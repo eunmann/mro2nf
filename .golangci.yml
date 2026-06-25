@@ -1,0 +1,74 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    - lll
+    - wsl
+    - wsl_v5
+    - varnamelen
+    - tagliatelle
+    - paralleltest
+    - exhaustruct
+    - canonicalheader
+    - depguard
+    - noinlineerr
+    # LSP request handlers legitimately return (nil, nil) to mean "no result".
+    - nilnil
+  settings:
+    gomoddirectives:
+      # We use a local `replace` for the Martian module during development.
+      replace-local: true
+    goconst:
+      # Test fixtures legitimately repeat string literals; extracting them as
+      # constants harms readability. Production code is still checked.
+      ignore-tests: true
+    cyclop:
+      max-complexity: 15
+    funlen:
+      lines: 80
+    interfacebloat:
+      max: 20
+    gosec:
+      excludes:
+        - G404
+        # Integer-overflow flags on int->uint32 for LSP line/column positions,
+        # which are small and non-negative.
+        - G115
+    exhaustive:
+      default-signifies-exhaustive: true
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        - github.com/eunmann/martian-nextflow/internal
+        # The Martian AST exposes parameters via the StructMemberLike interface.
+        - github.com/martian-lang/martian/martian/syntax
+  exclusions:
+    rules:
+      # In-package tests are intentional here (they exercise unexported helpers).
+      # Tests also legitimately launch subprocesses, leave external errors
+      # unwrapped, and pass fixed args to helpers.
+      - path: "_test\\.go"
+        linters:
+          - testpackage
+          - gosec
+          - wrapcheck
+          - unparam
+          - noctx
+  formatters:
+    enable:
+      - gci
+      - gofmt
+      - goimports
+      - gofumpt
+
+issues:
+  max-issues-per-linter: 0
+
+run:
+  timeout: 10m
+  tests: true
+  go: "1.26"
