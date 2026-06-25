@@ -1,0 +1,43 @@
+Martian Runtime - '078d9cd-dirty'
+2017-07-12 17:30:01 [cmdline] mrp pipeline.mro pipeline_test
+2017-07-12 17:30:01 [pid    ] 27972
+2017-07-12 17:30:01 [environ] MROPATH=martian/test/split_test
+2017-07-12 17:30:01 [version] MRO Version=2ff8789-dirty
+2017-07-12 17:30:01 [options] --jobmode=local
+2017-07-12 17:30:01 [options] --maxjobs=-1
+2017-07-12 17:30:01 [options] --jobinterval=-1
+2017-07-12 17:30:01 [options] --vdrmode=post
+2017-07-12 17:30:01 [options] --profile=disable
+2017-07-12 17:30:01 [options] --stackvars=false
+2017-07-12 17:30:01 [options] --zip=false
+2017-07-12 17:30:01 [options] --limit-loadavg=false
+2017-07-12 17:30:01 [options] --noexit=false
+2017-07-12 17:30:01 [options] --nopreflight=false
+2017-07-12 17:30:01 [jobmngr] Job config = martian/jobmanagers/config.json
+2017-07-12 17:30:01 [jobmngr] Using 64 logical cores available on system.
+2017-07-12 17:30:01 [jobmngr] Using 226 GB, 90% of system memory.
+2017-07-12 17:30:01 [webserv] UI disabled.
+Running preflight checks (please wait)...
+2017-07-12 17:30:01 [runtime] (ready)           ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES
+2017-07-12 17:30:01 [runtime] (run:local)       ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES.fork0.split
+2017-07-12 17:30:04 [runtime] (split_complete)  ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES
+2017-07-12 17:30:04 [runtime] (run:local)       ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES.fork0.chnk0.main
+2017-07-12 17:30:04 [runtime] (run:local)       ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES.fork0.chnk1.main
+2017-07-12 17:30:04 [runtime] (run:local)       ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES.fork0.chnk2.main
+2017-07-12 17:30:07 [runtime] (chunks_complete) ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES
+2017-07-12 17:30:07 [runtime] (run:local)       ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES.fork0.join
+2017-07-12 17:30:10 [runtime] (join_complete)   ID.pipeline_test.SUM_SQUARE_PIPELINE.SUM_SQUARES
+2017-07-12 17:30:16 [runtime] (ready)           ID.pipeline_test.SUM_SQUARE_PIPELINE.REPORT
+2017-07-12 17:30:19 [runtime] (split_complete)  ID.pipeline_test.SUM_SQUARE_PIPELINE.REPORT
+2017-07-12 17:30:19 [runtime] (run:local)       ID.pipeline_test.SUM_SQUARE_PIPELINE.REPORT.fork0.chnk0.main
+2017-07-12 17:30:22 [progres] (ID.pipeline_test.SUM_SQUARE_PIPELINE.REPORT.fork0.chnk0) 1.000000^2+2.000000^2+3.000000^2 = 14.000000
+2017-07-12 17:30:22 [runtime] (chunks_complete) ID.pipeline_test.SUM_SQUARE_PIPELINE.REPORT
+2017-07-12 17:30:25 [runtime] (join_complete)   ID.pipeline_test.SUM_SQUARE_PIPELINE.REPORT
+2017-07-12 17:30:28 [runtime] VDR killed 0 files, 0B.
+
+Outputs:
+- sum: 14
+
+2017-07-12 17:30:28 [perform] Serializing pipestance performance data.
+Pipestance completed successfully!
+

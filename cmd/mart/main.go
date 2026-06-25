@@ -53,12 +53,23 @@ func run(args []string) error {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
+	}
+
+	entry := "(none)"
+	if prog.Entry != nil {
+		entry = prog.Entry.Callable
+	}
+
 	log.Info().
 		Str("source", fs.Arg(0)).
-		Int("stages", len(ast.Stages)).
-		Int("pipelines", len(ast.Pipelines)).
+		Int("stages", len(prog.Stages)).
+		Int("pipelines", len(prog.Pipelines)).
+		Str("entry", entry).
 		Str("out", *outDir).
-		Msg("parsed MRO")
+		Msg("lowered MRO to IR")
 
 	return nil
 }

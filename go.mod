@@ -3,6 +3,7 @@ module github.com/eunmann/martian-nextflow
 go 1.26
 
 require (
+	github.com/google/go-cmp v0.7.0
 	github.com/martian-lang/martian v0.0.0-20260506211707-4a558e7dd93b
 	github.com/rs/zerolog v1.34.0
 )
