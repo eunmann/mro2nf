@@ -32,6 +32,12 @@ linters:
     gosec:
       excludes:
         - G404
+        # The shim reads/writes Martian metadata files at transpiler- and
+        # runtime-controlled paths, not attacker-controlled input.
+        - G304
+        # The shim launches the Martian adapter; the command and args come from
+        # the transpiled pipeline, not attacker-controlled input.
+        - G204
         # Integer-overflow flags on int->uint32 for LSP line/column positions,
         # which are small and non-negative.
         - G115
