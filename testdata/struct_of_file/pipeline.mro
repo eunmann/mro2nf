@@ -1,0 +1,32 @@
+# A struct output containing a file field: exercises the type walk descending a
+# struct to a file leaf through the bundle + publish.
+filetype txt;
+
+struct Bundle(
+    txt report,
+    int n,
+)
+
+stage MAKEB(
+    in  int    x,
+    out Bundle b,
+    src py     "stages/makeb",
+)
+
+pipeline SB(
+    in  int    x,
+    out Bundle b,
+)
+{
+    call MAKEB(
+        x = self.x,
+    )
+
+    return (
+        b = MAKEB.b,
+    )
+}
+
+call SB(
+    x = 5,
+)

@@ -82,7 +82,11 @@ func (t *Table) walk(v any, base string, arrayDim, mapDim int, isFile bool, fn T
 			return t.walkMap(tv, base, arrayDim, mapDim, isFile, fn)
 		}
 
-		if fields, ok := t.structs[base]; ok && !isFile {
+		// A struct value descends regardless of isFile: Martian marks a struct
+		// that contains file fields as a directory kind (isFile true), but the
+		// struct itself is an object to recurse into, not a file leaf. (A real
+		// file leaf is a string, handled below, never a map.)
+		if fields, ok := t.structs[base]; ok {
 			return t.Apply(fields, tv, fn)
 		}
 

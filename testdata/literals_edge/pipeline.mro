@@ -1,0 +1,38 @@
+# Literal edge cases: negative numbers, a >2^53 int (precision), unicode escape.
+stage ECHO(
+    in  int    neg,
+    in  int    big,
+    in  string esc,
+    out int    neg2,
+    out int    big2,
+    out string esc2,
+    src py     "stages/echo",
+)
+
+pipeline LE(
+    in  int    neg,
+    in  int    big,
+    in  string esc,
+    out int    neg2,
+    out int    big2,
+    out string esc2,
+)
+{
+    call ECHO(
+        neg = self.neg,
+        big = self.big,
+        esc = self.esc,
+    )
+
+    return (
+        neg2 = ECHO.neg2,
+        big2 = ECHO.big2,
+        esc2 = ECHO.esc2,
+    )
+}
+
+call LE(
+    neg = -7,
+    big = 9007199254740993,
+    esc = "a\tbéc",
+)

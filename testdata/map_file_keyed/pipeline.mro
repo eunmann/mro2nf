@@ -1,0 +1,30 @@
+# A map call over a map<int> whose callee emits a FILE -> keyed map<txt> result.
+# Exercises the map-fork file path: walkMap file leaves + MERGE (MapDim+1) + publish.
+filetype txt;
+
+stage WRITEF(
+    in  int i,
+    out txt f,
+    src py  "stages/writef",
+)
+
+pipeline MFK(
+    in  map<int> m,
+    out map<txt> fs,
+)
+{
+    map call WRITEF(
+        i = split self.m,
+    )
+
+    return (
+        fs = WRITEF.f,
+    )
+}
+
+call MFK(
+    m = {
+        "a": 1,
+        "b": 2,
+    },
+)

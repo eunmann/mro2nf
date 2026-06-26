@@ -99,6 +99,15 @@ func leafShapeCases() []leafCase {
 			want:   []string{"r.bam"},
 		},
 		{
+			// Martian marks a struct that contains files as a directory kind
+			// (IsFile true); the walk must still descend it, not treat it as a
+			// file leaf.
+			name:   "struct-with-file param marked IsFile",
+			params: []ir.Param{{Name: "c", BaseType: "Cfg", IsFile: true}},
+			vals:   map[string]any{"c": map[string]any{"ref": "r.bam", "n": float64(1)}},
+			want:   []string{"r.bam"},
+		},
+		{
 			name:   "array of struct",
 			params: []ir.Param{{Name: "cs", BaseType: "Cfg", ArrayDim: 1}},
 			vals: map[string]any{"cs": []any{
