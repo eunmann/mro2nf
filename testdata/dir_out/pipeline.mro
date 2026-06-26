@@ -1,0 +1,25 @@
+# A directory-typed (out path) output: the bundle + publish must copy the whole
+# directory tree, not just a single file.
+stage MKDIR(
+    in  int  n,
+    out path d,
+    src py   "stages/mkdir",
+)
+
+pipeline DP(
+    in  int  n,
+    out path d,
+)
+{
+    call MKDIR(
+        n = self.n,
+    )
+
+    return (
+        d = MKDIR.d,
+    )
+}
+
+call DP(
+    n = 2,
+)

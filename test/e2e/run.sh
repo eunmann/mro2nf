@@ -85,6 +85,8 @@ CASES=(
     "map_file_keyed|testdata/map_file_keyed|testdata/map_file_keyed/expected/outs.json"
     "struct_of_file|testdata/struct_of_file|testdata/struct_of_file/expected/outs.json"
     "literals_edge|testdata/literals_edge|testdata/literals_edge/expected/outs.json"
+    "dir_out|testdata/dir_out|testdata/dir_out/expected/outs.json"
+    "api_smoke|testdata/api_smoke|testdata/api_smoke/expected/outs.json"
     "include_test|testdata/include_test|testdata/include_test/expected/outs.json"
     "default_out|testdata/default_out|testdata/default_out/expected/outs.json"
     "wildcard|testdata/wildcard|testdata/wildcard/expected/outs.json"

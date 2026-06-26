@@ -1,0 +1,31 @@
+# Exercises the martian adapter API (alarm/log_warn/update_progress) and proves
+# resource plumbing: get_memory_allocation/get_threads_allocation read _jobinfo.
+stage PROBE(
+    in  int   x,
+    out float mem,
+    out float threads,
+    src py    "stages/probe",
+) using (
+    mem_gb  = 3,
+    threads = 2,
+)
+
+pipeline AP(
+    in  int   x,
+    out float mem,
+    out float threads,
+)
+{
+    call PROBE(
+        x = self.x,
+    )
+
+    return (
+        mem     = PROBE.mem,
+        threads = PROBE.threads,
+    )
+}
+
+call AP(
+    x = 1,
+)
