@@ -99,6 +99,35 @@ func (p *producer) coerceInputs(raw json.RawMessage, roles ...string) (json.RawM
 	return out, nil
 }
 
+// coerceChunk coerces a split chunk's per-chunk args (chunk.Args, keyed by the
+// ChunkIn param names) so whole-number floats bound to int chunk params become
+// integers — the stageArgs RoleChunkIn pass cannot, since per-chunk values live
+// here, not in the stage args.
+func (p *producer) coerceChunk(chunk shim.ChunkDef) (shim.ChunkDef, error) {
+	if p.types == "" || len(chunk.Args) == 0 {
+		return chunk, nil
+	}
+
+	raw, err := json.Marshal(chunk.Args)
+	if err != nil {
+		return chunk, fmt.Errorf("encode chunk args: %w", err)
+	}
+
+	coerced, err := p.coerceInputs(raw, types.RoleChunkIn)
+	if err != nil {
+		return chunk, err
+	}
+
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(coerced, &args); err != nil {
+		return chunk, fmt.Errorf("decode coerced chunk args: %w", err)
+	}
+
+	chunk.Args = args
+
+	return chunk, nil
+}
+
 // rawToMap decodes a JSON object into a map. An empty payload, JSON null, or the
 // empty string the Martian adapter writes for a stage with no outputs yields an
 // empty map. Any other non-object payload (an array, a number, or corrupt JSON)

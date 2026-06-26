@@ -120,7 +120,11 @@ func coerceNumber(n json.Number, base string) any {
 		return i
 	}
 
-	if f, err := n.Float64(); err == nil && f == math.Trunc(f) {
+	// A whole-number float in int64 range coerces to an integer; out-of-range
+	// values (e.g. 1e20) are left as the original number rather than overflowing
+	// into a garbage int.
+	if f, err := n.Float64(); err == nil && f == math.Trunc(f) &&
+		f >= math.MinInt64 && f <= math.MaxInt64 {
 		return int64(f)
 	}
 

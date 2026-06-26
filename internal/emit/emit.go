@@ -248,9 +248,12 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
 
 	var cur *ir.Param
 
-	// curMap is the typed-map depth of the value reached so far. A map-mode map
-	// call wraps the callee's outputs in one extra map dimension (the fork keys).
-	curMap := 0
+	// Track the array and typed-map dims of the value reached so far. A map call
+	// wraps the callee's outputs in one extra dimension (map-mode -> map; array-
+	// mode -> array). We project a field through a value only when it is a typed
+	// map with no enclosing array (an array auto-projects at runtime; a field
+	// beneath an array-of-map is the rare unhandled shape, left to runtime).
+	curMap, curArray := 0, 0
 
 	switch ref.Kind {
 	case "self":
@@ -258,22 +261,23 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
 		cur = paramByName(p.In, segs[0])
 	case "call":
 		segs = strings.Split(ref.Output, ".")
-		c := findCall(p, ref.ID)
 		cur = paramByName(calleeOutParams(prog, p, ref.ID), segs[0])
-
-		if c != nil && c.MapMode == "map" {
-			curMap++
-		}
+		curMap, curArray = forkDims(findCall(p, ref.ID))
 	default:
 		return 0
 	}
 
 	if cur != nil {
 		curMap += cur.MapDim
+		curArray += cur.ArrayDim
 	}
 
 	for i := 1; i < len(segs); i++ {
-		if curMap > 0 { // about to access a field beneath a typed map
+		if cur == nil || curArray > 0 {
+			return 0
+		}
+
+		if curMap > 0 { // a field access beneath a (non-array) typed map
 			return i
 		}
 
@@ -283,14 +287,30 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
 		}
 
 		cur = paramByName(st.Fields, segs[i])
-		if cur == nil {
-			return 0
+		if cur != nil {
+			curMap, curArray = cur.MapDim, cur.ArrayDim
 		}
-
-		curMap = cur.MapDim
 	}
 
 	return 0
+}
+
+// forkDims returns the extra map and array dimensions a map call wraps its
+// callee's outputs in: a keyed (map/unknown-keyed) fork adds a map dimension; an
+// array fork adds an array dimension.
+func forkDims(c *ir.Call) (int, int) {
+	if c == nil {
+		return 0, 0
+	}
+
+	switch c.MapMode {
+	case "map", "unknown":
+		return 1, 0
+	case "array":
+		return 0, 1
+	default:
+		return 0, 0
+	}
 }
 
 // findCall returns the call with the given instance id in p, or nil.

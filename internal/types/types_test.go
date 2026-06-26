@@ -227,6 +227,13 @@ func TestCoerceScalars(t *testing.T) {
 		t.Errorf("int leaf 5.0 -> %v (%T), want int64 5", got["i"], got["i"])
 	}
 
+	// An out-of-int64-range whole float is left as-is, not overflowed.
+	big := tbl.CoerceScalars([]ir.Param{{Name: "b", BaseType: "int"}},
+		map[string]any{"b": json.Number("1e20")})
+	if big["b"] != json.Number("1e20") {
+		t.Errorf("out-of-range int leaf -> %v, want unchanged 1e20", big["b"])
+	}
+
 	if got["f"] != json.Number("42.0") {
 		t.Errorf("float leaf 42.0 -> %v, want unchanged 42.0", got["f"])
 	}
