@@ -62,6 +62,8 @@ run_case exec_min testdata/exec_min \
     testdata/exec_min/expected/ep_outs.json
 run_case kitchen_sink testdata/kitchen_sink \
     testdata/kitchen_sink/expected/main_outs.json
+run_case file_chain testdata/file_chain \
+    testdata/file_chain/expected/cp_outs.json
 
 # file_min verifies a published file output: content and basename rewrite. Its
 # pipeline_outs.json uses a basename (not an mrp abspath), so it is checked

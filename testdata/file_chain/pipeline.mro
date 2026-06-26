@@ -1,0 +1,35 @@
+filetype txt;
+
+stage MAKEFILE(
+    in  float x,
+    out txt   f  "data"  "f.txt",
+    src py    "stages/makefile",
+)
+
+stage READFILE(
+    in  txt   f,
+    out float y,
+    src py    "stages/readfile",
+)
+
+pipeline CP(
+    in  float x,
+    out float y,
+)
+{
+    call MAKEFILE(
+        x = self.x,
+    )
+
+    call READFILE(
+        f = MAKEFILE.f,
+    )
+
+    return (
+        y = READFILE.y,
+    )
+}
+
+call CP(
+    x = 21.0,
+)
