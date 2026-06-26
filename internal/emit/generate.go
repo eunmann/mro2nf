@@ -298,7 +298,8 @@ func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx
 	fmt.Fprintf(b, `process %[1]s {
   input:
 %[2]s  output:
-    path 'fork_*.json', optional: true
+    path 'fork_*.json', emit: forks, optional: true
+    path 'forkkeys.json', emit: keys
   script:
     """
     '%[3]s' forkbind -spec '${projectDir}/bindspecs/%[4]s.json' -pipeargs ${pipeargs}%[5]s -chunkdir .
@@ -314,11 +315,12 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 	fmt.Fprintf(b, `process %[1]s {
   input:
     path souts
+    path 'forkkeys.json'
   output:
     path 'merged.json'
   script:
     """
-    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1 outs__*.json 2>/dev/null | sort -V | paste -sd, -)" -o merged.json
+    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1 outs__*.json 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged.json
     """
 }
 
@@ -355,10 +357,11 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, _ *ir.Program
 		fork := forkName(pipeline, c.Name)
 		merge := mergeName(pipeline, c.Name)
 		fmt.Fprintf(b, "    %s(%s)\n", fork, bindCallArgs(c.Bindings))
-		fmt.Fprintf(b, "    out_%s = %s(%s.out.flatten())\n", c.Name, callee, fork)
+		fmt.Fprintf(b, "    out_%s = %s(%s.out.forks.flatten())\n", c.Name, callee, fork)
 		// ifEmpty([]) ensures MERGE still runs for an empty fork collection
 		// (collect() on an empty channel emits nothing), yielding null outputs.
-		fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]))\n", merge, c.Name)
+		// FORK.out.keys carries map-fork keys (null for an array fork).
+		fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys)\n", merge, c.Name, fork)
 		// .first() makes the result a value channel so it can feed multiple
 		// downstream consumers (non-linear DAGs).
 		fmt.Fprintf(b, "    ch_%s = %s.out.first()\n", c.Name, merge)

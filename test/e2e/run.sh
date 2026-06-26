@@ -84,3 +84,9 @@ run_case diamond_min testdata/diamond_min \
     testdata/diamond_min/expected/outs.json
 run_case empty_fork_min testdata/empty_fork_min \
     testdata/empty_fork_min/expected/outs.json
+run_case stage_entry testdata/stage_entry \
+    testdata/stage_entry/expected/outs.json
+run_case struct_proj testdata/struct_proj \
+    testdata/struct_proj/expected/outs.json
+run_case map_fork testdata/map_fork \
+    testdata/map_fork/expected/outs.json

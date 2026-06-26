@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
+	"sort"
 	"strings"
 )
 
@@ -70,95 +72,140 @@ func Resolve(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMe
 
 // ResolveForks resolves a map call's bindings into one _args object per fork.
 // Split bindings are resolved to collections and zipped element-wise; non-split
-// bindings are broadcast to every fork.
-func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage) ([]json.RawMessage, error) {
+// bindings are broadcast to every fork. When the split collection is a map, the
+// returned keys give each fork's map key (in sorted order); for an array fork,
+// keys is nil.
+func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
 	broadcast := map[string]json.RawMessage{}
-	splits := map[string][]json.RawMessage{}
-	count := -1
+	splits := map[string]json.RawMessage{}
 
 	for param, entry := range spec {
 		val, err := entry.resolve(pipeArgs, callOuts)
 		if err != nil {
-			return nil, fmt.Errorf("bind %q: %w", param, err)
+			return nil, nil, fmt.Errorf("bind %q: %w", param, err)
 		}
 
-		if !entry.Split {
+		if entry.Split {
+			splits[param] = val
+		} else {
 			broadcast[param] = val
-
-			continue
 		}
+	}
 
+	if len(splits) == 0 {
+		return nil, nil, errNoSplit
+	}
+
+	if mapMode(splits) {
+		return buildMapForks(broadcast, splits)
+	}
+
+	return buildArrayForks(broadcast, splits)
+}
+
+// mapMode reports whether the split collections are maps (objects) rather than
+// arrays. A null collection (e.g. a disabled upstream) is treated as an array.
+func mapMode(splits map[string]json.RawMessage) bool {
+	for _, raw := range splits {
+		if t := bytes.TrimSpace(raw); len(t) > 0 && t[0] == '{' {
+			return true
+		}
+	}
+
+	return false
+}
+
+func buildArrayForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
+	arrays := make(map[string][]json.RawMessage, len(splits))
+	count := -1
+
+	for param, raw := range splits {
 		var arr []json.RawMessage
-		if err := json.Unmarshal(val, &arr); err != nil {
-			return nil, fmt.Errorf("split %q: %w", param, errNotArray)
+		if err := json.Unmarshal(orEmptyArray(raw), &arr); err != nil {
+			return nil, nil, fmt.Errorf("split %q: %w", param, errNotArray)
 		}
 
 		if count == -1 {
 			count = len(arr)
 		} else if len(arr) != count {
-			return nil, fmt.Errorf("split %q: %w", param, errSplitLen)
+			return nil, nil, fmt.Errorf("split %q: %w", param, errSplitLen)
 		}
 
-		splits[param] = arr
+		arrays[param] = arr
 	}
 
-	if count == -1 {
-		return nil, errNoSplit
-	}
-
-	return buildForks(broadcast, splits, count)
-}
-
-func buildForks(broadcast map[string]json.RawMessage, splits map[string][]json.RawMessage, count int) ([]json.RawMessage, error) {
 	forks := make([]json.RawMessage, 0, count)
 
 	for i := range count {
-		args := make(map[string]json.RawMessage, len(broadcast)+len(splits))
+		args := make(map[string]json.RawMessage, len(broadcast)+len(arrays))
 		maps.Copy(args, broadcast)
 
-		for param, arr := range splits {
+		for param, arr := range arrays {
 			args[param] = arr[i]
 		}
 
 		raw, err := json.Marshal(args)
 		if err != nil {
-			return nil, fmt.Errorf("marshal fork %d: %w", i, err)
+			return nil, nil, fmt.Errorf("marshal fork %d: %w", i, err)
 		}
 
 		forks = append(forks, raw)
 	}
 
-	return forks, nil
+	return forks, nil, nil
 }
 
-// Merge combines per-fork outputs into a single map-call result: each named
-// output becomes an array of that field across the forks, in order.
-func Merge(names []string, outs []json.RawMessage) (json.RawMessage, error) {
+func buildMapForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
+	maps0 := make(map[string]map[string]json.RawMessage, len(splits))
+	keys := []string(nil)
+
+	for param, raw := range splits {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return nil, nil, fmt.Errorf("split %q: %w", param, errNotArray)
+		}
+
+		ks := sortedKeys(m)
+		if keys == nil {
+			keys = ks
+		} else if !equalKeys(keys, ks) {
+			return nil, nil, fmt.Errorf("split %q: %w", param, errSplitLen)
+		}
+
+		maps0[param] = m
+	}
+
+	forks := make([]json.RawMessage, 0, len(keys))
+
+	for _, k := range keys {
+		args := make(map[string]json.RawMessage, len(broadcast)+len(maps0))
+		maps.Copy(args, broadcast)
+
+		for param, m := range maps0 {
+			args[param] = m[k]
+		}
+
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal fork %q: %w", k, err)
+		}
+
+		forks = append(forks, raw)
+	}
+
+	return forks, keys, nil
+}
+
+// Merge combines per-fork outputs into a single map-call result. For an array
+// fork (keys nil), each named output becomes an array of that field across the
+// forks in order; for a map fork, each output becomes a map keyed by keys[i].
+func Merge(names []string, outs []json.RawMessage, keys []string) (json.RawMessage, error) {
 	result := make(map[string]json.RawMessage, len(names))
 
 	for _, name := range names {
-		// An empty map call resolves to null per output, matching Martian's
-		// null-map-call semantics (not an empty array).
-		if len(outs) == 0 {
-			result[name] = json.RawMessage(nullLiteral)
-
-			continue
-		}
-
-		arr := make([]json.RawMessage, 0, len(outs))
-
-		for _, out := range outs {
-			val, err := extract(out, name)
-			if err != nil {
-				return nil, fmt.Errorf("merge %q: %w", name, err)
-			}
-
-			arr = append(arr, val)
-		}
-
-		raw, err := json.Marshal(arr)
+		raw, err := mergeOne(name, outs, keys)
 		if err != nil {
-			return nil, fmt.Errorf("merge %q: %w", name, err)
+			return nil, err
 		}
 
 		result[name] = raw
@@ -252,6 +299,74 @@ func projectArray(raw json.RawMessage, path string) (json.RawMessage, error) {
 	}
 
 	return raw, nil
+}
+
+// mergeOne computes one output's merged value: a key→value map for a map fork,
+// an ordered array for an array fork, or null for an empty array fork.
+func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessage, error) {
+	if keys != nil {
+		m := make(map[string]json.RawMessage, len(keys))
+
+		for i, k := range keys {
+			v, err := extract(outs[i], name)
+			if err != nil {
+				return nil, fmt.Errorf("merge %q: %w", name, err)
+			}
+
+			m[k] = v
+		}
+
+		return marshalRaw(m, name)
+	}
+
+	if len(outs) == 0 {
+		return json.RawMessage(nullLiteral), nil
+	}
+
+	arr := make([]json.RawMessage, 0, len(outs))
+
+	for _, out := range outs {
+		v, err := extract(out, name)
+		if err != nil {
+			return nil, fmt.Errorf("merge %q: %w", name, err)
+		}
+
+		arr = append(arr, v)
+	}
+
+	return marshalRaw(arr, name)
+}
+
+func marshalRaw(v any, name string) (json.RawMessage, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("merge %q: %w", name, err)
+	}
+
+	return raw, nil
+}
+
+func orEmptyArray(raw json.RawMessage) json.RawMessage {
+	if t := bytes.TrimSpace(raw); len(t) == 0 || string(t) == nullLiteral {
+		return json.RawMessage("[]")
+	}
+
+	return raw
+}
+
+func sortedKeys(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	return keys
+}
+
+func equalKeys(a, b []string) bool {
+	return slices.Equal(a, b)
 }
 
 func joinPath(id, output string) string {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"path/filepath"
@@ -37,7 +38,7 @@ func runForkBind(_ context.Context, argv []string) error {
 		return err
 	}
 
-	forks, err := bind.ResolveForks(spec, pipeArgs, callOuts)
+	forks, keys, err := bind.ResolveForks(spec, pipeArgs, callOuts)
 	if err != nil {
 		return fmt.Errorf("forkbind: %w", err)
 	}
@@ -49,7 +50,16 @@ func runForkBind(_ context.Context, argv []string) error {
 		}
 	}
 
-	return nil
+	// forkkeys.json carries the map keys for a map fork (null for an array fork)
+	// so merge can rebuild a keyed result.
+	keysJSON := json.RawMessage("null")
+	if keys != nil {
+		if keysJSON, err = json.Marshal(keys); err != nil {
+			return fmt.Errorf("marshal fork keys: %w", err)
+		}
+	}
+
+	return writeRaw(filepath.Join(*dir, "forkkeys.json"), keysJSON)
 }
 
 // runMerge combines per-fork outputs into one map-call result: each named
@@ -58,6 +68,7 @@ func runMerge(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("merge", flag.ContinueOnError)
 	outs := fs.String("outs", "", "comma-separated output parameter names")
 	files := fs.String("files", "", "comma-separated per-fork outs files, in order")
+	keysFile := fs.String("keys-file", "", "fork keys JSON (null for an array fork)")
 	outFile := fs.String("o", "", "output merged file (default stdout)")
 
 	if err := fs.Parse(argv); err != nil {
@@ -69,10 +80,35 @@ func runMerge(_ context.Context, argv []string) error {
 		return err
 	}
 
-	merged, err := bind.Merge(splitComma(*outs), forkOuts)
+	keys, err := readForkKeys(*keysFile)
+	if err != nil {
+		return err
+	}
+
+	merged, err := bind.Merge(splitComma(*outs), forkOuts, keys)
 	if err != nil {
 		return fmt.Errorf("merge: %w", err)
 	}
 
 	return writeRaw(*outFile, merged)
+}
+
+// readForkKeys reads forkkeys.json: a JSON null (array fork) yields nil keys; a
+// JSON array yields the map fork's keys.
+func readForkKeys(path string) ([]string, error) {
+	data, err := readFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	var keys []string
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return nil, fmt.Errorf("parse fork keys %s: %w", path, err)
+	}
+
+	return keys, nil
 }

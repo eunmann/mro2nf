@@ -1,0 +1,26 @@
+stage DBL(
+    in  int v,
+    out int w,
+    src py  "stages/dbl",
+)
+
+pipeline MP(
+    in  map<int> m,
+    out map<int> w,
+)
+{
+    map call DBL(
+        v = split self.m,
+    )
+
+    return (
+        w = DBL.w,
+    )
+}
+
+call MP(
+    m = {
+        "a": 1,
+        "b": 2,
+    },
+)

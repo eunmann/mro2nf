@@ -1,0 +1,38 @@
+struct Point(
+    int x,
+    int y,
+)
+
+stage MAKE(
+    in  int   n,
+    out Point p,
+    src py    "stages/make",
+)
+
+stage SUMX(
+    in  int[] xs,
+    out int   total,
+    src py    "stages/sumx",
+)
+
+pipeline PP(
+    in  int[] ns,
+    out int   total,
+)
+{
+    map call MAKE(
+        n = split self.ns,
+    )
+
+    call SUMX(
+        xs = MAKE.p.x,
+    )
+
+    return (
+        total = SUMX.total,
+    )
+}
+
+call PP(
+    ns = [1, 2, 3],
+)

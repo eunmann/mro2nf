@@ -1,0 +1,10 @@
+# Top-level call targeting a bare stage (no wrapping pipeline).
+stage SOLO(
+    in  int x,
+    out int y,
+    src py  "stages/solo",
+)
+
+call SOLO(
+    x = 7,
+)
