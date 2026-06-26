@@ -137,6 +137,14 @@ func Merge(names []string, outs []json.RawMessage) (json.RawMessage, error) {
 	result := make(map[string]json.RawMessage, len(names))
 
 	for _, name := range names {
+		// An empty map call resolves to null per output, matching Martian's
+		// null-map-call semantics (not an empty array).
+		if len(outs) == 0 {
+			result[name] = json.RawMessage(nullLiteral)
+
+			continue
+		}
+
 		arr := make([]json.RawMessage, 0, len(outs))
 
 		for _, out := range outs {

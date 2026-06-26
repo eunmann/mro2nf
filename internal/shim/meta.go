@@ -238,6 +238,8 @@ func numRaw(f float64) json.RawMessage {
 
 func asFloat(raw json.RawMessage) float64 {
 	var f float64
+	// A non-numeric resource value leaves f at 0 (treated as "unset"); Martian
+	// always writes numbers here, so a parse failure is not actionable.
 	_ = json.Unmarshal(raw, &f)
 
 	return f

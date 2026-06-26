@@ -38,6 +38,7 @@ func run(ctx context.Context, args []string) error {
 
 	switch phase := args[0]; phase {
 	case "version":
+		// Writing the version line to stdout cannot meaningfully fail.
 		_, _ = fmt.Fprintln(os.Stdout, "mre", version)
 
 		return nil

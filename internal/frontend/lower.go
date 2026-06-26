@@ -203,6 +203,9 @@ func disabledRef(m *syntax.Modifiers) *ir.Ref {
 // litToGo converts a literal value expression into a Go value ready for JSON
 // encoding. It returns an UnsupportedError if it encounters a reference, which
 // is only valid in a binding position, not nested inside a constant.
+//
+// Recursion depth is bounded by the nesting of the parsed MRO literal, which the
+// Martian compiler has already produced as a finite AST.
 func litToGo(e syntax.Exp) (any, error) {
 	switch v := e.(type) {
 	case *syntax.IntExp:

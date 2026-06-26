@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/eunmann/martian-nextflow/internal/apperror"
 	"github.com/eunmann/martian-nextflow/internal/bind"
 	"github.com/eunmann/martian-nextflow/internal/ir"
 )
@@ -44,6 +45,10 @@ type Options struct {
 func Emit(prog *ir.Program, opts Options) error {
 	if prog.Entry == nil {
 		return errNoEntry
+	}
+
+	if err := validateProgram(prog); err != nil {
+		return err
 	}
 
 	specDir := filepath.Join(opts.OutDir, "bindspecs")
@@ -104,9 +109,7 @@ func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 				return fmt.Errorf("create nulls dir: %w", err)
 			}
 
-			spec := bind.Spec{"disabled": {Ref: &bind.Ref{
-				Kind: c.Disabled.Kind, ID: c.Disabled.ID, Output: c.Disabled.Output,
-			}}}
+			spec := bindSpec(disableBindings(c))
 			if err := writeJSONFile(filepath.Join(specDir, disableName(p.Name, c.Name)+".json"), spec); err != nil {
 				return err
 			}
@@ -147,6 +150,34 @@ func writeJSONFile(path string, v any) error {
 	}
 
 	return writeFile(path, data)
+}
+
+// validateProgram rejects feature combinations the emitter cannot yet lower
+// correctly, with a clear error rather than silently wrong output.
+func validateProgram(prog *ir.Program) error {
+	for _, name := range sortedKeys(prog.Pipelines) {
+		for _, c := range prog.Pipelines[name].Calls {
+			if !c.Mapped {
+				continue
+			}
+
+			if c.Disabled != nil {
+				return &apperror.UnsupportedError{
+					Construct: "disabled map call",
+					Detail:    name + "." + c.Name,
+				}
+			}
+
+			if s, ok := prog.Stages[c.Callable]; !ok || s.Split {
+				return &apperror.UnsupportedError{
+					Construct: "map call over a split stage or pipeline",
+					Detail:    name + "." + c.Name + " -> " + c.Callable,
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // writeModules writes one Nextflow module per stage and per pipeline.

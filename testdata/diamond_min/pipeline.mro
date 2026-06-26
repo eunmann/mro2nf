@@ -1,0 +1,37 @@
+stage GEN(
+    in  float x,
+    out float y,
+    src py    "stages/gen",
+)
+
+stage ADD(
+    in  float a,
+    in  float b,
+    out float c,
+    src py    "stages/add",
+)
+
+pipeline D(
+    in  float x,
+    out float c,
+    out float passthru,
+)
+{
+    call GEN(
+        x = self.x,
+    )
+
+    call ADD(
+        a = GEN.y,
+        b = GEN.y,
+    )
+
+    return (
+        c        = ADD.c,
+        passthru = GEN.y,
+    )
+}
+
+call D(
+    x = 5.0,
+)

@@ -86,13 +86,16 @@ func TestEmitModules(t *testing.T) {
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf": {
 			"workflow SUM_SQUARE_PIPELINE {",
 			"include { wf_SUM_SQUARES as wf_SUM_SQUARE_PIPELINE__SUM_SQUARES }",
+			// Call outputs are value channels so they can feed multiple consumers.
+			".out).first()",
 		},
 		"modules/stage_SUM_SQUARES.nf": {
 			"process SUM_SQUARES_SPLIT {",
 			"process SUM_SQUARES_MAIN {",
 			"process SUM_SQUARES_JOIN {",
 			"workflow wf_SUM_SQUARES {",
-			"-stagecode /x/sum_squares",
+			// Paths are single-quoted so spaces/metacharacters are safe.
+			"-stagecode '/x/sum_squares'",
 		},
 		"modules/stage_REPORT.nf": {"process REPORT {"},
 	}

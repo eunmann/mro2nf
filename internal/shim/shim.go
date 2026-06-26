@@ -312,19 +312,21 @@ func openAdapterIO(meta string) (*adapterIO, error) {
 }
 
 // run starts the adapter, drains its error channel, and classifies the result.
-func (aio *adapterIO) run(cmd *exec.Cmd, phase, meta string) error {
+func (a *adapterIO) run(cmd *exec.Cmd, phase, meta string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start adapter: %w", err)
 	}
 
 	// Close the parent's write end so reading the pipe ends when the child exits.
-	_ = aio.errW.Close()
-	aio.errW = nil
+	_ = a.errW.Close()
+	a.errW = nil
 
-	stageErr, _ := io.ReadAll(aio.errR)
+	stageErr, _ := io.ReadAll(a.errR)
 	waitErr := cmd.Wait()
 
 	if msg := strings.TrimSpace(string(stageErr)); msg != "" {
+		// Mirror the error into _errors for parity with mrjob; a failure to do
+		// so does not change the outcome (we already have the message).
 		_ = os.WriteFile(filepath.Join(meta, "_errors"), stageErr, filePerm)
 
 		return fmt.Errorf("%s phase: %w: %s", phase, errStageFailed, msg)
@@ -339,8 +341,8 @@ func (aio *adapterIO) run(cmd *exec.Cmd, phase, meta string) error {
 	return nil
 }
 
-func (aio *adapterIO) close() {
-	for _, f := range []*os.File{aio.logFile, aio.stdout, aio.stderr, aio.errR, aio.errW} {
+func (a *adapterIO) close() {
+	for _, f := range []*os.File{a.logFile, a.stdout, a.stderr, a.errR, a.errW} {
 		if f != nil {
 			_ = f.Close()
 		}

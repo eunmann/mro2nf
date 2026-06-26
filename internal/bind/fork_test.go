@@ -47,6 +47,19 @@ func TestResolveForksNoSplit(t *testing.T) {
 	}
 }
 
+func TestMergeEmpty(t *testing.T) {
+	// An empty map call yields null per output (Martian's null-map-call
+	// semantics), not an empty array.
+	merged, err := bind.Merge([]string{"scaled"}, nil)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	if got := string(merged); got != `{"scaled":null}` {
+		t.Errorf("merge of zero forks = %s, want {\"scaled\":null}", got)
+	}
+}
+
 func TestMerge(t *testing.T) {
 	outs := []json.RawMessage{
 		json.RawMessage(`{"scaled":10}`),

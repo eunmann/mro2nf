@@ -19,13 +19,17 @@ type genCtx struct {
 	code    map[string]string // stage name -> stage code path
 }
 
-// mrjobArg renders the optional -mrjob flag for stage commands.
-func (g genCtx) mrjobArg() string {
-	if g.mrjob == "" {
-		return ""
+// stageCmd renders an mre invocation for a stage phase, single-quoting every
+// path so spaces and shell metacharacters in paths are safe.
+func (g genCtx) stageCmd(phase, code string, lang ir.Lang) string {
+	cmd := fmt.Sprintf("'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
+		g.mre, phase, g.shell, code, lang, g.entry, g.mroFile)
+
+	if g.mrjob != "" {
+		cmd += fmt.Sprintf(" -mrjob '%s'", g.mrjob)
 	}
 
-	return " -mrjob " + g.mrjob
+	return cmd
 }
 
 // generateStageModule renders a stage's module: its processes and the wf_<stage>
@@ -53,14 +57,17 @@ func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 	return b.String()
 }
 
-// generateMain renders main.nf: the entry workflow plus PUBLISH.
+// generateMain renders main.nf: the entry workflow plus PUBLISH. The entry
+// callable may be a pipeline or a bare stage.
 func generateMain(prog *ir.Program, g genCtx) string {
 	var b strings.Builder
 
+	export, src := calleeModule(prog, prog.Entry.Callable)
+
 	b.WriteString("nextflow.enable.dsl=2\n\n")
-	fmt.Fprintf(&b, "include { %[1]s } from './modules/pipe_%[1]s.nf'\n\n", prog.Entry.Callable)
+	fmt.Fprintf(&b, "include { %s } from './modules/%s'\n\n", export, strings.TrimPrefix(src, "./"))
 	genPublish(&b, entryFileParams(prog), g)
-	genEntry(&b, prog)
+	genEntry(&b, export)
 
 	return b.String()
 }
@@ -124,11 +131,10 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 	code := g.code[s.Name]
 	mainOuts := strings.Join(append(names(s.Out), names(s.ChunkOut)...), ",")
 	joinOuts := strings.Join(names(s.Out), ",")
-	base := fmt.Sprintf("%s main -shell %s -stagecode %s -lang %s -call %s -mro %s%s",
-		g.mre, g.shell, code, s.Lang, g.entry, g.mroFile, g.mrjobArg())
+	base := g.stageCmd("main", code, s.Lang)
 
 	if !s.Split {
-		genSingleStage(b, s, g, base, joinOuts)
+		genSingleStage(b, s, base, joinOuts)
 
 		return
 	}
@@ -137,7 +143,7 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 	genSplitWorkflow(b, s)
 }
 
-func genSingleStage(b *strings.Builder, s *ir.Stage, g genCtx, base, outs string) {
+func genSingleStage(b *strings.Builder, s *ir.Stage, base, outs string) {
 	fmt.Fprintf(b, `process %[1]s {
   cpus %[2]d
   memory '%[3]d GB'
@@ -160,14 +166,11 @@ workflow wf_%[1]s {
 }
 
 `, s.Name, cpusOf(s), memOf(s), base, outs)
-	_ = g
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
-	splitCmd := fmt.Sprintf("%s split -shell %s -stagecode %s -lang %s -call %s -mro %s%s",
-		g.mre, g.shell, g.code[s.Name], s.Lang, g.entry, g.mroFile, g.mrjobArg())
-	joinCmd := fmt.Sprintf("%s join -shell %s -stagecode %s -lang %s -call %s -mro %s%s",
-		g.mre, g.shell, g.code[s.Name], s.Lang, g.entry, g.mroFile, g.mrjobArg())
+	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang)
+	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang)
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
   cpus %[2]d
@@ -176,7 +179,7 @@ func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts
     path args
   output:
     path 'chunks.json', emit: defs
-    path 'chunk_*.json', emit: chunks
+    path 'chunk_*.json', emit: chunks, optional: true
   script:
     """
     %[4]s -args ${args} -work . -o chunks.json -chunkdir .
@@ -207,7 +210,7 @@ process %[1]s_JOIN {
     path 'outs.json'
   script:
     """
-    %[7]s -args ${args} -chunkdefs ${defs} -chunkouts \$(ls -1 out_*.json | sort | paste -sd, -) -outs '%[8]s' -work . -o outs.json
+    %[7]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1 out_*.json 2>/dev/null | sort -V | paste -sd, -)" -outs '%[8]s' -work . -o outs.json
     """
 }
 
@@ -241,7 +244,7 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
     path 'disable.json'
   script:
     """
-    %[3]s bind -spec ${projectDir}/bindspecs/%[1]s.json -pipeargs ${pipeargs}%[4]s -o disable.json
+    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o disable.json
     """
 }
 
@@ -280,7 +283,7 @@ func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g ge
     path 'args.json'
   script:
     """
-    %[3]s bind -spec ${projectDir}/bindspecs/%[1]s.json -pipeargs ${pipeargs}%[4]s -o args.json
+    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o args.json
     """
 }
 
@@ -295,10 +298,10 @@ func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx
 	fmt.Fprintf(b, `process %[1]s {
   input:
 %[2]s  output:
-    path 'fork_*.json'
+    path 'fork_*.json', optional: true
   script:
     """
-    %[3]s forkbind -spec ${projectDir}/bindspecs/%[4]s.json -pipeargs ${pipeargs}%[5]s -chunkdir .
+    '%[3]s' forkbind -spec '${projectDir}/bindspecs/%[4]s.json' -pipeargs ${pipeargs}%[5]s -chunkdir .
     """
 }
 
@@ -315,7 +318,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
     path 'merged.json'
   script:
     """
-    %[2]s merge -outs '%[3]s' -files \$(ls -1 outs__*.json | sort | paste -sd, -) -o merged.json
+    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1 outs__*.json 2>/dev/null | sort -V | paste -sd, -)" -o merged.json
     """
 }
 
@@ -353,8 +356,12 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, _ *ir.Program
 		merge := mergeName(pipeline, c.Name)
 		fmt.Fprintf(b, "    %s(%s)\n", fork, bindCallArgs(c.Bindings))
 		fmt.Fprintf(b, "    out_%s = %s(%s.out.flatten())\n", c.Name, callee, fork)
-		fmt.Fprintf(b, "    %s(out_%s.collect())\n", merge, c.Name)
-		fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
+		// ifEmpty([]) ensures MERGE still runs for an empty fork collection
+		// (collect() on an empty channel emits nothing), yielding null outputs.
+		fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]))\n", merge, c.Name)
+		// .first() makes the result a value channel so it can feed multiple
+		// downstream consumers (non-linear DAGs).
+		fmt.Fprintf(b, "    ch_%s = %s.out.first()\n", c.Name, merge)
 
 		return
 	}
@@ -368,7 +375,8 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, _ *ir.Program
 		return
 	}
 
-	fmt.Fprintf(b, "    ch_%s = %s(%s.out)\n", c.Name, callee, bind)
+	// .first() yields a value channel reusable by multiple downstream consumers.
+	fmt.Fprintf(b, "    ch_%s = %s(%s.out).first()\n", c.Name, callee, bind)
 }
 
 // genDisabledWiring runs the callee only when the resolved `disabled` flag is
@@ -386,7 +394,7 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
     }
     r_%[1]s = %[4]s(g_%[1]s.run.map { a, d -> a })
     s_%[1]s = g_%[1]s.skip.map { a, d -> file("%[5]s") }
-    ch_%[1]s = r_%[1]s.mix(s_%[1]s)
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
 `, c.Name, bind, dis, callee, nulls)
 }
 
@@ -467,13 +475,13 @@ func genPublish(b *strings.Builder, fileParams []string, g genCtx) {
 `, g.mre, strings.Join(fileParams, ","))
 }
 
-func genEntry(b *strings.Builder, prog *ir.Program) {
+func genEntry(b *strings.Builder, entryWorkflow string) {
 	fmt.Fprintf(b, `workflow {
   pipeargs = Channel.value(file("${projectDir}/entry_args.json"))
   %[1]s(pipeargs)
   PUBLISH(%[1]s.out)
 }
-`, prog.Entry.Callable)
+`, entryWorkflow)
 }
 
 func bindName(pipeline, call string) string {

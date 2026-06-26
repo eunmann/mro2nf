@@ -80,3 +80,7 @@ else
     echo "FAIL[file_min]"
     exit 1
 fi
+run_case diamond_min testdata/diamond_min \
+    testdata/diamond_min/expected/outs.json
+run_case empty_fork_min testdata/empty_fork_min \
+    testdata/empty_fork_min/expected/outs.json

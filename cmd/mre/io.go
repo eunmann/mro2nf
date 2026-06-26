@@ -59,15 +59,9 @@ func readChunkData(defsPath, outsList string) ([]shim.ChunkDef, []json.RawMessag
 		return nil, nil, fmt.Errorf("parse chunk defs %s: %w", defsPath, err)
 	}
 
-	var outs []json.RawMessage
-
-	for _, file := range splitComma(outsList) {
-		data, err := readFile(file)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		outs = append(outs, data)
+	outs, err := readFileList(splitComma(outsList))
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return defs, outs, nil
