@@ -125,6 +125,10 @@ type Call struct {
 	Volatile  bool
 	// Mapped reports a `map call ... split` fork over a collection.
 	Mapped bool
+	// MapMode is the fork collection kind for a map call: "map" (keyed) or
+	// "array" (empty for a non-map call). A map-mode fork wraps the callee's
+	// outputs in a typed map, which matters for field projection through them.
+	MapMode string
 }
 
 // Pipeline is a normalized Martian pipeline declaration.

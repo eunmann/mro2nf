@@ -1,0 +1,40 @@
+# Field projection through a typed map<S>: MK outputs map<P>; SUM consumes
+# MK.m.x, projecting field x across the map's values (map<P>.x -> map<int>).
+struct P(
+    int x,
+    int y,
+)
+
+stage MK(
+    in  int      n,
+    out map<P>   m,
+    src py       "stages/mk",
+)
+
+stage SUM(
+    in  map<int> xs,
+    out int      total,
+    src py       "stages/sum",
+)
+
+pipeline MSP(
+    in  int n,
+    out int total,
+)
+{
+    call MK(
+        n = self.n,
+    )
+
+    call SUM(
+        xs = MK.m.x,
+    )
+
+    return (
+        total = SUM.total,
+    )
+}
+
+call MSP(
+    n = 2,
+)

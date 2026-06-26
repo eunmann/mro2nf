@@ -33,6 +33,12 @@ type Ref struct {
 	ID string `json:"id"`
 	// Output is the dotted projection within the referent (empty = whole value).
 	Output string `json:"output"`
+	// MapDepth, when > 0, marks a field projection through a typed map: navigate
+	// the first MapDepth segments of the path, then project the remainder over
+	// the values of the typed map reached there (map<S>.field -> map<field>).
+	// The emitter computes it from the program's types. 0 means no map
+	// projection (arrays auto-project at runtime; structs navigate by key).
+	MapDepth int `json:"mapDepth,omitempty"`
 }
 
 // Entry binds one parameter to a value expression: a leaf literal or ref, or a
@@ -259,17 +265,63 @@ func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMes
 
 	switch e.Ref.Kind {
 	case "self":
-		return extract(pipeArgs, joinPath(e.Ref.ID, e.Ref.Output))
+		return extractProject(pipeArgs, joinPath(e.Ref.ID, e.Ref.Output), e.Ref.MapDepth)
 	case "call":
 		outs, ok := callOuts[e.Ref.ID]
 		if !ok {
 			return json.RawMessage(nullLiteral), nil
 		}
 
-		return extract(outs, e.Ref.Output)
+		return extractProject(outs, e.Ref.Output, e.Ref.MapDepth)
 	default:
 		return nil, fmt.Errorf("%w: %q", errUnknownRefKind, e.Ref.Kind)
 	}
+}
+
+// extractProject navigates the first mapDepth segments, then projects the rest
+// of the path over the values of the typed map reached there. With mapDepth <= 0
+// it is the plain navigate/array-project extract.
+func extractProject(raw json.RawMessage, path string, mapDepth int) (json.RawMessage, error) {
+	if mapDepth <= 0 {
+		return extract(raw, path)
+	}
+
+	segs := strings.Split(path, ".")
+	if mapDepth >= len(segs) {
+		return extract(raw, path)
+	}
+
+	mapVal, err := extract(raw, strings.Join(segs[:mapDepth], "."))
+	if err != nil {
+		return nil, err
+	}
+
+	return projectMap(mapVal, strings.Join(segs[mapDepth:], "."))
+}
+
+// projectMap applies path to each value of a typed-map object, returning a map
+// of the projected values (null-tolerant for a null/absent map).
+func projectMap(raw json.RawMessage, path string) (json.RawMessage, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte(nullLiteral)) {
+		return json.RawMessage(nullLiteral), nil
+	}
+
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("project %q over map: %w", path, err)
+	}
+
+	out := make(map[string]json.RawMessage, len(m))
+	for k, v := range m {
+		pv, err := extract(v, path)
+		if err != nil {
+			return nil, err
+		}
+
+		out[k] = pv
+	}
+
+	return marshalRaw(out, "map projection")
 }
 
 const nullLiteral = "null"

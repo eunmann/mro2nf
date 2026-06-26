@@ -103,6 +103,10 @@ func lowerPipeline(p *syntax.Pipeline) (*ir.Pipeline, error) {
 func lowerCall(c *syntax.CallStm) (ir.Call, error) {
 	lc := ir.Call{Name: c.Id, Callable: c.DecId, Mapped: c.Mapping != nil}
 
+	if c.Mapping != nil {
+		lc.MapMode = c.Mapping.CallMode().String()
+	}
+
 	if m := c.Modifiers; m != nil {
 		lc.Local = m.Local
 		lc.Preflight = m.Preflight

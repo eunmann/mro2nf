@@ -117,7 +117,7 @@ func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 				return fmt.Errorf("create nulls dir: %w", err)
 			}
 
-			spec := bindSpec(disableBindings(c))
+			spec := bindSpec(prog, p, disableBindings(c))
 			if err := writeJSONFile(filepath.Join(specDir, disableName(p.Name, c.Name)+".json"), spec); err != nil {
 				return err
 			}
@@ -169,17 +169,9 @@ func validateProgram(prog *ir.Program) error {
 		p := prog.Pipelines[name]
 
 		for _, c := range p.Calls {
-			if err := checkMapProjection(prog, p, c.Bindings); err != nil {
-				return err
-			}
-
 			if err := validateMapCall(prog, name, c); err != nil {
 				return err
 			}
-		}
-
-		if err := checkMapProjection(prog, p, p.Returns); err != nil {
-			return err
 		}
 	}
 
@@ -239,88 +231,74 @@ func keyablePipeline(prog *ir.Program, callable string, seen map[string]bool) bo
 	return true
 }
 
-// checkMapProjection rejects a binding that projects a field through a typed map
-// (map<S>.field). The runtime binder is type-agnostic — it would navigate the
-// literal key "field" in the map and return null — so this fails fast rather
-// than emit silently-wrong output. Array and struct projection are fine.
-func checkMapProjection(prog *ir.Program, p *ir.Pipeline, bindings []ir.Binding) error {
-	var bad *ir.Ref
-
-	for _, b := range bindings {
-		walkRefs(b.Value, func(r *ir.Ref) {
-			if bad == nil && projectsThroughTypedMap(prog, p, r) {
-				bad = r
-			}
-		})
+// mapProjectDepth returns how many leading path segments a ref navigates before
+// it must project the remainder over a typed map's values (a map<S>.field
+// projection). It returns 0 when there is no typed-map projection — arrays
+// auto-project at runtime and structs navigate by key. The binder uses the depth
+// to switch from key navigation to map projection at exactly the right segment.
+func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
+	if p == nil || ref == nil || ref.Output == "" {
+		return 0
 	}
 
-	if bad != nil {
-		return &apperror.UnsupportedError{
-			Construct: "field projection through a typed map",
-			Detail:    p.Name + ": " + bad.ID + "." + bad.Output,
-		}
-	}
-
-	return nil
-}
-
-// walkRefs invokes fn for every ref in a value tree (including refs nested in
-// array/object literals).
-func walkRefs(v ir.Value, fn func(*ir.Ref)) {
-	if v.Ref != nil {
-		fn(v.Ref)
-	}
-
-	for _, e := range v.Array {
-		walkRefs(e, fn)
-	}
-
-	for _, e := range v.Object {
-		walkRefs(e, fn)
-	}
-}
-
-// projectsThroughTypedMap reports whether ref accesses a field underneath a
-// typed-map dimension (the unsupported map<S>.field shape).
-func projectsThroughTypedMap(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) bool {
-	if ref == nil || ref.Output == "" {
-		return false
-	}
+	var segs []string
 
 	var cur *ir.Param
 
-	var rest []string
+	// curMap is the typed-map depth of the value reached so far. A map-mode map
+	// call wraps the callee's outputs in one extra map dimension (the fork keys).
+	curMap := 0
 
 	switch ref.Kind {
 	case "self":
-		cur = paramByName(p.In, ref.ID)
-		rest = strings.Split(ref.Output, ".")
+		segs = append([]string{ref.ID}, strings.Split(ref.Output, ".")...)
+		cur = paramByName(p.In, segs[0])
 	case "call":
-		segs := strings.Split(ref.Output, ".")
+		segs = strings.Split(ref.Output, ".")
+		c := findCall(p, ref.ID)
 		cur = paramByName(calleeOutParams(prog, p, ref.ID), segs[0])
-		rest = segs[1:]
+
+		if c != nil && c.MapMode == "map" {
+			curMap++
+		}
 	default:
-		return false
+		return 0
 	}
 
-	for _, seg := range rest {
-		if cur == nil {
-			return false
-		}
+	if cur != nil {
+		curMap += cur.MapDim
+	}
 
-		if cur.MapDim > 0 { // a field access beneath a typed map
-			return true
+	for i := 1; i < len(segs); i++ {
+		if curMap > 0 { // about to access a field beneath a typed map
+			return i
 		}
 
 		st, ok := prog.Structs[cur.BaseType]
 		if !ok {
-			return false
+			return 0
 		}
 
-		cur = paramByName(st.Fields, seg)
+		cur = paramByName(st.Fields, segs[i])
+		if cur == nil {
+			return 0
+		}
+
+		curMap = cur.MapDim
 	}
 
-	return false
+	return 0
+}
+
+// findCall returns the call with the given instance id in p, or nil.
+func findCall(p *ir.Pipeline, id string) *ir.Call {
+	for i := range p.Calls {
+		if p.Calls[i].Name == id {
+			return &p.Calls[i]
+		}
+	}
+
+	return nil
 }
 
 func paramByName(ps []ir.Param, name string) *ir.Param {
@@ -377,12 +355,12 @@ func writeBindSpecs(prog *ir.Program, specDir string) error {
 		p := prog.Pipelines[name]
 
 		for _, c := range p.Calls {
-			if err := writeSpec(specDir, bindName(p.Name, c.Name), c.Bindings); err != nil {
+			if err := writeSpec(specDir, bindName(p.Name, c.Name), prog, p, c.Bindings); err != nil {
 				return err
 			}
 		}
 
-		if err := writeSpec(specDir, bindName(p.Name, "return"), p.Returns); err != nil {
+		if err := writeSpec(specDir, bindName(p.Name, "return"), prog, p, p.Returns); err != nil {
 			return err
 		}
 	}
@@ -390,8 +368,8 @@ func writeBindSpecs(prog *ir.Program, specDir string) error {
 	return nil
 }
 
-func writeSpec(specDir, name string, bindings []ir.Binding) error {
-	data, err := json.MarshalIndent(bindSpec(bindings), "", "  ")
+func writeSpec(specDir, name string, prog *ir.Program, p *ir.Pipeline, bindings []ir.Binding) error {
+	data, err := json.MarshalIndent(bindSpec(prog, p, bindings), "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal spec %s: %w", name, err)
 	}
@@ -403,7 +381,7 @@ func writeSpec(specDir, name string, bindings []ir.Binding) error {
 // entry_args bundle, staging any file-typed entry inputs so the run is
 // self-contained from the start.
 func writeEntryArgs(prog *ir.Program, outDir string) error {
-	args, err := bind.Resolve(bindSpec(prog.Entry.Bindings), nil, nil)
+	args, err := bind.Resolve(bindSpec(prog, nil, prog.Entry.Bindings), nil, nil)
 	if err != nil {
 		return fmt.Errorf("resolve entry args: %w", err)
 	}
@@ -441,8 +419,9 @@ func entryInParams(prog *ir.Program) []ir.Param {
 }
 
 // bindSpec converts IR bindings into a runtime binding spec, skipping wildcard
-// bindings (handled separately).
-func bindSpec(bindings []ir.Binding) bind.Spec {
+// bindings (handled separately). prog and the enclosing pipeline p (may be nil
+// for the top-level entry) let it resolve typed-map field projections.
+func bindSpec(prog *ir.Program, p *ir.Pipeline, bindings []ir.Binding) bind.Spec {
 	spec := bind.Spec{}
 
 	for _, b := range bindings {
@@ -450,7 +429,7 @@ func bindSpec(bindings []ir.Binding) bind.Spec {
 			continue
 		}
 
-		entry := valueToEntry(b.Value)
+		entry := valueToEntry(prog, p, b.Value)
 		entry.Split = b.Split
 		spec[b.Param] = entry
 	}
@@ -463,24 +442,29 @@ func bindSpec(bindings []ir.Binding) bind.Spec {
 // today; cloud profiles additionally require the object-store data plane.
 // valueToEntry converts an IR value tree into a runtime bind.Entry, preserving
 // refs nested inside array/object literals.
-func valueToEntry(v ir.Value) bind.Entry {
+func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 	switch {
 	case v.Array != nil:
 		arr := make([]bind.Entry, len(v.Array))
 		for i, e := range v.Array {
-			arr[i] = valueToEntry(e)
+			arr[i] = valueToEntry(prog, p, e)
 		}
 
 		return bind.Entry{Array: arr}
 	case v.Object != nil:
 		obj := make(map[string]bind.Entry, len(v.Object))
 		for k, e := range v.Object {
-			obj[k] = valueToEntry(e)
+			obj[k] = valueToEntry(prog, p, e)
 		}
 
 		return bind.Entry{Object: obj}
 	case v.Ref != nil:
-		return bind.Entry{Ref: &bind.Ref{Kind: v.Ref.Kind, ID: v.Ref.ID, Output: v.Ref.Output}}
+		return bind.Entry{Ref: &bind.Ref{
+			Kind:     v.Ref.Kind,
+			ID:       v.Ref.ID,
+			Output:   v.Ref.Output,
+			MapDepth: mapProjectDepth(prog, p, v.Ref),
+		}}
 	default:
 		return bind.Entry{Literal: v.Literal}
 	}

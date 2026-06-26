@@ -19,7 +19,6 @@ func TestEmitUnsupported(t *testing.T) {
 	}{
 		{"map call over a sub-pipeline", "../../testdata/unsupported/map_over_pipeline.mro"},
 		{"disabled map call", "../../testdata/unsupported/disabled_map.mro"},
-		{"field projection through a typed map", "../../testdata/unsupported/map_struct_proj.mro"},
 	}
 
 	for _, tc := range cases {

@@ -88,6 +88,7 @@ CASES=(
     "dir_out|testdata/dir_out|testdata/dir_out/expected/outs.json"
     "api_smoke|testdata/api_smoke|testdata/api_smoke/expected/outs.json"
     "float_to_int|testdata/float_to_int|testdata/float_to_int/expected/outs.json"
+    "map_struct_proj|testdata/map_struct_proj|testdata/map_struct_proj/expected/outs.json"
     "include_test|testdata/include_test|testdata/include_test/expected/outs.json"
     "default_out|testdata/default_out|testdata/default_out/expected/outs.json"
     "wildcard|testdata/wildcard|testdata/wildcard/expected/outs.json"

@@ -9,6 +9,33 @@ import (
 	"github.com/eunmann/martian-nextflow/internal/bind"
 )
 
+// TestResolveMapProjection projects a struct field through a typed map<S>:
+// CALL.m.x over {"m":{"a":{"x":1},"b":{"x":2}}} yields {"a":1,"b":2}.
+func TestResolveMapProjection(t *testing.T) {
+	spec := bind.Spec{
+		"xs": {Ref: &bind.Ref{Kind: "call", ID: "MAKE", Output: "m.x", MapDepth: 1}},
+	}
+	callOuts := map[string]json.RawMessage{
+		"MAKE": json.RawMessage(`{"m":{"a":{"x":1},"b":{"x":2}}}`),
+	}
+
+	raw, err := bind.Resolve(spec, nil, callOuts)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	var got struct {
+		Xs map[string]int `json:"xs"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if diff := cmp.Diff(map[string]int{"a": 1, "b": 2}, got.Xs); diff != "" {
+		t.Errorf("map projection mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestResolve(t *testing.T) {
 	spec := bind.Spec{
 		"values": {Ref: &bind.Ref{Kind: "self", ID: "values"}},
