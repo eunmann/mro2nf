@@ -62,17 +62,17 @@ func genSingleStage(b *strings.Builder, s *ir.Stage, g genCtx, base, outs string
   input:
     path args
   output:
-    path 'outs.json'
+    path "outs__${args.baseName}.json"
   script:
     """
-    %[4]s -args ${args} -outs '%[5]s' -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs.json
+    %[4]s -args ${args} -outs '%[5]s' -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${args.baseName}.json
     """
 }
 
 workflow wf_%[1]s {
   take: args
   main:
-    %[1]s(args.first())
+    %[1]s(args)
   emit:
     %[1]s.out
 }
@@ -150,6 +150,13 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 
 func genPipeline(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx) {
 	for _, c := range p.Calls {
+		if c.Mapped {
+			genForkBindProcess(b, p.Name, c, g)
+			genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
+
+			continue
+		}
+
 		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g)
 	}
 
@@ -157,11 +164,9 @@ func genPipeline(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx)
 	genPipelineWorkflow(b, p, prog)
 }
 
-// genBindProcess emits a process that resolves one call's (or the return's)
-// input bindings into args.json via `mre bind`.
-func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx) {
-	refs := refCalls(bindings)
-
+// bindInputs renders the input block and the -inputs argument for a bind/fork
+// process: pipeline args plus one staged file per referenced upstream call.
+func bindInputs(refs []string) (string, string) {
 	var inputs strings.Builder
 
 	inputs.WriteString("    path pipeargs\n")
@@ -172,10 +177,18 @@ func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g ge
 		pairs = append(pairs, fmt.Sprintf("%s=in_%s.json", id, id))
 	}
 
-	inputsArg := ""
+	arg := ""
 	if len(pairs) > 0 {
-		inputsArg = " -inputs " + strings.Join(pairs, ",")
+		arg = " -inputs " + strings.Join(pairs, ",")
 	}
+
+	return inputs.String(), arg
+}
+
+// genBindProcess emits a process that resolves one call's (or the return's)
+// input bindings into args.json via `mre bind`.
+func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx) {
+	block, arg := bindInputs(refCalls(bindings))
 
 	fmt.Fprintf(b, `process %[1]s {
   input:
@@ -187,7 +200,42 @@ func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g ge
     """
 }
 
-`, name, inputs.String(), g.mre, inputsArg)
+`, name, block, g.mre, arg)
+}
+
+// genForkBindProcess emits a process that resolves a map call's bindings into
+// one args file per fork (fork_NNNNN.json) via `mre forkbind`.
+func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
+	block, arg := bindInputs(refCalls(c.Bindings))
+
+	fmt.Fprintf(b, `process %[1]s {
+  input:
+%[2]s  output:
+    path 'fork_*.json'
+  script:
+    """
+    %[3]s forkbind -spec ${projectDir}/bindspecs/%[4]s.json -pipeargs ${pipeargs}%[5]s -chunkdir .
+    """
+}
+
+`, forkName(pipeline, c.Name), block, g.mre, bindName(pipeline, c.Name), arg)
+}
+
+// genMergeProcess emits a process that merges per-fork outputs into the
+// map-call result via `mre merge`.
+func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
+	fmt.Fprintf(b, `process %[1]s {
+  input:
+    path souts
+  output:
+    path 'merged.json'
+  script:
+    """
+    %[2]s merge -outs '%[3]s' -files \$(ls -1 outs__*.json | sort | paste -sd, -) -o merged.json
+    """
+}
+
+`, mergeName(pipeline, c.Name), g.mre, calleeOuts)
 }
 
 func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
@@ -212,8 +260,20 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 `, p.Name, body.String(), retName)
 }
 
-// genCallWiring emits the BIND + stage-workflow invocation for one call.
+// genCallWiring emits the BIND + stage-workflow invocation for one call, or the
+// fork/merge fan-out for a map call.
 func genCallWiring(b *strings.Builder, pipeline string, c ir.Call) {
+	if c.Mapped {
+		fork := forkName(pipeline, c.Name)
+		merge := mergeName(pipeline, c.Name)
+		fmt.Fprintf(b, "    %s(%s)\n", fork, bindCallArgs(c.Bindings))
+		fmt.Fprintf(b, "    out_%s = wf_%s(%s.out.flatten())\n", c.Name, c.Callable, fork)
+		fmt.Fprintf(b, "    %s(out_%s.collect())\n", merge, c.Name)
+		fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
+
+		return
+	}
+
 	bind := bindName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", bind, bindCallArgs(c.Bindings))
 	fmt.Fprintf(b, "    ch_%s = wf_%s(%s.out)\n", c.Name, c.Callable, bind)
@@ -259,6 +319,27 @@ func genEntry(b *strings.Builder, prog *ir.Program) {
 
 func bindName(pipeline, call string) string {
 	return "BIND_" + pipeline + "__" + call
+}
+
+func forkName(pipeline, call string) string {
+	return "FORK_" + pipeline + "__" + call
+}
+
+func mergeName(pipeline, call string) string {
+	return "MERGE_" + pipeline + "__" + call
+}
+
+// calleeOutNames returns the comma-joined output parameter names of a callable.
+func calleeOutNames(prog *ir.Program, callable string) string {
+	if s, ok := prog.Stages[callable]; ok {
+		return strings.Join(names(s.Out), ",")
+	}
+
+	if p, ok := prog.Pipelines[callable]; ok {
+		return strings.Join(names(p.Out), ",")
+	}
+
+	return ""
 }
 
 // refCalls returns the unique, sorted upstream call ids referenced by bindings.

@@ -1,0 +1,28 @@
+# Minimal map-call (fork) pipeline: scales each value by a factor.
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline SCALE_ALL(
+    in  float[] values,
+    in  float   factor,
+    out float[] scaled,
+)
+{
+    map call SCALE(
+        value  = split self.values,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+call SCALE_ALL(
+    values = [1.0, 2.0, 3.0],
+    factor = 10.0,
+)

@@ -118,7 +118,7 @@ func bindSpec(bindings []ir.Binding) bind.Spec {
 			continue
 		}
 
-		entry := bind.Entry{}
+		entry := bind.Entry{Split: b.Split}
 		if b.Ref != nil {
 			entry.Ref = &bind.Ref{Kind: b.Ref.Kind, ID: b.Ref.ID, Output: b.Ref.Output}
 		} else {
