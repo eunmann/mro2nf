@@ -5,6 +5,7 @@
 package emit
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -245,7 +246,12 @@ func writeEntryArgs(prog *ir.Program, outDir string) error {
 
 	payload := map[string]any{}
 	if len(args) > 0 {
-		if err := json.Unmarshal(args, &payload); err != nil {
+		// UseNumber keeps a whole-number float (e.g. 21.0) from collapsing to an
+		// integer when the entry args round-trip through the bundle.
+		dec := json.NewDecoder(bytes.NewReader(args))
+		dec.UseNumber()
+
+		if err := dec.Decode(&payload); err != nil {
 			return fmt.Errorf("decode entry args: %w", err)
 		}
 	}

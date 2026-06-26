@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -48,8 +49,8 @@ func ReadBundle(dir string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("resolve bundle %s: %w", dir, err)
 	}
 
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	v, err := decodeJSON(raw)
+	if err != nil {
 		return nil, fmt.Errorf("parse bundle %s: %w", dir, err)
 	}
 
@@ -59,6 +60,20 @@ func ReadBundle(dir string) (json.RawMessage, error) {
 	}
 
 	return out, nil
+}
+
+// decodeJSON decodes JSON into an any tree, keeping numbers as json.Number so a
+// whole-number float like 42.0 is not silently rewritten to 42 on re-encode.
+func decodeJSON(raw json.RawMessage) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, fmt.Errorf("decode json: %w", err)
+	}
+
+	return v, nil
 }
 
 // resolveMarkers walks decoded JSON, replacing marker strings with absolute
@@ -120,8 +135,8 @@ func writePayload(dir string, payload map[string]any) error {
 func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.Table) error {
 	argsMap := make(map[string]any, len(def.Args))
 	for k, v := range def.Args {
-		var dv any
-		if err := json.Unmarshal(v, &dv); err != nil {
+		dv, err := decodeJSON(v)
+		if err != nil {
 			return fmt.Errorf("decode chunk arg %s: %w", k, err)
 		}
 

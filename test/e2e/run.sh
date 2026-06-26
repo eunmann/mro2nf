@@ -96,3 +96,7 @@ CASES=(
 # Run cases in a bounded parallel pool; xargs exits non-zero if any case fails.
 printf '%s\n' "${CASES[@]}" |
     xargs -P "${E2E_PARALLEL:-6}" -d '\n' -I{} bash "$0" --one '{}'
+
+# Object-store readiness: a file pipeline under copy-staging into isolated
+# scratch dirs, plus self-contained-bundle assertions.
+bash "$ROOT/test/e2e/cloud_sim.sh"

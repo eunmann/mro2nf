@@ -73,7 +73,10 @@ func rawToMap(raw json.RawMessage) (map[string]any, error) {
 		return out, nil
 	}
 
-	if err := json.Unmarshal(trimmed, &out); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber() // keep 42.0 from collapsing to 42 across the bundle round-trip
+
+	if err := dec.Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode payload: %w", err)
 	}
 
