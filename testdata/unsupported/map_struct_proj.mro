@@ -1,0 +1,32 @@
+struct P(
+    int x,
+)
+
+stage MAKE(
+    out map<P> m,
+    src py     "m",
+)
+
+stage USE(
+    in  map<int> xs,
+    out int      w,
+    src py       "u",
+)
+
+# USE.xs binds MAKE.m.x: projecting field x through a typed map<P>.
+pipeline MP(
+    out int w,
+)
+{
+    call MAKE()
+
+    call USE(
+        xs = MAKE.m.x,
+    )
+
+    return (
+        w = USE.w,
+    )
+}
+
+call MP()

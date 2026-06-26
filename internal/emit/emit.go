@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/martian-nextflow/internal/apperror"
 	"github.com/eunmann/martian-nextflow/internal/bind"
@@ -165,27 +166,44 @@ func writeJSONFile(path string, v any) error {
 // correctly, with a clear error rather than silently wrong output.
 func validateProgram(prog *ir.Program) error {
 	for _, name := range sortedKeys(prog.Pipelines) {
-		for _, c := range prog.Pipelines[name].Calls {
-			if !c.Mapped {
-				continue
+		p := prog.Pipelines[name]
+
+		for _, c := range p.Calls {
+			if err := checkMapProjection(prog, p, c.Bindings); err != nil {
+				return err
 			}
 
-			if c.Disabled != nil {
-				return &apperror.UnsupportedError{
-					Construct: "disabled map call",
-					Detail:    name + "." + c.Name,
-				}
+			if err := validateMapCall(prog, name, c); err != nil {
+				return err
 			}
+		}
 
-			// Stage and keyable-pipeline map targets run through fork-key-threaded
-			// variants. A pipeline target whose body (transitively) contains a
-			// disabled or nested-map call cannot yet be keyed per fork.
-			if !keyablePipeline(prog, c.Callable, map[string]bool{}) {
-				return &apperror.UnsupportedError{
-					Construct: "map call over a pipeline with disabled or nested-map calls",
-					Detail:    name + "." + c.Name + " -> " + c.Callable,
-				}
-			}
+		if err := checkMapProjection(prog, p, p.Returns); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateMapCall rejects map-call modifier combinations the keyed machinery
+// cannot yet thread per fork.
+func validateMapCall(prog *ir.Program, pipeline string, c ir.Call) error {
+	if !c.Mapped {
+		return nil
+	}
+
+	if c.Disabled != nil {
+		return &apperror.UnsupportedError{Construct: "disabled map call", Detail: pipeline + "." + c.Name}
+	}
+
+	// Stage and keyable-pipeline map targets run through fork-key-threaded
+	// variants. A pipeline target whose body (transitively) contains a disabled
+	// or nested-map call cannot yet be keyed per fork.
+	if !keyablePipeline(prog, c.Callable, map[string]bool{}) {
+		return &apperror.UnsupportedError{
+			Construct: "map call over a pipeline with disabled or nested-map calls",
+			Detail:    pipeline + "." + c.Name + " -> " + c.Callable,
 		}
 	}
 
@@ -219,6 +237,120 @@ func keyablePipeline(prog *ir.Program, callable string, seen map[string]bool) bo
 	}
 
 	return true
+}
+
+// checkMapProjection rejects a binding that projects a field through a typed map
+// (map<S>.field). The runtime binder is type-agnostic — it would navigate the
+// literal key "field" in the map and return null — so this fails fast rather
+// than emit silently-wrong output. Array and struct projection are fine.
+func checkMapProjection(prog *ir.Program, p *ir.Pipeline, bindings []ir.Binding) error {
+	var bad *ir.Ref
+
+	for _, b := range bindings {
+		walkRefs(b.Value, func(r *ir.Ref) {
+			if bad == nil && projectsThroughTypedMap(prog, p, r) {
+				bad = r
+			}
+		})
+	}
+
+	if bad != nil {
+		return &apperror.UnsupportedError{
+			Construct: "field projection through a typed map",
+			Detail:    p.Name + ": " + bad.ID + "." + bad.Output,
+		}
+	}
+
+	return nil
+}
+
+// walkRefs invokes fn for every ref in a value tree (including refs nested in
+// array/object literals).
+func walkRefs(v ir.Value, fn func(*ir.Ref)) {
+	if v.Ref != nil {
+		fn(v.Ref)
+	}
+
+	for _, e := range v.Array {
+		walkRefs(e, fn)
+	}
+
+	for _, e := range v.Object {
+		walkRefs(e, fn)
+	}
+}
+
+// projectsThroughTypedMap reports whether ref accesses a field underneath a
+// typed-map dimension (the unsupported map<S>.field shape).
+func projectsThroughTypedMap(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) bool {
+	if ref == nil || ref.Output == "" {
+		return false
+	}
+
+	var cur *ir.Param
+
+	var rest []string
+
+	switch ref.Kind {
+	case "self":
+		cur = paramByName(p.In, ref.ID)
+		rest = strings.Split(ref.Output, ".")
+	case "call":
+		segs := strings.Split(ref.Output, ".")
+		cur = paramByName(calleeOutParams(prog, p, ref.ID), segs[0])
+		rest = segs[1:]
+	default:
+		return false
+	}
+
+	for _, seg := range rest {
+		if cur == nil {
+			return false
+		}
+
+		if cur.MapDim > 0 { // a field access beneath a typed map
+			return true
+		}
+
+		st, ok := prog.Structs[cur.BaseType]
+		if !ok {
+			return false
+		}
+
+		cur = paramByName(st.Fields, seg)
+	}
+
+	return false
+}
+
+func paramByName(ps []ir.Param, name string) *ir.Param {
+	for i := range ps {
+		if ps[i].Name == name {
+			return &ps[i]
+		}
+	}
+
+	return nil
+}
+
+// calleeOutParams returns the output params of the callable invoked by the named
+// call in pipeline p.
+func calleeOutParams(prog *ir.Program, p *ir.Pipeline, callID string) []ir.Param {
+	for _, c := range p.Calls {
+		if c.Name != callID {
+			continue
+		}
+
+		if s, ok := prog.Stages[c.Callable]; ok {
+			return s.Out
+		}
+
+		if pp, ok := prog.Pipelines[c.Callable]; ok {
+			return pp.Out
+		}
+	}
+
+	return nil
 }
 
 // writeModules writes one Nextflow module per stage and per pipeline.
