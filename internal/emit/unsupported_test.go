@@ -17,8 +17,7 @@ func TestEmitUnsupported(t *testing.T) {
 		name string
 		mro  string
 	}{
-		{"map call over a sub-pipeline", "../../testdata/unsupported/map_over_pipeline.mro"},
-		{"disabled map call", "../../testdata/unsupported/disabled_map.mro"},
+		{"map call over a sub-pipeline with disabled body", "../../testdata/unsupported/map_over_pipeline.mro"},
 	}
 
 	for _, tc := range cases {

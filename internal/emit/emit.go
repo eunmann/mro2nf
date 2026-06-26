@@ -188,10 +188,6 @@ func validateMapCall(prog *ir.Program, pipeline string, c ir.Call) error {
 		return nil
 	}
 
-	if c.Disabled != nil {
-		return &apperror.UnsupportedError{Construct: "disabled map call", Detail: pipeline + "." + c.Name}
-	}
-
 	// Stage and keyable-pipeline map targets run through fork-key-threaded
 	// variants. A pipeline target whose body (transitively) contains a disabled
 	// or nested-map call cannot yet be keyed per fork.

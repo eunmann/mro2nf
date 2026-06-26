@@ -1,0 +1,29 @@
+# A disabled map call: when the flag is true the whole mapped call yields null;
+# when false it runs every fork. Here skip=true, so the result is null.
+stage DBL(
+    in  int v,
+    out int w,
+    src py  "stages/dbl",
+)
+
+pipeline Q(
+    in  int[] vs,
+    in  bool  skip,
+    out int[] w,
+)
+{
+    map call DBL(
+        v = split self.vs,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        w = DBL.w,
+    )
+}
+
+call Q(
+    vs   = [1, 2, 3],
+    skip = true,
+)

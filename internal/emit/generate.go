@@ -216,6 +216,10 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			genForkBindProcess(b, p.Name, c, g)
 			genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 
+			if c.Disabled != nil {
+				genDisableProcess(b, p.Name, c, g)
+			}
+
 			continue
 		}
 
@@ -601,7 +605,16 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Prog
 func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee string, _ *ir.Program) {
 	fork := forkName(pipeline, c.Name)
 	merge := mergeName(pipeline, c.Name)
-	fmt.Fprintf(b, "    %s(%s)\n", fork, bindCallArgs(c.Bindings))
+
+	// When the map call is disabled, gate the fork's pipeline-args by the runtime
+	// flag so the forks only run when enabled; on skip the call yields its null
+	// outputs bundle instead.
+	forkArgs := bindCallArgs(c.Bindings)
+	if c.Disabled != nil {
+		forkArgs = genMappedDisableGate(b, pipeline, c)
+	}
+
+	fmt.Fprintf(b, "    %s(%s)\n", fork, forkArgs)
 	// Each fork is keyed by its args-bundle name and run through the callee's
 	// fork-key-threaded variant, which emits tuple(key, outBundle).
 	fmt.Fprintf(b, "    keyed_%s = %s.out.forks.flatten().map { f -> tuple(f.baseName, f) }\n", c.Name, fork)
@@ -610,9 +623,36 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 	// (collect() on an empty channel emits nothing), yielding null outputs.
 	// FORK.out.keys carries map-fork keys (null for an array fork).
 	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys)\n", merge, c.Name, fork)
+
+	if c.Disabled != nil {
+		// On the disabled branch FORK is skipped, so MERGE produces nothing; mix
+		// in the null bundle. .first() makes the merged result reusable.
+		nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+		fmt.Fprintf(b, "    s_%[1]s = g_%[1]s.skip.map { a, d -> file(\"%[2]s\") }\n", c.Name, nulls)
+		fmt.Fprintf(b, "    ch_%s = %s.out.mix(s_%s).first()\n", c.Name, merge, c.Name)
+
+		return
+	}
+
 	// MERGE's inputs are value channels (collected forks + keys), so its output
 	// is a value channel reusable by multiple downstream consumers.
 	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
+}
+
+// genMappedDisableGate emits the DISABLE process and a run/skip branch on the
+// resolved flag, returning the fork's actual-args with pipeargs replaced by the
+// enabled (run) branch.
+func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string {
+	dis := disableName(pipeline, c.Name)
+	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c)))
+	fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s.out).branch { a, d ->
+        def off = new groovy.json.JsonSlurper().parseText(file("${d}/data.json").text).disabled
+        run: !off
+        skip: off
+    }
+`, c.Name, dis)
+
+	return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { a, d -> a }", c.Name))
 }
 
 // genDisabledWiring runs the callee only when the resolved `disabled` flag is
@@ -663,10 +703,16 @@ func disableName(pipeline, call string) string {
 // bindCallArgs renders the actual-argument list for a BIND invocation: the
 // pipeline args first, then each referenced upstream call's output channel.
 func bindCallArgs(bindings []ir.Binding) string {
+	return bindCallArgsPa(bindings, "pa")
+}
+
+// bindCallArgsPa is bindCallArgs with an explicit pipeline-args channel
+// expression (used to substitute a gated channel for a disabled call).
+func bindCallArgsPa(bindings []ir.Binding, pa string) string {
 	refs := refCalls(bindings)
 
 	args := make([]string, 0, 1+len(refs))
-	args = append(args, "pa")
+	args = append(args, pa)
 
 	for _, id := range refs {
 		args = append(args, "ch_"+id)
