@@ -1,0 +1,128 @@
+# Kitchen-sink pipeline: exercises a broad cross-section of Martian features so
+# the transpiler and a Nextflow run can be compared against mrp.
+#
+# Features: filetype, struct type, split/main/join (map-reduce), file outputs,
+# using(mem_gb/threads/volatile), retain, non-split stage, preflight stage,
+# local + disabled + volatile call modifiers, aliased calls, map call (fork
+# over an array), nested pipeline, self/call/wildcard bindings, typed map,
+# and a top-level call.
+
+filetype txt;
+
+struct Stats(
+    int   count,
+    float total,
+    float mean,
+)
+
+# split/main/join: square each input value, then sum, and write a report file.
+stage SUM_SQUARES(
+    in  float[] values,
+    out float   sum,
+    out txt     report  "human-readable summary"  "report.txt",
+    src py      "stages/sum_squares",
+) split (
+    in  float   value,
+    out float   square,
+) using (
+    mem_gb   = 1,
+    threads  = 1,
+    volatile = strict,
+)
+
+# non-split stage producing a struct output.
+stage STATS(
+    in  float[] values,
+    out Stats   stats,
+    src py      "stages/stats",
+) using (
+    mem_gb = 1,
+)
+
+# preflight stage: validates inputs, has no outputs.
+stage CHECK(
+    in  float[] values,
+    src py      "stages/check",
+)
+
+# scales a single value by a factor; used inside a map-call fork.
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+# nested pipeline that forks SCALE over each value (map call).
+pipeline SCALE_ALL(
+    in  float[] values,
+    in  float   factor,
+    out float[] scaled,
+)
+{
+    map call SCALE(
+        value  = split self.values,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+pipeline MAIN(
+    in  float[] values,
+    in  float   factor,
+    in  bool    skip_stats,
+    out float   sum,
+    out Stats   stats,
+    out float[] scaled,
+    out float[] scaled_again,
+)
+{
+    call CHECK(
+        values = self.values,
+    ) using (
+        preflight = true,
+    )
+
+    call SUM_SQUARES(
+        values = self.values,
+    ) using (
+        local    = true,
+        volatile = true,
+    )
+
+    call STATS(
+        values = self.values,
+    ) using (
+        disabled = self.skip_stats,
+    )
+
+    call SCALE_ALL(
+        values = self.values,
+        factor = self.factor,
+    )
+
+    call SCALE_ALL as SCALE_ALL2(
+        values = self.values,
+        factor = self.factor,
+    )
+
+    return (
+        sum          = SUM_SQUARES.sum,
+        stats        = STATS.stats,
+        scaled       = SCALE_ALL.scaled,
+        scaled_again = SCALE_ALL2.scaled,
+    )
+
+    retain (
+        SUM_SQUARES.report,
+    )
+}
+
+call MAIN(
+    values     = [1.0, 2.0, 3.0, 4.0],
+    factor     = 10.0,
+    skip_stats = false,
+)
