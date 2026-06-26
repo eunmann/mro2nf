@@ -60,3 +60,5 @@ run_case alias_min testdata/alias_min \
     testdata/alias_min/expected/p_outs.json
 run_case exec_min testdata/exec_min \
     testdata/exec_min/expected/ep_outs.json
+run_case kitchen_sink testdata/kitchen_sink \
+    testdata/kitchen_sink/expected/main_outs.json
