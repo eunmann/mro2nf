@@ -96,6 +96,48 @@ func TestEmitConfig(t *testing.T) {
 	}
 }
 
+// TestEmitMonitorAndContainer checks the -monitor and -container options reach
+// the generated stage commands and config.
+func TestEmitMonitorAndContainer(t *testing.T) {
+	ast, err := frontend.Parse("../../testdata/split_test/pipeline.mro", []string{"../../testdata/split_test"}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	dir := t.TempDir()
+	err = emit.Emit(prog, emit.Options{
+		OutDir: dir, Mre: "mre", Shell: "/x/martian_shell.py", MROFile: "pipeline.mro",
+		Monitor: true, Container: "ecr/mre:latest",
+		StageCode: map[string]string{"SUM_SQUARES": "/x/sum_squares", "REPORT": "/x/report"},
+	})
+	if err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+
+	mod, err := os.ReadFile(filepath.Join(dir, "modules", "stage_SUM_SQUARES.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(mod), " -monitor") {
+		t.Error("stage command missing -monitor with Monitor: true")
+	}
+
+	cfg, err := os.ReadFile(filepath.Join(dir, "nextflow.config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(cfg), "container = 'ecr/mre:latest'") {
+		t.Error("nextflow.config missing process.container line")
+	}
+}
+
 func TestEmitEntryArgs(t *testing.T) {
 	dir := loadAndEmit(t)
 

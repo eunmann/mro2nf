@@ -79,6 +79,7 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-shell <path>` | path to `martian_shell.py` at run time |
 | `-mrjob <path>` | path to `mrjob` (only needed for `comp` stages) |
 | `-container <image>` | set `process.container` for container backends (AWS Batch, k8s) |
+| `-monitor` | cap each stage's virtual memory at its `vmem_gb` via `prlimit` (mrp `--monitor`) |
 
 `-mre`/`-shell`/`-mrjob`/stage paths are baked into the generated scripts, so set
 them to the paths that will exist **where the pipeline runs** (the local repo for
@@ -141,11 +142,13 @@ Supported: stages/pipelines/calls, split/main/join, map calls over arrays/maps/
 `exec`/`comp` adapters, call modifiers, dynamic per-chunk resources, and the
 object-store data plane.
 
-Guarded (fail fast with a clear error, never silently wrong): a `disabled` map
-call, and a map call over a pipeline whose body contains a disabled/nested-map
-call. Documented divergences (output-correct; only allocation/layout differ):
-VDR timing, `vmem`/`special` scheduler directives, and mrp's nested `outs/` tree
-vs Nextflow's flat `publishDir`.
+Every Martian map-call combination is supported (including disabled map calls,
+maps over pipelines with internal disabled calls, and nested maps via 2-D fork
+keying). Content-based retry (ASSERT → terminate, otherwise retry) and `-monitor`
+vmem enforcement are handled in the shim. Documented divergences (output-correct;
+only allocation/layout/timing differ): mid-run VDR deletion, the `special`
+scheduler key (map it via a `withName`/`clusterOptions` config block), and mrp's
+nested `outs/` tree vs Nextflow's flat `publishDir`.
 
 ## Development
 

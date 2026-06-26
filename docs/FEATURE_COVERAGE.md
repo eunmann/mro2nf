@@ -88,14 +88,15 @@ out of scope for a transpiler.
 | per-chunk resources → Nextflow scheduler directives | ✅ #15 (dynamic `cpus`/`memory` closures read the chunk's resolved resources) | e2e `split_test`, unit |
 | negative/adaptive resource sentinels | ✅ preserved | unit `TestMergeArgsNegativeResources` |
 | stage `using(mem_gb/threads)` incl. fractional → cpus/memory | ✅ | unit `TestEmitModules` (`memory '2 GB'`, `cpus 1`), shim |
-| `using(vmem_gb)` / `using(special)` → scheduler directive | ⚠️ carried in `_args`/`_jobinfo` but not mapped to a Nextflow directive (no native vmem ceiling; `special`→`clusterOptions` not emitted). Output-correct; allocation differs | unit `TestSpecialResourcePreserved` |
+| `using(vmem_gb)` enforcement | ✅ with `mart -monitor` (shim caps the adapter's virtual memory via `prlimit --as`); otherwise carried in `_jobinfo` only | unit `TestLimitedCommandMonitor` |
+| `using(special)` → scheduler | ⚠️ carried in `_jobinfo`; not auto-mapped (the `special` string is a jobmanager key, not raw scheduler syntax). Map it with a `withName`/`clusterOptions` config block. Output-correct | unit `TestSpecialResourcePreserved` |
 | split-returned `join` resource override → join phase directives | ⚠️ dropped (join uses the stage's static `using()` resources). Output-correct; allocation differs | — |
 | `martian` module API (make_path, log_info/log_warn, update_progress, exit, alarm) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain`, `api_smoke` |
 | `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` (using(mem_gb=3,threads=2)→mem 3,threads 2) |
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
-| ASSERT vs retryable-error classification | 🚫 mrp content-based retry | — (documented) |
+| ASSERT vs retryable-error classification | ✅ shim exits 42 for an ASSERT (terminate) vs 1 for a retryable failure; config's dynamic `errorStrategy` routes accordingly | unit `TestStageFailureClassification`, `TestEmitConfig` |
 | auto-adjust-memory / OOM escalation | 🚫 mrp runtime | — (documented) |
-| `--monitor` vmem enforcement | 🚫 mrp/cgroup | — (documented) |
+| `--monitor` vmem enforcement | ✅ with `mart -monitor` (shim `prlimit --as` cap; RLIMIT_AS address-space, vs mrp's RSS poll) | unit `TestLimitedCommandMonitor` |
 
 ## Outputs / storage — storage-management
 
@@ -114,7 +115,7 @@ out of scope for a transpiler.
 | Feature | Status | Test |
 |---|---|---|
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles | unit `TestEmitConfig` |
-| `--autoretry` (coarse retry of failed tasks) | ⚠️ `errorStrategy 'retry'`/`maxRetries 2` (any-failure retry; mrp's content-based ASSERT-vs-retryable classification is 🚫) | unit `TestEmitConfig` |
+| `--autoretry` (content-based retry) | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it | unit `TestEmitConfig`, `TestStageFailureClassification` |
 | cloud executors (awsbatch/k8s) | ✅ profiles emitted; #13 bundle data plane makes file flow object-store-correct | config, e2e `cloud_sim` (copy-staging proxy) |
 | `-resume` ≈ restart-without-rerun | ⚠️ content-addressed cache (different mechanism) | — |
 | web UI / HTTP API / mrstat | 🚫 use `nextflow log`/`-with-report` instead | — |
@@ -130,15 +131,15 @@ out of scope for a transpiler.
   2-D composite-key fork threading). The transpiler no longer emits an
   `UnsupportedError` for any map-call shape. (The `lower` stage still guards a
   genuinely unknown expression kind as defensive code.)
-- 🚫 items are `mrp`-runtime behaviors classified by *where* support would live;
-  none affects output equivalence (final `results/` match `mrp`):
-  - **content-based retry (ASSERT vs retryable)** — shim-implementable: the shim
-    already sees the `ASSERT:` error channel and could exit with a distinct code,
-    with the emitter mapping exit codes to a dynamic `errorStrategy`. A coarse
-    `errorStrategy 'retry'` is already emitted; fine classification is future work.
-  - **`--monitor` vmem enforcement** — shim-implementable: the shim spawns the
-    adapter and could impose a virtual-memory ceiling (`prlimit --as`) and kill on
-    breach, like mrp's cgroup monitor. Not yet wired.
+- Former `mrp`-runtime-only items, now handled at the shim level (none affects
+  output equivalence — final `results/` always match `mrp`):
+  - **content-based retry (ASSERT vs retryable)** — ✅ done. The shim exits 42 for
+    an `ASSERT:` failure and 1 otherwise; the config's dynamic `errorStrategy`
+    terminates the former and retries the latter.
+  - **`--monitor` vmem enforcement** — ✅ done (opt-in `mart -monitor`). The shim
+    caps the adapter via `prlimit --as`. Caveat: RLIMIT_AS bounds address space,
+    where mrp polls RSS, so a high-virtual/low-resident stage may be capped
+    sooner; enable only when you want that ceiling.
   - **VDR rolling/strict mid-run deletion** — *not* shim-level (a single phase has
     no downstream-DAG view). For a volatile output with one consumer it is cleanly
     emittable (inject the delete into that consumer's shim, removing the symlink
