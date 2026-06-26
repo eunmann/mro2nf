@@ -66,6 +66,36 @@ func TestEmitFiles(t *testing.T) {
 	}
 }
 
+// TestEmitConfig checks nextflow.config declares every executor profile and the
+// auto-retry analog, so a -profile run resolves and transient failures retry.
+func TestEmitConfig(t *testing.T) {
+	dir := loadAndEmit(t)
+
+	data, err := os.ReadFile(filepath.Join(dir, "nextflow.config"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	cfg := string(data)
+	for _, want := range []string{
+		"params.outdir = 'results'",
+		"standard { process.executor = 'local' }",
+		"slurm    { process.executor = 'slurm' }",
+		"sge      { process.executor = 'sge' }",
+		"lsf      { process.executor = 'lsf' }",
+		"pbs      { process.executor = 'pbs' }",
+		"process.executor = 'awsbatch'",
+		"k8s { process.executor = 'k8s' }",
+		"errorStrategy = 'retry'",
+		"maxRetries = 2",
+		"params.aws_queue = null",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("nextflow.config missing %q", want)
+		}
+	}
+}
+
 func TestEmitEntryArgs(t *testing.T) {
 	dir := loadAndEmit(t)
 
@@ -111,8 +141,14 @@ func TestEmitModules(t *testing.T) {
 			// reading the chunk's resolved resources carried as a val.
 			"cpus { (res?.threads",
 			"memory { (res?.mem_gb",
+			// Static using(mem_gb=2) maps to the split/join phase memory.
+			"memory '2 GB'",
 		},
-		"modules/stage_REPORT.nf": {"process REPORT {"},
+		"modules/stage_REPORT.nf": {
+			"process REPORT {",
+			// using(threads=0.5) rounds up to one whole CPU.
+			"cpus 1",
+		},
 	}
 
 	for rel, wants := range checks {

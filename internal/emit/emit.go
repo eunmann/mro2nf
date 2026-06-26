@@ -356,6 +356,18 @@ func valueToEntry(v ir.Value) bind.Entry {
 
 func configFile() string {
 	return `params.outdir = 'results'
+// Cloud knobs the awsbatch profile reads; override with --aws_queue/--aws_region.
+params.aws_queue = null
+params.aws_region = null
+
+// Coarse analog of mrp --autoretry: retry a failed task a couple of times.
+// (mrp's content-based ASSERT-vs-retryable classification has no Nextflow
+// equivalent, so this retries any failure.) Cap concurrency with the standard
+// '-process.maxForks' / '-qs' flags; local pools with '-process.cpus' etc.
+process {
+    errorStrategy = 'retry'
+    maxRetries = 2
+}
 
 profiles {
     standard { process.executor = 'local' }
