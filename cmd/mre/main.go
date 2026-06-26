@@ -104,6 +104,7 @@ func runSplit(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("split", flag.ContinueOnError)
 	cf := addCommon(fs)
 	argsFile := fs.String("args", "", "stage args JSON file")
+	chunkDir := fs.String("chunkdir", "", "if set, also write per-chunk files (chunk_NNNNN.json) here")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -119,7 +120,15 @@ func runSplit(ctx context.Context, argv []string) error {
 		return fmt.Errorf("split: %w", err)
 	}
 
-	return writeJSON(cf.outFile, defs)
+	if err := writeJSON(cf.outFile, defs); err != nil {
+		return err
+	}
+
+	if *chunkDir != "" {
+		return writeChunkFiles(*chunkDir, defs)
+	}
+
+	return nil
 }
 
 func runMain(ctx context.Context, argv []string) error {
@@ -155,7 +164,7 @@ func runJoin(ctx context.Context, argv []string) error {
 	cf := addCommon(fs)
 	argsFile := fs.String("args", "", "stage args JSON file")
 	defsFile := fs.String("chunkdefs", "", "chunk defs JSON array file")
-	outsFile := fs.String("chunkouts", "", "chunk outs JSON array file")
+	outsFile := fs.String("chunkouts", "", "comma-separated per-chunk outs files, in order")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)

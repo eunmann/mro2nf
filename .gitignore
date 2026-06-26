@@ -1,4 +1,8 @@
 /mart
 /mre
+/out/
+/.nextflow*
+/work/
+/results/
 /artifacts/*
 !/artifacts/.gitkeep

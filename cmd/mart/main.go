@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/eunmann/martian-nextflow/internal/emit"
 	"github.com/eunmann/martian-nextflow/internal/frontend"
+	"github.com/eunmann/martian-nextflow/internal/ir"
 	"github.com/eunmann/martian-nextflow/internal/logging"
 )
 
@@ -29,6 +31,8 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("mart", flag.ContinueOnError)
 	outDir := fs.String("o", "out", "output directory for the generated Nextflow project")
 	mroPath := fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)")
+	mreFlag := fs.String("mre", "mre", "path to the mre shim binary")
+	shellFlag := fs.String("shell", "", "path to martian_shell.py")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -58,18 +62,64 @@ func run(args []string) error {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
-	entry := "(none)"
-	if prog.Entry != nil {
-		entry = prog.Entry.Callable
+	if err := emitProgram(prog, fs.Arg(0), *outDir, *mreFlag, *shellFlag); err != nil {
+		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
 	log.Info().
 		Str("source", fs.Arg(0)).
 		Int("stages", len(prog.Stages)).
 		Int("pipelines", len(prog.Pipelines)).
-		Str("entry", entry).
 		Str("out", *outDir).
-		Msg("lowered MRO to IR")
+		Msg("emitted Nextflow project")
 
 	return nil
+}
+
+// emitProgram resolves the absolute paths the generated project needs and emits
+// the Nextflow project for prog.
+func emitProgram(prog *ir.Program, src, outDir, mre, shell string) error {
+	mroDir := filepath.Dir(src)
+
+	code := make(map[string]string, len(prog.Stages))
+
+	for name, s := range prog.Stages {
+		path := s.SrcPath
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(mroDir, path)
+		}
+
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolve stage %s src: %w", name, err)
+		}
+
+		code[name] = abs
+	}
+
+	if err := emit.Emit(prog, emit.Options{
+		OutDir:    outDir,
+		Mre:       absOrSelf(mre),
+		Shell:     absOrSelf(shell),
+		MROFile:   filepath.Base(src),
+		StageCode: code,
+	}); err != nil {
+		return fmt.Errorf("emit: %w", err)
+	}
+
+	return nil
+}
+
+// absOrSelf returns the absolute form of a path, falling back to the original
+// (e.g. a bare command name like "mre" found on PATH).
+func absOrSelf(p string) string {
+	if p == "" || p == "mre" {
+		return p
+	}
+
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+
+	return p
 }

@@ -22,6 +22,9 @@ build: ## Build mart and mre
 test: ## Run unit tests
 	go test ./... 2>&1 | tee artifacts/test.log
 
+test-e2e: build ## Run the end-to-end Nextflow differential test
+	bash test/e2e/run.sh
+
 vet: ## Run go vet
 	go vet ./...
 

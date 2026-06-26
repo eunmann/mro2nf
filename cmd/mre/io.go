@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/eunmann/martian-nextflow/internal/shim"
@@ -26,11 +27,16 @@ func readFile(path string) (json.RawMessage, error) {
 }
 
 func readChunk(path string) (shim.ChunkDef, error) {
-	var chunk shim.ChunkDef
+	chunk := shim.ChunkDef{Args: map[string]json.RawMessage{}}
 
 	data, err := readFile(path)
 	if err != nil {
 		return chunk, err
+	}
+
+	// A non-split stage runs as a single chunk with no per-chunk args.
+	if len(data) == 0 {
+		return chunk, nil
 	}
 
 	if err := json.Unmarshal(data, &chunk); err != nil {
@@ -40,7 +46,9 @@ func readChunk(path string) (shim.ChunkDef, error) {
 	return chunk, nil
 }
 
-func readChunkData(defsPath, outsPath string) ([]shim.ChunkDef, []json.RawMessage, error) {
+// readChunkData reads the chunk defs array and the ordered, comma-separated
+// per-chunk outs files.
+func readChunkData(defsPath, outsList string) ([]shim.ChunkDef, []json.RawMessage, error) {
 	defsRaw, err := readFile(defsPath)
 	if err != nil {
 		return nil, nil, err
@@ -51,14 +59,15 @@ func readChunkData(defsPath, outsPath string) ([]shim.ChunkDef, []json.RawMessag
 		return nil, nil, fmt.Errorf("parse chunk defs %s: %w", defsPath, err)
 	}
 
-	outsRaw, err := readFile(outsPath)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	var outs []json.RawMessage
-	if err := json.Unmarshal(outsRaw, &outs); err != nil {
-		return nil, nil, fmt.Errorf("parse chunk outs %s: %w", outsPath, err)
+
+	for _, file := range splitComma(outsList) {
+		data, err := readFile(file)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		outs = append(outs, data)
 	}
 
 	return defs, outs, nil
@@ -84,6 +93,19 @@ func writeRaw(path string, data []byte) error {
 
 	if err := os.WriteFile(path, data, filePerm); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
+	}
+
+	return nil
+}
+
+// writeChunkFiles writes each chunk to a zero-padded file so that a lexical
+// sort of the filenames recovers chunk order downstream.
+func writeChunkFiles(dir string, defs []shim.ChunkDef) error {
+	for i, def := range defs {
+		name := fmt.Sprintf("chunk_%05d.json", i)
+		if err := writeJSON(filepath.Join(dir, name), def); err != nil {
+			return err
+		}
 	}
 
 	return nil
