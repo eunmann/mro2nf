@@ -36,6 +36,7 @@ out of scope for a transpiler.
 | typed arrays `T[]`, multi-dim `T[][]` | ✅ | e2e `multidim`, `split_test` |
 | typed maps `map<T>` (output) | ✅ | e2e `typedmap_out` |
 | int→float coercion; float→int rejected | ✅ | `martian/syntax` (corpus parse) |
+| whole-number float literal → int param (`5.0` → `5`) | ✅ (type-directed `CoerceScalars`) | e2e `float_to_int`, unit `TestCoerceScalars` |
 | literals: int/float/sci, bool, null, arrays, maps, struct literals, escapes | ✅ | `martian/syntax`; e2e entry args |
 | bindings: `self.x`, `self.x.y`, `STAGE`, `STAGE.out`, `STAGE.out.field`, `STAGE.default` | ✅ | unit `bind`; e2e `struct_proj`, `default_out` |
 | **field projection through arrays** (`CALL.s.field`) | ✅ | unit `TestResolveArrayProjection`, e2e `struct_proj` |
@@ -88,7 +89,9 @@ out of scope for a transpiler.
 | stage `using(mem_gb/threads)` incl. fractional → cpus/memory | ✅ | unit `TestEmitModules` (`memory '2 GB'`, `cpus 1`), shim |
 | `using(vmem_gb)` / `using(special)` → scheduler directive | ⚠️ carried in `_args`/`_jobinfo` but not mapped to a Nextflow directive (no native vmem ceiling; `special`→`clusterOptions` not emitted). Output-correct; allocation differs | unit `TestSpecialResourcePreserved` |
 | split-returned `join` resource override → join phase directives | ⚠️ dropped (join uses the stage's static `using()` resources). Output-correct; allocation differs | — |
-| `martian` module API (make_path, log, progress, exit/throw, allocations) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain` |
+| `martian` module API (make_path, log_info/log_warn, update_progress, exit, alarm) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain`, `api_smoke` |
+| `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` (using(mem_gb=3,threads=2)→mem 3,threads 2) |
+| directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
 | ASSERT vs retryable-error classification | 🚫 mrp content-based retry | — (documented) |
 | auto-adjust-memory / OOM escalation | 🚫 mrp runtime | — (documented) |
 | `--monitor` vmem enforcement | 🚫 mrp/cgroup | — (documented) |
