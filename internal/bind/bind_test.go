@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/eunmann/martian-nextflow/internal/bind"
 )
 
@@ -36,6 +38,35 @@ func TestResolve(t *testing.T) {
 		if string(got[key]) != want {
 			t.Errorf("%s = %s, want %s", key, got[key], want)
 		}
+	}
+}
+
+func TestResolveArrayProjection(t *testing.T) {
+	// Map-then-gather: an upstream map call produces an array of structs, and a
+	// downstream call projects a field through it (CALL.s.mean), which Martian
+	// resolves to an array. Regression test for extract() crashing on arrays.
+	spec := bind.Spec{
+		"means": {Ref: &bind.Ref{Kind: "call", ID: "M", Output: "s.mean"}},
+	}
+	callOuts := map[string]json.RawMessage{
+		"M": json.RawMessage(`{"s":[{"mean":1},{"mean":2},{"mean":3}]}`),
+	}
+
+	raw, err := bind.Resolve(spec, nil, callOuts)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	var got struct {
+		Means []int `json:"means"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	want := []int{1, 2, 3}
+	if diff := cmp.Diff(want, got.Means); diff != "" {
+		t.Errorf("means mismatch (-want +got):\n%s", diff)
 	}
 }
 

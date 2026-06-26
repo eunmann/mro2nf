@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -98,6 +99,100 @@ func TestRunSumSquares(t *testing.T) {
 	}
 	if final.Sum != 14 {
 		t.Errorf("sum = %v, want 14 (1+4+9)", final.Sum)
+	}
+}
+
+// TestJobInfoResolvedResources checks that _jobinfo reports the per-chunk
+// resolved allocation (what the stage actually got) rather than the raw phase
+// request, matching mrp's golden _jobinfo.
+func TestJobInfoResolvedResources(t *testing.T) {
+	adapter := sumSquaresAdapter(t)
+	inv := Invocation{Call: "P", Args: json.RawMessage(`{"values":[2]}`), MROFile: "p.mro"}
+	stageArgs := json.RawMessage(`{"values":[2]}`)
+	work := t.TempDir()
+	ctx := context.Background()
+
+	// The phase request is 2 GB, but the split assigns __mem_gb=1 per chunk.
+	res := Resources{Threads: 1, MemGB: 2}
+
+	defs, err := RunSplit(ctx, filepath.Join(work, "split"), adapter, stageArgs, res, inv)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(defs))
+	}
+
+	mainDir := filepath.Join(work, "chnk")
+	if _, err := RunMain(ctx, mainDir, adapter, stageArgs, defs[0], []string{"sum", "square"}, res, inv); err != nil {
+		t.Fatalf("main: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(mainDir, "main", "_jobinfo"))
+	if err != nil {
+		t.Fatalf("read _jobinfo: %v", err)
+	}
+
+	var info struct {
+		MemGB float64 `json:"memGB"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatalf("parse _jobinfo: %v", err)
+	}
+
+	if info.MemGB != 1 {
+		t.Errorf("_jobinfo memGB = %v, want 1 (chunk override, not phase request 2)", info.MemGB)
+	}
+}
+
+func TestMergeArgsNegativeResources(t *testing.T) {
+	// Martian uses negative resource values as adaptive sentinels; they must
+	// override the phase default, not be discarded as "unset".
+	chunk := ChunkDef{
+		Args:      map[string]json.RawMessage{},
+		Resources: Resources{MemGB: -8, Threads: -1},
+	}
+
+	merged, err := mergeArgs(json.RawMessage(`{}`), chunk, Resources{MemGB: 4, Threads: 4})
+	if err != nil {
+		t.Fatalf("mergeArgs: %v", err)
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(merged, &got); err != nil {
+		t.Fatalf("parse merged: %v", err)
+	}
+
+	if string(got["__mem_gb"]) != "-8" {
+		t.Errorf("__mem_gb = %s, want -8 (negative sentinel preserved)", got["__mem_gb"])
+	}
+	if string(got["__threads"]) != "-1" {
+		t.Errorf("__threads = %s, want -1", got["__threads"])
+	}
+}
+
+func TestSpecialResourcePreserved(t *testing.T) {
+	chunk := splitChunk(map[string]json.RawMessage{
+		"value":     json.RawMessage("1"),
+		"__special": json.RawMessage(`"highmem"`),
+		"__mem_gb":  json.RawMessage("2"),
+	})
+	if chunk.Resources.Special != "highmem" {
+		t.Fatalf("special not parsed from chunk def: %q", chunk.Resources.Special)
+	}
+
+	merged, err := mergeArgs(json.RawMessage(`{}`), chunk, Resources{})
+	if err != nil {
+		t.Fatalf("mergeArgs: %v", err)
+	}
+
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(merged, &got); err != nil {
+		t.Fatalf("parse merged: %v", err)
+	}
+
+	if string(got["__special"]) != `"highmem"` {
+		t.Errorf("__special = %s, want \"highmem\"", got["__special"])
 	}
 }
 

@@ -54,6 +54,7 @@ type Resources struct {
 	Threads float64 `json:"threads"`
 	MemGB   float64 `json:"mem_gb"`
 	VMemGB  float64 `json:"vmem_gb"`
+	Special string  `json:"special,omitempty"`
 }
 
 // Invocation is the minimal pipeline invocation recorded in _jobinfo.
@@ -110,7 +111,10 @@ func RunMain(
 		return nil, err
 	}
 
-	if err := stageInputs(meta, files, args, outNames, res, inv, "main"); err != nil {
+	// _jobinfo must report the resolved per-chunk allocation (what the stage
+	// actually got), not the raw phase request, matching mrp.
+	eff := resolveResources(chunk.Resources, res)
+	if err := stageInputs(meta, files, args, outNames, eff, inv, "main"); err != nil {
 		return nil, err
 	}
 
@@ -138,7 +142,8 @@ func RunJoin(
 		return nil, err
 	}
 
-	if err := stageInputs(meta, files, args, outNames, res, inv, "join"); err != nil {
+	eff := resolveResources(Resources{}, res)
+	if err := stageInputs(meta, files, args, outNames, eff, inv, "join"); err != nil {
 		return nil, err
 	}
 

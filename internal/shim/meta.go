@@ -108,6 +108,7 @@ func splitChunk(chunk map[string]json.RawMessage) ChunkDef {
 		case "__vmem_gb":
 			def.Resources.VMemGB = asFloat(val)
 		case "__special":
+			_ = json.Unmarshal(val, &def.Resources.Special) // best-effort; non-string leaves it empty
 		default:
 			def.Args[key] = val
 		}
@@ -125,11 +126,7 @@ func mergeArgs(stageArgs json.RawMessage, chunk ChunkDef, res Resources) (json.R
 	}
 
 	maps.Copy(merged, chunk.Args)
-
-	memGB := coalesce(chunk.Resources.MemGB, res.MemGB)
-	merged["__mem_gb"] = numRaw(memGB)
-	merged["__threads"] = numRaw(coalesce(chunk.Resources.Threads, res.Threads))
-	merged["__vmem_gb"] = numRaw(coalesce(chunk.Resources.VMemGB, memGB+extraVMemGB))
+	injectResources(merged, resolveResources(chunk.Resources, res))
 
 	raw, err := json.Marshal(merged)
 	if err != nil {
@@ -147,9 +144,7 @@ func withResources(stageArgs json.RawMessage, res Resources) (json.RawMessage, e
 		return nil, fmt.Errorf("stage args: %w", err)
 	}
 
-	merged["__mem_gb"] = numRaw(res.MemGB)
-	merged["__threads"] = numRaw(res.Threads)
-	merged["__vmem_gb"] = numRaw(coalesce(res.VMemGB, res.MemGB+extraVMemGB))
+	injectResources(merged, resolveResources(Resources{}, res))
 
 	raw, err := json.Marshal(merged)
 	if err != nil {
@@ -157,6 +152,38 @@ func withResources(stageArgs json.RawMessage, res Resources) (json.RawMessage, e
 	}
 
 	return raw, nil
+}
+
+// resolveResources overlays a chunk's per-chunk overrides on the phase
+// allocation. A non-zero override wins (including negative adaptive sentinels);
+// vmem defaults to the resolved memory plus the standard headroom.
+func resolveResources(chunk, res Resources) Resources {
+	eff := Resources{
+		MemGB:   coalesce(chunk.MemGB, res.MemGB),
+		Threads: coalesce(chunk.Threads, res.Threads),
+		Special: chunk.Special,
+	}
+
+	if eff.Special == "" {
+		eff.Special = res.Special
+	}
+
+	eff.VMemGB = coalesce(chunk.VMemGB, coalesce(res.VMemGB, eff.MemGB+extraVMemGB))
+
+	return eff
+}
+
+// injectResources writes the resolved resource keys into an args map.
+func injectResources(merged map[string]json.RawMessage, eff Resources) {
+	merged["__mem_gb"] = numRaw(eff.MemGB)
+	merged["__threads"] = numRaw(eff.Threads)
+	merged["__vmem_gb"] = numRaw(eff.VMemGB)
+
+	if eff.Special != "" {
+		if raw, err := json.Marshal(eff.Special); err == nil {
+			merged["__special"] = raw
+		}
+	}
 }
 
 func toMap(raw json.RawMessage) (map[string]json.RawMessage, error) {
@@ -216,9 +243,10 @@ func asFloat(raw json.RawMessage) float64 {
 	return f
 }
 
-// coalesce returns primary if it is positive, otherwise fallback.
+// coalesce returns primary unless it is unset (0); Martian treats only 0 as
+// "no override" and uses negative values as adaptive sentinels.
 func coalesce(primary, fallback float64) float64 {
-	if primary > 0 {
+	if primary != 0 {
 		return primary
 	}
 

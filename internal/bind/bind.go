@@ -4,6 +4,7 @@
 package bind
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -191,28 +192,58 @@ const nullLiteral = "null"
 
 // extract navigates a JSON value along a dotted key path. A missing key
 // resolves to null, mirroring how Martian treats a disabled upstream output.
+// When the value at a step is an array, the remaining path is projected over
+// each element (Martian projects field access through arrays), so e.g.
+// CALL.s.mean over {"s":[{"mean":1},{"mean":2}]} yields [1,2].
 func extract(raw json.RawMessage, path string) (json.RawMessage, error) {
 	if path == "" || len(raw) == 0 {
 		return orNull(raw), nil
 	}
 
-	cur := raw
-
-	for key := range strings.SplitSeq(path, ".") {
-		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(cur, &obj); err != nil {
-			return nil, fmt.Errorf("navigate %q: %w", key, err)
-		}
-
-		next, ok := obj[key]
-		if !ok {
-			return json.RawMessage(nullLiteral), nil
-		}
-
-		cur = next
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) > 0 && trimmed[0] == '[' {
+		return projectArray(raw, path)
 	}
 
-	return cur, nil
+	key, rest, _ := strings.Cut(path, ".")
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("navigate %q: %w", key, err)
+	}
+
+	next, ok := obj[key]
+	if !ok {
+		return json.RawMessage(nullLiteral), nil
+	}
+
+	return extract(next, rest)
+}
+
+// projectArray applies the path to each element of a JSON array and returns the
+// array of results.
+func projectArray(raw json.RawMessage, path string) (json.RawMessage, error) {
+	var elems []json.RawMessage
+	if err := json.Unmarshal(raw, &elems); err != nil {
+		return nil, fmt.Errorf("project %q over array: %w", path, err)
+	}
+
+	out := make([]json.RawMessage, 0, len(elems))
+
+	for _, elem := range elems {
+		v, err := extract(elem, path)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, v)
+	}
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("marshal projection: %w", err)
+	}
+
+	return raw, nil
 }
 
 func joinPath(id, output string) string {
