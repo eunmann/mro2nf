@@ -132,6 +132,10 @@ func runSplit(ctx context.Context, argv []string) error {
 		return err
 	}
 
+	if stageArgs, err = prod.coerceInputs(stageArgs, types.RoleIn); err != nil {
+		return err
+	}
+
 	defs, err := shim.RunSplit(ctx, cf.work, cf.adapter(), stageArgs, cf.resources(), cf.invocation(stageArgs))
 	if err != nil {
 		return fmt.Errorf("split: %w", err)
@@ -186,6 +190,10 @@ func runMain(ctx context.Context, argv []string) error {
 		return err
 	}
 
+	if stageArgs, err = prod.coerceInputs(stageArgs, types.RoleIn, types.RoleChunkIn); err != nil {
+		return err
+	}
+
 	chunkRaw, err := readBundle(*chunkDir)
 	if err != nil {
 		return err
@@ -218,6 +226,10 @@ func runJoin(ctx context.Context, argv []string) error {
 
 	stageArgs, err := readBundle(*argsDir)
 	if err != nil {
+		return err
+	}
+
+	if stageArgs, err = prod.coerceInputs(stageArgs, types.RoleIn); err != nil {
 		return err
 	}
 

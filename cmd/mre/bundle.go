@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/eunmann/martian-nextflow/internal/ir"
 	"github.com/eunmann/martian-nextflow/internal/shim"
 	"github.com/eunmann/martian-nextflow/internal/types"
 )
@@ -64,6 +65,38 @@ func (p *producer) write(dir string, raw json.RawMessage) error {
 	}
 
 	return nil
+}
+
+// coerceInputs coerces whole-number float values bound to int params back to
+// integers in raw, walking the producer's callable under the given input roles
+// (e.g. RoleIn, plus RoleChunkIn for a split main). Returns raw unchanged when
+// no manifest is configured.
+func (p *producer) coerceInputs(raw json.RawMessage, roles ...string) (json.RawMessage, error) {
+	if p.types == "" || len(raw) == 0 {
+		return raw, nil
+	}
+
+	man, err := p.manifest()
+	if err != nil {
+		return nil, err
+	}
+
+	vals, err := rawToMap(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var params []ir.Param
+	for _, r := range roles {
+		params = append(params, man.Params(p.callable, r)...)
+	}
+
+	out, err := json.Marshal(man.Table().CoerceScalars(params, vals))
+	if err != nil {
+		return nil, fmt.Errorf("encode coerced args: %w", err)
+	}
+
+	return out, nil
 }
 
 // rawToMap decodes a JSON object into a map. An empty payload, JSON null, or the

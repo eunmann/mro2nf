@@ -1,6 +1,7 @@
 package types_test
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 	"testing"
@@ -202,6 +203,37 @@ func TestApplyMapDeterministic(t *testing.T) {
 		if diff := cmp.Diff([]string{"af", "mf", "zf"}, *seen); diff != "" {
 			t.Errorf("visit order not sorted/stable (-want +got):\n%s", diff)
 		}
+	}
+}
+
+// TestCoerceScalars checks whole-number floats bound to int params become
+// integers, while float params and non-whole values are left intact.
+func TestCoerceScalars(t *testing.T) {
+	tbl := newTable()
+	params := []ir.Param{
+		{Name: "i", BaseType: "int"},
+		{Name: "f", BaseType: "float"},
+		{Name: "is", BaseType: "int", ArrayDim: 1},
+	}
+	vals := map[string]any{
+		"i":  json.Number("5.0"),
+		"f":  json.Number("42.0"),
+		"is": []any{json.Number("1.0"), json.Number("2")},
+	}
+
+	got := tbl.CoerceScalars(params, vals)
+
+	if got["i"] != int64(5) {
+		t.Errorf("int leaf 5.0 -> %v (%T), want int64 5", got["i"], got["i"])
+	}
+
+	if got["f"] != json.Number("42.0") {
+		t.Errorf("float leaf 42.0 -> %v, want unchanged 42.0", got["f"])
+	}
+
+	arr, ok := got["is"].([]any)
+	if !ok || arr[0] != int64(1) || arr[1] != int64(2) {
+		t.Errorf("int[] -> %v, want [1 2] as int64", got["is"])
 	}
 }
 

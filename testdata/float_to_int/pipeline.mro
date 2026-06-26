@@ -1,0 +1,24 @@
+# A whole-number float literal bound to an int param: Martian coerces 5.0 -> 5.
+stage INC(
+    in  int x,
+    out int y,
+    src py  "stages/inc",
+)
+
+pipeline FI(
+    in  int x,
+    out int y,
+)
+{
+    call INC(
+        x = self.x,
+    )
+
+    return (
+        y = INC.y,
+    )
+}
+
+call FI(
+    x = 5.0,
+)

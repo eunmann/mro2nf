@@ -7,8 +7,10 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"sort"
 
 	"github.com/eunmann/martian-nextflow/internal/ir"
@@ -57,6 +59,72 @@ func (t *Table) Apply(params []ir.Param, vals map[string]any, fn Transform) (map
 	}
 
 	return out, nil
+}
+
+// CoerceScalars walks vals against params and coerces each int-typed leaf whose
+// value is a whole-number float to an integer (e.g. the literal 5.0 bound to an
+// int param), matching Martian's int-from-float-literal coercion. This is needed
+// because numbers are decoded with json.UseNumber to preserve float fidelity
+// (42.0 stays a float), which would otherwise hand a stage 5.0 for an int param.
+func (t *Table) CoerceScalars(params []ir.Param, vals map[string]any) map[string]any {
+	out := make(map[string]any, len(vals))
+	maps.Copy(out, vals)
+
+	for _, p := range params {
+		if v, ok := vals[p.Name]; ok {
+			out[p.Name] = t.coerce(v, p.BaseType, p.ArrayDim, p.MapDim)
+		}
+	}
+
+	return out
+}
+
+func (t *Table) coerce(v any, base string, arrayDim, mapDim int) any {
+	switch tv := v.(type) {
+	case []any:
+		if arrayDim > 0 {
+			for i, e := range tv {
+				tv[i] = t.coerce(e, base, arrayDim-1, mapDim)
+			}
+		}
+
+		return tv
+	case map[string]any:
+		if mapDim > 0 {
+			for k, e := range tv {
+				tv[k] = t.coerce(e, base, arrayDim, mapDim-1)
+			}
+
+			return tv
+		}
+
+		if fields, ok := t.structs[base]; ok {
+			return t.CoerceScalars(fields, tv)
+		}
+
+		return tv
+	case json.Number:
+		return coerceNumber(tv, base)
+	default:
+		return v
+	}
+}
+
+// coerceNumber converts a whole-number JSON value to an integer for an int param.
+func coerceNumber(n json.Number, base string) any {
+	if base != "int" {
+		return n
+	}
+
+	if i, err := n.Int64(); err == nil {
+		return i
+	}
+
+	if f, err := n.Float64(); err == nil && f == math.Trunc(f) {
+		return int64(f)
+	}
+
+	return n
 }
 
 // walk descends one value. It dispatches on the value's actual JSON shape
