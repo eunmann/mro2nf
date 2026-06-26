@@ -15,24 +15,25 @@ const (
 	LangComp Lang = "comp"
 )
 
-// Param is a single stage or pipeline input/output parameter.
+// Param is a single stage or pipeline input/output parameter. The json tags let
+// it round-trip through the runtime type manifest.
 type Param struct {
 	// Name is the parameter identifier.
-	Name string
+	Name string `json:"name"`
 	// Type is the rendered MRO type, e.g. "float", "float[]", "map<int>".
-	Type string
+	Type string `json:"type"`
 	// BaseType is the bare element type name with array/map wrappers stripped,
 	// e.g. "float", "file", or a struct name like "Cfg". Used to resolve struct
 	// fields during the type-directed file-leaf walk.
-	BaseType string
+	BaseType string `json:"baseType"`
 	// ArrayDim is the number of array dimensions (0 for a scalar).
-	ArrayDim int
+	ArrayDim int `json:"arrayDim"`
 	// MapDim is the number of typed-map dimensions (0 for a non-map).
-	MapDim int
+	MapDim int `json:"mapDim"`
 	// IsFile reports whether the type refers to a file, directory, or path.
-	IsFile bool
+	IsFile bool `json:"isFile"`
 	// OutName is the optional on-disk output filename (output params only).
-	OutName string
+	OutName string `json:"outName,omitempty"`
 }
 
 // StructType is a Martian struct: an ordered, named set of typed fields. Stage
@@ -40,9 +41,9 @@ type Param struct {
 // fields during the file-leaf walk.
 type StructType struct {
 	// Name is the struct type identifier.
-	Name string
+	Name string `json:"name"`
 	// Fields are the struct's members, each a typed Param.
-	Fields []Param
+	Fields []Param `json:"fields"`
 }
 
 // Resources is a stage's static resource request from `using(...)`.

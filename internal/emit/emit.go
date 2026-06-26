@@ -14,6 +14,7 @@ import (
 	"github.com/eunmann/martian-nextflow/internal/apperror"
 	"github.com/eunmann/martian-nextflow/internal/bind"
 	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/martian-nextflow/internal/types"
 )
 
 const (
@@ -87,6 +88,10 @@ func Emit(prog *ir.Program, opts Options) error {
 
 	if err := writeDisableArtifacts(prog, opts.OutDir, specDir); err != nil {
 		return err
+	}
+
+	if err := types.BuildManifest(prog).Write(filepath.Join(opts.OutDir, "types.json")); err != nil {
+		return fmt.Errorf("write types manifest: %w", err)
 	}
 
 	return writeEntryArgs(prog, opts.OutDir)

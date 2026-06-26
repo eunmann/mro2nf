@@ -49,6 +49,7 @@ func TestEmitFiles(t *testing.T) {
 		"main.nf",
 		"nextflow.config",
 		"entry_args.json",
+		"types.json",
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf",
 		"modules/stage_SUM_SQUARES.nf",
 		"modules/stage_REPORT.nf",
