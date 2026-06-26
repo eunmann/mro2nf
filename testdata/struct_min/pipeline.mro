@@ -1,0 +1,32 @@
+# Minimal struct pipeline: a non-split stage emitting a struct output.
+struct Stats(
+    int   count,
+    float total,
+    float mean,
+)
+
+stage STATS(
+    in  float[] values,
+    out Stats   stats,
+    src py      "stages/stats",
+) using (
+    mem_gb = 1,
+)
+
+pipeline STATS_PIPE(
+    in  float[] values,
+    out Stats   stats,
+)
+{
+    call STATS(
+        values = self.values,
+    )
+
+    return (
+        stats = STATS.stats,
+    )
+}
+
+call STATS_PIPE(
+    values = [1.0, 2.0, 3.0, 4.0],
+)

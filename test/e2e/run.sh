@@ -52,3 +52,5 @@ run_case split_test testdata/split_test \
     testdata/split_test/expected/SUM_SQUARE_PIPELINE/fork0/_outs
 run_case fork_min testdata/fork_min \
     testdata/fork_min/expected/scale_all_outs.json
+run_case struct_min testdata/struct_min \
+    testdata/struct_min/expected/stats_pipe_outs.json
