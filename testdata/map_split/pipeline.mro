@@ -1,0 +1,31 @@
+# A map call whose target is a SPLIT stage: each fork runs its own
+# split -> main -> join independently and the per-fork totals are gathered.
+stage SUMSQ(
+    in  float[] values,
+    out float   total,
+    src py      "stages/sumsq",
+) split (
+    in  float   value,
+    out float   sq,
+)
+
+pipeline MS(
+    in  float[][] sets,
+    out float[]   totals,
+)
+{
+    map call SUMSQ(
+        values = split self.sets,
+    )
+
+    return (
+        totals = SUMSQ.total,
+    )
+}
+
+call MS(
+    sets = [
+        [1, 2],
+        [3],
+    ],
+)

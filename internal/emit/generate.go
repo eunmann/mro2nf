@@ -81,11 +81,30 @@ func generateMain(prog *ir.Program, g genCtx) string {
 // a per-call name so each call is an independent instance.
 func genPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 	for _, c := range p.Calls {
-		export, src := calleeModule(prog, c.Callable)
+		export, src := calleeExport(prog, c)
 		fmt.Fprintf(b, "include { %s as %s } from '%s'\n", export, callAlias(p.Name, c.Name), src)
 	}
 
 	b.WriteString("\n")
+}
+
+// calleeExport returns the workflow name and module to import for a call. A map
+// call over a split stage imports that stage's fork-key-threaded variant
+// (wf_<stage>_map) instead of the plain wf_<stage>.
+func calleeExport(prog *ir.Program, c ir.Call) (string, string) {
+	export, src := calleeModule(prog, c.Callable)
+	if c.Mapped && isSplitStage(prog, c.Callable) {
+		export = "wf_" + c.Callable + "_map"
+	}
+
+	return export, src
+}
+
+// isSplitStage reports whether callable names a split stage.
+func isSplitStage(prog *ir.Program, callable string) bool {
+	s, ok := prog.Stages[callable]
+
+	return ok && s.Split
 }
 
 // genPipeProcesses emits the BIND/FORK/MERGE/DISABLE helper processes for a
@@ -124,6 +143,82 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 
 	genSplitProcesses(b, s, g, base, mainOuts, joinOuts)
 	genSplitWorkflow(b, s)
+	// A fork-key-threaded variant, used when this split stage is a map-call
+	// target so each fork runs its own split/main/join and gathers per fork.
+	genKeyedSplitProcesses(b, s, g, base, mainOuts, joinOuts)
+	genKeyedSplitWorkflow(b, s)
+}
+
+// genKeyedSplitProcesses emits fork-key-carrying variants of the split/main/join
+// processes: every channel item is tuple(key, ...), so chunks and joins stay
+// partitioned by fork. Outputs are named by key so the merge orders them.
+func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
+	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang)
+	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang)
+
+	fmt.Fprintf(b, `process %[1]s_SPLIT_K {
+  cpus %[2]d
+  memory '%[3]d GB'
+  input:
+    tuple val(key), path(args)
+  output:
+    tuple val(key), path('chunks.json'), emit: defs
+    tuple val(key), path('chunk_*', type: 'dir'), emit: chunks, optional: true
+  script:
+    """
+    %[4]s -args ${args} -work . -o chunks.json -chunkdir .%[5]s
+    """
+}
+
+process %[1]s_MAIN_K {
+  cpus { (res?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(res.threads as double) as int) : %[2]d }
+  memory { (res?.mem_gb ?: 0) > 0 ? "${res.mem_gb} GB" : '%[3]d GB' }
+  input:
+    tuple val(key), val(res), path(chunk), path(args)
+  output:
+    tuple val(key), path("out_${chunk.baseName}", type: 'dir')
+  script:
+    """
+    %[6]s -args ${args} -chunk ${chunk} -outs '%[7]s'%[9]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
+    """
+}
+
+process %[1]s_JOIN_K {
+  cpus %[2]d
+  memory '%[3]d GB'
+  input:
+    tuple val(key), path(souts), path(args), path(defs)
+  output:
+    tuple val(key), path("outs__${key}", type: 'dir')
+  script:
+    """
+    %[8]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[10]s'%[11]s -work . -o outs__${key}
+    """
+}
+
+`, s.Name, cpusOf(s), memOf(s), splitCmd, g.producerArgs(s.Name, types.RoleChunkIn),
+		base, mainOuts, joinCmd, g.producerArgs(s.Name, types.RoleMainOut),
+		joinOuts, g.producerArgs(s.Name, types.RoleOut))
+}
+
+// genKeyedSplitWorkflow wires the keyed split processes. multiMap duplicates the
+// keyed args so split, main, and join each consume it without exhausting the
+// queue; combine/join by the fork key keep chunks and outputs grouped per fork.
+func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
+	fmt.Fprintf(b, `workflow wf_%[1]s_map {
+  take: keyed
+  main:
+    ch = keyed.multiMap { k, a -> sp: tuple(k, a); mn: tuple(k, a); jn: tuple(k, a) }
+    %[1]s_SPLIT_K(ch.sp)
+    chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> (cs instanceof List ? cs : [cs]).collect { c -> tuple(key, new groovy.json.JsonSlurper().parseText(file("${c}/data.json").text).resources, c) } }
+    %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0))
+    joined = %[1]s_MAIN_K.out.groupTuple().join(ch.jn).join(%[1]s_SPLIT_K.out.defs)
+    %[1]s_JOIN_K(joined)
+  emit:
+    %[1]s_JOIN_K.out
+}
+
+`, s.Name)
 }
 
 func genSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g genCtx) {
@@ -338,21 +433,11 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 
 // genCallWiring emits the wiring for one call: a map-call fork/merge fan-out, a
 // disabled-aware branch, or a plain BIND + callee invocation.
-func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, _ *ir.Program) {
+func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Program) {
 	callee := callAlias(pipeline, c.Name)
 
 	if c.Mapped {
-		fork := forkName(pipeline, c.Name)
-		merge := mergeName(pipeline, c.Name)
-		fmt.Fprintf(b, "    %s(%s)\n", fork, bindCallArgs(c.Bindings))
-		fmt.Fprintf(b, "    out_%s = %s(%s.out.forks.flatten())\n", c.Name, callee, fork)
-		// ifEmpty([]) ensures MERGE still runs for an empty fork collection
-		// (collect() on an empty channel emits nothing), yielding null outputs.
-		// FORK.out.keys carries map-fork keys (null for an array fork).
-		fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys)\n", merge, c.Name, fork)
-		// .first() makes the result a value channel so it can feed multiple
-		// downstream consumers (non-linear DAGs).
-		fmt.Fprintf(b, "    ch_%s = %s.out.first()\n", c.Name, merge)
+		genMappedWiring(b, pipeline, c, callee, prog)
 
 		return
 	}
@@ -368,6 +453,30 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, _ *ir.Program
 
 	// .first() yields a value channel reusable by multiple downstream consumers.
 	fmt.Fprintf(b, "    ch_%s = %s(%s.out).first()\n", c.Name, callee, bind)
+}
+
+// genMappedWiring emits a map call's fork/callee/merge fan-out. A split-stage
+// callee runs through its fork-key-threaded variant (each fork keyed by its
+// args-bundle name); other callees take the flattened fork channel directly.
+func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee string, prog *ir.Program) {
+	fork := forkName(pipeline, c.Name)
+	merge := mergeName(pipeline, c.Name)
+	fmt.Fprintf(b, "    %s(%s)\n", fork, bindCallArgs(c.Bindings))
+
+	if isSplitStage(prog, c.Callable) {
+		fmt.Fprintf(b, "    keyed_%s = %s.out.forks.flatten().map { f -> tuple(f.baseName, f) }\n", c.Name, fork)
+		fmt.Fprintf(b, "    out_%s = %s(keyed_%s).map { k, bundle -> bundle }\n", c.Name, callee, c.Name)
+	} else {
+		fmt.Fprintf(b, "    out_%s = %s(%s.out.forks.flatten())\n", c.Name, callee, fork)
+	}
+
+	// ifEmpty([]) ensures MERGE still runs for an empty fork collection
+	// (collect() on an empty channel emits nothing), yielding null outputs.
+	// FORK.out.keys carries map-fork keys (null for an array fork).
+	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys)\n", merge, c.Name, fork)
+	// .first() makes the result a value channel so it can feed multiple
+	// downstream consumers (non-linear DAGs).
+	fmt.Fprintf(b, "    ch_%s = %s.out.first()\n", c.Name, merge)
 }
 
 // genDisabledWiring runs the callee only when the resolved `disabled` flag is

@@ -177,9 +177,11 @@ func validateProgram(prog *ir.Program) error {
 				}
 			}
 
-			if s, ok := prog.Stages[c.Callable]; !ok || s.Split {
+			// Split-stage map targets run through the fork-key-threaded variant;
+			// sub-pipeline map targets still need per-fork body keying.
+			if _, ok := prog.Stages[c.Callable]; !ok {
 				return &apperror.UnsupportedError{
-					Construct: "map call over a split stage or pipeline",
+					Construct: "map call over a sub-pipeline",
 					Detail:    name + "." + c.Name + " -> " + c.Callable,
 				}
 			}

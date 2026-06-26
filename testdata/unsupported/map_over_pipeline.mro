@@ -1,0 +1,37 @@
+stage S(
+    in  float x,
+    out float y,
+    src py    "s",
+)
+
+pipeline INNER(
+    in  float x,
+    out float y,
+)
+{
+    call S(
+        x = self.x,
+    )
+
+    return (
+        y = S.y,
+    )
+}
+
+pipeline P(
+    in  float[] xs,
+    out float[] y,
+)
+{
+    map call INNER(
+        x = split self.xs,
+    )
+
+    return (
+        y = INNER.y,
+    )
+}
+
+call P(
+    xs = [1.0],
+)
