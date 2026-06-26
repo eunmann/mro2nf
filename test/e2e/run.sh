@@ -58,3 +58,5 @@ run_case modifiers_min testdata/modifiers_min \
     testdata/modifiers_min/expected/top_outs.json
 run_case alias_min testdata/alias_min \
     testdata/alias_min/expected/p_outs.json
+run_case exec_min testdata/exec_min \
+    testdata/exec_min/expected/ep_outs.json

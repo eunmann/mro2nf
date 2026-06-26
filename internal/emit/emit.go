@@ -32,6 +32,8 @@ type Options struct {
 	Mre string
 	// Shell is the path to martian_shell.py.
 	Shell string
+	// Mrjob is the path to the mrjob wrapper (for comp stages); may be empty.
+	Mrjob string
 	// MROFile is the source MRO filename recorded in _jobinfo.
 	MROFile string
 	// StageCode maps each stage name to its (absolute) stage code path.
@@ -58,6 +60,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		mroFile: opts.MROFile,
 		mre:     opts.Mre,
 		shell:   opts.Shell,
+		mrjob:   opts.Mrjob,
 		code:    opts.StageCode,
 	}
 

@@ -33,6 +33,7 @@ func run(args []string) error {
 	mroPath := fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)")
 	mreFlag := fs.String("mre", "mre", "path to the mre shim binary")
 	shellFlag := fs.String("shell", "", "path to martian_shell.py")
+	mrjobFlag := fs.String("mrjob", "", "path to mrjob (for comp stages)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -62,7 +63,7 @@ func run(args []string) error {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
-	if err := emitProgram(prog, fs.Arg(0), *outDir, *mreFlag, *shellFlag); err != nil {
+	if err := emitProgram(prog, fs.Arg(0), *outDir, *mreFlag, *shellFlag, *mrjobFlag); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
@@ -78,7 +79,7 @@ func run(args []string) error {
 
 // emitProgram resolves the absolute paths the generated project needs and emits
 // the Nextflow project for prog.
-func emitProgram(prog *ir.Program, src, outDir, mre, shell string) error {
+func emitProgram(prog *ir.Program, src, outDir, mre, shell, mrjob string) error {
 	mroDir := filepath.Dir(src)
 
 	code := make(map[string]string, len(prog.Stages))
@@ -101,6 +102,7 @@ func emitProgram(prog *ir.Program, src, outDir, mre, shell string) error {
 		OutDir:    outDir,
 		Mre:       absOrSelf(mre),
 		Shell:     absOrSelf(shell),
+		Mrjob:     absOrSelf(mrjob),
 		MROFile:   filepath.Base(src),
 		StageCode: code,
 	}); err != nil {

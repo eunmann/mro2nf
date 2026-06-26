@@ -43,8 +43,10 @@ type Adapter struct {
 	Stagecode string
 	// SrcArgs are extra args from the stage's src declaration.
 	SrcArgs []string
-	// Python is the interpreter to use; defaults to python3.
+	// Python is the interpreter to use for py stages; defaults to python3.
 	Python string
+	// Mrjob is the path to the mrjob wrapper used to run comp stages.
+	Mrjob string
 }
 
 // Resources is the per-phase resource allocation surfaced to stage code.
@@ -184,18 +186,32 @@ func writeChunkData(meta string, defs []ChunkDef, outs []json.RawMessage) error 
 	return writeJSON(filepath.Join(meta, "_chunk_outs"), outs)
 }
 
-// runAdapter invokes the Martian adapter for one phase. The adapter expects
-// fd 3 to be its _log file and fd 4 to be an error channel (normally supplied
-// by mrjob); we provide both. The stage failed if anything was written to the
-// error channel; otherwise success is a clean exit.
+// runAdapter invokes the Martian adapter for one phase, dispatching by language.
 func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string) error {
-	if a.Lang != ir.LangPy {
-		return &apperror.UnsupportedError{
-			Construct: "adapter " + string(a.Lang),
-			Detail:    "only py adapters are supported so far",
+	switch a.Lang {
+	case ir.LangPy:
+		return runPyAdapter(ctx, meta, files, journal, a, phase)
+	case ir.LangComp:
+		if a.Mrjob == "" {
+			return &apperror.UnsupportedError{Construct: "comp adapter", Detail: "no mrjob path configured"}
 		}
-	}
 
+		argv := append([]string{a.Mrjob, a.Stagecode}, a.SrcArgs...)
+
+		return runWrappedAdapter(ctx, meta, files, journal, append(argv, phase), phase)
+	case ir.LangExec:
+		argv := append([]string{a.Stagecode}, a.SrcArgs...)
+
+		return runWrappedAdapter(ctx, meta, files, journal, append(argv, phase), phase)
+	default:
+		return &apperror.UnsupportedError{Construct: "adapter " + string(a.Lang)}
+	}
+}
+
+// runPyAdapter runs a python stage directly. The adapter expects fd 3 to be its
+// _log file and fd 4 to be an error channel (normally supplied by mrjob); we
+// provide both. The stage failed if anything was written to the error channel.
+func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string) error {
 	python := a.Python
 	if python == "" {
 		python = defaultPython
@@ -215,6 +231,42 @@ func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, pha
 	cmd.ExtraFiles = []*os.File{aio.logFile, aio.errW} // fd 3 = _log, fd 4 = errors
 
 	return aio.run(cmd, phase, meta)
+}
+
+// runWrappedAdapter runs a comp (via mrjob) or exec stage, which manage the
+// metadata protocol themselves. Failure is a non-empty _errors file or a
+// non-zero exit.
+func runWrappedAdapter(ctx context.Context, meta, files, journal string, argv []string, phase string) error {
+	cmd := exec.CommandContext(ctx, argv[0], append(argv[1:], meta, files, journal)...)
+	cmd.Dir = files
+
+	stdout, err := os.Create(filepath.Join(meta, "_stdout"))
+	if err != nil {
+		return fmt.Errorf("create _stdout: %w", err)
+	}
+	defer func() { _ = stdout.Close() }()
+
+	stderr, err := os.Create(filepath.Join(meta, "_stderr"))
+	if err != nil {
+		return fmt.Errorf("create _stderr: %w", err)
+	}
+	defer func() { _ = stderr.Close() }()
+
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	runErr := cmd.Run()
+
+	if data, err := os.ReadFile(filepath.Join(meta, "_errors")); err == nil && len(data) > 0 {
+		return fmt.Errorf("%s phase: %w: %s", phase, errStageFailed, strings.TrimSpace(string(data)))
+	}
+
+	if runErr != nil {
+		tail, _ := os.ReadFile(filepath.Join(meta, "_stderr"))
+
+		return fmt.Errorf("adapter %s phase: %w: %s", phase, runErr, strings.TrimSpace(string(tail)))
+	}
+
+	return nil
 }
 
 // adapterIO holds the file descriptors the Martian adapter expects.

@@ -61,10 +61,11 @@ func run(ctx context.Context, args []string) error {
 // commonFlags are the adapter, resource, and invocation flags shared by every
 // phase subcommand.
 type commonFlags struct {
-	shell, stagecode, lang     string
-	call, mro, work, outFile   string
-	outs                       string
-	threads, memGB, vmemGB     float64
+	shell, stagecode, lang   string
+	mrjob                    string
+	call, mro, work, outFile string
+	outs                     string
+	threads, memGB, vmemGB   float64
 }
 
 func addCommon(fs *flag.FlagSet) *commonFlags {
@@ -72,6 +73,7 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.StringVar(&c.shell, "shell", "", "path to martian_shell.py")
 	fs.StringVar(&c.stagecode, "stagecode", "", "path to the stage code")
 	fs.StringVar(&c.lang, "lang", "py", "stage adapter language")
+	fs.StringVar(&c.mrjob, "mrjob", "", "path to mrjob (for comp stages)")
 	fs.StringVar(&c.call, "call", "", "top-level pipeline/stage call name")
 	fs.StringVar(&c.mro, "mro", "", "source MRO filename (for _jobinfo)")
 	fs.StringVar(&c.work, "work", ".", "work directory for metadata/files")
@@ -85,7 +87,12 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 }
 
 func (c *commonFlags) adapter() shim.Adapter {
-	return shim.Adapter{Lang: ir.Lang(c.lang), Shell: c.shell, Stagecode: c.stagecode}
+	return shim.Adapter{
+		Lang:      ir.Lang(c.lang),
+		Shell:     c.shell,
+		Stagecode: c.stagecode,
+		Mrjob:     c.mrjob,
+	}
 }
 
 func (c *commonFlags) resources() shim.Resources {

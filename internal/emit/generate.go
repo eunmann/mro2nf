@@ -15,7 +15,17 @@ type genCtx struct {
 	mroFile string
 	mre     string
 	shell   string
+	mrjob   string
 	code    map[string]string // stage name -> stage code path
+}
+
+// mrjobArg renders the optional -mrjob flag for stage commands.
+func (g genCtx) mrjobArg() string {
+	if g.mrjob == "" {
+		return ""
+	}
+
+	return " -mrjob " + g.mrjob
 }
 
 // generateStageModule renders a stage's module: its processes and the wf_<stage>
@@ -91,8 +101,8 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 	code := g.code[s.Name]
 	mainOuts := strings.Join(append(names(s.Out), names(s.ChunkOut)...), ",")
 	joinOuts := strings.Join(names(s.Out), ",")
-	base := fmt.Sprintf("%s main -shell %s -stagecode %s -lang %s -call %s -mro %s",
-		g.mre, g.shell, code, s.Lang, g.entry, g.mroFile)
+	base := fmt.Sprintf("%s main -shell %s -stagecode %s -lang %s -call %s -mro %s%s",
+		g.mre, g.shell, code, s.Lang, g.entry, g.mroFile, g.mrjobArg())
 
 	if !s.Split {
 		genSingleStage(b, s, g, base, joinOuts)
@@ -131,10 +141,10 @@ workflow wf_%[1]s {
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
-	splitCmd := fmt.Sprintf("%s split -shell %s -stagecode %s -lang %s -call %s -mro %s",
-		g.mre, g.shell, g.code[s.Name], s.Lang, g.entry, g.mroFile)
-	joinCmd := fmt.Sprintf("%s join -shell %s -stagecode %s -lang %s -call %s -mro %s",
-		g.mre, g.shell, g.code[s.Name], s.Lang, g.entry, g.mroFile)
+	splitCmd := fmt.Sprintf("%s split -shell %s -stagecode %s -lang %s -call %s -mro %s%s",
+		g.mre, g.shell, g.code[s.Name], s.Lang, g.entry, g.mroFile, g.mrjobArg())
+	joinCmd := fmt.Sprintf("%s join -shell %s -stagecode %s -lang %s -call %s -mro %s%s",
+		g.mre, g.shell, g.code[s.Name], s.Lang, g.entry, g.mroFile, g.mrjobArg())
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
   cpus %[2]d

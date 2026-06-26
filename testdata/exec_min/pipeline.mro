@@ -1,0 +1,23 @@
+stage EXECDOUBLE(
+    in  float x,
+    out float y,
+    src exec  "exec_double.py",
+)
+
+pipeline EP(
+    in  float x,
+    out float y,
+)
+{
+    call EXECDOUBLE(
+        x = self.x,
+    )
+
+    return (
+        y = EXECDOUBLE.y,
+    )
+}
+
+call EP(
+    x = 7.0,
+)
