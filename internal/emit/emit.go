@@ -43,6 +43,9 @@ type Options struct {
 	MROFile string
 	// StageCode maps each stage name to its (absolute) stage code path.
 	StageCode map[string]string
+	// Container, when set, is the image used for every process (process.container
+	// in nextflow.config) — required by container backends like AWS Batch.
+	Container string
 }
 
 // Emit writes the Nextflow project for prog into opts.OutDir.
@@ -81,7 +84,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(configFile())); err != nil {
+	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(configFile(opts.Container))); err != nil {
 		return err
 	}
 
@@ -470,7 +473,12 @@ func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 	}
 }
 
-func configFile() string {
+func configFile(container string) string {
+	containerLine := ""
+	if container != "" {
+		containerLine = "    container = '" + container + "'\n"
+	}
+
 	return `params.outdir = 'results'
 // Cloud knobs the awsbatch profile reads; override with --aws_queue/--aws_region.
 params.aws_queue = null
@@ -483,7 +491,7 @@ params.aws_region = null
 process {
     errorStrategy = 'retry'
     maxRetries = 2
-}
+` + containerLine + `}
 
 profiles {
     standard { process.executor = 'local' }

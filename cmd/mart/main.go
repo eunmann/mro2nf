@@ -34,6 +34,7 @@ func run(args []string) error {
 	mreFlag := fs.String("mre", "mre", "path to the mre shim binary")
 	shellFlag := fs.String("shell", "", "path to martian_shell.py")
 	mrjobFlag := fs.String("mrjob", "", "path to mrjob (for comp stages)")
+	containerFlag := fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -63,7 +64,9 @@ func run(args []string) error {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
-	if err := emitProgram(prog, fs.Arg(0), *outDir, *mreFlag, *shellFlag, *mrjobFlag); err != nil {
+	if err := emitProgram(prog, fs.Arg(0), opts{
+		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag, container: *containerFlag,
+	}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
@@ -77,9 +80,14 @@ func run(args []string) error {
 	return nil
 }
 
+// opts groups the CLI options that shape emission.
+type opts struct {
+	outDir, mre, shell, mrjob, container string
+}
+
 // emitProgram resolves the absolute paths the generated project needs and emits
 // the Nextflow project for prog.
-func emitProgram(prog *ir.Program, src, outDir, mre, shell, mrjob string) error {
+func emitProgram(prog *ir.Program, src string, o opts) error {
 	mroDir := filepath.Dir(src)
 
 	code := make(map[string]string, len(prog.Stages))
@@ -99,10 +107,11 @@ func emitProgram(prog *ir.Program, src, outDir, mre, shell, mrjob string) error 
 	}
 
 	if err := emit.Emit(prog, emit.Options{
-		OutDir:    outDir,
-		Mre:       absOrSelf(mre),
-		Shell:     absOrSelf(shell),
-		Mrjob:     absOrSelf(mrjob),
+		OutDir:    o.outDir,
+		Mre:       absOrSelf(o.mre),
+		Shell:     absOrSelf(o.shell),
+		Mrjob:     absOrSelf(o.mrjob),
+		Container: o.container,
 		MROFile:   filepath.Base(src),
 		StageCode: code,
 	}); err != nil {
