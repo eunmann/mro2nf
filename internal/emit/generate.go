@@ -436,7 +436,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 	fmt.Fprintf(b, `workflow wf_%[1]s {
   take: args
   main:
-    a = args.first()
+    a = args
     %[1]s_SPLIT(a)
     chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(file("${f}/data.json").text).resources, f) }
     %[1]s_MAIN(chunks.combine(a))
@@ -547,7 +547,10 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 	var body strings.Builder
 
-	body.WriteString("  main:\n    pa = pipeargs.first()\n")
+	// pipeargs is always a value channel (the entry uses Channel.value and nested
+	// calls pass the parent's value-channel pa), so it is directly re-readable by
+	// every bind — no .first() needed (which would warn as useless on a value).
+	body.WriteString("  main:\n    pa = pipeargs\n")
 
 	for _, c := range p.Calls {
 		genCallWiring(&body, p.Name, c, prog)
@@ -585,8 +588,11 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Prog
 		return
 	}
 
-	// .first() yields a value channel reusable by multiple downstream consumers.
-	fmt.Fprintf(b, "    ch_%s = %s(%s.out).first()\n", c.Name, callee, bind)
+	// Bind outputs are value channels (every input traces back to the
+	// Channel.value entry args through all-value-input processes), so the callee
+	// result is itself a value channel — reusable by multiple downstream
+	// consumers without .first().
+	fmt.Fprintf(b, "    ch_%s = %s(%s.out)\n", c.Name, callee, bind)
 }
 
 // genMappedWiring emits a map call's fork/callee/merge fan-out. A split-stage
@@ -604,9 +610,9 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 	// (collect() on an empty channel emits nothing), yielding null outputs.
 	// FORK.out.keys carries map-fork keys (null for an array fork).
 	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys)\n", merge, c.Name, fork)
-	// .first() makes the result a value channel so it can feed multiple
-	// downstream consumers (non-linear DAGs).
-	fmt.Fprintf(b, "    ch_%s = %s.out.first()\n", c.Name, merge)
+	// MERGE's inputs are value channels (collected forks + keys), so its output
+	// is a value channel reusable by multiple downstream consumers.
+	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
 }
 
 // genDisabledWiring runs the callee only when the resolved `disabled` flag is

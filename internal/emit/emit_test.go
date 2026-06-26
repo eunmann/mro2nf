@@ -96,8 +96,9 @@ func TestEmitModules(t *testing.T) {
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf": {
 			"workflow SUM_SQUARE_PIPELINE {",
 			"include { wf_SUM_SQUARES as wf_19_SUM_SQUARE_PIPELINE__SUM_SQUARES }",
-			// Call outputs are value channels so they can feed multiple consumers.
-			".out).first()",
+			// Bind outputs are value channels, so callee results feed multiple
+			// consumers directly (no redundant, warning-triggering .first()).
+			"ch_SUM_SQUARES = wf_19_SUM_SQUARE_PIPELINE__SUM_SQUARES(BIND_19_SUM_SQUARE_PIPELINE__SUM_SQUARES.out)",
 		},
 		"modules/stage_SUM_SQUARES.nf": {
 			"process SUM_SQUARES_SPLIT {",
