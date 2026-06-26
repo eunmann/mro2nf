@@ -86,7 +86,7 @@ func TestEmitConfig(t *testing.T) {
 		"pbs      { process.executor = 'pbs' }",
 		"process.executor = 'awsbatch'",
 		"k8s { process.executor = 'k8s' }",
-		"errorStrategy = 'retry'",
+		"task.exitStatus == 42 ? 'terminate' : 'retry'",
 		"maxRetries = 2",
 		"params.aws_queue = null",
 	} {

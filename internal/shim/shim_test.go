@@ -3,10 +3,12 @@ package shim
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/eunmann/martian-nextflow/internal/ir"
@@ -224,5 +226,56 @@ func TestMergeArgsResources(t *testing.T) {
 	}
 	if _, ok := got["values"]; !ok {
 		t.Error("merged args should retain stage-level values")
+	}
+}
+
+// TestStageFailureClassification checks that an ASSERT-prefixed stage error is
+// classified as non-retryable (ErrStageAssert) while any other failure is the
+// ordinary retryable errStageFailed.
+func TestStageFailureClassification(t *testing.T) {
+	assert := stageFailure("main", "ASSERT: values must be non-empty")
+	if !errors.Is(assert, ErrStageAssert) {
+		t.Errorf("ASSERT error not classified as ErrStageAssert: %v", assert)
+	}
+	if errors.Is(assert, errStageFailed) {
+		t.Error("ASSERT error should not also be errStageFailed")
+	}
+
+	boom := stageFailure("main", "boom: divide by zero")
+	if !errors.Is(boom, errStageFailed) {
+		t.Errorf("ordinary error not classified as errStageFailed: %v", boom)
+	}
+	if errors.Is(boom, ErrStageAssert) {
+		t.Error("ordinary error should not be ErrStageAssert")
+	}
+}
+
+// TestLimitedCommandMonitor checks that monitoring wraps the adapter in prlimit
+// with the vmem ceiling, and is a no-op otherwise.
+func TestLimitedCommandMonitor(t *testing.T) {
+	ctx := context.Background()
+
+	plain := limitedCommand(ctx, Adapter{Monitor: false}, 8, "python3", "stage.py")
+	if filepath.Base(plain.Path) != "python3" {
+		t.Errorf("unmonitored command = %q, want python3", plain.Path)
+	}
+
+	if _, err := exec.LookPath("prlimit"); err != nil {
+		t.Skip("prlimit not available")
+	}
+
+	limited := limitedCommand(ctx, Adapter{Monitor: true}, 8, "python3", "stage.py")
+	if filepath.Base(limited.Path) != "prlimit" {
+		t.Fatalf("monitored command = %q, want prlimit wrapper", limited.Path)
+	}
+
+	wantAS := fmt.Sprintf("--as=%d", int64(8*bytesPerGB))
+	if !slices.Contains(limited.Args, wantAS) {
+		t.Errorf("monitored args %v missing %q", limited.Args, wantAS)
+	}
+
+	// Monitoring with no vmem ceiling does not wrap.
+	if noVmem := limitedCommand(ctx, Adapter{Monitor: true}, 0, "python3"); filepath.Base(noVmem.Path) != "python3" {
+		t.Errorf("monitor with vmem=0 wrapped: %q", noVmem.Path)
 	}
 }

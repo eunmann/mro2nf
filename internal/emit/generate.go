@@ -18,6 +18,7 @@ type genCtx struct {
 	mre     string
 	shell   string
 	mrjob   string
+	monitor bool
 	code    map[string]string // stage name -> stage code path
 }
 
@@ -29,6 +30,10 @@ func (g genCtx) stageCmd(phase, code string, lang ir.Lang) string {
 
 	if g.mrjob != "" {
 		cmd += fmt.Sprintf(" -mrjob '%s'", g.mrjob)
+	}
+
+	if g.monitor {
+		cmd += " -monitor"
 	}
 
 	return cmd

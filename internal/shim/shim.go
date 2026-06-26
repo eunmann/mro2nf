@@ -27,11 +27,34 @@ const (
 	filePerm    = 0o644
 	dirPerm     = 0o755
 	disableFlag = "disable"
+	// assertPrefix marks a non-retryable assertion failure on the adapter error
+	// channel (mrp's write_assert prepends it).
+	assertPrefix = "ASSERT:"
+	// AssertExitCode is the process exit code the shim uses for an ASSERT-class
+	// failure, letting the generated Nextflow terminate rather than retry it.
+	AssertExitCode = 42
+	bytesPerGB     = 1 << 30
 )
 
-// errStageFailed indicates the stage code reported an error via the adapter's
-// error channel (fd 4).
-var errStageFailed = errors.New("stage failed")
+var (
+	// errStageFailed indicates the stage reported a (retryable) error via the
+	// adapter's error channel (fd 4).
+	errStageFailed = errors.New("stage failed")
+	// ErrStageAssert is a non-retryable assertion failure (mrp ASSERT:).
+	ErrStageAssert = errors.New("stage assertion failed")
+)
+
+// stageFailure builds the error for a stage that reported msg on its error
+// channel, classifying an ASSERT (non-retryable) distinctly from an ordinary
+// (retryable) failure.
+func stageFailure(phase, msg string) error {
+	sentinel := errStageFailed
+	if strings.HasPrefix(msg, assertPrefix) {
+		sentinel = ErrStageAssert
+	}
+
+	return fmt.Errorf("%s phase: %w: %s", phase, sentinel, msg)
+}
 
 // Adapter locates the stage code and the Martian adapter that runs it.
 type Adapter struct {
@@ -47,6 +70,9 @@ type Adapter struct {
 	Python string
 	// Mrjob is the path to the mrjob wrapper used to run comp stages.
 	Mrjob string
+	// Monitor, when set, caps the adapter's virtual memory at the resolved
+	// vmem_gb via prlimit (the mrp --monitor analog).
+	Monitor bool
 }
 
 // Resources is the per-phase resource allocation surfaced to stage code.
@@ -89,7 +115,7 @@ func RunSplit(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "split"); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "split", resolveResources(Resources{}, res).VMemGB); err != nil {
 		return nil, err
 	}
 
@@ -118,7 +144,7 @@ func RunMain(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "main"); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "main", eff.VMemGB); err != nil {
 		return nil, err
 	}
 
@@ -151,7 +177,7 @@ func RunJoin(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "join"); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "join", eff.VMemGB); err != nil {
 		return nil, err
 	}
 
@@ -192,10 +218,12 @@ func writeChunkData(meta string, defs []ChunkDef, outs []json.RawMessage) error 
 }
 
 // runAdapter invokes the Martian adapter for one phase, dispatching by language.
-func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string) error {
+// vmemGB is the resolved virtual-memory allocation used to cap the adapter when
+// monitoring is enabled.
+func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, vmemGB float64) error {
 	switch a.Lang {
 	case ir.LangPy:
-		return runPyAdapter(ctx, meta, files, journal, a, phase)
+		return runPyAdapter(ctx, meta, files, journal, a, phase, vmemGB)
 	case ir.LangComp:
 		if a.Mrjob == "" {
 			return &apperror.UnsupportedError{Construct: "comp adapter", Detail: "no mrjob path configured"}
@@ -203,26 +231,43 @@ func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, pha
 
 		argv := append([]string{a.Mrjob, a.Stagecode}, a.SrcArgs...)
 
-		return runWrappedAdapter(ctx, meta, files, journal, append(argv, phase), phase)
+		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, vmemGB)
 	case ir.LangExec:
 		argv := append([]string{a.Stagecode}, a.SrcArgs...)
 
-		return runWrappedAdapter(ctx, meta, files, journal, append(argv, phase), phase)
+		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, vmemGB)
 	default:
 		return &apperror.UnsupportedError{Construct: "adapter " + string(a.Lang)}
 	}
 }
 
+// limitedCommand builds the adapter command, capping its virtual memory via
+// prlimit when monitoring is enabled and a vmem ceiling is set. The cap uses
+// RLIMIT_AS (address space); a stage exceeding it fails its allocation, the
+// closest portable analog to mrp's RSS-based --monitor kill. Absence of prlimit
+// is tolerated (best effort).
+func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string, args ...string) *exec.Cmd {
+	argv := append([]string{name}, args...)
+
+	if a.Monitor && vmemGB > 0 {
+		if path, err := exec.LookPath("prlimit"); err == nil {
+			argv = append([]string{path, fmt.Sprintf("--as=%d", int64(vmemGB*bytesPerGB)), "--"}, argv...)
+		}
+	}
+
+	return exec.CommandContext(ctx, argv[0], argv[1:]...)
+}
+
 // runPyAdapter runs a python stage directly. The adapter expects fd 3 to be its
 // _log file and fd 4 to be an error channel (normally supplied by mrjob); we
 // provide both. The stage failed if anything was written to the error channel.
-func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string) error {
+func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, vmemGB float64) error {
 	python := a.Python
 	if python == "" {
 		python = defaultPython
 	}
 
-	cmd := exec.CommandContext(ctx, python, a.Shell, a.Stagecode, phase, meta, files, journal)
+	cmd := limitedCommand(ctx, a, vmemGB, python, a.Shell, a.Stagecode, phase, meta, files, journal)
 	cmd.Dir = files
 
 	aio, err := openAdapterIO(meta)
@@ -241,8 +286,8 @@ func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, p
 // runWrappedAdapter runs a comp (via mrjob) or exec stage, which manage the
 // metadata protocol themselves. Failure is a non-empty _errors file or a
 // non-zero exit.
-func runWrappedAdapter(ctx context.Context, meta, files, journal string, argv []string, phase string) error {
-	cmd := exec.CommandContext(ctx, argv[0], append(argv[1:], meta, files, journal)...)
+func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapter, argv []string, phase string, vmemGB float64) error {
+	cmd := limitedCommand(ctx, a, vmemGB, argv[0], append(argv[1:], meta, files, journal)...)
 	cmd.Dir = files
 
 	stdout, err := os.Create(filepath.Join(meta, "_stdout"))
@@ -262,7 +307,7 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, argv []
 	runErr := cmd.Run()
 
 	if data, err := os.ReadFile(filepath.Join(meta, "_errors")); err == nil && len(data) > 0 {
-		return fmt.Errorf("%s phase: %w: %s", phase, errStageFailed, strings.TrimSpace(string(data)))
+		return stageFailure(phase, strings.TrimSpace(string(data)))
 	}
 
 	if runErr != nil {
@@ -329,7 +374,7 @@ func (a *adapterIO) run(cmd *exec.Cmd, phase, meta string) error {
 		// so does not change the outcome (we already have the message).
 		_ = os.WriteFile(filepath.Join(meta, "_errors"), stageErr, filePerm)
 
-		return fmt.Errorf("%s phase: %w: %s", phase, errStageFailed, msg)
+		return stageFailure(phase, msg)
 	}
 
 	if waitErr != nil {

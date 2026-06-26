@@ -29,8 +29,18 @@ var (
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "mre:", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
+}
+
+// exitCode maps a stage failure to a process exit code: an ASSERT-class failure
+// uses a distinct code so the generated Nextflow terminates rather than retries.
+func exitCode(err error) int {
+	if errors.Is(err, shim.ErrStageAssert) {
+		return shim.AssertExitCode
+	}
+
+	return 1
 }
 
 func run(ctx context.Context, args []string) error {
@@ -71,6 +81,7 @@ type commonFlags struct {
 	call, mro, work, outFile string
 	outs                     string
 	threads, memGB, vmemGB   float64
+	monitor                  bool
 }
 
 func addCommon(fs *flag.FlagSet) *commonFlags {
@@ -87,6 +98,7 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.Float64Var(&c.threads, "threads", 1, "allocated threads")
 	fs.Float64Var(&c.memGB, "memgb", 1, "allocated memory in GB")
 	fs.Float64Var(&c.vmemGB, "vmemgb", 0, "allocated virtual memory in GB")
+	fs.BoolVar(&c.monitor, "monitor", false, "cap stage virtual memory at vmem_gb via prlimit")
 
 	return c
 }
@@ -97,6 +109,7 @@ func (c *commonFlags) adapter() shim.Adapter {
 		Shell:     c.shell,
 		Stagecode: c.stagecode,
 		Mrjob:     c.mrjob,
+		Monitor:   c.monitor,
 	}
 }
 

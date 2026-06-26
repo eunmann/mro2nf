@@ -35,6 +35,7 @@ func run(args []string) error {
 	shellFlag := fs.String("shell", "", "path to martian_shell.py")
 	mrjobFlag := fs.String("mrjob", "", "path to mrjob (for comp stages)")
 	containerFlag := fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)")
+	monitorFlag := fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -65,7 +66,8 @@ func run(args []string) error {
 	}
 
 	if err := emitProgram(prog, fs.Arg(0), opts{
-		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag, container: *containerFlag,
+		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag,
+		container: *containerFlag, monitor: *monitorFlag,
 	}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
@@ -83,6 +85,7 @@ func run(args []string) error {
 // opts groups the CLI options that shape emission.
 type opts struct {
 	outDir, mre, shell, mrjob, container string
+	monitor                              bool
 }
 
 // emitProgram resolves the absolute paths the generated project needs and emits
@@ -112,6 +115,7 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 		Shell:     absOrSelf(o.shell),
 		Mrjob:     absOrSelf(o.mrjob),
 		Container: o.container,
+		Monitor:   o.monitor,
 		MROFile:   filepath.Base(src),
 		StageCode: code,
 	}); err != nil {

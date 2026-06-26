@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/martian-nextflow/internal/bind"
@@ -45,6 +46,9 @@ type Options struct {
 	// Container, when set, is the image used for every process (process.container
 	// in nextflow.config) — required by container backends like AWS Batch.
 	Container string
+	// Monitor enables per-stage virtual-memory enforcement in the shim (the mrp
+	// --monitor analog).
+	Monitor bool
 }
 
 // Emit writes the Nextflow project for prog into opts.OutDir.
@@ -68,6 +72,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		mre:     opts.Mre,
 		shell:   opts.Shell,
 		mrjob:   opts.Mrjob,
+		monitor: opts.Monitor,
 		code:    opts.StageCode,
 	}
 
@@ -425,17 +430,19 @@ func configFile(container string) string {
 		containerLine = "    container = '" + container + "'\n"
 	}
 
+	assertExit := strconv.Itoa(shim.AssertExitCode)
+
 	return `params.outdir = 'results'
 // Cloud knobs the awsbatch profile reads; override with --aws_queue/--aws_region.
 params.aws_queue = null
 params.aws_region = null
 
-// Coarse analog of mrp --autoretry: retry a failed task a couple of times.
-// (mrp's content-based ASSERT-vs-retryable classification has no Nextflow
-// equivalent, so this retries any failure.) Cap concurrency with the standard
-// '-process.maxForks' / '-qs' flags; local pools with '-process.cpus' etc.
+// Content-based retry (mrp --autoretry analog): the shim exits ` + assertExit + ` for an
+// ASSERT-class (non-retryable) stage failure and 1 for an ordinary (retryable)
+// one, so terminate on ASSERT and retry everything else. Cap concurrency with
+// the standard '-process.maxForks' / '-qs' flags; local pools with '-process.cpus'.
 process {
-    errorStrategy = 'retry'
+    errorStrategy = { task.exitStatus == ` + assertExit + ` ? 'terminate' : 'retry' }
     maxRetries = 2
 ` + containerLine + `}
 
