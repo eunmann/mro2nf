@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/eunmann/martian-nextflow/internal/apperror"
 	"github.com/eunmann/martian-nextflow/internal/bind"
 	"github.com/eunmann/martian-nextflow/internal/ir"
 	"github.com/eunmann/martian-nextflow/internal/shim"
@@ -52,10 +51,6 @@ type Options struct {
 func Emit(prog *ir.Program, opts Options) error {
 	if prog.Entry == nil {
 		return errNoEntry
-	}
-
-	if err := validateProgram(prog); err != nil {
-		return err
 	}
 
 	specDir := filepath.Join(opts.OutDir, "bindspecs")
@@ -163,73 +158,6 @@ func writeJSONFile(path string, v any) error {
 	}
 
 	return writeFile(path, data)
-}
-
-// validateProgram rejects feature combinations the emitter cannot yet lower
-// correctly, with a clear error rather than silently wrong output.
-func validateProgram(prog *ir.Program) error {
-	for _, name := range sortedKeys(prog.Pipelines) {
-		p := prog.Pipelines[name]
-
-		for _, c := range p.Calls {
-			if err := validateMapCall(prog, name, c); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-// validateMapCall rejects map-call modifier combinations the keyed machinery
-// cannot yet thread per fork.
-func validateMapCall(prog *ir.Program, pipeline string, c ir.Call) error {
-	if !c.Mapped {
-		return nil
-	}
-
-	// Stage and keyable-pipeline map targets run through fork-key-threaded
-	// variants. A pipeline target whose body (transitively) contains a disabled
-	// or nested-map call cannot yet be keyed per fork.
-	if !keyablePipeline(prog, c.Callable, map[string]bool{}) {
-		return &apperror.UnsupportedError{
-			Construct: "map call over a pipeline with disabled or nested-map calls",
-			Detail:    pipeline + "." + c.Name + " -> " + c.Callable,
-		}
-	}
-
-	return nil
-}
-
-// keyablePipeline reports whether a map call may target callable: stages are
-// always fine; a pipeline is keyable only if every call in it (transitively) is
-// a plain or split call — a disabled or nested-map call inside the body cannot
-// yet be threaded per fork. Recursion is bounded by the seen set.
-func keyablePipeline(prog *ir.Program, callable string, seen map[string]bool) bool {
-	if seen[callable] {
-		return true
-	}
-
-	seen[callable] = true
-
-	p, ok := prog.Pipelines[callable]
-	if !ok {
-		return true // a stage target
-	}
-
-	for _, c := range p.Calls {
-		// A nested map call inside a mapped pipeline needs 2-D fork keying, which
-		// the keyed machinery does not yet do; disabled calls are gated per fork.
-		if c.Mapped {
-			return false
-		}
-
-		if !keyablePipeline(prog, c.Callable, seen) {
-			return false
-		}
-	}
-
-	return true
 }
 
 // mapProjectDepth returns how many leading path segments a ref navigates before

@@ -1,27 +1,27 @@
-stage S(
+# Nested map: OUTER maps INNER, and INNER itself maps DBL. 2-D fork keying.
+stage DBL(
     in  int x,
     out int y,
-    src py  "s",
+    src py  "stages/dbl",
 )
 
-# INNER contains a nested map call, so a map over INNER needs 2-D fork keying.
 pipeline INNER(
     in  int[] xs,
     out int[] ys,
 )
 {
-    map call S(
+    map call DBL(
         x = split self.xs,
     )
 
     return (
-        ys = S.y,
+        ys = DBL.y,
     )
 }
 
-pipeline P(
+pipeline OUTER(
     in  int[][] sets,
-    out int[][] y,
+    out int[][] yss,
 )
 {
     map call INNER(
@@ -29,12 +29,13 @@ pipeline P(
     )
 
     return (
-        y = INNER.ys,
+        yss = INNER.ys,
     )
 }
 
-call P(
+call OUTER(
     sets = [
-        [1],
+        [1, 2],
+        [3],
     ],
 )

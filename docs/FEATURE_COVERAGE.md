@@ -72,7 +72,8 @@ out of scope for a transpiler.
 | map call emitting a **file** (array/keyed-map of files) | ✅ | e2e `map_file`, `map_file_keyed` |
 | empty-split fork inside a map call (0 chunks → 0/null, no fork dropped) | ✅ | e2e `map_split` (includes an empty fork) |
 | `disabled` on a map call | ✅ (fork pipeline-args gated by the resolved flag; skip → null bundle) | e2e `disabled_map` (skip true→null, false→[2,4,6]) |
-| map call over a pipeline with an internal disabled/nested-map call | ❌ guarded | unit `TestEmitUnsupported` |
+| map call over a pipeline with an internal **disabled** call | ✅ (keyed pipeline gates the call per fork) | e2e `map_pipe_disabled` |
+| **nested** map call (a map over a pipeline that itself maps) | ✅ (2-D fork keying: composite `outer~inner` keys, keyed FORKBIND/MERGE) | e2e `map_pipe_nested` |
 
 ## Stages / adapters / resources
 
@@ -123,14 +124,12 @@ out of scope for a transpiler.
 
 - Every e2e fixture's expected output is the real `mrp` result, captured under
   `testdata/<name>/expected/`.
-- ❌ items fail fast with a typed `apperror.UnsupportedError` at transpile time;
-  they never emit silently-wrong Nextflow. The **only** remaining ❌ is a map call
-  over a pipeline whose body itself contains a `disabled` or nested-map call.
-  First-principles assessment: the disabled-inside-keyed-pipeline case is
-  tractable (the keyed analog of the now-implemented disabled-map fork gate, ~one
-  keyed branch); the nested-map case needs 2-D fork-identity keying (composite
-  keys through the keyed-pipeline machinery) and is the genuinely larger piece.
-  Both are rare combinations; guarded until built.
+- Every Martian map-call combination is now supported, including the formerly
+  guarded ones: a `disabled` map call, a map over a pipeline with an internal
+  disabled call, and a nested map (a map over a pipeline that itself maps, via
+  2-D composite-key fork threading). The transpiler no longer emits an
+  `UnsupportedError` for any map-call shape. (The `lower` stage still guards a
+  genuinely unknown expression kind as defensive code.)
 - 🚫 items are `mrp`-runtime behaviors (live UI, content-based retry, mid-run VDR
   timing, OOM auto-escalation) with no faithful Nextflow analog; the closest
   testable guarantee (terminal filesystem state, output equivalence) is used

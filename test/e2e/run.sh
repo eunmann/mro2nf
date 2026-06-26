@@ -81,6 +81,7 @@ CASES=(
     "map_split|testdata/map_split|testdata/map_split/expected/outs.json"
     "map_pipe|testdata/map_pipe|testdata/map_pipe/expected/outs.json"
     "map_file|testdata/map_file|testdata/map_file/expected/outs.json"
+    "map_pipe_nested|testdata/map_pipe_nested|testdata/map_pipe_nested/expected/outs.json"
     "map_pipe_disabled|testdata/map_pipe_disabled|testdata/map_pipe_disabled/expected/outs.json"
     "map_pipe_split|testdata/map_pipe_split|testdata/map_pipe_split/expected/outs.json"
     "map_file_keyed|testdata/map_file_keyed|testdata/map_file_keyed/expected/outs.json"

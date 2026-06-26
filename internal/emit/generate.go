@@ -123,8 +123,15 @@ func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) 
 
 // genKeyedPipeProcesses emits the fork-key-carrying bind processes a keyed
 // pipeline uses (one per call, plus the return).
-func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, _ *ir.Program, g genCtx) {
+func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx) {
 	for _, c := range p.Calls {
+		if c.Mapped {
+			genKeyedForkBindProcess(b, p.Name, c, g)
+			genKeyedMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
+
+			continue
+		}
+
 		genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
 
 		if c.Disabled != nil {
@@ -140,8 +147,24 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, _ *ir.Program, g 
 // fork. out is the produced bundle's name ("args" for an intermediate call,
 // "outs__${key}" for the return so the merge can order forks).
 func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx, prodArgs, out string) {
-	refs := refCalls(bindings)
+	block, arg := keyedInputs(refCalls(bindings))
 
+	fmt.Fprintf(b, `process %[1]s_K {
+  input:
+%[2]s  output:
+    tuple val(key), path("%[6]s", type: 'dir')
+  script:
+    """
+    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o %[6]s%[5]s
+    """
+}
+
+`, name, block, g.mre, arg, prodArgs, out)
+}
+
+// keyedInputs renders a keyed process's input block — tuple(key, pipeargs, staged
+// upstream bundles) — and the matching `-inputs id=in_id` argument.
+func keyedInputs(refs []string) (string, string) {
 	var in strings.Builder
 
 	in.WriteString("    tuple val(key), path(pipeargs)")
@@ -159,17 +182,47 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 		arg = " -inputs " + strings.Join(pairs, ",")
 	}
 
+	return in.String(), arg
+}
+
+// genKeyedForkBindProcess emits the fork-key-threaded forkbind for a nested map
+// call: per outer fork it forks the split collection into inner fork bundles.
+func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
+	block, arg := keyedInputs(refCalls(c.Bindings))
+
+	// The forks are emitted as a single directory (a tuple-glob path captures
+	// only one match, unlike a list output); the workflow lists it per fork.
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
 %[2]s  output:
-    tuple val(key), path("%[6]s", type: 'dir')
+    tuple val(key), path('forks'), emit: forks
+    tuple val(key), path('forkkeys.json'), emit: keys
   script:
     """
-    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o %[6]s%[5]s
+    mkdir -p forks
+    '%[3]s' forkbind -spec '${projectDir}/bindspecs/%[4]s.json' -pipeargs ${pipeargs}%[5]s -chunkdir forks%[6]s
+    mv forks/forkkeys.json forkkeys.json
     """
 }
 
-`, name, in.String(), g.mre, arg, prodArgs, out)
+`, forkName(pipeline, c.Name), block, g.mre, bindName(pipeline, c.Name), arg, g.producerArgs(c.Callable, types.RoleIn))
+}
+
+// genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
+// per outer fork it gathers that fork's inner results.
+func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
+	fmt.Fprintf(b, `process %[1]s_K {
+  input:
+    tuple val(key), path(souts), path('forkkeys.json')
+  output:
+    tuple val(key), path('merged', type: 'dir')
+  script:
+    """
+    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
+    """
+}
+
+`, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut))
 }
 
 // genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,
@@ -203,6 +256,12 @@ func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline) {
 // branched, running the callee only for enabled forks and emitting the null
 // bundle for skipped ones.
 func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
+	if c.Mapped {
+		genKeyedMappedCallBody(body, pipeline, c)
+
+		return
+	}
+
 	bind := bindName(pipeline, c.Name)
 	alias := keyedCallAlias(pipeline, c.Name)
 	fmt.Fprintf(body, "    %s_K(%s)\n", bind, keyedBindInput(c.Bindings))
@@ -225,6 +284,25 @@ func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
     s_%[1]s = g_%[1]s.skip.map { key, args, d -> tuple(key, file("%[5]s")) }
     ch_%[1]s_l = r_%[1]s.mix(s_%[1]s).toList()
 `, c.Name, bind, dis, alias, nulls)
+}
+
+// genKeyedMappedCallBody emits a nested map call inside a keyed pipeline. Per
+// outer fork the FORKBIND forks the split collection; each inner fork is given a
+// composite "outer~inner" key and run through the callee's _map variant; results
+// are regrouped by stripping the innermost key segment (so arbitrary nesting
+// works) and merged per outer fork. A remainder join keeps an outer fork whose
+// inner collection was empty (it merges to null).
+func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
+	fork := forkName(pipeline, c.Name)
+	merge := mergeName(pipeline, c.Name)
+	alias := keyedCallAlias(pipeline, c.Name)
+
+	fmt.Fprintf(body, "    %s_K(%s)\n", fork, keyedBindInput(c.Bindings))
+	fmt.Fprintf(body, "    ik_%[1]s = %[2]s_K.out.forks.flatMap { ok, d -> d.listFiles().findAll { it.name.startsWith('fork_') }.sort { it.name }.collect { f -> tuple(\"${ok}~${f.name}\", f) } }\n", c.Name, fork)
+	fmt.Fprintf(body, "    io_%[1]s = %[2]s(ik_%[1]s)\n", c.Name, alias)
+	fmt.Fprintf(body, "    mj_%[1]s = %[2]s_K.out.keys.join(io_%[1]s.map { ck, bdl -> tuple(ck[0..<ck.lastIndexOf('~')], bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, so ?: [], fk) }\n", c.Name, fork)
+	fmt.Fprintf(body, "    %s_K(mj_%s)\n", merge, c.Name)
+	fmt.Fprintf(body, "    ch_%[1]s_l = %[2]s_K.out.toList()\n", c.Name, merge)
 }
 
 // keyedBindInput renders the channel expression feeding a keyed bind: the fork
