@@ -184,10 +184,10 @@ func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts
 }
 
 process %[1]s_MAIN {
-  cpus %[2]d
-  memory '%[3]d GB'
+  cpus { (res?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(res.threads as double) as int) : %[2]d }
+  memory { (res?.mem_gb ?: 0) > 0 ? "${res.mem_gb} GB" : '%[3]d GB' }
   input:
-    tuple path(chunk), path(args)
+    tuple val(res), path(chunk), path(args)
   output:
     path "out_${chunk.baseName}.json"
   script:
@@ -220,8 +220,8 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
   main:
     a = args.first()
     %[1]s_SPLIT(a)
-    main_in = %[1]s_SPLIT.out.chunks.flatten().combine(a)
-    %[1]s_MAIN(main_in)
+    chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.text).resources, f) }
+    %[1]s_MAIN(chunks.combine(a))
     %[1]s_JOIN(a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect())
   emit:
     %[1]s_JOIN.out

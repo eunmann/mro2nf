@@ -96,6 +96,10 @@ func TestEmitModules(t *testing.T) {
 			"workflow wf_SUM_SQUARES {",
 			// Paths are single-quoted so spaces/metacharacters are safe.
 			"-stagecode '/x/sum_squares'",
+			// Per-chunk resources reach the scheduler via dynamic directives
+			// reading the chunk's resolved resources carried as a val.
+			"cpus { (res?.threads",
+			"memory { (res?.mem_gb",
 		},
 		"modules/stage_REPORT.nf": {"process REPORT {"},
 	}
