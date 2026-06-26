@@ -218,7 +218,9 @@ func keyablePipeline(prog *ir.Program, callable string, seen map[string]bool) bo
 	}
 
 	for _, c := range p.Calls {
-		if c.Disabled != nil || c.Mapped {
+		// A nested map call inside a mapped pipeline needs 2-D fork keying, which
+		// the keyed machinery does not yet do; disabled calls are gated per fork.
+		if c.Mapped {
 			return false
 		}
 

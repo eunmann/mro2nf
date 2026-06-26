@@ -1,42 +1,40 @@
 stage S(
-    in  float x,
-    out float y,
-    src py    "s",
+    in  int x,
+    out int y,
+    src py  "s",
 )
 
-# INNER contains a disabled call, so it cannot be threaded per fork.
+# INNER contains a nested map call, so a map over INNER needs 2-D fork keying.
 pipeline INNER(
-    in  float x,
-    in  bool  off,
-    out float y,
+    in  int[] xs,
+    out int[] ys,
 )
 {
-    call S(
-        x = self.x,
-    ) using (
-        disabled = self.off,
+    map call S(
+        x = split self.xs,
     )
 
     return (
-        y = S.y,
+        ys = S.y,
     )
 }
 
 pipeline P(
-    in  float[] xs,
-    out float[] y,
+    in  int[][] sets,
+    out int[][] y,
 )
 {
     map call INNER(
-        x   = split self.xs,
-        off = false,
+        xs = split self.sets,
     )
 
     return (
-        y = INNER.y,
+        y = INNER.ys,
     )
 }
 
 call P(
-    xs = [1.0],
+    sets = [
+        [1],
+    ],
 )

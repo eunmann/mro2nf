@@ -1,0 +1,47 @@
+# A map call over a sub-pipeline whose body contains a DISABLED call: each fork
+# runs INNER, and INNER's DBL is gated per fork by the keyed disable branch.
+stage DBL(
+    in  int x,
+    out int y,
+    src py  "stages/dbl",
+)
+
+pipeline INNER(
+    in  int  x,
+    in  bool skip,
+    out int  y,
+)
+{
+    call DBL(
+        x = self.x,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        y = DBL.y,
+    )
+}
+
+pipeline OUTER(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    map call INNER(
+        x    = split self.xs,
+        skip = true,
+    )
+
+    return (
+        ys = INNER.y,
+    )
+}
+
+call OUTER(
+    xs = [
+        1,
+        2,
+        3,
+    ],
+)

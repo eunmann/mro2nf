@@ -126,6 +126,10 @@ func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) 
 func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, _ *ir.Program, g genCtx) {
 	for _, c := range p.Calls {
 		genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
+
+		if c.Disabled != nil {
+			genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
+		}
 	}
 
 	genKeyedBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut), `outs__${key}`)
@@ -178,9 +182,7 @@ func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline) {
 	body.WriteString("  main:\n    pa_l = keyed.toList()\n")
 
 	for _, c := range p.Calls {
-		bind := bindName(p.Name, c.Name)
-		fmt.Fprintf(&body, "    %s_K(%s)\n", bind, keyedBindInput(c.Bindings))
-		fmt.Fprintf(&body, "    ch_%s_l = %s(%s_K.out).toList()\n", c.Name, keyedCallAlias(p.Name, c.Name), bind)
+		genKeyedCallBody(&body, p.Name, c)
 	}
 
 	retName := bindName(p.Name, "return")
@@ -193,6 +195,36 @@ func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline) {
 }
 
 `, p.Name, body.String(), retName)
+}
+
+// genKeyedCallBody emits one call's wiring inside a keyed pipeline: a keyed bind
+// then the callee's _map variant, threading the fork key. A disabled call is
+// gated per fork — its keyed bind and a keyed DISABLE are joined by key and
+// branched, running the callee only for enabled forks and emitting the null
+// bundle for skipped ones.
+func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
+	bind := bindName(pipeline, c.Name)
+	alias := keyedCallAlias(pipeline, c.Name)
+	fmt.Fprintf(body, "    %s_K(%s)\n", bind, keyedBindInput(c.Bindings))
+
+	if c.Disabled == nil {
+		fmt.Fprintf(body, "    ch_%s_l = %s(%s_K.out).toList()\n", c.Name, alias, bind)
+
+		return
+	}
+
+	dis := disableName(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindInput(disableBindings(c)))
+	fmt.Fprintf(body, `    g_%[1]s = %[2]s_K.out.join(%[3]s_K.out).branch { key, args, d ->
+        def off = new groovy.json.JsonSlurper().parseText(file("${d}/data.json").text).disabled
+        run: !off
+        skip: off
+    }
+    r_%[1]s = %[4]s(g_%[1]s.run.map { key, args, d -> tuple(key, args) })
+    s_%[1]s = g_%[1]s.skip.map { key, args, d -> tuple(key, file("%[5]s")) }
+    ch_%[1]s_l = r_%[1]s.mix(s_%[1]s).toList()
+`, c.Name, bind, dis, alias, nulls)
 }
 
 // keyedBindInput renders the channel expression feeding a keyed bind: the fork
