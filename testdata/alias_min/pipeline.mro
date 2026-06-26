@@ -1,0 +1,29 @@
+stage DOUBLE(
+    in  float x,
+    out float y,
+    src py    "stages/double",
+)
+
+pipeline P(
+    in  float x,
+    out float a,
+    out float b,
+)
+{
+    call DOUBLE(
+        x = self.x,
+    )
+
+    call DOUBLE as DOUBLE2(
+        x = self.x,
+    )
+
+    return (
+        a = DOUBLE.y,
+        b = DOUBLE2.y,
+    )
+}
+
+call P(
+    x = 5.0,
+)

@@ -49,6 +49,9 @@ func TestEmitFiles(t *testing.T) {
 		"main.nf",
 		"nextflow.config",
 		"entry_args.json",
+		"modules/pipe_SUM_SQUARE_PIPELINE.nf",
+		"modules/stage_SUM_SQUARES.nf",
+		"modules/stage_REPORT.nf",
 		"bindspecs/BIND_SUM_SQUARE_PIPELINE__SUM_SQUARES.json",
 		"bindspecs/BIND_SUM_SQUARE_PIPELINE__REPORT.json",
 		"bindspecs/BIND_SUM_SQUARE_PIPELINE__return.json",
@@ -72,26 +75,40 @@ func TestEmitEntryArgs(t *testing.T) {
 	}
 }
 
-func TestEmitMainNF(t *testing.T) {
+func TestEmitModules(t *testing.T) {
 	dir := loadAndEmit(t)
 
-	data, err := os.ReadFile(filepath.Join(dir, "main.nf"))
-	if err != nil {
-		t.Fatalf("read main.nf: %v", err)
+	checks := map[string][]string{
+		"main.nf": {
+			"include { SUM_SQUARE_PIPELINE } from './modules/pipe_SUM_SQUARE_PIPELINE.nf'",
+			"SUM_SQUARE_PIPELINE(pipeargs)",
+		},
+		"modules/pipe_SUM_SQUARE_PIPELINE.nf": {
+			"workflow SUM_SQUARE_PIPELINE {",
+			"include { wf_SUM_SQUARES as wf_SUM_SQUARE_PIPELINE__SUM_SQUARES }",
+		},
+		"modules/stage_SUM_SQUARES.nf": {
+			"process SUM_SQUARES_SPLIT {",
+			"process SUM_SQUARES_MAIN {",
+			"process SUM_SQUARES_JOIN {",
+			"workflow wf_SUM_SQUARES {",
+			"-stagecode /x/sum_squares",
+		},
+		"modules/stage_REPORT.nf": {"process REPORT {"},
 	}
 
-	nf := string(data)
-	for _, want := range []string{
-		"workflow SUM_SQUARE_PIPELINE {",
-		"process SUM_SQUARES_SPLIT {",
-		"process SUM_SQUARES_MAIN {",
-		"process SUM_SQUARES_JOIN {",
-		"process REPORT {",
-		"workflow wf_SUM_SQUARES {",
-		"-stagecode /x/sum_squares",
-	} {
-		if !strings.Contains(nf, want) {
-			t.Errorf("main.nf missing %q", want)
+	for rel, wants := range checks {
+		data, err := os.ReadFile(filepath.Join(dir, rel))
+		if err != nil {
+			t.Errorf("read %s: %v", rel, err)
+
+			continue
+		}
+
+		for _, want := range wants {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("%s missing %q", rel, want)
+			}
 		}
 	}
 }

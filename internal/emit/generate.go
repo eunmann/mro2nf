@@ -18,24 +18,73 @@ type genCtx struct {
 	code    map[string]string // stage name -> stage code path
 }
 
-// generateNF renders the complete main.nf for a program.
-func generateNF(prog *ir.Program, g genCtx) string {
+// generateStageModule renders a stage's module: its processes and the wf_<stage>
+// subworkflow that wraps them.
+func generateStageModule(s *ir.Stage, g genCtx) string {
 	var b strings.Builder
 
 	b.WriteString("nextflow.enable.dsl=2\n\n")
+	genStage(&b, s, g)
 
-	for _, name := range sortedKeys(prog.Stages) {
-		genStage(&b, prog.Stages[name], g)
-	}
+	return b.String()
+}
 
-	for _, name := range sortedKeys(prog.Pipelines) {
-		genPipeline(&b, prog.Pipelines[name], prog, g)
-	}
+// generatePipeModule renders a pipeline's module: includes of its callees (each
+// aliased per call so repeated calls get independent instances), the per-call
+// helper processes, and the pipeline workflow.
+func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
+	var b strings.Builder
 
+	b.WriteString("nextflow.enable.dsl=2\n\n")
+	genPipeIncludes(&b, p, prog)
+	genPipeProcesses(&b, p, prog, g)
+	genPipelineWorkflow(&b, p, prog)
+
+	return b.String()
+}
+
+// generateMain renders main.nf: the entry workflow plus PUBLISH.
+func generateMain(prog *ir.Program) string {
+	var b strings.Builder
+
+	b.WriteString("nextflow.enable.dsl=2\n\n")
+	fmt.Fprintf(&b, "include { %[1]s } from './modules/pipe_%[1]s.nf'\n\n", prog.Entry.Callable)
 	genPublish(&b)
 	genEntry(&b, prog)
 
 	return b.String()
+}
+
+// genPipeIncludes emits one include per call, aliasing the callee's workflow to
+// a per-call name so each call is an independent instance.
+func genPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
+	for _, c := range p.Calls {
+		export, src := calleeModule(prog, c.Callable)
+		fmt.Fprintf(b, "include { %s as %s } from '%s'\n", export, callAlias(p.Name, c.Name), src)
+	}
+
+	b.WriteString("\n")
+}
+
+// genPipeProcesses emits the BIND/FORK/MERGE/DISABLE helper processes for a
+// pipeline's calls and its return binding.
+func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx) {
+	for _, c := range p.Calls {
+		if c.Mapped {
+			genForkBindProcess(b, p.Name, c, g)
+			genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
+
+			continue
+		}
+
+		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g)
+
+		if c.Disabled != nil {
+			genDisableProcess(b, p.Name, c, g)
+		}
+	}
+
+	genBindProcess(b, bindName(p.Name, "return"), p.Returns, g)
 }
 
 func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
@@ -146,26 +195,6 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 }
 
 `, s.Name)
-}
-
-func genPipeline(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx) {
-	for _, c := range p.Calls {
-		if c.Mapped {
-			genForkBindProcess(b, p.Name, c, g)
-			genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
-
-			continue
-		}
-
-		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g)
-
-		if c.Disabled != nil {
-			genDisableProcess(b, p.Name, c, g)
-		}
-	}
-
-	genBindProcess(b, bindName(p.Name, "return"), p.Returns, g)
-	genPipelineWorkflow(b, p, prog)
 }
 
 // genDisableProcess emits a process that resolves a call's `disabled` flag into
@@ -283,8 +312,8 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 
 // genCallWiring emits the wiring for one call: a map-call fork/merge fan-out, a
 // disabled-aware branch, or a plain BIND + callee invocation.
-func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Program) {
-	callee := calleeWorkflow(prog, c.Callable)
+func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, _ *ir.Program) {
+	callee := callAlias(pipeline, c.Name)
 
 	if c.Mapped {
 		fork := forkName(pipeline, c.Name)
@@ -328,14 +357,21 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
 `, c.Name, bind, dis, callee, nulls)
 }
 
-// calleeWorkflow returns the Nextflow workflow name for a callable: stages are
-// wrapped as wf_<stage>; pipelines use their own name.
-func calleeWorkflow(prog *ir.Program, callable string) string {
+// calleeModule returns the exported workflow name and module path for a
+// callable: stages export wf_<stage> from stage_<stage>.nf; pipelines export
+// <pipeline> from pipe_<pipeline>.nf.
+func calleeModule(prog *ir.Program, callable string) (string, string) {
 	if _, ok := prog.Stages[callable]; ok {
-		return "wf_" + callable
+		return "wf_" + callable, "./stage_" + callable + ".nf"
 	}
 
-	return callable
+	return callable, "./pipe_" + callable + ".nf"
+}
+
+// callAlias is the per-call workflow alias, unique within a pipeline, so each
+// call (including repeated/aliased calls) is an independent instance.
+func callAlias(pipeline, call string) string {
+	return "wf_" + pipeline + "__" + call
 }
 
 // disableBindings builds a one-entry binding list for a call's disabled ref.

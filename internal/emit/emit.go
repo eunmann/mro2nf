@@ -45,8 +45,12 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	specDir := filepath.Join(opts.OutDir, "bindspecs")
-	if err := os.MkdirAll(specDir, dirPerm); err != nil {
-		return fmt.Errorf("create output dirs: %w", err)
+	modDir := filepath.Join(opts.OutDir, "modules")
+
+	for _, dir := range []string{specDir, modDir} {
+		if err := os.MkdirAll(dir, dirPerm); err != nil {
+			return fmt.Errorf("create output dirs: %w", err)
+		}
 	}
 
 	g := genCtx{
@@ -57,7 +61,11 @@ func Emit(prog *ir.Program, opts Options) error {
 		code:    opts.StageCode,
 	}
 
-	if err := writeFile(filepath.Join(opts.OutDir, "main.nf"), []byte(generateNF(prog, g))); err != nil {
+	if err := writeModules(prog, modDir, g); err != nil {
+		return err
+	}
+
+	if err := writeFile(filepath.Join(opts.OutDir, "main.nf"), []byte(generateMain(prog))); err != nil {
 		return err
 	}
 
@@ -136,6 +144,25 @@ func writeJSONFile(path string, v any) error {
 	}
 
 	return writeFile(path, data)
+}
+
+// writeModules writes one Nextflow module per stage and per pipeline.
+func writeModules(prog *ir.Program, modDir string, g genCtx) error {
+	for _, name := range sortedKeys(prog.Stages) {
+		path := filepath.Join(modDir, "stage_"+name+".nf")
+		if err := writeFile(path, []byte(generateStageModule(prog.Stages[name], g))); err != nil {
+			return err
+		}
+	}
+
+	for _, name := range sortedKeys(prog.Pipelines) {
+		path := filepath.Join(modDir, "pipe_"+name+".nf")
+		if err := writeFile(path, []byte(generatePipeModule(prog.Pipelines[name], prog, g))); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func writeBindSpecs(prog *ir.Program, specDir string) error {
