@@ -62,3 +62,19 @@ run_case exec_min testdata/exec_min \
     testdata/exec_min/expected/ep_outs.json
 run_case kitchen_sink testdata/kitchen_sink \
     testdata/kitchen_sink/expected/main_outs.json
+
+# file_min verifies a published file output: content and basename rewrite. Its
+# pipeline_outs.json uses a basename (not an mrp abspath), so it is checked
+# directly rather than via run_case.
+proj="$(mktemp -d)"
+trap 'rm -rf "$proj"' EXIT
+./mart -o "$proj" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
+    -mropath testdata/file_min testdata/file_min/pipeline.mro >/dev/null
+(cd "$proj" && nextflow run main.nf >/dev/null)
+if [ "$(cat "$proj/results/note.txt")" = "x=42" ] &&
+    grep -q '"note": "note.txt"' "$proj/results/pipeline_outs.json"; then
+    echo "OK[file_min]: published note.txt content + basename rewrite"
+else
+    echo "FAIL[file_min]"
+    exit 1
+fi

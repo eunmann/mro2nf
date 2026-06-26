@@ -68,7 +68,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	if err := writeFile(filepath.Join(opts.OutDir, "main.nf"), []byte(generateMain(prog))); err != nil {
+	if err := writeFile(filepath.Join(opts.OutDir, "main.nf"), []byte(generateMain(prog, g))); err != nil {
 		return err
 	}
 
@@ -227,8 +227,26 @@ func bindSpec(bindings []ir.Binding) bind.Spec {
 	return spec
 }
 
+// configFile renders nextflow.config with executor profiles. The local and
+// HPC profiles (slurm/sge/lsf/pbs) work with the shared-filesystem model used
+// today; cloud profiles additionally require the object-store data plane.
 func configFile() string {
-	return "params.outdir = 'results'\n"
+	return `params.outdir = 'results'
+
+profiles {
+    standard { process.executor = 'local' }
+    slurm    { process.executor = 'slurm' }
+    sge      { process.executor = 'sge' }
+    lsf      { process.executor = 'lsf' }
+    pbs      { process.executor = 'pbs' }
+    awsbatch {
+        process.executor = 'awsbatch'
+        process.queue    = params.aws_queue
+        aws.region       = params.aws_region
+    }
+    k8s { process.executor = 'k8s' }
+}
+`
 }
 
 func writeFile(path string, data []byte) error {

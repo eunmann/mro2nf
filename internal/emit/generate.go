@@ -54,15 +54,38 @@ func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 }
 
 // generateMain renders main.nf: the entry workflow plus PUBLISH.
-func generateMain(prog *ir.Program) string {
+func generateMain(prog *ir.Program, g genCtx) string {
 	var b strings.Builder
 
 	b.WriteString("nextflow.enable.dsl=2\n\n")
 	fmt.Fprintf(&b, "include { %[1]s } from './modules/pipe_%[1]s.nf'\n\n", prog.Entry.Callable)
-	genPublish(&b)
+	genPublish(&b, entryFileParams(prog), g)
 	genEntry(&b, prog)
 
 	return b.String()
+}
+
+// entryFileParams returns the names of the entry callable's file-typed outputs.
+func entryFileParams(prog *ir.Program) []string {
+	var out []string
+
+	if p, ok := prog.Pipelines[prog.Entry.Callable]; ok {
+		for _, param := range p.Out {
+			if param.IsFile {
+				out = append(out, param.Name)
+			}
+		}
+	}
+
+	if s, ok := prog.Stages[prog.Entry.Callable]; ok {
+		for _, param := range s.Out {
+			if param.IsFile {
+				out = append(out, param.Name)
+			}
+		}
+	}
+
+	return out
 }
 
 // genPipeIncludes emits one include per call, aliasing the callee's workflow to
@@ -408,8 +431,12 @@ func bindCallArgs(bindings []ir.Binding) string {
 	return strings.Join(args, ", ")
 }
 
-func genPublish(b *strings.Builder) {
-	b.WriteString(`process PUBLISH {
+// genPublish emits the PUBLISH process. When the entry has file-typed outputs,
+// it runs `mre publish` to copy those files into the results dir and rewrite
+// their paths to basenames; otherwise it just publishes the outs JSON.
+func genPublish(b *strings.Builder, fileParams []string, g genCtx) {
+	if len(fileParams) == 0 {
+		b.WriteString(`process PUBLISH {
   publishDir params.outdir, mode: 'copy'
   input:
     path 'pipeline_outs.json'
@@ -420,6 +447,24 @@ func genPublish(b *strings.Builder) {
 }
 
 `)
+
+		return
+	}
+
+	fmt.Fprintf(b, `process PUBLISH {
+  publishDir params.outdir, mode: 'copy'
+  input:
+    path 'final_outs.json'
+  output:
+    path '*'
+  script:
+    """
+    %s publish -outs final_outs.json -files '%s' -dir .
+    rm -f final_outs.json
+    """
+}
+
+`, g.mre, strings.Join(fileParams, ","))
 }
 
 func genEntry(b *strings.Builder, prog *ir.Program) {

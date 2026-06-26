@@ -1,0 +1,25 @@
+filetype txt;
+
+stage WRITE(
+    in  float x,
+    out txt   note  "a note file"  "note.txt",
+    src py    "stages/write",
+)
+
+pipeline FP(
+    in  float x,
+    out txt   note,
+)
+{
+    call WRITE(
+        x = self.x,
+    )
+
+    return (
+        note = WRITE.note,
+    )
+}
+
+call FP(
+    x = 42.0,
+)
