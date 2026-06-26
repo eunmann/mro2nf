@@ -21,12 +21,28 @@ type Param struct {
 	Name string
 	// Type is the rendered MRO type, e.g. "float", "float[]", "map<int>".
 	Type string
+	// BaseType is the bare element type name with array/map wrappers stripped,
+	// e.g. "float", "file", or a struct name like "Cfg". Used to resolve struct
+	// fields during the type-directed file-leaf walk.
+	BaseType string
 	// ArrayDim is the number of array dimensions (0 for a scalar).
 	ArrayDim int
+	// MapDim is the number of typed-map dimensions (0 for a non-map).
+	MapDim int
 	// IsFile reports whether the type refers to a file, directory, or path.
 	IsFile bool
 	// OutName is the optional on-disk output filename (output params only).
 	OutName string
+}
+
+// StructType is a Martian struct: an ordered, named set of typed fields. Stage
+// and pipeline output params whose BaseType names a struct expand into these
+// fields during the file-leaf walk.
+type StructType struct {
+	// Name is the struct type identifier.
+	Name string
+	// Fields are the struct's members, each a typed Param.
+	Fields []Param
 }
 
 // Resources is a stage's static resource request from `using(...)`.
@@ -136,6 +152,9 @@ type Program struct {
 	// Stages and Pipelines are keyed by name.
 	Stages    map[string]*Stage
 	Pipelines map[string]*Pipeline
+	// Structs holds explicit `struct` type declarations, keyed by name, so the
+	// file-leaf walk can expand nested struct-typed values.
+	Structs map[string]*StructType
 	// Entry is the top-level call, or nil if the source declares none.
 	Entry *EntryCall
 }

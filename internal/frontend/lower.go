@@ -16,6 +16,7 @@ func Lower(ast *syntax.Ast) (*ir.Program, error) {
 	prog := &ir.Program{
 		Stages:    make(map[string]*ir.Stage, len(ast.Stages)),
 		Pipelines: make(map[string]*ir.Pipeline, len(ast.Pipelines)),
+		Structs:   lowerStructs(ast),
 	}
 
 	for _, s := range ast.Stages {
@@ -289,15 +290,38 @@ func lowerOutParams(p *syntax.OutParams) []ir.Param {
 }
 
 func paramFrom(p syntax.Param) ir.Param {
-	t := p.GetTname()
+	return paramFromParts(p.GetId(), p.GetTname(), p.IsFile() != syntax.KindIsNotFile, p.GetOutName())
+}
 
+// paramFromParts builds an ir.Param from the common parts shared by stage/
+// pipeline params and struct members.
+func paramFromParts(id string, t syntax.TypeId, isFile bool, outName string) ir.Param {
 	return ir.Param{
-		Name:     p.GetId(),
+		Name:     id,
 		Type:     renderType(t),
+		BaseType: t.Tname,
 		ArrayDim: int(t.ArrayDim),
-		IsFile:   p.IsFile() != syntax.KindIsNotFile,
-		OutName:  p.GetOutName(),
+		MapDim:   int(t.MapDim),
+		IsFile:   isFile,
+		OutName:  outName,
 	}
+}
+
+// lowerStructs extracts explicit `struct` type declarations so the file-leaf
+// walk can expand nested struct-typed values.
+func lowerStructs(ast *syntax.Ast) map[string]*ir.StructType {
+	structs := make(map[string]*ir.StructType, len(ast.StructTypes))
+
+	for _, st := range ast.StructTypes {
+		fields := make([]ir.Param, len(st.Members))
+		for i, m := range st.Members {
+			fields[i] = paramFromParts(m.GetId(), m.GetTname(), m.IsFile() != syntax.KindIsNotFile, m.GetOutName())
+		}
+
+		structs[st.Id] = &ir.StructType{Name: st.Id, Fields: fields}
+	}
+
+	return structs
 }
 
 // renderType reconstructs the MRO surface type string from a TypeId, including
