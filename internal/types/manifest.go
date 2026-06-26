@@ -83,3 +83,34 @@ func LoadManifest(path string) (Manifest, error) {
 func (m Manifest) Table() *Table {
 	return NewTable(m.Structs)
 }
+
+// Param roles select which of a callable's parameter sets a producer walks when
+// building an output bundle.
+const (
+	RoleIn      = "in"      // a callee's input params (bind/forkbind)
+	RoleOut     = "out"     // a callable's output params (join/merge/return/publish)
+	RoleMainOut = "mainout" // a split stage's per-chunk main outputs (out + chunkOut)
+	RoleChunkIn = "chunkin" // a split stage's per-chunk input params
+)
+
+// Params returns the parameter set for a callable under the given role. An
+// unknown callable or role yields nil (no file leaves to rewrite).
+func (m Manifest) Params(callable, role string) []ir.Param {
+	c, ok := m.Callables[callable]
+	if !ok {
+		return nil
+	}
+
+	switch role {
+	case RoleIn:
+		return c.In
+	case RoleOut:
+		return c.Out
+	case RoleChunkIn:
+		return c.ChunkIn
+	case RoleMainOut:
+		return append(append([]ir.Param(nil), c.Out...), c.ChunkOut...)
+	default:
+		return nil
+	}
+}

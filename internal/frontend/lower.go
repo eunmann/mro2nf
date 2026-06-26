@@ -290,7 +290,14 @@ func lowerOutParams(p *syntax.OutParams) []ir.Param {
 }
 
 func paramFrom(p syntax.Param) ir.Param {
-	return paramFromParts(p.GetId(), p.GetTname(), p.IsFile() != syntax.KindIsNotFile, p.GetOutName())
+	return paramFromParts(p.GetId(), p.GetTname(), isFileKind(p.IsFile()), p.GetOutName())
+}
+
+// isFileKind reports whether a parameter's file kind denotes a real file or
+// directory to stage. KindMayContainPaths (e.g. a plain string) is a VDR
+// heuristic, not a file, so it is excluded.
+func isFileKind(fk syntax.FileKind) bool {
+	return fk == syntax.KindIsFile || fk == syntax.KindIsDirectory
 }
 
 // paramFromParts builds an ir.Param from the common parts shared by stage/
@@ -315,7 +322,7 @@ func lowerStructs(ast *syntax.Ast) map[string]*ir.StructType {
 	for _, st := range ast.StructTypes {
 		fields := make([]ir.Param, len(st.Members))
 		for i, m := range st.Members {
-			fields[i] = paramFromParts(m.GetId(), m.GetTname(), m.IsFile() != syntax.KindIsNotFile, m.GetOutName())
+			fields[i] = paramFromParts(m.GetId(), m.GetTname(), isFileKind(m.IsFile()), m.GetOutName())
 		}
 
 		structs[st.Id] = &ir.StructType{Name: st.Id, Fields: fields}

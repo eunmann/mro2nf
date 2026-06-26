@@ -8,17 +8,20 @@ import (
 	"strings"
 
 	"github.com/eunmann/martian-nextflow/internal/bind"
+	"github.com/eunmann/martian-nextflow/internal/types"
 )
 
-// runBind resolves a call's input bindings into an _args JSON file. -spec is the
-// static binding spec, -pipeargs is the enclosing pipeline's input args, and
-// -inputs is a comma-separated list of callId=outsFile pairs for call refs.
+// runBind resolves a call's input bindings into an _args bundle directory. -spec
+// is the static binding spec, -pipeargs is the enclosing pipeline's input
+// bundle, and -inputs is a comma-separated list of callId=bundleDir pairs for
+// call refs. The producer flags stage any file leaves into the output bundle.
 func runBind(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("bind", flag.ContinueOnError)
+	prod := addProducer(fs, types.RoleIn)
 	specFile := fs.String("spec", "", "binding spec JSON file")
-	pipeFile := fs.String("pipeargs", "", "enclosing pipeline args JSON file")
-	inputs := fs.String("inputs", "", "comma-separated callId=outsFile pairs")
-	outFile := fs.String("o", "", "output args file (default stdout)")
+	pipeFile := fs.String("pipeargs", "", "enclosing pipeline args bundle dir")
+	inputs := fs.String("inputs", "", "comma-separated callId=bundleDir pairs")
+	outFile := fs.String("o", "", "output args bundle dir")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -29,7 +32,7 @@ func runBind(_ context.Context, argv []string) error {
 		return err
 	}
 
-	pipeArgs, err := readFile(*pipeFile)
+	pipeArgs, err := readBundle(*pipeFile)
 	if err != nil {
 		return err
 	}
@@ -44,7 +47,7 @@ func runBind(_ context.Context, argv []string) error {
 		return fmt.Errorf("bind: %w", err)
 	}
 
-	return writeRaw(*outFile, args)
+	return prod.write(*outFile, args)
 }
 
 func readSpec(path string) (bind.Spec, error) {
@@ -72,7 +75,7 @@ func readInputs(inputs string) (map[string]json.RawMessage, error) {
 			return nil, fmt.Errorf("%w: %q", errBadInput, pair)
 		}
 
-		data, err := readFile(file)
+		data, err := readBundle(file)
 		if err != nil {
 			return nil, err
 		}

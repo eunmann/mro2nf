@@ -10,9 +10,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/eunmann/martian-nextflow/internal/ir"
 	"github.com/eunmann/martian-nextflow/internal/shim"
+	"github.com/eunmann/martian-nextflow/internal/types"
 )
 
 // version is set via -ldflags at build time.
@@ -117,14 +119,15 @@ func (c *commonFlags) outNames() []string {
 func runSplit(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("split", flag.ContinueOnError)
 	cf := addCommon(fs)
-	argsFile := fs.String("args", "", "stage args JSON file")
-	chunkDir := fs.String("chunkdir", "", "if set, also write per-chunk files (chunk_NNNNN.json) here")
+	prod := addProducer(fs, types.RoleChunkIn)
+	argsDir := fs.String("args", "", "stage args bundle dir")
+	chunkDir := fs.String("chunkdir", "", "if set, write per-chunk bundles (chunk_NNNNN/) here")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	stageArgs, err := readFile(*argsFile)
+	stageArgs, err := readBundle(*argsDir)
 	if err != nil {
 		return err
 	}
@@ -134,12 +137,34 @@ func runSplit(ctx context.Context, argv []string) error {
 		return fmt.Errorf("split: %w", err)
 	}
 
+	// chunks.json is the defs summary the join phase consumes; the per-chunk
+	// bundles carry each chunk's staged input files to the main phase.
 	if err := writeJSON(cf.outFile, defs); err != nil {
 		return err
 	}
 
 	if *chunkDir != "" {
-		return writeChunkFiles(*chunkDir, defs)
+		return writeChunkBundles(*chunkDir, defs, prod)
+	}
+
+	return nil
+}
+
+// writeChunkBundles writes each chunk definition as a zero-padded bundle dir so
+// a lexical sort of the names recovers chunk order downstream.
+func writeChunkBundles(dir string, defs []shim.ChunkDef, prod *producer) error {
+	man, err := prod.manifest()
+	if err != nil {
+		return err
+	}
+
+	chunkIn, tbl := man.Params(prod.callable, types.RoleChunkIn), man.Table()
+
+	for i, def := range defs {
+		name := fmt.Sprintf("chunk_%05d", i)
+		if err := shim.WriteChunkBundle(filepath.Join(dir, name), def, chunkIn, tbl); err != nil {
+			return fmt.Errorf("write chunk bundle %s: %w", name, err)
+		}
 	}
 
 	return nil
@@ -148,19 +173,25 @@ func runSplit(ctx context.Context, argv []string) error {
 func runMain(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("main", flag.ContinueOnError)
 	cf := addCommon(fs)
-	argsFile := fs.String("args", "", "stage args JSON file")
-	chunkFile := fs.String("chunk", "", "chunk definition JSON file")
+	prod := addProducer(fs, types.RoleMainOut)
+	argsDir := fs.String("args", "", "stage args bundle dir")
+	chunkDir := fs.String("chunk", "", "chunk bundle dir")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	stageArgs, err := readFile(*argsFile)
+	stageArgs, err := readBundle(*argsDir)
 	if err != nil {
 		return err
 	}
 
-	chunk, err := readChunk(*chunkFile)
+	chunkRaw, err := readBundle(*chunkDir)
+	if err != nil {
+		return err
+	}
+
+	chunk, err := decodeChunk(chunkRaw)
 	if err != nil {
 		return err
 	}
@@ -170,26 +201,27 @@ func runMain(ctx context.Context, argv []string) error {
 		return fmt.Errorf("main: %w", err)
 	}
 
-	return writeRaw(cf.outFile, outs)
+	return prod.write(cf.outFile, outs)
 }
 
 func runJoin(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("join", flag.ContinueOnError)
 	cf := addCommon(fs)
-	argsFile := fs.String("args", "", "stage args JSON file")
+	prod := addProducer(fs, types.RoleOut)
+	argsDir := fs.String("args", "", "stage args bundle dir")
 	defsFile := fs.String("chunkdefs", "", "chunk defs JSON array file")
-	outsFile := fs.String("chunkouts", "", "comma-separated per-chunk outs files, in order")
+	outsList := fs.String("chunkouts", "", "comma-separated per-chunk output bundle dirs, in order")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	stageArgs, err := readFile(*argsFile)
+	stageArgs, err := readBundle(*argsDir)
 	if err != nil {
 		return err
 	}
 
-	defs, outs, err := readChunkData(*defsFile, *outsFile)
+	defs, outs, err := readChunkData(*defsFile, *outsList)
 	if err != nil {
 		return err
 	}
@@ -199,5 +231,5 @@ func runJoin(ctx context.Context, argv []string) error {
 		return fmt.Errorf("join: %w", err)
 	}
 
-	return writeRaw(cf.outFile, final)
+	return prod.write(cf.outFile, final)
 }

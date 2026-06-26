@@ -1,46 +1,52 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
+
+	"github.com/eunmann/martian-nextflow/internal/shim"
+	"github.com/eunmann/martian-nextflow/internal/types"
 )
 
-// runPublish finalizes a pipeline's outputs: it copies each file-typed output
-// into -dir and rewrites that output's path in the outs JSON to the basename,
-// so published results are self-contained and location-independent.
+// runPublish finalizes a pipeline's outputs. It reads the final output bundle
+// (resolving every file leaf to a real path), copies each file-typed output —
+// including those nested in arrays, typed maps, and structs — into -dir under
+// its basename, and rewrites those paths to basenames so the published results
+// are self-contained and location-independent.
 func runPublish(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
-	outsFile := fs.String("outs", "", "final outs JSON file")
-	files := fs.String("files", "", "comma-separated file-typed output names")
+	prod := addProducer(fs, types.RoleOut)
+	bundleDir := fs.String("bundle", "", "final output bundle dir")
 	dir := fs.String("dir", ".", "directory to copy files into and write outs")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	raw, err := readFile(*outsFile)
+	raw, err := readBundle(*bundleDir)
 	if err != nil {
 		return err
 	}
 
-	outs := map[string]json.RawMessage{}
-	if err := json.Unmarshal(raw, &outs); err != nil {
-		return fmt.Errorf("parse outs %s: %w", *outsFile, err)
+	outs, err := rawToMap(raw)
+	if err != nil {
+		return err
 	}
 
-	for _, name := range splitComma(*files) {
-		if err := publishFile(outs, name, *dir); err != nil {
-			return err
-		}
+	man, err := prod.manifest()
+	if err != nil {
+		return err
 	}
 
-	out, err := json.MarshalIndent(outs, "", "    ")
+	published, err := man.Table().Apply(man.Params(prod.callable, prod.role), outs, publishLeaf(*dir))
+	if err != nil {
+		return fmt.Errorf("publish files: %w", err)
+	}
+
+	out, err := json.MarshalIndent(published, "", "    ")
 	if err != nil {
 		return fmt.Errorf("marshal published outs: %w", err)
 	}
@@ -48,62 +54,19 @@ func runPublish(_ context.Context, argv []string) error {
 	return writeRaw(filepath.Join(*dir, "pipeline_outs.json"), out)
 }
 
-func publishFile(outs map[string]json.RawMessage, name, dir string) error {
-	raw, ok := outs[name]
-	if !ok {
-		return nil
+// publishLeaf copies each file leaf into dir under its basename and returns that
+// basename for the published outs JSON.
+func publishLeaf(dir string) types.Transform {
+	return func(src string) (string, error) {
+		if src == "" {
+			return src, nil
+		}
+
+		base := filepath.Base(src)
+		if err := shim.CopyTree(src, filepath.Join(dir, base)); err != nil {
+			return "", fmt.Errorf("publish %s: %w", base, err)
+		}
+
+		return base, nil
 	}
-
-	// Skip anything that is not a JSON string path (e.g. a null disabled
-	// output, or a nested struct/array of files, which M3b does not yet cover).
-	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '"' {
-		return nil
-	}
-
-	var src string
-	if err := json.Unmarshal(raw, &src); err != nil {
-		return fmt.Errorf("decode %s path: %w", name, err)
-	}
-
-	if src == "" {
-		return nil
-	}
-
-	base := filepath.Base(src)
-	if err := copyFile(src, filepath.Join(dir, base)); err != nil {
-		return err
-	}
-
-	rewritten, err := json.Marshal(base)
-	if err != nil {
-		return fmt.Errorf("rewrite %s: %w", name, err)
-	}
-
-	outs[name] = rewritten
-
-	return nil
-}
-
-func copyFile(src, dst string) error {
-	if src == dst {
-		return nil
-	}
-
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", src, err)
-	}
-	defer func() { _ = in.Close() }()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", dst, err)
-	}
-	defer func() { _ = out.Close() }()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return fmt.Errorf("copy %s: %w", src, err)
-	}
-
-	return nil
 }

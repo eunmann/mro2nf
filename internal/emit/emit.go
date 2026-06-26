@@ -14,6 +14,7 @@ import (
 	"github.com/eunmann/martian-nextflow/internal/apperror"
 	"github.com/eunmann/martian-nextflow/internal/bind"
 	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/martian-nextflow/internal/shim"
 	"github.com/eunmann/martian-nextflow/internal/types"
 )
 
@@ -119,9 +120,11 @@ func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 				return err
 			}
 
+			// A skipped call emits a null-valued output bundle (no files).
 			nulls := nullOuts(prog, c.Callable)
-			if err := writeJSONFile(filepath.Join(nullsDir, qualify(p.Name, c.Name)+".json"), nulls); err != nil {
-				return err
+			nullDir := filepath.Join(nullsDir, qualify(p.Name, c.Name))
+			if err := shim.WriteBundle(nullDir, nulls, nil, types.NewTable(prog.Structs)); err != nil {
+				return fmt.Errorf("write null bundle: %w", err)
 			}
 		}
 	}
@@ -231,13 +234,40 @@ func writeSpec(specDir, name string, bindings []ir.Binding) error {
 	return writeFile(filepath.Join(specDir, name+".json"), data)
 }
 
+// writeEntryArgs resolves the top-level call's inputs and writes them as the
+// entry_args bundle, staging any file-typed entry inputs so the run is
+// self-contained from the start.
 func writeEntryArgs(prog *ir.Program, outDir string) error {
 	args, err := bind.Resolve(bindSpec(prog.Entry.Bindings), nil, nil)
 	if err != nil {
 		return fmt.Errorf("resolve entry args: %w", err)
 	}
 
-	return writeFile(filepath.Join(outDir, "entry_args.json"), args)
+	payload := map[string]any{}
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &payload); err != nil {
+			return fmt.Errorf("decode entry args: %w", err)
+		}
+	}
+
+	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), payload, entryInParams(prog), types.NewTable(prog.Structs)); err != nil {
+		return fmt.Errorf("write entry args bundle: %w", err)
+	}
+
+	return nil
+}
+
+// entryInParams returns the entry callable's input parameters.
+func entryInParams(prog *ir.Program) []ir.Param {
+	if p, ok := prog.Pipelines[prog.Entry.Callable]; ok {
+		return p.In
+	}
+
+	if s, ok := prog.Stages[prog.Entry.Callable]; ok {
+		return s.In
+	}
+
+	return nil
 }
 
 // bindSpec converts IR bindings into a runtime binding spec, skipping wildcard

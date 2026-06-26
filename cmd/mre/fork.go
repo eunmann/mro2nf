@@ -8,16 +8,18 @@ import (
 	"path/filepath"
 
 	"github.com/eunmann/martian-nextflow/internal/bind"
+	"github.com/eunmann/martian-nextflow/internal/types"
 )
 
 // runForkBind resolves a map call's bindings into one args file per fork,
 // written as fork_NNNNN.json into -chunkdir so a lexical sort recovers order.
 func runForkBind(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("forkbind", flag.ContinueOnError)
+	prod := addProducer(fs, types.RoleIn)
 	specFile := fs.String("spec", "", "binding spec JSON file")
-	pipeFile := fs.String("pipeargs", "", "enclosing pipeline args JSON file")
-	inputs := fs.String("inputs", "", "comma-separated callId=outsFile pairs")
-	dir := fs.String("chunkdir", ".", "directory to write per-fork args files")
+	pipeFile := fs.String("pipeargs", "", "enclosing pipeline args bundle dir")
+	inputs := fs.String("inputs", "", "comma-separated callId=bundleDir pairs")
+	dir := fs.String("chunkdir", ".", "directory to write per-fork args bundles")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -28,7 +30,7 @@ func runForkBind(_ context.Context, argv []string) error {
 		return err
 	}
 
-	pipeArgs, err := readFile(*pipeFile)
+	pipeArgs, err := readBundle(*pipeFile)
 	if err != nil {
 		return err
 	}
@@ -44,8 +46,8 @@ func runForkBind(_ context.Context, argv []string) error {
 	}
 
 	for i, args := range forks {
-		name := fmt.Sprintf("fork_%05d.json", i)
-		if err := writeRaw(filepath.Join(*dir, name), args); err != nil {
+		name := fmt.Sprintf("fork_%05d", i)
+		if err := prod.write(filepath.Join(*dir, name), args); err != nil {
 			return err
 		}
 	}
@@ -66,16 +68,17 @@ func runForkBind(_ context.Context, argv []string) error {
 // output becomes an ordered array across forks.
 func runMerge(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("merge", flag.ContinueOnError)
+	prod := addProducer(fs, types.RoleOut)
 	outs := fs.String("outs", "", "comma-separated output parameter names")
-	files := fs.String("files", "", "comma-separated per-fork outs files, in order")
+	files := fs.String("files", "", "comma-separated per-fork output bundle dirs, in order")
 	keysFile := fs.String("keys-file", "", "fork keys JSON (null for an array fork)")
-	outFile := fs.String("o", "", "output merged file (default stdout)")
+	outFile := fs.String("o", "", "output merged bundle dir")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	forkOuts, err := readFileList(splitComma(*files))
+	forkOuts, err := readBundleList(splitComma(*files))
 	if err != nil {
 		return err
 	}
@@ -90,7 +93,7 @@ func runMerge(_ context.Context, argv []string) error {
 		return fmt.Errorf("merge: %w", err)
 	}
 
-	return writeRaw(*outFile, merged)
+	return prod.write(*outFile, merged)
 }
 
 // readForkKeys reads forkkeys.json: a JSON null (array fork) yields nil keys; a

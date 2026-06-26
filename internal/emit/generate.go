@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/martian-nextflow/internal/types"
 )
 
 // genCtx carries the resolved paths and names needed to render Nextflow code.
@@ -31,6 +32,12 @@ func (g genCtx) stageCmd(phase, code string, lang ir.Lang) string {
 	}
 
 	return cmd
+}
+
+// producerArgs renders the flags a bundle-producing mre command needs to stage
+// the file leaves of callable's params under the given role.
+func (g genCtx) producerArgs(callable, role string) string {
+	return fmt.Sprintf(" -types '${projectDir}/types.json' -callable '%s' -role %s", callable, role)
 }
 
 // generateStageModule renders a stage's module: its processes and the wf_<stage>
@@ -64,33 +71,10 @@ func generateMain(prog *ir.Program, g genCtx) string {
 	export, src := calleeModule(prog, prog.Entry.Callable)
 
 	fmt.Fprintf(&b, "include { %s } from './modules/%s'\n\n", export, strings.TrimPrefix(src, "./"))
-	genPublish(&b, entryFileParams(prog), g)
+	genPublish(&b, prog.Entry.Callable, g)
 	genEntry(&b, export)
 
 	return b.String()
-}
-
-// entryFileParams returns the names of the entry callable's file-typed outputs.
-func entryFileParams(prog *ir.Program) []string {
-	var out []string
-
-	if p, ok := prog.Pipelines[prog.Entry.Callable]; ok {
-		for _, param := range p.Out {
-			if param.IsFile {
-				out = append(out, param.Name)
-			}
-		}
-	}
-
-	if s, ok := prog.Stages[prog.Entry.Callable]; ok {
-		for _, param := range s.Out {
-			if param.IsFile {
-				out = append(out, param.Name)
-			}
-		}
-	}
-
-	return out
 }
 
 // genPipeIncludes emits one include per call, aliasing the callee's workflow to
@@ -115,14 +99,15 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			continue
 		}
 
-		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g)
+		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn))
 
 		if c.Disabled != nil {
 			genDisableProcess(b, p.Name, c, g)
 		}
 	}
 
-	genBindProcess(b, bindName(p.Name, "return"), p.Returns, g)
+	// The return bind builds the pipeline's own output bundle.
+	genBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut))
 }
 
 func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
@@ -132,7 +117,7 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 	base := g.stageCmd("main", code, s.Lang)
 
 	if !s.Split {
-		genSingleStage(b, s, base, joinOuts)
+		genSingleStage(b, s, base, joinOuts, g)
 
 		return
 	}
@@ -141,17 +126,17 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 	genSplitWorkflow(b, s)
 }
 
-func genSingleStage(b *strings.Builder, s *ir.Stage, base, outs string) {
+func genSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s {
   cpus %[2]d
   memory '%[3]d GB'
   input:
     path args
   output:
-    path "outs__${args.baseName}.json"
+    path "outs__${args.baseName}"
   script:
     """
-    %[4]s -args ${args} -outs '%[5]s' -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${args.baseName}.json
+    %[4]s -args ${args} -outs '%[5]s'%[6]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${args.baseName}
     """
 }
 
@@ -163,7 +148,7 @@ workflow wf_%[1]s {
     %[1]s.out
 }
 
-`, s.Name, cpusOf(s), memOf(s), base, outs)
+`, s.Name, cpusOf(s), memOf(s), base, outs, g.producerArgs(s.Name, types.RoleMainOut))
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
@@ -177,10 +162,10 @@ func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts
     path args
   output:
     path 'chunks.json', emit: defs
-    path 'chunk_*.json', emit: chunks, optional: true
+    path 'chunk_*', emit: chunks, type: 'dir', optional: true
   script:
     """
-    %[4]s -args ${args} -work . -o chunks.json -chunkdir .
+    %[4]s -args ${args} -work . -o chunks.json -chunkdir .%[9]s
     """
 }
 
@@ -190,10 +175,10 @@ process %[1]s_MAIN {
   input:
     tuple val(res), path(chunk), path(args)
   output:
-    path "out_${chunk.baseName}.json"
+    path "out_${chunk.baseName}", type: 'dir'
   script:
     """
-    %[5]s -args ${args} -chunk ${chunk} -outs '%[6]s' -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}.json
+    %[5]s -args ${args} -chunk ${chunk} -outs '%[6]s'%[10]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
     """
 }
 
@@ -205,14 +190,17 @@ process %[1]s_JOIN {
     path defs
     path souts
   output:
-    path 'outs.json'
+    path 'outs', type: 'dir'
   script:
     """
-    %[7]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1 out_*.json 2>/dev/null | sort -V | paste -sd, -)" -outs '%[8]s' -work . -o outs.json
+    %[7]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[8]s'%[11]s -work . -o outs
     """
 }
 
-`, s.Name, cpusOf(s), memOf(s), splitCmd, base, mainOuts, joinCmd, joinOuts)
+`, s.Name, cpusOf(s), memOf(s), splitCmd, base, mainOuts, joinCmd, joinOuts,
+		g.producerArgs(s.Name, types.RoleChunkIn),
+		g.producerArgs(s.Name, types.RoleMainOut),
+		g.producerArgs(s.Name, types.RoleOut))
 }
 
 func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
@@ -221,7 +209,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
   main:
     a = args.first()
     %[1]s_SPLIT(a)
-    chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.text).resources, f) }
+    chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(file("${f}/data.json").text).resources, f) }
     %[1]s_MAIN(chunks.combine(a))
     %[1]s_JOIN(a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect())
   emit:
@@ -232,17 +220,18 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 }
 
 // genDisableProcess emits a process that resolves a call's `disabled` flag into
-// disable.json at runtime.
+// a disable bundle at runtime. It carries no file leaves, so it needs no
+// producer flags.
 func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
 	block, arg := bindInputs(refCalls(disableBindings(c)))
 
 	fmt.Fprintf(b, `process %[1]s {
   input:
 %[2]s  output:
-    path 'disable.json'
+    path 'disable', type: 'dir'
   script:
     """
-    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o disable.json
+    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o disable
     """
 }
 
@@ -250,7 +239,7 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
 }
 
 // bindInputs renders the input block and the -inputs argument for a bind/fork
-// process: pipeline args plus one staged file per referenced upstream call.
+// process: pipeline args plus one staged bundle per referenced upstream call.
 func bindInputs(refs []string) (string, string) {
 	var inputs strings.Builder
 
@@ -258,8 +247,8 @@ func bindInputs(refs []string) (string, string) {
 
 	pairs := make([]string, 0, len(refs))
 	for _, id := range refs {
-		fmt.Fprintf(&inputs, "    path 'in_%s.json'\n", id)
-		pairs = append(pairs, fmt.Sprintf("%s=in_%s.json", id, id))
+		fmt.Fprintf(&inputs, "    path 'in_%s'\n", id)
+		pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
 	}
 
 	arg := ""
@@ -271,58 +260,59 @@ func bindInputs(refs []string) (string, string) {
 }
 
 // genBindProcess emits a process that resolves one call's (or the return's)
-// input bindings into args.json via `mre bind`.
-func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx) {
+// input bindings into an args bundle via `mre bind`. prodArgs stages any file
+// leaves of the produced bundle (empty for the disable resolver).
+func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx, prodArgs string) {
 	block, arg := bindInputs(refCalls(bindings))
 
 	fmt.Fprintf(b, `process %[1]s {
   input:
 %[2]s  output:
-    path 'args.json'
+    path 'args', type: 'dir'
   script:
     """
-    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o args.json
+    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o args%[5]s
     """
 }
 
-`, name, block, g.mre, arg)
+`, name, block, g.mre, arg, prodArgs)
 }
 
 // genForkBindProcess emits a process that resolves a map call's bindings into
-// one args file per fork (fork_NNNNN.json) via `mre forkbind`.
+// one args bundle per fork (fork_NNNNN/) via `mre forkbind`.
 func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
 	block, arg := bindInputs(refCalls(c.Bindings))
 
 	fmt.Fprintf(b, `process %[1]s {
   input:
 %[2]s  output:
-    path 'fork_*.json', emit: forks, optional: true
+    path 'fork_*', emit: forks, type: 'dir', optional: true
     path 'forkkeys.json', emit: keys
   script:
     """
-    '%[3]s' forkbind -spec '${projectDir}/bindspecs/%[4]s.json' -pipeargs ${pipeargs}%[5]s -chunkdir .
+    '%[3]s' forkbind -spec '${projectDir}/bindspecs/%[4]s.json' -pipeargs ${pipeargs}%[5]s -chunkdir .%[6]s
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, bindName(pipeline, c.Name), arg)
+`, forkName(pipeline, c.Name), block, g.mre, bindName(pipeline, c.Name), arg, g.producerArgs(c.Callable, types.RoleIn))
 }
 
 // genMergeProcess emits a process that merges per-fork outputs into the
-// map-call result via `mre merge`.
+// map-call result bundle via `mre merge`.
 func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s {
   input:
     path souts
     path 'forkkeys.json'
   output:
-    path 'merged.json'
+    path 'merged', type: 'dir'
   script:
     """
-    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1 outs__*.json 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged.json
+    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
     """
 }
 
-`, mergeName(pipeline, c.Name), g.mre, calleeOuts)
+`, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut))
 }
 
 func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
@@ -381,15 +371,15 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, _ *ir.Program
 }
 
 // genDisabledWiring runs the callee only when the resolved `disabled` flag is
-// false; disabled forks emit a null outputs file instead.
+// false; disabled forks emit a null outputs bundle instead.
 func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee string) {
 	bind := bindName(pipeline, c.Name)
 	dis := disableName(pipeline, c.Name)
-	nulls := fmt.Sprintf("${projectDir}/nulls/%s.json", qualify(pipeline, c.Name))
+	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
 
 	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c)))
 	fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s.out).branch { a, d ->
-        def off = new groovy.json.JsonSlurper().parse(d).disabled
+        def off = new groovy.json.JsonSlurper().parseText(file("${d}/data.json").text).disabled
         run: !off
         skip: off
     }
@@ -440,45 +430,30 @@ func bindCallArgs(bindings []ir.Binding) string {
 	return strings.Join(args, ", ")
 }
 
-// genPublish emits the PUBLISH process. When the entry has file-typed outputs,
-// it runs `mre publish` to copy those files into the results dir and rewrite
-// their paths to basenames; otherwise it just publishes the outs JSON.
-func genPublish(b *strings.Builder, fileParams []string, g genCtx) {
-	if len(fileParams) == 0 {
-		b.WriteString(`process PUBLISH {
-  publishDir params.outdir, mode: 'copy'
-  input:
-    path 'pipeline_outs.json'
-  output:
-    path 'pipeline_outs.json'
-  script:
-    'true'
-}
-
-`)
-
-		return
-	}
-
+// genPublish emits the PUBLISH process: it reads the entry's final output
+// bundle, copies every file-typed output (including nested ones) into the
+// results dir under its basename, and writes the published outs JSON. The staged
+// bundle is removed before output globbing so only published artifacts remain.
+func genPublish(b *strings.Builder, entry string, g genCtx) {
 	fmt.Fprintf(b, `process PUBLISH {
   publishDir params.outdir, mode: 'copy'
   input:
-    path 'final_outs.json'
+    path bundle
   output:
     path '*'
   script:
     """
-    %s publish -outs final_outs.json -files '%s' -dir .
-    rm -f final_outs.json
+    %[1]s publish -bundle ${bundle} -dir .%[2]s
+    rm -rf ${bundle}
     """
 }
 
-`, g.mre, strings.Join(fileParams, ","))
+`, g.mre, g.producerArgs(entry, types.RoleOut))
 }
 
 func genEntry(b *strings.Builder, entryWorkflow string) {
 	fmt.Fprintf(b, `workflow {
-  pipeargs = Channel.value(file("${projectDir}/entry_args.json"))
+  pipeargs = Channel.value(file("${projectDir}/entry_args"))
   %[1]s(pipeargs)
   PUBLISH(%[1]s.out)
 }

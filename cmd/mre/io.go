@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/eunmann/martian-nextflow/internal/shim"
@@ -26,28 +25,28 @@ func readFile(path string) (json.RawMessage, error) {
 	return data, nil
 }
 
-func readChunk(path string) (shim.ChunkDef, error) {
+// decodeChunk decodes a chunk bundle's resolved payload into a ChunkDef. Empty
+// input is a non-split stage's single chunk (no per-chunk args).
+func decodeChunk(raw json.RawMessage) (shim.ChunkDef, error) {
 	chunk := shim.ChunkDef{Args: map[string]json.RawMessage{}}
 
-	data, err := readFile(path)
-	if err != nil {
-		return chunk, err
-	}
-
-	// A non-split stage runs as a single chunk with no per-chunk args.
-	if len(data) == 0 {
+	if len(raw) == 0 {
 		return chunk, nil
 	}
 
-	if err := json.Unmarshal(data, &chunk); err != nil {
-		return chunk, fmt.Errorf("parse chunk %s: %w", path, err)
+	if err := json.Unmarshal(raw, &chunk); err != nil {
+		return chunk, fmt.Errorf("parse chunk: %w", err)
+	}
+
+	if chunk.Args == nil {
+		chunk.Args = map[string]json.RawMessage{}
 	}
 
 	return chunk, nil
 }
 
-// readChunkData reads the chunk defs array and the ordered, comma-separated
-// per-chunk outs files.
+// readChunkData reads the chunk defs array (a plain summary file) and the
+// ordered, comma-separated per-chunk output bundle directories.
 func readChunkData(defsPath, outsList string) ([]shim.ChunkDef, []json.RawMessage, error) {
 	defsRaw, err := readFile(defsPath)
 	if err != nil {
@@ -59,7 +58,7 @@ func readChunkData(defsPath, outsList string) ([]shim.ChunkDef, []json.RawMessag
 		return nil, nil, fmt.Errorf("parse chunk defs %s: %w", defsPath, err)
 	}
 
-	outs, err := readFileList(splitComma(outsList))
+	outs, err := readBundleList(splitComma(outsList))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -67,11 +66,23 @@ func readChunkData(defsPath, outsList string) ([]shim.ChunkDef, []json.RawMessag
 	return defs, outs, nil
 }
 
-func readFileList(paths []string) ([]json.RawMessage, error) {
-	out := make([]json.RawMessage, 0, len(paths))
+// readBundle resolves a bundle directory into its payload (file leaves rewritten
+// to absolute paths), wrapping the error for the caller's context.
+func readBundle(dir string) (json.RawMessage, error) {
+	raw, err := shim.ReadBundle(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read input bundle: %w", err)
+	}
 
-	for _, p := range paths {
-		data, err := readFile(p)
+	return raw, nil
+}
+
+// readBundleList resolves each bundle directory in dirs into its payload.
+func readBundleList(dirs []string) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, 0, len(dirs))
+
+	for _, d := range dirs {
+		data, err := readBundle(d)
 		if err != nil {
 			return nil, err
 		}
@@ -102,19 +113,6 @@ func writeRaw(path string, data []byte) error {
 
 	if err := os.WriteFile(path, data, filePerm); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
-	}
-
-	return nil
-}
-
-// writeChunkFiles writes each chunk to a zero-padded file so that a lexical
-// sort of the filenames recovers chunk order downstream.
-func writeChunkFiles(dir string, defs []shim.ChunkDef) error {
-	for i, def := range defs {
-		name := fmt.Sprintf("chunk_%05d.json", i)
-		if err := writeJSON(filepath.Join(dir, name), def); err != nil {
-			return err
-		}
 	}
 
 	return nil

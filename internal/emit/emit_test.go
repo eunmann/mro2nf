@@ -1,10 +1,13 @@
 package emit_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/eunmann/martian-nextflow/internal/emit"
 	"github.com/eunmann/martian-nextflow/internal/frontend"
@@ -48,7 +51,7 @@ func TestEmitFiles(t *testing.T) {
 	for _, rel := range []string{
 		"main.nf",
 		"nextflow.config",
-		"entry_args.json",
+		"entry_args/data.json",
 		"types.json",
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf",
 		"modules/stage_SUM_SQUARES.nf",
@@ -66,13 +69,19 @@ func TestEmitFiles(t *testing.T) {
 func TestEmitEntryArgs(t *testing.T) {
 	dir := loadAndEmit(t)
 
-	data, err := os.ReadFile(filepath.Join(dir, "entry_args.json"))
+	data, err := os.ReadFile(filepath.Join(dir, "entry_args", "data.json"))
 	if err != nil {
 		t.Fatalf("read entry args: %v", err)
 	}
 
-	if got := strings.TrimSpace(string(data)); got != `{"values":[1,2,3]}` {
-		t.Errorf("entry args = %s, want {\"values\":[1,2,3]}", got)
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse entry args: %v", err)
+	}
+
+	want := map[string]any{"values": []any{float64(1), float64(2), float64(3)}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("entry args mismatch (-want +got):\n%s", diff)
 	}
 }
 
