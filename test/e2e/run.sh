@@ -106,3 +106,11 @@ run_case multisplit testdata/multisplit \
     testdata/multisplit/expected/outs.json
 run_case null_in testdata/null_in \
     testdata/null_in/expected/outs.json
+run_case disabled_callref testdata/disabled_callref \
+    testdata/disabled_callref/expected/outs.json
+run_case struct_input testdata/struct_input \
+    testdata/struct_input/expected/outs.json
+run_case nested_struct testdata/nested_struct \
+    testdata/nested_struct/expected/outs.json
+run_case literals testdata/literals \
+    testdata/literals/expected/outs.json

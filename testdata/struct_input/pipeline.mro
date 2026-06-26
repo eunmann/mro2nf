@@ -1,0 +1,46 @@
+struct Cfg(
+    int    scale,
+    string label,
+)
+
+stage MAKECFG(
+    in  int    s,
+    in  string l,
+    out Cfg    cfg,
+    src py     "stages/makecfg",
+)
+
+stage APPLY(
+    in  Cfg    cfg,
+    in  int    x,
+    out string r,
+    src py     "stages/apply",
+)
+
+pipeline SI(
+    in  int    s,
+    in  string l,
+    in  int    x,
+    out string r,
+)
+{
+    call MAKECFG(
+        s = self.s,
+        l = self.l,
+    )
+
+    call APPLY(
+        cfg = MAKECFG.cfg,
+        x   = self.x,
+    )
+
+    return (
+        r = APPLY.r,
+    )
+}
+
+call SI(
+    s = 10,
+    l = "v",
+    x = 5,
+)

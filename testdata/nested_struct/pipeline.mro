@@ -1,0 +1,46 @@
+struct Inner(
+    int a,
+)
+
+struct Outer(
+    Inner inner,
+    int   b,
+)
+
+stage NEST(
+    in  int   a,
+    in  int   b,
+    out Outer o,
+    src py    "stages/nest",
+)
+
+stage READN(
+    in  Outer o,
+    out int   total,
+    src py    "stages/readn",
+)
+
+pipeline NS(
+    in  int a,
+    in  int b,
+    out int total,
+)
+{
+    call NEST(
+        a = self.a,
+        b = self.b,
+    )
+
+    call READN(
+        o = NEST.o,
+    )
+
+    return (
+        total = READN.total,
+    )
+}
+
+call NS(
+    a = 2,
+    b = 3,
+)

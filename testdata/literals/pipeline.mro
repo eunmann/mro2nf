@@ -1,0 +1,30 @@
+stage ECHO(
+    in  float  f,
+    in  string s,
+    out float  f2,
+    out string s2,
+    src py     "stages/echo",
+)
+
+pipeline LIT(
+    in  float  f,
+    in  string s,
+    out float  f2,
+    out string s2,
+)
+{
+    call ECHO(
+        f = self.f,
+        s = self.s,
+    )
+
+    return (
+        f2 = ECHO.f2,
+        s2 = ECHO.s2,
+    )
+}
+
+call LIT(
+    f = 1.5e3,
+    s = "a\tb\n",
+)

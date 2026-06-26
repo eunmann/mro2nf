@@ -1,0 +1,37 @@
+stage FLAG(
+    in  bool b,
+    out bool on,
+    src py   "stages/flag",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline DC(
+    in  int  x,
+    in  bool b,
+    out int  y,
+)
+{
+    call FLAG(
+        b = self.b,
+    )
+
+    call WORK(
+        x = self.x,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    return (
+        y = WORK.y,
+    )
+}
+
+call DC(
+    x = 3,
+    b = true,
+)
