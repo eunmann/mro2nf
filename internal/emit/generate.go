@@ -37,7 +37,6 @@ func (g genCtx) stageCmd(phase, code string, lang ir.Lang) string {
 func generateStageModule(s *ir.Stage, g genCtx) string {
 	var b strings.Builder
 
-	b.WriteString("nextflow.enable.dsl=2\n\n")
 	genStage(&b, s, g)
 
 	return b.String()
@@ -49,7 +48,6 @@ func generateStageModule(s *ir.Stage, g genCtx) string {
 func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 	var b strings.Builder
 
-	b.WriteString("nextflow.enable.dsl=2\n\n")
 	genPipeIncludes(&b, p, prog)
 	genPipeProcesses(&b, p, prog, g)
 	genPipelineWorkflow(&b, p, prog)
@@ -64,7 +62,6 @@ func generateMain(prog *ir.Program, g genCtx) string {
 
 	export, src := calleeModule(prog, prog.Entry.Callable)
 
-	b.WriteString("nextflow.enable.dsl=2\n\n")
 	fmt.Fprintf(&b, "include { %s } from './modules/%s'\n\n", export, strings.TrimPrefix(src, "./"))
 	genPublish(&b, entryFileParams(prog), g)
 	genEntry(&b, export)
