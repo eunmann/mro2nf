@@ -19,8 +19,9 @@ import (
 var version = "dev"
 
 var (
-	errUsage        = errors.New("usage: mre <split|main|join|version> [flags]")
+	errUsage        = errors.New("usage: mre <split|main|join|bind|version> [flags]")
 	errUnknownPhase = errors.New("unknown phase")
+	errBadInput     = errors.New("invalid -inputs pair (want id=file)")
 )
 
 func main() {
@@ -46,6 +47,8 @@ func run(ctx context.Context, args []string) error {
 		return runMain(ctx, args[1:])
 	case "join":
 		return runJoin(ctx, args[1:])
+	case "bind":
+		return runBind(ctx, args[1:])
 	default:
 		return fmt.Errorf("%w: %q", errUnknownPhase, phase)
 	}
