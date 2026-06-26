@@ -1,0 +1,26 @@
+stage FLATSUM(
+    in  int[][] grid,
+    out int     total,
+    src py      "stages/flatsum",
+)
+
+pipeline MD(
+    in  int[][] grid,
+    out int     total,
+)
+{
+    call FLATSUM(
+        grid = self.grid,
+    )
+
+    return (
+        total = FLATSUM.total,
+    )
+}
+
+call MD(
+    grid = [
+        [1, 2],
+        [3, 4],
+    ],
+)

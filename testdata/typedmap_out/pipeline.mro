@@ -1,0 +1,23 @@
+stage COUNTS(
+    in  string[] words,
+    out map<int>  counts,
+    src py        "stages/counts",
+)
+
+pipeline TM(
+    in  string[] words,
+    out map<int>  counts,
+)
+{
+    call COUNTS(
+        words = self.words,
+    )
+
+    return (
+        counts = COUNTS.counts,
+    )
+}
+
+call TM(
+    words = ["a", "b", "a"],
+)

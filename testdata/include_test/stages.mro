@@ -1,0 +1,6 @@
+stage ADD(
+    in  int a,
+    in  int b,
+    out int s,
+    src py  "stages/add",
+)

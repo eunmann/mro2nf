@@ -1,0 +1,26 @@
+stage USE(
+    in  int a,
+    in  int b,
+    out int s,
+    src py  "stages/use",
+)
+
+pipeline WP(
+    in  int a,
+    in  int b,
+    out int s,
+)
+{
+    call USE(
+        * = self,
+    )
+
+    return (
+        s = USE.s,
+    )
+}
+
+call WP(
+    a = 4,
+    b = 6,
+)

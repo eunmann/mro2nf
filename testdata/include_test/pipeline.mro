@@ -1,0 +1,22 @@
+@include "stages.mro"
+
+pipeline IP(
+    in  int a,
+    in  int b,
+    out int s,
+)
+{
+    call ADD(
+        a = self.a,
+        b = self.b,
+    )
+
+    return (
+        s = ADD.s,
+    )
+}
+
+call IP(
+    a = 2,
+    b = 3,
+)

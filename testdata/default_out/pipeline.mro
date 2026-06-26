@@ -1,0 +1,23 @@
+stage GEN(
+    in  int x,
+    out int,
+    src py  "stages/gen",
+)
+
+pipeline DP(
+    in  int x,
+    out int y,
+)
+{
+    call GEN(
+        x = self.x,
+    )
+
+    return (
+        y = GEN.default,
+    )
+}
+
+call DP(
+    x = 9,
+)

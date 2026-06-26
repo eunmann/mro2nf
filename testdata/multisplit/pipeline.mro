@@ -1,0 +1,27 @@
+stage PAIR(
+    in  int a,
+    in  int b,
+    out int s,
+    src py  "stages/pair",
+)
+
+pipeline MS(
+    in  int[] xs,
+    in  int[] ys,
+    out int[] s,
+)
+{
+    map call PAIR(
+        a = split self.xs,
+        b = split self.ys,
+    )
+
+    return (
+        s = PAIR.s,
+    )
+}
+
+call MS(
+    xs = [1, 2, 3],
+    ys = [10, 20, 30],
+)

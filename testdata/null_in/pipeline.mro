@@ -1,0 +1,23 @@
+stage MAYBE(
+    in  int    x,
+    out string msg,
+    src py     "stages/maybe",
+)
+
+pipeline NP(
+    in  int    x,
+    out string msg,
+)
+{
+    call MAYBE(
+        x = self.x,
+    )
+
+    return (
+        msg = MAYBE.msg,
+    )
+}
+
+call NP(
+    x = null,
+)

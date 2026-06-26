@@ -1,0 +1,15 @@
+pipeline WRAP(
+    in  int   x,
+    out int   y,
+    out int[] lit,
+)
+{
+    return (
+        y   = self.x,
+        lit = [1, 2, 3],
+    )
+}
+
+call WRAP(
+    x = 5,
+)

@@ -90,3 +90,19 @@ run_case struct_proj testdata/struct_proj \
     testdata/struct_proj/expected/outs.json
 run_case map_fork testdata/map_fork \
     testdata/map_fork/expected/outs.json
+run_case include_test testdata/include_test \
+    testdata/include_test/expected/outs.json
+run_case default_out testdata/default_out \
+    testdata/default_out/expected/outs.json
+run_case wildcard testdata/wildcard \
+    testdata/wildcard/expected/outs.json
+run_case multidim testdata/multidim \
+    testdata/multidim/expected/outs.json
+run_case typedmap_out testdata/typedmap_out \
+    testdata/typedmap_out/expected/outs.json
+run_case returnonly testdata/returnonly \
+    testdata/returnonly/expected/outs.json
+run_case multisplit testdata/multisplit \
+    testdata/multisplit/expected/outs.json
+run_case null_in testdata/null_in \
+    testdata/null_in/expected/outs.json
