@@ -314,7 +314,10 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     %[1]s_SPLIT_K(ch.sp)
     chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> (cs instanceof List ? cs : [cs]).collect { c -> tuple(key, new groovy.json.JsonSlurper().parseText(file("${c}/data.json").text).resources, c) } }
     %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0))
-    joined = %[1]s_MAIN_K.out.groupTuple().join(ch.jn).join(%[1]s_SPLIT_K.out.defs)
+    // Drive the join from the full fork set (ch.jn) with a remainder join, so a
+    // fork whose split produced zero chunks (no groupTuple group) still runs
+    // JOIN_K — with an empty chunk-outs list — instead of being dropped.
+    joined = ch.jn.join(%[1]s_SPLIT_K.out.defs).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[3] ?: [], t[1], t[2]) }
     %[1]s_JOIN_K(joined)
   emit:
     %[1]s_JOIN_K.out
@@ -330,7 +333,7 @@ func genSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g genCtx
   input:
     path args
   output:
-    path "outs__${args.baseName}"
+    path "outs__${args.baseName}", type: 'dir'
   script:
     """
     %[4]s -args ${args} -outs '%[5]s'%[6]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${args.baseName}

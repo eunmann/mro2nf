@@ -3,12 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 
 	"github.com/eunmann/martian-nextflow/internal/shim"
 	"github.com/eunmann/martian-nextflow/internal/types"
 )
+
+// errNotObject is returned when a payload that should be a JSON object isn't.
+var errNotObject = errors.New("expected a JSON object")
 
 // producer holds the flags a bundle-writing subcommand needs to locate the file
 // leaves it must stage: the type manifest, the producing callable, and which of
@@ -62,15 +66,21 @@ func (p *producer) write(dir string, raw json.RawMessage) error {
 	return nil
 }
 
-// rawToMap decodes a JSON object into a map. A non-object payload — empty,
-// null, or the empty string the Martian adapter writes for a stage with no
-// outputs — yields an empty map so an output bundle is always well-formed.
+// rawToMap decodes a JSON object into a map. An empty payload, JSON null, or the
+// empty string the Martian adapter writes for a stage with no outputs yields an
+// empty map. Any other non-object payload (an array, a number, or corrupt JSON)
+// is an error, so genuinely malformed outputs surface instead of silently
+// becoming empty.
 func rawToMap(raw json.RawMessage) (map[string]any, error) {
 	out := map[string]any{}
 
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte(`""`)) {
 		return out, nil
+	}
+
+	if trimmed[0] != '{' {
+		return nil, fmt.Errorf("decode payload: %w, got %.32s", errNotObject, trimmed)
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(trimmed))

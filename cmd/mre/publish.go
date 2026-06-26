@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/martian-nextflow/internal/shim"
 	"github.com/eunmann/martian-nextflow/internal/types"
@@ -55,18 +56,44 @@ func runPublish(_ context.Context, argv []string) error {
 }
 
 // publishLeaf copies each file leaf into dir under its basename and returns that
-// basename for the published outs JSON.
+// basename for the published outs JSON. Distinct leaves that share a basename
+// (e.g. each fork of a map call emitting "result.txt") are disambiguated with a
+// numeric suffix so none is silently overwritten.
 func publishLeaf(dir string) types.Transform {
+	seen := map[string]bool{}
+
 	return func(src string) (string, error) {
 		if src == "" {
 			return src, nil
 		}
 
-		base := filepath.Base(src)
-		if err := shim.CopyTree(src, filepath.Join(dir, base)); err != nil {
-			return "", fmt.Errorf("publish %s: %w", base, err)
+		name := uniqueName(filepath.Base(src), seen)
+		if err := shim.CopyTree(src, filepath.Join(dir, name)); err != nil {
+			return "", fmt.Errorf("publish %s: %w", name, err)
 		}
 
-		return base, nil
+		return name, nil
+	}
+}
+
+// uniqueName returns base, or base with a numeric suffix before its extension if
+// base is already taken, recording the chosen name in seen.
+func uniqueName(base string, seen map[string]bool) string {
+	if !seen[base] {
+		seen[base] = true
+
+		return base
+	}
+
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+
+	for i := 1; ; i++ {
+		cand := fmt.Sprintf("%s_%d%s", stem, i, ext)
+		if !seen[cand] {
+			seen[cand] = true
+
+			return cand
+		}
 	}
 }

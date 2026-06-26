@@ -1,0 +1,30 @@
+# A map call whose callee emits a FILE output. The per-fork files must travel
+# through the MERGE bundle so they survive object-store / copy staging.
+filetype txt;
+
+stage WRITEF(
+    in  int i,
+    out txt f,
+    src py  "stages/writef",
+)
+
+pipeline MF(
+    in  int[] xs,
+    out txt[] fs,
+)
+{
+    map call WRITEF(
+        i = split self.xs,
+    )
+
+    return (
+        fs = WRITEF.f,
+    )
+}
+
+call MF(
+    xs = [
+        1,
+        2,
+    ],
+)

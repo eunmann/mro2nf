@@ -9,6 +9,7 @@ package types
 import (
 	"fmt"
 	"maps"
+	"sort"
 
 	"github.com/eunmann/martian-nextflow/internal/ir"
 )
@@ -58,78 +59,77 @@ func (t *Table) Apply(params []ir.Param, vals map[string]any, fn Transform) (map
 	return out, nil
 }
 
-// walk descends one value. Typed-map dimensions are peeled before array
-// dimensions (so map<T[]> — a map of arrays — resolves correctly); the rare
-// array-of-typed-map shape is not produced by the Martian grammar in practice.
-// Shape mismatches (e.g. a null where a map is expected) pass through untouched
-// rather than erroring, since runtime values may legitimately be null.
+// walk descends one value. It dispatches on the value's actual JSON shape
+// rather than on a fixed dimension order, so both map<T[]> (a map of arrays) and
+// the array-of-typed-map shape resolve correctly even though the IR flattens
+// ArrayDim/MapDim and loses their nesting order. Maps are walked in sorted key
+// order so the resulting file-leaf layout (and the markers written into the
+// bundle) are deterministic across runs, keeping -resume caching stable. Shape
+// mismatches (e.g. a null, or a json.Number where a file string is expected)
+// pass through untouched, since runtime values may legitimately be null.
 func (t *Table) walk(v any, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
-	if v == nil {
+	switch tv := v.(type) {
+	case nil:
 		return nil, nil
-	}
-
-	if mapDim > 0 {
-		return t.walkMap(v, base, arrayDim, mapDim, isFile, fn)
-	}
-
-	if arrayDim > 0 {
-		return t.walkArray(v, base, arrayDim, isFile, fn)
-	}
-
-	if isFile {
-		s, ok := v.(string)
-		if !ok {
+	case []any:
+		if arrayDim <= 0 {
 			return v, nil
 		}
 
-		return fn(s)
-	}
-
-	if fields, ok := t.structs[base]; ok {
-		m, ok := v.(map[string]any)
-		if !ok {
-			return v, nil
+		return t.walkSlice(tv, base, arrayDim, mapDim, isFile, fn)
+	case map[string]any:
+		if mapDim > 0 {
+			return t.walkMap(tv, base, arrayDim, mapDim, isFile, fn)
 		}
 
-		return t.Apply(fields, m, fn)
-	}
-
-	return v, nil
-}
-
-func (t *Table) walkMap(v any, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return v, nil
-	}
-
-	out := make(map[string]any, len(m))
-	for k, e := range m {
-		nv, err := t.walk(e, base, arrayDim, mapDim-1, isFile, fn)
-		if err != nil {
-			return nil, err
+		if fields, ok := t.structs[base]; ok && !isFile {
+			return t.Apply(fields, tv, fn)
 		}
 
-		out[k] = nv
-	}
+		return v, nil
+	case string:
+		if isFile && arrayDim == 0 && mapDim == 0 {
+			return fn(tv)
+		}
 
-	return out, nil
-}
-
-func (t *Table) walkArray(v any, base string, arrayDim int, isFile bool, fn Transform) (any, error) {
-	arr, ok := v.([]any)
-	if !ok {
+		return v, nil
+	default:
 		return v, nil
 	}
+}
 
+func (t *Table) walkSlice(arr []any, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
 	out := make([]any, len(arr))
+
 	for i, e := range arr {
-		nv, err := t.walk(e, base, arrayDim-1, 0, isFile, fn)
+		nv, err := t.walk(e, base, arrayDim-1, mapDim, isFile, fn)
 		if err != nil {
 			return nil, err
 		}
 
 		out[i] = nv
+	}
+
+	return out, nil
+}
+
+func (t *Table) walkMap(m map[string]any, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
+	out := make(map[string]any, len(m))
+
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		nv, err := t.walk(m[k], base, arrayDim, mapDim-1, isFile, fn)
+		if err != nil {
+			return nil, err
+		}
+
+		out[k] = nv
 	}
 
 	return out, nil

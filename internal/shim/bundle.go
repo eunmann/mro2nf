@@ -3,6 +3,7 @@ package shim
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,10 @@ import (
 	"github.com/eunmann/martian-nextflow/internal/ir"
 	"github.com/eunmann/martian-nextflow/internal/types"
 )
+
+// errDestExists is returned by CopyTree when the destination already exists, to
+// avoid truncating a possibly hard-linked source.
+var errDestExists = errors.New("destination already exists")
 
 // The bundle is the object-store-portable channel item exchanged between
 // Nextflow processes: a directory holding a JSON payload plus the actual files
@@ -203,6 +208,14 @@ func CopyTree(src, dst string) error {
 
 	if err := os.Link(src, dst); err == nil {
 		return nil
+	}
+
+	// Hard-linking failed. Refuse to overwrite an existing destination: a
+	// truncating copy over a file already hard-linked elsewhere would corrupt
+	// the shared inode. A genuinely absent dst means the link was unavailable
+	// (e.g. cross-device), so fall back to a byte copy.
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("copy %s: %w", dst, errDestExists)
 	}
 
 	return copyFileContents(src, dst, info)

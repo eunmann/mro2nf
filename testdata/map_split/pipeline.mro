@@ -26,6 +26,7 @@ pipeline MS(
 call MS(
     sets = [
         [1, 2],
+        [],
         [3],
     ],
 )

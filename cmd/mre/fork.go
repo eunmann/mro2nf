@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/eunmann/martian-nextflow/internal/bind"
+	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/martian-nextflow/internal/shim"
 	"github.com/eunmann/martian-nextflow/internal/types"
 )
 
@@ -45,10 +47,24 @@ func runForkBind(_ context.Context, argv []string) error {
 		return fmt.Errorf("forkbind: %w", err)
 	}
 
+	// Load the type manifest once, not once per fork.
+	man, err := prod.manifest()
+	if err != nil {
+		return err
+	}
+
+	params, tbl := man.Params(prod.callable, prod.role), man.Table()
+
 	for i, args := range forks {
 		name := fmt.Sprintf("fork_%05d", i)
-		if err := prod.write(filepath.Join(*dir, name), args); err != nil {
+
+		payload, err := rawToMap(args)
+		if err != nil {
 			return err
+		}
+
+		if err := shim.WriteBundle(filepath.Join(*dir, name), payload, params, tbl); err != nil {
+			return fmt.Errorf("write fork bundle %s: %w", name, err)
 		}
 	}
 
@@ -93,7 +109,49 @@ func runMerge(_ context.Context, argv []string) error {
 		return fmt.Errorf("merge: %w", err)
 	}
 
-	return prod.write(*outFile, merged)
+	// The merge adds a fork dimension to every output (an array for an array
+	// fork, a keyed map for a map fork), so the file-leaf walk must descend one
+	// level deeper than the callee's declared output types or it will skip the
+	// per-fork files and leave dangling paths under object-store staging.
+	return writeMerged(*outFile, merged, prod, keys != nil)
+}
+
+// writeMerged writes the merged map-call result as a bundle, bumping each output
+// param's outer dimension to match the fork shape so nested files are staged.
+func writeMerged(dir string, merged json.RawMessage, prod *producer, mapFork bool) error {
+	man, err := prod.manifest()
+	if err != nil {
+		return err
+	}
+
+	payload, err := rawToMap(merged)
+	if err != nil {
+		return err
+	}
+
+	params := bumpForkDim(man.Params(prod.callable, prod.role), mapFork)
+	if err := shim.WriteBundle(dir, payload, params, man.Table()); err != nil {
+		return fmt.Errorf("write merged bundle %s: %w", dir, err)
+	}
+
+	return nil
+}
+
+// bumpForkDim raises each param's outer dimension by one to reflect the extra
+// fork dimension the merge introduces.
+func bumpForkDim(params []ir.Param, mapFork bool) []ir.Param {
+	out := make([]ir.Param, len(params))
+	copy(out, params)
+
+	for i := range out {
+		if mapFork {
+			out[i].MapDim++
+		} else {
+			out[i].ArrayDim++
+		}
+	}
+
+	return out
 }
 
 // readForkKeys reads forkkeys.json: a JSON null (array fork) yields nil keys; a

@@ -79,6 +79,14 @@ func leafShapeCases() []leafCase {
 			want:   []string{"p", "q"},
 		},
 		{
+			// Same flattened dims as "map of file array" but the runtime value is
+			// an array-of-maps; the shape-driven walk must handle both.
+			name:   "array of file map",
+			params: []ir.Param{fileParam("a", 1, 1)},
+			vals:   map[string]any{"a": []any{map[string]any{"k": "p"}, map[string]any{"k": "q"}}},
+			want:   []string{"p", "q"},
+		},
+		{
 			name:   "non-file primitive untouched",
 			params: []ir.Param{{Name: "n", BaseType: "int"}},
 			vals:   map[string]any{"n": float64(5)},
@@ -166,6 +174,25 @@ func TestApplyRewrites(t *testing.T) {
 
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("rewrite mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestApplyMapDeterministic checks that a map's file leaves are visited in a
+// stable (sorted-key) order so bundle layout is reproducible across runs.
+func TestApplyMapDeterministic(t *testing.T) {
+	tbl := newTable()
+	vals := map[string]any{"m": map[string]any{"z": "zf", "a": "af", "m": "mf"}}
+	params := []ir.Param{fileParam("m", 0, 1)}
+
+	for range 5 {
+		fn, seen := collector()
+		if _, err := tbl.Apply(params, vals, fn); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+
+		if diff := cmp.Diff([]string{"af", "mf", "zf"}, *seen); diff != "" {
+			t.Errorf("visit order not sorted/stable (-want +got):\n%s", diff)
+		}
 	}
 }
 

@@ -80,6 +80,7 @@ CASES=(
     "map_fork|testdata/map_fork|testdata/map_fork/expected/outs.json"
     "map_split|testdata/map_split|testdata/map_split/expected/outs.json"
     "map_pipe|testdata/map_pipe|testdata/map_pipe/expected/outs.json"
+    "map_file|testdata/map_file|testdata/map_file/expected/outs.json"
     "include_test|testdata/include_test|testdata/include_test/expected/outs.json"
     "default_out|testdata/default_out|testdata/default_out/expected/outs.json"
     "wildcard|testdata/wildcard|testdata/wildcard/expected/outs.json"
