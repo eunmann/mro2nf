@@ -40,7 +40,7 @@ out of scope for a transpiler.
 | literals: int/float/sci, bool, null, arrays, maps, struct literals, escapes | ✅ | `martian/syntax`; e2e entry args |
 | bindings: `self.x`, `self.x.y`, `STAGE`, `STAGE.out`, `STAGE.out.field`, `STAGE.default` | ✅ | unit `bind`; e2e `struct_proj`, `default_out` |
 | **field projection through arrays** (`CALL.s.field`) | ✅ | unit `TestResolveArrayProjection`, e2e `struct_proj` |
-| field projection through maps (`map<S>.field`) | ❌ guarded (the type-agnostic binder would return null; `validateProgram` rejects it with a typed type-resolving check) | unit `TestEmitUnsupported`, `testdata/unsupported/map_struct_proj` |
+| field projection through maps (`map<S>.field`) | ✅ (emitter computes a per-ref `MapDepth` from the program types; the binder projects the field over the map's values — covers declared `map<S>` outputs and map-fork-induced maps) | e2e `map_struct_proj`, unit `TestResolveMapProjection`, `TestMapProjectDepth` |
 | literal edge cases: negative numbers, `>2^53` int64 precision, unicode/escape strings | ✅ | e2e `literals_edge` |
 | wildcard binding `* = self` / `* = REF` | ✅ | e2e `wildcard` (compiler expands) |
 | **refs nested in array/map literals** (`[A.x, B.x]` fan-in) | ✅ #14 | unit `bind`/`fork`, e2e `fanin` |
@@ -71,8 +71,8 @@ out of scope for a transpiler.
 | map call over a **sub-pipeline** (per-fork body keying) | ✅ #16 | e2e `map_pipe`, `map_pipe_split` |
 | map call emitting a **file** (array/keyed-map of files) | ✅ | e2e `map_file`, `map_file_keyed` |
 | empty-split fork inside a map call (0 chunks → 0/null, no fork dropped) | ✅ | e2e `map_split` (includes an empty fork) |
-| map call over a pipeline with internal disabled/nested-map | ❌ guarded | unit `TestEmitUnsupported` |
-| `disabled` on a map call | ❌ guarded | unit `TestEmitUnsupported` |
+| `disabled` on a map call | ✅ (fork pipeline-args gated by the resolved flag; skip → null bundle) | e2e `disabled_map` (skip true→null, false→[2,4,6]) |
+| map call over a pipeline with an internal disabled/nested-map call | ❌ guarded | unit `TestEmitUnsupported` |
 
 ## Stages / adapters / resources
 
@@ -124,18 +124,17 @@ out of scope for a transpiler.
 - Every e2e fixture's expected output is the real `mrp` result, captured under
   `testdata/<name>/expected/`.
 - ❌ items fail fast with a typed `apperror.UnsupportedError` at transpile time;
-  they never emit silently-wrong Nextflow. The remaining ❌ are a `disabled`
-  map call and a map over a pipeline whose body holds a disabled/nested-map call
-  — both need the per-fork disable/nested-map threading layered on the keyed
-  pipeline machinery.
+  they never emit silently-wrong Nextflow. The **only** remaining ❌ is a map call
+  over a pipeline whose body itself contains a `disabled` or nested-map call.
+  First-principles assessment: the disabled-inside-keyed-pipeline case is
+  tractable (the keyed analog of the now-implemented disabled-map fork gate, ~one
+  keyed branch); the nested-map case needs 2-D fork-identity keying (composite
+  keys through the keyed-pipeline machinery) and is the genuinely larger piece.
+  Both are rare combinations; guarded until built.
 - 🚫 items are `mrp`-runtime behaviors (live UI, content-based retry, mid-run VDR
   timing, OOM auto-escalation) with no faithful Nextflow analog; the closest
   testable guarantee (terminal filesystem state, output equivalence) is used
   where applicable.
-- Field projection through a *typed map* (`map<S>.field`) is now **guarded** with
-  a typed `UnsupportedError` (it never emits silently-wrong output); projection
-  through arrays and structs is fully supported. Enabling it would require
-  threading per-segment type info into the (currently type-agnostic) binder.
 - Remaining ⚠️ items are resource-*allocation* fidelity (vmem/special directives,
   split-returned join overrides) — outputs are identical to mrp; only the
   requested scheduler resources differ — and storage-*layout* fidelity (flat
