@@ -52,9 +52,9 @@ func TestEmitFiles(t *testing.T) {
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf",
 		"modules/stage_SUM_SQUARES.nf",
 		"modules/stage_REPORT.nf",
-		"bindspecs/BIND_SUM_SQUARE_PIPELINE__SUM_SQUARES.json",
-		"bindspecs/BIND_SUM_SQUARE_PIPELINE__REPORT.json",
-		"bindspecs/BIND_SUM_SQUARE_PIPELINE__return.json",
+		"bindspecs/BIND_19_SUM_SQUARE_PIPELINE__SUM_SQUARES.json",
+		"bindspecs/BIND_19_SUM_SQUARE_PIPELINE__REPORT.json",
+		"bindspecs/BIND_19_SUM_SQUARE_PIPELINE__return.json",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
 			t.Errorf("expected file %s: %v", rel, err)
@@ -85,7 +85,7 @@ func TestEmitModules(t *testing.T) {
 		},
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf": {
 			"workflow SUM_SQUARE_PIPELINE {",
-			"include { wf_SUM_SQUARES as wf_SUM_SQUARE_PIPELINE__SUM_SQUARES }",
+			"include { wf_SUM_SQUARES as wf_19_SUM_SQUARE_PIPELINE__SUM_SQUARES }",
 			// Call outputs are value channels so they can feed multiple consumers.
 			".out).first()",
 		},

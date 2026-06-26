@@ -115,7 +115,7 @@ func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 			}
 
 			nulls := nullOuts(prog, c.Callable)
-			if err := writeJSONFile(filepath.Join(nullsDir, p.Name+"__"+c.Name+".json"), nulls); err != nil {
+			if err := writeJSONFile(filepath.Join(nullsDir, qualify(p.Name, c.Name)+".json"), nulls); err != nil {
 				return err
 			}
 		}

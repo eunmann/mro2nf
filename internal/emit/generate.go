@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/martian-nextflow/internal/ir"
@@ -384,7 +385,7 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, _ *ir.Program
 func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee string) {
 	bind := bindName(pipeline, c.Name)
 	dis := disableName(pipeline, c.Name)
-	nulls := fmt.Sprintf("${projectDir}/nulls/%s__%s.json", pipeline, c.Name)
+	nulls := fmt.Sprintf("${projectDir}/nulls/%s.json", qualify(pipeline, c.Name))
 
 	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c)))
 	fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s.out).branch { a, d ->
@@ -412,7 +413,7 @@ func calleeModule(prog *ir.Program, callable string) (string, string) {
 // callAlias is the per-call workflow alias, unique within a pipeline, so each
 // call (including repeated/aliased calls) is an independent instance.
 func callAlias(pipeline, call string) string {
-	return "wf_" + pipeline + "__" + call
+	return "wf_" + qualify(pipeline, call)
 }
 
 // disableBindings builds a one-entry binding list for a call's disabled ref.
@@ -421,7 +422,7 @@ func disableBindings(c ir.Call) []ir.Binding {
 }
 
 func disableName(pipeline, call string) string {
-	return "DISABLE_" + pipeline + "__" + call
+	return "DISABLE_" + qualify(pipeline, call)
 }
 
 // bindCallArgs renders the actual-argument list for a BIND invocation: the
@@ -484,16 +485,23 @@ func genEntry(b *strings.Builder, entryWorkflow string) {
 `, entryWorkflow)
 }
 
+// qualify builds a collision-free, valid-identifier suffix from a (pipeline,
+// call) pair. The length prefix disambiguates pairs whose names themselves
+// contain the "__" separator (e.g. pipeline "A"/call "B__C" vs "A__B"/"C").
+func qualify(pipeline, call string) string {
+	return strconv.Itoa(len(pipeline)) + "_" + pipeline + "__" + call
+}
+
 func bindName(pipeline, call string) string {
-	return "BIND_" + pipeline + "__" + call
+	return "BIND_" + qualify(pipeline, call)
 }
 
 func forkName(pipeline, call string) string {
-	return "FORK_" + pipeline + "__" + call
+	return "FORK_" + qualify(pipeline, call)
 }
 
 func mergeName(pipeline, call string) string {
-	return "MERGE_" + pipeline + "__" + call
+	return "MERGE_" + qualify(pipeline, call)
 }
 
 // calleeOutNames returns the comma-joined output parameter names of a callable.
