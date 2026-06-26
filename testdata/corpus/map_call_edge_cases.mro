@@ -1,0 +1,280 @@
+filetype Inputs3Plus;
+
+struct Inputs1(
+    string thing1,
+    int    thing2,
+    int    thing3,
+)
+
+struct Inputs1Plus(
+    string thing1,
+    int    thing2,
+    int    thing3,
+    int    thing4,
+)
+
+struct Inputs2(
+    bool      thing,
+    Inputs1[] inputs,
+)
+
+struct Inputs2Plus(
+    bool          thing,
+    Inputs1Plus[] inputs,
+)
+
+struct Inputs3(
+    string[] blah,
+    int      thing,
+)
+
+struct Inputs4(
+    Inputs3[] outs,
+)
+
+stage GENERATE_ARRAY(
+    in  Inputs2Plus[] what,
+    out Inputs2Plus[] result,
+    src exec          "stage.py",
+)
+
+stage GENERATE_MAP(
+    in  map<Inputs2Plus> what,
+    out map<Inputs2Plus> result,
+    src exec             "stage.py",
+)
+
+stage GENERATE_INPUTS(
+    in  Inputs2Plus what,
+    out Inputs2Plus result,
+    src exec        "stage.py",
+)
+
+stage STUFF1(
+    in  string what,
+    in  string thing1,
+    in  int    thing2,
+    out string result,
+    src exec   "stage.py",
+)
+
+stage STUFF2(
+    in  string       what,
+    in  map<Inputs4> inputs,
+    out string       result,
+    src exec         "stage.py",
+)
+
+pipeline PIPELINE1(
+    in  Inputs1  inputs,
+    in  string   blah,
+    out string[] blah,
+    out int      thing,
+)
+{
+    call STUFF1(
+        what = self.inputs.thing1,
+        *    = self.inputs,
+    )
+
+    return (
+        blah  = [
+            STUFF1.result,
+            self.blah,
+        ],
+        thing = self.inputs.thing3,
+    )
+}
+
+pipeline PIPELINE2(
+    in  Inputs2   inputs,
+    in  string    blah,
+    out Inputs3[] outs,
+    out string    ignored,
+)
+{
+    map call PIPELINE1(
+        inputs = split self.inputs.inputs,
+        blah   = self.blah,
+    ) using (
+        disabled = self.inputs.thing,
+    )
+
+    return (
+        outs    = PIPELINE1,
+        ignored = self.blah,
+    )
+}
+
+pipeline PIPELINE3(
+    in  map<Inputs2> inputs1,
+    in  Inputs2[]    inputs2,
+    in  Inputs2[]    inputs3,
+    in  string       blah,
+    out STUFF2       output,
+    out map<Inputs4> intermediate1,
+    out Inputs4[]    intermediate2,
+    out Inputs4[]    intermediate3,
+    out map<Inputs4> intermediate4,
+    out Inputs4[]    intermediate5,
+)
+{
+    map call PIPELINE2 as MAP_MAP(
+        inputs = split self.inputs1,
+        blah   = self.blah,
+    )
+
+    map call PIPELINE2 as ARRAY_MAP(
+        inputs = split self.inputs2,
+        blah   = self.blah,
+    )
+
+    call GENERATE_ARRAY(
+        what = [
+            {
+                inputs: [
+                    {
+                        thing1: "thing",
+                        thing2: 1,
+                        thing3: 2,
+                        thing4: 3,
+                    },
+                ],
+                thing: false,
+            },
+        ],
+    )
+
+    map call PIPELINE2 as VARIABLE_ARRAY_MAP(
+        inputs = split GENERATE_ARRAY.result,
+        blah   = self.blah,
+    )
+
+    call GENERATE_MAP(
+        what = {
+            "thing1": {
+                inputs: [
+                    {
+                        thing1: "thing1.1",
+                        thing2: 1,
+                        thing3: 2,
+                        thing4: 3,
+                    },
+                    {
+                        thing1: "thing1.2",
+                        thing2: 4,
+                        thing3: 5,
+                        thing4: 6,
+                    },
+                ],
+                thing: false,
+            },
+            "thing2": {
+                inputs: [
+                    {
+                        thing1: "thing2",
+                        thing2: 7,
+                        thing3: 8,
+                        thing4: 9,
+                    },
+                ],
+                thing: true,
+            },
+            "thing3": {
+                inputs: [],
+                thing:  false,
+            },
+        },
+    )
+
+    map call PIPELINE2 as VARIABLE_MAP_MAP(
+        inputs = split GENERATE_MAP.result,
+        blah   = self.blah,
+    )
+
+    call STUFF2(
+        what   = "thingy",
+        inputs = MAP_MAP,
+    )
+
+    map call PIPELINE2 as PARTLY_VARIABLE(
+        inputs = split self.inputs3,
+        blah   = self.blah,
+    )
+
+    return (
+        output        = STUFF2,
+        intermediate1 = MAP_MAP,
+        intermediate2 = ARRAY_MAP,
+        intermediate3 = VARIABLE_ARRAY_MAP,
+        intermediate4 = VARIABLE_MAP_MAP,
+        intermediate5 = PARTLY_VARIABLE,
+    )
+}
+
+pipeline _STRUCTIFY(
+    in  map<Inputs2Plus> inputs1,
+    in  Inputs2Plus[]    inputs2,
+    in  Inputs2Plus[]    inputs3,
+    out map<Inputs2Plus> inputs1,
+    out Inputs2Plus[]    inputs2,
+    out Inputs2Plus[]    inputs3,
+)
+{
+    return (
+        inputs1 = self.inputs1,
+        inputs2 = self.inputs2,
+        inputs3 = self.inputs3,
+    )
+}
+
+pipeline TOP(
+    in  Inputs1Plus inputs,
+    out PIPELINE3   outputs,
+)
+{
+    call GENERATE_INPUTS(
+        what = {
+            inputs: [self.inputs],
+            thing:  false,
+        },
+    )
+
+    call _STRUCTIFY(
+        inputs1 = {
+            "foo": {
+                inputs: [self.inputs],
+                thing:  false,
+            },
+        },
+        inputs2 = [
+            {
+                inputs: [self.inputs],
+                thing:  false,
+            },
+            {
+                inputs: [self.inputs],
+                thing:  true,
+            },
+        ],
+        inputs3 = [GENERATE_INPUTS.result],
+    )
+
+    call PIPELINE3(
+        blah = "A thing",
+        *    = _STRUCTIFY,
+    )
+
+    return (
+        outputs = PIPELINE3,
+    )
+}
+
+call TOP(
+    inputs = {
+        thing1: "blah",
+        thing2: 2,
+        thing3: 3,
+        thing4: 4,
+    },
+)
