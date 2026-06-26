@@ -57,8 +57,11 @@ func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 	var b strings.Builder
 
 	genPipeIncludes(&b, p, prog)
+	genKeyedPipeIncludes(&b, p, prog)
 	genPipeProcesses(&b, p, prog, g)
+	genKeyedPipeProcesses(&b, p, prog, g)
 	genPipelineWorkflow(&b, p, prog)
+	genKeyedPipeline(&b, p)
 
 	return b.String()
 }
@@ -93,18 +96,116 @@ func genPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 // (wf_<stage>_map) instead of the plain wf_<stage>.
 func calleeExport(prog *ir.Program, c ir.Call) (string, string) {
 	export, src := calleeModule(prog, c.Callable)
-	if c.Mapped && isSplitStage(prog, c.Callable) {
+	if c.Mapped {
+		// Every map target runs through its fork-key-threaded variant.
 		export = "wf_" + c.Callable + "_map"
 	}
 
 	return export, src
 }
 
-// isSplitStage reports whether callable names a split stage.
-func isSplitStage(prog *ir.Program, callable string) bool {
-	s, ok := prog.Stages[callable]
+// keyedCallAlias is the per-call alias under which a callee's fork-key-threaded
+// variant (wf_<callable>_map) is imported into a keyed pipeline.
+func keyedCallAlias(pipeline, call string) string {
+	return "wfk_" + qualify(pipeline, call)
+}
 
-	return ok && s.Split
+// genKeyedPipeIncludes imports the fork-key-threaded variant of each callee so a
+// keyed pipeline can run its body per fork.
+func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
+	for _, c := range p.Calls {
+		_, src := calleeModule(prog, c.Callable)
+		fmt.Fprintf(b, "include { wf_%s_map as %s } from '%s'\n", c.Callable, keyedCallAlias(p.Name, c.Name), src)
+	}
+
+	b.WriteString("\n")
+}
+
+// genKeyedPipeProcesses emits the fork-key-carrying bind processes a keyed
+// pipeline uses (one per call, plus the return).
+func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, _ *ir.Program, g genCtx) {
+	for _, c := range p.Calls {
+		genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
+	}
+
+	genKeyedBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut), `outs__${key}`)
+}
+
+// genKeyedBindProcess emits a fork-key-carrying bind: it joins the fork's
+// pipeline args and referenced upstream outputs by key, then resolves them per
+// fork. out is the produced bundle's name ("args" for an intermediate call,
+// "outs__${key}" for the return so the merge can order forks).
+func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx, prodArgs, out string) {
+	refs := refCalls(bindings)
+
+	var in strings.Builder
+
+	in.WriteString("    tuple val(key), path(pipeargs)")
+
+	pairs := make([]string, 0, len(refs))
+	for _, id := range refs {
+		fmt.Fprintf(&in, ", path('in_%s')", id)
+		pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
+	}
+
+	in.WriteString("\n")
+
+	arg := ""
+	if len(pairs) > 0 {
+		arg = " -inputs " + strings.Join(pairs, ",")
+	}
+
+	fmt.Fprintf(b, `process %[1]s_K {
+  input:
+%[2]s  output:
+    tuple val(key), path("%[6]s", type: 'dir')
+  script:
+    """
+    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o %[6]s%[5]s
+    """
+}
+
+`, name, in.String(), g.mre, arg, prodArgs, out)
+}
+
+// genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,
+// with the fork key threaded through every bind and callee. Each channel is
+// collapsed to a value list (toList) so it can be re-read by multiple consumers
+// without exhausting the fork queue; binds join their inputs by key.
+func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline) {
+	var body strings.Builder
+
+	body.WriteString("  main:\n    pa_l = keyed.toList()\n")
+
+	for _, c := range p.Calls {
+		bind := bindName(p.Name, c.Name)
+		fmt.Fprintf(&body, "    %s_K(%s)\n", bind, keyedBindInput(c.Bindings))
+		fmt.Fprintf(&body, "    ch_%s_l = %s(%s_K.out).toList()\n", c.Name, keyedCallAlias(p.Name, c.Name), bind)
+	}
+
+	retName := bindName(p.Name, "return")
+	fmt.Fprintf(&body, "    %s_K(%s)\n", retName, keyedBindInput(p.Returns))
+
+	fmt.Fprintf(b, `workflow wf_%s_map {
+  take: keyed
+%s  emit:
+    %s_K.out
+}
+
+`, p.Name, body.String(), retName)
+}
+
+// keyedBindInput renders the channel expression feeding a keyed bind: the fork
+// pipeline args joined by key with each referenced upstream call's output.
+func keyedBindInput(bindings []ir.Binding) string {
+	var expr strings.Builder
+
+	expr.WriteString("pa_l.flatMap { it }")
+	for _, id := range refCalls(bindings) {
+		fmt.Fprintf(&expr, ".join(ch_%s_l.flatMap { it })", id)
+	}
+
+	return expr.String()
 }
 
 // genPipeProcesses emits the BIND/FORK/MERGE/DISABLE helper processes for a
@@ -137,6 +238,7 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 
 	if !s.Split {
 		genSingleStage(b, s, base, joinOuts, g)
+		genKeyedSingleStage(b, s, base, joinOuts, g)
 
 		return
 	}
@@ -241,6 +343,35 @@ workflow wf_%[1]s {
     %[1]s(args)
   emit:
     %[1]s.out
+}
+
+`, s.Name, cpusOf(s), memOf(s), base, outs, g.producerArgs(s.Name, types.RoleMainOut))
+}
+
+// genKeyedSingleStage emits a fork-key-threaded variant of a non-split stage:
+// the process carries tuple(key, args) and names its output bundle by key so a
+// map call (or an enclosing keyed pipeline) can run one instance per fork and
+// gather per fork.
+func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g genCtx) {
+	fmt.Fprintf(b, `process %[1]s_MAP {
+  cpus %[2]d
+  memory '%[3]d GB'
+  input:
+    tuple val(key), path(args)
+  output:
+    tuple val(key), path("outs__${key}", type: 'dir')
+  script:
+    """
+    %[4]s -args ${args} -outs '%[5]s'%[6]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    """
+}
+
+workflow wf_%[1]s_map {
+  take: keyed
+  main:
+    %[1]s_MAP(keyed)
+  emit:
+    %[1]s_MAP.out
 }
 
 `, s.Name, cpusOf(s), memOf(s), base, outs, g.producerArgs(s.Name, types.RoleMainOut))
@@ -458,18 +589,14 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Prog
 // genMappedWiring emits a map call's fork/callee/merge fan-out. A split-stage
 // callee runs through its fork-key-threaded variant (each fork keyed by its
 // args-bundle name); other callees take the flattened fork channel directly.
-func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee string, prog *ir.Program) {
+func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee string, _ *ir.Program) {
 	fork := forkName(pipeline, c.Name)
 	merge := mergeName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", fork, bindCallArgs(c.Bindings))
-
-	if isSplitStage(prog, c.Callable) {
-		fmt.Fprintf(b, "    keyed_%s = %s.out.forks.flatten().map { f -> tuple(f.baseName, f) }\n", c.Name, fork)
-		fmt.Fprintf(b, "    out_%s = %s(keyed_%s).map { k, bundle -> bundle }\n", c.Name, callee, c.Name)
-	} else {
-		fmt.Fprintf(b, "    out_%s = %s(%s.out.forks.flatten())\n", c.Name, callee, fork)
-	}
-
+	// Each fork is keyed by its args-bundle name and run through the callee's
+	// fork-key-threaded variant, which emits tuple(key, outBundle).
+	fmt.Fprintf(b, "    keyed_%s = %s.out.forks.flatten().map { f -> tuple(f.baseName, f) }\n", c.Name, fork)
+	fmt.Fprintf(b, "    out_%s = %s(keyed_%s).map { k, bundle -> bundle }\n", c.Name, callee, c.Name)
 	// ifEmpty([]) ensures MERGE still runs for an empty fork collection
 	// (collect() on an empty channel emits nothing), yielding null outputs.
 	// FORK.out.keys carries map-fork keys (null for an array fork).

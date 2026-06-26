@@ -177,11 +177,12 @@ func validateProgram(prog *ir.Program) error {
 				}
 			}
 
-			// Split-stage map targets run through the fork-key-threaded variant;
-			// sub-pipeline map targets still need per-fork body keying.
-			if _, ok := prog.Stages[c.Callable]; !ok {
+			// Stage and keyable-pipeline map targets run through fork-key-threaded
+			// variants. A pipeline target whose body (transitively) contains a
+			// disabled or nested-map call cannot yet be keyed per fork.
+			if !keyablePipeline(prog, c.Callable, map[string]bool{}) {
 				return &apperror.UnsupportedError{
-					Construct: "map call over a sub-pipeline",
+					Construct: "map call over a pipeline with disabled or nested-map calls",
 					Detail:    name + "." + c.Name + " -> " + c.Callable,
 				}
 			}
@@ -189,6 +190,35 @@ func validateProgram(prog *ir.Program) error {
 	}
 
 	return nil
+}
+
+// keyablePipeline reports whether a map call may target callable: stages are
+// always fine; a pipeline is keyable only if every call in it (transitively) is
+// a plain or split call — a disabled or nested-map call inside the body cannot
+// yet be threaded per fork. Recursion is bounded by the seen set.
+func keyablePipeline(prog *ir.Program, callable string, seen map[string]bool) bool {
+	if seen[callable] {
+		return true
+	}
+
+	seen[callable] = true
+
+	p, ok := prog.Pipelines[callable]
+	if !ok {
+		return true // a stage target
+	}
+
+	for _, c := range p.Calls {
+		if c.Disabled != nil || c.Mapped {
+			return false
+		}
+
+		if !keyablePipeline(prog, c.Callable, seen) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // writeModules writes one Nextflow module per stage and per pipeline.

@@ -1,0 +1,43 @@
+# A map call whose target is a SUB-PIPELINE: each fork runs the whole inner
+# pipeline body independently and the per-fork results are gathered.
+stage ADD1(
+    in  float x,
+    out float y,
+    src py    "stages/add1",
+)
+
+pipeline INNER(
+    in  float x,
+    out float y,
+)
+{
+    call ADD1(
+        x = self.x,
+    )
+
+    return (
+        y = ADD1.y,
+    )
+}
+
+pipeline OUTER(
+    in  float[] xs,
+    out float[] ys,
+)
+{
+    map call INNER(
+        x = split self.xs,
+    )
+
+    return (
+        ys = INNER.y,
+    )
+}
+
+call OUTER(
+    xs = [
+        1,
+        2,
+        3,
+    ],
+)

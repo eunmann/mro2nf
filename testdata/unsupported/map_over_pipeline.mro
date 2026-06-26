@@ -4,13 +4,17 @@ stage S(
     src py    "s",
 )
 
+# INNER contains a disabled call, so it cannot be threaded per fork.
 pipeline INNER(
     in  float x,
+    in  bool  off,
     out float y,
 )
 {
     call S(
         x = self.x,
+    ) using (
+        disabled = self.off,
     )
 
     return (
@@ -24,7 +28,8 @@ pipeline P(
 )
 {
     map call INNER(
-        x = split self.xs,
+        x   = split self.xs,
+        off = false,
     )
 
     return (
