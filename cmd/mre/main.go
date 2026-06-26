@@ -49,6 +49,10 @@ func run(ctx context.Context, args []string) error {
 		return runJoin(ctx, args[1:])
 	case "bind":
 		return runBind(ctx, args[1:])
+	case "forkbind":
+		return runForkBind(ctx, args[1:])
+	case "merge":
+		return runMerge(ctx, args[1:])
 	default:
 		return fmt.Errorf("%w: %q", errUnknownPhase, phase)
 	}

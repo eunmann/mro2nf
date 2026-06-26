@@ -7,11 +7,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 )
 
-// errUnknownRefKind is returned for a reference that is neither self nor call.
-var errUnknownRefKind = errors.New("unknown ref kind")
+var (
+	// errUnknownRefKind is returned for a reference that is neither self nor call.
+	errUnknownRefKind = errors.New("unknown ref kind")
+	// errNoSplit is returned when a fork is requested with no split binding.
+	errNoSplit = errors.New("map call has no split binding")
+	// errSplitLen is returned when zipped split collections differ in length.
+	errSplitLen = errors.New("split collections have mismatched lengths")
+	// errNotArray is returned when a split binding is not bound to an array.
+	errNotArray = errors.New("split binding is not an array")
+)
 
 // Ref is a reference to a pipeline input (self) or an upstream call output.
 type Ref struct {
@@ -27,6 +36,9 @@ type Ref struct {
 type Entry struct {
 	Literal json.RawMessage `json:"literal,omitempty"`
 	Ref     *Ref            `json:"ref,omitempty"`
+	// Split marks a map-call fork dimension: the resolved value is a
+	// collection iterated one element per fork.
+	Split bool `json:"split,omitempty"`
 }
 
 // Spec maps each callee parameter name to its binding.
@@ -50,6 +62,102 @@ func Resolve(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMe
 	raw, err := json.Marshal(args)
 	if err != nil {
 		return nil, fmt.Errorf("marshal args: %w", err)
+	}
+
+	return raw, nil
+}
+
+// ResolveForks resolves a map call's bindings into one _args object per fork.
+// Split bindings are resolved to collections and zipped element-wise; non-split
+// bindings are broadcast to every fork.
+func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage) ([]json.RawMessage, error) {
+	broadcast := map[string]json.RawMessage{}
+	splits := map[string][]json.RawMessage{}
+	count := -1
+
+	for param, entry := range spec {
+		val, err := entry.resolve(pipeArgs, callOuts)
+		if err != nil {
+			return nil, fmt.Errorf("bind %q: %w", param, err)
+		}
+
+		if !entry.Split {
+			broadcast[param] = val
+
+			continue
+		}
+
+		var arr []json.RawMessage
+		if err := json.Unmarshal(val, &arr); err != nil {
+			return nil, fmt.Errorf("split %q: %w", param, errNotArray)
+		}
+
+		if count == -1 {
+			count = len(arr)
+		} else if len(arr) != count {
+			return nil, fmt.Errorf("split %q: %w", param, errSplitLen)
+		}
+
+		splits[param] = arr
+	}
+
+	if count == -1 {
+		return nil, errNoSplit
+	}
+
+	return buildForks(broadcast, splits, count)
+}
+
+func buildForks(broadcast map[string]json.RawMessage, splits map[string][]json.RawMessage, count int) ([]json.RawMessage, error) {
+	forks := make([]json.RawMessage, 0, count)
+
+	for i := range count {
+		args := make(map[string]json.RawMessage, len(broadcast)+len(splits))
+		maps.Copy(args, broadcast)
+
+		for param, arr := range splits {
+			args[param] = arr[i]
+		}
+
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return nil, fmt.Errorf("marshal fork %d: %w", i, err)
+		}
+
+		forks = append(forks, raw)
+	}
+
+	return forks, nil
+}
+
+// Merge combines per-fork outputs into a single map-call result: each named
+// output becomes an array of that field across the forks, in order.
+func Merge(names []string, outs []json.RawMessage) (json.RawMessage, error) {
+	result := make(map[string]json.RawMessage, len(names))
+
+	for _, name := range names {
+		arr := make([]json.RawMessage, 0, len(outs))
+
+		for _, out := range outs {
+			val, err := extract(out, name)
+			if err != nil {
+				return nil, fmt.Errorf("merge %q: %w", name, err)
+			}
+
+			arr = append(arr, val)
+		}
+
+		raw, err := json.Marshal(arr)
+		if err != nil {
+			return nil, fmt.Errorf("merge %q: %w", name, err)
+		}
+
+		result[name] = raw
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("marshal merged: %w", err)
 	}
 
 	return raw, nil

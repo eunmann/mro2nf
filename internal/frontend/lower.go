@@ -150,13 +150,19 @@ func lowerBindings(bs *syntax.BindStms) ([]ir.Binding, error) {
 func lowerBinding(bs *syntax.BindStm) (ir.Binding, error) {
 	b := ir.Binding{Param: bs.Id}
 
-	if r, ok := bs.Exp.(*syntax.RefExp); ok {
+	exp := bs.Exp
+	if se, ok := exp.(*syntax.SplitExp); ok {
+		b.Split = true
+		exp = se.Value
+	}
+
+	if r, ok := exp.(*syntax.RefExp); ok {
 		b.Ref = refFrom(r)
 
 		return b, nil
 	}
 
-	v, err := litToGo(bs.Exp)
+	v, err := litToGo(exp)
 	if err != nil {
 		return b, fmt.Errorf("binding %q: %w", bs.Id, err)
 	}

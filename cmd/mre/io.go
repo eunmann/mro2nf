@@ -73,6 +73,21 @@ func readChunkData(defsPath, outsList string) ([]shim.ChunkDef, []json.RawMessag
 	return defs, outs, nil
 }
 
+func readFileList(paths []string) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, 0, len(paths))
+
+	for _, p := range paths {
+		data, err := readFile(p)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, data)
+	}
+
+	return out, nil
+}
+
 func writeJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

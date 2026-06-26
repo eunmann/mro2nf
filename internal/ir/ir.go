@@ -77,6 +77,9 @@ type Binding struct {
 	Literal json.RawMessage
 	// Ref is a reference to an input or upstream output.
 	Ref *Ref
+	// Split marks a `split` binding in a map call: the bound value is a
+	// collection to fork over, one element per fork.
+	Split bool
 }
 
 // Call is an invocation of a stage or pipeline within a pipeline.
