@@ -245,13 +245,8 @@ func bindSpec(bindings []ir.Binding) bind.Spec {
 			continue
 		}
 
-		entry := bind.Entry{Split: b.Split}
-		if b.Ref != nil {
-			entry.Ref = &bind.Ref{Kind: b.Ref.Kind, ID: b.Ref.ID, Output: b.Ref.Output}
-		} else {
-			entry.Literal = b.Literal
-		}
-
+		entry := valueToEntry(b.Value)
+		entry.Split = b.Split
 		spec[b.Param] = entry
 	}
 
@@ -261,6 +256,31 @@ func bindSpec(bindings []ir.Binding) bind.Spec {
 // configFile renders nextflow.config with executor profiles. The local and
 // HPC profiles (slurm/sge/lsf/pbs) work with the shared-filesystem model used
 // today; cloud profiles additionally require the object-store data plane.
+// valueToEntry converts an IR value tree into a runtime bind.Entry, preserving
+// refs nested inside array/object literals.
+func valueToEntry(v ir.Value) bind.Entry {
+	switch {
+	case v.Array != nil:
+		arr := make([]bind.Entry, len(v.Array))
+		for i, e := range v.Array {
+			arr[i] = valueToEntry(e)
+		}
+
+		return bind.Entry{Array: arr}
+	case v.Object != nil:
+		obj := make(map[string]bind.Entry, len(v.Object))
+		for k, e := range v.Object {
+			obj[k] = valueToEntry(e)
+		}
+
+		return bind.Entry{Object: obj}
+	case v.Ref != nil:
+		return bind.Entry{Ref: &bind.Ref{Kind: v.Ref.Kind, ID: v.Ref.ID, Output: v.Ref.Output}}
+	default:
+		return bind.Entry{Literal: v.Literal}
+	}
+}
+
 func configFile() string {
 	return `params.outdir = 'results'
 

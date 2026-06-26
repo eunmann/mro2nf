@@ -114,3 +114,5 @@ run_case nested_struct testdata/nested_struct \
     testdata/nested_struct/expected/outs.json
 run_case literals testdata/literals \
     testdata/literals/expected/outs.json
+run_case fanin testdata/fanin \
+    testdata/fanin/expected/outs.json

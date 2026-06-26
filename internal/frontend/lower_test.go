@@ -101,17 +101,17 @@ func TestLowerPipelineWiring(t *testing.T) {
 	}
 
 	sum := findBinding(report.Bindings, "sum")
-	if sum == nil || sum.Ref == nil {
+	if sum == nil || sum.Value.Ref == nil {
 		t.Fatal("REPORT.sum should be a reference binding")
 	}
 
 	want := &ir.Ref{Kind: "call", ID: "SUM_SQUARES", Output: "sum"}
-	if diff := cmp.Diff(want, sum.Ref); diff != "" {
+	if diff := cmp.Diff(want, sum.Value.Ref); diff != "" {
 		t.Errorf("REPORT.sum ref mismatch (-want +got):\n%s", diff)
 	}
 
 	ret := findBinding(pl.Returns, "sum")
-	if ret == nil || ret.Ref == nil || ret.Ref.ID != "SUM_SQUARES" || ret.Ref.Output != "sum" {
+	if ret == nil || ret.Value.Ref == nil || ret.Value.Ref.ID != "SUM_SQUARES" || ret.Value.Ref.Output != "sum" {
 		t.Errorf("return sum should reference SUM_SQUARES.sum, got %+v", ret)
 	}
 }
@@ -127,13 +127,17 @@ func TestLowerEntry(t *testing.T) {
 	}
 
 	values := findBinding(prog.Entry.Bindings, "values")
-	if values == nil || values.Literal == nil {
-		t.Fatal("entry values should be a literal binding")
+	if values == nil || values.Value.Array == nil {
+		t.Fatal("entry values should be an array binding")
 	}
 
-	var got []int
-	if err := json.Unmarshal(values.Literal, &got); err != nil {
-		t.Fatalf("unmarshal values: %v", err)
+	got := make([]int, 0, len(values.Value.Array))
+	for _, el := range values.Value.Array {
+		var n int
+		if err := json.Unmarshal(el.Literal, &n); err != nil {
+			t.Fatalf("unmarshal element: %v", err)
+		}
+		got = append(got, n)
 	}
 
 	if diff := cmp.Diff([]int{1, 2, 3}, got); diff != "" {

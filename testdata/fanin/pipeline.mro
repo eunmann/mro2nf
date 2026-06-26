@@ -1,0 +1,39 @@
+stage GEN(
+    in  int n,
+    out int v,
+    src py  "stages/gen",
+)
+
+stage SUMALL(
+    in  int[] vals,
+    out int   total,
+    src py    "stages/sumall",
+)
+
+pipeline FI(
+    in  int a,
+    in  int b,
+    out int total,
+)
+{
+    call GEN as G1(
+        n = self.a,
+    )
+
+    call GEN as G2(
+        n = self.b,
+    )
+
+    call SUMALL(
+        vals = [G1.v, G2.v],
+    )
+
+    return (
+        total = SUMALL.total,
+    )
+}
+
+call FI(
+    a = 4,
+    b = 6,
+)

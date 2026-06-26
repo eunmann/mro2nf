@@ -35,10 +35,14 @@ type Ref struct {
 	Output string `json:"output"`
 }
 
-// Entry binds one parameter: exactly one of Literal or Ref is set.
+// Entry binds one parameter to a value expression: a leaf literal or ref, or a
+// composite array/object whose elements may contain refs (fan-in). Exactly one
+// of Literal/Ref/Array/Object is set.
 type Entry struct {
-	Literal json.RawMessage `json:"literal,omitempty"`
-	Ref     *Ref            `json:"ref,omitempty"`
+	Literal json.RawMessage  `json:"literal,omitempty"`
+	Ref     *Ref             `json:"ref,omitempty"`
+	Array   []Entry          `json:"array,omitempty"`
+	Object  map[string]Entry `json:"object,omitempty"`
 	// Split marks a map-call fork dimension: the resolved value is a
 	// collection iterated one element per fork.
 	Split bool `json:"split,omitempty"`
@@ -220,11 +224,36 @@ func Merge(names []string, outs []json.RawMessage, keys []string) (json.RawMessa
 }
 
 func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMessage) (json.RawMessage, error) {
-	if e.Literal != nil {
-		return e.Literal, nil
-	}
+	switch {
+	case e.Array != nil:
+		out := make([]json.RawMessage, 0, len(e.Array))
 
-	if e.Ref == nil {
+		for _, el := range e.Array {
+			v, err := el.resolve(pipeArgs, callOuts)
+			if err != nil {
+				return nil, err
+			}
+
+			out = append(out, v)
+		}
+
+		return marshalRaw(out, "array")
+	case e.Object != nil:
+		out := make(map[string]json.RawMessage, len(e.Object))
+
+		for k, el := range e.Object {
+			v, err := el.resolve(pipeArgs, callOuts)
+			if err != nil {
+				return nil, err
+			}
+
+			out[k] = v
+		}
+
+		return marshalRaw(out, "object")
+	case e.Literal != nil:
+		return e.Literal, nil
+	case e.Ref == nil:
 		return json.RawMessage(nullLiteral), nil
 	}
 

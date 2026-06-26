@@ -417,7 +417,7 @@ func callAlias(pipeline, call string) string {
 
 // disableBindings builds a one-entry binding list for a call's disabled ref.
 func disableBindings(c ir.Call) []ir.Binding {
-	return []ir.Binding{{Param: "disabled", Ref: c.Disabled}}
+	return []ir.Binding{{Param: "disabled", Value: ir.Value{Ref: c.Disabled}}}
 }
 
 func disableName(pipeline, call string) string {
@@ -509,18 +509,31 @@ func calleeOutNames(prog *ir.Program, callable string) string {
 	return ""
 }
 
-// refCalls returns the unique, sorted upstream call ids referenced by bindings.
+// refCalls returns the unique, sorted upstream call ids referenced anywhere in
+// the bindings' value trees (including refs nested inside array/object literals).
 func refCalls(bindings []ir.Binding) []string {
 	seen := map[string]bool{}
 
 	var ids []string
 
-	for _, bnd := range bindings {
-		if bnd.Ref != nil && bnd.Ref.Kind == "call" && !seen[bnd.Ref.ID] {
-			seen[bnd.Ref.ID] = true
-
-			ids = append(ids, bnd.Ref.ID)
+	var walk func(v ir.Value)
+	walk = func(v ir.Value) {
+		if v.Ref != nil && v.Ref.Kind == "call" && !seen[v.Ref.ID] {
+			seen[v.Ref.ID] = true
+			ids = append(ids, v.Ref.ID)
 		}
+
+		for _, e := range v.Array {
+			walk(e)
+		}
+
+		for _, e := range v.Object {
+			walk(e)
+		}
+	}
+
+	for _, bnd := range bindings {
+		walk(bnd.Value)
 	}
 
 	sort.Strings(ids)

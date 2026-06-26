@@ -68,17 +68,28 @@ type Ref struct {
 	Output string
 }
 
-// Binding assigns a value to a callee input or a pipeline output. Exactly one
-// of Literal or Ref is non-nil.
+// Value is a binding's value expression: a leaf literal or ref, or a composite
+// array/object whose elements may themselves contain refs (e.g. a fan-in
+// `[A.out, B.out]` or `{"k": UP.out}`). Exactly one field is set.
+type Value struct {
+	// Literal is a JSON-encoded constant leaf.
+	Literal json.RawMessage
+	// Ref is a reference leaf (pipeline input or upstream output).
+	Ref *Ref
+	// Array is an array literal whose elements are themselves values.
+	Array []Value
+	// Object is a map/struct literal whose values are themselves values.
+	Object map[string]Value
+}
+
+// Binding assigns a value expression to a callee input or pipeline output.
 type Binding struct {
 	// Param is the bound parameter name ("*" for a wildcard binding).
 	Param string
-	// Literal is a JSON-encoded constant value.
-	Literal json.RawMessage
-	// Ref is a reference to an input or upstream output.
-	Ref *Ref
-	// Split marks a `split` binding in a map call: the bound value is a
-	// collection to fork over, one element per fork.
+	// Value is the bound expression.
+	Value Value
+	// Split marks a `split` binding in a map call: the value is a collection
+	// to fork over, one element per fork.
 	Split bool
 }
 

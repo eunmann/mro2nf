@@ -156,23 +156,12 @@ func lowerBinding(bs *syntax.BindStm) (ir.Binding, error) {
 		exp = se.Value
 	}
 
-	if r, ok := exp.(*syntax.RefExp); ok {
-		b.Ref = refFrom(r)
-
-		return b, nil
-	}
-
-	v, err := litToGo(exp)
+	v, err := lowerExp(exp)
 	if err != nil {
 		return b, fmt.Errorf("binding %q: %w", bs.Id, err)
 	}
 
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return b, fmt.Errorf("binding %q: marshal literal: %w", bs.Id, err)
-	}
-
-	b.Literal = raw
+	b.Value = v
 
 	return b, nil
 }
@@ -200,56 +189,77 @@ func disabledRef(m *syntax.Modifiers) *ir.Ref {
 	return refFrom(r)
 }
 
-// litToGo converts a literal value expression into a Go value ready for JSON
-// encoding. It returns an UnsupportedError if it encounters a reference, which
-// is only valid in a binding position, not nested inside a constant.
-//
-// Recursion depth is bounded by the nesting of the parsed MRO literal, which the
-// Martian compiler has already produced as a finite AST.
-func litToGo(e syntax.Exp) (any, error) {
+// lowerExp lowers a value expression into an ir.Value tree, preserving any
+// references nested inside array/map literals (e.g. a fan-in `[A.out, B.out]`).
+// Recursion depth is bounded by the finite parsed MRO AST.
+func lowerExp(e syntax.Exp) (ir.Value, error) {
 	switch v := e.(type) {
-	case *syntax.IntExp:
-		return v.Value, nil
-	case *syntax.FloatExp:
-		return v.Value, nil
-	case *syntax.StringExp:
-		return v.Value, nil
-	case *syntax.BoolExp:
-		return v.Value, nil
-	case *syntax.NullExp:
-		return nil, nil
+	case *syntax.RefExp:
+		return ir.Value{Ref: refFrom(v)}, nil
 	case *syntax.ArrayExp:
-		arr := make([]any, 0, len(v.Value))
+		arr := make([]ir.Value, 0, len(v.Value))
 
 		for _, el := range v.Value {
-			g, err := litToGo(el)
+			lv, err := lowerExp(el)
 			if err != nil {
-				return nil, err
+				return ir.Value{}, err
 			}
 
-			arr = append(arr, g)
+			arr = append(arr, lv)
 		}
 
-		return arr, nil
+		return ir.Value{Array: arr}, nil
 	case *syntax.MapExp:
-		m := make(map[string]any, len(v.Value))
+		obj := make(map[string]ir.Value, len(v.Value))
 
 		for k, el := range v.Value {
-			g, err := litToGo(el)
+			lv, err := lowerExp(el)
 			if err != nil {
-				return nil, err
+				return ir.Value{}, err
 			}
 
-			m[k] = g
+			obj[k] = lv
 		}
 
-		return m, nil
+		return ir.Value{Object: obj}, nil
+	default:
+		raw, err := litLeaf(e)
+		if err != nil {
+			return ir.Value{}, err
+		}
+
+		return ir.Value{Literal: raw}, nil
+	}
+}
+
+// litLeaf marshals a scalar literal leaf (int/float/string/bool/null).
+func litLeaf(e syntax.Exp) (json.RawMessage, error) {
+	var v any
+
+	switch x := e.(type) {
+	case *syntax.IntExp:
+		v = x.Value
+	case *syntax.FloatExp:
+		v = x.Value
+	case *syntax.StringExp:
+		v = x.Value
+	case *syntax.BoolExp:
+		v = x.Value
+	case *syntax.NullExp:
+		v = nil
 	default:
 		return nil, &apperror.UnsupportedError{
-			Construct: "non-literal value",
-			Detail:    fmt.Sprintf("expression %T cannot appear as a constant", e),
+			Construct: "expression",
+			Detail:    fmt.Sprintf("%T cannot be lowered", e),
 		}
 	}
+
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("marshal literal: %w", err)
+	}
+
+	return raw, nil
 }
 
 func lowerInParams(p *syntax.InParams) []ir.Param {
