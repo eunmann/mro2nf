@@ -54,3 +54,5 @@ run_case fork_min testdata/fork_min \
     testdata/fork_min/expected/scale_all_outs.json
 run_case struct_min testdata/struct_min \
     testdata/struct_min/expected/stats_pipe_outs.json
+run_case modifiers_min testdata/modifiers_min \
+    testdata/modifiers_min/expected/top_outs.json

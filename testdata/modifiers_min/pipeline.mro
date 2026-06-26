@@ -1,0 +1,65 @@
+# Exercises a preflight stage, a nested pipeline call, and a disabled call.
+stage DOUBLE(
+    in  float x,
+    out float y,
+    src py    "stages/double",
+)
+
+stage TRIPLE(
+    in  float x,
+    out float y,
+    src py    "stages/triple",
+)
+
+stage CHECK(
+    in  float x,
+    src py    "stages/check",
+)
+
+pipeline INNER(
+    in  float x,
+    out float y,
+)
+{
+    call DOUBLE(
+        x = self.x,
+    )
+
+    return (
+        y = DOUBLE.y,
+    )
+}
+
+pipeline TOP(
+    in  float x,
+    in  bool  skip,
+    out float y,
+    out float z,
+)
+{
+    call CHECK(
+        x = self.x,
+    ) using (
+        preflight = true,
+    )
+
+    call INNER(
+        x = self.x,
+    )
+
+    call TRIPLE(
+        x = self.x,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        y = INNER.y,
+        z = TRIPLE.y,
+    )
+}
+
+call TOP(
+    x    = 5.0,
+    skip = true,
+)

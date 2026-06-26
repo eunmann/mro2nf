@@ -158,10 +158,32 @@ func genPipeline(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx)
 		}
 
 		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g)
+
+		if c.Disabled != nil {
+			genDisableProcess(b, p.Name, c, g)
+		}
 	}
 
 	genBindProcess(b, bindName(p.Name, "return"), p.Returns, g)
 	genPipelineWorkflow(b, p, prog)
+}
+
+// genDisableProcess emits a process that resolves a call's `disabled` flag into
+// disable.json at runtime.
+func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
+	block, arg := bindInputs(refCalls(disableBindings(c)))
+
+	fmt.Fprintf(b, `process %[1]s {
+  input:
+%[2]s  output:
+    path 'disable.json'
+  script:
+    """
+    %[3]s bind -spec ${projectDir}/bindspecs/%[1]s.json -pipeargs ${pipeargs}%[4]s -o disable.json
+    """
+}
+
+`, disableName(pipeline, c.Name), block, g.mre, arg)
 }
 
 // bindInputs renders the input block and the -inputs argument for a bind/fork
@@ -244,8 +266,7 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 	body.WriteString("  main:\n    pa = pipeargs.first()\n")
 
 	for _, c := range p.Calls {
-		genCallWiring(&body, p.Name, c)
-		_ = prog
+		genCallWiring(&body, p.Name, c, prog)
 	}
 
 	retName := bindName(p.Name, "return")
@@ -260,14 +281,16 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 `, p.Name, body.String(), retName)
 }
 
-// genCallWiring emits the BIND + stage-workflow invocation for one call, or the
-// fork/merge fan-out for a map call.
-func genCallWiring(b *strings.Builder, pipeline string, c ir.Call) {
+// genCallWiring emits the wiring for one call: a map-call fork/merge fan-out, a
+// disabled-aware branch, or a plain BIND + callee invocation.
+func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Program) {
+	callee := calleeWorkflow(prog, c.Callable)
+
 	if c.Mapped {
 		fork := forkName(pipeline, c.Name)
 		merge := mergeName(pipeline, c.Name)
 		fmt.Fprintf(b, "    %s(%s)\n", fork, bindCallArgs(c.Bindings))
-		fmt.Fprintf(b, "    out_%s = wf_%s(%s.out.flatten())\n", c.Name, c.Callable, fork)
+		fmt.Fprintf(b, "    out_%s = %s(%s.out.flatten())\n", c.Name, callee, fork)
 		fmt.Fprintf(b, "    %s(out_%s.collect())\n", merge, c.Name)
 		fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
 
@@ -276,7 +299,52 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call) {
 
 	bind := bindName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", bind, bindCallArgs(c.Bindings))
-	fmt.Fprintf(b, "    ch_%s = wf_%s(%s.out)\n", c.Name, c.Callable, bind)
+
+	if c.Disabled != nil {
+		genDisabledWiring(b, pipeline, c, callee)
+
+		return
+	}
+
+	fmt.Fprintf(b, "    ch_%s = %s(%s.out)\n", c.Name, callee, bind)
+}
+
+// genDisabledWiring runs the callee only when the resolved `disabled` flag is
+// false; disabled forks emit a null outputs file instead.
+func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee string) {
+	bind := bindName(pipeline, c.Name)
+	dis := disableName(pipeline, c.Name)
+	nulls := fmt.Sprintf("${projectDir}/nulls/%s__%s.json", pipeline, c.Name)
+
+	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c)))
+	fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s.out).branch { a, d ->
+        def off = new groovy.json.JsonSlurper().parse(d).disabled
+        run: !off
+        skip: off
+    }
+    r_%[1]s = %[4]s(g_%[1]s.run.map { a, d -> a })
+    s_%[1]s = g_%[1]s.skip.map { a, d -> file("%[5]s") }
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s)
+`, c.Name, bind, dis, callee, nulls)
+}
+
+// calleeWorkflow returns the Nextflow workflow name for a callable: stages are
+// wrapped as wf_<stage>; pipelines use their own name.
+func calleeWorkflow(prog *ir.Program, callable string) string {
+	if _, ok := prog.Stages[callable]; ok {
+		return "wf_" + callable
+	}
+
+	return callable
+}
+
+// disableBindings builds a one-entry binding list for a call's disabled ref.
+func disableBindings(c ir.Call) []ir.Binding {
+	return []ir.Binding{{Param: "disabled", Ref: c.Disabled}}
+}
+
+func disableName(pipeline, call string) string {
+	return "DISABLE_" + pipeline + "__" + call
 }
 
 // bindCallArgs renders the actual-argument list for a BIND invocation: the

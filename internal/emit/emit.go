@@ -69,7 +69,73 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
+	if err := writeDisableArtifacts(prog, opts.OutDir, specDir); err != nil {
+		return err
+	}
+
 	return writeEntryArgs(prog, opts.OutDir)
+}
+
+// writeDisableArtifacts emits, for every disabled call, its disable bindspec
+// and a null-outputs file used when the call is skipped at runtime.
+func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
+	nullsDir := filepath.Join(outDir, "nulls")
+
+	for _, name := range sortedKeys(prog.Pipelines) {
+		p := prog.Pipelines[name]
+
+		for _, c := range p.Calls {
+			if c.Disabled == nil {
+				continue
+			}
+
+			if err := os.MkdirAll(nullsDir, dirPerm); err != nil {
+				return fmt.Errorf("create nulls dir: %w", err)
+			}
+
+			spec := bind.Spec{"disabled": {Ref: &bind.Ref{
+				Kind: c.Disabled.Kind, ID: c.Disabled.ID, Output: c.Disabled.Output,
+			}}}
+			if err := writeJSONFile(filepath.Join(specDir, disableName(p.Name, c.Name)+".json"), spec); err != nil {
+				return err
+			}
+
+			nulls := nullOuts(prog, c.Callable)
+			if err := writeJSONFile(filepath.Join(nullsDir, p.Name+"__"+c.Name+".json"), nulls); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// nullOuts returns a map of a callable's output names to null.
+func nullOuts(prog *ir.Program, callable string) map[string]any {
+	out := map[string]any{}
+
+	if s, ok := prog.Stages[callable]; ok {
+		for _, p := range s.Out {
+			out[p.Name] = nil
+		}
+	}
+
+	if p, ok := prog.Pipelines[callable]; ok {
+		for _, param := range p.Out {
+			out[param.Name] = nil
+		}
+	}
+
+	return out
+}
+
+func writeJSONFile(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", filepath.Base(path), err)
+	}
+
+	return writeFile(path, data)
 }
 
 func writeBindSpecs(prog *ir.Program, specDir string) error {
