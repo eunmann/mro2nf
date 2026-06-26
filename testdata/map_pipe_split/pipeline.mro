@@ -1,0 +1,46 @@
+# Composition: a map call over a sub-pipeline whose body contains a SPLIT stage.
+# Exercises keyed-pipeline -> keyed-split nesting (fork identity threaded through
+# both layers).
+stage SUMSQ(
+    in  float[] values,
+    out float   total,
+    src py      "stages/sumsq",
+) split (
+    in  float   value,
+    out float   sq,
+)
+
+pipeline INNER(
+    in  float[] values,
+    out float   total,
+)
+{
+    call SUMSQ(
+        values = self.values,
+    )
+
+    return (
+        total = SUMSQ.total,
+    )
+}
+
+pipeline OUTER(
+    in  float[][] sets,
+    out float[]   totals,
+)
+{
+    map call INNER(
+        values = split self.sets,
+    )
+
+    return (
+        totals = INNER.total,
+    )
+}
+
+call OUTER(
+    sets = [
+        [1, 2],
+        [3],
+    ],
+)
