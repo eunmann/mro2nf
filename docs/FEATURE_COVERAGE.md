@@ -130,10 +130,22 @@ out of scope for a transpiler.
   2-D composite-key fork threading). The transpiler no longer emits an
   `UnsupportedError` for any map-call shape. (The `lower` stage still guards a
   genuinely unknown expression kind as defensive code.)
-- 🚫 items are `mrp`-runtime behaviors (live UI, content-based retry, mid-run VDR
-  timing, OOM auto-escalation) with no faithful Nextflow analog; the closest
-  testable guarantee (terminal filesystem state, output equivalence) is used
-  where applicable.
+- 🚫 items are `mrp`-runtime behaviors classified by *where* support would live;
+  none affects output equivalence (final `results/` match `mrp`):
+  - **content-based retry (ASSERT vs retryable)** — shim-implementable: the shim
+    already sees the `ASSERT:` error channel and could exit with a distinct code,
+    with the emitter mapping exit codes to a dynamic `errorStrategy`. A coarse
+    `errorStrategy 'retry'` is already emitted; fine classification is future work.
+  - **`--monitor` vmem enforcement** — shim-implementable: the shim spawns the
+    adapter and could impose a virtual-memory ceiling (`prlimit --as`) and kill on
+    breach, like mrp's cgroup monitor. Not yet wired.
+  - **VDR rolling/strict mid-run deletion** — *not* shim-level (a single phase has
+    no downstream-DAG view). For a volatile output with one consumer it is cleanly
+    emittable (inject the delete into that consumer's shim, removing the symlink
+    target); fan-out needs a common-descendant barrier or falls back to post-run
+    cleanup, since "last consumer" is a runtime fact. Future work; today the whole
+    `work/` tree is retained (higher peak disk, identical outputs).
+  - **live UI / HTTP API / OOM auto-escalation** — no faithful Nextflow analog.
 - Remaining ⚠️ items are resource-*allocation* fidelity (vmem/special directives,
   split-returned join overrides) — outputs are identical to mrp; only the
   requested scheduler resources differ — and storage-*layout* fidelity (flat
