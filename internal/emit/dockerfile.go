@@ -49,9 +49,11 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 		toCheck["stage "+name] = src
 	}
 
-	for what, src := range toCheck {
-		if _, err := os.Stat(src); err != nil {
-			return g, fmt.Errorf("container target: %s source %q: %w", what, src, err)
+	// Sorted so that when several sources are missing the reported one is stable
+	// (map iteration order is randomized), keeping the error reproducible.
+	for _, what := range sortedKeys(toCheck) {
+		if _, err := os.Stat(toCheck[what]); err != nil {
+			return g, fmt.Errorf("container target: %s source %q: %w", what, toCheck[what], err)
 		}
 	}
 
