@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/google/go-cmp/cmp"
 )
 
 const splitTestMRO = "../../testdata/split_test/pipeline.mro"

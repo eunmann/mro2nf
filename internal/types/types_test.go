@@ -7,10 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/google/go-cmp/cmp"
 )
 
 // upper rewrites a path to its uppercase form, so tests can assert exactly which

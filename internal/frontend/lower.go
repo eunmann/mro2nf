@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/martian-lang/martian/martian/syntax"
-
 	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // Lower converts a type-checked Martian AST into the transpiler IR.
