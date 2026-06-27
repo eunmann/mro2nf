@@ -130,3 +130,47 @@ func TestReadBundleEmpty(t *testing.T) {
 		t.Errorf("ReadBundle(\"\") = %v, %v; want nil, nil", got, err)
 	}
 }
+
+// TestCopyTreeDerefSymlink is the regression guard for the entry-file isolation
+// fault: Nextflow stages inputs as symlinks, and link(2) does not follow them, so
+// hard-linking a symlinked source would copy a dangling link into the bundle —
+// which then breaks once the bundle is staged into another isolated task. The
+// destination must be a real file carrying the target's content, not a symlink.
+func TestCopyTreeDerefSymlink(t *testing.T) {
+	dir := t.TempDir()
+
+	target := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(target, []byte("staged content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	link := filepath.Join(dir, "staged_link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(dir, "out", "copied.txt")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { // CopyTree's caller makes the parent
+		t.Fatal(err)
+	}
+	if err := shim.CopyTree(link, dst); err != nil {
+		t.Fatalf("CopyTree: %v", err)
+	}
+
+	// The copy must not itself be a symlink (a dangling link in the next task).
+	lst, err := os.Lstat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lst.Mode()&os.ModeSymlink != 0 {
+		t.Error("CopyTree produced a symlink; it must dereference to a real file")
+	}
+
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "staged content" {
+		t.Errorf("copied content = %q, want %q", got, "staged content")
+	}
+}

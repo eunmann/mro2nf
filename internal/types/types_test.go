@@ -2,6 +2,7 @@ package types_test
 
 import (
 	"encoding/json"
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -232,6 +233,22 @@ func TestCoerceScalars(t *testing.T) {
 		map[string]any{"b": json.Number("1e20")})
 	if big["b"] != json.Number("1e20") {
 		t.Errorf("out-of-range int leaf -> %v, want unchanged 1e20", big["b"])
+	}
+
+	// Boundary: 2^63 == float64(math.MaxInt64) (which rounds up); int64(2^63)
+	// wraps to MinInt64, so it must be left as the original number, not coerced.
+	boundary := tbl.CoerceScalars([]ir.Param{{Name: "b", BaseType: "int"}},
+		map[string]any{"b": json.Number("9223372036854775808")})
+	if boundary["b"] != json.Number("9223372036854775808") {
+		t.Errorf("2^63 int leaf -> %v (%T), want unchanged (would overflow to MinInt64)",
+			boundary["b"], boundary["b"])
+	}
+
+	// MinInt64 (-2^63) is exactly representable and must coerce, not be dropped.
+	minv := tbl.CoerceScalars([]ir.Param{{Name: "b", BaseType: "int"}},
+		map[string]any{"b": json.Number("-9223372036854775808.0")})
+	if minv["b"] != int64(math.MinInt64) {
+		t.Errorf("-2^63 int leaf -> %v (%T), want int64 MinInt64", minv["b"], minv["b"])
 	}
 
 	if got["f"] != json.Number("42.0") {

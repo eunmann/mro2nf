@@ -35,7 +35,7 @@ func TestRunSumSquaresComp(t *testing.T) {
 	work := t.TempDir()
 	ctx := context.Background()
 
-	defs, err := RunSplit(ctx, filepath.Join(work, "split"), adapter, stageArgs, res, inv)
+	defs, _, err := RunSplit(ctx, filepath.Join(work, "split"), adapter, stageArgs, res, inv)
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}

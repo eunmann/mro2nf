@@ -55,8 +55,11 @@ func runForkBind(_ context.Context, argv []string) error {
 
 	params, tbl := man.Params(prod.callable, prod.role), man.Table()
 
+	names := make([]string, len(forks))
+
 	for i, args := range forks {
 		name := fmt.Sprintf("fork_%05d", i)
+		names[i] = name
 
 		payload, err := rawToMap(args)
 		if err != nil {
@@ -68,8 +71,25 @@ func runForkBind(_ context.Context, argv []string) error {
 		}
 	}
 
-	// forkkeys.json carries the map keys for a map fork (null for an array fork)
-	// so merge can rebuild a keyed result.
+	return writeForkMeta(*dir, names, keys)
+}
+
+// writeForkMeta writes the two fork sidecar files into dir:
+//   - forknames.json: the fork bundle dir names, so a keyed (nested-map) workflow
+//     can enumerate forks without a java.io listFiles() (which cannot list an
+//     object-store s3:// work dir).
+//   - forkkeys.json: the map keys for a map fork (null for an array fork), so
+//     merge can rebuild a keyed result.
+func writeForkMeta(dir string, names, keys []string) error {
+	namesJSON, err := json.Marshal(names)
+	if err != nil {
+		return fmt.Errorf("marshal fork names: %w", err)
+	}
+
+	if err := writeRaw(filepath.Join(dir, "forknames.json"), namesJSON); err != nil {
+		return err
+	}
+
 	keysJSON := json.RawMessage("null")
 	if keys != nil {
 		if keysJSON, err = json.Marshal(keys); err != nil {
@@ -77,7 +97,7 @@ func runForkBind(_ context.Context, argv []string) error {
 		}
 	}
 
-	return writeRaw(filepath.Join(*dir, "forkkeys.json"), keysJSON)
+	return writeRaw(filepath.Join(dir, "forkkeys.json"), keysJSON)
 }
 
 // runMerge combines per-fork outputs into one map-call result: each named

@@ -1,0 +1,50 @@
+# Disabled nested map: OUTER maps INNER; INNER itself maps DBL with a per-fork
+# `disabled` modifier. When an outer fork's skip flag is true, that fork's whole
+# inner map yields null; otherwise every inner fork runs. Exercises the keyed
+# (nested) disable gate.
+stage DBL(
+    in  int x,
+    out int y,
+    src py  "stages/dbl",
+)
+
+pipeline INNER(
+    in  int[] xs,
+    in  bool  skip,
+    out int[] ys,
+)
+{
+    map call DBL(
+        x = split self.xs,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        ys = DBL.y,
+    )
+}
+
+pipeline OUTER(
+    in  int[][] sets,
+    in  bool[]  skips,
+    out int[][] yss,
+)
+{
+    map call INNER(
+        xs   = split self.sets,
+        skip = split self.skips,
+    )
+
+    return (
+        yss = INNER.ys,
+    )
+}
+
+call OUTER(
+    sets  = [
+        [1, 2],
+        [3],
+    ],
+    skips = [false, true],
+)

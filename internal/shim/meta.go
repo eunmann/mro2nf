@@ -72,20 +72,23 @@ func writeSkeletonOuts(meta string, names []string) error {
 	return writeJSON(filepath.Join(meta, "_outs"), outs)
 }
 
-// readStageDefs parses a split phase's _stage_defs into chunk definitions,
-// separating the __-prefixed resource keys from the data args.
-func readStageDefs(meta string) ([]ChunkDef, error) {
+// readStageDefs parses a split phase's _stage_defs into chunk definitions and
+// the optional join-phase resource override. The join override (Martian's
+// `{"join": {...}}` key) sets the JOIN phase's resources, overlaying the stage's
+// `using` block field-by-field — the same semantics as a per-chunk override.
+func readStageDefs(meta string) ([]ChunkDef, Resources, error) {
 	raw, err := readRaw(filepath.Join(meta, "_stage_defs"))
 	if err != nil {
-		return nil, err
+		return nil, Resources{}, err
 	}
 
 	var sd struct {
 		Chunks []map[string]json.RawMessage `json:"chunks"`
+		Join   map[string]json.RawMessage   `json:"join"`
 	}
 
 	if err := json.Unmarshal(raw, &sd); err != nil {
-		return nil, fmt.Errorf("parse _stage_defs: %w", err)
+		return nil, Resources{}, fmt.Errorf("parse _stage_defs: %w", err)
 	}
 
 	defs := make([]ChunkDef, 0, len(sd.Chunks))
@@ -93,28 +96,40 @@ func readStageDefs(meta string) ([]ChunkDef, error) {
 		defs = append(defs, splitChunk(c))
 	}
 
-	return defs, nil
+	join, _ := parseResources(sd.Join)
+
+	return defs, join, nil
 }
 
 func splitChunk(chunk map[string]json.RawMessage) ChunkDef {
-	def := ChunkDef{Args: make(map[string]json.RawMessage, len(chunk))}
+	res, args := parseResources(chunk)
 
-	for key, val := range chunk {
+	return ChunkDef{Args: args, Resources: res}
+}
+
+// parseResources splits a Martian arg map into its __-prefixed resource keys and
+// the remaining data args. Used for both per-chunk defs and the join override.
+func parseResources(m map[string]json.RawMessage) (Resources, map[string]json.RawMessage) {
+	var res Resources
+
+	args := make(map[string]json.RawMessage, len(m))
+
+	for key, val := range m {
 		switch key {
 		case "__threads":
-			def.Resources.Threads = asFloat(val)
+			res.Threads = asFloat(val)
 		case "__mem_gb":
-			def.Resources.MemGB = asFloat(val)
+			res.MemGB = asFloat(val)
 		case "__vmem_gb":
-			def.Resources.VMemGB = asFloat(val)
+			res.VMemGB = asFloat(val)
 		case "__special":
-			_ = json.Unmarshal(val, &def.Resources.Special) // best-effort; non-string leaves it empty
+			_ = json.Unmarshal(val, &res.Special) // best-effort; non-string leaves it empty
 		default:
-			def.Args[key] = val
+			args[key] = val
 		}
 	}
 
-	return def
+	return res, args
 }
 
 // mergeArgs builds a chunk's _args: the stage args, overlaid with the chunk's

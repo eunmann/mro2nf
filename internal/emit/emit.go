@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/martian-nextflow/internal/apperror"
 	"github.com/eunmann/martian-nextflow/internal/bind"
 	"github.com/eunmann/martian-nextflow/internal/ir"
 	"github.com/eunmann/martian-nextflow/internal/shim"
@@ -23,7 +25,45 @@ import (
 const (
 	dirPerm  = 0o755
 	filePerm = 0o644
+	// assetsDir holds types.json + bindspecs/. Each task stages the individual
+	// files it needs (the shared types.json, plus its own bindspec for a bind/fork
+	// process) as `path` inputs, so they are present in an isolated task container
+	// (AWS Batch + S3, HealthOmics) and not just on a shared filesystem — and a
+	// task transfers only its own bindspec, not every call's.
+	assetsDir = "_assets"
+	// entrySentinel is a baked empty file fed to BUILD_ENTRY_ARGS for a file-typed
+	// entry input the run did not override, so the process still has a staged path
+	// input (and keeps the baked default). Lives under _assets/ so it is packaged
+	// for HealthOmics. See genEntry.
+	entrySentinel = ".entry_empty"
 )
+
+// hasFileLeaf reports whether a param has any file leaf — directly (a
+// file/dir/path at any array/map dimension) or nested inside a struct field
+// (recursively). Such an entry input is staged through Nextflow so its file
+// leaves are localized into the (possibly isolated) task; see genEntry.
+func hasFileLeaf(p ir.Param, structs map[string]*ir.StructType) bool {
+	if p.IsFile {
+		return true
+	}
+
+	st, ok := structs[p.BaseType]
+	if !ok {
+		return false
+	}
+
+	return slices.ContainsFunc(st.Fields, func(f ir.Param) bool {
+		return hasFileLeaf(f, structs)
+	})
+}
+
+// hasStagedFileEntry reports whether the entry callable has any file-bearing
+// input staged as a run parameter (so the sentinel file is worth baking).
+func hasStagedFileEntry(prog *ir.Program) bool {
+	return slices.ContainsFunc(entryInParams(prog), func(p ir.Param) bool {
+		return hasFileLeaf(p, prog.Structs)
+	})
+}
 
 // errNoEntry indicates the program has no top-level call to drive.
 var errNoEntry = errors.New("program has no entry call")
@@ -41,6 +81,10 @@ type Options struct {
 	Mrjob string
 	// MROFile is the source MRO filename recorded in _jobinfo.
 	MROFile string
+	// MRODir is the source .mro's directory. A relative file path baked into an
+	// entry input default is resolved against it so the baked entry_args bundle is
+	// self-contained regardless of the transpile working directory.
+	MRODir string
 	// StageCode maps each stage name to its (absolute) stage code path.
 	StageCode map[string]string
 	// Container, when set, is the image used for every process (process.container
@@ -49,6 +93,8 @@ type Options struct {
 	// Monitor enables per-stage virtual-memory enforcement in the shim (the mrp
 	// --monitor analog).
 	Monitor bool
+	// Target is the execution backend the project is shaped for (default local).
+	Target Target
 }
 
 // Emit writes the Nextflow project for prog into opts.OutDir.
@@ -57,13 +103,27 @@ func Emit(prog *ir.Program, opts Options) error {
 		return errNoEntry
 	}
 
-	specDir := filepath.Join(opts.OutDir, "bindspecs")
+	if err := checkSupported(prog); err != nil {
+		return err
+	}
+
+	// types.json and the bindspecs live under _assets/. A process script can only
+	// read files staged into its (isolated) task dir — referencing them via
+	// ${projectDir} works on a shared filesystem but not on AWS Batch + S3, where
+	// the worker is a separate container. Each task stages the specific asset files
+	// it needs (types.json, and its own bindspec for binds) so both cases work.
+	specDir := filepath.Join(opts.OutDir, assetsDir, "bindspecs")
 	modDir := filepath.Join(opts.OutDir, "modules")
 
 	for _, dir := range []string{specDir, modDir} {
 		if err := os.MkdirAll(dir, dirPerm); err != nil {
 			return fmt.Errorf("create output dirs: %w", err)
 		}
+	}
+
+	target, err := ParseTarget(string(opts.Target))
+	if err != nil {
+		return err
 	}
 
 	g := genCtx{
@@ -73,9 +133,29 @@ func Emit(prog *ir.Program, opts Options) error {
 		shell:   opts.Shell,
 		mrjob:   opts.Mrjob,
 		monitor: opts.Monitor,
+		target:  target,
 		code:    opts.StageCode,
 	}
 
+	// Container targets bake in-container paths and ship a self-contained Docker
+	// build context (mre + adapters + stage code), so the image — not the host —
+	// supplies the runtime.
+	if target.isContainer() {
+		cb, err := containerBuild(opts, target)
+		if err != nil {
+			return err
+		}
+
+		g.mre, g.shell, g.mrjob, g.code = cb.mre, cb.shell, cb.mrjob, cb.code
+	}
+
+	return writeProject(prog, opts, target, g, specDir, modDir)
+}
+
+// writeProject renders every file of the Nextflow project (modules, main.nf,
+// config, bindspecs, type manifest, disable artifacts, target packaging, and the
+// entry args) into opts.OutDir.
+func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specDir, modDir string) error {
 	if err := writeModules(prog, modDir, g); err != nil {
 		return err
 	}
@@ -84,7 +164,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(configFile(opts.Container))); err != nil {
+	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(configFile(opts.Container, target))); err != nil {
 		return err
 	}
 
@@ -96,11 +176,25 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	if err := types.BuildManifest(prog).Write(filepath.Join(opts.OutDir, "types.json")); err != nil {
+	if err := types.BuildManifest(prog).Write(filepath.Join(opts.OutDir, assetsDir, "types.json")); err != nil {
 		return fmt.Errorf("write types manifest: %w", err)
 	}
 
-	return writeEntryArgs(prog, opts.OutDir)
+	if target == TargetHealthOmics {
+		if err := writeHealthOmicsPackaging(prog, opts.OutDir); err != nil {
+			return err
+		}
+	}
+
+	if hasStagedFileEntry(prog) {
+		// A staged-but-unset file input is fed this empty sentinel so BUILD_ENTRY_ARGS
+		// still has its path input (and keeps the baked default); see genEntry.
+		if err := writeFile(filepath.Join(opts.OutDir, assetsDir, entrySentinel), []byte{}); err != nil {
+			return err
+		}
+	}
+
+	return writeEntryArgs(prog, opts.OutDir, opts.MRODir)
 }
 
 // writeDisableArtifacts emits, for every disabled call, its disable bindspec
@@ -165,6 +259,57 @@ func writeJSONFile(path string, v any) error {
 	return writeFile(path, data)
 }
 
+// checkSupported rejects programs that use a Martian construct with no faithful
+// Nextflow lowering before any output is written. It reuses mapProjectDepth's
+// shape analysis: a negative depth marks an array-of-typed-map field projection
+// (array<map<S>>.field), which the binder would silently mis-navigate.
+func checkSupported(prog *ir.Program) error {
+	for _, name := range sortedKeys(prog.Pipelines) {
+		p := prog.Pipelines[name]
+
+		bindings := append([]ir.Binding{}, p.Returns...)
+		for _, c := range p.Calls {
+			bindings = append(bindings, c.Bindings...)
+		}
+
+		for _, b := range bindings {
+			if err := checkValueRefs(prog, p, b.Value); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkValueRefs walks a binding value tree and rejects any ref whose projection
+// shape is unsupported (mapProjectDepth < 0).
+func checkValueRefs(prog *ir.Program, p *ir.Pipeline, v ir.Value) error {
+	switch {
+	case v.Array != nil:
+		for _, e := range v.Array {
+			if err := checkValueRefs(prog, p, e); err != nil {
+				return err
+			}
+		}
+	case v.Object != nil:
+		for _, e := range v.Object {
+			if err := checkValueRefs(prog, p, e); err != nil {
+				return err
+			}
+		}
+	case v.Ref != nil:
+		if mapProjectDepth(prog, p, v.Ref) < 0 {
+			return &apperror.UnsupportedError{
+				Construct: "array-of-map field projection",
+				Detail:    fmt.Sprintf("%s.%s in pipeline %s", v.Ref.ID, v.Ref.Output, p.Name),
+			}
+		}
+	}
+
+	return nil
+}
+
 // mapProjectDepth returns how many leading path segments a ref navigates before
 // it must project the remainder over a typed map's values (a map<S>.field
 // projection). It returns 0 when there is no typed-map projection — arrays
@@ -204,7 +349,18 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
 	}
 
 	for i := 1; i < len(segs); i++ {
-		if cur == nil || curArray > 0 {
+		if cur == nil {
+			return 0
+		}
+
+		if curArray > 0 {
+			// A field beneath a plain array auto-projects at runtime (depth 0);
+			// a field beneath an array of typed maps (array<map<S>>.field) has no
+			// faithful lowering — signal it with -1 so the emitter rejects it.
+			if curMap > 0 {
+				return -1
+			}
+
 			return 0
 		}
 
@@ -333,8 +489,9 @@ func writeSpec(specDir, name string, prog *ir.Program, p *ir.Pipeline, bindings 
 
 // writeEntryArgs resolves the top-level call's inputs and writes them as the
 // entry_args bundle, staging any file-typed entry inputs so the run is
-// self-contained from the start.
-func writeEntryArgs(prog *ir.Program, outDir string) error {
+// self-contained from the start. Relative file-default paths are resolved
+// against mroDir so the bundle does not depend on the transpile working dir.
+func writeEntryArgs(prog *ir.Program, outDir, mroDir string) error {
 	args, err := bind.Resolve(bindSpec(prog, nil, prog.Entry.Bindings), nil, nil)
 	if err != nil {
 		return fmt.Errorf("resolve entry args: %w", err)
@@ -352,11 +509,39 @@ func writeEntryArgs(prog *ir.Program, outDir string) error {
 		}
 	}
 
-	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), payload, entryInParams(prog), types.NewTable(prog.Structs)); err != nil {
+	params := entryInParams(prog)
+	tbl := types.NewTable(prog.Structs)
+
+	if mroDir != "" {
+		if payload, err = resolveEntryFileLeaves(payload, params, tbl, mroDir); err != nil {
+			return err
+		}
+	}
+
+	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), payload, params, tbl); err != nil {
 		return fmt.Errorf("write entry args bundle: %w", err)
 	}
 
 	return nil
+}
+
+// resolveEntryFileLeaves rewrites every relative file-leaf path in the entry
+// payload to an absolute path under mroDir, so a baked default like
+// "input/reads.txt" resolves regardless of the transpile working directory. URIs
+// (e.g. s3://) and absolute paths pass through unchanged.
+func resolveEntryFileLeaves(payload map[string]any, params []ir.Param, tbl *types.Table, mroDir string) (map[string]any, error) {
+	resolved, err := tbl.Apply(params, payload, func(path string) (string, error) {
+		if path == "" || filepath.IsAbs(path) || strings.Contains(path, "://") {
+			return path, nil
+		}
+
+		return filepath.Join(mroDir, path), nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve entry file defaults: %w", err)
+	}
+
+	return resolved, nil
 }
 
 // entryInParams returns the entry callable's input parameters.
@@ -413,39 +598,112 @@ func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 
 		return bind.Entry{Object: obj}
 	case v.Ref != nil:
+		// checkSupported rejects the negative (unsupported) case before emit, so
+		// clamp defensively here for any ref reached outside that pass.
 		return bind.Entry{Ref: &bind.Ref{
 			Kind:     v.Ref.Kind,
 			ID:       v.Ref.ID,
 			Output:   v.Ref.Output,
-			MapDepth: mapProjectDepth(prog, p, v.Ref),
+			MapDepth: max(mapProjectDepth(prog, p, v.Ref), 0),
 		}}
 	default:
 		return bind.Entry{Literal: v.Literal}
 	}
 }
 
-func configFile(container string) string {
-	containerLine := ""
-	if container != "" {
-		containerLine = "    container = '" + container + "'\n"
+// configFile renders nextflow.config for the chosen target: the common params +
+// retry/process block, the per-target executor wiring, and (cloud targets) a
+// parameterized container image.
+func configFile(container string, target Target) string {
+	var b strings.Builder
+
+	b.WriteString(configCommon(target))
+	b.WriteString(configProcess(container, target))
+
+	switch target {
+	case TargetAWSBatch:
+		b.WriteString(configAWSBatch())
+	case TargetHealthOmics:
+		b.WriteString(configHealthOmics())
+	case TargetLocal:
+		b.WriteString(configProfiles())
 	}
 
-	assertExit := strconv.Itoa(shim.AssertExitCode)
+	return b.String()
+}
 
-	return `params.outdir = 'results'
-// Cloud knobs the awsbatch profile reads; override with --aws_queue/--aws_region.
+// configCommon renders the params shared by every target.
+func configCommon(target Target) string {
+	common := outdirConfig(target) + `
+// Martian 'special' scheduler-resource map (the MRO_JOBRESOURCES analog): maps a
+// stage's special key to scheduler options applied via clusterOptions on grid
+// executors. Empty by default (no-op); override per deployment, e.g.
+// --job_resources.highmem='--partition=highmem' or in a -params-file.
+params.job_resources = [:]
+`
+	if target == TargetAWSBatch || target == TargetLocal {
+		common += `// Cloud knobs the awsbatch profile reads; override with --aws_queue/--aws_region.
 params.aws_queue = null
 params.aws_region = null
+`
+	}
 
+	return common
+}
+
+// outdirConfig renders the params.outdir declaration. AWS Batch defaults to no
+// curated publish (params.outdir = null): every stage's declared outputs are
+// already uploaded to the S3 work dir by the Batch executor, so the canonical
+// results live there regardless. An operator opts into a stable S3 publish
+// location with --aws_outdir s3://<bucket>/out. Local and HealthOmics always
+// publish (HealthOmics only exports its magic pubdir path).
+func outdirConfig(target Target) string {
+	if target == TargetAWSBatch {
+		return `// Curated publish location for final outputs. Null by default: the canonical
+// outputs already live in the S3 work dir (-work-dir s3://...); set
+// --aws_outdir s3://<bucket>/out to also copy them to a stable S3 location.
+params.aws_outdir = null
+params.outdir = params.aws_outdir
+`
+	}
+
+	return "params.outdir = '" + target.publishDir() + "'\n"
+}
+
+// configProcess renders the process{} block: the content-based retry strategy
+// and, for container targets, a parameterized default image.
+func configProcess(container string, target Target) string {
+	assertExit := strconv.Itoa(shim.AssertExitCode)
+
+	containerLines := ""
+	if target.isContainer() {
+		// Cloud backends run every task in a container; expose the image as a param
+		// so an ECR URI can be supplied/validated at run time (required by
+		// HealthOmics). Per-stage overrides go in withName: blocks.
+		containerLines = "params.container = " + quoteOrNull(container) + "\n"
+	}
+
+	block := containerLines + `
 // Content-based retry (mrp --autoretry analog): the shim exits ` + assertExit + ` for an
 // ASSERT-class (non-retryable) stage failure and 1 for an ordinary (retryable)
-// one, so terminate on ASSERT and retry everything else. Cap concurrency with
-// the standard '-process.maxForks' / '-qs' flags; local pools with '-process.cpus'.
+// one, so terminate on ASSERT and retry everything else.
 process {
     errorStrategy = { task.exitStatus == ` + assertExit + ` ? 'terminate' : 'retry' }
     maxRetries = 2
-` + containerLine + `}
+`
+	switch {
+	case target.isContainer():
+		block += "    container = params.container\n"
+	case container != "":
+		block += "    container = '" + container + "'\n"
+	}
 
+	return block + "}\n"
+}
+
+// configProfiles renders the local + HPC executor profiles (the local target).
+func configProfiles() string {
+	return `
 profiles {
     standard { process.executor = 'local' }
     slurm    { process.executor = 'slurm' }
@@ -460,6 +718,47 @@ profiles {
     k8s { process.executor = 'k8s' }
 }
 `
+}
+
+// configAWSBatch wires the AWS Batch executor with classic aws-CLI S3 staging.
+// Run with: nextflow run main.nf --aws_queue <q> --aws_region <r> \
+//   -work-dir s3://<bucket>/work --container <ecr-uri> [--aws_outdir s3://<bucket>/out]
+func configAWSBatch() string {
+	return `
+// AWS Batch + S3 (classic aws-CLI staging). Requirements:
+//  - workDir on S3:        -work-dir s3://<bucket>/work
+//  - a container image:    --container <ecr-uri>  (see Dockerfile)
+//  - the aws CLI present in the image, OR set --aws_cli_path for a custom AMI.
+//  - (optional) a publish location: --aws_outdir s3://<bucket>/out (else the
+//    canonical outputs remain in the S3 work dir only).
+params.aws_cli_path = null
+process.executor = 'awsbatch'
+process.queue    = params.aws_queue
+aws.region       = params.aws_region
+aws.batch.cliPath = params.aws_cli_path
+`
+}
+
+// configHealthOmics shapes the config for AWS HealthOmics private workflows:
+// execution is fully managed (no executor/workDir), outputs go to the magic
+// publishDir, and the Nextflow version is pinned to a supported release.
+func configHealthOmics() string {
+	return `
+// AWS HealthOmics manages execution (instances, containers, the run filesystem),
+// so no executor/workDir is set here. Outputs are exported from params.outdir
+// (/mnt/workflow/pubdir). Containers must be private-ECR URIs (--container);
+// tasks have no internet, so everything must be baked into the image.
+manifest.nextflowVersion = '!>=23.10.0'
+`
+}
+
+// quoteOrNull renders a Groovy string literal, or `null` when empty.
+func quoteOrNull(s string) string {
+	if s == "" {
+		return "null"
+	}
+
+	return "'" + s + "'"
 }
 
 func writeFile(path string, data []byte) error {

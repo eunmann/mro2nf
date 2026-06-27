@@ -122,9 +122,12 @@ func coerceNumber(n json.Number, base string) any {
 
 	// A whole-number float in int64 range coerces to an integer; out-of-range
 	// values (e.g. 1e20) are left as the original number rather than overflowing
-	// into a garbage int.
+	// into a garbage int. The upper bound is strict: float64(math.MaxInt64)
+	// rounds up to 2^63, so `<= MaxInt64` would admit exactly 2^63, which
+	// int64() then wraps to MinInt64; `< MaxInt64` rejects it. MinInt64 (-2^63)
+	// is exactly representable, so the lower bound stays inclusive.
 	if f, err := n.Float64(); err == nil && f == math.Trunc(f) &&
-		f >= math.MinInt64 && f <= math.MaxInt64 {
+		f >= math.MinInt64 && f < math.MaxInt64 {
 		return int64(f)
 	}
 

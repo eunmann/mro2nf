@@ -1,0 +1,14 @@
+stage COMPSUM(
+    in  float[] values,
+    out float   sum,
+    src comp    "stages/comp_sum.py",
+) split using (
+    in  float   value,
+    out float   square,
+)
+pipeline CS(in float[] values, out float sum,)
+{
+    call COMPSUM(values = self.values,)
+    return (sum = COMPSUM.sum,)
+}
+call CS(values = [1, 2, 3],)

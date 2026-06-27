@@ -1,0 +1,10 @@
+filetype txt;
+stage WRITEVAL(in int x, out txt f, src py "stages/writeval",)
+stage SUMFILES(in txt[] fs, out int total, src py "stages/sumfiles",)
+pipeline FA(in int[] xs, out int total,)
+{
+    map call WRITEVAL(x = split self.xs,)
+    call SUMFILES(fs = WRITEVAL.f,)
+    return (total = SUMFILES.total,)
+}
+call FA(xs = [10, 20, 30],)

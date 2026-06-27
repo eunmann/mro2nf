@@ -19,6 +19,7 @@ type genCtx struct {
 	shell   string
 	mrjob   string
 	monitor bool
+	target  Target
 	code    map[string]string // stage name -> stage code path
 }
 
@@ -42,7 +43,7 @@ func (g genCtx) stageCmd(phase, code string, lang ir.Lang) string {
 // producerArgs renders the flags a bundle-producing mre command needs to stage
 // the file leaves of callable's params under the given role.
 func (g genCtx) producerArgs(callable, role string) string {
-	return fmt.Sprintf(" -types '${projectDir}/types.json' -callable '%s' -role %s", callable, role)
+	return fmt.Sprintf(" -types 'types.json' -callable '%s' -role %s", callable, role)
 }
 
 // generateStageModule renders a stage's module: its processes and the wf_<stage>
@@ -80,7 +81,7 @@ func generateMain(prog *ir.Program, g genCtx) string {
 
 	fmt.Fprintf(&b, "include { %s } from './modules/%s'\n\n", export, strings.TrimPrefix(src, "./"))
 	genPublish(&b, prog.Entry.Callable, g)
-	genEntry(&b, export)
+	genEntry(&b, prog, export, g)
 
 	return b.String()
 }
@@ -134,6 +135,10 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 			genKeyedForkBindProcess(b, p.Name, c, g)
 			genKeyedMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 
+			if c.Disabled != nil {
+				genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
+			}
+
 			continue
 		}
 
@@ -160,7 +165,7 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
     tuple val(key), path("%[6]s", type: 'dir')
   script:
     """
-    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o %[6]s%[5]s
+    '%[3]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -o %[6]s%[5]s
     """
 }
 
@@ -181,6 +186,11 @@ func keyedInputs(refs []string) (string, string) {
 	}
 
 	in.WriteString("\n")
+	// The shared type manifest and this process's own bindspec are staged as two
+	// individual files (not the whole _assets dir), so a task transfers only the
+	// one bindspec it needs rather than every call's spec; see assetsDir.
+	in.WriteString("    path 'types.json'\n")
+	in.WriteString("    path 'spec.json'\n")
 
 	arg := ""
 	if len(pairs) > 0 {
@@ -205,12 +215,12 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
   script:
     """
     mkdir -p forks
-    '%[3]s' forkbind -spec '${projectDir}/bindspecs/%[4]s.json' -pipeargs ${pipeargs}%[5]s -chunkdir forks%[6]s
-    mv forks/forkkeys.json forkkeys.json
+    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks%[5]s
+    mv -f forks/forkkeys.json forkkeys.json
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, bindName(pipeline, c.Name), arg, g.producerArgs(c.Callable, types.RoleIn))
+`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn))
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
@@ -219,6 +229,7 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
     tuple val(key), path(souts), path('forkkeys.json')
+    path 'types.json'
   output:
     tuple val(key), path('merged', type: 'dir')
   script:
@@ -238,13 +249,14 @@ func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline) {
 	var body strings.Builder
 
 	body.WriteString("  main:\n    pa_l = keyed.toList()\n")
+	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
 	for _, c := range p.Calls {
 		genKeyedCallBody(&body, p.Name, c)
 	}
 
 	retName := bindName(p.Name, "return")
-	fmt.Fprintf(&body, "    %s_K(%s)\n", retName, keyedBindInput(p.Returns))
+	fmt.Fprintf(&body, "    %s_K(%s)\n", retName, keyedBindCall(p.Returns, retName))
 
 	fmt.Fprintf(b, `workflow wf_%s_map {
   take: keyed
@@ -269,7 +281,7 @@ func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
 
 	bind := bindName(pipeline, c.Name)
 	alias := keyedCallAlias(pipeline, c.Name)
-	fmt.Fprintf(body, "    %s_K(%s)\n", bind, keyedBindInput(c.Bindings))
+	fmt.Fprintf(body, "    %s_K(%s)\n", bind, keyedBindCall(c.Bindings, bind))
 
 	if c.Disabled == nil {
 		fmt.Fprintf(body, "    ch_%s_l = %s(%s_K.out).toList()\n", c.Name, alias, bind)
@@ -279,9 +291,9 @@ func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
 
 	dis := disableName(pipeline, c.Name)
 	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
-	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindInput(disableBindings(c)))
+	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
 	fmt.Fprintf(body, `    g_%[1]s = %[2]s_K.out.join(%[3]s_K.out).branch { key, args, d ->
-        def off = new groovy.json.JsonSlurper().parseText(file("${d}/data.json").text).disabled
+        def off = new groovy.json.JsonSlurper().parseText(d.resolve('data.json').text).disabled
         run: !off
         skip: off
     }
@@ -302,12 +314,52 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
 	merge := mergeName(pipeline, c.Name)
 	alias := keyedCallAlias(pipeline, c.Name)
 
-	fmt.Fprintf(body, "    %s_K(%s)\n", fork, keyedBindInput(c.Bindings))
-	fmt.Fprintf(body, "    ik_%[1]s = %[2]s_K.out.forks.flatMap { ok, d -> d.listFiles().findAll { it.name.startsWith('fork_') }.sort { it.name }.collect { f -> tuple(\"${ok}~${f.name}\", f) } }\n", c.Name, fork)
+	// A disabled nested map is all-or-nothing per outer fork: the disable flag is
+	// resolved per key and gates whether that fork's inner map runs at all. The
+	// FORKBIND reuses the call's bind spec (see genKeyedForkBindProcess).
+	forkInput := keyedBindCall(c.Bindings, bindName(pipeline, c.Name))
+	if c.Disabled != nil {
+		forkInput = genKeyedMappedDisableGate(body, pipeline, c)
+	}
+
+	fmt.Fprintf(body, "    %s_K(%s)\n", fork, forkInput)
+	// Enumerate the per-fork bundle dirs from forknames.json rather than a java.io
+	// listFiles() call, which cannot list an object-store (s3://) work dir. Reading
+	// the staged names file and constructing each fork path is object-store-safe.
+	fmt.Fprintf(body, "    ik_%[1]s = %[2]s_K.out.forks.flatMap { ok, d -> new groovy.json.JsonSlurper().parseText(d.resolve('forknames.json').text).collect { fn -> tuple(\"${ok}~${fn}\", d.resolve(fn)) } }\n", c.Name, fork)
 	fmt.Fprintf(body, "    io_%[1]s = %[2]s(ik_%[1]s)\n", c.Name, alias)
 	fmt.Fprintf(body, "    mj_%[1]s = %[2]s_K.out.keys.join(io_%[1]s.map { ck, bdl -> tuple(ck[0..<ck.lastIndexOf('~')], bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, so ?: [], fk) }\n", c.Name, fork)
-	fmt.Fprintf(body, "    %s_K(mj_%s)\n", merge, c.Name)
+	fmt.Fprintf(body, "    %s_K(mj_%s, types)\n", merge, c.Name)
+
+	if c.Disabled != nil {
+		// Skipped outer forks bypass FORKBIND/MERGE entirely; mix their null
+		// bundles back in so every outer key has a result.
+		fmt.Fprintf(body, "    ch_%[1]s_l = %[2]s_K.out.mix(sk_%[1]s).toList()\n", c.Name, merge)
+
+		return
+	}
+
 	fmt.Fprintf(body, "    ch_%[1]s_l = %[2]s_K.out.toList()\n", c.Name, merge)
+}
+
+// genKeyedMappedDisableGate emits a keyed DISABLE bind and a per-outer-fork
+// run/skip branch for a disabled nested map call. It returns the run-branch
+// channel expression (the FORKBIND input with the disable-flag bundle stripped)
+// and emits sk_<call>, the keyed null bundles for skipped outer forks.
+func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call) string {
+	dis := disableName(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+
+	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
+	fmt.Fprintf(body, `    gk_%[1]s = %[2]s.join(%[3]s_K.out).branch { row ->
+        def off = new groovy.json.JsonSlurper().parseText(row[-1].resolve('data.json').text).disabled
+        run: !off
+        skip: off
+    }
+    sk_%[1]s = gk_%[1]s.skip.map { row -> tuple(row[0], file("%[4]s")) }
+`, c.Name, keyedBindInput(c.Bindings), dis, nulls)
+
+	return fmt.Sprintf("gk_%s.run.map { row -> row[0..<row.size() - 1] }, types, %s", c.Name, specFile(bindName(pipeline, c.Name)))
 }
 
 // keyedBindInput renders the channel expression feeding a keyed bind: the fork
@@ -321,6 +373,22 @@ func keyedBindInput(bindings []ir.Binding) string {
 	}
 
 	return expr.String()
+}
+
+// keyedBindCall renders a keyed process invocation argument list: the keyed
+// channel expression plus the two final broadcast inputs every bind/fork process
+// takes — the shared type manifest and this process's own bindspec (specName).
+// Used where keyedBindInput feeds a process call (not where it is a channel
+// expression transformed further, e.g. the disable gate's join).
+func keyedBindCall(bindings []ir.Binding, specName string) string {
+	return keyedBindInput(bindings) + ", types, " + specFile(specName)
+}
+
+// specFile is the head-node expression that resolves a call's bindspec so
+// Nextflow stages it into the task as `spec.json`. Each bind/fork/disable
+// process stages only its own spec rather than every call's (see assetsDir).
+func specFile(name string) string {
+	return `file("${projectDir}/_assets/bindspecs/` + name + `.json")`
 }
 
 // genPipeProcesses emits the BIND/FORK/MERGE/DISABLE helper processes for a
@@ -378,24 +446,25 @@ func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mai
 	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang)
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT_K {
-  cpus %[2]d
-  memory '%[3]d GB'
+%[2]s
   input:
     tuple val(key), path(args)
+    path 'types.json'
   output:
     tuple val(key), path('chunks.json'), emit: defs
+    tuple val(key), path('joinres.json'), emit: joinres
     tuple val(key), path('chunk_*', type: 'dir'), emit: chunks, optional: true
   script:
     """
-    %[4]s -args ${args} -work . -o chunks.json -chunkdir .%[5]s
+    %[4]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[5]s
     """
 }
 
 process %[1]s_MAIN_K {
-  cpus { (res?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(res.threads as double) as int) : %[2]d }
-  memory { (res?.mem_gb ?: 0) > 0 ? "${res.mem_gb} GB" : '%[3]d GB' }
+%[12]s
   input:
     tuple val(key), val(res), path(chunk), path(args)
+    path 'types.json'
   output:
     tuple val(key), path("out_${chunk.baseName}", type: 'dir')
   script:
@@ -405,21 +474,22 @@ process %[1]s_MAIN_K {
 }
 
 process %[1]s_JOIN_K {
-  cpus %[2]d
-  memory '%[3]d GB'
+%[13]s
   input:
-    tuple val(key), path(souts), path(args), path(defs)
+    tuple val(key), val(join), path(souts), path(args), path(defs)
+    path 'types.json'
   output:
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[8]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[10]s'%[11]s -work . -o outs__${key}
+    %[8]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[10]s'%[11]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
     """
 }
 
-`, s.Name, cpusOf(s), memOf(s), splitCmd, g.producerArgs(s.Name, types.RoleChunkIn),
+`, s.Name, stageDirectives(s, ""), memOf(s), splitCmd, g.producerArgs(s.Name, types.RoleChunkIn),
 		base, mainOuts, joinCmd, g.producerArgs(s.Name, types.RoleMainOut),
-		joinOuts, g.producerArgs(s.Name, types.RoleOut))
+		joinOuts, g.producerArgs(s.Name, types.RoleOut),
+		stageDirectives(s, "res"), stageDirectives(s, "join"))
 }
 
 // genKeyedSplitWorkflow wires the keyed split processes. multiMap duplicates the
@@ -429,15 +499,18 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 	fmt.Fprintf(b, `workflow wf_%[1]s_map {
   take: keyed
   main:
+    types = file("${projectDir}/_assets/types.json")
     ch = keyed.multiMap { k, a -> sp: tuple(k, a); mn: tuple(k, a); jn: tuple(k, a) }
-    %[1]s_SPLIT_K(ch.sp)
-    chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> (cs instanceof List ? cs : [cs]).collect { c -> tuple(key, new groovy.json.JsonSlurper().parseText(file("${c}/data.json").text).resources, c) } }
-    %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0))
-    // Drive the join from the full fork set (ch.jn) with a remainder join, so a
-    // fork whose split produced zero chunks (no groupTuple group) still runs
-    // JOIN_K — with an empty chunk-outs list — instead of being dropped.
-    joined = ch.jn.join(%[1]s_SPLIT_K.out.defs).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[3] ?: [], t[1], t[2]) }
-    %[1]s_JOIN_K(joined)
+    %[1]s_SPLIT_K(ch.sp, types)
+    chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> (cs instanceof List ? cs : [cs]).collect { c -> tuple(key, new groovy.json.JsonSlurper().parseText(c.resolve('data.json').text).resources, c) } }
+    %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0), types)
+    joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, new groovy.json.JsonSlurper().parseText(f.text)) }
+    // Drive the join from the full fork set (ch.jn) with a remainder join on the
+    // chunk outputs, so a fork whose split produced zero chunks (no groupTuple
+    // group) still runs JOIN_K — with an empty chunk-outs list — instead of
+    // being dropped. defs/joinres are inner-joined (always emitted per fork).
+    joined = ch.jn.join(%[1]s_SPLIT_K.out.defs).join(joinres).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[3], t[4] ?: [], t[1], t[2]) }
+    %[1]s_JOIN_K(joined, types)
   emit:
     %[1]s_JOIN_K.out
 }
@@ -447,27 +520,28 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 
 func genSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s {
-  cpus %[2]d
-  memory '%[3]d GB'
+%[2]s
   input:
     path args
+    path 'types.json'
   output:
     path "outs__${args.baseName}", type: 'dir'
   script:
     """
-    %[4]s -args ${args} -outs '%[5]s'%[6]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${args.baseName}
+    %[3]s -args ${args} -outs '%[4]s'%[5]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${args.baseName}
     """
 }
 
 workflow wf_%[1]s {
   take: args
   main:
-    %[1]s(args)
+    types = file("${projectDir}/_assets/types.json")
+    %[1]s(args, types)
   emit:
     %[1]s.out
 }
 
-`, s.Name, cpusOf(s), memOf(s), base, outs, g.producerArgs(s.Name, types.RoleMainOut))
+`, s.Name, stageDirectives(s, ""), base, outs, g.producerArgs(s.Name, types.RoleMainOut))
 }
 
 // genKeyedSingleStage emits a fork-key-threaded variant of a non-split stage:
@@ -476,27 +550,28 @@ workflow wf_%[1]s {
 // gather per fork.
 func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s_MAP {
-  cpus %[2]d
-  memory '%[3]d GB'
+%[2]s
   input:
     tuple val(key), path(args)
+    path 'types.json'
   output:
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[4]s -args ${args} -outs '%[5]s'%[6]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[3]s -args ${args} -outs '%[4]s'%[5]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
     """
 }
 
 workflow wf_%[1]s_map {
   take: keyed
   main:
-    %[1]s_MAP(keyed)
+    types = file("${projectDir}/_assets/types.json")
+    %[1]s_MAP(keyed, types)
   emit:
     %[1]s_MAP.out
 }
 
-`, s.Name, cpusOf(s), memOf(s), base, outs, g.producerArgs(s.Name, types.RoleMainOut))
+`, s.Name, stageDirectives(s, ""), base, outs, g.producerArgs(s.Name, types.RoleMainOut))
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
@@ -504,24 +579,25 @@ func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts
 	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang)
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
-  cpus %[2]d
-  memory '%[3]d GB'
+%[2]s
   input:
     path args
+    path 'types.json'
   output:
     path 'chunks.json', emit: defs
+    path 'joinres.json', emit: joinres
     path 'chunk_*', emit: chunks, type: 'dir', optional: true
   script:
     """
-    %[4]s -args ${args} -work . -o chunks.json -chunkdir .%[9]s
+    %[4]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[9]s
     """
 }
 
 process %[1]s_MAIN {
-  cpus { (res?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(res.threads as double) as int) : %[2]d }
-  memory { (res?.mem_gb ?: 0) > 0 ? "${res.mem_gb} GB" : '%[3]d GB' }
+%[12]s
   input:
     tuple val(res), path(chunk), path(args)
+    path 'types.json'
   output:
     path "out_${chunk.baseName}", type: 'dir'
   script:
@@ -531,35 +607,39 @@ process %[1]s_MAIN {
 }
 
 process %[1]s_JOIN {
-  cpus %[2]d
-  memory '%[3]d GB'
+%[13]s
   input:
+    val join
     path args
     path defs
     path souts
+    path 'types.json'
   output:
     path 'outs', type: 'dir'
   script:
     """
-    %[7]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[8]s'%[11]s -work . -o outs
+    %[7]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[8]s'%[11]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
     """
 }
 
-`, s.Name, cpusOf(s), memOf(s), splitCmd, base, mainOuts, joinCmd, joinOuts,
+`, s.Name, stageDirectives(s, ""), memOf(s), splitCmd, base, mainOuts, joinCmd, joinOuts,
 		g.producerArgs(s.Name, types.RoleChunkIn),
 		g.producerArgs(s.Name, types.RoleMainOut),
-		g.producerArgs(s.Name, types.RoleOut))
+		g.producerArgs(s.Name, types.RoleOut),
+		stageDirectives(s, "res"), stageDirectives(s, "join"))
 }
 
 func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 	fmt.Fprintf(b, `workflow wf_%[1]s {
   take: args
   main:
+    types = file("${projectDir}/_assets/types.json")
     a = args
-    %[1]s_SPLIT(a)
-    chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(file("${f}/data.json").text).resources, f) }
-    %[1]s_MAIN(chunks.combine(a))
-    %[1]s_JOIN(a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect())
+    %[1]s_SPLIT(a, types)
+    chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
+    %[1]s_MAIN(chunks.combine(a), types)
+    join = %[1]s_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
+    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect(), types)
   emit:
     %[1]s_JOIN.out
 }
@@ -579,7 +659,7 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
     path 'disable', type: 'dir'
   script:
     """
-    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o disable
+    '%[3]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -o disable
     """
 }
 
@@ -598,6 +678,12 @@ func bindInputs(refs []string) (string, string) {
 		fmt.Fprintf(&inputs, "    path 'in_%s'\n", id)
 		pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
 	}
+
+	// The shared type manifest and this process's own bindspec are staged as two
+	// individual files (not the whole _assets dir), so a task transfers only the
+	// one bindspec it needs rather than every call's spec; see assetsDir.
+	inputs.WriteString("    path 'types.json'\n")
+	inputs.WriteString("    path 'spec.json'\n")
 
 	arg := ""
 	if len(pairs) > 0 {
@@ -619,7 +705,7 @@ func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g ge
     path 'args', type: 'dir'
   script:
     """
-    '%[3]s' bind -spec '${projectDir}/bindspecs/%[1]s.json' -pipeargs ${pipeargs}%[4]s -o args%[5]s
+    '%[3]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -o args%[5]s
     """
 }
 
@@ -638,11 +724,11 @@ func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx
     path 'forkkeys.json', emit: keys
   script:
     """
-    '%[3]s' forkbind -spec '${projectDir}/bindspecs/%[4]s.json' -pipeargs ${pipeargs}%[5]s -chunkdir .%[6]s
+    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir .%[5]s
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, bindName(pipeline, c.Name), arg, g.producerArgs(c.Callable, types.RoleIn))
+`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn))
 }
 
 // genMergeProcess emits a process that merges per-fork outputs into the
@@ -652,6 +738,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
   input:
     path souts
     path 'forkkeys.json'
+    path 'types.json'
   output:
     path 'merged', type: 'dir'
   script:
@@ -670,13 +757,14 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 	// calls pass the parent's value-channel pa), so it is directly re-readable by
 	// every bind — no .first() needed (which would warn as useless on a value).
 	body.WriteString("  main:\n    pa = pipeargs\n")
+	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
 	for _, c := range p.Calls {
 		genCallWiring(&body, p.Name, c, prog)
 	}
 
 	retName := bindName(p.Name, "return")
-	fmt.Fprintf(&body, "    %s(%s)\n", retName, bindCallArgs(p.Returns))
+	fmt.Fprintf(&body, "    %s(%s)\n", retName, bindCallArgs(p.Returns, retName))
 
 	fmt.Fprintf(b, `workflow %s {
   take: pipeargs
@@ -699,7 +787,7 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Prog
 	}
 
 	bind := bindName(pipeline, c.Name)
-	fmt.Fprintf(b, "    %s(%s)\n", bind, bindCallArgs(c.Bindings))
+	fmt.Fprintf(b, "    %s(%s)\n", bind, bindCallArgs(c.Bindings, bind))
 
 	if c.Disabled != nil {
 		genDisabledWiring(b, pipeline, c, callee)
@@ -724,7 +812,8 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 	// When the map call is disabled, gate the fork's pipeline-args by the runtime
 	// flag so the forks only run when enabled; on skip the call yields its null
 	// outputs bundle instead.
-	forkArgs := bindCallArgs(c.Bindings)
+	// The FORK process reuses the call's bind spec (see genForkBindProcess).
+	forkArgs := bindCallArgs(c.Bindings, bindName(pipeline, c.Name))
 	if c.Disabled != nil {
 		forkArgs = genMappedDisableGate(b, pipeline, c)
 	}
@@ -737,7 +826,7 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 	// ifEmpty([]) ensures MERGE still runs for an empty fork collection
 	// (collect() on an empty channel emits nothing), yielding null outputs.
 	// FORK.out.keys carries map-fork keys (null for an array fork).
-	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys)\n", merge, c.Name, fork)
+	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys, types)\n", merge, c.Name, fork)
 
 	if c.Disabled != nil {
 		// On the disabled branch FORK is skipped, so MERGE produces nothing; mix
@@ -759,15 +848,16 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 // enabled (run) branch.
 func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string {
 	dis := disableName(pipeline, c.Name)
-	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c)))
+	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c), dis))
 	fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s.out).branch { a, d ->
-        def off = new groovy.json.JsonSlurper().parseText(file("${d}/data.json").text).disabled
+        def off = new groovy.json.JsonSlurper().parseText(d.resolve('data.json').text).disabled
         run: !off
         skip: off
     }
 `, c.Name, dis)
 
-	return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { a, d -> a }", c.Name))
+	// Feeds the FORK process, which reuses the call's bind spec.
+	return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { a, d -> a }", c.Name), bindName(pipeline, c.Name))
 }
 
 // genDisabledWiring runs the callee only when the resolved `disabled` flag is
@@ -777,9 +867,9 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
 	dis := disableName(pipeline, c.Name)
 	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
 
-	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c)))
+	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c), dis))
 	fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s.out).branch { a, d ->
-        def off = new groovy.json.JsonSlurper().parseText(file("${d}/data.json").text).disabled
+        def off = new groovy.json.JsonSlurper().parseText(d.resolve('data.json').text).disabled
         run: !off
         skip: off
     }
@@ -817,21 +907,27 @@ func disableName(pipeline, call string) string {
 
 // bindCallArgs renders the actual-argument list for a BIND invocation: the
 // pipeline args first, then each referenced upstream call's output channel.
-func bindCallArgs(bindings []ir.Binding) string {
-	return bindCallArgsPa(bindings, "pa")
+// specName is the bind process's own bindspec (staged as spec.json).
+func bindCallArgs(bindings []ir.Binding, specName string) string {
+	return bindCallArgsPa(bindings, "pa", specName)
 }
 
 // bindCallArgsPa is bindCallArgs with an explicit pipeline-args channel
 // expression (used to substitute a gated channel for a disabled call).
-func bindCallArgsPa(bindings []ir.Binding, pa string) string {
+func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
 	refs := refCalls(bindings)
 
-	args := make([]string, 0, 1+len(refs))
+	args := make([]string, 0, len(refs)+1)
 	args = append(args, pa)
 
 	for _, id := range refs {
 		args = append(args, "ch_"+id)
 	}
+
+	// Every bind/fork/disable process takes two final broadcast inputs: the shared
+	// type manifest (types) and its own bindspec (spec.json); see assetsDir. The
+	// workflow defines `types` in its main block.
+	args = append(args, "types", specFile(specName))
 
 	return strings.Join(args, ", ")
 }
@@ -842,9 +938,10 @@ func bindCallArgsPa(bindings []ir.Binding, pa string) string {
 // bundle is removed before output globbing so only published artifacts remain.
 func genPublish(b *strings.Builder, entry string, g genCtx) {
 	fmt.Fprintf(b, `process PUBLISH {
-  publishDir params.outdir, mode: 'copy'
+  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null
   input:
     path bundle
+    path 'types.json'
   output:
     path '*'
   script:
@@ -857,13 +954,131 @@ func genPublish(b *strings.Builder, entry string, g genCtx) {
 `, g.mre, g.producerArgs(entry, types.RoleOut))
 }
 
-func genEntry(b *strings.Builder, entryWorkflow string) {
-	fmt.Fprintf(b, `workflow {
-  pipeargs = Channel.value(file("${projectDir}/entry_args"))
-  %[1]s(pipeargs)
-  PUBLISH(%[1]s.out)
+// genEntry emits the top-level workflow. Each entry input is exposed as a
+// nullable run parameter (params.<name>); at launch the BUILD_ENTRY_ARGS process
+// overlays the supplied values on the baked defaults, so inputs can be set via a
+// Nextflow -params-file or AWS HealthOmics run parameters without re-transpiling.
+//
+// A file-bearing input (a file/dir at any dimension, or a struct/array/map whose
+// leaves are files) is additionally routed through Nextflow's own staging: its
+// file leaves (s3:// URIs or paths) are flattened to a list, file()'d on the head
+// node, and declared as a `path` input, so the worker reads real local files (an
+// isolated AWS Batch / HealthOmics task cannot stat the raw values). entryargs
+// pops the staged paths back into the value in the canonical type-walk order and
+// marks them into the bundle. An unset input is fed the empty sentinel and keeps
+// its baked default.
+func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
+	ins := entryInParams(prog)
+
+	var decls, fileInputs, fileChans strings.Builder
+
+	// `[:]` is Groovy's empty map (a bare `[]` would be a list, which the overrides
+	// JSON object must not be); a non-empty map lists each input's param.
+	pairs := make([]string, 0, len(ins))
+	flatFlags := make([]string, 0) // name=joined-staged-paths for the entryargs -fileflat flag
+	callArgs := []string{`file("${projectDir}/entry_args")`, "values", "types"}
+	sentinel := fmt.Sprintf(`file("${projectDir}/%s/%s")`, assetsDir, entrySentinel)
+
+	for _, p := range ins {
+		fmt.Fprintf(&decls, "params.%s = null\n", p.Name)
+		pairs = append(pairs, fmt.Sprintf("%[1]s: params.%[1]s", p.Name))
+
+		if !hasFileLeaf(p, prog.Structs) {
+			continue
+		}
+
+		in := "inflat_" + p.Name
+		fileInputs.WriteString("    path " + in + "\n") // variable form: stages the whole list
+		// The staged paths (one per file leaf, canonical order) reach entryargs joined
+		// by ','; multiple inputs are ';'-separated and the whole flag is single-quoted
+		// so the shell leaves it intact while Nextflow still interpolates the ${...}.
+		flatFlags = append(flatFlags, fmt.Sprintf("%s=${%s.join(\",\")}", p.Name, in))
+		callArgs = append(callArgs, "flat_"+p.Name)
+		// Flatten the override's file leaves to a list of staged files on the head node;
+		// an unset input (or one with no file leaves) falls back to the empty sentinel so
+		// the process still runs (entryargs ignores the sentinel when the input is unset).
+		fmt.Fprintf(&fileChans, "  flat_%[1]s = (params.%[1]s != null ? (%[2]s) : []) ?: [%[3]s]\n",
+			p.Name, fileFlattenExpr("params."+p.Name, p, prog.Structs), sentinel)
+	}
+
+	valuesMap := "[:]"
+	if len(pairs) > 0 {
+		valuesMap = "[" + strings.Join(pairs, ", ") + "]"
+	}
+
+	flatFlag := ""
+	if len(flatFlags) > 0 {
+		flatFlag = " -fileflat '" + strings.Join(flatFlags, ";") + "'"
+	}
+
+	// A quoted heredoc writes the overrides to a file; Nextflow interpolates the
+	// JSON string, and the quoted delimiter stops the shell from expanding it.
+	fmt.Fprintf(b, `%[1]s
+process BUILD_ENTRY_ARGS {
+  input:
+    path 'entry_args'
+    val values
+    path 'types.json'
+%[6]s  output:
+    path 'entry_resolved', type: 'dir'
+  script:
+    """
+    cat > values.json <<'MART_EOF'
+${values}
+MART_EOF
+    '%[2]s' entryargs -base entry_args -values values.json -o entry_resolved -types 'types.json' -callable '%[3]s' -role in%[7]s
+    """
 }
-`, entryWorkflow)
+
+workflow {
+  types = file("${projectDir}/_assets/types.json")
+  values = groovy.json.JsonOutput.toJson(%[4]s)
+%[8]s  BUILD_ENTRY_ARGS(%[9]s)
+  pipeargs = BUILD_ENTRY_ARGS.out.first()
+  %[5]s(pipeargs)
+  PUBLISH(%[5]s.out, types)
+}
+`, decls.String(), g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
+		fileInputs.String(), flatFlag, fileChans.String(), strings.Join(callArgs, ", "))
+}
+
+// fileFlattenExpr renders a Groovy expression that flattens the file leaves of a
+// runtime value (expr, of param p's type) into a list of file() objects, in the
+// canonical walk order types.Table uses — arrays in index order, maps by sorted
+// key, struct fields in declaration order — so mre entryargs can pop the staged
+// paths back into the value in the same order. Non-file scalars contribute [].
+func fileFlattenExpr(expr string, p ir.Param, structs map[string]*ir.StructType) string {
+	switch {
+	case p.ArrayDim > 0:
+		elem := p
+		elem.ArrayDim--
+
+		return fmt.Sprintf("(%s ?: []).collect { __e -> %s }.flatten()", expr, fileFlattenExpr("__e", elem, structs))
+	case p.MapDim > 0:
+		val := p
+		val.MapDim--
+
+		return fmt.Sprintf("(%s ?: [:]).sort { it.key }.collect { __e -> %s }.flatten()", expr, fileFlattenExpr("__e.value", val, structs))
+	}
+
+	if st, ok := structs[p.BaseType]; ok {
+		parts := make([]string, 0, len(st.Fields))
+		for _, f := range st.Fields {
+			parts = append(parts, fileFlattenExpr(fmt.Sprintf("(%s)?.%s", expr, f.Name), f, structs))
+		}
+
+		if len(parts) == 0 {
+			return "[]"
+		}
+
+		return "(" + strings.Join(parts, " + ") + ")"
+	}
+
+	if p.IsFile {
+		return fmt.Sprintf("(%[1]s != null ? [file(%[1]s)] : [])", expr)
+	}
+
+	return "[]"
 }
 
 // qualify builds a collision-free, valid-identifier suffix from a (pipeline,
@@ -937,6 +1152,51 @@ func names(params []ir.Param) []string {
 	}
 
 	return out
+}
+
+// stageDirectives renders the scheduler directives (cpus, memory, and an
+// optional clusterOptions for `special`) at the top of a stage-phase process.
+// When val is empty the cpus/memory are static (split/single-stage phases);
+// otherwise they read the per-task val (a chunk's resolved resources for main,
+// the split-returned override for join). Each line carries the process body's
+// two-space indent.
+func stageDirectives(s *ir.Stage, val string) string {
+	var b strings.Builder
+
+	if val == "" {
+		fmt.Fprintf(&b, "  cpus %d\n  memory '%d GB'", cpusOf(s), memOf(s))
+	} else {
+		fmt.Fprintf(&b, "  %s\n  %s", dynCpus(val, cpusOf(s)), dynMem(val, memOf(s)))
+	}
+
+	// `special` is mrp's scheduler-routing key (MRO_JOBRESOURCES); map it through
+	// params.job_resources so a grid run resolves it to clusterOptions. Emitted
+	// only when the stage declares one statically; a per-task __special override
+	// (split-returned) then wins over the static key at runtime.
+	if s.Resources.Special != "" {
+		key := "'" + s.Resources.Special + "'"
+		if val != "" {
+			key = fmt.Sprintf("%s?.special ?: '%s'", val, s.Resources.Special)
+		}
+
+		fmt.Fprintf(&b, "\n  clusterOptions { params.job_resources?.get(%s) ?: '' }", key)
+	}
+
+	return b.String()
+}
+
+// dynCpus renders a dynamic `cpus` directive: it provisions the runtime val's
+// threads (rounded up to a whole CPU) when positive, else the stage's static
+// `using` default. val is the name of a per-task val input (e.g. a chunk's
+// resolved resources or the split-returned join override).
+func dynCpus(val string, fallback int) string {
+	return fmt.Sprintf("cpus { (%[1]s?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(%[1]s.threads as double) as int) : %[2]d }", val, fallback)
+}
+
+// dynMem renders a dynamic `memory` directive: the runtime val's mem_gb when
+// positive, else the stage's static `using` default.
+func dynMem(val string, fallback int) string {
+	return fmt.Sprintf("memory { (%[1]s?.mem_gb ?: 0) > 0 ? \"${%[1]s.mem_gb} GB\" : '%[2]d GB' }", val, fallback)
 }
 
 func cpusOf(s *ir.Stage) int {

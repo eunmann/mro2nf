@@ -97,26 +97,28 @@ type ChunkDef struct {
 	Resources Resources                  `json:"resources"`
 }
 
-// RunSplit runs the split phase and returns the chunk definitions.
+// RunSplit runs the split phase and returns the chunk definitions plus the
+// optional join-phase resource override the split emitted (zero-valued when the
+// split returned no `join` block).
 func RunSplit(
 	ctx context.Context, workDir string, a Adapter,
 	stageArgs json.RawMessage, res Resources, inv Invocation,
-) ([]ChunkDef, error) {
+) ([]ChunkDef, Resources, error) {
 	meta, files, journal, err := prepDirs(workDir, "split")
 	if err != nil {
-		return nil, err
+		return nil, Resources{}, err
 	}
 
 	if err := writeRaw(filepath.Join(meta, "_args"), orEmptyObj(stageArgs)); err != nil {
-		return nil, err
+		return nil, Resources{}, err
 	}
 
 	if err := writeJobInfo(meta, files, "split", res, inv); err != nil {
-		return nil, err
+		return nil, Resources{}, err
 	}
 
 	if err := runAdapter(ctx, meta, files, journal, a, "split", resolveResources(Resources{}, res).VMemGB); err != nil {
-		return nil, err
+		return nil, Resources{}, err
 	}
 
 	return readStageDefs(meta)
@@ -276,8 +278,13 @@ func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, p
 	}
 	defer aio.close()
 
-	cmd.Stdout = aio.stdout
-	cmd.Stderr = aio.stderr
+	// Tee the stage's stdout/stderr to the shim's own streams as well as the
+	// _stdout/_stderr files, so they land in the task's captured logs
+	// (.command.out/.err -> CloudWatch on Batch, GetRunTask on HealthOmics,
+	// `nextflow log` locally). Without this the stage's output would only sit in
+	// the per-task scratch and be lost on an object-store backend.
+	cmd.Stdout = io.MultiWriter(aio.stdout, os.Stdout)
+	cmd.Stderr = io.MultiWriter(aio.stderr, os.Stderr)
 	cmd.ExtraFiles = []*os.File{aio.logFile, aio.errW} // fd 3 = _log, fd 4 = errors
 
 	return aio.run(cmd, phase, meta)
@@ -302,9 +309,10 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	}
 	defer func() { _ = stderr.Close() }()
 
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd.Stdout = io.MultiWriter(stdout, os.Stdout)
+	cmd.Stderr = io.MultiWriter(stderr, os.Stderr)
 	runErr := cmd.Run()
+	forwardStageLog(meta)
 
 	if data, err := os.ReadFile(filepath.Join(meta, "_errors")); err == nil && len(data) > 0 {
 		return stageFailure(phase, strings.TrimSpace(string(data)))
@@ -317,6 +325,19 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	}
 
 	return nil
+}
+
+// forwardStageLog surfaces a stage's Martian log (_log, written via
+// martian.log_info on fd 3) to the shim's stderr, so it appears in the task's
+// captured logs rather than only in the per-task scratch (which an object-store
+// backend does not retain). Best-effort: a missing or empty log is silent.
+func forwardStageLog(meta string) {
+	data, err := os.ReadFile(filepath.Join(meta, "_log"))
+	if err != nil || len(strings.TrimSpace(string(data))) == 0 {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "--- martian stage log ---\n%s\n", strings.TrimRight(string(data), "\n"))
 }
 
 // adapterIO holds the file descriptors the Martian adapter expects.
@@ -368,6 +389,7 @@ func (a *adapterIO) run(cmd *exec.Cmd, phase, meta string) error {
 
 	stageErr, _ := io.ReadAll(a.errR)
 	waitErr := cmd.Wait()
+	forwardStageLog(meta)
 
 	if msg := strings.TrimSpace(string(stageErr)); msg != "" {
 		// Mirror the error into _errors for parity with mrjob; a failure to do

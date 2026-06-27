@@ -1,0 +1,36 @@
+filetype txt;
+
+# A Cell Ranger-shaped fixture: the entry pipeline takes a FILE input (`reads`,
+# analogous to a FASTQ input) plus a scalar (`scale`), and the entry stage opens
+# and reads the file. The output therefore depends on the file's content actually
+# arriving in the (possibly isolated) task — so it exercises file-typed entry
+# parameterization end to end. Override `reads` at launch with a -params-file
+# (local) or a run parameter / S3 URI (AWS Batch, HealthOmics).
+
+stage COUNT(
+    in  txt   reads,
+    in  float scale,
+    out float total,
+    src py    "stages/count",
+)
+
+pipeline EP(
+    in  txt   reads,
+    in  float scale,
+    out float total,
+)
+{
+    call COUNT(
+        reads = self.reads,
+        scale = self.scale,
+    )
+
+    return (
+        total = COUNT.total,
+    )
+}
+
+call EP(
+    reads = "input/default.txt",
+    scale = 2.0,
+)

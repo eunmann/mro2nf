@@ -1,0 +1,30 @@
+# Split-returned join resource override: the SUM_SQUARES split returns a `join`
+# block requesting more threads/memory for the join phase than the stage's
+# `using` defaults. The generated JOIN process must provision those (cpus 2,
+# memory 3 GB) so it schedules like mrp; the output is unchanged.
+stage SUM_SQUARES(
+    in  float[] values,
+    out float   sum,
+    src py      "stages/sum_squares",
+) split using (
+    in  float   value,
+    out float   square,
+)
+
+pipeline SUM_SQUARE_PIPELINE(
+    in  float[] values,
+    out float   sum,
+)
+{
+    call SUM_SQUARES(
+        values = self.values,
+    )
+
+    return (
+        sum = SUM_SQUARES.sum,
+    )
+}
+
+call SUM_SQUARE_PIPELINE(
+    values = [1, 2, 3],
+)

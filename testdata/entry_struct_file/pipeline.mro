@@ -1,0 +1,37 @@
+filetype txt;
+
+# struct-with-file entry input: a config struct carrying a file field plus a
+# scalar. Override at launch with a JSON object {ref: s3://..., n: 5}; the file
+# leaf is staged while the scalar field flows through unchanged.
+
+struct Cfg(
+    txt   ref,
+    int   n,
+)
+
+stage READCFG(
+    in  Cfg    cfg,
+    out float  total,
+    src py     "stages/readcfg",
+)
+
+pipeline EPS(
+    in  Cfg    cfg,
+    out float  total,
+)
+{
+    call READCFG(
+        cfg = self.cfg,
+    )
+
+    return (
+        total = READCFG.total,
+    )
+}
+
+call EPS(
+    cfg = {
+        ref: "input/ref.txt",
+        n:   3,
+    },
+)

@@ -68,6 +68,8 @@ func run(ctx context.Context, args []string) error {
 		return runMerge(ctx, args[1:])
 	case "publish":
 		return runPublish(ctx, args[1:])
+	case "entryargs":
+		return runEntryArgs(ctx, args[1:])
 	default:
 		return fmt.Errorf("%w: %q", errUnknownPhase, phase)
 	}
@@ -135,6 +137,7 @@ func runSplit(ctx context.Context, argv []string) error {
 	prod := addProducer(fs, types.RoleChunkIn)
 	argsDir := fs.String("args", "", "stage args bundle dir")
 	chunkDir := fs.String("chunkdir", "", "if set, write per-chunk bundles (chunk_NNNNN/) here")
+	joinResOut := fs.String("joinres", "", "if set, write the split's join-phase resource override here")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -149,7 +152,7 @@ func runSplit(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	defs, err := shim.RunSplit(ctx, cf.work, cf.adapter(), stageArgs, cf.resources(), cf.invocation(stageArgs))
+	defs, joinRes, err := shim.RunSplit(ctx, cf.work, cf.adapter(), stageArgs, cf.resources(), cf.invocation(stageArgs))
 	if err != nil {
 		return fmt.Errorf("split: %w", err)
 	}
@@ -158,6 +161,14 @@ func runSplit(ctx context.Context, argv []string) error {
 	// bundles carry each chunk's staged input files to the main phase.
 	if err := writeJSON(cf.outFile, defs); err != nil {
 		return err
+	}
+
+	// joinres.json carries the split-returned join-phase resource override so the
+	// generated JOIN process provisions cpus/memory/special to match mrp.
+	if *joinResOut != "" {
+		if err := writeJSON(*joinResOut, joinRes); err != nil {
+			return err
+		}
 	}
 
 	if *chunkDir != "" {

@@ -35,6 +35,7 @@ func run(args []string) error {
 	shellFlag := fs.String("shell", "", "path to martian_shell.py")
 	mrjobFlag := fs.String("mrjob", "", "path to mrjob (for comp stages)")
 	containerFlag := fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)")
+	targetFlag := fs.String("target", "local", "execution backend: local | awsbatch | healthomics")
 	monitorFlag := fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
@@ -65,9 +66,20 @@ func run(args []string) error {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
+	target, err := emit.ParseTarget(*targetFlag)
+	if err != nil {
+		return fmt.Errorf("invalid -target: %w", err)
+	}
+
+	// Surface documented divergences (preflight/local/volatile no-ops) so a
+	// ported pipeline's behavior differences are loud, not silent.
+	for _, msg := range emit.Warnings(prog) {
+		log.Warn().Msg(msg)
+	}
+
 	if err := emitProgram(prog, fs.Arg(0), opts{
 		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag,
-		container: *containerFlag, monitor: *monitorFlag,
+		container: *containerFlag, monitor: *monitorFlag, target: target,
 	}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
@@ -86,6 +98,7 @@ func run(args []string) error {
 type opts struct {
 	outDir, mre, shell, mrjob, container string
 	monitor                              bool
+	target                               emit.Target
 }
 
 // emitProgram resolves the absolute paths the generated project needs and emits
@@ -116,7 +129,9 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 		Mrjob:     absOrSelf(o.mrjob),
 		Container: o.container,
 		Monitor:   o.monitor,
+		Target:    o.target,
 		MROFile:   filepath.Base(src),
+		MRODir:    mroDir,
 		StageCode: code,
 	}); err != nil {
 		return fmt.Errorf("emit: %w", err)

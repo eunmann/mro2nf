@@ -31,13 +31,28 @@ if [[ "${1:-}" == "--one" ]]; then
     proj="$(mktemp -d)"
     trap 'rm -rf "$proj"' EXIT
 
+    # A comp-adapter fixture ships its own mrjob wrapper alongside the .mro.
+    mrjob_opt=()
+    [ -f "$dir/mrjob.sh" ] && mrjob_opt=(-mrjob "$dir/mrjob.sh")
+
     ./mart -o "$proj" \
         -mre "$ROOT/mre" \
         -shell "$ROOT/vendor-martian/python/martian_shell.py" \
-        -mropath "$dir" \
+        -mropath "$dir" ${mrjob_opt[@]+"${mrjob_opt[@]}"} \
         "$dir/pipeline.mro" >/dev/null 2>&1 || { echo "FAIL[$name]: transpile"; exit 1; }
 
-    (cd "$proj" && nextflow run main.nf >/dev/null 2>&1) || { echo "FAIL[$name]: nextflow"; exit 1; }
+    # An *_override case exercises file-typed entry-input staging: it supplies the
+    # file input(s) at launch via -params-file, so the run's output must reflect the
+    # OVERRIDE content, not the baked default. The fixture ships override-params.json
+    # with a @DIR@ placeholder for its (absolute) directory.
+    params_opt=()
+    if [[ "$name" == *_override ]]; then
+        sed "s#@DIR@#$ROOT/$dir#g" "$dir/override-params.json" >"$proj/params.json"
+        params_opt=(-params-file params.json)
+    fi
+
+    (cd "$proj" && nextflow run main.nf ${params_opt[@]+"${params_opt[@]}"} >/dev/null 2>&1) ||
+        { echo "FAIL[$name]: nextflow"; exit 1; }
 
     # file_min additionally verifies the published file's content.
     if [[ "$name" == "file_min" ]]; then
@@ -82,6 +97,7 @@ CASES=(
     "map_pipe|testdata/map_pipe|testdata/map_pipe/expected/outs.json"
     "map_file|testdata/map_file|testdata/map_file/expected/outs.json"
     "map_pipe_nested|testdata/map_pipe_nested|testdata/map_pipe_nested/expected/outs.json"
+    "map_pipe_disabled_nested|testdata/map_pipe_disabled_nested|testdata/map_pipe_disabled_nested/expected/outs.json"
     "map_pipe_disabled|testdata/map_pipe_disabled|testdata/map_pipe_disabled/expected/outs.json"
     "map_pipe_split|testdata/map_pipe_split|testdata/map_pipe_split/expected/outs.json"
     "map_file_keyed|testdata/map_file_keyed|testdata/map_file_keyed/expected/outs.json"
@@ -99,6 +115,20 @@ CASES=(
     "typedmap_out|testdata/typedmap_out|testdata/typedmap_out/expected/outs.json"
     "returnonly|testdata/returnonly|testdata/returnonly/expected/outs.json"
     "multisplit|testdata/multisplit|testdata/multisplit/expected/outs.json"
+    "join_resources|testdata/join_resources|testdata/join_resources/expected/outs.json"
+    "file_array|testdata/file_array|testdata/file_array/expected/outs.json"
+    "comp_split|testdata/comp_split|testdata/comp_split/expected/outs.json"
+    "entry_file|testdata/entry_file|testdata/entry_file/expected/ep_outs.json"
+    "entry_file_override|testdata/entry_file|testdata/entry_file/expected/ep_override_outs.json"
+    "entry_filearr|testdata/entry_filearr|testdata/entry_filearr/expected/epa_outs.json"
+    "entry_filearr_override|testdata/entry_filearr|testdata/entry_filearr/expected/epa_override_outs.json"
+    "entry_struct_file|testdata/entry_struct_file|testdata/entry_struct_file/expected/eps_outs.json"
+    "entry_struct_file_override|testdata/entry_struct_file|testdata/entry_struct_file/expected/eps_override_outs.json"
+    "entry_mapfile|testdata/entry_mapfile|testdata/entry_mapfile/expected/epm_outs.json"
+    "entry_mapfile_override|testdata/entry_mapfile|testdata/entry_mapfile/expected/epm_override_outs.json"
+    "split_from_file|testdata/split_from_file|testdata/split_from_file/expected/sp_outs.json"
+    "split_from_file_override|testdata/split_from_file|testdata/split_from_file/expected/sp_override_outs.json"
+    "special_resource|testdata/special_resource|testdata/special_resource/expected/outs.json"
     "null_in|testdata/null_in|testdata/null_in/expected/outs.json"
     "disabled_callref|testdata/disabled_callref|testdata/disabled_callref/expected/outs.json"
     "struct_input|testdata/struct_input|testdata/struct_input/expected/outs.json"

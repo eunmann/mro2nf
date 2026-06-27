@@ -197,6 +197,19 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 // outputs may be directories). It hard-links files when possible (same device)
 // for speed, falling back to a byte copy.
 func CopyTree(src, dst string) error {
+	// Resolve a symlinked source to its real target first. Nextflow stages inputs
+	// as symlinks, and link(2) does not follow them — hard-linking the symlink
+	// would leave a dangling link once the bundle is staged into another isolated
+	// task (AWS Batch + S3 / HealthOmics), where the original target is absent.
+	if lst, err := os.Lstat(src); err == nil && lst.Mode()&os.ModeSymlink != 0 {
+		resolved, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return fmt.Errorf("resolve symlink %s: %w", src, err)
+		}
+
+		src = resolved
+	}
+
 	info, err := os.Stat(src)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", src, err)

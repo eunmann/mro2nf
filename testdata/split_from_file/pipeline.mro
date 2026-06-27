@@ -1,0 +1,37 @@
+filetype txt;
+
+# Data-dependent split: the split phase opens a STAGED input file and produces one
+# chunk per line, with each chunk's value AND its per-chunk resources (__threads)
+# derived from the file content. This is Martian's defining runtime feature (Cell
+# Ranger splits by lanes/reads). Override `manifest` at launch with an s3:// file
+# of a different length to fan out a different number of chunks.
+
+stage SQUARELINES(
+    in  txt  manifest,
+    out int  total,
+    out int  nchunks,
+    src py   "stages/splitfile",
+) split using (
+    in  int  n,
+    out int  part,
+)
+
+pipeline SP(
+    in  txt  manifest,
+    out int  total,
+    out int  nchunks,
+)
+{
+    call SQUARELINES(
+        manifest = self.manifest,
+    )
+
+    return (
+        total   = SQUARELINES.total,
+        nchunks = SQUARELINES.nchunks,
+    )
+}
+
+call SP(
+    manifest = "input/manifest.txt",
+)

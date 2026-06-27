@@ -15,6 +15,6 @@ require (
 	golang.org/x/tools v0.30.0 // indirect
 )
 
-// Develop against the local Martian checkout (the aws-batch jobmode fork),
-// whose go.mod has no /v4 suffix so a tag will not resolve as a module version.
-replace github.com/martian-lang/martian => ../martian
+// Martian's go.mod has no /v4 suffix, so a tag won't resolve as a Go module
+// version -- it is pinned by commit (see the require above). To hack on the
+// Martian parser locally, add a go.work or a replace pointing at a checkout.

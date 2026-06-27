@@ -1,0 +1,35 @@
+filetype txt;
+
+# map<file> entry input: a keyed map of files (e.g. sample-name -> FASTQ). The
+# stage sums across all values. Override at launch with a JSON object of s3:// URIs.
+
+stage COUNTMAP(
+    in  map<txt> reads,
+    in  float    scale,
+    out float    total,
+    src py       "stages/countmap",
+)
+
+pipeline EPM(
+    in  map<txt> reads,
+    in  float    scale,
+    out float    total,
+)
+{
+    call COUNTMAP(
+        reads = self.reads,
+        scale = self.scale,
+    )
+
+    return (
+        total = COUNTMAP.total,
+    )
+}
+
+call EPM(
+    reads = {
+        "a": "input/a.txt",
+        "b": "input/b.txt",
+    },
+    scale = 2.0,
+)

@@ -1,0 +1,35 @@
+# Martian `special` scheduler key: the stage requests a `special` node class via
+# its `using` block. The transpiler maps it to a clusterOptions directive looked
+# up from params.job_resources (mrp's MRO_JOBRESOURCES analog), on every phase.
+# special is a scheduler hint — it does not change outputs — and is a no-op on
+# the local executor, so this runs to the same result as plain SUM_SQUARES.
+stage SUM_SQUARES(
+    in  float[] values,
+    out float   sum,
+    src py      "stages/sum_squares",
+) split using (
+    in  float   value,
+    out float   square,
+) using (
+    mem_gb  = 2,
+    threads = 2,
+    special = "highmem",
+)
+
+pipeline SUM_SQUARE_PIPELINE(
+    in  float[] values,
+    out float   sum,
+)
+{
+    call SUM_SQUARES(
+        values = self.values,
+    )
+
+    return (
+        sum = SUM_SQUARES.sum,
+    )
+}
+
+call SUM_SQUARE_PIPELINE(
+    values = [1, 2, 3],
+)

@@ -1,0 +1,32 @@
+filetype txt;
+
+# file[] entry input: a LIST of files (multiple FASTQs). Override at launch with
+# a JSON array of s3:// URIs; each is staged and the stage reads all of them.
+
+stage COUNTARR(
+    in  txt[]  reads,
+    in  float  scale,
+    out float  total,
+    src py     "stages/countarr",
+)
+
+pipeline EPA(
+    in  txt[]  reads,
+    in  float  scale,
+    out float  total,
+)
+{
+    call COUNTARR(
+        reads = self.reads,
+        scale = self.scale,
+    )
+
+    return (
+        total = COUNTARR.total,
+    )
+}
+
+call EPA(
+    reads = ["input/a.txt", "input/b.txt"],
+    scale = 2.0,
+)

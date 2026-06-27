@@ -1,0 +1,33 @@
+filetype txt;
+
+# Directory-input variant: the entry pipeline takes a DIRECTORY input (`fastqs`,
+# the literal Cell Ranger `--fastqs` shape) and the stage reads every file in it.
+# Override at launch with an s3:// prefix (a trailing-slash directory import).
+
+stage COUNTDIR(
+    in  path  fastqs,
+    in  float scale,
+    out float total,
+    src py    "stages/countdir",
+)
+
+pipeline EPD(
+    in  path  fastqs,
+    in  float scale,
+    out float total,
+)
+{
+    call COUNTDIR(
+        fastqs = self.fastqs,
+        scale  = self.scale,
+    )
+
+    return (
+        total = COUNTDIR.total,
+    )
+}
+
+call EPD(
+    fastqs = "input/reads_dir",
+    scale  = 2.0,
+)

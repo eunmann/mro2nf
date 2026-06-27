@@ -49,7 +49,7 @@ func TestRunSumSquares(t *testing.T) {
 	work := t.TempDir()
 	ctx := context.Background()
 
-	defs, err := RunSplit(ctx, filepath.Join(work, "split"), adapter, stageArgs, res, inv)
+	defs, _, err := RunSplit(ctx, filepath.Join(work, "split"), adapter, stageArgs, res, inv)
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestJobInfoResolvedResources(t *testing.T) {
 	// The phase request is 2 GB, but the split assigns __mem_gb=1 per chunk.
 	res := Resources{Threads: 1, MemGB: 2}
 
-	defs, err := RunSplit(ctx, filepath.Join(work, "split"), adapter, stageArgs, res, inv)
+	defs, _, err := RunSplit(ctx, filepath.Join(work, "split"), adapter, stageArgs, res, inv)
 	if err != nil {
 		t.Fatalf("split: %v", err)
 	}
@@ -144,6 +144,46 @@ func TestJobInfoResolvedResources(t *testing.T) {
 
 	if info.MemGB != 1 {
 		t.Errorf("_jobinfo memGB = %v, want 1 (chunk override, not phase request 2)", info.MemGB)
+	}
+}
+
+// TestReadStageDefsJoinOverride checks that a split's `{"join": {...}}` block is
+// parsed into the join-phase resource override (Martian's mechanism for a split
+// to request more resources for its gather), separate from the chunk defs.
+func TestReadStageDefsJoinOverride(t *testing.T) {
+	meta := t.TempDir()
+	defsJSON := `{
+		"chunks": [{"value": 1, "__threads": 1, "__mem_gb": 1}],
+		"join": {"__threads": 2, "__mem_gb": 3, "__special": "highmem"}
+	}`
+	if err := writeRaw(filepath.Join(meta, "_stage_defs"), []byte(defsJSON)); err != nil {
+		t.Fatalf("write _stage_defs: %v", err)
+	}
+
+	defs, join, err := readStageDefs(meta)
+	if err != nil {
+		t.Fatalf("readStageDefs: %v", err)
+	}
+
+	if len(defs) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(defs))
+	}
+
+	if join.Threads != 2 || join.MemGB != 3 || join.Special != "highmem" {
+		t.Errorf("join override = %+v, want threads 2 / mem 3 / special highmem", join)
+	}
+
+	// A split with no join block yields a zero override (JOIN uses stage defaults).
+	if err := writeRaw(filepath.Join(meta, "_stage_defs"), []byte(`{"chunks": []}`)); err != nil {
+		t.Fatalf("write _stage_defs: %v", err)
+	}
+
+	if _, join, err = readStageDefs(meta); err != nil {
+		t.Fatalf("readStageDefs: %v", err)
+	}
+
+	if (join != Resources{}) {
+		t.Errorf("no-join override = %+v, want zero", join)
 	}
 }
 
