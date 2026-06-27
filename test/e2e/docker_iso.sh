@@ -37,6 +37,20 @@ IMAGE=mro2nf-iso:test
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# On rootful Docker (GitHub Actions) containers default to root, so task outputs
+# come back root-owned: the head-node Groovy that reads a chunk's data.json can be
+# denied, and the work-dir cleanup fails with "Permission denied". Mapping the
+# container to the runner's uid/gid (with a writable HOME) keeps files owned by
+# the runner. But on ROOTLESS Docker the opposite holds — the container's root
+# already maps to the host user, and forcing -u maps to an unprivileged subuid
+# that cannot write the bind-mounted work dir — so only apply -u when rootful.
+ISO_CFG="$WORK/iso.config"
+if docker info -f '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    : >"$ISO_CFG" # rootless: default (container root -> host user) is correct
+else
+    printf "docker.runOptions = '-u %s:%s -e HOME=/tmp'\n" "$(id -u)" "$(id -g)" >"$ISO_CFG"
+fi
+
 # An image that bakes mre, the Martian adapters, and the fixture stage code at
 # the SAME absolute paths the transpiler bakes into the generated scripts, so
 # they resolve inside the isolated task container. types.json and the bindspecs
@@ -86,7 +100,7 @@ for spec in "${CASES[@]}"; do
         -mropath "$dir" "$dir/pipeline.mro" >/dev/null 2>&1 ||
         { echo "FAIL[$name]: transpile"; fail=1; continue; }
 
-    ( cd "$proj" && nextflow run main.nf -with-docker "$IMAGE" >run.log 2>&1 ) ||
+    ( cd "$proj" && nextflow run main.nf -c "$ISO_CFG" -with-docker "$IMAGE" >run.log 2>&1 ) ||
         { echo "FAIL[$name]: nextflow (isolated)"; tail -4 "$proj/run.log" | sed 's/^/    /'; fail=1; continue; }
 
     python3 - "$proj/results/pipeline_outs.json" "$golden" "$name" <<'PY' || fail=1
@@ -128,7 +142,7 @@ run_override() { # name fixture params-json expected-json
         echo "FAIL[$name]: transpile"; fail=1; return
     fi
     printf '%s' "$params" >"$proj/params.json"
-    if ! ( cd "$proj" && nextflow run main.nf -params-file params.json -with-docker "$IMAGE" >run.log 2>&1 ); then
+    if ! ( cd "$proj" && nextflow run main.nf -c "$ISO_CFG" -params-file params.json -with-docker "$IMAGE" >run.log 2>&1 ); then
         echo "FAIL[$name]: nextflow (isolated)"; tail -4 "$proj/run.log" | sed 's/^/    /'; fail=1; return
     fi
     EXPECT="$expect" python3 - "$proj/results/pipeline_outs.json" "$name" <<'PY' || fail=1
