@@ -1172,7 +1172,7 @@ func stageDirectives(s *ir.Stage, val string) string {
 	var b strings.Builder
 
 	if val == "" {
-		fmt.Fprintf(&b, "  cpus %d\n  memory '%d GB'", cpusOf(s), memOf(s))
+		fmt.Fprintf(&b, "  cpus %d\n  %s", cpusOf(s), staticMem(memOf(s)))
 	} else {
 		fmt.Fprintf(&b, "  %s\n  %s", dynCpus(val, cpusOf(s)), dynMem(val, memOf(s)))
 	}
@@ -1232,7 +1232,16 @@ func dynCpus(val string, fallback int) string {
 // dynMem renders a dynamic `memory` directive: the runtime val's mem_gb when
 // positive, else the stage's static `using` default.
 func dynMem(val string, fallback int) string {
-	return fmt.Sprintf("memory { (%[1]s?.mem_gb ?: 0) > 0 ? \"${%[1]s.mem_gb} GB\" : '%[2]d GB' }", val, fallback)
+	return fmt.Sprintf("memory { def m = (%[1]s?.mem_gb ?: 0) > 0 ? %[1]s.mem_gb : %[2]d; (m * task.attempt) + ' GB' }", val, fallback)
+}
+
+// staticMem renders a static `memory` directive that grows with task.attempt —
+// the --auto-adjust-memory analog. Attempt 1 requests the stage's `using` value;
+// a retry (an OOM kill is a retryable, non-ASSERT failure) requests a multiple,
+// so a stage that died for want of memory gets more on the next attempt instead
+// of failing identically. cpus do not escalate (more CPUs do not fix an OOM).
+func staticMem(memGB int) string {
+	return fmt.Sprintf("memory { %d * task.attempt + ' GB' }", memGB)
 }
 
 func cpusOf(s *ir.Stage) int {
