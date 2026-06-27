@@ -1181,7 +1181,16 @@ func stageDirectives(s *ir.Stage, val string) string {
 	// params.job_resources so a grid run resolves it to clusterOptions. Emitted
 	// only when the stage declares one statically; a per-task __special override
 	// (split-returned) then wins over the static key at runtime.
-	if s.Resources.Special != "" {
+	if n, ok := gpuRequest(s.Resources.Special); ok {
+		// Reserved `special = "gpu[:N]"`: request N whole GPUs via the accelerator
+		// directive, on the compute phase only — a split stage's split and join
+		// phases do no GPU work. The awsbatch/healthomics executors translate
+		// accelerator into a GPU resourceRequirement; see docs/GPU.md for the
+		// backend (compute environment / queue) setup.
+		if (!s.Split && val == "") || (s.Split && val == "res") {
+			fmt.Fprintf(&b, "\n  accelerator %d", n)
+		}
+	} else if s.Resources.Special != "" {
 		key := "'" + s.Resources.Special + "'"
 		if val != "" {
 			key = fmt.Sprintf("%s?.special ?: '%s'", val, s.Resources.Special)
@@ -1191,6 +1200,25 @@ func stageDirectives(s *ir.Stage, val string) string {
 	}
 
 	return b.String()
+}
+
+// gpuRequest parses the reserved `special` value for a GPU request: "gpu" -> 1,
+// "gpu:N" -> N (a positive integer). Any other value returns ok=false, keeping
+// the clusterOptions scheduler-key routing. A GPU is a whole device, so the
+// request is a count with no size dimension; the GPU type is a property of the
+// compute environment, not the .mro (see docs/GPU.md).
+func gpuRequest(special string) (int, bool) {
+	if special == "gpu" {
+		return 1, true
+	}
+
+	if rest, ok := strings.CutPrefix(special, "gpu:"); ok {
+		if n, err := strconv.Atoi(rest); err == nil && n > 0 {
+			return n, true
+		}
+	}
+
+	return 0, false
 }
 
 // dynCpus renders a dynamic `cpus` directive: it provisions the runtime val's

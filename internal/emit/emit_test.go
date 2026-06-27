@@ -401,6 +401,31 @@ func TestEmitNoSpecialOmitsClusterOptions(t *testing.T) {
 	}
 }
 
+// TestEmitGPUAccelerator checks the reserved `special = "gpu[:N]"` key: it emits
+// an `accelerator N` directive (not clusterOptions) on the compute phase only —
+// a non-split stage's process and a split stage's MAIN, never SPLIT or JOIN.
+func TestEmitGPUAccelerator(t *testing.T) {
+	dir := emitFixture(t, "gpu_stage", map[string]string{"INFER": "/x/infer", "TRAIN": "/x/train"})
+
+	infer := readFile(t, filepath.Join(dir, "modules", "stage_INFER.nf"))
+	if !strings.Contains(infer, "accelerator 1") {
+		t.Error("non-split GPU stage INFER must request `accelerator 1`")
+	}
+	if strings.Contains(infer, "clusterOptions") {
+		t.Error("a gpu special must emit accelerator, not clusterOptions")
+	}
+
+	train := readFile(t, filepath.Join(dir, "modules", "stage_TRAIN.nf"))
+	if !strings.Contains(train, "accelerator 2") {
+		t.Error("split GPU stage TRAIN main must request `accelerator 2`")
+	}
+	// accelerator belongs only on the compute (MAIN) phases — plain + keyed — so
+	// exactly two directives, and none on the SPLIT/JOIN phases.
+	if got := strings.Count(train, "accelerator"); got != 2 {
+		t.Errorf("TRAIN has %d accelerator directives, want 2 (MAIN + MAIN_K only, not SPLIT/JOIN)", got)
+	}
+}
+
 // TestEmitAssetsStaged checks the cloud-portability fix: the type manifest and a
 // process's own bindspec are staged into its task as individual `path` inputs
 // (not referenced by ${projectDir}, which is invisible to an isolated AWS Batch /
