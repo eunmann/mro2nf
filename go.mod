@@ -1,4 +1,4 @@
-module github.com/eunmann/martian-nextflow
+module github.com/eunmann/mro2nf
 
 go 1.26
 

@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
-	"github.com/eunmann/martian-nextflow/internal/types"
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // genCtx carries the resolved paths and names needed to render Nextflow code.

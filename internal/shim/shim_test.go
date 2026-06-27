@@ -11,7 +11,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 func sumSquaresAdapter(t *testing.T) Adapter {

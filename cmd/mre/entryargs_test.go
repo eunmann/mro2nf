@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
-	"github.com/eunmann/martian-nextflow/internal/types"
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // TestOverlayValues checks the value-overlay merge: a supplied value replaces the

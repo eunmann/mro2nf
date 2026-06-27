@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/eunmann/martian-nextflow/internal/emit"
-	"github.com/eunmann/martian-nextflow/internal/frontend"
+	"github.com/eunmann/mro2nf/internal/emit"
+	"github.com/eunmann/mro2nf/internal/frontend"
 )
 
 // emitFixture parses, lowers, and emits a testdata fixture into a temp dir,
@@ -182,7 +182,7 @@ func TestEmitConfigTargets(t *testing.T) {
 		mre, shell, stages := realRuntime(t)
 		if err := emit.Emit(prog, emit.Options{
 			OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro", Target: target,
-			Container: "ecr/mart:1", StageCode: stages,
+			Container: "ecr/mro2nf:1", StageCode: stages,
 		}); err != nil {
 			t.Fatalf("emit: %v", err)
 		}
@@ -196,7 +196,7 @@ func TestEmitConfigTargets(t *testing.T) {
 
 	batch := emitCfg(emit.TargetAWSBatch)
 	for _, want := range []string{
-		"params.container = 'ecr/mart:1'",
+		"params.container = 'ecr/mro2nf:1'",
 		"container = params.container",
 		"process.executor = 'awsbatch'",
 		"aws.batch.cliPath = params.aws_cli_path",
@@ -499,7 +499,7 @@ func TestEmitObjectStoreSafe(t *testing.T) {
 
 // TestEmitContainerMrjob checks that when a pipeline has comp stages (Mrjob set)
 // the generated Dockerfile bakes the mrjob wrapper into the image — otherwise a
-// comp stage's `-mrjob /opt/mart/mrjob` reference would be missing on the worker.
+// comp stage's `-mrjob /opt/mro2nf/mrjob` reference would be missing on the worker.
 func TestEmitContainerMrjob(t *testing.T) {
 	tmp := t.TempDir()
 	for _, n := range []string{"mre", "mrjob"} {
@@ -532,7 +532,7 @@ func TestEmitContainerMrjob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(df), "COPY runtime/mrjob /opt/mart/mrjob") {
+	if !strings.Contains(string(df), "COPY runtime/mrjob /opt/mro2nf/mrjob") {
 		t.Error("Dockerfile must COPY mrjob when the pipeline has comp stages (Mrjob set)")
 	}
 
@@ -596,7 +596,7 @@ func TestEmitHealthOmicsPackaging(t *testing.T) {
 
 // TestEmitContainerBuild checks that a container target assembles a self-contained
 // Docker build context (mre + adapters + stage code under runtime/), emits a
-// Dockerfile, and bakes in-container /opt/mart paths into the scripts — never the
+// Dockerfile, and bakes in-container /opt/mro2nf paths into the scripts — never the
 // host paths, which don't exist inside the image.
 func TestEmitContainerBuild(t *testing.T) {
 	mre := filepath.Join(t.TempDir(), "mre")
@@ -618,7 +618,7 @@ func TestEmitContainerBuild(t *testing.T) {
 	shell, _ := filepath.Abs("../../vendor-martian/python/martian_shell.py")
 	if err := emit.Emit(prog, emit.Options{
 		OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro",
-		Target: emit.TargetAWSBatch, Container: "ecr/mart:1",
+		Target: emit.TargetAWSBatch, Container: "ecr/mro2nf:1",
 		StageCode: map[string]string{"SUM_SQUARES": ssDir, "REPORT": ssDir},
 	}); err != nil {
 		t.Fatalf("emit: %v", err)
@@ -629,7 +629,7 @@ func TestEmitContainerBuild(t *testing.T) {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
 
-	for _, want := range []string{"FROM --platform=linux/amd64", "COPY runtime/mre /opt/mart/mre", "awscli"} {
+	for _, want := range []string{"FROM --platform=linux/amd64", "COPY runtime/mre /opt/mro2nf/mre", "awscli"} {
 		if !strings.Contains(string(df), want) {
 			t.Errorf("Dockerfile missing %q", want)
 		}
@@ -652,8 +652,8 @@ func TestEmitContainerBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(mod), "'/opt/mart/mre'") || !strings.Contains(string(mod), "-stagecode '/opt/mart/stages/SUM_SQUARES'") {
-		t.Error("scripts must bake in-container /opt/mart paths for a container target")
+	if !strings.Contains(string(mod), "'/opt/mro2nf/mre'") || !strings.Contains(string(mod), "-stagecode '/opt/mro2nf/stages/SUM_SQUARES'") {
+		t.Error("scripts must bake in-container /opt/mro2nf paths for a container target")
 	}
 
 	if strings.Contains(string(mod), ssDir) {

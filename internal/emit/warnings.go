@@ -3,13 +3,13 @@ package emit
 import (
 	"fmt"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // Warnings returns human-readable notices for Martian constructs the generated
 // project reproduces with a documented divergence from mrp. These do NOT change
 // output correctness (the pipeline still computes the same results), but the
-// operator should know the runtime behavior differs — so the mart CLI logs them
+// operator should know the runtime behavior differs — so the mro2nf CLI logs them
 // at transpile time rather than letting the difference pass silently.
 //
 // Constructs with no faithful lowering at all (unknown expressions/adapters, an

@@ -7,7 +7,7 @@ import (
 
 	"github.com/martian-lang/martian/martian/syntax"
 
-	"github.com/eunmann/martian-nextflow/internal/apperror"
+	"github.com/eunmann/mro2nf/internal/apperror"
 )
 
 // Parse compiles the MRO file at path, resolving @include directives against

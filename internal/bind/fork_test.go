@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/eunmann/martian-nextflow/internal/bind"
+	"github.com/eunmann/mro2nf/internal/bind"
 )
 
 func TestResolveForks(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 
 	"github.com/martian-lang/martian/martian/syntax"
 
-	"github.com/eunmann/martian-nextflow/internal/apperror"
-	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/mro2nf/internal/apperror"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // Lower converts a type-checked Martian AST into the transpiler IR.

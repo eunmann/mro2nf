@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/eunmann/martian-nextflow/internal/bind"
-	"github.com/eunmann/martian-nextflow/internal/types"
+	"github.com/eunmann/mro2nf/internal/bind"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // runBind resolves a call's input bindings into an _args bundle directory. -spec

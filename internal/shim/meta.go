@@ -53,8 +53,8 @@ func writeJobInfo(meta, files, phase string, res Resources, inv Invocation) erro
 			"mro_file": inv.MROFile,
 		},
 		"version": map[string]any{
-			"martian":   "martian-nextflow",
-			"pipelines": "martian-nextflow",
+			"martian":   "mro2nf",
+			"pipelines": "mro2nf",
 		},
 	}
 

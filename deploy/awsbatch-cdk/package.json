@@ -1,5 +1,5 @@
 {
-  "name": "mart-nextflow-awsbatch-cdk",
+  "name": "mro2nf-awsbatch-cdk",
   "version": "0.1.0",
   "private": true,
   "description": "Minimal AWS infra (Batch + S3 + ECR + HealthOmics role) to test transpiled Martian->Nextflow pipelines live",

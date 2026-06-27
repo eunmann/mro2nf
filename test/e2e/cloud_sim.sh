@@ -31,7 +31,7 @@ make build >/dev/null
 proj="$(mktemp -d)"
 trap 'rm -rf "$proj"' EXIT
 
-./mart -o "$proj" \
+./mro2nf -o "$proj" \
     -mre "$ROOT/mre" \
     -shell "$ROOT/vendor-martian/python/martian_shell.py" \
     -mropath testdata/file_chain \
@@ -89,7 +89,7 @@ fi
 # 3. A map call whose callee emits a FILE must carry per-fork files through the
 #    MERGE bundle, not bare absolute paths into deleted fork scratch dirs.
 mf="$(mktemp -d)"
-./mart -o "$mf" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
+./mro2nf -o "$mf" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
     -mropath testdata/map_file testdata/map_file/pipeline.mro >/dev/null
 cp "$proj/cloud.config" "$mf/cloud.config"
 if ! (cd "$mf" && nextflow run main.nf -c cloud.config >/dev/null 2>&1); then

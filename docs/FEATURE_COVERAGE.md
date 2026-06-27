@@ -26,7 +26,7 @@ out of scope for a transpiler.
   an invalid `-target`. Lowering errors by default on any unrecognized
   expression, so a construct cannot be silently dropped.
 - **⚠️ warning** — the project transpiles but a no-op divergence is **logged**
-  by `mart`: `preflight` (runs, no early-abort), `local`, `volatile` (no VDR).
+  by `mro2nf`: `preflight` (runs, no early-abort), `local`, `volatile` (no VDR).
 - **🚫 / layout** — documented here with no output-observable impact.
 
 ## Language — writing-pipelines / language-details
@@ -105,7 +105,7 @@ out of scope for a transpiler.
 | per-chunk resources → Nextflow scheduler directives | ✅ #15 (dynamic `cpus`/`memory` closures read the chunk's resolved resources; split & join phases also pass their resolved allocation to the shim so every phase's `_jobinfo` matches mrp) | e2e `split_test`, unit |
 | negative/adaptive resource sentinels | ✅ preserved | unit `TestMergeArgsNegativeResources` |
 | stage `using(mem_gb/threads)` incl. fractional → cpus/memory | ✅ | unit `TestEmitModules` (`memory '2 GB'`, `cpus 1`), shim |
-| `using(vmem_gb)` enforcement | ✅ with `mart -monitor` (shim caps the adapter's virtual memory via `prlimit --as`); otherwise carried in `_jobinfo` only | unit `TestLimitedCommandMonitor` |
+| `using(vmem_gb)` enforcement | ✅ with `mro2nf -monitor` (shim caps the adapter's virtual memory via `prlimit --as`); otherwise carried in `_jobinfo` only | unit `TestLimitedCommandMonitor` |
 | `using(special)` → scheduler | ✅ mapped to a `clusterOptions` directive on every phase, looked up from `params.job_resources` (the `MRO_JOBRESOURCES` analog: a `special` string keys into a deploy-supplied map of scheduler options). Default map is empty (no-op on local; populate per deployment). A per-task `__special` (per-chunk / split-returned join) wins over the static key | e2e `special_resource`, unit `TestEmitSpecialScheduler`, `TestSpecialResourcePreserved` |
 | split-returned `join` resource override → join phase directives | ✅ the split's `{"join": {...}}` block (`readStageDefs`) is emitted as `joinres.json` and read by the JOIN process's dynamic `cpus`/`memory`/`clusterOptions`, overlaying the stage's static `using()` field-by-field — matching mrp's `getJobReqs`. JOIN provisions and reports the overridden allocation | e2e `join_resources`, unit `TestReadStageDefsJoinOverride`, `TestEmitJoinResourceOverride` |
 | `martian` module API (make_path, log_info/log_warn, update_progress, exit, alarm) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain`, `api_smoke` |
@@ -113,7 +113,7 @@ out of scope for a transpiler.
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
 | ASSERT vs retryable-error classification | ✅ shim exits 42 for an ASSERT (terminate) vs 1 for a retryable failure; config's dynamic `errorStrategy` routes accordingly | unit `TestStageFailureClassification`, `TestEmitConfig` |
 | auto-adjust-memory / OOM escalation | 🚫 mrp runtime | — (documented) |
-| `--monitor` vmem enforcement | ✅ with `mart -monitor` (shim `prlimit --as` cap; RLIMIT_AS address-space, vs mrp's RSS poll) | unit `TestLimitedCommandMonitor` |
+| `--monitor` vmem enforcement | ✅ with `mro2nf -monitor` (shim `prlimit --as` cap; RLIMIT_AS address-space, vs mrp's RSS poll) | unit `TestLimitedCommandMonitor` |
 
 ## Outputs / storage — storage-management
 
@@ -135,7 +135,7 @@ out of scope for a transpiler.
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles | unit `TestEmitConfig` |
 | `--autoretry` (content-based retry) | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it | unit `TestEmitConfig`, `TestStageFailureClassification` |
 | cloud executors (awsbatch/k8s) | ✅ profiles emitted; #13 bundle data plane makes file flow object-store-correct; auxiliary files staged via `_assets` so isolated workers (no shared FS) can read them | config, e2e `cloud_sim` (copy-staging), `docker_iso` (true container isolation) |
-| `-target awsbatch` (AWS Batch + S3) | ✅ Batch executor + classic aws-CLI S3 staging, in-container `/opt/mart` paths, a generated `Dockerfile` + self-contained `runtime/` build context (bash/ps, no ENTRYPOINT, x86_64, aws CLI) | unit `TestEmitConfigTargets`, `TestEmitContainerBuild`; e2e `docker_iso` (built from the generated Dockerfile) |
+| `-target awsbatch` (AWS Batch + S3) | ✅ Batch executor + classic aws-CLI S3 staging, in-container `/opt/mro2nf` paths, a generated `Dockerfile` + self-contained `runtime/` build context (bash/ps, no ENTRYPOINT, x86_64, aws CLI) | unit `TestEmitConfigTargets`, `TestEmitContainerBuild`; e2e `docker_iso` (built from the generated Dockerfile) |
 | `-target healthomics` (AWS HealthOmics) | ✅ ECR-parameterized container, publishes to `/mnt/workflow/pubdir`, no executor (managed), pinned Nextflow version, `parameter-template.json` + `package.sh` (workflow zip) | unit `TestEmitConfigTargets`, `TestEmitHealthOmicsPackaging` |
 | `-resume` ≈ restart-without-rerun | ⚠️ content-addressed cache (different mechanism) | — |
 | web UI / HTTP API / mrstat | 🚫 use `nextflow log`/`-with-report` instead | — |
@@ -156,7 +156,7 @@ out of scope for a transpiler.
   - **content-based retry (ASSERT vs retryable)** — ✅ done. The shim exits 42 for
     an `ASSERT:` failure and 1 otherwise; the config's dynamic `errorStrategy`
     terminates the former and retries the latter.
-  - **`--monitor` vmem enforcement** — ✅ done (opt-in `mart -monitor`). The shim
+  - **`--monitor` vmem enforcement** — ✅ done (opt-in `mro2nf -monitor`). The shim
     caps the adapter via `prlimit --as`. Caveat: RLIMIT_AS bounds address space,
     where mrp polls RSS, so a high-virtual/low-resident stage may be capped
     sooner; enable only when you want that ceiling.

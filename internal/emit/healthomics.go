@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // healthOmicsParam is one entry in a HealthOmics parameter-template.json: a

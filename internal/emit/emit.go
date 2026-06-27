@@ -15,11 +15,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/martian-nextflow/internal/apperror"
-	"github.com/eunmann/martian-nextflow/internal/bind"
-	"github.com/eunmann/martian-nextflow/internal/ir"
-	"github.com/eunmann/martian-nextflow/internal/shim"
-	"github.com/eunmann/martian-nextflow/internal/types"
+	"github.com/eunmann/mro2nf/internal/apperror"
+	"github.com/eunmann/mro2nf/internal/bind"
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 const (

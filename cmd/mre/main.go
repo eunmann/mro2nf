@@ -12,9 +12,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
-	"github.com/eunmann/martian-nextflow/internal/shim"
-	"github.com/eunmann/martian-nextflow/internal/types"
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // version is set via -ldflags at build time.

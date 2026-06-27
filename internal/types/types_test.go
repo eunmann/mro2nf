@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
-	"github.com/eunmann/martian-nextflow/internal/types"
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // upper rewrites a path to its uppercase form, so tests can assert exactly which

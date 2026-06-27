@@ -1,6 +1,6 @@
 package emit
 
-import "github.com/eunmann/martian-nextflow/internal/apperror"
+import "github.com/eunmann/mro2nf/internal/apperror"
 
 // Target is the execution backend the generated project is shaped for. It drives
 // the nextflow.config profile, the publish directory, whether a container image

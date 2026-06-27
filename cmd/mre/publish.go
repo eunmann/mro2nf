@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/eunmann/martian-nextflow/internal/shim"
-	"github.com/eunmann/martian-nextflow/internal/types"
+	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // runPublish finalizes a pipeline's outputs. It reads the final output bundle

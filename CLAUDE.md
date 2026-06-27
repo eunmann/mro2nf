@@ -1,4 +1,4 @@
-# martian-nextflow
+# mro2nf
 
 Transpiles Martian (`.mro`) pipelines into Nextflow projects. Generated Nextflow
 orchestrates the DAG/splits/forks/resources; each process runs the **original**
@@ -8,7 +8,7 @@ design plan at `~/.claude/plans/bright-booping-rose.md`.
 ## Architecture
 
 ```
-cmd/mart/            → transpiler CLI: .mro -> Nextflow project
+cmd/mro2nf/            → transpiler CLI: .mro -> Nextflow project
 cmd/mre/             → runtime shim: runs one stage phase (split|main|join)
                        against the real Martian adapter inside a NF process
 internal/

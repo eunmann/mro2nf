@@ -33,7 +33,7 @@ export NXF_ANSI_LOG=false
 export NXF_DISABLE_CHECK_LATEST=true
 export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx1g -XX:+UseSerialGC}"
 
-IMAGE=mart-iso:test
+IMAGE=mro2nf-iso:test
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -82,7 +82,7 @@ for spec in "${CASES[@]}"; do
     [ -n "${GOLD[$name]:-}" ] && golden="${GOLD[$name]}"
     proj="$WORK/$name"
 
-    ./mart -o "$proj" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
+    ./mro2nf -o "$proj" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
         -mropath "$dir" "$dir/pipeline.mro" >/dev/null 2>&1 ||
         { echo "FAIL[$name]: transpile"; fail=1; continue; }
 
@@ -123,7 +123,7 @@ printf '10\n'       >"$WORK/sb2/reads.txt"  # 10 ; (5+10) * 2 == 30
 run_override() { # name fixture params-json expected-json
     local name="$1" fx="$2" params="$3" expect="$4"
     local proj="$WORK/$name"
-    if ! ./mart -o "$proj" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
+    if ! ./mro2nf -o "$proj" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
         -mropath "testdata/$fx" "testdata/$fx/pipeline.mro" >/dev/null 2>&1; then
         echo "FAIL[$name]: transpile"; fail=1; return
     fi

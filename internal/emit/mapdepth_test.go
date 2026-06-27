@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/eunmann/martian-nextflow/internal/apperror"
-	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/mro2nf/internal/apperror"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // TestCheckSupportedRejectsArrayOfMapProjection verifies the emit-time guard:

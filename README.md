@@ -1,4 +1,4 @@
-# martian-nextflow
+# mro2nf
 
 Turn [Martian](https://martian-lang.org) (`.mro`) pipelines into runnable
 [Nextflow](https://www.nextflow.io) projects, without rewriting your stage code.
@@ -12,7 +12,7 @@ AWS Batch, Kubernetes) and its object-store data plane. The stage code runs
 unchanged and never knows it moved.
 
 ```
-.mro + stage code ──mart──▶ Nextflow project ──nextflow run──▶ results/
+.mro + stage code ──mro2nf──▶ Nextflow project ──nextflow run──▶ results/
                             (main.nf, modules/,                (== mrp outputs)
                              nextflow.config, types.json)
                                     │ each process:
@@ -40,7 +40,7 @@ targets — see **[`docs/TRANSPILER.md`](docs/TRANSPILER.md)**.
 ## Layout
 
 ```
-cmd/mart/      transpiler CLI: .mro -> Nextflow project
+cmd/mro2nf/      transpiler CLI: .mro -> Nextflow project
 cmd/mre/       runtime shim: runs one stage phase against the Martian adapter
 internal/
   frontend/    parse .mro via github.com/martian-lang/martian/syntax -> IR
@@ -65,9 +65,9 @@ Prerequisites: Go ≥ 1.24, Java 17+, [Nextflow](https://www.nextflow.io)
 (`curl -s https://get.nextflow.io | bash`), Python 3.
 
 ```bash
-make build                      # builds ./mart and ./mre
+make build                      # builds ./mro2nf and ./mre
 
-./mart -o out \
+./mro2nf -o out \
     -mre "$PWD/mre" \
     -shell "$PWD/vendor-martian/python/martian_shell.py" \
     -mropath path/to/pipeline_dir \
@@ -76,7 +76,7 @@ make build                      # builds ./mart and ./mre
 cd out && nextflow run main.nf  # results land in out/results/
 ```
 
-### `mart` flags
+### `mro2nf` flags
 
 | Flag | Meaning |
 |---|---|
@@ -93,8 +93,8 @@ For `-target local` the `-mre`/`-shell`/`-mrjob`/stage paths are baked into the
 generated scripts, so set them to the paths that will exist **where the pipeline
 runs** (the local repo, or shared-filesystem cluster paths).
 
-For `-target awsbatch` and `-target healthomics` (container backends) `mart`
-ignores those host paths. It bakes fixed in-container paths under `/opt/mart/`,
+For `-target awsbatch` and `-target healthomics` (container backends) `mro2nf`
+ignores those host paths. It bakes fixed in-container paths under `/opt/mro2nf/`,
 copies the `mre` shim, the Martian adapters, and your stage code into a
 self-contained `runtime/` build context, and writes a `Dockerfile` so
 `docker build` produces the runtime image.
@@ -166,11 +166,11 @@ absolute paths.
 
 ## Running on AWS Batch + S3 or HealthOmics
 
-Transpile with the matching target — `mart` bakes in-container paths and emits a
+Transpile with the matching target — `mro2nf` bakes in-container paths and emits a
 ready-to-build `Dockerfile` + `runtime/` context:
 
 ```bash
-./mart -o out -target awsbatch -container <ecr-uri> \
+./mro2nf -o out -target awsbatch -container <ecr-uri> \
     -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
     -mropath path/to/pipeline_dir path/to/pipeline.mro
 
@@ -247,7 +247,7 @@ CI (`.github/workflows/pr-validation.yml`) runs lint (golangci-lint + `govulnche
 PR and push to `main`. The Martian dependency is pinned to a published commit, so
 CI needs only a single checkout; to hack on the Martian parser locally, add a
 `go.work` pointing at a fork checkout (gitignored). Tagging `v*` triggers
-`release.yml`, which cross-compiles the `mart` and `mre` binaries and publishes a
+`release.yml`, which cross-compiles the `mro2nf` and `mre` binaries and publishes a
 GitHub release.
 
 ## License

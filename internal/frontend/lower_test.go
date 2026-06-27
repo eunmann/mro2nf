@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/eunmann/martian-nextflow/internal/frontend"
-	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/mro2nf/internal/frontend"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 const splitTestMRO = "../../testdata/split_test/pipeline.mro"

@@ -35,7 +35,7 @@ if [[ "${1:-}" == "--one" ]]; then
     mrjob_opt=()
     [ -f "$dir/mrjob.sh" ] && mrjob_opt=(-mrjob "$dir/mrjob.sh")
 
-    ./mart -o "$proj" \
+    ./mro2nf -o "$proj" \
         -mre "$ROOT/mre" \
         -shell "$ROOT/vendor-martian/python/martian_shell.py" \
         -mropath "$dir" ${mrjob_opt[@]+"${mrjob_opt[@]}"} \

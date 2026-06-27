@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-BINS := mart mre
+BINS := mro2nf mre
 PREFIX ?= $(HOME)/.local
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -16,7 +16,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n", $$1, $$2}'
 
-build: ## Build mart and mre
+build: ## Build mro2nf and mre
 	@for b in $(BINS); do go build -ldflags "$(LDFLAGS)" -o $$b ./cmd/$$b; done
 
 test: ## Run unit tests

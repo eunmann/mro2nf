@@ -6,7 +6,7 @@ a transpiled Martian→Nextflow pipeline live, for **both** cloud targets:
 | Resource | Used by |
 |---|---|
 | S3 bucket (work dir + outputs) | `awsbatch` + `healthomics` |
-| ECR repo `mart-runtime` (the image built from the generated `Dockerfile`) | both |
+| ECR repo `mro2nf-runtime` (the image built from the generated `Dockerfile`) | both |
 | VPC (public subnets, S3 gateway endpoint, no NAT) | `awsbatch` |
 | Batch compute environment + job queue + instance role | `awsbatch` |
 | HealthOmics service role + ECR pull policy | `healthomics` |
@@ -57,8 +57,8 @@ Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleAr
 ## Run on AWS Batch + S3
 
 ```bash
-# 1. transpile for awsbatch (bakes /opt/mart paths + Dockerfile + runtime/ context)
-./mart -o out -target awsbatch -container <EcrRepoUri>:latest \
+# 1. transpile for awsbatch (bakes /opt/mro2nf paths + Dockerfile + runtime/ context)
+./mro2nf -o out -target awsbatch -container <EcrRepoUri>:latest \
     -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
     -mropath testdata/split_test testdata/split_test/pipeline.mro
 
@@ -80,7 +80,7 @@ nextflow run main.nf \
 
 ```bash
 # 1. transpile for healthomics (also emits parameter-template.json + package.sh)
-./mart -o out -target healthomics -container <EcrRepoUri>:latest \
+./mro2nf -o out -target healthomics -container <EcrRepoUri>:latest \
     -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
     -mropath testdata/split_test testdata/split_test/pipeline.mro
 

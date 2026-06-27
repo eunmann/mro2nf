@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/martian-nextflow/internal/apperror"
-	"github.com/eunmann/martian-nextflow/internal/frontend"
+	"github.com/eunmann/mro2nf/internal/apperror"
+	"github.com/eunmann/mro2nf/internal/frontend"
 )
 
 // TestCorpusParsesAndLowers is a robustness sweep over rich, real Martian MRO

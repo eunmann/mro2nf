@@ -13,7 +13,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // Table resolves struct type names to their fields so the walk can descend into

@@ -7,12 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/eunmann/martian-nextflow/internal/apperror"
+	"github.com/eunmann/mro2nf/internal/apperror"
 )
 
 // In-container layout the generated scripts reference and the Dockerfile fills.
 const (
-	ctrRoot     = "/opt/mart"
+	ctrRoot     = "/opt/mro2nf"
 	ctrMre      = ctrRoot + "/mre"
 	ctrAdapters = ctrRoot + "/adapters"
 	ctrMrjob    = ctrRoot + "/mrjob"

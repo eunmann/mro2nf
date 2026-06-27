@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // filePerm is the mode for generated project artifacts (not secrets).

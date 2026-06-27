@@ -19,7 +19,7 @@ import * as batch from 'aws-cdk-lib/aws-batch';
  * easy teardown — `cdk destroy` removes it all. This is an example, not a
  * hardened production deployment.
  */
-export class MartNextflowStack extends cdk.Stack {
+export class Mro2nfStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
@@ -51,7 +51,7 @@ export class MartNextflowStack extends cdk.Stack {
     // Keep a bounded number of recent images so layers can't pile up (room for
     // version history and a multi-pipeline test matrix; they share base layers).
     const repo = new ecr.Repository(this, 'RuntimeRepo', {
-      repositoryName: 'mart-runtime',
+      repositoryName: 'mro2nf-runtime',
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       emptyOnDelete: true,
       lifecycleRules: [{ maxImageCount: 20 }],
@@ -110,7 +110,7 @@ export class MartNextflowStack extends cdk.Stack {
       actions: ['ecr:GetDownloadUrlForLayer', 'ecr:BatchGetImage', 'ecr:BatchCheckLayerAvailability'],
     }));
 
-    // --- Outputs (feed these to `mart` / `nextflow run` / `aws omics`) ---
+    // --- Outputs (feed these to `mro2nf` / `nextflow run` / `aws omics`) ---
     new cdk.CfnOutput(this, 'Region', { value: this.region });
     new cdk.CfnOutput(this, 'WorkBucketName', { value: bucket.bucketName });
     new cdk.CfnOutput(this, 'EcrRepoUri', { value: repo.repositoryUri });

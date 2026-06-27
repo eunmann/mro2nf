@@ -7,9 +7,9 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/eunmann/martian-nextflow/internal/ir"
-	"github.com/eunmann/martian-nextflow/internal/shim"
-	"github.com/eunmann/martian-nextflow/internal/types"
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // errNotObject is returned when a payload that should be a JSON object isn't.

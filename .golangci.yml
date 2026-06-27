@@ -49,7 +49,7 @@ linters:
         - error
         - empty
         - stdlib
-        - github.com/eunmann/martian-nextflow/internal
+        - github.com/eunmann/mro2nf/internal
         # The Martian AST exposes parameters via the StructMemberLike interface.
         - github.com/martian-lang/martian/martian/syntax
   exclusions:

@@ -24,20 +24,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Build mart + mre
+      - name: Build mro2nf + mre
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           ext=""
           [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
-          for bin in mart mre; do
+          for bin in mro2nf mre; do
             out="${bin}-${{ matrix.goos }}-${{ matrix.goarch }}${ext}"
             go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" "./cmd/${bin}"
           done
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            mart-${{ matrix.goos }}-${{ matrix.goarch }}*
+            mro2nf-${{ matrix.goos }}-${{ matrix.goarch }}*
             mre-${{ matrix.goos }}-${{ matrix.goarch }}*
           fail_on_unmatched_files: true

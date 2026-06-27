@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/eunmann/martian-nextflow/internal/shim"
+	"github.com/eunmann/mro2nf/internal/shim"
 )
 
 const filePerm = 0o644

@@ -4,10 +4,10 @@ Tracks what was actually run on real AWS infrastructure (not just local/Docker)
 and verified against `mrp` golden outputs. Updated as runs complete.
 
 - **Account / region:** 854552618084 / us-east-2
-- **Infra:** `deploy/awsbatch-cdk/` (S3 bucket, ECR `mart-runtime`, Batch managed-EC2
+- **Infra:** `deploy/awsbatch-cdk/` (S3 bucket, ECR `mro2nf-runtime`, Batch managed-EC2
   spot CE + queue, HealthOmics role). VPC public subnets + S3 gateway endpoint, no NAT.
 - **Runtime image:** `python:3.12-slim` + `procps` + `awscli` + static `linux/amd64`
-  `mre` + Martian adapters + stage code at `/opt/mart` (built from the generated
+  `mre` + Martian adapters + stage code at `/opt/mro2nf` (built from the generated
   `Dockerfile`). One tag per fixture in ECR.
 - **Date:** 2026-06-27 (round 4); earlier rounds 2026-06-26
 
@@ -274,7 +274,7 @@ at `omics-out/<run-id>/logs/engine.log`.
 
 4. **Dockerfile omitted `mrjob`.** The generated Dockerfile copied mre/adapters/
    stage code but not the `mrjob` wrapper, so a **comp-adapter** image was missing
-   `/opt/mart/mrjob` on the worker. **Fix:** the Dockerfile now COPYs `runtime/mrjob`
+   `/opt/mro2nf/mrjob` on the worker. **Fix:** the Dockerfile now COPYs `runtime/mrjob`
    when the pipeline has comp stages (`Options.Mrjob` set). Regression test
    `TestEmitContainerMrjob`; `make test-e2e` gained a `-mrjob` path so `comp_split`
    runs in the standing suite.
@@ -302,7 +302,7 @@ directory, in and out), logs, retry/terminate, and resources verified live.
   default on any expression it doesn't recognize, so unsupported constructs
   cannot slip through as a silent drop.
 - **Warning (transpiles, behavior differs):** `preflight` (runs, no early-abort),
-  `local` (scheduled normally), `volatile` (no mid-run VDR). `mart` logs these.
+  `local` (scheduled normally), `volatile` (no mid-run VDR). `mro2nf` logs these.
 - **Documented, no output impact:** `publishDir` layout vs mrp's `outs/` tree;
   `special` → `clusterOptions` mapping. See `FEATURE_COVERAGE.md`.
 
@@ -333,6 +333,6 @@ collision), plus the no-op-modifier warnings. Local `make test` + `make test-e2e
 
 **Infra status (2026-06-27, round 4):** after the round-4 campaign the stack was
 **torn down** — `cd deploy/awsbatch-cdk && npx cdk destroy` in us-east-2 and
-us-east-1. To bring it back, `npx cdk deploy MartNextflowStack` per region. It
+us-east-1. To bring it back, `npx cdk deploy Mro2nfStack` per region. It
 idles at ≈$0 when up (Batch `minvCpus: 0`, spot; no NAT/EFS), so leaving it
 deployed is cheap if more live runs are planned.

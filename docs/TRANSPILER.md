@@ -1,6 +1,6 @@
 # How the Martian → Nextflow transpiler works
 
-This document explains, end to end, how `martian-nextflow` turns a Martian
+This document explains, end to end, how `mro2nf` turns a Martian
 pipeline (`.mro`) into a runnable Nextflow project — what each piece does, how
 data flows, and why the design is shaped the way it is. It is meant to be read
 top to bottom by someone who knows neither codebase deeply.
@@ -35,7 +35,7 @@ This one decision shapes everything else:
   (`martian_shell.py`), so its outputs are byte-for-byte what `mrp` would
   produce. The transpiler only has to schedule the same work in the same shape.
   It never re-derives the science.
-- **Two programs.** `mart` is the transpiler; it runs at build time and emits the
+- **Two programs.** `mro2nf` is the transpiler; it runs at build time and emits the
   Nextflow project. `mre` is the runtime shim, baked into that project; it runs
   each stage phase at execution time.
 - **A neutral data plane.** Martian passes data between stages as JSON plus files
@@ -47,7 +47,7 @@ This one decision shapes everything else:
   identically on a laptop, an HPC cluster, AWS Batch + S3, and AWS HealthOmics.
 
 ```
-          build time (mart)                         run time (Nextflow + mre)
+          build time (mro2nf)                         run time (Nextflow + mre)
    ┌──────────────────────────┐            ┌──────────────────────────────────┐
    │  pipeline.mro            │            │  process SUM_SQUARES_SPLIT { … }  │
    │      │  parse + lower     │   emits    │     └─ runs:  mre split …         │
@@ -67,7 +67,7 @@ This one decision shapes everything else:
 ```
 .mro file
    │
-   │  cmd/mart  (the `mart` CLI)
+   │  cmd/mro2nf  (the `mro2nf` CLI)
    ▼
 frontend.Parse   → Martian AST     (uses github.com/martian-lang/martian/syntax)
    │
@@ -85,7 +85,7 @@ nextflow run main.nf …   →  processes invoke the baked `mre` shim, which
 Source layout (from `CLAUDE.md`):
 
 ```
-cmd/mart/      → transpiler CLI: .mro -> Nextflow project
+cmd/mro2nf/      → transpiler CLI: .mro -> Nextflow project
 cmd/mre/       → runtime shim: runs one stage phase (split|main|join|…) per process
 internal/
   frontend/    → parse .mro via martian/syntax, lower to IR
@@ -108,7 +108,7 @@ intermediate representation (`frontend.Lower` → `internal/ir`). The IR exists 
 the emitter never has to think about Martian's surface syntax — only about a flat
 set of stages, pipelines, calls, and bindings.
 
-The `mart` CLI (`cmd/mart/main.go`) ties this together:
+The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
 
 - Flags: `-o <dir>` (output project), `-mre`/`-shell`/`-mrjob` (paths to the
   runtime shim, the Martian Python adapter, and the optional compiled-stage
@@ -492,7 +492,7 @@ only the surrounding plumbing changes.
 For container targets the emitter writes a **`Dockerfile`** plus a self-contained
 `runtime/` build context (the `mre` binary, the Martian adapters, your stage
 code, and — for `comp` stages — the `mrjob` wrapper) at fixed in-container paths
-(`/opt/mart/…`) that the generated scripts bake. HealthOmics tasks have **no
+(`/opt/mro2nf/…`) that the generated scripts bake. HealthOmics tasks have **no
 internet**, so any third-party stage dependency (e.g. the Cell Ranger binary)
 must be added to the Dockerfile.
 
