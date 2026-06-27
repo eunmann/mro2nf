@@ -22,11 +22,12 @@ out of scope for a transpiler.
 **How unsupported features are signalled (never silent):**
 - **❌ hard error** — the transpile fails (`UnsupportedError` / parse error,
   non-zero exit): an unknown expression (e.g. `sweep`), an unknown adapter
-  language, a `comp` stage without `mrjob`, an `array<map<S>>.field` projection,
-  an invalid `-target`. Lowering errors by default on any unrecognized
-  expression, so a construct cannot be silently dropped.
+  language, a `comp` stage without `mrjob`, a nested typed-map projection
+  (`map<map<S>>.field`), an invalid `-target`. Lowering errors by default on any
+  unrecognized expression, so a construct cannot be silently dropped.
 - **⚠️ warning** — the project transpiles but a no-op divergence is **logged**
-  by `mro2nf`: `preflight` (runs, no early-abort), `local`, `volatile` (no VDR).
+  by `mro2nf`: `local`, `volatile` (no VDR), and a `preflight` bound to a call
+  output (it runs in DAG order rather than gating early).
 - **🚫 / layout** — documented here with no output-observable impact.
 
 ## Language — writing-pipelines / language-details
@@ -53,7 +54,8 @@ out of scope for a transpiler.
 | bindings: `self.x`, `self.x.y`, `STAGE`, `STAGE.out`, `STAGE.out.field`, `STAGE.default` | ✅ | unit `bind`; e2e `struct_proj`, `default_out` |
 | **field projection through arrays** (`CALL.s.field`) | ✅ | unit `TestResolveArrayProjection`, e2e `struct_proj` |
 | field projection through maps (`map<S>.field`) | ✅ (emitter computes a per-ref `MapDepth` from the program types; the binder projects the field over the map's values — covers declared `map<S>` outputs and map-fork-induced maps) | e2e `map_struct_proj`, unit `TestResolveMapProjection`, `TestMapProjectDepth` |
-| field projection through an **array of typed maps** (`array<map<S>>.field`) | ❌ rejected at emit time (`checkSupported` → `ErrUnsupported`) rather than emitting silently-wrong wiring — mixed array-then-map projection has no faithful single-`MapDepth` lowering | unit `TestCheckSupportedRejectsArrayOfMapProjection`, `TestMapProjectDepth` (depth −1) |
+| field projection through an **array of typed maps** (`array<map<S>>.field`) | ✅ the binder descends the array and projects the field over each map's values, preserving the array shape (`-> array<map<field>>`); the emitter marks it with `Ref.MapInArray` | unit `TestResolveArrayOfMapProjection`, `TestMapProjectDepth`, `TestCheckSupported` |
+| field projection through **nested typed maps** (`map<map<S>>.field`) | ❌ rejected at emit time (`checkSupported` → `ErrUnsupported`) — one projection level cannot faithfully lower nested maps, so it errors rather than mis-projecting | unit `TestCheckSupported`, `TestMapProjectDepth` (depth −1) |
 | literal edge cases: negative numbers, `>2^53` int64 precision, unicode/escape strings | ✅ | e2e `literals_edge` |
 | wildcard binding `* = self` / `* = REF` | ✅ | e2e `wildcard` (compiler expands) |
 | **refs nested in array/map literals** (`[A.x, B.x]` fan-in) | ✅ #14 | unit `bind`/`fork`, e2e `fanin` |
@@ -68,7 +70,7 @@ out of scope for a transpiler.
 | nested pipeline calls (pipeline→pipeline) | ✅ | e2e `modifiers_min`, `kitchen_sink` |
 | non-linear / diamond DAGs | ✅ | e2e `diamond_min` |
 | `using (disabled = ref)` (self or call ref) | ✅ | e2e `modifiers_min` |
-| `(preflight)` | ⚠️ runs as ordinary call (no early-abort gating) | e2e `modifiers_min` |
+| `(preflight)` | ✅ gates the pipeline (early-abort): an input-bound preflight runs first and the pipeline's `pa` is gated on its completion, so every downstream call waits — mrp's prenode behavior. A preflight bound to a call output stays in DAG order (warns) | e2e `modifiers_min`, `kitchen_sink`; unit `TestEmitPreflightGate` |
 | `(local)` | ⚠️ no-op (scheduling only) | e2e `kitchen_sink` |
 | `(volatile)` / `volatile = strict` | ⚠️ no-op for outputs (VDR is 🚫) | e2e `kitchen_sink` |
 
@@ -112,7 +114,7 @@ out of scope for a transpiler.
 | `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` (using(mem_gb=3,threads=2)→mem 3,threads 2) |
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
 | ASSERT vs retryable-error classification | ✅ shim exits 42 for an ASSERT (terminate) vs 1 for a retryable failure; config's dynamic `errorStrategy` routes accordingly | unit `TestStageFailureClassification`, `TestEmitConfig` |
-| auto-adjust-memory / OOM escalation | 🚫 mrp runtime | — (documented) |
+| auto-adjust-memory / OOM escalation | ✅ memory directives grow with `task.attempt`, so an OOM-killed stage (a retryable failure) is retried with more memory instead of failing identically; cpus do not escalate. Attempt 1 is unchanged | unit `TestEmitModules` (`* task.attempt`) |
 | `--monitor` vmem enforcement | ✅ with `mro2nf -monitor` (shim `prlimit --as` cap; RLIMIT_AS address-space, vs mrp's RSS poll) | unit `TestLimitedCommandMonitor` |
 
 ## Outputs / storage — storage-management
@@ -170,11 +172,12 @@ out of scope for a transpiler.
 - Scheduler-*allocation* fidelity is now broad: per-chunk `cpus`/`memory`, the
   split-returned `join` override, and `special` → `clusterOptions` all reach the
   scheduler, and every phase reports its resolved allocation in `_jobinfo`, so a
-  transpiled run provisions like mrp and runs in a comparable duration. Residual
-  allocation gaps (no output-observable impact): an explicit `__vmem_gb` join
-  override is not enforced by `--monitor` (the shim derives vmem from memory),
-  and a purely split-returned `__special` on a stage that declares no static
-  `special` is not routed (`clusterOptions` is gated on a static declaration).
+  transpiled run provisions like mrp and runs in a comparable duration. A
+  purely split-returned `__special` is now routed even with no static key (the
+  main/join phases read the per-task `__special`). Residual allocation gap (no
+  output-observable impact, `--monitor`-only): an explicit `__vmem_gb` is not
+  passed to the shim, so `--monitor` caps virtual memory at the derived value
+  (memory + headroom) rather than a declared `vmem_gb`.
 - Remaining ⚠️ items are storage-*layout* fidelity (flat `publishDir` results vs
   mrp's nested `outs/` tree; published names use the written basename, with
   collisions disambiguated, rather than mrp's `GetOutFilename`) — no
