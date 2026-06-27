@@ -254,6 +254,10 @@ func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string,
 	if a.Monitor && vmemGB > 0 {
 		if path, err := exec.LookPath("prlimit"); err == nil {
 			argv = append([]string{path, fmt.Sprintf("--as=%d", int64(vmemGB*bytesPerGB)), "--"}, argv...)
+		} else {
+			// Monitoring was requested but cannot be enforced; say so loudly
+			// rather than silently running the stage with no memory ceiling.
+			fmt.Fprintf(os.Stderr, "mre: --monitor requested but prlimit not found; running without a %g GB vmem cap\n", vmemGB)
 		}
 	}
 
