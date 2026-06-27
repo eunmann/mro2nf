@@ -8,3 +8,9 @@
 !/artifacts/.gitkeep
 __pycache__/
 *.pyc
+
+# Local-only: point the Martian dependency at a fork checkout for parser hacking.
+go.work
+go.work.sum
+/out-*/
+*-linux-amd64

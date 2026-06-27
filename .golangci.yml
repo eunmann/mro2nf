@@ -53,6 +53,10 @@ linters:
         # The Martian AST exposes parameters via the StructMemberLike interface.
         - github.com/martian-lang/martian/martian/syntax
   exclusions:
+    paths:
+      # The CDK app under deploy/ is TypeScript; its node_modules ships stray Go
+      # template files that aren't part of any package. Never lint there.
+      - deploy/
     rules:
       # In-package tests are intentional here (they exercise unexported helpers).
       # Tests also legitimately launch subprocesses, leave external errors

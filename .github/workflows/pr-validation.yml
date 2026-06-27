@@ -1,0 +1,110 @@
+name: PR Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check go mod tidy
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: Check for vulnerabilities
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...
+      # golangci-lint runs govet, so there is no separate `go vet` step.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build all packages
+        run: go build ./...
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run tests (race detector)
+        run: go test -race ./...
+
+  # Transpiles every fixture, runs it under Nextflow, and diffs the result against
+  # the committed real-mrp golden. (Goldens are committed, so mrp is not needed.)
+  e2e:
+    name: E2E (Nextflow vs mrp goldens)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle # cache the JDK toolchain download
+      - uses: nf-core/setup-nextflow@v2 # installs + caches the Nextflow binary
+      - name: Cache Nextflow plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.nextflow
+          key: nextflow-${{ runner.os }}
+      - run: make test-e2e
+
+  # The same pipelines under the docker executor (containers that mount only their
+  # work dir) — the AWS Batch / HealthOmics no-shared-filesystem model. Runs in
+  # parallel with the local e2e job above.
+  e2e-docker:
+    name: E2E (container isolation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@v2
+      - name: Cache Nextflow plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.nextflow
+          key: nextflow-${{ runner.os }}
+      - run: make test-e2e-docker
