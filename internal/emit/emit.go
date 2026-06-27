@@ -306,9 +306,9 @@ func checkValueRefs(prog *ir.Program, p *ir.Pipeline, v ir.Value) error {
 			}
 		}
 	case v.Ref != nil:
-		if mapProjectDepth(prog, p, v.Ref) < 0 {
+		if d, _ := mapProjectDepth(prog, p, v.Ref); d < 0 {
 			return &apperror.UnsupportedError{
-				Construct: "array-of-map field projection",
+				Construct: "nested typed-map field projection",
 				Detail:    fmt.Sprintf("%s.%s in pipeline %s", v.Ref.ID, v.Ref.Output, p.Name),
 			}
 		}
@@ -322,9 +322,9 @@ func checkValueRefs(prog *ir.Program, p *ir.Pipeline, v ir.Value) error {
 // projection). It returns 0 when there is no typed-map projection — arrays
 // auto-project at runtime and structs navigate by key. The binder uses the depth
 // to switch from key navigation to map projection at exactly the right segment.
-func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
+func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) (int, bool) {
 	if p == nil || ref == nil || ref.Output == "" {
-		return 0
+		return 0, false
 	}
 
 	var segs []string
@@ -342,12 +342,12 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
 	case "self":
 		segs = append([]string{ref.ID}, strings.Split(ref.Output, ".")...)
 		cur = paramByName(p.In, segs[0])
-	case "call":
+	case refKindCall:
 		segs = strings.Split(ref.Output, ".")
 		cur = paramByName(calleeOutParams(prog, p, ref.ID), segs[0])
 		curMap, curArray = forkDims(findCall(p, ref.ID))
 	default:
-		return 0
+		return 0, false
 	}
 
 	if cur != nil {
@@ -357,27 +357,16 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
 
 	for i := 1; i < len(segs); i++ {
 		if cur == nil {
-			return 0
+			return 0, false
 		}
 
-		if curArray > 0 {
-			// A field beneath a plain array auto-projects at runtime (depth 0);
-			// a field beneath an array of typed maps (array<map<S>>.field) has no
-			// faithful lowering — signal it with -1 so the emitter rejects it.
-			if curMap > 0 {
-				return -1
-			}
-
-			return 0
-		}
-
-		if curMap > 0 { // a field access beneath a (non-array) typed map
-			return i
+		if depth, inArray, done := projectionShape(curArray, curMap, i); done {
+			return depth, inArray
 		}
 
 		st, ok := prog.Structs[cur.BaseType]
 		if !ok {
-			return 0
+			return 0, false
 		}
 
 		cur = paramByName(st.Fields, segs[i])
@@ -386,7 +375,30 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) int {
 		}
 	}
 
-	return 0
+	return 0, false
+}
+
+// projectionShape decides the projection at a field-access segment from the
+// array/map dims of the value reached. It returns (depth, inArray, done): when
+// done is true the caller returns (depth, inArray) — depth i for a typed-map
+// projection (inArray for array<map<S>>.field), 0 for a plain array auto-project,
+// or -1 to reject a nested typed-map projection that has no faithful lowering.
+// When done is false the value is a struct and the caller keeps descending.
+func projectionShape(curArray, curMap, i int) (int, bool, bool) {
+	switch {
+	case curArray > 0 && curMap == 1:
+		return i, true, true // array<map<S>>.field -> project over each map in the array
+	case curArray > 0 && curMap > 1:
+		return -1, false, true // nested maps inside an array: unsupported
+	case curArray > 0:
+		return 0, false, true // a field beneath a plain array auto-projects
+	case curMap == 1:
+		return i, false, true // map<S>.field
+	case curMap > 1:
+		return -1, false, true // nested typed-map projection: unsupported
+	}
+
+	return 0, false, false // a struct: keep descending by key
 }
 
 // forkDims returns the extra map and array dimensions a map call wraps its
@@ -606,12 +618,16 @@ func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 		return bind.Entry{Object: obj}
 	case v.Ref != nil:
 		// checkSupported rejects the negative (unsupported) case before emit, so
-		// clamp defensively here for any ref reached outside that pass.
+		// clamp defensively here for any ref reached outside that pass. inArray
+		// marks the array<map<S>>.field shape for the binder's projection.
+		depth, inArray := mapProjectDepth(prog, p, v.Ref)
+
 		return bind.Entry{Ref: &bind.Ref{
-			Kind:     v.Ref.Kind,
-			ID:       v.Ref.ID,
-			Output:   v.Ref.Output,
-			MapDepth: max(mapProjectDepth(prog, p, v.Ref), 0),
+			Kind:       v.Ref.Kind,
+			ID:         v.Ref.ID,
+			Output:     v.Ref.Output,
+			MapDepth:   max(depth, 0),
+			MapInArray: inArray,
 		}}
 	default:
 		return bind.Entry{Literal: v.Literal}

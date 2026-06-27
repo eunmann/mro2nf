@@ -35,6 +35,36 @@ func TestResolveMapProjection(t *testing.T) {
 	}
 }
 
+// TestResolveArrayOfMapProjection projects a struct field through an array of
+// typed maps (array<map<S>>.field): CALL.m.x over
+// {"m":[{"a":{"x":1},"b":{"x":2}},{"c":{"x":3}}]} yields [{"a":1,"b":2},{"c":3}]
+// — the array shape is preserved and the field is projected over each map.
+func TestResolveArrayOfMapProjection(t *testing.T) {
+	spec := bind.Spec{
+		"xs": {Ref: &bind.Ref{Kind: "call", ID: "MAKE", Output: "m.x", MapDepth: 1, MapInArray: true}},
+	}
+	callOuts := map[string]json.RawMessage{
+		"MAKE": json.RawMessage(`{"m":[{"a":{"x":1},"b":{"x":2}},{"c":{"x":3}}]}`),
+	}
+
+	raw, err := bind.Resolve(spec, nil, callOuts)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	var got struct {
+		Xs []map[string]int `json:"xs"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	want := []map[string]int{{"a": 1, "b": 2}, {"c": 3}}
+	if diff := cmp.Diff(want, got.Xs); diff != "" {
+		t.Errorf("array-of-map projection mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestResolve(t *testing.T) {
 	spec := bind.Spec{
 		"values": {Ref: &bind.Ref{Kind: "self", ID: "values"}},
