@@ -19,7 +19,6 @@ type genCtx struct {
 	shell   string
 	mrjob   string
 	monitor bool
-	target  Target
 	code    map[string]string // stage name -> stage code path
 }
 
@@ -66,7 +65,7 @@ func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 	genKeyedPipeIncludes(&b, p, prog)
 	genPipeProcesses(&b, p, prog, g)
 	genKeyedPipeProcesses(&b, p, prog, g)
-	genPipelineWorkflow(&b, p, prog)
+	genPipelineWorkflow(&b, p)
 	genKeyedPipeline(&b, p)
 
 	return b.String()
@@ -367,9 +366,9 @@ func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call
 func keyedBindInput(bindings []ir.Binding) string {
 	var expr strings.Builder
 
-	expr.WriteString("pa_l.flatMap { it }")
+	expr.WriteString("pa_l.flatMap { x -> x }")
 	for _, id := range refCalls(bindings) {
-		fmt.Fprintf(&expr, ".join(ch_%s_l.flatMap { it })", id)
+		fmt.Fprintf(&expr, ".join(ch_%s_l.flatMap { x -> x })", id)
 	}
 
 	return expr.String()
@@ -750,7 +749,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 `, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut))
 }
 
-func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
+func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline) {
 	var body strings.Builder
 
 	// pipeargs is always a value channel (the entry uses Channel.value and nested
@@ -760,7 +759,7 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
 	for _, c := range p.Calls {
-		genCallWiring(&body, p.Name, c, prog)
+		genCallWiring(&body, p.Name, c)
 	}
 
 	retName := bindName(p.Name, "return")
@@ -777,11 +776,11 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 
 // genCallWiring emits the wiring for one call: a map-call fork/merge fan-out, a
 // disabled-aware branch, or a plain BIND + callee invocation.
-func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Program) {
+func genCallWiring(b *strings.Builder, pipeline string, c ir.Call) {
 	callee := callAlias(pipeline, c.Name)
 
 	if c.Mapped {
-		genMappedWiring(b, pipeline, c, callee, prog)
+		genMappedWiring(b, pipeline, c, callee)
 
 		return
 	}
@@ -805,7 +804,7 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call, prog *ir.Prog
 // genMappedWiring emits a map call's fork/callee/merge fan-out. A split-stage
 // callee runs through its fork-key-threaded variant (each fork keyed by its
 // args-bundle name); other callees take the flattened fork channel directly.
-func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee string, _ *ir.Program) {
+func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee string) {
 	fork := forkName(pipeline, c.Name)
 	merge := mergeName(pipeline, c.Name)
 
@@ -946,8 +945,8 @@ func genPublish(b *strings.Builder, entry string, g genCtx) {
     path '*'
   script:
     """
-    %[1]s publish -bundle ${bundle} -dir .%[2]s
-    rm -rf ${bundle}
+    "%[1]s" publish -bundle "${bundle}" -dir .%[2]s
+    rm -rf "${bundle}"
     """
 }
 
@@ -988,11 +987,20 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 		}
 
 		in := "inflat_" + p.Name
-		fileInputs.WriteString("    path " + in + "\n") // variable form: stages the whole list
+		// stageAs '<in>_?/*' stages each file leaf into its own numbered subdir
+		// (<in>_1/<basename>, <in>_2/<basename>, ...), so leaves that share a
+		// basename (e.g. sampleA/reads.fastq + sampleB/reads.fastq) do not collide
+		// in the task work dir, while the original basename is preserved for the
+		// stage. The order matches the head-node flatten (canonical type order).
+		fmt.Fprintf(&fileInputs, "    path(%s, stageAs: '%s_?/*')\n", in, in)
 		// The staged paths (one per file leaf, canonical order) reach entryargs joined
 		// by ','; multiple inputs are ';'-separated and the whole flag is single-quoted
 		// so the shell leaves it intact while Nextflow still interpolates the ${...}.
-		flatFlags = append(flatFlags, fmt.Sprintf("%s=${%s.join(\",\")}", p.Name, in))
+		// The list-coercion matters: a single staged file is a lone Groovy Path, and
+		// Path.join(",") iterates its path *segments* (the stageAs subdir splits it
+		// into "<in>_1,<basename>"); wrapping it in a list makes join treat the whole
+		// path as one element. A multi-leaf input is already a List, left as-is.
+		flatFlags = append(flatFlags, fmt.Sprintf("%[1]s=${(%[2]s instanceof List ? %[2]s : [%[2]s]).join(\",\")}", p.Name, in))
 		callArgs = append(callArgs, "flat_"+p.Name)
 		// Flatten the override's file leaves to a list of staged files on the head node;
 		// an unset input (or one with no file leaves) falls back to the empty sentinel so

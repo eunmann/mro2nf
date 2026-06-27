@@ -295,7 +295,7 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 		// the keyed disable bind exists alongside the non-keyed one
 		"process DISABLE_5_INNER__DBL_K {",
 		// the disable flag is resolved per outer fork and branched run/skip
-		"gk_DBL = pa_l.flatMap { it }.join(DISABLE_5_INNER__DBL_K.out).branch",
+		"gk_DBL = pa_l.flatMap { x -> x }.join(DISABLE_5_INNER__DBL_K.out).branch",
 		// skipped outer forks emit the null bundle keyed by their key
 		`sk_DBL = gk_DBL.skip.map { row -> tuple(row[0], file("${projectDir}/nulls/5_INNER__DBL")) }`,
 		// only enabled forks feed FORKBIND (disable bundle stripped off the row);
@@ -702,10 +702,12 @@ func TestEmitEntryFileParam(t *testing.T) {
 	main := string(data)
 	for _, want := range []string{
 		"params.reads = null", // the file input is overridable
-		"path inflat_reads",   // its file leaves staged as a list path input
+		// its file leaves staged as a list path input, each in a per-index subdir
+		// so same-basename leaves do not collide in the task work dir
+		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
 		`[file(params.reads)]`,                                   // flattened + file()'d on the head node
 		`?: [file("${projectDir}/_assets/.entry_empty")]`,        // unset / no-leaf falls back to the sentinel
-		`-fileflat 'reads=${inflat_reads.join(",")}'`,            // staged paths reach entryargs
+		`-fileflat 'reads=${(inflat_reads instanceof List ? inflat_reads : [inflat_reads]).join(",")}'`, // staged paths reach entryargs
 		`BUILD_ENTRY_ARGS(file("${projectDir}/entry_args"), values, types, flat_reads)`,
 	} {
 		if !strings.Contains(main, want) {
@@ -731,9 +733,9 @@ func TestEmitEntryFileArray(t *testing.T) {
 
 	main := readFile(t, filepath.Join(dir, "main.nf"))
 	for _, want := range []string{
-		"path inflat_reads",
+		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
 		`(params.reads ?: []).collect { __e -> (__e != null ? [file(__e)] : []) }.flatten()`,
-		`-fileflat 'reads=${inflat_reads.join(",")}'`,
+		`-fileflat 'reads=${(inflat_reads instanceof List ? inflat_reads : [inflat_reads]).join(",")}'`,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing file-array staging %q", want)
@@ -750,9 +752,9 @@ func TestEmitEntryStructFile(t *testing.T) {
 	// The struct param 'cfg' descends to its file field 'ref'; the int field 'n'
 	// contributes nothing to the flattened file list.
 	for _, want := range []string{
-		"path inflat_cfg",
+		"path(inflat_cfg, stageAs: 'inflat_cfg_?/*')",
 		`)?.ref != null ? [file(`,
-		`-fileflat 'cfg=${inflat_cfg.join(",")}'`,
+		`-fileflat 'cfg=${(inflat_cfg instanceof List ? inflat_cfg : [inflat_cfg]).join(",")}'`,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing struct-file staging %q", want)

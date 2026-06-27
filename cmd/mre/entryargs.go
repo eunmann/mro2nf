@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +20,9 @@ var (
 	errNoEntryType = errors.New("entry input has staged files but no type")
 	// errStagedFew reports fewer staged files than the value's file leaves.
 	errStagedFew = errors.New("too few staged files for entry input")
+	// errStagedMany reports more staged files than the value's file leaves —
+	// a sign the override value and the staged paths disagree on shape.
+	errStagedMany = errors.New("more staged files than entry input file leaves")
 )
 
 // runEntryArgs builds the entry-args bundle at run time from the baked defaults
@@ -56,7 +58,7 @@ func runEntryArgs(_ context.Context, argv []string) error {
 			return err
 		}
 
-		if err := decodeJSONNumber(raw, &payload); err != nil {
+		if payload, err = rawToMap(raw); err != nil {
 			return fmt.Errorf("decode base entry args: %w", err)
 		}
 	}
@@ -97,8 +99,8 @@ func overlayEntry(payload map[string]any, valuesFile string, flatMap map[string]
 		return fmt.Errorf("read values: %w", err)
 	}
 
-	over := map[string]any{}
-	if err := decodeJSONNumber(raw, &over); err != nil {
+	over, err := rawToMap(raw)
+	if err != nil {
 		return fmt.Errorf("decode values: %w", err)
 	}
 
@@ -153,6 +155,10 @@ func reconstructFiles(payload, over map[string]any, flatMap map[string][]string,
 			return fmt.Errorf("reconstruct entry input %q: %w", name, err)
 		}
 
+		if i < len(staged) {
+			return fmt.Errorf("%w: %q (%d staged, %d consumed)", errStagedMany, name, len(staged), i)
+		}
+
 		payload[name] = out[name]
 		delete(over, name)
 	}
@@ -194,17 +200,4 @@ func parseFlatFlags(s string) (map[string][]string, error) {
 	}
 
 	return out, nil
-}
-
-// decodeJSONNumber unmarshals JSON into v keeping numbers as json.Number, so a
-// whole-number float (e.g. 21.0) does not collapse to an int before type coercion.
-func decodeJSONNumber(raw []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-
-	if err := dec.Decode(v); err != nil {
-		return fmt.Errorf("decode json: %w", err)
-	}
-
-	return nil
 }

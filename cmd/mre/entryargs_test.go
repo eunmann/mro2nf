@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -133,6 +134,30 @@ func TestReconstructFilesStruct(t *testing.T) {
 	}
 	if fmt.Sprint(cfg["n"]) != "3" {
 		t.Errorf("cfg.n = %v, want 3 (non-file field preserved)", cfg["n"])
+	}
+}
+
+// TestReconstructFilesStagedCountMismatch checks the staged-count guards: fewer
+// staged paths than file leaves fails (errStagedFew) and more staged paths than
+// leaves fails (errStagedMany) — both signal the override value and the staged
+// paths disagree on shape, which would otherwise mis-bind or drop files silently.
+func TestReconstructFilesStagedCountMismatch(t *testing.T) {
+	tbl, params := entryTable()
+
+	// A 2-element file array but only one staged path: too few.
+	few := reconstructFiles(
+		map[string]any{}, map[string]any{"fastqs": []any{"s3://b/a", "s3://b/b"}},
+		map[string][]string{"fastqs": {"/work/a"}}, params, tbl)
+	if !errors.Is(few, errStagedFew) {
+		t.Errorf("too-few staged: err = %v, want errStagedFew", few)
+	}
+
+	// A single scalar file leaf but two staged paths: too many.
+	many := reconstructFiles(
+		map[string]any{}, map[string]any{"reads": "s3://b/r"},
+		map[string][]string{"reads": {"/work/r1", "/work/r2"}}, params, tbl)
+	if !errors.Is(many, errStagedMany) {
+		t.Errorf("too-many staged: err = %v, want errStagedMany", many)
 	}
 }
 

@@ -111,6 +111,15 @@ printf '4\n4\n'     >"$WORK/o_ref.txt"      # 8  ; * n(5) == 40
 printf '6\n'        >"$WORK/o_m1.txt"       # 6
 printf '14\n'       >"$WORK/o_m2.txt"       # 14 ; (6+14) * 2 == 40
 
+# Same-basename file[] leaves (sb1/reads.txt + sb2/reads.txt): the regression
+# guard for the entry-file staging collision. Both leaves share the basename
+# reads.txt; only the per-index `stageAs: '<in>_?/*'` subdir keeps them from
+# clobbering each other in the isolated task work dir. Without it one file
+# overwrites the other and the total is wrong.
+mkdir -p "$WORK/sb1" "$WORK/sb2"
+printf '2\n3\n'     >"$WORK/sb1/reads.txt"  # 5
+printf '10\n'       >"$WORK/sb2/reads.txt"  # 10 ; (5+10) * 2 == 30
+
 run_override() { # name fixture params-json expected-json
     local name="$1" fx="$2" params="$3" expect="$4"
     local proj="$WORK/$name"
@@ -133,6 +142,7 @@ PY
 
 run_override entry_file_override        entry_file        "{\"reads\": \"$WORK/o_scalar.txt\"}"                          '{"total": 42.0}'
 run_override entry_filearr_override      entry_filearr     "{\"reads\": [\"$WORK/o_arr1.txt\", \"$WORK/o_arr2.txt\"]}"    '{"total": 30.0}'
+run_override entry_filearr_samebasename  entry_filearr     "{\"reads\": [\"$WORK/sb1/reads.txt\", \"$WORK/sb2/reads.txt\"]}" '{"total": 30.0}'
 run_override entry_struct_file_override  entry_struct_file "{\"cfg\": {\"ref\": \"$WORK/o_ref.txt\", \"n\": 5}}"          '{"total": 40.0}'
 run_override entry_mapfile_override       entry_mapfile     "{\"reads\": {\"a\": \"$WORK/o_m1.txt\", \"b\": \"$WORK/o_m2.txt\"}}" '{"total": 40.0}'
 

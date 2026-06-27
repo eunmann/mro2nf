@@ -133,7 +133,6 @@ func Emit(prog *ir.Program, opts Options) error {
 		shell:   opts.Shell,
 		mrjob:   opts.Mrjob,
 		monitor: opts.Monitor,
-		target:  target,
 		code:    opts.StageCode,
 	}
 
@@ -270,6 +269,14 @@ func checkSupported(prog *ir.Program) error {
 		bindings := append([]ir.Binding{}, p.Returns...)
 		for _, c := range p.Calls {
 			bindings = append(bindings, c.Bindings...)
+
+			// A `disabled = REF.field` condition navigates the same projection
+			// shapes as a binding, so it must pass the same support check.
+			if c.Disabled != nil {
+				if err := checkValueRefs(prog, p, ir.Value{Ref: c.Disabled}); err != nil {
+					return err
+				}
+			}
 		}
 
 		for _, b := range bindings {
