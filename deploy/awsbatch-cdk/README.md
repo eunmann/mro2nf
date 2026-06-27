@@ -33,7 +33,8 @@ Designed to cost **≈ $0 while idle** and only a few cents per test run:
   expensive). A tiny test run is well under a dollar.
 
 The only knobs that could raise the bill are user-driven: launching very large
-pipelines (capped here at `maxvCpus: 16`), or leaving data in S3/ECR. Run
+pipelines (capped here at `maxvCpus: 256`, so a wide parallel run is not vCPU
+starved; still $0 idle on spot + `minvCpus: 0`), or leaving data in S3/ECR. Run
 `cdk destroy` when done to remove everything.
 
 ## Prerequisites

@@ -78,10 +78,12 @@ export class MartNextflowStack extends cdk.Stack {
       // Cost: spot (~70% cheaper) and — critically — minvCpus 0 so Batch runs NO
       // instances while idle (it scales to zero between runs; you pay only for
       // the minutes a job actually runs). maxvCpus caps the worst-case concurrent
-      // spend; a test pipeline uses 1–2 vCPUs.
+      // spend; a test pipeline uses 1–2 vCPUs. Raised to 256 so a parallel test
+      // campaign (many fixtures + split chunks at once) is not vCPU-starved; idle
+      // cost is unchanged (scales to zero between runs).
       spot: true,
       minvCpus: 0,
-      maxvCpus: 16,
+      maxvCpus: 256,
     });
 
     const queue = new batch.JobQueue(this, 'JobQueue', {
