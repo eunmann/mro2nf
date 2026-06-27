@@ -411,6 +411,32 @@ func TestEmitNoSpecialClusterOptions(t *testing.T) {
 	}
 }
 
+// TestEmitVmemFlag checks that a stage's static using(vmem_gb) is passed to the
+// shim via -vmemgb on every phase (so --monitor caps at the declared value, not
+// the memory-derived default): a plain value on split/main, and a join phase that
+// lets a split-returned join __vmem_gb override refine it. A stage with no
+// vmem_gb emits no -vmemgb.
+func TestEmitVmemFlag(t *testing.T) {
+	dir := emitFixture(t, "vmem_stage", map[string]string{"VSTAGE": "/x/vstage"})
+	mod := readFile(t, filepath.Join(dir, "modules", "stage_VSTAGE.nf"))
+
+	for _, want := range []string{
+		"-vmemgb 8",
+		"-vmemgb ${(join?.vmem_gb ?: 0) > 0 ? join.vmem_gb : 8}",
+	} {
+		if !strings.Contains(mod, want) {
+			t.Errorf("stage_VSTAGE.nf missing vmem flag %q", want)
+		}
+	}
+
+	// A stage with no using(vmem_gb) must not emit -vmemgb (no noise; the shim
+	// derives vmem from memory).
+	noVmem := readFile(t, filepath.Join(loadAndEmit(t), "modules", "stage_SUM_SQUARES.nf"))
+	if strings.Contains(noVmem, "-vmemgb") {
+		t.Error("a stage without vmem_gb must not emit -vmemgb")
+	}
+}
+
 // TestEmitPreflightGate checks that an input-bound preflight call gates the rest
 // of the pipeline: it is wired first against the raw pipeargs, then `pa` is
 // reassigned to a channel that only emits once the preflight completes, so every
