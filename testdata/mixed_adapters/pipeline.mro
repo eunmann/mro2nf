@@ -1,0 +1,46 @@
+# All three adapter ABIs chained in one pipeline: py -> exec -> comp. Verifies a
+# single transpiled project (and one container image) drives every adapter, with
+# data flowing stage-to-stage across adapter boundaries.
+stage GEN(
+    in  int n,
+    out int x,
+    src py  "stages/gen",
+)
+
+stage DBL(
+    in  int x,
+    out int y,
+    src exec "dbl.py",
+)
+
+stage ADD(
+    in  int y,
+    out int z,
+    src comp "stages/add.py",
+)
+
+pipeline MA(
+    in  int n,
+    out int z,
+)
+{
+    call GEN(
+        n = self.n,
+    )
+
+    call DBL(
+        x = GEN.x,
+    )
+
+    call ADD(
+        y = DBL.y,
+    )
+
+    return (
+        z = ADD.z,
+    )
+}
+
+call MA(
+    n = 5,
+)

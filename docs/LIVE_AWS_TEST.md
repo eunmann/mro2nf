@@ -11,6 +11,39 @@ and verified against `mrp` golden outputs. Updated as runs complete.
   `Dockerfile`). One tag per fixture in ECR.
 - **Date:** 2026-06-26
 
+## Re-verification round 3 (2026-06-26, current committed code)
+
+The CDK stacks were found **still deployed** (us-east-2 Batch+S3, us-east-1
+HealthOmics) — the earlier "teardown done" note is superseded; the infra was
+redeployed and is live again. Re-confirmed the **current committed transpiler**
+runs correctly on the live infra:
+
+| Run | Path | Result |
+|---|---|---|
+| `exec_min` (reused ECR image) | exec adapter, pure compute on Batch+S3 | ✅ `{"y":14}` |
+| `file_array` (**fresh** transpile → rebuilt+pushed image) | map-fork file outputs → MERGE → `file[]` consume, all via S3 | ✅ `{"total":60}` |
+
+The `file_array` run is the definitive check: re-transpiled from current
+`testdata`, image rebuilt and pushed, then run live — proving the committed code
+(not a stale snapshot), byte-identical to `mrp`. **Caveat learned:** the local
+`out-*/` dirs are stale snapshots (re-running `out-filearr` gave `20.0` from its
+old baked input, not the current golden `60`); always re-transpile from
+`testdata` for a live run. (Those dirs are gitignored.)
+
+### New complex-combination fixtures (this session)
+
+Added to cover realistic multi-feature pipelines (the kind Cell Ranger builds),
+not just single features:
+
+| Fixture | Combination exercised | Local + docker-iso | Live Batch |
+|---|---|---|---|
+| `map_split_file` | map over a sub-pipeline whose body is a **split stage emitting a file** (fork keying + per-fork split/main/join + file through the object-store merge) | ✅ `{"bams":["s2.txt","s3.txt"]}` | ⏳ pending fresh creds |
+| `mixed_adapters` | **py → exec → comp** chained in one pipeline (all three ABIs + `mrjob` in one image) | ✅ `{"z":11}` (local) | ⏳ pending fresh creds |
+
+`map_split_file` passing under **docker-isolation** (no shared filesystem, mount-
+only-workdir — the exact AWS model) is strong evidence it runs on Batch; the live
+run is queued for the next credentialed session.
+
 ## Re-verification round 2 (2026-06-26, after C1/C2/C3)
 
 Stack redeployed (us-east-2 Batch+S3, us-east-1 HealthOmics) and the post-C1/C2/C3
@@ -61,13 +94,18 @@ splits by lanes/reads): the split phase opens the staged input and emits the
 chunk set, and Batch provisions each chunk per its requested resources. All three
 adapter ABIs (`py`/`exec`/`comp`) now have a live cloud run.
 
-## Not yet re-run live (lower-priority, verified locally + docker-iso)
+## Not yet run live (lower-priority, verified locally + docker-iso)
 
-1. **Live retry / `ASSERT` / spot reclaim** — only config-verified so far.
+1. **Spot reclaim** — `errorStrategy` retry/terminate is verified end-to-end
+   (see "Error handling" below; ✅ retry on exit 1, terminate on ASSERT exit 42),
+   but a forced spot-instance reclamation mid-run has not been exercised.
 2. **`-resume` over an S3 work dir** — Nextflow content-addressed resume on
    `s3://` is finicky and untested here.
 3. **A stage with a baked third-party dependency** (the "no internet on
    HealthOmics, bake your tools" model end-to-end).
+4. **The two new complex-combination fixtures** (`map_split_file`,
+   `mixed_adapters`) — verified locally + docker-iso; live Batch run pending
+   fresh credentials (see Round 3 above).
 
 ## What is being verified
 
@@ -241,8 +279,10 @@ found and fixed via the live runs (ECR lifecycle, the S3 `.resolve()` scheme bug
 lost stage logs, the Dockerfile missing `mrjob`), plus the no-op-modifier
 warnings. Local `make test` + `make test-e2e` (47) + `make test-e2e-docker` green.
 
-**Teardown done** (2026-06-26): all 16 registered Omics workflows deleted, both
-S3 buckets emptied, and `cdk destroy` removed `MartNextflowStack` in us-east-2 and
-us-east-1 (Batch, VPC, ECR, S3, IAM). Only the reusable `CDKToolkit` bootstrap
-remains (~$0). To reproduce, `cd deploy/awsbatch-cdk && npx cdk deploy` (see its
-README) and re-run the steps above.
+**Infra status (2026-06-26, round 3):** the stack was redeployed and is
+**currently live** — `MartNextflowStack` exists in both us-east-2 (Batch+S3,
+bucket `martnextflowstack-workbucketf885502b-l5n5aq5yqdat`, ECR `mart-runtime`,
+queue `JobQueueEE3AD499-…`) and us-east-1 (HealthOmics). Round 3 re-verification
+ran against it. It idles at ≈$0 (Batch `minvCpus: 0`, spot; no NAT/EFS); run
+`cd deploy/awsbatch-cdk && npx cdk destroy` in both regions to tear down when
+done.

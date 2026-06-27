@@ -67,6 +67,7 @@ CASES=(
     "entry_struct_file|testdata/entry_struct_file|testdata/entry_struct_file/expected/eps_outs.json"
     "entry_mapfile|testdata/entry_mapfile|testdata/entry_mapfile/expected/epm_outs.json"
     "split_from_file|testdata/split_from_file|testdata/split_from_file/expected/sp_outs.json"
+    "map_split_file|testdata/map_split_file|testdata/map_split_file/expected/outs.json"
 )
 
 # split_test's golden is a stage _outs; everything else is a plain outs.json.

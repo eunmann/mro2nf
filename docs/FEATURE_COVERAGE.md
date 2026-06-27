@@ -83,6 +83,8 @@ out of scope for a transpiler.
 | map call over a **split stage** (fork-key threaded) | ✅ #16 | e2e `map_split` |
 | map call over a **sub-pipeline** (per-fork body keying) | ✅ #16 | e2e `map_pipe`, `map_pipe_split` |
 | map call emitting a **file** (array/keyed-map of files) | ✅ | e2e `map_file`, `map_file_keyed` |
+| **complex combo**: map over a sub-pipeline whose body is a split stage emitting a file (Cell Ranger per-sample pattern) | ✅ | e2e + docker-iso `map_split_file` |
+| **complex combo**: py + exec + comp adapters chained in one pipeline | ✅ | e2e `mixed_adapters` |
 | empty-split fork inside a map call (0 chunks → 0/null, no fork dropped) | ✅ | e2e `map_split` (includes an empty fork) |
 | `disabled` on a map call | ✅ (fork pipeline-args gated by the resolved flag; skip → null bundle) | e2e `disabled_map` (skip true→null, false→[2,4,6]) |
 | map call over a pipeline with an internal **disabled** call | ✅ (keyed pipeline gates the call per fork) | e2e `map_pipe_disabled` |

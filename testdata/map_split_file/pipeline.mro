@@ -1,0 +1,49 @@
+# Complex combination (the Cell Ranger per-sample pattern): a map call over a
+# sub-pipeline whose body is a SPLIT stage that emits a FILE. Exercises, in one
+# DAG: map-over-pipeline fork keying + per-fork split/main/join + a file output
+# flowing through the object-store merge back to the cohort result.
+filetype txt;
+
+stage ALIGN(
+    in  int sample,
+    out txt aligned,
+    src py  "stages/align",
+) split (
+    in  int lane,
+    out int laneval,
+)
+
+pipeline PERSAMPLE(
+    in  int sample,
+    out txt aligned,
+)
+{
+    call ALIGN(
+        sample = self.sample,
+    )
+
+    return (
+        aligned = ALIGN.aligned,
+    )
+}
+
+pipeline COHORT(
+    in  int[] samples,
+    out txt[] bams,
+)
+{
+    map call PERSAMPLE(
+        sample = split self.samples,
+    )
+
+    return (
+        bams = PERSAMPLE.aligned,
+    )
+}
+
+call COHORT(
+    samples = [
+        2,
+        3,
+    ],
+)
