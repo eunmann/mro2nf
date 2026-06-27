@@ -1,0 +1,25 @@
+{
+  "name": "mart-nextflow-awsbatch-cdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal AWS infra (Batch + S3 + ECR + HealthOmics role) to test transpiled Martian->Nextflow pipelines live",
+  "bin": {
+    "app": "bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "aws-cdk": "^2.150.0",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.5.4"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  }
+}
