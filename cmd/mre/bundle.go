@@ -22,6 +22,12 @@ type producer struct {
 	types    string
 	callable string
 	role     string
+
+	// manifest is loaded lazily and cached: a single mre invocation reads it
+	// from coerceInputs/write/reconstruct, and the path never changes after
+	// flag parse, so it is loaded from disk at most once.
+	manCache  *types.Manifest
+	manLoaded bool
 }
 
 func addProducer(fs *flag.FlagSet, defaultRole string) *producer {
@@ -36,14 +42,22 @@ func addProducer(fs *flag.FlagSet, defaultRole string) *producer {
 // manifest loads the type manifest, or an empty one when no path is configured
 // (e.g. pipelines with no file outputs need no rewriting).
 func (p *producer) manifest() (types.Manifest, error) {
+	if p.manLoaded {
+		return *p.manCache, nil
+	}
+
 	if p.types == "" {
-		return types.Manifest{}, nil
+		p.manCache, p.manLoaded = &types.Manifest{}, true
+
+		return *p.manCache, nil
 	}
 
 	man, err := types.LoadManifest(p.types)
 	if err != nil {
 		return types.Manifest{}, fmt.Errorf("load type manifest: %w", err)
 	}
+
+	p.manCache, p.manLoaded = &man, true
 
 	return man, nil
 }
