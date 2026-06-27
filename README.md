@@ -181,6 +181,20 @@ nextflow run main.nf --aws_queue <q> --aws_region <r> \
     --container <ecr-uri> -work-dir s3://<bucket>/work
 ```
 
+The emitted `Dockerfile` is self-contained (it vendors `mre` + the adapters). If
+you'd rather not vendor them, base your image on the published runtime image
+instead — it ships `mre` + the Martian adapters at `/opt/mro2nf`, multi-arch:
+
+```dockerfile
+FROM ghcr.io/eunmann/mro2nf-runtime:<version>   # match your mro2nf version
+COPY stages /opt/mro2nf/stages                  # your stage code
+# comp-adapter stages also need an mrjob at /opt/mro2nf/mrjob
+```
+
+Use the tag matching the `mro2nf` version that produced the project, so the `mre`
+ABI matches the generated scripts. The image is published on each release (see
+`deploy/runtime/Dockerfile` and the `release.yml` `image` job).
+
 - **`-target awsbatch`** wires the Batch executor with classic aws-CLI S3 staging
   (the image includes the aws CLI; or set `--aws_cli_path` for a custom AMI).
 - **`-target healthomics`** additionally emits `parameter-template.json` and

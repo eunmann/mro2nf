@@ -41,3 +41,37 @@ jobs:
             mro2nf-${{ matrix.goos }}-${{ matrix.goarch }}*
             mre-${{ matrix.goos }}-${{ matrix.goarch }}*
           fail_on_unmatched_files: true
+
+  # Publish the runtime base image (mre + Martian adapters at /opt/mro2nf) to
+  # GHCR so users build their pipeline image FROM it instead of vendoring mre.
+  # Tagged with the release version + latest, multi-arch (amd64 + arm64).
+  image:
+    name: Runtime image (GHCR)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3 # arm64 emulation for the final stage
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/mro2nf-runtime
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/runtime/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
