@@ -35,6 +35,10 @@ aws-batch jobmode fork). `martian-lsp` is a sibling reference for `syntax` usage
   compare with `github.com/google/go-cmp`.
 - Wrap errors with context: `fmt.Errorf("operation: %w", err)`.
 - Keep `main` thin: parse flags, wire deps, delegate.
+- Commit atomically: one logical change per commit, each building and passing
+  `make test` on its own. Don't bundle unrelated fixes, refactors, and docs into
+  one commit; split them so each can be reviewed and reverted independently.
+  Write an imperative subject (`fix:`/`feat:`/`docs:`/`test:`/`refactor:`).
 
 ## Conventions
 
