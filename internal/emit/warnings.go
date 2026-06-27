@@ -24,8 +24,12 @@ func Warnings(prog *ir.Program) []string {
 		for _, c := range p.Calls {
 			q := name + "." + c.Name
 
-			if c.Preflight {
-				w = append(w, fmt.Sprintf("call %s: `preflight` runs as an ordinary stage — it executes, but does not gate/abort the run early as it would under mrp", q))
+			// A preflight bound to pipeline inputs now gates the rest of the
+			// pipeline (it runs first and downstream calls wait — mrp's behavior).
+			// One bound to another call's output cannot gate without a cycle, so it
+			// runs in DAG order without the early-abort other stages would get.
+			if c.Preflight && (c.Mapped || c.Disabled != nil || bindingsRefCall(c.Bindings)) {
+				w = append(w, fmt.Sprintf("call %s: `preflight` is bound to a call output (not pipeline inputs), so it runs in DAG order and does not gate other stages early as it would under mrp", q))
 			}
 
 			if c.Local {

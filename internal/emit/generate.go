@@ -3,6 +3,7 @@ package emit
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +11,9 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 )
+
+// refKindCall is the ir.Ref.Kind for a reference to another call's output.
+const refKindCall = "call"
 
 // genCtx carries the resolved paths and names needed to render Nextflow code.
 type genCtx struct {
@@ -758,7 +762,28 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline) {
 	body.WriteString("  main:\n    pa = pipeargs\n")
 	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
-	for _, c := range p.Calls {
+	// Preflight gating: wire the gateable preflight calls first (against the raw
+	// pipeargs), then gate `pa` on their completion so every other call waits for
+	// validation to pass before starting — the early-abort behavior mrp gives a
+	// preflight. Only preflights bound solely to pipeline inputs are gates (one
+	// bound to another call's output is itself downstream, so it stays in order
+	// and cannot gate without a cycle).
+	pre, rest := partitionGateablePreflight(p.Calls)
+	for _, c := range pre {
+		genCallWiring(&body, p.Name, c)
+	}
+
+	if len(pre) > 0 {
+		var gate strings.Builder
+		gate.WriteString("ch_" + pre[0].Name)
+		for _, c := range pre[1:] {
+			gate.WriteString(".combine(ch_" + c.Name + ")")
+		}
+
+		fmt.Fprintf(&body, "    pa = %s.combine(pipeargs).map { it[-1] }.first()\n", gate.String())
+	}
+
+	for _, c := range rest {
 		genCallWiring(&body, p.Name, c)
 	}
 
@@ -772,6 +797,52 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline) {
 }
 
 `, p.Name, body.String(), retName)
+}
+
+// partitionGateablePreflight splits calls into the gateable preflight calls
+// (preflight, plain — not mapped/disabled — and bound only to pipeline inputs or
+// literals) and everything else, each in original order. A gateable preflight
+// depends on nothing but pipeargs, so it can run first and gate the rest without
+// a cycle. A preflight that references another call is left in place (it cannot
+// gate the pipeline it is downstream of) and keeps its prior in-order behavior.
+func partitionGateablePreflight(calls []ir.Call) ([]ir.Call, []ir.Call) {
+	var pre, rest []ir.Call
+
+	for _, c := range calls {
+		if c.Preflight && !c.Mapped && c.Disabled == nil && !bindingsRefCall(c.Bindings) {
+			pre = append(pre, c)
+		} else {
+			rest = append(rest, c)
+		}
+	}
+
+	return pre, rest
+}
+
+// bindingsRefCall reports whether any binding value references another call's
+// output (Ref kind "call"), recursing into array/object literals.
+func bindingsRefCall(bindings []ir.Binding) bool {
+	var refsCall func(ir.Value) bool
+	refsCall = func(v ir.Value) bool {
+		switch {
+		case v.Ref != nil:
+			return v.Ref.Kind == refKindCall
+		case v.Array != nil:
+			return slices.ContainsFunc(v.Array, refsCall)
+		case v.Object != nil:
+			for _, e := range v.Object {
+				if refsCall(e) {
+					return true
+				}
+			}
+		}
+
+		return false
+	}
+
+	return slices.ContainsFunc(bindings, func(bnd ir.Binding) bool {
+		return refsCall(bnd.Value)
+	})
 }
 
 // genCallWiring emits the wiring for one call: a map-call fork/merge fan-out, a
@@ -1130,7 +1201,7 @@ func refCalls(bindings []ir.Binding) []string {
 
 	var walk func(v ir.Value)
 	walk = func(v ir.Value) {
-		if v.Ref != nil && v.Ref.Kind == "call" && !seen[v.Ref.ID] {
+		if v.Ref != nil && v.Ref.Kind == refKindCall && !seen[v.Ref.ID] {
 			seen[v.Ref.ID] = true
 			ids = append(ids, v.Ref.ID)
 		}

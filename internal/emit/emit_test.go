@@ -389,7 +389,7 @@ func TestEmitSpecialScheduler(t *testing.T) {
 // TestEmitNoSpecialClusterOptions checks the `special` routing for stages with no
 // static key: a non-split stage (REPORT) emits no clusterOptions at all, while a
 // split stage's main/join phases carry a dynamic router that resolves a
-// split-returned __special (and is a no-op — resolves to '' — when none is
+// split-returned __special (and is a no-op — resolves to ” — when none is
 // returned). The split phase itself emits nothing.
 func TestEmitNoSpecialClusterOptions(t *testing.T) {
 	dir := loadAndEmit(t)
@@ -408,6 +408,28 @@ func TestEmitNoSpecialClusterOptions(t *testing.T) {
 		if !strings.Contains(sumsq, want) {
 			t.Errorf("split stage main/join must route a split-returned __special: missing %q", want)
 		}
+	}
+}
+
+// TestEmitPreflightGate checks that an input-bound preflight call gates the rest
+// of the pipeline: it is wired first against the raw pipeargs, then `pa` is
+// reassigned to a channel that only emits once the preflight completes, so every
+// downstream call waits for it (mrp's prenode dependency, via the shared pa).
+func TestEmitPreflightGate(t *testing.T) {
+	dir := emitFixture(t, "modifiers_min", map[string]string{
+		"CHECK": "/x/check", "DOUBLE": "/x/double", "TRIPLE": "/x/triple",
+	})
+
+	mod := readFile(t, filepath.Join(dir, "modules", "pipe_TOP.nf"))
+	check := strings.Index(mod, "ch_CHECK = ")
+	gate := strings.Index(mod, "pa = ch_CHECK.combine(pipeargs).map { it[-1] }.first()")
+	inner := strings.Index(mod, "BIND_3_TOP__INNER(")
+	if check < 0 || gate < 0 || inner < 0 {
+		t.Fatalf("preflight wiring missing: check=%d gate=%d inner=%d", check, gate, inner)
+	}
+	// order: preflight wired, then pa gated, then the gated downstream call.
+	if check >= gate || gate >= inner {
+		t.Errorf("preflight must be wired before the gate, and the gate before downstream calls (check=%d gate=%d inner=%d)", check, gate, inner)
 	}
 }
 
@@ -797,36 +819,49 @@ func TestEmitEntryStructFile(t *testing.T) {
 }
 
 // TestWarnings checks the transpiler surfaces documented no-op divergences
-// (preflight/local/volatile) rather than applying them silently, so a ported
-// pipeline's behavior differences are visible at transpile time.
+// (local/volatile) rather than applying them silently, and — now that an
+// input-bound preflight actually gates the pipeline — does NOT warn about it.
 func TestWarnings(t *testing.T) {
-	ast, err := frontend.Parse("../../testdata/modifiers_min/pipeline.mro", []string{"../../testdata/modifiers_min"}, false)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	prog, err := frontend.Lower(ast)
-	if err != nil {
-		t.Fatalf("lower: %v", err)
-	}
-
-	warns := emit.Warnings(prog)
-
-	var sawPreflight bool
-	for _, w := range warns {
-		if strings.Contains(w, "preflight") {
-			sawPreflight = true
+	warnsFor := func(fx string) []string {
+		t.Helper()
+		ast, err := frontend.Parse("../../testdata/"+fx+"/pipeline.mro", []string{"../../testdata/" + fx}, false)
+		if err != nil {
+			t.Fatalf("parse %s: %v", fx, err)
 		}
+		prog, err := frontend.Lower(ast)
+		if err != nil {
+			t.Fatalf("lower %s: %v", fx, err)
+		}
+
+		return emit.Warnings(prog)
 	}
 
-	if !sawPreflight {
-		t.Errorf("expected a preflight no-op warning, got %v", warns)
+	contains := func(ws []string, sub string) bool {
+		for _, w := range ws {
+			if strings.Contains(w, sub) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	// modifiers_min's preflight binds pipeline inputs, so it now gates the run —
+	// no preflight warning. Its only other modifier is a disabled call (handled,
+	// not a divergence), so it produces no warnings at all.
+	if w := warnsFor("modifiers_min"); len(w) != 0 {
+		t.Errorf("modifiers_min: an input-bound preflight gates and should not warn; got %v", w)
+	}
+
+	// kitchen_sink still has genuine no-op modifiers (local, volatile) that must
+	// be surfaced.
+	ks := warnsFor("kitchen_sink")
+	if !contains(ks, "local") || !contains(ks, "volatile") {
+		t.Errorf("kitchen_sink should warn on local and volatile no-ops, got %v", ks)
 	}
 
 	// A pipeline with no modifiers must produce no warnings (no false noise).
-	ast2, _ := frontend.Parse("../../testdata/split_test/pipeline.mro", []string{"../../testdata/split_test"}, false)
-	prog2, _ := frontend.Lower(ast2)
-
-	if w := emit.Warnings(prog2); len(w) != 0 {
+	if w := warnsFor("split_test"); len(w) != 0 {
 		t.Errorf("split_test should have no warnings, got %v", w)
 	}
 }
