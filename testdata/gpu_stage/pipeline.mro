@@ -1,0 +1,50 @@
+# GPU stages: the reserved `special = "gpu[:N]"` requests N whole GPUs. The
+# transpiler emits an `accelerator N` directive on the compute phase, which the
+# AWS Batch / HealthOmics executors turn into a GPU resourceRequirement. INFER is
+# a non-split stage (one GPU); TRAIN is a split stage requesting two GPUs per
+# chunk on its main phase only. See docs/GPU.md.
+
+stage INFER(
+    in  float x,
+    out float y,
+    src py    "stages/infer",
+) using (
+    special = "gpu",
+)
+
+stage TRAIN(
+    in  float[] data,
+    out float   model,
+    src py      "stages/train",
+) split using (
+    in  float chunk,
+    out float part,
+) using (
+    special = "gpu:2",
+)
+
+pipeline GPU_PIPE(
+    in  float   x,
+    in  float[] data,
+    out float   y,
+    out float   model,
+)
+{
+    call INFER(
+        x = self.x,
+    )
+
+    call TRAIN(
+        data = self.data,
+    )
+
+    return (
+        y     = INFER.y,
+        model = TRAIN.model,
+    )
+}
+
+call GPU_PIPE(
+    x    = 1,
+    data = [1, 2, 3],
+)
