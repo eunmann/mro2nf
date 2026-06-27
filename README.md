@@ -244,7 +244,10 @@ Resources track mrp, so a transpiled run schedules and finishes comparably.
 Per-chunk `cpus` and `memory`, the split-returned `join` override, and the
 `special` scheduler key all reach the executor, and every phase reports the
 allocation it resolved. (The `special` key maps to `clusterOptions` through a
-`params.job_resources` map, the `MRO_JOBRESOURCES` analog.) A few things diverge
+`params.job_resources` map, the `MRO_JOBRESOURCES` analog.) The reserved
+`special = "gpu"` / `"gpu:N"` instead requests N GPUs via the `accelerator`
+directive on the compute phase — see [`docs/GPU.md`](docs/GPU.md) for the AWS
+Batch / HealthOmics setup. A few things diverge
 in layout or timing but never in output: mid-run VDR deletion, nested maps on a
 real object-store work dir, and mrp's nested `outs/` tree versus Nextflow's flat
 `publishDir`.
