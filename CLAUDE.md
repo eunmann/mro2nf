@@ -21,8 +21,11 @@ internal/
   apperror/          → sentinel + typed errors
 ```
 
-The Martian parser is consumed via a local `replace => ../martian` (the
-aws-batch jobmode fork). `martian-lsp` is a sibling reference for `syntax` usage.
+The Martian parser is consumed as a normal module dependency, pinned by commit
+to public `github.com/martian-lang/martian` (see `go.mod`) — no `replace`, so a
+fresh clone builds. To hack on the parser locally, add a gitignored `go.work`
+(or a `replace`) pointing at a checkout. `martian-lsp` is a sibling reference for
+`syntax` usage.
 
 ## Rules
 
