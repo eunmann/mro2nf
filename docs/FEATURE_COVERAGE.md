@@ -19,12 +19,24 @@ Status: ✅ supported & tested · ⚠️ supported with a documented divergence 
 ❌ unsupported, guarded with a clear error & tracked · 🚫 runtime/`mrp`-only,
 out of scope for a transpiler.
 
+**How unsupported features are signalled (never silent):**
+- **❌ hard error** — the transpile fails (`UnsupportedError` / parse error,
+  non-zero exit): an unknown expression (e.g. `sweep`), an unknown adapter
+  language, a `comp` stage without `mrjob`, an `array<map<S>>.field` projection,
+  an invalid `-target`. Lowering errors by default on any unrecognized
+  expression, so a construct cannot be silently dropped.
+- **⚠️ warning** — the project transpiles but a no-op divergence is **logged**
+  by `mart`: `preflight` (runs, no early-abort), `local`, `volatile` (no VDR).
+- **🚫 / layout** — documented here with no output-observable impact.
+
 ## Language — writing-pipelines / language-details
 
 | Feature | Status | Test |
 |---|---|---|
 | stage / pipeline / top-level call | ✅ | e2e `split_test`, all |
 | top-level call targeting a bare **stage** | ✅ | e2e `stage_entry` |
+| entry inputs as run parameters (override at launch) | ✅ each entry input → `params.<name>` (defaults to the baked `.mro` value); BUILD_ENTRY_ARGS (`mre entryargs`) overlays a `-params-file` / HealthOmics run params on the defaults | unit `TestEmitEntryParams`; verified default + override |
+| file-typed entry inputs (FASTQ etc.) overridable at launch | ✅ **every shape** — scalar `file`/`path`/dir, `file[]`, `map<file>`, and struct-with-file. The value's file leaves are flattened to a list (canonical type-walk order: arrays in index order, maps by sorted key, struct fields in order), `file()`'d on the head node and staged as one `path` input, so an isolated worker reads real localized files; `mre entryargs -fileflat` pops the staged paths back into the value and marks them into the bundle. An S3 URI / `s3://` prefix (directory) is staged by Nextflow / HealthOmics | e2e `entry_file`/`entry_filearr`/`entry_mapfile`/`entry_struct_file` (+ `_override`); `docker_iso` overrides with inputs **outside the image** (arrive only via staging); live Batch + HealthOmics; unit `TestEmitEntryFileParam`, `TestEmitEntryFileArray`, `TestEmitEntryStructFile`, `TestReconstructFiles`, `TestCopyTreeDerefSymlink` |
 | pipeline with **no calls** (return-only) | ✅ | e2e `returnonly` |
 | `@include` (resolved via MROPATH) | ✅ | e2e `include_test` |
 | `@include` diamond / cycle / missing | ✅ (parser-enforced) | via `martian/syntax`; corpus parse |
@@ -41,6 +53,7 @@ out of scope for a transpiler.
 | bindings: `self.x`, `self.x.y`, `STAGE`, `STAGE.out`, `STAGE.out.field`, `STAGE.default` | ✅ | unit `bind`; e2e `struct_proj`, `default_out` |
 | **field projection through arrays** (`CALL.s.field`) | ✅ | unit `TestResolveArrayProjection`, e2e `struct_proj` |
 | field projection through maps (`map<S>.field`) | ✅ (emitter computes a per-ref `MapDepth` from the program types; the binder projects the field over the map's values — covers declared `map<S>` outputs and map-fork-induced maps) | e2e `map_struct_proj`, unit `TestResolveMapProjection`, `TestMapProjectDepth` |
+| field projection through an **array of typed maps** (`array<map<S>>.field`) | ❌ rejected at emit time (`checkSupported` → `ErrUnsupported`) rather than emitting silently-wrong wiring — mixed array-then-map projection has no faithful single-`MapDepth` lowering | unit `TestCheckSupportedRejectsArrayOfMapProjection`, `TestMapProjectDepth` (depth −1) |
 | literal edge cases: negative numbers, `>2^53` int64 precision, unicode/escape strings | ✅ | e2e `literals_edge` |
 | wildcard binding `* = self` / `* = REF` | ✅ | e2e `wildcard` (compiler expands) |
 | **refs nested in array/map literals** (`[A.x, B.x]` fan-in) | ✅ #14 | unit `bind`/`fork`, e2e `fanin` |
@@ -73,7 +86,8 @@ out of scope for a transpiler.
 | empty-split fork inside a map call (0 chunks → 0/null, no fork dropped) | ✅ | e2e `map_split` (includes an empty fork) |
 | `disabled` on a map call | ✅ (fork pipeline-args gated by the resolved flag; skip → null bundle) | e2e `disabled_map` (skip true→null, false→[2,4,6]) |
 | map call over a pipeline with an internal **disabled** call | ✅ (keyed pipeline gates the call per fork) | e2e `map_pipe_disabled` |
-| **nested** map call (a map over a pipeline that itself maps) | ✅ (2-D fork keying: composite `outer~inner` keys, keyed FORKBIND/MERGE) | e2e `map_pipe_nested` |
+| **nested** map call (a map over a pipeline that itself maps) | ✅ (2-D fork keying: composite `outer~inner` keys, keyed FORKBIND/MERGE; the keyed FORKBIND enumerates per-fork bundle dirs from a staged `forknames.json` read via `.resolve()`, which is object-store-safe — `java.io.File.listFiles()` is **not** used) | e2e `map_pipe_nested`; live Batch + S3 (`map_pipe_nested`); unit guard `TestEmitDisabledNestedMap` (forbids `listFiles()`) |
+| **disabled** nested map call (a disabled map nested inside an outer map) | ✅ (keyed disable gate: the flag is resolved per outer fork and either runs that fork's inner map or emits its null bundle) | e2e `map_pipe_disabled_nested` (fork0→[2,4], fork1 skip→null) |
 
 ## Stages / adapters / resources
 
@@ -85,12 +99,12 @@ out of scope for a transpiler.
 | `exec` adapter | ✅ | e2e `exec_min` |
 | `comp` adapter (mrjob-wrapped) | ✅ | unit `TestRunSumSquaresComp` |
 | per-chunk resources `__mem_gb/__threads/__vmem_gb/__special` | ✅ in `_args`/`_jobinfo` | unit `TestMergeArgs*`, `TestSpecialResourcePreserved`, `TestJobInfoResolvedResources` |
-| per-chunk resources → Nextflow scheduler directives | ✅ #15 (dynamic `cpus`/`memory` closures read the chunk's resolved resources) | e2e `split_test`, unit |
+| per-chunk resources → Nextflow scheduler directives | ✅ #15 (dynamic `cpus`/`memory` closures read the chunk's resolved resources; split & join phases also pass their resolved allocation to the shim so every phase's `_jobinfo` matches mrp) | e2e `split_test`, unit |
 | negative/adaptive resource sentinels | ✅ preserved | unit `TestMergeArgsNegativeResources` |
 | stage `using(mem_gb/threads)` incl. fractional → cpus/memory | ✅ | unit `TestEmitModules` (`memory '2 GB'`, `cpus 1`), shim |
 | `using(vmem_gb)` enforcement | ✅ with `mart -monitor` (shim caps the adapter's virtual memory via `prlimit --as`); otherwise carried in `_jobinfo` only | unit `TestLimitedCommandMonitor` |
-| `using(special)` → scheduler | ⚠️ carried in `_jobinfo`; not auto-mapped (the `special` string is a jobmanager key, not raw scheduler syntax). Map it with a `withName`/`clusterOptions` config block. Output-correct | unit `TestSpecialResourcePreserved` |
-| split-returned `join` resource override → join phase directives | ⚠️ dropped (join uses the stage's static `using()` resources). Output-correct; allocation differs | — |
+| `using(special)` → scheduler | ✅ mapped to a `clusterOptions` directive on every phase, looked up from `params.job_resources` (the `MRO_JOBRESOURCES` analog: a `special` string keys into a deploy-supplied map of scheduler options). Default map is empty (no-op on local; populate per deployment). A per-task `__special` (per-chunk / split-returned join) wins over the static key | e2e `special_resource`, unit `TestEmitSpecialScheduler`, `TestSpecialResourcePreserved` |
+| split-returned `join` resource override → join phase directives | ✅ the split's `{"join": {...}}` block (`readStageDefs`) is emitted as `joinres.json` and read by the JOIN process's dynamic `cpus`/`memory`/`clusterOptions`, overlaying the stage's static `using()` field-by-field — matching mrp's `getJobReqs`. JOIN provisions and reports the overridden allocation | e2e `join_resources`, unit `TestReadStageDefsJoinOverride`, `TestEmitJoinResourceOverride` |
 | `martian` module API (make_path, log_info/log_warn, update_progress, exit, alarm) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain`, `api_smoke` |
 | `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` (using(mem_gb=3,threads=2)→mem 3,threads 2) |
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
@@ -104,7 +118,8 @@ out of scope for a transpiler.
 |---|---|---|
 | file outputs published to results (path→basename rewrite) | ✅ | e2e `file_min` |
 | inter-stage file passing (shared FS) | ✅ | e2e `file_chain` |
-| inter-stage file passing (object store, no shared FS) | ✅ #13 (bundle-dir channels: files travel with their JSON as `@mre:file:` markers; the shim absolutizes on input, copies+relativizes on output) | e2e `cloud_sim`, unit `TestBundleRoundTrip` |
+| inter-stage file passing (object store, no shared FS) | ✅ #13 (bundle-dir channels: files travel with their JSON as `@mre:file:` markers; the shim absolutizes on input, copies+relativizes on output) | e2e `cloud_sim`, `docker_iso`, unit `TestBundleRoundTrip` |
+| auxiliary files reach isolated workers (types.json, bindspecs) | ✅ each task stages only the files it needs — the shared `types.json` plus, for a bind/fork process, its own `spec.json` — as individual `path` inputs, never referenced by `${projectDir}` (invisible on an AWS Batch / HealthOmics worker, which mounts only its work dir). A task transfers only its own bindspec, not every call's | e2e `docker_iso` (container that does not mount the project dir), unit `TestEmitAssetsStaged` |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ #13 (PUBLISH walks the entry's output type, descending file-bearing structs) | e2e `map_file`, `map_file_keyed`, `struct_of_file`; unit `internal/types` |
 | stage / pipeline `retain` | ⚠️ trivially satisfied (Nextflow keeps `work/`) | parse |
 | VDR modes (disable/post/rolling/strict) timing | 🚫 no native dependency-gated mid-run deletion | — (terminal-state only) |
@@ -116,7 +131,9 @@ out of scope for a transpiler.
 |---|---|---|
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles | unit `TestEmitConfig` |
 | `--autoretry` (content-based retry) | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it | unit `TestEmitConfig`, `TestStageFailureClassification` |
-| cloud executors (awsbatch/k8s) | ✅ profiles emitted; #13 bundle data plane makes file flow object-store-correct | config, e2e `cloud_sim` (copy-staging proxy) |
+| cloud executors (awsbatch/k8s) | ✅ profiles emitted; #13 bundle data plane makes file flow object-store-correct; auxiliary files staged via `_assets` so isolated workers (no shared FS) can read them | config, e2e `cloud_sim` (copy-staging), `docker_iso` (true container isolation) |
+| `-target awsbatch` (AWS Batch + S3) | ✅ Batch executor + classic aws-CLI S3 staging, in-container `/opt/mart` paths, a generated `Dockerfile` + self-contained `runtime/` build context (bash/ps, no ENTRYPOINT, x86_64, aws CLI) | unit `TestEmitConfigTargets`, `TestEmitContainerBuild`; e2e `docker_iso` (built from the generated Dockerfile) |
+| `-target healthomics` (AWS HealthOmics) | ✅ ECR-parameterized container, publishes to `/mnt/workflow/pubdir`, no executor (managed), pinned Nextflow version, `parameter-template.json` + `package.sh` (workflow zip) | unit `TestEmitConfigTargets`, `TestEmitHealthOmicsPackaging` |
 | `-resume` ≈ restart-without-rerun | ⚠️ content-addressed cache (different mechanism) | — |
 | web UI / HTTP API / mrstat | 🚫 use `nextflow log`/`-with-report` instead | — |
 | `mro check` / `mro graph` as conformance oracle | ✅ used to validate every fixture | `test/e2e`, `mro check` |
@@ -147,9 +164,15 @@ out of scope for a transpiler.
     cleanup, since "last consumer" is a runtime fact. Future work; today the whole
     `work/` tree is retained (higher peak disk, identical outputs).
   - **live UI / HTTP API / OOM auto-escalation** — no faithful Nextflow analog.
-- Remaining ⚠️ items are resource-*allocation* fidelity (vmem/special directives,
-  split-returned join overrides) — outputs are identical to mrp; only the
-  requested scheduler resources differ — and storage-*layout* fidelity (flat
-  `publishDir` results vs mrp's nested `outs/` tree; published names use the
-  written basename, with collisions disambiguated, rather than mrp's
-  `GetOutFilename`). All have no output-observable correctness impact.
+- Scheduler-*allocation* fidelity is now broad: per-chunk `cpus`/`memory`, the
+  split-returned `join` override, and `special` → `clusterOptions` all reach the
+  scheduler, and every phase reports its resolved allocation in `_jobinfo`, so a
+  transpiled run provisions like mrp and runs in a comparable duration. Residual
+  allocation gaps (no output-observable impact): an explicit `__vmem_gb` join
+  override is not enforced by `--monitor` (the shim derives vmem from memory),
+  and a purely split-returned `__special` on a stage that declares no static
+  `special` is not routed (`clusterOptions` is gated on a static declaration).
+- Remaining ⚠️ items are storage-*layout* fidelity (flat `publishDir` results vs
+  mrp's nested `outs/` tree; published names use the written basename, with
+  collisions disambiguated, rather than mrp's `GetOutFilename`) — no
+  output-observable correctness impact.
