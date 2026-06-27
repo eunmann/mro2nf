@@ -1,15 +1,15 @@
 # martian-nextflow
 
-Transpile [Martian](https://martian-lang.org) (`.mro`) pipelines into runnable
-[Nextflow](https://www.nextflow.io) projects — **without rewriting your stage
-code**.
+Turn [Martian](https://martian-lang.org) (`.mro`) pipelines into runnable
+[Nextflow](https://www.nextflow.io) projects, without rewriting your stage code.
 
-The transpiler translates only the *orchestration* (the DAG, splits, map-call
-forks, bindings, resources) into idiomatic Nextflow DSL2. Each generated process
-runs your **original, unmodified Martian stage code** through the real Martian
-adapter ABI, driven by a small shim (`mre`). You escape the `mrp` orchestrator
-and gain Nextflow's executors (local, SLURM/SGE/LSF/PBS, AWS Batch, Kubernetes)
-and its object-store data plane — while the stage code never knows it moved.
+The transpiler translates only the orchestration: the DAG, splits, map-call
+forks, bindings, and resource requests. It does not touch your stage code. Each
+generated Nextflow process runs your original Martian stage code through the real
+Martian adapter, driven by a small shim called `mre`. You leave the `mrp`
+orchestrator behind and gain Nextflow's executors (local, SLURM, SGE, LSF, PBS,
+AWS Batch, Kubernetes) and its object-store data plane. The stage code runs
+unchanged and never knows it moved.
 
 ```
 .mro + stage code ──mart──▶ Nextflow project ──nextflow run──▶ results/
@@ -26,16 +26,16 @@ targets — see **[`docs/TRANSPILER.md`](docs/TRANSPILER.md)**.
 
 ## Why it works
 
-- Martian is **filesystem-mediated**: a stage phase is `<adapter> <split|main|join>
-  <metadata> <files> <journal>`, reading `_args`/`_jobinfo` and writing
-  `_outs`/`_stage_defs`. The shim reproduces exactly what `mrp`+`mrjob` do for one
-  phase.
-- Martian's **topology is static** (only chunk *counts* are dynamic), which maps
-  cleanly onto Nextflow's static-DAG / runtime-cardinality model.
-- Every stage is uniformly `split → chunks → join` (a non-split stage is the
-  1-chunk degenerate case).
-- The Martian parser/resolver is a public Go package, so we import it rather than
-  reimplement the grammar.
+- Martian is filesystem-mediated. A stage phase runs as `<adapter> <split|main|join>
+  <metadata> <files> <journal>`: it reads `_args` and `_jobinfo` and writes
+  `_outs` and `_stage_defs`. The shim reproduces exactly what `mrp` and `mrjob` do
+  for one phase.
+- Martian's topology is static (only chunk counts are decided at runtime), so it
+  maps cleanly onto Nextflow's model of a static DAG with runtime cardinality.
+- Every stage has the same shape: split into chunks, run each chunk, join. A
+  non-split stage is just the one-chunk case.
+- The Martian parser and resolver are a public Go package, so we import them
+  instead of reimplementing the grammar.
 
 ## Layout
 
@@ -93,17 +93,18 @@ For `-target local` the `-mre`/`-shell`/`-mrjob`/stage paths are baked into the
 generated scripts, so set them to the paths that will exist **where the pipeline
 runs** (the local repo, or shared-filesystem cluster paths).
 
-For `-target awsbatch`/`healthomics` (container backends) `mart` ignores those host
-paths: it bakes fixed **in-container** paths (`/opt/mart/…`), copies the `mre`
-shim, the Martian adapters, and your stage code into a self-contained
-`runtime/` build context, and emits a **`Dockerfile`** so `docker build` produces
-the runtime image. Each task stages only the auxiliary files it needs — the
-shared `types.json` plus, for a bind, its own `spec.json` — as individual `path`
-inputs (never `${projectDir}`), so tasks work on an isolated worker with no
-shared filesystem and transfer only their own bindspec. File-bearing entry inputs
-(e.g. FASTQ) — at any shape: a file/dir, `file[]`, `map<file>`, or a struct with
-file fields — are likewise staged through Nextflow, so a run parameter pointing at
-an `s3://` path/prefix localizes into the task.
+For `-target awsbatch` and `-target healthomics` (container backends) `mart`
+ignores those host paths. It bakes fixed in-container paths under `/opt/mart/`,
+copies the `mre` shim, the Martian adapters, and your stage code into a
+self-contained `runtime/` build context, and writes a `Dockerfile` so
+`docker build` produces the runtime image.
+
+These backends have no shared filesystem, so each task stages in only the files
+it needs as individual `path` inputs (never via `${projectDir}`): the shared
+`types.json`, plus its own `spec.json` for a bind. File-bearing entry inputs (a
+FASTQ, say) are staged the same way, at any shape: a file or directory, a
+`file[]`, a `map<file>`, or a struct with file fields. So a run parameter that
+points at an `s3://` path or prefix is localized into the task by Nextflow.
 
 ## Testing
 
@@ -128,19 +129,23 @@ orchestrator, so "correct" means byte-identical to Martian:
 
 - **Unit** (`make test`): in-process tests of the IR, binder, type walk, shim
   ABI, and the generated Nextflow text.
-- **Local e2e** (`make test-e2e`): 60 `.mro` fixtures transpiled, run under
+- **Local e2e** (`make test-e2e`): 59 `.mro` fixtures transpiled, run under
   Nextflow, diffed vs committed `mrp` goldens — covering every supported feature,
   including file-typed entry inputs (scalar, `file[]`, `map<file>`,
   struct-with-file) supplied at launch via `-params-file`.
-- **Container isolation** (`make test-e2e-docker`): the same pipelines under the
-  docker executor (no shared filesystem), the model AWS uses — including an
-  entry-file override whose input lives outside the image, so it can only arrive
-  via Nextflow staging (the AWS Batch / HealthOmics S3-localization path).
-- **Live AWS**: the full fixture set was run end-to-end on real **AWS Batch + S3**
-  (19/19) and **AWS HealthOmics** (14/14), all byte-identical to `mrp` —
-  exercising all three adapters (`py`/`exec`/`comp`), file inputs/outputs through
-  the object store, directory outputs, retry/ASSERT handling, and stage logs.
-  See [`docs/LIVE_AWS_TEST.md`](docs/LIVE_AWS_TEST.md) and
+- **Container isolation** (`make test-e2e-docker`): 19 checks (14 fixtures + 5
+  entry-file overrides) under the docker executor (no shared filesystem), the
+  model AWS uses — including an entry-file override whose input lives outside the
+  image, so it can only arrive via Nextflow staging (the AWS Batch / HealthOmics
+  S3-localization path), and a same-basename `file[]` override that proves the
+  per-leaf staging never collides.
+- **Live AWS**: the fixture set has been run end-to-end on real **AWS Batch + S3**
+  and **AWS HealthOmics**, all byte-identical to `mrp` — exercising all three
+  adapters (`py`/`exec`/`comp`), file inputs/outputs through the object store,
+  directory outputs, retry/ASSERT handling, and stage logs. The most recent round
+  re-ran 15 fixtures in parallel on Batch after the entry-file staging fix,
+  including a same-basename `file[]` case that proves per-leaf staging never
+  collides. See [`docs/LIVE_AWS_TEST.md`](docs/LIVE_AWS_TEST.md) and
   [`deploy/awsbatch-cdk/`](deploy/awsbatch-cdk/) (the CDK that provisions it).
 
 ## Running on a cluster
@@ -153,10 +158,11 @@ nextflow run main.nf -profile awsbatch \
     --aws_queue <job-queue> --aws_region <region> -work-dir s3://<bucket>/work
 ```
 
-The **object-store data plane** makes file flow correct without a shared
-filesystem: every inter-process channel item is a self-contained *bundle*
-directory (its JSON payload plus the files it references), so Nextflow stages
-real files across task boundaries (S3, GCS, …) instead of bare absolute paths.
+The object-store data plane is what makes file flow work without a shared
+filesystem. Every channel item between processes is a self-contained *bundle*
+directory: its JSON payload plus the files it references. Nextflow stages those
+real files across task boundaries (S3, GCS, and so on) instead of passing bare
+absolute paths.
 
 ## Running on AWS Batch + S3 or HealthOmics
 
@@ -204,29 +210,29 @@ HealthOmics service role) — see its README for `cdk deploy` + run steps.
 
 ## Feature coverage & limitations
 
-`docs/FEATURE_COVERAGE.md` is the authoritative matrix — every Martian feature
-(from a page-by-page audit of all seven martian-lang.org docs, cross-checked
-against the `martian/syntax` grammar) mapped to its support status and the test
-that exercises it.
+`docs/FEATURE_COVERAGE.md` is the authoritative matrix. It comes from a
+page-by-page read of all seven martian-lang.org docs, cross-checked against the
+`martian/syntax` grammar, and maps every Martian feature to its support status
+and the test that exercises it.
 
-Supported: stages/pipelines/calls, split/main/join, map calls over arrays/maps/
-**split stages**/**sub-pipelines**, structs & typed maps (including
-`map<S>.field` projection), file/array/map/struct-of-file outputs, the `py`/
-`exec`/`comp` adapters, call modifiers, dynamic per-chunk resources, and the
-object-store data plane.
+Supported: stages, pipelines, and calls; split/main/join; map calls over arrays,
+maps, split stages, and sub-pipelines; structs and typed maps (including
+`map<S>.field` projection); file, array, map, and struct-of-file outputs; the
+`py`, `exec`, and `comp` adapters; call modifiers; dynamic per-chunk resources;
+and the object-store data plane.
 
-Every Martian map-call combination is supported (including disabled map calls,
-maps over pipelines with internal disabled calls, disabled nested maps, and
-nested maps via 2-D fork keying). Content-based retry (ASSERT → terminate,
-otherwise retry) and `-monitor` vmem enforcement are handled in the shim.
+Every map-call combination works, including disabled map calls, maps over
+pipelines that contain disabled calls, disabled nested maps, and nested maps
+(handled by 2-D fork keying). The shim handles content-based retry (ASSERT
+terminates, everything else retries) and `-monitor` vmem enforcement.
 
-Resource provisioning tracks mrp so a transpiled run schedules — and finishes —
-comparably: per-chunk `cpus`/`memory`, the split-returned `join` resource
-override, and the `special` scheduler key (mapped to `clusterOptions` via a
-`params.job_resources` map, the `MRO_JOBRESOURCES` analog) all reach the
-executor, and every phase reports its resolved allocation. Documented divergences
-(output-correct; only layout/timing differ): mid-run VDR deletion, nested maps on
-a true object-store work-dir, and mrp's nested `outs/` tree vs Nextflow's flat
+Resources track mrp, so a transpiled run schedules and finishes comparably.
+Per-chunk `cpus` and `memory`, the split-returned `join` override, and the
+`special` scheduler key all reach the executor, and every phase reports the
+allocation it resolved. (The `special` key maps to `clusterOptions` through a
+`params.job_resources` map, the `MRO_JOBRESOURCES` analog.) A few things diverge
+in layout or timing but never in output: mid-run VDR deletion, nested maps on a
+real object-store work dir, and mrp's nested `outs/` tree versus Nextflow's flat
 `publishDir`.
 
 ## Development

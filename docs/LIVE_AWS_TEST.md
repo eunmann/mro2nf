@@ -9,7 +9,51 @@ and verified against `mrp` golden outputs. Updated as runs complete.
 - **Runtime image:** `python:3.12-slim` + `procps` + `awscli` + static `linux/amd64`
   `mre` + Martian adapters + stage code at `/opt/mart` (built from the generated
   `Dockerfile`). One tag per fixture in ECR.
-- **Date:** 2026-06-26
+- **Date:** 2026-06-27 (round 4); earlier rounds 2026-06-26
+
+## Re-verification round 4 (2026-06-27, after the code-review `--fix`)
+
+After applying the max-effort code-review fixes (the entry-file staging
+collision fix, the `errStagedMany` guard, the `-fileflat` list-coercion follow-up,
+and assorted cleanups), the Batch compute environment was scaled
+(`maxvCpus` 16 → 256, still $0 idle on spot + `minvCpus: 0`) and a **parallel**
+campaign of 15 transpiled fixtures was run at once on live AWS Batch + S3
+(us-east-2). Images were built as one shared base (`mre` + adapters) plus a thin
+per-fixture layer (stages), so the whole fleet pushed quickly.
+
+**Result: 15/15 byte-identical to `mrp` on live AWS Batch + S3.**
+
+The campaign deliberately re-covers the **changed code path** — file-typed entry
+inputs at every shape — plus a regression spread:
+
+| Fixture | What it exercises | Live result |
+|---|---|---|
+| `entry_file` | scalar `file` entry input from S3 (override) | ✅ `{"total":42.0}` |
+| `entry_filearr` | `file[]` entry input from S3 | ✅ `{"total":30.0}` |
+| `entry_filearr` (same-basename) | **two `file[]` leaves sharing a basename** — the `stageAs: '<in>_?/*'` collision fix | ✅ `{"total":30.0}` |
+| `entry_struct_file` | struct-with-file entry input | ✅ `{"total":40.0}` |
+| `entry_mapfile` | `map<file>` entry input | ✅ `{"total":40.0}` |
+| `split_test` | split/main/join + entry parameterization | ✅ `{"sum":14}` |
+| `map_pipe` | map over array / sub-pipeline | ✅ `{"ys":[2,3,4]}` |
+| `map_pipe_nested` | nested map (2-D fork keying) | ✅ `{"yss":[[2,4],[6]]}` |
+| `disabled_map` | disabled map + null bundle | ✅ `{"w":null}` |
+| `kitchen_sink` | split + map + struct (comprehensive) | ✅ full match |
+| `join_resources` | split-returned join override | ✅ `{"sum":14}` |
+| `split_from_file` | data-dependent split from a file | ✅ `{"nchunks":3,"total":29}` |
+| `map_split_file` | map over a split stage emitting a file | ✅ `{"bams":["s2.txt","s3.txt"]}` |
+| `struct_file_array` | struct field that is a file array | ✅ `{"r":{"files":["r0.txt","r1.txt"],"n":2}}` |
+| `mixed_adapters` | py → exec → comp in one pipeline | ✅ `{"z":11}` |
+
+The same-basename `file[]` run is the key new check: before the fix, two leaves
+named `reads.txt` collided in the task work dir; with `stageAs: '<in>_?/*'` each
+lands in its own numbered subdir and reconstructs to the right slot. Verified
+live, byte-identical to `mrp`.
+
+**HealthOmics (us-east-1):** the same-basename entry-file override was also run on
+live AWS HealthOmics to confirm the fix on the managed backend — `entry_filearr`
+with `reads = [s3://…/sb1/reads.txt, s3://…/sb2/reads.txt]` (run id `3456592`),
+result `{"total":30.0}` ✅, byte-identical to mrp. Output exported to
+`omics-out/3456592/pubdir/pipeline_outs.json`.
 
 ## Re-verification round 3 (2026-06-26, current committed code)
 
@@ -278,17 +322,17 @@ The content-based `errorStrategy` was confirmed with two failing pipelines
 
 ## Status
 
-Live validation: **AWS Batch + S3 (us-east-2) 22/22** (the original 19 + the 3
-Round-3 complex-combination fixtures) and **AWS HealthOmics (us-east-1) 14/14**,
-all byte-identical to mrp. Four real issues were found and fixed via the live runs
-(ECR lifecycle, the S3 `.resolve()` scheme bug, lost stage logs, the Dockerfile
-missing `mrjob`), plus the no-op-modifier warnings. Local `make test` +
-`make test-e2e` (60) + `make test-e2e-docker` green.
+Live validation: **AWS Batch + S3 (us-east-2)** — 22/22 in round 3, then a
+**15/15 parallel re-run in round 4** after the code-review fixes (Batch scaled to
+`maxvCpus: 256`) — and **AWS HealthOmics (us-east-1) 14/14** plus a round-4
+same-basename entry-file run. All byte-identical to mrp. Five real issues were
+found and fixed via the live runs (ECR lifecycle, the S3 `.resolve()` scheme bug,
+lost stage logs, the Dockerfile missing `mrjob`, and the entry-file basename
+collision), plus the no-op-modifier warnings. Local `make test` + `make test-e2e`
+(59) + `make test-e2e-docker` (19) green.
 
-**Infra status (2026-06-26, round 3):** the stack was redeployed and is
-**currently live** — `MartNextflowStack` exists in both us-east-2 (Batch+S3,
-bucket `martnextflowstack-workbucketf885502b-l5n5aq5yqdat`, ECR `mart-runtime`,
-queue `JobQueueEE3AD499-…`) and us-east-1 (HealthOmics). Round 3 re-verification
-ran against it. It idles at ≈$0 (Batch `minvCpus: 0`, spot; no NAT/EFS); run
-`cd deploy/awsbatch-cdk && npx cdk destroy` in both regions to tear down when
-done.
+**Infra status (2026-06-27, round 4):** after the round-4 campaign the stack was
+**torn down** — `cd deploy/awsbatch-cdk && npx cdk destroy` in us-east-2 and
+us-east-1. To bring it back, `npx cdk deploy MartNextflowStack` per region. It
+idles at ≈$0 when up (Batch `minvCpus: 0`, spot; no NAT/EFS), so leaving it
+deployed is cheap if more live runs are planned.

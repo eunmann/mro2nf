@@ -29,21 +29,21 @@ it generates runs the **original, unmodified** Martian stage through a small Go
 shim called **`mre`**, which speaks the exact same adapter ABI that Martian's own
 runner (`mrp`) speaks. The stage can't tell the difference.
 
-That single decision drives everything else:
+This one decision shapes everything else:
 
-- **Correctness for free.** Because the stage code runs through the real Martian
-  adapter (`martian_shell.py`), outputs are byte-for-byte what `mrp` would
-  produce. The transpiler's job is "schedule the same work in the same shape,"
-  not "re-derive the science."
-- **Two programs, not one.** `mart` (the transpiler, build time) emits the
-  Nextflow project; `mre` (the runtime shim, baked into the project) runs each
-  stage phase at execution time.
-- **A neutral data plane.** Martian passes data between stages as JSON plus
-  files on a shared filesystem. Nextflow on the cloud has **no** shared
-  filesystem — each task is an isolated container with an object-store (S3) work
-  dir. So the transpiler defines a self-contained *bundle* format that carries a
-  stage's inputs/outputs (JSON **and** the files they reference) as one directory
-  that Nextflow can stage between tasks. This is what makes the same project run
+- **Correctness.** The stage code runs through the real Martian adapter
+  (`martian_shell.py`), so its outputs are byte-for-byte what `mrp` would
+  produce. The transpiler only has to schedule the same work in the same shape.
+  It never re-derives the science.
+- **Two programs.** `mart` is the transpiler; it runs at build time and emits the
+  Nextflow project. `mre` is the runtime shim, baked into that project; it runs
+  each stage phase at execution time.
+- **A neutral data plane.** Martian passes data between stages as JSON plus files
+  on a shared filesystem. On the cloud, Nextflow has no shared filesystem: each
+  task is an isolated container with an object-store (S3) work dir. So the
+  transpiler defines a self-contained *bundle* format that carries a stage's
+  inputs and outputs (the JSON and the files it references) as one directory
+  Nextflow can stage between tasks. This is what lets the same project run
   identically on a laptop, an HPC cluster, AWS Batch + S3, and AWS HealthOmics.
 
 ```
@@ -145,9 +145,9 @@ core types:
 ## 4. Emit: mapping every Martian construct to Nextflow
 
 The emitter (`internal/emit`) writes a complete Nextflow DSL2 project. The shape
-of the output is the heart of the transpiler, so it's worth seeing concretely.
-For a simple pipeline that calls a split stage `SUM_SQUARES` then `REPORT`, the
-project is:
+of the output is the heart of the transpiler, so it helps to see a concrete
+example. For a simple pipeline that calls a split stage `SUM_SQUARES` then
+`REPORT`, the project is:
 
 ```
 main.nf                              ← entry workflow + PUBLISH + BUILD_ENTRY_ARGS
@@ -401,11 +401,11 @@ In `data.json`, every file-typed leaf is replaced with a **marker** of the form
   file.
 
 Because the files travel *inside* the bundle directory, Nextflow stages them
-between tasks automatically — no shared filesystem required. This is the crux of
-cloud portability: the same bundle works on a laptop (shared FS), under the
-Docker executor (isolated containers), and on AWS Batch with an S3 work dir.
+between tasks automatically, with no shared filesystem required. This is what
+makes cloud portability work: the same bundle runs on a laptop (shared FS), under
+the Docker executor (isolated containers), and on AWS Batch with an S3 work dir.
 
-Two subtleties that only bite on a real object store, both handled:
+Two details matter only on a real object store. Both are handled:
 
 - **`.resolve()`, not string interpolation.** Head-node Groovy closures that read
   a bundle's `data.json` use `path.resolve('data.json').text`, never
@@ -443,6 +443,15 @@ bundle. This works for **every shape** — a scalar `file`/`path`/directory, a
 flatten-and-reconstruct mechanism whose ordering (arrays by index, maps by sorted
 key, struct fields in declaration order) is shared between the Groovy flatten and
 the Go reconstruction so they can't drift. An unset input keeps its baked default.
+
+Two leaves can share a basename — two FASTQs both named `reads.fastq` in
+different sample directories, say. To keep them from clobbering each other when
+Nextflow stages them into one task dir, the `path` input uses
+`stageAs: '<name>_?/*'`, which puts each leaf in its own numbered subdir
+(`<name>_1/reads.fastq`, `<name>_2/reads.fastq`, …) while keeping the original
+filename. The staged paths are then handed to `mre entryargs` in that numbered
+order, which matches the flatten order, so each leaf reconstructs to the right
+slot regardless of name collisions.
 
 All of these were verified live on AWS Batch + S3 and AWS HealthOmics (e.g. a
 FASTQ-directory supplied as an `s3://…/dir/` prefix stages the whole directory
@@ -487,7 +496,7 @@ code, and — for `comp` stages — the `mrjob` wrapper) at fixed in-container p
 internet**, so any third-party stage dependency (e.g. the Cell Ranger binary)
 must be added to the Dockerfile.
 
-Two cloud-specific defaults worth knowing:
+Two cloud-specific defaults to know about:
 
 - **`awsbatch` publishes nothing by default.** A transpiled stage's outputs are
   already uploaded to the S3 work dir by the Batch executor — that *is* the
@@ -507,8 +516,9 @@ feature is checked against the real `mrp` output. The validation tiers:
 
 - **Unit tests** — the IR, binder, type walk, shim ABI, and the generated
   Nextflow text.
-- **Local e2e** (`make test-e2e`) — 57 `.mro` fixtures transpiled, run under
-  Nextflow, and diffed against committed `mrp` goldens.
+- **Local e2e** (`make test-e2e`) — 59 `.mro` fixtures transpiled, run under
+  Nextflow, and diffed against committed `mrp` goldens (plus `cloud_sim.sh`, the
+  object-store data plane under copy-staging).
 - **Container isolation** (`make test-e2e-docker`) — the same pipelines under the
   Docker executor, where each task mounts only its work dir. This is the
   license-free proxy for the cloud "no shared filesystem" model and the regression
