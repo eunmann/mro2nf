@@ -1,0 +1,34 @@
+# Edge/complex output shape: a struct whose field is an ARRAY of files
+# (struct{ txt[] reports, int n }). The type walk must descend the struct and
+# then the array to reach each file leaf, staging them through the object store
+# and publishing them — a shape no single-feature fixture covers.
+filetype txt;
+
+struct Report(
+    txt[] files,
+    int   n,
+)
+
+stage MAKER(
+    in  int    k,
+    out Report r,
+    src py     "stages/maker",
+)
+
+pipeline SFA(
+    in  int    k,
+    out Report r,
+)
+{
+    call MAKER(
+        k = self.k,
+    )
+
+    return (
+        r = MAKER.r,
+    )
+}
+
+call SFA(
+    k = 2,
+)

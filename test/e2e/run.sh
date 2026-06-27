@@ -137,6 +137,7 @@ CASES=(
     "fanin|testdata/fanin|testdata/fanin/expected/outs.json"
     "map_split_file|testdata/map_split_file|testdata/map_split_file/expected/outs.json"
     "mixed_adapters|testdata/mixed_adapters|testdata/mixed_adapters/expected/outs.json"
+    "struct_file_array|testdata/struct_file_array|testdata/struct_file_array/expected/outs.json"
 )
 
 # Run cases in a bounded parallel pool; xargs exits non-zero if any case fails.
