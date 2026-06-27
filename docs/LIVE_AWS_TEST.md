@@ -35,14 +35,19 @@ old baked input, not the current golden `60`); always re-transpile from
 Added to cover realistic multi-feature pipelines (the kind Cell Ranger builds),
 not just single features:
 
-| Fixture | Combination exercised | Local + docker-iso | Live Batch |
+| Fixture | Combination exercised | Local + docker-iso | Live Batch + S3 |
 |---|---|---|---|
-| `map_split_file` | map over a sub-pipeline whose body is a **split stage emitting a file** (fork keying + per-fork split/main/join + file through the object-store merge) | ✅ `{"bams":["s2.txt","s3.txt"]}` | ⏳ pending fresh creds |
-| `mixed_adapters` | **py → exec → comp** chained in one pipeline (all three ABIs + `mrjob` in one image) | ✅ `{"z":11}` (local) | ⏳ pending fresh creds |
+| `map_split_file` | map over a sub-pipeline whose body is a **split stage emitting a file** (fork keying + per-fork split/main/join + file through the object-store merge) | ✅ `{"bams":["s2.txt","s3.txt"]}` | ✅ `{"bams":["s2.txt","s3.txt"]}` |
+| `mixed_adapters` | **py → exec → comp** chained in one pipeline (all three ABIs + `mrjob` in one image) | ✅ `{"z":11}` | ✅ `{"z":11}` |
+| `struct_file_array` | a struct output whose field is a **file array** (`struct{ txt[] files, int n }`; type walk descends struct → array → file leaf) | ✅ `{"r":{"files":["r0.txt","r1.txt"],"n":2}}` | ✅ `{"r":{"files":["r0.txt","r1.txt"],"n":2}}` |
 
-`map_split_file` passing under **docker-isolation** (no shared filesystem, mount-
-only-workdir — the exact AWS model) is strong evidence it runs on Batch; the live
-run is queued for the next credentialed session.
+All three ran end-to-end on **live AWS Batch + S3** (us-east-2, default
+`emu_dev` SSO profile, fresh image per fixture built from the generated
+`Dockerfile` and pushed to ECR), each **byte-identical to `mrp`** — confirming
+the complex combinations on the real object-store data plane, not just under
+docker-isolation. HealthOmics not re-run for these (every constituent feature is
+already in the HealthOmics 14/14 matrix below; the combos are validated on Batch
++ docker-iso).
 
 ## Re-verification round 2 (2026-06-26, after C1/C2/C3)
 
@@ -273,11 +278,12 @@ The content-based `errorStrategy` was confirmed with two failing pipelines
 
 ## Status
 
-Live validation complete: **AWS Batch + S3 (us-east-2) 19/19** and **AWS
-HealthOmics (us-east-1) 14/14**, all byte-identical to mrp. Four real issues were
-found and fixed via the live runs (ECR lifecycle, the S3 `.resolve()` scheme bug,
-lost stage logs, the Dockerfile missing `mrjob`), plus the no-op-modifier
-warnings. Local `make test` + `make test-e2e` (47) + `make test-e2e-docker` green.
+Live validation: **AWS Batch + S3 (us-east-2) 22/22** (the original 19 + the 3
+Round-3 complex-combination fixtures) and **AWS HealthOmics (us-east-1) 14/14**,
+all byte-identical to mrp. Four real issues were found and fixed via the live runs
+(ECR lifecycle, the S3 `.resolve()` scheme bug, lost stage logs, the Dockerfile
+missing `mrjob`), plus the no-op-modifier warnings. Local `make test` +
+`make test-e2e` (60) + `make test-e2e-docker` green.
 
 **Infra status (2026-06-26, round 3):** the stack was redeployed and is
 **currently live** — `MartNextflowStack` exists in both us-east-2 (Batch+S3,
