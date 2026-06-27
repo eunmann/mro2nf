@@ -1178,9 +1178,9 @@ func stageDirectives(s *ir.Stage, val string) string {
 	}
 
 	// `special` is mrp's scheduler-routing key (MRO_JOBRESOURCES); map it through
-	// params.job_resources so a grid run resolves it to clusterOptions. Emitted
-	// only when the stage declares one statically; a per-task __special override
-	// (split-returned) then wins over the static key at runtime.
+	// params.job_resources so a grid run resolves it to clusterOptions. A per-task
+	// __special (split-returned per chunk / join) wins over a static key, and is
+	// routed on the main/join phases even when the stage declares no static key.
 	if n, ok := gpuRequest(s.Resources.Special); ok {
 		// Reserved `special = "gpu[:N]"`: request N whole GPUs via the accelerator
 		// directive, on the compute phase only — a split stage's split and join
@@ -1197,6 +1197,11 @@ func stageDirectives(s *ir.Stage, val string) string {
 		}
 
 		fmt.Fprintf(&b, "\n  clusterOptions { params.job_resources?.get(%s) ?: '' }", key)
+	} else if val != "" {
+		// No static special, but a split's per-chunk / join __special can still
+		// appear at runtime on the main and join phases; route it (the key resolves
+		// to '' — a no-op — when no __special is returned).
+		fmt.Fprintf(&b, "\n  clusterOptions { params.job_resources?.get(%s?.special ?: '') ?: '' }", val)
 	}
 
 	return b.String()

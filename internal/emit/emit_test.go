@@ -386,18 +386,28 @@ func TestEmitSpecialScheduler(t *testing.T) {
 	}
 }
 
-// TestEmitNoSpecialOmitsClusterOptions checks that a stage without a `special`
-// key emits no clusterOptions directive (no scheduler noise for the common case).
-func TestEmitNoSpecialOmitsClusterOptions(t *testing.T) {
+// TestEmitNoSpecialClusterOptions checks the `special` routing for stages with no
+// static key: a non-split stage (REPORT) emits no clusterOptions at all, while a
+// split stage's main/join phases carry a dynamic router that resolves a
+// split-returned __special (and is a no-op — resolves to '' — when none is
+// returned). The split phase itself emits nothing.
+func TestEmitNoSpecialClusterOptions(t *testing.T) {
 	dir := loadAndEmit(t)
 
-	data, err := os.ReadFile(filepath.Join(dir, "modules", "stage_SUM_SQUARES.nf"))
-	if err != nil {
-		t.Fatalf("read stage module: %v", err)
+	report := readFile(t, filepath.Join(dir, "modules", "stage_REPORT.nf"))
+	if strings.Contains(report, "clusterOptions") {
+		t.Error("a non-split stage with no special must not emit clusterOptions")
 	}
 
-	if strings.Contains(string(data), "clusterOptions") {
-		t.Error("stage with no special should not emit clusterOptions")
+	sumsq := readFile(t, filepath.Join(dir, "modules", "stage_SUM_SQUARES.nf"))
+	// main and join route a split-returned __special even without a static key.
+	for _, want := range []string{
+		"clusterOptions { params.job_resources?.get(res?.special ?: '') ?: '' }",
+		"clusterOptions { params.job_resources?.get(join?.special ?: '') ?: '' }",
+	} {
+		if !strings.Contains(sumsq, want) {
+			t.Errorf("split stage main/join must route a split-returned __special: missing %q", want)
+		}
 	}
 }
 
