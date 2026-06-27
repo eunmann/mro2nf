@@ -39,6 +39,11 @@ type Ref struct {
 	// The emitter computes it from the program's types. 0 means no map
 	// projection (arrays auto-project at runtime; structs navigate by key).
 	MapDepth int `json:"mapDepth,omitempty"`
+	// MapInArray marks the array<map<S>>.field shape: the value reached at
+	// MapDepth is an array (one or more dims) of typed maps, so the field is
+	// projected over each map's values *within* the array, preserving the array
+	// structure (array<map<S>>.field -> array<map<field>>).
+	MapInArray bool `json:"mapInArray,omitempty"`
 }
 
 // Entry binds one parameter to a value expression: a leaf literal or ref, or a
@@ -265,14 +270,14 @@ func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMes
 
 	switch e.Ref.Kind {
 	case "self":
-		return extractProject(pipeArgs, joinPath(e.Ref.ID, e.Ref.Output), e.Ref.MapDepth)
+		return extractProject(pipeArgs, joinPath(e.Ref.ID, e.Ref.Output), e.Ref.MapDepth, e.Ref.MapInArray)
 	case "call":
 		outs, ok := callOuts[e.Ref.ID]
 		if !ok {
 			return json.RawMessage(nullLiteral), nil
 		}
 
-		return extractProject(outs, e.Ref.Output, e.Ref.MapDepth)
+		return extractProject(outs, e.Ref.Output, e.Ref.MapDepth, e.Ref.MapInArray)
 	default:
 		return nil, fmt.Errorf("%w: %q", errUnknownRefKind, e.Ref.Kind)
 	}
@@ -280,9 +285,11 @@ func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMes
 
 // extractProject navigates the first mapDepth segments, then projects the rest
 // of the path over the values of the typed map reached there. With mapDepth <= 0
-// it is the plain navigate/array-project extract.
-func extractProject(raw json.RawMessage, path string, mapDepth int) (json.RawMessage, error) {
-	if mapDepth <= 0 {
+// it is the plain navigate/array-project extract. When mapInArray is set the
+// value at mapDepth is an array of maps, so the projection descends the array and
+// projects over each map (array<map<S>>.field -> array<map<field>>).
+func extractProject(raw json.RawMessage, path string, mapDepth int, mapInArray bool) (json.RawMessage, error) {
+	if mapDepth <= 0 && !mapInArray {
 		return extract(raw, path)
 	}
 
@@ -296,7 +303,43 @@ func extractProject(raw json.RawMessage, path string, mapDepth int) (json.RawMes
 		return nil, err
 	}
 
+	if mapInArray {
+		return projectMapInArray(mapVal, strings.Join(segs[mapDepth:], "."))
+	}
+
 	return projectMap(mapVal, strings.Join(segs[mapDepth:], "."))
+}
+
+// projectMapInArray projects path over the typed-map values nested inside an
+// array (any depth): it recurses through array levels and applies projectMap at
+// each map, so array<map<S>>.field yields array<map<field>> and the array shape
+// is preserved.
+func projectMapInArray(raw json.RawMessage, path string) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte(nullLiteral)) {
+		return json.RawMessage(nullLiteral), nil
+	}
+
+	if trimmed[0] != '[' {
+		return projectMap(raw, path)
+	}
+
+	var arr []json.RawMessage
+	if err := json.Unmarshal(raw, &arr); err != nil {
+		return nil, fmt.Errorf("project %q over array-of-map: %w", path, err)
+	}
+
+	out := make([]json.RawMessage, len(arr))
+	for i, e := range arr {
+		pv, err := projectMapInArray(e, path)
+		if err != nil {
+			return nil, err
+		}
+
+		out[i] = pv
+	}
+
+	return marshalRaw(out, "array-of-map projection")
 }
 
 // projectMap applies path to each value of a typed-map object, returning a map

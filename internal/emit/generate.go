@@ -3,6 +3,7 @@ package emit
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +11,9 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 )
+
+// refKindCall is the ir.Ref.Kind for a reference to another call's output.
+const refKindCall = "call"
 
 // genCtx carries the resolved paths and names needed to render Nextflow code.
 type genCtx struct {
@@ -758,7 +762,28 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline) {
 	body.WriteString("  main:\n    pa = pipeargs\n")
 	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
-	for _, c := range p.Calls {
+	// Preflight gating: wire the gateable preflight calls first (against the raw
+	// pipeargs), then gate `pa` on their completion so every other call waits for
+	// validation to pass before starting — the early-abort behavior mrp gives a
+	// preflight. Only preflights bound solely to pipeline inputs are gates (one
+	// bound to another call's output is itself downstream, so it stays in order
+	// and cannot gate without a cycle).
+	pre, rest := partitionGateablePreflight(p.Calls)
+	for _, c := range pre {
+		genCallWiring(&body, p.Name, c)
+	}
+
+	if len(pre) > 0 {
+		var gate strings.Builder
+		gate.WriteString("ch_" + pre[0].Name)
+		for _, c := range pre[1:] {
+			gate.WriteString(".combine(ch_" + c.Name + ")")
+		}
+
+		fmt.Fprintf(&body, "    pa = %s.combine(pipeargs).map { it[-1] }.first()\n", gate.String())
+	}
+
+	for _, c := range rest {
 		genCallWiring(&body, p.Name, c)
 	}
 
@@ -772,6 +797,52 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline) {
 }
 
 `, p.Name, body.String(), retName)
+}
+
+// partitionGateablePreflight splits calls into the gateable preflight calls
+// (preflight, plain — not mapped/disabled — and bound only to pipeline inputs or
+// literals) and everything else, each in original order. A gateable preflight
+// depends on nothing but pipeargs, so it can run first and gate the rest without
+// a cycle. A preflight that references another call is left in place (it cannot
+// gate the pipeline it is downstream of) and keeps its prior in-order behavior.
+func partitionGateablePreflight(calls []ir.Call) ([]ir.Call, []ir.Call) {
+	var pre, rest []ir.Call
+
+	for _, c := range calls {
+		if c.Preflight && !c.Mapped && c.Disabled == nil && !bindingsRefCall(c.Bindings) {
+			pre = append(pre, c)
+		} else {
+			rest = append(rest, c)
+		}
+	}
+
+	return pre, rest
+}
+
+// bindingsRefCall reports whether any binding value references another call's
+// output (Ref kind "call"), recursing into array/object literals.
+func bindingsRefCall(bindings []ir.Binding) bool {
+	var refsCall func(ir.Value) bool
+	refsCall = func(v ir.Value) bool {
+		switch {
+		case v.Ref != nil:
+			return v.Ref.Kind == refKindCall
+		case v.Array != nil:
+			return slices.ContainsFunc(v.Array, refsCall)
+		case v.Object != nil:
+			for _, e := range v.Object {
+				if refsCall(e) {
+					return true
+				}
+			}
+		}
+
+		return false
+	}
+
+	return slices.ContainsFunc(bindings, func(bnd ir.Binding) bool {
+		return refsCall(bnd.Value)
+	})
 }
 
 // genCallWiring emits the wiring for one call: a map-call fork/merge fan-out, a
@@ -1130,7 +1201,7 @@ func refCalls(bindings []ir.Binding) []string {
 
 	var walk func(v ir.Value)
 	walk = func(v ir.Value) {
-		if v.Ref != nil && v.Ref.Kind == "call" && !seen[v.Ref.ID] {
+		if v.Ref != nil && v.Ref.Kind == refKindCall && !seen[v.Ref.ID] {
 			seen[v.Ref.ID] = true
 			ids = append(ids, v.Ref.ID)
 		}
@@ -1172,15 +1243,15 @@ func stageDirectives(s *ir.Stage, val string) string {
 	var b strings.Builder
 
 	if val == "" {
-		fmt.Fprintf(&b, "  cpus %d\n  memory '%d GB'", cpusOf(s), memOf(s))
+		fmt.Fprintf(&b, "  cpus %d\n  %s", cpusOf(s), staticMem(memOf(s)))
 	} else {
 		fmt.Fprintf(&b, "  %s\n  %s", dynCpus(val, cpusOf(s)), dynMem(val, memOf(s)))
 	}
 
 	// `special` is mrp's scheduler-routing key (MRO_JOBRESOURCES); map it through
-	// params.job_resources so a grid run resolves it to clusterOptions. Emitted
-	// only when the stage declares one statically; a per-task __special override
-	// (split-returned) then wins over the static key at runtime.
+	// params.job_resources so a grid run resolves it to clusterOptions. A per-task
+	// __special (split-returned per chunk / join) wins over a static key, and is
+	// routed on the main/join phases even when the stage declares no static key.
 	if n, ok := gpuRequest(s.Resources.Special); ok {
 		// Reserved `special = "gpu[:N]"`: request N whole GPUs via the accelerator
 		// directive, on the compute phase only — a split stage's split and join
@@ -1197,6 +1268,11 @@ func stageDirectives(s *ir.Stage, val string) string {
 		}
 
 		fmt.Fprintf(&b, "\n  clusterOptions { params.job_resources?.get(%s) ?: '' }", key)
+	} else if val != "" {
+		// No static special, but a split's per-chunk / join __special can still
+		// appear at runtime on the main and join phases; route it (the key resolves
+		// to '' — a no-op — when no __special is returned).
+		fmt.Fprintf(&b, "\n  clusterOptions { params.job_resources?.get(%s?.special ?: '') ?: '' }", val)
 	}
 
 	return b.String()
@@ -1232,7 +1308,16 @@ func dynCpus(val string, fallback int) string {
 // dynMem renders a dynamic `memory` directive: the runtime val's mem_gb when
 // positive, else the stage's static `using` default.
 func dynMem(val string, fallback int) string {
-	return fmt.Sprintf("memory { (%[1]s?.mem_gb ?: 0) > 0 ? \"${%[1]s.mem_gb} GB\" : '%[2]d GB' }", val, fallback)
+	return fmt.Sprintf("memory { def m = (%[1]s?.mem_gb ?: 0) > 0 ? %[1]s.mem_gb : %[2]d; (m * task.attempt) + ' GB' }", val, fallback)
+}
+
+// staticMem renders a static `memory` directive that grows with task.attempt —
+// the --auto-adjust-memory analog. Attempt 1 requests the stage's `using` value;
+// a retry (an OOM kill is a retryable, non-ASSERT failure) requests a multiple,
+// so a stage that died for want of memory gets more on the next attempt instead
+// of failing identically. cpus do not escalate (more CPUs do not fix an OOM).
+func staticMem(memGB int) string {
+	return fmt.Sprintf("memory { %d * task.attempt + ' GB' }", memGB)
 }
 
 func cpusOf(s *ir.Stage) int {
