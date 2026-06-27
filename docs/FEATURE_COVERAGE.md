@@ -107,7 +107,7 @@ out of scope for a transpiler.
 | per-chunk resources → Nextflow scheduler directives | ✅ #15 (dynamic `cpus`/`memory` closures read the chunk's resolved resources; split & join phases also pass their resolved allocation to the shim so every phase's `_jobinfo` matches mrp) | e2e `split_test`, unit |
 | negative/adaptive resource sentinels | ✅ preserved | unit `TestMergeArgsNegativeResources` |
 | stage `using(mem_gb/threads)` incl. fractional → cpus/memory | ✅ | unit `TestEmitModules` (`memory '2 GB'`, `cpus 1`), shim |
-| `using(vmem_gb)` enforcement | ✅ with `mro2nf -monitor` (shim caps the adapter's virtual memory via `prlimit --as`); otherwise carried in `_jobinfo` only | unit `TestLimitedCommandMonitor` |
+| `using(vmem_gb)` enforcement | ✅ the declared value is passed to the shim via `-vmemgb` on every phase, so `mro2nf -monitor` caps the adapter's virtual memory (`prlimit --as`) at it and `_jobinfo` reports it; a per-chunk `__vmem_gb` overrides for main, a split-returned join `__vmem_gb` for join | unit `TestEmitVmemFlag`, `TestLimitedCommandMonitor` |
 | `using(special)` → scheduler | ✅ mapped to a `clusterOptions` directive on every phase, looked up from `params.job_resources` (the `MRO_JOBRESOURCES` analog: a `special` string keys into a deploy-supplied map of scheduler options). Default map is empty (no-op on local; populate per deployment). A per-task `__special` (per-chunk / split-returned join) wins over the static key | e2e `special_resource`, unit `TestEmitSpecialScheduler`, `TestSpecialResourcePreserved` |
 | split-returned `join` resource override → join phase directives | ✅ the split's `{"join": {...}}` block (`readStageDefs`) is emitted as `joinres.json` and read by the JOIN process's dynamic `cpus`/`memory`/`clusterOptions`, overlaying the stage's static `using()` field-by-field — matching mrp's `getJobReqs`. JOIN provisions and reports the overridden allocation | e2e `join_resources`, unit `TestReadStageDefsJoinOverride`, `TestEmitJoinResourceOverride` |
 | `martian` module API (make_path, log_info/log_warn, update_progress, exit, alarm) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain`, `api_smoke` |
@@ -174,10 +174,10 @@ out of scope for a transpiler.
   scheduler, and every phase reports its resolved allocation in `_jobinfo`, so a
   transpiled run provisions like mrp and runs in a comparable duration. A
   purely split-returned `__special` is now routed even with no static key (the
-  main/join phases read the per-task `__special`). Residual allocation gap (no
-  output-observable impact, `--monitor`-only): an explicit `__vmem_gb` is not
-  passed to the shim, so `--monitor` caps virtual memory at the derived value
-  (memory + headroom) rather than a declared `vmem_gb`.
+  main/join phases read the per-task `__special`), and a declared `using(vmem_gb)`
+  is passed to the shim via `-vmemgb` on every phase, so `--monitor` caps virtual
+  memory (and `_jobinfo` reports it) at the declared value (a per-chunk
+  `__vmem_gb` still wins for main; a split-returned join override refines it).
 - Remaining ⚠️ items are storage-*layout* fidelity (flat `publishDir` results vs
   mrp's nested `outs/` tree; published names use the written basename, with
   collisions disambiguated, rather than mrp's `GetOutFilename`) — no
