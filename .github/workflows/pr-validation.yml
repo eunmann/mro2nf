@@ -75,7 +75,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle # cache the JDK toolchain download
       - uses: nf-core/setup-nextflow@v2 # installs + caches the Nextflow binary
       - name: Cache Nextflow plugins
         uses: actions/cache@v4
