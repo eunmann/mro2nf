@@ -28,7 +28,7 @@ type genCtx struct {
 
 // stageCmd renders an mre invocation for a stage phase, single-quoting every
 // path so spaces and shell metacharacters in paths are safe.
-func (g genCtx) stageCmd(phase, code string, lang ir.Lang) string {
+func (g genCtx) stageCmd(phase, code string, lang ir.Lang, vmemExpr string) string {
 	cmd := fmt.Sprintf("'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
 		g.mre, phase, g.shell, code, lang, g.entry, g.mroFile)
 
@@ -36,11 +36,39 @@ func (g genCtx) stageCmd(phase, code string, lang ir.Lang) string {
 		cmd += fmt.Sprintf(" -mrjob '%s'", g.mrjob)
 	}
 
+	// A declared `using(vmem_gb)` is passed so the shim's --monitor caps virtual
+	// memory (and reports it in _jobinfo) at the declared value instead of the
+	// memory-derived default. A per-chunk __vmem_gb still wins for main (it
+	// arrives in the chunk def); a split-returned join override refines it via
+	// vmemExpr. When no vmem_gb is declared, vmemExpr is empty and the shim
+	// derives vmem from memory as before.
+	if vmemExpr != "" {
+		cmd += " -vmemgb " + vmemExpr
+	}
+
 	if g.monitor {
 		cmd += " -monitor"
 	}
 
 	return cmd
+}
+
+// vmemFlag renders the -vmemgb value for a stage phase from its static
+// using(vmem_gb): empty when none is declared (the shim then derives vmem from
+// memory). The join phase wraps it so a split-returned join __vmem_gb override
+// refines the static default at runtime.
+func vmemFlag(s *ir.Stage, phase string) string {
+	v := s.Resources.VMemGB
+	if v <= 0 {
+		return ""
+	}
+
+	static := strconv.FormatFloat(v, 'g', -1, 64)
+	if phase == "join" {
+		return fmt.Sprintf("${(join?.vmem_gb ?: 0) > 0 ? join.vmem_gb : %s}", static)
+	}
+
+	return static
 }
 
 // producerArgs renders the flags a bundle-producing mre command needs to stage
@@ -424,7 +452,7 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 	code := g.code[s.Name]
 	mainOuts := strings.Join(append(names(s.Out), names(s.ChunkOut)...), ",")
 	joinOuts := strings.Join(names(s.Out), ",")
-	base := g.stageCmd("main", code, s.Lang)
+	base := g.stageCmd("main", code, s.Lang, vmemFlag(s, "main"))
 
 	if !s.Split {
 		genSingleStage(b, s, base, joinOuts, g)
@@ -445,8 +473,8 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 // processes: every channel item is tuple(key, ...), so chunks and joins stay
 // partitioned by fork. Outputs are named by key so the merge orders them.
 func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
-	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang)
-	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang)
+	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
+	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang, vmemFlag(s, "join"))
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT_K {
 %[2]s
@@ -578,8 +606,8 @@ workflow wf_%[1]s_map {
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
-	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang)
-	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang)
+	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
+	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang, vmemFlag(s, "join"))
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
 %[2]s

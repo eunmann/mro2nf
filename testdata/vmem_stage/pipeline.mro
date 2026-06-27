@@ -1,0 +1,33 @@
+# A stage that declares using(vmem_gb): the transpiler passes -vmemgb to the shim
+# so --monitor caps virtual memory (and _jobinfo reports it) at the declared
+# value instead of the memory-derived default.
+
+stage VSTAGE(
+    in  float[] values,
+    out float   sum,
+    src py      "stages/vstage",
+) split using (
+    in  float value,
+    out float square,
+) using (
+    mem_gb  = 2,
+    vmem_gb = 8,
+)
+
+pipeline VP(
+    in  float[] values,
+    out float   sum,
+)
+{
+    call VSTAGE(
+        values = self.values,
+    )
+
+    return (
+        sum = VSTAGE.sum,
+    )
+}
+
+call VP(
+    values = [1, 2, 3],
+)
