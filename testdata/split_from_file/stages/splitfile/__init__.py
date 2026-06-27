@@ -7,7 +7,12 @@ def split(args):
             line = line.strip()
             if line:
                 n = int(line)
-                chunks.append({"n": n, "__threads": n, "__mem_gb": 1})
+                # __threads is derived from the data but capped at 2 so a chunk
+                # never requests more CPUs than a small CI runner has (the local
+                # executor rejects a task whose cpus exceed the machine). The
+                # value still varies per chunk; total/nchunks depend on n, not n's
+                # thread count, so the goldens are unaffected.
+                chunks.append({"n": n, "__threads": min(n, 2), "__mem_gb": 1})
     return {"chunks": chunks}
 
 
