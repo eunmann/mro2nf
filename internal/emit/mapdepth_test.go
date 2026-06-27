@@ -56,7 +56,7 @@ func TestMapProjectDepth(t *testing.T) {
 			"P": {Name: "P", Fields: []ir.Param{{Name: "x", BaseType: "int"}}},
 		},
 		Stages: map[string]*ir.Stage{
-			"MAPOUT": {Name: "MAPOUT", Out: []ir.Param{{Name: "m", BaseType: "P", MapDim: 1}}},
+			"MAPOUT":    {Name: "MAPOUT", Out: []ir.Param{{Name: "m", BaseType: "P", MapDim: 1}}},
 			"STRUCTOUT": {Name: "STRUCTOUT", Out: []ir.Param{{Name: "p", BaseType: "P"}}},
 		},
 	}

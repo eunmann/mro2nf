@@ -5,9 +5,8 @@ package frontend
 import (
 	"fmt"
 
-	"github.com/martian-lang/martian/martian/syntax"
-
 	"github.com/eunmann/mro2nf/internal/apperror"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // Parse compiles the MRO file at path, resolving @include directives against

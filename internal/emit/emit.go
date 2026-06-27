@@ -728,8 +728,9 @@ profiles {
 }
 
 // configAWSBatch wires the AWS Batch executor with classic aws-CLI S3 staging.
-// Run with: nextflow run main.nf --aws_queue <q> --aws_region <r> \
-//   -work-dir s3://<bucket>/work --container <ecr-uri> [--aws_outdir s3://<bucket>/out]
+//
+//	Run with: nextflow run main.nf --aws_queue <q> --aws_region <r> \
+//	  -work-dir s3://<bucket>/work --container <ecr-uri> [--aws_outdir s3://<bucket>/out]
 func configAWSBatch() string {
 	return `
 // AWS Batch + S3 (classic aws-CLI staging). Requirements:

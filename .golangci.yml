@@ -68,12 +68,12 @@ linters:
           - wrapcheck
           - unparam
           - noctx
-  formatters:
-    enable:
-      - gci
-      - gofmt
-      - goimports
-      - gofumpt
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - goimports
+    - gofumpt
 
 issues:
   max-issues-per-linter: 0

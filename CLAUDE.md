@@ -42,6 +42,9 @@ fresh clone builds. To hack on the parser locally, add a gitignored `go.work`
   `make test` on its own. Don't bundle unrelated fixes, refactors, and docs into
   one commit; split them so each can be reviewed and reverted independently.
   Write an imperative subject (`fix:`/`feat:`/`docs:`/`test:`/`refactor:`).
+- Land changes via pull request, not direct pushes to `main`. Branch, push, open
+  a PR, and let the PR Validation workflow (lint, build, unit tests, both e2e
+  suites) go green before merging. Keep `main` releasable.
 
 ## Conventions
 

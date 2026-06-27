@@ -7,10 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/frontend"
+	"github.com/google/go-cmp/cmp"
 )
 
 // emitFixture parses, lowers, and emits a testdata fixture into a temp dir,
@@ -436,8 +435,8 @@ func TestEmitAssetsStaged(t *testing.T) {
 
 	mod := string(stage)
 	for _, want := range []string{
-		"path 'types.json'",                              // the shared manifest staged into the task
-		"-types 'types.json'",                            // command reads the staged copy
+		"path 'types.json'",   // the shared manifest staged into the task
+		"-types 'types.json'", // command reads the staged copy
 		`types = file("${projectDir}/_assets/types.json")`, // workflow resolves it on the head node
 	} {
 		if !strings.Contains(mod, want) {
@@ -452,9 +451,9 @@ func TestEmitAssetsStaged(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"path 'spec.json'",          // the per-process bindspec input
-		"bind -spec 'spec.json'",    // command reads the staged single spec
-		"/_assets/bindspecs/",       // head-node resolves the specific spec file
+		"path 'spec.json'",       // the per-process bindspec input
+		"bind -spec 'spec.json'", // command reads the staged single spec
+		"/_assets/bindspecs/",    // head-node resolves the specific spec file
 	} {
 		if !strings.Contains(string(pipe), want) {
 			t.Errorf("pipe module missing per-bind spec staging %q", want)
@@ -705,8 +704,8 @@ func TestEmitEntryFileParam(t *testing.T) {
 		// its file leaves staged as a list path input, each in a per-index subdir
 		// so same-basename leaves do not collide in the task work dir
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
-		`[file(params.reads)]`,                                   // flattened + file()'d on the head node
-		`?: [file("${projectDir}/_assets/.entry_empty")]`,        // unset / no-leaf falls back to the sentinel
+		`[file(params.reads)]`,                            // flattened + file()'d on the head node
+		`?: [file("${projectDir}/_assets/.entry_empty")]`, // unset / no-leaf falls back to the sentinel
 		`-fileflat 'reads=${(inflat_reads instanceof List ? inflat_reads : [inflat_reads]).join(",")}'`, // staged paths reach entryargs
 		`BUILD_ENTRY_ARGS(file("${projectDir}/entry_args"), values, types, flat_reads)`,
 	} {

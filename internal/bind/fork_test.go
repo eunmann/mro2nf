@@ -4,9 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
-
 	"github.com/eunmann/mro2nf/internal/bind"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestResolveForks(t *testing.T) {
