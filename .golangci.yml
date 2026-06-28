@@ -33,8 +33,10 @@ linters:
       excludes:
         - G404
         # The shim reads/writes Martian metadata files at transpiler- and
-        # runtime-controlled paths, not attacker-controlled input.
+        # runtime-controlled paths, not attacker-controlled input; the CLI reads
+        # the .mro / overrides file the user named on the command line.
         - G304
+        - G703
         # The shim launches the Martian adapter; the command and args come from
         # the transpiled pipeline, not attacker-controlled input.
         - G204

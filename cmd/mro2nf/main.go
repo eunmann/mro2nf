@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/logging"
+	"github.com/eunmann/mro2nf/internal/overrides"
 )
 
 // version is set via -ldflags at build time.
@@ -28,6 +30,12 @@ func main() {
 }
 
 func run(args []string) error {
+	// `mro2nf overrides <file>` converts an mrp --overrides JSON to a Nextflow
+	// -c config; the default (no subcommand) transpiles a pipeline.
+	if len(args) > 0 && args[0] == "overrides" {
+		return runOverrides(args[1:])
+	}
+
 	fs := flag.NewFlagSet("mro2nf", flag.ContinueOnError)
 	outDir := fs.String("o", "out", "output directory for the generated Nextflow project")
 	mroPath := fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)")
@@ -90,6 +98,41 @@ func run(args []string) error {
 		Int("pipelines", len(prog.Pipelines)).
 		Str("out", *outDir).
 		Msg("emitted Nextflow project")
+
+	return nil
+}
+
+// runOverrides converts an mrp --overrides JSON (a file argument, or stdin when
+// omitted or "-") into a Nextflow process-scope config printed to stdout. Fields
+// with no faithful Nextflow directive are reported on stderr.
+func runOverrides(args []string) error {
+	var (
+		raw []byte
+		err error
+	)
+
+	if len(args) == 0 || args[0] == "-" {
+		raw, err = io.ReadAll(os.Stdin)
+	} else {
+		raw, err = os.ReadFile(args[0])
+	}
+
+	if err != nil {
+		return fmt.Errorf("read overrides: %w", err)
+	}
+
+	cfg, unmapped, err := overrides.Convert(raw)
+	if err != nil {
+		return fmt.Errorf("convert overrides: %w", err)
+	}
+
+	for _, u := range unmapped {
+		fmt.Fprintln(os.Stderr, "mro2nf overrides: skipped", u)
+	}
+
+	if _, err := fmt.Fprint(os.Stdout, cfg); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
 
 	return nil
 }
