@@ -55,7 +55,8 @@ testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
 test/e2e/      transpile + nextflow run + diff vs mrp (+ docker_iso.sh isolation)
 deploy/awsbatch-cdk/   minimal AWS CDK: S3 + ECR + Batch + HealthOmics role
 docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
-                (support matrix), LIVE_AWS_TEST.md (validation)
+                (support matrix), GPU.md, RUNTIME_TUNING.md (mrp knobs ->
+                Nextflow), LIVE_AWS_TEST.md (validation)
 .github/workflows/   PR validation + release CI
 ```
 
