@@ -1,8 +1,8 @@
 {
     "r": {
         "files": [
-            "r0.txt",
-            "r1.txt"
+            "r/files/0.txt",
+            "r/files/1.txt"
         ],
         "n": 2
     }

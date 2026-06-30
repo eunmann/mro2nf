@@ -36,7 +36,7 @@ small number of design/minor divergences remain. Ranked:
 | 2 | comp/exec (mrjob) backend never reads `_assert` → a compiled-stage assertion is a silent SUCCESS with stale outs | **CORRECTNESS (High, scoped)** | A, G | fix |
 | 3 | negative-adaptive resource sentinels not resolved to `\|x\|` → adaptive stages under-provisioned; a stage can read a negative `get_memory_allocation()` | **CORRECTNESS (Medium)** | E | fix |
 | 4 | empty array-mode map-call merge resolves to `null` instead of `[]`; but null-source and empty-array are already indistinguishable by merge time, and `null` is correct for the (common) null-source case | **CORRECTNESS (Medium)** | D | deferred |
-| 5 | published file names/layout: mre uses source basename + flat + numeric-suffix; Martian uses `GetOutFilename` + nested index/key subdirs | **DESIGN** | C | decision |
+| 5 | published file names/layout: mre used source basename + flat + numeric-suffix; Martian uses `GetOutFilename` + nested index/key subdirs | **CORRECTNESS** (was DESIGN) | C | fixed |
 | 6 | `--monitor` enforces vmem (`RLIMIT_AS`) only, not mrp's primary RSS-vs-`mem_gb` kill | **DESIGN** | E | decision |
 | 7 | `map<map<S>>.field` nested-map projection rejected at transpile time (loud) | MINOR (coverage) | D | document |
 | 8 | over-retry: deterministic stage exceptions are retried (mrp fails them immediately) | MINOR | G | document |
@@ -95,17 +95,21 @@ pre-population, finalization keeping an absent file's path verbatim, and publish
 nulling an absent file. The scalar-directory worry is a non-issue: the only
 scalar directory kind is a struct, which `IsStruct` already nulls.
 
-**DESIGN divergence (#5):** Martian publishes final files under `GetOutFilename`,
-nesting arrays/maps/structs into index/key-named subdirectories
-(`post_process.go:237-486`); mre publishes flat under the **source basename** with
-numeric-suffix collision handling (`cmd/mre/publish.go`). File **contents** and
-JSON **shape** match, but on-disk **names, layout, and leaf path strings** are not
-byte-identical to mrp's published tree — most visibly for any array/map/struct of
-files. The fixtures encode the mre behavior. **Decision:** is a byte-identical
-published tree a goal, or is a self-contained/location-independent bundle
-acceptable? If the former, publish scalar leaves under `GetOutFilename` (the IR
-already has `OutName`/`BaseType`/`IsFile`) and replicate the nested layout.
-Minor: an empty-string output leaf publishes as `""` rather than `null`.
+**FIXED (#5):** Martian publishes final files under `GetOutFilename`, nesting
+arrays/maps/structs into index/key/field-named subdirectories
+(`post_process.go:237-486`). mre previously published flat under the source
+basename. Because downstream pipelines consume an upstream's `outs/` tree, this
+is a correctness requirement, not a preference. `cmd/mre/publish.go` now
+reproduces mrp's layout exactly: a scalar named by `GetOutFilename` (`OutName`,
+else bare name for builtin file/path or complex, else `name.<typename>`); an
+array → `<param>/<idx>.<ext>` with index width = digits of the element count
+(Martian's `WidthForInt`); a typed map → `<param>/<key>.<ext>` (illegal Unix
+filenames skipped); a struct → `<param>/<field>` recursed by each field's
+`GetOutFilename`; missing/empty leaves → `null`. The one deliberate departure:
+the JSON leaf value is the path **relative to the outs dir** (e.g.
+`shards/0.csv`) rather than mrp's absolute path, preserving mro2nf's
+location-independent bundles while matching the on-disk tree. Five goldens were
+updated to the tree layout.
 
 ## D. Binding & resolution — faithful (two real divergences)
 
@@ -216,8 +220,9 @@ only pipeline-input-bound preflights gate the rest of the pipeline.
 4. **Fix #4 (empty array fork) — deferred:** preserve null-vs-empty through the
    fork pipeline (`buildArrayForks`→`forkkeys`→`merge`) so an empty array →`[]`,
    a null source →`null`. Not a naive flip; touches the whole pipeline.
-5. **Decide #5 (publish naming) and #6 (monitor RSS):** product calls — byte-
-   identical mrp output tree vs self-contained bundle; vmem-cap vs RSS-kill.
+5. **#5 (publish naming): done** — mre reproduces mrp's `outs/` tree (downstream
+   pipelines consume it). **#6 (monitor RSS):** still a product call — add an
+   RSS-vs-`mem_gb` kill to match mrp, or keep the vmem (`RLIMIT_AS`) cap.
 6. **Document #7–#9** as known, bounded divergences.
 
 Items 1–3 are unambiguous correctness fixes with no design tradeoff and landed
