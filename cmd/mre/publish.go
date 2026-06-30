@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -65,6 +66,13 @@ func publishLeaf(dir string) types.Transform {
 	return func(src string) (string, error) {
 		if src == "" {
 			return src, nil
+		}
+
+		// A declared output the pipeline legitimately never produced: drop it from
+		// the published outs (resolves to null), matching Martian's publish-time
+		// Lstat->null. ErrSkipLeaf continues the walk rather than failing the run.
+		if _, err := os.Lstat(src); os.IsNotExist(err) {
+			return "", types.ErrSkipLeaf
 		}
 
 		name := uniqueName(filepath.Base(src), seen)

@@ -8,6 +8,7 @@ package types
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -15,6 +16,12 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
+
+// ErrSkipLeaf is returned by a Transform to resolve that file leaf to null and
+// continue the walk instead of aborting it (the leaf analog of
+// filepath.SkipDir). It lets publish drop a declared output file the pipeline
+// never produced, matching Martian's publish-time "absent file -> null".
+var ErrSkipLeaf = errors.New("skip file leaf")
 
 // Table resolves struct type names to their fields so the walk can descend into
 // struct-typed values.
@@ -33,7 +40,7 @@ func NewTable(structs map[string]*ir.StructType) *Table {
 }
 
 // Transform maps a file-leaf path to its replacement. Returning an error aborts
-// the walk.
+// the walk, except ErrSkipLeaf, which resolves that one leaf to null and continues.
 type Transform func(path string) (string, error)
 
 // Apply walks each value in vals against the matching param's type, applying fn
@@ -168,7 +175,12 @@ func (t *Table) walk(v any, base string, arrayDim, mapDim int, isFile bool, fn T
 		return v, nil
 	case string:
 		if isFile && arrayDim == 0 && mapDim == 0 {
-			return fn(tv)
+			nv, err := fn(tv)
+			if errors.Is(err, ErrSkipLeaf) {
+				return nil, nil
+			}
+
+			return nv, err
 		}
 
 		return v, nil

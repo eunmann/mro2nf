@@ -29,6 +29,34 @@ func collector() (types.Transform, *[]string) {
 	return fn, &seen
 }
 
+// TestApplySkipLeaf guards bug 7: a Transform returning ErrSkipLeaf resolves that
+// one leaf to null and continues the walk, rather than aborting it. publish uses
+// this for a declared output file the pipeline legitimately never produced —
+// matching Martian, which Lstats each published file and writes null when absent
+// (core/post_process.go), instead of failing the whole run.
+func TestApplySkipLeaf(t *testing.T) {
+	fn := func(s string) (string, error) {
+		if s == "skipme" {
+			return "", types.ErrSkipLeaf
+		}
+
+		return "X:" + s, nil
+	}
+
+	params := []ir.Param{fileParam("a", 0, 0), fileParam("b", 0, 0)}
+	vals := map[string]any{"a": "skipme", "b": "keep"}
+
+	got, err := newTable().Apply(params, vals, fn)
+	if err != nil {
+		t.Fatalf("ErrSkipLeaf must not abort the walk: %v", err)
+	}
+
+	want := map[string]any{"a": nil, "b": "X:keep"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("Apply with ErrSkipLeaf mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func newTable() *types.Table {
 	return types.NewTable(map[string]*ir.StructType{
 		"Cfg": {Name: "Cfg", Fields: []ir.Param{
