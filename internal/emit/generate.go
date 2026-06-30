@@ -208,7 +208,9 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 func keyedInputs(refs []string) (string, string) {
 	var in strings.Builder
 
-	in.WriteString("    tuple val(key), path(pipeargs)")
+	// stageAs pins pipeargs off the `args` output name it would otherwise alias
+	// when the enclosing pipeline's args are an upstream bind output. See bug 1.
+	in.WriteString("    tuple val(key), path(pipeargs, stageAs: 'pipeargs')")
 
 	pairs := make([]string, 0, len(refs))
 	for _, id := range refs {
@@ -702,7 +704,10 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
 func bindInputs(refs []string) (string, string) {
 	var inputs strings.Builder
 
-	inputs.WriteString("    path pipeargs\n")
+	// Stage under a fixed name: a sub-pipeline's pipeargs is an upstream bind
+	// output dir named `args`, which is also this process's `-o args` output —
+	// staging it unquoted would alias (clobber) the input. See bug 1.
+	inputs.WriteString("    path pipeargs, stageAs: 'pipeargs'\n")
 
 	pairs := make([]string, 0, len(refs))
 	for _, id := range refs {
