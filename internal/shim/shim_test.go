@@ -159,6 +159,39 @@ func TestJobInfoResolvedResources(t *testing.T) {
 	}
 }
 
+// TestSplitJobInfoResolvesNegativeSentinel checks the split phase reports the
+// magnitude of a negative adaptive sentinel in _jobinfo, symmetric with main and
+// join — a split function's get_memory_allocation() must see |x|, not the raw
+// negative.
+func TestSplitJobInfoResolvesNegativeSentinel(t *testing.T) {
+	adapter := sumSquaresAdapter(t)
+	inv := Invocation{Call: "P", Args: json.RawMessage(`{"values":[2]}`), MROFile: "p.mro"}
+	stageArgs := json.RawMessage(`{"values":[2]}`)
+	work := t.TempDir()
+
+	res := Resources{Threads: -1, MemGB: -8}
+	if _, _, err := RunSplit(context.Background(), work, adapter, stageArgs, res, inv); err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(work, "split", "_jobinfo"))
+	if err != nil {
+		t.Fatalf("read _jobinfo: %v", err)
+	}
+
+	var info struct {
+		MemGB   float64 `json:"memGB"`
+		Threads float64 `json:"threads"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatalf("parse _jobinfo: %v", err)
+	}
+
+	if info.MemGB != 8 || info.Threads != 1 {
+		t.Errorf("split _jobinfo = {mem %v, threads %v}, want {8, 1} (sentinel magnitude)", info.MemGB, info.Threads)
+	}
+}
+
 // TestReadStageDefsJoinOverride checks that a split's `{"join": {...}}` block is
 // parsed into the join-phase resource override (Martian's mechanism for a split
 // to request more resources for its gather), separate from the chunk defs.

@@ -114,11 +114,15 @@ func RunSplit(
 		return nil, Resources{}, err
 	}
 
-	if err := writeJobInfo(meta, files, "split", res, inv); err != nil {
+	// Resolve once so the split phase reports the same magnitude as main/join: a
+	// negative adaptive sentinel becomes |x| in _jobinfo (and the prlimit cap),
+	// rather than leaking the raw negative to the split's get_memory_allocation().
+	eff := resolveResources(Resources{}, res)
+	if err := writeJobInfo(meta, files, "split", eff, inv); err != nil {
 		return nil, Resources{}, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "split", resolveResources(Resources{}, res).VMemGB); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "split", eff.VMemGB); err != nil {
 		return nil, Resources{}, err
 	}
 
