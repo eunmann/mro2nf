@@ -834,7 +834,7 @@ func TestEmitEntryFileArray(t *testing.T) {
 	main := readFile(t, filepath.Join(dir, "main.nf"))
 	for _, want := range []string{
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
-		`(params.reads ?: []).collect { __e -> (__e != null ? [file(__e)] : []) }.flatten()`,
+		`(params.reads ?: []).collect { __e0 -> (__e0 != null ? [file(__e0)] : []) }.flatten()`,
 		`-fileflat 'reads=${(inflat_reads instanceof List ? inflat_reads : [inflat_reads]).join(",")}'`,
 	} {
 		if !strings.Contains(main, want) {

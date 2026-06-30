@@ -1155,23 +1155,34 @@ workflow {
 // key, struct fields in declaration order — so mre entryargs can pop the staged
 // paths back into the value in the same order. Non-file scalars contribute [].
 func fileFlattenExpr(expr string, p ir.Param, structs map[string]*ir.StructType) string {
+	return fileFlattenExprDepth(expr, p, structs, 0)
+}
+
+// fileFlattenExprDepth threads a closure-variable depth so nested array/map
+// closures bind distinct names (__e0, __e1, ...). Reusing one name across
+// nesting depths is a Groovy compile error ("variable already declared").
+// Struct fields recurse at the *same* depth: they substitute (expr)?.field
+// without opening a new closure, so siblings never collide.
+func fileFlattenExprDepth(expr string, p ir.Param, structs map[string]*ir.StructType, depth int) string {
 	switch {
 	case p.ArrayDim > 0:
 		elem := p
 		elem.ArrayDim--
+		v := fmt.Sprintf("__e%d", depth)
 
-		return fmt.Sprintf("(%s ?: []).collect { __e -> %s }.flatten()", expr, fileFlattenExpr("__e", elem, structs))
+		return fmt.Sprintf("(%s ?: []).collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v, elem, structs, depth+1))
 	case p.MapDim > 0:
 		val := p
 		val.MapDim--
+		v := fmt.Sprintf("__e%d", depth)
 
-		return fmt.Sprintf("(%s ?: [:]).sort { it.key }.collect { __e -> %s }.flatten()", expr, fileFlattenExpr("__e.value", val, structs))
+		return fmt.Sprintf("(%s ?: [:]).sort { it.key }.collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v+".value", val, structs, depth+1))
 	}
 
 	if st, ok := structs[p.BaseType]; ok {
 		parts := make([]string, 0, len(st.Fields))
 		for _, f := range st.Fields {
-			parts = append(parts, fileFlattenExpr(fmt.Sprintf("(%s)?.%s", expr, f.Name), f, structs))
+			parts = append(parts, fileFlattenExprDepth(fmt.Sprintf("(%s)?.%s", expr, f.Name), f, structs, depth))
 		}
 
 		if len(parts) == 0 {
