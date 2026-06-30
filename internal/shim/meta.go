@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // prepDirs creates the metadata and files directories for a phase and returns
@@ -61,15 +64,51 @@ func writeJobInfo(meta, files, phase string, res Resources, inv Invocation) erro
 	return writeJSON(filepath.Join(meta, "_jobinfo"), info)
 }
 
-// writeSkeletonOuts writes an _outs file with every output name set to null,
-// which the adapter reads and then populates.
-func writeSkeletonOuts(meta string, names []string) error {
-	outs := make(map[string]any, len(names))
-	for _, n := range names {
-		outs[n] = nil
+// writeSkeletonOuts writes the _outs skeleton the adapter reads before a stage
+// runs, pre-populating it the way Martian's makeOutArg does (core/stage.go):
+// array dims become [], map dims {}, a scalar file leaf its default writable
+// path under files, and everything else (plain scalars, structs) null. Stages
+// that write to or assert on a pre-populated output path rely on this.
+func writeSkeletonOuts(meta, files string, outParams []ir.Param, tbl *types.Table) error {
+	outs := make(map[string]any, len(outParams))
+	for _, p := range outParams {
+		outs[p.Name] = skeletonOut(p, files, tbl)
 	}
 
 	return writeJSON(filepath.Join(meta, "_outs"), outs)
+}
+
+// skeletonOut returns the pre-populated _outs value for one declared output,
+// mirroring Martian's makeOutArg / GetOutFilename.
+func skeletonOut(p ir.Param, files string, tbl *types.Table) any {
+	switch {
+	case p.ArrayDim > 0:
+		return []any{}
+	case p.MapDim > 0:
+		return map[string]any{}
+	case tbl.IsStruct(p.BaseType):
+		// A struct (complex) output, including a struct-as-directory: null. The
+		// stage populates it; pre-filling a path would not match Martian.
+		return nil
+	case p.IsFile:
+		return filepath.Join(files, outFilename(p))
+	default:
+		return nil
+	}
+}
+
+// outFilename chooses a scalar file output's default basename, matching
+// Martian's StructMember.GetOutFilename: an explicit OutName wins; the builtin
+// file/path types use the bare name; a user file type appends .<typename>.
+func outFilename(p ir.Param) string {
+	switch {
+	case p.OutName != "":
+		return p.OutName
+	case p.BaseType == "file" || p.BaseType == "path":
+		return p.Name
+	default:
+		return p.Name + "." + p.BaseType
+	}
 }
 
 // readStageDefs parses a split phase's _stage_defs into chunk definitions and

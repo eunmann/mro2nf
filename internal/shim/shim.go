@@ -17,6 +17,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 const (
@@ -127,7 +128,7 @@ func RunSplit(
 // RunMain runs one chunk's main phase and returns that chunk's _outs.
 func RunMain(
 	ctx context.Context, workDir string, a Adapter, stageArgs json.RawMessage,
-	chunk ChunkDef, outNames []string, res Resources, inv Invocation,
+	chunk ChunkDef, outParams []ir.Param, tbl *types.Table, res Resources, inv Invocation,
 ) (json.RawMessage, error) {
 	meta, files, journal, err := prepDirs(workDir, "main")
 	if err != nil {
@@ -142,7 +143,7 @@ func RunMain(
 	// _jobinfo must report the resolved per-chunk allocation (what the stage
 	// actually got), not the raw phase request, matching mrp.
 	eff := resolveResources(chunk.Resources, res)
-	if err := stageInputs(meta, files, args, outNames, eff, inv, "main"); err != nil {
+	if err := stageInputs(meta, files, args, outParams, tbl, eff, inv, "main"); err != nil {
 		return nil, err
 	}
 
@@ -158,7 +159,7 @@ func RunMain(
 func RunJoin(
 	ctx context.Context, workDir string, a Adapter, stageArgs json.RawMessage,
 	chunkDefs []ChunkDef, chunkOuts []json.RawMessage,
-	outNames []string, res Resources, inv Invocation,
+	outParams []ir.Param, tbl *types.Table, res Resources, inv Invocation,
 ) (json.RawMessage, error) {
 	meta, files, journal, err := prepDirs(workDir, "join")
 	if err != nil {
@@ -171,7 +172,7 @@ func RunJoin(
 	}
 
 	eff := resolveResources(Resources{}, res)
-	if err := stageInputs(meta, files, args, outNames, eff, inv, "join"); err != nil {
+	if err := stageInputs(meta, files, args, outParams, tbl, eff, inv, "join"); err != nil {
 		return nil, err
 	}
 
@@ -189,7 +190,7 @@ func RunJoin(
 // stageInputs writes the per-phase _args, _jobinfo, and skeleton _outs.
 func stageInputs(
 	meta, files string, args json.RawMessage,
-	outNames []string, res Resources, inv Invocation, phase string,
+	outParams []ir.Param, tbl *types.Table, res Resources, inv Invocation, phase string,
 ) error {
 	if err := writeRaw(filepath.Join(meta, "_args"), args); err != nil {
 		return err
@@ -199,7 +200,7 @@ func stageInputs(
 		return err
 	}
 
-	return writeSkeletonOuts(meta, outNames)
+	return writeSkeletonOuts(meta, files, outParams, tbl)
 }
 
 func writeChunkData(meta string, defs []ChunkDef, outs []json.RawMessage) error {

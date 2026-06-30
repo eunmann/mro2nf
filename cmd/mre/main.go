@@ -123,14 +123,6 @@ func (c *commonFlags) invocation(args json.RawMessage) shim.Invocation {
 	return shim.Invocation{Call: c.call, Args: args, MROFile: c.mro}
 }
 
-func (c *commonFlags) outNames() []string {
-	if c.outs == "" {
-		return nil
-	}
-
-	return splitComma(c.outs)
-}
-
 func runSplit(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("split", flag.ContinueOnError)
 	cf := addCommon(fs)
@@ -232,7 +224,13 @@ func runMain(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	outs, err := shim.RunMain(ctx, cf.work, cf.adapter(), stageArgs, chunk, cf.outNames(), cf.resources(), cf.invocation(stageArgs))
+	man, err := prod.manifest()
+	if err != nil {
+		return err
+	}
+
+	outs, err := shim.RunMain(ctx, cf.work, cf.adapter(), stageArgs, chunk,
+		man.Params(prod.callable, prod.role), man.Table(), cf.resources(), cf.invocation(stageArgs))
 	if err != nil {
 		return fmt.Errorf("main: %w", err)
 	}
@@ -266,7 +264,13 @@ func runJoin(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	final, err := shim.RunJoin(ctx, cf.work, cf.adapter(), stageArgs, defs, outs, cf.outNames(), cf.resources(), cf.invocation(stageArgs))
+	man, err := prod.manifest()
+	if err != nil {
+		return err
+	}
+
+	final, err := shim.RunJoin(ctx, cf.work, cf.adapter(), stageArgs, defs, outs,
+		man.Params(prod.callable, prod.role), man.Table(), cf.resources(), cf.invocation(stageArgs))
 	if err != nil {
 		return fmt.Errorf("join: %w", err)
 	}

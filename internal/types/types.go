@@ -39,6 +39,16 @@ func NewTable(structs map[string]*ir.StructType) *Table {
 	return &Table{structs: m}
 }
 
+// IsStruct reports whether name is a known struct type. The skeleton-outs
+// builder uses it to leave a struct-typed output null (Martian's makeOutArg
+// pre-fills only genuine file leaves, nulling complex/struct outputs), since the
+// IR's IsFile flag is also set for structs that contain file fields.
+func (t *Table) IsStruct(name string) bool {
+	_, ok := t.structs[name]
+
+	return ok
+}
+
 // Transform maps a file-leaf path to its replacement. Returning an error aborts
 // the walk, except ErrSkipLeaf, which resolves that one leaf to null and continues.
 type Transform func(path string) (string, error)

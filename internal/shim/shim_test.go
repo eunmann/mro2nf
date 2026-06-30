@@ -12,7 +12,19 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
+
+// scalarOuts builds non-file (float) output params, whose _outs skeleton is all
+// null — matching these tests' pre-bug behavior — paired with an empty table.
+func scalarOuts(names ...string) []ir.Param {
+	out := make([]ir.Param, len(names))
+	for i, n := range names {
+		out[i] = ir.Param{Name: n, BaseType: "float"}
+	}
+
+	return out
+}
 
 func sumSquaresAdapter(t *testing.T) Adapter {
 	t.Helper()
@@ -64,7 +76,7 @@ func TestRunSumSquares(t *testing.T) {
 	for i, def := range defs {
 		out, err := RunMain(
 			ctx, filepath.Join(work, fmt.Sprintf("chnk%d", i)),
-			adapter, stageArgs, def, []string{"sum", "square"}, res, inv,
+			adapter, stageArgs, def, scalarOuts("sum", "square"), types.NewTable(nil), res, inv,
 		)
 		if err != nil {
 			t.Fatalf("main chunk %d: %v", i, err)
@@ -87,7 +99,7 @@ func TestRunSumSquares(t *testing.T) {
 
 	finalRaw, err := RunJoin(
 		ctx, filepath.Join(work, "join"), adapter, stageArgs,
-		defs, chunkOuts, []string{"sum"}, res, inv,
+		defs, chunkOuts, scalarOuts("sum"), types.NewTable(nil), res, inv,
 	)
 	if err != nil {
 		t.Fatalf("join: %v", err)
@@ -126,7 +138,7 @@ func TestJobInfoResolvedResources(t *testing.T) {
 	}
 
 	mainDir := filepath.Join(work, "chnk")
-	if _, err := RunMain(ctx, mainDir, adapter, stageArgs, defs[0], []string{"sum", "square"}, res, inv); err != nil {
+	if _, err := RunMain(ctx, mainDir, adapter, stageArgs, defs[0], scalarOuts("sum", "square"), types.NewTable(nil), res, inv); err != nil {
 		t.Fatalf("main: %v", err)
 	}
 
