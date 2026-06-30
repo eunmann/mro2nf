@@ -302,6 +302,29 @@ func TestStageFailureClassification(t *testing.T) {
 	}
 }
 
+// TestWrappedAdapterReadsAssert guards the comp/exec path's assert handling: a
+// real mrjob writes a compiled-stage assertion to _assert (prefix stripped) and
+// exits 0, so the wrapped path must read _assert — not only _errors + exit code —
+// or the assertion is silently treated as success with stale outs.
+func TestWrappedAdapterReadsAssert(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("/bin/sh not available")
+	}
+
+	meta := t.TempDir()
+	files := t.TempDir()
+	journal := filepath.Join(meta, "journal")
+
+	// argv[1:] gets meta, files, journal appended, so inside sh: $1=meta. The
+	// stand-in "mrjob" writes _assert and exits 0, exactly like the real one.
+	argv := []string{"/bin/sh", "-c", `printf 'pipeline halted by assertion' > "$1/_assert"`, "mrjob"}
+
+	err := runWrappedAdapter(context.Background(), meta, files, journal, Adapter{}, argv, "main", 0)
+	if !errors.Is(err, ErrStageAssert) {
+		t.Errorf("comp/exec assertion must surface as ErrStageAssert, got %v", err)
+	}
+}
+
 // TestLimitedCommandMonitor checks that monitoring wraps the adapter in prlimit
 // with the vmem ceiling, and is a no-op otherwise.
 func TestLimitedCommandMonitor(t *testing.T) {

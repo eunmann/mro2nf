@@ -319,6 +319,14 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	runErr := cmd.Run()
 	forwardStageLog(meta)
 
+	// mrjob routes a stage assertion to _assert (with the ASSERT: prefix stripped)
+	// and exits 0, so it must be checked before _errors and the exit code or the
+	// assertion is silently treated as success. Re-add the prefix so stageFailure
+	// classifies it as the non-retryable ErrStageAssert.
+	if data, err := os.ReadFile(filepath.Join(meta, "_assert")); err == nil && len(data) > 0 {
+		return stageFailure(phase, assertPrefix+strings.TrimSpace(string(data)))
+	}
+
 	if data, err := os.ReadFile(filepath.Join(meta, "_errors")); err == nil && len(data) > 0 {
 		return stageFailure(phase, strings.TrimSpace(string(data)))
 	}
