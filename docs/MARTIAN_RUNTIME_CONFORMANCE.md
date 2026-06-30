@@ -35,7 +35,7 @@ small number of design/minor divergences remain. Ranked:
 | 1 | `map<T[]>` and deeper (MapDim≥2) file/int leaves are silently never walked — staging, resolution, coercion, and publish all drop them | **CORRECTNESS (High)** | F (types) | fix |
 | 2 | comp/exec (mrjob) backend never reads `_assert` → a compiled-stage assertion is a silent SUCCESS with stale outs | **CORRECTNESS (High, scoped)** | A, G | fix |
 | 3 | negative-adaptive resource sentinels not resolved to `\|x\|` → adaptive stages under-provisioned; a stage can read a negative `get_memory_allocation()` | **CORRECTNESS (Medium)** | E | fix |
-| 4 | empty array-mode map-call merge resolves to `null` instead of `[]` (root: fork mode sniffed from JSON, not static `MapMode`) | **CORRECTNESS (Medium)** | D | fix |
+| 4 | empty array-mode map-call merge resolves to `null` instead of `[]`; but null-source and empty-array are already indistinguishable by merge time, and `null` is correct for the (common) null-source case | **CORRECTNESS (Medium)** | D | deferred |
 | 5 | published file names/layout: mre uses source basename + flat + numeric-suffix; Martian uses `GetOutFilename` + nested index/key subdirs | **DESIGN** | C | decision |
 | 6 | `--monitor` enforces vmem (`RLIMIT_AS`) only, not mrp's primary RSS-vs-`mem_gb` kill | **DESIGN** | E | decision |
 | 7 | `map<map<S>>.field` nested-map projection rejected at transpile time (loud) | MINOR (coverage) | D | document |
@@ -114,12 +114,21 @@ Minor: an empty-string output leaf publishes as `""` rather than `null`.
 float fidelity, `5.0`→`5` int coercion, null propagation, and lexical key
 ordering all match Martian (`core/resolve.go`, `argument_map.go`).
 
-**CORRECTNESS (#4):** an empty *array-mode* map-call merge resolves to `null`
-(`bind.go mergeOne`) where Martian yields `[]` (`resolve.go:391-403`); map-mode
-empties correctly yield `{}`. Root cause: the fork resolver sniffs array-vs-map
-from the runtime JSON's first byte instead of the static `ir.Call.MapMode`, which
-is ambiguous for empty/null collections. **Fix:** thread `MapMode` into the
-resolver.
+**CORRECTNESS (#4, deferred — needs care):** an empty *array-mode* map-call
+resolves to `null` (`bind.go mergeOne:446-448`) where Martian yields `[]` for an
+empty array source (`resolve.go:391-403`); map-mode empties correctly yield `{}`.
+But the fix is subtler than first reported: `buildArrayForks` coalesces a *null*
+source to `[]` via `orEmptyArray` (`bind.go:139`), so by merge time an empty
+present array and a null source are indistinguishable — both reach `mergeOne`
+with `keys==nil` and zero forks. The current `null` result is therefore *correct*
+for the null/disabled-upstream case (the common one, where Martian also yields
+`null` via `ModeNullMapCall`) and wrong only for a genuinely empty present array.
+A naive flip to `[]` would regress the null case. **Proper fix:** preserve the
+null-vs-empty distinction end-to-end (don't coalesce null→`[]` in
+`buildArrayForks`; carry a null-source marker, or the static `MapMode`, through
+`forkkeys` into `merge`) so an empty array → `[]`, a null source → `null`, an
+empty map → `{}`. Deferred because it touches the whole fork pipeline and risks
+the currently-correct null path; tracked for a dedicated change.
 
 **MINOR/coverage (#7):** Martian's recursive `resolvePath` supports
 `map<map<S>>.field`; mro2nf rejects it loudly at transpile time
@@ -204,11 +213,16 @@ only pipeline-input-bound preflights gate the rest of the pipeline.
    `internal/emit/generate.go` `fileFlattenExpr`; add the `map<T[]>` test matrix.
 2. **Fix #2 (`_assert`):** read `_assert` in `runWrappedAdapter`.
 3. **Fix #3 (negative sentinels):** `abs()` in resource resolution + directives.
-4. **Fix #4 (empty array fork):** thread `ir.Call.MapMode` into the fork resolver.
+4. **Fix #4 (empty array fork) — deferred:** preserve null-vs-empty through the
+   fork pipeline (`buildArrayForks`→`forkkeys`→`merge`) so an empty array →`[]`,
+   a null source →`null`. Not a naive flip; touches the whole pipeline.
 5. **Decide #5 (publish naming) and #6 (monitor RSS):** product calls — byte-
    identical mrp output tree vs self-contained bundle; vmem-cap vs RSS-kill.
 6. **Document #7–#9** as known, bounded divergences.
 
-Items 1–4 are unambiguous correctness fixes with no design tradeoff and should
-land with regression tests (TDD). Items 5–6 need a decision before any change,
-because the current behavior is deliberate and the fixtures encode it.
+Items 1–3 are unambiguous correctness fixes with no design tradeoff and landed
+with regression tests (TDD). Item 4 is deferred: the correct behavior depends on
+a null-vs-empty distinction that is currently collapsed, so it needs a scoped
+change to the fork pipeline rather than a one-line flip. Items 5–6 need a
+decision before any change, because the current behavior is deliberate and the
+fixtures encode it.
