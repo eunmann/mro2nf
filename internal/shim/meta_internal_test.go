@@ -11,6 +11,25 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+// TestResolveResourcesAbsNegativeSentinel guards the adaptive-resource contract:
+// Martian treats a negative request as "at least |x|" and its cluster path
+// resolves it to the positive |x| before reporting it. The resolved allocation
+// the shim writes into _jobinfo/__keys (and the stage reads via
+// get_memory_allocation) must therefore be positive, never the raw negative.
+func TestResolveResourcesAbsNegativeSentinel(t *testing.T) {
+	eff := resolveResources(Resources{}, Resources{MemGB: -4, Threads: -2})
+
+	if eff.MemGB != 4 {
+		t.Errorf("mem_gb -4 -> %v, want 4", eff.MemGB)
+	}
+	if eff.Threads != 2 {
+		t.Errorf("threads -2 -> %v, want 2", eff.Threads)
+	}
+	if eff.VMemGB != 4+extraVMemGB {
+		t.Errorf("vmem_gb -> %v, want %v (|mem| + headroom)", eff.VMemGB, 4+extraVMemGB)
+	}
+}
+
 // TestWriteSkeletonOutsPrepopulatesFilePaths guards bug 6: the _outs skeleton
 // must pre-fill each declared output the way Martian's makeOutArg does, not set
 // everything to null. Stages that write to (or assert on) a pre-populated output

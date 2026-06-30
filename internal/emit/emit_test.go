@@ -336,8 +336,8 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		// the split's own _jobinfo is now accurate (passes its allocation)
 		"-work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}",
 		// JOIN provisions from the override, falling back to the stage default
-		"cpus { (join?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(join.threads as double) as int) : 1 }",
-		`memory { def m = (join?.mem_gb ?: 0) > 0 ? join.mem_gb : 1; (m * task.attempt) + ' GB' }`,
+		"cpus { def t = Math.abs((join?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : 1 }",
+		`memory { def m = Math.abs((join?.mem_gb ?: 0) as double); m = m > 0 ? m : 1; (m * task.attempt) + ' GB' }`,
 		"val join",
 		// the workflow parses joinres.json into the join val
 		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }",
@@ -953,8 +953,8 @@ func TestEmitModules(t *testing.T) {
 			"-stagecode '/x/sum_squares'",
 			// Per-chunk resources reach the scheduler via dynamic directives
 			// reading the chunk's resolved resources carried as a val.
-			"cpus { (res?.threads",
-			"memory { def m = (res?.mem_gb",
+			"cpus { def t = Math.abs((res?.threads",
+			"memory { def m = Math.abs((res?.mem_gb",
 			// Static using(mem_gb=2) maps to the split/join phase memory, which
 			// grows with task.attempt (the --auto-adjust-memory analog).
 			"memory { 2 * task.attempt + ' GB' }",

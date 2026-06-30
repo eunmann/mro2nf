@@ -212,9 +212,13 @@ func withResources(stageArgs json.RawMessage, res Resources) (json.RawMessage, e
 // allocation. A non-zero override wins (including negative adaptive sentinels);
 // vmem defaults to the resolved memory plus the standard headroom.
 func resolveResources(chunk, res Resources) Resources {
+	// A negative request is Martian's adaptive sentinel ("at least |x|, ideally
+	// all available"); its cluster path resolves it to the positive |x| before
+	// reporting it, so do the same here to avoid leaking a negative mem_gb/threads
+	// into _jobinfo and the __* keys the stage reads.
 	eff := Resources{
-		MemGB:   coalesce(chunk.MemGB, res.MemGB),
-		Threads: coalesce(chunk.Threads, res.Threads),
+		MemGB:   absResource(coalesce(chunk.MemGB, res.MemGB)),
+		Threads: absResource(coalesce(chunk.Threads, res.Threads)),
 		Special: chunk.Special,
 	}
 
@@ -222,9 +226,18 @@ func resolveResources(chunk, res Resources) Resources {
 		eff.Special = res.Special
 	}
 
-	eff.VMemGB = coalesce(chunk.VMemGB, coalesce(res.VMemGB, eff.MemGB+extraVMemGB))
+	eff.VMemGB = absResource(coalesce(chunk.VMemGB, coalesce(res.VMemGB, eff.MemGB+extraVMemGB)))
 
 	return eff
+}
+
+// absResource resolves a negative adaptive sentinel to its magnitude.
+func absResource(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+
+	return f
 }
 
 // injectResources writes the resolved resource keys into an args map.

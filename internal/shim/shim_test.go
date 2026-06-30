@@ -200,8 +200,10 @@ func TestReadStageDefsJoinOverride(t *testing.T) {
 }
 
 func TestMergeArgsNegativeResources(t *testing.T) {
-	// Martian uses negative resource values as adaptive sentinels; they must
-	// override the phase default, not be discarded as "unset".
+	// A negative resource value is Martian's adaptive sentinel ("at least |x|").
+	// It must override the phase default (not be discarded as "unset"), and it
+	// resolves to its magnitude — mrp's cluster path negates it to positive before
+	// the chunk runs, so the injected __keys carry |x|, not the raw sentinel.
 	chunk := ChunkDef{
 		Args:      map[string]json.RawMessage{},
 		Resources: Resources{MemGB: -8, Threads: -1},
@@ -217,11 +219,12 @@ func TestMergeArgsNegativeResources(t *testing.T) {
 		t.Fatalf("parse merged: %v", err)
 	}
 
-	if string(got["__mem_gb"]) != "-8" {
-		t.Errorf("__mem_gb = %s, want -8 (negative sentinel preserved)", got["__mem_gb"])
+	// 8/1 (the magnitude of the override), not 4 (the phase default it overrode).
+	if string(got["__mem_gb"]) != "8" {
+		t.Errorf("__mem_gb = %s, want 8 (|-8|, override resolved to magnitude)", got["__mem_gb"])
 	}
-	if string(got["__threads"]) != "-1" {
-		t.Errorf("__threads = %s, want -1", got["__threads"])
+	if string(got["__threads"]) != "1" {
+		t.Errorf("__threads = %s, want 1 (|-1|)", got["__threads"])
 	}
 }
 

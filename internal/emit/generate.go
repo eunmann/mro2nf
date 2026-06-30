@@ -1350,13 +1350,14 @@ func gpuRequest(special string) (int, bool) {
 // `using` default. val is the name of a per-task val input (e.g. a chunk's
 // resolved resources or the split-returned join override).
 func dynCpus(val string, fallback int) string {
-	return fmt.Sprintf("cpus { (%[1]s?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(%[1]s.threads as double) as int) : %[2]d }", val, fallback)
+	return fmt.Sprintf("cpus { def t = Math.abs((%[1]s?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : %[2]d }", val, fallback)
 }
 
 // dynMem renders a dynamic `memory` directive: the runtime val's mem_gb when
-// positive, else the stage's static `using` default.
+// positive, else the stage's static `using` default. A negative per-task value is
+// the adaptive sentinel and is provisioned at its magnitude (see cpusOf/memOf).
 func dynMem(val string, fallback int) string {
-	return fmt.Sprintf("memory { def m = (%[1]s?.mem_gb ?: 0) > 0 ? %[1]s.mem_gb : %[2]d; (m * task.attempt) + ' GB' }", val, fallback)
+	return fmt.Sprintf("memory { def m = Math.abs((%[1]s?.mem_gb ?: 0) as double); m = m > 0 ? m : %[2]d; (m * task.attempt) + ' GB' }", val, fallback)
 }
 
 // staticMem renders a static `memory` directive that grows with task.attempt —
@@ -1368,20 +1369,25 @@ func staticMem(memGB int) string {
 	return fmt.Sprintf("memory { %d * task.attempt + ' GB' }", memGB)
 }
 
+// cpusOf and memOf use the magnitude of the request: a negative value is
+// Martian's adaptive sentinel ("at least |x|"), resolved to |x| (matching mrp's
+// cluster path), not floored to the 1-unit minimum.
 func cpusOf(s *ir.Stage) int {
-	if s.Resources.Threads < 1 {
+	t := math.Abs(s.Resources.Threads)
+	if t < 1 {
 		return 1
 	}
 
-	return int(math.Ceil(s.Resources.Threads))
+	return int(math.Ceil(t))
 }
 
 func memOf(s *ir.Stage) int {
-	if s.Resources.MemGB < 1 {
+	m := math.Abs(s.Resources.MemGB)
+	if m < 1 {
 		return 1
 	}
 
-	return int(math.Ceil(s.Resources.MemGB))
+	return int(math.Ceil(m))
 }
 
 func sortedKeys[V any](m map[string]V) []string {
