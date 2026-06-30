@@ -81,8 +81,9 @@ type leafCase struct {
 	want   []string // file leaves, sorted
 }
 
+// leafShapeCases is a long-by-design table of file-leaf shapes.
 func leafShapeCases() []leafCase {
-	return append(mapLeafCases(), []leafCase{
+	return []leafCase{
 		{
 			name:   "single file",
 			params: []ir.Param{fileParam("f", 0, 0)},
@@ -94,6 +95,35 @@ func leafShapeCases() []leafCase {
 			params: []ir.Param{fileParam("fs", 1, 0)},
 			vals:   map[string]any{"fs": []any{"a", "b"}},
 			want:   []string{"a", "b"},
+		},
+		{
+			name:   "map of file",
+			params: []ir.Param{fileParam("m", 0, 1)},
+			vals:   map[string]any{"m": map[string]any{"k1": "x", "k2": "y"}},
+			want:   []string{"x", "y"},
+		},
+		{
+			// Same flattened dims as the real map<file[]> but the runtime value is
+			// an array-of-maps; the shape-driven walk must handle both.
+			name:   "array of file map",
+			params: []ir.Param{fileParam("a", 1, 1)},
+			vals:   map[string]any{"a": []any{map[string]any{"k": "p"}, map[string]any{"k": "q"}}},
+			want:   []string{"p", "q"},
+		},
+		{
+			// The REAL lowering of map<file[]>: Martian folds the inner array dim
+			// into MapDim, so the IR is {ArrayDim:0, MapDim:2}. The walk must reach
+			// both leaves; the old nested-map-level model dropped them silently.
+			name:   "map of file array (real lowering, MapDim=2)",
+			params: []ir.Param{fileParam("m", 0, 2)},
+			vals:   map[string]any{"m": map[string]any{"k": []any{"p", "q"}}},
+			want:   []string{"p", "q"},
+		},
+		{
+			name:   "map of file matrix (map<file[][]>, MapDim=3)",
+			params: []ir.Param{fileParam("m", 0, 3)},
+			vals:   map[string]any{"m": map[string]any{"k": []any{[]any{"a", "b"}, []any{"c"}}}},
+			want:   []string{"a", "b", "c"},
 		},
 		{
 			name:   "non-file primitive untouched",
@@ -139,42 +169,6 @@ func leafShapeCases() []leafCase {
 			params: []ir.Param{fileParam("f", 0, 0)},
 			vals:   map[string]any{"f": nil},
 			want:   nil,
-		},
-	}...)
-}
-
-// mapLeafCases covers typed-map file shapes, including the load-bearing MapDim
-// encoding (Martian folds a typed map's inner array dims into MapDim, so
-// map<file[]> is {ArrayDim:0, MapDim:2} — see lower.go).
-func mapLeafCases() []leafCase {
-	return []leafCase{
-		{
-			name:   "map of file",
-			params: []ir.Param{fileParam("m", 0, 1)},
-			vals:   map[string]any{"m": map[string]any{"k1": "x", "k2": "y"}},
-			want:   []string{"x", "y"},
-		},
-		{
-			// Same flattened dims as the real map<file[]> but the runtime value is
-			// an array-of-maps; the shape-driven walk must handle both.
-			name:   "array of file map",
-			params: []ir.Param{fileParam("a", 1, 1)},
-			vals:   map[string]any{"a": []any{map[string]any{"k": "p"}, map[string]any{"k": "q"}}},
-			want:   []string{"p", "q"},
-		},
-		{
-			// The REAL lowering of map<file[]>: {ArrayDim:0, MapDim:2}. The walk
-			// must reach both leaves; the old nested-map-level model dropped them.
-			name:   "map of file array (real lowering, MapDim=2)",
-			params: []ir.Param{fileParam("m", 0, 2)},
-			vals:   map[string]any{"m": map[string]any{"k": []any{"p", "q"}}},
-			want:   []string{"p", "q"},
-		},
-		{
-			name:   "map of file matrix (map<file[][]>, MapDim=3)",
-			params: []ir.Param{fileParam("m", 0, 3)},
-			vals:   map[string]any{"m": map[string]any{"k": []any{[]any{"a", "b"}, []any{"c"}}}},
-			want:   []string{"a", "b", "c"},
 		},
 	}
 }

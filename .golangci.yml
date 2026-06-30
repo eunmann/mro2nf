@@ -62,7 +62,9 @@ linters:
     rules:
       # In-package tests are intentional here (they exercise unexported helpers).
       # Tests also legitimately launch subprocesses, leave external errors
-      # unwrapped, and pass fixed args to helpers.
+      # unwrapped, and pass fixed args to helpers. Table-driven tests are long by
+      # design (the case list is data, not procedural code), so funlen is off for
+      # tests — it would only push us to split case tables artificially.
       - path: "_test\\.go"
         linters:
           - testpackage
@@ -70,6 +72,7 @@ linters:
           - wrapcheck
           - unparam
           - noctx
+          - funlen
 formatters:
   enable:
     - gci
