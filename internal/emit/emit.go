@@ -603,6 +603,12 @@ func bindSpec(prog *ir.Program, p *ir.Pipeline, bindings []ir.Binding) bind.Spec
 func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 	switch {
 	case v.Array != nil:
+		// An empty composite must encode as a literal: a non-nil empty Array is
+		// dropped by omitempty on marshal, so reload would resolve it to null.
+		if len(v.Array) == 0 {
+			return bind.Entry{Literal: json.RawMessage("[]")}
+		}
+
 		arr := make([]bind.Entry, len(v.Array))
 		for i, e := range v.Array {
 			arr[i] = valueToEntry(prog, p, e)
@@ -610,6 +616,10 @@ func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 
 		return bind.Entry{Array: arr}
 	case v.Object != nil:
+		if len(v.Object) == 0 {
+			return bind.Entry{Literal: json.RawMessage("{}")}
+		}
+
 		obj := make(map[string]bind.Entry, len(v.Object))
 		for k, e := range v.Object {
 			obj[k] = valueToEntry(prog, p, e)
