@@ -167,6 +167,14 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 			return src, nil
 		}
 
+		// A declared output file the stage legitimately never wrote: keep the path
+		// string unchanged rather than erroring on stat. Martian keeps it as-is at
+		// stage finalize and only nulls it at publish; a downstream join may still
+		// need the path string. See bug 4.
+		if _, err := os.Lstat(src); os.IsNotExist(err) {
+			return src, nil
+		}
+
 		// Each leaf gets its own numbered subdirectory so its original basename
 		// is preserved across every bundle hop (the published name stays stable)
 		// while distinct leaves never collide.

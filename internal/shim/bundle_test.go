@@ -123,6 +123,34 @@ func TestBundleNestedStructFile(t *testing.T) {
 	}
 }
 
+// TestBundleMissingFileKeepsPath guards bug 4: a declared output file the stage
+// legitimately did not write must keep its path string at bundle time, not error
+// (CopyTree's stat) or null. Martian keeps the path as-is at stage finalize and
+// only resolves an absent file to null at publish (core/stage.go, post_process.go).
+// A downstream join (e.g. MAKE_SHARD read_prefix_counts) needs the path string.
+func TestBundleMissingFileKeepsPath(t *testing.T) {
+	dir := t.TempDir()
+
+	missing := filepath.Join(dir, "never-written.txt")
+	params := []ir.Param{
+		{Name: "f", BaseType: "file", IsFile: true},
+		{Name: "n", BaseType: "int"},
+	}
+	payload := map[string]any{"f": missing, "n": float64(3)}
+
+	marked, err := shim.MarkFiles(dir, payload, params, fileTable())
+	if err != nil {
+		t.Fatalf("MarkFiles must not error on an absent declared output: %v", err)
+	}
+
+	if marked["f"] != missing {
+		t.Errorf("absent output f = %v, want the unchanged path %q", marked["f"], missing)
+	}
+	if marked["n"] != float64(3) {
+		t.Errorf("non-file value n = %v, want 3", marked["n"])
+	}
+}
+
 // TestReadBundleEmpty returns nil for an absent optional input.
 func TestReadBundleEmpty(t *testing.T) {
 	got, err := shim.ReadBundle("")
