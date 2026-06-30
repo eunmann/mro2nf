@@ -108,8 +108,9 @@ func (t *Table) coerce(v any, base string, arrayDim, mapDim int) any {
 		return tv
 	case map[string]any:
 		if mapDim > 0 {
+			// One typed-map level carrying mapDim-1 inner array dims (see walkMap).
 			for k, e := range tv {
-				tv[k] = t.coerce(e, base, arrayDim, mapDim-1)
+				tv[k] = t.coerce(e, base, arrayDim+mapDim-1, 0)
 			}
 
 			return tv
@@ -224,8 +225,13 @@ func (t *Table) walkMap(m map[string]any, base string, arrayDim, mapDim int, isF
 
 	sort.Strings(keys)
 
+	// A typed map is exactly one map level; Martian folds any inner array
+	// dimensions into MapDim (MapDim = 1 + innerArrayDim), so after descending
+	// this level the element carries mapDim-1 array dims (and never another typed
+	// map — nested typed maps are not representable). Treating mapDim as a count
+	// of nested map levels would leave map<T[]> inner arrays unwalked.
 	for _, k := range keys {
-		nv, err := t.walk(m[k], base, arrayDim, mapDim-1, isFile, fn)
+		nv, err := t.walk(m[k], base, arrayDim+mapDim-1, 0, isFile, fn)
 		if err != nil {
 			return nil, err
 		}

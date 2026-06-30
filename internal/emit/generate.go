@@ -1177,8 +1177,12 @@ func fileFlattenExprDepth(expr string, p ir.Param, structs map[string]*ir.Struct
 
 		return fmt.Sprintf("(%s ?: []).collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v, elem, structs, depth+1))
 	case p.MapDim > 0:
+		// A typed map is one map level; Martian folds inner array dims into MapDim
+		// (MapDim = 1 + innerArrayDim). Descend one level, then treat the value as
+		// carrying mapDim-1 array dims — not another typed map.
 		val := p
-		val.MapDim--
+		val.ArrayDim += p.MapDim - 1
+		val.MapDim = 0
 		v := fmt.Sprintf("__e%d", depth)
 
 		return fmt.Sprintf("(%s ?: [:]).sort { it.key }.collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v+".value", val, structs, depth+1))

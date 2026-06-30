@@ -36,6 +36,15 @@ func TestFileFlattenNestedClosureVars(t *testing.T) {
 			want: "(params.reads ?: []).collect { __e0 -> (__e0 ?: [:]).sort { it.key }.collect { __e1 -> " +
 				"(__e1.value != null ? [file(__e1.value)] : []) }.flatten() }.flatten()",
 		},
+		{
+			// map<file[]> lowers to {MapDim:2, ArrayDim:0}: one map level whose
+			// value is an array of files. The inner dim must be walked as an ARRAY,
+			// not as a second map level.
+			name: "map of file array descends inner array (MapDim=2)",
+			p:    ir.Param{Name: "m", BaseType: "txt", IsFile: true, MapDim: 2},
+			want: "(params.m ?: [:]).sort { it.key }.collect { __e0 -> (__e0.value ?: []).collect { __e1 -> " +
+				"(__e1 != null ? [file(__e1)] : []) }.flatten() }.flatten()",
+		},
 	}
 
 	for _, tc := range cases {
