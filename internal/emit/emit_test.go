@@ -341,11 +341,29 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		"val join",
 		// the workflow parses joinres.json into the join val
 		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }",
-		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect(), types)",
+		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("stage_SUM_SQUARES.nf missing join-override wiring %q", want)
 		}
+	}
+}
+
+// TestEmitSplitJoinRunsWithZeroChunks guards bug 5: a split that produces 0
+// chunks must still run its JOIN. Nextflow's collect() on an empty channel emits
+// nothing, so the non-keyed JOIN wiring must guard it with .ifEmpty([]) — matching
+// Martian, which writes _chunk_outs=[] and runs the join anyway (core/stage.go).
+func TestEmitSplitJoinRunsWithZeroChunks(t *testing.T) {
+	dir := emitFixture(t, "join_resources", map[string]string{"SUM_SQUARES": "/x/sum_squares"})
+
+	data, err := os.ReadFile(filepath.Join(dir, "modules", "stage_SUM_SQUARES.nf"))
+	if err != nil {
+		t.Fatalf("read stage module: %v", err)
+	}
+
+	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)"
+	if !strings.Contains(string(data), want) {
+		t.Errorf("non-keyed JOIN wiring must guard the empty channel; missing %q", want)
 	}
 }
 

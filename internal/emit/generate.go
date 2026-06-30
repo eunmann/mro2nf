@@ -670,7 +670,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
     %[1]s_MAIN(chunks.combine(a), types)
     join = %[1]s_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
-    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect(), types)
+    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect().ifEmpty([]), types)
   emit:
     %[1]s_JOIN.out
 }
