@@ -475,6 +475,12 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			continue
 		}
 
+		// An emit-once forward routes the producer straight through, so it needs no
+		// BIND process (genCallWiring emits the direct wiring instead).
+		if _, ok := callForwardProducer(c, p); ok {
+			continue
+		}
+
 		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn))
 
 		if c.Disabled != nil {
@@ -482,8 +488,11 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 		}
 	}
 
-	// The return bind builds the pipeline's own output bundle.
-	genBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut))
+	// The return bind builds the pipeline's own output bundle, unless the returns
+	// forward one call's outputs verbatim (then no BIND — routed directly).
+	if _, ok := forwardProducer(p.Returns, p); !ok {
+		genBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut))
+	}
 }
 
 func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
@@ -864,7 +873,7 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline) {
 	// and cannot gate without a cycle).
 	pre, rest := partitionGateablePreflight(p.Calls)
 	for _, c := range pre {
-		genCallWiring(&body, p.Name, c)
+		genCallWiring(&body, p, c)
 	}
 
 	if len(pre) > 0 {
@@ -881,19 +890,26 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline) {
 	}
 
 	for _, c := range rest {
-		genCallWiring(&body, p.Name, c)
+		genCallWiring(&body, p, c)
 	}
 
-	retName := bindName(p.Name, "return")
-	fmt.Fprintf(&body, "    %s(%s)\n", retName, bindCallArgs(p.Returns, retName))
+	// The pipeline's own output: when its returns forward one call's outputs
+	// verbatim, emit that producer's bundle directly instead of rebuilding it in a
+	// return BIND (emit-once, #14); otherwise the return bind assembles it.
+	emit := bindName(p.Name, "return") + ".out"
+	if prod, ok := forwardProducer(p.Returns, p); ok {
+		emit = "ch_" + prod
+	} else {
+		fmt.Fprintf(&body, "    %s(%s)\n", bindName(p.Name, "return"), bindCallArgs(p.Returns, bindName(p.Name, "return")))
+	}
 
 	fmt.Fprintf(b, `workflow %s {
   take: pipeargs
 %s  emit:
-    %s.out
+    %s
 }
 
-`, p.Name, body.String(), retName)
+`, p.Name, body.String(), emit)
 }
 
 // partitionGateablePreflight splits calls into the gateable preflight calls
@@ -943,12 +959,23 @@ func bindingsRefCall(bindings []ir.Binding) bool {
 }
 
 // genCallWiring emits the wiring for one call: a map-call fork/merge fan-out, a
-// disabled-aware branch, or a plain BIND + callee invocation.
-func genCallWiring(b *strings.Builder, pipeline string, c ir.Call) {
+// disabled-aware branch, an emit-once forward, or a plain BIND + callee invocation.
+func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call) {
+	pipeline := p.Name
 	callee := callAlias(pipeline, c.Name)
 
 	if c.Mapped {
 		genMappedWiring(b, pipeline, c, callee)
+
+		return
+	}
+
+	// Emit-once routing (epic #18 / #14): when a call's inputs are a verbatim
+	// forward of one upstream call's outputs, feed that producer's output bundle
+	// straight into the callee, skipping the BIND that would only re-materialize
+	// its files. The producer's channel is a value channel, so it is reusable.
+	if prod, ok := callForwardProducer(c, p); ok {
+		fmt.Fprintf(b, "    ch_%s = %s(ch_%s)\n", c.Name, callee, prod)
 
 		return
 	}
@@ -967,6 +994,60 @@ func genCallWiring(b *strings.Builder, pipeline string, c ir.Call) {
 	// result is itself a value channel — reusable by multiple downstream
 	// consumers without .first().
 	fmt.Fprintf(b, "    ch_%s = %s(%s.out)\n", c.Name, callee, bind)
+}
+
+// forwardProducer reports the single upstream call id that a set of bindings
+// forwards verbatim, or ("", false). Every binding must be a name-preserving
+// whole-field reference (`X = PROD.X`) to the SAME plain, clean upstream call, so
+// the consumer's args ARE that producer's output bundle and the BIND that would
+// rebuild them is pure plumbing — routable straight through (emit-once, #14).
+func forwardProducer(bindings []ir.Binding, p *ir.Pipeline) (string, bool) {
+	if len(bindings) == 0 {
+		return "", false
+	}
+
+	id := ""
+	for _, bnd := range bindings {
+		r := bnd.Value.Ref
+		if r == nil || r.Kind != refKindCall || r.Output != bnd.Param || strings.Contains(r.Output, ".") {
+			return "", false
+		}
+
+		if id == "" {
+			id = r.ID
+		} else if id != r.ID {
+			return "", false
+		}
+	}
+
+	if !plainCleanProducer(id, p) {
+		return "", false
+	}
+
+	return id, true
+}
+
+// plainCleanProducer reports whether call id in p is a plain call whose output is
+// a clean bundle tuple safe to route directly — not mapped (a fork map/array
+// wrap) and not disabled (a possibly null bundle of a different shape).
+func plainCleanProducer(id string, p *ir.Pipeline) bool {
+	for _, c := range p.Calls {
+		if c.Name == id {
+			return !c.Mapped && c.Disabled == nil
+		}
+	}
+
+	return false
+}
+
+// callForwardProducer applies forwardProducer to a plain (non-mapped, enabled,
+// non-preflight) call's input bindings.
+func callForwardProducer(c ir.Call, p *ir.Pipeline) (string, bool) {
+	if c.Mapped || c.Disabled != nil || c.Preflight {
+		return "", false
+	}
+
+	return forwardProducer(c.Bindings, p)
 }
 
 // genMappedWiring emits a map call's fork/callee/merge fan-out. A split-stage

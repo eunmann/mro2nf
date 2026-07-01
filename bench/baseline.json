@@ -1,24 +1,24 @@
 {
   "chain": {
     "name": "chain",
-    "tasks": 13,
-    "processes": 13,
-    "edges": 40,
-    "rchar_bytes": 11124633,
-    "wchar_bytes": 1122131,
-    "refs": 11,
+    "tasks": 8,
+    "processes": 8,
+    "edges": 20,
+    "rchar_bytes": 10730393,
+    "wchar_bytes": 1120402,
+    "refs": 6,
     "producers": 1,
-    "multiplier": 11.0
+    "multiplier": 6.0
   },
   "split": {
     "name": "split",
-    "tasks": 22,
-    "processes": 7,
-    "edges": 28,
-    "rchar_bytes": 38178816,
-    "wchar_bytes": 2112632,
-    "refs": 21,
+    "tasks": 21,
+    "processes": 6,
+    "edges": 24,
+    "rchar_bytes": 38099558,
+    "wchar_bytes": 2110729,
+    "refs": 20,
     "producers": 1,
-    "multiplier": 21.0
+    "multiplier": 20.0
   }
 }
