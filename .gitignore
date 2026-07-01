@@ -19,3 +19,4 @@ go.work.sum
 spike/**/work/
 spike/**/.nextflow*
 spike/**/cloud.config
+mre-linux

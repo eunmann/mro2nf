@@ -9,7 +9,32 @@ and verified against `mrp` golden outputs. Updated as runs complete.
 - **Runtime image:** `python:3.12-slim` + `procps` + `awscli` + static `linux/amd64`
   `mre` + Martian adapters + stage code at `/opt/mro2nf` (built from the generated
   `Dockerfile`). One tag per fixture in ECR.
-- **Date:** 2026-06-27 (round 4); earlier rounds 2026-06-26
+- **Date:** 2026-07-01 (round 5, data-plane epic); 2026-06-27 (round 4); earlier 2026-06-26
+
+## Round 5 (2026-07-01, epic #18 data-plane rework, us-east-1)
+
+After the idiomatic emit-once data-plane epic (de-bundle #13, emit-once routing
+#14, split staging #15, fold BIND #16, funnel-free publish + manifest #12/#11),
+the whole transpiler was re-validated LIVE on **both** cloud targets, driven by
+the new reusable parallel harnesses `test/e2e/aws_run.sh` (Batch) and
+`test/e2e/aws_healthomics.sh` (HealthOmics). Stack deployed in **us-east-1**
+(HealthOmics is not available in us-east-2). Each fixture's S3-published
+`pipeline_outs.json` was diffed (path-normalized) against a local `mrp` golden.
+
+- **AWS Batch + S3: 13/13 byte-identical to mrp** — file_min, file_chain,
+  split_test, kitchen_sink, file_tree, map_file, struct_of_file, dir_out,
+  fork_min, map_split_file, struct_file_array, map_file_array, map_null_map. Run
+  in parallel (`RUN_PARALLEL=8`).
+- **AWS HealthOmics: 4/4 byte-identical to mrp** — file_min, split_test,
+  file_tree, map_file (one workflow + run per fixture, all COMPLETED).
+- **Manifest ↔ S3 alignment verified:** the emitted `manifest.json.gz` outputs
+  list is set-equal to the actual published `outs/` files on **both** backends
+  (file_tree: 9 leaves = 9 manifest entries, exact match).
+
+The generated DAG is materially leaner (fewer plumbing nodes; the epic routes /
+folds standalone `BIND_*` and de-funnels PUBLISH) — see the epic issue for the
+before/after node/edge/transfer-multiplier table. No transpiler code changes were
+needed for either backend; only the two new harness scripts.
 
 ## Re-verification round 4 (2026-06-27, after the code-review `--fix`)
 
