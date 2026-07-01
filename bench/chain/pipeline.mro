@@ -1,0 +1,54 @@
+filetype txt;
+
+# Benchmark: a single file carried through a deep chain of pass-through stages.
+# MAKEBIG produces one file; each PASSFILE re-exports its input unchanged (Martian
+# passes files by reference off a shared FS). The current bundle data plane
+# re-materializes that file into a new bundle at every bind/stage hop, so the file
+# is transferred O(chain depth) times. The idiomatic target (epic #18, #14) is a
+# single write routed producer->consumer: multiplier 1.
+
+stage MAKEBIG(
+    in  int  kb,
+    out txt  f,
+    src py   "stages/bigfile",
+)
+
+stage PASSFILE(
+    in  txt  f,
+    out txt  f,
+    src py   "stages/passfile",
+)
+
+pipeline CHAIN(
+    in  int  kb,
+    out txt  f,
+)
+{
+    call MAKEBIG(
+        kb = self.kb,
+    )
+
+    call PASSFILE as P1(
+        f = MAKEBIG.f,
+    )
+
+    call PASSFILE as P2(
+        f = P1.f,
+    )
+
+    call PASSFILE as P3(
+        f = P2.f,
+    )
+
+    call PASSFILE as P4(
+        f = P3.f,
+    )
+
+    return (
+        f = P4.f,
+    )
+}
+
+call CHAIN(
+    kb = 512,
+)

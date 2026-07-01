@@ -1,0 +1,39 @@
+filetype txt;
+
+# Benchmark: a split stage whose stage-level file arg (`payload`) is a large input
+# handed to every chunk. The current emitter wires `chunks.combine(args)`, so each
+# of the N chunk tasks stages the full stage args (including `payload`) even though
+# `main` never reads it — O(N) redundant staging of one file. #15's target is to
+# stage a stage-level file only into the chunks that actually consume it; here that
+# is zero chunks, so payload should reach only the split/join, not the N mains.
+
+stage WSPLIT(
+    in  int  nchunks,
+    in  txt  payload,
+    out int  total,
+    src py   "stages/wsplit",
+) split (
+    in  int  i,
+    out int  part,
+)
+
+pipeline WIDE(
+    in  int  nchunks,
+    in  txt  payload,
+    out int  total,
+)
+{
+    call WSPLIT(
+        nchunks = self.nchunks,
+        payload = self.payload,
+    )
+
+    return (
+        total = WSPLIT.total,
+    )
+}
+
+call WIDE(
+    nchunks = 16,
+    payload = "input/payload.txt",
+)

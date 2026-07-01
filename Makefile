@@ -31,6 +31,9 @@ test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (clou
 test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
 	bash test/e2e/mrp_diff.sh
 
+bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline
+	bash test/e2e/bench.sh
+
 vet: ## Run go vet
 	go vet ./...
 
