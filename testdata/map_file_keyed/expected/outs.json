@@ -1,6 +1,6 @@
 {
     "fs": {
-        "a": "v1.txt",
-        "b": "v2.txt"
+        "a": "fs/a.txt",
+        "b": "fs/b.txt"
     }
 }

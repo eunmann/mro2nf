@@ -1,3 +1,10 @@
+# A map call over an empty collection. The gather (MERGE) still runs on the empty
+# fork and yields the typed empty ([]) for the float[] output. NOTE: the source
+# here is a literal `[]` at the launch call; Martian statically prunes such a
+# known-empty literal to null, but mro2nf's runtime-generic model (entry inputs
+# are overridable at launch) treats it as a runtime empty -> [] — a documented,
+# justified difference. A stage-produced empty/null source matches mrp exactly
+# (see test/e2e/mapcall_matrix.sh).
 stage SCALE(
     in  float value,
     in  float factor,

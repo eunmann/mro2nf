@@ -15,7 +15,7 @@ func TestResolveForks(t *testing.T) {
 	}
 	pipeArgs := json.RawMessage(`{"values":[1,2,3],"factor":10}`)
 
-	forks, _, err := bind.ResolveForks(spec, pipeArgs, nil)
+	forks, _, err := bind.ResolveForks(spec, pipeArgs, nil, false)
 	if err != nil {
 		t.Fatalf("resolve forks: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestResolveForks(t *testing.T) {
 func TestResolveForksNoSplit(t *testing.T) {
 	spec := bind.Spec{"factor": {Ref: &bind.Ref{Kind: "self", ID: "factor"}}}
 
-	_, _, err := bind.ResolveForks(spec, json.RawMessage(`{"factor":10}`), nil)
+	_, _, err := bind.ResolveForks(spec, json.RawMessage(`{"factor":10}`), nil, false)
 	if err == nil {
 		t.Fatal("expected error for map call with no split binding")
 	}
@@ -56,7 +56,7 @@ func TestResolveForksMap(t *testing.T) {
 	}
 	pipeArgs := json.RawMessage(`{"m":{"b":2,"a":1}}`)
 
-	forks, keys, err := bind.ResolveForks(spec, pipeArgs, nil)
+	forks, keys, err := bind.ResolveForks(spec, pipeArgs, nil, true)
 	if err != nil {
 		t.Fatalf("resolve forks: %v", err)
 	}
@@ -92,15 +92,26 @@ func TestMergeMap(t *testing.T) {
 }
 
 func TestMergeEmpty(t *testing.T) {
-	// An empty map call yields null per output (Martian's null-map-call
-	// semantics), not an empty array.
+	// A zero-fork ARRAY map call yields an empty array per output, matching
+	// Martian's runtime merge (marshallerArray{} -> []) for an empty or null
+	// typed-array source; keys nil signals array mode.
 	merged, err := bind.Merge([]string{"scaled"}, nil, nil)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 
-	if got := string(merged); got != `{"scaled":null}` {
-		t.Errorf("merge of zero forks = %s, want {\"scaled\":null}", got)
+	if got := string(merged); got != `{"scaled":[]}` {
+		t.Errorf("merge of zero array forks = %s, want {\"scaled\":[]}", got)
+	}
+
+	// A zero-fork MAP map call (non-nil empty keys) yields an empty object.
+	merged, err = bind.Merge([]string{"scaled"}, nil, []string{})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	if got := string(merged); got != `{"scaled":{}}` {
+		t.Errorf("merge of zero map forks = %s, want {\"scaled\":{}}", got)
 	}
 }
 

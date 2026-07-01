@@ -336,16 +336,34 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		// the split's own _jobinfo is now accurate (passes its allocation)
 		"-work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}",
 		// JOIN provisions from the override, falling back to the stage default
-		"cpus { (join?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(join.threads as double) as int) : 1 }",
-		`memory { def m = (join?.mem_gb ?: 0) > 0 ? join.mem_gb : 1; (m * task.attempt) + ' GB' }`,
+		"cpus { def t = Math.abs((join?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : 1 }",
+		`memory { def m = Math.abs((join?.mem_gb ?: 0) as double); m = m > 0 ? m : 1; (m * task.attempt) + ' GB' }`,
 		"val join",
 		// the workflow parses joinres.json into the join val
 		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }",
-		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect(), types)",
+		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("stage_SUM_SQUARES.nf missing join-override wiring %q", want)
 		}
+	}
+}
+
+// TestEmitSplitJoinRunsWithZeroChunks guards bug 5: a split that produces 0
+// chunks must still run its JOIN. Nextflow's collect() on an empty channel emits
+// nothing, so the non-keyed JOIN wiring must guard it with .ifEmpty([]) — matching
+// Martian, which writes _chunk_outs=[] and runs the join anyway (core/stage.go).
+func TestEmitSplitJoinRunsWithZeroChunks(t *testing.T) {
+	dir := emitFixture(t, "join_resources", map[string]string{"SUM_SQUARES": "/x/sum_squares"})
+
+	data, err := os.ReadFile(filepath.Join(dir, "modules", "stage_SUM_SQUARES.nf"))
+	if err != nil {
+		t.Fatalf("read stage module: %v", err)
+	}
+
+	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)"
+	if !strings.Contains(string(data), want) {
+		t.Errorf("non-keyed JOIN wiring must guard the empty channel; missing %q", want)
 	}
 }
 
@@ -816,7 +834,7 @@ func TestEmitEntryFileArray(t *testing.T) {
 	main := readFile(t, filepath.Join(dir, "main.nf"))
 	for _, want := range []string{
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
-		`(params.reads ?: []).collect { __e -> (__e != null ? [file(__e)] : []) }.flatten()`,
+		`(params.reads ?: []).collect { __e0 -> (__e0 != null ? [file(__e0)] : []) }.flatten()`,
 		`-fileflat 'reads=${(inflat_reads instanceof List ? inflat_reads : [inflat_reads]).join(",")}'`,
 	} {
 		if !strings.Contains(main, want) {
@@ -935,8 +953,8 @@ func TestEmitModules(t *testing.T) {
 			"-stagecode '/x/sum_squares'",
 			// Per-chunk resources reach the scheduler via dynamic directives
 			// reading the chunk's resolved resources carried as a val.
-			"cpus { (res?.threads",
-			"memory { def m = (res?.mem_gb",
+			"cpus { def t = Math.abs((res?.threads",
+			"memory { def m = Math.abs((res?.mem_gb",
 			// Static using(mem_gb=2) maps to the split/join phase memory, which
 			// grows with task.attempt (the --auto-adjust-memory analog).
 			"memory { 2 * task.attempt + ' GB' }",

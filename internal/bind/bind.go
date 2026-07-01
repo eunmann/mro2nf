@@ -21,8 +21,10 @@ var (
 	errNoSplit = errors.New("map call has no split binding")
 	// errSplitLen is returned when zipped split collections differ in length.
 	errSplitLen = errors.New("split collections have mismatched lengths")
-	// errNotArray is returned when a split binding is not bound to an array.
+	// errNotArray is returned when an array-mode split binding is not an array.
 	errNotArray = errors.New("split binding is not an array")
+	// errNotMap is returned when a map-mode split binding is not a typed map.
+	errNotMap = errors.New("split binding is not a map")
 )
 
 // Ref is a reference to a pipeline input (self) or an upstream call output.
@@ -87,10 +89,13 @@ func Resolve(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMe
 
 // ResolveForks resolves a map call's bindings into one _args object per fork.
 // Split bindings are resolved to collections and zipped element-wise; non-split
-// bindings are broadcast to every fork. When the split collection is a map, the
-// returned keys give each fork's map key (in sorted order); for an array fork,
-// keys is nil.
-func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
+// bindings are broadcast to every fork. isMap selects the fork kind from the
+// call's STATIC map mode (array vs typed map) rather than sniffing the runtime
+// value — so a null or empty typed-map source still forks as a map (keys nil-
+// safe) and merges to {}, and a null/empty array source merges to [], matching
+// Martian's type-directed dispatch. For a map fork the returned keys give each
+// fork's map key (sorted); for an array fork keys is nil.
+func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, isMap bool) ([]json.RawMessage, []string, error) {
 	broadcast := map[string]json.RawMessage{}
 	splits := map[string]json.RawMessage{}
 
@@ -111,23 +116,11 @@ func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.
 		return nil, nil, errNoSplit
 	}
 
-	if mapMode(splits) {
+	if isMap {
 		return buildMapForks(broadcast, splits)
 	}
 
 	return buildArrayForks(broadcast, splits)
-}
-
-// mapMode reports whether the split collections are maps (objects) rather than
-// arrays. A null collection (e.g. a disabled upstream) is treated as an array.
-func mapMode(splits map[string]json.RawMessage) bool {
-	for _, raw := range splits {
-		if t := bytes.TrimSpace(raw); len(t) > 0 && t[0] == '{' {
-			return true
-		}
-	}
-
-	return false
 }
 
 func buildArrayForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
@@ -177,7 +170,7 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMess
 	for param, raw := range splits {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &m); err != nil {
-			return nil, nil, fmt.Errorf("split %q: %w", param, errNotArray)
+			return nil, nil, fmt.Errorf("split %q: %w", param, errNotMap)
 		}
 
 		ks := sortedKeys(m)
@@ -425,10 +418,18 @@ func projectArray(raw json.RawMessage, path string) (json.RawMessage, error) {
 	return raw, nil
 }
 
-// mergeOne computes one output's merged value: a key→value map for a map fork,
-// an ordered array for an array fork, or null for an empty array fork.
+// mergeOne computes one output's merged value: a key→value map for a map fork
+// (empty map for zero forks), or an ordered array for an array fork (empty array
+// for zero forks).
 func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessage, error) {
 	if keys != nil {
+		// The keys (forkkeys.json) and outs (collected per-fork bundles) are
+		// produced independently; a desync would index outs out of range. Fail
+		// with a clear error rather than panicking the merge process.
+		if len(outs) != len(keys) {
+			return nil, fmt.Errorf("merge %q: %d fork outputs for %d keys: %w", name, len(outs), len(keys), errSplitLen)
+		}
+
 		m := make(map[string]json.RawMessage, len(keys))
 
 		for i, k := range keys {
@@ -443,8 +444,13 @@ func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessa
 		return marshalRaw(m, name)
 	}
 
+	// An array-mode fork (keys nil) with zero forks resolves to an empty array,
+	// not null — Martian's runtime merge yields marshallerArray{} ([]) for an
+	// empty typed-array source (and for a null one, since the type is known). A
+	// statically-known-empty literal is collapsed to null earlier by Martian's
+	// compiler, which mro2nf's runtime-generic model does not reproduce.
 	if len(outs) == 0 {
-		return json.RawMessage(nullLiteral), nil
+		return json.RawMessage("[]"), nil
 	}
 
 	arr := make([]json.RawMessage, 0, len(outs))

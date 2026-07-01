@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // TestRunSumSquaresComp exercises the comp adapter path (mrjob-wrapped binary
@@ -47,7 +48,7 @@ func TestRunSumSquaresComp(t *testing.T) {
 	for i, def := range defs {
 		out, err := RunMain(
 			ctx, filepath.Join(work, fmt.Sprintf("chnk%d", i)),
-			adapter, stageArgs, def, []string{"sum", "square"}, res, inv,
+			adapter, stageArgs, def, scalarOuts("sum", "square"), types.NewTable(nil), res, inv,
 		)
 		if err != nil {
 			t.Fatalf("main chunk %d: %v", i, err)
@@ -57,7 +58,7 @@ func TestRunSumSquaresComp(t *testing.T) {
 
 	finalRaw, err := RunJoin(
 		ctx, filepath.Join(work, "join"), adapter, stageArgs,
-		defs, chunkOuts, []string{"sum"}, res, inv,
+		defs, chunkOuts, scalarOuts("sum"), types.NewTable(nil), res, inv,
 	)
 	if err != nil {
 		t.Fatalf("join: %v", err)

@@ -29,6 +29,34 @@ func collector() (types.Transform, *[]string) {
 	return fn, &seen
 }
 
+// TestApplySkipLeaf guards bug 7: a Transform returning ErrSkipLeaf resolves that
+// one leaf to null and continues the walk, rather than aborting it. publish uses
+// this for a declared output file the pipeline legitimately never produced —
+// matching Martian, which Lstats each published file and writes null when absent
+// (core/post_process.go), instead of failing the whole run.
+func TestApplySkipLeaf(t *testing.T) {
+	fn := func(s string) (string, error) {
+		if s == "skipme" {
+			return "", types.ErrSkipLeaf
+		}
+
+		return "X:" + s, nil
+	}
+
+	params := []ir.Param{fileParam("a", 0, 0), fileParam("b", 0, 0)}
+	vals := map[string]any{"a": "skipme", "b": "keep"}
+
+	got, err := newTable().Apply(params, vals, fn)
+	if err != nil {
+		t.Fatalf("ErrSkipLeaf must not abort the walk: %v", err)
+	}
+
+	want := map[string]any{"a": nil, "b": "X:keep"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("Apply with ErrSkipLeaf mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func newTable() *types.Table {
 	return types.NewTable(map[string]*ir.StructType{
 		"Cfg": {Name: "Cfg", Fields: []ir.Param{
@@ -53,6 +81,7 @@ type leafCase struct {
 	want   []string // file leaves, sorted
 }
 
+// leafShapeCases is a long-by-design table of file-leaf shapes.
 func leafShapeCases() []leafCase {
 	return []leafCase{
 		{
@@ -74,18 +103,27 @@ func leafShapeCases() []leafCase {
 			want:   []string{"x", "y"},
 		},
 		{
-			name:   "map of file array",
-			params: []ir.Param{fileParam("m", 1, 1)},
-			vals:   map[string]any{"m": map[string]any{"k": []any{"p", "q"}}},
-			want:   []string{"p", "q"},
-		},
-		{
-			// Same flattened dims as "map of file array" but the runtime value is
+			// Same flattened dims as the real map<file[]> but the runtime value is
 			// an array-of-maps; the shape-driven walk must handle both.
 			name:   "array of file map",
 			params: []ir.Param{fileParam("a", 1, 1)},
 			vals:   map[string]any{"a": []any{map[string]any{"k": "p"}, map[string]any{"k": "q"}}},
 			want:   []string{"p", "q"},
+		},
+		{
+			// The REAL lowering of map<file[]>: Martian folds the inner array dim
+			// into MapDim, so the IR is {ArrayDim:0, MapDim:2}. The walk must reach
+			// both leaves; the old nested-map-level model dropped them silently.
+			name:   "map of file array (real lowering, MapDim=2)",
+			params: []ir.Param{fileParam("m", 0, 2)},
+			vals:   map[string]any{"m": map[string]any{"k": []any{"p", "q"}}},
+			want:   []string{"p", "q"},
+		},
+		{
+			name:   "map of file matrix (map<file[][]>, MapDim=3)",
+			params: []ir.Param{fileParam("m", 0, 3)},
+			vals:   map[string]any{"m": map[string]any{"k": []any{[]any{"a", "b"}, []any{"c"}}}},
+			want:   []string{"a", "b", "c"},
 		},
 		{
 			name:   "non-file primitive untouched",
@@ -257,6 +295,22 @@ func TestCoerceScalars(t *testing.T) {
 	arr, ok := got["is"].([]any)
 	if !ok || arr[0] != int64(1) || arr[1] != int64(2) {
 		t.Errorf("int[] -> %v, want [1 2] as int64", got["is"])
+	}
+}
+
+// TestCoerceMapOfIntArray guards the MapDim model for coercion: map<int[]> lowers
+// to {MapDim:2, ArrayDim:0}, so the whole-number floats inside its inner arrays
+// must still coerce to int — the old nested-map-level model skipped them.
+func TestCoerceMapOfIntArray(t *testing.T) {
+	tbl := newTable()
+	params := []ir.Param{{Name: "m", BaseType: "int", MapDim: 2}}
+	vals := map[string]any{"m": map[string]any{"k": []any{json.Number("5.0"), json.Number("6")}}}
+
+	got := tbl.CoerceScalars(params, vals)
+
+	inner, ok := got["m"].(map[string]any)["k"].([]any)
+	if !ok || inner[0] != int64(5) || inner[1] != int64(6) {
+		t.Errorf("map<int[]> -> %v, want {k:[5 6]} as int64", got["m"])
 	}
 }
 

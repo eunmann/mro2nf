@@ -22,6 +22,7 @@ func runForkBind(_ context.Context, argv []string) error {
 	pipeFile := fs.String("pipeargs", "", "enclosing pipeline args bundle dir")
 	inputs := fs.String("inputs", "", "comma-separated callId=bundleDir pairs")
 	dir := fs.String("chunkdir", ".", "directory to write per-fork args bundles")
+	mapMode := fs.String("mapmode", "array", "static fork kind: 'map' (typed map) or 'array'")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -42,7 +43,7 @@ func runForkBind(_ context.Context, argv []string) error {
 		return err
 	}
 
-	forks, keys, err := bind.ResolveForks(spec, pipeArgs, callOuts)
+	forks, keys, err := bind.ResolveForks(spec, pipeArgs, callOuts, *mapMode == "map")
 	if err != nil {
 		return fmt.Errorf("forkbind: %w", err)
 	}

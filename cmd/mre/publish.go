@@ -5,18 +5,29 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
+	"os"
+	"path"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
+// publishDirPerm is the mode for created outs/ subdirectories. A named constant
+// keeps the published tree group/other-readable (downstream pipelines may run as
+// a different user) without tripping gosec's octal-literal check.
+const publishDirPerm = 0o755
+
 // runPublish finalizes a pipeline's outputs. It reads the final output bundle
-// (resolving every file leaf to a real path), copies each file-typed output —
-// including those nested in arrays, typed maps, and structs — into -dir under
-// its basename, and rewrites those paths to basenames so the published results
-// are self-contained and location-independent.
+// (resolving every file leaf to a real path) and lays the file outputs out under
+// -dir exactly as Martian's mrp does in a pipestance `outs/` tree — each output
+// named by GetOutFilename, arrays/maps/structs nested into index/key/field-named
+// subdirectories — so a downstream pipeline can consume the tree like an mrp one.
 func runPublish(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
 	prod := addProducer(fs, types.RoleOut)
@@ -42,7 +53,7 @@ func runPublish(_ context.Context, argv []string) error {
 		return err
 	}
 
-	published, err := man.Table().Apply(man.Params(prod.callable, prod.role), outs, publishLeaf(*dir))
+	published, err := publishOuts(*dir, man.Params(prod.callable, prod.role), man.Structs, outs)
 	if err != nil {
 		return fmt.Errorf("publish files: %w", err)
 	}
@@ -55,45 +66,240 @@ func runPublish(_ context.Context, argv []string) error {
 	return writeRaw(filepath.Join(*dir, "pipeline_outs.json"), out)
 }
 
-// publishLeaf copies each file leaf into dir under its basename and returns that
-// basename for the published outs JSON. Distinct leaves that share a basename
-// (e.g. each fork of a map call emitting "result.txt") are disambiguated with a
-// numeric suffix so none is silently overwritten.
-func publishLeaf(dir string) types.Transform {
-	seen := map[string]bool{}
+// publishOuts copies the file leaves of outs into dir under the Martian outs/
+// layout and returns the rewritten outs (file leaves replaced by their path
+// within dir). Non-file values pass through unchanged; a missing/empty file leaf
+// resolves to null. Keys without a matching declared output param are preserved.
+func publishOuts(dir string, params []ir.Param, structs map[string]*ir.StructType, outs map[string]any) (map[string]any, error) {
+	pub := &publisher{dir: dir, structs: structs, seen: map[string]string{}}
 
-	return func(src string) (string, error) {
-		if src == "" {
-			return src, nil
+	published := make(map[string]any, len(outs))
+	maps.Copy(published, outs)
+
+	for _, p := range params {
+		v, ok := outs[p.Name]
+		if !ok {
+			continue
 		}
 
-		name := uniqueName(filepath.Base(src), seen)
-		if err := shim.CopyTree(src, filepath.Join(dir, name)); err != nil {
-			return "", fmt.Errorf("publish %s: %w", name, err)
+		jv, err := pub.emit("", p, v)
+		if err != nil {
+			return nil, err
 		}
 
-		return name, nil
+		published[p.Name] = jv
+	}
+
+	return published, nil
+}
+
+// publisher lays out a pipeline's file outputs under dir like mrp's outs/ tree.
+type publisher struct {
+	dir     string
+	structs map[string]*ir.StructType
+	// seen maps a published rel path to the source it was copied from, so a
+	// repeated source dedups while two distinct sources on one rel disambiguate.
+	seen map[string]string
+}
+
+// emit publishes value (of param p's type) under parentRel, naming this node by
+// GetOutFilename(p). It copies file leaves into dir and returns the JSON value:
+// the path within dir for a file, a nested array/object for a collection/struct,
+// the unchanged value for a non-file scalar, or nil for a null/absent leaf.
+func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+
+	// A type with no file/dir leaves (a plain scalar, or an array/map/struct of
+	// them) is passed through verbatim — matching Martian's non-file outs, which
+	// are emitted unchanged (all map keys and struct fields kept). Only file-
+	// bearing values are decomposed into the outs/ tree. IsFile is set for a file,
+	// a directory, and any array/map/struct that contains one.
+	if !p.IsFile {
+		return value, nil
+	}
+
+	rel := path.Join(parentRel, types.OutFilename(p, pub.isStruct))
+
+	switch {
+	case p.ArrayDim > 0:
+		return pub.emitArray(rel, p, value)
+	case p.MapDim > 0:
+		return pub.emitMap(rel, p, value)
+	case pub.isStruct(p.BaseType):
+		return pub.emitStruct(rel, p, value)
+	default:
+		return pub.emitFile(rel, value)
 	}
 }
 
-// uniqueName returns base, or base with a numeric suffix before its extension if
-// base is already taken, recording the chosen name in seen.
-func uniqueName(base string, seen map[string]bool) string {
-	if !seen[base] {
-		seen[base] = true
+// isStruct reports whether name is one of the pipeline's struct types.
+func (pub *publisher) isStruct(name string) bool {
+	return pub.structs[name] != nil
+}
 
-		return base
+// emitArray publishes an array into the rel/ subdir, naming elements by a
+// zero-padded index (width = digits of the element count, matching Martian's
+// WidthForInt) plus the element type's own GetOutFilename suffix.
+func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) {
+	arr, ok := value.([]any)
+	if !ok {
+		return value, nil
 	}
 
-	ext := filepath.Ext(base)
-	stem := strings.TrimSuffix(base, ext)
+	width := len(strconv.Itoa(len(arr)))
+	out := make([]any, len(arr))
+
+	for i, ev := range arr {
+		elem := p
+		elem.ArrayDim--
+		elem.Name = fmt.Sprintf("%0*d", width, i)
+		elem.OutName = ""
+
+		jv, err := pub.emit(rel, elem, ev)
+		if err != nil {
+			return nil, err
+		}
+
+		out[i] = jv
+	}
+
+	return out, nil
+}
+
+// emitMap publishes a typed map into the rel/ subdir, naming elements by their
+// (legal, sorted) keys. Illegal Unix filenames are skipped, matching Martian. A
+// typed map is exactly one map level whose value carries MapDim-1 inner array
+// dims (Martian's encoding: map<T[]> is {MapDim:2, ArrayDim:0}), so the element
+// is descended as an array of that depth — not another map level.
+func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return value, nil
+	}
+
+	out := make(map[string]any, len(m))
+
+	for _, k := range legalSortedKeys(m) {
+		elem := p
+		elem.ArrayDim = p.ArrayDim + p.MapDim - 1
+		elem.MapDim = 0
+		elem.Name = k
+		elem.OutName = ""
+
+		jv, err := pub.emit(rel, elem, m[k])
+		if err != nil {
+			return nil, err
+		}
+
+		out[k] = jv
+	}
+
+	return out, nil
+}
+
+// emitStruct publishes a struct into the rel/ subdir, recursing each field named
+// by its own GetOutFilename; the JSON object is keyed by field id.
+func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error) {
+	sv, ok := value.(map[string]any)
+	if !ok {
+		return value, nil
+	}
+
+	out := make(map[string]any, len(pub.structs[p.BaseType].Fields))
+
+	for _, f := range pub.structs[p.BaseType].Fields {
+		// Every declared member is emitted (an absent one as null), matching
+		// Martian; a non-file field passes through verbatim via emit's guard.
+		jv, err := pub.emit(rel, f, sv[f.Name])
+		if err != nil {
+			return nil, err
+		}
+
+		out[f.Name] = jv
+	}
+
+	return out, nil
+}
+
+// emitFile copies one scalar file/dir leaf to dir/rel and returns rel, or nil
+// when the source is empty or was never written (matching Martian's null).
+func (pub *publisher) emitFile(rel string, value any) (any, error) {
+	src, ok := value.(string)
+	if !ok || src == "" {
+		return nil, nil
+	}
+
+	// os.Stat (not Lstat) follows symlinks, so a declared output that was never
+	// written — including a dangling symlink whose target is gone — resolves to
+	// null rather than aborting the publish in CopyTree's symlink resolution.
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	// Re-publishing the SAME source (a value referenced by two outputs) reuses its
+	// path. Two DISTINCT sources colliding on one rel (e.g. two outputs sharing an
+	// explicit OutName) are disambiguated with a numeric suffix so neither file is
+	// silently dropped — the per-param subdir layout makes this rare.
+	if prev, ok := pub.seen[rel]; ok {
+		if prev == src {
+			return rel, nil
+		}
+
+		rel = pub.uniqueRel(rel)
+	}
+
+	dst := filepath.Join(pub.dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dst), publishDirPerm); err != nil {
+		return nil, fmt.Errorf("publish %s: %w", rel, err)
+	}
+
+	if err := shim.CopyTree(src, dst); err != nil {
+		return nil, fmt.Errorf("publish %s: %w", rel, err)
+	}
+
+	pub.seen[rel] = src
+
+	return rel, nil
+}
+
+// uniqueRel returns rel, or rel with a numeric suffix before its extension when
+// rel is already taken by a different source, so distinct colliding leaves keep
+// distinct published paths.
+func (pub *publisher) uniqueRel(rel string) string {
+	ext := path.Ext(rel)
+	stem := strings.TrimSuffix(rel, ext)
 
 	for i := 1; ; i++ {
 		cand := fmt.Sprintf("%s_%d%s", stem, i, ext)
-		if !seen[cand] {
-			seen[cand] = true
-
+		if _, ok := pub.seen[cand]; !ok {
 			return cand
 		}
 	}
+}
+
+// legalSortedKeys returns m's keys in sorted order, dropping any that are not a
+// legal single-segment Unix filename (Martian skips these with a printed error).
+func legalSortedKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		if isLegalFilename(k) {
+			keys = append(keys, k)
+		}
+	}
+
+	sort.Strings(keys)
+
+	return keys
+}
+
+// isLegalFilename mirrors Martian's IsLegalUnixFilename: a non-empty single path
+// segment of at most 255 bytes, not "." or "..". Publishing under an illegal key
+// would create an invalid path (or ENAMETOOLONG), so it is skipped like Martian.
+func isLegalFilename(k string) bool {
+	const maxNameLen = 255
+
+	return k != "" && k != "." && k != ".." &&
+		len(k) <= maxNameLen && !strings.ContainsAny(k, "/\x00")
 }

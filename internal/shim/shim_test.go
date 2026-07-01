@@ -12,7 +12,19 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
+
+// scalarOuts builds non-file (float) output params, whose _outs skeleton is all
+// null — matching these tests' pre-bug behavior — paired with an empty table.
+func scalarOuts(names ...string) []ir.Param {
+	out := make([]ir.Param, len(names))
+	for i, n := range names {
+		out[i] = ir.Param{Name: n, BaseType: "float"}
+	}
+
+	return out
+}
 
 func sumSquaresAdapter(t *testing.T) Adapter {
 	t.Helper()
@@ -64,7 +76,7 @@ func TestRunSumSquares(t *testing.T) {
 	for i, def := range defs {
 		out, err := RunMain(
 			ctx, filepath.Join(work, fmt.Sprintf("chnk%d", i)),
-			adapter, stageArgs, def, []string{"sum", "square"}, res, inv,
+			adapter, stageArgs, def, scalarOuts("sum", "square"), types.NewTable(nil), res, inv,
 		)
 		if err != nil {
 			t.Fatalf("main chunk %d: %v", i, err)
@@ -87,7 +99,7 @@ func TestRunSumSquares(t *testing.T) {
 
 	finalRaw, err := RunJoin(
 		ctx, filepath.Join(work, "join"), adapter, stageArgs,
-		defs, chunkOuts, []string{"sum"}, res, inv,
+		defs, chunkOuts, scalarOuts("sum"), types.NewTable(nil), res, inv,
 	)
 	if err != nil {
 		t.Fatalf("join: %v", err)
@@ -126,7 +138,7 @@ func TestJobInfoResolvedResources(t *testing.T) {
 	}
 
 	mainDir := filepath.Join(work, "chnk")
-	if _, err := RunMain(ctx, mainDir, adapter, stageArgs, defs[0], []string{"sum", "square"}, res, inv); err != nil {
+	if _, err := RunMain(ctx, mainDir, adapter, stageArgs, defs[0], scalarOuts("sum", "square"), types.NewTable(nil), res, inv); err != nil {
 		t.Fatalf("main: %v", err)
 	}
 
@@ -144,6 +156,39 @@ func TestJobInfoResolvedResources(t *testing.T) {
 
 	if info.MemGB != 1 {
 		t.Errorf("_jobinfo memGB = %v, want 1 (chunk override, not phase request 2)", info.MemGB)
+	}
+}
+
+// TestSplitJobInfoResolvesNegativeSentinel checks the split phase reports the
+// magnitude of a negative adaptive sentinel in _jobinfo, symmetric with main and
+// join — a split function's get_memory_allocation() must see |x|, not the raw
+// negative.
+func TestSplitJobInfoResolvesNegativeSentinel(t *testing.T) {
+	adapter := sumSquaresAdapter(t)
+	inv := Invocation{Call: "P", Args: json.RawMessage(`{"values":[2]}`), MROFile: "p.mro"}
+	stageArgs := json.RawMessage(`{"values":[2]}`)
+	work := t.TempDir()
+
+	res := Resources{Threads: -1, MemGB: -8}
+	if _, _, err := RunSplit(context.Background(), work, adapter, stageArgs, res, inv); err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(work, "split", "_jobinfo"))
+	if err != nil {
+		t.Fatalf("read _jobinfo: %v", err)
+	}
+
+	var info struct {
+		MemGB   float64 `json:"memGB"`
+		Threads float64 `json:"threads"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatalf("parse _jobinfo: %v", err)
+	}
+
+	if info.MemGB != 8 || info.Threads != 1 {
+		t.Errorf("split _jobinfo = {mem %v, threads %v}, want {8, 1} (sentinel magnitude)", info.MemGB, info.Threads)
 	}
 }
 
@@ -188,8 +233,10 @@ func TestReadStageDefsJoinOverride(t *testing.T) {
 }
 
 func TestMergeArgsNegativeResources(t *testing.T) {
-	// Martian uses negative resource values as adaptive sentinels; they must
-	// override the phase default, not be discarded as "unset".
+	// A negative resource value is Martian's adaptive sentinel ("at least |x|").
+	// It must override the phase default (not be discarded as "unset"), and it
+	// resolves to its magnitude — mrp's cluster path negates it to positive before
+	// the chunk runs, so the injected __keys carry |x|, not the raw sentinel.
 	chunk := ChunkDef{
 		Args:      map[string]json.RawMessage{},
 		Resources: Resources{MemGB: -8, Threads: -1},
@@ -205,11 +252,12 @@ func TestMergeArgsNegativeResources(t *testing.T) {
 		t.Fatalf("parse merged: %v", err)
 	}
 
-	if string(got["__mem_gb"]) != "-8" {
-		t.Errorf("__mem_gb = %s, want -8 (negative sentinel preserved)", got["__mem_gb"])
+	// 8/1 (the magnitude of the override), not 4 (the phase default it overrode).
+	if string(got["__mem_gb"]) != "8" {
+		t.Errorf("__mem_gb = %s, want 8 (|-8|, override resolved to magnitude)", got["__mem_gb"])
 	}
-	if string(got["__threads"]) != "-1" {
-		t.Errorf("__threads = %s, want -1", got["__threads"])
+	if string(got["__threads"]) != "1" {
+		t.Errorf("__threads = %s, want 1 (|-1|)", got["__threads"])
 	}
 }
 
@@ -287,6 +335,29 @@ func TestStageFailureClassification(t *testing.T) {
 	}
 	if errors.Is(boom, ErrStageAssert) {
 		t.Error("ordinary error should not be ErrStageAssert")
+	}
+}
+
+// TestWrappedAdapterReadsAssert guards the comp/exec path's assert handling: a
+// real mrjob writes a compiled-stage assertion to _assert (prefix stripped) and
+// exits 0, so the wrapped path must read _assert — not only _errors + exit code —
+// or the assertion is silently treated as success with stale outs.
+func TestWrappedAdapterReadsAssert(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("/bin/sh not available")
+	}
+
+	meta := t.TempDir()
+	files := t.TempDir()
+	journal := filepath.Join(meta, "journal")
+
+	// argv[1:] gets meta, files, journal appended, so inside sh: $1=meta. The
+	// stand-in "mrjob" writes _assert and exits 0, exactly like the real one.
+	argv := []string{"/bin/sh", "-c", `printf 'pipeline halted by assertion' > "$1/_assert"`, "mrjob"}
+
+	err := runWrappedAdapter(context.Background(), meta, files, journal, Adapter{}, argv, "main", Resources{})
+	if !errors.Is(err, ErrStageAssert) {
+		t.Errorf("comp/exec assertion must surface as ErrStageAssert, got %v", err)
 	}
 }
 

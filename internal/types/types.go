@@ -8,6 +8,7 @@ package types
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -15,6 +16,12 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
+
+// ErrSkipLeaf is returned by a Transform to resolve that file leaf to null and
+// continue the walk instead of aborting it (the leaf analog of
+// filepath.SkipDir). It lets publish drop a declared output file the pipeline
+// never produced, matching Martian's publish-time "absent file -> null".
+var ErrSkipLeaf = errors.New("skip file leaf")
 
 // Table resolves struct type names to their fields so the walk can descend into
 // struct-typed values.
@@ -32,8 +39,37 @@ func NewTable(structs map[string]*ir.StructType) *Table {
 	return &Table{structs: m}
 }
 
+// IsStruct reports whether name is a known struct type. The skeleton-outs
+// builder uses it to leave a struct-typed output null (Martian's makeOutArg
+// pre-fills only genuine file leaves, nulling complex/struct outputs), since the
+// IR's IsFile flag is also set for structs that contain file fields.
+func (t *Table) IsStruct(name string) bool {
+	_, ok := t.structs[name]
+
+	return ok
+}
+
+// OutFilename is the on-disk basename for a declared output, mirroring Martian's
+// StructMember.GetOutFilename: an explicit OutName wins; a complex type
+// (array/map/struct — per isStruct) or the builtin file/path types use the bare
+// name; any other (user) file type appends .<typename>. The pre-populated
+// skeleton _outs path a stage writes to and the published path must both use this
+// single rule so they never diverge (or an output would vanish at publish time).
+func OutFilename(p ir.Param, isStruct func(name string) bool) string {
+	switch {
+	case p.OutName != "":
+		return p.OutName
+	case p.ArrayDim > 0 || p.MapDim > 0 || isStruct(p.BaseType):
+		return p.Name
+	case p.BaseType == "file" || p.BaseType == "path":
+		return p.Name
+	default:
+		return p.Name + "." + p.BaseType
+	}
+}
+
 // Transform maps a file-leaf path to its replacement. Returning an error aborts
-// the walk.
+// the walk, except ErrSkipLeaf, which resolves that one leaf to null and continues.
 type Transform func(path string) (string, error)
 
 // Apply walks each value in vals against the matching param's type, applying fn
@@ -91,8 +127,9 @@ func (t *Table) coerce(v any, base string, arrayDim, mapDim int) any {
 		return tv
 	case map[string]any:
 		if mapDim > 0 {
+			// One typed-map level carrying mapDim-1 inner array dims (see walkMap).
 			for k, e := range tv {
-				tv[k] = t.coerce(e, base, arrayDim, mapDim-1)
+				tv[k] = t.coerce(e, base, arrayDim+mapDim-1, 0)
 			}
 
 			return tv
@@ -168,7 +205,12 @@ func (t *Table) walk(v any, base string, arrayDim, mapDim int, isFile bool, fn T
 		return v, nil
 	case string:
 		if isFile && arrayDim == 0 && mapDim == 0 {
-			return fn(tv)
+			nv, err := fn(tv)
+			if errors.Is(err, ErrSkipLeaf) {
+				return nil, nil
+			}
+
+			return nv, err
 		}
 
 		return v, nil
@@ -202,8 +244,13 @@ func (t *Table) walkMap(m map[string]any, base string, arrayDim, mapDim int, isF
 
 	sort.Strings(keys)
 
+	// A typed map is exactly one map level; Martian folds any inner array
+	// dimensions into MapDim (MapDim = 1 + innerArrayDim), so after descending
+	// this level the element carries mapDim-1 array dims (and never another typed
+	// map — nested typed maps are not representable). Treating mapDim as a count
+	// of nested map levels would leave map<T[]> inner arrays unwalked.
 	for _, k := range keys {
-		nv, err := t.walk(m[k], base, arrayDim, mapDim-1, isFile, fn)
+		nv, err := t.walk(m[k], base, arrayDim+mapDim-1, 0, isFile, fn)
 		if err != nil {
 			return nil, err
 		}

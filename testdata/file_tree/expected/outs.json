@@ -1,0 +1,20 @@
+{
+    "gathered": [
+        "gathered/0.txt",
+        "gathered/1.txt",
+        "gathered/2.txt"
+    ],
+    "report": {
+        "byname": {
+            "item0": "report/byname/item0.txt",
+            "item1": "report/byname/item1.txt"
+        },
+        "count": 5,
+        "shards": [
+            "report/shards/0.txt",
+            "report/shards/1.txt",
+            "report/shards/2.txt"
+        ],
+        "summary": "report/summary.txt"
+    }
+}

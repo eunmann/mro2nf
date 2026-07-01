@@ -1,0 +1,89 @@
+# A deliberately complex file-output pipeline: it exercises, in one run, every
+# shape the publish tree must reproduce from Martian — a split->join file array,
+# a nested sub-pipeline whose map call emits a per-fork file merged into an array,
+# and a struct output that bundles an array of files, a map of files, a scalar
+# file, and a plain scalar. The stages do trivial work; the point is the shapes.
+filetype txt;
+
+struct Report(
+    txt[]     shards,
+    map<txt>  byname,
+    txt       summary,
+    int       count,
+)
+
+# Split stage: n chunks, each writes one shard file; join gathers them.
+stage MAKE_SHARDS(
+    in  int    n,
+    out txt[]  shards,
+    src py     "stages/make_shards",
+) split using (
+    in  int    idx,
+    out txt    shard,
+)
+
+# Map-called stage: one file per fork.
+stage LABEL(
+    in  int    v,
+    out txt    labeled,
+    src py     "stages/label",
+)
+
+# Assembles the struct output plus a fresh top-level array. Both are final-only
+# (consumed by nothing), so neither is subject to intermediate VDR — keeping this
+# a clean test of the publish tree rather than of file-lifecycle policy.
+stage ASSEMBLE(
+    in  txt[]   shards,
+    in  txt[]   labels,
+    out Report  report,
+    out txt[]   gathered,
+    src py      "stages/assemble",
+)
+
+pipeline INNER(
+    in  int[]  vals,
+    out txt[]  labels,
+)
+{
+    map call LABEL(
+        v = split self.vals,
+    )
+
+    return (
+        labels = LABEL.labeled,
+    )
+}
+
+pipeline FILE_TREE(
+    in  int     n,
+    in  int[]   vals,
+    out Report  report,
+    out txt[]   gathered,
+)
+{
+    call MAKE_SHARDS(
+        n = self.n,
+    )
+
+    call INNER(
+        vals = self.vals,
+    )
+
+    call ASSEMBLE(
+        shards = MAKE_SHARDS.shards,
+        labels = INNER.labels,
+    )
+
+    return (
+        report   = ASSEMBLE.report,
+        gathered = ASSEMBLE.gathered,
+    )
+}
+
+call FILE_TREE(
+    n    = 3,
+    vals = [
+        10,
+        20,
+    ],
+)

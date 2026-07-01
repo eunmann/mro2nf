@@ -208,7 +208,9 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 func keyedInputs(refs []string) (string, string) {
 	var in strings.Builder
 
-	in.WriteString("    tuple val(key), path(pipeargs)")
+	// stageAs pins pipeargs off the `args` output name it would otherwise alias
+	// when the enclosing pipeline's args are an upstream bind output. See bug 1.
+	in.WriteString("    tuple val(key), path(pipeargs, stageAs: 'pipeargs')")
 
 	pairs := make([]string, 0, len(refs))
 	for _, id := range refs {
@@ -246,12 +248,12 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
   script:
     """
     mkdir -p forks
-    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks%[5]s
+    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks -mapmode %[6]s%[5]s
     mv -f forks/forkkeys.json forkkeys.json
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn))
+`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c))
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
@@ -670,7 +672,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
     %[1]s_MAIN(chunks.combine(a), types)
     join = %[1]s_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
-    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect(), types)
+    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect().ifEmpty([]), types)
   emit:
     %[1]s_JOIN.out
 }
@@ -702,7 +704,10 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
 func bindInputs(refs []string) (string, string) {
 	var inputs strings.Builder
 
-	inputs.WriteString("    path pipeargs\n")
+	// Stage under a fixed name: a sub-pipeline's pipeargs is an upstream bind
+	// output dir named `args`, which is also this process's `-o args` output —
+	// staging it unquoted would alias (clobber) the input. See bug 1.
+	inputs.WriteString("    path pipeargs, stageAs: 'pipeargs'\n")
 
 	pairs := make([]string, 0, len(refs))
 	for _, id := range refs {
@@ -755,11 +760,33 @@ func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx
     path 'forkkeys.json', emit: keys
   script:
     """
-    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir .%[5]s
+    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir . -mapmode %[6]s%[5]s
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn))
+`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c))
+}
+
+// Map-call fork kinds — the ir.Call.MapMode values derived from Martian's
+// CallMode (map_call_source.go).
+const (
+	mapModeMap     = "map"
+	mapModeArray   = "array"
+	mapModeUnknown = "unknown"
+)
+
+// mapModeArg is the static fork kind for a map call: "map" for a typed-map (or
+// not-statically-resolved "unknown") source, else "array". It drives the
+// fork/merge so an empty or null typed source resolves to the typed empty
+// ([]/{}) instead of being sniffed from the runtime value (which mis-classifies
+// null). "unknown" maps to "map" to stay consistent with forkDims (emit.go),
+// whose output-projection treats an unknown mode as a keyed map.
+func mapModeArg(c ir.Call) string {
+	if c.MapMode == mapModeMap || c.MapMode == mapModeUnknown {
+		return mapModeMap
+	}
+
+	return mapModeArray
 }
 
 // genMergeProcess emits a process that merges per-fork outputs into the
@@ -922,7 +949,8 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 	fmt.Fprintf(b, "    keyed_%s = %s.out.forks.flatten().map { f -> tuple(f.baseName, f) }\n", c.Name, fork)
 	fmt.Fprintf(b, "    out_%s = %s(keyed_%s).map { k, bundle -> bundle }\n", c.Name, callee, c.Name)
 	// ifEmpty([]) ensures MERGE still runs for an empty fork collection
-	// (collect() on an empty channel emits nothing), yielding null outputs.
+	// (collect() on an empty channel emits nothing); MERGE then yields the typed
+	// empty ([] for an array fork, {} for a map fork).
 	// FORK.out.keys carries map-fork keys (null for an array fork).
 	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys, types)\n", merge, c.Name, fork)
 
@@ -1155,23 +1183,38 @@ workflow {
 // key, struct fields in declaration order — so mre entryargs can pop the staged
 // paths back into the value in the same order. Non-file scalars contribute [].
 func fileFlattenExpr(expr string, p ir.Param, structs map[string]*ir.StructType) string {
+	return fileFlattenExprDepth(expr, p, structs, 0)
+}
+
+// fileFlattenExprDepth threads a closure-variable depth so nested array/map
+// closures bind distinct names (__e0, __e1, ...). Reusing one name across
+// nesting depths is a Groovy compile error ("variable already declared").
+// Struct fields recurse at the *same* depth: they substitute (expr)?.field
+// without opening a new closure, so siblings never collide.
+func fileFlattenExprDepth(expr string, p ir.Param, structs map[string]*ir.StructType, depth int) string {
 	switch {
 	case p.ArrayDim > 0:
 		elem := p
 		elem.ArrayDim--
+		v := fmt.Sprintf("__e%d", depth)
 
-		return fmt.Sprintf("(%s ?: []).collect { __e -> %s }.flatten()", expr, fileFlattenExpr("__e", elem, structs))
+		return fmt.Sprintf("(%s ?: []).collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v, elem, structs, depth+1))
 	case p.MapDim > 0:
+		// A typed map is one map level; Martian folds inner array dims into MapDim
+		// (MapDim = 1 + innerArrayDim). Descend one level, then treat the value as
+		// carrying mapDim-1 array dims — not another typed map.
 		val := p
-		val.MapDim--
+		val.ArrayDim += p.MapDim - 1
+		val.MapDim = 0
+		v := fmt.Sprintf("__e%d", depth)
 
-		return fmt.Sprintf("(%s ?: [:]).sort { it.key }.collect { __e -> %s }.flatten()", expr, fileFlattenExpr("__e.value", val, structs))
+		return fmt.Sprintf("(%s ?: [:]).sort { it.key }.collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v+".value", val, structs, depth+1))
 	}
 
 	if st, ok := structs[p.BaseType]; ok {
 		parts := make([]string, 0, len(st.Fields))
 		for _, f := range st.Fields {
-			parts = append(parts, fileFlattenExpr(fmt.Sprintf("(%s)?.%s", expr, f.Name), f, structs))
+			parts = append(parts, fileFlattenExprDepth(fmt.Sprintf("(%s)?.%s", expr, f.Name), f, structs, depth))
 		}
 
 		if len(parts) == 0 {
@@ -1330,13 +1373,14 @@ func gpuRequest(special string) (int, bool) {
 // `using` default. val is the name of a per-task val input (e.g. a chunk's
 // resolved resources or the split-returned join override).
 func dynCpus(val string, fallback int) string {
-	return fmt.Sprintf("cpus { (%[1]s?.threads ?: 0) > 0 ? Math.max(1, Math.ceil(%[1]s.threads as double) as int) : %[2]d }", val, fallback)
+	return fmt.Sprintf("cpus { def t = Math.abs((%[1]s?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : %[2]d }", val, fallback)
 }
 
 // dynMem renders a dynamic `memory` directive: the runtime val's mem_gb when
-// positive, else the stage's static `using` default.
+// positive, else the stage's static `using` default. A negative per-task value is
+// the adaptive sentinel and is provisioned at its magnitude (see cpusOf/memOf).
 func dynMem(val string, fallback int) string {
-	return fmt.Sprintf("memory { def m = (%[1]s?.mem_gb ?: 0) > 0 ? %[1]s.mem_gb : %[2]d; (m * task.attempt) + ' GB' }", val, fallback)
+	return fmt.Sprintf("memory { def m = Math.abs((%[1]s?.mem_gb ?: 0) as double); m = m > 0 ? m : %[2]d; (m * task.attempt) + ' GB' }", val, fallback)
 }
 
 // staticMem renders a static `memory` directive that grows with task.attempt —
@@ -1348,20 +1392,25 @@ func staticMem(memGB int) string {
 	return fmt.Sprintf("memory { %d * task.attempt + ' GB' }", memGB)
 }
 
+// cpusOf and memOf use the magnitude of the request: a negative value is
+// Martian's adaptive sentinel ("at least |x|"), resolved to |x| (matching mrp's
+// cluster path), not floored to the 1-unit minimum.
 func cpusOf(s *ir.Stage) int {
-	if s.Resources.Threads < 1 {
+	t := math.Abs(s.Resources.Threads)
+	if t < 1 {
 		return 1
 	}
 
-	return int(math.Ceil(s.Resources.Threads))
+	return int(math.Ceil(t))
 }
 
 func memOf(s *ir.Stage) int {
-	if s.Resources.MemGB < 1 {
+	m := math.Abs(s.Resources.MemGB)
+	if m < 1 {
 		return 1
 	}
 
-	return int(math.Ceil(s.Resources.MemGB))
+	return int(math.Ceil(m))
 }
 
 func sortedKeys[V any](m map[string]V) []string {

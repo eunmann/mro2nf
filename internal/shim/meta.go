@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // prepDirs creates the metadata and files directories for a phase and returns
@@ -61,15 +64,40 @@ func writeJobInfo(meta, files, phase string, res Resources, inv Invocation) erro
 	return writeJSON(filepath.Join(meta, "_jobinfo"), info)
 }
 
-// writeSkeletonOuts writes an _outs file with every output name set to null,
-// which the adapter reads and then populates.
-func writeSkeletonOuts(meta string, names []string) error {
-	outs := make(map[string]any, len(names))
-	for _, n := range names {
-		outs[n] = nil
+// writeSkeletonOuts writes the _outs skeleton the adapter reads before a stage
+// runs, pre-populating it the way Martian's makeOutArg does (core/stage.go):
+// array dims become [], map dims {}, a scalar file leaf its default writable
+// path under files, and everything else (plain scalars, structs) null. Stages
+// that write to or assert on a pre-populated output path rely on this.
+func writeSkeletonOuts(meta, files string, outParams []ir.Param, tbl *types.Table) error {
+	outs := make(map[string]any, len(outParams))
+	for _, p := range outParams {
+		outs[p.Name] = skeletonOut(p, files, tbl)
 	}
 
 	return writeJSON(filepath.Join(meta, "_outs"), outs)
+}
+
+// skeletonOut returns the pre-populated _outs value for one declared output,
+// mirroring Martian's makeOutArg / GetOutFilename.
+func skeletonOut(p ir.Param, files string, tbl *types.Table) any {
+	switch {
+	case p.ArrayDim > 0:
+		return []any{}
+	case p.MapDim > 0:
+		return map[string]any{}
+	case tbl.IsStruct(p.BaseType):
+		// A struct (complex) output, including a struct-as-directory: null. The
+		// stage populates it; pre-filling a path would not match Martian.
+		return nil
+	case p.IsFile:
+		// A scalar file leaf: pre-fill its default writable path. The shared
+		// OutFilename rule is the same one publish uses, so the stage writes to
+		// exactly where publish later looks.
+		return filepath.Join(files, types.OutFilename(p, tbl.IsStruct))
+	default:
+		return nil
+	}
 }
 
 // readStageDefs parses a split phase's _stage_defs into chunk definitions and
@@ -173,9 +201,13 @@ func withResources(stageArgs json.RawMessage, res Resources) (json.RawMessage, e
 // allocation. A non-zero override wins (including negative adaptive sentinels);
 // vmem defaults to the resolved memory plus the standard headroom.
 func resolveResources(chunk, res Resources) Resources {
+	// A negative request is Martian's adaptive sentinel ("at least |x|, ideally
+	// all available"); its cluster path resolves it to the positive |x| before
+	// reporting it, so do the same here to avoid leaking a negative mem_gb/threads
+	// into _jobinfo and the __* keys the stage reads.
 	eff := Resources{
-		MemGB:   coalesce(chunk.MemGB, res.MemGB),
-		Threads: coalesce(chunk.Threads, res.Threads),
+		MemGB:   absResource(coalesce(chunk.MemGB, res.MemGB)),
+		Threads: absResource(coalesce(chunk.Threads, res.Threads)),
 		Special: chunk.Special,
 	}
 
@@ -183,9 +215,25 @@ func resolveResources(chunk, res Resources) Resources {
 		eff.Special = res.Special
 	}
 
-	eff.VMemGB = coalesce(chunk.VMemGB, coalesce(res.VMemGB, eff.MemGB+extraVMemGB))
+	// vmem defaults to the resolved memory plus the standard headroom. Matching
+	// Martian's remote GetSystemReqs, any resolved vmem below 1 GB (an unset 0, or
+	// a too-small explicit value) is recomputed from memory rather than used
+	// as-is.
+	eff.VMemGB = absResource(coalesce(chunk.VMemGB, res.VMemGB))
+	if eff.VMemGB < 1 {
+		eff.VMemGB = eff.MemGB + extraVMemGB
+	}
 
 	return eff
+}
+
+// absResource resolves a negative adaptive sentinel to its magnitude.
+func absResource(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+
+	return f
 }
 
 // injectResources writes the resolved resource keys into an args map.

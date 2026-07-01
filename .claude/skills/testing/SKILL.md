@@ -21,7 +21,7 @@ description: "Reference: Testing conventions, lint rules, and make targets. Cons
 ## Lint Rules That Affect Tests
 
 - `mnd` linter catches magic numbers — use named constants or `//nolint:mnd` when a literal is clearer.
-- `funlen` max 80 lines per function (applies to test helpers too).
+- `funlen` is **excluded for `_test.go`**: a table-driven test's case list is data, not procedural code, so a long table is fine — keep cases in one table rather than splitting them artificially to satisfy a length limit. (Production code is still capped at 80 lines.)
 - `gosec` is excluded for `_test.go` (tests legitimately launch subprocesses), as are `wrapcheck`, `unparam`, and `noctx`.
 
 ## Make Targets

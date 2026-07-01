@@ -10,7 +10,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # Tools run via `go run ...@pinned` to avoid global installs.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
-.PHONY: all build test test-e2e test-e2e-docker vet lint lint-check install clean help
+.PHONY: all build test test-e2e test-e2e-docker test-mrp-diff vet lint lint-check install clean help
 .DEFAULT_GOAL := help
 
 help: ## Show this help
@@ -27,6 +27,9 @@ test-e2e: build ## Run the end-to-end Nextflow differential test
 
 test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
 	bash test/e2e/docker_iso.sh
+
+test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
+	bash test/e2e/mrp_diff.sh
 
 vet: ## Run go vet
 	go vet ./...

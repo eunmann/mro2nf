@@ -1,0 +1,37 @@
+# A map call over a NULL typed-map source (a stage returning None for its
+# map<float> output). The static map mode drives the fork/merge, so the result
+# is the typed empty {} — matching Martian exactly (mrp yields {} here, since the
+# source type is a map). Regression guard for the null-sniffed-as-array bug.
+stage NULLM(
+    in  int        n,
+    out map<float> m,
+    src py         "stages/nullm",
+)
+
+stage SCALE(
+    in  float value,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline P(
+    in  int        n,
+    out map<float> scaled,
+)
+{
+    call NULLM(
+        n = self.n,
+    )
+
+    map call SCALE(
+        value = split NULLM.m,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+call P(
+    n = 0,
+)
