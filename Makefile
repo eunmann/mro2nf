@@ -34,6 +34,9 @@ test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; 
 bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline
 	bash test/e2e/bench.sh
 
+spike-13: build ## Validate the #13 de-bundle staging spike (local + S3-proxy)
+	bash test/e2e/spike_debundle.sh
+
 vet: ## Run go vet
 	go vet ./...
 
