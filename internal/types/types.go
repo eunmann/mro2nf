@@ -49,6 +49,25 @@ func (t *Table) IsStruct(name string) bool {
 	return ok
 }
 
+// OutFilename is the on-disk basename for a declared output, mirroring Martian's
+// StructMember.GetOutFilename: an explicit OutName wins; a complex type
+// (array/map/struct — per isStruct) or the builtin file/path types use the bare
+// name; any other (user) file type appends .<typename>. The pre-populated
+// skeleton _outs path a stage writes to and the published path must both use this
+// single rule so they never diverge (or an output would vanish at publish time).
+func OutFilename(p ir.Param, isStruct func(name string) bool) string {
+	switch {
+	case p.OutName != "":
+		return p.OutName
+	case p.ArrayDim > 0 || p.MapDim > 0 || isStruct(p.BaseType):
+		return p.Name
+	case p.BaseType == "file" || p.BaseType == "path":
+		return p.Name
+	default:
+		return p.Name + "." + p.BaseType
+	}
+}
+
 // Transform maps a file-leaf path to its replacement. Returning an error aborts
 // the walk, except ErrSkipLeaf, which resolves that one leaf to null and continues.
 type Transform func(path string) (string, error)

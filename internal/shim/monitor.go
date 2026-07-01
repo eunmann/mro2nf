@@ -22,6 +22,8 @@ const (
 	// statmRSSIndex is the resident-pages field's position in /proc/<pid>/statm:
 	// size(0) resident(1).
 	statmRSSIndex = 1
+	// bytesPerKB converts ru_maxrss (KB on Linux) to bytes.
+	bytesPerKB = 1 << 10
 )
 
 // memMonitor watches a process group's resident memory and kills the group when
@@ -56,8 +58,9 @@ func (m *memMonitor) watch(ctx context.Context) {
 				// Only kill while our child — the process-group leader, whose pid
 				// equals the pgid — is still alive and leading its own group. Once
 				// it has exited (and been reaped by Wait), its pid can be recycled;
-				// this guard ensures a delayed sample never SIGKILLs an unrelated
-				// group that happens to reuse the pgid.
+				// this guard, together with stop() joining before the child is
+				// reaped, makes a SIGKILL to a recycled pgid vanishingly unlikely
+				// (the check and kill are not atomic, so not strictly impossible).
 				if procPgrp(m.pgid) != m.pgid {
 					return
 				}
@@ -71,10 +74,38 @@ func (m *memMonitor) watch(ctx context.Context) {
 	}
 }
 
-// message renders the retryable failure text for a memory-quota kill, mirroring
-// mrp's ExceededMemQuotaMessage so downstream logs read the same.
+// recordExitPeak folds the child's peak resident memory (wait4's ru_maxrss, in
+// KB on Linux) into the monitor after the process has exited. This catches a
+// spike shorter than the sample interval that the periodic poll would miss —
+// mirroring mrp's post-hoc memory-reservation check at stage completion. Call
+// after the run's stop() has joined the watch goroutine, so the writes race with
+// nothing.
+func (m *memMonitor) recordExitPeak(ps *os.ProcessState) {
+	if m == nil || ps == nil {
+		return
+	}
+
+	ru, ok := ps.SysUsage().(*syscall.Rusage)
+	if !ok {
+		return
+	}
+
+	peak := ru.Maxrss * bytesPerKB // ru_maxrss is in KB on Linux, where this shim runs
+	if peak > m.peakBytes.Load() {
+		m.peakBytes.Store(peak)
+	}
+
+	if peak > m.limitBytes {
+		m.violated.Store(true)
+	}
+}
+
+// message renders the retryable failure text for a memory-quota kill. It leads
+// with Martian's canonical "Stage exceeded its memory quota" prefix (core
+// runtime.go ExceededMemQuotaMessage), so tooling that greps _errors for it
+// matches mre's message too.
 func (m *memMonitor) message() string {
-	return fmt.Sprintf("stage exceeded its memory quota (using %.1f GB, allowed %.1f GB)",
+	return fmt.Sprintf("Stage exceeded its memory quota (using %.1f, allowed %gG)",
 		float64(m.peakBytes.Load())/bytesPerGB, float64(m.limitBytes)/bytesPerGB)
 }
 

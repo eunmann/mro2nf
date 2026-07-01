@@ -71,7 +71,7 @@ func runPublish(_ context.Context, argv []string) error {
 // within dir). Non-file values pass through unchanged; a missing/empty file leaf
 // resolves to null. Keys without a matching declared output param are preserved.
 func publishOuts(dir string, params []ir.Param, structs map[string]*ir.StructType, outs map[string]any) (map[string]any, error) {
-	pub := &publisher{dir: dir, structs: structs, seen: map[string]bool{}}
+	pub := &publisher{dir: dir, structs: structs, seen: map[string]string{}}
 
 	published := make(map[string]any, len(outs))
 	maps.Copy(published, outs)
@@ -97,7 +97,9 @@ func publishOuts(dir string, params []ir.Param, structs map[string]*ir.StructTyp
 type publisher struct {
 	dir     string
 	structs map[string]*ir.StructType
-	seen    map[string]bool
+	// seen maps a published rel path to the source it was copied from, so a
+	// repeated source dedups while two distinct sources on one rel disambiguate.
+	seen map[string]string
 }
 
 // emit publishes value (of param p's type) under parentRel, naming this node by
@@ -118,18 +120,23 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error)
 		return value, nil
 	}
 
-	rel := path.Join(parentRel, pub.outFilename(p))
+	rel := path.Join(parentRel, types.OutFilename(p, pub.isStruct))
 
 	switch {
 	case p.ArrayDim > 0:
 		return pub.emitArray(rel, p, value)
 	case p.MapDim > 0:
 		return pub.emitMap(rel, p, value)
-	case pub.structs[p.BaseType] != nil:
+	case pub.isStruct(p.BaseType):
 		return pub.emitStruct(rel, p, value)
 	default:
 		return pub.emitFile(rel, value)
 	}
+}
+
+// isStruct reports whether name is one of the pipeline's struct types.
+func (pub *publisher) isStruct(name string) bool {
+	return pub.structs[name] != nil
 }
 
 // emitArray publishes an array into the rel/ subdir, naming elements by a
@@ -231,35 +238,44 @@ func (pub *publisher) emitFile(rel string, value any) (any, error) {
 		return nil, nil
 	}
 
-	if !pub.seen[rel] {
-		dst := filepath.Join(pub.dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(dst), publishDirPerm); err != nil {
-			return nil, fmt.Errorf("publish %s: %w", rel, err)
+	// Re-publishing the SAME source (a value referenced by two outputs) reuses its
+	// path. Two DISTINCT sources colliding on one rel (e.g. two outputs sharing an
+	// explicit OutName) are disambiguated with a numeric suffix so neither file is
+	// silently dropped — the per-param subdir layout makes this rare.
+	if prev, ok := pub.seen[rel]; ok {
+		if prev == src {
+			return rel, nil
 		}
 
-		if err := shim.CopyTree(src, dst); err != nil {
-			return nil, fmt.Errorf("publish %s: %w", rel, err)
-		}
-
-		pub.seen[rel] = true
+		rel = pub.uniqueRel(rel)
 	}
+
+	dst := filepath.Join(pub.dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dst), publishDirPerm); err != nil {
+		return nil, fmt.Errorf("publish %s: %w", rel, err)
+	}
+
+	if err := shim.CopyTree(src, dst); err != nil {
+		return nil, fmt.Errorf("publish %s: %w", rel, err)
+	}
+
+	pub.seen[rel] = src
 
 	return rel, nil
 }
 
-// outFilename mirrors Martian's StructMember.GetOutFilename: an explicit OutName
-// wins; a complex type (array/map/struct) or the builtin file/path types use the
-// bare name; any other (user) file type appends .<typename>.
-func (pub *publisher) outFilename(p ir.Param) string {
-	switch {
-	case p.OutName != "":
-		return p.OutName
-	case p.ArrayDim > 0 || p.MapDim > 0 || pub.structs[p.BaseType] != nil:
-		return p.Name
-	case p.BaseType == "file" || p.BaseType == "path":
-		return p.Name
-	default:
-		return p.Name + "." + p.BaseType
+// uniqueRel returns rel, or rel with a numeric suffix before its extension when
+// rel is already taken by a different source, so distinct colliding leaves keep
+// distinct published paths.
+func (pub *publisher) uniqueRel(rel string) string {
+	ext := path.Ext(rel)
+	stem := strings.TrimSuffix(rel, ext)
+
+	for i := 1; ; i++ {
+		cand := fmt.Sprintf("%s_%d%s", stem, i, ext)
+		if _, ok := pub.seen[cand]; !ok {
+			return cand
+		}
 	}
 }
 

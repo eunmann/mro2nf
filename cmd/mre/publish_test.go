@@ -198,3 +198,97 @@ func TestPublishOutsNonFilePassthrough(t *testing.T) {
 		t.Errorf("non-file passthrough mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// TestPublishOutsDeepNesting guards the dim arithmetic at depth: a map<txt[][]>
+// (MapDim=3) descends map -> array -> array, and a struct whose field is a
+// map<txt> nests as <param>/<field>/<key>.txt. Both are reachable shapes not
+// covered by the shallower tests.
+func TestPublishOutsDeepNesting(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := t.TempDir()
+	w := func(n string) string {
+		p := filepath.Join(srcDir, n)
+		if err := os.WriteFile(p, []byte(n), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		return p
+	}
+
+	params := []ir.Param{
+		{Name: "grid", BaseType: "txt", IsFile: true, MapDim: 3}, // map<txt[][]>
+		{Name: "cfg", BaseType: "Cfg", IsFile: true},             // struct{ map<txt> reports }
+	}
+	structs := map[string]*ir.StructType{
+		"Cfg": {Name: "Cfg", Fields: []ir.Param{{Name: "reports", BaseType: "txt", IsFile: true, MapDim: 1}}},
+	}
+	outs := map[string]any{
+		"grid": map[string]any{"k": []any{[]any{w("a.txt"), w("b.txt")}, []any{w("c.txt")}}},
+		"cfg":  map[string]any{"reports": map[string]any{"r1": w("d.txt"), "r2": w("e.txt")}},
+	}
+
+	got, err := publishOuts(dir, params, structs, outs)
+	if err != nil {
+		t.Fatalf("publishOuts: %v", err)
+	}
+
+	want := map[string]any{
+		"grid": map[string]any{"k": []any{
+			[]any{"grid/k/0/0.txt", "grid/k/0/1.txt"},
+			[]any{"grid/k/1/0.txt"},
+		}},
+		"cfg": map[string]any{"reports": map[string]any{
+			"r1": "cfg/reports/r1.txt",
+			"r2": "cfg/reports/r2.txt",
+		}},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("deep-nesting publish mismatch (-want +got):\n%s", diff)
+	}
+	for _, rel := range []string{
+		"grid/k/0/0.txt", "grid/k/0/1.txt", "grid/k/1/0.txt",
+		"cfg/reports/r1.txt", "cfg/reports/r2.txt",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+			t.Errorf("missing published file %s: %v", rel, err)
+		}
+	}
+}
+
+// TestPublishOutsCollisionDisambiguated guards that two distinct sources sharing
+// an explicit OutName both publish (the second gets a numeric suffix) rather than
+// the second silently overwriting/aliasing the first.
+func TestPublishOutsCollisionDisambiguated(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := t.TempDir()
+	w := func(n, content string) string {
+		p := filepath.Join(srcDir, n)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		return p
+	}
+
+	params := []ir.Param{
+		{Name: "a", BaseType: "txt", IsFile: true, OutName: "report.txt"},
+		{Name: "b", BaseType: "txt", IsFile: true, OutName: "report.txt"},
+	}
+	outs := map[string]any{"a": w("a.txt", "AAA"), "b": w("b.txt", "BBB")}
+
+	got, err := publishOuts(dir, params, nil, outs)
+	if err != nil {
+		t.Fatalf("publishOuts: %v", err)
+	}
+
+	if got["a"] != "report.txt" || got["b"] != "report_1.txt" {
+		t.Fatalf("collision not disambiguated: a=%v b=%v", got["a"], got["b"])
+	}
+	// Both files present with their own content — neither dropped.
+	if c, _ := os.ReadFile(filepath.Join(dir, "report.txt")); string(c) != "AAA" {
+		t.Errorf("report.txt content = %q, want AAA", c)
+	}
+	if c, _ := os.ReadFile(filepath.Join(dir, "report_1.txt")); string(c) != "BBB" {
+		t.Errorf("report_1.txt content = %q, want BBB", c)
+	}
+}

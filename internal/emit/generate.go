@@ -770,16 +770,19 @@ func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx
 // Map-call fork kinds — the ir.Call.MapMode values derived from Martian's
 // CallMode (map_call_source.go).
 const (
-	mapModeMap   = "map"
-	mapModeArray = "array"
+	mapModeMap     = "map"
+	mapModeArray   = "array"
+	mapModeUnknown = "unknown"
 )
 
-// mapModeArg is the static fork kind for a map call: "map" for a typed-map
-// source, else "array". It drives the fork/merge so an empty or null typed
-// source resolves to the typed empty ([]/{}) instead of being sniffed from the
-// runtime value (which mis-classifies null).
+// mapModeArg is the static fork kind for a map call: "map" for a typed-map (or
+// not-statically-resolved "unknown") source, else "array". It drives the
+// fork/merge so an empty or null typed source resolves to the typed empty
+// ([]/{}) instead of being sniffed from the runtime value (which mis-classifies
+// null). "unknown" maps to "map" to stay consistent with forkDims (emit.go),
+// whose output-projection treats an unknown mode as a keyed map.
 func mapModeArg(c ir.Call) string {
-	if c.MapMode == mapModeMap {
+	if c.MapMode == mapModeMap || c.MapMode == mapModeUnknown {
 		return mapModeMap
 	}
 

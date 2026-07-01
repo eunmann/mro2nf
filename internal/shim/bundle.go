@@ -170,8 +170,10 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		// A declared output file the stage legitimately never wrote: keep the path
 		// string unchanged rather than erroring on stat. Martian keeps it as-is at
 		// stage finalize and only nulls it at publish; a downstream join may still
-		// need the path string. See bug 4.
-		if _, err := os.Lstat(src); os.IsNotExist(err) {
+		// need the path string. See bug 4. os.Stat (not Lstat) follows symlinks so
+		// a dangling symlink is treated as absent too, rather than aborting the
+		// bundle in CopyTree's symlink resolution (matching publish's emitFile).
+		if _, err := os.Stat(src); os.IsNotExist(err) {
 			return src, nil
 		}
 

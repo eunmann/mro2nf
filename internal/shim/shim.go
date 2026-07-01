@@ -352,6 +352,7 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	runErr := cmd.Wait()
 
 	stop() // join the monitor before reading its verdict; no sample in flight
+	mon.recordExitPeak(cmd.ProcessState)
 	forwardStageLog(meta)
 
 	// mrjob routes a stage assertion to _assert (with the ASSERT: prefix stripped)
@@ -447,6 +448,7 @@ func (a *adapterIO) run(ctx context.Context, cmd *exec.Cmd, phase, meta string, 
 	stageErr, _ := io.ReadAll(a.errR)
 	waitErr := cmd.Wait()
 	stop() // join the monitor before reading its verdict; no sample in flight
+	mon.recordExitPeak(cmd.ProcessState)
 	forwardStageLog(meta)
 
 	// A stage-reported message (incl. an ASSERT on fd 4) is authoritative and is

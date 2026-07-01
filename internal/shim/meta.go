@@ -91,23 +91,12 @@ func skeletonOut(p ir.Param, files string, tbl *types.Table) any {
 		// stage populates it; pre-filling a path would not match Martian.
 		return nil
 	case p.IsFile:
-		return filepath.Join(files, outFilename(p))
+		// A scalar file leaf: pre-fill its default writable path. The shared
+		// OutFilename rule is the same one publish uses, so the stage writes to
+		// exactly where publish later looks.
+		return filepath.Join(files, types.OutFilename(p, tbl.IsStruct))
 	default:
 		return nil
-	}
-}
-
-// outFilename chooses a scalar file output's default basename, matching
-// Martian's StructMember.GetOutFilename: an explicit OutName wins; the builtin
-// file/path types use the bare name; a user file type appends .<typename>.
-func outFilename(p ir.Param) string {
-	switch {
-	case p.OutName != "":
-		return p.OutName
-	case p.BaseType == "file" || p.BaseType == "path":
-		return p.Name
-	default:
-		return p.Name + "." + p.BaseType
 	}
 }
 
@@ -226,7 +215,14 @@ func resolveResources(chunk, res Resources) Resources {
 		eff.Special = res.Special
 	}
 
-	eff.VMemGB = absResource(coalesce(chunk.VMemGB, coalesce(res.VMemGB, eff.MemGB+extraVMemGB)))
+	// vmem defaults to the resolved memory plus the standard headroom. Matching
+	// Martian's remote GetSystemReqs, any resolved vmem below 1 GB (an unset 0, or
+	// a too-small explicit value) is recomputed from memory rather than used
+	// as-is.
+	eff.VMemGB = absResource(coalesce(chunk.VMemGB, res.VMemGB))
+	if eff.VMemGB < 1 {
+		eff.VMemGB = eff.MemGB + extraVMemGB
+	}
 
 	return eff
 }
