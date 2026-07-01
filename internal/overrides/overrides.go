@@ -67,7 +67,7 @@ func mapField(stage, field string, val json.RawMessage) (string, string, string)
 		phase, base = "", field
 	}
 
-	if _, known := phaseSuffixes[phase]; !known {
+	if _, _, known := phaseSuffixes(phase); !known {
 		return "", "", "unrecognized phase prefix"
 	}
 
@@ -91,16 +91,25 @@ func mapField(stage, field string, val json.RawMessage) (string, string, string)
 	}
 }
 
-// phaseSuffixes maps an mrp override phase prefix to the two process-name
-// suffixes that phase runs under: the plain family (STAGE_MAIN, and its keyed
-// _K variant via the trailing .*) and the fused per-call alias family
+// phaseSuffixes returns the two process-name suffixes an mrp override phase
+// prefix runs under: the plain family (STAGE_MAIN, and its keyed _K variant via
+// the trailing .*) and the fused per-call alias family
 // (STAGE_<n>_<pipe>__<call>_MN). A stage-level field ("" phase) has no suffix —
-// it applies to every phase of the stage.
-var phaseSuffixes = map[string][2]string{
-	"":      {"", ""},
-	"split": {"_SPLIT", "_SP"},
-	"chunk": {"_MAIN", "_MN"},
-	"join":  {"_JOIN", "_JN"},
+// it applies to every phase of the stage. The bool is false for an unknown
+// phase; the returns are (plain suffix, fused suffix, known).
+func phaseSuffixes(phase string) (string, string, bool) {
+	switch phase {
+	case "":
+		return "", "", true
+	case "split":
+		return "_SPLIT", "_SP", true
+	case "chunk":
+		return "_MAIN", "_MN", true
+	case "join":
+		return "_JOIN", "_JN", true
+	default:
+		return "", "", false
+	}
 }
 
 // fusedPrefix matches the fused per-call process-name prefix the BIND fold
@@ -113,21 +122,21 @@ const fusedPrefix = `STAGE_\d+_.+__`
 // regex for split/chunk/join. Each regex covers the plain processes, the keyed
 // fork variants (_MAP/_K, via the trailing .*), and the fused per-call names.
 func selector(stage, phase string) string {
-	suf := phaseSuffixes[phase]
+	plain, fused, _ := phaseSuffixes(phase)
 
 	if stage == "" {
 		if phase == "" {
 			return "" // global process default
 		}
 
-		return fmt.Sprintf(".*(%s|%s).*", suf[0], suf[1])
+		return fmt.Sprintf(".*(%s|%s).*", plain, fused)
 	}
 
 	if phase == "" {
 		return fmt.Sprintf("(%s)?%s.*", fusedPrefix, stage)
 	}
 
-	return fmt.Sprintf("(%s%s|%s%s%s).*", stage, suf[0], fusedPrefix, stage, suf[1])
+	return fmt.Sprintf("(%s%s|%s%s%s).*", stage, plain, fusedPrefix, stage, fused)
 }
 
 // render emits the process{} block: the global defaults first, then a withName
