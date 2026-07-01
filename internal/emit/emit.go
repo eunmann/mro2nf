@@ -286,8 +286,9 @@ func checkCompMrjob(prog *ir.Program, mrjob string) error {
 
 // checkSupported rejects programs that use a Martian construct with no faithful
 // Nextflow lowering before any output is written. It reuses mapProjectDepth's
-// shape analysis: a negative depth marks an array-of-typed-map field projection
-// (array<map<S>>.field), which the binder would silently mis-navigate.
+// shape analysis: a negative depth marks a nested typed-map field projection
+// (map<map<S>>.field, or maps nested inside an array), which the binder would
+// silently mis-navigate. The array<map<S>>.field shape IS supported (MapInArray).
 func checkSupported(prog *ir.Program) error {
 	for _, name := range sortedKeys(prog.Pipelines) {
 		p := prog.Pipelines[name]
