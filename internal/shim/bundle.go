@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -177,10 +176,13 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 			return src, nil
 		}
 
-		// Each leaf gets its own numbered subdirectory so its original basename
-		// is preserved across every bundle hop (the published name stays stable)
-		// while distinct leaves never collide.
-		rel := filepath.Join(bundleFiles, strconv.Itoa(n), filepath.Base(src))
+		// Each leaf is staged under a flat, ordinal name (f/L0000, f/L0001, …) in
+		// canonical walk order. The transport basename is not load-bearing — publish
+		// names every leaf from the manifest via OutFilename, and the adapter reads
+		// inputs by absolute path — so leaves are renumbered rather than carrying
+		// their original basename through every hop. This flat, predictable naming is
+		// what lets the leaves be staged as individual path items (epic #18 / #13).
+		rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d", n))
 		n++
 
 		dst := filepath.Join(dir, rel)

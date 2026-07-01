@@ -46,14 +46,19 @@ func TestBundleRoundTrip(t *testing.T) {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
-	// The file was copied into the bundle and the payload now holds a marker.
+	// The file was staged into the bundle under a flat ordinal leaf name (no
+	// original basename in transport) and the payload now holds its marker.
 	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(raw), "@mre:file:f/") {
-		t.Errorf("data.json should contain a file marker, got: %s", raw)
+	if !strings.Contains(string(raw), "@mre:file:f/L0000") {
+		t.Errorf("data.json should contain a flat ordinal file marker, got: %s", raw)
+	}
+
+	if _, err := os.Stat(filepath.Join(bundle, "f", "L0000")); err != nil {
+		t.Errorf("leaf should be staged as f/L0000: %v", err)
 	}
 
 	// Read it back; the marker resolves to an absolute path that exists.
