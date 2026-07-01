@@ -35,13 +35,14 @@ local number is the portable stand-in for the S3-object metric.
 Both live under `bench/` and exercise the two costly patterns the epic targets:
 
 - **`chain`** — one file (`MAKEBIG`) carried through a deep chain of pass-through
-  stages (`PASSFILE` ×4). The current bundle data plane re-materializes the file
-  into a new bundle at every bind/stage hop, so it is transferred O(chain depth)
-  times. Emit-once routing (#14) should drive this toward multiplier 1.
+  stages (`PASSFILE` ×4). The pre-epic bundle data plane re-materialized the file
+  into a new bundle at every bind/stage hop, transferring it O(chain depth)
+  times; emit-once routing (#14) and the BIND fold (#16) cut that (see the
+  baseline below).
 - **`split`** — a split stage whose large stage-level file arg (`payload`) is
   broadcast to every chunk via `chunks.combine(args)`, even though `main` never
-  reads it: O(N) redundant staging over an N-way split. #15 should stage a
-  stage-level file only into the chunks that consume it.
+  reads it: O(N) redundant staging over an N-way split. Remaining headroom for
+  consumer-aware split staging (#15).
 
 ## Metrics
 
@@ -51,7 +52,9 @@ reporting with a direct probe-file measurement:
 | metric       | source | meaning |
 |--------------|--------|---------|
 | `tasks`      | `-with-trace` rows | task executions |
+| `plumbing_tasks` / `stage_tasks` | trace, split by process name | tasks that add no Martian stage work (`BIND_*`/`FORK_*`/`MERGE_*`/`DISABLE_*`, `BUILD_ENTRY_ARGS`, `LAYOUT`, `PUBLISH_LEAF`) vs. real stage tasks |
 | `processes`  | trace `name` (chunk tags collapsed) | distinct processes |
+| `plumbing_processes` / `stage_processes` / `plumbing` | same split | distinct plumbing vs. stage processes, and the plumbing names seen |
 | `edges`      | `-with-dag` mermaid | static process wiring (BIND nodes show here) |
 | `wchar`/`rchar` | trace | aggregate characters written/read (copy-volume proxy) |
 | `refs`       | work-dir scan | task dirs into which the probe file is staged/materialized |
@@ -76,12 +79,16 @@ and compare against these shapes.
 
 ## Baseline (local executor)
 
-Recorded for the current bundle-copy design:
+Recorded after the data-plane epic landed (de-bundle #13, emit-once routing #14,
+BIND folding #16, funnel-free publish #12); `bench/baseline.json` is the source
+of truth:
 
 | benchmark | tasks | processes | edges | refs | multiplier |
 |-----------|-------|-----------|-------|------|------------|
-| chain     | 13    | 13        | 40    | 11   | 11.0       |
-| split     | 22    | 7         | 28    | 21   | 21.0       |
+| chain     | 8     | 5         | 22    | 6    | 6.0        |
+| split     | 20    | 5         | 25    | 19   | 19.0       |
 
-Both should fall sharply as de-bundling (#13), emit-once routing (#14), split
-staging (#15), BIND folding (#16), and in-place publish (#12) land.
+(For comparison, the pre-epic bundle-copy design measured chain 13 tasks /
+refs 11 / ×11.0 and split 22 / 21 / ×21.0.) The split multiplier's remaining
+headroom is consumer-aware split staging (#15); further drops re-record via
+`BENCH_UPDATE=1 make bench` so the gate ratchets downward.

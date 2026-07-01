@@ -93,6 +93,8 @@ internal/
   emit/        → IR -> Nextflow (.nf + nextflow.config) templates
   types/       → type-directed file-leaf walk (shared by emit + shim)
   shim/        → bundle I/O, path rewrite, Martian adapter launch
+  bind/        → resolve call bindings into _args (refs, projections, fan-in)
+  overrides/   → mrp --overrides file -> Nextflow -c config
   logging/     → zerolog setup (stderr)
   apperror/    → sentinel + typed errors
 ```
@@ -150,7 +152,7 @@ example. For a simple pipeline that calls a split stage `SUM_SQUARES` then
 `REPORT`, the project is:
 
 ```
-main.nf                              ← entry workflow + PUBLISH + BUILD_ENTRY_ARGS
+main.nf                              ← entry workflow + LAYOUT/PUBLISH_LEAF + BUILD_ENTRY_ARGS
 modules/
   stage_SUM_SQUARES.nf               ← one module per stage
   stage_REPORT.nf
@@ -269,6 +271,20 @@ referenced upstream call (`path 'in_<callid>'`), and runs `mre bind -spec
 spec.json …` to produce the callee's args bundle. The `return` bind builds the
 pipeline's output bundle the same way.
 
+Two optimizations remove standalone BINDs where they would be pure plumbing:
+
+- **Fold BIND into the stage task (#16).** A plain (non-mapped, enabled,
+  non-preflight) stage call runs `mre bind` at the head of the *same* task as
+  its stage phase — a fused per-call process named
+  `STAGE_<n>_<pipeline>__<call>` (for a split stage, a fused bind+split process
+  plus `_SP`/`_MN`/`_JN`-aliased phase processes). The call's referenced files
+  stage into that one task once, instead of into a BIND task and again into the
+  stage task.
+- **Emit-once forward (#14).** When a call's bindings (or the pipeline's
+  returns) forward one upstream call's entire output bundle verbatim, no
+  process is emitted at all: the producer's output channel is routed straight
+  to the consumer.
+
 ### 4.4 Map / fork calls → FORK + MERGE (and keyed variants)
 
 When a call is *mapped* (run once per element of an array/map input — Martian's
@@ -308,13 +324,19 @@ calls gate per fork.
   key up in `params.job_resources` (the `MRO_JOBRESOURCES` analog; empty by
   default, populated per deployment for grid executors).
 
-### 4.7 Outputs → PUBLISH
+### 4.7 Outputs → LAYOUT + PUBLISH_LEAF
 
-The entry pipeline's final output bundle is handed to a **PUBLISH process**
-(`mre publish`) that walks the output type, copies every file-typed output
-(including nested ones inside structs/arrays/maps) into the results directory
-under its basename, and writes the human-readable `pipeline_outs.json`. See §10
-for where "results" lives on each target.
+The entry pipeline's final outputs are published without a single-node funnel
+(#12) by a pair of processes. **LAYOUT** stages only the final bundle's sidecar
+(`data.json`) and runs `mre publish-layout`, which walks the output type and
+computes the mrp-style `outs/` layout — every file output named by Martian's
+`GetOutFilename` rule, arrays/maps/structs nested into index/key/field
+subdirectories — plus the human-readable `pipeline_outs.json` and a compressed
+machine-readable index, `manifest.json.gz` (#11). **PUBLISH_LEAF** then stages
+each file leaf individually and publishes it to its `outs/` path via
+`publishDir saveAs`, so the result set lands in parallel across tasks. The
+published tree matches an mrp pipestance `outs/` (verified by
+`test/e2e/mrp_diff.sh`); see §10 for where "results" lives on each target.
 
 ---
 
@@ -337,7 +359,10 @@ writes an output bundle:
 - **`mre merge`** — gather per-fork output bundles into one array/map output.
 - **`mre entryargs`** — build the top-level args bundle from the baked defaults
   overlaid with launch-time run parameters (§8).
-- **`mre publish`** — produce the final results directory + `pipeline_outs.json`.
+- **`mre publish-layout`** — compute the mrp-style `outs/` layout from the final
+  sidecar alone (no file leaves staged), writing `layout.json`,
+  `pipeline_outs.json`, and `manifest.json.gz` for the PUBLISH_LEAF fan-out
+  (§4.7). (`mre publish` is the older copy-everything form of the same walk.)
 
 Under the hood each phase hands the stage to the **real Martian adapter** —
 `martian_shell.py` for `py` stages, an exec wrapper for `exec` stages, and the
@@ -516,9 +541,9 @@ feature is checked against the real `mrp` output. The validation tiers:
 
 - **Unit tests** — the IR, binder, type walk, shim ABI, and the generated
   Nextflow text.
-- **Local e2e** (`make test-e2e`) — 59 `.mro` fixtures transpiled, run under
-  Nextflow, and diffed against committed `mrp` goldens (plus `cloud_sim.sh`, the
-  object-store data plane under copy-staging).
+- **Local e2e** (`make test-e2e`) — 62 cases over 57 `.mro` fixtures transpiled,
+  run under Nextflow, and diffed against committed `mrp` goldens (plus
+  `cloud_sim.sh`, the object-store data plane under copy-staging).
 - **Container isolation** (`make test-e2e-docker`) — the same pipelines under the
   Docker executor, where each task mounts only its work dir. This is the
   license-free proxy for the cloud "no shared filesystem" model and the regression
@@ -530,10 +555,11 @@ feature is checked against the real `mrp` output. The validation tiers:
   and stage logs. See [`LIVE_AWS_TEST.md`](LIVE_AWS_TEST.md).
 
 The known **divergences** are documented in [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md)
-and are all behavior-only (never output-affecting): `preflight` runs as an
-ordinary stage (no early-abort gate), `local`/`volatile` are no-ops (no VDR /
-mid-run work-dir reclamation), and the published `results/` use a flat
-`publishDir` layout rather than `mrp`'s nested `outs/` tree. The transpiler is
-**loud** about anything it cannot lower faithfully — unsupported constructs are
-hard transpile errors, and documented behavioral no-ops are logged as warnings at
-transpile time.
+and are all behavior-only (never output-affecting): a `preflight` bound to
+pipeline inputs gates the rest of the pipeline (mrp's early abort), but one
+bound to a call output runs in plain DAG order; `local`/`volatile` are no-ops
+(no VDR / mid-run work-dir reclamation); and the published `outs/` tree is
+copied into place rather than mrp's move+symlink (same layout and contents).
+The transpiler is **loud** about anything it cannot lower faithfully —
+unsupported constructs are hard transpile errors, and documented behavioral
+no-ops are logged as warnings at transpile time.

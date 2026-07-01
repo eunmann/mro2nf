@@ -9,14 +9,19 @@ design plan at `~/.claude/plans/bright-booping-rose.md`.
 
 ```
 cmd/mro2nf/            → transpiler CLI: .mro -> Nextflow project
-cmd/mre/             → runtime shim: runs one stage phase (split|main|join)
-                       against the real Martian adapter inside a NF process
+                       (+ `overrides` subcommand: mrp --overrides -> -c config)
+cmd/mre/             → runtime shim: runs stage phases (split|main|join)
+                       against the real Martian adapter inside a NF process,
+                       plus the data-plane subcommands the generated processes
+                       call (bind|forkbind|merge|publish-layout|entryargs)
 internal/
   frontend/          → parse .mro via github.com/martian-lang/martian/syntax
   ir/                → normalized transpiler IR (stages, pipelines, bindings)
   emit/              → IR -> Nextflow (.nf + nextflow.config) templates
   types/             → type-directed file-leaf walk (shared by emit + shim)
   shim/              → _args/_jobinfo/_outs I/O, path rewrite, adapter launch
+  bind/              → resolve call bindings into _args (refs, projections, fan-in)
+  overrides/         → mrp --overrides file -> Nextflow -c config
   logging/           → zerolog setup (stderr)
   apperror/          → sentinel + typed errors
 ```

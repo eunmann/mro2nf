@@ -40,8 +40,10 @@ targets — see **[`docs/TRANSPILER.md`](docs/TRANSPILER.md)**.
 ## Layout
 
 ```
-cmd/mro2nf/      transpiler CLI: .mro -> Nextflow project
-cmd/mre/       runtime shim: runs one stage phase against the Martian adapter
+cmd/mro2nf/      transpiler CLI: .mro -> Nextflow project (+ `overrides` subcommand)
+cmd/mre/       runtime shim: runs stage phases (split|main|join) against the
+               Martian adapter, plus the data-plane subcommands the generated
+               processes call (bind, forkbind, merge, publish-layout, entryargs)
 internal/
   frontend/    parse .mro via github.com/martian-lang/martian/syntax -> IR
   ir/          normalized transpiler IR
@@ -49,6 +51,7 @@ internal/
   types/       type-directed file-leaf walk + scalar coercion + manifest
   shim/        _args/_jobinfo/_outs I/O, bundle data plane, adapter launch
   bind/        resolve call bindings into _args (refs, projections, fan-in)
+  overrides/   mrp --overrides file -> Nextflow -c config
   logging/     zerolog setup    apperror/  typed errors
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
@@ -62,7 +65,7 @@ docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
 
 ## Quickstart
 
-Prerequisites: Go ≥ 1.24, Java 17+, [Nextflow](https://www.nextflow.io)
+Prerequisites: Go ≥ 1.26, Java 17+, [Nextflow](https://www.nextflow.io)
 (`curl -s https://get.nextflow.io | bash`), Python 3.
 
 ```bash
@@ -89,6 +92,10 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-container <image>` | set `process.container` for container backends (AWS Batch, k8s) |
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
 | `-monitor` | cap each stage's virtual memory at its `vmem_gb` via `prlimit` (mrp `--monitor`) |
+
+`mro2nf overrides <file>` converts an mrp `--overrides` JSON into an equivalent
+Nextflow `-c` config overlay (per-stage `memory`/`cpus` retuning at launch) —
+see [`docs/RUNTIME_TUNING.md`](docs/RUNTIME_TUNING.md).
 
 For `-target local` the `-mre`/`-shell`/`-mrjob`/stage paths are baked into the
 generated scripts, so set them to the paths that will exist **where the pipeline
@@ -130,8 +137,8 @@ orchestrator, so "correct" means byte-identical to Martian:
 
 - **Unit** (`make test`): in-process tests of the IR, binder, type walk, shim
   ABI, and the generated Nextflow text.
-- **Local e2e** (`make test-e2e`): 59 `.mro` fixtures transpiled, run under
-  Nextflow, diffed vs committed `mrp` goldens — covering every supported feature,
+- **Local e2e** (`make test-e2e`): 62 cases over 57 `.mro` fixtures transpiled,
+  run under Nextflow, diffed vs committed `mrp` goldens — covering every supported feature,
   including file-typed entry inputs (scalar, `file[]`, `map<file>`,
   struct-with-file) supplied at launch via `-params-file`.
 - **Container isolation** (`make test-e2e-docker`): 19 checks (14 fixtures + 5
@@ -144,9 +151,10 @@ orchestrator, so "correct" means byte-identical to Martian:
   and **AWS HealthOmics**, all byte-identical to `mrp` — exercising all three
   adapters (`py`/`exec`/`comp`), file inputs/outputs through the object store,
   directory outputs, retry/ASSERT handling, and stage logs. The most recent round
-  re-ran 15 fixtures in parallel on Batch after the entry-file staging fix,
-  including a same-basename `file[]` case that proves per-leaf staging never
-  collides. See [`docs/LIVE_AWS_TEST.md`](docs/LIVE_AWS_TEST.md) and
+  (round 5, after the data-plane epic) re-validated 13 fixtures in parallel on
+  Batch and 4 on HealthOmics, with the emitted `manifest.json.gz` verified
+  set-equal to the published S3 outputs on both backends.
+  See [`docs/LIVE_AWS_TEST.md`](docs/LIVE_AWS_TEST.md) and
   [`deploy/awsbatch-cdk/`](deploy/awsbatch-cdk/) (the CDK that provisions it).
 
 ## Running on a cluster
@@ -249,9 +257,10 @@ allocation it resolved. (The `special` key maps to `clusterOptions` through a
 `special = "gpu"` / `"gpu:N"` instead requests N GPUs via the `accelerator`
 directive on the compute phase — see [`docs/GPU.md`](docs/GPU.md) for the AWS
 Batch / HealthOmics setup. A few things diverge
-in layout or timing but never in output: mid-run VDR deletion, nested maps on a
-real object-store work dir, and mrp's nested `outs/` tree versus Nextflow's flat
-`publishDir`.
+in timing or mechanism but never in output: there is no mid-run VDR deletion
+(work dirs are retained), nested maps stage whole bundle dirs on a real
+object-store work dir, and the published `outs/` tree is copied into place
+(mrp moves + symlinks) — the tree's layout and contents match mrp's.
 
 ## Development
 

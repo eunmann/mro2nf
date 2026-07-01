@@ -121,14 +121,14 @@ out of scope for a transpiler.
 
 | Feature | Status | Test |
 |---|---|---|
-| file outputs published to results (path→basename rewrite) | ✅ | e2e `file_min` |
+| file outputs published to results (mrp `outs/` layout, `GetOutFilename` naming) | ✅ | e2e `file_min`, `mrp_diff.sh` (tree diff vs real mrp) |
 | inter-stage file passing (shared FS) | ✅ | e2e `file_chain` |
 | inter-stage file passing (object store, no shared FS) | ✅ #13 (bundle-dir channels: files travel with their JSON as `@mre:file:` markers; the shim absolutizes on input, copies+relativizes on output) | e2e `cloud_sim`, `docker_iso`, unit `TestBundleRoundTrip` |
 | auxiliary files reach isolated workers (types.json, bindspecs) | ✅ each task stages only the files it needs — the shared `types.json` plus, for a bind/fork process, its own `spec.json` — as individual `path` inputs, never referenced by `${projectDir}` (invisible on an AWS Batch / HealthOmics worker, which mounts only its work dir). A task transfers only its own bindspec, not every call's | e2e `docker_iso` (container that does not mount the project dir), unit `TestEmitAssetsStaged` |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ #13 (PUBLISH walks the entry's output type, descending file-bearing structs) | e2e `map_file`, `map_file_keyed`, `struct_of_file`; unit `internal/types` |
 | stage / pipeline `retain` | ⚠️ trivially satisfied (Nextflow keeps `work/`) | parse |
 | VDR modes (disable/post/rolling/strict) timing | 🚫 no native dependency-gated mid-run deletion | — (terminal-state only) |
-| `outs/` move+symlink layout | ⚠️ → `publishDir` (different mechanism, same result) | e2e `file_min` |
+| `outs/` move+symlink layout | ⚠️ files are *copied* into an mrp-style `outs/` tree via `publishDir` (same layout and contents; mrp moves + symlinks) | e2e `file_min`, `mrp_diff.sh` |
 
 ## Running / inspecting — running-pipelines / inspecting-pipelines
 
@@ -171,7 +171,9 @@ out of scope for a transpiler.
     target); fan-out needs a common-descendant barrier or falls back to post-run
     cleanup, since "last consumer" is a runtime fact. Future work; today the whole
     `work/` tree is retained (higher peak disk, identical outputs).
-  - **live UI / HTTP API / OOM auto-escalation** — no faithful Nextflow analog.
+  - **live UI / HTTP API** — no faithful Nextflow analog. (OOM handling is
+    covered: memory directives grow with `task.attempt`, so a memory-killed
+    stage retries with more — see the resources table above.)
 - Scheduler-*allocation* fidelity is now broad: per-chunk `cpus`/`memory`, the
   split-returned `join` override, and `special` → `clusterOptions` all reach the
   scheduler, and every phase reports its resolved allocation in `_jobinfo`, so a
@@ -181,7 +183,8 @@ out of scope for a transpiler.
   is passed to the shim via `-vmemgb` on every phase, so `--monitor` caps virtual
   memory (and `_jobinfo` reports it) at the declared value (a per-chunk
   `__vmem_gb` still wins for main; a split-returned join override refines it).
-- Remaining ⚠️ items are storage-*layout* fidelity (flat `publishDir` results vs
-  mrp's nested `outs/` tree; published names use the written basename, with
-  collisions disambiguated, rather than mrp's `GetOutFilename`) — no
-  output-observable correctness impact.
+- Remaining ⚠️ items are storage-*mechanism* fidelity: the published `outs/`
+  tree now reproduces mrp's nested layout and `GetOutFilename` naming
+  (verified by `test/e2e/mrp_diff.sh` against real mrp), but files are copied
+  into place rather than moved + symlinked, and `work/` is retained (no VDR) —
+  no output-observable correctness impact.
