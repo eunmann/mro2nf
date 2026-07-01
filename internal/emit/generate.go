@@ -1416,22 +1416,42 @@ func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
 // bundle, copies every file-typed output (including nested ones) into the
 // results dir under its basename, and writes the published outs JSON. The staged
 // bundle is removed before output globbing so only published artifacts remain.
+// genPublish emits the terminal publish as two processes that avoid a single-node
+// funnel (#12): LAYOUT stages ONLY the final sidecar (data.json) — no file leaves
+// — to compute the outs/ layout (leaf basename -> outs/ rel path) and the
+// pipeline_outs.json value tree; PUBLISH_LEAF then stages each leaf individually
+// and publishes it into outs/<rel>, so the result set is published in parallel
+// across tasks rather than round-tripped through one node. The physical outs/
+// tree (which downstream pipelines consume) is unchanged.
 func genPublish(b *strings.Builder, entry string, g genCtx) {
-	fmt.Fprintf(b, `process PUBLISH {
-  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null
+	fmt.Fprintf(b, `process LAYOUT {
+  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
   input:
-    %[3]s
+    path 'data.json'
     path 'types.json'
   output:
-    path '*'
+    path 'layout.json', emit: layout
+    path 'pipeline_outs.json'
+    path 'manifest.json.gz'
   script:
     """
-    "%[1]s" publish -bundle bundle -dir .%[2]s
-    rm -rf bundle
+    "%[1]s" publish-layout -sidecar data.json -dir .%[2]s
     """
 }
 
-`, g.mre, g.producerArgs(entry, types.RoleOut), bundleInput("bundle"))
+process PUBLISH_LEAF {
+  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, saveAs: { outsPath }
+  input:
+    tuple val(outsPath), path(leaf)
+  output:
+    path leaf
+  script:
+    """
+    true
+    """
+}
+
+`, g.mre, g.producerArgs(entry, types.RoleOut))
 }
 
 // genEntry emits the top-level workflow. Each entry input is exposed as a
@@ -1525,7 +1545,14 @@ workflow {
 %[8]s  BUILD_ENTRY_ARGS(%[9]s)
   pipeargs = BUILD_ENTRY_ARGS.out.first()
   %[5]s(pipeargs)
-  PUBLISH(%[5]s.out, types)
+  // Publish without a single-node funnel (#12): LAYOUT reads only the sidecar to
+  // compute the outs/ layout; PUBLISH_LEAF publishes each leaf into place in
+  // parallel. multiMap splits the final output tuple so both consume it safely.
+  ep = %[5]s.out.multiMap { s, l -> side: s; leaves: l }
+  LAYOUT(ep.side, types)
+  lmap = LAYOUT.out.layout.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
+  leaves = ep.leaves.flatMap { l -> (l instanceof List ? l : [l]).collect { leaf -> tuple(leaf.name, leaf) } }
+  PUBLISH_LEAF(leaves.combine(lmap).flatMap { base, leaf, m -> (m[base] ?: []).collect { rel -> tuple(rel, leaf) } })
 }
 `, decls.String(), g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
 		fileInputs.String(), flatFlag, fileChans.String(), strings.Join(callArgs, ", "),

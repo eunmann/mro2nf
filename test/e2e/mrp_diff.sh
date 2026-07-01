@@ -44,10 +44,12 @@ CASES=(
 )
 
 # tree DIR EXCLUDE -> "relpath  sha256" for every regular file, sorted. An
-# absent dir (a pipeline with no file outputs) yields an empty tree.
+# absent dir (a pipeline with no file outputs) yields an empty tree. manifest.json.gz
+# is a Nextflow-only metadata index (like pipeline_outs.json), not a pipeline
+# output, so it is excluded from the outs/ tree comparison.
 tree() {
     [ -d "$1" ] || return 0
-    ( cd "$1" && find . -type f ! -name "$2" -printf '%P\n' | LC_ALL=C sort |
+    ( cd "$1" && find . -type f ! -name "$2" ! -name 'manifest.json.gz' -printf '%P\n' | LC_ALL=C sort |
         while IFS= read -r f; do printf '%s  %s\n' "$f" "$(sha256sum "$f" | cut -d' ' -f1)"; done )
 }
 
