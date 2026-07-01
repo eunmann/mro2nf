@@ -12,12 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # Unix targets only: the mre runtime shim drives the Martian adapter ABI
+        # (process groups, RSS/prlimit accounting) which is Unix-specific, and the
+        # generated pipelines run on Linux backends. Windows is not supported.
         include:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
           - { goos: darwin, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
-          - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -29,10 +31,8 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          ext=""
-          [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
           for bin in mro2nf mre; do
-            out="${bin}-${{ matrix.goos }}-${{ matrix.goarch }}${ext}"
+            out="${bin}-${{ matrix.goos }}-${{ matrix.goarch }}"
             go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" "./cmd/${bin}"
           done
       - uses: softprops/action-gh-release@v3
