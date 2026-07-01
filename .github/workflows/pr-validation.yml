@@ -10,9 +10,12 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs for PR branches, but never for main: pushes to main
+# all share ref refs/heads/main, so cancel-in-progress there would leave merged
+# commits with no completed validation run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   lint:
@@ -28,7 +31,9 @@ jobs:
       - name: Check go mod tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
       - name: Check for vulnerabilities
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...
+        # Pinned so a new govulncheck release (or one needing a newer toolchain)
+        # cannot change CI behavior without a repo change.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 && govulncheck ./...
       # golangci-lint runs govet, so there is no separate `go vet` step.
       - uses: golangci/golangci-lint-action@v9
         with:
@@ -66,6 +71,10 @@ jobs:
     name: E2E (Nextflow vs mrp goldens)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      # The harnesses skip cleanly on a dev box missing a tool, but in CI a
+      # missing prerequisite must FAIL the job, not silently pass it.
+      E2E_REQUIRE: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -96,6 +105,8 @@ jobs:
     name: E2E (container isolation)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6

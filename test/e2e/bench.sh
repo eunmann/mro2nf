@@ -27,9 +27,16 @@ if ! command -v java >/dev/null 2>&1 && [ -s "$HOME/.sdkman/bin/sdkman-init.sh" 
     set -u
 fi
 
-command -v nextflow >/dev/null 2>&1 || { echo "SKIP[bench]: nextflow not found"; exit 0; }
-command -v java >/dev/null 2>&1 || { echo "SKIP[bench]: java not found"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP[bench]: python3 not found"; exit 0; }
+# A missing prerequisite skips locally but FAILS under E2E_REQUIRE=1 (set in
+# CI), so a runner-image regression cannot turn the gate into a silent skip.
+missing() {
+    [ "${E2E_REQUIRE:-0}" = "1" ] && { echo "FAIL[bench]: $1 (required by E2E_REQUIRE=1)"; exit 1; }
+    echo "SKIP[bench]: $1"
+    exit 0
+}
+command -v nextflow >/dev/null 2>&1 || missing "nextflow not found"
+command -v java >/dev/null 2>&1 || missing "java not found"
+command -v python3 >/dev/null 2>&1 || missing "python3 not found"
 
 export NXF_ANSI_LOG=false NXF_DISABLE_CHECK_LATEST=true
 export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx1g -XX:+UseSerialGC}"

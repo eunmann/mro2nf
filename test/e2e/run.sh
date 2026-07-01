@@ -39,7 +39,8 @@ if [[ "${1:-}" == "--one" ]]; then
         -mre "$ROOT/mre" \
         -shell "$ROOT/vendor-martian/python/martian_shell.py" \
         -mropath "$dir" ${mrjob_opt[@]+"${mrjob_opt[@]}"} \
-        "$dir/pipeline.mro" >/dev/null 2>&1 || { echo "FAIL[$name]: transpile"; exit 1; }
+        "$dir/pipeline.mro" >"$proj/transpile.log" 2>&1 ||
+        { echo "FAIL[$name]: transpile"; sed 's/^/    /' "$proj/transpile.log" | tail -5; exit 1; }
 
     # An *_override case exercises file-typed entry-input staging: it supplies the
     # file input(s) at launch via -params-file, so the run's output must reflect the
@@ -51,8 +52,8 @@ if [[ "${1:-}" == "--one" ]]; then
         params_opt=(-params-file params.json)
     fi
 
-    (cd "$proj" && nextflow run main.nf ${params_opt[@]+"${params_opt[@]}"} >/dev/null 2>&1) ||
-        { echo "FAIL[$name]: nextflow"; exit 1; }
+    (cd "$proj" && nextflow run main.nf ${params_opt[@]+"${params_opt[@]}"} >run.log 2>&1) ||
+        { echo "FAIL[$name]: nextflow"; tail -5 "$proj/run.log" | sed 's/^/    /'; exit 1; }
 
     # file_min additionally verifies the published file's content.
     if [[ "$name" == "file_min" ]]; then
@@ -72,9 +73,17 @@ PY
 fi
 
 # --- driver ---
-command -v nextflow >/dev/null 2>&1 || { echo "SKIP: nextflow not found"; exit 0; }
-command -v java >/dev/null 2>&1 || { echo "SKIP: java not found"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 not found"; exit 0; }
+# A missing prerequisite skips locally but FAILS under E2E_REQUIRE=1 (set in
+# CI), so a runner-image regression cannot turn the whole suite into a silent
+# green skip.
+missing() {
+    [ "${E2E_REQUIRE:-0}" = "1" ] && { echo "FAIL: $1 (required by E2E_REQUIRE=1)"; exit 1; }
+    echo "SKIP: $1"
+    exit 0
+}
+command -v nextflow >/dev/null 2>&1 || missing "nextflow not found"
+command -v java >/dev/null 2>&1 || missing "java not found"
+command -v python3 >/dev/null 2>&1 || missing "python3 not found"
 
 make build >/dev/null
 

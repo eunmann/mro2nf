@@ -19,9 +19,16 @@ if ! command -v java >/dev/null 2>&1 && [ -s "$HOME/.sdkman/bin/sdkman-init.sh" 
     set -u
 fi
 
-command -v nextflow >/dev/null 2>&1 || { echo "SKIP[spike13]: nextflow not found"; exit 0; }
-command -v java >/dev/null 2>&1 || { echo "SKIP[spike13]: java not found"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP[spike13]: python3 not found"; exit 0; }
+# A missing prerequisite skips locally but FAILS under E2E_REQUIRE=1 (set in
+# CI), so a runner-image regression cannot turn the check into a silent skip.
+missing() {
+    [ "${E2E_REQUIRE:-0}" = "1" ] && { echo "FAIL[spike13]: $1 (required by E2E_REQUIRE=1)"; exit 1; }
+    echo "SKIP[spike13]: $1"
+    exit 0
+}
+command -v nextflow >/dev/null 2>&1 || missing "nextflow not found"
+command -v java >/dev/null 2>&1 || missing "java not found"
+command -v python3 >/dev/null 2>&1 || missing "python3 not found"
 
 export NXF_ANSI_LOG=false NXF_DISABLE_CHECK_LATEST=true
 export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx1g -XX:+UseSerialGC}"
@@ -50,7 +57,10 @@ run_mode() {
     fi
 
     # Zero-copy: no bundle f/ dir, and each producer leaf exists once.
-    if find "$run/work" -type d -name f | grep -q .; then
+    # -print -quit stops find at the first match: a full `find | grep -q` can die
+    # of SIGPIPE when grep exits early, and under pipefail that 141 would skip
+    # this FAIL branch exactly when a violation was found.
+    if find "$run/work" -type d -name f -print -quit | grep -q .; then
         echo "FAIL[spike13:$label]: found a bundle f/ dir (expected zero byte-copy)"; return 1
     fi
     echo "OK[spike13:$label]: $n/$EXPECTED shapes staged, zero-copy"

@@ -17,9 +17,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-command -v docker >/dev/null 2>&1 || { echo "SKIP: docker not found"; exit 0; }
-docker info >/dev/null 2>&1 || { echo "SKIP: docker not usable"; exit 0; }
-command -v nextflow >/dev/null 2>&1 || { echo "SKIP: nextflow not found"; exit 0; }
+# A missing prerequisite skips locally but FAILS under E2E_REQUIRE=1 (set in
+# CI), so a runner-image regression cannot turn the whole suite into a silent
+# green skip.
+missing() {
+    [ "${E2E_REQUIRE:-0}" = "1" ] && { echo "FAIL: $1 (required by E2E_REQUIRE=1)"; exit 1; }
+    echo "SKIP: $1"
+    exit 0
+}
+command -v docker >/dev/null 2>&1 || missing "docker not found"
+docker info >/dev/null 2>&1 || missing "docker not usable"
+command -v nextflow >/dev/null 2>&1 || missing "nextflow not found"
 
 if ! command -v java >/dev/null 2>&1 && [ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]; then
     set +u
@@ -27,7 +35,7 @@ if ! command -v java >/dev/null 2>&1 && [ -s "$HOME/.sdkman/bin/sdkman-init.sh" 
     source "$HOME/.sdkman/bin/sdkman-init.sh"
     set -u
 fi
-command -v java >/dev/null 2>&1 || { echo "SKIP: java not found"; exit 0; }
+command -v java >/dev/null 2>&1 || missing "java not found"
 
 export NXF_ANSI_LOG=false
 export NXF_DISABLE_CHECK_LATEST=true
@@ -69,7 +77,7 @@ DOCKERFILE
 # (fork/merge + keyed), disabled call (null-bundle staging), split-returned join
 # override, and the `special` scheduler key.
 CASES=(
-    "split_test|testdata/split_test|testdata/split_test/expected/outs.json"
+    "split_test|testdata/split_test|testdata/split_test/expected/SUM_SQUARE_PIPELINE/fork0/_outs"
     "map_pipe|testdata/map_pipe|testdata/map_pipe/expected/outs.json"
     "disabled_map|testdata/disabled_map|testdata/disabled_map/expected/outs.json"
     "join_resources|testdata/join_resources|testdata/join_resources/expected/outs.json"
@@ -85,15 +93,9 @@ CASES=(
     "struct_file_array|testdata/struct_file_array|testdata/struct_file_array/expected/outs.json"
 )
 
-# split_test's golden is a stage _outs; everything else is a plain outs.json.
-declare -A GOLD=(
-    [split_test]="testdata/split_test/expected/SUM_SQUARE_PIPELINE/fork0/_outs"
-)
-
 fail=0
 for spec in "${CASES[@]}"; do
     IFS='|' read -r name dir golden <<<"$spec"
-    [ -n "${GOLD[$name]:-}" ] && golden="${GOLD[$name]}"
     proj="$WORK/$name"
 
     ./mro2nf -o "$proj" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \

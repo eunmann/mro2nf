@@ -68,7 +68,11 @@ run_one() {
     [ -d "$ROOT/$dir/input" ] && ln -s "$ROOT/$dir/input" "$tmp/input"
     if ! ( cd "$tmp" && MROPATH="$ROOT/$dir" "$MARTIAN_BIN/mrp" "$ROOT/$dir/pipeline.mro" mrp \
             --jobmode=local --localcores=2 --localmem=4 --disable-ui --nopreflight >"$tmp/mrp.log" 2>&1 ); then
-        echo "FAIL[$name]: mrp"; grep -iE "error|assert|traceback|no such|invalid" "$tmp/mrp.log" | head -5; return 1
+        echo "FAIL[$name]: mrp"
+        # `|| true`: in single-case mode run_one runs with set -e live, and a log
+        # with no matching keyword would otherwise abort before returning 1.
+        grep -iE "error|assert|traceback|no such|invalid" "$tmp/mrp.log" | head -5 || true
+        return 1
     fi
 
     # --- Nextflow ---

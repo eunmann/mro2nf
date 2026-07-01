@@ -64,11 +64,13 @@ for fx in "${FIXTURES[@]}"; do
         ( cd "$WORK/$fx" && docker build --platform linux/amd64 -t "${ECR}:${fx}" . >"$WORK/$fx.build.log" 2>&1 ) || { echo "BUILD_FAIL $fx"; continue; }
         docker push "${ECR}:${fx}" >"$WORK/$fx.push.log" 2>&1 || { echo "PUSH_FAIL $fx"; continue; }
     fi
-    ( cd "$WORK/$fx" && bash package.sh >/dev/null 2>&1 )
+    # Guarded like the build/push steps: under set -e an unguarded failure here
+    # would abort the whole harness instead of reporting and moving on.
+    ( cd "$WORK/$fx" && bash package.sh >/dev/null 2>&1 ) || { echo "PACKAGE_FAIL $fx"; continue; }
     WFID[$fx]="$(aws omics create-workflow --engine NEXTFLOW --main main.nf \
         --name "mro2nf-$fx-$$" --definition-zip "fileb://$WORK/$fx/workflow.zip" \
         --parameter-template "file://$WORK/$fx/parameter-template.json" \
-        --query id --output text)"
+        --query id --output text)" || { echo "REGISTER_FAIL $fx"; continue; }
     echo "REGISTERED $fx workflow=${WFID[$fx]}"
 done
 

@@ -83,7 +83,11 @@ if [ "${NO_BUILD:-}" != "1" ]; then
     export -f build_one transpile; export ROOT ECR MRE SHELL_PY WORK
     printf '%s\n' "${FIXTURES[@]}" | xargs -P "$RUN_PARALLEL" -I{} bash -c 'build_one "$@"' _ {}
 else
-    for fx in "${FIXTURES[@]}"; do transpile "$fx" >"$WORK/$fx.tp.log" 2>&1; done
+    # Guarded like the parallel path: under set -e an unguarded failure would
+    # abort the whole harness instead of reporting and moving on.
+    for fx in "${FIXTURES[@]}"; do
+        transpile "$fx" >"$WORK/$fx.tp.log" 2>&1 || echo "TRANSPILE_FAIL $fx"
+    done
 fi
 
 # --- phase 2: run on Batch (parallel) ---
@@ -110,7 +114,7 @@ for fx in "${FIXTURES[@]}"; do
     fi
     mrp_json="$(ls -d "$mt"/mrp/*/fork0/_outs 2>/dev/null | sort | head -1)"
     if ! aws s3 cp "s3://${BUCKET}/results/${fx}/pipeline_outs.json" "$mt/nf_outs.json" >/dev/null 2>&1; then
-        echo "FAIL[$fx]: no S3 pipeline_outs.json ($(grep -oE 'RUN_(OK|FAIL) '"$fx" <<<"" || true)see $WORK/$fx.run.log)"; rc=1; rm -rf "$mt"; continue
+        echo "FAIL[$fx]: no S3 pipeline_outs.json (see $WORK/$fx.run.log)"; rc=1; rm -rf "$mt"; continue
     fi
     if python3 "$ROOT/test/e2e/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" >/dev/null 2>&1; then
         echo "OK[$fx]: AWS Batch pipeline_outs matches mrp"

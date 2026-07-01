@@ -20,8 +20,16 @@ if ! command -v java >/dev/null 2>&1 && [ -s "$HOME/.sdkman/bin/sdkman-init.sh" 
     set -u
 fi
 
-command -v nextflow >/dev/null 2>&1 || { echo "SKIP: nextflow not found"; exit 0; }
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 not found"; exit 0; }
+# A missing prerequisite skips locally but FAILS under E2E_REQUIRE=1 (set in
+# CI), so a runner-image regression cannot turn the check into a silent skip.
+missing() {
+    [ "${E2E_REQUIRE:-0}" = "1" ] && { echo "FAIL: $1 (required by E2E_REQUIRE=1)"; exit 1; }
+    echo "SKIP: $1"
+    exit 0
+}
+command -v nextflow >/dev/null 2>&1 || missing "nextflow not found"
+command -v java >/dev/null 2>&1 || missing "java not found"
+command -v python3 >/dev/null 2>&1 || missing "python3 not found"
 
 export NXF_ANSI_LOG=false NXF_DISABLE_CHECK_LATEST=true
 export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx1g -XX:+UseSerialGC}"
@@ -29,7 +37,8 @@ export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx1g -XX:+UseSerialGC}"
 make build >/dev/null
 
 proj="$(mktemp -d)"
-trap 'rm -rf "$proj"' EXIT
+mf="" # the map_file project dir (created later); covered by the same trap
+trap 'rm -rf "$proj" ${mf:+"$mf"}' EXIT
 
 ./mro2nf -o "$proj" \
     -mre "$ROOT/mre" \
@@ -93,14 +102,13 @@ mf="$(mktemp -d)"
     -mropath testdata/map_file testdata/map_file/pipeline.mro >/dev/null
 cp "$proj/cloud.config" "$mf/cloud.config"
 if ! (cd "$mf" && nextflow run main.nf -c cloud.config >/dev/null 2>&1); then
-    echo "FAIL[cloud_sim]: map_file nextflow"; rm -rf "$mf"; exit 1
+    echo "FAIL[cloud_sim]: map_file nextflow"; exit 1
 fi
 # The txt[] output `fs` publishes as an mrp-style tree: fs/<idx>.txt.
 if [ "$(cat "$mf/results/fs/0.txt" 2>/dev/null)" != "val=1" ] ||
     [ "$(cat "$mf/results/fs/1.txt" 2>/dev/null)" != "val=2" ]; then
     echo "FAIL[cloud_sim]: map-call file outputs not staged through merge"
-    rm -rf "$mf"; exit 1
+    exit 1
 fi
-rm -rf "$mf"
 
 echo "OK[cloud_sim]: copy-staged file + map-call-file pipelines correct, bundles self-contained"
