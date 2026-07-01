@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -71,8 +72,9 @@ type Adapter struct {
 	Python string
 	// Mrjob is the path to the mrjob wrapper used to run comp stages.
 	Mrjob string
-	// Monitor, when set, caps the adapter's virtual memory at the resolved
-	// vmem_gb via prlimit (the mrp --monitor analog).
+	// Monitor, when set, enforces the mrp --monitor limits: a hard vmem_gb cap on
+	// address space via prlimit, plus a resident-memory (RSS) kill at mem_gb via
+	// the process-group monitor (mrp's primary monitor kill).
 	Monitor bool
 }
 
@@ -122,7 +124,7 @@ func RunSplit(
 		return nil, Resources{}, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "split", eff.VMemGB); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "split", eff); err != nil {
 		return nil, Resources{}, err
 	}
 
@@ -151,7 +153,7 @@ func RunMain(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "main", eff.VMemGB); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "main", eff); err != nil {
 		return nil, err
 	}
 
@@ -184,7 +186,7 @@ func RunJoin(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "join", eff.VMemGB); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "join", eff); err != nil {
 		return nil, err
 	}
 
@@ -225,12 +227,12 @@ func writeChunkData(meta string, defs []ChunkDef, outs []json.RawMessage) error 
 }
 
 // runAdapter invokes the Martian adapter for one phase, dispatching by language.
-// vmemGB is the resolved virtual-memory allocation used to cap the adapter when
-// monitoring is enabled.
-func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, vmemGB float64) error {
+// res is the resolved allocation: its vmem_gb caps address space (prlimit) and
+// its mem_gb bounds resident memory (the RSS monitor) when monitoring is enabled.
+func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources) error {
 	switch a.Lang {
 	case ir.LangPy:
-		return runPyAdapter(ctx, meta, files, journal, a, phase, vmemGB)
+		return runPyAdapter(ctx, meta, files, journal, a, phase, res)
 	case ir.LangComp:
 		if a.Mrjob == "" {
 			return &apperror.UnsupportedError{Construct: "comp adapter", Detail: "no mrjob path configured"}
@@ -238,21 +240,39 @@ func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, pha
 
 		argv := append([]string{a.Mrjob, a.Stagecode}, a.SrcArgs...)
 
-		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, vmemGB)
+		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, res)
 	case ir.LangExec:
 		argv := append([]string{a.Stagecode}, a.SrcArgs...)
 
-		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, vmemGB)
+		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, res)
 	default:
 		return &apperror.UnsupportedError{Construct: "adapter " + string(a.Lang)}
 	}
 }
 
+// startMonitor makes cmd a process-group leader and returns a resident-memory
+// monitor for it, or nil when monitoring is off or no mem_gb limit is set. Call
+// before cmd.Start; after Start, set the monitor's pgid and launch watch.
+func startMonitor(cmd *exec.Cmd, a Adapter, memGB float64) *memMonitor {
+	if !a.Monitor || memGB <= 0 {
+		return nil
+	}
+
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+
+	cmd.SysProcAttr.Setpgid = true
+
+	return &memMonitor{limitBytes: int64(memGB * bytesPerGB)}
+}
+
 // limitedCommand builds the adapter command, capping its virtual memory via
 // prlimit when monitoring is enabled and a vmem ceiling is set. The cap uses
-// RLIMIT_AS (address space); a stage exceeding it fails its allocation, the
-// closest portable analog to mrp's RSS-based --monitor kill. Absence of prlimit
-// is tolerated (best effort).
+// RLIMIT_AS (address space); a stage exceeding it fails its allocation. This is
+// the hard address-space bound; the resident-memory (RSS-vs-mem_gb) kill mrp's
+// monitor also applies is enforced separately by the process-group memMonitor.
+// Absence of prlimit is tolerated (best effort).
 func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string, args ...string) *exec.Cmd {
 	argv := append([]string{name}, args...)
 
@@ -272,14 +292,15 @@ func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string,
 // runPyAdapter runs a python stage directly. The adapter expects fd 3 to be its
 // _log file and fd 4 to be an error channel (normally supplied by mrjob); we
 // provide both. The stage failed if anything was written to the error channel.
-func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, vmemGB float64) error {
+func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources) error {
 	python := a.Python
 	if python == "" {
 		python = defaultPython
 	}
 
-	cmd := limitedCommand(ctx, a, vmemGB, python, a.Shell, a.Stagecode, phase, meta, files, journal)
+	cmd := limitedCommand(ctx, a, res.VMemGB, python, a.Shell, a.Stagecode, phase, meta, files, journal)
 	cmd.Dir = files
+	mon := startMonitor(cmd, a, res.MemGB)
 
 	aio, err := openAdapterIO(meta)
 	if err != nil {
@@ -296,15 +317,16 @@ func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, p
 	cmd.Stderr = io.MultiWriter(aio.stderr, os.Stderr)
 	cmd.ExtraFiles = []*os.File{aio.logFile, aio.errW} // fd 3 = _log, fd 4 = errors
 
-	return aio.run(cmd, phase, meta)
+	return aio.run(ctx, cmd, phase, meta, mon)
 }
 
 // runWrappedAdapter runs a comp (via mrjob) or exec stage, which manage the
 // metadata protocol themselves. Failure is a non-empty _errors file or a
 // non-zero exit.
-func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapter, argv []string, phase string, vmemGB float64) error {
-	cmd := limitedCommand(ctx, a, vmemGB, argv[0], append(argv[1:], meta, files, journal)...)
+func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapter, argv []string, phase string, res Resources) error {
+	cmd := limitedCommand(ctx, a, res.VMemGB, argv[0], append(argv[1:], meta, files, journal)...)
 	cmd.Dir = files
+	mon := startMonitor(cmd, a, res.MemGB)
 
 	stdout, err := os.Create(filepath.Join(meta, "_stdout"))
 	if err != nil {
@@ -320,8 +342,20 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 
 	cmd.Stdout = io.MultiWriter(stdout, os.Stdout)
 	cmd.Stderr = io.MultiWriter(stderr, os.Stderr)
-	runErr := cmd.Run()
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start adapter: %w", err)
+	}
+
+	stop := beginMonitor(ctx, cmd, mon)
+	runErr := cmd.Wait()
+
+	stop()
 	forwardStageLog(meta)
+
+	if err := memViolation(mon, phase, meta); err != nil {
+		return err
+	}
 
 	// mrjob routes a stage assertion to _assert (with the ASSERT: prefix stripped)
 	// and exits 0, so it must be checked before _errors and the exit code or the
@@ -395,10 +429,13 @@ func openAdapterIO(meta string) (*adapterIO, error) {
 }
 
 // run starts the adapter, drains its error channel, and classifies the result.
-func (a *adapterIO) run(cmd *exec.Cmd, phase, meta string) error {
+func (a *adapterIO) run(ctx context.Context, cmd *exec.Cmd, phase, meta string, mon *memMonitor) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start adapter: %w", err)
 	}
+
+	stop := beginMonitor(ctx, cmd, mon)
+	defer stop()
 
 	// Close the parent's write end so reading the pipe ends when the child exits.
 	_ = a.errW.Close()
@@ -407,6 +444,10 @@ func (a *adapterIO) run(cmd *exec.Cmd, phase, meta string) error {
 	stageErr, _ := io.ReadAll(a.errR)
 	waitErr := cmd.Wait()
 	forwardStageLog(meta)
+
+	if err := memViolation(mon, phase, meta); err != nil {
+		return err
+	}
 
 	if msg := strings.TrimSpace(string(stageErr)); msg != "" {
 		// Mirror the error into _errors for parity with mrjob; a failure to do
@@ -423,6 +464,37 @@ func (a *adapterIO) run(cmd *exec.Cmd, phase, meta string) error {
 	}
 
 	return nil
+}
+
+// beginMonitor launches the memory monitor against the started command's process
+// group and returns a stop function; a nil monitor yields a no-op stop. The watch
+// derives from the run's context so a cancelled run also stops the monitor.
+func beginMonitor(ctx context.Context, cmd *exec.Cmd, mon *memMonitor) func() {
+	if mon == nil {
+		return func() {}
+	}
+
+	mon.pgid = cmd.Process.Pid
+	wctx, cancel := context.WithCancel(ctx)
+
+	go mon.watch(wctx)
+
+	return cancel
+}
+
+// memViolation returns the retryable failure for a monitor breach (writing the
+// quota message to _errors like mrjob), or nil when no breach occurred. A memory
+// kill is not an ASSERT, so it stays retryable — Nextflow retries with the
+// escalated memory (memory * task.attempt).
+func memViolation(mon *memMonitor, phase, meta string) error {
+	if mon == nil || !mon.violated.Load() {
+		return nil
+	}
+
+	msg := mon.message()
+	_ = os.WriteFile(filepath.Join(meta, "_errors"), []byte(msg), filePerm)
+
+	return stageFailure(phase, msg)
 }
 
 func (a *adapterIO) close() {

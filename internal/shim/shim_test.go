@@ -355,7 +355,7 @@ func TestWrappedAdapterReadsAssert(t *testing.T) {
 	// stand-in "mrjob" writes _assert and exits 0, exactly like the real one.
 	argv := []string{"/bin/sh", "-c", `printf 'pipeline halted by assertion' > "$1/_assert"`, "mrjob"}
 
-	err := runWrappedAdapter(context.Background(), meta, files, journal, Adapter{}, argv, "main", 0)
+	err := runWrappedAdapter(context.Background(), meta, files, journal, Adapter{}, argv, "main", Resources{})
 	if !errors.Is(err, ErrStageAssert) {
 		t.Errorf("comp/exec assertion must surface as ErrStageAssert, got %v", err)
 	}

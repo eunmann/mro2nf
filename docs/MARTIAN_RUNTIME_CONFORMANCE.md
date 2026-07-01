@@ -37,14 +37,15 @@ small number of design/minor divergences remain. Ranked:
 | 3 | negative-adaptive resource sentinels not resolved to `\|x\|` → adaptive stages under-provisioned; a stage can read a negative `get_memory_allocation()` | **CORRECTNESS (Medium)** | E | fix |
 | 4 | empty array-mode map-call merge resolves to `null` instead of `[]`; but null-source and empty-array are already indistinguishable by merge time, and `null` is correct for the (common) null-source case | **CORRECTNESS (Medium)** | D | deferred |
 | 5 | published file names/layout: mre used source basename + flat + numeric-suffix; Martian uses `GetOutFilename` + nested index/key subdirs | **CORRECTNESS** (was DESIGN) | C | fixed |
-| 6 | `--monitor` enforces vmem (`RLIMIT_AS`) only, not mrp's primary RSS-vs-`mem_gb` kill | **DESIGN** | E | decision |
+| 6 | `--monitor` enforced vmem (`RLIMIT_AS`) only, not mrp's primary RSS-vs-`mem_gb` kill | **CORRECTNESS** (was DESIGN) | E | fixed |
 | 7 | `map<map<S>>.field` nested-map projection rejected at transpile time (loud) | MINOR (coverage) | D | document |
 | 8 | over-retry: deterministic stage exceptions are retried (mrp fails them immediately) | MINOR | G | document |
 | 9 | vmem cap not scaled on retry while mem is; join block accepts stray keys; `invocation` = stage args not top-level; version string `mro2nf`; `MRO_UUID` unset; empty-string output leaf → `""` not `null` | MINOR | A,C,E | document |
 
-Items 5–6 are **design decisions** (the fixtures currently encode the mre
-behavior), so they are surfaced for a product call rather than changed
-unilaterally. Items 7–9 are minor/unreachable-for-valid-pipelines or intentional.
+Items 5–6 were initially raised as design decisions; both were confirmed as
+requirements and fixed (publish tree consumed downstream; RSS kill is mrp's
+primary monitor). Items 7–9 are minor/unreachable-for-valid-pipelines or
+intentional.
 
 ---
 
@@ -157,11 +158,15 @@ request falls back to the static default, and `coalesce` keeps the negative, so
 returns a negative number. mrp's cluster path does `-res.MemGB`. **Fix:** take
 `abs()` before provisioning and before writing `_jobinfo`/`__*`.
 
-**DESIGN (#6):** `--monitor` caps address space (`RLIMIT_AS`≈`vmem_gb`) only;
-mrp's *primary* monitor kill fires on RSS exceeding `mem_gb` (`mrjob.go`). A stage
-whose RSS overruns `mem_gb` but whose address space stays under `vmem_gb` is
-killed by mrp, not mre. Currently acknowledged only in a code comment.
-**Decision:** document the analog, or add an RSS poller that kills at `mem_gb`.
+**FIXED (#6):** `--monitor` previously capped address space (`RLIMIT_AS`≈`vmem_gb`)
+only; mrp's *primary* monitor kill fires on RSS exceeding `mem_gb` (`mrjob.go`).
+`internal/shim/monitor.go` now adds that RSS kill: the adapter runs as a process-
+group leader, and a monitor samples the group's resident memory every second
+(summed from `/proc/<pid>/statm` over the group, like mrp's mrjob) and SIGKILLs
+the group when it exceeds `mem_gb`, writing mrp's quota message to `_errors`. The
+kill is not an ASSERT, so it stays retryable — Nextflow retries with the escalated
+memory (`memory * task.attempt`). The `RLIMIT_AS`/`vmem_gb` cap still applies as
+the hard address-space bound.
 
 **Minor/intentional:** linear OOM escalation (`mem * task.attempt`, always on) vs
 mrp's `--auto-adjust-memory` RSS formula; vmem cap not scaled on retry; GPU
@@ -221,8 +226,8 @@ only pipeline-input-bound preflights gate the rest of the pipeline.
    fork pipeline (`buildArrayForks`→`forkkeys`→`merge`) so an empty array →`[]`,
    a null source →`null`. Not a naive flip; touches the whole pipeline.
 5. **#5 (publish naming): done** — mre reproduces mrp's `outs/` tree (downstream
-   pipelines consume it). **#6 (monitor RSS):** still a product call — add an
-   RSS-vs-`mem_gb` kill to match mrp, or keep the vmem (`RLIMIT_AS`) cap.
+   pipelines consume it). **#6 (monitor RSS): done** — the RSS-vs-`mem_gb` kill is
+   implemented alongside the `RLIMIT_AS` vmem cap.
 6. **Document #7–#9** as known, bounded divergences.
 
 Items 1–3 are unambiguous correctness fixes with no design tradeoff and landed
