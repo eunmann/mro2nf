@@ -19,23 +19,33 @@ It maps each override field to the generated process names:
 
 | mrp override field | Nextflow directive | applies to |
 |---|---|---|
-| `mem_gb` | `memory` | the stage (`withName: 'STAGE.*'`) |
-| `threads` | `cpus` | the stage |
-| `chunk.mem_gb` / `chunk.threads` | `memory` / `cpus` | the main phase (`STAGE_MAIN.*`) |
-| `join.mem_gb` / `join.threads` | `memory` / `cpus` | the join phase (`STAGE_JOIN.*`) |
+| `mem_gb` | `memory` | every phase of the stage |
+| `threads` | `cpus` | every phase of the stage |
+| `split.mem_gb` / `split.threads` | `memory` / `cpus` | the split phase |
+| `chunk.mem_gb` / `chunk.threads` | `memory` / `cpus` | the main phase |
+| `join.mem_gb` / `join.threads` | `memory` / `cpus` | the join phase |
 | `""` (the empty key) | `memory` / `cpus` | all stages (global `process {}`) |
 
-The override key's **last segment** is taken as the stage name. Fields with no
-faithful Nextflow directive are reported and skipped: `vmem_gb` (Nextflow has no
-virtual-memory directive — use `mro2nf -monitor`, which reads `vmem_gb` from the
-`.mro`), `force_volatile` (VDR is not modeled), and `profile` (use the trace/report
-options below). mrp's *pipeline-scoped* keys (a key that names a sub-pipeline,
-not a stage) don't map — our process names are stage-named, not path-qualified —
-so scope overrides to individual stages.
+The override key's **last segment** is taken as the stage/call name. Fields with
+no faithful Nextflow directive are reported and skipped: `vmem_gb` (Nextflow has
+no virtual-memory directive — use `mro2nf -monitor`, which reads `vmem_gb` from
+the `.mro`), `force_volatile` (VDR is not modeled), and `profile` (use the
+trace/report options below). mrp's *pipeline-scoped* keys (a key that names a
+sub-pipeline, not a stage) don't map — our process names are stage-named, not
+path-qualified — so scope overrides to individual stages.
 
-You can also just hand-write the overlay; the process names are:
-`STAGE` (non-split), `STAGE_SPLIT` / `STAGE_MAIN` / `STAGE_JOIN` (split), each
-with a `_K` keyed-fork variant. A `.*` regex (e.g. `'STAGE.*'`) covers them all.
+Each generated selector covers every naming family the emitter produces:
+
+- the plain stage processes — `STAGE` (non-split), `STAGE_SPLIT` /
+  `STAGE_MAIN` / `STAGE_JOIN` (split), and their `_K` keyed-fork variants plus
+  `STAGE_MAP`;
+- the fused per-call processes from the BIND fold —
+  `STAGE_<n>_<pipeline>__<call>` and its `_SP` / `_MN` / `_JN` phase aliases.
+  These embed the **call** name, which is also what an mrp override key's last
+  segment names, so aliased calls (`call STAGE as X`, keyed `X`) match too.
+
+To hand-write an overlay, use the same shapes, e.g.
+`withName: '(STAGE_\d+_.+__)?ALIGN.*' { memory = '8 GB' }`.
 
 ## Scheduler throttling
 

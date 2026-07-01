@@ -13,8 +13,13 @@
 //	}
 //
 // The key's last segment is taken as the stage name and mapped to the generated
-// process names (STAGE, STAGE_MAIN, STAGE_JOIN, and their keyed _K variants) via
-// withName regexes; "" maps to the global process defaults.
+// process names via withName regexes; "" maps to the global process defaults.
+// Each selector covers every naming family the emitter produces for a stage:
+// the plain processes (STAGE, STAGE_SPLIT/_MAIN/_JOIN), the keyed fork variants
+// (STAGE_MAP, STAGE_*_K), and the fused per-call processes from the BIND fold
+// (STAGE_<n>_<pipeline>__<call>[_SP|_MN|_JN]), which embed the call name — for
+// an aliased call (`call STAGE as X`) the override key's last segment matches
+// the call name, exactly what mrp keys on.
 package overrides
 
 import (
@@ -62,6 +67,10 @@ func mapField(stage, field string, val json.RawMessage) (string, string, string)
 		phase, base = "", field
 	}
 
+	if _, known := phaseSuffixes[phase]; !known {
+		return "", "", "unrecognized phase prefix"
+	}
+
 	switch base {
 	case "mem_gb":
 		// Config-file scope uses `directive = value` (not the .nf process-body
@@ -82,21 +91,43 @@ func mapField(stage, field string, val json.RawMessage) (string, string, string)
 	}
 }
 
-// selector renders the withName regex for a stage + phase. An empty stage means
-// all stages: "" (the global process block) for a stage-level field, or a
-// phase-wide regex for chunk/join. The _K keyed fork variants are matched too.
+// phaseSuffixes maps an mrp override phase prefix to the two process-name
+// suffixes that phase runs under: the plain family (STAGE_MAIN, and its keyed
+// _K variant via the trailing .*) and the fused per-call alias family
+// (STAGE_<n>_<pipe>__<call>_MN). A stage-level field ("" phase) has no suffix —
+// it applies to every phase of the stage.
+var phaseSuffixes = map[string][2]string{
+	"":      {"", ""},
+	"split": {"_SPLIT", "_SP"},
+	"chunk": {"_MAIN", "_MN"},
+	"join":  {"_JOIN", "_JN"},
+}
+
+// fusedPrefix matches the fused per-call process-name prefix the BIND fold
+// emits: STAGE_<len>_<pipeline>__ (see emit's fusedName/qualify).
+const fusedPrefix = `STAGE_\d+_.+__`
+
+// selector renders the withName regex for a stage + phase; Nextflow full-matches
+// it against the process (or process-alias) name. An empty stage means all
+// stages: "" (the global process block) for a stage-level field, or a phase-wide
+// regex for split/chunk/join. Each regex covers the plain processes, the keyed
+// fork variants (_MAP/_K, via the trailing .*), and the fused per-call names.
 func selector(stage, phase string) string {
-	suffix := map[string]string{"": "", "chunk": "_MAIN", "join": "_JOIN"}[phase]
+	suf := phaseSuffixes[phase]
 
 	if stage == "" {
-		if suffix == "" {
+		if phase == "" {
 			return "" // global process default
 		}
 
-		return ".*" + suffix + ".*"
+		return fmt.Sprintf(".*(%s|%s).*", suf[0], suf[1])
 	}
 
-	return stage + suffix + ".*"
+	if phase == "" {
+		return fmt.Sprintf("(%s)?%s.*", fusedPrefix, stage)
+	}
+
+	return fmt.Sprintf("(%s%s|%s%s%s).*", stage, suf[0], fusedPrefix, stage, suf[1])
 }
 
 // render emits the process{} block: the global defaults first, then a withName
