@@ -10,7 +10,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # Tools run via `go run ...@pinned` to avoid global installs.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
-.PHONY: all build test test-e2e test-e2e-docker test-mrp-diff vet lint lint-check install clean help
+.PHONY: all build test test-e2e test-e2e-docker test-mrp-diff bench spike-13 vet lint lint-check install clean help
 .DEFAULT_GOAL := help
 
 help: ## Show this help

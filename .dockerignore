@@ -1,0 +1,15 @@
+# Keep repo-root docker build contexts small and cache-stable. Two builds use
+# this context: deploy/runtime/Dockerfile (needs go.mod/go.sum, cmd/, internal/,
+# vendor-martian/) and test/e2e/docker_iso.sh's heredoc image (additionally
+# needs the built ./mre and testdata/) — so only genuinely unused trees are
+# excluded here.
+.git
+.github
+.claude
+artifacts
+deploy/awsbatch-cdk/node_modules
+deploy/awsbatch-cdk/cdk.out
+out-*
+work
+results
+.nextflow*
