@@ -1,0 +1,24 @@
+{
+  "chain": {
+    "name": "chain",
+    "tasks": 13,
+    "processes": 13,
+    "edges": 40,
+    "rchar_bytes": 11124633,
+    "wchar_bytes": 1122131,
+    "refs": 11,
+    "producers": 1,
+    "multiplier": 11.0
+  },
+  "split": {
+    "name": "split",
+    "tasks": 22,
+    "processes": 7,
+    "edges": 28,
+    "rchar_bytes": 38178816,
+    "wchar_bytes": 2112632,
+    "refs": 21,
+    "producers": 1,
+    "multiplier": 21.0
+  }
+}
