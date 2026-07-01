@@ -1,42 +1,40 @@
 {
   "chain": {
     "name": "chain",
-    "tasks": 8,
-    "plumbing_tasks": 3,
+    "tasks": 7,
+    "plumbing_tasks": 2,
     "stage_tasks": 5,
-    "processes": 5,
+    "processes": 4,
     "stage_processes": 2,
-    "plumbing_processes": 3,
+    "plumbing_processes": 2,
     "plumbing": [
-      "BIND_5_CHAIN__MAKEBIG",
       "BUILD_ENTRY_ARGS",
       "PUBLISH"
     ],
-    "edges": 20,
-    "rchar_bytes": 10730393,
-    "wchar_bytes": 1120402,
+    "edges": 18,
+    "rchar_bytes": 10756505,
+    "wchar_bytes": 1120159,
     "refs": 6,
     "producers": 1,
     "multiplier": 6.0
   },
   "split": {
     "name": "split",
-    "tasks": 21,
-    "plumbing_tasks": 3,
+    "tasks": 20,
+    "plumbing_tasks": 2,
     "stage_tasks": 18,
-    "processes": 6,
+    "processes": 5,
     "stage_processes": 3,
-    "plumbing_processes": 3,
+    "plumbing_processes": 2,
     "plumbing": [
-      "BIND_4_WIDE__WSPLIT",
       "BUILD_ENTRY_ARGS",
       "PUBLISH"
     ],
-    "edges": 24,
-    "rchar_bytes": 38099558,
-    "wchar_bytes": 2110727,
-    "refs": 20,
+    "edges": 21,
+    "rchar_bytes": 38125260,
+    "wchar_bytes": 2110548,
+    "refs": 19,
     "producers": 1,
-    "multiplier": 20.0
+    "multiplier": 19.0
   }
 }

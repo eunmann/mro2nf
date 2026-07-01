@@ -87,6 +87,12 @@ func bundleOutput(name string) string {
 	return "tuple(" + bundleOutputElems(name) + ")"
 }
 
+// bundleOutputEmit is bundleOutput with a named `emit:` label, for a process that
+// emits several outputs (Nextflow requires the un-parenthesized tuple form here).
+func bundleOutputEmit(name, emit string) string {
+	return "tuple " + bundleOutputElems(name) + ", emit: " + emit
+}
+
 // bundleOutputElems is bundleOutput's inner path items, for embedding a bundle in
 // a larger output tuple (e.g. a keyed tuple(val(key), …)).
 func bundleOutputElems(name string) string {
@@ -157,6 +163,20 @@ func generateMain(prog *ir.Program, g genCtx) string {
 // a per-call name so each call is an independent instance.
 func genPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 	for _, c := range p.Calls {
+		// A fused non-split call is a self-contained per-call process — no import.
+		if _, ok := fuseableStageCall(c, p, prog); ok {
+			continue
+		}
+
+		// A fused split call imports the stage's MAIN/JOIN phase processes, aliased
+		// per call (DSL2 requires an alias since wf_<stage> also invokes them).
+		if s, ok := fuseableSplitCall(c, p, prog); ok {
+			fmt.Fprintf(b, "include { %[1]s_MAIN as %[2]s; %[1]s_JOIN as %[3]s } from './stage_%[1]s.nf'\n",
+				s.Name, fusedMainAlias(p.Name, c.Name), fusedJoinAlias(p.Name, c.Name))
+
+			continue
+		}
+
 		export, src := calleeExport(prog, c)
 		fmt.Fprintf(b, "include { %s as %s } from '%s'\n", export, callAlias(p.Name, c.Name), src)
 	}
@@ -485,6 +505,15 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 		// emit that fused process instead of a standalone BIND (#16).
 		if s, ok := fuseableStageCall(c, p, prog); ok {
 			genFusedStageProcess(b, p.Name, c, s, g)
+
+			continue
+		}
+
+		// A fuseable split stage call folds bind into a per-call SPLIT that emits
+		// the bound args for the aliased MAIN/JOIN (#16).
+		if s, ok := fuseableSplitCall(c, p, prog); ok {
+			genFusedSplitProcess(b, p.Name, c, s, g)
+			genFusedSplitWorkflow(b, p.Name, c)
 
 			continue
 		}
@@ -997,6 +1026,15 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, c ir.Ca
 		return
 	}
 
+	// A fuseable split call invokes its per-call fused workflow (bind+split →
+	// MAIN → JOIN); types and bindspec are resolved inside it (#16).
+	if _, ok := fuseableSplitCall(c, p, prog); ok {
+		fmt.Fprintf(b, "    ch_%s = %s(%s)\n", c.Name, fusedName(pipeline, c.Name),
+			fusedSplitCallArgs(c.Bindings))
+
+		return
+	}
+
 	bind := bindName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", bind, bindCallArgs(c.Bindings, bind))
 
@@ -1103,6 +1141,118 @@ func fuseableStageCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, 
 
 func fusedName(pipeline, call string) string {
 	return "STAGE_" + qualify(pipeline, call)
+}
+
+// The fused split emits a per-call bind+split process plus per-call aliased
+// imports of the stage's MAIN/JOIN phase processes (DSL2 requires an alias since
+// the plain wf_<stage> also invokes them), wired by a per-call fused workflow
+// named fusedName.
+func fusedSplitProc(pipeline, call string) string { return fusedName(pipeline, call) + "_SP" }
+func fusedMainAlias(pipeline, call string) string { return fusedName(pipeline, call) + "_MN" }
+func fusedJoinAlias(pipeline, call string) string { return fusedName(pipeline, call) + "_JN" }
+
+// fuseableSplitCall reports the split stage a plain call folds its BIND into, or
+// (nil, false). Like fuseableStageCall but for split stages: the fold runs
+// `mre bind` at the head of the SPLIT task, which then emits the bound args for
+// the (aliased) MAIN/JOIN — removing the standalone BIND (#16).
+func fuseableSplitCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, bool) {
+	if c.Mapped || c.Disabled != nil || c.Preflight {
+		return nil, false
+	}
+
+	if _, ok := callForwardProducer(c, p, prog); ok {
+		return nil, false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || !s.Split {
+		return nil, false
+	}
+
+	return s, true
+}
+
+// fusedSplitCallArgs renders the fused split workflow's actual arguments: the
+// pipeline args plus each referenced upstream call's channel (types and the
+// bindspec are resolved inside the workflow, not passed).
+func fusedSplitCallArgs(bindings []ir.Binding) string {
+	refs := refCalls(bindings)
+	args := make([]string, 0, len(refs)+1)
+	args = append(args, "pa")
+
+	for _, id := range refs {
+		args = append(args, "ch_"+id)
+	}
+
+	return strings.Join(args, ", ")
+}
+
+// genFusedSplitProcess emits the per-call bind+split process: it resolves the
+// call's inputs into a local args bundle (staging referenced files into this one
+// task) and runs the split phase, emitting the bound args alongside the chunk
+// defs/resources so the aliased MAIN/JOIN can consume them.
+func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
+	block, arg := bindInputs(refCalls(c.Bindings))
+	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
+
+	fmt.Fprintf(b, `process %[1]s {
+%[2]s
+  input:
+%[3]s  output:
+    %[7]s
+    path 'chunks.json', emit: defs
+    path 'joinres.json', emit: joinres
+    path 'chunk_*', emit: chunks, type: 'dir', optional: true
+  script:
+    """
+    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
+    %[6]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[9]s
+    """
+}
+
+`, fusedSplitProc(pipeline, c.Name), stageDirectives(s, ""), block, g.mre, arg, splitCmd,
+		bundleOutputEmit("args", "args"), g.producerArgs(c.Callable, types.RoleIn),
+		g.producerArgs(s.Name, types.RoleChunkIn))
+}
+
+// genFusedSplitWorkflow emits the per-call workflow wiring the fused SPLIT to the
+// aliased MAIN/JOIN, mirroring genSplitWorkflow but sourcing the bound args from
+// the fused SPLIT's `args` output (made re-readable with .first()).
+func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
+	var take strings.Builder
+	take.WriteString("    pipeargs\n")
+
+	refs := refCalls(c.Bindings)
+	refArgs := make([]string, 0, len(refs))
+
+	for _, id := range refs {
+		v := "r_" + id
+		fmt.Fprintf(&take, "    %s\n", v)
+		refArgs = append(refArgs, v)
+	}
+
+	// The fused SPLIT is called with pipeargs, one channel per ref, then the
+	// broadcast types manifest and this call's bindspec.
+	callArgs := append(append([]string{"pipeargs"}, refArgs...), "types", "spec")
+
+	fmt.Fprintf(b, `workflow %[1]s {
+  take:
+%[2]s  main:
+    types = file("${projectDir}/_assets/types.json")
+    spec = %[6]s
+    %[3]s(%[7]s)
+    a = %[3]s.out.args.first()
+    chunks = %[3]s.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
+    %[4]s(chunks.combine(a), types)
+    join = %[3]s.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
+    %[5]s(join, a, %[3]s.out.defs, %[4]s.out.collect().ifEmpty([]), types)
+  emit:
+    %[5]s.out
+}
+
+`, fusedName(pipeline, c.Name), take.String(), fusedSplitProc(pipeline, c.Name),
+		fusedMainAlias(pipeline, c.Name), fusedJoinAlias(pipeline, c.Name),
+		specFile(bindName(pipeline, c.Name)), strings.Join(callArgs, ", "))
 }
 
 // genFusedStageProcess emits a per-call process that runs `mre bind` then the

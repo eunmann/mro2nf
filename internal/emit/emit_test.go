@@ -939,10 +939,13 @@ func TestEmitModules(t *testing.T) {
 		},
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf": {
 			"workflow SUM_SQUARE_PIPELINE {",
-			"include { wf_SUM_SQUARES as wf_19_SUM_SQUARE_PIPELINE__SUM_SQUARES }",
-			// Bind outputs are value channels, so callee results feed multiple
-			// consumers directly (no redundant, warning-triggering .first()).
-			"ch_SUM_SQUARES = wf_19_SUM_SQUARE_PIPELINE__SUM_SQUARES(BIND_19_SUM_SQUARE_PIPELINE__SUM_SQUARES.out)",
+			// SUM_SQUARES' bind (values=self.values) is a real transform on a split
+			// stage, so #16 folds it into a per-call fused workflow that imports the
+			// stage's MAIN/JOIN aliased and invokes them off a bind+split process —
+			// no standalone BIND_SUM_SQUARES.
+			"include { SUM_SQUARES_MAIN as STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_MN; SUM_SQUARES_JOIN as STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_JN }",
+			"workflow STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES {",
+			"ch_SUM_SQUARES = STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES(pa)",
 		},
 		"modules/stage_SUM_SQUARES.nf": {
 			"process SUM_SQUARES_SPLIT {",
