@@ -466,7 +466,7 @@ func TestEmitPreflightGate(t *testing.T) {
 
 	mod := readFile(t, filepath.Join(dir, "modules", "pipe_TOP.nf"))
 	check := strings.Index(mod, "ch_CHECK = ")
-	gate := strings.Index(mod, "pa = ch_CHECK.combine(pipeargs).map { it[-1] }.first()")
+	gate := strings.Index(mod, "pa = ch_CHECK.combine(pipeargs).map { tuple(it[-2], it[-1]) }.first()")
 	inner := strings.Index(mod, "BIND_3_TOP__INNER(")
 	if check < 0 || gate < 0 || inner < 0 {
 		t.Fatalf("preflight wiring missing: check=%d gate=%d inner=%d", check, gate, inner)
