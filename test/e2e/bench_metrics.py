@@ -41,8 +41,21 @@ def parse_size(s):
         return 0.0
 
 
+# A Nextflow process is PLUMBING (adds no Martian stage — pure data-plane
+# machinery the epic removes: bind resolution, map fork/merge, disable gating,
+# entry-arg build, terminal publish) when its base name matches one of these.
+# Everything else is a genuine stage phase (SPLIT/MAIN/JOIN or a single stage),
+# which DOES correspond to a Martian stage.
+_PLUMBING_PREFIXES = ("BIND_", "FORK_", "MERGE_", "DISABLE_")
+_PLUMBING_EXACT = ("PUBLISH", "BUILD_ENTRY_ARGS")
+
+
+def is_plumbing(base):
+    return base.startswith(_PLUMBING_PREFIXES) or base in _PLUMBING_EXACT
+
+
 def parse_trace(path):
-    tasks, procs, rchar, wchar = 0, set(), 0.0, 0.0
+    tasks, plumb_tasks, procs, rchar, wchar = 0, 0, set(), 0.0, 0.0
     with open(path) as h:
         header = h.readline().rstrip("\n").split("\t")
         idx = {c: i for i, c in enumerate(header)}
@@ -51,12 +64,17 @@ def parse_trace(path):
             if len(cols) < len(header):
                 continue
             tasks += 1
-            procs.add(cols[idx["name"]].split(" (")[0])
+            # Strip the workflow path prefix (A:B:PROC) and the chunk tag " (n)".
+            base = cols[idx["name"]].split(" (")[0].split(":")[-1]
+            procs.add(base)
+            if is_plumbing(base):
+                plumb_tasks += 1
             if "rchar" in idx:
                 rchar += parse_size(cols[idx["rchar"]])
             if "wchar" in idx:
                 wchar += parse_size(cols[idx["wchar"]])
-    return tasks, len(procs), int(rchar), int(wchar)
+    plumbing = sorted(p for p in procs if is_plumbing(p))
+    return tasks, plumb_tasks, len(procs), int(rchar), int(wchar), plumbing
 
 
 def count_edges(dag):
@@ -105,7 +123,7 @@ def main():
     )
     dag = sys.argv[6] if len(sys.argv) > 6 else ""
 
-    tasks, procs, rchar, wchar = parse_trace(trace)
+    tasks, plumb_tasks, procs, rchar, wchar, plumbing = parse_trace(trace)
     refs = count_refs(workdir, probe)
     mult = round(refs / producers, 3) if producers else float(refs)
 
@@ -114,7 +132,15 @@ def main():
             {
                 "name": name,
                 "tasks": tasks,
+                # plumbing = processes/tasks that add NO Martian stage (bind/fork/
+                # merge/disable/entry/publish) — the data-plane machinery Nextflow
+                # adds beyond Martian's DAG, which #16/#12 remove.
+                "plumbing_tasks": plumb_tasks,
+                "stage_tasks": tasks - plumb_tasks,
                 "processes": procs,
+                "stage_processes": procs - len(plumbing),
+                "plumbing_processes": len(plumbing),
+                "plumbing": plumbing,
                 "edges": count_edges(dag),
                 "rchar_bytes": rchar,
                 "wchar_bytes": wchar,

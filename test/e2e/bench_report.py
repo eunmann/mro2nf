@@ -32,10 +32,12 @@ def load_baseline(path):
 
 
 def fmt(m):
+    # plumb = tasks that add no Martian stage (BIND/FORK/MERGE/DISABLE/PUBLISH/
+    # entry) — the data-plane machinery Nextflow adds beyond Martian's DAG.
     return (
-        f"tasks={m['tasks']:>3}  procs={m['processes']:>2}  edges={m['edges']:>3}  "
-        f"refs={m['refs']:>3}  mult={m['multiplier']:<6}  "
-        f"wchar={m['wchar_bytes']:>10}  rchar={m['rchar_bytes']:>10}"
+        f"tasks={m['tasks']:>3} (stage={m.get('stage_tasks', 0):>2} "
+        f"plumb={m.get('plumbing_tasks', 0):>2})  procs={m['processes']:>2}  "
+        f"refs={m['refs']:>3}  mult={m['multiplier']:<6}  wchar={m['wchar_bytes']:>9}"
     )
 
 

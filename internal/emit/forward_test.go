@@ -79,3 +79,45 @@ func TestForwardProducerExactCoverage(t *testing.T) {
 		})
 	}
 }
+
+// TestFuseableStageCall pins which calls fold their BIND inline (#16): a plain,
+// enabled, non-preflight call to a NON-SPLIT stage whose bind is a real transform
+// (not a pure forward, which #14 routes with no process). Split stages, mapped/
+// disabled/preflight calls, sub-pipeline callees, and pure forwards keep the
+// separate BIND (or, for forwards, none).
+func TestFuseableStageCall(t *testing.T) {
+	prog := &ir.Program{
+		Stages: map[string]*ir.Stage{
+			"PLAIN": {Name: "PLAIN", Out: []ir.Param{{Name: "y"}}},
+			"SPLIT": {Name: "SPLIT", Split: true, Out: []ir.Param{{Name: "y"}}},
+		},
+		Pipelines: map[string]*ir.Pipeline{"SUB": {Name: "SUB", Out: []ir.Param{{Name: "y"}}}},
+	}
+
+	self := []ir.Binding{{Param: "x", Value: ir.Value{Ref: &ir.Ref{Kind: "self", ID: "x"}}}}
+	fwd := []ir.Binding{ref("y", "PROD")} // exact forward of PROD's {y}
+
+	tests := []struct {
+		name string
+		c    ir.Call
+		want bool
+	}{
+		{"non-split stage, transform bind", ir.Call{Name: "C", Callable: "PLAIN", Bindings: self}, true},
+		{"split stage keeps BIND", ir.Call{Name: "C", Callable: "SPLIT", Bindings: self}, false},
+		{"mapped keeps BIND", ir.Call{Name: "C", Callable: "PLAIN", Bindings: self, Mapped: true}, false},
+		{"disabled keeps BIND", ir.Call{Name: "C", Callable: "PLAIN", Bindings: self, Disabled: &ir.Ref{Kind: "self", ID: "off"}}, false},
+		{"preflight keeps BIND", ir.Call{Name: "C", Callable: "PLAIN", Bindings: self, Preflight: true}, false},
+		{"pure forward is routed, not fused", ir.Call{Name: "C", Callable: "PLAIN", Bindings: fwd}, false},
+		{"sub-pipeline callee keeps BIND", ir.Call{Name: "C", Callable: "SUB", Bindings: self}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &ir.Pipeline{Name: "P", Calls: []ir.Call{{Name: "PROD", Callable: "PLAIN"}, tc.c}}
+			_, ok := fuseableStageCall(tc.c, p, prog)
+			if ok != tc.want {
+				t.Errorf("fuseableStageCall(%s) = %v, want %v", tc.name, ok, tc.want)
+			}
+		})
+	}
+}
