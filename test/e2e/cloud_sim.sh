@@ -95,8 +95,9 @@ cp "$proj/cloud.config" "$mf/cloud.config"
 if ! (cd "$mf" && nextflow run main.nf -c cloud.config >/dev/null 2>&1); then
     echo "FAIL[cloud_sim]: map_file nextflow"; rm -rf "$mf"; exit 1
 fi
-if [ "$(cat "$mf/results/v1.txt" 2>/dev/null)" != "val=1" ] ||
-    [ "$(cat "$mf/results/v2.txt" 2>/dev/null)" != "val=2" ]; then
+# The txt[] output `fs` publishes as an mrp-style tree: fs/<idx>.txt.
+if [ "$(cat "$mf/results/fs/0.txt" 2>/dev/null)" != "val=1" ] ||
+    [ "$(cat "$mf/results/fs/1.txt" 2>/dev/null)" != "val=2" ]; then
     echo "FAIL[cloud_sim]: map-call file outputs not staged through merge"
     rm -rf "$mf"; exit 1
 fi
