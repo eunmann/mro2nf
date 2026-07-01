@@ -35,11 +35,30 @@ jobs:
             out="${bin}-${{ matrix.goos }}-${{ matrix.goarch }}"
             go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" "./cmd/${bin}"
           done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            mro2nf-${{ matrix.goos }}-${{ matrix.goarch }}
+            mre-${{ matrix.goos }}-${{ matrix.goarch }}
+          if-no-files-found: error
+
+  # A single job publishes the release: the 4 build legs racing to create the
+  # same release concurrently is a known flakiness source (duplicate-release
+  # 409s in action-gh-release).
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
       - uses: softprops/action-gh-release@v3
         with:
           files: |
-            mro2nf-${{ matrix.goos }}-${{ matrix.goarch }}*
-            mre-${{ matrix.goos }}-${{ matrix.goarch }}*
+            mro2nf-*
+            mre-*
           fail_on_unmatched_files: true
 
   # Publish the runtime base image (mre + Martian adapters at /opt/mro2nf) to
