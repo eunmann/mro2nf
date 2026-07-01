@@ -87,10 +87,13 @@ func Resolve(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMe
 
 // ResolveForks resolves a map call's bindings into one _args object per fork.
 // Split bindings are resolved to collections and zipped element-wise; non-split
-// bindings are broadcast to every fork. When the split collection is a map, the
-// returned keys give each fork's map key (in sorted order); for an array fork,
-// keys is nil.
-func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
+// bindings are broadcast to every fork. isMap selects the fork kind from the
+// call's STATIC map mode (array vs typed map) rather than sniffing the runtime
+// value — so a null or empty typed-map source still forks as a map (keys nil-
+// safe) and merges to {}, and a null/empty array source merges to [], matching
+// Martian's type-directed dispatch. For a map fork the returned keys give each
+// fork's map key (sorted); for an array fork keys is nil.
+func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, isMap bool) ([]json.RawMessage, []string, error) {
 	broadcast := map[string]json.RawMessage{}
 	splits := map[string]json.RawMessage{}
 
@@ -111,23 +114,11 @@ func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.
 		return nil, nil, errNoSplit
 	}
 
-	if mapMode(splits) {
+	if isMap {
 		return buildMapForks(broadcast, splits)
 	}
 
 	return buildArrayForks(broadcast, splits)
-}
-
-// mapMode reports whether the split collections are maps (objects) rather than
-// arrays. A null collection (e.g. a disabled upstream) is treated as an array.
-func mapMode(splits map[string]json.RawMessage) bool {
-	for _, raw := range splits {
-		if t := bytes.TrimSpace(raw); len(t) > 0 && t[0] == '{' {
-			return true
-		}
-	}
-
-	return false
 }
 
 func buildArrayForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
@@ -443,8 +434,13 @@ func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessa
 		return marshalRaw(m, name)
 	}
 
+	// An array-mode fork (keys nil) with zero forks resolves to an empty array,
+	// not null — Martian's runtime merge yields marshallerArray{} ([]) for an
+	// empty typed-array source (and for a null one, since the type is known). A
+	// statically-known-empty literal is collapsed to null earlier by Martian's
+	// compiler, which mro2nf's runtime-generic model does not reproduce.
 	if len(outs) == 0 {
-		return json.RawMessage(nullLiteral), nil
+		return json.RawMessage("[]"), nil
 	}
 
 	arr := make([]json.RawMessage, 0, len(outs))

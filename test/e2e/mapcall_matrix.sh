@@ -33,10 +33,11 @@ make build >/dev/null
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/stages/scale" "$WORK/stages/mkarr" "$WORK/stages/mkmap"
+mkdir -p "$WORK/stages/scale" "$WORK/stages/mkarr" "$WORK/stages/mkmap" "$WORK/stages/nullc"
 printf 'def main(args, outs):\n    outs.scaled = args.value * 2\n' > "$WORK/stages/scale/__init__.py"
 printf 'def main(args, outs):\n    outs.xs = [float(i) for i in range(args.n)]\n' > "$WORK/stages/mkarr/__init__.py"
 printf 'def main(args, outs):\n    outs.xs = {("k%%d" %% i): float(i) for i in range(args.n)}\n' > "$WORK/stages/mkmap/__init__.py"
+printf 'def main(args, outs):\n    outs.xs = None\n' > "$WORK/stages/nullc/__init__.py"
 
 mrp_scaled() {
     local dir="$1" tmp; tmp="$(mktemp -d)"
@@ -69,6 +70,8 @@ probe() {
 SCALE='stage SCALE(in float value, out float scaled, src py "stages/scale",)'
 MKARR='stage MKARR(in int n, out float[] xs, src py "stages/mkarr",)'
 MKMAP='stage MKMAP(in int n, out map<float> xs, src py "stages/mkmap",)'
+NULLARR='stage NULLARR(in int n, out float[] xs, src py "stages/nullc",)'
+NULLMAP='stage NULLMAP(in int n, out map<float> xs, src py "stages/nullc",)'
 
 echo "map-call source matrix (mrp = source of truth):"
 probe lit_empty_array "$SCALE
@@ -99,3 +102,11 @@ probe rt_nonempty_map "$SCALE
 $MKMAP
 pipeline P(in int n, out map<float> scaled,){ call MKMAP(n=self.n,) map call SCALE(value=split MKMAP.xs,) return(scaled=SCALE.scaled,) }
 call P(n=2,)"
+probe rt_null_array "$SCALE
+$NULLARR
+pipeline P(in int n, out float[] scaled,){ call NULLARR(n=self.n,) map call SCALE(value=split NULLARR.xs,) return(scaled=SCALE.scaled,) }
+call P(n=0,)"
+probe rt_null_map "$SCALE
+$NULLMAP
+pipeline P(in int n, out map<float> scaled,){ call NULLMAP(n=self.n,) map call SCALE(value=split NULLMAP.xs,) return(scaled=SCALE.scaled,) }
+call P(n=0,)"

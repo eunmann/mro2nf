@@ -248,12 +248,12 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
   script:
     """
     mkdir -p forks
-    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks%[5]s
+    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks -mapmode %[6]s%[5]s
     mv -f forks/forkkeys.json forkkeys.json
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn))
+`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c))
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
@@ -760,11 +760,30 @@ func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx
     path 'forkkeys.json', emit: keys
   script:
     """
-    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir .%[5]s
+    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir . -mapmode %[6]s%[5]s
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn))
+`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c))
+}
+
+// Map-call fork kinds — the ir.Call.MapMode values derived from Martian's
+// CallMode (map_call_source.go).
+const (
+	mapModeMap   = "map"
+	mapModeArray = "array"
+)
+
+// mapModeArg is the static fork kind for a map call: "map" for a typed-map
+// source, else "array". It drives the fork/merge so an empty or null typed
+// source resolves to the typed empty ([]/{}) instead of being sniffed from the
+// runtime value (which mis-classifies null).
+func mapModeArg(c ir.Call) string {
+	if c.MapMode == mapModeMap {
+		return mapModeMap
+	}
+
+	return mapModeArray
 }
 
 // genMergeProcess emits a process that merges per-fork outputs into the

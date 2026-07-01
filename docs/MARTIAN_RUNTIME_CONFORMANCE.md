@@ -35,7 +35,7 @@ small number of design/minor divergences remain. Ranked:
 | 1 | `map<T[]>` and deeper (MapDim≥2) file/int leaves are silently never walked — staging, resolution, coercion, and publish all drop them | **CORRECTNESS (High)** | F (types) | fix |
 | 2 | comp/exec (mrjob) backend never reads `_assert` → a compiled-stage assertion is a silent SUCCESS with stale outs | **CORRECTNESS (High, scoped)** | A, G | fix |
 | 3 | negative-adaptive resource sentinels not resolved to `\|x\|` → adaptive stages under-provisioned; a stage can read a negative `get_memory_allocation()` | **CORRECTNESS (Medium)** | E | fix |
-| 4 | empty/zero-fork map call: runtime-empty array → mre `null` vs mrp `[]`; literal empty map → mre `{}` vs mrp `null` (literal-vs-runtime + array-vs-map matrix, verified against real mrp) | **CORRECTNESS (Medium)** | D | deferred |
+| 4 | empty/zero-fork map call: runtime empty/null source now yields the typed empty (`[]`/`{}`) matching mrp via static `MapMode`; literal-empty cases give typed empty vs mrp `null` (justified — see below) | **CORRECTNESS (Medium)** | D | fixed (runtime); justified residual (literal) |
 | 5 | published file names/layout: mre used source basename + flat + numeric-suffix; Martian uses `GetOutFilename` + nested index/key subdirs | **CORRECTNESS** (was DESIGN) | C | fixed |
 | 6 | `--monitor` enforced vmem (`RLIMIT_AS`) only, not mrp's primary RSS-vs-`mem_gb` kill | **CORRECTNESS** (was DESIGN) | E | fixed |
 | 7 | `map<map<S>>.field` nested-map projection rejected at transpile time (loud) | MINOR (coverage) | D | document |
@@ -119,40 +119,45 @@ updated to the tree layout.
 float fidelity, `5.0`→`5` int coercion, null propagation, and lexical key
 ordering all match Martian (`core/resolve.go`, `argument_map.go`).
 
-**CORRECTNESS (#4, deferred — two divergences, empirically mapped):** the
-behavior of an empty/zero-fork map call depends on whether the source is a
+**#4 — mostly FIXED (runtime cases); one justified residual (literal cases).**
+An empty/zero-fork map call's result depends on whether the source is a
 *statically-known-empty literal* or a *runtime* (typed stage-output) value.
 Verified against real `mrp` and the transpiled Nextflow across the full matrix
-(`test/e2e/mapcall_matrix.sh`):
+(`test/e2e/mapcall_matrix.sh`, which now includes null-source cases):
 
-| map-call source | Martian (mrp) | mro2nf |
-|-----------------|---------------|--------|
-| literal empty array `[]` | `null` | `null` ✓ |
-| literal empty map `{}` | `null` | `{}` ✗ |
-| runtime-empty array (typed) | `[]` | `null` ✗ |
+| map-call source | Martian (mrp) | mro2nf (after fix) |
+|-----------------|---------------|--------------------|
+| runtime-empty array (typed) | `[]` | `[]` ✓ |
+| runtime-null array (`float[]`=None) | `[]` | `[]` ✓ |
 | runtime-empty map (typed) | `{}` | `{}` ✓ |
+| runtime-null map (`map<float>`=None) | `{}` | `{}` ✓ |
 | non-empty array / map | `[…]` / `{…}` | same ✓ |
+| literal empty array `[]` | `null` | `[]` (justified) |
+| literal empty map `{}` | `null` | `{}` (justified) |
 
 Martian dispatches on the source's static `CallMode` plus `KnownLength`: a
-statically-known-empty literal → `ModeNullMapCall` → `null`
-(`map_call_source.go`), while a runtime source of unknown length keeps its typed
-`ModeArrayCall`/`ModeMapCall` and yields the typed empty (`[]`/`{}`) via
-`resolveMerge`'s `emptyFork` branch (`resolve.go:389-403`). mro2nf instead sniffs
-array-vs-map from the runtime JSON at merge time (`bind.go mapMode`) and cannot
-distinguish literal from runtime, so it always gives `null` for an empty array
-and `{}` for an empty map. The earlier note here (claiming Martian yields `[]` for
-*any* empty array) was wrong — it was refuted for the literal case and confirmed
-only for the runtime case; the systematic matrix is the source of truth.
+statically-known-empty **literal** → `ModeNullMapCall` → `null` (collapsed at
+compile time by `MergeExp.BindingPath`, `merge_exp.go:389-427`), while a
+**runtime** source of unknown length keeps its typed `ModeArrayCall`/`ModeMapCall`
+and yields the typed empty (`[]`/`{}`) via `resolveMerge`'s `emptyFork` branch
+(`resolve.go:389-403`) — *regardless of whether the runtime value is empty or
+null*, because the mode comes from the declared type.
 
-The two divergences: **runtime-empty array** (mrp `[]` vs mre `null` — the more
-impactful one, since a downstream `array<T>` consumer gets `null`) and **literal
-empty map** (mrp `null` vs mre `{}`). **Proper fix (two coordinated changes):**
-(a) at transpile time, resolve a statically-known-empty literal map source to
-`null` (skip the fork); (b) thread the static `MapMode` into `merge` so a
-runtime-empty array → `[]` and a runtime-empty map → `{}`. A naive merge-only
-flip trades the literal-array case for the runtime-array case, so both halves are
-required. Deferred as a scoped fork-pipeline change; the matrix probe is the
-regression oracle.
+**Fix (implemented):** mre now decides array-vs-map from the **static** `MapMode`
+(threaded via `mre forkbind -mapmode` from `ir.Call.MapMode`) instead of sniffing
+the runtime JSON — so a null `map<T>` source forks as a map and merges to `{}`
+(previously null), and any empty/null array source merges to `[]` (`bind.go`
+`ResolveForks`/`mergeOne`). All six **runtime** cases now match mrp exactly.
+
+**Residual (justified, not a bug):** the two literal cases give the typed empty
+where mrp gives `null`. Matching mrp there would require compile-time whole-
+program `KnownLength` propagation (reimplementing Martian's static fork pruning),
+and — for the only realistic form, an entry input defaulting to `[]` — it would
+**break mro2nf's launch-override feature** (statically pruning the map call to
+`null` would ignore a launch-time `v=[1,2]`). mro2nf's runtime-generic model
+(entry inputs overridable) makes the typed empty the correct behavior for it. See
+`testdata/empty_fork_min` (literal) vs `testdata/map_null_map` (runtime, matches
+mrp).
 
 **MINOR/coverage (#7):** Martian's recursive `resolvePath` supports
 `map<map<S>>.field`; mro2nf rejects it loudly at transpile time
@@ -241,10 +246,11 @@ only pipeline-input-bound preflights gate the rest of the pipeline.
    `internal/emit/generate.go` `fileFlattenExpr`; add the `map<T[]>` test matrix.
 2. **Fix #2 (`_assert`):** read `_assert` in `runWrappedAdapter`.
 3. **Fix #3 (negative sentinels):** `abs()` in resource resolution + directives.
-4. **Fix #4 (empty/zero-fork map call) — deferred:** (a) resolve a statically-
-   known-empty literal map source to `null` at transpile time; (b) thread the
-   static `MapMode` into `merge` so a runtime-empty array →`[]`, map →`{}`.
-   Validate with `test/e2e/mapcall_matrix.sh` (the mrp-vs-Nextflow matrix).
+4. **Fix #4 (empty/zero-fork map call) — done for runtime:** mre decides
+   array-vs-map from the static `MapMode` (via `mre forkbind -mapmode`), so every
+   runtime empty/null source matches mrp. The literal cases are a justified
+   residual (matching would break entry-override). Validate with
+   `test/e2e/mapcall_matrix.sh`.
 5. **#5 (publish naming): done** — mre reproduces mrp's `outs/` tree (downstream
    pipelines consume it). **#6 (monitor RSS): done** — the RSS-vs-`mem_gb` kill is
    implemented alongside the `RLIMIT_AS` vmem cap.
