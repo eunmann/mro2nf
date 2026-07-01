@@ -40,7 +40,7 @@ CASES=(
     map_file map_file_keyed map_split_file
     struct_of_file struct_file_array
     diamond_min fork_min struct_min kitchen_sink
-    file_tree map_null_map
+    file_tree map_null_map map_file_array
 )
 
 # tree DIR EXCLUDE -> "relpath  sha256" for every regular file, sorted. An

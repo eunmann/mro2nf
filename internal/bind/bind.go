@@ -21,8 +21,10 @@ var (
 	errNoSplit = errors.New("map call has no split binding")
 	// errSplitLen is returned when zipped split collections differ in length.
 	errSplitLen = errors.New("split collections have mismatched lengths")
-	// errNotArray is returned when a split binding is not bound to an array.
+	// errNotArray is returned when an array-mode split binding is not an array.
 	errNotArray = errors.New("split binding is not an array")
+	// errNotMap is returned when a map-mode split binding is not a typed map.
+	errNotMap = errors.New("split binding is not a map")
 )
 
 // Ref is a reference to a pipeline input (self) or an upstream call output.
@@ -168,7 +170,7 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMess
 	for param, raw := range splits {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &m); err != nil {
-			return nil, nil, fmt.Errorf("split %q: %w", param, errNotArray)
+			return nil, nil, fmt.Errorf("split %q: %w", param, errNotMap)
 		}
 
 		ks := sortedKeys(m)
@@ -416,8 +418,9 @@ func projectArray(raw json.RawMessage, path string) (json.RawMessage, error) {
 	return raw, nil
 }
 
-// mergeOne computes one output's merged value: a key→value map for a map fork,
-// an ordered array for an array fork, or null for an empty array fork.
+// mergeOne computes one output's merged value: a key→value map for a map fork
+// (empty map for zero forks), or an ordered array for an array fork (empty array
+// for zero forks).
 func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessage, error) {
 	if keys != nil {
 		m := make(map[string]json.RawMessage, len(keys))

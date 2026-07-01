@@ -127,3 +127,74 @@ func TestPublishOutsArrayInStruct(t *testing.T) {
 		t.Errorf("array-in-struct publish mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// TestPublishOutsMapOfFileArray guards the MapDim model in the publisher: a
+// map<txt[]> output lowers to {MapDim:2, ArrayDim:0}, so the map's array-typed
+// values must be descended as arrays (map<file[]> -> <param>/<key>/<idx>.txt),
+// not treated as a second map level (which dropped the inner files and leaked
+// absolute source paths).
+func TestPublishOutsMapOfFileArray(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := t.TempDir()
+	w := func(n string) string {
+		p := filepath.Join(srcDir, n)
+		if err := os.WriteFile(p, []byte(n), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		return p
+	}
+
+	params := []ir.Param{{Name: "lanes", BaseType: "txt", IsFile: true, MapDim: 2}}
+	outs := map[string]any{"lanes": map[string]any{
+		"sampleA": []any{w("a0.txt"), w("a1.txt")},
+		"sampleB": []any{w("b0.txt")},
+	}}
+
+	got, err := publishOuts(dir, params, nil, outs)
+	if err != nil {
+		t.Fatalf("publishOuts: %v", err)
+	}
+
+	want := map[string]any{"lanes": map[string]any{
+		"sampleA": []any{"lanes/sampleA/0.txt", "lanes/sampleA/1.txt"},
+		"sampleB": []any{"lanes/sampleB/0.txt"},
+	}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("map<file[]> publish mismatch (-want +got):\n%s", diff)
+	}
+	for _, rel := range []string{"lanes/sampleA/0.txt", "lanes/sampleA/1.txt", "lanes/sampleB/0.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+			t.Errorf("missing published file %s: %v", rel, err)
+		}
+	}
+}
+
+// TestPublishOutsNonFilePassthrough guards that non-file outputs pass through
+// verbatim — a map<int> keeps every key (even ones illegal as filenames, which
+// only matter when a file must be named) and a non-file struct keeps its value
+// unchanged, matching Martian's non-file outs.
+func TestPublishOutsNonFilePassthrough(t *testing.T) {
+	dir := t.TempDir()
+	params := []ir.Param{
+		{Name: "counts", BaseType: "int", MapDim: 1},
+		{Name: "vals", BaseType: "int", ArrayDim: 1},
+	}
+	outs := map[string]any{
+		"counts": map[string]any{"a/b": float64(1), "": float64(2), "ok": float64(3)},
+		"vals":   []any{float64(1), float64(2)},
+	}
+
+	got, err := publishOuts(dir, params, nil, outs)
+	if err != nil {
+		t.Fatalf("publishOuts: %v", err)
+	}
+
+	want := map[string]any{
+		"counts": map[string]any{"a/b": float64(1), "": float64(2), "ok": float64(3)},
+		"vals":   []any{float64(1), float64(2)},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("non-file passthrough mismatch (-want +got):\n%s", diff)
+	}
+}

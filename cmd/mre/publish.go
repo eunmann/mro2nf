@@ -109,6 +109,15 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error)
 		return nil, nil
 	}
 
+	// A type with no file/dir leaves (a plain scalar, or an array/map/struct of
+	// them) is passed through verbatim — matching Martian's non-file outs, which
+	// are emitted unchanged (all map keys and struct fields kept). Only file-
+	// bearing values are decomposed into the outs/ tree. IsFile is set for a file,
+	// a directory, and any array/map/struct that contains one.
+	if !p.IsFile {
+		return value, nil
+	}
+
 	rel := path.Join(parentRel, pub.outFilename(p))
 
 	switch {
@@ -118,10 +127,8 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error)
 		return pub.emitMap(rel, p, value)
 	case pub.structs[p.BaseType] != nil:
 		return pub.emitStruct(rel, p, value)
-	case p.IsFile:
-		return pub.emitFile(rel, value)
 	default:
-		return value, nil
+		return pub.emitFile(rel, value)
 	}
 }
 
@@ -155,7 +162,10 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their
-// (legal, sorted) keys. Illegal Unix filenames are skipped, matching Martian.
+// (legal, sorted) keys. Illegal Unix filenames are skipped, matching Martian. A
+// typed map is exactly one map level whose value carries MapDim-1 inner array
+// dims (Martian's encoding: map<T[]> is {MapDim:2, ArrayDim:0}), so the element
+// is descended as an array of that depth — not another map level.
 func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
 	m, ok := value.(map[string]any)
 	if !ok {
@@ -166,7 +176,8 @@ func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
 
 	for _, k := range legalSortedKeys(m) {
 		elem := p
-		elem.MapDim--
+		elem.ArrayDim = p.ArrayDim + p.MapDim - 1
+		elem.MapDim = 0
 		elem.Name = k
 		elem.OutName = ""
 
@@ -189,15 +200,12 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error)
 		return value, nil
 	}
 
-	out := make(map[string]any, len(sv))
+	out := make(map[string]any, len(pub.structs[p.BaseType].Fields))
 
 	for _, f := range pub.structs[p.BaseType].Fields {
-		fv, ok := sv[f.Name]
-		if !ok {
-			continue
-		}
-
-		jv, err := pub.emit(rel, f, fv)
+		// Every declared member is emitted (an absent one as null), matching
+		// Martian; a non-file field passes through verbatim via emit's guard.
+		jv, err := pub.emit(rel, f, sv[f.Name])
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +224,10 @@ func (pub *publisher) emitFile(rel string, value any) (any, error) {
 		return nil, nil
 	}
 
-	if _, err := os.Lstat(src); os.IsNotExist(err) {
+	// os.Stat (not Lstat) follows symlinks, so a declared output that was never
+	// written — including a dangling symlink whose target is gone — resolves to
+	// null rather than aborting the publish in CopyTree's symlink resolution.
+	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return nil, nil
 	}
 
@@ -257,7 +268,7 @@ func (pub *publisher) outFilename(p ir.Param) string {
 func legalSortedKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
-		if k != "" && k != "." && k != ".." && !strings.ContainsAny(k, "/\x00") {
+		if isLegalFilename(k) {
 			keys = append(keys, k)
 		}
 	}
@@ -265,4 +276,14 @@ func legalSortedKeys(m map[string]any) []string {
 	sort.Strings(keys)
 
 	return keys
+}
+
+// isLegalFilename mirrors Martian's IsLegalUnixFilename: a non-empty single path
+// segment of at most 255 bytes, not "." or "..". Publishing under an illegal key
+// would create an invalid path (or ENAMETOOLONG), so it is skipped like Martian.
+func isLegalFilename(k string) bool {
+	const maxNameLen = 255
+
+	return k != "" && k != "." && k != ".." &&
+		len(k) <= maxNameLen && !strings.ContainsAny(k, "/\x00")
 }

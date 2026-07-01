@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/eunmann/mro2nf/internal/apperror"
@@ -350,23 +351,25 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	stop := beginMonitor(ctx, cmd, mon)
 	runErr := cmd.Wait()
 
-	stop()
+	stop() // join the monitor before reading its verdict; no sample in flight
 	forwardStageLog(meta)
-
-	if err := memViolation(mon, phase, meta); err != nil {
-		return err
-	}
 
 	// mrjob routes a stage assertion to _assert (with the ASSERT: prefix stripped)
 	// and exits 0, so it must be checked before _errors and the exit code or the
 	// assertion is silently treated as success. Re-add the prefix so stageFailure
-	// classifies it as the non-retryable ErrStageAssert.
+	// classifies it as the non-retryable ErrStageAssert. A stage-written _assert /
+	// _errors is authoritative and is checked before the monitor verdict, so a
+	// coincident memory kill cannot mask a non-retryable assertion.
 	if data, err := os.ReadFile(filepath.Join(meta, "_assert")); err == nil && len(data) > 0 {
 		return stageFailure(phase, assertPrefix+strings.TrimSpace(string(data)))
 	}
 
 	if data, err := os.ReadFile(filepath.Join(meta, "_errors")); err == nil && len(data) > 0 {
 		return stageFailure(phase, strings.TrimSpace(string(data)))
+	}
+
+	if err := memViolation(mon, phase, meta); err != nil {
+		return err
 	}
 
 	if runErr != nil {
@@ -443,18 +446,22 @@ func (a *adapterIO) run(ctx context.Context, cmd *exec.Cmd, phase, meta string, 
 
 	stageErr, _ := io.ReadAll(a.errR)
 	waitErr := cmd.Wait()
+	stop() // join the monitor before reading its verdict; no sample in flight
 	forwardStageLog(meta)
 
-	if err := memViolation(mon, phase, meta); err != nil {
-		return err
-	}
-
+	// A stage-reported message (incl. an ASSERT on fd 4) is authoritative and is
+	// classified first, so a coincident memory kill cannot mask a non-retryable
+	// assertion as a retryable memory failure.
 	if msg := strings.TrimSpace(string(stageErr)); msg != "" {
 		// Mirror the error into _errors for parity with mrjob; a failure to do
 		// so does not change the outcome (we already have the message).
 		_ = os.WriteFile(filepath.Join(meta, "_errors"), stageErr, filePerm)
 
 		return stageFailure(phase, msg)
+	}
+
+	if err := memViolation(mon, phase, meta); err != nil {
+		return err
 	}
 
 	if waitErr != nil {
@@ -468,7 +475,10 @@ func (a *adapterIO) run(ctx context.Context, cmd *exec.Cmd, phase, meta string, 
 
 // beginMonitor launches the memory monitor against the started command's process
 // group and returns a stop function; a nil monitor yields a no-op stop. The watch
-// derives from the run's context so a cancelled run also stops the monitor.
+// derives from the run's context so a cancelled run also stops the monitor. stop
+// is idempotent and BLOCKS until the watch goroutine has exited, so the caller
+// can read the monitor's violation flag knowing no sample is still in flight and
+// no delayed kill can fire after the child is reaped.
 func beginMonitor(ctx context.Context, cmd *exec.Cmd, mon *memMonitor) func() {
 	if mon == nil {
 		return func() {}
@@ -476,10 +486,21 @@ func beginMonitor(ctx context.Context, cmd *exec.Cmd, mon *memMonitor) func() {
 
 	mon.pgid = cmd.Process.Pid
 	wctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 
-	go mon.watch(wctx)
+	go func() {
+		defer close(done)
+		mon.watch(wctx)
+	}()
 
-	return cancel
+	var once sync.Once
+
+	return func() {
+		once.Do(func() {
+			cancel()
+			<-done
+		})
+	}
 }
 
 // memViolation returns the retryable failure for a monitor breach (writing the

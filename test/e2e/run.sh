@@ -140,6 +140,7 @@ CASES=(
     "struct_file_array|testdata/struct_file_array|testdata/struct_file_array/expected/outs.json"
     "file_tree|testdata/file_tree|testdata/file_tree/expected/outs.json"
     "map_null_map|testdata/map_null_map|testdata/map_null_map/expected/outs.json"
+    "map_file_array|testdata/map_file_array|testdata/map_file_array/expected/outs.json"
 )
 
 # Run cases in a bounded parallel pool; xargs exits non-zero if any case fails.

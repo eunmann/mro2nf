@@ -946,7 +946,8 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 	fmt.Fprintf(b, "    keyed_%s = %s.out.forks.flatten().map { f -> tuple(f.baseName, f) }\n", c.Name, fork)
 	fmt.Fprintf(b, "    out_%s = %s(keyed_%s).map { k, bundle -> bundle }\n", c.Name, callee, c.Name)
 	// ifEmpty([]) ensures MERGE still runs for an empty fork collection
-	// (collect() on an empty channel emits nothing), yielding null outputs.
+	// (collect() on an empty channel emits nothing); MERGE then yields the typed
+	// empty ([] for an array fork, {} for a map fork).
 	// FORK.out.keys carries map-fork keys (null for an array fork).
 	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys, types)\n", merge, c.Name, fork)
 

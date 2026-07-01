@@ -1,0 +1,12 @@
+{
+    "lanes": {
+        "laneA": [
+            "lanes/laneA/0.txt",
+            "lanes/laneA/1.txt"
+        ],
+        "laneB": [
+            "lanes/laneB/0.txt",
+            "lanes/laneB/1.txt"
+        ]
+    }
+}

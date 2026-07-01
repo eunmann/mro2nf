@@ -53,6 +53,15 @@ func (m *memMonitor) watch(ctx context.Context) {
 			}
 
 			if rss > m.limitBytes {
+				// Only kill while our child — the process-group leader, whose pid
+				// equals the pgid — is still alive and leading its own group. Once
+				// it has exited (and been reaped by Wait), its pid can be recycled;
+				// this guard ensures a delayed sample never SIGKILLs an unrelated
+				// group that happens to reuse the pgid.
+				if procPgrp(m.pgid) != m.pgid {
+					return
+				}
+
 				m.violated.Store(true)
 				_ = syscall.Kill(-m.pgid, syscall.SIGKILL)
 
@@ -73,6 +82,12 @@ func (m *memMonitor) message() string {
 // pgid, read from /proc. A process that exits mid-scan is skipped. Returns 0 when
 // /proc is unavailable, so the monitor is a best-effort no-op off Linux (the
 // prlimit vmem cap still applies where configured).
+//
+// Accounting (and the SIGKILL) is by process GROUP, which covers the stage and
+// its ordinary children. A descendant that starts a new session/group (e.g. a
+// stage calling subprocess with start_new_session=True) escapes both — an
+// accepted limitation of this best-effort monitor; the vmem RLIMIT_AS cap is not
+// so escapable.
 func groupRSS(pgid int) int64 {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {

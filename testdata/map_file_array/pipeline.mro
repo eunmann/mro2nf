@@ -1,0 +1,28 @@
+# A map<file[]> output: a typed map whose values are arrays of files. This is the
+# {MapDim:2, ArrayDim:0} shape; the publisher must descend the map's array-typed
+# values as arrays (lanes/<key>/<idx>.txt), matching Martian exactly.
+filetype txt;
+
+stage MK(
+    in  int         n,
+    out map<txt[]>  lanes,
+    src py          "stages/mk",
+)
+
+pipeline MFA(
+    in  int         n,
+    out map<txt[]>  lanes,
+)
+{
+    call MK(
+        n = self.n,
+    )
+
+    return (
+        lanes = MK.lanes,
+    )
+}
+
+call MFA(
+    n = 2,
+)
