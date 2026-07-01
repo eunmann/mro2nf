@@ -24,10 +24,10 @@ var errDestExists = errors.New("destination already exists")
 // boundaries. File leaves in the payload are stored as markers; the real files
 // live under the files subdir, named collision-free.
 const (
-	// fileMarker prefixes a file-leaf value in a bundle's payload. The remainder
+	// FileMarker prefixes a file-leaf value in a bundle's payload. The remainder
 	// is the bundle-relative path to the staged file. The prefix is distinctive
 	// enough that no real data value collides with it.
-	fileMarker = "@mre:file:"
+	FileMarker = "@mre:file:"
 	// bundleData is the payload filename inside a bundle directory.
 	bundleData = "data.json"
 	// bundleFiles is the files subdirectory inside a bundle directory.
@@ -85,7 +85,7 @@ func decodeJSON(raw json.RawMessage) (any, error) {
 func resolveMarkers(v any, bundleAbs string) any {
 	switch t := v.(type) {
 	case string:
-		if rel, ok := strings.CutPrefix(t, fileMarker); ok {
+		if rel, ok := strings.CutPrefix(t, FileMarker); ok {
 			return filepath.Join(bundleAbs, rel)
 		}
 
@@ -194,7 +194,7 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 			return "", err
 		}
 
-		return fileMarker + rel, nil
+		return FileMarker + rel, nil
 	}
 
 	marked, err := tbl.Apply(params, payload, copyIn)

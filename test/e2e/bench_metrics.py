@@ -47,7 +47,7 @@ def parse_size(s):
 # Everything else is a genuine stage phase (SPLIT/MAIN/JOIN or a single stage),
 # which DOES correspond to a Martian stage.
 _PLUMBING_PREFIXES = ("BIND_", "FORK_", "MERGE_", "DISABLE_")
-_PLUMBING_EXACT = ("PUBLISH", "BUILD_ENTRY_ARGS")
+_PLUMBING_EXACT = ("PUBLISH", "BUILD_ENTRY_ARGS", "LAYOUT", "PUBLISH_LEAF")
 
 
 def is_plumbing(base):

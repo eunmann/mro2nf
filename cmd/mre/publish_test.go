@@ -6,8 +6,71 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
+
+// TestPublishLayoutMapping pins the funnel-free layout mode (#12): from the raw
+// marker-bearing sidecar (no files staged), it maps each leaf's transport
+// basename to its outs/ rel path(s) and records one manifest entry per leaf, with
+// is_dir set for a path-typed (directory) leaf — WITHOUT copying anything.
+func TestPublishLayoutMapping(t *testing.T) {
+	params := []ir.Param{
+		{Name: "aln", BaseType: "bam", IsFile: true},
+		{Name: "shards", BaseType: "txt", IsFile: true, ArrayDim: 1},
+		{Name: "workdir", BaseType: "path", IsFile: true},
+	}
+	m := func(n string) string { return shim.FileMarker + "f/" + n }
+	outs := map[string]any{
+		"aln":     m("L0000"),
+		"shards":  []any{m("L0001"), m("L0002")},
+		"workdir": m("L0003"),
+	}
+
+	pub := &publisher{
+		dir: t.TempDir(), seen: map[string]string{},
+		layoutOnly: true, layout: map[string][]string{},
+	}
+
+	published, err := pub.publishOuts(params, outs)
+	if err != nil {
+		t.Fatalf("publishOuts: %v", err)
+	}
+
+	wantLayout := map[string][]string{
+		"L0000": {"aln.bam"},
+		"L0001": {"shards/0.txt"},
+		"L0002": {"shards/1.txt"},
+		"L0003": {"workdir"},
+	}
+	if diff := cmp.Diff(wantLayout, pub.layout); diff != "" {
+		t.Errorf("layout mismatch (-want +got):\n%s", diff)
+	}
+
+	wantPublished := map[string]any{
+		"aln":     "aln.bam",
+		"shards":  []any{"shards/0.txt", "shards/1.txt"},
+		"workdir": "workdir",
+	}
+	if diff := cmp.Diff(wantPublished, published); diff != "" {
+		t.Errorf("published tree mismatch (-want +got):\n%s", diff)
+	}
+
+	wantManifest := []manifestEntry{
+		{Path: "aln.bam", BaseType: "bam", IsDir: false},
+		{Path: "shards/0.txt", BaseType: "txt", IsDir: false},
+		{Path: "shards/1.txt", BaseType: "txt", IsDir: false},
+		{Path: "workdir", BaseType: "path", IsDir: true},
+	}
+	if diff := cmp.Diff(wantManifest, pub.manifest); diff != "" {
+		t.Errorf("manifest mismatch (-want +got):\n%s", diff)
+	}
+
+	// Layout mode copies nothing: the output dir stays empty.
+	if entries, _ := os.ReadDir(pub.dir); len(entries) != 0 {
+		t.Errorf("layout mode must not write files, found %d entries", len(entries))
+	}
+}
 
 // TestPublishOutsTreeLayout pins the published outs/ tree to Martian's
 // post_process layout: a scalar file is named by GetOutFilename at the root; an
@@ -67,6 +130,44 @@ func TestPublishOutsTreeLayout(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
 			t.Errorf("missing published file %s: %v", rel, err)
 		}
+	}
+}
+
+// TestPublishLayoutOutNameCollision pins that layout mode disambiguates two
+// distinct leaves colliding on one outs/ rel (two outputs sharing an explicit
+// OutName) with a numeric suffix, exactly as the copying path does — so neither
+// file is silently mapped over the other.
+func TestPublishLayoutOutNameCollision(t *testing.T) {
+	params := []ir.Param{
+		{Name: "a", BaseType: "file", IsFile: true, OutName: "shared.txt"},
+		{Name: "b", BaseType: "file", IsFile: true, OutName: "shared.txt"},
+	}
+	outs := map[string]any{
+		"a": shim.FileMarker + "f/L0000",
+		"b": shim.FileMarker + "f/L0001",
+	}
+
+	pub := &publisher{
+		dir: t.TempDir(), seen: map[string]string{},
+		layoutOnly: true, layout: map[string][]string{},
+	}
+	if _, err := pub.publishOuts(params, outs); err != nil {
+		t.Fatalf("publishOuts: %v", err)
+	}
+
+	want := map[string][]string{"L0000": {"shared.txt"}, "L0001": {"shared_1.txt"}}
+	if diff := cmp.Diff(want, pub.layout); diff != "" {
+		t.Errorf("collision layout mismatch (-want +got):\n%s", diff)
+	}
+
+	// The manifest must record the ACTUAL published path (post-disambiguation), not
+	// the pre-collision rel — otherwise it points two entries at 'shared.txt'.
+	wantManifest := []manifestEntry{
+		{Path: "shared.txt", BaseType: "file", IsDir: false},
+		{Path: "shared_1.txt", BaseType: "file", IsDir: false},
+	}
+	if diff := cmp.Diff(wantManifest, pub.manifest); diff != "" {
+		t.Errorf("collision manifest mismatch (-want +got):\n%s", diff)
 	}
 }
 
