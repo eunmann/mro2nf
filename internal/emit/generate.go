@@ -481,6 +481,14 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			continue
 		}
 
+		// A fuseable non-split stage call runs `mre bind` inline in the stage task;
+		// emit that fused process instead of a standalone BIND (#16).
+		if s, ok := fuseableStageCall(c, p, prog); ok {
+			genFusedStageProcess(b, p.Name, c, s, g)
+
+			continue
+		}
+
 		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn))
 
 		if c.Disabled != nil {
@@ -980,6 +988,15 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, c ir.Ca
 		return
 	}
 
+	// A fuseable non-split stage call invokes its fused bind+main process directly
+	// with the same inputs a BIND would take, so the standalone BIND is gone (#16).
+	if _, ok := fuseableStageCall(c, p, prog); ok {
+		fmt.Fprintf(b, "    ch_%s = %s(%s)\n", c.Name, fusedName(pipeline, c.Name),
+			bindCallArgs(c.Bindings, bindName(pipeline, c.Name)))
+
+		return
+	}
+
 	bind := bindName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", bind, bindCallArgs(c.Bindings, bind))
 
@@ -1058,6 +1075,60 @@ func callForwardProducer(c ir.Call, p *ir.Pipeline, prog *ir.Program) (string, b
 	}
 
 	return forwardProducer(c.Bindings, p, prog)
+}
+
+// fuseableStageCall reports the stage a plain call resolves its bindings into
+// inline, or (nil, false). A non-split stage call whose bind is a genuine payload
+// transform (not a pure forward, which #14 routes with no process at all) can run
+// `mre bind` at the head of the SAME task as its `main` phase — no standalone
+// BIND_* task, and its referenced files stage into the one task once instead of
+// being staged to the bind and re-staged to the stage (fold BIND, #16). Mapped,
+// disabled, preflight, split-stage, and sub-pipeline callees keep their BIND.
+func fuseableStageCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, bool) {
+	if c.Mapped || c.Disabled != nil || c.Preflight {
+		return nil, false
+	}
+
+	if _, ok := callForwardProducer(c, p, prog); ok {
+		return nil, false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split {
+		return nil, false
+	}
+
+	return s, true
+}
+
+func fusedName(pipeline, call string) string {
+	return "STAGE_" + qualify(pipeline, call)
+}
+
+// genFusedStageProcess emits a per-call process that runs `mre bind` then the
+// stage's `main` phase in one task: the bind resolves the call's inputs into a
+// local args bundle (staging its referenced files into this task once), and main
+// consumes it — folding the standalone BIND away (#16).
+func genFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
+	block, arg := bindInputs(refCalls(c.Bindings))
+	base := g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main"))
+	outs := strings.Join(names(s.Out), ",")
+
+	fmt.Fprintf(b, `process %[1]s {
+%[2]s
+  input:
+%[3]s  output:
+    %[8]s
+  script:
+    """
+    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[9]s
+    %[6]s -args args -outs '%[7]s'%[10]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    """
+}
+
+`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.mre, arg, base, outs,
+		bundleOutput("outs"), g.producerArgs(c.Callable, types.RoleIn),
+		g.producerArgs(c.Callable, types.RoleMainOut))
 }
 
 // genMappedWiring emits a map call's fork/callee/merge fan-out. A split-stage
