@@ -231,3 +231,35 @@ a null-vs-empty distinction that is currently collapsed, so it needs a scoped
 change to the fork pipeline rather than a one-line flip. Items 5–6 need a
 decision before any change, because the current behavior is deliberate and the
 fixtures encode it.
+
+## Differential testing against real Martian
+
+`make test-mrp-diff` (`test/e2e/mrp_diff.sh`) runs each fixture through **real
+`mrp`** and the transpiled Nextflow, then compares the published `outs/` tree —
+every output file's path (relative to the outs dir) and its content hash — and
+the path-normalized `_outs` JSON. This validates the whole transpile + runtime +
+publish path against Martian itself, not a hand-written golden.
+
+It needs a local Martian build: set `MARTIAN_BIN` (default `~/workdir/martian/bin`,
+which holds `mrp`/`mrjob`). It skips cleanly when `mrp`, `nextflow`, `java`, or
+`python3` is absent, so CI without a Martian checkout is unaffected. Run one case
+with `bash test/e2e/mrp_diff.sh <fixture>`.
+
+The one intended difference the harness normalizes: Martian writes **absolute**
+paths into `_outs`; mre writes the **same tree** with paths **relative** to the
+outs dir (location-independent bundles). Tree structure, filenames, and contents
+are byte-identical.
+
+Fixtures that read a launch-time file input (relative-path or `-params`) or that
+the local `mrp` build can't run standalone (e.g. a nested map pipeline binding
+this `mrp` version rejects) are covered by the golden e2e (`make test-e2e`) but
+excluded from the mrp differential. `testdata/file_tree` is the flagship complex
+case: a split→join file array, a nested sub-pipeline whose map call emits a
+per-fork file, and a struct output bundling an array, a map, and a scalar file —
+9 published files, all matching `mrp`.
+
+**VDR note:** Martian garbage-collects an intermediate file even when it is also a
+pipeline output (it publishes such a value as `null`); mro2nf does not implement
+VDR (Nextflow owns file lifecycle), so it keeps the file. Fixtures used for the
+differential therefore return final-only file outputs, isolating the publish-tree
+contract from file-lifecycle policy.
