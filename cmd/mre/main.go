@@ -66,8 +66,6 @@ func run(ctx context.Context, args []string) error {
 		return runForkBind(ctx, args[1:])
 	case "merge":
 		return runMerge(ctx, args[1:])
-	case "publish":
-		return runPublish(ctx, args[1:])
 	case "publish-layout":
 		return runPublishLayout(ctx, args[1:])
 	case "entryargs":

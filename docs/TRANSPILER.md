@@ -363,7 +363,7 @@ writes an output bundle:
 - **`mre publish-layout`** — compute the mrp-style `outs/` layout from the final
   sidecar alone (no file leaves staged), writing `layout.json`,
   `pipeline_outs.json`, and `manifest.json.gz` for the PUBLISH_LEAF fan-out
-  (§4.7). (`mre publish` is the older copy-everything form of the same walk.)
+  (§4.7).
 
 Under the hood each phase hands the stage to the **real Martian adapter** —
 `martian_shell.py` for `py` stages, an exec wrapper for `exec` stages, and the

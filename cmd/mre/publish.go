@@ -19,54 +19,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-// publishDirPerm is the mode for created outs/ subdirectories. A named constant
-// keeps the published tree group/other-readable (downstream pipelines may run as
-// a different user) without tripping gosec's octal-literal check.
-const publishDirPerm = 0o755
-
-// runPublish finalizes a pipeline's outputs. It reads the final output bundle
-// (resolving every file leaf to a real path) and lays the file outputs out under
-// -dir exactly as Martian's mrp does in a pipestance `outs/` tree — each output
-// named by GetOutFilename, arrays/maps/structs nested into index/key/field-named
-// subdirectories — so a downstream pipeline can consume the tree like an mrp one.
-func runPublish(_ context.Context, argv []string) error {
-	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
-	prod := addProducer(fs, types.RoleOut)
-	bundleDir := fs.String("bundle", "", "final output bundle dir")
-	dir := fs.String("dir", ".", "directory to copy files into and write outs")
-
-	if err := fs.Parse(argv); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	raw, err := readBundle(*bundleDir)
-	if err != nil {
-		return err
-	}
-
-	outs, err := rawToMap(raw)
-	if err != nil {
-		return err
-	}
-
-	man, err := prod.manifest()
-	if err != nil {
-		return err
-	}
-
-	published, err := publishOuts(*dir, man.Params(prod.callable, prod.role), man.Structs, outs)
-	if err != nil {
-		return fmt.Errorf("publish files: %w", err)
-	}
-
-	out, err := json.MarshalIndent(published, "", "    ")
-	if err != nil {
-		return fmt.Errorf("marshal published outs: %w", err)
-	}
-
-	return writeRaw(filepath.Join(*dir, "pipeline_outs.json"), out)
-}
-
 // runPublishLayout computes the outs/ layout from the final output sidecar ALONE
 // (no file leaves staged, so no single-node funnel — #12): it walks the raw
 // marker-bearing sidecar and writes layout.json (transport leaf basename -> outs/
@@ -97,10 +49,7 @@ func runPublishLayout(_ context.Context, argv []string) error {
 		return err
 	}
 
-	pub := &publisher{
-		dir: *dir, structs: man.Structs, seen: map[string]string{},
-		layoutOnly: true, layout: map[string][]string{},
-	}
+	pub := newPublisher(man.Structs)
 
 	published, err := pub.publishOuts(man.Params(prod.callable, prod.role), outs)
 	if err != nil {
@@ -161,18 +110,10 @@ func writeManifest(path, pipeline string, outputs []manifestEntry) error {
 	return nil
 }
 
-// publishOuts copies the file leaves of outs into dir under the Martian outs/
-// layout and returns the rewritten outs (file leaves replaced by their path
-// within dir). Non-file values pass through unchanged; a missing/empty file leaf
-// resolves to null. Keys without a matching declared output param are preserved.
-func publishOuts(dir string, params []ir.Param, structs map[string]*ir.StructType, outs map[string]any) (map[string]any, error) {
-	pub := &publisher{dir: dir, structs: structs, seen: map[string]string{}}
-
-	return pub.publishOuts(params, outs)
-}
-
 // publishOuts walks each declared output param and emits its value, returning the
 // rewritten outs tree (file leaves replaced by their outs/ rel path, or null).
+// Non-file values pass through unchanged; a missing/empty file leaf resolves to
+// null. Keys without a matching declared output param are preserved.
 func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) (map[string]any, error) {
 	published := make(map[string]any, len(outs))
 	maps.Copy(published, outs)
@@ -194,24 +135,25 @@ func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) (map[s
 	return published, nil
 }
 
-// publisher lays out a pipeline's file outputs under dir like mrp's outs/ tree.
+// publisher computes a pipeline's mrp-style outs/ layout from the raw sidecar
+// markers WITHOUT copying files, so a distributed fan-out can publish each leaf
+// into place (no single-node funnel — #12).
 type publisher struct {
-	dir     string
 	structs map[string]*ir.StructType
-	// seen maps a published rel path to the source it was copied from, so a
-	// repeated source dedups while two distinct sources on one rel disambiguate.
+	// seen maps a published rel path to the transport basename it resolved from,
+	// so a repeated leaf dedups while two distinct leaves on one rel disambiguate.
 	seen map[string]string
-	// layoutOnly computes the outs/ layout WITHOUT copying files: it records each
-	// leaf's transport basename -> outs/ rel path in `layout` from the raw sidecar
-	// markers, so a distributed fan-out can publish each leaf into place (no
-	// single-node funnel — #12). Empty in the normal copying mode.
-	layoutOnly bool
 	// layout maps a transport leaf basename to the outs/ rel path(s) it publishes
 	// to — a list, since one file value may be referenced by several outputs.
 	layout map[string][]string
-	// manifest accumulates one entry per published file leaf (layoutOnly mode) for
-	// the machine-readable output index (see manifestEntry).
+	// manifest accumulates one entry per published file leaf for the
+	// machine-readable output index (see manifestEntry).
 	manifest []manifestEntry
+}
+
+// newPublisher returns a publisher over the program's struct table.
+func newPublisher(structs map[string]*ir.StructType) *publisher {
+	return &publisher{structs: structs, seen: map[string]string{}, layout: map[string][]string{}}
 }
 
 // manifestEntry is one published output file in the manifest index: a downstream
@@ -250,16 +192,16 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error)
 	case pub.isStruct(p.BaseType):
 		return pub.emitStruct(rel, p, value)
 	default:
-		jv, err := pub.emitFile(rel, value)
+		jv := pub.emitFile(rel, value)
 		// Record a manifest entry per published leaf, using jv — the ACTUAL
 		// published path emitFile returned, which may differ from rel after
 		// collision disambiguation. A null/absent leaf (jv is nil, not a string) is
 		// not published, so not listed. A `path`-typed leaf is a directory.
-		if published, ok := jv.(string); ok && pub.layoutOnly && err == nil {
+		if published, ok := jv.(string); ok {
 			pub.manifest = append(pub.manifest, manifestEntry{Path: published, BaseType: p.BaseType, IsDir: p.BaseType == "path"})
 		}
 
-		return jv, err
+		return jv, nil
 	}
 }
 
@@ -352,69 +294,33 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error)
 	return out, nil
 }
 
-// emitFile copies one scalar file/dir leaf to dir/rel and returns rel, or nil
-// when the source is empty or was never written (matching Martian's null). In
-// layoutOnly mode it copies nothing: it records the leaf's transport basename ->
-// rel mapping (a present leaf carries a @mre:file: marker; an absent one keeps a
-// raw path and resolves to null, exactly as in the copying path).
-func (pub *publisher) emitFile(rel string, value any) (any, error) {
+// emitFile records one scalar file/dir leaf's transport basename -> rel mapping
+// and returns rel, or nil when the leaf is absent (matching Martian's null): a
+// present leaf carries a @mre:file: marker, while a declared output that was
+// never written keeps a raw path and resolves to null. Nothing is copied.
+func (pub *publisher) emitFile(rel string, value any) any {
 	src, ok := value.(string)
 	if !ok || src == "" {
-		return nil, nil
+		return nil
 	}
 
-	if pub.layoutOnly {
-		marker, ok := strings.CutPrefix(src, shim.FileMarker)
-		if !ok {
-			return nil, nil
-		}
-
-		base := path.Base(marker)
-		// Disambiguate two DISTINCT leaves colliding on one rel exactly as the
-		// copying path does (seen keyed by rel -> transport basename), so a shared
-		// explicit OutName does not map two files onto one outs/ path. Same leaf
-		// referenced twice keeps its rel.
-		if prev, ok := pub.seen[rel]; ok && prev != base {
-			rel = pub.uniqueRel(rel)
-		}
-
-		pub.seen[rel] = base
-		pub.layout[base] = append(pub.layout[base], rel)
-
-		return rel, nil
+	marker, ok := strings.CutPrefix(src, shim.FileMarker)
+	if !ok {
+		return nil
 	}
 
-	// os.Stat (not Lstat) follows symlinks, so a declared output that was never
-	// written — including a dangling symlink whose target is gone — resolves to
-	// null rather than aborting the publish in CopyTree's symlink resolution.
-	if _, err := os.Stat(src); os.IsNotExist(err) {
-		return nil, nil
-	}
-
-	// Re-publishing the SAME source (a value referenced by two outputs) reuses its
-	// path. Two DISTINCT sources colliding on one rel (e.g. two outputs sharing an
+	base := path.Base(marker)
+	// Two DISTINCT leaves colliding on one rel (e.g. two outputs sharing an
 	// explicit OutName) are disambiguated with a numeric suffix so neither file is
-	// silently dropped — the per-param subdir layout makes this rare.
-	if prev, ok := pub.seen[rel]; ok {
-		if prev == src {
-			return rel, nil
-		}
-
+	// silently mapped over the other; the same leaf referenced twice keeps its rel.
+	if prev, ok := pub.seen[rel]; ok && prev != base {
 		rel = pub.uniqueRel(rel)
 	}
 
-	dst := filepath.Join(pub.dir, filepath.FromSlash(rel))
-	if err := os.MkdirAll(filepath.Dir(dst), publishDirPerm); err != nil {
-		return nil, fmt.Errorf("publish %s: %w", rel, err)
-	}
+	pub.seen[rel] = base
+	pub.layout[base] = append(pub.layout[base], rel)
 
-	if err := shim.CopyTree(src, dst); err != nil {
-		return nil, fmt.Errorf("publish %s: %w", rel, err)
-	}
-
-	pub.seen[rel] = src
-
-	return rel, nil
+	return rel
 }
 
 // uniqueRel returns rel, or rel with a numeric suffix before its extension when
