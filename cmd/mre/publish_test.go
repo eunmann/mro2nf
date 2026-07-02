@@ -29,10 +29,7 @@ func TestPublishLayoutMapping(t *testing.T) {
 
 	pub := newPublisher(nil)
 
-	published, err := pub.publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	published := pub.publishOuts(params, outs)
 
 	wantLayout := map[string][]string{
 		"L0000": {"aln.bam"},
@@ -88,10 +85,7 @@ func TestPublishOutsTreeLayout(t *testing.T) {
 		"count":      float64(7),
 	}
 
-	got, err := newPublisher(structs).publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(structs).publishOuts(params, outs)
 
 	want := map[string]any{
 		"alignments": "alignments.bam",
@@ -121,10 +115,7 @@ func TestPublishLayoutOutNameCollision(t *testing.T) {
 
 	pub := newPublisher(nil)
 
-	got, err := pub.publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := pub.publishOuts(params, outs)
 
 	if got["a"] != "shared.txt" || got["b"] != "shared_1.txt" {
 		t.Fatalf("collision not disambiguated: a=%v b=%v", got["a"], got["b"])
@@ -161,10 +152,7 @@ func TestPublishLayoutRepeatedLeafDedup(t *testing.T) {
 
 	pub := newPublisher(nil)
 
-	got, err := pub.publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := pub.publishOuts(params, outs)
 
 	if got["a"] != "shared.txt" || got["b"] != "shared.txt" {
 		t.Fatalf("repeated leaf rels = %v/%v, want shared.txt/shared.txt", got["a"], got["b"])
@@ -194,10 +182,7 @@ func TestPublishOutsAbsentFileNull(t *testing.T) {
 		"empty":   "",
 	}
 
-	got, err := newPublisher(nil).publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(nil).publishOuts(params, outs)
 
 	if got["missing"] != nil || got["empty"] != nil {
 		t.Errorf("absent/empty leaves = %v/%v, want nil/nil", got["missing"], got["empty"])
@@ -214,10 +199,7 @@ func TestPublishOutsArrayInStruct(t *testing.T) {
 	}}}
 	outs := map[string]any{"r": map[string]any{"files": []any{marker("L0000"), marker("L0001")}, "n": float64(2)}}
 
-	got, err := newPublisher(structs).publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(structs).publishOuts(params, outs)
 
 	want := map[string]any{"r": map[string]any{
 		"files": []any{"r/files/0.txt", "r/files/1.txt"},
@@ -240,10 +222,7 @@ func TestPublishOutsMapOfFileArray(t *testing.T) {
 		"sampleB": []any{marker("L0002")},
 	}}
 
-	got, err := newPublisher(nil).publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(nil).publishOuts(params, outs)
 
 	want := map[string]any{"lanes": map[string]any{
 		"sampleA": []any{"lanes/sampleA/0.txt", "lanes/sampleA/1.txt"},
@@ -268,10 +247,7 @@ func TestPublishOutsNonFilePassthrough(t *testing.T) {
 		"vals":   []any{float64(1), float64(2)},
 	}
 
-	got, err := newPublisher(nil).publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(nil).publishOuts(params, outs)
 
 	want := map[string]any{
 		"counts": map[string]any{"a/b": float64(1), "": float64(2), "ok": float64(3)},
@@ -299,10 +275,7 @@ func TestPublishOutsDeepNesting(t *testing.T) {
 		"cfg":  map[string]any{"reports": map[string]any{"r1": marker("L0003"), "r2": marker("L0004")}},
 	}
 
-	got, err := newPublisher(structs).publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(structs).publishOuts(params, outs)
 
 	want := map[string]any{
 		"grid": map[string]any{"k": []any{

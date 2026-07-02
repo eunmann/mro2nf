@@ -50,11 +50,7 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	}
 
 	pub := newPublisher(man.Structs)
-
-	published, err := pub.publishOuts(man.Params(prod.callable, prod.role), outs)
-	if err != nil {
-		return fmt.Errorf("compute layout: %w", err)
-	}
+	published := pub.publishOuts(man.Params(prod.callable, prod.role), outs)
 
 	if err := writeJSON(filepath.Join(*dir, "layout.json"), pub.layout); err != nil {
 		return err
@@ -114,25 +110,16 @@ func writeManifest(path, pipeline string, outputs []manifestEntry) error {
 // rewritten outs tree (file leaves replaced by their outs/ rel path, or null).
 // Non-file values pass through unchanged; a missing/empty file leaf resolves to
 // null. Keys without a matching declared output param are preserved.
-func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) (map[string]any, error) {
-	published := make(map[string]any, len(outs))
-	maps.Copy(published, outs)
+func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) map[string]any {
+	published := maps.Clone(outs)
 
 	for _, p := range params {
-		v, ok := outs[p.Name]
-		if !ok {
-			continue
+		if v, ok := outs[p.Name]; ok {
+			published[p.Name] = pub.emit("", p, v)
 		}
-
-		jv, err := pub.emit("", p, v)
-		if err != nil {
-			return nil, err
-		}
-
-		published[p.Name] = jv
 	}
 
-	return published, nil
+	return published
 }
 
 // publisher computes a pipeline's mrp-style outs/ layout from the raw sidecar
@@ -165,12 +152,13 @@ type manifestEntry struct {
 }
 
 // emit publishes value (of param p's type) under parentRel, naming this node by
-// GetOutFilename(p). It copies file leaves into dir and returns the JSON value:
-// the path within dir for a file, a nested array/object for a collection/struct,
-// the unchanged value for a non-file scalar, or nil for a null/absent leaf.
-func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error) {
+// GetOutFilename(p). It records file leaves in the layout/manifest and returns
+// the JSON value: the outs/ rel path for a file, a nested array/object for a
+// collection/struct, the unchanged value for a non-file scalar, or nil for a
+// null/absent leaf. Nothing touches the filesystem.
+func (pub *publisher) emit(parentRel string, p ir.Param, value any) any {
 	if value == nil {
-		return nil, nil
+		return nil
 	}
 
 	// A type with no file/dir leaves (a plain scalar, or an array/map/struct of
@@ -179,7 +167,7 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error)
 	// bearing values are decomposed into the outs/ tree. IsFile is set for a file,
 	// a directory, and any array/map/struct that contains one.
 	if !p.IsFile {
-		return value, nil
+		return value
 	}
 
 	rel := path.Join(parentRel, types.OutFilename(p, pub.isStruct))
@@ -192,7 +180,7 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error)
 	case pub.isStruct(p.BaseType):
 		return pub.emitStruct(rel, p, value)
 	default:
-		return pub.emitFile(rel, p, value), nil
+		return pub.emitFile(rel, p, value)
 	}
 }
 
@@ -204,10 +192,10 @@ func (pub *publisher) isStruct(name string) bool {
 // emitArray publishes an array into the rel/ subdir, naming elements by a
 // zero-padded index (width = digits of the element count, matching Martian's
 // WidthForInt) plus the element type's own GetOutFilename suffix.
-func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) {
+func (pub *publisher) emitArray(rel string, p ir.Param, value any) any {
 	arr, ok := value.([]any)
 	if !ok {
-		return value, nil
+		return value
 	}
 
 	width := len(strconv.Itoa(len(arr)))
@@ -219,15 +207,10 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 		elem.Name = fmt.Sprintf("%0*d", width, i)
 		elem.OutName = ""
 
-		jv, err := pub.emit(rel, elem, ev)
-		if err != nil {
-			return nil, err
-		}
-
-		out[i] = jv
+		out[i] = pub.emit(rel, elem, ev)
 	}
 
-	return out, nil
+	return out
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their
@@ -235,10 +218,10 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 // typed map is exactly one map level whose value carries MapDim-1 inner array
 // dims (Martian's encoding: map<T[]> is {MapDim:2, ArrayDim:0}), so the element
 // is descended as an array of that depth — not another map level.
-func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
+func (pub *publisher) emitMap(rel string, p ir.Param, value any) any {
 	m, ok := value.(map[string]any)
 	if !ok {
-		return value, nil
+		return value
 	}
 
 	out := make(map[string]any, len(m))
@@ -250,23 +233,18 @@ func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
 		elem.Name = k
 		elem.OutName = ""
 
-		jv, err := pub.emit(rel, elem, m[k])
-		if err != nil {
-			return nil, err
-		}
-
-		out[k] = jv
+		out[k] = pub.emit(rel, elem, m[k])
 	}
 
-	return out, nil
+	return out
 }
 
 // emitStruct publishes a struct into the rel/ subdir, recursing each field named
 // by its own GetOutFilename; the JSON object is keyed by field id.
-func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error) {
+func (pub *publisher) emitStruct(rel string, p ir.Param, value any) any {
 	sv, ok := value.(map[string]any)
 	if !ok {
-		return value, nil
+		return value
 	}
 
 	out := make(map[string]any, len(pub.structs[p.BaseType].Fields))
@@ -274,15 +252,10 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error)
 	for _, f := range pub.structs[p.BaseType].Fields {
 		// Every declared member is emitted (an absent one as null), matching
 		// Martian; a non-file field passes through verbatim via emit's guard.
-		jv, err := pub.emit(rel, f, sv[f.Name])
-		if err != nil {
-			return nil, err
-		}
-
-		out[f.Name] = jv
+		out[f.Name] = pub.emit(rel, f, sv[f.Name])
 	}
 
-	return out, nil
+	return out
 }
 
 // emitFile records one scalar file/dir leaf's transport basename -> rel mapping
