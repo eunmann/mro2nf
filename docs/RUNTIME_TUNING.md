@@ -45,7 +45,7 @@ Each generated selector covers every naming family the emitter produces:
   segment names, so aliased calls (`call STAGE as X`, keyed `X`) match too.
 
 To hand-write an overlay, use the same shapes, e.g.
-`withName: '(STAGE_\d+_.+__)?ALIGN.*' { memory = '8 GB' }`.
+`withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '8 GB' }`.
 
 ## Scheduler throttling
 

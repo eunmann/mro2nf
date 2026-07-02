@@ -121,8 +121,10 @@ func phaseSuffixes(phase string) (string, string, bool) {
 }
 
 // fusedPrefix matches the fused per-call process-name prefix the BIND fold
-// emits: STAGE_<len>_<pipeline>__ (see emit's fusedName/qualify).
-const fusedPrefix = `STAGE_\d+_.+__`
+// emits: STAGE_<len>_<pipeline>__ (see emit's fusedName/qualify). [0-9] rather
+// than \d: the selector is rendered inside a single-quoted Groovy string,
+// where a backslash escape fails config parsing.
+const fusedPrefix = `STAGE_[0-9]+_.+__`
 
 // selector renders the withName regex for a stage + phase; Nextflow full-matches
 // it against the process (or process-alias) name. An empty stage means all

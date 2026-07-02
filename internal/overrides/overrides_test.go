@@ -24,10 +24,10 @@ func TestConvert(t *testing.T) {
 	for _, want := range []string{
 		"process {",
 		"memory = '2 GB'", // the "" key -> global default
-		`withName: '(STAGE_\d+_.+__)?ALIGN.*' { memory = '8 GB'; cpus = 4 }`,
-		`withName: '(ALIGN_MAIN|STAGE_\d+_.+__ALIGN_MN).*' { memory = '16 GB' }`,               // chunk.* -> main phase
-		`withName: '(COLLATE_JOIN|STAGE_\d+_.+__COLLATE_JN).*' { memory = '32 GB'; cpus = 2 }`, // join.* -> join phase
-		`withName: '(SORT_SPLIT|STAGE_\d+_.+__SORT_SP).*' { memory = '6 GB' }`,                 // split.* -> split phase
+		`withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '8 GB'; cpus = 4 }`,
+		`withName: '(ALIGN_MAIN|STAGE_[0-9]+_.+__ALIGN_MN).*' { memory = '16 GB' }`,               // chunk.* -> main phase
+		`withName: '(COLLATE_JOIN|STAGE_[0-9]+_.+__COLLATE_JN).*' { memory = '32 GB'; cpus = 2 }`, // join.* -> join phase
+		`withName: '(SORT_SPLIT|STAGE_[0-9]+_.+__SORT_SP).*' { memory = '6 GB' }`,                 // split.* -> split phase
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing %q\n--- got ---\n%s", want, cfg)
