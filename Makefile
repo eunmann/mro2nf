@@ -13,9 +13,9 @@ DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.47.0
 
 .PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff bench vet lint lint-check deadcode install clean help
 
-# Minimum total statement coverage (cross-package) the cover gate accepts.
-# Current total is ~79%; the floor sits a little under it so refactors don't
-# flap, while a real coverage regression still fails.
+# Minimum total statement coverage (cross-package) the cover gate accepts. Keep
+# it a little under the current `make cover` total so refactors don't flap while
+# a real regression still fails; ratchet it up as coverage grows.
 COVER_MIN ?= 76
 .DEFAULT_GOAL := help
 
@@ -45,7 +45,7 @@ E2E_PARALLEL ?= 6
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
 test-e2e: build ## Run the e2e suite (golden table, cloud-sim, failure paths, knobs)
-	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestBench|^TestSpike'
+	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestBench'
 
 test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
 	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
