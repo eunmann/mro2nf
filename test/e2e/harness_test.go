@@ -92,9 +92,16 @@ func buildBinaries(t *testing.T) {
 // appended before the .mro argument.
 func transpile(t *testing.T, fixture string, extra ...string) string {
 	t.Helper()
+
+	return transpileDir(t, filepath.Join(root, "testdata", fixture), extra...)
+}
+
+// transpileDir is transpile for a fixture at an arbitrary directory (e.g. the
+// bench/ pipelines).
+func transpileDir(t *testing.T, dir string, extra ...string) string {
+	t.Helper()
 	buildBinaries(t)
 
-	dir := filepath.Join(root, "testdata", fixture)
 	proj := t.TempDir()
 
 	args := []string{
@@ -115,7 +122,7 @@ func transpile(t *testing.T, fixture string, extra ...string) string {
 	cmd.Dir = root
 
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("transpile %s: %v\n%s", fixture, err, out)
+		t.Fatalf("transpile %s: %v\n%s", dir, err, out)
 	}
 
 	return proj
