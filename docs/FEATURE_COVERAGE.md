@@ -135,11 +135,11 @@ out of scope for a transpiler.
 | Feature | Status | Test |
 |---|---|---|
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles | unit `TestEmitConfig` |
-| `--autoretry` (content-based retry) | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it | unit `TestEmitConfig`, `TestStageFailureClassification` |
+| `--autoretry` (content-based retry) | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it | unit `TestEmitConfig`, `TestStageFailureClassification`; e2e `failure_paths` / Go `TestAssertTerminatesWithoutRetry`, `TestOrdinaryFailureRetriesWithEscalatedMemory` (assert terminates after 1 attempt with exit 42; ordinary failure retries and sees the escalated allocation) |
 | cloud executors (awsbatch/k8s) | ✅ profiles emitted; #13 bundle data plane makes file flow object-store-correct; auxiliary files staged via `_assets` so isolated workers (no shared FS) can read them | config, e2e `cloud_sim` (copy-staging), `docker_iso` (true container isolation) |
 | `-target awsbatch` (AWS Batch + S3) | ✅ Batch executor + classic aws-CLI S3 staging, in-container `/opt/mro2nf` paths, a generated `Dockerfile` + self-contained `runtime/` build context (bash/ps, no ENTRYPOINT, x86_64, aws CLI) | unit `TestEmitConfigTargets`, `TestEmitContainerBuild`; e2e `docker_iso` (built from the generated Dockerfile) |
 | `-target healthomics` (AWS HealthOmics) | ✅ ECR-parameterized container, publishes to `/mnt/workflow/pubdir`, no executor (managed), pinned Nextflow version, `parameter-template.json` + `package.sh` (workflow zip) | unit `TestEmitConfigTargets`, `TestEmitHealthOmicsPackaging` |
-| `-resume` ≈ restart-without-rerun | ⚠️ content-addressed cache (different mechanism) | — |
+| `-resume` ≈ restart-without-rerun | ⚠️ content-addressed cache (different mechanism) | e2e `runtime_knobs` / Go `TestResumeCachesEverything` (unchanged rerun: zero tasks re-execute) |
 | `mrp --overrides` (per-stage resource retune at launch) | ✅ `mro2nf overrides` converts the JSON to a `process`/`withName:` `-c` overlay; or write it natively. See `RUNTIME_TUNING.md` | unit `TestConvert` |
 | `--maxjobs` / `--jobinterval` / `--localcores` / `--localmem` (throttling) | ✅ Nextflow `executor.queueSize` / `submitRateLimit` / `cpus` / `memory`; documented in `RUNTIME_TUNING.md` | — |
 | `--profile` / `--inspect` / `--onfinish` (profile, dry-run, hook) | ✅ Nextflow `-with-trace`/`-with-report`, `-preview`, `workflow.onComplete`; see `RUNTIME_TUNING.md` | — |

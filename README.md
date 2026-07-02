@@ -118,9 +118,17 @@ points at an `s3://` path or prefix is localized into the task by Nextflow.
 
 ```bash
 make test          # unit tests (in-process, sub-second)
+make cover         # unit-test coverage gate (fails below COVER_MIN%)
 make test-e2e      # transpile + nextflow run + diff vs mrp, all fixtures
+make test-e2e-go   # the Go e2e harness (the shell suites' replacement)
 make lint-check    # golangci-lint (no auto-fix)
 ```
+
+The e2e suites are being ported from shell into the `test/e2e` Go package
+(`make test-e2e-go`, build tag `e2e`): the golden table, copy-staging,
+docker-isolation, mrp-differential, failure-path (retry/ASSERT), `-resume`,
+and overrides-overlay checks all run there. Both stacks run in CI until
+parity, then the shell versions are removed; the live AWS runbooks stay shell.
 
 The e2e suite (`test/e2e/run.sh`) runs each fixture's transpiled pipeline under
 Nextflow and diffs the result against the committed real-`mrp` output. It runs
