@@ -34,6 +34,7 @@ Run these once at the **end** of a change set, after all edits are complete — 
 - `make lint-check` — linter without auto-fix; the CI zero-issue gate.
 - `make test` — run unit tests. Run after lint is clean.
 - `make cover` — cross-package coverage with the CI floor (`COVER_MIN`).
+- `make deadcode` — fail on functions unreachable from the binaries (runs in CI's lint job). Run after removing a subcommand or feature.
 - `make test-e2e` / `make test-e2e-docker` — Go e2e suites in `test/e2e` (build tag `e2e`, always `-count=1`): golden diffs vs committed mrp outputs, and the same pipelines under docker container isolation. Run when changing the emitter, shim, or data plane.
 - `make test-mrp-diff` — differential run against a real local `mrp` (needs `MARTIAN_BIN`). `make bench` — the data-movement regression gate.
 

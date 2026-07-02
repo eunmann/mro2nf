@@ -38,6 +38,10 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+      - name: Check for dead code
+        # Whole-program reachability from the two binaries; catches orphans
+        # golangci's `unused` misses (exported or test-reachable functions).
+        run: make deadcode
 
   build:
     name: Build
