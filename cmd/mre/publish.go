@@ -192,16 +192,7 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error)
 	case pub.isStruct(p.BaseType):
 		return pub.emitStruct(rel, p, value)
 	default:
-		jv := pub.emitFile(rel, value)
-		// Record a manifest entry per published leaf, using jv — the ACTUAL
-		// published path emitFile returned, which may differ from rel after
-		// collision disambiguation. A null/absent leaf (jv is nil, not a string) is
-		// not published, so not listed. A `path`-typed leaf is a directory.
-		if published, ok := jv.(string); ok {
-			pub.manifest = append(pub.manifest, manifestEntry{Path: published, BaseType: p.BaseType, IsDir: p.BaseType == "path"})
-		}
-
-		return jv, nil
+		return pub.emitFile(rel, p, value), nil
 	}
 }
 
@@ -295,10 +286,12 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error)
 }
 
 // emitFile records one scalar file/dir leaf's transport basename -> rel mapping
-// and returns rel, or nil when the leaf is absent (matching Martian's null): a
-// present leaf carries a @mre:file: marker, while a declared output that was
-// never written keeps a raw path and resolves to null. Nothing is copied.
-func (pub *publisher) emitFile(rel string, value any) any {
+// and its manifest entry, and returns rel — the ACTUAL published path, which may
+// differ from the argument after collision disambiguation. It returns nil when
+// the leaf is absent (matching Martian's null): a present leaf carries a
+// @mre:file: marker, while a declared output that was never written keeps a raw
+// path and resolves to null. Nothing is copied.
+func (pub *publisher) emitFile(rel string, p ir.Param, value any) any {
 	src, ok := value.(string)
 	if !ok || src == "" {
 		return nil
@@ -310,15 +303,22 @@ func (pub *publisher) emitFile(rel string, value any) any {
 	}
 
 	base := path.Base(marker)
-	// Two DISTINCT leaves colliding on one rel (e.g. two outputs sharing an
-	// explicit OutName) are disambiguated with a numeric suffix so neither file is
-	// silently mapped over the other; the same leaf referenced twice keeps its rel.
-	if prev, ok := pub.seen[rel]; ok && prev != base {
+	// The SAME leaf landing on the same rel twice (one value referenced by two
+	// identically-named outputs) publishes once; two DISTINCT leaves colliding on
+	// one rel (e.g. two outputs sharing an explicit OutName) are disambiguated
+	// with a numeric suffix so neither file is silently mapped over the other.
+	if prev, ok := pub.seen[rel]; ok {
+		if prev == base {
+			return rel
+		}
+
 		rel = pub.uniqueRel(rel)
 	}
 
 	pub.seen[rel] = base
 	pub.layout[base] = append(pub.layout[base], rel)
+	// One manifest entry per published leaf. A `path`-typed leaf is a directory.
+	pub.manifest = append(pub.manifest, manifestEntry{Path: rel, BaseType: p.BaseType, IsDir: p.BaseType == "path"})
 
 	return rel
 }

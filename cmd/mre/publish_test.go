@@ -146,6 +146,41 @@ func TestPublishLayoutOutNameCollision(t *testing.T) {
 	}
 }
 
+// TestPublishLayoutRepeatedLeafDedup pins that ONE leaf referenced by two
+// outputs resolving to the same rel publishes once: the rel appears once in
+// layout[base] and once in the manifest — re-establishing, for layout mode, the
+// same-source dedup the copying mode had. Without it the PUBLISH_LEAF fan-out
+// would spawn two tasks writing the same outs/ destination and the manifest
+// would double-count the output.
+func TestPublishLayoutRepeatedLeafDedup(t *testing.T) {
+	params := []ir.Param{
+		{Name: "a", BaseType: "file", IsFile: true, OutName: "shared.txt"},
+		{Name: "b", BaseType: "file", IsFile: true, OutName: "shared.txt"},
+	}
+	outs := map[string]any{"a": marker("L0000"), "b": marker("L0000")}
+
+	pub := newPublisher(nil)
+
+	got, err := pub.publishOuts(params, outs)
+	if err != nil {
+		t.Fatalf("publishOuts: %v", err)
+	}
+
+	if got["a"] != "shared.txt" || got["b"] != "shared.txt" {
+		t.Fatalf("repeated leaf rels = %v/%v, want shared.txt/shared.txt", got["a"], got["b"])
+	}
+
+	wantLayout := map[string][]string{"L0000": {"shared.txt"}}
+	if diff := cmp.Diff(wantLayout, pub.layout); diff != "" {
+		t.Errorf("repeated-leaf layout mismatch (-want +got):\n%s", diff)
+	}
+
+	wantManifest := []manifestEntry{{Path: "shared.txt", BaseType: "file", IsDir: false}}
+	if diff := cmp.Diff(wantManifest, pub.manifest); diff != "" {
+		t.Errorf("repeated-leaf manifest mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // TestPublishOutsAbsentFileNull guards the null cases: an empty-string leaf and a
 // declared-but-never-written file (which keeps its raw, marker-less path in the
 // sidecar) both resolve to null, matching Martian.
