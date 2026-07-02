@@ -1,0 +1,56 @@
+name: mrp differential
+
+# The strongest correctness oracle — transpiled output diffed against REAL mrp,
+# full published-tree comparison — needs a Martian build, so it can't run on
+# every PR. Run it weekly (and on demand) against the pinned Martian commit and
+# the latest Nextflow, so a divergence or a Nextflow deprecation surfaces during
+# quiet periods rather than at the next release.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mrp-diff:
+    name: mrp differential (real Martian)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # The differential SKIPS when mrp is absent (CI normally has no Martian);
+      # here we build it, so a missing binary is a setup failure, not a skip.
+      # Binaries live in the Martian source tree's bin/ so mrp resolves its
+      # sibling jobmanagers/ (mrp reads <bindir>/../jobmanagers/config.json).
+      MARTIAN_BIN: ${{ github.workspace }}/martian-src/bin
+      E2E_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@v2 # latest Nextflow, deliberately unpinned
+      - name: Build Martian (mrp + mrjob) at the pinned commit
+        # Pin matches go.mod's github.com/martian-lang/martian pseudo-version, so
+        # the differential runs against the exact Martian the transpiler targets.
+        env:
+          MARTIAN_COMMIT: 4a558e7dd93b
+        run: |
+          git clone --filter=blob:none https://github.com/martian-lang/martian.git martian-src
+          git -C martian-src checkout "$MARTIAN_COMMIT"
+          for bin in mrp mrjob; do
+            ( cd martian-src && go build -o "bin/$bin" "./cmd/$bin" )
+          done
+          # A missing/broken binary would make the differential skip silently and
+          # the job pass green — assert both exist and are executable instead.
+          test -x "$MARTIAN_BIN/mrp" && test -x "$MARTIAN_BIN/mrjob"
+      - name: Differential vs real mrp
+        run: make test-mrp-diff
+      - name: Golden suite on latest Nextflow (deprecation canary)
+        run: make test-e2e
