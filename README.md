@@ -145,14 +145,17 @@ orchestrator, so "correct" means byte-identical to Martian:
 
 - **Unit** (`make test`): in-process tests of the IR, binder, type walk, shim
   ABI, and the generated Nextflow text.
-- **Local e2e** (`make test-e2e`): 62 cases over 57 `.mro` fixtures transpiled,
-  run under Nextflow, diffed vs committed `mrp` goldens — covering every supported feature,
-  including file-typed entry inputs (scalar, `file[]`, `map<file>`,
+- **Local e2e** (`make test-e2e`): every `.mro` fixture transpiled, run under
+  Nextflow, diffed vs committed `mrp` goldens — covering every supported
+  feature, including file-typed entry inputs (scalar, `file[]`, `map<file>`,
   struct-with-file) supplied at launch via `-params-file`.
-- **Container isolation** (`make test-e2e-docker`): 19 checks (14 fixtures + 5
-  entry-file overrides) under the docker executor (no shared filesystem), the
-  model AWS uses — including an entry-file override whose input lives outside the
-  image, so it can only arrive via Nextflow staging (the AWS Batch / HealthOmics
+- **Container isolation** (`make test-e2e-docker`): a representative fixture
+  slice — including the exec/comp adapters and the null-bundle / zero-chunk
+  shapes — and the file-typed entry-input overrides under the docker executor
+  (no shared filesystem), the model AWS uses, plus a build-and-run of the
+  *generated* `-target awsbatch` Dockerfile and HealthOmics package validation.
+  Includes an entry-file override whose input lives outside the image, so it
+  can only arrive via Nextflow staging (the AWS Batch / HealthOmics
   S3-localization path), and a same-basename `file[]` override that proves the
   per-leaf staging never collides.
 - **Live AWS**: the fixture set has been run end-to-end on real **AWS Batch + S3**
@@ -176,8 +179,8 @@ nextflow run main.nf -profile awsbatch \
 ```
 
 The object-store data plane is what makes file flow work without a shared
-filesystem. Every channel item between processes is a self-contained *bundle*
-directory: its JSON payload plus the files it references. Nextflow stages those
+filesystem. Every payload between processes travels as a typed JSON sidecar
+plus the files it references as individual `path` items; Nextflow stages those
 real files across task boundaries (S3, GCS, and so on) instead of passing bare
 absolute paths.
 

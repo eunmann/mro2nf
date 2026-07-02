@@ -32,9 +32,9 @@ small number of design/minor divergences remain. Ranked:
 
 | # | Finding | Class | Area | Status |
 |---|---------|-------|------|--------|
-| 1 | `map<T[]>` and deeper (MapDim≥2) file/int leaves are silently never walked — staging, resolution, coercion, and publish all drop them | **CORRECTNESS (High)** | F (types) | fix |
-| 2 | comp/exec (mrjob) backend never reads `_assert` → a compiled-stage assertion is a silent SUCCESS with stale outs | **CORRECTNESS (High, scoped)** | A, G | fix |
-| 3 | negative-adaptive resource sentinels not resolved to `\|x\|` → adaptive stages under-provisioned; a stage can read a negative `get_memory_allocation()` | **CORRECTNESS (Medium)** | E | fix |
+| 1 | `map<T[]>` and deeper (MapDim≥2) file/int leaves are silently never walked — staging, resolution, coercion, and publish all drop them | **CORRECTNESS (High)** | F (types) | fixed |
+| 2 | comp/exec (mrjob) backend never reads `_assert` → a compiled-stage assertion is a silent SUCCESS with stale outs | **CORRECTNESS (High, scoped)** | A, G | fixed |
+| 3 | negative-adaptive resource sentinels not resolved to `\|x\|` → adaptive stages under-provisioned; a stage can read a negative `get_memory_allocation()` | **CORRECTNESS (Medium)** | E | fixed |
 | 4 | empty/zero-fork map call: runtime empty/null source now yields the typed empty (`[]`/`{}`) matching mrp via static `MapMode`; literal-empty cases give typed empty vs mrp `null` (justified — see below) | **CORRECTNESS (Medium)** | D | fixed (runtime); justified residual (literal) |
 | 5 | published file names/layout: mre used source basename + flat + numeric-suffix; Martian uses `GetOutFilename` + nested index/key subdirs | **CORRECTNESS** (was DESIGN) | C | fixed |
 | 6 | `--monitor` enforced vmem (`RLIMIT_AS`) only, not mrp's primary RSS-vs-`mem_gb` kill | **CORRECTNESS** (was DESIGN) | E | fixed |
@@ -187,12 +187,14 @@ unreachable for compiler-valid pipelines.
 the resolved (not raw) allocation reported to `get_*`, and `special`→
 `clusterOptions`/`params.job_resources` as the `MRO_JOBRESOURCES` analog.
 
-**CORRECTNESS (#3):** negative-adaptive sentinels (Martian's "at least `|x|`")
-are not resolved to `|x|`. NF `dynMem`/`dynCpus` gate on `> 0` so a negative
-request falls back to the static default, and `coalesce` keeps the negative, so
-`_jobinfo.memGB`/`__mem_gb` can be **negative** and `get_memory_allocation()`
-returns a negative number. mrp's cluster path does `-res.MemGB`. **Fix:** take
-`abs()` before provisioning and before writing `_jobinfo`/`__*`.
+**CORRECTNESS (#3) — FIXED:** negative-adaptive sentinels (Martian's "at least
+`|x|`") were not resolved to `|x|`: NF `dynMem`/`dynCpus` gated on `> 0` so a
+negative request fell back to the static default, and `coalesce` kept the
+negative, so `_jobinfo.memGB`/`__mem_gb` could be **negative** and
+`get_memory_allocation()` returned a negative number (mrp's cluster path does
+`-res.MemGB`). Fixed by taking the absolute value on both sides: `absResource`
+in the shim's resource merge (`internal/shim/meta.go`) and `Math.abs` in the
+emitted dynamic `cpus`/`memory` directives.
 
 **FIXED (#6):** `--monitor` previously capped address space (`RLIMIT_AS`≈`vmem_gb`)
 only; mrp's *primary* monitor kill fires on RSS exceeding `mem_gb` (`mrjob.go`).
@@ -218,7 +220,7 @@ The file-vs-directory `IsFile`-bool collapse is **benign** (pre-population is
 structurally guarded; leaf copy stats at runtime; staging/publish decompose to
 scalar `KindIsFile` leaves).
 
-**CORRECTNESS (#1, the highest-value finding):** Martian encodes `MapDim = 1 +
+**CORRECTNESS (#1, the highest-value finding) — FIXED:** Martian encodes `MapDim = 1 +
 innerArrayDim` — a typed map is exactly one map level whose element is an array of
 dim `MapDim-1` (`syntax/collection_types.go:325-331`; confirmed in
 `internal/frontend/lower.go:342-347`). The shared walk (`internal/types/types.go`)
@@ -235,7 +237,11 @@ emit-side `fileFlattenExpr`. **Fix:** model `MapDim` as one map level carrying
 `MapDim-1` inner array dims (on entering a typed map, descend one level then treat
 the element with `arrayDim += mapDim-1, mapDim=0`) in `walk`/`walkMap`, `coerce`,
 and `fileFlattenExpr`; add tests for `map<file[]>`, `map<int[]>`, `map<file[][]>`,
-and struct fields of those.
+and struct fields of those. **This fix landed** — `internal/types/types.go` and
+the emit-side `fileFlattenExpr` now model one typed-map level carrying
+`MapDim-1` inner array dims, with the `map<T[]>` test matrix
+(`internal/emit/mapdepth_test.go`, `internal/types`) and the `map_file_array`
+fixture as regression cover.
 
 ## G. Errors, retries, preflight, disabled — faithful (Python path)
 
@@ -254,11 +260,12 @@ only pipeline-input-bound preflights gate the rest of the pipeline.
 
 ## Recommended actions
 
-1. **Fix #1 (MapDim walk):** correct `internal/types/types.go` `walk`/`coerce` and
-   `internal/emit/generate.go` `fileFlattenExpr`; add the `map<T[]>` test matrix.
-2. **Fix #2 (`_assert`):** read `_assert` in `runWrappedAdapter`.
-3. **Fix #3 (negative sentinels):** `abs()` in resource resolution + directives.
-4. **Fix #4 (empty/zero-fork map call) — done for runtime:** mre decides
+1. **#1 (MapDim walk): done** — `internal/types/types.go` `walk`/`coerce` and
+   `internal/emit/generate.go` `fileFlattenExpr` corrected, with the `map<T[]>`
+   test matrix.
+2. **#2 (`_assert`): done** — `runWrappedAdapter` reads `_assert` first.
+3. **#3 (negative sentinels): done** — `abs()` in resource resolution + directives.
+4. **#4 (empty/zero-fork map call): done for runtime:** mre decides
    array-vs-map from the static `MapMode` (via `mre forkbind -mapmode`), so every
    runtime empty/null source matches mrp. The literal cases are a justified
    residual (matching would break entry-override). Validate with
@@ -268,12 +275,11 @@ only pipeline-input-bound preflights gate the rest of the pipeline.
    implemented alongside the `RLIMIT_AS` vmem cap.
 6. **Document #7–#9** as known, bounded divergences.
 
-Items 1–3 are unambiguous correctness fixes with no design tradeoff and landed
-with regression tests (TDD). Item 4 is deferred: the correct behavior depends on
-a null-vs-empty distinction that is currently collapsed, so it needs a scoped
-change to the fork pipeline rather than a one-line flip. Items 5–6 need a
-decision before any change, because the current behavior is deliberate and the
-fixtures encode it.
+Items 1–3 were unambiguous correctness fixes with no design tradeoff and landed
+with regression tests (TDD). Item 4 landed for every runtime case; the two
+literal-empty cases are a justified residual (matching mrp there would break the
+launch-override feature — see area D). Items 5–6 were confirmed as requirements
+and fixed. Only 7–9 remain, as documented, bounded divergences.
 
 ## Differential testing against real Martian
 
