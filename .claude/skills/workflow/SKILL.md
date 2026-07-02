@@ -22,7 +22,7 @@ Before branching, challenge whether this is the right scope — a single branch 
 
 ## Implementation
 
-1. **Sprawl first.** Read the related features, consumers, and call paths the change touches. For non-trivial work, apply the `repo-research` skill. If the work touches handlers, templates, or JS, apply the `frontend` skill's mandatory pre-work checklist.
+1. **Sprawl first.** Read the related features, consumers, and call paths the change touches. A transpiler change usually spans layers — check whether the frontend/IR, emitter, shim, and bindspec sides all agree before editing one of them.
 2. **Implement directly.** Write code and its tests together. Use the `tdd` skill only for bug fixes, where the failing test proves the bug.
 3. **Refactor where warranted.** If existing code near the change should be restructured for clarity or correctness, do it — in its own commit. No hacks, no workarounds, no compatibility shims (pre-production).
 4. **Edit discipline.** Edit/Write tools for all source edits. Complete the full edit set before any lint or test run.
@@ -31,19 +31,21 @@ Before branching, challenge whether this is the right scope — a single branch 
 
 - One logical change per commit: a feature + its tests, a refactor, or a bug fix.
 - Each commit compiles and passes tests independently.
-- Messages describe behavior, not files: `fix: movement cancels channels` not `update movement.go`.
+- Messages describe behavior, not files: `fix: zero-chunk split starves its JOIN` not `update generate.go`.
 
 ## Verification (end of change set, not mid-development)
 
 1. `make lint` — commit any auto-fixes.
-2. `make test` — all green. `make test-all` before the PR.
+2. `make test` — all green. Before the PR: `make lint-check`, `make cover`, and
+   `make test-e2e` (plus `make test-e2e-docker` when the emitter, shim, or data
+   plane changed).
 
 ## Review
 
-Run `/review-loop` to find and fix bugs, gaps, and quality issues iteratively until clean.
+Run `/code-review` to find bugs and quality issues in the branch diff before opening the PR.
 
 ## Finishing Up
 
 1. Summarize what changed and why — no commentary on effort or scale.
-2. Ask: "Ready to create a draft PR?" (`/create-pr`)
+2. Push the branch and open a PR with `gh pr create`; let the PR Validation workflow go green before merging (never push directly to `main`).
 3. After merge, delete the local branch: `git branch -d feature/<short-name>`

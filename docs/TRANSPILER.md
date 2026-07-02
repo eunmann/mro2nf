@@ -172,15 +172,15 @@ A non-split stage becomes a single Nextflow process whose `script` block runs
 ```groovy
 process SOMESTAGE {
   cpus 1
-  memory '1 GB'
+  memory { 1 * task.attempt + ' GB' }        // grows on retry (OOM escalation)
   input:
-    path args                  // the stage's input bundle (a directory)
+    tuple(path('args/data.json'), path('args/f/*'))   // input bundle: sidecar + leaves
     path 'types.json'          // the shared type manifest (staged; see §9)
   output:
-    path "outs__${args.baseName}", type: 'dir'   // the output bundle
+    tuple(path("outs/data.json"), path("outs/f/*", arity: '0..*'))
   script:
     """
-    'mre' main … -args ${args} -outs 'y' … -o outs__${args.baseName}
+    'mre' main … -args args -outs 'y' … -o outs
     """
 }
 workflow wf_SOMESTAGE {
@@ -193,9 +193,10 @@ workflow wf_SOMESTAGE {
 }
 ```
 
-The process takes a **bundle directory** as input and emits a **bundle
-directory** as output. Bundles are the universal currency between processes
-(§7).
+The process consumes and emits a **bundle** — a typed JSON sidecar
+(`data.json`) plus its file leaves as individual `path` items, which Nextflow
+stages back into one directory (`args/`, `outs/`) inside the task. Bundles are
+the universal currency between processes (§7).
 
 ### 4.2 A split stage → SPLIT / MAIN / JOIN
 
@@ -362,7 +363,7 @@ writes an output bundle:
 - **`mre publish-layout`** — compute the mrp-style `outs/` layout from the final
   sidecar alone (no file leaves staged), writing `layout.json`,
   `pipeline_outs.json`, and `manifest.json.gz` for the PUBLISH_LEAF fan-out
-  (§4.7). (`mre publish` is the older copy-everything form of the same walk.)
+  (§4.7).
 
 Under the hood each phase hands the stage to the **real Martian adapter** —
 `martian_shell.py` for `py` stages, an exec wrapper for `exec` stages, and the
@@ -404,18 +405,27 @@ Groovy per call.
 ## 7. The bundle data plane
 
 A **bundle** is the transpiler's neutral container for "a set of typed values,
-including the files they reference." Every channel item between processes is a
-bundle *directory*:
+including the files they reference." On disk it is a directory:
 
 ```
 <bundle>/
-  data.json        ← the JSON payload (scalars, arrays, maps, structs)
-  f/0/<basename>   ← each file-typed leaf, copied in and numbered so basenames
-  f/1/<basename>     never collide; data.json references them via a marker
+  data.json        ← the typed JSON sidecar (scalars, arrays, maps, structs)
+  f/L0000          ← each file-typed leaf under a flat, ordinal name (the
+  f/L0001            canonical type-walk order), so leaves never collide;
+                     data.json references them via a marker
 ```
 
+Between processes, a bundle travels **de-bundled** (#13): the channel item is a
+`tuple(path("X/data.json"), path("X/f/*", arity: '0..*'))` — the sidecar plus
+each leaf as its own `path` item — which Nextflow stages back into one `X/`
+directory in the consuming task. Leaves are individual objects on an
+object-store work dir (staged per file, never re-materialized as a copied
+bundle), and each input stages under its own directory so two inputs' ordinal
+leaf names cannot collide. (The keyed nested-map fork/merge subsystem still
+stages whole bundle directories.)
+
 In `data.json`, every file-typed leaf is replaced with a **marker** of the form
-`@mre:file:f/<n>/<basename>` — a *bundle-relative* path. The rules:
+`@mre:file:f/L<nnnn>` — a *bundle-relative* path. The rules:
 
 - **On write** (a stage produced an output that is a real file): the file is
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
@@ -425,8 +435,9 @@ In `data.json`, every file-typed leaf is replaced with a **marker** of the form
   back to real paths inside the staged bundle, so the stage opens a real local
   file.
 
-Because the files travel *inside* the bundle directory, Nextflow stages them
-between tasks automatically, with no shared filesystem required. This is what
+Because the files travel *with* the bundle — declared as `path` outputs and
+inputs — Nextflow stages them between tasks automatically, with no shared
+filesystem required. This is what
 makes cloud portability work: the same bundle runs on a laptop (shared FS), under
 the Docker executor (isolated containers), and on AWS Batch with an S3 work dir.
 
@@ -541,8 +552,8 @@ feature is checked against the real `mrp` output. The validation tiers:
 
 - **Unit tests** — the IR, binder, type walk, shim ABI, and the generated
   Nextflow text.
-- **Local e2e** (`make test-e2e`) — 62 cases over 57 `.mro` fixtures transpiled,
-  run under Nextflow, and diffed against committed `mrp` goldens (plus
+- **Local e2e** (`make test-e2e`) — the golden fixture table transpiled, run
+  under Nextflow, and diffed against committed `mrp` goldens (plus
   `TestCloudSim*`, the object-store data plane under copy-staging).
 - **Container isolation** (`make test-e2e-docker`) — the same pipelines under the
   Docker executor, where each task mounts only its work dir. This is the

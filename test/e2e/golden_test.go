@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,8 +118,54 @@ func TestGolden(t *testing.T) {
 			goldenJSON(t,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(fixtureDir, tc.golden))
+
+			// file_tree additionally verifies the PHYSICAL placement of every
+			// published leaf: multi-segment rels through the layout ->
+			// PUBLISH_LEAF join, which the JSON diff above cannot see.
+			if tc.name == "file_tree" {
+				assertPublishedLeaves(t, filepath.Join(proj, "results"),
+					filepath.Join(fixtureDir, tc.golden))
+			}
 		})
 	}
+}
+
+// assertPublishedLeaves walks the golden outs JSON and requires every string
+// leaf to exist on disk under resultsDir — verifying physical outs/ placement,
+// not just the rel strings goldenJSON diffs. Only usable for fixtures whose
+// string leaves are all published file paths (file_tree is; a fixture with a
+// plain string output is not).
+func assertPublishedLeaves(t *testing.T, resultsDir, goldenPath string) {
+	t.Helper()
+
+	raw, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", goldenPath, err)
+	}
+
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		t.Fatalf("parse golden %s: %v", goldenPath, err)
+	}
+
+	var walk func(v any)
+	walk = func(v any) {
+		switch tv := v.(type) {
+		case string:
+			if _, err := os.Stat(filepath.Join(resultsDir, tv)); err != nil {
+				t.Errorf("published leaf %s not on disk: %v", tv, err)
+			}
+		case []any:
+			for _, e := range tv {
+				walk(e)
+			}
+		case map[string]any:
+			for _, e := range tv {
+				walk(e)
+			}
+		}
+	}
+	walk(tree)
 }
 
 // renderOverrideParams instantiates the fixture's override-params.json into

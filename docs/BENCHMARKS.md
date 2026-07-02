@@ -79,16 +79,11 @@ and compare against these shapes.
 
 ## Baseline (local executor)
 
-Recorded after the data-plane epic landed (de-bundle #13, emit-once routing #14,
-BIND folding #16, funnel-free publish #12); `bench/baseline.json` is the source
-of truth:
-
-| benchmark | tasks | processes | edges | refs | multiplier |
-|-----------|-------|-----------|-------|------|------------|
-| chain     | 8     | 5         | 22    | 6    | 6.0        |
-| split     | 20    | 5         | 25    | 19   | 19.0       |
-
-(For comparison, the pre-epic bundle-copy design measured chain 13 tasks /
-refs 11 / ×11.0 and split 22 / 21 / ×21.0.) The split multiplier's remaining
-headroom is consumer-aware split staging (#15); further drops re-record via
+`bench/baseline.json` is the source of truth for the current numbers (recorded
+after the data-plane epic landed: de-bundle #13, emit-once routing #14, BIND
+folding #16, funnel-free publish #12). For scale: the pre-epic bundle-copy
+design measured a ×11.0 transfer multiplier on `chain` and ×21.0 on `split`;
+the epic nearly halved chain's, while split's barely moved — its residual (the
+payload staged to every chunk) is the acknowledged floor pending
+consumer-aware split staging (#15). Further drops re-record via
 `BENCH_UPDATE=1 make bench` so the gate ratchets downward.

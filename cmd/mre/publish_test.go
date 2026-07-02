@@ -1,14 +1,15 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
+
+// marker builds a transport-marker leaf value as mre writes it into a sidecar.
+func marker(n string) string { return shim.FileMarker + "f/" + n }
 
 // TestPublishLayoutMapping pins the funnel-free layout mode (#12): from the raw
 // marker-bearing sidecar (no files staged), it maps each leaf's transport
@@ -20,22 +21,15 @@ func TestPublishLayoutMapping(t *testing.T) {
 		{Name: "shards", BaseType: "txt", IsFile: true, ArrayDim: 1},
 		{Name: "workdir", BaseType: "path", IsFile: true},
 	}
-	m := func(n string) string { return shim.FileMarker + "f/" + n }
 	outs := map[string]any{
-		"aln":     m("L0000"),
-		"shards":  []any{m("L0001"), m("L0002")},
-		"workdir": m("L0003"),
+		"aln":     marker("L0000"),
+		"shards":  []any{marker("L0001"), marker("L0002")},
+		"workdir": marker("L0003"),
 	}
 
-	pub := &publisher{
-		dir: t.TempDir(), seen: map[string]string{},
-		layoutOnly: true, layout: map[string][]string{},
-	}
+	pub := newPublisher(nil)
 
-	published, err := pub.publishOuts(params, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	published := pub.publishOuts(params, outs)
 
 	wantLayout := map[string][]string{
 		"L0000": {"aln.bam"},
@@ -65,11 +59,6 @@ func TestPublishLayoutMapping(t *testing.T) {
 	if diff := cmp.Diff(wantManifest, pub.manifest); diff != "" {
 		t.Errorf("manifest mismatch (-want +got):\n%s", diff)
 	}
-
-	// Layout mode copies nothing: the output dir stays empty.
-	if entries, _ := os.ReadDir(pub.dir); len(entries) != 0 {
-		t.Errorf("layout mode must not write files, found %d entries", len(entries))
-	}
 }
 
 // TestPublishOutsTreeLayout pins the published outs/ tree to Martian's
@@ -78,17 +67,6 @@ func TestPublishLayoutMapping(t *testing.T) {
 // typed map a subdir with key filenames; a struct a subdir with each field named
 // by its own GetOutFilename. Leaf JSON values are the path within the outs dir.
 func TestPublishOutsTreeLayout(t *testing.T) {
-	dir := t.TempDir()
-	srcDir := t.TempDir()
-	write := func(name string) string {
-		p := filepath.Join(srcDir, name)
-		if err := os.WriteFile(p, []byte(name), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		return p
-	}
-
 	params := []ir.Param{
 		{Name: "alignments", BaseType: "bam", IsFile: true},          // scalar user file -> name.bam
 		{Name: "shards", BaseType: "csv", IsFile: true, ArrayDim: 1}, // array -> shards/<idx>.csv
@@ -100,17 +78,14 @@ func TestPublishOutsTreeLayout(t *testing.T) {
 		"MyStruct": {Name: "MyStruct", Fields: []ir.Param{{Name: "data", BaseType: "file", IsFile: true}}},
 	}
 	outs := map[string]any{
-		"alignments": write("aln.bam"),
-		"shards":     []any{write("s0.csv"), write("s1.csv")},
-		"reports":    map[string]any{"sampleA": write("ra.txt"), "sampleB": write("rb.txt")},
-		"cfg":        map[string]any{"data": write("data.bin")},
+		"alignments": marker("L0000"),
+		"shards":     []any{marker("L0001"), marker("L0002")},
+		"reports":    map[string]any{"sampleA": marker("L0003"), "sampleB": marker("L0004")},
+		"cfg":        map[string]any{"data": marker("L0005")},
 		"count":      float64(7),
 	}
 
-	got, err := publishOuts(dir, params, structs, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(structs).publishOuts(params, outs)
 
 	want := map[string]any{
 		"alignments": "alignments.bam",
@@ -122,37 +97,28 @@ func TestPublishOutsTreeLayout(t *testing.T) {
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("published outs mismatch (-want +got):\n%s", diff)
 	}
-
-	for _, rel := range []string{
-		"alignments.bam", "shards/0.csv", "shards/1.csv",
-		"reports/sampleA.txt", "reports/sampleB.txt", "cfg/data",
-	} {
-		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
-			t.Errorf("missing published file %s: %v", rel, err)
-		}
-	}
 }
 
-// TestPublishLayoutOutNameCollision pins that layout mode disambiguates two
-// distinct leaves colliding on one outs/ rel (two outputs sharing an explicit
-// OutName) with a numeric suffix, exactly as the copying path does — so neither
-// file is silently mapped over the other.
+// TestPublishLayoutOutNameCollision pins that two distinct leaves colliding on
+// one outs/ rel (two outputs sharing an explicit OutName) are disambiguated with
+// a numeric suffix — so neither file is silently mapped over the other — in the
+// published values, the layout, and the manifest alike.
 func TestPublishLayoutOutNameCollision(t *testing.T) {
 	params := []ir.Param{
 		{Name: "a", BaseType: "file", IsFile: true, OutName: "shared.txt"},
 		{Name: "b", BaseType: "file", IsFile: true, OutName: "shared.txt"},
 	}
 	outs := map[string]any{
-		"a": shim.FileMarker + "f/L0000",
-		"b": shim.FileMarker + "f/L0001",
+		"a": marker("L0000"),
+		"b": marker("L0001"),
 	}
 
-	pub := &publisher{
-		dir: t.TempDir(), seen: map[string]string{},
-		layoutOnly: true, layout: map[string][]string{},
-	}
-	if _, err := pub.publishOuts(params, outs); err != nil {
-		t.Fatalf("publishOuts: %v", err)
+	pub := newPublisher(nil)
+
+	got := pub.publishOuts(params, outs)
+
+	if got["a"] != "shared.txt" || got["b"] != "shared_1.txt" {
+		t.Fatalf("collision not disambiguated: a=%v b=%v", got["a"], got["b"])
 	}
 
 	want := map[string][]string{"L0000": {"shared.txt"}, "L0001": {"shared_1.txt"}}
@@ -171,23 +137,52 @@ func TestPublishLayoutOutNameCollision(t *testing.T) {
 	}
 }
 
+// TestPublishLayoutRepeatedLeafDedup pins that ONE leaf referenced by two
+// outputs resolving to the same rel publishes once: the rel appears once in
+// layout[base] and once in the manifest — re-establishing, for layout mode, the
+// same-source dedup the copying mode had. Without it the PUBLISH_LEAF fan-out
+// would spawn two tasks writing the same outs/ destination and the manifest
+// would double-count the output.
+func TestPublishLayoutRepeatedLeafDedup(t *testing.T) {
+	params := []ir.Param{
+		{Name: "a", BaseType: "file", IsFile: true, OutName: "shared.txt"},
+		{Name: "b", BaseType: "file", IsFile: true, OutName: "shared.txt"},
+	}
+	outs := map[string]any{"a": marker("L0000"), "b": marker("L0000")}
+
+	pub := newPublisher(nil)
+
+	got := pub.publishOuts(params, outs)
+
+	if got["a"] != "shared.txt" || got["b"] != "shared.txt" {
+		t.Fatalf("repeated leaf rels = %v/%v, want shared.txt/shared.txt", got["a"], got["b"])
+	}
+
+	wantLayout := map[string][]string{"L0000": {"shared.txt"}}
+	if diff := cmp.Diff(wantLayout, pub.layout); diff != "" {
+		t.Errorf("repeated-leaf layout mismatch (-want +got):\n%s", diff)
+	}
+
+	wantManifest := []manifestEntry{{Path: "shared.txt", BaseType: "file", IsDir: false}}
+	if diff := cmp.Diff(wantManifest, pub.manifest); diff != "" {
+		t.Errorf("repeated-leaf manifest mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // TestPublishOutsAbsentFileNull guards the null cases: an empty-string leaf and a
-// declared-but-never-written file both resolve to null, matching Martian.
+// declared-but-never-written file (which keeps its raw, marker-less path in the
+// sidecar) both resolve to null, matching Martian.
 func TestPublishOutsAbsentFileNull(t *testing.T) {
-	dir := t.TempDir()
 	params := []ir.Param{
 		{Name: "missing", BaseType: "txt", IsFile: true},
 		{Name: "empty", BaseType: "txt", IsFile: true},
 	}
 	outs := map[string]any{
-		"missing": filepath.Join(dir, "never-written.txt"),
+		"missing": "/scratch/files/never-written.txt",
 		"empty":   "",
 	}
 
-	got, err := publishOuts(dir, params, nil, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(nil).publishOuts(params, outs)
 
 	if got["missing"] != nil || got["empty"] != nil {
 		t.Errorf("absent/empty leaves = %v/%v, want nil/nil", got["missing"], got["empty"])
@@ -197,28 +192,14 @@ func TestPublishOutsAbsentFileNull(t *testing.T) {
 // TestPublishOutsArrayInStruct covers a struct field that is itself a file array
 // (the struct_file_array fixture shape): the leaves nest under <param>/<field>/.
 func TestPublishOutsArrayInStruct(t *testing.T) {
-	dir := t.TempDir()
-	srcDir := t.TempDir()
-	w := func(n string) string {
-		p := filepath.Join(srcDir, n)
-		if err := os.WriteFile(p, []byte(n), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		return p
-	}
-
 	params := []ir.Param{{Name: "r", BaseType: "Report", IsFile: true}}
 	structs := map[string]*ir.StructType{"Report": {Name: "Report", Fields: []ir.Param{
 		{Name: "files", BaseType: "txt", IsFile: true, ArrayDim: 1},
 		{Name: "n", BaseType: "int"},
 	}}}
-	outs := map[string]any{"r": map[string]any{"files": []any{w("a.txt"), w("b.txt")}, "n": float64(2)}}
+	outs := map[string]any{"r": map[string]any{"files": []any{marker("L0000"), marker("L0001")}, "n": float64(2)}}
 
-	got, err := publishOuts(dir, params, structs, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(structs).publishOuts(params, outs)
 
 	want := map[string]any{"r": map[string]any{
 		"files": []any{"r/files/0.txt", "r/files/1.txt"},
@@ -235,27 +216,13 @@ func TestPublishOutsArrayInStruct(t *testing.T) {
 // not treated as a second map level (which dropped the inner files and leaked
 // absolute source paths).
 func TestPublishOutsMapOfFileArray(t *testing.T) {
-	dir := t.TempDir()
-	srcDir := t.TempDir()
-	w := func(n string) string {
-		p := filepath.Join(srcDir, n)
-		if err := os.WriteFile(p, []byte(n), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		return p
-	}
-
 	params := []ir.Param{{Name: "lanes", BaseType: "txt", IsFile: true, MapDim: 2}}
 	outs := map[string]any{"lanes": map[string]any{
-		"sampleA": []any{w("a0.txt"), w("a1.txt")},
-		"sampleB": []any{w("b0.txt")},
+		"sampleA": []any{marker("L0000"), marker("L0001")},
+		"sampleB": []any{marker("L0002")},
 	}}
 
-	got, err := publishOuts(dir, params, nil, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(nil).publishOuts(params, outs)
 
 	want := map[string]any{"lanes": map[string]any{
 		"sampleA": []any{"lanes/sampleA/0.txt", "lanes/sampleA/1.txt"},
@@ -264,11 +231,6 @@ func TestPublishOutsMapOfFileArray(t *testing.T) {
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("map<file[]> publish mismatch (-want +got):\n%s", diff)
 	}
-	for _, rel := range []string{"lanes/sampleA/0.txt", "lanes/sampleA/1.txt", "lanes/sampleB/0.txt"} {
-		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
-			t.Errorf("missing published file %s: %v", rel, err)
-		}
-	}
 }
 
 // TestPublishOutsNonFilePassthrough guards that non-file outputs pass through
@@ -276,7 +238,6 @@ func TestPublishOutsMapOfFileArray(t *testing.T) {
 // only matter when a file must be named) and a non-file struct keeps its value
 // unchanged, matching Martian's non-file outs.
 func TestPublishOutsNonFilePassthrough(t *testing.T) {
-	dir := t.TempDir()
 	params := []ir.Param{
 		{Name: "counts", BaseType: "int", MapDim: 1},
 		{Name: "vals", BaseType: "int", ArrayDim: 1},
@@ -286,10 +247,7 @@ func TestPublishOutsNonFilePassthrough(t *testing.T) {
 		"vals":   []any{float64(1), float64(2)},
 	}
 
-	got, err := publishOuts(dir, params, nil, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(nil).publishOuts(params, outs)
 
 	want := map[string]any{
 		"counts": map[string]any{"a/b": float64(1), "": float64(2), "ok": float64(3)},
@@ -305,17 +263,6 @@ func TestPublishOutsNonFilePassthrough(t *testing.T) {
 // map<txt> nests as <param>/<field>/<key>.txt. Both are reachable shapes not
 // covered by the shallower tests.
 func TestPublishOutsDeepNesting(t *testing.T) {
-	dir := t.TempDir()
-	srcDir := t.TempDir()
-	w := func(n string) string {
-		p := filepath.Join(srcDir, n)
-		if err := os.WriteFile(p, []byte(n), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		return p
-	}
-
 	params := []ir.Param{
 		{Name: "grid", BaseType: "txt", IsFile: true, MapDim: 3}, // map<txt[][]>
 		{Name: "cfg", BaseType: "Cfg", IsFile: true},             // struct{ map<txt> reports }
@@ -324,14 +271,11 @@ func TestPublishOutsDeepNesting(t *testing.T) {
 		"Cfg": {Name: "Cfg", Fields: []ir.Param{{Name: "reports", BaseType: "txt", IsFile: true, MapDim: 1}}},
 	}
 	outs := map[string]any{
-		"grid": map[string]any{"k": []any{[]any{w("a.txt"), w("b.txt")}, []any{w("c.txt")}}},
-		"cfg":  map[string]any{"reports": map[string]any{"r1": w("d.txt"), "r2": w("e.txt")}},
+		"grid": map[string]any{"k": []any{[]any{marker("L0000"), marker("L0001")}, []any{marker("L0002")}}},
+		"cfg":  map[string]any{"reports": map[string]any{"r1": marker("L0003"), "r2": marker("L0004")}},
 	}
 
-	got, err := publishOuts(dir, params, structs, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
+	got := newPublisher(structs).publishOuts(params, outs)
 
 	want := map[string]any{
 		"grid": map[string]any{"k": []any{
@@ -345,51 +289,5 @@ func TestPublishOutsDeepNesting(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("deep-nesting publish mismatch (-want +got):\n%s", diff)
-	}
-	for _, rel := range []string{
-		"grid/k/0/0.txt", "grid/k/0/1.txt", "grid/k/1/0.txt",
-		"cfg/reports/r1.txt", "cfg/reports/r2.txt",
-	} {
-		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
-			t.Errorf("missing published file %s: %v", rel, err)
-		}
-	}
-}
-
-// TestPublishOutsCollisionDisambiguated guards that two distinct sources sharing
-// an explicit OutName both publish (the second gets a numeric suffix) rather than
-// the second silently overwriting/aliasing the first.
-func TestPublishOutsCollisionDisambiguated(t *testing.T) {
-	dir := t.TempDir()
-	srcDir := t.TempDir()
-	w := func(n, content string) string {
-		p := filepath.Join(srcDir, n)
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		return p
-	}
-
-	params := []ir.Param{
-		{Name: "a", BaseType: "txt", IsFile: true, OutName: "report.txt"},
-		{Name: "b", BaseType: "txt", IsFile: true, OutName: "report.txt"},
-	}
-	outs := map[string]any{"a": w("a.txt", "AAA"), "b": w("b.txt", "BBB")}
-
-	got, err := publishOuts(dir, params, nil, outs)
-	if err != nil {
-		t.Fatalf("publishOuts: %v", err)
-	}
-
-	if got["a"] != "report.txt" || got["b"] != "report_1.txt" {
-		t.Fatalf("collision not disambiguated: a=%v b=%v", got["a"], got["b"])
-	}
-	// Both files present with their own content — neither dropped.
-	if c, _ := os.ReadFile(filepath.Join(dir, "report.txt")); string(c) != "AAA" {
-		t.Errorf("report.txt content = %q, want AAA", c)
-	}
-	if c, _ := os.ReadFile(filepath.Join(dir, "report_1.txt")); string(c) != "BBB" {
-		t.Errorf("report_1.txt content = %q, want BBB", c)
 	}
 }

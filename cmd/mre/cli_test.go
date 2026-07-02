@@ -516,7 +516,7 @@ func TestRunPublishLayoutSmoke(t *testing.T) {
 	}
 
 	sidecar := writeTestFile(t, filepath.Join(dir, "data.json"),
-		`{"aln":"`+shim.FileMarker+`f/L0000"}`)
+		`{"aln":"`+marker("L0000")+`"}`)
 	outDir := filepath.Join(dir, "outs")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		t.Fatalf("mkdir outs: %v", err)

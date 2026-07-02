@@ -9,12 +9,13 @@ LDFLAGS := -X main.version=$(VERSION)
 
 # Tools run via `go run ...@pinned` to avoid global installs.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.47.0
 
-.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff bench spike-13 vet lint lint-check install clean help
+.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff bench vet lint lint-check deadcode install clean help
 
-# Minimum total statement coverage (cross-package) the cover gate accepts.
-# Current total is ~79%; the floor sits a little under it so refactors don't
-# flap, while a real coverage regression still fails.
+# Minimum total statement coverage (cross-package) the cover gate accepts. Keep
+# it a little under the current `make cover` total so refactors don't flap while
+# a real regression still fails; ratchet it up as coverage grows.
 COVER_MIN ?= 76
 .DEFAULT_GOAL := help
 
@@ -44,7 +45,7 @@ E2E_PARALLEL ?= 6
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
 test-e2e: build ## Run the e2e suite (golden table, cloud-sim, failure paths, knobs)
-	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestBench|^TestSpike'
+	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestBench'
 
 test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
 	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
@@ -55,9 +56,6 @@ test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; 
 bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline
 	$(GO_E2E) -timeout 20m -run '^TestBench'
 
-spike-13: build ## Validate the #13 de-bundle staging spike (local + S3-proxy)
-	$(GO_E2E) -timeout 20m -run '^TestSpikeDebundle'
-
 vet: ## Run go vet
 	go vet ./...
 
@@ -66,6 +64,10 @@ lint: ## Run linter with auto-fix
 
 lint-check: ## Run linter without auto-fix (for CI)
 	$(GOLANGCI_LINT) run ./...
+
+deadcode: ## Fail on functions unreachable from the mro2nf/mre binaries
+	@out="$$($(DEADCODE) ./cmd/...)"; \
+	if [ -n "$$out" ]; then echo "$$out"; echo "deadcode: unreachable functions found"; exit 1; fi
 
 install: build ## Install binaries into PREFIX/bin
 	install -d $(PREFIX)/bin
