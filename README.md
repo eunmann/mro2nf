@@ -40,8 +40,10 @@ targets — see **[`docs/TRANSPILER.md`](docs/TRANSPILER.md)**.
 ## Layout
 
 ```
-cmd/mro2nf/      transpiler CLI: .mro -> Nextflow project
-cmd/mre/       runtime shim: runs one stage phase against the Martian adapter
+cmd/mro2nf/      transpiler CLI: .mro -> Nextflow project (+ `overrides` subcommand)
+cmd/mre/       runtime shim: runs stage phases (split|main|join) against the
+               Martian adapter, plus the data-plane subcommands the generated
+               processes call (bind, forkbind, merge, publish-layout, entryargs)
 internal/
   frontend/    parse .mro via github.com/martian-lang/martian/syntax -> IR
   ir/          normalized transpiler IR
@@ -49,10 +51,11 @@ internal/
   types/       type-directed file-leaf walk + scalar coercion + manifest
   shim/        _args/_jobinfo/_outs I/O, bundle data plane, adapter launch
   bind/        resolve call bindings into _args (refs, projections, fan-in)
+  overrides/   mrp --overrides file -> Nextflow -c config
   logging/     zerolog setup    apperror/  typed errors
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
-test/e2e/      transpile + nextflow run + diff vs mrp (+ docker_iso.sh isolation)
+test/e2e/      Go e2e suites (golden diff vs mrp, docker isolation) + AWS runbooks
 deploy/awsbatch-cdk/   minimal AWS CDK: S3 + ECR + Batch + HealthOmics role
 docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
                 (support matrix), GPU.md, RUNTIME_TUNING.md (mrp knobs ->
@@ -62,7 +65,7 @@ docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
 
 ## Quickstart
 
-Prerequisites: Go ≥ 1.24, Java 17+, [Nextflow](https://www.nextflow.io)
+Prerequisites: Go ≥ 1.26, Java 17+, [Nextflow](https://www.nextflow.io)
 (`curl -s https://get.nextflow.io | bash`), Python 3.
 
 ```bash
@@ -90,6 +93,10 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
 | `-monitor` | cap each stage's virtual memory at its `vmem_gb` via `prlimit` (mrp `--monitor`) |
 
+`mro2nf overrides <file>` converts an mrp `--overrides` JSON into an equivalent
+Nextflow `-c` config overlay (per-stage `memory`/`cpus` retuning at launch) —
+see [`docs/RUNTIME_TUNING.md`](docs/RUNTIME_TUNING.md).
+
 For `-target local` the `-mre`/`-shell`/`-mrjob`/stage paths are baked into the
 generated scripts, so set them to the paths that will exist **where the pipeline
 runs** (the local repo, or shared-filesystem cluster paths).
@@ -111,17 +118,25 @@ points at an `s3://` path or prefix is localized into the task by Nextflow.
 
 ```bash
 make test          # unit tests (in-process, sub-second)
-make test-e2e      # transpile + nextflow run + diff vs mrp, all fixtures
+make cover         # unit-test coverage gate (fails below COVER_MIN%)
+make test-e2e      # golden table + cloud-sim + failure paths + launch knobs
+make test-e2e-docker  # the same pipelines under docker (container isolation)
 make lint-check    # golangci-lint (no auto-fix)
 ```
 
-The e2e suite (`test/e2e/run.sh`) runs each fixture's transpiled pipeline under
-Nextflow and diffs the result against the committed real-`mrp` output. It runs
-cases in a bounded parallel pool — tune with `E2E_PARALLEL=<n>` (default 6) — and
-includes `cloud_sim.sh` (object-store data plane under copy-staging). A separate
-`make test-e2e-docker` (`test/e2e/docker_iso.sh`) runs pipelines under the
-Nextflow **docker** executor — tasks in containers that mount only their work
-dir — reproducing the AWS Batch / HealthOmics no-shared-filesystem model.
+The e2e suites are Go tests in `test/e2e` (build tag `e2e`, always run with
+`-count=1` so the test cache can't return a stale ok). `make test-e2e` runs
+each fixture's transpiled pipeline under Nextflow in a bounded parallel pool
+(`E2E_PARALLEL=<n>`, default 6) and diffs the result against the committed
+real-`mrp` golden; it also covers copy-staging (the object-store data plane),
+the retry/ASSERT failure contract, `-resume` cache stability, and
+`mro2nf overrides` overlay application. `make test-e2e-docker` runs pipelines
+under the Nextflow **docker** executor — tasks in containers that mount only
+their work dir — reproducing the AWS Batch / HealthOmics no-shared-filesystem
+model, and additionally builds + runs the *generated* `-target awsbatch`
+Dockerfile and validates the HealthOmics package. The live AWS runbooks
+(`test/e2e/aws_*.sh`) and the informational mrp oracle (`mapcall_matrix.sh`)
+remain shell.
 
 ### How it's validated
 
@@ -130,8 +145,8 @@ orchestrator, so "correct" means byte-identical to Martian:
 
 - **Unit** (`make test`): in-process tests of the IR, binder, type walk, shim
   ABI, and the generated Nextflow text.
-- **Local e2e** (`make test-e2e`): 59 `.mro` fixtures transpiled, run under
-  Nextflow, diffed vs committed `mrp` goldens — covering every supported feature,
+- **Local e2e** (`make test-e2e`): 62 cases over 57 `.mro` fixtures transpiled,
+  run under Nextflow, diffed vs committed `mrp` goldens — covering every supported feature,
   including file-typed entry inputs (scalar, `file[]`, `map<file>`,
   struct-with-file) supplied at launch via `-params-file`.
 - **Container isolation** (`make test-e2e-docker`): 19 checks (14 fixtures + 5
@@ -144,9 +159,10 @@ orchestrator, so "correct" means byte-identical to Martian:
   and **AWS HealthOmics**, all byte-identical to `mrp` — exercising all three
   adapters (`py`/`exec`/`comp`), file inputs/outputs through the object store,
   directory outputs, retry/ASSERT handling, and stage logs. The most recent round
-  re-ran 15 fixtures in parallel on Batch after the entry-file staging fix,
-  including a same-basename `file[]` case that proves per-leaf staging never
-  collides. See [`docs/LIVE_AWS_TEST.md`](docs/LIVE_AWS_TEST.md) and
+  (round 5, after the data-plane epic) re-validated 13 fixtures in parallel on
+  Batch and 4 on HealthOmics, with the emitted `manifest.json.gz` verified
+  set-equal to the published S3 outputs on both backends.
+  See [`docs/LIVE_AWS_TEST.md`](docs/LIVE_AWS_TEST.md) and
   [`deploy/awsbatch-cdk/`](deploy/awsbatch-cdk/) (the CDK that provisions it).
 
 ## Running on a cluster
@@ -219,8 +235,8 @@ needed to test live (S3 bucket, ECR repo, Batch compute env + queue, and a
 HealthOmics service role) — see its README for `cdk deploy` + run steps.
 
 > Provide a **linux/amd64** `mre` (build with `GOOS=linux GOARCH=amd64`). Cloud
-> file flow is validated locally via `cloud_sim.sh` (copy-staging) and
-> `docker_iso.sh` (true container isolation); a live Batch/S3 or HealthOmics run
+> file flow is validated locally via the copy-staging suite (`TestCloudSim*`) and
+> the docker-isolation suite (`make test-e2e-docker`); a live Batch/S3 or HealthOmics run
 > additionally needs the AWS infrastructure (`deploy/awsbatch-cdk/`).
 
 ## Feature coverage & limitations
@@ -249,9 +265,10 @@ allocation it resolved. (The `special` key maps to `clusterOptions` through a
 `special = "gpu"` / `"gpu:N"` instead requests N GPUs via the `accelerator`
 directive on the compute phase — see [`docs/GPU.md`](docs/GPU.md) for the AWS
 Batch / HealthOmics setup. A few things diverge
-in layout or timing but never in output: mid-run VDR deletion, nested maps on a
-real object-store work dir, and mrp's nested `outs/` tree versus Nextflow's flat
-`publishDir`.
+in timing or mechanism but never in output: there is no mid-run VDR deletion
+(work dirs are retained), nested maps stage whole bundle dirs on a real
+object-store work dir, and the published `outs/` tree is copied into place
+(mrp moves + symlinks) — the tree's layout and contents match mrp's.
 
 ## Development
 

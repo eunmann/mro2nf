@@ -2,11 +2,13 @@ package emit_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/google/go-cmp/cmp"
@@ -638,6 +640,36 @@ func TestEmitContainerMrjob(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, "runtime", "mrjob")); err != nil {
 		t.Errorf("build context missing runtime/mrjob: %v", err)
+	}
+}
+
+// TestEmitCompRequiresMrjob checks that a program with a comp-adapter stage
+// fails the transpile when no -mrjob is supplied (the generated project could
+// only fail at run time), and emits normally once one is.
+func TestEmitCompRequiresMrjob(t *testing.T) {
+	ast, err := frontend.Parse("../../testdata/comp_split/pipeline.mro", []string{"../../testdata/comp_split"}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	opts := emit.Options{
+		OutDir: t.TempDir(), Mre: "mre", Shell: "/x/martian_shell.py",
+		MROFile: "pipeline.mro", StageCode: map[string]string{"COMPSUM": "/x/compsum"},
+	}
+
+	err = emit.Emit(prog, opts)
+	if !errors.Is(err, apperror.ErrUnsupported) {
+		t.Fatalf("Emit without -mrjob: want ErrUnsupported, got %v", err)
+	}
+
+	opts.Mrjob = "/x/mrjob.sh"
+	if err := emit.Emit(prog, opts); err != nil {
+		t.Fatalf("Emit with -mrjob: %v", err)
 	}
 }
 

@@ -65,15 +65,27 @@ on the Python path, all six `_jobinfo` keys, the mandatory `_outs` skeleton, and
 `_chunk_defs` with resources stripped for join. Python-path asserts (`ASSERT:` on
 fd 4) → `ErrStageAssert` → exit 42. Faithful.
 
-**Bug (CORRECTNESS, scoped):** `runWrappedAdapter` (the comp/exec path,
-`shim.go:301-333`) reads only `_errors` + exit code — never `_assert`. With a real
-mrjob, a compiled-stage assertion lands in `_assert` and mrjob exits 0, so mre
-sees empty `_errors`/nil exit and returns the stale skeleton `_outs` as success.
-**Fix:** read `_assert` in `runWrappedAdapter`; non-empty → `ErrStageAssert`.
+**Bug (CORRECTNESS, scoped) — FIXED:** `runWrappedAdapter` (the comp/exec path)
+originally read only `_errors` + exit code — never `_assert` — so a real-mrjob
+assertion (written to `_assert`, exit 0) was silently treated as success. It now
+reads `_assert` first and classifies it as `ErrStageAssert`
+(`shim.go` runWrappedAdapter; TestWrappedAdapterReadsAssert).
+
+**TMPDIR — FIXED:** mrp creates `<meta>/tmp` and sets `TMPDIR` per job
+(`core/node.go`, `metadata.go` TempDir) so stage tempfiles land on the job's
+scratch volume. mre originally inherited the task env; it now creates the tmp
+dir in `prepDirs` and sets `TMPDIR` on the adapter child (`adapterEnv`;
+TestAdapterTMPDIR). On container backends this keeps `tempfile` off the small
+root volume.
 
 **Intentional/minor:** `_complete`/`_perf`/heartbeat not written (NF replaces);
-`monitor_flag` hardcoded `disable`; `invocation` carries stage args not the
-top-level pipeline invocation; `version` = `mro2nf`; `MRO_UUID` unset.
+`monitor_flag`, `profile_mode`, and `stackvars_flag` hardcoded `disable` (no
+mrp `--profile`/`--stackvars` analogs); `invocation` carries stage args not the
+top-level pipeline invocation; `version` = `mro2nf`; `MRO_UUID` unset; mre reads
+the whole fd-4 error payload where mrjob truncates at 8100 bytes (mre is the
+more permissive side); mrjob sets PDEATHSIG on its child while mre relies on
+Nextflow's task-tree kill (an orphaned stage can briefly outlive a SIGKILLed
+mre — accepted, as NF owns the supervision tree).
 
 ## B. Lifecycle & forks — faithful
 
@@ -265,7 +277,7 @@ fixtures encode it.
 
 ## Differential testing against real Martian
 
-`make test-mrp-diff` (`test/e2e/mrp_diff.sh`) runs each fixture through **real
+`make test-mrp-diff` (the Go `TestMrpDiff` suite) runs each fixture through **real
 `mrp`** and the transpiled Nextflow, then compares the published `outs/` tree —
 every output file's path (relative to the outs dir) and its content hash — and
 the path-normalized `_outs` JSON. This validates the whole transpile + runtime +
@@ -274,7 +286,7 @@ publish path against Martian itself, not a hand-written golden.
 It needs a local Martian build: set `MARTIAN_BIN` (default `~/workdir/martian/bin`,
 which holds `mrp`/`mrjob`). It skips cleanly when `mrp`, `nextflow`, `java`, or
 `python3` is absent, so CI without a Martian checkout is unaffected. Run one case
-with `bash test/e2e/mrp_diff.sh <fixture>`.
+with `go test -tags e2e -count=1 -run "TestMrpDiff/<fixture>" ./test/e2e/`.
 
 The one intended difference the harness normalizes: Martian writes **absolute**
 paths into `_outs`; mre writes the **same tree** with paths **relative** to the

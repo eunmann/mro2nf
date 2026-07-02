@@ -12,15 +12,22 @@ import (
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-// prepDirs creates the metadata and files directories for a phase and returns
-// the absolute metadata dir, files dir, and journal prefix path the adapter
-// writes to.
+// prepDirs creates the metadata, files, and per-stage tmp directories for a
+// phase and returns the absolute metadata dir, files dir, and journal prefix
+// path the adapter writes to. The tmp dir backs the TMPDIR env var the adapter
+// child runs with (mrp sets TMPDIR=<meta>/tmp per job — core/node.go,
+// metadata.go TempDir — so stage tempfiles land on the job's scratch volume,
+// not the possibly tiny container /tmp).
 func prepDirs(workDir, phase string) (string, string, string, error) {
 	meta := filepath.Join(workDir, phase)
 	files := filepath.Join(meta, "files")
 
 	if err := os.MkdirAll(files, dirPerm); err != nil {
 		return "", "", "", fmt.Errorf("create work dirs: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(meta, "tmp"), dirPerm); err != nil {
+		return "", "", "", fmt.Errorf("create tmp dir: %w", err)
 	}
 
 	absMeta, err := filepath.Abs(meta)

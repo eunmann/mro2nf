@@ -107,6 +107,10 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
+	if err := checkCompMrjob(prog, opts.Mrjob); err != nil {
+		return err
+	}
+
 	// types.json and the bindspecs live under _assets/. A process script can only
 	// read files staged into its (isolated) task dir — referencing them via
 	// ${projectDir} works on a shared filesystem but not on AWS Batch + S3, where
@@ -258,10 +262,33 @@ func writeJSONFile(path string, v any) error {
 	return writeFile(path, data)
 }
 
+// checkCompMrjob rejects a program that declares a comp-adapter stage when no
+// -mrjob path was supplied. The generated stage command would omit -mrjob and
+// every phase of that stage would fail inside the shim at run time; failing the
+// transpile keeps the contract that unsupportable programs never emit a project
+// (see Warnings).
+func checkCompMrjob(prog *ir.Program, mrjob string) error {
+	if mrjob != "" {
+		return nil
+	}
+
+	for _, name := range sortedKeys(prog.Stages) {
+		if prog.Stages[name].Lang == ir.LangComp {
+			return &apperror.UnsupportedError{
+				Construct: "comp stage " + name,
+				Detail:    "-mrjob is required to run comp-adapter stages",
+			}
+		}
+	}
+
+	return nil
+}
+
 // checkSupported rejects programs that use a Martian construct with no faithful
 // Nextflow lowering before any output is written. It reuses mapProjectDepth's
-// shape analysis: a negative depth marks an array-of-typed-map field projection
-// (array<map<S>>.field), which the binder would silently mis-navigate.
+// shape analysis: a negative depth marks a nested typed-map field projection
+// (map<map<S>>.field, or maps nested inside an array), which the binder would
+// silently mis-navigate. The array<map<S>>.field shape IS supported (MapInArray).
 func checkSupported(prog *ir.Program) error {
 	for _, name := range sortedKeys(prog.Pipelines) {
 		p := prog.Pipelines[name]

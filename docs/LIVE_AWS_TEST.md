@@ -177,9 +177,10 @@ adapter ABIs (`py`/`exec`/`comp`) now have a live cloud run.
    `s3://` is finicky and untested here.
 3. **A stage with a baked third-party dependency** (the "no internet on
    HealthOmics, bake your tools" model end-to-end).
-4. **The two new complex-combination fixtures** (`map_split_file`,
-   `mixed_adapters`) — verified locally + docker-iso; live Batch run pending
-   fresh credentials (see Round 3 above).
+
+(The complex-combination fixtures `map_split_file` and `mixed_adapters`,
+previously listed here, ran live on Batch + S3 in round 3 — see the
+combination table above — and `map_split_file` again in round 5.)
 
 ## What is being verified
 
@@ -231,7 +232,7 @@ and input parameterization — the object-store data plane verified end-to-end.
 | Stage errors / `ASSERT` | ✅ mirrored to stderr → CloudWatch; exit-42 terminates (non-retryable) |
 | cpus/memory provisioning | ✅ `_jobinfo` matches mrp; Batch requests per the directives |
 | Retries (`errorStrategy`) | ⚠️ config emitted; not exercised live (no transient failure forced) |
-| Directory outputs / `comp`+`exec` adapters | ⚠️ not yet run live (only `py` stages) |
+| Directory outputs / `comp`+`exec` adapters | ⚠️ not run live in *this* wave (only `py` stages); ✅ covered in the later waves — `dir_out` and all three adapters ran live (see round 3 and the totals below) |
 
 ## Issues found and fixed during live testing
 
@@ -322,14 +323,18 @@ directory, in and out), logs, retry/terminate, and resources verified live.
 ## How the transpiler signals what it can't reproduce
 
 - **Hard error (transpile fails):** unknown expressions (e.g. `sweep` — parse
-  error), unknown adapter language, a `comp` stage with no `mrjob`, an
-  `array<map<S>>.field` projection, an invalid `-target`. Lowering errors by
-  default on any expression it doesn't recognize, so unsupported constructs
-  cannot slip through as a silent drop.
-- **Warning (transpiles, behavior differs):** `preflight` (runs, no early-abort),
-  `local` (scheduled normally), `volatile` (no mid-run VDR). `mro2nf` logs these.
-- **Documented, no output impact:** `publishDir` layout vs mrp's `outs/` tree;
-  `special` → `clusterOptions` mapping. See `FEATURE_COVERAGE.md`.
+  error), unknown adapter language, a `comp` stage with no `mrjob`, a *nested*
+  typed-map field projection (`map<map<S>>.field`, or maps nested inside an
+  array — plain `array<map<S>>.field` is supported), an invalid `-target`.
+  Lowering errors by default on any expression it doesn't recognize, so
+  unsupported constructs cannot slip through as a silent drop.
+- **Warning (transpiles, behavior differs):** a `preflight` bound to a call
+  output (runs in DAG order; an input-bound preflight gates the pipeline like
+  mrp), `local` (scheduled normally), `volatile` (no mid-run VDR). `mro2nf`
+  logs these.
+- **Documented, no output impact:** the `outs/` tree is copied into place
+  (mrp moves + symlinks); `special` → `clusterOptions` mapping. See
+  `FEATURE_COVERAGE.md`.
 
 (Note: a 3-level nested map was attempted but **Martian itself** rejects it —
 `mro check`: "filtering merge: unexpected merge expression for int" — so 2-level
@@ -354,7 +359,7 @@ same-basename entry-file run. All byte-identical to mrp. Five real issues were
 found and fixed via the live runs (ECR lifecycle, the S3 `.resolve()` scheme bug,
 lost stage logs, the Dockerfile missing `mrjob`, and the entry-file basename
 collision), plus the no-op-modifier warnings. Local `make test` + `make test-e2e`
-(59) + `make test-e2e-docker` (19) green.
+(62 cases / 57 fixtures) + `make test-e2e-docker` (19) green.
 
 **Infra status (2026-06-27, round 4):** after the round-4 campaign the stack was
 **torn down** — `cd deploy/awsbatch-cdk && npx cdk destroy` in us-east-2 and

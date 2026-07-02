@@ -25,10 +25,6 @@ const (
 // bake (so mre, the adapters, and the stage code resolve inside an isolated
 // task). The host artifacts are copied into <out>/runtime/ and a Dockerfile is
 // written so `docker build -t <image> <out>` produces the runtime image.
-//
-// It is best-effort about missing sources (e.g. a bare "mre" name): the Dockerfile
-// still references the in-container path, and the operator fills any gap in
-// runtime/ before building.
 func containerBuild(opts Options, target Target) (genCtx, error) {
 	g := genCtx{mre: ctrMre, shell: opts.Shell, mrjob: opts.Mrjob, code: map[string]string{}}
 

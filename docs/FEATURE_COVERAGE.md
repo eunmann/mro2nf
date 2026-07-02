@@ -3,7 +3,7 @@
 This matrix tracks every Martian feature (from the martian-lang.org docs and the
 authoritative `martian/syntax` grammar) against the transpiler's support and the
 test that exercises it. Test types: **e2e** = transpile + run under Nextflow,
-output diffed against real `mrp` (`test/e2e/run.sh`); **unit** = Go test;
+output diffed against real `mrp` (the Go `test/e2e` suite); **unit** = Go test;
 **corpus** = parse+lower robustness sweep.
 
 Provenance: this matrix was built from a systematic page-by-page audit of all
@@ -121,25 +121,25 @@ out of scope for a transpiler.
 
 | Feature | Status | Test |
 |---|---|---|
-| file outputs published to results (path→basename rewrite) | ✅ | e2e `file_min` |
+| file outputs published to results (mrp `outs/` layout, `GetOutFilename` naming) | ✅ | e2e `file_min`, `mrp_diff.sh` (tree diff vs real mrp) |
 | inter-stage file passing (shared FS) | ✅ | e2e `file_chain` |
 | inter-stage file passing (object store, no shared FS) | ✅ #13 (bundle-dir channels: files travel with their JSON as `@mre:file:` markers; the shim absolutizes on input, copies+relativizes on output) | e2e `cloud_sim`, `docker_iso`, unit `TestBundleRoundTrip` |
 | auxiliary files reach isolated workers (types.json, bindspecs) | ✅ each task stages only the files it needs — the shared `types.json` plus, for a bind/fork process, its own `spec.json` — as individual `path` inputs, never referenced by `${projectDir}` (invisible on an AWS Batch / HealthOmics worker, which mounts only its work dir). A task transfers only its own bindspec, not every call's | e2e `docker_iso` (container that does not mount the project dir), unit `TestEmitAssetsStaged` |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ #13 (PUBLISH walks the entry's output type, descending file-bearing structs) | e2e `map_file`, `map_file_keyed`, `struct_of_file`; unit `internal/types` |
 | stage / pipeline `retain` | ⚠️ trivially satisfied (Nextflow keeps `work/`) | parse |
 | VDR modes (disable/post/rolling/strict) timing | 🚫 no native dependency-gated mid-run deletion | — (terminal-state only) |
-| `outs/` move+symlink layout | ⚠️ → `publishDir` (different mechanism, same result) | e2e `file_min` |
+| `outs/` move+symlink layout | ⚠️ files are *copied* into an mrp-style `outs/` tree via `publishDir` (same layout and contents; mrp moves + symlinks) | e2e `file_min`, `mrp_diff.sh` |
 
 ## Running / inspecting — running-pipelines / inspecting-pipelines
 
 | Feature | Status | Test |
 |---|---|---|
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles | unit `TestEmitConfig` |
-| `--autoretry` (content-based retry) | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it | unit `TestEmitConfig`, `TestStageFailureClassification` |
+| `--autoretry` (content-based retry) | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it | unit `TestEmitConfig`, `TestStageFailureClassification`; e2e `failure_paths` / Go `TestAssertTerminatesWithoutRetry`, `TestOrdinaryFailureRetriesWithEscalatedMemory` (assert terminates after 1 attempt with exit 42; ordinary failure retries and sees the escalated allocation) |
 | cloud executors (awsbatch/k8s) | ✅ profiles emitted; #13 bundle data plane makes file flow object-store-correct; auxiliary files staged via `_assets` so isolated workers (no shared FS) can read them | config, e2e `cloud_sim` (copy-staging), `docker_iso` (true container isolation) |
 | `-target awsbatch` (AWS Batch + S3) | ✅ Batch executor + classic aws-CLI S3 staging, in-container `/opt/mro2nf` paths, a generated `Dockerfile` + self-contained `runtime/` build context (bash/ps, no ENTRYPOINT, x86_64, aws CLI) | unit `TestEmitConfigTargets`, `TestEmitContainerBuild`; e2e `docker_iso` (built from the generated Dockerfile) |
 | `-target healthomics` (AWS HealthOmics) | ✅ ECR-parameterized container, publishes to `/mnt/workflow/pubdir`, no executor (managed), pinned Nextflow version, `parameter-template.json` + `package.sh` (workflow zip) | unit `TestEmitConfigTargets`, `TestEmitHealthOmicsPackaging` |
-| `-resume` ≈ restart-without-rerun | ⚠️ content-addressed cache (different mechanism) | — |
+| `-resume` ≈ restart-without-rerun | ⚠️ content-addressed cache (different mechanism) | e2e `runtime_knobs` / Go `TestResumeCachesEverything` (unchanged rerun: zero tasks re-execute) |
 | `mrp --overrides` (per-stage resource retune at launch) | ✅ `mro2nf overrides` converts the JSON to a `process`/`withName:` `-c` overlay; or write it natively. See `RUNTIME_TUNING.md` | unit `TestConvert` |
 | `--maxjobs` / `--jobinterval` / `--localcores` / `--localmem` (throttling) | ✅ Nextflow `executor.queueSize` / `submitRateLimit` / `cpus` / `memory`; documented in `RUNTIME_TUNING.md` | — |
 | `--profile` / `--inspect` / `--onfinish` (profile, dry-run, hook) | ✅ Nextflow `-with-trace`/`-with-report`, `-preview`, `workflow.onComplete`; see `RUNTIME_TUNING.md` | — |
@@ -171,7 +171,9 @@ out of scope for a transpiler.
     target); fan-out needs a common-descendant barrier or falls back to post-run
     cleanup, since "last consumer" is a runtime fact. Future work; today the whole
     `work/` tree is retained (higher peak disk, identical outputs).
-  - **live UI / HTTP API / OOM auto-escalation** — no faithful Nextflow analog.
+  - **live UI / HTTP API** — no faithful Nextflow analog. (OOM handling is
+    covered: memory directives grow with `task.attempt`, so a memory-killed
+    stage retries with more — see the resources table above.)
 - Scheduler-*allocation* fidelity is now broad: per-chunk `cpus`/`memory`, the
   split-returned `join` override, and `special` → `clusterOptions` all reach the
   scheduler, and every phase reports its resolved allocation in `_jobinfo`, so a
@@ -181,7 +183,8 @@ out of scope for a transpiler.
   is passed to the shim via `-vmemgb` on every phase, so `--monitor` caps virtual
   memory (and `_jobinfo` reports it) at the declared value (a per-chunk
   `__vmem_gb` still wins for main; a split-returned join override refines it).
-- Remaining ⚠️ items are storage-*layout* fidelity (flat `publishDir` results vs
-  mrp's nested `outs/` tree; published names use the written basename, with
-  collisions disambiguated, rather than mrp's `GetOutFilename`) — no
-  output-observable correctness impact.
+- Remaining ⚠️ items are storage-*mechanism* fidelity: the published `outs/`
+  tree now reproduces mrp's nested layout and `GetOutFilename` naming
+  (verified by the Go `TestMrpDiff` suite against real mrp), but files are copied
+  into place rather than moved + symlinked, and `work/` is retained (no VDR) —
+  no output-observable correctness impact.

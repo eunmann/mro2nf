@@ -50,6 +50,87 @@ func TestCheckSupported(t *testing.T) {
 	}
 }
 
+// nestedMapProg builds a program whose MAPFORK call wraps a map<P> output in a
+// second map dimension (an unsupported projection source), with hook points
+// for a disabled-ref or composite return binding.
+func nestedMapProg(ret ir.Value, disabled *ir.Ref) *ir.Program {
+	return &ir.Program{
+		Structs: map[string]*ir.StructType{
+			"P": {Name: "P", Fields: []ir.Param{{Name: "x", BaseType: "int"}}},
+		},
+		Stages: map[string]*ir.Stage{
+			"MAPOUT": {Name: "MAPOUT", Out: []ir.Param{{Name: "m", BaseType: "P", MapDim: 1}}},
+		},
+		Pipelines: map[string]*ir.Pipeline{
+			"T": {
+				Name: "T",
+				Calls: []ir.Call{
+					{Name: "MAPFORK", Callable: "MAPOUT", Mapped: true, MapMode: "map"},
+					{Name: "GATED", Callable: "MAPOUT", Disabled: disabled},
+				},
+				Returns: []ir.Binding{{Param: "r", Value: ret}},
+			},
+		},
+	}
+}
+
+// TestCheckSupportedDisabledRef checks a `disabled = REF` condition navigating
+// an unsupported nested typed-map projection fails the transpile like a
+// binding would (the disabled path through checkValueRefs).
+func TestCheckSupportedDisabledRef(t *testing.T) {
+	bad := &ir.Ref{Kind: "call", ID: "MAPFORK", Output: "m.x"}
+	prog := nestedMapProg(ir.Value{Literal: []byte("1")}, bad)
+
+	if err := checkSupported(prog); !errors.Is(err, apperror.ErrUnsupported) {
+		t.Errorf("disabled-ref nested-map projection: want ErrUnsupported, got %v", err)
+	}
+}
+
+// TestCheckSupportedCompositeRefs checks refs nested inside array/object
+// binding literals reach the projection guard (a fan-in [MAPFORK.m.x] must be
+// rejected exactly like a bare ref).
+func TestCheckSupportedCompositeRefs(t *testing.T) {
+	bad := ir.Value{Ref: &ir.Ref{Kind: "call", ID: "MAPFORK", Output: "m.x"}}
+
+	for name, v := range map[string]ir.Value{
+		"array":  {Array: []ir.Value{bad}},
+		"object": {Object: map[string]ir.Value{"k": bad}},
+	} {
+		if err := checkSupported(nestedMapProg(v, nil)); !errors.Is(err, apperror.ErrUnsupported) {
+			t.Errorf("%s-nested ref: want ErrUnsupported, got %v", name, err)
+		}
+	}
+}
+
+// TestMapProjectDepthArrayShapes covers the projectionShape arms with no prior
+// direct case: a field beneath a plain array auto-projects (depth 0), and maps
+// nested inside an array reject (negative depth).
+func TestMapProjectDepthArrayShapes(t *testing.T) {
+	prog := &ir.Program{
+		Structs: map[string]*ir.StructType{
+			"P": {Name: "P", Fields: []ir.Param{{Name: "x", BaseType: "int"}}},
+		},
+		Stages: map[string]*ir.Stage{
+			"S": {Name: "S", Out: []ir.Param{
+				{Name: "arr", BaseType: "P", ArrayDim: 1},
+				{Name: "mm", BaseType: "P", MapDim: 2},
+			}},
+		},
+	}
+	p := &ir.Pipeline{Name: "T", Calls: []ir.Call{
+		{Name: "PLAIN", Callable: "S"},
+		{Name: "ARRFORK", Callable: "S", Mapped: true, MapMode: "array"},
+	}}
+
+	if d, inArr := mapProjectDepth(prog, p, &ir.Ref{Kind: "call", ID: "PLAIN", Output: "arr.x"}); d != 0 || inArr {
+		t.Errorf("array-of-struct: got (%d,%v), want (0,false)", d, inArr)
+	}
+
+	if d, _ := mapProjectDepth(prog, p, &ir.Ref{Kind: "call", ID: "ARRFORK", Output: "mm.x"}); d >= 0 {
+		t.Errorf("array over nested maps: got depth %d, want negative (unsupported)", d)
+	}
+}
+
 // TestMapProjectDepth covers the typed-map field-projection resolver: the depth
 // at which projection begins and whether the projection descends an array
 // (array<map<S>>.field), plus the edge cases a code review surfaced (an

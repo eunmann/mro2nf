@@ -1,0 +1,27 @@
+# Failure-path fixture: the stage raises a Martian assertion (martian.exit).
+# The run must TERMINATE without a retry — the shim exits 42 and the generated
+# errorStrategy maps 42 to 'terminate'. Exercised by test/e2e/failure_paths.sh
+# (behavioral; no mrp golden — mrp has no retry policy to compare against).
+stage BOOM(
+    in  float x,
+    out float y,
+    src py    "stages/boom",
+)
+
+pipeline AP(
+    in  float x,
+    out float y,
+)
+{
+    call BOOM(
+        x = self.x,
+    )
+
+    return (
+        y = BOOM.y,
+    )
+}
+
+call AP(
+    x = 1.0,
+)

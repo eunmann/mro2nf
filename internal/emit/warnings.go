@@ -12,9 +12,9 @@ import (
 // operator should know the runtime behavior differs — so the mro2nf CLI logs them
 // at transpile time rather than letting the difference pass silently.
 //
-// Constructs with no faithful lowering at all (unknown expressions/adapters, an
-// array-of-map<S> field projection, a comp stage without mrjob) are hard errors
-// elsewhere — those fail the transpile; these only warn.
+// Constructs with no faithful lowering at all (unknown expressions/adapters, a
+// nested typed-map field projection, a comp stage without mrjob) are hard
+// errors elsewhere — those fail the transpile; these only warn.
 func Warnings(prog *ir.Program) []string {
 	var w []string
 

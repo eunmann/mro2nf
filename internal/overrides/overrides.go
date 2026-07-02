@@ -13,8 +13,13 @@
 //	}
 //
 // The key's last segment is taken as the stage name and mapped to the generated
-// process names (STAGE, STAGE_MAIN, STAGE_JOIN, and their keyed _K variants) via
-// withName regexes; "" maps to the global process defaults.
+// process names via withName regexes; "" maps to the global process defaults.
+// Each selector covers every naming family the emitter produces for a stage:
+// the plain processes (STAGE, STAGE_SPLIT/_MAIN/_JOIN), the keyed fork variants
+// (STAGE_MAP, STAGE_*_K), and the fused per-call processes from the BIND fold
+// (STAGE_<n>_<pipeline>__<call>[_SP|_MN|_JN]), which embed the call name — for
+// an aliased call (`call STAGE as X`) the override key's last segment matches
+// the call name, exactly what mrp keys on.
 package overrides
 
 import (
@@ -62,12 +67,24 @@ func mapField(stage, field string, val json.RawMessage) (string, string, string)
 		phase, base = "", field
 	}
 
+	if _, _, known := phaseSuffixes(phase); !known {
+		return "", "", "unrecognized phase prefix"
+	}
+
 	switch base {
-	case "mem_gb":
+	case "mem_gb", "threads":
+		// mrp only writes numbers here; anything else would render a broken
+		// directive (e.g. `memory = 'true GB'`), so report it instead.
+		if !isNumber(val) {
+			return "", "", "value is not a number"
+		}
+
 		// Config-file scope uses `directive = value` (not the .nf process-body
 		// `directive value` form), so a `-c` overlay parses.
-		return selector(stage, phase), "memory = " + memLiteral(val), ""
-	case "threads":
+		if base == "mem_gb" {
+			return selector(stage, phase), "memory = " + memLiteral(val), ""
+		}
+
 		return selector(stage, phase), "cpus = " + strings.TrimSpace(string(val)), ""
 	case "vmem_gb":
 		return "", "", "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
@@ -82,21 +99,54 @@ func mapField(stage, field string, val json.RawMessage) (string, string, string)
 	}
 }
 
-// selector renders the withName regex for a stage + phase. An empty stage means
-// all stages: "" (the global process block) for a stage-level field, or a
-// phase-wide regex for chunk/join. The _K keyed fork variants are matched too.
+// phaseSuffixes returns the two process-name suffixes an mrp override phase
+// prefix runs under: the plain family (STAGE_MAIN, and its keyed _K variant via
+// the trailing .*) and the fused per-call alias family
+// (STAGE_<n>_<pipe>__<call>_MN). A stage-level field ("" phase) has no suffix —
+// it applies to every phase of the stage. The bool is false for an unknown
+// phase; the returns are (plain suffix, fused suffix, known).
+func phaseSuffixes(phase string) (string, string, bool) {
+	switch phase {
+	case "":
+		return "", "", true
+	case "split":
+		return "_SPLIT", "_SP", true
+	case "chunk":
+		return "_MAIN", "_MN", true
+	case "join":
+		return "_JOIN", "_JN", true
+	default:
+		return "", "", false
+	}
+}
+
+// fusedPrefix matches the fused per-call process-name prefix the BIND fold
+// emits: STAGE_<len>_<pipeline>__ (see emit's fusedName/qualify). [0-9] rather
+// than \d: the selector is rendered inside a single-quoted Groovy string,
+// where a backslash escape fails config parsing.
+const fusedPrefix = `STAGE_[0-9]+_.+__`
+
+// selector renders the withName regex for a stage + phase; Nextflow full-matches
+// it against the process (or process-alias) name. An empty stage means all
+// stages: "" (the global process block) for a stage-level field, or a phase-wide
+// regex for split/chunk/join. Each regex covers the plain processes, the keyed
+// fork variants (_MAP/_K, via the trailing .*), and the fused per-call names.
 func selector(stage, phase string) string {
-	suffix := map[string]string{"": "", "chunk": "_MAIN", "join": "_JOIN"}[phase]
+	plain, fused, _ := phaseSuffixes(phase)
 
 	if stage == "" {
-		if suffix == "" {
+		if phase == "" {
 			return "" // global process default
 		}
 
-		return ".*" + suffix + ".*"
+		return fmt.Sprintf(".*(%s|%s).*", plain, fused)
 	}
 
-	return stage + suffix + ".*"
+	if phase == "" {
+		return fmt.Sprintf("(%s)?%s.*", fusedPrefix, stage)
+	}
+
+	return fmt.Sprintf("(%s%s|%s%s%s).*", stage, plain, fusedPrefix, stage, fused)
 }
 
 // render emits the process{} block: the global defaults first, then a withName
@@ -128,6 +178,13 @@ func render(groups map[string][]string) string {
 // memLiteral renders a JSON number of GB as a Nextflow memory string.
 func memLiteral(val json.RawMessage) string {
 	return "'" + strings.TrimSpace(string(val)) + " GB'"
+}
+
+// isNumber reports whether raw is a JSON number.
+func isNumber(raw json.RawMessage) bool {
+	var f float64
+
+	return json.Unmarshal(raw, &f) == nil
 }
 
 func lastSegment(qualified string) string {

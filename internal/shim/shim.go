@@ -290,6 +290,14 @@ func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string,
 	return exec.CommandContext(ctx, argv[0], argv[1:]...)
 }
 
+// adapterEnv is the stage child's environment: the shim's own env with TMPDIR
+// pointed at the phase's per-stage tmp dir (created by prepDirs), matching
+// mrp's per-job TMPDIR so stage tempfiles land on the task's scratch volume
+// rather than the container's (possibly tiny) /tmp.
+func adapterEnv(meta string) []string {
+	return append(os.Environ(), "TMPDIR="+filepath.Join(meta, "tmp"))
+}
+
 // runPyAdapter runs a python stage directly. The adapter expects fd 3 to be its
 // _log file and fd 4 to be an error channel (normally supplied by mrjob); we
 // provide both. The stage failed if anything was written to the error channel.
@@ -301,6 +309,7 @@ func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, p
 
 	cmd := limitedCommand(ctx, a, res.VMemGB, python, a.Shell, a.Stagecode, phase, meta, files, journal)
 	cmd.Dir = files
+	cmd.Env = adapterEnv(meta)
 	mon := startMonitor(cmd, a, res.MemGB)
 
 	aio, err := openAdapterIO(meta)
@@ -327,6 +336,7 @@ func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, p
 func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapter, argv []string, phase string, res Resources) error {
 	cmd := limitedCommand(ctx, a, res.VMemGB, argv[0], append(argv[1:], meta, files, journal)...)
 	cmd.Dir = files
+	cmd.Env = adapterEnv(meta)
 	mon := startMonitor(cmd, a, res.MemGB)
 
 	stdout, err := os.Create(filepath.Join(meta, "_stdout"))

@@ -13,7 +13,7 @@ linters:
     - canonicalheader
     - depguard
     - noinlineerr
-    # LSP request handlers legitimately return (nil, nil) to mean "no result".
+    # Lookup helpers legitimately return (nil, nil) to mean "no result".
     - nilnil
   settings:
     gomoddirectives:
@@ -40,8 +40,8 @@ linters:
         # The shim launches the Martian adapter; the command and args come from
         # the transpiled pipeline, not attacker-controlled input.
         - G204
-        # Integer-overflow flags on int->uint32 for LSP line/column positions,
-        # which are small and non-negative.
+        # Integer-overflow flags on small, non-negative numeric conversions
+        # (resource counts, array/map dimensions).
         - G115
     exhaustive:
       default-signifies-exhaustive: true
