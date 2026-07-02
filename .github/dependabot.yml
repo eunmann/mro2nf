@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Batch minor/patch bumps into one PR; majors stay separate for review.
+      go-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # AWS Batch CDK app. No lockfile is committed, so bumps rewrite the
+  # package.json ranges.
+  - package-ecosystem: npm
+    directory: /deploy/awsbatch-cdk
+    schedule:
+      interval: weekly
+    groups:
+      cdk-minor-patch:
+        update-types: ["minor", "patch"]
