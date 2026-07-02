@@ -121,6 +121,53 @@ func TestConvertUnknownPhase(t *testing.T) {
 	}
 }
 
+// TestConvertNonNumericValue checks a non-numeric mem_gb/threads value is
+// reported as unmapped instead of emitted as a broken directive (previously
+// {"mem_gb": true} produced `memory = 'true GB'`).
+func TestConvertNonNumericValue(t *testing.T) {
+	cfg, unmapped, err := overrides.Convert([]byte(`{"P.S": {"mem_gb": true, "threads": "four", "chunk.mem_gb": 8}}`))
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if strings.Contains(cfg, "'true GB'") || strings.Contains(cfg, "cpus = \"four\"") {
+		t.Errorf("non-numeric values must not be emitted, got:\n%s", cfg)
+	}
+
+	if !strings.Contains(cfg, "memory = '8 GB'") {
+		t.Errorf("the valid chunk.mem_gb must still be emitted, got:\n%s", cfg)
+	}
+
+	if len(unmapped) != 2 {
+		t.Errorf("want 2 unmapped fields (mem_gb, threads), got %v", unmapped)
+	}
+}
+
+// TestConvertUnknownField checks an unrecognized override field is reported.
+func TestConvertUnknownField(t *testing.T) {
+	_, unmapped, err := overrides.Convert([]byte(`{"P.S": {"bogus_field": 1}}`))
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if len(unmapped) != 1 || !strings.Contains(unmapped[0], "unrecognized") {
+		t.Errorf("want 1 'unrecognized' unmapped field, got %v", unmapped)
+	}
+}
+
+// TestConvertGlobalPhaseSelector checks a phase field under the all-stages key
+// maps to the phase-wide selector covering both naming families.
+func TestConvertGlobalPhaseSelector(t *testing.T) {
+	cfg, _, err := overrides.Convert([]byte(`{"": {"chunk.mem_gb": 4}}`))
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if !strings.Contains(cfg, `withName: '.*(_MAIN|_MN).*' { memory = '4 GB' }`) {
+		t.Errorf("global chunk override must use the phase-wide selector, got:\n%s", cfg)
+	}
+}
+
 // TestConvertUnmappable checks that fields with no faithful Nextflow directive
 // (virtual memory, VDR volatility, profiling) are reported, not silently emitted.
 func TestConvertUnmappable(t *testing.T) {

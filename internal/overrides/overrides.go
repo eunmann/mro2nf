@@ -72,11 +72,19 @@ func mapField(stage, field string, val json.RawMessage) (string, string, string)
 	}
 
 	switch base {
-	case "mem_gb":
+	case "mem_gb", "threads":
+		// mrp only writes numbers here; anything else would render a broken
+		// directive (e.g. `memory = 'true GB'`), so report it instead.
+		if !isNumber(val) {
+			return "", "", "value is not a number"
+		}
+
 		// Config-file scope uses `directive = value` (not the .nf process-body
 		// `directive value` form), so a `-c` overlay parses.
-		return selector(stage, phase), "memory = " + memLiteral(val), ""
-	case "threads":
+		if base == "mem_gb" {
+			return selector(stage, phase), "memory = " + memLiteral(val), ""
+		}
+
 		return selector(stage, phase), "cpus = " + strings.TrimSpace(string(val)), ""
 	case "vmem_gb":
 		return "", "", "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
@@ -168,6 +176,13 @@ func render(groups map[string][]string) string {
 // memLiteral renders a JSON number of GB as a Nextflow memory string.
 func memLiteral(val json.RawMessage) string {
 	return "'" + strings.TrimSpace(string(val)) + " GB'"
+}
+
+// isNumber reports whether raw is a JSON number.
+func isNumber(raw json.RawMessage) bool {
+	var f float64
+
+	return json.Unmarshal(raw, &f) == nil
 }
 
 func lastSegment(qualified string) string {
