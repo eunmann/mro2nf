@@ -105,11 +105,16 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: nf-core/setup-nextflow@v2 # installs + caches the Nextflow binary
+      - name: Resolve Nextflow version
+        id: nxf
+        # setup-nextflow exposes no version output, so read it back; keying the
+        # plugin cache on it means a Nextflow bump can't be served stale plugins.
+        run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
       - name: Cache Nextflow plugins
         uses: actions/cache@v6
         with:
           path: ~/.nextflow
-          key: nextflow-${{ runner.os }}
+          key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
       - run: make test-e2e
       # Data-plane epic gate (#17/#13): the transfer-multiplier benchmark must not
       # regress vs bench/baseline.json.
@@ -135,9 +140,12 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: nf-core/setup-nextflow@v2
+      - name: Resolve Nextflow version
+        id: nxf
+        run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
       - name: Cache Nextflow plugins
         uses: actions/cache@v6
         with:
           path: ~/.nextflow
-          key: nextflow-${{ runner.os }}
+          key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
       - run: make test-e2e-docker

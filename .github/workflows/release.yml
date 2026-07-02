@@ -3,9 +3,17 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # Manual dry run: build the binaries and the runtime image on demand to
+  # validate the release pipeline (e.g. after an action bump) WITHOUT publishing
+  # a GitHub release or pushing to GHCR. Only a tag push publishes.
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+# A dispatch run is a dry run (no tag to publish against); a tag push is real.
+env:
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
   build:
@@ -49,6 +57,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' # dry run builds but never releases
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -75,6 +84,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3 # arm64 emulation for the final stage
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v3
+        if: env.DRY_RUN != 'true' # no registry auth needed to build-without-push
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -91,6 +101,6 @@ jobs:
           context: .
           file: deploy/runtime/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ env.DRY_RUN != 'true' }} # dry run builds the image but does not push
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
