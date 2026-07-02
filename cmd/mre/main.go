@@ -21,7 +21,7 @@ import (
 var version = "dev"
 
 var (
-	errUsage        = errors.New("usage: mre <split|main|join|bind|forkbind|merge|publish|publish-layout|entryargs|version> [flags]")
+	errUsage        = errors.New("usage: mre <split|main|join|bind|forkbind|merge|publish-layout|entryargs|version> [flags]")
 	errUnknownPhase = errors.New("unknown phase")
 	errBadInput     = errors.New("invalid -inputs pair (want id=file)")
 )
