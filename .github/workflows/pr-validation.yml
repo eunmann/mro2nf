@@ -1,11 +1,24 @@
 name: PR Validation
 
+# Docs-only changes skip validation entirely: markdown, docs/, and the agent
+# skills can't affect anything CI measures. paths-ignore only fires when EVERY
+# changed file matches, so a mixed docs+code PR still validates fully.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".claude/**"
+      - LICENSE
   # Run for PRs against ANY base branch, not just main, so stacked PRs (a PR
   # whose base is another feature branch) are validated too.
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".claude/**"
+      - LICENSE
 
 permissions:
   contents: read
