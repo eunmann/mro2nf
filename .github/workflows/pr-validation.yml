@@ -94,6 +94,9 @@ jobs:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}
       - run: make test-e2e
+      # The Go e2e harness (the shell suites are being ported into it; both
+      # stacks run until parity, then the shell versions are removed).
+      - run: make test-e2e-go
       # Data-plane epic gates (#17/#13): the transfer-multiplier benchmark must not
       # regress vs bench/baseline.json, and the de-bundle staging spike must pass on
       # both the local and copy (S3-proxy) staging models.

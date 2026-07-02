@@ -10,7 +10,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # Tools run via `go run ...@pinned` to avoid global installs.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
-.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff bench spike-13 vet lint lint-check install clean help
+.PHONY: all build test cover test-e2e-go test-e2e test-e2e-docker test-mrp-diff bench spike-13 vet lint lint-check install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts.
 COVER_MIN ?= 65
@@ -36,6 +36,12 @@ cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
 
 test-e2e: build ## Run the end-to-end Nextflow differential test
 	bash test/e2e/run.sh
+
+# The Go e2e harness (the shell suites are being ported into it script by
+# script; both run in CI until parity). -count=1 defeats the test cache, which
+# would otherwise return a cached ok without running Nextflow.
+test-e2e-go: build ## Run the Go e2e harness (tags: e2e)
+	go test -tags e2e -count=1 -timeout 30m -v ./test/e2e/
 
 test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
 	bash test/e2e/docker_iso.sh
