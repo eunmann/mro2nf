@@ -14,9 +14,4 @@ go.work
 go.work.sum
 /out-*/
 *-linux-amd64
-
-# spike run artifacts
-spike/**/work/
-spike/**/.nextflow*
-spike/**/cloud.config
 mre-linux

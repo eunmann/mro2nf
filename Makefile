@@ -10,7 +10,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # Tools run via `go run ...@pinned` to avoid global installs.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
-.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff bench spike-13 vet lint lint-check install clean help
+.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff bench vet lint lint-check install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts.
 # Current total is ~79%; the floor sits a little under it so refactors don't
@@ -54,9 +54,6 @@ test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; 
 
 bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline
 	$(GO_E2E) -timeout 20m -run '^TestBench'
-
-spike-13: build ## Validate the #13 de-bundle staging spike (local + S3-proxy)
-	$(GO_E2E) -timeout 20m -run '^TestSpikeDebundle'
 
 vet: ## Run go vet
 	go vet ./...

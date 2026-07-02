@@ -94,11 +94,9 @@ jobs:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}
       - run: make test-e2e
-      # Data-plane epic gates (#17/#13): the transfer-multiplier benchmark must not
-      # regress vs bench/baseline.json, and the de-bundle staging spike must pass on
-      # both the local and copy (S3-proxy) staging models.
+      # Data-plane epic gate (#17/#13): the transfer-multiplier benchmark must not
+      # regress vs bench/baseline.json.
       - run: make bench
-      - run: make spike-13
 
   # The same pipelines under the docker executor (containers that mount only their
   # work dir) — the AWS Batch / HealthOmics no-shared-filesystem model. Runs in
