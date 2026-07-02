@@ -121,14 +121,14 @@ out of scope for a transpiler.
 
 | Feature | Status | Test |
 |---|---|---|
-| file outputs published to results (mrp `outs/` layout, `GetOutFilename` naming) | ✅ | e2e `file_min`, `mrp_diff.sh` (tree diff vs real mrp) |
+| file outputs published to results (mrp `outs/` layout, `GetOutFilename` naming) | ✅ | e2e `file_min`, `TestMrpDiff` (tree diff vs real mrp) |
 | inter-stage file passing (shared FS) | ✅ | e2e `file_chain` |
 | inter-stage file passing (object store, no shared FS) | ✅ #13 (bundle-dir channels: files travel with their JSON as `@mre:file:` markers; the shim absolutizes on input, copies+relativizes on output) | e2e `cloud_sim`, `docker_iso`, unit `TestBundleRoundTrip` |
 | auxiliary files reach isolated workers (types.json, bindspecs) | ✅ each task stages only the files it needs — the shared `types.json` plus, for a bind/fork process, its own `spec.json` — as individual `path` inputs, never referenced by `${projectDir}` (invisible on an AWS Batch / HealthOmics worker, which mounts only its work dir). A task transfers only its own bindspec, not every call's | e2e `docker_iso` (container that does not mount the project dir), unit `TestEmitAssetsStaged` |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ #13 (PUBLISH walks the entry's output type, descending file-bearing structs) | e2e `map_file`, `map_file_keyed`, `struct_of_file`; unit `internal/types` |
 | stage / pipeline `retain` | ⚠️ trivially satisfied (Nextflow keeps `work/`) | parse |
 | VDR modes (disable/post/rolling/strict) timing | 🚫 no native dependency-gated mid-run deletion | — (terminal-state only) |
-| `outs/` move+symlink layout | ⚠️ files are *copied* into an mrp-style `outs/` tree via `publishDir` (same layout and contents; mrp moves + symlinks) | e2e `file_min`, `mrp_diff.sh` |
+| `outs/` move+symlink layout | ⚠️ files are *copied* into an mrp-style `outs/` tree via `publishDir` (same layout and contents; mrp moves + symlinks) | e2e `file_min`, `TestMrpDiff` |
 
 ## Running / inspecting — running-pipelines / inspecting-pipelines
 
