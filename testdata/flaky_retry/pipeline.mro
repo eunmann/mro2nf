@@ -1,0 +1,31 @@
+# Failure-path fixture: the stage fails (ordinary, retryable) whenever its
+# memory allocation is 1 GB — i.e. on attempt 1 of the generated
+# `memory { 1 * task.attempt GB }` directive — and succeeds once the retry
+# escalates it, reporting the allocation it saw. A successful run with
+# mem_gb == 2 therefore proves BOTH the retry path and the memory escalation.
+# Exercised by test/e2e/failure_paths.sh (behavioral; no mrp golden).
+stage FLAKY(
+    in  float x,
+    out float mem_gb,
+    src py    "stages/flaky",
+) using (
+    mem_gb = 1,
+)
+
+pipeline FR(
+    in  float x,
+    out float mem_gb,
+)
+{
+    call FLAKY(
+        x = self.x,
+    )
+
+    return (
+        mem_gb = FLAKY.mem_gb,
+    )
+}
+
+call FR(
+    x = 1.0,
+)

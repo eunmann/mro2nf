@@ -159,3 +159,7 @@ printf '%s\n' "${CASES[@]}" |
 # Object-store readiness: a file pipeline under copy-staging into isolated
 # scratch dirs, plus self-contained-bundle assertions.
 bash "$ROOT/test/e2e/cloud_sim.sh"
+
+# The retry/ASSERT contract: an assertion terminates without retrying; an
+# ordinary failure retries with escalated memory. Behavioral (no mrp golden).
+bash "$ROOT/test/e2e/failure_paths.sh"
