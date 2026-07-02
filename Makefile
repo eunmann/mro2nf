@@ -10,7 +10,10 @@ LDFLAGS := -X main.version=$(VERSION)
 # Tools run via `go run ...@pinned` to avoid global installs.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
 
-.PHONY: all build test test-e2e test-e2e-docker test-mrp-diff bench spike-13 vet lint lint-check install clean help
+.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff bench spike-13 vet lint lint-check install clean help
+
+# Minimum total statement coverage (cross-package) the cover gate accepts.
+COVER_MIN ?= 65
 .DEFAULT_GOAL := help
 
 help: ## Show this help
@@ -21,6 +24,15 @@ build: ## Build mro2nf and mre
 
 test: ## Run unit tests
 	go test ./... 2>&1 | tee artifacts/test.log
+
+# Cross-package attribution (-coverpkg) so e.g. types.OutFilename exercised from
+# cmd/mre tests counts; scoped to ./cmd + ./internal (deploy/ has no Go).
+cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
+	@go test -coverprofile=artifacts/cover.out -coverpkg=./cmd/...,./internal/... ./cmd/... ./internal/... >/dev/null
+	@go tool cover -func=artifacts/cover.out | tail -1
+	@go tool cover -func=artifacts/cover.out | awk -v min="$(COVER_MIN)" \
+		'END { gsub(/%/,"",$$3); if ($$3+0 < min+0) { printf "FAIL: total coverage %s%% is below COVER_MIN=%s%%\n", $$3, min; exit 1 } \
+		printf "OK: total coverage %s%% >= %s%%\n", $$3, min }'
 
 test-e2e: build ## Run the end-to-end Nextflow differential test
 	bash test/e2e/run.sh

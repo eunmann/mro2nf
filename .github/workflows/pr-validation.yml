@@ -64,6 +64,8 @@ jobs:
           cache: true
       - name: Run tests (race detector)
         run: go test -race ./...
+      - name: Coverage gate
+        run: make cover
 
   # Transpiles every fixture, runs it under Nextflow, and diffs the result against
   # the committed real-mrp golden. (Goldens are committed, so mrp is not needed.)
