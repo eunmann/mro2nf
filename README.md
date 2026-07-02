@@ -55,7 +55,7 @@ internal/
   logging/     zerolog setup    apperror/  typed errors
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
-test/e2e/      transpile + nextflow run + diff vs mrp (+ docker_iso.sh isolation)
+test/e2e/      Go e2e suites (golden diff vs mrp, docker isolation) + AWS runbooks
 deploy/awsbatch-cdk/   minimal AWS CDK: S3 + ECR + Batch + HealthOmics role
 docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
                 (support matrix), GPU.md, RUNTIME_TUNING.md (mrp knobs ->
@@ -119,24 +119,24 @@ points at an `s3://` path or prefix is localized into the task by Nextflow.
 ```bash
 make test          # unit tests (in-process, sub-second)
 make cover         # unit-test coverage gate (fails below COVER_MIN%)
-make test-e2e      # transpile + nextflow run + diff vs mrp, all fixtures
-make test-e2e-go   # the Go e2e harness (the shell suites' replacement)
+make test-e2e      # golden table + cloud-sim + failure paths + launch knobs
+make test-e2e-docker  # the same pipelines under docker (container isolation)
 make lint-check    # golangci-lint (no auto-fix)
 ```
 
-The e2e suites are being ported from shell into the `test/e2e` Go package
-(`make test-e2e-go`, build tag `e2e`): the golden table, copy-staging,
-docker-isolation, mrp-differential, failure-path (retry/ASSERT), `-resume`,
-and overrides-overlay checks all run there. Both stacks run in CI until
-parity, then the shell versions are removed; the live AWS runbooks stay shell.
-
-The e2e suite (`test/e2e/run.sh`) runs each fixture's transpiled pipeline under
-Nextflow and diffs the result against the committed real-`mrp` output. It runs
-cases in a bounded parallel pool — tune with `E2E_PARALLEL=<n>` (default 6) — and
-includes `cloud_sim.sh` (object-store data plane under copy-staging). A separate
-`make test-e2e-docker` (`test/e2e/docker_iso.sh`) runs pipelines under the
-Nextflow **docker** executor — tasks in containers that mount only their work
-dir — reproducing the AWS Batch / HealthOmics no-shared-filesystem model.
+The e2e suites are Go tests in `test/e2e` (build tag `e2e`, always run with
+`-count=1` so the test cache can't return a stale ok). `make test-e2e` runs
+each fixture's transpiled pipeline under Nextflow in a bounded parallel pool
+(`E2E_PARALLEL=<n>`, default 6) and diffs the result against the committed
+real-`mrp` golden; it also covers copy-staging (the object-store data plane),
+the retry/ASSERT failure contract, `-resume` cache stability, and
+`mro2nf overrides` overlay application. `make test-e2e-docker` runs pipelines
+under the Nextflow **docker** executor — tasks in containers that mount only
+their work dir — reproducing the AWS Batch / HealthOmics no-shared-filesystem
+model, and additionally builds + runs the *generated* `-target awsbatch`
+Dockerfile and validates the HealthOmics package. The live AWS runbooks
+(`test/e2e/aws_*.sh`) and the informational mrp oracle (`mapcall_matrix.sh`)
+remain shell.
 
 ### How it's validated
 
@@ -235,8 +235,8 @@ needed to test live (S3 bucket, ECR repo, Batch compute env + queue, and a
 HealthOmics service role) — see its README for `cdk deploy` + run steps.
 
 > Provide a **linux/amd64** `mre` (build with `GOOS=linux GOARCH=amd64`). Cloud
-> file flow is validated locally via `cloud_sim.sh` (copy-staging) and
-> `docker_iso.sh` (true container isolation); a live Batch/S3 or HealthOmics run
+> file flow is validated locally via the copy-staging suite (`TestCloudSim*`) and
+> the docker-isolation suite (`make test-e2e-docker`); a live Batch/S3 or HealthOmics run
 > additionally needs the AWS infrastructure (`deploy/awsbatch-cdk/`).
 
 ## Feature coverage & limitations

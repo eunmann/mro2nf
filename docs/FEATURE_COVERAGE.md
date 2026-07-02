@@ -3,7 +3,7 @@
 This matrix tracks every Martian feature (from the martian-lang.org docs and the
 authoritative `martian/syntax` grammar) against the transpiler's support and the
 test that exercises it. Test types: **e2e** = transpile + run under Nextflow,
-output diffed against real `mrp` (`test/e2e/run.sh`); **unit** = Go test;
+output diffed against real `mrp` (the Go `test/e2e` suite); **unit** = Go test;
 **corpus** = parse+lower robustness sweep.
 
 Provenance: this matrix was built from a systematic page-by-page audit of all
@@ -185,6 +185,6 @@ out of scope for a transpiler.
   `__vmem_gb` still wins for main; a split-returned join override refines it).
 - Remaining ⚠️ items are storage-*mechanism* fidelity: the published `outs/`
   tree now reproduces mrp's nested layout and `GetOutFilename` naming
-  (verified by `test/e2e/mrp_diff.sh` against real mrp), but files are copied
+  (verified by the Go `TestMrpDiff` suite against real mrp), but files are copied
   into place rather than moved + symlinked, and `work/` is retained (no VDR) —
   no output-observable correctness impact.

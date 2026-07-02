@@ -277,7 +277,7 @@ fixtures encode it.
 
 ## Differential testing against real Martian
 
-`make test-mrp-diff` (`test/e2e/mrp_diff.sh`) runs each fixture through **real
+`make test-mrp-diff` (the Go `TestMrpDiff` suite) runs each fixture through **real
 `mrp`** and the transpiled Nextflow, then compares the published `outs/` tree —
 every output file's path (relative to the outs dir) and its content hash — and
 the path-normalized `_outs` JSON. This validates the whole transpile + runtime +
@@ -286,7 +286,7 @@ publish path against Martian itself, not a hand-written golden.
 It needs a local Martian build: set `MARTIAN_BIN` (default `~/workdir/martian/bin`,
 which holds `mrp`/`mrjob`). It skips cleanly when `mrp`, `nextflow`, `java`, or
 `python3` is absent, so CI without a Martian checkout is unaffected. Run one case
-with `bash test/e2e/mrp_diff.sh <fixture>`.
+with `go test -tags e2e -count=1 -run "TestMrpDiff/<fixture>" ./test/e2e/`.
 
 The one intended difference the harness normalizes: Martian writes **absolute**
 paths into `_outs`; mre writes the **same tree** with paths **relative** to the

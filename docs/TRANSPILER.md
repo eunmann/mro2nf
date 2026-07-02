@@ -336,7 +336,7 @@ machine-readable index, `manifest.json.gz` (#11). **PUBLISH_LEAF** then stages
 each file leaf individually and publishes it to its `outs/` path via
 `publishDir saveAs`, so the result set lands in parallel across tasks. The
 published tree matches an mrp pipestance `outs/` (verified by
-`test/e2e/mrp_diff.sh`); see §10 for where "results" lives on each target.
+`the Go TestMrpDiff suite`); see §10 for where "results" lives on each target.
 
 ---
 
@@ -543,7 +543,7 @@ feature is checked against the real `mrp` output. The validation tiers:
   Nextflow text.
 - **Local e2e** (`make test-e2e`) — 62 cases over 57 `.mro` fixtures transpiled,
   run under Nextflow, and diffed against committed `mrp` goldens (plus
-  `cloud_sim.sh`, the object-store data plane under copy-staging).
+  `TestCloudSim*`, the object-store data plane under copy-staging).
 - **Container isolation** (`make test-e2e-docker`) — the same pipelines under the
   Docker executor, where each task mounts only its work dir. This is the
   license-free proxy for the cloud "no shared filesystem" model and the regression
