@@ -1412,10 +1412,6 @@ func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
 	return strings.Join(args, ", ")
 }
 
-// genPublish emits the PUBLISH process: it reads the entry's final output
-// bundle, copies every file-typed output (including nested ones) into the
-// results dir under its basename, and writes the published outs JSON. The staged
-// bundle is removed before output globbing so only published artifacts remain.
 // genPublish emits the terminal publish as two processes that avoid a single-node
 // funnel (#12): LAYOUT stages ONLY the final sidecar (data.json) — no file leaves
 // — to compute the outs/ layout (leaf basename -> outs/ rel path) and the

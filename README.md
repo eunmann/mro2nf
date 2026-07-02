@@ -145,10 +145,10 @@ orchestrator, so "correct" means byte-identical to Martian:
 
 - **Unit** (`make test`): in-process tests of the IR, binder, type walk, shim
   ABI, and the generated Nextflow text.
-- **Local e2e** (`make test-e2e`): every `.mro` fixture transpiled, run under
-  Nextflow, diffed vs committed `mrp` goldens — covering every supported
-  feature, including file-typed entry inputs (scalar, `file[]`, `map<file>`,
-  struct-with-file) supplied at launch via `-params-file`.
+- **Local e2e** (`make test-e2e`): the golden fixture table — `.mro` fixtures
+  transpiled, run under Nextflow, diffed vs committed `mrp` goldens — covering
+  every supported feature, including file-typed entry inputs (scalar, `file[]`,
+  `map<file>`, struct-with-file) supplied at launch via `-params-file`.
 - **Container isolation** (`make test-e2e-docker`): a representative fixture
   slice — including the exec/comp adapters and the null-bundle / zero-chunk
   shapes — and the file-typed entry-input overrides under the docker executor

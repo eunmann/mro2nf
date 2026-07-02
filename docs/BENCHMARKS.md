@@ -83,6 +83,7 @@ and compare against these shapes.
 after the data-plane epic landed: de-bundle #13, emit-once routing #14, BIND
 folding #16, funnel-free publish #12). For scale: the pre-epic bundle-copy
 design measured a ×11.0 transfer multiplier on `chain` and ×21.0 on `split`;
-the epic cut both by roughly half. The split multiplier's remaining headroom is
-consumer-aware split staging (#15); further drops re-record via
+the epic nearly halved chain's, while split's barely moved — its residual (the
+payload staged to every chunk) is the acknowledged floor pending
+consumer-aware split staging (#15). Further drops re-record via
 `BENCH_UPDATE=1 make bench` so the gate ratchets downward.

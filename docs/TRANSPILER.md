@@ -552,9 +552,9 @@ feature is checked against the real `mrp` output. The validation tiers:
 
 - **Unit tests** — the IR, binder, type walk, shim ABI, and the generated
   Nextflow text.
-- **Local e2e** (`make test-e2e`) — every `.mro` fixture transpiled, run under
-  Nextflow, and diffed against committed `mrp` goldens (plus `TestCloudSim*`,
-  the object-store data plane under copy-staging).
+- **Local e2e** (`make test-e2e`) — the golden fixture table transpiled, run
+  under Nextflow, and diffed against committed `mrp` goldens (plus
+  `TestCloudSim*`, the object-store data plane under copy-staging).
 - **Container isolation** (`make test-e2e-docker`) — the same pipelines under the
   Docker executor, where each task mounts only its work dir. This is the
   license-free proxy for the cloud "no shared filesystem" model and the regression
