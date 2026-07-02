@@ -163,3 +163,7 @@ bash "$ROOT/test/e2e/cloud_sim.sh"
 # The retry/ASSERT contract: an assertion terminates without retrying; an
 # ordinary failure retries with escalated memory. Behavioral (no mrp golden).
 bash "$ROOT/test/e2e/failure_paths.sh"
+
+# Launch-time knobs: -resume caches everything on an unchanged rerun, and an
+# `mro2nf overrides` overlay actually retunes the targeted stage.
+bash "$ROOT/test/e2e/runtime_knobs.sh"
