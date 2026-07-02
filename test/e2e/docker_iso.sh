@@ -91,6 +91,15 @@ CASES=(
     "split_from_file|testdata/split_from_file|testdata/split_from_file/expected/sp_outs.json"
     "map_split_file|testdata/map_split_file|testdata/map_split_file/expected/outs.json"
     "struct_file_array|testdata/struct_file_array|testdata/struct_file_array/expected/outs.json"
+    # Adapter coverage under isolation: exec and comp (comp needs -mrjob; the
+    # fixture's mrjob.sh is baked into the image with testdata/).
+    "exec_min|testdata/exec_min|testdata/exec_min/expected/ep_outs.json"
+    "mixed_adapters|testdata/mixed_adapters|testdata/mixed_adapters/expected/outs.json"
+    # Null-bundle / zero-chunk staging — the shapes most likely to break on
+    # isolated workers.
+    "empty_fork_min|testdata/empty_fork_min|testdata/empty_fork_min/expected/outs.json"
+    "map_null_map|testdata/map_null_map|testdata/map_null_map/expected/outs.json"
+    "disabled_callref|testdata/disabled_callref|testdata/disabled_callref/expected/outs.json"
 )
 
 fail=0
@@ -98,8 +107,13 @@ for spec in "${CASES[@]}"; do
     IFS='|' read -r name dir golden <<<"$spec"
     proj="$WORK/$name"
 
+    # A comp-adapter fixture ships its mrjob wrapper alongside the .mro; the
+    # baked path resolves inside the image because testdata/ is copied in.
+    mrjob_opt=()
+    [ -f "$dir/mrjob.sh" ] && mrjob_opt=(-mrjob "$ROOT/$dir/mrjob.sh")
+
     ./mro2nf -o "$proj" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
-        -mropath "$dir" "$dir/pipeline.mro" >/dev/null 2>&1 ||
+        -mropath "$dir" ${mrjob_opt[@]+"${mrjob_opt[@]}"} "$dir/pipeline.mro" >/dev/null 2>&1 ||
         { echo "FAIL[$name]: transpile"; fail=1; continue; }
 
     ( cd "$proj" && nextflow run main.nf -c "$ISO_CFG" -with-docker "$IMAGE" >run.log 2>&1 ) ||
@@ -155,6 +169,61 @@ print(("ISO-OK" if ok else "ISO-FAIL") + f"[{sys.argv[2]}]: {json.dumps(got, sor
 sys.exit(0 if ok else 1)
 PY
 }
+
+# --- the GENERATED cloud artifacts, validated without a live account ---------
+# 1. -target awsbatch: build the runtime image from the EMITTED Dockerfile
+#    (not this harness's inline one) and run the pipeline with only that
+#    image's baked /opt/mro2nf runtime, executor overridden to local+docker.
+GEN_IMAGE=mro2nf-gen:test
+gen="$WORK/gen_awsbatch"
+if ! ./mro2nf -o "$gen" -target awsbatch -container "$GEN_IMAGE" \
+    -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
+    -mropath testdata/diamond_min testdata/diamond_min/pipeline.mro >/dev/null 2>&1; then
+    echo "FAIL[gen_awsbatch]: transpile"; fail=1
+elif ! docker build -q -t "$GEN_IMAGE" "$gen" >/dev/null 2>&1; then
+    echo "FAIL[gen_awsbatch]: docker build of the generated Dockerfile"; fail=1
+else
+    { echo "process.executor = 'local'"; echo "docker.enabled = true"; cat "$ISO_CFG"; } >"$gen/local.config"
+    if ! ( cd "$gen" && nextflow run main.nf -c local.config --aws_outdir "$gen/results" >run.log 2>&1 ); then
+        echo "FAIL[gen_awsbatch]: nextflow (generated image)"; tail -4 "$gen/run.log" | sed 's/^/    /'; fail=1
+    else
+        python3 - "$gen/results/pipeline_outs.json" testdata/diamond_min/expected/outs.json gen_awsbatch <<'PY' || fail=1
+import json, sys
+got, gold = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+ok = got == gold
+print(("ISO-OK" if ok else "ISO-FAIL") + f"[{sys.argv[3]}]: {json.dumps(got, sort_keys=True)}")
+sys.exit(0 if ok else 1)
+PY
+    fi
+fi
+
+# 2. -target healthomics: the packaging artifacts must be well-formed —
+#    package.sh builds a zip containing the workflow (not the build context),
+#    and parameter-template.json parses with the container + entry params.
+if command -v zip >/dev/null 2>&1; then
+    omics="$WORK/gen_omics"
+    if ! ./mro2nf -o "$omics" -target healthomics -container "$GEN_IMAGE" \
+        -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
+        -mropath testdata/entry_file testdata/entry_file/pipeline.mro >/dev/null 2>&1; then
+        echo "FAIL[gen_omics]: transpile"; fail=1
+    elif ! ( cd "$omics" && bash package.sh >/dev/null 2>&1 ); then
+        echo "FAIL[gen_omics]: package.sh"; fail=1
+    elif ! ( cd "$omics" && unzip -l workflow.zip | grep -q ' main.nf$' ); then
+        echo "FAIL[gen_omics]: workflow.zip missing main.nf"; fail=1
+    elif ( cd "$omics" && unzip -l workflow.zip | grep -q 'runtime/mre' ); then
+        echo "FAIL[gen_omics]: workflow.zip must exclude the docker build context"; fail=1
+    elif ! python3 -c "
+import json, sys
+t = json.load(open('$omics/parameter-template.json'))
+sys.exit(0 if 'container' in t and 'reads' in t and t['reads'].get('optional') else 1)
+"; then
+        echo "FAIL[gen_omics]: parameter-template.json missing container/reads entries"; fail=1
+    else
+        echo "ISO-OK[gen_omics]: package.sh zip + parameter template well-formed"
+    fi
+else
+    echo "SKIP[gen_omics]: zip not found"
+fi
 
 run_override entry_file_override        entry_file        "{\"reads\": \"$WORK/o_scalar.txt\"}"                          '{"total": 42.0}'
 run_override entry_filearr_override      entry_filearr     "{\"reads\": [\"$WORK/o_arr1.txt\", \"$WORK/o_arr2.txt\"]}"    '{"total": 30.0}'
