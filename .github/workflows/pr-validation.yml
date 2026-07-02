@@ -93,7 +93,7 @@ jobs:
           java-version: "17"
       - uses: nf-core/setup-nextflow@v2 # installs + caches the Nextflow binary
       - name: Cache Nextflow plugins
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}
@@ -123,7 +123,7 @@ jobs:
           java-version: "17"
       - uses: nf-core/setup-nextflow@v2
       - name: Cache Nextflow plugins
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}
