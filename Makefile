@@ -13,7 +13,9 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 .PHONY: all build test cover test-e2e-go test-e2e test-e2e-docker test-mrp-diff bench spike-13 vet lint lint-check install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts.
-COVER_MIN ?= 65
+# Current total is ~79%; the floor sits a little under it so refactors don't
+# flap, while a real coverage regression still fails.
+COVER_MIN ?= 76
 .DEFAULT_GOAL := help
 
 help: ## Show this help
