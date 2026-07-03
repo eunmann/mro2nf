@@ -27,6 +27,10 @@ var errKeysFileNeedsIndex = errors.New("forkbind -keysfile requires -index or -k
 // errKeysOnlyNeedsFile reports -keysonly without the -keysfile destination.
 var errKeysOnlyNeedsFile = errors.New("forkbind -keysonly requires -keysfile <path>")
 
+// errKeysOnlyWithIndex reports -keysonly combined with -index: the flags are
+// mutually exclusive modes (keys-only would silently skip the -o bundle write).
+var errKeysOnlyWithIndex = errors.New("forkbind -keysonly cannot be combined with -index")
+
 // runForkBind resolves a map call's bindings into one args file per fork,
 // written as fork_NNNNN.json into -chunkdir so a lexical sort recovers order.
 func runForkBind(_ context.Context, argv []string) error {
@@ -69,7 +73,7 @@ func runForkBind(_ context.Context, argv []string) error {
 	// (split kind vs -mapmode, zip lengths, every binding's resolution) is
 	// identical to the full resolve either way.
 	only := bind.AllForks
-	if *index >= 0 && !*keysOnly {
+	if *index >= 0 {
 		only = *index
 	}
 
@@ -116,6 +120,10 @@ func checkForkBindFlags(index int, keysOnly bool, keysFile string) error {
 
 	if keysOnly && keysFile == "" {
 		return errKeysOnlyNeedsFile
+	}
+
+	if keysOnly && index >= 0 {
+		return errKeysOnlyWithIndex
 	}
 
 	return nil

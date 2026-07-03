@@ -98,15 +98,26 @@ func TestBuildPlanNativeScatterQueueContext(t *testing.T) {
 	}
 }
 
-// TestBuildPlanMergeFold pins the #76 merge-fold decision: a scatter whose sole
-// consumer is the return (fork_min), a mid-pipeline fused-stage consumer
-// (fork_ref's SCALE feeding... the return again — so also fold), and the
-// counterexamples: a fan-out (two consumers) keeps the MERGE, and a
-// mid-pipeline single consumer folds. Default mode has no scatter, so no fold.
+// TestBuildPlanMergeFold pins the #76 merge-fold decision: a scatter whose
+// sole consumer is the entry return folds (fork_min), a sole MID-PIPELINE
+// fused-stage consumer folds (fork_mid), a fan-out keeps the MERGE
+// (fork_fanout), and a sole non-entry return consumer folds
+// (fork_disabled_sub).
 func TestBuildPlanMergeFold(t *testing.T) {
 	fm := lowerFixture(t, "fork_min")
 	if cp := buildPlan(fm, featureSet{native: true}).pipes["SCALE_ALL"].calls["SCALE"]; !cp.foldMerge {
 		t.Error("fork_min SCALE: sole return consumer must fold the MERGE")
+	}
+
+	// fork_mid's SCALE folds into the SUMALL fused-stage task (mid-pipeline).
+	fmid := lowerFixture(t, "fork_mid")
+
+	pm := buildPlan(fmid, featureSet{native: true}).pipes["MID"]
+	if pm.calls["SUMALL"].kind != kindFusedStage {
+		t.Fatalf("fork_mid SUMALL kind = %d, want kindFusedStage", pm.calls["SUMALL"].kind)
+	}
+	if !pm.calls["SCALE"].foldMerge {
+		t.Error("fork_mid SCALE: sole fused-stage consumer must fold the MERGE")
 	}
 
 	// fork_fanout's SCALE has two consumers (SUMALL + the return): keep MERGE.
@@ -201,14 +212,14 @@ func TestGenerateNativeScatter(t *testing.T) {
 
 	for _, want := range []string{
 		"process STAGE_9_SCALE_ALL__SCALE {",
-		"-mapmode array -index ${fi} -o fargs${fi == 0 ? ' -keysfile forkkeys.json' : ''}",
-		"-keysonly -keysfile forkkeys.json",
+		"-mapmode array -index ${fi} -o fargs${fi == 0 ? ' -keysfile forkkeys.mro2nf.json' : ''}",
+		"-keysonly -keysfile forkkeys.mro2nf.json",
 		"Mro2nf.forkScatter(data, leaves, 'values', 'array')",
 		"path \"outs__${key}\", type: 'dir', emit: outs, optional: true",
-		"path 'forkkeys.json', emit: keys, optional: true",
+		"path 'forkkeys.mro2nf.json', emit: keys, optional: true",
 		// The MERGE folds into the entry return's LAYOUT (#76): the workflow
 		// exposes the per-fork outs + keys channels for it instead.
-		"ch_SCALE_souts = STAGE_9_SCALE_ALL__SCALE.out.outs.collect().ifEmpty([])",
+		"ch_SCALE_souts = STAGE_9_SCALE_ALL__SCALE.out.outs.toSortedList { a, b -> a.name <=> b.name }",
 		"ch_SCALE_keys = STAGE_9_SCALE_ALL__SCALE.out.keys.first()",
 		"ref_SCALE_souts = ch_SCALE_souts",
 		"ref_SCALE_keys = ch_SCALE_keys",

@@ -619,6 +619,14 @@ func TestRunForkBindKeysOnly(t *testing.T) {
 	if err := run(t.Context(), []string{"forkbind", "-spec", bad, "-keysonly"}); !errors.Is(err, errKeysOnlyNeedsFile) {
 		t.Errorf("forkbind -keysonly without -keysfile: err = %v, want errKeysOnlyNeedsFile", err)
 	}
+
+	// -keysonly with -index would silently skip the -o bundle write: loud error.
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", bad, "-keysonly", "-index", "0",
+		"-o", filepath.Join(dir, "a"), "-keysfile", filepath.Join(dir, "k2.json"),
+	}); !errors.Is(err, errKeysOnlyWithIndex) {
+		t.Errorf("forkbind -keysonly with -index: err = %v, want errKeysOnlyWithIndex", err)
+	}
 }
 
 // TestRunMergeSmoke drives merge end to end: an array fork collects each output

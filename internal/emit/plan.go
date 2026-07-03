@@ -332,22 +332,22 @@ func nativeScatterable(c ir.Call, prog *ir.Program, queuedPa bool) (*ir.Stage, s
 // mergeFoldable reports whether a native scatter's MERGE can run inline in its
 // consumer's task (#76): exactly one consumer (mirroring the #59 Lever 4
 // single-consumer rule — K consumers would duplicate the merge and stage the N
-// fork dirs K times), no disable-gate reference (the driver reads that bundle
-// directly; there is no task to host the merge), and the consumer is a
-// task-hosted bind shape — the pipeline return (return BIND, or the native
-// LAYOUT for the entry) or a plain/fused/mapped call. A downstream scatter
+// fork dirs K times), and that consumer is a task-hosted bind shape — the
+// pipeline return (return BIND, or the native LAYOUT for the entry) or a
+// plain/fused/mapped call. A disable-gate reference is never foldable (the
+// driver reads that bundle directly; no task hosts the merge) — consumerCount
+// counts gate refs, so a gate-referenced producer either has 2+ consumers or
+// its sole "consumer" is the gate, which matches neither the returns nor any
+// call bindings below and falls through to false. A downstream scatter
 // consumer keeps the MERGE: folding there would re-merge once per fork
 // instance. Forward/chain consumers cannot reference a mapped producer
-// (forwardProducer and chainFusion both reject them).
+// (forwardProducer and chainFusion both reject them). Dormancy invariant: a
+// folded consumer must stage BOTH the souts and keys channels — souts emits []
+// even for a skipped pipeline; only the unbound keys channel keeps the
+// consumer dormant (see genNativeScatterWiring).
 func mergeFoldable(name string, p *ir.Pipeline, pp pipePlan) bool {
 	if consumerCount(name, p) != 1 {
 		return false
-	}
-
-	for _, c := range p.Calls {
-		if c.Disabled != nil && c.Disabled.Kind == refKindCall && c.Disabled.ID == name {
-			return false
-		}
 	}
 
 	if slices.Contains(refCalls(p.Returns), name) {

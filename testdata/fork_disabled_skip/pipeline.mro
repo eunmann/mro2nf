@@ -1,0 +1,51 @@
+# fork_disabled_sub's skip=true twin: the sub-pipeline is SKIPPED at runtime,
+# so the scatter runs no instances, the folded consumer (SUB's return bind)
+# must stay dormant — its keys channel never emits — and TOP yields the null
+# result, exactly as the default FORK path does (#76 dormancy parity).
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline SUB(
+    in  float[] values,
+    in  float   factor,
+    out float[] scaled,
+)
+{
+    map call SCALE(
+        value  = split self.values,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+pipeline TOP(
+    in  float[] values,
+    in  float   factor,
+    in  bool    skip,
+    out float[] scaled,
+)
+{
+    call SUB(
+        values = self.values,
+        factor = self.factor,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        scaled = SUB.scaled,
+    )
+}
+
+call TOP(
+    values = [1.0, 2.0, 3.0],
+    factor = 5.0,
+    skip   = true,
+)

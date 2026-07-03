@@ -936,37 +936,29 @@ func bindInputs(refs []string) (string, string) {
 }
 
 // bindInputsHead is bindInputs with a caller-supplied first input line (e.g.
-// the native scatter's key/index-carrying pipeargs tuple), so every bind-style
-// input block shares one implementation and staging fixes land everywhere.
+// the native scatter's key/index-carrying pipeargs tuple). It is foldBindInputs
+// with no fold context, so every bind-style input block shares ONE loop and
+// staging fixes land everywhere.
 func bindInputsHead(head string, refs []string) (string, string) {
-	var inputs strings.Builder
+	block, arg, _ := foldBindInputs(genCtx{}, nil, nil, head, refs)
 
-	fmt.Fprintf(&inputs, "    %s\n", head)
-
-	pairs := make([]string, 0, len(refs))
-	for _, id := range refs {
-		fmt.Fprintf(&inputs, "    %s\n", bundleInput("in_"+id))
-		pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
-	}
-
-	// The shared type manifest and this process's own bindspec are staged as two
-	// individual files (not the whole _assets dir), so a task transfers only the
-	// one bindspec it needs rather than every call's spec; see assetsDir.
-	inputs.WriteString("    path 'types.json'\n")
-	inputs.WriteString("    path 'spec.json'\n")
-
-	arg := ""
-	if len(pairs) > 0 {
-		arg = " -inputs " + strings.Join(pairs, ",")
-	}
-
-	return inputs.String(), arg
+	return block, arg
 }
 
+// soutsChan and keysChan name a folded producer's gathered-outs and keys
+// channels under the given prefix ("ch_" in a workflow body, "ref_" at the
+// entry emit boundary). Every site that wires, invokes, or re-exports the pair
+// reads these, so the souts-then-keys pairing and spelling cannot drift.
+func soutsChan(prefix, id string) string { return prefix + id + "_souts" }
+
+func keysChan(prefix, id string) string { return prefix + id + "_keys" }
+
 // mergeFoldProducer returns the producer call behind ref id when its MERGE
-// folds into this consumer's task (#76), or false.
+// folds into this consumer's task (#76), or false. A nil pipeline (a caller
+// with no fold context, e.g. the plain bindInputs/bindCallArgs wrappers) never
+// folds.
 func mergeFoldProducer(g genCtx, p *ir.Pipeline, id string) (ir.Call, bool) {
-	if !g.plan.pipes[p.Name].calls[id].foldMerge {
+	if p == nil || !g.plan.pipes[p.Name].calls[id].foldMerge {
 		return ir.Call{}, false
 	}
 
@@ -998,8 +990,8 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 
 		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkkeys_%[1]s.json'\n", id)
 		pairs = append(pairs, fmt.Sprintf("%s=merged_%s", id, id))
-		fmt.Fprintf(&pre, `    '%[1]s' merge -outs '%[2]s' -files "\$(ls -1d souts_%[3]s/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys_%[3]s.json -o merged_%[3]s%[4]s
-`, g.mre, calleeOutNames(prog, prod.Callable), id, g.producerArgs(prod.Callable, types.RoleOut))
+		fmt.Fprintf(&pre, "    %s\n", g.mergeCmd(prod.Callable, calleeOutNames(prog, prod.Callable),
+			"souts_"+id+"/outs__*", "forkkeys_"+id+".json", "merged_"+id))
 	}
 
 	inputs.WriteString("    path 'types.json'\n")
@@ -1013,6 +1005,14 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 	return inputs.String(), arg, pre.String()
 }
 
+// mergeCmd renders the `mre merge` gather command. The MERGE task and the
+// folded in-task merge (#76) share it, so the two invocations cannot drift —
+// they differ only in where the fork outs live and where the result lands.
+func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string) string {
+	return fmt.Sprintf(`'%s' merge -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keys-file %s -o %s%s`,
+		g.mre, outs, glob, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
+}
+
 // foldCallArgs is bindCallArgsPa for a fold-aware consumer invocation: a
 // folded ref feeds the producer's collected per-fork outs and keys channels in
 // place of the merged bundle channel, matching foldBindInputs' input order.
@@ -1024,7 +1024,7 @@ func foldCallArgs(g genCtx, p *ir.Pipeline, bindings []ir.Binding, pa, specName 
 
 	for _, id := range refs {
 		if _, ok := mergeFoldProducer(g, p, id); ok {
-			args = append(args, "ch_"+id+"_souts", "ch_"+id+"_keys")
+			args = append(args, soutsChan("ch_", id), keysChan("ch_", id))
 
 			continue
 		}
@@ -1108,6 +1108,12 @@ func mapModeArg(c ir.Call) string {
 // -keysonly`: every binding is resolved and validated exactly as the
 // always-running FORK task did — a wrong-kind or mis-zipped source still fails
 // loudly — and only the keys sidecar is produced, so both outputs are optional.
+// The sidecar's task-side name is forkkeys.mro2nf.json because the stage main
+// shares this cwd (-work .): a stage scratch file named forkkeys.json must not
+// satisfy the optional keys output (consumers rename it on staging anyway).
+// The trailing [ -d outs__<key> ] keeps the old keyed path's hard per-fork
+// guarantee: an instance that exits 0 without its out bundle fails the task
+// instead of silently shortening an array-fork merge.
 func genNativeScatterProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	// The scattered tuple carries the fork key/index plus the pipeargs bundle
 	// elements; upstream bundles, types, and the bindspec are value channels
@@ -1124,16 +1130,17 @@ func genNativeScatterProcess(b *strings.Builder, pipeline string, c ir.Call, s *
   input:
 %[3]s  output:
     path "outs__${key}", type: 'dir', emit: outs, optional: true
-    path 'forkkeys.json', emit: keys, optional: true
+    path 'forkkeys.mro2nf.json', emit: keys, optional: true
   script:
     if( fi < 0 )
       """
-      %[4]s -keysonly -keysfile forkkeys.json%[5]s
+      %[4]s -keysonly -keysfile forkkeys.mro2nf.json%[5]s
       """
     else
       """
-      %[4]s -index ${fi} -o fargs${fi == 0 ? ' -keysfile forkkeys.json' : ''}%[5]s
+      %[4]s -index ${fi} -o fargs${fi == 0 ? ' -keysfile forkkeys.mro2nf.json' : ''}%[5]s
       %[6]s -args fargs -outs '%[7]s'%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+      [ -d outs__${key} ]
       """
 }
 
@@ -1152,14 +1159,14 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
     path 'forkkeys.json'
     path 'types.json'
   output:
-    %[5]s
+    %[3]s
   script:
     """
-    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
+    %[2]s
     """
 }
 
-`, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut),
+`, mergeName(pipeline, c.Name), g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged"),
 		bundleOutput("merged"))
 }
 
@@ -1218,7 +1225,8 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 			// A folded producer hands LAYOUT its per-fork outs + keys channels; the
 			// merge runs inline in LAYOUT before the return bind (#76).
 			if _, ok := mergeFoldProducer(g, p, id); ok {
-				fmt.Fprintf(&em, "\n    ref_%[1]s_souts = ch_%[1]s_souts\n    ref_%[1]s_keys = ch_%[1]s_keys", id)
+				fmt.Fprintf(&em, "\n    %s = %s\n    %s = %s",
+					soutsChan("ref_", id), soutsChan("ch_", id), keysChan("ref_", id), keysChan("ch_", id))
 
 				continue
 			}
@@ -1854,20 +1862,28 @@ func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp c
 	fmt.Fprintf(b, "    %s(%s)\n", fused,
 		bindCallArgsPa(c.Bindings, "scat_"+c.Name, bindName(pipeline, c.Name)))
 
+	// The gathered outs are sorted by bundle name driver-side so the consumer's
+	// input-file ORDER is deterministic across runs — collect() order is
+	// completion order, which would invalidate the consumer's -resume cache key
+	// on every replay. toSortedList also emits [] for an empty channel (the
+	// ifEmpty it replaces), so it is NOT dormancy-safe on its own: when the
+	// enclosing pipeline is skipped the souts channel still emits []. Dormancy
+	// rests on the keys channel — .first() of the single fi<=0 writer never
+	// binds when no instance ran — so every consumer must take souts AND keys
+	// together (foldBindInputs guarantees the pairing).
+	souts := fused + ".out.outs.toSortedList { a, b -> a.name <=> b.name }"
+
 	// A folded merge runs inside the sole consumer's task (#76): expose the
-	// collected per-fork outs and the keys value channel for it instead of a
-	// MERGE task. Both are value channels; the keys .first() keeps the skipped-
-	// pipeline dormancy (no instances -> no keys -> consumer never fires).
+	// gathered outs and the keys value channel for it instead of a MERGE task.
 	if cp.foldMerge {
-		fmt.Fprintf(b, "    ch_%s_souts = %s.out.outs.collect().ifEmpty([])\n", c.Name, fused)
-		fmt.Fprintf(b, "    ch_%s_keys = %s.out.keys.first()\n", c.Name, fused)
+		fmt.Fprintf(b, "    %s = %s\n", soutsChan("ch_", c.Name), souts)
+		fmt.Fprintf(b, "    %s = %s.out.keys.first()\n", keysChan("ch_", c.Name), fused)
 
 		return
 	}
 
 	merge := mergeName(pipeline, c.Name)
-	fmt.Fprintf(b, "    %s(%s.out.outs.collect().ifEmpty([]), %s.out.keys.first(), types)\n",
-		merge, fused, fused)
+	fmt.Fprintf(b, "    %s(%s, %s.out.keys.first(), types)\n", merge, souts, fused)
 	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
 }
 
@@ -2061,23 +2077,13 @@ func bindCallArgs(bindings []ir.Binding, specName string) string {
 }
 
 // bindCallArgsPa is bindCallArgs with an explicit pipeline-args channel
-// expression (used to substitute a gated channel for a disabled call).
+// expression (used to substitute a gated channel for a disabled call). It is
+// foldCallArgs with no fold context, so ONE loop defines the invocation-arg
+// order for every bind-style process. Every such process takes two final
+// broadcast inputs: the shared type manifest (types) and its own bindspec
+// (spec.json); see assetsDir. The workflow defines `types` in its main block.
 func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
-	refs := refCalls(bindings)
-
-	args := make([]string, 0, len(refs)+1)
-	args = append(args, pa)
-
-	for _, id := range refs {
-		args = append(args, "ch_"+id)
-	}
-
-	// Every bind/fork/disable process takes two final broadcast inputs: the shared
-	// type manifest (types) and its own bindspec (spec.json); see assetsDir. The
-	// workflow defines `types` in its main block.
-	args = append(args, "types", specFile(specName))
-
-	return strings.Join(args, ", ")
+	return foldCallArgs(genCtx{}, nil, bindings, pa, specName)
 }
 
 // genPublish emits the terminal publish as two processes that avoid a single-node
@@ -2217,7 +2223,8 @@ func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow st
 	var refArgs strings.Builder
 	for _, id := range refCalls(p.Returns) {
 		if _, ok := mergeFoldProducer(g, p, id); ok {
-			fmt.Fprintf(&refArgs, ", %[1]s.out.ref_%[2]s_souts, %[1]s.out.ref_%[2]s_keys", entryWorkflow, id)
+			fmt.Fprintf(&refArgs, ", %[1]s.out.%[2]s, %[1]s.out.%[3]s",
+				entryWorkflow, soutsChan("ref_", id), keysChan("ref_", id))
 
 			continue
 		}
