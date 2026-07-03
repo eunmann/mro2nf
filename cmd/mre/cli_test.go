@@ -464,6 +464,42 @@ func TestRunForkBindArraySmoke(t *testing.T) {
 	}
 }
 
+// TestRunForkBindIndex drives the native-scatter path (#76): -index writes only
+// the one fork's args, identical to the corresponding full-fork write, and an
+// out-of-range index is a loud error rather than a silent empty bundle.
+func TestRunForkBindIndex(t *testing.T) {
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"n":{"literal":[10,20,30],"split":true}}`)
+	out := filepath.Join(dir, "args")
+
+	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-index", "1", "-o", out}); err != nil {
+		t.Fatalf("run forkbind -index: %v", err)
+	}
+
+	if diff := cmp.Diff(map[string]any{"n": 20.0}, readTestBundle(t, out)); diff != "" {
+		t.Errorf("fork 1 args mismatch (-want +got):\n%s", diff)
+	}
+
+	// The native scatter relies on -index N being byte-identical to the default
+	// path's fork_0000N: run the default, then diff fork_00001 against -o.
+	forks := filepath.Join(dir, "forks")
+	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-chunkdir", forks}); err != nil {
+		t.Fatalf("run default forkbind: %v", err)
+	}
+
+	if diff := cmp.Diff(readTestBundle(t, filepath.Join(forks, "fork_00001")), readTestBundle(t, out)); diff != "" {
+		t.Errorf("-index 1 not byte-identical to default fork_00001 (-default +index):\n%s", diff)
+	}
+
+	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-index", "5", "-o", out}); err == nil {
+		t.Error("forkbind -index 5 over 3 forks must error, not write an empty bundle")
+	}
+
+	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-index", "0"}); err == nil {
+		t.Error("forkbind -index without -o must error, not write to cwd")
+	}
+}
+
 // TestRunMergeSmoke drives merge end to end: an array fork collects each output
 // into an ordered array; a keyed (map) fork rebuilds a map from the keys file.
 func TestRunMergeSmoke(t *testing.T) {
