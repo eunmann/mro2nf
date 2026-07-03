@@ -94,6 +94,50 @@ func TestOverridesOverlayReachesStage(t *testing.T) {
 	}
 }
 
+// TestOverridesPipelineScopeReachesStages exercises the `-mro` path (#45): a
+// pipeline-scoped key (naming the pipeline D, not a leaf stage) must expand to
+// every stage beneath it, so BOTH GEN and ADD see the override. Without -mro the
+// key would render a dead selector for the pipeline name and reach neither.
+func TestOverridesPipelineScopeReachesStages(t *testing.T) {
+	requireTools(t, "nextflow", "java")
+	buildBinaries(t)
+
+	work := t.TempDir()
+	overridesJSON := filepath.Join(work, "overrides.json")
+
+	if err := os.WriteFile(overridesJSON, []byte(`{ "D": { "mem_gb": 3 } }`), 0o644); err != nil {
+		t.Fatalf("write overrides.json: %v", err)
+	}
+
+	fixture := filepath.Join(root, "testdata", "diamond_min")
+
+	out, err := exec.Command(filepath.Join(root, "mro2nf"), "overrides",
+		"-mro", filepath.Join(fixture, "pipeline.mro"), "-mropath", fixture, overridesJSON).Output()
+	if err != nil {
+		t.Fatalf("mro2nf overrides -mro: %v", err)
+	}
+
+	overlay := filepath.Join(work, "overrides.config")
+	if err := os.WriteFile(overlay, out, 0o644); err != nil {
+		t.Fatalf("write overrides.config: %v", err)
+	}
+
+	proj := transpile(t, "diamond_min")
+
+	if err := runNextflow(t, proj, "-c", overlay); err != nil {
+		t.Fatal(err)
+	}
+
+	gen, add := stageJobinfos(t, filepath.Join(proj, "work"))
+	if gen == nil || add == nil {
+		t.Fatalf("GEN found=%v, ADD found=%v; want both stages' _jobinfo", gen != nil, add != nil)
+	}
+
+	if gen.MemGB != 3 || add.MemGB != 3 {
+		t.Errorf("pipeline-scoped D override reached GEN memGB=%v, ADD memGB=%v; want both 3", gen.MemGB, add.MemGB)
+	}
+}
+
 // stageJobinfos walks the work tree and returns the _jobinfo the GEN and ADD
 // stages saw. _jobinfo's own `name` carries the entry callable, so the stage
 // is identified from the task dir's .command.run header instead.

@@ -13,6 +13,9 @@ with `-c`. `mro2nf` converts an existing overrides file for you:
 ```bash
 mro2nf overrides overrides.json > overrides.config
 nextflow run main.nf -c overrides.config
+
+# Pass the pipeline to expand pipeline-scoped keys and validate stage names:
+mro2nf overrides -mro pipeline.mro -mropath . overrides.json > overrides.config
 ```
 
 It maps each override field to the generated process names:
@@ -30,9 +33,21 @@ The override key's **last segment** is taken as the stage/call name. Fields with
 no faithful Nextflow directive are reported and skipped: `vmem_gb` (Nextflow has
 no virtual-memory directive — use `mro2nf -monitor`, which reads `vmem_gb` from
 the `.mro`), `force_volatile` (VDR is not modeled), and `profile` (use the
-trace/report options below). mrp's *pipeline-scoped* keys (a key that names a
-sub-pipeline, not a stage) don't map — our process names are stage-named, not
-path-qualified — so scope overrides to individual stages.
+trace/report options below).
+
+**Pipeline-scoped keys.** mrp matches a key as a path prefix, so a key that names
+a *sub-pipeline* applies to every stage beneath it. Pass `-mro <pipeline.mro>` and
+`mro2nf overrides` parses the pipeline and **expands** such a key into one
+selector per stage under that sub-pipeline; when a stage-specific key and a
+pipeline-scoped key both touch the same stage/phase/field, the deeper (more
+specific) key wins, matching mrp's nearest-ancestor rule. With `-mro`, a key that
+names neither a stage nor a sub-pipeline is **reported and skipped** rather than
+silently emitting a selector that matches no process. Without `-mro` the tool
+can't tell a sub-pipeline name from a stage name, so a pipeline-scoped key emits a
+dead selector — pass `-mro`, or scope overrides to individual stages. (Because the
+generated process names are stage/call-named, not fully path-qualified, expansion
+targets stage *names*: an override reaches every instance of a stage, not one
+call site.)
 
 Each generated selector covers every naming family the emitter produces:
 
