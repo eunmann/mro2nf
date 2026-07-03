@@ -138,6 +138,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		mrjob:   opts.Mrjob,
 		monitor: opts.Monitor,
 		code:    opts.StageCode,
+		keyed:   keyedReachable(prog),
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker

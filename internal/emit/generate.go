@@ -24,6 +24,10 @@ type genCtx struct {
 	mrjob   string
 	monitor bool
 	code    map[string]string // stage name -> stage code path
+	// keyed is the set of stage names reachable under a map call, which are the
+	// only stages whose fork-keyed variants (_MAP / _SPLIT_K etc.) can be invoked.
+	// A stage not in this set gets no keyed variant emitted (#59).
+	keyed map[string]bool
 }
 
 // stageCmd renders an mre invocation for a stage phase, single-quoting every
@@ -136,11 +140,16 @@ func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 	var b strings.Builder
 
 	genPipeIncludes(&b, p, prog)
-	genKeyedPipeIncludes(&b, p, prog)
 	genPipeProcesses(&b, p, prog, g)
-	genKeyedPipeProcesses(&b, p, prog, g)
 	genPipelineWorkflow(&b, p, prog)
-	genKeyedPipeline(&b, p)
+
+	// The keyed layer (wf_<p>_map + its keyed includes/processes) is only invoked
+	// when this pipeline runs under a map call; otherwise it is dead code (#59).
+	if g.keyed[p.Name] {
+		genKeyedPipeIncludes(&b, p, prog)
+		genKeyedPipeProcesses(&b, p, prog, g)
+		genKeyedPipeline(&b, p)
+	}
 
 	return b.String()
 }
@@ -538,19 +547,87 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 	joinOuts := strings.Join(names(s.Out), ",")
 	base := g.stageCmd("main", code, s.Lang, vmemFlag(s, "main"))
 
+	// The fork-keyed variants are only ever invoked for a stage reachable under a
+	// map call; for any other stage they are dead process definitions, so emit
+	// them only when needed (#59).
+	keyed := g.keyed[s.Name]
+
 	if !s.Split {
 		genSingleStage(b, s, base, joinOuts, g)
-		genKeyedSingleStage(b, s, base, joinOuts, g)
+
+		if keyed {
+			genKeyedSingleStage(b, s, base, joinOuts, g)
+		}
 
 		return
 	}
 
 	genSplitProcesses(b, s, g, base, mainOuts, joinOuts)
 	genSplitWorkflow(b, s)
+
 	// A fork-key-threaded variant, used when this split stage is a map-call
 	// target so each fork runs its own split/main/join and gathers per fork.
-	genKeyedSplitProcesses(b, s, g, base, mainOuts, joinOuts)
-	genKeyedSplitWorkflow(b, s)
+	if keyed {
+		genKeyedSplitProcesses(b, s, g, base, mainOuts, joinOuts)
+		genKeyedSplitWorkflow(b, s)
+	}
+}
+
+// keyedReachable returns the set of stage AND pipeline names that can run under a
+// map call — directly targeted by a `map call`, or reached through a (possibly
+// nested) sub-pipeline that is map-called. Only these callables need a fork-keyed
+// variant emitted (a stage's _MAP/_SPLIT_K processes, a pipeline's wf_<p>_map
+// plus its keyed includes/processes); every other callable's keyed layer is
+// never invoked. The analysis unions over all call paths, so a callable reached
+// both keyed and plain is still marked keyed.
+func keyedReachable(prog *ir.Program) map[string]bool {
+	needed := map[string]bool{}
+	seen := map[[2]string]bool{} // (callable, keyed-context) already walked
+
+	var walk func(callable string, keyed bool)
+	walk = func(callable string, keyed bool) {
+		if _, ok := prog.Stages[callable]; ok {
+			if keyed {
+				needed[callable] = true
+			}
+
+			return
+		}
+
+		p, ok := prog.Pipelines[callable]
+		if !ok {
+			return
+		}
+
+		if keyed {
+			needed[callable] = true
+		}
+
+		mark := [2]string{callable, boolKey(keyed)}
+		if seen[mark] {
+			return
+		}
+
+		seen[mark] = true
+
+		for _, c := range p.Calls {
+			walk(c.Callable, keyed || c.Mapped)
+		}
+	}
+
+	if prog.Entry != nil {
+		walk(prog.Entry.Callable, false)
+	}
+
+	return needed
+}
+
+func boolKey(b bool) string {
+	if b {
+		return "k"
+	}
+
+	return "p"
 }
 
 // genKeyedSplitProcesses emits fork-key-carrying variants of the split/main/join

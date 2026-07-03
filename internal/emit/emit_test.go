@@ -505,10 +505,51 @@ func TestEmitGPUAccelerator(t *testing.T) {
 	if !strings.Contains(train, "accelerator 2") {
 		t.Error("split GPU stage TRAIN main must request `accelerator 2`")
 	}
-	// accelerator belongs only on the compute (MAIN) phases — plain + keyed — so
-	// exactly two directives, and none on the SPLIT/JOIN phases.
-	if got := strings.Count(train, "accelerator"); got != 2 {
-		t.Errorf("TRAIN has %d accelerator directives, want 2 (MAIN + MAIN_K only, not SPLIT/JOIN)", got)
+	// accelerator belongs only on the compute (MAIN) phase, not SPLIT/JOIN. TRAIN
+	// is not map-called, so its keyed variants are pruned (#59) — exactly one
+	// accelerator directive (plain MAIN), and no _MAIN_K process at all.
+	if got := strings.Count(train, "accelerator"); got != 1 {
+		t.Errorf("TRAIN has %d accelerator directives, want 1 (MAIN only, not SPLIT/JOIN)", got)
+	}
+
+	if strings.Contains(train, "TRAIN_MAIN_K") {
+		t.Error("TRAIN is not map-called; its keyed _MAIN_K variant must be pruned (#59)")
+	}
+}
+
+// TestEmitPrunesUnusedKeyedVariants guards #59: a stage/pipeline that never runs
+// under a map call gets no fork-keyed variant emitted, while a map-reachable one
+// keeps it. Behavior is unchanged (the pruned processes were never invoked) —
+// this is verified byte-identical by the e2e/differential suites; here we pin the
+// emitted structure.
+func TestEmitPrunesUnusedKeyedVariants(t *testing.T) {
+	// diamond_min has no map call anywhere, so no keyed layer at all.
+	d := emitFixture(t, "diamond_min", map[string]string{"GEN": "/x/gen", "ADD": "/x/add"})
+
+	gen := readFile(t, filepath.Join(d, "modules", "stage_GEN.nf"))
+	if strings.Contains(gen, "GEN_MAP") || strings.Contains(gen, "wf_GEN_map") {
+		t.Error("GEN is never map-called; its keyed variant must be pruned (#59)")
+	}
+
+	pipeD := readFile(t, filepath.Join(d, "modules", "pipe_D.nf"))
+	if strings.Contains(pipeD, "wf_D_map") || strings.Contains(pipeD, "wfk_") {
+		t.Error("pipeline D is never map-called; its keyed layer must be pruned (#59)")
+	}
+
+	// map_pipe maps sub-pipeline INNER over an array, so INNER and its stage ADD1
+	// run keyed and MUST keep their variants; the top-level OUTER does not.
+	m := emitFixture(t, "map_pipe", map[string]string{"ADD1": "/x/add1"})
+
+	if add1 := readFile(t, filepath.Join(m, "modules", "stage_ADD1.nf")); !strings.Contains(add1, "ADD1_MAP") {
+		t.Error("ADD1 runs under a map call; its keyed variant must be emitted")
+	}
+
+	if inner := readFile(t, filepath.Join(m, "modules", "pipe_INNER.nf")); !strings.Contains(inner, "wf_INNER_map") {
+		t.Error("INNER is map-called; its keyed variant must be emitted")
+	}
+
+	if outer := readFile(t, filepath.Join(m, "modules", "pipe_OUTER.nf")); strings.Contains(outer, "wf_OUTER_map") {
+		t.Error("OUTER is the top-level pipeline (not map-called); its keyed layer must be pruned (#59)")
 	}
 }
 
