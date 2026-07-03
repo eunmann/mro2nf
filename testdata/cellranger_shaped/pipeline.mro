@@ -30,7 +30,7 @@ stage FLAG_STAGES(
     src py   "stages/flag_stages",
 )
 
-stage FILTER_BARCODES(
+stage SELECT_CELLS(
     in  int  counts,
     out int  filtered,
     src py   "stages/filter",
@@ -80,24 +80,30 @@ pipeline POST_MATRIX(
         mode = self.mode,
     )
 
-    call FILTER_BARCODES(
+    call SELECT_CELLS(
         counts = self.counts,
     )
 
     call SUMMARIZE_DIMS(
-        filtered = FILTER_BARCODES.filtered,
+        filtered = SELECT_CELLS.filtered,
     )
 
     call SUMMARIZE_DIMS as SUMMARIZE_PROBE_DIMS(
-        filtered = FILTER_BARCODES.filtered,
+        filtered = SELECT_CELLS.filtered,
     ) using (
         disabled = FLAG_STAGES.no_probe,
     )
 
     call WRITE_BAM(
-        filtered = FILTER_BARCODES.filtered,
+        filtered = SELECT_CELLS.filtered,
     ) using (
         disabled = FLAG_STAGES.disable_legacy,
+    )
+
+    call WRITE_BAM as MULTI_WRITE_BAM(
+        filtered = SELECT_CELLS.filtered,
+    ) using (
+        disabled = FLAG_STAGES.disable_multi,
     )
 
     call SPLIT_SAMPLES(
@@ -111,7 +117,7 @@ pipeline POST_MATRIX(
     call MERGE_METRICS(
         dims       = SUMMARIZE_DIMS.dims,
         probe_dims = SUMMARIZE_PROBE_DIMS.dims,
-        filtered   = FILTER_BARCODES.filtered,
+        filtered   = SELECT_CELLS.filtered,
         per_sample = PER_SAMPLE.metric,
     )
 
@@ -173,6 +179,6 @@ pipeline COUNT(
 call COUNT(
     gem_wells = 2,
     reads     = 100,
-    mode      = 0,
+    mode      = 2,
     samples   = 3,
 )
