@@ -12,8 +12,12 @@ import (
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-// refKindCall is the ir.Ref.Kind for a reference to another call's output.
-const refKindCall = "call"
+// refKindCall is the ir.Ref.Kind for a reference to another call's output;
+// refKindSelf is a reference to one of the pipeline's own inputs.
+const (
+	refKindCall = "call"
+	refKindSelf = "self"
+)
 
 // genCtx carries the resolved paths and names needed to render Nextflow code.
 type genCtx struct {
@@ -529,7 +533,10 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 
 		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn))
 
-		if c.Disabled != nil {
+		// A natively-gated disable (#59) reads the flag on the driver, so the plain
+		// workflow needs no DISABLE process. A keyed pipeline still emits its keyed
+		// DISABLE (genKeyedPipeProcesses) for the keyed workflow.
+		if _, _, native := nativeDisableGate(c); c.Disabled != nil && !native {
 			genDisableProcess(b, p.Name, c, g)
 		}
 	}
@@ -1428,8 +1435,26 @@ func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string
 // false; disabled forks emit a null outputs bundle instead.
 func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee string) {
 	bind := bindName(pipeline, c.Name)
-	dis := disableName(pipeline, c.Name)
 	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+
+	// When the disable flag resolves to a single top-level field of the pipeline
+	// args or an upstream output, read it natively on the driver instead of
+	// spending a whole DISABLE task on one `mre bind` (#59, Lever 2).
+	if src, field, ok := nativeDisableGate(c); ok {
+		fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s).branch { data, leaves, gd, gl ->
+        def off = Mro2nf.disabledField(gd, '%[4]s')
+        run: !off
+        skip: off
+    }
+    r_%[1]s = %[5]s(g_%[1]s.run.map { data, leaves, gd, gl -> tuple(data, leaves) })
+    s_%[1]s = g_%[1]s.skip.map { data, leaves, gd, gl -> %[6]s }
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
+`, c.Name, bind, src, field, callee, nullBundle(nulls))
+
+		return
+	}
+
+	dis := disableName(pipeline, c.Name)
 
 	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c), dis))
 	fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s.out).branch { data, leaves, d ->
@@ -1441,6 +1466,33 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
     s_%[1]s = g_%[1]s.skip.map { data, leaves, d -> %[6]s }
     ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
 `, c.Name, bind, dis, callee, nulls, nullBundle(nulls))
+}
+
+// nativeDisableGate reports whether a call's disable flag can be read natively
+// (no DISABLE task) — when the `disabled` ref is a single top-level field of the
+// pipeline args (self.<field>) or an upstream output (CALL.out.<field>). It
+// returns the source channel (pa or ch_<call>) and the field name. A nested or
+// projected ref keeps the general DISABLE-bind path.
+func nativeDisableGate(c ir.Call) (string, string, bool) {
+	r := c.Disabled
+	if r == nil {
+		return "", "", false
+	}
+
+	switch r.Kind {
+	case refKindSelf:
+		// self.<field>: the whole referenced input is the flag (no sub-path).
+		if r.Output == "" {
+			return "pa", r.ID, true
+		}
+	case refKindCall:
+		// CALL.out.<field>: a single (non-nested) output field.
+		if r.Output != "" && !strings.Contains(r.Output, ".") {
+			return "ch_" + r.ID, r.Output, true
+		}
+	}
+
+	return "", "", false
 }
 
 // calleeModule returns the exported workflow name and module path for a
