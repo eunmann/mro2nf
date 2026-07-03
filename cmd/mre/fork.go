@@ -17,6 +17,9 @@ import (
 // errForkIndexRange reports a native-scatter fork index past the resolved forks.
 var errForkIndexRange = errors.New("forkbind -index out of range")
 
+// errForkIndexNoOut reports -index without the required -o output dir.
+var errForkIndexNoOut = errors.New("forkbind -index requires -o <dir>")
+
 // runForkBind resolves a map call's bindings into one args file per fork,
 // written as fork_NNNNN.json into -chunkdir so a lexical sort recovers order.
 func runForkBind(_ context.Context, argv []string) error {
@@ -92,6 +95,10 @@ func runForkBind(_ context.Context, argv []string) error {
 // writeForkIndex writes only fork[index]'s args bundle to oDir (the native-scatter
 // path); it is identical to the corresponding full-fork write.
 func writeForkIndex(forks []json.RawMessage, index int, oDir string, params []ir.Param, tbl *types.Table) error {
+	if oDir == "" {
+		return errForkIndexNoOut
+	}
+
 	if index >= len(forks) {
 		return fmt.Errorf("%w: index %d, %d forks", errForkIndexRange, index, len(forks))
 	}

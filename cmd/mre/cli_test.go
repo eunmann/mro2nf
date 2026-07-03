@@ -480,8 +480,23 @@ func TestRunForkBindIndex(t *testing.T) {
 		t.Errorf("fork 1 args mismatch (-want +got):\n%s", diff)
 	}
 
+	// The native scatter relies on -index N being byte-identical to the default
+	// path's fork_0000N: run the default, then diff fork_00001 against -o.
+	forks := filepath.Join(dir, "forks")
+	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-chunkdir", forks}); err != nil {
+		t.Fatalf("run default forkbind: %v", err)
+	}
+
+	if diff := cmp.Diff(readTestBundle(t, filepath.Join(forks, "fork_00001")), readTestBundle(t, out)); diff != "" {
+		t.Errorf("-index 1 not byte-identical to default fork_00001 (-default +index):\n%s", diff)
+	}
+
 	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-index", "5", "-o", out}); err == nil {
 		t.Error("forkbind -index 5 over 3 forks must error, not write an empty bundle")
+	}
+
+	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-index", "0"}); err == nil {
+		t.Error("forkbind -index without -o must error, not write to cwd")
 	}
 }
 
