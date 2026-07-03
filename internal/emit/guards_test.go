@@ -189,3 +189,50 @@ func TestBindSpecSplitFlag(t *testing.T) {
 		t.Errorf("map-call bindspec has no split:true entry:\n%s", data)
 	}
 }
+
+// TestEmitRejectsCompStageWithoutMrjob checks a pipeline with a comp-adapter
+// stage is rejected up front when -mrjob is absent — the comp stages cannot run
+// without the wrapper, so emitting would produce a broken project rather than a
+// clear error.
+func TestEmitRejectsCompStageWithoutMrjob(t *testing.T) {
+	ast, err := frontend.Parse("../../testdata/comp_split/pipeline.mro", []string{"../../testdata/comp_split"}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	code := map[string]string{}
+	for n := range prog.Stages {
+		code[n] = filepath.Join("/x", n)
+	}
+
+	dir := t.TempDir()
+	// Mrjob deliberately unset.
+	err = emit.Emit(prog, emit.Options{OutDir: dir, Mre: "mre", Shell: "/x/s", MROFile: "pipeline.mro", StageCode: code})
+	if !errors.Is(err, apperror.ErrUnsupported) || !strings.Contains(err.Error(), "comp stage") {
+		t.Fatalf("Emit(comp stage, no -mrjob): want ErrUnsupported naming a comp stage, got %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(dir, "main.nf")); statErr == nil {
+		t.Error("Emit wrote main.nf despite rejecting the comp pipeline")
+	}
+}
+
+// TestParseRejectsMalformedMRO checks the frontend surfaces a parse error for
+// syntactically invalid MRO instead of silently yielding an empty program.
+func TestParseRejectsMalformedMRO(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "pipeline.mro")
+
+	if err := os.WriteFile(bad, []byte("stage GEN( this is not valid mro )\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := frontend.Parse(bad, []string{dir}, false); err == nil {
+		t.Error("Parse(malformed .mro): want a parse error, got nil")
+	}
+}
