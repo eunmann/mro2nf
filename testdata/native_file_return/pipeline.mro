@@ -1,0 +1,42 @@
+# A single pipeline with a TRANSFORM return (combining two calls) where one
+# returned output is a FILE — so under -native the return BIND folds into LAYOUT
+# and exercises its file-leaf path (mv args/f f + the leaves output feeding
+# PUBLISH_LEAF). Verifies #76's native LAYOUT publishes real file outputs
+# byte-identically.
+filetype txt;
+
+stage MAKE_NOTE(
+    in  int  x,
+    out txt  note,
+    src py   "stages/note",
+)
+
+stage DOUBLE(
+    in  int  x,
+    out int  y,
+    src py   "stages/double",
+)
+
+pipeline NF(
+    in  int  x,
+    out txt  note,
+    out int  y,
+)
+{
+    call MAKE_NOTE(
+        x = self.x,
+    )
+
+    call DOUBLE(
+        x = self.x,
+    )
+
+    return (
+        note = MAKE_NOTE.note,
+        y    = DOUBLE.y,
+    )
+}
+
+call NF(
+    x = 21,
+)

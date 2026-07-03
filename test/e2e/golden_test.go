@@ -108,6 +108,8 @@ var goldenCases = []struct {
 	// _basic_sc_rna_counter shape — preflight, split, a disable fan-out gating
 	// aliased calls, a mapped per-sample stage, and nested sub-pipelines.
 	{"cellranger_shaped", "cellranger_shaped", "expected/count_outs.json"},
+	// #76: a transform return with a file output — the native LAYOUT file-leaf path.
+	{"native_file_return", "native_file_return", "expected/nf_outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
@@ -460,7 +462,7 @@ func assertNativeComplete(t *testing.T, proj string) {
 			t.Fatal(err)
 		}
 
-		for _, cat := range []string{"process BIND", "process FORK", "process MERGE", "process STRUCTIFY", "process BUILD_ENTRY_ARGS"} {
+		for _, cat := range []string{"process BIND", "process FORK", "process MERGE", "process DISABLE", "process BUILD_ENTRY_ARGS"} {
 			if strings.Contains(string(data), cat) {
 				t.Errorf("%s: -native must not emit a %q task", filepath.Base(f), strings.TrimPrefix(cat, "process "))
 			}
@@ -471,11 +473,14 @@ func assertNativeComplete(t *testing.T, proj string) {
 // TestNativeComplete guards #76 for the single-pipeline subset that -native fully
 // collapses: no data-plane task categories remain, and the output is byte-identical
 // to the default (bundle-mode) run. file_min exercises a file output through the
-// native LAYOUT's inline return bind.
+// native LAYOUT's inline return bind. native_file_return has a TRANSFORM return
+// with a file output, so it exercises the native LAYOUT's file-leaf path (the
+// inline bind's args/f -> leaves -> PUBLISH_LEAF); file_min/chain_fuse/struct_min
+// are forward returns (default LAYOUT) that only drop BUILD_ENTRY_ARGS.
 func TestNativeComplete(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	for _, fx := range []string{"diamond_min", "fold_disable", "file_min", "chain_fuse", "struct_min"} {
+	for _, fx := range []string{"diamond_min", "fold_disable", "native_file_return", "file_min", "chain_fuse", "struct_min"} {
 		t.Run(fx, func(t *testing.T) {
 			t.Parallel()
 
