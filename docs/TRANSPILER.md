@@ -425,7 +425,11 @@ leaf names cannot collide. (The keyed nested-map fork/merge subsystem still
 stages whole bundle directories.)
 
 In `data.json`, every file-typed leaf is replaced with a **marker** of the form
-`@mre:file:f/L<nnnn>` — a *bundle-relative* path. The rules:
+`@mre:file:f/L<nnnn>` — a *bundle-relative* path. A leaf staged from a
+**directory** (a `path` output, or a directory a stage wrote into a `file`-typed
+out) uses `@mre:dir:` instead, so its ground-truth dir-ness — stat'd at staging
+time — travels to publish rather than being inferred from the declared type.
+Both prefixes resolve identically on read-back. The rules:
 
 - **On write** (a stage produced an output that is a real file): the file is
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
