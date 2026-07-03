@@ -91,7 +91,7 @@ func run(args []string) error {
 		return fmt.Errorf("invalid -target: %w", err)
 	}
 
-	if err := reportDiagnostics(log, prog, *fuseChainsFlag, *foldDisablesFlag); err != nil {
+	if err := reportDiagnostics(log, prog, *fuseChainsFlag, *foldDisablesFlag, *nativeFlag); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
@@ -211,8 +211,8 @@ func readOverridesInput(arg string) ([]byte, error) {
 // reportDiagnostics runs the pre-emit checks, prints each by severity, and
 // returns an error (aborting the transpile) if any is fatal — an enabled flag
 // that would produce a wrong or broken project for this pipeline.
-func reportDiagnostics(log zerolog.Logger, prog *ir.Program, fuseChains, foldDisables bool) error {
-	diags := emit.Diagnose(prog, emit.Options{FuseChains: fuseChains, FoldDisables: foldDisables})
+func reportDiagnostics(log zerolog.Logger, prog *ir.Program, fuseChains, foldDisables, native bool) error {
+	diags := emit.Diagnose(prog, emit.Options{FuseChains: fuseChains, FoldDisables: foldDisables, Native: native})
 
 	for _, d := range diags {
 		switch d.Severity {

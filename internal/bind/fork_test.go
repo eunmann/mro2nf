@@ -15,7 +15,7 @@ func TestResolveForks(t *testing.T) {
 	}
 	pipeArgs := json.RawMessage(`{"values":[1,2,3],"factor":10}`)
 
-	forks, _, err := bind.ResolveForks(spec, pipeArgs, nil, false)
+	forks, _, err := bind.ResolveForks(spec, pipeArgs, nil, false, bind.AllForks)
 	if err != nil {
 		t.Fatalf("resolve forks: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestResolveForks(t *testing.T) {
 func TestResolveForksNoSplit(t *testing.T) {
 	spec := bind.Spec{"factor": {Ref: &bind.Ref{Kind: "self", ID: "factor"}}}
 
-	_, _, err := bind.ResolveForks(spec, json.RawMessage(`{"factor":10}`), nil, false)
+	_, _, err := bind.ResolveForks(spec, json.RawMessage(`{"factor":10}`), nil, false, bind.AllForks)
 	if err == nil {
 		t.Fatal("expected error for map call with no split binding")
 	}
@@ -56,7 +56,7 @@ func TestResolveForksMap(t *testing.T) {
 	}
 	pipeArgs := json.RawMessage(`{"m":{"b":2,"a":1}}`)
 
-	forks, keys, err := bind.ResolveForks(spec, pipeArgs, nil, true)
+	forks, keys, err := bind.ResolveForks(spec, pipeArgs, nil, true, bind.AllForks)
 	if err != nil {
 		t.Fatalf("resolve forks: %v", err)
 	}

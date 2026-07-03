@@ -29,10 +29,7 @@ type genCtx struct {
 	monitor bool
 	// features holds the opt-in emission toggles (mirrored from Options).
 	features featureSet
-	// native selects the channel-native orchestration path (#76): the entry args
-	// are baked and staged directly, so no BUILD_ENTRY_ARGS task runs.
-	native bool
-	code   map[string]string // stage name -> stage code path
+	code     map[string]string // stage name -> stage code path
 	// plan is the whole-program emission plan (per-call kinds + the keyed set),
 	// resolved once in buildPlan so the process/wiring/include sites read a fixed
 	// decision instead of re-deriving fuseable*/forward/chain predicates.
@@ -583,7 +580,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 	// The return bind builds the pipeline's own output bundle, unless the returns
 	// forward one call's outputs verbatim (then no BIND — routed directly), or the
 	// native entry LAYOUT folds the return bind inline (#76 — no BIND node here).
-	if pp.retFwd == "" && (!g.native || p.Name != g.entry) {
+	if pp.retFwd == "" && (!g.features.native || p.Name != g.entry) {
 		genBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut))
 	}
 }
@@ -626,11 +623,13 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 // variant emitted (a stage's _MAP/_SPLIT_K processes, a pipeline's wf_<p>_map
 // plus its keyed includes/processes); every other callable's keyed layer is
 // never invoked. The analysis unions over all call paths, so a callable reached
-// both keyed and plain is still marked keyed. A plain-context map call that
-// -native scatters in-workflow (#76) runs the stage inline in its own fused
-// process, so it does NOT need the callee's keyed variant — but the same call
-// inside a keyed pipeline still forks through FORK_K, which does.
-func keyedReachable(prog *ir.Program, f featureSet) map[string]bool {
+// both keyed and plain is still marked keyed. A plain-context map call planned
+// as a native scatter (#76) runs the stage inline in its own fused process, so
+// it does NOT fan out to the callee's keyed variant — read from the already-
+// decided plan kind, never re-derived, so this site cannot disagree with
+// planCall (#77). The same call inside a keyed pipeline still forks through
+// FORK_K, which does need the keyed variant.
+func keyedReachable(prog *ir.Program, pl emitPlan) map[string]bool {
 	needed := map[string]bool{}
 	seen := map[[2]string]bool{} // (callable, keyed-context) already walked
 
@@ -662,10 +661,8 @@ func keyedReachable(prog *ir.Program, f featureSet) map[string]bool {
 
 		for _, c := range p.Calls {
 			mapped := c.Mapped
-			if mapped && !keyed && f.native {
-				if _, _, ok := nativeScatterable(c, prog); ok {
-					mapped = false
-				}
+			if mapped && !keyed && pl.pipes[callable].calls[c.Name].kind == kindNativeScatter {
+				mapped = false
 			}
 
 			walk(c.Callable, keyed || mapped)
@@ -927,12 +924,19 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
 // bindInputs renders the input block and the -inputs argument for a bind/fork
 // process: pipeline args plus one staged bundle per referenced upstream call.
 func bindInputs(refs []string) (string, string) {
-	var inputs strings.Builder
-
 	// Each input bundle is reconstructed under its own dir (pipeargs/, in_<id>/)
 	// from the staged sidecar + individual leaf items. The distinct dir names also
 	// keep pipeargs from clobbering this process's own `-o args` output (bug 1).
-	fmt.Fprintf(&inputs, "    %s\n", bundleInput("pipeargs"))
+	return bindInputsHead(bundleInput("pipeargs"), refs)
+}
+
+// bindInputsHead is bindInputs with a caller-supplied first input line (e.g.
+// the native scatter's key/index-carrying pipeargs tuple), so every bind-style
+// input block shares one implementation and staging fixes land everywhere.
+func bindInputsHead(head string, refs []string) (string, string) {
+	var inputs strings.Builder
+
+	fmt.Fprintf(&inputs, "    %s\n", head)
 
 	pairs := make([]string, 0, len(refs))
 	for _, id := range refs {
@@ -1016,47 +1020,44 @@ func mapModeArg(c ir.Call) string {
 
 // genNativeScatterProcess emits the fused forkbind+main process a -native map
 // call scatters over (#76): each instance resolves its own fork's args inline
-// (`forkbind -index`) and runs the stage main — no FORK task. Every instance
-// also writes the forkkeys sidecar (identical across instances, same
-// ResolveForks) for the MERGE gather, and names its out bundle outs__<key> so
+// (`forkbind -index`) and runs the stage main — no FORK task. Instance 0 alone
+// writes the forkkeys sidecar for the MERGE gather (one deterministic producer,
+// so -resume rehashes the same path), and out bundles are named outs__<key> so
 // the gather's `sort -V` staging orders forks exactly as the keyed path does.
+// The index -1 sentinel instance (empty fork collection) runs `forkbind
+// -keysonly`: every binding is resolved and validated exactly as the
+// always-running FORK task did — a wrong-kind or mis-zipped source still fails
+// loudly — and only the keys sidecar is produced, so both outputs are optional.
 func genNativeScatterProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
-	refs := refCalls(c.Bindings)
-
-	var ins strings.Builder
-
 	// The scattered tuple carries the fork key/index plus the pipeargs bundle
 	// elements; upstream bundles, types, and the bindspec are value channels
-	// re-read per instance.
-	fmt.Fprintf(&ins, "    tuple val(key), val(fi), %s\n", bundleInputElems("pipeargs"))
+	// re-read per instance (the plan bars upstream refs where pipeargs may be a
+	// queue — see nativeScatterable).
+	head := "tuple val(key), val(fi), " + bundleInputElems("pipeargs")
+	block, arg := bindInputsHead(head, refCalls(c.Bindings))
 
-	pairs := make([]string, 0, len(refs))
-	for _, id := range refs {
-		fmt.Fprintf(&ins, "    %s\n", bundleInput("in_"+id))
-		pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
-	}
-
-	ins.WriteString("    path 'types.json'\n    path 'spec.json'\n")
-
-	arg := ""
-	if len(pairs) > 0 {
-		arg = " -inputs " + strings.Join(pairs, ",")
-	}
+	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s -mapmode %s",
+		g.mre, arg, mapModeArg(c))
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
   input:
 %[3]s  output:
-    tuple val(key), path("outs__${key}", type: 'dir'), emit: outs
-    path 'forkkeys.json', emit: keys
+    path "outs__${key}", type: 'dir', emit: outs, optional: true
+    path 'forkkeys.json', emit: keys, optional: true
   script:
-    """
-    '%[4]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[5]s -mapmode %[6]s -index ${fi} -o fargs -keysfile forkkeys.json%[7]s
-    %[8]s -args fargs -outs '%[9]s'%[10]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
-    """
+    if( fi < 0 )
+      """
+      %[4]s -keysonly -keysfile forkkeys.json%[5]s
+      """
+    else
+      """
+      %[4]s -index ${fi} -o fargs${fi == 0 ? ' -keysfile forkkeys.json' : ''}%[5]s
+      %[6]s -args fargs -outs '%[7]s'%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+      """
 }
 
-`, fusedName(pipeline, c.Name), stageDirectives(s, ""), ins.String(), g.mre, arg, mapModeArg(c),
+`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, forkbind,
 		g.producerArgs(c.Callable, types.RoleIn),
 		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
 		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
@@ -1126,7 +1127,7 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 	emit := bindName(p.Name, "return") + ".out"
 	if fwd := g.plan.pipes[p.Name].retFwd; fwd != "" {
 		emit = "ch_" + fwd
-	} else if g.native && p.Name == g.entry {
+	} else if g.features.native && p.Name == g.entry {
 		// #76: the native entry LAYOUT binds the return inline, so emit the return
 		// bind's raw inputs (pipeargs + the returned calls) instead of running a
 		// standalone BIND_<entry>__return.
@@ -1749,33 +1750,22 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 
 // genNativeScatterWiring wires a -native map call's in-workflow scatter (#76):
 // the driver reads the fork width from pipeargs' data.json (Mro2nf.forkScatter)
-// and fans out one fused forkbind+main instance per fork — no FORK task. The
-// MERGE gather is unchanged; its keys come from any instance's forkkeys sidecar
-// (all byte-identical), falling back to the static empty-fork asset when the
-// collection is empty (zero instances, so no sidecar). concat ordering makes
-// the fallback deterministic: the asset is only reachable once the (empty)
-// keys channel has completed.
+// and fans out one fused forkbind+main instance per fork — no FORK task; an
+// empty collection scatters the keys-only sentinel instead. The MERGE gather
+// is unchanged. Its keys channel has exactly one producer (the fi<=0
+// instance), so .first() is deterministic — and when the enclosing pipeline is
+// skipped (no pipeargs item, so no instances at all) the keys channel stays
+// empty and MERGE stays dormant, exactly like FORK.out.keys on the FORK path.
 func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp callPlan) {
 	fused := fusedName(pipeline, c.Name)
 	merge := mergeName(pipeline, c.Name)
-	refs := refCalls(c.Bindings)
 
-	args := make([]string, 0, len(refs)+1)
-	args = append(args, "scat_"+c.Name)
-
-	for _, id := range refs {
-		args = append(args, "ch_"+id)
-	}
-
-	args = append(args, "types", specFile(bindName(pipeline, c.Name)))
-
-	fmt.Fprintf(b, "    scat_%s = pa.flatMap { data, leaves -> Mro2nf.forkScatter(data, leaves, '%s') }\n",
-		c.Name, cp.scatterField)
-	fmt.Fprintf(b, "    %s(%s)\n", fused, strings.Join(args, ", "))
-	fmt.Fprintf(b, "    out_%s = %s.out.outs.map { k, bundle -> bundle }\n", c.Name, fused)
-	fmt.Fprintf(b, "    keys_%s = %s.out.keys.concat(Channel.of(file(\"${projectDir}/_assets/%s\"))).first()\n",
-		c.Name, fused, forkKeysAsset(c))
-	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), keys_%s, types)\n", merge, c.Name, c.Name)
+	fmt.Fprintf(b, "    scat_%s = pa.flatMap { data, leaves -> Mro2nf.forkScatter(data, leaves, '%s', '%s') }\n",
+		c.Name, cp.scatterField, mapModeArg(c))
+	fmt.Fprintf(b, "    %s(%s)\n", fused,
+		bindCallArgsPa(c.Bindings, "scat_"+c.Name, bindName(pipeline, c.Name)))
+	fmt.Fprintf(b, "    %s(%s.out.outs.collect().ifEmpty([]), %s.out.keys.first(), types)\n",
+		merge, fused, fused)
 	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
 }
 
@@ -2042,7 +2032,7 @@ func genDefaultLayout(b *strings.Builder, entry string, g genCtx) {
 // when -native is off, the entry is a stage, or the return is a pure forward
 // (#14, no BIND to fold).
 func nativeReturnBind(prog *ir.Program, g genCtx) *ir.Pipeline {
-	if !g.native {
+	if !g.features.native {
 		return nil
 	}
 
@@ -2133,7 +2123,7 @@ func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow st
 }
 
 func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
-	if g.native {
+	if g.features.native {
 		genNativeEntry(b, prog, entryWorkflow, g)
 
 		return

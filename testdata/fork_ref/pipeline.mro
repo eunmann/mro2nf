@@ -1,0 +1,41 @@
+# A map call whose broadcast binding references an UPSTREAM call output
+# (factor = MKFAC.factor) while splitting a pipeline input. Under -native this
+# is scatter-eligible in a value-channel pipeargs context: the upstream bundle
+# is a value channel re-read by every fork instance (#76).
+stage MKFAC(
+    in  float base,
+    out float factor,
+    src py    "stages/mkfac",
+)
+
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline SCALE_REF(
+    in  float[] values,
+    in  float   base,
+    out float[] scaled,
+)
+{
+    call MKFAC(
+        base = self.base,
+    )
+
+    map call SCALE(
+        value  = split self.values,
+        factor = MKFAC.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+call SCALE_REF(
+    values = [1.0, 2.0, 3.0],
+    base   = 9.0,
+)

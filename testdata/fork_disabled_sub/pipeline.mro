@@ -1,0 +1,53 @@
+# A map call inside a DISABLED sub-pipeline: the callee receives its pipeline
+# args through the disable gate's run branch (a queue channel, not a value
+# channel). A self-only scatter is safe there — the fork channel is the only
+# multi-item input — so under -native it must still run every fork (#76).
+# skip=false here, so the sub-pipeline runs; the differential proves all three
+# forks execute through the queue-shaped pipeargs.
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline SUB(
+    in  float[] values,
+    in  float   factor,
+    out float[] scaled,
+)
+{
+    map call SCALE(
+        value  = split self.values,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+pipeline TOP(
+    in  float[] values,
+    in  float   factor,
+    in  bool    skip,
+    out float[] scaled,
+)
+{
+    call SUB(
+        values = self.values,
+        factor = self.factor,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        scaled = SUB.scaled,
+    )
+}
+
+call TOP(
+    values = [1.0, 2.0, 3.0],
+    factor = 5.0,
+    skip   = false,
+)

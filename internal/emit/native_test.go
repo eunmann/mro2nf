@@ -58,10 +58,51 @@ func TestBuildPlanNativeScatterIneligible(t *testing.T) {
 	}
 }
 
+// TestBuildPlanNativeScatterQueueContext guards the queue-pipeargs rule: a
+// pipeline reached through a disabled call gets a QUEUE channel as pipeargs,
+// so a scatter with upstream-ref inputs would zip its N-item fork channel
+// against 1-item queues and run a single fork. Self-only scatters stay
+// eligible there (the fork channel is the only multi-item input); ref-bearing
+// scatters stay eligible only in value-channel contexts.
+func TestBuildPlanNativeScatterQueueContext(t *testing.T) {
+	ds := lowerFixture(t, "fork_disabled_sub")
+
+	if q := queuePipeArgs(ds); !q["SUB"] || q["TOP"] {
+		t.Errorf("queuePipeArgs = %v, want SUB queued (disabled callee), TOP not", q)
+	}
+
+	// Self-only split inside the disabled sub-pipeline: still scatterable.
+	if got := buildPlan(ds, featureSet{native: true}).pipes["SUB"].calls["SCALE"].kind; got != kindNativeScatter {
+		t.Errorf("self-only scatter in a queued pipeline: kind = %d, want kindNativeScatter", got)
+	}
+
+	// A ref-bearing map call (fork_ref's factor = MKFAC.factor) is eligible in a
+	// value context but must NOT scatter if its pipeline had queue pipeargs.
+	fr := lowerFixture(t, "fork_ref")
+
+	c := findCall(fr.Pipelines["SCALE_REF"], "SCALE")
+	if c == nil {
+		t.Fatal("fork_ref: no SCALE call")
+	}
+
+	if _, _, ok := nativeScatterable(*c, fr, false); !ok {
+		t.Error("ref-bearing scatter in a value context must be eligible")
+	}
+
+	if _, _, ok := nativeScatterable(*c, fr, true); ok {
+		t.Error("ref-bearing scatter in a queue-pipeargs context must keep the FORK path")
+	}
+
+	if got := buildPlan(fr, featureSet{native: true}).pipes["SCALE_REF"].calls["SCALE"].kind; got != kindNativeScatter {
+		t.Errorf("fork_ref SCALE kind = %d, want kindNativeScatter (entry context is value)", got)
+	}
+}
+
 // TestGenerateNativeScatter renders fork_min's pipeline module with -native and
 // pins the scatter shape: no FORK process, a fused forkbind -index + main
-// process, driver-side fork enumeration, the keys fallback to the empty-fork
-// asset, and an unchanged MERGE gather.
+// process whose instance 0 alone writes the keys sidecar, the keys-only
+// sentinel branch for an empty collection, driver-side fork enumeration, and
+// an unchanged MERGE gather fed by the single-producer keys channel.
 func TestGenerateNativeScatter(t *testing.T) {
 	prog := lowerFixture(t, "fork_min")
 	f := featureSet{native: true}
@@ -71,7 +112,6 @@ func TestGenerateNativeScatter(t *testing.T) {
 		mre:      "mre",
 		shell:    "/x/martian_shell.py",
 		features: f,
-		native:   true,
 		code:     map[string]string{"SCALE": "/x/scale"},
 		plan:     buildPlan(prog, f),
 	}
@@ -83,11 +123,13 @@ func TestGenerateNativeScatter(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"forkbind -spec 'spec.json' -pipeargs pipeargs -mapmode array -index ${fi} -o fargs -keysfile forkkeys.json",
-		"Mro2nf.forkScatter(data, leaves, 'values')",
 		"process STAGE_9_SCALE_ALL__SCALE {",
-		"tuple val(key), path(\"outs__${key}\", type: 'dir'), emit: outs",
-		"concat(Channel.of(file(\"${projectDir}/_assets/forkkeys_array.json\"))).first()",
+		"-mapmode array -index ${fi} -o fargs${fi == 0 ? ' -keysfile forkkeys.json' : ''}",
+		"-keysonly -keysfile forkkeys.json",
+		"Mro2nf.forkScatter(data, leaves, 'values', 'array')",
+		"path \"outs__${key}\", type: 'dir', emit: outs, optional: true",
+		"path 'forkkeys.json', emit: keys, optional: true",
+		".out.keys.first(), types)",
 		"process MERGE_9_SCALE_ALL__SCALE {",
 	} {
 		if !strings.Contains(mod, want) {

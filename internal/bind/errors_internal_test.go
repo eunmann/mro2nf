@@ -40,7 +40,7 @@ func TestResolveForksArraySplitErrors(t *testing.T) {
 				"y": {Ref: &Ref{Kind: "self", ID: "ys"}, Split: true},
 			}
 
-			_, _, err := ResolveForks(spec, json.RawMessage(tt.pipeArgs), nil, false)
+			_, _, err := ResolveForks(spec, json.RawMessage(tt.pipeArgs), nil, false, AllForks)
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("ResolveForks error = %v, want errors.Is %v", err, tt.wantErr)
 			}
@@ -76,7 +76,7 @@ func TestResolveForksMapSplitErrors(t *testing.T) {
 				"y": {Ref: &Ref{Kind: "self", ID: "ys"}, Split: true},
 			}
 
-			_, _, err := ResolveForks(spec, json.RawMessage(tt.pipeArgs), nil, true)
+			_, _, err := ResolveForks(spec, json.RawMessage(tt.pipeArgs), nil, true, AllForks)
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("ResolveForks error = %v, want errors.Is %v", err, tt.wantErr)
 			}
@@ -90,7 +90,7 @@ func TestResolveForksMapSplitErrors(t *testing.T) {
 func TestResolveForksNullMapSource(t *testing.T) {
 	spec := Spec{"m": {Ref: &Ref{Kind: "self", ID: "src"}, Split: true}}
 
-	forks, keys, err := ResolveForks(spec, json.RawMessage(`{"src":null}`), nil, true)
+	forks, keys, err := ResolveForks(spec, json.RawMessage(`{"src":null}`), nil, true, AllForks)
 	if err != nil {
 		t.Fatalf("resolve forks: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestResolveForksNullMapSource(t *testing.T) {
 func TestResolveForksNullArraySource(t *testing.T) {
 	spec := Spec{"x": {Ref: &Ref{Kind: "self", ID: "src"}, Split: true}}
 
-	forks, keys, err := ResolveForks(spec, json.RawMessage(`{"src":null}`), nil, false)
+	forks, keys, err := ResolveForks(spec, json.RawMessage(`{"src":null}`), nil, false, AllForks)
 	if err != nil {
 		t.Fatalf("resolve forks: %v", err)
 	}

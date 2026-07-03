@@ -445,10 +445,9 @@ func TestNativeRejectsContainer(t *testing.T) {
 	}
 }
 
-// assertNativeComplete fails if any BIND/FORK/MERGE/STRUCTIFY/BUILD_ENTRY_ARGS
-// process is emitted — the #76 acceptance that those data-plane task categories
-// vanish under -native.
-func assertNativeComplete(t *testing.T, proj string) {
+// assertNoProcesses fails if any process in the project's generated Nextflow
+// (modules + main.nf) matches one of the given `process <CAT>` prefixes.
+func assertNoProcesses(t *testing.T, proj string, cats ...string) {
 	t.Helper()
 
 	mods, err := filepath.Glob(filepath.Join(proj, "modules", "*.nf"))
@@ -462,44 +461,46 @@ func assertNativeComplete(t *testing.T, proj string) {
 			t.Fatal(err)
 		}
 
-		for _, cat := range []string{"process BIND", "process FORK", "process MERGE", "process DISABLE", "process BUILD_ENTRY_ARGS"} {
-			if strings.Contains(string(data), cat) {
-				t.Errorf("%s: -native must not emit a %q task", filepath.Base(f), strings.TrimPrefix(cat, "process "))
+		for _, cat := range cats {
+			if strings.Contains(string(data), "process "+cat) {
+				t.Errorf("%s: -native must not emit a %q task", filepath.Base(f), cat)
 			}
 		}
 	}
+}
+
+// assertNativeComplete fails if any BIND/FORK/MERGE/STRUCTIFY/BUILD_ENTRY_ARGS
+// process is emitted — the #76 acceptance that those data-plane task categories
+// vanish under -native.
+func assertNativeComplete(t *testing.T, proj string) {
+	t.Helper()
+	assertNoProcesses(t, proj, "BIND", "FORK", "MERGE", "DISABLE", "BUILD_ENTRY_ARGS")
 }
 
 // TestNativeScatter guards #76's native-map increment: under -native an
 // eligible map call (single whole-field self split, leaf-stage callee)
 // scatters in-workflow — each fused instance resolves its own fork via
 // `forkbind -index` — so no FORK task is emitted. The MERGE gather remains (a
-// later increment). fork_min is an array fork, map_fork a typed-map fork, and
-// empty_fork_min the zero-fork path (no scatter instances, so MERGE's keys
-// fall back to the static empty-fork asset). Output must be byte-identical to
-// the default (bundle-mode) run.
+// later increment). Output must be byte-identical to the default (bundle-mode)
+// run. The fixtures cover the scatter's edge shapes: fork_min (array fork),
+// map_fork (typed-map fork), empty_fork_min / empty_map_fork (zero forks — the
+// keys-only sentinel instance supplies MERGE's keys and validates bindings),
+// fork_ref (a broadcast binding to an UPSTREAM call output re-read per
+// instance), and fork_disabled_sub (the scatter inside a disabled sub-pipeline
+// whose pipeargs arrive as a queue channel — every fork must still run).
 func TestNativeScatter(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	for _, fx := range []string{"fork_min", "map_fork", "empty_fork_min"} {
+	fixtures := []string{
+		"fork_min", "map_fork", "empty_fork_min", "empty_map_fork", "fork_ref", "fork_disabled_sub",
+	}
+
+	for _, fx := range fixtures {
 		t.Run(fx, func(t *testing.T) {
 			t.Parallel()
 
 			native := transpile(t, fx, "-native")
-
-			mods, err := filepath.Glob(filepath.Join(native, "modules", "*.nf"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, f := range append(mods, filepath.Join(native, "main.nf")) {
-				data, err := os.ReadFile(f)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if strings.Contains(string(data), "process FORK") {
-					t.Errorf("%s: -native scatter must not emit a FORK task", filepath.Base(f))
-				}
-			}
+			assertNoProcesses(t, native, "FORK")
 
 			def := transpile(t, fx)
 			if err := runNextflow(t, native); err != nil {

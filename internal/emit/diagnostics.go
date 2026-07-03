@@ -32,7 +32,9 @@ type Diagnostic struct {
 // pipeline. Callers print the results and abort if HasError reports an Error —
 // the seam #72/#76 add their flag-specific error checks to.
 func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
-	f := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables}
+	// The featureSet must mirror Emit's exactly (emit.go), or these diagnostics
+	// analyze a different plan than the one emitted.
+	f := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables, native: opts.Native}
 	pl := buildPlan(prog, f)
 
 	warns := Warnings(prog)
@@ -43,8 +45,35 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 	}
 
 	ds = append(ds, chainDiagnostics(f, pl)...)
+	ds = append(ds, nativeDiagnostics(prog, f, pl)...)
 
 	return append(ds, foldDiagnostics(prog, f, pl)...)
+}
+
+// nativeDiagnostics surfaces which map calls -native could NOT scatter (they
+// keep the FORK/MERGE tasks), so partial collapse is visible up front instead
+// of discovered by diffing the generated project (#83's detect-and-refuse
+// principle: an opt-in never silently under-delivers).
+func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic {
+	if !f.native {
+		return nil
+	}
+
+	var ds []Diagnostic
+
+	for _, name := range sortedKeys(prog.Pipelines) {
+		for _, c := range prog.Pipelines[name].Calls {
+			if c.Mapped && pl.pipes[name].calls[c.Name].kind == kindMapped {
+				ds = append(ds, Diagnostic{
+					Severity: SevInfo,
+					Message: fmt.Sprintf("-native: map call %s.%s keeps the FORK/MERGE tasks (not yet scatterable: needs a single whole-field self split on an undisabled leaf stage)",
+						name, c.Name),
+				})
+			}
+		}
+	}
+
+	return ds
 }
 
 // foldDiagnostics warns which disable gates -fold-disables pruned and on which
