@@ -5,8 +5,115 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/overrides"
 )
+
+// sampleProgram builds a two-level pipeline for the pipeline-scope tests:
+// TOP calls sub-pipeline SUB (stages ALIGN, SORT) and stage COLLATE.
+func sampleProgram() *ir.Program {
+	return &ir.Program{
+		Stages: map[string]*ir.Stage{
+			"ALIGN": {Name: "ALIGN"}, "SORT": {Name: "SORT"}, "COLLATE": {Name: "COLLATE"},
+		},
+		Pipelines: map[string]*ir.Pipeline{
+			"SUB": {Name: "SUB", Calls: []ir.Call{
+				{Name: "ALIGN", Callable: "ALIGN"}, {Name: "SORT", Callable: "SORT"},
+			}},
+			"TOP": {Name: "TOP", Calls: []ir.Call{
+				{Name: "SUB", Callable: "SUB"}, {Name: "COLLATE", Callable: "COLLATE"},
+			}},
+		},
+		Entry: &ir.EntryCall{Callable: "TOP"},
+	}
+}
+
+// TestConvertPipelineScopeExpands guards #45: a key naming a sub-pipeline expands
+// to a selector for every stage beneath it, rather than emitting one dead
+// selector for the pipeline name that matches no process.
+func TestConvertPipelineScopeExpands(t *testing.T) {
+	cfg, unmapped, err := overrides.Convert([]byte(`{"TOP.SUB": {"mem_gb": 8}}`), sampleProgram())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if len(unmapped) != 0 {
+		t.Errorf("unexpected unmapped: %v", unmapped)
+	}
+
+	for _, stage := range []string{"ALIGN", "SORT"} {
+		want := "withName: '(STAGE_[0-9]+_.+__)?" + stage + ".*' { memory = '8 GB' }"
+		if !strings.Contains(cfg, want) {
+			t.Errorf("config missing expanded selector for %s:\n%s\n--- got ---\n%s", stage, want, cfg)
+		}
+	}
+
+	// The sub-pipeline name itself must NOT appear as a selector (it matches no
+	// process); only its stages do.
+	if strings.Contains(cfg, "?SUB.*'") {
+		t.Errorf("config emitted a dead selector for the sub-pipeline name:\n%s", cfg)
+	}
+}
+
+// TestConvertUnknownKeyReported guards #45: a key naming neither a stage nor a
+// sub-pipeline is reported, not silently dropped, when the program is known.
+func TestConvertUnknownKeyReported(t *testing.T) {
+	cfg, unmapped, err := overrides.Convert([]byte(`{"NOPE": {"mem_gb": 8}}`), sampleProgram())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if len(unmapped) != 1 || !strings.Contains(unmapped[0], "NOPE") {
+		t.Errorf("expected NOPE reported as unmapped, got %v", unmapped)
+	}
+
+	if strings.Contains(cfg, "NOPE") {
+		t.Errorf("unknown key leaked a selector into the config:\n%s", cfg)
+	}
+}
+
+// TestConvertDeeperKeyWins guards mrp's nearest-ancestor precedence: a
+// stage-specific key overrides the pipeline-scoped value for that stage, while
+// the pipeline value still applies to the stage's siblings.
+func TestConvertDeeperKeyWins(t *testing.T) {
+	cfg, _, err := overrides.Convert(
+		[]byte(`{"TOP.SUB": {"mem_gb": 8}, "TOP.SUB.ALIGN": {"mem_gb": 16}}`), sampleProgram())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	alignSel := "withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '16 GB' }"
+	sortSel := "withName: '(STAGE_[0-9]+_.+__)?SORT.*' { memory = '8 GB' }"
+
+	if !strings.Contains(cfg, alignSel) {
+		t.Errorf("ALIGN should take the deeper 16 GB override:\n%s", cfg)
+	}
+
+	if !strings.Contains(cfg, sortSel) {
+		t.Errorf("SORT should keep the pipeline-scoped 8 GB override:\n%s", cfg)
+	}
+
+	if strings.Contains(cfg, "ALIGN.*' { memory = '8 GB' }") {
+		t.Errorf("ALIGN must not also carry the shallower 8 GB value:\n%s", cfg)
+	}
+}
+
+// TestConvertLeafKeyStillWorks confirms a plain stage key is unaffected by the
+// program-aware resolution.
+func TestConvertLeafKeyStillWorks(t *testing.T) {
+	cfg, unmapped, err := overrides.Convert([]byte(`{"TOP.COLLATE": {"threads": 3}}`), sampleProgram())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if len(unmapped) != 0 {
+		t.Errorf("unexpected unmapped: %v", unmapped)
+	}
+
+	if !strings.Contains(cfg, "withName: '(STAGE_[0-9]+_.+__)?COLLATE.*' { cpus = 3 }") {
+		t.Errorf("leaf stage key mis-rendered:\n%s", cfg)
+	}
+}
 
 func TestConvert(t *testing.T) {
 	in := []byte(`{
@@ -16,7 +123,7 @@ func TestConvert(t *testing.T) {
 	  "":                    { "mem_gb": 2 }
 	}`)
 
-	cfg, unmapped, err := overrides.Convert(in)
+	cfg, unmapped, err := overrides.Convert(in, nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -46,7 +153,7 @@ func TestConvert(t *testing.T) {
 func TestConvertSelectorsMatchGeneratedNames(t *testing.T) {
 	in := []byte(`{"P.ALIGN": {"mem_gb": 8, "split.mem_gb": 4, "chunk.mem_gb": 16, "join.mem_gb": 32}}`)
 
-	cfg, _, err := overrides.Convert(in)
+	cfg, _, err := overrides.Convert(in, nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -107,7 +214,7 @@ func TestConvertSelectorsMatchGeneratedNames(t *testing.T) {
 // TestConvertUnknownPhase checks an unrecognized phase prefix is reported as
 // unmapped rather than silently widening to the whole stage.
 func TestConvertUnknownPhase(t *testing.T) {
-	cfg, unmapped, err := overrides.Convert([]byte(`{"P.S": {"bogus.mem_gb": 8}}`))
+	cfg, unmapped, err := overrides.Convert([]byte(`{"P.S": {"bogus.mem_gb": 8}}`), nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -125,7 +232,7 @@ func TestConvertUnknownPhase(t *testing.T) {
 // reported as unmapped instead of emitted as a broken directive (previously
 // {"mem_gb": true} produced `memory = 'true GB'`).
 func TestConvertNonNumericValue(t *testing.T) {
-	cfg, unmapped, err := overrides.Convert([]byte(`{"P.S": {"mem_gb": true, "threads": "four", "chunk.mem_gb": 8}}`))
+	cfg, unmapped, err := overrides.Convert([]byte(`{"P.S": {"mem_gb": true, "threads": "four", "chunk.mem_gb": 8}}`), nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -145,7 +252,7 @@ func TestConvertNonNumericValue(t *testing.T) {
 
 // TestConvertUnknownField checks an unrecognized override field is reported.
 func TestConvertUnknownField(t *testing.T) {
-	_, unmapped, err := overrides.Convert([]byte(`{"P.S": {"bogus_field": 1}}`))
+	_, unmapped, err := overrides.Convert([]byte(`{"P.S": {"bogus_field": 1}}`), nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -158,7 +265,7 @@ func TestConvertUnknownField(t *testing.T) {
 // TestConvertGlobalPhaseSelector checks a phase field under the all-stages key
 // maps to the phase-wide selector covering both naming families.
 func TestConvertGlobalPhaseSelector(t *testing.T) {
-	cfg, _, err := overrides.Convert([]byte(`{"": {"chunk.mem_gb": 4}}`))
+	cfg, _, err := overrides.Convert([]byte(`{"": {"chunk.mem_gb": 4}}`), nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -173,7 +280,7 @@ func TestConvertGlobalPhaseSelector(t *testing.T) {
 func TestConvertUnmappable(t *testing.T) {
 	in := []byte(`{"P.S": {"vmem_gb": 20, "force_volatile": true, "profile": "cpu"}}`)
 
-	cfg, unmapped, err := overrides.Convert(in)
+	cfg, unmapped, err := overrides.Convert(in, nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
@@ -187,7 +294,7 @@ func TestConvertUnmappable(t *testing.T) {
 }
 
 func TestConvertMalformed(t *testing.T) {
-	if _, _, err := overrides.Convert([]byte("not json")); err == nil {
+	if _, _, err := overrides.Convert([]byte("not json"), nil); err == nil {
 		t.Error("expected an error for malformed JSON")
 	}
 }

@@ -12,10 +12,20 @@
 //	  "":             { "mem_gb": 2 }
 //	}
 //
-// The key's last segment is taken as the stage name and mapped to the generated
-// process names via withName regexes; "" maps to the global process defaults.
-// Each selector covers every naming family the emitter produces for a stage:
-// the plain processes (STAGE, STAGE_SPLIT/_MAIN/_JOIN), the keyed fork variants
+// mrp matches a key as a path prefix from the pipestance root, and a node
+// inherits from the nearest ancestor in its path that defines the field — so a
+// key naming a sub-pipeline applies to every stage beneath it. The generated
+// Nextflow process names are stage/call-named, not path-qualified, so this
+// converter targets the key's last segment. With the pipeline program available
+// (Convert's prog argument), a last segment that names a sub-pipeline is
+// EXPANDED to the leaf stages beneath it, and a segment that names nothing is
+// reported instead of silently emitting a selector that matches no process; when
+// deeper and shallower keys touch the same stage/phase/field, the deeper key
+// wins (mrp's most-specific-ancestor rule). Without the program, every key is
+// treated as a leaf stage (the conservative legacy behavior).
+//
+// Each selector covers every naming family the emitter produces for a stage: the
+// plain processes (STAGE, STAGE_SPLIT/_MAIN/_JOIN), the keyed fork variants
 // (STAGE_MAP, STAGE_*_K), and the fused per-call processes from the BIND fold
 // (STAGE_<n>_<pipeline>__<call>[_SP|_MN|_JN]), which embed the call name — for
 // an aliased call (`call STAGE as X`) the override key's last segment matches
@@ -27,48 +37,98 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
-// Convert renders the Nextflow config equivalent of an mrp overrides JSON. It
-// returns the config text and a list of fields it could not map (so the caller
-// can surface them), or an error if the JSON is malformed.
-func Convert(raw []byte) (string, []string, error) {
+// Convert renders the Nextflow config equivalent of an mrp overrides JSON. prog
+// is the parsed pipeline (or nil): when present, pipeline-scoped keys are
+// expanded to their stages and unknown keys are reported rather than silently
+// dropped. It returns the config text and a list of fields/keys it could not
+// map (so the caller can surface them), or an error if the JSON is malformed.
+func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 	var spec map[string]map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return "", nil, fmt.Errorf("parse overrides: %w", err)
 	}
 
-	// selector -> ordered directive lines (selector "" is the global default).
-	groups := map[string][]string{}
+	res := newResolver(prog)
+	resolved := map[[3]string]directive{}
 	var unmapped []string
 
-	for _, stageKey := range sortedKeys(spec) {
-		stage := lastSegment(stageKey)
-		for _, field := range sortedKeys(spec[stageKey]) {
-			sel, line, note := mapField(stage, field, spec[stageKey][field])
-			switch {
-			case note != "":
-				unmapped = append(unmapped, fmt.Sprintf("%s.%s: %s", orAll(stageKey), field, note))
-			case line != "":
-				groups[sel] = append(groups[sel], line)
+	for _, key := range sortedKeys(spec) {
+		targets, note := res.targets(key)
+		if note != "" {
+			unmapped = append(unmapped, fmt.Sprintf("%s: %s", orAll(key), note))
+
+			continue
+		}
+
+		depth := keyDepth(key)
+
+		for _, field := range sortedKeys(spec[key]) {
+			phase, base, line, fnote := mapField(field, spec[key][field])
+			if fnote != "" {
+				unmapped = append(unmapped, fmt.Sprintf("%s.%s: %s", orAll(key), field, fnote))
+
+				continue
+			}
+
+			for _, stage := range targets {
+				rk := [3]string{stage, phase, base}
+				if cur, ok := resolved[rk]; !ok || depth >= cur.depth {
+					resolved[rk] = directive{depth, selector(stage, phase), line}
+				}
 			}
 		}
 	}
 
-	return render(groups), unmapped, nil
+	return render(groupSelectors(resolved)), unmapped, nil
 }
 
-// mapField maps one override field to a (selector, directive line, note). The
+// directive is one resolved override line for a (stage, phase, field) triple.
+// The deepest source key wins, matching mrp's nearest-ancestor rule.
+type directive struct {
+	depth int
+	sel   string
+	line  string
+}
+
+// groupSelectors collapses the resolved directives into selector -> lines,
+// ordering each selector's lines by field (base) so a stage's `memory` (mem_gb)
+// precedes its `cpus` (threads), stable across runs.
+func groupSelectors(resolved map[[3]string]directive) map[string][]string {
+	type baseLine struct{ base, line string }
+
+	bySel := map[string][]baseLine{}
+	for rk, d := range resolved {
+		bySel[d.sel] = append(bySel[d.sel], baseLine{rk[2], d.line})
+	}
+
+	groups := make(map[string][]string, len(bySel))
+
+	for sel, items := range bySel {
+		sort.Slice(items, func(i, j int) bool { return items[i].base < items[j].base })
+
+		for _, it := range items {
+			groups[sel] = append(groups[sel], it.line)
+		}
+	}
+
+	return groups
+}
+
+// mapField maps one override field to (phase, base, directive line, note). The
 // note is non-empty instead of the line when the field has no faithful Nextflow
-// directive. stage is the bare stage name ("" = all stages).
-func mapField(stage, field string, val json.RawMessage) (string, string, string) {
+// directive; the returned line omits the selector (the caller applies it).
+func mapField(field string, val json.RawMessage) (string, string, string, string) {
 	phase, base, ok := strings.Cut(field, ".")
 	if !ok { // a stage-level field: phase holds the whole name
 		phase, base = "", field
 	}
 
 	if _, _, known := phaseSuffixes(phase); !known {
-		return "", "", "unrecognized phase prefix"
+		return phase, base, "", "unrecognized phase prefix"
 	}
 
 	switch base {
@@ -76,26 +136,26 @@ func mapField(stage, field string, val json.RawMessage) (string, string, string)
 		// mrp only writes numbers here; anything else would render a broken
 		// directive (e.g. `memory = 'true GB'`), so report it instead.
 		if !isNumber(val) {
-			return "", "", "value is not a number"
+			return phase, base, "", "value is not a number"
 		}
 
 		// Config-file scope uses `directive = value` (not the .nf process-body
 		// `directive value` form), so a `-c` overlay parses.
 		if base == "mem_gb" {
-			return selector(stage, phase), "memory = " + memLiteral(val), ""
+			return phase, base, "memory = " + memLiteral(val), ""
 		}
 
-		return selector(stage, phase), "cpus = " + strings.TrimSpace(string(val)), ""
+		return phase, base, "cpus = " + strings.TrimSpace(string(val)), ""
 	case "vmem_gb":
-		return "", "", "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
+		return phase, base, "", "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
 	case "profile":
-		return "", "", "use `nextflow run -with-trace`/`-with-report` for stage profiling"
+		return phase, base, "", "use `nextflow run -with-trace`/`-with-report` for stage profiling"
 	default:
 		if field == "force_volatile" {
-			return "", "", "VDR is not modeled (Nextflow retains work/); see FEATURE_COVERAGE.md"
+			return phase, base, "", "VDR is not modeled (Nextflow retains work/); see FEATURE_COVERAGE.md"
 		}
 
-		return "", "", "unrecognized override field"
+		return phase, base, "", "unrecognized override field"
 	}
 }
 
@@ -185,6 +245,16 @@ func isNumber(raw json.RawMessage) bool {
 	var f float64
 
 	return json.Unmarshal(raw, &f) == nil
+}
+
+// keyDepth is the number of path segments in an override key; "" (the global
+// default) is 0 so any specific key outranks it.
+func keyDepth(key string) int {
+	if key == "" {
+		return 0
+	}
+
+	return strings.Count(key, ".") + 1
 }
 
 func lastSegment(qualified string) string {

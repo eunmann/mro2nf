@@ -104,24 +104,29 @@ func run(args []string) error {
 
 // runOverrides converts an mrp --overrides JSON (a file argument, or stdin when
 // omitted or "-") into a Nextflow process-scope config printed to stdout. Fields
-// with no faithful Nextflow directive are reported on stderr.
+// with no faithful Nextflow directive are reported on stderr. With -mro, the
+// pipeline is parsed so pipeline-scoped keys expand to their stages and unknown
+// keys are reported instead of silently emitting a dead selector.
 func runOverrides(args []string) error {
-	var (
-		raw []byte
-		err error
-	)
+	fs := flag.NewFlagSet("overrides", flag.ContinueOnError)
+	mroFlag := fs.String("mro", "", "pipeline .mro: expands pipeline-scoped keys to their stages and validates stage names")
+	mroPath := fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)")
 
-	if len(args) == 0 || args[0] == "-" {
-		raw, err = io.ReadAll(os.Stdin)
-	} else {
-		raw, err = os.ReadFile(args[0])
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	prog, err := loadOverrideProgram(*mroFlag, *mroPath)
 	if err != nil {
-		return fmt.Errorf("read overrides: %w", err)
+		return err
 	}
 
-	cfg, unmapped, err := overrides.Convert(raw)
+	raw, err := readOverridesInput(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+
+	cfg, unmapped, err := overrides.Convert(raw, prog)
 	if err != nil {
 		return fmt.Errorf("convert overrides: %w", err)
 	}
@@ -135,6 +140,46 @@ func runOverrides(args []string) error {
 	}
 
 	return nil
+}
+
+// loadOverrideProgram parses the pipeline at mro (may be empty -> nil program)
+// so the converter can resolve pipeline-scoped keys.
+func loadOverrideProgram(mro, mroPath string) (*ir.Program, error) {
+	if mro == "" {
+		return nil, nil
+	}
+
+	ast, err := frontend.Parse(mro, filepath.SplitList(mroPath), false)
+	if err != nil {
+		return nil, fmt.Errorf("parse pipeline %s: %w", mro, err)
+	}
+
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		return nil, fmt.Errorf("lower pipeline %s: %w", mro, err)
+	}
+
+	return prog, nil
+}
+
+// readOverridesInput reads the overrides JSON from arg (a file), or stdin when
+// arg is empty or "-".
+func readOverridesInput(arg string) ([]byte, error) {
+	if arg == "" || arg == "-" {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read overrides from stdin: %w", err)
+		}
+
+		return raw, nil
+	}
+
+	raw, err := os.ReadFile(arg)
+	if err != nil {
+		return nil, fmt.Errorf("read overrides %s: %w", arg, err)
+	}
+
+	return raw, nil
 }
 
 // opts groups the CLI options that shape emission.
