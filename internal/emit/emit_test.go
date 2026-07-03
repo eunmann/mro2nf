@@ -100,6 +100,7 @@ func TestEmitFiles(t *testing.T) {
 	for _, rel := range []string{
 		"main.nf",
 		"nextflow.config",
+		"lib/Mro2nf.groovy",
 		"entry_args/data.json",
 		"_assets/types.json",
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf",
@@ -304,9 +305,12 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 		`FORK_5_INNER__DBL_K(gk_DBL.run.map { row -> row[0..<row.size() - 1] }, types, file("${projectDir}/_assets/bindspecs/BIND_5_INNER__DBL.json"))`,
 		// skipped forks are mixed back so every outer key has a result
 		"ch_DBL_l = MERGE_5_INNER__DBL_K.out.mix(sk_DBL).toList()",
-		// forks are enumerated from forknames.json (object-store-safe), not listFiles;
-		// .resolve() preserves the s3:// scheme that a "${d}/..." GString would drop
-		`d.resolve('forknames.json')`,
+		// forks are enumerated from forknames.json (object-store-safe, not
+		// listFiles) via the shipped helper (#49)
+		"Mro2nf.forkTuples(ok, d)",
+		// the disable flag is read via the shipped helper (#49), not an inline
+		// JsonSlurper closure stamped into the generated code
+		"def off = Mro2nf.disabled(row[-1])",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("pipe_INNER.nf missing keyed disable wiring %q", want)
@@ -315,6 +319,10 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 
 	if strings.Contains(mod, "listFiles()") {
 		t.Error("pipe_INNER.nf uses listFiles() (cannot enumerate an s3:// work dir)")
+	}
+
+	if strings.Contains(mod, "JsonSlurper().parseText(row[-1]") {
+		t.Error("pipe_INNER.nf still stamps the inline disable-flag closure; use Mro2nf.disabled")
 	}
 }
 
@@ -341,8 +349,8 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		"cpus { def t = Math.abs((join?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : 1 }",
 		`memory { def m = Math.abs((join?.mem_gb ?: 0) as double); m = m > 0 ? m : 1; (m * task.attempt) + ' GB' }`,
 		"val join",
-		// the workflow parses joinres.json into the join val
-		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }",
+		// the workflow parses joinres.json into the join val via the shipped helper (#49)
+		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }",
 		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)",
 	} {
 		if !strings.Contains(mod, want) {

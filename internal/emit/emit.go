@@ -171,6 +171,10 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		return err
 	}
 
+	if err := writeLib(opts.OutDir); err != nil {
+		return err
+	}
+
 	if err := writeBindSpecs(prog, specDir); err != nil {
 		return err
 	}
