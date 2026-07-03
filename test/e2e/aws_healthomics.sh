@@ -18,7 +18,13 @@ set -euo pipefail
 #   NO_BUILD=1 ./test/e2e/aws_healthomics.sh file_min                # reuse images
 #
 # Env: AWS_PROFILE (default), STACK (Mro2nfStack), MARTIAN_BIN, NO_BUILD,
-#      POLL_SECS (30), MAX_WAIT_SECS (2400).
+#      POLL_SECS (30), MAX_WAIT_SECS (2400), KEEP_RESOURCES (1 = skip teardown).
+#
+# Teardown: on exit the harness deletes every workflow it registered and every
+# run that verified OK, so a multi-fixture campaign does not accrue HealthOmics
+# resources. Failed/unverified runs (and their workflows, when deletion
+# conflicts) are kept for debugging and listed; KEEP_RESOURCES=1 keeps
+# everything. See docs/LIVE_AWS_TEST.md for the bulk teardown of leftovers.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
@@ -50,11 +56,40 @@ echo "stack=$STACK region=$REGION bucket=$BUCKET omics_role=$OMICS_ROLE"
 MRE="$ROOT/mre-linux"
 [ -x "$MRE" ] || GOOS=linux GOARCH=amd64 go build -o "$MRE" ./cmd/mre
 SHELL_PY="$ROOT/vendor-martian/python/martian_shell.py"
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d)"
+
+declare -A WFID RUNID DONE VERIFIED
+
+# Delete what this invocation created: runs that verified OK, then every
+# registered workflow (runs must go first — a workflow with live runs rejects
+# deletion). Anything kept (failed/unverified runs, conflicting workflows) is
+# listed so the operator can debug and then clean up manually.
+cleanup() {
+    rm -rf "$WORK"
+    if [ "${KEEP_RESOURCES:-}" = "1" ]; then
+        echo "KEEP_RESOURCES=1: leaving HealthOmics workflows/runs in place"
+        return
+    fi
+    local fx
+    for fx in "${!RUNID[@]}"; do
+        if [ "${VERIFIED[$fx]:-}" = "1" ]; then
+            aws omics delete-run --id "${RUNID[$fx]}" >/dev/null 2>&1 \
+                && echo "DELETED run ${RUNID[$fx]} ($fx)" \
+                || echo "KEPT run ${RUNID[$fx]} ($fx): delete failed"
+        else
+            echo "KEPT run ${RUNID[$fx]} ($fx) for debugging (${DONE[$fx]:-not finished})"
+        fi
+    done
+    for fx in "${!WFID[@]}"; do
+        aws omics delete-workflow --id "${WFID[$fx]}" >/dev/null 2>&1 \
+            && echo "DELETED workflow ${WFID[$fx]} ($fx)" \
+            || echo "KEPT workflow ${WFID[$fx]} ($fx): delete failed (live run?)"
+    done
+}
+trap cleanup EXIT
 
 # --- phase 1: transpile (healthomics) + build + push + package + register ---
 [ "${NO_BUILD:-}" != "1" ] && aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR" >/dev/null
-declare -A WFID RUNID
 for fx in "${FIXTURES[@]}"; do
     mrjob=(); [ -f "testdata/$fx/mrjob.sh" ] && mrjob=(-mrjob "testdata/$fx/mrjob.sh")
     ./mro2nf -o "$WORK/$fx" -target healthomics -container "${ECR}:${fx}" \
@@ -96,7 +131,6 @@ done
 
 # --- phase 3: poll all to a terminal state ---
 deadline=$((SECONDS + MAX_WAIT_SECS))
-declare -A DONE
 while [ "$SECONDS" -lt "$deadline" ]; do
     pending=0
     for fx in "${FIXTURES[@]}"; do
@@ -129,7 +163,7 @@ for fx in "${FIXTURES[@]}"; do
         echo "FAIL[$fx]: no exported pipeline_outs.json"; rc=1; rm -rf "$mt"; continue
     fi
     if python3 "$ROOT/test/e2e/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" >/dev/null 2>&1; then
-        echo "OK[$fx]: AWS HealthOmics pipeline_outs matches mrp"
+        echo "OK[$fx]: AWS HealthOmics pipeline_outs matches mrp"; VERIFIED[$fx]=1
     else
         echo "FAIL[$fx]: pipeline_outs mismatch"; rc=1
     fi
