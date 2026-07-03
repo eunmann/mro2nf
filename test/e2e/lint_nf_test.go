@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -43,13 +44,36 @@ func TestNextflowLint(t *testing.T) {
 
 			out, err := cmd.CombinedOutput()
 
-			_ = os.WriteFile(filepath.Join(proj, "lint.log"), out, 0o644)
-
 			if err != nil {
-				t.Fatalf("nextflow lint reported errors for %s:\n%s", fx, tail(out, 20))
+				// nextflow lint prints diagnostics grouped by file in path order
+				// with warnings interleaved, so a tail can bury the error's
+				// file/line under a later file's warnings. Surface the error
+				// lines specifically, then the full output for context.
+				t.Fatalf("nextflow lint reported errors for %s:\n%s\n--- full output ---\n%s",
+					fx, lintErrorLines(out), out)
 			}
 		})
 	}
+}
+
+// lintErrorLines returns the `Error …:<line>:<col>:` diagnostic lines from
+// `nextflow lint` output (and the ❌ summary), so a failure always names the
+// location regardless of where the erroring file sorts among warnings.
+func lintErrorLines(out []byte) string {
+	var errs []string
+
+	for _, line := range strings.Split(string(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Error") || strings.Contains(line, "❌") {
+			errs = append(errs, trimmed)
+		}
+	}
+
+	if len(errs) == 0 {
+		return "(no Error line found; see full output below)"
+	}
+
+	return strings.Join(errs, "\n")
 }
 
 // lintFixtures returns every testdata fixture directory that has a pipeline.mro.
