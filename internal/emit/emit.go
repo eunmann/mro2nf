@@ -134,16 +134,17 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
+	features := featureSet{fuseChains: opts.FuseChains}
 	g := genCtx{
-		entry:      prog.Entry.Callable,
-		mroFile:    opts.MROFile,
-		mre:        opts.Mre,
-		shell:      opts.Shell,
-		mrjob:      opts.Mrjob,
-		monitor:    opts.Monitor,
-		fuseChains: opts.FuseChains,
-		code:       opts.StageCode,
-		keyed:      keyedReachable(prog),
+		entry:    prog.Entry.Callable,
+		mroFile:  opts.MROFile,
+		mre:      opts.Mre,
+		shell:    opts.Shell,
+		mrjob:    opts.Mrjob,
+		monitor:  opts.Monitor,
+		features: features,
+		code:     opts.StageCode,
+		plan:     buildPlan(prog, features),
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker
