@@ -235,7 +235,9 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 			genKeyedForkBindProcess(b, p.Name, c, g)
 			genKeyedMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 
-			if c.Disabled != nil {
+			// A natively-gated keyed disable (self.<field>) reads the flag from the
+			// per-fork args and needs no DISABLE_K bind.
+			if c.Disabled != nil && !keyedNativeDisable(c) {
 				genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
 			}
 
@@ -244,6 +246,8 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 
 		genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
 
+		// A non-mapped keyed disabled call is gated by genKeyedCallBody, which still
+		// uses the keyed DISABLE bind — so keep emitting it here.
 		if c.Disabled != nil {
 			genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
 		}
@@ -449,8 +453,25 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
 // channel expression (the FORKBIND input with the disable-flag bundle stripped)
 // and emits sk_<call>, the keyed null bundles for skipped outer forks.
 func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call) string {
-	dis := disableName(pipeline, c.Name)
 	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+
+	// Native gating (#59, Lever 2) for a self.<field> flag: read it from the
+	// per-fork pipeline-args bundle (row[1]) — no keyed DISABLE task, no join.
+	// (An upstream-ref keyed disable keeps the DISABLE_K bind: its position in the
+	// keyed row depends on the bind's ref order.)
+	if src, field, ok := nativeDisableGate(c); ok && src == "pa" {
+		fmt.Fprintf(body, `    gk_%[1]s = %[2]s.branch { row ->
+        def off = Mro2nf.disabledDir(row[1], '%[3]s')
+        run: !off
+        skip: off
+    }
+    sk_%[1]s = gk_%[1]s.skip.map { row -> tuple(row[0], file("%[4]s")) }
+`, c.Name, keyedBindInput(c.Bindings), field, nulls)
+
+		return fmt.Sprintf("gk_%s.run, types, %s", c.Name, specFile(bindName(pipeline, c.Name)))
+	}
+
+	dis := disableName(pipeline, c.Name)
 
 	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
 	fmt.Fprintf(body, `    gk_%[1]s = %[2]s.join(%[3]s_K.out).branch { row ->
@@ -1524,6 +1545,15 @@ func nativeDisableGate(c ir.Call) (string, string, bool) {
 	}
 
 	return "", "", false
+}
+
+// keyedNativeDisable reports whether a mapped call's keyed disable gate reads the
+// flag natively (a self.<field> flag from the per-fork args) — the only keyed
+// case genKeyedMappedDisableGate gates without a DISABLE_K bind.
+func keyedNativeDisable(c ir.Call) bool {
+	src, _, ok := nativeDisableGate(c)
+
+	return ok && src == "pa"
 }
 
 // calleeModule returns the exported workflow name and module path for a
