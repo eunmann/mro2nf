@@ -1,10 +1,18 @@
 # #59 Lever 1 regression: the entry bakes skip=true, so GEN's disabled=self.skip
-# folds to always-off. With -fold-disables, GEN is pruned to its null output
-# (no stage, no gate); KEEP always runs. Output is byte-identical to mrp either
-# way (mrp skips GEN → y null).
+# folds to always-off. With -fold-disables, GEN is pruned to its null output (no
+# stage, no gate). USE is a downstream STAGE that consumes GEN's (null) output —
+# it must resolve the same null the runtime-skip path produces (regression for
+# the review's flagged case). KEEP always runs. Output is byte-identical to mrp
+# either way.
 stage GEN(
     out int y,
     src py "stages/gen",
+)
+
+stage USE(
+    in  int y,
+    out int w,
+    src py "stages/use",
 )
 
 stage KEEP(
@@ -16,10 +24,15 @@ pipeline P(
     in  bool skip,
     out int  y,
     out int  z,
+    out int  w,
 )
 {
     call GEN() using (
         disabled = self.skip,
+    )
+
+    call USE(
+        y = GEN.y,
     )
 
     call KEEP()
@@ -27,6 +40,7 @@ pipeline P(
     return (
         y = GEN.y,
         z = KEEP.z,
+        w = USE.w,
     )
 }
 
