@@ -382,7 +382,7 @@ func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
 	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
 	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
 	fmt.Fprintf(body, `    g_%[1]s = %[2]s_K.out.join(%[3]s_K.out).branch { key, args, d ->
-        def off = new groovy.json.JsonSlurper().parseText(d.resolve('data.json').text).disabled
+        def off = Mro2nf.disabled(d)
         run: !off
         skip: off
     }
@@ -415,9 +415,9 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
 	// Enumerate the per-fork bundle dirs from forknames.json rather than a java.io
 	// listFiles() call, which cannot list an object-store (s3://) work dir. Reading
 	// the staged names file and constructing each fork path is object-store-safe.
-	fmt.Fprintf(body, "    ik_%[1]s = %[2]s_K.out.forks.flatMap { ok, d -> new groovy.json.JsonSlurper().parseText(d.resolve('forknames.json').text).collect { fn -> tuple(\"${ok}~${fn}\", d.resolve(fn)) } }\n", c.Name, fork)
+	fmt.Fprintf(body, "    ik_%[1]s = %[2]s_K.out.forks.flatMap { ok, d -> Mro2nf.forkTuples(ok, d) }\n", c.Name, fork)
 	fmt.Fprintf(body, "    io_%[1]s = %[2]s(ik_%[1]s)\n", c.Name, alias)
-	fmt.Fprintf(body, "    mj_%[1]s = %[2]s_K.out.keys.join(io_%[1]s.map { ck, bdl -> tuple(ck[0..<ck.lastIndexOf('~')], bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, so ?: [], fk) }\n", c.Name, fork)
+	fmt.Fprintf(body, "    mj_%[1]s = %[2]s_K.out.keys.join(io_%[1]s.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, so ?: [], fk) }\n", c.Name, fork)
 	fmt.Fprintf(body, "    %s_K(mj_%s, types)\n", merge, c.Name)
 
 	if c.Disabled != nil {
@@ -441,7 +441,7 @@ func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call
 
 	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
 	fmt.Fprintf(body, `    gk_%[1]s = %[2]s.join(%[3]s_K.out).branch { row ->
-        def off = new groovy.json.JsonSlurper().parseText(row[-1].resolve('data.json').text).disabled
+        def off = Mro2nf.disabled(row[-1])
         run: !off
         skip: off
     }
@@ -617,9 +617,9 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     types = file("${projectDir}/_assets/types.json")
     ch = keyed.multiMap { k, a -> sp: tuple(k, a); mn: tuple(k, a); jn: tuple(k, a) }
     %[1]s_SPLIT_K(ch.sp, types)
-    chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> (cs instanceof List ? cs : [cs]).collect { c -> tuple(key, new groovy.json.JsonSlurper().parseText(c.resolve('data.json').text).resources, c) } }
+    chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> Mro2nf.keyedChunks(key, cs) }
     %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0), types)
-    joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, new groovy.json.JsonSlurper().parseText(f.text)) }
+    joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, Mro2nf.parseJson(f)) }
     // Drive the join from the full fork set (ch.jn) with a remainder join on the
     // chunk outputs, so a fork whose split produced zero chunks (no groupTuple
     // group) still runs JOIN_K — with an empty chunk-outs list — instead of
@@ -753,9 +753,9 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     types = file("${projectDir}/_assets/types.json")
     a = args
     %[1]s_SPLIT(a, types)
-    chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
+    chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[1]s_MAIN(chunks.combine(a), types)
-    join = %[1]s_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
+    join = %[1]s_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }
     %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect().ifEmpty([]), types)
   emit:
     %[1]s_JOIN.out
@@ -1242,9 +1242,9 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
     spec = %[6]s
     %[3]s(%[7]s)
     a = %[3]s.out.args.first()
-    chunks = %[3]s.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
+    chunks = %[3]s.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[4]s(chunks.combine(a), types)
-    join = %[3]s.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
+    join = %[3]s.out.joinres.map { f -> Mro2nf.parseJson(f) }
     %[5]s(join, a, %[3]s.out.defs, %[4]s.out.collect().ifEmpty([]), types)
   emit:
     %[5]s.out
@@ -1330,7 +1330,7 @@ func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string
 	dis := disableName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c), dis))
 	fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s.out).branch { data, leaves, d ->
-        def off = new groovy.json.JsonSlurper().parseText(d.resolve('data.json').text).disabled
+        def off = Mro2nf.disabled(d)
         run: !off
         skip: off
     }
@@ -1349,7 +1349,7 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
 
 	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c), dis))
 	fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s.out).branch { data, leaves, d ->
-        def off = new groovy.json.JsonSlurper().parseText(d.resolve('data.json').text).disabled
+        def off = Mro2nf.disabled(d)
         run: !off
         skip: off
     }
@@ -1546,7 +1546,7 @@ workflow {
   // parallel. multiMap splits the final output tuple so both consume it safely.
   ep = %[5]s.out.multiMap { s, l -> side: s; leaves: l }
   LAYOUT(ep.side, types)
-  lmap = LAYOUT.out.layout.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
+  lmap = LAYOUT.out.layout.map { f -> Mro2nf.parseJson(f) }
   leaves = ep.leaves.flatMap { l -> (l instanceof List ? l : [l]).collect { leaf -> tuple(leaf.name, leaf) } }
   PUBLISH_LEAF(leaves.combine(lmap).flatMap { base, leaf, m -> (m[base] ?: []).collect { rel -> tuple(rel, leaf) } })
 }
