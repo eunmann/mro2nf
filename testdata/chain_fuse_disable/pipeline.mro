@@ -1,0 +1,52 @@
+# #59 Lever 4 fold-safety: SRC feeds the transform-consumer USE *and* gates GATE
+# via disabled = SRC.flag. SRC therefore has two consumers and must NOT fold
+# under -fuse-chains (else GATE's disable gate would reference a dropped ch_SRC).
+stage SRC(
+    in  int  x,
+    out int  y,
+    out bool flag,
+    src py    "stages/src",
+)
+
+stage USE(
+    in  int y,
+    in  int k,
+    out int z,
+    src py    "stages/use",
+)
+
+stage GATE(
+    out int w,
+    src py    "stages/gate",
+)
+
+pipeline CH(
+    in  int x,
+    in  int k,
+    out int z,
+    out int w,
+)
+{
+    call SRC(
+        x = self.x,
+    )
+
+    call USE(
+        y = SRC.y,
+        k = self.k,
+    )
+
+    call GATE() using (
+        disabled = SRC.flag,
+    )
+
+    return (
+        z = USE.z,
+        w = GATE.w,
+    )
+}
+
+call CH(
+    x = 4,
+    k = 3,
+)

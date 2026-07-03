@@ -93,6 +93,9 @@ var goldenCases = []struct {
 	// #59 Lever 4 baseline: this chain fixture must be byte-identical with the
 	// default (no -fuse-chains); TestFuseChains reruns it with the flag on.
 	{"chain_fuse", "chain_fuse", "expected/outs.json"},
+	// #59 Lever 4 fold-safety: SRC has a second consumer via disabled = SRC.flag,
+	// so it must NOT fold under -fuse-chains; TestFuseChains asserts that + reruns.
+	{"chain_fuse_disable", "chain_fuse_disable", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
@@ -170,6 +173,28 @@ func TestFuseChains(t *testing.T) {
 	goldenJSON(t,
 		filepath.Join(proj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "chain_fuse", "expected", "outs.json"))
+
+	// Fold-safety: chain_fuse_disable's SRC gates a third call via disabled =
+	// SRC.flag, so SRC has two consumers and must NOT fold even with the flag on;
+	// output stays byte-identical.
+	dproj := transpile(t, "chain_fuse_disable", "-fuse-chains")
+
+	dmod, err := os.ReadFile(filepath.Join(dproj, "modules", "pipe_CH.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(dmod), "spec_prod.json") {
+		t.Errorf("SRC must not fold: it also gates a call via disabled = SRC.flag:\n%s", dmod)
+	}
+
+	if err := runNextflow(t, dproj); err != nil {
+		t.Fatal(err)
+	}
+
+	goldenJSON(t,
+		filepath.Join(dproj, "results", "pipeline_outs.json"),
+		filepath.Join(root, "testdata", "chain_fuse_disable", "expected", "outs.json"))
 }
 
 // assertPublishedLeaves walks the golden outs JSON and requires every string
