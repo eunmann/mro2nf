@@ -442,3 +442,57 @@ func TestNativeRejectsContainer(t *testing.T) {
 		t.Errorf("want a container-backend error, got:\n%s", out)
 	}
 }
+
+// assertNativeComplete fails if any BIND/FORK/MERGE/STRUCTIFY/BUILD_ENTRY_ARGS
+// process is emitted — the #76 acceptance that those data-plane task categories
+// vanish under -native.
+func assertNativeComplete(t *testing.T, proj string) {
+	t.Helper()
+
+	mods, err := filepath.Glob(filepath.Join(proj, "modules", "*.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range append(mods, filepath.Join(proj, "main.nf")) {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, cat := range []string{"process BIND", "process FORK", "process MERGE", "process STRUCTIFY", "process BUILD_ENTRY_ARGS"} {
+			if strings.Contains(string(data), cat) {
+				t.Errorf("%s: -native must not emit a %q task", filepath.Base(f), strings.TrimPrefix(cat, "process "))
+			}
+		}
+	}
+}
+
+// TestNativeComplete guards #76 for the single-pipeline subset that -native fully
+// collapses: no data-plane task categories remain, and the output is byte-identical
+// to the default (bundle-mode) run. file_min exercises a file output through the
+// native LAYOUT's inline return bind.
+func TestNativeComplete(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	for _, fx := range []string{"diamond_min", "fold_disable", "file_min", "chain_fuse", "struct_min"} {
+		t.Run(fx, func(t *testing.T) {
+			t.Parallel()
+
+			native := transpile(t, fx, "-native")
+			assertNativeComplete(t, native)
+
+			def := transpile(t, fx)
+			if err := runNextflow(t, native); err != nil {
+				t.Fatal(err)
+			}
+			if err := runNextflow(t, def); err != nil {
+				t.Fatal(err)
+			}
+
+			goldenJSON(t,
+				filepath.Join(native, "results", "pipeline_outs.json"),
+				filepath.Join(def, "results", "pipeline_outs.json"))
+		})
+	}
+}

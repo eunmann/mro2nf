@@ -171,7 +171,7 @@ func generateMain(prog *ir.Program, g genCtx) string {
 	export, src := calleeModule(prog, prog.Entry.Callable)
 
 	fmt.Fprintf(&b, "include { %s } from './modules/%s'\n\n", export, strings.TrimPrefix(src, "./"))
-	genPublish(&b, prog.Entry.Callable, g)
+	genPublish(&b, prog, g)
 	genEntry(&b, prog, export, g)
 
 	return b.String()
@@ -575,8 +575,9 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 	}
 
 	// The return bind builds the pipeline's own output bundle, unless the returns
-	// forward one call's outputs verbatim (then no BIND — routed directly).
-	if pp.retFwd == "" {
+	// forward one call's outputs verbatim (then no BIND — routed directly), or the
+	// native entry LAYOUT folds the return bind inline (#76 — no BIND node here).
+	if pp.retFwd == "" && (!g.native || p.Name != g.entry) {
 		genBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut))
 	}
 }
@@ -1061,6 +1062,18 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 	emit := bindName(p.Name, "return") + ".out"
 	if fwd := g.plan.pipes[p.Name].retFwd; fwd != "" {
 		emit = "ch_" + fwd
+	} else if g.native && p.Name == g.entry {
+		// #76: the native entry LAYOUT binds the return inline, so emit the return
+		// bind's raw inputs (pipeargs + the returned calls) instead of running a
+		// standalone BIND_<entry>__return.
+		var em strings.Builder
+		em.WriteString("pargs = pa")
+
+		for _, id := range refCalls(p.Returns) {
+			fmt.Fprintf(&em, "\n    ref_%s = ch_%s", id, id)
+		}
+
+		emit = em.String()
 	} else {
 		fmt.Fprintf(&body, "    %s(%s)\n", bindName(p.Name, "return"), bindCallArgs(p.Returns, bindName(p.Name, "return")))
 	}
@@ -1880,7 +1893,33 @@ func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
 // and publishes it into outs/<rel>, so the result set is published in parallel
 // across tasks rather than round-tripped through one node. The physical outs/
 // tree (which downstream pipelines consume) is unchanged.
-func genPublish(b *strings.Builder, entry string, g genCtx) {
+func genPublish(b *strings.Builder, prog *ir.Program, g genCtx) {
+	if p := nativeReturnBind(prog, g); p != nil {
+		genNativeLayout(b, p, g)
+	} else {
+		genDefaultLayout(b, prog.Entry.Callable, g)
+	}
+
+	fmt.Fprint(b, `
+process PUBLISH_LEAF {
+  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, saveAs: { outsPath }
+  input:
+    tuple val(outsPath), path(leaf)
+  output:
+    path leaf
+  script:
+    """
+    true
+    """
+}
+
+`)
+}
+
+// genDefaultLayout emits the bundle-mode LAYOUT: it reads the pipeline's return
+// bundle sidecar (produced by a separate return BIND) and computes the outs/
+// layout + manifest.
+func genDefaultLayout(b *strings.Builder, entry string, g genCtx) {
 	fmt.Fprintf(b, `process LAYOUT {
   publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
   input:
@@ -1895,20 +1934,52 @@ func genPublish(b *strings.Builder, entry string, g genCtx) {
     "%[1]s" publish-layout -sidecar data.json -dir .%[2]s
     """
 }
-
-process PUBLISH_LEAF {
-  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, saveAs: { outsPath }
-  input:
-    tuple val(outsPath), path(leaf)
-  output:
-    path leaf
-  script:
-    """
-    true
-    """
+`, g.mre, g.producerArgs(entry, types.RoleOut))
 }
 
-`, g.mre, g.producerArgs(entry, types.RoleOut))
+// nativeReturnBind returns the entry pipeline whose transform return LAYOUT binds
+// inline under -native (folding the return BIND into the publish task), or nil
+// when -native is off, the entry is a stage, or the return is a pure forward
+// (#14, no BIND to fold).
+func nativeReturnBind(prog *ir.Program, g genCtx) *ir.Pipeline {
+	if !g.native {
+		return nil
+	}
+
+	p, ok := prog.Pipelines[prog.Entry.Callable]
+	if !ok || g.plan.pipes[p.Name].retFwd != "" {
+		return nil
+	}
+
+	return p
+}
+
+// genNativeLayout emits a LAYOUT that runs the pipeline's return BIND inline
+// before publish-layout (#76): no standalone BIND_<entry>__return node. It takes
+// the return bind's inputs (pipeargs + the returned calls), binds them into the
+// return bundle, moves it to the task root so publish-layout runs the identical
+// command the default LAYOUT does, and exposes the bundle leaves for PUBLISH_LEAF.
+func genNativeLayout(b *strings.Builder, p *ir.Pipeline, g genCtx) {
+	inBlock, arg := bindInputs(refCalls(p.Returns))
+	flags := g.producerArgs(p.Name, types.RoleOut)
+
+	fmt.Fprintf(b, `process LAYOUT {
+  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
+  input:
+%[1]s  output:
+    path 'layout.json', emit: layout
+    path 'pipeline_outs.json'
+    path 'manifest.json.gz'
+    path 'f/*', emit: leaves, arity: '0..*', optional: true
+  script:
+    """
+    '%[2]s' bind -spec 'spec.json' -pipeargs pipeargs%[3]s -o args%[4]s
+    mv args/data.json data.json
+    if [ -d args/f ]; then mv args/f f; fi
+    '%[2]s' publish-layout -sidecar data.json -dir .%[4]s
+    """
+}
+`, inBlock, g.mre, arg, flags)
 }
 
 // genEntry emits the top-level workflow. Each entry input is exposed as a
@@ -1928,20 +1999,42 @@ process PUBLISH_LEAF {
 // into entry_resolved/ at transpile time (see bakeEntryArgs), so instead of a
 // BUILD_ENTRY_ARGS task the workflow stages that bundle as a value channel and
 // runs the pipeline directly. The publish wiring is identical to the default.
-func genNativeEntry(b *strings.Builder, entryWorkflow string) {
+func genNativeEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
 	fmt.Fprintf(b, `
 workflow {
   types = file("${projectDir}/_assets/types.json")
   pipeargs = Channel.value(tuple(file("${projectDir}/entry_resolved/data.json"), file("${projectDir}/entry_resolved/f/*")))
   %[1]s(pipeargs)
 `, entryWorkflow)
-	genPublishWiring(b, entryWorkflow)
+
+	if p := nativeReturnBind(prog, g); p != nil {
+		genNativePublishWiring(b, p, entryWorkflow)
+	} else {
+		genPublishWiring(b, entryWorkflow)
+	}
+
 	b.WriteString("}\n")
+}
+
+// genNativePublishWiring wires the native LAYOUT (which folds in the return bind):
+// it feeds LAYOUT the entry's raw return inputs (pargs + each returned call) and
+// takes the published leaves from LAYOUT's own output for PUBLISH_LEAF.
+func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow string) {
+	var refArgs strings.Builder
+	for _, id := range refCalls(p.Returns) {
+		fmt.Fprintf(&refArgs, ", %s.out.ref_%s", entryWorkflow, id)
+	}
+
+	fmt.Fprintf(b, `  LAYOUT(%[1]s.out.pargs%[2]s, types, %[3]s)
+  lmap = LAYOUT.out.layout.map { f -> Mro2nf.parseJson(f) }
+  leaves = LAYOUT.out.leaves.flatMap { l -> (l instanceof List ? l : [l]).collect { leaf -> tuple(leaf.name, leaf) } }
+  PUBLISH_LEAF(leaves.combine(lmap).flatMap { base, leaf, m -> (m[base] ?: []).collect { rel -> tuple(rel, leaf) } })
+`, entryWorkflow, refArgs.String(), specFile(bindName(p.Name, "return")))
 }
 
 func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
 	if g.native {
-		genNativeEntry(b, entryWorkflow)
+		genNativeEntry(b, prog, entryWorkflow, g)
 
 		return
 	}
