@@ -54,6 +54,7 @@ func run(args []string) error {
 	fuseChainsFlag := fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)")
 	foldDisablesFlag := fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)")
 	nativeFlag := fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)")
+	nativeRunnerFlag := fs.Bool("native-runner", false, "opt-in direct-call Python stage runner (#79): no martian_shell.py adapter or mre broker on the stage hop (py stages only; local backend)")
 	configFlag := fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
@@ -99,6 +100,7 @@ func run(args []string) error {
 		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag,
 		container: *containerFlag, monitor: *monitorFlag, target: target,
 		fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag,
+		nativeRunner: *nativeRunnerFlag,
 	}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
@@ -286,6 +288,7 @@ type opts struct {
 	fuseChains                           bool
 	foldDisables                         bool
 	native                               bool
+	nativeRunner                         bool
 	target                               emit.Target
 }
 
@@ -320,6 +323,7 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 		FuseChains:   o.fuseChains,
 		FoldDisables: o.foldDisables,
 		Native:       o.native,
+		NativeRunner: o.nativeRunner,
 		Target:       o.target,
 		MROFile:      filepath.Base(src),
 		MRODir:       mroDir,

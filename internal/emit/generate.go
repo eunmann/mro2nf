@@ -36,15 +36,15 @@ type genCtx struct {
 	plan emitPlan
 }
 
-// stageCmd renders an mre invocation for a stage phase, single-quoting every
-// path so spaces and shell metacharacters in paths are safe.
+// stageCmd renders a stage-phase invocation, single-quoting every path so
+// spaces and shell metacharacters in paths are safe. The default runs the
+// phase through `mre` + the Martian adapter (-shell); under -native-runner a
+// Python stage instead execs the embedded run_stage.py directly (#79) — no
+// martian_shell.py adapter and no mre broker on the stage-execution hop. The
+// runner accepts the identical flag tail every call site appends (and the
+// -vmemgb/-monitor suffixes below), so this branch is the only emitter change.
 func (g genCtx) stageCmd(phase, code string, lang ir.Lang, vmemExpr string) string {
-	cmd := fmt.Sprintf("'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
-		g.mre, phase, g.shell, code, lang, g.entry, g.mroFile)
-
-	if g.mrjob != "" {
-		cmd += fmt.Sprintf(" -mrjob '%s'", g.mrjob)
-	}
+	cmd := g.stageHead(phase, code, lang)
 
 	// A declared `using(vmem_gb)` is passed so the shim's --monitor caps virtual
 	// memory (and reports it in _jobinfo) at the declared value instead of the
@@ -58,6 +58,25 @@ func (g genCtx) stageCmd(phase, code string, lang ir.Lang, vmemExpr string) stri
 
 	if g.monitor {
 		cmd += " -monitor"
+	}
+
+	return cmd
+}
+
+// stageHead renders the phase invocation up to the shared flag tail: the
+// direct-call runner for a Python stage under -native-runner, else the
+// mre+adapter invocation (with -mrjob for comp stages when configured).
+func (g genCtx) stageHead(phase, code string, lang ir.Lang) string {
+	if g.features.nativeRunner && lang == ir.LangPy {
+		return fmt.Sprintf(`'python3' "${projectDir}/_assets/runner/run_stage.py" %s -stagecode '%s' -call '%s' -mro '%s'`,
+			phase, code, g.entry, g.mroFile)
+	}
+
+	cmd := fmt.Sprintf("'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
+		g.mre, phase, g.shell, code, lang, g.entry, g.mroFile)
+
+	if g.mrjob != "" {
+		cmd += fmt.Sprintf(" -mrjob '%s'", g.mrjob)
 	}
 
 	return cmd

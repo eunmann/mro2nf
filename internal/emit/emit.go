@@ -109,6 +109,13 @@ type Options struct {
 	// BUILD_ENTRY_ARGS task runs (entry inputs are fixed — no launch-time param
 	// override in native mode). Further increments collapse BIND/FORK/MERGE.
 	Native bool
+	// NativeRunner opts a Python stage's split/main/join into the embedded
+	// direct-call runner (#61 M2 / #79): no martian_shell.py adapter, no mre
+	// broker on the stage-execution hop; `import martian` resolves to the
+	// shipped compat shim. Independent of Native (it swaps only the stage hop,
+	// so it composes with the default DAG too). Compiled/exec stages keep the
+	// adapter path.
+	NativeRunner bool
 }
 
 // Emit writes the Nextflow project for prog into opts.OutDir.
@@ -144,7 +151,10 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	features := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables, native: opts.Native}
+	features := featureSet{
+		fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables,
+		native: opts.Native, nativeRunner: opts.NativeRunner,
+	}
 	g := genCtx{
 		entry:    prog.Entry.Callable,
 		mroFile:  opts.MROFile,
@@ -168,6 +178,13 @@ func Emit(prog *ir.Program, opts Options) error {
 	// host mre, and the native path is untested against container staging — gate
 	// the combination explicitly rather than relying on untested behavior.
 	if opts.Native && target.isContainer() {
+		return errNativeContainer
+	}
+
+	// The runner is read from ${projectDir}/_assets at task runtime, which only
+	// a shared local filesystem guarantees; container backends would need it
+	// staged/packaged, which this increment does not cover.
+	if opts.NativeRunner && target.isContainer() {
 		return errNativeContainer
 	}
 
@@ -202,20 +219,8 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		return err
 	}
 
-	if err := writeLib(opts.OutDir); err != nil {
+	if err := writeProjectAssets(prog, opts, specDir); err != nil {
 		return err
-	}
-
-	if err := writeBindSpecs(prog, specDir); err != nil {
-		return err
-	}
-
-	if err := writeDisableArtifacts(prog, opts.OutDir, specDir); err != nil {
-		return err
-	}
-
-	if err := types.BuildManifest(prog).Write(filepath.Join(opts.OutDir, assetsDir, "types.json")); err != nil {
-		return fmt.Errorf("write types manifest: %w", err)
 	}
 
 	if target == TargetHealthOmics {
@@ -238,6 +243,35 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 
 	if opts.Native {
 		return bakeEntryArgs(prog, opts)
+	}
+
+	return nil
+}
+
+// writeProjectAssets writes the shared static assets: the Groovy helper lib,
+// the Python runner (under -native-runner), the per-call bindspecs, the
+// disable artifacts, and the type manifest.
+func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
+	if err := writeLib(opts.OutDir); err != nil {
+		return err
+	}
+
+	if opts.NativeRunner {
+		if err := writeRunner(opts.OutDir); err != nil {
+			return err
+		}
+	}
+
+	if err := writeBindSpecs(prog, specDir); err != nil {
+		return err
+	}
+
+	if err := writeDisableArtifacts(prog, opts.OutDir, specDir); err != nil {
+		return err
+	}
+
+	if err := types.BuildManifest(prog).Write(filepath.Join(opts.OutDir, assetsDir, "types.json")); err != nil {
+		return fmt.Errorf("write types manifest: %w", err)
 	}
 
 	return nil
