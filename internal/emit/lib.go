@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 )
 
@@ -38,7 +39,9 @@ func writeLib(outDir string) error {
 			continue
 		}
 
-		data, err := fs.ReadFile(libAssets, filepath.Join(libDir, e.Name()))
+		// embed.FS paths are always slash-separated, so use path.Join (not
+		// filepath.Join, which would use a backslash on Windows).
+		data, err := fs.ReadFile(libAssets, path.Join(libDir, e.Name()))
 		if err != nil {
 			return fmt.Errorf("read embedded lib %s: %w", e.Name(), err)
 		}
