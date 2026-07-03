@@ -100,6 +100,9 @@ var goldenCases = []struct {
 	// default (gated) run must match the golden; TestFoldDisables reruns it with
 	// -fold-disables (GEN pruned) and asserts the same output.
 	{"fold_disable", "fold_disable", "expected/outs.json"},
+	// #81 baseline: a 3-stage linear chain A->B->C; default runs three tasks,
+	// TestFuseChains reruns it with -fuse-chains (all fold into one) — same output.
+	{"chain_fuse3", "chain_fuse3", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
@@ -162,7 +165,7 @@ func TestFuseChains(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(mod), "spec_prod.json") {
+	if !strings.Contains(string(mod), "spec_0.json") {
 		t.Errorf("-fuse-chains did not emit the fused chain process:\n%s", mod)
 	}
 
@@ -188,7 +191,7 @@ func TestFuseChains(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if strings.Contains(string(dmod), "spec_prod.json") {
+	if strings.Contains(string(dmod), "spec_0.json") {
 		t.Errorf("SRC must not fold: it also gates a call via disabled = SRC.flag:\n%s", dmod)
 	}
 
@@ -210,7 +213,7 @@ func TestFuseChains(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(fmod), "spec_prod.json") {
+	if !strings.Contains(string(fmod), "spec_0.json") {
 		t.Errorf("-fuse-chains must fold MAKEFILE into the READFILE forward consumer:\n%s", fmod)
 	}
 
@@ -225,6 +228,26 @@ func TestFuseChains(t *testing.T) {
 	goldenJSON(t,
 		filepath.Join(fproj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "file_chain", "expected", "cp_outs.json"))
+
+	// #81: a 3-stage chain A->B->C folds into one process (3 specs), byte-identical.
+	nproj := transpile(t, "chain_fuse3", "-fuse-chains")
+
+	nmod, err := os.ReadFile(filepath.Join(nproj, "modules", "pipe_P.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := strings.Count(string(nmod), "path 'spec_"); got != 3 {
+		t.Errorf("3-stage chain: want one fused process staging 3 specs, got %d spec inputs:\n%s", got, nmod)
+	}
+
+	if err := runNextflow(t, nproj); err != nil {
+		t.Fatal(err)
+	}
+
+	goldenJSON(t,
+		filepath.Join(nproj, "results", "pipeline_outs.json"),
+		filepath.Join(root, "testdata", "chain_fuse3", "expected", "outs.json"))
 }
 
 // TestFoldDisables verifies #59 Lever 1: with -fold-disables, an entry-baked

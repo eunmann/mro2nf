@@ -72,8 +72,8 @@ func TestBuildPlanChainFusion(t *testing.T) {
 	if on["SRC"].kind != kindFusedAway {
 		t.Errorf("with -fuse-chains: SRC kind = %d, want kindFusedAway", on["SRC"].kind)
 	}
-	if on["USE"].kind != kindFusedChain || on["USE"].prod.Name != "SRC" {
-		t.Errorf("with -fuse-chains: USE kind = %d prod = %q, want kindFusedChain folding SRC", on["USE"].kind, on["USE"].prod.Name)
+	if on["USE"].kind != kindFusedChain || on["USE"].chain[0].call.Name != "SRC" {
+		t.Errorf("with -fuse-chains: USE kind = %d, want kindFusedChain with SRC first", on["USE"].kind)
 	}
 }
 
@@ -115,9 +115,27 @@ func TestBuildPlanForwardChain(t *testing.T) {
 	if on["MAKEFILE"].kind != kindFusedAway {
 		t.Errorf("with -fuse-chains: MAKEFILE kind = %d, want kindFusedAway", on["MAKEFILE"].kind)
 	}
-	if on["READFILE"].kind != kindFusedChain || on["READFILE"].prod.Name != "MAKEFILE" {
-		t.Errorf("with -fuse-chains: READFILE kind = %d prod = %q, want kindFusedChain folding MAKEFILE",
-			on["READFILE"].kind, on["READFILE"].prod.Name)
+	if on["READFILE"].kind != kindFusedChain || on["READFILE"].chain[0].call.Name != "MAKEFILE" {
+		t.Errorf("with -fuse-chains: READFILE kind = %d, want kindFusedChain with MAKEFILE first", on["READFILE"].kind)
+	}
+}
+
+// TestBuildPlanNStageChain guards #81: a 3-stage linear run A->B->C folds into
+// one chain ending at C (all three links) with A and B folded away.
+func TestBuildPlanNStageChain(t *testing.T) {
+	c3 := lowerFixture(t, "chain_fuse3")
+	on := buildPlan(c3, featureSet{fuseChains: true}).pipes["P"].calls
+
+	if on["A"].kind != kindFusedAway || on["B"].kind != kindFusedAway {
+		t.Errorf("A/B should fold away: A=%d B=%d", on["A"].kind, on["B"].kind)
+	}
+
+	cp := on["C"]
+	if cp.kind != kindFusedChain || len(cp.chain) != 3 {
+		t.Fatalf("C kind = %d, chain len = %d, want kindFusedChain of 3", cp.kind, len(cp.chain))
+	}
+	if cp.chain[0].call.Name != "A" || cp.chain[1].call.Name != "B" || cp.chain[2].call.Name != "C" {
+		t.Errorf("chain order = %s,%s,%s, want A,B,C", cp.chain[0].call.Name, cp.chain[1].call.Name, cp.chain[2].call.Name)
 	}
 }
 

@@ -611,7 +611,7 @@ func TestEmitFuseChains(t *testing.T) {
 	if strings.Contains(on, "process STAGE_2_CH__SRC") {
 		t.Errorf("-fuse-chains must fold the SRC producer into USE:\n%s", on)
 	}
-	if !strings.Contains(on, "-inputs SRC=outs_prod") {
+	if !strings.Contains(on, "-inputs SRC=outs_0") {
 		t.Errorf("-fuse-chains must feed the producer's outputs into the consumer bind:\n%s", on)
 	}
 }

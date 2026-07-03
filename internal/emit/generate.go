@@ -539,7 +539,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 		// #59 Lever 4: the chain consumer emits the combined producer+consumer
 		// process instead of a plain fused stage.
 		case kindFusedChain:
-			genFusedChainProcess(b, p.Name, cp.prod, c, cp.prodStage, cp.consStage, g)
+			genFusedChainProcess(b, p.Name, cp.chain, g)
 
 		case kindMapped:
 			genForkBindProcess(b, p.Name, c, g)
@@ -1136,8 +1136,11 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 
 	// The chain consumer runs the combined producer+consumer process off pipeargs.
 	case kindFusedChain:
-		fmt.Fprintf(b, "    ch_%s = %s(pa, types, %s, %s)\n", c.Name, fusedName(pipeline, c.Name),
-			specFile(bindName(pipeline, cp.prod.Name)), specFile(bindName(pipeline, c.Name)))
+		var specs strings.Builder
+		for _, l := range cp.chain {
+			fmt.Fprintf(&specs, ", %s", specFile(bindName(pipeline, l.call.Name)))
+		}
+		fmt.Fprintf(b, "    ch_%s = %s(pa, types%s)\n", c.Name, fusedName(pipeline, c.Name), specs.String())
 
 	case kindMapped:
 		genMappedWiring(b, pipeline, c, callee)
@@ -1275,46 +1278,57 @@ func fuseableStageCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, 
 // -threads/-memgb are correct for both, keeping output byte-identical. It returns
 // the producer call and both stages. Producers are always sources, so a fused
 // producer is never itself a consumer end — no 3-stage chains, no conflicts.
-func chainFusion(c ir.Call, p *ir.Pipeline, prog *ir.Program, fuseChains bool) (ir.Call, *ir.Stage, *ir.Stage, bool) {
+// chainFusion returns the maximal linear run of leaf stages ending at c that
+// -fuse-chains folds into one task (#59 Lever 4, extended to N stages by #81):
+// source-first, each stage feeding only the next, all equal-resource fuseable
+// leaves, the first a source with no call inputs. It walks backward from c,
+// prepending a producer while it is a single-consumer, equal-resource fuseable
+// leaf; the run must reach a source so no stage needs an external channel (the
+// fused task takes only pipeargs). Returns nil unless the chain has >= 2 stages.
+func chainFusion(c ir.Call, p *ir.Pipeline, prog *ir.Program, fuseChains bool) ([]chainLink, bool) {
 	if !fuseChains {
-		return ir.Call{}, nil, nil, false
+		return nil, false
 	}
 
 	cs, ok := chainConsumer(c, prog)
 	if !ok {
-		return ir.Call{}, nil, nil, false
-	}
-
-	refs := refCalls(c.Bindings)
-	if len(refs) != 1 {
-		return ir.Call{}, nil, nil, false
-	}
-
-	prod, ok := callByName(p, refs[0])
-	if !ok {
-		return ir.Call{}, nil, nil, false
-	}
-
-	ps, ok := fuseableLeaf(prod, p, prog)
-	if !ok || len(refCalls(prod.Bindings)) != 0 || consumerCount(prod.Name, p) != 1 {
-		return ir.Call{}, nil, nil, false
-	}
-
-	if ps.Resources != cs.Resources {
-		return ir.Call{}, nil, nil, false
-	}
-
-	return prod, ps, cs, true
-}
-
-// fuseableLeaf is fuseableStageCall restricted to non-preflight calls (a
-// preflight's gate wiring makes it unfit as a chain end).
-func fuseableLeaf(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, bool) {
-	if c.Preflight {
 		return nil, false
 	}
 
-	return fuseableStageCall(c, p, prog)
+	chain := []chainLink{{call: c, stage: cs}}
+	cur, curStage := c, cs
+
+	for {
+		refs := refCalls(cur.Bindings)
+		if len(refs) == 0 {
+			break // reached a source — the chain is complete
+		}
+
+		if len(refs) != 1 {
+			return nil, false // a stage with two call inputs can't be a clean link
+		}
+
+		prod, ok := callByName(p, refs[0])
+		if !ok || consumerCount(prod.Name, p) != 1 {
+			return nil, false // shared producer — the chain must start at a source
+		}
+
+		ps, ok := chainConsumer(prod, prog)
+		if !ok || ps.Resources != curStage.Resources {
+			return nil, false
+		}
+
+		chain = append([]chainLink{{call: prod, stage: ps}}, chain...)
+		cur, curStage = prod, ps
+	}
+
+	// A fusion needs at least a producer and a consumer.
+	const minChain = 2
+	if len(chain) < minChain {
+		return nil, false
+	}
+
+	return chain, true
 }
 
 // chainConsumer reports whether c can be the downstream end of a fused chain: a
@@ -1386,8 +1400,10 @@ func fusedAwayProducers(p *ir.Pipeline, prog *ir.Program, fuseChains bool) map[s
 	away := map[string]bool{}
 
 	for _, c := range p.Calls {
-		if prod, _, _, ok := chainFusion(c, p, prog, fuseChains); ok {
-			away[prod.Name] = true
+		if chain, ok := chainFusion(c, p, prog, fuseChains); ok {
+			for _, l := range chain[:len(chain)-1] {
+				away[l.call.Name] = true
+			}
 		}
 	}
 
@@ -1398,34 +1414,47 @@ func fusedAwayProducers(p *ir.Pipeline, prog *ir.Program, fuseChains bool) map[s
 // bind+main for the source, then bind+main for the consumer with the source's
 // outputs fed in locally (#59, Lever 4). Both use the consumer's directives (the
 // resources are equal, per chainFusion).
-func genFusedChainProcess(b *strings.Builder, pipeline string, prod, cons ir.Call, ps, cs *ir.Stage, g genCtx) {
-	pbase := g.stageCmd("main", g.code[ps.Name], ps.Lang, vmemFlag(ps, "main"))
-	cbase := g.stageCmd("main", g.code[cs.Name], cs.Lang, vmemFlag(cs, "main"))
+func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink, g genCtx) {
+	last := chain[len(chain)-1]
+
+	var specInputs, script strings.Builder
+
+	for i, link := range chain {
+		fmt.Fprintf(&specInputs, "    path 'spec_%d.json'\n", i)
+
+		base := g.stageCmd("main", g.code[link.stage.Name], link.stage.Lang, vmemFlag(link.stage, "main"))
+		outs := strings.Join(names(link.stage.Out), ",")
+
+		inputs := ""
+		if i > 0 {
+			inputs = fmt.Sprintf(" -inputs %s=outs_%d", chain[i-1].call.Name, i-1)
+		}
+
+		outVar := fmt.Sprintf("outs_%d", i)
+		if i == len(chain)-1 {
+			outVar = "outs"
+		}
+
+		fmt.Fprintf(&script, "    '%s' bind -spec 'spec_%d.json' -pipeargs pipeargs%s -o args_%d%s\n",
+			g.mre, i, inputs, i, g.producerArgs(link.call.Callable, types.RoleIn))
+		fmt.Fprintf(&script, "    %s -args args_%d -outs '%s'%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o %s\n",
+			base, i, outs, g.producerArgs(link.call.Callable, types.RoleMainOut), outVar)
+	}
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
   input:
     %[3]s
     path 'types.json'
-    path 'spec_prod.json'
-    path 'spec_cons.json'
-  output:
-    %[4]s
+%[4]s  output:
+    %[5]s
   script:
     """
-    '%[5]s' bind -spec 'spec_prod.json' -pipeargs pipeargs -o args_prod%[6]s
-    %[7]s -args args_prod -outs '%[8]s'%[9]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs_prod
-    '%[5]s' bind -spec 'spec_cons.json' -pipeargs pipeargs -inputs %[10]s=outs_prod -o args_cons%[11]s
-    %[12]s -args args_cons -outs '%[13]s'%[14]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
-    """
+%[6]s    """
 }
 
-`, fusedName(pipeline, cons.Name), stageDirectives(cs, ""), bundleInput("pipeargs"),
-		bundleOutput("outs"), g.mre,
-		g.producerArgs(prod.Callable, types.RoleIn), pbase, strings.Join(names(ps.Out), ","),
-		g.producerArgs(prod.Callable, types.RoleMainOut), prod.Name,
-		g.producerArgs(cons.Callable, types.RoleIn), cbase, strings.Join(names(cs.Out), ","),
-		g.producerArgs(cons.Callable, types.RoleMainOut))
+`, fusedName(pipeline, last.call.Name), stageDirectives(last.stage, ""), bundleInput("pipeargs"),
+		specInputs.String(), bundleOutput("outs"), script.String())
 }
 
 // fuseableDisabledStage reports a non-split leaf-stage call whose disable is
