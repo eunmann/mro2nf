@@ -87,6 +87,9 @@ var goldenCases = []struct {
 	// Regression for #59: an unreachable pipeline containing a map call — its
 	// keyed-variant include must resolve (verified by the nextflow-lint gate).
 	{"dead_map_pipe", "dead_map_pipe", "expected/outs.json"},
+	// Regression for #59 Lever 2: a map call disabled on an UPSTREAM output ref
+	// (FLAG.on), gated natively from the upstream channel (no DISABLE task).
+	{"disabled_map_ref", "disabled_map_ref", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile

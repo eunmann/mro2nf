@@ -1,0 +1,36 @@
+# Native disable-gating regression (#59): a MAP call disabled on an UPSTREAM
+# output ref (FLAG.on), not self.<field>. The gate reads FLAG's output channel
+# natively (Mro2nf.disabledField) with no DISABLE task. When on=true the whole
+# mapped call yields null.
+stage FLAG(
+    out bool on,
+    src py    "stages/flag",
+)
+
+stage DBL(
+    in  int x,
+    out int y,
+    src py    "stages/dbl",
+)
+
+pipeline P(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    call FLAG()
+
+    map call DBL(
+        x = split self.xs,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    return (
+        ys = DBL.y,
+    )
+}
+
+call P(
+    xs = [1, 2, 3],
+)
