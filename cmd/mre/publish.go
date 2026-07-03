@@ -314,9 +314,10 @@ func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 	}
 
 	transport, isDir, ok := shim.CutMarker(src)
-	if !ok || src == "" {
-		// An empty string, or a declared output the stage never wrote (a raw,
-		// marker-less path): resolves to null, matching Martian.
+	if !ok {
+		// A non-marker string — an empty string, or a declared output the stage
+		// never wrote (a raw, marker-less path) — resolves to null, matching
+		// Martian.
 		return nil, nil
 	}
 
