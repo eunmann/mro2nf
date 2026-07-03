@@ -542,7 +542,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			genFusedChainProcess(b, p.Name, cp.chain, g)
 
 		case kindMapped:
-			genForkBindProcess(b, p.Name, c, g)
+			genForkBindProcess(b, prog, p, c, g)
 			genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 
 			// A natively-gated disable reads the flag on the driver, so no DISABLE
@@ -552,15 +552,20 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			}
 
 		// #76: a -native map call scatters in-workflow — a fused forkbind+main
-		// process per fork instance, no FORK task. The MERGE gather remains.
+		// process per fork instance, no FORK task. The MERGE gather remains only
+		// when it cannot fold into the sole consumer's task (fan-out or an
+		// unsupported consumer shape — see mergeFoldable).
 		case kindNativeScatter:
 			genNativeScatterProcess(b, p.Name, c, cp.stage, g)
-			genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
+
+			if !cp.foldMerge {
+				genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
+			}
 
 		// A fuseable non-split leaf (plain or natively-disabled) runs `mre bind`
 		// inline in the stage task — the standalone BIND is gone (#16, #59).
 		case kindFusedStage, kindFusedDisabled:
-			genFusedStageProcess(b, p.Name, c, cp.stage, g)
+			genFusedStageProcess(b, prog, p, c, cp.stage, g)
 
 		// A fuseable split call folds bind into a per-call SPLIT feeding the aliased
 		// MAIN/JOIN (#16).
@@ -569,7 +574,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			genFusedSplitWorkflow(b, p.Name, c)
 
 		case kindPlainBind:
-			genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn))
+			genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, prog, p, g.producerArgs(c.Callable, types.RoleIn))
 
 			if cp.disableTask {
 				genDisableProcess(b, p.Name, c, g)
@@ -581,7 +586,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 	// forward one call's outputs verbatim (then no BIND — routed directly), or the
 	// native entry LAYOUT folds the return bind inline (#76 — no BIND node here).
 	if pp.retFwd == "" && (!g.features.native || p.Name != g.entry) {
-		genBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut))
+		genBindProcess(b, bindName(p.Name, "return"), p.Returns, g, prog, p, g.producerArgs(p.Name, types.RoleOut))
 	}
 }
 
@@ -958,11 +963,86 @@ func bindInputsHead(head string, refs []string) (string, string) {
 	return inputs.String(), arg
 }
 
+// mergeFoldProducer returns the producer call behind ref id when its MERGE
+// folds into this consumer's task (#76), or false.
+func mergeFoldProducer(g genCtx, p *ir.Pipeline, id string) (ir.Call, bool) {
+	if !g.plan.pipes[p.Name].calls[id].foldMerge {
+		return ir.Call{}, false
+	}
+
+	return callByName(p, id)
+}
+
+// foldBindInputs is bindInputsHead for a fold-aware consumer: a folded-merge
+// ref stages the producer's per-fork outs dirs under souts_<id>/ plus its keys
+// sidecar instead of a merged bundle, and the returned pre-lines reconstruct
+// merged_<id> in-task with the IDENTICAL `mre merge` the MERGE task ran — the
+// bundle is byte-identical, it just never crosses a process boundary. The
+// souts_<id>/ subdir isolates each producer's outs__* names from every other
+// input (including a second folded producer).
+func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, refs []string) (string, string, string) {
+	var inputs, pre strings.Builder
+
+	fmt.Fprintf(&inputs, "    %s\n", head)
+
+	pairs := make([]string, 0, len(refs))
+
+	for _, id := range refs {
+		prod, ok := mergeFoldProducer(g, p, id)
+		if !ok {
+			fmt.Fprintf(&inputs, "    %s\n", bundleInput("in_"+id))
+			pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
+
+			continue
+		}
+
+		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkkeys_%[1]s.json'\n", id)
+		pairs = append(pairs, fmt.Sprintf("%s=merged_%s", id, id))
+		fmt.Fprintf(&pre, `    '%[1]s' merge -outs '%[2]s' -files "\$(ls -1d souts_%[3]s/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys_%[3]s.json -o merged_%[3]s%[4]s
+`, g.mre, calleeOutNames(prog, prod.Callable), id, g.producerArgs(prod.Callable, types.RoleOut))
+	}
+
+	inputs.WriteString("    path 'types.json'\n")
+	inputs.WriteString("    path 'spec.json'\n")
+
+	arg := ""
+	if len(pairs) > 0 {
+		arg = " -inputs " + strings.Join(pairs, ",")
+	}
+
+	return inputs.String(), arg, pre.String()
+}
+
+// foldCallArgs is bindCallArgsPa for a fold-aware consumer invocation: a
+// folded ref feeds the producer's collected per-fork outs and keys channels in
+// place of the merged bundle channel, matching foldBindInputs' input order.
+func foldCallArgs(g genCtx, p *ir.Pipeline, bindings []ir.Binding, pa, specName string) string {
+	refs := refCalls(bindings)
+
+	args := make([]string, 0, len(refs)+1)
+	args = append(args, pa)
+
+	for _, id := range refs {
+		if _, ok := mergeFoldProducer(g, p, id); ok {
+			args = append(args, "ch_"+id+"_souts", "ch_"+id+"_keys")
+
+			continue
+		}
+
+		args = append(args, "ch_"+id)
+	}
+
+	args = append(args, "types", specFile(specName))
+
+	return strings.Join(args, ", ")
+}
+
 // genBindProcess emits a process that resolves one call's (or the return's)
-// input bindings into an args bundle via `mre bind`. prodArgs stages any file
-// leaves of the produced bundle (empty for the disable resolver).
-func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx, prodArgs string) {
-	block, arg := bindInputs(refCalls(bindings))
+// input bindings into an args bundle via `mre bind`, running any folded
+// producer's merge first (#76). prodArgs stages any file leaves of the
+// produced bundle (empty for the disable resolver).
+func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx, prog *ir.Program, p *ir.Pipeline, prodArgs string) {
+	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(bindings))
 
 	fmt.Fprintf(b, `process %[1]s {
   input:
@@ -970,17 +1050,17 @@ func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g ge
     %[6]s
   script:
     """
-    '%[3]s' bind -spec 'spec.json' -pipeargs pipeargs%[4]s -o args%[5]s
+%[7]s    '%[3]s' bind -spec 'spec.json' -pipeargs pipeargs%[4]s -o args%[5]s
     """
 }
 
-`, name, block, g.mre, arg, prodArgs, bundleOutput("args"))
+`, name, block, g.mre, arg, prodArgs, bundleOutput("args"), pre)
 }
 
 // genForkBindProcess emits a process that resolves a map call's bindings into
 // one args bundle per fork (fork_NNNNN/) via `mre forkbind`.
-func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
-	block, arg := bindInputs(refCalls(c.Bindings))
+func genForkBindProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c ir.Call, g genCtx) {
+	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
 
 	fmt.Fprintf(b, `process %[1]s {
   input:
@@ -989,11 +1069,11 @@ func genForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx
     path 'forkkeys.json', emit: keys
   script:
     """
-    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -chunkdir . -mapmode %[6]s%[5]s
+%[7]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -chunkdir . -mapmode %[6]s%[5]s
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c))
+`, forkName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre)
 }
 
 // Map-call fork kinds — the ir.Call.MapMode values derived from Martian's
@@ -1135,12 +1215,20 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 		em.WriteString("pargs = pa")
 
 		for _, id := range refCalls(p.Returns) {
+			// A folded producer hands LAYOUT its per-fork outs + keys channels; the
+			// merge runs inline in LAYOUT before the return bind (#76).
+			if _, ok := mergeFoldProducer(g, p, id); ok {
+				fmt.Fprintf(&em, "\n    ref_%[1]s_souts = ch_%[1]s_souts\n    ref_%[1]s_keys = ch_%[1]s_keys", id)
+
+				continue
+			}
+
 			fmt.Fprintf(&em, "\n    ref_%s = ch_%s", id, id)
 		}
 
 		emit = em.String()
 	} else {
-		fmt.Fprintf(&body, "    %s(%s)\n", bindName(p.Name, "return"), bindCallArgs(p.Returns, bindName(p.Name, "return")))
+		fmt.Fprintf(&body, "    %s(%s)\n", bindName(p.Name, "return"), foldCallArgs(g, p, p.Returns, "pa", bindName(p.Name, "return")))
 	}
 
 	fmt.Fprintf(b, `workflow %s {
@@ -1224,7 +1312,7 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 		fmt.Fprintf(b, "    ch_%s = %s(pa, types%s)\n", c.Name, fusedName(pipeline, c.Name), specs.String())
 
 	case kindMapped:
-		genMappedWiring(b, pipeline, c, callee)
+		genMappedWiring(b, p, c, callee, g)
 
 	// #76: a -native map call scatters in-workflow off pipeargs; no FORK task.
 	case kindNativeScatter:
@@ -1238,7 +1326,7 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 	// A fuseable non-split stage invokes its fused bind+main process directly (#16).
 	case kindFusedStage:
 		fmt.Fprintf(b, "    ch_%s = %s(%s)\n", c.Name, fusedName(pipeline, c.Name),
-			bindCallArgs(c.Bindings, bindName(pipeline, c.Name)))
+			foldCallArgs(g, p, c.Bindings, "pa", bindName(pipeline, c.Name)))
 
 	// A fuseable split call invokes its per-call fused workflow (bind+split → MAIN
 	// → JOIN); types and bindspec are resolved inside it (#16).
@@ -1248,11 +1336,11 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 
 	// A natively-disabled leaf fuses bind into the fused process (#59, Lever 3).
 	case kindFusedDisabled:
-		genFusedDisabledWiring(b, pipeline, c)
+		genFusedDisabledWiring(b, p, c, g)
 
 	case kindPlainBind:
 		bind := bindName(pipeline, c.Name)
-		fmt.Fprintf(b, "    %s(%s)\n", bind, bindCallArgs(c.Bindings, bind))
+		fmt.Fprintf(b, "    %s(%s)\n", bind, foldCallArgs(g, p, c.Bindings, "pa", bind))
 
 		if c.Disabled != nil {
 			genDisabledWiring(b, pipeline, c, callee)
@@ -1681,9 +1769,10 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 // genFusedStageProcess emits a per-call process that runs `mre bind` then the
 // stage's `main` phase in one task: the bind resolves the call's inputs into a
 // local args bundle (staging its referenced files into this task once), and main
-// consumes it — folding the standalone BIND away (#16).
-func genFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
-	block, arg := bindInputs(refCalls(c.Bindings))
+// consumes it — folding the standalone BIND away (#16). A folded producer's
+// merge runs first in the same task (#76).
+func genFusedStageProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c ir.Call, s *ir.Stage, g genCtx) {
+	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
 	base := g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main"))
 	outs := strings.Join(names(s.Out), ",")
 
@@ -1694,20 +1783,21 @@ func genFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.
     %[8]s
   script:
     """
-    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[9]s
+%[11]s    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[9]s
     %[6]s -args args -outs '%[7]s'%[10]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
     """
 }
 
-`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.mre, arg, base, outs,
+`, fusedName(p.Name, c.Name), stageDirectives(s, ""), block, g.mre, arg, base, outs,
 		bundleOutput("outs"), g.producerArgs(c.Callable, types.RoleIn),
-		g.producerArgs(c.Callable, types.RoleMainOut))
+		g.producerArgs(c.Callable, types.RoleMainOut), pre)
 }
 
 // genMappedWiring emits a map call's fork/callee/merge fan-out. A split-stage
 // callee runs through its fork-key-threaded variant (each fork keyed by its
 // args-bundle name); other callees take the flattened fork channel directly.
-func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee string) {
+func genMappedWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee string, g genCtx) {
+	pipeline := p.Name
 	fork := forkName(pipeline, c.Name)
 	merge := mergeName(pipeline, c.Name)
 
@@ -1715,9 +1805,9 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 	// flag so the forks only run when enabled; on skip the call yields its null
 	// outputs bundle instead.
 	// The FORK process reuses the call's bind spec (see genForkBindProcess).
-	forkArgs := bindCallArgs(c.Bindings, bindName(pipeline, c.Name))
+	forkArgs := foldCallArgs(g, p, c.Bindings, "pa", bindName(pipeline, c.Name))
 	if c.Disabled != nil {
-		forkArgs = genMappedDisableGate(b, pipeline, c)
+		forkArgs = genMappedDisableGate(b, p, c, g)
 	}
 
 	fmt.Fprintf(b, "    %s(%s)\n", fork, forkArgs)
@@ -1758,12 +1848,24 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 // empty and MERGE stays dormant, exactly like FORK.out.keys on the FORK path.
 func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp callPlan) {
 	fused := fusedName(pipeline, c.Name)
-	merge := mergeName(pipeline, c.Name)
 
 	fmt.Fprintf(b, "    scat_%s = pa.flatMap { data, leaves -> Mro2nf.forkScatter(data, leaves, '%s', '%s') }\n",
 		c.Name, cp.scatterField, mapModeArg(c))
 	fmt.Fprintf(b, "    %s(%s)\n", fused,
 		bindCallArgsPa(c.Bindings, "scat_"+c.Name, bindName(pipeline, c.Name)))
+
+	// A folded merge runs inside the sole consumer's task (#76): expose the
+	// collected per-fork outs and the keys value channel for it instead of a
+	// MERGE task. Both are value channels; the keys .first() keeps the skipped-
+	// pipeline dormancy (no instances -> no keys -> consumer never fires).
+	if cp.foldMerge {
+		fmt.Fprintf(b, "    ch_%s_souts = %s.out.outs.collect().ifEmpty([])\n", c.Name, fused)
+		fmt.Fprintf(b, "    ch_%s_keys = %s.out.keys.first()\n", c.Name, fused)
+
+		return
+	}
+
+	merge := mergeName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s.out.outs.collect().ifEmpty([]), %s.out.keys.first(), types)\n",
 		merge, fused, fused)
 	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
@@ -1772,7 +1874,8 @@ func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp c
 // genMappedDisableGate emits the DISABLE process and a run/skip branch on the
 // resolved flag, returning the fork's actual-args with pipeargs replaced by the
 // enabled (run) branch.
-func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string {
+func genMappedDisableGate(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) string {
+	pipeline := p.Name
 	bind := bindName(pipeline, c.Name)
 
 	// Native gating (#59, Lever 2): read the flag directly instead of a DISABLE
@@ -1787,7 +1890,7 @@ func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string
     }
 `, c.Name, field)
 
-			return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves -> tuple(data, leaves) }", c.Name), bind)
+			return foldCallArgs(g, p, c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves -> tuple(data, leaves) }", c.Name), bind)
 		}
 
 		fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s).branch { data, leaves, gd, gl ->
@@ -1797,7 +1900,7 @@ func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string
     }
 `, c.Name, src, field)
 
-		return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, gd, gl -> tuple(data, leaves) }", c.Name), bind)
+		return foldCallArgs(g, p, c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, gd, gl -> tuple(data, leaves) }", c.Name), bind)
 	}
 
 	dis := disableName(pipeline, c.Name)
@@ -1810,7 +1913,7 @@ func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string
 `, c.Name, dis)
 
 	// Feeds the FORK process, which reuses the call's bind spec.
-	return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, d -> tuple(data, leaves) }", c.Name), bind)
+	return foldCallArgs(g, p, c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, d -> tuple(data, leaves) }", c.Name), bind)
 }
 
 // genDisabledWiring runs the callee only when the resolved `disabled` flag is
@@ -1854,7 +1957,8 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
 // enabled forks straight into the fused bind+main process — no standalone BIND
 // (#59, Lever 3). The self case branches on pa (the flag lives in the fork args);
 // the upstream-ref case combines pa with the producing channel to read the flag.
-func genFusedDisabledWiring(b *strings.Builder, pipeline string, c ir.Call) {
+func genFusedDisabledWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
+	pipeline := p.Name
 	bind := bindName(pipeline, c.Name)
 	fused := fusedName(pipeline, c.Name)
 	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
@@ -1870,7 +1974,7 @@ func genFusedDisabledWiring(b *strings.Builder, pipeline string, c ir.Call) {
     r_%[1]s = %[3]s(%[4]s)
     s_%[1]s = g_%[1]s.skip.map { data, leaves -> %[5]s }
     ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
-`, c.Name, field, fused, bindCallArgsPa(c.Bindings, enabled, bind), nullBundle(nulls))
+`, c.Name, field, fused, foldCallArgs(g, p, c.Bindings, enabled, bind), nullBundle(nulls))
 
 		return
 	}
@@ -1884,7 +1988,7 @@ func genFusedDisabledWiring(b *strings.Builder, pipeline string, c ir.Call) {
     r_%[1]s = %[4]s(%[5]s)
     s_%[1]s = g_%[1]s.skip.map { data, leaves, gd, gl -> %[6]s }
     ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
-`, c.Name, src, field, fused, bindCallArgsPa(c.Bindings, enabled, bind), nullBundle(nulls))
+`, c.Name, src, field, fused, foldCallArgs(g, p, c.Bindings, enabled, bind), nullBundle(nulls))
 }
 
 // nativeDisableGate reports whether a call's disable flag can be read natively
@@ -1985,7 +2089,7 @@ func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
 // tree (which downstream pipelines consume) is unchanged.
 func genPublish(b *strings.Builder, prog *ir.Program, g genCtx) {
 	if p := nativeReturnBind(prog, g); p != nil {
-		genNativeLayout(b, p, g)
+		genNativeLayout(b, prog, p, g)
 	} else {
 		genDefaultLayout(b, prog.Entry.Callable, g)
 	}
@@ -2049,8 +2153,8 @@ func nativeReturnBind(prog *ir.Program, g genCtx) *ir.Pipeline {
 // the return bind's inputs (pipeargs + the returned calls), binds them into the
 // return bundle, moves it to the task root so publish-layout runs the identical
 // command the default LAYOUT does, and exposes the bundle leaves for PUBLISH_LEAF.
-func genNativeLayout(b *strings.Builder, p *ir.Pipeline, g genCtx) {
-	inBlock, arg := bindInputs(refCalls(p.Returns))
+func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g genCtx) {
+	inBlock, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(p.Returns))
 	flags := g.producerArgs(p.Name, types.RoleOut)
 
 	fmt.Fprintf(b, `process LAYOUT {
@@ -2063,13 +2167,13 @@ func genNativeLayout(b *strings.Builder, p *ir.Pipeline, g genCtx) {
     path 'f/*', emit: leaves, arity: '0..*', optional: true
   script:
     """
-    '%[2]s' bind -spec 'spec.json' -pipeargs pipeargs%[3]s -o args%[4]s
+%[5]s    '%[2]s' bind -spec 'spec.json' -pipeargs pipeargs%[3]s -o args%[4]s
     mv args/data.json data.json
     if [ -d args/f ]; then mv args/f f; fi
     '%[2]s' publish-layout -sidecar data.json -dir .%[4]s
     """
 }
-`, inBlock, g.mre, arg, flags)
+`, inBlock, g.mre, arg, flags, pre)
 }
 
 // genEntry emits the top-level workflow. Each entry input is exposed as a
@@ -2098,7 +2202,7 @@ workflow {
 `, entryWorkflow)
 
 	if p := nativeReturnBind(prog, g); p != nil {
-		genNativePublishWiring(b, p, entryWorkflow)
+		genNativePublishWiring(b, p, entryWorkflow, g)
 	} else {
 		genPublishWiring(b, entryWorkflow)
 	}
@@ -2109,9 +2213,15 @@ workflow {
 // genNativePublishWiring wires the native LAYOUT (which folds in the return bind):
 // it feeds LAYOUT the entry's raw return inputs (pargs + each returned call) and
 // takes the published leaves from LAYOUT's own output for PUBLISH_LEAF.
-func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow string) {
+func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow string, g genCtx) {
 	var refArgs strings.Builder
 	for _, id := range refCalls(p.Returns) {
+		if _, ok := mergeFoldProducer(g, p, id); ok {
+			fmt.Fprintf(&refArgs, ", %[1]s.out.ref_%[2]s_souts, %[1]s.out.ref_%[2]s_keys", entryWorkflow, id)
+
+			continue
+		}
+
 		fmt.Fprintf(&refArgs, ", %s.out.ref_%s", entryWorkflow, id)
 	}
 

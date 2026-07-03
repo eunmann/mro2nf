@@ -2,6 +2,7 @@ package emit
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -56,6 +57,11 @@ type callPlan struct {
 	// scatterField is the pipeline-input name whose collection a kindNativeScatter
 	// call forks over — the driver reads its size from pipeargs' data.json.
 	scatterField string
+	// foldMerge marks a kindNativeScatter call whose MERGE gather runs inline in
+	// its sole consumer's task (#76): no standalone MERGE process; the consumer
+	// stages the per-fork outs dirs + keys sidecar and reconstructs merged_<id>
+	// with `mre merge` before its own bind.
+	foldMerge bool
 }
 
 // pipePlan is the per-pipeline emission plan: one callPlan per call, plus whether
@@ -93,6 +99,16 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 
 		if prod, ok := forwardProducer(p.Returns, p, prog); ok {
 			pp.retFwd = prod
+		}
+
+		// Second pass (#76 merge fold): with every call's kind fixed, decide which
+		// scatters fold their MERGE into the sole consumer. Reading the finished
+		// kinds keeps this a plan decision the emitters can't disagree with (#77).
+		for _, c := range p.Calls {
+			if cp := pp.calls[c.Name]; cp.kind == kindNativeScatter && mergeFoldable(c.Name, p, pp) {
+				cp.foldMerge = true
+				pp.calls[c.Name] = cp
+			}
 		}
 
 		pl.pipes[name] = pp
@@ -311,6 +327,47 @@ func nativeScatterable(c ir.Call, prog *ir.Program, queuedPa bool) (*ir.Stage, s
 	}
 
 	return s, field, true
+}
+
+// mergeFoldable reports whether a native scatter's MERGE can run inline in its
+// consumer's task (#76): exactly one consumer (mirroring the #59 Lever 4
+// single-consumer rule — K consumers would duplicate the merge and stage the N
+// fork dirs K times), no disable-gate reference (the driver reads that bundle
+// directly; there is no task to host the merge), and the consumer is a
+// task-hosted bind shape — the pipeline return (return BIND, or the native
+// LAYOUT for the entry) or a plain/fused/mapped call. A downstream scatter
+// consumer keeps the MERGE: folding there would re-merge once per fork
+// instance. Forward/chain consumers cannot reference a mapped producer
+// (forwardProducer and chainFusion both reject them).
+func mergeFoldable(name string, p *ir.Pipeline, pp pipePlan) bool {
+	if consumerCount(name, p) != 1 {
+		return false
+	}
+
+	for _, c := range p.Calls {
+		if c.Disabled != nil && c.Disabled.Kind == refKindCall && c.Disabled.ID == name {
+			return false
+		}
+	}
+
+	if slices.Contains(refCalls(p.Returns), name) {
+		return true
+	}
+
+	for _, c := range p.Calls {
+		if !slices.Contains(refCalls(c.Bindings), name) {
+			continue
+		}
+
+		switch pp.calls[c.Name].kind {
+		case kindPlainBind, kindFusedStage, kindFusedDisabled, kindMapped:
+			return true
+		default:
+			return false
+		}
+	}
+
+	return false
 }
 
 // needsDisableTask reports whether a disabled call requires a standalone DISABLE

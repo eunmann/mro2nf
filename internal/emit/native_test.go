@@ -98,11 +98,84 @@ func TestBuildPlanNativeScatterQueueContext(t *testing.T) {
 	}
 }
 
+// TestBuildPlanMergeFold pins the #76 merge-fold decision: a scatter whose sole
+// consumer is the return (fork_min), a mid-pipeline fused-stage consumer
+// (fork_ref's SCALE feeding... the return again — so also fold), and the
+// counterexamples: a fan-out (two consumers) keeps the MERGE, and a
+// mid-pipeline single consumer folds. Default mode has no scatter, so no fold.
+func TestBuildPlanMergeFold(t *testing.T) {
+	fm := lowerFixture(t, "fork_min")
+	if cp := buildPlan(fm, featureSet{native: true}).pipes["SCALE_ALL"].calls["SCALE"]; !cp.foldMerge {
+		t.Error("fork_min SCALE: sole return consumer must fold the MERGE")
+	}
+
+	// fork_fanout's SCALE has two consumers (SUMALL + the return): keep MERGE.
+	ff := lowerFixture(t, "fork_fanout")
+
+	pf := buildPlan(ff, featureSet{native: true}).pipes["FANOUT"]
+	if pf.calls["SCALE"].kind != kindNativeScatter {
+		t.Fatalf("fork_fanout SCALE kind = %d, want kindNativeScatter", pf.calls["SCALE"].kind)
+	}
+	if pf.calls["SCALE"].foldMerge {
+		t.Error("fork_fanout SCALE: two consumers must keep the MERGE task")
+	}
+
+	// fork_disabled_sub's SCALE folds into SUB's return BIND (single consumer).
+	ds := lowerFixture(t, "fork_disabled_sub")
+	if cp := buildPlan(ds, featureSet{native: true}).pipes["SUB"].calls["SCALE"]; !cp.foldMerge {
+		t.Error("fork_disabled_sub SCALE: sole return consumer must fold the MERGE")
+	}
+}
+
+// TestGenerateNativeMergeFold pins the folded-merge emission at the two
+// consumer shapes: the entry LAYOUT (fork_min — rendered via generateMain) and
+// a non-entry return BIND (fork_disabled_sub's SUB module). Both stage the
+// per-fork outs under souts_<id>/ plus the keys sidecar and run the identical
+// `mre merge` in-task before their bind.
+func TestGenerateNativeMergeFold(t *testing.T) {
+	prog := lowerFixture(t, "fork_min")
+	f := featureSet{native: true}
+	g := genCtx{
+		entry: "SCALE_ALL", mroFile: "pipeline.mro", mre: "mre", shell: "/x/sh.py",
+		features: f, code: map[string]string{"SCALE": "/x/scale"}, plan: buildPlan(prog, f),
+	}
+
+	main := generateMain(prog, g)
+
+	for _, want := range []string{
+		"path(souts_SCALE, stageAs: 'souts_SCALE/*')",
+		"path 'forkkeys_SCALE.json'",
+		`'mre' merge -outs 'scaled' -files "\$(ls -1d souts_SCALE/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
+		"-inputs SCALE=merged_SCALE",
+		".out.ref_SCALE_souts, ",
+		".out.ref_SCALE_keys",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("missing %q in native main.nf:\n%s", want, main)
+		}
+	}
+
+	ds := lowerFixture(t, "fork_disabled_sub")
+	gd := genCtx{
+		entry: "TOP", mroFile: "pipeline.mro", mre: "mre", shell: "/x/sh.py",
+		features: f, code: map[string]string{"SCALE": "/x/scale"}, plan: buildPlan(ds, f),
+	}
+
+	mod := generatePipeModule(ds.Pipelines["SUB"], ds, gd)
+	if strings.Contains(mod, "process MERGE_") {
+		t.Errorf("folded merge in SUB must not emit a MERGE process:\n%s", mod)
+	}
+	if !strings.Contains(mod, "-o merged_SCALE") || !strings.Contains(mod, "-inputs SCALE=merged_SCALE") {
+		t.Errorf("SUB's return BIND must run the merge inline:\n%s", mod)
+	}
+}
+
 // TestGenerateNativeScatter renders fork_min's pipeline module with -native and
 // pins the scatter shape: no FORK process, a fused forkbind -index + main
 // process whose instance 0 alone writes the keys sidecar, the keys-only
-// sentinel branch for an empty collection, driver-side fork enumeration, and
-// an unchanged MERGE gather fed by the single-producer keys channel.
+// sentinel branch for an empty collection, driver-side fork enumeration, and —
+// with the sole consumer being the entry return — the MERGE folded away into
+// LAYOUT, leaving only the per-fork outs/keys channels on the emit path.
 func TestGenerateNativeScatter(t *testing.T) {
 	prog := lowerFixture(t, "fork_min")
 	f := featureSet{native: true}
@@ -122,6 +195,10 @@ func TestGenerateNativeScatter(t *testing.T) {
 		t.Errorf("-native scatter must not emit a FORK process:\n%s", mod)
 	}
 
+	if strings.Contains(mod, "process MERGE_") {
+		t.Errorf("a folded merge must not emit a MERGE process:\n%s", mod)
+	}
+
 	for _, want := range []string{
 		"process STAGE_9_SCALE_ALL__SCALE {",
 		"-mapmode array -index ${fi} -o fargs${fi == 0 ? ' -keysfile forkkeys.json' : ''}",
@@ -129,8 +206,12 @@ func TestGenerateNativeScatter(t *testing.T) {
 		"Mro2nf.forkScatter(data, leaves, 'values', 'array')",
 		"path \"outs__${key}\", type: 'dir', emit: outs, optional: true",
 		"path 'forkkeys.json', emit: keys, optional: true",
-		".out.keys.first(), types)",
-		"process MERGE_9_SCALE_ALL__SCALE {",
+		// The MERGE folds into the entry return's LAYOUT (#76): the workflow
+		// exposes the per-fork outs + keys channels for it instead.
+		"ch_SCALE_souts = STAGE_9_SCALE_ALL__SCALE.out.outs.collect().ifEmpty([])",
+		"ch_SCALE_keys = STAGE_9_SCALE_ALL__SCALE.out.keys.first()",
+		"ref_SCALE_souts = ch_SCALE_souts",
+		"ref_SCALE_keys = ch_SCALE_keys",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("missing %q in native module:\n%s", want, mod)
