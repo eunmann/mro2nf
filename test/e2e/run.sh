@@ -144,8 +144,10 @@ CASES=(
 )
 
 # Run cases in a bounded parallel pool; xargs exits non-zero if any case fails.
+# -I{} processes one input line per invocation on both GNU and BSD/macOS xargs
+# (BSD has no -d flag); case strings contain no spaces, so per-line is safe.
 printf '%s\n' "${CASES[@]}" |
-    xargs -P "${E2E_PARALLEL:-6}" -d '\n' -I{} bash "$0" --one '{}'
+    xargs -P "${E2E_PARALLEL:-6}" -I{} bash "$0" --one '{}'
 
 # Object-store readiness: a file pipeline under copy-staging into isolated
 # scratch dirs, plus self-contained-bundle assertions.

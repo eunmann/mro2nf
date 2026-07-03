@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -79,9 +80,32 @@ func LoadManifest(path string) (Manifest, error) {
 	return m, nil
 }
 
-// Table returns a file-leaf walk Table over the manifest's struct definitions.
+// Table returns a file-leaf walk Table over the manifest's struct definitions,
+// augmented with each callable's output bundle as a struct type keyed by the
+// callable name.
+//
+// A param may be typed as a callable's outputs rather than a declared struct —
+// e.g. `matrix_computer_outs _SLFE_MATRIX_COMPUTER`, forwarding a sub-pipeline's
+// whole outputs. Martian treats such a value as a struct whose fields are that
+// callable's outputs, so the file-leaf walk must descend into it. Without this,
+// the struct name resolves to no fields, the walk leaves the value untouched, and
+// every file the bundle carries stays an unmarked, task-local path — which then
+// vanishes on the next isolated worker (AWS Batch/S3, HealthOmics). Genuine
+// struct definitions win on any name collision.
 func (m Manifest) Table() *Table {
-	return NewTable(m.Structs)
+	merged := make(map[string]*ir.StructType, len(m.Callables)+len(m.Structs))
+
+	for name, c := range m.Callables {
+		if len(c.Out) == 0 {
+			continue
+		}
+
+		merged[name] = &ir.StructType{Name: name, Fields: c.Out}
+	}
+
+	maps.Copy(merged, m.Structs)
+
+	return NewTable(merged)
 }
 
 // Param roles select which of a callable's parameter sets a producer walks when

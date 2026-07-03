@@ -321,62 +321,46 @@ func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, p
 	return aio.run(ctx, cmd, phase, meta, mon)
 }
 
-// runWrappedAdapter runs a comp (via mrjob) or exec stage, which manage the
-// metadata protocol themselves. Failure is a non-empty _errors file or a
-// non-zero exit.
+// runWrappedAdapter runs a comp (via mrjob) or exec stage. A compiled (Rust)
+// Martian adapter adopts fd 3 (_log) and fd 4 (errors) at startup via
+// File::from_raw_fd — descriptors normally supplied by mrjob. With a passthrough
+// mrjob the shim must provide them itself (ExtraFiles below), or the adapter
+// aborts with "IO Safety violation: owned file descriptor already closed" before
+// running. aio.run then drains the fd-4 channel, forwards the stage log, and
+// classifies the result exactly as the py path does.
 func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapter, argv []string, phase string, res Resources) error {
 	cmd := limitedCommand(ctx, a, res.VMemGB, argv[0], append(argv[1:], meta, files, journal)...)
 	cmd.Dir = files
 	mon := startMonitor(cmd, a, res.MemGB)
 
-	stdout, err := os.Create(filepath.Join(meta, "_stdout"))
+	aio, err := openAdapterIO(meta)
 	if err != nil {
-		return fmt.Errorf("create _stdout: %w", err)
+		return err
 	}
-	defer func() { _ = stdout.Close() }()
+	defer aio.close()
 
-	stderr, err := os.Create(filepath.Join(meta, "_stderr"))
-	if err != nil {
-		return fmt.Errorf("create _stderr: %w", err)
-	}
-	defer func() { _ = stderr.Close() }()
+	cmd.Stdout = io.MultiWriter(aio.stdout, os.Stdout)
+	cmd.Stderr = io.MultiWriter(aio.stderr, os.Stderr)
+	cmd.ExtraFiles = []*os.File{aio.logFile, aio.errW} // fd 3 = _log, fd 4 = errors
 
-	cmd.Stdout = io.MultiWriter(stdout, os.Stdout)
-	cmd.Stderr = io.MultiWriter(stderr, os.Stderr)
+	runErr := aio.run(ctx, cmd, phase, meta, mon)
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start adapter: %w", err)
-	}
-
-	stop := beginMonitor(ctx, cmd, mon)
-	runErr := cmd.Wait()
-
-	stop() // join the monitor before reading its verdict; no sample in flight
-	mon.recordExitPeak(cmd.ProcessState)
-	forwardStageLog(meta)
-
-	// mrjob routes a stage assertion to _assert (with the ASSERT: prefix stripped)
-	// and exits 0, so it must be checked before _errors and the exit code or the
-	// assertion is silently treated as success. Re-add the prefix so stageFailure
-	// classifies it as the non-retryable ErrStageAssert. A stage-written _assert /
-	// _errors is authoritative and is checked before the monitor verdict, so a
-	// coincident memory kill cannot mask a non-retryable assertion.
-	if data, err := os.ReadFile(filepath.Join(meta, "_assert")); err == nil && len(data) > 0 {
+	// mrjob/exec stages may route a non-retryable assertion to _assert (ASSERT:
+	// prefix stripped) rather than the fd-4 channel; it is authoritative and takes
+	// precedence over any other verdict. Re-add the prefix so stageFailure
+	// classifies it as the non-retryable ErrStageAssert.
+	if data, e := os.ReadFile(filepath.Join(meta, "_assert")); e == nil && len(data) > 0 {
 		return stageFailure(phase, assertPrefix+strings.TrimSpace(string(data)))
 	}
 
-	if data, err := os.ReadFile(filepath.Join(meta, "_errors")); err == nil && len(data) > 0 {
-		return stageFailure(phase, strings.TrimSpace(string(data)))
-	}
-
-	if err := memViolation(mon, phase, meta); err != nil {
-		return err
-	}
-
 	if runErr != nil {
-		tail, _ := os.ReadFile(filepath.Join(meta, "_stderr"))
+		return runErr
+	}
 
-		return fmt.Errorf("adapter %s phase: %w: %s", phase, runErr, strings.TrimSpace(string(tail)))
+	// An exec stage may report failure by writing _errors directly rather than via
+	// the fd-4 channel; honor that too.
+	if data, e := os.ReadFile(filepath.Join(meta, "_errors")); e == nil && len(data) > 0 {
+		return stageFailure(phase, strings.TrimSpace(string(data)))
 	}
 
 	return nil

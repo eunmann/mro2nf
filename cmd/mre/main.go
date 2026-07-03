@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -82,6 +83,7 @@ func run(ctx context.Context, args []string) error {
 type commonFlags struct {
 	shell, stagecode, lang   string
 	mrjob                    string
+	srcargs                  string
 	call, mro, work, outFile string
 	outs                     string
 	threads, memGB, vmemGB   float64
@@ -94,6 +96,7 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.StringVar(&c.stagecode, "stagecode", "", "path to the stage code")
 	fs.StringVar(&c.lang, "lang", "py", "stage adapter language")
 	fs.StringVar(&c.mrjob, "mrjob", "", "path to mrjob (for comp stages)")
+	fs.StringVar(&c.srcargs, "srcargs", "", "extra src args forwarded to the adapter (e.g. comp \"martian <stage>\"), whitespace-separated")
 	fs.StringVar(&c.call, "call", "", "top-level pipeline/stage call name")
 	fs.StringVar(&c.mro, "mro", "", "source MRO filename (for _jobinfo)")
 	fs.StringVar(&c.work, "work", ".", "work directory for metadata/files")
@@ -112,6 +115,7 @@ func (c *commonFlags) adapter() shim.Adapter {
 		Lang:      ir.Lang(c.lang),
 		Shell:     c.shell,
 		Stagecode: c.stagecode,
+		SrcArgs:   strings.Fields(c.srcargs),
 		Mrjob:     c.mrjob,
 		Monitor:   c.monitor,
 	}
@@ -245,7 +249,8 @@ func runJoin(ctx context.Context, argv []string) error {
 	cf := addCommon(fs)
 	prod := addProducer(fs, types.RoleOut)
 	argsDir := fs.String("args", "", "stage args bundle dir")
-	defsFile := fs.String("chunkdefs", "", "chunk defs JSON array file")
+	defsFile := fs.String("chunkdefs", "", "chunk defs JSON array file (raw summary; paths not staged)")
+	bundlesList := fs.String("chunkbundles", "", "comma-separated per-chunk def bundle dirs (chunk_NNNNN/), in order; staged so split-produced def files resolve on the join worker")
 	outsList := fs.String("chunkouts", "", "comma-separated per-chunk output bundle dirs, in order")
 
 	if err := fs.Parse(argv); err != nil {
@@ -261,8 +266,22 @@ func runJoin(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	defs, outs, err := readChunkData(*defsFile, *outsList)
-	if err != nil {
+	// Prefer the staged per-chunk def bundles (localized file leaves) over the raw
+	// chunks.json summary, so files the split produced into a chunk def (e.g. a
+	// reference index) resolve on an isolated join worker.
+	var defs []shim.ChunkDef
+
+	var outs []json.RawMessage
+
+	if *bundlesList != "" {
+		if defs, err = readChunkBundleDefs(splitComma(*bundlesList)); err != nil {
+			return err
+		}
+
+		if outs, err = readBundleList(splitComma(*outsList)); err != nil {
+			return err
+		}
+	} else if defs, outs, err = readChunkData(*defsFile, *outsList); err != nil {
 		return err
 	}
 

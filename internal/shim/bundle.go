@@ -177,12 +177,25 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		}
 
 		// Each leaf is staged under a flat, ordinal name (f/L0000, f/L0001, …) in
-		// canonical walk order. The transport basename is not load-bearing — publish
-		// names every leaf from the manifest via OutFilename, and the adapter reads
-		// inputs by absolute path — so leaves are renumbered rather than carrying
-		// their original basename through every hop. This flat, predictable naming is
-		// what lets the leaves be staged as individual path items (epic #18 / #13).
-		rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d", n))
+		// canonical walk order — the ordinal keeps names unique and predictable and
+		// lets the leaves be staged as individual path items (epic #18 / #13).
+		//
+		// The ordinal alone is NOT enough: a typed martian filetype (bincode, h5,
+		// json.gz, …) reconstructs its canonical extension when a stage opens the
+		// path (e.g. `load_filtered_bcs_groups` opens `<leaf>.bincode`), so a leaf
+		// staged bare as `L0002` is looked for at `L0002.bincode` and not found.
+		// Preserve the source's extension (everything after the first dot of the
+		// basename — matching OutFilename's `name.<type>`, incl. multi-part types
+		// like json.gz) so those readers resolve the staged leaf. Builtin file/path
+		// outputs are bare (no dot) and stay `L%04d`.
+		ext := ""
+		if b := filepath.Base(src); b != "" {
+			if i := strings.IndexByte(b, '.'); i >= 0 {
+				ext = b[i:]
+			}
+		}
+
+		rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d%s", n, ext))
 		n++
 
 		dst := filepath.Join(dir, rel)
@@ -235,11 +248,18 @@ func CopyTree(src, dst string) error {
 		return nil
 	}
 
-	// Hard-linking failed. Refuse to overwrite an existing destination: a
-	// truncating copy over a file already hard-linked elsewhere would corrupt
-	// the shared inode. A genuinely absent dst means the link was unavailable
-	// (e.g. cross-device), so fall back to a byte copy.
-	if _, err := os.Lstat(dst); err == nil {
+	// Hard-linking failed. If the destination already exists, distinguish an
+	// idempotent re-stage from a genuine collision: when dst is already a hard
+	// link to the same inode as src (a Nextflow retry restaging the same leaf, the
+	// same file referenced by multiple params, or an input bundle that overlaps
+	// the output), the link we wanted is already in place — a no-op, not
+	// corruption. Only a different inode at dst is a real collision; truncating it
+	// could corrupt a file hard-linked elsewhere.
+	if dstInfo, lerr := os.Lstat(dst); lerr == nil {
+		if os.SameFile(info, dstInfo) {
+			return nil
+		}
+
 		return fmt.Errorf("copy %s: %w", dst, errDestExists)
 	}
 

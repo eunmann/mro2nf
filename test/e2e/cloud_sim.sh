@@ -103,4 +103,42 @@ if [ "$(cat "$mf/results/fs/0.txt" 2>/dev/null)" != "val=1" ] ||
 fi
 rm -rf "$mf"
 
-echo "OK[cloud_sim]: copy-staged file + map-call-file pipelines correct, bundles self-contained"
+# 4. A split stage that creates a file into its chunk def (an `in file` chunk
+#    param) and reads it in the JOIN must carry that split-produced file to the
+#    join, not a bare absolute path into the split's scratch. Mirrors CellRanger
+#    MAKE_SHARD (feature_reference). Without staging the chunk-def bundles to the
+#    join, the join fails to open the file under copy-staging.
+sdf="$(mktemp -d)"
+./mro2nf -o "$sdf" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
+    -mropath testdata/split_def_file testdata/split_def_file/pipeline.mro >/dev/null
+cp "$proj/cloud.config" "$sdf/cloud.config"
+if ! (cd "$sdf" && nextflow run main.nf -c cloud.config >/dev/null 2>&1); then
+    echo "FAIL[cloud_sim]: split_def_file nextflow (split-produced def file not staged to join?)"; rm -rf "$sdf"; exit 1
+fi
+if ! python3 -c "import json,sys; d=json.load(open('$sdf/results/pipeline_outs.json')); sys.exit(0 if d=={'total':403} else 1)" 2>/dev/null; then
+    echo "FAIL[cloud_sim]: split_def_file result $(cat "$sdf/results/pipeline_outs.json" 2>/dev/null), want {'total': 403}"
+    rm -rf "$sdf"; exit 1
+fi
+rm -rf "$sdf"
+
+# 5. A sub-pipeline's whole output bundle, forwarded by callable-name type
+#    (`bundle = SUB` into `in SUB bundle`) and projected in a consumer, must carry
+#    its file leaves through the bundle. Mirrors CellRanger `matrix_computer_outs
+#    _SLFE_MATRIX_COMPUTER` forwarded into POST_MATRIX_COMPUTATION, whose
+#    FILTER_BARCODES reads a file field. The callee name is not a declared struct,
+#    so without registering each callable's outputs as a walk struct the files stay
+#    task-local paths and the consumer fails to open them under copy-staging.
+pof="$(mktemp -d)"
+./mro2nf -o "$pof" -mre "$ROOT/mre" -shell "$ROOT/vendor-martian/python/martian_shell.py" \
+    -mropath testdata/pipe_outs_forward testdata/pipe_outs_forward/pipeline.mro >/dev/null
+cp "$proj/cloud.config" "$pof/cloud.config"
+if ! (cd "$pof" && nextflow run main.nf -c cloud.config >/dev/null 2>&1); then
+    echo "FAIL[cloud_sim]: pipe_outs_forward nextflow (callable-typed bundle files not staged?)"; rm -rf "$pof"; exit 1
+fi
+if ! python3 -c "import json,sys; d=json.load(open('$pof/results/pipeline_outs.json')); sys.exit(0 if d=={'total':43} else 1)" 2>/dev/null; then
+    echo "FAIL[cloud_sim]: pipe_outs_forward result $(cat "$pof/results/pipeline_outs.json" 2>/dev/null), want {'total': 43}"
+    rm -rf "$pof"; exit 1
+fi
+rm -rf "$pof"
+
+echo "OK[cloud_sim]: copy-staged file + map-call-file + split-def-file + pipe-outs-forward pipelines correct, bundles self-contained"

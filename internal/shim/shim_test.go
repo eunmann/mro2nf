@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -358,6 +359,30 @@ func TestWrappedAdapterReadsAssert(t *testing.T) {
 	err := runWrappedAdapter(context.Background(), meta, files, journal, Adapter{}, argv, "main", Resources{})
 	if !errors.Is(err, ErrStageAssert) {
 		t.Errorf("comp/exec assertion must surface as ErrStageAssert, got %v", err)
+	}
+}
+
+// TestWrappedAdapterProvidesErrorFd guards the fd 3/4 wiring for comp/exec
+// adapters. A compiled Martian adapter adopts fd 3 (_log) and fd 4 (errors) at
+// startup; without them it aborts ("IO Safety violation: owned file descriptor
+// already closed"). Here a stand-in adapter writes to fd 4 and exits: the message
+// must be captured (proving fd 4 was open) and surfaced as a stage failure. If fd
+// 4 were not provided, the write would fail and the message would be lost.
+func TestWrappedAdapterProvidesErrorFd(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("/bin/sh not available")
+	}
+
+	meta := t.TempDir()
+	files := t.TempDir()
+	journal := filepath.Join(meta, "journal")
+
+	// fd 4 is the shim-provided error channel; writing to it must succeed.
+	argv := []string{"/bin/sh", "-c", `echo "boom via fd4" >&4; exit 1`, "mrjob"}
+
+	err := runWrappedAdapter(context.Background(), meta, files, journal, Adapter{}, argv, "main", Resources{})
+	if err == nil || !strings.Contains(err.Error(), "boom via fd4") {
+		t.Errorf("fd-4 error must be captured and surfaced; got %v", err)
 	}
 }
 

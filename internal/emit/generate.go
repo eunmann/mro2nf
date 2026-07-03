@@ -23,17 +23,27 @@ type genCtx struct {
 	shell   string
 	mrjob   string
 	monitor bool
-	code    map[string]string // stage name -> stage code path
+	code    map[string]string   // stage name -> stage code path
+	srcArgs map[string][]string // stage name -> extra `src` args (e.g. comp "martian <stage>")
 }
 
 // stageCmd renders an mre invocation for a stage phase, single-quoting every
 // path so spaces and shell metacharacters in paths are safe.
-func (g genCtx) stageCmd(phase, code string, lang ir.Lang, vmemExpr string) string {
+func (g genCtx) stageCmd(phase string, s *ir.Stage, vmemExpr string) string {
 	cmd := fmt.Sprintf("'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
-		g.mre, phase, g.shell, code, lang, g.entry, g.mroFile)
+		g.mre, phase, g.shell, g.code[s.Name], s.Lang, g.entry, g.mroFile)
 
 	if g.mrjob != "" {
 		cmd += fmt.Sprintf(" -mrjob '%s'", g.mrjob)
+	}
+
+	// Extra `src` args (e.g. a comp stage's `martian <stage>` dispatch selector)
+	// are forwarded verbatim after the stage code so the adapter reconstructs the
+	// original `<binary> <args...>` invocation. Martian src args are bare tokens
+	// with no embedded whitespace, so a space-joined value round-trips through the
+	// shim's strings.Fields split.
+	if args := g.srcArgs[s.Name]; len(args) > 0 {
+		cmd += fmt.Sprintf(" -srcargs '%s'", strings.Join(args, " "))
 	}
 
 	// A declared `using(vmem_gb)` is passed so the shim's --monitor caps virtual
@@ -533,10 +543,9 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 }
 
 func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
-	code := g.code[s.Name]
 	mainOuts := strings.Join(append(names(s.Out), names(s.ChunkOut)...), ",")
 	joinOuts := strings.Join(names(s.Out), ",")
-	base := g.stageCmd("main", code, s.Lang, vmemFlag(s, "main"))
+	base := g.stageCmd("main", s, vmemFlag(s, "main"))
 
 	if !s.Split {
 		genSingleStage(b, s, base, joinOuts, g)
@@ -557,8 +566,8 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 // processes: every channel item is tuple(key, ...), so chunks and joins stay
 // partitioned by fork. Outputs are named by key so the merge orders them.
 func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
-	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
-	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang, vmemFlag(s, "join"))
+	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
+	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT_K {
 %[2]s
@@ -691,8 +700,8 @@ workflow wf_%[1]s_map {
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
-	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
-	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang, vmemFlag(s, "join"))
+	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
+	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
 %[2]s
@@ -728,13 +737,14 @@ process %[1]s_JOIN {
     val join
     %[14]s
     path defs
+    path chunkbundles
     path souts
     path 'types.json'
   output:
     %[16]s
   script:
     """
-    %[7]s -args args -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[8]s'%[11]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[7]s -args args -chunkdefs ${defs} -chunkbundles "\$(ls -1d chunk_* 2>/dev/null | sort -V | paste -sd, -)" -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[8]s'%[11]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
     """
 }
 
@@ -756,7 +766,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
     %[1]s_MAIN(chunks.combine(a), types)
     join = %[1]s_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
-    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect().ifEmpty([]), types)
+    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_SPLIT.out.chunks.collect().ifEmpty([]), %[1]s_MAIN.out.collect().ifEmpty([]), types)
   emit:
     %[1]s_JOIN.out
 }
@@ -1193,7 +1203,7 @@ func fusedSplitCallArgs(bindings []ir.Binding) string {
 // defs/resources so the aliased MAIN/JOIN can consume them.
 func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg := bindInputs(refCalls(c.Bindings))
-	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
+	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
@@ -1245,7 +1255,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
     chunks = %[3]s.out.chunks.flatten().map { f -> tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
     %[4]s(chunks.combine(a), types)
     join = %[3]s.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
-    %[5]s(join, a, %[3]s.out.defs, %[4]s.out.collect().ifEmpty([]), types)
+    %[5]s(join, a, %[3]s.out.defs, %[3]s.out.chunks.collect().ifEmpty([]), %[4]s.out.collect().ifEmpty([]), types)
   emit:
     %[5]s.out
 }
@@ -1261,7 +1271,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 // consumes it — folding the standalone BIND away (#16).
 func genFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg := bindInputs(refCalls(c.Bindings))
-	base := g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main"))
+	base := g.stageCmd("main", s, vmemFlag(s, "main"))
 	outs := strings.Join(names(s.Out), ",")
 
 	fmt.Fprintf(b, `process %[1]s {

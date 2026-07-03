@@ -1,0 +1,78 @@
+# Whole-call output bundle forwarded by callable-name type. A sub-pipeline's
+# entire outputs are passed as one value (`bundle = SUB`) into a consumer whose
+# input is typed by the callee name (`in SUB bundle`) — not a declared struct.
+# The consumer projects file fields out of the bundle to an inner stage. This is
+# the CellRanger shape: `matrix_computer_outs _SLFE_MATRIX_COMPUTER` forwarded
+# into POST_MATRIX_COMPUTATION, whose FILTER_BARCODES reads a file field.
+#
+# The file-leaf walk must descend into the callable-typed bundle to mark its
+# files; otherwise data/parts stay task-local paths and the consumer fails to
+# open them once staged onto an isolated worker (the cloud_sim copy-staging case).
+filetype txt;
+
+stage MAKE_DATA(
+    in  int   n,
+    out txt   data,
+    out txt[] parts,
+    src py    "stages/make_data",
+)
+
+stage READ_DATA(
+    in  txt   data,
+    in  txt[] parts,
+    out int   total,
+    src py    "stages/read_data",
+)
+
+pipeline SUB(
+    in  int   n,
+    out txt   data,
+    out txt[] parts,
+)
+{
+    call MAKE_DATA(
+        n = self.n,
+    )
+
+    return (
+        data  = MAKE_DATA.data,
+        parts = MAKE_DATA.parts,
+    )
+}
+
+pipeline CONSUME(
+    in  SUB   bundle,
+    out int   total,
+)
+{
+    call READ_DATA(
+        data  = self.bundle.data,
+        parts = self.bundle.parts,
+    )
+
+    return (
+        total = READ_DATA.total,
+    )
+}
+
+pipeline TOP(
+    in  int   n,
+    out int   total,
+)
+{
+    call SUB(
+        n = self.n,
+    )
+
+    call CONSUME(
+        bundle = SUB,
+    )
+
+    return (
+        total = CONSUME.total,
+    )
+}
+
+call TOP(
+    n = 4,
+)

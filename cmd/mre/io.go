@@ -66,6 +66,39 @@ func readChunkData(defsPath, outsList string) ([]shim.ChunkDef, []json.RawMessag
 	return defs, outs, nil
 }
 
+// readChunkBundleDefs reconstructs the chunk defs from the split's staged
+// per-chunk bundle directories (chunk_NNNNN/), resolving each bundle's file
+// leaves to their staged paths. Unlike the plain chunks.json summary, this gives
+// the join phase localized paths for files the split produced (e.g. a reference
+// index passed in the chunk def), so they resolve on an isolated join worker with
+// no shared filesystem.
+func readChunkBundleDefs(dirs []string) ([]shim.ChunkDef, error) {
+	defs := make([]shim.ChunkDef, 0, len(dirs))
+
+	for _, d := range dirs {
+		raw, err := readBundle(d)
+		if err != nil {
+			return nil, err
+		}
+
+		var b struct {
+			Args      map[string]json.RawMessage `json:"args"`
+			Resources shim.Resources             `json:"resources"`
+		}
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, fmt.Errorf("parse chunk bundle %s: %w", d, err)
+		}
+
+		if b.Args == nil {
+			b.Args = map[string]json.RawMessage{}
+		}
+
+		defs = append(defs, shim.ChunkDef{Args: b.Args, Resources: b.Resources})
+	}
+
+	return defs, nil
+}
+
 // readBundle resolves a bundle directory into its payload (file leaves rewritten
 // to absolute paths), wrapping the error for the caller's context.
 func readBundle(dir string) (json.RawMessage, error) {

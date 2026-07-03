@@ -46,19 +46,20 @@ func TestBundleRoundTrip(t *testing.T) {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
-	// The file was staged into the bundle under a flat ordinal leaf name (no
-	// original basename in transport) and the payload now holds its marker.
+	// The file was staged into the bundle under an ordinal leaf name that keeps
+	// the source's extension (so typed martian filetypes resolve it), and the
+	// payload now holds its marker.
 	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(raw), "@mre:file:f/L0000") {
-		t.Errorf("data.json should contain a flat ordinal file marker, got: %s", raw)
+	if !strings.Contains(string(raw), "@mre:file:f/L0000.txt") {
+		t.Errorf("data.json should contain an ordinal file marker keeping the extension, got: %s", raw)
 	}
 
-	if _, err := os.Stat(filepath.Join(bundle, "f", "L0000")); err != nil {
-		t.Errorf("leaf should be staged as f/L0000: %v", err)
+	if _, err := os.Stat(filepath.Join(bundle, "f", "L0000.txt")); err != nil {
+		t.Errorf("leaf should be staged as f/L0000.txt: %v", err)
 	}
 
 	// Read it back; the marker resolves to an absolute path that exists.
@@ -153,6 +154,57 @@ func TestBundleMissingFileKeepsPath(t *testing.T) {
 	}
 	if marked["n"] != float64(3) {
 		t.Errorf("non-file value n = %v, want 3", marked["n"])
+	}
+}
+
+// TestMarkFilesPreservesExtension guards bug #6: a typed martian filetype
+// (bincode, h5, json.gz, …) reconstructs its canonical extension when a stage
+// opens the path, so a leaf staged bare as `L0000` is looked for at
+// `L0000.bincode` and fails (this broke FILTER_BARCODES.join reading each chunk's
+// bincode output). The staged leaf must keep the source's extension, including
+// multi-part ones; a source with no extension stays bare.
+func TestMarkFilesPreservesExtension(t *testing.T) {
+	dir := t.TempDir()
+
+	for _, name := range []string{"a.bincode", "b.json.gz", "c"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	params := []ir.Param{
+		{Name: "typed", BaseType: "bincode", IsFile: true},
+		{Name: "multi", BaseType: "json.gz", IsFile: true},
+		{Name: "plain", BaseType: "file", IsFile: true},
+	}
+	payload := map[string]any{
+		"typed": filepath.Join(dir, "a.bincode"),
+		"multi": filepath.Join(dir, "b.json.gz"),
+		"plain": filepath.Join(dir, "c"),
+	}
+
+	bundle := filepath.Join(dir, "bundle")
+	marked, err := shim.MarkFiles(bundle, payload, params, fileTable())
+	if err != nil {
+		t.Fatalf("MarkFiles: %v", err)
+	}
+
+	// Ordinal order follows param order; each leaf keeps the source extension
+	// (multi-part preserved), and a source with no dot stays bare.
+	want := map[string]string{
+		"typed": shim.FileMarker + "f/L0000.bincode",
+		"multi": shim.FileMarker + "f/L0001.json.gz",
+		"plain": shim.FileMarker + "f/L0002",
+	}
+	for k, w := range want {
+		if marked[k] != w {
+			t.Errorf("%s marker = %v, want %q", k, marked[k], w)
+		}
+
+		rel := strings.TrimPrefix(w, shim.FileMarker)
+		if _, err := os.Stat(filepath.Join(bundle, rel)); err != nil {
+			t.Errorf("leaf %s not staged: %v", rel, err)
+		}
 	}
 }
 

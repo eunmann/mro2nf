@@ -1,0 +1,29 @@
+# Regression fixture: a split stage whose split() CREATES a file and references
+# it in every chunk def (an `in file` chunk param), then the JOIN reads that
+# split-produced file. On a shared filesystem this works; on an object-store /
+# copy-staged backend (no shared FS) the join must receive the split-produced
+# file staged, not a bare absolute path into the split's scratch. Mirrors
+# CellRanger MAKE_SHARD, which puts a split-built feature_reference in each chunk
+# def and reads it in the join.
+filetype txt;
+
+stage SPLIT_DEF_FILE(
+    in  int   n,
+    out int   total,
+    src py    "stages/splitdef",
+) split using (
+    in  file  shared,
+    in  int   v,
+    out int   part,
+)
+
+pipeline SPLIT_DEF_FILE_PIPE(
+    in  int  n,
+    out int  total,
+)
+{
+    call SPLIT_DEF_FILE(n = self.n,)
+    return (total = SPLIT_DEF_FILE.total,)
+}
+
+call SPLIT_DEF_FILE_PIPE(n = 3,)

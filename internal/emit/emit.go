@@ -87,6 +87,17 @@ type Options struct {
 	MRODir string
 	// StageCode maps each stage name to its (absolute) stage code path.
 	StageCode map[string]string
+	// StageArgs maps each stage name to the extra args from its `src` declaration
+	// (e.g. a comp stage's `martian <stage>` dispatch selector). Empty for a plain
+	// py/exec stage.
+	StageArgs map[string][]string
+	// ExternalRuntime, for a container target, means the operator's image already
+	// provides mre, the adapters, mrjob, and all stage code at the paths passed in
+	// (Mre/Shell/Mrjob/StageCode) — so skip vendoring them into a runtime/ build
+	// context and skip writing a Dockerfile, baking those paths as-is. Used when
+	// basing the image on an existing runtime (e.g. a full CellRanger install)
+	// rather than the generated python:slim one.
+	ExternalRuntime bool
 	// Container, when set, is the image used for every process (process.container
 	// in nextflow.config) — required by container backends like AWS Batch.
 	Container string
@@ -134,12 +145,14 @@ func Emit(prog *ir.Program, opts Options) error {
 		mrjob:   opts.Mrjob,
 		monitor: opts.Monitor,
 		code:    opts.StageCode,
+		srcArgs: opts.StageArgs,
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker
 	// build context (mre + adapters + stage code), so the image — not the host —
-	// supplies the runtime.
-	if target.isContainer() {
+	// supplies the runtime. With ExternalRuntime the image is operator-supplied and
+	// already contains everything at the passed paths, so skip vendoring entirely.
+	if target.isContainer() && !opts.ExternalRuntime {
 		cb, err := containerBuild(opts, target)
 		if err != nil {
 			return err

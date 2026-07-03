@@ -92,6 +92,32 @@ func loadAndEmit(t *testing.T) string {
 	})
 }
 
+// TestEmitSplitJoinReceivesChunkDefFiles guards that a split stage's JOIN phase
+// receives the split-produced chunk-def files as staged bundles (localized paths)
+// — not just the raw chunks.json summary. A file the split creates into a chunk
+// def (e.g. CellRanger MAKE_SHARD's feature_reference) is otherwise a bare
+// absolute path into the split's scratch, unreadable on a no-shared-filesystem
+// join worker (AWS Batch/S3). Covers both the fused (pipeline-inlined) and the
+// generic wf_ split-join wirings, plus the JOIN process staging + -chunkbundles.
+func TestEmitSplitJoinReceivesChunkDefFiles(t *testing.T) {
+	dir := loadAndEmit(t)
+
+	pipe := readFile(t, filepath.Join(dir, "modules", "pipe_SUM_SQUARE_PIPELINE.nf"))
+	if !strings.Contains(pipe, "_SP.out.chunks.collect().ifEmpty([])") {
+		t.Errorf("fused split JOIN must be passed the split's chunk-def bundles (SP.out.chunks.collect()); got:\n%s", pipe)
+	}
+
+	stage := readFile(t, filepath.Join(dir, "modules", "stage_SUM_SQUARES.nf"))
+	if !strings.Contains(stage, "SUM_SQUARES_SPLIT.out.chunks.collect().ifEmpty([])") {
+		t.Errorf("generic wf_ split JOIN must be passed the chunk-def bundles; got:\n%s", stage)
+	}
+	for _, want := range []string{"path chunkbundles", "-chunkbundles "} {
+		if !strings.Contains(stage, want) {
+			t.Errorf("split JOIN process must stage chunk-def bundles (missing %q)", want)
+		}
+	}
+}
+
 func TestEmitFiles(t *testing.T) {
 	dir := loadAndEmit(t)
 
@@ -341,7 +367,7 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		"val join",
 		// the workflow parses joinres.json into the join val
 		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }",
-		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)",
+		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_SPLIT.out.chunks.collect().ifEmpty([]), SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("stage_SUM_SQUARES.nf missing join-override wiring %q", want)
@@ -361,7 +387,7 @@ func TestEmitSplitJoinRunsWithZeroChunks(t *testing.T) {
 		t.Fatalf("read stage module: %v", err)
 	}
 
-	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)"
+	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_SPLIT.out.chunks.collect().ifEmpty([]), SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)"
 	if !strings.Contains(string(data), want) {
 		t.Errorf("non-keyed JOIN wiring must guard the empty channel; missing %q", want)
 	}

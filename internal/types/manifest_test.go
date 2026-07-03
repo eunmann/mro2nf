@@ -2,6 +2,7 @@ package types_test
 
 import (
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -64,5 +65,69 @@ func TestManifestRoundTrip(t *testing.T) {
 
 	if !seen["a.txt"] {
 		t.Error("table from loaded manifest did not visit file leaf")
+	}
+}
+
+// TestTableDescendsIntoCallableOutputBundle guards the bug where a param typed as
+// a callable's whole output bundle (e.g. `matrix_computer_outs _SLFE_MATRIX_COMPUTER`,
+// forwarding a sub-pipeline's outputs) left every file it carried unmarked. The
+// callable name is not a declared struct, so the walk table must register each
+// callable's outputs as a struct keyed by the callable name — otherwise the walk
+// stops at the bundle and the nested files stay task-local paths that vanish on
+// the next isolated worker. The bundle also nests a real struct to prove the walk
+// keeps descending through both kinds.
+func TestTableDescendsIntoCallableOutputBundle(t *testing.T) {
+	prog := &ir.Program{
+		Structs: map[string]*ir.StructType{
+			// A file-typed struct nested inside the pipeline's outputs.
+			"RnaChunk": {Name: "RnaChunk", Fields: []ir.Param{
+				{Name: "r1", BaseType: "fastq", IsFile: true},
+			}},
+		},
+		Pipelines: map[string]*ir.Pipeline{
+			// A sub-pipeline whose outputs are a file, a file array, and an
+			// array of a file-bearing struct — the shape of a real counter bundle.
+			"SUB": {Name: "SUB", Out: []ir.Param{
+				{Name: "matrix_h5", BaseType: "h5", IsFile: true},
+				{Name: "shards", BaseType: "bincode", IsFile: true, ArrayDim: 1},
+				{Name: "read_chunks", BaseType: "RnaChunk", ArrayDim: 1},
+			}},
+		},
+		Stages: map[string]*ir.Stage{
+			// A consumer that receives the whole sub-pipeline output as one input,
+			// typed by the pipeline name (IsFile true: Martian marks a file-bearing
+			// bundle as a directory kind).
+			"CONSUMER": {Name: "CONSUMER", In: []ir.Param{
+				{Name: "sub_outs", BaseType: "SUB", IsFile: true},
+			}},
+		},
+	}
+
+	man := types.BuildManifest(prog)
+
+	fn, seen := collector()
+
+	payload := map[string]any{
+		"sub_outs": map[string]any{
+			"matrix_h5":   "/scratch/matrix.h5",
+			"shards":      []any{"/scratch/s0.bincode", "/scratch/s1.bincode"},
+			"read_chunks": []any{map[string]any{"r1": "/scratch/r1.fastq"}},
+		},
+	}
+
+	if _, err := man.Table().Apply(man.Callables["CONSUMER"].In, payload, fn); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	sort.Strings(*seen)
+
+	want := []string{
+		"/scratch/matrix.h5",
+		"/scratch/r1.fastq",
+		"/scratch/s0.bincode",
+		"/scratch/s1.bincode",
+	}
+	if diff := cmp.Diff(want, *seen); diff != "" {
+		t.Errorf("walk did not reach every file leaf inside the callable output bundle (-want +got):\n%s", diff)
 	}
 }

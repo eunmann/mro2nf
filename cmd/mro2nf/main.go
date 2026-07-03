@@ -45,6 +45,7 @@ func run(args []string) error {
 	containerFlag := fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)")
 	targetFlag := fs.String("target", "local", "execution backend: local | awsbatch | healthomics")
 	monitorFlag := fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)")
+	externalRuntimeFlag := fs.Bool("external-runtime", false, "container target: the image already provides mre/adapters/mrjob/stage code at the given paths; skip vendoring them and skip the Dockerfile")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -88,6 +89,7 @@ func run(args []string) error {
 	if err := emitProgram(prog, fs.Arg(0), opts{
 		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag,
 		container: *containerFlag, monitor: *monitorFlag, target: target,
+		externalRuntime: *externalRuntimeFlag,
 	}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
@@ -141,6 +143,7 @@ func runOverrides(args []string) error {
 type opts struct {
 	outDir, mre, shell, mrjob, container string
 	monitor                              bool
+	externalRuntime                      bool
 	target                               emit.Target
 }
 
@@ -150,37 +153,55 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 	mroDir := filepath.Dir(src)
 
 	code := make(map[string]string, len(prog.Stages))
+	srcArgs := make(map[string][]string, len(prog.Stages))
 
 	for name, s := range prog.Stages {
-		path := s.SrcPath
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(mroDir, path)
-		}
+		code[name] = resolveStageCode(s.SrcPath, mroDir)
 
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("resolve stage %s src: %w", name, err)
+		if len(s.SrcArgs) > 0 {
+			srcArgs[name] = s.SrcArgs
 		}
-
-		code[name] = abs
 	}
 
 	if err := emit.Emit(prog, emit.Options{
-		OutDir:    o.outDir,
-		Mre:       absOrSelf(o.mre),
-		Shell:     absOrSelf(o.shell),
-		Mrjob:     absOrSelf(o.mrjob),
-		Container: o.container,
-		Monitor:   o.monitor,
-		Target:    o.target,
-		MROFile:   filepath.Base(src),
-		MRODir:    mroDir,
-		StageCode: code,
+		OutDir:          o.outDir,
+		Mre:             absOrSelf(o.mre),
+		Shell:           absOrSelf(o.shell),
+		Mrjob:           absOrSelf(o.mrjob),
+		Container:       o.container,
+		Monitor:         o.monitor,
+		ExternalRuntime: o.externalRuntime,
+		Target:          o.target,
+		MROFile:         filepath.Base(src),
+		MRODir:          mroDir,
+		StageCode:       code,
+		StageArgs:       srcArgs,
 	}); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}
 
 	return nil
+}
+
+// resolveStageCode turns a stage's `src` path into the absolute path baked as
+// -stagecode, resolving a relative path against the MRO dir. A comp stage names
+// its executable (e.g. `cr_lib`, dispatched by its `martian <stage>` src args);
+// it is resolved to an absolute path too, NOT left bare — a compiled Martian
+// adapter derives its own location via current_exe/argv[0] (see
+// martian_stages!), which fails for a bare name with no path. Deployments that
+// invoke a bare binary via a shared filesystem place a resolvable file (often a
+// symlink to the real binary) at <mroDir>/<name> so this path exists at run time.
+func resolveStageCode(srcPath, mroDir string) string {
+	path := srcPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(mroDir, path)
+	}
+
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+
+	return path
 }
 
 // absOrSelf returns the absolute form of a path, falling back to the original
