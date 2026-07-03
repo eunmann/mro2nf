@@ -29,7 +29,10 @@ type genCtx struct {
 	monitor bool
 	// features holds the opt-in emission toggles (mirrored from Options).
 	features featureSet
-	code     map[string]string // stage name -> stage code path
+	// native selects the channel-native orchestration path (#76): the entry args
+	// are baked and staged directly, so no BUILD_ENTRY_ARGS task runs.
+	native bool
+	code   map[string]string // stage name -> stage code path
 	// plan is the whole-program emission plan (per-call kinds + the keyed set),
 	// resolved once in buildPlan so the process/wiring/include sites read a fixed
 	// decision instead of re-deriving fuseable*/forward/chain predicates.
@@ -1921,7 +1924,28 @@ process PUBLISH_LEAF {
 // pops the staged paths back into the value in the canonical type-walk order and
 // marks them into the bundle. An unset input is fed the empty sentinel and keeps
 // its baked default.
+// genNativeEntry emits the native workflow (#76 M1): the entry args are baked
+// into entry_resolved/ at transpile time (see bakeEntryArgs), so instead of a
+// BUILD_ENTRY_ARGS task the workflow stages that bundle as a value channel and
+// runs the pipeline directly. The publish wiring is identical to the default.
+func genNativeEntry(b *strings.Builder, entryWorkflow string) {
+	fmt.Fprintf(b, `
+workflow {
+  types = file("${projectDir}/_assets/types.json")
+  pipeargs = Channel.value(tuple(file("${projectDir}/entry_resolved/data.json"), file("${projectDir}/entry_resolved/f/*")))
+  %[1]s(pipeargs)
+`, entryWorkflow)
+	genPublishWiring(b, entryWorkflow)
+	b.WriteString("}\n")
+}
+
 func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
+	if g.native {
+		genNativeEntry(b, entryWorkflow)
+
+		return
+	}
+
 	ins := entryInParams(prog)
 
 	var decls, fileInputs, fileChans strings.Builder
@@ -1999,18 +2023,28 @@ workflow {
 %[8]s  BUILD_ENTRY_ARGS(%[9]s)
   pipeargs = BUILD_ENTRY_ARGS.out.first()
   %[5]s(pipeargs)
-  // Publish without a single-node funnel (#12): LAYOUT reads only the sidecar to
+`, decls.String(), g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
+		fileInputs.String(), flatFlag, fileChans.String(), strings.Join(callArgs, ", "),
+		bundleOutput("entry_resolved"))
+
+	genPublishWiring(b, entryWorkflow)
+	b.WriteString("}\n")
+}
+
+// genPublishWiring emits the shared publish tail (#12): LAYOUT reads only the
+// sidecar to compute the outs/ layout; PUBLISH_LEAF publishes each leaf in
+// parallel. multiMap splits the final output tuple so both consume it safely.
+// Used by both the default (BUILD_ENTRY_ARGS) and native entry workflows.
+func genPublishWiring(b *strings.Builder, entryWorkflow string) {
+	fmt.Fprintf(b, `  // Publish without a single-node funnel (#12): LAYOUT reads only the sidecar to
   // compute the outs/ layout; PUBLISH_LEAF publishes each leaf into place in
   // parallel. multiMap splits the final output tuple so both consume it safely.
-  ep = %[5]s.out.multiMap { s, l -> side: s; leaves: l }
+  ep = %[1]s.out.multiMap { s, l -> side: s; leaves: l }
   LAYOUT(ep.side, types)
   lmap = LAYOUT.out.layout.map { f -> Mro2nf.parseJson(f) }
   leaves = ep.leaves.flatMap { l -> (l instanceof List ? l : [l]).collect { leaf -> tuple(leaf.name, leaf) } }
   PUBLISH_LEAF(leaves.combine(lmap).flatMap { base, leaf, m -> (m[base] ?: []).collect { rel -> tuple(rel, leaf) } })
-}
-`, decls.String(), g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
-		fileInputs.String(), flatFlag, fileChans.String(), strings.Join(callArgs, ", "),
-		bundleOutput("entry_resolved"))
+`, entryWorkflow)
 }
 
 // fileFlattenExpr renders a Groovy expression that flattens the file leaves of a
