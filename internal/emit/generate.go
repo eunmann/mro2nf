@@ -1271,13 +1271,6 @@ func fuseableStageCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, 
 	return s, true
 }
 
-// chainFusion reports whether consumer call c is the downstream end of a linear
-// chain that -fuse-chains folds into one task (#59, Lever 4): its single call-ref
-// input is a *source* leaf stage (no call inputs of its own) that feeds only c,
-// and both stages request identical resources — so the one fused task's
-// -threads/-memgb are correct for both, keeping output byte-identical. It returns
-// the producer call and both stages. Producers are always sources, so a fused
-// producer is never itself a consumer end — no 3-stage chains, no conflicts.
 // chainFusion returns the maximal linear run of leaf stages ending at c that
 // -fuse-chains folds into one task (#59 Lever 4, extended to N stages by #81):
 // source-first, each stage feeding only the next, all equal-resource fuseable
@@ -1331,10 +1324,10 @@ func chainFusion(c ir.Call, p *ir.Pipeline, prog *ir.Program, fuseChains bool) (
 	return chain, true
 }
 
-// chainConsumer reports whether c can be the downstream end of a fused chain: a
-// non-split leaf stage that is not mapped/disabled/preflight. Unlike fuseableLeaf
-// it permits a pure-forward consumer (#73) — its bind is a forward the fused
-// process runs inline, so a source feeding a forwarding stage folds too.
+// chainConsumer reports whether c can be a link in a fused chain: a non-split
+// leaf stage that is not mapped/disabled/preflight. It permits a pure-forward
+// stage (#73) — its bind is a forward the fused process runs inline — so a source
+// feeding a forwarding stage folds too.
 func chainConsumer(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
 	if c.Mapped || c.Disabled != nil || c.Preflight {
 		return nil, false
