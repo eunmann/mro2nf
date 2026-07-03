@@ -1,0 +1,50 @@
+# #81 N-stage chain: A -> B -> C, each single-consumer & equal-resource, A a
+# source. With -fuse-chains all three fold into one task (C's process); A and B
+# fold away. Output byte-identical to mrp either way.
+stage A(
+    in  int x,
+    out int y,
+    src py "stages/a",
+)
+
+stage B(
+    in  int y,
+    out int z,
+    src py "stages/b",
+)
+
+stage C(
+    in  int z,
+    in  int k,
+    out int w,
+    src py "stages/c",
+)
+
+pipeline P(
+    in  int x,
+    in  int k,
+    out int w,
+)
+{
+    call A(
+        x = self.x,
+    )
+
+    call B(
+        y = A.y,
+    )
+
+    call C(
+        z = B.z,
+        k = self.k,
+    )
+
+    return (
+        w = C.w,
+    )
+}
+
+call P(
+    x = 4,
+    k = 3,
+)

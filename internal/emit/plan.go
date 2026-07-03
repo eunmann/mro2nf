@@ -31,6 +31,12 @@ const (
 	kindFoldedOff                     // #59 Lever 1 always-disabled call: emit only its null output
 )
 
+// chainLink is one stage in a fused linear chain: the call and its stage.
+type chainLink struct {
+	call  ir.Call
+	stage *ir.Stage
+}
+
 // callPlan is the decided emission strategy for one call plus the analysis payload
 // each site needs, so nothing is recomputed downstream.
 type callPlan struct {
@@ -39,10 +45,9 @@ type callPlan struct {
 	stage *ir.Stage
 	// fwd is the producer call name for kindForward.
 	fwd string
-	// prod/prodStage/consStage describe a kindFusedChain fusion.
-	prod      ir.Call
-	prodStage *ir.Stage
-	consStage *ir.Stage
+	// chain is the fused linear run for kindFusedChain, source-first and ending at
+	// this call (length >= 2); every stage but the last folds away (#59 Lever 4).
+	chain []chainLink
 	// disableTask reports that a mapped/plain disabled call needs a standalone
 	// DISABLE process (the flag is not driver-gateable).
 	disableTask bool
@@ -104,8 +109,8 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 			return callPlan{kind: kindFusedAway}
 		}
 
-		if prod, ps, cs, ok := chainFusion(c, p, prog, f.fuseChains); ok {
-			return callPlan{kind: kindFusedChain, prod: prod, prodStage: ps, consStage: cs}
+		if chain, ok := chainFusion(c, p, prog, f.fuseChains); ok {
+			return callPlan{kind: kindFusedChain, chain: chain}
 		}
 	}
 
