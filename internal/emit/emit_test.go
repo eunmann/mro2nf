@@ -294,23 +294,20 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 
 	mod := string(data)
 	for _, want := range []string{
-		// the keyed disable bind exists alongside the non-keyed one
-		"process DISABLE_5_INNER__DBL_K {",
-		// the disable flag is resolved per outer fork and branched run/skip
-		"gk_DBL = pa_l.flatMap { x -> x }.join(DISABLE_5_INNER__DBL_K.out).branch",
+		// the disable flag (self.skip) is read natively per outer fork from the
+		// per-fork args (row[1]) and branched run/skip — no DISABLE_K task (#59)
+		"gk_DBL = pa_l.flatMap { x -> x }.branch { row ->",
+		"def off = Mro2nf.disabledDir(row[1], 'skip')",
 		// skipped outer forks emit the null bundle keyed by their key
 		`sk_DBL = gk_DBL.skip.map { row -> tuple(row[0], file("${projectDir}/nulls/5_INNER__DBL")) }`,
-		// only enabled forks feed FORKBIND (disable bundle stripped off the row);
-		// the fork stages the shared types + its (reused) bind spec, not all assets
-		`FORK_5_INNER__DBL_K(gk_DBL.run.map { row -> row[0..<row.size() - 1] }, types, file("${projectDir}/_assets/bindspecs/BIND_5_INNER__DBL.json"))`,
+		// enabled forks feed FORKBIND directly (no disable bundle to strip); the
+		// fork stages the shared types + its (reused) bind spec, not all assets
+		`FORK_5_INNER__DBL_K(gk_DBL.run, types, file("${projectDir}/_assets/bindspecs/BIND_5_INNER__DBL.json"))`,
 		// skipped forks are mixed back so every outer key has a result
 		"ch_DBL_l = MERGE_5_INNER__DBL_K.out.mix(sk_DBL).toList()",
 		// forks are enumerated from forknames.json (object-store-safe, not
 		// listFiles) via the shipped helper (#49)
 		"Mro2nf.forkTuples(ok, d)",
-		// the disable flag is read via the shipped helper (#49), not an inline
-		// JsonSlurper closure stamped into the generated code
-		"def off = Mro2nf.disabled(row[-1])",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("pipe_INNER.nf missing keyed disable wiring %q", want)
@@ -321,8 +318,13 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 		t.Error("pipe_INNER.nf uses listFiles() (cannot enumerate an s3:// work dir)")
 	}
 
-	if strings.Contains(mod, "JsonSlurper().parseText(row[-1]") {
-		t.Error("pipe_INNER.nf still stamps the inline disable-flag closure; use Mro2nf.disabled")
+	// The keyed disable is native now — no DISABLE_K bind, no join on its output.
+	if strings.Contains(mod, "process DISABLE_5_INNER__DBL_K") {
+		t.Error("a natively-gated keyed disable must emit no DISABLE_K process (#59)")
+	}
+
+	if strings.Contains(mod, "Mro2nf.disabled(row[-1])") {
+		t.Error("keyed disable must read the flag natively (disabledDir), not from a DISABLE bundle")
 	}
 }
 

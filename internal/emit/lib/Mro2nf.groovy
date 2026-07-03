@@ -42,6 +42,13 @@ class Mro2nf {
         (boolean) ((Map) parseJson(jsonFile)).get(field)
     }
 
+    // disabledDir is disabledField for a bundle DIRECTORY (its data.json) rather
+    // than the data.json file — used by the keyed disable gate, whose per-fork
+    // pipeline args arrive as a staged bundle dir (#59).
+    static boolean disabledDir(Path bundleDir, String field) {
+        (boolean) parseSidecar(bundleDir).get(field)
+    }
+
     // parseJson parses a JSON file by Path (e.g. a split's joinres.json), keeping
     // the filesystem/scheme intact for an s3:// work dir.
     static Object parseJson(Path jsonFile) {
