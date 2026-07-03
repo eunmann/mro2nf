@@ -1,0 +1,41 @@
+# #59 Lever 4 regression: SRC is a single-consumer source stage feeding only the
+# transform-consumer USE (which also reads self.k), and SRC's output is not
+# returned. With -fuse-chains, SRC folds into USE's task (one node); output is
+# byte-identical to mrp either way.
+stage SRC(
+    in  int x,
+    out int y,
+    src py "stages/src",
+)
+
+stage USE(
+    in  int y,
+    in  int k,
+    out int z,
+    src py "stages/use",
+)
+
+pipeline CH(
+    in  int x,
+    in  int k,
+    out int z,
+)
+{
+    call SRC(
+        x = self.x,
+    )
+
+    call USE(
+        y = SRC.y,
+        k = self.k,
+    )
+
+    return (
+        z = USE.z,
+    )
+}
+
+call CH(
+    x = 4,
+    k = 3,
+)

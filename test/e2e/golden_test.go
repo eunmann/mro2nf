@@ -90,6 +90,9 @@ var goldenCases = []struct {
 	// Regression for #59 Lever 2: a map call disabled on an UPSTREAM output ref
 	// (FLAG.on), gated natively from the upstream channel (no DISABLE task).
 	{"disabled_map_ref", "disabled_map_ref", "expected/outs.json"},
+	// #59 Lever 4 baseline: this chain fixture must be byte-identical with the
+	// default (no -fuse-chains); TestFuseChains reruns it with the flag on.
+	{"chain_fuse", "chain_fuse", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
@@ -136,6 +139,37 @@ func TestGolden(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFuseChains verifies #59 Lever 4: with -fuse-chains, a single-consumer
+// source stage folds into its consumer's task, and the run stays byte-identical
+// to the golden. chain_fuse's SRC folds into the STAGE_2_CH__USE process (which
+// runs both stages' bind+main inline); no standalone SRC process remains.
+func TestFuseChains(t *testing.T) {
+	requireTools(t, "nextflow", "java")
+
+	proj := transpile(t, "chain_fuse", "-fuse-chains")
+
+	mod, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_CH.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(mod), "spec_prod.json") {
+		t.Errorf("-fuse-chains did not emit the fused chain process:\n%s", mod)
+	}
+
+	if strings.Contains(string(mod), "process STAGE_2_CH__SRC") {
+		t.Errorf("-fuse-chains left a standalone SRC process (not folded):\n%s", mod)
+	}
+
+	if err := runNextflow(t, proj); err != nil {
+		t.Fatal(err)
+	}
+
+	goldenJSON(t,
+		filepath.Join(proj, "results", "pipeline_outs.json"),
+		filepath.Join(root, "testdata", "chain_fuse", "expected", "outs.json"))
 }
 
 // assertPublishedLeaves walks the golden outs JSON and requires every string
