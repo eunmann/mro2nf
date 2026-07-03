@@ -87,6 +87,71 @@ func TestBundleRoundTrip(t *testing.T) {
 	}
 }
 
+// TestMarkFilesDirLeaf guards #43: a directory leaf is staged with DirMarker so
+// its ground-truth dir-ness (stat at staging time) travels to publish, rather
+// than being inferred from the declared output type. A plain-file leaf keeps
+// FileMarker; both resolve to a real absolute path on read-back.
+func TestMarkFilesDirLeaf(t *testing.T) {
+	dir := t.TempDir()
+
+	// A directory the payload references, declared with a plain `file` type — the
+	// mistyped-directory shape #43 is about.
+	srcDir := filepath.Join(dir, "outdir")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "part.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	params := []ir.Param{{Name: "d", BaseType: "file", IsFile: true}}
+	payload := map[string]any{"d": srcDir}
+
+	marked, err := shim.MarkFiles(dir, payload, params, fileTable())
+	if err != nil {
+		t.Fatalf("MarkFiles: %v", err)
+	}
+
+	got, ok := marked["d"].(string)
+	if !ok {
+		t.Fatalf("marked d = %v, want a marker string", marked["d"])
+	}
+
+	rel, isDir, ok := shim.CutMarker(got)
+	if !ok || !isDir {
+		t.Errorf("CutMarker(%q) = %q, %v, %v; want a dir marker", got, rel, isDir, ok)
+	}
+
+	// The staged leaf is a directory carrying the original tree.
+	if fi, err := os.Stat(filepath.Join(dir, rel)); err != nil || !fi.IsDir() {
+		t.Errorf("staged leaf %s should be a directory (err %v)", rel, err)
+	}
+}
+
+// TestMarkerRoundTrip pins the marker encode/decode contract both ways.
+func TestMarkerRoundTrip(t *testing.T) {
+	cases := []struct {
+		rel   string
+		isDir bool
+	}{
+		{"f/L0000", false},
+		{"f/L0001", true},
+	}
+
+	for _, c := range cases {
+		m := shim.Marker(c.rel, c.isDir)
+
+		rel, isDir, ok := shim.CutMarker(m)
+		if !ok || rel != c.rel || isDir != c.isDir {
+			t.Errorf("CutMarker(Marker(%q,%v)) = %q,%v,%v", c.rel, c.isDir, rel, isDir, ok)
+		}
+	}
+
+	if _, _, ok := shim.CutMarker("/plain/path"); ok {
+		t.Error("CutMarker on a non-marker string should report ok=false")
+	}
+}
+
 // TestBundleNestedStructFile checks a file nested inside a struct leaf travels.
 func TestBundleNestedStructFile(t *testing.T) {
 	dir := t.TempDir()
