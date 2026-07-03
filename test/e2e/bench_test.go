@@ -4,10 +4,12 @@ package e2e
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +53,10 @@ func TestBench(t *testing.T) {
 		}
 
 		if w := os.Getenv("BENCH_WORKDIR"); w != "" {
+			if err := requireLocalWorkdir(w); err != nil {
+				t.Fatal(err)
+			}
+
 			args = append(args, "-work-dir", w)
 		}
 
@@ -70,6 +76,51 @@ func TestBench(t *testing.T) {
 			t.Fatalf("bench_metrics %s: %v\n%s", b.name, err, errBuf.String())
 		}
 	}
+
+	runBenchReport(t, metrics)
+}
+
+// requireLocalWorkdir rejects a non-local BENCH_WORKDIR. The bench gate's `refs`
+// metric is a local scan of the work dir (bench_metrics.count_refs); over an
+// object store (s3://…) that scan cannot walk the tree, so `refs` reads 0 and
+// the regression gate would pass vacuously — a real S3-transfer regression would
+// slip through. Rather than report a meaningless pass, the harness fails loudly:
+// collecting the object-store metric is out of scope (see docs/BENCHMARKS.md).
+func requireLocalWorkdir(w string) error {
+	if i := strings.Index(w, "://"); i >= 0 && w[:i] != "file" {
+		return fmt.Errorf("BENCH_WORKDIR=%q is non-local (%s://): the bench gate's "+
+			"refs metric is a local work-dir scan and reads 0 over an object store, "+
+			"so the gate would pass vacuously; run bench against a local work dir "+
+			"(see docs/BENCHMARKS.md)", w, w[:i])
+	}
+
+	return nil
+}
+
+func TestRequireLocalWorkdir(t *testing.T) {
+	cases := []struct {
+		workdir string
+		wantErr bool
+	}{
+		{"", false},
+		{"/tmp/work", false},
+		{"./work", false},
+		{"file:///tmp/work", false},
+		{"s3://bucket/work", true},
+		{"gs://bucket/work", true},
+		{"az://container/work", true},
+	}
+
+	for _, c := range cases {
+		err := requireLocalWorkdir(c.workdir)
+		if (err != nil) != c.wantErr {
+			t.Errorf("requireLocalWorkdir(%q) error = %v, wantErr %v", c.workdir, err, c.wantErr)
+		}
+	}
+}
+
+func runBenchReport(t *testing.T, metrics string) {
+	t.Helper()
 
 	report := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_report.py"),
 		metrics, filepath.Join(root, "bench", "baseline.json"))

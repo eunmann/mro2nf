@@ -22,13 +22,21 @@ executor — only the config profile differs. The harness takes the project as-i
 and lets you point it at another backend:
 
 ```sh
-BENCH_PROFILE=awsbatch BENCH_WORKDIR=s3://bucket/work make bench
+BENCH_PROFILE=awsbatch BENCH_WORKDIR=/mnt/shared/work make bench
 ```
 
 The default is the local executor so CI needs no cloud credentials. On a shared
 filesystem (local, HealthOmics) a staging is a cheap hard-link; on S3 it is a
 real object transfer. The `refs` metric below counts stagings either way, so the
 local number is the portable stand-in for the S3-object metric.
+
+**`BENCH_WORKDIR` must be a local path.** The `refs` gate is a local scan of the
+work dir (`bench_metrics.count_refs`); over an object store (`s3://…`) that scan
+cannot walk the tree, so `refs` reads 0 and the gate would pass vacuously —
+masking a real S3-transfer regression. The harness therefore rejects a non-local
+`BENCH_WORKDIR` (any `scheme://` other than `file`) rather than report a
+meaningless pass. Collecting the true S3-object metric needs S3 request logs or a
+wrapping proxy and is out of scope here (see below).
 
 ## Benchmarks
 
