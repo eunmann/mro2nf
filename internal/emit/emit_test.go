@@ -517,6 +517,32 @@ func TestEmitGPUAccelerator(t *testing.T) {
 	}
 }
 
+// TestEmitNativeDisableGate guards #59 Lever 2: a plain (non-mapped) disabled
+// call whose flag is a single top-level field reads it natively on the driver
+// (Mro2nf.disabledField) with no DISABLE task. modifiers_min gates TRIPLE on
+// self.skip; disabled_callref gates on an upstream output FLAG.on.
+func TestEmitNativeDisableGate(t *testing.T) {
+	m := emitFixture(t, "modifiers_min", map[string]string{"DOUBLE": "/x/d", "TRIPLE": "/x/t", "CHECK": "/x/c"})
+
+	top := readFile(t, filepath.Join(m, "modules", "pipe_TOP.nf"))
+	if !strings.Contains(top, "Mro2nf.disabledField(gd, 'skip')") {
+		t.Errorf("self.skip disable must be read natively:\n%s", top)
+	}
+	if strings.Contains(top, "process DISABLE") {
+		t.Errorf("a natively-gated disable must emit no DISABLE process:\n%s", top)
+	}
+
+	d := emitFixture(t, "disabled_callref", map[string]string{"FLAG": "/x/f", "WORK": "/x/w"})
+
+	dp := readFile(t, filepath.Join(d, "modules", "pipe_DC.nf"))
+	if !strings.Contains(dp, "Mro2nf.disabledField(gd, 'on')") {
+		t.Errorf("FLAG.on disable must be read natively from the upstream channel:\n%s", dp)
+	}
+	if strings.Contains(dp, "process DISABLE") {
+		t.Errorf("a natively-gated upstream-ref disable must emit no DISABLE process:\n%s", dp)
+	}
+}
+
 // TestEmitPrunesUnusedKeyedVariants guards #59: a stage/pipeline that never runs
 // under a map call gets no fork-keyed variant emitted, while a map-reachable one
 // keeps it. Behavior is unchanged (the pruned processes were never invoked) —

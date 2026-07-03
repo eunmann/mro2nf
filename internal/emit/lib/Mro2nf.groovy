@@ -34,6 +34,14 @@ class Mro2nf {
         (boolean) parseSidecar(bundleDir).get('disabled')
     }
 
+    // disabledField reads a disable-gate boolean directly from a source bundle's
+    // data.json (jsonFile) by top-level field name — the native alternative to a
+    // DISABLE task when the gate's ref resolves to a single top-level field: the
+    // pipeline input (self.<field>) or an upstream output (CALL.out.<field>) (#59).
+    static boolean disabledField(Path jsonFile, String field) {
+        (boolean) ((Map) parseJson(jsonFile)).get(field)
+    }
+
     // parseJson parses a JSON file by Path (e.g. a split's joinres.json), keeping
     // the filesystem/scheme intact for an s3:// work dir.
     static Object parseJson(Path jsonFile) {
