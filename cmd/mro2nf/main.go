@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/eunmann/mro2nf/internal/config"
 	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -52,6 +53,7 @@ func run(args []string) error {
 	monitorFlag := fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)")
 	fuseChainsFlag := fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)")
 	foldDisablesFlag := fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)")
+	configFlag := fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -67,6 +69,13 @@ func run(args []string) error {
 
 	if fs.NArg() != 1 {
 		return errUsage
+	}
+
+	if err := applyConfig(fs, *configFlag, fs.Arg(0), cliPtrs{
+		target: targetFlag, container: containerFlag, mre: mreFlag, shell: shellFlag,
+		mrjob: mrjobFlag, monitor: monitorFlag, fuseChains: fuseChainsFlag, foldDisables: foldDisablesFlag,
+	}); err != nil {
+		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
 	log := logging.New()
@@ -208,6 +217,53 @@ func reportDiagnostics(log zerolog.Logger, prog *ir.Program, fuseChains, foldDis
 	if emit.HasError(diags) {
 		return errFlagConflict
 	}
+
+	return nil
+}
+
+// cliPtrs collects the transpile flag value pointers a .mro2nf.yml may default.
+type cliPtrs struct {
+	target, container, mre, shell, mrjob *string
+	monitor, fuseChains, foldDisables    *bool
+}
+
+// applyConfig loads the .mro2nf.yml (explicit path, else alongside the .mro) and
+// sets each flag the user did NOT pass explicitly to the config's value —
+// precedence is builtin default < config file < explicit flag.
+func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
+	path := explicit
+	if path == "" {
+		path = filepath.Join(filepath.Dir(mroPath), config.FileName)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
+	applyStr := func(name string, dst, cv *string) {
+		if !set[name] && cv != nil {
+			*dst = *cv
+		}
+	}
+
+	applyBool := func(name string, dst, cv *bool) {
+		if !set[name] && cv != nil {
+			*dst = *cv
+		}
+	}
+
+	applyStr("target", p.target, cfg.Target)
+	applyStr("container", p.container, cfg.Container)
+	applyStr("mre", p.mre, cfg.Mre)
+	applyStr("shell", p.shell, cfg.Shell)
+	applyStr("mrjob", p.mrjob, cfg.Mrjob)
+	applyBool("monitor", p.monitor, cfg.Monitor)
+	applyBool("fuse-chains", p.fuseChains, cfg.FuseChains)
+	applyBool("fold-disables", p.foldDisables, cfg.FoldDisables)
 
 	return nil
 }
