@@ -93,6 +93,10 @@ type Options struct {
 	// Monitor enables per-stage virtual-memory enforcement in the shim (the mrp
 	// --monitor analog).
 	Monitor bool
+	// FuseChains opts into linear-chain stage fusion (#59 Lever 4): a single-
+	// consumer, equal-resource source stage is folded into its consumer's task,
+	// dropping a node at the cost of coarser -resume/retry granularity.
+	FuseChains bool
 	// Target is the execution backend the project is shaped for (default local).
 	Target Target
 }
@@ -131,14 +135,15 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	g := genCtx{
-		entry:   prog.Entry.Callable,
-		mroFile: opts.MROFile,
-		mre:     opts.Mre,
-		shell:   opts.Shell,
-		mrjob:   opts.Mrjob,
-		monitor: opts.Monitor,
-		code:    opts.StageCode,
-		keyed:   keyedReachable(prog),
+		entry:      prog.Entry.Callable,
+		mroFile:    opts.MROFile,
+		mre:        opts.Mre,
+		shell:      opts.Shell,
+		mrjob:      opts.Mrjob,
+		monitor:    opts.Monitor,
+		fuseChains: opts.FuseChains,
+		code:       opts.StageCode,
+		keyed:      keyedReachable(prog),
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker

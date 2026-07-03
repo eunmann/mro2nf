@@ -45,6 +45,7 @@ func run(args []string) error {
 	containerFlag := fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)")
 	targetFlag := fs.String("target", "local", "execution backend: local | awsbatch | healthomics")
 	monitorFlag := fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)")
+	fuseChainsFlag := fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -88,6 +89,7 @@ func run(args []string) error {
 	if err := emitProgram(prog, fs.Arg(0), opts{
 		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag,
 		container: *containerFlag, monitor: *monitorFlag, target: target,
+		fuseChains: *fuseChainsFlag,
 	}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
@@ -186,6 +188,7 @@ func readOverridesInput(arg string) ([]byte, error) {
 type opts struct {
 	outDir, mre, shell, mrjob, container string
 	monitor                              bool
+	fuseChains                           bool
 	target                               emit.Target
 }
 
@@ -211,16 +214,17 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 	}
 
 	if err := emit.Emit(prog, emit.Options{
-		OutDir:    o.outDir,
-		Mre:       absOrSelf(o.mre),
-		Shell:     absOrSelf(o.shell),
-		Mrjob:     absOrSelf(o.mrjob),
-		Container: o.container,
-		Monitor:   o.monitor,
-		Target:    o.target,
-		MROFile:   filepath.Base(src),
-		MRODir:    mroDir,
-		StageCode: code,
+		OutDir:     o.outDir,
+		Mre:        absOrSelf(o.mre),
+		Shell:      absOrSelf(o.shell),
+		Mrjob:      absOrSelf(o.mrjob),
+		Container:  o.container,
+		Monitor:    o.monitor,
+		FuseChains: o.fuseChains,
+		Target:     o.target,
+		MROFile:    filepath.Base(src),
+		MRODir:     mroDir,
+		StageCode:  code,
 	}); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}

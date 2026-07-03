@@ -573,6 +573,49 @@ func TestEmitNativeDisableGate(t *testing.T) {
 	}
 }
 
+// TestEmitFuseChains guards #59 Lever 4: -fuse-chains folds a single-consumer
+// source stage (SRC) into its transform-consumer's task (USE), running both
+// stages' bind+main inline in one process; without the flag they stay separate.
+func TestEmitFuseChains(t *testing.T) {
+	base := "../../testdata/chain_fuse"
+
+	ast, err := frontend.Parse(base+"/pipeline.mro", []string{base}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	emitCH := func(fuse bool) string {
+		dir := t.TempDir()
+		if err := emit.Emit(prog, emit.Options{
+			OutDir: dir, Mre: "mre", Shell: "/x/s", MROFile: "pipeline.mro", MRODir: base,
+			StageCode:  map[string]string{"SRC": "/x/src", "USE": "/x/use"},
+			FuseChains: fuse,
+		}); err != nil {
+			t.Fatalf("emit(fuse=%v): %v", fuse, err)
+		}
+
+		return readFile(t, filepath.Join(dir, "modules", "pipe_CH.nf"))
+	}
+
+	def := emitCH(false)
+	if !strings.Contains(def, "process STAGE_2_CH__SRC") || strings.Contains(def, "spec_prod.json") {
+		t.Errorf("default must keep SRC standalone and not fuse the chain:\n%s", def)
+	}
+
+	on := emitCH(true)
+	if strings.Contains(on, "process STAGE_2_CH__SRC") {
+		t.Errorf("-fuse-chains must fold the SRC producer into USE:\n%s", on)
+	}
+	if !strings.Contains(on, "-inputs SRC=outs_prod") {
+		t.Errorf("-fuse-chains must feed the producer's outputs into the consumer bind:\n%s", on)
+	}
+}
+
 // TestEmitPrunesUnusedKeyedVariants guards #59: a stage/pipeline that never runs
 // under a map call gets no fork-keyed variant emitted, while a map-reachable one
 // keeps it. Behavior is unchanged (the pruned processes were never invoked) —
