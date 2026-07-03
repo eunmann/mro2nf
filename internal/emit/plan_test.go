@@ -100,6 +100,27 @@ func TestBuildPlanFoldDisables(t *testing.T) {
 	}
 }
 
+// TestBuildPlanForwardChain guards #73: a source feeding a pure-FORWARD consumer
+// folds under -fuse-chains too. file_chain's MAKEFILE feeds READFILE, which just
+// forwards MAKEFILE.f — so with the flag MAKEFILE folds away and READFILE becomes
+// the chain process; without it, READFILE stays a plain forward.
+func TestBuildPlanForwardChain(t *testing.T) {
+	fc := lowerFixture(t, "file_chain")
+
+	if got := buildPlan(fc, featureSet{}).pipes["CP"].calls["READFILE"].kind; got != kindForward {
+		t.Errorf("without -fuse-chains: READFILE kind = %d, want kindForward", got)
+	}
+
+	on := buildPlan(fc, featureSet{fuseChains: true}).pipes["CP"].calls
+	if on["MAKEFILE"].kind != kindFusedAway {
+		t.Errorf("with -fuse-chains: MAKEFILE kind = %d, want kindFusedAway", on["MAKEFILE"].kind)
+	}
+	if on["READFILE"].kind != kindFusedChain || on["READFILE"].prod.Name != "MAKEFILE" {
+		t.Errorf("with -fuse-chains: READFILE kind = %d prod = %q, want kindFusedChain folding MAKEFILE",
+			on["READFILE"].kind, on["READFILE"].prod.Name)
+	}
+}
+
 func keysOf(m map[string]pipePlan) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {
