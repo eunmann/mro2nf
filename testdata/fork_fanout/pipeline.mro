@@ -1,0 +1,42 @@
+# A scatterable map call with TWO consumers (a downstream stage and the
+# return): the merge cannot fold — duplicating it would stage the fork outs
+# into both — so the MERGE task must remain even under -native (#76).
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+stage SUMALL(
+    in  float[] xs,
+    out float   total,
+    src py      "stages/sumall",
+)
+
+pipeline FANOUT(
+    in  float[] values,
+    in  float   factor,
+    out float[] scaled,
+    out float   total,
+)
+{
+    map call SCALE(
+        value  = split self.values,
+        factor = self.factor,
+    )
+
+    call SUMALL(
+        xs = SCALE.scaled,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+        total  = SUMALL.total,
+    )
+}
+
+call FANOUT(
+    values = [1.0, 2.0, 3.0],
+    factor = 10.0,
+)

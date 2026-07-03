@@ -50,10 +50,13 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 	return append(ds, foldDiagnostics(prog, f, pl)...)
 }
 
-// nativeDiagnostics surfaces which map calls -native could NOT scatter (they
-// keep the FORK/MERGE tasks), so partial collapse is visible up front instead
-// of discovered by diffing the generated project (#83's detect-and-refuse
-// principle: an opt-in never silently under-delivers).
+// nativeDiagnostics surfaces which map calls -native could NOT collapse (they
+// keep FORK/MERGE tasks), so partial collapse is visible up front instead of
+// discovered by diffing the generated project (#83's detect-and-refuse
+// principle: an opt-in never silently under-delivers). Two shapes are
+// reported: a call the plan kept on the FORK path, and a planned scatter
+// inside a keyed-reachable pipeline — under a map call only the keyed layer
+// runs, and its FORK_K/MERGE_K tasks all remain.
 func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic {
 	if !f.native {
 		return nil
@@ -63,11 +66,23 @@ func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic
 
 	for _, name := range sortedKeys(prog.Pipelines) {
 		for _, c := range prog.Pipelines[name].Calls {
-			if c.Mapped && pl.pipes[name].calls[c.Name].kind == kindMapped {
+			if !c.Mapped {
+				continue
+			}
+
+			kind := pl.pipes[name].calls[c.Name].kind
+
+			if kind == kindMapped {
 				ds = append(ds, Diagnostic{
 					Severity: SevInfo,
-					Message: fmt.Sprintf("-native: map call %s.%s keeps the FORK/MERGE tasks (not yet scatterable: needs a single whole-field self split on an undisabled leaf stage)",
+					Message: fmt.Sprintf("-native: map call %s.%s keeps the FORK/MERGE tasks (not yet scatterable: needs a single whole-field self split on an undisabled, non-preflight leaf stage; upstream-ref bindings are also barred where the pipeline can receive a queue pipeargs)",
 						name, c.Name),
+				})
+			} else if kind == kindNativeScatter && pl.keyed[name] {
+				ds = append(ds, Diagnostic{
+					Severity: SevInfo,
+					Message: fmt.Sprintf("-native: map call %s.%s scatters only when %s runs plain; under a map call its keyed layer keeps the FORK/MERGE tasks",
+						name, c.Name, name),
 				})
 			}
 		}

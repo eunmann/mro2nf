@@ -1,0 +1,41 @@
+# A scatterable map call whose SOLE consumer is a MID-PIPELINE fused leaf
+# stage (not the return): the merge folds into SUMALL's task — souts/keys are
+# staged there and `mre merge` runs before its bind (#76). The return forwards
+# SUMALL verbatim, so the whole project is native-complete.
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+stage SUMALL(
+    in  float[] xs,
+    out float   total,
+    src py      "stages/sumall",
+)
+
+pipeline MID(
+    in  float[] values,
+    in  float   factor,
+    out float   total,
+)
+{
+    map call SCALE(
+        value  = split self.values,
+        factor = self.factor,
+    )
+
+    call SUMALL(
+        xs = SCALE.scaled,
+    )
+
+    return (
+        total = SUMALL.total,
+    )
+}
+
+call MID(
+    values = [1.0, 2.0, 3.0],
+    factor = 10.0,
+)

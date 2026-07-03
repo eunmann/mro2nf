@@ -469,40 +469,51 @@ func assertNoProcesses(t *testing.T, proj string, cats ...string) {
 	}
 }
 
-// assertNativeComplete fails if any BIND/FORK/MERGE/STRUCTIFY/BUILD_ENTRY_ARGS
+// assertNativeComplete fails if any BIND/FORK/MERGE/DISABLE/BUILD_ENTRY_ARGS
 // process is emitted — the #76 acceptance that those data-plane task categories
-// vanish under -native.
+// vanish under -native. (#76 also names STRUCTIFY, but no STRUCTIFY process
+// exists anywhere in the emitter — struct outputs flow through ordinary
+// bundles — so there is nothing to assert against.)
 func assertNativeComplete(t *testing.T, proj string) {
 	t.Helper()
 	assertNoProcesses(t, proj, "BIND", "FORK", "MERGE", "DISABLE", "BUILD_ENTRY_ARGS")
 }
 
-// TestNativeScatter guards #76's native-map increment: under -native an
-// eligible map call (single whole-field self split, leaf-stage callee)
-// scatters in-workflow — each fused instance resolves its own fork via
-// `forkbind -index` — so no FORK task is emitted. The MERGE gather remains (a
-// later increment). Output must be byte-identical to the default (bundle-mode)
-// run. The fixtures cover the scatter's edge shapes: fork_min (array fork),
-// map_fork (typed-map fork), empty_fork_min / empty_map_fork (zero forks — the
-// keys-only sentinel instance supplies MERGE's keys and validates bindings),
-// fork_ref (a broadcast binding to an UPSTREAM call output re-read per
-// instance), and fork_disabled_sub (the scatter inside a disabled sub-pipeline
-// whose pipeargs arrive as a queue channel — every fork must still run).
+// TestNativeScatter guards the #76 native-map shapes that are NOT fully
+// task-free but must still scatter with no FORK task, byte-identical to the
+// default run. Each case states its MERGE contract: fork_disabled_sub (scatter
+// behind a disabled sub-pipeline's QUEUE pipeargs, every fork must run; its
+// merge folds, so no MERGE — the enclosing TOP keeps BIND tasks),
+// fork_disabled_skip (the same shape with skip=true baked: zero instances run
+// and the folded consumer must stay DORMANT, yielding the null result), and
+// fork_fanout (two consumers, so the MERGE task must REMAIN rather than fold).
+// The fully-collapsed fixtures live in TestNativeComplete.
 func TestNativeScatter(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	fixtures := []string{
-		"fork_min", "map_fork", "empty_fork_min", "empty_map_fork", "fork_ref", "fork_disabled_sub",
+	cases := []struct {
+		fixture   string
+		wantMerge bool
+	}{
+		{"fork_disabled_sub", false},
+		{"fork_disabled_skip", false},
+		{"fork_fanout", true},
 	}
 
-	for _, fx := range fixtures {
-		t.Run(fx, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
 			t.Parallel()
 
-			native := transpile(t, fx, "-native")
+			native := transpile(t, tc.fixture, "-native")
 			assertNoProcesses(t, native, "FORK")
 
-			def := transpile(t, fx)
+			if tc.wantMerge {
+				assertHasProcess(t, native, "MERGE")
+			} else {
+				assertNoProcesses(t, native, "MERGE")
+			}
+
+			def := transpile(t, tc.fixture)
 			if err := runNextflow(t, native); err != nil {
 				t.Fatal(err)
 			}
@@ -517,17 +528,48 @@ func TestNativeScatter(t *testing.T) {
 	}
 }
 
-// TestNativeComplete guards #76 for the single-pipeline subset that -native fully
-// collapses: no data-plane task categories remain, and the output is byte-identical
-// to the default (bundle-mode) run. file_min exercises a file output through the
+// assertHasProcess fails unless some generated file declares a process with
+// the given prefix — guarding that a deliberately-kept task really remains.
+func assertHasProcess(t *testing.T, proj string, cat string) {
+	t.Helper()
+
+	mods, err := filepath.Glob(filepath.Join(proj, "modules", "*.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, f := range append(mods, filepath.Join(proj, "main.nf")) {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if strings.Contains(string(data), "process "+cat) {
+			return
+		}
+	}
+
+	t.Errorf("expected a %q process in the generated project", cat)
+}
+
+// TestNativeComplete guards #76 for the subset that -native fully collapses:
+// no data-plane task categories remain, and the output is byte-identical to
+// the default (bundle-mode) run. file_min exercises a file output through the
 // native LAYOUT's inline return bind. native_file_return has a TRANSFORM return
 // with a file output, so it exercises the native LAYOUT's file-leaf path (the
 // inline bind's args/f -> leaves -> PUBLISH_LEAF); file_min/chain_fuse/struct_min
-// are forward returns (default LAYOUT) that only drop BUILD_ENTRY_ARGS.
+// are forward returns (default LAYOUT) that only drop BUILD_ENTRY_ARGS. The
+// map-call fixtures collapse the whole fork machinery: the scatter kills FORK
+// and the sole-consumer merge fold kills MERGE — fork_min (array), map_fork
+// (typed map), empty_fork_min/empty_map_fork (zero forks via the keys-only
+// sentinel), and fork_ref (an upstream broadcast ref re-read per instance).
 func TestNativeComplete(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	for _, fx := range []string{"diamond_min", "fold_disable", "native_file_return", "file_min", "chain_fuse", "struct_min"} {
+	for _, fx := range []string{
+		"diamond_min", "fold_disable", "native_file_return", "file_min", "chain_fuse", "struct_min",
+		"fork_min", "map_fork", "empty_fork_min", "empty_map_fork", "fork_ref", "fork_mid",
+	} {
 		t.Run(fx, func(t *testing.T) {
 			t.Parallel()
 
