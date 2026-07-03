@@ -158,11 +158,24 @@ modules/
   stage_REPORT.nf
   pipe_SUM_SQUARE_PIPELINE.nf        ← one module per pipeline
 nextflow.config                      ← executor profiles, retry policy, params
+lib/Mro2nf.groovy                    ← driver-side channel helpers (see below)
 _assets/
   types.json                         ← the program's type manifest
   bindspecs/BIND_*.json              ← one binding spec per call (see §6)
 entry_args/data.json                 ← the baked top-level call arguments (§8)
 ```
+
+The non-trivial channel logic the workflows need — reading a bundle's sidecar,
+resolving a disable gate, expanding a keyed SPLIT into per-chunk tuples,
+enumerating forks from `forknames.json`, stripping a composite fork key — lives
+in a hand-written **`lib/Mro2nf.groovy`** (`@CompileStatic`, `java.nio.Path`
+APIs only), shipped verbatim into every project (embedded in the transpiler, same
+as `_assets/`). Nextflow auto-adds `lib/` to the driver classpath, so generated
+code calls `Mro2nf.disabled(d)`, `Mro2nf.chunkRes(c)`, `Mro2nf.forkTuples(ok, d)`
+etc. instead of stamping a dense one-line closure at each site. Every helper runs
+on the **driver** while wiring channels — never in a task — so it changes nothing
+for AWS Batch / S3 / HealthOmics execution, and the file rides along in the
+HealthOmics zip like `_assets/` and `nulls/`.
 
 ### 4.1 A plain stage → a process
 
