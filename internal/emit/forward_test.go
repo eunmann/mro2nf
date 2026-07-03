@@ -81,10 +81,10 @@ func TestForwardProducerExactCoverage(t *testing.T) {
 }
 
 // TestFuseableStageCall pins which calls fold their BIND inline (#16): a plain,
-// enabled, non-preflight call to a NON-SPLIT stage whose bind is a real transform
-// (not a pure forward, which #14 routes with no process). Split stages, mapped/
-// disabled/preflight calls, sub-pipeline callees, and pure forwards keep the
-// separate BIND (or, for forwards, none).
+// enabled call to a NON-SPLIT stage whose bind is a real transform (not a pure
+// forward, which #14 routes with no process). Split stages, mapped/disabled
+// calls, sub-pipeline callees, and pure forwards keep the separate BIND (or, for
+// forwards, none). A preflight leaf stage fuses like any other leaf (#59).
 func TestFuseableStageCall(t *testing.T) {
 	prog := &ir.Program{
 		Stages: map[string]*ir.Stage{
@@ -106,7 +106,9 @@ func TestFuseableStageCall(t *testing.T) {
 		{"split stage keeps BIND", ir.Call{Name: "C", Callable: "SPLIT", Bindings: self}, false},
 		{"mapped keeps BIND", ir.Call{Name: "C", Callable: "PLAIN", Bindings: self, Mapped: true}, false},
 		{"disabled keeps BIND", ir.Call{Name: "C", Callable: "PLAIN", Bindings: self, Disabled: &ir.Ref{Kind: "self", ID: "off"}}, false},
-		{"preflight keeps BIND", ir.Call{Name: "C", Callable: "PLAIN", Bindings: self, Preflight: true}, false},
+		// A preflight leaf stage fuses (#59): its output only signals completion to
+		// the pa gate; preflight semantics live in the wiring, not the process.
+		{"preflight leaf stage fuses", ir.Call{Name: "C", Callable: "PLAIN", Bindings: self, Preflight: true}, true},
 		{"pure forward is routed, not fused", ir.Call{Name: "C", Callable: "PLAIN", Bindings: fwd}, false},
 		{"sub-pipeline callee keeps BIND", ir.Call{Name: "C", Callable: "SUB", Bindings: self}, false},
 	}
