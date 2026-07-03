@@ -14,6 +14,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/logging"
 	"github.com/eunmann/mro2nf/internal/overrides"
+	"github.com/rs/zerolog"
 )
 
 // version is set via -ldflags at build time.
@@ -21,6 +22,10 @@ var version = "dev"
 
 // errUsage is returned when the command-line arguments are invalid.
 var errUsage = errors.New("usage: mro2nf [-o dir] [-mropath path] <pipeline.mro>")
+
+// errFlagConflict aborts a transpile when a diagnostic reports an enabled flag
+// would produce a wrong or broken project for the pipeline.
+var errFlagConflict = errors.New("aborted on a flag/pipeline conflict (see error diagnostics above)")
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -80,10 +85,8 @@ func run(args []string) error {
 		return fmt.Errorf("invalid -target: %w", err)
 	}
 
-	// Surface documented divergences (preflight/local/volatile no-ops) so a
-	// ported pipeline's behavior differences are loud, not silent.
-	for _, msg := range emit.Warnings(prog) {
-		log.Warn().Msg(msg)
+	if err := reportDiagnostics(log, prog, *fuseChainsFlag); err != nil {
+		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
 	if err := emitProgram(prog, fs.Arg(0), opts{
@@ -182,6 +185,30 @@ func readOverridesInput(arg string) ([]byte, error) {
 	}
 
 	return raw, nil
+}
+
+// reportDiagnostics runs the pre-emit checks, prints each by severity, and
+// returns an error (aborting the transpile) if any is fatal — an enabled flag
+// that would produce a wrong or broken project for this pipeline.
+func reportDiagnostics(log zerolog.Logger, prog *ir.Program, fuseChains bool) error {
+	diags := emit.Diagnose(prog, emit.Options{FuseChains: fuseChains})
+
+	for _, d := range diags {
+		switch d.Severity {
+		case emit.SevError:
+			log.Error().Msg(d.Message)
+		case emit.SevWarn:
+			log.Warn().Msg(d.Message)
+		default:
+			log.Info().Msg(d.Message)
+		}
+	}
+
+	if emit.HasError(diags) {
+		return errFlagConflict
+	}
+
+	return nil
 }
 
 // opts groups the CLI options that shape emission.
