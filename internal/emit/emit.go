@@ -165,6 +165,13 @@ func Emit(prog *ir.Program, opts Options) error {
 		return errNativeFileEntry
 	}
 
+	// Native M1 is validated for the local backend only; the entry bake uses the
+	// host mre, and the native path is untested against container staging — gate
+	// the combination explicitly rather than relying on untested behavior.
+	if opts.Native && target.isContainer() {
+		return errNativeContainer
+	}
+
 	// Container targets bake in-container paths and ship a self-contained Docker
 	// build context (mre + adapters + stage code), so the image — not the host —
 	// supplies the runtime.
@@ -240,6 +247,10 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 // errNativeFileEntry reports that -native was asked for a pipeline with a
 // file-typed entry input, which native M1 does not yet support.
 var errNativeFileEntry = errors.New("native mode does not yet support file-typed entry inputs")
+
+// errNativeContainer reports that -native was asked for a container backend,
+// which native M1 does not yet cover (validated on the local backend only).
+var errNativeContainer = errors.New("native mode is not yet supported for container backends (awsbatch/healthomics)")
 
 // bakeEntryArgs resolves the entry args once at transpile time (no launch-time
 // override) by running the same `mre entryargs` the BUILD_ENTRY_ARGS task would,

@@ -420,3 +420,25 @@ func TestNativeRejectsFileEntry(t *testing.T) {
 		t.Errorf("want a file-typed-entry error, got:\n%s", out)
 	}
 }
+
+// TestNativeRejectsContainer guards the M1 boundary: -native is validated for
+// the local backend only, so a container target must be a loud error.
+func TestNativeRejectsContainer(t *testing.T) {
+	buildBinaries(t)
+
+	dir := filepath.Join(root, "testdata", "diamond_min")
+	cmd := exec.Command(filepath.Join(root, "mro2nf"),
+		"-native", "-target", "awsbatch", "-container", "example/img:1",
+		"-o", t.TempDir(), "-mre", filepath.Join(root, "mre"),
+		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
+		"-mropath", dir, filepath.Join(dir, "pipeline.mro"))
+	cmd.Dir = root
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("-native with a container target must fail; got success:\n%s", out)
+	}
+	if !strings.Contains(string(out), "container backends") {
+		t.Errorf("want a container-backend error, got:\n%s", out)
+	}
+}
