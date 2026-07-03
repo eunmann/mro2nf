@@ -470,6 +470,52 @@ func assertNativeComplete(t *testing.T, proj string) {
 	}
 }
 
+// TestNativeScatter guards #76's native-map increment: under -native an
+// eligible map call (single whole-field self split, leaf-stage callee)
+// scatters in-workflow — each fused instance resolves its own fork via
+// `forkbind -index` — so no FORK task is emitted. The MERGE gather remains (a
+// later increment). fork_min is an array fork, map_fork a typed-map fork, and
+// empty_fork_min the zero-fork path (no scatter instances, so MERGE's keys
+// fall back to the static empty-fork asset). Output must be byte-identical to
+// the default (bundle-mode) run.
+func TestNativeScatter(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	for _, fx := range []string{"fork_min", "map_fork", "empty_fork_min"} {
+		t.Run(fx, func(t *testing.T) {
+			t.Parallel()
+
+			native := transpile(t, fx, "-native")
+
+			mods, err := filepath.Glob(filepath.Join(native, "modules", "*.nf"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range append(mods, filepath.Join(native, "main.nf")) {
+				data, err := os.ReadFile(f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(data), "process FORK") {
+					t.Errorf("%s: -native scatter must not emit a FORK task", filepath.Base(f))
+				}
+			}
+
+			def := transpile(t, fx)
+			if err := runNextflow(t, native); err != nil {
+				t.Fatal(err)
+			}
+			if err := runNextflow(t, def); err != nil {
+				t.Fatal(err)
+			}
+
+			goldenJSON(t,
+				filepath.Join(native, "results", "pipeline_outs.json"),
+				filepath.Join(def, "results", "pipeline_outs.json"))
+		})
+	}
+}
+
 // TestNativeComplete guards #76 for the single-pipeline subset that -native fully
 // collapses: no data-plane task categories remain, and the output is byte-identical
 // to the default (bundle-mode) run. file_min exercises a file output through the

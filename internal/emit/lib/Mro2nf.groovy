@@ -88,4 +88,29 @@ class Mro2nf {
     static String outerKey(String compositeKey) {
         compositeKey.substring(0, compositeKey.lastIndexOf('~' as String))
     }
+
+    // forkCount is the native-map scatter width (#76): the size of the map
+    // call's split collection, read from the enclosing pipeline args' data.json
+    // on the driver so no FORK task runs. A null (or absent) source forks zero
+    // times — the merge then yields the typed empty. A non-collection value
+    // scatters one instance whose inline forkbind fails with the same error the
+    // FORK task would have given (never a silent skip).
+    static int forkCount(Path jsonFile, String field) {
+        def v = ((Map) parseJson(jsonFile)).get(field)
+        if (v == null) return 0
+        if (v instanceof List) return ((List) v).size()
+        if (v instanceof Map) return ((Map) v).size()
+        return 1
+    }
+
+    // forkScatter expands a pipeline-args tuple into one [key, index, data,
+    // leaves] tuple per fork of the split collection in `field` — the
+    // driver-side replacement for the FORK task's fork_NNNNN enumeration. The
+    // key matches the full-fork write's bundle name, so downstream out bundle
+    // names (outs__<key>) sort identically for the gather.
+    static List forkScatter(Path jsonFile, Object leaves, String field) {
+        (0..<forkCount(jsonFile, field)).collect { int i ->
+            [String.format('fork_%05d', i), i, jsonFile, leaves]
+        }
+    }
 }

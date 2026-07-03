@@ -554,6 +554,12 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 				genDisableProcess(b, p.Name, c, g)
 			}
 
+		// #76: a -native map call scatters in-workflow — a fused forkbind+main
+		// process per fork instance, no FORK task. The MERGE gather remains.
+		case kindNativeScatter:
+			genNativeScatterProcess(b, p.Name, c, cp.stage, g)
+			genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
+
 		// A fuseable non-split leaf (plain or natively-disabled) runs `mre bind`
 		// inline in the stage task — the standalone BIND is gone (#16, #59).
 		case kindFusedStage, kindFusedDisabled:
@@ -620,8 +626,11 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 // variant emitted (a stage's _MAP/_SPLIT_K processes, a pipeline's wf_<p>_map
 // plus its keyed includes/processes); every other callable's keyed layer is
 // never invoked. The analysis unions over all call paths, so a callable reached
-// both keyed and plain is still marked keyed.
-func keyedReachable(prog *ir.Program) map[string]bool {
+// both keyed and plain is still marked keyed. A plain-context map call that
+// -native scatters in-workflow (#76) runs the stage inline in its own fused
+// process, so it does NOT need the callee's keyed variant — but the same call
+// inside a keyed pipeline still forks through FORK_K, which does.
+func keyedReachable(prog *ir.Program, f featureSet) map[string]bool {
 	needed := map[string]bool{}
 	seen := map[[2]string]bool{} // (callable, keyed-context) already walked
 
@@ -652,7 +661,14 @@ func keyedReachable(prog *ir.Program) map[string]bool {
 		seen[mark] = true
 
 		for _, c := range p.Calls {
-			walk(c.Callable, keyed || c.Mapped)
+			mapped := c.Mapped
+			if mapped && !keyed && f.native {
+				if _, _, ok := nativeScatterable(c, prog); ok {
+					mapped = false
+				}
+			}
+
+			walk(c.Callable, keyed || mapped)
 		}
 	}
 
@@ -998,6 +1014,54 @@ func mapModeArg(c ir.Call) string {
 	return mapModeArray
 }
 
+// genNativeScatterProcess emits the fused forkbind+main process a -native map
+// call scatters over (#76): each instance resolves its own fork's args inline
+// (`forkbind -index`) and runs the stage main — no FORK task. Every instance
+// also writes the forkkeys sidecar (identical across instances, same
+// ResolveForks) for the MERGE gather, and names its out bundle outs__<key> so
+// the gather's `sort -V` staging orders forks exactly as the keyed path does.
+func genNativeScatterProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
+	refs := refCalls(c.Bindings)
+
+	var ins strings.Builder
+
+	// The scattered tuple carries the fork key/index plus the pipeargs bundle
+	// elements; upstream bundles, types, and the bindspec are value channels
+	// re-read per instance.
+	fmt.Fprintf(&ins, "    tuple val(key), val(fi), %s\n", bundleInputElems("pipeargs"))
+
+	pairs := make([]string, 0, len(refs))
+	for _, id := range refs {
+		fmt.Fprintf(&ins, "    %s\n", bundleInput("in_"+id))
+		pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
+	}
+
+	ins.WriteString("    path 'types.json'\n    path 'spec.json'\n")
+
+	arg := ""
+	if len(pairs) > 0 {
+		arg = " -inputs " + strings.Join(pairs, ",")
+	}
+
+	fmt.Fprintf(b, `process %[1]s {
+%[2]s
+  input:
+%[3]s  output:
+    tuple val(key), path("outs__${key}", type: 'dir'), emit: outs
+    path 'forkkeys.json', emit: keys
+  script:
+    """
+    '%[4]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[5]s -mapmode %[6]s -index ${fi} -o fargs -keysfile forkkeys.json%[7]s
+    %[8]s -args fargs -outs '%[9]s'%[10]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    """
+}
+
+`, fusedName(pipeline, c.Name), stageDirectives(s, ""), ins.String(), g.mre, arg, mapModeArg(c),
+		g.producerArgs(c.Callable, types.RoleIn),
+		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
+		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
+}
+
 // genMergeProcess emits a process that merges per-fork outputs into the
 // map-call result bundle via `mre merge`.
 func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
@@ -1160,6 +1224,10 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 
 	case kindMapped:
 		genMappedWiring(b, pipeline, c, callee)
+
+	// #76: a -native map call scatters in-workflow off pipeargs; no FORK task.
+	case kindNativeScatter:
+		genNativeScatterWiring(b, pipeline, c, cp)
 
 	// Emit-once routing (#18/#14): feed the forwarded producer's value channel
 	// straight into the callee, skipping the BIND that would re-materialize files.
@@ -1676,6 +1744,38 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 
 	// MERGE's inputs are value channels (collected forks + keys), so its output
 	// is a value channel reusable by multiple downstream consumers.
+	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
+}
+
+// genNativeScatterWiring wires a -native map call's in-workflow scatter (#76):
+// the driver reads the fork width from pipeargs' data.json (Mro2nf.forkScatter)
+// and fans out one fused forkbind+main instance per fork — no FORK task. The
+// MERGE gather is unchanged; its keys come from any instance's forkkeys sidecar
+// (all byte-identical), falling back to the static empty-fork asset when the
+// collection is empty (zero instances, so no sidecar). concat ordering makes
+// the fallback deterministic: the asset is only reachable once the (empty)
+// keys channel has completed.
+func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp callPlan) {
+	fused := fusedName(pipeline, c.Name)
+	merge := mergeName(pipeline, c.Name)
+	refs := refCalls(c.Bindings)
+
+	args := make([]string, 0, len(refs)+1)
+	args = append(args, "scat_"+c.Name)
+
+	for _, id := range refs {
+		args = append(args, "ch_"+id)
+	}
+
+	args = append(args, "types", specFile(bindName(pipeline, c.Name)))
+
+	fmt.Fprintf(b, "    scat_%s = pa.flatMap { data, leaves -> Mro2nf.forkScatter(data, leaves, '%s') }\n",
+		c.Name, cp.scatterField)
+	fmt.Fprintf(b, "    %s(%s)\n", fused, strings.Join(args, ", "))
+	fmt.Fprintf(b, "    out_%s = %s.out.outs.map { k, bundle -> bundle }\n", c.Name, fused)
+	fmt.Fprintf(b, "    keys_%s = %s.out.keys.concat(Channel.of(file(\"${projectDir}/_assets/%s\"))).first()\n",
+		c.Name, fused, forkKeysAsset(c))
+	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), keys_%s, types)\n", merge, c.Name, c.Name)
 	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
 }
 

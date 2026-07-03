@@ -144,7 +144,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	features := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables}
+	features := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables, native: opts.Native}
 	g := genCtx{
 		entry:    prog.Entry.Callable,
 		mroFile:  opts.MROFile,
@@ -212,6 +212,10 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 	}
 
 	if err := writeDisableArtifacts(prog, opts.OutDir, specDir); err != nil {
+		return err
+	}
+
+	if err := writeForkKeysAssets(prog, g, opts.OutDir); err != nil {
 		return err
 	}
 
@@ -313,6 +317,51 @@ func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 	}
 
 	return nil
+}
+
+// writeForkKeysAssets emits the static empty-fork keys sidecar(s) a native
+// scatter's MERGE falls back to when the fork collection is empty — the scatter
+// then runs no instance, so no forkkeys.json is produced in-task. The content
+// matches what the FORK task writes for a zero-fork source: null for an array
+// fork (merges to []), [] for a map fork (merges to {}).
+func writeForkKeysAssets(prog *ir.Program, g genCtx, outDir string) error {
+	need := map[string]string{}
+
+	for name, p := range prog.Pipelines {
+		for _, c := range p.Calls {
+			if g.plan.pipes[name].calls[c.Name].kind != kindNativeScatter {
+				continue
+			}
+
+			need[forkKeysAsset(c)] = emptyForkKeys(c)
+		}
+	}
+
+	for _, name := range sortedKeys(need) {
+		if err := writeFile(filepath.Join(outDir, assetsDir, name), []byte(need[name])); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// forkKeysAsset names the empty-fork keys asset for a map call's static mode.
+func forkKeysAsset(c ir.Call) string {
+	if mapModeArg(c) == mapModeMap {
+		return "forkkeys_map.json"
+	}
+
+	return "forkkeys_array.json"
+}
+
+// emptyForkKeys is the zero-fork keys payload for a map call's static mode.
+func emptyForkKeys(c ir.Call) string {
+	if mapModeArg(c) == mapModeMap {
+		return "[]"
+	}
+
+	return "null"
 }
 
 // nullOuts returns a map of a callable's output names to null.

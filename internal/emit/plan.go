@@ -12,6 +12,7 @@ import (
 type featureSet struct {
 	fuseChains   bool
 	foldDisables bool
+	native       bool
 }
 
 // callKind is how a single call is emitted — decided once in buildPlan so the
@@ -29,6 +30,7 @@ const (
 	kindFusedChain                    // #59 Lever 4 chain consumer (folds its producer)
 	kindFusedAway                     // #59 Lever 4 chain producer folded into its consumer
 	kindFoldedOff                     // #59 Lever 1 always-disabled call: emit only its null output
+	kindNativeScatter                 // #76 -native map call: in-workflow scatter, no FORK task
 )
 
 // chainLink is one stage in a fused linear chain: the call and its stage.
@@ -51,6 +53,9 @@ type callPlan struct {
 	// disableTask reports that a mapped/plain disabled call needs a standalone
 	// DISABLE process (the flag is not driver-gateable).
 	disableTask bool
+	// scatterField is the pipeline-input name whose collection a kindNativeScatter
+	// call forks over — the driver reads its size from pipeargs' data.json.
+	scatterField string
 }
 
 // pipePlan is the per-pipeline emission plan: one callPlan per call, plus whether
@@ -75,7 +80,7 @@ type emitPlan struct {
 // fuseable*/forward/chain predicates at each site (the class of drift that
 // produces dangling processes).
 func buildPlan(prog *ir.Program, f featureSet) emitPlan {
-	pl := emitPlan{keyed: keyedReachable(prog), pipes: map[string]pipePlan{}}
+	pl := emitPlan{keyed: keyedReachable(prog, f), pipes: map[string]pipePlan{}}
 
 	for name, p := range prog.Pipelines {
 		away := fusedAwayProducers(p, prog, f.fuseChains)
@@ -158,6 +163,14 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	}
 
 	if c.Mapped {
+		// #76: under -native an eligible map call scatters in-workflow (each stage
+		// instance resolves its own fork via forkbind -index), so no FORK task.
+		if f.native {
+			if s, field, ok := nativeScatterable(c, prog); ok {
+				return callPlan{kind: kindNativeScatter, stage: s, scatterField: field}
+			}
+		}
+
 		return callPlan{kind: kindMapped, disableTask: needsDisableTask(c)}
 	}
 
@@ -213,6 +226,48 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 	return "", false
 }
 
+// nativeScatterable reports whether a -native map call can scatter in-workflow
+// with no FORK task (#76), returning the callee stage and the pipeline-input
+// field whose collection sizes the scatter. This increment covers the shape
+// whose fork width the driver can read from pipeargs' data.json: a non-split
+// leaf stage callee, no disable gate, and exactly one split binding that is a
+// whole-field self ref (a projection or upstream ref would need the FORK task's
+// full bind resolution to know the width). Ineligible map calls keep the FORK
+// path — still correct, just not yet collapsed.
+func nativeScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
+	if c.Disabled != nil {
+		return nil, "", false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split {
+		return nil, "", false
+	}
+
+	field, splits := "", 0
+
+	for _, b := range c.Bindings {
+		if !b.Split {
+			continue
+		}
+
+		splits++
+
+		r := b.Value.Ref
+		if r == nil || r.Kind != refKindSelf || r.Output != "" {
+			return nil, "", false
+		}
+
+		field = r.ID
+	}
+
+	if splits != 1 {
+		return nil, "", false
+	}
+
+	return s, field, true
+}
+
 // needsDisableTask reports whether a disabled call requires a standalone DISABLE
 // bind (its flag is not a single top-level field readable on the driver).
 func needsDisableTask(c ir.Call) bool {
@@ -226,8 +281,9 @@ func needsDisableTask(c ir.Call) bool {
 }
 
 // fusedInclude reports whether a call's module include is suppressed — the fused
-// stage/chain kinds are self-contained per-call processes with no wf_ import.
+// stage/chain/scatter kinds are self-contained per-call processes with no wf_
+// import.
 func (cp callPlan) fusedInclude() bool {
 	return cp.kind == kindFusedStage || cp.kind == kindFusedChain || cp.kind == kindFusedAway ||
-		cp.kind == kindFoldedOff
+		cp.kind == kindFoldedOff || cp.kind == kindNativeScatter
 }
