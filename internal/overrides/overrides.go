@@ -57,14 +57,19 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 	var unmapped []string
 
 	for _, key := range sortedKeys(spec) {
-		targets, note := res.targets(key)
+		targets, kind, note := res.targets(key)
 		if note != "" {
 			unmapped = append(unmapped, fmt.Sprintf("%s: %s", orAll(key), note))
 
 			continue
 		}
 
-		depth := keyDepth(key)
+		// A more specific match wins: a direct stage key over a pipeline
+		// expansion, then a deeper path over a shallower one (mrp's
+		// nearest-ancestor rule). Ties (same kind and depth) resolve to the last
+		// in sorted-key order, deterministically. kind dominates depth, so it is
+		// weighted above any realistic path length.
+		rank := kind*kindWeight + keyDepth(key)
 
 		for _, field := range sortedKeys(spec[key]) {
 			phase, base, line, fnote := mapField(field, spec[key][field])
@@ -76,46 +81,118 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 
 			for _, stage := range targets {
 				rk := [3]string{stage, phase, base}
-				if cur, ok := resolved[rk]; !ok || depth >= cur.depth {
-					resolved[rk] = directive{depth, selector(stage, phase), line}
+				if cur, ok := resolved[rk]; !ok || rank >= cur.rank {
+					resolved[rk] = directive{rank, line}
 				}
 			}
 		}
 	}
 
-	return render(groupSelectors(resolved)), unmapped, nil
+	globalDefault, groups := groupSelectors(resolved)
+
+	return render(globalDefault, groups), unmapped, nil
 }
+
+// kindWeight scales a target's specificity kind above any realistic override
+// key depth, so a direct stage key always outranks a pipeline expansion.
+const kindWeight = 1000
 
 // directive is one resolved override line for a (stage, phase, field) triple.
-// The deepest source key wins, matching mrp's nearest-ancestor rule.
+// The most specific source key wins (see the rank computed in Convert).
 type directive struct {
-	depth int
-	sel   string
-	line  string
+	rank int
+	line string
 }
 
-// groupSelectors collapses the resolved directives into selector -> lines,
-// ordering each selector's lines by field (base) so a stage's `memory` (mem_gb)
-// precedes its `cpus` (threads), stable across runs.
-func groupSelectors(resolved map[[3]string]directive) map[string][]string {
+// Selector breadth levels, from broadest to narrowest. render emits selectors in
+// this order so the narrowest is applied last (Nextflow applies the LAST matching
+// withName, so last = wins).
+const (
+	breadthPhaseWide  = iota // .*(_MAIN|…) — every stage's phase
+	breadthStage             // one stage, all phases
+	breadthStagePhase        // one stage + phase
+)
+
+// selGroup is one withName selector and its directive lines, tagged with a
+// breadth so render can order broad selectors before narrow ones.
+type selGroup struct {
+	breadth int
+	sel     string
+	lines   []string
+}
+
+// selBreadth classifies a selector's (stage, phase) by how many processes it
+// matches. The bare process default (stage=="" && phase=="") is not a withName
+// selector and is handled separately.
+func selBreadth(stage, phase string) int {
+	switch {
+	case stage == "":
+		return breadthPhaseWide
+	case phase == "":
+		return breadthStage
+	default:
+		return breadthStagePhase
+	}
+}
+
+// groupSelectors collapses the resolved directives into the global process
+// default plus an ordered list of withName groups. Each group's lines are sorted
+// by field (base) so `memory` precedes `cpus`; the groups are ordered
+// broad-to-narrow so a specific override wins over a phase-wide one at runtime.
+func groupSelectors(resolved map[[3]string]directive) ([]string, []selGroup) {
 	type baseLine struct{ base, line string }
 
-	bySel := map[string][]baseLine{}
-	for rk, d := range resolved {
-		bySel[d.sel] = append(bySel[d.sel], baseLine{rk[2], d.line})
+	type acc struct {
+		breadth int
+		items   []baseLine
 	}
 
-	groups := make(map[string][]string, len(bySel))
+	var globalDefault []baseLine
 
-	for sel, items := range bySel {
-		sort.Slice(items, func(i, j int) bool { return items[i].base < items[j].base })
+	bySel := map[string]*acc{}
 
-		for _, it := range items {
-			groups[sel] = append(groups[sel], it.line)
+	for rk, d := range resolved {
+		stage, phase := rk[0], rk[1]
+		if sel := selector(stage, phase); sel != "" {
+			a := bySel[sel]
+			if a == nil {
+				a = &acc{breadth: selBreadth(stage, phase)}
+				bySel[sel] = a
+			}
+
+			a.items = append(a.items, baseLine{rk[2], d.line})
+		} else {
+			globalDefault = append(globalDefault, baseLine{rk[2], d.line})
 		}
 	}
 
-	return groups
+	linesOf := func(items []baseLine) []string {
+		sort.Slice(items, func(i, j int) bool { return items[i].base < items[j].base })
+
+		out := make([]string, len(items))
+		for i, it := range items {
+			out[i] = it.line
+		}
+
+		return out
+	}
+
+	groups := make([]selGroup, 0, len(bySel))
+	for sel, a := range bySel {
+		groups = append(groups, selGroup{a.breadth, sel, linesOf(a.items)})
+	}
+
+	// Broad first, ties by selector text — a stable, deterministic order that puts
+	// the most specific selector last.
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].breadth != groups[j].breadth {
+			return groups[i].breadth < groups[j].breadth
+		}
+
+		return groups[i].sel < groups[j].sel
+	})
+
+	return linesOf(globalDefault), groups
 }
 
 // mapField maps one override field to (phase, base, directive line, note). The
@@ -209,25 +286,22 @@ func selector(stage, phase string) string {
 	return fmt.Sprintf("(%s%s|%s%s%s).*", stage, plain, fusedPrefix, stage, fused)
 }
 
-// render emits the process{} block: the global defaults first, then a withName
-// selector per group, in a stable order.
-func render(groups map[string][]string) string {
+// render emits the process{} block: the global process default first, then each
+// withName selector broad-to-narrow so the most specific one is applied last
+// (Nextflow's last-matching-withName-wins rule) and thus takes effect.
+func render(globalDefault []string, groups []selGroup) string {
 	var b strings.Builder
 
 	b.WriteString("// Generated from an mrp --overrides file by `mro2nf overrides`.\n")
 	b.WriteString("// Apply at launch: nextflow run main.nf -c overrides.config\n")
 	b.WriteString("process {\n")
 
-	for _, line := range groups[""] {
+	for _, line := range globalDefault {
 		fmt.Fprintf(&b, "    %s\n", line)
 	}
 
-	for _, sel := range sortedKeys(groups) {
-		if sel == "" {
-			continue
-		}
-
-		fmt.Fprintf(&b, "    withName: '%s' { %s }\n", sel, strings.Join(groups[sel], "; "))
+	for _, g := range groups {
+		fmt.Fprintf(&b, "    withName: '%s' { %s }\n", g.sel, strings.Join(g.lines, "; "))
 	}
 
 	b.WriteString("}\n")

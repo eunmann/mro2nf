@@ -55,6 +55,114 @@ func TestConvertPipelineScopeExpands(t *testing.T) {
 	}
 }
 
+// TestConvertPipelineScopeTransitive guards that expansion recurses through a
+// nested sub-pipeline: the entry pipeline TOP resolves to ALIGN and SORT (via
+// SUB) plus its own direct stage COLLATE.
+func TestConvertPipelineScopeTransitive(t *testing.T) {
+	cfg, unmapped, err := overrides.Convert([]byte(`{"TOP": {"mem_gb": 8}}`), sampleProgram())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if len(unmapped) != 0 {
+		t.Errorf("unexpected unmapped: %v", unmapped)
+	}
+
+	for _, stage := range []string{"ALIGN", "SORT", "COLLATE"} {
+		want := "withName: '(STAGE_[0-9]+_.+__)?" + stage + ".*' { memory = '8 GB' }"
+		if !strings.Contains(cfg, want) {
+			t.Errorf("TOP must expand transitively to %s:\n%s", stage, cfg)
+		}
+	}
+}
+
+// TestConvertPipelineScopePhase guards a phase-qualified pipeline-scoped key: the
+// phase selector must be applied to every expanded stage.
+func TestConvertPipelineScopePhase(t *testing.T) {
+	cfg, _, err := overrides.Convert([]byte(`{"TOP.SUB": {"chunk.mem_gb": 8}}`), sampleProgram())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	for _, stage := range []string{"ALIGN", "SORT"} {
+		want := "withName: '(" + stage + "_MAIN|STAGE_[0-9]+_.+__" + stage + "_MN).*' { memory = '8 GB' }"
+		if !strings.Contains(cfg, want) {
+			t.Errorf("chunk.mem_gb must reach %s's main-phase selector:\n%s", stage, cfg)
+		}
+	}
+}
+
+// TestConvertResolvesByAlias guards that an override key matches a call's alias
+// (`call ALIGN as TRIM`), which is what mrp keys on — not just the callable name.
+func TestConvertResolvesByAlias(t *testing.T) {
+	prog := sampleProgram()
+	// Rename SUB's ALIGN call to the alias TRIM (callable stays ALIGN).
+	prog.Pipelines["SUB"].Calls[0].Name = "TRIM"
+
+	cfg, unmapped, err := overrides.Convert([]byte(`{"SUB.TRIM": {"mem_gb": 8}}`), prog)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if len(unmapped) != 0 {
+		t.Errorf("aliased call key should resolve, got unmapped: %v", unmapped)
+	}
+
+	if !strings.Contains(cfg, "withName: '(STAGE_[0-9]+_.+__)?TRIM.*' { memory = '8 GB' }") {
+		t.Errorf("override must target the alias TRIM:\n%s", cfg)
+	}
+}
+
+// TestConvertStageKeyBeatsPipelineScope guards precedence: an explicit stage key
+// wins over a pipeline-scoped key that also covers the stage, even though the
+// stage key has fewer path segments (a narrower target is more specific).
+func TestConvertStageKeyBeatsPipelineScope(t *testing.T) {
+	cfg, _, err := overrides.Convert(
+		[]byte(`{"ALIGN": {"mem_gb": 16}, "TOP.SUB": {"mem_gb": 8}}`), sampleProgram())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if !strings.Contains(cfg, "withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '16 GB' }") {
+		t.Errorf("explicit ALIGN key (16) must win over the pipeline scope (8):\n%s", cfg)
+	}
+
+	if strings.Contains(cfg, "ALIGN.*' { memory = '8 GB' }") {
+		t.Errorf("ALIGN must not take the pipeline-scoped 8 GB:\n%s", cfg)
+	}
+
+	// SORT, covered only by the pipeline scope, keeps 8 GB.
+	if !strings.Contains(cfg, "withName: '(STAGE_[0-9]+_.+__)?SORT.*' { memory = '8 GB' }") {
+		t.Errorf("SORT should keep the pipeline-scoped 8 GB:\n%s", cfg)
+	}
+}
+
+// TestConvertSpecificPhaseWinsOverGlobal guards the selector ordering: when a
+// phase-wide default and a specific stage-phase override both match a process,
+// the specific one must be emitted LATER, because Nextflow applies the last
+// matching withName. A global chunk default and an expanded sub-pipeline chunk
+// override both hit ALIGN_MAIN; the broad `.*` selector must precede the specific
+// one so the specific 8 GB wins over the global 4 GB at runtime.
+func TestConvertSpecificPhaseWinsOverGlobal(t *testing.T) {
+	cfg, _, err := overrides.Convert(
+		[]byte(`{"": {"chunk.mem_gb": 4}, "TOP.SUB": {"chunk.mem_gb": 8}}`), sampleProgram())
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	broad := strings.Index(cfg, `withName: '.*(_MAIN|_MN).*'`)
+	specific := strings.Index(cfg, `withName: '(ALIGN_MAIN|`)
+
+	if broad < 0 || specific < 0 {
+		t.Fatalf("expected both a phase-wide and a specific selector:\n%s", cfg)
+	}
+
+	if broad > specific {
+		t.Errorf("phase-wide selector must precede the specific one (so the specific wins under "+
+			"Nextflow's last-match rule); broad@%d specific@%d:\n%s", broad, specific, cfg)
+	}
+}
+
 // TestConvertUnknownKeyReported guards #45: a key naming neither a stage nor a
 // sub-pipeline is reported, not silently dropped, when the program is known.
 func TestConvertUnknownKeyReported(t *testing.T) {
