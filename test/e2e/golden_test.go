@@ -67,6 +67,8 @@ var goldenCases = []struct {
 	{"entry_struct_file_override", "entry_struct_file", "expected/eps_override_outs.json"},
 	{"entry_mapfile", "entry_mapfile", "expected/epm_outs.json"},
 	{"entry_mapfile_override", "entry_mapfile", "expected/epm_override_outs.json"},
+	{"entry_dir", "entry_dir", "expected/epd_outs.json"},
+	{"entry_dir_override", "entry_dir", "expected/epd_override_outs.json"},
 	{"split_from_file", "split_from_file", "expected/sp_outs.json"},
 	{"split_from_file_override", "split_from_file", "expected/sp_override_outs.json"},
 	{"special_resource", "special_resource", "expected/outs.json"},

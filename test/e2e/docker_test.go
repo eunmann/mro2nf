@@ -205,6 +205,12 @@ func TestDockerEntryOverrides(t *testing.T) {
 		// other and the total is wrong.
 		"sb1/reads.txt": "2\n3\n", // 5
 		"sb2/reads.txt": "10\n",   // 10 ; (5+10) * 2 == 30
+		// A DIRECTORY entry input (`path fastqs`, the Cell Ranger --fastqs
+		// shape): the whole dir is staged into the container, and the stage sums
+		// every file in it. Lives outside the image, so a correct total proves
+		// the directory arrived only via staging.
+		"odir/e.txt": "10\n",    // 10
+		"odir/f.txt": "11\n12\n", // 23 ; (10+11+12) * 2 == 66
 	}
 
 	for name, content := range files {
@@ -235,6 +241,8 @@ func TestDockerEntryOverrides(t *testing.T) {
 			map[string]any{"cfg": map[string]any{"ref": p("o_ref.txt"), "n": 5}}, `{"total": 40.0}`},
 		{"entry_mapfile_override", "entry_mapfile",
 			map[string]any{"reads": map[string]any{"a": p("o_m1.txt"), "b": p("o_m2.txt")}}, `{"total": 40.0}`},
+		{"entry_dir_override", "entry_dir",
+			map[string]any{"fastqs": p("odir")}, `{"total": 66.0}`},
 	}
 
 	for _, tc := range cases {
