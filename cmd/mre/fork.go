@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"path/filepath"
@@ -12,6 +13,9 @@ import (
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 )
+
+// errForkIndexRange reports a native-scatter fork index past the resolved forks.
+var errForkIndexRange = errors.New("forkbind -index out of range")
 
 // runForkBind resolves a map call's bindings into one args file per fork,
 // written as fork_NNNNN.json into -chunkdir so a lexical sort recovers order.
@@ -23,6 +27,8 @@ func runForkBind(_ context.Context, argv []string) error {
 	inputs := fs.String("inputs", "", "comma-separated callId=bundleDir pairs")
 	dir := fs.String("chunkdir", ".", "directory to write per-fork args bundles")
 	mapMode := fs.String("mapmode", "array", "static fork kind: 'map' (typed map) or 'array'")
+	index := fs.Int("index", -1, "with -o, resolve and write ONLY this fork's args bundle (native-map scatter, #76)")
+	oDir := fs.String("o", "", "output args bundle dir when -index >= 0")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -56,6 +62,14 @@ func runForkBind(_ context.Context, argv []string) error {
 
 	params, tbl := man.Params(prod.callable, prod.role), man.Table()
 
+	// Native scatter (#76 foundation): -index writes just one fork's args to -o, so
+	// the standalone FORK task can be replaced by an in-workflow scatter over
+	// 0..N-1 with each stage resolving its own fork inline. The per-fork args are
+	// identical to the corresponding full-fork write.
+	if *index >= 0 {
+		return writeForkIndex(forks, *index, *oDir, params, tbl)
+	}
+
 	names := make([]string, len(forks))
 
 	for i, args := range forks {
@@ -73,6 +87,25 @@ func runForkBind(_ context.Context, argv []string) error {
 	}
 
 	return writeForkMeta(*dir, names, keys)
+}
+
+// writeForkIndex writes only fork[index]'s args bundle to oDir (the native-scatter
+// path); it is identical to the corresponding full-fork write.
+func writeForkIndex(forks []json.RawMessage, index int, oDir string, params []ir.Param, tbl *types.Table) error {
+	if index >= len(forks) {
+		return fmt.Errorf("%w: index %d, %d forks", errForkIndexRange, index, len(forks))
+	}
+
+	payload, err := rawToMap(forks[index])
+	if err != nil {
+		return err
+	}
+
+	if err := shim.WriteBundle(oDir, payload, params, tbl); err != nil {
+		return fmt.Errorf("write fork %d bundle: %w", index, err)
+	}
+
+	return nil
 }
 
 // writeForkMeta writes the two fork sidecar files into dir:
