@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -8,13 +10,29 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// marker builds a transport-marker leaf value as mre writes it into a sidecar.
-func marker(n string) string { return shim.FileMarker + "f/" + n }
+// marker builds a file transport-marker leaf value as mre writes it into a
+// sidecar; dirMarker is its directory counterpart (a staged `path`/dir leaf).
+func marker(n string) string    { return shim.FileMarker + "f/" + n }
+func dirMarker(n string) string { return shim.DirMarker + "f/" + n }
+
+// mustPublish runs publishOuts and fails the test on a shape error, returning the
+// published outs tree.
+func mustPublish(t *testing.T, pub *publisher, params []ir.Param, outs map[string]any) map[string]any {
+	t.Helper()
+
+	got, err := pub.publishOuts(params, outs)
+	if err != nil {
+		t.Fatalf("publishOuts: %v", err)
+	}
+
+	return got
+}
 
 // TestPublishLayoutMapping pins the funnel-free layout mode (#12): from the raw
 // marker-bearing sidecar (no files staged), it maps each leaf's transport
 // basename to its outs/ rel path(s) and records one manifest entry per leaf, with
-// is_dir set for a path-typed (directory) leaf — WITHOUT copying anything.
+// is_dir taken from the leaf's marker (its ground-truth dir-ness stat'd at
+// staging time) — WITHOUT copying anything.
 func TestPublishLayoutMapping(t *testing.T) {
 	params := []ir.Param{
 		{Name: "aln", BaseType: "bam", IsFile: true},
@@ -24,12 +42,12 @@ func TestPublishLayoutMapping(t *testing.T) {
 	outs := map[string]any{
 		"aln":     marker("L0000"),
 		"shards":  []any{marker("L0001"), marker("L0002")},
-		"workdir": marker("L0003"),
+		"workdir": dirMarker("L0003"),
 	}
 
 	pub := newPublisher(nil)
 
-	published := pub.publishOuts(params, outs)
+	published := mustPublish(t, pub, params, outs)
 
 	wantLayout := map[string][]string{
 		"L0000": {"aln.bam"},
@@ -61,6 +79,80 @@ func TestPublishLayoutMapping(t *testing.T) {
 	}
 }
 
+// TestPublishManifestIsDirGroundTruth guards #43: is_dir comes from the leaf's
+// staged marker, not the declared output type. A directory written into a
+// `file`-typed out is catalogued is_dir=true, and a plain file written into a
+// `path`-typed out is_dir=false — so a downstream control plane reading the
+// manifest GETs the right shape regardless of a producer's declared type.
+func TestPublishManifestIsDirGroundTruth(t *testing.T) {
+	params := []ir.Param{
+		{Name: "dir_in_file", BaseType: "file", IsFile: true},  // declared file, staged a dir
+		{Name: "file_in_path", BaseType: "path", IsFile: true}, // declared path, staged a file
+	}
+	outs := map[string]any{
+		"dir_in_file":  dirMarker("L0000"),
+		"file_in_path": marker("L0001"),
+	}
+
+	pub := newPublisher(nil)
+	mustPublish(t, pub, params, outs)
+
+	wantManifest := []manifestEntry{
+		{Path: "dir_in_file", BaseType: "file", IsDir: true},
+		{Path: "file_in_path", BaseType: "path", IsDir: false},
+	}
+	if diff := cmp.Diff(wantManifest, pub.manifest); diff != "" {
+		t.Errorf("ground-truth is_dir manifest mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestPublishShapeMismatchErrors guards #44: a file-bearing output whose runtime
+// value contradicts its declared container type is a hard error, not a silent
+// pass-through that would leak a raw @mre:file: marker into pipeline_outs.json and
+// skip the layout/manifest. Each case is a well-formed marker at the wrong shape.
+func TestPublishShapeMismatchErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		params  []ir.Param
+		structs map[string]*ir.StructType
+		outs    map[string]any
+	}{
+		{
+			name:   "array param, scalar marker",
+			params: []ir.Param{{Name: "shards", BaseType: "txt", IsFile: true, ArrayDim: 1}},
+			outs:   map[string]any{"shards": marker("L0000")},
+		},
+		{
+			name:   "map param, scalar marker",
+			params: []ir.Param{{Name: "reports", BaseType: "txt", IsFile: true, MapDim: 1}},
+			outs:   map[string]any{"reports": marker("L0000")},
+		},
+		{
+			name:    "struct param, scalar marker",
+			params:  []ir.Param{{Name: "cfg", BaseType: "Cfg", IsFile: true}},
+			structs: map[string]*ir.StructType{"Cfg": {Name: "Cfg", Fields: []ir.Param{{Name: "data", BaseType: "file", IsFile: true}}}},
+			outs:    map[string]any{"cfg": marker("L0000")},
+		},
+		{
+			name:   "scalar file param, array value",
+			params: []ir.Param{{Name: "aln", BaseType: "bam", IsFile: true}},
+			outs:   map[string]any{"aln": []any{marker("L0000")}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := newPublisher(c.structs).publishOuts(c.params, c.outs)
+			if err == nil {
+				t.Fatalf("expected a shape-mismatch error, got nil")
+			}
+			if strings.Contains(fmt.Sprint(err), shim.FileMarker) {
+				t.Errorf("error must not embed the raw marker value: %v", err)
+			}
+		})
+	}
+}
+
 // TestPublishOutsTreeLayout pins the published outs/ tree to Martian's
 // post_process layout: a scalar file is named by GetOutFilename at the root; an
 // array becomes a subdir (bare param name) with zero-padded index filenames; a
@@ -85,7 +177,7 @@ func TestPublishOutsTreeLayout(t *testing.T) {
 		"count":      float64(7),
 	}
 
-	got := newPublisher(structs).publishOuts(params, outs)
+	got := mustPublish(t, newPublisher(structs), params, outs)
 
 	want := map[string]any{
 		"alignments": "alignments.bam",
@@ -115,7 +207,7 @@ func TestPublishLayoutOutNameCollision(t *testing.T) {
 
 	pub := newPublisher(nil)
 
-	got := pub.publishOuts(params, outs)
+	got := mustPublish(t, pub, params, outs)
 
 	if got["a"] != "shared.txt" || got["b"] != "shared_1.txt" {
 		t.Fatalf("collision not disambiguated: a=%v b=%v", got["a"], got["b"])
@@ -152,7 +244,7 @@ func TestPublishLayoutRepeatedLeafDedup(t *testing.T) {
 
 	pub := newPublisher(nil)
 
-	got := pub.publishOuts(params, outs)
+	got := mustPublish(t, pub, params, outs)
 
 	if got["a"] != "shared.txt" || got["b"] != "shared.txt" {
 		t.Fatalf("repeated leaf rels = %v/%v, want shared.txt/shared.txt", got["a"], got["b"])
@@ -182,7 +274,7 @@ func TestPublishOutsAbsentFileNull(t *testing.T) {
 		"empty":   "",
 	}
 
-	got := newPublisher(nil).publishOuts(params, outs)
+	got := mustPublish(t, newPublisher(nil), params, outs)
 
 	if got["missing"] != nil || got["empty"] != nil {
 		t.Errorf("absent/empty leaves = %v/%v, want nil/nil", got["missing"], got["empty"])
@@ -199,7 +291,7 @@ func TestPublishOutsArrayInStruct(t *testing.T) {
 	}}}
 	outs := map[string]any{"r": map[string]any{"files": []any{marker("L0000"), marker("L0001")}, "n": float64(2)}}
 
-	got := newPublisher(structs).publishOuts(params, outs)
+	got := mustPublish(t, newPublisher(structs), params, outs)
 
 	want := map[string]any{"r": map[string]any{
 		"files": []any{"r/files/0.txt", "r/files/1.txt"},
@@ -222,7 +314,7 @@ func TestPublishOutsMapOfFileArray(t *testing.T) {
 		"sampleB": []any{marker("L0002")},
 	}}
 
-	got := newPublisher(nil).publishOuts(params, outs)
+	got := mustPublish(t, newPublisher(nil), params, outs)
 
 	want := map[string]any{"lanes": map[string]any{
 		"sampleA": []any{"lanes/sampleA/0.txt", "lanes/sampleA/1.txt"},
@@ -247,7 +339,7 @@ func TestPublishOutsNonFilePassthrough(t *testing.T) {
 		"vals":   []any{float64(1), float64(2)},
 	}
 
-	got := newPublisher(nil).publishOuts(params, outs)
+	got := mustPublish(t, newPublisher(nil), params, outs)
 
 	want := map[string]any{
 		"counts": map[string]any{"a/b": float64(1), "": float64(2), "ok": float64(3)},
@@ -275,7 +367,7 @@ func TestPublishOutsDeepNesting(t *testing.T) {
 		"cfg":  map[string]any{"reports": map[string]any{"r1": marker("L0003"), "r2": marker("L0004")}},
 	}
 
-	got := newPublisher(structs).publishOuts(params, outs)
+	got := mustPublish(t, newPublisher(structs), params, outs)
 
 	want := map[string]any{
 		"grid": map[string]any{"k": []any{

@@ -24,15 +24,47 @@ var errDestExists = errors.New("destination already exists")
 // boundaries. File leaves in the payload are stored as markers; the real files
 // live under the files subdir, named collision-free.
 const (
-	// FileMarker prefixes a file-leaf value in a bundle's payload. The remainder
-	// is the bundle-relative path to the staged file. The prefix is distinctive
-	// enough that no real data value collides with it.
+	// FileMarker prefixes a plain-file leaf value in a bundle's payload. The
+	// remainder is the bundle-relative path to the staged file. The prefix is
+	// distinctive enough that no real data value collides with it.
 	FileMarker = "@mre:file:"
+	// DirMarker is FileMarker's counterpart for a leaf staged from a directory
+	// (a Martian `path` output, or a directory a stage wrote into a `file`-typed
+	// out). Both markers resolve to a path identically; the distinction records
+	// the leaf's ground-truth dir-ness — measured by stat at staging time — so a
+	// downstream consumer (publish's manifest) need not infer it from the declared
+	// output type. See MarkFiles and cmd/mre/publish.go emitFile.
+	DirMarker = "@mre:dir:"
 	// bundleData is the payload filename inside a bundle directory.
 	bundleData = "data.json"
 	// bundleFiles is the files subdirectory inside a bundle directory.
 	bundleFiles = "f"
 )
+
+// Marker returns the transport marker for a leaf staged at bundle-relative rel,
+// choosing FileMarker or DirMarker by the leaf's stat'd dir-ness.
+func Marker(rel string, isDir bool) string {
+	if isDir {
+		return DirMarker + rel
+	}
+
+	return FileMarker + rel
+}
+
+// CutMarker splits a transport marker into (rel, isDir, ok): its bundle-relative
+// path and whether the leaf is a directory. ok is false for a string that is not
+// a marker (a plain scalar, or a raw path for a declared output never written).
+func CutMarker(s string) (string, bool, bool) {
+	if rel, ok := strings.CutPrefix(s, DirMarker); ok {
+		return rel, true, true
+	}
+
+	if rel, ok := strings.CutPrefix(s, FileMarker); ok {
+		return rel, false, true
+	}
+
+	return "", false, false
+}
 
 // ReadBundle loads a bundle directory's payload and rewrites every file marker
 // to an absolute path under the (staged) bundle, so callers see real paths. An
@@ -85,7 +117,7 @@ func decodeJSON(raw json.RawMessage) (any, error) {
 func resolveMarkers(v any, bundleAbs string) any {
 	switch t := v.(type) {
 	case string:
-		if rel, ok := strings.CutPrefix(t, FileMarker); ok {
+		if rel, _, ok := CutMarker(t); ok {
 			return filepath.Join(bundleAbs, rel)
 		}
 
@@ -172,9 +204,15 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		// need the path string. See bug 4. os.Stat (not Lstat) follows symlinks so
 		// a dangling symlink is treated as absent too, rather than aborting the
 		// bundle in CopyTree's symlink resolution (matching publish's emitFile).
-		if _, err := os.Stat(src); os.IsNotExist(err) {
+		// The same stat records the leaf's ground-truth dir-ness for the marker;
+		// a non-IsNotExist error falls through to CopyTree, which reports it
+		// precisely.
+		info, err := os.Stat(src)
+		if os.IsNotExist(err) {
 			return src, nil
 		}
+
+		isDir := err == nil && info.IsDir()
 
 		// Each leaf is staged under a flat, ordinal name (f/L0000, f/L0001, …) in
 		// canonical walk order. The transport basename is not load-bearing — publish
@@ -194,7 +232,7 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 			return "", err
 		}
 
-		return FileMarker + rel, nil
+		return Marker(rel, isDir), nil
 	}
 
 	marked, err := tbl.Apply(params, payload, copyIn)
