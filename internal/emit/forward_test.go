@@ -11,6 +11,28 @@ func ref(param, id string) ir.Binding {
 	return ir.Binding{Param: param, Value: ir.Value{Ref: &ir.Ref{Kind: refKindCall, ID: id, Output: param}}}
 }
 
+// TestConsumerCount guards #59 Lever 4's fold-safety: consumerCount must count
+// every dependent on a call's output — input bindings, pipeline returns, AND
+// disable refs (which live on the call, not in its bindings). Missing a disable
+// consumer would fold a producer whose ch_<producer> the gate still references.
+func TestConsumerCount(t *testing.T) {
+	p := &ir.Pipeline{
+		Calls: []ir.Call{
+			{Name: "SRC"},
+			{Name: "USE", Bindings: []ir.Binding{ref("y", "SRC")}},
+			{Name: "GATE", Disabled: &ir.Ref{Kind: refKindCall, ID: "SRC", Output: "flag"}},
+		},
+		Returns: []ir.Binding{ref("w", "GATE")},
+	}
+
+	if got := consumerCount("SRC", p); got != 2 {
+		t.Errorf("consumerCount(SRC) = %d, want 2 (USE input + GATE disable ref)", got)
+	}
+	if got := consumerCount("GATE", p); got != 1 {
+		t.Errorf("consumerCount(GATE) = %d, want 1 (return)", got)
+	}
+}
+
 // TestForwardProducerExactCoverage pins the emit-once routing condition: a call is
 // routed straight through only when its bindings forward EXACTLY one plain
 // producer's declared outputs. A subset forward must keep its BIND, or routing the

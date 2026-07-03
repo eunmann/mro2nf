@@ -1375,6 +1375,14 @@ func consumerCount(name string, p *ir.Pipeline) int {
 				n++
 			}
 		}
+
+		// A disable ref (using(disabled = <call>.flag)) lives on the call, not in
+		// its bindings, but still depends on the producer's output — so it counts
+		// as a consumer (else the producer would be folded away and the gate's
+		// ch_<producer> would dangle).
+		if c.Disabled != nil && c.Disabled.Kind == refKindCall && c.Disabled.ID == name {
+			n++
+		}
 	}
 
 	for _, r := range refCalls(p.Returns) {
