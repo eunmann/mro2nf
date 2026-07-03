@@ -6,10 +6,12 @@ package emit
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -102,6 +104,11 @@ type Options struct {
 	FuseChains bool
 	// Target is the execution backend the project is shaped for (default local).
 	Target Target
+	// Native opts into channel-native orchestration (#61 M1 / #76). M1 step 1:
+	// the entry args are baked at transpile time and staged directly, so no
+	// BUILD_ENTRY_ARGS task runs (entry inputs are fixed — no launch-time param
+	// override in native mode). Further increments collapse BIND/FORK/MERGE.
+	Native bool
 }
 
 // Emit writes the Nextflow project for prog into opts.OutDir.
@@ -146,8 +153,16 @@ func Emit(prog *ir.Program, opts Options) error {
 		mrjob:    opts.Mrjob,
 		monitor:  opts.Monitor,
 		features: features,
+		native:   opts.Native,
 		code:     opts.StageCode,
 		plan:     buildPlan(prog, features),
+	}
+
+	// Native M1 bakes the entry args at transpile time (no BUILD_ENTRY_ARGS task).
+	// File-typed entry inputs additionally need Nextflow head-node staging, which
+	// the baked path does not yet reproduce — gate them out of this increment.
+	if opts.Native && hasStagedFileEntry(prog) {
+		return errNativeFileEntry
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker
@@ -211,7 +226,48 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		}
 	}
 
-	return writeEntryArgs(prog, opts.OutDir, opts.MRODir)
+	if err := writeEntryArgs(prog, opts.OutDir, opts.MRODir); err != nil {
+		return err
+	}
+
+	if opts.Native {
+		return bakeEntryArgs(prog, opts)
+	}
+
+	return nil
+}
+
+// errNativeFileEntry reports that -native was asked for a pipeline with a
+// file-typed entry input, which native M1 does not yet support.
+var errNativeFileEntry = errors.New("native mode does not yet support file-typed entry inputs")
+
+// bakeEntryArgs resolves the entry args once at transpile time (no launch-time
+// override) by running the same `mre entryargs` the BUILD_ENTRY_ARGS task would,
+// writing entry_resolved/ into the project so the native workflow stages it
+// directly — no per-run entry task (#76 M1). Byte-identical to the runtime
+// resolution because it is the identical command on the identical baked defaults.
+func bakeEntryArgs(prog *ir.Program, opts Options) error {
+	values := filepath.Join(opts.OutDir, assetsDir, "native_values.json")
+	if err := writeFile(values, []byte("{}")); err != nil {
+		return err
+	}
+
+	cmd := exec.CommandContext(context.Background(), opts.Mre, "entryargs",
+		"-base", filepath.Join(opts.OutDir, "entry_args"),
+		"-values", values,
+		"-o", filepath.Join(opts.OutDir, "entry_resolved"),
+		"-types", filepath.Join(opts.OutDir, assetsDir, "types.json"),
+		"-callable", prog.Entry.Callable, "-role", "in")
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("bake entry args for -native: %w: %s", err, out)
+	}
+
+	if err := os.Remove(values); err != nil {
+		return fmt.Errorf("clean up native values file: %w", err)
+	}
+
+	return nil
 }
 
 // writeDisableArtifacts emits, for every disabled call, its disable bindspec

@@ -5,6 +5,7 @@ package e2e
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -355,5 +356,67 @@ func assertFileContent(t *testing.T, path, want string) {
 
 	if got := strings.TrimRight(string(raw), "\n"); got != want {
 		t.Errorf("%s content = %q, want %q", path, got, want)
+	}
+}
+
+// TestNativeMode guards #76 M1 step 1: -native bakes the entry args at transpile
+// time so no BUILD_ENTRY_ARGS task is emitted, and the run output stays
+// byte-identical to the golden. Exercises a simple diamond-shaped disable
+// fixture, an N-stage chain, and the complex cellranger_shaped pipeline (all
+// scalar-entry). A file-typed entry is gated out of this increment.
+func TestNativeMode(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	cases := []struct{ fixture, golden string }{
+		{"fold_disable", "expected/outs.json"},
+		{"chain_fuse3", "expected/outs.json"},
+		{"cellranger_shaped", "expected/count_outs.json"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, tc.fixture, "-native")
+
+			main, err := os.ReadFile(filepath.Join(proj, "main.nf"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(main), "BUILD_ENTRY_ARGS") {
+				t.Error("-native must not emit a BUILD_ENTRY_ARGS task")
+			}
+
+			if err := runNextflow(t, proj); err != nil {
+				t.Fatal(err)
+			}
+
+			goldenJSON(t,
+				filepath.Join(proj, "results", "pipeline_outs.json"),
+				filepath.Join(root, "testdata", tc.fixture, tc.golden))
+		})
+	}
+}
+
+// TestNativeRejectsFileEntry guards the M1 gate: a file-typed entry input is not
+// yet supported by -native and must be a loud transpile error, not silent wrong
+// output.
+func TestNativeRejectsFileEntry(t *testing.T) {
+	buildBinaries(t)
+
+	dir := filepath.Join(root, "testdata", "entry_file")
+	cmd := exec.Command(filepath.Join(root, "mro2nf"),
+		"-native", "-o", t.TempDir(),
+		"-mre", filepath.Join(root, "mre"),
+		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
+		"-mropath", dir, filepath.Join(dir, "pipeline.mro"))
+	cmd.Dir = root
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("-native on a file-entry pipeline must fail; got success:\n%s", out)
+	}
+	if !strings.Contains(string(out), "file-typed entry") {
+		t.Errorf("want a file-typed-entry error, got:\n%s", out)
 	}
 }

@@ -53,6 +53,7 @@ func run(args []string) error {
 	monitorFlag := fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)")
 	fuseChainsFlag := fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)")
 	foldDisablesFlag := fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)")
+	nativeFlag := fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)")
 	configFlag := fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
@@ -80,14 +81,9 @@ func run(args []string) error {
 
 	log := logging.New()
 
-	ast, err := frontend.Parse(fs.Arg(0), filepath.SplitList(*mroPath), false)
+	prog, err := loadProgram(fs.Arg(0), *mroPath)
 	if err != nil {
-		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
-	}
-
-	prog, err := frontend.Lower(ast)
-	if err != nil {
-		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
+		return err
 	}
 
 	target, err := emit.ParseTarget(*targetFlag)
@@ -102,7 +98,7 @@ func run(args []string) error {
 	if err := emitProgram(prog, fs.Arg(0), opts{
 		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag,
 		container: *containerFlag, monitor: *monitorFlag, target: target,
-		fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag,
+		fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag,
 	}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
@@ -155,6 +151,21 @@ func runOverrides(args []string) error {
 	}
 
 	return nil
+}
+
+// loadProgram parses and lowers the pipeline at src into the transpiler IR.
+func loadProgram(src, mroPath string) (*ir.Program, error) {
+	ast, err := frontend.Parse(src, filepath.SplitList(mroPath), false)
+	if err != nil {
+		return nil, fmt.Errorf("transpile %s: %w", src, err)
+	}
+
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		return nil, fmt.Errorf("transpile %s: %w", src, err)
+	}
+
+	return prog, nil
 }
 
 // loadOverrideProgram parses the pipeline at mro (may be empty -> nil program)
@@ -274,6 +285,7 @@ type opts struct {
 	monitor                              bool
 	fuseChains                           bool
 	foldDisables                         bool
+	native                               bool
 	target                               emit.Target
 }
 
@@ -307,6 +319,7 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 		Monitor:      o.monitor,
 		FuseChains:   o.fuseChains,
 		FoldDisables: o.foldDisables,
+		Native:       o.native,
 		Target:       o.target,
 		MROFile:      filepath.Base(src),
 		MRODir:       mroDir,
