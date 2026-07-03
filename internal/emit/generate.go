@@ -1251,9 +1251,12 @@ func callForwardProducer(c ir.Call, p *ir.Pipeline, prog *ir.Program) (string, b
 // `mre bind` at the head of the SAME task as its `main` phase — no standalone
 // BIND_* task, and its referenced files stage into the one task once instead of
 // being staged to the bind and re-staged to the stage (fold BIND, #16). Mapped,
-// disabled, preflight, split-stage, and sub-pipeline callees keep their BIND.
+// disabled, split-stage, and sub-pipeline callees keep their BIND. A preflight
+// leaf stage fuses too (#59): its output only signals completion to the pa gate,
+// and the fused process is identical to a normal stage — preflight semantics live
+// entirely in the gate wiring (partitionGateablePreflight), not the process.
 func fuseableStageCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, bool) {
-	if c.Mapped || c.Disabled != nil || c.Preflight {
+	if c.Mapped || c.Disabled != nil {
 		return nil, false
 	}
 
