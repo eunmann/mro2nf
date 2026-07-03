@@ -1,0 +1,35 @@
+# #59 Lever 1 regression: the entry bakes skip=true, so GEN's disabled=self.skip
+# folds to always-off. With -fold-disables, GEN is pruned to its null output
+# (no stage, no gate); KEEP always runs. Output is byte-identical to mrp either
+# way (mrp skips GEN → y null).
+stage GEN(
+    out int y,
+    src py "stages/gen",
+)
+
+stage KEEP(
+    out int z,
+    src py "stages/keep",
+)
+
+pipeline P(
+    in  bool skip,
+    out int  y,
+    out int  z,
+)
+{
+    call GEN() using (
+        disabled = self.skip,
+    )
+
+    call KEEP()
+
+    return (
+        y = GEN.y,
+        z = KEEP.z,
+    )
+}
+
+call P(
+    skip = true,
+)

@@ -32,7 +32,7 @@ type Diagnostic struct {
 // pipeline. Callers print the results and abort if HasError reports an Error —
 // the seam #72/#76 add their flag-specific error checks to.
 func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
-	f := featureSet{fuseChains: opts.FuseChains}
+	f := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables}
 	pl := buildPlan(prog, f)
 
 	warns := Warnings(prog)
@@ -42,7 +42,46 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 		ds = append(ds, Diagnostic{Severity: SevWarn, Message: w})
 	}
 
-	return append(ds, chainDiagnostics(f, pl)...)
+	ds = append(ds, chainDiagnostics(f, pl)...)
+
+	return append(ds, foldDiagnostics(prog, f, pl)...)
+}
+
+// foldDiagnostics warns which disable gates -fold-disables pruned and on which
+// entry input, so the user knows overriding that input at run time will not
+// re-enable the pruned stage (the safety trade the flag opts into).
+func foldDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic {
+	if !f.foldDisables {
+		return nil
+	}
+
+	var ds []Diagnostic
+
+	for _, name := range sortedKeys(prog.Pipelines) {
+		p := prog.Pipelines[name]
+
+		for _, c := range p.Calls {
+			if pl.pipes[name].calls[c.Name].kind != kindFoldedOff {
+				continue
+			}
+
+			input, _ := foldDisableOff(prog, p, c)
+			ds = append(ds, Diagnostic{
+				Severity: SevWarn,
+				Message: fmt.Sprintf("call %s.%s pruned: disabled=self.%s folds to true; overriding %q at run time will NOT re-enable it",
+					name, c.Name, input, input),
+			})
+		}
+	}
+
+	if len(ds) == 0 {
+		return []Diagnostic{{
+			Severity: SevInfo,
+			Message:  "-fold-disables had no effect: no entry-determinable always-disabled stage to prune",
+		}}
+	}
+
+	return ds
 }
 
 // HasError reports whether any diagnostic is fatal.

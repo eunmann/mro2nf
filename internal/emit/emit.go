@@ -93,6 +93,9 @@ type Options struct {
 	// Monitor enables per-stage virtual-memory enforcement in the shim (the mrp
 	// --monitor analog).
 	Monitor bool
+	// FoldDisables opts into constant-folding entry-determinable disable branches
+	// (#59 Lever 1): an always-disabled stage is pruned from the emitted project.
+	FoldDisables bool
 	// FuseChains opts into linear-chain stage fusion (#59 Lever 4): a single-
 	// consumer, equal-resource source stage is folded into its consumer's task,
 	// dropping a node at the cost of coarser -resume/retry granularity.
@@ -134,7 +137,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	features := featureSet{fuseChains: opts.FuseChains}
+	features := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables}
 	g := genCtx{
 		entry:    prog.Entry.Callable,
 		mroFile:  opts.MROFile,

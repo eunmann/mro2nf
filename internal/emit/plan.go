@@ -1,12 +1,17 @@
 package emit
 
-import "github.com/eunmann/mro2nf/internal/ir"
+import (
+	"encoding/json"
+
+	"github.com/eunmann/mro2nf/internal/ir"
+)
 
 // featureSet is the opt-in emission flags, mirrored from Options. Grouping them
 // keeps genCtx's runtime config (mre/shell/…) separate from behavior toggles and
 // gives the plan a single place to read policy from.
 type featureSet struct {
-	fuseChains bool
+	fuseChains   bool
+	foldDisables bool
 }
 
 // callKind is how a single call is emitted — decided once in buildPlan so the
@@ -23,6 +28,7 @@ const (
 	kindFusedDisabled                 // #59 fused bind+main, natively-gated disable
 	kindFusedChain                    // #59 Lever 4 chain consumer (folds its producer)
 	kindFusedAway                     // #59 Lever 4 chain producer folded into its consumer
+	kindFoldedOff                     // #59 Lever 1 always-disabled call: emit only its null output
 )
 
 // callPlan is the decided emission strategy for one call plus the analysis payload
@@ -84,6 +90,15 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 // inline: chain fold, chain consumer, mapped, forward, fused stage/split/disabled,
 // else a plain bind.
 func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away map[string]bool) callPlan {
+	// #59 Lever 1: an always-disabled call (its gate constant-folds to true) needs
+	// no stage or gate — only its null output, which downstream reads as it would
+	// when skipped at runtime. Takes precedence over every run-path kind.
+	if f.foldDisables {
+		if _, ok := foldDisableOff(prog, p, c); ok {
+			return callPlan{kind: kindFoldedOff}
+		}
+	}
+
 	if f.fuseChains {
 		if away[c.Name] {
 			return callPlan{kind: kindFusedAway}
@@ -117,6 +132,39 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	return callPlan{kind: kindPlainBind, disableTask: needsDisableTask(c)}
 }
 
+// foldDisableOff reports whether a call's disable constant-folds to true — so the
+// call never runs and can be pruned to its null output. Scoped to the safe,
+// unambiguous case: a `disabled = self.<input>` gate on the ENTRY pipeline whose
+// input the entry call bakes as a `true` bool literal (the entry pipeline is
+// instantiated once, so the value is unambiguous). It returns the entry input
+// name so a diagnostic can name it. A `disabled = CALL.out.x` gate is
+// runtime-derived and never folds; a `false` literal leaves the call gated.
+func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) {
+	r := c.Disabled
+	if r == nil || r.Kind != refKindSelf || r.Output != "" {
+		return "", false
+	}
+
+	if prog.Entry == nil || prog.Entry.Callable != p.Name {
+		return "", false
+	}
+
+	for _, b := range prog.Entry.Bindings {
+		if b.Param != r.ID {
+			continue
+		}
+
+		var v bool
+		if b.Value.Ref == nil && json.Unmarshal(b.Value.Literal, &v) == nil && v {
+			return r.ID, true
+		}
+
+		return "", false
+	}
+
+	return "", false
+}
+
 // needsDisableTask reports whether a disabled call requires a standalone DISABLE
 // bind (its flag is not a single top-level field readable on the driver).
 func needsDisableTask(c ir.Call) bool {
@@ -132,5 +180,6 @@ func needsDisableTask(c ir.Call) bool {
 // fusedInclude reports whether a call's module include is suppressed — the fused
 // stage/chain kinds are self-contained per-call processes with no wf_ import.
 func (cp callPlan) fusedInclude() bool {
-	return cp.kind == kindFusedStage || cp.kind == kindFusedChain || cp.kind == kindFusedAway
+	return cp.kind == kindFusedStage || cp.kind == kindFusedChain || cp.kind == kindFusedAway ||
+		cp.kind == kindFoldedOff
 }

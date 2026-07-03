@@ -96,6 +96,10 @@ var goldenCases = []struct {
 	// #59 Lever 4 fold-safety: SRC has a second consumer via disabled = SRC.flag,
 	// so it must NOT fold under -fuse-chains; TestFuseChains asserts that + reruns.
 	{"chain_fuse_disable", "chain_fuse_disable", "expected/outs.json"},
+	// #59 Lever 1 baseline: entry bakes skip=true so GEN is always disabled; the
+	// default (gated) run must match the golden; TestFoldDisables reruns it with
+	// -fold-disables (GEN pruned) and asserts the same output.
+	{"fold_disable", "fold_disable", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
@@ -195,6 +199,39 @@ func TestFuseChains(t *testing.T) {
 	goldenJSON(t,
 		filepath.Join(dproj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "chain_fuse_disable", "expected", "outs.json"))
+}
+
+// TestFoldDisables verifies #59 Lever 1: with -fold-disables, an entry-baked
+// always-disabled stage (GEN, gated on self.skip with skip=true) is pruned to
+// its null output — no GEN stage/bind/gate in the pipeline — and the run stays
+// byte-identical to the golden (which mrp produced by skipping GEN).
+func TestFoldDisables(t *testing.T) {
+	requireTools(t, "nextflow", "java")
+
+	proj := transpile(t, "fold_disable", "-fold-disables")
+
+	mod, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_P.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(mod), "ch_GEN = Channel.value(") {
+		t.Errorf("-fold-disables must prune GEN to its null output:\n%s", mod)
+	}
+
+	// No stage/bind process definition for GEN remains (the return bind still
+	// consumes ch_GEN's null, which is correct).
+	if strings.Contains(string(mod), "_P__GEN {") {
+		t.Errorf("-fold-disables left a GEN process definition in the pipeline:\n%s", mod)
+	}
+
+	if err := runNextflow(t, proj); err != nil {
+		t.Fatal(err)
+	}
+
+	goldenJSON(t,
+		filepath.Join(proj, "results", "pipeline_outs.json"),
+		filepath.Join(root, "testdata", "fold_disable", "expected", "outs.json"))
 }
 
 // assertPublishedLeaves walks the golden outs JSON and requires every string
