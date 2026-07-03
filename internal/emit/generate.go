@@ -1280,7 +1280,7 @@ func chainFusion(c ir.Call, p *ir.Pipeline, prog *ir.Program, fuseChains bool) (
 		return ir.Call{}, nil, nil, false
 	}
 
-	cs, ok := fuseableLeaf(c, p, prog)
+	cs, ok := chainConsumer(c, prog)
 	if !ok {
 		return ir.Call{}, nil, nil, false
 	}
@@ -1315,6 +1315,23 @@ func fuseableLeaf(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, bool)
 	}
 
 	return fuseableStageCall(c, p, prog)
+}
+
+// chainConsumer reports whether c can be the downstream end of a fused chain: a
+// non-split leaf stage that is not mapped/disabled/preflight. Unlike fuseableLeaf
+// it permits a pure-forward consumer (#73) — its bind is a forward the fused
+// process runs inline, so a source feeding a forwarding stage folds too.
+func chainConsumer(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
+	if c.Mapped || c.Disabled != nil || c.Preflight {
+		return nil, false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split {
+		return nil, false
+	}
+
+	return s, true
 }
 
 // callByName returns the pipeline call with the given instance id.

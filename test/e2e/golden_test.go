@@ -199,6 +199,32 @@ func TestFuseChains(t *testing.T) {
 	goldenJSON(t,
 		filepath.Join(dproj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "chain_fuse_disable", "expected", "outs.json"))
+
+	// #73: a source feeding a pure-FORWARD consumer folds too. file_chain's
+	// MAKEFILE forwards into READFILE; with -fuse-chains MAKEFILE folds away and
+	// the run stays byte-identical to the golden.
+	fproj := transpile(t, "file_chain", "-fuse-chains")
+
+	fmod, err := os.ReadFile(filepath.Join(fproj, "modules", "pipe_CP.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(fmod), "spec_prod.json") {
+		t.Errorf("-fuse-chains must fold MAKEFILE into the READFILE forward consumer:\n%s", fmod)
+	}
+
+	if strings.Contains(string(fmod), "process STAGE_1_CP__MAKEFILE") {
+		t.Errorf("-fuse-chains left a standalone MAKEFILE process:\n%s", fmod)
+	}
+
+	if err := runNextflow(t, fproj); err != nil {
+		t.Fatal(err)
+	}
+
+	goldenJSON(t,
+		filepath.Join(fproj, "results", "pipeline_outs.json"),
+		filepath.Join(root, "testdata", "file_chain", "expected", "cp_outs.json"))
 }
 
 // TestFoldDisables verifies #59 Lever 1: with -fold-disables, an entry-baked
