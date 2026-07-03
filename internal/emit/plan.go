@@ -64,6 +64,10 @@ type pipePlan struct {
 type emitPlan struct {
 	keyed map[string]bool
 	pipes map[string]pipePlan
+	// modules is the set of stages whose stage_<name>.nf module is actually
+	// referenced (imported) somewhere; a stage fused into every one of its call
+	// sites has a dead module that is not emitted (#82).
+	modules map[string]bool
 }
 
 // buildPlan resolves every per-call emission decision up front so the process,
@@ -88,7 +92,46 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 		pl.pipes[name] = pp
 	}
 
+	pl.modules = neededStageModules(prog, pl)
+
 	return pl
+}
+
+// neededStageModules returns the stages whose stage_<name>.nf is referenced: any
+// call whose include names the stage (it is not a fully-inlined fused kind), any
+// keyed-reachable stage (its fork-keyed variants live in the module), and a stage
+// entry point. A stage absent from this set is fused everywhere and its module is
+// dead — writeModules skips it (#82).
+func neededStageModules(prog *ir.Program, pl emitPlan) map[string]bool {
+	needed := map[string]bool{}
+
+	mark := func(callable string) {
+		if _, ok := prog.Stages[callable]; ok {
+			needed[callable] = true
+		}
+	}
+
+	for name, keyed := range pl.keyed {
+		if keyed {
+			mark(name)
+		}
+	}
+
+	if prog.Entry != nil {
+		mark(prog.Entry.Callable)
+	}
+
+	for name, p := range prog.Pipelines {
+		pp := pl.pipes[name]
+
+		for _, c := range p.Calls {
+			if !pp.calls[c.Name].fusedInclude() {
+				mark(c.Callable)
+			}
+		}
+	}
+
+	return needed
 }
 
 // planCall decides one call's kind in the same precedence the emitters used to

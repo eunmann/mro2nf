@@ -504,6 +504,12 @@ func calleeOutParams(prog *ir.Program, p *ir.Pipeline, callID string) []ir.Param
 // writeModules writes one Nextflow module per stage and per pipeline.
 func writeModules(prog *ir.Program, modDir string, g genCtx) error {
 	for _, name := range sortedKeys(prog.Stages) {
+		// A stage fused into every one of its call sites has no importer — its
+		// module is dead, so skip it (#82); the fused processes are self-contained.
+		if !g.plan.modules[name] {
+			continue
+		}
+
 		path := filepath.Join(modDir, "stage_"+name+".nf")
 		if err := writeFile(path, []byte(generateStageModule(prog.Stages[name], g))); err != nil {
 			return err
