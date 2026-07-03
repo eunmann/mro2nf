@@ -10,11 +10,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
 
-// fileMarker prefixes a bundled file reference inside a stage's data.json.
-const fileMarker = "@mre:file:"
+// leafMarkers are the transport-marker prefixes a stage's data.json may carry:
+// a plain file (shim.FileMarker) or a staged directory (shim.DirMarker). The
+// self-containment check must recognize both, or a directory-only bundle would
+// silently pass its assertions.
+var leafMarkers = []string{shim.FileMarker, shim.DirMarker}
 
 // cloudConfig forces copy-staging into per-task scratch dirs: no input is
 // reachable via a shared absolute path, only via Nextflow's staged copy of the
@@ -79,9 +83,10 @@ func TestCloudSimMapFileMerge(t *testing.T) {
 }
 
 // assertSelfContainedBundles walks the work tree's data.json files and checks
-// the bundle contract: every file marker is a relative bundle path (never
-// absolute), the referenced file exists beside the data.json, and at least one
-// such bundle exists at all (so the check cannot green-skip).
+// the bundle contract: every leaf marker (file or directory) is a relative
+// bundle path (never absolute), the referenced leaf exists beside the
+// data.json, and at least one such bundle exists at all (so the check cannot
+// green-skip).
 func assertSelfContainedBundles(t *testing.T, work string) {
 	t.Helper()
 
@@ -97,18 +102,20 @@ func assertSelfContainedBundles(t *testing.T, work string) {
 			return readErr
 		}
 
-		if !strings.Contains(string(raw), fileMarker) {
+		if !containsAnyMarker(string(raw)) {
 			return nil
 		}
 
 		// The marker must be a relative bundle path, not an absolute one.
-		if strings.Contains(string(raw), `"`+fileMarker+`/`) {
-			t.Errorf("absolute path in bundle marker (%s)", path)
+		for _, m := range leafMarkers {
+			if strings.Contains(string(raw), `"`+m+`/`) {
+				t.Errorf("absolute path in bundle marker (%s)", path)
+			}
 		}
 
 		for _, rel := range bundleMarkers(raw) {
 			if !fileExists(filepath.Join(filepath.Dir(path), rel)) {
-				t.Errorf("bundle file %s missing beside %s", rel, path)
+				t.Errorf("bundle leaf %s missing beside %s", rel, path)
 
 				continue
 			}
@@ -123,12 +130,24 @@ func assertSelfContainedBundles(t *testing.T, work string) {
 	}
 
 	if !found {
-		t.Error("no self-contained file bundle found under work/")
+		t.Error("no self-contained leaf bundle found under work/")
 	}
 }
 
-// bundleMarkers extracts the relative paths of every top-level file marker in
-// a data.json document (non-object documents carry no top-level markers).
+// containsAnyMarker reports whether s carries either transport-marker prefix.
+func containsAnyMarker(s string) bool {
+	for _, m := range leafMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// bundleMarkers extracts the relative paths of every top-level leaf marker
+// (file or directory) in a data.json document (non-object documents carry no
+// top-level markers).
 func bundleMarkers(raw []byte) []string {
 	var doc map[string]any
 
@@ -139,8 +158,10 @@ func bundleMarkers(raw []byte) []string {
 	var rels []string
 
 	for _, v := range doc {
-		if s, ok := v.(string); ok && strings.HasPrefix(s, fileMarker) {
-			rels = append(rels, strings.TrimPrefix(s, fileMarker))
+		if s, ok := v.(string); ok {
+			if rel, _, isMarker := shim.CutMarker(s); isMarker {
+				rels = append(rels, rel)
+			}
 		}
 	}
 

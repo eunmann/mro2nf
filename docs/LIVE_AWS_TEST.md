@@ -366,3 +366,25 @@ collision), plus the no-op-modifier warnings. Local `make test` + `make test-e2e
 us-east-1. To bring it back, `npx cdk deploy Mro2nfStack` per region. It
 idles at ≈$0 when up (Batch `minvCpus: 0`, spot; no NAT/EFS), so leaving it
 deployed is cheap if more live runs are planned.
+
+## HealthOmics resource teardown
+
+`test/e2e/aws_healthomics.sh` cleans up after itself: on exit it deletes every
+workflow it registered and every run that verified OK. Failed or unverified
+runs (and any workflow whose deletion conflicts with a live run) are kept for
+debugging and listed in the harness output; `KEEP_RESOURCES=1` keeps
+everything. To bulk-delete leftovers from earlier or aborted campaigns — all
+harness resources are named `mro2nf-*` — run (in the stack region):
+
+```sh
+aws omics list-runs \
+    --query "items[?starts_with(name,'mro2nf-') && (status=='COMPLETED' || status=='FAILED' || status=='CANCELLED')].id" \
+    --output text | xargs -rn1 aws omics delete-run --id
+aws omics list-workflows \
+    --query "items[?starts_with(name,'mro2nf-')].id" \
+    --output text | xargs -rn1 aws omics delete-workflow --id
+```
+
+Deleting a run does not remove its exported output under
+`s3://<bucket>/omics-out/<run-id>/`; clear those with `aws s3 rm --recursive`
+when the diffs are no longer needed.

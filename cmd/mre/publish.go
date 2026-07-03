@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"maps"
@@ -50,7 +51,11 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	}
 
 	pub := newPublisher(man.Structs)
-	published := pub.publishOuts(man.Params(prod.callable, prod.role), outs)
+
+	published, err := pub.publishOuts(man.Params(prod.callable, prod.role), outs)
+	if err != nil {
+		return err
+	}
 
 	if err := writeJSON(filepath.Join(*dir, "layout.json"), pub.layout); err != nil {
 		return err
@@ -110,16 +115,21 @@ func writeManifest(path, pipeline string, outputs []manifestEntry) error {
 // rewritten outs tree (file leaves replaced by their outs/ rel path, or null).
 // Non-file values pass through unchanged; a missing/empty file leaf resolves to
 // null. Keys without a matching declared output param are preserved.
-func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) map[string]any {
+func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) (map[string]any, error) {
 	published := maps.Clone(outs)
 
 	for _, p := range params {
 		if v, ok := outs[p.Name]; ok {
-			published[p.Name] = pub.emit("", p, v)
+			ev, err := pub.emit("", p, v)
+			if err != nil {
+				return nil, err
+			}
+
+			published[p.Name] = ev
 		}
 	}
 
-	return published
+	return published, nil
 }
 
 // publisher computes a pipeline's mrp-style outs/ layout from the raw sidecar
@@ -155,10 +165,12 @@ type manifestEntry struct {
 // GetOutFilename(p). It records file leaves in the layout/manifest and returns
 // the JSON value: the outs/ rel path for a file, a nested array/object for a
 // collection/struct, the unchanged value for a non-file scalar, or nil for a
-// null/absent leaf. Nothing touches the filesystem.
-func (pub *publisher) emit(parentRel string, p ir.Param, value any) any {
+// null/absent leaf. Nothing touches the filesystem. A file-bearing value whose
+// runtime shape contradicts its declared type is an error, not a silent
+// pass-through (which would leak a transport marker into pipeline_outs.json).
+func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error) {
 	if value == nil {
-		return nil
+		return nil, nil
 	}
 
 	// A type with no file/dir leaves (a plain scalar, or an array/map/struct of
@@ -167,7 +179,7 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) any {
 	// bearing values are decomposed into the outs/ tree. IsFile is set for a file,
 	// a directory, and any array/map/struct that contains one.
 	if !p.IsFile {
-		return value
+		return value, nil
 	}
 
 	rel := path.Join(parentRel, types.OutFilename(p, pub.isStruct))
@@ -184,6 +196,19 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) any {
 	}
 }
 
+// errShapeMismatch flags a file-bearing output whose runtime value contradicts
+// its declared container type. Returning the value verbatim (the old behavior)
+// would let a raw @mre:file: transport marker reach pipeline_outs.json and skip
+// the layout/manifest entirely — unreachable from a well-formed binder, so this
+// guards a binder shape bug or a hand-edited/forked sidecar.
+var errShapeMismatch = errors.New("publish output shape mismatch")
+
+// shapeErr wraps errShapeMismatch with the offending output's name, outs/ rel,
+// declared container, and the actual runtime value's type.
+func shapeErr(rel, want string, p ir.Param, value any) error {
+	return fmt.Errorf("%w: %q at %s declared %s but sidecar value is %T", errShapeMismatch, p.Name, rel, want, value)
+}
+
 // isStruct reports whether name is one of the pipeline's struct types.
 func (pub *publisher) isStruct(name string) bool {
 	return pub.structs[name] != nil
@@ -192,10 +217,10 @@ func (pub *publisher) isStruct(name string) bool {
 // emitArray publishes an array into the rel/ subdir, naming elements by a
 // zero-padded index (width = digits of the element count, matching Martian's
 // WidthForInt) plus the element type's own GetOutFilename suffix.
-func (pub *publisher) emitArray(rel string, p ir.Param, value any) any {
+func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) {
 	arr, ok := value.([]any)
 	if !ok {
-		return value
+		return nil, shapeErr(rel, "array", p, value)
 	}
 
 	width := len(strconv.Itoa(len(arr)))
@@ -207,10 +232,15 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) any {
 		elem.Name = fmt.Sprintf("%0*d", width, i)
 		elem.OutName = ""
 
-		out[i] = pub.emit(rel, elem, ev)
+		ov, err := pub.emit(rel, elem, ev)
+		if err != nil {
+			return nil, err
+		}
+
+		out[i] = ov
 	}
 
-	return out
+	return out, nil
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their
@@ -218,10 +248,10 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) any {
 // typed map is exactly one map level whose value carries MapDim-1 inner array
 // dims (Martian's encoding: map<T[]> is {MapDim:2, ArrayDim:0}), so the element
 // is descended as an array of that depth — not another map level.
-func (pub *publisher) emitMap(rel string, p ir.Param, value any) any {
+func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
 	m, ok := value.(map[string]any)
 	if !ok {
-		return value
+		return nil, shapeErr(rel, "map", p, value)
 	}
 
 	out := make(map[string]any, len(m))
@@ -233,18 +263,23 @@ func (pub *publisher) emitMap(rel string, p ir.Param, value any) any {
 		elem.Name = k
 		elem.OutName = ""
 
-		out[k] = pub.emit(rel, elem, m[k])
+		ov, err := pub.emit(rel, elem, m[k])
+		if err != nil {
+			return nil, err
+		}
+
+		out[k] = ov
 	}
 
-	return out
+	return out, nil
 }
 
 // emitStruct publishes a struct into the rel/ subdir, recursing each field named
 // by its own GetOutFilename; the JSON object is keyed by field id.
-func (pub *publisher) emitStruct(rel string, p ir.Param, value any) any {
+func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error) {
 	sv, ok := value.(map[string]any)
 	if !ok {
-		return value
+		return nil, shapeErr(rel, "struct", p, value)
 	}
 
 	out := make(map[string]any, len(pub.structs[p.BaseType].Fields))
@@ -252,37 +287,48 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) any {
 	for _, f := range pub.structs[p.BaseType].Fields {
 		// Every declared member is emitted (an absent one as null), matching
 		// Martian; a non-file field passes through verbatim via emit's guard.
-		out[f.Name] = pub.emit(rel, f, sv[f.Name])
+		fv, err := pub.emit(rel, f, sv[f.Name])
+		if err != nil {
+			return nil, err
+		}
+
+		out[f.Name] = fv
 	}
 
-	return out
+	return out, nil
 }
 
 // emitFile records one scalar file/dir leaf's transport basename -> rel mapping
 // and its manifest entry, and returns rel — the ACTUAL published path, which may
 // differ from the argument after collision disambiguation. It returns nil when
 // the leaf is absent (matching Martian's null): a present leaf carries a
-// @mre:file: marker, while a declared output that was never written keeps a raw
-// path and resolves to null. Nothing is copied.
-func (pub *publisher) emitFile(rel string, p ir.Param, value any) any {
+// @mre:file:/@mre:dir: marker, while a declared output that was never written
+// keeps a raw path and resolves to null. Nothing is copied.
+func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 	src, ok := value.(string)
-	if !ok || src == "" {
-		return nil
-	}
-
-	marker, ok := strings.CutPrefix(src, shim.FileMarker)
 	if !ok {
-		return nil
+		// A scalar file/dir leaf is always a path string or null in a well-formed
+		// sidecar; a non-string here is a shape bug (an array/object where a leaf
+		// belongs), reported rather than silently nulled.
+		return nil, shapeErr(rel, "file", p, value)
 	}
 
-	base := path.Base(marker)
+	transport, isDir, ok := shim.CutMarker(src)
+	if !ok {
+		// A non-marker string — an empty string, or a declared output the stage
+		// never wrote (a raw, marker-less path) — resolves to null, matching
+		// Martian.
+		return nil, nil
+	}
+
+	base := path.Base(transport)
 	// The SAME leaf landing on the same rel twice (one value referenced by two
 	// identically-named outputs) publishes once; two DISTINCT leaves colliding on
 	// one rel (e.g. two outputs sharing an explicit OutName) are disambiguated
 	// with a numeric suffix so neither file is silently mapped over the other.
 	if prev, ok := pub.seen[rel]; ok {
 		if prev == base {
-			return rel
+			return rel, nil
 		}
 
 		rel = pub.uniqueRel(rel)
@@ -290,10 +336,13 @@ func (pub *publisher) emitFile(rel string, p ir.Param, value any) any {
 
 	pub.seen[rel] = base
 	pub.layout[base] = append(pub.layout[base], rel)
-	// One manifest entry per published leaf. A `path`-typed leaf is a directory.
-	pub.manifest = append(pub.manifest, manifestEntry{Path: rel, BaseType: p.BaseType, IsDir: p.BaseType == "path"})
+	// One manifest entry per published leaf. is_dir is the leaf's ground truth —
+	// the stat recorded in the marker at staging time — not an inference from the
+	// declared type, so a directory written into a `file`-typed out (or a file
+	// into a `path`-typed out) is catalogued correctly.
+	pub.manifest = append(pub.manifest, manifestEntry{Path: rel, BaseType: p.BaseType, IsDir: isDir})
 
-	return rel
+	return rel, nil
 }
 
 // uniqueRel returns rel, or rel with a numeric suffix before its extension when

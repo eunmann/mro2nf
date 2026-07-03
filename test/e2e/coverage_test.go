@@ -18,10 +18,6 @@ var nonE2EFixtures = map[string]string{
 	// by emit unit tests (TestEmitGPUAccelerator / TestEmitVmemFlag) instead.
 	"gpu_stage":  "emit-only: accelerator directive text (internal/emit unit test)",
 	"vmem_stage": "emit-only: -monitor vmem cap text (internal/emit unit test)",
-	// Directory entry-input fixture with no committed golden yet. The directory
-	// input shape IS validated live (LIVE_AWS_TEST, via an s3:// prefix); wiring
-	// entry_dir into an e2e suite is tracked as a GitHub issue.
-	"entry_dir": "no committed golden yet — tracked in issue #42",
 }
 
 // TestEveryFixtureIsExercised fails when a testdata fixture (a directory with a
