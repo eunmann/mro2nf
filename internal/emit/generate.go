@@ -554,6 +554,14 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			continue
 		}
 
+		// A natively-disabled leaf-stage call fuses bind into its stage task; the
+		// driver-side gate needs neither a BIND nor a DISABLE process (#59).
+		if s, ok := fuseableDisabledStage(c, p, prog); ok {
+			genFusedStageProcess(b, p.Name, c, s, g)
+
+			continue
+		}
+
 		genBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn))
 
 		// A natively-gated disable (#59) reads the flag on the driver, so the plain
@@ -1149,6 +1157,14 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, c ir.Ca
 		return
 	}
 
+	// A natively-disabled leaf-stage call fuses its bind into the fused bind+main
+	// process, gated by genFusedDisabledWiring — no standalone BIND (#59, Lever 3).
+	if _, ok := fuseableDisabledStage(c, p, prog); ok {
+		genFusedDisabledWiring(b, pipeline, c)
+
+		return
+	}
+
 	bind := bindName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", bind, bindCallArgs(c.Bindings, bind))
 
@@ -1238,6 +1254,33 @@ func callForwardProducer(c ir.Call, p *ir.Pipeline, prog *ir.Program) (string, b
 // disabled, preflight, split-stage, and sub-pipeline callees keep their BIND.
 func fuseableStageCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, bool) {
 	if c.Mapped || c.Disabled != nil || c.Preflight {
+		return nil, false
+	}
+
+	if _, ok := callForwardProducer(c, p, prog); ok {
+		return nil, false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split {
+		return nil, false
+	}
+
+	return s, true
+}
+
+// fuseableDisabledStage reports a non-split leaf-stage call whose disable is
+// gated natively (#59, Lever 2): because the run/skip decision is read on the
+// driver — not from a resolved DISABLE bundle — the call's own bind no longer has
+// to run before the gate, so it fuses into the stage task like an un-disabled
+// leaf call. The enabled branch feeds the fused bind+main process the fork's
+// pipeline args; the skipped branch yields the null bundle (#59, Lever 3).
+func fuseableDisabledStage(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, bool) {
+	if c.Mapped || c.Disabled == nil || c.Preflight {
+		return nil, false
+	}
+
+	if _, _, ok := nativeDisableGate(c); !ok {
 		return nil, false
 	}
 
@@ -1518,6 +1561,43 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
     s_%[1]s = g_%[1]s.skip.map { data, leaves, d -> %[6]s }
     ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
 `, c.Name, bind, dis, callee, nulls, nullBundle(nulls))
+}
+
+// genFusedDisabledWiring gates a natively-disabled leaf-stage call and feeds the
+// enabled forks straight into the fused bind+main process — no standalone BIND
+// (#59, Lever 3). The self case branches on pa (the flag lives in the fork args);
+// the upstream-ref case combines pa with the producing channel to read the flag.
+func genFusedDisabledWiring(b *strings.Builder, pipeline string, c ir.Call) {
+	bind := bindName(pipeline, c.Name)
+	fused := fusedName(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+	src, field, _ := nativeDisableGate(c)
+
+	if src == "pa" {
+		enabled := fmt.Sprintf("g_%s.run", c.Name)
+		fmt.Fprintf(b, `    g_%[1]s = pa.branch { data, leaves ->
+        def off = Mro2nf.disabledField(data, '%[2]s')
+        run: !off
+        skip: off
+    }
+    r_%[1]s = %[3]s(%[4]s)
+    s_%[1]s = g_%[1]s.skip.map { data, leaves -> %[5]s }
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
+`, c.Name, field, fused, bindCallArgsPa(c.Bindings, enabled, bind), nullBundle(nulls))
+
+		return
+	}
+
+	enabled := fmt.Sprintf("g_%s.run.map { data, leaves, gd, gl -> tuple(data, leaves) }", c.Name)
+	fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s).branch { data, leaves, gd, gl ->
+        def off = Mro2nf.disabledField(gd, '%[3]s')
+        run: !off
+        skip: off
+    }
+    r_%[1]s = %[4]s(%[5]s)
+    s_%[1]s = g_%[1]s.skip.map { data, leaves, gd, gl -> %[6]s }
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
+`, c.Name, src, field, fused, bindCallArgsPa(c.Bindings, enabled, bind), nullBundle(nulls))
 }
 
 // nativeDisableGate reports whether a call's disable flag can be read natively

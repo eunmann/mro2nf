@@ -519,16 +519,26 @@ func TestEmitGPUAccelerator(t *testing.T) {
 	}
 }
 
-// TestEmitNativeDisableGate guards #59 Lever 2: a plain (non-mapped) disabled
-// call whose flag is a single top-level field reads it natively on the driver
-// (Mro2nf.disabledField) with no DISABLE task. modifiers_min gates TRIPLE on
-// self.skip; disabled_callref gates on an upstream output FLAG.on.
+// TestEmitNativeDisableGate guards #59 Levers 2+3: a disabled call whose flag is
+// a single top-level field reads it natively on the driver (Mro2nf.disabledField)
+// with no DISABLE task; and a natively-disabled non-split leaf stage additionally
+// fuses its bind into the stage task, so no standalone BIND either. modifiers_min
+// gates the TRIPLE leaf stage on self.skip; disabled_callref gates the WORK leaf
+// stage on an upstream output FLAG.on; disabled_map gates a map call (not fused).
 func TestEmitNativeDisableGate(t *testing.T) {
 	m := emitFixture(t, "modifiers_min", map[string]string{"DOUBLE": "/x/d", "TRIPLE": "/x/t", "CHECK": "/x/c"})
 
 	top := readFile(t, filepath.Join(m, "modules", "pipe_TOP.nf"))
-	if !strings.Contains(top, "Mro2nf.disabledField(gd, 'skip')") {
+	// self.skip read natively from the fork args, and the enabled branch feeds the
+	// FUSED bind+main stage directly (Lever 3) — no BIND, no DISABLE.
+	if !strings.Contains(top, "Mro2nf.disabledField(data, 'skip')") {
 		t.Errorf("self.skip disable must be read natively:\n%s", top)
+	}
+	if !strings.Contains(top, "r_TRIPLE = STAGE_3_TOP__TRIPLE(g_TRIPLE.run") {
+		t.Errorf("a disabled leaf stage must fuse bind into the stage task:\n%s", top)
+	}
+	if strings.Contains(top, "process BIND_3_TOP__TRIPLE") {
+		t.Errorf("a fused disabled leaf stage must emit no standalone BIND:\n%s", top)
 	}
 	if strings.Contains(top, "process DISABLE") {
 		t.Errorf("a natively-gated disable must emit no DISABLE process:\n%s", top)
@@ -537,15 +547,21 @@ func TestEmitNativeDisableGate(t *testing.T) {
 	d := emitFixture(t, "disabled_callref", map[string]string{"FLAG": "/x/f", "WORK": "/x/w"})
 
 	dp := readFile(t, filepath.Join(d, "modules", "pipe_DC.nf"))
+	// FLAG.on read natively by combining pa with the producing channel; WORK (a
+	// leaf stage) fuses too.
 	if !strings.Contains(dp, "Mro2nf.disabledField(gd, 'on')") {
 		t.Errorf("FLAG.on disable must be read natively from the upstream channel:\n%s", dp)
+	}
+	if !strings.Contains(dp, "r_WORK = STAGE_2_DC__WORK(") {
+		t.Errorf("a disabled upstream-ref leaf stage must fuse bind into the stage task:\n%s", dp)
 	}
 	if strings.Contains(dp, "process DISABLE") {
 		t.Errorf("a natively-gated upstream-ref disable must emit no DISABLE process:\n%s", dp)
 	}
 
-	// A disabled MAP call (non-keyed) gates natively too: disabled_map's `map call
-	// DBL using (disabled = self.skip)` reads the flag from pa directly.
+	// A disabled MAP call gates natively (reads the flag from pa) but is NOT fused
+	// — it still needs the FORK for fan-out: disabled_map's `map call DBL using
+	// (disabled = self.skip)`.
 	dm := emitFixture(t, "disabled_map", map[string]string{"DBL": "/x/dbl"})
 
 	dmp := readFile(t, filepath.Join(dm, "modules", "pipe_Q.nf"))
