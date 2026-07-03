@@ -77,6 +77,29 @@ func TestBuildPlanChainFusion(t *testing.T) {
 	}
 }
 
+// TestBuildPlanFoldDisables pins #59 Lever 1: with -fold-disables an entry
+// `disabled = self.skip` gate whose input the entry bakes true folds the call to
+// kindFoldedOff (pruned to its null output); without the flag it stays a normal
+// natively-gated disabled leaf. A disable that is NOT entry-determinable (an
+// upstream CALL.out ref) never folds, even with the flag on.
+func TestBuildPlanFoldDisables(t *testing.T) {
+	fd := lowerFixture(t, "fold_disable")
+
+	if got := buildPlan(fd, featureSet{}).pipes["P"].calls["GEN"].kind; got != kindFusedDisabled {
+		t.Errorf("without -fold-disables: GEN kind = %d, want kindFusedDisabled", got)
+	}
+	if got := buildPlan(fd, featureSet{foldDisables: true}).pipes["P"].calls["GEN"].kind; got != kindFoldedOff {
+		t.Errorf("with -fold-disables: GEN kind = %d, want kindFoldedOff", got)
+	}
+
+	// disabled_callref's WORK is gated on an upstream output (FLAG.on) — runtime-
+	// derived, so it must NOT fold even with the flag on.
+	cr := lowerFixture(t, "disabled_callref")
+	if got := buildPlan(cr, featureSet{foldDisables: true}).pipes["DC"].calls["WORK"].kind; got == kindFoldedOff {
+		t.Errorf("WORK gated on FLAG.on must not fold (runtime-derived), got kindFoldedOff")
+	}
+}
+
 func keysOf(m map[string]pipePlan) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {

@@ -54,6 +54,21 @@ func TestDiagnoseWrapsWarnings(t *testing.T) {
 	}
 }
 
+// TestDiagnoseFoldDisables checks -fold-disables warns which gate it pruned and
+// on which entry input (the override caveat), and only with the flag on.
+func TestDiagnoseFoldDisables(t *testing.T) {
+	fd := lowerFixture(t, "fold_disable")
+
+	on := Diagnose(fd, Options{FoldDisables: true})
+	if !hasMessage(on, SevWarn, "P.GEN pruned") || !hasMessage(on, SevWarn, "self.skip") {
+		t.Errorf("want a fold warning naming P.GEN and self.skip, got %+v", on)
+	}
+
+	if got := Diagnose(fd, Options{}); hasMessage(got, SevWarn, "pruned") {
+		t.Errorf("no fold warning without the flag, got %+v", got)
+	}
+}
+
 // TestHasError checks the abort predicate the CLI gates on.
 func TestHasError(t *testing.T) {
 	if HasError(nil) {

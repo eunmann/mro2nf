@@ -51,6 +51,7 @@ func run(args []string) error {
 	targetFlag := fs.String("target", "local", "execution backend: local | awsbatch | healthomics")
 	monitorFlag := fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)")
 	fuseChainsFlag := fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)")
+	foldDisablesFlag := fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -85,14 +86,14 @@ func run(args []string) error {
 		return fmt.Errorf("invalid -target: %w", err)
 	}
 
-	if err := reportDiagnostics(log, prog, *fuseChainsFlag); err != nil {
+	if err := reportDiagnostics(log, prog, *fuseChainsFlag, *foldDisablesFlag); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
 	if err := emitProgram(prog, fs.Arg(0), opts{
 		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag,
 		container: *containerFlag, monitor: *monitorFlag, target: target,
-		fuseChains: *fuseChainsFlag,
+		fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag,
 	}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
@@ -190,8 +191,8 @@ func readOverridesInput(arg string) ([]byte, error) {
 // reportDiagnostics runs the pre-emit checks, prints each by severity, and
 // returns an error (aborting the transpile) if any is fatal — an enabled flag
 // that would produce a wrong or broken project for this pipeline.
-func reportDiagnostics(log zerolog.Logger, prog *ir.Program, fuseChains bool) error {
-	diags := emit.Diagnose(prog, emit.Options{FuseChains: fuseChains})
+func reportDiagnostics(log zerolog.Logger, prog *ir.Program, fuseChains, foldDisables bool) error {
+	diags := emit.Diagnose(prog, emit.Options{FuseChains: fuseChains, FoldDisables: foldDisables})
 
 	for _, d := range diags {
 		switch d.Severity {
@@ -216,6 +217,7 @@ type opts struct {
 	outDir, mre, shell, mrjob, container string
 	monitor                              bool
 	fuseChains                           bool
+	foldDisables                         bool
 	target                               emit.Target
 }
 
@@ -241,17 +243,18 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 	}
 
 	if err := emit.Emit(prog, emit.Options{
-		OutDir:     o.outDir,
-		Mre:        absOrSelf(o.mre),
-		Shell:      absOrSelf(o.shell),
-		Mrjob:      absOrSelf(o.mrjob),
-		Container:  o.container,
-		Monitor:    o.monitor,
-		FuseChains: o.fuseChains,
-		Target:     o.target,
-		MROFile:    filepath.Base(src),
-		MRODir:     mroDir,
-		StageCode:  code,
+		OutDir:       o.outDir,
+		Mre:          absOrSelf(o.mre),
+		Shell:        absOrSelf(o.shell),
+		Mrjob:        absOrSelf(o.mrjob),
+		Container:    o.container,
+		Monitor:      o.monitor,
+		FuseChains:   o.fuseChains,
+		FoldDisables: o.foldDisables,
+		Target:       o.target,
+		MROFile:      filepath.Base(src),
+		MRODir:       mroDir,
+		StageCode:    code,
 	}); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}
