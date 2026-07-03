@@ -1,0 +1,184 @@
+# cellranger_shaped — a trivial-compute differential fixture whose DAG mirrors
+# CellRanger's _basic_sc_rna_counter shape (#90): a FLAG_STAGES fan-out gating
+# aliased/disabled calls, a split matrix computer, a mapped per-sample stage, a
+# preflight, and nested sub-pipelines. No 10x source is used — only the DAG
+# shape is derived; every stage does deterministic arithmetic. See NOTICE.
+filetype json;
+
+stage CHECK_INPUTS(
+    in  int  gem_wells,
+    src py   "stages/check",
+)
+
+stage MAKE_MATRIX(
+    in  int  gem_wells,
+    in  int  reads,
+    out int  counts,
+    src py   "stages/make_matrix",
+) split (
+    in  int  chunk,
+    out int  partial,
+) using (
+    mem_gb = 2,
+)
+
+stage FLAG_STAGES(
+    in  int  mode,
+    out bool no_probe,
+    out bool disable_legacy,
+    out bool disable_multi,
+    src py   "stages/flag_stages",
+)
+
+stage SELECT_CELLS(
+    in  int  counts,
+    out int  filtered,
+    src py   "stages/filter",
+)
+
+stage SUMMARIZE_DIMS(
+    in  int  filtered,
+    out int  dims,
+    src py   "stages/summarize",
+)
+
+stage WRITE_BAM(
+    in  int  filtered,
+    out json bam,
+    src py   "stages/write_bam",
+)
+
+stage SPLIT_SAMPLES(
+    in  int   n,
+    out int[] samples,
+    src py    "stages/split_samples",
+)
+
+stage PER_SAMPLE(
+    in  int  sample,
+    out int  metric,
+    src py   "stages/per_sample",
+)
+
+stage MERGE_METRICS(
+    in  int   dims,
+    in  int   probe_dims,
+    in  int   filtered,
+    in  int[] per_sample,
+    out int   total,
+    src py    "stages/merge",
+)
+
+pipeline POST_MATRIX(
+    in  int  counts,
+    in  int  mode,
+    in  int  samples,
+    out int  total,
+)
+{
+    call FLAG_STAGES(
+        mode = self.mode,
+    )
+
+    call SELECT_CELLS(
+        counts = self.counts,
+    )
+
+    call SUMMARIZE_DIMS(
+        filtered = SELECT_CELLS.filtered,
+    )
+
+    call SUMMARIZE_DIMS as SUMMARIZE_PROBE_DIMS(
+        filtered = SELECT_CELLS.filtered,
+    ) using (
+        disabled = FLAG_STAGES.no_probe,
+    )
+
+    call WRITE_BAM(
+        filtered = SELECT_CELLS.filtered,
+    ) using (
+        disabled = FLAG_STAGES.disable_legacy,
+    )
+
+    call WRITE_BAM as MULTI_WRITE_BAM(
+        filtered = SELECT_CELLS.filtered,
+    ) using (
+        disabled = FLAG_STAGES.disable_multi,
+    )
+
+    call SPLIT_SAMPLES(
+        n = self.samples,
+    )
+
+    map call PER_SAMPLE(
+        sample = split SPLIT_SAMPLES.samples,
+    )
+
+    call MERGE_METRICS(
+        dims       = SUMMARIZE_DIMS.dims,
+        probe_dims = SUMMARIZE_PROBE_DIMS.dims,
+        filtered   = SELECT_CELLS.filtered,
+        per_sample = PER_SAMPLE.metric,
+    )
+
+    return (
+        total = MERGE_METRICS.total,
+    )
+}
+
+pipeline BASIC_COUNTER(
+    in  int  gem_wells,
+    in  int  reads,
+    in  int  mode,
+    in  int  samples,
+    out int  total,
+)
+{
+    call MAKE_MATRIX(
+        gem_wells = self.gem_wells,
+        reads     = self.reads,
+    )
+
+    call POST_MATRIX(
+        counts  = MAKE_MATRIX.counts,
+        mode    = self.mode,
+        samples = self.samples,
+    )
+
+    return (
+        total = POST_MATRIX.total,
+    )
+}
+
+pipeline COUNT(
+    in  int  gem_wells,
+    in  int  reads,
+    in  int  mode,
+    in  int  samples,
+    out int  total,
+)
+{
+    call CHECK_INPUTS(
+        gem_wells = self.gem_wells,
+    ) using (
+        preflight = true,
+    )
+
+    call BASIC_COUNTER(
+        gem_wells = self.gem_wells,
+        reads     = self.reads,
+        mode      = self.mode,
+        samples   = self.samples,
+    )
+
+    return (
+        total = BASIC_COUNTER.total,
+    )
+}
+
+call COUNT(
+    gem_wells = 2,
+    reads     = 100,
+    mode      = 2,
+    samples   = 3,
+)

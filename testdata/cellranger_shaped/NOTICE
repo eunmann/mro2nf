@@ -1,0 +1,8 @@
+cellranger_shaped is a clean-room, trivial-compute fixture whose pipeline DAG
+SHAPE was derived from the structure of 10x Genomics CellRanger 10.1.0's
+_basic_sc_rna_counter MRO (a FLAG_STAGES/DISABLE_STAGES fan-out gating aliased
+and disabled calls, a split matrix computer, a mapped per-sample stage, a
+preflight, and nested sub-pipelines). No CellRanger source, stage code,
+parameter names, or reference data are reproduced — only the topological shape,
+re-expressed with arithmetic stubs so it runs fast and deterministically under
+both mrp and Nextflow as a real-world-complexity differential test (#90).

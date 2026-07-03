@@ -171,6 +171,9 @@ func TestMrpDiff(t *testing.T) {
 		{name: "file_tree"},
 		{name: "map_null_map"},
 		{name: "map_file_array"},
+		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
+		// map, nested pipelines) — all py stages, so it joins the mrp differential.
+		{name: "cellranger_shaped"},
 		// TODO: the comp/exec-adapter fixtures cannot join an mrp
 		// differential — their stage binaries are fake Python stand-ins for
 		// mre's simpler wrapped-adapter contract, and REAL mrp hangs
