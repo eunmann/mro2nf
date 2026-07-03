@@ -615,8 +615,15 @@ func keyedReachable(prog *ir.Program) map[string]bool {
 		}
 	}
 
-	if prog.Entry != nil {
-		walk(prog.Entry.Callable, false)
+	// Walk EVERY declared pipeline as a root, not just the ones reachable from the
+	// entry: writeModules emits a module for every pipeline in the program
+	// (including a declared-but-uncalled one from an @included library), and a
+	// pipeline module's plain includes reference wf_<callee>_map for each of its
+	// `map call`s. So those keyed variants must be emitted even for a pipeline the
+	// entry never reaches, or the include dangles. The `seen` guard dedups the
+	// overlap with the entry-reachable walk.
+	for name := range prog.Pipelines {
+		walk(name, false)
 	}
 
 	return needed

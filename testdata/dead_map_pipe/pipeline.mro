@@ -1,0 +1,42 @@
+# Regression fixture for #59 keyed-variant pruning: DEAD is a declared-but-never-
+# called pipeline that contains a `map call`. Its module still emits an include of
+# the callee's keyed variant (wf_GEN_map), so that variant must be emitted even
+# though the entry (MAIN) reaches GEN only through a PLAIN call. `nextflow lint`
+# (which parses every module) is the gate: a pruned wf_GEN_map dangles here.
+filetype txt;
+
+stage GEN(
+    in  float x,
+    out float y,
+    src py    "stages/gen",
+)
+
+pipeline DEAD(
+    in  float[] xs,
+    out float[] ys,
+)
+{
+    map call GEN(
+        x = split self.xs,
+    )
+    return (
+        ys = GEN.y,
+    )
+}
+
+pipeline MAIN(
+    in  float x,
+    out float y,
+)
+{
+    call GEN(
+        x = self.x,
+    )
+    return (
+        y = GEN.y,
+    )
+}
+
+call MAIN(
+    x = 1.0,
+)

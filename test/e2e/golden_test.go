@@ -84,6 +84,9 @@ var goldenCases = []struct {
 	{"file_tree", "file_tree", "expected/outs.json"},
 	{"map_null_map", "map_null_map", "expected/outs.json"},
 	{"map_file_array", "map_file_array", "expected/outs.json"},
+	// Regression for #59: an unreachable pipeline containing a map call — its
+	// keyed-variant include must resolve (verified by the nextflow-lint gate).
+	{"dead_map_pipe", "dead_map_pipe", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
