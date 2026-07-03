@@ -87,6 +87,9 @@ func Resolve(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMe
 	return raw, nil
 }
 
+// AllForks marks every fork's args for marshaling in ResolveForks.
+const AllForks = -1
+
 // ResolveForks resolves a map call's bindings into one _args object per fork.
 // Split bindings are resolved to collections and zipped element-wise; non-split
 // bindings are broadcast to every fork. isMap selects the fork kind from the
@@ -94,8 +97,13 @@ func Resolve(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMe
 // value — so a null or empty typed-map source still forks as a map (keys nil-
 // safe) and merges to {}, and a null/empty array source merges to [], matching
 // Martian's type-directed dispatch. For a map fork the returned keys give each
-// fork's map key (sorted); for an array fork keys is nil.
-func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, isMap bool) ([]json.RawMessage, []string, error) {
+// fork's map key (sorted); for an array fork keys is nil. `only` selects which
+// fork's args to marshal (AllForks marshals every fork; other slots stay nil):
+// resolution and validation are identical either way — same collection, zip,
+// and mode checks, same fork count, same keys — so a single native-scatter
+// instance (#76) pays one args marshal instead of N while failing exactly
+// where the full FORK-task resolve would.
+func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, isMap bool, only int) ([]json.RawMessage, []string, error) {
 	broadcast := map[string]json.RawMessage{}
 	splits := map[string]json.RawMessage{}
 
@@ -117,13 +125,13 @@ func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.
 	}
 
 	if isMap {
-		return buildMapForks(broadcast, splits)
+		return buildMapForks(broadcast, splits, only)
 	}
 
-	return buildArrayForks(broadcast, splits)
+	return buildArrayForks(broadcast, splits, only)
 }
 
-func buildArrayForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
+func buildArrayForks(broadcast, splits map[string]json.RawMessage, only int) ([]json.RawMessage, []string, error) {
 	arrays := make(map[string][]json.RawMessage, len(splits))
 	count := -1
 
@@ -142,9 +150,13 @@ func buildArrayForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMe
 		arrays[param] = arr
 	}
 
-	forks := make([]json.RawMessage, 0, count)
+	forks := make([]json.RawMessage, count)
 
 	for i := range count {
+		if only != AllForks && i != only {
+			continue
+		}
+
 		args := make(map[string]json.RawMessage, len(broadcast)+len(arrays))
 		maps.Copy(args, broadcast)
 
@@ -157,13 +169,13 @@ func buildArrayForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMe
 			return nil, nil, fmt.Errorf("marshal fork %d: %w", i, err)
 		}
 
-		forks = append(forks, raw)
+		forks[i] = raw
 	}
 
 	return forks, nil, nil
 }
 
-func buildMapForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMessage, []string, error) {
+func buildMapForks(broadcast, splits map[string]json.RawMessage, only int) ([]json.RawMessage, []string, error) {
 	maps0 := make(map[string]map[string]json.RawMessage, len(splits))
 	keys := []string(nil)
 
@@ -183,9 +195,13 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMess
 		maps0[param] = m
 	}
 
-	forks := make([]json.RawMessage, 0, len(keys))
+	forks := make([]json.RawMessage, len(keys))
 
-	for _, k := range keys {
+	for i, k := range keys {
+		if only != AllForks && i != only {
+			continue
+		}
+
 		args := make(map[string]json.RawMessage, len(broadcast)+len(maps0))
 		maps.Copy(args, broadcast)
 
@@ -198,7 +214,7 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage) ([]json.RawMess
 			return nil, nil, fmt.Errorf("marshal fork %q: %w", k, err)
 		}
 
-		forks = append(forks, raw)
+		forks[i] = raw
 	}
 
 	return forks, keys, nil

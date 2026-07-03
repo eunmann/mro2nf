@@ -12,6 +12,7 @@ import (
 type featureSet struct {
 	fuseChains   bool
 	foldDisables bool
+	native       bool
 }
 
 // callKind is how a single call is emitted — decided once in buildPlan so the
@@ -29,6 +30,7 @@ const (
 	kindFusedChain                    // #59 Lever 4 chain consumer (folds its producer)
 	kindFusedAway                     // #59 Lever 4 chain producer folded into its consumer
 	kindFoldedOff                     // #59 Lever 1 always-disabled call: emit only its null output
+	kindNativeScatter                 // #76 -native map call: in-workflow scatter, no FORK task
 )
 
 // chainLink is one stage in a fused linear chain: the call and its stage.
@@ -51,6 +53,9 @@ type callPlan struct {
 	// disableTask reports that a mapped/plain disabled call needs a standalone
 	// DISABLE process (the flag is not driver-gateable).
 	disableTask bool
+	// scatterField is the pipeline-input name whose collection a kindNativeScatter
+	// call forks over — the driver reads its size from pipeargs' data.json.
+	scatterField string
 }
 
 // pipePlan is the per-pipeline emission plan: one callPlan per call, plus whether
@@ -75,14 +80,15 @@ type emitPlan struct {
 // fuseable*/forward/chain predicates at each site (the class of drift that
 // produces dangling processes).
 func buildPlan(prog *ir.Program, f featureSet) emitPlan {
-	pl := emitPlan{keyed: keyedReachable(prog), pipes: map[string]pipePlan{}}
+	pl := emitPlan{pipes: map[string]pipePlan{}}
+	queued := queuePipeArgs(prog)
 
 	for name, p := range prog.Pipelines {
 		away := fusedAwayProducers(p, prog, f.fuseChains)
 		pp := pipePlan{calls: make(map[string]callPlan, len(p.Calls))}
 
 		for _, c := range p.Calls {
-			pp.calls[c.Name] = planCall(c, p, prog, f, away)
+			pp.calls[c.Name] = planCall(c, p, prog, f, away, queued[name])
 		}
 
 		if prod, ok := forwardProducer(p.Returns, p, prog); ok {
@@ -92,9 +98,45 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 		pl.pipes[name] = pp
 	}
 
+	// keyedReachable reads the per-call kinds, so the pipes must be complete
+	// first (planCall reads nothing from the keyed set — no cycle).
+	pl.keyed = keyedReachable(prog, pl)
 	pl.modules = neededStageModules(prog, pl)
 
 	return pl
+}
+
+// queuePipeArgs returns the pipelines whose plain workflow can receive a QUEUE
+// channel as its pipeargs instead of the usual value channel: a disabled call
+// hands the callee its gated run-branch (a 0/1-item queue), and queue-ness
+// propagates down the plain call tree (a bind fed a queue emits a queue). A
+// native scatter with upstream-ref inputs would zip its N-item fork channel
+// against those 1-item queues and run a single fork, so eligibility consults
+// this set (#76). Mapped calls are excluded — a map-called pipeline runs its
+// keyed layer, not the plain workflow.
+func queuePipeArgs(prog *ir.Program) map[string]bool {
+	queued := map[string]bool{}
+
+	// Iterate to a fixed point: the call graph is a DAG pipeline-wise, but a
+	// caller's queue-ness may be decided after its callees were visited.
+	for changed := true; changed; {
+		changed = false
+
+		for name, p := range prog.Pipelines {
+			for _, c := range p.Calls {
+				if _, ok := prog.Pipelines[c.Callable]; !ok || c.Mapped || queued[c.Callable] {
+					continue
+				}
+
+				if c.Disabled != nil || queued[name] {
+					queued[c.Callable] = true
+					changed = true
+				}
+			}
+		}
+	}
+
+	return queued
 }
 
 // neededStageModules returns the stages whose stage_<name>.nf is referenced: any
@@ -137,7 +179,7 @@ func neededStageModules(prog *ir.Program, pl emitPlan) map[string]bool {
 // planCall decides one call's kind in the same precedence the emitters used to
 // inline: chain fold, chain consumer, mapped, forward, fused stage/split/disabled,
 // else a plain bind.
-func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away map[string]bool) callPlan {
+func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away map[string]bool, queuedPa bool) callPlan {
 	// #59 Lever 1: an always-disabled call (its gate constant-folds to true) needs
 	// no stage or gate — only its null output, which downstream reads as it would
 	// when skipped at runtime. Takes precedence over every run-path kind.
@@ -158,6 +200,14 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	}
 
 	if c.Mapped {
+		// #76: under -native an eligible map call scatters in-workflow (each stage
+		// instance resolves its own fork via forkbind -index), so no FORK task.
+		if f.native {
+			if s, field, ok := nativeScatterable(c, prog, queuedPa); ok {
+				return callPlan{kind: kindNativeScatter, stage: s, scatterField: field}
+			}
+		}
+
 		return callPlan{kind: kindMapped, disableTask: needsDisableTask(c)}
 	}
 
@@ -213,6 +263,56 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 	return "", false
 }
 
+// nativeScatterable reports whether a -native map call can scatter in-workflow
+// with no FORK task (#76), returning the callee stage and the pipeline-input
+// field whose collection sizes the scatter. This increment covers the shape
+// whose fork width the driver can read from pipeargs' data.json: a non-split
+// leaf stage callee, no disable gate, no preflight, and exactly one split
+// binding that is a whole-field self ref (a projection or upstream ref would
+// need the FORK task's full bind resolution to know the width). Wildcard
+// bindings never carry Split (the Martian grammar has no `* = split ...`
+// production), so they fall through the !b.Split skip. In a queue-pipeargs
+// pipeline, upstream-ref bindings are disqualifying: the refs' 1-item queue
+// channels would zip against the N-item fork channel and run a single fork.
+// Ineligible map calls keep the FORK path — still correct, just not collapsed.
+func nativeScatterable(c ir.Call, prog *ir.Program, queuedPa bool) (*ir.Stage, string, bool) {
+	if c.Disabled != nil || c.Preflight {
+		return nil, "", false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split {
+		return nil, "", false
+	}
+
+	if queuedPa && len(refCalls(c.Bindings)) > 0 {
+		return nil, "", false
+	}
+
+	field, splits := "", 0
+
+	for _, b := range c.Bindings {
+		if !b.Split {
+			continue
+		}
+
+		splits++
+
+		r := b.Value.Ref
+		if r == nil || r.Kind != refKindSelf || r.Output != "" {
+			return nil, "", false
+		}
+
+		field = r.ID
+	}
+
+	if splits != 1 {
+		return nil, "", false
+	}
+
+	return s, field, true
+}
+
 // needsDisableTask reports whether a disabled call requires a standalone DISABLE
 // bind (its flag is not a single top-level field readable on the driver).
 func needsDisableTask(c ir.Call) bool {
@@ -226,8 +326,9 @@ func needsDisableTask(c ir.Call) bool {
 }
 
 // fusedInclude reports whether a call's module include is suppressed — the fused
-// stage/chain kinds are self-contained per-call processes with no wf_ import.
+// stage/chain/scatter kinds are self-contained per-call processes with no wf_
+// import.
 func (cp callPlan) fusedInclude() bool {
 	return cp.kind == kindFusedStage || cp.kind == kindFusedChain || cp.kind == kindFusedAway ||
-		cp.kind == kindFoldedOff
+		cp.kind == kindFoldedOff || cp.kind == kindNativeScatter
 }

@@ -144,7 +144,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	features := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables}
+	features := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables, native: opts.Native}
 	g := genCtx{
 		entry:    prog.Entry.Callable,
 		mroFile:  opts.MROFile,
@@ -153,7 +153,6 @@ func Emit(prog *ir.Program, opts Options) error {
 		mrjob:    opts.Mrjob,
 		monitor:  opts.Monitor,
 		features: features,
-		native:   opts.Native,
 		code:     opts.StageCode,
 		plan:     buildPlan(prog, features),
 	}

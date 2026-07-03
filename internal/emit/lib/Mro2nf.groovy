@@ -88,4 +88,40 @@ class Mro2nf {
     static String outerKey(String compositeKey) {
         compositeKey.substring(0, compositeKey.lastIndexOf('~' as String))
     }
+
+    // forkCount is the native-map scatter width (#76): the size of the map
+    // call's split collection, read from the enclosing pipeline args' data.json
+    // on the driver so no FORK task runs. mapMode is the call's STATIC fork
+    // kind ('map' or 'array'); a value of the wrong kind counts as ONE fork, so
+    // a single instance runs forkbind and fails with the same errNotArray /
+    // errNotMap the FORK task gave — one loud task, not size-of-collection
+    // failures and never a silent skip. A null (or absent) source and the
+    // empty right-kind collection fork zero times; the scatter then runs the
+    // keys-only sentinel instance, which validates every binding like the FORK
+    // task did and feeds the gather its keys.
+    static int forkCount(Path jsonFile, String field, String mapMode) {
+        def v = ((Map) parseJson(jsonFile)).get(field)
+        if (v == null) return 0
+        if (v instanceof List) return mapMode == 'array' ? ((List) v).size() : 1
+        if (v instanceof Map) return mapMode == 'map' ? ((Map) v).size() : 1
+        return 1
+    }
+
+    // forkScatter expands a pipeline-args tuple into one [key, index, data,
+    // leaves] tuple per fork of the split collection in `field` — the
+    // driver-side replacement for the FORK task's fork_NNNNN enumeration. The
+    // key matches the full-fork write's bundle name (cmd/mre fork_%05d,
+    // rendered locale-independently), so out bundle names (outs__<key>) sort
+    // identically for the gather. An empty/null collection yields ONE sentinel
+    // tuple with index -1: its instance runs `forkbind -keysonly`, preserving
+    // the FORK task's always-validate behavior and keys output while staying
+    // dormant when the enclosing pipeline itself is skipped (no pipeargs item
+    // -> no tuples at all).
+    static List forkScatter(Path jsonFile, Object leaves, String field, String mapMode) {
+        int n = forkCount(jsonFile, field, mapMode)
+        if (n == 0) return [['fork_none', -1, jsonFile, leaves]]
+        (0..<n).collect { int i ->
+            ['fork_' + Integer.toString(i).padLeft(5, '0'), i, jsonFile, leaves]
+        }
+    }
 }

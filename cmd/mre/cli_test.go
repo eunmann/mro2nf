@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -497,6 +498,126 @@ func TestRunForkBindIndex(t *testing.T) {
 
 	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-index", "0"}); err == nil {
 		t.Error("forkbind -index without -o must error, not write to cwd")
+	}
+}
+
+// TestRunForkBindIndexKeysFile drives the -keysfile side of the native scatter:
+// each -index instance can emit the forkkeys sidecar byte-identical to the full
+// write's (map keys for a map fork, null for an array fork), so the gather gets
+// its keys without a FORK task. -keysfile without -index is a loud error.
+func TestRunForkBindIndexKeysFile(t *testing.T) {
+	tests := []struct {
+		name, spec, mapMode, want string
+	}{
+		{name: "array fork", spec: `{"n":{"literal":[10,20],"split":true}}`, mapMode: "array", want: "null"},
+		{name: "map fork", spec: `{"n":{"literal":{"a":1,"b":2},"split":true}}`, mapMode: "map", want: `["a","b"]`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
+			keys := filepath.Join(dir, "forkkeys.json")
+
+			if err := run(t.Context(), []string{
+				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
+				"-index", "0", "-o", filepath.Join(dir, "args"), "-keysfile", keys,
+			}); err != nil {
+				t.Fatalf("run forkbind -index -keysfile: %v", err)
+			}
+
+			got, err := os.ReadFile(keys)
+			if err != nil {
+				t.Fatalf("read keysfile: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("keysfile = %q, want %q", got, tc.want)
+			}
+
+			// Byte-identical to the full-fork write's forkkeys.json.
+			forks := filepath.Join(dir, "forks")
+			if err := run(t.Context(), []string{
+				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
+				"-chunkdir", forks,
+			}); err != nil {
+				t.Fatalf("run default forkbind: %v", err)
+			}
+
+			full, err := os.ReadFile(filepath.Join(forks, "forkkeys.json"))
+			if err != nil {
+				t.Fatalf("read full-write forkkeys.json: %v", err)
+			}
+			if string(got) != string(full) {
+				t.Errorf("keysfile %q not byte-identical to full write %q", got, full)
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"n":{"literal":[1],"split":true}}`)
+
+	// The guard must fire as the SPECIFIC flag error, before any resolution work
+	// (a wrapped I/O error here would mean the guard regressed to a side effect).
+	err := run(t.Context(), []string{"forkbind", "-spec", spec, "-keysfile", filepath.Join(dir, "k.json")})
+	if !errors.Is(err, errKeysFileNeedsIndex) {
+		t.Errorf("forkbind -keysfile without -index: err = %v, want errKeysFileNeedsIndex", err)
+	}
+}
+
+// TestRunForkBindKeysOnly drives the native scatter's empty-collection
+// sentinel (#76): -keysonly resolves and VALIDATES every binding like the FORK
+// task would — a wrong-kind split source still fails loudly — and writes only
+// the keys sidecar (no fork bundle).
+func TestRunForkBindKeysOnly(t *testing.T) {
+	tests := []struct {
+		name, spec, mapMode, want string
+	}{
+		{name: "empty array fork", spec: `{"n":{"literal":[],"split":true}}`, mapMode: "array", want: "null"},
+		{name: "empty map fork", spec: `{"n":{"literal":{},"split":true}}`, mapMode: "map", want: "[]"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
+			keys := filepath.Join(dir, "forkkeys.json")
+
+			if err := run(t.Context(), []string{
+				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
+				"-keysonly", "-keysfile", keys,
+			}); err != nil {
+				t.Fatalf("run forkbind -keysonly: %v", err)
+			}
+
+			got, err := os.ReadFile(keys)
+			if err != nil {
+				t.Fatalf("read keysfile: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("keysfile = %q, want %q", got, tc.want)
+			}
+
+			if _, err := os.Stat(filepath.Join(dir, "fork_00000")); !os.IsNotExist(err) {
+				t.Error("-keysonly must not write fork bundles")
+			}
+		})
+	}
+
+	dir := t.TempDir()
+
+	// Validation parity with the FORK task: an array split value under map mode
+	// must fail loudly even though it would scatter zero forks.
+	bad := writeTestFile(t, filepath.Join(dir, "bad.json"), `{"n":{"literal":[],"split":true}}`)
+	err := run(t.Context(), []string{
+		"forkbind", "-spec", bad, "-mapmode", "map",
+		"-keysonly", "-keysfile", filepath.Join(dir, "k.json"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "not a map") {
+		t.Errorf("-keysonly on [] under map mode: err = %v, want the FORK task's not-a-map error", err)
+	}
+
+	if err := run(t.Context(), []string{"forkbind", "-spec", bad, "-keysonly"}); !errors.Is(err, errKeysOnlyNeedsFile) {
+		t.Errorf("forkbind -keysonly without -keysfile: err = %v, want errKeysOnlyNeedsFile", err)
 	}
 }
 

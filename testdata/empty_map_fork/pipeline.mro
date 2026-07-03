@@ -1,0 +1,27 @@
+# A map call over an EMPTY typed-map source: zero forks of the map kind. The
+# gather must yield the typed empty {} (not [] and not an error). Under -native
+# the scatter runs the keys-only sentinel instance, whose forkbind validates
+# the bindings and writes the [] keys sidecar the FORK task would have (#76).
+stage DBL(
+    in  int v,
+    out int w,
+    src py  "stages/dbl",
+)
+
+pipeline EMP(
+    in  map<int> m,
+    out map<int> w,
+)
+{
+    map call DBL(
+        v = split self.m,
+    )
+
+    return (
+        w = DBL.w,
+    )
+}
+
+call EMP(
+    m = {},
+)
