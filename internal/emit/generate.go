@@ -501,7 +501,9 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			genForkBindProcess(b, p.Name, c, g)
 			genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 
-			if c.Disabled != nil {
+			// A natively-gated disable (#59) needs no DISABLE process; the mapped
+			// wiring reads the flag on the driver.
+			if _, _, native := nativeDisableGate(c); c.Disabled != nil && !native {
 				genDisableProcess(b, p.Name, c, g)
 			}
 
@@ -1403,7 +1405,9 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 		// On the disabled branch FORK is skipped, so MERGE produces nothing; mix
 		// in the null bundle. .first() makes the merged result reusable.
 		nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
-		fmt.Fprintf(b, "    s_%[1]s = g_%[1]s.skip.map { data, leaves, d -> %[2]s }\n", c.Name, nullBundle(nulls))
+		// The skip item's arity varies with the gate (native reads add 0/2 extra
+		// tuple slots), and the null bundle ignores it — so accept any shape.
+		fmt.Fprintf(b, "    s_%[1]s = g_%[1]s.skip.map { %[2]s }\n", c.Name, nullBundle(nulls))
 		fmt.Fprintf(b, "    ch_%s = %s.out.mix(s_%s).first()\n", c.Name, merge, c.Name)
 
 		return
@@ -1418,6 +1422,33 @@ func genMappedWiring(b *strings.Builder, pipeline string, c ir.Call, callee stri
 // resolved flag, returning the fork's actual-args with pipeargs replaced by the
 // enabled (run) branch.
 func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string {
+	bind := bindName(pipeline, c.Name)
+
+	// Native gating (#59, Lever 2): read the flag directly instead of a DISABLE
+	// task. For self.<field> the flag is in the fork's own pipeline args (pa); for
+	// CALL.out.<field> it is in the upstream channel.
+	if src, field, ok := nativeDisableGate(c); ok {
+		if src == "pa" {
+			fmt.Fprintf(b, `    g_%[1]s = pa.branch { data, leaves ->
+        def off = Mro2nf.disabledField(data, '%[2]s')
+        run: !off
+        skip: off
+    }
+`, c.Name, field)
+
+			return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves -> tuple(data, leaves) }", c.Name), bind)
+		}
+
+		fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s).branch { data, leaves, gd, gl ->
+        def off = Mro2nf.disabledField(gd, '%[3]s')
+        run: !off
+        skip: off
+    }
+`, c.Name, src, field)
+
+		return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, gd, gl -> tuple(data, leaves) }", c.Name), bind)
+	}
+
 	dis := disableName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c), dis))
 	fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s.out).branch { data, leaves, d ->
@@ -1428,7 +1459,7 @@ func genMappedDisableGate(b *strings.Builder, pipeline string, c ir.Call) string
 `, c.Name, dis)
 
 	// Feeds the FORK process, which reuses the call's bind spec.
-	return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, d -> tuple(data, leaves) }", c.Name), bindName(pipeline, c.Name))
+	return bindCallArgsPa(c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, d -> tuple(data, leaves) }", c.Name), bind)
 }
 
 // genDisabledWiring runs the callee only when the resolved `disabled` flag is
