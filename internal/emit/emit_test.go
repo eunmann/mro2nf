@@ -105,7 +105,6 @@ func TestEmitFiles(t *testing.T) {
 		"_assets/types.json",
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf",
 		"modules/stage_SUM_SQUARES.nf",
-		"modules/stage_REPORT.nf",
 		"_assets/bindspecs/BIND_19_SUM_SQUARE_PIPELINE__SUM_SQUARES.json",
 		"_assets/bindspecs/BIND_19_SUM_SQUARE_PIPELINE__REPORT.json",
 		"_assets/bindspecs/BIND_19_SUM_SQUARE_PIPELINE__return.json",
@@ -424,7 +423,9 @@ func TestEmitSpecialScheduler(t *testing.T) {
 func TestEmitNoSpecialClusterOptions(t *testing.T) {
 	dir := loadAndEmit(t)
 
-	report := readFile(t, filepath.Join(dir, "modules", "stage_REPORT.nf"))
+	// REPORT is a fused non-split stage; its process (with no special) lives in the
+	// pipe module (#82 removed the dead stage_REPORT.nf).
+	report := readFile(t, filepath.Join(dir, "modules", "pipe_SUM_SQUARE_PIPELINE.nf"))
 	if strings.Contains(report, "clusterOptions") {
 		t.Error("a non-split stage with no special must not emit clusterOptions")
 	}
@@ -495,7 +496,9 @@ func TestEmitPreflightGate(t *testing.T) {
 func TestEmitGPUAccelerator(t *testing.T) {
 	dir := emitFixture(t, "gpu_stage", map[string]string{"INFER": "/x/infer", "TRAIN": "/x/train"})
 
-	infer := readFile(t, filepath.Join(dir, "modules", "stage_INFER.nf"))
+	// INFER is fused (non-split), so its accelerator directive is in the pipe
+	// module (#82 removed the dead stage_INFER.nf).
+	infer := readFile(t, filepath.Join(dir, "modules", "pipe_GPU_PIPE.nf"))
 	if !strings.Contains(infer, "accelerator 1") {
 		t.Error("non-split GPU stage INFER must request `accelerator 1`")
 	}
@@ -625,12 +628,16 @@ func TestEmitPrunesUnusedKeyedVariants(t *testing.T) {
 	// diamond_min has no map call anywhere, so no keyed layer at all.
 	d := emitFixture(t, "diamond_min", map[string]string{"GEN": "/x/gen", "ADD": "/x/add"})
 
-	gen := readFile(t, filepath.Join(d, "modules", "stage_GEN.nf"))
-	if strings.Contains(gen, "GEN_MAP") || strings.Contains(gen, "wf_GEN_map") {
-		t.Error("GEN is never map-called; its keyed variant must be pruned (#59)")
+	// GEN is fused into its call site, so #82 drops its dead stage module entirely
+	// — which trivially proves no keyed variant survives.
+	if _, err := os.Stat(filepath.Join(d, "modules", "stage_GEN.nf")); err == nil {
+		t.Error("GEN is fused everywhere; its dead stage module must not be emitted (#82)")
 	}
 
 	pipeD := readFile(t, filepath.Join(d, "modules", "pipe_D.nf"))
+	if strings.Contains(pipeD, "GEN_MAP") || strings.Contains(pipeD, "wf_GEN_map") {
+		t.Error("GEN is never map-called; its keyed variant must be pruned (#59)")
+	}
 	if strings.Contains(pipeD, "wf_D_map") || strings.Contains(pipeD, "wfk_") {
 		t.Error("pipeline D is never map-called; its keyed layer must be pruned (#59)")
 	}
@@ -1126,6 +1133,10 @@ func TestEmitModules(t *testing.T) {
 			"include { SUM_SQUARES_MAIN as STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_MN; SUM_SQUARES_JOIN as STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_JN }",
 			"workflow STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES {",
 			"ch_SUM_SQUARES = STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES(pa)",
+			// REPORT is a fused non-split stage, so its process lives here (#82
+			// removed the dead stage_REPORT.nf); using(threads=0.5) rounds up to 1 CPU.
+			"process STAGE_19_SUM_SQUARE_PIPELINE__REPORT {",
+			"cpus 1",
 		},
 		"modules/stage_SUM_SQUARES.nf": {
 			"process SUM_SQUARES_SPLIT {",
@@ -1141,11 +1152,6 @@ func TestEmitModules(t *testing.T) {
 			// Static using(mem_gb=2) maps to the split/join phase memory, which
 			// grows with task.attempt (the --auto-adjust-memory analog).
 			"memory { 2 * task.attempt + ' GB' }",
-		},
-		"modules/stage_REPORT.nf": {
-			"process REPORT {",
-			// using(threads=0.5) rounds up to one whole CPU.
-			"cpus 1",
 		},
 	}
 
