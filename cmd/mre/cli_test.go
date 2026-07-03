@@ -500,6 +500,69 @@ func TestRunForkBindIndex(t *testing.T) {
 	}
 }
 
+// TestRunForkBindIndexKeysFile drives the -keysfile side of the native scatter:
+// each -index instance can emit the forkkeys sidecar byte-identical to the full
+// write's (map keys for a map fork, null for an array fork), so the gather gets
+// its keys without a FORK task. -keysfile without -index is a loud error.
+func TestRunForkBindIndexKeysFile(t *testing.T) {
+	tests := []struct {
+		name, spec, mapMode, want string
+	}{
+		{name: "array fork", spec: `{"n":{"literal":[10,20],"split":true}}`, mapMode: "array", want: "null"},
+		{name: "map fork", spec: `{"n":{"literal":{"a":1,"b":2},"split":true}}`, mapMode: "map", want: `["a","b"]`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
+			keys := filepath.Join(dir, "forkkeys.json")
+
+			if err := run(t.Context(), []string{
+				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
+				"-index", "0", "-o", filepath.Join(dir, "args"), "-keysfile", keys,
+			}); err != nil {
+				t.Fatalf("run forkbind -index -keysfile: %v", err)
+			}
+
+			got, err := os.ReadFile(keys)
+			if err != nil {
+				t.Fatalf("read keysfile: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("keysfile = %q, want %q", got, tc.want)
+			}
+
+			// Byte-identical to the full-fork write's forkkeys.json.
+			forks := filepath.Join(dir, "forks")
+			if err := run(t.Context(), []string{
+				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
+				"-chunkdir", forks,
+			}); err != nil {
+				t.Fatalf("run default forkbind: %v", err)
+			}
+
+			full, err := os.ReadFile(filepath.Join(forks, "forkkeys.json"))
+			if err != nil {
+				t.Fatalf("read full-write forkkeys.json: %v", err)
+			}
+			if string(got) != string(full) {
+				t.Errorf("keysfile %q not byte-identical to full write %q", got, full)
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"n":{"literal":[1],"split":true}}`)
+
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec,
+		"-keysfile", filepath.Join(dir, "k.json"),
+	}); err == nil {
+		t.Error("forkbind -keysfile without -index must error")
+	}
+}
+
 // TestRunMergeSmoke drives merge end to end: an array fork collects each output
 // into an ordered array; a keyed (map) fork rebuilds a map from the keys file.
 func TestRunMergeSmoke(t *testing.T) {

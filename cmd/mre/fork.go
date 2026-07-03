@@ -20,6 +20,10 @@ var errForkIndexRange = errors.New("forkbind -index out of range")
 // errForkIndexNoOut reports -index without the required -o output dir.
 var errForkIndexNoOut = errors.New("forkbind -index requires -o <dir>")
 
+// errKeysFileNeedsIndex reports -keysfile without -index (the full-fork write
+// already emits forkkeys.json into -chunkdir).
+var errKeysFileNeedsIndex = errors.New("forkbind -keysfile requires -index")
+
 // runForkBind resolves a map call's bindings into one args file per fork,
 // written as fork_NNNNN.json into -chunkdir so a lexical sort recovers order.
 func runForkBind(_ context.Context, argv []string) error {
@@ -32,6 +36,7 @@ func runForkBind(_ context.Context, argv []string) error {
 	mapMode := fs.String("mapmode", "array", "static fork kind: 'map' (typed map) or 'array'")
 	index := fs.Int("index", -1, "with -o, resolve and write ONLY this fork's args bundle (native-map scatter, #76)")
 	oDir := fs.String("o", "", "output args bundle dir when -index >= 0")
+	keysFile := fs.String("keysfile", "", "with -index, also write the forkkeys sidecar to this path")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -68,11 +73,22 @@ func runForkBind(_ context.Context, argv []string) error {
 	// Native scatter (#76 foundation): -index writes just one fork's args to -o, so
 	// the standalone FORK task can be replaced by an in-workflow scatter over
 	// 0..N-1 with each stage resolving its own fork inline. The per-fork args are
-	// identical to the corresponding full-fork write.
+	// identical to the corresponding full-fork write, and -keysfile emits the same
+	// forkkeys sidecar the full write would, so the gather still gets its keys.
 	if *index >= 0 {
-		return writeForkIndex(forks, *index, *oDir, params, tbl)
+		return writeForkIndex(forks, keys, *index, *oDir, *keysFile, params, tbl)
 	}
 
+	if *keysFile != "" {
+		return errKeysFileNeedsIndex
+	}
+
+	return writeAllForks(forks, keys, *dir, params, tbl)
+}
+
+// writeAllForks writes every fork's args bundle (fork_NNNNN/) into dir plus the
+// forknames/forkkeys sidecars — the default (FORK task) write.
+func writeAllForks(forks []json.RawMessage, keys []string, dir string, params []ir.Param, tbl *types.Table) error {
 	names := make([]string, len(forks))
 
 	for i, args := range forks {
@@ -84,17 +100,19 @@ func runForkBind(_ context.Context, argv []string) error {
 			return err
 		}
 
-		if err := shim.WriteBundle(filepath.Join(*dir, name), payload, params, tbl); err != nil {
+		if err := shim.WriteBundle(filepath.Join(dir, name), payload, params, tbl); err != nil {
 			return fmt.Errorf("write fork bundle %s: %w", name, err)
 		}
 	}
 
-	return writeForkMeta(*dir, names, keys)
+	return writeForkMeta(dir, names, keys)
 }
 
 // writeForkIndex writes only fork[index]'s args bundle to oDir (the native-scatter
-// path); it is identical to the corresponding full-fork write.
-func writeForkIndex(forks []json.RawMessage, index int, oDir string, params []ir.Param, tbl *types.Table) error {
+// path); it is identical to the corresponding full-fork write. With keysFile it
+// also writes the forkkeys sidecar (identical to the full write's), so a scatter
+// instance can supply the gather's keys without a FORK task.
+func writeForkIndex(forks []json.RawMessage, keys []string, index int, oDir, keysFile string, params []ir.Param, tbl *types.Table) error {
 	if oDir == "" {
 		return errForkIndexNoOut
 	}
@@ -112,7 +130,16 @@ func writeForkIndex(forks []json.RawMessage, index int, oDir string, params []ir
 		return fmt.Errorf("write fork %d bundle: %w", index, err)
 	}
 
-	return nil
+	if keysFile == "" {
+		return nil
+	}
+
+	raw, err := keysJSON(keys)
+	if err != nil {
+		return err
+	}
+
+	return writeRaw(keysFile, raw)
 }
 
 // writeForkMeta writes the two fork sidecar files into dir:
@@ -131,14 +158,27 @@ func writeForkMeta(dir string, names, keys []string) error {
 		return err
 	}
 
-	keysJSON := json.RawMessage("null")
-	if keys != nil {
-		if keysJSON, err = json.Marshal(keys); err != nil {
-			return fmt.Errorf("marshal fork keys: %w", err)
-		}
+	raw, err := keysJSON(keys)
+	if err != nil {
+		return err
 	}
 
-	return writeRaw(filepath.Join(dir, "forkkeys.json"), keysJSON)
+	return writeRaw(filepath.Join(dir, "forkkeys.json"), raw)
+}
+
+// keysJSON renders the forkkeys sidecar payload: the map fork's keys, or JSON
+// null for an array fork (nil keys).
+func keysJSON(keys []string) (json.RawMessage, error) {
+	if keys == nil {
+		return json.RawMessage("null"), nil
+	}
+
+	raw, err := json.Marshal(keys)
+	if err != nil {
+		return nil, fmt.Errorf("marshal fork keys: %w", err)
+	}
+
+	return raw, nil
 }
 
 // runMerge combines per-fork outputs into one map-call result: each named
