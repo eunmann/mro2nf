@@ -147,7 +147,7 @@ func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 
 	genPipeIncludes(&b, p, prog, g)
 	genPipeProcesses(&b, p, prog, g)
-	genPipelineWorkflow(&b, p, prog, g)
+	genPipelineWorkflow(&b, p, g)
 
 	// The keyed layer (wf_<p>_map + its keyed includes/processes) is only invoked
 	// when this pipeline runs under a map call; otherwise it is dead code (#59).
@@ -1012,7 +1012,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 		bundleOutput("merged"))
 }
 
-func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx) {
+func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 	var body strings.Builder
 
 	// pipeargs is always a value channel (the entry uses Channel.value and nested
@@ -1051,10 +1051,11 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g
 
 	// The pipeline's own output: when its returns forward one call's outputs
 	// verbatim, emit that producer's bundle directly instead of rebuilding it in a
-	// return BIND (emit-once, #14); otherwise the return bind assembles it.
+	// return BIND (emit-once, #14); otherwise the return bind assembles it. The
+	// forward decision is resolved once in the plan (retFwd).
 	emit := bindName(p.Name, "return") + ".out"
-	if prod, ok := forwardProducer(p.Returns, p, prog); ok {
-		emit = "ch_" + prod
+	if fwd := g.plan.pipes[p.Name].retFwd; fwd != "" {
+		emit = "ch_" + fwd
 	} else {
 		fmt.Fprintf(&body, "    %s(%s)\n", bindName(p.Name, "return"), bindCallArgs(p.Returns, bindName(p.Name, "return")))
 	}
