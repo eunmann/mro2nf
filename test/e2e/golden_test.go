@@ -103,6 +103,10 @@ var goldenCases = []struct {
 	// #81 baseline: a 3-stage linear chain A->B->C; default runs three tasks,
 	// TestFuseChains reruns it with -fuse-chains (all fold into one) — same output.
 	{"chain_fuse3", "chain_fuse3", "expected/outs.json"},
+	// #90: a trivial-compute fixture whose DAG mirrors CellRanger's
+	// _basic_sc_rna_counter shape — preflight, split, a disable fan-out gating
+	// aliased calls, a mapped per-sample stage, and nested sub-pipelines.
+	{"cellranger_shaped", "cellranger_shaped", "expected/count_outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
