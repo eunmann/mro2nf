@@ -541,6 +541,18 @@ func TestEmitNativeDisableGate(t *testing.T) {
 	if strings.Contains(dp, "process DISABLE") {
 		t.Errorf("a natively-gated upstream-ref disable must emit no DISABLE process:\n%s", dp)
 	}
+
+	// A disabled MAP call (non-keyed) gates natively too: disabled_map's `map call
+	// DBL using (disabled = self.skip)` reads the flag from pa directly.
+	dm := emitFixture(t, "disabled_map", map[string]string{"DBL": "/x/dbl"})
+
+	dmp := readFile(t, filepath.Join(dm, "modules", "pipe_Q.nf"))
+	if !strings.Contains(dmp, "Mro2nf.disabledField(data, 'skip')") {
+		t.Errorf("a disabled map call must gate natively on pa:\n%s", dmp)
+	}
+	if strings.Contains(dmp, "process DISABLE") {
+		t.Errorf("a natively-gated disabled map call must emit no DISABLE process:\n%s", dmp)
+	}
 }
 
 // TestEmitPrunesUnusedKeyedVariants guards #59: a stage/pipeline that never runs
