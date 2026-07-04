@@ -176,7 +176,7 @@ func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 	if g.plan.keyed[p.Name] {
 		genKeyedPipeIncludes(&b, p, prog)
 		genKeyedPipeProcesses(&b, p, prog, g)
-		genKeyedPipeline(&b, p)
+		genKeyedPipeline(&b, prog, p, g)
 	}
 
 	return b.String()
@@ -245,10 +245,34 @@ func keyedCallAlias(pipeline, call string) string {
 	return "wfk_" + qualify(pipeline, call)
 }
 
+// keyedFuseable reports whether a keyed-pipeline call runs its bind+main in one
+// fused process (genKeyedFusedStageProcess) rather than a standalone BIND_K plus
+// the callee's _map variant — the same conditions as the plain-layer fold
+// (fuseableStageCall): a non-mapped, non-disabled call onto a non-split stage.
+// Fusing folds away one BIND_K task PER OUTER FORK (#99). It returns the callee
+// stage for the fused process.
+func keyedFuseable(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
+	if c.Mapped || c.Disabled != nil {
+		return nil, false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split {
+		return nil, false
+	}
+
+	return s, true
+}
+
 // genKeyedPipeIncludes imports the fork-key-threaded variant of each callee so a
-// keyed pipeline can run its body per fork.
+// keyed pipeline can run its body per fork. A fused leaf call embeds its stage's
+// main directly, so it needs no wf_<stage>_map import.
 func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 	for _, c := range p.Calls {
+		if _, ok := keyedFuseable(c, prog); ok {
+			continue
+		}
+
 		_, src := calleeModule(prog, c.Callable)
 		fmt.Fprintf(b, "include { wf_%s_map as %s } from '%s'\n", c.Callable, keyedCallAlias(p.Name, c.Name), src)
 	}
@@ -273,6 +297,14 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 			continue
 		}
 
+		// A fuseable leaf call runs bind+main in one keyed process (#99); an
+		// unfuseable one keeps its standalone BIND_K feeding the callee's variant.
+		if s, ok := keyedFuseable(c, prog); ok {
+			genKeyedFusedStageProcess(b, p.Name, c, s, g)
+
+			continue
+		}
+
 		genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
 
 		// A non-mapped keyed disabled call is gated by genKeyedCallBody, which still
@@ -282,7 +314,11 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 		}
 	}
 
-	genKeyedBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut), `outs__${key}`)
+	// A pure-forward return needs no keyed return bind — genKeyedPipeline emits
+	// the producer's own per-fork bundle (#99).
+	if g.plan.pipes[p.Name].retFwd == "" {
+		genKeyedBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut), `outs__${key}`)
+	}
 }
 
 // genKeyedBindProcess emits a fork-key-carrying bind: it joins the fork's
@@ -303,6 +339,34 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 }
 
 `, name, block, g.mre, arg, prodArgs, out)
+}
+
+// genKeyedFusedStageProcess emits a per-call fork-keyed process that runs
+// `mre bind` then the stage's `main` in ONE task — the keyed-layer analog of
+// genFusedStageProcess (#16), folding away the standalone BIND_K a keyed leaf
+// call would otherwise run per outer fork (#99). Input/output match the
+// BIND_K→_MAP pair it replaces: tuple(key, pipeargs, in_refs) + types + spec in,
+// tuple(key, outs__<key>) out — so genKeyedCallBody drops it in with no other
+// wiring change.
+func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
+	block, arg := keyedInputs(refCalls(c.Bindings))
+	main := g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main"))
+
+	fmt.Fprintf(b, `process %[1]s_K {
+%[2]s
+  input:
+%[3]s  output:
+    tuple val(key), path("outs__${key}", type: 'dir')
+  script:
+    """
+    '%[4]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[5]s -o args%[6]s
+    %[7]s -args args -outs '%[8]s'%[9]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    """
+}
+
+`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.mre, arg,
+		g.producerArgs(c.Callable, types.RoleIn), main,
+		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
 }
 
 // keyedInputs renders a keyed process's input block — tuple(key, pipeargs, staged
@@ -390,14 +454,31 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 // with the fork key threaded through every bind and callee. Each channel is
 // collapsed to a value list (toList) so it can be re-read by multiple consumers
 // without exhausting the fork queue; binds join their inputs by key.
-func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline) {
+func genKeyedPipeline(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g genCtx) {
 	var body strings.Builder
 
 	body.WriteString("  main:\n    pa_l = keyed.toList()\n")
 	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
 	for _, c := range p.Calls {
-		genKeyedCallBody(&body, p.Name, c)
+		genKeyedCallBody(&body, prog, p.Name, c)
+	}
+
+	// A pure-forward return (retFwd) is the producer's own per-fork bundle — no
+	// keyed return BIND_K, one fewer task per outer fork (#99). Re-expand its
+	// collected list back to per-fork tuple(key, outs__<key>), matching the
+	// return bind's emit shape.
+	if fwd := g.plan.pipes[p.Name].retFwd; fwd != "" {
+		emit := fmt.Sprintf("ch_%s_l.flatMap { x -> x }", fwd)
+		fmt.Fprintf(b, `workflow wf_%s_map {
+  take: keyed
+%s  emit:
+    %s
+}
+
+`, p.Name, body.String(), emit)
+
+		return
 	}
 
 	retName := bindName(p.Name, "return")
@@ -417,9 +498,19 @@ func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline) {
 // gated per fork — its keyed bind and a keyed DISABLE are joined by key and
 // branched, running the callee only for enabled forks and emitting the null
 // bundle for skipped ones.
-func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
+func genKeyedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, c ir.Call) {
 	if c.Mapped {
 		genKeyedMappedCallBody(body, pipeline, c)
+
+		return
+	}
+
+	// A fuseable leaf call runs bind+main in one keyed process (fusedName_K),
+	// taking the same keyed input the standalone BIND_K would and emitting the
+	// per-fork outs bundle directly — no separate BIND_K, no _map hop (#99).
+	if _, ok := keyedFuseable(c, prog); ok {
+		fmt.Fprintf(body, "    ch_%s_l = %s_K(%s).toList()\n",
+			c.Name, fusedName(pipeline, c.Name), keyedBindCall(c.Bindings, bindName(pipeline, c.Name)))
 
 		return
 	}
@@ -690,6 +781,14 @@ func keyedReachable(prog *ir.Program, pl emitPlan) map[string]bool {
 		seen[mark] = true
 
 		for _, c := range p.Calls {
+			// A fuseable keyed leaf call embeds its stage's main in a per-call
+			// fused process (genKeyedFusedStageProcess), so it needs no
+			// wf_<stage>_map variant — don't mark the callee keyed-reachable
+			// (matches genKeyedPipeIncludes skipping its import).
+			if _, ok := keyedFuseable(c, prog); ok && keyed {
+				continue
+			}
+
 			mapped := c.Mapped
 			if mapped && !keyed && pl.pipes[callable].calls[c.Name].kind == kindNativeScatter {
 				mapped = false

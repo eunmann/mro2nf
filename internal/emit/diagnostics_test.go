@@ -94,11 +94,18 @@ func TestDiagnoseNativeMapped(t *testing.T) {
 		t.Errorf("file-bearing scatter: want a folded-FORK info, got %+v", fbs)
 	}
 
-	// A sub-pipeline map target is not a leaf stage, so its gather does not fold
-	// — both the FORK and MERGE tasks remain.
+	// A sub-pipeline map folds its outer MERGE and its keyed leaf binds (#99),
+	// so only the FORK resolve remains at the outer level.
 	mp := Diagnose(lowerFixture(t, "map_pipe"), Options{Native: true})
-	if !hasMessage(mp, SevInfo, "keeps the FORK and MERGE tasks") {
-		t.Errorf("sub-pipeline map: want a FORK+MERGE info, got %+v", mp)
+	if !hasMessage(mp, SevInfo, "keeps one FORK resolve task; its sub-pipeline body runs keyed") {
+		t.Errorf("sub-pipeline map: want a folded-FORK + keyed-body info, got %+v", mp)
+	}
+
+	// A DISABLED mapped call keeps its MERGE (the skip branch needs it as the
+	// null-mix point), so both the FORK and MERGE tasks remain.
+	dm := Diagnose(lowerFixture(t, "disabled_map"), Options{Native: true})
+	if !hasMessage(dm, SevInfo, "keeps the FORK and MERGE tasks") {
+		t.Errorf("disabled mapped call: want a FORK+MERGE info, got %+v", dm)
 	}
 
 	fm := Diagnose(lowerFixture(t, "fork_min"), Options{Native: true})
