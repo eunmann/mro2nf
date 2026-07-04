@@ -173,6 +173,8 @@ func TestMrpDiff(t *testing.T) {
 		// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
 		// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
 		{name: "map_key_sort"},
+		// #99: upstream map-fork element path (producer bundle sliced, real keys).
+		{name: "map_fork_upstream"},
 		// #99 empty-fork fidelity, both sides of the static/runtime split:
 		// an invocation-known empty split source merges to null (mrp's static
 		// resolver prunes the zero-fork call); an upstream empty/null

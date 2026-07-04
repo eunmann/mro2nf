@@ -24,6 +24,9 @@ var goldenCases = []struct {
 	{"split_test", "split_test", "expected/SUM_SQUARE_PIPELINE/fork0/_outs"},
 	{"fork_min", "fork_min", "expected/scale_all_outs.json"},
 	{"fork_upstream", "fork_upstream", "expected/outs.json"},
+	// #99: upstream MAP-fork with real keys — the O(1) element path slicing a
+	// producer bundle for a map fork (driver UTF-8 key sort vs Go forkkeys).
+	{"map_fork_upstream", "map_fork_upstream", "expected/outs.json"},
 	{"struct_min", "struct_min", "expected/stats_pipe_outs.json"},
 	{"modifiers_min", "modifiers_min", "expected/top_outs.json"},
 	{"alias_min", "alias_min", "expected/p_outs.json"},
@@ -622,6 +625,7 @@ func TestNativeComplete(t *testing.T) {
 		{"fork_ref", "expected/outs.json"},
 		{"fork_mid", "expected/outs.json"},
 		{"fork_upstream", "expected/outs.json"},
+		{"map_fork_upstream", "expected/outs.json"},
 		{"map_null_map", "expected/outs.json"},
 		{"map_key_sort", "expected/outs.json"},
 		{"runtime_empty_forks", "expected/outs.json"},

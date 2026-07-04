@@ -1,0 +1,37 @@
+# A map call over an UPSTREAM typed-map output with REAL keys (split GEN.m):
+# exercises the O(1) element path (#99) slicing a producer's value-channel
+# bundle for a MAP fork — the driver's UTF-8 key sort must agree with the Go
+# forkkeys order when the collection comes from callOuts rather than pipeargs.
+stage GEN(
+    in  int      n,
+    out map<int> m,
+    src py       "stages/gen",
+)
+
+stage DBL(
+    in  int v,
+    out int w,
+    src py  "stages/dbl",
+)
+
+pipeline MFU(
+    in  int      n,
+    out map<int> w,
+)
+{
+    call GEN(
+        n = self.n,
+    )
+
+    map call DBL(
+        v = split GEN.m,
+    )
+
+    return (
+        w = DBL.w,
+    )
+}
+
+call MFU(
+    n = 3,
+)
