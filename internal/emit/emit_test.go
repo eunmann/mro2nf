@@ -642,15 +642,26 @@ func TestEmitPrunesUnusedKeyedVariants(t *testing.T) {
 		t.Error("pipeline D is never map-called; its keyed layer must be pruned (#59)")
 	}
 
-	// map_pipe maps sub-pipeline INNER over an array, so INNER and its stage ADD1
-	// run keyed and MUST keep their variants; the top-level OUTER does not.
+	// map_pipe maps sub-pipeline INNER over an array, so INNER keeps its keyed
+	// variant; the top-level OUTER does not.
 	m := emitFixture(t, "map_pipe", map[string]string{"ADD1": "/x/add1"})
 
-	if add1 := readFile(t, filepath.Join(m, "modules", "stage_ADD1.nf")); !strings.Contains(add1, "ADD1_MAP") {
-		t.Error("ADD1 runs under a map call; its keyed variant must be emitted")
+	// ADD1 is a fuseable leaf call inside keyed INNER (#99): its bind+main run
+	// in one per-call fused process (STAGE_5_INNER__ADD1_K), so its standalone
+	// keyed variant AND its now-unused stage module are pruned, and no separate
+	// BIND_5_INNER__ADD1_K remains.
+	inner := readFile(t, filepath.Join(m, "modules", "pipe_INNER.nf"))
+	if !strings.Contains(inner, "STAGE_5_INNER__ADD1_K") {
+		t.Error("ADD1 is a fuseable keyed leaf; it must run as a fused STAGE_..._K process")
+	}
+	if strings.Contains(inner, "BIND_5_INNER__ADD1_K") {
+		t.Error("ADD1 is fused; its standalone keyed BIND must be gone")
+	}
+	if _, err := os.Stat(filepath.Join(m, "modules", "stage_ADD1.nf")); err == nil {
+		t.Error("ADD1 is fused everywhere; its now-unused stage module must not be emitted")
 	}
 
-	if inner := readFile(t, filepath.Join(m, "modules", "pipe_INNER.nf")); !strings.Contains(inner, "wf_INNER_map") {
+	if !strings.Contains(inner, "wf_INNER_map") {
 		t.Error("INNER is map-called; its keyed variant must be emitted")
 	}
 

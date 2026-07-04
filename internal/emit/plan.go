@@ -121,18 +121,18 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 		// Second pass (#76/#99 merge fold): with every call's kind fixed, decide
 		// which map-call gathers fold their MERGE into the sole consumer. Reading
 		// the finished kinds keeps this a plan decision the emitters can't
-		// disagree with (#77). Under -native the fold covers a kindMapped call
-		// onto a STAGE — leaf or split — because the leaf _MAP and the split
-		// JOIN_K both emit the tuple(key, outs__<key>) the fold contract pairs
-		// with FORK.out.keys. A sub-pipeline callee keeps its outer MERGE for now
-		// (its keyed layer's per-outer-fork bookkeeping is the separate #99
-		// remainder). A DISABLED mapped call keeps its MERGE too — the skip
-		// branch needs the merged bundle as the mix point for the null output.
+		// disagree with (#77). Under -native the fold covers EVERY kindMapped
+		// target — leaf stage, split stage, or sub-pipeline — because every keyed
+		// callee variant emits the tuple(key, outs__<key>) the fold contract
+		// pairs with FORK.out.keys (the leaf _MAP, the split JOIN_K, and the
+		// keyed pipeline's return/forward all write outs__<key>). A DISABLED
+		// mapped call keeps its MERGE — the skip branch needs the merged bundle
+		// as the mix point for the null output.
 		for _, c := range p.Calls {
 			cp := pp.calls[c.Name]
 
 			foldable := cp.kind == kindNativeScatter ||
-				(f.native && cp.kind == kindMapped && c.Disabled == nil && stageCallee(prog, c.Callable))
+				(f.native && cp.kind == kindMapped && c.Disabled == nil)
 
 			if foldable && mergeFoldable(c.Name, p, pp) {
 				cp.foldMerge = true
@@ -538,17 +538,6 @@ func mergeFoldable(name string, p *ir.Pipeline, pp pipePlan) bool {
 	}
 
 	return false
-}
-
-// stageCallee reports whether a callable is a STAGE (leaf or split) rather than
-// a sub-pipeline — its keyed _map variant is a single fork-keyed hop (the leaf
-// _MAP or the split SPLIT_K/MAIN_K/JOIN_K triad) that emits outs__<key>, so its
-// gather satisfies the merge-fold contract. A sub-pipeline's keyed variant runs
-// a whole per-outer-fork body whose bookkeeping is folded separately.
-func stageCallee(prog *ir.Program, callable string) bool {
-	_, ok := prog.Stages[callable]
-
-	return ok
 }
 
 // needsDisableTask reports whether a disabled call requires a standalone DISABLE

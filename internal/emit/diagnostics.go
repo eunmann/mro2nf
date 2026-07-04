@@ -102,10 +102,10 @@ func mappedRemainderMsg(prog *ir.Program, pipeline string, c ir.Call, cp callPla
 
 	switch s, isStage := prog.Stages[c.Callable]; {
 	case !isStage:
-		// A sub-pipeline callee keeps its outer FORK/MERGE AND runs its keyed
-		// per-outer-fork body (BIND_K/FORK_K/MERGE_K) — bookkeeping that scales
-		// with outer fork width, the deeper #99 remainder.
-		tasks += " plus its keyed per-outer-fork layer (BIND_K/MERGE_K)"
+		// A sub-pipeline callee runs its keyed body per outer fork. Its leaf
+		// calls are fused (#99), so only a nested map (FORK_K/MERGE_K), a
+		// disabled call, or a split call inside keeps a keyed bookkeeping task.
+		tasks += "; its sub-pipeline body runs keyed per outer fork (leaf calls fused; a nested-map, disabled, or split call inside keeps its keyed task)"
 	case s.Split:
 		// A split-stage callee also fans out the intrinsic per-fork split triad
 		// (SPLIT/MAIN/JOIN) — that is genuine compute matching mrp's jobs 1:1,
