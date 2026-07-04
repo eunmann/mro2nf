@@ -23,6 +23,7 @@ var goldenCases = []struct {
 }{
 	{"split_test", "split_test", "expected/SUM_SQUARE_PIPELINE/fork0/_outs"},
 	{"fork_min", "fork_min", "expected/scale_all_outs.json"},
+	{"fork_upstream", "fork_upstream", "expected/outs.json"},
 	{"struct_min", "struct_min", "expected/stats_pipe_outs.json"},
 	{"modifiers_min", "modifiers_min", "expected/top_outs.json"},
 	{"alias_min", "alias_min", "expected/p_outs.json"},
@@ -563,12 +564,17 @@ func assertHasProcess(t *testing.T, proj string, cat string) {
 // and the sole-consumer merge fold kills MERGE — fork_min (array), map_fork
 // (typed map), empty_fork_min/empty_map_fork (zero forks via the keys-only
 // sentinel), and fork_ref (an upstream broadcast ref re-read per instance).
+// fork_upstream and map_null_map scatter over an UPSTREAM split source (#99):
+// the driver reads the fork width from the producer's value channel
+// (Mro2nf.forkScatterRef); map_null_map's null typed-map output exercises the
+// zero-fork sentinel on that path (result {}).
 func TestNativeComplete(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
 	for _, fx := range []string{
 		"diamond_min", "fold_disable", "native_file_return", "file_min", "chain_fuse", "struct_min",
 		"fork_min", "map_fork", "empty_fork_min", "empty_map_fork", "fork_ref", "fork_mid",
+		"fork_upstream", "map_null_map",
 	} {
 		t.Run(fx, func(t *testing.T) {
 			t.Parallel()

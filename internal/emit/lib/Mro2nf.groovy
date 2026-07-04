@@ -124,4 +124,18 @@ class Mro2nf {
             ['fork_' + Integer.toString(i).padLeft(5, '0'), i, jsonFile, leaves]
         }
     }
+
+    // forkScatterRef is forkScatter for an UPSTREAM-ref split source (#99): the
+    // fork WIDTH is read from the producer's bundle (refJson), while the scatter
+    // tuples still carry the enclosing pipeargs bundle (paJson + paLeaves) — the
+    // fused instance stages the producer's whole output separately as an in_<id>
+    // broadcast input, which forkbind resolves the per-fork split from. The
+    // empty/null-source sentinel behaves exactly as the self-source path.
+    static List forkScatterRef(Path refJson, Path paJson, Object paLeaves, String field, String mapMode) {
+        int n = forkCount(refJson, field, mapMode)
+        if (n == 0) return [['fork_none', -1, paJson, paLeaves]]
+        (0..<n).collect { int i ->
+            ['fork_' + Integer.toString(i).padLeft(5, '0'), i, paJson, paLeaves]
+        }
+    }
 }
