@@ -170,6 +170,9 @@ func TestMrpDiff(t *testing.T) {
 		{name: "kitchen_sink"},
 		{name: "file_tree"},
 		{name: "map_null_map"},
+		// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
+		// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
+		{name: "map_key_sort"},
 		{name: "map_file_array"},
 		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
 		// map, nested pipelines) — all py stages, so it joins the mrp differential.

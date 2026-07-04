@@ -42,7 +42,10 @@ cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
 # load-bearing: the test cache would otherwise return a cached ok without
 # running Nextflow. Partitioned by -run/-skip so CI can parallelize the docker
 # job; the mrp differential needs a local Martian (skips without one).
-E2E_PARALLEL ?= 6
+# Each parallel case is an idle-heavy `nextflow run` (JVM startup + tiny
+# tasks), so oversubscribing cores is a win; the harness caps every JVM at
+# -Xmx512m, bounding 10 concurrent runs to ~5 GB.
+E2E_PARALLEL ?= 10
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
 test-e2e: build ## Run the e2e suite (golden table, cloud-sim, failure paths, knobs)
