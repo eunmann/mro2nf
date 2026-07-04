@@ -5,6 +5,34 @@ orchestrates the DAG/splits/forks/resources; each process runs the **original**
 Martian stage code through the Martian adapter ABI via the `mre` shim. See the
 design plan at `~/.claude/plans/bright-booping-rose.md`.
 
+## North star (the correctness + performance bar)
+
+Faithfulness means exactly two contracts, nothing more:
+
+1. **The Martian stage ABI**: each stage task receives `_args` and produces
+   `_outs` in the byte shape the Martian adapter expects (`shim.WriteBundle`,
+   `@mre:` markers). Never perturb this.
+2. **Pipeline outputs**: a transpiled pipeline produces the **exact same
+   outputs every run** as `mrp` (the golden + mrp-differential suites), and
+   runs reliably and safely (deterministic ordering, `-resume`-stable,
+   loud failures — never silent divergence).
+
+Everything between stage tasks — binding, forking, gathering, disabling,
+staging — is **not** a contract. Implement it as idiomatic, modern Nextflow
+(channels, operators, native `path` staging), NOT as a byte-identical replica
+of Martian's internal orchestration or of the current emitter's task graph.
+100% Martian feature parity is not the goal; identical outputs are.
+
+**Overhead rule**: orchestration cost (tasks, driver work, bytes staged, work
+inside stage tasks that isn't the stage's own compute) must be O(pipeline
+size + total data). It must never scale super-linearly with fork width N or
+chunk count M, and per-fork/per-chunk bookkeeping tasks are a smell — the
+split triad (split → per-chunk main → join, per fork) is the only intrinsic
+fan-out; it matches Martian's own jobs 1:1. When judging a change, measure
+tasks and per-instance work against `mrp`'s job count at two widths (see the
+forks×chunks fixtures); constant overhead is acceptable, scaling overhead is
+a bug.
+
 ## Architecture
 
 ```

@@ -38,6 +38,14 @@ Run these once at the **end** of a change set, after all edits are complete — 
 - `make test-e2e` / `make test-e2e-docker` — Go e2e suites in `test/e2e` (build tag `e2e`, always `-count=1`): golden diffs vs committed mrp outputs, and the same pipelines under docker container isolation. Run when changing the emitter, shim, or data plane.
 - `make test-mrp-diff` — differential run against a real local `mrp` (needs `MARTIAN_BIN`). `make bench` — the data-movement regression gate.
 
+The correctness bar these suites enforce (see CLAUDE.md "North star"): pipeline
+OUTPUTS identical to mrp, plus the stage `_args`/`_outs` ABI. Do NOT write tests
+that pin the intermediate task graph or intermediate bundle bytes as a contract
+— orchestration between stages is free to change to idiomatic Nextflow, and a
+test frozen on today's task shape blocks exactly the overhead-reduction work
+the project wants. Pin outputs, exit codes, ordering determinism, and scaling
+properties (task/work counts flat in fork width) instead.
+
 Exception: when fixing a bug via the `tdd` skill, run the single reproducing test (`go test -run <TestName> ./<pkg>/`) during the red-green cycle; the full lint+test pass still happens once at the end.
 
 ## See Also
