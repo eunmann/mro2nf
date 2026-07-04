@@ -6,18 +6,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 )
 
-// target is one resolved override destination: a leaf STAGE and the CALL
-// instance names that invoke it. A generated project names processes two ways —
-// the plain/keyed family after the STAGE (`<stage>`, `<stage>_MAP`, …) and the
-// fused per-call family after the CALL (`STAGE_<n>_<pipe>__<call>`, emitted by
-// #16 fusion and #76 native scatter). A selector must cover both, so an
-// override reaches its stage whether a given call is fused/scattered (call-
-// named) or plain/keyed (stage-named), and whether the call is aliased.
-type target struct {
-	stage string
-	calls []string
-}
-
 // resolver maps an override key to the generated stage/call names it targets,
 // using the pipeline program to expand a pipeline-scoped key to the leaf stages
 // beneath it and to flag a key that names nothing. A nil program yields the
@@ -131,25 +119,29 @@ const (
 	kindStage         // resolved directly to a leaf stage
 )
 
-// targets returns the (stage, calls) destinations an override key maps to and
+// targets returns the leaf-STAGE (callable) names an override key maps to and
 // how specifically (kind), plus a note that is non-empty when the key names
 // nothing the pipeline emits (so the caller reports it instead of silently
-// emitting a dead selector). The empty key "" is the global default. Without a
-// program, the key's last segment is returned as both stage and its own call
-// (the conservative legacy behavior — the emitter's call name equalled the
-// stage name before per-call fusion/scatter existed).
-func (r *resolver) targets(key string) ([]target, int, string) {
+// emitting a dead selector). The empty key "" is the global default. A key
+// resolves to the stage(s) it touches — an alias key to the aliased call's
+// stage, a pipeline key to the leaf stages beneath it — so precedence and the
+// resolved-map dedup stay per (stage, phase, field) exactly as before; the
+// selector then covers ALL of that stage's call sites (see callsFor). Without a
+// program, the key's last segment is returned unchanged (the conservative
+// legacy behavior — the emitter's call name equalled the stage name before
+// per-call fusion/scatter existed).
+func (r *resolver) targets(key string) ([]string, int, string) {
 	seg := lastSegment(key)
 	if seg == "" {
-		return []target{{stage: ""}}, kindGlobal, "" // global process default
+		return []string{""}, kindGlobal, "" // global process default
 	}
 
 	if r.prog == nil {
-		return []target{{stage: seg, calls: []string{seg}}}, kindStage, ""
+		return []string{seg}, kindStage, ""
 	}
 
 	if r.stage[seg] {
-		return []target{r.stageTarget(seg)}, kindStage, ""
+		return []string{r.callableOf(seg)}, kindStage, ""
 	}
 
 	if lv, ok := r.leaves[seg]; ok {
@@ -157,51 +149,43 @@ func (r *resolver) targets(key string) ([]target, int, string) {
 			return nil, kindExpand, "names a sub-pipeline with no stages"
 		}
 
-		return r.groupCalls(lv), kindExpand, ""
+		return r.stagesOf(lv), kindExpand, ""
 	}
 
 	return nil, kindStage, "no stage or sub-pipeline of that name in the pipeline"
 }
 
-// stageTarget resolves a leaf-stage segment (either a callable name or a call
-// instance name) to its (stage, calls) target. A callable name covers every
-// call site of that stage (so a stage-level override reaches an aliased
-// scattered call); a call name covers that one call plus its stage's shared
-// plain/keyed process.
-func (r *resolver) stageTarget(seg string) target {
+// callableOf maps a leaf-stage segment to its callable (stage) name: a callable
+// name is itself; a call instance name maps to its callable.
+func (r *resolver) callableOf(seg string) string {
 	if r.prog.Stages[seg] != nil {
-		return target{stage: seg, calls: r.stageCalls[seg]}
+		return seg
 	}
 
-	return target{stage: r.callStage[seg], calls: []string{seg}}
+	return r.callStage[seg]
 }
 
-// groupCalls turns a sub-pipeline's leaf call names into one target per stage,
-// each carrying the calls of that stage within the expansion.
-func (r *resolver) groupCalls(calls []string) []target {
-	byStage := map[string][]string{}
+// stagesOf maps a sub-pipeline's leaf call names to their distinct, sorted
+// callable (stage) names.
+func (r *resolver) stagesOf(calls []string) []string {
+	stages := make([]string, 0, len(calls))
 	for _, c := range calls {
-		byStage[r.callStage[c]] = append(byStage[r.callStage[c]], c)
+		stages = append(stages, r.callStage[c])
 	}
 
-	out := make([]target, 0, len(byStage))
-	for _, stage := range sortedStrKeys(byStage) {
-		out = append(out, target{stage: stage, calls: dedupSorted(byStage[stage])})
-	}
-
-	return out
+	return dedupSorted(stages)
 }
 
-// sortedStrKeys returns the sorted keys of a string-keyed map.
-func sortedStrKeys(m map[string][]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
+// callsFor returns every call instance name that invokes stage (callable), or
+// the stage itself when it has no recorded call sites (a bare-stage entry, or
+// the legacy no-program path). The selector matches the fused per-call process
+// of each so a stage-level override reaches an aliased scattered call.
+func (r *resolver) callsFor(stage string) []string {
+	if calls := r.stageCalls[stage]; len(calls) > 0 {
+		return calls
 	}
 
-	sort.Strings(out)
-
-	return out
+	return []string{stage}
 }
 
 // dedupSorted returns the sorted, de-duplicated elements of in.

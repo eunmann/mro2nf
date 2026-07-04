@@ -53,7 +53,7 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 	}
 
 	res := newResolver(prog)
-	resolved := map[selKey]directive{}
+	resolved := map[[3]string]directive{}
 	var unmapped []string
 
 	for _, key := range sortedKeys(spec) {
@@ -79,8 +79,12 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 				continue
 			}
 
-			for _, t := range targets {
-				rk := selKey{stage: t.stage, calls: strings.Join(t.calls, ","), phase: phase, base: base}
+			// Keyed per (stage, phase, base) — NOT the call set — so precedence
+			// between two keys touching the same stage is decided by rank, exactly
+			// as before the fused-family unification. The selector covers every
+			// call site of the stage at render time (res.callsFor).
+			for _, stage := range targets {
+				rk := [3]string{stage, phase, base}
 				if cur, ok := resolved[rk]; !ok || rank >= cur.rank {
 					resolved[rk] = directive{rank, line}
 				}
@@ -88,7 +92,7 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 		}
 	}
 
-	globalDefault, groups := groupSelectors(resolved)
+	globalDefault, groups := groupSelectors(resolved, res)
 
 	return render(globalDefault, groups), unmapped, nil
 }
@@ -97,16 +101,8 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 // key depth, so a direct stage key always outranks a pipeline expansion.
 const kindWeight = 1000
 
-// selKey identifies one resolved override destination: a stage, the comma-
-// joined call names whose fused per-call processes it also targets, and the
-// phase/field. calls is part of the key so two stage targets differing only in
-// their call set render distinct selectors.
-type selKey struct {
-	stage, calls, phase, base string
-}
-
-// directive is one resolved override line for a selKey. The most specific
-// source key wins (see the rank computed in Convert).
+// directive is one resolved override line for a (stage, phase, field) triple.
+// The most specific source key wins (see the rank computed in Convert).
 type directive struct {
 	rank int
 	line string
@@ -147,7 +143,7 @@ func selBreadth(stage, phase string) int {
 // default plus an ordered list of withName groups. Each group's lines are sorted
 // by field (base) so `memory` precedes `cpus`; the groups are ordered
 // broad-to-narrow so a specific override wins over a phase-wide one at runtime.
-func groupSelectors(resolved map[selKey]directive) ([]string, []selGroup) {
+func groupSelectors(resolved map[[3]string]directive, res *resolver) ([]string, []selGroup) {
 	type baseLine struct{ base, line string }
 
 	type acc struct {
@@ -160,17 +156,17 @@ func groupSelectors(resolved map[selKey]directive) ([]string, []selGroup) {
 	bySel := map[string]*acc{}
 
 	for rk, d := range resolved {
-		calls := splitCalls(rk.calls)
-		if sel := selector(rk.stage, calls, rk.phase); sel != "" {
+		stage, phase := rk[0], rk[1]
+		if sel := selector(stage, res.callsFor(stage), phase); sel != "" {
 			a := bySel[sel]
 			if a == nil {
-				a = &acc{breadth: selBreadth(rk.stage, rk.phase)}
+				a = &acc{breadth: selBreadth(stage, phase)}
 				bySel[sel] = a
 			}
 
-			a.items = append(a.items, baseLine{rk.base, d.line})
+			a.items = append(a.items, baseLine{rk[2], d.line})
 		} else {
-			globalDefault = append(globalDefault, baseLine{rk.base, d.line})
+			globalDefault = append(globalDefault, baseLine{rk[2], d.line})
 		}
 	}
 
@@ -271,15 +267,6 @@ func phaseSuffixes(phase string) (string, string, bool) {
 // where a backslash escape fails config parsing.
 const fusedPrefix = `STAGE_[0-9]+_.+__`
 
-// splitCalls restores the call-name slice from its comma-joined selKey form.
-func splitCalls(joined string) []string {
-	if joined == "" {
-		return nil
-	}
-
-	return strings.Split(joined, ",")
-}
-
 // selector renders the withName regex for a stage + its call instances + phase;
 // Nextflow full-matches it against the process (or process-alias) name. An empty
 // stage means all stages: "" (the global process block) for a stage-level field,
@@ -306,27 +293,22 @@ func selector(stage string, calls []string, phase string) string {
 		calls = []string{stage}
 	}
 
-	// A single call equal to the stage (the non-aliased case) keeps the compact
-	// pre-unification form, so every existing selector is byte-identical; an
-	// aliased or multi-call target uses the explicit stage|call alternation.
-	if len(calls) == 1 && calls[0] == stage {
-		if phase == "" {
-			return fmt.Sprintf("(%s)?%s.*", fusedPrefix, stage)
-		}
-
-		return fmt.Sprintf("(%s%s|%s%s%s).*", stage, plain, fusedPrefix, stage, fused)
-	}
-
 	callAlt := calls[0]
 	if len(calls) > 1 {
 		callAlt = "(" + strings.Join(calls, "|") + ")"
 	}
 
+	// Two explicit alternatives: the callable-named plain/keyed family via the
+	// stage token (with `.*` to reach `_MAP`/`_SPLIT`/`_*_K`), and the call-named
+	// fused per-call family via the call token(s). The fused branch is BOUNDED —
+	// `…__<call>` with only an optional phase suffix, no trailing `.*` — so a call
+	// name that is a prefix of another call's name cannot over-match the longer
+	// call's process.
 	if phase == "" {
-		return fmt.Sprintf("(%s|%s%s).*", stage, fusedPrefix, callAlt)
+		return fmt.Sprintf("(%s.*|%s%s(_SP|_MN|_JN)?)", stage, fusedPrefix, callAlt)
 	}
 
-	return fmt.Sprintf("(%s%s|%s%s%s).*", stage, plain, fusedPrefix, callAlt, fused)
+	return fmt.Sprintf("(%s%s.*|%s%s%s)", stage, plain, fusedPrefix, callAlt, fused)
 }
 
 // render emits the process{} block: the global process default first, then each

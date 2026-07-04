@@ -1884,6 +1884,12 @@ func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp c
 		// channel (combine yields one deterministic item), while the scatter
 		// tuples carry the enclosing pipeargs bundle. The producer bundle is also
 		// staged into each instance as an in_<id> broadcast input by bindCallArgsPa.
+		// This relies on ch_<scatterCall> being a bare, re-readable VALUE channel:
+		// guaranteed because a value-context scatter's upstream refs are all value
+		// channels (the queue-pipeargs bar excludes the other case), and the
+		// producer is never fused away (consumerCount includes this split ref) nor
+		// merge-folded into a scatter consumer (mergeFoldable rejects that) — so
+		// ch_<scatterCall> is never rewritten to *_souts/*_keys.
 		fmt.Fprintf(b, "    scat_%[1]s = pa.combine(ch_%[2]s).flatMap { pd, pl, ud, ul -> Mro2nf.forkScatterRef(ud, pd, pl, '%[3]s', '%[4]s') }\n",
 			c.Name, cp.scatterCall, cp.scatterField, mapModeArg(c))
 	} else {
