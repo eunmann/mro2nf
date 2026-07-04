@@ -292,7 +292,14 @@ func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) 
 func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx) {
 	for _, c := range p.Calls {
 		if c.Mapped {
-			genKeyedForkBindProcess(b, p.Name, c, g)
+			// A value-only nested map uses the driver element scatter (#99): its
+			// fused per-inner-fork process replaces the FORK_K resolve.
+			if s, _, ok := keyedScatterable(c, prog); ok {
+				genKeyedNestedScatterProcess(b, p.Name, c, s, g)
+			} else {
+				genKeyedForkBindProcess(b, p.Name, c, g)
+			}
+
 			genKeyedMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 
 			// A natively-gated keyed disable (self.<field>) reads the flag from the
@@ -406,6 +413,114 @@ func keyedInputs(refs []string) (string, string) {
 	return in.String(), arg
 }
 
+// keyedScatterable reports whether a nested map call (a map inside a keyed
+// pipeline) can replace its per-outer-fork FORK_K with a driver element scatter
+// (#99): a value-only leaf callee, exactly one whole-field self split, and no
+// call-ref bindings (a broadcast/split from an upstream call would need the
+// producer joined per outer key — kept on the FORK_K path). Disabled nested
+// maps keep FORK_K (the per-fork run/skip gate). Returns the callee stage and
+// the split field.
+func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
+	if !c.Mapped || c.Disabled != nil {
+		return nil, "", false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split || !splitValueOnly(c, s, prog) {
+		return nil, "", false
+	}
+
+	field, splits := "", 0
+
+	for _, b := range c.Bindings {
+		if b.Value.Ref != nil && b.Value.Ref.Kind == refKindCall {
+			return nil, "", false
+		}
+
+		if b.Split {
+			splits++
+
+			r := b.Value.Ref
+			if r == nil || r.Kind != refKindSelf || r.Output != "" {
+				return nil, "", false
+			}
+
+			field = r.ID
+		}
+	}
+
+	if splits != 1 {
+		return nil, "", false
+	}
+
+	return s, field, true
+}
+
+// genKeyedNestedScatterProcess emits the O(1)-per-instance fused inner scatter
+// for a value-only nested map (#99): the driver already sliced each outer
+// fork's inner collection (Mro2nf.forkElementsKeyed), so an inner fork with
+// index > 0 assembles its args from its own base64 element (forkbind
+// -elementfile) and runs the stage main — no per-outer-fork FORK_K resolve.
+// Index 0 (per outer fork) runs `forkbind -index 0` once to write that outer
+// fork's inner forkkeys sidecar for the gather; the fi<0 sentinel validates an
+// empty inner collection. The composite key (outer~inner) threads fork identity
+// for the regroup; the keys output is keyed by the OUTER key so the per-outer
+// merge pairs them. The staged `pipeargs` is that outer fork's args (carried in
+// the element tuple), used for the inner broadcast bindings and the index-0
+// resolve.
+func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
+	refs := refCalls(c.Bindings)
+
+	var in strings.Builder
+	in.WriteString("    tuple val(okey), val(key), val(fi), val(element), path(pipeargs, stageAs: 'pipeargs')")
+
+	pairs := make([]string, 0, len(refs))
+	for _, id := range refs {
+		fmt.Fprintf(&in, ", path('in_%s')", id)
+		pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
+	}
+
+	in.WriteString("\n    path 'types.json'\n    path 'spec.json'\n")
+
+	arg := ""
+	if len(pairs) > 0 {
+		arg = " -inputs " + strings.Join(pairs, ",")
+	}
+
+	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s -mapmode %s", g.mre, arg, mapModeArg(c))
+	main := fmt.Sprintf("%s -args fargs -outs '%s'%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
+		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
+		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
+
+	fmt.Fprintf(b, `process %[1]s_KS {
+%[5]s
+  input:
+%[2]s  output:
+    tuple val(key), path("outs__${key}", type: 'dir'), emit: outs, optional: true
+    tuple val(okey), path('forkkeys.mro2nf.json'), emit: keys, optional: true
+  script:
+    if( fi < 0 )
+      """
+      %[3]s -keysonly -keysfile forkkeys.mro2nf.json
+      """
+    else if( fi == 0 )
+      """
+      %[3]s -index 0 -o fargs -keysfile forkkeys.mro2nf.json
+      %[4]s
+      [ -d outs__${key} ]
+      """
+    else
+      """
+      printf %%s '${element}' | base64 -d > element.json
+      %[3]s -elementfile element.json -o fargs
+      %[4]s
+      [ -d outs__${key} ]
+      """
+}
+
+`, forkName(pipeline, c.Name), in.String(), forkbind, main, stageDirectives(s, ""))
+}
+
 // genKeyedForkBindProcess emits the fork-key-threaded forkbind for a nested map
 // call: per outer fork it forks the split collection into inner fork bundles.
 func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
@@ -507,7 +622,7 @@ func genKeyedPipeline(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g ge
 // bundle for skipped ones.
 func genKeyedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, c ir.Call) {
 	if c.Mapped {
-		genKeyedMappedCallBody(body, pipeline, c)
+		genKeyedMappedCallBody(body, prog, pipeline, c)
 
 		return
 	}
@@ -552,10 +667,27 @@ func genKeyedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, 
 // are regrouped by stripping the innermost key segment (so arbitrary nesting
 // works) and merged per outer fork. A remainder join keeps an outer fork whose
 // inner collection was empty (it merges to null).
-func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call) {
+func genKeyedMappedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, c ir.Call) {
 	fork := forkName(pipeline, c.Name)
 	merge := mergeName(pipeline, c.Name)
 	alias := keyedCallAlias(pipeline, c.Name)
+
+	// A value-only nested map collapses its per-outer-fork FORK_K into a driver
+	// element scatter (#99): the driver slices each outer fork's inner collection
+	// once (forkElementsKeyed) and each inner fork assembles its args from its own
+	// element — no FORK_K resolve. The MERGE_K gather is unchanged (fed the
+	// scatter's composite-keyed outs + per-outer keys).
+	if _, field, ok := keyedScatterable(c, prog); ok {
+		fmt.Fprintf(body, "    ek_%[1]s = pa_l.flatMap { x -> x }.flatMap { ok, pab -> Mro2nf.forkElementsKeyed(ok, pab, '%[2]s', '%[3]s') }\n",
+			c.Name, field, mapModeArg(c))
+		fmt.Fprintf(body, "    io_%[1]s = %[2]s_KS(ek_%[1]s, types, %[3]s)\n",
+			c.Name, fork, specFile(bindName(pipeline, c.Name)))
+		fmt.Fprintf(body, "    mj_%[1]s = io_%[1]s.keys.join(io_%[1]s.outs.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, so ?: [], fk) }\n", c.Name)
+		fmt.Fprintf(body, "    %s_K(mj_%s, types)\n", merge, c.Name)
+		fmt.Fprintf(body, "    ch_%[1]s_l = %[2]s_K.out.toList()\n", c.Name, merge)
+
+		return
+	}
 
 	// A disabled nested map is all-or-nothing per outer fork: the disable flag is
 	// resolved per key and gates whether that fork's inner map runs at all. The
