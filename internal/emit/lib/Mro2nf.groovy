@@ -90,58 +90,6 @@ class Mro2nf {
         compositeKey.substring(0, compositeKey.lastIndexOf('~' as String))
     }
 
-    // forkCount is the native-map scatter width (#76): the size of the map
-    // call's split collection, read from the enclosing pipeline args' data.json
-    // on the driver so no FORK task runs. mapMode is the call's STATIC fork
-    // kind ('map' or 'array'); a value of the wrong kind counts as ONE fork, so
-    // a single instance runs forkbind and fails with the same errNotArray /
-    // errNotMap the FORK task gave — one loud task, not size-of-collection
-    // failures and never a silent skip. A null (or absent) source and the
-    // empty right-kind collection fork zero times; the scatter then runs the
-    // keys-only sentinel instance, which validates every binding like the FORK
-    // task did and feeds the gather its keys.
-    static int forkCount(Path jsonFile, String field, String mapMode) {
-        def v = ((Map) parseJson(jsonFile)).get(field)
-        if (v == null) return 0
-        if (v instanceof List) return mapMode == 'array' ? ((List) v).size() : 1
-        if (v instanceof Map) return mapMode == 'map' ? ((Map) v).size() : 1
-        return 1
-    }
-
-    // forkScatter expands a pipeline-args tuple into one [key, index, data,
-    // leaves] tuple per fork of the split collection in `field` — the
-    // driver-side replacement for the FORK task's fork_NNNNN enumeration. The
-    // key matches the full-fork write's bundle name (cmd/mre fork_%05d,
-    // rendered locale-independently), so out bundle names (outs__<key>) sort
-    // identically for the gather. An empty/null collection yields ONE sentinel
-    // tuple with index -1: its instance runs `forkbind -keysonly`, preserving
-    // the FORK task's always-validate behavior and keys output while staying
-    // dormant when the enclosing pipeline itself is skipped (no pipeargs item
-    // -> no tuples at all).
-    static List forkScatter(Path jsonFile, Object leaves, String field, String mapMode) {
-        scatterTuples(forkCount(jsonFile, field, mapMode), jsonFile, leaves)
-    }
-
-    // forkScatterRef is forkScatter for an UPSTREAM-ref split source (#99): the
-    // fork WIDTH is read from the producer's bundle (refJson), while the scatter
-    // tuples still carry the enclosing pipeargs bundle (paJson + paLeaves) — the
-    // fused instance stages the producer's whole output separately as an in_<id>
-    // broadcast input, which forkbind resolves the per-fork split from. The
-    // empty/null-source sentinel behaves exactly as the self-source path.
-    static List forkScatterRef(Path refJson, Path paJson, Object paLeaves, String field, String mapMode) {
-        scatterTuples(forkCount(refJson, field, mapMode), paJson, paLeaves)
-    }
-
-    // scatterTuples builds the [key, index, paJson, paLeaves] tuple per fork —
-    // the single source of the fork-key format and the index -1 empty-source
-    // sentinel shared by both scatter width sources.
-    private static List scatterTuples(int n, Path paJson, Object paLeaves) {
-        if (n == 0) return [['fork_none', -1, paJson, paLeaves]]
-        (0..<n).collect { int i ->
-            ['fork_' + Integer.toString(i).padLeft(5, '0'), i, paJson, paLeaves]
-        }
-    }
-
     // forkElements is the O(1)-per-instance native scatter for a VALUE-only
     // split source (#99): the split collection in `field` is parsed ONCE here on
     // the driver and each fork gets ONLY its own pre-sliced element, so no
@@ -157,7 +105,39 @@ class Mro2nf {
     // carries no file leaves (the emitter gates this), so the JSON element is the
     // whole split value — no bundle marker rewrite is needed, unlike a file fork.
     static List forkElements(Path jsonFile, String field, String mapMode) {
-        def v = ((Map) parseJson(jsonFile)).get(field)
+        elementTriples((Map) parseJson(jsonFile), field, mapMode)
+    }
+
+    // forkElementsPa is forkElements for a QUEUE-pipeargs pipeline (#99): pa is a
+    // ≤1-item queue that cannot broadcast into N element instances, so each
+    // tuple carries the pipeargs bundle (paJson + paLeaves) alongside its
+    // element — the fused instance stages `pipeargs` from the tuple instead of a
+    // broadcast input. Upstream refs are barred in queue-pipeargs pipelines
+    // (nativeScatterable), so the collection is always in pipeargs itself.
+    static List forkElementsPa(Path paJson, Object paLeaves, String field, String mapMode) {
+        elementTriples((Map) parseJson(paJson), field, mapMode).collect { Object t ->
+            List tuple = (List) t
+            [tuple[0], tuple[1], tuple[2], paJson, paLeaves]
+        }
+    }
+
+    // elementTriples slices `field`'s collection into [key, index, elementB64]
+    // per fork — the shared core of forkElements/forkElementsPa. The collection
+    // is parsed ONCE here on the driver and each fork gets ONLY its own
+    // pre-sliced element, so no instance re-parses the whole collection (the
+    // O(N^2) the per-fork forkbind -index did across N instances). Emits in the
+    // SAME order/index the full-fork write uses (array order; map keys sorted by
+    // UTF-8 byte value, matching bind.go sortedKeys), so the gather sees
+    // identical ordering. The element is base64-encoded JSON so it transports
+    // through the task script safely regardless of contents (a string value with
+    // shell metacharacters cannot break the command). An empty/null/wrong-kind
+    // source yields the single index -1 sentinel (its instance validates via
+    // forkbind -keysonly and feeds the gather the typed empty). Value-only:
+    // `field` carries no file leaves (the emitter gates this), so the JSON
+    // element is the whole split value — no bundle marker rewrite, unlike a file
+    // fork.
+    private static List elementTriples(Map data, String field, String mapMode) {
+        def v = data.get(field)
         if (v == null) return [['fork_none', -1, '']]
 
         if (v instanceof List && mapMode == 'array') {

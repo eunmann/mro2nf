@@ -190,6 +190,8 @@ func TestMrpDiff(t *testing.T) {
 		{name: "fork_disabled_skip"},
 		{name: "fork_fanout"},
 		{name: "map_file_array"},
+		// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
+		{name: "map_file_split"},
 		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
 		// map, nested pipelines) — all py stages, so it joins the mrp differential.
 		{name: "cellranger_shaped"},

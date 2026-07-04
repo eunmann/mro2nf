@@ -83,3 +83,26 @@ func TestHasError(t *testing.T) {
 		t.Error("an error diagnostic must be detected")
 	}
 }
+
+// TestDiagnoseNativeMapped pins the -native map-call remainder messages (#99):
+// a file-bearing leaf scatter keeps ONE FORK resolve task and folds its MERGE
+// (map_file_split); a sub-pipeline map target keeps FORK and MERGE (map_pipe).
+// A fully-collapsed value-only scatter emits NO map diagnostic (fork_min).
+func TestDiagnoseNativeMapped(t *testing.T) {
+	fbs := Diagnose(lowerFixture(t, "map_file_split"), Options{Native: true})
+	if !hasMessage(fbs, SevInfo, "keeps one FORK resolve task") {
+		t.Errorf("file-bearing scatter: want a folded-FORK info, got %+v", fbs)
+	}
+
+	// A sub-pipeline map target is not a leaf stage, so its gather does not fold
+	// — both the FORK and MERGE tasks remain.
+	mp := Diagnose(lowerFixture(t, "map_pipe"), Options{Native: true})
+	if !hasMessage(mp, SevInfo, "keeps the FORK and MERGE tasks") {
+		t.Errorf("sub-pipeline map: want a FORK+MERGE info, got %+v", mp)
+	}
+
+	fm := Diagnose(lowerFixture(t, "fork_min"), Options{Native: true})
+	if hasMessage(fm, SevInfo, "keeps") {
+		t.Errorf("fork_min fully collapses under -native: want no map remainder info, got %+v", fm)
+	}
+}

@@ -54,13 +54,14 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 	return append(ds, foldDiagnostics(prog, f, pl)...)
 }
 
-// nativeDiagnostics surfaces which map calls -native could NOT collapse (they
-// keep FORK/MERGE tasks), so partial collapse is visible up front instead of
-// discovered by diffing the generated project (#83's detect-and-refuse
-// principle: an opt-in never silently under-delivers). Two shapes are
-// reported: a call the plan kept on the FORK path, and a planned scatter
-// inside a keyed-reachable pipeline — under a map call only the keyed layer
-// runs, and its FORK_K/MERGE_K tasks all remain.
+// nativeDiagnostics surfaces which map calls -native could NOT fully collapse,
+// so partial collapse is visible up front instead of discovered by diffing the
+// generated project (#83's detect-and-refuse principle: an opt-in never
+// silently under-delivers). The message names exactly what orchestration
+// remains, which the value-only element scatter (#99) eliminates entirely: a
+// kindMapped call keeps ONE FORK resolve task (O(total), not per-instance) plus
+// a MERGE only when the gather cannot fold into its consumer; a scatter reached
+// through an outer map call runs its keyed layer instead of collapsing.
 func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic {
 	if !f.native {
 		return nil
@@ -74,18 +75,14 @@ func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic
 				continue
 			}
 
-			kind := pl.pipes[name].calls[c.Name].kind
+			cp := pl.pipes[name].calls[c.Name]
 
-			if kind == kindMapped {
+			if cp.kind == kindMapped {
+				ds = append(ds, Diagnostic{Severity: SevInfo, Message: mappedRemainderMsg(name, c, cp)})
+			} else if cp.kind == kindNativeScatter && pl.keyed[name] {
 				ds = append(ds, Diagnostic{
 					Severity: SevInfo,
-					Message: fmt.Sprintf("-native: map call %s.%s keeps the FORK/MERGE tasks (not yet scatterable: needs a single whole-field self split on an undisabled, non-preflight leaf stage; upstream-ref bindings are also barred where the pipeline can receive a queue pipeargs)",
-						name, c.Name),
-				})
-			} else if kind == kindNativeScatter && pl.keyed[name] {
-				ds = append(ds, Diagnostic{
-					Severity: SevInfo,
-					Message: fmt.Sprintf("-native: map call %s.%s scatters only when %s runs plain; under a map call its keyed layer keeps the FORK/MERGE tasks",
+					Message: fmt.Sprintf("-native: map call %s.%s scatters only when %s runs plain; under an outer map call its keyed layer keeps the FORK_K/MERGE_K tasks",
 						name, c.Name, name),
 				})
 			}
@@ -93,6 +90,18 @@ func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic
 	}
 
 	return ds
+}
+
+// mappedRemainderMsg describes the orchestration a kindMapped call keeps and
+// why it is not on the O(1) element scatter path.
+func mappedRemainderMsg(pipeline string, c ir.Call, cp callPlan) string {
+	tasks := "one FORK resolve task"
+	if !cp.foldMerge {
+		tasks = "the FORK and MERGE tasks"
+	}
+
+	return fmt.Sprintf("-native: map call %s.%s keeps %s (not on the O(1) element scatter: needs a single whole-field self/upstream split feeding a value-typed param of an undisabled, non-preflight leaf stage; a file-typed, projected, or multi-split element and split-stage / sub-pipeline callees all keep the FORK resolve)",
+		pipeline, c.Name, tasks)
 }
 
 // runnerDiagnostics surfaces what -native-runner does NOT cover, so the opt-in

@@ -39,6 +39,10 @@ var goldenCases = []struct {
 	{"map_split", "map_split", "expected/outs.json"},
 	{"map_pipe", "map_pipe", "expected/outs.json"},
 	{"map_file", "map_file", "expected/outs.json"},
+	// #99: a file-bearing LEAF scatter (split element is a file) — keeps the
+	// FORK resolve (O(total)) under -native but folds its MERGE; TestNativeMode
+	// reruns it with -native.
+	{"map_file_split", "map_file_split", "expected/outs.json"},
 	{"map_pipe_nested", "map_pipe_nested", "expected/outs.json"},
 	{"map_pipe_disabled_nested", "map_pipe_disabled_nested", "expected/outs.json"},
 	{"map_pipe_disabled", "map_pipe_disabled", "expected/outs.json"},
@@ -394,6 +398,12 @@ func TestNativeMode(t *testing.T) {
 		{"fold_disable", "expected/outs.json"},
 		{"chain_fuse3", "expected/outs.json"},
 		{"cellranger_shaped", "expected/count_outs.json"},
+		// #99 kindMapped shapes under -native: a file-bearing leaf scatter and a
+		// multi-split leaf both fold their MERGE (leaf callee); a split-stage
+		// callee keeps FORK+MERGE. All must match the mrp golden.
+		{"map_file_split", "expected/outs.json"},
+		{"multisplit", "expected/outs.json"},
+		{"map_split", "expected/outs.json"},
 	}
 
 	for _, tc := range cases {
