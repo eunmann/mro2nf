@@ -90,24 +90,28 @@ func assertNoAdapterOnPyStages(t *testing.T, proj string) {
 func TestNativeRunnerComposesWithNative(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	for _, fx := range []string{"fork_min", "split_test"} {
-		t.Run(fx, func(t *testing.T) {
+	// Compared against the committed mrp goldens in ONE run each: TestGolden
+	// proves default==golden for both fixtures, so combined==golden covers
+	// combined==default transitively.
+	cases := []struct{ fixture, golden string }{
+		{"fork_min", "expected/scale_all_outs.json"},
+		{"split_test", filepath.Join("expected", "SUM_SQUARE_PIPELINE", "fork0", "_outs")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
 			t.Parallel()
 
-			combined := transpile(t, fx, "-native", "-native-runner")
+			combined := transpile(t, tc.fixture, "-native", "-native-runner")
 			assertNoAdapterOnPyStages(t, combined)
 
-			def := transpile(t, fx)
 			if err := runNextflow(t, combined); err != nil {
-				t.Fatal(err)
-			}
-			if err := runNextflow(t, def); err != nil {
 				t.Fatal(err)
 			}
 
 			goldenJSON(t,
 				filepath.Join(combined, "results", "pipeline_outs.json"),
-				filepath.Join(def, "results", "pipeline_outs.json"))
+				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 		})
 	}
 }

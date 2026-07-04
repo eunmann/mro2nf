@@ -87,6 +87,14 @@ var goldenCases = []struct {
 	{"map_null_map", "map_null_map", "expected/outs.json"},
 	{"map_key_sort", "map_key_sort", "expected/outs.json"},
 	{"map_file_array", "map_file_array", "expected/outs.json"},
+	// mrp-anchored goldens for the native-suite fixtures, so the -native runs
+	// compare against mrp truth in ONE run instead of a second default run per
+	// fixture (TestGolden here proves default==golden; native==golden follows).
+	{"fork_ref", "fork_ref", "expected/outs.json"},
+	{"fork_mid", "fork_mid", "expected/outs.json"},
+	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
+	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
+	{"fork_fanout", "fork_fanout", "expected/outs.json"},
 	// Regression for #59: an unreachable pipeline containing a map call — its
 	// keyed-variant include must resolve (verified by the nextflow-lint gate).
 	{"dead_map_pipe", "dead_map_pipe", "expected/outs.json"},
@@ -515,17 +523,18 @@ func TestNativeScatter(t *testing.T) {
 				assertNoProcesses(t, native, "MERGE")
 			}
 
-			def := transpile(t, tc.fixture)
 			if err := runNextflow(t, native); err != nil {
 				t.Fatal(err)
 			}
-			if err := runNextflow(t, def); err != nil {
-				t.Fatal(err)
-			}
 
+			// Compared against the committed mrp golden, not a fresh default run:
+			// TestGolden already proves default==golden for these fixtures, so
+			// native==golden covers native==default transitively in half the runs
+			// — and anchors native to mrp truth rather than to whatever the
+			// default path happens to produce.
 			goldenJSON(t,
 				filepath.Join(native, "results", "pipeline_outs.json"),
-				filepath.Join(def, "results", "pipeline_outs.json"))
+				filepath.Join(root, "testdata", tc.fixture, "expected", "outs.json"))
 		})
 	}
 }
@@ -572,27 +581,59 @@ func assertHasProcess(t *testing.T, proj string, cat string) {
 func TestNativeComplete(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	for _, fx := range []string{
-		"diamond_min", "fold_disable", "native_file_return", "file_min", "chain_fuse", "struct_min",
-		"fork_min", "map_fork", "empty_fork_min", "empty_map_fork", "fork_ref", "fork_mid",
-		"fork_upstream", "map_null_map", "map_key_sort",
-	} {
-		t.Run(fx, func(t *testing.T) {
+	// golden "" = no committed mrp golden exists: empty_map_fork's static-empty
+	// map fork merges to {} here but null under current mrp (empty_fork_min's
+	// committed [] golden shows the same divergence for arrays) — a pre-existing
+	// static-empty-fork fidelity question tracked on #99. Until it is resolved,
+	// empty_map_fork keeps the run-vs-run comparison so native==default stays
+	// guarded without committing a golden that endorses either answer.
+	cases := []struct{ fixture, golden string }{
+		{"diamond_min", "expected/outs.json"},
+		{"fold_disable", "expected/outs.json"},
+		{"native_file_return", "expected/nf_outs.json"},
+		{"file_min", "expected/outs.json"},
+		{"chain_fuse", "expected/outs.json"},
+		{"struct_min", "expected/stats_pipe_outs.json"},
+		{"fork_min", "expected/scale_all_outs.json"},
+		{"map_fork", "expected/outs.json"},
+		{"empty_fork_min", "expected/outs.json"},
+		{"empty_map_fork", ""},
+		{"fork_ref", "expected/outs.json"},
+		{"fork_mid", "expected/outs.json"},
+		{"fork_upstream", "expected/outs.json"},
+		{"map_null_map", "expected/outs.json"},
+		{"map_key_sort", "expected/outs.json"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
 			t.Parallel()
 
-			native := transpile(t, fx, "-native")
+			native := transpile(t, tc.fixture, "-native")
 			assertNativeComplete(t, native)
 
-			def := transpile(t, fx)
 			if err := runNextflow(t, native); err != nil {
 				t.Fatal(err)
 			}
+
+			nativeOuts := filepath.Join(native, "results", "pipeline_outs.json")
+
+			// With a committed mrp golden, one native run suffices: TestGolden
+			// proves default==golden, so native==golden covers native==default
+			// transitively — and anchors native to mrp truth.
+			if tc.golden != "" {
+				goldenJSON(t, nativeOuts,
+					filepath.Join(root, "testdata", tc.fixture, tc.golden))
+
+				return
+			}
+
+			def := transpile(t, tc.fixture)
 			if err := runNextflow(t, def); err != nil {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
-				filepath.Join(native, "results", "pipeline_outs.json"),
+			goldenJSON(t, nativeOuts,
 				filepath.Join(def, "results", "pipeline_outs.json"))
 		})
 	}

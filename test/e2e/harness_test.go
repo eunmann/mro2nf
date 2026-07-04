@@ -136,6 +136,15 @@ func runNextflow(t *testing.T, proj string, args ...string) error {
 
 	cmd := exec.Command("nextflow", append([]string{"run", "main.nf"}, args...)...)
 	cmd.Dir = proj
+	// Every run pays a fresh JVM, so startup dominates suite time: skip the
+	// remote version/plugin check (no fixture declares plugins), drop ANSI
+	// rendering, and cap JIT tiering + heap — the pipelines are trivial
+	// compute, and the smaller heap lets more runs overlap under -parallel.
+	cmd.Env = append(os.Environ(),
+		"NXF_OFFLINE=true",
+		"NXF_ANSI_LOG=false",
+		"NXF_OPTS=-XX:TieredStopAtLevel=1 -Xms64m -Xmx512m",
+	)
 
 	out, err := cmd.CombinedOutput()
 
