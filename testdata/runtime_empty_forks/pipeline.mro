@@ -1,10 +1,10 @@
 # Pins mrp's RUNTIME zero-fork merge semantics (#99): an upstream-produced
 # empty OR null collection merges to the TYPED empty ([] for an array fork,
-# {} for a map fork) — unlike a STATICALLY-empty split source, which Martian's
-# resolver prunes to null (see staticEmptyFork; empty_fork_min/empty_map_fork
-# cover that side). Also the runtime zero-fork sentinel path: each map call
-# scatters zero times, so only the keys-only instance runs and the gather
-# yields the typed empty.
+# {} for a map fork) — unlike an INVOCATION-known empty split source, which
+# Martian's resolver prunes to null (see entrySplit / bind.Merge emptyNull;
+# empty_fork_min/empty_map_fork cover that side). Also the runtime zero-fork
+# sentinel path: each map call scatters zero times, so only the keys-only
+# instance runs and the gather yields the typed empty.
 stage GEN(
     out int[]    arr_empty,
     out int[]    arr_null,

@@ -286,7 +286,7 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 		return "", false
 	}
 
-	if prog.Entry == nil || prog.Entry.Callable != p.Name {
+	if !entryScoped(prog, p) {
 		return "", false
 	}
 
@@ -318,9 +318,18 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 // entry-split call's zero-fork MERGE emits null at runtime (bind.Merge
 // emptyNull) — override to non-empty and the forks run, override to empty and
 // the result is null, exactly what mrp produces for that invocation. Known
-// residual divergence (documented, exotic): a sub-pipeline whose split input
-// chains back to an entry literal through the call graph is not traced here
-// and keeps the typed-empty merge; mrp's full static resolver would null it.
+// residual divergences (all the value-CHAIN class mrp's whole-program
+// KnownLength propagation prunes but a shape rule cannot see; closing them
+// needs constant propagation across the binding graph). An empty literal
+// split (`split []`) is a Martian PARSE error, so the only reachable
+// invocation-known-empty source is an entry self ref:
+//   - a sub-pipeline whose split input chains back to an entry value through
+//     the parent call's bindings;
+//   - an in-pipeline chain `map call B(split A.out)` where A itself nulls —
+//     mrp cascades the prune to B, we merge B's runtime null to typed empty;
+//   - a MIXED split (an entry-ref binding zipped with an upstream ref, where
+//     the entry side resolves empty) — the all-bindings rule leaves it
+//     unflagged.
 func entrySplit(prog *ir.Program, p *ir.Pipeline, c ir.Call) bool {
 	splits := 0
 
@@ -340,14 +349,44 @@ func entrySplit(prog *ir.Program, p *ir.Pipeline, c ir.Call) bool {
 }
 
 // entryValue reports whether a binding value is launch-invocation-sourced: a
-// ref-free literal/composite, or a whole-field self ref on the entry pipeline.
+// literal/composite carrying no refs, or ANY self ref (whole-field or
+// projected, e.g. self.cfg.list) on the entry pipeline — entry inputs come
+// only from the launch invocation, so a projection of one is invocation-known
+// too. A composite CONTAINING refs (fan-in `[A.out, B.out]`) is rejected even
+// though its static length makes the zero-fork case unreachable today — the
+// guard is structural, not an unstated invariant.
 func entryValue(prog *ir.Program, p *ir.Pipeline, v ir.Value) bool {
 	if v.Ref == nil {
+		return !valueHasRef(v)
+	}
+
+	return v.Ref.Kind == refKindSelf && entryScoped(prog, p)
+}
+
+// valueHasRef reports whether a value expression contains any ref leaf.
+func valueHasRef(v ir.Value) bool {
+	if v.Ref != nil {
 		return true
 	}
 
-	return v.Ref.Kind == refKindSelf && v.Ref.Output == "" &&
-		prog.Entry != nil && prog.Entry.Callable == p.Name
+	if slices.ContainsFunc(v.Array, valueHasRef) {
+		return true
+	}
+
+	for _, el := range v.Object {
+		if valueHasRef(el) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// entryScoped reports whether p is the entry pipeline — instantiated exactly
+// once, so a self ref's value is unambiguous. Shared by foldDisableOff and
+// entryValue so the two "invocation-known" scope tests cannot drift.
+func entryScoped(prog *ir.Program, p *ir.Pipeline) bool {
+	return prog.Entry != nil && prog.Entry.Callable == p.Name
 }
 
 // nativeScatterable reports whether a -native map call can scatter in-workflow

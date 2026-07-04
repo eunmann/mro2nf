@@ -133,6 +133,36 @@ func TestBuildPlanEmptyNull(t *testing.T) {
 	}
 }
 
+// TestEntryValueShapes pins entryValue's classification directly: literals and
+// ANY entry self ref (whole-field or projected — self.cfg.list is equally
+// invocation-known) flag; upstream refs and sub-pipeline self refs do not.
+func TestEntryValueShapes(t *testing.T) {
+	entry := &ir.Pipeline{Name: "TOP"}
+	sub := &ir.Pipeline{Name: "SUB"}
+	prog := &ir.Program{Entry: &ir.EntryCall{Callable: "TOP"}}
+
+	cases := []struct {
+		name string
+		p    *ir.Pipeline
+		v    ir.Value
+		want bool
+	}{
+		{"literal", entry, ir.Value{Literal: []byte("[]")}, true},
+		{"whole-field entry self", entry, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "xs"}}, true},
+		{"projected entry self", entry, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "cfg", Output: "list"}}, true},
+		{"sub-pipeline self", sub, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "xs"}}, false},
+		{"upstream ref", entry, ir.Value{Ref: &ir.Ref{Kind: refKindCall, ID: "UP", Output: "xs"}}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := entryValue(prog, tc.p, tc.v); got != tc.want {
+				t.Errorf("entryValue(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestBuildPlanForwardChain guards #73: a source feeding a pure-FORWARD consumer
 // folds under -fuse-chains too. file_chain's MAKEFILE feeds READFILE, which just
 // forwards MAKEFILE.f — so with the flag MAKEFILE folds away and READFILE becomes

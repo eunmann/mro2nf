@@ -35,7 +35,7 @@ small number of design/minor divergences remain. Ranked:
 | 1 | `map<T[]>` and deeper (MapDim≥2) file/int leaves are silently never walked — staging, resolution, coercion, and publish all drop them | **CORRECTNESS (High)** | F (types) | fixed |
 | 2 | comp/exec (mrjob) backend never reads `_assert` → a compiled-stage assertion is a silent SUCCESS with stale outs | **CORRECTNESS (High, scoped)** | A, G | fixed |
 | 3 | negative-adaptive resource sentinels not resolved to `\|x\|` → adaptive stages under-provisioned; a stage can read a negative `get_memory_allocation()` | **CORRECTNESS (Medium)** | E | fixed |
-| 4 | empty/zero-fork map call: runtime empty/null source now yields the typed empty (`[]`/`{}`) matching mrp via static `MapMode`; literal-empty cases give typed empty vs mrp `null` (justified — see below) | **CORRECTNESS (Medium)** | D | fixed (runtime); justified residual (literal) |
+| 4 | empty/zero-fork map call: runtime empty/null source yields the typed empty (`[]`/`{}`) via static `MapMode`; an INVOCATION-known empty source now merges to `null` matching mrp's static prune, via the runtime `emptyNull` shape rule — launch overrides preserved (#99) | **CORRECTNESS (Medium)** | D | fixed (runtime + invocation-known); narrow residual (chained sources — see below) |
 | 5 | published file names/layout: mre used source basename + flat + numeric-suffix; Martian uses `GetOutFilename` + nested index/key subdirs | **CORRECTNESS** (was DESIGN) | C | fixed |
 | 6 | `--monitor` enforced vmem (`RLIMIT_AS`) only, not mrp's primary RSS-vs-`mem_gb` kill | **CORRECTNESS** (was DESIGN) | E | fixed |
 | 7 | `map<map<S>>.field` nested-map projection rejected at transpile time (loud) | MINOR (coverage) | D | document |
@@ -144,8 +144,8 @@ Verified against real `mrp` and the transpiled Nextflow across the full matrix
 | runtime-empty map (typed) | `{}` | `{}` ✓ |
 | runtime-null map (`map<float>`=None) | `{}` | `{}` ✓ |
 | non-empty array / map | `[…]` / `{…}` | same ✓ |
-| literal empty array `[]` | `null` | `[]` (justified) |
-| literal empty map `{}` | `null` | `{}` (justified) |
+| invocation-known empty array `[]` | `null` | `null` ✓ (emptyNull, #99) |
+| invocation-known empty map `{}` | `null` | `null` ✓ (emptyNull, #99) |
 
 Martian dispatches on the source's static `CallMode` plus `KnownLength`: a
 statically-known-empty **literal** → `ModeNullMapCall` → `null` (collapsed at
@@ -161,15 +161,25 @@ the runtime JSON — so a null `map<T>` source forks as a map and merges to `{}`
 (previously null), and any empty/null array source merges to `[]` (`bind.go`
 `ResolveForks`/`mergeOne`). All six **runtime** cases now match mrp exactly.
 
-**Residual (justified, not a bug):** the two literal cases give the typed empty
-where mrp gives `null`. Matching mrp there would require compile-time whole-
-program `KnownLength` propagation (reimplementing Martian's static fork pruning),
-and — for the only realistic form, an entry input defaulting to `[]` — it would
-**break mro2nf's launch-override feature** (statically pruning the map call to
-`null` would ignore a launch-time `v=[1,2]`). mro2nf's runtime-generic model
-(entry inputs overridable) makes the typed empty the correct behavior for it. See
-`testdata/empty_fork_min` (literal) vs `testdata/map_null_map` (runtime, matches
-mrp).
+**Fix (implemented, #99):** the invocation-known cases now match mrp WITHOUT
+breaking launch overrides. Instead of static pruning, the plan flags a map call
+whose split source is launch-invocation-known — a literal, or any self ref on
+the entry pipeline (`entrySplit`, `internal/emit/plan.go`) — and its merge runs
+`mre merge -emptynull`: ZERO forks yield `null` (`bind.Merge`), any forks merge
+normally. The rule is shape-based, not value-based, so a launch-time override
+to a non-empty collection runs the forks (`empty_fork_min_override` golden) and
+an override to empty gives `null` — in both cases exactly what mrp produces for
+that effective invocation. See `testdata/empty_fork_min`/`empty_map_fork`
+(invocation-known → null) vs `testdata/runtime_empty_forks` (runtime → typed
+empty); all three run in the live mrp differential (`TestMrpDiff`).
+
+**Residual (narrow, documented in `entrySplit`):** value CHAINS that mrp's
+whole-program `KnownLength` propagation would prune but the shape rule cannot
+see: a sub-pipeline whose split input chains back to an entry literal through
+the call graph, and an in-pipeline `map call B(split A.out)` where A itself
+nulls (mrp cascades the prune; mro2nf's B merges the runtime null to the typed
+empty). Closing these requires compile-time constant propagation across the
+binding graph.
 
 **MINOR/coverage (#7):** Martian's recursive `resolvePath` supports
 `map<map<S>>.field`; mro2nf rejects it loudly at transpile time

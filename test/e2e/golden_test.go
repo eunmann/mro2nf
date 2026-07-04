@@ -584,9 +584,10 @@ func assertHasProcess(t *testing.T, proj string, cat string) {
 // map-call fixtures collapse the whole fork machinery: the scatter kills FORK
 // and the sole-consumer merge fold kills MERGE — fork_min (array), map_fork
 // (typed map), and fork_ref (an upstream broadcast ref re-read per instance).
-// empty_fork_min/empty_map_fork are STATICALLY-empty forks: the plan folds the
-// call to its null output with no scatter at all (staticEmptyFork, matching
-// mrp's static resolver). fork_upstream and map_null_map scatter over an
+// empty_fork_min/empty_map_fork are INVOCATION-known empty forks: the scatter
+// still runs its keys-only sentinel, and the zero-fork merge emits null
+// (bind.Merge emptyNull — matching mrp's static resolver, while keeping entry
+// inputs launch-overridable). fork_upstream and map_null_map scatter over an
 // UPSTREAM split source (#99): the driver reads the fork width from the
 // producer's value channel (Mro2nf.forkScatterRef); map_null_map and
 // runtime_empty_forks exercise the RUNTIME zero-fork keys-only sentinel on

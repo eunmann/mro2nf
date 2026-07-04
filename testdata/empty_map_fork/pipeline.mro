@@ -1,8 +1,9 @@
-# A map call over a STATICALLY-empty typed-map source ({} baked through the
-# entry call): Martian's static resolver prunes the zero-fork call, so its
+# A map call over an INVOCATION-known empty typed-map source ({} baked through
+# the entry call): Martian's static resolver prunes the zero-fork call, so its
 # output resolves to NULL — not the typed empty {} a RUNTIME empty collection
-# merges to (runtime_empty_forks covers that side). The plan folds the call to
-# its null output in every mode (staticEmptyFork, #99).
+# merges to (runtime_empty_forks covers that side). The transpiler reproduces
+# this at runtime: the zero-fork MERGE emits null for an entry-sourced split
+# (bind.Merge emptyNull, #99), keeping the entry input launch-overridable.
 stage DBL(
     in  int v,
     out int w,

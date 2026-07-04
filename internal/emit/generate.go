@@ -359,8 +359,18 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
-// per outer fork it gathers that fork's inner results.
+// per outer fork it gathers that fork's inner results. emptyNull threads here
+// for consistency with the plain MERGE (#99), though it cannot fire from valid
+// Martian source today: the only keyed split source the plan flags is a
+// LITERAL (sub-pipeline self refs are unflagged), and Martian's grammar
+// rejects an empty literal split (`split []` is a parse error) — so a flagged
+// keyed merge always has at least one fork.
 func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
+	flag := ""
+	if g.plan.pipes[pipeline].calls[c.Name].emptyNull {
+		flag = " -emptynull"
+	}
+
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
     tuple val(key), path(souts), path('forkkeys.json')
@@ -369,11 +379,11 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
     tuple val(key), path('merged', type: 'dir')
   script:
     """
-    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
+    '%[2]s' merge%[5]s -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
     """
 }
 
-`, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut))
+`, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut), flag)
 }
 
 // genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,
@@ -2337,12 +2347,20 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
 // BUILD_ENTRY_ARGS task the workflow stages that bundle as a value channel and
 // runs the pipeline directly. The publish wiring is identical to the default.
 func genNativeEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
+	// -native bakes entry args at transpile time, so a launch-time override
+	// (-params-file / --<input>) would be SILENTLY ignored — fail loudly
+	// instead: an ignored override is a silent output divergence (e.g. an
+	// emptyNull fork would yield null where the user expected their forks).
 	fmt.Fprintf(b, `
 workflow {
+  %[2]s.each { n ->
+    if( params.containsKey(n) )
+      error "entry arg '${n}' was baked at transpile time (-native); re-transpile to change it"
+  }
   types = file("${projectDir}/_assets/types.json")
   pipeargs = Channel.value(tuple(file("${projectDir}/entry_resolved/data.json"), file("${projectDir}/entry_resolved/f/*")))
   %[1]s(pipeargs)
-`, entryWorkflow)
+`, entryWorkflow, groovyStringList(entryInNames(prog)))
 
 	if p := nativeReturnBind(prog, g); p != nil {
 		genNativePublishWiring(b, p, entryWorkflow, g)
@@ -2351,6 +2369,31 @@ workflow {
 	}
 
 	b.WriteString("}\n")
+}
+
+// entryInNames lists the entry callable's input parameter names (pipeline or
+// stage entry alike) — the params a -native project has baked and must reject
+// at launch.
+func entryInNames(prog *ir.Program) []string {
+	if p, ok := prog.Pipelines[prog.Entry.Callable]; ok {
+		return names(p.In)
+	}
+
+	if s, ok := prog.Stages[prog.Entry.Callable]; ok {
+		return names(s.In)
+	}
+
+	return nil
+}
+
+// groovyStringList renders names as a Groovy string-list literal.
+func groovyStringList(items []string) string {
+	quoted := make([]string, len(items))
+	for i, s := range items {
+		quoted[i] = "'" + s + "'"
+	}
+
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // genNativePublishWiring wires the native LAYOUT (which folds in the return bind):

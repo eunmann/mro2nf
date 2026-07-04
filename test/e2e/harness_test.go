@@ -140,11 +140,19 @@ func runNextflow(t *testing.T, proj string, args ...string) error {
 	// remote version/plugin check (no fixture declares plugins), drop ANSI
 	// rendering, and cap JIT tiering + heap — the pipelines are trivial
 	// compute, and the smaller heap lets more runs overlap under -parallel.
-	cmd.Env = append(os.Environ(),
-		"NXF_OFFLINE=true",
+	// An inherited NXF_OPTS (proxy, truststore) is PREPENDED so it survives:
+	// within one NXF_OPTS the later flags win, keeping the heap cap. An
+	// explicitly exported NXF_OFFLINE is honored (fresh-launcher bootstrap
+	// needs the network once).
+	env := append(os.Environ(),
 		"NXF_ANSI_LOG=false",
-		"NXF_OPTS=-XX:TieredStopAtLevel=1 -Xms64m -Xmx512m",
+		"NXF_OPTS="+strings.TrimSpace(os.Getenv("NXF_OPTS")+" -XX:TieredStopAtLevel=1 -Xms64m -Xmx512m"),
 	)
+	if os.Getenv("NXF_OFFLINE") == "" {
+		env = append(env, "NXF_OFFLINE=true")
+	}
+
+	cmd.Env = env
 
 	out, err := cmd.CombinedOutput()
 

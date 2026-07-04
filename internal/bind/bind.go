@@ -263,16 +263,27 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage, only int) ([]js
 // (entrySplit), where mrp's static resolver would prune the zero-fork call and
 // resolve its outputs to null. A runtime-sourced empty keeps the typed empty.
 func Merge(names []string, outs []json.RawMessage, keys []string, emptyNull bool) (json.RawMessage, error) {
+	// The zero-fork null decision is made once, before the per-name loop, and
+	// only after the same keys/outs desync guard mergeOne applies — so the
+	// precedence is structural: desync error > null > typed value.
+	zeroNull := emptyNull && len(outs) == 0
+
+	if zeroNull && keys != nil && len(keys) != 0 {
+		return nil, fmt.Errorf("merge: 0 fork outputs for %d keys: %w", len(keys), errSplitLen)
+	}
+
 	result := make(map[string]json.RawMessage, len(names))
 
 	for _, name := range names {
+		if zeroNull {
+			result[name] = json.RawMessage("null")
+
+			continue
+		}
+
 		raw, err := mergeOne(name, outs, keys)
 		if err != nil {
 			return nil, err
-		}
-
-		if emptyNull && len(outs) == 0 {
-			raw = json.RawMessage("null")
 		}
 
 		result[name] = raw
