@@ -3,6 +3,7 @@ package emit
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -57,9 +58,13 @@ type callPlan struct {
 	// disableTask reports that a mapped/plain disabled call needs a standalone
 	// DISABLE process (the flag is not driver-gateable).
 	disableTask bool
-	// scatterField is the pipeline-input name whose collection a kindNativeScatter
-	// call forks over — the driver reads its size from pipeargs' data.json.
+	// scatterField is the whole-field name whose collection a kindNativeScatter
+	// call forks over — the driver reads its size from pipeargs' data.json (self
+	// source) or the producer's bundle (upstream source; see scatterCall).
 	scatterField string
+	// scatterCall is the producing call whose value-channel bundle a
+	// kindNativeScatter reads its fork width from, or "" for a self source.
+	scatterCall string
 	// foldMerge marks a kindNativeScatter call whose MERGE gather runs inline in
 	// its sole consumer's task (#76): no standalone MERGE process; the consumer
 	// stages the per-fork outs dirs + keys sidecar and reconstructs merged_<id>
@@ -222,8 +227,8 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 		// #76: under -native an eligible map call scatters in-workflow (each stage
 		// instance resolves its own fork via forkbind -index), so no FORK task.
 		if f.native {
-			if s, field, ok := nativeScatterable(c, prog, queuedPa); ok {
-				return callPlan{kind: kindNativeScatter, stage: s, scatterField: field}
+			if s, field, call, ok := nativeScatterable(c, prog, queuedPa); ok {
+				return callPlan{kind: kindNativeScatter, stage: s, scatterField: field, scatterCall: call}
 			}
 		}
 
@@ -283,32 +288,35 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 }
 
 // nativeScatterable reports whether a -native map call can scatter in-workflow
-// with no FORK task (#76), returning the callee stage and the pipeline-input
-// field whose collection sizes the scatter. This increment covers the shape
-// whose fork width the driver can read from pipeargs' data.json: a non-split
-// leaf stage callee, no disable gate, no preflight, and exactly one split
-// binding that is a whole-field self ref (a projection or upstream ref would
-// need the FORK task's full bind resolution to know the width). Wildcard
-// bindings never carry Split (the Martian grammar has no `* = split ...`
-// production), so they fall through the !b.Split skip. In a queue-pipeargs
-// pipeline, upstream-ref bindings are disqualifying: the refs' 1-item queue
-// channels would zip against the N-item fork channel and run a single fork.
-// Ineligible map calls keep the FORK path — still correct, just not collapsed.
-func nativeScatterable(c ir.Call, prog *ir.Program, queuedPa bool) (*ir.Stage, string, bool) {
+// with no FORK task (#76), returning the callee stage, the whole-field name
+// whose collection sizes the scatter, and (for an upstream-ref source) the
+// producing call whose channel the driver reads that width from ("" for a self
+// source). This increment covers a non-split leaf stage callee, no disable
+// gate, no preflight, and exactly one split binding that is a whole-field ref:
+// either a self input (`split self.field`, width read from pipeargs' data.json)
+// or a top-level upstream output (`split CALL.field`, width read from the
+// producer's value-channel bundle). A projection (`self.a.b` / `CALL.a.b`) can
+// navigate a typed map and is left to the FORK path. Wildcard bindings never
+// carry Split (the Martian grammar has no `* = split ...` production), so they
+// fall through the !b.Split skip. In a queue-pipeargs pipeline, upstream-ref
+// bindings are disqualifying: the refs' 1-item queue channels would zip against
+// the N-item fork channel and run a single fork. Ineligible map calls keep the
+// FORK path — still correct, just not collapsed.
+func nativeScatterable(c ir.Call, prog *ir.Program, queuedPa bool) (*ir.Stage, string, string, bool) {
 	if c.Disabled != nil || c.Preflight {
-		return nil, "", false
+		return nil, "", "", false
 	}
 
 	s, ok := prog.Stages[c.Callable]
 	if !ok || s.Split {
-		return nil, "", false
+		return nil, "", "", false
 	}
 
 	if queuedPa && len(refCalls(c.Bindings)) > 0 {
-		return nil, "", false
+		return nil, "", "", false
 	}
 
-	field, splits := "", 0
+	field, call, splits := "", "", 0
 
 	for _, b := range c.Bindings {
 		if !b.Split {
@@ -317,19 +325,37 @@ func nativeScatterable(c ir.Call, prog *ir.Program, queuedPa bool) (*ir.Stage, s
 
 		splits++
 
-		r := b.Value.Ref
-		if r == nil || r.Kind != refKindSelf || r.Output != "" {
-			return nil, "", false
+		f, cl, ok := scatterSource(b.Value.Ref)
+		if !ok {
+			return nil, "", "", false
 		}
 
-		field = r.ID
+		field, call = f, cl
 	}
 
 	if splits != 1 {
-		return nil, "", false
+		return nil, "", "", false
 	}
 
-	return s, field, true
+	return s, field, call, true
+}
+
+// scatterSource classifies a split binding's ref as a driver-readable scatter
+// source, returning the width field, the producing call ("" for a self source),
+// and whether it qualifies. Eligible: a whole-field self input (`self.field`)
+// or a whole top-level upstream output (`CALL.field`). A projection (a dotted
+// Output) can navigate a typed map and is left to the FORK path.
+func scatterSource(r *ir.Ref) (string, string, bool) {
+	switch {
+	case r == nil:
+		return "", "", false
+	case r.Kind == refKindSelf && r.Output == "":
+		return r.ID, "", true
+	case r.Kind == refKindCall && r.Output != "" && !strings.Contains(r.Output, "."):
+		return r.Output, r.ID, true
+	default:
+		return "", "", false
+	}
 }
 
 // mergeFoldable reports whether a native scatter's MERGE can run inline in its

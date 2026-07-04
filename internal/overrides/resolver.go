@@ -16,13 +16,21 @@ type resolver struct {
 	// stage is the set of call/callable names that denote a leaf stage process.
 	stage map[string]bool
 	// leaves maps a sub-pipeline's call/callable name to the sorted leaf
-	// stage/call names reachable beneath it.
+	// call names reachable beneath it.
 	leaves map[string][]string
+	// callStage maps a leaf call instance name to its callable (stage) name.
+	callStage map[string]string
+	// stageCalls maps a callable (stage) name to the sorted unique call
+	// instance names that invoke it anywhere in the program.
+	stageCalls map[string][]string
 }
 
 // newResolver builds a resolver over prog (may be nil).
 func newResolver(prog *ir.Program) *resolver {
-	r := &resolver{prog: prog, stage: map[string]bool{}, leaves: map[string][]string{}}
+	r := &resolver{
+		prog: prog, stage: map[string]bool{}, leaves: map[string][]string{},
+		callStage: map[string]string{}, stageCalls: map[string][]string{},
+	}
 	if prog == nil {
 		return r
 	}
@@ -32,14 +40,27 @@ func newResolver(prog *ir.Program) *resolver {
 	}
 
 	// A bare-stage entry (top-level `call STAGE`) has no enclosing pipeline, so
-	// mark it directly; the emitter still names a process for it.
+	// mark it directly; the emitter names a plain `<stage>` process for it (no
+	// per-call fused name), so the stage is its own sole "call".
 	if prog.Entry != nil {
 		if _, ok := prog.Stages[prog.Entry.Callable]; ok {
-			r.stage[prog.Entry.Callable] = true
+			r.markStageCall(prog.Entry.Callable, prog.Entry.Callable)
 		}
 	}
 
+	for stage, calls := range r.stageCalls {
+		r.stageCalls[stage] = dedupSorted(calls)
+	}
+
 	return r
+}
+
+// markStageCall records that call name invokes stage callable.
+func (r *resolver) markStageCall(call, callable string) {
+	r.stage[call] = true
+	r.stage[callable] = true
+	r.callStage[call] = callable
+	r.stageCalls[callable] = append(r.stageCalls[callable], call)
 }
 
 // collect returns the leaf stage/call names beneath pipeline pipeName,
@@ -67,8 +88,7 @@ func (r *resolver) collect(pipeName string, inProgress map[string]bool) []string
 	for _, c := range p.Calls {
 		switch {
 		case r.prog.Stages[c.Callable] != nil:
-			r.stage[c.Name] = true
-			r.stage[c.Callable] = true
+			r.markStageCall(c.Name, c.Callable)
 
 			out = append(out, c.Name)
 		case r.prog.Pipelines[c.Callable] != nil:
@@ -99,19 +119,29 @@ const (
 	kindStage         // resolved directly to a leaf stage
 )
 
-// targets returns the stage names an override key maps to and how specifically
-// (kind), plus a note that is non-empty when the key names nothing the pipeline
-// emits (so the caller reports it instead of silently emitting a dead selector).
-// The empty key "" is the global default. Without a program, the key's last
-// segment is returned as a stage (the conservative legacy behavior).
+// targets returns the leaf-STAGE (callable) names an override key maps to and
+// how specifically (kind), plus a note that is non-empty when the key names
+// nothing the pipeline emits (so the caller reports it instead of silently
+// emitting a dead selector). The empty key "" is the global default. A key
+// resolves to the stage(s) it touches — an alias key to the aliased call's
+// stage, a pipeline key to the leaf stages beneath it — so precedence and the
+// resolved-map dedup stay per (stage, phase, field) exactly as before; the
+// selector then covers ALL of that stage's call sites (see callsFor). Without a
+// program, the key's last segment is returned unchanged (the conservative
+// legacy behavior — the emitter's call name equalled the stage name before
+// per-call fusion/scatter existed).
 func (r *resolver) targets(key string) ([]string, int, string) {
 	seg := lastSegment(key)
 	if seg == "" {
 		return []string{""}, kindGlobal, "" // global process default
 	}
 
-	if r.prog == nil || r.stage[seg] {
+	if r.prog == nil {
 		return []string{seg}, kindStage, ""
+	}
+
+	if r.stage[seg] {
+		return []string{r.callableOf(seg)}, kindStage, ""
 	}
 
 	if lv, ok := r.leaves[seg]; ok {
@@ -119,10 +149,43 @@ func (r *resolver) targets(key string) ([]string, int, string) {
 			return nil, kindExpand, "names a sub-pipeline with no stages"
 		}
 
-		return lv, kindExpand, ""
+		return r.stagesOf(lv), kindExpand, ""
 	}
 
 	return nil, kindStage, "no stage or sub-pipeline of that name in the pipeline"
+}
+
+// callableOf maps a leaf-stage segment to its callable (stage) name: a callable
+// name is itself; a call instance name maps to its callable.
+func (r *resolver) callableOf(seg string) string {
+	if r.prog.Stages[seg] != nil {
+		return seg
+	}
+
+	return r.callStage[seg]
+}
+
+// stagesOf maps a sub-pipeline's leaf call names to their distinct, sorted
+// callable (stage) names.
+func (r *resolver) stagesOf(calls []string) []string {
+	stages := make([]string, 0, len(calls))
+	for _, c := range calls {
+		stages = append(stages, r.callStage[c])
+	}
+
+	return dedupSorted(stages)
+}
+
+// callsFor returns every call instance name that invokes stage (callable), or
+// the stage itself when it has no recorded call sites (a bare-stage entry, or
+// the legacy no-program path). The selector matches the fused per-call process
+// of each so a stage-level override reaches an aliased scattered call.
+func (r *resolver) callsFor(stage string) []string {
+	if calls := r.stageCalls[stage]; len(calls) > 0 {
+		return calls
+	}
+
+	return []string{stage}
 }
 
 // dedupSorted returns the sorted, de-duplicated elements of in.

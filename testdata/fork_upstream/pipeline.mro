@@ -1,0 +1,43 @@
+# A map call whose SPLIT source is an UPSTREAM stage output (value = split
+# GEN.values), not a pipeline input. Under -native the driver reads the fork
+# width from GEN's value-channel bundle (Mro2nf.forkScatterRef) rather than
+# pipeargs, and each fork stages GEN's output as a broadcast input — so the
+# scatter runs with no FORK task (#99). Value context: GEN.values is a value
+# channel re-readable by every fork instance.
+stage GEN(
+    in  int     n,
+    out float[] values,
+    src py      "stages/gen",
+)
+
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline SCALE_UP(
+    in  int   n,
+    in  float factor,
+    out float[] scaled,
+)
+{
+    call GEN(
+        n = self.n,
+    )
+
+    map call SCALE(
+        value  = split GEN.values,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+call SCALE_UP(
+    n      = 3,
+    factor = 10.0,
+)

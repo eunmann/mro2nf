@@ -79,6 +79,10 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 				continue
 			}
 
+			// Keyed per (stage, phase, base) — NOT the call set — so precedence
+			// between two keys touching the same stage is decided by rank, exactly
+			// as before the fused-family unification. The selector covers every
+			// call site of the stage at render time (res.callsFor).
 			for _, stage := range targets {
 				rk := [3]string{stage, phase, base}
 				if cur, ok := resolved[rk]; !ok || rank >= cur.rank {
@@ -88,7 +92,7 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 		}
 	}
 
-	globalDefault, groups := groupSelectors(resolved)
+	globalDefault, groups := groupSelectors(resolved, res)
 
 	return render(globalDefault, groups), unmapped, nil
 }
@@ -139,7 +143,7 @@ func selBreadth(stage, phase string) int {
 // default plus an ordered list of withName groups. Each group's lines are sorted
 // by field (base) so `memory` precedes `cpus`; the groups are ordered
 // broad-to-narrow so a specific override wins over a phase-wide one at runtime.
-func groupSelectors(resolved map[[3]string]directive) ([]string, []selGroup) {
+func groupSelectors(resolved map[[3]string]directive, res *resolver) ([]string, []selGroup) {
 	type baseLine struct{ base, line string }
 
 	type acc struct {
@@ -153,7 +157,7 @@ func groupSelectors(resolved map[[3]string]directive) ([]string, []selGroup) {
 
 	for rk, d := range resolved {
 		stage, phase := rk[0], rk[1]
-		if sel := selector(stage, phase); sel != "" {
+		if sel := selector(stage, res.callsFor(stage), phase); sel != "" {
 			a := bySel[sel]
 			if a == nil {
 				a = &acc{breadth: selBreadth(stage, phase)}
@@ -263,12 +267,18 @@ func phaseSuffixes(phase string) (string, string, bool) {
 // where a backslash escape fails config parsing.
 const fusedPrefix = `STAGE_[0-9]+_.+__`
 
-// selector renders the withName regex for a stage + phase; Nextflow full-matches
-// it against the process (or process-alias) name. An empty stage means all
-// stages: "" (the global process block) for a stage-level field, or a phase-wide
-// regex for split/chunk/join. Each regex covers the plain processes, the keyed
-// fork variants (_MAP/_K, via the trailing .*), and the fused per-call names.
-func selector(stage, phase string) string {
+// selector renders the withName regex for a stage + its call instances + phase;
+// Nextflow full-matches it against the process (or process-alias) name. An empty
+// stage means all stages: "" (the global process block) for a stage-level field,
+// or a phase-wide regex for split/chunk/join. The regex covers BOTH naming
+// families the emitter produces: the callable-named plain and keyed-fork
+// processes (`<stage>`, `<stage>_MAP`, `<stage>_*_K`) via the stage token, and
+// the call-named fused per-call processes (`STAGE_<n>_<pipe>__<call>`, from #16
+// fusion and #76 native scatter) via the call tokens — so an override reaches an
+// aliased scattered call (call-named) and its stage's shared keyed process
+// (callable-named) alike. calls falls back to the stage name (a bare-stage entry
+// or the legacy no-program path, where call == callable).
+func selector(stage string, calls []string, phase string) string {
 	plain, fused, _ := phaseSuffixes(phase)
 
 	if stage == "" {
@@ -279,11 +289,26 @@ func selector(stage, phase string) string {
 		return fmt.Sprintf(".*(%s|%s).*", plain, fused)
 	}
 
-	if phase == "" {
-		return fmt.Sprintf("(%s)?%s.*", fusedPrefix, stage)
+	if len(calls) == 0 {
+		calls = []string{stage}
 	}
 
-	return fmt.Sprintf("(%s%s|%s%s%s).*", stage, plain, fusedPrefix, stage, fused)
+	callAlt := calls[0]
+	if len(calls) > 1 {
+		callAlt = "(" + strings.Join(calls, "|") + ")"
+	}
+
+	// Two explicit alternatives: the callable-named plain/keyed family via the
+	// stage token (with `.*` to reach `_MAP`/`_SPLIT`/`_*_K`), and the call-named
+	// fused per-call family via the call token(s). The fused branch is BOUNDED —
+	// `…__<call>` with only an optional phase suffix, no trailing `.*` — so a call
+	// name that is a prefix of another call's name cannot over-match the longer
+	// call's process.
+	if phase == "" {
+		return fmt.Sprintf("(%s.*|%s%s(_SP|_MN|_JN)?)", stage, fusedPrefix, callAlt)
+	}
+
+	return fmt.Sprintf("(%s%s.*|%s%s%s)", stage, plain, fusedPrefix, callAlt, fused)
 }
 
 // render emits the process{} block: the global process default first, then each

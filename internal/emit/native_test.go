@@ -3,6 +3,8 @@ package emit
 import (
 	"strings"
 	"testing"
+
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // TestBuildPlanNativeScatter guards #76's scatter eligibility: with -native an
@@ -43,7 +45,6 @@ func TestBuildPlanNativeScatter(t *testing.T) {
 func TestBuildPlanNativeScatterIneligible(t *testing.T) {
 	cases := []struct{ fixture, pipe, call, why string }{
 		{"multisplit", "MS", "PAIR", "two zipped split bindings"},
-		{"map_null_map", "P", "SCALE", "split source is an upstream call output"},
 		{"disabled_map", "Q", "DBL", "disable gate"},
 		{"map_pipe", "OUTER", "INNER", "sub-pipeline callee"},
 		{"map_split", "MS", "SUMSQ", "split-stage callee"},
@@ -55,6 +56,44 @@ func TestBuildPlanNativeScatterIneligible(t *testing.T) {
 		if got := buildPlan(prog, featureSet{native: true}).pipes[tc.pipe].calls[tc.call].kind; got != kindMapped {
 			t.Errorf("%s (%s): %s.%s kind = %d, want kindMapped", tc.fixture, tc.why, tc.pipe, tc.call, got)
 		}
+	}
+}
+
+// TestNativeScatterableRefKinds pins the #99 split-source widening at the
+// predicate: a whole-field self ref and a whole top-level upstream ref both
+// scatter (returning the width field and, for the upstream case, the producing
+// call); a PROJECTED ref (self.a.b or CALL.a.b — which can navigate a typed
+// map) keeps the FORK path.
+func TestNativeScatterableRefKinds(t *testing.T) {
+	prog := &ir.Program{Stages: map[string]*ir.Stage{"S": {Name: "S"}}}
+
+	mk := func(r *ir.Ref) ir.Call {
+		return ir.Call{
+			Name: "C", Callable: "S", Mapped: true,
+			Bindings: []ir.Binding{{Param: "v", Value: ir.Value{Ref: r}, Split: true}},
+		}
+	}
+
+	cases := []struct {
+		name       string
+		ref        *ir.Ref
+		wantOK     bool
+		field, cal string
+	}{
+		{"self whole field", &ir.Ref{Kind: refKindSelf, ID: "vs"}, true, "vs", ""},
+		{"upstream whole output", &ir.Ref{Kind: refKindCall, ID: "GEN", Output: "vs"}, true, "vs", "GEN"},
+		{"self projection", &ir.Ref{Kind: refKindSelf, ID: "cfg", Output: "vs"}, false, "", ""},
+		{"upstream projection", &ir.Ref{Kind: refKindCall, ID: "GEN", Output: "cfg.vs"}, false, "", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, field, cal, ok := nativeScatterable(mk(tc.ref), prog, false)
+			if ok != tc.wantOK || field != tc.field || cal != tc.cal {
+				t.Errorf("nativeScatterable = (%q, %q, %v), want (%q, %q, %v)",
+					field, cal, ok, tc.field, tc.cal, tc.wantOK)
+			}
+		})
 	}
 }
 
@@ -85,11 +124,11 @@ func TestBuildPlanNativeScatterQueueContext(t *testing.T) {
 		t.Fatal("fork_ref: no SCALE call")
 	}
 
-	if _, _, ok := nativeScatterable(*c, fr, false); !ok {
+	if _, _, _, ok := nativeScatterable(*c, fr, false); !ok {
 		t.Error("ref-bearing scatter in a value context must be eligible")
 	}
 
-	if _, _, ok := nativeScatterable(*c, fr, true); ok {
+	if _, _, _, ok := nativeScatterable(*c, fr, true); ok {
 		t.Error("ref-bearing scatter in a queue-pipeargs context must keep the FORK path")
 	}
 

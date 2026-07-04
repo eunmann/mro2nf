@@ -118,10 +118,26 @@ class Mro2nf {
     // dormant when the enclosing pipeline itself is skipped (no pipeargs item
     // -> no tuples at all).
     static List forkScatter(Path jsonFile, Object leaves, String field, String mapMode) {
-        int n = forkCount(jsonFile, field, mapMode)
-        if (n == 0) return [['fork_none', -1, jsonFile, leaves]]
+        scatterTuples(forkCount(jsonFile, field, mapMode), jsonFile, leaves)
+    }
+
+    // forkScatterRef is forkScatter for an UPSTREAM-ref split source (#99): the
+    // fork WIDTH is read from the producer's bundle (refJson), while the scatter
+    // tuples still carry the enclosing pipeargs bundle (paJson + paLeaves) — the
+    // fused instance stages the producer's whole output separately as an in_<id>
+    // broadcast input, which forkbind resolves the per-fork split from. The
+    // empty/null-source sentinel behaves exactly as the self-source path.
+    static List forkScatterRef(Path refJson, Path paJson, Object paLeaves, String field, String mapMode) {
+        scatterTuples(forkCount(refJson, field, mapMode), paJson, paLeaves)
+    }
+
+    // scatterTuples builds the [key, index, paJson, paLeaves] tuple per fork —
+    // the single source of the fork-key format and the index -1 empty-source
+    // sentinel shared by both scatter width sources.
+    private static List scatterTuples(int n, Path paJson, Object paLeaves) {
+        if (n == 0) return [['fork_none', -1, paJson, paLeaves]]
         (0..<n).collect { int i ->
-            ['fork_' + Integer.toString(i).padLeft(5, '0'), i, jsonFile, leaves]
+            ['fork_' + Integer.toString(i).padLeft(5, '0'), i, paJson, paLeaves]
         }
     }
 }
