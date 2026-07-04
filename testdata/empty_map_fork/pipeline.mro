@@ -1,7 +1,9 @@
-# A map call over an EMPTY typed-map source: zero forks of the map kind. The
-# gather must yield the typed empty {} (not [] and not an error). Under -native
-# the scatter runs the keys-only sentinel instance, whose forkbind validates
-# the bindings and writes the [] keys sidecar the FORK task would have (#76).
+# A map call over an INVOCATION-known empty typed-map source ({} baked through
+# the entry call): Martian's static resolver prunes the zero-fork call, so its
+# output resolves to NULL — not the typed empty {} a RUNTIME empty collection
+# merges to (runtime_empty_forks covers that side). The transpiler reproduces
+# this at runtime: the zero-fork MERGE emits null for an entry-sourced split
+# (bind.Merge emptyNull, #99), keeping the entry input launch-overridable.
 stage DBL(
     in  int v,
     out int w,

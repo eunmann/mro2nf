@@ -92,6 +92,17 @@ var goldenCases = []struct {
 	// fixture (TestGolden here proves default==golden; native==golden follows).
 	{"fork_ref", "fork_ref", "expected/outs.json"},
 	{"fork_mid", "fork_mid", "expected/outs.json"},
+	// #99 empty-fork fidelity: an invocation-known split source that resolves
+	// EMPTY merges to null (bind.Merge emptyNull, matching mrp's static
+	// resolver pruning a zero-fork call — empty_fork_min regenerated from
+	// current mrp: null, not []); runtime_empty_forks pins the RUNTIME side
+	// (typed empty for an upstream empty/null collection) plus the zero-fork
+	// sentinel. The rule is shape-based, not value-based, so the _override
+	// case proves a launch-time entry override to a NON-empty collection still
+	// runs the forks — the hazard that bars baking the empty statically.
+	{"empty_map_fork", "empty_map_fork", "expected/outs.json"},
+	{"empty_fork_min_override", "empty_fork_min", "expected/override_outs.json"},
+	{"runtime_empty_forks", "runtime_empty_forks", "expected/outs.json"},
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},
@@ -572,21 +583,21 @@ func assertHasProcess(t *testing.T, proj string, cat string) {
 // are forward returns (default LAYOUT) that only drop BUILD_ENTRY_ARGS. The
 // map-call fixtures collapse the whole fork machinery: the scatter kills FORK
 // and the sole-consumer merge fold kills MERGE — fork_min (array), map_fork
-// (typed map), empty_fork_min/empty_map_fork (zero forks via the keys-only
-// sentinel), and fork_ref (an upstream broadcast ref re-read per instance).
-// fork_upstream and map_null_map scatter over an UPSTREAM split source (#99):
-// the driver reads the fork width from the producer's value channel
-// (Mro2nf.forkScatterRef); map_null_map's null typed-map output exercises the
-// zero-fork sentinel on that path (result {}).
+// (typed map), and fork_ref (an upstream broadcast ref re-read per instance).
+// empty_fork_min/empty_map_fork are INVOCATION-known empty forks: the scatter
+// still runs its keys-only sentinel, and the zero-fork merge emits null
+// (bind.Merge emptyNull — matching mrp's static resolver, while keeping entry
+// inputs launch-overridable). fork_upstream and map_null_map scatter over an
+// UPSTREAM split source (#99): the driver reads the fork width from the
+// producer's value channel (Mro2nf.forkScatterRef); map_null_map and
+// runtime_empty_forks exercise the RUNTIME zero-fork keys-only sentinel on
+// that path (typed-empty results across null/empty x array/map).
 func TestNativeComplete(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	// golden "" = no committed mrp golden exists: empty_map_fork's static-empty
-	// map fork merges to {} here but null under current mrp (empty_fork_min's
-	// committed [] golden shows the same divergence for arrays) — a pre-existing
-	// static-empty-fork fidelity question tracked on #99. Until it is resolved,
-	// empty_map_fork keeps the run-vs-run comparison so native==default stays
-	// guarded without committing a golden that endorses either answer.
+	// Each case compares its single -native run against the committed mrp
+	// golden: TestGolden proves default==golden, so native==golden covers
+	// native==default transitively — and anchors native to mrp truth.
 	cases := []struct{ fixture, golden string }{
 		{"diamond_min", "expected/outs.json"},
 		{"fold_disable", "expected/outs.json"},
@@ -597,12 +608,13 @@ func TestNativeComplete(t *testing.T) {
 		{"fork_min", "expected/scale_all_outs.json"},
 		{"map_fork", "expected/outs.json"},
 		{"empty_fork_min", "expected/outs.json"},
-		{"empty_map_fork", ""},
+		{"empty_map_fork", "expected/outs.json"},
 		{"fork_ref", "expected/outs.json"},
 		{"fork_mid", "expected/outs.json"},
 		{"fork_upstream", "expected/outs.json"},
 		{"map_null_map", "expected/outs.json"},
 		{"map_key_sort", "expected/outs.json"},
+		{"runtime_empty_forks", "expected/outs.json"},
 	}
 
 	for _, tc := range cases {
@@ -616,25 +628,9 @@ func TestNativeComplete(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			nativeOuts := filepath.Join(native, "results", "pipeline_outs.json")
-
-			// With a committed mrp golden, one native run suffices: TestGolden
-			// proves default==golden, so native==golden covers native==default
-			// transitively — and anchors native to mrp truth.
-			if tc.golden != "" {
-				goldenJSON(t, nativeOuts,
-					filepath.Join(root, "testdata", tc.fixture, tc.golden))
-
-				return
-			}
-
-			def := transpile(t, tc.fixture)
-			if err := runNextflow(t, def); err != nil {
-				t.Fatal(err)
-			}
-
-			goldenJSON(t, nativeOuts,
-				filepath.Join(def, "results", "pipeline_outs.json"))
+			goldenJSON(t,
+				filepath.Join(native, "results", "pipeline_outs.json"),
+				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 		})
 	}
 }

@@ -100,6 +100,69 @@ func TestBuildPlanFoldDisables(t *testing.T) {
 	}
 }
 
+// TestBuildPlanEmptyNull pins the #99 empty-fork fidelity rule: a map call
+// whose split source is launch-invocation-known (a whole-field entry self ref
+// or a literal) gets emptyNull — its ZERO-fork merge emits null, matching
+// mrp's static resolver pruning a statically-empty fork — in default and
+// native mode alike. A map call splitting an UPSTREAM output must NOT get it:
+// a runtime empty merges to the typed empty. The flag is shape-based (not
+// value-based), so launch-time entry overrides stay correct: override the
+// input to non-empty and the forks run, override to empty and mrp with that
+// invocation would produce null too.
+func TestBuildPlanEmptyNull(t *testing.T) {
+	for _, fx := range []struct{ fixture, pipe, call string }{
+		{"empty_fork_min", "EF", "SCALE"},
+		{"empty_map_fork", "EMP", "DBL"},
+		{"fork_min", "SCALE_ALL", "SCALE"}, // non-empty entry source: flagged too (never fires at runtime)
+	} {
+		prog := lowerFixture(t, fx.fixture)
+
+		for _, f := range []featureSet{{}, {native: true}} {
+			if !buildPlan(prog, f).pipes[fx.pipe].calls[fx.call].emptyNull {
+				t.Errorf("%s (native=%v): entry-sourced split must set emptyNull", fx.fixture, f.native)
+			}
+		}
+	}
+
+	// Upstream-sourced splits stay typed-empty: zero forks is a RUNTIME fact.
+	ref := lowerFixture(t, "runtime_empty_forks")
+	for _, call := range []string{"SC_EA", "SC_NA", "SC_EM", "SC_NM"} {
+		if buildPlan(ref, featureSet{native: true}).pipes["REF"].calls[call].emptyNull {
+			t.Errorf("%s splits an upstream output; a runtime empty must keep the typed empty", call)
+		}
+	}
+}
+
+// TestEntryValueShapes pins entryValue's classification directly: literals and
+// ANY entry self ref (whole-field or projected — self.cfg.list is equally
+// invocation-known) flag; upstream refs and sub-pipeline self refs do not.
+func TestEntryValueShapes(t *testing.T) {
+	entry := &ir.Pipeline{Name: "TOP"}
+	sub := &ir.Pipeline{Name: "SUB"}
+	prog := &ir.Program{Entry: &ir.EntryCall{Callable: "TOP"}}
+
+	cases := []struct {
+		name string
+		p    *ir.Pipeline
+		v    ir.Value
+		want bool
+	}{
+		{"literal", entry, ir.Value{Literal: []byte("[]")}, true},
+		{"whole-field entry self", entry, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "xs"}}, true},
+		{"projected entry self", entry, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "cfg", Output: "list"}}, true},
+		{"sub-pipeline self", sub, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "xs"}}, false},
+		{"upstream ref", entry, ir.Value{Ref: &ir.Ref{Kind: refKindCall, ID: "UP", Output: "xs"}}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := entryValue(prog, tc.p, tc.v); got != tc.want {
+				t.Errorf("entryValue(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestBuildPlanForwardChain guards #73: a source feeding a pure-FORWARD consumer
 // folds under -fuse-chains too. file_chain's MAKEFILE feeds READFILE, which just
 // forwards MAKEFILE.f — so with the flag MAKEFILE folds away and READFILE becomes

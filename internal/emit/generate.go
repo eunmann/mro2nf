@@ -359,8 +359,18 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
-// per outer fork it gathers that fork's inner results.
+// per outer fork it gathers that fork's inner results. emptyNull threads here
+// for consistency with the plain MERGE (#99), though it cannot fire from valid
+// Martian source today: the only keyed split source the plan flags is a
+// LITERAL (sub-pipeline self refs are unflagged), and Martian's grammar
+// rejects an empty literal split (`split []` is a parse error) — so a flagged
+// keyed merge always has at least one fork.
 func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
+	flag := ""
+	if g.plan.pipes[pipeline].calls[c.Name].emptyNull {
+		flag = " -emptynull"
+	}
+
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
     tuple val(key), path(souts), path('forkkeys.json')
@@ -369,11 +379,11 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
     tuple val(key), path('merged', type: 'dir')
   script:
     """
-    '%[2]s' merge -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
+    '%[2]s' merge%[5]s -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
     """
 }
 
-`, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut))
+`, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut), flag)
 }
 
 // genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,
@@ -1013,7 +1023,8 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkkeys_%[1]s.json'\n", id)
 		pairs = append(pairs, fmt.Sprintf("%s=merged_%s", id, id))
 		fmt.Fprintf(&pre, "    %s\n", g.mergeCmd(prod.Callable, calleeOutNames(prog, prod.Callable),
-			"souts_"+id+"/outs__*", "forkkeys_"+id+".json", "merged_"+id))
+			"souts_"+id+"/outs__*", "forkkeys_"+id+".json", "merged_"+id,
+			g.plan.pipes[p.Name].calls[prod.Name].emptyNull))
 	}
 
 	inputs.WriteString("    path 'types.json'\n")
@@ -1030,9 +1041,16 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 // mergeCmd renders the `mre merge` gather command. The MERGE task and the
 // folded in-task merge (#76) share it, so the two invocations cannot drift —
 // they differ only in where the fork outs live and where the result lands.
-func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string) string {
-	return fmt.Sprintf(`'%s' merge -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keys-file %s -o %s%s`,
-		g.mre, outs, glob, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
+// emptyNull applies mrp's invocation-known-empty rule: zero forks merge to
+// null instead of the typed empty (#99).
+func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string, emptyNull bool) string {
+	flag := ""
+	if emptyNull {
+		flag = " -emptynull"
+	}
+
+	return fmt.Sprintf(`'%s' merge%s -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keys-file %s -o %s%s`,
+		g.mre, flag, outs, glob, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
 }
 
 // foldCallArgs is bindCallArgsPa for a fold-aware consumer invocation: a
@@ -1255,7 +1273,9 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
     """
 }
 
-`, mergeName(pipeline, c.Name), g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged"),
+`, mergeName(pipeline, c.Name),
+		g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged",
+			g.plan.pipes[pipeline].calls[c.Name].emptyNull),
 		bundleOutput("merged"))
 }
 
@@ -2327,12 +2347,20 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
 // BUILD_ENTRY_ARGS task the workflow stages that bundle as a value channel and
 // runs the pipeline directly. The publish wiring is identical to the default.
 func genNativeEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
+	// -native bakes entry args at transpile time, so a launch-time override
+	// (-params-file / --<input>) would be SILENTLY ignored — fail loudly
+	// instead: an ignored override is a silent output divergence (e.g. an
+	// emptyNull fork would yield null where the user expected their forks).
 	fmt.Fprintf(b, `
 workflow {
+  %[2]s.each { n ->
+    if( params.containsKey(n) )
+      error "entry arg '${n}' was baked at transpile time (-native); re-transpile to change it"
+  }
   types = file("${projectDir}/_assets/types.json")
   pipeargs = Channel.value(tuple(file("${projectDir}/entry_resolved/data.json"), file("${projectDir}/entry_resolved/f/*")))
   %[1]s(pipeargs)
-`, entryWorkflow)
+`, entryWorkflow, groovyStringList(entryInNames(prog)))
 
 	if p := nativeReturnBind(prog, g); p != nil {
 		genNativePublishWiring(b, p, entryWorkflow, g)
@@ -2341,6 +2369,31 @@ workflow {
 	}
 
 	b.WriteString("}\n")
+}
+
+// entryInNames lists the entry callable's input parameter names (pipeline or
+// stage entry alike) — the params a -native project has baked and must reject
+// at launch.
+func entryInNames(prog *ir.Program) []string {
+	if p, ok := prog.Pipelines[prog.Entry.Callable]; ok {
+		return names(p.In)
+	}
+
+	if s, ok := prog.Stages[prog.Entry.Callable]; ok {
+		return names(s.In)
+	}
+
+	return nil
+}
+
+// groovyStringList renders names as a Groovy string-list literal.
+func groovyStringList(items []string) string {
+	quoted := make([]string, len(items))
+	for i, s := range items {
+		quoted[i] = "'" + s + "'"
+	}
+
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // genNativePublishWiring wires the native LAYOUT (which folds in the return bind):

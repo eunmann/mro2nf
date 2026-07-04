@@ -300,6 +300,7 @@ func runMerge(_ context.Context, argv []string) error {
 	files := fs.String("files", "", "comma-separated per-fork output bundle dirs, in order")
 	keysFile := fs.String("keys-file", "", "fork keys JSON (null for an array fork)")
 	outFile := fs.String("o", "", "output merged bundle dir")
+	emptyNull := fs.Bool("emptynull", false, "zero forks merge to null instead of the typed empty (invocation-known split source, #99)")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -315,7 +316,7 @@ func runMerge(_ context.Context, argv []string) error {
 		return err
 	}
 
-	merged, err := bind.Merge(splitComma(*outs), forkOuts, keys)
+	merged, err := bind.Merge(splitComma(*outs), forkOuts, keys, *emptyNull)
 	if err != nil {
 		return fmt.Errorf("merge: %w", err)
 	}

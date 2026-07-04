@@ -257,10 +257,30 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage, only int) ([]js
 // Merge combines per-fork outputs into a single map-call result. For an array
 // fork (keys nil), each named output becomes an array of that field across the
 // forks in order; for a map fork, each output becomes a map keyed by keys[i].
-func Merge(names []string, outs []json.RawMessage, keys []string) (json.RawMessage, error) {
+// emptyNull applies mrp's invocation-known-empty rule (#99): with ZERO forks
+// every output merges to null instead of the typed empty — the emitter sets it
+// only for a map call whose split source is launch-invocation-known
+// (entrySplit), where mrp's static resolver would prune the zero-fork call and
+// resolve its outputs to null. A runtime-sourced empty keeps the typed empty.
+func Merge(names []string, outs []json.RawMessage, keys []string, emptyNull bool) (json.RawMessage, error) {
+	// The zero-fork null decision is made once, before the per-name loop, and
+	// only after the same keys/outs desync guard mergeOne applies — so the
+	// precedence is structural: desync error > null > typed value.
+	zeroNull := emptyNull && len(outs) == 0
+
+	if zeroNull && keys != nil && len(keys) != 0 {
+		return nil, fmt.Errorf("merge: 0 fork outputs for %d keys: %w", len(keys), errSplitLen)
+	}
+
 	result := make(map[string]json.RawMessage, len(names))
 
 	for _, name := range names {
+		if zeroNull {
+			result[name] = json.RawMessage("null")
+
+			continue
+		}
+
 		raw, err := mergeOne(name, outs, keys)
 		if err != nil {
 			return nil, err
@@ -498,7 +518,8 @@ func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessa
 	// not null — Martian's runtime merge yields marshallerArray{} ([]) for an
 	// empty typed-array source (and for a null one, since the type is known). A
 	// statically-known-empty literal is collapsed to null earlier by Martian's
-	// compiler, which mro2nf's runtime-generic model does not reproduce.
+	// compiler; Merge's emptyNull reproduces that for invocation-known split
+	// sources (#99) while this default keeps the runtime typed empty.
 	if len(outs) == 0 {
 		return json.RawMessage("[]"), nil
 	}

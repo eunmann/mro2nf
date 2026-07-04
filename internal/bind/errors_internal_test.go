@@ -105,7 +105,7 @@ func TestResolveForksNullMapSource(t *testing.T) {
 		t.Errorf("keys = %v, want empty", keys)
 	}
 
-	merged, err := Merge([]string{"o"}, nil, keys)
+	merged, err := Merge([]string{"o"}, nil, keys, false)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestResolveForksNullArraySource(t *testing.T) {
 		t.Errorf("keys = %v, want nil for array mode", keys)
 	}
 
-	merged, err := Merge([]string{"o"}, nil, keys)
+	merged, err := Merge([]string{"o"}, nil, keys, false)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestMergeOutsKeysDesync(t *testing.T) {
 		json.RawMessage(`{"w":2}`),
 	}
 
-	_, err := Merge([]string{"w"}, outs, []string{"a", "b", "c"})
+	_, err := Merge([]string{"w"}, outs, []string{"a", "b", "c"}, false)
 	if !errors.Is(err, errSplitLen) {
 		t.Fatalf("Merge error = %v, want errors.Is errSplitLen", err)
 	}

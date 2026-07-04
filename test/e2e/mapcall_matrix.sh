@@ -5,8 +5,10 @@ set -u
 # collection a `map call` iterates, run the pipeline through REAL Martian (mrp)
 # AND the transpiled Nextflow and print the resolved output side by side. This
 # is the oracle for conformance finding #4 (empty/zero-fork map calls): Martian's
-# result depends on literal-vs-runtime and array-vs-map in ways mro2nf does not
-# yet fully reproduce. Informational (exit 0); DIFF rows are the known gaps
+# result depends on invocation-known-vs-runtime and array-vs-map; mro2nf
+# reproduces both sides (runtime typed empty via static MapMode; invocation-
+# known empty -> null via bind.Merge emptyNull, #99). Informational (exit 0);
+# any DIFF row is a REGRESSION or one of the narrow chained-source residuals
 # documented in docs/MARTIAN_RUNTIME_CONFORMANCE.md.
 #
 # Requires a local Martian build: set MARTIAN_BIN (default ~/workdir/martian/bin).

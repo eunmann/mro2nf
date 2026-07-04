@@ -70,6 +70,10 @@ type callPlan struct {
 	// its own element (O(1) per instance) instead of every instance re-parsing
 	// the whole collection via forkbind -index (the O(N^2) fix, #99).
 	scatterValueOnly bool
+	// emptyNull marks a map call whose split source is launch-invocation-known
+	// (entrySplit): its ZERO-fork merge emits null instead of the typed empty,
+	// matching mrp's static resolver pruning a statically-empty fork (#99).
+	emptyNull bool
 	// foldMerge marks a kindNativeScatter call whose MERGE gather runs inline in
 	// its sole consumer's task (#76): no standalone MERGE process; the consumer
 	// stages the per-fork outs dirs + keys sidecar and reconstructs merged_<id>
@@ -229,6 +233,8 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	}
 
 	if c.Mapped {
+		emptyNull := entrySplit(prog, p, c)
+
 		// #76: under -native an eligible map call scatters in-workflow (each stage
 		// instance resolves its own fork via forkbind -index), so no FORK task.
 		if f.native {
@@ -240,11 +246,12 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 				return callPlan{
 					kind: kindNativeScatter, stage: s, scatterField: field, scatterCall: call,
 					scatterValueOnly: !queuedPa && splitValueOnly(c, s, prog),
+					emptyNull:        emptyNull,
 				}
 			}
 		}
 
-		return callPlan{kind: kindMapped, disableTask: needsDisableTask(c)}
+		return callPlan{kind: kindMapped, disableTask: needsDisableTask(c), emptyNull: emptyNull}
 	}
 
 	if prod, ok := callForwardProducer(c, p, prog); ok {
@@ -279,7 +286,7 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 		return "", false
 	}
 
-	if prog.Entry == nil || prog.Entry.Callable != p.Name {
+	if !entryScoped(prog, p) {
 		return "", false
 	}
 
@@ -297,6 +304,89 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 	}
 
 	return "", false
+}
+
+// entrySplit reports whether every split binding of a map call draws from the
+// LAUNCH INVOCATION: a literal, or a whole-field self ref on the ENTRY pipeline
+// (instantiated once, so the source is unambiguous — the same scope rule as
+// foldDisableOff). Martian's resolver treats an invocation-known empty fork
+// collection differently from a runtime one — observed against mrp 4.0.15: a
+// static []/{} split source resolves the whole mapped call to NULL (the zero-
+// fork call is pruned), while an upstream-produced empty or null collection
+// merges to the typed empty ([] / {}). mro2nf keeps entry inputs overridable
+// at launch, so the distinction cannot be baked statically; instead an
+// entry-split call's zero-fork MERGE emits null at runtime (bind.Merge
+// emptyNull) — override to non-empty and the forks run, override to empty and
+// the result is null, exactly what mrp produces for that invocation. Known
+// residual divergences (all the value-CHAIN class mrp's whole-program
+// KnownLength propagation prunes but a shape rule cannot see; closing them
+// needs constant propagation across the binding graph). An empty literal
+// split (`split []`) is a Martian PARSE error, so the only reachable
+// invocation-known-empty source is an entry self ref:
+//   - a sub-pipeline whose split input chains back to an entry value through
+//     the parent call's bindings;
+//   - an in-pipeline chain `map call B(split A.out)` where A itself nulls —
+//     mrp cascades the prune to B, we merge B's runtime null to typed empty;
+//   - a MIXED split (an entry-ref binding zipped with an upstream ref, where
+//     the entry side resolves empty) — the all-bindings rule leaves it
+//     unflagged.
+func entrySplit(prog *ir.Program, p *ir.Pipeline, c ir.Call) bool {
+	splits := 0
+
+	for _, b := range c.Bindings {
+		if !b.Split {
+			continue
+		}
+
+		splits++
+
+		if !entryValue(prog, p, b.Value) {
+			return false
+		}
+	}
+
+	return splits > 0
+}
+
+// entryValue reports whether a binding value is launch-invocation-sourced: a
+// literal/composite carrying no refs, or ANY self ref (whole-field or
+// projected, e.g. self.cfg.list) on the entry pipeline — entry inputs come
+// only from the launch invocation, so a projection of one is invocation-known
+// too. A composite CONTAINING refs (fan-in `[A.out, B.out]`) is rejected even
+// though its static length makes the zero-fork case unreachable today — the
+// guard is structural, not an unstated invariant.
+func entryValue(prog *ir.Program, p *ir.Pipeline, v ir.Value) bool {
+	if v.Ref == nil {
+		return !valueHasRef(v)
+	}
+
+	return v.Ref.Kind == refKindSelf && entryScoped(prog, p)
+}
+
+// valueHasRef reports whether a value expression contains any ref leaf.
+func valueHasRef(v ir.Value) bool {
+	if v.Ref != nil {
+		return true
+	}
+
+	if slices.ContainsFunc(v.Array, valueHasRef) {
+		return true
+	}
+
+	for _, el := range v.Object {
+		if valueHasRef(el) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// entryScoped reports whether p is the entry pipeline — instantiated exactly
+// once, so a self ref's value is unambiguous. Shared by foldDisableOff and
+// entryValue so the two "invocation-known" scope tests cannot drift.
+func entryScoped(prog *ir.Program, p *ir.Pipeline) bool {
+	return prog.Entry != nil && prog.Entry.Callable == p.Name
 }
 
 // nativeScatterable reports whether a -native map call can scatter in-workflow

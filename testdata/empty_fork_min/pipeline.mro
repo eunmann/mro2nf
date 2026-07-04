@@ -1,10 +1,11 @@
-# A map call over an empty collection. The gather (MERGE) still runs on the empty
-# fork and yields the typed empty ([]) for the float[] output. NOTE: the source
-# here is a literal `[]` at the launch call; Martian statically prunes such a
-# known-empty literal to null, but mro2nf's runtime-generic model (entry inputs
-# are overridable at launch) treats it as a runtime empty -> [] — a documented,
-# justified difference. A stage-produced empty/null source matches mrp exactly
-# (see test/e2e/mapcall_matrix.sh).
+# A map call over an INVOCATION-known empty collection ([] baked through the
+# launch call): Martian's static resolver prunes the zero-fork call, so the
+# output resolves to NULL. The transpiler reproduces this at RUNTIME (the
+# zero-fork MERGE emits null for an entry-sourced split — bind.Merge
+# emptyNull, #99), keeping entry inputs overridable at launch: override
+# `values` to a non-empty list and the forks run (expected/override_outs.json
+# pins that); a stage-produced empty/null source merges to the typed empty
+# instead (runtime_empty_forks).
 stage SCALE(
     in  float value,
     in  float factor,

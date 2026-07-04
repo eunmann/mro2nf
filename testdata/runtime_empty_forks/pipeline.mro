@@ -1,0 +1,57 @@
+# Pins mrp's RUNTIME zero-fork merge semantics (#99): an upstream-produced
+# empty OR null collection merges to the TYPED empty ([] for an array fork,
+# {} for a map fork) — unlike an INVOCATION-known empty split source, which
+# Martian's resolver prunes to null (see entrySplit / bind.Merge emptyNull;
+# empty_fork_min/empty_map_fork cover that side). Also the runtime zero-fork
+# sentinel path: each map call scatters zero times, so only the keys-only
+# instance runs and the gather yields the typed empty.
+stage GEN(
+    out int[]    arr_empty,
+    out int[]    arr_null,
+    out map<int> m_empty,
+    out map<int> m_null,
+    src py       "stages/gen",
+)
+
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+pipeline REF(
+    out int[]    ea,
+    out int[]    na,
+    out map<int> em,
+    out map<int> nm,
+)
+{
+    call GEN(
+    )
+
+    map call SCALE as SC_EA(
+        value = split GEN.arr_empty,
+    )
+
+    map call SCALE as SC_NA(
+        value = split GEN.arr_null,
+    )
+
+    map call SCALE as SC_EM(
+        value = split GEN.m_empty,
+    )
+
+    map call SCALE as SC_NM(
+        value = split GEN.m_null,
+    )
+
+    return (
+        ea = SC_EA.scaled,
+        na = SC_NA.scaled,
+        em = SC_EM.scaled,
+        nm = SC_NM.scaled,
+    )
+}
+
+call REF(
+)
