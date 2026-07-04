@@ -87,6 +87,40 @@ func Resolve(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMe
 	return raw, nil
 }
 
+// ResolveElement builds one fork's _args JSON from a PRE-SLICED split element,
+// skipping the whole-collection parse a per-fork ResolveForks would do (the
+// native-scatter O(N^2) fix, #99): the driver extracts element i once and each
+// fork instance assembles its args in O(1). Every split binding takes element
+// verbatim; broadcast bindings resolve against pipeArgs/callOuts as usual. A
+// map call has exactly one split binding on the native-scatter path, so element
+// is that one param's value; the caller guarantees element matches the split
+// param's element type.
+func ResolveElement(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, element json.RawMessage) (json.RawMessage, error) {
+	args := make(map[string]json.RawMessage, len(spec))
+
+	for param, entry := range spec {
+		if entry.Split {
+			args[param] = element
+
+			continue
+		}
+
+		val, err := entry.resolve(pipeArgs, callOuts)
+		if err != nil {
+			return nil, fmt.Errorf("bind %q: %w", param, err)
+		}
+
+		args[param] = val
+	}
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("marshal element args: %w", err)
+	}
+
+	return raw, nil
+}
+
 // AllForks marks every fork's args for marshaling in ResolveForks.
 const AllForks = -1
 

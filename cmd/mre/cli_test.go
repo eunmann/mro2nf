@@ -501,6 +501,51 @@ func TestRunForkBindIndex(t *testing.T) {
 	}
 }
 
+// TestRunForkBindElement drives the O(1) native-scatter path (#99): assembling
+// a fork's args from a pre-sliced element must be byte-identical to the -index
+// write of that fork (the driver hands the same value ResolveForks would slice),
+// and a broadcast binding still resolves against pipeargs.
+func TestRunForkBindElement(t *testing.T) {
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
+		`{"v":{"ref":{"kind":"self","id":"vals","output":""},"split":true},"f":{"ref":{"kind":"self","id":"factor","output":""}}}`)
+	pipe := filepath.Join(dir, "pipeargs")
+	writeTestBundle(t, pipe, map[string]any{"vals": []any{10, 20, 30}, "factor": 2})
+
+	// Element for fork 1 (value 20), sliced by the driver.
+	elem := writeTestFile(t, filepath.Join(dir, "elem.json"), `20`)
+	byElem := filepath.Join(dir, "by_element")
+
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe,
+		"-elementfile", elem, "-o", byElem,
+	}); err != nil {
+		t.Fatalf("run forkbind -elementfile: %v", err)
+	}
+
+	if diff := cmp.Diff(map[string]any{"v": 20.0, "f": 2.0}, readTestBundle(t, byElem)); diff != "" {
+		t.Errorf("element args mismatch (-want +got):\n%s", diff)
+	}
+
+	// Byte-identical to the -index write of the same fork.
+	byIndex := filepath.Join(dir, "by_index")
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe,
+		"-index", "1", "-o", byIndex,
+	}); err != nil {
+		t.Fatalf("run forkbind -index: %v", err)
+	}
+
+	if diff := cmp.Diff(readTestBundle(t, byIndex), readTestBundle(t, byElem)); diff != "" {
+		t.Errorf("-elementfile not byte-identical to -index 1 (-index +element):\n%s", diff)
+	}
+
+	// -elementfile without -o is a loud error, not a write to cwd.
+	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-pipeargs", pipe, "-elementfile", elem}); err == nil {
+		t.Error("forkbind -elementfile without -o must error")
+	}
+}
+
 // TestRunForkBindIndexKeysFile drives the -keysfile side of the native scatter:
 // each -index instance can emit the forkkeys sidecar byte-identical to the full
 // write's (map keys for a map fork, null for an array fork), so the gather gets

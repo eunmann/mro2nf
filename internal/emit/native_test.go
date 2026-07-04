@@ -110,9 +110,15 @@ func TestBuildPlanNativeScatterQueueContext(t *testing.T) {
 		t.Errorf("queuePipeArgs = %v, want SUB queued (disabled callee), TOP not", q)
 	}
 
-	// Self-only split inside the disabled sub-pipeline: still scatterable.
-	if got := buildPlan(ds, featureSet{native: true}).pipes["SUB"].calls["SCALE"].kind; got != kindNativeScatter {
-		t.Errorf("self-only scatter in a queued pipeline: kind = %d, want kindNativeScatter", got)
+	// Self-only split inside the disabled sub-pipeline: still scatterable, but
+	// on the pipeargs-in-tuple path — the O(1) element path pulls pipeargs out as
+	// a value-channel broadcast, which a queue pipeargs would zip to one fork.
+	cp := buildPlan(ds, featureSet{native: true}).pipes["SUB"].calls["SCALE"]
+	if cp.kind != kindNativeScatter {
+		t.Errorf("self-only scatter in a queued pipeline: kind = %d, want kindNativeScatter", cp.kind)
+	}
+	if cp.scatterValueOnly {
+		t.Error("a queue-pipeargs scatter must NOT take the element path (would zip N forks to one)")
 	}
 
 	// A ref-bearing map call (fork_ref's factor = MKFAC.factor) is eligible in a
@@ -220,6 +226,44 @@ func TestGenerateNativeMergeFold(t *testing.T) {
 	}
 }
 
+// TestSplitValueOnly pins the O(1) element-path eligibility (#99): a scatter
+// whose split element type carries no file leaves is value-only (element path);
+// a file / file-struct split element keeps the -index path (its element carries
+// bundle markers a plain JSON slice can't reproduce).
+func TestSplitValueOnly(t *testing.T) {
+	structs := map[string]*ir.StructType{
+		"Cfg": {Name: "Cfg", Fields: []ir.Param{{Name: "path", BaseType: "file", IsFile: true}}},
+	}
+	prog := &ir.Program{Structs: structs}
+
+	mk := func(p ir.Param) (ir.Call, *ir.Stage) {
+		s := &ir.Stage{Name: "S", In: []ir.Param{p}}
+		c := ir.Call{Callable: "S", Bindings: []ir.Binding{{Param: p.Name, Split: true}}}
+
+		return c, s
+	}
+
+	cases := []struct {
+		name string
+		p    ir.Param
+		want bool
+	}{
+		{"float element", ir.Param{Name: "v", BaseType: "float"}, true},
+		{"string element", ir.Param{Name: "v", BaseType: "string"}, true},
+		{"file element", ir.Param{Name: "v", BaseType: "file", IsFile: true}, false},
+		{"struct-of-file element", ir.Param{Name: "v", BaseType: "Cfg"}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, s := mk(tc.p)
+			if got := splitValueOnly(c, s, prog); got != tc.want {
+				t.Errorf("splitValueOnly(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestGenerateNativeScatter renders fork_min's pipeline module with -native and
 // pins the scatter shape: no FORK process, a fused forkbind -index + main
 // process whose instance 0 alone writes the keys sidecar, the keys-only
@@ -251,9 +295,15 @@ func TestGenerateNativeScatter(t *testing.T) {
 
 	for _, want := range []string{
 		"process STAGE_9_SCALE_ALL__SCALE {",
-		"-mapmode array -index ${fi} -o fargs${fi == 0 ? ' -keysfile forkkeys.mro2nf.json' : ''}",
+		// fork_min is a value-only (float) self-source scatter → the O(1)
+		// per-element path (#99): index 0 computes keys, index >0 assembles
+		// from its own base64 element, no whole-collection re-parse.
+		"tuple val(key), val(fi), val(element)",
+		"-index 0 -o fargs -keysfile forkkeys.mro2nf.json",
+		"printf %s '${element}' | base64 -d > element.json",
+		"-elementfile element.json -o fargs",
 		"-keysonly -keysfile forkkeys.mro2nf.json",
-		"Mro2nf.forkScatter(data, leaves, 'values', 'array')",
+		"Mro2nf.forkElements(data, 'values', 'array')",
 		"path \"outs__${key}\", type: 'dir', emit: outs, optional: true",
 		"path 'forkkeys.mro2nf.json', emit: keys, optional: true",
 		// The MERGE folds into the entry return's LAYOUT (#76): the workflow

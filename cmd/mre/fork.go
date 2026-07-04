@@ -45,6 +45,7 @@ func runForkBind(_ context.Context, argv []string) error {
 	oDir := fs.String("o", "", "output args bundle dir when -index >= 0")
 	keysFile := fs.String("keysfile", "", "with -index or -keysonly, write the forkkeys sidecar to this path")
 	keysOnly := fs.Bool("keysonly", false, "resolve and validate every binding but write ONLY the -keysfile sidecar (native scatter's empty-fork instance, #76)")
+	elemFile := fs.String("elementfile", "", "with -o, assemble this fork's args from a PRE-SLICED split element (O(1), no whole-collection parse; native scatter #99)")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -69,15 +70,42 @@ func runForkBind(_ context.Context, argv []string) error {
 		return err
 	}
 
+	// -elementfile is the O(1) native-scatter path (#99): the driver sliced the
+	// fork collection once and handed this instance only its element, so the args
+	// are assembled without re-parsing the whole collection (the O(N^2) that the
+	// per-fork -index path did across N instances).
+	if *elemFile != "" {
+		return writeForkElement(spec, pipeArgs, callOuts, *elemFile, *oDir, prod)
+	}
+
+	return resolveAndWriteForks(spec, pipeArgs, callOuts, prod, forkWrite{
+		mapMode: *mapMode, index: *index, oDir: *oDir, dir: *dir,
+		keysFile: *keysFile, keysOnly: *keysOnly,
+	})
+}
+
+// forkWrite bundles the destination flags for the full-collection forkbind
+// modes (all-forks / -index / -keysonly).
+type forkWrite struct {
+	mapMode             string
+	index               int
+	oDir, dir, keysFile string
+	keysOnly            bool
+}
+
+// resolveAndWriteForks resolves the whole fork collection and writes the
+// requested output: -keysonly (validate + keys sidecar), -index (one fork's
+// args + its keys), or the default full-fork write.
+func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, prod *producer, w forkWrite) error {
 	// A single-fork write (-index) marshals only that fork's args; validation
 	// (split kind vs -mapmode, zip lengths, every binding's resolution) is
 	// identical to the full resolve either way.
 	only := bind.AllForks
-	if *index >= 0 {
-		only = *index
+	if w.index >= 0 {
+		only = w.index
 	}
 
-	forks, keys, err := bind.ResolveForks(spec, pipeArgs, callOuts, *mapMode == "map", only)
+	forks, keys, err := bind.ResolveForks(spec, pipeArgs, callOuts, w.mapMode == "map", only)
 	if err != nil {
 		return fmt.Errorf("forkbind: %w", err)
 	}
@@ -86,8 +114,8 @@ func runForkBind(_ context.Context, argv []string) error {
 	// resolve above validated every binding exactly as the FORK task would (a
 	// wrong-kind or mis-zipped source still fails loudly), and only the keys
 	// sidecar is written — there is no fork to run.
-	if *keysOnly {
-		return writeKeysFile(*keysFile, keys)
+	if w.keysOnly {
+		return writeKeysFile(w.keysFile, keys)
 	}
 
 	// Load the type manifest once, not once per fork.
@@ -103,11 +131,48 @@ func runForkBind(_ context.Context, argv []string) error {
 	// each stage resolving its own fork inline. The per-fork args are identical
 	// to the corresponding full-fork write, and -keysfile emits the same
 	// forkkeys sidecar the full write would, so the gather still gets its keys.
-	if *index >= 0 {
-		return writeForkIndex(forks, keys, *index, *oDir, *keysFile, params, tbl)
+	if w.index >= 0 {
+		return writeForkIndex(forks, keys, w.index, w.oDir, w.keysFile, params, tbl)
 	}
 
-	return writeAllForks(forks, keys, *dir, params, tbl)
+	return writeAllForks(forks, keys, w.dir, params, tbl)
+}
+
+// writeForkElement assembles one fork's args bundle from a pre-sliced split
+// element (native scatter #99): O(1) per instance, no whole-collection parse.
+// The bundle is byte-identical to the corresponding -index write (same
+// ResolveElement result, same WriteBundle) — the element the driver sliced is
+// the same value ResolveForks would have placed at that fork's split param.
+func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, elemFile, oDir string, prod *producer) error {
+	if oDir == "" {
+		return errForkIndexNoOut
+	}
+
+	element, err := readFile(elemFile)
+	if err != nil {
+		return fmt.Errorf("read element file: %w", err)
+	}
+
+	args, err := bind.ResolveElement(spec, pipeArgs, callOuts, element)
+	if err != nil {
+		return fmt.Errorf("forkbind element: %w", err)
+	}
+
+	man, err := prod.manifest()
+	if err != nil {
+		return err
+	}
+
+	payload, err := rawToMap(args)
+	if err != nil {
+		return err
+	}
+
+	if err := shim.WriteBundle(oDir, payload, man.Params(prod.callable, prod.role), man.Table()); err != nil {
+		return fmt.Errorf("write element bundle: %w", err)
+	}
+
+	return nil
 }
 
 // checkForkBindFlags diagnoses flag-combination misuse before any resolution

@@ -578,7 +578,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 		// when it cannot fold into the sole consumer's task (fan-out or an
 		// unsupported consumer shape — see mergeFoldable).
 		case kindNativeScatter:
-			genNativeScatterProcess(b, p.Name, c, cp.stage, g)
+			genNativeScatterProcess(b, p.Name, c, cp, g)
 
 			if !cp.foldMerge {
 				genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
@@ -1136,7 +1136,27 @@ func mapModeArg(c ir.Call) string {
 // The trailing [ -d outs__<key> ] keeps the old keyed path's hard per-fork
 // guarantee: an instance that exits 0 without its out bundle fails the task
 // instead of silently shortening an array-fork merge.
-func genNativeScatterProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
+func genNativeScatterProcess(b *strings.Builder, pipeline string, c ir.Call, cp callPlan, g genCtx) {
+	if scatterUsesElements(cp) {
+		genNativeScatterElementProcess(b, pipeline, c, cp.stage, g)
+
+		return
+	}
+
+	genNativeScatterIndexProcess(b, pipeline, c, cp.stage, g)
+}
+
+// scatterUsesElements reports whether a native scatter takes the O(1)
+// per-element path (#99): a value-only split from a self source. A file-bearing
+// element (bundle markers) or an upstream source keeps the -index path for now.
+func scatterUsesElements(cp callPlan) bool {
+	return cp.scatterValueOnly && cp.scatterCall == ""
+}
+
+// genNativeScatterIndexProcess emits the -index scatter process: each instance
+// resolves its own fork by re-parsing the whole collection (kept for a
+// file-bearing split source, where the element carries bundle file markers).
+func genNativeScatterIndexProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	// The scattered tuple carries the fork key/index plus the pipeargs bundle
 	// elements; upstream bundles, types, and the bindspec are value channels
 	// re-read per instance (the plan bars upstream refs where pipeargs may be a
@@ -1170,6 +1190,53 @@ func genNativeScatterProcess(b *strings.Builder, pipeline string, c ir.Call, s *
 		g.producerArgs(c.Callable, types.RoleIn),
 		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
 		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
+}
+
+// genNativeScatterElementProcess emits the O(1)-per-instance scatter process for
+// a VALUE-only split source (#99): the driver sliced the collection once, so a
+// fork with index > 0 assembles its args from its own base64 JSON element
+// (forkbind -elementfile) — no whole-collection re-parse. Index 0 still runs the
+// -index path (it computes the forkkeys sidecar for the gather, parsing the
+// collection once — one instance, not N), and the fi<0 sentinel validates an
+// empty source. The pipeargs bundle is a broadcast input (staged once per
+// instance for the broadcast bindings), not carried in the scatter tuple.
+func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
+	head := "tuple val(key), val(fi), val(element)\n    " + bundleInput("pipeargs")
+	block, arg := bindInputsHead(head, refCalls(c.Bindings))
+
+	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s -mapmode %s",
+		g.mre, arg, mapModeArg(c))
+	main := fmt.Sprintf("%s -args fargs -outs '%s'%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
+		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
+		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
+
+	fmt.Fprintf(b, `process %[1]s {
+%[2]s
+  input:
+%[3]s  output:
+    path "outs__${key}", type: 'dir', emit: outs, optional: true
+    path 'forkkeys.mro2nf.json', emit: keys, optional: true
+  script:
+    if( fi < 0 )
+      """
+      %[4]s -keysonly -keysfile forkkeys.mro2nf.json
+      """
+    else if( fi == 0 )
+      """
+      %[4]s -index 0 -o fargs -keysfile forkkeys.mro2nf.json
+      %[5]s
+      [ -d outs__${key} ]
+      """
+    else
+      """
+      printf %%s '${element}' | base64 -d > element.json
+      %[4]s -elementfile element.json -o fargs
+      %[5]s
+      [ -d outs__${key} ]
+      """
+}
+
+`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, forkbind, main)
 }
 
 // genMergeProcess emits a process that merges per-fork outputs into the
@@ -1879,7 +1946,18 @@ func genMappedWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee strin
 func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp callPlan) {
 	fused := fusedName(pipeline, c.Name)
 
-	if cp.scatterCall != "" {
+	switch {
+	case scatterUsesElements(cp):
+		// O(1) per-instance path (#99): the driver slices the collection once
+		// into per-fork elements; each instance assembles its args from its own
+		// element (no whole-collection re-parse). pipeargs is a separate broadcast
+		// input (`pa`), not carried in the element tuple, so the instance stages
+		// it once for the broadcast bindings.
+		fmt.Fprintf(b, "    scat_%s = pa.flatMap { data, leaves -> Mro2nf.forkElements(data, '%s', '%s') }\n",
+			c.Name, cp.scatterField, mapModeArg(c))
+		fmt.Fprintf(b, "    %s(%s)\n", fused, elementCallArgs(c, "scat_"+c.Name, bindName(pipeline, c.Name)))
+
+	case cp.scatterCall != "":
 		// Upstream-ref source: read the fork width from the producer's value
 		// channel (combine yields one deterministic item), while the scatter
 		// tuples carry the enclosing pipeargs bundle. The producer bundle is also
@@ -1892,13 +1970,15 @@ func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp c
 		// ch_<scatterCall> is never rewritten to *_souts/*_keys.
 		fmt.Fprintf(b, "    scat_%[1]s = pa.combine(ch_%[2]s).flatMap { pd, pl, ud, ul -> Mro2nf.forkScatterRef(ud, pd, pl, '%[3]s', '%[4]s') }\n",
 			c.Name, cp.scatterCall, cp.scatterField, mapModeArg(c))
-	} else {
+		fmt.Fprintf(b, "    %s(%s)\n", fused,
+			bindCallArgsPa(c.Bindings, "scat_"+c.Name, bindName(pipeline, c.Name)))
+
+	default:
 		fmt.Fprintf(b, "    scat_%s = pa.flatMap { data, leaves -> Mro2nf.forkScatter(data, leaves, '%s', '%s') }\n",
 			c.Name, cp.scatterField, mapModeArg(c))
+		fmt.Fprintf(b, "    %s(%s)\n", fused,
+			bindCallArgsPa(c.Bindings, "scat_"+c.Name, bindName(pipeline, c.Name)))
 	}
-
-	fmt.Fprintf(b, "    %s(%s)\n", fused,
-		bindCallArgsPa(c.Bindings, "scat_"+c.Name, bindName(pipeline, c.Name)))
 
 	// The gathered outs are sorted by bundle name driver-side so the consumer's
 	// input-file ORDER is deterministic across runs — collect() order is
@@ -2122,6 +2202,30 @@ func bindCallArgs(bindings []ir.Binding, specName string) string {
 // (spec.json); see assetsDir. The workflow defines `types` in its main block.
 func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
 	return foldCallArgs(genCtx{}, nil, bindings, pa, specName)
+}
+
+// elementCallArgs renders the invocation for the O(1) element scatter process
+// (#99): the element tuple channel first, then pipeargs as a SEPARATE broadcast
+// input (the element process takes pipeargs on its own, not inside the tuple),
+// then each broadcast call ref, then types and the bindspec — matching the
+// process's input block order.
+func elementCallArgs(c ir.Call, scatChan, specName string) string {
+	// Leading channels (the element tuple + the broadcast pipeargs), then one
+	// channel per broadcast call ref, then the two trailing broadcast inputs.
+	lead := []string{scatChan, "pa"}
+	trail := []string{"types", specFile(specName)}
+	refs := refCalls(c.Bindings)
+
+	args := make([]string, 0, len(lead)+len(refs)+len(trail))
+	args = append(args, lead...)
+
+	for _, id := range refs {
+		args = append(args, "ch_"+id)
+	}
+
+	args = append(args, trail...)
+
+	return strings.Join(args, ", ")
 }
 
 // genPublish emits the terminal publish as two processes that avoid a single-node

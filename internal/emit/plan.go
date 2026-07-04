@@ -65,6 +65,11 @@ type callPlan struct {
 	// scatterCall is the producing call whose value-channel bundle a
 	// kindNativeScatter reads its fork width from, or "" for a self source.
 	scatterCall string
+	// scatterValueOnly marks a kindNativeScatter whose split element carries no
+	// file leaves, so the driver slices the collection once and hands each fork
+	// its own element (O(1) per instance) instead of every instance re-parsing
+	// the whole collection via forkbind -index (the O(N^2) fix, #99).
+	scatterValueOnly bool
 	// foldMerge marks a kindNativeScatter call whose MERGE gather runs inline in
 	// its sole consumer's task (#76): no standalone MERGE process; the consumer
 	// stages the per-fork outs dirs + keys sidecar and reconstructs merged_<id>
@@ -228,7 +233,14 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 		// instance resolves its own fork via forkbind -index), so no FORK task.
 		if f.native {
 			if s, field, call, ok := nativeScatterable(c, prog, queuedPa); ok {
-				return callPlan{kind: kindNativeScatter, stage: s, scatterField: field, scatterCall: call}
+				// The O(1) element path pulls pipeargs out as a broadcast input, so
+				// it needs a VALUE-channel pipeargs; in a queue-pipeargs context
+				// (a disabled sub-pipeline callee) it would zip N forks down to one,
+				// so those keep the pipeargs-in-tuple path.
+				return callPlan{
+					kind: kindNativeScatter, stage: s, scatterField: field, scatterCall: call,
+					scatterValueOnly: !queuedPa && splitValueOnly(c, s, prog),
+				}
 			}
 		}
 
@@ -338,6 +350,27 @@ func nativeScatterable(c ir.Call, prog *ir.Program, queuedPa bool) (*ir.Stage, s
 	}
 
 	return s, field, call, true
+}
+
+// splitValueOnly reports whether a native scatter's split element carries no
+// file leaves — the callee's parameter bound by the split binding is a
+// file-free type. Only then can the driver slice the collection into plain JSON
+// elements (no bundle file markers to rewrite per fork), enabling the O(1)
+// forkbind -elementfile path; a file-bearing split keeps the -index path.
+func splitValueOnly(c ir.Call, s *ir.Stage, prog *ir.Program) bool {
+	for _, b := range c.Bindings {
+		if !b.Split {
+			continue
+		}
+
+		for i := range s.In {
+			if s.In[i].Name == b.Param {
+				return !hasFileLeaf(s.In[i], prog.Structs)
+			}
+		}
+	}
+
+	return false
 }
 
 // scatterSource classifies a split binding's ref as a driver-readable scatter
