@@ -14,6 +14,9 @@ type featureSet struct {
 	fuseChains   bool
 	foldDisables bool
 	native       bool
+	// nativeRunner swaps the Python stage-execution hop from the Martian
+	// adapter (mre + martian_shell.py) to the embedded direct-call runner (#79).
+	nativeRunner bool
 }
 
 // callKind is how a single call is emitted — decided once in buildPlan so the
