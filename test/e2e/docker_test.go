@@ -311,6 +311,37 @@ func TestGeneratedAWSBatchImage(t *testing.T) {
 		filepath.Join(root, "testdata", "diamond_min", "expected", "outs.json"))
 }
 
+// TestGeneratedAWSBatchImageNative validates -native + -native-runner on the
+// awsbatch container target (#99): the emitted image bakes the Python runner at
+// /opt/mro2nf/runner, the generated scripts exec that baked path (no mounted
+// project dir), and the baked entry_resolved (a file-typed entry) stages into
+// the isolated task — the same self-contained-image mechanism the default
+// container path uses. Executor overridden to local+docker (no live account).
+func TestGeneratedAWSBatchImageNative(t *testing.T) {
+	requireDocker(t)
+
+	const genImage = "mro2nf-gen-native:test"
+
+	proj := transpile(t, "entry_file",
+		"-native", "-native-runner", "-target", "awsbatch", "-container", genImage)
+
+	build := exec.Command("docker", "build", "-q", "-t", genImage, proj)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("docker build of the generated native Dockerfile: %v\n%s", err, out)
+	}
+
+	cfg := "process.executor = 'local'\ndocker.enabled = true\n" + isoConfig()
+	writeFileT(t, filepath.Join(proj, "local.config"), cfg)
+
+	if err := runNextflow(t, proj,
+		"-c", "local.config", "--aws_outdir", filepath.Join(proj, "results")); err != nil {
+		t.Fatalf("nextflow (generated native image): %v", err)
+	}
+
+	goldenJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"),
+		filepath.Join(root, "testdata", "entry_file", "expected", "ep_outs.json"))
+}
+
 // TestGeneratedHealthOmicsPackage validates the -target healthomics packaging
 // artifacts without a live account: package.sh must build a zip containing the
 // workflow (not the docker build context), and parameter-template.json must

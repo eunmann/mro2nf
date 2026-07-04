@@ -17,23 +17,21 @@ const (
 	ctrAdapters = ctrRoot + "/adapters"
 	ctrMrjob    = ctrRoot + "/mrjob"
 	ctrStages   = ctrRoot + "/stages"
-	buildCtxDir = "runtime" // build-context subdir under the output project
+	ctrRunner   = ctrRoot + "/runner" // -native-runner Python runner, baked for container backends
+	buildCtxDir = "runtime"           // build-context subdir under the output project
 )
 
 // containerBuild assembles a self-contained Docker build context under the
 // output project and returns the in-container paths the generated scripts must
 // bake (so mre, the adapters, and the stage code resolve inside an isolated
 // task). The host artifacts are copied into <out>/runtime/ and a Dockerfile is
-// written so `docker build -t <image> <out>` produces the runtime image.
-func containerBuild(opts Options, target Target) (genCtx, error) {
-	g := genCtx{mre: ctrMre, shell: opts.Shell, mrjob: opts.Mrjob, code: map[string]string{}}
-
-	// Fail loudly here if a baked runtime source is missing, rather than letting
-	// it surface as a cryptic `docker build` COPY error or a silently broken image.
-	// mre is always required; -shell and each stage's code are verified when
-	// present (an exec/comp-only pipeline may have no -shell).
+// checkContainerSources fails loudly if a baked runtime source is missing,
+// rather than letting it surface as a cryptic `docker build` COPY error or a
+// silently broken image. mre is always required; -shell and each stage's code
+// are verified when present (an exec/comp-only pipeline may have no -shell).
+func checkContainerSources(opts Options) error {
 	if opts.Mre == "" {
-		return g, &apperror.UnsupportedError{Construct: "container target", Detail: "-mre is required (it is baked into the image)"}
+		return &apperror.UnsupportedError{Construct: "container target", Detail: "-mre is required (it is baked into the image)"}
 	}
 
 	toCheck := map[string]string{"-mre": opts.Mre}
@@ -49,8 +47,19 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 	// (map iteration order is randomized), keeping the error reproducible.
 	for _, what := range sortedKeys(toCheck) {
 		if _, err := os.Stat(toCheck[what]); err != nil {
-			return g, fmt.Errorf("container target: %s source %q: %w", what, toCheck[what], err)
+			return fmt.Errorf("container target: %s source %q: %w", what, toCheck[what], err)
 		}
+	}
+
+	return nil
+}
+
+// written so `docker build -t <image> <out>` produces the runtime image.
+func containerBuild(opts Options, target Target) (genCtx, error) {
+	g := genCtx{mre: ctrMre, shell: opts.Shell, mrjob: opts.Mrjob, code: map[string]string{}}
+
+	if err := checkContainerSources(opts); err != nil {
+		return g, err
 	}
 
 	rt := filepath.Join(opts.OutDir, buildCtxDir)
@@ -86,8 +95,20 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 		g.code[name] = ctrStages + "/" + name
 	}
 
+	// -native-runner reads run_stage.py from the project dir at task runtime,
+	// which an isolated container worker (AWS Batch / HealthOmics) cannot see —
+	// so bake the embedded runner into the image and point the generated scripts
+	// at the fixed in-image path (#99).
+	if opts.NativeRunner {
+		if err := copyEmbeddedDir(runnerAssets, runnerDir, filepath.Join(rt, "runner"), "runner"); err != nil {
+			return g, err
+		}
+
+		g.runnerBase = ctrRunner
+	}
+
 	return g, writeFile(filepath.Join(opts.OutDir, "Dockerfile"),
-		[]byte(dockerfile(target, opts.Shell != "", len(opts.StageCode) > 0, opts.Mrjob != "")))
+		[]byte(dockerfile(target, opts.Shell != "", len(opts.StageCode) > 0, opts.Mrjob != "", opts.NativeRunner)))
 }
 
 // dockerfile renders the runtime image: the mre shim plus the Martian adapters,
@@ -95,7 +116,7 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 // with bash + ps and no ENTRYPOINT (both AWS Batch and HealthOmics inject a bash
 // launcher). x86_64 only. Each COPY is emitted only when its source was staged,
 // so a missing optional piece never breaks `docker build`.
-func dockerfile(target Target, hasAdapters, hasStages, hasMrjob bool) string {
+func dockerfile(target Target, hasAdapters, hasStages, hasMrjob, hasRunner bool) string {
 	awsCLI := ""
 	if target == TargetAWSBatch {
 		// Classic AWS Batch staging copies inputs/outputs with the aws CLI.
@@ -111,6 +132,9 @@ func dockerfile(target Target, hasAdapters, hasStages, hasMrjob bool) string {
 	}
 	if hasMrjob {
 		copies += fmt.Sprintf("COPY %s/mrjob %s\nRUN chmod +x %s\n", buildCtxDir, ctrMrjob, ctrMrjob)
+	}
+	if hasRunner {
+		copies += fmt.Sprintf("COPY %s/runner %s\n", buildCtxDir, ctrRunner)
 	}
 
 	return fmt.Sprintf(`# Runtime image for the transpiled pipeline. Build (x86_64 only):

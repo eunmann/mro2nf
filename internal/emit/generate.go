@@ -26,7 +26,12 @@ type genCtx struct {
 	mre     string
 	shell   string
 	mrjob   string
-	monitor bool
+	// runnerBase is the directory holding the -native-runner Python runner
+	// (run_stage.py + martian.py): "${projectDir}/_assets/runner" on a shared
+	// filesystem, or the baked ctrRunner path for a container backend where the
+	// project dir is not mounted into the isolated task.
+	runnerBase string
+	monitor    bool
 	// features holds the opt-in emission toggles (mirrored from Options).
 	features featureSet
 	code     map[string]string // stage name -> stage code path
@@ -70,9 +75,11 @@ func (g genCtx) stageHead(phase, code string, lang ir.Lang) string {
 	if g.features.nativeRunner && lang == ir.LangPy {
 		// Groovy interpolates ${projectDir} in the script GString before bash sees
 		// the line, so single quotes keep the resulting path literal to bash (a $
-		// or backtick in the project path must not re-expand).
-		return fmt.Sprintf(`'python3' '${projectDir}/_assets/runner/run_stage.py' %s -stagecode '%s' -call '%s' -mro '%s'`,
-			phase, code, g.entry, g.mroFile)
+		// or backtick in the project path must not re-expand). runnerBase is the
+		// project dir on a shared FS, or the baked ctrRunner in a container image
+		// (where the project dir is not mounted into an isolated task).
+		return fmt.Sprintf(`'python3' '%s/run_stage.py' %s -stagecode '%s' -call '%s' -mro '%s'`,
+			g.runnerBase, phase, code, g.entry, g.mroFile)
 	}
 
 	cmd := fmt.Sprintf("'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
