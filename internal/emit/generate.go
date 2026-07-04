@@ -272,11 +272,16 @@ func keyedFuseable(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
 }
 
 // genKeyedPipeIncludes imports the fork-key-threaded variant of each callee so a
-// keyed pipeline can run its body per fork. A fused leaf call embeds its stage's
-// main directly, so it needs no wf_<stage>_map import.
+// keyed pipeline can run its body per fork. A fused leaf call or a value-only
+// nested-map scatter embeds its stage's main directly (in its _K / _KS process),
+// so it needs no wf_<stage>_map import.
 func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
 	for _, c := range p.Calls {
 		if _, ok := keyedFuseable(c, prog); ok {
+			continue
+		}
+
+		if _, _, ok := keyedScatterable(c, prog); ok {
 			continue
 		}
 
@@ -426,8 +431,19 @@ func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
 	}
 
 	s, ok := prog.Stages[c.Callable]
-	if !ok || s.Split || !splitValueOnly(c, s, prog) {
+	if !ok || s.Split {
 		return nil, "", false
+	}
+
+	// Every callee input must be value-only, not just the split param: the _KS
+	// forkbind assembles fargs without the type manifest, so a file-typed
+	// BROADCAST binding would not re-stage its leaf. This is stricter than the
+	// non-keyed scatter (which gates only the split), erring safe for the keyed
+	// path until a file-broadcast fixture exercises it.
+	for i := range s.In {
+		if hasFileLeaf(s.In[i], prog.Structs) {
+			return nil, "", false
+		}
 	}
 
 	field, splits := "", 0
