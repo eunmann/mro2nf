@@ -80,10 +80,19 @@ func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic
 			if cp.kind == kindMapped {
 				ds = append(ds, Diagnostic{Severity: SevInfo, Message: mappedRemainderMsg(prog, name, c, cp)})
 			} else if cp.kind == kindNativeScatter && pl.keyed[name] {
+				// Under an outer map call a value-only inner map collapses its
+				// per-outer-fork FORK_K resolve into a driver element scatter
+				// (#99), keeping only the data-proportional MERGE_K gather; a
+				// file-bearing/multi-split/disabled inner map keeps both.
+				kept := "the FORK_K and MERGE_K tasks"
+				if _, _, ok := keyedScatterable(c, prog); ok {
+					kept = "the data-proportional MERGE_K gather (its inner fork resolve is a driver element scatter)"
+				}
+
 				ds = append(ds, Diagnostic{
 					Severity: SevInfo,
-					Message: fmt.Sprintf("-native: map call %s.%s scatters only when %s runs plain; under an outer map call its keyed layer keeps the FORK_K/MERGE_K tasks",
-						name, c.Name, name),
+					Message: fmt.Sprintf("-native: map call %s.%s scatters only when %s runs plain; under an outer map call its keyed layer keeps %s",
+						name, c.Name, name, kept),
 				})
 			}
 		}

@@ -121,6 +121,23 @@ class Mro2nf {
         }
     }
 
+    // forkElementsKeyed is the O(1)-per-instance scatter for a NESTED map inside
+    // a keyed (map-called) pipeline (#99): for one outer fork it slices that
+    // fork's inner collection (in its pipeargs bundle) ONCE on the driver into
+    // per-inner-fork elements, so no per-outer-fork FORK_K task resolves the
+    // inner collection. Emits [outerKey, "outerKey~innerKey", index, elementB64,
+    // bundleDir] per inner fork: the composite key threads fork identity for the
+    // regroup (Mro2nf.outerKey), and bundleDir is the outer fork's pipeargs,
+    // staged into the fused inner process for its broadcast bindings and the
+    // index-0 keys resolve. An empty/null inner collection yields the single
+    // "outerKey~fork_none" sentinel (index -1), exactly like forkElements.
+    static List forkElementsKeyed(Object outerKey, Path bundleDir, String field, String mapMode) {
+        elementTriples(parseSidecar(bundleDir), field, mapMode).collect { Object t ->
+            List tuple = (List) t
+            [outerKey, outerKey.toString() + '~' + (String) tuple[0], tuple[1], tuple[2], bundleDir]
+        }
+    }
+
     // elementTriples slices `field`'s collection into [key, index, elementB64]
     // per fork — the shared core of forkElements/forkElementsPa. The collection
     // is parsed ONCE here on the driver and each fork gets ONLY its own

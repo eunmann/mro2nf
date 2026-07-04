@@ -1181,3 +1181,36 @@ func TestEmitModules(t *testing.T) {
 		}
 	}
 }
+
+// TestEmitNestedScatter pins the #99 nested-map collapse: a value-only leaf map
+// inside a keyed (map-called) pipeline replaces its per-outer-fork FORK_K with a
+// driver element scatter (forkElementsKeyed → a fused per-inner-fork _KS
+// process), so no FORKBIND_K resolve runs per outer fork; the MERGE_K gather
+// stays (data-proportional). map_pipe_disabled_nested's inner map is disabled,
+// so it keeps the FORK_K path.
+func TestEmitNestedScatter(t *testing.T) {
+	inner := readFile(t, filepath.Join(
+		emitFixture(t, "map_pipe_nested", map[string]string{"DBL": "/x/dbl"}),
+		"modules", "pipe_INNER.nf"))
+
+	for _, want := range []string{
+		"Mro2nf.forkElementsKeyed(ok, pab, 'xs', 'array')",
+		"process FORK_5_INNER__DBL_KS {",
+		"-elementfile element.json -o fargs",
+	} {
+		if !strings.Contains(inner, want) {
+			t.Errorf("nested scatter missing %q in pipe_INNER.nf", want)
+		}
+	}
+	if strings.Contains(inner, "process FORK_5_INNER__DBL_K {") {
+		t.Error("a value-only nested map must not emit a per-outer-fork FORK_K resolve")
+	}
+
+	// A disabled inner map keeps the FORK_K path (per-fork run/skip gate).
+	dis := readFile(t, filepath.Join(
+		emitFixture(t, "map_pipe_disabled_nested", map[string]string{"DBL": "/x/dbl"}),
+		"modules", "pipe_INNER.nf"))
+	if !strings.Contains(dis, "_K {") || strings.Contains(dis, "_KS {") {
+		t.Error("a disabled nested map must keep the keyed FORK_K path, not the scatter")
+	}
+}
