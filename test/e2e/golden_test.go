@@ -393,7 +393,8 @@ func assertFileContent(t *testing.T, path, want string) {
 // time so no BUILD_ENTRY_ARGS task is emitted, and the run output stays
 // byte-identical to the golden. Exercises a simple diamond-shaped disable
 // fixture, an N-stage chain, and the complex cellranger_shaped pipeline (all
-// scalar-entry). A file-typed entry is gated out of this increment.
+// scalar-entry). File- and directory-typed entries are covered by
+// TestNativeFileEntry.
 func TestNativeMode(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
@@ -434,26 +435,46 @@ func TestNativeMode(t *testing.T) {
 	}
 }
 
-// TestNativeRejectsFileEntry guards the M1 gate: a file-typed entry input is not
-// yet supported by -native and must be a loud transpile error, not silent wrong
-// output.
-func TestNativeRejectsFileEntry(t *testing.T) {
-	buildBinaries(t)
+// TestNativeFileEntry verifies -native supports file- AND directory-typed entry
+// inputs (#99): the entry args (including their file/dir leaves) are baked at
+// transpile time and staged into the workflow, so each fixture's -native run
+// reproduces its mrp golden (the baked default invocation).
+func TestNativeFileEntry(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
 
-	dir := filepath.Join(root, "testdata", "entry_file")
-	cmd := exec.Command(filepath.Join(root, "mro2nf"),
-		"-native", "-o", t.TempDir(),
-		"-mre", filepath.Join(root, "mre"),
-		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
-		"-mropath", dir, filepath.Join(dir, "pipeline.mro"))
-	cmd.Dir = root
-
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("-native on a file-entry pipeline must fail; got success:\n%s", out)
+	cases := []struct{ fixture, golden string }{
+		{"entry_file", "expected/ep_outs.json"},
+		{"entry_filearr", "expected/epa_outs.json"},
+		{"entry_struct_file", "expected/eps_outs.json"},
+		{"entry_mapfile", "expected/epm_outs.json"},
+		{"entry_dir", "expected/epd_outs.json"},
 	}
-	if !strings.Contains(string(out), "file-typed entry") {
-		t.Errorf("want a file-typed-entry error, got:\n%s", out)
+
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, tc.fixture, "-native")
+			if err := runNextflow(t, proj); err != nil {
+				t.Fatal(err)
+			}
+
+			goldenJSON(t,
+				filepath.Join(proj, "results", "pipeline_outs.json"),
+				filepath.Join(root, "testdata", tc.fixture, tc.golden))
+		})
+	}
+}
+
+// TestNativeRejectsOverride guards the #103 override guard: -native bakes entry
+// args at transpile time, so a launch-time param naming a baked input must be a
+// loud error, not a silently-ignored override (which would diverge from mrp).
+func TestNativeRejectsOverride(t *testing.T) {
+	requireTools(t, "nextflow", "java")
+
+	proj := transpile(t, "entry_file", "-native")
+	if err := runNextflow(t, proj, "--reads", "/tmp/whatever.txt"); err == nil {
+		t.Error("-native must reject a launch-time override of a baked entry arg")
 	}
 }
 

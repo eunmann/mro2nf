@@ -167,12 +167,11 @@ func Emit(prog *ir.Program, opts Options) error {
 		plan:     buildPlan(prog, features),
 	}
 
-	// Native M1 bakes the entry args at transpile time (no BUILD_ENTRY_ARGS task).
-	// File-typed entry inputs additionally need Nextflow head-node staging, which
-	// the baked path does not yet reproduce — gate them out of this increment.
-	if opts.Native && hasStagedFileEntry(prog) {
-		return errNativeFileEntry
-	}
+	// Native bakes the entry args at transpile time (no BUILD_ENTRY_ARGS task).
+	// File AND directory (`path`) entry inputs are supported (#99): writeEntryArgs
+	// stages their leaves into entry_args/f/, bakeEntryArgs carries them into
+	// entry_resolved/, and genNativeEntry stages that with `file(..., type:
+	// 'any')` so a directory leaf is matched and localized like a file leaf.
 
 	// Native M1 is validated for the local backend only; the entry bake uses the
 	// host mre, and the native path is untested against container staging — gate
@@ -229,7 +228,10 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		}
 	}
 
-	if hasStagedFileEntry(prog) {
+	// The empty sentinel is only consumed by the default BUILD_ENTRY_ARGS task
+	// (genEntry); native bakes the entry args and emits no such task, so a
+	// native project needs no sentinel.
+	if !opts.Native && hasStagedFileEntry(prog) {
 		// A staged-but-unset file input is fed this empty sentinel so BUILD_ENTRY_ARGS
 		// still has its path input (and keeps the baked default); see genEntry.
 		if err := writeFile(filepath.Join(opts.OutDir, assetsDir, entrySentinel), []byte{}); err != nil {
@@ -276,10 +278,6 @@ func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
 
 	return nil
 }
-
-// errNativeFileEntry reports that -native was asked for a pipeline with a
-// file-typed entry input, which native M1 does not yet support.
-var errNativeFileEntry = errors.New("native mode does not yet support file-typed entry inputs")
 
 // errNativeContainer reports that -native was asked for a container backend,
 // which native M1 does not yet cover (validated on the local backend only).
