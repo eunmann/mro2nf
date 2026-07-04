@@ -156,40 +156,29 @@ func Emit(prog *ir.Program, opts Options) error {
 		native: opts.Native, nativeRunner: opts.NativeRunner,
 	}
 	g := genCtx{
-		entry:    prog.Entry.Callable,
-		mroFile:  opts.MROFile,
-		mre:      opts.Mre,
-		shell:    opts.Shell,
-		mrjob:    opts.Mrjob,
-		monitor:  opts.Monitor,
-		features: features,
-		code:     opts.StageCode,
-		plan:     buildPlan(prog, features),
+		entry:   prog.Entry.Callable,
+		mroFile: opts.MROFile,
+		mre:     opts.Mre,
+		shell:   opts.Shell,
+		mrjob:   opts.Mrjob,
+		// On a shared filesystem the runner is read from the project dir; a
+		// container backend rebinds this to the baked ctrRunner below.
+		runnerBase: "${projectDir}/" + assetsDir + "/" + runnerDir,
+		monitor:    opts.Monitor,
+		features:   features,
+		code:       opts.StageCode,
+		plan:       buildPlan(prog, features),
 	}
 
-	// Native bakes the entry args at transpile time (no BUILD_ENTRY_ARGS task).
-	// File AND directory (`path`) entry inputs are supported (#99): writeEntryArgs
-	// stages their leaves into entry_args/f/, bakeEntryArgs carries them into
-	// entry_resolved/, and genNativeEntry stages that with `file(..., type:
-	// 'any')` so a directory leaf is matched and localized like a file leaf.
-
-	// Native M1 is validated for the local backend only; the entry bake uses the
-	// host mre, and the native path is untested against container staging — gate
-	// the combination explicitly rather than relying on untested behavior.
-	if opts.Native && target.isContainer() {
-		return errNativeContainer
-	}
-
-	// The runner is read from ${projectDir}/_assets at task runtime, which only
-	// a shared local filesystem guarantees; container backends would need it
-	// staged/packaged, which this increment does not cover.
-	if opts.NativeRunner && target.isContainer() {
-		return errNativeRunnerContainer
-	}
+	// Native/-native-runner now support container backends (#99): the entry args
+	// are baked and staged like any project asset, and the runner is baked into
+	// the image (containerBuild) at ctrRunner so an isolated task needs no
+	// mounted project dir — the same self-contained-image pattern the default
+	// container path already uses.
 
 	// Container targets bake in-container paths and ship a self-contained Docker
-	// build context (mre + adapters + stage code), so the image — not the host —
-	// supplies the runtime.
+	// build context (mre + adapters + stage code + runner), so the image — not
+	// the host — supplies the runtime.
 	if target.isContainer() {
 		cb, err := containerBuild(opts, target)
 		if err != nil {
@@ -197,6 +186,9 @@ func Emit(prog *ir.Program, opts Options) error {
 		}
 
 		g.mre, g.shell, g.mrjob, g.code = cb.mre, cb.shell, cb.mrjob, cb.code
+		if cb.runnerBase != "" {
+			g.runnerBase = cb.runnerBase
+		}
 	}
 
 	return writeProject(prog, opts, target, g, specDir, modDir)
@@ -218,7 +210,7 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		return err
 	}
 
-	if err := writeProjectAssets(prog, opts, specDir); err != nil {
+	if err := writeProjectAssets(prog, opts, target, specDir); err != nil {
 		return err
 	}
 
@@ -253,12 +245,15 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 // writeProjectAssets writes the shared static assets: the Groovy helper lib,
 // the Python runner (under -native-runner), the per-call bindspecs, the
 // disable artifacts, and the type manifest.
-func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
+func writeProjectAssets(prog *ir.Program, opts Options, target Target, specDir string) error {
 	if err := writeLib(opts.OutDir); err != nil {
 		return err
 	}
 
-	if opts.NativeRunner {
+	// The runner ships in the project's _assets/ for a shared-filesystem run;
+	// a container backend bakes it into the image instead (containerBuild), so
+	// the project copy would be dead weight (and dead zip weight for HealthOmics).
+	if opts.NativeRunner && !target.isContainer() {
 		if err := writeRunner(opts.OutDir); err != nil {
 			return err
 		}
@@ -278,15 +273,6 @@ func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
 
 	return nil
 }
-
-// errNativeContainer reports that -native was asked for a container backend,
-// which native M1 does not yet cover (validated on the local backend only).
-var errNativeContainer = errors.New("native mode is not yet supported for container backends (awsbatch/healthomics)")
-
-// errNativeRunnerContainer reports that -native-runner was asked for a
-// container backend: the runner is read from the project dir at task runtime,
-// which only a shared local filesystem provides.
-var errNativeRunnerContainer = errors.New("-native-runner is not yet supported for container backends (awsbatch/healthomics)")
 
 // bakeEntryArgs resolves the entry args once at transpile time (no launch-time
 // override) by running the same `mre entryargs` the BUILD_ENTRY_ARGS task would,

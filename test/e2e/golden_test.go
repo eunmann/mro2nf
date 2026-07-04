@@ -478,25 +478,42 @@ func TestNativeRejectsOverride(t *testing.T) {
 	}
 }
 
-// TestNativeRejectsContainer guards the M1 boundary: -native is validated for
-// the local backend only, so a container target must be a loud error.
-func TestNativeRejectsContainer(t *testing.T) {
+// TestNativeContainerEmits verifies -native + -native-runner transpile cleanly
+// for a container target (#99): the project builds with the runner baked into
+// the image at ctrRunner and the generated scripts referencing that in-image
+// path (no mounted project dir). TestGeneratedAWSBatchImageNative runs the
+// built image end to end; here we assert the transpile succeeds and wires the
+// baked paths.
+func TestNativeContainerEmits(t *testing.T) {
 	buildBinaries(t)
 
+	proj := t.TempDir()
 	dir := filepath.Join(root, "testdata", "diamond_min")
 	cmd := exec.Command(filepath.Join(root, "mro2nf"),
-		"-native", "-target", "awsbatch", "-container", "example/img:1",
-		"-o", t.TempDir(), "-mre", filepath.Join(root, "mre"),
+		"-native", "-native-runner", "-target", "awsbatch", "-container", "example/img:1",
+		"-o", proj, "-mre", filepath.Join(root, "mre"),
 		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
 		"-mropath", dir, filepath.Join(dir, "pipeline.mro"))
 	cmd.Dir = root
 
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("-native with a container target must fail; got success:\n%s", out)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("-native container transpile must succeed; got:\n%s", out)
 	}
-	if !strings.Contains(string(out), "container backends") {
-		t.Errorf("want a container-backend error, got:\n%s", out)
+
+	dockerfile, err := os.ReadFile(filepath.Join(proj, "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(dockerfile), "/opt/mro2nf/runner") {
+		t.Error("container Dockerfile must bake the -native-runner runner")
+	}
+
+	main, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_D.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(main), "/opt/mro2nf/runner/run_stage.py") {
+		t.Error("container native-runner scripts must exec the baked runner path")
 	}
 }
 

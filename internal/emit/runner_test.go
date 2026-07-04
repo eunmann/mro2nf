@@ -16,8 +16,9 @@ import (
 func TestStageCmdNativeRunner(t *testing.T) {
 	g := genCtx{
 		entry: "P", mroFile: "pipeline.mro", mre: "/x/mre", shell: "/x/shell.py",
-		monitor:  true,
-		features: featureSet{nativeRunner: true},
+		runnerBase: "${projectDir}/_assets/runner",
+		monitor:    true,
+		features:   featureSet{nativeRunner: true},
 	}
 
 	py := g.stageCmd("main", "/code/stage", ir.LangPy, "4")
@@ -25,6 +26,14 @@ func TestStageCmdNativeRunner(t *testing.T) {
 
 	if py != want {
 		t.Errorf("native-runner py stageCmd:\n got %q\nwant %q", py, want)
+	}
+
+	// A container backend rebinds runnerBase to the baked in-image path.
+	gc := g
+	gc.runnerBase = ctrRunner
+
+	if got := gc.stageCmd("main", "/code/stage", ir.LangPy, ""); !strings.Contains(got, "'"+ctrRunner+"/run_stage.py'") {
+		t.Errorf("container native-runner must exec the baked runner path: %q", got)
 	}
 
 	if comp := g.stageCmd("main", "/code/bin", ir.LangComp, ""); !strings.Contains(comp, "'/x/mre' main -shell '/x/shell.py'") {
