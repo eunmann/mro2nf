@@ -1165,10 +1165,13 @@ func genNativeScatterProcess(b *strings.Builder, pipeline string, c ir.Call, cp 
 }
 
 // scatterUsesElements reports whether a native scatter takes the O(1)
-// per-element path (#99): a value-only split from a self source. A file-bearing
-// element (bundle markers) or an upstream source keeps the -index path for now.
+// per-element path (#99): a value-only split, whether the collection lives in
+// pipeargs (self source) or in the producer's value-channel bundle (upstream
+// source) — the driver slices whichever bundle holds it. A file-bearing
+// element (bundle markers) keeps the -index path — its element cannot be
+// represented as a plain JSON slice.
 func scatterUsesElements(cp callPlan) bool {
-	return cp.scatterValueOnly && cp.scatterCall == ""
+	return cp.scatterValueOnly
 }
 
 // genNativeScatterIndexProcess emits the -index scatter process: each instance
@@ -1972,9 +1975,20 @@ func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp c
 		// into per-fork elements; each instance assembles its args from its own
 		// element (no whole-collection re-parse). pipeargs is a separate broadcast
 		// input (`pa`), not carried in the element tuple, so the instance stages
-		// it once for the broadcast bindings.
-		fmt.Fprintf(b, "    scat_%s = pa.flatMap { data, leaves -> Mro2nf.forkElements(data, '%s', '%s') }\n",
-			c.Name, cp.scatterField, mapModeArg(c))
+		// it once for the broadcast bindings. An upstream source slices the
+		// producer's value-channel bundle instead of pipeargs — safe to read
+		// directly for the same reasons forkScatterRef reads it (value channel,
+		// never fused away, never rewritten to *_souts); the producer bundle is
+		// ALSO staged into each instance as the in_<id> broadcast the -index-0
+		// keys resolve and any broadcast bindings read.
+		if cp.scatterCall != "" {
+			fmt.Fprintf(b, "    scat_%[1]s = ch_%[2]s.flatMap { data, leaves -> Mro2nf.forkElements(data, '%[3]s', '%[4]s') }\n",
+				c.Name, cp.scatterCall, cp.scatterField, mapModeArg(c))
+		} else {
+			fmt.Fprintf(b, "    scat_%s = pa.flatMap { data, leaves -> Mro2nf.forkElements(data, '%s', '%s') }\n",
+				c.Name, cp.scatterField, mapModeArg(c))
+		}
+
 		fmt.Fprintf(b, "    %s(%s)\n", fused, elementCallArgs(c, "scat_"+c.Name, bindName(pipeline, c.Name)))
 
 	case cp.scatterCall != "":
