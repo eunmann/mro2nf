@@ -65,11 +65,11 @@ type callPlan struct {
 	// scatterCall is the producing call whose value-channel bundle a
 	// kindNativeScatter reads its fork width from, or "" for a self source.
 	scatterCall string
-	// scatterValueOnly marks a kindNativeScatter whose split element carries no
-	// file leaves, so the driver slices the collection once and hands each fork
-	// its own element (O(1) per instance) instead of every instance re-parsing
-	// the whole collection via forkbind -index (the O(N^2) fix, #99).
-	scatterValueOnly bool
+	// scatterQueuedPa marks a kindNativeScatter in a queue-pipeargs pipeline (a
+	// disabled sub-pipeline callee): pipeargs cannot broadcast into N element
+	// instances there, so each element tuple carries the pipeargs bundle
+	// (forkElementsPa) instead of the process taking pa as a broadcast input.
+	scatterQueuedPa bool
 	// emptyNull marks a map call whose split source is launch-invocation-known
 	// (entrySplit): its ZERO-fork merge emits null instead of the typed empty,
 	// matching mrp's static resolver pruning a statically-empty fork (#99).
@@ -118,11 +118,21 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 			pp.retFwd = prod
 		}
 
-		// Second pass (#76 merge fold): with every call's kind fixed, decide which
-		// scatters fold their MERGE into the sole consumer. Reading the finished
-		// kinds keeps this a plan decision the emitters can't disagree with (#77).
+		// Second pass (#76/#99 merge fold): with every call's kind fixed, decide
+		// which map-call gathers fold their MERGE into the sole consumer. Reading
+		// the finished kinds keeps this a plan decision the emitters can't
+		// disagree with (#77). Under -native the fold covers kindMapped LEAF
+		// targets too (the keyed callee's outs__<key> bundles satisfy the same
+		// fold contract FORK.out.keys pairs with); a DISABLED mapped call keeps
+		// its MERGE — the skip branch needs the merged bundle as the mix point
+		// for the null output.
 		for _, c := range p.Calls {
-			if cp := pp.calls[c.Name]; cp.kind == kindNativeScatter && mergeFoldable(c.Name, p, pp) {
+			cp := pp.calls[c.Name]
+
+			foldable := cp.kind == kindNativeScatter ||
+				(f.native && cp.kind == kindMapped && c.Disabled == nil && leafStage(prog, c.Callable))
+
+			if foldable && mergeFoldable(c.Name, p, pp) {
 				cp.foldMerge = true
 				pp.calls[c.Name] = cp
 			}
@@ -235,18 +245,24 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	if c.Mapped {
 		emptyNull := entrySplit(prog, p, c)
 
-		// #76: under -native an eligible map call scatters in-workflow (each stage
-		// instance resolves its own fork via forkbind -index), so no FORK task.
+		// #76/#99: under -native an eligible VALUE-ONLY map call scatters
+		// in-workflow on the O(1) element path — the driver slices the fork
+		// collection once and each fused instance assembles its args from its
+		// own element; zero orchestration tasks. A file-bearing element (bundle
+		// markers a JSON slice can't carry), multi-split, projection, or
+		// disabled leaf call takes kindMapped instead: ONE FORK task resolves
+		// every fork (O(total)), the keyed callee runs stage main per fork with
+		// no per-instance bind work, and the MERGE folds into the sole consumer
+		// where eligible — so no path re-parses the collection per instance.
 		if f.native {
-			if s, field, call, ok := nativeScatterable(c, prog, queuedPa); ok {
-				// The O(1) element path pulls pipeargs out as a broadcast input, so
-				// it needs a VALUE-channel pipeargs; in a queue-pipeargs context
-				// (a disabled sub-pipeline callee) it would zip N forks down to one,
-				// so those keep the pipeargs-in-tuple path.
+			if s, field, call, ok := nativeScatterable(c, prog, queuedPa); ok && splitValueOnly(c, s, prog) {
 				return callPlan{
 					kind: kindNativeScatter, stage: s, scatterField: field, scatterCall: call,
-					scatterValueOnly: !queuedPa && splitValueOnly(c, s, prog),
-					emptyNull:        emptyNull,
+					// In a queue-pipeargs context (a disabled sub-pipeline callee)
+					// pipeargs cannot broadcast to N instances, so the element
+					// tuple carries it instead (forkElementsPa).
+					scatterQueuedPa: queuedPa,
+					emptyNull:       emptyNull,
 				}
 			}
 		}
@@ -520,6 +536,15 @@ func mergeFoldable(name string, p *ir.Pipeline, pp pipePlan) bool {
 	}
 
 	return false
+}
+
+// leafStage reports whether a callable is a non-split stage — the map-call
+// targets whose keyed variant is a single main hop, so their gather satisfies
+// the merge-fold contract.
+func leafStage(prog *ir.Program, callable string) bool {
+	s, ok := prog.Stages[callable]
+
+	return ok && !s.Split
 }
 
 // needsDisableTask reports whether a disabled call requires a standalone DISABLE

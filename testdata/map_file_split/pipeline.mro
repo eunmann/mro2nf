@@ -1,0 +1,42 @@
+# A map call over a LEAF stage whose SPLIT element is a FILE (split GEN.files,
+# an upstream txt[]): the split-target param PROC.f is file-typed, so the fork
+# element carries a bundle file marker that a plain JSON slice cannot represent.
+# Under -native this keeps the FORK task (one O(total) resolve that stages each
+# fork's file into its own args bundle) rather than the O(1) element path, and
+# its MERGE folds into the consumer. Verifies the file-bearing scatter matches
+# mrp exactly (the sizes come back keyed by fork order).
+filetype txt;
+
+stage GEN(
+    in  int    n,
+    out txt[]  files,
+    src py     "stages/gen",
+)
+
+stage PROC(
+    in  txt f,
+    out int size,
+    src py  "stages/proc",
+)
+
+pipeline FBS(
+    in  int   n,
+    out int[] sizes,
+)
+{
+    call GEN(
+        n = self.n,
+    )
+
+    map call PROC(
+        f = split GEN.files,
+    )
+
+    return (
+        sizes = PROC.size,
+    )
+}
+
+call FBS(
+    n = 3,
+)

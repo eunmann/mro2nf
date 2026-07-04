@@ -110,15 +110,16 @@ func TestBuildPlanNativeScatterQueueContext(t *testing.T) {
 		t.Errorf("queuePipeArgs = %v, want SUB queued (disabled callee), TOP not", q)
 	}
 
-	// Self-only split inside the disabled sub-pipeline: still scatterable, but
-	// on the pipeargs-in-tuple path — the O(1) element path pulls pipeargs out as
-	// a value-channel broadcast, which a queue pipeargs would zip to one fork.
+	// Self-only split inside the disabled sub-pipeline: still scatterable on the
+	// O(1) element path, but with pipeargs carried IN the element tuple
+	// (forkElementsPa) — a ≤1-item pa queue can't broadcast to N instances, so
+	// the broadcast layout would zip N forks to one.
 	cp := buildPlan(ds, featureSet{native: true}).pipes["SUB"].calls["SCALE"]
 	if cp.kind != kindNativeScatter {
 		t.Errorf("self-only scatter in a queued pipeline: kind = %d, want kindNativeScatter", cp.kind)
 	}
-	if cp.scatterValueOnly {
-		t.Error("a queue-pipeargs scatter must NOT take the element path (would zip N forks to one)")
+	if !cp.scatterQueuedPa {
+		t.Error("a queue-pipeargs scatter must carry pipeargs in the element tuple (scatterQueuedPa)")
 	}
 
 	// A ref-bearing map call (fork_ref's factor = MKFAC.factor) is eligible in a
