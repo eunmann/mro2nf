@@ -92,7 +92,7 @@ func run(args []string) error {
 		return fmt.Errorf("invalid -target: %w", err)
 	}
 
-	if err := reportDiagnostics(log, prog, *fuseChainsFlag, *foldDisablesFlag, *nativeFlag); err != nil {
+	if err := reportDiagnostics(log, prog, diagOpts{fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag, nativeRunner: *nativeRunnerFlag, monitor: *monitorFlag}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
@@ -213,8 +213,17 @@ func readOverridesInput(arg string) ([]byte, error) {
 // reportDiagnostics runs the pre-emit checks, prints each by severity, and
 // returns an error (aborting the transpile) if any is fatal — an enabled flag
 // that would produce a wrong or broken project for this pipeline.
-func reportDiagnostics(log zerolog.Logger, prog *ir.Program, fuseChains, foldDisables, native bool) error {
-	diags := emit.Diagnose(prog, emit.Options{FuseChains: fuseChains, FoldDisables: foldDisables, Native: native})
+// diagOpts carries the flag subset Diagnose needs; it must mirror what
+// emitProgram passes to Emit or the diagnostics analyze a different plan.
+type diagOpts struct {
+	fuseChains, foldDisables, native, nativeRunner, monitor bool
+}
+
+func reportDiagnostics(log zerolog.Logger, prog *ir.Program, o diagOpts) error {
+	diags := emit.Diagnose(prog, emit.Options{
+		FuseChains: o.fuseChains, FoldDisables: o.foldDisables,
+		Native: o.native, NativeRunner: o.nativeRunner, Monitor: o.monitor,
+	})
 
 	for _, d := range diags {
 		switch d.Severity {

@@ -185,7 +185,7 @@ func Emit(prog *ir.Program, opts Options) error {
 	// a shared local filesystem guarantees; container backends would need it
 	// staged/packaged, which this increment does not cover.
 	if opts.NativeRunner && target.isContainer() {
-		return errNativeContainer
+		return errNativeRunnerContainer
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker
@@ -284,6 +284,11 @@ var errNativeFileEntry = errors.New("native mode does not yet support file-typed
 // errNativeContainer reports that -native was asked for a container backend,
 // which native M1 does not yet cover (validated on the local backend only).
 var errNativeContainer = errors.New("native mode is not yet supported for container backends (awsbatch/healthomics)")
+
+// errNativeRunnerContainer reports that -native-runner was asked for a
+// container backend: the runner is read from the project dir at task runtime,
+// which only a shared local filesystem provides.
+var errNativeRunnerContainer = errors.New("-native-runner is not yet supported for container backends (awsbatch/healthomics)")
 
 // bakeEntryArgs resolves the entry args once at transpile time (no launch-time
 // override) by running the same `mre entryargs` the BUILD_ENTRY_ARGS task would,

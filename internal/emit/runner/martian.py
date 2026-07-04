@@ -9,10 +9,11 @@ view as-is), but with no metadata-file protocol and no fd3/fd4 channels:
     ('%Y-%m-%d %H:%M:%S [level] msg'),
   - exit() raises StageAssertion, which run_stage.py maps to exit code 42
     (internal/shim/shim.go AssertExitCode),
-  - alarm() appends to ./_warnings (cwd is the phase files dir) and stderr,
-  - update_progress() best-effort writes ./_progress,
-  - the resolved per-phase resources are installed by run_stage.py via
-    _configure() and served by get_threads_allocation()/get_memory_allocation().
+  - alarm() appends to <work>/<phase>/_warnings and stderr,
+  - update_progress() best-effort writes <work>/<phase>/_progress,
+  - the resolved per-phase resources and the invocation call/args are
+    installed by run_stage.py via _configure() and served by
+    get_threads_allocation()/get_memory_allocation()/get_invocation_*().
 
 Stage code does `import martian`; run_stage.py's directory is sys.path[0]
 (and is re-appended before the stage module import), so this sibling module
@@ -33,10 +34,19 @@ from pathlib import PurePath
 
 # Resolved per-phase state, set by run_stage.py via _configure() before the
 # stage phase runs. Values mirror what the mre shim writes into _jobinfo
-# (internal/shim/meta.go writeJobInfo).
+# (internal/shim/meta.go writeJobInfo), including the invocation call/args.
 _FILES_PATH = b""
 _THREADS = 1
 _MEM_GB = 1
+_INVOCATION_CALL = None
+_INVOCATION_ARGS = {}
+# Sidecar files the stage may write. Deviation from the vendor adapter: mrp
+# wrote _alarm/_progress into the metadata dir via the journal; the runner
+# targets <work>/<phase>/ (the parent of files/) with ABSOLUTE paths, so a
+# stage os.chdir cannot scatter them and they never pollute the stage's
+# files/ output tree. Defaults are relative fallbacks for direct imports.
+_WARNINGS_PATH = "_warnings"
+_PROGRESS_PATH = "_progress"
 
 
 class StageException(Exception):
@@ -56,12 +66,20 @@ class StageAssertion(SystemExit):
         self.message = message
 
 
-def _configure(files_path, threads, mem_gb):
+def _configure(files_path, threads, mem_gb, call=None, invocation_args=None):
     """Install the per-phase state. Called by run_stage.py, not stage code."""
-    global _FILES_PATH, _THREADS, _MEM_GB  # pylint: disable=global-statement
+    # pylint: disable=global-statement
+    global _FILES_PATH, _THREADS, _MEM_GB
+    global _INVOCATION_CALL, _INVOCATION_ARGS
+    global _WARNINGS_PATH, _PROGRESS_PATH
     _FILES_PATH = os.fsencode(files_path)
     _THREADS = threads
     _MEM_GB = mem_gb
+    _INVOCATION_CALL = call
+    _INVOCATION_ARGS = invocation_args if invocation_args is not None else {}
+    meta = os.path.dirname(os.path.abspath(files_path))
+    _WARNINGS_PATH = os.path.join(meta, "_warnings")
+    _PROGRESS_PATH = os.path.join(meta, "_progress")
 
 
 class Record:
@@ -280,13 +298,16 @@ def make_path(filename):
 
 
 def get_invocation_args():
-    """Get the args from the invocation."""
-    return {}
+    """Get the args from the invocation: the coerced top-level stage args,
+    matching mre's _jobinfo invocation.args (internal/shim/meta.go
+    writeJobInfo — the stage args before chunk merge and __* injection)."""
+    return _INVOCATION_ARGS
 
 
 def get_invocation_call():
-    """Get the call information from the invocation."""
-    return None
+    """Get the call information from the invocation: the -call name,
+    matching mre's _jobinfo invocation.call."""
+    return _INVOCATION_CALL
 
 
 def get_martian_version():
@@ -318,10 +339,11 @@ def get_pipestance_uuid():
 
 
 def update_progress(message):
-    """Best-effort progress update: write ./_progress (cwd is the phase files
-    dir); there is no mrp to read it, but stages may call this freely."""
+    """Best-effort progress update: write <work>/<phase>/_progress (absolute,
+    see the _PROGRESS_PATH note); there is no mrp to read it, but stages may
+    call this freely."""
     try:
-        with open("_progress", "wb") as dest:
+        with open(_PROGRESS_PATH, "wb") as dest:
             dest.write(_ensure_binary(message))
     except OSError:
         pass
@@ -358,10 +380,12 @@ def exit(message):  # pylint: disable=redefined-builtin
 
 
 def alarm(message):
-    """Add a message to the alarms: append ./_warnings, echo to stderr."""
+    """Add a message to the alarms: append <work>/<phase>/_warnings
+    (absolute, see the _WARNINGS_PATH note) and echo to stderr (a deviation
+    from the vendor adapter's silent _alarm file, kept as a debugging aid)."""
     text = _to_string_type(message)
     try:
-        with open("_warnings", "a", encoding="utf-8") as dest:
+        with open(_WARNINGS_PATH, "a", encoding="utf-8") as dest:
             dest.write(text + "\n")
     except OSError:
         pass

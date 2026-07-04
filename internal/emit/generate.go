@@ -68,7 +68,10 @@ func (g genCtx) stageCmd(phase, code string, lang ir.Lang, vmemExpr string) stri
 // mre+adapter invocation (with -mrjob for comp stages when configured).
 func (g genCtx) stageHead(phase, code string, lang ir.Lang) string {
 	if g.features.nativeRunner && lang == ir.LangPy {
-		return fmt.Sprintf(`'python3' "${projectDir}/_assets/runner/run_stage.py" %s -stagecode '%s' -call '%s' -mro '%s'`,
+		// Groovy interpolates ${projectDir} in the script GString before bash sees
+		// the line, so single quotes keep the resulting path literal to bash (a $
+		// or backtick in the project path must not re-expand).
+		return fmt.Sprintf(`'python3' '${projectDir}/_assets/runner/run_stage.py' %s -stagecode '%s' -call '%s' -mro '%s'`,
 			phase, code, g.entry, g.mroFile)
 	}
 

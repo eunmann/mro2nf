@@ -21,7 +21,7 @@ func TestStageCmdNativeRunner(t *testing.T) {
 	}
 
 	py := g.stageCmd("main", "/code/stage", ir.LangPy, "4")
-	want := `'python3' "${projectDir}/_assets/runner/run_stage.py" main -stagecode '/code/stage' -call 'P' -mro 'pipeline.mro' -vmemgb 4 -monitor`
+	want := `'python3' '${projectDir}/_assets/runner/run_stage.py' main -stagecode '/code/stage' -call 'P' -mro 'pipeline.mro' -vmemgb 4 -monitor`
 
 	if py != want {
 		t.Errorf("native-runner py stageCmd:\n got %q\nwant %q", py, want)

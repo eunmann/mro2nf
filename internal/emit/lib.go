@@ -25,13 +25,20 @@ const libDir = "lib"
 // along in the HealthOmics packaging zip (package.sh zips the project, excluding
 // only runtime/) exactly like _assets/ and nulls/.
 func writeLib(outDir string) error {
-	entries, err := libAssets.ReadDir(libDir)
+	return copyEmbeddedDir(libAssets, libDir, filepath.Join(outDir, libDir), "lib")
+}
+
+// copyEmbeddedDir writes every file of an embedded directory into dst, so the
+// static asset trees (lib/, _assets/runner/) share one copy loop and staging
+// fixes land in both.
+func copyEmbeddedDir(fsys embed.FS, srcDir, dst, what string) error {
+	entries, err := fsys.ReadDir(srcDir)
 	if err != nil {
-		return fmt.Errorf("read embedded lib: %w", err)
+		return fmt.Errorf("read embedded %s: %w", what, err)
 	}
 
-	if err := os.MkdirAll(filepath.Join(outDir, libDir), dirPerm); err != nil {
-		return fmt.Errorf("create lib dir: %w", err)
+	if err := os.MkdirAll(dst, dirPerm); err != nil {
+		return fmt.Errorf("create %s dir: %w", what, err)
 	}
 
 	for _, e := range entries {
@@ -41,12 +48,12 @@ func writeLib(outDir string) error {
 
 		// embed.FS paths are always slash-separated, so use path.Join (not
 		// filepath.Join, which would use a backslash on Windows).
-		data, err := fs.ReadFile(libAssets, path.Join(libDir, e.Name()))
+		data, err := fs.ReadFile(fsys, path.Join(srcDir, e.Name()))
 		if err != nil {
-			return fmt.Errorf("read embedded lib %s: %w", e.Name(), err)
+			return fmt.Errorf("read embedded %s %s: %w", what, e.Name(), err)
 		}
 
-		if err := writeFile(filepath.Join(outDir, libDir, e.Name()), data); err != nil {
+		if err := writeFile(filepath.Join(dst, e.Name()), data); err != nil {
 			return err
 		}
 	}

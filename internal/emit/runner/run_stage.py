@@ -29,6 +29,7 @@ import os
 import resource as _resource_mod
 import stat as _stat_mod
 import sys
+import threading
 import traceback
 from types import SimpleNamespace
 
@@ -73,7 +74,10 @@ _PHASE_FLAGS = {
 }
 # Ports the addProducer default role per phase (cmd/mre/main.go).
 _ROLE_DEFAULT = {"split": "chunkin", "main": "mainout", "join": "out"}
-_TRUE_WORDS = {"1", "t", "true"}
+# Go strconv.ParseBool's exact accepted spellings (what flag's bool parsing
+# uses); anything else is a hard parse error.
+_BOOL_TRUE = {"1", "t", "T", "TRUE", "true", "True"}
+_BOOL_FALSE = {"0", "f", "F", "FALSE", "false", "False"}
 
 
 def _flag_defaults(phase, spec):
@@ -107,7 +111,14 @@ def parse_flags(phase, argv):
             raise RunnerError("flag provided but not defined: -%s" % name)
         kind = spec[name]
         if kind is bool:
-            vals[name] = inline is None or inline.lower() in _TRUE_WORDS
+            if inline is None or inline in _BOOL_TRUE:
+                vals[name] = True
+            elif inline in _BOOL_FALSE:
+                vals[name] = False
+            else:
+                raise RunnerError(
+                    "invalid boolean value %r for -%s" % (inline, name)
+                )
             i += 1
             continue
         if inline is None:
@@ -746,19 +757,120 @@ def prep_dirs(work, phase):
     return meta, files
 
 
-def apply_monitor(monitor, vmem_gb):
-    """Ports shim.go limitedCommand's prlimit --as: cap address space at the
-    resolved vmem when -monitor is set. Best-effort, like mre."""
+def apply_vmem_cap(monitor, vmem_gb):
+    """Ports shim.go limitedCommand's prlimit --as, scoped like mre: only
+    the stage phase call runs under the cap (mre caps just the adapter
+    child, never its own data plane). Sets only the SOFT limit — the hard
+    limit stays untouched so the cap can be restored after the phase —
+    clamped to the hard limit and to int64. Best-effort, like mre when
+    prlimit is missing. Returns the previous (soft, hard) pair, or None."""
     if not monitor or vmem_gb <= 0:
-        return
-    limit = int(vmem_gb * BYTES_PER_GB)
+        return None
     try:
-        _resource_mod.setrlimit(_resource_mod.RLIMIT_AS, (limit, limit))
-    except (ValueError, OSError) as err:
+        prev = _resource_mod.getrlimit(_resource_mod.RLIMIT_AS)
+        limit = min(int(vmem_gb * BYTES_PER_GB), 2 ** 63 - 1)
+        hard = prev[1]
+        if hard != _resource_mod.RLIM_INFINITY:
+            limit = min(limit, hard)  # the soft limit may not exceed hard
+        _resource_mod.setrlimit(_resource_mod.RLIMIT_AS, (limit, hard))
+        return prev
+    except (ValueError, OSError, OverflowError) as err:
         sys.stderr.write(
             "run_stage: -monitor requested but setrlimit failed (%s); "
             "running without a %g GB vmem cap\n" % (err, vmem_gb)
         )
+        return None
+
+
+def restore_vmem_cap(prev):
+    """Undo apply_vmem_cap once the phase returns (best-effort)."""
+    if prev is None:
+        return
+    try:
+        _resource_mod.setrlimit(_resource_mod.RLIMIT_AS, prev)
+    except (ValueError, OSError, OverflowError):
+        pass
+
+
+def _rss_from_statm(text, page_size):
+    """Ports internal/shim/monitor.go procRSSPages: the resident page count
+    is field 1 of /proc/<pid>/statm; malformed input reads as 0."""
+    fields = text.split()
+    if len(fields) <= 1:
+        return 0
+    try:
+        pages = int(fields[1])
+    except ValueError:
+        return 0
+    return pages * page_size
+
+
+def _self_rss_bytes():
+    """This process's current RSS in bytes, from /proc/self/statm; falls
+    back to the peak (getrusage ru_maxrss, KB on Linux) where /proc is
+    unavailable — best-effort, like monitor.go groupRSS returning 0."""
+    try:
+        with open("/proc/self/statm", encoding="ascii") as src:
+            return _rss_from_statm(src.read(), _resource_mod.getpagesize())
+    except OSError:
+        return _resource_mod.getrusage(
+            _resource_mod.RUSAGE_SELF
+        ).ru_maxrss * 1024
+
+
+def quota_message(used_bytes, limit_bytes):
+    """Ports internal/shim/monitor.go memMonitor.message: Martian's
+    canonical memory-quota text."""
+    return "Stage exceeded its memory quota (using %.1f, allowed %gG)" % (
+        used_bytes / float(BYTES_PER_GB),
+        limit_bytes / float(BYTES_PER_GB),
+    )
+
+
+def start_rss_watchdog(monitor, mem_gb, stop):
+    """Ports internal/shim/monitor.go memMonitor.watch for the in-process
+    stage: a daemon thread samples RSS every second while the phase runs;
+    on breach it prints the quota message and hard-exits 1 (retryable,
+    mre's memViolation — never an assert). Deviations from mre: only this
+    process is sampled (mre sums the whole process group, and folds the
+    child's ru_maxrss in at exit), and sampling stops when the phase
+    returns."""
+    if not monitor or mem_gb <= 0:
+        return
+    limit = int(mem_gb * BYTES_PER_GB)
+
+    def watch():
+        while not stop.wait(1.0):
+            rss = _self_rss_bytes()
+            if rss > limit:
+                sys.stderr.write(quota_message(rss, limit) + "\n")
+                sys.stderr.flush()
+                os._exit(1)
+
+    threading.Thread(target=watch, daemon=True, name="rss-monitor").start()
+
+
+class monitored_phase:
+    """Scopes -monitor enforcement to the stage phase call only: the vmem
+    soft cap and the RSS watchdog are active while split/main/join runs and
+    are torn down before the runner's own data plane (outs encode,
+    mark_files) resumes — mre likewise caps only the adapter subprocess."""
+
+    def __init__(self, monitor, eff):
+        self._monitor = monitor
+        self._eff = eff
+        self._stop = threading.Event()
+        self._prev = None
+
+    def __enter__(self):
+        self._prev = apply_vmem_cap(self._monitor, self._eff.vmem_gb)
+        start_rss_watchdog(self._monitor, self._eff.mem_gb, self._stop)
+        return self
+
+    def __exit__(self, *exc_info):
+        self._stop.set()
+        restore_vmem_cap(self._prev)
+        return False
 
 
 def import_stage(stagecode):
@@ -798,13 +910,46 @@ def load_stage_args(fl, man):
     return coerce_inputs(man, fl.callable, ["in"], args)
 
 
-def setup_stage(fl, files, eff):
-    """Configure martian, apply the monitor cap, enter the files dir, and
-    import the stage module (in that order, matching mre + martian_shell)."""
-    martian._configure(files, _js_num(eff.threads), _js_num(eff.mem_gb))
-    apply_monitor(fl.monitor, eff.vmem_gb)
+def setup_stage(fl, files, eff, invocation_args):
+    """Configure martian (resources + the invocation call/args mre records
+    in _jobinfo — internal/shim/meta.go writeJobInfo), enter the files dir,
+    and import the stage module. The -monitor caps are NOT applied here;
+    they are scoped to the phase call via monitored_phase."""
+    martian._configure(
+        files, _js_num(eff.threads), _js_num(eff.mem_gb),
+        call=fl.call, invocation_args=invocation_args,
+    )
     os.chdir(files)
-    return import_stage(fl.stagecode)
+    try:
+        return import_stage(fl.stagecode)
+    except martian.StageAssertion:
+        raise
+    except SystemExit as exc:
+        # An import-time sys.exit: the vendor shell's __init__ catches it,
+        # writes the traceback to the error channel, and mre fails (exit 1)
+        # regardless of the code.
+        raise RunnerError(
+            "import stage code: SystemExit: %s" % (exc.code,)
+        ) from None
+
+
+def stage_system_exit(exc, phase):
+    """Classify a stage-raised sys.exit() (never martian.exit) like mre:
+    martian_shell lets SystemExit propagate (its _main catches Exception
+    only), so the adapter child exits with that status and nothing on the
+    error channel; shim.go adapterIO.run treats a zero status as success and
+    any nonzero status as a plain adapter failure, which cmd/mre/main.go
+    exitCode maps to 1 — a stage sys.exit(42) is NOT an assert and never
+    leaks its own code. Returns on zero; raises RunnerError on nonzero."""
+    code = exc.code
+    if code is None:
+        code = 0
+    if not isinstance(code, int):
+        # CPython prints a non-int SystemExit code to stderr and exits 1.
+        sys.stderr.write("%s\n" % (code,))
+        code = 1
+    if code != 0:
+        raise RunnerError("adapter %s phase: exit status %d" % (phase, code))
 
 
 def write_outs(out_path, outs, out_params, man):
@@ -822,8 +967,20 @@ def run_split(fl):
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
     eff = resolve_resources(Resources(), cli_resources(fl))
-    module = setup_stage(fl, files, eff)
-    result = martian.json_sanitize(module.split(record(args)))
+    module = setup_stage(fl, files, eff, args)
+    try:
+        with monitored_phase(fl.monitor, eff):
+            raw_result = module.split(record(args))
+    except martian.StageAssertion:
+        raise
+    except SystemExit as exc:
+        stage_system_exit(exc, "split")
+        # Exit 0 from split: the vendor shell dies before writing
+        # _stage_defs, so mre fails to read it (shim.go readStageDefs).
+        raise RunnerError(
+            "read _stage_defs: split exited without returning chunk defs"
+        ) from None
+    result = martian.json_sanitize(raw_result)
     defs, join_res = parse_stage_defs(result)
     write_text(out_path, go_json(chunk_defs_doc(defs)))
     if fl.joinres:
@@ -834,7 +991,19 @@ def run_split(fl):
 
 def parse_stage_defs(result):
     """Ports meta.go readStageDefs on the in-memory split return value."""
-    if not result or not isinstance(result, dict):
+    if result is None or result == {}:
+        # End-to-end adapter-path parity: the vendor shell's metadata.write
+        # serializes a falsy split result as "" (its `obj or ""` quirk), which
+        # meta.go readStageDefs cannot parse — mre exits 1. Although Go's
+        # readStageDefs alone would accept null/{} as a 0-chunk split, the
+        # runner mirrors the observable end-to-end behavior: a falsy split
+        # return is a loud failure, not a silent empty split. A 0-chunk split
+        # is still expressible as {'chunks': []}.
+        raise RunnerError(
+            "split returned %r; a 0-chunk split must be {'chunks': []} "
+            "(the adapter path fails on a falsy split return)" % (result,)
+        )
+    if not isinstance(result, dict):
         raise RunnerError(
             "parse _stage_defs: split must return a JSON object of chunk defs"
         )
@@ -858,13 +1027,22 @@ def parse_stage_defs(result):
 
 
 def chunk_defs_doc(defs):
-    """chunks.json as mre writeJSON([]shim.ChunkDef) renders it: each chunk's
-    args map top-level-sorted (Go map) with RawMessage-passthrough values,
-    resources in struct order with Go floats."""
+    """chunks.json as mre writeJSON([]shim.ChunkDef) renders it: Go itself
+    marshals the Args map[string]json.RawMessage, so the map KEYS are sorted
+    and Go-escaped (raw UTF-8 + HTML escapes) while each VALUE is RawMessage
+    passthrough (Python json.dumps escaping and insertion order preserved);
+    resources are in struct order with Go floats."""
     doc = []
     for res, cargs in defs:
+        args_map = GoStruct()
+        pairs = sorted(
+            ((_json_key(k), v) for k, v in cargs.items()),
+            key=lambda kv: kv[0],
+        )
+        for k, v in pairs:
+            args_map[k] = PyStrings(v)
         cd = GoStruct()
-        cd["args"] = PyStrings(dict(sorted(cargs.items())))
+        cd["args"] = args_map
         cd["resources"] = resources_struct(res)
         doc.append(cd)
     return doc
@@ -893,9 +1071,22 @@ def run_main(fl):
     merged.update(chunk_args)
     inject_resources(merged, eff)
     out_params = man.params(fl.callable, fl.role)
-    outs = record(skeleton_outs(man.structs, out_params, files))
-    module = setup_stage(fl, files, eff)
-    module.main(record(merged), outs)
+    skeleton = skeleton_outs(man.structs, out_params, files)
+    outs = record(skeleton)
+    module = setup_stage(fl, files, eff, args)
+    try:
+        with monitored_phase(fl.monitor, eff):
+            module.main(record(merged), outs)
+    except martian.StageAssertion:
+        raise
+    except SystemExit as exc:
+        stage_system_exit(exc, "main")
+        # Exit 0: the vendor shell exits without rewriting _outs, so mre
+        # bundles the skeleton it staged before the run — never the
+        # possibly-mutated in-memory Record.
+        write_bundle(out_path, martian.json_sanitize(dict(skeleton)),
+                     out_params, man.structs)
+        return
     write_outs(out_path, outs, out_params, man)
 
 
@@ -911,9 +1102,20 @@ def run_join(fl):
     inject_resources(merged, eff)
     chunk_defs, chunk_outs = read_chunk_data(fl.chunkdefs, fl.chunkouts)
     out_params = man.params(fl.callable, fl.role)
-    outs = record(skeleton_outs(man.structs, out_params, files))
-    module = setup_stage(fl, files, eff)
-    module.join(record(merged), outs, chunk_defs, chunk_outs)
+    skeleton = skeleton_outs(man.structs, out_params, files)
+    outs = record(skeleton)
+    module = setup_stage(fl, files, eff, args)
+    try:
+        with monitored_phase(fl.monitor, eff):
+            module.join(record(merged), outs, chunk_defs, chunk_outs)
+    except martian.StageAssertion:
+        raise
+    except SystemExit as exc:
+        stage_system_exit(exc, "join")
+        # Exit 0: mre bundles the pre-staged skeleton (see run_main).
+        write_bundle(out_path, martian.json_sanitize(dict(skeleton)),
+                     out_params, man.structs)
+        return
     write_outs(out_path, outs, out_params, man)
 
 
@@ -978,6 +1180,10 @@ if __name__ == "__main__":
         sys.stderr.write("run_stage: %s\n" % exc)
         sys.exit(1)
     except SystemExit:
+        raise
+    except (KeyboardInterrupt, GeneratorExit):
+        # The mre adapter path dies by signal on interrupt; do not convert
+        # one into a retryable stage failure — let Python's default apply.
         raise
     except BaseException:  # pylint: disable=broad-except
         traceback.print_exc()

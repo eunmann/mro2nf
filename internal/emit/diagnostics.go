@@ -34,7 +34,10 @@ type Diagnostic struct {
 func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 	// The featureSet must mirror Emit's exactly (emit.go), or these diagnostics
 	// analyze a different plan than the one emitted.
-	f := featureSet{fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables, native: opts.Native}
+	f := featureSet{
+		fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables,
+		native: opts.Native, nativeRunner: opts.NativeRunner,
+	}
 	pl := buildPlan(prog, f)
 
 	warns := Warnings(prog)
@@ -46,6 +49,7 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 
 	ds = append(ds, chainDiagnostics(f, pl)...)
 	ds = append(ds, nativeDiagnostics(prog, f, pl)...)
+	ds = append(ds, runnerDiagnostics(prog, f, opts.Monitor)...)
 
 	return append(ds, foldDiagnostics(prog, f, pl)...)
 }
@@ -86,6 +90,36 @@ func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic
 				})
 			}
 		}
+	}
+
+	return ds
+}
+
+// runnerDiagnostics surfaces what -native-runner does NOT cover, so the opt-in
+// never silently under-delivers (#83): comp/exec stages keep the Martian
+// adapter path, and -monitor's RSS enforcement runs in-process (the runner's
+// watchdog) rather than mre's process-group monitor.
+func runnerDiagnostics(prog *ir.Program, f featureSet, monitor bool) []Diagnostic {
+	if !f.nativeRunner {
+		return nil
+	}
+
+	var ds []Diagnostic
+
+	for _, name := range sortedKeys(prog.Stages) {
+		if lang := prog.Stages[name].Lang; lang != ir.LangPy {
+			ds = append(ds, Diagnostic{
+				Severity: SevInfo,
+				Message:  fmt.Sprintf("-native-runner: stage %s is a %s stage and keeps the Martian adapter path", name, lang),
+			})
+		}
+	}
+
+	if monitor {
+		ds = append(ds, Diagnostic{
+			Severity: SevInfo,
+			Message:  "-native-runner: -monitor enforcement runs in-process (RLIMIT_AS vmem cap + RSS watchdog), not mre's process-group monitor",
+		})
 	}
 
 	return ds
