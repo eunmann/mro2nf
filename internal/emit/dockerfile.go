@@ -21,10 +21,6 @@ const (
 	buildCtxDir = "runtime"           // build-context subdir under the output project
 )
 
-// containerBuild assembles a self-contained Docker build context under the
-// output project and returns the in-container paths the generated scripts must
-// bake (so mre, the adapters, and the stage code resolve inside an isolated
-// task). The host artifacts are copied into <out>/runtime/ and a Dockerfile is
 // checkContainerSources fails loudly if a baked runtime source is missing,
 // rather than letting it surface as a cryptic `docker build` COPY error or a
 // silently broken image. mre is always required; -shell and each stage's code
@@ -54,7 +50,12 @@ func checkContainerSources(opts Options) error {
 	return nil
 }
 
-// written so `docker build -t <image> <out>` produces the runtime image.
+// containerBuild assembles a self-contained Docker build context under the
+// output project and returns the in-container paths the generated scripts bake
+// (so mre, the adapters, the stage code, and — under -native-runner — the
+// Python runner resolve inside an isolated task). The host artifacts are copied
+// into <out>/runtime/ and a Dockerfile is written so `docker build -t <image>
+// <out>` produces the runtime image.
 func containerBuild(opts Options, target Target) (genCtx, error) {
 	g := genCtx{mre: ctrMre, shell: opts.Shell, mrjob: opts.Mrjob, code: map[string]string{}}
 

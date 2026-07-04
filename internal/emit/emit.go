@@ -210,7 +210,7 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		return err
 	}
 
-	if err := writeProjectAssets(prog, opts, specDir); err != nil {
+	if err := writeProjectAssets(prog, opts, target, specDir); err != nil {
 		return err
 	}
 
@@ -245,12 +245,15 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 // writeProjectAssets writes the shared static assets: the Groovy helper lib,
 // the Python runner (under -native-runner), the per-call bindspecs, the
 // disable artifacts, and the type manifest.
-func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
+func writeProjectAssets(prog *ir.Program, opts Options, target Target, specDir string) error {
 	if err := writeLib(opts.OutDir); err != nil {
 		return err
 	}
 
-	if opts.NativeRunner {
+	// The runner ships in the project's _assets/ for a shared-filesystem run;
+	// a container backend bakes it into the image instead (containerBuild), so
+	// the project copy would be dead weight (and dead zip weight for HealthOmics).
+	if opts.NativeRunner && !target.isContainer() {
 		if err := writeRunner(opts.OutDir); err != nil {
 			return err
 		}
