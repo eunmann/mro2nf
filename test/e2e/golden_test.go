@@ -85,6 +85,7 @@ var goldenCases = []struct {
 	{"struct_file_array", "struct_file_array", "expected/outs.json"},
 	{"file_tree", "file_tree", "expected/outs.json"},
 	{"map_null_map", "map_null_map", "expected/outs.json"},
+	{"map_key_sort", "map_key_sort", "expected/outs.json"},
 	{"map_file_array", "map_file_array", "expected/outs.json"},
 	// Regression for #59: an unreachable pipeline containing a map call — its
 	// keyed-variant include must resolve (verified by the nextflow-lint gate).
@@ -574,7 +575,7 @@ func TestNativeComplete(t *testing.T) {
 	for _, fx := range []string{
 		"diamond_min", "fold_disable", "native_file_return", "file_min", "chain_fuse", "struct_min",
 		"fork_min", "map_fork", "empty_fork_min", "empty_map_fork", "fork_ref", "fork_mid",
-		"fork_upstream", "map_null_map",
+		"fork_upstream", "map_null_map", "map_key_sort",
 	} {
 		t.Run(fx, func(t *testing.T) {
 			t.Parallel()

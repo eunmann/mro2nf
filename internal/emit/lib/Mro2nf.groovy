@@ -15,6 +15,7 @@
 // package, so generated code references `Mro2nf` directly.
 
 import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
 import groovy.transform.CompileStatic
 import java.nio.file.Path
 
@@ -139,5 +140,71 @@ class Mro2nf {
         (0..<n).collect { int i ->
             ['fork_' + Integer.toString(i).padLeft(5, '0'), i, paJson, paLeaves]
         }
+    }
+
+    // forkElements is the O(1)-per-instance native scatter for a VALUE-only
+    // split source (#99): the split collection in `field` is parsed ONCE here on
+    // the driver and each fork gets ONLY its own pre-sliced element, so no
+    // instance re-parses the whole collection (the O(N^2) the per-fork forkbind
+    // -index did across N instances). Emits [key, index, elementB64] per fork in
+    // the SAME order/index the full-fork write uses (array order; sorted map
+    // keys, matching bind.go sortedKeys), so the gather sees identical ordering.
+    // The element is base64-encoded JSON so it transports through the task script
+    // safely regardless of its contents (a string value with shell metacharacters
+    // cannot break the command). An empty/null/wrong-kind source yields the single
+    // index -1 sentinel (its instance validates via forkbind -keysonly and feeds
+    // the gather the typed empty), exactly like forkScatter. Value-only: `field`
+    // carries no file leaves (the emitter gates this), so the JSON element is the
+    // whole split value — no bundle marker rewrite is needed, unlike a file fork.
+    static List forkElements(Path jsonFile, String field, String mapMode) {
+        def v = ((Map) parseJson(jsonFile)).get(field)
+        if (v == null) return [['fork_none', -1, '']]
+
+        if (v instanceof List && mapMode == 'array') {
+            List l = (List) v
+            if (l.isEmpty()) return [['fork_none', -1, '']]
+            return (0..<l.size()).collect { int i ->
+                ['fork_' + Integer.toString(i).padLeft(5, '0'), i, b64(l[i])]
+            }
+        }
+
+        if (v instanceof Map && mapMode == 'map') {
+            Map m = (Map) v
+            if (m.isEmpty()) return [['fork_none', -1, '']]
+            List keys = new ArrayList(m.keySet())
+            // Order the keys by UTF-8 byte value, matching Go's sort.Strings
+            // (bind.go sortedKeys) EXACTLY — the forkkeys sidecar the fi==0
+            // instance writes uses that order, so the element index order here
+            // must agree or a map fork would pair values with the wrong keys.
+            // (Java's natural String order diverges only for supplementary-plane
+            // code points, but matching Go byte order removes the risk entirely.)
+            keys.sort { Object a, Object b -> compareUtf8((String) a, (String) b) }
+            return (0..<keys.size()).collect { int i ->
+                ['fork_' + Integer.toString(i).padLeft(5, '0'), i, b64(m[keys[i]])]
+            }
+        }
+
+        // Wrong-kind (or an empty collection of the other kind): one sentinel so
+        // a single instance fails loudly / yields the typed empty, as forkCount.
+        return [['fork_none', -1, '']]
+    }
+
+    // b64 renders a value as base64-encoded JSON for shell-safe transport.
+    private static String b64(Object v) {
+        JsonOutput.toJson(v).getBytes('UTF-8').encodeBase64().toString()
+    }
+
+    // compareUtf8 orders two strings by unsigned UTF-8 byte value, matching Go's
+    // lexical string comparison (sort.Strings) so a driver-side key sort agrees
+    // with the Go-side forkkeys order byte-for-byte.
+    private static int compareUtf8(String a, String b) {
+        byte[] x = a.getBytes('UTF-8')
+        byte[] y = b.getBytes('UTF-8')
+        int n = Math.min(x.length, y.length)
+        for (int i = 0; i < n; i++) {
+            int d = (x[i] & 0xff) - (y[i] & 0xff)
+            if (d != 0) return d
+        }
+        return x.length - y.length
     }
 }

@@ -1,0 +1,39 @@
+# A native-scatter map fork whose keys stress the driver-vs-Go sort agreement.
+# Mixed case, digits, and — critically — an astral code point (U+1F389) with a
+# private-use BMP char order DIFFERENTLY under Java's natural String order
+# (UTF-16 code units) vs Go's sort.Strings (UTF-8 bytes). forkElements must
+# order elements by the same byte order the forkkeys sidecar uses
+# (Mro2nf.compareUtf8 matches bind.go sortedKeys), or the merged map pairs
+# values with the wrong keys (#99).
+stage DBL(
+    in  int v,
+    out int w,
+    src py  "stages/dbl",
+)
+
+pipeline MKS(
+    in  map<int> m,
+    out map<int> w,
+)
+{
+    map call DBL(
+        v = split self.m,
+    )
+
+    return (
+        w = DBL.w,
+    )
+}
+
+call MKS(
+    m = {
+        "Zebra":    1,
+        "apple":    2,
+        "Banana10": 3,
+        "banana2":  4,
+        "10x":      5,
+        "2y":       6,
+        "🎉astral": 7,
+        "私用面":  8,
+    },
+)

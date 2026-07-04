@@ -501,6 +501,130 @@ func TestRunForkBindIndex(t *testing.T) {
 	}
 }
 
+// TestRunForkBindElement drives the O(1) native-scatter path (#99): assembling
+// a fork's args from a pre-sliced element must be byte-identical to the -index
+// write of that fork (the driver hands the same value ResolveForks would slice),
+// and a broadcast binding still resolves against pipeargs.
+func TestRunForkBindElement(t *testing.T) {
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
+		`{"v":{"ref":{"kind":"self","id":"vals","output":""},"split":true},"f":{"ref":{"kind":"self","id":"factor","output":""}}}`)
+	pipe := filepath.Join(dir, "pipeargs")
+	writeTestBundle(t, pipe, map[string]any{"vals": []any{10, 20, 30}, "factor": 2})
+
+	// Element for fork 1 (value 20), sliced by the driver.
+	elem := writeTestFile(t, filepath.Join(dir, "elem.json"), `20`)
+	byElem := filepath.Join(dir, "by_element")
+
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe,
+		"-elementfile", elem, "-o", byElem,
+	}); err != nil {
+		t.Fatalf("run forkbind -elementfile: %v", err)
+	}
+
+	if diff := cmp.Diff(map[string]any{"v": 20.0, "f": 2.0}, readTestBundle(t, byElem)); diff != "" {
+		t.Errorf("element args mismatch (-want +got):\n%s", diff)
+	}
+
+	// Byte-identical to the -index write of the same fork.
+	byIndex := filepath.Join(dir, "by_index")
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe,
+		"-index", "1", "-o", byIndex,
+	}); err != nil {
+		t.Fatalf("run forkbind -index: %v", err)
+	}
+
+	if diff := cmp.Diff(readTestBundle(t, byIndex), readTestBundle(t, byElem)); diff != "" {
+		t.Errorf("-elementfile not byte-identical to -index 1 (-index +element):\n%s", diff)
+	}
+
+	// -elementfile without -o is a loud error, not a write to cwd.
+	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-pipeargs", pipe, "-elementfile", elem}); err == nil {
+		t.Error("forkbind -elementfile without -o must error")
+	}
+}
+
+// TestRunForkBindElementTypes locks the byte-identity invariant the O(1) path
+// depends on across element shapes — a float, a unicode string, and a nested
+// struct — since WriteBundle's type coercion is what normalizes the driver's
+// re-serialized element to the -index bytes; a regression there would silently
+// corrupt fork args.
+func TestRunForkBindElementTypes(t *testing.T) {
+	cases := []struct {
+		name, collection, element string
+	}{
+		{"float", `[0.1, 42.0]`, `42.0`},
+		{"unicode string", `["a", "café🎉"]`, `"café🎉"`},
+		{"nested struct", `[{"x":1},{"x":2,"y":"z"}]`, `{"x":2,"y":"z"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
+				`{"v":{"ref":{"kind":"self","id":"vals","output":""},"split":true}}`)
+			pipe := filepath.Join(dir, "pipeargs")
+			writeTestBundle(t, pipe, map[string]any{"vals": json.RawMessage(tc.collection)})
+
+			byElem := filepath.Join(dir, "by_element")
+			if err := run(t.Context(), []string{
+				"forkbind", "-spec", spec, "-pipeargs", pipe,
+				"-elementfile", writeTestFile(t, filepath.Join(dir, "e.json"), tc.element), "-o", byElem,
+			}); err != nil {
+				t.Fatalf("run -elementfile: %v", err)
+			}
+
+			byIndex := filepath.Join(dir, "by_index")
+			if err := run(t.Context(), []string{
+				"forkbind", "-spec", spec, "-pipeargs", pipe,
+				"-index", "1", "-o", byIndex,
+			}); err != nil {
+				t.Fatalf("run -index: %v", err)
+			}
+
+			if diff := cmp.Diff(readTestBundle(t, byIndex), readTestBundle(t, byElem)); diff != "" {
+				t.Errorf("-elementfile not byte-identical to -index 1 (-index +element):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestRunForkBindElementMap drives the O(1) element path for a MAP fork: a
+// pre-sliced map VALUE assembles byte-identically to the -index write of that
+// key's fork, so the driver's per-key element slicing matches ResolveForks.
+func TestRunForkBindElementMap(t *testing.T) {
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
+		`{"v":{"ref":{"kind":"self","id":"m","output":""},"split":true}}`)
+	pipe := filepath.Join(dir, "pipeargs")
+	// Sorted keys a,b,c → fork indices 0,1,2; fork 1 is key "b" → value 20.
+	writeTestBundle(t, pipe, map[string]any{"m": map[string]any{"a": 10, "b": 20, "c": 30}})
+
+	elem := writeTestFile(t, filepath.Join(dir, "elem.json"), `20`)
+	byElem := filepath.Join(dir, "by_element")
+
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe,
+		"-mapmode", "map", "-elementfile", elem, "-o", byElem,
+	}); err != nil {
+		t.Fatalf("run forkbind -elementfile (map): %v", err)
+	}
+
+	byIndex := filepath.Join(dir, "by_index")
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe,
+		"-mapmode", "map", "-index", "1", "-o", byIndex,
+	}); err != nil {
+		t.Fatalf("run forkbind -index (map): %v", err)
+	}
+
+	if diff := cmp.Diff(readTestBundle(t, byIndex), readTestBundle(t, byElem)); diff != "" {
+		t.Errorf("map -elementfile not byte-identical to -index 1 (-index +element):\n%s", diff)
+	}
+}
+
 // TestRunForkBindIndexKeysFile drives the -keysfile side of the native scatter:
 // each -index instance can emit the forkkeys sidecar byte-identical to the full
 // write's (map keys for a map fork, null for an array fork), so the gather gets
