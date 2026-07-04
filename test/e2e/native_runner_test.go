@@ -22,6 +22,9 @@ var nativeRunnerFixtures = []struct{ fixture, golden string }{
 	{"join_resources", "expected/outs.json"},
 	{"api_smoke", "expected/outs.json"},
 	{"kitchen_sink", "expected/main_outs.json"},
+	// py + exec + comp in one pipeline: the runner takes ONLY the py stage;
+	// exec/comp keep their adapter launchers — per-language routing retained.
+	{"mixed_adapters", "expected/outs.json"},
 }
 
 // TestNativeRunner guards #79: with -native-runner a Python stage's
@@ -49,10 +52,11 @@ func TestNativeRunner(t *testing.T) {
 	}
 }
 
-// assertNoAdapterOnPyStages fails if any generated module still runs a Python
-// stage through the adapter: no martian_shell.py reference anywhere, and every
-// -stagecode line for a py stage starts with the runner (mre may still appear
-// for the data plane — bind/forkbind/merge — which is #76 territory).
+// assertNoAdapterOnPyStages fails if any generated module still runs a PYTHON
+// stage through the adapter: no `-lang py` line may carry the -shell adapter
+// broker. comp/exec stages legitimately keep martian_shell.py + mre (the
+// runner is py-only), and mre may still appear for the data plane —
+// bind/forkbind/merge — which is #76 territory.
 func assertNoAdapterOnPyStages(t *testing.T, proj string) {
 	t.Helper()
 
@@ -68,12 +72,8 @@ func assertNoAdapterOnPyStages(t *testing.T, proj string) {
 		}
 
 		for _, line := range strings.Split(string(data), "\n") {
-			if strings.Contains(line, "martian_shell.py") {
-				t.Errorf("%s: adapter reference remains under -native-runner: %s", filepath.Base(f), strings.TrimSpace(line))
-			}
-
 			if strings.Contains(line, "-lang py") && strings.Contains(line, "-shell") {
-				t.Errorf("%s: py stage still brokered by mre: %s", filepath.Base(f), strings.TrimSpace(line))
+				t.Errorf("%s: py stage still brokered by the adapter: %s", filepath.Base(f), strings.TrimSpace(line))
 			}
 		}
 	}

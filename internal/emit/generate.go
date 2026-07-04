@@ -2505,6 +2505,14 @@ func names(params []ir.Param) []string {
 func stageDirectives(s *ir.Stage, val string) string {
 	var b strings.Builder
 
+	// Every stage-phase process is labeled with its Martian adapter language
+	// (py/comp/exec), so the DAG, trace, and reports retain which launcher runs
+	// each stage — and `withLabel:lang_<x>` config selectors can target them —
+	// across every emission mode (default, -native, -native-runner). A fused
+	// chain process carries its consumer's label; each folded link still runs
+	// through its own language's launcher inside the script.
+	fmt.Fprintf(&b, "  label 'lang_%s'\n", s.Lang)
+
 	if val == "" {
 		fmt.Fprintf(&b, "  cpus %d\n  %s", cpusOf(s), staticMem(memOf(s)))
 	} else {
