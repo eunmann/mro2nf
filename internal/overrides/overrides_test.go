@@ -108,8 +108,20 @@ func TestConvertResolvesByAlias(t *testing.T) {
 		t.Errorf("aliased call key should resolve, got unmapped: %v", unmapped)
 	}
 
-	if !strings.Contains(cfg, "withName: '(STAGE_[0-9]+_.+__)?TRIM.*' { memory = '8 GB' }") {
-		t.Errorf("override must target the alias TRIM:\n%s", cfg)
+	// The alias key must reach BOTH naming families (#99): the call-named fused
+	// per-call process (STAGE_..__TRIM, the native-scatter/#16 form) AND the
+	// callable-named plain/keyed process (ALIGN, ALIGN_MAP) that the same stage
+	// runs through in default mode.
+	sel := "withName: '(ALIGN|STAGE_[0-9]+_.+__TRIM).*' { memory = '8 GB' }"
+	if !strings.Contains(cfg, sel) {
+		t.Errorf("alias key must target both TRIM (fused) and ALIGN (plain/keyed):\n%s", cfg)
+	}
+
+	re := regexp.MustCompile(`^(?:` + "(ALIGN|STAGE_[0-9]+_.+__TRIM).*" + `)$`)
+	for _, name := range []string{"ALIGN", "ALIGN_MAP", "STAGE_4_SUB__TRIM"} {
+		if !re.MatchString(name) {
+			t.Errorf("alias-key selector must full-match %q", name)
+		}
 	}
 }
 
@@ -251,6 +263,43 @@ func TestConvert(t *testing.T) {
 
 	if len(unmapped) != 0 {
 		t.Errorf("unexpected unmapped fields: %v", unmapped)
+	}
+}
+
+// TestConvertStageKeyReachesAliasedScatter guards the other direction of the
+// #99 unification: a STAGE-name key must reach an ALIASED map call's fused
+// per-call process (STAGE_..__<alias>, the #76 native-scatter form) as well as
+// every other call site of that stage — the case a bare `(fusedPrefix)?<stage>`
+// selector missed, since the aliased call's process embeds the alias, not the
+// stage. ALIGN is called once as ALIGN (SUB) and once aliased as TRIM.
+func TestConvertStageKeyReachesAliasedScatter(t *testing.T) {
+	prog := sampleProgram()
+	prog.Pipelines["TOP"].Calls = append(prog.Pipelines["TOP"].Calls,
+		ir.Call{Name: "TRIM", Callable: "ALIGN", Mapped: true})
+
+	cfg, unmapped, err := overrides.Convert([]byte(`{"ALIGN": {"mem_gb": 8}}`), prog)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if len(unmapped) != 0 {
+		t.Errorf("stage key should resolve, got unmapped: %v", unmapped)
+	}
+
+	sels := regexp.MustCompile(`withName: '([^']+)'`).FindAllStringSubmatch(cfg, -1)
+	if len(sels) != 1 {
+		t.Fatalf("want 1 stage-level selector, got %d:\n%s", len(sels), cfg)
+	}
+
+	re := regexp.MustCompile("^(?:" + sels[0][1] + ")$")
+	// Both call sites' fused processes and the shared plain/keyed family.
+	for _, name := range []string{"ALIGN", "ALIGN_MAP", "STAGE_5_TOP__TRIM", "STAGE_4_SUB__ALIGN"} {
+		if !re.MatchString(name) {
+			t.Errorf("stage-key selector %q must full-match %q", sels[0][1], name)
+		}
+	}
+	// It must not bleed onto an unrelated stage.
+	if re.MatchString("SORT") || re.MatchString("STAGE_4_SUB__SORT") {
+		t.Errorf("stage-key selector %q over-matches an unrelated stage", sels[0][1])
 	}
 }
 
