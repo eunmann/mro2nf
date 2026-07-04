@@ -328,3 +328,35 @@ func TestGenerateNativeScatter(t *testing.T) {
 		t.Errorf("default mode must keep the FORK process:\n%s", def)
 	}
 }
+
+// TestGenerateNativeScatterUpstreamElements pins the upstream O(1) element
+// wiring (#99): a value-only split of an UPSTREAM output slices the PRODUCER'S
+// value-channel bundle on the driver (ch_GEN, not pipeargs) into per-fork
+// elements, and the fused process still stages the producer as the in_GEN
+// broadcast for the index-0 keys resolve and broadcast bindings.
+func TestGenerateNativeScatterUpstreamElements(t *testing.T) {
+	prog := lowerFixture(t, "fork_upstream")
+	f := featureSet{native: true}
+	g := genCtx{
+		entry: "SCALE_UP", mroFile: "pipeline.mro", mre: "mre",
+		shell: "/x/martian_shell.py", features: f,
+		code: map[string]string{"SCALE": "/x/scale", "GEN": "/x/gen"},
+		plan: buildPlan(prog, f),
+	}
+
+	mod := generatePipeModule(prog.Pipelines["SCALE_UP"], prog, g)
+
+	for _, want := range []string{
+		"scat_SCALE = ch_GEN.flatMap { data, leaves -> Mro2nf.forkElements(data, 'values', 'array')",
+		"tuple val(key), val(fi), val(element)",
+		"-elementfile element.json -o fargs",
+	} {
+		if !strings.Contains(mod, want) {
+			t.Errorf("missing %q in upstream native module:\n%s", want, mod)
+		}
+	}
+
+	if strings.Contains(mod, "forkScatterRef") {
+		t.Errorf("value-only upstream scatter must use the element path, not forkScatterRef:\n%s", mod)
+	}
+}
