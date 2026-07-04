@@ -2427,7 +2427,7 @@ workflow {
       error "entry arg '${n}' was baked at transpile time (-native); re-transpile to change it"
   }
   types = file("${projectDir}/_assets/types.json")
-  pipeargs = Channel.value(tuple(file("${projectDir}/entry_resolved/data.json"), file("${projectDir}/entry_resolved/f/*")))
+  pipeargs = Channel.value(tuple(file("${projectDir}/entry_resolved/data.json"), file("${projectDir}/entry_resolved/f/*", type: 'any')))
   %[1]s(pipeargs)
 `, entryWorkflow, groovyStringList(entryInNames(prog)))
 
