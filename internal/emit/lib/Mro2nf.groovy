@@ -172,7 +172,13 @@ class Mro2nf {
             Map m = (Map) v
             if (m.isEmpty()) return [['fork_none', -1, '']]
             List keys = new ArrayList(m.keySet())
-            keys.sort()
+            // Order the keys by UTF-8 byte value, matching Go's sort.Strings
+            // (bind.go sortedKeys) EXACTLY — the forkkeys sidecar the fi==0
+            // instance writes uses that order, so the element index order here
+            // must agree or a map fork would pair values with the wrong keys.
+            // (Java's natural String order diverges only for supplementary-plane
+            // code points, but matching Go byte order removes the risk entirely.)
+            keys.sort { Object a, Object b -> compareUtf8((String) a, (String) b) }
             return (0..<keys.size()).collect { int i ->
                 ['fork_' + Integer.toString(i).padLeft(5, '0'), i, b64(m[keys[i]])]
             }
@@ -186,5 +192,19 @@ class Mro2nf {
     // b64 renders a value as base64-encoded JSON for shell-safe transport.
     private static String b64(Object v) {
         JsonOutput.toJson(v).getBytes('UTF-8').encodeBase64().toString()
+    }
+
+    // compareUtf8 orders two strings by unsigned UTF-8 byte value, matching Go's
+    // lexical string comparison (sort.Strings) so a driver-side key sort agrees
+    // with the Go-side forkkeys order byte-for-byte.
+    private static int compareUtf8(String a, String b) {
+        byte[] x = a.getBytes('UTF-8')
+        byte[] y = b.getBytes('UTF-8')
+        int n = Math.min(x.length, y.length)
+        for (int i = 0; i < n; i++) {
+            int d = (x[i] & 0xff) - (y[i] & 0xff)
+            if (d != 0) return d
+        }
+        return x.length - y.length
     }
 }

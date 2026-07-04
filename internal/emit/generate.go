@@ -2205,27 +2205,12 @@ func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
 }
 
 // elementCallArgs renders the invocation for the O(1) element scatter process
-// (#99): the element tuple channel first, then pipeargs as a SEPARATE broadcast
-// input (the element process takes pipeargs on its own, not inside the tuple),
-// then each broadcast call ref, then types and the bindspec — matching the
-// process's input block order.
+// (#99): the element tuple channel first, then the standard bind-style args with
+// pipeargs (`pa`) as the SEPARATE broadcast input — so the same one loop
+// (bindCallArgsPa/foldCallArgs) defines the ref/types/spec order the process's
+// input block reads, and the two can't drift.
 func elementCallArgs(c ir.Call, scatChan, specName string) string {
-	// Leading channels (the element tuple + the broadcast pipeargs), then one
-	// channel per broadcast call ref, then the two trailing broadcast inputs.
-	lead := []string{scatChan, "pa"}
-	trail := []string{"types", specFile(specName)}
-	refs := refCalls(c.Bindings)
-
-	args := make([]string, 0, len(lead)+len(refs)+len(trail))
-	args = append(args, lead...)
-
-	for _, id := range refs {
-		args = append(args, "ch_"+id)
-	}
-
-	args = append(args, trail...)
-
-	return strings.Join(args, ", ")
+	return scatChan + ", " + bindCallArgsPa(c.Bindings, "pa", specName)
 }
 
 // genPublish emits the terminal publish as two processes that avoid a single-node
