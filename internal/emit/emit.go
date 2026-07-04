@@ -228,7 +228,10 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		}
 	}
 
-	if hasStagedFileEntry(prog) {
+	// The empty sentinel is only consumed by the default BUILD_ENTRY_ARGS task
+	// (genEntry); native bakes the entry args and emits no such task, so a
+	// native project needs no sentinel.
+	if !opts.Native && hasStagedFileEntry(prog) {
 		// A staged-but-unset file input is fed this empty sentinel so BUILD_ENTRY_ARGS
 		// still has its path input (and keeps the baked default); see genEntry.
 		if err := writeFile(filepath.Join(opts.OutDir, assetsDir, entrySentinel), []byte{}); err != nil {
