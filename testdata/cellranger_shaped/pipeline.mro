@@ -58,6 +58,9 @@ stage PER_SAMPLE(
     in  int  sample,
     out int  metric,
     src py   "stages/per_sample",
+) split (
+    in  int  unit,
+    out int  partial,
 )
 
 stage MERGE_METRICS(
