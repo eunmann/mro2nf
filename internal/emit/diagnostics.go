@@ -100,11 +100,17 @@ func mappedRemainderMsg(prog *ir.Program, pipeline string, c ir.Call, cp callPla
 		tasks = "the FORK and MERGE tasks"
 	}
 
-	if _, isStage := prog.Stages[c.Callable]; !isStage {
+	switch s, isStage := prog.Stages[c.Callable]; {
+	case !isStage:
 		// A sub-pipeline callee keeps its outer FORK/MERGE AND runs its keyed
 		// per-outer-fork body (BIND_K/FORK_K/MERGE_K) — bookkeeping that scales
 		// with outer fork width, the deeper #99 remainder.
 		tasks += " plus its keyed per-outer-fork layer (BIND_K/MERGE_K)"
+	case s.Split:
+		// A split-stage callee also fans out the intrinsic per-fork split triad
+		// (SPLIT/MAIN/JOIN) — that is genuine compute matching mrp's jobs 1:1,
+		// not orchestration overhead, but name it so the task count is expected.
+		tasks += " (plus the intrinsic per-fork split triad, matching mrp 1:1)"
 	}
 
 	return fmt.Sprintf("-native: map call %s.%s keeps %s (not on the O(1) element scatter: needs a single whole-field self/upstream split feeding a value-typed param of an undisabled, non-preflight leaf stage; a file-typed, projected, or multi-split element and split-stage / sub-pipeline callees all keep the FORK resolve)",
