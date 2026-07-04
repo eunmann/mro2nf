@@ -201,7 +201,9 @@ func TestGenerateNativeMergeFold(t *testing.T) {
 	for _, want := range []string{
 		"path(souts_SCALE, stageAs: 'souts_SCALE/*')",
 		"path 'forkkeys_SCALE.json'",
-		`'mre' merge -outs 'scaled' -files "\$(ls -1d souts_SCALE/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
+		// -emptynull: fork_min's split source is an entry self ref, so a zero-fork
+		// merge yields null (mrp's invocation-known-empty rule, #99).
+		`'mre' merge -emptynull -outs 'scaled' -files "\$(ls -1d souts_SCALE/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
 		"-inputs SCALE=merged_SCALE",
 		".out.ref_SCALE_souts, ",
 		".out.ref_SCALE_keys",

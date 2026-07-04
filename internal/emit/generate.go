@@ -1013,7 +1013,8 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkkeys_%[1]s.json'\n", id)
 		pairs = append(pairs, fmt.Sprintf("%s=merged_%s", id, id))
 		fmt.Fprintf(&pre, "    %s\n", g.mergeCmd(prod.Callable, calleeOutNames(prog, prod.Callable),
-			"souts_"+id+"/outs__*", "forkkeys_"+id+".json", "merged_"+id))
+			"souts_"+id+"/outs__*", "forkkeys_"+id+".json", "merged_"+id,
+			g.plan.pipes[p.Name].calls[prod.Name].emptyNull))
 	}
 
 	inputs.WriteString("    path 'types.json'\n")
@@ -1030,9 +1031,16 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 // mergeCmd renders the `mre merge` gather command. The MERGE task and the
 // folded in-task merge (#76) share it, so the two invocations cannot drift —
 // they differ only in where the fork outs live and where the result lands.
-func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string) string {
-	return fmt.Sprintf(`'%s' merge -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keys-file %s -o %s%s`,
-		g.mre, outs, glob, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
+// emptyNull applies mrp's invocation-known-empty rule: zero forks merge to
+// null instead of the typed empty (#99).
+func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string, emptyNull bool) string {
+	flag := ""
+	if emptyNull {
+		flag = " -emptynull"
+	}
+
+	return fmt.Sprintf(`'%s' merge%s -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keys-file %s -o %s%s`,
+		g.mre, flag, outs, glob, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
 }
 
 // foldCallArgs is bindCallArgsPa for a fold-aware consumer invocation: a
@@ -1255,7 +1263,9 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
     """
 }
 
-`, mergeName(pipeline, c.Name), g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged"),
+`, mergeName(pipeline, c.Name),
+		g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged",
+			g.plan.pipes[pipeline].calls[c.Name].emptyNull),
 		bundleOutput("merged"))
 }
 

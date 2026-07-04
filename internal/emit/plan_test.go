@@ -100,6 +100,39 @@ func TestBuildPlanFoldDisables(t *testing.T) {
 	}
 }
 
+// TestBuildPlanEmptyNull pins the #99 empty-fork fidelity rule: a map call
+// whose split source is launch-invocation-known (a whole-field entry self ref
+// or a literal) gets emptyNull — its ZERO-fork merge emits null, matching
+// mrp's static resolver pruning a statically-empty fork — in default and
+// native mode alike. A map call splitting an UPSTREAM output must NOT get it:
+// a runtime empty merges to the typed empty. The flag is shape-based (not
+// value-based), so launch-time entry overrides stay correct: override the
+// input to non-empty and the forks run, override to empty and mrp with that
+// invocation would produce null too.
+func TestBuildPlanEmptyNull(t *testing.T) {
+	for _, fx := range []struct{ fixture, pipe, call string }{
+		{"empty_fork_min", "EF", "SCALE"},
+		{"empty_map_fork", "EMP", "DBL"},
+		{"fork_min", "SCALE_ALL", "SCALE"}, // non-empty entry source: flagged too (never fires at runtime)
+	} {
+		prog := lowerFixture(t, fx.fixture)
+
+		for _, f := range []featureSet{{}, {native: true}} {
+			if !buildPlan(prog, f).pipes[fx.pipe].calls[fx.call].emptyNull {
+				t.Errorf("%s (native=%v): entry-sourced split must set emptyNull", fx.fixture, f.native)
+			}
+		}
+	}
+
+	// Upstream-sourced splits stay typed-empty: zero forks is a RUNTIME fact.
+	ref := lowerFixture(t, "runtime_empty_forks")
+	for _, call := range []string{"SC_EA", "SC_NA", "SC_EM", "SC_NM"} {
+		if buildPlan(ref, featureSet{native: true}).pipes["REF"].calls[call].emptyNull {
+			t.Errorf("%s splits an upstream output; a runtime empty must keep the typed empty", call)
+		}
+	}
+}
+
 // TestBuildPlanForwardChain guards #73: a source feeding a pure-FORWARD consumer
 // folds under -fuse-chains too. file_chain's MAKEFILE feeds READFILE, which just
 // forwards MAKEFILE.f — so with the flag MAKEFILE folds away and READFILE becomes

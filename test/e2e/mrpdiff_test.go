@@ -173,6 +173,13 @@ func TestMrpDiff(t *testing.T) {
 		// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
 		// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
 		{name: "map_key_sort"},
+		// #99 empty-fork fidelity, both sides of the static/runtime split:
+		// a statically-empty split source folds to null (mrp's static resolver
+		// prunes the zero-fork call); an upstream empty/null collection merges
+		// to the typed empty at runtime.
+		{name: "empty_fork_min"},
+		{name: "empty_map_fork"},
+		{name: "runtime_empty_forks"},
 		{name: "map_file_array"},
 		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
 		// map, nested pipelines) — all py stages, so it joins the mrp differential.

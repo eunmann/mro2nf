@@ -81,7 +81,7 @@ func TestMergeMap(t *testing.T) {
 		json.RawMessage(`{"w":4}`),
 	}
 
-	merged, err := bind.Merge([]string{"w"}, outs, []string{"a", "b"})
+	merged, err := bind.Merge([]string{"w"}, outs, []string{"a", "b"}, false)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestMergeEmpty(t *testing.T) {
 	// A zero-fork ARRAY map call yields an empty array per output, matching
 	// Martian's runtime merge (marshallerArray{} -> []) for an empty or null
 	// typed-array source; keys nil signals array mode.
-	merged, err := bind.Merge([]string{"scaled"}, nil, nil)
+	merged, err := bind.Merge([]string{"scaled"}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -105,13 +105,50 @@ func TestMergeEmpty(t *testing.T) {
 	}
 
 	// A zero-fork MAP map call (non-nil empty keys) yields an empty object.
-	merged, err = bind.Merge([]string{"scaled"}, nil, []string{})
+	merged, err = bind.Merge([]string{"scaled"}, nil, []string{}, false)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 
 	if got := string(merged); got != `{"scaled":{}}` {
 		t.Errorf("merge of zero map forks = %s, want {\"scaled\":{}}", got)
+	}
+}
+
+// TestMergeEmptyNull pins the invocation-known-empty rule (#99): with
+// emptyNull, ZERO forks merge every output to null (mrp's static resolver
+// prunes a statically-empty fork to null), array and map mode alike — while a
+// non-empty merge is unaffected by the flag.
+func TestMergeEmptyNull(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys []string
+	}{
+		{"array mode", nil},
+		{"map mode", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			merged, err := bind.Merge([]string{"scaled"}, nil, tc.keys, true)
+			if err != nil {
+				t.Fatalf("merge: %v", err)
+			}
+
+			if got := string(merged); got != `{"scaled":null}` {
+				t.Errorf("emptyNull zero-fork merge = %s, want {\"scaled\":null}", got)
+			}
+		})
+	}
+
+	// Non-zero forks: the flag must not perturb the merged collection.
+	outs := []json.RawMessage{json.RawMessage(`{"scaled":10}`), json.RawMessage(`{"scaled":20}`)}
+
+	merged, err := bind.Merge([]string{"scaled"}, outs, nil, true)
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	if got := string(merged); got != `{"scaled":[10,20]}` {
+		t.Errorf("emptyNull non-empty merge = %s, want {\"scaled\":[10,20]}", got)
 	}
 }
 
@@ -122,7 +159,7 @@ func TestMerge(t *testing.T) {
 		json.RawMessage(`{"scaled":30}`),
 	}
 
-	merged, err := bind.Merge([]string{"scaled"}, outs, nil)
+	merged, err := bind.Merge([]string{"scaled"}, outs, nil, false)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}

@@ -70,6 +70,10 @@ type callPlan struct {
 	// its own element (O(1) per instance) instead of every instance re-parsing
 	// the whole collection via forkbind -index (the O(N^2) fix, #99).
 	scatterValueOnly bool
+	// emptyNull marks a map call whose split source is launch-invocation-known
+	// (entrySplit): its ZERO-fork merge emits null instead of the typed empty,
+	// matching mrp's static resolver pruning a statically-empty fork (#99).
+	emptyNull bool
 	// foldMerge marks a kindNativeScatter call whose MERGE gather runs inline in
 	// its sole consumer's task (#76): no standalone MERGE process; the consumer
 	// stages the per-fork outs dirs + keys sidecar and reconstructs merged_<id>
@@ -229,6 +233,8 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	}
 
 	if c.Mapped {
+		emptyNull := entrySplit(prog, p, c)
+
 		// #76: under -native an eligible map call scatters in-workflow (each stage
 		// instance resolves its own fork via forkbind -index), so no FORK task.
 		if f.native {
@@ -240,11 +246,12 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 				return callPlan{
 					kind: kindNativeScatter, stage: s, scatterField: field, scatterCall: call,
 					scatterValueOnly: !queuedPa && splitValueOnly(c, s, prog),
+					emptyNull:        emptyNull,
 				}
 			}
 		}
 
-		return callPlan{kind: kindMapped, disableTask: needsDisableTask(c)}
+		return callPlan{kind: kindMapped, disableTask: needsDisableTask(c), emptyNull: emptyNull}
 	}
 
 	if prod, ok := callForwardProducer(c, p, prog); ok {
@@ -297,6 +304,50 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 	}
 
 	return "", false
+}
+
+// entrySplit reports whether every split binding of a map call draws from the
+// LAUNCH INVOCATION: a literal, or a whole-field self ref on the ENTRY pipeline
+// (instantiated once, so the source is unambiguous — the same scope rule as
+// foldDisableOff). Martian's resolver treats an invocation-known empty fork
+// collection differently from a runtime one — observed against mrp 4.0.15: a
+// static []/{} split source resolves the whole mapped call to NULL (the zero-
+// fork call is pruned), while an upstream-produced empty or null collection
+// merges to the typed empty ([] / {}). mro2nf keeps entry inputs overridable
+// at launch, so the distinction cannot be baked statically; instead an
+// entry-split call's zero-fork MERGE emits null at runtime (bind.Merge
+// emptyNull) — override to non-empty and the forks run, override to empty and
+// the result is null, exactly what mrp produces for that invocation. Known
+// residual divergence (documented, exotic): a sub-pipeline whose split input
+// chains back to an entry literal through the call graph is not traced here
+// and keeps the typed-empty merge; mrp's full static resolver would null it.
+func entrySplit(prog *ir.Program, p *ir.Pipeline, c ir.Call) bool {
+	splits := 0
+
+	for _, b := range c.Bindings {
+		if !b.Split {
+			continue
+		}
+
+		splits++
+
+		if !entryValue(prog, p, b.Value) {
+			return false
+		}
+	}
+
+	return splits > 0
+}
+
+// entryValue reports whether a binding value is launch-invocation-sourced: a
+// ref-free literal/composite, or a whole-field self ref on the entry pipeline.
+func entryValue(prog *ir.Program, p *ir.Pipeline, v ir.Value) bool {
+	if v.Ref == nil {
+		return true
+	}
+
+	return v.Ref.Kind == refKindSelf && v.Ref.Output == "" &&
+		prog.Entry != nil && prog.Entry.Callable == p.Name
 }
 
 // nativeScatterable reports whether a -native map call can scatter in-workflow
