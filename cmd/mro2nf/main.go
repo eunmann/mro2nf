@@ -92,7 +92,7 @@ func run(args []string) error {
 		return fmt.Errorf("invalid -target: %w", err)
 	}
 
-	if err := reportDiagnostics(log, prog, diagOpts{fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag, nativeRunner: *nativeRunnerFlag, monitor: *monitorFlag}); err != nil {
+	if err := reportDiagnostics(log, prog, diagOpts{fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag, nativeRunner: *nativeRunnerFlag, monitor: *monitorFlag, target: target}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
@@ -217,12 +217,14 @@ func readOverridesInput(arg string) ([]byte, error) {
 // emitProgram passes to Emit or the diagnostics analyze a different plan.
 type diagOpts struct {
 	fuseChains, foldDisables, native, nativeRunner, monitor bool
+	target                                                  emit.Target
 }
 
 func reportDiagnostics(log zerolog.Logger, prog *ir.Program, o diagOpts) error {
 	diags := emit.Diagnose(prog, emit.Options{
 		FuseChains: o.fuseChains, FoldDisables: o.foldDisables,
 		Native: o.native, NativeRunner: o.nativeRunner, Monitor: o.monitor,
+		Target: o.target,
 	})
 
 	for _, d := range diags {
@@ -251,14 +253,23 @@ type cliPtrs struct {
 
 // applyConfig loads the .mro2nf.yml (explicit path, else alongside the .mro) and
 // sets each flag the user did NOT pass explicitly to the config's value —
-// precedence is builtin default < config file < explicit flag.
+// precedence is builtin default < config file < explicit flag. An explicit
+// -config path must exist — a typo there must not silently drop the defaults —
+// while the implicit alongside-the-.mro probe tolerates a missing file. An
+// empty -config value is indistinguishable from an unset flag, so it takes the
+// implicit probe.
 func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
-	path := explicit
-	if path == "" {
-		path = filepath.Join(filepath.Dir(mroPath), config.FileName)
+	var (
+		cfg *config.Config
+		err error
+	)
+
+	if explicit != "" {
+		cfg, err = config.LoadRequired(explicit)
+	} else {
+		cfg, err = config.Load(filepath.Join(filepath.Dir(mroPath), config.FileName))
 	}
 
-	cfg, err := config.Load(path)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
