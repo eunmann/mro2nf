@@ -624,6 +624,14 @@ func TestNativeFileEntry(t *testing.T) {
 			goldenJSON(t,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
+
+			// #120 physical publish verification: every path leaf the golden
+			// claims must exist under results/. Today these goldens are scalar
+			// totals (the fixtures CONSUME file entries and publish no files),
+			// so this walk asserts nothing — it is wired so a fixture gaining a
+			// file-typed out is physically verified automatically.
+			assertPublishedLeaves(t, filepath.Join(proj, "results"),
+				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 		})
 	}
 }
@@ -870,41 +878,51 @@ func TestNativeComplete(t *testing.T) {
 	// Each case compares its single -native run against the committed mrp
 	// golden: TestGolden proves default==golden, so native==golden covers
 	// native==default transitively — and anchors native to mrp truth.
-	cases := []struct{ fixture, golden string }{
-		{"diamond_min", "expected/outs.json"},
-		{"fold_disable", "expected/outs.json"},
-		{"native_file_return", "expected/nf_outs.json"},
-		{"file_min", "expected/outs.json"},
-		{"chain_fuse", "expected/outs.json"},
-		{"struct_min", "expected/stats_pipe_outs.json"},
-		{"fork_min", "expected/scale_all_outs.json"},
-		{"map_fork", "expected/outs.json"},
-		{"empty_fork_min", "expected/outs.json"},
-		{"empty_map_fork", "expected/outs.json"},
-		{"fork_ref", "expected/outs.json"},
-		{"fork_mid", "expected/outs.json"},
-		{"fork_upstream", "expected/outs.json"},
-		{"map_fork_upstream", "expected/outs.json"},
-		{"map_null_map", "expected/outs.json"},
-		{"map_key_sort", "expected/outs.json"},
-		{"runtime_empty_forks", "expected/outs.json"},
+	//
+	// leaves marks the file-bearing fixtures (#120): every path leaf the golden
+	// claims must physically exist under results/, not just match as a string —
+	// a native LAYOUT bug publishing correct rel paths to the wrong place (or
+	// nowhere) fails here. note additionally pins the published note.txt's
+	// bytes, so the leaf carries the right CONTENT, not merely a file.
+	cases := []struct {
+		fixture, golden string
+		leaves          bool
+		note            string
+	}{
+		{fixture: "diamond_min", golden: "expected/outs.json"},
+		{fixture: "fold_disable", golden: "expected/outs.json"},
+		{fixture: "native_file_return", golden: "expected/nf_outs.json", leaves: true, note: "x=21"},
+		{fixture: "file_min", golden: "expected/outs.json", leaves: true, note: "x=42"},
+		{fixture: "chain_fuse", golden: "expected/outs.json"},
+		{fixture: "struct_min", golden: "expected/stats_pipe_outs.json"},
+		{fixture: "fork_min", golden: "expected/scale_all_outs.json"},
+		{fixture: "map_fork", golden: "expected/outs.json"},
+		{fixture: "empty_fork_min", golden: "expected/outs.json"},
+		{fixture: "empty_map_fork", golden: "expected/outs.json"},
+		{fixture: "fork_ref", golden: "expected/outs.json"},
+		{fixture: "fork_mid", golden: "expected/outs.json"},
+		{fixture: "fork_upstream", golden: "expected/outs.json"},
+		{fixture: "map_fork_upstream", golden: "expected/outs.json"},
+		{fixture: "map_null_map", golden: "expected/outs.json"},
+		{fixture: "map_key_sort", golden: "expected/outs.json"},
+		{fixture: "runtime_empty_forks", golden: "expected/outs.json"},
 		// #121: value-only leaf scatters whose outputs (not split elements)
 		// carry files — file arrays, keyed typed maps, struct projections, and
 		// multi-dimensional forks all ride the O(1) element path with the merge
 		// folded into the sole consumer.
-		{"map_file", "expected/outs.json"},
-		{"map_file_keyed", "expected/outs.json"},
-		{"map_file_array", "expected/outs.json"},
-		{"map_struct_proj", "expected/outs.json"},
-		{"multidim", "expected/outs.json"},
+		{fixture: "map_file", golden: "expected/outs.json", leaves: true},
+		{fixture: "map_file_keyed", golden: "expected/outs.json", leaves: true},
+		{fixture: "map_file_array", golden: "expected/outs.json", leaves: true},
+		{fixture: "map_struct_proj", golden: "expected/outs.json"},
+		{fixture: "multidim", golden: "expected/outs.json"},
 		// #121: non-map shapes where every call fuses (wildcard bindings,
 		// aliased calls, exec/comp adapters, a compiled split stage) — -native
 		// must leave no data-plane task at all. mixed_adapters and comp_split
 		// ship an mrjob.sh, which transpile() passes via -mrjob automatically.
-		{"wildcard", "expected/outs.json"},
-		{"alias_min", "expected/p_outs.json"},
-		{"mixed_adapters", "expected/outs.json"},
-		{"comp_split", "expected/outs.json"},
+		{fixture: "wildcard", golden: "expected/outs.json"},
+		{fixture: "alias_min", golden: "expected/p_outs.json"},
+		{fixture: "mixed_adapters", golden: "expected/outs.json"},
+		{fixture: "comp_split", golden: "expected/outs.json"},
 	}
 
 	for _, tc := range cases {
@@ -921,6 +939,15 @@ func TestNativeComplete(t *testing.T) {
 			goldenJSON(t,
 				filepath.Join(native, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
+
+			if tc.leaves {
+				assertPublishedLeaves(t, filepath.Join(native, "results"),
+					filepath.Join(root, "testdata", tc.fixture, tc.golden))
+			}
+
+			if tc.note != "" {
+				assertFileContent(t, filepath.Join(native, "results", "note.txt"), tc.note)
+			}
 		})
 	}
 }
