@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -161,25 +163,38 @@ func TestReconstructFilesStagedCountMismatch(t *testing.T) {
 	}
 }
 
-// TestParseFlatFlags checks the -fileflat parser, including multi-input, empty,
-// and malformed cases.
-func TestParseFlatFlags(t *testing.T) {
-	got, err := parseFlatFlags("reads=/w/a;fastqs=/w/x,/w/y")
-	if err != nil {
-		t.Fatalf("parseFlatFlags: %v", err)
+// TestReadFlatFile checks the -fileflat JSON decoding, including staged paths
+// containing the `,`/`;`/`=` characters that broke the old flat-string
+// encoding (all legal in filenames), plus the empty and malformed cases.
+func TestReadFlatFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fileflat.json")
+	payload := `{"reads":["/w/a,b;c=d.fastq"],"fastqs":["/w/x","/w/y"],"unset":[]}`
+
+	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got["reads"], []string{"/w/a"}) {
-		t.Errorf("reads = %v, want [/w/a]", got["reads"])
+
+	got, err := readFlatFile(path)
+	if err != nil {
+		t.Fatalf("readFlatFile: %v", err)
+	}
+	if !reflect.DeepEqual(got["reads"], []string{"/w/a,b;c=d.fastq"}) {
+		t.Errorf("reads = %v, want the separator-laden path intact", got["reads"])
 	}
 	if !reflect.DeepEqual(got["fastqs"], []string{"/w/x", "/w/y"}) {
 		t.Errorf("fastqs = %v, want the two staged paths", got["fastqs"])
 	}
 
-	if empty, err := parseFlatFlags(""); err != nil || len(empty) != 0 {
-		t.Errorf("parseFlatFlags(\"\") = %v, %v; want empty map, nil", empty, err)
+	if empty, err := readFlatFile(""); err != nil || len(empty) != 0 {
+		t.Errorf("readFlatFile(\"\") = %v, %v; want empty map, nil", empty, err)
 	}
 
-	if _, err := parseFlatFlags("bogus"); err == nil {
-		t.Error("parseFlatFlags(\"bogus\") should error (no name=path)")
+	bogus := filepath.Join(t.TempDir(), "bogus.json")
+	if err := os.WriteFile(bogus, []byte("not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := readFlatFile(bogus); err == nil {
+		t.Error("readFlatFile(non-JSON) should error")
 	}
 }

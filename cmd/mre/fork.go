@@ -31,6 +31,15 @@ var errKeysOnlyNeedsFile = errors.New("forkbind -keysonly requires -keysfile <pa
 // mutually exclusive modes (keys-only would silently skip the -o bundle write).
 var errKeysOnlyWithIndex = errors.New("forkbind -keysonly cannot be combined with -index")
 
+// errElementNoOut reports -elementfile without the required -o output dir.
+var errElementNoOut = errors.New("forkbind -elementfile requires -o <dir>")
+
+// errElementConflict reports -elementfile combined with a full-collection flag
+// (-index/-keysfile/-keysonly/-mapmode): the pre-sliced element path never
+// indexes, writes keys, or dispatches on the fork kind, so such a flag would
+// be silently ignored.
+var errElementConflict = errors.New("forkbind -elementfile cannot be combined with -index, -keysfile, -keysonly, or -mapmode")
+
 // runForkBind resolves a map call's bindings into one args file per fork,
 // written as fork_NNNNN.json into -chunkdir so a lexical sort recovers order.
 func runForkBind(_ context.Context, argv []string) error {
@@ -51,7 +60,7 @@ func runForkBind(_ context.Context, argv []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	if err := checkForkBindFlags(*index, *keysOnly, *keysFile); err != nil {
+	if err := checkForkBindFlags(fs, *index, *keysOnly, *keysFile, *elemFile); err != nil {
 		return err
 	}
 
@@ -118,13 +127,17 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 		return writeKeysFile(w.keysFile, keys)
 	}
 
-	// Load the type manifest once, not once per fork.
 	man, err := prod.manifest()
 	if err != nil {
 		return err
 	}
 
-	params, tbl := man.Params(prod.callable, prod.role), man.Table()
+	params, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("forkbind params: %w", err)
+	}
+
+	tbl := man.Table()
 
 	// Native scatter (#76): -index writes just one fork's args to -o, so the
 	// standalone FORK task is replaced by an in-workflow scatter over 0..N-1 with
@@ -145,7 +158,7 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 // the same value ResolveForks would have placed at that fork's split param.
 func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, elemFile, oDir string, prod *producer) error {
 	if oDir == "" {
-		return errForkIndexNoOut
+		return errElementNoOut
 	}
 
 	element, err := readFile(elemFile)
@@ -158,27 +171,27 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 		return fmt.Errorf("forkbind element: %w", err)
 	}
 
-	man, err := prod.manifest()
-	if err != nil {
-		return err
-	}
-
-	payload, err := rawToMap(args)
-	if err != nil {
-		return err
-	}
-
-	if err := shim.WriteBundle(oDir, payload, man.Params(prod.callable, prod.role), man.Table()); err != nil {
-		return fmt.Errorf("write element bundle: %w", err)
-	}
-
-	return nil
+	return prod.write(oDir, args)
 }
 
 // checkForkBindFlags diagnoses flag-combination misuse before any resolution
 // work, so the error names the actual mistake rather than whatever I/O failed
-// first.
-func checkForkBindFlags(index int, keysOnly bool, keysFile string) error {
+// first. The element path checks EXPLICITLY-set flags (via fs.Visit), so
+// -mapmode's default does not trip the conflict while a passed one does.
+func checkForkBindFlags(fs *flag.FlagSet, index int, keysOnly bool, keysFile, elemFile string) error {
+	if elemFile != "" {
+		set := map[string]bool{}
+		fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+
+		for _, name := range []string{"index", "keysfile", "keysonly", "mapmode"} {
+			if set[name] {
+				return fmt.Errorf("%w: got -%s", errElementConflict, name)
+			}
+		}
+
+		return nil
+	}
+
 	if keysFile != "" && index < 0 && !keysOnly {
 		return errKeysFileNeedsIndex
 	}
@@ -298,7 +311,7 @@ func runMerge(_ context.Context, argv []string) error {
 	prod := addProducer(fs, types.RoleOut)
 	outs := fs.String("outs", "", "comma-separated output parameter names")
 	files := fs.String("files", "", "comma-separated per-fork output bundle dirs, in order")
-	keysFile := fs.String("keys-file", "", "fork keys JSON (null for an array fork)")
+	keysFile := fs.String("keysfile", "", "fork keys JSON (null for an array fork)")
 	outFile := fs.String("o", "", "output merged bundle dir")
 	emptyNull := fs.Bool("emptynull", false, "zero forks merge to null instead of the typed empty (invocation-known split source, #99)")
 
@@ -341,7 +354,12 @@ func writeMerged(dir string, merged json.RawMessage, prod *producer, mapFork boo
 		return err
 	}
 
-	params := bumpForkDim(man.Params(prod.callable, prod.role), mapFork)
+	outParams, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("merge params: %w", err)
+	}
+
+	params := bumpForkDim(outParams, mapFork)
 	if err := shim.WriteBundle(dir, payload, params, man.Table()); err != nil {
 		return fmt.Errorf("write merged bundle %s: %w", dir, err)
 	}

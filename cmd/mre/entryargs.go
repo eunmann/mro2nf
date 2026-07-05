@@ -7,15 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
 var (
-	// errBadFlatFlag reports a malformed -fileflat entry (not name=paths).
-	errBadFlatFlag = errors.New("invalid -fileflat entry (want name=path[,path...])")
 	// errNoEntryType reports a staged input with no matching entry-param type.
 	errNoEntryType = errors.New("entry input has staged files but no type")
 	// errStagedFew reports fewer staged files than the value's file leaves.
@@ -33,17 +30,18 @@ var (
 //	-base     the baked entry_args bundle (defaults; file leaves carry through)
 //	-values   a JSON object {input: value} of overrides (a null value keeps the
 //	          baked default for that input)
-//	-fileflat ';'-separated name=p1,p2,... — for each file-bearing input the run
-//	          supplied, the Nextflow-staged file paths (one per file leaf, in the
-//	          canonical type-walk order). These real local paths replace the raw
-//	          override values (s3:// URIs the worker cannot stat) and are marked
-//	          into the bundle.
+//	-fileflat a JSON file {input: [path, ...]} — for each file-bearing input the
+//	          run supplied, the Nextflow-staged file paths (one per file leaf, in
+//	          the canonical type-walk order). These real local paths replace the
+//	          raw override values (s3:// URIs the worker cannot stat) and are
+//	          marked into the bundle. JSON keeps legal filenames containing
+//	          `,`/`;`/`=` intact, which a flat separator encoding cannot.
 func runEntryArgs(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("entryargs", flag.ContinueOnError)
 	prod := addProducer(fs, types.RoleIn)
 	base := fs.String("base", "", "baked entry_args bundle dir (defaults)")
 	values := fs.String("values", "", "JSON file of {input: value} run-parameter overrides")
-	fileflat := fs.String("fileflat", "", "';'-separated name=path[,path...] of staged file leaves")
+	fileflat := fs.String("fileflat", "", "JSON file of {input: [staged file-leaf paths]}")
 	outFile := fs.String("o", "", "output bundle dir")
 
 	if err := fs.Parse(argv); err != nil {
@@ -63,7 +61,7 @@ func runEntryArgs(_ context.Context, argv []string) error {
 		}
 	}
 
-	flatMap, err := parseFlatFlags(*fileflat)
+	flatMap, err := readFlatFile(*fileflat)
 	if err != nil {
 		return err
 	}
@@ -109,7 +107,12 @@ func overlayEntry(payload map[string]any, valuesFile string, flatMap map[string]
 		return err
 	}
 
-	if err := reconstructFiles(payload, over, flatMap, man.Params(prod.callable, prod.role), man.Table()); err != nil {
+	params, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("entry params: %w", err)
+	}
+
+	if err := reconstructFiles(payload, over, flatMap, params, man.Table()); err != nil {
 		return err
 	}
 
@@ -176,27 +179,22 @@ func overlayValues(payload, over map[string]any) {
 	}
 }
 
-// parseFlatFlags parses the -fileflat "name=p1,p2;name2=p3" argument: ';'
-// separates inputs, '=' splits name from its comma-separated staged paths.
-func parseFlatFlags(s string) (map[string][]string, error) {
+// readFlatFile reads the -fileflat JSON file: an object mapping each supplied
+// file-bearing input name to its staged file-leaf paths in canonical
+// type-walk order. An empty path yields an empty map (no staged inputs).
+func readFlatFile(path string) (map[string][]string, error) {
 	out := map[string][]string{}
-	if s == "" {
+	if path == "" {
 		return out, nil
 	}
 
-	for entry := range strings.SplitSeq(s, ";") {
-		name, paths, ok := strings.Cut(entry, "=")
-		if !ok || name == "" {
-			return nil, fmt.Errorf("%w: %q", errBadFlatFlag, entry)
-		}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read fileflat: %w", err)
+	}
 
-		if paths == "" {
-			out[name] = nil
-
-			continue
-		}
-
-		out[name] = strings.Split(paths, ",")
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("parse fileflat %s: %w", path, err)
 	}
 
 	return out, nil

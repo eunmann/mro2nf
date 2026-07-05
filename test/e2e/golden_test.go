@@ -396,6 +396,50 @@ func renderOverrideParams(t *testing.T, fixtureDir, proj string) {
 	}
 }
 
+// TestEntryFileAdversarialName pins the EMITTER side of the -fileflat JSON
+// seam: BUILD_ENTRY_ARGS renders the staged-path map with
+// groovy.json.JsonOutput.toJson inside a quoted heredoc, and that encoding —
+// not just mre's decoder, which TestReadFlatFile covers — must keep a legal
+// filename containing every separator the old flat encoding used (`,`, `;`,
+// `=`) intact. The adversarial copy of entry_file's override input is created
+// at runtime (committing such a basename would be fragile across tooling); the
+// stage sums the file's numbers, so the run reproduces the override golden
+// (total = 200) only if the path survived the emit -> entryargs seam — the old
+// encoding mis-split it at `;` and `,`.
+func TestEntryFileAdversarialName(t *testing.T) {
+	requireTools(t, "nextflow", "java")
+
+	fixtureDir := filepath.Join(root, "testdata", "entry_file")
+	proj := transpile(t, "entry_file")
+
+	content, err := os.ReadFile(filepath.Join(fixtureDir, "input", "override.txt"))
+	if err != nil {
+		t.Fatalf("read override input: %v", err)
+	}
+
+	advPath := filepath.Join(t.TempDir(), "a,b;c=d.txt")
+	if err := os.WriteFile(advPath, content, 0o644); err != nil {
+		t.Fatalf("write adversarial input: %v", err)
+	}
+
+	params, err := json.Marshal(map[string]string{"reads": advPath})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(proj, "params.json"), params, 0o644); err != nil {
+		t.Fatalf("write params.json: %v", err)
+	}
+
+	if err := runNextflow(t, proj, "-params-file", "params.json"); err != nil {
+		t.Fatal(err)
+	}
+
+	goldenJSON(t,
+		filepath.Join(proj, "results", "pipeline_outs.json"),
+		filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
+}
+
 // assertFileContent asserts a published text file's content, ignoring a
 // trailing newline (matching the shell harness's `$(cat ...)` comparison).
 func assertFileContent(t *testing.T, path, want string) {
