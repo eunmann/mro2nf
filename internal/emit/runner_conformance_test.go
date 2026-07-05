@@ -125,8 +125,43 @@ func TestRunnerConformanceExitCodes(t *testing.T) {
 			if tc.wantArtifact && mreArtifact && pyArtifact {
 				diffDirs(t, "sysexit-zero outs", filepath.Join(mreOut, "outs"), filepath.Join(pyOut, "outs"))
 			}
+
+			// Exit 42 alone is not the whole assert contract: the ASSERT line
+			// is the user-visible message (and what failure classification
+			// keys on), so both stacks must emit the identical one.
+			if tc.name == "assert" {
+				mreLine := assertLine(t, filepath.Join(mreOut, "combined.log"))
+				pyLine := assertLine(t, filepath.Join(pyOut, "combined.log"))
+
+				if mreLine == "" || mreLine != pyLine {
+					t.Errorf("ASSERT line: mre=%q py=%q, want identical non-empty", mreLine, pyLine)
+				}
+			}
 		})
 	}
+}
+
+// assertLine returns the "ASSERT:..." payload from the first output line
+// carrying one, or "" when none was emitted. The framing differs by design —
+// the runner prints the bare adapter-style line, mre embeds it in its wrapped
+// error ("mre: main phase: ...: ASSERT:boom") — but the payload from the
+// prefix to end-of-line must match, since that is the user-visible assert
+// message and what failure classification keys on.
+func assertLine(t *testing.T, log string) string {
+	t.Helper()
+
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if i := strings.Index(line, "ASSERT"); i >= 0 {
+			return strings.TrimSpace(line[i:])
+		}
+	}
+
+	return ""
 }
 
 // conformanceEnv is one prepared stage + inputs shared by both stacks.
@@ -367,6 +402,12 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 	cmd.Dir = dir
 
 	out, err := cmd.CombinedOutput()
+	// Persist the combined output so cases can pin diagnostic-surface parity
+	// (e.g. the ASSERT line both stacks must emit), not just exit codes.
+	if werr := os.WriteFile(filepath.Join(dir, "combined.log"), out, 0o644); werr != nil {
+		t.Fatal(werr)
+	}
+
 	if err == nil {
 		return 0, dir
 	}
