@@ -10,26 +10,60 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
-// TestBench is the data-movement benchmark gate (epic #18 / #17): each bench
-// pipeline runs under Nextflow with tracing, bench_metrics.py measures how
-// often the probe file is staged across the work dir, and bench_report.py
-// gates the transfer multiplier against bench/baseline.json (BENCH_UPDATE=1
+// benchLane is one benchmark run: a fixture invocation (dir + entry .mro)
+// transpiled in either default or -native mode, measured under its own
+// baseline key.
+type benchLane struct {
+	key       string // metrics name and bench/baseline.json key
+	dir       string // fixture dir under bench/
+	mro       string // entry invocation .mro within dir
+	probe     string // marker string the fixture's probe file carries
+	producers int    // how many tasks legitimately write the probe file
+	native    bool   // transpile with -native
+}
+
+// benchLanes returns every benchmark lane: each fixture invocation in default
+// mode and again under -native (distinct `_native` baseline keys). The forks
+// and split fixtures run at two widths (N=4 / N=16 forks, 4 / 16 chunks) so
+// bench_report.py can assert the plumbing task count is IDENTICAL at both —
+// the CLAUDE.md overhead rule that orchestration cost must not scale with
+// fork width or chunk count. The forks×widths×native lanes are the ones that
+// prove the -native O(1) element scatter stays O(1).
+func benchLanes() []benchLane {
+	base := []benchLane{
+		{key: "chain", dir: "chain", mro: "pipeline.mro", probe: "MRE_BENCH_CHAIN_PROBE", producers: 1},
+		{key: "forks_w4", dir: "forks", mro: "pipeline_w4.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1},
+		{key: "forks_w16", dir: "forks", mro: "pipeline_w16.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1},
+		{key: "split_c4", dir: "split", mro: "pipeline_c4.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1},
+		{key: "split_c16", dir: "split", mro: "pipeline_c16.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1},
+	}
+
+	lanes := make([]benchLane, 0, 2*len(base))
+
+	for _, l := range base {
+		lanes = append(lanes, l)
+
+		l.key += "_native"
+		l.native = true
+		lanes = append(lanes, l)
+	}
+
+	return lanes
+}
+
+// TestBench is the data-movement and orchestration-overhead benchmark gate
+// (epic #18 / #17, overhead rule #119): each bench lane runs under Nextflow
+// with tracing, bench_metrics.py measures the probe-file staging count and
+// the task/plumbing shape, and bench_report.py gates refs, plumbing_tasks,
+// and tasks against bench/baseline.json — plus the width-scaling invariant
+// that plumbing_tasks is identical across a fixture's widths (BENCH_UPDATE=1
 // records a new baseline; BENCH_PROFILE/BENCH_WORKDIR select another backend).
-// Port of bench.sh; the Python metric scripts are retained as-is.
 func TestBench(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
-
-	benches := []struct {
-		name      string
-		probe     string
-		producers int
-	}{
-		{"chain", "MRE_BENCH_CHAIN_PROBE", 1},
-		{"split", "MRE_BENCH_SPLIT_PROBE", 1},
-	}
 
 	// A non-local BENCH_WORKDIR makes the refs gate vacuous (see
 	// requireLocalWorkdir); validate once, up front, before any transpile or run.
@@ -38,49 +72,91 @@ func TestBench(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	metrics := filepath.Join(t.TempDir(), "metrics.jsonl")
+	var (
+		mu      sync.Mutex
+		metrics bytes.Buffer
+	)
 
-	mf, err := os.Create(metrics)
-	if err != nil {
+	ok := t.Run("lanes", func(t *testing.T) {
+		for _, l := range benchLanes() {
+			t.Run(l.key, func(t *testing.T) {
+				t.Parallel()
+
+				line := runBenchLane(t, l, workdir)
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				metrics.Write(line)
+			})
+		}
+	})
+	if !ok {
+		t.Fatal("bench lanes failed; skipping the report gate")
+	}
+
+	path := filepath.Join(t.TempDir(), "metrics.jsonl")
+	if err := os.WriteFile(path, metrics.Bytes(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	defer mf.Close()
 
-	for _, b := range benches {
-		dir := filepath.Join(root, "bench", b.name)
-		if !fileExists(filepath.Join(dir, "pipeline.mro")) {
-			t.Fatalf("bench fixture %s missing", b.name)
-		}
+	runBenchReport(t, path)
+}
 
-		proj := transpileDir(t, dir)
+// runBenchLane transpiles, runs, and measures one lane, returning its
+// bench_metrics.py JSON line.
+func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
+	t.Helper()
 
-		args := []string{"-with-trace", "trace.txt", "-with-dag", "dag.mmd"}
-		if p := os.Getenv("BENCH_PROFILE"); p != "" {
-			args = append(args, "-profile", p)
-		}
-
-		if workdir != "" {
-			args = append(args, "-work-dir", workdir)
-		}
-
-		if err := runNextflow(t, proj, args...); err != nil {
-			t.Fatalf("bench %s: %v", b.name, err)
-		}
-
-		var errBuf bytes.Buffer
-
-		cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
-			b.name, filepath.Join(proj, "trace.txt"), proj, b.probe,
-			strconv.Itoa(b.producers), filepath.Join(proj, "dag.mmd"))
-		cmd.Stdout = mf
-		cmd.Stderr = &errBuf
-
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("bench_metrics %s: %v\n%s", b.name, err, errBuf.String())
-		}
+	dir := filepath.Join(root, "bench", l.dir)
+	if !fileExists(filepath.Join(dir, l.mro)) {
+		t.Fatalf("bench fixture %s/%s missing", l.dir, l.mro)
 	}
 
-	runBenchReport(t, metrics)
+	var flags []string
+	if l.native {
+		flags = append(flags, "-native")
+	}
+
+	proj := transpileMRO(t, dir, l.mro, flags...)
+
+	args := []string{"-with-trace", "trace.txt", "-with-dag", "dag.mmd"}
+	if p := os.Getenv("BENCH_PROFILE"); p != "" {
+		args = append(args, "-profile", p)
+	}
+
+	// scanRoot is where bench_metrics.py scans <scanRoot>/work for probe
+	// stagings. Lanes run in parallel and a fixture's two widths share one
+	// probe string, so a shared BENCH_WORKDIR gets a per-lane subdirectory —
+	// otherwise one lane's stagings would inflate another's refs count.
+	scanRoot := proj
+
+	if workdir != "" {
+		if _, path, ok := strings.Cut(workdir, "://"); ok {
+			workdir = path // requireLocalWorkdir proved the scheme is file
+		}
+
+		scanRoot = filepath.Join(workdir, l.key)
+		args = append(args, "-work-dir", filepath.Join(scanRoot, "work"))
+	}
+
+	if err := runNextflow(t, proj, args...); err != nil {
+		t.Fatalf("bench %s: %v", l.key, err)
+	}
+
+	var out, errBuf bytes.Buffer
+
+	cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		l.key, filepath.Join(proj, "trace.txt"), scanRoot, l.probe,
+		strconv.Itoa(l.producers), filepath.Join(proj, "dag.mmd"))
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("bench_metrics %s: %v\n%s", l.key, err, errBuf.String())
+	}
+
+	return out.Bytes()
 }
 
 // requireLocalWorkdir rejects a non-local BENCH_WORKDIR (empty is fine — the
