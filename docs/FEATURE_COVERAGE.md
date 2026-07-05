@@ -146,6 +146,28 @@ out of scope for a transpiler.
 | web UI / HTTP API / mrstat | 🚫 use `nextflow log`/`-with-report` instead | — |
 | `mro check` / `mro graph` as conformance oracle | ✅ used to validate every fixture; `mro graph` ≈ `nextflow run -with-dag` | `test/e2e`, `mro check` |
 
+## Opt-in emission modes — `-fuse-chains`, `-fold-disables`, `-native`, `-native-runner`
+
+These flags change the emitted *task graph*, never the outputs, so each gate
+compares its run against the committed real-`mrp` golden (and `TestMrpDiff`
+machine-checks the native-suite goldens' mrp provenance against a live `mrp`).
+The trade-offs each flag opts into are surfaced as transpile-time diagnostics
+(`internal/emit/diagnostics.go`) — see `docs/TRANSPILER.md` §4.8.
+
+| Shape under the flag | Status | Test |
+|---|---|---|
+| `-fuse-chains`: single-consumer, equal-resource chain folded into one task | ✅ (coarser `-resume`/retry for the fused stages; Info diagnostic counts the fused chains) | e2e `TestFuseChains`; unit `TestBuildPlanChainFusion`, `TestDiagnoseFuseChains` |
+| `-fold-disables`: entry-determinable always-disabled call pruned to its null output | ✅ (Warn diagnostic per pruned call: overriding the gate input will not re-enable it) | e2e `TestFoldDisables`; unit `TestBuildPlanFoldDisables`, `TestDiagnoseFoldDisables` |
+| `-native` full collapse (plain/diamond DAGs, fused chains, value-only array & map forks, upstream split sources, invocation-known & runtime empty forks, file outputs through the native LAYOUT, wildcard/alias, exec+comp adapters) | ✅ **no** data-plane task remains (`assertNativeComplete`: no BIND/FORK/MERGE/DISABLE/BUILD_ENTRY_ARGS) and output equals the mrp golden | e2e `TestNativeComplete` |
+| `-native` bounded remainder (file-bearing / multi-split / split-stage forks keep exactly one FORK resolve; map-over-sub-pipeline runs the keyed layer; a disabled map keeps FORK+MERGE as the skip mix point; nested value-only maps ride the `_KS` driver scatter) | ✅ the exact surviving data-plane process names are pinned per fixture, and each prints an Info diagnostic at transpile | e2e `TestNativeMode` |
+| `-native` scatter/merge-fold specifics (disabled sub-pipeline callees, fan-out consumers keeping their MERGE, empty-fork cascades) | ✅ | e2e `TestNativeScatter` |
+| `-native` file- and directory-typed entry inputs (baked leaves staged into the workflow) | ✅ | e2e `TestNativeFileEntry` |
+| `-native` launch-time override of a baked entry arg | ❌ **by design**: loud error, never a silent ignore — re-transpile to change entry values (HealthOmics: `parameter-template.json` still declares the params; supplying one fails the run, per the transpile-time Info) | e2e `TestNativeRejectsOverride`; unit `TestDiagnoseNativeHealthOmics` |
+| `-native` (+ `-native-runner`) on container backends (baked runner + entry args in the image) | ✅ | e2e `TestNativeContainerEmits`; docker e2e `TestGeneratedAWSBatchImageNative` |
+| `-native` plan eligibility (what scatters, what keeps the FORK path, merge-fold rules, queue-pipeargs contexts) | ✅ decided once in `buildPlan`, so emitters cannot disagree | unit `internal/emit/native_test.go` (`TestBuildPlanNativeScatter*`, `TestBuildPlanMergeFold`, `TestSplitValueOnly`, …) |
+| `-native-runner`: `py` stages via the embedded direct-call runner | ✅ `py` only — `exec`/`comp` stages keep the Martian adapter path (Info diagnostic per stage); `-monitor` enforcement runs in-process (RLIMIT_AS cap + RSS watchdog) | e2e `TestNativeRunner`, `TestNativeRunnerComposesWithNative`, `TestNativeRunnerExitContract`; unit `TestRunnerConformance*` (encoder/ABI conformance vs the adapter) |
+| `.mro2nf.yml` flag defaults (keys mirror flags; builtin < config < explicit flag) | ✅ | unit `internal/config` `TestLoad*`; `cmd/mro2nf` `TestApplyConfig*` |
+
 ## Notes
 
 - Every e2e fixture's expected output is the real `mrp` result, captured under
