@@ -1,0 +1,44 @@
+# #127 value-chain divergence (b): an in-pipeline chain `map call SECOND(split
+# FIRST.scaled)` where FIRST itself forks over an invocation-known-empty entry
+# source. mrp's KnownLength propagation prunes FIRST to null AND cascades the
+# prune to SECOND (both resolve NULL); a shape-only rule would merge SECOND's
+# runtime-null split source to the typed empty []. The transpiler must
+# propagate the invocation-known marking through the mapped-call output
+# (knownInvocation cascade): FIRST zero-fork merges to null exactly when the
+# entry source is empty, so SECOND's zero-fork merge may emit null too.
+# Override `values` non-empty at launch and both fork layers run
+# (expected/override_outs.json pins that).
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline EFC(
+    in  float[] values,
+    in  float   factor,
+    out float[] first,
+    out float[] second,
+)
+{
+    map call SCALE as FIRST(
+        value  = split self.values,
+        factor = self.factor,
+    )
+
+    map call SCALE as SECOND(
+        value  = split FIRST.scaled,
+        factor = self.factor,
+    )
+
+    return (
+        first  = FIRST.scaled,
+        second = SECOND.scaled,
+    )
+}
+
+call EFC(
+    values = [],
+    factor = 10.0,
+)
