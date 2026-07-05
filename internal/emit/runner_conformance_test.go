@@ -42,10 +42,21 @@ func TestRunnerConformance(t *testing.T) {
 	pySplit := env.runPhase(t, "py", "split", nil)
 	diffDirs(t, "split", mreSplit, pySplit)
 
+	// Guard the fixture's reach: the parity diff is vacuous for an escape or
+	// staging branch the fixture no longer hits, so pin the trouble-spot bytes
+	// on the mre side (the py side matches it byte-for-byte via diffDirs).
+	mustContain(t, filepath.Join(mreSplit, "chunks.json"),
+		`\u003c`, `\u003e`, `\u0026`, `\u0001`, `\u2028`, `\u2029`, "2.5")
+	mustContain(t, filepath.Join(mreSplit, "joinres.json"), "1.25")
+
 	chunk := filepath.Join(mreSplit, "chunk_00000")
+	mustContain(t, filepath.Join(chunk, "data.json"), shim.FileMarker)
+
 	mreMain := env.runPhase(t, "mre", "main", []string{"-chunk", chunk})
 	pyMain := env.runPhase(t, "py", "main", []string{"-chunk", chunk})
 	diffDirs(t, "main", mreMain, pyMain)
+	mustContain(t, filepath.Join(mreMain, "outs", "data.json"),
+		`\u003c`, `\u0026`, `\u0001`, `\u0002`, `\u2028`, `\u2029`)
 
 	joinFlags := []string{
 		"-chunkdefs", filepath.Join(mreSplit, "chunks.json"),
@@ -115,44 +126,72 @@ func requirePython(t *testing.T) {
 
 // conformanceStage is a split stage whose values exercise the parity trouble
 // spots: float fidelity (42.0), non-ASCII map KEYS in chunk defs (Go vs python
-// escaping), a file output, and chunk resource overrides.
+// escaping), a string chunk def + outs value hitting every hand-ported escape
+// branch (HTML `<>&`, a control character, U+2028/U+2029 — _go_string in the
+// chunk/outs bundles, _py_string in chunks.json's RawMessage passthrough), a
+// file-typed chunk-in the split writes (write_chunk_bundles' mark_files vs
+// shim.WriteChunkBundle staging), fractional resource overrides (GoFloat's
+// formatting in chunks.json + joinres.json), and a file output.
 const conformanceStage = `import martian
 
 def split(args):
+    src = args.srcdir + '/chunk_src.txt'
+    with open(src, 'w') as f:
+        f.write('chunk-input-payload')
     return {
         'chunks': [
-            {'i': 0, 'café': 'kéy', '__mem_gb': 2},
-            {'i': 1, 'café': 'v2'},
+            {'i': 0, 'café': 'kéy', 'html': 'a<b>&c\x01d\u2028e\u2029f',
+             'src': src, '__mem_gb': 2.5},
+            {'i': 1, 'café': 'v2', 'html': 'plain', 'src': src},
         ],
-        'join': {'__threads': 2},
+        'join': {'__threads': 2, '__mem_gb': 1.25},
     }
 
 def main(args, outs):
     outs.part = args.value * 10.0 + 42.0
     p = martian.make_path('report.txt').decode()
+    with open(args.src) as f:
+        payload = f.read()
     with open(p, 'w') as f:
-        f.write('value=%s threads=%s' % (args.value, martian.get_threads_allocation()))
+        f.write('value=%s threads=%s mem=%s src=%s' % (
+            args.value, martian.get_threads_allocation(),
+            martian.get_memory_allocation(), payload))
     outs.report = p
+    outs.note = args.html + ' <main>&\x02'
 
 def join(args, outs, chunk_defs, chunk_outs):
     outs.total = sum(c.part for c in chunk_outs)
     outs.report = chunk_outs[0].report
+    outs.note = chunk_outs[0].note + ' <join>'
 `
 
 func newConformanceEnv(t *testing.T) *conformanceEnv {
 	t.Helper()
 
 	return buildConformanceEnv(t, conformanceStage, &ir.Stage{
-		Name:  "CONF",
-		In:    []ir.Param{{Name: "value", Type: "float", BaseType: "float"}},
-		Out:   []ir.Param{{Name: "total", Type: "float", BaseType: "float"}, {Name: "report", Type: "txt", BaseType: "txt", IsFile: true}},
+		Name: "CONF",
+		In: []ir.Param{
+			{Name: "value", Type: "float", BaseType: "float"},
+			{Name: "srcdir", Type: "string", BaseType: "string"},
+		},
+		Out: []ir.Param{
+			{Name: "total", Type: "float", BaseType: "float"},
+			{Name: "report", Type: "txt", BaseType: "txt", IsFile: true},
+			{Name: "note", Type: "string", BaseType: "string"},
+		},
 		Split: true,
 		ChunkIn: []ir.Param{
 			{Name: "i", Type: "int", BaseType: "int"},
 			{Name: "café", Type: "string", BaseType: "string"},
+			{Name: "html", Type: "string", BaseType: "string"},
+			{Name: "src", Type: "txt", BaseType: "txt", IsFile: true},
 		},
-		ChunkOut: []ir.Param{{Name: "part", Type: "float", BaseType: "float"}, {Name: "report", Type: "txt", BaseType: "txt", IsFile: true}},
-		Lang:     ir.LangPy,
+		ChunkOut: []ir.Param{
+			{Name: "part", Type: "float", BaseType: "float"},
+			{Name: "report", Type: "txt", BaseType: "txt", IsFile: true},
+			{Name: "note", Type: "string", BaseType: "string"},
+		},
+		Lang: ir.LangPy,
 	})
 }
 
@@ -200,9 +239,20 @@ func buildConformanceEnv(t *testing.T, code string, s *ir.Stage) *conformanceEnv
 		t.Fatal(err)
 	}
 
+	// srcdir is a shared scratch dir OUTSIDE both stacks' work dirs: the split
+	// writes a chunk-input file there, so the path string recorded in
+	// chunks.json is byte-identical across stacks (both runs write the same
+	// bytes to the same path) while the staged copies under each chunk bundle
+	// are what the parity diff compares.
+	srcdir := filepath.Join(root, "shared")
+	if err := os.MkdirAll(srcdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	env.argsDir = filepath.Join(root, "args")
 	man := types.BuildManifest(prog)
-	if err := shim.WriteBundle(env.argsDir, map[string]any{"value": 1.5}, man.Params(s.Name, types.RoleIn), man.Table()); err != nil {
+	stageArgs := map[string]any{"value": 1.5, "srcdir": srcdir}
+	if err := shim.WriteBundle(env.argsDir, stageArgs, man.Params(s.Name, types.RoleIn), man.Table()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -240,7 +290,7 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 		t.Fatal(err)
 	}
 
-	role, outsList := types.RoleMainOut, "part,report"
+	role, outsList := types.RoleMainOut, "part,report,note"
 	outFlag := "outs"
 
 	switch phase {
@@ -248,7 +298,7 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 		role, outFlag = types.RoleChunkIn, ""
 		extra = append(extra, "-o", "chunks.json", "-joinres", "joinres.json", "-chunkdir", ".")
 	case "join":
-		role, outsList = types.RoleOut, "total,report"
+		role, outsList = types.RoleOut, "total,report,note"
 	}
 
 	args := []string{phase, "-stagecode", e.stageCode, "-call", "CONF", "-mro", "pipeline.mro"}
@@ -376,4 +426,22 @@ func fileExistsAt(path string) bool {
 	_, err := os.Stat(path)
 
 	return err == nil
+}
+
+// mustContain asserts a produced artifact carries each want substring; it
+// guards the conformance fixture's REACH (the byte-parity diff alone would
+// pass vacuously if a trouble-spot value fell out of the fixture).
+func mustContain(t *testing.T, path string, wants ...string) {
+	t.Helper()
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, w := range wants {
+		if !strings.Contains(string(b), w) {
+			t.Errorf("%s: missing %q (fixture no longer exercises this branch)", path, w)
+		}
+	}
 }
