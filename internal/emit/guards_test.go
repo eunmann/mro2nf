@@ -69,32 +69,66 @@ func TestEmitContainerMissingSources(t *testing.T) {
 	}
 }
 
-// TestWarningsPreflightCallRef checks a preflight bound to another call's
-// output produces the runs-in-DAG-order warning (the arm no fixture triggers).
-func TestWarningsPreflightCallRef(t *testing.T) {
-	prog := &ir.Program{
-		Stages: map[string]*ir.Stage{"S": {Name: "S", Out: []ir.Param{{Name: "y", BaseType: "int"}}}},
-		Pipelines: map[string]*ir.Pipeline{
-			"T": {Name: "T", Calls: []ir.Call{
-				{Name: "A", Callable: "S"},
-				{Name: "CHECK", Callable: "S", Preflight: true, Bindings: []ir.Binding{
-					{Param: "x", Value: ir.Value{Ref: &ir.Ref{Kind: "call", ID: "A", Output: "y"}}},
-				}},
-			}},
+// TestWarningsPreflightUngateable checks every preflight that cannot act as
+// mrp's early gate warns and names its actual trigger — a mapped or disabled
+// preflight runs in DAG order too, not only one bound to a call output — and
+// that a plain input-bound preflight (the gateable case) warns nothing.
+func TestWarningsPreflightUngateable(t *testing.T) {
+	selfBind := []ir.Binding{{Param: "x", Value: ir.Value{Ref: &ir.Ref{Kind: "self", ID: "n"}}}}
+	callBind := []ir.Binding{{Param: "x", Value: ir.Value{Ref: &ir.Ref{Kind: "call", ID: "A", Output: "y"}}}}
+
+	cases := []struct {
+		name string
+		call ir.Call
+		want string // The named trigger; "" = no preflight warning at all.
+	}{
+		{
+			"call-output bound",
+			ir.Call{Name: "CHECK", Callable: "S", Preflight: true, Bindings: callBind},
+			"is bound to a call output",
+		},
+		{
+			"mapped",
+			ir.Call{Name: "CHECK", Callable: "S", Preflight: true, Mapped: true, Bindings: selfBind},
+			"is a map call",
+		},
+		{
+			"disabled",
+			ir.Call{Name: "CHECK", Callable: "S", Preflight: true, Disabled: &ir.Ref{Kind: "self", ID: "skip"}, Bindings: selfBind},
+			"carries a `disabled` gate",
+		},
+		{
+			"gateable input-bound",
+			ir.Call{Name: "CHECK", Callable: "S", Preflight: true, Bindings: selfBind},
+			"",
 		},
 	}
 
-	warnings := emit.Warnings(prog)
-	found := false
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prog := &ir.Program{
+				Stages: map[string]*ir.Stage{"S": {Name: "S", Out: []ir.Param{{Name: "y", BaseType: "int"}}}},
+				Pipelines: map[string]*ir.Pipeline{
+					"T": {Name: "T", Calls: []ir.Call{{Name: "A", Callable: "S"}, tc.call}},
+				},
+			}
 
-	for _, w := range warnings {
-		if strings.Contains(w, "T.CHECK") && strings.Contains(w, "preflight") {
-			found = true
-		}
-	}
+			var got []string
 
-	if !found {
-		t.Errorf("want a preflight-in-DAG-order warning for T.CHECK, got %v", warnings)
+			for _, w := range emit.Warnings(prog) {
+				if strings.Contains(w, "T.CHECK") && strings.Contains(w, "preflight") {
+					got = append(got, w)
+				}
+			}
+
+			switch {
+			case tc.want == "" && len(got) > 0:
+				t.Errorf("gateable preflight: want no warning, got %v", got)
+			case tc.want != "" && (len(got) != 1 ||
+				!strings.Contains(got[0], tc.want) || !strings.Contains(got[0], "runs in DAG order")):
+				t.Errorf("want one warning naming %q with the DAG-order consequence, got %v", tc.want, got)
+			}
+		})
 	}
 }
 
