@@ -19,7 +19,7 @@ type healthOmicsParam struct {
 // the workflow definition: parameter-template.json (the run-time inputs the
 // console/API prompts for) and package.sh (builds the upload zip, excluding the
 // Docker build context which ships as the image instead).
-func writeHealthOmicsPackaging(prog *ir.Program, outDir string) error {
+func writeHealthOmicsPackaging(prog *ir.Program, outDir string, native bool) error {
 	tmpl := map[string]healthOmicsParam{
 		"container": {
 			Description: "Private Amazon ECR image URI for the runtime (same region as the run); see Dockerfile",
@@ -30,15 +30,14 @@ func writeHealthOmicsPackaging(prog *ir.Program, outDir string) error {
 	// undeclared parameters are rejected, which would make the param-override path
 	// silently unavailable. File-bearing inputs are included: HealthOmics resolves
 	// their S3 URIs (or s3:// prefixes for directories) into staged read-only files,
-	// which genEntry routes through Nextflow staging.
+	// which genEntry routes through Nextflow staging. Under -native the values are
+	// baked and the workflow rejects a supplied entry parameter (genNativeEntry),
+	// but the parameters stay declared — dropping them would make HealthOmics
+	// reject the whole request instead of the run failing with the workflow's own
+	// re-transpile message — with a description stating the bake.
 	for _, p := range entryInParams(prog) {
-		desc := fmt.Sprintf("pipeline input %q (optional; defaults to the value baked from the .mro)", p.Name)
-		if hasFileLeaf(p, prog.Structs) {
-			desc = fmt.Sprintf("pipeline file input %q: an S3 URI (or s3:// prefix for a directory) staged into the run; optional, defaults to the baked value", p.Name)
-		}
-
 		tmpl[p.Name] = healthOmicsParam{
-			Description: desc,
+			Description: entryParamDesc(prog, p, native),
 			Optional:    true,
 		}
 	}
@@ -53,6 +52,21 @@ func writeHealthOmicsPackaging(prog *ir.Program, outDir string) error {
 	}
 
 	return writeFile(filepath.Join(outDir, "package.sh"), []byte(healthOmicsPackageScript))
+}
+
+// entryParamDesc describes one entry input in the parameter template. Under
+// -native the value was baked at transpile time and any supplied override fails
+// the run at launch, so the description must say so instead of inviting one.
+func entryParamDesc(prog *ir.Program, p ir.Param, native bool) string {
+	if native {
+		return fmt.Sprintf("pipeline input %q: baked at transpile time by -native and cannot be overridden; re-transpile to change it", p.Name)
+	}
+
+	if hasFileLeaf(p, prog.Structs) {
+		return fmt.Sprintf("pipeline file input %q: an S3 URI (or s3:// prefix for a directory) staged into the run; optional, defaults to the baked value", p.Name)
+	}
+
+	return fmt.Sprintf("pipeline input %q (optional; defaults to the value baked from the .mro)", p.Name)
 }
 
 // healthOmicsPackageScript zips the workflow for `aws omics create-workflow`. The
