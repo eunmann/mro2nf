@@ -398,7 +398,12 @@ func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
 	}
 
 	forked := generatePipeModule(dis.Pipelines["INNER"], dis, gd)
-	if !strings.Contains(forked, wantScatter) {
+	// Anchored on the FORK_K remainder-join head so the scatter path's
+	// identical sorted suffix cannot satisfy this assertion.
+	wantFork := "mj_DBL = FORK_5_INNER__DBL_K.out.keys.join(io_DBL.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }" +
+		wantScatter
+
+	if !strings.Contains(forked, wantFork) {
 		t.Errorf("keyed FORK_K gather must sort its grouped souts by name:\n%s", forked)
 	}
 
