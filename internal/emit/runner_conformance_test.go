@@ -246,7 +246,7 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 		t.Fatal(err)
 	}
 
-	role, outsList := types.RoleMainOut, "part,report"
+	role := types.RoleMainOut
 	outFlag := "outs"
 
 	switch phase {
@@ -254,7 +254,7 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 		role, outFlag = types.RoleChunkIn, ""
 		extra = append(extra, "-o", "chunks.json", "-joinres", "joinres.json", "-chunkdir", ".")
 	case "join":
-		role, outsList = types.RoleOut, "total,report"
+		role = types.RoleOut
 	}
 
 	args := []string{phase, "-stagecode", e.stageCode, "-call", "CONF", "-mro", "pipeline.mro"}
@@ -265,7 +265,7 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 	args = append(args, "-args", e.argsDir, "-types", e.typesFile, "-callable", e.callable, "-role", role,
 		"-threads", "1", "-memgb", "1", "-work", ".")
 	if outFlag != "" {
-		args = append(args, "-outs", outsList, "-o", outFlag)
+		args = append(args, "-o", outFlag)
 	}
 
 	args = append(args, extra...)

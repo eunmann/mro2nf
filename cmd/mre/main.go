@@ -81,7 +81,6 @@ type commonFlags struct {
 	shell, stagecode, lang   string
 	mrjob                    string
 	call, mro, work, outFile string
-	outs                     string
 	threads, memGB, vmemGB   float64
 	monitor                  bool
 }
@@ -96,7 +95,6 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.StringVar(&c.mro, "mro", "", "source MRO filename (for _jobinfo)")
 	fs.StringVar(&c.work, "work", ".", "work directory for metadata/files")
 	fs.StringVar(&c.outFile, "o", "", "output file (default stdout)")
-	fs.StringVar(&c.outs, "outs", "", "comma-separated output parameter names")
 	fs.Float64Var(&c.threads, "threads", 1, "allocated threads")
 	fs.Float64Var(&c.memGB, "memgb", 1, "allocated memory in GB")
 	fs.Float64Var(&c.vmemGB, "vmemgb", 0, "allocated virtual memory in GB")

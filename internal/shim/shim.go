@@ -69,8 +69,6 @@ type Adapter struct {
 	Stagecode string
 	// SrcArgs are extra args from the stage's src declaration.
 	SrcArgs []string
-	// Python is the interpreter to use for py stages; defaults to python3.
-	Python string
 	// Mrjob is the path to the mrjob wrapper used to run comp stages.
 	Mrjob string
 	// Monitor, when set, enforces the mrp --monitor limits: a hard vmem_gb cap on
@@ -302,12 +300,7 @@ func adapterEnv(meta string) []string {
 // _log file and fd 4 to be an error channel (normally supplied by mrjob); we
 // provide both. The stage failed if anything was written to the error channel.
 func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources) error {
-	python := a.Python
-	if python == "" {
-		python = defaultPython
-	}
-
-	cmd := limitedCommand(ctx, a, res.VMemGB, python, a.Shell, a.Stagecode, phase, meta, files, journal)
+	cmd := limitedCommand(ctx, a, res.VMemGB, defaultPython, a.Shell, a.Stagecode, phase, meta, files, journal)
 	cmd.Dir = files
 	cmd.Env = adapterEnv(meta)
 	mon := startMonitor(cmd, a, res.MemGB)
