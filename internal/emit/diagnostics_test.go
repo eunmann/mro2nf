@@ -113,3 +113,39 @@ func TestDiagnoseNativeMapped(t *testing.T) {
 		t.Errorf("fork_min fully collapses under -native: want no map remainder info, got %+v", fm)
 	}
 }
+
+// TestDiagnoseNativeRunner checks -native-runner surfaces what it does NOT
+// cover (#83): each exec/comp stage gets a keeps-the-adapter-path Info, a py
+// stage gets none, and -monitor adds the in-process enforcement notice only
+// alongside the runner flag. Without -native-runner there is no runner
+// diagnostic at all. mixed_adapters has one stage per adapter (py/exec/comp).
+func TestDiagnoseNativeRunner(t *testing.T) {
+	ma := lowerFixture(t, "mixed_adapters")
+
+	on := Diagnose(ma, Options{NativeRunner: true})
+	if !hasMessage(on, SevInfo, "stage ADD is a comp stage and keeps the Martian adapter path") {
+		t.Errorf("comp stage: want an adapter-path info naming ADD, got %+v", on)
+	}
+
+	if !hasMessage(on, SevInfo, "stage DBL is a exec stage and keeps the Martian adapter path") {
+		t.Errorf("exec stage: want an adapter-path info naming DBL, got %+v", on)
+	}
+
+	if hasMessage(on, SevInfo, "stage GEN") {
+		t.Errorf("py stage GEN runs natively: want no adapter-path info for it, got %+v", on)
+	}
+
+	if hasMessage(on, SevInfo, "-monitor enforcement") {
+		t.Errorf("without -monitor: want no monitor notice, got %+v", on)
+	}
+
+	mon := Diagnose(ma, Options{NativeRunner: true, Monitor: true})
+	if !hasMessage(mon, SevInfo, "-monitor enforcement runs in-process") {
+		t.Errorf("with -monitor: want the in-process enforcement notice, got %+v", mon)
+	}
+
+	off := Diagnose(ma, Options{Monitor: true})
+	if hasMessage(off, SevInfo, "native-runner") {
+		t.Errorf("without -native-runner: want no runner diagnostic, got %+v", off)
+	}
+}
