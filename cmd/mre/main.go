@@ -83,7 +83,6 @@ type commonFlags struct {
 	mrjob                    string
 	srcArgs                  repeatedFlag
 	call, mro, work, outFile string
-	outs                     string
 	threads, memGB, vmemGB   float64
 	monitor                  bool
 }
@@ -110,7 +109,6 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.StringVar(&c.mro, "mro", "", "source MRO filename (for _jobinfo)")
 	fs.StringVar(&c.work, "work", ".", "work directory for metadata/files")
 	fs.StringVar(&c.outFile, "o", "", "output file (default stdout)")
-	fs.StringVar(&c.outs, "outs", "", "comma-separated output parameter names")
 	fs.Float64Var(&c.threads, "threads", 1, "allocated threads")
 	fs.Float64Var(&c.memGB, "memgb", 1, "allocated memory in GB")
 	fs.Float64Var(&c.vmemGB, "vmemgb", 0, "allocated virtual memory in GB")
@@ -193,7 +191,12 @@ func writeChunkBundles(dir string, defs []shim.ChunkDef, prod *producer) error {
 		return err
 	}
 
-	chunkIn, tbl := man.Params(prod.callable, types.RoleChunkIn), man.Table()
+	chunkIn, err := man.Params(prod.callable, types.RoleChunkIn)
+	if err != nil {
+		return fmt.Errorf("chunk params: %w", err)
+	}
+
+	tbl := man.Table()
 
 	for i, def := range defs {
 		name := fmt.Sprintf("chunk_%05d", i)
@@ -244,8 +247,13 @@ func runMain(ctx context.Context, argv []string) error {
 		return err
 	}
 
+	params, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("main params: %w", err)
+	}
+
 	outs, err := shim.RunMain(ctx, cf.work, cf.adapter(), stageArgs, chunk,
-		man.Params(prod.callable, prod.role), man.Table(), cf.resources(), cf.invocation(stageArgs))
+		params, man.Table(), cf.resources(), cf.invocation(stageArgs))
 	if err != nil {
 		return fmt.Errorf("main: %w", err)
 	}
@@ -284,8 +292,13 @@ func runJoin(ctx context.Context, argv []string) error {
 		return err
 	}
 
+	params, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("join params: %w", err)
+	}
+
 	final, err := shim.RunJoin(ctx, cf.work, cf.adapter(), stageArgs, defs, outs,
-		man.Params(prod.callable, prod.role), man.Table(), cf.resources(), cf.invocation(stageArgs))
+		params, man.Table(), cf.resources(), cf.invocation(stageArgs))
 	if err != nil {
 		return fmt.Errorf("join: %w", err)
 	}
