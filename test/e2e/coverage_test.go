@@ -3,9 +3,13 @@
 package e2e
 
 import (
+	"bytes"
+	"go/scanner"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"testing"
 )
 
@@ -68,9 +72,13 @@ func TestEveryFixtureIsExercised(t *testing.T) {
 	}
 }
 
-// readTestSources concatenates every .go file in this package directory (the e2e
-// suite source) so a fixture name can be matched against the case tables that
-// reference it, wherever they live (exported slices or inline literals).
+// readTestSources extracts the STRING LITERALS (one per line) from every .go
+// file in this package directory (the e2e suite source) so a fixture name can
+// be matched against the case tables that reference it, wherever they live
+// (exported slices or inline literals). A real reference is always a quoted
+// name — a case-table entry or a path join — so scanning tokens instead of
+// raw bytes stops a COMMENT mention from counting as coverage (#127): a
+// fixture that is merely discussed is still unexercised.
 func readTestSources(t *testing.T) []byte {
 	t.Helper()
 
@@ -79,7 +87,7 @@ func readTestSources(t *testing.T) []byte {
 		t.Fatalf("glob e2e sources: %v", err)
 	}
 
-	var all []byte
+	var all bytes.Buffer
 
 	for _, p := range matches {
 		if filepath.Base(p) == "coverage_test.go" {
@@ -91,8 +99,32 @@ func readTestSources(t *testing.T) []byte {
 			t.Fatalf("read %s: %v", p, err)
 		}
 
-		all = append(all, b...)
+		// A nil error handler is safe: these sources are this very package,
+		// so they compiled before this test could run.
+		fset := token.NewFileSet()
+
+		var s scanner.Scanner
+		s.Init(fset.AddFile(p, fset.Base(), len(b)), b, nil, 0)
+
+		for {
+			_, tok, lit := s.Scan()
+			if tok == token.EOF {
+				break
+			}
+
+			if tok != token.STRING {
+				continue
+			}
+
+			val, err := strconv.Unquote(lit)
+			if err != nil {
+				val = lit
+			}
+
+			all.WriteString(val)
+			all.WriteByte('\n')
+		}
 	}
 
-	return all
+	return all.Bytes()
 }
