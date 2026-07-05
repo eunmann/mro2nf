@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/config"
@@ -47,5 +49,33 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	}
 	if !*fuse2 {
 		t.Errorf("unset fuse-chains should still take config value, got %v", *fuse2)
+	}
+}
+
+// TestApplyConfigExplicitMissingIsError ensures an explicit -config path that
+// does not exist fails loudly instead of silently dropping the user's defaults.
+// The implicit alongside-the-.mro probe stays tolerant of a missing file.
+func TestApplyConfigExplicitMissingIsError(t *testing.T) {
+	dir := t.TempDir()
+	mro := filepath.Join(dir, "pipeline.mro")
+
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	target := fs.String("target", "local", "")
+	_ = fs.Parse([]string{mro})
+
+	typo := filepath.Join(dir, "typo.yml")
+
+	switch err := applyConfig(fs, typo, mro, cliPtrs{target: target}); {
+	case err == nil:
+		t.Errorf("explicit -config %s is missing: want an error, got nil", typo)
+	case !errors.Is(err, os.ErrNotExist):
+		t.Errorf("want os.ErrNotExist for the missing config, got %v", err)
+	case !strings.Contains(err.Error(), typo):
+		t.Errorf("error should name the missing path %s, got %v", typo, err)
+	}
+
+	// No explicit path: a missing probe file is still fine.
+	if err := applyConfig(fs, "", mro, cliPtrs{target: target}); err != nil {
+		t.Errorf("implicit probe with no config file: want no error, got %v", err)
 	}
 }
