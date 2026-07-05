@@ -391,11 +391,18 @@ func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s
 // keyedInputs renders a keyed process's input block — tuple(key, pipeargs, staged
 // upstream bundles) — and the matching `-inputs id=in_id` argument.
 func keyedInputs(refs []string) (string, string) {
-	var in strings.Builder
-
 	// stageAs pins pipeargs off the `args` output name it would otherwise alias
 	// when the enclosing pipeline's args are an upstream bind output. See bug 1.
-	in.WriteString("    tuple val(key), path(pipeargs, stageAs: 'pipeargs')")
+	return keyedInputsHead("tuple val(key), path(pipeargs, stageAs: 'pipeargs')", refs)
+}
+
+// keyedInputsHead is keyedInputs with a caller-supplied leading tuple line
+// (e.g. the keyed nested scatter's okey/index/element-carrying head), so every
+// keyed input block shares ONE per-ref staging loop and fixes land everywhere.
+func keyedInputsHead(head string, refs []string) (string, string) {
+	var in strings.Builder
+
+	in.WriteString("    " + head)
 
 	pairs := make([]string, 0, len(refs))
 	for _, id := range refs {
@@ -431,24 +438,31 @@ func keyedInputs(refs []string) (string, string) {
 // the element tuple), used for the inner broadcast bindings and the index-0
 // resolve.
 func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
-	refs := refCalls(c.Bindings)
+	block, arg := keyedInputsHead(
+		"tuple val(okey), val(key), val(fi), val(element), path(pipeargs, stageAs: 'pipeargs')",
+		refCalls(c.Bindings))
 
-	var in strings.Builder
-	in.WriteString("    tuple val(okey), val(key), val(fi), val(element), path(pipeargs, stageAs: 'pipeargs')")
+	fmt.Fprintf(b, `process %[1]s_KS {
+%[2]s
+  input:
+%[3]s  output:
+    tuple val(key), path("outs__${key}", type: 'dir'), emit: outs, optional: true
+    tuple val(okey), path('forkkeys.mro2nf.json'), emit: keys, optional: true
+%[4]s}
 
-	pairs := make([]string, 0, len(refs))
-	for _, id := range refs {
-		fmt.Fprintf(&in, ", path('in_%s')", id)
-		pairs = append(pairs, fmt.Sprintf("%s=in_%s", id, id))
-	}
+`, forkName(pipeline, c.Name), stageDirectives(s, ""), block, g.scatterScript(c, s, arg))
+}
 
-	in.WriteString("\n    path 'types.json'\n    path 'spec.json'\n")
-
-	arg := ""
-	if len(pairs) > 0 {
-		arg = " -inputs " + strings.Join(pairs, ",")
-	}
-
+// scatterScript renders the three-branch script block of an element-scatter
+// process (#99), shared by the -native plain scatter and the keyed nested
+// scatter so a scatter-script fix lands once. fi<0 is the empty-collection
+// sentinel (keys-only resolve); fi==0 runs `forkbind -index 0` once, writing
+// the forkkeys sidecar alongside its own fork; every other instance assembles
+// its args from its own base64 element. The trailing [ -d outs__${key} ] keeps
+// the hard per-fork guarantee: an instance that exits 0 without its out bundle
+// fails the task instead of silently shortening the merge. arg is the staged-
+// ref `-inputs` tail returned for the same process's input block.
+func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 	// The element branch keeps the bare forkbind base: -mapmode is a
 	// full-collection flag forkbind rejects alongside -elementfile.
 	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
@@ -457,33 +471,25 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
 		g.stageCmd("main", s, vmemFlag(s, "main")),
 		g.producerArgs(c.Callable, types.RoleMainOut))
 
-	fmt.Fprintf(b, `process %[1]s_KS {
-%[5]s
-  input:
-%[2]s  output:
-    tuple val(key), path("outs__${key}", type: 'dir'), emit: outs, optional: true
-    tuple val(okey), path('forkkeys.mro2nf.json'), emit: keys, optional: true
-  script:
+	return fmt.Sprintf(`  script:
     if( fi < 0 )
       """
-      %[3]s -keysonly -keysfile forkkeys.mro2nf.json
+      %[1]s -keysonly -keysfile forkkeys.mro2nf.json
       """
     else if( fi == 0 )
       """
-      %[3]s -index 0 -o fargs -keysfile forkkeys.mro2nf.json
-      %[4]s
+      %[1]s -index 0 -o fargs -keysfile forkkeys.mro2nf.json
+      %[2]s
       [ -d outs__${key} ]
       """
     else
       """
       printf %%s '${element}' | base64 -d > element.json
-      %[6]s -elementfile element.json -o fargs
-      %[4]s
+      %[3]s -elementfile element.json -o fargs
+      %[2]s
       [ -d outs__${key} ]
       """
-}
-
-`, forkName(pipeline, c.Name), in.String(), forkbindAll, main, stageDirectives(s, ""), forkbind)
+`, forkbindAll, main, forkbind)
 }
 
 // genKeyedForkBindProcess emits the fork-key-threaded forkbind for a nested map
@@ -1380,41 +1386,15 @@ func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Ca
 
 	block, arg := bindInputsHead(head, refCalls(c.Bindings))
 
-	// The element branch keeps the bare forkbind base: -mapmode is a
-	// full-collection flag forkbind rejects alongside -elementfile.
-	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
-	forkbindAll := fmt.Sprintf("%s -mapmode %s", forkbind, mapModeArg(c))
-	main := fmt.Sprintf("%s -args fargs%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
-		g.stageCmd("main", s, vmemFlag(s, "main")),
-		g.producerArgs(c.Callable, types.RoleMainOut))
-
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
   input:
 %[3]s  output:
     path "outs__${key}", type: 'dir', emit: outs, optional: true
     path 'forkkeys.mro2nf.json', emit: keys, optional: true
-  script:
-    if( fi < 0 )
-      """
-      %[4]s -keysonly -keysfile forkkeys.mro2nf.json
-      """
-    else if( fi == 0 )
-      """
-      %[4]s -index 0 -o fargs -keysfile forkkeys.mro2nf.json
-      %[5]s
-      [ -d outs__${key} ]
-      """
-    else
-      """
-      printf %%s '${element}' | base64 -d > element.json
-      %[6]s -elementfile element.json -o fargs
-      %[5]s
-      [ -d outs__${key} ]
-      """
-}
+%[4]s}
 
-`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, forkbindAll, main, forkbind)
+`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.scatterScript(c, s, arg))
 }
 
 // genMergeProcess emits a process that merges per-fork outputs into the
