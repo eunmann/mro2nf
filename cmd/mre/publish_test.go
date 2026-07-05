@@ -325,6 +325,63 @@ func TestPublishOutsMapOfFileArray(t *testing.T) {
 	}
 }
 
+// TestPublishOutsMapIllegalKeyWarns guards #114: a file map output under a key
+// that is not a legal Unix filename is dropped from the published tree, the
+// layout, AND the manifest — matching mrp, whose post_process writes only legal
+// keys back into the outs JSON (martian/core/post_process.go moveOutFiles,
+// TypedMapType case) — but the drop must be LOUD: one stderr warning per skipped
+// key, naming the key, the output, and the reason, mirroring Martian's printed
+// error. Legal keys publish normally and are not warned about.
+func TestPublishOutsMapIllegalKeyWarns(t *testing.T) {
+	longKey := strings.Repeat("k", 256)
+	params := []ir.Param{{Name: "reports", BaseType: "txt", IsFile: true, MapDim: 1}}
+	outs := map[string]any{"reports": map[string]any{
+		"a/b":   marker("L0000"),
+		"":      marker("L0001"),
+		"..":    marker("L0002"),
+		longKey: marker("L0003"),
+		"ok":    marker("L0004"),
+	}}
+
+	pub := newPublisher(nil)
+
+	var warnings strings.Builder
+
+	pub.warn = &warnings
+
+	got := mustPublish(t, pub, params, outs)
+
+	want := map[string]any{"reports": map[string]any{"ok": "reports/ok.txt"}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("published outs mismatch (-want +got):\n%s", diff)
+	}
+
+	wantLayout := map[string][]string{"L0004": {"reports/ok.txt"}}
+	if diff := cmp.Diff(wantLayout, pub.layout); diff != "" {
+		t.Errorf("layout mismatch (-want +got):\n%s", diff)
+	}
+
+	wantManifest := []manifestEntry{{Path: "reports/ok.txt", BaseType: "txt", IsDir: false}}
+	if diff := cmp.Diff(wantManifest, pub.manifest); diff != "" {
+		t.Errorf("manifest mismatch (-want +got):\n%s", diff)
+	}
+
+	for _, k := range []string{"a/b", "", "..", longKey} {
+		wantLine := fmt.Sprintf("mre: publish: skipping map key %q of output %q: ", k, "reports")
+		if !strings.Contains(warnings.String(), wantLine) {
+			t.Errorf("missing warning for key %q: want substring %q in:\n%s", k, wantLine, warnings.String())
+		}
+	}
+
+	if n := strings.Count(warnings.String(), "skipping map key"); n != 4 {
+		t.Errorf("warning count = %d, want 4 (one per skipped key):\n%s", n, warnings.String())
+	}
+
+	if strings.Contains(warnings.String(), `"ok"`) {
+		t.Errorf("legal key %q must not be warned about:\n%s", "ok", warnings.String())
+	}
+}
+
 // TestPublishOutsNonFilePassthrough guards that non-file outputs pass through
 // verbatim — a map<int> keeps every key (even ones illegal as filenames, which
 // only matter when a file must be named) and a non-file struct keeps its value

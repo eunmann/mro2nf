@@ -7,11 +7,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -137,6 +138,9 @@ func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) (map[s
 // into place (no single-node funnel — #12).
 type publisher struct {
 	structs map[string]*ir.StructType
+	// warn receives per-skipped-key diagnostics (illegal map keys, #114) —
+	// os.Stderr in production, a buffer in tests.
+	warn io.Writer
 	// seen maps a published rel path to the transport basename it resolved from,
 	// so a repeated leaf dedups while two distinct leaves on one rel disambiguate.
 	seen map[string]string
@@ -150,7 +154,7 @@ type publisher struct {
 
 // newPublisher returns a publisher over the program's struct table.
 func newPublisher(structs map[string]*ir.StructType) *publisher {
-	return &publisher{structs: structs, seen: map[string]string{}, layout: map[string][]string{}}
+	return &publisher{structs: structs, warn: os.Stderr, seen: map[string]string{}, layout: map[string][]string{}}
 }
 
 // manifestEntry is one published output file in the manifest index: a downstream
@@ -244,10 +248,13 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their
-// (legal, sorted) keys. Illegal Unix filenames are skipped, matching Martian. A
-// typed map is exactly one map level whose value carries MapDim-1 inner array
-// dims (Martian's encoding: map<T[]> is {MapDim:2, ArrayDim:0}), so the element
-// is descended as an array of that depth — not another map level.
+// (legal, sorted) keys. A key that is not a legal Unix filename is dropped from
+// the tree AND the outs JSON with a stderr warning — matching Martian, which
+// drops such keys from the rewritten outs with a printed error (post_process.go
+// moveOutFiles, TypedMapType case). A typed map is exactly one map level whose
+// value carries MapDim-1 inner array dims (Martian's encoding: map<T[]> is
+// {MapDim:2, ArrayDim:0}), so the element is descended as an array of that
+// depth — not another map level.
 func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
 	m, ok := value.(map[string]any)
 	if !ok {
@@ -256,7 +263,15 @@ func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
 
 	out := make(map[string]any, len(m))
 
-	for _, k := range legalSortedKeys(m) {
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		if err := legalFilenameErr(k); err != nil {
+			// Best-effort diagnostic write: a failed stderr warning must not
+			// fail the publish itself.
+			_, _ = fmt.Fprintf(pub.warn, "mre: publish: skipping map key %q of output %q: %v\n", k, rel, err)
+
+			continue
+		}
+
 		elem := p
 		elem.ArrayDim = p.ArrayDim + p.MapDim - 1
 		elem.MapDim = 0
@@ -360,27 +375,36 @@ func (pub *publisher) uniqueRel(rel string) string {
 	}
 }
 
-// legalSortedKeys returns m's keys in sorted order, dropping any that are not a
-// legal single-segment Unix filename (Martian skips these with a printed error).
-func legalSortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		if isLegalFilename(k) {
-			keys = append(keys, k)
-		}
-	}
+// The reasons a map key is illegal as a filename, in Martian's
+// IsLegalUnixFilename wording so mre's warning reads like mrp's error.
+var (
+	errNameTooLong  = errors.New("too long")
+	errNameEmpty    = errors.New("empty string")
+	errNameReserved = errors.New("reserved name")
+	errNameSlash    = errors.New("'/' is not allowed in filenames")
+	errNameNul      = errors.New("null characters are not allowed in filenames")
+)
 
-	sort.Strings(keys)
-
-	return keys
-}
-
-// isLegalFilename mirrors Martian's IsLegalUnixFilename: a non-empty single path
-// segment of at most 255 bytes, not "." or "..". Publishing under an illegal key
-// would create an invalid path (or ENAMETOOLONG), so it is skipped like Martian.
-func isLegalFilename(k string) bool {
+// legalFilenameErr mirrors Martian's syntax.IsLegalUnixFilename: nil for a
+// non-empty single path segment of at most 255 bytes that is not "." or "..",
+// otherwise the reason the name is illegal. Publishing under an illegal key
+// would create an invalid path (or ENAMETOOLONG), so the caller skips it like
+// Martian does.
+func legalFilenameErr(k string) error {
 	const maxNameLen = 255
 
-	return k != "" && k != "." && k != ".." &&
-		len(k) <= maxNameLen && !strings.ContainsAny(k, "/\x00")
+	switch {
+	case len(k) > maxNameLen:
+		return errNameTooLong
+	case k == "":
+		return errNameEmpty
+	case k == "." || k == "..":
+		return errNameReserved
+	case strings.ContainsRune(k, '/'):
+		return errNameSlash
+	case strings.ContainsRune(k, 0):
+		return errNameNul
+	default:
+		return nil
+	}
 }
