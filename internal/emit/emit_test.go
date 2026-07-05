@@ -1081,7 +1081,10 @@ func TestEmitEntryFileParam(t *testing.T) {
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
 		`[file(params.reads)]`,                            // flattened + file()'d on the head node
 		`?: [file("${projectDir}/_assets/.entry_empty")]`, // unset / no-leaf falls back to the sentinel
-		`-fileflat 'reads=${(inflat_reads instanceof List ? inflat_reads : [inflat_reads]).join(",")}'`, // staged paths reach entryargs
+		// staged paths reach entryargs as heredoc-written JSON — collision-proof
+		// for legal filenames containing , ; =
+		`${groovy.json.JsonOutput.toJson([reads: (inflat_reads instanceof List ? inflat_reads : [inflat_reads])*.toString()])}`,
+		"-fileflat fileflat.json",
 		`BUILD_ENTRY_ARGS(file("${projectDir}/entry_args"), values, types, flat_reads)`,
 	} {
 		if !strings.Contains(main, want) {
@@ -1109,7 +1112,7 @@ func TestEmitEntryFileArray(t *testing.T) {
 	for _, want := range []string{
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
 		`(params.reads ?: []).collect { __e0 -> (__e0 != null ? [file(__e0)] : []) }.flatten()`,
-		`-fileflat 'reads=${(inflat_reads instanceof List ? inflat_reads : [inflat_reads]).join(",")}'`,
+		`${groovy.json.JsonOutput.toJson([reads: (inflat_reads instanceof List ? inflat_reads : [inflat_reads])*.toString()])}`,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing file-array staging %q", want)
@@ -1128,7 +1131,7 @@ func TestEmitEntryStructFile(t *testing.T) {
 	for _, want := range []string{
 		"path(inflat_cfg, stageAs: 'inflat_cfg_?/*')",
 		`)?.ref != null ? [file(`,
-		`-fileflat 'cfg=${(inflat_cfg instanceof List ? inflat_cfg : [inflat_cfg]).join(",")}'`,
+		`${groovy.json.JsonOutput.toJson([cfg: (inflat_cfg instanceof List ? inflat_cfg : [inflat_cfg])*.toString()])}`,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing struct-file staging %q", want)

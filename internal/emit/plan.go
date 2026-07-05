@@ -308,7 +308,7 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 // runtime-derived and never folds; a `false` literal leaves the call gated.
 func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) {
 	r := c.Disabled
-	if r == nil || r.Kind != refKindSelf || r.Output != "" {
+	if r == nil || r.Kind != ir.RefKindSelf || r.Output != "" {
 		return "", false
 	}
 
@@ -476,7 +476,7 @@ func (k invKnown) known(prog *ir.Program, p *ir.Pipeline, v ir.Value, lenOnly bo
 		return !valueHasRef(v)
 	}
 
-	if r.Kind == refKindSelf {
+	if r.Kind == ir.RefKindSelf {
 		if entryScoped(prog, p) {
 			return true
 		}
@@ -666,9 +666,9 @@ func scatterSource(r *ir.Ref) (string, string, bool) {
 	switch {
 	case r == nil:
 		return "", "", false
-	case r.Kind == refKindSelf && r.Output == "":
+	case r.Kind == ir.RefKindSelf && r.Output == "":
 		return r.ID, "", true
-	case r.Kind == refKindCall && r.Output != "" && !strings.Contains(r.Output, "."):
+	case r.Kind == ir.RefKindCall && r.Output != "" && !strings.Contains(r.Output, "."):
 		return r.Output, r.ID, true
 	default:
 		return "", "", false

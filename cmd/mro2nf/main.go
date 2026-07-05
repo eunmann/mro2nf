@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/config"
 	"github.com/eunmann/mro2nf/internal/emit"
@@ -358,10 +359,12 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 	return nil
 }
 
-// absOrSelf returns the absolute form of a path, falling back to the original
-// (e.g. a bare command name like "mre" found on PATH).
+// absOrSelf resolves a tool flag the way exec.LookPath dispatches: a bare
+// command name (no path separator) is left as-is for PATH lookup at task run
+// time, while any path containing a separator is absolutized so the generated
+// project does not depend on Nextflow's per-task working directory.
 func absOrSelf(p string) string {
-	if p == "" || p == "mre" {
+	if !strings.ContainsRune(p, filepath.Separator) {
 		return p
 	}
 
