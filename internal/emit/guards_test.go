@@ -114,38 +114,7 @@ func TestEmitHealthOmicsTemplateEntries(t *testing.T) {
 		{name: "native_states_bake", native: true, wantDesc: "cannot be overridden"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// A runnable no-op stands in for mre: -native execs it to bake the
-			// entry args (bakeEntryArgs), and the container target copies it
-			// into the Docker build context.
-			mre := filepath.Join(t.TempDir(), "mre")
-			if err := os.WriteFile(mre, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-
-			base := "../../testdata/entry_file"
-
-			ast, err := frontend.Parse(base+"/pipeline.mro", []string{base}, false)
-			if err != nil {
-				t.Fatalf("parse: %v", err)
-			}
-
-			prog, err := frontend.Lower(ast)
-			if err != nil {
-				t.Fatalf("lower: %v", err)
-			}
-
-			code := map[string]string{}
-			for name := range prog.Stages {
-				code[name] = t.TempDir()
-			}
-
-			dir := t.TempDir()
-			if err := emit.Emit(prog, emit.Options{
-				OutDir: dir, Mre: mre, MROFile: "pipeline.mro", Target: emit.TargetHealthOmics,
-				StageCode: code, Native: tc.native,
-			}); err != nil {
-				t.Fatalf("emit: %v", err)
-			}
+			dir := emitHealthOmicsEntryFile(t, tc.native)
 
 			data, err := os.ReadFile(filepath.Join(dir, "parameter-template.json"))
 			if err != nil {
@@ -169,8 +138,101 @@ func TestEmitHealthOmicsTemplateEntries(t *testing.T) {
 			if _, ok := tmpl["container"]; !ok {
 				t.Error("template missing the required 'container' parameter")
 			}
+
+			assertEntryBake(t, dir, tc.native)
 		})
 	}
+}
+
+// emitHealthOmicsEntryFile emits the entry_file fixture for the HealthOmics
+// target (with the entryargs stub standing in for mre) and returns the project dir.
+func emitHealthOmicsEntryFile(t *testing.T, native bool) string {
+	t.Helper()
+
+	base := "../../testdata/entry_file"
+
+	ast, err := frontend.Parse(base+"/pipeline.mro", []string{base}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	code := map[string]string{}
+	for name := range prog.Stages {
+		code[name] = t.TempDir()
+	}
+
+	dir := t.TempDir()
+	if err := emit.Emit(prog, emit.Options{
+		OutDir: dir, Mre: writeEntryArgsStub(t), MROFile: "pipeline.mro",
+		Target: emit.TargetHealthOmics, StageCode: code, Native: native,
+	}); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+
+	return dir
+}
+
+// assertEntryBake checks -native baked the resolved entry bundle into the
+// project (bakeEntryArgs) — the native workflow stages entry_resolved/ directly
+// and has no BUILD_ENTRY_ARGS task to build it at run time — and that a
+// non-native emit wrote no such bundle.
+func assertEntryBake(t *testing.T, dir string, native bool) {
+	t.Helper()
+
+	resolved := filepath.Join(dir, "entry_resolved", "data.json")
+	if !native {
+		if _, err := os.Stat(resolved); err == nil {
+			t.Error("non-native emit wrote entry_resolved/ (the bake is native-only)")
+		}
+
+		return
+	}
+
+	baked, err := os.ReadFile(resolved)
+	if err != nil {
+		t.Fatalf("-native did not bake entry_resolved/data.json: %v", err)
+	}
+
+	if !strings.Contains(string(baked), "reads") {
+		t.Errorf("baked entry args missing the 'reads' input:\n%s", baked)
+	}
+}
+
+// writeEntryArgsStub writes a runnable stand-in for mre: -native execs
+// `mre entryargs -base ... -o ...` to bake the entry args (bakeEntryArgs), and
+// with no run-time overrides the resolved bundle equals the baked defaults, so
+// the stub copies the -base bundle to -o — the same data.json + f/ bundle shape
+// the real command writes and the native workflow stages. The container target
+// also copies the stub file into the Docker build context.
+func writeEntryArgsStub(t *testing.T) string {
+	t.Helper()
+
+	const stub = `#!/bin/sh
+set -eu
+base=""; out=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-base) base="$2"; shift 2 ;;
+	-o) out="$2"; shift 2 ;;
+	*) shift ;;
+	esac
+done
+[ -d "$base" ] && [ -n "$out" ] || exit 9
+mkdir -p "$out"
+cp -R "$base/." "$out/"
+`
+
+	mre := filepath.Join(t.TempDir(), "mre")
+	if err := os.WriteFile(mre, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	return mre
 }
 
 // TestBindSpecSplitFlag checks a map call's split binding round-trips into its
