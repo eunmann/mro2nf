@@ -1,6 +1,7 @@
 package emit
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -20,15 +21,23 @@ func TestResourceDirectivesAbsNegativeSentinel(t *testing.T) {
 		t.Errorf("memOf(mem_gb=-4) = %d, want 4", got)
 	}
 
-	// The dynamic directives take the magnitude of the per-task value at the right
-	// place: abs the raw val, fall back to the stage default only when it's zero.
-	wantMem := "memory { def m = Math.abs((res?.mem_gb ?: 0) as double); m = m > 0 ? m : 1; (m * task.attempt) + ' GB' }"
-	if d := dynMem("res", 1); d != wantMem {
-		t.Errorf("dynMem =\n  %s\nwant\n  %s", d, wantMem)
+	// The dynamic directives must take the magnitude of the RAW per-task value
+	// (Math.abs wraps the nil-coalesced field read, BEFORE any positivity test,
+	// so a negative sentinel provisions |x|) and reach the stage default only
+	// in the not-positive arm. Assert those parts rather than the full
+	// generated Groovy: a cosmetic template change stays green while an
+	// abs-after-fallback or dropped-default regression still fails.
+	mem := dynMem("res", 3)
+	for _, part := range []string{"memory {", "Math.abs((res?.mem_gb ?: 0)", ": 3;", "task.attempt"} {
+		if !strings.Contains(mem, part) {
+			t.Errorf("dynMem = %q, missing %q", mem, part)
+		}
 	}
 
-	wantCpus := "cpus { def t = Math.abs((res?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : 1 }"
-	if d := dynCpus("res", 1); d != wantCpus {
-		t.Errorf("dynCpus =\n  %s\nwant\n  %s", d, wantCpus)
+	cpus := dynCpus("res", 3)
+	for _, part := range []string{"cpus {", "Math.abs((res?.threads ?: 0)", ": 3 }"} {
+		if !strings.Contains(cpus, part) {
+			t.Errorf("dynCpus = %q, missing %q", cpus, part)
+		}
 	}
 }
