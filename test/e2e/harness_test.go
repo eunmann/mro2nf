@@ -100,21 +100,6 @@ func transpile(t *testing.T, fixture string, extra ...string) string {
 // bench/ pipelines).
 func transpileDir(t *testing.T, dir string, extra ...string) string {
 	t.Helper()
-
-	proj, out, err := transpileDirErr(t, dir, extra...)
-	if err != nil {
-		t.Fatalf("transpile %s: %v\n%s", dir, err, out)
-	}
-
-	return proj
-}
-
-// transpileDirErr is transpileDir but returns the transpiler's combined output
-// and error instead of failing the test, so a caller sweeping flag/fixture
-// combinations can treat an expected refusal (a SevError flag/pipeline
-// conflict) explicitly rather than as a harness fatal.
-func transpileDirErr(t *testing.T, dir string, extra ...string) (string, []byte, error) {
-	t.Helper()
 	buildBinaries(t)
 
 	proj := t.TempDir()
@@ -136,9 +121,11 @@ func transpileDirErr(t *testing.T, dir string, extra ...string) (string, []byte,
 	cmd := exec.Command(filepath.Join(root, "mro2nf"), args...)
 	cmd.Dir = root
 
-	out, err := cmd.CombinedOutput()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("transpile %s: %v\n%s", dir, err, out)
+	}
 
-	return proj, out, err
+	return proj
 }
 
 // runNextflow runs `nextflow run main.nf <args...>` in proj, always capturing

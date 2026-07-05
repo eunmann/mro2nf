@@ -49,10 +49,11 @@ const (
 // TestNextflowLint lints the generated project for every testdata fixture
 // under every lintConfigs flag set. It enumerates the fixtures (rather than a
 // hand-kept list) so any new fixture is linted automatically and the branch
-// space is covered by construction. A combo the transpiler itself REFUSES (a
-// SevError flag/pipeline conflict, cmd/mro2nf's errFlagConflict) has no
-// project to lint — that is expected-refusal behavior, surfaced as an
-// explicit skip naming the diagnostics; any other transpile failure is fatal.
+// space is covered by construction. ANY transpile failure is a test failure:
+// no flag/fixture combination is refused today, so there is nothing to skip.
+// If a future flag introduces a genuine SevError refusal, add an explicit
+// expected-refusal allowlist entry for that exact combo THEN — loud by
+// default, never classified by error-message substring.
 func TestNextflowLint(t *testing.T) {
 	requireTools(t, "nextflow", "java")
 	requireNextflowLint(t)
@@ -62,15 +63,7 @@ func TestNextflowLint(t *testing.T) {
 			t.Run(fx+"/"+cfg.name, func(t *testing.T) {
 				t.Parallel()
 
-				proj, tout, err := transpileDirErr(t, filepath.Join(root, "testdata", fx), cfg.flags...)
-				if err != nil {
-					if strings.Contains(string(tout), "flag/pipeline conflict") {
-						t.Skipf("transpiler refused %s under %v (expected SevError refusal):\n%s",
-							fx, cfg.flags, tout)
-					}
-
-					t.Fatalf("transpile %s under %v: %v\n%s", fx, cfg.flags, err, tout)
-				}
+				proj := transpileDir(t, filepath.Join(root, "testdata", fx), cfg.flags...)
 
 				cmd := exec.Command("nextflow", "lint", ".")
 				cmd.Dir = proj
