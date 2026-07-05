@@ -1,10 +1,19 @@
 package overrides
 
 import (
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
+
+// callRef locates one call site of a stage: the pipeline containing the call
+// and the call instance name — the two axes embedded in the fused/scatter
+// process names (STAGE_<n>_<pipe>__<call>, FORK_<n>_<pipe>__<call>). A
+// bare-stage entry has no containing pipeline (empty pipe): the emitter names
+// it a plain <stage> process, never a fused one.
+type callRef struct{ pipe, call string }
 
 // resolver maps an override key to the generated stage/call names it targets,
 // using the pipeline program to expand a pipeline-scoped key to the leaf stages
@@ -20,16 +29,16 @@ type resolver struct {
 	leaves map[string][]string
 	// callStage maps a leaf call instance name to its callable (stage) name.
 	callStage map[string]string
-	// stageCalls maps a callable (stage) name to the sorted unique call
-	// instance names that invoke it anywhere in the program.
-	stageCalls map[string][]string
+	// stageRefs maps a callable (stage) name to the sorted unique call sites
+	// that invoke it anywhere in the program.
+	stageRefs map[string][]callRef
 }
 
 // newResolver builds a resolver over prog (may be nil).
 func newResolver(prog *ir.Program) *resolver {
 	r := &resolver{
 		prog: prog, stage: map[string]bool{}, leaves: map[string][]string{},
-		callStage: map[string]string{}, stageCalls: map[string][]string{},
+		callStage: map[string]string{}, stageRefs: map[string][]callRef{},
 	}
 	if prog == nil {
 		return r
@@ -44,23 +53,31 @@ func newResolver(prog *ir.Program) *resolver {
 	// per-call fused name), so the stage is its own sole "call".
 	if prog.Entry != nil {
 		if _, ok := prog.Stages[prog.Entry.Callable]; ok {
-			r.markStageCall(prog.Entry.Callable, prog.Entry.Callable)
+			r.markStageCall("", prog.Entry.Callable, prog.Entry.Callable)
 		}
 	}
 
-	for stage, calls := range r.stageCalls {
-		r.stageCalls[stage] = dedupSorted(calls)
+	for stage, refs := range r.stageRefs {
+		slices.SortFunc(refs, func(a, b callRef) int {
+			if c := strings.Compare(a.pipe, b.pipe); c != 0 {
+				return c
+			}
+
+			return strings.Compare(a.call, b.call)
+		})
+		r.stageRefs[stage] = slices.Compact(refs)
 	}
 
 	return r
 }
 
-// markStageCall records that call name invokes stage callable.
-func (r *resolver) markStageCall(call, callable string) {
+// markStageCall records that call name invokes stage callable inside pipeline
+// pipe ("" for a bare-stage entry).
+func (r *resolver) markStageCall(pipe, call, callable string) {
 	r.stage[call] = true
 	r.stage[callable] = true
 	r.callStage[call] = callable
-	r.stageCalls[callable] = append(r.stageCalls[callable], call)
+	r.stageRefs[callable] = append(r.stageRefs[callable], callRef{pipe, call})
 }
 
 // collect returns the leaf stage/call names beneath pipeline pipeName,
@@ -88,7 +105,7 @@ func (r *resolver) collect(pipeName string, inProgress map[string]bool) []string
 	for _, c := range p.Calls {
 		switch {
 		case r.prog.Stages[c.Callable] != nil:
-			r.markStageCall(c.Name, c.Callable)
+			r.markStageCall(pipeName, c.Name, c.Callable)
 
 			out = append(out, c.Name)
 		case r.prog.Pipelines[c.Callable] != nil:
@@ -176,16 +193,36 @@ func (r *resolver) stagesOf(calls []string) []string {
 	return dedupSorted(stages)
 }
 
-// callsFor returns every call instance name that invokes stage (callable), or
-// the stage itself when it has no recorded call sites (a bare-stage entry, or
-// the legacy no-program path). The selector matches the fused per-call process
-// of each so a stage-level override reaches an aliased scattered call.
-func (r *resolver) callsFor(stage string) []string {
-	if calls := r.stageCalls[stage]; len(calls) > 0 {
-		return calls
+// qualifiers returns the fused/scatter name-qualifier fragments for stage —
+// one `[0-9]+_<pipe>__<callAlt>` per pipeline that calls the stage, covering
+// every call site so a stage-level override reaches an aliased scattered
+// call. The pipeline names are LITERAL: Martian identifiers may contain "__",
+// so a `.+` qualifier would let call TRIM's selector absorb the qualifier of
+// an unrelated call X__TRIM (`.+` matching "PIPE__X"); a literal pipeline
+// name cannot. Without a program the single `.+`-qualified fragment is
+// returned — structurally ambiguous for such names (see the package doc). A
+// bare-stage entry contributes nothing: its process is plain-named, never
+// fused. `[0-9]` rather than `\d`: the selector is rendered inside a
+// single-quoted Groovy string, where a backslash escape fails config parsing.
+func (r *resolver) qualifiers(stage string) []string {
+	if r.prog == nil {
+		return []string{`[0-9]+_.+__` + stage}
 	}
 
-	return []string{stage}
+	byPipe := map[string][]string{}
+
+	for _, ref := range r.stageRefs[stage] {
+		if ref.pipe != "" {
+			byPipe[ref.pipe] = append(byPipe[ref.pipe], ref.call)
+		}
+	}
+
+	quals := make([]string, 0, len(byPipe))
+	for _, pipe := range sortedKeys(byPipe) {
+		quals = append(quals, `[0-9]+_`+pipe+`__`+altGroup(byPipe[pipe]))
+	}
+
+	return quals
 }
 
 // dedupSorted returns the sorted, de-duplicated elements of in.
