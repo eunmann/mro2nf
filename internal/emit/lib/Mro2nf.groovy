@@ -101,9 +101,9 @@ class Mro2nf {
     // safely regardless of its contents (a string value with shell metacharacters
     // cannot break the command). An empty/null/wrong-kind source yields the single
     // index -1 sentinel (its instance validates via forkbind -keysonly and feeds
-    // the gather the typed empty), exactly like forkScatter. Value-only: `field`
-    // carries no file leaves (the emitter gates this), so the JSON element is the
-    // whole split value — no bundle marker rewrite is needed, unlike a file fork.
+    // the gather the typed empty). Value-only: `field` carries no file leaves
+    // (the emitter gates this), so the JSON element is the whole split value —
+    // no bundle marker rewrite is needed, unlike a file fork.
     static List forkElements(Path jsonFile, String field, String mapMode) {
         elementTriples((Map) parseJson(jsonFile), field, mapMode)
     }
@@ -182,7 +182,7 @@ class Mro2nf {
         }
 
         // Wrong-kind (or an empty collection of the other kind): one sentinel so
-        // a single instance fails loudly / yields the typed empty, as forkCount.
+        // a single instance fails loudly / yields the typed empty.
         return [['fork_none', -1, '']]
     }
 
