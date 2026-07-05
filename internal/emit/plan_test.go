@@ -278,6 +278,37 @@ call P(xs = [], skip = false,)
 	if dk.emptySplit["P"]["B"] {
 		t.Error("B splits a disabled call's output — runtime-nullable, must not be marked")
 	}
+
+	// A PROJECTED split of a length-only-known input must not mark: INNER.ps
+	// is lenIn-only (bound to a cascade collection — invocation-known LENGTH,
+	// runtime values), and length knowledge of the container proves nothing
+	// about a projected field, so `split self.ps.arr` requires VALUE
+	// knowledge. The guard is structural (invKnown.known), not a per-type
+	// argument about which projections happen to preserve the outer length.
+	proj := lowerMRO(t, `
+struct Pair(int[] arr,)
+stage MK(in int x, out Pair p, src py "s/mk",)
+stage SC(in int[] v, out int w, src py "s/sc",)
+pipeline INNER(in Pair[] ps, out int[] w,){
+    map call SC(v = split self.ps.arr,)
+    return (w = SC.w,)
+}
+pipeline TOP(in int[] xs, out int[] w,){
+    map call MK(x = split self.xs,)
+    call INNER(ps = MK.p,)
+    return (w = INNER.w,)
+}
+call TOP(xs = [],)
+`)
+
+	pk := knownInvocation(proj)
+	if !pk.lenIn["INNER"]["ps"] || pk.valIn["INNER"]["ps"] {
+		t.Fatal("test premise: INNER.ps must be lenIn-only (cascade-bound)")
+	}
+
+	if pk.emptySplit["INNER"]["SC"] {
+		t.Error("a projected split of a lenIn-only input must not be marked (value knowledge required)")
+	}
 }
 
 // TestBuildPlanForwardChain guards #73: a source feeding a pure-FORWARD consumer

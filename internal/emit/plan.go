@@ -481,7 +481,15 @@ func (k invKnown) known(prog *ir.Program, p *ir.Pipeline, v ir.Value, lenOnly bo
 			return true
 		}
 
-		if lenOnly {
+		// A PROJECTED self ref (r.Output != "") navigates INTO the input, and
+		// lenIn's length-only sources (cascade collections) carry runtime
+		// element VALUES — length knowledge of the container proves nothing
+		// about a projected field's length. So a projection always requires
+		// VALUE knowledge; only a whole-field ref may lean on lenIn. The
+		// guard is structural, not a per-type argument about which
+		// projections happen to preserve the outer length (same stance as
+		// the composite-refs rejection above).
+		if lenOnly && r.Output == "" {
 			return k.lenIn[p.Name][r.ID]
 		}
 
