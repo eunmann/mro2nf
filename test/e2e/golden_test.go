@@ -597,6 +597,97 @@ func TestNativeMode(t *testing.T) {
 	}
 }
 
+// TestNativeCombos guards -native composed with the other plan levers (#122):
+// buildPlan folds -fuse-chains' kindFusedChain and -fold-disables'
+// kindFoldedOff into the same plan -native scatters, but nothing exercised the
+// compositions. Each case pins the exact surviving data-plane inventory
+// (empty: these linear value shapes collapse fully) and must reproduce the
+// committed mrp golden — but plane emptiness and golden output alone cannot
+// distinguish "composed" from "lever silently ignored", since each fixture
+// also collapses and matches under plain -native. So each case additionally
+// asserts the lever fired in the generated module: a fused chain runs as ONE
+// process staging every constituent's bind spec (specs counts them, absent
+// names the folded-away standalone processes), and a folded-off gate leaves
+// only its null channel (fired) with no stage process (absent), mirroring
+// TestFuseChains/TestFoldDisables' single-flag structural checks.
+func TestNativeCombos(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	cases := []struct {
+		fixture string
+		flags   []string
+		golden  string
+		module  string   // pipeline module the lever rewrites
+		specs   int      // fused-chain spec inputs the surviving process stages (0: not a fusion case)
+		fired   string   // substring proving the lever fired (fusion cases use specs instead)
+		absent  []string // declarations the lever must have removed
+	}{
+		{
+			fixture: "chain_fuse",
+			flags:   []string{"-native", "-fuse-chains"},
+			golden:  "expected/outs.json",
+			module:  "pipe_CH.nf",
+			specs:   2,
+			absent:  []string{"process STAGE_2_CH__SRC"},
+		},
+		{
+			fixture: "chain_fuse3",
+			flags:   []string{"-native", "-fuse-chains"},
+			golden:  "expected/outs.json",
+			module:  "pipe_P.nf",
+			specs:   3,
+			absent:  []string{"process STAGE_1_P__A", "process STAGE_1_P__B"},
+		},
+		{
+			fixture: "fold_disable",
+			flags:   []string{"-native", "-fold-disables"},
+			golden:  "expected/outs.json",
+			module:  "pipe_P.nf",
+			fired:   "ch_GEN = Channel.value(",
+			absent:  []string{"process STAGE_1_P__GEN"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, tc.fixture, tc.flags...)
+			assertPlaneProcesses(t, proj, nil)
+
+			mod, err := os.ReadFile(filepath.Join(proj, "modules", tc.module))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.specs > 0 {
+				if got := strings.Count(string(mod), "path 'spec_"); got != tc.specs {
+					t.Errorf("%v: want one fused process staging %d specs, got %d spec inputs:\n%s",
+						tc.flags, tc.specs, got, mod)
+				}
+			}
+
+			if tc.fired != "" && !strings.Contains(string(mod), tc.fired) {
+				t.Errorf("%v: lever did not fire, missing %q:\n%s", tc.flags, tc.fired, mod)
+			}
+
+			for _, a := range tc.absent {
+				if strings.Contains(string(mod), a) {
+					t.Errorf("%v: lever left %q in the module:\n%s", tc.flags, a, mod)
+				}
+			}
+
+			if err := runNextflow(t, proj); err != nil {
+				t.Fatal(err)
+			}
+
+			goldenJSON(t,
+				filepath.Join(proj, "results", "pipeline_outs.json"),
+				filepath.Join(root, "testdata", tc.fixture, tc.golden))
+		})
+	}
+}
+
 // TestNativeFileEntry verifies -native supports file- AND directory-typed entry
 // inputs (#99): the entry args (including their file/dir leaves) are baked at
 // transpile time and staged into the workflow, so each fixture's -native run
