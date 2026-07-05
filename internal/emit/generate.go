@@ -438,8 +438,8 @@ func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
 	// Every callee input must be value-only, not just the split param: the _KS
 	// forkbind assembles fargs without the type manifest, so a file-typed
 	// BROADCAST binding would not re-stage its leaf. This is stricter than the
-	// non-keyed scatter (which gates only the split), erring safe for the keyed
-	// path until a file-broadcast fixture exercises it.
+	// non-keyed scatter (which gates only the split); the rejection is pinned
+	// by map_pipe_nested_file (TestDiagnoseNativeKeyedScatter).
 	for i := range s.In {
 		if hasFileLeaf(s.In[i], prog.Structs) {
 			return nil, "", false

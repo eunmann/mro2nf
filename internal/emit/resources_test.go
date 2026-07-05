@@ -28,14 +28,18 @@ func TestResourceDirectivesAbsNegativeSentinel(t *testing.T) {
 	// generated Groovy: a cosmetic template change stays green while an
 	// abs-after-fallback or dropped-default regression still fails.
 	mem := dynMem("res", 3)
-	for _, part := range []string{"memory {", "Math.abs((res?.mem_gb ?: 0)", ": 3;", "task.attempt"} {
+	// "(m * task.attempt) + ' GB'" pins the retry-escalation operator and the
+	// unit: a *→+ swap or a lost ' GB' changes real provisioning silently.
+	for _, part := range []string{"memory {", "Math.abs((res?.mem_gb ?: 0)", "m > 0 ? m : 3;", "(m * task.attempt) + ' GB'"} {
 		if !strings.Contains(mem, part) {
 			t.Errorf("dynMem = %q, missing %q", mem, part)
 		}
 	}
 
 	cpus := dynCpus("res", 3)
-	for _, part := range []string{"cpus {", "Math.abs((res?.threads ?: 0)", ": 3 }"} {
+	// "Math.max(1, Math.ceil(t) as int)" pins whole-CPU rounding UP and the
+	// floor of 1: ceil→floor or a dropped max under-provisions CPUs.
+	for _, part := range []string{"cpus {", "Math.abs((res?.threads ?: 0)", "Math.max(1, Math.ceil(t) as int) : 3 }"} {
 		if !strings.Contains(cpus, part) {
 			t.Errorf("dynCpus = %q, missing %q", cpus, part)
 		}
