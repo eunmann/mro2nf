@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,11 +55,82 @@ var edgeLexemes = []string{
 	`true`,
 }
 
-// edgeMapJSON is the map-fork corpus: edge lexeme values under keys whose
-// UTF-8 sort order (a < z < é < 🎉) differs from nothing in ASCII but
-// exercises the driver's compareUtf8 against Go's sort.Strings, including
-// \u-escaped and surrogate-pair keys the driver must decode before sorting.
-const edgeMapJSON = `{"z":-0.0,"a":1e5,"é":12345678901234567890,"🎉":2.5e-3}`
+// edgeMapEntries is the map-fork corpus: edge lexeme values under keys whose
+// UTF-8 sort order (a < z < é < 🎉, an astral surrogate-pair key) exercises
+// the driver's compareUtf8 against Go's sort.Strings, including keys Go's
+// json.Marshal stores ESCAPED in data.json ("a&b" -> "a\u0026b",
+// "x<y" -> "x\u003cy", U+2028 -> "\u2028"). Each escaped key has a partner
+// key ("aZb", "x=y", "l~s") that sorts between its raw and decoded positions,
+// so a scanner that sorted RAW key substrings instead of decoded keys would
+// emit a different fork order — and every value is distinct, so any
+// mispairing changes bytes at both seams. json.RawMessage values pass through
+// json.Marshal verbatim (modulo compaction), keeping the numeric edge lexemes
+// intact.
+var edgeMapEntries = map[string]json.RawMessage{
+	"a":        json.RawMessage(`1e5`),
+	"a&b":      json.RawMessage(`1E2`),
+	"aZb":      json.RawMessage(`-1.5e-300`),
+	"l~s":      json.RawMessage(`-0.0`),
+	"l\u2028s": json.RawMessage(`[1e5,-0.0]`),
+	"x<y":      json.RawMessage(`9223372036854775807`),
+	"x=y":      json.RawMessage(`12345678901234567890`),
+	"z":        json.RawMessage(`2.5e-3`),
+	"é":        json.RawMessage(`0.1000000000000000055511151231257827`),
+	"🎉":        json.RawMessage(`{"n":1e5}`),
+}
+
+// edgeMapJSON renders the map corpus VIA Go's json.Marshal so the key escapes
+// in data.json are authentic, then guards the corpus itself: the escape
+// sequences must be present and raw-key order must diverge from decoded-key
+// order, or the corpus would silently stop covering the decode-before-sort
+// contract.
+func edgeMapJSON(t *testing.T) string {
+	t.Helper()
+
+	b, err := json.Marshal(edgeMapEntries)
+	if err != nil {
+		t.Fatalf("marshal map corpus: %v", err)
+	}
+
+	for _, esc := range []string{`\u0026`, `\u003c`, `\u2028`} {
+		if !strings.Contains(string(b), esc) {
+			t.Fatalf("map corpus lost authentic escape %s in %s", esc, b)
+		}
+	}
+
+	decoded := make([]string, 0, len(edgeMapEntries))
+	rawOf := make(map[string]string, len(edgeMapEntries))
+
+	for k := range edgeMapEntries {
+		kb, err := json.Marshal(k)
+		if err != nil {
+			t.Fatalf("marshal corpus key %q: %v", k, err)
+		}
+
+		decoded = append(decoded, k)
+		rawOf[k] = string(kb)
+	}
+
+	sort.Strings(decoded)
+
+	rawSorted := append([]string(nil), decoded...)
+	sort.Slice(rawSorted, func(i, j int) bool { return rawOf[rawSorted[i]] < rawOf[rawSorted[j]] })
+
+	if slices.Equal(decoded, rawSorted) {
+		t.Fatalf("map corpus no longer distinguishes raw-key from decoded-key sorting: %v", decoded)
+	}
+
+	return string(b)
+}
+
+// malformedJSON are data.json corruptions the driver scanner must reject
+// loudly (throw) rather than emit a truncated element: an unterminated
+// string, a truncated composite, and an unclosed root object.
+var malformedJSON = map[string]string{
+	"bad_unterminated": `{"xs":["abc`,
+	"bad_truncated":    `{"xs":[1,2`,
+	"bad_unclosed":     `{"xs":[1,2]`,
+}
 
 // elementProbe prints every [key, index, elementB64] triple the driver-side
 // slice emits, plus the sentinel triples for null/missing/empty/wrong-kind
@@ -73,6 +145,14 @@ const elementProbe = `workflow {
     ['emap', 'xs'].each { f ->
         Mro2nf.forkElements(data, f, 'map').each { tr -> println 'CSM:' + f + ' ' + tr[0] + ' ' + tr[1] + ' x' + tr[2] }
     }
+    ['bad_unterminated', 'bad_truncated', 'bad_unclosed'].each { f ->
+        try {
+            def n = Mro2nf.forkElements(file("${projectDir}/" + f + '.json'), 'xs', 'array').size()
+            println 'CE:' + f + ' returned ' + n
+        } catch (IllegalArgumentException e) {
+            println 'CE:' + f + ' threw'
+        }
+    }
 }
 `
 
@@ -85,11 +165,16 @@ func TestElementSliceByteConformance(t *testing.T) {
 	proj := transpile(t, "file_min")
 
 	xsJSON := "[" + strings.Join(edgeLexemes, ",") + "]"
-	dataJSON := `{"factor":10,"xs":` + xsJSON + `,"m":` + edgeMapJSON +
+	mJSON := edgeMapJSON(t)
+	dataJSON := `{"factor":10,"xs":` + xsJSON + `,"m":` + mJSON +
 		`,"nullf":null,"earr":[],"emap":{},"str":"not a collection"}`
 
 	writeFileT(t, filepath.Join(proj, "probe_elems.json"), dataJSON)
 	writeFileT(t, filepath.Join(proj, "probe.nf"), elementProbe)
+
+	for name, content := range malformedJSON {
+		writeFileT(t, filepath.Join(proj, name+".json"), content)
+	}
 
 	out := runNextflowCapture(t, proj, "probe.nf")
 
@@ -114,7 +199,7 @@ func TestElementSliceByteConformance(t *testing.T) {
 	}
 
 	var m map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(edgeMapJSON), &m); err != nil {
+	if err := json.Unmarshal([]byte(mJSON), &m); err != nil {
 		t.Fatalf("slice map corpus: %v", err)
 	}
 
@@ -148,6 +233,14 @@ func TestElementSliceByteConformance(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("probe output missing sentinel %q in:\n%s", want, out)
+		}
+	}
+
+	// Loudness contract: a malformed data.json must make the scanner THROW —
+	// never emit a truncated element (a "returned N" line means it sliced).
+	for name := range malformedJSON {
+		if !strings.Contains(out, "CE:"+name+" threw") {
+			t.Errorf("scanner did not throw on %s in:\n%s", name, out)
 		}
 	}
 
