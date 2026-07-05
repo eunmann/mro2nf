@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/config"
@@ -62,8 +64,14 @@ func TestApplyConfigExplicitMissingIsError(t *testing.T) {
 	_ = fs.Parse([]string{mro})
 
 	typo := filepath.Join(dir, "typo.yml")
-	if err := applyConfig(fs, typo, mro, cliPtrs{target: target}); err == nil {
+
+	switch err := applyConfig(fs, typo, mro, cliPtrs{target: target}); {
+	case err == nil:
 		t.Errorf("explicit -config %s is missing: want an error, got nil", typo)
+	case !errors.Is(err, os.ErrNotExist):
+		t.Errorf("want os.ErrNotExist for the missing config, got %v", err)
+	case !strings.Contains(err.Error(), typo):
+		t.Errorf("error should name the missing path %s, got %v", typo, err)
 	}
 
 	// No explicit path: a missing probe file is still fine.

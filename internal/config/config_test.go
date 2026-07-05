@@ -84,3 +84,18 @@ func TestLoadRejectsBadInput(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadPropagatesNonNotExist pins the tolerance boundary: Load swallows only
+// a genuinely-absent file. Any other open/read failure (here: the path is a
+// directory) must surface, or the implicit probe would silently drop the user's
+// defaults on an EISDIR/EACCES.
+func TestLoadPropagatesNonNotExist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), config.FileName)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := config.Load(path); err == nil {
+		t.Errorf("Load(%s) where the path is a directory: want an error, got nil", path)
+	}
+}

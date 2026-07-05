@@ -253,7 +253,9 @@ type cliPtrs struct {
 // sets each flag the user did NOT pass explicitly to the config's value —
 // precedence is builtin default < config file < explicit flag. An explicit
 // -config path must exist — a typo there must not silently drop the defaults —
-// while the implicit alongside-the-.mro probe tolerates a missing file.
+// while the implicit alongside-the-.mro probe tolerates a missing file. An
+// empty -config value is indistinguishable from an unset flag, so it takes the
+// implicit probe.
 func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
 	var (
 		cfg *config.Config
