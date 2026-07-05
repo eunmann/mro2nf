@@ -18,7 +18,7 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	mro := filepath.Join(dir, "pipeline.mro")
 
 	if err := os.WriteFile(filepath.Join(dir, config.FileName),
-		[]byte("target: awsbatch\nfuse-chains: true\n"), 0o644); err != nil {
+		[]byte("target: awsbatch\nfuse-chains: true\nnative: true\nnative-runner: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -26,22 +26,32 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	target := fs.String("target", "local", "")
 	fuse := fs.Bool("fuse-chains", false, "")
+	native := fs.Bool("native", false, "")
+	nativeRunner := fs.Bool("native-runner", false, "")
 	_ = fs.Parse([]string{mro})
 
-	if err := applyConfig(fs, "", mro, cliPtrs{target: target, fuseChains: fuse}); err != nil {
+	ptrs := cliPtrs{target: target, fuseChains: fuse, native: native, nativeRunner: nativeRunner}
+	if err := applyConfig(fs, "", mro, ptrs); err != nil {
 		t.Fatal(err)
 	}
 	if *target != "awsbatch" || !*fuse {
 		t.Errorf("config should set unset flags: target=%q fuse=%v", *target, *fuse)
 	}
+	if !*native || !*nativeRunner {
+		t.Errorf("config should set unset native flags: native=%v native-runner=%v", *native, *nativeRunner)
+	}
 
-	// An explicitly-passed flag overrides the config.
+	// An explicitly-passed flag overrides the config — including a bool passed
+	// as its default value (-native=false must beat the config's native: true).
 	fs2 := flag.NewFlagSet("t", flag.ContinueOnError)
 	target2 := fs2.String("target", "local", "")
 	fuse2 := fs2.Bool("fuse-chains", false, "")
-	_ = fs2.Parse([]string{"-target", "healthomics", mro})
+	native2 := fs2.Bool("native", false, "")
+	nativeRunner2 := fs2.Bool("native-runner", false, "")
+	_ = fs2.Parse([]string{"-target", "healthomics", "-native=false", "-native-runner=false", mro})
 
-	if err := applyConfig(fs2, "", mro, cliPtrs{target: target2, fuseChains: fuse2}); err != nil {
+	ptrs2 := cliPtrs{target: target2, fuseChains: fuse2, native: native2, nativeRunner: nativeRunner2}
+	if err := applyConfig(fs2, "", mro, ptrs2); err != nil {
 		t.Fatal(err)
 	}
 	if *target2 != "healthomics" {
@@ -49,6 +59,10 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	}
 	if !*fuse2 {
 		t.Errorf("unset fuse-chains should still take config value, got %v", *fuse2)
+	}
+	if *native2 || *nativeRunner2 {
+		t.Errorf("explicit -native=false/-native-runner=false should win over config: native=%v native-runner=%v",
+			*native2, *nativeRunner2)
 	}
 }
 

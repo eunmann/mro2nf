@@ -137,6 +137,7 @@ func (f transpileFlags) configPtrs() cliPtrs {
 	return cliPtrs{
 		target: f.target, container: f.container, mre: f.mre, shell: f.shell,
 		mrjob: f.mrjob, monitor: f.monitor, fuseChains: f.fuseChains, foldDisables: f.foldDisables,
+		native: f.native, nativeRunner: f.nativeRunner,
 	}
 }
 
@@ -289,6 +290,7 @@ func reportDiagnostics(log zerolog.Logger, prog *ir.Program, opts emit.Options) 
 type cliPtrs struct {
 	target, container, mre, shell, mrjob *string
 	monitor, fuseChains, foldDisables    *bool
+	native, nativeRunner                 *bool
 }
 
 // applyConfig loads the .mro2nf.yml (explicit path, else alongside the .mro) and
@@ -337,6 +339,8 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
 	applyBool("monitor", p.monitor, cfg.Monitor)
 	applyBool("fuse-chains", p.fuseChains, cfg.FuseChains)
 	applyBool("fold-disables", p.foldDisables, cfg.FoldDisables)
+	applyBool("native", p.native, cfg.Native)
+	applyBool("native-runner", p.nativeRunner, cfg.NativeRunner)
 
 	return nil
 }

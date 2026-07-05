@@ -24,6 +24,11 @@ var (
 
 // Config is the set of flag defaults a .mro2nf.yml may set. A nil field means the
 // file did not set that key, so the CLI leaves the flag's own default in place.
+//
+// Native and NativeRunner change launch-time behavior, not just the emitted
+// orchestration: -native bakes entry args at transpile time, so the project
+// rejects launch-time entry-arg overrides. A project that defaults
+// `native: true` here opts every transpile into that contract.
 type Config struct {
 	Target       *string
 	Container    *string
@@ -33,6 +38,8 @@ type Config struct {
 	Monitor      *bool
 	FuseChains   *bool
 	FoldDisables *bool
+	Native       *bool
+	NativeRunner *bool
 }
 
 // Load reads and parses the config at path. A missing file is not an error — it
@@ -111,6 +118,10 @@ func assign(cfg *Config, key, val string) error {
 		return assignBool(&cfg.FuseChains, key, val)
 	case "fold-disables":
 		return assignBool(&cfg.FoldDisables, key, val)
+	case "native":
+		return assignBool(&cfg.Native, key, val)
+	case "native-runner":
+		return assignBool(&cfg.NativeRunner, key, val)
 	default:
 		return fmt.Errorf("%w %q", errUnknownKey, key)
 	}
