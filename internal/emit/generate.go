@@ -2490,19 +2490,6 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
 `, inBlock, g.mre, arg, flags, pre)
 }
 
-// genEntry emits the top-level workflow. Each entry input is exposed as a
-// nullable run parameter (params.<name>); at launch the BUILD_ENTRY_ARGS process
-// overlays the supplied values on the baked defaults, so inputs can be set via a
-// Nextflow -params-file or AWS HealthOmics run parameters without re-transpiling.
-//
-// A file-bearing input (a file/dir at any dimension, or a struct/array/map whose
-// leaves are files) is additionally routed through Nextflow's own staging: its
-// file leaves (s3:// URIs or paths) are flattened to a list, file()'d on the head
-// node, and declared as a `path` input, so the worker reads real local files (an
-// isolated AWS Batch / HealthOmics task cannot stat the raw values). entryargs
-// pops the staged paths back into the value in the canonical type-walk order and
-// marks them into the bundle. An unset input is fed the empty sentinel and keeps
-// its baked default.
 // genNativeEntry emits the native workflow (#76 M1): the entry args are baked
 // into entry_resolved/ at transpile time (see bakeEntryArgs), so instead of a
 // BUILD_ENTRY_ARGS task the workflow stages that bundle as a value channel and
@@ -2580,27 +2567,34 @@ func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow st
 `, entryWorkflow, refArgs.String(), specFile(bindName(p.Name, "return")))
 }
 
-func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
-	if g.features.native {
-		genNativeEntry(b, prog, entryWorkflow, g)
+// entryWiring is the per-input wiring genEntry assembles into the entry
+// template: the params.<name> declarations, the file-staging path inputs and
+// head-node flatten channels, the values-map pairs, the -fileflat map entries,
+// and the BUILD_ENTRY_ARGS call arguments.
+type entryWiring struct {
+	decls, fileInputs, fileChans string
+	pairs, flatPairs, callArgs   []string
+}
 
-		return
-	}
-
+// entryParamWiring accumulates each entry input's wiring: every input gets a
+// nullable params.<name> declaration and a values-map pair; a file-bearing
+// input is additionally routed through Nextflow staging — a `path` input, a
+// head-node flatten channel (falling back to the empty sentinel when unset),
+// and a -fileflat map entry so entryargs can pop the staged paths back in.
+func entryParamWiring(prog *ir.Program) entryWiring {
 	ins := entryInParams(prog)
 
 	var decls, fileInputs, fileChans strings.Builder
 
-	// `[:]` is Groovy's empty map (a bare `[]` would be a list, which the overrides
-	// JSON object must not be); a non-empty map lists each input's param.
-	pairs := make([]string, 0, len(ins))
-	flatPairs := make([]string, 0) // Groovy map entries for the entryargs -fileflat JSON
-	callArgs := []string{`file("${projectDir}/entry_args")`, "values", "types"}
+	w := entryWiring{
+		pairs:    make([]string, 0, len(ins)),
+		callArgs: []string{`file("${projectDir}/entry_args")`, "values", "types"},
+	}
 	sentinel := fmt.Sprintf(`file("${projectDir}/%s/%s")`, assetsDir, entrySentinel)
 
 	for _, p := range ins {
 		fmt.Fprintf(&decls, "params.%s = null\n", p.Name)
-		pairs = append(pairs, fmt.Sprintf("%[1]s: params.%[1]s", p.Name))
+		w.pairs = append(w.pairs, fmt.Sprintf("%[1]s: params.%[1]s", p.Name))
 
 		if !hasFileLeaf(p, prog.Structs) {
 			continue
@@ -2620,8 +2614,8 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 		// Groovy Path, and toJson would serialize a bare Path as its segment
 		// list; wrapping it in a list and spreading toString() yields one path
 		// string per leaf. A multi-leaf input is already a List, left as-is.
-		flatPairs = append(flatPairs, fmt.Sprintf("%[1]s: (%[2]s instanceof List ? %[2]s : [%[2]s])*.toString()", p.Name, in))
-		callArgs = append(callArgs, "flat_"+p.Name)
+		w.flatPairs = append(w.flatPairs, fmt.Sprintf("%[1]s: (%[2]s instanceof List ? %[2]s : [%[2]s])*.toString()", p.Name, in))
+		w.callArgs = append(w.callArgs, "flat_"+p.Name)
 		// Flatten the override's file leaves to a list of staged files on the head node;
 		// an unset input (or one with no file leaves) falls back to the empty sentinel so
 		// the process still runs (entryargs ignores the sentinel when the input is unset).
@@ -2629,20 +2623,49 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 			p.Name, fileFlattenExpr("params."+p.Name, p, prog.Structs), sentinel)
 	}
 
+	w.decls, w.fileInputs, w.fileChans = decls.String(), fileInputs.String(), fileChans.String()
+
+	return w
+}
+
+// genEntry emits the top-level workflow. Each entry input is exposed as a
+// nullable run parameter (params.<name>); at launch the BUILD_ENTRY_ARGS process
+// overlays the supplied values on the baked defaults, so inputs can be set via a
+// Nextflow -params-file or AWS HealthOmics run parameters without re-transpiling.
+//
+// A file-bearing input (a file/dir at any dimension, or a struct/array/map whose
+// leaves are files) is additionally routed through Nextflow's own staging: its
+// file leaves (s3:// URIs or paths) are flattened to a list, file()'d on the head
+// node, and declared as a `path` input, so the worker reads real local files (an
+// isolated AWS Batch / HealthOmics task cannot stat the raw values). entryargs
+// pops the staged paths back into the value in the canonical type-walk order and
+// marks them into the bundle. An unset input is fed the empty sentinel and keeps
+// its baked default.
+func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
+	if g.features.native {
+		genNativeEntry(b, prog, entryWorkflow, g)
+
+		return
+	}
+
+	w := entryParamWiring(prog)
+
+	// `[:]` is Groovy's empty map (a bare `[]` would be a list, which the overrides
+	// JSON object must not be); a non-empty map lists each input's param.
 	valuesMap := "[:]"
-	if len(pairs) > 0 {
-		valuesMap = "[" + strings.Join(pairs, ", ") + "]"
+	if len(w.pairs) > 0 {
+		valuesMap = "[" + strings.Join(w.pairs, ", ") + "]"
 	}
 
 	// A second quoted heredoc writes the staged-path map as JSON; the flag
 	// passes only the filename, so no path ever crosses a shell-quoting seam.
 	flatFlag, flatHeredoc := "", ""
-	if len(flatPairs) > 0 {
+	if len(w.flatPairs) > 0 {
 		flatFlag = " -fileflat fileflat.json"
 		flatHeredoc = fmt.Sprintf(`    cat > fileflat.json <<'MART_EOF'
 ${groovy.json.JsonOutput.toJson([%s])}
 MART_EOF
-`, strings.Join(flatPairs, ", "))
+`, strings.Join(w.flatPairs, ", "))
 	}
 
 	// A quoted heredoc writes the overrides to a file; Nextflow interpolates the
@@ -2670,8 +2693,8 @@ workflow {
 %[8]s  BUILD_ENTRY_ARGS(%[9]s)
   pipeargs = BUILD_ENTRY_ARGS.out.first()
   %[5]s(pipeargs)
-`, decls.String(), g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
-		fileInputs.String(), flatFlag, fileChans.String(), strings.Join(callArgs, ", "),
+`, w.decls, g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
+		w.fileInputs, flatFlag, w.fileChans, strings.Join(w.callArgs, ", "),
 		bundleOutput("entry_resolved"), flatHeredoc)
 
 	genPublishWiring(b, entryWorkflow)
