@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -87,6 +88,35 @@ func TestExitCode(t *testing.T) {
 				t.Errorf("exitCode(%v) = %d, want %d", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestCommonFlagsSrcArgs covers the -srcarg plumbing (#113): each repeated
+// occurrence lands on Adapter.SrcArgs in order, and omitting the flag leaves
+// SrcArgs empty.
+func TestCommonFlagsSrcArgs(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	cf := addCommon(fs)
+
+	argv := []string{"-stagecode", "/code/tool.py", "-lang", "exec", "-srcarg", "3", "-srcarg", "hello"}
+	if err := fs.Parse(argv); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	want := shim.Adapter{Lang: ir.LangExec, Stagecode: "/code/tool.py", SrcArgs: []string{"3", "hello"}}
+	if diff := cmp.Diff(want, cf.adapter()); diff != "" {
+		t.Errorf("adapter mismatch (-want +got):\n%s", diff)
+	}
+
+	fs2 := flag.NewFlagSet("test", flag.ContinueOnError)
+	cf2 := addCommon(fs2)
+
+	if err := fs2.Parse(nil); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	if got := cf2.adapter().SrcArgs; len(got) != 0 {
+		t.Errorf("SrcArgs without -srcarg = %v, want empty", got)
 	}
 }
 
