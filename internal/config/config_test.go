@@ -28,6 +28,8 @@ target: awsbatch
 container: "ecr/repo:1"   # inline comment kept out of the value
 fuse-chains: true
 fold-disables: false
+native: true
+native-runner: false
 `))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -44,6 +46,12 @@ fold-disables: false
 	}
 	if cfg.FoldDisables == nil || *cfg.FoldDisables {
 		t.Errorf("FoldDisables = %v, want false", cfg.FoldDisables)
+	}
+	if cfg.Native == nil || !*cfg.Native {
+		t.Errorf("Native = %v, want true", cfg.Native)
+	}
+	if cfg.NativeRunner == nil || *cfg.NativeRunner {
+		t.Errorf("NativeRunner = %v, want false", cfg.NativeRunner)
 	}
 	// An unset key stays nil so the CLI keeps the flag default.
 	if cfg.Monitor != nil {
@@ -71,9 +79,11 @@ func TestLoadRequiredMissingIsError(t *testing.T) {
 
 func TestLoadRejectsBadInput(t *testing.T) {
 	cases := map[string]string{
-		"unknown key":    "bogus: 1\n",
-		"malformed line": "no colon here\n",
-		"non-bool":       "fuse-chains: yes-please\n",
+		"unknown key":       "bogus: 1\n",
+		"typo'd native key": "natives: true\n",
+		"malformed line":    "no colon here\n",
+		"non-bool":          "fuse-chains: yes-please\n",
+		"non-bool native":   "native: yes-please\n",
 	}
 
 	for name, body := range cases {
