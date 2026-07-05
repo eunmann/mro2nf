@@ -3,6 +3,8 @@
 package e2e
 
 import (
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -176,8 +178,10 @@ func TestOverridesPipelineScopeReachesStages(t *testing.T) {
 // stageJobinfos walks the work tree and returns the _jobinfo the GEN and ADD
 // stages saw. _jobinfo's own `name` carries the entry callable, so the stage
 // is identified from the task dir's .command.run header instead.
-func stageJobinfos(t *testing.T, work string) (gen, add *jobinfo) {
+func stageJobinfos(t *testing.T, work string) (*jobinfo, *jobinfo) {
 	t.Helper()
+
+	var gen, add *jobinfo
 
 	walkErr := filepath.WalkDir(work, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || d.Name() != "_jobinfo" {
@@ -188,8 +192,12 @@ func stageJobinfos(t *testing.T, work string) (gen, add *jobinfo) {
 		runFile := filepath.Join(filepath.Dir(filepath.Dir(path)), ".command.run")
 
 		raw, readErr := os.ReadFile(runFile)
-		if readErr != nil {
+		if errors.Is(readErr, fs.ErrNotExist) {
 			return nil // no .command.run two levels up: not a task's _jobinfo
+		}
+
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", runFile, readErr)
 		}
 
 		header := commandRunHeader(raw)

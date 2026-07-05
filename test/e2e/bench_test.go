@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,7 +45,9 @@ func TestBench(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mf.Close()
+	// The checked Close below runs before the report; this deferred one only
+	// covers the t.Fatalf exits inside the loop, where a leaked fd is moot.
+	defer func() { _ = mf.Close() }()
 
 	for _, b := range benches {
 		dir := filepath.Join(root, "bench", b.name)
@@ -80,8 +83,18 @@ func TestBench(t *testing.T) {
 		}
 	}
 
+	// bench_metrics.py wrote through mf; a close error means the metrics file
+	// may be incomplete, so fail before gating on it.
+	if err := mf.Close(); err != nil {
+		t.Fatalf("close %s: %v", metrics, err)
+	}
+
 	runBenchReport(t, metrics)
 }
+
+// errNonLocalWorkdir rejects a BENCH_WORKDIR on an object store, where the
+// refs metric cannot be collected (see requireLocalWorkdir).
+var errNonLocalWorkdir = errors.New("BENCH_WORKDIR is non-local")
 
 // requireLocalWorkdir rejects a non-local BENCH_WORKDIR (empty is fine — the
 // default local executor). The bench gate's `refs` metric is a local scan of the
@@ -93,10 +106,10 @@ func TestBench(t *testing.T) {
 // compare is case-insensitive (URI schemes are, per RFC 3986).
 func requireLocalWorkdir(w string) error {
 	if before, _, ok := strings.Cut(w, "://"); ok && !strings.EqualFold(before, "file") {
-		return fmt.Errorf("BENCH_WORKDIR=%q is non-local (%s://): the bench gate's "+
+		return fmt.Errorf("%w: BENCH_WORKDIR=%q (%s://): the bench gate's "+
 			"refs metric is a local work-dir scan and reads 0 over an object store, "+
 			"so the gate would pass vacuously; run bench against a local work dir "+
-			"(see docs/BENCHMARKS.md)", w, before)
+			"(see docs/BENCHMARKS.md)", errNonLocalWorkdir, w, before)
 	}
 
 	return nil

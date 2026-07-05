@@ -80,7 +80,7 @@ const isoImage = "mro2nf-iso:test"
 
 var (
 	isoImgOnce sync.Once
-	isoImgErr  error
+	errIsoImg  error
 )
 
 // buildIsoImage builds (once per test process) an image that bakes mre, the
@@ -105,12 +105,12 @@ RUN chmod +x %[1]s/mre
 		cmd.Stdin = strings.NewReader(dockerfile)
 
 		if out, err := cmd.CombinedOutput(); err != nil {
-			isoImgErr = fmt.Errorf("docker build %s: %w\n%s", isoImage, err, out)
+			errIsoImg = fmt.Errorf("docker build %s: %w\n%s", isoImage, err, out)
 		}
 	})
 
-	if isoImgErr != nil {
-		t.Fatal(isoImgErr)
+	if errIsoImg != nil {
+		t.Fatal(errIsoImg)
 	}
 }
 
