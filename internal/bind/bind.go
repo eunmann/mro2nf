@@ -326,7 +326,7 @@ func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMes
 			out = append(out, v)
 		}
 
-		return marshalRaw(out, "array")
+		return marshalRaw(out, "array binding")
 	case e.Object != nil:
 		out := make(map[string]json.RawMessage, len(e.Object))
 
@@ -339,7 +339,7 @@ func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMes
 			out[k] = v
 		}
 
-		return marshalRaw(out, "object")
+		return marshalRaw(out, "object binding")
 	case e.Literal != nil:
 		return e.Literal, nil
 	case e.Ref == nil:
@@ -526,7 +526,7 @@ func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessa
 			m[k] = v
 		}
 
-		return marshalRaw(m, name)
+		return marshalRaw(m, fmt.Sprintf("merged output %q", name))
 	}
 
 	// An array-mode fork (keys nil) with zero forks resolves to an empty array,
@@ -550,13 +550,16 @@ func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessa
 		arr = append(arr, v)
 	}
 
-	return marshalRaw(arr, name)
+	return marshalRaw(arr, fmt.Sprintf("merged output %q", name))
 }
 
-func marshalRaw(v any, name string) (json.RawMessage, error) {
+// marshalRaw marshals a composite value, wrapping any failure with the
+// caller's actual operation (e.g. "array binding", "map projection",
+// `merged output "x"`) so the error names what was being built.
+func marshalRaw(v any, op string) (json.RawMessage, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return nil, fmt.Errorf("merge %q: %w", name, err)
+		return nil, fmt.Errorf("marshal %s: %w", op, err)
 	}
 
 	return raw, nil

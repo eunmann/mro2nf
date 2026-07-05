@@ -195,6 +195,28 @@ func TestEntryResolveUnknownRefKind(t *testing.T) {
 	}
 }
 
+// TestResolveMarshalErrorNamesBinding checks a marshal failure inside binding
+// resolution reports the binding operation, not "merge" (marshalRaw used to
+// stamp every failure as a merge regardless of the caller's actual operation).
+func TestResolveMarshalErrorNamesBinding(t *testing.T) {
+	// A corrupt RawMessage literal survives resolve verbatim and fails only at
+	// the composite marshal.
+	spec := Spec{"p": {Array: []Entry{{Literal: json.RawMessage(`{bad`)}}}}
+
+	_, err := Resolve(spec, nil, nil)
+	if err == nil {
+		t.Fatal("Resolve with corrupt literal: want marshal error, got nil")
+	}
+
+	if strings.Contains(err.Error(), "merge") {
+		t.Errorf("binding-resolution marshal error mentions merge: %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "marshal array binding") {
+		t.Errorf("error = %v, want the actual operation %q", err, "marshal array binding")
+	}
+}
+
 // TestMergeOutsKeysDesync covers the outs/keys length guard in mergeOne: a
 // desync fails with errSplitLen and an error naming both counts.
 func TestMergeOutsKeysDesync(t *testing.T) {
