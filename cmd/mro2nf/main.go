@@ -25,6 +25,10 @@ var version = "dev"
 // errUsage is returned when the command-line arguments are invalid.
 var errUsage = errors.New("usage: mro2nf [-o dir] [-mropath path] <pipeline.mro>")
 
+// errOverridesUsage is returned when the overrides subcommand receives extra
+// positional arguments (it takes at most one overrides file).
+var errOverridesUsage = errors.New("usage: mro2nf overrides [-mro pipeline.mro] [-mropath path] [overrides.json]")
+
 // errFlagConflict aborts a transpile when a diagnostic reports an enabled flag
 // would produce a wrong or broken project for the pipeline.
 var errFlagConflict = errors.New("aborted on a flag/pipeline conflict (see error diagnostics above)")
@@ -44,26 +48,13 @@ func run(args []string) error {
 	}
 
 	fs := flag.NewFlagSet("mro2nf", flag.ContinueOnError)
-	outDir := fs.String("o", "out", "output directory for the generated Nextflow project")
-	mroPath := fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)")
-	mreFlag := fs.String("mre", "mre", "path to the mre shim binary")
-	shellFlag := fs.String("shell", "", "path to martian_shell.py")
-	mrjobFlag := fs.String("mrjob", "", "path to mrjob (for comp stages)")
-	containerFlag := fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)")
-	targetFlag := fs.String("target", "local", "execution backend: local | awsbatch | healthomics")
-	monitorFlag := fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)")
-	fuseChainsFlag := fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)")
-	foldDisablesFlag := fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)")
-	nativeFlag := fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)")
-	nativeRunnerFlag := fs.Bool("native-runner", false, "opt-in direct-call Python stage runner (#79): no martian_shell.py adapter or mre broker on the stage hop (py stages only; the runner is baked into the image for container backends)")
-	configFlag := fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win")
-	showVersion := fs.Bool("version", false, "print version and exit")
+	f := defineTranspileFlags(fs)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	if *showVersion {
+	if *f.showVersion {
 		// Writing the version line to stdout cannot meaningfully fail.
 		_, _ = fmt.Fprintln(os.Stdout, "mro2nf", version)
 
@@ -74,46 +65,96 @@ func run(args []string) error {
 		return errUsage
 	}
 
-	if err := applyConfig(fs, *configFlag, fs.Arg(0), cliPtrs{
-		target: targetFlag, container: containerFlag, mre: mreFlag, shell: shellFlag,
-		mrjob: mrjobFlag, monitor: monitorFlag, fuseChains: fuseChainsFlag, foldDisables: foldDisablesFlag,
-	}); err != nil {
-		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
+	src := fs.Arg(0)
+	if err := applyConfig(fs, *f.configPath, src, f.configPtrs()); err != nil {
+		return fmt.Errorf("transpile %s: %w", src, err)
 	}
 
 	log := logging.New()
 
-	prog, err := loadProgram(fs.Arg(0), *mroPath)
+	prog, err := loadProgram(src, *f.mroPath)
 	if err != nil {
 		return err
 	}
 
-	target, err := emit.ParseTarget(*targetFlag)
+	opts, err := f.options()
 	if err != nil {
-		return fmt.Errorf("invalid -target: %w", err)
+		return err
 	}
 
-	if err := reportDiagnostics(log, prog, diagOpts{fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag, nativeRunner: *nativeRunnerFlag, monitor: *monitorFlag, target: target}); err != nil {
-		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
+	// One Options value feeds both Diagnose and Emit, so the diagnostics always
+	// analyze exactly the plan that is emitted.
+	if err := reportDiagnostics(log, prog, opts); err != nil {
+		return fmt.Errorf("transpile %s: %w", src, err)
 	}
 
-	if err := emitProgram(prog, fs.Arg(0), opts{
-		outDir: *outDir, mre: *mreFlag, shell: *shellFlag, mrjob: *mrjobFlag,
-		container: *containerFlag, monitor: *monitorFlag, target: target,
-		fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag,
-		nativeRunner: *nativeRunnerFlag,
-	}); err != nil {
-		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
+	if err := emitProgram(prog, src, opts); err != nil {
+		return fmt.Errorf("transpile %s: %w", src, err)
 	}
 
 	log.Info().
-		Str("source", fs.Arg(0)).
+		Str("source", src).
 		Int("stages", len(prog.Stages)).
 		Int("pipelines", len(prog.Pipelines)).
-		Str("out", *outDir).
+		Str("out", opts.OutDir).
 		Msg("emitted Nextflow project")
 
 	return nil
+}
+
+// transpileFlags collects every flag of the default (transpile) command in one
+// struct, so run() reads parsed values from a single place and the config
+// pointers and emit.Options are derived rather than hand-copied.
+type transpileFlags struct {
+	outDir, mroPath, mre, shell, mrjob, container, target, configPath *string
+	monitor, fuseChains, foldDisables, native, nativeRunner           *bool
+	showVersion                                                       *bool
+}
+
+// defineTranspileFlags registers the transpile flags on fs and returns their
+// value pointers.
+func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
+	return transpileFlags{
+		outDir:       fs.String("o", "out", "output directory for the generated Nextflow project"),
+		mroPath:      fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)"),
+		mre:          fs.String("mre", "mre", "path to the mre shim binary"),
+		shell:        fs.String("shell", "", "path to martian_shell.py"),
+		mrjob:        fs.String("mrjob", "", "path to mrjob (for comp stages)"),
+		container:    fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)"),
+		target:       fs.String("target", "local", "execution backend: local | awsbatch | healthomics"),
+		monitor:      fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)"),
+		fuseChains:   fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)"),
+		foldDisables: fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)"),
+		native:       fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)"),
+		nativeRunner: fs.Bool("native-runner", false, "opt-in direct-call Python stage runner (#79): no martian_shell.py adapter or mre broker on the stage hop (py stages only; the runner is baked into the image for container backends)"),
+		configPath:   fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win"),
+		showVersion:  fs.Bool("version", false, "print version and exit"),
+	}
+}
+
+// configPtrs returns the flag value pointers a .mro2nf.yml may default.
+func (f transpileFlags) configPtrs() cliPtrs {
+	return cliPtrs{
+		target: f.target, container: f.container, mre: f.mre, shell: f.shell,
+		mrjob: f.mrjob, monitor: f.monitor, fuseChains: f.fuseChains, foldDisables: f.foldDisables,
+	}
+}
+
+// options builds the single emit.Options both Diagnose and Emit consume — a new
+// flag added here reaches both, so they cannot diverge. emitProgram fills in
+// the source-derived fields (absolute tool paths, MROFile/MRODir, StageCode).
+func (f transpileFlags) options() (emit.Options, error) {
+	target, err := emit.ParseTarget(*f.target)
+	if err != nil {
+		return emit.Options{}, fmt.Errorf("invalid -target: %w", err)
+	}
+
+	return emit.Options{
+		OutDir: *f.outDir, Mre: *f.mre, Shell: *f.shell, Mrjob: *f.mrjob,
+		Container: *f.container, Monitor: *f.monitor, Target: target,
+		FuseChains: *f.fuseChains, FoldDisables: *f.foldDisables,
+		Native: *f.native, NativeRunner: *f.nativeRunner,
+	}, nil
 }
 
 // runOverrides converts an mrp --overrides JSON (a file argument, or stdin when
@@ -131,6 +172,10 @@ func runOverrides(args []string) error {
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	if fs.NArg() > 1 {
+		return errOverridesUsage
 	}
 
 	prog, err := loadOverrideProgram(*mroFlag, *mroPath)
@@ -216,20 +261,11 @@ func readOverridesInput(arg string) ([]byte, error) {
 
 // reportDiagnostics runs the pre-emit checks, prints each by severity, and
 // returns an error (aborting the transpile) if any is fatal — an enabled flag
-// that would produce a wrong or broken project for this pipeline.
-// diagOpts carries the flag subset Diagnose needs; it must mirror what
-// emitProgram passes to Emit or the diagnostics analyze a different plan.
-type diagOpts struct {
-	fuseChains, foldDisables, native, nativeRunner, monitor bool
-	target                                                  emit.Target
-}
-
-func reportDiagnostics(log zerolog.Logger, prog *ir.Program, o diagOpts) error {
-	diags := emit.Diagnose(prog, emit.Options{
-		FuseChains: o.fuseChains, FoldDisables: o.foldDisables,
-		Native: o.native, NativeRunner: o.nativeRunner, Monitor: o.monitor,
-		Target: o.target,
-	})
+// that would produce a wrong or broken project for this pipeline. It receives
+// the same Options that emitProgram passes to Emit, so Diagnose analyzes the
+// plan that is actually emitted.
+func reportDiagnostics(log zerolog.Logger, prog *ir.Program, opts emit.Options) error {
+	diags := emit.Diagnose(prog, opts)
 
 	for _, d := range diags {
 		switch d.Severity {
@@ -305,20 +341,9 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
 	return nil
 }
 
-// opts groups the CLI options that shape emission.
-type opts struct {
-	outDir, mre, shell, mrjob, container string
-	monitor                              bool
-	fuseChains                           bool
-	foldDisables                         bool
-	native                               bool
-	nativeRunner                         bool
-	target                               emit.Target
-}
-
-// emitProgram resolves the absolute paths the generated project needs and emits
-// the Nextflow project for prog.
-func emitProgram(prog *ir.Program, src string, o opts) error {
+// emitProgram fills in the source-derived Options fields (absolute tool paths,
+// MROFile/MRODir, StageCode) and emits the Nextflow project for prog.
+func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 	mroDir := filepath.Dir(src)
 
 	code := make(map[string]string, len(prog.Stages))
@@ -337,22 +362,14 @@ func emitProgram(prog *ir.Program, src string, o opts) error {
 		code[name] = abs
 	}
 
-	if err := emit.Emit(prog, emit.Options{
-		OutDir:       o.outDir,
-		Mre:          absOrSelf(o.mre),
-		Shell:        absOrSelf(o.shell),
-		Mrjob:        absOrSelf(o.mrjob),
-		Container:    o.container,
-		Monitor:      o.monitor,
-		FuseChains:   o.fuseChains,
-		FoldDisables: o.foldDisables,
-		Native:       o.native,
-		NativeRunner: o.nativeRunner,
-		Target:       o.target,
-		MROFile:      filepath.Base(src),
-		MRODir:       mroDir,
-		StageCode:    code,
-	}); err != nil {
+	opts.Mre = absOrSelf(opts.Mre)
+	opts.Shell = absOrSelf(opts.Shell)
+	opts.Mrjob = absOrSelf(opts.Mrjob)
+	opts.MROFile = filepath.Base(src)
+	opts.MRODir = mroDir
+	opts.StageCode = code
+
+	if err := emit.Emit(prog, opts); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}
 

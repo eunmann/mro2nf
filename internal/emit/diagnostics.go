@@ -32,12 +32,7 @@ type Diagnostic struct {
 // pipeline. Callers print the results and abort if HasError reports an Error —
 // the seam #72/#76 add their flag-specific error checks to.
 func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
-	// The featureSet must mirror Emit's exactly (emit.go), or these diagnostics
-	// analyze a different plan than the one emitted.
-	f := featureSet{
-		fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables,
-		native: opts.Native, nativeRunner: opts.NativeRunner,
-	}
+	f := opts.featureSet()
 	pl := buildPlan(prog, f)
 
 	warns := Warnings(prog)
