@@ -1185,7 +1185,11 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[1]s_MAIN(chunks.combine(a), types)
     join = %[1]s_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }
-    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.collect().ifEmpty([]), types)
+    // JOIN's chunk outs (out_chunk_NNNNN) are gathered sorted by name: collect()
+    // order is completion order, which is part of JOIN's -resume cache key.
+    // toSortedList emits [] on an empty channel, so a 0-chunk split still joins.
+    // (x/y, not the a/b used elsewhere: 'a' is a workflow local here.)
+    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
     %[1]s_JOIN.out
 }
@@ -2076,7 +2080,8 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
     chunks = %[3]s.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[4]s(chunks.combine(a), types)
     join = %[3]s.out.joinres.map { f -> Mro2nf.parseJson(f) }
-    %[5]s(join, a, %[3]s.out.defs, %[4]s.out.collect().ifEmpty([]), types)
+    // Sorted for the same -resume cache-key reason as genSplitWorkflow's JOIN.
+    %[5]s(join, a, %[3]s.out.defs, %[4]s.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
     %[5]s.out
 }

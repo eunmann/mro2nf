@@ -15,8 +15,13 @@ import (
 // -resume must execute ZERO new tasks (everything cached). A cache-key
 // instability — e.g. a timestamp leaking into a staged asset, or a gather task
 // whose input order is completion order — would otherwise ship silently and
-// destroy resumability on long runs. (Port of the -resume half of
-// runtime_knobs.sh, extended to the -native gather shapes for #123.)
+// destroy resumability on long runs. The table pins the gather shapes that
+// carry order countermeasures (#123): the -native element scatter, the keyed
+// split triad's JOIN_K, the keyed nested-map MERGE_K, and the non-keyed split
+// triad's JOIN (plain + fused). These runtime cases are probabilistic guards —
+// an unsorted gather only re-executes when completion order happens to churn;
+// the emit-side text pins are the deterministic ones. (Port of the -resume
+// half of runtime_knobs.sh.)
 func TestResumeCachesEverything(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
@@ -26,6 +31,9 @@ func TestResumeCachesEverything(t *testing.T) {
 		flags   []string
 	}{
 		{"diamond_min", "diamond_min", nil},
+		// Default-mode non-keyed split triad: a >=2-chunk split whose JOIN
+		// gathers the chunk outs sorted by name (toSortedList, not collect()).
+		{"split_test", "split_test", nil},
 		// The -native shapes whose gathers carry the -resume cache-key
 		// countermeasures (#123): the O(1) element scatter (toSortedList over
 		// bundle names), the keyed split triad (sorted JOIN_K chunk outs), and

@@ -352,7 +352,7 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		"val join",
 		// the workflow parses joinres.json into the join val via the shipped helper (#49)
 		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }",
-		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)",
+		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("stage_SUM_SQUARES.nf missing join-override wiring %q", want)
@@ -361,9 +361,10 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 }
 
 // TestEmitSplitJoinRunsWithZeroChunks guards bug 5: a split that produces 0
-// chunks must still run its JOIN. Nextflow's collect() on an empty channel emits
-// nothing, so the non-keyed JOIN wiring must guard it with .ifEmpty([]) — matching
-// Martian, which writes _chunk_outs=[] and runs the join anyway (core/stage.go).
+// chunks must still run its JOIN. The non-keyed JOIN gathers MAIN's chunk outs
+// with toSortedList, which emits [] on an empty channel (unlike collect(),
+// which emits nothing) — matching Martian, which writes _chunk_outs=[] and
+// runs the join anyway (core/stage.go).
 func TestEmitSplitJoinRunsWithZeroChunks(t *testing.T) {
 	dir := emitFixture(t, "join_resources", map[string]string{"SUM_SQUARES": "/x/sum_squares"})
 
@@ -372,9 +373,44 @@ func TestEmitSplitJoinRunsWithZeroChunks(t *testing.T) {
 		t.Fatalf("read stage module: %v", err)
 	}
 
-	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect().ifEmpty([]), types)"
+	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)"
 	if !strings.Contains(string(data), want) {
-		t.Errorf("non-keyed JOIN wiring must guard the empty channel; missing %q", want)
+		t.Errorf("non-keyed JOIN wiring must gather sorted and guard the empty channel; missing %q", want)
+	}
+}
+
+// TestEmitSplitJoinGatherSorted guards -resume stability (#123) for the
+// non-keyed split triad, plain and fused: JOIN's chunk outs (out_chunk_NNNNN
+// dirs) must be gathered sorted by name, not with collect(), whose order is
+// completion order — a task's input order is part of its -resume cache key,
+// so an arrival-ordered gather re-executes JOIN (and everything downstream)
+// on replay even though the output bytes are order-safe (in-task `sort -V`).
+func TestEmitSplitJoinGatherSorted(t *testing.T) {
+	dir := emitFixture(t, "split_test", map[string]string{
+		"SUM_SQUARES": "/x/sum_squares",
+		"REPORT":      "/x/report",
+	})
+
+	// x/y, not the a/b comparator params used elsewhere: `a` is a workflow
+	// local in both split workflows, and Groovy rejects shadowing it.
+	sorted := ".out.toSortedList { x, y -> x.name <=> y.name }, types)"
+
+	for module, want := range map[string]string{
+		// The plain per-stage workflow (genSplitWorkflow).
+		"stage_SUM_SQUARES.nf": "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN" + sorted,
+		// The fused per-call workflow (genFusedSplitWorkflow).
+		"pipe_SUM_SQUARE_PIPELINE.nf": "(join, a, STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_SP.out.defs, " +
+			"STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_MN" + sorted,
+	} {
+		mod := readFile(t, filepath.Join(dir, "modules", module))
+
+		if !strings.Contains(mod, want) {
+			t.Errorf("%s: JOIN must gather MAIN's chunk outs sorted by name; missing %q:\n%s", module, want, mod)
+		}
+
+		if strings.Contains(mod, ".collect().ifEmpty([]), types)") {
+			t.Errorf("%s: JOIN still gathers chunk outs in arrival order:\n%s", module, mod)
+		}
 	}
 }
 
