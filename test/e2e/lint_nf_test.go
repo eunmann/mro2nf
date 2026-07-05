@@ -20,39 +20,73 @@ import (
 	"testing"
 )
 
+// lintConfigs is the emission-branch dimension (#122): each opt-in flag routes
+// the emitter down generator branches the default emission never reaches
+// (native scatter/merge, the direct-call runner scripts, fused-chain
+// processes, folded-off null channels), so each fixture is linted under every
+// single flag plus the -native -native-runner composition. The full matrix is
+// cheap enough to run whole rather than subset: `nextflow lint` measures
+// ~1.2s wall per project (transpile is milliseconds), so all fixtures times
+// these configs cost a few CPU-minutes, amortized by -parallel.
+var lintConfigs = []struct {
+	name  string
+	flags []string
+}{
+	{"default", nil},
+	{"native", []string{"-native"}},
+	{"native-runner", []string{"-native-runner"}},
+	{"fuse-chains", []string{"-fuse-chains"}},
+	{"fold-disables", []string{"-fold-disables"}},
+	{"native+native-runner", []string{"-native", "-native-runner"}},
+}
+
 // minNextflowMajor/Minor is the first release with `nextflow lint`.
 const (
 	minNextflowMajor = 25
 	minNextflowMinor = 4
 )
 
-// TestNextflowLint lints the generated project for every testdata fixture. It
-// enumerates the fixtures (rather than a hand-kept list) so any new fixture is
-// linted automatically and the branch space is covered by construction.
+// TestNextflowLint lints the generated project for every testdata fixture
+// under every lintConfigs flag set. It enumerates the fixtures (rather than a
+// hand-kept list) so any new fixture is linted automatically and the branch
+// space is covered by construction. A combo the transpiler itself REFUSES (a
+// SevError flag/pipeline conflict, cmd/mro2nf's errFlagConflict) has no
+// project to lint — that is expected-refusal behavior, surfaced as an
+// explicit skip naming the diagnostics; any other transpile failure is fatal.
 func TestNextflowLint(t *testing.T) {
 	requireTools(t, "nextflow", "java")
 	requireNextflowLint(t)
 
 	for _, fx := range lintFixtures(t) {
-		t.Run(fx, func(t *testing.T) {
-			t.Parallel()
+		for _, cfg := range lintConfigs {
+			t.Run(fx+"/"+cfg.name, func(t *testing.T) {
+				t.Parallel()
 
-			proj := transpile(t, fx)
+				proj, tout, err := transpileDirErr(t, filepath.Join(root, "testdata", fx), cfg.flags...)
+				if err != nil {
+					if strings.Contains(string(tout), "flag/pipeline conflict") {
+						t.Skipf("transpiler refused %s under %v (expected SevError refusal):\n%s",
+							fx, cfg.flags, tout)
+					}
 
-			cmd := exec.Command("nextflow", "lint", ".")
-			cmd.Dir = proj
+					t.Fatalf("transpile %s under %v: %v\n%s", fx, cfg.flags, err, tout)
+				}
 
-			out, err := cmd.CombinedOutput()
+				cmd := exec.Command("nextflow", "lint", ".")
+				cmd.Dir = proj
 
-			if err != nil {
-				// nextflow lint prints diagnostics grouped by file in path order
-				// with warnings interleaved, so a tail can bury the error's
-				// file/line under a later file's warnings. Surface the error
-				// lines specifically, then the full output for context.
-				t.Fatalf("nextflow lint reported errors for %s:\n%s\n--- full output ---\n%s",
-					fx, lintErrorLines(out), out)
-			}
-		})
+				out, err := cmd.CombinedOutput()
+
+				if err != nil {
+					// nextflow lint prints diagnostics grouped by file in path order
+					// with warnings interleaved, so a tail can bury the error's
+					// file/line under a later file's warnings. Surface the error
+					// lines specifically, then the full output for context.
+					t.Fatalf("nextflow lint reported errors for %s under %v:\n%s\n--- full output ---\n%s",
+						fx, cfg.flags, lintErrorLines(out), out)
+				}
+			})
+		}
 	}
 }
 
