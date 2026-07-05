@@ -1,0 +1,51 @@
+# #127 value-chain divergence (a): a SUB-PIPELINE whose split input chains
+# back to an entry value through the parent call's bindings. mrp's whole-
+# program static resolver sees `self.vals` inside SUB as the entry's `[]` and
+# prunes the zero-fork map call to NULL — the same rule empty_fork_min pins
+# for a direct entry-pipeline split. The transpiler must propagate the
+# invocation-known marking across the call binding (knownInvocation) so SUB's
+# zero-fork MERGE emits null too; override `values` non-empty at launch and
+# the forks run (expected/override_outs.json pins that).
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline SUB(
+    in  float[] vals,
+    in  float   factor,
+    out float[] scaled,
+)
+{
+    map call SCALE(
+        value  = split self.vals,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+pipeline EFS(
+    in  float[] values,
+    in  float   factor,
+    out float[] scaled,
+)
+{
+    call SUB(
+        vals   = self.values,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SUB.scaled,
+    )
+}
+
+call EFS(
+    values = [],
+    factor = 10.0,
+)
