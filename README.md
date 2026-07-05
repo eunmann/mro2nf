@@ -203,7 +203,8 @@ nextflow run main.nf --aws_queue <q> --aws_region <r> \
 
 The emitted `Dockerfile` is self-contained (it vendors `mre` + the adapters). If
 you'd rather not vendor them, base your image on the published runtime image
-instead — it ships `mre` + the Martian adapters at `/opt/mro2nf`, multi-arch:
+instead — it ships `mre`, the Martian adapters, and the `-native-runner` runner
+at `/opt/mro2nf`, multi-arch:
 
 ```dockerfile
 FROM ghcr.io/eunmann/mro2nf-runtime:<version>   # match your mro2nf version
