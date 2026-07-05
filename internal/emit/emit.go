@@ -118,6 +118,18 @@ type Options struct {
 	NativeRunner bool
 }
 
+// featureSet extracts the opt-in emission toggles from o. It is the single
+// Options→featureSet constructor: Emit and Diagnose both derive their plan
+// through it, so they can never analyze different plans for the same options.
+func (o Options) featureSet() featureSet {
+	return featureSet{
+		fuseChains:   o.FuseChains,
+		foldDisables: o.FoldDisables,
+		native:       o.Native,
+		nativeRunner: o.NativeRunner,
+	}
+}
+
 // Emit writes the Nextflow project for prog into opts.OutDir.
 func Emit(prog *ir.Program, opts Options) error {
 	if prog.Entry == nil {
@@ -151,10 +163,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	features := featureSet{
-		fuseChains: opts.FuseChains, foldDisables: opts.FoldDisables,
-		native: opts.Native, nativeRunner: opts.NativeRunner,
-	}
+	features := opts.featureSet()
 	g := genCtx{
 		entry:   prog.Entry.Callable,
 		mroFile: opts.MROFile,
