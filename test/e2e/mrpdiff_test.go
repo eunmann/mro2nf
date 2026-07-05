@@ -182,6 +182,13 @@ func TestMrpDiff(t *testing.T) {
 		{name: "empty_fork_min"},
 		{name: "empty_map_fork"},
 		{name: "runtime_empty_forks"},
+		// #127 value-chain empty-fork classes: mrp's static resolver prunes
+		// each to null (sub-pipeline chain to an entry value, in-pipeline
+		// cascade through a mapped call, mixed entry+upstream zip) — the
+		// live differential machine-checks the knownInvocation cascade.
+		{name: "empty_fork_sub"},
+		{name: "empty_fork_cascade"},
+		{name: "empty_fork_mixed"},
 		// The native-suite golden anchors: their committed expected/outs.json
 		// files claim mrp provenance, so the live differential machine-checks
 		// that claim — otherwise TestGolden + the native suites would prove
