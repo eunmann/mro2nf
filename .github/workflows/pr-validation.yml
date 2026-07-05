@@ -48,9 +48,12 @@ jobs:
         # cannot change CI behavior without a repo change.
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 && govulncheck ./...
       # golangci-lint runs govet, so there is no separate `go vet` step.
+      # --build-tags e2e pulls the tag-gated test/e2e harness into the lint
+      # set (the tag is additive; nothing else carries an e2e constraint).
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+          args: --build-tags e2e
       - name: Check for dead code
         # Whole-program reachability from the two binaries; catches orphans
         # golangci's `unused` misses (exported or test-reachable functions).
