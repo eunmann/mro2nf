@@ -256,14 +256,23 @@ type cliPtrs struct {
 
 // applyConfig loads the .mro2nf.yml (explicit path, else alongside the .mro) and
 // sets each flag the user did NOT pass explicitly to the config's value —
-// precedence is builtin default < config file < explicit flag.
+// precedence is builtin default < config file < explicit flag. An explicit
+// -config path must exist — a typo there must not silently drop the defaults —
+// while the implicit alongside-the-.mro probe tolerates a missing file. An
+// empty -config value is indistinguishable from an unset flag, so it takes the
+// implicit probe.
 func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
-	path := explicit
-	if path == "" {
-		path = filepath.Join(filepath.Dir(mroPath), config.FileName)
+	var (
+		cfg *config.Config
+		err error
+	)
+
+	if explicit != "" {
+		cfg, err = config.LoadRequired(explicit)
+	} else {
+		cfg, err = config.Load(filepath.Join(filepath.Dir(mroPath), config.FileName))
 	}
 
-	cfg, err := config.Load(path)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

@@ -257,11 +257,22 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage, only int) ([]js
 // Merge combines per-fork outputs into a single map-call result. For an array
 // fork (keys nil), each named output becomes an array of that field across the
 // forks in order; for a map fork, each output becomes a map keyed by keys[i].
-// emptyNull applies mrp's invocation-known-empty rule (#99): with ZERO forks
-// every output merges to null instead of the typed empty — the emitter sets it
-// only for a map call whose split source is launch-invocation-known
-// (entrySplit), where mrp's static resolver would prune the zero-fork call and
-// resolve its outputs to null. A runtime-sourced empty keeps the typed empty.
+// emptyNull applies mrp's invocation-known-empty rule (#99, widened by #127):
+// with ZERO forks every output merges to null instead of the typed empty,
+// matching mrp's static resolver pruning the zero-fork call. The emitter
+// (knownInvocation) sets the flag when ANY split side's emptiness is
+// invocation-known — a direct entry/literal source, a value chain through
+// sub-pipeline bindings, or a length-known cascade source (a mapped call's
+// output, whose merged size is the fork count); one such side of a MIXED zip
+// suffices, because zipped splits must agree in length (errSplitLen fails
+// loudly otherwise), so zero forks implies the known side resolved empty.
+// The flag only ever WIDENS the zero-fork case to null: with one or more
+// forks mergeOne runs untouched, which keeps launch-time entry overrides
+// invocation-correct. A zero-fork merge for an UNMARKED call (runtime-sourced
+// empty or null) keeps the typed empty. A DISABLED marked call reaches this
+// merge only on its gate-false (run) branch, where zero-fork null is
+// mrp-correct; the gate-true branch bypasses the merge for the skip-null
+// bundle (see emit.planCall).
 func Merge(names []string, outs []json.RawMessage, keys []string, emptyNull bool) (json.RawMessage, error) {
 	// The zero-fork null decision is made once, before the per-name loop, and
 	// only after the same keys/outs desync guard mergeOne applies — so the
