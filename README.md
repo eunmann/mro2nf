@@ -52,6 +52,7 @@ internal/
   shim/        _args/_jobinfo/_outs I/O, bundle data plane, adapter launch
   bind/        resolve call bindings into _args (refs, projections, fan-in)
   overrides/   mrp --overrides file -> Nextflow -c config
+  config/      .mro2nf.yml project defaults for the transpiler flags
   logging/     zerolog setup    apperror/  typed errors
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
@@ -92,6 +93,12 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-container <image>` | set `process.container` for container backends (AWS Batch, k8s) |
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
 | `-monitor` | cap each stage's virtual memory at its `vmem_gb` via `prlimit` (mrp `--monitor`) |
+| `-fuse-chains` | fuse a single-consumer, equal-resource source stage into its consumer's task (fewer tasks; **trade-off:** `-resume` and per-stage retry are coarser for the fused stages) |
+| `-fold-disables` | constant-fold an entry-determinable disable gate: an always-disabled stage is pruned at transpile time (**trade-off:** overriding that gate input at launch will *not* re-enable the pruned stage — the transpiler warns which) |
+| `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native--native-runner)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
+| `-native-runner` | run `py` stages through the embedded direct-call runner instead of `mre` + `martian_shell.py` (`exec`/`comp` stages keep the adapter). On container backends the runner is baked into the image, so toggling it there means an image rebuild |
+| `-config <path>` | path to a [`.mro2nf.yml`](#mro2nfyml-project-defaults) of per-project flag defaults (default: probed alongside the `.mro`) |
+| `-version` | print the mro2nf version and exit |
 
 `mro2nf overrides <file>` converts an mrp `--overrides` JSON into an equivalent
 Nextflow `-c` config overlay (per-stage `memory`/`cpus` retuning at launch) —
@@ -113,6 +120,64 @@ it needs as individual `path` inputs (never via `${projectDir}`): the shared
 FASTQ, say) are staged the same way, at any shape: a file or directory, a
 `file[]`, a `map<file>`, or a struct with file fields. So a run parameter that
 points at an `s3://` path or prefix is localized into the task by Nextflow.
+
+### Native mode (`-native`, `-native-runner`)
+
+By default every piece of orchestration between stage tasks — binding, forking,
+merging, entry-arg resolution — runs as its own small task. `-native` collapses
+that data plane into driver-side channel wiring while leaving the stage tasks
+(and the Martian adapter ABI they speak) untouched:
+
+- **Entry args are baked at transpile time** (`entry_resolved/` in the project;
+  no `BUILD_ENTRY_ARGS` task). Supplying an entry parameter at launch is a
+  **loud error** — re-transpile to change an input.
+- **Plain calls fuse** their bind into the stage's own task; simple disable
+  gates are branched on the driver instead of a `DISABLE` task.
+- **Eligible map calls scatter in-workflow with no FORK task**: the driver
+  slices the fork collection once and hands each fused instance only its own
+  element (O(1) per fork, not O(N) re-parses).
+- **Sole-consumer MERGE gathers fold** into the consumer's task.
+
+Shapes that can't fully collapse keep a bounded remainder — e.g. a
+file-bearing, multi-split, or projected fork keeps **one** FORK resolve task
+(O(total data), never per-instance), a disabled map call keeps its MERGE as the
+skip-branch mix point, and a map over a split stage or sub-pipeline runs its
+fork-keyed layer. **Every non-collapsed shape prints an Info diagnostic at
+transpile time** naming exactly which tasks remain and why, so a partial
+collapse is never silent (see `internal/emit/diagnostics.go`).
+
+`-native-runner` is independent: it swaps the *stage-execution* hop for `py`
+stages from `mre` + `martian_shell.py` to an embedded direct-call Python runner
+(`import martian` resolves to a shipped compat shim). `exec`/`comp` stages keep
+the adapter path (an Info diagnostic names each). It composes with or without
+`-native`, and on container backends the runner is baked into the image.
+
+Both modes are held to the same bar as the default emission: the native e2e
+suites diff their outputs against the committed real-`mrp` goldens, and pin the
+exact set of surviving data-plane processes per pipeline shape (see
+[`docs/FEATURE_COVERAGE.md`](docs/FEATURE_COVERAGE.md)).
+
+### `.mro2nf.yml` project defaults
+
+A `.mro2nf.yml` next to the pipeline `.mro` (or named via `-config`, in which
+case it must exist) sets per-project defaults for the transpile flags, so a
+team doesn't have to repeat them on every invocation:
+
+```yaml
+# keys mirror the CLI flags
+target: awsbatch
+container: 123456789.dkr.ecr.us-east-1.amazonaws.com/pipe:1
+native: true
+native-runner: true
+```
+
+Supported keys: `target`, `container`, `mre`, `shell`, `mrjob`, `monitor`,
+`fuse-chains`, `fold-disables`, `native`, `native-runner`. Precedence is
+**builtin default < config file < explicit flag**. To override a config `true`
+back off for one run, use the equals form — `-native=false` — because Go's flag
+parsing reads a space-separated `-native false` as a bare `-native` plus a
+positional argument. Unknown keys and malformed values are errors, so typos are
+loud.
 
 ## Testing
 
