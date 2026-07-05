@@ -33,6 +33,14 @@
 // the call name, exactly what mrp keys on. Nextflow full-matches withName
 // regexes, so every selector is bounded to the emitter's exported suffix
 // inventory (internal/emit names.go) rather than trailing `.*` (#112).
+//
+// The <pipeline> axis of the per-call families is exact only with the program:
+// the selector then carries the literal pipeline name(s) that call the stage.
+// Without it the axis falls back to `.+`, which is structurally ambiguous when
+// identifiers contain "__" (Martian allows this): a selector for call TRIM
+// also full-matches an unrelated call X__TRIM's processes, because `.+` can
+// absorb the "<pipeline>__X" prefix. That residual over-match is one more
+// reason to pass -mro to `mro2nf overrides`.
 package overrides
 
 import (
@@ -161,7 +169,7 @@ func groupSelectors(resolved map[[3]string]directive, res *resolver) ([]string, 
 
 	for rk, d := range resolved {
 		stage, phase := rk[0], rk[1]
-		if sel := selector(stage, res.callsFor(stage), phase); sel != "" {
+		if sel := selector(stage, res.qualifiers(stage), phase); sel != "" {
 			a := bySel[sel]
 			if a == nil {
 				a = &acc{breadth: selBreadth(stage, phase)}
@@ -279,18 +287,15 @@ func withRoot(suffixes []string, root string) []string {
 	return out
 }
 
-// Qualified per-call process-name prefixes the emitter builds with qualify():
-// <FAMILY>_<len>_<pipeline>__ (see emit's fusedName/forkName). [0-9] rather
-// than \d: the selector is rendered inside a single-quoted Groovy string,
-// where a backslash escape fails config parsing.
-const (
-	// fusedPrefix is the fused per-call family from the BIND fold (#16),
-	// native scatter (#76), and the keyed fused/chain processes.
-	fusedPrefix = `STAGE_[0-9]+_.+__`
-	// scatterPrefix is the fork-named family whose _KS keyed element scatter
-	// runs the stage's main inline (#99).
-	scatterPrefix = `FORK_[0-9]+_.+__`
-)
+// altGroup renders names as a regex alternation: a single name verbatim,
+// several as a group.
+func altGroup(names []string) string {
+	if len(names) == 1 {
+		return names[0]
+	}
+
+	return "(" + strings.Join(names, "|") + ")"
+}
 
 // suffixAlt renders a suffix inventory as a bounded regex fragment: a single
 // suffix verbatim, several as an alternation group, with the empty suffix
@@ -317,22 +322,22 @@ func suffixAlt(suffixes []string) string {
 	return "(" + strings.Join(rest, "|") + ")" + opt
 }
 
-// selector renders the withName regex for a stage + its call instances + phase;
-// Nextflow full-matches it against the process (or process-alias) name. An empty
-// stage means all stages: "" (the global process block) for a stage-level field,
-// or a phase-wide regex for split/chunk/join. The regex covers every naming
-// family the emitter produces: the callable-named plain and keyed-fork
-// processes (`<stage>`, `<stage>_MAP`, `<stage>_*_K`) via the stage token, and
-// the call-named fused per-call (`STAGE_<n>_<pipe>__<call>*`, from #16 fusion
-// and #76 native scatter) and keyed-scatter (`FORK_<n>_<pipe>__<call>_KS`)
-// processes via the call tokens — so an override reaches an aliased scattered
-// call (call-named) and its stage's shared keyed process (callable-named)
-// alike. Every branch is BOUNDED to the emitter's exported suffix inventory —
-// no trailing `.*` — so a stage/call name that is a prefix of another's cannot
-// over-match the longer name's processes (#112). calls falls back to the stage
-// name (a bare-stage entry or the legacy no-program path, where call ==
-// callable).
-func selector(stage string, calls []string, phase string) string {
+// selector renders the withName regex for a stage + its call-site qualifiers
+// (resolver.qualifiers) + phase; Nextflow full-matches it against the process
+// (or process-alias) name. An empty stage means all stages: "" (the global
+// process block) for a stage-level field, or a phase-wide regex for
+// split/chunk/join. The regex covers every naming family the emitter produces:
+// the callable-named plain and keyed-fork processes (`<stage>`, `<stage>_MAP`,
+// `<stage>_*_K`) via the stage token, and the call-named fused per-call
+// (`STAGE_<n>_<pipe>__<call>*`, from #16 fusion and #76 native scatter) and
+// keyed-scatter (`FORK_<n>_<pipe>__<call>_KS`) processes via the qualifiers —
+// so an override reaches an aliased scattered call (call-named) and its
+// stage's shared keyed process (callable-named) alike. Every branch is BOUNDED
+// to the emitter's exported suffix inventory — no trailing `.*` — so a
+// stage/call name that is a prefix of another's cannot over-match the longer
+// name's processes (#112); with a program the qualifiers pin the pipeline axis
+// too (literal names, not `.+`), closing the `__`-in-identifier ambiguity.
+func selector(stage string, quals []string, phase string) string {
 	plain, fused, _ := familySuffixes(phase)
 
 	if stage == "" {
@@ -343,20 +348,17 @@ func selector(stage string, calls []string, phase string) string {
 		return ".*" + suffixAlt(append(plain, fused...))
 	}
 
-	if len(calls) == 0 {
-		calls = []string{stage}
+	alts := []string{stage + suffixAlt(plain)}
+	for _, q := range quals {
+		alts = append(alts, "STAGE_"+q+suffixAlt(fused))
 	}
 
-	callAlt := calls[0]
-	if len(calls) > 1 {
-		callAlt = "(" + strings.Join(calls, "|") + ")"
-	}
-
-	alts := []string{stage + suffixAlt(plain), fusedPrefix + callAlt + suffixAlt(fused)}
 	// The _KS scatter is the stage's main; only a stage-level override reaches
 	// it (the per-stage phase selectors cover the split-triad processes).
 	if phase == "" {
-		alts = append(alts, scatterPrefix+callAlt+suffixAlt(emit.ScatterCallSuffixes()))
+		for _, q := range quals {
+			alts = append(alts, "FORK_"+q+suffixAlt(emit.ScatterCallSuffixes()))
+		}
 	}
 
 	return "(" + strings.Join(alts, "|") + ")"

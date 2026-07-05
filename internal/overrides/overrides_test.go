@@ -11,19 +11,30 @@ import (
 
 // stageSel renders the expected stage-level selector for a stage: the bounded
 // plain/keyed family on the stage name, plus the fused and keyed-scatter
-// per-call families on the call alternation (the call name, or "(A|B)").
-// Bounded suffix alternations, never a trailing `.*` — Nextflow full-matches
-// withName, so `SORT.*` would retune an unrelated stage SORT_READS (#112).
-func stageSel(stage, callAlt string) string {
-	return "(" + stage + "(_MAP|_SPLIT|_SPLIT_K|_MAIN|_MAIN_K|_JOIN|_JOIN_K)?" +
-		"|STAGE_[0-9]+_.+__" + callAlt + "(_SP|_MN|_JN|_K)?" +
-		"|FORK_[0-9]+_.+__" + callAlt + "_KS)"
+// per-call families on each call-site qualifier — a literal
+// "<pipe>__<callAlt>" when a program was given, the ambiguous ".+__<stage>"
+// without one. Bounded suffix alternations, never a trailing `.*` — Nextflow
+// full-matches withName, so `SORT.*` would retune an unrelated stage
+// SORT_READS (#112).
+func stageSel(stage string, quals ...string) string {
+	alts := make([]string, 0, 1+2*len(quals))
+	alts = append(alts, stage+"(_MAP|_SPLIT|_SPLIT_K|_MAIN|_MAIN_K|_JOIN|_JOIN_K)?")
+
+	for _, q := range quals {
+		alts = append(alts, "STAGE_[0-9]+_"+q+"(_SP|_MN|_JN|_K)?")
+	}
+
+	for _, q := range quals {
+		alts = append(alts, "FORK_[0-9]+_"+q+"_KS")
+	}
+
+	return "(" + strings.Join(alts, "|") + ")"
 }
 
 // phaseSel renders the expected phase-level selector: the plain phase process
 // and its keyed variant, plus the fused per-call phase process.
-func phaseSel(stage, plain, callAlt, fused string) string {
-	return "(" + stage + "(" + plain + "|" + plain + "_K)|STAGE_[0-9]+_.+__" + callAlt + fused + ")"
+func phaseSel(stage, plain, qual, fused string) string {
+	return "(" + stage + "(" + plain + "|" + plain + "_K)|STAGE_[0-9]+_" + qual + fused + ")"
 }
 
 // sampleProgram builds a two-level pipeline for the pipeline-scope tests:
@@ -59,7 +70,7 @@ func TestConvertPipelineScopeExpands(t *testing.T) {
 	}
 
 	for _, stage := range []string{"ALIGN", "SORT"} {
-		want := "withName: '" + stageSel(stage, stage) + "' { memory = '8 GB' }"
+		want := "withName: '" + stageSel(stage, "SUB__"+stage) + "' { memory = '8 GB' }"
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing expanded selector for %s:\n%s\n--- got ---\n%s", stage, want, cfg)
 		}
@@ -85,8 +96,10 @@ func TestConvertPipelineScopeTransitive(t *testing.T) {
 		t.Errorf("unexpected unmapped: %v", unmapped)
 	}
 
-	for _, stage := range []string{"ALIGN", "SORT", "COLLATE"} {
-		want := "withName: '" + stageSel(stage, stage) + "' { memory = '8 GB' }"
+	for stage, qual := range map[string]string{
+		"ALIGN": "SUB__ALIGN", "SORT": "SUB__SORT", "COLLATE": "TOP__COLLATE",
+	} {
+		want := "withName: '" + stageSel(stage, qual) + "' { memory = '8 GB' }"
 		if !strings.Contains(cfg, want) {
 			t.Errorf("TOP must expand transitively to %s:\n%s", stage, cfg)
 		}
@@ -102,7 +115,7 @@ func TestConvertPipelineScopePhase(t *testing.T) {
 	}
 
 	for _, stage := range []string{"ALIGN", "SORT"} {
-		want := "withName: '" + phaseSel(stage, "_MAIN", stage, "_MN") + "' { memory = '8 GB' }"
+		want := "withName: '" + phaseSel(stage, "_MAIN", "SUB__"+stage, "_MN") + "' { memory = '8 GB' }"
 		if !strings.Contains(cfg, want) {
 			t.Errorf("chunk.mem_gb must reach %s's main-phase selector:\n%s", stage, cfg)
 		}
@@ -129,7 +142,7 @@ func TestConvertResolvesByAlias(t *testing.T) {
 	// per-call process (STAGE_..__TRIM, the native-scatter/#16 form) AND the
 	// callable-named plain/keyed process (ALIGN, ALIGN_MAP) that the same stage
 	// runs through in default mode.
-	sel := stageSel("ALIGN", "TRIM")
+	sel := stageSel("ALIGN", "SUB__TRIM")
 	if !strings.Contains(cfg, "withName: '"+sel+"' { memory = '8 GB' }") {
 		t.Errorf("alias key must target both TRIM (fused) and ALIGN (plain/keyed):\n%s", cfg)
 	}
@@ -152,16 +165,16 @@ func TestConvertStageKeyBeatsPipelineScope(t *testing.T) {
 		t.Fatalf("Convert: %v", err)
 	}
 
-	if !strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "ALIGN")+"' { memory = '16 GB' }") {
+	if !strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '16 GB' }") {
 		t.Errorf("explicit ALIGN key (16) must win over the pipeline scope (8):\n%s", cfg)
 	}
 
-	if strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "ALIGN")+"' { memory = '8 GB' }") {
+	if strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '8 GB' }") {
 		t.Errorf("ALIGN must not take the pipeline-scoped 8 GB:\n%s", cfg)
 	}
 
 	// SORT, covered only by the pipeline scope, keeps 8 GB.
-	if !strings.Contains(cfg, "withName: '"+stageSel("SORT", "SORT")+"' { memory = '8 GB' }") {
+	if !strings.Contains(cfg, "withName: '"+stageSel("SORT", "SUB__SORT")+"' { memory = '8 GB' }") {
 		t.Errorf("SORT should keep the pipeline-scoped 8 GB:\n%s", cfg)
 	}
 }
@@ -219,8 +232,8 @@ func TestConvertDeeperKeyWins(t *testing.T) {
 		t.Fatalf("Convert: %v", err)
 	}
 
-	alignSel := "withName: '" + stageSel("ALIGN", "ALIGN") + "' { memory = '16 GB' }"
-	sortSel := "withName: '" + stageSel("SORT", "SORT") + "' { memory = '8 GB' }"
+	alignSel := "withName: '" + stageSel("ALIGN", "SUB__ALIGN") + "' { memory = '16 GB' }"
+	sortSel := "withName: '" + stageSel("SORT", "SUB__SORT") + "' { memory = '8 GB' }"
 
 	if !strings.Contains(cfg, alignSel) {
 		t.Errorf("ALIGN should take the deeper 16 GB override:\n%s", cfg)
@@ -230,7 +243,7 @@ func TestConvertDeeperKeyWins(t *testing.T) {
 		t.Errorf("SORT should keep the pipeline-scoped 8 GB override:\n%s", cfg)
 	}
 
-	if strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "ALIGN")+"' { memory = '8 GB' }") {
+	if strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '8 GB' }") {
 		t.Errorf("ALIGN must not also carry the shallower 8 GB value:\n%s", cfg)
 	}
 }
@@ -247,7 +260,7 @@ func TestConvertLeafKeyStillWorks(t *testing.T) {
 		t.Errorf("unexpected unmapped: %v", unmapped)
 	}
 
-	if !strings.Contains(cfg, "withName: '"+stageSel("COLLATE", "COLLATE")+"' { cpus = 3 }") {
+	if !strings.Contains(cfg, "withName: '"+stageSel("COLLATE", "TOP__COLLATE")+"' { cpus = 3 }") {
 		t.Errorf("leaf stage key mis-rendered:\n%s", cfg)
 	}
 }
@@ -265,13 +278,16 @@ func TestConvert(t *testing.T) {
 		t.Fatalf("Convert: %v", err)
 	}
 
+	// Without a program the fused/scatter qualifier stays the legacy `.+__`
+	// wildcard (see the package doc for the residual `__`-in-identifier
+	// ambiguity that pinning requires -mro to close).
 	for _, want := range []string{
 		"process {",
 		"memory = '2 GB'", // the "" key -> global default
-		"withName: '" + stageSel("ALIGN", "ALIGN") + "' { memory = '8 GB'; cpus = 4 }",
-		"withName: '" + phaseSel("ALIGN", "_MAIN", "ALIGN", "_MN") + "' { memory = '16 GB' }",               // chunk.* -> main phase
-		"withName: '" + phaseSel("COLLATE", "_JOIN", "COLLATE", "_JN") + "' { memory = '32 GB'; cpus = 2 }", // join.* -> join phase
-		"withName: '" + phaseSel("SORT", "_SPLIT", "SORT", "_SP") + "' { memory = '6 GB' }",                 // split.* -> split phase
+		"withName: '" + stageSel("ALIGN", ".+__ALIGN") + "' { memory = '8 GB'; cpus = 4 }",
+		"withName: '" + phaseSel("ALIGN", "_MAIN", ".+__ALIGN", "_MN") + "' { memory = '16 GB' }",               // chunk.* -> main phase
+		"withName: '" + phaseSel("COLLATE", "_JOIN", ".+__COLLATE", "_JN") + "' { memory = '32 GB'; cpus = 2 }", // join.* -> join phase
+		"withName: '" + phaseSel("SORT", "_SPLIT", ".+__SORT", "_SP") + "' { memory = '6 GB' }",                 // split.* -> split phase
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing %q\n--- got ---\n%s", want, cfg)
@@ -327,10 +343,62 @@ func TestConvertNoPrefixOverMatch(t *testing.T) {
 	}
 }
 
+// TestConvertQualifierSeparatorOverMatch guards the pipeline-qualifier axis of
+// the fused/scatter selectors: Martian identifiers may contain "__", so a
+// greedy `.+__` qualifier lets a selector for call TRIM full-match an
+// unrelated call X__TRIM in the same pipeline (in STAGE_4_PIPE__X__TRIM the
+// `.+` absorbs "PIPE__X"). With the program, the qualifier must be the literal
+// pipeline name, which cannot absorb the extra call-name segment.
+func TestConvertQualifierSeparatorOverMatch(t *testing.T) {
+	prog := &ir.Program{
+		Stages: map[string]*ir.Stage{"ALIGN": {Name: "ALIGN"}, "OTHER": {Name: "OTHER"}},
+		Pipelines: map[string]*ir.Pipeline{
+			"PIPE": {Name: "PIPE", Calls: []ir.Call{
+				{Name: "TRIM", Callable: "ALIGN", Mapped: true},
+				{Name: "X__TRIM", Callable: "OTHER", Mapped: true},
+			}},
+		},
+		Entry: &ir.EntryCall{Callable: "PIPE"},
+	}
+
+	cfg, unmapped, err := overrides.Convert([]byte(`{"PIPE.TRIM": {"mem_gb": 8}}`), prog)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if len(unmapped) != 0 {
+		t.Errorf("unexpected unmapped: %v", unmapped)
+	}
+
+	sel := regexp.MustCompile(`withName: '([^']+)'`).FindStringSubmatch(cfg)
+	if sel == nil {
+		t.Fatalf("no withName selector emitted:\n%s", cfg)
+	}
+
+	re := regexp.MustCompile("^(?:" + sel[1] + ")$")
+
+	for _, name := range []string{
+		"ALIGN", "ALIGN_MAP", // plain/keyed family of TRIM's stage
+		"STAGE_4_PIPE__TRIM", "STAGE_4_PIPE__TRIM_MN", "FORK_4_PIPE__TRIM_KS",
+	} {
+		if !re.MatchString(name) {
+			t.Errorf("TRIM selector %q must full-match %q", sel[1], name)
+		}
+	}
+
+	for _, name := range []string{
+		"STAGE_4_PIPE__X__TRIM", "STAGE_4_PIPE__X__TRIM_MN", "FORK_4_PIPE__X__TRIM_KS",
+	} {
+		if re.MatchString(name) {
+			t.Errorf("TRIM selector %q over-matches the unrelated call X__TRIM's process %q", sel[1], name)
+		}
+	}
+}
+
 // TestConvertStageKeyReachesAliasedScatter guards the other direction of the
 // #99 unification: a STAGE-name key must reach an ALIASED map call's fused
 // per-call process (STAGE_..__<alias>, the #76 native-scatter form) as well as
-// every other call site of that stage — the case a bare `(fusedPrefix)?<stage>`
+// every other call site of that stage — the case a bare `STAGE_..__<stage>`
 // selector missed, since the aliased call's process embeds the alias, not the
 // stage. ALIGN is called once as ALIGN (SUB) and once aliased as TRIM.
 func TestConvertStageKeyReachesAliasedScatter(t *testing.T) {
