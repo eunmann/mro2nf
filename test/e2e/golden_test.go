@@ -110,6 +110,20 @@ var goldenCases = []struct {
 	{"empty_map_fork", "empty_map_fork", "expected/outs.json"},
 	{"empty_fork_min_override", "empty_fork_min", "expected/override_outs.json"},
 	{"runtime_empty_forks", "runtime_empty_forks", "expected/outs.json"},
+	// #127 value-chain empty-fork fidelity — the three divergence classes the
+	// old entrySplit comment admitted, closed by knownInvocation propagation:
+	// a sub-pipeline split chaining to an entry value through the parent
+	// call's bindings, an in-pipeline cascade `map call SECOND(split
+	// FIRST.scaled)` over an invocation-known-empty FIRST, and a MIXED split
+	// (entry ref zipped with an upstream ref, entry side empty). mrp prunes
+	// all three to null; the _override cases prove the marking stays a
+	// runtime shape rule (launch-override the entry side non-empty and the
+	// forks run).
+	{"empty_fork_sub", "empty_fork_sub", "expected/outs.json"},
+	{"empty_fork_sub_override", "empty_fork_sub", "expected/override_outs.json"},
+	{"empty_fork_cascade", "empty_fork_cascade", "expected/outs.json"},
+	{"empty_fork_cascade_override", "empty_fork_cascade", "expected/override_outs.json"},
+	{"empty_fork_mixed", "empty_fork_mixed", "expected/outs.json"},
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},
