@@ -75,8 +75,11 @@ func TestEveryFixtureIsExercised(t *testing.T) {
 // readTestSources extracts the STRING LITERALS (one per line) from every .go
 // file in this package directory (the e2e suite source) so a fixture name can
 // be matched against the case tables that reference it, wherever they live
-// (exported slices or inline literals). A real reference is always a quoted
-// name — a case-table entry or a path join — so scanning tokens instead of
+// (exported slices or inline literals). What counts as coverage is exactly a
+// WHOLE quoted string literal naming the fixture — a case-table entry or a
+// path join. A name assembled by concatenation or held in a cross-package
+// const is NOT seen, but that miss is loud (the check fails and demands the
+// fixture be wired or allowlisted), never silent. Scanning tokens instead of
 // raw bytes stops a COMMENT mention from counting as coverage (#127): a
 // fixture that is merely discussed is still unexercised.
 func readTestSources(t *testing.T) []byte {
