@@ -895,3 +895,11 @@ func (cp callPlan) fusedInclude() bool {
 	return cp.kind == kindFusedStage || cp.kind == kindFusedChain || cp.kind == kindFusedAway ||
 		cp.kind == kindFoldedOff || cp.kind == kindNativeScatter
 }
+
+// keyedFusedInclude reports whether a call's keyed-layer include is suppressed —
+// the fused-leaf (_K) and element-scatter (_KS) kinds embed the stage's main in
+// a self-contained per-call process, so they need no wf_<callee>_map import
+// (the keyed analog of fusedInclude).
+func (cp callPlan) keyedFusedInclude() bool {
+	return cp.keyedKind == keyedFused || cp.keyedKind == keyedScatter
+}

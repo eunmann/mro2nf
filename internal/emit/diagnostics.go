@@ -81,7 +81,7 @@ func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic
 				// (#99), keeping only the data-proportional MERGE_K gather; a
 				// file-bearing/multi-split/disabled inner map keeps both.
 				kept := "the FORK_K and MERGE_K tasks"
-				if _, _, ok := keyedScatterable(c, prog); ok {
+				if cp.keyedKind == keyedScatter {
 					kept = "the data-proportional MERGE_K gather (its inner fork resolve is a driver element scatter)"
 				}
 
