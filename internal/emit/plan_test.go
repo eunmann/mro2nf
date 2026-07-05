@@ -359,6 +359,44 @@ func keysOf(m map[string]pipePlan) []string {
 	return ks
 }
 
+// TestKeyedScatterableRejections pins keyedScatterable's guardrails (#99): the
+// keyed driver scatter requires a value-only callee and no call-ref bindings.
+// map_pipe_nested is the positive control (keyedScatter over xs); a
+// file-bearing callee input (map_pipe_nested_file) and a broadcast binding
+// referencing an upstream call must both fall back to keyedForkBind — the _KS
+// forkbind assembles fargs without the type manifest or a per-outer-key
+// producer join, so either shape would break on the scatter path.
+func TestKeyedScatterableRejections(t *testing.T) {
+	el := buildPlan(lowerFixture(t, "map_pipe_nested"), featureSet{}).pipes["INNER"].calls["DBL"]
+	if el.keyedKind != keyedScatter || el.keyedScatterField != "xs" {
+		t.Errorf("value-only nested map: keyedKind = %d (field %q), want keyedScatter over xs",
+			el.keyedKind, el.keyedScatterField)
+	}
+
+	fb := buildPlan(lowerFixture(t, "map_pipe_nested_file"), featureSet{}).pipes["INNER"].calls["DBL"]
+	if fb.keyedKind != keyedForkBind {
+		t.Errorf("file-bearing callee input: keyedKind = %d, want keyedForkBind (file-leaf rejection)", fb.keyedKind)
+	}
+
+	cr := lowerMRO(t, `
+stage GEN(out int k, src py "s/gen",)
+stage DBL(in int x, in int k, out int y, src py "s/dbl",)
+pipeline INNER(in int[] xs, out int[] ys,){
+    call GEN()
+    map call DBL(x = split self.xs, k = GEN.k,)
+    return (ys = DBL.y,)
+}
+pipeline OUTER(in int[][] sets, out int[][] yss,){
+    map call INNER(xs = split self.sets,)
+    return (yss = INNER.ys,)
+}
+call OUTER(sets = [[1]],)
+`)
+	if got := buildPlan(cr, featureSet{}).pipes["INNER"].calls["DBL"]; got.keyedKind != keyedForkBind {
+		t.Errorf("call-ref broadcast binding: keyedKind = %d, want keyedForkBind (call-ref rejection)", got.keyedKind)
+	}
+}
+
 // TestPlanKeyedKindFlagInvariant pins planKeyedCall's documented featureSet
 // independence: the keyed decision (and payload) must be identical under every
 // flag combination, since the keyed layer's correctness for flag-composed
