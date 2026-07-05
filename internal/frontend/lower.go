@@ -103,7 +103,12 @@ func lowerCall(c *syntax.CallStm) (ir.Call, error) {
 	lc := ir.Call{Name: c.Id, Callable: c.DecId, Mapped: c.Mapping != nil}
 
 	if c.Mapping != nil {
-		lc.MapMode = c.Mapping.CallMode().String()
+		mode, err := mapMode(c.Mapping.CallMode())
+		if err != nil {
+			return lc, fmt.Errorf("call %s: %w", c.Id, err)
+		}
+
+		lc.MapMode = mode
 	}
 
 	if m := c.Modifiers; m != nil {
@@ -121,6 +126,25 @@ func lowerCall(c *syntax.CallStm) (ir.Call, error) {
 	lc.Bindings = b
 
 	return lc, nil
+}
+
+// mapMode maps Martian's static fork-source kind onto the IR vocabulary. Any
+// other mode (single, null, or a future addition) has no lowering, so it fails
+// loudly instead of leaking an unvetted mode string into the emitter.
+func mapMode(m syntax.CallMode) (string, error) {
+	switch m {
+	case syntax.ModeArrayCall:
+		return ir.MapModeArray, nil
+	case syntax.ModeMapCall:
+		return ir.MapModeMap, nil
+	case syntax.ModeUnknownMapCall:
+		return ir.MapModeUnknown, nil
+	default:
+		return "", &apperror.UnsupportedError{
+			Construct: "map call mode",
+			Detail:    fmt.Sprintf("mode %q cannot be lowered", m),
+		}
+	}
 }
 
 func lowerEntry(c *syntax.CallStm) (*ir.EntryCall, error) {
