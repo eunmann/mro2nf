@@ -67,7 +67,11 @@ cat "$LINT_OUT"
 # a commit touching only such files would be spuriously blocked. `go run`
 # launders the child's exit code to 1 and prints "exit status 5" instead, so
 # match that line too.
-if [[ $LINT_EXIT -eq 5 ]] || { [[ $LINT_EXIT -ne 0 ]] && grep -qx 'exit status 5' "$LINT_OUT"; }; then
+# Defense in depth: only downgrade when golangci also reported zero findings
+# (exit 5 and findings are mutually exclusive, but a bare string match alone
+# could theoretically mask a failure whose output contains that line).
+if { [[ $LINT_EXIT -eq 5 ]] || { [[ $LINT_EXIT -ne 0 ]] && grep -qx 'exit status 5' "$LINT_OUT"; }; } \
+        && ! grep -qE '^[0-9]+ issues:' "$LINT_OUT"; then
     LINT_EXIT=0
 fi
 rm -f "$LINT_OUT"

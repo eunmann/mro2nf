@@ -78,7 +78,10 @@ linters:
       # owned by TestMain/sync.Once (repo root, built binaries, the docker iso
       # image). `go test` offers no injection seam for these, and threading
       # them through every helper would only obscure the harness.
-      - path: "test/e2e/"
+      # Segment-anchored: matches the harness dir from the repo root AND from
+      # a git-worktree-prefixed path (agents lint from worktrees), while never
+      # matching an unrelated "...xtest/e2e" or nested foreign tree by substring.
+      - path: "(^|/)test/e2e/"
         linters:
           - gochecknoglobals
 formatters:
