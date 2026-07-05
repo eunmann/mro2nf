@@ -110,7 +110,13 @@ func lowerCall(c *syntax.CallStm) (ir.Call, error) {
 		lc.Local = m.Local
 		lc.Preflight = m.Preflight
 		lc.Volatile = m.Volatile
-		lc.Disabled = disabledRef(m)
+
+		disabled, err := disabledRef(m)
+		if err != nil {
+			return lc, fmt.Errorf("call %s: %w", c.Id, err)
+		}
+
+		lc.Disabled = disabled
 	}
 
 	b, err := lowerBindings(c.Bindings)
@@ -174,23 +180,28 @@ func refFrom(r *syntax.RefExp) *ir.Ref {
 	return &ir.Ref{Kind: string(r.Kind), ID: r.Id, Output: r.OutputId}
 }
 
-// disabledRef extracts the `disabled = <ref>` call modifier, if present.
-func disabledRef(m *syntax.Modifiers) *ir.Ref {
+// disabledRef extracts the `disabled = <ref>` call modifier, if present. Any
+// other expression shape is unsupported and fails loudly: silently dropping it
+// would lower the call as "always enabled", inverting e.g. `disabled = true`.
+func disabledRef(m *syntax.Modifiers) (*ir.Ref, error) {
 	if m.Bindings == nil {
-		return nil
+		return nil, nil
 	}
 
 	d, ok := m.Bindings.Table["disabled"]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	r, ok := d.Exp.(*syntax.RefExp)
 	if !ok {
-		return nil
+		return nil, &apperror.UnsupportedError{
+			Construct: "disabled modifier",
+			Detail:    fmt.Sprintf("%T expression (only a reference is supported)", d.Exp),
+		}
 	}
 
-	return refFrom(r)
+	return refFrom(r), nil
 }
 
 // lowerExp lowers a value expression into an ir.Value tree, preserving any

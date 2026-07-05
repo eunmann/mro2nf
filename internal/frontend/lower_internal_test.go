@@ -16,22 +16,38 @@ func TestLowerExpUnsupported(t *testing.T) {
 	}
 }
 
-// TestDisabledRefNonRef checks a non-reference `disabled =` binding is dropped
-// (nil), leaving the call unconditionally enabled — pinned so the silent drop
-// stays a deliberate contract rather than an accident.
-func TestDisabledRefNonRef(t *testing.T) {
-	m := &syntax.Modifiers{Bindings: &syntax.BindStms{
-		Table: map[string]*syntax.BindStm{
-			"disabled": {Id: "disabled", Exp: &syntax.BoolExp{Value: true}},
+// TestLowerCallDisabledNonRef checks an unexpected `disabled =` expression
+// shape (anything but a reference) fails loudly with ErrUnsupported instead of
+// silently lowering the call to "always enabled".
+func TestLowerCallDisabledNonRef(t *testing.T) {
+	c := &syntax.CallStm{Id: "X", DecId: "X", Modifiers: &syntax.Modifiers{
+		Bindings: &syntax.BindStms{
+			Table: map[string]*syntax.BindStm{
+				"disabled": {Id: "disabled", Exp: &syntax.BoolExp{Value: true}},
+			},
 		},
 	}}
 
-	if ref := disabledRef(m); ref != nil {
-		t.Errorf("disabledRef(literal) = %+v, want nil", ref)
+	if _, err := lowerCall(c); !errors.Is(err, apperror.ErrUnsupported) {
+		t.Errorf("lowerCall(disabled = literal): want ErrUnsupported, got %v", err)
 	}
+}
 
-	if ref := disabledRef(&syntax.Modifiers{}); ref != nil {
-		t.Errorf("disabledRef(no bindings) = %+v, want nil", ref)
+// TestDisabledRefAbsent checks the no-modifier shapes still lower to a nil
+// disable gate without error.
+func TestDisabledRefAbsent(t *testing.T) {
+	for name, m := range map[string]*syntax.Modifiers{
+		"no bindings":       {},
+		"no disabled entry": {Bindings: &syntax.BindStms{Table: map[string]*syntax.BindStm{}}},
+	} {
+		ref, err := disabledRef(m)
+		if err != nil {
+			t.Errorf("disabledRef(%s): unexpected error %v", name, err)
+		}
+
+		if ref != nil {
+			t.Errorf("disabledRef(%s) = %+v, want nil", name, ref)
+		}
 	}
 }
 
