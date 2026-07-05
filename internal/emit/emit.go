@@ -549,9 +549,9 @@ func forkDims(c *ir.Call) (int, int) {
 	}
 
 	switch c.MapMode {
-	case mapModeMap, mapModeUnknown:
+	case ir.MapModeMap, ir.MapModeUnknown:
 		return 1, 0
-	case mapModeArray:
+	case ir.MapModeArray:
 		return 0, 1
 	default:
 		return 0, 0

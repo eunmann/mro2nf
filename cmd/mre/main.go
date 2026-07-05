@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -80,10 +81,22 @@ func run(ctx context.Context, args []string) error {
 type commonFlags struct {
 	shell, stagecode, lang   string
 	mrjob                    string
+	srcArgs                  repeatedFlag
 	call, mro, work, outFile string
 	outs                     string
 	threads, memGB, vmemGB   float64
 	monitor                  bool
+}
+
+// repeatedFlag collects every occurrence of a repeatable string flag, in order.
+type repeatedFlag []string
+
+func (r *repeatedFlag) String() string { return strings.Join(*r, " ") }
+
+func (r *repeatedFlag) Set(v string) error {
+	*r = append(*r, v)
+
+	return nil
 }
 
 func addCommon(fs *flag.FlagSet) *commonFlags {
@@ -92,6 +105,7 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.StringVar(&c.stagecode, "stagecode", "", "path to the stage code")
 	fs.StringVar(&c.lang, "lang", "py", "stage adapter language")
 	fs.StringVar(&c.mrjob, "mrjob", "", "path to mrjob (for comp stages)")
+	fs.Var(&c.srcArgs, "srcarg", "extra stage src argument (repeatable, comp/exec stages)")
 	fs.StringVar(&c.call, "call", "", "top-level pipeline/stage call name")
 	fs.StringVar(&c.mro, "mro", "", "source MRO filename (for _jobinfo)")
 	fs.StringVar(&c.work, "work", ".", "work directory for metadata/files")
@@ -110,6 +124,7 @@ func (c *commonFlags) adapter() shim.Adapter {
 		Lang:      ir.Lang(c.lang),
 		Shell:     c.shell,
 		Stagecode: c.stagecode,
+		SrcArgs:   c.srcArgs,
 		Mrjob:     c.mrjob,
 		Monitor:   c.monitor,
 	}

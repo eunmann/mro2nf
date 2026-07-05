@@ -22,6 +22,9 @@ var nonE2EFixtures = map[string]string{
 	// by emit unit tests (TestEmitGPUAccelerator / TestEmitVmemFlag) instead.
 	"gpu_stage":  "emit-only: accelerator directive text (internal/emit unit test)",
 	"vmem_stage": "emit-only: -monitor vmem cap text (internal/emit unit test)",
+	// Runtime-wise it behaves like map_pipe_nested (which the golden + docker
+	// suites run); only the -native diagnostic wording differs.
+	"map_pipe_nested_file": "emit-only: keyed native-scatter FORK_K+MERGE_K diagnostic (internal/emit unit test)",
 }
 
 // TestEveryFixtureIsExercised fails when a testdata fixture (a directory with a
