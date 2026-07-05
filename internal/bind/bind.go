@@ -19,6 +19,9 @@ var (
 	errUnknownRefKind = errors.New("unknown ref kind")
 	// errNoSplit is returned when a fork is requested with no split binding.
 	errNoSplit = errors.New("map call has no split binding")
+	// errMultiSplit is returned when an element resolve sees several split
+	// bindings; a single pre-sliced element cannot represent a zip.
+	errMultiSplit = errors.New("element resolve requires exactly one split binding")
 	// errSplitLen is returned when zipped split collections differ in length.
 	errSplitLen = errors.New("split collections have mismatched lengths")
 	// errNotArray is returned when an array-mode split binding is not an array.
@@ -94,13 +97,17 @@ func Resolve(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMe
 // verbatim; broadcast bindings resolve against pipeArgs/callOuts as usual. A
 // map call has exactly one split binding on the native-scatter path, so element
 // is that one param's value; the caller guarantees element matches the split
-// param's element type.
+// param's element type. A spec with zero split bindings is rejected with the
+// same errNoSplit ResolveForks reports, and several split bindings are
+// rejected too — one element cannot stand in for a zip of collections.
 func ResolveElement(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, element json.RawMessage) (json.RawMessage, error) {
 	args := make(map[string]json.RawMessage, len(spec))
+	splits := 0
 
 	for param, entry := range spec {
 		if entry.Split {
 			args[param] = element
+			splits++
 
 			continue
 		}
@@ -111,6 +118,14 @@ func ResolveElement(spec Spec, pipeArgs json.RawMessage, callOuts map[string]jso
 		}
 
 		args[param] = val
+	}
+
+	if splits == 0 {
+		return nil, errNoSplit
+	}
+
+	if splits > 1 {
+		return nil, fmt.Errorf("%w: got %d", errMultiSplit, splits)
 	}
 
 	raw, err := json.Marshal(args)

@@ -140,6 +140,43 @@ func TestResolveForksNullArraySource(t *testing.T) {
 	}
 }
 
+// TestResolveElementSplitCount checks ResolveElement rejects the spec shapes
+// the native-scatter path cannot represent: no split binding (errNoSplit, as
+// ResolveForks reports) and more than one split binding (a single pre-sliced
+// element cannot stand in for a zip of several collections).
+func TestResolveElementSplitCount(t *testing.T) {
+	tests := []struct {
+		name    string
+		spec    Spec
+		wantErr error
+	}{
+		{
+			name:    "no split binding",
+			spec:    Spec{"x": {Ref: &Ref{Kind: "self", ID: "xs"}}},
+			wantErr: errNoSplit,
+		},
+		{
+			name: "multiple split bindings",
+			spec: Spec{
+				"x": {Ref: &Ref{Kind: "self", ID: "xs"}, Split: true},
+				"y": {Ref: &Ref{Kind: "self", ID: "ys"}, Split: true},
+			},
+			wantErr: errMultiSplit,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pipeArgs := json.RawMessage(`{"xs":[1],"ys":[2]}`)
+
+			_, err := ResolveElement(tt.spec, pipeArgs, nil, json.RawMessage(`1`))
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("ResolveElement error = %v, want errors.Is %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // TestEntryResolveUnknownRefKind hits the default arm of Entry.resolve's ref
 // dispatch, both directly and wrapped through the public Resolve.
 func TestEntryResolveUnknownRefKind(t *testing.T) {
