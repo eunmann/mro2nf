@@ -24,7 +24,10 @@ const (
 // rather than letting it surface as a cryptic `docker build` COPY error or a
 // silently broken image. mre is always required; -shell, -mrjob, and each
 // stage's code are verified when present (an exec/comp-only pipeline may have
-// no -shell).
+// no -shell). Note the -shell check stats the FILE, while containerBuild
+// copies its parent adapters directory: the dir's existence is implied by the
+// file check, and per-entry read failures inside any tree still surface as
+// copyTree errors.
 func checkContainerSources(opts Options) error {
 	if opts.Mre == "" {
 		return &apperror.UnsupportedError{Construct: "container target", Detail: "-mre is required (it is baked into the image)"}
@@ -120,8 +123,10 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 // stage code, and (comp pipelines) the mrjob wrapper at fixed paths, on a base
 // with bash + ps and no ENTRYPOINT (both AWS Batch and HealthOmics inject a bash
 // launcher). x86_64 only. Each COPY is emitted only when its source was staged
-// (checkContainerSources verifies every source and copyTree errors on a missing
-// one), so an absent optional piece never breaks `docker build`.
+// (checkContainerSources verifies the on-disk sources and copyTree errors on a
+// missing one; the -native-runner runner is copied from the embedded FS by
+// copyEmbeddedDir, so it cannot be absent), so an absent optional piece never
+// breaks `docker build`.
 func dockerfile(target Target, hasAdapters, hasStages, hasMrjob, hasRunner bool) string {
 	awsCLI := ""
 	if target == TargetAWSBatch {
@@ -171,8 +176,10 @@ func awsCLIComment(target Target) string {
 }
 
 // copyTree copies a file or directory tree from src to dst, preserving the
-// executable bit. A missing src is an error: every source is pre-verified by
-// checkContainerSources, so absence here means the tree changed under us.
+// executable bit. It is not a best-effort copier: callers pre-verify sources
+// via checkContainerSources, so a missing src is a hard error (for the
+// adapters dir the pre-check stats the -shell file, which implies the parent
+// dir exists), and any per-entry read failure aborts the copy.
 func copyTree(src, dst string) error {
 	info, err := os.Stat(src)
 	if err != nil {
