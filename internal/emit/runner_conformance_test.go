@@ -70,39 +70,59 @@ func TestRunnerConformance(t *testing.T) {
 // TestRunnerConformanceExitCodes pins the exit-code matrix against mre: an
 // ASSERT is 42 in both stacks, a stage sys.exit(0) in main succeeds with the
 // skeleton outs bundle in both, and any other stage failure is 1 in both.
+// The split cases prove (not just claim — see run_stage.py's parse_stage_defs
+// and run_split comments) the adapter-path behavior: a split that sys.exit(0)s
+// dies before writing _stage_defs, and a falsy split return (None or {}) is
+// serialized as "" by the vendor shell — mre fails loudly on both, so the
+// runner must too, and neither stack may leave a chunks.json behind.
 func TestRunnerConformanceExitCodes(t *testing.T) {
 	requirePython(t)
 
 	cases := []struct {
-		name, body string
-		wantExit   int
-		wantBundle bool
+		name, phase, body string
+		wantExit          int
+		wantArtifact      bool
 	}{
-		{"assert", "martian.exit('boom')", 42, false},
-		{"sysexit zero", "import sys; sys.exit(0)", 0, true},
-		{"sysexit nonzero", "import sys; sys.exit(5)", 1, false},
-		{"raise", "raise RuntimeError('bad')", 1, false},
+		{"assert", "main", "martian.exit('boom')", 42, false},
+		{"sysexit zero", "main", "import sys; sys.exit(0)", 0, true},
+		{"sysexit nonzero", "main", "import sys; sys.exit(5)", 1, false},
+		{"raise", "main", "raise RuntimeError('bad')", 1, false},
+		{"split sysexit zero", "split", "import sys; sys.exit(0)", 1, false},
+		{"split returns none", "split", "return None", 1, false},
+		{"split returns empty", "split", "return {}", 1, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := newConformanceEnvWithMain(t, "import martian\n\ndef main(args, outs):\n    "+tc.body+"\n")
+			var env *conformanceEnv
+			if tc.phase == "split" {
+				env = newConformanceEnvWithSplit(t, tc.body)
+			} else {
+				env = newConformanceEnvWithMain(t, "import martian\n\ndef main(args, outs):\n    "+tc.body+"\n")
+			}
 
-			mreCode, mreOut := env.runPhaseCode(t, "mre", "main", nil)
-			pyCode, pyOut := env.runPhaseCode(t, "py", "main", nil)
+			mreCode, mreOut := env.runPhaseCode(t, "mre", tc.phase, nil)
+			pyCode, pyOut := env.runPhaseCode(t, "py", tc.phase, nil)
 
 			if mreCode != tc.wantExit || pyCode != tc.wantExit {
 				t.Errorf("exit codes: mre=%d py=%d, want both %d", mreCode, pyCode, tc.wantExit)
 			}
 
-			mreBundle := fileExistsAt(filepath.Join(mreOut, "outs", "data.json"))
-			pyBundle := fileExistsAt(filepath.Join(pyOut, "outs", "data.json"))
-
-			if mreBundle != tc.wantBundle || pyBundle != tc.wantBundle {
-				t.Errorf("outs bundle present: mre=%v py=%v, want both %v", mreBundle, pyBundle, tc.wantBundle)
+			// The phase's primary artifact: main's outs bundle, split's chunks.json.
+			artifact := []string{"outs", "data.json"}
+			if tc.phase == "split" {
+				artifact = []string{"chunks.json"}
 			}
 
-			if tc.wantBundle && mreBundle && pyBundle {
+			mreArtifact := fileExistsAt(filepath.Join(mreOut, filepath.Join(artifact...)))
+			pyArtifact := fileExistsAt(filepath.Join(pyOut, filepath.Join(artifact...)))
+
+			if mreArtifact != tc.wantArtifact || pyArtifact != tc.wantArtifact {
+				t.Errorf("%s present: mre=%v py=%v, want both %v",
+					filepath.Join(artifact...), mreArtifact, pyArtifact, tc.wantArtifact)
+			}
+
+			if tc.wantArtifact && mreArtifact && pyArtifact {
 				diffDirs(t, "sysexit-zero outs", filepath.Join(mreOut, "outs"), filepath.Join(pyOut, "outs"))
 			}
 		})
@@ -203,6 +223,26 @@ func newConformanceEnvWithMain(t *testing.T, code string) *conformanceEnv {
 		In:   []ir.Param{{Name: "value", Type: "float", BaseType: "float"}},
 		Out:  []ir.Param{{Name: "total", Type: "float", BaseType: "float"}},
 		Lang: ir.LangPy,
+	})
+}
+
+// newConformanceEnvWithSplit builds a minimal Split:true stage whose split
+// body is the given statement, for split-phase exit-code parity cases.
+func newConformanceEnvWithSplit(t *testing.T, splitBody string) *conformanceEnv {
+	t.Helper()
+
+	code := "import martian\n\ndef split(args):\n    " + splitBody +
+		"\n\ndef main(args, outs):\n    outs.part = 1.0\n" +
+		"\ndef join(args, outs, chunk_defs, chunk_outs):\n    outs.total = 1.0\n"
+
+	return buildConformanceEnv(t, code, &ir.Stage{
+		Name:     "CONF",
+		In:       []ir.Param{{Name: "value", Type: "float", BaseType: "float"}},
+		Out:      []ir.Param{{Name: "total", Type: "float", BaseType: "float"}},
+		Split:    true,
+		ChunkIn:  []ir.Param{{Name: "i", Type: "int", BaseType: "int"}},
+		ChunkOut: []ir.Param{{Name: "part", Type: "float", BaseType: "float"}},
+		Lang:     ir.LangPy,
 	})
 }
 
