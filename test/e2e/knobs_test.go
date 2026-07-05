@@ -13,32 +13,55 @@ import (
 
 // TestResumeCachesEverything: rerunning an unchanged, successful pipeline with
 // -resume must execute ZERO new tasks (everything cached). A cache-key
-// instability — e.g. a timestamp leaking into a staged asset — would otherwise
-// ship silently and destroy resumability on long runs. (Port of the -resume
-// half of runtime_knobs.sh.)
+// instability — e.g. a timestamp leaking into a staged asset, or a gather task
+// whose input order is completion order — would otherwise ship silently and
+// destroy resumability on long runs. (Port of the -resume half of
+// runtime_knobs.sh, extended to the -native gather shapes for #123.)
 func TestResumeCachesEverything(t *testing.T) {
-	requireTools(t, "nextflow", "java")
+	requireTools(t, "nextflow", "java", "python3")
 
-	proj := transpile(t, "diamond_min")
-
-	if err := runNextflow(t, proj); err != nil {
-		t.Fatalf("first run: %v", err)
+	cases := []struct {
+		name    string
+		fixture string
+		flags   []string
+	}{
+		{"diamond_min", "diamond_min", nil},
+		// The -native shapes whose gathers carry the -resume cache-key
+		// countermeasures (#123): the O(1) element scatter (toSortedList over
+		// bundle names), the keyed split triad (sorted JOIN_K chunk outs), and
+		// the keyed nested map (_KS scatter + sorted MERGE_K gather).
+		{"native_fork_min", "fork_min", []string{"-native"}},
+		{"native_map_split", "map_split", []string{"-native"}},
+		{"native_map_pipe_nested", "map_pipe_nested", []string{"-native"}},
 	}
 
-	if err := runNextflow(t, proj, "-resume", "-with-trace", "trace2.txt"); err != nil {
-		t.Fatalf("-resume rerun: %v", err)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	rows := readTrace(t, filepath.Join(proj, "trace2.txt"))
-	if len(rows) == 0 {
-		t.Fatal("empty trace on -resume rerun, want >0 rows")
-	}
+			proj := transpile(t, tc.fixture, tc.flags...)
 
-	// Any non-CACHED row is a task that re-executed, i.e. an unstable cache key.
-	for _, row := range rows {
-		if row.Status != "CACHED" {
-			t.Errorf("task %s re-executed under -resume (status %s), want CACHED", row.Name, row.Status)
-		}
+			if err := runNextflow(t, proj); err != nil {
+				t.Fatalf("first run: %v", err)
+			}
+
+			if err := runNextflow(t, proj, "-resume", "-with-trace", "trace2.txt"); err != nil {
+				t.Fatalf("-resume rerun: %v", err)
+			}
+
+			rows := readTrace(t, filepath.Join(proj, "trace2.txt"))
+			if len(rows) == 0 {
+				t.Fatal("empty trace on -resume rerun, want >0 rows")
+			}
+
+			// Any non-CACHED row is a task that re-executed, i.e. an unstable
+			// cache key.
+			for _, row := range rows {
+				if row.Status != "CACHED" {
+					t.Errorf("task %s re-executed under -resume (status %s), want CACHED", row.Name, row.Status)
+				}
+			}
+		})
 	}
 }
 
