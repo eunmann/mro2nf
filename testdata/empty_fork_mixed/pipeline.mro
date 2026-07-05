@@ -1,0 +1,42 @@
+# #127 value-chain divergence (c): a MIXED split — an entry-ref binding zipped
+# with an upstream stage ref, where the entry side resolves empty. mrp's
+# static resolver knows the entry side's length (0) and prunes the zero-fork
+# call to NULL, even though the upstream side is runtime-produced; the old
+# all-bindings rule left this unflagged, so the zero-fork merge emitted the
+# typed empty []. Marking on ANY invocation-known split side is sound at
+# runtime: zipped splits must agree in length (bind errSplitLen fails loudly
+# on a mismatch), so ZERO forks implies the entry side was empty — exactly
+# when mrp prunes.
+stage GEN(
+    out int[] more,
+    src py    "stages/gen",
+)
+
+stage PAIR(
+    in  int a,
+    in  int b,
+    out int s,
+    src py  "stages/pair",
+)
+
+pipeline EFM(
+    in  int[] lhs,
+    out int[] sums,
+)
+{
+    call GEN(
+    )
+
+    map call PAIR(
+        a = split self.lhs,
+        b = split GEN.more,
+    )
+
+    return (
+        sums = PAIR.s,
+    )
+}
+
+call EFM(
+    lhs = [],
+)
