@@ -162,9 +162,14 @@ func TestMrpDiff(t *testing.T) {
 	// committed goldens and a Martian behavior change at a pin bump — or a
 	// native-only divergence the golden JSON does not capture — would be
 	// invisible until goldens were regenerated. runner further adds a combined
-	// -native -native-runner leg; it is set only where a stage actually
-	// executes (an empty/pruned fork runs no stage code, so the runner leg
-	// would re-test pure orchestration the native leg already covers).
+	// -native -native-runner leg; it is set wherever any py stage actually
+	// executes. The runner-less native fixtures run ZERO stage code, so a
+	// runner leg would re-test pure orchestration the native leg already
+	// covers: empty_fork_min/_sub/_cascade statically prune every fork (their
+	// only stage, SCALE, never runs) and fork_disabled_skip bakes skip=true so
+	// its whole sub-pipeline — SCALE again — is disabled. empty_fork_mixed is
+	// NOT such a case: its unconditional GEN call runs real stage code before
+	// the zero-fork zip, so it carries the runner leg.
 	cases := []struct {
 		name      string
 		realMrjob bool
@@ -202,7 +207,7 @@ func TestMrpDiff(t *testing.T) {
 		// live differential machine-checks the knownInvocation cascade.
 		{name: "empty_fork_sub", native: true},
 		{name: "empty_fork_cascade", native: true},
-		{name: "empty_fork_mixed", native: true},
+		{name: "empty_fork_mixed", native: true, runner: true},
 		// The native-suite golden anchors: their committed expected/outs.json
 		// files claim mrp provenance, so the live differential machine-checks
 		// that claim — otherwise TestGolden + the native suites would prove
