@@ -124,6 +124,16 @@ func lowerCall(c *syntax.CallStm) (ir.Call, error) {
 }
 
 func lowerEntry(c *syntax.CallStm) (*ir.EntryCall, error) {
+	// mrp forks a top-level `map call` per collection element; the transpiler
+	// has no entry-fork lowering, so fail loudly rather than emit a project
+	// that silently runs the entry once with the whole collection.
+	if c.Mapping != nil {
+		return nil, &apperror.UnsupportedError{
+			Construct: "top-level map call",
+			Detail:    fmt.Sprintf("entry call %s forks over a collection", c.DecId),
+		}
+	}
+
 	b, err := lowerBindings(c.Bindings)
 	if err != nil {
 		return nil, fmt.Errorf("entry call %s: %w", c.DecId, err)

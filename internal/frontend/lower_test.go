@@ -2,8 +2,10 @@ package frontend_test
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/google/go-cmp/cmp"
@@ -141,6 +143,28 @@ func TestLowerEntry(t *testing.T) {
 
 	if diff := cmp.Diff([]int{1, 2, 3}, got); diff != "" {
 		t.Errorf("entry values mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestLowerRejectsTopLevelMapCall pins the loud failure for a top-level map
+// call: mrp forks the entry per collection element, which the transpiler has
+// no lowering for, so Lower must return a typed UnsupportedError instead of
+// silently emitting a project that runs the entry once (issue #111).
+func TestLowerRejectsTopLevelMapCall(t *testing.T) {
+	ast, err := frontend.Parse("../../testdata/corpus/map_call_entry.mro", []string{"../../testdata/corpus"}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	_, err = frontend.Lower(ast)
+
+	var ue *apperror.UnsupportedError
+	if !errors.As(err, &ue) {
+		t.Fatalf("Lower = %v, want *apperror.UnsupportedError", err)
+	}
+
+	if ue.Construct != "top-level map call" {
+		t.Errorf("Construct = %q, want %q", ue.Construct, "top-level map call")
 	}
 }
 
