@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -340,12 +341,9 @@ func TestFoldDisables(t *testing.T) {
 		filepath.Join(root, "testdata", "fold_disable", "expected", "outs.json"))
 }
 
-// assertPublishedLeaves walks the golden outs JSON and requires every string
-// leaf to exist on disk under resultsDir — verifying physical outs/ placement,
-// not just the rel strings goldenJSON diffs. Only usable for fixtures whose
-// string leaves are all published file paths (file_tree is; a fixture with a
-// plain string output is not).
-func assertPublishedLeaves(t *testing.T, resultsDir, goldenPath string) {
+// goldenStringLeaves returns every string leaf of the golden outs JSON, in
+// walk order (arrays in order, map values unordered).
+func goldenStringLeaves(t *testing.T, goldenPath string) []string {
 	t.Helper()
 
 	raw, err := os.ReadFile(goldenPath)
@@ -358,13 +356,13 @@ func assertPublishedLeaves(t *testing.T, resultsDir, goldenPath string) {
 		t.Fatalf("parse golden %s: %v", goldenPath, err)
 	}
 
+	var leaves []string
+
 	var walk func(v any)
 	walk = func(v any) {
 		switch tv := v.(type) {
 		case string:
-			if _, err := os.Stat(filepath.Join(resultsDir, tv)); err != nil {
-				t.Errorf("published leaf %s not on disk: %v", tv, err)
-			}
+			leaves = append(leaves, tv)
 		case []any:
 			for _, e := range tv {
 				walk(e)
@@ -376,6 +374,44 @@ func assertPublishedLeaves(t *testing.T, resultsDir, goldenPath string) {
 		}
 	}
 	walk(tree)
+
+	return leaves
+}
+
+// assertPublishedLeaves walks the golden outs JSON and requires every string
+// leaf to exist on disk under resultsDir — verifying physical outs/ placement,
+// not just the rel strings goldenJSON diffs. Only usable for fixtures whose
+// string leaves are all published file paths (file_tree is; a fixture with a
+// plain string output is not).
+func assertPublishedLeaves(t *testing.T, resultsDir, goldenPath string) {
+	t.Helper()
+
+	for _, leaf := range goldenStringLeaves(t, goldenPath) {
+		if _, err := os.Stat(filepath.Join(resultsDir, leaf)); err != nil {
+			t.Errorf("published leaf %s not on disk: %v", leaf, err)
+		}
+	}
+}
+
+// assertPublishedTreeExact strengthens assertPublishedLeaves from subset-
+// existence to set EQUALITY: after the leaf-existence walk, the full file set
+// under resultsDir must equal the golden's string-leaf set, so a LAYOUT bug
+// publishing stray extra files fails, not only a missing leaf. The Nextflow-
+// side metadata (pipeline_outs.json, manifest.json.gz) is excluded, mirroring
+// compareMrpToNextflow. Only usable when every string leaf is a published
+// file path and no output is directory-typed (a dir leaf's inner files are
+// not listed in the golden).
+func assertPublishedTreeExact(t *testing.T, resultsDir, goldenPath string) {
+	t.Helper()
+
+	assertPublishedLeaves(t, resultsDir, goldenPath)
+
+	want := slices.Compact(slices.Sorted(slices.Values(goldenStringLeaves(t, goldenPath))))
+	got := slices.Sorted(maps.Keys(hashTree(t, resultsDir, "pipeline_outs.json", "manifest.json.gz")))
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("published results/ file set != golden leaf set (-want +got):\n%s", diff)
+	}
 }
 
 // renderOverrideParams instantiates the fixture's override-params.json into
@@ -604,12 +640,21 @@ func TestNativeMode(t *testing.T) {
 func TestNativeFileEntry(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	cases := []struct{ fixture, golden string }{
-		{"entry_file", "expected/ep_outs.json"},
-		{"entry_filearr", "expected/epa_outs.json"},
-		{"entry_struct_file", "expected/eps_outs.json"},
-		{"entry_mapfile", "expected/epm_outs.json"},
-		{"entry_dir", "expected/epd_outs.json"},
+	// leaves gates the #120 physical publish verification exactly as
+	// TestNativeComplete's flag does. All five goldens are scalar totals today
+	// (the fixtures CONSUME file entries and publish no files), so none opts
+	// in: an unconditional walk would false-fail os.Stat on a future scalar
+	// STRING output, and a future file-typed out must consciously flip its
+	// flag to get the exact published-tree check.
+	cases := []struct {
+		fixture, golden string
+		leaves          bool
+	}{
+		{fixture: "entry_file", golden: "expected/ep_outs.json"},
+		{fixture: "entry_filearr", golden: "expected/epa_outs.json"},
+		{fixture: "entry_struct_file", golden: "expected/eps_outs.json"},
+		{fixture: "entry_mapfile", golden: "expected/epm_outs.json"},
+		{fixture: "entry_dir", golden: "expected/epd_outs.json"},
 	}
 
 	for _, tc := range cases {
@@ -625,13 +670,10 @@ func TestNativeFileEntry(t *testing.T) {
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 
-			// #120 physical publish verification: every path leaf the golden
-			// claims must exist under results/. Today these goldens are scalar
-			// totals (the fixtures CONSUME file entries and publish no files),
-			// so this walk asserts nothing — it is wired so a fixture gaining a
-			// file-typed out is physically verified automatically.
-			assertPublishedLeaves(t, filepath.Join(proj, "results"),
-				filepath.Join(root, "testdata", tc.fixture, tc.golden))
+			if tc.leaves {
+				assertPublishedTreeExact(t, filepath.Join(proj, "results"),
+					filepath.Join(root, "testdata", tc.fixture, tc.golden))
+			}
 		})
 	}
 }
@@ -879,11 +921,12 @@ func TestNativeComplete(t *testing.T) {
 	// golden: TestGolden proves default==golden, so native==golden covers
 	// native==default transitively — and anchors native to mrp truth.
 	//
-	// leaves marks the file-bearing fixtures (#120): every path leaf the golden
-	// claims must physically exist under results/, not just match as a string —
-	// a native LAYOUT bug publishing correct rel paths to the wrong place (or
-	// nowhere) fails here. note additionally pins the published note.txt's
-	// bytes, so the leaf carries the right CONTENT, not merely a file.
+	// leaves marks the file-bearing fixtures (#120): the published results/
+	// file set must EQUAL the golden's path-leaf set — a native LAYOUT bug
+	// publishing correct rel paths to the wrong place (or nowhere) fails the
+	// existence walk, and one publishing STRAY extra files fails the set
+	// comparison. note additionally pins the published note.txt's bytes, so
+	// the leaf carries the right CONTENT, not merely a file.
 	cases := []struct {
 		fixture, golden string
 		leaves          bool
@@ -941,7 +984,7 @@ func TestNativeComplete(t *testing.T) {
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 
 			if tc.leaves {
-				assertPublishedLeaves(t, filepath.Join(native, "results"),
+				assertPublishedTreeExact(t, filepath.Join(native, "results"),
 					filepath.Join(root, "testdata", tc.fixture, tc.golden))
 			}
 
