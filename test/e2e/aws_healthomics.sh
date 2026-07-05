@@ -102,10 +102,14 @@ for fx in "${FIXTURES[@]}"; do
     # Guarded like the build/push steps: under set -e an unguarded failure here
     # would abort the whole harness instead of reporting and moving on.
     ( cd "$WORK/$fx" && bash package.sh >/dev/null 2>&1 ) || { echo "PACKAGE_FAIL $fx"; continue; }
-    WFID[$fx]="$(aws omics create-workflow --engine NEXTFLOW --main main.nf \
+    # Assign the array key only on success: `WFID[$fx]="$(...)" || continue`
+    # would create an empty-valued key before the guard fires, and the EXIT
+    # cleanup trap would then print a bogus "KEPT workflow  ($fx)" entry.
+    wfid="$(aws omics create-workflow --engine NEXTFLOW --main main.nf \
         --name "mro2nf-$fx-$$" --definition-zip "fileb://$WORK/$fx/workflow.zip" \
         --parameter-template "file://$WORK/$fx/parameter-template.json" \
         --query id --output text)" || { echo "REGISTER_FAIL $fx"; continue; }
+    WFID[$fx]="$wfid"
     echo "REGISTERED $fx workflow=${WFID[$fx]}"
 done
 
@@ -123,10 +127,13 @@ done
 # --- phase 2: start all runs (parallel by nature — HealthOmics schedules them) ---
 for fx in "${FIXTURES[@]}"; do
     [ "$(aws omics get-workflow --id "${WFID[$fx]:-x}" --query status --output text 2>/dev/null || true)" = "ACTIVE" ] || continue
-    RUNID[$fx]="$(aws omics start-run --workflow-id "${WFID[$fx]}" --role-arn "$OMICS_ROLE" \
+    # Assign the array key only on success (see WFID above): an empty-valued
+    # RUNID[$fx] would make the cleanup trap print a bogus "KEPT run" entry.
+    runid="$(aws omics start-run --workflow-id "${WFID[$fx]}" --role-arn "$OMICS_ROLE" \
         --name "mro2nf-$fx-$$" --output-uri "s3://${BUCKET}/omics-out" \
         --parameters "{\"container\":\"${ECR}:${fx}\"}" --query id --output text)" \
         || { echo "START_FAIL $fx"; continue; }
+    RUNID[$fx]="$runid"
     echo "STARTED $fx run=${RUNID[$fx]}"
 done
 
@@ -157,7 +164,9 @@ for fx in "${FIXTURES[@]}"; do
     ( cd "$mt" && MROPATH="$ROOT/testdata/$fx" "$MARTIAN_BIN/mrp" "$ROOT/testdata/$fx/pipeline.mro" mrp \
         --jobmode=local --localcores=2 --localmem=4 --disable-ui --nopreflight >/dev/null 2>&1 ) \
         || { echo "FAIL[$fx]: local mrp"; rc=1; rm -rf "$mt"; continue; }
-    mrp_json="$(ls -d "$mt"/mrp/*/fork0/_outs 2>/dev/null | sort | head -1)"
+    # Guarded: under pipefail a glob miss makes ls (and thus the assignment)
+    # nonzero, which would abort the whole verify loop under set -e.
+    mrp_json="$(ls -d "$mt"/mrp/*/fork0/_outs 2>/dev/null | sort | head -1)" || true
     # HealthOmics exports params.outdir under s3://<output-uri>/<runId>/out/...; find the published file.
     # aws s3 ls exits nonzero on an empty prefix; the -z check below reports it.
     key="$(aws s3 ls "s3://${BUCKET}/omics-out/${RUNID[$fx]}/" --recursive | awk '/pipeline_outs\.json$/{print $4; exit}')" || true
