@@ -37,13 +37,21 @@ type Config struct {
 
 // Load reads and parses the config at path. A missing file is not an error — it
 // returns a zero Config (no defaults set), so the caller can attempt a load
-// unconditionally.
+// unconditionally. For a path the user named explicitly, use LoadRequired so a
+// typo is not silently ignored.
 func Load(path string) (*Config, error) {
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
+	cfg, err := LoadRequired(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return &Config{}, nil
 	}
 
+	return cfg, err
+}
+
+// LoadRequired is Load, except a missing file is an error. Use it for paths the
+// user named explicitly, where tolerating absence would swallow a typo.
+func LoadRequired(path string) (*Config, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
