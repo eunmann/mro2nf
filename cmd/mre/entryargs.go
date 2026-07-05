@@ -109,7 +109,12 @@ func overlayEntry(payload map[string]any, valuesFile string, flatMap map[string]
 		return err
 	}
 
-	if err := reconstructFiles(payload, over, flatMap, man.Params(prod.callable, prod.role), man.Table()); err != nil {
+	params, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("entry params: %w", err)
+	}
+
+	if err := reconstructFiles(payload, over, flatMap, params, man.Table()); err != nil {
 		return err
 	}
 

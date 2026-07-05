@@ -202,7 +202,13 @@ func buildConformanceEnv(t *testing.T, code string, s *ir.Stage) *conformanceEnv
 
 	env.argsDir = filepath.Join(root, "args")
 	man := types.BuildManifest(prog)
-	if err := shim.WriteBundle(env.argsDir, map[string]any{"value": 1.5}, man.Params(s.Name, types.RoleIn), man.Table()); err != nil {
+
+	inParams, err := man.Params(s.Name, types.RoleIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := shim.WriteBundle(env.argsDir, map[string]any{"value": 1.5}, inParams, man.Table()); err != nil {
 		t.Fatal(err)
 	}
 

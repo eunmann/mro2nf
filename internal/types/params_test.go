@@ -48,23 +48,51 @@ func TestManifestParams(t *testing.T) {
 		{"S", types.RoleOut, []string{"out1"}},
 		{"S", types.RoleChunkIn, []string{"cin1"}},
 		{"S", types.RoleMainOut, []string{"out1", "cout1"}},
-		{"S", "bogus-role", nil},
-		{"MISSING", types.RoleIn, nil},
 	}
 
 	for _, tc := range cases {
-		got := names(man.Params(tc.callable, tc.role))
-		if tc.want == nil {
-			if len(got) != 0 {
-				t.Errorf("Params(%s,%s) = %v, want empty", tc.callable, tc.role, got)
-			}
+		params, err := man.Params(tc.callable, tc.role)
+		if err != nil {
+			t.Errorf("Params(%s,%s): unexpected error %v", tc.callable, tc.role, err)
 
 			continue
 		}
 
-		if diff := cmp.Diff(tc.want, got); diff != "" {
+		if diff := cmp.Diff(tc.want, names(params)); diff != "" {
 			t.Errorf("Params(%s,%s) mismatch (-want +got):\n%s", tc.callable, tc.role, diff)
 		}
+	}
+}
+
+// TestManifestParamsUnknown checks a configured manifest fails loudly on an
+// unknown callable or role instead of silently yielding no parameters (which
+// would skip path rewrites and surface only as dangling files downstream).
+func TestManifestParamsUnknown(t *testing.T) {
+	man := types.Manifest{Callables: map[string]types.Callable{
+		"S": {In: []ir.Param{{Name: "in1"}}},
+	}}
+
+	if _, err := man.Params("MISSING", types.RoleIn); err == nil {
+		t.Error("Params(MISSING, in): want error, got nil")
+	}
+
+	if _, err := man.Params("S", "bogus-role"); err == nil {
+		t.Error("Params(S, bogus-role): want error, got nil")
+	}
+}
+
+// TestManifestParamsUnconfigured checks the zero manifest (the no `-types`
+// path: nothing to rewrite) yields nil params without error for any callable.
+func TestManifestParamsUnconfigured(t *testing.T) {
+	var man types.Manifest
+
+	params, err := man.Params("ANY", types.RoleIn)
+	if err != nil {
+		t.Fatalf("Params on unconfigured manifest: %v", err)
+	}
+
+	if params != nil {
+		t.Errorf("Params on unconfigured manifest = %v, want nil", params)
 	}
 }
 

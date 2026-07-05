@@ -124,7 +124,12 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 		return err
 	}
 
-	params, tbl := man.Params(prod.callable, prod.role), man.Table()
+	params, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("forkbind params: %w", err)
+	}
+
+	tbl := man.Table()
 
 	// Native scatter (#76): -index writes just one fork's args to -o, so the
 	// standalone FORK task is replaced by an in-workflow scatter over 0..N-1 with
@@ -168,7 +173,12 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 		return err
 	}
 
-	if err := shim.WriteBundle(oDir, payload, man.Params(prod.callable, prod.role), man.Table()); err != nil {
+	params, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return err
+	}
+
+	if err := shim.WriteBundle(oDir, payload, params, man.Table()); err != nil {
 		return fmt.Errorf("write element bundle: %w", err)
 	}
 
@@ -341,7 +351,12 @@ func writeMerged(dir string, merged json.RawMessage, prod *producer, mapFork boo
 		return err
 	}
 
-	params := bumpForkDim(man.Params(prod.callable, prod.role), mapFork)
+	outParams, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("merge params: %w", err)
+	}
+
+	params := bumpForkDim(outParams, mapFork)
 	if err := shim.WriteBundle(dir, payload, params, man.Table()); err != nil {
 		return fmt.Errorf("write merged bundle %s: %w", dir, err)
 	}

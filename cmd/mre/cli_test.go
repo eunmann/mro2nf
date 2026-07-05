@@ -343,7 +343,12 @@ func TestProducerManifestNoTypes(t *testing.T) {
 		t.Errorf("empty producer manifest = %+v, want empty", man)
 	}
 
-	if params := man.Params("ANY", types.RoleIn); params != nil {
+	params, err := man.Params("ANY", types.RoleIn)
+	if err != nil {
+		t.Fatalf("Params on empty manifest: %v", err)
+	}
+
+	if params != nil {
 		t.Errorf("empty manifest Params = %v, want nil", params)
 	}
 }
