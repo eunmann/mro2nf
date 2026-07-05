@@ -39,6 +39,22 @@ const (
 	kindNativeScatter                 // #76 -native map call: in-workflow scatter, no FORK task
 )
 
+// keyedKind is how a call is emitted inside its pipeline's fork-keyed layer
+// (wf_<pipeline>_map) — the keyed analog of callKind, decided once in buildPlan
+// for the same reason (#77): the keyed include, process, and wiring sites read
+// one fixed decision instead of re-running the keyed predicates, so they can
+// never disagree and emit a dangling or missing _K/_KS process. Every call
+// carries both dimensions — a pipeline can be plain-called and map-called at
+// once, and the two layers fold independently.
+type keyedKind uint8
+
+const (
+	keyedBind     keyedKind = iota // standalone BIND_K feeding the callee's _map variant
+	keyedFused                     // #99 fused bind+main _K process for a leaf stage
+	keyedForkBind                  // nested map: FORK_K resolve → callee _map → MERGE_K
+	keyedScatter                   // #99 value-only nested map: driver element scatter _KS
+)
+
 // chainLink is one stage in a fused linear chain: the call and its stage.
 type chainLink struct {
 	call  ir.Call
@@ -81,6 +97,22 @@ type callPlan struct {
 	// stages the per-fork outs dirs + keys sidecar and reconstructs merged_<id>
 	// with `mre merge` before its own bind.
 	foldMerge bool
+	// keyedKind is how this call is emitted in the pipeline's fork-keyed layer.
+	// Meaningful only when the pipeline is keyed-reachable (the layer is dead
+	// code otherwise), but decided for every call so no site has to know.
+	keyedKind keyedKind
+	// keyedStage is the callee stage for keyedFused and keyedScatter.
+	keyedStage *ir.Stage
+	// keyedScatterField is the self input whose per-outer-fork collection a
+	// keyedScatter call forks over — the driver slices it once per outer fork
+	// (Mro2nf.forkElementsKeyed).
+	keyedScatterField string
+	// keyedDisableTask reports that a keyed disabled call needs a DISABLE_K
+	// bind. A nested map (keyedForkBind) gates natively when the flag is a
+	// whole self input readable from the per-fork args (keyedNativeDisable); a
+	// non-mapped disabled call always keeps DISABLE_K — genKeyedCallBody's
+	// run/skip branch joins on its output.
+	keyedDisableTask bool
 }
 
 // pipePlan is the per-pipeline emission plan: one callPlan per call, plus whether
@@ -114,7 +146,8 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 		pp := pipePlan{calls: make(map[string]callPlan, len(p.Calls))}
 
 		for _, c := range p.Calls {
-			pp.calls[c.Name] = planCall(c, p, prog, f, away, queued[name], known)
+			cp := planCall(c, p, prog, f, away, queued[name], known)
+			pp.calls[c.Name] = planKeyedCall(cp, c, prog)
 		}
 
 		if prod, ok := forwardProducer(p.Returns, p, prog); ok {
@@ -298,6 +331,37 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	}
 
 	return callPlan{kind: kindPlainBind, disableTask: needsDisableTask(c)}
+}
+
+// planKeyedCall fills the fork-keyed-layer fields of a call's plan: how the
+// call is emitted inside wf_<pipeline>_map when its pipeline runs under a map
+// call. The decision is independent of the plain kind and of featureSet — the
+// keyed folds (fused leaf, element scatter, native disable gate) are
+// unconditional, so a keyed layer folds the same way under every flag set.
+func planKeyedCall(cp callPlan, c ir.Call, prog *ir.Program) callPlan {
+	if c.Mapped {
+		if s, field, ok := keyedScatterable(c, prog); ok {
+			cp.keyedKind, cp.keyedStage, cp.keyedScatterField = keyedScatter, s, field
+
+			return cp
+		}
+
+		cp.keyedKind = keyedForkBind
+		cp.keyedDisableTask = c.Disabled != nil && !keyedNativeDisable(c)
+
+		return cp
+	}
+
+	if s, ok := keyedFuseable(c, prog); ok {
+		cp.keyedKind, cp.keyedStage = keyedFused, s
+
+		return cp
+	}
+
+	cp.keyedKind = keyedBind
+	cp.keyedDisableTask = c.Disabled != nil
+
+	return cp
 }
 
 // foldDisableOff reports whether a call's disable constant-folds to true — so the
@@ -676,6 +740,89 @@ func scatterSource(r *ir.Ref) (string, string, bool) {
 	}
 }
 
+// keyedScatterable reports whether a nested map call (a map inside a keyed
+// pipeline) can replace its per-outer-fork FORK_K with a driver element scatter
+// (#99), returning the callee stage and the split field. It is the keyed-layer
+// analog of nativeScatterable above, and DELIBERATELY STRICTER — the strictness
+// difference lives here and nowhere else. Both require an undisabled leaf-stage
+// callee and exactly one whole-field split, but the keyed scatter additionally
+// requires:
+//
+//   - a SELF split source only. nativeScatterable also accepts a top-level
+//     upstream output, whose width the driver reads from the producer's value
+//     channel; the keyed layer has no per-outer-key producer join to read from.
+//   - NO call-ref bindings at all, split or broadcast: an upstream producer
+//     would need to be joined per outer key — kept on the FORK_K path.
+//   - EVERY callee input value-only, not just the split element (which is all
+//     splitValueOnly gates on the plain path): the _KS forkbind assembles fargs
+//     without the type manifest, so a file-typed BROADCAST binding would not
+//     re-stage its leaf. The rejection is pinned by map_pipe_nested_file
+//     (TestDiagnoseNativeKeyedScatter).
+//
+// Disabled nested maps keep FORK_K (the per-fork run/skip gate). Single caller:
+// planKeyedCall — every emit site reads the planned keyedKind (#77).
+func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
+	if !c.Mapped || c.Disabled != nil {
+		return nil, "", false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split {
+		return nil, "", false
+	}
+
+	for i := range s.In {
+		if hasFileLeaf(s.In[i], prog.Structs) {
+			return nil, "", false
+		}
+	}
+
+	field, splits := "", 0
+
+	for _, b := range c.Bindings {
+		if b.Value.Ref != nil && b.Value.Ref.Kind == ir.RefKindCall {
+			return nil, "", false
+		}
+
+		if b.Split {
+			splits++
+
+			r := b.Value.Ref
+			if r == nil || r.Kind != ir.RefKindSelf || r.Output != "" {
+				return nil, "", false
+			}
+
+			field = r.ID
+		}
+	}
+
+	if splits != 1 {
+		return nil, "", false
+	}
+
+	return s, field, true
+}
+
+// keyedFuseable reports whether a keyed-pipeline call runs its bind+main in one
+// fused process (genKeyedFusedStageProcess) rather than a standalone BIND_K plus
+// the callee's _map variant — the same conditions as the plain-layer fold
+// (fuseableStageCall): a non-mapped, non-disabled call onto a non-split stage.
+// Fusing folds away one BIND_K task PER OUTER FORK (#99). It returns the callee
+// stage for the fused process. Single caller: planKeyedCall — every emit site
+// reads the planned keyedKind (#77).
+func keyedFuseable(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
+	if c.Mapped || c.Disabled != nil {
+		return nil, false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || s.Split {
+		return nil, false
+	}
+
+	return s, true
+}
+
 // mergeFoldable reports whether a native scatter's MERGE can run inline in its
 // consumer's task (#76): exactly one consumer (mirroring the #59 Lever 4
 // single-consumer rule — K consumers would duplicate the merge and stage the N
@@ -727,6 +874,18 @@ func needsDisableTask(c ir.Call) bool {
 	_, _, native := nativeDisableGate(c)
 
 	return !native
+}
+
+// keyedNativeDisable reports whether a mapped call's keyed disable gate reads the
+// flag natively (a self.<field> flag from the per-fork args) — the only keyed
+// case genKeyedMappedDisableGate gates without a DISABLE_K bind. An upstream-ref
+// flag is native on the plain layer (needsDisableTask) but not here: its
+// position in the keyed row depends on the bind's ref order. Single caller:
+// planKeyedCall, which records the decision as keyedDisableTask (#77).
+func keyedNativeDisable(c ir.Call) bool {
+	src, _, ok := nativeDisableGate(c)
+
+	return ok && src == "pa"
 }
 
 // fusedInclude reports whether a call's module include is suppressed — the fused

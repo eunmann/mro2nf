@@ -272,25 +272,6 @@ func keyedCallAlias(pipeline, call string) string {
 	return "wfk_" + qualify(pipeline, call)
 }
 
-// keyedFuseable reports whether a keyed-pipeline call runs its bind+main in one
-// fused process (genKeyedFusedStageProcess) rather than a standalone BIND_K plus
-// the callee's _map variant — the same conditions as the plain-layer fold
-// (fuseableStageCall): a non-mapped, non-disabled call onto a non-split stage.
-// Fusing folds away one BIND_K task PER OUTER FORK (#99). It returns the callee
-// stage for the fused process.
-func keyedFuseable(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
-	if c.Mapped || c.Disabled != nil {
-		return nil, false
-	}
-
-	s, ok := prog.Stages[c.Callable]
-	if !ok || s.Split {
-		return nil, false
-	}
-
-	return s, true
-}
-
 // genKeyedPipeIncludes imports the fork-key-threaded variant of each callee so a
 // keyed pipeline can run its body per fork. A fused leaf call or a value-only
 // nested-map scatter embeds its stage's main directly (in its _K / _KS process),
@@ -436,60 +417,6 @@ func keyedInputs(refs []string) (string, string) {
 	}
 
 	return in.String(), arg
-}
-
-// keyedScatterable reports whether a nested map call (a map inside a keyed
-// pipeline) can replace its per-outer-fork FORK_K with a driver element scatter
-// (#99): a value-only leaf callee, exactly one whole-field self split, and no
-// call-ref bindings (a broadcast/split from an upstream call would need the
-// producer joined per outer key — kept on the FORK_K path). Disabled nested
-// maps keep FORK_K (the per-fork run/skip gate). Returns the callee stage and
-// the split field.
-func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
-	if !c.Mapped || c.Disabled != nil {
-		return nil, "", false
-	}
-
-	s, ok := prog.Stages[c.Callable]
-	if !ok || s.Split {
-		return nil, "", false
-	}
-
-	// Every callee input must be value-only, not just the split param: the _KS
-	// forkbind assembles fargs without the type manifest, so a file-typed
-	// BROADCAST binding would not re-stage its leaf. This is stricter than the
-	// non-keyed scatter (which gates only the split); the rejection is pinned
-	// by map_pipe_nested_file (TestDiagnoseNativeKeyedScatter).
-	for i := range s.In {
-		if hasFileLeaf(s.In[i], prog.Structs) {
-			return nil, "", false
-		}
-	}
-
-	field, splits := "", 0
-
-	for _, b := range c.Bindings {
-		if b.Value.Ref != nil && b.Value.Ref.Kind == ir.RefKindCall {
-			return nil, "", false
-		}
-
-		if b.Split {
-			splits++
-
-			r := b.Value.Ref
-			if r == nil || r.Kind != ir.RefKindSelf || r.Output != "" {
-				return nil, "", false
-			}
-
-			field = r.ID
-		}
-	}
-
-	if splits != 1 {
-		return nil, "", false
-	}
-
-	return s, field, true
 }
 
 // genKeyedNestedScatterProcess emits the O(1)-per-instance fused inner scatter
@@ -2423,15 +2350,6 @@ func nativeDisableGate(c ir.Call) (string, string, bool) {
 	}
 
 	return "", "", false
-}
-
-// keyedNativeDisable reports whether a mapped call's keyed disable gate reads the
-// flag natively (a self.<field> flag from the per-fork args) — the only keyed
-// case genKeyedMappedDisableGate gates without a DISABLE_K bind.
-func keyedNativeDisable(c ir.Call) bool {
-	src, _, ok := nativeDisableGate(c)
-
-	return ok && src == "pa"
 }
 
 // calleeModule returns the exported workflow name and module path for a
