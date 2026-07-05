@@ -118,6 +118,49 @@ func TestCoerceScalarsStructField(t *testing.T) {
 	}
 }
 
+// TestCoerceScalarsDoesNotMutateInput proves the copy-on-return contract holds
+// for NESTED values too: coercing a whole-number float inside a caller-owned
+// slice, typed map, or struct object must rewrite only the returned copy,
+// never the input (callers reuse the decoded payload after coercion).
+func TestCoerceScalarsDoesNotMutateInput(t *testing.T) {
+	tbl := types.NewTable(map[string]*ir.StructType{
+		"Cfg": {Name: "Cfg", Fields: []ir.Param{{Name: "n", BaseType: "int"}}},
+	})
+
+	arr := []any{json.Number("5.0")}
+	cfg := map[string]any{"n": json.Number("7.0")}
+	m := map[string]any{"k": json.Number("3.0")}
+	vals := map[string]any{"arr": arr, "cfg": cfg, "m": m}
+	params := []ir.Param{
+		{Name: "arr", BaseType: "int", ArrayDim: 1},
+		{Name: "cfg", BaseType: "Cfg"},
+		{Name: "m", BaseType: "int", MapDim: 1},
+	}
+
+	got := tbl.CoerceScalars(params, vals)
+
+	// The returned copy is coerced.
+	want := map[string]any{
+		"arr": []any{int64(5)},
+		"cfg": map[string]any{"n": int64(7)},
+		"m":   map[string]any{"k": int64(3)},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("coerced copy mismatch (-want +got):\n%s", diff)
+	}
+
+	// The caller-owned nested containers are untouched.
+	if _, ok := arr[0].(json.Number); !ok {
+		t.Errorf("input slice mutated: arr[0] = %v (%T), want json.Number", arr[0], arr[0])
+	}
+	if _, ok := cfg["n"].(json.Number); !ok {
+		t.Errorf("input struct object mutated: cfg.n = %v (%T), want json.Number", cfg["n"], cfg["n"])
+	}
+	if _, ok := m["k"].(json.Number); !ok {
+		t.Errorf("input map mutated: m.k = %v (%T), want json.Number", m["k"], m["k"])
+	}
+}
+
 // TestWalkShapeMismatchPassthrough checks values whose runtime shape disagrees
 // with the declared type pass through untouched instead of erroring — runtime
 // values may legitimately be null or oddly-shaped mid-pipeline.
