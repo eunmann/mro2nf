@@ -469,10 +469,10 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) (int, bool) 
 	curMap, curArray := 0, 0
 
 	switch ref.Kind {
-	case "self":
+	case ir.RefKindSelf:
 		segs = append([]string{ref.ID}, strings.Split(ref.Output, ".")...)
 		cur = paramByName(p.In, segs[0])
-	case refKindCall:
+	case ir.RefKindCall:
 		segs = strings.Split(ref.Output, ".")
 		cur = paramByName(calleeOutParams(prog, p, ref.ID), segs[0])
 		curMap, curArray = forkDims(findCall(p, ref.ID))

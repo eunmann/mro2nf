@@ -12,13 +12,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-// refKindCall is the ir.Ref.Kind for a reference to another call's output;
-// refKindSelf is a reference to one of the pipeline's own inputs.
-const (
-	refKindCall = "call"
-	refKindSelf = "self"
-)
-
 // genCtx carries the resolved paths and names needed to render Nextflow code.
 type genCtx struct {
 	entry   string
@@ -406,13 +399,13 @@ func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s
   script:
     """
     '%[4]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[5]s -o args%[6]s
-    %[7]s -args args -outs '%[8]s'%[9]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[7]s -args args%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
     """
 }
 
 `, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.mre, arg,
 		g.producerArgs(c.Callable, types.RoleIn), main,
-		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
+		g.producerArgs(c.Callable, types.RoleMainOut))
 }
 
 // keyedInputs renders a keyed process's input block — tuple(key, pipeargs, staged
@@ -476,7 +469,7 @@ func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
 	field, splits := "", 0
 
 	for _, b := range c.Bindings {
-		if b.Value.Ref != nil && b.Value.Ref.Kind == refKindCall {
+		if b.Value.Ref != nil && b.Value.Ref.Kind == ir.RefKindCall {
 			return nil, "", false
 		}
 
@@ -484,7 +477,7 @@ func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
 			splits++
 
 			r := b.Value.Ref
-			if r == nil || r.Kind != refKindSelf || r.Output != "" {
+			if r == nil || r.Kind != ir.RefKindSelf || r.Output != "" {
 				return nil, "", false
 			}
 
@@ -530,10 +523,13 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
 		arg = " -inputs " + strings.Join(pairs, ",")
 	}
 
-	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s -mapmode %s", g.mre, arg, mapModeArg(c))
-	main := fmt.Sprintf("%s -args fargs -outs '%s'%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
+	// The element branch keeps the bare forkbind base: -mapmode is a
+	// full-collection flag forkbind rejects alongside -elementfile.
+	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
+	forkbindAll := fmt.Sprintf("%s -mapmode %s", forkbind, mapModeArg(c))
+	main := fmt.Sprintf("%s -args fargs%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
 		g.stageCmd("main", s, vmemFlag(s, "main")),
-		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
+		g.producerArgs(c.Callable, types.RoleMainOut))
 
 	fmt.Fprintf(b, `process %[1]s_KS {
 %[5]s
@@ -555,13 +551,13 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
     else
       """
       printf %%s '${element}' | base64 -d > element.json
-      %[3]s -elementfile element.json -o fargs
+      %[6]s -elementfile element.json -o fargs
       %[4]s
       [ -d outs__${key} ]
       """
 }
 
-`, forkName(pipeline, c.Name), in.String(), forkbind, main, stageDirectives(s, ""))
+`, forkName(pipeline, c.Name), in.String(), forkbindAll, main, stageDirectives(s, ""), forkbind)
 }
 
 // genKeyedForkBindProcess emits the fork-key-threaded forkbind for a nested map
@@ -608,7 +604,7 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
     tuple val(key), path('merged', type: 'dir')
   script:
     """
-    '%[2]s' merge%[5]s -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
+    '%[2]s' merge%[5]s -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keysfile forkkeys.json -o merged%[4]s
     """
 }
 
@@ -894,8 +890,6 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 }
 
 func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
-	mainOuts := strings.Join(append(names(s.Out), names(s.ChunkOut)...), ",")
-	joinOuts := strings.Join(names(s.Out), ",")
 	base := g.stageCmd("main", s, vmemFlag(s, "main"))
 
 	// The fork-keyed variants are only ever invoked for a stage reachable under a
@@ -904,22 +898,22 @@ func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
 	keyed := g.plan.keyed[s.Name]
 
 	if !s.Split {
-		genSingleStage(b, s, base, joinOuts, g)
+		genSingleStage(b, s, base, g)
 
 		if keyed {
-			genKeyedSingleStage(b, s, base, joinOuts, g)
+			genKeyedSingleStage(b, s, base, g)
 		}
 
 		return
 	}
 
-	genSplitProcesses(b, s, g, base, mainOuts, joinOuts)
+	genSplitProcesses(b, s, g, base)
 	genSplitWorkflow(b, s)
 
 	// A fork-key-threaded variant, used when this split stage is a map-call
 	// target so each fork runs its own split/main/join and gathers per fork.
 	if keyed {
-		genKeyedSplitProcesses(b, s, g, base, mainOuts, joinOuts)
+		genKeyedSplitProcesses(b, s, g, base)
 		genKeyedSplitWorkflow(b, s)
 	}
 }
@@ -1009,7 +1003,7 @@ func boolKey(b bool) string {
 // genKeyedSplitProcesses emits fork-key-carrying variants of the split/main/join
 // processes: every channel item is tuple(key, ...), so chunks and joins stay
 // partitioned by fork. Outputs are named by key so the merge orders them.
-func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
+func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
 	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
 	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
 
@@ -1024,12 +1018,12 @@ func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mai
     tuple val(key), path('chunk_*', type: 'dir'), emit: chunks, optional: true
   script:
     """
-    %[4]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[5]s
+    %[3]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[4]s
     """
 }
 
 process %[1]s_MAIN_K {
-%[12]s
+%[9]s
   input:
     tuple val(key), val(res), path(chunk), path(args)
     path 'types.json'
@@ -1037,12 +1031,12 @@ process %[1]s_MAIN_K {
     tuple val(key), path("out_${chunk.baseName}", type: 'dir')
   script:
     """
-    %[6]s -args ${args} -chunk ${chunk} -outs '%[7]s'%[9]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
+    %[5]s -args ${args} -chunk ${chunk}%[7]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
     """
 }
 
 process %[1]s_JOIN_K {
-%[13]s
+%[10]s
   input:
     tuple val(key), val(join), path(souts), path(args), path(defs)
     path 'types.json'
@@ -1050,13 +1044,13 @@ process %[1]s_JOIN_K {
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[8]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[10]s'%[11]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[6]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)"%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
     """
 }
 
-`, s.Name, stageDirectives(s, ""), memOf(s), splitCmd, g.producerArgs(s.Name, types.RoleChunkIn),
-		base, mainOuts, joinCmd, g.producerArgs(s.Name, types.RoleMainOut),
-		joinOuts, g.producerArgs(s.Name, types.RoleOut),
+`, s.Name, stageDirectives(s, ""), splitCmd, g.producerArgs(s.Name, types.RoleChunkIn),
+		base, joinCmd, g.producerArgs(s.Name, types.RoleMainOut),
+		g.producerArgs(s.Name, types.RoleOut),
 		stageDirectives(s, "res"), stageDirectives(s, "join"))
 }
 
@@ -1088,17 +1082,17 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 `, s.Name)
 }
 
-func genSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g genCtx) {
+func genSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
   input:
-    %[6]s
+    %[5]s
     path 'types.json'
   output:
-    %[7]s
+    %[6]s
   script:
     """
-    %[3]s -args args -outs '%[4]s'%[5]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[3]s -args args%[4]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
     """
 }
 
@@ -1111,7 +1105,7 @@ workflow wf_%[1]s {
     %[1]s.out
 }
 
-`, s.Name, stageDirectives(s, ""), base, outs, g.producerArgs(s.Name, types.RoleMainOut),
+`, s.Name, stageDirectives(s, ""), base, g.producerArgs(s.Name, types.RoleMainOut),
 		bundleInput("args"), bundleOutput("outs"))
 }
 
@@ -1119,7 +1113,7 @@ workflow wf_%[1]s {
 // the process carries tuple(key, args) and names its output bundle by key so a
 // map call (or an enclosing keyed pipeline) can run one instance per fork and
 // gather per fork.
-func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g genCtx) {
+func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s_MAP {
 %[2]s
   input:
@@ -1129,7 +1123,7 @@ func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base, outs string, g g
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[3]s -args ${args} -outs '%[4]s'%[5]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[3]s -args ${args}%[4]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
     """
 }
 
@@ -1142,17 +1136,17 @@ workflow wf_%[1]s_map {
     %[1]s_MAP.out
 }
 
-`, s.Name, stageDirectives(s, ""), base, outs, g.producerArgs(s.Name, types.RoleMainOut))
+`, s.Name, stageDirectives(s, ""), base, g.producerArgs(s.Name, types.RoleMainOut))
 }
 
-func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts, joinOuts string) {
+func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
 	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
 	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
 %[2]s
   input:
-    %[14]s
+    %[11]s
     path 'types.json'
   output:
     path 'chunks.json', emit: defs
@@ -1160,40 +1154,40 @@ func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base, mainOuts
     path 'chunk_*', emit: chunks, type: 'dir', optional: true
   script:
     """
-    %[4]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[9]s
+    %[3]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[6]s
     """
 }
 
 process %[1]s_MAIN {
-%[12]s
+%[9]s
   input:
-    tuple val(res), path(chunk), %[15]s
+    tuple val(res), path(chunk), %[12]s
     path 'types.json'
   output:
     path "out_${chunk.baseName}", type: 'dir'
   script:
     """
-    %[5]s -args args -chunk ${chunk} -outs '%[6]s'%[10]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
+    %[4]s -args args -chunk ${chunk}%[7]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
     """
 }
 
 process %[1]s_JOIN {
-%[13]s
+%[10]s
   input:
     val join
-    %[14]s
+    %[11]s
     path defs
     path souts
     path 'types.json'
   output:
-    %[16]s
+    %[13]s
   script:
     """
-    %[7]s -args args -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)" -outs '%[8]s'%[11]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[5]s -args args -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)"%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
     """
 }
 
-`, s.Name, stageDirectives(s, ""), memOf(s), splitCmd, base, mainOuts, joinCmd, joinOuts,
+`, s.Name, stageDirectives(s, ""), splitCmd, base, joinCmd,
 		g.producerArgs(s.Name, types.RoleChunkIn),
 		g.producerArgs(s.Name, types.RoleMainOut),
 		g.producerArgs(s.Name, types.RoleOut),
@@ -1333,7 +1327,7 @@ func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string, emptyNul
 		flag = " -emptynull"
 	}
 
-	return fmt.Sprintf(`'%s' merge%s -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keys-file %s -o %s%s`,
+	return fmt.Sprintf(`'%s' merge%s -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keysfile %s -o %s%s`,
 		g.mre, flag, outs, glob, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
 }
 
@@ -1447,11 +1441,13 @@ func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Ca
 
 	block, arg := bindInputsHead(head, refCalls(c.Bindings))
 
-	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s -mapmode %s",
-		g.mre, arg, mapModeArg(c))
-	main := fmt.Sprintf("%s -args fargs -outs '%s'%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
+	// The element branch keeps the bare forkbind base: -mapmode is a
+	// full-collection flag forkbind rejects alongside -elementfile.
+	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
+	forkbindAll := fmt.Sprintf("%s -mapmode %s", forkbind, mapModeArg(c))
+	main := fmt.Sprintf("%s -args fargs%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
 		g.stageCmd("main", s, vmemFlag(s, "main")),
-		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
+		g.producerArgs(c.Callable, types.RoleMainOut))
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
@@ -1473,13 +1469,13 @@ func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Ca
     else
       """
       printf %%s '${element}' | base64 -d > element.json
-      %[4]s -elementfile element.json -o fargs
+      %[6]s -elementfile element.json -o fargs
       %[5]s
       [ -d outs__${key} ]
       """
 }
 
-`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, forkbind, main)
+`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, forkbindAll, main, forkbind)
 }
 
 // genMergeProcess emits a process that merges per-fork outputs into the
@@ -1610,7 +1606,7 @@ func bindingsRefCall(bindings []ir.Binding) bool {
 	refsCall = func(v ir.Value) bool {
 		switch {
 		case v.Ref != nil:
-			return v.Ref.Kind == refKindCall
+			return v.Ref.Kind == ir.RefKindCall
 		case v.Array != nil:
 			return slices.ContainsFunc(v.Array, refsCall)
 		case v.Object != nil:
@@ -1714,7 +1710,7 @@ func forwardProducer(bindings []ir.Binding, p *ir.Pipeline, prog *ir.Program) (s
 
 	for _, bnd := range bindings {
 		r := bnd.Value.Ref
-		if r == nil || r.Kind != refKindCall || r.Output != bnd.Param || strings.Contains(r.Output, ".") {
+		if r == nil || r.Kind != ir.RefKindCall || r.Output != bnd.Param || strings.Contains(r.Output, ".") {
 			return "", false
 		}
 
@@ -1884,7 +1880,7 @@ func consumerCount(name string, p *ir.Pipeline) int {
 		// its bindings, but still depends on the producer's output — so it counts
 		// as a consumer (else the producer would be folded away and the gate's
 		// ch_<producer> would dangle).
-		if c.Disabled != nil && c.Disabled.Kind == refKindCall && c.Disabled.ID == name {
+		if c.Disabled != nil && c.Disabled.Kind == ir.RefKindCall && c.Disabled.ID == name {
 			n++
 		}
 	}
@@ -1932,7 +1928,6 @@ func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink
 		fmt.Fprintf(&specInputs, "    path 'spec_%d.json'\n", i)
 
 		base := g.stageCmd("main", link.stage, vmemFlag(link.stage, "main"))
-		outs := strings.Join(names(link.stage.Out), ",")
 
 		inputs := ""
 		if i > 0 {
@@ -1946,8 +1941,8 @@ func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink
 
 		fmt.Fprintf(&script, "    '%s' bind -spec 'spec_%d.json' -pipeargs pipeargs%s -o args_%d%s\n",
 			g.mre, i, inputs, i, g.producerArgs(link.call.Callable, types.RoleIn))
-		fmt.Fprintf(&script, "    %s -args args_%d -outs '%s'%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o %s\n",
-			base, i, outs, g.producerArgs(link.call.Callable, types.RoleMainOut), outVar)
+		fmt.Fprintf(&script, "    %s -args args_%d%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o %s\n",
+			base, i, g.producerArgs(link.call.Callable, types.RoleMainOut), outVar)
 	}
 
 	fmt.Fprintf(b, `process %[1]s {
@@ -2118,21 +2113,20 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 func genFusedStageProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
 	base := g.stageCmd("main", s, vmemFlag(s, "main"))
-	outs := strings.Join(names(s.Out), ",")
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
   input:
 %[3]s  output:
-    %[8]s
+    %[7]s
   script:
     """
-%[11]s    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[9]s
-    %[6]s -args args -outs '%[7]s'%[10]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+%[10]s    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
+    %[6]s -args args%[9]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
     """
 }
 
-`, fusedName(p.Name, c.Name), stageDirectives(s, ""), block, g.mre, arg, base, outs,
+`, fusedName(p.Name, c.Name), stageDirectives(s, ""), block, g.mre, arg, base,
 		bundleOutput("outs"), g.producerArgs(c.Callable, types.RoleIn),
 		g.producerArgs(c.Callable, types.RoleMainOut), pre)
 }
@@ -2416,12 +2410,12 @@ func nativeDisableGate(c ir.Call) (string, string, bool) {
 	}
 
 	switch r.Kind {
-	case refKindSelf:
+	case ir.RefKindSelf:
 		// self.<field>: the whole referenced input is the flag (no sub-path).
 		if r.Output == "" {
 			return "pa", r.ID, true
 		}
-	case refKindCall:
+	case ir.RefKindCall:
 		// CALL.out.<field>: a single (non-nested) output field.
 		if r.Output != "" && !strings.Contains(r.Output, ".") {
 			return "ch_" + r.ID, r.Output, true
@@ -2692,7 +2686,7 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 	// `[:]` is Groovy's empty map (a bare `[]` would be a list, which the overrides
 	// JSON object must not be); a non-empty map lists each input's param.
 	pairs := make([]string, 0, len(ins))
-	flatFlags := make([]string, 0) // name=joined-staged-paths for the entryargs -fileflat flag
+	flatPairs := make([]string, 0) // Groovy map entries for the entryargs -fileflat JSON
 	callArgs := []string{`file("${projectDir}/entry_args")`, "values", "types"}
 	sentinel := fmt.Sprintf(`file("${projectDir}/%s/%s")`, assetsDir, entrySentinel)
 
@@ -2711,14 +2705,14 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 		// in the task work dir, while the original basename is preserved for the
 		// stage. The order matches the head-node flatten (canonical type order).
 		fmt.Fprintf(&fileInputs, "    path(%s, stageAs: '%s_?/*')\n", in, in)
-		// The staged paths (one per file leaf, canonical order) reach entryargs joined
-		// by ','; multiple inputs are ';'-separated and the whole flag is single-quoted
-		// so the shell leaves it intact while Nextflow still interpolates the ${...}.
-		// The list-coercion matters: a single staged file is a lone Groovy Path, and
-		// Path.join(",") iterates its path *segments* (the stageAs subdir splits it
-		// into "<in>_1,<basename>"); wrapping it in a list makes join treat the whole
-		// path as one element. A multi-leaf input is already a List, left as-is.
-		flatFlags = append(flatFlags, fmt.Sprintf("%[1]s=${(%[2]s instanceof List ? %[2]s : [%[2]s]).join(\",\")}", p.Name, in))
+		// The staged paths (one per file leaf, canonical order) reach entryargs
+		// as one JSON object written via heredoc — JSON escaping keeps legal
+		// filenames containing , ; = intact, which a flat separator encoding
+		// cannot. The list-coercion matters: a single staged file is a lone
+		// Groovy Path, and toJson would serialize a bare Path as its segment
+		// list; wrapping it in a list and spreading toString() yields one path
+		// string per leaf. A multi-leaf input is already a List, left as-is.
+		flatPairs = append(flatPairs, fmt.Sprintf("%[1]s: (%[2]s instanceof List ? %[2]s : [%[2]s])*.toString()", p.Name, in))
 		callArgs = append(callArgs, "flat_"+p.Name)
 		// Flatten the override's file leaves to a list of staged files on the head node;
 		// an unset input (or one with no file leaves) falls back to the empty sentinel so
@@ -2732,9 +2726,15 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 		valuesMap = "[" + strings.Join(pairs, ", ") + "]"
 	}
 
-	flatFlag := ""
-	if len(flatFlags) > 0 {
-		flatFlag = " -fileflat '" + strings.Join(flatFlags, ";") + "'"
+	// A second quoted heredoc writes the staged-path map as JSON; the flag
+	// passes only the filename, so no path ever crosses a shell-quoting seam.
+	flatFlag, flatHeredoc := "", ""
+	if len(flatPairs) > 0 {
+		flatFlag = " -fileflat fileflat.json"
+		flatHeredoc = fmt.Sprintf(`    cat > fileflat.json <<'MART_EOF'
+${groovy.json.JsonOutput.toJson([%s])}
+MART_EOF
+`, strings.Join(flatPairs, ", "))
 	}
 
 	// A quoted heredoc writes the overrides to a file; Nextflow interpolates the
@@ -2752,7 +2752,7 @@ process BUILD_ENTRY_ARGS {
     cat > values.json <<'MART_EOF'
 ${values}
 MART_EOF
-    '%[2]s' entryargs -base entry_args -values values.json -o entry_resolved -types 'types.json' -callable '%[3]s' -role in%[7]s
+%[11]s    '%[2]s' entryargs -base entry_args -values values.json -o entry_resolved -types 'types.json' -callable '%[3]s' -role in%[7]s
     """
 }
 
@@ -2764,7 +2764,7 @@ workflow {
   %[5]s(pipeargs)
 `, decls.String(), g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
 		fileInputs.String(), flatFlag, fileChans.String(), strings.Join(callArgs, ", "),
-		bundleOutput("entry_resolved"))
+		bundleOutput("entry_resolved"), flatHeredoc)
 
 	genPublishWiring(b, entryWorkflow)
 	b.WriteString("}\n")
@@ -2881,7 +2881,7 @@ func refCalls(bindings []ir.Binding) []string {
 
 	var walk func(v ir.Value)
 	walk = func(v ir.Value) {
-		if v.Ref != nil && v.Ref.Kind == refKindCall && !seen[v.Ref.ID] {
+		if v.Ref != nil && v.Ref.Kind == ir.RefKindCall && !seen[v.Ref.ID] {
 			seen[v.Ref.ID] = true
 			ids = append(ids, v.Ref.ID)
 		}
