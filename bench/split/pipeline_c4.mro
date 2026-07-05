@@ -1,0 +1,6 @@
+@include "common.mro"
+
+call WIDE(
+    nchunks = 4,
+    payload = "input/payload.txt",
+)

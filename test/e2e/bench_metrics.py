@@ -5,7 +5,7 @@ Emits a single JSON object combining Nextflow's own reporting with a direct,
 backend-agnostic measure of how many times a benchmark's probe file is staged
 across the run's work dir:
 
-  tasks       -- number of task executions (trace rows)
+  tasks       -- number of unique tasks (retried attempts collapsed; see parse_trace)
   processes   -- distinct process names (chunk tags collapsed)
   rchar/wchar -- aggregate characters read/written (trace; copy-volume proxy)
   edges       -- DAG edge count (-with-dag mermaid), the static process wiring
@@ -55,7 +55,20 @@ def is_plumbing(base):
 
 
 def parse_trace(path):
-    tasks, plumb_tasks, procs, rchar, wchar = 0, 0, set(), 0.0, 0.0
+    """Aggregate the trace by unique task identity, not by row.
+
+    The trace holds one row per ATTEMPT: under `errorStrategy retry` a
+    transient failure adds a FAILED row and then a fresh row for the retry, so
+    raw row counts would fail the `tasks` gate on any unrelated retry. The
+    harness requests the default trace fields, which carry no attempt column —
+    but the fully qualified task name (`WF:PROC (n)`; the generated processes
+    set no `tag`, so the index makes each task's name unique) IS the stable
+    task identity, and every attempt of one task repeats it. Keying rows by
+    that name and letting the last attempt win therefore counts each task
+    once, retried or not, and reads rchar/wchar from the attempt that
+    actually completed.
+    """
+    by_name = {}
     with open(path) as h:
         header = h.readline().rstrip("\n").split("\t")
         idx = {c: i for i, c in enumerate(header)}
@@ -63,16 +76,19 @@ def parse_trace(path):
             cols = line.rstrip("\n").split("\t")
             if len(cols) < len(header):
                 continue
-            tasks += 1
-            # Strip the workflow path prefix (A:B:PROC) and the chunk tag " (n)".
-            base = cols[idx["name"]].split(" (")[0].split(":")[-1]
-            procs.add(base)
-            if is_plumbing(base):
-                plumb_tasks += 1
-            if "rchar" in idx:
-                rchar += parse_size(cols[idx["rchar"]])
-            if "wchar" in idx:
-                wchar += parse_size(cols[idx["wchar"]])
+            by_name[cols[idx["name"]]] = cols  # last attempt wins
+    tasks, plumb_tasks, procs, rchar, wchar = 0, 0, set(), 0.0, 0.0
+    for name, cols in by_name.items():
+        tasks += 1
+        # Strip the workflow path prefix (A:B:PROC) and the chunk tag " (n)".
+        base = name.split(" (")[0].split(":")[-1]
+        procs.add(base)
+        if is_plumbing(base):
+            plumb_tasks += 1
+        if "rchar" in idx:
+            rchar += parse_size(cols[idx["rchar"]])
+        if "wchar" in idx:
+            wchar += parse_size(cols[idx["wchar"]])
     plumbing = sorted(p for p in procs if is_plumbing(p))
     return tasks, plumb_tasks, len(procs), int(rchar), int(wchar), plumbing
 
