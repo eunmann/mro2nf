@@ -12,13 +12,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-// refKindCall is the ir.Ref.Kind for a reference to another call's output;
-// refKindSelf is a reference to one of the pipeline's own inputs.
-const (
-	refKindCall = "call"
-	refKindSelf = "self"
-)
-
 // genCtx carries the resolved paths and names needed to render Nextflow code.
 type genCtx struct {
 	entry   string
@@ -449,7 +442,7 @@ func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
 	field, splits := "", 0
 
 	for _, b := range c.Bindings {
-		if b.Value.Ref != nil && b.Value.Ref.Kind == refKindCall {
+		if b.Value.Ref != nil && b.Value.Ref.Kind == ir.RefKindCall {
 			return nil, "", false
 		}
 
@@ -457,7 +450,7 @@ func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
 			splits++
 
 			r := b.Value.Ref
-			if r == nil || r.Kind != refKindSelf || r.Output != "" {
+			if r == nil || r.Kind != ir.RefKindSelf || r.Output != "" {
 				return nil, "", false
 			}
 
@@ -1583,7 +1576,7 @@ func bindingsRefCall(bindings []ir.Binding) bool {
 	refsCall = func(v ir.Value) bool {
 		switch {
 		case v.Ref != nil:
-			return v.Ref.Kind == refKindCall
+			return v.Ref.Kind == ir.RefKindCall
 		case v.Array != nil:
 			return slices.ContainsFunc(v.Array, refsCall)
 		case v.Object != nil:
@@ -1687,7 +1680,7 @@ func forwardProducer(bindings []ir.Binding, p *ir.Pipeline, prog *ir.Program) (s
 
 	for _, bnd := range bindings {
 		r := bnd.Value.Ref
-		if r == nil || r.Kind != refKindCall || r.Output != bnd.Param || strings.Contains(r.Output, ".") {
+		if r == nil || r.Kind != ir.RefKindCall || r.Output != bnd.Param || strings.Contains(r.Output, ".") {
 			return "", false
 		}
 
@@ -1857,7 +1850,7 @@ func consumerCount(name string, p *ir.Pipeline) int {
 		// its bindings, but still depends on the producer's output — so it counts
 		// as a consumer (else the producer would be folded away and the gate's
 		// ch_<producer> would dangle).
-		if c.Disabled != nil && c.Disabled.Kind == refKindCall && c.Disabled.ID == name {
+		if c.Disabled != nil && c.Disabled.Kind == ir.RefKindCall && c.Disabled.ID == name {
 			n++
 		}
 	}
@@ -2382,12 +2375,12 @@ func nativeDisableGate(c ir.Call) (string, string, bool) {
 	}
 
 	switch r.Kind {
-	case refKindSelf:
+	case ir.RefKindSelf:
 		// self.<field>: the whole referenced input is the flag (no sub-path).
 		if r.Output == "" {
 			return "pa", r.ID, true
 		}
-	case refKindCall:
+	case ir.RefKindCall:
 		// CALL.out.<field>: a single (non-nested) output field.
 		if r.Output != "" && !strings.Contains(r.Output, ".") {
 			return "ch_" + r.ID, r.Output, true
@@ -2853,7 +2846,7 @@ func refCalls(bindings []ir.Binding) []string {
 
 	var walk func(v ir.Value)
 	walk = func(v ir.Value) {
-		if v.Ref != nil && v.Ref.Kind == refKindCall && !seen[v.Ref.ID] {
+		if v.Ref != nil && v.Ref.Kind == ir.RefKindCall && !seen[v.Ref.ID] {
 			seen[v.Ref.ID] = true
 			ids = append(ids, v.Ref.ID)
 		}

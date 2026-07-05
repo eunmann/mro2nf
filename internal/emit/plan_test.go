@@ -148,10 +148,10 @@ func TestEntryValueShapes(t *testing.T) {
 		want bool
 	}{
 		{"literal", entry, ir.Value{Literal: []byte("[]")}, true},
-		{"whole-field entry self", entry, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "xs"}}, true},
-		{"projected entry self", entry, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "cfg", Output: "list"}}, true},
-		{"sub-pipeline self", sub, ir.Value{Ref: &ir.Ref{Kind: refKindSelf, ID: "xs"}}, false},
-		{"upstream ref", entry, ir.Value{Ref: &ir.Ref{Kind: refKindCall, ID: "UP", Output: "xs"}}, false},
+		{"whole-field entry self", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, true},
+		{"projected entry self", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "cfg", Output: "list"}}, true},
+		{"sub-pipeline self", sub, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, false},
+		{"upstream ref", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: "UP", Output: "xs"}}, false},
 	}
 
 	for _, tc := range cases {

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 var (
@@ -32,7 +34,7 @@ var (
 
 // Ref is a reference to a pipeline input (self) or an upstream call output.
 type Ref struct {
-	// Kind is "self" or "call".
+	// Kind is ir.RefKindSelf or ir.RefKindCall.
 	Kind string `json:"kind"`
 	// ID is the pipeline input name (self) or call instance id (call).
 	ID string `json:"id"`
@@ -347,9 +349,9 @@ func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMes
 	}
 
 	switch e.Ref.Kind {
-	case "self":
+	case ir.RefKindSelf:
 		return extractProject(pipeArgs, joinPath(e.Ref.ID, e.Ref.Output), e.Ref.MapDepth, e.Ref.MapInArray)
-	case "call":
+	case ir.RefKindCall:
 		outs, ok := callOuts[e.Ref.ID]
 		if !ok {
 			return json.RawMessage(nullLiteral), nil

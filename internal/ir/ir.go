@@ -74,9 +74,19 @@ type Stage struct {
 	Resources Resources
 }
 
+// RefKindSelf and RefKindCall are the two Ref.Kind values: a reference to a
+// pipeline input and a reference to an upstream call's output. The emitter
+// writes them into the generated bindspecs and the runtime binder dispatches
+// on them, so the strings are defined once here for both sides of that seam.
+const (
+	RefKindSelf = "self"
+	RefKindCall = "call"
+)
+
 // Ref is a reference expression: a pipeline input (self) or a call output.
 type Ref struct {
-	// Kind is "self" (pipeline input) or "call" (another call's output).
+	// Kind is RefKindSelf (pipeline input) or RefKindCall (another call's
+	// output).
 	Kind string
 	// ID is the pipeline input name (self) or call instance id (call).
 	ID string

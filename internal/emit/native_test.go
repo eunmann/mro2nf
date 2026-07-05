@@ -80,10 +80,10 @@ func TestNativeScatterableRefKinds(t *testing.T) {
 		wantOK     bool
 		field, cal string
 	}{
-		{"self whole field", &ir.Ref{Kind: refKindSelf, ID: "vs"}, true, "vs", ""},
-		{"upstream whole output", &ir.Ref{Kind: refKindCall, ID: "GEN", Output: "vs"}, true, "vs", "GEN"},
-		{"self projection", &ir.Ref{Kind: refKindSelf, ID: "cfg", Output: "vs"}, false, "", ""},
-		{"upstream projection", &ir.Ref{Kind: refKindCall, ID: "GEN", Output: "cfg.vs"}, false, "", ""},
+		{"self whole field", &ir.Ref{Kind: ir.RefKindSelf, ID: "vs"}, true, "vs", ""},
+		{"upstream whole output", &ir.Ref{Kind: ir.RefKindCall, ID: "GEN", Output: "vs"}, true, "vs", "GEN"},
+		{"self projection", &ir.Ref{Kind: ir.RefKindSelf, ID: "cfg", Output: "vs"}, false, "", ""},
+		{"upstream projection", &ir.Ref{Kind: ir.RefKindCall, ID: "GEN", Output: "cfg.vs"}, false, "", ""},
 	}
 
 	for _, tc := range cases {
