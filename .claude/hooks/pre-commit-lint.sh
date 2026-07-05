@@ -54,9 +54,23 @@ while IFS= read -r file; do
     fi
 done <<< "$STAGED_FILES"
 
-# Run linter with auto-fix
+# Run linter with auto-fix. --build-tags e2e keeps the tag-gated test/e2e
+# harness in the lint set (the tag is additive; nothing else carries an e2e
+# constraint), matching make lint / CI.
 LINT_EXIT=0
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --fix $PACKAGES 2>&1 || LINT_EXIT=$?
+LINT_OUT=$(mktemp)
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --fix --build-tags e2e $PACKAGES >"$LINT_OUT" 2>&1 || LINT_EXIT=$?
+cat "$LINT_OUT"
+
+# golangci exits 5 for "no go files to analyze" — e.g. every staged package is
+# tag- or config-excluded. Nothing to lint is not a lint failure; without this
+# a commit touching only such files would be spuriously blocked. `go run`
+# launders the child's exit code to 1 and prints "exit status 5" instead, so
+# match that line too.
+if [[ $LINT_EXIT -eq 5 ]] || { [[ $LINT_EXIT -ne 0 ]] && grep -qx 'exit status 5' "$LINT_OUT"; }; then
+    LINT_EXIT=0
+fi
+rm -f "$LINT_OUT"
 
 # Re-stage any auto-fixed files
 RESTAGED=0
