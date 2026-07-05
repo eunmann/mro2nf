@@ -17,7 +17,13 @@ jobs:
   mrp-diff:
     name: mrp differential (real Martian)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Budget for the WHOLE job — toolchain setup + Martian clone/build (~5 min)
+    # + the 52-leg differential (21 s wall locally at -parallel 10; allow ~15x
+    # on a 4-vCPU runner ≈ 5 min) + `make test-e2e` (~6 min observed in PR CI)
+    # ≈ 16 min expected, ~2x that worst-normal. 60 keeps >40% headroom over
+    # even the pessimistic estimate while still killing a genuine hang well
+    # before the two 30-minute go-test timeouts could stack.
+    timeout-minutes: 60
     env:
       # The differential SKIPS when mrp is absent (CI normally has no Martian);
       # here we build it, so a missing binary is a setup failure, not a skip.
