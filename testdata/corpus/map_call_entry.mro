@@ -1,0 +1,32 @@
+# A top-level `map call` forks the entry pipeline per collection element.
+# `mro check` accepts this, but the transpiler has no entry-fork lowering, so
+# it must fail loudly instead of running the entry once with the whole
+# collection.
+
+stage DOUBLE(
+    in  int x,
+    out int y,
+    src py  "stages/double",
+)
+
+pipeline DOUBLER(
+    in  int x,
+    out int y,
+)
+{
+    call DOUBLE(
+        x = self.x,
+    )
+
+    return (
+        y = DOUBLE.y,
+    )
+}
+
+map call DOUBLER(
+    x = split [
+        1,
+        2,
+        3,
+    ],
+)
