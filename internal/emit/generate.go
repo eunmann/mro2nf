@@ -2657,7 +2657,7 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 	// `[:]` is Groovy's empty map (a bare `[]` would be a list, which the overrides
 	// JSON object must not be); a non-empty map lists each input's param.
 	pairs := make([]string, 0, len(ins))
-	flatFlags := make([]string, 0) // name=joined-staged-paths for the entryargs -fileflat flag
+	flatPairs := make([]string, 0) // Groovy map entries for the entryargs -fileflat JSON
 	callArgs := []string{`file("${projectDir}/entry_args")`, "values", "types"}
 	sentinel := fmt.Sprintf(`file("${projectDir}/%s/%s")`, assetsDir, entrySentinel)
 
@@ -2676,14 +2676,14 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 		// in the task work dir, while the original basename is preserved for the
 		// stage. The order matches the head-node flatten (canonical type order).
 		fmt.Fprintf(&fileInputs, "    path(%s, stageAs: '%s_?/*')\n", in, in)
-		// The staged paths (one per file leaf, canonical order) reach entryargs joined
-		// by ','; multiple inputs are ';'-separated and the whole flag is single-quoted
-		// so the shell leaves it intact while Nextflow still interpolates the ${...}.
-		// The list-coercion matters: a single staged file is a lone Groovy Path, and
-		// Path.join(",") iterates its path *segments* (the stageAs subdir splits it
-		// into "<in>_1,<basename>"); wrapping it in a list makes join treat the whole
-		// path as one element. A multi-leaf input is already a List, left as-is.
-		flatFlags = append(flatFlags, fmt.Sprintf("%[1]s=${(%[2]s instanceof List ? %[2]s : [%[2]s]).join(\",\")}", p.Name, in))
+		// The staged paths (one per file leaf, canonical order) reach entryargs
+		// as one JSON object written via heredoc — JSON escaping keeps legal
+		// filenames containing , ; = intact, which a flat separator encoding
+		// cannot. The list-coercion matters: a single staged file is a lone
+		// Groovy Path, and toJson would serialize a bare Path as its segment
+		// list; wrapping it in a list and spreading toString() yields one path
+		// string per leaf. A multi-leaf input is already a List, left as-is.
+		flatPairs = append(flatPairs, fmt.Sprintf("%[1]s: (%[2]s instanceof List ? %[2]s : [%[2]s])*.toString()", p.Name, in))
 		callArgs = append(callArgs, "flat_"+p.Name)
 		// Flatten the override's file leaves to a list of staged files on the head node;
 		// an unset input (or one with no file leaves) falls back to the empty sentinel so
@@ -2697,9 +2697,15 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 		valuesMap = "[" + strings.Join(pairs, ", ") + "]"
 	}
 
-	flatFlag := ""
-	if len(flatFlags) > 0 {
-		flatFlag = " -fileflat '" + strings.Join(flatFlags, ";") + "'"
+	// A second quoted heredoc writes the staged-path map as JSON; the flag
+	// passes only the filename, so no path ever crosses a shell-quoting seam.
+	flatFlag, flatHeredoc := "", ""
+	if len(flatPairs) > 0 {
+		flatFlag = " -fileflat fileflat.json"
+		flatHeredoc = fmt.Sprintf(`    cat > fileflat.json <<'MART_EOF'
+${groovy.json.JsonOutput.toJson([%s])}
+MART_EOF
+`, strings.Join(flatPairs, ", "))
 	}
 
 	// A quoted heredoc writes the overrides to a file; Nextflow interpolates the
@@ -2717,7 +2723,7 @@ process BUILD_ENTRY_ARGS {
     cat > values.json <<'MART_EOF'
 ${values}
 MART_EOF
-    '%[2]s' entryargs -base entry_args -values values.json -o entry_resolved -types 'types.json' -callable '%[3]s' -role in%[7]s
+%[11]s    '%[2]s' entryargs -base entry_args -values values.json -o entry_resolved -types 'types.json' -callable '%[3]s' -role in%[7]s
     """
 }
 
@@ -2729,7 +2735,7 @@ workflow {
   %[5]s(pipeargs)
 `, decls.String(), g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
 		fileInputs.String(), flatFlag, fileChans.String(), strings.Join(callArgs, ", "),
-		bundleOutput("entry_resolved"))
+		bundleOutput("entry_resolved"), flatHeredoc)
 
 	genPublishWiring(b, entryWorkflow)
 	b.WriteString("}\n")
