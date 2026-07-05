@@ -26,6 +26,8 @@ import (
 // the emit-side text pins are the deterministic ones. (Port of the -resume
 // half of runtime_knobs.sh.)
 func TestResumeCachesEverything(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	cases := []struct {

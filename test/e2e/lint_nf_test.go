@@ -59,6 +59,8 @@ const (
 // expected-refusal allowlist entry for that exact combo THEN — loud by
 // default, never classified by error-message substring.
 func TestNextflowLint(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java")
 	requireNextflowLint(t)
 

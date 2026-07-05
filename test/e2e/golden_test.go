@@ -169,6 +169,8 @@ var goldenCases = []struct {
 // parallel because each is an independent `nextflow run` and JVM startup
 // dominates; bound the pool with go test's -parallel flag.
 func TestGolden(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java")
 
 	for _, tc := range goldenCases {
@@ -507,6 +509,8 @@ func assertFileContent(t *testing.T, path, want string) {
 // runs. File- and directory-typed entries are covered by TestNativeFileEntry;
 // the fully-collapsed fixtures live in TestNativeComplete.
 func TestNativeMode(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	cases := []struct {
@@ -647,6 +651,8 @@ func TestNativeMode(t *testing.T) {
 // only its null channel (fired) with no stage process (absent), mirroring
 // TestFuseChains/TestFoldDisables' single-flag structural checks.
 func TestNativeCombos(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	cases := []struct {
@@ -729,6 +735,8 @@ func TestNativeCombos(t *testing.T) {
 // transpile time and staged into the workflow, so each fixture's -native run
 // reproduces its mrp golden (the baked default invocation).
 func TestNativeFileEntry(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	// leaves gates the #120 physical publish verification exactly as
@@ -918,6 +926,8 @@ func assertNativeComplete(t *testing.T, proj string) {
 // fork_fanout (two consumers, so the MERGE task must REMAIN rather than fold).
 // The fully-collapsed fixtures live in TestNativeComplete.
 func TestNativeScatter(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	cases := []struct {
@@ -1006,6 +1016,8 @@ func assertHasProcess(t *testing.T, proj string, cat string) {
 // runtime_empty_forks exercise the RUNTIME zero-fork keys-only sentinel on
 // that path (typed-empty results across null/empty x array/map).
 func TestNativeComplete(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	// Each case compares its single -native run against the committed mrp

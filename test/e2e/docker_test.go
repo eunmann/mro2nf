@@ -130,6 +130,8 @@ func writeFileT(t *testing.T, path, content string) {
 // -mrjob) and the null-bundle / zero-chunk shapes most likely to break on
 // isolated workers.
 func TestDockerIsolation(t *testing.T) {
+	t.Parallel()
+
 	requireDocker(t)
 	buildIsoImage(t)
 
@@ -184,6 +186,8 @@ func TestDockerIsolation(t *testing.T) {
 // Batch / HealthOmics S3-localization path. Covers a scalar file, a file[]
 // (list), and a struct-with-file, each reconstructed by mre entryargs.
 func TestDockerEntryOverrides(t *testing.T) {
+	t.Parallel()
+
 	requireDocker(t)
 	buildIsoImage(t)
 

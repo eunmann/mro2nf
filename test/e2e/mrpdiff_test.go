@@ -148,6 +148,8 @@ func stripPathPrefix(v any, prefix string) any {
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
 // and requires the published file tree and the _outs JSON to match.
 func TestMrpDiff(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	bin := martianBin(t)
