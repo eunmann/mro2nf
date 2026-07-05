@@ -201,9 +201,9 @@ func generatePipeModule(p *ir.Pipeline, prog *ir.Program, g genCtx) string {
 	// The keyed layer (wf_<p>_map + its keyed includes/processes) is only invoked
 	// when this pipeline runs under a map call; otherwise it is dead code (#59).
 	if g.plan.keyed[p.Name] {
-		genKeyedPipeIncludes(&b, p, prog)
+		genKeyedPipeIncludes(&b, p, prog, g)
 		genKeyedPipeProcesses(&b, p, prog, g)
-		genKeyedPipeline(&b, prog, p, g)
+		genKeyedPipeline(&b, p, g)
 	}
 
 	return b.String()
@@ -272,36 +272,15 @@ func keyedCallAlias(pipeline, call string) string {
 	return "wfk_" + qualify(pipeline, call)
 }
 
-// keyedFuseable reports whether a keyed-pipeline call runs its bind+main in one
-// fused process (genKeyedFusedStageProcess) rather than a standalone BIND_K plus
-// the callee's _map variant — the same conditions as the plain-layer fold
-// (fuseableStageCall): a non-mapped, non-disabled call onto a non-split stage.
-// Fusing folds away one BIND_K task PER OUTER FORK (#99). It returns the callee
-// stage for the fused process.
-func keyedFuseable(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
-	if c.Mapped || c.Disabled != nil {
-		return nil, false
-	}
-
-	s, ok := prog.Stages[c.Callable]
-	if !ok || s.Split {
-		return nil, false
-	}
-
-	return s, true
-}
-
 // genKeyedPipeIncludes imports the fork-key-threaded variant of each callee so a
 // keyed pipeline can run its body per fork. A fused leaf call or a value-only
 // nested-map scatter embeds its stage's main directly (in its _K / _KS process),
 // so it needs no wf_<stage>_map import.
-func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) {
-	for _, c := range p.Calls {
-		if _, ok := keyedFuseable(c, prog); ok {
-			continue
-		}
+func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx) {
+	pp := g.plan.pipes[p.Name]
 
-		if _, _, ok := keyedScatterable(c, prog); ok {
+	for _, c := range p.Calls {
+		if pp.calls[c.Name].keyedFusedInclude() {
 			continue
 		}
 
@@ -313,49 +292,50 @@ func genKeyedPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program) 
 }
 
 // genKeyedPipeProcesses emits the fork-key-carrying bind processes a keyed
-// pipeline uses (one per call, plus the return).
+// pipeline uses (one per call, plus the return), switching on each call's
+// planned keyedKind.
 func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g genCtx) {
-	for _, c := range p.Calls {
-		if c.Mapped {
-			// A value-only nested map uses the driver element scatter (#99): its
-			// fused per-inner-fork process replaces the FORK_K resolve.
-			if s, _, ok := keyedScatterable(c, prog); ok {
-				genKeyedNestedScatterProcess(b, p.Name, c, s, g)
-			} else {
-				genKeyedForkBindProcess(b, p.Name, c, g)
-			}
+	pp := g.plan.pipes[p.Name]
 
+	for _, c := range p.Calls {
+		cp := pp.calls[c.Name]
+
+		switch cp.keyedKind {
+		// A value-only nested map uses the driver element scatter (#99): its
+		// fused per-inner-fork process replaces the FORK_K resolve.
+		case keyedScatter:
+			genKeyedNestedScatterProcess(b, p.Name, c, cp.keyedStage, g)
 			genKeyedMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 
-			// A natively-gated keyed disable (self.<field>) reads the flag from the
-			// per-fork args and needs no DISABLE_K bind.
-			if c.Disabled != nil && !keyedNativeDisable(c) {
+		case keyedForkBind:
+			genKeyedForkBindProcess(b, p.Name, c, g)
+			genKeyedMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
+
+			// A natively-gated keyed disable (self.<field>) reads the flag from
+			// the per-fork args and needs no DISABLE_K bind.
+			if cp.keyedDisableTask {
 				genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
 			}
 
-			continue
-		}
-
 		// A fuseable leaf call runs bind+main in one keyed process (#99); an
 		// unfuseable one keeps its standalone BIND_K feeding the callee's variant.
-		if s, ok := keyedFuseable(c, prog); ok {
-			genKeyedFusedStageProcess(b, p.Name, c, s, g)
+		case keyedFused:
+			genKeyedFusedStageProcess(b, p.Name, c, cp.keyedStage, g)
 
-			continue
-		}
+		case keyedBind:
+			genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
 
-		genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
-
-		// A non-mapped keyed disabled call is gated by genKeyedCallBody, which still
-		// uses the keyed DISABLE bind — so keep emitting it here.
-		if c.Disabled != nil {
-			genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
+			// A non-mapped keyed disabled call is gated by genKeyedCallBody, which
+			// still uses the keyed DISABLE bind — so keep emitting it here.
+			if cp.keyedDisableTask {
+				genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
+			}
 		}
 	}
 
 	// A pure-forward return needs no keyed return bind — genKeyedPipeline emits
 	// the producer's own per-fork bundle (#99).
-	if g.plan.pipes[p.Name].retFwd == "" {
+	if pp.retFwd == "" {
 		genKeyedBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut), `outs__${key}`)
 	}
 }
@@ -436,60 +416,6 @@ func keyedInputs(refs []string) (string, string) {
 	}
 
 	return in.String(), arg
-}
-
-// keyedScatterable reports whether a nested map call (a map inside a keyed
-// pipeline) can replace its per-outer-fork FORK_K with a driver element scatter
-// (#99): a value-only leaf callee, exactly one whole-field self split, and no
-// call-ref bindings (a broadcast/split from an upstream call would need the
-// producer joined per outer key — kept on the FORK_K path). Disabled nested
-// maps keep FORK_K (the per-fork run/skip gate). Returns the callee stage and
-// the split field.
-func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
-	if !c.Mapped || c.Disabled != nil {
-		return nil, "", false
-	}
-
-	s, ok := prog.Stages[c.Callable]
-	if !ok || s.Split {
-		return nil, "", false
-	}
-
-	// Every callee input must be value-only, not just the split param: the _KS
-	// forkbind assembles fargs without the type manifest, so a file-typed
-	// BROADCAST binding would not re-stage its leaf. This is stricter than the
-	// non-keyed scatter (which gates only the split); the rejection is pinned
-	// by map_pipe_nested_file (TestDiagnoseNativeKeyedScatter).
-	for i := range s.In {
-		if hasFileLeaf(s.In[i], prog.Structs) {
-			return nil, "", false
-		}
-	}
-
-	field, splits := "", 0
-
-	for _, b := range c.Bindings {
-		if b.Value.Ref != nil && b.Value.Ref.Kind == ir.RefKindCall {
-			return nil, "", false
-		}
-
-		if b.Split {
-			splits++
-
-			r := b.Value.Ref
-			if r == nil || r.Kind != ir.RefKindSelf || r.Output != "" {
-				return nil, "", false
-			}
-
-			field = r.ID
-		}
-	}
-
-	if splits != 1 {
-		return nil, "", false
-	}
-
-	return s, field, true
 }
 
 // genKeyedNestedScatterProcess emits the O(1)-per-instance fused inner scatter
@@ -615,21 +541,23 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 // with the fork key threaded through every bind and callee. Each channel is
 // collapsed to a value list (toList) so it can be re-read by multiple consumers
 // without exhausting the fork queue; binds join their inputs by key.
-func genKeyedPipeline(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g genCtx) {
+func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline, g genCtx) {
+	pp := g.plan.pipes[p.Name]
+
 	var body strings.Builder
 
 	body.WriteString("  main:\n    pa_l = keyed.toList()\n")
 	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
 	for _, c := range p.Calls {
-		genKeyedCallBody(&body, prog, p.Name, c)
+		genKeyedCallBody(&body, p.Name, c, pp.calls[c.Name])
 	}
 
 	// A pure-forward return (retFwd) is the producer's own per-fork bundle — no
 	// keyed return BIND_K, one fewer task per outer fork (#99). Re-expand its
 	// collected list back to per-fork tuple(key, outs__<key>), matching the
 	// return bind's emit shape.
-	if fwd := g.plan.pipes[p.Name].retFwd; fwd != "" {
+	if fwd := pp.retFwd; fwd != "" {
 		emit := fmt.Sprintf("ch_%s_l.flatMap { x -> x }", fwd)
 		fmt.Fprintf(b, `workflow wf_%s_map {
   take: keyed
@@ -659,9 +587,9 @@ func genKeyedPipeline(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g ge
 // gated per fork — its keyed bind and a keyed DISABLE are joined by key and
 // branched, running the callee only for enabled forks and emitting the null
 // bundle for skipped ones.
-func genKeyedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, c ir.Call) {
+func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call, cp callPlan) {
 	if c.Mapped {
-		genKeyedMappedCallBody(body, prog, pipeline, c)
+		genKeyedMappedCallBody(body, pipeline, c, cp)
 
 		return
 	}
@@ -669,7 +597,7 @@ func genKeyedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, 
 	// A fuseable leaf call runs bind+main in one keyed process (fusedName_K),
 	// taking the same keyed input the standalone BIND_K would and emitting the
 	// per-fork outs bundle directly — no separate BIND_K, no _map hop (#99).
-	if _, ok := keyedFuseable(c, prog); ok {
+	if cp.keyedKind == keyedFused {
 		fmt.Fprintf(body, "    ch_%s_l = %s_K(%s).toList()\n",
 			c.Name, fusedName(pipeline, c.Name), keyedBindCall(c.Bindings, bindName(pipeline, c.Name)))
 
@@ -680,7 +608,10 @@ func genKeyedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, 
 	alias := keyedCallAlias(pipeline, c.Name)
 	fmt.Fprintf(body, "    %s_K(%s)\n", bind, keyedBindCall(c.Bindings, bind))
 
-	if c.Disabled == nil {
+	// The DISABLE_K join must agree with genKeyedPipeProcesses' decision to
+	// emit that process, so both read the plan's keyedDisableTask — the same
+	// value, never re-derived from c.Disabled here.
+	if !cp.keyedDisableTask {
 		fmt.Fprintf(body, "    ch_%s_l = %s(%s_K.out).toList()\n", c.Name, alias, bind)
 
 		return
@@ -706,7 +637,7 @@ func genKeyedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, 
 // are regrouped by stripping the innermost key segment (so arbitrary nesting
 // works) and merged per outer fork. A remainder join keeps an outer fork whose
 // inner collection was empty (it merges to null).
-func genKeyedMappedCallBody(body *strings.Builder, prog *ir.Program, pipeline string, c ir.Call) {
+func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call, cp callPlan) {
 	fork := forkName(pipeline, c.Name)
 	merge := mergeName(pipeline, c.Name)
 	alias := keyedCallAlias(pipeline, c.Name)
@@ -716,9 +647,9 @@ func genKeyedMappedCallBody(body *strings.Builder, prog *ir.Program, pipeline st
 	// once (forkElementsKeyed) and each inner fork assembles its args from its own
 	// element — no FORK_K resolve. The MERGE_K gather is unchanged (fed the
 	// scatter's composite-keyed outs + per-outer keys).
-	if _, field, ok := keyedScatterable(c, prog); ok {
+	if cp.keyedKind == keyedScatter {
 		fmt.Fprintf(body, "    ek_%[1]s = pa_l.flatMap { x -> x }.flatMap { ok, pab -> Mro2nf.forkElementsKeyed(ok, pab, '%[2]s', '%[3]s') }\n",
-			c.Name, field, mapModeArg(c))
+			c.Name, cp.keyedScatterField, mapModeArg(c))
 		fmt.Fprintf(body, "    io_%[1]s = %[2]s_KS(ek_%[1]s, types, %[3]s)\n",
 			c.Name, fork, specFile(bindName(pipeline, c.Name)))
 		// groupTuple's per-group order is completion order; sorting the grouped
@@ -737,7 +668,7 @@ func genKeyedMappedCallBody(body *strings.Builder, prog *ir.Program, pipeline st
 	// FORKBIND reuses the call's bind spec (see genKeyedForkBindProcess).
 	forkInput := keyedBindCall(c.Bindings, bindName(pipeline, c.Name))
 	if c.Disabled != nil {
-		forkInput = genKeyedMappedDisableGate(body, pipeline, c)
+		forkInput = genKeyedMappedDisableGate(body, pipeline, c, cp)
 	}
 
 	fmt.Fprintf(body, "    %s_K(%s)\n", fork, forkInput)
@@ -765,14 +696,18 @@ func genKeyedMappedCallBody(body *strings.Builder, prog *ir.Program, pipeline st
 // run/skip branch for a disabled nested map call. It returns the run-branch
 // channel expression (the FORKBIND input with the disable-flag bundle stripped)
 // and emits sk_<call>, the keyed null bundles for skipped outer forks.
-func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call) string {
+func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call, cp callPlan) string {
 	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
 
 	// Native gating (#59, Lever 2) for a self.<field> flag: read it from the
 	// per-fork pipeline-args bundle (row[1]) — no keyed DISABLE task, no join.
-	// (An upstream-ref keyed disable keeps the DISABLE_K bind: its position in the
-	// keyed row depends on the bind's ref order.)
-	if src, field, ok := nativeDisableGate(c); ok && src == "pa" {
+	// The DECISION is the plan's keyedDisableTask (set from keyedNativeDisable,
+	// so it cannot drift from genKeyedPipeProcesses' DISABLE_K emission);
+	// nativeDisableGate only extracts the field name here. (An upstream-ref
+	// keyed disable keeps the DISABLE_K bind: its position in the keyed row
+	// depends on the bind's ref order.)
+	if !cp.keyedDisableTask {
+		_, field, _ := nativeDisableGate(c)
 		fmt.Fprintf(body, `    gk_%[1]s = %[2]s.branch { row ->
         def off = Mro2nf.disabledDir(row[1], '%[3]s')
         run: !off
@@ -965,7 +900,11 @@ func keyedReachable(prog *ir.Program, pl emitPlan) map[string]bool {
 			// fused process (genKeyedFusedStageProcess), so it needs no
 			// wf_<stage>_map variant — don't mark the callee keyed-reachable
 			// (matches genKeyedPipeIncludes skipping its import).
-			if _, ok := keyedFuseable(c, prog); ok && keyed {
+			// pl.pipes is complete before keyedReachable runs (buildPlan fills
+			// every pipeline first); a map miss here would read the zero
+			// callPlan (keyedBind) and silently mis-mark reachability, so that
+			// ordering is load-bearing.
+			if keyed && pl.pipes[callable].calls[c.Name].keyedKind == keyedFused {
 				continue
 			}
 
@@ -2423,15 +2362,6 @@ func nativeDisableGate(c ir.Call) (string, string, bool) {
 	}
 
 	return "", "", false
-}
-
-// keyedNativeDisable reports whether a mapped call's keyed disable gate reads the
-// flag natively (a self.<field> flag from the per-fork args) — the only keyed
-// case genKeyedMappedDisableGate gates without a DISABLE_K bind.
-func keyedNativeDisable(c ir.Call) bool {
-	src, _, ok := nativeDisableGate(c)
-
-	return ok && src == "pa"
 }
 
 // calleeModule returns the exported workflow name and module path for a
