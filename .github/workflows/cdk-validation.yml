@@ -1,5 +1,11 @@
 name: CDK Validation
 
+# NOTE: this workflow is path-filtered. Do NOT add its check to the branch-
+# protection required checks: a required check that never triggers on non-CDK
+# PRs deadlocks merges as "Expected — Waiting for status". As of 2026-07 the
+# required contexts (Lint, Build, Unit tests, the two E2E suites) do not
+# include it — keep it that way.
+#
 # The deploy/awsbatch-cdk app is TypeScript, invisible to the Go-centric PR
 # Validation workflow — without this, a dependabot bump of aws-cdk-lib would
 # merge green having exercised zero of its code (#133). A separate workflow
@@ -35,6 +41,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
+          # Keep in lockstep with the @types/node major in package.json.
           node-version: 24
           cache: npm
           cache-dependency-path: deploy/awsbatch-cdk/package-lock.json
