@@ -73,6 +73,14 @@ linters:
           - unparam
           - noctx
           - funlen
+      # The e2e harness's package-level state is deliberate: shared fixture
+      # tables (goldenCases, lintConfigs, ...) and once-per-process caches
+      # owned by TestMain/sync.Once (repo root, built binaries, the docker iso
+      # image). `go test` offers no injection seam for these, and threading
+      # them through every helper would only obscure the harness.
+      - path: "test/e2e/"
+        linters:
+          - gochecknoglobals
 formatters:
   enable:
     - gci
