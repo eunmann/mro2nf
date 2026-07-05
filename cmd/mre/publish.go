@@ -389,7 +389,9 @@ var (
 // non-empty single path segment of at most 255 bytes that is not "." or "..",
 // otherwise the reason the name is illegal. Publishing under an illegal key
 // would create an invalid path (or ENAMETOOLONG), so the caller skips it like
-// Martian does.
+// Martian does. The rune checks are a single left-to-right scan, matching
+// Martian's iteration, so the reported reason is that of the FIRST offending
+// rune (e.g. "a\x00/b" is a null-character error, not a '/' error).
 func legalFilenameErr(k string) error {
 	const maxNameLen = 255
 
@@ -400,11 +402,16 @@ func legalFilenameErr(k string) error {
 		return errNameEmpty
 	case k == "." || k == "..":
 		return errNameReserved
-	case strings.ContainsRune(k, '/'):
-		return errNameSlash
-	case strings.ContainsRune(k, 0):
-		return errNameNul
-	default:
-		return nil
 	}
+
+	for _, c := range k {
+		switch c {
+		case '/':
+			return errNameSlash
+		case 0:
+			return errNameNul
+		}
+	}
+
+	return nil
 }

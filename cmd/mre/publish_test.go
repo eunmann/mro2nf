@@ -336,11 +336,13 @@ func TestPublishOutsMapIllegalKeyWarns(t *testing.T) {
 	longKey := strings.Repeat("k", 256)
 	params := []ir.Param{{Name: "reports", BaseType: "txt", IsFile: true, MapDim: 1}}
 	outs := map[string]any{"reports": map[string]any{
-		"a/b":   marker("L0000"),
-		"":      marker("L0001"),
-		"..":    marker("L0002"),
-		longKey: marker("L0003"),
-		"ok":    marker("L0004"),
+		"a/b":     marker("L0000"),
+		"":        marker("L0001"),
+		"..":      marker("L0002"),
+		longKey:   marker("L0003"),
+		"a\x00/b": marker("L0005"),
+		"a/\x00b": marker("L0006"),
+		"ok":      marker("L0004"),
 	}}
 
 	pub := newPublisher(nil)
@@ -373,8 +375,21 @@ func TestPublishOutsMapIllegalKeyWarns(t *testing.T) {
 		}
 	}
 
-	if n := strings.Count(warnings.String(), "skipping map key"); n != 4 {
-		t.Errorf("warning count = %d, want 4 (one per skipped key):\n%s", n, warnings.String())
+	// The reason names the FIRST offending rune left-to-right, matching
+	// Martian's IsLegalUnixFilename scan: NUL before '/' reports the null-
+	// character reason, '/' before NUL reports the '/' reason.
+	for k, reason := range map[string]string{
+		"a\x00/b": "null characters are not allowed in filenames",
+		"a/\x00b": "'/' is not allowed in filenames",
+	} {
+		wantLine := fmt.Sprintf("mre: publish: skipping map key %q of output %q: %s\n", k, "reports", reason)
+		if !strings.Contains(warnings.String(), wantLine) {
+			t.Errorf("missing warning for key %q: want substring %q in:\n%s", k, wantLine, warnings.String())
+		}
+	}
+
+	if n := strings.Count(warnings.String(), "skipping map key"); n != 6 {
+		t.Errorf("warning count = %d, want 6 (one per skipped key):\n%s", n, warnings.String())
 	}
 
 	if strings.Contains(warnings.String(), `"ok"`) {
