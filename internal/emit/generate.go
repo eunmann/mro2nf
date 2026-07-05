@@ -465,8 +465,8 @@ func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
 	// Every callee input must be value-only, not just the split param: the _KS
 	// forkbind assembles fargs without the type manifest, so a file-typed
 	// BROADCAST binding would not re-stage its leaf. This is stricter than the
-	// non-keyed scatter (which gates only the split), erring safe for the keyed
-	// path until a file-broadcast fixture exercises it.
+	// non-keyed scatter (which gates only the split); the rejection is pinned
+	// by map_pipe_nested_file (TestDiagnoseNativeKeyedScatter).
 	for i := range s.In {
 		if hasFileLeaf(s.In[i], prog.Structs) {
 			return nil, "", false
@@ -1583,8 +1583,9 @@ func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 }
 
 // partitionGateablePreflight splits calls into the gateable preflight calls
-// (preflight, plain — not mapped/disabled — and bound only to pipeline inputs or
-// literals) and everything else, each in original order. A gateable preflight
+// (preflight, plain — not mapped/disabled — and bound only to pipeline inputs
+// or literals; the condition is preflightUngateable, shared with the Warnings
+// wording) and everything else, each in original order. A gateable preflight
 // depends on nothing but pipeargs, so it can run first and gate the rest without
 // a cycle. A preflight that references another call is left in place (it cannot
 // gate the pipeline it is downstream of) and keeps its prior in-order behavior.
@@ -1592,7 +1593,7 @@ func partitionGateablePreflight(calls []ir.Call) ([]ir.Call, []ir.Call) {
 	var pre, rest []ir.Call
 
 	for _, c := range calls {
-		if c.Preflight && !c.Mapped && c.Disabled == nil && !bindingsRefCall(c.Bindings) {
+		if c.Preflight && preflightUngateable(c) == "" {
 			pre = append(pre, c)
 		} else {
 			rest = append(rest, c)
