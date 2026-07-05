@@ -358,3 +358,36 @@ func keysOf(m map[string]pipePlan) []string {
 
 	return ks
 }
+
+// TestPlanKeyedKindFlagInvariant pins planKeyedCall's documented featureSet
+// independence: the keyed decision (and payload) must be identical under every
+// flag combination, since the keyed layer's correctness for flag-composed
+// runs rests on it. If a future change threads a flag into the keyed
+// predicates, this forces the composed golden coverage question to be asked.
+func TestPlanKeyedKindFlagInvariant(t *testing.T) {
+	sets := []featureSet{
+		{},
+		{native: true},
+		{fuseChains: true, foldDisables: true, native: true, nativeRunner: true},
+	}
+
+	for _, fixture := range []string{"map_pipe_nested", "map_pipe_disabled_nested", "map_pipe_split", "kitchen_sink"} {
+		prog := lowerFixture(t, fixture)
+
+		base := buildPlan(prog, sets[0])
+
+		for _, f := range sets[1:] {
+			pl := buildPlan(prog, f)
+
+			for name, pp := range base.pipes {
+				for call, cp := range pp.calls {
+					got := pl.pipes[name].calls[call]
+					if got.keyedKind != cp.keyedKind || got.keyedScatterField != cp.keyedScatterField ||
+						got.keyedDisableTask != cp.keyedDisableTask || got.keyedStage != cp.keyedStage {
+						t.Errorf("%s %s.%s: keyed decision varies with featureSet %+v", fixture, name, call, f)
+					}
+				}
+			}
+		}
+	}
+}

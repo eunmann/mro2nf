@@ -608,7 +608,10 @@ func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call, cp call
 	alias := keyedCallAlias(pipeline, c.Name)
 	fmt.Fprintf(body, "    %s_K(%s)\n", bind, keyedBindCall(c.Bindings, bind))
 
-	if c.Disabled == nil {
+	// The DISABLE_K join must agree with genKeyedPipeProcesses' decision to
+	// emit that process, so both read the plan's keyedDisableTask — the same
+	// value, never re-derived from c.Disabled here.
+	if !cp.keyedDisableTask {
 		fmt.Fprintf(body, "    ch_%s_l = %s(%s_K.out).toList()\n", c.Name, alias, bind)
 
 		return
@@ -897,6 +900,10 @@ func keyedReachable(prog *ir.Program, pl emitPlan) map[string]bool {
 			// fused process (genKeyedFusedStageProcess), so it needs no
 			// wf_<stage>_map variant — don't mark the callee keyed-reachable
 			// (matches genKeyedPipeIncludes skipping its import).
+			// pl.pipes is complete before keyedReachable runs (buildPlan fills
+			// every pipeline first); a map miss here would read the zero
+			// callPlan (keyedBind) and silently mis-mark reachability, so that
+			// ordering is load-bearing.
 			if keyed && pl.pipes[callable].calls[c.Name].keyedKind == keyedFused {
 				continue
 			}
