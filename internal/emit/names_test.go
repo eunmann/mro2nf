@@ -25,16 +25,20 @@ import (
 // inventory entry fails the coverage check at the end too.
 func TestStageProcessNameInventory(t *testing.T) {
 	fixtures := []struct {
-		name   string
-		native bool
+		name string
+		mode string       // labels the emit mode in failure messages
+		opts emit.Options // only the mode flags; emittedProcessNames fills the rest
 	}{
-		{"split_test", false},      // plain + fused split triads, fused non-split (#16)
-		{"stage_entry", false},     // bare stage process
-		{"fork_min", false},        // keyed non-split _MAP
-		{"fork_min", true},         // native scatter: bare fused per-call process (#76)
-		{"map_pipe_split", false},  // keyed split triad (_SPLIT_K/_MAIN_K/_JOIN_K)
-		{"map_pipe", false},        // keyed fused bind+main (_K, #99)
-		{"map_pipe_nested", false}, // keyed element scatter (_KS, #99)
+		{"split_test", "default", emit.Options{}},                           // plain + fused split triads, fused non-split (#16)
+		{"stage_entry", "default", emit.Options{}},                          // bare stage process
+		{"fork_min", "default", emit.Options{}},                             // keyed non-split _MAP
+		{"fork_min", "native", emit.Options{Native: true}},                  // native scatter: bare fused per-call process (#76)
+		{"map_pipe_split", "default", emit.Options{}},                       // keyed split triad (_SPLIT_K/_MAIN_K/_JOIN_K)
+		{"map_pipe", "default", emit.Options{}},                             // keyed fused bind+main (_K, #99)
+		{"map_pipe_nested", "default", emit.Options{}},                      // keyed element scatter (_KS, #99)
+		{"chain_fuse3", "fuse-chains", emit.Options{FuseChains: true}},      // fused linear chain (#59 Lever 4)
+		{"fold_disable", "fold-disables", emit.Options{FoldDisables: true}}, // always-off stage pruned (#59 Lever 1)
+		{"split_test", "native-runner", emit.Options{NativeRunner: true}},   // direct-call runner stage hop (#79)
 	}
 
 	seen := map[string]bool{}
@@ -43,12 +47,12 @@ func TestStageProcessNameInventory(t *testing.T) {
 		prog := lowerNamesFixture(t, fx.name)
 		inv := inventoryNames(prog)
 
-		for _, name := range emittedProcessNames(t, fx.name, prog, fx.native) {
+		for _, name := range emittedProcessNames(t, fx.name, prog, fx.opts) {
 			tag, ok := inv[name]
 			if !ok {
-				t.Errorf("%s (native=%v): process name %q is not in the inventory shared with "+
+				t.Errorf("%s (%s): process name %q is not in the inventory shared with "+
 					"internal/overrides (emit.PlainStageSuffixes/FusedCallSuffixes/ScatterCallSuffixes); "+
-					"extend it so override selectors keep covering every stage process", fx.name, fx.native, name)
+					"extend it so override selectors keep covering every stage process", fx.name, fx.mode, name)
 
 				continue
 			}
@@ -167,11 +171,12 @@ func stubMre(t *testing.T) string {
 	return path
 }
 
-// emittedProcessNames emits the fixture and returns every process definition
+// emittedProcessNames emits the fixture under opts (mode flags set by the
+// caller; the paths are filled in here) and returns every process definition
 // name and every capitalized include-alias (a process alias such as the fused
 // _MN/_JN imports; lowercase wf_/wfk_ aliases are workflows, which withName
 // never targets) across the generated .nf files.
-func emittedProcessNames(t *testing.T, fixture string, prog *ir.Program, native bool) []string {
+func emittedProcessNames(t *testing.T, fixture string, prog *ir.Program, opts emit.Options) []string {
 	t.Helper()
 
 	base := "../../testdata/" + fixture
@@ -182,16 +187,15 @@ func emittedProcessNames(t *testing.T, fixture string, prog *ir.Program, native 
 	}
 
 	dir := t.TempDir()
-	if err := emit.Emit(prog, emit.Options{
-		OutDir:    dir,
-		Mre:       stubMre(t),
-		Shell:     "/x/martian_shell.py",
-		MROFile:   "pipeline.mro",
-		MRODir:    base,
-		StageCode: code,
-		Native:    native,
-	}); err != nil {
-		t.Fatalf("emit %s (native=%v): %v", fixture, native, err)
+	opts.OutDir = dir
+	opts.Mre = stubMre(t)
+	opts.Shell = "/x/martian_shell.py"
+	opts.MROFile = "pipeline.mro"
+	opts.MRODir = base
+	opts.StageCode = code
+
+	if err := emit.Emit(prog, opts); err != nil {
+		t.Fatalf("emit %s (opts %+v): %v", fixture, opts, err)
 	}
 
 	var names []string
