@@ -341,9 +341,12 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 		role, outsList = types.RoleOut, "total,report,note"
 	}
 
+	// The stacks differ only in the invocation head (mre additionally takes
+	// the adapter's -shell and -lang, see stageCmd); the flag tail appended
+	// below is identical for both.
 	args := []string{phase, "-stagecode", e.stageCode, "-call", "CONF", "-mro", "pipeline.mro"}
 	if stack == "mre" {
-		args = append([]string{phase, "-shell", e.shell, "-stagecode", e.stageCode, "-lang", "py", "-call", "CONF", "-mro", "pipeline.mro"}, args[5:]...)
+		args = []string{phase, "-shell", e.shell, "-stagecode", e.stageCode, "-lang", "py", "-call", "CONF", "-mro", "pipeline.mro"}
 	}
 
 	args = append(args, "-args", e.argsDir, "-types", e.typesFile, "-callable", e.callable, "-role", role,
