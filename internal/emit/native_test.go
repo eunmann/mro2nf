@@ -363,3 +363,71 @@ func TestGenerateNativeScatterUpstreamElements(t *testing.T) {
 		t.Errorf("value-only upstream scatter must use the element path, not forkScatterRef:\n%s", mod)
 	}
 }
+
+// TestGenerateKeyedGatherPinsInputOrder guards -resume stability (#123): every
+// keyed gather that groups per-fork/per-chunk outputs with groupTuple must sort
+// the grouped bundle list by name before handing it to the gather task. The
+// grouped ORDER is completion order, and a task's input tuple order is part of
+// its -resume cache key — output bytes are already safe (in-task `sort -V`),
+// but an arrival-ordered input list would re-execute the gather on replay.
+const sortedGather = ".sort { a, b -> a.name <=> b.name }"
+
+func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
+	f := featureSet{native: true}
+
+	// Keyed nested map on the driver element scatter (_KS): MERGE_K's grouped
+	// souts are sorted inside the remainder-join map.
+	prog := lowerFixture(t, "map_pipe_nested")
+	g := genCtx{
+		entry: "OUTER", mroFile: "pipeline.mro", mre: "mre", shell: "/x/sh.py",
+		features: f, code: map[string]string{"DBL": "/x/dbl"}, plan: buildPlan(prog, f),
+	}
+
+	scatter := generatePipeModule(prog.Pipelines["INNER"], prog, g)
+	wantScatter := ".groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, (so ?: [])" +
+		sortedGather + ", fk) }"
+
+	if !strings.Contains(scatter, "mj_DBL = io_DBL.keys.join(io_DBL.outs.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }"+wantScatter) {
+		t.Errorf("keyed scatter gather must sort its grouped souts by name:\n%s", scatter)
+	}
+
+	// Keyed nested map on the FORK_K path (disabled, so not scatterable): same
+	// sorted gather.
+	dis := lowerFixture(t, "map_pipe_disabled_nested")
+	gd := genCtx{
+		entry: "OUTER", mroFile: "pipeline.mro", mre: "mre", shell: "/x/sh.py",
+		features: f, code: map[string]string{"DBL": "/x/dbl"}, plan: buildPlan(dis, f),
+	}
+
+	forked := generatePipeModule(dis.Pipelines["INNER"], dis, gd)
+	// Anchored on the FORK_K remainder-join head so the scatter path's
+	// identical sorted suffix cannot satisfy this assertion.
+	wantFork := "mj_DBL = FORK_5_INNER__DBL_K.out.keys.join(io_DBL.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }" +
+		wantScatter
+
+	if !strings.Contains(forked, wantFork) {
+		t.Errorf("keyed FORK_K gather must sort its grouped souts by name:\n%s", forked)
+	}
+
+	// Keyed split triad: JOIN_K's grouped chunk outs are sorted the same way.
+	ms := lowerFixture(t, "map_split")
+	gm := genCtx{
+		entry: "MS", mroFile: "pipeline.mro", mre: "mre", shell: "/x/sh.py",
+		features: f, code: map[string]string{"SUMSQ": "/x/sumsq"}, plan: buildPlan(ms, f),
+	}
+
+	triad := generateStageModule(ms.Stages["SUMSQ"], gm)
+	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[3], (t[4] ?: [])" +
+		sortedGather + ", t[1], t[2]) }"
+
+	if !strings.Contains(triad, wantTriad) {
+		t.Errorf("keyed split triad must sort JOIN_K's grouped chunk outs by name:\n%s", triad)
+	}
+
+	// No gather may keep the bare arrival-ordered list.
+	for name, mod := range map[string]string{"scatter": scatter, "fork_k": forked, "triad": triad} {
+		if strings.Contains(mod, "so ?: [], fk") || strings.Contains(mod, "t[4] ?: [], t[1]") {
+			t.Errorf("%s module still gathers in arrival order:\n%s", name, mod)
+		}
+	}
+}

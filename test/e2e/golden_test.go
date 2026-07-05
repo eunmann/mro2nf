@@ -110,6 +110,20 @@ var goldenCases = []struct {
 	{"empty_map_fork", "empty_map_fork", "expected/outs.json"},
 	{"empty_fork_min_override", "empty_fork_min", "expected/override_outs.json"},
 	{"runtime_empty_forks", "runtime_empty_forks", "expected/outs.json"},
+	// #127 value-chain empty-fork fidelity — the three divergence classes the
+	// old entrySplit comment admitted, closed by knownInvocation propagation:
+	// a sub-pipeline split chaining to an entry value through the parent
+	// call's bindings, an in-pipeline cascade `map call SECOND(split
+	// FIRST.scaled)` over an invocation-known-empty FIRST, and a MIXED split
+	// (entry ref zipped with an upstream ref, entry side empty). mrp prunes
+	// all three to null; the _override cases prove the marking stays a
+	// runtime shape rule (launch-override the entry side non-empty and the
+	// forks run).
+	{"empty_fork_sub", "empty_fork_sub", "expected/outs.json"},
+	{"empty_fork_sub_override", "empty_fork_sub", "expected/override_outs.json"},
+	{"empty_fork_cascade", "empty_fork_cascade", "expected/outs.json"},
+	{"empty_fork_cascade_override", "empty_fork_cascade", "expected/override_outs.json"},
+	{"empty_fork_mixed", "empty_fork_mixed", "expected/outs.json"},
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},
@@ -452,6 +466,13 @@ func TestNativeMode(t *testing.T) {
 		{"map_file_split", "expected/outs.json"},
 		{"multisplit", "expected/outs.json"},
 		{"map_split", "expected/outs.json"},
+		// #127 value-chain emptyNull under -native: a sub-pipeline split fed an
+		// entry value through the parent's bindings (in-workflow scatter inside
+		// the sub-pipeline), and a MIXED entry+upstream zip (multi-split, so it
+		// keeps the FORK resolve). Both must merge the zero-fork run to null,
+		// matching mrp's static prune.
+		{"empty_fork_sub", "expected/outs.json"},
+		{"empty_fork_mixed", "expected/outs.json"},
 	}
 
 	for _, tc := range cases {
@@ -614,6 +635,11 @@ func TestNativeScatter(t *testing.T) {
 		{"fork_disabled_sub", false},
 		{"fork_disabled_skip", false},
 		{"fork_fanout", true},
+		// #127 cascade under -native: SECOND scatters over FIRST.scaled with
+		// emptyNull set by the knownInvocation cascade — the zero-width
+		// upstream scatter runs its keys-only sentinel and merges to null.
+		// FIRST keeps its MERGE (two consumers: SECOND's split + the return).
+		{"empty_fork_cascade", true},
 	}
 
 	for _, tc := range cases {

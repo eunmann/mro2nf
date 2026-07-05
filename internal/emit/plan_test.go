@@ -1,6 +1,8 @@
 package emit
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/frontend"
@@ -114,6 +116,15 @@ func TestBuildPlanEmptyNull(t *testing.T) {
 		{"empty_fork_min", "EF", "SCALE"},
 		{"empty_map_fork", "EMP", "DBL"},
 		{"fork_min", "SCALE_ALL", "SCALE"}, // non-empty entry source: flagged too (never fires at runtime)
+		// #127 value-chain propagation (knownInvocation): a sub-pipeline split
+		// chained to an entry value through the parent call's bindings, the
+		// in-pipeline cascade through a mapped call's output, and a MIXED
+		// entry+upstream zip must all be flagged — mrp's static resolver
+		// prunes each to null when the entry side is empty.
+		{"empty_fork_sub", "SUB", "SCALE"},
+		{"empty_fork_cascade", "EFC", "FIRST"},
+		{"empty_fork_cascade", "EFC", "SECOND"},
+		{"empty_fork_mixed", "EFM", "PAIR"},
 	} {
 		prog := lowerFixture(t, fx.fixture)
 
@@ -133,13 +144,18 @@ func TestBuildPlanEmptyNull(t *testing.T) {
 	}
 }
 
-// TestEntryValueShapes pins entryValue's classification directly: literals and
+// TestKnownValueShapes pins invKnown.known's leaf classification: literals and
 // ANY entry self ref (whole-field or projected — self.cfg.list is equally
-// invocation-known) flag; upstream refs and sub-pipeline self refs do not.
-func TestEntryValueShapes(t *testing.T) {
+// invocation-known) flag; upstream refs and unbound sub-pipeline self refs do
+// not.
+func TestKnownValueShapes(t *testing.T) {
 	entry := &ir.Pipeline{Name: "TOP"}
 	sub := &ir.Pipeline{Name: "SUB"}
-	prog := &ir.Program{Entry: &ir.EntryCall{Callable: "TOP"}}
+	prog := &ir.Program{
+		Entry:     &ir.EntryCall{Callable: "TOP"},
+		Pipelines: map[string]*ir.Pipeline{"TOP": entry, "SUB": sub},
+	}
+	k := knownInvocation(prog)
 
 	cases := []struct {
 		name string
@@ -150,16 +166,148 @@ func TestEntryValueShapes(t *testing.T) {
 		{"literal", entry, ir.Value{Literal: []byte("[]")}, true},
 		{"whole-field entry self", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, true},
 		{"projected entry self", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "cfg", Output: "list"}}, true},
-		{"sub-pipeline self", sub, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, false},
+		{"unbound sub-pipeline self", sub, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, false},
 		{"upstream ref", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: "UP", Output: "xs"}}, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := entryValue(prog, tc.p, tc.v); got != tc.want {
-				t.Errorf("entryValue(%s) = %v, want %v", tc.name, got, tc.want)
+			if got := k.known(prog, tc.p, tc.v, true); got != tc.want {
+				t.Errorf("known(%s) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
+	}
+}
+
+// lowerMRO parses and lowers an inline .mro source (src paths unchecked), for
+// pinning analysis shapes no committed fixture needs to run end-to-end.
+func lowerMRO(t *testing.T, src string) *ir.Program {
+	t.Helper()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.mro")
+
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatalf("write mro: %v", err)
+	}
+
+	ast, err := frontend.Parse(path, []string{dir}, false)
+	if err != nil {
+		t.Fatalf("parse inline mro: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast)
+	if err != nil {
+		t.Fatalf("lower inline mro: %v", err)
+	}
+
+	return prog
+}
+
+// TestKnownInvocationConservative pins the widen-only guardrails of the #127
+// propagation — the shapes that must NOT be marked, because marking them
+// would turn a RUNTIME-empty fork into null where mrp merges the typed empty.
+func TestKnownInvocationConservative(t *testing.T) {
+	// A pipeline instantiated at several sites shares one plan, so an input is
+	// invocation-known only when EVERY site binds it so: S2 binds a stage
+	// output, which must unmark SUB.SC for S1 too.
+	multi := lowerMRO(t, `
+stage GEN(out int[] xs, src py "s/gen",)
+stage SC(in int v, out int w, src py "s/sc",)
+pipeline SUB(in int[] vals, out int[] w,){
+    map call SC(v = split self.vals,)
+    return (w = SC.w,)
+}
+pipeline TOP(in int[] values, out int[] a, out int[] b,){
+    call GEN()
+    call SUB as S1(vals = self.values,)
+    call SUB as S2(vals = GEN.xs,)
+    return (a = S1.w, b = S2.w,)
+}
+call TOP(values = [],)
+`)
+	if knownInvocation(multi).emptySplit["SUB"]["SC"] {
+		t.Error("SUB is also instantiated with a runtime collection (S2); its split must not be marked")
+	}
+
+	// A cascade source has invocation-known LENGTH but runtime element values,
+	// so a map-called sub-pipeline fed its ELEMENTS must not mark an inner
+	// split (mrp resolves those elements at runtime); the outer scatter over
+	// the cascade output itself IS marked.
+	elem := lowerMRO(t, `
+stage DUP(in int[] xs, out int[] ys, src py "s/dup",)
+stage SC(in int v, out int w, src py "s/sc",)
+pipeline INNER(in int[] items, out int[] w,){
+    map call SC(v = split self.items,)
+    return (w = SC.w,)
+}
+pipeline TOP(in int[][] grid, out int[][] w,){
+    map call DUP(xs = split self.grid,)
+    map call INNER(items = split DUP.ys,)
+    return (w = INNER.w,)
+}
+call TOP(grid = [],)
+`)
+
+	ek := knownInvocation(elem)
+	if !ek.emptySplit["TOP"]["DUP"] || !ek.emptySplit["TOP"]["INNER"] {
+		t.Error("entry split and its cascade consumer must both be marked")
+	}
+
+	if ek.emptySplit["INNER"]["SC"] {
+		t.Error("INNER's elements are runtime values (DUP outputs); its inner split must not be marked")
+	}
+
+	// A DISABLED producer is never known: its gate may null it at runtime,
+	// where mrp's typed-empty rule applies — the consumer must stay unmarked.
+	dis := lowerMRO(t, `
+stage SC(in int v, out int w, src py "s/sc",)
+pipeline P(in int[] xs, in bool skip, out int[] a, out int[] b,){
+    map call SC as A(v = split self.xs,) using (disabled = self.skip,)
+    map call SC as B(v = split A.w,)
+    return (a = A.w, b = B.w,)
+}
+call P(xs = [], skip = false,)
+`)
+
+	dk := knownInvocation(dis)
+	if !dk.emptySplit["P"]["A"] {
+		t.Error("A splits an entry source; its own merge is marked even when disable-gated")
+	}
+
+	if dk.emptySplit["P"]["B"] {
+		t.Error("B splits a disabled call's output — runtime-nullable, must not be marked")
+	}
+
+	// A PROJECTED split of a length-only-known input must not mark: INNER.ps
+	// is lenIn-only (bound to a cascade collection — invocation-known LENGTH,
+	// runtime values), and length knowledge of the container proves nothing
+	// about a projected field, so `split self.ps.arr` requires VALUE
+	// knowledge. The guard is structural (invKnown.known), not a per-type
+	// argument about which projections happen to preserve the outer length.
+	proj := lowerMRO(t, `
+struct Pair(int[] arr,)
+stage MK(in int x, out Pair p, src py "s/mk",)
+stage SC(in int[] v, out int w, src py "s/sc",)
+pipeline INNER(in Pair[] ps, out int[] w,){
+    map call SC(v = split self.ps.arr,)
+    return (w = SC.w,)
+}
+pipeline TOP(in int[] xs, out int[] w,){
+    map call MK(x = split self.xs,)
+    call INNER(ps = MK.p,)
+    return (w = INNER.w,)
+}
+call TOP(xs = [],)
+`)
+
+	pk := knownInvocation(proj)
+	if !pk.lenIn["INNER"]["ps"] || pk.valIn["INNER"]["ps"] {
+		t.Fatal("test premise: INNER.ps must be lenIn-only (cascade-bound)")
+	}
+
+	if pk.emptySplit["INNER"]["SC"] {
+		t.Error("a projected split of a lenIn-only input must not be marked (value knowledge required)")
 	}
 }
 
