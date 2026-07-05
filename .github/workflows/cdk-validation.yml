@@ -1,0 +1,48 @@
+name: CDK Validation
+
+# The deploy/awsbatch-cdk app is TypeScript, invisible to the Go-centric PR
+# Validation workflow — without this, a dependabot bump of aws-cdk-lib would
+# merge green having exercised zero of its code (#133). A separate workflow
+# with `paths:` (rather than a job in pr-validation.yml) means it only runs —
+# and only reports a check — when the CDK app actually changed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/awsbatch-cdk/**"
+      - ".github/workflows/cdk-validation.yml"
+  pull_request:
+    paths:
+      - "deploy/awsbatch-cdk/**"
+      - ".github/workflows/cdk-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  cdk:
+    name: Compile + synth
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: deploy/awsbatch-cdk
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: deploy/awsbatch-cdk/package-lock.json
+      - name: Install (reproducible, from the committed lockfile)
+        run: npm ci
+      - name: Type-check
+        run: npx tsc --noEmit
+      # Offline by design: bin/app.ts is environment-agnostic (Fn::GetAZs, no
+      # account lookups), so synth needs no AWS credentials.
+      - name: Synthesize
+        run: npx cdk synth --quiet

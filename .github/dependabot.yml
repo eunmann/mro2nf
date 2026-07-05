@@ -23,8 +23,9 @@ updates:
       actions-minor-patch:
         update-types: ["minor", "patch"]
 
-  # AWS Batch CDK app. No lockfile is committed, so bumps rewrite the
-  # package.json ranges.
+  # AWS Batch CDK app. Its package-lock.json is committed, so bumps update the
+  # lockfile (and package.json ranges when needed) and CI (cdk-validation.yml)
+  # compiles + synths the app on every bump.
   - package-ecosystem: npm
     directory: /deploy/awsbatch-cdk
     schedule:
