@@ -100,60 +100,76 @@ func TestWarningsPreflightCallRef(t *testing.T) {
 
 // TestEmitHealthOmicsTemplateEntries checks every entry input is declared in
 // parameter-template.json (undeclared parameters are rejected by HealthOmics,
-// which would silently disable the override path), with the S3 wording for
-// file-bearing inputs.
+// which would silently disable the override path): by default with the S3
+// wording for file-bearing inputs, and under -native — where the values are
+// baked and the workflow rejects a supplied entry parameter (#116) — with a
+// description stating the bake instead of inviting an override.
 func TestEmitHealthOmicsTemplateEntries(t *testing.T) {
-	mre := filepath.Join(t.TempDir(), "mre")
-	if err := os.WriteFile(mre, []byte("x"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	for _, tc := range []struct {
+		name     string
+		native   bool
+		wantDesc string
+	}{
+		{name: "default_invites_override", native: false, wantDesc: "S3 URI"},
+		{name: "native_states_bake", native: true, wantDesc: "cannot be overridden"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A runnable no-op stands in for mre: -native execs it to bake the
+			// entry args (bakeEntryArgs), and the container target copies it
+			// into the Docker build context.
+			mre := filepath.Join(t.TempDir(), "mre")
+			if err := os.WriteFile(mre, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 
-	base := "../../testdata/entry_file"
+			base := "../../testdata/entry_file"
 
-	ast, err := frontend.Parse(base+"/pipeline.mro", []string{base}, false)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
+			ast, err := frontend.Parse(base+"/pipeline.mro", []string{base}, false)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
 
-	prog, err := frontend.Lower(ast)
-	if err != nil {
-		t.Fatalf("lower: %v", err)
-	}
+			prog, err := frontend.Lower(ast)
+			if err != nil {
+				t.Fatalf("lower: %v", err)
+			}
 
-	code := map[string]string{}
-	for name := range prog.Stages {
-		code[name] = t.TempDir()
-	}
+			code := map[string]string{}
+			for name := range prog.Stages {
+				code[name] = t.TempDir()
+			}
 
-	dir := t.TempDir()
-	if err := emit.Emit(prog, emit.Options{
-		OutDir: dir, Mre: mre, MROFile: "pipeline.mro", Target: emit.TargetHealthOmics,
-		StageCode: code,
-	}); err != nil {
-		t.Fatalf("emit: %v", err)
-	}
+			dir := t.TempDir()
+			if err := emit.Emit(prog, emit.Options{
+				OutDir: dir, Mre: mre, MROFile: "pipeline.mro", Target: emit.TargetHealthOmics,
+				StageCode: code, Native: tc.native,
+			}); err != nil {
+				t.Fatalf("emit: %v", err)
+			}
 
-	data, err := os.ReadFile(filepath.Join(dir, "parameter-template.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+			data, err := os.ReadFile(filepath.Join(dir, "parameter-template.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	var tmpl map[string]struct {
-		Description string `json:"description"`
-		Optional    bool   `json:"optional"`
-	}
+			var tmpl map[string]struct {
+				Description string `json:"description"`
+				Optional    bool   `json:"optional"`
+			}
 
-	if err := json.Unmarshal(data, &tmpl); err != nil {
-		t.Fatalf("parse template: %v", err)
-	}
+			if err := json.Unmarshal(data, &tmpl); err != nil {
+				t.Fatalf("parse template: %v", err)
+			}
 
-	reads, ok := tmpl["reads"]
-	if !ok || !reads.Optional || !strings.Contains(reads.Description, "S3 URI") {
-		t.Errorf("file input 'reads' entry = %+v (present=%v), want optional with S3 wording", reads, ok)
-	}
+			reads, ok := tmpl["reads"]
+			if !ok || !reads.Optional || !strings.Contains(reads.Description, tc.wantDesc) {
+				t.Errorf("file input 'reads' entry = %+v (present=%v), want optional with %q in the description", reads, ok, tc.wantDesc)
+			}
 
-	if _, ok := tmpl["container"]; !ok {
-		t.Error("template missing the required 'container' parameter")
+			if _, ok := tmpl["container"]; !ok {
+				t.Error("template missing the required 'container' parameter")
+			}
+		})
 	}
 }
 

@@ -49,6 +49,7 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 
 	ds = append(ds, chainDiagnostics(f, pl)...)
 	ds = append(ds, nativeDiagnostics(prog, f, pl)...)
+	ds = append(ds, nativeTargetDiagnostics(f, opts.Target)...)
 	ds = append(ds, runnerDiagnostics(prog, f, opts.Monitor)...)
 
 	return append(ds, foldDiagnostics(prog, f, pl)...)
@@ -124,6 +125,22 @@ func mappedRemainderMsg(prog *ir.Program, pipeline string, c ir.Call, cp callPla
 
 	return fmt.Sprintf("-native: map call %s.%s keeps %s (not on the O(1) element scatter: needs a single whole-field self/upstream split feeding a value-typed param of an undisabled, non-preflight leaf stage; a file-typed, projected, or multi-split element and split-stage / sub-pipeline callees all keep the FORK resolve)",
 		pipeline, c.Name, tasks)
+}
+
+// nativeTargetDiagnostics surfaces the -native + -target healthomics trade-off
+// (#116): entry inputs stay declared in parameter-template.json (HealthOmics
+// rejects a request carrying an undeclared parameter, so dropping them would
+// change which requests fail), but their values were baked at transpile time
+// and supplying one fails the run at launch.
+func nativeTargetDiagnostics(f featureSet, target Target) []Diagnostic {
+	if !f.native || target != TargetHealthOmics {
+		return nil
+	}
+
+	return []Diagnostic{{
+		Severity: SevInfo,
+		Message:  "-native with -target healthomics: entry inputs are baked at transpile time; parameter-template.json still declares them (HealthOmics rejects undeclared parameters) but supplying one fails the run — re-transpile to change entry values",
+	}}
 }
 
 // runnerDiagnostics surfaces what -native-runner does NOT cover, so the opt-in

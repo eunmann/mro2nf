@@ -84,6 +84,27 @@ func TestHasError(t *testing.T) {
 	}
 }
 
+// TestDiagnoseNativeHealthOmics checks the -native + -target healthomics
+// trade-off is surfaced as an Info (#116): the parameter template declares
+// entry inputs that were baked at transpile time, so supplying one fails the
+// run. Either flag alone emits no such diagnostic.
+func TestDiagnoseNativeHealthOmics(t *testing.T) {
+	prog := lowerFixture(t, "fork_min")
+
+	on := Diagnose(prog, Options{Native: true, Target: TargetHealthOmics})
+	if !hasMessage(on, SevInfo, "-native with -target healthomics") {
+		t.Errorf("native + healthomics: want a baked-entry-params info, got %+v", on)
+	}
+
+	if got := Diagnose(prog, Options{Native: true}); hasMessage(got, SevInfo, "healthomics") {
+		t.Errorf("native without the healthomics target: want no target diagnostic, got %+v", got)
+	}
+
+	if got := Diagnose(prog, Options{Target: TargetHealthOmics}); hasMessage(got, SevInfo, "healthomics") {
+		t.Errorf("healthomics without -native: want no target diagnostic, got %+v", got)
+	}
+}
+
 // TestDiagnoseNativeMapped pins the -native map-call remainder messages (#99):
 // a file-bearing leaf scatter keeps ONE FORK resolve task and folds its MERGE
 // (map_file_split); a sub-pipeline map target keeps FORK and MERGE (map_pipe).
