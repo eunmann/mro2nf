@@ -84,6 +84,41 @@ func TestHasError(t *testing.T) {
 	}
 }
 
+// TestDiagnoseNativeHealthOmics checks the -native + -target healthomics
+// trade-off is surfaced as an Info (#116): the parameter template declares
+// entry inputs that were baked at transpile time, so supplying one fails the
+// run. Either flag alone emits no such diagnostic, an entry pipeline with no
+// input parameters declares nothing baked (so no Info), and an unparseable
+// target emits no Info because Emit rejects it outright.
+func TestDiagnoseNativeHealthOmics(t *testing.T) {
+	prog := lowerFixture(t, "fork_min")
+
+	on := Diagnose(prog, Options{Native: true, Target: TargetHealthOmics})
+	if !hasMessage(on, SevInfo, "-native with -target healthomics") {
+		t.Errorf("native + healthomics: want a baked-entry-params info, got %+v", on)
+	}
+
+	if got := Diagnose(prog, Options{Native: true}); hasMessage(got, SevInfo, "healthomics") {
+		t.Errorf("native without the healthomics target: want no target diagnostic, got %+v", got)
+	}
+
+	if got := Diagnose(prog, Options{Target: TargetHealthOmics}); hasMessage(got, SevInfo, "healthomics") {
+		t.Errorf("healthomics without -native: want no target diagnostic, got %+v", got)
+	}
+
+	noIn := &ir.Program{
+		Entry:     &ir.EntryCall{Callable: "P"},
+		Pipelines: map[string]*ir.Pipeline{"P": {Name: "P"}},
+	}
+	if got := Diagnose(noIn, Options{Native: true, Target: TargetHealthOmics}); hasMessage(got, SevInfo, "healthomics") {
+		t.Errorf("entry pipeline without inputs: want no target diagnostic, got %+v", got)
+	}
+
+	if got := Diagnose(prog, Options{Native: true, Target: "bogus"}); hasMessage(got, SevInfo, "healthomics") {
+		t.Errorf("unparseable target: want no target diagnostic (Emit rejects it), got %+v", got)
+	}
+}
+
 // TestDiagnoseNativeMapped pins the -native map-call remainder messages (#99):
 // a file-bearing leaf scatter keeps ONE FORK resolve task and folds its MERGE
 // (map_file_split); a sub-pipeline map target keeps FORK and MERGE (map_pipe).

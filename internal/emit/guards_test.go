@@ -134,13 +134,54 @@ func TestWarningsPreflightUngateable(t *testing.T) {
 
 // TestEmitHealthOmicsTemplateEntries checks every entry input is declared in
 // parameter-template.json (undeclared parameters are rejected by HealthOmics,
-// which would silently disable the override path), with the S3 wording for
-// file-bearing inputs.
+// which would silently disable the override path): by default with the S3
+// wording for file-bearing inputs, and under -native — where the values are
+// baked and the workflow rejects a supplied entry parameter (#116) — with a
+// description stating the bake instead of inviting an override.
 func TestEmitHealthOmicsTemplateEntries(t *testing.T) {
-	mre := filepath.Join(t.TempDir(), "mre")
-	if err := os.WriteFile(mre, []byte("x"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name     string
+		native   bool
+		wantDesc string
+	}{
+		{name: "default_invites_override", native: false, wantDesc: "S3 URI"},
+		{name: "native_states_bake", native: true, wantDesc: "cannot be overridden"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := emitHealthOmicsEntryFile(t, tc.native)
+
+			data, err := os.ReadFile(filepath.Join(dir, "parameter-template.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var tmpl map[string]struct {
+				Description string `json:"description"`
+				Optional    bool   `json:"optional"`
+			}
+
+			if err := json.Unmarshal(data, &tmpl); err != nil {
+				t.Fatalf("parse template: %v", err)
+			}
+
+			reads, ok := tmpl["reads"]
+			if !ok || !reads.Optional || !strings.Contains(reads.Description, tc.wantDesc) {
+				t.Errorf("file input 'reads' entry = %+v (present=%v), want optional with %q in the description", reads, ok, tc.wantDesc)
+			}
+
+			if _, ok := tmpl["container"]; !ok {
+				t.Error("template missing the required 'container' parameter")
+			}
+
+			assertEntryBake(t, dir, tc.native)
+		})
 	}
+}
+
+// emitHealthOmicsEntryFile emits the entry_file fixture for the HealthOmics
+// target (with the entryargs stub standing in for mre) and returns the project dir.
+func emitHealthOmicsEntryFile(t *testing.T, native bool) string {
+	t.Helper()
 
 	base := "../../testdata/entry_file"
 
@@ -161,34 +202,71 @@ func TestEmitHealthOmicsTemplateEntries(t *testing.T) {
 
 	dir := t.TempDir()
 	if err := emit.Emit(prog, emit.Options{
-		OutDir: dir, Mre: mre, MROFile: "pipeline.mro", Target: emit.TargetHealthOmics,
-		StageCode: code,
+		OutDir: dir, Mre: writeEntryArgsStub(t), MROFile: "pipeline.mro",
+		Target: emit.TargetHealthOmics, StageCode: code, Native: native,
 	}); err != nil {
 		t.Fatalf("emit: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "parameter-template.json"))
+	return dir
+}
+
+// assertEntryBake checks -native baked the resolved entry bundle into the
+// project (bakeEntryArgs) — the native workflow stages entry_resolved/ directly
+// and has no BUILD_ENTRY_ARGS task to build it at run time — and that a
+// non-native emit wrote no such bundle.
+func assertEntryBake(t *testing.T, dir string, native bool) {
+	t.Helper()
+
+	resolved := filepath.Join(dir, "entry_resolved", "data.json")
+	if !native {
+		if _, err := os.Stat(resolved); err == nil {
+			t.Error("non-native emit wrote entry_resolved/ (the bake is native-only)")
+		}
+
+		return
+	}
+
+	baked, err := os.ReadFile(resolved)
 	if err != nil {
+		t.Fatalf("-native did not bake entry_resolved/data.json: %v", err)
+	}
+
+	if !strings.Contains(string(baked), "reads") {
+		t.Errorf("baked entry args missing the 'reads' input:\n%s", baked)
+	}
+}
+
+// writeEntryArgsStub writes a runnable stand-in for mre: -native execs
+// `mre entryargs -base ... -o ...` to bake the entry args (bakeEntryArgs), and
+// with no run-time overrides the resolved bundle equals the baked defaults, so
+// the stub copies the -base bundle to -o — the same data.json + f/ bundle shape
+// the real command writes and the native workflow stages. The container target
+// also copies the stub file into the Docker build context.
+func writeEntryArgsStub(t *testing.T) string {
+	t.Helper()
+
+	const stub = `#!/bin/sh
+set -eu
+base=""; out=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-base) base="$2"; shift 2 ;;
+	-o) out="$2"; shift 2 ;;
+	*) shift ;;
+	esac
+done
+[ -d "$base" ] && [ -n "$out" ] || exit 9
+mkdir -p "$out"
+cp -R "$base/." "$out/"
+`
+
+	mre := filepath.Join(t.TempDir(), "mre")
+	if err := os.WriteFile(mre, []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	var tmpl map[string]struct {
-		Description string `json:"description"`
-		Optional    bool   `json:"optional"`
-	}
-
-	if err := json.Unmarshal(data, &tmpl); err != nil {
-		t.Fatalf("parse template: %v", err)
-	}
-
-	reads, ok := tmpl["reads"]
-	if !ok || !reads.Optional || !strings.Contains(reads.Description, "S3 URI") {
-		t.Errorf("file input 'reads' entry = %+v (present=%v), want optional with S3 wording", reads, ok)
-	}
-
-	if _, ok := tmpl["container"]; !ok {
-		t.Error("template missing the required 'container' parameter")
-	}
+	return mre
 }
 
 // TestBindSpecSplitFlag checks a map call's split binding round-trips into its
