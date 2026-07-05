@@ -247,6 +247,12 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	}
 
 	if c.Mapped {
+		// emptyNull may mark a DISABLED map call too. Load-bearing invariant:
+		// its MERGE executes only on the gate-false (run) branch — FORK feeds
+		// it and FORK receives only enabled forks (genMappedWiring) — where a
+		// zero-fork run means the invocation-known split side was empty and
+		// null is exactly mrp's prune. The gate-true branch never reaches the
+		// merge; the skip branch mixes in the null bundle instead.
 		emptyNull := known.emptySplit[p.Name][c.Name]
 
 		// #76/#99: under -native an eligible VALUE-ONLY map call scatters
