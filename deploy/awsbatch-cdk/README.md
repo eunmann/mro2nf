@@ -73,7 +73,7 @@ nextflow run main.nf \
     --aws_queue <BatchJobQueue> --aws_region <Region> \
     --container <EcrRepoUri>:latest \
     -work-dir s3://<WorkBucketName>/work \
-    --outdir s3://<WorkBucketName>/results
+    --aws_outdir s3://<WorkBucketName>/results
 ```
 
 ## Run on AWS HealthOmics

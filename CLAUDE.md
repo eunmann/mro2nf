@@ -2,8 +2,8 @@
 
 Transpiles Martian (`.mro`) pipelines into Nextflow projects. Generated Nextflow
 orchestrates the DAG/splits/forks/resources; each process runs the **original**
-Martian stage code through the Martian adapter ABI via the `mre` shim. See the
-design plan at `~/.claude/plans/bright-booping-rose.md`.
+Martian stage code through the Martian adapter ABI via the `mre` shim. See
+`docs/TRANSPILER.md` for the end-to-end design.
 
 ## North star (the correctness + performance bar)
 
@@ -52,6 +52,7 @@ internal/
   shim/              → _args/_jobinfo/_outs I/O, path rewrite, adapter launch
   bind/              → resolve call bindings into _args (refs, projections, fan-in)
   overrides/         → mrp --overrides file -> Nextflow -c config
+  config/            → .mro2nf.yml project defaults for the transpiler flags
   logging/           → zerolog setup (stderr)
   apperror/          → sentinel + typed errors
 ```

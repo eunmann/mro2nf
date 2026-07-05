@@ -95,6 +95,7 @@ internal/
   shim/        → bundle I/O, path rewrite, Martian adapter launch
   bind/        → resolve call bindings into _args (refs, projections, fan-in)
   overrides/   → mrp --overrides file -> Nextflow -c config
+  config/      → .mro2nf.yml project defaults for the transpiler flags
   logging/     → zerolog setup (stderr)
   apperror/    → sentinel + typed errors
 ```
@@ -116,8 +117,11 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   runtime shim, the Martian Python adapter, and the optional compiled-stage
   wrapper, all baked into the generated scripts), `-mropath` (search path for
   `@include`), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
-  (image URI for cloud targets), `-monitor` (per-stage virtual-memory
-  enforcement).
+  (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
+  the opt-in emission modes `-fuse-chains`, `-fold-disables`, `-native`, and
+  `-native-runner` (§4.8), `-config` (a `.mro2nf.yml` of per-project flag
+  defaults; keys mirror the flags, an explicit flag always wins — see
+  `internal/config`), and `-version`.
 - It resolves the stage source paths and the runtime tool paths to **absolute**
   paths (so the generated project runs from any working directory), records the
   `.mro`'s directory as `MRODir` (used to resolve relative file defaults — see
@@ -351,6 +355,69 @@ each file leaf individually and publishes it to its `outs/` path via
 `publishDir saveAs`, so the result set lands in parallel across tasks. The
 published tree matches an mrp pipestance `outs/` (verified by
 `the Go TestMrpDiff suite`); see §10 for where "results" lives on each target.
+
+### 4.8 Opt-in emission modes: `-fuse-chains`, `-fold-disables`, and channel-native orchestration (`-native`)
+
+Everything in §§4.1–4.7 describes the default emission. Four opt-in flags trade
+some launch-time flexibility for a smaller task graph. All of them are
+**plan-decided**: `buildPlan` (`internal/emit/plan.go`) resolves every call to a
+single `callKind` — plain bind, mapped, forward, one of the fused kinds, folded
+off, or native scatter — once, up front, and the process, wiring, and include
+emitters all read that fixed plan, so no two emission sites can disagree about
+how a call is rendered.
+
+- **`-fuse-chains`** folds a single-consumer, equal-resource source stage into
+  its consumer's task (`kindFusedChain`/`kindFusedAway`), dropping a node per
+  fused link. The cost is granularity: `-resume` and per-stage retry treat the
+  fused chain as one task.
+- **`-fold-disables`** constant-folds a disable gate the entry invocation
+  already determines (`disabled = self.x` where the entry call bakes `x = true`):
+  the always-disabled call is pruned to its null output (`kindFoldedOff`). The
+  transpiler warns per pruned call that overriding the gate input at launch
+  will **not** re-enable it.
+- **`-native`** replaces the data-plane *tasks* with driver-side channel wiring,
+  without touching the stage tasks or the adapter ABI:
+  - **Baked entry args.** The entry bundle is resolved once at transpile time by
+    running the same `mre entryargs` the `BUILD_ENTRY_ARGS` task would
+    (`bakeEntryArgs` in `internal/emit/emit.go`), and the workflow stages
+    `entry_resolved/` directly. Launch-time entry parameters are rejected with a
+    hard error in the generated `main.nf` — re-transpile to change an input.
+  - **The O(1) element scatter.** An eligible map call (a single whole-field
+    self/upstream split feeding a value-typed param of an undisabled leaf
+    stage) becomes `kindNativeScatter`: no FORK task at all. The driver parses
+    the fork collection **once** (`Mro2nf.forkElements*` in
+    `internal/emit/lib/Mro2nf.groovy`) and hands each fused forkbind+main
+    instance only its own pre-sliced element, so per-instance work is O(1) and
+    ordering matches the Go binder's canonical order byte-for-byte.
+  - **Merge folds.** When a scattered (or, under `-native`, any mapped) call
+    has exactly one consumer, its MERGE gather runs inline at the head of that
+    consumer's task (`mergeFoldable`): the consumer stages the per-fork outs
+    plus a keys sidecar and reconstructs the merged bundle with `mre merge`
+    before its own bind — no standalone MERGE process.
+  - **The keyed layer.** A map over a split stage or sub-pipeline still runs
+    the fork-keyed workflow variants of §4.4; a value-only *nested* map inside
+    a keyed pipeline collapses its per-outer-fork FORK_K resolve into a single
+    driver element scatter (the `_KS` process, `Mro2nf.forkElementsKeyed`),
+    keeping only the data-proportional MERGE_K gather.
+  - **Empty-fork fidelity.** mrp's static resolver prunes an invocation-known
+    empty fork to null while a runtime-empty collection merges to the typed
+    empty; the `knownInvocation` analysis in `plan.go` reproduces that split as
+    a runtime shape rule, so entry inputs stay overridable in default mode.
+- **`-native-runner`** swaps the stage-execution hop for `py` stages from
+  `mre` + `martian_shell.py` to an embedded direct-call runner
+  (`internal/emit/runner/run_stage.py`, with a shipped `martian` compat shim).
+  `exec`/`comp` stages keep the adapter path. It is independent of `-native`
+  and composes with the default DAG; container backends bake the runner into
+  the image.
+
+**Detect and refuse, never under-deliver.** Every transpile runs the pre-emit
+diagnostics (`internal/emit/diagnostics.go`) over the *same plan* that is
+emitted. A flag/pipeline combination that would produce a wrong project is a
+hard error that aborts the transpile; a shape an opt-in flag cannot fully
+collapse prints an **Info** diagnostic naming exactly which orchestration
+remains and why (e.g. which map call keeps its one FORK resolve, or that a
+`py`-only runner leaves an `exec` stage on the adapter path), and a flag that
+had no effect at all says so — an opt-in never silently does less than asked.
 
 ---
 

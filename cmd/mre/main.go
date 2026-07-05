@@ -112,7 +112,7 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.Float64Var(&c.threads, "threads", 1, "allocated threads")
 	fs.Float64Var(&c.memGB, "memgb", 1, "allocated memory in GB")
 	fs.Float64Var(&c.vmemGB, "vmemgb", 0, "allocated virtual memory in GB")
-	fs.BoolVar(&c.monitor, "monitor", false, "cap stage virtual memory at vmem_gb via prlimit")
+	fs.BoolVar(&c.monitor, "monitor", false, "enforce mrp --monitor memory limits: an RSS kill at memgb plus a prlimit vmem cap at vmemgb")
 
 	return c
 }
