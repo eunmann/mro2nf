@@ -209,7 +209,7 @@ func TestDockerEntryOverrides(t *testing.T) {
 		// shape): the whole dir is staged into the container, and the stage sums
 		// every file in it. Lives outside the image, so a correct total proves
 		// the directory arrived only via staging.
-		"odir/e.txt": "10\n",    // 10
+		"odir/e.txt": "10\n",     // 10
 		"odir/f.txt": "11\n12\n", // 23 ; (10+11+12) * 2 == 66
 	}
 
