@@ -149,9 +149,12 @@ out of scope for a transpiler.
 ## Opt-in emission modes — `-fuse-chains`, `-fold-disables`, `-native`, `-native-runner`
 
 These flags change the emitted *task graph*, never the outputs, so each gate
-compares its run against the committed real-`mrp` golden (and `TestMrpDiff`
-machine-checks the native-suite goldens' mrp provenance against a live `mrp`).
-The trade-offs each flag opts into are surfaced as transpile-time diagnostics
+compares its run against the committed real-`mrp` golden, and `TestMrpDiff`
+anchors those goldens to live `mrp`: its anchor fixtures additionally run
+`-native` (and, wherever a py stage actually executes, `-native
+-native-runner`) Nextflow legs against the same mrp pipestance, so the native
+emit path faces real `mrp` output, not only committed goldens. The trade-offs
+each flag opts into are surfaced as transpile-time diagnostics
 (`internal/emit/diagnostics.go`) — see `docs/TRANSPILER.md` §4.8.
 
 | Shape under the flag | Status | Test |
