@@ -71,8 +71,9 @@ type callPlan struct {
 	// (forkElementsPa) instead of the process taking pa as a broadcast input.
 	scatterQueuedPa bool
 	// emptyNull marks a map call whose split source is launch-invocation-known
-	// (entrySplit): its ZERO-fork merge emits null instead of the typed empty,
-	// matching mrp's static resolver pruning a statically-empty fork (#99).
+	// (knownInvocation, #127): its ZERO-fork merge emits null instead of the
+	// typed empty, matching mrp's static resolver pruning a statically-empty
+	// fork (#99).
 	emptyNull bool
 	// foldMerge marks a kindNativeScatter call whose MERGE gather runs inline in
 	// its sole consumer's task (#76): no standalone MERGE process; the consumer
@@ -105,13 +106,14 @@ type emitPlan struct {
 func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 	pl := emitPlan{pipes: map[string]pipePlan{}}
 	queued := queuePipeArgs(prog)
+	known := knownInvocation(prog)
 
 	for name, p := range prog.Pipelines {
 		away := fusedAwayProducers(p, prog, f.fuseChains)
 		pp := pipePlan{calls: make(map[string]callPlan, len(p.Calls))}
 
 		for _, c := range p.Calls {
-			pp.calls[c.Name] = planCall(c, p, prog, f, away, queued[name])
+			pp.calls[c.Name] = planCall(c, p, prog, f, away, queued[name], known)
 		}
 
 		if prod, ok := forwardProducer(p.Returns, p, prog); ok {
@@ -224,7 +226,7 @@ func neededStageModules(prog *ir.Program, pl emitPlan) map[string]bool {
 // planCall decides one call's kind in the same precedence the emitters used to
 // inline: chain fold, chain consumer, mapped, forward, fused stage/split/disabled,
 // else a plain bind.
-func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away map[string]bool, queuedPa bool) callPlan {
+func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away map[string]bool, queuedPa bool, known invKnown) callPlan {
 	// #59 Lever 1: an always-disabled call (its gate constant-folds to true) needs
 	// no stage or gate — only its null output, which downstream reads as it would
 	// when skipped at runtime. Takes precedence over every run-path kind.
@@ -245,7 +247,7 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 	}
 
 	if c.Mapped {
-		emptyNull := entrySplit(prog, p, c)
+		emptyNull := known.emptySplit[p.Name][c.Name]
 
 		// #76/#99: under -native an eligible VALUE-ONLY map call scatters
 		// in-workflow on the O(1) element path — the driver slices the fork
@@ -324,61 +326,221 @@ func foldDisableOff(prog *ir.Program, p *ir.Pipeline, c ir.Call) (string, bool) 
 	return "", false
 }
 
-// entrySplit reports whether every split binding of a map call draws from the
-// LAUNCH INVOCATION: a literal, or a whole-field self ref on the ENTRY pipeline
-// (instantiated once, so the source is unambiguous — the same scope rule as
-// foldDisableOff). Martian's resolver treats an invocation-known empty fork
+// invKnown is the invocation-known analysis over the IR binding graph (#127):
+// per pipeline, which inputs and mapped calls the LAUNCH INVOCATION alone
+// determines. Martian's resolver treats an invocation-known empty fork
 // collection differently from a runtime one — observed against mrp 4.0.15: a
-// static []/{} split source resolves the whole mapped call to NULL (the zero-
-// fork call is pruned), while an upstream-produced empty or null collection
+// static []/{} split source resolves the whole mapped call to NULL (the
+// zero-fork call is pruned, and KnownLength propagation cascades the prune
+// through value chains), while an upstream-produced empty or null collection
 // merges to the typed empty ([] / {}). mro2nf keeps entry inputs overridable
-// at launch, so the distinction cannot be baked statically; instead an
-// entry-split call's zero-fork MERGE emits null at runtime (bind.Merge
-// emptyNull) — override to non-empty and the forks run, override to empty and
-// the result is null, exactly what mrp produces for that invocation. Known
-// residual divergences (all the value-CHAIN class mrp's whole-program
-// KnownLength propagation prunes but a shape rule cannot see; closing them
-// needs constant propagation across the binding graph). An empty literal
-// split (`split []`) is a Martian PARSE error, so the only reachable
-// invocation-known-empty source is an entry self ref:
-//   - a sub-pipeline whose split input chains back to an entry value through
-//     the parent call's bindings;
-//   - an in-pipeline chain `map call B(split A.out)` where A itself nulls —
-//     mrp cascades the prune to B, we merge B's runtime null to typed empty;
-//   - a MIXED split (an entry-ref binding zipped with an upstream ref, where
-//     the entry side resolves empty) — the all-bindings rule leaves it
-//     unflagged.
-func entrySplit(prog *ir.Program, p *ir.Pipeline, c ir.Call) bool {
-	splits := 0
+// at launch, so the distinction is never baked statically; the analysis only
+// ever WIDENS the emptyNull marking, and the marking is purely a runtime
+// shape rule: the call's ZERO-fork MERGE emits null (bind.Merge emptyNull).
+// Override the entry side to non-empty and the forks run and merge normally;
+// override to empty and the result is null — exactly what mrp produces for
+// that invocation.
+type invKnown struct {
+	// valIn marks pipeline inputs whose VALUE every call site binds
+	// invocation-known; lenIn additionally admits mapped-call cascade sources,
+	// whose LENGTH (not values) is invocation-determined — emptiness is a
+	// length fact, so lenIn is what split marking consults.
+	valIn map[string]map[string]bool
+	lenIn map[string]map[string]bool
+	// emptySplit is the widened entry-split predicate per (pipeline, map
+	// call): some split binding's emptiness is invocation-determined, so a
+	// zero-fork run implies mrp's resolver pruned this call to null.
+	emptySplit map[string]map[string]bool
+}
 
-	for _, b := range c.Bindings {
-		if !b.Split {
-			continue
-		}
+// knownInvocation computes invKnown by fixed-point iteration (the same scheme
+// as queuePipeArgs): the pipeline call graph is a DAG, but a caller's binding
+// knowledge may be decided after its callees were visited. All three
+// predicates are monotone (no rule negates another), so iterating to no
+// change yields the least fixed point — conservative: anything not provably
+// invocation-determined keeps the runtime typed-empty merge.
+func knownInvocation(prog *ir.Program) invKnown {
+	k := invKnown{
+		valIn:      make(map[string]map[string]bool, len(prog.Pipelines)),
+		lenIn:      make(map[string]map[string]bool, len(prog.Pipelines)),
+		emptySplit: make(map[string]map[string]bool, len(prog.Pipelines)),
+	}
 
-		splits++
+	for name := range prog.Pipelines {
+		k.valIn[name] = map[string]bool{}
+		k.lenIn[name] = map[string]bool{}
+		k.emptySplit[name] = map[string]bool{}
+	}
 
-		if !entryValue(prog, p, b.Value) {
-			return false
+	for changed := true; changed; {
+		changed = false
+
+		for name, p := range prog.Pipelines {
+			for i := range p.In {
+				in := p.In[i].Name
+				if !k.valIn[name][in] && k.inputKnown(prog, name, in, false) {
+					k.valIn[name][in] = true
+					changed = true
+				}
+
+				if !k.lenIn[name][in] && k.inputKnown(prog, name, in, true) {
+					k.lenIn[name][in] = true
+					changed = true
+				}
+			}
+
+			for _, c := range p.Calls {
+				if c.Mapped && !k.emptySplit[name][c.Name] && k.splitKnown(prog, p, c) {
+					k.emptySplit[name][c.Name] = true
+					changed = true
+				}
+			}
 		}
 	}
 
-	return splits > 0
+	return k
 }
 
-// entryValue reports whether a binding value is launch-invocation-sourced: a
-// literal/composite carrying no refs, or ANY self ref (whole-field or
-// projected, e.g. self.cfg.list) on the entry pipeline — entry inputs come
-// only from the launch invocation, so a projection of one is invocation-known
-// too. A composite CONTAINING refs (fan-in `[A.out, B.out]`) is rejected even
-// though its static length makes the zero-fork case unreachable today — the
-// guard is structural, not an unstated invariant.
-func entryValue(prog *ir.Program, p *ir.Pipeline, v ir.Value) bool {
-	if v.Ref == nil {
+// inputKnown reports whether the named pipeline input is invocation-known at
+// EVERY call site — one pipePlan serves all instantiations of a pipeline, so
+// the marking must hold for each of them (a never-called pipeline gets
+// nothing). A split-bound input receives ELEMENTS of the caller's collection,
+// so only a fully value-known collection qualifies even for lenOnly: a
+// cascade source has invocation-known length but runtime element values. An
+// input some site leaves unbound (or binds via a wildcard) stays unknown.
+func (k invKnown) inputKnown(prog *ir.Program, name, in string, lenOnly bool) bool {
+	found := false
+
+	for _, q := range prog.Pipelines {
+		for _, c := range q.Calls {
+			if c.Callable != name {
+				continue
+			}
+
+			b, ok := bindingFor(c, in)
+			if !ok || !k.known(prog, q, b.Value, lenOnly && !b.Split) {
+				return false
+			}
+
+			found = true
+		}
+	}
+
+	return found
+}
+
+// splitKnown is the per-call marking rule: ANY split binding whose emptiness
+// is invocation-known flags the map call. ANY (not ALL) is sound for a MIXED
+// zip: zipped splits must agree in length (bind fails loudly with errSplitLen
+// on a mismatch), so a ZERO-fork run implies every side — the known side
+// included — resolved empty, which is exactly the invocation whose statically
+// visible 0-length makes mrp prune the call to null.
+func (k invKnown) splitKnown(prog *ir.Program, p *ir.Pipeline, c ir.Call) bool {
+	for _, b := range c.Bindings {
+		if b.Split && k.known(prog, p, b.Value, true) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// known reports whether a binding value in pipeline p is invocation-known.
+// With lenOnly=false the VALUE must be: a ref-free literal (an empty literal
+// split is a Martian parse error, so literals only ever plumb non-split
+// bindings), ANY self ref on the entry pipeline (whole-field or projected —
+// entry inputs come only from the launch invocation, overrides included), a
+// self ref on an invocation-known input, or a plain sub-pipeline ref whose
+// return chain is known. lenOnly=true relaxes value to LENGTH/emptiness
+// knowledge, additionally admitting a mapped call's output: the merged
+// collection's size equals the fork count, which is invocation-determined
+// exactly when that call's own split source is (mrp's KnownLength cascade) —
+// its zero-fork merge yields null, and any projection of null stays null. The
+// whole-outs ref of a mapped call is excluded: only a named output projects
+// to the per-fork collection. A composite CONTAINING refs (fan-in
+// `[A.out, B.out]`) is rejected even though its static length makes the
+// zero-fork case unreachable today — the guard is structural, not an unstated
+// invariant. A disabled call is never known: its gate may null it at runtime,
+// where mrp's typed-empty rule (not the static prune) applies. Recursion
+// descends the pipeline call DAG through returnKnown (Martian forbids
+// recursive pipelines), so depth is bounded by the program's nesting.
+func (k invKnown) known(prog *ir.Program, p *ir.Pipeline, v ir.Value, lenOnly bool) bool {
+	r := v.Ref
+	if r == nil {
 		return !valueHasRef(v)
 	}
 
-	return v.Ref.Kind == refKindSelf && entryScoped(prog, p)
+	if r.Kind == refKindSelf {
+		if entryScoped(prog, p) {
+			return true
+		}
+
+		if lenOnly {
+			return k.lenIn[p.Name][r.ID]
+		}
+
+		return k.valIn[p.Name][r.ID]
+	}
+
+	c, ok := callByName(p, r.ID)
+	if !ok || c.Disabled != nil {
+		return false
+	}
+
+	if c.Mapped {
+		return lenOnly && r.Output != "" && k.emptySplit[p.Name][c.Name]
+	}
+
+	sub, ok := prog.Pipelines[c.Callable]
+	if !ok {
+		// A stage output is runtime-produced.
+		return false
+	}
+
+	return k.returnKnown(prog, sub, r.Output, lenOnly)
+}
+
+// returnKnown resolves a ref THROUGH a plain sub-pipeline call: the ref's
+// first output segment selects the return binding, whose value is examined in
+// the callee's own scope. A deeper projection preserves known-ness — a
+// projection of an invocation-known value is invocation-known, and a
+// projection of a mapped-call output keeps the fork-count outer dimension. A
+// whole-outs ref ("") requires every return binding known.
+func (k invKnown) returnKnown(prog *ir.Program, sub *ir.Pipeline, output string, lenOnly bool) bool {
+	if output == "" {
+		if len(sub.Returns) == 0 {
+			return false
+		}
+
+		for _, b := range sub.Returns {
+			if !k.known(prog, sub, b.Value, lenOnly) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	field, _, _ := strings.Cut(output, ".")
+
+	for _, b := range sub.Returns {
+		if b.Param == field {
+			return k.known(prog, sub, b.Value, lenOnly)
+		}
+	}
+
+	return false
+}
+
+// bindingFor returns the call's explicit binding for a parameter.
+func bindingFor(c ir.Call, param string) (ir.Binding, bool) {
+	for _, b := range c.Bindings {
+		if b.Param == param {
+			return b, true
+		}
+	}
+
+	return ir.Binding{}, false
 }
 
 // valueHasRef reports whether a value expression contains any ref leaf.
@@ -402,7 +564,7 @@ func valueHasRef(v ir.Value) bool {
 
 // entryScoped reports whether p is the entry pipeline — instantiated exactly
 // once, so a self ref's value is unambiguous. Shared by foldDisableOff and
-// entryValue so the two "invocation-known" scope tests cannot drift.
+// invKnown.known so the two "invocation-known" scope tests cannot drift.
 func entryScoped(prog *ir.Program, p *ir.Pipeline) bool {
 	return prog.Entry != nil && prog.Entry.Callable == p.Name
 }
