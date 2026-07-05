@@ -26,13 +26,22 @@ import re
 import sys
 
 # Baseline-gated metrics: any increase over the committed baseline is a
-# regression.
+# regression. `tasks` counts unique task identities, not trace rows — a
+# transient executor retry re-runs a task under the same name and
+# bench_metrics.py keeps only the final attempt, so a retry on an unrelated
+# task cannot trip this gate (see bench_metrics.parse_trace).
 GATED = ("refs", "plumbing_tasks", "tasks")
 
 # A lane name of one fixture run at a given width: <base>_w<N> (fork width) or
 # <base>_c<N> (chunk count), with an optional _native suffix. All widths of one
 # (base, mode) pair form a scaling group.
 _WIDTH = re.compile(r"^(?P<base>.+)_[wc]\d+(?P<native>_native)?$")
+
+# Lanes that intentionally run at a single width and therefore carry no
+# scaling group. Every lane must either match _WIDTH or be listed here:
+# anything else is a naming mistake that would silently escape the scaling
+# gate, so check_scaling fails it loudly instead.
+SINGLE_WIDTH_LANES = frozenset({"chain", "chain_native"})
 
 
 def load_jsonl(path):
@@ -71,14 +80,36 @@ def scaling_group(name):
 
 
 def check_scaling(cur):
-    """Fail (rc 1) if any width group's plumbing task count varies with width."""
+    """Fail (rc 1) if any width group's plumbing task count varies with width.
+
+    Also fails on the two ways a lane could silently escape this gate: a lane
+    name that neither parses as <base>_[wc]<N>[_native] nor is an allow-listed
+    single-width lane (a typo'd lane would otherwise skip the check), and a
+    width group left with fewer than two widths (one width proves nothing
+    about flatness).
+    """
     groups = {}
+    rc = 0
     for name in sorted(cur):
         g = scaling_group(name)
         if g is not None:
             groups.setdefault(g, []).append(name)
-    rc = 0
+        elif name not in SINGLE_WIDTH_LANES:
+            print(
+                f"SCALING[{name}]: unrecognized bench lane naming — neither "
+                f"<base>_[wc]<N>[_native] nor an allow-listed single-width lane "
+                f"({', '.join(sorted(SINGLE_WIDTH_LANES))}); a mis-named lane "
+                f"would silently skip the width-flatness gate"
+            )
+            rc = 1
     for g in sorted(groups):
+        if len(groups[g]) < 2:
+            print(
+                f"SCALING[{g}]: only one width ({groups[g][0]}) in the run — "
+                f"the width-flatness gate needs at least two widths per group"
+            )
+            rc = 1
+            continue
         counts = {n: cur[n]["plumbing_tasks"] for n in groups[g]}
         if len(set(counts.values())) > 1:
             print(
@@ -90,7 +121,13 @@ def check_scaling(cur):
 
 
 def check_baseline(cur, base):
-    """Print the metrics table and fail (rc 1) on any gated-metric increase."""
+    """Print the metrics table and fail (rc 1) on any gated-metric increase.
+
+    A lane present in only one of run/baseline is also a failure: a new lane
+    without a baseline has no gate at all (record one with BENCH_UPDATE=1),
+    and a baseline lane missing from the run means a lane was silently
+    dropped — its gate vanished with it.
+    """
     rc = 0
     print(f"{'benchmark':<18} current")
     for name in sorted(cur):
@@ -98,13 +135,24 @@ def check_baseline(cur, base):
         print(f"{name:<18} {fmt(m)}")
         b = base.get(name)
         if b is None:
-            print("                   (no baseline; run BENCH_UPDATE=1 make bench to record)")
+            print(
+                f"  NO-BASELINE[{name}]: lane has no committed baseline, so it "
+                f"is ungated; run BENCH_UPDATE=1 make bench to record one"
+            )
+            rc = 1
             continue
         print(f"{'  baseline':<18} {fmt(b)}")
         for metric in GATED:
             if m[metric] > b[metric]:
                 print(f"  REGRESSION[{name}]: {metric} {m[metric]} > baseline {b[metric]}")
                 rc = 1
+    for name in sorted(set(base) - set(cur)):
+        print(
+            f"  MISSING-LANE[{name}]: baseline lane absent from this run — a "
+            f"dropped lane loses its gate; restore the lane or re-record the "
+            f"baseline with BENCH_UPDATE=1 make bench"
+        )
+        rc = 1
     return rc
 
 

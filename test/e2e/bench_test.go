@@ -72,6 +72,15 @@ func TestBench(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Absolutize once at the harness boundary: nextflow resolves a relative
+	// -work-dir against the project dir while bench_metrics.py scans relative
+	// to the test cwd, so a relative BENCH_WORKDIR would split the two roots
+	// and the refs scan would read 0 — a vacuous pass.
+	workdir, err := absLocalWorkdir(workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var (
 		mu      sync.Mutex
 		metrics bytes.Buffer
@@ -132,10 +141,6 @@ func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 	scanRoot := proj
 
 	if workdir != "" {
-		if _, path, ok := strings.Cut(workdir, "://"); ok {
-			workdir = path // requireLocalWorkdir proved the scheme is file
-		}
-
 		scanRoot = filepath.Join(workdir, l.key)
 		args = append(args, "-work-dir", filepath.Join(scanRoot, "work"))
 	}
@@ -178,6 +183,30 @@ func requireLocalWorkdir(w string) error {
 	return nil
 }
 
+// absLocalWorkdir normalizes a local BENCH_WORKDIR (already vetted by
+// requireLocalWorkdir) to one absolute path: it strips a file:// scheme and
+// resolves a relative path against the current working directory. Both
+// consumers of the value — nextflow's -work-dir (cwd = project dir) and
+// bench_metrics.py's refs scan (cwd = test dir) — must receive the SAME
+// absolute root; handing them a relative path would silently split them and
+// the refs gate would count 0.
+func absLocalWorkdir(w string) (string, error) {
+	if w == "" {
+		return "", nil
+	}
+
+	if _, path, ok := strings.Cut(w, "://"); ok {
+		w = path // requireLocalWorkdir proved the scheme is file
+	}
+
+	abs, err := filepath.Abs(w)
+	if err != nil {
+		return "", fmt.Errorf("absolutize BENCH_WORKDIR %q: %w", w, err)
+	}
+
+	return abs, nil
+}
+
 func TestRequireLocalWorkdir(t *testing.T) {
 	cases := []struct {
 		workdir string
@@ -197,6 +226,47 @@ func TestRequireLocalWorkdir(t *testing.T) {
 		err := requireLocalWorkdir(c.workdir)
 		if (err != nil) != c.wantErr {
 			t.Errorf("requireLocalWorkdir(%q) error = %v, wantErr %v", c.workdir, err, c.wantErr)
+		}
+	}
+}
+
+// TestAbsLocalWorkdir proves a relative BENCH_WORKDIR is resolved to ONE
+// consistent absolute root before it feeds both nextflow's -work-dir and
+// bench_metrics.py's scan — the two run from different cwds, so a relative
+// value passed through unchanged would scan the wrong tree (refs=0, vacuous
+// pass).
+func TestAbsLocalWorkdir(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		workdir string
+		want    string
+	}{
+		{"", ""}, // empty stays empty: default local executor, scanRoot = proj
+		{"work", filepath.Join(cwd, "work")},
+		{"./work", filepath.Join(cwd, "work")},
+		{"/tmp/bench-work", "/tmp/bench-work"},
+		{"file:///tmp/bench-work", "/tmp/bench-work"},
+		{"file://rel/work", filepath.Join(cwd, "rel", "work")},
+	}
+
+	for _, c := range cases {
+		got, err := absLocalWorkdir(c.workdir)
+		if err != nil {
+			t.Errorf("absLocalWorkdir(%q) error = %v", c.workdir, err)
+
+			continue
+		}
+
+		if got != c.want {
+			t.Errorf("absLocalWorkdir(%q) = %q, want %q", c.workdir, got, c.want)
+		}
+
+		if got != "" && !filepath.IsAbs(got) {
+			t.Errorf("absLocalWorkdir(%q) = %q is not absolute", c.workdir, got)
 		}
 	}
 }
