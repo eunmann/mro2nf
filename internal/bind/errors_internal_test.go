@@ -13,12 +13,15 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// TestResolveForksArraySplitErrors covers buildArrayForks' failure arms:
-// zipped split arrays of mismatched lengths and a non-array split source.
-func TestResolveForksArraySplitErrors(t *testing.T) {
+// TestResolveForksSplitErrors covers buildArrayForks' and buildMapForks'
+// failure arms: zipped split collections of mismatched lengths/key sets
+// (which also exercises equalKeys) and a wrong-kind split source under each
+// mode.
+func TestResolveForksSplitErrors(t *testing.T) {
 	tests := []struct {
 		name     string
 		pipeArgs string
+		isMap    bool
 		wantErr  error
 	}{
 		{
@@ -31,40 +34,16 @@ func TestResolveForksArraySplitErrors(t *testing.T) {
 			pipeArgs: `{"xs":{"a":1},"ys":{"a":1}}`,
 			wantErr:  errNotArray,
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			spec := Spec{
-				"x": {Ref: &Ref{Kind: "self", ID: "xs"}, Split: true},
-				"y": {Ref: &Ref{Kind: "self", ID: "ys"}, Split: true},
-			}
-
-			_, _, err := ResolveForks(spec, json.RawMessage(tt.pipeArgs), nil, false, AllForks)
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("ResolveForks error = %v, want errors.Is %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-// TestResolveForksMapSplitErrors covers buildMapForks' failure arms: an array
-// split source in map mode and two map splits with different key sets (which
-// also exercises equalKeys).
-func TestResolveForksMapSplitErrors(t *testing.T) {
-	tests := []struct {
-		name     string
-		pipeArgs string
-		wantErr  error
-	}{
 		{
 			name:     "array split binding in map mode",
 			pipeArgs: `{"xs":[1,2],"ys":[1,2]}`,
+			isMap:    true,
 			wantErr:  errNotMap,
 		},
 		{
 			name:     "mismatched map key sets",
 			pipeArgs: `{"xs":{"a":1,"b":2},"ys":{"a":1,"c":3}}`,
+			isMap:    true,
 			wantErr:  errSplitLen,
 		},
 	}
@@ -76,9 +55,13 @@ func TestResolveForksMapSplitErrors(t *testing.T) {
 				"y": {Ref: &Ref{Kind: "self", ID: "ys"}, Split: true},
 			}
 
-			_, _, err := ResolveForks(spec, json.RawMessage(tt.pipeArgs), nil, true, AllForks)
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("ResolveForks error = %v, want errors.Is %v", err, tt.wantErr)
+			// The single-fork marshal arm (only=0, the native-scatter -index
+			// path) must validate exactly like the full resolve.
+			for _, only := range []int{AllForks, 0} {
+				_, _, err := ResolveForks(spec, json.RawMessage(tt.pipeArgs), nil, tt.isMap, only)
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("ResolveForks(only=%d) error = %v, want errors.Is %v", only, err, tt.wantErr)
+				}
 			}
 		})
 	}
