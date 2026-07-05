@@ -68,6 +68,10 @@ var goldenCases = []struct {
 	{"join_resources", "join_resources", "expected/outs.json"},
 	{"file_array", "file_array", "expected/outs.json"},
 	{"comp_split", "comp_split", "expected/outs.json"},
+	// #113: an exec stage whose src line carries arguments after the path —
+	// the outputs depend on both args, so dropping -srcarg fails loudly. The
+	// golden is a real mrp run (the stub speaks the journal protocol).
+	{"src_args", "src_args", "expected/outs.json"},
 	{"entry_file", "entry_file", "expected/ep_outs.json"},
 	{"entry_file_override", "entry_file", "expected/ep_override_outs.json"},
 	{"entry_filearr", "entry_filearr", "expected/epa_outs.json"},
