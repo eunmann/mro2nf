@@ -67,6 +67,16 @@ func TestEmitContainerMissingSources(t *testing.T) {
 	if err := emit.Emit(prog, opts); err == nil || !strings.Contains(err.Error(), opts.Mre) {
 		t.Errorf("container target with missing mre file: want error naming the path, got %v", err)
 	}
+
+	opts.Mre = filepath.Join(t.TempDir(), "mre")
+	if err := os.WriteFile(opts.Mre, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	opts.Mrjob = filepath.Join(t.TempDir(), "does-not-exist")
+	if err := emit.Emit(prog, opts); err == nil || !strings.Contains(err.Error(), opts.Mrjob) {
+		t.Errorf("container target with missing mrjob file: want error naming the path, got %v", err)
+	}
 }
 
 // TestWarningsPreflightCallRef checks a preflight bound to another call's
