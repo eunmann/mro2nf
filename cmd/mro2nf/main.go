@@ -119,11 +119,14 @@ func run(args []string) error {
 // runOverrides converts an mrp --overrides JSON (a file argument, or stdin when
 // omitted or "-") into a Nextflow process-scope config printed to stdout. Fields
 // with no faithful Nextflow directive are reported on stderr. With -mro, the
-// pipeline is parsed so pipeline-scoped keys expand to their stages and unknown
-// keys are reported instead of silently emitting a dead selector.
+// pipeline is parsed so pipeline-scoped keys expand to their stages, unknown
+// keys are reported instead of silently emitting a dead selector, and per-call
+// selectors carry literal pipeline names — without it, a call name containing
+// "__" can be over-matched by another call's selector (see internal/overrides).
 func runOverrides(args []string) error {
 	fs := flag.NewFlagSet("overrides", flag.ContinueOnError)
-	mroFlag := fs.String("mro", "", "pipeline .mro: expands pipeline-scoped keys to their stages and validates stage names")
+	mroFlag := fs.String("mro", "", "pipeline .mro: expands pipeline-scoped keys to their stages, validates stage names, "+
+		"and pins per-call selectors to literal pipeline names (avoids over-matching call names containing '__')")
 	mroPath := fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)")
 
 	if err := fs.Parse(args); err != nil {
