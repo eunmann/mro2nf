@@ -204,7 +204,7 @@ func TestGenerateNativeMergeFold(t *testing.T) {
 		"path 'forkkeys_SCALE.json'",
 		// -emptynull: fork_min's split source is an entry self ref, so a zero-fork
 		// merge yields null (mrp's invocation-known-empty rule, #99).
-		`'mre' merge -emptynull -outs 'scaled' -files "\$(ls -1d souts_SCALE/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
+		`'mre' merge -emptynull -outs 'scaled' -files "\$(ls -1d souts_SCALE/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keysfile forkkeys_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
 		"-inputs SCALE=merged_SCALE",
 		".out.ref_SCALE_souts, ",
 		".out.ref_SCALE_keys",
@@ -302,10 +302,12 @@ func TestGenerateNativeScatter(t *testing.T) {
 		// per-element path (#99): index 0 computes keys, index >0 assembles
 		// from its own base64 element, no whole-collection re-parse.
 		"tuple val(key), val(fi), val(element)",
-		"-index 0 -o fargs -keysfile forkkeys.mro2nf.json",
+		"-mapmode array -index 0 -o fargs -keysfile forkkeys.mro2nf.json",
 		"printf %s '${element}' | base64 -d > element.json",
-		"-elementfile element.json -o fargs",
-		"-keysonly -keysfile forkkeys.mro2nf.json",
+		// The element branch carries no full-collection flags (forkbind
+		// rejects -mapmode and friends alongside -elementfile).
+		"-pipeargs pipeargs -elementfile element.json -o fargs",
+		"-mapmode array -keysonly -keysfile forkkeys.mro2nf.json",
 		"Mro2nf.forkElements(data, 'values', 'array')",
 		"path \"outs__${key}\", type: 'dir', emit: outs, optional: true",
 		"path 'forkkeys.mro2nf.json', emit: keys, optional: true",
@@ -350,7 +352,7 @@ func TestGenerateNativeScatterUpstreamElements(t *testing.T) {
 	for _, want := range []string{
 		"scat_SCALE = ch_GEN.flatMap { data, leaves -> Mro2nf.forkElements(data, 'values', 'array')",
 		"tuple val(key), val(fi), val(element)",
-		"-elementfile element.json -o fargs",
+		"-pipeargs pipeargs -inputs GEN=in_GEN -elementfile element.json -o fargs",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("missing %q in upstream native module:\n%s", want, mod)

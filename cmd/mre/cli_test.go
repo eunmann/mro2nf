@@ -545,9 +545,41 @@ func TestRunForkBindElement(t *testing.T) {
 		t.Errorf("-elementfile not byte-identical to -index 1 (-index +element):\n%s", diff)
 	}
 
-	// -elementfile without -o is a loud error, not a write to cwd.
-	if err := run(t.Context(), []string{"forkbind", "-spec", spec, "-pipeargs", pipe, "-elementfile", elem}); err == nil {
-		t.Error("forkbind -elementfile without -o must error")
+	// -elementfile without -o is a loud error naming the actual flag pair,
+	// not a write to cwd and not a message blaming -index.
+	err := run(t.Context(), []string{"forkbind", "-spec", spec, "-pipeargs", pipe, "-elementfile", elem})
+	if !errors.Is(err, errElementNoOut) {
+		t.Errorf("forkbind -elementfile without -o: err = %v, want errElementNoOut", err)
+	}
+}
+
+// TestRunForkBindElementFlagConflicts checks -elementfile rejects the
+// full-collection flags it would otherwise silently ignore: the pre-sliced
+// element path never indexes, writes keys, or dispatches on -mapmode.
+func TestRunForkBindElementFlagConflicts(t *testing.T) {
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
+		`{"v":{"ref":{"kind":"self","id":"vals","output":""},"split":true}}`)
+	pipe := filepath.Join(dir, "pipeargs")
+	writeTestBundle(t, pipe, map[string]any{"vals": []any{1}})
+	elem := writeTestFile(t, filepath.Join(dir, "elem.json"), `1`)
+
+	cases := [][]string{
+		{"-index", "0"},
+		{"-keysfile", filepath.Join(dir, "k.json")},
+		{"-keysonly"},
+		{"-mapmode", "array"},
+	}
+
+	for _, extra := range cases {
+		argv := append([]string{
+			"forkbind", "-spec", spec, "-pipeargs", pipe,
+			"-elementfile", elem, "-o", filepath.Join(dir, "out"),
+		}, extra...)
+
+		if err := run(t.Context(), argv); !errors.Is(err, errElementConflict) {
+			t.Errorf("forkbind -elementfile with %v: err = %v, want errElementConflict", extra, err)
+		}
 	}
 }
 
@@ -610,9 +642,11 @@ func TestRunForkBindElementMap(t *testing.T) {
 	elem := writeTestFile(t, filepath.Join(dir, "elem.json"), `20`)
 	byElem := filepath.Join(dir, "by_element")
 
+	// The element path is fork-kind-agnostic (no -mapmode): the driver already
+	// sliced the map value, so the same command serves array and map forks.
 	if err := run(t.Context(), []string{
 		"forkbind", "-spec", spec, "-pipeargs", pipe,
-		"-mapmode", "map", "-elementfile", elem, "-o", byElem,
+		"-elementfile", elem, "-o", byElem,
 	}); err != nil {
 		t.Fatalf("run forkbind -elementfile (map): %v", err)
 	}
@@ -763,7 +797,7 @@ func TestRunForkBindKeysOnly(t *testing.T) {
 func TestRunMergeSmoke(t *testing.T) {
 	tests := []struct {
 		name     string
-		keysJSON string // empty = array fork (no -keys-file)
+		keysJSON string // empty = array fork (no -keysfile)
 		want     map[string]any
 	}{
 		{name: "array fork", want: map[string]any{"s": []any{1.0, 2.0}}},
@@ -781,7 +815,7 @@ func TestRunMergeSmoke(t *testing.T) {
 
 			argv := []string{"merge", "-outs", "s", "-files", fork0 + "," + fork1, "-o", out}
 			if tc.keysJSON != "" {
-				argv = append(argv, "-keys-file", writeTestFile(t, filepath.Join(dir, "keys.json"), tc.keysJSON))
+				argv = append(argv, "-keysfile", writeTestFile(t, filepath.Join(dir, "keys.json"), tc.keysJSON))
 			}
 
 			if err := run(t.Context(), argv); err != nil {

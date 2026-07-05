@@ -503,7 +503,10 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
 		arg = " -inputs " + strings.Join(pairs, ",")
 	}
 
-	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s -mapmode %s", g.mre, arg, mapModeArg(c))
+	// The element branch keeps the bare forkbind base: -mapmode is a
+	// full-collection flag forkbind rejects alongside -elementfile.
+	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
+	forkbindAll := fmt.Sprintf("%s -mapmode %s", forkbind, mapModeArg(c))
 	main := fmt.Sprintf("%s -args fargs -outs '%s'%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
 		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
 		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
@@ -528,13 +531,13 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
     else
       """
       printf %%s '${element}' | base64 -d > element.json
-      %[3]s -elementfile element.json -o fargs
+      %[6]s -elementfile element.json -o fargs
       %[4]s
       [ -d outs__${key} ]
       """
 }
 
-`, forkName(pipeline, c.Name), in.String(), forkbind, main, stageDirectives(s, ""))
+`, forkName(pipeline, c.Name), in.String(), forkbindAll, main, stageDirectives(s, ""), forkbind)
 }
 
 // genKeyedForkBindProcess emits the fork-key-threaded forkbind for a nested map
@@ -581,7 +584,7 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
     tuple val(key), path('merged', type: 'dir')
   script:
     """
-    '%[2]s' merge%[5]s -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keys-file forkkeys.json -o merged%[4]s
+    '%[2]s' merge%[5]s -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keysfile forkkeys.json -o merged%[4]s
     """
 }
 
@@ -1296,7 +1299,7 @@ func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string, emptyNul
 		flag = " -emptynull"
 	}
 
-	return fmt.Sprintf(`'%s' merge%s -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keys-file %s -o %s%s`,
+	return fmt.Sprintf(`'%s' merge%s -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keysfile %s -o %s%s`,
 		g.mre, flag, outs, glob, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
 }
 
@@ -1418,8 +1421,10 @@ func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Ca
 
 	block, arg := bindInputsHead(head, refCalls(c.Bindings))
 
-	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s -mapmode %s",
-		g.mre, arg, mapModeArg(c))
+	// The element branch keeps the bare forkbind base: -mapmode is a
+	// full-collection flag forkbind rejects alongside -elementfile.
+	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
+	forkbindAll := fmt.Sprintf("%s -mapmode %s", forkbind, mapModeArg(c))
 	main := fmt.Sprintf("%s -args fargs -outs '%s'%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
 		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
 		strings.Join(names(s.Out), ","), g.producerArgs(c.Callable, types.RoleMainOut))
@@ -1444,13 +1449,13 @@ func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Ca
     else
       """
       printf %%s '${element}' | base64 -d > element.json
-      %[4]s -elementfile element.json -o fargs
+      %[6]s -elementfile element.json -o fargs
       %[5]s
       [ -d outs__${key} ]
       """
 }
 
-`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, forkbind, main)
+`, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, forkbindAll, main, forkbind)
 }
 
 // genMergeProcess emits a process that merges per-fork outputs into the
