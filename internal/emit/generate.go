@@ -698,7 +698,11 @@ func genKeyedMappedCallBody(body *strings.Builder, prog *ir.Program, pipeline st
 			c.Name, field, mapModeArg(c))
 		fmt.Fprintf(body, "    io_%[1]s = %[2]s_KS(ek_%[1]s, types, %[3]s)\n",
 			c.Name, fork, specFile(bindName(pipeline, c.Name)))
-		fmt.Fprintf(body, "    mj_%[1]s = io_%[1]s.keys.join(io_%[1]s.outs.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, so ?: [], fk) }\n", c.Name)
+		// groupTuple's per-group order is completion order; sorting the grouped
+		// bundles by name pins MERGE_K's input order — part of its -resume cache
+		// key — so a replay stays CACHED regardless of arrival order (the output
+		// bytes are already order-safe via the in-task `sort -V`).
+		fmt.Fprintf(body, "    mj_%[1]s = io_%[1]s.keys.join(io_%[1]s.outs.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, (so ?: []).sort { a, b -> a.name <=> b.name }, fk) }\n", c.Name)
 		fmt.Fprintf(body, "    %s_K(mj_%s, types)\n", merge, c.Name)
 		fmt.Fprintf(body, "    ch_%[1]s_l = %[2]s_K.out.toList()\n", c.Name, merge)
 
@@ -719,7 +723,8 @@ func genKeyedMappedCallBody(body *strings.Builder, prog *ir.Program, pipeline st
 	// the staged names file and constructing each fork path is object-store-safe.
 	fmt.Fprintf(body, "    ik_%[1]s = %[2]s_K.out.forks.flatMap { ok, d -> Mro2nf.forkTuples(ok, d) }\n", c.Name, fork)
 	fmt.Fprintf(body, "    io_%[1]s = %[2]s(ik_%[1]s)\n", c.Name, alias)
-	fmt.Fprintf(body, "    mj_%[1]s = %[2]s_K.out.keys.join(io_%[1]s.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, so ?: [], fk) }\n", c.Name, fork)
+	// Sorted for the same -resume cache-key reason as the scatter path above.
+	fmt.Fprintf(body, "    mj_%[1]s = %[2]s_K.out.keys.join(io_%[1]s.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, (so ?: []).sort { a, b -> a.name <=> b.name }, fk) }\n", c.Name, fork)
 	fmt.Fprintf(body, "    %s_K(mj_%s, types)\n", merge, c.Name)
 
 	if c.Disabled != nil {
@@ -1046,7 +1051,9 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     // chunk outputs, so a fork whose split produced zero chunks (no groupTuple
     // group) still runs JOIN_K — with an empty chunk-outs list — instead of
     // being dropped. defs/joinres are inner-joined (always emitted per fork).
-    joined = ch.jn.join(%[1]s_SPLIT_K.out.defs).join(joinres).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[3], t[4] ?: [], t[1], t[2]) }
+    // The grouped chunk outs are sorted by name: groupTuple order is completion
+    // order, and JOIN_K's input order is part of its -resume cache key.
+    joined = ch.jn.join(%[1]s_SPLIT_K.out.defs).join(joinres).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[3], (t[4] ?: []).sort { a, b -> a.name <=> b.name }, t[1], t[2]) }
     %[1]s_JOIN_K(joined, types)
   emit:
     %[1]s_JOIN_K.out
