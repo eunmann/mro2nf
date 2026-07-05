@@ -74,10 +74,13 @@ transpile() {
 if [ "${NO_BUILD:-}" != "1" ]; then
     aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR" >/dev/null
     build_one() {
+        # Failures report and return 0 (like run_one): a nonzero return would
+        # propagate through bash -c and xargs (exit 123) and, under set -e,
+        # abort the whole campaign; phase 3 flags unbuilt fixtures instead.
         local fx="$1"
-        transpile "$fx" >"$WORK/$fx.tp.log" 2>&1 || { echo "TRANSPILE_FAIL $fx"; return 1; }
-        ( cd "$WORK/$fx" && docker build --platform linux/amd64 -t "${ECR}:${fx}" . >"$WORK/$fx.build.log" 2>&1 ) || { echo "BUILD_FAIL $fx"; return 1; }
-        docker push "${ECR}:${fx}" >"$WORK/$fx.push.log" 2>&1 || { echo "PUSH_FAIL $fx"; return 1; }
+        transpile "$fx" >"$WORK/$fx.tp.log" 2>&1 || { echo "TRANSPILE_FAIL $fx"; return 0; }
+        ( cd "$WORK/$fx" && docker build --platform linux/amd64 -t "${ECR}:${fx}" . >"$WORK/$fx.build.log" 2>&1 ) || { echo "BUILD_FAIL $fx"; return 0; }
+        docker push "${ECR}:${fx}" >"$WORK/$fx.push.log" 2>&1 || { echo "PUSH_FAIL $fx"; return 0; }
         echo "IMAGE_READY $fx"
     }
     export -f build_one transpile; export ROOT ECR MRE SHELL_PY WORK
@@ -120,7 +123,9 @@ for fx in "${FIXTURES[@]}"; do
         echo "OK[$fx]: AWS Batch pipeline_outs matches mrp"
     else
         echo "FAIL[$fx]: pipeline_outs mismatch (run log: $WORK/$fx.run.log)"
-        python3 "$ROOT/test/e2e/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" | sed 's/^/    /'
+        # normcmp exits nonzero here by construction; without the guard,
+        # pipefail + set -e would abort the loop on the first mismatch.
+        python3 "$ROOT/test/e2e/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" | sed 's/^/    /' || true
         rc=1
     fi
     rm -rf "$mt"

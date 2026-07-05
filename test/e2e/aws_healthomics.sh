@@ -125,7 +125,8 @@ for fx in "${FIXTURES[@]}"; do
     [ "$(aws omics get-workflow --id "${WFID[$fx]:-x}" --query status --output text 2>/dev/null || true)" = "ACTIVE" ] || continue
     RUNID[$fx]="$(aws omics start-run --workflow-id "${WFID[$fx]}" --role-arn "$OMICS_ROLE" \
         --name "mro2nf-$fx-$$" --output-uri "s3://${BUCKET}/omics-out" \
-        --parameters "{\"container\":\"${ECR}:${fx}\"}" --query id --output text)"
+        --parameters "{\"container\":\"${ECR}:${fx}\"}" --query id --output text)" \
+        || { echo "START_FAIL $fx"; continue; }
     echo "STARTED $fx run=${RUNID[$fx]}"
 done
 
@@ -158,7 +159,8 @@ for fx in "${FIXTURES[@]}"; do
         || { echo "FAIL[$fx]: local mrp"; rc=1; rm -rf "$mt"; continue; }
     mrp_json="$(ls -d "$mt"/mrp/*/fork0/_outs 2>/dev/null | sort | head -1)"
     # HealthOmics exports params.outdir under s3://<output-uri>/<runId>/out/...; find the published file.
-    key="$(aws s3 ls "s3://${BUCKET}/omics-out/${RUNID[$fx]}/" --recursive | awk '/pipeline_outs\.json$/{print $4; exit}')"
+    # aws s3 ls exits nonzero on an empty prefix; the -z check below reports it.
+    key="$(aws s3 ls "s3://${BUCKET}/omics-out/${RUNID[$fx]}/" --recursive | awk '/pipeline_outs\.json$/{print $4; exit}')" || true
     if [ -z "$key" ] || ! aws s3 cp "s3://${BUCKET}/${key}" "$mt/nf_outs.json" >/dev/null 2>&1; then
         echo "FAIL[$fx]: no exported pipeline_outs.json"; rc=1; rm -rf "$mt"; continue
     fi
