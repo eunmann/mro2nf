@@ -1057,11 +1057,35 @@ def write_chunk_bundles(dir_, defs, man, callable_):
         write_payload(bdir, {"args": marked, "resources": resources_struct(res)})
 
 
+def run_outs_phase(fl, phase, files, eff, man, args, invoke):
+    """The shared run_main/run_join tail: stage the skeleton outs, import the
+    stage module, run invoke(module, outs) under -monitor scoping, and write
+    the -o bundle. On a stage sys.exit(0) the vendor shell exits without
+    rewriting _outs, so mre bundles the skeleton it staged before the run —
+    never the possibly-mutated in-memory Record; a nonzero sys.exit raises
+    via stage_system_exit."""
+    out_path = abs_out(fl.o)
+    out_params = man.params(fl.callable, fl.role)
+    skeleton = skeleton_outs(man.structs, out_params, files)
+    outs = record(skeleton)
+    module = setup_stage(fl, files, eff, args)
+    try:
+        with monitored_phase(fl.monitor, eff):
+            invoke(module, outs)
+    except martian.StageAssertion:
+        raise
+    except SystemExit as exc:
+        stage_system_exit(exc, phase)
+        write_bundle(out_path, martian.json_sanitize(dict(skeleton)),
+                     out_params, man.structs)
+        return
+    write_outs(out_path, outs, out_params, man)
+
+
 def run_main(fl):
     """Ports cmd/mre/main.go runMain + shim.RunMain: merge stage and chunk
     args, inject resolved resources, run main(args, outs), write the bundle."""
     _, files = prep_dirs(fl.work, "main")
-    out_path = abs_out(fl.o)
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
     chunk_res, chunk_args = decode_chunk(read_bundle(fl.chunk))
@@ -1070,53 +1094,27 @@ def run_main(fl):
     merged = dict(args)
     merged.update(chunk_args)
     inject_resources(merged, eff)
-    out_params = man.params(fl.callable, fl.role)
-    skeleton = skeleton_outs(man.structs, out_params, files)
-    outs = record(skeleton)
-    module = setup_stage(fl, files, eff, args)
-    try:
-        with monitored_phase(fl.monitor, eff):
-            module.main(record(merged), outs)
-    except martian.StageAssertion:
-        raise
-    except SystemExit as exc:
-        stage_system_exit(exc, "main")
-        # Exit 0: the vendor shell exits without rewriting _outs, so mre
-        # bundles the skeleton it staged before the run — never the
-        # possibly-mutated in-memory Record.
-        write_bundle(out_path, martian.json_sanitize(dict(skeleton)),
-                     out_params, man.structs)
-        return
-    write_outs(out_path, outs, out_params, man)
+    run_outs_phase(
+        fl, "main", files, eff, man, args,
+        lambda module, outs: module.main(record(merged), outs),
+    )
 
 
 def run_join(fl):
     """Ports cmd/mre/main.go runJoin + shim.RunJoin: args + resolved
     resources, chunk defs/outs Records, run join(...), write the bundle."""
     _, files = prep_dirs(fl.work, "join")
-    out_path = abs_out(fl.o)
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
     eff = resolve_resources(Resources(), cli_resources(fl))
     merged = dict(args)
     inject_resources(merged, eff)
     chunk_defs, chunk_outs = read_chunk_data(fl.chunkdefs, fl.chunkouts)
-    out_params = man.params(fl.callable, fl.role)
-    skeleton = skeleton_outs(man.structs, out_params, files)
-    outs = record(skeleton)
-    module = setup_stage(fl, files, eff, args)
-    try:
-        with monitored_phase(fl.monitor, eff):
-            module.join(record(merged), outs, chunk_defs, chunk_outs)
-    except martian.StageAssertion:
-        raise
-    except SystemExit as exc:
-        stage_system_exit(exc, "join")
-        # Exit 0: mre bundles the pre-staged skeleton (see run_main).
-        write_bundle(out_path, martian.json_sanitize(dict(skeleton)),
-                     out_params, man.structs)
-        return
-    write_outs(out_path, outs, out_params, man)
+    run_outs_phase(
+        fl, "join", files, eff, man, args,
+        lambda module, outs: module.join(
+            record(merged), outs, chunk_defs, chunk_outs),
+    )
 
 
 def read_chunk_data(defs_path, outs_list):
