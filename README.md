@@ -92,7 +92,7 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-mrjob <path>` | path to `mrjob` (only needed for `comp` stages) |
 | `-container <image>` | set `process.container` for container backends (AWS Batch, k8s) |
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
-| `-monitor` | cap each stage's virtual memory at its `vmem_gb` via `prlimit` (mrp `--monitor`) |
+| `-monitor` | enforce mrp `--monitor`'s memory limits per stage: an RSS kill at `mem_gb` (the process-group monitor, mrp's primary kill) plus a `prlimit` virtual-memory cap at `vmem_gb` |
 | `-fuse-chains` | fuse a single-consumer, equal-resource source stage into its consumer's task (fewer tasks; **trade-off:** `-resume` and per-stage retry are coarser for the fused stages) |
 | `-fold-disables` | constant-fold an entry-determinable disable gate: an always-disabled stage is pruned at transpile time (**trade-off:** overriding that gate input at launch will *not* re-enable the pruned stage — the transpiler warns which) |
 | `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native--native-runner)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
@@ -192,7 +192,7 @@ make lint-check    # golangci-lint (no auto-fix)
 The e2e suites are Go tests in `test/e2e` (build tag `e2e`, always run with
 `-count=1` so the test cache can't return a stale ok). `make test-e2e` runs
 each fixture's transpiled pipeline under Nextflow in a bounded parallel pool
-(`E2E_PARALLEL=<n>`, default 6) and diffs the result against the committed
+(`E2E_PARALLEL=<n>`, default 10) and diffs the result against the committed
 real-`mrp` golden; it also covers copy-staging (the object-store data plane),
 the retry/ASSERT failure contract, `-resume` cache stability, and
 `mro2nf overrides` overlay application. `make test-e2e-docker` runs pipelines
@@ -324,7 +324,8 @@ and the object-store data plane.
 Every map-call combination works, including disabled map calls, maps over
 pipelines that contain disabled calls, disabled nested maps, and nested maps
 (handled by 2-D fork keying). The shim handles content-based retry (ASSERT
-terminates, everything else retries) and `-monitor` vmem enforcement.
+terminates, everything else retries) and `-monitor` memory enforcement (RSS
+kill + vmem cap).
 
 Resources track mrp, so a transpiled run schedules and finishes comparably.
 Per-chunk `cpus` and `memory`, the split-returned `join` override, and the

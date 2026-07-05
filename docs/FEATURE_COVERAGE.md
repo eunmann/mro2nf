@@ -115,7 +115,7 @@ out of scope for a transpiler.
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
 | ASSERT vs retryable-error classification | ✅ shim exits 42 for an ASSERT (terminate) vs 1 for a retryable failure; config's dynamic `errorStrategy` routes accordingly | unit `TestStageFailureClassification`, `TestEmitConfig` |
 | auto-adjust-memory / OOM escalation | ✅ memory directives grow with `task.attempt`, so an OOM-killed stage (a retryable failure) is retried with more memory instead of failing identically; cpus do not escalate. Attempt 1 is unchanged | unit `TestEmitModules` (`* task.attempt`) |
-| `--monitor` vmem enforcement | ✅ with `mro2nf -monitor` (shim `prlimit --as` cap; RLIMIT_AS address-space, vs mrp's RSS poll) | unit `TestLimitedCommandMonitor` |
+| `--monitor` memory enforcement | ✅ with `mro2nf -monitor`: an RSS kill at `mem_gb` via the process-group monitor (mrp's primary kill) plus a `prlimit --as` vmem cap at `vmem_gb` | unit `TestMemMonitor*`, `TestRunAdapterMonitorMemoryQuota`, `TestLimitedCommandMonitor` |
 
 ## Outputs / storage — storage-management
 
@@ -183,10 +183,13 @@ The trade-offs each flag opts into are surfaced as transpile-time diagnostics
   - **content-based retry (ASSERT vs retryable)** — ✅ done. The shim exits 42 for
     an `ASSERT:` failure and 1 otherwise; the config's dynamic `errorStrategy`
     terminates the former and retries the latter.
-  - **`--monitor` vmem enforcement** — ✅ done (opt-in `mro2nf -monitor`). The shim
-    caps the adapter via `prlimit --as`. Caveat: RLIMIT_AS bounds address space,
-    where mrp polls RSS, so a high-virtual/low-resident stage may be capped
-    sooner; enable only when you want that ceiling.
+  - **`--monitor` memory enforcement** — ✅ done (opt-in `mro2nf -monitor`). The
+    shim polls the stage process group's RSS and kills it over `mem_gb` (mrp's
+    primary monitor kill, same "exceeded its memory quota" message), and
+    additionally caps the adapter's address space via `prlimit --as` at
+    `vmem_gb`. Caveat: RLIMIT_AS bounds virtual address space, so a
+    high-virtual/low-resident stage may hit the vmem cap before the RSS kill;
+    enable only when you want those ceilings.
   - **VDR rolling/strict mid-run deletion** — *not* shim-level (a single phase has
     no downstream-DAG view). For a volatile output with one consumer it is cleanly
     emittable (inject the delete into that consumer's shim, removing the symlink
