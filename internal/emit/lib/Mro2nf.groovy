@@ -15,7 +15,6 @@
 // package, so generated code references `Mro2nf` directly.
 
 import groovy.json.JsonSlurper
-import groovy.json.JsonOutput
 import groovy.transform.CompileStatic
 import java.nio.file.Path
 
@@ -91,7 +90,7 @@ class Mro2nf {
     }
 
     // forkElements is the O(1)-per-instance native scatter for a VALUE-only
-    // split source (#99): the split collection in `field` is parsed ONCE here on
+    // split source (#99): the split collection in `field` is sliced ONCE here on
     // the driver and each fork gets ONLY its own pre-sliced element, so no
     // instance re-parses the whole collection (the O(N^2) the per-fork forkbind
     // -index did across N instances). Emits [key, index, elementB64] per fork in
@@ -105,7 +104,7 @@ class Mro2nf {
     // (the emitter gates this), so the JSON element is the whole split value —
     // no bundle marker rewrite is needed, unlike a file fork.
     static List forkElements(Path jsonFile, String field, String mapMode) {
-        elementTriples((Map) parseJson(jsonFile), field, mapMode)
+        elementTriples(jsonFile.text, field, mapMode)
     }
 
     // forkElementsPa is forkElements for a QUEUE-pipeargs pipeline (#99): pa is a
@@ -115,7 +114,7 @@ class Mro2nf {
     // broadcast input. Upstream refs are barred in queue-pipeargs pipelines
     // (nativeScatterable), so the collection is always in pipeargs itself.
     static List forkElementsPa(Path paJson, Object paLeaves, String field, String mapMode) {
-        elementTriples((Map) parseJson(paJson), field, mapMode).collect { Object t ->
+        elementTriples(paJson.text, field, mapMode).collect { Object t ->
             List tuple = (List) t
             [tuple[0], tuple[1], tuple[2], paJson, paLeaves]
         }
@@ -132,52 +131,55 @@ class Mro2nf {
     // index-0 keys resolve. An empty/null inner collection yields the single
     // "outerKey~fork_none" sentinel (index -1), exactly like forkElements.
     static List forkElementsKeyed(Object outerKey, Path bundleDir, String field, String mapMode) {
-        elementTriples(parseSidecar(bundleDir), field, mapMode).collect { Object t ->
+        elementTriples(bundleDir.resolve('data.json').text, field, mapMode).collect { Object t ->
             List tuple = (List) t
             [outerKey, outerKey.toString() + '~' + (String) tuple[0], tuple[1], tuple[2], bundleDir]
         }
     }
 
     // elementTriples slices `field`'s collection into [key, index, elementB64]
-    // per fork — the shared core of forkElements/forkElementsPa. The collection
-    // is parsed ONCE here on the driver and each fork gets ONLY its own
-    // pre-sliced element, so no instance re-parses the whole collection (the
-    // O(N^2) the per-fork forkbind -index did across N instances). Emits in the
-    // SAME order/index the full-fork write uses (array order; map keys sorted by
-    // UTF-8 byte value, matching bind.go sortedKeys), so the gather sees
-    // identical ordering. The element is base64-encoded JSON so it transports
-    // through the task script safely regardless of contents (a string value with
-    // shell metacharacters cannot break the command). An empty/null/wrong-kind
-    // source yields the single index -1 sentinel (its instance validates via
-    // forkbind -keysonly and feeds the gather the typed empty). Value-only:
-    // `field` carries no file leaves (the emitter gates this), so the JSON
-    // element is the whole split value — no bundle marker rewrite, unlike a file
-    // fork.
-    private static List elementTriples(Map data, String field, String mapMode) {
-        def v = data.get(field)
-        if (v == null) return [['fork_none', -1, '']]
+    // per fork — the shared core of forkElements/forkElementsPa/
+    // forkElementsKeyed. The collection is sliced ONCE here on the driver and
+    // each fork gets ONLY its own pre-sliced element, so no instance re-parses
+    // the whole collection (the O(N^2) the per-fork forkbind -index did across
+    // N instances). Emits in the SAME order/index the full-fork write uses
+    // (array order; map keys sorted by UTF-8 byte value, matching bind.go
+    // sortedKeys), so the gather sees identical ordering. Each element is the
+    // RAW substring of the source JSON, base64-encoded for shell-safe transport
+    // (a string value with shell metacharacters cannot break the command). Raw
+    // carriage is load-bearing (#124): a JsonSlurper -> JsonOutput round-trip
+    // re-encodes numeric lexemes (1e5 -> 1E+5, -0.0 -> 0.0) and silently
+    // OVERFLOWS integers past Long, while the -index path embeds the source
+    // bytes verbatim via json.RawMessage — the two paths must produce
+    // byte-identical _args (contract 1). An empty/null/wrong-kind source
+    // yields the single index -1 sentinel (its instance validates via forkbind
+    // -keysonly and feeds the gather the typed empty). Value-only: `field`
+    // carries no file leaves (the emitter gates this), so the JSON element is
+    // the whole split value — no bundle marker rewrite, unlike a file fork.
+    private static List elementTriples(String json, String field, String mapMode) {
+        String raw = rawTopField(json, field)
+        if (raw == null || raw == 'null') return [['fork_none', -1, '']]
 
-        if (v instanceof List && mapMode == 'array') {
-            List l = (List) v
-            if (l.isEmpty()) return [['fork_none', -1, '']]
-            return (0..<l.size()).collect { int i ->
-                ['fork_' + Integer.toString(i).padLeft(5, '0'), i, b64(l[i])]
+        if (raw.startsWith('[') && mapMode == 'array') {
+            List<String> elems = rawArrayElements(raw)
+            if (elems.isEmpty()) return [['fork_none', -1, '']]
+            return (0..<elems.size()).collect { int i ->
+                ['fork_' + Integer.toString(i).padLeft(5, '0'), i, b64(elems[i])]
             }
         }
 
-        if (v instanceof Map && mapMode == 'map') {
-            Map m = (Map) v
-            if (m.isEmpty()) return [['fork_none', -1, '']]
-            List keys = new ArrayList(m.keySet())
+        if (raw.startsWith('{') && mapMode == 'map') {
+            List<List<String>> entries = rawObjectEntries(raw)
+            if (entries.isEmpty()) return [['fork_none', -1, '']]
             // Order the keys by UTF-8 byte value, matching Go's sort.Strings
             // (bind.go sortedKeys) EXACTLY — the forkkeys sidecar the fi==0
             // instance writes uses that order, so the element index order here
             // must agree or a map fork would pair values with the wrong keys.
             // (Java's natural String order diverges only for supplementary-plane
             // code points, but matching Go byte order removes the risk entirely.)
-            keys.sort { Object a, Object b -> compareUtf8((String) a, (String) b) }
-            return (0..<keys.size()).collect { int i ->
-                ['fork_' + Integer.toString(i).padLeft(5, '0'), i, b64(m[keys[i]])]
+            entries.sort { List<String> a, List<String> b -> compareUtf8(a[0], b[0]) }
+            return (0..<entries.size()).collect { int i ->
+                ['fork_' + Integer.toString(i).padLeft(5, '0'), i, b64(entries[i][1])]
             }
         }
 
@@ -186,9 +188,147 @@ class Mro2nf {
         return [['fork_none', -1, '']]
     }
 
-    // b64 renders a value as base64-encoded JSON for shell-safe transport.
-    private static String b64(Object v) {
-        JsonOutput.toJson(v).getBytes('UTF-8').encodeBase64().toString()
+    // b64 base64-encodes a raw JSON substring for shell-safe transport.
+    private static String b64(String rawJson) {
+        rawJson.getBytes('UTF-8').encodeBase64().toString()
+    }
+
+    // rawTopField returns the raw substring of a top-level object field's
+    // value, or null when the field is absent. Deliberately scans the WHOLE
+    // object instead of stopping at the match: the single O(file) pass then
+    // doubles as full-document validation, so a corrupt data.json fails loudly
+    // even when the split field itself scans clean. First match wins on a
+    // duplicate key (unreachable: data.json is written by Go's json.Marshal,
+    // which never emits duplicate keys).
+    private static String rawTopField(String json, String field) {
+        for (List<String> e : rawObjectEntries(json)) {
+            if (e[0] == field) return e[1]
+        }
+        return null
+    }
+
+    // rawObjectEntries scans a JSON object and returns its [decodedKey,
+    // rawValueSubstring] entries in source order — one entry per key
+    // occurrence, so a duplicate key yields duplicate entries (unreachable in
+    // practice: the input is written by Go's json.Marshal, which never emits
+    // duplicates). Keys are decoded (JSON string escapes resolved) so they
+    // compare and sort exactly like the Go side's decoded keys — never match
+    // or sort on the raw substring, where the escaped and literal forms of a
+    // key (Go writes `&` as the six chars backslash-u-0-0-2-6) order
+    // differently;
+    // values stay raw. Malformed input throws — data.json is machine-written,
+    // so that is a system bug that must fail loudly.
+    private static List<List<String>> rawObjectEntries(String s) {
+        List<List<String>> out = []
+        int i = skipWs(s, 0)
+        expect(s, i, '{' as char)
+        i = skipWs(s, i + 1)
+        if (charAt(s, i) == ('}' as char)) return out
+        while (true) {
+            int keyEnd = scanString(s, i)
+            String key = decodeKey(s.substring(i, keyEnd))
+            i = skipWs(s, keyEnd)
+            expect(s, i, ':' as char)
+            int vs = skipWs(s, i + 1)
+            int ve = scanValue(s, vs)
+            out.add([key, s.substring(vs, ve)])
+            i = skipWs(s, ve)
+            if (charAt(s, i) == (',' as char)) { i = skipWs(s, i + 1); continue }
+            expect(s, i, '}' as char)
+            return out
+        }
+    }
+
+    // decodeKey resolves a raw JSON string token (quotes included) to its
+    // decoded value. The common escape-free key is a plain substring; only a
+    // key containing a backslash pays for a JsonSlurper parse. That parse
+    // depends on JsonSlurper accepting a ROOT-LEVEL primitive (a bare JSON
+    // string), which the Groovy 3+ parser Nextflow ships does.
+    private static String decodeKey(String rawKey) {
+        if (!rawKey.contains('\\')) return rawKey.substring(1, rawKey.length() - 1)
+        (String) new JsonSlurper().parseText(rawKey)
+    }
+
+    // rawArrayElements scans a JSON array and returns each element's raw
+    // substring in order.
+    private static List<String> rawArrayElements(String s) {
+        List<String> out = []
+        int i = skipWs(s, 0)
+        expect(s, i, '[' as char)
+        i = skipWs(s, i + 1)
+        if (charAt(s, i) == (']' as char)) return out
+        while (true) {
+            int ve = scanValue(s, i)
+            out.add(s.substring(i, ve))
+            i = skipWs(s, ve)
+            if (charAt(s, i) == (',' as char)) { i = skipWs(s, i + 1); continue }
+            expect(s, i, ']' as char)
+            return out
+        }
+    }
+
+    // scanValue returns the end index (exclusive) of the JSON value starting at
+    // i: a string, a depth-tracked (string-aware) object/array, or a
+    // number/true/false/null lexeme ending at the next delimiter.
+    private static int scanValue(String s, int i) {
+        char c = charAt(s, i)
+        if (c == ('"' as char)) return scanString(s, i)
+        if (c == ('{' as char) || c == ('[' as char)) {
+            int depth = 0
+            int j = i
+            while (j < s.length()) {
+                char d = s.charAt(j)
+                if (d == ('"' as char)) { j = scanString(s, j); continue }
+                if (d == ('{' as char) || d == ('[' as char)) depth++
+                else if (d == ('}' as char) || d == (']' as char)) { depth--; if (depth == 0) return j + 1 }
+                j++
+            }
+            throw malformed(s, i)
+        }
+        int j = i
+        while (j < s.length()) {
+            char d = s.charAt(j)
+            if (d == (',' as char) || d == ('}' as char) || d == (']' as char) || isWs(d)) break
+            j++
+        }
+        if (j == i) throw malformed(s, i)
+        return j
+    }
+
+    // scanString returns the end index (exclusive) of the JSON string whose
+    // opening quote is at i, honoring backslash escapes.
+    private static int scanString(String s, int i) {
+        expect(s, i, '"' as char)
+        int j = i + 1
+        while (j < s.length()) {
+            char c = s.charAt(j)
+            if (c == ('\\' as char)) { j += 2; continue }
+            if (c == ('"' as char)) return j + 1
+            j++
+        }
+        throw malformed(s, i)
+    }
+
+    private static int skipWs(String s, int i) {
+        while (i < s.length() && isWs(s.charAt(i))) i++
+        return i
+    }
+
+    private static boolean isWs(char c) {
+        c == (' ' as char) || c == ('\t' as char) || c == ('\n' as char) || c == ('\r' as char)
+    }
+
+    private static char charAt(String s, int i) {
+        if (i >= s.length()) throw malformed(s, i)
+        s.charAt(i)
+    }
+
+    private static void expect(String s, int i, char want) {
+        if (charAt(s, i) != want) throw malformed(s, i)
+    }
+
+    private static IllegalArgumentException malformed(String s, int i) {
+        new IllegalArgumentException('malformed JSON at offset ' + i + ': ' + s.take(80))
     }
 
     // compareUtf8 orders two strings by unsigned UTF-8 byte value, matching Go's
