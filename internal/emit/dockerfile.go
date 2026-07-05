@@ -1,7 +1,6 @@
 package emit
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,8 +22,9 @@ const (
 
 // checkContainerSources fails loudly if a baked runtime source is missing,
 // rather than letting it surface as a cryptic `docker build` COPY error or a
-// silently broken image. mre is always required; -shell and each stage's code
-// are verified when present (an exec/comp-only pipeline may have no -shell).
+// silently broken image. mre is always required; -shell, -mrjob, and each
+// stage's code are verified when present (an exec/comp-only pipeline may have
+// no -shell).
 func checkContainerSources(opts Options) error {
 	if opts.Mre == "" {
 		return &apperror.UnsupportedError{Construct: "container target", Detail: "-mre is required (it is baked into the image)"}
@@ -33,6 +33,10 @@ func checkContainerSources(opts Options) error {
 	toCheck := map[string]string{"-mre": opts.Mre}
 	if opts.Shell != "" {
 		toCheck["-shell"] = opts.Shell
+	}
+
+	if opts.Mrjob != "" {
+		toCheck["-mrjob"] = opts.Mrjob
 	}
 
 	for name, src := range opts.StageCode {
@@ -115,8 +119,9 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 // dockerfile renders the runtime image: the mre shim plus the Martian adapters,
 // stage code, and (comp pipelines) the mrjob wrapper at fixed paths, on a base
 // with bash + ps and no ENTRYPOINT (both AWS Batch and HealthOmics inject a bash
-// launcher). x86_64 only. Each COPY is emitted only when its source was staged,
-// so a missing optional piece never breaks `docker build`.
+// launcher). x86_64 only. Each COPY is emitted only when its source was staged
+// (checkContainerSources verifies every source and copyTree errors on a missing
+// one), so an absent optional piece never breaks `docker build`.
 func dockerfile(target Target, hasAdapters, hasStages, hasMrjob, hasRunner bool) string {
 	awsCLI := ""
 	if target == TargetAWSBatch {
@@ -166,13 +171,10 @@ func awsCLIComment(target Target) string {
 }
 
 // copyTree copies a file or directory tree from src to dst, preserving the
-// executable bit. A missing src is skipped (best-effort build context).
+// executable bit. A missing src is an error: every source is pre-verified by
+// checkContainerSources, so absence here means the tree changed under us.
 func copyTree(src, dst string) error {
 	info, err := os.Stat(src)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", src, err)
 	}
