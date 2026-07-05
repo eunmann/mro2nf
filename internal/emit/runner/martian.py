@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Martian stage-code API for the mro2nf native runner (issue #79).
 
-A lean port of vendor-martian/python/martian.py: same public surface and
-quirks (make_path returns BYTES; Record.__getitem__ indexes the dict-keys
-view as-is), but with no metadata-file protocol and no fd3/fd4 channels:
+A lean port of vendor-martian/python/martian.py: the vendor's public
+surface and quirks (make_path returns BYTES; Record.__getitem__ indexes the
+dict-keys view as-is), with exactly two deliberate surface differences —
+test_initialize is omitted (it boots the vendor's metadata-file StageWrapper,
+which does not exist here) and StageAssertion is added (the exception
+exit() raises) — and with no metadata-file protocol and no fd3/fd4 channels:
 
   - log_* write to stderr in mrp's log-line format
     ('%Y-%m-%d %H:%M:%S [level] msg'),
