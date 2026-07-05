@@ -49,3 +49,33 @@ func TestApplyConfigPrecedence(t *testing.T) {
 		t.Errorf("unset fuse-chains should still take config value, got %v", *fuse2)
 	}
 }
+
+// TestAbsOrSelf pins the tool-path resolution rule: a bare command name (no
+// path separator) is left for PATH lookup — ANY name, not just "mre" — while
+// anything containing a separator is anchored to an absolute path so the
+// generated project does not depend on Nextflow's task working directory.
+func TestAbsOrSelf(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name, in, want string
+	}{
+		{"empty stays empty", "", ""},
+		{"bare mre stays PATH-resolved", "mre", "mre"},
+		{"any bare command stays PATH-resolved", "mrjob", "mrjob"},
+		{"relative path absolutized", "bin/mre", filepath.Join(cwd, "bin", "mre")},
+		{"dot-relative path absolutized", "./mre", filepath.Join(cwd, "mre")},
+		{"absolute path unchanged", "/usr/bin/mre", "/usr/bin/mre"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := absOrSelf(tc.in); got != tc.want {
+				t.Errorf("absOrSelf(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
