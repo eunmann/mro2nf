@@ -523,11 +523,6 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
 // rejects an empty literal split (`split []` is a parse error) — so a flagged
 // keyed merge always has at least one fork.
 func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
-	flag := ""
-	if g.plan.pipes[pipeline].calls[c.Name].emptyNull {
-		flag = " -emptynull"
-	}
-
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
     tuple val(key), path(souts), path('forkkeys.json')
@@ -536,11 +531,13 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
     tuple val(key), path('merged', type: 'dir')
   script:
     """
-    '%[2]s' merge%[5]s -outs '%[3]s' -files "\$(ls -1d outs__* 2>/dev/null | sort -V | paste -sd, -)" -keysfile forkkeys.json -o merged%[4]s
+    %[2]s
     """
 }
 
-`, mergeName(pipeline, c.Name), g.mre, calleeOuts, g.producerArgs(c.Callable, types.RoleOut), flag)
+`, mergeName(pipeline, c.Name),
+		g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged",
+			g.plan.pipes[pipeline].calls[c.Name].emptyNull))
 }
 
 // genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,
@@ -1261,9 +1258,10 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 	return inputs.String(), arg, pre.String()
 }
 
-// mergeCmd renders the `mre merge` gather command. The MERGE task and the
-// folded in-task merge (#76) share it, so the two invocations cannot drift —
-// they differ only in where the fork outs live and where the result lands.
+// mergeCmd renders the `mre merge` gather command. The MERGE task, the keyed
+// MERGE_K task, and the folded in-task merge (#76) all share it, so the
+// invocations cannot drift — they differ only in where the fork outs live and
+// where the result lands.
 // emptyNull applies mrp's invocation-known-empty rule: zero forks merge to
 // null instead of the typed empty (#99).
 func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string, emptyNull bool) string {
