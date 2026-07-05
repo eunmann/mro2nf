@@ -24,10 +24,12 @@ import (
 // the emitter down generator branches the default emission never reaches
 // (native scatter/merge, the direct-call runner scripts, fused-chain
 // processes, folded-off null channels), so each fixture is linted under every
-// single flag plus the -native -native-runner composition. The full matrix is
-// cheap enough to run whole rather than subset: `nextflow lint` measures
-// ~1.2s wall per project (transpile is milliseconds), so all fixtures times
-// these configs cost a few CPU-minutes, amortized by -parallel.
+// single flag plus the compositions that route down distinct combined
+// branches: -native -native-runner, and -native with each plan lever
+// (TestNativeCombos proves those emit Groovy neither flag emits alone). The
+// full matrix is cheap enough to run whole rather than subset: `nextflow
+// lint` measures ~1.2s wall per project (transpile is milliseconds), so all
+// fixtures times these configs cost a few CPU-minutes, amortized by -parallel.
 var lintConfigs = []struct {
 	name  string
 	flags []string
@@ -38,6 +40,8 @@ var lintConfigs = []struct {
 	{"fuse-chains", []string{"-fuse-chains"}},
 	{"fold-disables", []string{"-fold-disables"}},
 	{"native+native-runner", []string{"-native", "-native-runner"}},
+	{"native+fuse-chains", []string{"-native", "-fuse-chains"}},
+	{"native+fold-disables", []string{"-native", "-fold-disables"}},
 }
 
 // minNextflowMajor/Minor is the first release with `nextflow lint`.
