@@ -104,3 +104,7 @@ jobs:
           push: ${{ env.DRY_RUN != 'true' }} # dry run builds the image but does not push
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Bake the tag into `mre version` (a dispatch dry run bakes the branch
+          # name, which is fine — the image is never pushed).
+          build-args: |
+            VERSION=${{ github.ref_name }}
