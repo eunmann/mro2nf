@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Print a benchmark metrics table and gate on the per-file transfer multiplier.
+"""Print a benchmark metrics table and gate on data movement and overhead.
 
 Reads the run's metrics (one JSON object per line) and a committed baseline. In
 report mode it prints the metrics next to the baseline and fails if any
-benchmark's `refs` (and thus its transfer multiplier) exceeds the baseline —
-i.e. a change reintroduced per-hop re-transfer. With BENCH_UPDATE=1 it rewrites
-the baseline from the current run instead of gating (used to record a new,
-lower baseline after a data-plane improvement lands).
+benchmark's `refs` (and thus its transfer multiplier), `plumbing_tasks`, or
+`tasks` exceeds the baseline — respectively a reintroduced per-hop re-transfer,
+reintroduced data-plane bookkeeping, or extra task executions. Equal is fine;
+the target is monotone improvement. With BENCH_UPDATE=1 it rewrites the
+baseline from the current run instead of gating (used to record a new, lower
+baseline after a data-plane improvement lands).
 """
 import json
 import os
 import sys
+
+# Baseline-gated metrics: any increase over the committed baseline is a
+# regression.
+GATED = ("refs", "plumbing_tasks", "tasks")
 
 
 def load_jsonl(path):
@@ -65,17 +71,12 @@ def main():
             print(f"           (no baseline; run BENCH_UPDATE=1 make bench to record)")
             continue
         print(f"{'  baseline':<10} {fmt(b):<95}")
-        # Regression gate: refs must not grow. The per-file transfer multiplier is
-        # refs/producers, so a rise in refs is exactly a reintroduced per-hop
-        # transfer. Equal is fine; the target is monotone improvement.
-        if m["refs"] > b["refs"]:
-            print(
-                f"  REGRESSION[{name}]: refs {m['refs']} > baseline {b['refs']} "
-                f"(multiplier {m['multiplier']} > {b['multiplier']})"
-            )
-            rc = 1
+        for metric in GATED:
+            if m[metric] > b[metric]:
+                print(f"  REGRESSION[{name}]: {metric} {m[metric]} > baseline {b[metric]}")
+                rc = 1
     if rc == 0:
-        print("OK: no transfer-multiplier regression vs baseline")
+        print("OK: no regression vs baseline (refs/plumbing_tasks/tasks)")
     return rc
 
 
