@@ -92,7 +92,7 @@ func run(args []string) error {
 		return fmt.Errorf("invalid -target: %w", err)
 	}
 
-	if err := reportDiagnostics(log, prog, diagOpts{fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag, nativeRunner: *nativeRunnerFlag, monitor: *monitorFlag}); err != nil {
+	if err := reportDiagnostics(log, prog, diagOpts{fuseChains: *fuseChainsFlag, foldDisables: *foldDisablesFlag, native: *nativeFlag, nativeRunner: *nativeRunnerFlag, monitor: *monitorFlag, target: target}); err != nil {
 		return fmt.Errorf("transpile %s: %w", fs.Arg(0), err)
 	}
 
@@ -220,12 +220,14 @@ func readOverridesInput(arg string) ([]byte, error) {
 // emitProgram passes to Emit or the diagnostics analyze a different plan.
 type diagOpts struct {
 	fuseChains, foldDisables, native, nativeRunner, monitor bool
+	target                                                  emit.Target
 }
 
 func reportDiagnostics(log zerolog.Logger, prog *ir.Program, o diagOpts) error {
 	diags := emit.Diagnose(prog, emit.Options{
 		FuseChains: o.fuseChains, FoldDisables: o.foldDisables,
 		Native: o.native, NativeRunner: o.nativeRunner, Monitor: o.monitor,
+		Target: o.target,
 	})
 
 	for _, d := range diags {
