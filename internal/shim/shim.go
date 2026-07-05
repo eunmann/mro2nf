@@ -455,12 +455,19 @@ func (a *adapterIO) run(ctx context.Context, cmd *exec.Cmd, phase, meta string, 
 	_ = a.errW.Close()
 	a.errW = nil
 
-	stageErr, _ := io.ReadAll(a.errR)
+	stageErr, readErr := io.ReadAll(a.errR)
 	waitErr := cmd.Wait()
 	stop() // join the monitor before reading its verdict; no sample in flight
 	mon.recordExitPeak(cmd.ProcessState)
 	forwardStageLog(meta)
 
+	return classifyAdapterResult(phase, meta, stageErr, readErr, waitErr, mon)
+}
+
+// classifyAdapterResult turns a py adapter's exit evidence — the fd-4 error
+// channel contents (and any failure reading them), the process exit, and the
+// memory-monitor verdict — into the phase's result.
+func classifyAdapterResult(phase, meta string, stageErr []byte, readErr, waitErr error, mon *memMonitor) error {
 	// A stage-reported message (incl. an ASSERT on fd 4) is authoritative and is
 	// classified first, so a coincident memory kill cannot mask a non-retryable
 	// assertion as a retryable memory failure.
@@ -470,6 +477,13 @@ func (a *adapterIO) run(ctx context.Context, cmd *exec.Cmd, phase, meta string, 
 		_ = os.WriteFile(filepath.Join(meta, "_errors"), stageErr, filePerm)
 
 		return stageFailure(phase, msg)
+	}
+
+	// A failed error-channel read means the stage's verdict is unknown — a
+	// failure message may have been lost — so the phase must not pass even on a
+	// clean exit.
+	if readErr != nil {
+		return fmt.Errorf("adapter %s phase: read stage error channel (fd 4): %w", phase, readErr)
 	}
 
 	if err := memViolation(mon, phase, meta); err != nil {
