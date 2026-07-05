@@ -41,8 +41,8 @@ type genCtx struct {
 // martian_shell.py adapter and no mre broker on the stage-execution hop. The
 // runner accepts the identical flag tail every call site appends (and the
 // -vmemgb/-monitor suffixes below), so this branch is the only emitter change.
-func (g genCtx) stageCmd(phase, code string, lang ir.Lang, vmemExpr string) string {
-	cmd := g.stageHead(phase, code, lang)
+func (g genCtx) stageCmd(phase string, s *ir.Stage, vmemExpr string) string {
+	cmd := g.stageHead(phase, s)
 
 	// A declared `using(vmem_gb)` is passed so the shim's --monitor caps virtual
 	// memory (and reports it in _jobinfo) at the declared value instead of the
@@ -64,8 +64,13 @@ func (g genCtx) stageCmd(phase, code string, lang ir.Lang, vmemExpr string) stri
 // stageHead renders the phase invocation up to the shared flag tail: the
 // direct-call runner for a Python stage under -native-runner, else the
 // mre+adapter invocation (with -mrjob for comp stages when configured).
-func (g genCtx) stageHead(phase, code string, lang ir.Lang) string {
-	if g.features.nativeRunner && lang == ir.LangPy {
+func (g genCtx) stageHead(phase string, s *ir.Stage) string {
+	code := g.code[s.Name]
+
+	// A py stage can never carry src args (the Martian compiler rejects them:
+	// syntax/compile_stages.go "py stage type cannot have additional
+	// arguments"), so the runner path has nothing to forward.
+	if g.features.nativeRunner && s.Lang == ir.LangPy {
 		// Groovy interpolates ${projectDir} in the script GString before bash sees
 		// the line, so single quotes keep the resulting path literal to bash (a $
 		// or backtick in the project path must not re-expand). runnerBase is the
@@ -75,14 +80,36 @@ func (g genCtx) stageHead(phase, code string, lang ir.Lang) string {
 			g.runnerBase, phase, code, g.entry, g.mroFile)
 	}
 
-	cmd := fmt.Sprintf("'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
-		g.mre, phase, g.shell, code, lang, g.entry, g.mroFile)
+	var cmd strings.Builder
 
-	if g.mrjob != "" {
-		cmd += fmt.Sprintf(" -mrjob '%s'", g.mrjob)
+	fmt.Fprintf(&cmd, "'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
+		g.mre, phase, g.shell, code, s.Lang, g.entry, g.mroFile)
+
+	// Src args from the stage declaration (`src exec "code.py a b"`) ride to
+	// the adapter one -srcarg each (#113). Two quoting layers apply: Groovy
+	// interpolates the script GString before bash sees the line, so $ and \
+	// must be GString-escaped (gstringLit) or a `$INPUT` arg would resolve a
+	// Groovy variable — silently wrong args or a MissingPropertyException.
+	// Bash then sees the single-quoted literal; quotes themselves cannot
+	// appear (Martian's grammar rejects them in src args).
+	for _, a := range s.SrcArgs {
+		fmt.Fprintf(&cmd, " -srcarg '%s'", gstringLit(a))
 	}
 
-	return cmd
+	if g.mrjob != "" {
+		fmt.Fprintf(&cmd, " -mrjob '%s'", g.mrjob)
+	}
+
+	return cmd.String()
+}
+
+// gstringLit escapes a value for literal use inside a process script GString:
+// Groovy resolves \-escapes and $-interpolation before bash sees the text, so
+// both must be escaped for the value to reach bash byte-identical.
+func gstringLit(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+
+	return strings.ReplaceAll(s, "$", `\$`)
 }
 
 // vmemFlag renders the -vmemgb value for a stage phase from its static
@@ -362,7 +389,7 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 // wiring change.
 func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg := keyedInputs(refCalls(c.Bindings))
-	main := g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main"))
+	main := g.stageCmd("main", s, vmemFlag(s, "main"))
 
 	fmt.Fprintf(b, `process %[1]s_K {
 %[2]s
@@ -501,7 +528,7 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
 	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
 	forkbindAll := fmt.Sprintf("%s -mapmode %s", forkbind, mapModeArg(c))
 	main := fmt.Sprintf("%s -args fargs%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
-		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
+		g.stageCmd("main", s, vmemFlag(s, "main")),
 		g.producerArgs(c.Callable, types.RoleMainOut))
 
 	fmt.Fprintf(b, `process %[1]s_KS {
@@ -863,8 +890,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 }
 
 func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
-	code := g.code[s.Name]
-	base := g.stageCmd("main", code, s.Lang, vmemFlag(s, "main"))
+	base := g.stageCmd("main", s, vmemFlag(s, "main"))
 
 	// The fork-keyed variants are only ever invoked for a stage reachable under a
 	// map call; for any other stage they are dead process definitions, so emit
@@ -978,8 +1004,8 @@ func boolKey(b bool) string {
 // processes: every channel item is tuple(key, ...), so chunks and joins stay
 // partitioned by fork. Outputs are named by key so the merge orders them.
 func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
-	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
-	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang, vmemFlag(s, "join"))
+	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
+	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT_K {
 %[2]s
@@ -1114,8 +1140,8 @@ workflow wf_%[1]s_map {
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
-	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
-	joinCmd := g.stageCmd("join", g.code[s.Name], s.Lang, vmemFlag(s, "join"))
+	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
+	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
 %[2]s
@@ -1428,7 +1454,7 @@ func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Ca
 	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
 	forkbindAll := fmt.Sprintf("%s -mapmode %s", forkbind, mapModeArg(c))
 	main := fmt.Sprintf("%s -args fargs%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
-		g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main")),
+		g.stageCmd("main", s, vmemFlag(s, "main")),
 		g.producerArgs(c.Callable, types.RoleMainOut))
 
 	fmt.Fprintf(b, `process %[1]s {
@@ -1908,7 +1934,7 @@ func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink
 	for i, link := range chain {
 		fmt.Fprintf(&specInputs, "    path 'spec_%d.json'\n", i)
 
-		base := g.stageCmd("main", g.code[link.stage.Name], link.stage.Lang, vmemFlag(link.stage, "main"))
+		base := g.stageCmd("main", link.stage, vmemFlag(link.stage, "main"))
 
 		inputs := ""
 		if i > 0 {
@@ -2023,7 +2049,7 @@ func fusedSplitCallArgs(bindings []ir.Binding) string {
 // defs/resources so the aliased MAIN/JOIN can consume them.
 func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg := bindInputs(refCalls(c.Bindings))
-	splitCmd := g.stageCmd("split", g.code[s.Name], s.Lang, vmemFlag(s, "split"))
+	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
@@ -2093,7 +2119,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 // merge runs first in the same task (#76).
 func genFusedStageProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
-	base := g.stageCmd("main", g.code[s.Name], s.Lang, vmemFlag(s, "main"))
+	base := g.stageCmd("main", s, vmemFlag(s, "main"))
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s

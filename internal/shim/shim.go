@@ -67,7 +67,10 @@ type Adapter struct {
 	Shell string
 	// Stagecode is the path to the stage module or binary.
 	Stagecode string
-	// SrcArgs are extra args from the stage's src declaration.
+	// SrcArgs are extra args from the stage's src declaration (`src exec
+	// "code.py a b"`). Only comp/exec stages can carry them: the Martian
+	// compiler rejects src args for py stages (syntax/compile_stages.go
+	// "py stage type cannot have additional arguments").
 	SrcArgs []string
 	// Mrjob is the path to the mrjob wrapper used to run comp stages.
 	Mrjob string
@@ -230,8 +233,13 @@ func writeChunkData(meta string, defs []ChunkDef, outs []json.RawMessage) error 
 // its mem_gb bounds resident memory (the RSS monitor) when monitoring is enabled.
 func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources) error {
 	switch a.Lang {
+	// py never sees SrcArgs: mrp's python arm builds a fixed argv with no args
+	// slot (martian/core/node.go runChunk panics on py src args) and the
+	// Martian compiler rejects them at parse time, so none can reach here.
 	case ir.LangPy:
 		return runPyAdapter(ctx, meta, files, journal, a, phase, res)
+	// comp matches mrp: `mrjob <stagecode> <srcargs...> <phase> <meta> <files>
+	// <journal>` (martian/core/node.go runChunk, CompiledStage arm).
 	case ir.LangComp:
 		if a.Mrjob == "" {
 			return &apperror.UnsupportedError{Construct: "comp adapter", Detail: "no mrjob path configured"}
@@ -240,6 +248,8 @@ func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, pha
 		argv := append([]string{a.Mrjob, a.Stagecode}, a.SrcArgs...)
 
 		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, res)
+	// exec matches mrp: `<stagecode> <srcargs...> <phase> <meta> <files>
+	// <journal>` (martian/core/node.go runChunk, ExecStage arm).
 	case ir.LangExec:
 		argv := append([]string{a.Stagecode}, a.SrcArgs...)
 
