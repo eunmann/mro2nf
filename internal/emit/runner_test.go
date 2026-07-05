@@ -48,7 +48,9 @@ func TestStageCmdNativeRunner(t *testing.T) {
 
 // TestWriteRunner pins the embedded runner assets: both files land under
 // _assets/runner/ and the shim is importable as `martian` (sibling of
-// run_stage.py, which is python's sys.path[0]).
+// run_stage.py, which is python's sys.path[0]) — and the sibling
+// test_runner.py unit tests never ship into generated projects (the embed
+// directive names the two runtime files explicitly).
 func TestWriteRunner(t *testing.T) {
 	dir := t.TempDir()
 
@@ -60,5 +62,9 @@ func TestWriteRunner(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
 			t.Errorf("missing embedded runner asset %s: %v", rel, err)
 		}
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "_assets/runner/test_runner.py")); !os.IsNotExist(err) {
+		t.Errorf("test_runner.py must not ship into generated projects: stat err = %v", err)
 	}
 }
