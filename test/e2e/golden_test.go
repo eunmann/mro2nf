@@ -389,25 +389,59 @@ func assertFileContent(t *testing.T, path, want string) {
 	}
 }
 
-// TestNativeMode guards #76 M1 step 1: -native bakes the entry args at transpile
-// time so no BUILD_ENTRY_ARGS task is emitted, and the run output stays
-// byte-identical to the golden. Exercises a simple diamond-shaped disable
-// fixture, an N-stage chain, and the complex cellranger_shaped pipeline (all
-// scalar-entry). File- and directory-typed entries are covered by
-// TestNativeFileEntry.
+// TestNativeMode guards the -native shapes that do NOT fully collapse: #76 M1
+// step 1 (no BUILD_ENTRY_ARGS task — entry args are baked at transpile time)
+// plus, per fixture, the expected collapse level as wantFork/wantMerge — which
+// FORK/MERGE tasks the emit plan keeps (plan.go kind routing: a kindMapped
+// call keeps ONE FORK resolve, folding its MERGE into a sole consumer; a
+// disabled mapped call keeps its MERGE as the skip-branch mix point; a keyed
+// sub-pipeline body keeps a nested map's FORK_K/MERGE_K and a disabled or
+// split call's keyed task, per nativeDiagnostics). Every run must match the
+// committed mrp golden: TestGolden proves default==golden for these fixtures,
+// so native==golden covers native==default transitively in half the runs.
+// File- and directory-typed entries are covered by TestNativeFileEntry; the
+// fully-collapsed fixtures live in TestNativeComplete.
 func TestNativeMode(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	cases := []struct{ fixture, golden string }{
-		{"fold_disable", "expected/outs.json"},
-		{"chain_fuse3", "expected/outs.json"},
-		{"cellranger_shaped", "expected/count_outs.json"},
-		// #99 kindMapped shapes under -native: a file-bearing leaf scatter and a
-		// multi-split leaf both fold their MERGE (leaf callee); a split-stage
-		// callee keeps FORK+MERGE. All must match the mrp golden.
-		{"map_file_split", "expected/outs.json"},
-		{"multisplit", "expected/outs.json"},
-		{"map_split", "expected/outs.json"},
+	cases := []struct {
+		fixture, golden     string
+		wantFork, wantMerge bool
+	}{
+		{"fold_disable", "expected/outs.json", false, false},
+		{"chain_fuse3", "expected/outs.json", false, false},
+		// cellranger_shaped's PER_SAMPLE map call is not element-scatterable, so
+		// its FORK resolve remains; the gather folds into the sole consumer.
+		{"cellranger_shaped", "expected/count_outs.json", true, false},
+		// #99 kindMapped shapes under -native: a file-bearing leaf scatter, a
+		// multi-split leaf, and a split-stage callee (#106) all keep the single
+		// FORK resolve and fold their MERGE. All must match the mrp golden.
+		{"map_file_split", "expected/outs.json", true, false},
+		{"multisplit", "expected/outs.json", true, false},
+		{"map_split", "expected/outs.json", true, false},
+		// #121 map-over-sub-pipeline family (the keyed layer #107/#110 landed
+		// on). A sub-pipeline callee is kindMapped — one outer FORK resolve,
+		// MERGE folded into the sole consumer; leaf calls inside the keyed body
+		// fuse (#107). A nested map inside keeps its keyed FORK_K/MERGE_K
+		// (map_pipe_nested runs the #110 driver scatter for the inner resolve;
+		// map_pipe_disabled_nested's disabled inner map keeps both). A split or
+		// disabled call inside keeps only its keyed BIND/DISABLE task, no MERGE.
+		{"map_pipe", "expected/outs.json", true, false},
+		{"map_pipe_nested", "expected/outs.json", true, true},
+		{"map_pipe_split", "expected/outs.json", true, false},
+		{"map_pipe_disabled", "expected/outs.json", true, false},
+		{"map_pipe_disabled_nested", "expected/outs.json", true, true},
+		// A DISABLED map call is never scatterable (nativeScatterable rejects
+		// c.Disabled) — kindMapped keeps FORK, and the foldMerge pass skips
+		// disabled calls, so the MERGE remains as the skip-branch mix point.
+		{"disabled_map", "expected/outs.json", true, true},
+		{"disabled_map_ref", "expected/outs.json", true, true},
+		// dead_map_pipe's map call sits in an UNREACHABLE pipeline (#59): the
+		// live path collapses fully, leaving only the dead pipeline's module.
+		// kitchen_sink's fan-in calls keep plain BIND tasks but no fork
+		// machinery. Neither is BIND-free, so they cannot join TestNativeComplete.
+		{"dead_map_pipe", "expected/outs.json", false, false},
+		{"kitchen_sink", "expected/main_outs.json", false, false},
 	}
 
 	for _, tc := range cases {
@@ -422,6 +456,18 @@ func TestNativeMode(t *testing.T) {
 			}
 			if strings.Contains(string(main), "BUILD_ENTRY_ARGS") {
 				t.Error("-native must not emit a BUILD_ENTRY_ARGS task")
+			}
+
+			if tc.wantFork {
+				assertHasProcess(t, proj, "FORK")
+			} else {
+				assertNoProcesses(t, proj, "FORK")
+			}
+
+			if tc.wantMerge {
+				assertHasProcess(t, proj, "MERGE")
+			} else {
+				assertNoProcesses(t, proj, "MERGE")
 			}
 
 			if err := runNextflow(t, proj); err != nil {
@@ -667,6 +713,23 @@ func TestNativeComplete(t *testing.T) {
 		{"map_null_map", "expected/outs.json"},
 		{"map_key_sort", "expected/outs.json"},
 		{"runtime_empty_forks", "expected/outs.json"},
+		// #121: value-only leaf scatters whose outputs (not split elements)
+		// carry files — file arrays, keyed typed maps, struct projections, and
+		// multi-dimensional forks all ride the O(1) element path with the merge
+		// folded into the sole consumer.
+		{"map_file", "expected/outs.json"},
+		{"map_file_keyed", "expected/outs.json"},
+		{"map_file_array", "expected/outs.json"},
+		{"map_struct_proj", "expected/outs.json"},
+		{"multidim", "expected/outs.json"},
+		// #121: non-map shapes where every call fuses (wildcard bindings,
+		// aliased calls, exec/comp adapters, a compiled split stage) — -native
+		// must leave no data-plane task at all. mixed_adapters and comp_split
+		// ship an mrjob.sh, which transpile() passes via -mrjob automatically.
+		{"wildcard", "expected/outs.json"},
+		{"alias_min", "expected/p_outs.json"},
+		{"mixed_adapters", "expected/outs.json"},
+		{"comp_split", "expected/outs.json"},
 	}
 
 	for _, tc := range cases {
