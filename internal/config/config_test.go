@@ -62,6 +62,13 @@ func TestLoadMissingIsNotAnError(t *testing.T) {
 	}
 }
 
+func TestLoadRequiredMissingIsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nope.yml")
+	if _, err := config.LoadRequired(path); err == nil {
+		t.Errorf("LoadRequired(%s): want an error for a missing file, got nil", path)
+	}
+}
+
 func TestLoadRejectsBadInput(t *testing.T) {
 	cases := map[string]string{
 		"unknown key":    "bogus: 1\n",
