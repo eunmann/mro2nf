@@ -76,12 +76,15 @@ func nativeDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic
 			if cp.kind == kindMapped {
 				ds = append(ds, Diagnostic{Severity: SevInfo, Message: mappedRemainderMsg(prog, name, c, cp)})
 			} else if cp.kind == kindNativeScatter && pl.keyed[name] {
+				// kindNativeScatter implies c.Mapped, so keyedKind==keyedScatter
+				// here is exactly the old keyedScatterable(c) consult; a future
+				// non-mapped scatter shape would break that equivalence.
 				// Under an outer map call a value-only inner map collapses its
 				// per-outer-fork FORK_K resolve into a driver element scatter
 				// (#99), keeping only the data-proportional MERGE_K gather; a
 				// file-bearing/multi-split/disabled inner map keeps both.
 				kept := "the FORK_K and MERGE_K tasks"
-				if _, _, ok := keyedScatterable(c, prog); ok {
+				if cp.keyedKind == keyedScatter {
 					kept = "the data-proportional MERGE_K gather (its inner fork resolve is a driver element scatter)"
 				}
 

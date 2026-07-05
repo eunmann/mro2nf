@@ -122,7 +122,7 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 		mrjob:        fs.String("mrjob", "", "path to mrjob (for comp stages)"),
 		container:    fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)"),
 		target:       fs.String("target", "local", "execution backend: local | awsbatch | healthomics"),
-		monitor:      fs.Bool("monitor", false, "enforce per-stage virtual memory (vmem_gb) via prlimit (mrp --monitor)"),
+		monitor:      fs.Bool("monitor", false, "enforce mrp --monitor memory limits per stage: an RSS kill at mem_gb plus a prlimit vmem cap at vmem_gb"),
 		fuseChains:   fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)"),
 		foldDisables: fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)"),
 		native:       fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)"),
