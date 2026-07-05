@@ -152,10 +152,10 @@ func lowerEntry(c *syntax.CallStm) (*ir.EntryCall, error) {
 	// has no entry-fork lowering, so fail loudly rather than emit a project
 	// that silently runs the entry once with the whole collection.
 	if c.Mapping != nil {
-		return nil, &apperror.UnsupportedError{
+		return nil, fmt.Errorf("entry call %s: %w", c.DecId, &apperror.UnsupportedError{
 			Construct: "top-level map call",
-			Detail:    fmt.Sprintf("entry call %s forks over a collection", c.DecId),
-		}
+			Detail:    "the entry forks over a collection",
+		})
 	}
 
 	b, err := lowerBindings(c.Bindings)
