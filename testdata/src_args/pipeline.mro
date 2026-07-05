@@ -1,0 +1,32 @@
+# A stage whose src line carries arguments after the path (#113). Martian
+# passes them to the stage executable ahead of the metadata protocol args
+# (martian/core/node.go runChunk, CompiledStage/ExecStage arms); the Martian
+# compiler rejects src args for py stages, so exec is the natural fixture.
+# The outputs depend on BOTH args: dropping them is a loud failure (argv
+# shifts and the stage cannot parse its factor), never a silent divergence.
+stage SCALE_TAG(
+    in  float x,
+    out float y,
+    out string tag,
+    src exec  "scale_args.py 3 hello",
+)
+
+pipeline SA(
+    in  float x,
+    out float y,
+    out string tag,
+)
+{
+    call SCALE_TAG(
+        x = self.x,
+    )
+
+    return (
+        y   = SCALE_TAG.y,
+        tag = SCALE_TAG.tag,
+    )
+}
+
+call SA(
+    x = 7.0,
+)
