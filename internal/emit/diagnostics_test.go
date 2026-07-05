@@ -148,3 +148,67 @@ func TestDiagnoseNativeMapped(t *testing.T) {
 		t.Errorf("fork_min fully collapses under -native: want no map remainder info, got %+v", fm)
 	}
 }
+
+// TestDiagnoseNativeRunner checks -native-runner surfaces what it does NOT
+// cover (#83): each exec/comp stage gets a keeps-the-adapter-path Info, a py
+// stage gets none, and -monitor adds the in-process enforcement notice only
+// alongside the runner flag. Without -native-runner there is no runner
+// diagnostic at all. mixed_adapters has one stage per adapter (py/exec/comp).
+func TestDiagnoseNativeRunner(t *testing.T) {
+	ma := lowerFixture(t, "mixed_adapters")
+
+	on := Diagnose(ma, Options{NativeRunner: true})
+	if !hasMessage(on, SevInfo, "stage ADD is a comp stage and keeps the Martian adapter path") {
+		t.Errorf("comp stage: want an adapter-path info naming ADD, got %+v", on)
+	}
+
+	if !hasMessage(on, SevInfo, "stage DBL is a exec stage and keeps the Martian adapter path") {
+		t.Errorf("exec stage: want an adapter-path info naming DBL, got %+v", on)
+	}
+
+	if hasMessage(on, SevInfo, "stage GEN") {
+		t.Errorf("py stage GEN runs natively: want no adapter-path info for it, got %+v", on)
+	}
+
+	if hasMessage(on, SevInfo, "-monitor enforcement") {
+		t.Errorf("without -monitor: want no monitor notice, got %+v", on)
+	}
+
+	mon := Diagnose(ma, Options{NativeRunner: true, Monitor: true})
+	if !hasMessage(mon, SevInfo, "-monitor enforcement runs in-process") {
+		t.Errorf("with -monitor: want the in-process enforcement notice, got %+v", mon)
+	}
+
+	off := Diagnose(ma, Options{Monitor: true})
+	if hasMessage(off, SevInfo, "native-runner") {
+		t.Errorf("without -native-runner: want no runner diagnostic, got %+v", off)
+	}
+}
+
+// TestDiagnoseNativeKeyedScatter pins the keyed-layer wording for a nested map
+// call that scatters natively when its pipeline runs plain (#99): a value-only
+// inner map keeps only the data-proportional MERGE_K gather (map_pipe_nested),
+// while a keyed-ineligible one — here a file-bearing callee input — keeps both
+// FORK_K and MERGE_K (map_pipe_nested_file). A DISABLED inner map never plans
+// the native scatter (kindMapped), so it reports the plain FORK/MERGE
+// remainder instead of the keyed-scatter wording (map_pipe_disabled_nested).
+func TestDiagnoseNativeKeyedScatter(t *testing.T) {
+	el := Diagnose(lowerFixture(t, "map_pipe_nested"), Options{Native: true})
+	if !hasMessage(el, SevInfo, "map call INNER.DBL scatters only when INNER runs plain; under an outer map call its keyed layer keeps the data-proportional MERGE_K gather") {
+		t.Errorf("value-only nested map: want the MERGE_K-only keyed info, got %+v", el)
+	}
+
+	fb := Diagnose(lowerFixture(t, "map_pipe_nested_file"), Options{Native: true})
+	if !hasMessage(fb, SevInfo, "map call INNER.DBL scatters only when INNER runs plain; under an outer map call its keyed layer keeps the FORK_K and MERGE_K tasks") {
+		t.Errorf("file-bearing nested map: want the FORK_K+MERGE_K keyed info, got %+v", fb)
+	}
+
+	dn := Diagnose(lowerFixture(t, "map_pipe_disabled_nested"), Options{Native: true})
+	if hasMessage(dn, SevInfo, "keyed layer keeps") {
+		t.Errorf("disabled nested map is kindMapped: want no keyed-scatter wording, got %+v", dn)
+	}
+
+	if !hasMessage(dn, SevInfo, "map call INNER.DBL keeps the FORK and MERGE tasks") {
+		t.Errorf("disabled nested map: want the plain FORK+MERGE remainder info, got %+v", dn)
+	}
+}
