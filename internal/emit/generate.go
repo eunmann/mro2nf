@@ -2272,9 +2272,9 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
         skip: off
     }
     r_%[1]s = %[4]s(g_%[1]s.run.map { data, leaves, d -> tuple(data, leaves) })
-    s_%[1]s = g_%[1]s.skip.map { data, leaves, d -> %[6]s }
+    s_%[1]s = g_%[1]s.skip.map { data, leaves, d -> %[5]s }
     ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
-`, c.Name, bind, dis, callee, nulls, nullBundle(nulls))
+`, c.Name, bind, dis, callee, nullBundle(nulls))
 }
 
 // genFusedDisabledWiring gates a natively-disabled leaf-stage call and feeds the
