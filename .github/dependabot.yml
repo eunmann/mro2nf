@@ -33,6 +33,12 @@ updates:
     schedule:
       interval: weekly
     versioning-strategy: increase-if-necessary
+    # @types/node majors are pinned to the CI/runner Node major (see
+    # cdk-validation.yml's node-version comment): typings ahead of the runtime
+    # let tsc pass on APIs the runtime lacks. Bump both together, by hand.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       cdk-minor-patch:
         update-types: ["minor", "patch"]
