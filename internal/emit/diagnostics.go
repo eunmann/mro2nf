@@ -49,7 +49,7 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 
 	ds = append(ds, chainDiagnostics(f, pl)...)
 	ds = append(ds, nativeDiagnostics(prog, f, pl)...)
-	ds = append(ds, nativeTargetDiagnostics(f, opts.Target)...)
+	ds = append(ds, nativeTargetDiagnostics(prog, f, opts.Target)...)
 	ds = append(ds, runnerDiagnostics(prog, f, opts.Monitor)...)
 
 	return append(ds, foldDiagnostics(prog, f, pl)...)
@@ -132,8 +132,19 @@ func mappedRemainderMsg(prog *ir.Program, pipeline string, c ir.Call, cp callPla
 // rejects a request carrying an undeclared parameter, so dropping them would
 // change which requests fail), but their values were baked at transpile time
 // and supplying one fails the run at launch.
-func nativeTargetDiagnostics(f featureSet, target Target) []Diagnostic {
-	if !f.native || target != TargetHealthOmics {
+func nativeTargetDiagnostics(prog *ir.Program, f featureSet, rawTarget Target) []Diagnostic {
+	// Normalize exactly as Emit does, so a direct Diagnose caller passing a
+	// non-canonical target string agrees with Emit. On a ParseTarget error emit
+	// no target-Info: Emit rejects that target outright.
+	target, err := ParseTarget(string(rawTarget))
+	if err != nil || !f.native || target != TargetHealthOmics {
+		return nil
+	}
+
+	// No entry inputs means the template declares no baked parameters
+	// (entryInParams is the same enumeration writeHealthOmicsPackaging walks),
+	// so there is no trade-off to surface.
+	if prog.Entry == nil || len(entryInParams(prog)) == 0 {
 		return nil
 	}
 

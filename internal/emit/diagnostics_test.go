@@ -87,7 +87,9 @@ func TestHasError(t *testing.T) {
 // TestDiagnoseNativeHealthOmics checks the -native + -target healthomics
 // trade-off is surfaced as an Info (#116): the parameter template declares
 // entry inputs that were baked at transpile time, so supplying one fails the
-// run. Either flag alone emits no such diagnostic.
+// run. Either flag alone emits no such diagnostic, an entry pipeline with no
+// input parameters declares nothing baked (so no Info), and an unparseable
+// target emits no Info because Emit rejects it outright.
 func TestDiagnoseNativeHealthOmics(t *testing.T) {
 	prog := lowerFixture(t, "fork_min")
 
@@ -102,6 +104,18 @@ func TestDiagnoseNativeHealthOmics(t *testing.T) {
 
 	if got := Diagnose(prog, Options{Target: TargetHealthOmics}); hasMessage(got, SevInfo, "healthomics") {
 		t.Errorf("healthomics without -native: want no target diagnostic, got %+v", got)
+	}
+
+	noIn := &ir.Program{
+		Entry:     &ir.EntryCall{Callable: "P"},
+		Pipelines: map[string]*ir.Pipeline{"P": {Name: "P"}},
+	}
+	if got := Diagnose(noIn, Options{Native: true, Target: TargetHealthOmics}); hasMessage(got, SevInfo, "healthomics") {
+		t.Errorf("entry pipeline without inputs: want no target diagnostic, got %+v", got)
+	}
+
+	if got := Diagnose(prog, Options{Native: true, Target: "bogus"}); hasMessage(got, SevInfo, "healthomics") {
+		t.Errorf("unparseable target: want no target diagnostic (Emit rejects it), got %+v", got)
 	}
 }
 
