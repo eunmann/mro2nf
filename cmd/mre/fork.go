@@ -127,7 +127,6 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 		return writeKeysFile(w.keysFile, keys)
 	}
 
-	// Load the type manifest once, not once per fork.
 	man, err := prod.manifest()
 	if err != nil {
 		return err
@@ -172,26 +171,7 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 		return fmt.Errorf("forkbind element: %w", err)
 	}
 
-	man, err := prod.manifest()
-	if err != nil {
-		return err
-	}
-
-	payload, err := rawToMap(args)
-	if err != nil {
-		return err
-	}
-
-	params, err := man.Params(prod.callable, prod.role)
-	if err != nil {
-		return err
-	}
-
-	if err := shim.WriteBundle(oDir, payload, params, man.Table()); err != nil {
-		return fmt.Errorf("write element bundle: %w", err)
-	}
-
-	return nil
+	return prod.write(oDir, args)
 }
 
 // checkForkBindFlags diagnoses flag-combination misuse before any resolution
