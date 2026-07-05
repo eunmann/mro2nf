@@ -123,3 +123,35 @@ func TestApplyConfigExplicitMissingIsError(t *testing.T) {
 		t.Errorf("implicit probe with no config file: want no error, got %v", err)
 	}
 }
+
+// TestApplyConfigNativeReachesOptions pins the structural parity: a native
+// value sourced purely from the config (never passed as a flag) must reach
+// the single options() value both Diagnose and Emit consume — a reintroduced
+// pre-config snapshot would silently split them.
+func TestApplyConfigNativeReachesOptions(t *testing.T) {
+	dir := t.TempDir()
+	mro := filepath.Join(dir, "pipeline.mro")
+
+	if err := os.WriteFile(filepath.Join(dir, config.FileName),
+		[]byte("native: true\nnative-runner: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	f := defineTranspileFlags(fs)
+	_ = fs.Parse([]string{mro})
+
+	if err := applyConfig(fs, "", mro, f.configPtrs()); err != nil {
+		t.Fatal(err)
+	}
+
+	opts, err := f.options()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !opts.Native || !opts.NativeRunner {
+		t.Errorf("config-sourced native flags must reach options(): Native=%v NativeRunner=%v",
+			opts.Native, opts.NativeRunner)
+	}
+}

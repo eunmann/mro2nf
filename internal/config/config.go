@@ -25,10 +25,16 @@ var (
 // Config is the set of flag defaults a .mro2nf.yml may set. A nil field means the
 // file did not set that key, so the CLI leaves the flag's own default in place.
 //
-// Native and NativeRunner change launch-time behavior, not just the emitted
-// orchestration: -native bakes entry args at transpile time, so the project
-// rejects launch-time entry-arg overrides. A project that defaults
-// `native: true` here opts every transpile into that contract.
+// Native changes launch-time behavior, not just the emitted orchestration:
+// -native bakes entry args at transpile time, so the project rejects
+// launch-time entry-arg overrides — a project that defaults `native: true`
+// opts every transpile into that contract. NativeRunner swaps the Python
+// stage-execution hop to the embedded direct-call runner (baked into the
+// image on container backends, so toggling it there means a rebuild).
+//
+// Overriding a config `true` back off for one run needs the equals form:
+// `-native=false` (Go's flag package reads a space-separated `-native false`
+// as bare -native plus a positional arg).
 type Config struct {
 	Target       *string
 	Container    *string
