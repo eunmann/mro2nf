@@ -93,10 +93,14 @@ func (g genCtx) stageHead(phase string, s *ir.Stage) string {
 		g.mre, phase, g.shell, code, s.Lang, g.entry, g.mroFile)
 
 	// Src args from the stage declaration (`src exec "code.py a b"`) ride to
-	// the adapter one -srcarg each; Martian's grammar whitespace-splits them
-	// and rejects quotes, so single-quoting each is always safe (#113).
+	// the adapter one -srcarg each (#113). Two quoting layers apply: Groovy
+	// interpolates the script GString before bash sees the line, so $ and \
+	// must be GString-escaped (gstringLit) or a `$INPUT` arg would resolve a
+	// Groovy variable — silently wrong args or a MissingPropertyException.
+	// Bash then sees the single-quoted literal; quotes themselves cannot
+	// appear (Martian's grammar rejects them in src args).
 	for _, a := range s.SrcArgs {
-		fmt.Fprintf(&cmd, " -srcarg '%s'", a)
+		fmt.Fprintf(&cmd, " -srcarg '%s'", gstringLit(a))
 	}
 
 	if g.mrjob != "" {
@@ -104,6 +108,15 @@ func (g genCtx) stageHead(phase string, s *ir.Stage) string {
 	}
 
 	return cmd.String()
+}
+
+// gstringLit escapes a value for literal use inside a process script GString:
+// Groovy resolves \-escapes and $-interpolation before bash sees the text, so
+// both must be escaped for the value to reach bash byte-identical.
+func gstringLit(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+
+	return strings.ReplaceAll(s, "$", `\$`)
 }
 
 // vmemFlag renders the -vmemgb value for a stage phase from its static

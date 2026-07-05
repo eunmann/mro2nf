@@ -71,6 +71,14 @@ func TestStageCmdSrcArgs(t *testing.T) {
 	if plain := g.stageCmd("main", &ir.Stage{Name: "E", Lang: ir.LangExec}, ""); strings.Contains(plain, "-srcarg") {
 		t.Errorf("stage without src args must not emit -srcarg: %q", plain)
 	}
+
+	// Martian's grammar admits $ and \ in src args (it rejects only quotes),
+	// and the script block is a Groovy GString — both must be escaped or
+	// Groovy interpolates them before bash runs (wrong args or a parse error).
+	esc := g.stageCmd("main", &ir.Stage{Name: "E", Lang: ir.LangExec, SrcArgs: []string{"$INPUT", `a\nb`}}, "")
+	if !strings.Contains(esc, `-srcarg '\$INPUT' -srcarg 'a\\nb'`) {
+		t.Errorf("src args must be GString-escaped for the script block: %q", esc)
+	}
 }
 
 // TestWriteRunner pins the embedded runner assets: both files land under
