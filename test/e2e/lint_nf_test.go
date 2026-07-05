@@ -20,39 +20,70 @@ import (
 	"testing"
 )
 
+// lintConfigs is the emission-branch dimension (#122): each opt-in flag routes
+// the emitter down generator branches the default emission never reaches
+// (native scatter/merge, the direct-call runner scripts, fused-chain
+// processes, folded-off null channels), so each fixture is linted under every
+// single flag plus the compositions that route down distinct combined
+// branches: -native -native-runner, and -native with each plan lever
+// (TestNativeCombos proves those emit Groovy neither flag emits alone). The
+// full matrix is cheap enough to run whole rather than subset: `nextflow
+// lint` measures ~1.2s wall per project (transpile is milliseconds), so all
+// fixtures times these configs cost a few CPU-minutes, amortized by -parallel.
+var lintConfigs = []struct {
+	name  string
+	flags []string
+}{
+	{"default", nil},
+	{"native", []string{"-native"}},
+	{"native-runner", []string{"-native-runner"}},
+	{"fuse-chains", []string{"-fuse-chains"}},
+	{"fold-disables", []string{"-fold-disables"}},
+	{"native+native-runner", []string{"-native", "-native-runner"}},
+	{"native+fuse-chains", []string{"-native", "-fuse-chains"}},
+	{"native+fold-disables", []string{"-native", "-fold-disables"}},
+}
+
 // minNextflowMajor/Minor is the first release with `nextflow lint`.
 const (
 	minNextflowMajor = 25
 	minNextflowMinor = 4
 )
 
-// TestNextflowLint lints the generated project for every testdata fixture. It
-// enumerates the fixtures (rather than a hand-kept list) so any new fixture is
-// linted automatically and the branch space is covered by construction.
+// TestNextflowLint lints the generated project for every testdata fixture
+// under every lintConfigs flag set. It enumerates the fixtures (rather than a
+// hand-kept list) so any new fixture is linted automatically and the branch
+// space is covered by construction. ANY transpile failure is a test failure:
+// no flag/fixture combination is refused today, so there is nothing to skip.
+// If a future flag introduces a genuine SevError refusal, add an explicit
+// expected-refusal allowlist entry for that exact combo THEN — loud by
+// default, never classified by error-message substring.
 func TestNextflowLint(t *testing.T) {
 	requireTools(t, "nextflow", "java")
 	requireNextflowLint(t)
 
 	for _, fx := range lintFixtures(t) {
-		t.Run(fx, func(t *testing.T) {
-			t.Parallel()
+		for _, cfg := range lintConfigs {
+			t.Run(fx+"/"+cfg.name, func(t *testing.T) {
+				t.Parallel()
 
-			proj := transpile(t, fx)
+				proj := transpileDir(t, filepath.Join(root, "testdata", fx), cfg.flags...)
 
-			cmd := exec.Command("nextflow", "lint", ".")
-			cmd.Dir = proj
+				cmd := exec.Command("nextflow", "lint", ".")
+				cmd.Dir = proj
 
-			out, err := cmd.CombinedOutput()
+				out, err := cmd.CombinedOutput()
 
-			if err != nil {
-				// nextflow lint prints diagnostics grouped by file in path order
-				// with warnings interleaved, so a tail can bury the error's
-				// file/line under a later file's warnings. Surface the error
-				// lines specifically, then the full output for context.
-				t.Fatalf("nextflow lint reported errors for %s:\n%s\n--- full output ---\n%s",
-					fx, lintErrorLines(out), out)
-			}
-		})
+				if err != nil {
+					// nextflow lint prints diagnostics grouped by file in path order
+					// with warnings interleaved, so a tail can bury the error's
+					// file/line under a later file's warnings. Surface the error
+					// lines specifically, then the full output for context.
+					t.Fatalf("nextflow lint reported errors for %s under %v:\n%s\n--- full output ---\n%s",
+						fx, cfg.flags, lintErrorLines(out), out)
+				}
+			})
+		}
 	}
 }
 
