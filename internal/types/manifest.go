@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -93,24 +94,40 @@ const (
 	RoleChunkIn = "chunkin" // a split stage's per-chunk input params
 )
 
-// Params returns the parameter set for a callable under the given role. An
-// unknown callable or role yields nil (no file leaves to rewrite).
-func (m Manifest) Params(callable, role string) []ir.Param {
+var (
+	// ErrUnknownCallable reports a callable name missing from a configured
+	// manifest.
+	ErrUnknownCallable = errors.New("callable not in type manifest")
+	// ErrUnknownRole reports a role outside the Role* constants.
+	ErrUnknownRole = errors.New("unknown param role")
+)
+
+// Params returns the parameter set for a callable under the given role. The
+// unconfigured zero manifest (no Callables at all — the no `-types` path,
+// where there is nothing to rewrite) yields nil for any callable; a configured
+// manifest fails loudly on an unknown callable or role, since a silently-nil
+// parameter set would skip path rewrites and surface only as dangling files
+// downstream.
+func (m Manifest) Params(callable, role string) ([]ir.Param, error) {
+	if m.Callables == nil {
+		return nil, nil
+	}
+
 	c, ok := m.Callables[callable]
 	if !ok {
-		return nil
+		return nil, fmt.Errorf("%w: %q", ErrUnknownCallable, callable)
 	}
 
 	switch role {
 	case RoleIn:
-		return c.In
+		return c.In, nil
 	case RoleOut:
-		return c.Out
+		return c.Out, nil
 	case RoleChunkIn:
-		return c.ChunkIn
+		return c.ChunkIn, nil
 	case RoleMainOut:
-		return append(append([]ir.Param(nil), c.Out...), c.ChunkOut...)
+		return append(append([]ir.Param(nil), c.Out...), c.ChunkOut...), nil
 	default:
-		return nil
+		return nil, fmt.Errorf("%w: %q", ErrUnknownRole, role)
 	}
 }

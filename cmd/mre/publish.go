@@ -53,7 +53,12 @@ func runPublishLayout(_ context.Context, argv []string) error {
 
 	pub := newPublisher(man.Structs)
 
-	published, err := pub.publishOuts(man.Params(prod.callable, prod.role), outs)
+	params, err := man.Params(prod.callable, prod.role)
+	if err != nil {
+		return fmt.Errorf("publish params: %w", err)
+	}
+
+	published, err := pub.publishOuts(params, outs)
 	if err != nil {
 		return err
 	}

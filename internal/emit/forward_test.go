@@ -8,7 +8,7 @@ import (
 
 // ref builds a name-preserving whole-field call reference binding (`param = id.param`).
 func ref(param, id string) ir.Binding {
-	return ir.Binding{Param: param, Value: ir.Value{Ref: &ir.Ref{Kind: refKindCall, ID: id, Output: param}}}
+	return ir.Binding{Param: param, Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: id, Output: param}}}
 }
 
 // TestConsumerCount guards #59 Lever 4's fold-safety: consumerCount must count
@@ -20,7 +20,7 @@ func TestConsumerCount(t *testing.T) {
 		Calls: []ir.Call{
 			{Name: "SRC"},
 			{Name: "USE", Bindings: []ir.Binding{ref("y", "SRC")}},
-			{Name: "GATE", Disabled: &ir.Ref{Kind: refKindCall, ID: "SRC", Output: "flag"}},
+			{Name: "GATE", Disabled: &ir.Ref{Kind: ir.RefKindCall, ID: "SRC", Output: "flag"}},
 		},
 		Returns: []ir.Binding{ref("w", "GATE")},
 	}
@@ -80,7 +80,7 @@ func TestForwardProducerExactCoverage(t *testing.T) {
 		{
 			name:     "renaming binding does not route",
 			prodCall: ir.Call{Name: "P", Callable: "ONE"},
-			bindings: []ir.Binding{{Param: "y", Value: ir.Value{Ref: &ir.Ref{Kind: refKindCall, ID: "P", Output: "f"}}}},
+			bindings: []ir.Binding{{Param: "y", Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: "P", Output: "f"}}}},
 			wantOK:   false,
 		},
 		{
