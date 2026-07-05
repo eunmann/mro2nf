@@ -215,7 +215,7 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 	}
 
 	if target == TargetHealthOmics {
-		if err := writeHealthOmicsPackaging(prog, opts.OutDir); err != nil {
+		if err := writeHealthOmicsPackaging(prog, opts.OutDir, opts.Native); err != nil {
 			return err
 		}
 	}
