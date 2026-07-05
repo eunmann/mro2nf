@@ -414,6 +414,46 @@ func TestEmitSplitJoinGatherSorted(t *testing.T) {
 	}
 }
 
+// TestEmitMappedMergeGatherSorted guards -resume stability (#123) for the
+// default-mode mapped call's MERGE: the gathered per-fork out bundles must be
+// sorted by name, not collect()ed in completion order — MERGE's input order is
+// part of its -resume cache key (same class as the split JOIN and the keyed
+// gathers). toSortedList emits [] on an empty channel exactly where the
+// dropped ifEmpty([]) did: for zero forks (MERGE yields the typed empty) and
+// on a disabled skip — where dormancy rests on FORK.out.keys never emitting,
+// so MERGE stays dormant and the skip-null mixes in, unchanged.
+func TestEmitMappedMergeGatherSorted(t *testing.T) {
+	sorted := ".toSortedList { x, y -> x.name <=> y.name }"
+
+	for _, tc := range []struct{ fixture, module, want string }{
+		{
+			"map_fork", "pipe_MP.nf",
+			"MERGE_2_MP__DBL(out_DBL" + sorted + ", FORK_2_MP__DBL.out.keys, types)",
+		},
+		// The disabled variant shares the same gather line; the skip-null mix
+		// point downstream of MERGE must survive untouched.
+		{
+			"disabled_map", "pipe_Q.nf",
+			"MERGE_1_Q__DBL(out_DBL" + sorted + ", FORK_1_Q__DBL.out.keys, types)",
+		},
+	} {
+		dir := emitFixture(t, tc.fixture, map[string]string{"DBL": "/x/dbl"})
+		mod := readFile(t, filepath.Join(dir, "modules", tc.module))
+
+		if !strings.Contains(mod, tc.want) {
+			t.Errorf("%s: MERGE must gather the fork outs sorted by name; missing %q:\n%s", tc.fixture, tc.want, mod)
+		}
+
+		if strings.Contains(mod, ".collect().ifEmpty([])") {
+			t.Errorf("%s: MERGE still gathers fork outs in arrival order:\n%s", tc.fixture, mod)
+		}
+
+		if tc.fixture == "disabled_map" && !strings.Contains(mod, "ch_DBL = MERGE_1_Q__DBL.out.mix(s_DBL).first()") {
+			t.Errorf("disabled_map: the skip-null mix point must be preserved:\n%s", mod)
+		}
+	}
+}
+
 // TestEmitSpecialScheduler checks that a stage's `using(special=...)` key is
 // mapped to a clusterOptions directive on every phase, looked up from
 // params.job_resources (mrp's MRO_JOBRESOURCES analog). A per-task __special

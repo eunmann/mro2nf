@@ -2172,11 +2172,15 @@ func genMappedWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee strin
 		return
 	}
 
-	// ifEmpty([]) ensures MERGE still runs for an empty fork collection
-	// (collect() on an empty channel emits nothing); MERGE then yields the typed
-	// empty ([] for an array fork, {} for a map fork).
+	// The fork outs are gathered sorted by bundle name: collect() order is
+	// completion order, which is part of MERGE's -resume cache key. toSortedList
+	// emits [] on an empty channel exactly where the ifEmpty([]) it replaces did:
+	// for an empty fork collection MERGE still runs and yields the typed empty
+	// ([] for an array fork, {} for a map fork), and on a disabled skip the []
+	// emission is inert — dormancy rests on FORK.out.keys (FORK never ran, so no
+	// keys item and MERGE never fires), as on the foldMerge path above.
 	// FORK.out.keys carries map-fork keys (null for an array fork).
-	fmt.Fprintf(b, "    %s(out_%s.collect().ifEmpty([]), %s.out.keys, types)\n", merge, c.Name, fork)
+	fmt.Fprintf(b, "    %s(out_%s.toSortedList { x, y -> x.name <=> y.name }, %s.out.keys, types)\n", merge, c.Name, fork)
 
 	if c.Disabled != nil {
 		// On the disabled branch FORK is skipped, so MERGE produces nothing; mix
