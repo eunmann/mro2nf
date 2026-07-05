@@ -89,7 +89,10 @@ jobs:
   e2e:
     name: E2E (Nextflow vs mrp goldens)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # lint-nf sweeps every fixture under 8 flag configs (#122), ~25 CPU-min of
+    # `nextflow lint` on top of test-e2e + bench; sized for >=30% headroom over
+    # the observed job wall time.
+    timeout-minutes: 35
     env:
       # The harnesses skip cleanly on a dev box missing a tool, but in CI a
       # missing prerequisite must FAIL the job, not silently pass it.

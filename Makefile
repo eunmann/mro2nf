@@ -58,7 +58,7 @@ test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; 
 	$(GO_E2E) -timeout 30m -run '^TestMrpDiff'
 
 lint-nf: build ## Static-lint generated Nextflow with `nextflow lint` (needs Nextflow >= 25.04)
-	$(GO_E2E) -timeout 15m -run '^TestNextflowLint'
+	$(GO_E2E) -timeout 25m -run '^TestNextflowLint'
 
 bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline
 	$(GO_E2E) -timeout 20m -run '^TestBench'
