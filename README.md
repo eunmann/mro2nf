@@ -140,9 +140,9 @@ that data plane into driver-side channel wiring while leaving the stage tasks
 
 Shapes that can't fully collapse keep a bounded remainder — e.g. a
 file-bearing, multi-split, or projected fork keeps **one** FORK resolve task
-(O(total data), never per-instance), a disabled map call keeps its MERGE as the
-skip-branch mix point, and a map over a split stage or sub-pipeline runs its
-fork-keyed layer. **Every non-collapsed shape prints an Info diagnostic at
+(O(total data), never per-instance), a disabled map call keeps its FORK and its
+MERGE (the merge is the skip-branch mix point), and a map over a split stage or
+sub-pipeline runs its fork-keyed layer. **Every non-collapsed shape prints an Info diagnostic at
 transpile time** naming exactly which tasks remain and why, so a partial
 collapse is never silent (see `internal/emit/diagnostics.go`).
 
@@ -153,8 +153,13 @@ the adapter path (an Info diagnostic names each). It composes with or without
 `-native`, and on container backends the runner is baked into the image.
 
 Both modes are held to the same bar as the default emission: the native e2e
-suites diff their outputs against the committed real-`mrp` goldens, and pin the
-exact set of surviving data-plane processes per pipeline shape (see
+suites diff their outputs against the committed real-`mrp` goldens (including
+`-native` composed with `-fuse-chains`/`-fold-disables`), the live `mrp`
+differential runs `-native` and `-native-runner` legs, every fixture is
+statically linted under each opt-in flag, and the benchmark gate's `-native`
+lanes machine-check that the element scatter's orchestration stays flat across
+fork widths. The suites also pin the exact set of surviving data-plane
+processes per pipeline shape (see
 [`docs/FEATURE_COVERAGE.md`](docs/FEATURE_COVERAGE.md)).
 
 ### `.mro2nf.yml` project defaults
