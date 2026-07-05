@@ -204,6 +204,12 @@ func TestMrpDiff(t *testing.T) {
 		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
 		// map, nested pipelines) — all py stages, so it joins the mrp differential.
 		{name: "cellranger_shaped"},
+		// #113: stage src arguments (`src exec "code.py 3 hello"`) must reach
+		// the stage under both runners. Unlike the journal-less exec stubs
+		// below, this one writes journal entries (martian_shell.py
+		// update_journal), so real mrp completes it — machine-checking the
+		// committed golden's mrp provenance.
+		{name: "src_args"},
 		// TODO: the comp/exec-adapter fixtures cannot join an mrp
 		// differential — their stage binaries are fake Python stand-ins for
 		// mre's simpler wrapped-adapter contract, and REAL mrp hangs
