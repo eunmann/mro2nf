@@ -194,7 +194,12 @@ class Mro2nf {
     }
 
     // rawTopField returns the raw substring of a top-level object field's
-    // value, or null when the field is absent.
+    // value, or null when the field is absent. Deliberately scans the WHOLE
+    // object instead of stopping at the match: the single O(file) pass then
+    // doubles as full-document validation, so a corrupt data.json fails loudly
+    // even when the split field itself scans clean. First match wins on a
+    // duplicate key (unreachable: data.json is written by Go's json.Marshal,
+    // which never emits duplicate keys).
     private static String rawTopField(String json, String field) {
         for (List<String> e : rawObjectEntries(json)) {
             if (e[0] == field) return e[1]
@@ -203,8 +208,14 @@ class Mro2nf {
     }
 
     // rawObjectEntries scans a JSON object and returns its [decodedKey,
-    // rawValueSubstring] entries in source order. Keys are decoded (JSON string
-    // escapes resolved) so they compare and sort exactly like the Go side's;
+    // rawValueSubstring] entries in source order — one entry per key
+    // occurrence, so a duplicate key yields duplicate entries (unreachable in
+    // practice: the input is written by Go's json.Marshal, which never emits
+    // duplicates). Keys are decoded (JSON string escapes resolved) so they
+    // compare and sort exactly like the Go side's decoded keys — never match
+    // or sort on the raw substring, where the escaped and literal forms of a
+    // key (Go writes `&` as the six chars backslash-u-0-0-2-6) order
+    // differently;
     // values stay raw. Malformed input throws — data.json is machine-written,
     // so that is a system bug that must fail loudly.
     private static List<List<String>> rawObjectEntries(String s) {
@@ -215,7 +226,7 @@ class Mro2nf {
         if (charAt(s, i) == ('}' as char)) return out
         while (true) {
             int keyEnd = scanString(s, i)
-            String key = (String) new JsonSlurper().parseText(s.substring(i, keyEnd))
+            String key = decodeKey(s.substring(i, keyEnd))
             i = skipWs(s, keyEnd)
             expect(s, i, ':' as char)
             int vs = skipWs(s, i + 1)
@@ -226,6 +237,16 @@ class Mro2nf {
             expect(s, i, '}' as char)
             return out
         }
+    }
+
+    // decodeKey resolves a raw JSON string token (quotes included) to its
+    // decoded value. The common escape-free key is a plain substring; only a
+    // key containing a backslash pays for a JsonSlurper parse. That parse
+    // depends on JsonSlurper accepting a ROOT-LEVEL primitive (a bare JSON
+    // string), which the Groovy 3+ parser Nextflow ships does.
+    private static String decodeKey(String rawKey) {
+        if (!rawKey.contains('\\')) return rawKey.substring(1, rawKey.length() - 1)
+        (String) new JsonSlurper().parseText(rawKey)
     }
 
     // rawArrayElements scans a JSON array and returns each element's raw
