@@ -115,31 +115,38 @@ func (t *Table) CoerceScalars(params []ir.Param, vals map[string]any) map[string
 	return out
 }
 
+// coerce returns v with int-typed leaves coerced, never mutating v: nested
+// slices and maps are rebuilt copy-on-write so the caller-owned input survives
+// coercion intact (CoerceScalars' copy-on-return contract).
 func (t *Table) coerce(v any, base string, arrayDim, mapDim int) any {
 	switch tv := v.(type) {
 	case []any:
-		if arrayDim > 0 {
-			for i, e := range tv {
-				tv[i] = t.coerce(e, base, arrayDim-1, mapDim)
-			}
+		if arrayDim <= 0 {
+			return v
 		}
 
-		return tv
+		out := make([]any, len(tv))
+		for i, e := range tv {
+			out[i] = t.coerce(e, base, arrayDim-1, mapDim)
+		}
+
+		return out
 	case map[string]any:
 		if mapDim > 0 {
 			// One typed-map level carrying mapDim-1 inner array dims (see walkMap).
+			out := make(map[string]any, len(tv))
 			for k, e := range tv {
-				tv[k] = t.coerce(e, base, arrayDim+mapDim-1, 0)
+				out[k] = t.coerce(e, base, arrayDim+mapDim-1, 0)
 			}
 
-			return tv
+			return out
 		}
 
 		if fields, ok := t.structs[base]; ok {
 			return t.CoerceScalars(fields, tv)
 		}
 
-		return tv
+		return v
 	case json.Number:
 		return coerceNumber(tv, base)
 	default:

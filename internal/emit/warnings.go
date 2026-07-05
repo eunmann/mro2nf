@@ -24,12 +24,14 @@ func Warnings(prog *ir.Program) []string {
 		for _, c := range p.Calls {
 			q := name + "." + c.Name
 
-			// A preflight bound to pipeline inputs now gates the rest of the
-			// pipeline (it runs first and downstream calls wait — mrp's behavior).
-			// One bound to another call's output cannot gate without a cycle, so it
-			// runs in DAG order without the early-abort other stages would get.
-			if c.Preflight && (c.Mapped || c.Disabled != nil || bindingsRefCall(c.Bindings)) {
-				w = append(w, fmt.Sprintf("call %s: `preflight` is bound to a call output (not pipeline inputs), so it runs in DAG order and does not gate other stages early as it would under mrp", q))
+			// Only a plain preflight bound solely to pipeline inputs gates the
+			// rest of the pipeline (it runs first and downstream calls wait —
+			// mrp's behavior). Anything else — a mapped or disabled preflight, or
+			// one bound to another call's output (which cannot gate without a
+			// cycle) — runs in DAG order without the early abort, so name the
+			// actual trigger.
+			if reason := preflightUngateable(c); reason != "" {
+				w = append(w, fmt.Sprintf("call %s: `preflight` %s, so it runs in DAG order and does not gate other stages early as it would under mrp", q, reason))
 			}
 
 			if c.Local {
@@ -43,4 +45,24 @@ func Warnings(prog *ir.Program) []string {
 	}
 
 	return w
+}
+
+// preflightUngateable returns why a preflight call cannot act as mrp's early
+// gate, or "" for a gateable (or non-preflight) call. It is the single
+// definition of the gate condition: partitionGateablePreflight wires exactly
+// the calls this reports "" for, so the warning and the emitted gating cannot
+// drift apart.
+func preflightUngateable(c ir.Call) string {
+	switch {
+	case !c.Preflight:
+		return ""
+	case c.Mapped:
+		return "is a map call"
+	case c.Disabled != nil:
+		return "carries a `disabled` gate"
+	case bindingsRefCall(c.Bindings):
+		return "is bound to a call output (not pipeline inputs)"
+	default:
+		return ""
+	}
 }

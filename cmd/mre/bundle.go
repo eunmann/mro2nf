@@ -74,7 +74,12 @@ func (p *producer) write(dir string, raw json.RawMessage) error {
 		return err
 	}
 
-	if err := shim.WriteBundle(dir, payload, man.Params(p.callable, p.role), man.Table()); err != nil {
+	params, err := man.Params(p.callable, p.role)
+	if err != nil {
+		return fmt.Errorf("write bundle %s: %w", dir, err)
+	}
+
+	if err := shim.WriteBundle(dir, payload, params, man.Table()); err != nil {
 		return fmt.Errorf("write bundle %s: %w", dir, err)
 	}
 
@@ -101,8 +106,14 @@ func (p *producer) coerceInputs(raw json.RawMessage, roles ...string) (json.RawM
 	}
 
 	var params []ir.Param
+
 	for _, r := range roles {
-		params = append(params, man.Params(p.callable, r)...)
+		rp, err := man.Params(p.callable, r)
+		if err != nil {
+			return nil, fmt.Errorf("coerce inputs: %w", err)
+		}
+
+		params = append(params, rp...)
 	}
 
 	out, err := json.Marshal(man.Table().CoerceScalars(params, vals))

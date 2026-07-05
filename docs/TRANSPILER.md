@@ -584,8 +584,9 @@ feature is checked against the real `mrp` output. The validation tiers:
 
 The known **divergences** are documented in [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md)
 and are all behavior-only (never output-affecting): a `preflight` bound to
-pipeline inputs gates the rest of the pipeline (mrp's early abort), but one
-bound to a call output runs in plain DAG order; `local`/`volatile` are no-ops
+pipeline inputs gates the rest of the pipeline (mrp's early abort), but a
+mapped, disabled, or call-output-bound one runs in plain DAG order;
+`local`/`volatile` are no-ops
 (no VDR / mid-run work-dir reclamation); and the published `outs/` tree is
 copied into place rather than mrp's move+symlink (same layout and contents).
 The transpiler is **loud** about anything it cannot lower faithfully —

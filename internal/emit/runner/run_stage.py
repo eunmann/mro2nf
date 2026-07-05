@@ -64,7 +64,7 @@ class RunnerError(Exception):
 
 _COMMON_FLAGS = {
     "stagecode": str, "call": str, "mro": str, "work": str, "o": str,
-    "outs": str, "threads": float, "memgb": float, "vmemgb": float,
+    "threads": float, "memgb": float, "vmemgb": float,
     "monitor": bool, "types": str, "callable": str, "role": str,
 }
 _PHASE_FLAGS = {

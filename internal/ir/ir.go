@@ -74,9 +74,19 @@ type Stage struct {
 	Resources Resources
 }
 
+// RefKindSelf and RefKindCall are the two Ref.Kind values: a reference to a
+// pipeline input and a reference to an upstream call's output. The emitter
+// writes them into the generated bindspecs and the runtime binder dispatches
+// on them, so the strings are defined once here for both sides of that seam.
+const (
+	RefKindSelf = "self"
+	RefKindCall = "call"
+)
+
 // Ref is a reference expression: a pipeline input (self) or a call output.
 type Ref struct {
-	// Kind is "self" (pipeline input) or "call" (another call's output).
+	// Kind is RefKindSelf (pipeline input) or RefKindCall (another call's
+	// output).
 	Kind string
 	// ID is the pipeline input name (self) or call instance id (call).
 	ID string
@@ -125,11 +135,25 @@ type Call struct {
 	Volatile  bool
 	// Mapped reports a `map call ... split` fork over a collection.
 	Mapped bool
-	// MapMode is the fork collection kind for a map call: "map" (keyed) or
-	// "array" (empty for a non-map call). A map-mode fork wraps the callee's
-	// outputs in a typed map, which matters for field projection through them.
+	// MapMode is the fork collection kind for a map call: one of MapModeArray,
+	// MapModeMap, or MapModeUnknown (empty for a non-map call).
 	MapMode string
 }
+
+// Map-call fork collection kinds for Call.MapMode, derived from Martian's
+// syntax.CallMode. The values feed the generated `-mapmode` data-plane flag
+// and the Groovy fork helpers, so they must stay "array"/"map"/"unknown".
+const (
+	// MapModeArray forks over an array; the callee's outputs are wrapped in an
+	// extra array dimension.
+	MapModeArray = "array"
+	// MapModeMap forks over a typed map (keyed); the callee's outputs are
+	// wrapped in a typed map, which matters for field projection through them.
+	MapModeMap = "map"
+	// MapModeUnknown is a fork whose source kind is not statically resolved;
+	// consumers treat it as keyed (MapModeMap).
+	MapModeUnknown = "unknown"
+)
 
 // Pipeline is a normalized Martian pipeline declaration.
 type Pipeline struct {

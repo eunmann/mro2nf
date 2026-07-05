@@ -1,0 +1,54 @@
+# Nested map whose callee carries a FILE input: OUTER maps INNER, and INNER
+# maps DBL over value elements while broadcasting a txt input. The value-only
+# split keeps INNER's plain layer on the element scatter (kindNativeScatter),
+# but the file-bearing callee input disqualifies the keyed driver scatter
+# (keyedScatterable), so under the outer map the keyed layer keeps its FORK_K
+# and MERGE_K tasks — the diagnostic wording internal/emit unit tests pin.
+filetype txt;
+
+stage DBL(
+    in  int x,
+    in  txt cfg,
+    out int y,
+    src py  "stages/dbl",
+)
+
+pipeline INNER(
+    in  int[] xs,
+    in  txt   cfg,
+    out int[] ys,
+)
+{
+    map call DBL(
+        x   = split self.xs,
+        cfg = self.cfg,
+    )
+
+    return (
+        ys = DBL.y,
+    )
+}
+
+pipeline OUTER(
+    in  int[][] sets,
+    in  txt     cfg,
+    out int[][] yss,
+)
+{
+    map call INNER(
+        xs  = split self.sets,
+        cfg = self.cfg,
+    )
+
+    return (
+        yss = INNER.ys,
+    )
+}
+
+call OUTER(
+    sets = [
+        [1, 2],
+        [3],
+    ],
+    cfg  = "cfg.txt",
+)

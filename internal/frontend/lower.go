@@ -103,14 +103,25 @@ func lowerCall(c *syntax.CallStm) (ir.Call, error) {
 	lc := ir.Call{Name: c.Id, Callable: c.DecId, Mapped: c.Mapping != nil}
 
 	if c.Mapping != nil {
-		lc.MapMode = c.Mapping.CallMode().String()
+		mode, err := mapMode(c.Mapping.CallMode())
+		if err != nil {
+			return lc, fmt.Errorf("call %s: %w", c.Id, err)
+		}
+
+		lc.MapMode = mode
 	}
 
 	if m := c.Modifiers; m != nil {
 		lc.Local = m.Local
 		lc.Preflight = m.Preflight
 		lc.Volatile = m.Volatile
-		lc.Disabled = disabledRef(m)
+
+		disabled, err := disabledRef(m)
+		if err != nil {
+			return lc, fmt.Errorf("call %s: %w", c.Id, err)
+		}
+
+		lc.Disabled = disabled
 	}
 
 	b, err := lowerBindings(c.Bindings)
@@ -123,7 +134,36 @@ func lowerCall(c *syntax.CallStm) (ir.Call, error) {
 	return lc, nil
 }
 
+// mapMode maps Martian's static fork-source kind onto the IR vocabulary. Any
+// other mode (single, null, or a future addition) has no lowering, so it fails
+// loudly instead of leaking an unvetted mode string into the emitter.
+func mapMode(m syntax.CallMode) (string, error) {
+	switch m {
+	case syntax.ModeArrayCall:
+		return ir.MapModeArray, nil
+	case syntax.ModeMapCall:
+		return ir.MapModeMap, nil
+	case syntax.ModeUnknownMapCall:
+		return ir.MapModeUnknown, nil
+	default:
+		return "", &apperror.UnsupportedError{
+			Construct: "map call mode",
+			Detail:    fmt.Sprintf("mode %q cannot be lowered", m),
+		}
+	}
+}
+
 func lowerEntry(c *syntax.CallStm) (*ir.EntryCall, error) {
+	// mrp forks a top-level `map call` per collection element; the transpiler
+	// has no entry-fork lowering, so fail loudly rather than emit a project
+	// that silently runs the entry once with the whole collection.
+	if c.Mapping != nil {
+		return nil, fmt.Errorf("entry call %s: %w", c.DecId, &apperror.UnsupportedError{
+			Construct: "top-level map call",
+			Detail:    "the entry forks over a collection",
+		})
+	}
+
 	b, err := lowerBindings(c.Bindings)
 	if err != nil {
 		return nil, fmt.Errorf("entry call %s: %w", c.DecId, err)
@@ -174,23 +214,28 @@ func refFrom(r *syntax.RefExp) *ir.Ref {
 	return &ir.Ref{Kind: string(r.Kind), ID: r.Id, Output: r.OutputId}
 }
 
-// disabledRef extracts the `disabled = <ref>` call modifier, if present.
-func disabledRef(m *syntax.Modifiers) *ir.Ref {
+// disabledRef extracts the `disabled = <ref>` call modifier, if present. Any
+// other expression shape is unsupported and fails loudly: silently dropping it
+// would lower the call as "always enabled", inverting e.g. `disabled = true`.
+func disabledRef(m *syntax.Modifiers) (*ir.Ref, error) {
 	if m.Bindings == nil {
-		return nil
+		return nil, nil
 	}
 
 	d, ok := m.Bindings.Table["disabled"]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	r, ok := d.Exp.(*syntax.RefExp)
 	if !ok {
-		return nil
+		return nil, &apperror.UnsupportedError{
+			Construct: "disabled modifier",
+			Detail:    fmt.Sprintf("%T expression (only a reference is supported)", d.Exp),
+		}
 	}
 
-	return refFrom(r)
+	return refFrom(r), nil
 }
 
 // lowerExp lowers a value expression into an ir.Value tree, preserving any
