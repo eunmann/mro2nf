@@ -8,7 +8,8 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 )
 
-// featureSet is the opt-in emission flags, mirrored from Options. Grouping them
+// featureSet is the opt-in emission flags, derived from Options by its
+// featureSet method (the single constructor — see emit.go). Grouping them
 // keeps genCtx's runtime config (mre/shell/…) separate from behavior toggles and
 // gives the plan a single place to read policy from.
 type featureSet struct {
