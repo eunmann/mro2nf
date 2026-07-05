@@ -11,12 +11,18 @@ package e2e
 // (a real syntax bug); style warnings on the generated code exit 0.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -58,11 +64,31 @@ const (
 // If a future flag introduces a genuine SevError refusal, add an explicit
 // expected-refusal allowlist entry for that exact combo THEN — loud by
 // default, never classified by error-message substring.
+//
+// Most flag configs emit byte-identical projects for most fixtures (a flag
+// that doesn't apply to a fixture is a no-op), and each `nextflow lint` pays
+// a ~2s JVM boot that dwarfs the actual linting. So every combo transpiles
+// (milliseconds), but byte-identical emissions share one lint verdict: the
+// first subtest to see a content digest lints it, the rest reuse the result.
+// Identical bytes imply an identical verdict, so coverage is unchanged, and
+// every member subtest still fails by name when its emission has an error.
 func TestNextflowLint(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java")
 	requireNextflowLint(t)
+
+	var (
+		verdicts       sync.Map // tree digest -> *lintVerdict
+		combos, linted atomic.Int64
+	)
+
+	t.Cleanup(func() {
+		if n := linted.Load(); n > 0 {
+			t.Logf("linted %d unique emissions for %d fixture/config combos (%.1fx dedupe)",
+				n, combos.Load(), float64(combos.Load())/float64(n))
+		}
+	})
 
 	for _, fx := range lintFixtures(t) {
 		for _, cfg := range lintConfigs {
@@ -70,22 +96,62 @@ func TestNextflowLint(t *testing.T) {
 				t.Parallel()
 
 				proj := transpileDir(t, filepath.Join(root, "testdata", fx), cfg.flags...)
+				combos.Add(1)
 
-				cmd := exec.Command("nextflow", "lint", ".")
-				cmd.Dir = proj
+				vAny, _ := verdicts.LoadOrStore(treeDigest(t, proj), &lintVerdict{})
 
-				out, err := cmd.CombinedOutput()
-				if err != nil {
+				v, ok := vAny.(*lintVerdict)
+				if !ok {
+					t.Fatalf("verdict map holds %T, want *lintVerdict", vAny)
+				}
+				v.once.Do(func() {
+					linted.Add(1)
+
+					cmd := exec.Command("nextflow", "lint", ".")
+					cmd.Dir = proj
+					v.out, v.err = cmd.CombinedOutput()
+				})
+
+				if v.err != nil {
 					// nextflow lint prints diagnostics grouped by file in path order
 					// with warnings interleaved, so a tail can bury the error's
 					// file/line under a later file's warnings. Surface the error
 					// lines specifically, then the full output for context.
 					t.Fatalf("nextflow lint reported errors for %s under %v:\n%s\n--- full output ---\n%s",
-						fx, cfg.flags, lintErrorLines(out), out)
+						fx, cfg.flags, lintErrorLines(v.out), v.out)
 				}
 			})
 		}
 	}
+}
+
+// lintVerdict is the shared once-per-unique-emission lint result. sync.Once
+// publishes out/err to every waiter, so member subtests read it race-free.
+type lintVerdict struct {
+	once sync.Once
+	out  []byte
+	err  error
+}
+
+// treeDigest collapses hashTree into one content digest for the whole project
+// dir, so byte-identical emissions map to the same key regardless of which
+// temp directory they were emitted into.
+func treeDigest(t *testing.T, dir string) string {
+	t.Helper()
+
+	tree := hashTree(t, dir)
+
+	var manifest strings.Builder
+	for _, rel := range slices.Sorted(maps.Keys(tree)) {
+		manifest.WriteString(rel)
+		manifest.WriteByte(0)
+		manifest.WriteString(tree[rel])
+		manifest.WriteByte('\n')
+	}
+
+	sum := sha256.Sum256([]byte(manifest.String()))
+
+	return hex.EncodeToString(sum[:])
 }
 
 // lintErrorLines returns the `Error …:<line>:<col>:` diagnostic lines from
