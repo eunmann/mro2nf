@@ -230,13 +230,13 @@ func TestMrpDiff(t *testing.T) {
 		// update_journal), so real mrp completes it — machine-checking the
 		// committed golden's mrp provenance.
 		{name: "src_args"},
-		// TODO: the comp/exec-adapter fixtures cannot join an mrp
+		// The comp/exec-adapter fixtures cannot join an mrp
 		// differential — their stage binaries are fake Python stand-ins for
 		// mre's simpler wrapped-adapter contract, and REAL mrp hangs
 		// indefinitely waiting on them (observed: mixed_adapters stuck 23+
 		// minutes at DBL.fork0.chnk0.main before being killed; the hang is
 		// on the mrp side of the diff, not mre's). Exercising the
-		// real-mrjob-under-mre seam needs a dedicated harness that runs
+		// real-mrjob-under-mre seam would need a dedicated harness that runs
 		// ONLY the Nextflow side with $MARTIAN_BIN/mrjob (via the realMrjob
 		// knob below) against a committed golden, not an mrp baseline.
 		// {name: "comp_split", realMrjob: true},
