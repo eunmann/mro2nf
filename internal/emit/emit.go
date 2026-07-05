@@ -740,9 +740,6 @@ func bindSpec(prog *ir.Program, p *ir.Pipeline, bindings []ir.Binding) bind.Spec
 	return spec
 }
 
-// configFile renders nextflow.config with executor profiles. The local and
-// HPC profiles (slurm/sge/lsf/pbs) work with the shared-filesystem model used
-// today; cloud profiles additionally require the object-store data plane.
 // valueToEntry converts an IR value tree into a runtime bind.Entry, preserving
 // refs nested inside array/object literals.
 func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {

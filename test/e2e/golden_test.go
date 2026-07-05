@@ -1011,8 +1011,8 @@ func assertHasProcess(t *testing.T, proj string, cat string) {
 // still runs its keys-only sentinel, and the zero-fork merge emits null
 // (bind.Merge emptyNull — matching mrp's static resolver, while keeping entry
 // inputs launch-overridable). fork_upstream and map_null_map scatter over an
-// UPSTREAM split source (#99): the driver reads the fork width from the
-// producer's value channel (Mro2nf.forkScatterRef); map_null_map and
+// UPSTREAM split source (#99): the driver slices the producer's value-channel
+// bundle into per-fork elements (Mro2nf.forkElements); map_null_map and
 // runtime_empty_forks exercise the RUNTIME zero-fork keys-only sentinel on
 // that path (typed-empty results across null/empty x array/map).
 func TestNativeComplete(t *testing.T) {
