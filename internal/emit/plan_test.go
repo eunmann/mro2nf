@@ -1,6 +1,7 @@
 package emit
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -359,23 +360,44 @@ func keysOf(m map[string]pipePlan) []string {
 	return ks
 }
 
+// String names keyedKind values so test failures read as constants, not raw
+// numbers. Test-scoped on purpose: nothing reachable from the binaries prints
+// the enum, so a production method would trip the deadcode gate.
+func (k keyedKind) String() string {
+	switch k {
+	case keyedBind:
+		return "keyedBind"
+	case keyedFused:
+		return "keyedFused"
+	case keyedForkBind:
+		return "keyedForkBind"
+	case keyedScatter:
+		return "keyedScatter"
+	default:
+		return fmt.Sprintf("keyedKind(%d)", uint8(k))
+	}
+}
+
 // TestKeyedScatterableRejections pins keyedScatterable's guardrails (#99): the
 // keyed driver scatter requires a value-only callee and no call-ref bindings.
 // map_pipe_nested is the positive control (keyedScatter over xs); a
 // file-bearing callee input (map_pipe_nested_file) and a broadcast binding
 // referencing an upstream call must both fall back to keyedForkBind — the _KS
 // forkbind assembles fargs without the type manifest or a per-outer-key
-// producer join, so either shape would break on the scatter path.
+// producer join, so either shape would break on the scatter path. A rejection
+// must also leave the scatter payload empty (no field, no stage): a stale
+// payload beside keyedForkBind would let an emit site scatter anyway.
 func TestKeyedScatterableRejections(t *testing.T) {
 	el := buildPlan(lowerFixture(t, "map_pipe_nested"), featureSet{}).pipes["INNER"].calls["DBL"]
 	if el.keyedKind != keyedScatter || el.keyedScatterField != "xs" {
-		t.Errorf("value-only nested map: keyedKind = %d (field %q), want keyedScatter over xs",
+		t.Errorf("value-only nested map: keyedKind = %v (field %q), want keyedScatter over xs",
 			el.keyedKind, el.keyedScatterField)
 	}
 
 	fb := buildPlan(lowerFixture(t, "map_pipe_nested_file"), featureSet{}).pipes["INNER"].calls["DBL"]
-	if fb.keyedKind != keyedForkBind {
-		t.Errorf("file-bearing callee input: keyedKind = %d, want keyedForkBind (file-leaf rejection)", fb.keyedKind)
+	if fb.keyedKind != keyedForkBind || fb.keyedScatterField != "" || fb.keyedStage != nil {
+		t.Errorf("file-bearing callee input: keyedKind = %v (field %q, stage %v), want bare keyedForkBind (file-leaf rejection)",
+			fb.keyedKind, fb.keyedScatterField, fb.keyedStage)
 	}
 
 	cr := lowerMRO(t, `
@@ -392,8 +414,10 @@ pipeline OUTER(in int[][] sets, out int[][] yss,){
 }
 call OUTER(sets = [[1]],)
 `)
-	if got := buildPlan(cr, featureSet{}).pipes["INNER"].calls["DBL"]; got.keyedKind != keyedForkBind {
-		t.Errorf("call-ref broadcast binding: keyedKind = %d, want keyedForkBind (call-ref rejection)", got.keyedKind)
+	got := buildPlan(cr, featureSet{}).pipes["INNER"].calls["DBL"]
+	if got.keyedKind != keyedForkBind || got.keyedScatterField != "" || got.keyedStage != nil {
+		t.Errorf("call-ref broadcast binding: keyedKind = %v (field %q, stage %v), want bare keyedForkBind (call-ref rejection)",
+			got.keyedKind, got.keyedScatterField, got.keyedStage)
 	}
 }
 
