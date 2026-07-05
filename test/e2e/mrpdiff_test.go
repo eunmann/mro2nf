@@ -7,7 +7,9 @@ package e2e
 // tree — the set of output file paths relative to the outs dir plus their
 // contents — and the (path-normalized) _outs JSON. This validates mre's
 // publish layout and the whole transpile+runtime path against Martian itself,
-// not a hand-written golden.
+// not a hand-written golden. Anchor fixtures additionally run -native (and
+// -native -native-runner) Nextflow legs against the same mrp pipestance
+// (#120), so the native emit path faces live mrp, not only committed goldens.
 //
 // Requires a local Martian build: set MARTIAN_BIN (default
 // ~/workdir/martian/bin). Skips cleanly — never fails, even under
@@ -21,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -153,9 +156,20 @@ func TestMrpDiff(t *testing.T) {
 
 	// Fixtures whose top-level `call` runs standalone (no launch-time param
 	// override). Each exercises a distinct output/pipeline shape.
+	//
+	// native adds a -native transpile+Nextflow leg against the SAME mrp
+	// pipestance (#120): without it, -native correctness would rest entirely on
+	// committed goldens and a Martian behavior change at a pin bump — or a
+	// native-only divergence the golden JSON does not capture — would be
+	// invisible until goldens were regenerated. runner further adds a combined
+	// -native -native-runner leg; it is set only where a stage actually
+	// executes (an empty/pruned fork runs no stage code, so the runner leg
+	// would re-test pure orchestration the native leg already covers).
 	cases := []struct {
 		name      string
 		realMrjob bool
+		native    bool
+		runner    bool
 	}{
 		{name: "file_min"},
 		{name: "dir_out"},
@@ -172,38 +186,39 @@ func TestMrpDiff(t *testing.T) {
 		{name: "map_null_map"},
 		// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
 		// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
-		{name: "map_key_sort"},
+		{name: "map_key_sort", native: true, runner: true},
 		// #99: upstream map-fork element path (producer bundle sliced, real keys).
 		{name: "map_fork_upstream"},
 		// #99 empty-fork fidelity, both sides of the static/runtime split:
 		// an invocation-known empty split source merges to null (mrp's static
 		// resolver prunes the zero-fork call); an upstream empty/null
 		// collection merges to the typed empty at runtime.
-		{name: "empty_fork_min"},
+		{name: "empty_fork_min", native: true},
 		{name: "empty_map_fork"},
-		{name: "runtime_empty_forks"},
+		{name: "runtime_empty_forks", native: true, runner: true},
 		// #127 value-chain empty-fork classes: mrp's static resolver prunes
 		// each to null (sub-pipeline chain to an entry value, in-pipeline
 		// cascade through a mapped call, mixed entry+upstream zip) — the
 		// live differential machine-checks the knownInvocation cascade.
-		{name: "empty_fork_sub"},
-		{name: "empty_fork_cascade"},
-		{name: "empty_fork_mixed"},
+		{name: "empty_fork_sub", native: true},
+		{name: "empty_fork_cascade", native: true},
+		{name: "empty_fork_mixed", native: true},
 		// The native-suite golden anchors: their committed expected/outs.json
 		// files claim mrp provenance, so the live differential machine-checks
 		// that claim — otherwise TestGolden + the native suites would prove
-		// only self-consistency.
-		{name: "fork_ref"},
-		{name: "fork_mid"},
-		{name: "fork_disabled_sub"},
-		{name: "fork_disabled_skip"},
-		{name: "fork_fanout"},
-		{name: "map_file_array"},
+		// only self-consistency. Their native legs face the -native transpile
+		// itself against live mrp, not just the golden snapshot.
+		{name: "fork_ref", native: true, runner: true},
+		{name: "fork_mid", native: true, runner: true},
+		{name: "fork_disabled_sub", native: true, runner: true},
+		{name: "fork_disabled_skip", native: true},
+		{name: "fork_fanout", native: true, runner: true},
+		{name: "map_file_array", native: true, runner: true},
 		// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
 		{name: "map_file_split"},
 		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
 		// map, nested pipelines) — all py stages, so it joins the mrp differential.
-		{name: "cellranger_shaped"},
+		{name: "cellranger_shaped", native: true, runner: true},
 		// #113: stage src arguments (`src exec "code.py 3 hello"`) must reach
 		// the stage under both runners. Unlike the journal-less exec stubs
 		// below, this one writes journal entries (martian_shell.py
@@ -244,15 +259,41 @@ func TestMrpDiff(t *testing.T) {
 				extra = append(extra, "-mrjob", mrjob)
 			}
 
-			proj := transpile(t, tc.name, extra...)
+			diffNextflow(t, tc.name, tmp, extra)
 
-			if err := runNextflow(t, proj); err != nil {
-				t.Fatalf("nextflow: %v", err)
+			// The extra legs are Nextflow-only: each re-transpiles and re-runs
+			// against the pipestance the default leg's runMrp already produced,
+			// so mrp truth is computed once per fixture.
+			if tc.native {
+				t.Run("native", func(t *testing.T) {
+					t.Parallel()
+					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native"))
+				})
 			}
 
-			compareMrpToNextflow(t, tmp, proj)
+			if tc.runner {
+				t.Run("native_runner", func(t *testing.T) {
+					t.Parallel()
+					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native", "-native-runner"))
+				})
+			}
 		})
 	}
+}
+
+// diffNextflow transpiles a fixture with the given flags, runs the generated
+// project under Nextflow, and diffs its published tree + _outs JSON against
+// the mrp pipestance at <tmp>/mrp.
+func diffNextflow(t *testing.T, fixture, tmp string, flags []string) {
+	t.Helper()
+
+	proj := transpile(t, fixture, flags...)
+
+	if err := runNextflow(t, proj); err != nil {
+		t.Fatalf("nextflow: %v", err)
+	}
+
+	compareMrpToNextflow(t, tmp, proj)
 }
 
 // compareMrpToNextflow diffs the published file tree (paths + contents) and
