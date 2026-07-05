@@ -19,9 +19,12 @@ func TestStageCmdNativeRunner(t *testing.T) {
 		runnerBase: "${projectDir}/_assets/runner",
 		monitor:    true,
 		features:   featureSet{nativeRunner: true},
+		code:       map[string]string{"S": "/code/stage", "C": "/code/bin"},
 	}
+	pyStage := &ir.Stage{Name: "S", Lang: ir.LangPy}
+	compStage := &ir.Stage{Name: "C", Lang: ir.LangComp}
 
-	py := g.stageCmd("main", "/code/stage", ir.LangPy, "4")
+	py := g.stageCmd("main", pyStage, "4")
 	want := `'python3' '${projectDir}/_assets/runner/run_stage.py' main -stagecode '/code/stage' -call 'P' -mro 'pipeline.mro' -vmemgb 4 -monitor`
 
 	if py != want {
@@ -32,17 +35,41 @@ func TestStageCmdNativeRunner(t *testing.T) {
 	gc := g
 	gc.runnerBase = ctrRunner
 
-	if got := gc.stageCmd("main", "/code/stage", ir.LangPy, ""); !strings.Contains(got, "'"+ctrRunner+"/run_stage.py'") {
+	if got := gc.stageCmd("main", pyStage, ""); !strings.Contains(got, "'"+ctrRunner+"/run_stage.py'") {
 		t.Errorf("container native-runner must exec the baked runner path: %q", got)
 	}
 
-	if comp := g.stageCmd("main", "/code/bin", ir.LangComp, ""); !strings.Contains(comp, "'/x/mre' main -shell '/x/shell.py'") {
+	if comp := g.stageCmd("main", compStage, ""); !strings.Contains(comp, "'/x/mre' main -shell '/x/shell.py'") {
 		t.Errorf("comp stage must keep the adapter path: %q", comp)
 	}
 
-	gd := genCtx{entry: "P", mroFile: "pipeline.mro", mre: "/x/mre", shell: "/x/shell.py"}
-	if def := gd.stageCmd("main", "/code/stage", ir.LangPy, ""); !strings.Contains(def, "'/x/mre' main -shell '/x/shell.py'") {
+	gd := genCtx{
+		entry: "P", mroFile: "pipeline.mro", mre: "/x/mre", shell: "/x/shell.py",
+		code: map[string]string{"S": "/code/stage"},
+	}
+	if def := gd.stageCmd("main", pyStage, ""); !strings.Contains(def, "'/x/mre' main -shell '/x/shell.py'") {
 		t.Errorf("default mode must keep the adapter path: %q", def)
+	}
+}
+
+// TestStageCmdSrcArgs pins #113: src args declared after the stage code path
+// (`src exec "code.py a b"`) must ride to the adapter as one -srcarg flag each,
+// in declaration order — and a stage without src args must emit none.
+func TestStageCmdSrcArgs(t *testing.T) {
+	g := genCtx{
+		entry: "P", mroFile: "pipeline.mro", mre: "/x/mre", shell: "/x/shell.py",
+		code: map[string]string{"E": "/code/tool.py"},
+	}
+
+	got := g.stageCmd("main", &ir.Stage{Name: "E", Lang: ir.LangExec, SrcArgs: []string{"3", "hello"}}, "")
+	want := `'/x/mre' main -shell '/x/shell.py' -stagecode '/code/tool.py' -lang exec -call 'P' -mro 'pipeline.mro' -srcarg '3' -srcarg 'hello'`
+
+	if got != want {
+		t.Errorf("exec stageCmd with src args:\n got %q\nwant %q", got, want)
+	}
+
+	if plain := g.stageCmd("main", &ir.Stage{Name: "E", Lang: ir.LangExec}, ""); strings.Contains(plain, "-srcarg") {
+		t.Errorf("stage without src args must not emit -srcarg: %q", plain)
 	}
 }
 
