@@ -94,10 +94,8 @@ func hashTree(t *testing.T, dir string, exclude ...string) map[string]string {
 			return err
 		}
 
-		for _, ex := range exclude {
-			if d.Name() == ex {
-				return nil
-			}
+		if slices.Contains(exclude, d.Name()) {
+			return nil
 		}
 
 		rel, err := filepath.Rel(dir, path)

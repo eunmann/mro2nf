@@ -231,18 +231,36 @@ func TestDockerEntryOverrides(t *testing.T) {
 		params  map[string]any
 		expect  string
 	}{
-		{"entry_file_override", "entry_file",
-			map[string]any{"reads": p("o_scalar.txt")}, `{"total": 42.0}`},
-		{"entry_filearr_override", "entry_filearr",
-			map[string]any{"reads": []string{p("o_arr1.txt"), p("o_arr2.txt")}}, `{"total": 30.0}`},
-		{"entry_filearr_samebasename", "entry_filearr",
-			map[string]any{"reads": []string{p("sb1/reads.txt"), p("sb2/reads.txt")}}, `{"total": 30.0}`},
-		{"entry_struct_file_override", "entry_struct_file",
-			map[string]any{"cfg": map[string]any{"ref": p("o_ref.txt"), "n": 5}}, `{"total": 40.0}`},
-		{"entry_mapfile_override", "entry_mapfile",
-			map[string]any{"reads": map[string]any{"a": p("o_m1.txt"), "b": p("o_m2.txt")}}, `{"total": 40.0}`},
-		{"entry_dir_override", "entry_dir",
-			map[string]any{"fastqs": p("odir")}, `{"total": 66.0}`},
+		{
+			"entry_file_override", "entry_file",
+			map[string]any{"reads": p("o_scalar.txt")},
+			`{"total": 42.0}`,
+		},
+		{
+			"entry_filearr_override", "entry_filearr",
+			map[string]any{"reads": []string{p("o_arr1.txt"), p("o_arr2.txt")}},
+			`{"total": 30.0}`,
+		},
+		{
+			"entry_filearr_samebasename", "entry_filearr",
+			map[string]any{"reads": []string{p("sb1/reads.txt"), p("sb2/reads.txt")}},
+			`{"total": 30.0}`,
+		},
+		{
+			"entry_struct_file_override", "entry_struct_file",
+			map[string]any{"cfg": map[string]any{"ref": p("o_ref.txt"), "n": 5}},
+			`{"total": 40.0}`,
+		},
+		{
+			"entry_mapfile_override", "entry_mapfile",
+			map[string]any{"reads": map[string]any{"a": p("o_m1.txt"), "b": p("o_m2.txt")}},
+			`{"total": 40.0}`,
+		},
+		{
+			"entry_dir_override", "entry_dir",
+			map[string]any{"fastqs": p("odir")},
+			`{"total": 66.0}`,
+		},
 	}
 
 	for _, tc := range cases {

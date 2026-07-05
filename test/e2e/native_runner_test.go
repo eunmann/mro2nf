@@ -71,7 +71,7 @@ func assertNoAdapterOnPyStages(t *testing.T, proj string) {
 			t.Fatal(err)
 		}
 
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			if strings.Contains(line, "-lang py") && strings.Contains(line, "-shell") {
 				t.Errorf("%s: py stage still brokered by the adapter: %s", filepath.Base(f), strings.TrimSpace(line))
 			}

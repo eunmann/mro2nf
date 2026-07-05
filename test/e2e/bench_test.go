@@ -92,11 +92,11 @@ func TestBench(t *testing.T) {
 // object-store metric is out of scope (see docs/BENCHMARKS.md). The scheme
 // compare is case-insensitive (URI schemes are, per RFC 3986).
 func requireLocalWorkdir(w string) error {
-	if i := strings.Index(w, "://"); i >= 0 && !strings.EqualFold(w[:i], "file") {
+	if before, _, ok := strings.Cut(w, "://"); ok && !strings.EqualFold(before, "file") {
 		return fmt.Errorf("BENCH_WORKDIR=%q is non-local (%s://): the bench gate's "+
 			"refs metric is a local work-dir scan and reads 0 over an object store, "+
 			"so the gate would pass vacuously; run bench against a local work dir "+
-			"(see docs/BENCHMARKS.md)", w, w[:i])
+			"(see docs/BENCHMARKS.md)", w, before)
 	}
 
 	return nil
