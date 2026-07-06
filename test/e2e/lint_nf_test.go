@@ -25,8 +25,11 @@ package e2e
 //     JVMs instead of one each. Every emission ships the identical static
 //     lib/ (asserted below), so a single -project-dir serves the batch.
 //
-// An injected-syntax-error guard project rides every batch and MUST fail,
-// proving end-to-end that the gate still has teeth.
+// EVERY chunk carries its own injected-syntax-error guard project that MUST
+// report exactly its injected error, proving per invocation that the whole
+// lint path — invocation, JSON parsing, per-project attribution — still has
+// teeth. A single suite-wide guard would ride one chunk and let another
+// chunk's silently broken pipeline pass green.
 
 import (
 	"bytes"
@@ -37,6 +40,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -74,10 +78,12 @@ const (
 	minNextflowMinor = 4
 )
 
-// lintBatchSize bounds how many unique projects one `nextflow lint`
-// invocation covers, keeping the argument list and the JVM's parse workload
-// bounded as the fixture matrix grows. One JVM handled the full ~370-project
-// set comfortably, so this is headroom, not tuning.
+// lintBatchSize bounds how many projects one `nextflow lint` invocation
+// covers, keeping the argument list and the JVM's parse workload bounded as
+// the fixture matrix grows. One JVM handled the full ~370-project set
+// comfortably, so this is headroom, not tuning. Each chunk reserves one of
+// these slots for its guard project, so real emissions batch in groups of
+// lintBatchSize-1.
 const lintBatchSize = 150
 
 // TestNextflowLint lints the generated project for every testdata fixture
@@ -105,17 +111,10 @@ func TestNextflowLint(t *testing.T) {
 		t.Logf("linting %d unique emissions for %d fixture/config combos (%.1fx dedupe)",
 			len(reps), len(combos), float64(len(combos))/float64(len(reps)))
 
+		assertDedupeFloor(t, combos, reps)
 		assertUniformLib(t, parent, reps)
 
-		guard := injectLintGuard(t, parent, reps[0])
-		errsByProj = batchLint(t, parent, append(reps, guard))
-
-		// The gate must have teeth: if a deliberately broken emission lints
-		// clean, a real broken emission couldn't surface either and the whole
-		// suite would be a silent green skip.
-		if len(errsByProj[guard]) == 0 {
-			t.Fatalf("lint gate has no teeth: injected syntax error in %s produced no lint errors", guard)
-		}
+		errsByProj = batchLint(t, parent, reps)
 	}
 
 	for _, c := range combos {
@@ -201,6 +200,30 @@ func dedupeLintCombos(combos []*lintCombo) (map[string]string, []string) {
 	return repByGroup, reps
 }
 
+// assertDedupeFloor asserts the dedupe actually collapses the matrix: unique
+// emissions must stay at or below 80% of the transpiled combos (historically
+// ~50%, so this is a generous floor). The dedupe is the perf win that keeps
+// this gate affordable; if the ratio collapses, path-dependence (absolute
+// paths, timestamps, unstable map ordering) crept into the emitter's output
+// and every "identical" combo silently became its own lint job. That
+// regression must fail the gate loudly, not evaporate into a slower log line.
+func assertDedupeFloor(t *testing.T, combos []*lintCombo, reps []string) {
+	t.Helper()
+
+	transpiled := 0
+
+	for _, c := range combos {
+		if c.transpileErr == nil {
+			transpiled++
+		}
+	}
+
+	if len(reps)*5 > transpiled*4 {
+		t.Errorf("dedupe floor breached: %d unique emissions for %d transpiled combos (want <= 80%%); emissions have become path-dependent",
+			len(reps), transpiled)
+	}
+}
+
 // treeDigest collapses hashTree into one content digest for the whole project
 // dir, so byte-identical emissions map to the same key regardless of which
 // directory they were emitted into.
@@ -222,11 +245,26 @@ func treeDigest(t *testing.T, dir string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// lintEmissionAllowList is every top-level entry a real emission produces
+// today, derived by sweeping all fixtures under all lintConfigs. It backs the
+// shared-context tripwire in assertUniformLib.
+var lintEmissionAllowList = []string{
+	"_assets", "entry_args", "entry_resolved", "lib",
+	"main.nf", "modules", "nextflow.config", "nulls",
+}
+
 // assertUniformLib proves every unique emission ships a byte-identical lib/
 // tree. Batch linting resolves the driver-classpath classes (lib/*.groovy)
 // from a single -project-dir, so if a flag ever made lib/ config-dependent,
 // batching would silently lint some projects against the wrong helper
 // classes — fail loudly instead of degrading coverage.
+//
+// It also trips on any OTHER project-dir-anchored lint context: the batch
+// premise is that lib/ is the ONLY thing `nextflow lint` resolves from
+// -project-dir, so an emission growing a bin/ dir — or any top-level entry
+// outside the known emission shape — must be reviewed for whether it affects
+// lint resolution (and this allow-list extended) before the batch verdicts
+// can be trusted again.
 func assertUniformLib(t *testing.T, parent string, reps []string) {
 	t.Helper()
 
@@ -239,17 +277,31 @@ func assertUniformLib(t *testing.T, parent string, reps []string) {
 				reps[0], rep, reps[0], rep, diff)
 		}
 	}
+
+	for _, rep := range reps {
+		entries, err := os.ReadDir(filepath.Join(parent, rep))
+		if err != nil {
+			t.Fatalf("read emission %s: %v", rep, err)
+		}
+
+		for _, e := range entries {
+			if !slices.Contains(lintEmissionAllowList, e.Name()) {
+				t.Errorf("emission %s has unexpected top-level entry %q; batch lint assumes lib/ is the only project-dir-anchored lint context — review whether nextflow lint resolves it from -project-dir before extending lintEmissionAllowList",
+					rep, e.Name())
+			}
+		}
+	}
 }
 
 // injectLintGuard copies a clean emission and appends a Groovy syntax error
-// to its main.nf. The batch MUST report an error for it, proving on every run
-// that the whole lint path — batch invocation, JSON parsing, per-project
-// attribution — can actually surface a broken emission. The `__`-free name
-// cannot collide with a <fixture>__<config> project dir.
-func injectLintGuard(t *testing.T, parent, rep string) string {
+// to its main.nf. The chunk it rides MUST report an error for it, proving on
+// every run that the whole lint path — batch invocation, JSON parsing,
+// per-project attribution — can actually surface a broken emission. The
+// `__`-free name cannot collide with a <fixture>__<config> project dir.
+func injectLintGuard(t *testing.T, parent, rep string, n int) string {
 	t.Helper()
 
-	const guard = "zz-lint-guard"
+	guard := fmt.Sprintf("zz-lint-guard-%d", n)
 	if err := os.CopyFS(filepath.Join(parent, guard), os.DirFS(filepath.Join(parent, rep))); err != nil {
 		t.Fatalf("copy %s -> %s: %v", rep, guard, err)
 	}
@@ -278,54 +330,160 @@ type lintDiag struct {
 	Message     string `json:"message"`
 }
 
-// batchLint lints the given project directories (relative to parent) in a few
-// `nextflow lint` invocations instead of one JVM per project — ~95% of a
+// batchLint lints the given emission directories (relative to parent) in a
+// few `nextflow lint` invocations instead of one JVM per project — ~95% of a
 // single-project lint is JVM boot. Every project ships the identical lib/
 // (assertUniformLib), so the chunk's first project serves as -project-dir for
 // classpath resolution, and the JSON diagnostics carry project-relative paths
-// that attribute each error back to its emission. Returns error strings keyed
-// by project dir name; projects absent from the map linted clean.
-func batchLint(t *testing.T, parent string, projects []string) map[string][]string {
+// that attribute each error back to its emission. EVERY chunk carries its own
+// guard project (guard slots are reserved out of lintBatchSize), so a chunk
+// whose invocation, JSON parse, or attribution silently broke cannot pass
+// green. Returns error strings keyed by project dir name; projects absent
+// from the map linted clean. Guard verdicts are consumed here, not returned.
+func batchLint(t *testing.T, parent string, reps []string) map[string][]string {
 	t.Helper()
 
 	errsByProj := map[string][]string{}
+	chunkNum := 0
 
-	for chunk := range slices.Chunk(projects, lintBatchSize) {
-		args := append([]string{"lint", "-output", "json", "-project-dir", chunk[0]}, chunk...)
-		cmd := exec.Command("nextflow", args...)
-		cmd.Dir = parent
+	for chunk := range slices.Chunk(reps, lintBatchSize-1) {
+		guard := injectLintGuard(t, parent, chunk[0], chunkNum)
+		chunkNum++
 
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
+		// slices.Concat, not append: chunk aliases reps' backing array, and
+		// appending the guard in place would overwrite the next chunk's first
+		// element.
+		lintChunk(t, parent, slices.Concat(chunk, []string{guard}), errsByProj)
 
-		// A nonzero exit just means diagnostics were found; the JSON on
-		// stdout is the verdict (progress lines go to stderr).
-		out, runErr := cmd.Output()
-
-		var report struct {
-			Errors []lintDiag `json:"errors"`
-		}
-		if err := json.Unmarshal(out, &report); err != nil {
-			t.Fatalf("nextflow lint batch produced no JSON (%v; run: %v):\nstdout:\n%s\nstderr:\n%s",
-				err, runErr, out, stderr.Bytes())
-		}
-
-		if runErr != nil && len(report.Errors) == 0 {
-			t.Fatalf("nextflow lint batch failed without diagnostics: %v\nstderr:\n%s", runErr, stderr.Bytes())
-		}
-
-		for _, d := range report.Errors {
-			proj, rest, ok := strings.Cut(filepath.ToSlash(d.Filename), "/")
-			if !ok || !slices.Contains(chunk, proj) {
-				t.Fatalf("lint error for unattributable path %q: %s", d.Filename, d.Message)
-			}
-
-			errsByProj[proj] = append(errsByProj[proj],
-				fmt.Sprintf("%s:%d:%d: %s", rest, d.StartLine, d.StartColumn, d.Message))
-		}
+		assertGuardTeeth(t, guard, errsByProj[guard])
+		delete(errsByProj, guard) // consumed; no combo maps to a guard
 	}
 
 	return errsByProj
+}
+
+// lintChunk runs one `nextflow lint` invocation over chunk (relative to
+// parent) and merges the attributed diagnostics into errsByProj.
+func lintChunk(t *testing.T, parent string, chunk []string, errsByProj map[string][]string) {
+	t.Helper()
+
+	args := slices.Concat([]string{"lint", "-output", "json", "-project-dir", chunk[0]}, chunk)
+	cmd := exec.Command("nextflow", args...)
+	cmd.Dir = parent
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	// A nonzero exit just means diagnostics were found; the JSON on
+	// stdout is the verdict (progress lines go to stderr).
+	out, runErr := cmd.Output()
+
+	var report struct {
+		Errors []lintDiag `json:"errors"`
+	}
+	if err := json.Unmarshal(out, &report); err != nil {
+		t.Fatalf("nextflow lint batch produced no JSON (%v; run: %v):\nstdout:\n%s\nstderr:\n%s",
+			err, runErr, out, stderr.Bytes())
+	}
+
+	if runErr != nil && len(report.Errors) == 0 {
+		t.Fatalf("nextflow lint batch failed without diagnostics: %v\nstderr:\n%s", runErr, stderr.Bytes())
+	}
+
+	for _, d := range report.Errors {
+		proj, rest, ok := attributeLintDiag(chunk, d.Filename)
+		if !ok {
+			// Never Fatalf: one oddly-reported path must not vaporize the
+			// verdicts for the rest of the matrix — but it can't pass green
+			// either, so surface the raw diagnostic as its own failure.
+			t.Errorf("lint error with unattributable filename %q (no chunk project matches): %d:%d: %s",
+				d.Filename, d.StartLine, d.StartColumn, d.Message)
+
+			continue
+		}
+
+		errsByProj[proj] = append(errsByProj[proj],
+			fmt.Sprintf("%s:%d:%d: %s", rest, d.StartLine, d.StartColumn, d.Message))
+	}
+}
+
+// attributeLintDiag maps a diagnostic's filename to the chunk project it
+// belongs to, plus the project-relative remainder. `nextflow lint` reports
+// paths as passed, i.e. '<projdir>/…' relative to the invocation cwd, so the
+// first path component is tried first; if the shape ever changes (an absolute
+// path, say), any path still containing a chunk project's dir as a component
+// attributes by suffix. ok=false means no chunk project matches (e.g. a bare
+// 'main.nf' reported relative to the -project-dir) — the caller decides how
+// loudly to fail. Returns (project dir, project-relative path, ok).
+func attributeLintDiag(chunk []string, filename string) (string, string, bool) {
+	clean := path.Clean(filepath.ToSlash(filename))
+
+	if proj, rest, found := strings.Cut(clean, "/"); found && slices.Contains(chunk, proj) {
+		return proj, rest, true
+	}
+
+	for _, member := range chunk {
+		marker := "/" + member + "/"
+		if i := strings.LastIndex(clean, marker); i >= 0 {
+			return member, clean[i+len(marker):], true
+		}
+	}
+
+	return "", "", false
+}
+
+// assertGuardTeeth asserts a chunk's guard project reported exactly its
+// injected main.nf syntax error. An empty verdict means the chunk's lint path
+// lost its teeth (its real projects' green verdicts would be meaningless);
+// an error outside main.nf means the diagnostics were misattributed.
+func assertGuardTeeth(t *testing.T, guard string, errs []string) {
+	t.Helper()
+
+	if len(errs) == 0 {
+		t.Fatalf("lint gate has no teeth: injected syntax error in %s produced no lint errors for its chunk", guard)
+	}
+
+	for _, e := range errs {
+		if !strings.HasPrefix(e, "main.nf:") {
+			t.Errorf("guard %s reported an error outside its injected main.nf breakage (misattribution?): %s", guard, e)
+		}
+	}
+}
+
+// TestNextflowLintAttribution unit-tests the diagnostic-to-project mapping:
+// the as-passed '<projdir>/…' fast path, the tolerant suffix fallback, and
+// the not-ok shapes that must degrade to a per-diagnostic failure instead of
+// vaporizing the batch.
+func TestNextflowLintAttribution(t *testing.T) {
+	t.Parallel()
+
+	chunk := []string{"fx__default", "fx__native", "zz-lint-guard-0"}
+
+	cases := []struct {
+		name, filename     string
+		wantProj, wantRest string
+		wantOK             bool
+	}{
+		{"as-passed prefix", "fx__native/main.nf", "fx__native", "main.nf", true},
+		{"nested file", "fx__default/modules/stage_X.nf", "fx__default", "modules/stage_X.nf", true},
+		{"dot-prefixed", "./fx__default/main.nf", "fx__default", "main.nf", true},
+		{"absolute path", "/tmp/x/parent/zz-lint-guard-0/main.nf", "zz-lint-guard-0", "main.nf", true},
+		{"bare basename", "main.nf", "", "", false},
+		{"unknown project", "other__cfg/main.nf", "", "", false},
+		{"empty", "", "", "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			proj, rest, ok := attributeLintDiag(chunk, tc.filename)
+			if proj != tc.wantProj || rest != tc.wantRest || ok != tc.wantOK {
+				t.Errorf("attributeLintDiag(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					tc.filename, proj, rest, ok, tc.wantProj, tc.wantRest, tc.wantOK)
+			}
+		})
+	}
 }
 
 // lintFixtures returns every testdata fixture directory that has a pipeline.mro.
