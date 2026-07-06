@@ -31,6 +31,8 @@ func Lower(ast *syntax.Ast) (*ir.Program, error) {
 		prog.Pipelines[p.Id] = lp
 	}
 
+	addCallableStructs(prog)
+
 	if ast.Call != nil {
 		entry, err := lowerEntry(ast.Call)
 		if err != nil {
@@ -359,6 +361,38 @@ func paramFromParts(id string, t syntax.TypeId, isFile bool, outName string) ir.
 		MapDim:   int(t.MapDim),
 		IsFile:   isFile,
 		OutName:  outName,
+	}
+}
+
+// addCallableStructs registers a struct type for every stage and pipeline with
+// outputs, keyed by the callable name — mirroring Martian's structFromCallable.
+// Martian makes a param typed by a callable name (`out MYSTAGE made`) a legal
+// struct whose fields are that callable's outputs; without registering it here
+// the type-walk would treat the param as an opaque leaf and never rewrite,
+// stage, or publish the file paths inside it. An explicit `struct` decl of the
+// same name (which Martian's shared type namespace would already have rejected)
+// keeps precedence.
+func addCallableStructs(prog *ir.Program) {
+	add := func(name string, out []ir.Param) {
+		if len(out) == 0 {
+			return
+		}
+
+		if _, exists := prog.Structs[name]; exists {
+			return
+		}
+
+		fields := make([]ir.Param, len(out))
+		copy(fields, out)
+		prog.Structs[name] = &ir.StructType{Name: name, Fields: fields}
+	}
+
+	for _, s := range prog.Stages {
+		add(s.Name, s.Out)
+	}
+
+	for _, p := range prog.Pipelines {
+		add(p.Name, p.Out)
 	}
 }
 

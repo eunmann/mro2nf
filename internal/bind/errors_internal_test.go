@@ -305,3 +305,53 @@ func TestOrEmptyArray(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractProjectArrayOfMapField pins the runtime contract the #172 emit fix
+// relies on: given the (mapDepth 2, mapInArray) the emitter now computes for
+// arr.m.x, the binder projects over each map in the array and yields
+// array<map<field>>, matching mrp — not the [null,null] a depth-0 key-navigation
+// produces. (The binder already supported this; the emit fix is what asks for
+// it, so this is a characterization guard on the depth->result contract.) The
+// collision row also pins that a map key equal to the projected field name (x)
+// survives as the key rather than being confused with the field access.
+func TestExtractProjectArrayOfMapField(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "distinct keys",
+			raw:  `{"arr":[{"m":{"k":{"x":1}}},{"m":{"j":{"x":2}}}]}`,
+			want: `[{"k":1},{"j":2}]`,
+		},
+		{
+			// The map key equals the projected field name: the key must be kept,
+			// not conflated with the .x navigation.
+			name: "key collides with field name",
+			raw:  `{"arr":[{"m":{"x":{"x":99},"y":{"x":7}}}]}`,
+			want: `[{"x":99,"y":7}]`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := extractProject(json.RawMessage(tc.raw), "arr.m.x", 2, true)
+			if err != nil {
+				t.Fatalf("extractProject: %v", err)
+			}
+
+			var gotVal, wantVal any
+			if err := json.Unmarshal(got, &gotVal); err != nil {
+				t.Fatalf("unmarshal result: %v", err)
+			}
+			if err := json.Unmarshal([]byte(tc.want), &wantVal); err != nil {
+				t.Fatal(err)
+			}
+
+			if diff := cmp.Diff(wantVal, gotVal); diff != "" {
+				t.Errorf("array<map>.field projection mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
