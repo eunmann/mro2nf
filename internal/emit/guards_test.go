@@ -358,3 +358,26 @@ func TestParseRejectsMalformedMRO(t *testing.T) {
 		t.Error("Parse(malformed .mro): want a parse error, got nil")
 	}
 }
+
+// TestEmitRejectsReservedEntryName is the Emit-level guard for #171: a program
+// whose entry input collides with a reserved Nextflow param must be rejected
+// before any output is written, so the wiring (not just the helper) is covered
+// and a reordering that dropped the check would fail here.
+func TestEmitRejectsReservedEntryName(t *testing.T) {
+	prog := &ir.Program{
+		Entry: &ir.EntryCall{Callable: "TOP"},
+		Pipelines: map[string]*ir.Pipeline{
+			"TOP": {Name: "TOP", In: []ir.Param{{Name: "outdir", BaseType: "int"}}},
+		},
+	}
+
+	dir := t.TempDir()
+	err := emit.Emit(prog, emit.Options{OutDir: dir, Mre: "mre", Shell: "/x/s", MROFile: "pipeline.mro"})
+	if !errors.Is(err, apperror.ErrUnsupported) || !strings.Contains(err.Error(), "outdir") {
+		t.Fatalf("Emit(entry input 'outdir'): want ErrUnsupported naming outdir, got %v", err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(dir, "main.nf")); statErr == nil {
+		t.Error("Emit wrote main.nf despite rejecting the reserved entry-input name")
+	}
+}
