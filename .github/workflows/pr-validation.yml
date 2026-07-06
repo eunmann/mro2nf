@@ -92,6 +92,12 @@ jobs:
   # matrix and the total can never silently desync (which would drop a fraction
   # of the suite while CI stayed green). The step also asserts the list is the
   # contiguous range 0..N-1 that harness shardSkip's modulo partition requires.
+  #
+  # NOTE: "E2E shard config" (and "E2E shard N") are internal implementation
+  # contexts — do NOT mark them required in branch protection. Only the seven
+  # aggregate contexts are gates, and only those are mirrored in
+  # pr-validation-skip.yml; a required context missing from that companion
+  # deadlocks docs-only PRs (#182). TestRequiredContextsMirrored guards the set.
   e2e-config:
     name: E2E shard config
     runs-on: ubuntu-latest

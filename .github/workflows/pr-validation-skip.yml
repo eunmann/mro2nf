@@ -31,35 +31,42 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
     steps:
       - run: echo "docs-only change — real validation not required"
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
     steps:
       - run: echo "docs-only change — real validation not required"
   test:
     name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
     steps:
       - run: echo "docs-only change — real validation not required"
   e2e:
     name: E2E (Nextflow vs mrp goldens)
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
     steps:
       - run: echo "docs-only change — real validation not required"
   e2e-docker:
     name: E2E (container isolation)
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
     steps:
       - run: echo "docs-only change — real validation not required"
   lint-nf:
     name: Lint generated Nextflow
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
     steps:
       - run: echo "docs-only change — real validation not required"
   bench:
     name: Bench (data movement gate)
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
     steps:
       - run: echo "docs-only change — real validation not required"
