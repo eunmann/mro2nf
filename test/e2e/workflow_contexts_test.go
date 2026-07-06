@@ -53,12 +53,12 @@ func workflowJobNames(t *testing.T, file string) map[string]bool {
 // workflows disagree on the required status-check names, which would deadlock
 // either docs-only or code PRs (issue #182).
 func TestRequiredContextsMirrored(t *testing.T) {
-	real := workflowJobNames(t, "pr-validation.yml")
-	skip := workflowJobNames(t, "pr-validation-skip.yml")
+	gate := workflowJobNames(t, "pr-validation.yml")
+	companion := workflowJobNames(t, "pr-validation-skip.yml")
 
 	// Every required context is an actual job in the real gate.
 	for ctx := range requiredContexts {
-		if !real[ctx] {
+		if !gate[ctx] {
 			t.Errorf("required context %q is not a job name in pr-validation.yml", ctx)
 		}
 	}
@@ -66,12 +66,12 @@ func TestRequiredContextsMirrored(t *testing.T) {
 	// The companion mirrors EXACTLY the required set — nothing missing (would
 	// deadlock docs PRs) and nothing extra (a non-gate name reported for free).
 	for ctx := range requiredContexts {
-		if !skip[ctx] {
+		if !companion[ctx] {
 			t.Errorf("required context %q missing from pr-validation-skip.yml (docs-only PRs would deadlock)", ctx)
 		}
 	}
 
-	for name := range skip {
+	for name := range companion {
 		if !requiredContexts[name] {
 			t.Errorf("pr-validation-skip.yml has job %q that is not a required context; remove it or add it to requiredContexts", name)
 		}
