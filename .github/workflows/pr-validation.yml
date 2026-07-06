@@ -89,18 +89,27 @@ jobs:
 
   # Transpiles every fixture, runs it under Nextflow, and diffs the result against
   # the committed real-mrp golden. (Goldens are committed, so mrp is not needed.)
-  # Job name is a required branch-protection context — do not rename.
-  e2e:
-    name: E2E (Nextflow vs mrp goldens)
+  #
+  # Sharded across runners: every `nextflow run` is a fresh JVM, so the suite is
+  # JVM-boot-bound and core-throttled — one runner serializes ~130 runs. The
+  # E2E_SHARD_* pair partitions the runs by a stable hash of the subtest name
+  # (harness shardSkip), so N runners share the load near-linearly. Full
+  # coverage is the union of shards, enforced by the `e2e` gate below. To change
+  # the shard count, edit BOTH the matrix list and E2E_SHARD_TOTAL.
+  e2e-shard:
+    name: E2E shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # lint-nf sweeps every fixture under 8 flag configs (#122), ~25 CPU-min of
-    # `nextflow lint` on top of test-e2e + bench; sized for >=30% headroom over
-    # the observed job wall time.
-    timeout-minutes: 35
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false # run every shard so all failures surface in one CI round
+      matrix:
+        shard: [0, 1, 2, 3]
     env:
       # The harnesses skip cleanly on a dev box missing a tool, but in CI a
       # missing prerequisite must FAIL the job, not silently pass it.
       E2E_REQUIRE: "1"
+      E2E_SHARD_INDEX: ${{ matrix.shard }}
+      E2E_SHARD_TOTAL: "4"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -123,6 +132,23 @@ jobs:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
       - run: make test-e2e
+
+  # Stable required branch-protection context aggregating the shards — DO NOT
+  # rename (a renamed required check deadlocks every PR). Green only when every
+  # shard is green; `if: always()` so it always reports rather than stalling
+  # pending when a shard fails.
+  e2e:
+    name: E2E (Nextflow vs mrp goldens)
+    runs-on: ubuntu-latest
+    needs: [e2e-shard]
+    if: always()
+    steps:
+      - name: All E2E shards passed
+        run: |
+          echo "e2e-shard aggregate result: ${{ needs.e2e-shard.result }}"
+          [ "${{ needs.e2e-shard.result }}" = "success" ] || {
+            echo "one or more E2E shards did not succeed"; exit 1;
+          }
 
   # Static-parse every generated project with the formal language-server parser
   # (#48): a Groovy syntax error in a rarely-run emission branch fails here with
