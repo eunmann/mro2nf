@@ -1,0 +1,38 @@
+# Regression fixture for #217: a split stage whose SPLIT phase CREATES a file
+# and returns it as a per-chunk arg (a custom filetype), which the JOIN then
+# READS. This is CellRanger MAKE_SHARD's shape (feature_reference_binary): the
+# file lives in the split worker's ephemeral scratch, so on an object-store
+# backend (AWS Batch + S3, HealthOmics) it must be staged to the join worker —
+# the raw split-scratch path does not exist there. Local/docker-iso share a
+# filesystem and cannot expose the bug; only a real s3:// work dir does.
+filetype bin;
+
+stage MAKE_REFS(
+    in  int   n,
+    out int   total,
+    src py    "stages/make_refs",
+) split (
+    in  int   chunk_id,
+    in  bin   ref,
+    out int   partial,
+) using (
+    mem_gb = 1,
+)
+
+pipeline SPLIT_CHUNK_FILE(
+    in  int n,
+    out int total,
+)
+{
+    call MAKE_REFS(
+        n = self.n,
+    )
+
+    return (
+        total = MAKE_REFS.total,
+    )
+}
+
+call SPLIT_CHUNK_FILE(
+    n = 3,
+)

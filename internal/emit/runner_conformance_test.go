@@ -58,8 +58,11 @@ func TestRunnerConformance(t *testing.T) {
 	mustContain(t, filepath.Join(mreMain, "outs", "data.json"),
 		`\u003c`, `\u0026`, `\u0001`, `\u0002`, `\u2028`, `\u2029`)
 
+	// JOIN reads chunk DEFS from the staged chunk bundle dir(s), not the
+	// unstaged chunks.json summary (#217): the bundle carries the file-typed
+	// chunk-arg leaf as a resolvable marker, so both stacks localize it.
 	joinFlags := []string{
-		"-chunkdefs", filepath.Join(mreSplit, "chunks.json"),
+		"-chunkdefs", chunk,
 		"-chunkouts", filepath.Join(mreMain, "outs"),
 	}
 	mreJoin := env.runPhase(t, "mre", "join", joinFlags)

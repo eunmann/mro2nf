@@ -429,14 +429,14 @@ process %[1]s_JOIN {
   input:
     val join
     %[11]s
-    path defs
+    path cdefs
     path souts
     path 'types.json'
   output:
     %[13]s
   script:
     """
-    %[5]s -args args -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)"%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[5]s -args args -chunkdefs "\$(ls -1d chunk_* 2>/dev/null | sort -V | paste -sd, -)" -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)"%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
     """
 }
 
@@ -462,7 +462,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     // order is completion order, which is part of JOIN's -resume cache key.
     // toSortedList emits [] on an empty channel, so a 0-chunk split still joins.
     // (x/y, not the a/b used elsewhere: 'a' is a workflow local here.)
-    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)
+    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.chunks.ifEmpty([]), %[1]s_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
     %[1]s_JOIN.out
 }
@@ -1279,7 +1279,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
     %[4]s(chunks.combine(a), types)
     join = %[3]s.out.joinres.map { f -> Mro2nf.parseJson(f) }
     // Sorted for the same -resume cache-key reason as genSplitWorkflow's JOIN.
-    %[5]s(join, a, %[3]s.out.defs, %[4]s.out.toSortedList { x, y -> x.name <=> y.name }, types)
+    %[5]s(join, a, %[3]s.out.chunks.ifEmpty([]), %[4]s.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
     %[5]s.out
 }

@@ -266,7 +266,7 @@ func runJoin(ctx context.Context, argv []string) error {
 	cf := addCommon(fs)
 	prod := addProducer(fs, types.RoleOut)
 	argsDir := fs.String("args", "", "stage args bundle dir")
-	defsFile := fs.String("chunkdefs", "", "chunk defs JSON array file")
+	defsList := fs.String("chunkdefs", "", "comma-separated per-chunk def bundle dirs, in order")
 	outsList := fs.String("chunkouts", "", "comma-separated per-chunk output bundle dirs, in order")
 
 	if err := fs.Parse(argv); err != nil {
@@ -282,7 +282,7 @@ func runJoin(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	defs, outs, err := readChunkData(*defsFile, *outsList)
+	defs, outs, err := readChunkData(*defsList, *outsList)
 	if err != nil {
 		return err
 	}

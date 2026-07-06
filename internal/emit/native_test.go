@@ -417,8 +417,8 @@ func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
 	}
 
 	triad := generateStageModule(ms.Stages["SUMSQ"], gm)
-	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[3], (t[4] ?: [])" +
-		sortedGather + ", t[1], t[2]) }"
+	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[4] ?: [])" +
+		sortedGather + ", t[1], (t[3] ?: [])) }"
 
 	if !strings.Contains(triad, wantTriad) {
 		t.Errorf("keyed split triad must sort JOIN_K's grouped chunk outs by name:\n%s", triad)

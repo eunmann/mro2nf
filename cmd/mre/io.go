@@ -45,17 +45,28 @@ func decodeChunk(raw json.RawMessage) (shim.ChunkDef, error) {
 	return chunk, nil
 }
 
-// readChunkData reads the chunk defs array (a plain summary file) and the
-// ordered, comma-separated per-chunk output bundle directories.
-func readChunkData(defsPath, outsList string) ([]shim.ChunkDef, []json.RawMessage, error) {
-	defsRaw, err := readFile(defsPath)
+// readChunkData reads the ordered, comma-separated per-chunk DEFINITION bundle
+// directories and the per-chunk OUTPUT bundle directories. Both are resolved
+// through ReadBundle, so a file-typed leaf the split phase created and returned
+// in a chunk's args (e.g. a custom-filetype chunk arg) is rewritten from the
+// split worker's ephemeral scratch to a locally-staged path the join worker can
+// open — an object-store join never sees the split's absent scratch path (#217).
+// Defs and outs must be in matching chunk order; an empty list is a 0-chunk
+// split (the join still runs, with no chunks).
+func readChunkData(defsList, outsList string) ([]shim.ChunkDef, []json.RawMessage, error) {
+	defRaws, err := readBundleList(splitComma(defsList))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	var defs []shim.ChunkDef
-	if err := json.Unmarshal(defsRaw, &defs); err != nil {
-		return nil, nil, fmt.Errorf("parse chunk defs %s: %w", defsPath, err)
+	defs := make([]shim.ChunkDef, 0, len(defRaws))
+	for _, raw := range defRaws {
+		def, err := decodeChunk(raw)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		defs = append(defs, def)
 	}
 
 	outs, err := readBundleList(splitComma(outsList))

@@ -585,13 +585,13 @@ process %[1]s_MAIN_K {
 process %[1]s_JOIN_K {
 %[10]s
   input:
-    tuple val(key), val(join), path(souts), path(args), path(defs)
+    tuple val(key), val(join), path(souts), path(args), path(cdefs)
     path 'types.json'
   output:
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[6]s -args ${args} -chunkdefs ${defs} -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)"%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[6]s -args ${args} -chunkdefs "\$(ls -1d chunk_* 2>/dev/null | sort -V | paste -sd, -)" -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)"%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
     """
 }
 
@@ -614,13 +614,17 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> Mro2nf.keyedChunks(key, cs) }
     %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0), types)
     joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, Mro2nf.parseJson(f)) }
-    // Drive the join from the full fork set (ch.jn) with a remainder join on the
-    // chunk outputs, so a fork whose split produced zero chunks (no groupTuple
-    // group) still runs JOIN_K — with an empty chunk-outs list — instead of
-    // being dropped. defs/joinres are inner-joined (always emitted per fork).
-    // The grouped chunk outs are sorted by name: groupTuple order is completion
-    // order, and JOIN_K's input order is part of its -resume cache key.
-    joined = ch.jn.join(%[1]s_SPLIT_K.out.defs).join(joinres).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[3], (t[4] ?: []).sort { a, b -> a.name <=> b.name }, t[1], t[2]) }
+    // Drive the join from the full fork set (ch.jn) with remainder joins on the
+    // staged chunk bundles and chunk outputs, so a fork whose split produced zero
+    // chunks (no chunk_* dirs, no groupTuple group) still runs JOIN_K — with empty
+    // chunk-defs and chunk-outs lists — instead of being dropped. joinres is
+    // inner-joined (always emitted per fork). JOIN_K consumes the staged chunk
+    // bundles (SPLIT_K.out.chunks), not the unstaged chunks.json summary, so a
+    // file-typed chunk-def leaf the split phase created reaches the join worker as
+    // a staged path rather than the split's absent scratch path (#217). The
+    // grouped chunk outs are sorted by name: groupTuple order is completion order,
+    // and JOIN_K's input order is part of its -resume cache key.
+    joined = ch.jn.join(joinres).join(%[1]s_SPLIT_K.out.chunks, remainder: true).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[4] ?: []).sort { a, b -> a.name <=> b.name }, t[1], (t[3] ?: [])) }
     %[1]s_JOIN_K(joined, types)
   emit:
     %[1]s_JOIN_K.out
