@@ -209,23 +209,27 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	return writeProject(prog, opts, target, g, specDir, modDir)
+	return writeProject(prog, opts, target, g, specDir)
 }
 
 // writeProject renders every file of the Nextflow project (modules, main.nf,
 // config, bindspecs, type manifest, disable artifacts, target packaging, and the
 // entry args) into opts.OutDir.
-func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specDir, modDir string) error {
-	if err := writeModules(prog, modDir, g); err != nil {
+func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specDir string) error {
+	// Render every .nf, then run the whole-project process-name collision check
+	// BEFORE writing any of them: a collision spans modules (global namespace) and
+	// module-vs-main, so it can only be seen across the full rendered set (#176).
+	nf := renderModules(prog, g)
+	nf["main.nf"] = generateMain(prog, g)
+
+	if err := checkProcessCollisions(nf); err != nil {
 		return err
 	}
 
-	mainNf := generateMain(prog, g)
-	if err := checkDupProcesses(mainNf, "main.nf"); err != nil {
-		return err
-	}
-	if err := writeFile(filepath.Join(opts.OutDir, "main.nf"), []byte(mainNf)); err != nil {
-		return err
+	for _, rel := range sortedKeys(nf) {
+		if err := writeFile(filepath.Join(opts.OutDir, rel), []byte(nf[rel])); err != nil {
+			return err
+		}
 	}
 
 	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(configFile(opts.Container, target))); err != nil {
@@ -619,8 +623,12 @@ func calleeOutParams(prog *ir.Program, p *ir.Pipeline, callID string) []ir.Param
 	return nil
 }
 
-// writeModules writes one Nextflow module per stage and per pipeline.
-func writeModules(prog *ir.Program, modDir string, g genCtx) error {
+// renderModules renders one Nextflow module per stage and per pipeline, keyed by
+// project-relative path. It does not write — writeProject runs the whole-project
+// process-name collision check across every rendered .nf before any is written.
+func renderModules(prog *ir.Program, g genCtx) map[string]string {
+	files := make(map[string]string)
+
 	for _, name := range sortedKeys(prog.Stages) {
 		// A stage fused into every one of its call sites has no importer — its
 		// module is dead, so skip it (#82); the fused processes are self-contained.
@@ -628,56 +636,112 @@ func writeModules(prog *ir.Program, modDir string, g genCtx) error {
 			continue
 		}
 
-		file := "stage_" + name + ".nf"
-		content := generateStageModule(prog.Stages[name], g)
-		if err := checkDupProcesses(content, file); err != nil {
-			return err
-		}
-		if err := writeFile(filepath.Join(modDir, file), []byte(content)); err != nil {
-			return err
-		}
+		files[filepath.Join("modules", "stage_"+name+".nf")] = generateStageModule(prog.Stages[name], g)
 	}
 
 	for _, name := range sortedKeys(prog.Pipelines) {
-		file := "pipe_" + name + ".nf"
-		content := generatePipeModule(prog.Pipelines[name], prog, g)
-		if err := checkDupProcesses(content, file); err != nil {
-			return err
+		files[filepath.Join("modules", "pipe_"+name+".nf")] = generatePipeModule(prog.Pipelines[name], prog, g)
+	}
+
+	return files
+}
+
+var (
+	// processDeclRE matches an emitted `process NAME {` declaration. It is anchored
+	// at column 0, so an indented `process` inside a script block never matches.
+	processDeclRE = regexp.MustCompile(`(?m)^process\s+(\S+)\s*\{`)
+	// includeDeclRE matches a whole `include { ... }` line (only column-0 include
+	// lines, so `as` inside a fused process's script block is never scanned).
+	includeDeclRE = regexp.MustCompile(`(?m)^include\s*\{([^}]*)\}`)
+)
+
+// includeBoundNames returns the local names an include brace body binds: the
+// alias after `as`, or the bare name when unaliased. Entries are `;`-separated.
+func includeBoundNames(body string) []string {
+	var names []string
+
+	for _, part := range strings.Split(body, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
 		}
-		if err := writeFile(filepath.Join(modDir, file), []byte(content)); err != nil {
-			return err
+
+		if i := strings.LastIndex(part, " as "); i >= 0 {
+			part = strings.TrimSpace(part[i+len(" as "):])
+		}
+
+		names = append(names, part)
+	}
+
+	return names
+}
+
+// checkProcessCollisions rejects a generated project whose emitted process names
+// collide. qualify() length-prefixes only the pipeline segment, so it is
+// injective on the (pipeline, call) pair but NOT once an inventory suffix is
+// appended: qualify(P,C)+"_K" == qualify(P,C+"_K"), and a fused call X's
+// _MN/_JN aliases equal a sibling call X_MN's bare fused name. Two failure modes
+// follow, both of which leave Nextflow to fail opaquely at `nextflow run`:
+//
+//   - within one module, a name bound twice — two `process` declarations, or a
+//     `process` declaration and an `include { ... as NAME }` alias — is a compile
+//     error (a duplicate definition in one DSL2 scope);
+//   - across modules, the same `process NAME` declared in two files collides in
+//     Nextflow's global process-name namespace (#112: withName selectors and the
+//     DAG/config key the bare name project-wide), so two distinct stages would
+//     silently share resources/labels.
+//
+// Reject both at transpile time, naming the collision, per the loud-early-failure
+// contract (#176). The scan is precise — it flags only an actual duplicate — so a
+// valid project (distinct names) is never rejected.
+func checkProcessCollisions(files map[string]string) error {
+	declFiles := make(map[string][]string) // process name -> files that declare it
+
+	for _, rel := range sortedKeys(files) {
+		content := files[rel]
+		local := make(map[string]bool) // names bound in THIS file's scope
+
+		bind := func(name, kind string) error {
+			if local[name] {
+				return &apperror.UnsupportedError{
+					Construct: "colliding process name",
+					Detail: fmt.Sprintf(
+						"%s binds %q twice (%s) — a call or stage name equals a sibling's name plus a suffix (_K/_MN/...); rename one",
+						rel, name, kind),
+				}
+			}
+
+			local[name] = true
+
+			return nil
+		}
+
+		for _, m := range processDeclRE.FindAllStringSubmatch(content, -1) {
+			if err := bind(m[1], "process declaration"); err != nil {
+				return err
+			}
+
+			declFiles[m[1]] = append(declFiles[m[1]], rel)
+		}
+
+		for _, m := range includeDeclRE.FindAllStringSubmatch(content, -1) {
+			for _, name := range includeBoundNames(m[1]) {
+				if err := bind(name, "import alias"); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
-	return nil
-}
-
-// processDeclRE matches an emitted `process NAME {` declaration.
-var processDeclRE = regexp.MustCompile(`(?m)^process\s+(\S+)\s*\{`)
-
-// checkDupProcesses rejects a generated module that declares two processes with
-// the same name. qualify() length-prefixes only the pipeline segment, so it is
-// injective on the (pipeline, call) pair but NOT once an inventory suffix is
-// appended: qualify(P,C)+"_K" == qualify(P,C+"_K"), and stage SORT's "_MAP"
-// process name equals stage SORT_MAP's bare name — so a call/stage whose name
-// equals a sibling's plus an inventory suffix emits a duplicate `process` that
-// makes the whole generated project fail to parse. Reject it at transpile time
-// with the colliding name, rather than leaving Nextflow to fail opaquely (#176).
-func checkDupProcesses(content, file string) error {
-	seen := make(map[string]bool)
-
-	for _, m := range processDeclRE.FindAllStringSubmatch(content, -1) {
-		name := m[1]
-		if seen[name] {
+	for _, name := range sortedKeys(declFiles) {
+		if fs := declFiles[name]; len(fs) > 1 {
 			return &apperror.UnsupportedError{
 				Construct: "colliding process name",
 				Detail: fmt.Sprintf(
-					"%s declares two processes named %q — a call or stage name equals a sibling's name plus a suffix (_K/_MAP/...); rename one",
-					file, name),
+					"process %q is declared in %s — two stages whose names differ only by an inventory suffix collide in Nextflow's global process namespace; rename one",
+					name, strings.Join(fs, " and ")),
 			}
 		}
-
-		seen[name] = true
 	}
 
 	return nil
