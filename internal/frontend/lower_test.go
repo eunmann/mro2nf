@@ -21,7 +21,7 @@ func loadProgram(t *testing.T) *ir.Program {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestLowerRejectsTopLevelMapCall(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	_, err = frontend.Lower(ast)
+	_, err = frontend.Lower(ast, nil)
 
 	var ue *apperror.UnsupportedError
 	if !errors.As(err, &ue) {
@@ -174,7 +174,7 @@ func TestLowerStructs(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
