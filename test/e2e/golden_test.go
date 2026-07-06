@@ -101,6 +101,8 @@ var goldenCases = []struct {
 	{"literals", "literals", "expected/outs.json"},
 	{"fanin", "fanin", "expected/outs.json"},
 	{"map_split_file", "map_split_file", "expected/outs.json"},
+	// #217: file-typed chunk-def arg the split phase creates, read by the JOIN.
+	{"split_chunk_file", "split_chunk_file", "expected/outs.json"},
 	{"mixed_adapters", "mixed_adapters", "expected/outs.json"},
 	{"struct_file_array", "struct_file_array", "expected/outs.json"},
 	{"file_tree", "file_tree", "expected/outs.json"},

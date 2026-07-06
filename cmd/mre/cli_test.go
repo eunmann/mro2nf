@@ -313,6 +313,62 @@ func TestDecodeChunk(t *testing.T) {
 	}
 }
 
+// TestReadChunkDataResolvesFileLeaves is the #217 regression guard: the JOIN
+// reads chunk DEFS from the staged per-chunk bundles, so a file-typed leaf the
+// split phase created must come back rewritten to the locally-staged path (which
+// exists), NOT the split worker's ephemeral scratch path. Before the fix the
+// join read the unstaged chunks.json summary and got the split's absent path,
+// so on an object-store backend the stage's join() open() failed. Local and
+// docker-iso share a filesystem and cannot expose that, so this pins it in a
+// unit test.
+func TestReadChunkDataResolvesFileLeaves(t *testing.T) {
+	tmp := t.TempDir()
+	src := writeTestFile(t, filepath.Join(tmp, "ref_0.bin"), "10")
+
+	// Stage the chunk def exactly as the split phase does (WriteChunkBundle →
+	// MarkFiles copies the file leaf into the bundle and rewrites it to a marker).
+	bundle := filepath.Join(tmp, "chunk_00000")
+	def := shim.ChunkDef{Args: map[string]json.RawMessage{
+		"chunk_id": json.RawMessage("0"),
+		"ref":      json.RawMessage(`"` + src + `"`),
+	}}
+	tbl := types.NewTable(nil)
+	if err := shim.WriteChunkBundle(bundle, def, []ir.Param{{Name: "ref", BaseType: "bin", IsFile: true}}, tbl); err != nil {
+		t.Fatalf("WriteChunkBundle: %v", err)
+	}
+
+	defs, outs, err := readChunkData(bundle, "")
+	if err != nil {
+		t.Fatalf("readChunkData: %v", err)
+	}
+
+	if len(defs) != 1 || len(outs) != 0 {
+		t.Fatalf("got %d defs / %d outs, want 1 / 0", len(defs), len(outs))
+	}
+
+	var got string
+	if err := json.Unmarshal(defs[0].Args["ref"], &got); err != nil {
+		t.Fatalf("decode ref leaf: %v", err)
+	}
+
+	if got == src {
+		t.Fatalf("ref leaf was not restaged: still the split-scratch path %q (#217)", got)
+	}
+
+	if !strings.HasPrefix(got, bundle) {
+		t.Errorf("ref leaf %q not resolved inside the staged bundle %q", got, bundle)
+	}
+
+	data, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatalf("resolved ref leaf must exist and be readable on the join worker: %v", err)
+	}
+
+	if string(data) != "10" {
+		t.Errorf("resolved ref content = %q, want %q", data, "10")
+	}
+}
+
 // TestSplitComma checks trimming and empty-element dropping.
 func TestSplitComma(t *testing.T) {
 	tests := []struct {

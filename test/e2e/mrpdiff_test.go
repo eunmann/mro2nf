@@ -181,6 +181,11 @@ func TestMrpDiff(t *testing.T) {
 		{name: "map_file"},
 		{name: "map_file_keyed"},
 		{name: "map_split_file"},
+		// #217: a split phase creates a custom-filetype file and returns it as a
+		// per-chunk arg the JOIN reads. Verifies output + native-runner parity;
+		// the object-store staging path itself is guarded by the AWS e2e lane and
+		// the cmd/mre readChunkData unit test (local/docker-iso share a fs).
+		{name: "split_chunk_file", native: true, runner: true},
 		{name: "struct_of_file"},
 		{name: "struct_file_array"},
 		// #173: a pipeline output typed as a callable's output struct (MAKEB),

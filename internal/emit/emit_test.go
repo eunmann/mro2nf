@@ -368,7 +368,7 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		"val join",
 		// the workflow parses joinres.json into the join val via the shipped helper (#49)
 		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }",
-		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)",
+		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("stage_SUM_SQUARES.nf missing join-override wiring %q", want)
@@ -389,7 +389,7 @@ func TestEmitSplitJoinRunsWithZeroChunks(t *testing.T) {
 		t.Fatalf("read stage module: %v", err)
 	}
 
-	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)"
+	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)"
 	if !strings.Contains(string(data), want) {
 		t.Errorf("non-keyed JOIN wiring must gather sorted and guard the empty channel; missing %q", want)
 	}
@@ -413,9 +413,9 @@ func TestEmitSplitJoinGatherSorted(t *testing.T) {
 
 	for module, want := range map[string]string{
 		// The plain per-stage workflow (genSplitWorkflow).
-		"stage_SUM_SQUARES.nf": "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN" + sorted,
+		"stage_SUM_SQUARES.nf": "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_MAIN" + sorted,
 		// The fused per-call workflow (genFusedSplitWorkflow).
-		"pipe_SUM_SQUARE_PIPELINE.nf": "(join, a, STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_SP.out.defs, " +
+		"pipe_SUM_SQUARE_PIPELINE.nf": "(join, a, STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_SP.out.chunks.ifEmpty([]), " +
 			"STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_MN" + sorted,
 	} {
 		mod := readFile(t, filepath.Join(dir, "modules", module))

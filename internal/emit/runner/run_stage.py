@@ -1164,29 +1164,18 @@ def run_join(fl):
     )
 
 
-def read_chunk_data(defs_path, outs_list):
+def read_chunk_data(defs_list, outs_list):
     """Ports cmd/mre/io.go readChunkData + shim writeChunkData + the
     martian_shell join path: chunk_defs Records carry only each chunk's args
     (resources are stripped, as mre's _chunk_defs does); chunk_outs Records
-    are each chunk's resolved outs payload."""
-    if not defs_path:
-        raise RunnerError("join: -chunkdefs is required")
-    try:
-        with open(defs_path, encoding="utf-8") as src:
-            defs = json.load(src)
-    except OSError as err:
-        raise RunnerError("read %s: %s" % (defs_path, err)) from None
-    except ValueError as err:
-        raise RunnerError(
-            "parse chunk defs %s: %s" % (defs_path, err)
-        ) from None
-    if not isinstance(defs, list):
-        raise RunnerError("parse chunk defs %s: expected an array" % defs_path)
+    are each chunk's resolved outs payload. Both defs and outs are per-chunk
+    bundle dirs resolved via read_bundle, so a file-typed chunk-def leaf the
+    split phase created is rewritten to a staged path the join worker can open
+    (#217). An empty list is a 0-chunk split (the join still runs)."""
     def_recs = []
-    for d in defs:
-        if not isinstance(d, dict):
-            raise RunnerError("parse chunk defs: each def must be an object")
-        def_recs.append(record(d.get("args") or {}))
+    for dir_ in split_comma(defs_list):
+        _res, args = decode_chunk(read_bundle(dir_))
+        def_recs.append(record(args))
     out_recs = []
     for dir_ in split_comma(outs_list):
         payload = as_object(read_bundle(dir_), "chunk outs bundle %s" % dir_)
