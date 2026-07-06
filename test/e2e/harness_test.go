@@ -13,6 +13,7 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -261,10 +262,38 @@ func readJSON(t *testing.T, path string, v any) {
 		t.Fatalf("read %s: %v", path, err)
 	}
 
-	if err := json.Unmarshal(data, v); err != nil {
+	if err := decodeJSONNumber(data, v); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 }
+
+// decodeJSONNumber decodes JSON with UseNumber so numbers keep their exact token
+// (json.Number), not float64: a plain json.Unmarshal would make the golden and
+// mrp-differential comparators blind to an int-vs-float regression (21 vs 21.0)
+// and to >2^53 integer precision loss (the literals_edge / src_args fixtures
+// target exactly those ranges). The producer keeps the token via UseNumber
+// (cmd/mre/bundle.go rawToMap); a comparison must decode BOTH sides this way, so
+// use it for every want/got side, not just readJSON. It also rejects trailing
+// data so a malformed multi-document output still fails loudly (#188).
+func decodeJSONNumber(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+
+	if dec.More() {
+		return errTrailingJSON
+	}
+
+	return nil
+}
+
+// errTrailingJSON reports a comparator input file that is a valid JSON value
+// followed by more data (a malformed multi-document output) — kept loud rather
+// than silently accepting only the first document.
+var errTrailingJSON = errors.New("trailing data after JSON value")
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

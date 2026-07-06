@@ -291,7 +291,9 @@ func TestDockerEntryOverrides(t *testing.T) {
 
 			readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &got)
 
-			if err := json.Unmarshal([]byte(tc.expect), &want); err != nil {
+			// Decode the expected value the same way (UseNumber) so both sides are
+			// json.Number; a plain json.Unmarshal float64 would never match got.
+			if err := decodeJSONNumber([]byte(tc.expect), &want); err != nil {
 				t.Fatalf("parse expected %q: %v", tc.expect, err)
 			}
 

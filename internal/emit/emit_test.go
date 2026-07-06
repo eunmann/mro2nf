@@ -138,6 +138,9 @@ func TestEmitConfig(t *testing.T) {
 		"task.exitStatus == 42 ? 'terminate' : 'retry'",
 		"maxRetries = 2",
 		"params.aws_queue = null",
+		// #188: the Nextflow >=23.10.0 floor (path arity) must be declared for
+		// every target, not just HealthOmics — assert it on the local config too.
+		"manifest.nextflowVersion = '!>=23.10.0'",
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("nextflow.config missing %q", want)
@@ -204,6 +207,8 @@ func TestEmitConfigTargets(t *testing.T) {
 		// C2: no launcher-local publish by default; the curated copy is opt-in.
 		"params.aws_outdir = null",
 		"params.outdir = params.aws_outdir",
+		// #188: the Nextflow floor is declared for awsbatch too, not just HealthOmics.
+		"manifest.nextflowVersion = '!>=23.10.0'",
 	} {
 		if !strings.Contains(batch, want) {
 			t.Errorf("awsbatch config missing %q", want)

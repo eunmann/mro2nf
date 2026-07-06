@@ -1,6 +1,7 @@
 package types
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,14 @@ func (m Manifest) Write(path string) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
+	}
+
+	// Skip a byte-identical rewrite so a re-transpile preserves types.json's mtime:
+	// it is staged as a `path` input into every stage, and Nextflow's default
+	// -resume cache keys on path+size+mtime, so an unchanged rewrite would bust
+	// every task's cache on a re-emit (#188). A real change still rewrites.
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return nil
 	}
 
 	if err := os.WriteFile(path, data, filePerm); err != nil {

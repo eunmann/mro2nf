@@ -53,11 +53,17 @@ func TestCloudSimCopyStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var outs map[string]any
+	var outs, want map[string]any
 
 	readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
 
-	if diff := cmp.Diff(map[string]any{"y": 42.0}, outs); diff != "" {
+	// Decode the expected map the same way (UseNumber) so both sides are
+	// json.Number — a float64 literal would never equal the json.Number got side.
+	if err := decodeJSONNumber([]byte(`{"y": 42.0}`), &want); err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(want, outs); diff != "" {
 		t.Errorf("pipeline outs mismatch under copy-staging (-want +got):\n%s", diff)
 	}
 
