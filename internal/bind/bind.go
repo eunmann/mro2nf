@@ -241,11 +241,13 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage, only int) ([]js
 		}
 
 		ks := sortedKeys(m)
-		if keys == nil {
+
+		switch {
+		case keys == nil:
 			keys = ks
-		} else if len(ks) != len(keys) {
+		case len(ks) != len(keys):
 			return nil, nil, fmt.Errorf("split %q (%d keys, want %d): %w", param, len(ks), len(keys), errSplitLen)
-		} else if !equalKeys(keys, ks) {
+		case !equalKeys(keys, ks):
 			return nil, nil, fmt.Errorf("split %q keys %v differ from %v: %w", param, ks, keys, errSplitKeys)
 		}
 
