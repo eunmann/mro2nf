@@ -95,12 +95,8 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 		g.mrjob = ctrMrjob
 	}
 
-	for name, src := range opts.StageCode {
-		if err := copyTree(src, filepath.Join(rt, "stages", name)); err != nil {
-			return g, err
-		}
-
-		g.code[name] = ctrStages + "/" + name
+	if err := vendorStageCode(rt, opts.StageCode, g.code); err != nil {
+		return g, err
 	}
 
 	// -native-runner reads run_stage.py from the project dir at task runtime,
@@ -117,6 +113,73 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 
 	return g, writeFile(filepath.Join(opts.OutDir, "Dockerfile"),
 		[]byte(dockerfile(target, opts.Shell != "", len(opts.StageCode) > 0, opts.Mrjob != "", opts.NativeRunner)))
+}
+
+// vendorStageCode copies each stage's code under runtime/stages/<name>, deduped
+// by resolved source: a source that backs many stage names is vendored once and
+// the rest become relative symlinks to that copy. A handful of multi-command
+// binaries (CellRanger's cr_lib, cr_vdj, ...) each implement dozens of comp
+// stage names, so copying per name inflates the build context and image by the
+// fan-out factor (#215). Docker COPY preserves in-tree symlinks verbatim, so the
+// image keeps the same file at the same path for every name at a fraction of the
+// size. Names are walked in sorted order so the canonical copy (the symlink
+// target) is stable and the build reproducible.
+func vendorStageCode(rt string, stageCode, code map[string]string) error {
+	stagesDir := filepath.Join(rt, "stages")
+	canonical := map[string]string{} // resolved src -> first stage name copied there
+
+	for _, name := range sortedKeys(stageCode) {
+		key := stageCodeKey(stageCode[name])
+		if first, ok := canonical[key]; ok {
+			if err := symlinkSibling(stagesDir, first, name); err != nil {
+				return err
+			}
+		} else {
+			if err := copyTree(stageCode[name], filepath.Join(stagesDir, name)); err != nil {
+				return err
+			}
+
+			canonical[key] = name
+		}
+
+		code[name] = ctrStages + "/" + name
+	}
+
+	return nil
+}
+
+// stageCodeKey canonicalizes a stage source path for dedup: two stage names
+// resolving to the same on-disk file (after resolving symlinks — e.g. two mropath
+// compatibility symlinks pointing at one binary) share a single copy. Best
+// effort: an un-resolvable path keys on its cleaned absolute form, which at worst
+// misses a dedup, never over-dedups distinct sources.
+func stageCodeKey(src string) string {
+	abs, err := filepath.Abs(src)
+	if err != nil {
+		return filepath.Clean(src)
+	}
+
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+
+	return abs
+}
+
+// symlinkSibling links stagesDir/name to sibling stagesDir/target with a relative
+// symlink (just the target's name), so the stages tree stays self-contained and
+// relocatable and Docker COPY preserves it into the image unchanged.
+func symlinkSibling(stagesDir, target, name string) error {
+	if err := os.MkdirAll(stagesDir, dirPerm); err != nil {
+		return fmt.Errorf("mkdir %s: %w", stagesDir, err)
+	}
+
+	dst := filepath.Join(stagesDir, name)
+	if err := os.Symlink(target, dst); err != nil {
+		return fmt.Errorf("symlink %s -> %s: %w", dst, target, err)
+	}
+
+	return nil
 }
 
 // dockerfile renders the runtime image: the mre shim plus the Martian adapters,
