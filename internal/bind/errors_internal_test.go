@@ -48,6 +48,14 @@ func TestResolveForksSplitErrors(t *testing.T) {
 			isMap:    true,
 			wantErr:  errSplitKeys,
 		},
+		{
+			// Different lengths in map mode: a genuine LENGTH error (guards the
+			// errSplitLen arm of buildMapForks distinctly from errSplitKeys).
+			name:     "mismatched map lengths",
+			pipeArgs: `{"xs":{"a":1,"b":2},"ys":{"a":1}}`,
+			isMap:    true,
+			wantErr:  errSplitLen,
+		},
 	}
 
 	for _, tt := range tests {
