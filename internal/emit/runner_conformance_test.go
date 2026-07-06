@@ -93,6 +93,52 @@ func TestRunnerConformanceRelativeOutPath(t *testing.T) {
 	mreMain := env.runPhase(t, "mre", "main", nil)
 	pyMain := env.runPhase(t, "py", "main", nil)
 	diffDirs(t, "relative-outpath main", mreMain, pyMain)
+
+	// Reach guard: the parity diff is vacuous unless the relative-path-kept-as-raw
+	// branch is actually hit. Pin that mre kept the raw string and did NOT stage a
+	// file leaf (an absolute-path fixture would stage it and pass the diff for the
+	// wrong reason). The py side matches byte-for-byte via diffDirs.
+	mainData := filepath.Join(mreMain, "outs", "data.json")
+	mustContain(t, mainData, "relative_out.txt")
+	mustNotContain(t, mainData, shim.FileMarker)
+}
+
+// TestRunnerConformanceRelativeChunkPath is the split-phase leg of #179: a split
+// that writes a chunk-in file at a RELATIVE path and returns it in a chunk def
+// must be handled identically by both stacks. mre's data plane (run in the task
+// dir) stats it as absent and keeps the raw string; the pre-fix runner, still in
+// files/, would find and stage it — the same divergence as the main case, on the
+// split side, which the main-only test above does not cover.
+func TestRunnerConformanceRelativeChunkPath(t *testing.T) {
+	requirePython(t)
+
+	code := "import martian\n\n" +
+		"def split(args):\n" +
+		"    with open('rel_chunk.txt', 'w') as fh:\n" +
+		"        fh.write('x')\n" +
+		"    return {'chunks': [{'cfile': 'rel_chunk.txt'}]}\n\n" +
+		"def main(args, outs):\n    outs.total = 1.0\n\n" +
+		"def join(args, outs, chunk_defs, chunk_outs):\n    outs.total = 1.0\n"
+
+	env := buildConformanceEnv(t, code, &ir.Stage{
+		Name:     "CONF",
+		In:       []ir.Param{{Name: "value", Type: "float", BaseType: "float"}},
+		Out:      []ir.Param{{Name: "total", Type: "float", BaseType: "float"}},
+		Split:    true,
+		ChunkIn:  []ir.Param{{Name: "cfile", Type: "file", BaseType: "file", IsFile: true}},
+		ChunkOut: []ir.Param{{Name: "part", Type: "float", BaseType: "float"}},
+		Lang:     ir.LangPy,
+	})
+
+	mreSplit := env.runPhase(t, "mre", "split", nil)
+	pySplit := env.runPhase(t, "py", "split", nil)
+	diffDirs(t, "relative-chunkpath split", mreSplit, pySplit)
+
+	// Reach guard: mre kept the relative chunk-in path as a raw string (absent in
+	// the task dir) and staged no leaf; the runner must match, not stage it.
+	chunkData := filepath.Join(mreSplit, "chunk_00000", "data.json")
+	mustContain(t, chunkData, "rel_chunk.txt")
+	mustNotContain(t, chunkData, shim.FileMarker)
 }
 
 // TestRunnerConformanceExitCodes pins the exit-code matrix against mre: an
@@ -560,6 +606,23 @@ func mustContain(t *testing.T, path string, wants ...string) {
 	for _, w := range wants {
 		if !strings.Contains(string(b), w) {
 			t.Errorf("%s: missing %q (fixture no longer exercises this branch)", path, w)
+		}
+	}
+}
+
+// mustNotContain is the reach guard's negative half: it fails if path contains
+// any of the given substrings, pinning that a branch was NOT taken.
+func mustNotContain(t *testing.T, path string, unwanted ...string) {
+	t.Helper()
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, u := range unwanted {
+		if strings.Contains(string(b), u) {
+			t.Errorf("%s: unexpectedly contains %q", path, u)
 		}
 	}
 }

@@ -973,8 +973,10 @@ def run_split(fl):
     # task cwd). Capture it now and restore before write_chunk_bundles so the two
     # lanes stage the same leaves.
     task_cwd = os.getcwd()
-    module = setup_stage(fl, files, eff, args)
     try:
+        # setup_stage is inside the try so the finally's chdir also covers a
+        # setup/import failure that leaves the cwd in files/.
+        module = setup_stage(fl, files, eff, args)
         with monitored_phase(fl.monitor, eff):
             raw_result = module.split(record(args))
     except martian.StageAssertion:
@@ -986,7 +988,8 @@ def run_split(fl):
         raise RunnerError(
             "read _stage_defs: split exited without returning chunk defs"
         ) from None
-    os.chdir(task_cwd)
+    finally:
+        os.chdir(task_cwd)
     result = martian.json_sanitize(raw_result)
     defs, join_res = parse_stage_defs(result)
     write_text(out_path, go_json(chunk_defs_doc(defs)))
@@ -1080,9 +1083,11 @@ def run_outs_phase(fl, phase, files, eff, man, args, invoke):
     # dir as mre does, not against files/ — otherwise the two lanes stage
     # different leaves for the same stage. See run_split for the full rationale.
     task_cwd = os.getcwd()
-    module = setup_stage(fl, files, eff, args)
     exited = False
     try:
+        # setup_stage is inside the try so the finally's chdir also covers a
+        # setup/import failure that leaves the cwd in files/.
+        module = setup_stage(fl, files, eff, args)
         with monitored_phase(fl.monitor, eff):
             invoke(module, outs)
     except martian.StageAssertion:
