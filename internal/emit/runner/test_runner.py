@@ -227,18 +227,19 @@ class WalkAndMarkersTest(unittest.TestCase):
         rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS)
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
-        # Ordinals follow param order, then sorted map keys (aa before zz).
-        self.assertEqual(data["arr"], ["@mre:file:f/L0000", None])
-        self.assertEqual(data["st"], {"f": "@mre:file:f/L0001", "n": 7})
-        self.assertEqual(data["m"], {"aa": "@mre:file:f/L0002",
-                                     "zz": "@mre:file:f/L0003"})
+        # Ordinals follow param order, then sorted map keys (aa before zz); each
+        # leaf keeps the source extension (.txt) so typed-file readers resolve it.
+        self.assertEqual(data["arr"], ["@mre:file:f/L0000.txt", None])
+        self.assertEqual(data["st"], {"f": "@mre:file:f/L0001.txt", "n": 7})
+        self.assertEqual(data["m"], {"aa": "@mre:file:f/L0002.txt",
+                                     "zz": "@mre:file:f/L0003.txt"})
         self.assertEqual(data["passthru"], src["a"])
-        with open(os.path.join(bdir, "f", "L0002")) as fh:
+        with open(os.path.join(bdir, "f", "L0002.txt")) as fh:
             self.assertEqual(fh.read(), "d")  # aa -> d.txt
         # read_bundle resolves markers back to absolute staged paths.
         resolved = rs.read_bundle(bdir)
         self.assertEqual(resolved["arr"][0],
-                         os.path.join(os.path.abspath(bdir), "f", "L0000"))
+                         os.path.join(os.path.abspath(bdir), "f", "L0000.txt"))
 
     def test_missing_and_empty_leaves_kept(self):
         tmp = tempfile.mkdtemp()

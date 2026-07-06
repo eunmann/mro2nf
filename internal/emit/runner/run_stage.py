@@ -649,9 +649,19 @@ def resources_struct(r):
 # CopyTree/WriteChunkBundle.
 # ---------------------------------------------------------------------------
 
+def _leaf_ext(path):
+    """The file leaf's extension, matching Go filepath.Ext: the suffix from the
+    last dot in the final path element (including a leading-dot name), or ""."""
+    base = os.path.basename(path)
+    dot = base.rfind(".")
+    return base[dot:] if dot >= 0 else ""
+
+
 def mark_files(bundle_dir, payload, params, structs):
-    """Copy every file leaf into bundle_dir/f/L%04d (walk order) and replace
-    it with a transport marker; ports MarkFiles."""
+    """Copy every file leaf into bundle_dir/f/L%04d<ext> (walk order) and replace
+    it with a transport marker; ports MarkFiles. The ordinal drops the original
+    basename but keeps the extension, so Martian typed-file readers that
+    reconstruct a leaf path from its filetype (Path::with_extension) resolve it."""
     counter = [0]
 
     def copy_in(src):
@@ -666,7 +676,7 @@ def mark_files(bundle_dir, payload, params, structs):
             return src
         except OSError:
             src_is_dir = False  # copy_tree will surface the error precisely
-        rel = os.path.join(BUNDLE_FILES, "L%04d" % counter[0])
+        rel = os.path.join(BUNDLE_FILES, "L%04d%s" % (counter[0], _leaf_ext(src)))
         counter[0] += 1
         dst = os.path.join(bundle_dir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
