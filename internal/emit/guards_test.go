@@ -49,7 +49,7 @@ func TestEmitContainerMissingSources(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -200,7 +200,7 @@ func emitHealthOmicsEntryFile(t *testing.T, native bool) string {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestEmitRejectsCompStageWithoutMrjob(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
