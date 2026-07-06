@@ -1080,11 +1080,41 @@ process {
 	return block + "}\n"
 }
 
-// configProfiles renders the local + HPC executor profiles (the local target).
-func configProfiles() string {
+// resourceClamp renders the max_cpus/max_memory params the local profile feeds to
+// process.resourceLimits. A Martian stage RESERVES production-sized resources
+// (CellRanger's cloupe join asks for 30 GB); on a smaller machine Nextflow's local
+// executor would park such a task forever because its request exceeds the machine,
+// deadlocking a run that mrp completes fine (mrp clamps a job to its
+// --localmem/--localcores pool and runs it). Clamping the REQUEST to the detected
+// host resources reproduces that: the task runs here, using only what it actually
+// needs. Detected from the host (Linux /proc/meminfo; a fallback otherwise);
+// override with --max_cpus / --max_memory. Only the local profile applies the
+// clamp — a grid/cloud scheduler places an oversized request on a big-enough node.
+func resourceClamp() string {
 	return `
+// Local-executor resource clamp (see the standard profile below).
+params.max_cpus = Runtime.runtime.availableProcessors()
+params.max_memory = {
+    try {
+        def kb = (new File('/proc/meminfo').text =~ /MemTotal:\s+(\d+)/)[0][1] as long
+        return new nextflow.util.MemoryUnit(kb * 1024L).toString()
+    } catch (Exception e) {
+        return '15 GB'
+    }
+}()
+`
+}
+
+// configProfiles renders the local + HPC executor profiles (the local target).
+// The standard (local) profile clamps each task's resource REQUEST to the machine
+// so an oversized reservation runs instead of parking — see resourceClamp.
+func configProfiles() string {
+	return resourceClamp() + `
 profiles {
-    standard { process.executor = 'local' }
+    standard {
+        process.executor = 'local'
+        process.resourceLimits = [ cpus: params.max_cpus as int, memory: params.max_memory as nextflow.util.MemoryUnit ]
+    }
     slurm    { process.executor = 'slurm' }
     sge      { process.executor = 'sge' }
     lsf      { process.executor = 'lsf' }
