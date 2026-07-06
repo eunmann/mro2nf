@@ -120,7 +120,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v2 # installs + caches the Nextflow binary
+      - uses: nf-core/setup-nextflow@v3 # installs + caches the Nextflow binary
       - name: Resolve Nextflow version
         id: nxf
         # setup-nextflow exposes no version output, so read it back; keying the
@@ -172,7 +172,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v2
+      - uses: nf-core/setup-nextflow@v3
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
@@ -201,7 +201,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v2
+      - uses: nf-core/setup-nextflow@v3
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
@@ -231,7 +231,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v2
+      - uses: nf-core/setup-nextflow@v3
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"

@@ -41,7 +41,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v2 # latest Nextflow, deliberately unpinned
+      - uses: nf-core/setup-nextflow@v3 # latest Nextflow, deliberately unpinned
       - name: Build Martian (mrp + mrjob) at the pinned commit
         # Pin matches go.mod's github.com/martian-lang/martian pseudo-version, so
         # the differential runs against the exact Martian the transpiler targets.
