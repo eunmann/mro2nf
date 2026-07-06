@@ -1,0 +1,37 @@
+# Coverage-matrix fixture: each chunk's MAIN phase emits an ARRAY of files as a
+# chunk-out (position 5, array-of-files at the chunk boundary), which the JOIN
+# reads. The corpus only had a SCALAR file chunk-out (file_tree); this exercises
+# the chunk-out bundle staging descending an array of file leaves. The join
+# READS the files (summing their contents to an int) rather than re-emitting
+# their paths, so the test isolates chunk-out staging from Martian's final-output
+# VDR of chunk scratch files. Object-store-only (local/docker-iso share a fs).
+filetype txt;
+
+stage SHARD(
+    in  int    n,
+    out int    total,
+    src py     "stages/shard",
+) split (
+    in  int    idx,
+    out txt[]  parts,
+) using (
+    mem_gb = 1,
+)
+
+pipeline CHUNK_OUT_FILEARR(
+    in  int n,
+    out int total,
+)
+{
+    call SHARD(
+        n = self.n,
+    )
+
+    return (
+        total = SHARD.total,
+    )
+}
+
+call CHUNK_OUT_FILEARR(
+    n = 2,
+)

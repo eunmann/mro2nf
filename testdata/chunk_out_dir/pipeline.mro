@@ -1,0 +1,35 @@
+# Coverage-matrix fixture: each chunk's MAIN phase emits a DIRECTORY (path) as a
+# chunk-out (position 5, directory leaf at the chunk boundary), which the JOIN
+# reads a file from. The corpus only covered a top-level directory out (dir_out);
+# this exercises the chunk-out bundle staging a directory leaf (DirMarker) across
+# the split->join boundary. The join READS a file inside each chunk's directory
+# (summing to an int), isolating dir-chunk-out staging from final-output VDR.
+# Object-store-only (local/docker-iso share a filesystem).
+stage MAKE_DIRS(
+    in  int   n,
+    out int   total,
+    src py    "stages/make_dirs",
+) split (
+    in  int   idx,
+    out path  d,
+) using (
+    mem_gb = 1,
+)
+
+pipeline CHUNK_OUT_DIR(
+    in  int n,
+    out int total,
+)
+{
+    call MAKE_DIRS(
+        n = self.n,
+    )
+
+    return (
+        total = MAKE_DIRS.total,
+    )
+}
+
+call CHUNK_OUT_DIR(
+    n = 2,
+)

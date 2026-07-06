@@ -6,6 +6,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -84,6 +86,31 @@ func (p *producer) write(dir string, raw json.RawMessage) error {
 	}
 
 	return nil
+}
+
+// warnOutputScratchRefs loudly flags a stage output that baked this task's
+// ephemeral work-dir absolute path into its file CONTENT (rather than emitting a
+// declared file leaf). Such a path resolves under mrp's shared filesystem but
+// not on an object-store backend (AWS Batch + S3, HealthOmics), where the
+// downstream task is an isolated container — a silent divergence the data plane
+// cannot fix (it stages declared leaves, not paths hidden in bytes). Best-effort
+// and non-fatal: the warning goes to stderr (forwarded to the task log →
+// CloudWatch / the Omics engine log), turning a cryptic downstream
+// FileNotFoundError into a clear, stage-local diagnostic.
+func warnOutputScratchRefs(bundleDir, work string) {
+	prefix, err := filepath.Abs(work)
+	if err != nil {
+		return
+	}
+
+	for _, ref := range shim.ScanOutputForScratchRefs(bundleDir, prefix) {
+		fmt.Fprintf(os.Stderr, "mre: WARNING: stage output %s embeds an absolute "+
+			"scratch path %q — this resolves on a shared filesystem (mrp, local) but "+
+			"NOT on an object-store backend (AWS Batch + S3, HealthOmics), where the "+
+			"downstream task is an isolated container. Emit the referenced file as a "+
+			"declared Martian file output instead of baking its path into content.\n",
+			ref.File, ref.Path)
+	}
 }
 
 // coerceInputs coerces whole-number float values bound to int params back to
