@@ -67,6 +67,34 @@ func TestRunnerConformance(t *testing.T) {
 	diffDirs(t, "join", mreJoin, pyJoin)
 }
 
+// TestRunnerConformanceRelativeOutPath is the #179 regression guard: a stage
+// that sets an out-file leaf to a RELATIVE path (the file lands in files/, where
+// the stage runs) must be handled identically by both stacks. mre's data plane
+// runs in the task dir and stats the relative path there — absent — so it keeps
+// the path string; the runner must match. Before the cwd-restore fix the runner's
+// data plane inherited the stage's files/ cwd, found the file, and staged it —
+// diverging from mre and mrp (silent, since leaf counts still matched).
+func TestRunnerConformanceRelativeOutPath(t *testing.T) {
+	requirePython(t)
+
+	code := "import martian\n\n" +
+		"def main(args, outs):\n" +
+		"    with open('relative_out.txt', 'w') as fh:\n" +
+		"        fh.write('x')\n" +
+		"    outs.report = 'relative_out.txt'\n"
+
+	env := buildConformanceEnv(t, code, &ir.Stage{
+		Name: "CONF",
+		In:   []ir.Param{{Name: "value", Type: "float", BaseType: "float"}},
+		Out:  []ir.Param{{Name: "report", Type: "file", BaseType: "file", IsFile: true}},
+		Lang: ir.LangPy,
+	})
+
+	mreMain := env.runPhase(t, "mre", "main", nil)
+	pyMain := env.runPhase(t, "py", "main", nil)
+	diffDirs(t, "relative-outpath main", mreMain, pyMain)
+}
+
 // TestRunnerConformanceExitCodes pins the exit-code matrix against mre: an
 // ASSERT is 42 in both stacks, a stage sys.exit(0) in main succeeds with the
 // skeleton outs bundle in both, and any other stage failure is 1 in both.
