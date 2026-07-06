@@ -901,6 +901,11 @@ func configFile(container string, target Target) string {
 // configCommon renders the params shared by every target.
 func configCommon(target Target) string {
 	common := outdirConfig(target) + `
+// Every generated project uses the path 'arity' option (Nextflow >= 23.10.0), so
+// declare the floor for ALL targets — Nextflow then aborts cleanly on an older
+// engine instead of failing cryptically mid-run (#188).
+manifest.nextflowVersion = '!>=23.10.0'
+
 // Martian 'special' scheduler-resource map (the MRO_JOBRESOURCES analog): maps a
 // stage's special key to scheduler options applied via clusterOptions on grid
 // executors. Empty by default (no-op); override per deployment, e.g.
@@ -1015,7 +1020,6 @@ func configHealthOmics() string {
 // so no executor/workDir is set here. Outputs are exported from params.outdir
 // (/mnt/workflow/pubdir). Containers must be private-ECR URIs (--container);
 // tasks have no internet, so everything must be baked into the image.
-manifest.nextflowVersion = '!>=23.10.0'
 `
 }
 
@@ -1029,6 +1033,16 @@ func quoteOrNull(s string) string {
 }
 
 func writeFile(path string, data []byte) error {
+	// Skip a byte-identical rewrite so a re-transpile preserves the file's mtime.
+	// Every stage stages _assets/types.json and its bindspec as `path` inputs, and
+	// Nextflow's default -resume cache keys on path+size+mtime, so rewriting an
+	// unchanged asset with a fresh mtime would needlessly bust every task's cache
+	// on a re-emit into the same project dir (#188). A real content change still
+	// rewrites (new mtime), so the affected tasks correctly re-run.
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return nil
+	}
+
 	if err := os.WriteFile(path, data, filePerm); err != nil {
 		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
