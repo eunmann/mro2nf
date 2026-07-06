@@ -525,8 +525,13 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) (int, bool) 
 //   - curMap == 1: project the remainder over the map's values at this segment
 //     (depth i), with inArray set when an enclosing array makes the shape
 //     array<map<S>>.field. The binder's projectMapInArray descends the array.
-//   - curMap > 1: a nested typed-map projection (map<map<S>>) has no faithful
-//     lowering; reject with -1 so checkSupported fails the transpile loudly.
+//   - curMap > 1: the value is a typed map whose element type carries further
+//     map depth. Martian forbids a literal map<map<...>>, so this only arises as
+//     a map<T[]> (MapDim = 1 + inner array dims); projecting a field through it
+//     would yield map<array<field>>, which this single-level map projection
+//     cannot express. Reject with -1 so checkSupported fails the transpile
+//     loudly (mrp accepts map<T[]>.field; supporting it is future work — a loud
+//     refusal is preferable to the silent nulls the old code produced).
 //   - curMap == 0: not at a typed map yet — keep descending (done=false). We do
 //     NOT stop merely because a plain array is present: a typed-map field can lie
 //     deeper (arr.m.x), and a plain array with no map beneath it auto-projects at

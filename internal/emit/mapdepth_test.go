@@ -140,9 +140,17 @@ func TestMapProjectDepthArrayOfMapField(t *testing.T) {
 		Structs: map[string]*ir.StructType{
 			"Inner": {Name: "Inner", Fields: []ir.Param{{Name: "x", BaseType: "int"}}},
 			"Mid":   {Name: "Mid", Fields: []ir.Param{{Name: "m", BaseType: "Inner", MapDim: 1}}},
+			// Wrap has a PLAIN (dimensionless) struct field `a` between the array
+			// and the map, so arr2.a.m.x exercises the dims accumulating across a
+			// hop that contributes nothing — the case that distinguishes the fix's
+			// `+=` from the old reset (which would zero the enclosing array).
+			"Wrap": {Name: "Wrap", Fields: []ir.Param{{Name: "a", BaseType: "Mid"}}},
 		},
 		Stages: map[string]*ir.Stage{
-			"NEST": {Name: "NEST", Out: []ir.Param{{Name: "arr", BaseType: "Mid", ArrayDim: 1}}},
+			"NEST": {Name: "NEST", Out: []ir.Param{
+				{Name: "arr", BaseType: "Mid", ArrayDim: 1},
+				{Name: "arr2", BaseType: "Wrap", ArrayDim: 1},
+			}},
 		},
 	}
 	p := &ir.Pipeline{Name: "T", Calls: []ir.Call{{Name: "N", Callable: "NEST"}}}
@@ -150,6 +158,11 @@ func TestMapProjectDepthArrayOfMapField(t *testing.T) {
 	d, inArr := mapProjectDepth(prog, p, &ir.Ref{Kind: "call", ID: "N", Output: "arr.m.x"})
 	if d != 2 || !inArr {
 		t.Errorf("array-of-struct.map.field: got (%d,%v), want (2,true)", d, inArr)
+	}
+
+	// arr2.a.m.x: the enclosing array must survive the plain `a` struct hop.
+	if d, inArr := mapProjectDepth(prog, p, &ir.Ref{Kind: "call", ID: "N", Output: "arr2.a.m.x"}); d != 3 || !inArr {
+		t.Errorf("array-of-struct.struct.map.field: got (%d,%v), want (3,true)", d, inArr)
 	}
 
 	// checkSupported must ACCEPT this shape now (it is a real projection, not a
