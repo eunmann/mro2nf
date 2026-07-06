@@ -89,6 +89,7 @@ jobs:
 
   # Transpiles every fixture, runs it under Nextflow, and diffs the result against
   # the committed real-mrp golden. (Goldens are committed, so mrp is not needed.)
+  # Job name is a required branch-protection context — do not rename.
   e2e:
     name: E2E (Nextflow vs mrp goldens)
     runs-on: ubuntu-latest
@@ -121,14 +122,68 @@ jobs:
         with:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
-      # Static-parse every generated project with the formal language-server
-      # parser (#48): a Groovy syntax error in a rarely-run emission branch fails
-      # here with file/line, before the slower golden runs can miss it. setup-
-      # nextflow installs latest (>= 25.04), which the target asserts.
-      - run: make lint-nf
       - run: make test-e2e
-      # Data-plane epic gate (#17/#13): the transfer-multiplier benchmark must not
-      # regress vs bench/baseline.json.
+
+  # Static-parse every generated project with the formal language-server parser
+  # (#48): a Groovy syntax error in a rarely-run emission branch fails here with
+  # file/line, before the slower golden runs can miss it. setup-nextflow installs
+  # latest (>= 25.04), which the target asserts. Sweeps every fixture under
+  # 8 flag configs (#122), ~25 CPU-min of `nextflow lint` spread across
+  # E2E_PARALLEL workers; budgeted with headroom over observed wall time.
+  lint-nf:
+    name: Lint generated Nextflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@v2
+      - name: Resolve Nextflow version
+        id: nxf
+        run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
+      - name: Cache Nextflow plugins
+        uses: actions/cache@v6
+        with:
+          path: ~/.nextflow
+          key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
+      - run: make lint-nf
+
+  # Data-plane epic gate (#17/#13): the transfer-multiplier benchmark must not
+  # regress vs bench/baseline.json.
+  bench:
+    name: Bench (data movement gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@v2
+      - name: Resolve Nextflow version
+        id: nxf
+        run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
+      - name: Cache Nextflow plugins
+        uses: actions/cache@v6
+        with:
+          path: ~/.nextflow
+          key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
       - run: make bench
 
   # The same pipelines under the docker executor (containers that mount only their

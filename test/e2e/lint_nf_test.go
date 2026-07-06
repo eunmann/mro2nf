@@ -162,7 +162,7 @@ func transpileLintCombos(t *testing.T, parent string) []*lintCombo {
 			combos = append(combos, c)
 
 			proj := filepath.Join(parent, c.dir)
-			if err := transpileInto(filepath.Join(root, "testdata", fx), proj, cfg.flags...); err != nil {
+			if err := transpileInto(filepath.Join(root, "testdata", fx), "pipeline.mro", proj, cfg.flags...); err != nil {
 				c.transpileErr = err
 
 				continue

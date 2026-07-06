@@ -110,21 +110,30 @@ func transpile(t *testing.T, fixture string, extra ...string) string {
 // bench/ pipelines).
 func transpileDir(t *testing.T, dir string, extra ...string) string {
 	t.Helper()
+
+	return transpileMRO(t, dir, "pipeline.mro", extra...)
+}
+
+// transpileMRO is transpileDir for a named entry .mro inside the fixture dir —
+// used by fixtures that ship several top-level invocations of one pipeline
+// (e.g. the bench two-width variants pipeline_w4.mro / pipeline_w16.mro).
+func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
+	t.Helper()
 	buildBinaries(t)
 
 	proj := t.TempDir()
-	if err := transpileInto(dir, proj, extra...); err != nil {
+	if err := transpileInto(dir, mro, proj, extra...); err != nil {
 		t.Fatalf("transpile %s: %v", dir, err)
 	}
 
 	return proj
 }
 
-// transpileInto runs mro2nf for the fixture at dir, emitting into proj. It
-// returns the failure (with the tool output) instead of failing the test, so
+// transpileInto runs mro2nf for the fixture mro under dir, emitting into proj.
+// It returns the failure (with the tool output) instead of failing the test, so
 // batch callers can attribute a broken combo without aborting the rest.
 // buildBinaries must have run first.
-func transpileInto(dir, proj string, extra ...string) error {
+func transpileInto(dir, mro, proj string, extra ...string) error {
 	args := []string{
 		"-o", proj,
 		"-mre", filepath.Join(root, "mre"),
@@ -137,7 +146,7 @@ func transpileInto(dir, proj string, extra ...string) error {
 	}
 
 	args = append(args, extra...)
-	args = append(args, filepath.Join(dir, "pipeline.mro"))
+	args = append(args, filepath.Join(dir, mro))
 
 	cmd := exec.Command(filepath.Join(root, "mro2nf"), args...)
 	cmd.Dir = root

@@ -6,6 +6,10 @@ filetype txt;
 # `main` never reads it — O(N) redundant staging of one file. #15's target is to
 # stage a stage-level file only into the chunks that actually consume it; here that
 # is zero chunks, so payload should reach only the split/join, not the N mains.
+#
+# Run at two chunk counts (pipeline_c4.mro, pipeline_c16.mro) to mechanize the
+# CLAUDE.md overhead rule: the plumbing task count must be IDENTICAL at both —
+# only the split triad's own chunk tasks may grow with N.
 
 stage WSPLIT(
     in  int  nchunks,
@@ -32,8 +36,3 @@ pipeline WIDE(
         total = WSPLIT.total,
     )
 }
-
-call WIDE(
-    nchunks = 16,
-    payload = "input/payload.txt",
-)

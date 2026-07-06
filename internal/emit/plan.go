@@ -805,11 +805,13 @@ func keyedScatterable(c ir.Call, prog *ir.Program) (*ir.Stage, string, bool) {
 
 // keyedFuseable reports whether a keyed-pipeline call runs its bind+main in one
 // fused process (genKeyedFusedStageProcess) rather than a standalone BIND_K plus
-// the callee's _map variant — the same conditions as the plain-layer fold
-// (fuseableStageCall): a non-mapped, non-disabled call onto a non-split stage.
-// Fusing folds away one BIND_K task PER OUTER FORK (#99). It returns the callee
-// stage for the fused process. Single caller: planKeyedCall — every emit site
-// reads the planned keyedKind (#77).
+// the callee's _map variant: a non-mapped, non-disabled call onto a non-split
+// stage. Unlike the plain-layer fold (fuseableStageCall) it does NOT except a
+// pure-forward call — the keyed layer has no forward routing, so a forwarding
+// leaf call fuses too (its bind runs inline in the fused task). Fusing folds
+// away one BIND_K task PER OUTER FORK (#99). It returns the callee stage for
+// the fused process. Single caller: planKeyedCall — every emit site reads the
+// planned keyedKind (#77).
 func keyedFuseable(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
 	if c.Mapped || c.Disabled != nil {
 		return nil, false

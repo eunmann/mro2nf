@@ -12,15 +12,114 @@
       "LAYOUT",
       "PUBLISH_LEAF"
     ],
-    "edges": 22,
-    "rchar_bytes": 10826240,
-    "wchar_bytes": 1120421,
+    "edges": 23,
+    "rchar_bytes": 10825420,
+    "wchar_bytes": 1123480,
     "refs": 6,
     "producers": 1,
     "multiplier": 6.0
   },
-  "split": {
-    "name": "split",
+  "chain_native": {
+    "name": "chain_native",
+    "tasks": 7,
+    "plumbing_tasks": 2,
+    "stage_tasks": 5,
+    "processes": 4,
+    "stage_processes": 2,
+    "plumbing_processes": 2,
+    "plumbing": [
+      "LAYOUT",
+      "PUBLISH_LEAF"
+    ],
+    "edges": 19,
+    "rchar_bytes": 10742579,
+    "wchar_bytes": 1121070,
+    "refs": 6,
+    "producers": 1,
+    "multiplier": 6.0
+  },
+  "forks_w16": {
+    "name": "forks_w16",
+    "tasks": 22,
+    "plumbing_tasks": 5,
+    "stage_tasks": 17,
+    "processes": 7,
+    "stage_processes": 2,
+    "plumbing_processes": 5,
+    "plumbing": [
+      "BIND_6_FANOUT__return",
+      "BUILD_ENTRY_ARGS",
+      "FORK_6_FANOUT__FUSE",
+      "LAYOUT",
+      "MERGE_6_FANOUT__FUSE"
+    ],
+    "edges": 30,
+    "rchar_bytes": 37849804,
+    "wchar_bytes": 2258294,
+    "refs": 18,
+    "producers": 1,
+    "multiplier": 18.0
+  },
+  "forks_w16_native": {
+    "name": "forks_w16_native",
+    "tasks": 18,
+    "plumbing_tasks": 1,
+    "stage_tasks": 17,
+    "processes": 3,
+    "stage_processes": 2,
+    "plumbing_processes": 1,
+    "plumbing": [
+      "LAYOUT"
+    ],
+    "edges": 21,
+    "rchar_bytes": 37549568,
+    "wchar_bytes": 2259455,
+    "refs": 17,
+    "producers": 1,
+    "multiplier": 17.0
+  },
+  "forks_w4": {
+    "name": "forks_w4",
+    "tasks": 10,
+    "plumbing_tasks": 5,
+    "stage_tasks": 5,
+    "processes": 7,
+    "stage_processes": 2,
+    "plumbing_processes": 5,
+    "plumbing": [
+      "BIND_6_FANOUT__return",
+      "BUILD_ENTRY_ARGS",
+      "FORK_6_FANOUT__FUSE",
+      "LAYOUT",
+      "MERGE_6_FANOUT__FUSE"
+    ],
+    "edges": 30,
+    "rchar_bytes": 11424460,
+    "wchar_bytes": 853747,
+    "refs": 6,
+    "producers": 1,
+    "multiplier": 6.0
+  },
+  "forks_w4_native": {
+    "name": "forks_w4_native",
+    "tasks": 6,
+    "plumbing_tasks": 1,
+    "stage_tasks": 5,
+    "processes": 3,
+    "stage_processes": 2,
+    "plumbing_processes": 1,
+    "plumbing": [
+      "LAYOUT"
+    ],
+    "edges": 21,
+    "rchar_bytes": 11123916,
+    "wchar_bytes": 853577,
+    "refs": 5,
+    "producers": 1,
+    "multiplier": 5.0
+  },
+  "split_c16": {
+    "name": "split_c16",
     "tasks": 20,
     "plumbing_tasks": 2,
     "stage_tasks": 18,
@@ -31,11 +130,66 @@
       "BUILD_ENTRY_ARGS",
       "LAYOUT"
     ],
-    "edges": 25,
-    "rchar_bytes": 38121164,
-    "wchar_bytes": 2110549,
+    "edges": 26,
+    "rchar_bytes": 38110720,
+    "wchar_bytes": 2113453,
     "refs": 19,
     "producers": 1,
     "multiplier": 19.0
+  },
+  "split_c16_native": {
+    "name": "split_c16_native",
+    "tasks": 19,
+    "plumbing_tasks": 1,
+    "stage_tasks": 18,
+    "processes": 4,
+    "stage_processes": 3,
+    "plumbing_processes": 1,
+    "plumbing": [
+      "LAYOUT"
+    ],
+    "edges": 21,
+    "rchar_bytes": 38037196,
+    "wchar_bytes": 2112114,
+    "refs": 18,
+    "producers": 1,
+    "multiplier": 18.0
+  },
+  "split_c4": {
+    "name": "split_c4",
+    "tasks": 8,
+    "plumbing_tasks": 2,
+    "stage_tasks": 6,
+    "processes": 5,
+    "stage_processes": 3,
+    "plumbing_processes": 2,
+    "plumbing": [
+      "BUILD_ENTRY_ARGS",
+      "LAYOUT"
+    ],
+    "edges": 26,
+    "rchar_bytes": 12954726,
+    "wchar_bytes": 703935,
+    "refs": 7,
+    "producers": 1,
+    "multiplier": 7.0
+  },
+  "split_c4_native": {
+    "name": "split_c4_native",
+    "tasks": 7,
+    "plumbing_tasks": 1,
+    "stage_tasks": 6,
+    "processes": 4,
+    "stage_processes": 3,
+    "plumbing_processes": 1,
+    "plumbing": [
+      "LAYOUT"
+    ],
+    "edges": 21,
+    "rchar_bytes": 12871372,
+    "wchar_bytes": 703702,
+    "refs": 6,
+    "producers": 1,
+    "multiplier": 6.0
   }
 }

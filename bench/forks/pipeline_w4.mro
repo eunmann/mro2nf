@@ -1,0 +1,6 @@
+@include "common.mro"
+
+call FANOUT(
+    vs = [1, 2, 3, 4],
+    kb = 256,
+)
