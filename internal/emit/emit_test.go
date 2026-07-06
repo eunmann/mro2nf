@@ -25,7 +25,7 @@ func emitFixture(t *testing.T, fixture string, stageCode map[string]string) stri
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestEmitConfigTargets(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		prog, err := frontend.Lower(ast)
+		prog, err := frontend.Lower(ast, nil)
 		if err != nil {
 			t.Fatalf("lower: %v", err)
 		}
@@ -244,7 +244,7 @@ func TestEmitMonitorAndContainer(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -663,7 +663,7 @@ func TestEmitFuseChains(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -856,7 +856,7 @@ func TestEmitContainerMrjob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -894,7 +894,7 @@ func TestEmitCompRequiresMrjob(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -929,7 +929,7 @@ func TestEmitHealthOmicsPackaging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -982,7 +982,7 @@ func TestEmitContainerBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}
@@ -1149,7 +1149,7 @@ func TestWarnings(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", fx, err)
 		}
-		prog, err := frontend.Lower(ast)
+		prog, err := frontend.Lower(ast, nil)
 		if err != nil {
 			t.Fatalf("lower %s: %v", fx, err)
 		}

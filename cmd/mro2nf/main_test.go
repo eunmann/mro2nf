@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/config"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // TestApplyConfigPrecedence checks the .mro2nf.yml precedence: a config key sets
@@ -153,5 +154,32 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 	if !opts.Native || !opts.NativeRunner {
 		t.Errorf("config-sourced native flags must reach options(): Native=%v NativeRunner=%v",
 			opts.Native, opts.NativeRunner)
+	}
+}
+
+// TestStageCodePathsAbsolutizesNoRejoin guards the #178 review: a relative,
+// already-declaring-dir-resolved SrcPath must be absolutized against the cwd, not
+// re-joined against the entry .mro's dir (which would double-prefix an @included
+// stage's path). The helper takes no entry dir, so a revert to a mroDir-join
+// would not even compile against this test.
+func TestStageCodePathsAbsolutizesNoRejoin(t *testing.T) {
+	prog := &ir.Program{
+		Stages: map[string]*ir.Stage{
+			"S": {Name: "S", SrcPath: "proj/sub/code.py"}, // relative, declaring-dir-resolved
+			"A": {Name: "A", SrcPath: "/abs/code.py"},     // absolute passes through
+		},
+	}
+
+	code, err := stageCodePaths(prog)
+	if err != nil {
+		t.Fatalf("stageCodePaths: %v", err)
+	}
+
+	cwd, _ := os.Getwd()
+	if want := filepath.Join(cwd, "proj", "sub", "code.py"); code["S"] != want {
+		t.Errorf("S = %q, want %q (cwd-absolutized, not entry-dir-joined)", code["S"], want)
+	}
+	if code["A"] != "/abs/code.py" {
+		t.Errorf("A = %q, want the absolute path unchanged", code["A"])
 	}
 }
