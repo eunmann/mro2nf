@@ -36,7 +36,7 @@ func TestCorpusParsesAndLowers(t *testing.T) {
 
 			// Lower must not panic; a failure must be a typed apperror so the
 			// CLI can report it cleanly rather than crash.
-			if _, err := frontend.Lower(ast); err != nil {
+			if _, err := frontend.Lower(ast, nil); err != nil {
 				if !errors.Is(err, apperror.ErrUnsupported) && !errors.Is(err, apperror.ErrParse) {
 					t.Errorf("lower returned a non-apperror error: %v", err)
 				} else {

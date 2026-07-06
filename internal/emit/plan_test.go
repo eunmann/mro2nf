@@ -20,7 +20,7 @@ func lowerFixture(t *testing.T, fixture string) *ir.Program {
 		t.Fatalf("parse %s: %v", fixture, err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower %s: %v", fixture, err)
 	}
@@ -197,7 +197,7 @@ func lowerMRO(t *testing.T, src string) *ir.Program {
 		t.Fatalf("parse inline mro: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower inline mro: %v", err)
 	}
