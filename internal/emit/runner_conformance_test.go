@@ -502,9 +502,11 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 	return -1, dir
 }
 
-// diffDirs byte-compares every regular file under two directories (relative
-// tree + content), ignoring only the phase scratch dirs the stacks lay out
-// differently is NOT allowed — the full tree must match.
+// diffDirs byte-compares every produced-artifact file under two directories
+// (relative tree + content), skipping only the per-phase scratch dirs (split/,
+// main/, join/) that the two stacks lay out differently and that are not part of
+// the produced-artifact contract (see treeFiles). Every other file must match
+// byte-for-byte.
 func diffDirs(t *testing.T, what, a, b string) {
 	t.Helper()
 
