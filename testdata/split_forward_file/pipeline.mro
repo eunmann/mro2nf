@@ -1,0 +1,46 @@
+# Coverage-matrix fixture (position 4): a file that arrives as a stage INPUT is
+# forwarded by the split phase into each chunk's args, and the JOIN reads it off
+# chunk_defs. Distinct from split_chunk_file (where split CREATES the file): here
+# the leaf originates upstream (GEN.data), so the split forwards an already-staged
+# input path into the chunk defs. The chunk-def bundle staging must carry it to
+# the join worker. Object-store-only (local/docker-iso share a filesystem).
+filetype txt;
+
+stage GEN(
+    out txt data,
+    src py   "stages/gen",
+)
+
+stage SUM_FWD(
+    in  txt   seed,
+    in  int   n,
+    out int   total,
+    src py    "stages/sum_fwd",
+) split (
+    in  int   chunk_id,
+    in  txt   ref,
+    out int   partial,
+) using (
+    mem_gb = 1,
+)
+
+pipeline SPLIT_FORWARD_FILE(
+    in  int n,
+    out int total,
+)
+{
+    call GEN()
+
+    call SUM_FWD(
+        seed = GEN.data,
+        n   = self.n,
+    )
+
+    return (
+        total = SUM_FWD.total,
+    )
+}
+
+call SPLIT_FORWARD_FILE(
+    n = 3,
+)

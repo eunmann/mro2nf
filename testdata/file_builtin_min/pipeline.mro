@@ -1,0 +1,31 @@
+# Coverage-matrix fixture: the builtin `file` type (not a declared custom
+# filetype). The rest of the corpus only ever exercises custom `filetype` decls
+# (txt/bin/...) or `path`; this pins that a bare builtin `file` leaf is treated
+# as a file leaf and staged/read across a stage boundary the same way.
+stage MK(
+    out file blob,
+    src py   "stages/mk",
+)
+
+stage CONSUME(
+    in  file blob,
+    out int  n,
+    src py   "stages/consume",
+)
+
+pipeline FILE_BUILTIN_MIN(
+    out int n,
+)
+{
+    call MK()
+
+    call CONSUME(
+        blob = MK.blob,
+    )
+
+    return (
+        n = CONSUME.n,
+    )
+}
+
+call FILE_BUILTIN_MIN()

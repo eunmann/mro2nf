@@ -107,6 +107,9 @@ var goldenCases = []struct {
 	{"split_struct_chunk", "split_struct_chunk", "expected/outs.json"},
 	{"chunk_out_filearr", "chunk_out_filearr", "expected/outs.json"},
 	{"chunk_out_dir", "chunk_out_dir", "expected/outs.json"},
+	// Matrix completeness: builtin `file` type; file forwarded into a split arg.
+	{"file_builtin_min", "file_builtin_min", "expected/outs.json"},
+	{"split_forward_file", "split_forward_file", "expected/outs.json"},
 	{"mixed_adapters", "mixed_adapters", "expected/outs.json"},
 	{"struct_file_array", "struct_file_array", "expected/outs.json"},
 	{"file_tree", "file_tree", "expected/outs.json"},
