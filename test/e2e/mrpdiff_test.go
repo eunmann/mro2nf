@@ -186,6 +186,12 @@ func TestMrpDiff(t *testing.T) {
 		// the object-store staging path itself is guarded by the AWS e2e lane and
 		// the cmd/mre readChunkData unit test (local/docker-iso share a fs).
 		{name: "split_chunk_file", native: true, runner: true},
+		// Coverage matrix: file leaves at the split/join chunk boundary — the
+		// region #217 lived in. Nested struct chunk-def, array-of-files chunk-out,
+		// and a directory chunk-out. Object-store staging verified on the AWS lane.
+		{name: "split_struct_chunk", native: true, runner: true},
+		{name: "chunk_out_filearr", native: true, runner: true},
+		{name: "chunk_out_dir", native: true, runner: true},
 		{name: "struct_of_file"},
 		{name: "struct_file_array"},
 		// #173: a pipeline output typed as a callable's output struct (MAKEB),

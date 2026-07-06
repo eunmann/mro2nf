@@ -1,0 +1,41 @@
+# Coverage-matrix fixture: a file leaf nested inside a STRUCT that the split
+# phase creates and returns as a per-chunk arg, which the JOIN reads off
+# chunk_defs (positions 3 + 6, nested-struct at the chunk boundary). Extends
+# #217's scalar case: the chunk-def bundle staging must descend the struct to
+# find and stage the `ref` leaf. Object-store-only (local/docker-iso share a fs).
+filetype bin;
+
+struct Ref(
+    bin ref,
+    int k,
+)
+
+stage SUM_REFS(
+    in  int   n,
+    out int   total,
+    src py    "stages/sum_refs",
+) split (
+    in  int   chunk_id,
+    in  Ref   cfg,
+    out int   partial,
+) using (
+    mem_gb = 1,
+)
+
+pipeline SPLIT_STRUCT_CHUNK(
+    in  int n,
+    out int total,
+)
+{
+    call SUM_REFS(
+        n = self.n,
+    )
+
+    return (
+        total = SUM_REFS.total,
+    )
+}
+
+call SPLIT_STRUCT_CHUNK(
+    n = 3,
+)
