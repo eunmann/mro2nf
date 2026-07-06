@@ -261,7 +261,16 @@ func readJSON(t *testing.T, path string, v any) {
 		t.Fatalf("read %s: %v", path, err)
 	}
 
-	if err := json.Unmarshal(data, v); err != nil {
+	// Decode with UseNumber so numbers keep their exact JSON token: a plain
+	// json.Unmarshal coerces every number to float64, which would make the golden
+	// and mrp-differential comparators blind to a int-vs-float regression (21 vs
+	// 21.0) and to >2^53 integer precision loss (the literals_edge / src_args
+	// fixtures target exactly those ranges). The producer keeps the token via
+	// UseNumber (cmd/mre/bundle.go rawToMap); the comparator must too (#188).
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+
+	if err := dec.Decode(v); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 }
