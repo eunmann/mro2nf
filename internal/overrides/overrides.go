@@ -252,6 +252,10 @@ func mapField(field string, val json.RawMessage) (string, string, string, string
 	}
 }
 
+// phaseChunk is the mrp override phase for a stage's main job; every stage (split
+// or not) runs its main as this phase.
+const phaseChunk = "chunk"
+
 // familySuffixes returns the (plain-family, fused-family) process-name
 // suffixes an mrp override phase prefix reaches, drawn from the emitter's
 // exported inventory so the selector alternation cannot drift from the names
@@ -264,13 +268,94 @@ func familySuffixes(phase string) ([]string, []string, bool) {
 		return emit.PlainStageSuffixes(), emit.FusedCallSuffixes(), true
 	case "split":
 		return withRoot(emit.PlainStageSuffixes(), "_SPLIT"), withRoot(emit.FusedCallSuffixes(), "_SP"), true
-	case "chunk":
-		return withRoot(emit.PlainStageSuffixes(), "_MAIN"), withRoot(emit.FusedCallSuffixes(), "_MN"), true
+	case phaseChunk:
+		// mrp runs EVERY stage's main job as phase 'chunk' — including a non-split
+		// stage, whose main processes are the bare/_MAP/_K family, NOT _MAIN. So the
+		// chunk phase reaches all MAIN-phase processes: the split main (_MAIN/
+		// _MAIN_K/_MN) and the non-split main (bare/_MAP/_K), but never the split or
+		// join phases. A suffix that exists only for the other stage kind matches no
+		// process, so this is safe for split and non-split stages alike (the
+		// standalone _KS scatter main is added for chunk in selector, as for "").
+		return mainPhaseSuffixes(emit.PlainStageSuffixes()), mainPhaseSuffixes(emit.FusedCallSuffixes()), true
 	case "join":
 		return withRoot(emit.PlainStageSuffixes(), "_JOIN"), withRoot(emit.FusedCallSuffixes(), "_JN"), true
 	default:
 		return nil, nil, false
 	}
+}
+
+// mainPhaseSuffixes returns the main-phase (chunk) entries of a suffix inventory:
+// everything except the split and join phase suffixes. What remains is the bare
+// non-split main (""), the keyed non-split main (_MAP/_K), and the split stage's
+// main (_MAIN/_MAIN_K/_MN) — the processes mrp runs as phase 'chunk'.
+func mainPhaseSuffixes(suffixes []string) []string {
+	out := make([]string, 0, len(suffixes))
+
+	for _, s := range suffixes {
+		if strings.HasPrefix(s, "_SPLIT") || strings.HasPrefix(s, "_JOIN") || s == "_SP" || s == "_JN" {
+			continue
+		}
+
+		out = append(out, s)
+	}
+
+	return out
+}
+
+// splitJoinSuffixes are the split/join phase markers — the complement of the
+// main (chunk) phase over the full plain+fused inventory.
+func splitJoinSuffixes() []string {
+	full := append(append([]string{}, emit.PlainStageSuffixes()...), emit.FusedCallSuffixes()...)
+	main := map[string]bool{}
+
+	for _, s := range mainPhaseSuffixes(full) {
+		main[s] = true
+	}
+
+	out := make([]string, 0, len(full))
+
+	for _, s := range full {
+		if s != "" && !main[s] {
+			out = append(out, s)
+		}
+	}
+
+	return out
+}
+
+// globalChunkSuffixes returns the main-phase suffixes safe behind the global `.*`
+// prefix: non-empty, and not a suffix of any split/join marker (so `.*<s>` cannot
+// full-match a split or join process). This drops the bare "" (matches every
+// process) and _K (a suffix of _SPLIT_K/_JOIN_K); a bare or fused-_K non-split
+// main is therefore not reachable by a GLOBAL chunk override — target it by stage
+// name (a stage-scoped chunk override reaches every main process). The distinctive
+// _KS scatter main is included.
+func globalChunkSuffixes(main []string) []string {
+	sj := splitJoinSuffixes()
+
+	safe := make([]string, 0, len(main))
+
+	for _, s := range main {
+		if s == "" {
+			continue
+		}
+
+		ambiguous := false
+
+		for _, x := range sj {
+			if strings.HasSuffix(x, s) {
+				ambiguous = true
+
+				break
+			}
+		}
+
+		if !ambiguous {
+			safe = append(safe, s)
+		}
+	}
+
+	return append(safe, emit.ScatterCallSuffixes()...)
 }
 
 // withRoot filters a suffix inventory to the entries under one phase root
@@ -345,7 +430,15 @@ func selector(stage string, quals []string, phase string) string {
 			return "" // global process default
 		}
 
-		return ".*" + suffixAlt(append(plain, fused...))
+		suffixes := append(append([]string{}, plain...), fused...)
+		if phase == phaseChunk {
+			// A global `.*`-prefixed chunk selector can only use suffixes that are
+			// distinctive to the main phase; the bare and _K mains would over-match
+			// (see globalChunkSuffixes).
+			suffixes = globalChunkSuffixes(suffixes)
+		}
+
+		return ".*" + suffixAlt(suffixes)
 	}
 
 	alts := []string{stage + suffixAlt(plain)}
@@ -353,9 +446,10 @@ func selector(stage string, quals []string, phase string) string {
 		alts = append(alts, "STAGE_"+q+suffixAlt(fused))
 	}
 
-	// The _KS scatter is the stage's main; only a stage-level override reaches
-	// it (the per-stage phase selectors cover the split-triad processes).
-	if phase == "" {
+	// The _KS scatter is a stage's (non-split) main, so both a stage-level ("")
+	// and a chunk override reach it; the per-stage split/join selectors cover the
+	// split-triad processes.
+	if phase == "" || phase == phaseChunk {
 		for _, q := range quals {
 			alts = append(alts, "FORK_"+q+suffixAlt(emit.ScatterCallSuffixes()))
 		}
