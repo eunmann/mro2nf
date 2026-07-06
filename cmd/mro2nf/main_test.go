@@ -183,3 +183,34 @@ func TestStageCodePathsAbsolutizesNoRejoin(t *testing.T) {
 		t.Errorf("A = %q, want the absolute path unchanged", code["A"])
 	}
 }
+
+// TestStageCodePathsKeepsBareCommand guards that a comp/exec stage whose src is a
+// bare command name (no path separator, resolved on PATH at exec time — e.g.
+// CellRanger's `cr_lib`) passes through verbatim rather than being cwd-absolutized
+// into a broken filesystem path. Py stages and any path with a separator are still
+// absolutized.
+func TestStageCodePathsKeepsBareCommand(t *testing.T) {
+	prog := &ir.Program{
+		Stages: map[string]*ir.Stage{
+			"C": {Name: "C", Lang: ir.LangComp, SrcPath: "cr_lib"}, // bare command → PATH
+			"E": {Name: "E", Lang: ir.LangExec, SrcPath: "mytool"}, // bare command → PATH
+			"P": {Name: "P", Lang: ir.LangPy, SrcPath: "code.py"},  // py leaf → absolutized
+		},
+	}
+
+	code, err := stageCodePaths(prog)
+	if err != nil {
+		t.Fatalf("stageCodePaths: %v", err)
+	}
+
+	if code["C"] != "cr_lib" {
+		t.Errorf("C = %q, want %q (bare command kept verbatim for PATH resolution)", code["C"], "cr_lib")
+	}
+	if code["E"] != "mytool" {
+		t.Errorf("E = %q, want %q (bare command kept verbatim for PATH resolution)", code["E"], "mytool")
+	}
+	cwd, _ := os.Getwd()
+	if want := filepath.Join(cwd, "code.py"); code["P"] != want {
+		t.Errorf("P = %q, want %q (py leaf still cwd-absolutized)", code["P"], want)
+	}
+}

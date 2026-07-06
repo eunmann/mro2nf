@@ -123,3 +123,53 @@ call TOP()
 		t.Errorf("MK.SrcPath = %q, want %q (resolved via -mropath search)", got, want)
 	}
 }
+
+// TestSrcPathBareCommandStaysUnqualified guards real-toolkit pipelines like
+// CellRanger, whose comp stages share a multi-call binary invoked as a bare
+// command (`cr_lib martian <subcmd>`) that lives on PATH (in lib/bin), not in the
+// mro tree. When such a command is not found as a file, Martian's FindPath returns
+// it UNQUALIFIED so exec resolves it on PATH. Dir-joining it into the declaring
+// file's directory (mro/rna/cr_lib) turns a PATH lookup into a nonexistent
+// filesystem path — `fork/exec .../cr_lib: no such file or directory` at runtime.
+// A bare command (no path separator) for a comp/exec stage must therefore pass
+// through verbatim.
+func TestSrcPathBareCommandStaysUnqualified(t *testing.T) {
+	dir := t.TempDir()
+
+	// A comp stage whose src is a bare command with subcommand args; the binary
+	// is not present in the mro tree (it lives on PATH at run time).
+	if err := os.WriteFile(filepath.Join(dir, "pipeline.mro"), []byte(`
+stage RUN(
+    out  int   n,
+    src  comp  "cr_lib martian do_thing",
+)
+
+pipeline TOP(
+    out int result,
+)
+{
+    call RUN()
+    return (
+        result = RUN.n,
+    )
+}
+
+call TOP()
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ast, err := frontend.Parse(filepath.Join(dir, "pipeline.mro"), []string{dir}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast, []string{dir})
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	if got := prog.Stages["RUN"].SrcPath; got != "cr_lib" {
+		t.Errorf("RUN.SrcPath = %q, want %q (bare command kept unqualified for PATH resolution, not dir-joined)", got, "cr_lib")
+	}
+}
