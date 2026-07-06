@@ -122,7 +122,18 @@ func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
 	buildBinaries(t)
 
 	proj := t.TempDir()
+	if err := transpileInto(dir, mro, proj, extra...); err != nil {
+		t.Fatalf("transpile %s: %v", dir, err)
+	}
 
+	return proj
+}
+
+// transpileInto runs mro2nf for the fixture mro under dir, emitting into proj.
+// It returns the failure (with the tool output) instead of failing the test, so
+// batch callers can attribute a broken combo without aborting the rest.
+// buildBinaries must have run first.
+func transpileInto(dir, mro, proj string, extra ...string) error {
 	args := []string{
 		"-o", proj,
 		"-mre", filepath.Join(root, "mre"),
@@ -141,10 +152,10 @@ func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
 	cmd.Dir = root
 
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("transpile %s: %v\n%s", dir, err, out)
+		return fmt.Errorf("mro2nf: %w\n%s", err, out)
 	}
 
-	return proj
+	return nil
 }
 
 // runNextflow runs `nextflow run main.nf <args...>` in proj, always capturing
