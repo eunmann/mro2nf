@@ -57,6 +57,10 @@ var goldenCases = []struct {
 	{"map_pipe_split", "map_pipe_split", "expected/outs.json"},
 	{"map_file_keyed", "map_file_keyed", "expected/outs.json"},
 	{"struct_of_file", "struct_of_file", "expected/outs.json"},
+	// #173: pipeline output typed as a callable's output struct with a file leaf.
+	{"callable_struct_file", "callable_struct_file", "expected/outs.json"},
+	// #172: array<map<Point>>.x projection fed to a map<int>[] consumer.
+	{"arr_map_proj", "arr_map_proj", "expected/outs.json"},
 	{"literals_edge", "literals_edge", "expected/outs.json"},
 	{"dir_out", "dir_out", "expected/outs.json"},
 	{"api_smoke", "api_smoke", "expected/outs.json"},
