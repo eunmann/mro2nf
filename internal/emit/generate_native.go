@@ -520,7 +520,11 @@ func fileFlattenExprDepth(expr string, p ir.Param, structs map[string]*ir.Struct
 		val.MapDim = 0
 		v := fmt.Sprintf("__e%d", depth)
 
-		return fmt.Sprintf("(%s ?: [:]).sort { it.key }.collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v+".value", val, structs, depth+1))
+		// Sort by UTF-8 byte order (Mro2nf.compareUtf8), NOT Groovy's natural
+		// UTF-16 order: mre's entryargs re-walks the same map with Go sort.Strings
+		// (UTF-8 bytes), and the two orders diverge for supplementary-plane keys,
+		// which would mispair the flattened file leaves with the staged paths.
+		return fmt.Sprintf("(%s ?: [:]).sort { __a, __b -> Mro2nf.compareUtf8(__a.key, __b.key) }.collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v+".value", val, structs, depth+1))
 	}
 
 	if st, ok := structs[p.BaseType]; ok {
