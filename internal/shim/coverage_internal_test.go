@@ -346,6 +346,45 @@ func TestRunAdapterDispatch(t *testing.T) {
 	})
 }
 
+// TestResolveStageExe pins that a comp/exec stage binary given as a bare command
+// name (no separator) is resolved to an ABSOLUTE path via PATH, so the launched
+// process's argv[0] is a real path. Some Martian stage binaries (CellRanger's
+// cr_lib) resolve their own executable location from argv[0] and panic on a bare
+// name (martian::utils::current_executable). A path with a separator passes
+// through unchanged; an unresolvable bare name is returned as-is so the exec
+// surfaces a clear not-found error.
+func TestResolveStageExe(t *testing.T) {
+	if got := resolveStageExe("/abs/tool"); got != "/abs/tool" {
+		t.Errorf("resolveStageExe(/abs/tool) = %q, want it unchanged", got)
+	}
+
+	if got := resolveStageExe(filepath.Join("dir", "tool")); got != filepath.Join("dir", "tool") {
+		t.Errorf("resolveStageExe(dir/tool) = %q, want it unchanged", got)
+	}
+
+	if got := resolveStageExe("definitely-not-on-path-xyz"); got != "definitely-not-on-path-xyz" {
+		t.Errorf("resolveStageExe(missing) = %q, want the bare name back", got)
+	}
+
+	// A bare command found on PATH resolves to an absolute path.
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "mytool")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", dir)
+
+	got := resolveStageExe("mytool")
+	if !filepath.IsAbs(got) {
+		t.Errorf("resolveStageExe(mytool) = %q, want an absolute path", got)
+	}
+
+	if got != exe {
+		t.Errorf("resolveStageExe(mytool) = %q, want %q", got, exe)
+	}
+}
+
 // TestRunAdapterMonitorMemoryQuota drives the full monitored path through
 // runAdapter: a stage that allocates well past its mem_gb quota must fail with
 // the RETRYABLE errStageFailed (never ErrStageAssert — Nextflow retries memory

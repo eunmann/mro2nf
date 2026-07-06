@@ -245,18 +245,44 @@ func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, pha
 			return &apperror.UnsupportedError{Construct: "comp adapter", Detail: "no mrjob path configured"}
 		}
 
-		argv := append([]string{a.Mrjob, a.Stagecode}, a.SrcArgs...)
+		argv := append([]string{a.Mrjob, resolveStageExe(a.Stagecode)}, a.SrcArgs...)
 
 		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, res)
 	// exec matches mrp: `<stagecode> <srcargs...> <phase> <meta> <files>
 	// <journal>` (martian/core/node.go runChunk, ExecStage arm).
 	case ir.LangExec:
-		argv := append([]string{a.Stagecode}, a.SrcArgs...)
+		argv := append([]string{resolveStageExe(a.Stagecode)}, a.SrcArgs...)
 
 		return runWrappedAdapter(ctx, meta, files, journal, a, append(argv, phase), phase, res)
 	default:
 		return &apperror.UnsupportedError{Construct: "adapter " + string(a.Lang)}
 	}
+}
+
+// resolveStageExe returns the path used to launch a comp/exec stage binary. A
+// bare command name (no path separator) is looked up on PATH and returned as an
+// ABSOLUTE path, so the launched process's argv[0] is a real filesystem path.
+// Some Martian stage binaries resolve their own executable location from argv[0]
+// (e.g. CellRanger's cr_lib via martian::utils::current_executable) and panic on
+// a bare, unresolved name. A path that already has a separator (absolute or
+// relative) is returned unchanged, and an unresolvable bare name is returned
+// as-is so the subsequent exec surfaces a clear not-found error. This mirrors
+// Martian, which PATH-resolves a comp binary to a full path before exec.
+func resolveStageExe(stagecode string) string {
+	if stagecode == "" || strings.ContainsRune(stagecode, filepath.Separator) {
+		return stagecode
+	}
+
+	found, err := exec.LookPath(stagecode)
+	if err != nil {
+		return stagecode
+	}
+
+	if abs, err := filepath.Abs(found); err == nil {
+		return abs
+	}
+
+	return found
 }
 
 // startMonitor makes cmd a process-group leader and returns a resident-memory
