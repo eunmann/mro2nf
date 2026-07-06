@@ -1051,6 +1051,81 @@ func TestEmitContainerBuild(t *testing.T) {
 	}
 }
 
+// TestEmitContainerBuildDedupsSharedStageCode checks that when several stage
+// names resolve to the same source (the CellRanger pattern: one multi-command
+// binary backing dozens of stages), the source is vendored once and the rest
+// become relative symlinks to it — so the build context isn't inflated by the
+// stage-name fan-out (#215), while every name still resolves to the same code.
+func TestEmitContainerBuildDedupsSharedStageCode(t *testing.T) {
+	mre := filepath.Join(t.TempDir(), "mre")
+	if err := os.WriteFile(mre, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ast, err := frontend.Parse("../../testdata/split_test/pipeline.mro", []string{"../../testdata/split_test"}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	prog, err := frontend.Lower(ast, nil)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	// A single "binary" file backs both stage names, mimicking cr_lib.
+	bin := filepath.Join(t.TempDir(), "cr_lib")
+	if err := os.WriteFile(bin, []byte("BINARY-CONTENT"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	shell, _ := filepath.Abs("../../vendor-martian/python/martian_shell.py")
+	if err := emit.Emit(prog, emit.Options{
+		OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro",
+		Target: emit.TargetAWSBatch, Container: "ecr/mro2nf:1",
+		StageCode: map[string]string{"SUM_SQUARES": bin, "REPORT": bin},
+	}); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+
+	stages := filepath.Join(dir, "runtime", "stages")
+
+	// Exactly one name is a real regular file (the canonical copy); the other is a
+	// symlink whose target is the sibling canonical name (relative, no path sep).
+	var copies, links int
+	for _, name := range []string{"SUM_SQUARES", "REPORT"} {
+		fi, err := os.Lstat(filepath.Join(stages, name))
+		if err != nil {
+			t.Fatalf("lstat %s: %v", name, err)
+		}
+
+		if fi.Mode()&os.ModeSymlink != 0 {
+			links++
+			target, err := os.Readlink(filepath.Join(stages, name))
+			if err != nil {
+				t.Fatalf("readlink %s: %v", name, err)
+			}
+			if strings.ContainsRune(target, os.PathSeparator) {
+				t.Errorf("symlink %s target %q must be a bare sibling name, not a path", name, target)
+			}
+		} else {
+			copies++
+		}
+
+		// Either way, the name must resolve to the shared content.
+		got, err := os.ReadFile(filepath.Join(stages, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if string(got) != "BINARY-CONTENT" {
+			t.Errorf("stage %s content = %q, want shared binary content", name, got)
+		}
+	}
+
+	if copies != 1 || links != 1 {
+		t.Errorf("dedup: got %d copies + %d symlinks, want exactly 1 copy + 1 symlink", copies, links)
+	}
+}
+
 // TestEmitEntryParams checks entry-input parameterization: each entry input is a
 // nullable run param and BUILD_ENTRY_ARGS overlays the supplied values on the
 // baked defaults at launch (so inputs can be set via -params-file / HealthOmics
