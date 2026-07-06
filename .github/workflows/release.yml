@@ -8,8 +8,11 @@ on:
   # a GitHub release or pushing to GHCR. Only a tag push publishes.
   workflow_dispatch:
 
+# Least privilege at the workflow level: only the publish job needs write, and it
+# grants itself contents:write below. The build job (untrusted third-party actions
+# in the toolchain) and the image job thus run with a read-only token.
 permissions:
-  contents: write
+  contents: read
 
 # A dispatch run is a dry run (no tag to publish against); a tag push is real.
 env:
@@ -58,12 +61,17 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name != 'workflow_dispatch' # dry run builds but never releases
+    permissions:
+      contents: write # create the GitHub release (only this job needs it)
     steps:
       - uses: actions/download-artifact@v8
         with:
           pattern: binaries-*
           merge-multiple: true
-      - uses: softprops/action-gh-release@v3
+      # Third-party action holding the write token: pin to a commit SHA (not the
+      # mutable v3 tag) so a compromised tag can't gain release-write access.
+      # Dependabot keeps the pin current via the trailing version comment.
+      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           files: |
             mro2nf-*

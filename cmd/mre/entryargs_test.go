@@ -163,6 +163,21 @@ func TestReconstructFilesStagedCountMismatch(t *testing.T) {
 	}
 }
 
+// TestReconstructFilesUnknownParam checks the errNoEntryType arm: a supplied,
+// file-bearing entry input with no matching declared param must fail loudly.
+// Skipping it silently would leave overlayValues to re-copy the raw (unstaged)
+// value, so a downstream stage would read the pre-staging path.
+func TestReconstructFilesUnknownParam(t *testing.T) {
+	tbl, params := entryTable()
+
+	err := reconstructFiles(
+		map[string]any{}, map[string]any{"ghost": "s3://b/x"},
+		map[string][]string{"ghost": {"/work/x"}}, params, tbl)
+	if !errors.Is(err, errNoEntryType) {
+		t.Errorf("unknown entry input: err = %v, want errNoEntryType", err)
+	}
+}
+
 // TestReadFlatFile checks the -fileflat JSON decoding, including staged paths
 // containing the `,`/`;`/`=` characters that broke the old flat-string
 // encoding (all legal in filenames), plus the empty and malformed cases.

@@ -1,0 +1,72 @@
+name: PR Validation (docs-only)
+
+# Companion to pr-validation.yml. That workflow skips docs-only changes via
+# paths-ignore, but the seven required status checks live ONLY there — so a
+# docs-only PR leaves them stuck "Expected — Waiting for status" and can never
+# merge (branch protection is satisfied by context name, and a skipped workflow
+# reports no context). This workflow fires on exactly the ignored paths and
+# reports the same seven contexts as immediate successes, so a docs-only PR
+# satisfies branch protection without running the heavy suites.
+#
+# On a mixed docs+code PR BOTH workflows run and each emits e.g. a "Lint"
+# context; branch protection requires every check run of a required context to
+# succeed, so the real jobs still gate. On a code-only PR the `paths` filter
+# below matches nothing, so only the real workflow runs.
+on:
+  pull_request:
+    paths:
+      - "**.md"
+      - "docs/**"
+      - ".claude/**"
+      - LICENSE
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
+    steps:
+      - run: echo "docs-only change — real validation not required"
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
+    steps:
+      - run: echo "docs-only change — real validation not required"
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
+    steps:
+      - run: echo "docs-only change — real validation not required"
+  e2e:
+    name: E2E (Nextflow vs mrp goldens)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
+    steps:
+      - run: echo "docs-only change — real validation not required"
+  e2e-docker:
+    name: E2E (container isolation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
+    steps:
+      - run: echo "docs-only change — real validation not required"
+  lint-nf:
+    name: Lint generated Nextflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
+    steps:
+      - run: echo "docs-only change — real validation not required"
+  bench:
+    name: Bench (data movement gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # bound a wedged runner; parity with pr-validation.yml
+    steps:
+      - run: echo "docs-only change — real validation not required"
