@@ -1,0 +1,40 @@
+# array<map<Point>>.x projection (#172): a map call over an array source makes
+# MAKEM.m an array<map<Point>>; projecting .x yields array<map<int>>, fed to SINK.
+struct Point(
+    int x,
+    int y,
+)
+
+stage MAKEM(
+    in  int        n,
+    out map<Point> m,
+    src py         "stages/makem",
+)
+
+stage SINK(
+    in  map<int>[] ms,
+    out int        total,
+    src py         "stages/sink",
+)
+
+pipeline AP(
+    in  int[] ns,
+    out int   total,
+)
+{
+    map call MAKEM(
+        n = split self.ns,
+    )
+
+    call SINK(
+        ms = MAKEM.m.x,
+    )
+
+    return (
+        total = SINK.total,
+    )
+}
+
+call AP(
+    ns = [1, 2],
+)

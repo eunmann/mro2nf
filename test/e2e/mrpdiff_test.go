@@ -183,6 +183,13 @@ func TestMrpDiff(t *testing.T) {
 		{name: "map_split_file"},
 		{name: "struct_of_file"},
 		{name: "struct_file_array"},
+		// #173: a pipeline output typed as a callable's output struct (MAKEB),
+		// bound whole, with a file leaf — the type walk needs the callable-derived
+		// struct (addCallableStructs) to descend `made` to its `report` file.
+		{name: "callable_struct_file", native: true, runner: true},
+		// #172: array<map<Point>>.x projection — a map call over an array source
+		// makes MAKEM.m an array<map<Point>>; projecting .x yields array<map<int>>.
+		{name: "arr_map_proj", native: true, runner: true},
 		{name: "diamond_min"},
 		{name: "fork_min"},
 		{name: "struct_min"},

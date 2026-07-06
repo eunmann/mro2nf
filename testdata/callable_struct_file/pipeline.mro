@@ -1,0 +1,29 @@
+# A pipeline output typed as a CALLABLE's output struct (MAKEB), bound whole, with
+# a file leaf — exercises addCallableStructs (#173): the type-directed file walk
+# needs the callable-derived struct registered to descend `made` to `report`.
+filetype txt;
+
+stage MAKEB(
+    in  int x,
+    out txt report,
+    out int n,
+    src py  "stages/makeb",
+)
+
+pipeline SB(
+    in  int   x,
+    out MAKEB made,
+)
+{
+    call MAKEB(
+        x = self.x,
+    )
+
+    return (
+        made = MAKEB,
+    )
+}
+
+call SB(
+    x = 7,
+)
