@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -219,7 +220,11 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		return err
 	}
 
-	if err := writeFile(filepath.Join(opts.OutDir, "main.nf"), []byte(generateMain(prog, g))); err != nil {
+	mainNf := generateMain(prog, g)
+	if err := checkDupProcesses(mainNf, "main.nf"); err != nil {
+		return err
+	}
+	if err := writeFile(filepath.Join(opts.OutDir, "main.nf"), []byte(mainNf)); err != nil {
 		return err
 	}
 
@@ -623,17 +628,56 @@ func writeModules(prog *ir.Program, modDir string, g genCtx) error {
 			continue
 		}
 
-		path := filepath.Join(modDir, "stage_"+name+".nf")
-		if err := writeFile(path, []byte(generateStageModule(prog.Stages[name], g))); err != nil {
+		file := "stage_" + name + ".nf"
+		content := generateStageModule(prog.Stages[name], g)
+		if err := checkDupProcesses(content, file); err != nil {
+			return err
+		}
+		if err := writeFile(filepath.Join(modDir, file), []byte(content)); err != nil {
 			return err
 		}
 	}
 
 	for _, name := range sortedKeys(prog.Pipelines) {
-		path := filepath.Join(modDir, "pipe_"+name+".nf")
-		if err := writeFile(path, []byte(generatePipeModule(prog.Pipelines[name], prog, g))); err != nil {
+		file := "pipe_" + name + ".nf"
+		content := generatePipeModule(prog.Pipelines[name], prog, g)
+		if err := checkDupProcesses(content, file); err != nil {
 			return err
 		}
+		if err := writeFile(filepath.Join(modDir, file), []byte(content)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// processDeclRE matches an emitted `process NAME {` declaration.
+var processDeclRE = regexp.MustCompile(`(?m)^process\s+(\S+)\s*\{`)
+
+// checkDupProcesses rejects a generated module that declares two processes with
+// the same name. qualify() length-prefixes only the pipeline segment, so it is
+// injective on the (pipeline, call) pair but NOT once an inventory suffix is
+// appended: qualify(P,C)+"_K" == qualify(P,C+"_K"), and stage SORT's "_MAP"
+// process name equals stage SORT_MAP's bare name — so a call/stage whose name
+// equals a sibling's plus an inventory suffix emits a duplicate `process` that
+// makes the whole generated project fail to parse. Reject it at transpile time
+// with the colliding name, rather than leaving Nextflow to fail opaquely (#176).
+func checkDupProcesses(content, file string) error {
+	seen := make(map[string]bool)
+
+	for _, m := range processDeclRE.FindAllStringSubmatch(content, -1) {
+		name := m[1]
+		if seen[name] {
+			return &apperror.UnsupportedError{
+				Construct: "colliding process name",
+				Detail: fmt.Sprintf(
+					"%s declares two processes named %q — a call or stage name equals a sibling's name plus a suffix (_K/_MAP/...); rename one",
+					file, name),
+			}
+		}
+
+		seen[name] = true
 	}
 
 	return nil
