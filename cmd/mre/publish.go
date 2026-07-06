@@ -103,7 +103,17 @@ func writeManifest(path, pipeline string, outputs []manifestEntry) error {
 	if err != nil {
 		return fmt.Errorf("create manifest: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+
+	// Close the underlying file explicitly and propagate: on the object-store/NFS
+	// work dirs a write-back failure surfaces at close(2), not write(2), so a
+	// swallowed close would ship a truncated manifest that exits 0. The deferred
+	// close is only the error-path safety net (closed guards the double close).
+	closed := false
+	defer func() {
+		if !closed {
+			_ = f.Close()
+		}
+	}()
 
 	gz := gzip.NewWriter(f)
 	if _, err := gz.Write(data); err != nil {
@@ -111,6 +121,11 @@ func writeManifest(path, pipeline string, outputs []manifestEntry) error {
 	}
 
 	if err := gz.Close(); err != nil {
+		return fmt.Errorf("close manifest gzip: %w", err)
+	}
+
+	closed = true
+	if err := f.Close(); err != nil {
 		return fmt.Errorf("close manifest: %w", err)
 	}
 

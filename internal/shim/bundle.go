@@ -314,10 +314,27 @@ func copyFileContents(src, dst string, info os.FileInfo) error {
 	if err != nil {
 		return fmt.Errorf("create %s: %w", dst, err)
 	}
-	defer func() { _ = out.Close() }()
+
+	// Close on the happy path explicitly and propagate the error. The object-store
+	// (s3://) and NFS work dirs this data plane targets report write-back failures
+	// — ENOSPC, EDQUOT, a failed upload — at close(2), not write(2). Swallowing the
+	// close would return nil for a truncated leaf, which mre records in data.json,
+	// exits 0, and every -resume then trusts: a silent divergence. The deferred
+	// close is only the error-path safety net (closed guards the double close).
+	closed := false
+	defer func() {
+		if !closed {
+			_ = out.Close()
+		}
+	}()
 
 	if _, err := io.Copy(out, in); err != nil {
 		return fmt.Errorf("copy %s: %w", src, err)
+	}
+
+	closed = true
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", dst, err)
 	}
 
 	return nil
