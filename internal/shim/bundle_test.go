@@ -273,28 +273,35 @@ func TestCopyTreeDerefSymlink(t *testing.T) {
 	}
 }
 
-// TestCopyTreeSymlinkCycle guards against unbounded recursion: a directory output
-// containing a symlink back to one of its ancestors would otherwise recurse until
-// ENAMETOOLONG, duplicating the tree on the way. CopyTree must instead stop with a
-// cycle error.
-func TestCopyTreeSymlinkCycle(t *testing.T) {
+// TestCopyTreeDanglingSymlinkInDir checks that a dangling symlink INSIDE a copied
+// directory is treated as absent (skipped), not aborting the whole bundle — the
+// same tolerance MarkFiles' top-level guard gives a dangling output path.
+func TestCopyTreeDanglingSymlinkInDir(t *testing.T) {
 	dir := t.TempDir()
 
-	root := filepath.Join(dir, "out")
-	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+	src := filepath.Join(dir, "out")
+	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// out/sub/loop -> out : recursing into loop re-enters out, an ancestor.
-	if err := os.Symlink(root, filepath.Join(root, "sub", "loop")); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "real.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "gone"), filepath.Join(src, "broken")); err != nil {
 		t.Fatal(err)
 	}
 
-	err := shim.CopyTree(root, filepath.Join(dir, "copy"))
-	if err == nil {
-		t.Fatal("CopyTree over a symlink cycle must error, not recurse unbounded")
+	dst := filepath.Join(dir, "copy")
+	if err := shim.CopyTree(src, dst); err != nil {
+		t.Fatalf("CopyTree with a dangling symlink child must skip it, not error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "symlink cycle") {
-		t.Errorf("CopyTree cycle error = %v, want a symlink-cycle error", err)
+
+	if got, err := os.ReadFile(filepath.Join(dst, "real.txt")); err != nil || string(got) != "keep" {
+		t.Errorf("real sibling not copied: %q, %v", got, err)
+	}
+	// The dangling link must not have been reproduced (it would dangle in the next
+	// isolated task) and must not have aborted the copy.
+	if _, err := os.Lstat(filepath.Join(dst, "broken")); !os.IsNotExist(err) {
+		t.Errorf("dangling symlink child was reproduced in the copy: %v", err)
 	}
 }
 

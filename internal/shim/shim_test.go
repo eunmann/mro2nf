@@ -233,6 +233,74 @@ func TestReadStageDefsJoinOverride(t *testing.T) {
 	}
 }
 
+// errCloseBoom is the failing-close sentinel for TestCloseChecked (package-level
+// so the err113 linter does not flag a dynamic errors.New inside the test).
+var errCloseBoom = errors.New("close boom")
+
+// closerFunc adapts a func to io.Closer for closeChecked's test.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
+// TestCloseChecked verifies the close-error propagation helper: a Closer whose
+// Close fails surfaces that error (the whole point of #174), and a clean close
+// returns nil.
+func TestCloseChecked(t *testing.T) {
+	if err := closeChecked(closerFunc(func() error { return errCloseBoom }), "thing"); !errors.Is(err, errCloseBoom) {
+		t.Errorf("closeChecked on a failing close: err = %v, want it to wrap the close error", err)
+	}
+
+	if err := closeChecked(closerFunc(func() error { return nil }), "thing"); err != nil {
+		t.Errorf("closeChecked on a clean close: err = %v, want nil", err)
+	}
+}
+
+// TestCopyTreeSymlinkCycle guards against unbounded recursion: a directory output
+// containing a symlink back to one of its ancestors would otherwise recurse until
+// ENAMETOOLONG. CopyTree must stop with errSymlinkCycle instead. In-package so it
+// can assert the sentinel via errors.Is rather than string-matching the message.
+func TestCopyTreeSymlinkCycle(t *testing.T) {
+	dir := t.TempDir()
+
+	root := filepath.Join(dir, "out")
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// out/sub/loop -> out : recursing into loop re-enters out, an ancestor.
+	if err := os.Symlink(root, filepath.Join(root, "sub", "loop")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CopyTree(root, filepath.Join(dir, "copy"))
+	if !errors.Is(err, errSymlinkCycle) {
+		t.Fatalf("CopyTree over a symlink cycle: err = %v, want errSymlinkCycle", err)
+	}
+}
+
+// TestReadStageDefsJoinBadValue checks that a resource key with the wrong JSON
+// type in the join override is rejected (mrp fails the stage with an unmarshal
+// error), not coerced to a default and silently run.
+func TestReadStageDefsJoinBadValue(t *testing.T) {
+	cases := map[string]string{
+		"string mem_gb":  `{"chunks": [], "join": {"__mem_gb": "big"}}`,
+		"number special": `{"chunks": [], "join": {"__special": 5}}`,
+	}
+
+	for name, defsJSON := range cases {
+		t.Run(name, func(t *testing.T) {
+			meta := t.TempDir()
+			if err := writeRaw(filepath.Join(meta, "_stage_defs"), []byte(defsJSON)); err != nil {
+				t.Fatalf("write _stage_defs: %v", err)
+			}
+
+			_, _, err := readStageDefs(meta)
+			if !errors.Is(err, errJoinBadValue) {
+				t.Fatalf("readStageDefs with a wrong-typed join value: err = %v, want errJoinBadValue", err)
+			}
+		})
+	}
+}
+
 // TestReadStageDefsJoinUnknownKey checks that a non-resource key in the join
 // override is rejected, not silently dropped: mrp fails such a stage with
 // "Invalid parameter in join definition", so honoring the JOIN with the intended

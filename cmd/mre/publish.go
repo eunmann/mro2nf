@@ -104,10 +104,10 @@ func writeManifest(path, pipeline string, outputs []manifestEntry) error {
 		return fmt.Errorf("create manifest: %w", err)
 	}
 
-	// Close the underlying file explicitly and propagate: on the object-store/NFS
-	// work dirs a write-back failure surfaces at close(2), not write(2), so a
-	// swallowed close would ship a truncated manifest that exits 0. The deferred
-	// close is only the error-path safety net (closed guards the double close).
+	// The deferred close is the error-path safety net; the happy path closes via
+	// CloseChecked so a close(2) write-back failure (which the object-store/NFS
+	// work dirs report at close, not write) propagates instead of shipping a
+	// truncated manifest that exits 0.
 	closed := false
 	defer func() {
 		if !closed {
