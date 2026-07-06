@@ -163,6 +163,10 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
+	if err := checkReservedEntryNames(prog, target); err != nil {
+		return err
+	}
+
 	features := opts.featureSet()
 	g := genCtx{
 		entry:   prog.Entry.Callable,
@@ -713,6 +717,53 @@ func resolveEntryFileLeaves(payload map[string]any, params []ir.Param, tbl *type
 	}
 
 	return resolved, nil
+}
+
+// reservedParams returns the Nextflow params the emitted config defines for
+// target. An entry input sharing one of these names would be silently overridden
+// by the config declaration (config params beat script params), so the transpile
+// must reject the collision. Mirror configCommon / outdirConfig / configProcess /
+// configAWSBatch — keep this in sync with what those emit.
+func reservedParams(target Target) map[string]bool {
+	set := map[string]bool{"outdir": true, "job_resources": true}
+
+	if target == TargetAWSBatch || target == TargetLocal {
+		set["aws_queue"] = true
+		set["aws_region"] = true
+	}
+
+	if target == TargetAWSBatch {
+		set["aws_outdir"] = true
+		set["aws_cli_path"] = true
+	}
+
+	if target.isContainer() {
+		set["container"] = true
+	}
+
+	return set
+}
+
+// checkReservedEntryNames rejects an entry input whose name collides with a
+// reserved Nextflow param the emitter defines for target. Left unchecked the
+// collision silently replaces the input's baked default with the config value,
+// always fails the -native launch (the params.containsKey guard), or clobbers the
+// HealthOmics container-image template — all silent divergences from mrp.
+func checkReservedEntryNames(prog *ir.Program, target Target) error {
+	reserved := reservedParams(target)
+
+	for _, p := range entryInParams(prog) {
+		if reserved[p.Name] {
+			return &apperror.UnsupportedError{
+				Construct: "entry input name",
+				Detail: fmt.Sprintf(
+					"%q collides with a reserved Nextflow param the emitter defines for target %q; rename the input",
+					p.Name, target),
+			}
+		}
+	}
+
+	return nil
 }
 
 // entryInParams returns the entry callable's input parameters.
