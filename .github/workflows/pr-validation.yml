@@ -87,6 +87,28 @@ jobs:
       - name: Coverage gate
         run: make cover
 
+  # Single source of truth for the E2E shard fan-out: the shard list is defined
+  # here once, and E2E_SHARD_TOTAL below is DERIVED from its length — so the
+  # matrix and the total can never silently desync (which would drop a fraction
+  # of the suite while CI stayed green). The step also asserts the list is the
+  # contiguous range 0..N-1 that harness shardSkip's modulo partition requires.
+  e2e-config:
+    name: E2E shard config
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.set.outputs.shards }}
+      total: ${{ steps.set.outputs.total }}
+    steps:
+      - id: set
+        run: |
+          shards='[0, 1, 2, 3]'
+          total=$(echo "$shards" | jq 'length')
+          echo "$shards" | jq -e 'to_entries | all(.key == .value)' >/dev/null \
+            || { echo "shard list $shards is not the contiguous range 0..$((total-1))"; exit 1; }
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+
   # Transpiles every fixture, runs it under Nextflow, and diffs the result against
   # the committed real-mrp golden. (Goldens are committed, so mrp is not needed.)
   #
@@ -95,21 +117,22 @@ jobs:
   # E2E_SHARD_* pair partitions the runs by a stable hash of the subtest name
   # (harness shardSkip), so N runners share the load near-linearly. Full
   # coverage is the union of shards, enforced by the `e2e` gate below. To change
-  # the shard count, edit BOTH the matrix list and E2E_SHARD_TOTAL.
+  # the shard count, edit only the e2e-config shard list — the total derives.
   e2e-shard:
     name: E2E shard ${{ matrix.shard }}
+    needs: e2e-config
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false # run every shard so all failures surface in one CI round
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: ${{ fromJSON(needs.e2e-config.outputs.shards) }}
     env:
       # The harnesses skip cleanly on a dev box missing a tool, but in CI a
       # missing prerequisite must FAIL the job, not silently pass it.
       E2E_REQUIRE: "1"
       E2E_SHARD_INDEX: ${{ matrix.shard }}
-      E2E_SHARD_TOTAL: "4"
+      E2E_SHARD_TOTAL: ${{ needs.e2e-config.outputs.total }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
