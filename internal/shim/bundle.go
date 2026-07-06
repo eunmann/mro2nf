@@ -18,6 +18,10 @@ import (
 // avoid truncating a possibly hard-linked source.
 var errDestExists = errors.New("destination already exists")
 
+// errSymlinkCycle is returned by CopyTree when a directory output reaches one of
+// its own ancestors through a symlink, which would otherwise recurse unbounded.
+var errSymlinkCycle = errors.New("directory symlink cycle")
+
 // The bundle is the object-store-portable channel item exchanged between
 // Nextflow processes: a directory holding a JSON payload plus the actual files
 // it references, so Nextflow stages files (not bare absolute paths) across task
@@ -247,6 +251,15 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 // outputs may be directories). It hard-links files when possible (same device)
 // for speed, falling back to a byte copy.
 func CopyTree(src, dst string) error {
+	return copyTree(src, dst, nil)
+}
+
+// copyTree implements CopyTree, threading the set of resolved directory paths
+// already on the recursion stack. A directory output that (via a symlink) points
+// at one of its own ancestors would otherwise recurse until ENAMETOOLONG,
+// duplicating the tree on every pass; catching the repeat real path bounds the
+// recursion to the finite number of distinct directories reachable once.
+func copyTree(src, dst string, ancestors map[string]struct{}) error {
 	// Resolve a symlinked source to its real target first. Nextflow stages inputs
 	// as symlinks, and link(2) does not follow them — hard-linking the symlink
 	// would leave a dangling link once the bundle is staged into another isolated
@@ -266,7 +279,23 @@ func CopyTree(src, dst string) error {
 	}
 
 	if info.IsDir() {
-		return copyDir(src, dst, info)
+		realDir, err := filepath.EvalSymlinks(src)
+		if err != nil {
+			return fmt.Errorf("resolve dir %s: %w", src, err)
+		}
+
+		if _, cycle := ancestors[realDir]; cycle {
+			return fmt.Errorf("copy %s: %w", src, errSymlinkCycle)
+		}
+
+		if ancestors == nil {
+			ancestors = make(map[string]struct{})
+		}
+
+		ancestors[realDir] = struct{}{}
+		defer delete(ancestors, realDir)
+
+		return copyDir(src, dst, info, ancestors)
 	}
 
 	if err := os.Link(src, dst); err == nil {
@@ -284,8 +313,11 @@ func CopyTree(src, dst string) error {
 	return copyFileContents(src, dst, info)
 }
 
-func copyDir(src, dst string, info os.FileInfo) error {
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+func copyDir(src, dst string, info os.FileInfo, ancestors map[string]struct{}) error {
+	// Create the destination writable regardless of the source's mode, then
+	// restore the source mode after populating: a read-only source directory
+	// (e.g. 0555) must still admit its children being written into the copy.
+	if err := os.MkdirAll(dst, dirPerm); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
 	}
 
@@ -295,9 +327,13 @@ func copyDir(src, dst string, info os.FileInfo) error {
 	}
 
 	for _, e := range entries {
-		if err := CopyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors); err != nil {
 			return err
 		}
+	}
+
+	if err := os.Chmod(dst, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("chmod %s: %w", dst, err)
 	}
 
 	return nil

@@ -272,3 +272,113 @@ func TestCopyTreeDerefSymlink(t *testing.T) {
 		t.Errorf("copied content = %q, want %q", got, "staged content")
 	}
 }
+
+// TestCopyTreeSymlinkCycle guards against unbounded recursion: a directory output
+// containing a symlink back to one of its ancestors would otherwise recurse until
+// ENAMETOOLONG, duplicating the tree on the way. CopyTree must instead stop with a
+// cycle error.
+func TestCopyTreeSymlinkCycle(t *testing.T) {
+	dir := t.TempDir()
+
+	root := filepath.Join(dir, "out")
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// out/sub/loop -> out : recursing into loop re-enters out, an ancestor.
+	if err := os.Symlink(root, filepath.Join(root, "sub", "loop")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := shim.CopyTree(root, filepath.Join(dir, "copy"))
+	if err == nil {
+		t.Fatal("CopyTree over a symlink cycle must error, not recurse unbounded")
+	}
+	if !strings.Contains(err.Error(), "symlink cycle") {
+		t.Errorf("CopyTree cycle error = %v, want a symlink-cycle error", err)
+	}
+}
+
+// TestCopyTreeReadOnlyDir checks a read-only (0555) source directory is still
+// copied: the destination must be created writable so its children can be
+// written, then restored to the source mode.
+func TestCopyTreeReadOnlyDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory write permissions, so 0555 would not exercise the fix")
+	}
+
+	dir := t.TempDir()
+
+	src := filepath.Join(dir, "ro")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "child.txt"), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(src, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(src, 0o755) }) // let t.TempDir cleanup remove it
+
+	dst := filepath.Join(dir, "copy")
+	t.Cleanup(func() { _ = os.Chmod(dst, 0o755) }) // 0555 copy would block TempDir cleanup
+	if err := shim.CopyTree(src, dst); err != nil {
+		t.Fatalf("CopyTree of a read-only source dir: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dst, "child.txt"))
+	if err != nil || string(got) != "payload" {
+		t.Fatalf("copied child = %q, %v; want %q", got, err, "payload")
+	}
+
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o555 {
+		t.Errorf("copied dir mode = %o, want 0555 (source mode restored)", info.Mode().Perm())
+	}
+}
+
+// TestReadBundleMissingData checks the failure arm for a bundle directory with no
+// data.json payload.
+func TestReadBundleMissingData(t *testing.T) {
+	if _, err := shim.ReadBundle(t.TempDir()); err == nil {
+		t.Fatal("ReadBundle of a dir without data.json must error")
+	}
+}
+
+// TestReadBundleCorruptJSON checks the failure arm for a data.json that is not
+// valid JSON — a silent nil here would drop the payload.
+func TestReadBundleCorruptJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "data.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := shim.ReadBundle(dir); err == nil {
+		t.Fatal("ReadBundle of corrupt data.json must error")
+	}
+}
+
+// TestMarkFilesDanglingSymlink checks the documented dangling-symlink-as-absent
+// behavior: a declared output that is a symlink to a nonexistent target stats as
+// absent (os.Stat follows the link), so MarkFiles keeps the path unchanged rather
+// than aborting the bundle.
+func TestMarkFilesDanglingSymlink(t *testing.T) {
+	dir := t.TempDir()
+
+	dangling := filepath.Join(dir, "dangling")
+	if err := os.Symlink(filepath.Join(dir, "nonexistent-target"), dangling); err != nil {
+		t.Fatal(err)
+	}
+
+	params := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
+	marked, err := shim.MarkFiles(dir, map[string]any{"f": dangling}, params, fileTable())
+	if err != nil {
+		t.Fatalf("MarkFiles must treat a dangling symlink as absent, not error: %v", err)
+	}
+	if marked["f"] != dangling {
+		t.Errorf("dangling output f = %v, want the unchanged path %q", marked["f"], dangling)
+	}
+}

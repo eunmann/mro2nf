@@ -2,15 +2,22 @@ package shim
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 )
+
+// errJoinUnknownKey reports a non-resource key in a split's join override, which
+// mrp rejects as an invalid join definition rather than silently ignoring.
+var errJoinUnknownKey = errors.New("unknown key in join override")
 
 // prepDirs creates the metadata, files, and per-stage tmp directories for a
 // phase and returns the absolute metadata dir, files dir, and journal prefix
@@ -131,7 +138,14 @@ func readStageDefs(meta string) ([]ChunkDef, Resources, error) {
 		defs = append(defs, splitChunk(c))
 	}
 
-	join, _ := parseResources(sd.Join)
+	// The join override carries only the __-prefixed resource keys; any leftover
+	// data key is a malformed join definition. mrp rejects it ("Invalid parameter
+	// in join definition") rather than silently ignoring it, so match that — a
+	// dropped key would otherwise run the JOIN with unintended resources.
+	join, extra := parseResources(sd.Join)
+	if len(extra) > 0 {
+		return nil, Resources{}, fmt.Errorf("%w: %s", errJoinUnknownKey, strings.Join(slices.Sorted(maps.Keys(extra)), ", "))
+	}
 
 	return defs, join, nil
 }

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -229,6 +230,31 @@ func TestReadStageDefsJoinOverride(t *testing.T) {
 
 	if (join != Resources{}) {
 		t.Errorf("no-join override = %+v, want zero", join)
+	}
+}
+
+// TestReadStageDefsJoinUnknownKey checks that a non-resource key in the join
+// override is rejected, not silently dropped: mrp fails such a stage with
+// "Invalid parameter in join definition", so honoring the JOIN with the intended
+// resources depends on catching the malformed key here.
+func TestReadStageDefsJoinUnknownKey(t *testing.T) {
+	meta := t.TempDir()
+	defsJSON := `{
+		"chunks": [],
+		"join": {"__mem_gb": 4, "value": 7, "extra": true}
+	}`
+	if err := writeRaw(filepath.Join(meta, "_stage_defs"), []byte(defsJSON)); err != nil {
+		t.Fatalf("write _stage_defs: %v", err)
+	}
+
+	_, _, err := readStageDefs(meta)
+	if !errors.Is(err, errJoinUnknownKey) {
+		t.Fatalf("readStageDefs with unknown join keys: err = %v, want errJoinUnknownKey", err)
+	}
+
+	// The message must name the offending keys in sorted order for a usable error.
+	if msg := err.Error(); !strings.Contains(msg, "extra") || !strings.Contains(msg, "value") {
+		t.Errorf("error %q must name the unknown keys", msg)
 	}
 }
 
