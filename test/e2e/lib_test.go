@@ -28,6 +28,7 @@ func TestLibHelpers(t *testing.T) {
 	// keyed FORKBIND-style dir enumerated from forknames.json.
 	writeBundleSidecar(t, filepath.Join(proj, "probe_on"), `{"disabled": true}`)
 	writeBundleSidecar(t, filepath.Join(proj, "probe_off"), `{"disabled": false}`)
+	writeBundleSidecar(t, filepath.Join(proj, "probe_null"), `{"disabled": null}`)
 	writeBundleSidecar(t, filepath.Join(proj, "probe_chunk"), `{"resources": {"threads": 3}}`)
 	writeFileT(t, filepath.Join(proj, "probe_join.json"), `{"mem_gb": 7}`)
 
@@ -43,9 +44,14 @@ func TestLibHelpers(t *testing.T) {
 	probe := `workflow {
     def on = file("${projectDir}/probe_on")
     def off = file("${projectDir}/probe_off")
+    def nullp = file("${projectDir}/probe_null")
     def chunk = file("${projectDir}/probe_chunk")
     def joinf = file("${projectDir}/probe_join.json")
     def forks = file("${projectDir}/probe_forks")
+    // A null disable flag must fail loudly (mrp errors), not coerce to false.
+    def nullResult = "NO_THROW"
+    try { Mro2nf.disabled(nullp) } catch (IllegalArgumentException e) { nullResult = "THREW" }
+    println "R nullDisabled=" + nullResult
     println "R disabled=" + Mro2nf.disabled(on) + "/" + Mro2nf.disabled(off)
     println "R chunkRes=" + Mro2nf.chunkRes(chunk).threads
     println "R parseJson=" + Mro2nf.parseJson(joinf).mem_gb
@@ -59,6 +65,7 @@ func TestLibHelpers(t *testing.T) {
 	out := runNextflowCapture(t, proj, "probe.nf")
 
 	for _, want := range []string{
+		"R nullDisabled=THREW",
 		"R disabled=true/false",
 		"R chunkRes=3",
 		"R parseJson=7",

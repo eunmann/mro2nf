@@ -27,11 +27,25 @@ class Mro2nf {
         (Map) new JsonSlurper().parseText(bundleDir.resolve('data.json').text)
     }
 
+    // requireBool coerces a resolved disable flag to a boolean, failing loudly on
+    // a null or non-boolean value the way mrp does ("disabled is bound to a null
+    // value, which is not permitted", core/stage.go). Groovy's `(boolean)` cast
+    // would silently map null to false, running a branch mrp would have failed —
+    // a silent divergence.
+    private static boolean requireBool(Object value, String what) {
+        if (!(value instanceof Boolean)) {
+            String kind = value == null ? 'null' : value.getClass().getSimpleName()
+            throw new IllegalArgumentException(
+                "disable flag ${what} resolved to ${kind} (${value}); a disabled binding must be a boolean")
+        }
+        return (boolean) value
+    }
+
     // disabled reports a DISABLE gate's resolved flag: the `disabled` field of
     // its output bundle's data.json. Used by the run/skip branch of a
     // conditionally-disabled call.
     static boolean disabled(Path bundleDir) {
-        (boolean) parseSidecar(bundleDir).get('disabled')
+        requireBool(parseSidecar(bundleDir).get('disabled'), "'disabled'")
     }
 
     // disabledField reads a disable-gate boolean directly from a source bundle's
@@ -39,14 +53,14 @@ class Mro2nf {
     // DISABLE task when the gate's ref resolves to a single top-level field: the
     // pipeline input (self.<field>) or an upstream output (CALL.out.<field>) (#59).
     static boolean disabledField(Path jsonFile, String field) {
-        (boolean) ((Map) parseJson(jsonFile)).get(field)
+        requireBool(((Map) parseJson(jsonFile)).get(field), field)
     }
 
     // disabledDir is disabledField for a bundle DIRECTORY (its data.json) rather
     // than the data.json file — used by the keyed disable gate, whose per-fork
     // pipeline args arrive as a staged bundle dir (#59).
     static boolean disabledDir(Path bundleDir, String field) {
-        (boolean) parseSidecar(bundleDir).get(field)
+        requireBool(parseSidecar(bundleDir).get(field), field)
     }
 
     // parseJson parses a JSON file by Path (e.g. a split's joinres.json), keeping
