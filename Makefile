@@ -49,7 +49,7 @@ E2E_PARALLEL ?= 10
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
 test-e2e: build ## Run the e2e suite (golden table, cloud-sim, failure paths, knobs)
-	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestBench|^TestNextflowLint'
+	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestBench|^TestNextflowLint|^TestCellRanger'
 
 test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
 	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
@@ -62,6 +62,9 @@ lint-nf: build ## Static-lint generated Nextflow with `nextflow lint` (needs Nex
 
 bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline
 	$(GO_E2E) -timeout 20m -run '^TestBench'
+
+test-cellranger: build ## Real-CellRanger differential baseline (opt-in; set CELLRANGER_HOME=<extracted bundle>)
+	$(GO_E2E) -timeout 30m -run '^TestCellRanger'
 
 vet: ## Run go vet
 	go vet ./...

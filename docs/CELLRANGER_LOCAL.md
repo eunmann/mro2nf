@@ -105,3 +105,24 @@ cd out && nextflow run main.nf -profile standard   # add -c oversubscribe.config
 
 Then diff `out/results/metrics_summary.csv` against the golden
 `<id>/outs/metrics_summary.csv`.
+
+## Repeatable baseline (opt-in test harness)
+
+The manual flow above is wrapped as an **opt-in** e2e test so CellRanger stays a
+one-command local baseline — never a CI or normal-`make test` gate (the bundle is
+licensed and not committed):
+
+```sh
+CELLRANGER_HOME=~/Downloads/cellranger-10.1.0 make test-cellranger
+```
+
+`test/e2e/cellranger_test.go` (`TestCellRangerDifferential`) **skips** unless
+`CELLRANGER_HOME` points at an extracted bundle. When present it: emits the
+`count` invocation `.mro` (`cellranger testrun --dry`), runs the real Martian
+runner (`mrp`) for the golden, transpiles the **same** `.mro`, runs the generated
+Nextflow (the local profile's `resourceLimits` clamp keeps the 30 GB cloupe join
+from parking), and asserts `metrics_summary.csv` is **byte-identical** between the
+two — then logs the task-shape baseline (stage vs plumbing task counts) for
+tracking optimizer changes over time. Size the golden with
+`CELLRANGER_LOCALCORES` / `CELLRANGER_LOCALMEM`; it runs the pipeline twice, so
+budget a few minutes. It is excluded from `make test-e2e`.
