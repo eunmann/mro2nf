@@ -608,9 +608,15 @@ func TestConvertUnknownField(t *testing.T) {
 // TestConvertGlobalPhaseSelector checks a phase field under the all-stages key
 // maps to the phase-wide selector covering both naming families.
 func TestConvertGlobalPhaseSelector(t *testing.T) {
-	cfg, _, err := overrides.Convert([]byte(`{"": {"chunk.mem_gb": 4}}`), nil)
+	cfg, unmapped, err := overrides.Convert([]byte(`{"": {"chunk.mem_gb": 4}}`), nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
+	}
+
+	// The bare-non-split-main shortfall of a global chunk override is reported
+	// loudly, not silently dropped (#170 review).
+	if !strings.Contains(strings.Join(unmapped, " "), "global chunk override does not reach") {
+		t.Errorf("global chunk override must warn about the bare-main shortfall, got unmapped=%v", unmapped)
 	}
 
 	// The global chunk selector adds the distinctive non-split main markers (_MAP,
@@ -631,9 +637,20 @@ func TestConvertGlobalPhaseSelector(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"SORT_MAINLINE", "SORT_MAINLINE_SPLIT", "SORT_MN_X"} {
+	// The distinctive _KS scatter main IS a chunk process and must be reached.
+	if !match.MatchString("FORK_1_P__SORT_KS") {
+		t.Errorf("phase-wide chunk selector %q must reach the _KS scatter main", sel[1])
+	}
+
+	// The load-bearing anti-over-match property (independent of the exact string):
+	// a global chunk override must NEVER reach the split/join phases, including the
+	// keyed _SPLIT_K/_JOIN_K (the reason globalChunkSuffixes drops the ambiguous _K).
+	for _, name := range []string{
+		"SORT_MAINLINE", "SORT_MAINLINE_SPLIT", "SORT_MN_X",
+		"SORT_SPLIT", "SORT_JOIN", "SORT_SPLIT_K", "SORT_JOIN_K",
+	} {
 		if match.MatchString(name) {
-			t.Errorf("phase-wide selector %q over-matches %q", sel[1], name)
+			t.Errorf("phase-wide chunk selector %q over-matches %q", sel[1], name)
 		}
 	}
 }

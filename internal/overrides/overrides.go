@@ -91,6 +91,17 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 				continue
 			}
 
+			// A GLOBAL (all-stages) chunk override reaches only the main markers
+			// distinctive behind `.*` (_MAP/_MAIN*/_MN/_KS); a plain non-split
+			// stage's bare `<stage>` main (and its fused _K) cannot be matched
+			// behind `.*` without over-matching split/join, so surface the shortfall
+			// loudly instead of silently under-applying. Target such a stage by name.
+			if key == "" && phase == phaseChunk {
+				unmapped = append(unmapped, fmt.Sprintf(
+					"%s.%s: global chunk override does not reach a plain non-split stage's bare main; target it by stage name",
+					orAll(key), field))
+			}
+
 			// Keyed per (stage, phase, base) — NOT the call set — so precedence
 			// between two keys touching the same stage is decided by rank, exactly
 			// as before the fused-family unification. The selector covers every
@@ -292,7 +303,11 @@ func mainPhaseSuffixes(suffixes []string) []string {
 	out := make([]string, 0, len(suffixes))
 
 	for _, s := range suffixes {
-		if strings.HasPrefix(s, "_SPLIT") || strings.HasPrefix(s, "_JOIN") || s == "_SP" || s == "_JN" {
+		// Exclude every split/join marker by PREFIX (matching withRoot), so a
+		// future keyed fused split/join suffix (e.g. _SP_K) is also excluded rather
+		// than silently misclassified as a main.
+		if strings.HasPrefix(s, "_SPLIT") || strings.HasPrefix(s, "_JOIN") ||
+			strings.HasPrefix(s, "_SP") || strings.HasPrefix(s, "_JN") {
 			continue
 		}
 
