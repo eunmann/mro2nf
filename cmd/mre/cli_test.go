@@ -613,6 +613,25 @@ func TestRunForkBindElementFlagConflicts(t *testing.T) {
 	}
 }
 
+// TestRunForkBindNegativeIndex checks that a -index below the -1 "unset" sentinel
+// is rejected, not silently folded into the full-collection write — which would
+// drop -o and write the whole collection into -chunkdir instead.
+func TestRunForkBindNegativeIndex(t *testing.T) {
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
+		`{"v":{"ref":{"kind":"self","id":"vals","output":""},"split":true}}`)
+	pipe := filepath.Join(dir, "pipeargs")
+	writeTestBundle(t, pipe, map[string]any{"vals": []any{1}})
+
+	argv := []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe,
+		"-index=-2", "-o", filepath.Join(dir, "out"),
+	}
+	if err := run(t.Context(), argv); !errors.Is(err, errForkIndexNegative) {
+		t.Errorf("forkbind -index=-2: err = %v, want errForkIndexNegative", err)
+	}
+}
+
 // TestRunForkBindElementTypes locks the byte-identity invariant the O(1) path
 // depends on across element shapes — a float, a unicode string, and a nested
 // struct — since WriteBundle's type coercion is what normalizes the driver's

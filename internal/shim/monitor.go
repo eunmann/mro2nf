@@ -57,10 +57,11 @@ func (m *memMonitor) watch(ctx context.Context) {
 			if rss > m.limitBytes {
 				// Only kill while our child — the process-group leader, whose pid
 				// equals the pgid — is still alive and leading its own group. Once
-				// it has exited (and been reaped by Wait), its pid can be recycled;
-				// this guard, together with stop() joining before the child is
-				// reaped, makes a SIGKILL to a recycled pgid vanishingly unlikely
-				// (the check and kill are not atomic, so not strictly impossible).
+				// it has exited (and been reaped by Wait), its pid can be recycled.
+				// The run reaps (cmd.Wait) before stop() cancels this watch, so a
+				// tick can land after the reap; this pgrp check is the actual guard
+				// that keeps a SIGKILL to a recycled pgid vanishingly unlikely (the
+				// check and kill are not atomic, so not strictly impossible).
 				if procPgrp(m.pgid) != m.pgid {
 					return
 				}
