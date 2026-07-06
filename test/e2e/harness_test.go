@@ -110,6 +110,15 @@ func transpile(t *testing.T, fixture string, extra ...string) string {
 // bench/ pipelines).
 func transpileDir(t *testing.T, dir string, extra ...string) string {
 	t.Helper()
+
+	return transpileMRO(t, dir, "pipeline.mro", extra...)
+}
+
+// transpileMRO is transpileDir for a named entry .mro inside the fixture dir —
+// used by fixtures that ship several top-level invocations of one pipeline
+// (e.g. the bench two-width variants pipeline_w4.mro / pipeline_w16.mro).
+func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
+	t.Helper()
 	buildBinaries(t)
 
 	proj := t.TempDir()
@@ -126,7 +135,7 @@ func transpileDir(t *testing.T, dir string, extra ...string) string {
 	}
 
 	args = append(args, extra...)
-	args = append(args, filepath.Join(dir, "pipeline.mro"))
+	args = append(args, filepath.Join(dir, mro))
 
 	cmd := exec.Command(filepath.Join(root, "mro2nf"), args...)
 	cmd.Dir = root

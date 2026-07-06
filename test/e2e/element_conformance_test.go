@@ -260,7 +260,7 @@ func decodeProbeElements(t *testing.T, out, prefix string) [][]byte {
 
 	var elems [][]byte
 
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if !strings.HasPrefix(line, prefix) {
 			continue
 		}
@@ -314,8 +314,10 @@ func assertForkbindParity(t *testing.T, dataJSON, field, mapMode string, elems [
 		runMre(t, work, "forkbind", "-spec", specPath, "-pipeargs", pipeargs,
 			"-elementfile", elemPath, "-o", byElem)
 
-		idxArgs := []string{"forkbind", "-spec", specPath, "-pipeargs", pipeargs,
-			"-index", strconv.Itoa(i), "-o", byIndex}
+		idxArgs := []string{
+			"forkbind", "-spec", specPath, "-pipeargs", pipeargs,
+			"-index", strconv.Itoa(i), "-o", byIndex,
+		}
 		if mapMode != "" {
 			idxArgs = append(idxArgs, "-mapmode", mapMode)
 		}

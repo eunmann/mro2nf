@@ -29,9 +29,11 @@ size + total data). It must never scale super-linearly with fork width N or
 chunk count M, and per-fork/per-chunk bookkeeping tasks are a smell — the
 split triad (split → per-chunk main → join, per fork) is the only intrinsic
 fan-out; it matches Martian's own jobs 1:1. When judging a change, measure
-tasks and per-instance work against `mrp`'s job count at two widths (see the
-forks×chunks fixtures); constant overhead is acceptable, scaling overhead is
-a bug.
+tasks and per-instance work against `mrp`'s job count at two widths — `make
+bench` does exactly this: the `bench/forks` and `bench/split` fixtures run at
+two widths (default and `-native` lanes) and the gate fails if the plumbing
+task count differs between widths. Constant overhead is acceptable, scaling
+overhead is a bug.
 
 ## Architecture
 
