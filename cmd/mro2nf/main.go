@@ -212,7 +212,7 @@ func loadProgram(src, mroPath string) (*ir.Program, error) {
 		return nil, fmt.Errorf("transpile %s: %w", src, err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, filepath.SplitList(mroPath))
 	if err != nil {
 		return nil, fmt.Errorf("transpile %s: %w", src, err)
 	}
@@ -232,7 +232,7 @@ func loadOverrideProgram(mro, mroPath string) (*ir.Program, error) {
 		return nil, fmt.Errorf("parse pipeline %s: %w", mro, err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, filepath.SplitList(mroPath))
 	if err != nil {
 		return nil, fmt.Errorf("lower pipeline %s: %w", mro, err)
 	}
@@ -346,22 +346,34 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
 }
 
 // emitProgram fills in the source-derived Options fields (absolute tool paths,
+// stageCodePaths maps each stage to its absolute stage-code path. SrcPath is
+// already resolved against the declaring file's directory by the frontend (an
+// @included stage's src is relative to the included file, NOT the entry .mro), so
+// this only absolutizes it against the process cwd — it must NOT re-join it
+// against the entry .mro's directory (which would double-prefix an @included
+// stage's already-resolved relative path).
+func stageCodePaths(prog *ir.Program) (map[string]string, error) {
+	code := make(map[string]string, len(prog.Stages))
+
+	for name, s := range prog.Stages {
+		abs, err := filepath.Abs(s.SrcPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve stage %s src: %w", name, err)
+		}
+
+		code[name] = abs
+	}
+
+	return code, nil
+}
+
 // MROFile/MRODir, StageCode) and emits the Nextflow project for prog.
 func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 	mroDir := filepath.Dir(src)
 
-	code := make(map[string]string, len(prog.Stages))
-
-	for name, s := range prog.Stages {
-		// SrcPath is already resolved against the declaring file's directory by the
-		// frontend (an @included stage's src is relative to the included file, not
-		// this entry .mro); just make it absolute against the process cwd.
-		abs, err := filepath.Abs(s.SrcPath)
-		if err != nil {
-			return fmt.Errorf("resolve stage %s src: %w", name, err)
-		}
-
-		code[name] = abs
+	code, err := stageCodePaths(prog)
+	if err != nil {
+		return err
 	}
 
 	opts.Mre = absOrSelf(opts.Mre)

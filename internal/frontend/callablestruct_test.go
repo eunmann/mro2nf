@@ -44,7 +44,7 @@ func lowerMakeTop(t *testing.T) *ir.Program {
 		t.Fatalf("parse: %v", err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower: %v", err)
 	}

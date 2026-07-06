@@ -11,8 +11,10 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// Lower converts a type-checked Martian AST into the transpiler IR.
-func Lower(ast *syntax.Ast) (*ir.Program, error) {
+// Lower converts a type-checked Martian AST into the transpiler IR. mroPaths is
+// the -mropath search list, used to resolve stage src paths exactly as Martian
+// does (declaring-file dir, then the search paths).
+func Lower(ast *syntax.Ast, mroPaths []string) (*ir.Program, error) {
 	prog := &ir.Program{
 		Stages:    make(map[string]*ir.Stage, len(ast.Stages)),
 		Pipelines: make(map[string]*ir.Pipeline, len(ast.Pipelines)),
@@ -20,7 +22,7 @@ func Lower(ast *syntax.Ast) (*ir.Program, error) {
 	}
 
 	for _, s := range ast.Stages {
-		prog.Stages[s.Id] = lowerStage(s)
+		prog.Stages[s.Id] = lowerStage(s, mroPaths)
 	}
 
 	for _, p := range ast.Pipelines {
@@ -46,13 +48,20 @@ func Lower(ast *syntax.Ast) (*ir.Program, error) {
 	return prog, nil
 }
 
-// resolveSrcPath resolves a stage's relative src path against the directory of
-// the FILE THAT DECLARES the stage (Martian's rule — SrcParam.FindPath), not the
-// entry .mro's directory: an @included stage's src is relative to the included
-// file. Absolute paths pass through. The result may still be relative when the
-// declaring file's own path is relative; the emitter absolutizes it against the
-// process cwd, exactly as Martian's relative paths resolve.
-func resolveSrcPath(src *syntax.SrcParam) string {
+// resolveSrcPath resolves a stage's src path the way Martian does — via
+// SrcParam.FindPath: an absolute path, else the directory of the FILE THAT
+// DECLARES the stage (not the entry .mro's dir — an @included stage's src is
+// relative to the included file), else the -mropath search paths. When the stage
+// code is absent at transpile time (mro2nf parses with checkSrc=false, so it may
+// run without the code present) FindPath cannot locate it; fall back to Martian's
+// primary rule — the declaring file's directory — so the baked path is correct
+// once the code is in place. The result may be relative; the emitter absolutizes
+// it against the process cwd, exactly as Martian's relative paths resolve.
+func resolveSrcPath(src *syntax.SrcParam, mroPaths []string) string {
+	if resolved, err := src.FindPath(mroPaths); err == nil {
+		return resolved
+	}
+
 	if filepath.IsAbs(src.Path) || src.Node.Loc.File == nil {
 		return src.Path
 	}
@@ -60,7 +69,7 @@ func resolveSrcPath(src *syntax.SrcParam) string {
 	return filepath.Join(filepath.Dir(src.Node.Loc.File.FullPath), src.Path)
 }
 
-func lowerStage(s *syntax.Stage) *ir.Stage {
+func lowerStage(s *syntax.Stage, mroPaths []string) *ir.Stage {
 	st := &ir.Stage{
 		Name:     s.Id,
 		In:       lowerInParams(s.InParams),
@@ -72,7 +81,7 @@ func lowerStage(s *syntax.Stage) *ir.Stage {
 
 	if s.Src != nil {
 		st.Lang = ir.Lang(s.Src.Lang)
-		st.SrcPath = resolveSrcPath(s.Src)
+		st.SrcPath = resolveSrcPath(s.Src, mroPaths)
 		st.SrcArgs = s.Src.Args
 	}
 

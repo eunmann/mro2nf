@@ -92,7 +92,7 @@ func lowerNamesFixture(t *testing.T, fixture string) *ir.Program {
 		t.Fatalf("parse %s: %v", fixture, err)
 	}
 
-	prog, err := frontend.Lower(ast)
+	prog, err := frontend.Lower(ast, nil)
 	if err != nil {
 		t.Fatalf("lower %s: %v", fixture, err)
 	}
