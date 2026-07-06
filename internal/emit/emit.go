@@ -660,7 +660,7 @@ var (
 func includeBoundNames(body string) []string {
 	var names []string
 
-	for _, part := range strings.Split(body, ";") {
+	for part := range strings.SplitSeq(body, ";") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
