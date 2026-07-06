@@ -186,6 +186,16 @@ func (r *resolver) targets(key string) ([]string, int, string) {
 			return nil, kindExpand, "names a sub-pipeline with no stages"
 		}
 
+		// A pipeline key expands to its leaf calls, resolved through the global
+		// callStage map — which is last-writer under a collision. If any leaf call
+		// name is ambiguous, the expansion would silently drop the other stage(s),
+		// so report it rather than mis-target (mirrors the direct-key guard above).
+		for _, c := range lv {
+			if r.collisions[c] {
+				return nil, kindExpand, "expands through an ambiguous call name (bound to different stages in multiple pipelines); qualify or rename"
+			}
+		}
+
 		return r.stagesOf(lv), kindExpand, ""
 	}
 

@@ -247,6 +247,14 @@ func mapField(field string, val json.RawMessage) (string, string, string, string
 			return phase, base, "", "value is not a number"
 		}
 
+		// 0 is mrp's "use the site default" sentinel (GetSystemReqs fills in
+		// ThreadsPerJob/MemGBPerJob), which varies by jobmode/profile and has no
+		// static Nextflow equivalent — emitting `memory = '0 GB'` / `cpus = 0` would
+		// pin the stage to nothing, so report it instead of diverging silently.
+		if n == 0 {
+			return phase, base, "", "0 requests mrp's site default resource; no static Nextflow equivalent"
+		}
+
 		// mrp treats a negative request as a sentinel ("as much as possible" —
 		// magnitude on remote schedulers), so normalize to the magnitude; Nextflow
 		// has no negative directive and would reject `memory = '-8 GB'` / `cpus = -4`
@@ -261,8 +269,15 @@ func mapField(field string, val json.RawMessage) (string, string, string, string
 		}
 
 		// cpus must be a positive integer; round a fractional (centicore) thread
-		// request up so the stage is not under-provisioned.
-		return phase, base, "cpus = " + strconv.FormatInt(int64(math.Ceil(n)), 10), ""
+		// request up so the stage is not under-provisioned. Guard the int64
+		// conversion: a finite-but-absurd value would otherwise wrap to a negative
+		// cpu count — the very directive this normalization prevents.
+		ceil := math.Ceil(n)
+		if ceil > math.MaxInt64 {
+			return phase, base, "", "threads value is too large to render as a cpu count"
+		}
+
+		return phase, base, "cpus = " + strconv.FormatInt(int64(ceil), 10), ""
 	case "vmem_gb":
 		return phase, base, "", "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
 	case "profile":

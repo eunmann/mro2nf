@@ -766,3 +766,57 @@ func TestConvertSelectorEscapesRawSegment(t *testing.T) {
 		t.Errorf("selector is not a valid regex: %v (%q)", err, sel[1])
 	}
 }
+
+// TestConvertResourceValueReported guards the #175 review: the 0 sentinel (mrp's
+// "use the site default") and a finite-but-absurd threads value have no faithful
+// static directive, so they are reported, not silently emitted as a zero or an
+// overflowed-negative cpu count.
+func TestConvertResourceValueReported(t *testing.T) {
+	cases := []struct{ in, note string }{
+		{`{"P.S": {"mem_gb": 0}}`, "site default"},
+		{`{"P.S": {"threads": 0}}`, "site default"},
+		{`{"P.S": {"threads": 1e19}}`, "too large"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			cfg, unmapped, err := overrides.Convert([]byte(tc.in), nil)
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			if strings.Contains(cfg, "memory =") || strings.Contains(cfg, "cpus =") {
+				t.Errorf("value must be reported, not emitted as a directive:\n%s", cfg)
+			}
+			if !strings.Contains(strings.Join(unmapped, " "), tc.note) {
+				t.Errorf("want an unmapped note containing %q, got %v", tc.note, unmapped)
+			}
+		})
+	}
+}
+
+// TestConvertCallNameCollisionViaPipeline guards the #175 review: a collision
+// buried under a PIPELINE-scoped key (which expands through the collided call
+// name) must also be reported ambiguous, not silently resolved to one stage.
+func TestConvertCallNameCollisionViaPipeline(t *testing.T) {
+	prog := &ir.Program{
+		Stages: map[string]*ir.Stage{"ALIGN": {Name: "ALIGN"}, "SORT": {Name: "SORT"}},
+		Pipelines: map[string]*ir.Pipeline{
+			"SUBA": {Name: "SUBA", Calls: []ir.Call{{Name: "X", Callable: "ALIGN"}}},
+			"SUBB": {Name: "SUBB", Calls: []ir.Call{{Name: "X", Callable: "SORT"}}},
+			"MID":  {Name: "MID", Calls: []ir.Call{{Name: "SUBA", Callable: "SUBA"}, {Name: "SUBB", Callable: "SUBB"}}},
+			"TOP":  {Name: "TOP", Calls: []ir.Call{{Name: "MID", Callable: "MID"}}},
+		},
+		Entry: &ir.EntryCall{Callable: "TOP"},
+	}
+
+	cfg, unmapped, err := overrides.Convert([]byte(`{"MID": {"mem_gb": 8}}`), prog)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if !strings.Contains(strings.Join(unmapped, " "), "ambiguous") {
+		t.Errorf("a pipeline key expanding through a collision must be reported ambiguous, got %v", unmapped)
+	}
+	if strings.Contains(cfg, "withName") {
+		t.Errorf("no selector should be emitted for the ambiguous expansion:\n%s", cfg)
+	}
+}
