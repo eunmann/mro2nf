@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/frontend"
+	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // TestLowerRegistersCallableStructs guards #173: a param typed by a callable name
@@ -67,20 +69,49 @@ pipeline TOP(
 		t.Errorf("MAKE.data must be a file leaf so it is staged/published")
 	}
 
-	// The pipeline output `made` is typed by the callable, so its file leaves
-	// resolve through the registered struct rather than being lost.
+	// Cross the seam into the type-walk, the behavior #173 is actually about: the
+	// pipeline output `made` is typed by the callable, so it must publish as the
+	// bare name `made` (a directory) and its inner `data` file leaf must be
+	// rewritten — not published as `made.MAKE` with the file lost.
 	top := prog.Pipelines["TOP"]
 	if top == nil {
 		t.Fatal("pipeline TOP not lowered")
 	}
-	var madeTyped bool
+
+	var made ir.Param
 	for _, o := range top.Out {
-		if o.Name == "made" && o.BaseType == "MAKE" {
-			madeTyped = true
+		if o.Name == "made" {
+			made = o
 		}
 	}
-	if !madeTyped {
-		t.Errorf("TOP.made should be typed MAKE; out = %+v", top.Out)
+	if made.Name == "" {
+		t.Fatalf("TOP.made not found in out params: %+v", top.Out)
+	}
+
+	tbl := types.NewTable(prog.Structs)
+
+	// Without the registered struct, OutFilename falls to the `name.type` arm and
+	// publishes `made.MAKE`.
+	if got := types.OutFilename(made, tbl.IsStruct); got != "made" {
+		t.Errorf("OutFilename(made) = %q, want %q (callable struct must be recognized)", got, "made")
+	}
+
+	// The walk must descend the struct and rewrite the inner `data` file leaf.
+	var rewritten []string
+	out, err := tbl.Apply([]ir.Param{made}, map[string]any{
+		"made": map[string]any{"data": "in/f", "count": float64(5)},
+	}, func(path string) (string, error) {
+		rewritten = append(rewritten, path)
+		return "staged/" + path, nil
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(rewritten) != 1 || rewritten[0] != "in/f" {
+		t.Errorf("walk rewrote %v, want the single leaf [in/f] (struct must descend into `data`)", rewritten)
+	}
+	if inner, _ := out["made"].(map[string]any); inner["data"] != "staged/in/f" {
+		t.Errorf("made.data = %v, want the rewritten path (leaf not staged)", out["made"])
 	}
 }
 
