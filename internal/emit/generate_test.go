@@ -7,41 +7,48 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// TestGenDisabledWiringTaskBranch pins genDisabledWiring's DISABLE-task branch,
-// which no committed fixture reaches (every fixture's plain-layer disable flag
-// is a single top-level field, so nativeDisableGate folds the task away): a
-// PROJECTED disable ref (CFG.cfg.flag — a nested output path) is not
-// driver-gateable, so needsDisableTask forces the standalone DISABLE bind and
-// the run/skip branch joins on its output. The exact-text pin machine-checks
-// the template's interpolations (call name, BIND, DISABLE, callee, null
-// bundle) in their rendered positions.
-func TestGenDisabledWiringTaskBranch(t *testing.T) {
+// TestGenDisabledWiringNestedProjection pins #209: a PROJECTED disable ref
+// (CFG.cfg.flag — a nested output path) is read natively on the driver, NOT via a
+// standalone DISABLE task. A valid disable flag is always a scalar bool, so the
+// projection is pure struct navigation the driver walks with Mro2nf.disabledField
+// over the upstream channel's sidecar. The exact-text pin machine-checks the
+// native branch's interpolations (call name, BIND, source channel, dotted field
+// path, callee, null bundle) — and that no DISABLE process is emitted.
+func TestGenDisabledWiringNestedProjection(t *testing.T) {
+	// A disabled call to a SUB-PIPELINE (can't fuse bind+main into one task, so it
+	// stays kindPlainBind and uses genDisabledWiring) — this is CellRanger's shape
+	// (e.g. DISABLE_..__COUNT_ANALYZER gates a sub-pipeline on config.disable_count).
 	prog := lowerMRO(t, `
 struct Cfg(bool flag,)
 stage CFG(out Cfg cfg, src py "s/cfg",)
-stage WORK(in int x, out int y, src py "s/work",)
+stage LEAF(in int x, out int y, src py "s/leaf",)
+pipeline SUB(in int x, out int y,){
+    call LEAF(x = self.x,)
+    return (y = LEAF.y,)
+}
 pipeline P(in int x, out int y,){
     call CFG()
-    call WORK(x = self.x,) using (disabled = CFG.cfg.flag,)
-    return (y = WORK.y,)
+    call SUB(x = self.x,) using (disabled = CFG.cfg.flag,)
+    return (y = SUB.y,)
 }
 call P(x = 1,)
 `)
 
 	p := prog.Pipelines["P"]
 
-	c, ok := callByName(p, "WORK")
+	c, ok := callByName(p, "SUB")
 	if !ok {
-		t.Fatalf("no WORK call in pipeline P")
+		t.Fatalf("no SUB call in pipeline P")
 	}
 
-	if src, field, native := nativeDisableGate(c); native {
-		t.Fatalf("projected disable ref: nativeDisableGate = (%q, %q, true), want the DISABLE-task fallback", src, field)
+	src, field, native := nativeDisableGate(c)
+	if !native || src != "ch_CFG" || field != "cfg.flag" {
+		t.Fatalf("nested projected disable ref: nativeDisableGate = (%q, %q, %t), want (ch_CFG, cfg.flag, true)", src, field, native)
 	}
 
-	cp := buildPlan(prog, featureSet{}).pipes["P"].calls["WORK"]
-	if cp.kind != kindPlainBind || !cp.disableTask {
-		t.Fatalf("projected-disable leaf: kind = %d, disableTask = %t; want kindPlainBind with a DISABLE task",
+	cp := buildPlan(prog, featureSet{}).pipes["P"].calls["SUB"]
+	if cp.kind != kindPlainBind || cp.disableTask {
+		t.Fatalf("nested-projected-disabled sub-pipeline: kind = %d, disableTask = %t; want kindPlainBind with NO DISABLE task",
 			cp.kind, cp.disableTask)
 	}
 
@@ -49,18 +56,21 @@ call P(x = 1,)
 
 	genDisabledWiring(&b, p.Name, c, callAlias(p.Name, c.Name))
 
-	want := `    DISABLE_1_P__WORK(pa, ch_CFG, types, file("${projectDir}/_assets/bindspecs/DISABLE_1_P__WORK.json"))
-    g_WORK = BIND_1_P__WORK.out.combine(DISABLE_1_P__WORK.out).branch { data, leaves, d ->
-        def off = Mro2nf.disabled(d)
+	want := `    g_SUB = BIND_1_P__SUB.out.combine(ch_CFG).branch { data, leaves, gd, gl ->
+        def off = Mro2nf.disabledField(gd, 'cfg.flag')
         run: !off
         skip: off
     }
-    r_WORK = wf_1_P__WORK(g_WORK.run.map { data, leaves, d -> tuple(data, leaves) })
-    s_WORK = g_WORK.skip.map { data, leaves, d -> tuple(file("${projectDir}/nulls/1_P__WORK/data.json"), []) }
-    ch_WORK = r_WORK.mix(s_WORK).first()
+    r_SUB = wf_1_P__SUB(g_SUB.run.map { data, leaves, gd, gl -> tuple(data, leaves) })
+    s_SUB = g_SUB.skip.map { data, leaves, gd, gl -> tuple(file("${projectDir}/nulls/1_P__SUB/data.json"), []) }
+    ch_SUB = r_SUB.mix(s_SUB).first()
 `
 	if diff := cmp.Diff(want, b.String()); diff != "" {
-		t.Errorf("DISABLE-task wiring mismatch (-want +got):\n%s", diff)
+		t.Errorf("native nested-disable wiring mismatch (-want +got):\n%s", diff)
+	}
+
+	if strings.Contains(b.String(), "DISABLE_") {
+		t.Errorf("nested projected disable must not emit a DISABLE process:\n%s", b.String())
 	}
 }
 

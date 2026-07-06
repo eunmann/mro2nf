@@ -1529,18 +1529,35 @@ func nativeDisableGate(c ir.Call) (string, string, bool) {
 
 	switch r.Kind {
 	case ir.RefKindSelf:
-		// self.<field>: the whole referenced input is the flag (no sub-path).
-		if r.Output == "" {
-			return "pa", r.ID, true
-		}
+		// self.<path>: the flag is a field of the pipeline args (pa) — the whole
+		// referenced input (Output == "") or a nested struct path within it. Both
+		// are readable from pa's sidecar on the driver (#209).
+		return "pa", joinRefPath(r.ID, r.Output), true
 	case ir.RefKindCall:
-		// CALL.out.<field>: a single (non-nested) output field.
-		if r.Output != "" && !strings.Contains(r.Output, ".") {
+		// CALL.out.<path>: a field (possibly nested, e.g. config.disable_count) of
+		// an upstream output, readable from that call's channel. A valid disable
+		// ref always resolves to a scalar bool, so the path is pure struct
+		// navigation with no map/array projection (Mro2nf walks it directly). An
+		// empty Output would be the whole output bundle, not a bool, so it keeps
+		// the DISABLE-task path.
+		if r.Output != "" {
 			return "ch_" + r.ID, r.Output, true
 		}
 	}
 
 	return "", "", false
+}
+
+// joinRefPath renders a ref's dotted read path from its ID and projection Output:
+// the ID alone for a whole-value ref, else ID.Output. Used to address a disable
+// flag inside a sidecar (self.<id> is a top-level pipeline-args field; a nested
+// self.<id>.<output> descends the struct).
+func joinRefPath(id, output string) string {
+	if output == "" {
+		return id
+	}
+
+	return id + "." + output
 }
 
 // calleeModule returns the exported workflow name and module path for a
