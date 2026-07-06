@@ -37,6 +37,13 @@ func phaseSel(stage, plain, qual, fused string) string {
 	return "(" + stage + "(" + plain + "|" + plain + "_K)|STAGE_[0-9]+_" + qual + fused + ")"
 }
 
+// chunkSel is the expected 'chunk'-phase selector: the main-phase family, which
+// spans a split stage's _MAIN and a non-split stage's bare/_MAP/_K main plus the
+// _KS scatter (#170), so the bare/_K entries are optional (?) not required.
+func chunkSel(stage, qual string) string {
+	return "(" + stage + "(_MAP|_MAIN|_MAIN_K)?|STAGE_[0-9]+_" + qual + "(_MN|_K)?|FORK_[0-9]+_" + qual + "_KS)"
+}
+
 // sampleProgram builds a two-level pipeline for the pipeline-scope tests:
 // TOP calls sub-pipeline SUB (stages ALIGN, SORT) and stage COLLATE.
 func sampleProgram() *ir.Program {
@@ -115,7 +122,7 @@ func TestConvertPipelineScopePhase(t *testing.T) {
 	}
 
 	for _, stage := range []string{"ALIGN", "SORT"} {
-		want := "withName: '" + phaseSel(stage, "_MAIN", "SUB__"+stage, "_MN") + "' { memory = '8 GB' }"
+		want := "withName: '" + chunkSel(stage, "SUB__"+stage) + "' { memory = '8 GB' }"
 		if !strings.Contains(cfg, want) {
 			t.Errorf("chunk.mem_gb must reach %s's main-phase selector:\n%s", stage, cfg)
 		}
@@ -192,8 +199,8 @@ func TestConvertSpecificPhaseWinsOverGlobal(t *testing.T) {
 		t.Fatalf("Convert: %v", err)
 	}
 
-	broad := strings.Index(cfg, `withName: '.*(_MAIN|_MAIN_K|_MN)'`)
-	specific := strings.Index(cfg, `withName: '(ALIGN(_MAIN|_MAIN_K)|`)
+	broad := strings.Index(cfg, `withName: '.*(_MAP|_MAIN|_MAIN_K|_MN|_KS)'`)
+	specific := strings.Index(cfg, `withName: '(ALIGN(_MAP|_MAIN|_MAIN_K)?|`)
 
 	if broad < 0 || specific < 0 {
 		t.Fatalf("expected both a phase-wide and a specific selector:\n%s", cfg)
@@ -285,7 +292,7 @@ func TestConvert(t *testing.T) {
 		"process {",
 		"memory = '2 GB'", // the "" key -> global default
 		"withName: '" + stageSel("ALIGN", ".+__ALIGN") + "' { memory = '8 GB'; cpus = 4 }",
-		"withName: '" + phaseSel("ALIGN", "_MAIN", ".+__ALIGN", "_MN") + "' { memory = '16 GB' }",               // chunk.* -> main phase
+		"withName: '" + chunkSel("ALIGN", ".+__ALIGN") + "' { memory = '16 GB' }",                               // chunk.* -> main phase
 		"withName: '" + phaseSel("COLLATE", "_JOIN", ".+__COLLATE", "_JN") + "' { memory = '32 GB'; cpus = 2 }", // join.* -> join phase
 		"withName: '" + phaseSel("SORT", "_SPLIT", ".+__SORT", "_SP") + "' { memory = '6 GB' }",                 // split.* -> split phase
 	} {
@@ -451,12 +458,14 @@ func TestConvertSelectorsMatchGeneratedNames(t *testing.T) {
 	}
 
 	// Process name -> the override phases that must reach it ("" = stage-level).
+	// mrp runs a non-split stage's main job as phase 'chunk', so a chunk override
+	// must reach the non-split main processes too — not only the split _MAIN (#170).
 	names := map[string][]string{
-		"ALIGN":                  {""}, // plain non-split stage
-		"ALIGN_MAP":              {""}, // keyed non-split variant
-		"STAGE_4_PIPE__ALIGN":    {""}, // fused non-split call (#16)
-		"STAGE_4_PIPE__ALIGN_K":  {""}, // keyed fused bind+main (#99)
-		"FORK_4_PIPE__ALIGN_KS":  {""}, // keyed element scatter running main (#99)
+		"ALIGN":                  {"", "chunk"}, // plain non-split main
+		"ALIGN_MAP":              {"", "chunk"}, // keyed non-split main
+		"STAGE_4_PIPE__ALIGN":    {"", "chunk"}, // fused non-split call main (#16)
+		"STAGE_4_PIPE__ALIGN_K":  {"", "chunk"}, // keyed fused bind+main (#99)
+		"FORK_4_PIPE__ALIGN_KS":  {"", "chunk"}, // keyed element scatter running main (#99)
 		"ALIGN_SPLIT":            {"", "split"},
 		"ALIGN_SPLIT_K":          {"", "split"},
 		"STAGE_4_PIPE__ALIGN_SP": {"", "split"}, // fused bind+split
@@ -473,22 +482,24 @@ func TestConvertSelectorsMatchGeneratedNames(t *testing.T) {
 		"ALIGN_READS_MAIN":       nil,
 	}
 
-	// Map each selector back to its phase by the distinctive plain process it
-	// full-matches (only the stage-level selector matches the bare stage name).
+	// Map each selector back to its phase. The stage-level ("") selector is the
+	// only one spanning both split and join; chunk now also matches the bare main
+	// (a non-split stage's main runs as chunk), so classify by span, not by the
+	// bare name alone.
 	phaseOf := map[string]string{}
 
 	for _, m := range sels {
 		re := regexp.MustCompile("^(?:" + m[1] + ")$")
 
 		switch {
-		case re.MatchString("ALIGN"):
+		case re.MatchString("ALIGN_SPLIT") && re.MatchString("ALIGN_JOIN"):
 			phaseOf[""] = m[1]
 		case re.MatchString("ALIGN_SPLIT"):
 			phaseOf["split"] = m[1]
-		case re.MatchString("ALIGN_MAIN"):
-			phaseOf["chunk"] = m[1]
 		case re.MatchString("ALIGN_JOIN"):
 			phaseOf["join"] = m[1]
+		case re.MatchString("ALIGN_MAIN"):
+			phaseOf["chunk"] = m[1]
 		}
 	}
 
@@ -507,6 +518,38 @@ func TestConvertSelectorsMatchGeneratedNames(t *testing.T) {
 			if got := re.MatchString(name); got != want[ph] {
 				t.Errorf("selector %q (phase %q) match %q = %v, want %v", sel, ph, name, got, want[ph])
 			}
+		}
+	}
+}
+
+// TestConvertChunkReachesNonSplitMain guards #170 directly: mrp runs a non-split
+// stage's main job as phase 'chunk', so a chunk override must reach the bare
+// <stage> process (and its keyed _MAP main), not only a split stage's _MAIN —
+// otherwise a `chunk.mem_gb` on a splitless stage silently matches nothing and
+// the stage runs at default memory. Uses no -mro so it exercises the fix on the
+// prog-less path too.
+func TestConvertChunkReachesNonSplitMain(t *testing.T) {
+	cfg, _, err := overrides.Convert([]byte(`{"P.ALIGN": {"chunk.mem_gb": 64}}`), nil)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	sel := regexp.MustCompile(`withName: '([^']+)'`).FindStringSubmatch(cfg)
+	if sel == nil {
+		t.Fatalf("no selector emitted:\n%s", cfg)
+	}
+
+	re := regexp.MustCompile("^(?:" + sel[1] + ")$") // Nextflow full-matches withName
+
+	for _, name := range []string{"ALIGN", "ALIGN_MAP"} { // the non-split main processes
+		if !re.MatchString(name) {
+			t.Errorf("chunk override selector %q must reach the non-split main %q", sel[1], name)
+		}
+	}
+
+	for _, name := range []string{"ALIGN_SPLIT", "ALIGN_JOIN"} { // but not other phases
+		if re.MatchString(name) {
+			t.Errorf("chunk override selector %q must not reach %q", sel[1], name)
 		}
 	}
 }
@@ -565,13 +608,22 @@ func TestConvertUnknownField(t *testing.T) {
 // TestConvertGlobalPhaseSelector checks a phase field under the all-stages key
 // maps to the phase-wide selector covering both naming families.
 func TestConvertGlobalPhaseSelector(t *testing.T) {
-	cfg, _, err := overrides.Convert([]byte(`{"": {"chunk.mem_gb": 4}}`), nil)
+	cfg, unmapped, err := overrides.Convert([]byte(`{"": {"chunk.mem_gb": 4}}`), nil)
 	if err != nil {
 		t.Fatalf("Convert: %v", err)
 	}
 
-	if !strings.Contains(cfg, `withName: '.*(_MAIN|_MAIN_K|_MN)' { memory = '4 GB' }`) {
-		t.Errorf("global chunk override must use the phase-wide selector, got:\n%s", cfg)
+	// The bare-non-split-main shortfall of a global chunk override is reported
+	// loudly, not silently dropped (#170 review).
+	if !strings.Contains(strings.Join(unmapped, " "), "global chunk override does not reach") {
+		t.Errorf("global chunk override must warn about the bare-main shortfall, got unmapped=%v", unmapped)
+	}
+
+	// The global chunk selector adds the distinctive non-split main markers (_MAP,
+	// _KS) so it reaches non-split stages too, but omits the bare/_K mains that
+	// would over-match split/join behind `.*` (#170).
+	if !strings.Contains(cfg, `withName: '.*(_MAP|_MAIN|_MAIN_K|_MN|_KS)' { memory = '4 GB' }`) {
+		t.Errorf("global chunk override must use the phase-wide main selector, got:\n%s", cfg)
 	}
 
 	// The bounded phase-wide selector must not reach a stage whose NAME merely
@@ -585,9 +637,20 @@ func TestConvertGlobalPhaseSelector(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"SORT_MAINLINE", "SORT_MAINLINE_SPLIT", "SORT_MN_X"} {
+	// The distinctive _KS scatter main IS a chunk process and must be reached.
+	if !match.MatchString("FORK_1_P__SORT_KS") {
+		t.Errorf("phase-wide chunk selector %q must reach the _KS scatter main", sel[1])
+	}
+
+	// The load-bearing anti-over-match property (independent of the exact string):
+	// a global chunk override must NEVER reach the split/join phases, including the
+	// keyed _SPLIT_K/_JOIN_K (the reason globalChunkSuffixes drops the ambiguous _K).
+	for _, name := range []string{
+		"SORT_MAINLINE", "SORT_MAINLINE_SPLIT", "SORT_MN_X",
+		"SORT_SPLIT", "SORT_JOIN", "SORT_SPLIT_K", "SORT_JOIN_K",
+	} {
 		if match.MatchString(name) {
-			t.Errorf("phase-wide selector %q over-matches %q", sel[1], name)
+			t.Errorf("phase-wide chunk selector %q over-matches %q", sel[1], name)
 		}
 	}
 }
