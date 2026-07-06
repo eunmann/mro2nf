@@ -1,6 +1,7 @@
 package overrides
 
 import (
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -32,6 +33,11 @@ type resolver struct {
 	// stageRefs maps a callable (stage) name to the sorted unique call sites
 	// that invoke it anywhere in the program.
 	stageRefs map[string][]callRef
+	// collisions holds call names bound to more than one callable across
+	// pipelines (Martian scopes call names per pipeline). Such a name cannot be
+	// resolved from its last segment alone, so an override keyed on it is reported
+	// ambiguous rather than silently retuning whichever pipeline collected last.
+	collisions map[string]bool
 }
 
 // newResolver builds a resolver over prog (may be nil).
@@ -39,12 +45,16 @@ func newResolver(prog *ir.Program) *resolver {
 	r := &resolver{
 		prog: prog, stage: map[string]bool{}, leaves: map[string][]string{},
 		callStage: map[string]string{}, stageRefs: map[string][]callRef{},
+		collisions: map[string]bool{},
 	}
 	if prog == nil {
 		return r
 	}
 
-	for name := range prog.Pipelines {
+	// Collect in a deterministic pipeline order so a colliding call name resolves
+	// the same way every run (which callable wins is still order-dependent, but
+	// collisions are reported, not silently applied).
+	for _, name := range sortedKeys(prog.Pipelines) {
 		r.collect(name, map[string]bool{})
 	}
 
@@ -76,6 +86,12 @@ func newResolver(prog *ir.Program) *resolver {
 func (r *resolver) markStageCall(pipe, call, callable string) {
 	r.stage[call] = true
 	r.stage[callable] = true
+
+	if prev, ok := r.callStage[call]; ok && prev != callable {
+		// Same call name, different callable in another pipeline: ambiguous.
+		r.collisions[call] = true
+	}
+
 	r.callStage[call] = callable
 	r.stageRefs[callable] = append(r.stageRefs[callable], callRef{pipe, call})
 }
@@ -157,6 +173,10 @@ func (r *resolver) targets(key string) ([]string, int, string) {
 		return []string{seg}, kindStage, ""
 	}
 
+	if r.collisions[seg] {
+		return nil, kindStage, "call name is bound to different stages in multiple pipelines; ambiguous, qualify or rename"
+	}
+
 	if r.stage[seg] {
 		return []string{r.callableOf(seg)}, kindStage, ""
 	}
@@ -164,6 +184,16 @@ func (r *resolver) targets(key string) ([]string, int, string) {
 	if lv, ok := r.leaves[seg]; ok {
 		if len(lv) == 0 {
 			return nil, kindExpand, "names a sub-pipeline with no stages"
+		}
+
+		// A pipeline key expands to its leaf calls, resolved through the global
+		// callStage map — which is last-writer under a collision. If any leaf call
+		// name is ambiguous, the expansion would silently drop the other stage(s),
+		// so report it rather than mis-target (mirrors the direct-key guard above).
+		for _, c := range lv {
+			if r.collisions[c] {
+				return nil, kindExpand, "expands through an ambiguous call name (bound to different stages in multiple pipelines); qualify or rename"
+			}
 		}
 
 		return r.stagesOf(lv), kindExpand, ""
@@ -206,7 +236,10 @@ func (r *resolver) stagesOf(calls []string) []string {
 // single-quoted Groovy string, where a backslash escape fails config parsing.
 func (r *resolver) qualifiers(stage string) []string {
 	if r.prog == nil {
-		return []string{`[0-9]+_.+__` + stage}
+		// Without a program the stage name is the raw override-key segment; escape
+		// it so a regex metacharacter in a hand-written key cannot corrupt the
+		// selector (a valid Martian identifier is unaffected).
+		return []string{`[0-9]+_.+__` + regexp.QuoteMeta(stage)}
 	}
 
 	byPipe := map[string][]string{}

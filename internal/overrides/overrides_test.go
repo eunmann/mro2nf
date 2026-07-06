@@ -678,3 +678,145 @@ func TestConvertMalformed(t *testing.T) {
 		t.Error("expected an error for malformed JSON")
 	}
 }
+
+// TestConvertResourceValueNormalization guards #175: mrp writes float64 resource
+// values, including negative sentinels ("as much as possible"), fractional
+// (centicore) threads, and scientific notation — all of which the old code
+// rendered as directives Nextflow rejects (`memory = '-8 GB'`, `cpus = 2.5`,
+// `memory = '1e3 GB'`). Normalize to a valid directive instead.
+func TestConvertResourceValueNormalization(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{`{"P.S": {"mem_gb": -8}}`, "memory = '8 GB'"},     // negative sentinel -> magnitude
+		{`{"P.S": {"threads": -4}}`, "cpus = 4"},           // negative sentinel -> magnitude
+		{`{"P.S": {"threads": 2.5}}`, "cpus = 3"},          // fractional -> ceil (integer cpus)
+		{`{"P.S": {"mem_gb": 1e3}}`, "memory = '1000 GB'"}, // scientific -> plain
+		{`{"P.S": {"mem_gb": 7.5}}`, "memory = '7.5 GB'"},  // fractional GB is fine
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			cfg, _, err := overrides.Convert([]byte(tc.in), nil)
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			if !strings.Contains(cfg, tc.want) {
+				t.Errorf("want %q in:\n%s", tc.want, cfg)
+			}
+		})
+	}
+}
+
+// TestConvertCallNameCollision guards #175: a call name bound to different stages
+// in two pipelines cannot be resolved from its last segment alone, so an override
+// keyed on it is reported ambiguous (deterministically) rather than silently
+// retuning whichever pipeline was collected last.
+func TestConvertCallNameCollision(t *testing.T) {
+	prog := &ir.Program{
+		Stages: map[string]*ir.Stage{"ALIGN": {Name: "ALIGN"}, "SORT": {Name: "SORT"}},
+		Pipelines: map[string]*ir.Pipeline{
+			"P1":  {Name: "P1", Calls: []ir.Call{{Name: "X", Callable: "ALIGN"}}},
+			"P2":  {Name: "P2", Calls: []ir.Call{{Name: "X", Callable: "SORT"}}},
+			"TOP": {Name: "TOP", Calls: []ir.Call{{Name: "P1", Callable: "P1"}, {Name: "P2", Callable: "P2"}}},
+		},
+		Entry: &ir.EntryCall{Callable: "TOP"},
+	}
+
+	cfg, unmapped, err := overrides.Convert([]byte(`{"P1.X": {"mem_gb": 8}}`), prog)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if len(unmapped) == 0 || !strings.Contains(strings.Join(unmapped, " "), "ambiguous") {
+		t.Errorf("collision on X must be reported ambiguous, got unmapped=%v", unmapped)
+	}
+	if strings.Contains(cfg, "withName") {
+		t.Errorf("an ambiguous key must emit no selector:\n%s", cfg)
+	}
+
+	// Deterministic across runs (the bug was map-iteration-order dependent).
+	cfg2, _, _ := overrides.Convert([]byte(`{"P1.X": {"mem_gb": 8}}`), prog)
+	if cfg != cfg2 {
+		t.Errorf("output must be deterministic:\n%s\n---\n%s", cfg, cfg2)
+	}
+}
+
+// TestConvertSelectorEscapesRawSegment guards #175: without a program the stage
+// name is the raw override-key segment, so a regex metacharacter in a hand-written
+// key must be escaped, not spliced into the withName regex where it would corrupt
+// the selector (or make it uncompilable).
+func TestConvertSelectorEscapesRawSegment(t *testing.T) {
+	cfg, _, err := overrides.Convert([]byte(`{"S.T*U": {"mem_gb": 8}}`), nil)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	sel := regexp.MustCompile(`withName: '([^']+)'`).FindStringSubmatch(cfg)
+	if sel == nil {
+		t.Fatalf("no selector emitted:\n%s", cfg)
+	}
+
+	// The escaped literal must appear, and the whole selector must compile.
+	if !strings.Contains(sel[1], `T\*U`) {
+		t.Errorf("raw segment metacharacter not escaped in %q", sel[1])
+	}
+	if _, err := regexp.Compile("^(?:" + sel[1] + ")$"); err != nil {
+		t.Errorf("selector is not a valid regex: %v (%q)", err, sel[1])
+	}
+}
+
+// TestConvertResourceValueReported guards the #175 review: the 0 sentinel (mrp's
+// "use the site default") and a finite-but-absurd threads value have no faithful
+// static directive, so they are reported, not silently emitted as a zero or an
+// overflowed-negative cpu count.
+func TestConvertResourceValueReported(t *testing.T) {
+	cases := []struct{ in, note string }{
+		{`{"P.S": {"mem_gb": 0}}`, "site default"},
+		{`{"P.S": {"threads": 0}}`, "site default"},
+		{`{"P.S": {"threads": 1e19}}`, "too large"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			cfg, unmapped, err := overrides.Convert([]byte(tc.in), nil)
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			if strings.Contains(cfg, "memory =") || strings.Contains(cfg, "cpus =") {
+				t.Errorf("value must be reported, not emitted as a directive:\n%s", cfg)
+			}
+			if !strings.Contains(strings.Join(unmapped, " "), tc.note) {
+				t.Errorf("want an unmapped note containing %q, got %v", tc.note, unmapped)
+			}
+		})
+	}
+}
+
+// TestConvertCallNameCollisionViaPipeline guards the #175 review: a collision
+// buried under a PIPELINE-scoped key (which expands through the collided call
+// name) must also be reported ambiguous, not silently resolved to one stage.
+func TestConvertCallNameCollisionViaPipeline(t *testing.T) {
+	prog := &ir.Program{
+		Stages: map[string]*ir.Stage{"ALIGN": {Name: "ALIGN"}, "SORT": {Name: "SORT"}},
+		Pipelines: map[string]*ir.Pipeline{
+			"SUBA": {Name: "SUBA", Calls: []ir.Call{{Name: "X", Callable: "ALIGN"}}},
+			"SUBB": {Name: "SUBB", Calls: []ir.Call{{Name: "X", Callable: "SORT"}}},
+			"MID":  {Name: "MID", Calls: []ir.Call{{Name: "SUBA", Callable: "SUBA"}, {Name: "SUBB", Callable: "SUBB"}}},
+			"TOP":  {Name: "TOP", Calls: []ir.Call{{Name: "MID", Callable: "MID"}}},
+		},
+		Entry: &ir.EntryCall{Callable: "TOP"},
+	}
+
+	cfg, unmapped, err := overrides.Convert([]byte(`{"MID": {"mem_gb": 8}}`), prog)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if !strings.Contains(strings.Join(unmapped, " "), "ambiguous") {
+		t.Errorf("a pipeline key expanding through a collision must be reported ambiguous, got %v", unmapped)
+	}
+	if strings.Contains(cfg, "withName") {
+		t.Errorf("no selector should be emitted for the ambiguous expansion:\n%s", cfg)
+	}
+}
