@@ -20,6 +20,11 @@ var errForkIndexRange = errors.New("forkbind -index out of range")
 // errForkIndexNoOut reports -index without the required -o output dir.
 var errForkIndexNoOut = errors.New("forkbind -index requires -o <dir>")
 
+// errForkIndexNegative reports a -index below the -1 "unset" sentinel. Any other
+// negative value would otherwise be treated as the full-collection write and
+// silently drop -o, writing to -chunkdir instead of the requested output.
+var errForkIndexNegative = errors.New("forkbind -index must be >= 0 (or -1 for the full write)")
+
 // errKeysFileNeedsIndex reports -keysfile without -index or -keysonly (the
 // full-fork write already emits forkkeys.json into -chunkdir).
 var errKeysFileNeedsIndex = errors.New("forkbind -keysfile requires -index or -keysonly")
@@ -179,6 +184,13 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 // first. The element path checks EXPLICITLY-set flags (via fs.Visit), so
 // -mapmode's default does not trip the conflict while a passed one does.
 func checkForkBindFlags(fs *flag.FlagSet, index int, keysOnly bool, keysFile, elemFile string) error {
+	// -1 is the "unset" sentinel (full-collection write); a specific fork is >= 0.
+	// Reject anything below -1 loudly rather than folding it into the full write,
+	// which would silently ignore -o.
+	if index < bind.AllForks {
+		return fmt.Errorf("%w: got %d", errForkIndexNegative, index)
+	}
+
 	if elemFile != "" {
 		set := map[string]bool{}
 		fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
