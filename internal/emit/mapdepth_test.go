@@ -131,6 +131,55 @@ func TestMapProjectDepthArrayShapes(t *testing.T) {
 	}
 }
 
+// TestMapProjectDepthArrayOfMapField guards #172: a typed-map field reached
+// THROUGH an array of structs (arr.m.x) must project over each map in the array,
+// not stop at the plain array and resolve to nulls. The projection begins at the
+// map segment (depth 2) with inArray set, matching mrp's array<map<field>>.
+func TestMapProjectDepthArrayOfMapField(t *testing.T) {
+	prog := &ir.Program{
+		Structs: map[string]*ir.StructType{
+			"Inner": {Name: "Inner", Fields: []ir.Param{{Name: "x", BaseType: "int"}}},
+			"Mid":   {Name: "Mid", Fields: []ir.Param{{Name: "m", BaseType: "Inner", MapDim: 1}}},
+			// Wrap has a PLAIN (dimensionless) struct field `a` between the array
+			// and the map, so arr2.a.m.x exercises the dims accumulating across a
+			// hop that contributes nothing — the case that distinguishes the fix's
+			// `+=` from the old reset (which would zero the enclosing array).
+			"Wrap": {Name: "Wrap", Fields: []ir.Param{{Name: "a", BaseType: "Mid"}}},
+		},
+		Stages: map[string]*ir.Stage{
+			"NEST": {Name: "NEST", Out: []ir.Param{
+				{Name: "arr", BaseType: "Mid", ArrayDim: 1},
+				{Name: "arr2", BaseType: "Wrap", ArrayDim: 1},
+			}},
+		},
+	}
+	p := &ir.Pipeline{Name: "T", Calls: []ir.Call{{Name: "N", Callable: "NEST"}}}
+
+	d, inArr := mapProjectDepth(prog, p, &ir.Ref{Kind: "call", ID: "N", Output: "arr.m.x"})
+	if d != 2 || !inArr {
+		t.Errorf("array-of-struct.map.field: got (%d,%v), want (2,true)", d, inArr)
+	}
+
+	// arr2.a.m.x: the enclosing array must survive the plain `a` struct hop.
+	if d, inArr := mapProjectDepth(prog, p, &ir.Ref{Kind: "call", ID: "N", Output: "arr2.a.m.x"}); d != 3 || !inArr {
+		t.Errorf("array-of-struct.struct.map.field: got (%d,%v), want (3,true)", d, inArr)
+	}
+
+	// checkSupported must ACCEPT this shape now (it is a real projection, not a
+	// rejected nested map): a legal .mro of this shape transpiles.
+	prog.Pipelines = map[string]*ir.Pipeline{"T": p}
+	p.Calls = append(p.Calls, ir.Call{
+		Name: "SINK", Callable: "NEST",
+		Bindings: []ir.Binding{{
+			Param: "in",
+			Value: ir.Value{Ref: &ir.Ref{Kind: "call", ID: "N", Output: "arr.m.x"}},
+		}},
+	})
+	if err := checkSupported(prog); err != nil {
+		t.Errorf("checkSupported rejected a supported array<map>.field projection: %v", err)
+	}
+}
+
 // TestMapProjectDepth covers the typed-map field-projection resolver: the depth
 // at which projection begins and whether the projection descends an array
 // (array<map<S>>.field), plus the edge cases a code review surfaced (an
