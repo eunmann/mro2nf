@@ -967,8 +967,16 @@ def run_split(fl):
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
     eff = resolve_resources(Resources(), cli_resources(fl))
-    module = setup_stage(fl, files, eff, args)
+    # The stage runs in files/ (setup_stage chdir's there), but the data plane
+    # below must resolve relative out-path leaves against the task dir — the way
+    # mre does (only the adapter child gets cmd.Dir=files; MarkFiles runs in the
+    # task cwd). Capture it now and restore before write_chunk_bundles so the two
+    # lanes stage the same leaves.
+    task_cwd = os.getcwd()
     try:
+        # setup_stage is inside the try so the finally's chdir also covers a
+        # setup/import failure that leaves the cwd in files/.
+        module = setup_stage(fl, files, eff, args)
         with monitored_phase(fl.monitor, eff):
             raw_result = module.split(record(args))
     except martian.StageAssertion:
@@ -980,6 +988,8 @@ def run_split(fl):
         raise RunnerError(
             "read _stage_defs: split exited without returning chunk defs"
         ) from None
+    finally:
+        os.chdir(task_cwd)
     result = martian.json_sanitize(raw_result)
     defs, join_res = parse_stage_defs(result)
     write_text(out_path, go_json(chunk_defs_doc(defs)))
@@ -1068,14 +1078,26 @@ def run_outs_phase(fl, phase, files, eff, man, args, invoke):
     out_params = man.params(fl.callable, fl.role)
     skeleton = skeleton_outs(man.structs, out_params, files)
     outs = record(skeleton)
-    module = setup_stage(fl, files, eff, args)
+    # The stage runs in files/ (setup_stage chdir's there); restore the task cwd
+    # before the data plane so a relative out-path leaf resolves against the task
+    # dir as mre does, not against files/ — otherwise the two lanes stage
+    # different leaves for the same stage. See run_split for the full rationale.
+    task_cwd = os.getcwd()
+    exited = False
     try:
+        # setup_stage is inside the try so the finally's chdir also covers a
+        # setup/import failure that leaves the cwd in files/.
+        module = setup_stage(fl, files, eff, args)
         with monitored_phase(fl.monitor, eff):
             invoke(module, outs)
     except martian.StageAssertion:
         raise
     except SystemExit as exc:
-        stage_system_exit(exc, phase)
+        stage_system_exit(exc, phase)  # raises on a nonzero exit
+        exited = True
+    finally:
+        os.chdir(task_cwd)
+    if exited:
         write_bundle(out_path, martian.json_sanitize(dict(skeleton)),
                      out_params, man.structs)
         return
