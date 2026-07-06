@@ -33,7 +33,7 @@ func TestFileFlattenNestedClosureVars(t *testing.T) {
 		{
 			name: "array of map of file threads distinct vars",
 			p:    ir.Param{Name: "reads", BaseType: "txt", IsFile: true, ArrayDim: 1, MapDim: 1},
-			want: "(params.reads ?: []).collect { __e0 -> (__e0 ?: [:]).sort { it.key }.collect { __e1 -> " +
+			want: "(params.reads ?: []).collect { __e0 -> (__e0 ?: [:]).sort { __a, __b -> Mro2nf.compareUtf8(__a.key, __b.key) }.collect { __e1 -> " +
 				"(__e1.value != null ? [file(__e1.value)] : []) }.flatten() }.flatten()",
 		},
 		{
@@ -42,7 +42,7 @@ func TestFileFlattenNestedClosureVars(t *testing.T) {
 			// not as a second map level.
 			name: "map of file array descends inner array (MapDim=2)",
 			p:    ir.Param{Name: "m", BaseType: "txt", IsFile: true, MapDim: 2},
-			want: "(params.m ?: [:]).sort { it.key }.collect { __e0 -> (__e0.value ?: []).collect { __e1 -> " +
+			want: "(params.m ?: [:]).sort { __a, __b -> Mro2nf.compareUtf8(__a.key, __b.key) }.collect { __e0 -> (__e0.value ?: []).collect { __e1 -> " +
 				"(__e1 != null ? [file(__e1)] : []) }.flatten() }.flatten()",
 		},
 	}

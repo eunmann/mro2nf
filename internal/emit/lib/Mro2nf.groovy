@@ -348,7 +348,7 @@ class Mro2nf {
     // compareUtf8 orders two strings by unsigned UTF-8 byte value, matching Go's
     // lexical string comparison (sort.Strings) so a driver-side key sort agrees
     // with the Go-side forkkeys order byte-for-byte.
-    private static int compareUtf8(String a, String b) {
+    static int compareUtf8(String a, String b) {
         byte[] x = a.getBytes('UTF-8')
         byte[] y = b.getBytes('UTF-8')
         int n = Math.min(x.length, y.length)
