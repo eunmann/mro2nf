@@ -231,13 +231,16 @@ workflow wf_SUM_SQUARES {
   main:
     types = file("${projectDir}/_assets/types.json")
     SUM_SQUARES_SPLIT(args, types)
-    // each chunk dir carries its own resource request in data.json; read it
-    // with .resolve() (object-store-safe) and tuple it with the chunk:
-    chunks = SUM_SQUARES_SPLIT.out.chunks.flatten().map { f ->
-        tuple(new groovy.json.JsonSlurper().parseText(f.resolve('data.json').text).resources, f) }
+    // each chunk dir carries its own resource request in data.json; the Mro2nf
+    // helper reads it (raw-carriage, object-store-safe) and tuples it with the chunk:
+    chunks = SUM_SQUARES_SPLIT.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     SUM_SQUARES_MAIN(chunks.combine(args), types)
-    join = SUM_SQUARES_SPLIT.out.joinres.map { f -> new groovy.json.JsonSlurper().parseText(f.text) }
-    SUM_SQUARES_JOIN(join, args, SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.collect(), types)
+    join = SUM_SQUARES_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }
+    // JOIN gathers the chunk outs sorted by name — NOT .collect(), whose
+    // completion order would be part of JOIN's -resume cache key and would
+    // starve a 0-chunk JOIN. toSortedList emits [] on an empty channel.
+    SUM_SQUARES_JOIN(join, args, SUM_SQUARES_SPLIT.out.defs,
+        SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
     SUM_SQUARES_JOIN.out
 }
