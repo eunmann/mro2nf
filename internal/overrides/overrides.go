@@ -46,7 +46,10 @@ package overrides
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/emit"
@@ -89,6 +92,17 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 				unmapped = append(unmapped, fmt.Sprintf("%s.%s: %s", orAll(key), field, fnote))
 
 				continue
+			}
+
+			// A GLOBAL (all-stages) chunk override reaches only the main markers
+			// distinctive behind `.*` (_MAP/_MAIN*/_MN/_KS); a plain non-split
+			// stage's bare `<stage>` main (and its fused _K) cannot be matched
+			// behind `.*` without over-matching split/join, so surface the shortfall
+			// loudly instead of silently under-applying. Target such a stage by name.
+			if key == "" && phase == phaseChunk {
+				unmapped = append(unmapped, fmt.Sprintf(
+					"%s.%s: global chunk override does not reach a plain non-split stage's bare main; target it by stage name",
+					orAll(key), field))
 			}
 
 			// Keyed per (stage, phase, base) — NOT the call set — so precedence
@@ -226,19 +240,44 @@ func mapField(field string, val json.RawMessage) (string, string, string, string
 
 	switch base {
 	case "mem_gb", "threads":
-		// mrp only writes numbers here; anything else would render a broken
-		// directive (e.g. `memory = 'true GB'`), so report it instead.
-		if !isNumber(val) {
+		// mrp writes a float64 here; anything else would render a broken directive
+		// (e.g. `memory = 'true GB'`), so report it instead.
+		var n float64
+		if err := json.Unmarshal(val, &n); err != nil {
 			return phase, base, "", "value is not a number"
 		}
+
+		// 0 is mrp's "use the site default" sentinel (GetSystemReqs fills in
+		// ThreadsPerJob/MemGBPerJob), which varies by jobmode/profile and has no
+		// static Nextflow equivalent — emitting `memory = '0 GB'` / `cpus = 0` would
+		// pin the stage to nothing, so report it instead of diverging silently.
+		if n == 0 {
+			return phase, base, "", "0 requests mrp's site default resource; no static Nextflow equivalent"
+		}
+
+		// mrp treats a negative request as a sentinel ("as much as possible" —
+		// magnitude on remote schedulers), so normalize to the magnitude; Nextflow
+		// has no negative directive and would reject `memory = '-8 GB'` / `cpus = -4`
+		// at config parse. FormatFloat also avoids scientific notation (1e3), which
+		// MemoryUnit cannot parse.
+		n = math.Abs(n)
 
 		// Config-file scope uses `directive = value` (not the .nf process-body
 		// `directive value` form), so a `-c` overlay parses.
 		if base == "mem_gb" {
-			return phase, base, "memory = " + memLiteral(val), ""
+			return phase, base, "memory = " + memLiteral(n), ""
 		}
 
-		return phase, base, "cpus = " + strings.TrimSpace(string(val)), ""
+		// cpus must be a positive integer; round a fractional (centicore) thread
+		// request up so the stage is not under-provisioned. Guard the int64
+		// conversion: a finite-but-absurd value would otherwise wrap to a negative
+		// cpu count — the very directive this normalization prevents.
+		ceil := math.Ceil(n)
+		if ceil > math.MaxInt64 {
+			return phase, base, "", "threads value is too large to render as a cpu count"
+		}
+
+		return phase, base, "cpus = " + strconv.FormatInt(int64(ceil), 10), ""
 	case "vmem_gb":
 		return phase, base, "", "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
 	case "profile":
@@ -252,6 +291,10 @@ func mapField(field string, val json.RawMessage) (string, string, string, string
 	}
 }
 
+// phaseChunk is the mrp override phase for a stage's main job; every stage (split
+// or not) runs its main as this phase.
+const phaseChunk = "chunk"
+
 // familySuffixes returns the (plain-family, fused-family) process-name
 // suffixes an mrp override phase prefix reaches, drawn from the emitter's
 // exported inventory so the selector alternation cannot drift from the names
@@ -264,13 +307,98 @@ func familySuffixes(phase string) ([]string, []string, bool) {
 		return emit.PlainStageSuffixes(), emit.FusedCallSuffixes(), true
 	case "split":
 		return withRoot(emit.PlainStageSuffixes(), "_SPLIT"), withRoot(emit.FusedCallSuffixes(), "_SP"), true
-	case "chunk":
-		return withRoot(emit.PlainStageSuffixes(), "_MAIN"), withRoot(emit.FusedCallSuffixes(), "_MN"), true
+	case phaseChunk:
+		// mrp runs EVERY stage's main job as phase 'chunk' — including a non-split
+		// stage, whose main processes are the bare/_MAP/_K family, NOT _MAIN. So the
+		// chunk phase reaches all MAIN-phase processes: the split main (_MAIN/
+		// _MAIN_K/_MN) and the non-split main (bare/_MAP/_K), but never the split or
+		// join phases. A suffix that exists only for the other stage kind matches no
+		// process, so this is safe for split and non-split stages alike (the
+		// standalone _KS scatter main is added for chunk in selector, as for "").
+		return mainPhaseSuffixes(emit.PlainStageSuffixes()), mainPhaseSuffixes(emit.FusedCallSuffixes()), true
 	case "join":
 		return withRoot(emit.PlainStageSuffixes(), "_JOIN"), withRoot(emit.FusedCallSuffixes(), "_JN"), true
 	default:
 		return nil, nil, false
 	}
+}
+
+// mainPhaseSuffixes returns the main-phase (chunk) entries of a suffix inventory:
+// everything except the split and join phase suffixes. What remains is the bare
+// non-split main (""), the keyed non-split main (_MAP/_K), and the split stage's
+// main (_MAIN/_MAIN_K/_MN) — the processes mrp runs as phase 'chunk'.
+func mainPhaseSuffixes(suffixes []string) []string {
+	out := make([]string, 0, len(suffixes))
+
+	for _, s := range suffixes {
+		// Exclude every split/join marker by PREFIX (matching withRoot), so a
+		// future keyed fused split/join suffix (e.g. _SP_K) is also excluded rather
+		// than silently misclassified as a main.
+		if strings.HasPrefix(s, "_SPLIT") || strings.HasPrefix(s, "_JOIN") ||
+			strings.HasPrefix(s, "_SP") || strings.HasPrefix(s, "_JN") {
+			continue
+		}
+
+		out = append(out, s)
+	}
+
+	return out
+}
+
+// splitJoinSuffixes are the split/join phase markers — the complement of the
+// main (chunk) phase over the full plain+fused inventory.
+func splitJoinSuffixes() []string {
+	full := append(append([]string{}, emit.PlainStageSuffixes()...), emit.FusedCallSuffixes()...)
+	main := map[string]bool{}
+
+	for _, s := range mainPhaseSuffixes(full) {
+		main[s] = true
+	}
+
+	out := make([]string, 0, len(full))
+
+	for _, s := range full {
+		if s != "" && !main[s] {
+			out = append(out, s)
+		}
+	}
+
+	return out
+}
+
+// globalChunkSuffixes returns the main-phase suffixes safe behind the global `.*`
+// prefix: non-empty, and not a suffix of any split/join marker (so `.*<s>` cannot
+// full-match a split or join process). This drops the bare "" (matches every
+// process) and _K (a suffix of _SPLIT_K/_JOIN_K); a bare or fused-_K non-split
+// main is therefore not reachable by a GLOBAL chunk override — target it by stage
+// name (a stage-scoped chunk override reaches every main process). The distinctive
+// _KS scatter main is included.
+func globalChunkSuffixes(main []string) []string {
+	sj := splitJoinSuffixes()
+
+	safe := make([]string, 0, len(main))
+
+	for _, s := range main {
+		if s == "" {
+			continue
+		}
+
+		ambiguous := false
+
+		for _, x := range sj {
+			if strings.HasSuffix(x, s) {
+				ambiguous = true
+
+				break
+			}
+		}
+
+		if !ambiguous {
+			safe = append(safe, s)
+		}
+	}
+
+	return append(safe, emit.ScatterCallSuffixes()...)
 }
 
 // withRoot filters a suffix inventory to the entries under one phase root
@@ -345,17 +473,32 @@ func selector(stage string, quals []string, phase string) string {
 			return "" // global process default
 		}
 
-		return ".*" + suffixAlt(append(plain, fused...))
+		suffixes := append(append([]string{}, plain...), fused...)
+		if phase == phaseChunk {
+			// A global `.*`-prefixed chunk selector can only use suffixes that are
+			// distinctive to the main phase; the bare and _K mains would over-match
+			// (see globalChunkSuffixes).
+			suffixes = globalChunkSuffixes(suffixes)
+		}
+
+		return ".*" + suffixAlt(suffixes)
 	}
+
+	// Escape the stage name: with a program it is a valid Martian identifier
+	// (QuoteMeta is a no-op), but without one it is the raw override-key segment,
+	// where a regex metacharacter would otherwise corrupt the selector. The quals
+	// are already escaped where they embed a raw name (see qualifiers).
+	stage = regexp.QuoteMeta(stage)
 
 	alts := []string{stage + suffixAlt(plain)}
 	for _, q := range quals {
 		alts = append(alts, "STAGE_"+q+suffixAlt(fused))
 	}
 
-	// The _KS scatter is the stage's main; only a stage-level override reaches
-	// it (the per-stage phase selectors cover the split-triad processes).
-	if phase == "" {
+	// The _KS scatter is a stage's (non-split) main, so both a stage-level ("")
+	// and a chunk override reach it; the per-stage split/join selectors cover the
+	// split-triad processes.
+	if phase == "" || phase == phaseChunk {
 		for _, q := range quals {
 			alts = append(alts, "FORK_"+q+suffixAlt(emit.ScatterCallSuffixes()))
 		}
@@ -387,16 +530,10 @@ func render(globalDefault []string, groups []selGroup) string {
 	return b.String()
 }
 
-// memLiteral renders a JSON number of GB as a Nextflow memory string.
-func memLiteral(val json.RawMessage) string {
-	return "'" + strings.TrimSpace(string(val)) + " GB'"
-}
-
-// isNumber reports whether raw is a JSON number.
-func isNumber(raw json.RawMessage) bool {
-	var f float64
-
-	return json.Unmarshal(raw, &f) == nil
+// memLiteral renders a GB quantity as a Nextflow memory string, without
+// scientific notation (which MemoryUnit cannot parse).
+func memLiteral(gb float64) string {
+	return "'" + strconv.FormatFloat(gb, 'f', -1, 64) + " GB'"
 }
 
 // keyDepth is the number of path segments in an override key; "" (the global
