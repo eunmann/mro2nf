@@ -891,11 +891,14 @@ func keyedNativeDisable(c ir.Call) bool {
 }
 
 // fusedInclude reports whether a call's module include is suppressed — the fused
-// stage/chain/scatter kinds are self-contained per-call processes with no wf_
-// import.
+// stage/chain/scatter kinds (and the natively-gated fused-disabled kind) are
+// self-contained per-call processes with no wf_ import. Without this the
+// fused-disabled call emitted a dead `include { wf_<stage> as ... }` that its
+// wiring (genFusedDisabledWiring uses the fused process, not the alias) never
+// invokes, keeping the stage module alive and defeating #82 pruning.
 func (cp callPlan) fusedInclude() bool {
 	return cp.kind == kindFusedStage || cp.kind == kindFusedChain || cp.kind == kindFusedAway ||
-		cp.kind == kindFoldedOff || cp.kind == kindNativeScatter
+		cp.kind == kindFoldedOff || cp.kind == kindNativeScatter || cp.kind == kindFusedDisabled
 }
 
 // keyedFusedInclude reports whether a call's keyed-layer include is suppressed —

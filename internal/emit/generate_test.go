@@ -63,3 +63,35 @@ call P(x = 1,)
 		t.Errorf("DISABLE-task wiring mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// TestFusedDisabledEmitsNoDeadInclude guards #187: a natively-gated disabled call
+// fuses bind+main into a self-contained process (genFusedDisabledWiring uses the
+// fused process, not the wf_ alias), so genPipeIncludes must not emit a dead
+// `include { wf_<stage> as <call> }` for it (which kept the module alive and
+// defeated #82 pruning).
+func TestFusedDisabledEmitsNoDeadInclude(t *testing.T) {
+	prog := lowerMRO(t, `
+stage CFG(out bool flag, src py "s/cfg",)
+stage WORK(in int x, out int y, src py "s/work",)
+pipeline P(in int x, out int y,){
+    call CFG()
+    call WORK(x = self.x,) using (disabled = CFG.flag,)
+    return (y = WORK.y,)
+}
+call P(x = 1,)
+`)
+
+	g := genCtx{plan: buildPlan(prog, featureSet{})}
+
+	cp := g.plan.pipes["P"].calls["WORK"]
+	if cp.kind != kindFusedDisabled {
+		t.Fatalf("WORK: kind = %d, want kindFusedDisabled (a direct bool disable ref)", cp.kind)
+	}
+
+	var b strings.Builder
+	genPipeIncludes(&b, prog.Pipelines["P"], prog, g)
+
+	if alias := callAlias("P", "WORK"); strings.Contains(b.String(), alias) {
+		t.Errorf("fused-disabled WORK must not emit a dead wf_ include (%s); got:\n%s", alias, b.String())
+	}
+}

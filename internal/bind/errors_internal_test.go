@@ -41,10 +41,12 @@ func TestResolveForksSplitErrors(t *testing.T) {
 			wantErr:  errNotMap,
 		},
 		{
+			// Same length, different keys: a KEYS error, not the misleading
+			// "mismatched lengths" (#187).
 			name:     "mismatched map key sets",
 			pipeArgs: `{"xs":{"a":1,"b":2},"ys":{"a":1,"c":3}}`,
 			isMap:    true,
-			wantErr:  errSplitLen,
+			wantErr:  errSplitKeys,
 		},
 	}
 
