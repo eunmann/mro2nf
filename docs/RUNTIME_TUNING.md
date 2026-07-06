@@ -95,7 +95,7 @@ mrp's `--onfinish` runs a command when the pipestance finishes. The Nextflow
 analog is a `workflow.onComplete` handler in a `-c` overlay:
 
 ```groovy
-workflow.onComplete = { exec("/path/to/hook ${workflow.success}") }
+workflow.onComplete = { ["/path/to/hook", "${workflow.success}"].execute().waitFor() }
 ```
 
 ## Skipping preflight (`--nopreflight`)
