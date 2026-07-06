@@ -46,7 +46,10 @@ package overrides
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/emit"
@@ -237,19 +240,29 @@ func mapField(field string, val json.RawMessage) (string, string, string, string
 
 	switch base {
 	case "mem_gb", "threads":
-		// mrp only writes numbers here; anything else would render a broken
-		// directive (e.g. `memory = 'true GB'`), so report it instead.
-		if !isNumber(val) {
+		// mrp writes a float64 here; anything else would render a broken directive
+		// (e.g. `memory = 'true GB'`), so report it instead.
+		var n float64
+		if err := json.Unmarshal(val, &n); err != nil {
 			return phase, base, "", "value is not a number"
 		}
+
+		// mrp treats a negative request as a sentinel ("as much as possible" —
+		// magnitude on remote schedulers), so normalize to the magnitude; Nextflow
+		// has no negative directive and would reject `memory = '-8 GB'` / `cpus = -4`
+		// at config parse. FormatFloat also avoids scientific notation (1e3), which
+		// MemoryUnit cannot parse.
+		n = math.Abs(n)
 
 		// Config-file scope uses `directive = value` (not the .nf process-body
 		// `directive value` form), so a `-c` overlay parses.
 		if base == "mem_gb" {
-			return phase, base, "memory = " + memLiteral(val), ""
+			return phase, base, "memory = " + memLiteral(n), ""
 		}
 
-		return phase, base, "cpus = " + strings.TrimSpace(string(val)), ""
+		// cpus must be a positive integer; round a fractional (centicore) thread
+		// request up so the stage is not under-provisioned.
+		return phase, base, "cpus = " + strconv.FormatInt(int64(math.Ceil(n)), 10), ""
 	case "vmem_gb":
 		return phase, base, "", "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
 	case "profile":
@@ -456,6 +469,12 @@ func selector(stage string, quals []string, phase string) string {
 		return ".*" + suffixAlt(suffixes)
 	}
 
+	// Escape the stage name: with a program it is a valid Martian identifier
+	// (QuoteMeta is a no-op), but without one it is the raw override-key segment,
+	// where a regex metacharacter would otherwise corrupt the selector. The quals
+	// are already escaped where they embed a raw name (see qualifiers).
+	stage = regexp.QuoteMeta(stage)
+
 	alts := []string{stage + suffixAlt(plain)}
 	for _, q := range quals {
 		alts = append(alts, "STAGE_"+q+suffixAlt(fused))
@@ -496,16 +515,10 @@ func render(globalDefault []string, groups []selGroup) string {
 	return b.String()
 }
 
-// memLiteral renders a JSON number of GB as a Nextflow memory string.
-func memLiteral(val json.RawMessage) string {
-	return "'" + strings.TrimSpace(string(val)) + " GB'"
-}
-
-// isNumber reports whether raw is a JSON number.
-func isNumber(raw json.RawMessage) bool {
-	var f float64
-
-	return json.Unmarshal(raw, &f) == nil
+// memLiteral renders a GB quantity as a Nextflow memory string, without
+// scientific notation (which MemoryUnit cannot parse).
+func memLiteral(gb float64) string {
+	return "'" + strconv.FormatFloat(gb, 'f', -1, 64) + " GB'"
 }
 
 // keyDepth is the number of path segments in an override key; "" (the global
