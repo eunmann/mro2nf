@@ -305,3 +305,28 @@ func TestOrEmptyArray(t *testing.T) {
 		})
 	}
 }
+
+// TestExtractProjectArrayOfMapField is the bind-side half of the #172 fix: a
+// typed-map field reached through an array of structs (arr.m.x, mapDepth 2 /
+// mapInArray) must project over each map in the array and yield array<map<field>>
+// — matching mrp — not the [null,null] the old depth-0 navigation produced.
+func TestExtractProjectArrayOfMapField(t *testing.T) {
+	raw := json.RawMessage(`{"arr":[{"m":{"k":{"x":1}}},{"m":{"j":{"x":2}}}]}`)
+
+	got, err := extractProject(raw, "arr.m.x", 2, true)
+	if err != nil {
+		t.Fatalf("extractProject: %v", err)
+	}
+
+	var gotVal, wantVal any
+	if err := json.Unmarshal(got, &gotVal); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`[{"k":1},{"j":2}]`), &wantVal); err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(wantVal, gotVal); diff != "" {
+		t.Errorf("array<map>.field projection mismatch (-want +got):\n%s", diff)
+	}
+}

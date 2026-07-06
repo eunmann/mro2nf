@@ -470,11 +470,13 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) (int, bool) 
 
 	var cur *ir.Param
 
-	// Track the array and typed-map dims of the value reached so far. A map call
-	// wraps the callee's outputs in one extra dimension (map-mode -> map; array-
-	// mode -> array). We project a field through a value only when it is a typed
-	// map with no enclosing array (an array auto-projects at runtime; a field
-	// beneath an array-of-map is the rare unhandled shape, left to runtime).
+	// Track the array and typed-map dims of the value reached so far, accumulating
+	// as we descend struct fields: accessing a field of an array-of-structs
+	// preserves the enclosing array dimension (arr.m yields array<map> when m is a
+	// typed map). A map call wraps the callee's outputs in one extra dimension
+	// (map-mode -> map; array-mode -> array). We project the remainder over a
+	// value's map values the first time a typed map is reached; a typed map nested
+	// under an array (array<map<S>>.field) projects over each map in the array.
 	curMap, curArray := 0, 0
 
 	switch ref.Kind {
@@ -510,7 +512,8 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) (int, bool) 
 
 		cur = paramByName(st.Fields, segs[i])
 		if cur != nil {
-			curMap, curArray = cur.MapDim, cur.ArrayDim
+			curMap += cur.MapDim
+			curArray += cur.ArrayDim
 		}
 	}
 
@@ -518,26 +521,25 @@ func mapProjectDepth(prog *ir.Program, p *ir.Pipeline, ref *ir.Ref) (int, bool) 
 }
 
 // projectionShape decides the projection at a field-access segment from the
-// array/map dims of the value reached. It returns (depth, inArray, done): when
-// done is true the caller returns (depth, inArray) — depth i for a typed-map
-// projection (inArray for array<map<S>>.field), 0 for a plain array auto-project,
-// or -1 to reject a nested typed-map projection that has no faithful lowering.
-// When done is false the value is a struct and the caller keeps descending.
+// array/map dims of the value reached. It returns (depth, inArray, done):
+//   - curMap == 1: project the remainder over the map's values at this segment
+//     (depth i), with inArray set when an enclosing array makes the shape
+//     array<map<S>>.field. The binder's projectMapInArray descends the array.
+//   - curMap > 1: a nested typed-map projection (map<map<S>>) has no faithful
+//     lowering; reject with -1 so checkSupported fails the transpile loudly.
+//   - curMap == 0: not at a typed map yet — keep descending (done=false). We do
+//     NOT stop merely because a plain array is present: a typed-map field can lie
+//     deeper (arr.m.x), and a plain array with no map beneath it auto-projects at
+//     runtime, which the loop's fall-through returns as depth 0.
 func projectionShape(curArray, curMap, i int) (int, bool, bool) {
 	switch {
-	case curArray > 0 && curMap == 1:
-		return i, true, true // array<map<S>>.field -> project over each map in the array
-	case curArray > 0 && curMap > 1:
-		return -1, false, true // nested maps inside an array: unsupported
-	case curArray > 0:
-		return 0, false, true // a field beneath a plain array auto-projects
 	case curMap == 1:
-		return i, false, true // map<S>.field
+		return i, curArray > 0, true // map<S>.field, or array<map<S>>.field
 	case curMap > 1:
 		return -1, false, true // nested typed-map projection: unsupported
 	}
 
-	return 0, false, false // a struct: keep descending by key
+	return 0, false, false // a struct or a plain array: keep descending
 }
 
 // forkDims returns the extra map and array dimensions a map call wraps its
