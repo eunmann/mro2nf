@@ -204,6 +204,10 @@ func Emit(prog *ir.Program, opts Options) error {
 		}
 	}
 
+	if err := checkBakedPaths(g); err != nil {
+		return err
+	}
+
 	return writeProject(prog, opts, target, g, specDir, modDir)
 }
 
@@ -759,6 +763,35 @@ func checkReservedEntryNames(prog *ir.Program, target Target) error {
 				Detail: fmt.Sprintf(
 					"%q collides with a reserved Nextflow param the emitter defines for target %q; rename the input",
 					p.Name, target),
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkBakedPaths rejects a single quote in any path baked into a process script
+// as a bash single-quoted literal. Single-quoting cannot contain a ', and it
+// cannot be escaped across the Groovy-GString + bash quoting layers (gstringLit
+// handles $ and \, not '), so an unescaped ' would corrupt the command — refuse
+// it loudly instead. Keys are checked in sorted order for a deterministic error.
+func checkBakedPaths(g genCtx) error {
+	for _, fp := range []struct{ flag, path string }{
+		{"-mre", g.mre}, {"-shell", g.shell}, {"-mrjob", g.mrjob}, {"-mro", g.mroFile},
+	} {
+		if strings.ContainsRune(fp.path, '\'') {
+			return &apperror.UnsupportedError{
+				Construct: "path containing a single quote",
+				Detail:    fmt.Sprintf("%s %q cannot be baked into a shell command", fp.flag, fp.path),
+			}
+		}
+	}
+
+	for _, name := range sortedKeys(g.code) {
+		if strings.ContainsRune(g.code[name], '\'') {
+			return &apperror.UnsupportedError{
+				Construct: "stage src path containing a single quote",
+				Detail:    fmt.Sprintf("stage %s: %q", name, g.code[name]),
 			}
 		}
 	}

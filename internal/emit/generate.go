@@ -71,19 +71,20 @@ func (g genCtx) stageHead(phase string, s *ir.Stage) string {
 	// syntax/compile_stages.go "py stage type cannot have additional
 	// arguments"), so the runner path has nothing to forward.
 	if g.features.nativeRunner && s.Lang == ir.LangPy {
-		// Groovy interpolates ${projectDir} in the script GString before bash sees
-		// the line, so single quotes keep the resulting path literal to bash (a $
-		// or backtick in the project path must not re-expand). runnerBase is the
-		// project dir on a shared FS, or the baked ctrRunner in a container image
-		// (where the project dir is not mounted into an isolated task).
+		// runnerBase deliberately embeds ${projectDir} (a GString ref) so it stays
+		// raw; every other baked path is host-literal and goes through gstringLit,
+		// so a $ or \ in a stage-code / .mro path reaches bash byte-identical
+		// instead of resolving a Groovy variable (MissingPropertyException at task
+		// launch, or silently wrong args). runnerBase is the project dir on a shared
+		// FS, or the baked ctrRunner in a container image.
 		return fmt.Sprintf(`'python3' '%s/run_stage.py' %s -stagecode '%s' -call '%s' -mro '%s'`,
-			g.runnerBase, phase, code, g.entry, g.mroFile)
+			g.runnerBase, phase, gstringLit(code), gstringLit(g.entry), gstringLit(g.mroFile))
 	}
 
 	var cmd strings.Builder
 
 	fmt.Fprintf(&cmd, "'%s' %s -shell '%s' -stagecode '%s' -lang %s -call '%s' -mro '%s'",
-		g.mre, phase, g.shell, code, s.Lang, g.entry, g.mroFile)
+		gstringLit(g.mre), phase, gstringLit(g.shell), gstringLit(code), s.Lang, gstringLit(g.entry), gstringLit(g.mroFile))
 
 	// Src args from the stage declaration (`src exec "code.py a b"`) ride to
 	// the adapter one -srcarg each (#113). Two quoting layers apply: Groovy
@@ -97,7 +98,7 @@ func (g genCtx) stageHead(phase string, s *ir.Stage) string {
 	}
 
 	if g.mrjob != "" {
-		fmt.Fprintf(&cmd, " -mrjob '%s'", g.mrjob)
+		fmt.Fprintf(&cmd, " -mrjob '%s'", gstringLit(g.mrjob))
 	}
 
 	return cmd.String()
