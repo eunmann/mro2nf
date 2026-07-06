@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -17,6 +18,10 @@ import (
 // errDestExists is returned by CopyTree when the destination already exists, to
 // avoid truncating a possibly hard-linked source.
 var errDestExists = errors.New("destination already exists")
+
+// errSymlinkCycle is returned by CopyTree when a directory output reaches one of
+// its own ancestors through a symlink, which would otherwise recurse unbounded.
+var errSymlinkCycle = errors.New("directory symlink cycle")
 
 // The bundle is the object-store-portable channel item exchanged between
 // Nextflow processes: a directory holding a JSON payload plus the actual files
@@ -247,6 +252,43 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 // outputs may be directories). It hard-links files when possible (same device)
 // for speed, falling back to a byte copy.
 func CopyTree(src, dst string) error {
+	return copyTree(src, dst, make(map[dirID]struct{}))
+}
+
+// dirID identifies a directory by (device, inode) — the same identity os.SameFile
+// compares — so the copy-tree recursion detects a directory reached twice on one
+// path regardless of the symlink route taken to it. int64 (not uint64) keeps the
+// field conversions non-redundant across platforms whose Stat_t.Dev differs
+// (linux uint64, darwin int32); sign is irrelevant to a map key.
+type dirID struct {
+	dev, ino int64
+}
+
+// enterDir records dir's (device, inode) in ancestors for cycle detection. The
+// bool is true when it was already on the recursion stack (a cycle); the returned
+// func pops it on unwind.
+func enterDir(dir os.FileInfo, ancestors map[dirID]struct{}) (func(), bool) {
+	st, ok := dir.Sys().(*syscall.Stat_t)
+	if !ok {
+		return func() {}, false
+	}
+
+	id := dirID{dev: int64(st.Dev), ino: int64(st.Ino)}
+	if _, seen := ancestors[id]; seen {
+		return func() {}, true
+	}
+
+	ancestors[id] = struct{}{}
+
+	return func() { delete(ancestors, id) }, false
+}
+
+// copyTree implements CopyTree, threading the set of directory identities already
+// on the recursion stack. A directory output that (via a symlink) points at one
+// of its own ancestors would otherwise recurse until ENAMETOOLONG, duplicating
+// the tree on every pass; catching the repeat (dev, inode) bounds the recursion
+// to the finite number of distinct directories reachable once.
+func copyTree(src, dst string, ancestors map[dirID]struct{}) error {
 	// Resolve a symlinked source to its real target first. Nextflow stages inputs
 	// as symlinks, and link(2) does not follow them — hard-linking the symlink
 	// would leave a dangling link once the bundle is staged into another isolated
@@ -254,6 +296,13 @@ func CopyTree(src, dst string) error {
 	if lst, err := os.Lstat(src); err == nil && lst.Mode()&os.ModeSymlink != 0 {
 		resolved, err := filepath.EvalSymlinks(src)
 		if err != nil {
+			// A dangling symlink inside a copied directory: treat it as absent —
+			// the same way MarkFiles' top-level guard does (os.Stat -> IsNotExist
+			// -> keep the path) — rather than aborting the whole bundle.
+			if os.IsNotExist(err) {
+				return nil
+			}
+
 			return fmt.Errorf("resolve symlink %s: %w", src, err)
 		}
 
@@ -266,7 +315,14 @@ func CopyTree(src, dst string) error {
 	}
 
 	if info.IsDir() {
-		return copyDir(src, dst, info)
+		release, cycle := enterDir(info, ancestors)
+		if cycle {
+			return fmt.Errorf("copy %s: %w", src, errSymlinkCycle)
+		}
+
+		defer release()
+
+		return copyDir(src, dst, info, ancestors)
 	}
 
 	if err := os.Link(src, dst); err == nil {
@@ -284,8 +340,11 @@ func CopyTree(src, dst string) error {
 	return copyFileContents(src, dst, info)
 }
 
-func copyDir(src, dst string, info os.FileInfo) error {
-	if err := os.MkdirAll(dst, info.Mode().Perm()); err != nil {
+func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}) error {
+	// Create the destination writable regardless of the source's mode, then
+	// restore the source mode after populating: a read-only source directory
+	// (e.g. 0555) must still admit its children being written into the copy.
+	if err := os.MkdirAll(dst, dirPerm); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
 	}
 
@@ -295,9 +354,29 @@ func copyDir(src, dst string, info os.FileInfo) error {
 	}
 
 	for _, e := range entries {
-		if err := CopyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors); err != nil {
 			return err
 		}
+	}
+
+	// Restoring the source mode is best-effort: the exact directory permission is
+	// a nicety, not a contract (publish names every leaf and reads by path), and a
+	// filesystem that rejects the chmod would otherwise fail a copy that the prior
+	// MkdirAll-with-source-mode tolerated. A more-permissive dirPerm is safe.
+	_ = os.Chmod(dst, info.Mode().Perm())
+
+	return nil
+}
+
+// closeChecked closes c and wraps a close(2) failure with name, returning nil on
+// a clean close. Call it on a write function's happy path (`return closeChecked(
+// f, name)`) so a close error propagates — the object-store (s3://) and NFS work
+// dirs this data plane targets report write-back failures at close, not write, so
+// a swallowed close would ship a truncated file that exits 0 and gets
+// -resume-cached.
+func closeChecked(c io.Closer, name string) error {
+	if err := c.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", name, err)
 	}
 
 	return nil
@@ -314,11 +393,21 @@ func copyFileContents(src, dst string, info os.FileInfo) error {
 	if err != nil {
 		return fmt.Errorf("create %s: %w", dst, err)
 	}
-	defer func() { _ = out.Close() }()
+
+	// The deferred close is the error-path safety net; the happy path closes via
+	// CloseChecked so a close(2) failure propagates (closed guards a double close).
+	closed := false
+	defer func() {
+		if !closed {
+			_ = out.Close()
+		}
+	}()
 
 	if _, err := io.Copy(out, in); err != nil {
 		return fmt.Errorf("copy %s: %w", src, err)
 	}
 
-	return nil
+	closed = true
+
+	return closeChecked(out, dst)
 }

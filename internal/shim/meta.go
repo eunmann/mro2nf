@@ -2,15 +2,27 @@ package shim
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 )
+
+// errJoinUnknownKey reports a non-resource key in a split's join override, which
+// mrp rejects as an invalid join definition rather than silently ignoring.
+var errJoinUnknownKey = errors.New("unknown key in join override")
+
+// errJoinBadValue reports a resource key in a split's join override whose value
+// has the wrong JSON type (a non-number threads/mem, or a non-string __special),
+// which mrp rejects as an unmarshal error rather than coercing to a default.
+var errJoinBadValue = errors.New("invalid value in join override")
 
 // prepDirs creates the metadata, files, and per-stage tmp directories for a
 // phase and returns the absolute metadata dir, files dir, and journal prefix
@@ -131,9 +143,47 @@ func readStageDefs(meta string) ([]ChunkDef, Resources, error) {
 		defs = append(defs, splitChunk(c))
 	}
 
-	join, _ := parseResources(sd.Join)
+	// The join override carries only the __-prefixed resource keys; any leftover
+	// data key, or a resource key with the wrong value type, is a malformed join
+	// definition. mrp rejects both loudly (an "Expected string for __special" /
+	// unmarshal error that fails the stage) rather than silently ignoring them, so
+	// match that — parseResources' asFloat/best-effort unmarshal would otherwise
+	// coerce a bad value to a default and run the JOIN with unintended resources.
+	if err := checkJoinResourceTypes(sd.Join); err != nil {
+		return nil, Resources{}, err
+	}
+
+	join, extra := parseResources(sd.Join)
+	if len(extra) > 0 {
+		return nil, Resources{}, fmt.Errorf("%w: %s", errJoinUnknownKey, strings.Join(slices.Sorted(maps.Keys(extra)), ", "))
+	}
 
 	return defs, join, nil
+}
+
+// checkJoinResourceTypes rejects a join override whose resource keys carry the
+// wrong JSON type — a number-valued __special, or a non-number __threads/
+// __mem_gb/__vmem_gb — which parseResources would otherwise swallow. Keys are
+// checked in sorted order so the error names the same key deterministically.
+func checkJoinResourceTypes(m map[string]json.RawMessage) error {
+	for _, key := range slices.Sorted(maps.Keys(m)) {
+		val := m[key]
+
+		switch key {
+		case "__threads", "__mem_gb", "__vmem_gb":
+			var f float64
+			if err := json.Unmarshal(val, &f); err != nil {
+				return fmt.Errorf("%w: %s must be a number, got %s", errJoinBadValue, key, val)
+			}
+		case "__special":
+			var s string
+			if err := json.Unmarshal(val, &s); err != nil {
+				return fmt.Errorf("%w: %s must be a string, got %s", errJoinBadValue, key, val)
+			}
+		}
+	}
+
+	return nil
 }
 
 func splitChunk(chunk map[string]json.RawMessage) ChunkDef {
