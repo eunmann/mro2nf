@@ -111,6 +111,29 @@ class GoJSONTest(unittest.TestCase):
         self.assertEqual(rs.go_json(rs.GoFloat(1e20)),
                          "100000000000000000000")
 
+    def test_numpy_scalars_coerced(self):
+        # A stage that returns numpy values (CellRanger's SUBSAMPLE_READS returns
+        # a np.float64) must not leak numpy's repr into the bundle JSON — numpy>=2
+        # makes repr(np.float64(x)) == 'np.float64(x)', which Nextflow can't parse.
+        # .tolist() (detected via __module__, no numpy import) yields native
+        # scalars/lists. Faked here since the unit env has no numpy.
+        class _FakeF64(float):
+            __module__ = "numpy"
+
+            def tolist(self):
+                return float(self)
+
+        class _FakeArr:
+            __module__ = "numpy.ndarray"
+
+            def tolist(self):
+                return [1, 2]
+
+        self.assertEqual(rs.go_json(_FakeF64(0.5)), "0.5")
+        self.assertEqual(rs.go_json({"x": _FakeF64(1.25)}),
+                         '{\n  "x": 1.25\n}')
+        self.assertEqual(rs.go_json(_FakeArr()), "[\n  1,\n  2\n]")
+
     def test_go_string_control_and_line_separators(self):
         self.assertEqual(rs.go_json("a\tb\x01 "),
                          '"a\\tb\\u0001\\u2028"')
