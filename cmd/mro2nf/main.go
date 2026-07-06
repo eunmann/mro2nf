@@ -353,12 +353,10 @@ func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 	code := make(map[string]string, len(prog.Stages))
 
 	for name, s := range prog.Stages {
-		path := s.SrcPath
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(mroDir, path)
-		}
-
-		abs, err := filepath.Abs(path)
+		// SrcPath is already resolved against the declaring file's directory by the
+		// frontend (an @included stage's src is relative to the included file, not
+		// this entry .mro); just make it absolute against the process cwd.
+		abs, err := filepath.Abs(s.SrcPath)
 		if err != nil {
 			return fmt.Errorf("resolve stage %s src: %w", name, err)
 		}

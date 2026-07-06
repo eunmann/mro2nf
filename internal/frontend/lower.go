@@ -3,6 +3,7 @@ package frontend
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/apperror"
@@ -45,6 +46,20 @@ func Lower(ast *syntax.Ast) (*ir.Program, error) {
 	return prog, nil
 }
 
+// resolveSrcPath resolves a stage's relative src path against the directory of
+// the FILE THAT DECLARES the stage (Martian's rule — SrcParam.FindPath), not the
+// entry .mro's directory: an @included stage's src is relative to the included
+// file. Absolute paths pass through. The result may still be relative when the
+// declaring file's own path is relative; the emitter absolutizes it against the
+// process cwd, exactly as Martian's relative paths resolve.
+func resolveSrcPath(src *syntax.SrcParam) string {
+	if filepath.IsAbs(src.Path) || src.Node.Loc.File == nil {
+		return src.Path
+	}
+
+	return filepath.Join(filepath.Dir(src.Node.Loc.File.FullPath), src.Path)
+}
+
 func lowerStage(s *syntax.Stage) *ir.Stage {
 	st := &ir.Stage{
 		Name:     s.Id,
@@ -57,7 +72,7 @@ func lowerStage(s *syntax.Stage) *ir.Stage {
 
 	if s.Src != nil {
 		st.Lang = ir.Lang(s.Src.Lang)
-		st.SrcPath = s.Src.Path
+		st.SrcPath = resolveSrcPath(s.Src)
 		st.SrcArgs = s.Src.Args
 	}
 
