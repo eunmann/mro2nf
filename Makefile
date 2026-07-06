@@ -66,11 +66,14 @@ bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 re
 vet: ## Run go vet
 	go vet ./...
 
+# --build-tags e2e pulls the tag-gated test/e2e harness into the lint set; the
+# tag is additive (no !e2e constraints exist), so every other package lints
+# exactly as before.
 lint: ## Run linter with auto-fix
-	$(GOLANGCI_LINT) run --fix ./... 2>&1 | tee artifacts/lint.log
+	$(GOLANGCI_LINT) run --fix --build-tags e2e ./... 2>&1 | tee artifacts/lint.log
 
 lint-check: ## Run linter without auto-fix (for CI)
-	$(GOLANGCI_LINT) run ./...
+	$(GOLANGCI_LINT) run --build-tags e2e ./...
 
 deadcode: ## Fail on functions unreachable from the mro2nf/mre binaries
 	@out="$$($(DEADCODE) ./cmd/...)"; \

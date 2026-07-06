@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -164,6 +165,10 @@ func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 	return out.Bytes()
 }
 
+// errNonLocalWorkdir rejects a BENCH_WORKDIR on an object store, where the
+// refs metric cannot be collected (see requireLocalWorkdir).
+var errNonLocalWorkdir = errors.New("BENCH_WORKDIR is non-local")
+
 // requireLocalWorkdir rejects a non-local BENCH_WORKDIR (empty is fine — the
 // default local executor). The bench gate's `refs` metric is a local scan of the
 // work dir (bench_metrics.count_refs); over an object store (s3://…) that scan
@@ -173,11 +178,11 @@ func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 // object-store metric is out of scope (see docs/BENCHMARKS.md). The scheme
 // compare is case-insensitive (URI schemes are, per RFC 3986).
 func requireLocalWorkdir(w string) error {
-	if i := strings.Index(w, "://"); i >= 0 && !strings.EqualFold(w[:i], "file") {
-		return fmt.Errorf("BENCH_WORKDIR=%q is non-local (%s://): the bench gate's "+
+	if before, _, ok := strings.Cut(w, "://"); ok && !strings.EqualFold(before, "file") {
+		return fmt.Errorf("%w: BENCH_WORKDIR=%q (%s://): the bench gate's "+
 			"refs metric is a local work-dir scan and reads 0 over an object store, "+
 			"so the gate would pass vacuously; run bench against a local work dir "+
-			"(see docs/BENCHMARKS.md)", w, w[:i])
+			"(see docs/BENCHMARKS.md)", errNonLocalWorkdir, w, before)
 	}
 
 	return nil

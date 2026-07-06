@@ -94,10 +94,8 @@ func hashTree(t *testing.T, dir string, exclude ...string) map[string]string {
 			return err
 		}
 
-		for _, ex := range exclude {
-			if d.Name() == ex {
-				return nil
-			}
+		if slices.Contains(exclude, d.Name()) {
+			return nil
 		}
 
 		rel, err := filepath.Rel(dir, path)
@@ -150,6 +148,8 @@ func stripPathPrefix(v any, prefix string) any {
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
 // and requires the published file tree and the _outs JSON to match.
 func TestMrpDiff(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	bin := martianBin(t)
@@ -230,13 +230,13 @@ func TestMrpDiff(t *testing.T) {
 		// update_journal), so real mrp completes it — machine-checking the
 		// committed golden's mrp provenance.
 		{name: "src_args"},
-		// TODO: the comp/exec-adapter fixtures cannot join an mrp
+		// The comp/exec-adapter fixtures cannot join an mrp
 		// differential — their stage binaries are fake Python stand-ins for
 		// mre's simpler wrapped-adapter contract, and REAL mrp hangs
 		// indefinitely waiting on them (observed: mixed_adapters stuck 23+
 		// minutes at DBL.fork0.chnk0.main before being killed; the hang is
 		// on the mrp side of the diff, not mre's). Exercising the
-		// real-mrjob-under-mre seam needs a dedicated harness that runs
+		// real-mrjob-under-mre seam would need a dedicated harness that runs
 		// ONLY the Nextflow side with $MARTIAN_BIN/mrjob (via the realMrjob
 		// knob below) against a committed golden, not an mrp baseline.
 		// {name: "comp_split", realMrjob: true},

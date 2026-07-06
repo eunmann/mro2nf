@@ -39,14 +39,24 @@ func TestMain(m *testing.M) {
 
 	root = filepath.Dir(filepath.Dir(wd)) // test/e2e -> repo root
 
-	os.Setenv("NXF_ANSI_LOG", "false")
-	os.Setenv("NXF_DISABLE_CHECK_LATEST", "true")
+	mustSetenv("NXF_ANSI_LOG", "false")
+	mustSetenv("NXF_DISABLE_CHECK_LATEST", "true")
 
 	if os.Getenv("NXF_OPTS") == "" {
-		os.Setenv("NXF_OPTS", "-Xms256m -Xmx1g -XX:+UseSerialGC")
+		mustSetenv("NXF_OPTS", "-Xms256m -Xmx1g -XX:+UseSerialGC")
 	}
 
 	os.Exit(m.Run())
+}
+
+// mustSetenv sets an env var in TestMain (where t.Setenv is unavailable). The
+// pinned Nextflow environment is load-bearing for every test, so a failure to
+// set it aborts the run instead of silently proceeding unpinned.
+func mustSetenv(key, value string) {
+	if err := os.Setenv(key, value); err != nil {
+		fmt.Fprintf(os.Stderr, "setenv %s: %v\n", key, err)
+		os.Exit(1)
+	}
 }
 
 // requireTools skips the test when a prerequisite is missing — unless

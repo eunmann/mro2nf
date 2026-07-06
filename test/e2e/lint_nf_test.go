@@ -59,6 +59,8 @@ const (
 // expected-refusal allowlist entry for that exact combo THEN — loud by
 // default, never classified by error-message substring.
 func TestNextflowLint(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java")
 	requireNextflowLint(t)
 
@@ -73,7 +75,6 @@ func TestNextflowLint(t *testing.T) {
 				cmd.Dir = proj
 
 				out, err := cmd.CombinedOutput()
-
 				if err != nil {
 					// nextflow lint prints diagnostics grouped by file in path order
 					// with warnings interleaved, so a tail can bury the error's
@@ -93,7 +94,7 @@ func TestNextflowLint(t *testing.T) {
 func lintErrorLines(out []byte) string {
 	var errs []string
 
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "Error") || strings.Contains(line, "❌") {
 			errs = append(errs, trimmed)

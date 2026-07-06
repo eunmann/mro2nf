@@ -32,6 +32,8 @@ var nativeRunnerFixtures = []struct{ fixture, golden string }{
 // — no martian_shell.py adapter and no mre broker on the stage-execution hop —
 // with output identical to the committed mrp golden.
 func TestNativeRunner(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	for _, tc := range nativeRunnerFixtures {
@@ -71,7 +73,7 @@ func assertNoAdapterOnPyStages(t *testing.T, proj string) {
 			t.Fatal(err)
 		}
 
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			if strings.Contains(line, "-lang py") && strings.Contains(line, "-shell") {
 				t.Errorf("%s: py stage still brokered by the adapter: %s", filepath.Base(f), strings.TrimSpace(line))
 			}
@@ -88,6 +90,8 @@ func assertNoAdapterOnPyStages(t *testing.T, proj string) {
 // while -native-runner swaps the stage hop, and the combined project still
 // produces output byte-identical to the default run.
 func TestNativeRunnerComposesWithNative(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	// Compared against the committed mrp goldens in ONE run each: TestGolden
@@ -121,6 +125,8 @@ func TestNativeRunnerComposesWithNative(t *testing.T) {
 // an ordinary failure retries with escalated memory and the shim's
 // get_memory_allocation reports the attempt-2 value.
 func TestNativeRunnerExitContract(t *testing.T) {
+	t.Parallel()
+
 	requireTools(t, "nextflow", "java", "python3")
 
 	t.Run("assert terminates", func(t *testing.T) {
