@@ -18,6 +18,46 @@ func fileTable() *types.Table {
 	})
 }
 
+// TestMarkFilesPreservesExtension guards a real CellRanger failure: Martian
+// typed-file readers reconstruct a leaf's on-disk path from its filetype
+// extension (the Rust equivalent of Path::with_extension("bincode")). A staged
+// leaf therefore must keep the source file's extension, or the reader looks for
+// `<leaf>.bincode` next to a bare `<leaf>` and fails with NotFound. The transport
+// leaf stays ordinally named (collision-free) but carries the original extension.
+func TestMarkFilesPreservesExtension(t *testing.T) {
+	dir := t.TempDir()
+
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	src := filepath.Join(srcDir, "filtered_bcs_groups.bincode")
+	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	params := []ir.Param{{Name: "f", BaseType: "bincode", IsFile: true}}
+	bundle := filepath.Join(dir, "bundle")
+	if err := shim.WriteBundle(bundle, map[string]any{"f": src}, params, fileTable()); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+
+	// The leaf keeps the .bincode extension so with_extension("bincode") resolves.
+	if _, err := os.Stat(filepath.Join(bundle, "f", "L0000.bincode")); err != nil {
+		t.Errorf("leaf should be staged as f/L0000.bincode (extension preserved): %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(raw), "@mre:file:f/L0000.bincode") {
+		t.Errorf("marker should carry the .bincode extension, got: %s", raw)
+	}
+}
+
 // TestBundleRoundTrip writes a payload with a file leaf into a bundle, then
 // reads it back from a different relative path, proving the file travels with
 // the payload and the marker resolves to a real absolute path.
@@ -46,19 +86,20 @@ func TestBundleRoundTrip(t *testing.T) {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
-	// The file was staged into the bundle under a flat ordinal leaf name (no
-	// original basename in transport) and the payload now holds its marker.
+	// The file was staged into the bundle under a flat ordinal leaf name (the
+	// original basename is dropped, but its extension is preserved) and the payload
+	// now holds its marker.
 	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(raw), "@mre:file:f/L0000") {
+	if !strings.Contains(string(raw), "@mre:file:f/L0000.txt") {
 		t.Errorf("data.json should contain a flat ordinal file marker, got: %s", raw)
 	}
 
-	if _, err := os.Stat(filepath.Join(bundle, "f", "L0000")); err != nil {
-		t.Errorf("leaf should be staged as f/L0000: %v", err)
+	if _, err := os.Stat(filepath.Join(bundle, "f", "L0000.txt")); err != nil {
+		t.Errorf("leaf should be staged as f/L0000.txt: %v", err)
 	}
 
 	// Read it back; the marker resolves to an absolute path that exists.

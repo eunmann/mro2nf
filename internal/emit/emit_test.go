@@ -128,7 +128,11 @@ func TestEmitConfig(t *testing.T) {
 	cfg := string(data)
 	for _, want := range []string{
 		"params.outdir = 'results'",
-		"standard { process.executor = 'local' }",
+		"process.executor = 'local'",
+		// Local runs clamp each task's request to the machine (Martian parity), so
+		// an oversized reservation runs instead of parking the executor forever.
+		"process.resourceLimits = [ cpus: params.max_cpus as int, memory: params.max_memory as nextflow.util.MemoryUnit ]",
+		"params.max_memory =",
 		"slurm    { process.executor = 'slurm' }",
 		"sge      { process.executor = 'sge' }",
 		"lsf      { process.executor = 'lsf' }",
@@ -223,6 +227,13 @@ func TestEmitConfigTargets(t *testing.T) {
 
 	if strings.Contains(batch, "profiles {") {
 		t.Error("awsbatch config should set the executor directly, not bury it in a profile")
+	}
+
+	// The local resource clamp is local-only: a Batch scheduler places an oversized
+	// request on a big-enough node itself, so clamping to the launcher host would be
+	// wrong. It must not leak into the cloud config.
+	if strings.Contains(batch, "resourceLimits") || strings.Contains(batch, "max_memory") {
+		t.Error("awsbatch config should not carry the local-only resource clamp")
 	}
 
 	omics := emitCfg(emit.TargetHealthOmics)

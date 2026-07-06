@@ -589,9 +589,24 @@ def go_json(v):
     return _enc(v, 0, False)
 
 
+def _numpy_native(v):
+    """Coerce a numpy scalar/array to its native Python equivalent, or return v
+    unchanged. numpy scalars are not JSON-serializable as-is — numpy>=2.0 makes
+    repr(np.float64(x)) == 'np.float64(x)' (invalid JSON), and np.int64 is not an
+    int subclass at all — so a stage that returns numpy values (CellRanger's do)
+    would emit a broken bundle. .tolist() maps a numpy scalar to a Python scalar
+    and an ndarray to nested lists, matching martian_shell.py's JSON encoder.
+    Detected via __module__ so the runner needs no numpy dependency of its own."""
+    mod = type(v).__module__
+    if (mod == "numpy" or mod.startswith("numpy.")) and hasattr(v, "tolist"):
+        return v.tolist()
+    return v
+
+
 def _enc(v, level, raw):
     if isinstance(v, PyStrings):
         return _enc(v.value, level, True)
+    v = _numpy_native(v)
     if v is None:
         return "null"
     if isinstance(v, bool):
@@ -649,9 +664,19 @@ def resources_struct(r):
 # CopyTree/WriteChunkBundle.
 # ---------------------------------------------------------------------------
 
+def _leaf_ext(path):
+    """The file leaf's extension, matching Go filepath.Ext: the suffix from the
+    last dot in the final path element (including a leading-dot name), or ""."""
+    base = os.path.basename(path)
+    dot = base.rfind(".")
+    return base[dot:] if dot >= 0 else ""
+
+
 def mark_files(bundle_dir, payload, params, structs):
-    """Copy every file leaf into bundle_dir/f/L%04d (walk order) and replace
-    it with a transport marker; ports MarkFiles."""
+    """Copy every file leaf into bundle_dir/f/L%04d<ext> (walk order) and replace
+    it with a transport marker; ports MarkFiles. The ordinal drops the original
+    basename but keeps the extension, so Martian typed-file readers that
+    reconstruct a leaf path from its filetype (Path::with_extension) resolve it."""
     counter = [0]
 
     def copy_in(src):
@@ -666,7 +691,7 @@ def mark_files(bundle_dir, payload, params, structs):
             return src
         except OSError:
             src_is_dir = False  # copy_tree will surface the error precisely
-        rel = os.path.join(BUNDLE_FILES, "L%04d" % counter[0])
+        rel = os.path.join(BUNDLE_FILES, "L%04d%s" % (counter[0], _leaf_ext(src)))
         counter[0] += 1
         dst = os.path.join(bundle_dir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)

@@ -220,12 +220,16 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		isDir := err == nil && info.IsDir()
 
 		// Each leaf is staged under a flat, ordinal name (f/L0000, f/L0001, …) in
-		// canonical walk order. The transport basename is not load-bearing — publish
-		// names every leaf from the manifest via OutFilename, and the adapter reads
-		// inputs by absolute path — so leaves are renumbered rather than carrying
-		// their original basename through every hop. This flat, predictable naming is
-		// what lets the leaves be staged as individual path items (epic #18 / #13).
-		rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d", n))
+		// canonical walk order, so distinct leaves never collide and can be staged as
+		// individual path items (epic #18 / #13). The ordinal replaces the original
+		// basename — but the original EXTENSION is preserved, because Martian
+		// typed-file readers reconstruct a leaf's path from its filetype extension
+		// (the Rust `Path::with_extension("bincode")`); a bare `L0002` would send such
+		// a reader to a nonexistent `L0002.bincode`. The source file's extension is
+		// exactly the Martian filetype (Martian names outputs `<field>.<filetype>`),
+		// so carrying it makes the reconstruction round-trip while staying collision
+		// free.
+		rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d%s", n, filepath.Ext(src)))
 		n++
 
 		dst := filepath.Join(dir, rel)

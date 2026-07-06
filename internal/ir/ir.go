@@ -3,7 +3,11 @@
 // emitter and shim consume.
 package ir
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"path/filepath"
+	"strings"
+)
 
 // Lang identifies a stage adapter language.
 type Lang string
@@ -72,6 +76,20 @@ type Stage struct {
 	SrcArgs []string
 	// Resources is the static resource request.
 	Resources Resources
+}
+
+// SrcIsPathCommand reports whether the stage's code is a bare command name (no
+// path separator) for a compiled or exec stage — i.e. a binary resolved on PATH
+// at exec time (e.g. CellRanger's shared `cr_lib` in lib/bin) rather than a file
+// in the mro tree. Such a name must be kept verbatim, never absolutized into a
+// nonexistent filesystem path. A py stage's src is an interpreter-file argument,
+// so it is always a real path and never a path command.
+func (s *Stage) SrcIsPathCommand() bool {
+	if s.Lang != LangComp && s.Lang != LangExec {
+		return false
+	}
+
+	return s.SrcPath != "" && !strings.ContainsRune(s.SrcPath, filepath.Separator)
 }
 
 // RefKindSelf and RefKindCall are the two Ref.Kind values: a reference to a

@@ -66,7 +66,29 @@ func resolveSrcPath(src *syntax.SrcParam, mroPaths []string) string {
 		return src.Path
 	}
 
+	// A comp/exec stage whose src is a bare command name (no path separator) is
+	// exec'd by name and resolved on PATH at run time — Martian's FindPath returns
+	// it unqualified for exactly this case (e.g. CellRanger's `cr_lib` in lib/bin).
+	// Dir-joining it would turn a PATH lookup into a nonexistent filesystem path,
+	// so keep it verbatim. A py stage's src is an interpreter-file argument (not
+	// PATH-resolved), and a path with a separator is a real relative reference —
+	// both keep the declaring-dir fallback below.
+	if isBareCommand(src.Type, src.Path) {
+		return src.Path
+	}
+
 	return filepath.Join(filepath.Dir(src.Node.Loc.File.FullPath), src.Path)
+}
+
+// isBareCommand reports whether a stage src is a comp/exec command resolved on
+// PATH at exec time: a compiled or exec stage whose path is a bare name with no
+// separator. Such a name must never be qualified into a filesystem path.
+func isBareCommand(t syntax.StageCodeType, path string) bool {
+	if t != syntax.CompiledStage && t != syntax.ExecStage {
+		return false
+	}
+
+	return path != "" && !strings.ContainsRune(path, filepath.Separator)
 }
 
 func lowerStage(s *syntax.Stage, mroPaths []string) *ir.Stage {

@@ -356,6 +356,15 @@ func stageCodePaths(prog *ir.Program) (map[string]string, error) {
 	code := make(map[string]string, len(prog.Stages))
 
 	for name, s := range prog.Stages {
+		// A comp/exec stage whose src is a bare command (e.g. CellRanger's `cr_lib`)
+		// is resolved on PATH at exec time; absolutizing it would produce a broken
+		// filesystem path. Keep it verbatim.
+		if s.SrcIsPathCommand() {
+			code[name] = s.SrcPath
+
+			continue
+		}
+
 		abs, err := filepath.Abs(s.SrcPath)
 		if err != nil {
 			return nil, fmt.Errorf("resolve stage %s src: %w", name, err)
