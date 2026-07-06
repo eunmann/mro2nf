@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,37 @@ import (
 
 // root is the repo root, resolved once in TestMain.
 var root string
+
+// shardSkip partitions the Nextflow-running subtests across CI runners. Every
+// `nextflow run` is a fresh JVM, so the golden suite is JVM-boot-bound and
+// core-throttled; sharding it across matrix jobs cuts wall time near-linearly.
+// With E2E_SHARD_TOTAL=N>1, a subtest runs only on the shard its name hashes to
+// (a stable FNV hash of the full t.Name(), so the partition is deterministic
+// and disjoint — full coverage is the union of shards, enforced by the gate
+// job). Unset or N<=1 runs everything, so local `make test-e2e` is unaffected.
+// Gating here (rather than at each t.Run) covers every suite uniformly through
+// the single chokepoint; the preceding transpile is milliseconds against a
+// multi-second run, so the skipped work is negligible.
+func shardSkip(t *testing.T) {
+	t.Helper()
+
+	total, err := strconv.Atoi(os.Getenv("E2E_SHARD_TOTAL"))
+	if err != nil || total <= 1 {
+		return
+	}
+
+	index, err := strconv.Atoi(os.Getenv("E2E_SHARD_INDEX"))
+	if err != nil || index < 0 || index >= total {
+		t.Fatalf("E2E_SHARD_INDEX=%q invalid for E2E_SHARD_TOTAL=%d", os.Getenv("E2E_SHARD_INDEX"), total)
+	}
+
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(t.Name()))
+
+	if int(h.Sum32()%uint32(total)) != index {
+		t.Skipf("shard %d/%d: %s runs in another shard", index, total, t.Name())
+	}
+}
 
 // TestMain builds the transpiler + shim once and pins the Nextflow environment
 // the shell harnesses used (no ANSI redraw, no version check, small JVM).
@@ -163,6 +195,7 @@ func transpileInto(dir, mro, proj string, extra ...string) error {
 // the returned error so failures are never silent.
 func runNextflow(t *testing.T, proj string, args ...string) error {
 	t.Helper()
+	shardSkip(t)
 
 	cmd := exec.Command("nextflow", append([]string{"run", "main.nf"}, args...)...)
 	cmd.Dir = proj
