@@ -219,3 +219,16 @@ each flag opts into are surfaced as transpile-time diagnostics
   (verified by the Go `TestMrpDiff` suite against real mrp), but files are copied
   into place rather than moved + symlinked, and `work/` is retained (no VDR) —
   no output-observable correctness impact.
+- **Embedded absolute paths (shared-filesystem assumption) — unsupported on
+  object stores, flagged loudly.** The data plane stages *declared* file leaves;
+  a path a stage bakes into another file's *content* (e.g. a JSON manifest that
+  names other files by absolute path) is invisible to the type walk and cannot
+  be relocated. Under `mrp` (shared filesystem) it resolves; on AWS Batch + S3 /
+  HealthOmics the downstream isolated container never sees the producer's
+  scratch, so the referenced path is absent. This is a stage authoring pattern
+  the transpiler cannot faithfully reproduce, not a transpiler bug. The shim
+  scans each small text stage output for its task's own scratch-dir prefix and
+  emits a loud `mre: WARNING` (to the task log → CloudWatch / the Omics engine
+  log) naming the output and the offending path, turning a cryptic downstream
+  `FileNotFoundError` into a clear, stage-local diagnostic at production time.
+  (Best-effort: small text outputs only; binary/large outputs are skipped.)

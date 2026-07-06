@@ -258,7 +258,13 @@ func runMain(ctx context.Context, argv []string) error {
 		return fmt.Errorf("main: %w", err)
 	}
 
-	return prod.write(cf.outFile, outs)
+	if err := prod.write(cf.outFile, outs); err != nil {
+		return err
+	}
+
+	warnOutputScratchRefs(cf.outFile, cf.work)
+
+	return nil
 }
 
 func runJoin(ctx context.Context, argv []string) error {
@@ -303,5 +309,11 @@ func runJoin(ctx context.Context, argv []string) error {
 		return fmt.Errorf("join: %w", err)
 	}
 
-	return prod.write(cf.outFile, final)
+	if err := prod.write(cf.outFile, final); err != nil {
+		return err
+	}
+
+	warnOutputScratchRefs(cf.outFile, cf.work)
+
+	return nil
 }
