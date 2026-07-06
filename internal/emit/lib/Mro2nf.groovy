@@ -49,18 +49,39 @@ class Mro2nf {
     }
 
     // disabledField reads a disable-gate boolean directly from a source bundle's
-    // data.json (jsonFile) by top-level field name — the native alternative to a
-    // DISABLE task when the gate's ref resolves to a single top-level field: the
-    // pipeline input (self.<field>) or an upstream output (CALL.out.<field>) (#59).
-    static boolean disabledField(Path jsonFile, String field) {
-        requireBool(((Map) parseJson(jsonFile)).get(field), field)
+    // data.json (jsonFile) by a dotted struct path — the native alternative to a
+    // DISABLE task when the gate's ref resolves to a scalar bool: the pipeline
+    // input (self.<path>) or an upstream output (CALL.out.<path>). The path is a
+    // single top-level field (#59) or a nested struct projection like
+    // "config.disable_count" (#209).
+    static boolean disabledField(Path jsonFile, String path) {
+        requireBool(navigatePath(parseJson(jsonFile), path), path)
     }
 
     // disabledDir is disabledField for a bundle DIRECTORY (its data.json) rather
     // than the data.json file — used by the keyed disable gate, whose per-fork
     // pipeline args arrive as a staged bundle dir (#59).
-    static boolean disabledDir(Path bundleDir, String field) {
-        requireBool(parseSidecar(bundleDir).get(field), field)
+    static boolean disabledDir(Path bundleDir, String path) {
+        requireBool(navigatePath(parseSidecar(bundleDir), path), path)
+    }
+
+    // navigatePath walks a dotted struct-field path (e.g. "config.disable_count")
+    // through nested JSON objects, matching the Go binder's struct projection of a
+    // disable ref. A valid scalar-bool disable ref is always pure struct
+    // navigation, so an intermediate that is missing/null or not an object is a
+    // real divergence — fail loudly (matching requireBool) rather than silently
+    // resolve to false and run a branch mrp would not.
+    private static Object navigatePath(Object root, String path) {
+        Object cur = root
+        for (String seg : path.split('\\.')) {
+            if (!(cur instanceof Map)) {
+                String kind = cur == null ? 'null' : cur.getClass().getSimpleName()
+                throw new IllegalArgumentException(
+                    "disable gate path '${path}': cannot read field '${seg}' from a ${kind}")
+            }
+            cur = ((Map) cur).get(seg)
+        }
+        return cur
     }
 
     // parseJson parses a JSON file by Path (e.g. a split's joinres.json), keeping
