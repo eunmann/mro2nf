@@ -1,6 +1,7 @@
 package emit
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -15,11 +16,16 @@ import (
 // stay byte-identical — a leaf stage that read self.x.y now reads the parent's
 // binding for x projected by .y, the exact same value.
 //
-// Conservative by construction: a call is inlined only when its callee is a
-// plain (unmapped, undisabled) sub-pipeline AND every self-input substitution
-// and every consumer projection composes cleanly (a projection is only ever
-// pushed onto a ref/object/array, never into a scalar literal). Anything else is
-// left as a boundary task, so the pass can only remove tasks, never alter output.
+// Conservative by construction: a call is inlined only when its callee is an
+// unmapped sub-pipeline AND every self-input substitution and every consumer
+// projection composes cleanly (a projection is only ever pushed onto a
+// ref/object/array, never into a scalar literal). A runtime-disabled call is
+// inlined only when its gate can be pushed onto every internal call as a single
+// ref while staying byte-identical AND without increasing task count — the
+// boundary bind of a disabled sub cheaply short-circuits the whole sub-workflow,
+// so inlining is admitted only for a flat fan-out sub whose promoted calls the
+// emitter fuses into gated binds (inlineDisabled). Anything else is left as a
+// boundary task, so the pass can only remove tasks, never alter output.
 func inlinePipelines(prog *ir.Program) {
 	flat := map[string]bool{}
 	for name := range prog.Pipelines {
@@ -54,14 +60,15 @@ func flattenRound(p *ir.Pipeline, prog *ir.Program, flat map[string]bool, subs m
 }
 
 // inlineEligible splices every eligible plain sub-pipeline call into p, recording
-// each inlined call's whole output in subs.
+// each inlined call's whole output in subs. Both undisabled and safely
+// runtime-disabled calls are eligible (see inlineOne).
 func inlineEligible(p *ir.Pipeline, prog *ir.Program, flat map[string]bool, subs map[string]ir.Value) bool {
 	changed := false
 
 	out := p.Calls[:0:0]
 	for _, c := range p.Calls {
 		sub, ok := prog.Pipelines[c.Callable]
-		if !ok || c.Mapped || c.Disabled != nil {
+		if !ok || c.Mapped {
 			out = append(out, c)
 
 			continue
@@ -69,9 +76,9 @@ func inlineEligible(p *ir.Pipeline, prog *ir.Program, flat map[string]bool, subs
 
 		flattenPipeline(sub, prog, flat)
 
-		spliced, whole, ok := inlineCall(c, sub)
+		spliced, whole, ok := inlineOne(c, sub, prog, subs)
 		if !ok {
-			out = append(out, c) // un-composable: keep the boundary task
+			out = append(out, c) // un-composable or unsafe: keep the boundary task
 
 			continue
 		}
@@ -84,6 +91,143 @@ func inlineEligible(p *ir.Pipeline, prog *ir.Program, flat map[string]bool, subs
 	p.Calls = out
 
 	return changed
+}
+
+// inlineOne inlines a plain sub-pipeline call, dispatching on its disable gate:
+// an undisabled call inlines directly; a runtime-disabled call inlines only when
+// the gate can be pushed onto every spliced internal call both safely and without
+// increasing orchestration (inlineDisabled). A gate that folds to a constant is
+// left to foldDisables (ok=false, boundary kept, then re-visited next round
+// undisabled or pruned).
+func inlineOne(c ir.Call, sub *ir.Pipeline, prog *ir.Program, subs map[string]ir.Value) ([]ir.Call, ir.Value, bool) {
+	if c.Disabled == nil {
+		return inlineCall(c, sub)
+	}
+
+	return inlineDisabled(c, sub, prog, subs)
+}
+
+// inlineDisabled inlines a plain sub-pipeline call gated by a runtime disable X,
+// pushing X onto every spliced internal call so the whole sub is skipped — and
+// its call-output-ref returns resolve to null — exactly when X is true, which is
+// byte-identical to mrp disabling the sub-pipeline. It inlines only when BOTH gates
+// pass: disabledInlineSafe (correctness — the gate stays a single ref and every
+// return nulls) and disabledInlineProfitable (overhead — the promoted calls fuse
+// into gated binds, so a disabled fork never costs more tasks than the boundary).
+// A gate that folds to a constant is deferred to foldDisables. Any failure →
+// ok=false, boundary kept.
+func inlineDisabled(c ir.Call, sub *ir.Pipeline, prog *ir.Program, subs map[string]ir.Value) ([]ir.Call, ir.Value, bool) {
+	gate, runtime := runtimeGate(c.Disabled, subs)
+	if !runtime || !disabledInlineSafe(sub) || !disabledInlineProfitable(gate, sub, prog) {
+		return nil, ir.Value{}, false
+	}
+
+	spliced, whole, ok := inlineCall(c, sub)
+	if !ok {
+		return nil, ir.Value{}, false
+	}
+
+	for i := range spliced {
+		g := *gate
+		spliced[i].Disabled = &g // every internal call inherits X (none had its own)
+	}
+
+	return spliced, whole, true
+}
+
+// runtimeGate resolves a disable gate through the inlined-output subs, reporting
+// whether it is a genuine runtime ref (true) — an unresolved self/upstream ref, or
+// one that resolves to another ref — versus a gate that folds to a constant
+// (false), which foldDisables handles instead.
+func runtimeGate(d *ir.Ref, subs map[string]ir.Value) (*ir.Ref, bool) {
+	nv, resolved := applySubToValue(ir.Value{Ref: d}, subs)
+	if !resolved {
+		return d, true
+	}
+
+	return nv.Ref, nv.Ref != nil
+}
+
+// disabledInlineSafe reports whether sub can be inlined under a runtime disable:
+// no internal call may carry its own disable (the gate must stay a single ref),
+// and every return leaf must be a call-output ref (so it nulls with its now-
+// disabled call, matching mrp nulling every output of a disabled sub-pipeline).
+func disabledInlineSafe(sub *ir.Pipeline) bool {
+	for _, ic := range sub.Calls {
+		if ic.Disabled != nil {
+			return false
+		}
+	}
+
+	for _, rb := range sub.Returns {
+		if !isCallOutputRef(rb.Value) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// disabledInlineProfitable reports whether inlining sub under gate X cannot
+// INCREASE orchestration tasks. A disabled sub's boundary is a single cheap bind
+// that short-circuits the entire sub-workflow when X fires; inlining promotes the
+// sub's internal calls into the parent, and the emitter runs a STANDALONE,
+// UNCONDITIONAL bind for any promoted call it cannot fuse (a mapped, split,
+// preflight, non-native-gated, or internally-chained call). Such a call would pay
+// its bind even while disabled, so a runtime-disabled sub could cost M binds
+// instead of 1. We therefore inline only a FLAT fan-out sub: X is natively
+// readable and every internal call is an unmapped, non-preflight, non-split leaf
+// stage reading only pipeargs (no internal chaining) — exactly the calls the
+// emitter fuses into a gated bind, so a disabled fork costs ZERO tasks and an
+// enabled one drops the boundary bind. A strict non-regression either way.
+func disabledInlineProfitable(gate *ir.Ref, sub *ir.Pipeline, prog *ir.Program) bool {
+	if _, _, ok := nativeDisableGate(ir.Call{Disabled: gate}); !ok {
+		return false
+	}
+
+	for _, ic := range sub.Calls {
+		if ic.Mapped || ic.Preflight {
+			return false
+		}
+
+		if s, ok := prog.Stages[ic.Callable]; !ok || s.Split {
+			return false
+		}
+
+		for _, b := range ic.Bindings {
+			if refsAnyCall(b.Value) {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+// isCallOutputRef reports whether v is a bare reference to a call's output — not a
+// literal, a self/pipeline-input ref, or a composite array/object (each of which
+// would fail to null when the sub is disabled at runtime).
+func isCallOutputRef(v ir.Value) bool {
+	return v.Ref != nil && v.Ref.Kind == ir.RefKindCall
+}
+
+// refsAnyCall reports whether v contains any reference to a call's output,
+// recursing through composite arrays/objects.
+func refsAnyCall(v ir.Value) bool {
+	switch {
+	case v.Ref != nil:
+		return v.Ref.Kind == ir.RefKindCall
+	case v.Array != nil:
+		return slices.ContainsFunc(v.Array, refsAnyCall)
+	case v.Object != nil:
+		for _, e := range v.Object {
+			if refsAnyCall(e) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // resolveOutputRefs rewrites every ref to an inlined call's output (in p's calls
