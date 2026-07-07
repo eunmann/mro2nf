@@ -128,7 +128,7 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 		foldDisables:    fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)"),
 		native:          fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)"),
 		nativeRunner:    fs.Bool("native-runner", false, "opt-in direct-call Python stage runner (#79): no martian_shell.py adapter or mre broker on the stage hop (py stages only; the runner is baked into the image for container backends)"),
-		inlinePipelines: fs.Bool("inline-pipelines", false, "flatten eligible sub-pipeline boundaries into their parent, dropping the entry/return BIND tasks (orchestration-only, byte-identical outputs; coarsens -resume; #221)"),
+		inlinePipelines: fs.Bool("inline-pipelines", true, "flatten eligible sub-pipeline boundaries into their parent, dropping the entry/return BIND tasks (ON by default; orchestration-only, byte-identical outputs; pass -inline-pipelines=false to keep per-boundary tasks for finer -resume; #221)"),
 		configPath:      fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win (bools need the equals form, e.g. -native=false)"),
 		showVersion:     fs.Bool("version", false, "print version and exit"),
 	}

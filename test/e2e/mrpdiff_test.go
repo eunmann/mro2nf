@@ -308,12 +308,14 @@ func TestMrpDiff(t *testing.T) {
 				})
 			}
 
-			// #221: an -inline-pipelines leg faces the same mrp pipestance, gating
-			// that flattening a sub-pipeline boundary keeps outputs byte-identical.
+			// #221: inlining sub-pipeline boundaries is ON by default (the default
+			// leg already exercises it). This leg gates the OPT-OUT: the
+			// per-boundary-task path (-inline-pipelines=false) must ALSO stay
+			// byte-identical to the same mrp pipestance.
 			if tc.inline {
-				t.Run("inline", func(t *testing.T) {
+				t.Run("noinline", func(t *testing.T) {
 					t.Parallel()
-					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines"))
+					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false"))
 				})
 			}
 		})
