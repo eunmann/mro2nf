@@ -25,6 +25,10 @@ type genCtx struct {
 	// project dir is not mounted into the isolated task.
 	runnerBase string
 	monitor    bool
+	// target is the deployment backend; it gates the `array` directive (#224),
+	// which is emitted only for awsbatch (the local + HealthOmics executors do
+	// not support job arrays and would abort the run).
+	target Target
 	// features holds the opt-in emission toggles (mirrored from Options).
 	features featureSet
 	code     map[string]string // stage name -> stage code path
@@ -446,7 +450,7 @@ process %[1]s_JOIN {
 		g.producerArgs(s.Name, types.RoleChunkIn),
 		g.producerArgs(s.Name, types.RoleMainOut),
 		g.producerArgs(s.Name, types.RoleOut),
-		stageDirectives(s, "res"), stageDirectives(s, "join"),
+		stageDirectives(s, "res")+arrayDirective(g), stageDirectives(s, "join"),
 		bundleInput("args"), bundleInputElems("args"), bundleOutput("outs"))
 }
 
@@ -1803,6 +1807,26 @@ func names(params []ir.Param) []string {
 // otherwise they read the per-task val (a chunk's resolved resources for main,
 // the split-returned override for join). Each line carries the process body's
 // two-space indent.
+// arrayDirective renders a process `array params.array_size` directive (#224) on
+// the cloud targets so the executor batches this process's per-chunk task
+// instances into job arrays of up to array_size — collapsing N per-chunk
+// SubmitJob calls into one array submission. The batch size is a runtime param
+// (tunable per run, no re-transpile); Nextflow batches whatever number of chunks
+// SPLIT actually emits into arrays of ≤ array_size.
+//
+// Emitted for AWS Batch only. The local executor aborts on `array` ("Executor
+// 'local' does not support job arrays"), and a live probe proved HealthOmics'
+// managed engine also rejects it (its array collector fails at DAG build,
+// TaskArrayCollector.<init>) — both were verified, not assumed (#224). AWS Batch
+// is the one target whose executor supports job arrays.
+func arrayDirective(g genCtx) string {
+	if g.target != TargetAWSBatch {
+		return ""
+	}
+
+	return "\n  array params.array_size"
+}
+
 func stageDirectives(s *ir.Stage, val string) string {
 	var b strings.Builder
 

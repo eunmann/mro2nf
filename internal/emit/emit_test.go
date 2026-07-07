@@ -3,6 +3,7 @@ package emit_test
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -142,8 +143,9 @@ func TestEmitConfig(t *testing.T) {
 		"task.exitStatus == 42 ? 'terminate' : 'retry'",
 		"maxRetries = 2",
 		"params.aws_queue = null",
-		// #188: the Nextflow >=23.10.0 floor (path arity) must be declared for
-		// every target, not just HealthOmics — assert it on the local config too.
+		// #188: the Nextflow >=23.10.0 floor (path arity) is declared on every
+		// target. #224: only awsbatch bumps to 24.04 (for `array`); local stays
+		// at 23.10.0 so a run isn't forced onto a needlessly newer engine.
 		"manifest.nextflowVersion = '!>=23.10.0'",
 	} {
 		if !strings.Contains(cfg, want) {
@@ -231,6 +233,64 @@ func TestEmitHeadNodePublish(t *testing.T) {
 	}
 }
 
+// TestArrayDirective pins the #224 job-array directive: the per-chunk split MAIN
+// carries `array params.array_size` on AWS Batch (whose executor batches its
+// per-chunk SubmitJobs into one array submission) but NOT on local or
+// HealthOmics — both executors abort on the array directive (local: "does not
+// support job arrays"; HealthOmics: a live probe failed at its array collector).
+func TestArrayDirective(t *testing.T) {
+	mre, shell, stages := realRuntime(t)
+
+	emitAllNf := func(target emit.Target) string {
+		t.Helper()
+
+		ast, err := frontend.Parse("../../testdata/split_test/pipeline.mro", []string{"../../testdata/split_test"}, false)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		prog, err := frontend.Lower(ast, nil)
+		if err != nil {
+			t.Fatalf("lower: %v", err)
+		}
+
+		dir := t.TempDir()
+		if err := emit.Emit(prog, emit.Options{
+			OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro", Target: target,
+			Container: "ecr/mro2nf:1", StageCode: stages,
+		}); err != nil {
+			t.Fatalf("emit: %v", err)
+		}
+
+		var sb strings.Builder
+
+		_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".nf") {
+				data, rerr := os.ReadFile(p)
+				if rerr == nil {
+					sb.Write(data)
+				}
+			}
+
+			return nil
+		})
+
+		return sb.String()
+	}
+
+	const directive = "array params.array_size"
+
+	for _, tgt := range []emit.Target{emit.TargetLocal, emit.TargetHealthOmics} {
+		if strings.Contains(emitAllNf(tgt), directive) {
+			t.Errorf("%s must NOT emit the array directive (its executor aborts on job arrays)", tgt)
+		}
+	}
+
+	if !strings.Contains(emitAllNf(emit.TargetAWSBatch), directive) {
+		t.Error("awsbatch must emit `array params.array_size` on the per-chunk split MAIN")
+	}
+}
+
 // TestEmitConfigTargets checks the per-target nextflow.config: awsbatch wires the
 // Batch executor + classic S3 staging with a parameterized container, and
 // healthomics publishes to the managed pubdir, pins a Nextflow version, and sets
@@ -275,12 +335,14 @@ func TestEmitConfigTargets(t *testing.T) {
 		"params.aws_outdir = null",
 		"params.outdir = params.aws_outdir",
 		// #188: the Nextflow floor is declared for awsbatch too, not just HealthOmics.
-		"manifest.nextflowVersion = '!>=23.10.0'",
+		"manifest.nextflowVersion = '!>=24.04.0'",
 		// Wide-fan-out throughput + resilience tuning (config-only): submission
 		// rate-limit, S3 transfer retries, and transparent Spot-reclaim retries.
 		"executor.submitRateLimit",
 		"aws.batch.maxParallelTransfers",
 		"aws.batch.maxSpotAttempts",
+		// #224: the job-array batch-size ceiling (referenced by the `array` directive).
+		"params.array_size = 1000",
 	} {
 		if !strings.Contains(batch, want) {
 			t.Errorf("awsbatch config missing %q", want)

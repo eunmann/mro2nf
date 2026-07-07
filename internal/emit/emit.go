@@ -193,6 +193,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		// container backend rebinds this to the baked ctrRunner below.
 		runnerBase: "${projectDir}/" + assetsDir + "/" + runnerDir,
 		monitor:    opts.Monitor,
+		target:     target,
 		features:   features,
 		code:       opts.StageCode,
 		plan:       buildPlan(prog, features),
@@ -1022,11 +1023,20 @@ func configFile(container string, target Target) string {
 
 // configCommon renders the params shared by every target.
 func configCommon(target Target) string {
+	// Engine floor: 23.10+ covers the path 'arity' option used everywhere;
+	// awsbatch additionally needs 24.04+ for the process 'array' directive (#224).
+	// Left at 23.10.0 for local/HealthOmics — HealthOmics does NOT support job
+	// arrays (a live probe on the bumped floor hit 25.10.0 and broke at the array
+	// collector), so raising its floor would only force a needless engine jump.
+	floor := "23.10.0"
+	if target == TargetAWSBatch {
+		floor = "24.04.0"
+	}
+
 	common := outdirConfig(target) + `
-// Every generated project uses the path 'arity' option (Nextflow >= 23.10.0), so
-// declare the floor for ALL targets — Nextflow then aborts cleanly on an older
-// engine instead of failing cryptically mid-run (#188).
-manifest.nextflowVersion = '!>=23.10.0'
+// Nextflow engine floor, declared so Nextflow aborts cleanly on an older engine
+// instead of failing cryptically mid-run (#188/#224).
+manifest.nextflowVersion = '!>=` + floor + `'
 
 // Martian 'special' scheduler-resource map (the MRO_JOBRESOURCES analog): maps a
 // stage's special key to scheduler options applied via clusterOptions on grid
@@ -1174,6 +1184,12 @@ aws.batch.maxTransferAttempts  = 3
 aws.batch.delayBetweenAttempts = '10 sec'
 aws.batch.maxSpotAttempts      = 5
 aws.batch.retryMode            = 'standard'
+
+// Per-chunk fan-out (the split triad's MAIN) is submitted as job arrays of up to
+// this size (#224) — collapsing N per-chunk SubmitJob calls into one array
+// submission. Nextflow batches whatever number of chunks SPLIT emits at runtime;
+// this is the ceiling. Tune per run with --array_size.
+params.array_size = 1000
 `
 }
 
