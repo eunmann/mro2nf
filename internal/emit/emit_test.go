@@ -901,6 +901,110 @@ func TestEmitContainerMrjob(t *testing.T) {
 	}
 }
 
+// TestEmitContainerBakedToolkitCmd checks the general container contract: a stage
+// whose src is a BARE command (no path separator — an installed toolkit resolved
+// on PATH, e.g. samtools or a multi-command binary) is NOT vendored and does not
+// fail the transpile even though it names no host file; instead the Dockerfile
+// declares it must be provided on the image PATH. A path-based src is still
+// vendored. Uses a non-CellRanger name so the behavior is clearly general.
+func TestEmitContainerBakedToolkitCmd(t *testing.T) {
+	tmp := t.TempDir()
+	for _, n := range []string{"mre", "mrjob"} {
+		if err := os.WriteFile(filepath.Join(tmp, n), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mroSrc := "stage TOOLKIT(\n    in  int x,\n    out int y,\n" +
+		"    src comp \"sometool martian_stage mod func\",\n)\n\n" +
+		"pipeline P(\n    in  int x,\n    out int y,\n)\n{\n" +
+		"    call TOOLKIT(\n        x = self.x,\n    )\n\n    return (\n        y = TOOLKIT.y,\n    )\n}\n\n" +
+		"call P(\n    x = 1,\n)\n"
+	mro := filepath.Join(tmp, "pipeline.mro")
+	if err := os.WriteFile(mro, []byte(mroSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ast, err := frontend.Parse(mro, []string{tmp}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast, nil)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	dir := t.TempDir()
+	// StageCode carries the bare command verbatim (what stageCodePaths yields for a
+	// SrcIsPathCommand stage). A path source alongside it would be vendored.
+	if err := emit.Emit(prog, emit.Options{
+		OutDir: dir, Mre: filepath.Join(tmp, "mre"), Mrjob: filepath.Join(tmp, "mrjob"),
+		MROFile: "pipeline.mro", Target: emit.TargetHealthOmics,
+		StageCode: map[string]string{"TOOLKIT": "sometool"},
+	}); err != nil {
+		t.Fatalf("emit must not fail on a bare-command stage (it is PATH-resolved, not vendored): %v", err)
+	}
+
+	df, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(df), "from the image PATH") || !strings.Contains(string(df), "sometool") {
+		t.Errorf("Dockerfile must declare the PATH-provided toolkit command; got:\n%s", df)
+	}
+
+	if strings.Contains(string(df), "COPY runtime/stages") {
+		t.Error("no path-based stage was vendored, so the Dockerfile must not COPY runtime/stages")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "runtime", "stages", "TOOLKIT")); !os.IsNotExist(err) {
+		t.Errorf("a bare-command stage must not be vendored into runtime/stages, stat err = %v", err)
+	}
+
+	// The generated stage command runs the bare toolkit name (PATH-resolved by the
+	// shim's resolveStageExe at run time), not a vendored /opt/mro2nf/stages path.
+	if !anyNFContains(t, dir, "sometool") {
+		t.Error("a generated stage command must invoke the bare toolkit command 'sometool'")
+	}
+
+	if anyNFContains(t, dir, ctrStagesTOOLKIT) {
+		t.Errorf("a bare-command stage must not resolve to a vendored %s path", ctrStagesTOOLKIT)
+	}
+}
+
+// ctrStagesTOOLKIT is the vendored path a bare command must NOT be rewritten to.
+const ctrStagesTOOLKIT = "/opt/mro2nf/stages/TOOLKIT"
+
+// anyNFContains reports whether any generated .nf under dir contains want.
+func anyNFContains(t *testing.T, dir, want string) bool {
+	t.Helper()
+
+	found := false
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".nf" {
+			return err
+		}
+
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+
+		if strings.Contains(string(data), want) {
+			found = true
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", dir, err)
+	}
+
+	return found
+}
+
 // TestEmitCompRequiresMrjob checks that a program with a comp-adapter stage
 // fails the transpile when no -mrjob is supplied (the generated project could
 // only fail at run time), and emits normally once one is.

@@ -5,9 +5,45 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/apperror"
 )
+
+// isBakedToolkitCmd reports whether a stage src is a bare command resolved on the
+// image's PATH rather than a vendorable filesystem path. The container contract
+// mirrors the local one: a src that IS a path (has a separator) is vendored into
+// the image automatically and needs nothing from the user; a bare command (no
+// separator — an installed toolkit like samtools, STAR, or a multi-command
+// binary such as CellRanger's cr_lib) is the image's responsibility to provide on
+// PATH. A bare binary's own runtime deps (shared libs, interpreters, data) cannot
+// be vendored reliably from its name alone, so the transpiler passes it through
+// verbatim instead of copying it — the same classification the frontend already
+// makes (ir.Stage.SrcIsPathCommand), re-derived here structurally from the path.
+func isBakedToolkitCmd(src string) bool {
+	return !strings.ContainsRune(src, filepath.Separator)
+}
+
+// bakedToolkitCmds returns the sorted, unique bare commands the image must
+// provide on PATH — surfaced in the Dockerfile so the contract is explicit.
+func bakedToolkitCmds(stageCode map[string]string) []string {
+	set := map[string]bool{}
+	for _, src := range stageCode {
+		if isBakedToolkitCmd(src) {
+			set[src] = true
+		}
+	}
+
+	out := make([]string, 0, len(set))
+	for c := range set {
+		out = append(out, c)
+	}
+
+	sort.Strings(out)
+
+	return out
+}
 
 // In-container layout the generated scripts reference and the Dockerfile fills.
 const (
@@ -43,6 +79,12 @@ func checkContainerSources(opts Options) error {
 	}
 
 	for name, src := range opts.StageCode {
+		// A bare-command src is resolved on the image PATH, not vendored, so there
+		// is no host file to stat (see isBakedToolkitCmd / vendorStageCode).
+		if isBakedToolkitCmd(src) {
+			continue
+		}
+
 		toCheck["stage "+name] = src
 	}
 
@@ -111,8 +153,18 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 		g.runnerBase = ctrRunner
 	}
 
+	hasVendored := false
+	for _, src := range opts.StageCode {
+		if !isBakedToolkitCmd(src) {
+			hasVendored = true
+
+			break
+		}
+	}
+
 	return g, writeFile(filepath.Join(opts.OutDir, "Dockerfile"),
-		[]byte(dockerfile(target, opts.Shell != "", len(opts.StageCode) > 0, opts.Mrjob != "", opts.NativeRunner)))
+		[]byte(dockerfile(target, opts.Shell != "", hasVendored, opts.Mrjob != "",
+			opts.NativeRunner, bakedToolkitCmds(opts.StageCode))))
 }
 
 // vendorStageCode copies each stage's code under runtime/stages/<name>, deduped
@@ -129,13 +181,23 @@ func vendorStageCode(rt string, stageCode, code map[string]string) error {
 	canonical := map[string]string{} // resolved src -> first stage name copied there
 
 	for _, name := range sortedKeys(stageCode) {
-		key := stageCodeKey(stageCode[name])
+		src := stageCode[name]
+		// A bare command is provided on the image PATH (bake the toolkit); pass it
+		// through verbatim so the stage runs it via PATH, exactly as the local
+		// target does. Only path-based srcs are vendored into the image.
+		if isBakedToolkitCmd(src) {
+			code[name] = src
+
+			continue
+		}
+
+		key := stageCodeKey(src)
 		if first, ok := canonical[key]; ok {
 			if err := symlinkSibling(stagesDir, first, name); err != nil {
 				return err
 			}
 		} else {
-			if err := copyTree(stageCode[name], filepath.Join(stagesDir, name)); err != nil {
+			if err := copyTree(src, filepath.Join(stagesDir, name)); err != nil {
 				return err
 			}
 
@@ -190,7 +252,7 @@ func symlinkSibling(stagesDir, target, name string) error {
 // missing one; the -native-runner runner is copied from the embedded FS by
 // copyEmbeddedDir, so it cannot be absent), so an absent optional piece never
 // breaks `docker build`.
-func dockerfile(target Target, hasAdapters, hasStages, hasMrjob, hasRunner bool) string {
+func dockerfile(target Target, hasAdapters, hasStages, hasMrjob, hasRunner bool, pathCmds []string) string {
 	awsCLI := ""
 	if target == TargetAWSBatch {
 		// Classic AWS Batch staging copies inputs/outputs with the aws CLI.
@@ -223,11 +285,29 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends procps coreutils%s \
  && rm -rf /var/lib/apt/lists/*
 
-%s
+%s%s
 # Stage code and tools must be self-contained: HealthOmics tasks have no internet.
 # Add any third-party stage dependencies here, e.g.: RUN pip install --no-cache-dir numpy
 `,
-		awsCLIComment(target), awsCLI, copies)
+		awsCLIComment(target), awsCLI, copies, pathCmdContract(pathCmds))
+}
+
+// pathCmdContract renders the container contract for any bare-command stage srcs:
+// they are resolved on the image PATH (not vendored), so the image MUST provide
+// them. Empty when the pipeline has none, so a fully self-contained image reads
+// exactly as before.
+func pathCmdContract(cmds []string) string {
+	if len(cmds) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(`# This pipeline runs these stage commands from the image PATH (bare `+"`src comp`"+`/
+# `+"`src exec`"+` names, not vendored — a bare binary's own runtime deps cannot be
+# copied from its name alone): %s
+# You MUST install them, with their runtime dependencies, into this image so they
+# resolve on PATH (e.g. COPY the toolkit in and prepend its bin dir to PATH).
+# Stage code given as a path is vendored into %s automatically above.
+`, strings.Join(cmds, ", "), ctrStages)
 }
 
 func awsCLIComment(target Target) string {
