@@ -1,7 +1,6 @@
 package emit
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -236,10 +235,8 @@ func disabledInlineProfitable(gate *ir.Ref, sub *ir.Pipeline, prog *ir.Program) 
 			return false
 		}
 
-		for _, b := range ic.Bindings {
-			if refsAnyCall(b.Value) {
-				return false
-			}
+		if bindingsRefCall(ic.Bindings) {
+			return false // an internally-chained call: its promoted bind is not free
 		}
 	}
 
@@ -251,25 +248,6 @@ func disabledInlineProfitable(gate *ir.Ref, sub *ir.Pipeline, prog *ir.Program) 
 // would fail to null when the sub is disabled at runtime).
 func isCallOutputRef(v ir.Value) bool {
 	return v.Ref != nil && v.Ref.Kind == ir.RefKindCall
-}
-
-// refsAnyCall reports whether v contains any reference to a call's output,
-// recursing through composite arrays/objects.
-func refsAnyCall(v ir.Value) bool {
-	switch {
-	case v.Ref != nil:
-		return v.Ref.Kind == ir.RefKindCall
-	case v.Array != nil:
-		return slices.ContainsFunc(v.Array, refsAnyCall)
-	case v.Object != nil:
-		for _, e := range v.Object {
-			if refsAnyCall(e) {
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 // resolveOutputRefs rewrites every ref to an inlined call's output (in p's calls
@@ -293,10 +271,22 @@ func resolveOutputRefs(p *ir.Pipeline, subs map[string]ir.Value) bool {
 // calls — a literal false drops the gate; a literal true prunes the call to a
 // null output (recorded in subs so its refs resolve to null next round).
 func foldDisables(p *ir.Pipeline, subs map[string]ir.Value) bool {
+	kept, changed := foldPrune(p.Calls, subs)
+	p.Calls = kept
+
+	return changed
+}
+
+// foldPrune folds every constant disable across calls against the resolved-output
+// subs: a constant-true gate drops the call and records its null output in subs;
+// a constant-false gate is cleared. It returns the surviving calls and whether
+// anything changed. Shared by the outer flatten fixpoint (foldDisables) and the
+// inner dead-call fixpoint (resolveDeadInternal).
+func foldPrune(calls []ir.Call, subs map[string]ir.Value) ([]ir.Call, bool) {
 	changed := false
 
-	kept := p.Calls[:0:0]
-	for _, c := range p.Calls {
+	kept := calls[:0:0]
+	for _, c := range calls {
 		keep, dead, c2 := foldDisable(&c, subs)
 		changed = changed || c2
 
@@ -308,9 +298,7 @@ func foldDisables(p *ir.Pipeline, subs map[string]ir.Value) bool {
 		}
 	}
 
-	p.Calls = kept
-
-	return changed
+	return kept, changed
 }
 
 // nullOutput is an inlined/pruned call's whole output when all of it is null: an
@@ -342,14 +330,27 @@ func foldDisable(c *ir.Call, subs map[string]ir.Value) (bool, bool, bool) {
 		return false, true, true // constant-true gate: prune to null
 	}
 
-	c.Disabled = nil // constant false/null (or unrecognized): the call always runs
+	if litIsFalse(nv) {
+		c.Disabled = nil // constant false/null gate: the call always runs
 
-	return true, false, true
+		return true, false, true
+	}
+
+	// Unrecognized gate value (e.g. a composite — a type error in valid MRO):
+	// fail CLOSED. Leave the gate untouched rather than clearing it, which would
+	// wrongly enable the call.
+	return true, false, false
 }
 
 // litIsTrue reports whether v is the boolean literal true.
 func litIsTrue(v ir.Value) bool {
 	return strings.TrimSpace(string(v.Literal)) == "true"
+}
+
+// litIsFalse reports whether v is a constant-false gate: the boolean literal
+// false or JSON null (a null disable gate never fires, so the call always runs).
+func litIsFalse(v ir.Value) bool {
+	return strings.TrimSpace(string(v.Literal)) == "false" || isNullLiteral(v)
 }
 
 // inlineCall builds the renamed, ref-rewritten calls that replace call c to
@@ -443,8 +444,12 @@ func spliceDisable(nic *ir.Call, self map[string]ir.Value, prefix string) (bool,
 		nic.Disabled = dv.Ref
 	case litIsTrue(dv):
 		return false, true // pruned
-	default:
+	case litIsFalse(dv):
 		nic.Disabled = nil // literal false/null gate: the call always runs
+	default:
+		// Unrecognized gate value (a type error in valid MRO): fail CLOSED —
+		// abort the inline and keep the boundary rather than enabling the call.
+		return false, false
 	}
 
 	return true, true
@@ -462,22 +467,10 @@ func resolveDeadInternal(calls []ir.Call, dead map[string]ir.Value) []ir.Call {
 			changed = changed || c
 		}
 
-		kept := calls[:0:0]
-		for _, c := range calls {
-			keep, d, c2 := foldDisable(&c, dead)
-			changed = changed || c2
+		var pruned bool
+		calls, pruned = foldPrune(calls, dead)
 
-			switch {
-			case d:
-				dead[c.Name] = nullOutput()
-			case keep:
-				kept = append(kept, c)
-			}
-		}
-
-		calls = kept
-
-		if !changed {
+		if !changed && !pruned {
 			return calls
 		}
 	}

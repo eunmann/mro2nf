@@ -113,6 +113,57 @@ func TestInlineKeepsCalledModule(t *testing.T) {
 	}
 }
 
+// TestInlineComposesObjectProjection checks composeProjection's Object branch:
+// a sub input bound to an object literal, projected by an internal call's
+// self.x.<field>, resolves to that field's value in the parent scope.
+func TestInlineComposesObjectProjection(t *testing.T) {
+	prog := inlineFixtureProg()
+
+	// Bind S.x to an object literal {a: GEN.out} instead of a bare ref.
+	for i := range prog.Pipelines["TOP"].Calls {
+		if prog.Pipelines["TOP"].Calls[i].Name == "S" {
+			prog.Pipelines["TOP"].Calls[i].Bindings = []ir.Binding{{Param: "x", Value: ir.Value{Object: map[string]ir.Value{
+				"a": {Ref: &ir.Ref{Kind: ir.RefKindCall, ID: "GEN", Output: "out"}},
+			}}}}
+		}
+	}
+	// SUB's USE reads self.x.a (a projection into the object input).
+	prog.Pipelines["SUB"].Calls[0].Bindings = []ir.Binding{
+		{Param: "in", Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "x", Output: "a"}}},
+	}
+
+	inlinePipelines(prog)
+
+	su := inlineFindCall(prog.Pipelines["TOP"].Calls, "S_USE")
+	if su == nil {
+		t.Fatalf("expected spliced call S_USE, got %v", inlineCallNames(prog.Pipelines["TOP"].Calls))
+	}
+
+	// self.x.a where x = {a: GEN.out} must compose to GEN.out.
+	r := su.Bindings[0].Value.Ref
+	if r == nil || r.Kind != ir.RefKindCall || r.ID != "GEN" || r.Output != "out" {
+		t.Errorf("S_USE.in should resolve self.x.a -> GEN.out, got %+v", su.Bindings[0].Value)
+	}
+}
+
+// TestInlineSelfPassthroughReturn checks a sub whose return passes its own input
+// straight through (out = self.x): the parent's ref to S.out must resolve to the
+// parent's binding for x.
+func TestInlineSelfPassthroughReturn(t *testing.T) {
+	prog := inlineFixtureProg()
+	prog.Pipelines["SUB"].Returns = []ir.Binding{
+		{Param: "out", Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "x"}}},
+	}
+
+	inlinePipelines(prog)
+
+	// TOP.y was S.out = SUB.out = self.x = the parent's binding for x = GEN.out.
+	r := prog.Pipelines["TOP"].Returns[0].Value.Ref
+	if r == nil || r.Kind != ir.RefKindCall || r.ID != "GEN" || r.Output != "out" {
+		t.Errorf("TOP.y should resolve S.out(=self.x) -> GEN.out, got %+v", prog.Pipelines["TOP"].Returns[0].Value)
+	}
+}
+
 // TestInlineSkipsMapped checks the conservative gate: a mapped sub-pipeline call
 // keeps its boundary (not inlined) — its per-fork output shape is not expressible
 // by splicing.

@@ -25,11 +25,6 @@ type genCtx struct {
 	// project dir is not mounted into the isolated task.
 	runnerBase string
 	monitor    bool
-	// target is the deployment backend (local FS, HealthOmics shared FS, or the
-	// s3:// AWS Batch work dir). It drives the config profile, container/publish
-	// wiring, and cloud packaging; every backend publishes the final outs/ tree
-	// from the head node via publishDir (see genPublish).
-	target Target
 	// features holds the opt-in emission toggles (mirrored from Options).
 	features featureSet
 	code     map[string]string // stage name -> stage code path
@@ -874,20 +869,25 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 		genFusedDisabledSplitWiring(b, p, c)
 
 	case kindPlainBind:
-		if c.Disabled != nil {
-			// genDisabledWiring emits the BIND itself: a natively-gated disable runs
-			// it only on the enabled branch (zero tasks when disabled), so the
-			// unconditional bind is not pre-emitted here.
-			genDisabledWiring(b, p, c, callee, g)
-		} else {
-			bind := bindName(pipeline, c.Name)
-			fmt.Fprintf(b, "    %s(%s)\n", bind, foldCallArgs(g, p, c.Bindings, "pa", bind))
-			// Bind outputs are value channels (every input traces back to the
-			// Channel.value entry args), so the callee result is itself a reusable
-			// value channel — no .first() needed for multiple consumers.
-			fmt.Fprintf(b, "    ch_%s = %s(%s.out)\n", c.Name, callee, bind)
-		}
+		genPlainBindWiring(b, p, c, callee, g)
 	}
+}
+
+// genPlainBindWiring emits a standalone BIND then the callee. A natively-gated
+// disable runs the bind only on the enabled branch (genDisabledWiring — zero
+// tasks when disabled); otherwise the bind runs unconditionally off pipeargs.
+// Bind outputs are value channels (every input traces back to the entry args),
+// so the callee result is itself reusable — no .first() for multiple consumers.
+func genPlainBindWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee string, g genCtx) {
+	if c.Disabled != nil {
+		genDisabledWiring(b, p, c, callee, g)
+
+		return
+	}
+
+	bind := bindName(p.Name, c.Name)
+	fmt.Fprintf(b, "    %s(%s)\n", bind, foldCallArgs(g, p, c.Bindings, "pa", bind))
+	fmt.Fprintf(b, "    ch_%s = %s(%s.out)\n", c.Name, callee, bind)
 }
 
 // forwardProducer reports the single upstream call id whose ENTIRE output bundle

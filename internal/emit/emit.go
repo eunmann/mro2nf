@@ -193,7 +193,6 @@ func Emit(prog *ir.Program, opts Options) error {
 		// container backend rebinds this to the baked ctrRunner below.
 		runnerBase: "${projectDir}/" + assetsDir + "/" + runnerDir,
 		monitor:    opts.Monitor,
-		target:     target,
 		features:   features,
 		code:       opts.StageCode,
 		plan:       buildPlan(prog, features),
