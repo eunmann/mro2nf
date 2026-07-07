@@ -636,7 +636,14 @@ func TestNativeMode(t *testing.T) {
 		t.Run(tc.fixture, func(t *testing.T) {
 			t.Parallel()
 
-			proj := transpile(t, tc.fixture, "-native")
+			// -inline-pipelines=false isolates the -native data-plane machinery
+			// (keyed scatter, fork resolve, emptyNull, #59/#127) that these cases
+			// pin: default-on inlining (#221) flattens sub-pipeline boundaries into
+			// the parent, which would dissolve the very boundary BIND/FORK/return
+			// processes asserted here (kitchen_sink/empty_fork_sub collapse to
+			// nothing). The inline+native COMPOSITION is byte-identity-tested
+			// against mrp by the TestMrpDiff native legs, so nothing is lost.
+			proj := transpile(t, tc.fixture, "-native", "-inline-pipelines=false")
 			assertPlaneProcesses(t, proj, tc.plane)
 
 			if err := runNextflow(t, proj); err != nil {

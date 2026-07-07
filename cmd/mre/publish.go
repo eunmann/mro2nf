@@ -31,6 +31,8 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	prod := addProducer(fs, types.RoleOut)
 	sidecar := fs.String("sidecar", "", "raw output sidecar (data.json, markers intact)")
 	dir := fs.String("dir", ".", "directory to write layout.json and pipeline_outs.json")
+	leavesDir := fs.String("leaves", "", "dir of staged leaf files (head-node publish); empty leaves publishing off")
+	outsDir := fs.String("outs", "", "dir to materialise the outs/ tree into for head-node publishDir")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -76,7 +78,56 @@ func runPublishLayout(_ context.Context, argv []string) error {
 		return fmt.Errorf("marshal published outs: %w", err)
 	}
 
-	return writeRaw(filepath.Join(*dir, "pipeline_outs.json"), out)
+	if err := writeRaw(filepath.Join(*dir, "pipeline_outs.json"), out); err != nil {
+		return err
+	}
+
+	// Head-node publish (POSIX targets): materialise the outs/ tree from the
+	// staged leaves so a single publishDir directive on LAYOUT copies it into the
+	// results tree — no per-leaf PUBLISH_LEAF task. Off (both flags empty) on
+	// object-store backends, which keep the parallel fan-out.
+	if *outsDir != "" {
+		return materializeOuts(*leavesDir, filepath.Join(*dir, *outsDir), pub.layout)
+	}
+
+	return nil
+}
+
+// materializeOuts links each staged leaf into its published outs/ rel path(s),
+// reproducing the exact tree publish-layout computed. A leaf referenced by
+// several outputs is linked into each rel; CopyTree hard-links files (recursing
+// directory leaves) so the tree is built without copying bytes, and a later
+// publishDir copies it into the results dir. A layout key with no matching
+// staged leaf is skipped — the leaf was absent at staging time and resolves to
+// null, exactly as the sidecar already recorded.
+// outsDirPerm is the mode for outs/ parent directories; publishDir copies the
+// tree out, so this is transient scratch, not a published permission.
+const outsDirPerm = 0o750
+
+func materializeOuts(leavesDir, outsDir string, layout map[string][]string) error {
+	for base, rels := range layout {
+		src := filepath.Join(leavesDir, base)
+		if _, err := os.Stat(src); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+
+			return fmt.Errorf("stat leaf %q: %w", base, err)
+		}
+
+		for _, rel := range rels {
+			dst := filepath.Join(outsDir, rel)
+			if err := os.MkdirAll(filepath.Dir(dst), outsDirPerm); err != nil {
+				return fmt.Errorf("create outs dir for %q: %w", rel, err)
+			}
+
+			if err := shim.CopyTree(src, dst); err != nil {
+				return fmt.Errorf("materialise outs %q: %w", rel, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // manifestSchemaVersion is bumped only on a breaking manifest change; consumers

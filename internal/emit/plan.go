@@ -16,6 +16,9 @@ type featureSet struct {
 	fuseChains   bool
 	foldDisables bool
 	native       bool
+	// inlinePipelines flattens eligible sub-pipeline calls into their parent so
+	// the pipeline-boundary bind tasks (entry + return) disappear (#221).
+	inlinePipelines bool
 	// nativeRunner swaps the Python stage-execution hop from the Martian
 	// adapter (mre + martian_shell.py) to the embedded direct-call runner (#79).
 	nativeRunner bool
@@ -27,16 +30,17 @@ type featureSet struct {
 type callKind uint8
 
 const (
-	kindPlainBind     callKind = iota // standalone BIND + callee (or disable gate)
-	kindMapped                        // FORK → callee → MERGE
-	kindForward                       // #14 emit-once: route producer bundle straight in
-	kindFusedStage                    // #16 fused bind+main leaf stage
-	kindFusedSplit                    // #16 fused bind+split → MAIN → JOIN
-	kindFusedDisabled                 // #59 fused bind+main, natively-gated disable
-	kindFusedChain                    // #59 Lever 4 chain consumer (folds its producer)
-	kindFusedAway                     // #59 Lever 4 chain producer folded into its consumer
-	kindFoldedOff                     // #59 Lever 1 always-disabled call: emit only its null output
-	kindNativeScatter                 // #76 -native map call: in-workflow scatter, no FORK task
+	kindPlainBind          callKind = iota // standalone BIND + callee (or disable gate)
+	kindMapped                             // FORK → callee → MERGE
+	kindForward                            // #14 emit-once: route producer bundle straight in
+	kindFusedStage                         // #16 fused bind+main leaf stage
+	kindFusedSplit                         // #16 fused bind+split → MAIN → JOIN
+	kindFusedDisabled                      // #59 fused bind+main, natively-gated disable
+	kindFusedDisabledSplit                 // fused bind+split for a natively-gated disabled split stage
+	kindFusedChain                         // #59 Lever 4 chain consumer (folds its producer)
+	kindFusedAway                          // #59 Lever 4 chain producer folded into its consumer
+	kindFoldedOff                          // #59 Lever 1 always-disabled call: emit only its null output
+	kindNativeScatter                      // #76 -native map call: in-workflow scatter, no FORK task
 )
 
 // keyedKind is how a call is emitted inside its pipeline's fork-keyed layer
@@ -157,18 +161,27 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 		// Second pass (#76/#99 merge fold): with every call's kind fixed, decide
 		// which map-call gathers fold their MERGE into the sole consumer. Reading
 		// the finished kinds keeps this a plan decision the emitters can't
-		// disagree with (#77). Under -native the fold covers EVERY kindMapped
-		// target — leaf stage, split stage, or sub-pipeline — because every keyed
-		// callee variant emits the tuple(key, outs__<key>) the fold contract
-		// pairs with FORK.out.keys (the leaf _MAP, the split JOIN_K, and the
-		// keyed pipeline's return/forward all write outs__<key>). A DISABLED
-		// mapped call keeps its MERGE — the skip branch needs the merged bundle
-		// as the mix point for the null output.
+		// disagree with (#77). The fold covers EVERY kindMapped target — leaf
+		// stage, split stage, or sub-pipeline — because every keyed callee variant
+		// emits the tuple(key, outs__<key>) the fold contract pairs with
+		// FORK.out.keys (the leaf _MAP, the split JOIN_K, and the keyed pipeline's
+		// return/forward all write outs__<key>). The fold is mode-independent: a
+		// kindMapped call dispatches to the same genMappedWiring/genForkBindProcess
+		// regardless of -native (the flag only routes value-only scatters to
+		// kindNativeScatter), so folding it in the default mode too reuses the
+		// same in-task `mre merge` the -native fold has run since #99/#105. This
+		// is the #221 emit-once win: the standalone MERGE task materialises
+		// merged/f/* and re-uploads every per-fork leaf into its own work dir (an
+		// O(N) re-upload per fork on an object-store work dir), whereas the fold
+		// runs the merge in the consumer's own scratch over the co-staged per-fork
+		// outs — each leaf is uploaded once, by its producer, and referenced
+		// thereafter. A DISABLED mapped call keeps its MERGE — the skip branch
+		// needs the merged bundle as the mix point for the null output.
 		for _, c := range p.Calls {
 			cp := pp.calls[c.Name]
 
 			foldable := cp.kind == kindNativeScatter ||
-				(f.native && cp.kind == kindMapped && c.Disabled == nil)
+				(cp.kind == kindMapped && c.Disabled == nil)
 
 			if foldable && mergeFoldable(c.Name, p, pp) {
 				cp.foldMerge = true
@@ -328,6 +341,10 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 
 	if s, ok := fuseableDisabledStage(c, p, prog); ok {
 		return callPlan{kind: kindFusedDisabled, stage: s}
+	}
+
+	if s, ok := fuseableDisabledSplitCall(c, prog); ok {
+		return callPlan{kind: kindFusedDisabledSplit, stage: s}
 	}
 
 	return callPlan{kind: kindPlainBind, disableTask: needsDisableTask(c)}

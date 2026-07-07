@@ -54,14 +54,19 @@ call P(x = 1,)
 
 	var b strings.Builder
 
-	genDisabledWiring(&b, p.Name, c, callAlias(p.Name, c.Name))
+	g := genCtx{plan: buildPlan(prog, featureSet{})}
+	genDisabledWiring(&b, p, c, callAlias(p.Name, c.Name), g)
 
-	want := `    g_SUB = BIND_1_P__SUB.out.combine(ch_CFG).branch { data, leaves, gd, gl ->
+	// The BIND is gated onto the enabled branch (#221 overhead): pa.combine(ch_CFG)
+	// branches FIRST, and only the enabled pipeargs feed BIND — so a disabled sub
+	// runs zero tasks (no wasted bind). The callee reads BIND.out directly.
+	want := `    g_SUB = pa.combine(ch_CFG).branch { data, leaves, gd, gl ->
         def off = Mro2nf.disabledField(gd, 'cfg.flag')
         run: !off
         skip: off
     }
-    r_SUB = wf_1_P__SUB(g_SUB.run.map { data, leaves, gd, gl -> tuple(data, leaves) })
+    BIND_1_P__SUB(g_SUB.run.map { data, leaves, gd, gl -> tuple(data, leaves) }, types, file("${projectDir}/_assets/bindspecs/BIND_1_P__SUB.json"))
+    r_SUB = wf_1_P__SUB(BIND_1_P__SUB.out)
     s_SUB = g_SUB.skip.map { data, leaves, gd, gl -> tuple(file("${projectDir}/nulls/1_P__SUB/data.json"), []) }
     ch_SUB = r_SUB.mix(s_SUB).first()
 `
@@ -103,5 +108,67 @@ call P(x = 1,)
 
 	if alias := callAlias("P", "WORK"); strings.Contains(b.String(), alias) {
 		t.Errorf("fused-disabled WORK must not emit a dead wf_ include (%s); got:\n%s", alias, b.String())
+	}
+}
+
+// TestFusedDisabledSplit pins the disabled-SPLIT fold: a natively-gated
+// (self.<flag>) disabled SPLIT-stage call folds its bind into the fused SPLIT
+// task (kindFusedDisabledSplit) — no standalone BIND — while an ENABLED split
+// stays kindFusedSplit. The wiring gates pa into the fused split workflow and
+// mixes the null bundle on the skip branch; the includes alias the stage's
+// MAIN/JOIN (not a dead wf_ import).
+func TestFusedDisabledSplit(t *testing.T) {
+	prog := lowerMRO(t, `
+stage SP(in int v, out int w, src py "s/sp",) split using (in int c, out int cw,)
+pipeline P(in int v, in bool skip, out int a, out int b,){
+    call SP as EN(v = self.v,)
+    call SP as DIS(v = self.v,) using (disabled = self.skip,)
+    return (a = EN.w, b = DIS.w,)
+}
+call P(v = 1, skip = false,)
+`)
+
+	g := genCtx{plan: buildPlan(prog, featureSet{})}
+	calls := g.plan.pipes["P"].calls
+
+	if calls["EN"].kind != kindFusedSplit {
+		t.Fatalf("EN: kind = %d, want kindFusedSplit", calls["EN"].kind)
+	}
+	if calls["DIS"].kind != kindFusedDisabledSplit {
+		t.Fatalf("DIS: kind = %d, want kindFusedDisabledSplit", calls["DIS"].kind)
+	}
+
+	p := prog.Pipelines["P"]
+	dis, _ := callByName(p, "DIS")
+
+	var b strings.Builder
+	genFusedDisabledSplitWiring(&b, p, dis)
+
+	want := `    g_DIS = pa.branch { data, leaves ->
+        def off = Mro2nf.disabledField(data, 'skip')
+        run: !off
+        skip: off
+    }
+    r_DIS = STAGE_1_P__DIS(g_DIS.run)
+    s_DIS = g_DIS.skip.map { data, leaves -> tuple(file("${projectDir}/nulls/1_P__DIS/data.json"), []) }
+    ch_DIS = r_DIS.mix(s_DIS).first()
+`
+	if diff := cmp.Diff(want, b.String()); diff != "" {
+		t.Errorf("fused-disabled-split wiring mismatch (-want +got):\n%s", diff)
+	}
+
+	if strings.Contains(b.String(), "BIND_") || strings.Contains(b.String(), "DISABLE_") {
+		t.Errorf("fused-disabled split must emit no standalone BIND/DISABLE:\n%s", b.String())
+	}
+
+	// The includes alias the stage's MAIN/JOIN (fused split needs them), not the
+	// plain wf_ callee alias.
+	var inc strings.Builder
+	genPipeIncludes(&inc, p, prog, g)
+	if !strings.Contains(inc.String(), "SP_MAIN as "+fusedMainAlias("P", "DIS")) {
+		t.Errorf("disabled split must import the aliased MAIN/JOIN; got:\n%s", inc.String())
+	}
+	if alias := callAlias("P", "DIS"); strings.Contains(inc.String(), alias) {
+		t.Errorf("disabled split must not emit a dead wf_ include (%s); got:\n%s", alias, inc.String())
 	}
 }

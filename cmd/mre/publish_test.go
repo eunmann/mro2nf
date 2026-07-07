@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -453,5 +455,69 @@ func TestPublishOutsDeepNesting(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("deep-nesting publish mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestMaterializeOuts checks the head-node publish materialisation: from a dir of
+// staged leaves and the computed layout, it builds the outs/ tree (a file leaf
+// linked to each of its rel paths, a directory leaf mirrored recursively), so a
+// single publishDir on LAYOUT can copy it into place without a per-leaf task. A
+// layout key with no staged leaf (an absent output) is skipped, not an error.
+func TestMaterializeOuts(t *testing.T) {
+	root := t.TempDir()
+	leaves := filepath.Join(root, "f")
+	outs := filepath.Join(root, "outs")
+
+	if err := os.MkdirAll(filepath.Join(leaves, "L0002"), 0o750); err != nil {
+		t.Fatalf("mkdir leaf dir: %v", err)
+	}
+	writeLeaf(t, filepath.Join(leaves, "L0000.bam"), "aln")
+	writeLeaf(t, filepath.Join(leaves, "L0001.txt"), "shared")
+	writeLeaf(t, filepath.Join(leaves, "L0002", "part.txt"), "chunk")
+
+	layout := map[string][]string{
+		"L0000.bam": {"aln.bam"},
+		"L0001.txt": {"a.txt", "b.txt"}, // one leaf referenced by two outputs
+		"L0002":     {"workdir"},        // directory leaf
+		"L9999.txt": {"absent.txt"},     // no staged leaf -> skipped
+	}
+
+	if err := materializeOuts(leaves, outs, layout); err != nil {
+		t.Fatalf("materializeOuts: %v", err)
+	}
+
+	want := map[string]string{
+		"aln.bam":          "aln",
+		"a.txt":            "shared",
+		"b.txt":            "shared",
+		"workdir/part.txt": "chunk",
+	}
+	for rel, content := range want {
+		got, err := os.ReadFile(filepath.Join(outs, rel))
+		if err != nil {
+			t.Fatalf("read outs/%s: %v", rel, err)
+		}
+
+		if string(got) != content {
+			t.Errorf("outs/%s = %q, want %q", rel, got, content)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(outs, "absent.txt")); !os.IsNotExist(err) {
+		t.Errorf("absent leaf published: got err %v, want IsNotExist", err)
+	}
+}
+
+// writeLeaf writes content to path, creating parent dirs, failing the test on
+// error.
+func writeLeaf(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }

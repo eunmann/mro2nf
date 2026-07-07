@@ -175,6 +175,7 @@ func TestMrpDiff(t *testing.T) {
 		realMrjob bool
 		native    bool
 		runner    bool
+		inline    bool
 	}{
 		{name: "file_min"},
 		{name: "dir_out"},
@@ -210,8 +211,8 @@ func TestMrpDiff(t *testing.T) {
 		{name: "diamond_min"},
 		{name: "fork_min"},
 		{name: "struct_min"},
-		{name: "kitchen_sink"},
-		{name: "file_tree"},
+		{name: "kitchen_sink", inline: true},
+		{name: "file_tree", inline: true},
 		{name: "map_null_map"},
 		// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
 		// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
@@ -229,7 +230,7 @@ func TestMrpDiff(t *testing.T) {
 		// each to null (sub-pipeline chain to an entry value, in-pipeline
 		// cascade through a mapped call, mixed entry+upstream zip) — the
 		// live differential machine-checks the knownInvocation cascade.
-		{name: "empty_fork_sub", native: true},
+		{name: "empty_fork_sub", native: true, inline: true},
 		{name: "empty_fork_cascade", native: true},
 		{name: "empty_fork_mixed", native: true, runner: true},
 		// The native-suite golden anchors: their committed expected/outs.json
@@ -239,15 +240,26 @@ func TestMrpDiff(t *testing.T) {
 		// itself against live mrp, not just the golden snapshot.
 		{name: "fork_ref", native: true, runner: true},
 		{name: "fork_mid", native: true, runner: true},
-		{name: "fork_disabled_sub", native: true, runner: true},
-		{name: "fork_disabled_skip", native: true},
+		// The inline legs here keep the disabled SUB a boundary (its internal call
+		// is a MAP call, which the profitability guard excludes), so they gate that
+		// -inline-pipelines leaves a non-flat disabled sub byte-identical.
+		{name: "fork_disabled_sub", native: true, runner: true, inline: true},
+		{name: "fork_disabled_skip", native: true, inline: true},
+		// #221 disabled-plain sub-pipeline inlining: `call SUB using (disabled=X)`
+		// where SUB is a FLAT plain sub-pipeline (one undisabled leaf stage reading
+		// only pipeargs) splices its internal stage into the parent gated by X — the
+		// profitability guard's win case. _sub runs (skip=false → scaled=15), _skip
+		// nulls (skip=true → scaled=null), so the inline leg proves both the run and
+		// the disabled-null branch stay byte-identical to mrp.
+		{name: "disabled_plain_sub", inline: true},
+		{name: "disabled_plain_skip", inline: true},
 		{name: "fork_fanout", native: true, runner: true},
 		{name: "map_file_array", native: true, runner: true},
 		// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
 		{name: "map_file_split"},
 		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
 		// map, nested pipelines) — all py stages, so it joins the mrp differential.
-		{name: "cellranger_shaped", native: true, runner: true},
+		{name: "cellranger_shaped", native: true, runner: true, inline: true},
 		// #113: stage src arguments (`src exec "code.py 3 hello"`) must reach
 		// the stage under both runners. Unlike the journal-less exec stubs
 		// below, this one writes journal entries (martian_shell.py
@@ -304,6 +316,17 @@ func TestMrpDiff(t *testing.T) {
 				t.Run("native_runner", func(t *testing.T) {
 					t.Parallel()
 					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native", "-native-runner"))
+				})
+			}
+
+			// #221: inlining sub-pipeline boundaries is ON by default (the default
+			// leg already exercises it). This leg gates the OPT-OUT: the
+			// per-boundary-task path (-inline-pipelines=false) must ALSO stay
+			// byte-identical to the same mrp pipestance.
+			if tc.inline {
+				t.Run("noinline", func(t *testing.T) {
+					t.Parallel()
+					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false"))
 				})
 			}
 		})

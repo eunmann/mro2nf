@@ -168,6 +168,69 @@ func TestEmitPublishConditional(t *testing.T) {
 	}
 }
 
+// TestEmitHeadNodePublish checks the terminal publish: on every backend LAYOUT
+// itself materialises the outs/ tree and publishDir copies it into place from the
+// head node — no per-leaf PUBLISH_LEAF task. On a shared FS (local, HealthOmics
+// /mnt/workflow) leaf staging is a link; on the s3:// AWS Batch work dir Nextflow
+// stages+publishes the tree (a single-node pass), letting its own S3 filesystem
+// move the bytes rather than a hand-rolled aws-cli copy.
+func TestEmitHeadNodePublish(t *testing.T) {
+	// A container (object-store) target stats the mre/mrjob binaries to bake them
+	// into the image, so provide real files; the local target ignores them.
+	bin := t.TempDir()
+	for _, n := range []string{"mre", "mrjob"} {
+		if err := os.WriteFile(filepath.Join(bin, n), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	emitMain := func(target emit.Target) string {
+		t.Helper()
+
+		base := "../../testdata/split_test"
+		ast, err := frontend.Parse(base+"/pipeline.mro", []string{base}, false)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		prog, err := frontend.Lower(ast, nil)
+		if err != nil {
+			t.Fatalf("lower: %v", err)
+		}
+
+		ss, _ := filepath.Abs(base + "/stages/sum_squares")
+		dir := t.TempDir()
+		if err := emit.Emit(prog, emit.Options{
+			OutDir: dir, Mre: filepath.Join(bin, "mre"), Mrjob: filepath.Join(bin, "mrjob"),
+			Shell: ss + "/__init__.py", MROFile: "pipeline.mro", MRODir: base, Target: target,
+			StageCode: map[string]string{"SUM_SQUARES": ss, "REPORT": ss},
+		}); err != nil {
+			t.Fatalf("emit: %v", err)
+		}
+
+		data, err := os.ReadFile(filepath.Join(dir, "main.nf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return string(data)
+	}
+
+	// Every backend folds leaf publishing into LAYOUT — no per-leaf task.
+	for _, target := range []emit.Target{emit.TargetLocal, emit.TargetHealthOmics, emit.TargetAWSBatch} {
+		nf := emitMain(target)
+		if strings.Contains(nf, "PUBLISH_LEAF") {
+			t.Errorf("%s target must not emit a PUBLISH_LEAF process (head-node publish)", target)
+		}
+
+		for _, want := range []string{"-leaves f -outs outs", "path 'outs/**'", "it.startsWith('outs/')"} {
+			if !strings.Contains(nf, want) {
+				t.Errorf("%s LAYOUT missing head-node publish fragment %q", target, want)
+			}
+		}
+	}
+}
+
 // TestEmitConfigTargets checks the per-target nextflow.config: awsbatch wires the
 // Batch executor + classic S3 staging with a parameterized container, and
 // healthomics publishes to the managed pubdir, pins a Nextflow version, and sets
@@ -213,6 +276,11 @@ func TestEmitConfigTargets(t *testing.T) {
 		"params.outdir = params.aws_outdir",
 		// #188: the Nextflow floor is declared for awsbatch too, not just HealthOmics.
 		"manifest.nextflowVersion = '!>=23.10.0'",
+		// Wide-fan-out throughput + resilience tuning (config-only): submission
+		// rate-limit, S3 transfer retries, and transparent Spot-reclaim retries.
+		"executor.submitRateLimit",
+		"aws.batch.maxParallelTransfers",
+		"aws.batch.maxSpotAttempts",
 	} {
 		if !strings.Contains(batch, want) {
 			t.Errorf("awsbatch config missing %q", want)
@@ -431,37 +499,40 @@ func TestEmitSplitJoinGatherSorted(t *testing.T) {
 }
 
 // TestEmitMappedMergeGatherSorted guards -resume stability (#123) for the
-// default-mode mapped call's MERGE: the gathered per-fork out bundles must be
-// sorted by name, not collect()ed in completion order — MERGE's input order is
-// part of its -resume cache key (same class as the split JOIN and the keyed
-// gathers). toSortedList emits [] on an empty channel exactly where the
-// dropped ifEmpty([]) did: for zero forks (MERGE yields the typed empty) and
-// on a disabled skip — where dormancy rests on FORK.out.keys never emitting,
-// so MERGE stays dormant and the skip-null mixes in, unchanged.
+// default-mode mapped call's gather: the per-fork out bundles must be sorted by
+// name, not collect()ed in completion order — the gather order is part of the
+// -resume cache key (same class as the split JOIN and the keyed gathers).
+// toSortedList emits [] on an empty channel exactly where the dropped
+// ifEmpty([]) did: for zero forks and on a disabled skip.
+//
+// An enabled mapped call folds its MERGE into the sole consumer (#221 emit-once):
+// the sorted gather becomes the fold-contract souts channel and the merge runs
+// in the consumer's scratch, so the sort must survive there. A DISABLED mapped
+// call keeps its standalone MERGE (the skip branch needs it as the null-mix
+// point), where the sorted gather feeds the MERGE call directly.
 func TestEmitMappedMergeGatherSorted(t *testing.T) {
-	sorted := ".toSortedList { x, y -> x.name <=> y.name }"
-
 	for _, tc := range []struct{ fixture, module, want string }{
+		// Enabled: the fold consumes the sorted per-fork outs as the souts channel.
 		{
 			"map_fork", "pipe_MP.nf",
-			"MERGE_2_MP__DBL(out_DBL" + sorted + ", FORK_2_MP__DBL.out.keys, types)",
+			"ch_DBL_souts = out_DBL.toSortedList { a, b -> a.name <=> b.name }",
 		},
-		// The disabled variant shares the same gather line; the skip-null mix
+		// Disabled: the standalone MERGE keeps its sorted gather; the skip-null mix
 		// point downstream of MERGE must survive untouched.
 		{
 			"disabled_map", "pipe_Q.nf",
-			"MERGE_1_Q__DBL(out_DBL" + sorted + ", FORK_1_Q__DBL.out.keys, types)",
+			"MERGE_1_Q__DBL(out_DBL.toSortedList { x, y -> x.name <=> y.name }, FORK_1_Q__DBL.out.keys, types)",
 		},
 	} {
 		dir := emitFixture(t, tc.fixture, map[string]string{"DBL": "/x/dbl"})
 		mod := readFile(t, filepath.Join(dir, "modules", tc.module))
 
 		if !strings.Contains(mod, tc.want) {
-			t.Errorf("%s: MERGE must gather the fork outs sorted by name; missing %q:\n%s", tc.fixture, tc.want, mod)
+			t.Errorf("%s: fork outs must be gathered sorted by name; missing %q:\n%s", tc.fixture, tc.want, mod)
 		}
 
 		if strings.Contains(mod, ".collect().ifEmpty([])") {
-			t.Errorf("%s: MERGE still gathers fork outs in arrival order:\n%s", tc.fixture, mod)
+			t.Errorf("%s: fork outs still gathered in arrival order:\n%s", tc.fixture, mod)
 		}
 
 		if tc.fixture == "disabled_map" && !strings.Contains(mod, "ch_DBL = MERGE_1_Q__DBL.out.mix(s_DBL).first()") {

@@ -106,7 +106,7 @@ func lowerNamesFixture(t *testing.T, fixture string) *ir.Program {
 // which run no stage code), and the fixed singleton helpers.
 func inventoryNames(prog *ir.Program) map[string]string {
 	names := map[string]string{
-		"PUBLISH_LEAF": "helper", "LAYOUT": "helper", "BUILD_ENTRY_ARGS": "helper",
+		"LAYOUT": "helper", "BUILD_ENTRY_ARGS": "helper",
 	}
 
 	for stage := range prog.Stages {

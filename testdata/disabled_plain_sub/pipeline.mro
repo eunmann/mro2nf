@@ -1,0 +1,52 @@
+# A DISABLED-plain sub-pipeline call: `call SUB(...) using (disabled = self.skip)`
+# where SUB is a plain (unmapped) sub-pipeline holding a single undisabled stage
+# call and a call-output-ref return. -inline-pipelines splices SUB's SCALE into
+# TOP gated by self.skip, so the boundary BIND disappears while outputs stay
+# byte-identical: skip=false here, so the sub runs and TOP yields scaled=15.
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline SUB(
+    in  float value,
+    in  float factor,
+    out float scaled,
+)
+{
+    call SCALE(
+        value  = self.value,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+pipeline TOP(
+    in  float value,
+    in  float factor,
+    in  bool  skip,
+    out float scaled,
+)
+{
+    call SUB(
+        value  = self.value,
+        factor = self.factor,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        scaled = SUB.scaled,
+    )
+}
+
+call TOP(
+    value  = 3.0,
+    factor = 5.0,
+    skip   = false,
+)

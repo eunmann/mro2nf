@@ -117,6 +117,10 @@ type Options struct {
 	// so it composes with the default DAG too). Compiled/exec stages keep the
 	// adapter path.
 	NativeRunner bool
+	// InlinePipelines opts into flattening eligible sub-pipeline boundaries so
+	// their entry/return BIND tasks disappear (#221). Orchestration-only; outputs
+	// are byte-identical.
+	InlinePipelines bool
 }
 
 // featureSet extracts the opt-in emission toggles from o. It is the single
@@ -124,10 +128,11 @@ type Options struct {
 // through it, so they can never analyze different plans for the same options.
 func (o Options) featureSet() featureSet {
 	return featureSet{
-		fuseChains:   o.FuseChains,
-		foldDisables: o.FoldDisables,
-		native:       o.Native,
-		nativeRunner: o.NativeRunner,
+		fuseChains:      o.FuseChains,
+		foldDisables:    o.FoldDisables,
+		native:          o.Native,
+		nativeRunner:    o.NativeRunner,
+		inlinePipelines: o.InlinePipelines,
 	}
 }
 
@@ -169,6 +174,15 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	features := opts.featureSet()
+
+	// #221: flatten eligible sub-pipeline boundaries before planning, so their
+	// entry/return BIND tasks never exist. A pure orchestration transform (the
+	// data plane and every leaf binding's value are unchanged); opt-in while it
+	// proves out, since it renames inlined stage tasks (a one-time -resume reset).
+	if features.inlinePipelines {
+		inlinePipelines(prog)
+	}
+
 	g := genCtx{
 		entry:   prog.Entry.Callable,
 		mroFile: opts.MROFile,
@@ -1146,6 +1160,20 @@ process.executor = 'awsbatch'
 process.queue    = params.aws_queue
 aws.region       = params.aws_region
 aws.batch.cliPath = params.aws_cli_path
+
+// Wide-fan-out throughput + resilience on Batch/S3 (config-only, no output or
+// -resume impact): rate-limit job submission so a broad scatter (many forks /
+// chunks at once) does not throttle the Batch and S3 control-plane APIs, retry
+// S3 transfers on transient errors, and transparently re-run Spot reclaims
+// (maxSpotAttempts) instead of failing the task. Override any of these in a -c
+// config to match your account limits.
+executor.submitRateLimit       = '50/1sec'
+executor.queueSize             = 1000
+aws.batch.maxParallelTransfers = 5
+aws.batch.maxTransferAttempts  = 3
+aws.batch.delayBetweenAttempts = '10 sec'
+aws.batch.maxSpotAttempts      = 5
+aws.batch.retryMode            = 'standard'
 `
 }
 
