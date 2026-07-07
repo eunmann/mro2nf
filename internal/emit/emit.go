@@ -1161,6 +1161,20 @@ process.executor = 'awsbatch'
 process.queue    = params.aws_queue
 aws.region       = params.aws_region
 aws.batch.cliPath = params.aws_cli_path
+
+// Wide-fan-out throughput + resilience on Batch/S3 (config-only, no output or
+// -resume impact): rate-limit job submission so a broad scatter (many forks /
+// chunks at once) does not throttle the Batch and S3 control-plane APIs, retry
+// S3 transfers on transient errors, and transparently re-run Spot reclaims
+// (maxSpotAttempts) instead of failing the task. Override any of these in a -c
+// config to match your account limits.
+executor.submitRateLimit       = '50/1sec'
+executor.queueSize             = 1000
+aws.batch.maxParallelTransfers = 5
+aws.batch.maxTransferAttempts  = 3
+aws.batch.delayBetweenAttempts = '10 sec'
+aws.batch.maxSpotAttempts      = 5
+aws.batch.retryMode            = 'standard'
 `
 }
 

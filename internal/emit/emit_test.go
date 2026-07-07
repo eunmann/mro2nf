@@ -276,6 +276,11 @@ func TestEmitConfigTargets(t *testing.T) {
 		"params.outdir = params.aws_outdir",
 		// #188: the Nextflow floor is declared for awsbatch too, not just HealthOmics.
 		"manifest.nextflowVersion = '!>=23.10.0'",
+		// Wide-fan-out throughput + resilience tuning (config-only): submission
+		// rate-limit, S3 transfer retries, and transparent Spot-reclaim retries.
+		"executor.submitRateLimit",
+		"aws.batch.maxParallelTransfers",
+		"aws.batch.maxSpotAttempts",
 	} {
 		if !strings.Contains(batch, want) {
 			t.Errorf("awsbatch config missing %q", want)
