@@ -1,0 +1,51 @@
+# disabled_plain_sub's skip=true twin: the plain sub-pipeline is SKIPPED at
+# runtime, so its spliced SCALE never runs and TOP's scaled output must resolve
+# to null — exactly as the boundary BIND does — proving the pushed-down gate
+# nulls a disabled sub's call-output-ref return identically to mrp.
+stage SCALE(
+    in  float value,
+    in  float factor,
+    out float scaled,
+    src py    "stages/scale",
+)
+
+pipeline SUB(
+    in  float value,
+    in  float factor,
+    out float scaled,
+)
+{
+    call SCALE(
+        value  = self.value,
+        factor = self.factor,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+pipeline TOP(
+    in  float value,
+    in  float factor,
+    in  bool  skip,
+    out float scaled,
+)
+{
+    call SUB(
+        value  = self.value,
+        factor = self.factor,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        scaled = SUB.scaled,
+    )
+}
+
+call TOP(
+    value  = 3.0,
+    factor = 5.0,
+    skip   = true,
+)

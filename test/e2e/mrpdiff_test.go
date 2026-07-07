@@ -240,8 +240,19 @@ func TestMrpDiff(t *testing.T) {
 		// itself against live mrp, not just the golden snapshot.
 		{name: "fork_ref", native: true, runner: true},
 		{name: "fork_mid", native: true, runner: true},
-		{name: "fork_disabled_sub", native: true, runner: true},
-		{name: "fork_disabled_skip", native: true},
+		// The inline legs here keep the disabled SUB a boundary (its internal call
+		// is a MAP call, which the profitability guard excludes), so they gate that
+		// -inline-pipelines leaves a non-flat disabled sub byte-identical.
+		{name: "fork_disabled_sub", native: true, runner: true, inline: true},
+		{name: "fork_disabled_skip", native: true, inline: true},
+		// #221 disabled-plain sub-pipeline inlining: `call SUB using (disabled=X)`
+		// where SUB is a FLAT plain sub-pipeline (one undisabled leaf stage reading
+		// only pipeargs) splices its internal stage into the parent gated by X — the
+		// profitability guard's win case. _sub runs (skip=false → scaled=15), _skip
+		// nulls (skip=true → scaled=null), so the inline leg proves both the run and
+		// the disabled-null branch stay byte-identical to mrp.
+		{name: "disabled_plain_sub", inline: true},
+		{name: "disabled_plain_skip", inline: true},
 		{name: "fork_fanout", native: true, runner: true},
 		{name: "map_file_array", native: true, runner: true},
 		// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
