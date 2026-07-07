@@ -239,8 +239,9 @@ func genPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g gen
 		}
 
 		// A fused split call imports the stage's MAIN/JOIN phase processes, aliased
-		// per call (DSL2 requires an alias since wf_<stage> also invokes them).
-		if cp.kind == kindFusedSplit {
+		// per call (DSL2 requires an alias since wf_<stage> also invokes them). A
+		// natively-gated disabled split fuses the same way — only its wiring gates.
+		if cp.kind == kindFusedSplit || cp.kind == kindFusedDisabledSplit {
 			fmt.Fprintf(b, "include { %[1]s_MAIN as %[2]s; %[1]s_JOIN as %[3]s } from './stage_%[1]s.nf'\n",
 				cp.stage.Name, fusedMainAlias(p.Name, c.Name), fusedJoinAlias(p.Name, c.Name))
 
@@ -314,8 +315,9 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			genFusedStageProcess(b, prog, p, c, cp.stage, g)
 
 		// A fuseable split call folds bind into a per-call SPLIT feeding the aliased
-		// MAIN/JOIN (#16).
-		case kindFusedSplit:
+		// MAIN/JOIN (#16). A natively-gated disabled split emits the SAME process and
+		// workflow — only its wiring gates the enabled forks (genFusedDisabledSplitWiring).
+		case kindFusedSplit, kindFusedDisabledSplit:
 			genFusedSplitProcess(b, p.Name, c, cp.stage, g)
 			genFusedSplitWorkflow(b, p.Name, c)
 
@@ -861,6 +863,11 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 	case kindFusedDisabled:
 		genFusedDisabledWiring(b, p, c, g)
 
+	// A natively-disabled split fuses bind into the fused SPLIT, gating the
+	// enabled forks into it (the split analog of kindFusedDisabled).
+	case kindFusedDisabledSplit:
+		genFusedDisabledSplitWiring(b, p, c)
+
 	case kindPlainBind:
 		bind := bindName(pipeline, c.Name)
 		fmt.Fprintf(b, "    %s(%s)\n", bind, foldCallArgs(g, p, c.Bindings, "pa", bind))
@@ -1205,13 +1212,44 @@ func fuseableSplitCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, 
 	return s, true
 }
 
+// fuseableDisabledSplitCall reports a natively-gated disabled SPLIT-stage call
+// whose bind folds into the fused SPLIT task, or (nil, false) — the split analog
+// of fuseableDisabledStage. Because the run/skip decision is read on the driver
+// (nativeDisableGate), the bind no longer has to run before the gate, so a
+// standalone BIND disappears: only the enabled forks feed the fused bind+split
+// process (genFusedDisabledSplitWiring), and the skipped branch yields the null
+// bundle. A non-native gate keeps the plain BIND + DISABLE path (conservative).
+func fuseableDisabledSplitCall(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
+	if c.Mapped || c.Disabled == nil || c.Preflight {
+		return nil, false
+	}
+
+	if _, _, ok := nativeDisableGate(c); !ok {
+		return nil, false
+	}
+
+	s, ok := prog.Stages[c.Callable]
+	if !ok || !s.Split {
+		return nil, false
+	}
+
+	return s, true
+}
+
 // fusedSplitCallArgs renders the fused split workflow's actual arguments: the
 // pipeline args plus each referenced upstream call's channel (types and the
 // bindspec are resolved inside the workflow, not passed).
 func fusedSplitCallArgs(bindings []ir.Binding) string {
+	return fusedSplitCallArgsPa(bindings, "pa")
+}
+
+// fusedSplitCallArgsPa is fusedSplitCallArgs with an explicit pipeline-args
+// expression, so a disabled split call can feed its gated (enabled-fork) channel
+// in place of the plain `pa` broadcast (genFusedDisabledSplitWiring).
+func fusedSplitCallArgsPa(bindings []ir.Binding, pa string) string {
 	refs := refCalls(bindings)
 	args := make([]string, 0, len(refs)+1)
-	args = append(args, "pa")
+	args = append(args, pa)
 
 	for _, id := range refs {
 		args = append(args, "ch_"+id)
@@ -1514,6 +1552,45 @@ func genFusedDisabledWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g gen
     s_%[1]s = g_%[1]s.skip.map { data, leaves, gd, gl -> %[6]s }
     ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
 `, c.Name, src, field, fused, foldCallArgs(g, p, c.Bindings, enabled, bind), nullBundle(nulls))
+}
+
+// genFusedDisabledSplitWiring gates a natively-disabled SPLIT-stage call and feeds
+// the enabled forks into the fused bind+split WORKFLOW — no standalone BIND (the
+// split analog of genFusedDisabledWiring). The self case branches on pa; the
+// upstream-ref case combines pa with the producing channel to read the flag. In
+// both, the fused split workflow takes the gated pipeargs plus the call's ref
+// channels (fusedSplitCallArgsPa); skipped forks yield the null bundle.
+func genFusedDisabledSplitWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call) {
+	pipeline := p.Name
+	fused := fusedName(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+	src, field, _ := nativeDisableGate(c)
+
+	if src == "pa" {
+		enabled := fmt.Sprintf("g_%s.run", c.Name)
+		fmt.Fprintf(b, `    g_%[1]s = pa.branch { data, leaves ->
+        def off = Mro2nf.disabledField(data, '%[2]s')
+        run: !off
+        skip: off
+    }
+    r_%[1]s = %[3]s(%[4]s)
+    s_%[1]s = g_%[1]s.skip.map { data, leaves -> %[5]s }
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
+`, c.Name, field, fused, fusedSplitCallArgsPa(c.Bindings, enabled), nullBundle(nulls))
+
+		return
+	}
+
+	enabled := fmt.Sprintf("g_%s.run.map { data, leaves, gd, gl -> tuple(data, leaves) }", c.Name)
+	fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s).branch { data, leaves, gd, gl ->
+        def off = Mro2nf.disabledField(gd, '%[3]s')
+        run: !off
+        skip: off
+    }
+    r_%[1]s = %[4]s(%[5]s)
+    s_%[1]s = g_%[1]s.skip.map { data, leaves, gd, gl -> %[6]s }
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
+`, c.Name, src, field, fused, fusedSplitCallArgsPa(c.Bindings, enabled), nullBundle(nulls))
 }
 
 // nativeDisableGate reports whether a call's disable flag can be read natively

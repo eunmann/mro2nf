@@ -30,16 +30,17 @@ type featureSet struct {
 type callKind uint8
 
 const (
-	kindPlainBind     callKind = iota // standalone BIND + callee (or disable gate)
-	kindMapped                        // FORK → callee → MERGE
-	kindForward                       // #14 emit-once: route producer bundle straight in
-	kindFusedStage                    // #16 fused bind+main leaf stage
-	kindFusedSplit                    // #16 fused bind+split → MAIN → JOIN
-	kindFusedDisabled                 // #59 fused bind+main, natively-gated disable
-	kindFusedChain                    // #59 Lever 4 chain consumer (folds its producer)
-	kindFusedAway                     // #59 Lever 4 chain producer folded into its consumer
-	kindFoldedOff                     // #59 Lever 1 always-disabled call: emit only its null output
-	kindNativeScatter                 // #76 -native map call: in-workflow scatter, no FORK task
+	kindPlainBind          callKind = iota // standalone BIND + callee (or disable gate)
+	kindMapped                             // FORK → callee → MERGE
+	kindForward                            // #14 emit-once: route producer bundle straight in
+	kindFusedStage                         // #16 fused bind+main leaf stage
+	kindFusedSplit                         // #16 fused bind+split → MAIN → JOIN
+	kindFusedDisabled                      // #59 fused bind+main, natively-gated disable
+	kindFusedDisabledSplit                 // fused bind+split for a natively-gated disabled split stage
+	kindFusedChain                         // #59 Lever 4 chain consumer (folds its producer)
+	kindFusedAway                          // #59 Lever 4 chain producer folded into its consumer
+	kindFoldedOff                          // #59 Lever 1 always-disabled call: emit only its null output
+	kindNativeScatter                      // #76 -native map call: in-workflow scatter, no FORK task
 )
 
 // keyedKind is how a call is emitted inside its pipeline's fork-keyed layer
@@ -331,6 +332,10 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away ma
 
 	if s, ok := fuseableDisabledStage(c, p, prog); ok {
 		return callPlan{kind: kindFusedDisabled, stage: s}
+	}
+
+	if s, ok := fuseableDisabledSplitCall(c, prog); ok {
+		return callPlan{kind: kindFusedDisabledSplit, stage: s}
 	}
 
 	return callPlan{kind: kindPlainBind, disableTask: needsDisableTask(c)}
