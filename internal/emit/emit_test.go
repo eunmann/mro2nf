@@ -168,10 +168,12 @@ func TestEmitPublishConditional(t *testing.T) {
 	}
 }
 
-// TestEmitHeadNodePublish checks the target-gated terminal publish: a local
-// (POSIX) target folds leaf publishing into LAYOUT itself (head-node publishDir,
-// no per-leaf task), while an object-store target keeps the parallel PUBLISH_LEAF
-// fan-out so leaf bytes are not funnelled through one node (#12).
+// TestEmitHeadNodePublish checks the terminal publish: on every backend LAYOUT
+// itself materialises the outs/ tree and publishDir copies it into place from the
+// head node — no per-leaf PUBLISH_LEAF task. On a shared FS (local, HealthOmics
+// /mnt/workflow) leaf staging is a link; on the s3:// AWS Batch work dir Nextflow
+// stages+publishes the tree (a single-node pass), letting its own S3 filesystem
+// move the bytes rather than a hand-rolled aws-cli copy.
 func TestEmitHeadNodePublish(t *testing.T) {
 	// A container (object-store) target stats the mre/mrjob binaries to bake them
 	// into the image, so provide real files; the local target ignores them.
@@ -214,24 +216,18 @@ func TestEmitHeadNodePublish(t *testing.T) {
 		return string(data)
 	}
 
-	local := emitMain(emit.TargetLocal)
-	if strings.Contains(local, "process PUBLISH_LEAF") {
-		t.Error("local target must not emit a PUBLISH_LEAF process (head-node publish)")
-	}
-
-	for _, want := range []string{"-leaves f -outs outs", "path 'outs/**'", "it.startsWith('outs/')"} {
-		if !strings.Contains(local, want) {
-			t.Errorf("local LAYOUT missing head-node publish fragment %q", want)
+	// Every backend folds leaf publishing into LAYOUT — no per-leaf task.
+	for _, target := range []emit.Target{emit.TargetLocal, emit.TargetHealthOmics, emit.TargetAWSBatch} {
+		nf := emitMain(target)
+		if strings.Contains(nf, "PUBLISH_LEAF") {
+			t.Errorf("%s target must not emit a PUBLISH_LEAF process (head-node publish)", target)
 		}
-	}
 
-	batch := emitMain(emit.TargetAWSBatch)
-	if !strings.Contains(batch, "process PUBLISH_LEAF") {
-		t.Error("object-store target must keep the PUBLISH_LEAF fan-out")
-	}
-
-	if strings.Contains(batch, "-leaves f -outs outs") {
-		t.Error("object-store LAYOUT must not fold leaf publishing (avoids the #12 funnel)")
+		for _, want := range []string{"-leaves f -outs outs", "path 'outs/**'", "it.startsWith('outs/')"} {
+			if !strings.Contains(nf, want) {
+				t.Errorf("%s LAYOUT missing head-node publish fragment %q", target, want)
+			}
+		}
 	}
 }
 

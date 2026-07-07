@@ -166,67 +166,35 @@ func elementCallArgs(c ir.Call, scatChan, specName string) string {
 	return scatChan + ", " + bindCallArgsPa(c.Bindings, "pa", specName)
 }
 
-// genPublish emits the terminal publish as two processes that avoid a single-node
-// funnel (#12): LAYOUT stages ONLY the final sidecar (data.json) — no file leaves
-// — to compute the outs/ layout (leaf basename -> outs/ rel path) and the
-// pipeline_outs.json value tree; PUBLISH_LEAF then stages each leaf individually
-// and publishes it into outs/<rel>, so the result set is published in parallel
-// across tasks rather than round-tripped through one node. The physical outs/
-// tree (which downstream pipelines consume) is unchanged.
+// genPublish emits the terminal publish as a single LAYOUT task: it computes the
+// outs/ layout (leaf basename -> outs/ rel path) and the pipeline_outs.json value
+// tree from the return sidecar, materialises the outs/ tree from the staged
+// leaves, and a publishDir directive copies that tree into the results location.
+// Every backend publishes this way from the head node — there is no per-leaf task.
+// On a shared filesystem (local, HealthOmics' /mnt/workflow) staging each leaf
+// into LAYOUT is an intra-FS link; on the s3:// AWS Batch work dir Nextflow
+// stages the leaves into the task and publishDir uploads the tree, a single-node
+// pass whose cost is O(total output data) and constant in fork/chunk width (the
+// overhead budget), letting Nextflow's own S3 filesystem move the bytes rather
+// than a hand-rolled aws-cli copy. The physical outs/ tree (which downstream
+// pipelines consume) is unchanged.
 func genPublish(b *strings.Builder, prog *ir.Program, g genCtx) {
 	if p := nativeReturnBind(prog, g); p != nil {
 		genNativeLayout(b, prog, p, g)
 	} else {
 		genDefaultLayout(b, prog.Entry.Callable, g)
 	}
-
-	// On a POSIX filesystem LAYOUT publishes the outs/ tree itself from the head
-	// node (see headNodePublish / outsPublish), so no PUBLISH_LEAF process is
-	// emitted; object-store backends keep the parallel fan-out.
-	if g.headNodePublish() {
-		return
-	}
-
-	fmt.Fprint(b, `
-process PUBLISH_LEAF {
-  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, saveAs: { outsPath }
-  input:
-    tuple val(outsPath), path(leaf)
-  output:
-    path leaf
-  script:
-    """
-    true
-    """
-}
-
-`)
-}
-
-// headNodePublish reports whether the terminal outs/ tree is published by the
-// Nextflow driver via publishDir (no per-leaf task). This is faithful only on a
-// POSIX filesystem, where LAYOUT staging every leaf is a symlink rather than a
-// byte funnel; object-store backends (#12) keep the parallel PUBLISH_LEAF fan-out
-// so leaf bytes are not round-tripped through one node.
-func (g genCtx) headNodePublish() bool {
-	return g.target == TargetLocal
 }
 
 // outsPublish carries the fragments that turn LAYOUT into a head-node publisher:
 // a second publishDir directive (saveAs strips the outs/ prefix), the staged-leaf
-// input, the outs/** output, and the mre flags that materialise the tree. All
-// empty when the target keeps the PUBLISH_LEAF fan-out, so the emitted LAYOUT is
-// byte-for-byte the prior one.
+// input, the outs/** output, and the mre flags that materialise the tree.
 type outsPublish struct{ dir, in, out, flags string }
 
-// outsFragments returns the LAYOUT fragments for head-node publishing (empty on
-// object-store targets). staged is true when LAYOUT already has the leaves in f/
-// (the native return-bind moves them there), so no separate f/ input is added.
-func (g genCtx) outsFragments(staged bool) outsPublish {
-	if !g.headNodePublish() {
-		return outsPublish{}
-	}
-
+// outsFragments returns the LAYOUT fragments for head-node publishing. staged is
+// true when LAYOUT already has the leaves in f/ (the native return-bind moves
+// them there), so no separate f/ input is added.
+func outsFragments(staged bool) outsPublish {
 	op := outsPublish{
 		dir:   "  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, saveAs: { it.startsWith('outs/') ? it.substring(5) : null }\n",
 		out:   "    path 'outs/**', arity: '0..*', optional: true\n",
@@ -243,7 +211,7 @@ func (g genCtx) outsFragments(staged bool) outsPublish {
 // bundle sidecar (produced by a separate return BIND) and computes the outs/
 // layout + manifest.
 func genDefaultLayout(b *strings.Builder, entry string, g genCtx) {
-	op := g.outsFragments(false)
+	op := outsFragments(false)
 
 	fmt.Fprintf(b, `process LAYOUT {
   publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
@@ -283,19 +251,15 @@ func nativeReturnBind(prog *ir.Program, g genCtx) *ir.Pipeline {
 // before publish-layout (#76): no standalone BIND_<entry>__return node. It takes
 // the return bind's inputs (pipeargs + the returned calls), binds them into the
 // return bundle, moves it to the task root so publish-layout runs the identical
-// command the default LAYOUT does, and exposes the bundle leaves for PUBLISH_LEAF.
+// command the default LAYOUT does, and materialises + publishes the outs/ tree
+// from those bundle leaves.
 func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g genCtx) {
 	inBlock, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(p.Returns))
 	flags := g.producerArgs(p.Name, types.RoleOut)
 
 	// The return bind moves the leaves into f/ (staged=true), so head-node
-	// publishing needs no extra f/ input — it publishes outs/** instead of
-	// exposing the raw leaves for PUBLISH_LEAF.
-	op := g.outsFragments(true)
-	leafOut := "    path 'f/*', emit: leaves, arity: '0..*', optional: true\n"
-	if g.headNodePublish() {
-		leafOut = op.out
-	}
+	// publishing needs no extra f/ input — LAYOUT publishes outs/** directly.
+	op := outsFragments(true)
 
 	fmt.Fprintf(b, `process LAYOUT {
   publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
@@ -312,7 +276,7 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
     '%[2]s' publish-layout -sidecar data.json -dir .%[4]s%[8]s
     """
 }
-`, inBlock, g.mre, arg, flags, pre, op.dir, leafOut, op.flags)
+`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags)
 }
 
 // genNativeEntry emits the native workflow (#76 M1): the entry args are baked
@@ -338,7 +302,7 @@ workflow {
 	if p := nativeReturnBind(prog, g); p != nil {
 		genNativePublishWiring(b, p, entryWorkflow, g)
 	} else {
-		genPublishWiring(b, g, entryWorkflow)
+		genPublishWiring(b, entryWorkflow)
 	}
 
 	b.WriteString("}\n")
@@ -369,9 +333,10 @@ func groovyStringList(items []string) string {
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
-// genNativePublishWiring wires the native LAYOUT (which folds in the return bind):
-// it feeds LAYOUT the entry's raw return inputs (pargs + each returned call) and
-// takes the published leaves from LAYOUT's own output for PUBLISH_LEAF.
+// genNativePublishWiring wires the native LAYOUT (which folds in the return
+// bind): it feeds LAYOUT the entry's raw return inputs (pargs + each returned
+// call). LAYOUT then materialises and publishes the outs/ tree from the head node
+// itself, so there is no further publish task to wire.
 func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow string, g genCtx) {
 	var refArgs strings.Builder
 	for _, id := range refCalls(p.Returns) {
@@ -387,17 +352,6 @@ func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow st
 
 	fmt.Fprintf(b, "  LAYOUT(%[1]s.out.pargs%[2]s, types, %[3]s)\n",
 		entryWorkflow, refArgs.String(), specFile(bindName(p.Name, "return")))
-
-	// Head-node publish: LAYOUT already moved the leaves into f/ and published the
-	// outs/ tree itself, so there is no PUBLISH_LEAF fan-out to wire.
-	if g.headNodePublish() {
-		return
-	}
-
-	fmt.Fprint(b, `  lmap = LAYOUT.out.layout.map { f -> Mro2nf.parseJson(f) }
-  leaves = LAYOUT.out.leaves.flatMap { l -> (l instanceof List ? l : [l]).collect { leaf -> tuple(leaf.name, leaf) } }
-  PUBLISH_LEAF(leaves.combine(lmap).flatMap { base, leaf, m -> (m[base] ?: []).collect { rel -> tuple(rel, leaf) } })
-`)
 }
 
 // entryWiring is the per-input wiring genEntry assembles into the entry
@@ -530,34 +484,22 @@ workflow {
 		w.fileInputs, flatFlag, w.fileChans, strings.Join(w.callArgs, ", "),
 		bundleOutput("entry_resolved"), flatHeredoc)
 
-	genPublishWiring(b, g, entryWorkflow)
+	genPublishWiring(b, entryWorkflow)
 	b.WriteString("}\n")
 }
 
-// genPublishWiring emits the shared publish tail (#12): LAYOUT reads only the
-// sidecar to compute the outs/ layout; PUBLISH_LEAF publishes each leaf in
-// parallel. multiMap splits the final output tuple so both consume it safely.
-// Used by both the default (BUILD_ENTRY_ARGS) and native entry workflows.
-func genPublishWiring(b *strings.Builder, g genCtx, entryWorkflow string) {
-	if g.headNodePublish() {
-		fmt.Fprintf(b, `  // Publish the final outs/ tree from the head node (no per-leaf task): LAYOUT
-  // stages every leaf (a symlink on a POSIX filesystem), materialises outs/, and
-  // publishDir copies the tree into place. multiMap splits the final output tuple.
+// genPublishWiring emits the shared publish tail: LAYOUT stages every leaf,
+// computes the outs/ layout, materialises the outs/ tree, and publishDir copies
+// it into place from the head node (no per-leaf task). multiMap splits the final
+// output tuple so the sidecar and the leaves feed LAYOUT separately. Used by both
+// the default (BUILD_ENTRY_ARGS) and native entry workflows.
+func genPublishWiring(b *strings.Builder, entryWorkflow string) {
+	fmt.Fprintf(b, `  // Publish the final outs/ tree from the head node (no per-leaf task): LAYOUT
+  // stages every leaf (a link on a shared filesystem; a stage+publish pass on the
+  // s3:// work dir), materialises outs/, and publishDir copies the tree into
+  // place. multiMap splits the final output tuple.
   ep = %[1]s.out.multiMap { s, l -> side: s; leaves: l }
   LAYOUT(ep.side, types, ep.leaves)
-`, entryWorkflow)
-
-		return
-	}
-
-	fmt.Fprintf(b, `  // Publish without a single-node funnel (#12): LAYOUT reads only the sidecar to
-  // compute the outs/ layout; PUBLISH_LEAF publishes each leaf into place in
-  // parallel. multiMap splits the final output tuple so both consume it safely.
-  ep = %[1]s.out.multiMap { s, l -> side: s; leaves: l }
-  LAYOUT(ep.side, types)
-  lmap = LAYOUT.out.layout.map { f -> Mro2nf.parseJson(f) }
-  leaves = ep.leaves.flatMap { l -> (l instanceof List ? l : [l]).collect { leaf -> tuple(leaf.name, leaf) } }
-  PUBLISH_LEAF(leaves.combine(lmap).flatMap { base, leaf, m -> (m[base] ?: []).collect { rel -> tuple(rel, leaf) } })
 `, entryWorkflow)
 }
 

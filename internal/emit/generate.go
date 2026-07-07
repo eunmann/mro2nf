@@ -25,11 +25,10 @@ type genCtx struct {
 	// project dir is not mounted into the isolated task.
 	runnerBase string
 	monitor    bool
-	// target is the deployment backend (local FS vs an object-store container
-	// backend). It gates head-node publishing: on a POSIX filesystem the final
-	// outs/ tree is published by the driver via publishDir (no per-leaf task),
-	// while object-store backends keep the parallel PUBLISH_LEAF fan-out so leaf
-	// bytes are not funnelled through one node (#12).
+	// target is the deployment backend (local FS, HealthOmics shared FS, or the
+	// s3:// AWS Batch work dir). It drives the config profile, container/publish
+	// wiring, and cloud packaging; every backend publishes the final outs/ tree
+	// from the head node via publishDir (see genPublish).
 	target Target
 	// features holds the opt-in emission toggles (mirrored from Options).
 	features featureSet
