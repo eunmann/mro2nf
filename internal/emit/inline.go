@@ -398,9 +398,18 @@ func composeProjection(base ir.Value, path string) (ir.Value, bool) {
 		}
 
 		return ir.Value{Array: arr}, true
+	case isNullLiteral(base):
+		// Martian projects any path into null as null (a disabled/absent upstream);
+		// so a whole-null boundary output projected further stays null.
+		return ir.Value{Literal: []byte("null")}, true
 	default:
-		return ir.Value{}, false // projecting into a scalar literal
+		return ir.Value{}, false // projecting into a non-null scalar literal (a type error in valid MRO)
 	}
+}
+
+// isNullLiteral reports whether v is the JSON null literal.
+func isNullLiteral(v ir.Value) bool {
+	return v.Literal != nil && strings.TrimSpace(string(v.Literal)) == "null"
 }
 
 // joinOutput joins two projection path segments with a dot, dropping an empty
