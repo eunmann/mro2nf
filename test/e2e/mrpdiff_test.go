@@ -175,6 +175,7 @@ func TestMrpDiff(t *testing.T) {
 		realMrjob bool
 		native    bool
 		runner    bool
+		inline    bool
 	}{
 		{name: "file_min"},
 		{name: "dir_out"},
@@ -210,8 +211,8 @@ func TestMrpDiff(t *testing.T) {
 		{name: "diamond_min"},
 		{name: "fork_min"},
 		{name: "struct_min"},
-		{name: "kitchen_sink"},
-		{name: "file_tree"},
+		{name: "kitchen_sink", inline: true},
+		{name: "file_tree", inline: true},
 		{name: "map_null_map"},
 		// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
 		// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
@@ -229,7 +230,7 @@ func TestMrpDiff(t *testing.T) {
 		// each to null (sub-pipeline chain to an entry value, in-pipeline
 		// cascade through a mapped call, mixed entry+upstream zip) — the
 		// live differential machine-checks the knownInvocation cascade.
-		{name: "empty_fork_sub", native: true},
+		{name: "empty_fork_sub", native: true, inline: true},
 		{name: "empty_fork_cascade", native: true},
 		{name: "empty_fork_mixed", native: true, runner: true},
 		// The native-suite golden anchors: their committed expected/outs.json
@@ -247,7 +248,7 @@ func TestMrpDiff(t *testing.T) {
 		{name: "map_file_split"},
 		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
 		// map, nested pipelines) — all py stages, so it joins the mrp differential.
-		{name: "cellranger_shaped", native: true, runner: true},
+		{name: "cellranger_shaped", native: true, runner: true, inline: true},
 		// #113: stage src arguments (`src exec "code.py 3 hello"`) must reach
 		// the stage under both runners. Unlike the journal-less exec stubs
 		// below, this one writes journal entries (martian_shell.py
@@ -304,6 +305,15 @@ func TestMrpDiff(t *testing.T) {
 				t.Run("native_runner", func(t *testing.T) {
 					t.Parallel()
 					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native", "-native-runner"))
+				})
+			}
+
+			// #221: an -inline-pipelines leg faces the same mrp pipestance, gating
+			// that flattening a sub-pipeline boundary keeps outputs byte-identical.
+			if tc.inline {
+				t.Run("inline", func(t *testing.T) {
+					t.Parallel()
+					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines"))
 				})
 			}
 		})
