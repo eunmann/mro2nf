@@ -168,6 +168,73 @@ func TestEmitPublishConditional(t *testing.T) {
 	}
 }
 
+// TestEmitHeadNodePublish checks the target-gated terminal publish: a local
+// (POSIX) target folds leaf publishing into LAYOUT itself (head-node publishDir,
+// no per-leaf task), while an object-store target keeps the parallel PUBLISH_LEAF
+// fan-out so leaf bytes are not funnelled through one node (#12).
+func TestEmitHeadNodePublish(t *testing.T) {
+	// A container (object-store) target stats the mre/mrjob binaries to bake them
+	// into the image, so provide real files; the local target ignores them.
+	bin := t.TempDir()
+	for _, n := range []string{"mre", "mrjob"} {
+		if err := os.WriteFile(filepath.Join(bin, n), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	emitMain := func(target emit.Target) string {
+		t.Helper()
+
+		base := "../../testdata/split_test"
+		ast, err := frontend.Parse(base+"/pipeline.mro", []string{base}, false)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		prog, err := frontend.Lower(ast, nil)
+		if err != nil {
+			t.Fatalf("lower: %v", err)
+		}
+
+		ss, _ := filepath.Abs(base + "/stages/sum_squares")
+		dir := t.TempDir()
+		if err := emit.Emit(prog, emit.Options{
+			OutDir: dir, Mre: filepath.Join(bin, "mre"), Mrjob: filepath.Join(bin, "mrjob"),
+			Shell: ss + "/__init__.py", MROFile: "pipeline.mro", MRODir: base, Target: target,
+			StageCode: map[string]string{"SUM_SQUARES": ss, "REPORT": ss},
+		}); err != nil {
+			t.Fatalf("emit: %v", err)
+		}
+
+		data, err := os.ReadFile(filepath.Join(dir, "main.nf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return string(data)
+	}
+
+	local := emitMain(emit.TargetLocal)
+	if strings.Contains(local, "process PUBLISH_LEAF") {
+		t.Error("local target must not emit a PUBLISH_LEAF process (head-node publish)")
+	}
+
+	for _, want := range []string{"-leaves f -outs outs", "path 'outs/**'", "it.startsWith('outs/')"} {
+		if !strings.Contains(local, want) {
+			t.Errorf("local LAYOUT missing head-node publish fragment %q", want)
+		}
+	}
+
+	batch := emitMain(emit.TargetAWSBatch)
+	if !strings.Contains(batch, "process PUBLISH_LEAF") {
+		t.Error("object-store target must keep the PUBLISH_LEAF fan-out")
+	}
+
+	if strings.Contains(batch, "-leaves f -outs outs") {
+		t.Error("object-store LAYOUT must not fold leaf publishing (avoids the #12 funnel)")
+	}
+}
+
 // TestEmitConfigTargets checks the per-target nextflow.config: awsbatch wires the
 // Batch executor + classic S3 staging with a parameterized container, and
 // healthomics publishes to the managed pubdir, pins a Nextflow version, and sets
