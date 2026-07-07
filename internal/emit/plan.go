@@ -161,18 +161,27 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 		// Second pass (#76/#99 merge fold): with every call's kind fixed, decide
 		// which map-call gathers fold their MERGE into the sole consumer. Reading
 		// the finished kinds keeps this a plan decision the emitters can't
-		// disagree with (#77). Under -native the fold covers EVERY kindMapped
-		// target — leaf stage, split stage, or sub-pipeline — because every keyed
-		// callee variant emits the tuple(key, outs__<key>) the fold contract
-		// pairs with FORK.out.keys (the leaf _MAP, the split JOIN_K, and the
-		// keyed pipeline's return/forward all write outs__<key>). A DISABLED
-		// mapped call keeps its MERGE — the skip branch needs the merged bundle
-		// as the mix point for the null output.
+		// disagree with (#77). The fold covers EVERY kindMapped target — leaf
+		// stage, split stage, or sub-pipeline — because every keyed callee variant
+		// emits the tuple(key, outs__<key>) the fold contract pairs with
+		// FORK.out.keys (the leaf _MAP, the split JOIN_K, and the keyed pipeline's
+		// return/forward all write outs__<key>). The fold is mode-independent: a
+		// kindMapped call dispatches to the same genMappedWiring/genForkBindProcess
+		// regardless of -native (the flag only routes value-only scatters to
+		// kindNativeScatter), so folding it in the default mode too reuses the
+		// same in-task `mre merge` the -native fold has run since #99/#105. This
+		// is the #221 emit-once win: the standalone MERGE task materialises
+		// merged/f/* and re-uploads every per-fork leaf into its own work dir (an
+		// O(N) re-upload per fork on an object-store work dir), whereas the fold
+		// runs the merge in the consumer's own scratch over the co-staged per-fork
+		// outs — each leaf is uploaded once, by its producer, and referenced
+		// thereafter. A DISABLED mapped call keeps its MERGE — the skip branch
+		// needs the merged bundle as the mix point for the null output.
 		for _, c := range p.Calls {
 			cp := pp.calls[c.Name]
 
 			foldable := cp.kind == kindNativeScatter ||
-				(f.native && cp.kind == kindMapped && c.Disabled == nil)
+				(cp.kind == kindMapped && c.Disabled == nil)
 
 			if foldable && mergeFoldable(c.Name, p, pp) {
 				cp.foldMerge = true

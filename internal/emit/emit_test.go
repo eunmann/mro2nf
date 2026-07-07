@@ -499,37 +499,40 @@ func TestEmitSplitJoinGatherSorted(t *testing.T) {
 }
 
 // TestEmitMappedMergeGatherSorted guards -resume stability (#123) for the
-// default-mode mapped call's MERGE: the gathered per-fork out bundles must be
-// sorted by name, not collect()ed in completion order — MERGE's input order is
-// part of its -resume cache key (same class as the split JOIN and the keyed
-// gathers). toSortedList emits [] on an empty channel exactly where the
-// dropped ifEmpty([]) did: for zero forks (MERGE yields the typed empty) and
-// on a disabled skip — where dormancy rests on FORK.out.keys never emitting,
-// so MERGE stays dormant and the skip-null mixes in, unchanged.
+// default-mode mapped call's gather: the per-fork out bundles must be sorted by
+// name, not collect()ed in completion order — the gather order is part of the
+// -resume cache key (same class as the split JOIN and the keyed gathers).
+// toSortedList emits [] on an empty channel exactly where the dropped
+// ifEmpty([]) did: for zero forks and on a disabled skip.
+//
+// An enabled mapped call folds its MERGE into the sole consumer (#221 emit-once):
+// the sorted gather becomes the fold-contract souts channel and the merge runs
+// in the consumer's scratch, so the sort must survive there. A DISABLED mapped
+// call keeps its standalone MERGE (the skip branch needs it as the null-mix
+// point), where the sorted gather feeds the MERGE call directly.
 func TestEmitMappedMergeGatherSorted(t *testing.T) {
-	sorted := ".toSortedList { x, y -> x.name <=> y.name }"
-
 	for _, tc := range []struct{ fixture, module, want string }{
+		// Enabled: the fold consumes the sorted per-fork outs as the souts channel.
 		{
 			"map_fork", "pipe_MP.nf",
-			"MERGE_2_MP__DBL(out_DBL" + sorted + ", FORK_2_MP__DBL.out.keys, types)",
+			"ch_DBL_souts = out_DBL.toSortedList { a, b -> a.name <=> b.name }",
 		},
-		// The disabled variant shares the same gather line; the skip-null mix
+		// Disabled: the standalone MERGE keeps its sorted gather; the skip-null mix
 		// point downstream of MERGE must survive untouched.
 		{
 			"disabled_map", "pipe_Q.nf",
-			"MERGE_1_Q__DBL(out_DBL" + sorted + ", FORK_1_Q__DBL.out.keys, types)",
+			"MERGE_1_Q__DBL(out_DBL.toSortedList { x, y -> x.name <=> y.name }, FORK_1_Q__DBL.out.keys, types)",
 		},
 	} {
 		dir := emitFixture(t, tc.fixture, map[string]string{"DBL": "/x/dbl"})
 		mod := readFile(t, filepath.Join(dir, "modules", tc.module))
 
 		if !strings.Contains(mod, tc.want) {
-			t.Errorf("%s: MERGE must gather the fork outs sorted by name; missing %q:\n%s", tc.fixture, tc.want, mod)
+			t.Errorf("%s: fork outs must be gathered sorted by name; missing %q:\n%s", tc.fixture, tc.want, mod)
 		}
 
 		if strings.Contains(mod, ".collect().ifEmpty([])") {
-			t.Errorf("%s: MERGE still gathers fork outs in arrival order:\n%s", tc.fixture, mod)
+			t.Errorf("%s: fork outs still gathered in arrival order:\n%s", tc.fixture, mod)
 		}
 
 		if tc.fixture == "disabled_map" && !strings.Contains(mod, "ch_DBL = MERGE_1_Q__DBL.out.mix(s_DBL).first()") {
