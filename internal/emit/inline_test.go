@@ -78,6 +78,41 @@ func TestInlineSplicesAndRewrites(t *testing.T) {
 	}
 }
 
+// TestInlinePrunesInlinedModule checks that a sub-pipeline whose every call site
+// is inlined away is pruned from the program — otherwise the emitter would emit a
+// dead, never-invoked sub-workflow module (clutter, and it inflates the emitted
+// process set).
+func TestInlinePrunesInlinedModule(t *testing.T) {
+	prog := inlineFixtureProg()
+	inlinePipelines(prog)
+
+	if _, ok := prog.Pipelines["SUB"]; ok {
+		t.Errorf("SUB was fully inlined into TOP; its now-dead module must be pruned")
+	}
+
+	if _, ok := prog.Pipelines["TOP"]; !ok {
+		t.Errorf("the entry pipeline TOP must be retained")
+	}
+}
+
+// TestInlineKeepsCalledModule checks the prune is scoped to inline's own dead
+// modules: a sub-pipeline still called (here kept as a boundary because the call
+// is mapped) must be retained.
+func TestInlineKeepsCalledModule(t *testing.T) {
+	prog := inlineFixtureProg()
+	for i := range prog.Pipelines["TOP"].Calls {
+		if prog.Pipelines["TOP"].Calls[i].Name == "S" {
+			prog.Pipelines["TOP"].Calls[i].Mapped = true
+		}
+	}
+
+	inlinePipelines(prog)
+
+	if _, ok := prog.Pipelines["SUB"]; !ok {
+		t.Errorf("SUB is still called (mapped, not inlined); its module must be retained")
+	}
+}
+
 // TestInlineSkipsMapped checks the conservative gate: a mapped sub-pipeline call
 // keeps its boundary (not inlined) — its per-fork output shape is not expressible
 // by splicing.

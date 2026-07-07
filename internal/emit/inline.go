@@ -27,10 +27,52 @@ import (
 // emitter fuses into gated binds (inlineDisabled). Anything else is left as a
 // boundary task, so the pass can only remove tasks, never alter output.
 func inlinePipelines(prog *ir.Program) {
+	before := reachablePipelines(prog)
+
 	flat := map[string]bool{}
 	for name := range prog.Pipelines {
 		flattenPipeline(prog.Pipelines[name], prog, flat)
 	}
+
+	// Prune only the sub-pipelines inlining just made unreachable — those whose
+	// every call site was flattened into a parent. Their modules are now dead
+	// code the emitter would otherwise still emit as uninvoked sub-workflows (no
+	// runtime tasks, but clutter in the DAG and the emitted process set). A
+	// pipeline already unreachable BEFORE inlining (e.g. a #59 dead map) is left
+	// untouched, keeping this scoped to cleaning up inline's own dead modules.
+	after := reachablePipelines(prog)
+	for name := range prog.Pipelines {
+		if before[name] && !after[name] {
+			delete(prog.Pipelines, name)
+		}
+	}
+}
+
+// reachablePipelines is the set of pipeline names reachable from the entry via
+// the call graph (following every call — plain, mapped, or disabled). A stage
+// callable is not a pipeline and simply terminates that branch.
+func reachablePipelines(prog *ir.Program) map[string]bool {
+	reachable := map[string]bool{}
+	if prog.Entry == nil {
+		return reachable
+	}
+
+	var visit func(string)
+	visit = func(name string) {
+		p, ok := prog.Pipelines[name]
+		if !ok || reachable[name] {
+			return // a stage callable, or already visited
+		}
+
+		reachable[name] = true
+		for _, c := range p.Calls {
+			visit(c.Callable)
+		}
+	}
+
+	visit(prog.Entry.Callable)
+
+	return reachable
 }
 
 // flattenPipeline inlines every eligible sub-pipeline call in p (recursing into
