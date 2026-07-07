@@ -54,14 +54,19 @@ call P(x = 1,)
 
 	var b strings.Builder
 
-	genDisabledWiring(&b, p.Name, c, callAlias(p.Name, c.Name))
+	g := genCtx{plan: buildPlan(prog, featureSet{})}
+	genDisabledWiring(&b, p, c, callAlias(p.Name, c.Name), g)
 
-	want := `    g_SUB = BIND_1_P__SUB.out.combine(ch_CFG).branch { data, leaves, gd, gl ->
+	// The BIND is gated onto the enabled branch (#221 overhead): pa.combine(ch_CFG)
+	// branches FIRST, and only the enabled pipeargs feed BIND — so a disabled sub
+	// runs zero tasks (no wasted bind). The callee reads BIND.out directly.
+	want := `    g_SUB = pa.combine(ch_CFG).branch { data, leaves, gd, gl ->
         def off = Mro2nf.disabledField(gd, 'cfg.flag')
         run: !off
         skip: off
     }
-    r_SUB = wf_1_P__SUB(g_SUB.run.map { data, leaves, gd, gl -> tuple(data, leaves) })
+    BIND_1_P__SUB(g_SUB.run.map { data, leaves, gd, gl -> tuple(data, leaves) }, types, file("${projectDir}/_assets/bindspecs/BIND_1_P__SUB.json"))
+    r_SUB = wf_1_P__SUB(BIND_1_P__SUB.out)
     s_SUB = g_SUB.skip.map { data, leaves, gd, gl -> tuple(file("${projectDir}/nulls/1_P__SUB/data.json"), []) }
     ch_SUB = r_SUB.mix(s_SUB).first()
 `

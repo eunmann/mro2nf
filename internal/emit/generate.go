@@ -874,12 +874,14 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 		genFusedDisabledSplitWiring(b, p, c)
 
 	case kindPlainBind:
-		bind := bindName(pipeline, c.Name)
-		fmt.Fprintf(b, "    %s(%s)\n", bind, foldCallArgs(g, p, c.Bindings, "pa", bind))
-
 		if c.Disabled != nil {
-			genDisabledWiring(b, pipeline, c, callee)
+			// genDisabledWiring emits the BIND itself: a natively-gated disable runs
+			// it only on the enabled branch (zero tasks when disabled), so the
+			// unconditional bind is not pre-emitted here.
+			genDisabledWiring(b, p, c, callee, g)
 		} else {
+			bind := bindName(pipeline, c.Name)
+			fmt.Fprintf(b, "    %s(%s)\n", bind, foldCallArgs(g, p, c.Bindings, "pa", bind))
 			// Bind outputs are value channels (every input traces back to the
 			// Channel.value entry args), so the callee result is itself a reusable
 			// value channel — no .first() needed for multiple consumers.
@@ -1484,28 +1486,26 @@ func genMappedDisableGate(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCt
 	return foldCallArgs(g, p, c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, d -> tuple(data, leaves) }", c.Name), bind)
 }
 
-// genDisabledWiring runs the callee only when the resolved `disabled` flag is
-// false; disabled forks emit a null outputs bundle instead.
-func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee string) {
+// genDisabledWiring runs the standalone BIND + callee only when the resolved
+// `disabled` flag is false; disabled forks emit a null outputs bundle instead.
+// For a natively-gated disable (the flag is a channel-readable field), the BIND
+// itself is gated onto the enabled branch — so a disabled call costs ZERO tasks
+// (no wasted bind), mirroring genFusedDisabledWiring for the non-fused (e.g.
+// sub-pipeline) callee. A non-native gate keeps the unconditional BIND +
+// DISABLE-task path (bind-then-branch): the flag isn't channel-readable, so a
+// DISABLE task must resolve it before the driver can branch.
+func genDisabledWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee string, g genCtx) {
+	pipeline := p.Name
 	bind := bindName(pipeline, c.Name)
 	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
 
-	// When the disable flag resolves to a single top-level field of the pipeline
-	// args or an upstream output, read it natively on the driver instead of
-	// spending a whole DISABLE task on one `mre bind` (#59, Lever 2).
 	if src, field, ok := nativeDisableGate(c); ok {
-		fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s).branch { data, leaves, gd, gl ->
-        def off = Mro2nf.disabledField(gd, '%[4]s')
-        run: !off
-        skip: off
-    }
-    r_%[1]s = %[5]s(g_%[1]s.run.map { data, leaves, gd, gl -> tuple(data, leaves) })
-    s_%[1]s = g_%[1]s.skip.map { data, leaves, gd, gl -> %[6]s }
-    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
-`, c.Name, bind, src, field, callee, nullBundle(nulls))
+		genGatedBindDisabledWiring(b, p, c, callee, g, src, field, bind, nulls)
 
 		return
 	}
+
+	fmt.Fprintf(b, "    %s(%s)\n", bind, foldCallArgs(g, p, c.Bindings, "pa", bind))
 
 	dis := disableName(pipeline, c.Name)
 
@@ -1519,6 +1519,45 @@ func genDisabledWiring(b *strings.Builder, pipeline string, c ir.Call, callee st
     s_%[1]s = g_%[1]s.skip.map { data, leaves, d -> %[5]s }
     ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
 `, c.Name, bind, dis, callee, nullBundle(nulls))
+}
+
+// genGatedBindDisabledWiring gates BOTH the standalone BIND and the callee of a
+// natively-disabled non-fused call onto the enabled branch: the disable flag is
+// read on the driver (nativeDisableGate), so the fork's pipeline args are branched
+// FIRST and only the enabled args feed the BIND — a disabled call runs no bind and
+// no callee, costing zero tasks (the non-fused analog of genFusedDisabledWiring:
+// the callee is a sub-workflow or wf_ alias, so a standalone BIND stays, but it is
+// gated identically). self gates on pa; an upstream ref gates on pa.combine(src).
+// When enabled the BIND resolves the same args and the callee reads BIND.out, so
+// outputs are byte-identical — only the disabled-branch waste is removed.
+func genGatedBindDisabledWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee string, g genCtx, src, field, bind, nulls string) {
+	if src == "pa" {
+		enabled := fmt.Sprintf("g_%s.run", c.Name)
+		fmt.Fprintf(b, `    g_%[1]s = pa.branch { data, leaves ->
+        def off = Mro2nf.disabledField(data, '%[2]s')
+        run: !off
+        skip: off
+    }
+    %[3]s(%[4]s)
+    r_%[1]s = %[5]s(%[3]s.out)
+    s_%[1]s = g_%[1]s.skip.map { data, leaves -> %[6]s }
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
+`, c.Name, field, bind, foldCallArgs(g, p, c.Bindings, enabled, bind), callee, nullBundle(nulls))
+
+		return
+	}
+
+	enabled := fmt.Sprintf("g_%s.run.map { data, leaves, gd, gl -> tuple(data, leaves) }", c.Name)
+	fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s).branch { data, leaves, gd, gl ->
+        def off = Mro2nf.disabledField(gd, '%[3]s')
+        run: !off
+        skip: off
+    }
+    %[4]s(%[5]s)
+    r_%[1]s = %[6]s(%[4]s.out)
+    s_%[1]s = g_%[1]s.skip.map { data, leaves, gd, gl -> %[7]s }
+    ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
+`, c.Name, src, field, bind, foldCallArgs(g, p, c.Bindings, enabled, bind), callee, nullBundle(nulls))
 }
 
 // genFusedDisabledWiring gates a natively-disabled leaf-stage call and feeds the
