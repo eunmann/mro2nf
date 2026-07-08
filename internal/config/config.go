@@ -36,16 +36,17 @@ var (
 // `-native=false` (Go's flag package reads a space-separated `-native false`
 // as bare -native plus a positional arg).
 type Config struct {
-	Target       *string
-	Container    *string
-	Mre          *string
-	Shell        *string
-	Mrjob        *string
-	Monitor      *bool
-	FuseChains   *bool
-	FoldDisables *bool
-	Native       *bool
-	NativeRunner *bool
+	Target             *string
+	Container          *string
+	ContainerDataplane *string
+	Mre                *string
+	Shell              *string
+	Mrjob              *string
+	Monitor            *bool
+	FuseChains         *bool
+	FoldDisables       *bool
+	Native             *bool
+	NativeRunner       *bool
 }
 
 // Load reads and parses the config at path. A missing file is not an error — it
@@ -112,6 +113,8 @@ func assign(cfg *Config, key, val string) error {
 		cfg.Target = &val
 	case "container":
 		cfg.Container = &val
+	case "container-dataplane":
+		cfg.ContainerDataplane = &val
 	case "mre":
 		cfg.Mre = &val
 	case "shell":

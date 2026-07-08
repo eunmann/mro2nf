@@ -22,7 +22,14 @@ type healthOmicsParam struct {
 func writeHealthOmicsPackaging(prog *ir.Program, outDir string, native bool) error {
 	tmpl := map[string]healthOmicsParam{
 		"container": {
-			Description: "Private Amazon ECR image URI for the runtime (same region as the run); see Dockerfile",
+			Description: "Private Amazon ECR image URI for the stage runtime (same region as the run); see Dockerfile",
+		},
+		// #226: the slim data-plane image. Optional — HealthOmics still validates
+		// access when supplied, and if omitted the pure-mre tasks fall back to the
+		// stage image (params.container_dataplane ?: params.container).
+		"container_dataplane": {
+			Description: "Private Amazon ECR image URI for pure-mre data-plane tasks (same region); see Dockerfile.dataplane. Optional; defaults to the stage container.",
+			Optional:    true,
 		},
 	}
 
@@ -78,6 +85,9 @@ const healthOmicsPackageScript = `#!/usr/bin/env bash
 #
 #   1. Build + push the runtime image (see Dockerfile) to a private ECR repo in
 #      the run's region, then pass its URI as the 'container' parameter.
+#      (Optional #226: also build the slim data-plane image (Dockerfile.dataplane)
+#      and pass its URI as 'container_dataplane' so pure-mre tasks pull the small
+#      image; omit it and those tasks use the stage image.)
 #   2. Build the workflow zip (this script).
 #   3. aws omics create-workflow --engine NEXTFLOW --main main.nf \
 #        --definition-zip fileb://workflow.zip \
@@ -89,6 +99,6 @@ set -euo pipefail
 cd "$(dirname "$0")"
 rm -f workflow.zip
 zip -r workflow.zip . \
-    -x 'runtime/*' -x 'Dockerfile' -x 'package.sh' -x 'work/*' -x '.nextflow/*' -x 'results/*'
+    -x 'runtime/*' -x 'Dockerfile' -x 'Dockerfile.dataplane' -x 'package.sh' -x 'work/*' -x '.nextflow/*' -x 'results/*'
 echo "wrote workflow.zip"
 `

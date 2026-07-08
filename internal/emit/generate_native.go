@@ -214,7 +214,7 @@ func genDefaultLayout(b *strings.Builder, entry string, g genCtx) {
 	op := outsFragments(false)
 
 	fmt.Fprintf(b, `process LAYOUT {
-  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
+%[7]s  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
 %[3]s  input:
     path 'data.json'
     path 'types.json'
@@ -227,7 +227,7 @@ func genDefaultLayout(b *strings.Builder, entry string, g genCtx) {
     "%[1]s" publish-layout -sidecar data.json -dir .%[2]s%[6]s
     """
 }
-`, g.mre, g.producerArgs(entry, types.RoleOut), op.dir, op.in, op.out, op.flags)
+`, g.mre, g.producerArgs(entry, types.RoleOut), op.dir, op.in, op.out, op.flags, dataplaneLabelLine)
 }
 
 // nativeReturnBind returns the entry pipeline whose transform return LAYOUT binds
@@ -262,7 +262,7 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
 	op := outsFragments(true)
 
 	fmt.Fprintf(b, `process LAYOUT {
-  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
+%[9]s  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
 %[6]s  input:
 %[1]s  output:
     path 'layout.json', emit: layout
@@ -276,7 +276,7 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
     '%[2]s' publish-layout -sidecar data.json -dir .%[4]s%[8]s
     """
 }
-`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags)
+`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags, dataplaneLabelLine)
 }
 
 // genNativeEntry emits the native workflow (#76 M1): the entry args are baked
@@ -459,7 +459,7 @@ MART_EOF
 	// JSON string, and the quoted delimiter stops the shell from expanding it.
 	fmt.Fprintf(b, `%[1]s
 process BUILD_ENTRY_ARGS {
-  input:
+%[12]s  input:
     path 'entry_args'
     val values
     path 'types.json'
@@ -482,7 +482,7 @@ workflow {
   %[5]s(pipeargs)
 `, w.decls, g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
 		w.fileInputs, flatFlag, w.fileChans, strings.Join(w.callArgs, ", "),
-		bundleOutput("entry_resolved"), flatHeredoc)
+		bundleOutput("entry_resolved"), flatHeredoc, dataplaneLabelLine)
 
 	genPublishWiring(b, entryWorkflow)
 	b.WriteString("}\n")

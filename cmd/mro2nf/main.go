@@ -107,6 +107,7 @@ func run(args []string) error {
 // pointers and emit.Options are derived rather than hand-copied.
 type transpileFlags struct {
 	outDir, mroPath, mre, shell, mrjob, container, target, configPath *string
+	containerDataplane                                                *string
 	monitor, fuseChains, foldDisables, native, nativeRunner           *bool
 	inlinePipelines                                                   *bool
 	showVersion                                                       *bool
@@ -116,12 +117,14 @@ type transpileFlags struct {
 // value pointers.
 func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 	return transpileFlags{
-		outDir:          fs.String("o", "out", "output directory for the generated Nextflow project"),
-		mroPath:         fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)"),
-		mre:             fs.String("mre", "mre", "path to the mre shim binary"),
-		shell:           fs.String("shell", "", "path to martian_shell.py"),
-		mrjob:           fs.String("mrjob", "", "path to mrjob (for comp stages)"),
-		container:       fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)"),
+		outDir:    fs.String("o", "out", "output directory for the generated Nextflow project"),
+		mroPath:   fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)"),
+		mre:       fs.String("mre", "mre", "path to the mre shim binary"),
+		shell:     fs.String("shell", "", "path to martian_shell.py"),
+		mrjob:     fs.String("mrjob", "", "path to mrjob (for comp stages)"),
+		container: fs.String("container", "", "stage-role container image for processes that run stage code (e.g. an ECR URI for cloud backends)"),
+		containerDataplane: fs.String("container-dataplane", "", "slim image for pure-mre data-plane tasks (bind/forkbind/merge/publish-layout/entryargs); "+
+			"container targets only, defaults params.container_dataplane, empty falls back to -container; see Dockerfile.dataplane (#226)"),
 		target:          fs.String("target", "local", "execution backend: local | awsbatch | healthomics"),
 		monitor:         fs.Bool("monitor", false, "enforce mrp --monitor memory limits per stage: an RSS kill at mem_gb plus a prlimit vmem cap at vmem_gb"),
 		fuseChains:      fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)"),
@@ -137,7 +140,8 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 // configPtrs returns the flag value pointers a .mro2nf.yml may default.
 func (f transpileFlags) configPtrs() cliPtrs {
 	return cliPtrs{
-		target: f.target, container: f.container, mre: f.mre, shell: f.shell,
+		target: f.target, container: f.container, containerDataplane: f.containerDataplane,
+		mre: f.mre, shell: f.shell,
 		mrjob: f.mrjob, monitor: f.monitor, fuseChains: f.fuseChains, foldDisables: f.foldDisables,
 		native: f.native, nativeRunner: f.nativeRunner,
 	}
@@ -154,7 +158,8 @@ func (f transpileFlags) options() (emit.Options, error) {
 
 	return emit.Options{
 		OutDir: *f.outDir, Mre: *f.mre, Shell: *f.shell, Mrjob: *f.mrjob,
-		Container: *f.container, Monitor: *f.monitor, Target: target,
+		Container: *f.container, ContainerDataplane: *f.containerDataplane,
+		Monitor: *f.monitor, Target: target,
 		FuseChains: *f.fuseChains, FoldDisables: *f.foldDisables,
 		Native: *f.native, NativeRunner: *f.nativeRunner,
 		InlinePipelines: *f.inlinePipelines,
@@ -291,9 +296,9 @@ func reportDiagnostics(log zerolog.Logger, prog *ir.Program, opts emit.Options) 
 
 // cliPtrs collects the transpile flag value pointers a .mro2nf.yml may default.
 type cliPtrs struct {
-	target, container, mre, shell, mrjob *string
-	monitor, fuseChains, foldDisables    *bool
-	native, nativeRunner                 *bool
+	target, container, containerDataplane, mre, shell, mrjob *string
+	monitor, fuseChains, foldDisables                        *bool
+	native, nativeRunner                                     *bool
 }
 
 // applyConfig loads the .mro2nf.yml (explicit path, else alongside the .mro) and
@@ -336,6 +341,7 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
 
 	applyStr("target", p.target, cfg.Target)
 	applyStr("container", p.container, cfg.Container)
+	applyStr("container-dataplane", p.containerDataplane, cfg.ContainerDataplane)
 	applyStr("mre", p.mre, cfg.Mre)
 	applyStr("shell", p.shell, cfg.Shell)
 	applyStr("mrjob", p.mrjob, cfg.Mrjob)

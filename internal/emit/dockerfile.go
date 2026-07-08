@@ -162,9 +162,17 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 		}
 	}
 
-	return g, writeFile(filepath.Join(opts.OutDir, "Dockerfile"),
+	if err := writeFile(filepath.Join(opts.OutDir, "Dockerfile"),
 		[]byte(dockerfile(target, opts.Shell != "", hasVendored, opts.Mrjob != "",
-			opts.NativeRunner, bakedToolkitCmds(opts.StageCode))))
+			opts.NativeRunner, bakedToolkitCmds(opts.StageCode)))); err != nil {
+		return g, err
+	}
+
+	// #226: also emit the slim dataplane image. It is pure mro2nf runtime (mre on a
+	// minimal base, no user toolkit / adapters / stage code), so the transpiler owns
+	// it entirely and builds it directly from the same runtime/mre it just staged.
+	return g, writeFile(filepath.Join(opts.OutDir, "Dockerfile.dataplane"),
+		[]byte(dataplaneDockerfile(target)))
 }
 
 // vendorStageCode copies each stage's code under runtime/stages/<name>, deduped
@@ -290,6 +298,37 @@ RUN apt-get update \
 # Add any third-party stage dependencies here, e.g.: RUN pip install --no-cache-dir numpy
 `,
 		awsCLIComment(target), awsCLI, copies, pathCmdContract(pathCmds))
+}
+
+// dataplaneDockerfile renders the slim dataplane image (#226): just the mre
+// binary on a minimal Debian base with bash + ps + coreutils (and, for AWS
+// Batch, the aws CLI for S3 staging). It carries no Python, no Martian adapters,
+// no stage code — pure-mre data-plane tasks (bind/forkbind/merge/publish-layout/
+// entryargs) need nothing else, so on a fresh-pull backend they pull a fraction
+// of the stage image. mre lands at the SAME in-container path the generated
+// scripts bake (ctrMre), so a task runs identically in either image.
+func dataplaneDockerfile(target Target) string {
+	awsCLI, awsComment := "", ""
+	if target == TargetAWSBatch {
+		awsCLI, awsComment = " awscli", " + aws CLI (S3 staging)"
+	}
+
+	return fmt.Sprintf(`# Slim data-plane image for the transpiled pipeline (#226): the mre orchestration
+# binary only, no user toolkit. Build (x86_64 only):
+#   docker build --platform linux/amd64 -f Dockerfile.dataplane -t <dataplane-image> .
+# Then transpile with --container-dataplane <dataplane-image> and push it to your
+# registry (a private ECR repo in the run's region for AWS HealthOmics).
+FROM --platform=linux/amd64 debian:bookworm-slim
+
+# bash (launcher), ps (Nextflow metrics), coreutils%s. No ENTRYPOINT: the backend
+# invokes the generated command with a bash launcher directly.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends bash procps coreutils%s \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY %s/mre %s
+RUN chmod +x %s
+`, awsComment, awsCLI, buildCtxDir, ctrMre, ctrMre)
 }
 
 // pathCmdContract renders the container contract for any bare-command stage srcs:
