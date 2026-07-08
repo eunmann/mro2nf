@@ -115,6 +115,7 @@ export class Mro2nfStack extends cdk.Stack {
       instanceRole,
       useOptimalInstanceClasses: true,
       launchTemplate,
+      allocationStrategy: batch.AllocationStrategy.SPOT_PRICE_CAPACITY_OPTIMIZED,
       // Cost: spot (~70% cheaper) and — critically — minvCpus 0 so Batch runs NO
       // instances while idle (it scales to zero between runs; you pay only for
       // the minutes a job actually runs). maxvCpus caps the worst-case concurrent
