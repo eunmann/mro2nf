@@ -55,6 +55,15 @@ export class Mro2nfStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       emptyOnDelete: true,
       lifecycleRules: [{ maxImageCount: 20 }],
+      // Tags are immutable so a re-push can never change which image an existing
+      // tag points at — a run that pins `repo:tag` (or its resolved digest) is
+      // reproducible and can't be swapped out from under it. The `dev-*` prefix is
+      // exempted (stays mutable) for the iterative e2e harnesses, which re-push a
+      // per-fixture tag every campaign; name any throwaway/iteration image `dev-…`.
+      imageTagMutability: ecr.TagMutability.IMMUTABLE_WITH_EXCLUSION,
+      imageTagMutabilityExclusionFilters: [
+        ecr.ImageTagMutabilityExclusionFilter.wildcard('dev-*'),
+      ],
     });
 
     // --- AWS Batch (-target awsbatch) ---

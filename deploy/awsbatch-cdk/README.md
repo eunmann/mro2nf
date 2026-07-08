@@ -54,6 +54,21 @@ npx cdk deploy             # prints the outputs below
 
 Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleArn`.
 
+## Image tag immutability
+
+The ECR repo is created **`IMMUTABLE_WITH_EXCLUSION`**: once a tag is pushed it
+cannot be overwritten, so a run that pins `repo:tag` (or its resolved digest) can
+never have a *different* image pushed under that tag mid-flight or before its next
+run. The `dev-*` prefix is **exempted** (stays mutable) for iterative work — the
+e2e harnesses (`test/e2e/aws_run.sh`, `aws_healthomics.sh`) re-push a `dev-<fixture>`
+tag every campaign. So: name throwaway/iteration images `dev-…`; use a plain
+(immutable) tag or an `@sha256:` digest for anything you want reproducible.
+
+`mro2nf` also **warns at transpile time** when `-container`/`-container-dataplane`
+is a mutable tag rather than an `@sha256:` digest on a cloud target — HealthOmics
+pins the digest at run start (a running run is safe), but AWS Batch resolves the
+tag per task, so pin a digest for the strongest guarantee.
+
 ## Run on AWS Batch + S3
 
 ```bash

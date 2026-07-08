@@ -65,7 +65,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
 transpile() {
     local fx="$1" mrjob=(); [ -f "testdata/$fx/mrjob.sh" ] && mrjob=(-mrjob "testdata/$fx/mrjob.sh")
-    ./mro2nf -o "$WORK/$fx" -target awsbatch -container "${ECR}:${fx}" \
+    ./mro2nf -o "$WORK/$fx" -target awsbatch -container "${ECR}:dev-${fx}" \
         -mre "$MRE" -shell "$SHELL_PY" ${mrjob[@]+"${mrjob[@]}"} \
         -mropath "testdata/$fx" "testdata/$fx/pipeline.mro"
 }
@@ -82,8 +82,8 @@ if [ "${NO_BUILD:-}" != "1" ]; then
         # it even if stale S3 outputs from a previous run would verify green.
         local fx="$1"
         transpile "$fx" >"$WORK/$fx.tp.log" 2>&1 || { echo "TRANSPILE_FAIL $fx"; touch "$WORK/$fx.phase1_fail"; return 0; }
-        ( cd "$WORK/$fx" && docker build --platform linux/amd64 -t "${ECR}:${fx}" . >"$WORK/$fx.build.log" 2>&1 ) || { echo "BUILD_FAIL $fx"; touch "$WORK/$fx.phase1_fail"; return 0; }
-        docker push "${ECR}:${fx}" >"$WORK/$fx.push.log" 2>&1 || { echo "PUSH_FAIL $fx"; touch "$WORK/$fx.phase1_fail"; return 0; }
+        ( cd "$WORK/$fx" && docker build --platform linux/amd64 -t "${ECR}:dev-${fx}" . >"$WORK/$fx.build.log" 2>&1 ) || { echo "BUILD_FAIL $fx"; touch "$WORK/$fx.phase1_fail"; return 0; }
+        docker push "${ECR}:dev-${fx}" >"$WORK/$fx.push.log" 2>&1 || { echo "PUSH_FAIL $fx"; touch "$WORK/$fx.phase1_fail"; return 0; }
         echo "IMAGE_READY $fx"
     }
     export -f build_one transpile; export ROOT ECR MRE SHELL_PY WORK
@@ -105,7 +105,7 @@ run_one() {
     # publish outputs that verify green against the wrong code.
     [ -e "$WORK/$fx.phase1_fail" ] && { echo "RUN_SKIP $fx (phase 1 failed)"; return 0; }
     ( cd "$WORK/$fx" && nextflow run main.nf \
-        --aws_queue "$QUEUE" --aws_region "$AWS_REGION" --container "${ECR}:${fx}" \
+        --aws_queue "$QUEUE" --aws_region "$AWS_REGION" --container "${ECR}:dev-${fx}" \
         --aws_outdir "s3://${BUCKET}/results/${fx}" \
         -work-dir "s3://${BUCKET}/work/${fx}" >"$WORK/$fx.run.log" 2>&1 ) \
         && echo "RUN_OK $fx" || echo "RUN_FAIL $fx"
