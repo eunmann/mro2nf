@@ -310,7 +310,11 @@ RUN apt-get update \
 func dataplaneDockerfile(target Target) string {
 	awsCLI, awsComment := "", ""
 	if target == TargetAWSBatch {
-		awsCLI, awsComment = " awscli", " + aws CLI (S3 staging)"
+		// ca-certificates is required for the aws CLI's TLS to S3: unlike the stage
+		// image's python:3.12-slim base, debian:bookworm-slim ships no CA bundle and
+		// --no-install-recommends drops it, so `aws s3 cp` would fail cert verification
+		// on every data-plane task's stage-in.
+		awsCLI, awsComment = " ca-certificates awscli", " + aws CLI (S3 staging)"
 	}
 
 	return fmt.Sprintf(`# Slim data-plane image for the transpiled pipeline (#226): the mre orchestration

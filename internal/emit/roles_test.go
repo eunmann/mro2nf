@@ -242,6 +242,35 @@ func TestConfigLocalNoRoleParams(t *testing.T) {
 	}
 }
 
+// TestContainerDataplaneRejectedOnLocal checks -container-dataplane fails loudly
+// on a non-container target rather than being silently ignored (#226): the flag
+// only wires up under target.isContainer(), so a shared-filesystem target that
+// supplies it has misconfigured and must be told, per the repo's loud-failure norm.
+func TestContainerDataplaneRejectedOnLocal(t *testing.T) {
+	base := "../../testdata/split_test"
+	ast, err := frontend.Parse(base+"/pipeline.mro", []string{base}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := frontend.Lower(ast, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mre, shell, stages := realRuntime(t)
+	err = emit.Emit(prog, emit.Options{
+		OutDir: t.TempDir(), Mre: mre, Shell: shell, MROFile: "pipeline.mro",
+		Target: emit.TargetLocal, Container: "ecr/stage:1",
+		ContainerDataplane: "ecr/dataplane:1", StageCode: stages,
+	})
+	if err == nil {
+		t.Fatal("emit must reject -container-dataplane on a non-container target")
+	}
+	if !strings.Contains(err.Error(), "container-dataplane") {
+		t.Errorf("error should name the offending flag, got: %v", err)
+	}
+}
+
 // TestDataplaneDockerfile checks the container target emits a slim data-plane
 // image alongside the stage image: it carries the mre binary at the same path the
 // scripts bake but none of the stage toolkit (no adapters/stages copies), and the
@@ -284,10 +313,19 @@ func TestDataplaneDockerfile(t *testing.T) {
 	if strings.Contains(omics, "awscli") {
 		t.Error("healthomics dataplane image needs no aws CLI (managed filesystem)")
 	}
+	// No aws CLI on HealthOmics, so no CA bundle is needed either.
+	if strings.Contains(omics, "ca-certificates") {
+		t.Error("healthomics dataplane image needs no ca-certificates (no aws CLI)")
+	}
 
 	batch := emitDockerfiles(emit.TargetAWSBatch)
 	if !strings.Contains(batch, "awscli") {
 		t.Error("awsbatch dataplane image must include the aws CLI for S3 staging")
+	}
+	// debian:bookworm-slim ships no CA bundle, so the aws CLI's TLS to S3 needs
+	// ca-certificates installed explicitly (else stage-in fails cert verification).
+	if !strings.Contains(batch, "ca-certificates") {
+		t.Error("awsbatch dataplane image must install ca-certificates for the aws CLI's TLS to S3")
 	}
 }
 

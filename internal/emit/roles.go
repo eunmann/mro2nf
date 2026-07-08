@@ -11,11 +11,11 @@ type containerRole string
 const (
 	// roleStage runs Martian stage code through the adapter/toolkit, so it needs
 	// the user-supplied stage image (today's default). Stage-phase processes carry
-	// this role implicitly via the default process.container — they are not
-	// label-marked, because the default already points at their image and marking
-	// them would only add noise. A future increment can split roleStage per adapter
-	// language (roleStageComp/...) by labelling those processes and adding one more
-	// withLabel selector; the mechanism does not hardcode a fixed role count.
+	// no role_stage marker: they already carry `label 'lang_<lang>'` (stageDirectives)
+	// and the default process.container points at their image, so a second marker
+	// would only add noise. A future increment can split roleStage per adapter
+	// language (roleStageComp/...) by keying withLabel selectors on those existing
+	// lang_ labels; the mechanism does not hardcode a fixed role count.
 	roleStage containerRole = "stage"
 	// roleDataplane runs only the Go mre binary (bind / forkbind / merge /
 	// publish-layout / entryargs): pure orchestration whose content is entirely
@@ -24,13 +24,20 @@ const (
 	roleDataplane containerRole = "dataplane"
 )
 
+// rolePrefix namespaces role labels apart from the stage `lang_` labels, so the
+// two label families never collide in a withLabel: selector.
+const rolePrefix = "role_"
+
 // label is the Nextflow process label a role maps to. A withLabel: selector in
 // nextflow.config keyed on this string points every process of the role at its
 // own container image.
-func (r containerRole) label() string { return "role_" + string(r) }
+func (r containerRole) label() string { return rolePrefix + string(r) }
 
 // dataplaneLabelLine is the process-body directive that marks a pure-mre task as
 // the dataplane role. Every data-plane generator injects it right after the
 // `process NAME {` header (two-space body indent, matching the other directives).
-// Stage processes are the default role and carry no role marker.
-const dataplaneLabelLine = "  label 'role_dataplane'\n"
+// Stage processes are the default role and carry no role marker. Built from the
+// same rolePrefix + roleDataplane the config withLabel: selector (emit.go, via
+// roleDataplane.label()) uses, so the marker and the selector stay a single source
+// of truth. A const expression (not a method call) keeps it a compile-time constant.
+const dataplaneLabelLine = "  label '" + rolePrefix + string(roleDataplane) + "'\n"

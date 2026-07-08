@@ -181,6 +181,16 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
+	// -container-dataplane only wires up for container targets (the withLabel
+	// selector + Dockerfile.dataplane are gated on target.isContainer). Fail loudly
+	// rather than silently ignore it on a shared-filesystem target (#226).
+	if opts.ContainerDataplane != "" && !target.isContainer() {
+		return &apperror.UnsupportedError{
+			Construct: "-container-dataplane",
+			Detail:    "applies to container targets (awsbatch/healthomics) only; the local target runs a single image",
+		}
+	}
+
 	features := opts.featureSet()
 
 	// #221: flatten eligible sub-pipeline boundaries before planning, so their
