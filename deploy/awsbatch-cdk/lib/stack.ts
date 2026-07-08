@@ -79,17 +79,51 @@ export class Mro2nfStack extends cdk.Stack {
     });
     bucket.grantReadWrite(instanceRole);
 
+    // Reuse the container image across tasks on a reused instance: ECS's default
+    // pull behavior re-pulls the image for every task, so a multi-GB runtime image
+    // (e.g. CellRanger's ~2.8 GB) is re-fetched per task even when a warm instance
+    // already has it. ECS_IMAGE_PULL_BEHAVIOR=prefer-cached uses the local copy
+    // when present; the cleanup vars stop the agent from GC'ing it between jobs.
+    // This is an instance-side setting only — no transpiler change — and it is what
+    // AWS HealthOmics cannot do (managed compute, fresh instance + fresh pull per
+    // task). Batch requires launch-template user-data to be MIME-multipart so it
+    // merges with Batch's own cloud-init instead of replacing it.
+    const ecsConfig = ec2.UserData.forLinux();
+    ecsConfig.addCommands(
+      'echo ECS_IMAGE_PULL_BEHAVIOR=prefer-cached >> /etc/ecs/ecs.config',
+      'echo ECS_IMAGE_MINIMUM_CLEANUP_PERCENT=90 >> /etc/ecs/ecs.config',
+      'echo ECS_IMAGE_CLEANUP_INTERVAL=30m >> /etc/ecs/ecs.config',
+    );
+    const userData = new ec2.MultipartUserData();
+    userData.addUserDataPart(ecsConfig, ec2.MultipartBody.SHELL_SCRIPT, true);
+
+    const launchTemplate = new ec2.LaunchTemplate(this, 'BatchLaunchTemplate', {
+      userData,
+      requireImdsv2: true,
+      // A larger root volume so the cached image (plus task scratch) actually fits
+      // and survives between jobs on a reused instance. Deleted with the instance,
+      // so it adds no idle cost under minvCpus: 0 / spot.
+      blockDevices: [{
+        deviceName: '/dev/xvda',
+        volume: ec2.BlockDeviceVolume.ebs(100, { volumeType: ec2.EbsDeviceVolumeType.GP3 }),
+      }],
+    });
+
     const computeEnv = new batch.ManagedEc2EcsComputeEnvironment(this, 'ComputeEnv', {
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       instanceRole,
       useOptimalInstanceClasses: true,
+      launchTemplate,
       // Cost: spot (~70% cheaper) and — critically — minvCpus 0 so Batch runs NO
       // instances while idle (it scales to zero between runs; you pay only for
       // the minutes a job actually runs). maxvCpus caps the worst-case concurrent
       // spend; a test pipeline uses 1–2 vCPUs. Raised to 256 so a parallel test
       // campaign (many fixtures + split chunks at once) is not vCPU-starved; idle
-      // cost is unchanged (scales to zero between runs).
+      // cost is unchanged (scales to zero between runs). NO warm floor: instance
+      // (and image cache) reuse only happens WITHIN a burst of jobs, not across
+      // idle gaps — the deliberate trade for $0 idle. Raise minvCpus to keep a
+      // warm pool if cross-run reuse matters more than idle cost.
       spot: true,
       minvCpus: 0,
       maxvCpus: 256,
