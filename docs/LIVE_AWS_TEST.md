@@ -11,6 +11,39 @@ and verified against `mrp` golden outputs. Updated as runs complete.
   `Dockerfile`). One tag per fixture in ECR.
 - **Date:** 2026-07-01 (round 5, data-plane epic); 2026-06-27 (round 4); earlier 2026-06-26
 
+## Container roles + instance/image reuse (#226 + CDK, us-east-1)
+
+Validated the per-process container-role feature and the Batch instance/image
+reuse levers live on both backends. Outputs stayed byte-identical to `mrp`
+throughout (roles/caching change only *which image* a task runs in and *when* it
+pulls, never the stage ABI or outputs).
+
+- **Per-task image routing — proven, not just "it ran."** On **HealthOmics**,
+  `split_test` was run with distinct `--container` (stage) and
+  `--container-dataplane` (slim) images; `aws omics get-run-task` →
+  `imageDetails.image` showed the pure-`mre` tasks (`BUILD_ENTRY_ARGS`, `LAYOUT`)
+  on the slim image digest and the stage tasks on the full image — the slim image
+  carries no Python, so a mis-routed stage task would fail hard, so success across
+  all tasks proves the routing. On **AWS Batch**, `cellranger_shaped` ran with a
+  deliberately fat stage image and a slim data-plane image; each Batch job's
+  `container.image` confirmed the same split (plumbing → slim, stages → fat).
+
+- **Image cache reuse (`ECS_IMAGE_PULL_BEHAVIOR=prefer-cached`) — measured at the
+  ECS layer.** The `cellranger_shaped` Batch run packed its tasks onto two spot
+  instances; ECS `pullStartedAt`/`pullStoppedAt` show the fat image pulled **only
+  for the first task on each instance** — every other stage task reports **no pull
+  event at all** (cache hit), i.e. two pulls for the whole run, not one per task.
+  Instance reuse also skipped the per-task fresh-instance provision. Kept
+  `minvCpus: 0` (no warm floor, $0 idle) — reuse happened within the burst.
+
+- **Batch vs HealthOmics, same pipeline + image.** `cellranger_shaped` finished
+  roughly 2.5× faster on Batch than on HealthOmics, and the gap is almost entirely
+  the per-task fresh-instance provision + full image re-pull that HealthOmics
+  cannot avoid (no launch-template / AMI / `ecs.config` control) versus Batch's
+  instance + image-cache reuse. Both produced the identical golden output. This is
+  the structural reason Batch beats HealthOmics on a big-image pipeline; see
+  `deploy/awsbatch-cdk/README.md` ("Instance & image reuse").
+
 ## Round 5 (2026-07-01, epic #18 data-plane rework, us-east-1)
 
 After the idiomatic emit-once data-plane epic (de-bundle #13, emit-once routing
