@@ -91,8 +91,16 @@ type Options struct {
 	// StageCode maps each stage name to its (absolute) stage code path.
 	StageCode map[string]string
 	// Container, when set, is the image used for every process (process.container
-	// in nextflow.config) — required by container backends like AWS Batch.
+	// in nextflow.config) — required by container backends like AWS Batch. This is
+	// the stage-role image: the user-supplied toolkit base with the mro2nf runtime
+	// layered on.
 	Container string
+	// ContainerDataplane, when set (container targets only), is the image for
+	// pure-mre data-plane tasks (the dataplane role, #226). It defaults the
+	// params.container_dataplane run parameter; empty leaves it null, so those
+	// tasks fall back to Container (today's single-image behavior). The container
+	// target also emits a Dockerfile.dataplane that builds this slim image.
+	ContainerDataplane string
 	// Monitor enables per-stage virtual-memory enforcement in the shim (the mrp
 	// --monitor analog).
 	Monitor bool
@@ -173,6 +181,16 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
+	// -container-dataplane only wires up for container targets (the withLabel
+	// selector + Dockerfile.dataplane are gated on target.isContainer). Fail loudly
+	// rather than silently ignore it on a shared-filesystem target (#226).
+	if opts.ContainerDataplane != "" && !target.isContainer() {
+		return &apperror.UnsupportedError{
+			Construct: "-container-dataplane",
+			Detail:    "applies to container targets (awsbatch/healthomics) only; the local target runs a single image",
+		}
+	}
+
 	features := opts.featureSet()
 
 	// #221: flatten eligible sub-pipeline boundaries before planning, so their
@@ -246,7 +264,7 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		}
 	}
 
-	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(configFile(opts.Container, target))); err != nil {
+	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(configFile(opts.Container, opts.ContainerDataplane, target))); err != nil {
 		return err
 	}
 
@@ -865,6 +883,7 @@ func reservedParams(target Target) map[string]bool {
 
 	if target.isContainer() {
 		set["container"] = true
+		set["container_dataplane"] = true
 	}
 
 	return set
@@ -1002,11 +1021,11 @@ func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 // configFile renders nextflow.config for the chosen target: the common params +
 // retry/process block, the per-target executor wiring, and (cloud targets) a
 // parameterized container image.
-func configFile(container string, target Target) string {
+func configFile(container, dataplaneContainer string, target Target) string {
 	var b strings.Builder
 
 	b.WriteString(configCommon(target))
-	b.WriteString(configProcess(container, target))
+	b.WriteString(configProcess(container, dataplaneContainer, target))
 
 	switch target {
 	case TargetAWSBatch:
@@ -1064,8 +1083,9 @@ params.outdir = params.aws_outdir
 }
 
 // configProcess renders the process{} block: the content-based retry strategy
-// and, for container targets, a parameterized default image.
-func configProcess(container string, target Target) string {
+// and, for container targets, a parameterized default image plus a per-role
+// container override (#226).
+func configProcess(container, dataplaneContainer string, target Target) string {
 	assertExit := strconv.Itoa(shim.AssertExitCode)
 
 	containerLines := ""
@@ -1073,7 +1093,14 @@ func configProcess(container string, target Target) string {
 		// Cloud backends run every task in a container; expose the image as a param
 		// so an ECR URI can be supplied/validated at run time (required by
 		// HealthOmics). Per-stage overrides go in withName: blocks.
-		containerLines = "params.container = " + quoteOrNull(container) + "\n"
+		//
+		// #226: pure-mre data-plane tasks (the dataplane role — bind/forkbind/merge/
+		// publish-layout/entryargs) need only the slim mro2nf runtime, not the heavy
+		// stage image. Expose their image as a second param so a fresh-pull backend
+		// pulls the small one for those tasks; null falls back to params.container
+		// below, preserving today's single-image behavior.
+		containerLines = "params.container = " + quoteOrNull(container) + "\n" +
+			"params.container_dataplane = " + quoteOrNull(dataplaneContainer) + "\n"
 	}
 
 	block := containerLines + `
@@ -1086,7 +1113,11 @@ process {
 `
 	switch {
 	case target.isContainer():
-		block += "    container = params.container\n"
+		block += "    container = params.container\n" +
+			// Data-plane tasks pull the slim image when one is supplied; otherwise
+			// (?: fallback) they use the stage image, exactly as before (#226).
+			"    withLabel:" + roleDataplane.label() +
+			" { container = params.container_dataplane ?: params.container }\n"
 	case container != "":
 		block += "    container = '" + container + "'\n"
 	}

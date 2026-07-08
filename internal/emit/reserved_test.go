@@ -36,6 +36,8 @@ func TestCheckReservedEntryNames(t *testing.T) {
 		{"aws_outdir free on local", "aws_outdir", TargetLocal, false},
 		{"container reserved on container target", "container", TargetAWSBatch, true},
 		{"container free on local", "container", TargetLocal, false},
+		{"container_dataplane reserved on container target", "container_dataplane", TargetHealthOmics, true},
+		{"container_dataplane free on local", "container_dataplane", TargetLocal, false},
 		{"aws_queue free on healthomics", "aws_queue", TargetHealthOmics, false},
 		{"ordinary name free", "samples", TargetAWSBatch, false},
 	}

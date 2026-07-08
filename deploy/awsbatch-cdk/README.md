@@ -25,8 +25,10 @@ Designed to cost **≈ $0 while idle** and only a few cents per test run:
   free S3 gateway endpoint are used instead. (Nextflow uses S3 as its work dir,
   so unlike the MRP/Batch pattern it needs no shared filesystem.)
 - **Storage is bounded.** S3 `work/` and `omics-out/` objects expire after 14
-  days and incomplete uploads are aborted; ECR keeps only the 5 newest images.
-  Idle storage is a few hundred MB (the image) ⇒ cents/month.
+  days and incomplete uploads are aborted; ECR keeps only the 20 newest images.
+  Idle storage is a few hundred MB (the image) ⇒ cents/month. Each Batch instance
+  gets a 100 GB root volume (room for the cached image + task scratch, see below);
+  it is deleted with the spot instance, so it adds **no idle cost**.
 - **HealthOmics** has no idle cost — you're billed per run (omics instance-hours
   + run storage) only while a run executes. Keep the default **DYNAMIC** run
   storage; do **not** request STATIC (it provisions ≥1,200 GiB of Lustre and is
@@ -53,6 +55,48 @@ npx cdk deploy             # prints the outputs below
 ```
 
 Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleArn`.
+
+## Image tag immutability
+
+The ECR repo is created **`IMMUTABLE_WITH_EXCLUSION`**: once a tag is pushed it
+cannot be overwritten, so a run that pins `repo:tag` (or its resolved digest) can
+never have a *different* image pushed under that tag mid-flight or before its next
+run. The `dev-*` prefix is **exempted** (stays mutable) for iterative work — the
+e2e harnesses (`test/e2e/aws_run.sh`, `aws_healthomics.sh`) re-push a `dev-<fixture>`
+tag every campaign. So: name throwaway/iteration images `dev-…`; use a plain
+(immutable) tag or an `@sha256:` digest for anything you want reproducible.
+
+`mro2nf` also **warns at transpile time** when `-container`/`-container-dataplane`
+is a mutable tag rather than an `@sha256:` digest on a cloud target — HealthOmics
+pins the digest at run start (a running run is safe), but AWS Batch resolves the
+tag per task, so pin a digest for the strongest guarantee.
+
+## Instance & image reuse (cutting per-task startup)
+
+The dominant cost of a many-small-task run on an elastic cluster is per-task
+startup: acquiring an instance and **pulling the container image again for every
+task**. A big runtime image (CellRanger's is ~2.8 GB) makes that the wall-time
+bottleneck. The Batch compute environment mitigates it **without any warm-instance
+idle cost**:
+
+- A **launch template** sets `ECS_IMAGE_PULL_BEHAVIOR=prefer-cached` (plus cache-
+  retention vars) in `/etc/ecs/ecs.config`, so a task on a **reused** instance uses
+  the locally cached image instead of re-pulling. Paired with the 100 GB root volume
+  so the cache survives between jobs on that instance.
+- `allocationStrategy: SPOT_PRICE_CAPACITY_OPTIMIZED` — the deepest, cheapest spot
+  pools (fewest interruptions).
+- `minvCpus: 0` is kept — **no warm floor, $0 idle**. So instance + image-cache reuse
+  happens **within a burst** of jobs (Batch packs them onto running instances), not
+  across idle gaps. Raise `minvCpus` only if cross-run warmth matters more than idle
+  cost.
+
+Measured on a ~24-task run with a 1.36 GB image: the image was pulled **once per
+instance** (ECS `pullStartedAt`/`pullStoppedAt` show a pull only for the first task
+on each instance; the rest report *no pull event*), so 24 tasks pulled twice, not 24
+times. This is the reuse **AWS HealthOmics cannot do** — its managed compute gives
+every task a fresh instance and re-pulls, with no launch-template / AMI / `ecs.config`
+control. On a big-image pipeline that difference is most of the wall-time gap between
+the two backends.
 
 ## Run on AWS Batch + S3
 

@@ -479,7 +479,7 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
 	block, arg := bindInputs(refCalls(disableBindings(c)))
 
 	fmt.Fprintf(b, `process %[1]s {
-  input:
+%[5]s  input:
 %[2]s  output:
     path 'disable', type: 'dir'
   script:
@@ -488,7 +488,7 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
     """
 }
 
-`, disableName(pipeline, c.Name), block, g.mre, arg)
+`, disableName(pipeline, c.Name), block, g.mre, arg, dataplaneLabelLine)
 }
 
 // bindInputs renders the input block and the -inputs argument for a bind/fork
@@ -619,7 +619,7 @@ func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g ge
 	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(bindings))
 
 	fmt.Fprintf(b, `process %[1]s {
-  input:
+%[8]s  input:
 %[2]s  output:
     %[6]s
   script:
@@ -628,7 +628,7 @@ func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g ge
     """
 }
 
-`, name, block, g.mre, arg, prodArgs, bundleOutput("args"), pre)
+`, name, block, g.mre, arg, prodArgs, bundleOutput("args"), pre, dataplaneLabelLine)
 }
 
 // genForkBindProcess emits a process that resolves a map call's bindings into
@@ -637,7 +637,7 @@ func genForkBindProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c 
 	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
 
 	fmt.Fprintf(b, `process %[1]s {
-  input:
+%[8]s  input:
 %[2]s  output:
     path 'fork_*', emit: forks, type: 'dir', optional: true
     path 'forkkeys.json', emit: keys
@@ -647,7 +647,7 @@ func genForkBindProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c 
     """
 }
 
-`, forkName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre)
+`, forkName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre, dataplaneLabelLine)
 }
 
 // mapModeArg is the static fork kind for a map call: "map" for a typed-map (or
@@ -668,7 +668,7 @@ func mapModeArg(c ir.Call) string {
 // map-call result bundle via `mre merge`.
 func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s {
-  input:
+%[4]s  input:
     path souts
     path 'forkkeys.json'
     path 'types.json'
@@ -683,7 +683,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 `, mergeName(pipeline, c.Name),
 		g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged",
 			g.plan.pipes[pipeline].calls[c.Name].emptyNull),
-		bundleOutput("merged"))
+		bundleOutput("merged"), dataplaneLabelLine)
 }
 
 func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {

@@ -92,12 +92,12 @@ trap cleanup EXIT
 [ "${NO_BUILD:-}" != "1" ] && aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR" >/dev/null
 for fx in "${FIXTURES[@]}"; do
     mrjob=(); [ -f "testdata/$fx/mrjob.sh" ] && mrjob=(-mrjob "testdata/$fx/mrjob.sh")
-    ./mro2nf -o "$WORK/$fx" -target healthomics -container "${ECR}:${fx}" \
+    ./mro2nf -o "$WORK/$fx" -target healthomics -container "${ECR}:dev-${fx}" \
         -mre "$MRE" -shell "$SHELL_PY" ${mrjob[@]+"${mrjob[@]}"} \
         -mropath "testdata/$fx" "testdata/$fx/pipeline.mro" >"$WORK/$fx.tp.log" 2>&1 || { echo "TRANSPILE_FAIL $fx"; continue; }
     if [ "${NO_BUILD:-}" != "1" ]; then
-        ( cd "$WORK/$fx" && docker build --platform linux/amd64 -t "${ECR}:${fx}" . >"$WORK/$fx.build.log" 2>&1 ) || { echo "BUILD_FAIL $fx"; continue; }
-        docker push "${ECR}:${fx}" >"$WORK/$fx.push.log" 2>&1 || { echo "PUSH_FAIL $fx"; continue; }
+        ( cd "$WORK/$fx" && docker build --platform linux/amd64 -t "${ECR}:dev-${fx}" . >"$WORK/$fx.build.log" 2>&1 ) || { echo "BUILD_FAIL $fx"; continue; }
+        docker push "${ECR}:dev-${fx}" >"$WORK/$fx.push.log" 2>&1 || { echo "PUSH_FAIL $fx"; continue; }
     fi
     # Guarded like the build/push steps: under set -e an unguarded failure here
     # would abort the whole harness instead of reporting and moving on.
@@ -131,7 +131,7 @@ for fx in "${FIXTURES[@]}"; do
     # RUNID[$fx] would make the cleanup trap print a bogus "KEPT run" entry.
     runid="$(aws omics start-run --workflow-id "${WFID[$fx]}" --role-arn "$OMICS_ROLE" \
         --name "mro2nf-$fx-$$" --output-uri "s3://${BUCKET}/omics-out" \
-        --parameters "{\"container\":\"${ECR}:${fx}\"}" --query id --output text)" \
+        --parameters "{\"container\":\"${ECR}:dev-${fx}\"}" --query id --output text)" \
         || { echo "START_FAIL $fx"; continue; }
     RUNID[$fx]="$runid"
     echo "STARTED $fx run=${RUNID[$fx]}"

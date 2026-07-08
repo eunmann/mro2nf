@@ -54,6 +54,31 @@ func TestDiagnoseWrapsWarnings(t *testing.T) {
 	}
 }
 
+// TestDiagnoseContainerTag checks a container target is warned when its image is
+// pinned by a mutable tag rather than an immutable @sha256: digest, and that a
+// digest, a local target, and an empty ref produce no such warning.
+func TestDiagnoseContainerTag(t *testing.T) {
+	prog := lowerFixture(t, "split_test")
+
+	if ds := Diagnose(prog, Options{Target: TargetHealthOmics, Container: "ecr/img:latest"}); !hasMessage(ds, SevWarn, "mutable tag") {
+		t.Errorf("a mutable-tag cloud container must warn, got %+v", ds)
+	}
+
+	if ds := Diagnose(prog, Options{Target: TargetHealthOmics, Container: "ecr/img@sha256:abc123"}); hasMessage(ds, SevWarn, "mutable tag") {
+		t.Errorf("a digest-pinned container must not warn, got %+v", ds)
+	}
+
+	if ds := Diagnose(prog, Options{Target: TargetLocal, Container: "ecr/img:latest"}); hasMessage(ds, SevWarn, "mutable tag") {
+		t.Errorf("a non-container target must not warn about image tags, got %+v", ds)
+	}
+
+	// The slim data-plane image is checked too.
+	batch := Options{Target: TargetAWSBatch, Container: "ecr/img@sha256:a", ContainerDataplane: "ecr/dp:latest"}
+	if ds := Diagnose(prog, batch); !hasMessage(ds, SevWarn, "-container-dataplane") {
+		t.Errorf("a mutable-tag data-plane image must warn, got %+v", ds)
+	}
+}
+
 // TestDiagnoseFoldDisables checks -fold-disables warns which gate it pruned and
 // on which entry input (the override caveat), and only with the flag on.
 func TestDiagnoseFoldDisables(t *testing.T) {

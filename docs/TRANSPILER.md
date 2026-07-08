@@ -117,7 +117,8 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   runtime shim, the Martian Python adapter, and the optional compiled-stage
   wrapper, all baked into the generated scripts), `-mropath` (search path for
   `@include`), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
-  (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
+  (stage image URI for cloud targets) and `-container-dataplane` (a slim image
+  for pure-`mre` tasks; see §10.1), `-monitor` (per-stage memory enforcement),
   the opt-in emission modes `-fuse-chains`, `-fold-disables`, `-native`, and
   `-native-runner` (§4.8), `-config` (a `.mro2nf.yml` of per-project flag
   defaults; keys mirror the flags, an explicit flag always wins — see
@@ -610,7 +611,7 @@ only the surrounding plumbing changes.
 | container | none (host tools) | required ECR image | required private-ECR image |
 | data plane | shared FS | S3 object store | managed run filesystem |
 | outputs | `results/` | S3 work dir; `--aws_outdir s3://…` to publish | `/mnt/workflow/pubdir` → S3 |
-| packaging | — | `Dockerfile` + `runtime/` build context | + `parameter-template.json` + `package.sh` (zip) |
+| packaging | — | `Dockerfile` (+ `Dockerfile.dataplane`) + `runtime/` build context | + `parameter-template.json` + `package.sh` (zip) |
 
 For container targets the emitter writes a **`Dockerfile`** plus a self-contained
 `runtime/` build context (the `mre` binary, the Martian adapters, your stage
@@ -618,6 +619,59 @@ code, and — for `comp` stages — the `mrjob` wrapper) at fixed in-container p
 (`/opt/mro2nf/…`) that the generated scripts bake. HealthOmics tasks have **no
 internet**, so any third-party stage dependency (e.g. the Cell Ranger binary)
 must be added to the Dockerfile.
+
+### 10.1 Container roles: one image per task-kind
+
+On a per-task-billed / fresh-pull backend (HealthOmics, or Batch with no warm
+image cache) every task pays an image pull as it provisions. But not every task
+needs the heavy stage toolkit. The emitter therefore assigns each process a
+**container role** and points each role at its own image:
+
+- **`stage`** (the default) — tasks that run stage code through the Martian
+  adapter/toolkit. They need the user-supplied stage image (today's `--container`),
+  and carry it implicitly via `process.container`.
+- **`dataplane`** — pure-`mre` orchestration tasks (`bind` / `forkbind` / `merge` /
+  `publish-layout` / `entryargs`). Their content is **entirely mro2nf's** — no user
+  tooling — so they run on a slim base + the `mre` binary. Each such process is
+  marked `label 'role_dataplane'`, and the config retargets it with
+  `withLabel:role_dataplane { container = params.container_dataplane ?: params.container }`.
+
+The role is a function of **task-kind** (and, for a stage task, the stage's
+declared adapter `Lang`) — never of what a stage *does* — so the mapping is
+**pipeline-agnostic**: there is no CellRanger/tool-specific logic anywhere. Only
+the transpiler can compute it correctly, so **a user never hand-edits generated
+Nextflow to assign containers.** The label mechanism does not hardcode a fixed
+role count — a later increment can split `stage` per adapter language by labelling
+those processes and adding one more `withLabel:` selector.
+
+**Ownership.** mro2nf owns the roles, the process→role mapping, the per-role
+`container` wiring, and the *content* of any role with no user tooling: the
+`dataplane` image is emitted as **`Dockerfile.dataplane`** (a minimal base + `mre`,
+built straight from the same `runtime/mre` the stage build context already
+stages). You own the *content* of the toolkit-bearing `stage` image (its base and
+tools), supplied via `--container`.
+
+**Using it.** Pass `--container-dataplane <uri>` at transpile time (container
+targets only) to default `params.container_dataplane`; both images surface as
+validated HealthOmics run parameters (`container`, `container_dataplane`), so ECR
+access is checked before the run. **It is fully backward-compatible:** omit the
+flag and `params.container_dataplane` is null, so the `?:` fallback runs the
+data-plane tasks on the stage image — exactly the prior single-image behavior.
+The payoff scales with pipeline heterogeneity (many light tasks + a heavy
+toolkit); for a pipeline where nearly every stage needs the one heavy image, the
+benefit is limited to the handful of `mre`-only tasks — which is expected, since
+this is a correctness/generality feature, not a fix for any one pipeline's wall
+time. It changes only *which image* a task runs in, never the stage ABI or the
+pipeline outputs.
+
+**Pin a digest for reproducibility.** The transpiler emits the `--container` /
+`--container-dataplane` URI verbatim, so a mutable tag (`repo:latest`) is not
+reproducible: a re-push changes which image a later run pulls — and on AWS Batch
+even later tasks of an already-running one (HealthOmics is safer here, resolving
+the tag to a digest at run start). `mro2nf` **warns** at transpile when a
+cloud-target image is a tag rather than an `@sha256:` digest; pass a digest, or use
+an immutable registry (the example CDK repo is `IMMUTABLE_WITH_EXCLUSION`), to pin
+the run and silence the warning.
 
 Two cloud-specific defaults to know about:
 

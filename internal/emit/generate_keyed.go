@@ -90,7 +90,7 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 	block, arg := keyedInputs(refCalls(bindings))
 
 	fmt.Fprintf(b, `process %[1]s_K {
-  input:
+%[7]s  input:
 %[2]s  output:
     tuple val(key), path("%[6]s", type: 'dir')
   script:
@@ -99,7 +99,7 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
     """
 }
 
-`, name, block, g.mre, arg, prodArgs, out)
+`, name, block, g.mre, arg, prodArgs, out, dataplaneLabelLine)
 }
 
 // genKeyedFusedStageProcess emits a per-call fork-keyed process that runs
@@ -203,7 +203,7 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
 	// The forks are emitted as a single directory (a tuple-glob path captures
 	// only one match, unlike a list output); the workflow lists it per fork.
 	fmt.Fprintf(b, `process %[1]s_K {
-  input:
+%[7]s  input:
 %[2]s  output:
     tuple val(key), path('forks'), emit: forks
     tuple val(key), path('forkkeys.json'), emit: keys
@@ -215,7 +215,7 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c))
+`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), dataplaneLabelLine)
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
@@ -227,7 +227,7 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
 // keyed merge always has at least one fork.
 func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s_K {
-  input:
+%[3]s  input:
     tuple val(key), path(souts), path('forkkeys.json')
     path 'types.json'
   output:
@@ -240,7 +240,7 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 
 `, mergeName(pipeline, c.Name),
 		g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged",
-			g.plan.pipes[pipeline].calls[c.Name].emptyNull))
+			g.plan.pipes[pipeline].calls[c.Name].emptyNull), dataplaneLabelLine)
 }
 
 // genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,

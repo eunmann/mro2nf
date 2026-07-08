@@ -2,6 +2,7 @@ package emit
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -46,8 +47,41 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 	ds = append(ds, nativeDiagnostics(prog, f, pl)...)
 	ds = append(ds, nativeTargetDiagnostics(prog, f, opts.Target)...)
 	ds = append(ds, runnerDiagnostics(prog, f, opts.Monitor)...)
+	ds = append(ds, containerDiagnostics(opts)...)
 
 	return append(ds, foldDiagnostics(prog, f, pl)...)
+}
+
+// containerDiagnostics warns when a container-target run pins its image with a
+// mutable tag instead of an immutable @sha256: digest. A tag can be re-pushed, so
+// the exact image a run gets is not reproducible: a later run re-resolves the tag
+// to whatever it points at then, and on AWS Batch even later tasks of an
+// already-running run can pull a re-pushed tag (HealthOmics is safer — it pins the
+// tag to a digest at run start, so a running run is stable, but its next run still
+// re-resolves). Passing an @sha256: digest — or using an immutable registry —
+// removes the ambiguity. Warn, not error: a mutable tag is a common, valid choice.
+func containerDiagnostics(opts Options) []Diagnostic {
+	target, err := ParseTarget(string(opts.Target))
+	if err != nil || !target.isContainer() {
+		return nil
+	}
+
+	var ds []Diagnostic
+
+	for _, c := range []struct{ flag, ref string }{
+		{"-container", opts.Container},
+		{"-container-dataplane", opts.ContainerDataplane},
+	} {
+		if c.ref != "" && !strings.Contains(c.ref, "@sha256:") {
+			ds = append(ds, Diagnostic{Severity: SevWarn, Message: fmt.Sprintf(
+				"%s %q is a mutable tag, not an immutable @sha256: digest — a re-push to that "+
+					"tag can change which image a later run pulls (and, on AWS Batch, later tasks "+
+					"of a running one). Pin a digest (repo@sha256:...) or use an immutable registry "+
+					"for reproducible runs.", c.flag, c.ref)})
+		}
+	}
+
+	return ds
 }
 
 // nativeDiagnostics surfaces which map calls -native could NOT fully collapse,
