@@ -664,6 +664,15 @@ this is a correctness/generality feature, not a fix for any one pipeline's wall
 time. It changes only *which image* a task runs in, never the stage ABI or the
 pipeline outputs.
 
+**Pin a digest for reproducibility.** The transpiler emits the `--container` /
+`--container-dataplane` URI verbatim, so a mutable tag (`repo:latest`) is not
+reproducible: a re-push changes which image a later run pulls — and on AWS Batch
+even later tasks of an already-running one (HealthOmics is safer here, resolving
+the tag to a digest at run start). `mro2nf` **warns** at transpile when a
+cloud-target image is a tag rather than an `@sha256:` digest; pass a digest, or use
+an immutable registry (the example CDK repo is `IMMUTABLE_WITH_EXCLUSION`), to pin
+the run and silence the warning.
+
 Two cloud-specific defaults to know about:
 
 - **`awsbatch` publishes nothing by default.** A transpiled stage's outputs are
