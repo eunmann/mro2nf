@@ -71,7 +71,7 @@ jobs:
       # Third-party action holding the write token: pin to a commit SHA (not the
       # mutable v3 tag) so a compromised tag can't gain release-write access.
       # Dependabot keeps the pin current via the trailing version comment.
-      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           files: |
             mro2nf-*
