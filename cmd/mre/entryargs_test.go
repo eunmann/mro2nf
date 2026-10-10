@@ -47,7 +47,8 @@ func TestOverlayValues(t *testing.T) {
 }
 
 // entryTable builds a type table + params covering a scalar file, a file array,
-// and a struct with a file field — the shapes file-typed entry inputs take.
+// a file map and a struct with a file field — the shapes file-typed entry
+// inputs take.
 func entryTable() (*types.Table, []ir.Param) {
 	tbl := types.NewTable(map[string]*ir.StructType{
 		"Cfg": {Name: "Cfg", Fields: []ir.Param{
@@ -58,6 +59,7 @@ func entryTable() (*types.Table, []ir.Param) {
 	params := []ir.Param{
 		{Name: "reads", BaseType: "file", IsFile: true},
 		{Name: "fastqs", BaseType: "file", ArrayDim: 1, IsFile: true},
+		{Name: "named", BaseType: "file", MapDim: 1, IsFile: true},
 		{Name: "cfg", BaseType: "Cfg", IsFile: true},
 		{Name: "scale", BaseType: "float"},
 	}
@@ -88,7 +90,7 @@ func TestReconstructFiles(t *testing.T) {
 	flatMap := map[string][]string{
 		"reads":  {"/work/reads.fastq"},
 		"fastqs": {"/work/a.fastq", "/work/b.fastq"},
-		"cfg":    {"/work/unused"},
+		"cfg":    {},
 	}
 
 	if err := reconstructFiles(payload, over, flatMap, params, tbl); err != nil {
@@ -163,6 +165,53 @@ func TestReconstructFilesStagedCountMismatch(t *testing.T) {
 		map[string][]string{"reads": {"/work/r1", "/work/r2"}}, params, tbl)
 	if !errors.Is(many, errStagedMany) {
 		t.Errorf("too-many staged: err = %v, want errStagedMany", many)
+	}
+}
+
+// TestReconstructFilesEmptyOverride checks an override with zero file leaves
+// (#261) — an empty file[], an empty map<file>, a struct whose file field is
+// null — arrives with zero staged files and replaces the baked default, as the
+// same literals do under mrp.
+func TestReconstructFilesEmptyOverride(t *testing.T) {
+	tbl, params := entryTable()
+
+	payload := map[string]any{
+		"fastqs": []any{"baked/x"},
+		"named":  map[string]any{"a": "baked/a"},
+		"cfg":    map[string]any{"ref": "baked/ref", "n": json.Number("9")},
+	}
+	over := map[string]any{
+		"fastqs": []any{},
+		"named":  map[string]any{},
+		"cfg":    map[string]any{"ref": nil, "n": json.Number("3")},
+	}
+	flatMap := map[string][]string{"fastqs": {}, "named": {}, "cfg": {}}
+
+	if err := reconstructFiles(payload, over, flatMap, params, tbl); err != nil {
+		t.Fatalf("reconstructFiles: %v", err)
+	}
+
+	want := map[string]any{
+		"fastqs": []any{},
+		"named":  map[string]any{},
+		"cfg":    map[string]any{"ref": nil, "n": json.Number("3")},
+	}
+	if diff := cmp.Diff(want, payload); diff != "" {
+		t.Errorf("payload mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestReconstructFilesUnsetStaged checks an unset input that nonetheless has
+// staged files fails loudly: with no placeholder file staged for an unset
+// input, a staged path there means the flatten and the values disagree.
+func TestReconstructFilesUnsetStaged(t *testing.T) {
+	tbl, params := entryTable()
+
+	err := reconstructFiles(
+		map[string]any{"reads": "baked/r"}, map[string]any{"reads": nil},
+		map[string][]string{"reads": {"/work/r"}}, params, tbl)
+	if !errors.Is(err, errStagedMany) {
+		t.Errorf("unset input with a staged file: err = %v, want errStagedMany", err)
 	}
 }
 

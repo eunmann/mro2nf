@@ -31,6 +31,8 @@ func TestCheckReservedEntryNames(t *testing.T) {
 	}{
 		{"outdir reserved everywhere", "outdir", TargetLocal, true},
 		{"job_resources reserved everywhere", "job_resources", TargetHealthOmics, true},
+		{"remote-input opt-in reserved on local", "mro2nf_allow_remote_inputs", TargetLocal, true},
+		{"remote-input opt-in reserved on healthomics", "mro2nf_allow_remote_inputs", TargetHealthOmics, true},
 		{"aws_queue reserved on local", "aws_queue", TargetLocal, true},
 		{"aws_outdir reserved on awsbatch", "aws_outdir", TargetAWSBatch, true},
 		{"aws_outdir free on local", "aws_outdir", TargetLocal, false},

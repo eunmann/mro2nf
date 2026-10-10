@@ -366,9 +366,11 @@ type entryWiring struct {
 // entryParamWiring accumulates each entry input's wiring: every input gets a
 // nullable params.<name> declaration and a values-map pair; a file-bearing
 // input is additionally routed through Nextflow staging — a `path` input, a
-// head-node flatten channel (falling back to the empty sentinel when unset),
-// and a -fileflat map entry so entryargs can pop the staged paths back in.
-func entryParamWiring(prog *ir.Program) entryWiring {
+// head-node flatten channel (empty when the value is unset or holds no file),
+// and a -fileflat map entry so entryargs can pop the staged paths back in. The
+// flatten vets each file leaf for target before file() sees it, so a project
+// with a file-bearing input also declares the remote-input opt-in.
+func entryParamWiring(prog *ir.Program, target Target) entryWiring {
 	ins := entryInParams(prog)
 
 	var decls, fileInputs, fileChans strings.Builder
@@ -377,7 +379,6 @@ func entryParamWiring(prog *ir.Program) entryWiring {
 		pairs:    make([]string, 0, len(ins)),
 		callArgs: []string{`file("${projectDir}/entry_args")`, "values", "types"},
 	}
-	sentinel := fmt.Sprintf(`file("${projectDir}/%s/%s")`, assetsDir, entrySentinel)
 
 	for _, p := range ins {
 		fmt.Fprintf(&decls, "params.%s = null\n", p.Name)
@@ -387,27 +388,27 @@ func entryParamWiring(prog *ir.Program) entryWiring {
 			continue
 		}
 
+		if len(w.flatPairs) == 0 {
+			fmt.Fprintf(&decls, "params.%s = false\n", allowRemoteParam)
+		}
+
 		in := "inflat_" + p.Name
 		// stageAs '<in>_?/*' stages each file leaf into its own numbered subdir
 		// (<in>_1/<basename>, <in>_2/<basename>, ...), so leaves that share a
 		// basename (e.g. sampleA/reads.fastq + sampleB/reads.fastq) do not collide
 		// in the task work dir, while the original basename is preserved for the
 		// stage. The order matches the head-node flatten (canonical type order).
-		fmt.Fprintf(&fileInputs, "    path(%s, stageAs: '%s_?/*')\n", in, in)
+		// arity '0..*' lets an unset or leafless value stage no file at all, and
+		// makes the input a List even for one leaf: toJson would serialize a
+		// bare Path as its segment list.
+		fmt.Fprintf(&fileInputs, "    path(%s, stageAs: '%s_?/*', arity: '0..*')\n", in, in)
 		// The staged paths (one per file leaf, canonical order) reach entryargs
 		// as one JSON object written via heredoc — JSON escaping keeps legal
 		// filenames containing , ; = intact, which a flat separator encoding
-		// cannot. The list-coercion matters: a single staged file is a lone
-		// Groovy Path, and toJson would serialize a bare Path as its segment
-		// list; wrapping it in a list and spreading toString() yields one path
-		// string per leaf. A multi-leaf input is already a List, left as-is.
-		w.flatPairs = append(w.flatPairs, fmt.Sprintf("%[1]s: (%[2]s instanceof List ? %[2]s : [%[2]s])*.toString()", p.Name, in))
+		// cannot.
+		w.flatPairs = append(w.flatPairs, fmt.Sprintf("%s: %s*.toString()", p.Name, in))
 		w.callArgs = append(w.callArgs, "flat_"+p.Name)
-		// Flatten the override's file leaves to a list of staged files on the head node;
-		// an unset input (or one with no file leaves) falls back to the empty sentinel so
-		// the process still runs (entryargs ignores the sentinel when the input is unset).
-		fmt.Fprintf(&fileChans, "  flat_%[1]s = (params.%[1]s != null ? (%[2]s) : []) ?: [%[3]s]\n",
-			p.Name, fileFlattenExpr("params."+p.Name, p, prog.Structs), sentinel)
+		fmt.Fprintf(&fileChans, "  flat_%s = %s\n", p.Name, fileFlattenExpr("params."+p.Name, p, prog.Structs, target))
 	}
 
 	w.decls, w.fileInputs, w.fileChans = decls.String(), fileInputs.String(), fileChans.String()
@@ -426,8 +427,8 @@ func entryParamWiring(prog *ir.Program) entryWiring {
 // node, and declared as a `path` input, so the worker reads real local files (an
 // isolated AWS Batch / HealthOmics task cannot stat the raw values). entryargs
 // pops the staged paths back into the value in the canonical type-walk order and
-// marks them into the bundle. An unset input is fed the empty sentinel and keeps
-// its baked default.
+// marks them into the bundle. An unset input stages no file and keeps its baked
+// default.
 func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
 	if g.features.native {
 		genNativeEntry(b, prog, entryWorkflow, g)
@@ -435,7 +436,7 @@ func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genC
 		return
 	}
 
-	w := entryParamWiring(prog)
+	w := entryParamWiring(prog, g.target)
 
 	// `[:]` is Groovy's empty map (a bare `[]` would be a list, which the overrides
 	// JSON object must not be); a non-empty map lists each input's param.
@@ -508,23 +509,33 @@ func genPublishWiring(b *strings.Builder, entryWorkflow string) {
 // canonical walk order types.Table uses — arrays in index order, maps by sorted
 // key, struct fields in declaration order — so mre entryargs can pop the staged
 // paths back into the value in the same order. Non-file scalars contribute [].
-func fileFlattenExpr(expr string, p ir.Param, structs map[string]*ir.StructType) string {
-	return fileFlattenExprDepth(expr, p, structs, 0)
+// Each leaf passes Mro2nf.entryFile, which rejects a scheme or local path the
+// target does not allow, before file() can fetch or read it.
+func fileFlattenExpr(expr string, p ir.Param, structs map[string]*ir.StructType, target Target) string {
+	return fileFlatten{input: p.Name, target: target, structs: structs}.expr(expr, p, 0)
 }
 
-// fileFlattenExprDepth threads a closure-variable depth so nested array/map
-// closures bind distinct names (__e0, __e1, ...). Reusing one name across
-// nesting depths is a Groovy compile error ("variable already declared").
-// Struct fields recurse at the *same* depth: they substitute (expr)?.field
-// without opening a new closure, so siblings never collide.
-func fileFlattenExprDepth(expr string, p ir.Param, structs map[string]*ir.StructType, depth int) string {
+// fileFlatten renders the flatten of one entry input, whose name and the
+// target every leaf check reports.
+type fileFlatten struct {
+	input   string
+	target  Target
+	structs map[string]*ir.StructType
+}
+
+// expr threads a closure-variable depth so nested array/map closures bind
+// distinct names (__e0, __e1, ...). Reusing one name across nesting depths is
+// a Groovy compile error ("variable already declared"). Struct fields recurse
+// at the *same* depth: they substitute (expr)?.field without opening a new
+// closure, so siblings never collide.
+func (f fileFlatten) expr(expr string, p ir.Param, depth int) string {
 	switch {
 	case p.ArrayDim > 0:
 		elem := p
 		elem.ArrayDim--
 		v := fmt.Sprintf("__e%d", depth)
 
-		return fmt.Sprintf("(%s ?: []).collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v, elem, structs, depth+1))
+		return fmt.Sprintf("(%s ?: []).collect { %s -> %s }.flatten()", expr, v, f.expr(v, elem, depth+1))
 	case p.MapDim > 0:
 		// A typed map is one map level; Martian folds inner array dims into MapDim
 		// (MapDim = 1 + innerArrayDim). Descend one level, then treat the value as
@@ -538,13 +549,13 @@ func fileFlattenExprDepth(expr string, p ir.Param, structs map[string]*ir.Struct
 		// UTF-16 order: mre's entryargs re-walks the same map with Go sort.Strings
 		// (UTF-8 bytes), and the two orders diverge for supplementary-plane keys,
 		// which would mispair the flattened file leaves with the staged paths.
-		return fmt.Sprintf("(%s ?: [:]).sort { __a, __b -> Mro2nf.compareUtf8(__a.key, __b.key) }.collect { %s -> %s }.flatten()", expr, v, fileFlattenExprDepth(v+".value", val, structs, depth+1))
+		return fmt.Sprintf("(%s ?: [:]).sort { __a, __b -> Mro2nf.compareUtf8(__a.key, __b.key) }.collect { %s -> %s }.flatten()", expr, v, f.expr(v+".value", val, depth+1))
 	}
 
-	if st, ok := structs[p.BaseType]; ok {
+	if st, ok := f.structs[p.BaseType]; ok {
 		parts := make([]string, 0, len(st.Fields))
-		for _, f := range st.Fields {
-			parts = append(parts, fileFlattenExprDepth(fmt.Sprintf("(%s)?.%s", expr, f.Name), f, structs, depth))
+		for _, field := range st.Fields {
+			parts = append(parts, f.expr(fmt.Sprintf("(%s)?.%s", expr, field.Name), field, depth))
 		}
 
 		if len(parts) == 0 {
@@ -555,7 +566,8 @@ func fileFlattenExprDepth(expr string, p ir.Param, structs map[string]*ir.Struct
 	}
 
 	if p.IsFile {
-		return fmt.Sprintf("(%[1]s != null ? [file(%[1]s)] : [])", expr)
+		return fmt.Sprintf("(%[1]s != null ? [file(Mro2nf.entryFile('%[2]s', %[1]s, '%[3]s', params.%[4]s), glob: false)] : [])",
+			expr, f.input, f.target, allowRemoteParam)
 	}
 
 	return "[]"

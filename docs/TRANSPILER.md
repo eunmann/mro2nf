@@ -607,7 +607,46 @@ bundle. This works for **every shape** — a scalar `file`/`path`/directory, a
 `file[]`, a `map<file>`, and a struct with file fields — using one
 flatten-and-reconstruct mechanism whose ordering (arrays by index, maps by sorted
 key, struct fields in declaration order) is shared between the Groovy flatten and
-the Go reconstruction so they can't drift. An unset input keeps its baked default.
+the Go reconstruction so they can't drift. An unset input keeps its baked
+default. It, and a value with no file in it (`[]`, `{}`, a struct whose file
+field is null), stage zero files: the `path` input takes `arity: '0..*'`, so no
+placeholder file is needed. Each leaf goes through `file(x, glob: false)`, so
+the head node never globs a name.
+
+**Names Nextflow cannot stage.** Nextflow 26.04 writes each staged file into
+the task's stage-in script as `ln -s <source> <name>`, escaping spaces, quotes,
+`()`, `\`, `!`, `&`, `|`, `<>`, `` ` ``, `:` and `;` but not `*`, `?`, `[`,
+`]`, `{`, `}`, `$` or control characters such as a tab. Bash then expands those
+in the task: `s[1].txt` beside `s1.txt` stages `s1.txt` silently, `{a,b}`
+splits into two words, `$HOME` is substituted. The emitter cannot quote that
+script, so `Mro2nf.entryFile` rejects an override path holding any of these
+characters, anywhere in the path or URI, before anything is staged; the error
+names the input and the character. A baked default is copied into the entry
+bundle by `mro2nf` and renamed `L<n><ext>`, so only its extension ever reaches
+a stage-in script, and the transpile rejects a default whose extension holds
+one. Rename such a file, or the directory holding an override.
+
+**Which file values a run may supply.** `file()` on the head node fetches any
+URL Nextflow has a provider for and reads any path the head node can see, and a
+run parameter comes from whoever launches the run: a portal, a launcher
+service, a shared HealthOmics workflow. So before `file()` sees a leaf,
+`Mro2nf.entryFile` checks it against the target:
+
+| Target | Accepted file value |
+|---|---|
+| `local` | a local path (relative, absolute, or `file:`), or an `s3://` URI for its `awsbatch` profile |
+| `awsbatch`, `healthomics` | an `s3://` URI |
+
+Anything else fails the run on the head node, before anything is fetched, with
+an error naming the input and the scheme: `http(s)://`, `ftp://`, any other
+scheme, a local path on a cloud target.
+`--mro2nf_allow_remote_inputs true` (or `"mro2nf_allow_remote_inputs": true` in
+a `-params-file`) admits any scheme, but never a local path on a cloud target.
+Set it only when you trust whoever supplies the run parameters: the `mro2nf_`
+prefix keeps it apart from the pipeline inputs, which still share the one
+Nextflow param namespace until #303 separates them. The HealthOmics
+`parameter-template.json` does not declare it, so a HealthOmics run cannot set
+it. Baked defaults are not run parameters and are not checked.
 
 Two leaves can share a basename — two FASTQs both named `reads.fastq` in
 different sample directories, say. To keep them from clobbering each other when

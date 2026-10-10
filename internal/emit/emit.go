@@ -34,11 +34,6 @@ const (
 	// (AWS Batch + S3, HealthOmics) and not just on a shared filesystem — and a
 	// task transfers only its own bindspec, not every call's.
 	assetsDir = "_assets"
-	// entrySentinel is a baked empty file fed to BUILD_ENTRY_ARGS for a file-typed
-	// entry input the run did not override, so the process still has a staged path
-	// input (and keeps the baked default). Lives under _assets/ so it is packaged
-	// for HealthOmics. See genEntry.
-	entrySentinel = ".entry_empty"
 )
 
 // hasFileLeaf reports whether a param has any file leaf — directly (a
@@ -57,14 +52,6 @@ func hasFileLeaf(p ir.Param, structs map[string]*ir.StructType) bool {
 
 	return slices.ContainsFunc(st.Fields, func(f ir.Param) bool {
 		return hasFileLeaf(f, structs)
-	})
-}
-
-// hasStagedFileEntry reports whether the entry callable has any file-bearing
-// input staged as a run parameter (so the sentinel file is worth baking).
-func hasStagedFileEntry(prog *ir.Program) bool {
-	return slices.ContainsFunc(entryInParams(prog), func(p ir.Param) bool {
-		return hasFileLeaf(p, prog.Structs)
 	})
 }
 
@@ -193,6 +180,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		// container backend rebinds this to the baked ctrRunner below.
 		runnerBase: "${projectDir}/" + assetsDir + "/" + runnerDir,
 		monitor:    opts.Monitor,
+		target:     target,
 		features:   features,
 		code:       opts.StageCode,
 		plan:       buildPlan(prog, features),
@@ -261,17 +249,6 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 
 	if target == TargetHealthOmics {
 		if err := writeHealthOmicsPackaging(prog, opts.OutDir, opts.Native); err != nil {
-			return err
-		}
-	}
-
-	// The empty sentinel is only consumed by the default BUILD_ENTRY_ARGS task
-	// (genEntry); native bakes the entry args and emits no such task, so a
-	// native project needs no sentinel.
-	if !opts.Native && hasStagedFileEntry(prog) {
-		// A staged-but-unset file input is fed this empty sentinel so BUILD_ENTRY_ARGS
-		// still has its path input (and keeps the baked default); see genEntry.
-		if err := writeFile(filepath.Join(opts.OutDir, assetsDir, entrySentinel), []byte{}); err != nil {
 			return err
 		}
 	}
@@ -806,6 +783,10 @@ func writeEntryArgs(prog *ir.Program, outDir, mroDir string) error {
 	params := entryInParams(prog)
 	tbl := types.NewTable(prog.Structs)
 
+	if err := checkEntryFileDefaults(payload, params, tbl); err != nil {
+		return err
+	}
+
 	if mroDir != "" {
 		if payload, err = resolveEntryFileLeaves(payload, params, tbl, mroDir); err != nil {
 			return err
@@ -838,13 +819,60 @@ func resolveEntryFileLeaves(payload map[string]any, params []ir.Param, tbl *type
 	return resolved, nil
 }
 
-// reservedParams returns the Nextflow params the emitted config defines for
-// target. An entry input sharing one of these names would be silently overridden
-// by the config declaration (config params beat script params), so the transpile
-// must reject the collision. Mirror configCommon / outdirConfig / configProcess /
-// configAWSBatch — keep this in sync with what those emit.
+// stageUnsafe are the characters Nextflow 26.04's task stage-in script leaves
+// unescaped and bash still expands (Mro2nf.entryFile's STAGE_UNSAFE, which
+// also rejects control characters).
+const stageUnsafe = "*?[]{}$"
+
+// checkEntryFileDefaults rejects a baked file default whose extension holds a
+// character Nextflow would mis-stage. The bundle copies each leaf in Go and
+// renames it L<n><ext>, so only the extension ever reaches a stage-in script,
+// in every task that stages the entry bundle's files.
+func checkEntryFileDefaults(payload map[string]any, params []ir.Param, tbl *types.Table) error {
+	for _, p := range params {
+		v, ok := payload[p.Name]
+		if !ok {
+			continue
+		}
+
+		_, err := tbl.Apply([]ir.Param{p}, map[string]any{p.Name: v}, func(path string) (string, error) {
+			ext := filepath.Ext(path)
+			if i := strings.IndexFunc(ext, isStageUnsafe); i >= 0 {
+				return "", &apperror.UnsupportedError{
+					Construct: "entry file default",
+					Detail: fmt.Sprintf("input %q: the extension %q contains %q, which Nextflow's task stage-in "+
+						"script leaves unquoted, so bash would expand it; rename the file "+
+						"(a Nextflow staging limitation, see docs/TRANSPILER.md section 8)", p.Name, ext, ext[i]),
+				}
+			}
+
+			return path, nil
+		})
+		if err != nil {
+			return fmt.Errorf("check entry file defaults: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func isStageUnsafe(r rune) bool {
+	return r < 0x20 || r == 0x7f || strings.ContainsRune(stageUnsafe, r)
+}
+
+// allowRemoteParam is the run param that lets an entry file override use a
+// scheme other than the target's own (Mro2nf.entryFile). The mro2nf_ prefix
+// keeps it out of the pipeline-input namespace (#303).
+const allowRemoteParam = "mro2nf_allow_remote_inputs"
+
+// reservedParams returns the Nextflow params the emitter defines for target.
+// An entry input sharing a config-defined name would be silently overridden by
+// the config declaration (config params beat script params), and one named
+// allowRemoteParam would double as the opt-in, so the transpile must reject the
+// collision. Mirror configCommon / outdirConfig / configProcess /
+// configAWSBatch and entryParamWiring — keep this in sync with what those emit.
 func reservedParams(target Target) map[string]bool {
-	set := map[string]bool{"outdir": true, "job_resources": true}
+	set := map[string]bool{"outdir": true, "job_resources": true, allowRemoteParam: true}
 
 	if target == TargetAWSBatch || target == TargetLocal {
 		set["aws_queue"] = true

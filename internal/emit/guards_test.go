@@ -183,6 +183,16 @@ func TestEmitHealthOmicsTemplateEntries(t *testing.T) {
 				t.Error("template missing the required 'container' parameter")
 			}
 
+			// A run caller must not be able to widen the fetched schemes (#330).
+			if _, ok := tmpl["mro2nf_allow_remote_inputs"]; ok {
+				t.Error("template declares mro2nf_allow_remote_inputs; HealthOmics callers could set it")
+			}
+
+			main := readFile(t, filepath.Join(dir, "main.nf"))
+			if want := "Mro2nf.entryFile('reads', params.reads, 'healthomics', "; !tc.native && !strings.Contains(main, want) {
+				t.Errorf("main.nf does not vet the reads override for healthomics (%q)", want)
+			}
+
 			assertEntryBake(t, dir, tc.native)
 		})
 	}
