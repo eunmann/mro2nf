@@ -32,10 +32,10 @@ const goldenEmptyDirs = "expected/outs.emptydirs"
 
 const launchOverride = "launch-time -params-file override: mrp has no equivalent invocation to record"
 
-// jsonOnlyGoldens are the goldenCases entries whose fixture mrp runs but whose
-// case it cannot record, keyed by case name with the reason. They, and the
-// cases of mrpUnrunnable fixtures, have no mrp-recorded tree and are checked
-// on pipeline_outs.json alone.
+// jsonOnlyGoldens are the goldenCases entries mrp cannot record whatever their
+// fixture (the launch-time *_override cases), keyed by case name with the
+// reason. They, and every case of an mrpUnrunnable fixture, have no
+// mrp-recorded tree and are checked on pipeline_outs.json alone.
 var jsonOnlyGoldens = map[string]string{
 	"entry_file_override":         launchOverride,
 	"entry_filearr_override":      launchOverride,

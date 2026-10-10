@@ -51,4 +51,5 @@ the way `TestMrpDiff` does and replaces each `expected/outs/` and
 Outputs JSON: run `mrp <fixture>/pipeline.mro mrp --jobmode=local --disable-ui
 --nopreflight` with `MROPATH` set to the fixture dir, and copy the
 path-normalized `<pipestance>/<PIPELINE>/fork0/_outs` into `expected/`. Add the
-fixture to `TestMrpDiff`'s cases so the copy is machine-checked.
+fixture to `mrpDiffCases` so the copy is machine-checked (or to `mrpUnrunnable`
+with the reason mrp cannot run it); `TestEveryFixtureMrpDiffed` requires one.
