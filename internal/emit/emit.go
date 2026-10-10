@@ -466,6 +466,15 @@ func checkValueRefs(prog *ir.Program, p *ir.Pipeline, v ir.Value) error {
 				Detail:    fmt.Sprintf("%s.%s in pipeline %s", v.Ref.ID, v.Ref.Output, p.Name),
 			}
 		}
+
+		// The merge of an output-less mapped call is {}, which cannot say how
+		// many forks ran, so its per-fork whole value is not recoverable.
+		if wholeRefFork(p, v.Ref) != "" && len(calleeOutParams(prog, p, v.Ref.ID)) == 0 {
+			return &apperror.UnsupportedError{
+				Construct: "whole ref to a mapped call with no outputs",
+				Detail:    fmt.Sprintf("%s in pipeline %s", v.Ref.ID, p.Name),
+			}
+		}
 	}
 
 	return nil
@@ -977,10 +986,31 @@ func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 			Output:     v.Ref.Output,
 			MapDepth:   max(depth, 0),
 			MapInArray: inArray,
+			Fork:       wholeRefFork(p, v.Ref),
 		}}
 	default:
 		return bind.Entry{Literal: v.Literal}
 	}
+}
+
+// wholeRefFork returns the bind.Ref fork kind for a whole-call ref to a mapped
+// call in p (bind.ForkMap for a keyed fork, as forkDims treats it), or "" for
+// any other ref.
+func wholeRefFork(p *ir.Pipeline, ref *ir.Ref) string {
+	if p == nil || ref.Kind != ir.RefKindCall || ref.Output != "" {
+		return ""
+	}
+
+	c := findCall(p, ref.ID)
+	if c == nil || !c.Mapped {
+		return ""
+	}
+
+	if mapDim, _ := forkDims(c); mapDim > 0 {
+		return bind.ForkMap
+	}
+
+	return bind.ForkArray
 }
 
 // configFile renders nextflow.config for the chosen target: the common params +

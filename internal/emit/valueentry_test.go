@@ -2,11 +2,72 @@ package emit
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/bind"
 	"github.com/eunmann/mro2nf/internal/ir"
 )
+
+// mappedWholeRefProg builds pipeline T with an array-forked and a map-forked
+// call of stage MAKEB (outs), plus a plain call of it, returning ret.
+func mappedWholeRefProg(outs []ir.Param, ret *ir.Ref) *ir.Program {
+	return &ir.Program{
+		Structs: map[string]*ir.StructType{},
+		Stages:  map[string]*ir.Stage{"MAKEB": {Name: "MAKEB", Out: outs}},
+		Pipelines: map[string]*ir.Pipeline{
+			"T": {
+				Name: "T",
+				Calls: []ir.Call{
+					{Name: "ARR", Callable: "MAKEB", Mapped: true, MapMode: ir.MapModeArray},
+					{Name: "MAP", Callable: "MAKEB", Mapped: true, MapMode: ir.MapModeMap},
+					{Name: "ONE", Callable: "MAKEB"},
+				},
+				Returns: []ir.Binding{{Param: "r", Value: ir.Value{Ref: ret}}},
+			},
+		},
+	}
+}
+
+// TestValueToEntryMarksWholeMappedRef checks the emitter tags a whole-call ref
+// to a mapped call with its fork kind (#240), so the binder resolves it per
+// fork; a projection of a mapped call and a whole ref to a plain call stay
+// untagged.
+func TestValueToEntryMarksWholeMappedRef(t *testing.T) {
+	outs := []ir.Param{{Name: "a", BaseType: "int"}, {Name: "n", BaseType: "int"}}
+
+	for _, tc := range []struct {
+		name string
+		ref  ir.Ref
+		want string
+	}{
+		{"whole array fork", ir.Ref{Kind: ir.RefKindCall, ID: "ARR"}, bind.ForkArray},
+		{"whole map fork", ir.Ref{Kind: ir.RefKindCall, ID: "MAP"}, bind.ForkMap},
+		{"projected array fork", ir.Ref{Kind: ir.RefKindCall, ID: "ARR", Output: "n"}, ""},
+		{"whole plain call", ir.Ref{Kind: ir.RefKindCall, ID: "ONE"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := tc.ref
+			prog := mappedWholeRefProg(outs, &ref)
+
+			entry := valueToEntry(prog, prog.Pipelines["T"], ir.Value{Ref: &ref})
+			if entry.Ref == nil || entry.Ref.Fork != tc.want {
+				t.Errorf("entry ref = %+v, want fork %q", entry.Ref, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheckSupportedRejectsWholeRefToOutputlessMappedCall: a mapped call with no
+// outputs merges to {}, which cannot say how many forks ran, so a whole ref to
+// it is refused at transpile time rather than bound as a wrong-length array.
+func TestCheckSupportedRejectsWholeRefToOutputlessMappedCall(t *testing.T) {
+	prog := mappedWholeRefProg(nil, &ir.Ref{Kind: ir.RefKindCall, ID: "ARR"})
+	if err := checkSupported(prog); !errors.Is(err, apperror.ErrUnsupported) {
+		t.Errorf("checkSupported = %v, want ErrUnsupported", err)
+	}
+}
 
 // TestValueToEntryEmptyComposites guards bug 3: an empty array/object literal
 // must survive the bindspec JSON round-trip as an empty composite, not collapse

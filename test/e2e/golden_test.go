@@ -60,6 +60,9 @@ var goldenCases = []goldenCase{
 	{"struct_of_file", "struct_of_file", "expected/outs.json"},
 	// #173: pipeline output typed as a callable's output struct with a file leaf.
 	{"callable_struct_file", "callable_struct_file", "expected/outs.json"},
+	// #240: a whole ref to an array- and a map-forked call resolves per fork
+	// (array/map of structs, file leaves inside), in a stage's _args and the outs.
+	{"map_wholeref", "map_wholeref", "expected/outs.json"},
 	// #172: array<map<Point>>.x projection fed to a map<int>[] consumer.
 	{"arr_map_proj", "arr_map_proj", "expected/outs.json"},
 	{"literals_edge", "literals_edge", "expected/outs.json"},

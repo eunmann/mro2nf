@@ -493,7 +493,10 @@ input `z` is the literal `5`") are compiled at transpile time into small JSON
 
 This says the callee's `values` input is bound to the pipeline's own `values`
 input (`kind: self`). Other kinds reference an upstream call's output
-(`kind: call`, with `id` and `output`). At runtime `mre bind` reads the bindspec,
+(`kind: call`, with `id` and `output`). A whole-call ref to a map call also
+carries `fork` (`array` or `map`): the call's merged bundle holds one
+collection per output, and the binder regroups it into one struct per fork,
+which is the value mrp gives `x = CALL`. At runtime `mre bind` reads the bindspec,
 the pipeline args, and the staged upstream bundles, and assembles the callee's
 args bundle. Keeping the wiring as data (a bindspec) rather than baking it into
 the Groovy means the binder — including typed-map field projections and

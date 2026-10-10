@@ -82,6 +82,7 @@ out of scope for a transpiler.
 | `map call ... split` over an **array** → array result | ✅ | e2e `fork_min` |
 | `map call ... split` over a **map** → keyed result | ✅ | e2e `map_fork`, unit `TestResolveForksMap/Merge` |
 | fused multi-`split` (zipped) | ✅ | e2e `multisplit` |
+| whole-call ref (`x = CALL`) to a **map call** → one struct per fork (array of structs / map of structs, as mrp's resolveMerge) | ✅ (the bindspec ref carries the fork kind; the binder regroups the merged per-output collections per fork). A whole ref to a mapped call with no outputs is a transpile error | e2e `map_wholeref`; unit `TestResolveWholeRefToMappedCall`, `TestValueToEntryMarksWholeMappedRef` |
 | empty split collection → null result | ✅ | e2e `empty_fork_min` |
 | map call over a **split stage** (fork-key threaded) | ✅ #16 | e2e `map_split` |
 | map call over a **sub-pipeline** (per-fork body keying) | ✅ #16 | e2e `map_pipe`, `map_pipe_split` |
