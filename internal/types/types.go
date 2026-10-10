@@ -13,6 +13,7 @@ import (
 	"maps"
 	"math"
 	"sort"
+	"strconv"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -103,22 +104,40 @@ func (t *Table) Apply(params []ir.Param, vals map[string]any, fn Transform) (map
 // because numbers are decoded with json.UseNumber to preserve float fidelity
 // (42.0 stays a float), which would otherwise hand a stage 5.0 for an int param.
 func (t *Table) CoerceScalars(params []ir.Param, vals map[string]any) map[string]any {
+	return t.mapNumbers(params, vals, coerceNumber)
+}
+
+// FormatFloats re-encodes each float-typed leaf of vals the way mrp encodes a
+// float literal in a stage's _args (Martian's FloatExp uses AppendFloat 'g',
+// -1): 2.0 becomes 2 and 1E6 becomes 1e+06. It is for values that stand in for
+// .mro literals, such as entry-input overrides; a stage's own outputs keep
+// their text, as mrp passes them through unchanged.
+func (t *Table) FormatFloats(params []ir.Param, vals map[string]any) map[string]any {
+	return t.mapNumbers(params, vals, formatFloat)
+}
+
+// mapNumbers returns a copy of vals with every number leaf of a declared param
+// replaced by leaf(number, base type).
+func (t *Table) mapNumbers(params []ir.Param, vals map[string]any, leaf numberLeaf) map[string]any {
 	out := make(map[string]any, len(vals))
 	maps.Copy(out, vals)
 
 	for _, p := range params {
 		if v, ok := vals[p.Name]; ok {
-			out[p.Name] = t.coerce(v, p.BaseType, p.ArrayDim, p.MapDim)
+			out[p.Name] = t.mapNumber(v, p.BaseType, p.ArrayDim, p.MapDim, leaf)
 		}
 	}
 
 	return out
 }
 
-// coerce returns v with int-typed leaves coerced, never mutating v: nested
+// numberLeaf maps one number leaf given its declared base type.
+type numberLeaf func(n json.Number, base string) any
+
+// mapNumber returns v with its number leaves mapped, never mutating v: nested
 // slices and maps are rebuilt copy-on-write so the caller-owned input survives
-// coercion intact (CoerceScalars' copy-on-return contract).
-func (t *Table) coerce(v any, base string, arrayDim, mapDim int) any {
+// intact (mapNumbers' copy-on-return contract).
+func (t *Table) mapNumber(v any, base string, arrayDim, mapDim int, leaf numberLeaf) any {
 	switch tv := v.(type) {
 	case []any:
 		if arrayDim <= 0 {
@@ -127,7 +146,7 @@ func (t *Table) coerce(v any, base string, arrayDim, mapDim int) any {
 
 		out := make([]any, len(tv))
 		for i, e := range tv {
-			out[i] = t.coerce(e, base, arrayDim-1, mapDim)
+			out[i] = t.mapNumber(e, base, arrayDim-1, mapDim, leaf)
 		}
 
 		return out
@@ -136,22 +155,37 @@ func (t *Table) coerce(v any, base string, arrayDim, mapDim int) any {
 			// One typed-map level carrying mapDim-1 inner array dims (see walkMap).
 			out := make(map[string]any, len(tv))
 			for k, e := range tv {
-				out[k] = t.coerce(e, base, arrayDim+mapDim-1, 0)
+				out[k] = t.mapNumber(e, base, arrayDim+mapDim-1, 0, leaf)
 			}
 
 			return out
 		}
 
 		if fields, ok := t.structs[base]; ok {
-			return t.CoerceScalars(fields, tv)
+			return t.mapNumbers(fields, tv, leaf)
 		}
 
 		return v
 	case json.Number:
-		return coerceNumber(tv, base)
+		return leaf(tv, base)
 	default:
 		return v
 	}
+}
+
+// formatFloat re-encodes a float param's number in Martian's 'g', -1 form. A
+// number outside float64 range is left as written.
+func formatFloat(n json.Number, base string) any {
+	if base != "float" {
+		return n
+	}
+
+	f, err := strconv.ParseFloat(string(n), 64)
+	if err != nil {
+		return n
+	}
+
+	return json.Number(strconv.FormatFloat(f, 'g', -1, 64))
 }
 
 // coerceNumber converts a whole-number JSON value to an integer for an int param.

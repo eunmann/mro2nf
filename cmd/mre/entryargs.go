@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"strconv"
@@ -100,7 +101,8 @@ func runEntryArgs(_ context.Context, argv []string) error {
 }
 
 // overlayEntry merges run-parameter overrides onto the baked payload. A string
-// override of a scalar int/float/bool input is first parsed into that type. A
+// override of a scalar int/float/bool input is first parsed into that type, and
+// every float leaf is re-encoded as mrp encodes a float literal. A
 // file-bearing input the run supplied has its file leaves replaced with the
 // Nextflow-staged paths (from flatMap, in canonical type-walk order); every other
 // supplied (non-null) value is copied through; a null/absent value keeps the
@@ -202,9 +204,11 @@ func overlayValues(payload, over map[string]any) {
 }
 
 // typeOverrides replaces each string override of a scalar int, float or bool
-// entry input with the typed value it spells. Nextflow passes every command-line
-// --param as a String, so without this `--b false` would reach the stage as the
-// truthy string "false". A typed value (from a -params-file) is left as it is.
+// entry input with the typed value it spells, then re-encodes every float leaf
+// the way mrp encodes a float literal (types.FormatFloats). Nextflow's strict
+// (v2) parser passes every command-line --param as a String, so without this
+// `--b false` would reach the stage as the truthy string "false"; and a
+// -params-file 2.0 would reach it as 2.0 where mrp, given `f = 2.0`, passes 2.
 func typeOverrides(over map[string]any, params []ir.Param, tbl *types.Table) error {
 	for _, p := range params {
 		s, ok := over[p.Name].(string)
@@ -219,6 +223,8 @@ func typeOverrides(over map[string]any, params []ir.Param, tbl *types.Table) err
 
 		over[p.Name] = v
 	}
+
+	maps.Copy(over, tbl.FormatFloats(params, over))
 
 	return nil
 }
@@ -267,21 +273,18 @@ func parseIntLiteral(s string) (int64, bool) {
 	return i, err == nil
 }
 
-// parseFloatLiteral parses a JSON-number float and re-encodes it the way mrp
-// encodes a float literal in a stage's _args (Martian's FloatExp uses
-// AppendFloat 'g', -1). The re-encoding is observable: mrp passes `f = 2.0` as
-// 2, which a Python stage reads as an int, and `f = 1e6` as 1e+06.
+// parseFloatLiteral checks s is a JSON-number float in float64 range. Its
+// encoding is left to typeOverrides' FormatFloats pass.
 func parseFloatLiteral(s string) (json.Number, bool) {
 	if !jsonNumber.MatchString(s) {
 		return "", false
 	}
 
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+	if _, err := strconv.ParseFloat(s, 64); err != nil {
 		return "", false
 	}
 
-	return json.Number(strconv.FormatFloat(f, 'g', -1, 64)), true
+	return json.Number(s), true
 }
 
 // readFlatFile reads the -fileflat JSON file: an object mapping each supplied

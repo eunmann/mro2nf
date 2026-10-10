@@ -222,7 +222,10 @@ func TestReadFlatFile(t *testing.T) {
 // builtin file and a user filetype), and the non-scalar shapes.
 func overrideParams() (*types.Table, []ir.Param) {
 	tbl := types.NewTable(map[string]*ir.StructType{
-		"Cfg": {Name: "Cfg", Fields: []ir.Param{{Name: "n", Type: "int", BaseType: "int"}}},
+		"Cfg": {Name: "Cfg", Fields: []ir.Param{
+			{Name: "n", Type: "int", BaseType: "int"},
+			{Name: "x", Type: "float", BaseType: "float"},
+		}},
 	})
 	params := []ir.Param{
 		{Name: "n", Type: "int", BaseType: "int"},
@@ -233,6 +236,8 @@ func overrideParams() (*types.Table, []ir.Param) {
 		{Name: "aln", Type: "bam", BaseType: "bam", IsFile: true},
 		{Name: "xs", Type: "int[]", BaseType: "int", ArrayDim: 1},
 		{Name: "m", Type: "map<int>", BaseType: "int", MapDim: 1},
+		{Name: "fs", Type: "float[]", BaseType: "float", ArrayDim: 1},
+		{Name: "fm", Type: "map<float[]>", BaseType: "float", MapDim: 2},
 		{Name: "um", Type: "map", BaseType: "map"},
 		{Name: "cfg", Type: "Cfg", BaseType: "Cfg"},
 	}
@@ -241,9 +246,10 @@ func overrideParams() (*types.Table, []ir.Param) {
 }
 
 // TestTypeOverrides checks each accepted override: a string for an int, float or
-// bool input becomes its typed value (int64 exactly at the int64 bounds; floats
-// in mrp's 'g' encoding), a string for a string or file input is kept, and a
-// value that is already typed, null, nested or undeclared passes through.
+// bool input becomes its typed value (int64 exactly at the int64 bounds), a
+// string for a string or file input is kept, every float leaf, string-parsed or
+// typed and at any depth, takes mrp's 'g' encoding, and any other value that is
+// already typed, null, nested or undeclared passes through.
 func TestTypeOverrides(t *testing.T) {
 	tests := []struct {
 		name string
@@ -271,7 +277,13 @@ func TestTypeOverrides(t *testing.T) {
 		{name: "file_kept", key: "reads", in: "s3://b/reads.fq", want: "s3://b/reads.fq"},
 		{name: "user_filetype_kept", key: "aln", in: "true", want: "true"},
 		{name: "typed_int", key: "n", in: json.Number("5"), want: json.Number("5")},
-		{name: "typed_float", key: "f", in: json.Number("2.0"), want: json.Number("2.0")},
+		{name: "typed_float_whole", key: "f", in: json.Number("2.0"), want: json.Number("2")},
+		{name: "typed_float_exponent", key: "f", in: json.Number("1E6"), want: json.Number("1e+06")},
+		{name: "typed_float_fraction", key: "f", in: json.Number("2.5"), want: json.Number("2.5")},
+		{name: "typed_float_out_of_range", key: "f", in: json.Number("1e400"), want: json.Number("1e400")},
+		{name: "typed_float_array", key: "fs", in: []any{json.Number("2.0"), json.Number("0.50")}, want: []any{json.Number("2"), json.Number("0.5")}},
+		{name: "typed_float_map_of_array", key: "fm", in: map[string]any{"k": []any{json.Number("3.0")}}, want: map[string]any{"k": []any{json.Number("3")}}},
+		{name: "typed_float_struct_field", key: "cfg", in: map[string]any{"n": "5", "x": json.Number("4.0")}, want: map[string]any{"n": "5", "x": json.Number("4")}},
 		{name: "typed_bool", key: "b", in: false, want: false},
 		{name: "typed_array", key: "xs", in: []any{json.Number("1")}, want: []any{json.Number("1")}},
 		{name: "typed_map", key: "m", in: map[string]any{"k": json.Number("1")}, want: map[string]any{"k": json.Number("1")}},

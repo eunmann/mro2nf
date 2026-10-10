@@ -556,9 +556,13 @@ without re-transpiling:
   HealthOmics they are run parameters declared in `parameter-template.json`.
 - A command-line `--<name> <value>` reaches `mre entryargs` as a string, so a
   scalar `int`, `float` or `bool` input is parsed strictly into its declared type
-  (a base-10 int64; a JSON number re-encoded the way `mrp` encodes a float
-  literal; exactly `true`/`false`). A value that does not parse, or a string for
-  an array, map or struct input, fails the run; set those with `-params-file`.
+  (a base-10 int64; a JSON number; exactly `true`/`false`). A value that does not
+  parse, or a string for an array, map or struct input, fails the run; set those
+  with `-params-file`.
+- Every float in a supplied value, typed or parsed and at any depth, is
+  re-encoded the way `mrp` encodes a float literal (`'g'`, shortest form), so
+  `--f 2.0` and a `-params-file` `{"f": 2.0}` both reach the stage as `2`, as
+  `f = 2.0` does under `mrp`.
 
 **File-typed inputs (the Cell Ranger model).** A run value that is a file is an
 `s3://` URI, which a worker cannot `stat` directly. So file-bearing inputs are
