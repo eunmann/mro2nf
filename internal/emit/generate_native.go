@@ -555,7 +555,7 @@ func fileFlattenExprDepth(expr string, p ir.Param, structs map[string]*ir.Struct
 	}
 
 	if p.IsFile {
-		return fmt.Sprintf("(%[1]s != null ? [file(%[1]s)] : [])", expr)
+		return fmt.Sprintf("(%[1]s != null ? [file(%[1]s, glob: false)] : [])", expr)
 	}
 
 	return "[]"

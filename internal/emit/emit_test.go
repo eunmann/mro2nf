@@ -1416,7 +1416,7 @@ func TestEmitEntryFileParam(t *testing.T) {
 		// its file leaves staged as a list path input, each in a per-index subdir
 		// so same-basename leaves do not collide in the task work dir
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
-		`[file(params.reads)]`,                            // flattened + file()'d on the head node
+		`[file(params.reads, glob: false)]`,               // flattened + file()'d on the head node
 		`?: [file("${projectDir}/_assets/.entry_empty")]`, // unset / no-leaf falls back to the sentinel
 		// staged paths reach entryargs as heredoc-written JSON — collision-proof
 		// for legal filenames containing , ; =
@@ -1448,7 +1448,7 @@ func TestEmitEntryFileArray(t *testing.T) {
 	main := readFile(t, filepath.Join(dir, "main.nf"))
 	for _, want := range []string{
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
-		`(params.reads ?: []).collect { __e0 -> (__e0 != null ? [file(__e0)] : []) }.flatten()`,
+		`(params.reads ?: []).collect { __e0 -> (__e0 != null ? [file(__e0, glob: false)] : []) }.flatten()`,
 		`${groovy.json.JsonOutput.toJson([reads: (inflat_reads instanceof List ? inflat_reads : [inflat_reads])*.toString()])}`,
 	} {
 		if !strings.Contains(main, want) {

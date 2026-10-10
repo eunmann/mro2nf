@@ -608,6 +608,10 @@ bundle. This works for **every shape** — a scalar `file`/`path`/directory, a
 flatten-and-reconstruct mechanism whose ordering (arrays by index, maps by sorted
 key, struct fields in declaration order) is shared between the Groovy flatten and
 the Go reconstruction so they can't drift. An unset input keeps its baked default.
+Each leaf is staged with `file(x, glob: false)`, so a name holding `[`, `*`, `?`
+or `{` stages that exact file. Nextflow 26.04's own stage-in script still leaves
+the source path unquoted in the task, so a name that bash would glob to another
+file in the same directory, or a `{a,b}` brace, is not staged as written.
 
 Two leaves can share a basename — two FASTQs both named `reads.fastq` in
 different sample directories, say. To keep them from clobbering each other when

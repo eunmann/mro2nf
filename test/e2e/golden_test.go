@@ -481,6 +481,49 @@ func TestEntryFileAdversarialName(t *testing.T) {
 		filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
 }
 
+// TestEntryFileGlobCharName checks file[] entry overrides whose names hold the
+// glob characters `[`, `*`, `?` and `{` are staged as those exact files (#276):
+// a globbing file() matches nothing for `s[1]*?.txt`, so its leaf vanishes and
+// entryargs fails on the count. There is no decoy file the pattern would match,
+// and the brace holds no comma, because Nextflow 26.04's stage-in script leaves
+// the source path unquoted: bash would glob it to the decoy, or brace-expand
+// `{a,b}`, in the task itself, which no emitter change can prevent.
+func TestEntryFileGlobCharName(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	fixtureDir := filepath.Join(root, "testdata", "entry_filearr")
+	proj := transpile(t, "entry_filearr")
+
+	dir := t.TempDir()
+	reads := []string{filepath.Join(dir, "s[1]*?.txt"), filepath.Join(dir, "t{1}.txt")}
+
+	for i, src := range []string{"o1.txt", "o2.txt"} {
+		content, err := os.ReadFile(filepath.Join(fixtureDir, "input", src))
+		if err != nil {
+			t.Fatalf("read override input: %v", err)
+		}
+
+		writeFileT(t, reads[i], string(content))
+	}
+
+	params, err := json.Marshal(map[string][]string{"reads": reads})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	writeFileT(t, filepath.Join(proj, "params.json"), string(params))
+
+	if err := runNextflow(t, proj, "-params-file", "params.json"); err != nil {
+		t.Fatal(err)
+	}
+
+	goldenJSON(t,
+		filepath.Join(proj, "results", "pipeline_outs.json"),
+		filepath.Join(fixtureDir, "expected", "epa_override_outs.json"))
+}
+
 // assertFileContent asserts a published text file's content, ignoring a
 // trailing newline (matching the shell harness's `$(cat ...)` comparison).
 func assertFileContent(t *testing.T, path, want string) {
