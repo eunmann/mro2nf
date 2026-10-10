@@ -249,6 +249,41 @@ func TestInlineDisabledKeepsBoundary(t *testing.T) {
 	}
 }
 
+// TestInlineDisabledWholeRefKeepsBoundary checks that a runtime-disabled sub the
+// parent references WHOLE (`s = S`) stays a boundary (#339): inlined, the whole
+// ref would become an object of per-return refs that resolves to a struct of
+// nulls when the gate fires, where mrp resolves the disabled call to null.
+func TestInlineDisabledWholeRefKeepsBoundary(t *testing.T) {
+	prog := inlineFixtureProg()
+	setCallDisable(prog.Pipelines["TOP"].Calls, "S", &ir.Ref{Kind: ir.RefKindSelf, ID: "off"})
+
+	top := prog.Pipelines["TOP"]
+	top.Returns = append(top.Returns, ir.Binding{Param: "whole", Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: "S"}}})
+
+	inlinePipelines(prog)
+
+	if inlineFindCall(prog.Pipelines["TOP"].Calls, "S") == nil {
+		t.Errorf("a runtime-disabled sub referenced whole must stay a boundary, got %v", inlineCallNames(prog.Pipelines["TOP"].Calls))
+	}
+}
+
+// TestInlinePrunedWholeRefIsNull checks that a whole ref to a sub pruned by a
+// constant-true gate resolves to the null literal, not an empty object (#339).
+func TestInlinePrunedWholeRefIsNull(t *testing.T) {
+	prog := constGateProg("true")
+
+	top := prog.Pipelines["TOP"]
+	top.Returns = append(top.Returns, ir.Binding{Param: "whole", Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: "S"}}})
+
+	inlinePipelines(prog)
+
+	for _, rb := range prog.Pipelines["TOP"].Returns {
+		if !isNullLiteral(rb.Value) {
+			t.Errorf("return %s of a pruned sub = %+v, want the null literal", rb.Param, rb.Value)
+		}
+	}
+}
+
 // TestInlineDisabledKeepsBoundaryUnprofitable checks the overhead gate: a
 // runtime-disabled sub whose internal calls the emitter cannot fuse into gated
 // binds stays a boundary, because inlining it would run those binds

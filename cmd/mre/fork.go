@@ -176,7 +176,7 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 		return fmt.Errorf("forkbind element: %w", err)
 	}
 
-	return prod.write(oDir, args)
+	return prod.writeBound(oDir, args)
 }
 
 // checkForkBindFlags diagnoses flag-combination misuse before any resolution
@@ -233,7 +233,7 @@ func writeAllForks(forks []json.RawMessage, keys []string, dir string, params []
 			return err
 		}
 
-		if err := shim.WriteBundle(filepath.Join(dir, name), payload, params, tbl); err != nil {
+		if err := writeBoundBundle(filepath.Join(dir, name), payload, params, tbl); err != nil {
 			return fmt.Errorf("write fork bundle %s: %w", name, err)
 		}
 	}
@@ -259,7 +259,7 @@ func writeForkIndex(forks []json.RawMessage, keys []string, index int, oDir, key
 		return err
 	}
 
-	if err := shim.WriteBundle(oDir, payload, params, tbl); err != nil {
+	if err := writeBoundBundle(oDir, payload, params, tbl); err != nil {
 		return fmt.Errorf("write fork %d bundle: %w", index, err)
 	}
 

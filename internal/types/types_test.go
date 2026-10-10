@@ -314,6 +314,55 @@ func TestCoerceMapOfIntArray(t *testing.T) {
 	}
 }
 
+// TestNarrow pins mrp's FilterJson narrowing of a bound struct value to its
+// declared type (#239): extra fields are dropped (a file leaf among them never
+// reaches the walk), a missing field becomes null, and the rule recurses through
+// nested structs, arrays, and typed maps. Non-struct values, nulls, and keys with
+// no declared param pass through, and the input is not mutated.
+func TestNarrow(t *testing.T) {
+	tbl := newTable()
+	params := []ir.Param{
+		{Name: "c", BaseType: "Cfg"},
+		{Name: "o", BaseType: "Outer"},
+		{Name: "cs", BaseType: "Cfg", ArrayDim: 1},
+		{Name: "cm", BaseType: "Cfg", MapDim: 1},
+		{Name: "nil", BaseType: "Cfg"},
+		{Name: "n", BaseType: "int"},
+	}
+	wide := func() map[string]any {
+		return map[string]any{"ref": "a.txt", "n": json.Number("1"), "stray": "stray.txt"}
+	}
+	vals := map[string]any{
+		"c":     wide(),
+		"o":     map[string]any{"inner": map[string]any{"n": json.Number("2"), "x": true}, "y": 3},
+		"cs":    []any{wide(), nil},
+		"cm":    map[string]any{"k": wide()},
+		"nil":   nil,
+		"n":     json.Number("4"),
+		"other": map[string]any{"kept": 1},
+	}
+
+	got := tbl.Narrow(params, vals)
+
+	narrow := map[string]any{"ref": "a.txt", "n": json.Number("1")}
+	want := map[string]any{
+		"c":     narrow,
+		"o":     map[string]any{"inner": map[string]any{"ref": nil, "n": json.Number("2")}, "log": nil},
+		"cs":    []any{narrow, nil},
+		"cm":    map[string]any{"k": narrow},
+		"nil":   nil,
+		"n":     json.Number("4"),
+		"other": map[string]any{"kept": 1},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("Narrow mismatch (-want +got):\n%s", diff)
+	}
+
+	if _, ok := vals["c"].(map[string]any)["stray"]; !ok {
+		t.Error("Narrow mutated its input")
+	}
+}
+
 // TestApplyUnknownKeysPreserved checks that values without a declared param
 // survive the walk unchanged.
 func TestApplyUnknownKeysPreserved(t *testing.T) {

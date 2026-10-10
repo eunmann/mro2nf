@@ -1,0 +1,31 @@
+{
+    "made": [
+        {
+            "a": 1,
+            "n": 10,
+            "report": "made/0/report.txt"
+        },
+        {
+            "a": 2,
+            "n": 20,
+            "report": "made/1/report.txt"
+        }
+    ],
+    "madem": {
+        "p": {
+            "a": 3,
+            "n": 30,
+            "report": "madem/p/report.txt"
+        },
+        "q": {
+            "a": 4,
+            "n": 40,
+            "report": "madem/q/report.txt"
+        }
+    },
+    "ns": [
+        10,
+        20
+    ],
+    "r": "[[[('a', 1), ('n', 10)], [('a', 2), ('n', 20)]], [('p', [('a', 3), ('n', 30)]), ('q', [('a', 4), ('n', 40)])], ['dict', 'dict']]"
+}

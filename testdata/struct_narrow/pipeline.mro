@@ -1,0 +1,120 @@
+# A struct value bound to a NARROWER struct type is filtered to the declared
+# members, as mrp's FilterJson does (#239): a whole callable ref (UP), a wider
+# struct output (UPW.w, whose extra field is a file), an array and a typed map of
+# them, the pipeline outputs, a call whose bind would otherwise be a pure
+# forward (PEEK), a sub-pipeline return forward (NARROW), and a forward whose
+# types match but whose producer adds an undeclared key (SAME). The extra file
+# never reaches a consumer and no output publishes it.
+filetype txt;
+
+struct S(
+    int a,
+    int b,
+)
+
+struct W(
+    int a,
+    int b,
+    int c,
+    txt f,
+)
+
+stage UP(
+    out int a,
+    out int b,
+    out int c,
+    out txt extra,
+    src py  "stages/up",
+)
+
+stage UPW(
+    out W   w,
+    src py  "stages/upw",
+)
+
+stage UPX(
+    out S   w,
+    src py  "stages/upx",
+)
+
+stage DOWN(
+    in  S      s,
+    in  S      s2,
+    in  S[]    ss,
+    in  map<S> sm,
+    out string z,
+    src py     "stages/down",
+)
+
+stage PEEK(
+    in  S      w,
+    out string r,
+    src py     "stages/peek",
+)
+
+pipeline NARROW(
+    out S w,
+)
+{
+    call UPW()
+
+    return (
+        w = UPW.w,
+    )
+}
+
+pipeline P(
+    out S      s,
+    out S      nw,
+    out string pr,
+    out string sr,
+    out S[]    ss,
+    out map<S> sm,
+    out string z,
+)
+{
+    call UP()
+
+    call UPW()
+
+    call NARROW()
+
+    call PEEK(
+        w = UPW.w,
+    )
+
+    call UPX()
+
+    call PEEK as SAME(
+        w = UPX.w,
+    )
+
+    call DOWN(
+        s  = UP,
+        s2 = UPW.w,
+        ss = [
+            UP,
+            UPW.w,
+        ],
+        sm = {
+            "k": UP,
+        },
+    )
+
+    return (
+        s  = UP,
+        ss = [
+            UP,
+            UPW.w,
+        ],
+        sm = {
+            "k": UPW.w,
+        },
+        z  = DOWN.z,
+        nw = NARROW.w,
+        pr = PEEK.r,
+        sr = SAME.r,
+    )
+}
+
+call P()

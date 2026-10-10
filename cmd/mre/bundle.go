@@ -66,23 +66,56 @@ func (p *producer) manifest() (types.Manifest, error) {
 
 // write serializes raw as a bundle directory, staging its file leaves.
 func (p *producer) write(dir string, raw json.RawMessage) error {
+	payload, params, tbl, err := p.decode(raw)
+	if err != nil {
+		return fmt.Errorf("write bundle %s: %w", dir, err)
+	}
+
+	if err := shim.WriteBundle(dir, payload, params, tbl); err != nil {
+		return fmt.Errorf("write bundle %s: %w", dir, err)
+	}
+
+	return nil
+}
+
+// writeBound is write for a resolved binding payload: a callee's args or a
+// pipeline's outputs (see writeBoundBundle).
+func (p *producer) writeBound(dir string, raw json.RawMessage) error {
+	payload, params, tbl, err := p.decode(raw)
+	if err != nil {
+		return fmt.Errorf("write bound bundle %s: %w", dir, err)
+	}
+
+	return writeBoundBundle(dir, payload, params, tbl)
+}
+
+// decode returns raw's payload with the producer's param set and type table.
+func (p *producer) decode(raw json.RawMessage) (map[string]any, []ir.Param, *types.Table, error) {
 	man, err := p.manifest()
 	if err != nil {
-		return err
+		return nil, nil, nil, err
 	}
 
 	payload, err := rawToMap(raw)
 	if err != nil {
-		return err
+		return nil, nil, nil, err
 	}
 
 	params, err := man.Params(p.callable, p.role)
 	if err != nil {
-		return fmt.Errorf("write bundle %s: %w", dir, err)
+		return nil, nil, nil, fmt.Errorf("producer params: %w", err)
 	}
 
-	if err := shim.WriteBundle(dir, payload, params, man.Table()); err != nil {
-		return fmt.Errorf("write bundle %s: %w", dir, err)
+	return payload, params, man.Table(), nil
+}
+
+// writeBoundBundle writes a resolved binding payload as a bundle after
+// narrowing each value to its receiving param's type, as mrp filters every
+// bound value (#239): a field the receiver does not declare, and any file leaf
+// inside it, never reaches the callee.
+func writeBoundBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) error {
+	if err := shim.WriteBundle(dir, tbl.Narrow(params, payload), params, tbl); err != nil {
+		return fmt.Errorf("write bound bundle %s: %w", dir, err)
 	}
 
 	return nil
@@ -149,6 +182,38 @@ func (p *producer) coerceInputs(raw json.RawMessage, roles ...string) (json.RawM
 	}
 
 	return out, nil
+}
+
+// validateOuts applies mrp's stage output validation to a stage's final
+// outputs (types.ValidateOutputs): mrp fails the stage on an invalid _outs, so
+// the task fails too rather than hand the value downstream. Per-chunk outputs
+// are not passed here, as mrp's default enforcement level skips them, and a
+// callable with no declared outputs is not checked.
+func (p *producer) validateOuts(raw json.RawMessage) error {
+	man, err := p.manifest()
+	if err != nil {
+		return err
+	}
+
+	params, err := man.Params(p.callable, types.RoleOut)
+	if err != nil {
+		return fmt.Errorf("validate outputs: %w", err)
+	}
+
+	if len(params) == 0 {
+		return nil
+	}
+
+	outs, err := rawToMap(raw)
+	if err != nil {
+		return fmt.Errorf("validate outputs: %w", err)
+	}
+
+	if err := man.Table().ValidateOutputs(params, outs); err != nil {
+		return fmt.Errorf("validate outputs of %s: %w", p.callable, err)
+	}
+
+	return nil
 }
 
 // coerceChunk coerces a split chunk's per-chunk args (chunk.Args, keyed by the

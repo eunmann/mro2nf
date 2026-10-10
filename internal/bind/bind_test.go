@@ -126,6 +126,67 @@ func TestResolveArrayProjection(t *testing.T) {
 	}
 }
 
+// TestResolveWholeRefToMappedCall pins a whole-call ref to a MAPPED call to
+// Martian's per-fork resolve (resolveMerge, #240): the merged bundle holds one
+// collection per output, and the ref yields one struct per fork — an array of
+// structs for an array fork, a map of structs for a map fork. Zero forks keep
+// the typed empty; an invocation-known empty (all outputs null) and a disabled
+// call's null bundle stay null.
+func TestResolveWholeRefToMappedCall(t *testing.T) {
+	cases := []struct {
+		name, fork, merged, want string
+	}{
+		{"array fork", bind.ForkArray, `{"a":[1,2],"n":[10,20]}`, `[{"a":1,"n":10},{"a":2,"n":20}]`},
+		{"map fork", bind.ForkMap, `{"a":{"p":3,"q":4},"n":{"p":30,"q":40}}`, `{"p":{"a":3,"n":30},"q":{"a":4,"n":40}}`},
+		{"zero array forks", bind.ForkArray, `{"a":[],"n":[]}`, `[]`},
+		{"zero map forks", bind.ForkMap, `{"a":{},"n":{}}`, `{}`},
+		{"known-empty null merge", bind.ForkArray, `{"a":null,"n":null}`, `null`},
+		{"disabled null bundle", bind.ForkMap, `null`, `null`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := bind.Spec{"made": {Ref: &bind.Ref{Kind: "call", ID: "MAKEB", Fork: tc.fork}}}
+
+			raw, err := bind.Resolve(spec, nil, map[string]json.RawMessage{"MAKEB": json.RawMessage(tc.merged)})
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+
+			var got, want any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			if err := json.Unmarshal([]byte(`{"made":`+tc.want+`}`), &want); err != nil {
+				t.Fatalf("unmarshal want: %v", err)
+			}
+
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("whole mapped ref mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestResolveWholeRefToMappedCallDesync fails loudly when the merged outputs
+// disagree on the fork count or keys rather than mis-pairing fields.
+func TestResolveWholeRefToMappedCallDesync(t *testing.T) {
+	for _, tc := range []struct{ name, fork, merged string }{
+		{"array lengths", bind.ForkArray, `{"a":[1,2],"n":[10]}`},
+		{"map keys", bind.ForkMap, `{"a":{"p":3},"n":{"q":30}}`},
+		{"null beside a collection", bind.ForkArray, `{"a":null,"n":[10]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := bind.Spec{"made": {Ref: &bind.Ref{Kind: "call", ID: "MAKEB", Fork: tc.fork}}}
+
+			if _, err := bind.Resolve(spec, nil, map[string]json.RawMessage{"MAKEB": json.RawMessage(tc.merged)}); err == nil {
+				t.Errorf("resolve of %s succeeded; want a fork desync error", tc.merged)
+			}
+		})
+	}
+}
+
 func TestResolveNestedAndMissing(t *testing.T) {
 	spec := bind.Spec{
 		"deep":    {Ref: &bind.Ref{Kind: "self", ID: "cfg", Output: "a.b"}},

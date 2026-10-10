@@ -349,7 +349,8 @@ func bakeEntryArgs(prog *ir.Program, opts Options) error {
 }
 
 // writeDisableArtifacts emits, for every disabled call, its disable bindspec
-// and a null-outputs file used when the call is skipped at runtime.
+// and the null bundle that stands in for its output when it is skipped at
+// runtime.
 func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 	nullsDir := filepath.Join(outDir, "nulls")
 
@@ -370,35 +371,13 @@ func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 				return err
 			}
 
-			// A skipped call emits a null-valued output bundle (no files).
-			nulls := nullOuts(prog, c.Callable)
-			nullDir := filepath.Join(nullsDir, qualify(p.Name, c.Name))
-			if err := shim.WriteBundle(nullDir, nulls, nil, types.NewTable(prog.Structs)); err != nil {
+			if err := shim.WriteNullBundle(filepath.Join(nullsDir, qualify(p.Name, c.Name))); err != nil {
 				return fmt.Errorf("write null bundle: %w", err)
 			}
 		}
 	}
 
 	return nil
-}
-
-// nullOuts returns a map of a callable's output names to null.
-func nullOuts(prog *ir.Program, callable string) map[string]any {
-	out := map[string]any{}
-
-	if s, ok := prog.Stages[callable]; ok {
-		for _, p := range s.Out {
-			out[p.Name] = nil
-		}
-	}
-
-	if p, ok := prog.Pipelines[callable]; ok {
-		for _, param := range p.Out {
-			out[param.Name] = nil
-		}
-	}
-
-	return out
 }
 
 func writeJSONFile(path string, v any) error {
@@ -485,6 +464,15 @@ func checkValueRefs(prog *ir.Program, p *ir.Pipeline, v ir.Value) error {
 			return &apperror.UnsupportedError{
 				Construct: "nested typed-map field projection",
 				Detail:    fmt.Sprintf("%s.%s in pipeline %s", v.Ref.ID, v.Ref.Output, p.Name),
+			}
+		}
+
+		// The merge of an output-less mapped call is {}, which cannot say how
+		// many forks ran, so its per-fork whole value is not recoverable.
+		if wholeRefFork(p, v.Ref) != "" && len(calleeOutParams(prog, p, v.Ref.ID)) == 0 {
+			return &apperror.UnsupportedError{
+				Construct: "whole ref to a mapped call with no outputs",
+				Detail:    fmt.Sprintf("%s in pipeline %s", v.Ref.ID, p.Name),
 			}
 		}
 	}
@@ -998,10 +986,31 @@ func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 			Output:     v.Ref.Output,
 			MapDepth:   max(depth, 0),
 			MapInArray: inArray,
+			Fork:       wholeRefFork(p, v.Ref),
 		}}
 	default:
 		return bind.Entry{Literal: v.Literal}
 	}
+}
+
+// wholeRefFork returns the bind.Ref fork kind for a whole-call ref to a mapped
+// call in p (bind.ForkMap for a keyed fork, as forkDims treats it), or "" for
+// any other ref.
+func wholeRefFork(p *ir.Pipeline, ref *ir.Ref) string {
+	if p == nil || ref.Kind != ir.RefKindCall || ref.Output != "" {
+		return ""
+	}
+
+	c := findCall(p, ref.ID)
+	if c == nil || !c.Mapped {
+		return ""
+	}
+
+	if mapDim, _ := forkDims(c); mapDim > 0 {
+		return bind.ForkMap
+	}
+
+	return bind.ForkArray
 }
 
 // configFile renders nextflow.config for the chosen target: the common params +

@@ -60,6 +60,9 @@ var goldenCases = []goldenCase{
 	{"struct_of_file", "struct_of_file", "expected/outs.json"},
 	// #173: pipeline output typed as a callable's output struct with a file leaf.
 	{"callable_struct_file", "callable_struct_file", "expected/outs.json"},
+	// #240: a whole ref to an array- and a map-forked call resolves per fork
+	// (array/map of structs, file leaves inside), in a stage's _args and the outs.
+	{"map_wholeref", "map_wholeref", "expected/outs.json"},
 	// #172: array<map<Point>>.x projection fed to a map<int>[] consumer.
 	{"arr_map_proj", "arr_map_proj", "expected/outs.json"},
 	{"literals_edge", "literals_edge", "expected/outs.json"},
@@ -98,7 +101,13 @@ var goldenCases = []goldenCase{
 	{"special_resource", "special_resource", "expected/outs.json"},
 	{"null_in", "null_in", "expected/outs.json"},
 	{"disabled_callref", "disabled_callref", "expected/outs.json"},
+	// #339: a whole ref to a disabled stage / pipeline call reaches its
+	// consumer's _args as null, not a struct of nulls.
+	{"disabled_wholeref", "disabled_wholeref", "expected/outs.json"},
 	{"struct_input", "struct_input", "expected/outs.json"},
+	// #239: a struct bound to a narrower struct type keeps only its declared
+	// members, in stage _args and pipeline outputs alike.
+	{"struct_narrow", "struct_narrow", "expected/outs.json"},
 	{"nested_struct", "nested_struct", "expected/outs.json"},
 	{"literals", "literals", "expected/outs.json"},
 	// #238: whole-number float literals >= 1e6 stay floats for a Python stage.

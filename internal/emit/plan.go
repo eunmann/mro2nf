@@ -154,7 +154,7 @@ func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 			pp.calls[c.Name] = planKeyedCall(cp, c, prog)
 		}
 
-		if prod, ok := forwardProducer(p.Returns, p, prog); ok {
+		if prod, ok := forwardProducer(p.Returns, p.Out, p, prog); ok {
 			pp.retFwd = prod
 		}
 

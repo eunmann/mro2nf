@@ -1,0 +1,58 @@
+# A whole-call ref to a MAPPED call resolves per fork (Martian's resolveMerge):
+# an array of per-fork structs for an array fork, a map of them for a map fork,
+# not one struct of merged arrays (#240). The file leaf rides inside each fork's
+# struct, and the consumer stage receives the same per-fork shape in its _args.
+filetype txt;
+
+stage MAKEB(
+    in  int x,
+    out int a,
+    out int n,
+    out txt report,
+    src py  "stages/makeb",
+)
+
+stage USE(
+    in  MAKEB[]    made,
+    in  map<MAKEB> madem,
+    out string     r,
+    src py         "stages/use",
+)
+
+pipeline MW(
+    in  int[]      xs,
+    in  map<int>   xm,
+    out MAKEB[]    made,
+    out map<MAKEB> madem,
+    out int[]      ns,
+    out string     r,
+)
+{
+    map call MAKEB(
+        x = split self.xs,
+    )
+
+    map call MAKEB as MAKEM(
+        x = split self.xm,
+    )
+
+    call USE(
+        made  = MAKEB,
+        madem = MAKEM,
+    )
+
+    return (
+        made  = MAKEB,
+        madem = MAKEM,
+        ns    = MAKEB.n,
+        r     = USE.r,
+    )
+}
+
+call MW(
+    xs = [1, 2],
+    xm = {
+        "p": 3,
+        "q": 4,
+    },
+)

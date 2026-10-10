@@ -16,6 +16,8 @@ Ports, section by section:
   - type manifest + walk: internal/types/manifest.go, internal/types/types.go
   - scalar coercion:      cmd/mre/bundle.go coerceInputs/coerceChunk +
                           internal/types/types.go CoerceScalars
+  - output validation:    cmd/mre/bundle.go validateOuts +
+                          internal/types/validate.go ValidateOutputs
   - resources/skeletons:  internal/shim/meta.go, internal/shim/shim.go
   - JSON serialization:   Go encoding/json (MarshalIndent: sorted map keys,
                           2-space indent, HTML escaping, float encoding)
@@ -297,6 +299,120 @@ def _coerce_number(n, base):
     if n == math.trunc(n) and INT64_MIN <= n < INT64_MAX:
         return int(n)
     return n
+
+
+# ---------------------------------------------------------------------------
+# Output validation — ports internal/types/validate.go ValidateOutputs (mrp's
+# Fork.verifyOutput) and cmd/mre/bundle.go validateOuts. Values are the
+# sanitized Python outs, so a JSON integer is a Python int (never a bool), and
+# a float in an int slot fails exactly as its "2.0" text does on the adapter path.
+# ---------------------------------------------------------------------------
+
+_SCALAR_KINDS = {
+    "int": "an integer", "float": "a floating point number", "string": "a string",
+    "file": "a string", "path": "a string", "bool": "a boolean value", "map": "a map",
+}
+
+
+def validate_outputs(structs, params, outs, callable_):
+    """Raise RunnerError when a stage's final outs fail mrp's validation."""
+    problems = []
+    for p in params:
+        name = p["name"]
+        if name not in outs:
+            problems.append("Missing output value '%s'" % name)
+            continue
+        err = _validate(structs, outs[name], p.get("baseType", ""),
+                        p.get("arrayDim", 0), p.get("mapDim", 0),
+                        p.get("isFile", False))
+        if err:
+            problems.append("Expected %s output value '%s' %s"
+                            % (p.get("type", ""), name, err))
+    if problems:
+        raise RunnerError("validate outputs of %s: invalid stage outputs:\n%s"
+                          % (callable_, "\n".join(problems)))
+
+
+def _validate(structs, v, base, array_dim, map_dim, is_file):
+    if v is None:
+        return None
+    if array_dim > 0:
+        if not isinstance(v, list):
+            return _unparsable(v, "an array")
+        for i, e in enumerate(v):
+            err = _validate(structs, e, base, array_dim - 1, map_dim, is_file)
+            if err:
+                return "element %d: %s" % (i, err)
+        return None
+    if map_dim > 0:
+        return _validate_map(structs, v, base, map_dim, is_file)
+    if base in structs:
+        if not isinstance(v, dict):
+            return _unparsable(v, "a map")
+        errs = []
+        for f in structs[base]:
+            if f["name"] not in v:
+                errs.append("missing key: " + f["name"])
+                continue
+            err = _validate(structs, v[f["name"]], f.get("baseType", ""),
+                            f.get("arrayDim", 0), f.get("mapDim", 0),
+                            f.get("isFile", False))
+            if err:
+                errs.append("key %s: %s" % (f["name"], err))
+        return "\n".join(errs) or None
+    return _validate_scalar(v, base)
+
+
+def _validate_map(structs, v, base, map_dim, is_file):
+    if not isinstance(v, dict):
+        return _unparsable(v, "a map")
+    for k in sorted(v):
+        if is_file:
+            err = _legal_filename(k)
+            if err:
+                return "key %s: %s" % (k, err)
+        err = _validate(structs, v[k], base, map_dim - 1, 0, is_file)
+        if err:
+            return "key %s: %s" % (k, err)
+    return None
+
+
+def _validate_scalar(v, base):
+    if base not in _SCALAR_KINDS:
+        return None  # a user filetype: mrp only alarms
+    is_num = isinstance(v, (int, float)) and not isinstance(v, bool)
+    ok = {
+        "int": is_num and isinstance(v, int) and INT64_MIN <= v < INT64_MAX,
+        "float": is_num,
+        "string": isinstance(v, str),
+        "file": isinstance(v, str),
+        "path": isinstance(v, str),
+        "bool": isinstance(v, bool),
+        "map": isinstance(v, dict),
+    }[base]
+    return None if ok else _unparsable(v, _SCALAR_KINDS[base])
+
+
+def _unparsable(v, what):
+    shown = json.dumps(v)
+    if len(shown) > 32:
+        shown = shown[:32] + "..."
+    return "value '%s' cannot be parsed as %s" % (shown, what)
+
+
+def _legal_filename(name):
+    """Ports Martian's IsLegalUnixFilename (syntax/compile_params.go)."""
+    if len(name.encode("utf-8")) > 255:
+        return "illegal filename: too long"
+    if name == "":
+        return "illegal filename: empty string"
+    if name in (".", ".."):
+        return "illegal filename: reserved name"
+    if "/" in name:
+        return "illegal filename: '/' is not allowed in filenames"
+    if "\0" in name:
+        return "illegal filename: null characters are not allowed in filenames"
+    return None
 
 
 def coerce_inputs(man, callable_, roles, vals):
@@ -976,12 +1092,6 @@ def stage_system_exit(exc, phase):
         raise RunnerError("adapter %s phase: exit status %d" % (phase, code))
 
 
-def write_outs(out_path, outs, out_params, man):
-    """Sanitize the stage's outs Record and write it as the -o bundle."""
-    payload = martian.json_sanitize(outs.items())
-    write_bundle(out_path, payload, out_params, man.structs)
-
-
 def run_split(fl):
     """Ports cmd/mre/main.go runSplit + shim.RunSplit + meta.go readStageDefs:
     run split(args), then write chunks.json, joinres.json, and the per-chunk
@@ -1093,8 +1203,9 @@ def write_chunk_bundles(dir_, defs, man, callable_):
 
 def run_outs_phase(fl, phase, files, eff, man, args, invoke):
     """The shared run_main/run_join tail: stage the skeleton outs, import the
-    stage module, run invoke(module, outs) under -monitor scoping, and write
-    the -o bundle. On a stage sys.exit(0) the vendor shell exits without
+    stage module, run invoke(module, outs) under -monitor scoping, validate a
+    stage's final outs, and write the -o bundle. On a stage sys.exit(0) the
+    vendor shell exits without
     rewriting _outs, so mre bundles the skeleton it staged before the run —
     never the possibly-mutated in-memory Record; a nonzero sys.exit raises
     via stage_system_exit."""
@@ -1122,10 +1233,15 @@ def run_outs_phase(fl, phase, files, eff, man, args, invoke):
     finally:
         os.chdir(task_cwd)
     if exited:
-        write_bundle(out_path, martian.json_sanitize(dict(skeleton)),
-                     out_params, man.structs)
-        return
-    write_outs(out_path, outs, out_params, man)
+        payload = martian.json_sanitize(dict(skeleton))
+    else:
+        payload = martian.json_sanitize(outs.items())
+    # A chunk main's outs are not validated: mrp's default enforcement level
+    # skips them (cmd/mre/main.go runMain).
+    if phase == "join" or not fl.chunk:
+        validate_outputs(man.structs, man.params(fl.callable, "out"), payload,
+                         fl.callable)
+    write_bundle(out_path, payload, out_params, man.structs)
 
 
 def run_main(fl):

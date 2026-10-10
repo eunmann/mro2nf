@@ -59,7 +59,7 @@ out of scope for a transpiler.
 | literal edge cases: negative numbers, `>2^53` int64 precision, unicode/escape strings | ✅ | e2e `literals_edge` |
 | wildcard binding `* = self` / `* = REF` | ✅ | e2e `wildcard` (compiler expands) |
 | **refs nested in array/map literals** (`[A.x, B.x]` fan-in) | ✅ #14 | unit `bind`/`fork`, e2e `fanin` |
-| struct duck typing (extra fields) | ⚠️ via JSON pass-through | corpus parse |
+| struct duck typing (extra fields) | ✅ every bound value is narrowed to the receiving param's declared struct, as mrp's FilterJson (extra fields and their file leaves dropped, a missing field null), in stage `_args` and pipeline outputs; a forward of any struct-typed value keeps its BIND so the narrowing runs, even when the types match | e2e `struct_narrow`; unit `TestNarrow`, `TestRunBindNarrowsStructs`, `TestRunForkBindNarrowsStructs` |
 | null inputs / null propagation | ✅ | e2e `null_in`, `modifiers_min` |
 
 ## Calls & modifiers
@@ -70,6 +70,7 @@ out of scope for a transpiler.
 | nested pipeline calls (pipeline→pipeline) | ✅ | e2e `modifiers_min`, `kitchen_sink` |
 | non-linear / diamond DAGs | ✅ | e2e `diamond_min` |
 | `using (disabled = ref)` (self or call ref) | ✅ | e2e `modifiers_min` |
+| whole-call ref (`s = CALL`) to a **disabled** stage or pipeline call | ✅ null, as mrp (the skip bundle is a whole JSON null; a disabled sub referenced whole keeps its boundary rather than inlining) | e2e `disabled_wholeref`; unit `TestEmitDisabledNullBundleIsNull`, `TestInlineDisabledWholeRefKeepsBoundary` |
 | `(preflight)` | ✅ gates the pipeline (early-abort): an input-bound preflight runs first and the pipeline's `pa` is gated on its completion, so every downstream call waits — mrp's prenode behavior. A mapped, disabled, or call-output-bound preflight stays in DAG order (warns) | e2e `modifiers_min`, `kitchen_sink`; unit `TestEmitPreflightGate` |
 | `(local)` | ⚠️ no-op (scheduling only) | e2e `kitchen_sink` |
 | `(volatile)` / `volatile = strict` | ⚠️ no-op for outputs (VDR is 🚫) | e2e `kitchen_sink` |
@@ -81,6 +82,7 @@ out of scope for a transpiler.
 | `map call ... split` over an **array** → array result | ✅ | e2e `fork_min` |
 | `map call ... split` over a **map** → keyed result | ✅ | e2e `map_fork`, unit `TestResolveForksMap/Merge` |
 | fused multi-`split` (zipped) | ✅ | e2e `multisplit` |
+| whole-call ref (`x = CALL`) to a **map call** → one struct per fork (array of structs / map of structs, as mrp's resolveMerge) | ✅ (the bindspec ref carries the fork kind; the binder regroups the merged per-output collections per fork). A whole ref to a mapped call with no outputs is a transpile error | e2e `map_wholeref`; unit `TestResolveWholeRefToMappedCall`, `TestValueToEntryMarksWholeMappedRef` |
 | empty split collection → null result | ✅ | e2e `empty_fork_min` |
 | map call over a **split stage** (fork-key threaded) | ✅ #16 | e2e `map_split` |
 | map call over a **sub-pipeline** (per-fork body keying) | ✅ #16 | e2e `map_pipe`, `map_pipe_split` |
@@ -113,6 +115,7 @@ out of scope for a transpiler.
 | `martian` module API (make_path, log_info/log_warn, update_progress, exit, alarm) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain`, `api_smoke` |
 | `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` (using(mem_gb=3,threads=2)→mem 3,threads 2) |
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
+| stage output validation (mrp `verifyOutput`) | ✅ a stage's final `_outs` (non-split main, or join) are checked like mrp: every declared output present, each non-null value of its declared type (a struct with every member key, an int a JSON integer, a typed map of files with filename-legal keys); a violation fails the stage task before any consumer binds it. Per-chunk outs are not checked, as at mrp's default enforcement level. The native runner applies the same check | e2e `TestInvalidOutputFailsLikeMrp` (`missing_struct_key`); unit `TestValidateOutputs`, `TestProducerValidateOuts`, runner `ValidateOutputsTest` |
 | ASSERT vs retryable-error classification | ✅ shim exits 42 for an ASSERT (terminate) vs 1 for a retryable failure; config's dynamic `errorStrategy` routes accordingly | unit `TestStageFailureClassification`, `TestEmitConfig` |
 | auto-adjust-memory / OOM escalation | ✅ memory directives grow with `task.attempt`, so an OOM-killed stage (a retryable failure) is retried with more memory instead of failing identically; cpus do not escalate. Attempt 1 is unchanged | unit `TestEmitModules` (`* task.attempt`) |
 | `--monitor` memory enforcement | ✅ with `mro2nf -monitor`: an RSS kill at `mem_gb` via the process-group monitor (mrp's primary kill) plus a `prlimit --as` vmem cap at `vmem_gb` | unit `TestMemMonitor*`, `TestRunAdapterMonitorMemoryQuota`, `TestLimitedCommandMonitor` |

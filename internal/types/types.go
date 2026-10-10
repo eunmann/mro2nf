@@ -25,6 +25,13 @@ import (
 // never produced, matching Martian's publish-time "absent file -> null".
 var ErrSkipLeaf = errors.New("skip file leaf")
 
+// Martian builtin type names the walks dispatch on.
+const (
+	typeInt  = "int"
+	typeFile = "file"
+	typePath = "path"
+)
+
 // Table resolves struct type names to their fields so the walk can descend into
 // struct-typed values.
 type Table struct {
@@ -63,7 +70,7 @@ func OutFilename(p ir.Param, isStruct func(name string) bool) string {
 		return p.OutName
 	case p.ArrayDim > 0 || p.MapDim > 0 || isStruct(p.BaseType):
 		return p.Name
-	case p.BaseType == "file" || p.BaseType == "path":
+	case p.BaseType == typeFile || p.BaseType == typePath:
 		return p.Name
 	default:
 		return p.Name + "." + p.BaseType
@@ -116,6 +123,25 @@ func (t *Table) CoerceScalars(params []ir.Param, vals map[string]any) map[string
 // their text, as mrp passes them through unchanged.
 func (t *Table) FormatFloats(params []ir.Param, vals map[string]any) map[string]any {
 	return t.mapNumbers(params, vals, formatFloat)
+}
+
+// Narrow returns vals with every struct-typed value filtered to exactly its
+// declared fields, as mrp's FilterJson filters a bound value to the receiving
+// param's type (core/resolve.go filter, syntax StructType.FilterJson): extra
+// fields are dropped and a missing field is null, recursively through nested
+// structs, arrays, and typed maps. Keys without a matching param and values of
+// any other shape pass through. vals is not mutated.
+func (t *Table) Narrow(params []ir.Param, vals map[string]any) map[string]any {
+	out := make(map[string]any, len(vals))
+	maps.Copy(out, vals)
+
+	for _, p := range params {
+		if v, ok := vals[p.Name]; ok {
+			out[p.Name] = t.narrow(v, p.BaseType, p.ArrayDim, p.MapDim)
+		}
+	}
+
+	return out
 }
 
 // mapNumbers returns a copy of vals with every number leaf of a declared param
@@ -229,7 +255,7 @@ func formatFloat(n json.Number, base string) any {
 
 // coerceNumber converts a whole-number JSON value to an integer for an int param.
 func coerceNumber(n json.Number, base string) any {
-	if base != "int" {
+	if base != typeInt {
 		return n
 	}
 
@@ -249,6 +275,47 @@ func coerceNumber(n json.Number, base string) any {
 	}
 
 	return n
+}
+
+// narrow filters one value against its type; it descends shapes the way coerce
+// does (a typed map is one level carrying mapDim-1 inner array dims).
+func (t *Table) narrow(v any, base string, arrayDim, mapDim int) any {
+	switch tv := v.(type) {
+	case []any:
+		if arrayDim <= 0 {
+			return v
+		}
+
+		out := make([]any, len(tv))
+		for i, e := range tv {
+			out[i] = t.narrow(e, base, arrayDim-1, mapDim)
+		}
+
+		return out
+	case map[string]any:
+		if mapDim > 0 {
+			out := make(map[string]any, len(tv))
+			for k, e := range tv {
+				out[k] = t.narrow(e, base, arrayDim+mapDim-1, 0)
+			}
+
+			return out
+		}
+
+		fields, ok := t.structs[base]
+		if !ok || arrayDim > 0 {
+			return v
+		}
+
+		out := make(map[string]any, len(fields))
+		for _, f := range fields {
+			out[f.Name] = t.narrow(tv[f.Name], f.BaseType, f.ArrayDim, f.MapDim)
+		}
+
+		return out
+	default:
+		return v
+	}
 }
 
 // walk descends one value. It dispatches on the value's actual JSON shape

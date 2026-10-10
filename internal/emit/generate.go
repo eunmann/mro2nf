@@ -907,9 +907,13 @@ func genPlainBindWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee st
 // upstream call, AND the forwarded set must be EXACTLY that producer's declared
 // outputs — no fewer (a subset would route extra fields/files a projecting BIND
 // drops, staging leaves the consumer never needs) and, since Martian binds every
-// input, no more. Then the consumer's args ARE the producer's output bundle and
-// the BIND is pure plumbing, routable straight through (emit-once, #14).
-func forwardProducer(bindings []ir.Binding, p *ir.Pipeline, prog *ir.Program) (string, bool) {
+// input, no more. Each receiving param in dest must also declare exactly the
+// producer output's type, and that type must hold no struct: mrp filters every
+// bound struct to its declared members even when the types match (#239), which
+// only the BIND reproduces. Then the consumer's args ARE the producer's output
+// bundle and the BIND is pure plumbing, routable straight through (emit-once,
+// #14).
+func forwardProducer(bindings []ir.Binding, dest []ir.Param, p *ir.Pipeline, prog *ir.Program) (string, bool) {
 	if len(bindings) == 0 {
 		return "", false
 	}
@@ -939,20 +943,34 @@ func forwardProducer(bindings []ir.Binding, p *ir.Pipeline, prog *ir.Program) (s
 		return "", false
 	}
 
-	// Exact coverage: the producer's declared outputs must be exactly the
-	// forwarded set, so routing its whole bundle adds no extra fields/files.
-	outs := calleeOutParams(prog, p, id)
-	if len(outs) != len(forwarded) {
+	if !forwardsExactly(calleeOutParams(prog, p, id), forwarded, dest, prog.Structs) {
 		return "", false
 	}
 
+	return id, true
+}
+
+// forwardsExactly reports whether the forwarded names are exactly the
+// producer's declared outs, so routing its whole bundle adds no extra
+// fields/files, and each receiving param in dest has the out's exact,
+// struct-free type, so the value needs no filtering.
+func forwardsExactly(outs []ir.Param, forwarded map[string]bool, dest []ir.Param, structs map[string]*ir.StructType) bool {
+	if len(outs) != len(forwarded) {
+		return false
+	}
+
 	for _, o := range outs {
-		if !forwarded[o.Name] {
-			return "", false
+		d := paramByName(dest, o.Name)
+		if !forwarded[o.Name] || d == nil || d.BaseType != o.BaseType || d.ArrayDim != o.ArrayDim || d.MapDim != o.MapDim {
+			return false
+		}
+
+		if _, isStruct := structs[d.BaseType]; isStruct {
+			return false
 		}
 	}
 
-	return id, true
+	return true
 }
 
 // callForwardProducer applies forwardProducer to a plain (non-mapped, enabled,
@@ -962,7 +980,20 @@ func callForwardProducer(c ir.Call, p *ir.Pipeline, prog *ir.Program) (string, b
 		return "", false
 	}
 
-	return forwardProducer(c.Bindings, p, prog)
+	return forwardProducer(c.Bindings, callableInParams(prog, c.Callable), p, prog)
+}
+
+// callableInParams returns the input params of the named stage or pipeline.
+func callableInParams(prog *ir.Program, callable string) []ir.Param {
+	if s, ok := prog.Stages[callable]; ok {
+		return s.In
+	}
+
+	if pp, ok := prog.Pipelines[callable]; ok {
+		return pp.In
+	}
+
+	return nil
 }
 
 // fuseableStageCall reports the stage a plain call resolves its bindings into

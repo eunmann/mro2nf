@@ -307,9 +307,11 @@ Two optimizations remove standalone BINDs where they would be pure plumbing:
   stage into that one task once, instead of into a BIND task and again into the
   stage task.
 - **Emit-once forward (#14).** When a call's bindings (or the pipeline's
-  returns) forward one upstream call's entire output bundle verbatim, no
-  process is emitted at all: the producer's output channel is routed straight
-  to the consumer.
+  returns) forward one upstream call's entire output bundle verbatim, each
+  under its producer's exact type and no struct among them, no process is
+  emitted at all: the producer's output channel is routed straight to the
+  consumer. A struct-typed forward keeps its BIND, since mrp filters every
+  bound struct to its declared members.
 
 ### 4.4 Map / fork calls → FORK + MERGE (and keyed variants)
 
@@ -344,8 +346,10 @@ the staged `forknames.json`** (via `.resolve()`), never `java.io.File.listFiles(
 A `call … using (disabled = …)` is resolved at runtime: a **DISABLE process**
 (`mre bind … -o disable`) computes the boolean, and the workflow `branch`es on it
 — running the callee only for the enabled case and emitting a pre-baked
-*null-outputs* bundle (from `nulls/<call>`) for the skipped case. Disabled map
-calls gate per fork.
+*null* bundle (from `nulls/<call>`) for the skipped case. Its whole payload is
+JSON `null`, as mrp resolves a disabled call: a whole-call ref (`s = CALL`) and
+every projection into it (`CALL.out`) both bind null. Disabled map calls gate
+per fork.
 
 ### 4.6 Resources → process directives
 
@@ -448,7 +452,9 @@ writes an output bundle:
 - **`mre main`** — runs the stage's `main()` for a whole stage (non-split) or for
   one chunk (`-chunk`), producing an output bundle.
 - **`mre join`** — runs the stage's `join()` over the chunk outputs, producing the
-  stage's final output bundle.
+  stage's final output bundle. Like a whole-stage `mre main`, it first checks
+  those final outputs as mrp's output validation does (every declared output
+  present and of its declared type) and fails the task on a violation.
 - **`mre bind` / `mre forkbind`** — resolve a call's input *bindings* (from a
   bindspec + the staged upstream bundles + pipeline args) into the callee's args
   bundle. `forkbind` produces one bundle per fork.
@@ -491,7 +497,10 @@ input `z` is the literal `5`") are compiled at transpile time into small JSON
 
 This says the callee's `values` input is bound to the pipeline's own `values`
 input (`kind: self`). Other kinds reference an upstream call's output
-(`kind: call`, with `id` and `output`). At runtime `mre bind` reads the bindspec,
+(`kind: call`, with `id` and `output`). A whole-call ref to a map call also
+carries `fork` (`array` or `map`): the call's merged bundle holds one
+collection per output, and the binder regroups it into one struct per fork,
+which is the value mrp gives `x = CALL`. At runtime `mre bind` reads the bindspec,
 the pipeline args, and the staged upstream bundles, and assembles the callee's
 args bundle. Keeping the wiring as data (a bindspec) rather than baking it into
 the Groovy means the binder — including typed-map field projections and

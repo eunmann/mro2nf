@@ -34,6 +34,9 @@ var (
 	errNotArray = errors.New("split binding is not an array")
 	// errNotMap is returned when a map-mode split binding is not a typed map.
 	errNotMap = errors.New("split binding is not a map")
+	// errForkDesync is returned when a mapped call's merged outputs disagree on
+	// its forks (count or keys), so they cannot be regrouped per fork.
+	errForkDesync = errors.New("merged outputs disagree on the forks")
 )
 
 // Ref is a reference to a pipeline input (self) or an upstream call output.
@@ -55,7 +58,19 @@ type Ref struct {
 	// projected over each map's values *within* the array, preserving the array
 	// structure (array<map<S>>.field -> array<map<field>>).
 	MapInArray bool `json:"mapInArray,omitempty"`
+	// Fork marks a whole-call ref (empty Output) to a mapped call with its fork
+	// kind, ForkArray or ForkMap. The call's merged bundle holds one collection
+	// per output, while Martian's resolveMerge resolves a whole ref per fork, so
+	// the binder regroups it into one struct per fork. The emitter sets it from
+	// the call's static map mode.
+	Fork string `json:"fork,omitempty"`
 }
+
+// Fork kinds for Ref.Fork.
+const (
+	ForkArray = "array"
+	ForkMap   = "map"
+)
 
 // Entry binds one parameter to a value expression: a leaf literal or ref, or a
 // composite array/object whose elements may contain refs (fan-in). Exactly one
@@ -376,6 +391,10 @@ func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMes
 			return json.RawMessage(nullLiteral), nil
 		}
 
+		if e.Ref.Fork != "" {
+			return perFork(outs, e.Ref.Fork == ForkMap)
+		}
+
 		return extractProject(outs, e.Ref.Output, e.Ref.MapDepth, e.Ref.MapInArray)
 	default:
 		return nil, fmt.Errorf("%w: %q", errUnknownRefKind, e.Ref.Kind)
@@ -572,6 +591,116 @@ func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessa
 	}
 
 	return marshalRaw(arr, fmt.Sprintf("merged output %q", name))
+}
+
+// perFork regroups a mapped call's merged bundle (one collection per output, as
+// Merge writes it) into the value Martian's resolveMerge gives a whole ref to
+// the call: one struct per fork, in an array for an array fork or keyed by fork
+// for a map fork. A null bundle (a disabled call) and an all-null merge (an
+// invocation-known empty fork) resolve to null.
+func perFork(raw json.RawMessage, mapFork bool) (json.RawMessage, error) {
+	if isNullRaw(raw) {
+		return json.RawMessage(nullLiteral), nil
+	}
+
+	var merged map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &merged); err != nil {
+		return nil, fmt.Errorf("regroup merged forks: %w", err)
+	}
+
+	nulls := 0
+
+	for _, v := range merged {
+		if isNullRaw(v) {
+			nulls++
+		}
+	}
+
+	switch {
+	case nulls > 0 && nulls == len(merged):
+		return json.RawMessage(nullLiteral), nil
+	case nulls > 0:
+		return nil, fmt.Errorf("regroup merged forks: %d of %d outputs null: %w", nulls, len(merged), errForkDesync)
+	case mapFork:
+		return perForkMap(merged)
+	default:
+		return perForkArray(merged)
+	}
+}
+
+func perForkArray(merged map[string]json.RawMessage) (json.RawMessage, error) {
+	var forks []map[string]json.RawMessage
+
+	for _, name := range sortedKeys(merged) {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(merged[name], &arr); err != nil {
+			return nil, fmt.Errorf("regroup output %q: %w", name, errNotArray)
+		}
+
+		switch {
+		case forks == nil:
+			forks = make([]map[string]json.RawMessage, len(arr))
+			for i := range forks {
+				forks[i] = make(map[string]json.RawMessage, len(merged))
+			}
+		case len(arr) != len(forks):
+			return nil, fmt.Errorf("regroup output %q (%d forks, want %d): %w", name, len(arr), len(forks), errForkDesync)
+		}
+
+		for i, v := range arr {
+			forks[i][name] = v
+		}
+	}
+
+	if forks == nil {
+		forks = []map[string]json.RawMessage{}
+	}
+
+	return marshalRaw(forks, "per-fork array")
+}
+
+func perForkMap(merged map[string]json.RawMessage) (json.RawMessage, error) {
+	var forks map[string]map[string]json.RawMessage
+
+	for _, name := range sortedKeys(merged) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(merged[name], &m); err != nil {
+			return nil, fmt.Errorf("regroup output %q: %w", name, errNotMap)
+		}
+
+		if forks == nil {
+			forks = make(map[string]map[string]json.RawMessage, len(m))
+			for k := range m {
+				forks[k] = make(map[string]json.RawMessage, len(merged))
+			}
+		}
+
+		desync := fmt.Errorf("regroup output %q keys differ from the other outputs': %w", name, errForkDesync)
+		if len(m) != len(forks) {
+			return nil, desync
+		}
+
+		for k, v := range m {
+			fork, ok := forks[k]
+			if !ok {
+				return nil, desync
+			}
+
+			fork[name] = v
+		}
+	}
+
+	if forks == nil {
+		forks = map[string]map[string]json.RawMessage{}
+	}
+
+	return marshalRaw(forks, "per-fork map")
+}
+
+func isNullRaw(raw json.RawMessage) bool {
+	t := bytes.TrimSpace(raw)
+
+	return len(t) == 0 || bytes.Equal(t, []byte(nullLiteral))
 }
 
 // marshalRaw marshals a composite value, wrapping any failure with the
