@@ -58,7 +58,7 @@ Co-Authored-By: ...
 ## Verification (end of change set, not mid-development)
 
 1. `make lint` — commit any auto-fixes.
-2. `make test` — all green. Before the PR: `make lint-check`, `make cover`, and `make test-e2e` (plus `make test-e2e-docker` when the emitter, shim, or data plane changed, `make lint-nf` when generated Nextflow changed, `make bench` when task counts or bytes staged can change, and `make test-mrp-diff` against a local `mrp` when outputs or `_args` can change).
+2. `make test` — all green. Before the PR: `make lint-check`, `make cover`, and `make test-e2e` (plus `make test-e2e-docker` when the emitter, shim, or data plane changed, `make lint-nf` when generated Nextflow changed, `make bench` when task counts or bytes staged can change). `make test-e2e` includes the mrp differential when `MARTIAN_BIN` holds an `mrp` build; without one it skips locally, and CI runs it.
 
 ## Review
 
