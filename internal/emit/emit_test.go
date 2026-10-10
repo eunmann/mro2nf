@@ -362,6 +362,57 @@ func TestEmitMonitorAndContainer(t *testing.T) {
 	}
 }
 
+// TestEmitContainerIsGroovyQuoted guards the nextflow.config side of #329: the
+// -container image (CLI or .mro2nf.yml) lands in a single-quoted Groovy string,
+// so a quote must be escaped rather than end the literal, and a control
+// character, which would end the config line mid-literal, fails the emit.
+func TestEmitContainerIsGroovyQuoted(t *testing.T) {
+	ast, err := frontend.Parse("../../testdata/split_test/pipeline.mro", []string{"../../testdata/split_test"}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	mre, shell, stages := realRuntime(t)
+	emitCfg := func(target emit.Target, container string) (string, error) {
+		prog, err := frontend.Lower(ast, nil)
+		if err != nil {
+			t.Fatalf("lower: %v", err)
+		}
+
+		dir := t.TempDir()
+		if err := emit.Emit(prog, emit.Options{
+			OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro", Target: target,
+			Container: container, StageCode: stages,
+		}); err != nil {
+			return "", err
+		}
+
+		data, err := os.ReadFile(filepath.Join(dir, "nextflow.config"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return string(data), nil
+	}
+
+	for target, want := range map[emit.Target]string{
+		emit.TargetLocal:    `container = 'img\'quote'`,
+		emit.TargetAWSBatch: `params.container = 'img\'quote'`,
+	} {
+		cfg, err := emitCfg(target, "img'quote")
+		if err != nil {
+			t.Fatalf("emit %s: %v", target, err)
+		}
+		if !strings.Contains(cfg, want) {
+			t.Errorf("%s: a quote in the image must be escaped (want %q):\n%s", target, want, cfg)
+		}
+
+		if _, err := emitCfg(target, "img\nline"); !errors.Is(err, emit.ErrGroovyControlChar) {
+			t.Errorf("%s: a newline in the image must fail the emit, got %v", target, err)
+		}
+	}
+}
+
 // TestEmitDisabledNestedMap checks the keyed (nested) disable gate: a map call
 // that is BOTH disabled and itself nested inside an outer map must, per outer
 // fork, resolve its disable flag and either run its inner map or emit the null
