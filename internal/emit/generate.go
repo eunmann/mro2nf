@@ -561,10 +561,10 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 			continue
 		}
 
-		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkkeys_%[1]s.json'\n", id)
+		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkmeta_%[1]s.json'\n", id)
 		pairs = append(pairs, fmt.Sprintf("%s=merged_%s", id, id))
 		fmt.Fprintf(&pre, "    %s\n", g.mergeCmd(prod.Callable, calleeOutNames(prog, prod.Callable),
-			"souts_"+id, "forkkeys_"+id+".json", "merged_"+id,
+			"souts_"+id, "forkmeta_"+id+".json", "merged_"+id,
 			g.plan.pipes[p.Name].calls[prod.Name].emptyNull))
 	}
 
@@ -651,7 +651,7 @@ func genForkBindProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c 
   input:
 %[2]s  output:
     path 'fork_*', emit: forks, type: 'dir', optional: true
-    path 'forkkeys.json', emit: keys
+    path 'forkmeta.json', emit: keys
   script:
     """
 %[7]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -chunkdir . -mapmode %[6]s%[5]s
@@ -681,7 +681,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 	fmt.Fprintf(b, `process %[1]s {
   input:
     path souts
-    path 'forkkeys.json'
+    path 'forkmeta.json'
     path 'types.json'
   output:
     %[3]s
@@ -692,7 +692,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 }
 
 `, mergeName(pipeline, c.Name),
-		g.mergeCmd(c.Callable, calleeOuts, ".", "forkkeys.json", "merged",
+		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta.json", "merged",
 			g.plan.pipes[pipeline].calls[c.Name].emptyNull),
 		bundleOutput("merged"))
 }

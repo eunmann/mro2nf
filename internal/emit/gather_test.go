@@ -55,6 +55,14 @@ func checkGathers(t *testing.T, where, src string, seen map[string]int) {
 		}
 	}
 
+	// The count-carrying fork sidecar is named forkmeta: a producer cached
+	// under -resume from before the format change holds only the legacy
+	// forkkeys sidecar, so it misses its output and re-runs instead of
+	// handing the merge a sidecar it cannot read.
+	if strings.Contains(src, "forkkeys") {
+		t.Errorf("%s names the legacy forkkeys sidecar", where)
+	}
+
 	flags := map[string][]string{
 		"merge": {"-forksdir ", "-keysfile "},
 		"join":  {"-chunksfile chunks.json", "-chunkdir "},

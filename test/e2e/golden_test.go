@@ -30,7 +30,7 @@ var goldenCases = []struct {
 	{"fork_min", "fork_min", "expected/scale_all_outs.json"},
 	{"fork_upstream", "fork_upstream", "expected/outs.json"},
 	// #99: upstream MAP-fork with real keys — the O(1) element path slicing a
-	// producer bundle for a map fork (driver UTF-8 key sort vs Go forkkeys).
+	// producer bundle for a map fork (driver UTF-8 key sort vs Go fork key order).
 	{"map_fork_upstream", "map_fork_upstream", "expected/outs.json"},
 	{"struct_min", "struct_min", "expected/stats_pipe_outs.json"},
 	{"modifiers_min", "modifiers_min", "expected/top_outs.json"},

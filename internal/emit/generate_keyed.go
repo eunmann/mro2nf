@@ -173,7 +173,7 @@ func keyedInputsHead(head string, refs []string) (string, string) {
 // index > 0 assembles its args from its own base64 element (forkbind
 // -elementfile) and runs the stage main — no per-outer-fork FORK_K resolve.
 // Index 0 (per outer fork) runs `forkbind -index 0` once to write that outer
-// fork's inner forkkeys sidecar for the gather; the fi<0 sentinel validates an
+// fork's inner forkmeta sidecar for the gather; the fi<0 sentinel validates an
 // empty inner collection. The composite key (outer~inner) threads fork identity
 // for the regroup; the keys output is keyed by the OUTER key so the per-outer
 // merge pairs them. The staged `pipeargs` is that outer fork's args (carried in
@@ -189,7 +189,7 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
   input:
 %[3]s  output:
     tuple val(key), path("outs__${key}", type: 'dir'), emit: outs, optional: true
-    tuple val(okey), path('forkkeys.mro2nf.json'), emit: keys, optional: true
+    tuple val(okey), path('forkmeta.mro2nf.json'), emit: keys, optional: true
 %[4]s}
 
 `, forkName(pipeline, c.Name), stageDirectives(s, ""), block, g.scatterScript(c, s, arg))
@@ -206,12 +206,12 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
   input:
 %[2]s  output:
     tuple val(key), path('forks'), emit: forks
-    tuple val(key), path('forkkeys.json'), emit: keys
+    tuple val(key), path('forkmeta.json'), emit: keys
   script:
     """
     mkdir -p forks
     '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks -mapmode %[6]s%[5]s
-    mv -f forks/forkkeys.json forkkeys.json
+    mv -f forks/forkmeta.json forkmeta.json
     """
 }
 
@@ -228,7 +228,7 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
 func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
-    tuple val(key), path(souts), path('forkkeys.json')
+    tuple val(key), path(souts), path('forkmeta.json')
     path 'types.json'
   output:
     tuple val(key), path('merged', type: 'dir')
@@ -239,7 +239,7 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 }
 
 `, mergeName(pipeline, c.Name),
-		g.mergeCmd(c.Callable, calleeOuts, ".", "forkkeys.json", "merged",
+		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta.json", "merged",
 			g.plan.pipes[pipeline].calls[c.Name].emptyNull))
 }
 

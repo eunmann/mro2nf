@@ -1,7 +1,7 @@
 # A map call over an UPSTREAM typed-map output with REAL keys (split GEN.m):
 # exercises the O(1) element path (#99) slicing a producer's value-channel
 # bundle for a MAP fork — the driver's UTF-8 key sort must agree with the Go
-# forkkeys order when the collection comes from callOuts rather than pipeargs.
+# fork key order when the collection comes from callOuts rather than pipeargs.
 stage GEN(
     in  int      n,
     out map<int> m,

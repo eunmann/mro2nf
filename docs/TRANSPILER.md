@@ -326,8 +326,11 @@ fork), the emitter renders:
   single array/map-shaped output bundle. `mre merge -forksdir <dir>` lists the
   staged `outs__<key>` bundles itself, orders them by the fork index each key
   ends in, and fails unless they number exactly the `count` in the
-  `forkkeys.json` sidecar (`{"count": N, "keys": [...] | null}`) — no fork
+  `forkmeta.json` sidecar (`{"count": N, "keys": [...] | null}`) — no fork
   list rides on the command line, so the gather has no argv-length ceiling.
+  The sidecar's file name is part of its format: a `-resume` across a format
+  change finds no cached sidecar under the new name and re-runs the producer,
+  so a merge never reads a stale-format one.
 
 Every stage and pipeline therefore gets **two** emitted workflows: the plain
 `wf_<name>` and the keyed `wf_<name>_map`. The keyed forms exist so a map call

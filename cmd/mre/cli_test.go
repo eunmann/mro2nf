@@ -192,7 +192,7 @@ func TestBumpForkDim(t *testing.T) {
 	}
 }
 
-// TestForkMetaRoundTrip round-trips the fork sidecars: forkkeys.json carries
+// TestForkMetaRoundTrip round-trips the fork sidecars: forkmeta.json carries
 // the fork count plus a JSON null keys field for an array fork (read back as
 // nil keys) or the map fork's key array; forknames.json always lists the fork
 // bundle dirs.
@@ -215,15 +215,15 @@ func TestForkMetaRoundTrip(t *testing.T) {
 				t.Fatalf("writeForkMeta: %v", err)
 			}
 
-			keysPath := filepath.Join(dir, "forkkeys.json")
+			keysPath := filepath.Join(dir, "forkmeta.json")
 
 			data, err := os.ReadFile(keysPath)
 			if err != nil {
-				t.Fatalf("read forkkeys.json: %v", err)
+				t.Fatalf("read forkmeta.json: %v", err)
 			}
 
 			if string(data) != tc.wantFile {
-				t.Errorf("forkkeys.json = %q, want %q", data, tc.wantFile)
+				t.Errorf("forkmeta.json = %q, want %q", data, tc.wantFile)
 			}
 
 			got, err := readForkMeta(keysPath)
@@ -525,7 +525,7 @@ func TestRunBindSmoke(t *testing.T) {
 
 // TestRunForkBindArraySmoke drives forkbind in array mode over a literal split:
 // one fork bundle per element, forknames.json listing them in order, and a
-// forkkeys.json with the fork count and null keys.
+// forkmeta.json with the fork count and null keys.
 func TestRunForkBindArraySmoke(t *testing.T) {
 	dir := t.TempDir()
 	spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"n":{"literal":[1,2],"split":true}}`)
@@ -550,13 +550,13 @@ func TestRunForkBindArraySmoke(t *testing.T) {
 		t.Errorf("forknames.json mismatch (-want +got):\n%s", diff)
 	}
 
-	keysRaw, err := os.ReadFile(filepath.Join(forks, "forkkeys.json"))
+	keysRaw, err := os.ReadFile(filepath.Join(forks, "forkmeta.json"))
 	if err != nil {
-		t.Fatalf("read forkkeys.json: %v", err)
+		t.Fatalf("read forkmeta.json: %v", err)
 	}
 
 	if want := `{"count":2,"keys":null}`; string(keysRaw) != want {
-		t.Errorf("forkkeys.json = %q, want %q", keysRaw, want)
+		t.Errorf("forkmeta.json = %q, want %q", keysRaw, want)
 	}
 }
 
@@ -774,7 +774,7 @@ func TestRunForkBindElementMap(t *testing.T) {
 }
 
 // TestRunForkBindIndexKeysFile drives the -keysfile side of the native scatter:
-// each -index instance can emit the forkkeys sidecar byte-identical to the full
+// each -index instance can emit the forkmeta sidecar byte-identical to the full
 // write's (map keys for a map fork, null for an array fork), so the gather gets
 // its keys without a FORK task. -keysfile without -index is a loud error.
 func TestRunForkBindIndexKeysFile(t *testing.T) {
@@ -789,7 +789,7 @@ func TestRunForkBindIndexKeysFile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
-			keys := filepath.Join(dir, "forkkeys.json")
+			keys := filepath.Join(dir, "forkmeta.json")
 
 			if err := run(t.Context(), []string{
 				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
@@ -806,7 +806,7 @@ func TestRunForkBindIndexKeysFile(t *testing.T) {
 				t.Errorf("keysfile = %q, want %q", got, tc.want)
 			}
 
-			// Byte-identical to the full-fork write's forkkeys.json.
+			// Byte-identical to the full-fork write's forkmeta.json.
 			forks := filepath.Join(dir, "forks")
 			if err := run(t.Context(), []string{
 				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
@@ -815,9 +815,9 @@ func TestRunForkBindIndexKeysFile(t *testing.T) {
 				t.Fatalf("run default forkbind: %v", err)
 			}
 
-			full, err := os.ReadFile(filepath.Join(forks, "forkkeys.json"))
+			full, err := os.ReadFile(filepath.Join(forks, "forkmeta.json"))
 			if err != nil {
-				t.Fatalf("read full-write forkkeys.json: %v", err)
+				t.Fatalf("read full-write forkmeta.json: %v", err)
 			}
 			if string(got) != string(full) {
 				t.Errorf("keysfile %q not byte-identical to full write %q", got, full)
@@ -852,7 +852,7 @@ func TestRunForkBindKeysOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
-			keys := filepath.Join(dir, "forkkeys.json")
+			keys := filepath.Join(dir, "forkmeta.json")
 
 			if err := run(t.Context(), []string{
 				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
