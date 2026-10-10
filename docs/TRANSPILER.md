@@ -560,7 +560,9 @@ without re-transpiling:
   parse, or a string for an array, map or struct input, fails the run; set those
   with `-params-file`.
 - Every float in a supplied value, typed or parsed and at any depth, is
-  re-encoded the way `mrp` encodes a float literal (`'g'`, shortest form), so
+  re-encoded the way `mrp` encodes a float literal (`'g'`, shortest form). That
+  covers a `float` leaf of any shape and, inside an untyped `map`, any number
+  written with a `.` or an exponent, so
   `--f 2.0` and a `-params-file` `{"f": 2.0}` both reach the stage as `2`, as
   `f = 2.0` does under `mrp`.
 - The string guarantee holds only under the strict (v2) syntax parser, the

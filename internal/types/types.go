@@ -14,6 +14,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -107,9 +108,10 @@ func (t *Table) CoerceScalars(params []ir.Param, vals map[string]any) map[string
 	return t.mapNumbers(params, vals, coerceNumber)
 }
 
-// FormatFloats re-encodes each float-typed leaf of vals the way mrp encodes a
-// float literal in a stage's _args (Martian's FloatExp uses AppendFloat 'g',
-// -1): 2.0 becomes 2 and 1E6 becomes 1e+06. It is for values that stand in for
+// FormatFloats re-encodes each float leaf of vals (a float-typed leaf, or a
+// float-literal number inside an untyped map) the way mrp encodes a float
+// literal in a stage's _args (Martian's FloatExp uses AppendFloat 'g', -1):
+// 2.0 becomes 2 and 1E6 becomes 1e+06. It is for values that stand in for
 // .mro literals, such as entry-input overrides; a stage's own outputs keep
 // their text, as mrp passes them through unchanged.
 func (t *Table) FormatFloats(params []ir.Param, vals map[string]any) map[string]any {
@@ -165,9 +167,46 @@ func (t *Table) mapNumber(v any, base string, arrayDim, mapDim int, leaf numberL
 			return t.mapNumbers(fields, tv, leaf)
 		}
 
+		if base == untypedMap {
+			return mapUntyped(tv, leaf)
+		}
+
 		return v
 	case json.Number:
 		return leaf(tv, base)
+	default:
+		return v
+	}
+}
+
+// untypedMap is the base type name of Martian's untyped `map`.
+const untypedMap = "map"
+
+// mapUntyped returns v, a value inside an untyped map, with its number leaves
+// mapped at any depth. Martian types such a number by its literal: one written
+// with a '.' or an exponent is a float, any other keeps the untyped base.
+func mapUntyped(v any, leaf numberLeaf) any {
+	switch tv := v.(type) {
+	case []any:
+		out := make([]any, len(tv))
+		for i, e := range tv {
+			out[i] = mapUntyped(e, leaf)
+		}
+
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(tv))
+		for k, e := range tv {
+			out[k] = mapUntyped(e, leaf)
+		}
+
+		return out
+	case json.Number:
+		if strings.ContainsAny(string(tv), ".eE") {
+			return leaf(tv, "float")
+		}
+
+		return leaf(tv, untypedMap)
 	default:
 		return v
 	}
