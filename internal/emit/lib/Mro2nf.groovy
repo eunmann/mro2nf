@@ -399,27 +399,58 @@ class Mro2nf {
     // from whoever launches the run. So an s3:// URI is allowed on awsbatch and
     // healthomics, a local path (a `file:` URI included, as Nextflow reads it)
     // only on the local target, and any other scheme only when allowRemote
-    // (params.mro2nf_allow_remote_inputs) is true. The error names the input and
-    // the scheme but not the value, which may carry a credential.
+    // (params.mro2nf_allow_remote_inputs) is true. An accepted value must still
+    // be safe to stage (stageSafe). The errors name the input but not the value,
+    // which may carry a credential.
     static String entryFile(String input, Object value, String target, Object allowRemote) {
         if (!(value instanceof CharSequence)) {
             String kind = value == null ? 'null' : value.getClass().getSimpleName()
             throw new IllegalArgumentException("entry input '${input}': a file value must be a string, got ${kind}")
         }
         String s = value.toString()
+        vetScheme(input, s, target, allowRemote)
+        return stageSafe(input, s)
+    }
+
+    private static void vetScheme(String input, String s, String target, Object allowRemote) {
         Matcher m = URI_SCHEME.matcher(s)
         String scheme = m.find() ? m.group(1).toLowerCase(Locale.ROOT) : 'file'
         if (scheme == 'file') {
-            if (target == 'local') return s
+            if (target == 'local') return
             throw new IllegalArgumentException(
                 "entry input '${input}': a local path is not allowed on target '${target}'; pass an s3:// URI")
         }
-        if (scheme == 's3' && CLOUD_TARGETS.contains(target)) return s
-        if (allowRemoteInputs(allowRemote)) return s
+        if (scheme == 's3' && CLOUD_TARGETS.contains(target)) return
+        if (allowRemoteInputs(allowRemote)) return
         String allowed = target == 'local' ? 'a local path' : 'an s3:// URI'
         throw new IllegalArgumentException(
             "entry input '${input}': scheme '${scheme}' is not allowed on target '${target}'; pass ${allowed}, " +
             "or set params.mro2nf_allow_remote_inputs to true to fetch it")
+    }
+
+    // STAGE_UNSAFE are the characters Nextflow 26.04's task stage-in script
+    // writes unescaped into its `ln -s <source> <name>` lines that bash still
+    // expands there: a glob (`*?[]`) can match a different file and stage it
+    // silently, a brace or `$` rewrites the path. Control characters are also
+    // left unescaped and split the word. The emitter's checkEntryFileDefaults
+    // holds the same set.
+    private static final String STAGE_UNSAFE = '*?[]{}$'
+
+    // stageSafe rejects a value holding a STAGE_UNSAFE or control character:
+    // Nextflow, not this project, would mis-stage it, so the only safe outcome
+    // is a loud failure before staging.
+    private static String stageSafe(String input, String s) {
+        for (int i = 0; i < s.length(); i++) {
+            int c = (int) s.charAt(i)
+            if (c < 0x20 || c == 0x7f || STAGE_UNSAFE.indexOf(c) >= 0) {
+                String shown = c < 0x20 || c == 0x7f ? String.format('U+%04X', c) : "'" + s.charAt(i) + "'"
+                throw new IllegalArgumentException(
+                    "entry input '${input}': the path contains ${shown}, which Nextflow's task stage-in script " +
+                    "leaves unquoted, so bash would expand it and could stage a different file; rename the file " +
+                    "(a Nextflow staging limitation, see docs/TRANSPILER.md section 8)")
+            }
+        }
+        return s
     }
 
     // allowRemoteInputs reads the opt-in strictly: a command-line value arrives

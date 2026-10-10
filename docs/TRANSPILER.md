@@ -610,11 +610,21 @@ key, struct fields in declaration order) is shared between the Groovy flatten an
 the Go reconstruction so they can't drift. An unset input keeps its baked
 default. It, and a value with no file in it (`[]`, `{}`, a struct whose file
 field is null), stage zero files: the `path` input takes `arity: '0..*'`, so no
-placeholder file is needed. Each leaf is staged with `file(x, glob: false)`, so
-a name holding `[`, `*`, `?` or `{` stages that exact file. Nextflow 26.04's own
-stage-in script still leaves the source path unquoted in the task, so a name
-that bash would glob to another file in the same directory, or a `{a,b}` brace,
-is not staged as written.
+placeholder file is needed. Each leaf goes through `file(x, glob: false)`, so
+the head node never globs a name.
+
+**Names Nextflow cannot stage.** Nextflow 26.04 writes each staged file into
+the task's stage-in script as `ln -s <source> <name>`, escaping spaces, quotes,
+`()`, `\`, `!`, `&`, `|`, `<>`, `` ` ``, `:` and `;` but not `*`, `?`, `[`,
+`]`, `{`, `}`, `$` or control characters such as a tab. Bash then expands those
+in the task: `s[1].txt` beside `s1.txt` stages `s1.txt` silently, `{a,b}`
+splits into two words, `$HOME` is substituted. The emitter cannot quote that
+script, so `Mro2nf.entryFile` rejects an override path holding any of these
+characters, anywhere in the path or URI, before anything is staged; the error
+names the input and the character. A baked default is copied into the entry
+bundle by `mro2nf` and renamed `L<n><ext>`, so only its extension ever reaches
+a stage-in script, and the transpile rejects a default whose extension holds
+one. Rename such a file, or the directory holding an override.
 
 **Which file values a run may supply.** `file()` on the head node fetches any
 URL Nextflow has a provider for and reads any path the head node can see, and a

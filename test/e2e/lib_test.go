@@ -95,8 +95,10 @@ func TestLibHelpers(t *testing.T) {
 // TestLibEntryFile pins Mro2nf.entryFile, the head-node vetting of each entry
 // file-override leaf (#330): an s3:// URI on a cloud target, a local path on
 // the local target, anything else only with the remote-input opt-in, which
-// never admits a local path on a cloud target. A rejection names the input and
-// the scheme, never the value.
+// never admits a local path on a cloud target. An accepted value holding a
+// character Nextflow's stage-in leaves for bash to expand is still rejected
+// (#276). A rejection names the input and the scheme or character, never the
+// value.
 func TestLibEntryFile(t *testing.T) {
 	t.Parallel()
 
@@ -134,6 +136,18 @@ func TestLibEntryFile(t *testing.T) {
 		{"awsbatch", "'https://example.com/x'", "true", ok},
 		{"healthomics", "'s3://b/dir/'", "null", ok},
 		{"healthomics", "'gs://b/k'", "null", "scheme 'gs' is not allowed on target 'healthomics'"},
+		{"local", "'/in/a,b;c=d n~#%^@+.txt'", "null", ok},
+		{"local", "'/in/s[1].txt'", "null", "entry input 'in': the path contains '['"},
+		{"local", "'/in/s]1.txt'", "null", "contains ']'"},
+		{"local", "'/in/s*.txt'", "null", "contains '*'"},
+		{"local", "'/in/s?.txt'", "null", "contains '?'"},
+		{"local", "'/in/t{1}.txt'", "null", "contains '{'"},
+		{"local", "'/in/t}.txt'", "null", "contains '}'"},
+		{"local", "'/in/$HOME.txt'", "null", "contains '$'"},
+		{"local", "'/in/a\\tb.txt'", "null", "contains U+0009"},
+		{"local", "'/run[1]/a.txt'", "null", "Nextflow staging limitation, see docs/TRANSPILER.md section 8"},
+		{"awsbatch", "'s3://b/k*'", "null", "contains '*'"},
+		{"local", "'http://example.com/x?sig=1'", "true", "contains '?'"},
 	}
 
 	var probe strings.Builder

@@ -488,47 +488,67 @@ func TestEntryFileAdversarialName(t *testing.T) {
 		filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
 }
 
-// TestEntryFileGlobCharName checks file[] entry overrides whose names hold the
-// glob characters `[`, `*`, `?` and `{` are staged as those exact files (#276):
-// a globbing file() matches nothing for `s[1]*?.txt`, so its leaf vanishes and
-// entryargs fails on the count. There is no decoy file the pattern would match,
-// and the brace holds no comma, because Nextflow 26.04's stage-in script leaves
-// the source path unquoted: bash would glob it to the decoy, or brace-expand
-// `{a,b}`, in the task itself, which no emitter change can prevent.
+// TestEntryFileGlobCharName checks an entry file override whose name holds a
+// character bash would expand fails the run before staging, naming the input
+// and the character (#276). Nextflow 26.04's stage-in script leaves the source
+// path unquoted, so `s[1].txt` beside `s1.txt` would otherwise stage s1.txt
+// silently, and a brace would be expanded; the emitter cannot quote it.
 func TestEntryFileGlobCharName(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java")
 
-	fixtureDir := filepath.Join(root, "testdata", "entry_filearr")
-	proj := transpile(t, "entry_filearr")
+	cases := []struct {
+		name, fixture string
+		params        func(t *testing.T, dir string) any
+		want          string
+	}{
+		{"glob_beside_match", "entry_file", func(t *testing.T, dir string) any {
+			t.Helper()
+			writeFileT(t, filepath.Join(dir, "s[1].txt"), "10\n")
+			writeFileT(t, filepath.Join(dir, "s1.txt"), "999\n")
 
-	dir := t.TempDir()
-	reads := []string{filepath.Join(dir, "s[1]*?.txt"), filepath.Join(dir, "t{1}.txt")}
-
-	for i, src := range []string{"o1.txt", "o2.txt"} {
-		content, err := os.ReadFile(filepath.Join(fixtureDir, "input", src))
-		if err != nil {
-			t.Fatalf("read override input: %v", err)
-		}
-
-		writeFileT(t, reads[i], string(content))
+			return map[string]string{"reads": filepath.Join(dir, "s[1].txt")}
+		}, "entry input 'reads': the path contains '['"},
+		{"brace_in_array", "entry_filearr", func(_ *testing.T, dir string) any {
+			return map[string][]string{"reads": {filepath.Join(dir, "a.txt"), filepath.Join(dir, "t{a,b}.txt")}}
+		}, "entry input 'reads': the path contains '{'"},
 	}
 
-	params, err := json.Marshal(map[string][]string{"reads": reads})
-	if err != nil {
-		t.Fatalf("marshal params: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, tc.fixture)
+			dir := t.TempDir()
+
+			params, err := json.Marshal(tc.params(t, dir))
+			if err != nil {
+				t.Fatalf("marshal params: %v", err)
+			}
+
+			writeFileT(t, filepath.Join(proj, "params.json"), string(params))
+
+			if err := runNextflow(t, proj, "-params-file", "params.json"); err == nil {
+				t.Fatal("an override naming a file Nextflow would mis-stage must fail the run")
+			}
+
+			runLog, err := os.ReadFile(filepath.Join(proj, "run.log"))
+			if err != nil {
+				t.Fatalf("read run.log: %v", err)
+			}
+
+			for _, want := range []string{tc.want, "Nextflow staging limitation, see docs/TRANSPILER.md section 8"} {
+				if !strings.Contains(string(runLog), want) {
+					t.Errorf("run log does not report %q:\n%s", want, runLog)
+				}
+			}
+
+			if strings.Contains(string(runLog), "BUILD_ENTRY_ARGS") {
+				t.Errorf("BUILD_ENTRY_ARGS ran; the override must be rejected before staging:\n%s", runLog)
+			}
+		})
 	}
-
-	writeFileT(t, filepath.Join(proj, "params.json"), string(params))
-
-	if err := runNextflow(t, proj, "-params-file", "params.json"); err != nil {
-		t.Fatal(err)
-	}
-
-	goldenJSON(t,
-		filepath.Join(proj, "results", "pipeline_outs.json"),
-		filepath.Join(fixtureDir, "expected", "epa_override_outs.json"))
 }
 
 // TestEntryFileRemoteURL checks an http:// file override is refused on the head
