@@ -563,6 +563,13 @@ without re-transpiling:
   re-encoded the way `mrp` encodes a float literal (`'g'`, shortest form), so
   `--f 2.0` and a `-params-file` `{"f": 2.0}` both reach the stage as `2`, as
   `f = 2.0` does under `mrp`.
+- The string guarantee holds only under the strict (v2) syntax parser, the
+  default from Nextflow 26.04. The v1 parser (the default on earlier releases,
+  or `NXF_SYNTAX_PARSER=v1`) converts CLI values before the script sees them:
+  `--b True` becomes `true`, and `--s 007` becomes the integer `7`, which no
+  later step can recover. On such a launch, set
+  `NXF_DISABLE_PARAMS_TYPE_DETECTION=true`. `-params-file` and HealthOmics run
+  parameters are unaffected.
 
 **File-typed inputs (the Cell Ranger model).** A run value that is a file is an
 `s3://` URI, which a worker cannot `stat` directly. So file-bearing inputs are
