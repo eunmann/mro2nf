@@ -343,6 +343,36 @@ class WalkAndMarkersTest(unittest.TestCase):
             self.assertEqual(fh.read(), "x")
 
 
+class CopyTreeTest(unittest.TestCase):
+    """copy_tree's symlink handling, matching copyTree's (bundle.go)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_symlink_cycle_fails(self):
+        # out/sub/loop -> out: recursing into loop re-enters an ancestor, which
+        # would otherwise recurse until ENAMETOOLONG.
+        root = os.path.join(self.tmp, "out")
+        os.makedirs(os.path.join(root, "sub"))
+        os.symlink(root, os.path.join(root, "sub", "loop"))
+        with self.assertRaises(rs.RunnerError) as ctx:
+            rs.copy_tree(root, os.path.join(self.tmp, "copy"), None)
+        self.assertIn("directory symlink cycle", str(ctx.exception))
+
+    def test_dangling_symlink_in_dir_skipped(self):
+        src = os.path.join(self.tmp, "out")
+        os.mkdir(src)
+        with open(os.path.join(src, "real.txt"), "w") as fh:
+            fh.write("keep")
+        os.symlink(os.path.join(self.tmp, "gone"), os.path.join(src, "broken"))
+        dst = os.path.join(self.tmp, "copy")
+        rs.copy_tree(src, dst, None)
+        with open(os.path.join(dst, "real.txt")) as fh:
+            self.assertEqual(fh.read(), "keep")
+        self.assertFalse(os.path.lexists(os.path.join(dst, "broken")))
+
+
 class ConfinementTest(unittest.TestCase):
     """#332: copy_tree's confinement of a stage's outputs (ports
     internal/shim/confine.go)."""

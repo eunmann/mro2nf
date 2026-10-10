@@ -866,26 +866,41 @@ def mark_files(bundle_dir, payload, params, structs, confine):
         raise RunnerError("collect bundle files: %s" % err) from None
 
 
-def copy_tree(src, dst, confine, copy_only=False):
+def copy_tree(src, dst, confine, copy_only=False, ancestors=None):
     """Ports CopyTree: resolve a symlinked source, recurse into directories,
-    hard-link files when possible, fall back to a byte copy. A non-None
+    hard-link files when possible, fall back to a byte copy. A dangling
+    symlink is skipped, and a directory reached again on its own recursion
+    path (a symlink back to an ancestor) is a cycle error. A non-None
     confine classifies the stage's own files; it is dropped below a staged
     input, and below a host path outside the task, whose tree is copied
     without hard links (copyTree's copyPolicy)."""
+    if os.path.islink(src):
+        if not os.path.exists(src):
+            return
+        resolved = os.path.realpath(src)
+    else:
+        resolved = src
     if confine is not None:
         kind = confine.admit(src)
         if kind == LEAF_STAGED:
             confine = None
         elif kind == LEAF_OUTSIDE:
             confine, copy_only = None, True
-    if os.path.islink(src):
-        src = os.path.realpath(src)
+    src = resolved
     st = os.stat(src)
     if _stat_mod.S_ISDIR(st.st_mode):
-        os.makedirs(dst, mode=_stat_mod.S_IMODE(st.st_mode), exist_ok=True)
-        for entry in sorted(os.listdir(src)):
-            copy_tree(os.path.join(src, entry), os.path.join(dst, entry),
-                      confine, copy_only)
+        ancestors = set() if ancestors is None else ancestors
+        dir_id = (st.st_dev, st.st_ino)
+        if dir_id in ancestors:
+            raise RunnerError("copy %s: directory symlink cycle" % src)
+        ancestors.add(dir_id)
+        try:
+            os.makedirs(dst, mode=_stat_mod.S_IMODE(st.st_mode), exist_ok=True)
+            for entry in sorted(os.listdir(src)):
+                copy_tree(os.path.join(src, entry), os.path.join(dst, entry),
+                          confine, copy_only, ancestors)
+        finally:
+            ancestors.discard(dir_id)
         return
     if not copy_only:
         try:
