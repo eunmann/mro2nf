@@ -302,6 +302,7 @@ a Nextflow `-params-file` or AWS HealthOmics run parameters — no re-transpile:
 
 ```bash
 nextflow run main.nf -params-file inputs.json     # e.g. {"values": [5, 6, 7]}
+nextflow run main.nf --n 5 --scale 2.5 --skip false  # scalars, parsed as declared
 ```
 
 A minimal **AWS CDK** app in `deploy/awsbatch-cdk/` provisions exactly the infra

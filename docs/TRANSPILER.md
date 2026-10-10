@@ -554,6 +554,24 @@ without re-transpiling:
   overlays the supplied values onto the baked defaults (a null value keeps the
   default). On AWS Batch you set them with `-params-file inputs.json`; on
   HealthOmics they are run parameters declared in `parameter-template.json`.
+- A command-line `--<name> <value>` reaches `mre entryargs` as a string, so a
+  scalar `int`, `float` or `bool` input is parsed strictly into its declared type
+  (a base-10 int64; a JSON number; exactly `true`/`false`). A value that does not
+  parse, or a string for an array, map or struct input, fails the run; set those
+  with `-params-file`.
+- Every float in a supplied value, typed or parsed and at any depth, is
+  re-encoded the way `mrp` encodes a float literal (`'g'`, shortest form). That
+  covers a `float` leaf of any shape and, inside an untyped `map`, any number
+  written with a `.` or an exponent, so
+  `--f 2.0` and a `-params-file` `{"f": 2.0}` both reach the stage as `2`, as
+  `f = 2.0` does under `mrp`.
+- The string guarantee holds only under the strict (v2) syntax parser, the
+  default from Nextflow 26.04. The v1 parser (the default on earlier releases,
+  or `NXF_SYNTAX_PARSER=v1`) converts CLI values before the script sees them:
+  `--b True` becomes `true`, and `--s 007` becomes the integer `7`, which no
+  later step can recover. On such a launch, set
+  `NXF_DISABLE_PARAMS_TYPE_DETECTION=true`. `-params-file` and HealthOmics run
+  parameters are unaffected.
 
 **File-typed inputs (the Cell Ranger model).** A run value that is a file is an
 `s3://` URI, which a worker cannot `stat` directly. So file-bearing inputs are

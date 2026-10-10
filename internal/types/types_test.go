@@ -329,3 +329,70 @@ func TestApplyUnknownKeysPreserved(t *testing.T) {
 		t.Errorf("got %v, want declared=A.TXT extra=9", got)
 	}
 }
+
+// TestFormatFloats checks float leaves at every depth take Martian's 'g', -1
+// encoding while int leaves and the caller's input are left untouched.
+func TestFormatFloats(t *testing.T) {
+	tbl := newTable()
+	params := []ir.Param{
+		{Name: "f", BaseType: "float"},
+		{Name: "i", BaseType: "int"},
+		{Name: "m", BaseType: "float", MapDim: 2},
+	}
+	in := []any{json.Number("2.0")}
+	vals := map[string]any{
+		"f": json.Number("1E6"),
+		"i": json.Number("2.0"),
+		"m": map[string]any{"k": in},
+	}
+
+	got := tbl.FormatFloats(params, vals)
+
+	want := map[string]any{
+		"f": json.Number("1e+06"),
+		"i": json.Number("2.0"),
+		"m": map[string]any{"k": []any{json.Number("2")}},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("FormatFloats mismatch (-want +got):\n%s", diff)
+	}
+
+	if in[0] != json.Number("2.0") {
+		t.Errorf("FormatFloats mutated its input: %v", in)
+	}
+}
+
+// TestFormatFloatsUntypedMap checks a float-literal number anywhere inside an
+// untyped map takes Martian's 'g', -1 encoding, as a FloatExp in an .mro map
+// literal does under mrp, while int-literal numbers keep their text.
+func TestFormatFloatsUntypedMap(t *testing.T) {
+	tbl := newTable()
+	params := []ir.Param{
+		{Name: "um", BaseType: "map"},
+		{Name: "ums", BaseType: "map", ArrayDim: 1},
+	}
+	vals := map[string]any{
+		"um": map[string]any{
+			"x":    json.Number("2.0"),
+			"n":    json.Number("7"),
+			"big":  json.Number("12345678901234567890"),
+			"deep": map[string]any{"a": []any{json.Number("1E6"), "s"}},
+		},
+		"ums": []any{map[string]any{"y": json.Number("0.50")}},
+	}
+
+	got := tbl.FormatFloats(params, vals)
+
+	want := map[string]any{
+		"um": map[string]any{
+			"x":    json.Number("2"),
+			"n":    json.Number("7"),
+			"big":  json.Number("12345678901234567890"),
+			"deep": map[string]any{"a": []any{json.Number("1e+06"), "s"}},
+		},
+		"ums": []any{map[string]any{"y": json.Number("0.5")}},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("FormatFloats mismatch (-want +got):\n%s", diff)
+	}
+}
