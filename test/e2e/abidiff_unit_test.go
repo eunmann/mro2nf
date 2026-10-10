@@ -252,6 +252,9 @@ func TestLoadDivergencesRejectsInvalid(t *testing.T) {
 		{name: "bad_file", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_jobinfo","rule":"basename-extension-only"}]}`},
 		{name: "unknown_rule", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore"}]}`},
 		{name: "unknown_field", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"basename-extension-only","stage":"X"}]}`},
+		{name: "ignore_key_no_key", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore-key"}]}`},
+		{name: "ceil_no_key", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ceil-number"}]}`},
+		{name: "basename_with_key", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"basename-extension-only","key":"k"}]}`},
 		{name: "malformed", doc: `{"divergences":[`},
 	}
 
@@ -276,6 +279,56 @@ func TestNewABINormalizerScopesRuleToFile(t *testing.T) {
 
 	if newABINormalizer(nil, outsFile, divs).extOnly {
 		t.Errorf("rule for %s leaked into %s", argsFile, outsFile)
+	}
+}
+
+// TestABINormalizeKeyRules checks ignore-key and ceil-number touch only the
+// named top-level key of the named file.
+func TestABINormalizeKeyRules(t *testing.T) {
+	divs := []divergence{
+		{Issue: 1, Summary: "s", File: argsFile, Rule: ruleIgnoreKey, Key: "__special"},
+		{Issue: 2, Summary: "s", File: argsFile, Rule: ruleCeilKey, Key: "__threads"},
+	}
+
+	const doc = `{"__special":"gpu","__threads":0.5,"__mem_gb":0.5,"x":{"__special":"gpu","__threads":0.5}}`
+
+	cases := []struct {
+		file string
+		want string
+	}{
+		{argsFile, `{"__mem_gb":0.5,"__threads":1,"x":{"__special":"gpu","__threads":0.5}}`},
+		{outsFile, `{"__mem_gb":0.5,"__special":"gpu","__threads":0.5,"x":{"__special":"gpu","__threads":0.5}}`},
+	}
+
+	for _, tc := range cases {
+		got, err := newABINormalizer(nil, tc.file, divs).normalize([]byte(doc))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.file, err)
+		}
+
+		if got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.file, got, tc.want)
+		}
+	}
+
+	for _, threads := range []string{"1", "2", "1.0"} {
+		mrp, err := newABINormalizer(nil, argsFile, divs).normalize([]byte(`{"__threads":0.5}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		nf, err := newABINormalizer(nil, argsFile, divs).normalize([]byte(`{"__threads":` + threads + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if equal := mrp == nf; equal != (threads != "2") {
+			t.Errorf("__threads 0.5 vs %s: equal=%v, want equal only when %s is 0.5 rounded up", threads, equal, threads)
+		}
+	}
+
+	if _, err := newABINormalizer(nil, argsFile, divs).normalize([]byte(`{"__threads":"1"}`)); !errors.Is(err, errABIMeta) {
+		t.Errorf("ceil-number on a string: err=%v, want errABIMeta", err)
 	}
 }
 
