@@ -70,8 +70,11 @@ _COMMON_FLAGS = {
 _PHASE_FLAGS = {
     "split": {"args": str, "chunkdir": str, "joinres": str},
     "main": {"args": str, "chunk": str},
-    "join": {"args": str, "chunkdefs": str, "chunkouts": str},
+    "join": {"args": str, "chunksfile": str, "chunkdir": str},
 }
+# Ports the non-empty string flag defaults (cmd/mre/main.go addCommon -work,
+# runJoin -chunkdir); split's -chunkdir defaults to "" (no chunk bundles).
+_STR_DEFAULTS = {("*", "work"): ".", ("join", "chunkdir"): "."}
 # Ports the addProducer default role per phase (cmd/mre/main.go).
 _ROLE_DEFAULT = {"split": "chunkin", "main": "mainout", "join": "out"}
 # Go strconv.ParseBool's exact accepted spellings (what flag's bool parsing
@@ -88,7 +91,8 @@ def _flag_defaults(phase, spec):
         elif kind is float:
             vals[name] = 1.0 if name in ("threads", "memgb") else 0.0
         else:
-            vals[name] = "." if name == "work" else ""
+            vals[name] = _STR_DEFAULTS.get(
+                (phase, name), _STR_DEFAULTS.get(("*", name), ""))
     vals["role"] = _ROLE_DEFAULT[phase]
     return vals
 
@@ -759,11 +763,6 @@ def write_text(path, text):
         out.write(text)
 
 
-def split_comma(s):
-    """Ports cmd/mre/io.go splitComma."""
-    return [p.strip() for p in s.split(",") if p.strip()]
-
-
 # ---------------------------------------------------------------------------
 # Stage setup and phase execution — ports internal/shim/meta.go prepDirs,
 # internal/shim/shim.go (cwd/TMPDIR/prlimit), and martian_shell.py's stage
@@ -1156,7 +1155,7 @@ def run_join(fl):
     eff = resolve_resources(Resources(), cli_resources(fl))
     merged = dict(args)
     inject_resources(merged, eff)
-    chunk_defs, chunk_outs = read_chunk_data(fl.chunkdefs, fl.chunkouts)
+    chunk_defs, chunk_outs = read_chunk_data(fl.chunksfile, fl.chunkdir)
     run_outs_phase(
         fl, "join", files, eff, man, args,
         lambda module, outs: module.join(
@@ -1164,23 +1163,87 @@ def run_join(fl):
     )
 
 
-def read_chunk_data(defs_list, outs_list):
+CHUNK_DEF_PREFIX = "chunk_"
+CHUNK_OUT_PREFIX = "out_" + CHUNK_DEF_PREFIX
+
+
+def read_chunk_data(chunks_file, chunk_dir):
     """Ports cmd/mre/io.go readChunkData + shim writeChunkData + the
     martian_shell join path: chunk_defs Records carry only each chunk's args
     (resources are stripped, as mre's _chunk_defs does); chunk_outs Records
     are each chunk's resolved outs payload. Both defs and outs are per-chunk
-    bundle dirs resolved via read_bundle, so a file-typed chunk-def leaf the
-    split phase created is rewritten to a staged path the join worker can open
-    (#217). An empty list is a 0-chunk split (the join still runs)."""
+    bundle dirs listed from chunk_dir in chunk-index order, which must number
+    exactly the chunks chunks.json lists, and are resolved via read_bundle, so
+    a file-typed chunk-def leaf the split phase created is rewritten to a
+    staged path the join worker can open (#217). Zero chunks is a 0-chunk
+    split (the join still runs)."""
+    count = read_chunk_count(chunks_file)
     def_recs = []
-    for dir_ in split_comma(defs_list):
+    for dir_ in gather_indexed(chunk_dir, CHUNK_DEF_PREFIX, count):
         _res, args = decode_chunk(read_bundle(dir_))
         def_recs.append(record(args))
     out_recs = []
-    for dir_ in split_comma(outs_list):
+    for dir_ in gather_indexed(chunk_dir, CHUNK_OUT_PREFIX, count):
         payload = as_object(read_bundle(dir_), "chunk outs bundle %s" % dir_)
         out_recs.append(record(payload))
     return def_recs, out_recs
+
+
+def read_chunk_count(path):
+    """Ports cmd/mre/io.go readChunkCount: the split's chunk-def count."""
+    if not path:
+        raise RunnerError(
+            "join requires -chunksfile <the split's chunks.json>")
+    with open(path, encoding="utf-8") as fh:
+        defs = json.load(fh)
+    if defs is None:
+        return 0
+    if not isinstance(defs, list):
+        raise RunnerError("parse chunk defs %s: not a JSON array" % path)
+    return len(defs)
+
+
+def gather_indexed(dir_, prefix, want):
+    """Ports cmd/mre/gather.go gatherIndexed + orderByIndex: the paths of
+    dir_'s prefix+<stem><index> entries in index order, which must be
+    exactly indices 0..want-1 under one shared stem. A missing dir is zero
+    entries (what Nextflow stages for an empty list)."""
+    try:
+        entries = os.listdir(dir_)
+    except FileNotFoundError:
+        entries = []
+    names = sorted(n for n in entries if n.startswith(prefix))
+    if len(names) != want:
+        raise RunnerError(
+            "gathered entry count differs from the expected count: "
+            "%d %s* entries in %s, want %d" % (len(names), prefix, dir_, want))
+    paths = [None] * want
+    stem = None
+    for name in names:
+        s, idx = split_index(name)
+        if stem is None:
+            stem = s
+        elif s != stem:
+            raise RunnerError(
+                "malformed gather entry: %r does not share the stem %r"
+                % (name, stem))
+        if idx >= want or paths[idx] is not None:
+            raise RunnerError(
+                "malformed gather entry: %r index %d is repeated or past "
+                "the %d expected entries" % (name, idx, want))
+        paths[idx] = os.path.join(dir_, name)
+    return paths
+
+
+def split_index(name):
+    """Ports cmd/mre/gather.go splitIndex: (stem, trailing decimal index)."""
+    cut = len(name)
+    while cut > 0 and name[cut - 1] in "0123456789":
+        cut -= 1
+    if cut == len(name):
+        raise RunnerError(
+            "malformed gather entry: %r has no trailing index" % name)
+    return name[:cut], int(name[cut:])
 
 
 # ---------------------------------------------------------------------------

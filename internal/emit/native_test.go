@@ -201,10 +201,10 @@ func TestGenerateNativeMergeFold(t *testing.T) {
 
 	for _, want := range []string{
 		"path(souts_SCALE, stageAs: 'souts_SCALE/*')",
-		"path 'forkkeys_SCALE.json'",
+		"path 'forkmeta_SCALE.json'",
 		// -emptynull: fork_min's split source is an entry self ref, so a zero-fork
 		// merge yields null (mrp's invocation-known-empty rule, #99).
-		`'mre' merge -emptynull -outs 'scaled' -files "\$(ls -1d souts_SCALE/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keysfile forkkeys_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
+		`'mre' merge -emptynull -outs 'scaled' -forksdir souts_SCALE -keysfile forkmeta_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
 		"-inputs SCALE=merged_SCALE",
 		".out.ref_SCALE_souts, ",
 		".out.ref_SCALE_keys",
@@ -302,15 +302,15 @@ func TestGenerateNativeScatter(t *testing.T) {
 		// per-element path (#99): index 0 computes keys, index >0 assembles
 		// from its own base64 element, no whole-collection re-parse.
 		"tuple val(key), val(fi), val(element)",
-		"-mapmode array -index 0 -o fargs -keysfile forkkeys.mro2nf.json",
+		"-mapmode array -index 0 -o fargs -keysfile forkmeta.mro2nf.json",
 		"printf %s '${element}' | base64 -d > element.json",
 		// The element branch carries no full-collection flags (forkbind
 		// rejects -mapmode and friends alongside -elementfile).
 		"-pipeargs pipeargs -elementfile element.json -o fargs",
-		"-mapmode array -keysonly -keysfile forkkeys.mro2nf.json",
+		"-mapmode array -keysonly -keysfile forkmeta.mro2nf.json",
 		"Mro2nf.forkElements(data, 'values', 'array')",
 		"path \"outs__${key}\", type: 'dir', emit: outs, optional: true",
-		"path 'forkkeys.mro2nf.json', emit: keys, optional: true",
+		"path 'forkmeta.mro2nf.json', emit: keys, optional: true",
 		// The MERGE folds into the entry return's LAYOUT (#76): the workflow
 		// exposes the per-fork outs + keys channels for it instead.
 		"ch_SCALE_souts = STAGE_9_SCALE_ALL__SCALE.out.outs.toSortedList { a, b -> a.name <=> b.name }",
@@ -368,7 +368,7 @@ func TestGenerateNativeScatterUpstreamElements(t *testing.T) {
 // keyed gather that groups per-fork/per-chunk outputs with groupTuple must sort
 // the grouped bundle list by name before handing it to the gather task. The
 // grouped ORDER is completion order, and a task's input tuple order is part of
-// its -resume cache key — output bytes are already safe (in-task `sort -V`),
+// its -resume cache key — output bytes are already safe (mre orders by index),
 // but an arrival-ordered input list would re-execute the gather on replay.
 const sortedGather = ".sort { a, b -> a.name <=> b.name }"
 
@@ -417,8 +417,8 @@ func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
 	}
 
 	triad := generateStageModule(ms.Stages["SUMSQ"], gm)
-	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[4] ?: [])" +
-		sortedGather + ", t[1], (t[3] ?: [])) }"
+	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[5] ?: [])" +
+		sortedGather + ", t[1], (t[4] ?: []), t[3]) }"
 
 	if !strings.Contains(triad, wantTriad) {
 		t.Errorf("keyed split triad must sort JOIN_K's grouped chunk outs by name:\n%s", triad)
@@ -426,7 +426,7 @@ func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
 
 	// No gather may keep the bare arrival-ordered list.
 	for name, mod := range map[string]string{"scatter": scatter, "fork_k": forked, "triad": triad} {
-		if strings.Contains(mod, "so ?: [], fk") || strings.Contains(mod, "t[4] ?: [], t[1]") {
+		if strings.Contains(mod, "so ?: [], fk") || strings.Contains(mod, "t[5] ?: [], t[1]") {
 			t.Errorf("%s module still gathers in arrival order:\n%s", name, mod)
 		}
 	}

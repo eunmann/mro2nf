@@ -224,7 +224,7 @@ in `wf_<stage>`:
 ```groovy
 process SUM_SQUARES_SPLIT { … script: "mre split … -o chunks.json -joinres joinres.json -chunkdir ." }
 process SUM_SQUARES_MAIN  { … script: "mre main  … -chunk ${chunk} -o out_${chunk.baseName}" }
-process SUM_SQUARES_JOIN  { … script: "mre join  … -chunkdefs ${defs} -chunkouts … -o outs" }
+process SUM_SQUARES_JOIN  { … script: "mre join  … -chunksfile chunks.json -chunkdir . -o outs" }
 
 workflow wf_SUM_SQUARES {
   take: args
@@ -239,7 +239,8 @@ workflow wf_SUM_SQUARES {
     // JOIN gathers the chunk outs sorted by name — NOT .collect(), whose
     // completion order would be part of JOIN's -resume cache key and would
     // starve a 0-chunk JOIN. toSortedList emits [] on an empty channel.
-    SUM_SQUARES_JOIN(join, args, SUM_SQUARES_SPLIT.out.defs,
+    SUM_SQUARES_JOIN(join, args, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]),
+        SUM_SQUARES_SPLIT.out.defs,
         SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
     SUM_SQUARES_JOIN.out
@@ -260,6 +261,10 @@ Key points:
   resource request; SPLIT writes it to `joinres.json`, the workflow parses it
   into a `join` value, and JOIN's `cpus`/`memory` read it — so the join phase is
   scheduled like `mrp` would.
+- **Chunk gather.** JOIN stages the `chunk_N` def bundles, the `out_chunk_N`
+  outs, and the split's `chunks.json`. `mre join` lists the task dir itself,
+  orders both sets by chunk index, and fails unless each numbers exactly the
+  chunks in `chunks.json` — a lost chunk never joins as a shorter result.
 
 ### 4.3 A pipeline → a workflow, calls → BIND + callee
 
@@ -318,7 +323,14 @@ fork), the emitter renders:
   callee workflow (`wf_<callee>_map`), where every channel item is a
   `tuple(key, bundle)` so chunks/joins stay partitioned by fork.
 - A **MERGE process** (`mre merge`) that gathers the per-fork outputs back into a
-  single array/map-shaped output bundle.
+  single array/map-shaped output bundle. `mre merge -forksdir <dir>` lists the
+  staged `outs__<key>` bundles itself, orders them by the fork index each key
+  ends in, and fails unless they number exactly the `count` in the
+  `forkmeta.json` sidecar (`{"count": N, "keys": [...] | null}`) — no fork
+  list rides on the command line, so the gather has no argv-length ceiling.
+  The sidecar's file name is part of its format: a `-resume` across a format
+  change finds no cached sidecar under the new name and re-runs the producer,
+  so a merge never reads a stale-format one.
 
 Every stage and pipeline therefore gets **two** emitted workflows: the plain
 `wf_<name>` and the keyed `wf_<name>_map`. The keyed forms exist so a map call
