@@ -432,13 +432,14 @@ process %[1]s_JOIN {
     val join
     %[11]s
     path cdefs
+    path 'chunks.json'
     path souts
     path 'types.json'
   output:
     %[13]s
   script:
     """
-    %[5]s -args args -chunkdefs "\$(ls -1d chunk_* 2>/dev/null | sort -V | paste -sd, -)" -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)"%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[5]s -args args %[14]s%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
     """
 }
 
@@ -447,8 +448,15 @@ process %[1]s_JOIN {
 		g.producerArgs(s.Name, types.RoleMainOut),
 		g.producerArgs(s.Name, types.RoleOut),
 		stageDirectives(s, "res"), stageDirectives(s, "join"),
-		bundleInput("args"), bundleInputElems("args"), bundleOutput("outs"))
+		bundleInput("args"), bundleInputElems("args"), bundleOutput("outs"), joinGatherFlags)
 }
+
+// joinGatherFlags points a JOIN at its staged chunk bundles: the stage (mre or
+// the native runner) lists the task dir for chunk_N defs and out_chunk_N outs
+// itself and checks both against the split's chunks.json count. A
+// shell-expanded list would hit the kernel's per-argument limit at ~8k chunks
+// and hide a failed listing as an empty join.
+const joinGatherFlags = "-chunksfile chunks.json -chunkdir ."
 
 func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 	fmt.Fprintf(b, `workflow wf_%[1]s {
@@ -464,7 +472,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     // order is completion order, which is part of JOIN's -resume cache key.
     // toSortedList emits [] on an empty channel, so a 0-chunk split still joins.
     // (x/y, not the a/b used elsewhere: 'a' is a workflow local here.)
-    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.chunks.ifEmpty([]), %[1]s_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)
+    %[1]s_JOIN(join, a, %[1]s_SPLIT.out.chunks.ifEmpty([]), %[1]s_SPLIT.out.defs, %[1]s_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
     %[1]s_JOIN.out
 }
@@ -556,7 +564,7 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkkeys_%[1]s.json'\n", id)
 		pairs = append(pairs, fmt.Sprintf("%s=merged_%s", id, id))
 		fmt.Fprintf(&pre, "    %s\n", g.mergeCmd(prod.Callable, calleeOutNames(prog, prod.Callable),
-			"souts_"+id+"/outs__*", "forkkeys_"+id+".json", "merged_"+id,
+			"souts_"+id, "forkkeys_"+id+".json", "merged_"+id,
 			g.plan.pipes[p.Name].calls[prod.Name].emptyNull))
 	}
 
@@ -573,18 +581,21 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 
 // mergeCmd renders the `mre merge` gather command. The MERGE task, the keyed
 // MERGE_K task, and the folded in-task merge (#76) all share it, so the
-// invocations cannot drift — they differ only in where the fork outs live and
-// where the result lands.
+// invocations cannot drift — they differ only in which staged dir holds the
+// outs__<key> fork bundles and where the result lands. mre lists forksDir
+// itself and checks the bundles against the keys sidecar's fork count: a
+// shell-expanded list would hit the kernel's per-argument limit at a few
+// thousand forks and hide a failed listing as an empty gather.
 // emptyNull applies mrp's invocation-known-empty rule: zero forks merge to
 // null instead of the typed empty (#99).
-func (g genCtx) mergeCmd(callable, outs, glob, keysFile, outDir string, emptyNull bool) string {
+func (g genCtx) mergeCmd(callable, outs, forksDir, keysFile, outDir string, emptyNull bool) string {
 	flag := ""
 	if emptyNull {
 		flag = " -emptynull"
 	}
 
-	return fmt.Sprintf(`'%s' merge%s -outs '%s' -files "\$(ls -1d %s 2>/dev/null | sort -V | paste -sd, -)" -keysfile %s -o %s%s`,
-		g.mre, flag, outs, glob, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
+	return fmt.Sprintf(`'%s' merge%s -outs '%s' -forksdir %s -keysfile %s -o %s%s`,
+		g.mre, flag, outs, forksDir, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
 }
 
 // foldCallArgs is bindCallArgsPa for a fold-aware consumer invocation: a
@@ -681,7 +692,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 }
 
 `, mergeName(pipeline, c.Name),
-		g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged",
+		g.mergeCmd(c.Callable, calleeOuts, ".", "forkkeys.json", "merged",
 			g.plan.pipes[pipeline].calls[c.Name].emptyNull),
 		bundleOutput("merged"))
 }
@@ -1324,7 +1335,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
     %[4]s(chunks.combine(a), types)
     join = %[3]s.out.joinres.map { f -> Mro2nf.parseJson(f) }
     // Sorted for the same -resume cache-key reason as genSplitWorkflow's JOIN.
-    %[5]s(join, a, %[3]s.out.chunks.ifEmpty([]), %[4]s.out.toSortedList { x, y -> x.name <=> y.name }, types)
+    %[5]s(join, a, %[3]s.out.chunks.ifEmpty([]), %[3]s.out.defs, %[4]s.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
     %[5]s.out
 }

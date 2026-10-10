@@ -58,8 +58,8 @@ func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 // `forkbind -keysonly`: every binding is resolved and validated exactly as the
 // always-running FORK task did — a wrong-kind or mis-zipped source still fails
 // loudly — and only the keys sidecar is produced, so both outputs are optional.
-// Out bundles are named outs__<key> so the gather's `sort -V` staging orders
-// forks exactly as the keyed path does; the sidecar's task-side name is
+// Out bundles are named outs__<key> so the gather orders forks by the key's
+// index exactly as the keyed path does; the sidecar's task-side name is
 // forkkeys.mro2nf.json because the stage main shares this cwd (-work .), so a
 // stage scratch file named forkkeys.json must not satisfy the optional keys
 // output (consumers rename it on staging anyway). The trailing [ -d

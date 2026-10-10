@@ -204,7 +204,7 @@ func TestGenerateNativeMergeFold(t *testing.T) {
 		"path 'forkkeys_SCALE.json'",
 		// -emptynull: fork_min's split source is an entry self ref, so a zero-fork
 		// merge yields null (mrp's invocation-known-empty rule, #99).
-		`'mre' merge -emptynull -outs 'scaled' -files "\$(ls -1d souts_SCALE/outs__* 2>/dev/null | sort -V | paste -sd, -)" -keysfile forkkeys_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
+		`'mre' merge -emptynull -outs 'scaled' -forksdir souts_SCALE -keysfile forkkeys_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
 		"-inputs SCALE=merged_SCALE",
 		".out.ref_SCALE_souts, ",
 		".out.ref_SCALE_keys",
@@ -368,7 +368,7 @@ func TestGenerateNativeScatterUpstreamElements(t *testing.T) {
 // keyed gather that groups per-fork/per-chunk outputs with groupTuple must sort
 // the grouped bundle list by name before handing it to the gather task. The
 // grouped ORDER is completion order, and a task's input tuple order is part of
-// its -resume cache key — output bytes are already safe (in-task `sort -V`),
+// its -resume cache key — output bytes are already safe (mre orders by index),
 // but an arrival-ordered input list would re-execute the gather on replay.
 const sortedGather = ".sort { a, b -> a.name <=> b.name }"
 
@@ -417,8 +417,8 @@ func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
 	}
 
 	triad := generateStageModule(ms.Stages["SUMSQ"], gm)
-	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[4] ?: [])" +
-		sortedGather + ", t[1], (t[3] ?: [])) }"
+	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[5] ?: [])" +
+		sortedGather + ", t[1], (t[4] ?: []), t[3]) }"
 
 	if !strings.Contains(triad, wantTriad) {
 		t.Errorf("keyed split triad must sort JOIN_K's grouped chunk outs by name:\n%s", triad)
@@ -426,7 +426,7 @@ func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
 
 	// No gather may keep the bare arrival-ordered list.
 	for name, mod := range map[string]string{"scatter": scatter, "fork_k": forked, "triad": triad} {
-		if strings.Contains(mod, "so ?: [], fk") || strings.Contains(mod, "t[4] ?: [], t[1]") {
+		if strings.Contains(mod, "so ?: [], fk") || strings.Contains(mod, "t[5] ?: [], t[1]") {
 			t.Errorf("%s module still gathers in arrival order:\n%s", name, mod)
 		}
 	}

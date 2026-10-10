@@ -239,7 +239,7 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 }
 
 `, mergeName(pipeline, c.Name),
-		g.mergeCmd(c.Callable, calleeOuts, "outs__*", "forkkeys.json", "merged",
+		g.mergeCmd(c.Callable, calleeOuts, ".", "forkkeys.json", "merged",
 			g.plan.pipes[pipeline].calls[c.Name].emptyNull))
 }
 
@@ -361,7 +361,7 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call, c
 		// groupTuple's per-group order is completion order; sorting the grouped
 		// bundles by name pins MERGE_K's input order — part of its -resume cache
 		// key — so a replay stays CACHED regardless of arrival order (the output
-		// bytes are already order-safe via the in-task `sort -V`).
+		// bytes are already order-safe: mre merge orders forks by index).
 		fmt.Fprintf(body, "    mj_%[1]s = io_%[1]s.keys.join(io_%[1]s.outs.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, (so ?: []).sort { a, b -> a.name <=> b.name }, fk) }\n", c.Name)
 		fmt.Fprintf(body, "    %s_K(mj_%s, types)\n", merge, c.Name)
 		fmt.Fprintf(body, "    ch_%[1]s_l = %[2]s_K.out.toList()\n", c.Name, merge)
@@ -585,20 +585,20 @@ process %[1]s_MAIN_K {
 process %[1]s_JOIN_K {
 %[10]s
   input:
-    tuple val(key), val(join), path(souts), path(args), path(cdefs)
+    tuple val(key), val(join), path(souts), path(args), path(cdefs), path('chunks.json')
     path 'types.json'
   output:
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[6]s -args ${args} -chunkdefs "\$(ls -1d chunk_* 2>/dev/null | sort -V | paste -sd, -)" -chunkouts "\$(ls -1d out_* 2>/dev/null | sort -V | paste -sd, -)"%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[6]s -args ${args} %[11]s%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
     """
 }
 
 `, s.Name, stageDirectives(s, ""), splitCmd, g.producerArgs(s.Name, types.RoleChunkIn),
 		base, joinCmd, g.producerArgs(s.Name, types.RoleMainOut),
 		g.producerArgs(s.Name, types.RoleOut),
-		stageDirectives(s, "res"), stageDirectives(s, "join"))
+		stageDirectives(s, "res"), stageDirectives(s, "join"), joinGatherFlags)
 }
 
 // genKeyedSplitWorkflow wires the keyed split processes. multiMap duplicates the
@@ -617,14 +617,16 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     // Drive the join from the full fork set (ch.jn) with remainder joins on the
     // staged chunk bundles and chunk outputs, so a fork whose split produced zero
     // chunks (no chunk_* dirs, no groupTuple group) still runs JOIN_K — with empty
-    // chunk-defs and chunk-outs lists — instead of being dropped. joinres is
-    // inner-joined (always emitted per fork). JOIN_K consumes the staged chunk
-    // bundles (SPLIT_K.out.chunks), not the unstaged chunks.json summary, so a
-    // file-typed chunk-def leaf the split phase created reaches the join worker as
-    // a staged path rather than the split's absent scratch path (#217). The
+    // chunk-defs and chunk-outs lists — instead of being dropped. joinres and
+    // chunks.json (the count JOIN_K checks its gathered chunks against) are
+    // inner-joined (always emitted per fork). JOIN_K reads chunk defs from the
+    // staged chunk bundles (SPLIT_K.out.chunks), not the unstaged chunks.json
+    // summary, so a file-typed chunk-def leaf the split phase created reaches
+    // the join worker as a staged path rather than the split's absent scratch
+    // path (#217). The
     // grouped chunk outs are sorted by name: groupTuple order is completion order,
     // and JOIN_K's input order is part of its -resume cache key.
-    joined = ch.jn.join(joinres).join(%[1]s_SPLIT_K.out.chunks, remainder: true).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[4] ?: []).sort { a, b -> a.name <=> b.name }, t[1], (t[3] ?: [])) }
+    joined = ch.jn.join(joinres).join(%[1]s_SPLIT_K.out.defs).join(%[1]s_SPLIT_K.out.chunks, remainder: true).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[5] ?: []).sort { a, b -> a.name <=> b.name }, t[1], (t[4] ?: []), t[3]) }
     %[1]s_JOIN_K(joined, types)
   emit:
     %[1]s_JOIN_K.out

@@ -192,9 +192,10 @@ func TestBumpForkDim(t *testing.T) {
 	}
 }
 
-// TestForkMetaRoundTrip round-trips the fork sidecars: an array fork writes a
-// literal JSON null to forkkeys.json (read back as nil keys), a map fork writes
-// its key array; forknames.json always lists the fork bundle dirs.
+// TestForkMetaRoundTrip round-trips the fork sidecars: forkkeys.json carries
+// the fork count plus a JSON null keys field for an array fork (read back as
+// nil keys) or the map fork's key array; forknames.json always lists the fork
+// bundle dirs.
 func TestForkMetaRoundTrip(t *testing.T) {
 	names := []string{"fork_00000", "fork_00001"}
 
@@ -203,8 +204,8 @@ func TestForkMetaRoundTrip(t *testing.T) {
 		keys     []string
 		wantFile string
 	}{
-		{name: "array fork", keys: nil, wantFile: "null"},
-		{name: "map fork", keys: []string{"a", "b"}, wantFile: `["a","b"]`},
+		{name: "array fork", keys: nil, wantFile: `{"count":2,"keys":null}`},
+		{name: "map fork", keys: []string{"a", "b"}, wantFile: `{"count":2,"keys":["a","b"]}`},
 	}
 
 	for _, tc := range tests {
@@ -225,13 +226,13 @@ func TestForkMetaRoundTrip(t *testing.T) {
 				t.Errorf("forkkeys.json = %q, want %q", data, tc.wantFile)
 			}
 
-			gotKeys, err := readForkKeys(keysPath)
+			got, err := readForkMeta(keysPath)
 			if err != nil {
-				t.Fatalf("readForkKeys: %v", err)
+				t.Fatalf("readForkMeta: %v", err)
 			}
 
-			if diff := cmp.Diff(tc.keys, gotKeys); diff != "" {
-				t.Errorf("keys round-trip mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(forkMeta{Count: len(names), Keys: tc.keys}, got); diff != "" {
+				t.Errorf("fork meta round-trip mismatch (-want +got):\n%s", diff)
 			}
 
 			var gotNames []string
@@ -337,13 +338,16 @@ func TestReadChunkDataResolvesFileLeaves(t *testing.T) {
 		t.Fatalf("WriteChunkBundle: %v", err)
 	}
 
-	defs, outs, err := readChunkData(bundle, "")
+	writeTestBundle(t, filepath.Join(tmp, "out_chunk_00000"), map[string]any{"part": 1})
+	chunks := writeTestFile(t, filepath.Join(tmp, "chunks.json"), `[{"chunk_id":0}]`)
+
+	defs, outs, err := readChunkData(chunks, tmp)
 	if err != nil {
 		t.Fatalf("readChunkData: %v", err)
 	}
 
-	if len(defs) != 1 || len(outs) != 0 {
-		t.Fatalf("got %d defs / %d outs, want 1 / 0", len(defs), len(outs))
+	if len(defs) != 1 || len(outs) != 1 {
+		t.Fatalf("got %d defs / %d outs, want 1 / 1", len(defs), len(outs))
 	}
 
 	var got string
@@ -521,7 +525,7 @@ func TestRunBindSmoke(t *testing.T) {
 
 // TestRunForkBindArraySmoke drives forkbind in array mode over a literal split:
 // one fork bundle per element, forknames.json listing them in order, and a
-// literal null forkkeys.json (no map keys).
+// forkkeys.json with the fork count and null keys.
 func TestRunForkBindArraySmoke(t *testing.T) {
 	dir := t.TempDir()
 	spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"n":{"literal":[1,2],"split":true}}`)
@@ -551,8 +555,8 @@ func TestRunForkBindArraySmoke(t *testing.T) {
 		t.Fatalf("read forkkeys.json: %v", err)
 	}
 
-	if string(keysRaw) != "null" {
-		t.Errorf("forkkeys.json = %q, want null", keysRaw)
+	if want := `{"count":2,"keys":null}`; string(keysRaw) != want {
+		t.Errorf("forkkeys.json = %q, want %q", keysRaw, want)
 	}
 }
 
@@ -777,8 +781,8 @@ func TestRunForkBindIndexKeysFile(t *testing.T) {
 	tests := []struct {
 		name, spec, mapMode, want string
 	}{
-		{name: "array fork", spec: `{"n":{"literal":[10,20],"split":true}}`, mapMode: "array", want: "null"},
-		{name: "map fork", spec: `{"n":{"literal":{"a":1,"b":2},"split":true}}`, mapMode: "map", want: `["a","b"]`},
+		{name: "array fork", spec: `{"n":{"literal":[10,20],"split":true}}`, mapMode: "array", want: `{"count":2,"keys":null}`},
+		{name: "map fork", spec: `{"n":{"literal":{"a":1,"b":2},"split":true}}`, mapMode: "map", want: `{"count":2,"keys":["a","b"]}`},
 	}
 
 	for _, tc := range tests {
@@ -840,8 +844,8 @@ func TestRunForkBindKeysOnly(t *testing.T) {
 	tests := []struct {
 		name, spec, mapMode, want string
 	}{
-		{name: "empty array fork", spec: `{"n":{"literal":[],"split":true}}`, mapMode: "array", want: "null"},
-		{name: "empty map fork", spec: `{"n":{"literal":{},"split":true}}`, mapMode: "map", want: "[]"},
+		{name: "empty array fork", spec: `{"n":{"literal":[],"split":true}}`, mapMode: "array", want: `{"count":0,"keys":null}`},
+		{name: "empty map fork", spec: `{"n":{"literal":{},"split":true}}`, mapMode: "map", want: `{"count":0,"keys":[]}`},
 	}
 
 	for _, tc := range tests {
@@ -897,32 +901,50 @@ func TestRunForkBindKeysOnly(t *testing.T) {
 	}
 }
 
-// TestRunMergeSmoke drives merge end to end: an array fork collects each output
-// into an ordered array; a keyed (map) fork rebuilds a map from the keys file.
+// TestRunMergeSmoke drives merge end to end from a staged forks dir: an array
+// fork collects each output into an array in fork-index order; a keyed (map)
+// fork rebuilds a map from the keys sidecar; zero forks (no staged dir at all,
+// as Nextflow stages an empty list) merge to the typed empty.
 func TestRunMergeSmoke(t *testing.T) {
 	tests := []struct {
 		name     string
-		keysJSON string // empty = array fork (no -keysfile)
+		forks    []string // outs__ key per fork, written in this (unsorted) order
+		keysJSON string
 		want     map[string]any
 	}{
-		{name: "array fork", want: map[string]any{"s": []any{1.0, 2.0}}},
-		{name: "map fork", keysJSON: `["a","b"]`, want: map[string]any{"s": map[string]any{"a": 1.0, "b": 2.0}}},
+		{
+			name:     "array fork",
+			forks:    []string{"fork_00001", "fork_00000"},
+			keysJSON: `{"count":2,"keys":null}`,
+			want:     map[string]any{"s": []any{0.0, 1.0}},
+		},
+		{
+			name:     "map fork",
+			forks:    []string{"fork_00000", "fork_00001"},
+			keysJSON: `{"count":2,"keys":["a","b"]}`,
+			want:     map[string]any{"s": map[string]any{"a": 0.0, "b": 1.0}},
+		},
+		{
+			name:     "composite keys",
+			forks:    []string{"fork_00003~fork_00001", "fork_00003~fork_00000"},
+			keysJSON: `{"count":2,"keys":null}`,
+			want:     map[string]any{"s": []any{0.0, 1.0}},
+		},
+		{name: "zero array forks", keysJSON: `{"count":0,"keys":null}`, want: map[string]any{"s": []any{}}},
+		{name: "zero map forks", keysJSON: `{"count":0,"keys":[]}`, want: map[string]any{"s": map[string]any{}}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			fork0 := filepath.Join(dir, "f0")
-			fork1 := filepath.Join(dir, "f1")
-			writeTestBundle(t, fork0, map[string]any{"s": 1})
-			writeTestBundle(t, fork1, map[string]any{"s": 2})
+			forks := filepath.Join(dir, "souts")
+			writeForkOuts(t, forks, tc.forks)
 			out := filepath.Join(dir, "merged")
 
-			argv := []string{"merge", "-outs", "s", "-files", fork0 + "," + fork1, "-o", out}
-			if tc.keysJSON != "" {
-				argv = append(argv, "-keysfile", writeTestFile(t, filepath.Join(dir, "keys.json"), tc.keysJSON))
+			argv := []string{
+				"merge", "-outs", "s", "-forksdir", forks, "-o", out,
+				"-keysfile", writeTestFile(t, filepath.Join(dir, "keys.json"), tc.keysJSON),
 			}
-
 			if err := run(t.Context(), argv); err != nil {
 				t.Fatalf("run merge: %v", err)
 			}
@@ -931,6 +953,63 @@ func TestRunMergeSmoke(t *testing.T) {
 				t.Errorf("merged outs mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestRunMergeCountMismatch is the #324 guard: a merge whose staged fork
+// bundles do not number the sidecar's fork count fails loudly instead of
+// publishing a short (or empty) result, and the sidecar itself must be
+// present and self-consistent.
+func TestRunMergeCountMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		forks    []string
+		keysJSON string // empty = no -keysfile
+		wantErr  error
+	}{
+		{name: "fork missing", forks: []string{"fork_00000"}, keysJSON: `{"count":2,"keys":null}`, wantErr: errGatherCount},
+		{name: "no forks staged", keysJSON: `{"count":3,"keys":null}`, wantErr: errGatherCount},
+		{name: "extra fork", forks: []string{"fork_00000", "fork_00001"}, keysJSON: `{"count":1,"keys":null}`, wantErr: errGatherCount},
+		{name: "index gap", forks: []string{"fork_00000", "fork_00002"}, keysJSON: `{"count":2,"keys":null}`, wantErr: errGatherEntry},
+		{name: "keys disagree with count", forks: []string{"fork_00000"}, keysJSON: `{"count":1,"keys":["a","b"]}`, wantErr: errForkMeta},
+		{name: "sidecar without count", forks: []string{"fork_00000"}, keysJSON: `{"keys":null}`, wantErr: errForkMeta},
+		{name: "no keysfile", forks: []string{"fork_00000"}, wantErr: errNoKeysFile},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			forks := filepath.Join(dir, "souts")
+			writeForkOuts(t, forks, tc.forks)
+
+			argv := []string{"merge", "-outs", "s", "-forksdir", forks, "-o", filepath.Join(dir, "merged")}
+			if tc.keysJSON != "" {
+				argv = append(argv, "-keysfile", writeTestFile(t, filepath.Join(dir, "keys.json"), tc.keysJSON))
+			}
+
+			if err := run(t.Context(), argv); !errors.Is(err, tc.wantErr) {
+				t.Errorf("run merge: err = %v, want %v", err, tc.wantErr)
+			}
+
+			if _, err := os.Stat(filepath.Join(dir, "merged")); !os.IsNotExist(err) {
+				t.Error("a failed merge must not write the merged bundle")
+			}
+		})
+	}
+}
+
+// writeForkOuts stages one outs__<key> bundle per key under dir, each carrying
+// its key's trailing fork index as output "s" so a test can read back the order.
+func writeForkOuts(t *testing.T, dir string, keys []string) {
+	t.Helper()
+
+	for _, key := range keys {
+		_, idx, err := splitIndex(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		writeTestBundle(t, filepath.Join(dir, forkOutPrefix+key), map[string]any{"s": idx})
 	}
 }
 
