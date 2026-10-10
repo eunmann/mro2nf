@@ -12,10 +12,9 @@ package e2e
 // -native -native-runner) Nextflow legs against the same mrp pipestance
 // (#120), so the native emit path faces live mrp, not only committed goldens.
 //
-// Requires a local Martian build: set MARTIAN_BIN (default
-// ~/workdir/martian/bin). Skips cleanly — never fails, even under
-// E2E_REQUIRE=1 — when mrp is unavailable, so CI without a Martian checkout
-// is unaffected.
+// Requires a Martian build: set MARTIAN_BIN (default ~/workdir/martian/bin).
+// Without one it skips locally and fails under E2E_REQUIRE=1, where CI builds
+// it (.github/actions/setup-martian).
 
 import (
 	"crypto/sha256"
@@ -32,15 +31,14 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// martianBin resolves the local Martian bin dir and skips the test when mrp
-// is absent. Unlike requireTools this NEVER hard-fails under E2E_REQUIRE=1:
-// CI has no Martian checkout, so the differential suite is local-only.
-func martianBin(t *testing.T) string {
-	t.Helper()
+// martianBin resolves the Martian bin dir and, like requireTools, skips the
+// test when mrp is absent or fails it under E2E_REQUIRE=1.
+func martianBin(tb testing.TB) string {
+	tb.Helper()
 
 	bin, err := lookupMartianBin()
 	if err != nil {
-		t.Skip(err)
+		missingPrereqf(tb, "%v", err)
 	}
 
 	return bin
@@ -63,6 +61,28 @@ func lookupMartianBin() (string, error) {
 	}
 
 	return bin, nil
+}
+
+// TestMartianBinMissing checks a missing mrp fails the differential under
+// E2E_REQUIRE=1 and skips it otherwise.
+func TestMartianBinMissing(t *testing.T) {
+	for _, require := range []string{"1", ""} {
+		t.Run("E2E_REQUIRE="+require, func(t *testing.T) {
+			t.Setenv("MARTIAN_BIN", t.TempDir())
+			t.Setenv("E2E_REQUIRE", require)
+
+			fake := &fakeTB{}
+			martianBin(fake)
+
+			if failed := fake.fatal != ""; failed != (require == "1") {
+				t.Errorf("fatal=%q skip=%q, want a failure only under E2E_REQUIRE=1", fake.fatal, fake.skip)
+			}
+
+			if fake.fatal == "" && fake.skip == "" {
+				t.Error("a missing mrp neither failed nor skipped the test")
+			}
+		})
+	}
 }
 
 // runMrp runs the real Martian pipeline runner on a fixture inside tmp,
@@ -440,7 +460,7 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	if tc.realMrjob {
 		mrjob := filepath.Join(bin, "mrjob")
 		if !fileExists(mrjob) {
-			t.Skipf("mrjob not found at %s", mrjob)
+			missingPrereqf(t, "mrjob not found at %s", mrjob)
 		}
 
 		extra = append(extra, "-mrjob", mrjob)

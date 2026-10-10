@@ -134,23 +134,31 @@ func mustSetenv(key, value string) {
 	}
 }
 
-// requireTools skips the test when a prerequisite is missing — unless
-// E2E_REQUIRE=1 (set in CI), where a missing tool must FAIL, not silently
-// green-skip the gate.
+// requireTools skips the test when a prerequisite is missing, or fails it
+// under E2E_REQUIRE=1 (missingPrereqf).
 func requireTools(t *testing.T, tools ...string) {
 	t.Helper()
 
 	for _, tool := range tools {
-		if _, err := exec.LookPath(tool); err == nil {
-			continue
+		if _, err := exec.LookPath(tool); err != nil {
+			missingPrereqf(t, "%s not found", tool)
 		}
-
-		if os.Getenv("E2E_REQUIRE") == "1" {
-			t.Fatalf("%s not found (required by E2E_REQUIRE=1)", tool)
-		}
-
-		t.Skipf("%s not found", tool)
 	}
+}
+
+// missingPrereqf skips the test for an absent prerequisite — unless
+// E2E_REQUIRE=1 (set in CI), where a missing tool must FAIL, not silently
+// green-skip the gate.
+func missingPrereqf(tb testing.TB, format string, args ...any) {
+	tb.Helper()
+
+	if os.Getenv("E2E_REQUIRE") == "1" {
+		tb.Fatalf(format+" (required by E2E_REQUIRE=1)", args...)
+
+		return
+	}
+
+	tb.Skipf(format, args...)
 }
 
 var buildOnce sync.Once

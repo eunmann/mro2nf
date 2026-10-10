@@ -116,7 +116,8 @@ jobs:
           echo "total=$total" >> "$GITHUB_OUTPUT"
 
   # Transpiles every fixture, runs it under Nextflow, and diffs the result against
-  # the committed real-mrp golden. (Goldens are committed, so mrp is not needed.)
+  # the committed real-mrp golden, and (TestMrpDiff) against a live mrp run of
+  # the same fixture: published tree, _outs and every stage's _args/_outs.
   #
   # Sharded across runners: every `nextflow run` is a fresh JVM, so the suite is
   # JVM-boot-bound and core-throttled — one runner serializes ~130 runs. The
@@ -145,6 +146,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: ./.github/actions/setup-martian
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
