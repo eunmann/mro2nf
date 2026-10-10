@@ -67,18 +67,11 @@ func lookupMartianBin() (string, error) {
 
 // runMrp runs the real Martian pipeline runner on a fixture inside tmp,
 // producing <tmp>/mrp as the pipestance dir. mrp requires a plain pipestance
-// name and creates it in the cwd, so it runs from tmp; the fixture's input/
-// dir (if any) is symlinked there so relative input paths in the .mro (e.g.
-// "input/x.txt") resolve as they do for the transpiler's -mropath.
+// name and creates it in the cwd, so it runs from tmp.
 func runMrp(t *testing.T, bin, fixture, tmp string) {
 	t.Helper()
 
 	dir := filepath.Join(root, "testdata", fixture)
-	if fileExists(filepath.Join(dir, "input")) {
-		if err := os.Symlink(filepath.Join(dir, "input"), filepath.Join(tmp, "input")); err != nil {
-			t.Fatalf("symlink input: %v", err)
-		}
-	}
 
 	// --vdrmode=disable keeps intermediate stage files, which the stage-ABI diff
 	// hashes through the paths in each invocation's _args/_outs; mrp's default
@@ -224,8 +217,194 @@ func stripPathPrefix(v any, prefix string) any {
 	}
 }
 
+// mrpDiffCase is one fixture of the differential, run from its pipeline.mro
+// invocation, plus the extra Nextflow legs it runs against the same mrp
+// pipestance.
+//
+// native adds a -native transpile+Nextflow leg (#120): without it, -native
+// correctness would rest entirely on committed goldens and a Martian behavior
+// change at a pin bump — or a native-only divergence the golden JSON does not
+// capture — would be invisible until goldens were regenerated. runner further
+// adds a combined -native -native-runner leg; it is set wherever any py stage
+// actually executes. The runner-less native fixtures run ZERO stage code, so a
+// runner leg would re-test pure orchestration the native leg already covers:
+// empty_fork_min/_sub/_cascade statically prune every fork (their only stage,
+// SCALE, never runs) and fork_disabled_skip bakes skip=true so its whole
+// sub-pipeline — SCALE again — is disabled. empty_fork_mixed is NOT such a
+// case: its unconditional GEN call runs real stage code before the zero-fork
+// zip, so it carries the runner leg. realMrjob runs the Nextflow side's comp
+// stages through $MARTIAN_BIN/mrjob, the binary mrp itself runs them with.
+type mrpDiffCase struct {
+	name      string
+	realMrjob bool
+	native    bool
+	runner    bool
+	inline    bool
+}
+
+// mrpDiffCases are the fixtures run under both mrp and Nextflow; every other
+// pipeline fixture is in mrpUnrunnable (coverage_test.go) with the reason.
+var mrpDiffCases = []mrpDiffCase{
+	{name: "file_min"},
+	{name: "dir_out"},
+	// #242: dotfiles and an empty subdirectory inside directory outputs,
+	// through both LAYOUT variants (the transform return folds under -native).
+	{name: "dir_hidden", native: true, runner: true},
+	{name: "map_file"},
+	{name: "map_file_keyed"},
+	{name: "map_split_file"},
+	// #217: a split phase creates a custom-filetype file and returns it as a
+	// per-chunk arg the JOIN reads. Verifies output + native-runner parity;
+	// the object-store staging path itself is guarded by the AWS e2e lane and
+	// the cmd/mre readChunkData unit test (local/docker-iso share a fs).
+	{name: "split_chunk_file", native: true, runner: true},
+	// Coverage matrix: file leaves at the split/join chunk boundary — the
+	// region #217 lived in. Nested struct chunk-def, array-of-files chunk-out,
+	// and a directory chunk-out. Object-store staging verified on the AWS lane.
+	{name: "split_struct_chunk", native: true, runner: true},
+	{name: "chunk_out_filearr", native: true, runner: true},
+	{name: "chunk_out_dir", native: true, runner: true},
+	// Matrix completeness: the builtin `file` type (corpus only used custom
+	// filetypes), and a file forwarded from a stage input into a split
+	// chunk-arg (position 4). Same IsFile / chunk-def staging code paths the
+	// AWS lane already proved on split_chunk_file / split_struct_chunk.
+	{name: "file_builtin_min", native: true, runner: true},
+	{name: "split_forward_file", native: true, runner: true},
+	{name: "struct_of_file"},
+	{name: "struct_file_array"},
+	// #173: a pipeline output typed as a callable's output struct (MAKEB),
+	// bound whole, with a file leaf — the type walk needs the callable-derived
+	// struct (addCallableStructs) to descend `made` to its `report` file.
+	{name: "callable_struct_file", native: true, runner: true},
+	// #240: whole refs to array- and map-forked calls bind one struct per
+	// fork (Martian's resolveMerge), file leaves published per fork.
+	{name: "map_wholeref", native: true, runner: true},
+	// #172: array<map<Point>>.x projection — a map call over an array source
+	// makes MAKEM.m an array<map<Point>>; projecting .x yields array<map<int>>.
+	{name: "arr_map_proj", native: true, runner: true},
+	{name: "diamond_min"},
+	{name: "cli_typed"},
+	{name: "fork_min"},
+	{name: "struct_min"},
+	// #239: struct narrowing on every bind path; the noinline leg keeps the
+	// NARROW sub's return a would-be forward, the native legs fold binds.
+	{name: "struct_narrow", native: true, runner: true, inline: true},
+	{name: "kitchen_sink", inline: true},
+	{name: "file_tree", inline: true},
+	{name: "map_null_map"},
+	// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
+	// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
+	{name: "map_key_sort", native: true, runner: true},
+	// #99: upstream map-fork element path (producer bundle sliced, real keys).
+	{name: "map_fork_upstream"},
+	// #99 empty-fork fidelity, both sides of the static/runtime split:
+	// an invocation-known empty split source merges to null (mrp's static
+	// resolver prunes the zero-fork call); an upstream empty/null
+	// collection merges to the typed empty at runtime.
+	{name: "empty_fork_min", native: true},
+	{name: "empty_map_fork"},
+	{name: "runtime_empty_forks", native: true, runner: true},
+	// #127 value-chain empty-fork classes: mrp's static resolver prunes
+	// each to null (sub-pipeline chain to an entry value, in-pipeline
+	// cascade through a mapped call, mixed entry+upstream zip) — the
+	// live differential machine-checks the knownInvocation cascade.
+	{name: "empty_fork_sub", native: true, inline: true},
+	{name: "empty_fork_cascade", native: true},
+	{name: "empty_fork_mixed", native: true, runner: true},
+	// The native-suite golden anchors: their committed expected/outs.json
+	// files claim mrp provenance, so the live differential machine-checks
+	// that claim — otherwise TestGolden + the native suites would prove
+	// only self-consistency. Their native legs face the -native transpile
+	// itself against live mrp, not just the golden snapshot.
+	{name: "fork_ref", native: true, runner: true},
+	{name: "fork_mid", native: true, runner: true},
+	// The inline legs here keep the disabled SUB a boundary (its internal call
+	// is a MAP call, which the profitability guard excludes), so they gate that
+	// -inline-pipelines leaves a non-flat disabled sub byte-identical.
+	{name: "fork_disabled_sub", native: true, runner: true, inline: true},
+	{name: "fork_disabled_skip", native: true, inline: true},
+	// #221 disabled-plain sub-pipeline inlining: `call SUB using (disabled=X)`
+	// where SUB is a FLAT plain sub-pipeline (one undisabled leaf stage reading
+	// only pipeargs) splices its internal stage into the parent gated by X — the
+	// profitability guard's win case. _sub runs (skip=false → scaled=15), _skip
+	// nulls (skip=true → scaled=null), so the inline leg proves both the run and
+	// the disabled-null branch stay byte-identical to mrp.
+	{name: "disabled_plain_sub", inline: true},
+	{name: "disabled_plain_skip", inline: true},
+	// #339: a whole ref to a disabled stage and to a disabled (flat,
+	// otherwise inlinable) sub-pipeline is null in the consumer's _args; the
+	// noinline leg covers the boundary path, the default leg the inliner.
+	{name: "disabled_wholeref", native: true, inline: true},
+	{name: "fork_fanout", native: true, runner: true},
+	{name: "map_file_array", native: true, runner: true},
+	// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
+	{name: "map_file_split"},
+	// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
+	// map, nested pipelines) — all py stages, so it joins the mrp differential.
+	{name: "cellranger_shaped", native: true, runner: true, inline: true},
+	// #113: stage src arguments (`src exec "code.py 3 hello"`) must reach
+	// the stage under both runners. Unlike exec_min's stub, this one writes
+	// journal entries (martian_shell.py update_journal), so real mrp
+	// completes it.
+	{name: "src_args"},
+	// #238: float literals >= 1e6 (entry and call-site) reach the stage as
+	// floats; the outputs are type+repr strings, since the _outs JSON diff
+	// alone would equate 1e+06 with 1000000. The runner leg covers the
+	// native runner's own json.load of the args bundle.
+	{name: "literals_big", native: true, runner: true},
+	// A comp stage split/main/join: mrp runs it through its own mrjob, so the
+	// Nextflow side does too rather than through the fixture's mrjob.sh stub.
+	{name: "comp_split", realMrjob: true},
+	// The remaining runnable fixtures: each golden-suite shape faces live mrp,
+	// not only its committed golden.
+	{name: "alias_min"},
+	{name: "api_smoke"},
+	{name: "chain_fuse"},
+	{name: "chain_fuse3"},
+	{name: "chain_fuse_disable"},
+	{name: "dead_map_pipe"},
+	{name: "default_out"},
+	{name: "disabled_callref"},
+	{name: "disabled_map"},
+	{name: "disabled_map_ref"},
+	{name: "fanin"},
+	{name: "file_array"},
+	{name: "file_chain"},
+	{name: "float_to_int"},
+	{name: "fold_disable"},
+	{name: "fork_upstream"},
+	{name: "gpu_stage"},
+	{name: "include_test"},
+	{name: "join_resources"},
+	{name: "literals"},
+	{name: "literals_edge"},
+	{name: "map_fork"},
+	{name: "map_pipe"},
+	{name: "map_pipe_disabled"},
+	{name: "map_pipe_disabled_nested"},
+	{name: "map_pipe_split"},
+	{name: "map_split"},
+	{name: "map_struct_proj"},
+	{name: "modifiers_min"},
+	{name: "multidim"},
+	{name: "multisplit"},
+	{name: "native_file_return"},
+	{name: "nested_struct"},
+	{name: "null_in"},
+	{name: "returnonly"},
+	{name: "special_resource"},
+	{name: "split_test"},
+	{name: "stage_entry"},
+	{name: "struct_input"},
+	{name: "struct_proj"},
+	{name: "typedmap_out"},
+	{name: "vmem_stage"},
+	{name: "wildcard"},
+}
+
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
-// and requires the published file tree and the _outs JSON to match.
+// and requires the published file tree, the _outs JSON and every stage
+// invocation's _args/_outs to match.
 func TestMrpDiff(t *testing.T) {
 	t.Parallel()
 
@@ -233,202 +412,66 @@ func TestMrpDiff(t *testing.T) {
 
 	bin := martianBin(t)
 
-	// Fixtures whose top-level `call` runs standalone (no launch-time param
-	// override). Each exercises a distinct output/pipeline shape.
-	//
-	// native adds a -native transpile+Nextflow leg against the SAME mrp
-	// pipestance (#120): without it, -native correctness would rest entirely on
-	// committed goldens and a Martian behavior change at a pin bump — or a
-	// native-only divergence the golden JSON does not capture — would be
-	// invisible until goldens were regenerated. runner further adds a combined
-	// -native -native-runner leg; it is set wherever any py stage actually
-	// executes. The runner-less native fixtures run ZERO stage code, so a
-	// runner leg would re-test pure orchestration the native leg already
-	// covers: empty_fork_min/_sub/_cascade statically prune every fork (their
-	// only stage, SCALE, never runs) and fork_disabled_skip bakes skip=true so
-	// its whole sub-pipeline — SCALE again — is disabled. empty_fork_mixed is
-	// NOT such a case: its unconditional GEN call runs real stage code before
-	// the zero-fork zip, so it carries the runner leg.
-	cases := []struct {
-		name      string
-		realMrjob bool
-		native    bool
-		runner    bool
-		inline    bool
-	}{
-		{name: "file_min"},
-		{name: "dir_out"},
-		// #242: dotfiles and an empty subdirectory inside directory outputs,
-		// through both LAYOUT variants (the transform return folds under -native).
-		{name: "dir_hidden", native: true, runner: true},
-		{name: "map_file"},
-		{name: "map_file_keyed"},
-		{name: "map_split_file"},
-		// #217: a split phase creates a custom-filetype file and returns it as a
-		// per-chunk arg the JOIN reads. Verifies output + native-runner parity;
-		// the object-store staging path itself is guarded by the AWS e2e lane and
-		// the cmd/mre readChunkData unit test (local/docker-iso share a fs).
-		{name: "split_chunk_file", native: true, runner: true},
-		// Coverage matrix: file leaves at the split/join chunk boundary — the
-		// region #217 lived in. Nested struct chunk-def, array-of-files chunk-out,
-		// and a directory chunk-out. Object-store staging verified on the AWS lane.
-		{name: "split_struct_chunk", native: true, runner: true},
-		{name: "chunk_out_filearr", native: true, runner: true},
-		{name: "chunk_out_dir", native: true, runner: true},
-		// Matrix completeness: the builtin `file` type (corpus only used custom
-		// filetypes), and a file forwarded from a stage input into a split
-		// chunk-arg (position 4). Same IsFile / chunk-def staging code paths the
-		// AWS lane already proved on split_chunk_file / split_struct_chunk.
-		{name: "file_builtin_min", native: true, runner: true},
-		{name: "split_forward_file", native: true, runner: true},
-		{name: "struct_of_file"},
-		{name: "struct_file_array"},
-		// #173: a pipeline output typed as a callable's output struct (MAKEB),
-		// bound whole, with a file leaf — the type walk needs the callable-derived
-		// struct (addCallableStructs) to descend `made` to its `report` file.
-		{name: "callable_struct_file", native: true, runner: true},
-		// #240: whole refs to array- and map-forked calls bind one struct per
-		// fork (Martian's resolveMerge), file leaves published per fork.
-		{name: "map_wholeref", native: true, runner: true},
-		// #172: array<map<Point>>.x projection — a map call over an array source
-		// makes MAKEM.m an array<map<Point>>; projecting .x yields array<map<int>>.
-		{name: "arr_map_proj", native: true, runner: true},
-		{name: "diamond_min"},
-		{name: "cli_typed"},
-		{name: "fork_min"},
-		{name: "struct_min"},
-		// #239: struct narrowing on every bind path; the noinline leg keeps the
-		// NARROW sub's return a would-be forward, the native legs fold binds.
-		{name: "struct_narrow", native: true, runner: true, inline: true},
-		{name: "kitchen_sink", inline: true},
-		{name: "file_tree", inline: true},
-		{name: "map_null_map"},
-		// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
-		// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
-		{name: "map_key_sort", native: true, runner: true},
-		// #99: upstream map-fork element path (producer bundle sliced, real keys).
-		{name: "map_fork_upstream"},
-		// #99 empty-fork fidelity, both sides of the static/runtime split:
-		// an invocation-known empty split source merges to null (mrp's static
-		// resolver prunes the zero-fork call); an upstream empty/null
-		// collection merges to the typed empty at runtime.
-		{name: "empty_fork_min", native: true},
-		{name: "empty_map_fork"},
-		{name: "runtime_empty_forks", native: true, runner: true},
-		// #127 value-chain empty-fork classes: mrp's static resolver prunes
-		// each to null (sub-pipeline chain to an entry value, in-pipeline
-		// cascade through a mapped call, mixed entry+upstream zip) — the
-		// live differential machine-checks the knownInvocation cascade.
-		{name: "empty_fork_sub", native: true, inline: true},
-		{name: "empty_fork_cascade", native: true},
-		{name: "empty_fork_mixed", native: true, runner: true},
-		// The native-suite golden anchors: their committed expected/outs.json
-		// files claim mrp provenance, so the live differential machine-checks
-		// that claim — otherwise TestGolden + the native suites would prove
-		// only self-consistency. Their native legs face the -native transpile
-		// itself against live mrp, not just the golden snapshot.
-		{name: "fork_ref", native: true, runner: true},
-		{name: "fork_mid", native: true, runner: true},
-		// The inline legs here keep the disabled SUB a boundary (its internal call
-		// is a MAP call, which the profitability guard excludes), so they gate that
-		// -inline-pipelines leaves a non-flat disabled sub byte-identical.
-		{name: "fork_disabled_sub", native: true, runner: true, inline: true},
-		{name: "fork_disabled_skip", native: true, inline: true},
-		// #221 disabled-plain sub-pipeline inlining: `call SUB using (disabled=X)`
-		// where SUB is a FLAT plain sub-pipeline (one undisabled leaf stage reading
-		// only pipeargs) splices its internal stage into the parent gated by X — the
-		// profitability guard's win case. _sub runs (skip=false → scaled=15), _skip
-		// nulls (skip=true → scaled=null), so the inline leg proves both the run and
-		// the disabled-null branch stay byte-identical to mrp.
-		{name: "disabled_plain_sub", inline: true},
-		{name: "disabled_plain_skip", inline: true},
-		// #339: a whole ref to a disabled stage and to a disabled (flat,
-		// otherwise inlinable) sub-pipeline is null in the consumer's _args; the
-		// noinline leg covers the boundary path, the default leg the inliner.
-		{name: "disabled_wholeref", native: true, inline: true},
-		{name: "fork_fanout", native: true, runner: true},
-		{name: "map_file_array", native: true, runner: true},
-		// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
-		{name: "map_file_split"},
-		// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
-		// map, nested pipelines) — all py stages, so it joins the mrp differential.
-		{name: "cellranger_shaped", native: true, runner: true, inline: true},
-		// #113: stage src arguments (`src exec "code.py 3 hello"`) must reach
-		// the stage under both runners. Unlike the journal-less exec stubs
-		// below, this one writes journal entries (martian_shell.py
-		// update_journal), so real mrp completes it — machine-checking the
-		// committed golden's mrp provenance.
-		{name: "src_args"},
-		// #238: float literals >= 1e6 (entry and call-site) reach the stage as
-		// floats; the outputs are type+repr strings, since the _outs JSON diff
-		// alone would equate 1e+06 with 1000000. The runner leg covers the
-		// native runner's own json.load of the args bundle.
-		{name: "literals_big", native: true, runner: true},
-		// The comp/exec-adapter fixtures cannot join an mrp
-		// differential — their stage binaries are fake Python stand-ins for
-		// mre's simpler wrapped-adapter contract, and REAL mrp hangs
-		// indefinitely waiting on them (observed: mixed_adapters stuck 23+
-		// minutes at DBL.fork0.chnk0.main before being killed; the hang is
-		// on the mrp side of the diff, not mre's). Exercising the
-		// real-mrjob-under-mre seam would need a dedicated harness that runs
-		// ONLY the Nextflow side with $MARTIAN_BIN/mrjob (via the realMrjob
-		// knob below) against a committed golden, not an mrp baseline.
-		// {name: "comp_split", realMrjob: true},
-		// {name: "mixed_adapters", realMrjob: true},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range mrpDiffCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			tmp := t.TempDir()
-			runMrp(t, bin, tc.name, tmp)
+			// Gate before runMrp so one shard runs the fixture's mrp and all its
+			// legs (shardSkip's ancestor claim).
+			shardSkip(t)
+			runMrpDiffCase(t, bin, tc)
+		})
+	}
+}
 
-			// Extra transpile flags land AFTER the fixture's auto-added
-			// -mrjob; mro2nf's stdlib flag parsing keeps the LAST occurrence,
-			// so the real mrjob overrides the fixture stub.
-			var extra []string
+// runMrpDiffCase runs one fixture under mrp once and diffs every requested
+// Nextflow leg against that pipestance.
+func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
+	t.Helper()
 
-			if tc.realMrjob {
-				mrjob := filepath.Join(bin, "mrjob")
-				if !fileExists(mrjob) {
-					t.Skipf("mrjob not found at %s", mrjob)
-				}
+	tmp := t.TempDir()
+	runMrp(t, bin, tc.name, tmp)
 
-				extra = append(extra, "-mrjob", mrjob)
-			}
+	// Extra transpile flags land AFTER the fixture's auto-added -mrjob;
+	// mro2nf's stdlib flag parsing keeps the LAST occurrence, so the real mrjob
+	// overrides the fixture stub.
+	var extra []string
 
-			compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, extra))
+	if tc.realMrjob {
+		mrjob := filepath.Join(bin, "mrjob")
+		if !fileExists(mrjob) {
+			t.Skipf("mrjob not found at %s", mrjob)
+		}
 
-			// The extra legs are Nextflow-only: each re-transpiles and re-runs
-			// against the pipestance the default leg's runMrp already produced,
-			// so mrp truth is computed once per fixture.
-			if tc.native {
-				t.Run("native", func(t *testing.T) {
-					t.Parallel()
-					compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native")))
-				})
-			}
+		extra = append(extra, "-mrjob", mrjob)
+	}
 
-			// No stage-ABI diff here: the runner calls the stage functions in-process
-			// and writes no _args/_outs, so there is no adapter ABI to compare.
-			if tc.runner {
-				t.Run("native_runner", func(t *testing.T) {
-					t.Parallel()
-					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native", "-native-runner"))
-				})
-			}
+	compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, extra))
 
-			// #221: inlining sub-pipeline boundaries is ON by default (the default
-			// leg already exercises it). This leg gates the OPT-OUT: the
-			// per-boundary-task path (-inline-pipelines=false) must ALSO stay
-			// byte-identical to the same mrp pipestance.
-			if tc.inline {
-				t.Run("noinline", func(t *testing.T) {
-					t.Parallel()
-					compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
-				})
-			}
+	if tc.native {
+		t.Run("native", func(t *testing.T) {
+			t.Parallel()
+			compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native")))
+		})
+	}
+
+	// No stage-ABI diff here: the runner calls the stage functions in-process
+	// and writes no _args/_outs, so there is no adapter ABI to compare.
+	if tc.runner {
+		t.Run("native_runner", func(t *testing.T) {
+			t.Parallel()
+			diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native", "-native-runner"))
+		})
+	}
+
+	// #221: inlining sub-pipeline boundaries is ON by default (the default leg
+	// already exercises it). This leg gates the OPT-OUT: the per-boundary-task
+	// path (-inline-pipelines=false) must ALSO stay byte-identical to the same
+	// mrp pipestance.
+	if tc.inline {
+		t.Run("noinline", func(t *testing.T) {
+			t.Parallel()
+			compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
 		})
 	}
 }
