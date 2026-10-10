@@ -554,6 +554,11 @@ without re-transpiling:
   overlays the supplied values onto the baked defaults (a null value keeps the
   default). On AWS Batch you set them with `-params-file inputs.json`; on
   HealthOmics they are run parameters declared in `parameter-template.json`.
+- A command-line `--<name> <value>` reaches `mre entryargs` as a string, so a
+  scalar `int`, `float` or `bool` input is parsed strictly into its declared type
+  (a base-10 int64; a JSON number re-encoded the way `mrp` encodes a float
+  literal; exactly `true`/`false`). A value that does not parse, or a string for
+  an array, map or struct input, fails the run; set those with `-params-file`.
 
 **File-typed inputs (the Cell Ranger model).** A run value that is a file is an
 `s3://` URI, which a worker cannot `stat` directly. So file-bearing inputs are
