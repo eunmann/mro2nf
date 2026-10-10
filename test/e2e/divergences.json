@@ -11,6 +11,20 @@
       "summary": "the same ordinal staging reaches _outs when a phase returns a path it received, e.g. a join forwarding its chunks' file outputs; files the phase wrote in its own files dir keep full-basename comparison",
       "file": "_outs",
       "rule": "basename-extension-only"
+    },
+    {
+      "issue": 369,
+      "summary": "a stage's static using(special) never reaches mre, so its main and join _args lack the __special key mrp writes (gpu_stage, special_resource)",
+      "file": "_args",
+      "rule": "ignore-key",
+      "key": "__special"
+    },
+    {
+      "issue": 370,
+      "summary": "mre receives threads as Nextflow's integer task.cpus, so a fractional using(threads) reaches _args rounded up (mrp passes __threads 0.5, mro2nf 1; split_test)",
+      "file": "_args",
+      "rule": "ceil-number",
+      "key": "__threads"
     }
   ]
 }
