@@ -12,7 +12,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.47.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff lint-nf bench vet lint lint-check deadcode cloc install clean help
+.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff record-goldens lint-nf bench vet lint lint-check deadcode cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
@@ -49,13 +49,18 @@ E2E_PARALLEL ?= 10
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
 test-e2e: build ## Run the e2e suite (golden table, cloud-sim, failure paths, knobs)
-	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestBench|^TestNextflowLint|^TestCellRanger'
+	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger'
 
 test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
 	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
 
 test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
 	$(GO_E2E) -timeout 30m -run '^TestMrpDiff'
+
+# The only writer of testdata/*/expected/outs/: each recordable golden fixture
+# runs under real mrp and its published outs/ tree replaces the committed one.
+record-goldens: ## Re-record expected/outs/ golden trees from real mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
+	GOLDEN_RECORD=1 $(GO_E2E) -timeout 30m -run '^TestRecordGoldens$$'
 
 lint-nf: build ## Static-lint generated Nextflow with `nextflow lint` (needs Nextflow >= 25.04)
 	$(GO_E2E) -timeout 25m -run '^TestNextflowLint'

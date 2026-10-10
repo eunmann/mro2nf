@@ -175,6 +175,7 @@ func TestDockerIsolation(t *testing.T) {
 
 			goldenJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.name, tc.golden))
+			assertGoldenTree(t, tc.name, tc.name, proj)
 		})
 	}
 }

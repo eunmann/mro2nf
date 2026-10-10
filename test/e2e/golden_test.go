@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"encoding/json"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,16 +15,18 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+type goldenCase struct {
+	name    string
+	fixture string
+	golden  string
+}
+
 // goldenCases mirrors the CASES table in run.sh: a fixture directory under
 // testdata/ plus the committed mrp golden (relative to the fixture dir) the
 // Nextflow run must reproduce. An *_override entry reruns its fixture with the
 // file-typed entry input(s) supplied at launch via -params-file, so the run's
 // output must reflect the OVERRIDE content, not the baked default.
-var goldenCases = []struct {
-	name    string
-	fixture string
-	golden  string
-}{
+var goldenCases = []goldenCase{
 	{"split_test", "split_test", "expected/SUM_SQUARE_PIPELINE/fork0/_outs"},
 	{"fork_min", "fork_min", "expected/scale_all_outs.json"},
 	{"fork_upstream", "fork_upstream", "expected/outs.json"},
@@ -181,7 +182,8 @@ var goldenCases = []struct {
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
 // each fixture, run it under real Nextflow, and assert the published
-// pipeline_outs.json matches the committed golden mrp output. Cases run in
+// pipeline_outs.json matches the committed golden and the published file tree
+// matches the one mrp published (assertGoldenTree). Cases run in
 // parallel because each is an independent `nextflow run` and JVM startup
 // dominates; bound the pool with go test's -parallel flag.
 func TestGolden(t *testing.T) {
@@ -207,22 +209,10 @@ func TestGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// file_min additionally verifies the published file's content.
-			if tc.name == "file_min" {
-				assertFileContent(t, filepath.Join(proj, "results", "note.txt"), "x=42")
-			}
-
 			goldenJSON(t,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(fixtureDir, tc.golden))
-
-			// file_tree additionally verifies the PHYSICAL placement of every
-			// published leaf: multi-segment rels through the layout ->
-			// PUBLISH_LEAF join, which the JSON diff above cannot see.
-			if tc.name == "file_tree" {
-				assertPublishedLeaves(t, filepath.Join(proj, "results"),
-					filepath.Join(fixtureDir, tc.golden))
-			}
+			assertGoldenTree(t, tc.name, tc.fixture, proj)
 		})
 	}
 }
@@ -357,79 +347,6 @@ func TestFoldDisables(t *testing.T) {
 	goldenJSON(t,
 		filepath.Join(proj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "fold_disable", "expected", "outs.json"))
-}
-
-// goldenStringLeaves returns every string leaf of the golden outs JSON, in
-// walk order (arrays in order, map values unordered).
-func goldenStringLeaves(t *testing.T, goldenPath string) []string {
-	t.Helper()
-
-	raw, err := os.ReadFile(goldenPath)
-	if err != nil {
-		t.Fatalf("read golden %s: %v", goldenPath, err)
-	}
-
-	var tree any
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		t.Fatalf("parse golden %s: %v", goldenPath, err)
-	}
-
-	var leaves []string
-
-	var walk func(v any)
-	walk = func(v any) {
-		switch tv := v.(type) {
-		case string:
-			leaves = append(leaves, tv)
-		case []any:
-			for _, e := range tv {
-				walk(e)
-			}
-		case map[string]any:
-			for _, e := range tv {
-				walk(e)
-			}
-		}
-	}
-	walk(tree)
-
-	return leaves
-}
-
-// assertPublishedLeaves walks the golden outs JSON and requires every string
-// leaf to exist on disk under resultsDir — verifying physical outs/ placement,
-// not just the rel strings goldenJSON diffs. Only usable for fixtures whose
-// string leaves are all published file paths (file_tree is; a fixture with a
-// plain string output is not).
-func assertPublishedLeaves(t *testing.T, resultsDir, goldenPath string) {
-	t.Helper()
-
-	for _, leaf := range goldenStringLeaves(t, goldenPath) {
-		if _, err := os.Stat(filepath.Join(resultsDir, leaf)); err != nil {
-			t.Errorf("published leaf %s not on disk: %v", leaf, err)
-		}
-	}
-}
-
-// assertPublishedTreeExact strengthens assertPublishedLeaves from subset-
-// existence to set EQUALITY: after the leaf-existence walk, the full file set
-// under resultsDir must equal the golden's string-leaf set, so a LAYOUT bug
-// publishing stray extra files fails, not only a missing leaf. The Nextflow-
-// side metadata (pipeline_outs.json, manifest.json.gz) is excluded, mirroring
-// compareMrpToNextflow. Only usable when every string leaf is a published
-// file path and no output is directory-typed (a dir leaf's inner files are
-// not listed in the golden).
-func assertPublishedTreeExact(t *testing.T, resultsDir, goldenPath string) {
-	t.Helper()
-
-	assertPublishedLeaves(t, resultsDir, goldenPath)
-
-	want := slices.Compact(slices.Sorted(slices.Values(goldenStringLeaves(t, goldenPath))))
-	got := slices.Sorted(maps.Keys(hashTree(t, resultsDir, "pipeline_outs.json", "manifest.json.gz")))
-
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("published results/ file set != golden leaf set (-want +got):\n%s", diff)
-	}
 }
 
 // renderOverrideParams instantiates the fixture's override-params.json into
@@ -823,15 +740,8 @@ func TestNativeFileEntry(t *testing.T) {
 
 	requireTools(t, "nextflow", "java", "python3")
 
-	// leaves gates the #120 physical publish verification exactly as
-	// TestNativeComplete's flag does. All five goldens are scalar totals today
-	// (the fixtures CONSUME file entries and publish no files), so none opts
-	// in: an unconditional walk would false-fail os.Stat on a future scalar
-	// STRING output, and a future file-typed out must consciously flip its
-	// flag to get the exact published-tree check.
 	cases := []struct {
 		fixture, golden string
-		leaves          bool
 	}{
 		{fixture: "entry_file", golden: "expected/ep_outs.json"},
 		{fixture: "entry_filearr", golden: "expected/epa_outs.json"},
@@ -852,11 +762,6 @@ func TestNativeFileEntry(t *testing.T) {
 			goldenJSON(t,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
-
-			if tc.leaves {
-				assertPublishedTreeExact(t, filepath.Join(proj, "results"),
-					filepath.Join(root, "testdata", tc.fixture, tc.golden))
-			}
 		})
 	}
 }
@@ -1106,23 +1011,17 @@ func TestNativeComplete(t *testing.T) {
 
 	// Each case compares its single -native run against the committed mrp
 	// golden: TestGolden proves default==golden, so native==golden covers
-	// native==default transitively — and anchors native to mrp truth.
-	//
-	// leaves marks the file-bearing fixtures (#120): the published results/
-	// file set must EQUAL the golden's path-leaf set — a native LAYOUT bug
-	// publishing correct rel paths to the wrong place (or nowhere) fails the
-	// existence walk, and one publishing STRAY extra files fails the set
-	// comparison. note additionally pins the published note.txt's bytes, so
-	// the leaf carries the right CONTENT, not merely a file.
+	// native==default transitively — and anchors native to mrp truth. The
+	// published results/ tree must equal mrp's recorded one (assertGoldenTree),
+	// so a native LAYOUT bug publishing a file to the wrong place, a stray
+	// extra file, or the wrong bytes fails (#120).
 	cases := []struct {
 		fixture, golden string
-		leaves          bool
-		note            string
 	}{
 		{fixture: "diamond_min", golden: "expected/outs.json"},
 		{fixture: "fold_disable", golden: "expected/outs.json"},
-		{fixture: "native_file_return", golden: "expected/nf_outs.json", leaves: true, note: "x=21"},
-		{fixture: "file_min", golden: "expected/outs.json", leaves: true, note: "x=42"},
+		{fixture: "native_file_return", golden: "expected/nf_outs.json"},
+		{fixture: "file_min", golden: "expected/outs.json"},
 		{fixture: "chain_fuse", golden: "expected/outs.json"},
 		{fixture: "struct_min", golden: "expected/stats_pipe_outs.json"},
 		{fixture: "fork_min", golden: "expected/scale_all_outs.json"},
@@ -1140,9 +1039,9 @@ func TestNativeComplete(t *testing.T) {
 		// carry files — file arrays, keyed typed maps, struct projections, and
 		// multi-dimensional forks all ride the O(1) element path with the merge
 		// folded into the sole consumer.
-		{fixture: "map_file", golden: "expected/outs.json", leaves: true},
-		{fixture: "map_file_keyed", golden: "expected/outs.json", leaves: true},
-		{fixture: "map_file_array", golden: "expected/outs.json", leaves: true},
+		{fixture: "map_file", golden: "expected/outs.json"},
+		{fixture: "map_file_keyed", golden: "expected/outs.json"},
+		{fixture: "map_file_array", golden: "expected/outs.json"},
 		{fixture: "map_struct_proj", golden: "expected/outs.json"},
 		{fixture: "multidim", golden: "expected/outs.json"},
 		// #121: non-map shapes where every call fuses (wildcard bindings,
@@ -1169,15 +1068,7 @@ func TestNativeComplete(t *testing.T) {
 			goldenJSON(t,
 				filepath.Join(native, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
-
-			if tc.leaves {
-				assertPublishedTreeExact(t, filepath.Join(native, "results"),
-					filepath.Join(root, "testdata", tc.fixture, tc.golden))
-			}
-
-			if tc.note != "" {
-				assertFileContent(t, filepath.Join(native, "results", "note.txt"), tc.note)
-			}
+			assertGoldenTree(t, tc.fixture, tc.fixture, native)
 		})
 	}
 }

@@ -20,7 +20,8 @@ package e2e
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"io/fs"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,20 @@ import (
 func martianBin(t *testing.T) string {
 	t.Helper()
 
+	bin, err := lookupMartianBin()
+	if err != nil {
+		t.Skip(err)
+	}
+
+	return bin
+}
+
+// errNoMrp reports that MARTIAN_BIN holds no executable mrp.
+var errNoMrp = errors.New("mrp not found (set MARTIAN_BIN=<martian>/bin)")
+
+// lookupMartianBin resolves the Martian bin dir from MARTIAN_BIN (default
+// ~/workdir/martian/bin) and requires an executable mrp in it.
+func lookupMartianBin() (string, error) {
 	bin := os.Getenv("MARTIAN_BIN")
 	if bin == "" {
 		bin = filepath.Join(os.Getenv("HOME"), "workdir", "martian", "bin")
@@ -44,10 +59,10 @@ func martianBin(t *testing.T) string {
 
 	info, err := os.Stat(filepath.Join(bin, "mrp"))
 	if err != nil || info.Mode()&0o111 == 0 {
-		t.Skipf("mrp not found at %s/mrp (set MARTIAN_BIN=<martian>/bin)", bin)
+		return "", fmt.Errorf("%s/mrp: %w", bin, errNoMrp)
 	}
 
-	return bin
+	return bin, nil
 }
 
 // runMrp runs the real Martian pipeline runner on a fixture inside tmp,
@@ -83,29 +98,34 @@ func runMrp(t *testing.T, bin, fixture, tmp string) {
 	}
 }
 
-// hashTree maps relpath -> sha256 for every regular file under dir, skipping
-// files whose basename is in exclude. An absent dir (a pipeline with no file
-// outputs) yields an empty tree, matching mrp_diff.sh's tree() helper.
-func hashTree(t *testing.T, dir string, exclude ...string) map[string]string {
+// mrpOutsMeta and nfResultsMeta are the runners' own metadata files at the
+// top of a published tree: they describe the outputs rather than being
+// outputs, so tree comparisons drop them — at the root only, because a stage
+// may publish a file of the same name deeper in the tree.
+var (
+	mrpOutsMeta   = []string{"_outs", "manifest.json.gz"}
+	nfResultsMeta = []string{"pipeline_outs.json", "manifest.json.gz"}
+)
+
+// emptyDirMark is hashTree's value for an empty directory, keyed by its path
+// plus a trailing slash so it cannot collide with a file's digest entry.
+const emptyDirMark = "<empty dir>"
+
+// hashTree maps relpath -> sha256 for every file under dir, plus relpath/ ->
+// emptyDirMark for every empty directory, skipping the rootMeta names at the
+// top level. Symlinks are followed, so trees compare by content however they
+// were materialised. An absent dir (a pipeline with no file outputs) yields an
+// empty tree, matching mrp_diff.sh's tree() helper.
+func hashTree(t *testing.T, dir string, rootMeta ...string) map[string]string {
 	t.Helper()
 
 	tree := map[string]string{}
-	if !fileExists(dir) {
-		return tree
-	}
 
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
+	err := walkPublished(dir, rootMeta, func(rel, path string, emptyDir bool) error {
+		if emptyDir {
+			tree[rel+"/"] = emptyDirMark
 
-		if slices.Contains(exclude, d.Name()) {
 			return nil
-		}
-
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
 		}
 
 		data, err := os.ReadFile(path)
@@ -123,6 +143,60 @@ func hashTree(t *testing.T, dir string, exclude ...string) map[string]string {
 	}
 
 	return tree
+}
+
+// errUnpublishable reports a tree entry that is neither a file nor a
+// directory (a socket, device or named pipe).
+var errUnpublishable = errors.New("not a regular file or directory")
+
+// walkPublished calls visit for every file and every empty directory under
+// dir (following symlinks), skipping the rootMeta names directly under dir.
+// An absent dir visits nothing.
+func walkPublished(dir string, rootMeta []string, visit func(rel, path string, emptyDir bool) error) error {
+	if !fileExists(dir) {
+		return nil
+	}
+
+	return walkPublishedRel(dir, "", rootMeta, visit)
+}
+
+func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path string, emptyDir bool) error) error {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+
+	if len(entries) == 0 && rel != "" {
+		return visit(rel, path, true)
+	}
+
+	for _, e := range entries {
+		if rel == "" && slices.Contains(rootMeta, e.Name()) {
+			continue
+		}
+
+		child, childRel := filepath.Join(path, e.Name()), filepath.Join(rel, e.Name())
+
+		info, err := os.Stat(child)
+		if err != nil {
+			return err
+		}
+
+		switch {
+		case info.IsDir():
+			err = walkPublishedRel(child, childRel, nil, visit)
+		case info.Mode().IsRegular():
+			err = visit(childRel, child, false)
+		default:
+			err = fmt.Errorf("%s (%s): %w", child, info.Mode(), errUnpublishable)
+		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // stripPathPrefix normalizes Martian's _outs values: mrp writes absolute
@@ -391,17 +465,15 @@ func compareStageABI(t *testing.T, tmp, proj string) {
 
 // compareMrpToNextflow diffs the published file tree (paths + contents) and
 // the path-normalized _outs JSON between an mrp pipestance at <tmp>/mrp and
-// a Nextflow project's results/. manifest.json.gz is a Nextflow-only metadata
-// index (like pipeline_outs.json), not a pipeline output, so it is excluded
-// from the tree comparison.
+// a Nextflow project's results/.
 func compareMrpToNextflow(t *testing.T, tmp, proj string) {
 	t.Helper()
 
 	mrpOuts := filepath.Join(tmp, "mrp", "outs")
 	nfOuts := filepath.Join(proj, "results")
 
-	mrpTree := hashTree(t, mrpOuts, "_outs", "manifest.json.gz")
-	nfTree := hashTree(t, nfOuts, "pipeline_outs.json", "manifest.json.gz")
+	mrpTree := hashTree(t, mrpOuts, mrpOutsMeta...)
+	nfTree := hashTree(t, nfOuts, nfResultsMeta...)
 
 	if diff := cmp.Diff(mrpTree, nfTree); diff != "" {
 		t.Errorf("published tree differs (-mrp +nextflow):\n%s", diff)
