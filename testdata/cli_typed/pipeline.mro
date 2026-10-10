@@ -1,0 +1,44 @@
+# Scalar entry inputs overridden on the Nextflow command line. Nextflow passes
+# every --param as a String, so `mre entryargs` must parse `--n 5 --f 2.5
+# --g 1e6 --b false` into the declared int/float/bool before the stage sees
+# them; the stage reports each value's Python repr and type, and `gated` shows
+# whether `b` reads as truthy. expected/override_outs.json is mrp run with the
+# override values as invocation literals.
+stage REPR(
+    in  int    n,
+    in  float  f,
+    in  float  g,
+    in  bool   b,
+    out string desc,
+    out string gated,
+    src py     "stages/repr",
+)
+
+pipeline CT(
+    in  int    n,
+    in  float  f,
+    in  float  g,
+    in  bool   b,
+    out string desc,
+    out string gated,
+)
+{
+    call REPR(
+        n = self.n,
+        f = self.f,
+        g = self.g,
+        b = self.b,
+    )
+
+    return (
+        desc  = REPR.desc,
+        gated = REPR.gated,
+    )
+}
+
+call CT(
+    n = 1,
+    f = 0.5,
+    g = 0.25,
+    b = true,
+)

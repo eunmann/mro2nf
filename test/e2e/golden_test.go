@@ -93,6 +93,7 @@ var goldenCases = []struct {
 	{"entry_dir_override", "entry_dir", "expected/epd_override_outs.json"},
 	{"split_from_file", "split_from_file", "expected/sp_outs.json"},
 	{"split_from_file_override", "split_from_file", "expected/sp_override_outs.json"},
+	{"cli_typed", "cli_typed", "expected/outs.json"},
 	{"special_resource", "special_resource", "expected/outs.json"},
 	{"null_in", "null_in", "expected/outs.json"},
 	{"disabled_callref", "disabled_callref", "expected/outs.json"},
@@ -447,6 +448,67 @@ func renderOverrideParams(t *testing.T, fixtureDir, proj string) {
 	if err := os.WriteFile(filepath.Join(proj, "params.json"), []byte(rendered), 0o644); err != nil {
 		t.Fatalf("write params.json: %v", err)
 	}
+}
+
+// TestCLITypedOverrides checks that scalar entry inputs set on the Nextflow
+// command line reach the stage typed as declared. Nextflow passes every --param
+// as a String, and the stage reports each value's Python repr and type, so the
+// CLI run matches the -params-file run and the mrp golden (the override values
+// as invocation literals) only if entryargs parsed `--b false` into the boolean
+// false rather than the truthy string "false". A value that is not a literal of
+// its declared type must fail the run, naming the input.
+func TestCLITypedOverrides(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	const fixture = "cli_typed"
+
+	fixtureDir := filepath.Join(root, "testdata", fixture)
+	golden := filepath.Join(fixtureDir, "expected", "override_outs.json")
+
+	runs := []struct {
+		name string
+		args []string
+	}{
+		{name: "cli", args: []string{"--n", "5", "--f", "2.5", "--g", "1e6", "--b", "false"}},
+		{name: "params_file", args: []string{"-params-file", "params.json"}},
+	}
+
+	for _, rc := range runs {
+		t.Run(rc.name, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, fixture)
+			renderOverrideParams(t, fixtureDir, proj)
+
+			if err := runNextflow(t, proj, rc.args...); err != nil {
+				t.Fatal(err)
+			}
+
+			goldenJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), golden)
+		})
+	}
+
+	t.Run("invalid_bool", func(t *testing.T) {
+		t.Parallel()
+
+		proj := transpile(t, fixture)
+
+		err := runNextflow(t, proj, "--b", "True")
+		if err == nil {
+			t.Fatal("--b True must fail the run, not reach the stage as a string")
+		}
+
+		runLog, readErr := os.ReadFile(filepath.Join(proj, "run.log"))
+		if readErr != nil {
+			t.Fatalf("read run.log: %v", readErr)
+		}
+
+		if want := `entry input "b" declared bool, got "True"`; !strings.Contains(string(runLog), want) {
+			t.Errorf("run log does not report %q:\n%s", want, runLog)
+		}
+	})
 }
 
 // TestEntryFileAdversarialName pins the EMITTER side of the -fileflat JSON

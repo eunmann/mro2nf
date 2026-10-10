@@ -214,6 +214,7 @@ func TestMrpDiff(t *testing.T) {
 		// makes MAKEM.m an array<map<Point>>; projecting .x yields array<map<int>>.
 		{name: "arr_map_proj", native: true, runner: true},
 		{name: "diamond_min"},
+		{name: "cli_typed"},
 		{name: "fork_min"},
 		{name: "struct_min"},
 		{name: "kitchen_sink", inline: true},
