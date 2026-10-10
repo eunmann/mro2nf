@@ -266,6 +266,11 @@ func TestMrpDiff(t *testing.T) {
 		// update_journal), so real mrp completes it — machine-checking the
 		// committed golden's mrp provenance.
 		{name: "src_args"},
+		// #238: float literals >= 1e6 (entry and call-site) reach the stage as
+		// floats; the outputs are type+repr strings, since the _outs JSON diff
+		// alone would equate 1e+06 with 1000000. The runner leg covers the
+		// native runner's own json.load of the args bundle.
+		{name: "literals_big", native: true, runner: true},
 		// The comp/exec-adapter fixtures cannot join an mrp
 		// differential — their stage binaries are fake Python stand-ins for
 		// mre's simpler wrapped-adapter contract, and REAL mrp hangs

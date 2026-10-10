@@ -3,6 +3,8 @@ package frontend_test
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/apperror"
@@ -143,6 +145,80 @@ func TestLowerEntry(t *testing.T) {
 
 	if diff := cmp.Diff([]int{1, 2, 3}, got); diff != "" {
 		t.Errorf("entry values mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// literalsMRO binds one entry input per literal shape whose Go json.Marshal
+// encoding differs from (or must stay equal to) Martian's own JSON encoder.
+const literalsMRO = `stage ECHO(
+    in  float  million,
+    in  float  fraction_free,
+    in  float  huge,
+    in  float  small_exp,
+    in  float  neg_zero,
+    in  float  tiny,
+    in  int    big_int,
+    in  string html,
+    in  bool   flag,
+    in  float  none,
+    src py     "stages/echo",
+)
+
+call ECHO(
+    million       = 1e6,
+    fraction_free = 2500000.0,
+    huge          = 1e20,
+    small_exp     = 1.5e3,
+    neg_zero      = -0.0,
+    tiny          = 1e-7,
+    big_int       = 9223372036854775807,
+    html          = "<a&b>",
+    flag          = true,
+    none          = null,
+)
+`
+
+// TestLowerLiteralBytes pins each literal leaf to the bytes mrp writes into a
+// stage's _args (Martian's syntax JSON encoder), so a whole-number float >= 1e6
+// stays a float for a Python stage instead of collapsing to an int.
+func TestLowerLiteralBytes(t *testing.T) {
+	dir := t.TempDir()
+	mro := filepath.Join(dir, "pipeline.mro")
+
+	if err := os.WriteFile(mro, []byte(literalsMRO), 0o600); err != nil {
+		t.Fatalf("write mro: %v", err)
+	}
+
+	ast, err := frontend.Parse(mro, []string{dir}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast, nil)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	want := map[string]string{
+		"million":       "1e+06",
+		"fraction_free": "2.5e+06",
+		"huge":          "1e+20",
+		"small_exp":     "1500",
+		"neg_zero":      "-0",
+		"tiny":          "1e-07",
+		"big_int":       "9223372036854775807",
+		"html":          `"<a&b>"`,
+		"flag":          "true",
+		"none":          "null",
+	}
+
+	got := make(map[string]string, len(prog.Entry.Bindings))
+	for _, b := range prog.Entry.Bindings {
+		got[b.Param] = string(b.Value.Literal)
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("entry literal bytes mismatch (-want +got):\n%s", diff)
 	}
 }
 

@@ -1,0 +1,50 @@
+# Whole-number float literals >= 1e6, whose JSON text mrp writes in exponent
+# form (1e+06): a Python stage must receive a float, not an int. The outputs are
+# strings (type name + repr) because a numeric diff would treat 1e+06 == 1000000.
+stage ECHO(
+    in  float   entry_big,
+    in  float   entry_huge,
+    in  float[] entry_arr,
+    in  float   call_big,
+    in  float[] call_arr,
+    out string  entry_big2,
+    out string  entry_huge2,
+    out string  entry_arr2,
+    out string  call_big2,
+    out string  call_arr2,
+    src py      "stages/echo",
+)
+
+pipeline LB(
+    in  float   big,
+    in  float   huge,
+    in  float[] arr,
+    out string  entry_big2,
+    out string  entry_huge2,
+    out string  entry_arr2,
+    out string  call_big2,
+    out string  call_arr2,
+)
+{
+    call ECHO(
+        entry_big  = self.big,
+        entry_huge = self.huge,
+        entry_arr  = self.arr,
+        call_big   = 2500000.0,
+        call_arr   = [3e6, 1.5],
+    )
+
+    return (
+        entry_big2  = ECHO.entry_big2,
+        entry_huge2 = ECHO.entry_huge2,
+        entry_arr2  = ECHO.entry_arr2,
+        call_big2   = ECHO.call_big2,
+        call_arr2   = ECHO.call_arr2,
+    )
+}
+
+call LB(
+    big  = 1e6,
+    huge = 1e20,
+    arr  = [7e6, 2.0],
+)

@@ -99,6 +99,8 @@ var goldenCases = []struct {
 	{"struct_input", "struct_input", "expected/outs.json"},
 	{"nested_struct", "nested_struct", "expected/outs.json"},
 	{"literals", "literals", "expected/outs.json"},
+	// #238: whole-number float literals >= 1e6 stay floats for a Python stage.
+	{"literals_big", "literals_big", "expected/outs.json"},
 	{"fanin", "fanin", "expected/outs.json"},
 	{"map_split_file", "map_split_file", "expected/outs.json"},
 	// #217: file-typed chunk-def arg the split phase creates, read by the JOIN.

@@ -329,21 +329,24 @@ func lowerExp(e syntax.Exp) (ir.Value, error) {
 	}
 }
 
-// litLeaf marshals a scalar literal leaf (int/float/string/bool/null).
+// litLeaf encodes a scalar literal leaf (int/float/string/bool/null) with the
+// AST node's own Martian JSON encoder, which is what mrp writes into _args. Go's
+// json.Marshal disagrees on the number text (1e6 -> 1000000, which a Python
+// stage decodes as int, not float).
 func litLeaf(e syntax.Exp) (json.RawMessage, error) {
-	var v any
+	var m json.Marshaler
 
 	switch x := e.(type) {
 	case *syntax.IntExp:
-		v = x.Value
+		m = x
 	case *syntax.FloatExp:
-		v = x.Value
+		m = x
 	case *syntax.StringExp:
-		v = x.Value
+		m = x
 	case *syntax.BoolExp:
-		v = x.Value
+		m = x
 	case *syntax.NullExp:
-		v = nil
+		m = x
 	default:
 		return nil, &apperror.UnsupportedError{
 			Construct: "expression",
@@ -351,7 +354,7 @@ func litLeaf(e syntax.Exp) (json.RawMessage, error) {
 		}
 	}
 
-	raw, err := json.Marshal(v)
+	raw, err := m.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("marshal literal: %w", err)
 	}
