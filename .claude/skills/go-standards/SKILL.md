@@ -67,18 +67,6 @@ description: "Reference: Go code quality standards — control flow, error handl
 - Every channel must have a declared buffer size, or the goroutine lifecycle must guarantee no blocking.
 - If you can't diagram the concurrency on a napkin, simplify it.
 
-## Database & SQL
-
-Apply whenever you write, edit, or call SQL. Schema and indexes live in `infra/migrations/` (gamedev DB: `infra/migrations-gamedev/`).
-
-- **Index what you filter.** Every column used in a `WHERE`, `JOIN`, or `ORDER BY` on a growing table needs an index (composite in predicate order, with the `ORDER BY` column trailing). Foreign-key columns need their own index — unindexed FKs cause seq scans and lock contention on parent mutations. A column that is only the *non-leading* member of a composite is not covered for a standalone lookup.
-- **No redundant indexes.** A single-column index that is a leading prefix of an existing composite (or unique) index is dead write-amplification — do not add it, and drop it if you find one.
-- **Keep predicates sargable.** No function/cast on the indexed column in the `WHERE` (`LOWER(col)=`, `id::text LIKE`); use an expression index or a trigram GIN (`gin_trgm_ops`) for substring/`ILIKE '%x%'` search. A leading-wildcard `LIKE` without a trigram index is a seq scan.
-- **Avoid N+1.** Never call a per-row repo method inside a loop over a result set. Add a batch method (`WHERE id = ANY($1)` returning a `map[ID]T`) and resolve from the map. If a record already carries the foreign id (e.g. `match_participants.user_id`), use it instead of a lookup.
-- **Paginate growing reads.** No unbounded `SELECT` over a growing table; use `LIMIT`, and prefer keyset pagination over deep `OFFSET`. Split projections so list paths do not fetch large `TEXT`/`BYTEA`/`TOAST` columns that only a detail view renders.
-- **Parameterize and scan exactly.** All values via `$N` placeholders — never string-interpolate. Scan destinations must match the `SELECT`/`RETURNING` columns in count and order; nullable columns map to `*T`/`sql.NullT`. Multi-statement writes go in one transaction (or a CTE).
-- **Verify the plan.** When you add or change a query or index, prove it with `EXPLAIN` against the live DB. Dev tables are tiny, so the planner seq-scans them harmlessly — run `SET enable_seqscan=off; EXPLAIN <query>` (add `enable_indexscan/indexonlyscan=off` to force a GIN bitmap) and confirm the access path uses the intended index. A `Seq Scan` on a growing table with no index fallback is a defect, not a dev-data artifact. These EXPLAIN runs are throwaway — do not commit harness scripts or audit reports.
-
 ## Pointers and Unsafe
 
 - Do not use `unsafe` unless absolutely necessary, isolated, and commented with justification.
@@ -101,6 +89,74 @@ Apply whenever you write, edit, or call SQL. Schema and indexes live in `infra/m
 - Comments explain *why*, not *what*. The code shows what; the comment explains the rationale, trade-off, or non-obvious invariant.
 - Do not add a comment that restates what the code or config line already says. No narrating an edit, no justifying an obvious choice. If it carries no information beyond the line below it, delete it. This applies to config files too, not just Go.
 - Comments are sentences: capital letter, full stop.
+
+### A comment is usually a symptom
+
+The bar for adding one is that the code *cannot* be made to say it. Most lines
+clear that bar by being rewritten, not annotated. Before writing a comment, try
+these in order:
+
+1. **Rename.** A comment defining what a variable, field, or function is, is a
+   naming bug. Fix the name.
+2. **Extract.** A comment introducing a block — `// now validate the inputs` —
+   is a function waiting to be named.
+3. **Restructure.** A comment warning a caller about call order, nil-ness, or a
+   field that must not be set describes a type or signature that permits the
+   mistake. Make it impossible instead.
+
+Only when all three fail is a comment the right tool, and that is precisely when
+the reason lives *outside* the code: a Martian runtime behaviour, a Nextflow
+semantic, a wire format, a bug the shape of the code exists to prevent, a
+rejected alternative that looks better than it is. Those cannot be renamed into
+existence.
+
+"This code needs a comment to be followed" is first a report about the code.
+
+### Delete on sight
+
+Dead comments go the way of dead code, whether or not this change introduced
+them. If you are editing a file and pass a comment that restates its line,
+narrates an old edit, or describes behaviour that is no longer true, delete it
+in that commit — do not leave it for a cleanup that never comes.
+
+Remove it outright when it adds nothing. Do not reword a worthless comment into
+a better-written worthless comment. A stale comment is worse than none, because
+it is believed.
+
+### Length
+
+A comment is as long as its reason and no longer. One or two lines carries
+almost every *why*. Past about six lines, ask what a reader loses if you cut it
+in half — usually nothing, because the extra lines re-explain the first ones.
+
+Earn the length only for a reason the reader genuinely cannot reconstruct: an
+external constraint (`mrp`'s behaviour, a Nextflow semantic, a wire format), a
+bug the shape of the code exists to prevent, or a rejected alternative that
+looks obviously better than it is. Never for a summary of what the function
+does.
+
+### The test to apply
+
+**Would this comment exist if the code had been written this way the first
+time?** If it only makes sense as a record of how the code got here, cut it.
+These all fail that test:
+
+- `// The previous implementation used X, which broke because…`
+- `// Round two found that…`, `// This was added to fix…`, `// (#123)`
+- Restating the diff: `// Now derives the value from the constant`
+- A doc comment whose first sentence is the function signature in prose
+
+Keep the *fact* the history taught, drop the history:
+
+```go
+// BAD — narrates how we got here
+// This used to gather with .collect(), whose completion order leaked into
+// the JOIN's -resume key, so we switched to toSortedList in #87.
+
+// GOOD — states the constraint
+// Sorted by name: completion order would otherwise enter the JOIN's
+// -resume cache key, and toSortedList emits [] for a zero-chunk split.
+```
 
 ## Architecture
 
