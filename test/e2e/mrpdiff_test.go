@@ -270,6 +270,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #242: dotfiles and an empty subdirectory inside directory outputs,
 	// through both LAYOUT variants (the transform return folds under -native).
 	{name: "dir_hidden", native: true, runner: true},
+	// #328: string values shaped like @mre: markers reach the stage and the
+	// published outs exactly as mrp gives them.
+	{name: "marker_strings", native: true, runner: true},
 	{name: "map_file"},
 	{name: "map_file_keyed"},
 	{name: "map_split_file"},

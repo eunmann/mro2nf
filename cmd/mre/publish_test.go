@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -152,6 +154,71 @@ func TestPublishShapeMismatchErrors(t *testing.T) {
 				t.Errorf("error must not embed the raw marker value: %v", err)
 			}
 		})
+	}
+}
+
+// TestPublishKeepsMarkerShapedStrings guards #328 at publish: a marker-shaped
+// string output reaches pipeline_outs.json as the literal string mrp
+// publishes, and a file-typed output holding one names no file, so it
+// publishes null and adds nothing to the layout. The sidecar is the one
+// WriteBundle produces, as on the real path.
+func TestPublishKeepsMarkerShapedStrings(t *testing.T) {
+	const shaped = "@mre:file:f/L0000.txt"
+
+	params := []ir.Param{
+		{Name: "s", BaseType: "string"},
+		{Name: "m", BaseType: "map"},
+		{Name: "fake", BaseType: "txt", IsFile: true},
+	}
+	outs := map[string]any{
+		"s":     shaped,
+		"m":     map[string]any{"k": []any{shaped}},
+		"fake":  shaped,
+		"extra": shaped,
+	}
+
+	dir := filepath.Join(t.TempDir(), "outs")
+	if err := shim.WriteBundle(dir, outs, params, types.NewTable(nil)); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sidecar, err := rawToMap(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pub := newPublisher(nil)
+	got := mustPublish(t, pub, params, sidecar)
+
+	want := map[string]any{
+		"s":     shaped,
+		"m":     map[string]any{"k": []any{shaped}},
+		"fake":  nil,
+		"extra": shaped,
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("published outs mismatch (-want +got):\n%s", diff)
+	}
+
+	if len(pub.layout) != 0 {
+		t.Errorf("layout = %v, want empty: no output names a file", pub.layout)
+	}
+}
+
+// TestPublishRejectsMalformedMarker checks a file leaf carrying the reserved
+// marker prefix in a shape mre never writes fails the publish instead of being
+// laid out.
+func TestPublishRejectsMalformedMarker(t *testing.T) {
+	params := []ir.Param{{Name: "f", BaseType: "txt", IsFile: true}}
+	outs := map[string]any{"f": shim.FileMarker + "../elsewhere"}
+
+	if _, err := newPublisher(nil).publishOuts(params, outs); !errors.Is(err, shim.ErrBadMarker) {
+		t.Errorf("publishOuts err = %v, want ErrBadMarker", err)
 	}
 }
 

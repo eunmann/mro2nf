@@ -185,10 +185,20 @@ func writeManifest(path, pipeline string, outputs []manifestEntry) error {
 
 // publishOuts walks each declared output param and emits its value, returning the
 // rewritten outs tree (file leaves replaced by their outs/ rel path, or null).
-// Non-file values pass through unchanged; a missing/empty file leaf resolves to
-// null. Keys without a matching declared output param are preserved.
+// Non-file values pass through as the stage wrote them (the sidecar's escaped
+// strings restored); a missing/empty file leaf resolves to null. Keys without a
+// matching declared output param are preserved.
 func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) (map[string]any, error) {
-	published := maps.Clone(outs)
+	published := make(map[string]any, len(outs))
+
+	for k, v := range outs {
+		uv, err := unescape(k, v)
+		if err != nil {
+			return nil, err
+		}
+
+		published[k] = uv
+	}
 
 	for _, p := range params {
 		if v, ok := outs[p.Name]; ok {
@@ -202,6 +212,16 @@ func (pub *publisher) publishOuts(params []ir.Param, outs map[string]any) (map[s
 	}
 
 	return published, nil
+}
+
+// unescape restores the escaped strings in the sidecar value of output name.
+func unescape(name string, value any) (any, error) {
+	v, err := shim.UnescapeValue(value)
+	if err != nil {
+		return nil, fmt.Errorf("publish %q: %w", name, err)
+	}
+
+	return v, nil
 }
 
 // publisher computes a pipeline's mrp-style outs/ layout from the raw sidecar
@@ -249,12 +269,12 @@ func (pub *publisher) emit(parentRel string, p ir.Param, value any) (any, error)
 	}
 
 	// A type with no file/dir leaves (a plain scalar, or an array/map/struct of
-	// them) is passed through verbatim — matching Martian's non-file outs, which
+	// them) is passed through as the stage wrote it — matching Martian's non-file outs, which
 	// are emitted unchanged (all map keys and struct fields kept). Only file-
 	// bearing values are decomposed into the outs/ tree. IsFile is set for a file,
 	// a directory, and any array/map/struct that contains one.
 	if !p.IsFile {
-		return value, nil
+		return unescape(p.Name, value)
 	}
 
 	rel := path.Join(parentRel, types.OutFilename(p, pub.isStruct))
@@ -401,9 +421,13 @@ func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 
 	transport, isDir, ok := shim.CutMarker(src)
 	if !ok {
+		if err := shim.CheckReserved(src); err != nil {
+			return nil, fmt.Errorf("publish %q at %s: %w", p.Name, rel, err)
+		}
+
 		// A non-marker string — an empty string, or a declared output the stage
-		// never wrote (a raw, marker-less path) — resolves to null, matching
-		// Martian.
+		// never wrote (a raw path, or an escaped string) — resolves to null,
+		// matching Martian.
 		return nil, nil
 	}
 

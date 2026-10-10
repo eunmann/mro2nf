@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -23,28 +24,45 @@ var errDestExists = errors.New("destination already exists")
 // its own ancestors through a symlink, which would otherwise recurse unbounded.
 var errSymlinkCycle = errors.New("directory symlink cycle")
 
+// ErrBadMarker reports a payload string carrying the reserved marker prefix in
+// a shape mre never writes: a corrupt or forged bundle.
+var ErrBadMarker = errors.New("malformed bundle marker")
+
 // The bundle is the object-store-portable channel item exchanged between
 // Nextflow processes: a directory holding a JSON payload plus the actual files
 // it references, so Nextflow stages files (not bare absolute paths) across task
 // boundaries. File leaves in the payload are stored as markers; the real files
 // live under the files subdir, named collision-free.
+//
+// Every payload string beginning with reservedPrefix is mre's own: a marker
+// MarkFiles wrote at a file leaf the type walk found, or an escaped value.
+// MarkFiles escapes any other string that begins with the prefix, whatever its
+// type, so a user's string can never be read back as a marker; ReadBundle
+// unescapes it, and the stage receives the string mrp would give it.
 const (
+	reservedPrefix = "@mre:"
 	// FileMarker prefixes a plain-file leaf value in a bundle's payload. The
-	// remainder is the bundle-relative path to the staged file. The prefix is
-	// distinctive enough that no real data value collides with it.
-	FileMarker = "@mre:file:"
+	// remainder is the bundle-relative path to the staged file.
+	FileMarker = reservedPrefix + "file:"
 	// DirMarker is FileMarker's counterpart for a leaf staged from a directory
 	// (a Martian `path` output, or a directory a stage wrote into a `file`-typed
 	// out). Both markers resolve to a path identically; the distinction records
 	// the leaf's ground-truth dir-ness — measured by stat at staging time — so a
 	// downstream consumer (publish's manifest) need not infer it from the declared
 	// output type. See MarkFiles and cmd/mre/publish.go emitFile.
-	DirMarker = "@mre:dir:"
+	DirMarker = reservedPrefix + "dir:"
+	// escapePrefix prefixes a payload value that is not a marker but itself
+	// begins with reservedPrefix; the remainder is the original string.
+	escapePrefix = reservedPrefix + "str:"
 	// bundleData is the payload filename inside a bundle directory.
 	bundleData = "data.json"
 	// bundleFiles is the files subdirectory inside a bundle directory.
 	bundleFiles = "f"
 )
+
+// markerRel is the only bundle-relative shape MarkFiles writes: an ordinal leaf
+// directly under the files subdir, keeping the source's extension.
+var markerRel = regexp.MustCompile(`^` + bundleFiles + `/L[0-9]{4,}(\.[^/]*)?$`)
 
 // Marker returns the transport marker for a leaf staged at bundle-relative rel,
 // choosing FileMarker or DirMarker by the leaf's stat'd dir-ness.
@@ -58,23 +76,110 @@ func Marker(rel string, isDir bool) string {
 
 // CutMarker splits a transport marker into (rel, isDir, ok): its bundle-relative
 // path and whether the leaf is a directory. ok is false for a string that is not
-// a marker (a plain scalar, or a raw path for a declared output never written).
+// a well-formed marker (a plain scalar, an escaped value, a raw path for a
+// declared output never written, or a marker whose rel MarkFiles never writes).
 func CutMarker(s string) (string, bool, bool) {
-	if rel, ok := strings.CutPrefix(s, DirMarker); ok {
-		return rel, true, true
+	rel, isDir := strings.CutPrefix(s, DirMarker)
+	if !isDir {
+		var ok bool
+		if rel, ok = strings.CutPrefix(s, FileMarker); !ok {
+			return "", false, false
+		}
 	}
 
-	if rel, ok := strings.CutPrefix(s, FileMarker); ok {
-		return rel, false, true
+	if !markerRel.MatchString(rel) || !filepath.IsLocal(rel) {
+		return "", false, false
 	}
 
-	return "", false, false
+	return rel, isDir, true
+}
+
+// CheckReserved returns ErrBadMarker for a string that begins with the reserved
+// prefix but is neither a well-formed marker nor an escaped value, and nil for
+// any other string.
+func CheckReserved(s string) error {
+	if !strings.HasPrefix(s, reservedPrefix) || strings.HasPrefix(s, escapePrefix) {
+		return nil
+	}
+
+	if _, _, ok := CutMarker(s); ok {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %q", ErrBadMarker, s)
+}
+
+// UnescapeValue returns a copy of v with every escaped string restored to its
+// original value, leaving markers and all other values as they are. It is for
+// payload read raw rather than through ReadBundle: the published outs and the
+// element the driver slices out of a sidecar.
+func UnescapeValue(v any) (any, error) {
+	return mapStrings(v, func(s string) (string, error) {
+		return strings.TrimPrefix(s, escapePrefix), nil
+	})
+}
+
+// escapeValue returns a copy of v with every string that begins with the
+// reserved prefix escaped, so no value MarkFiles did not itself mark reads back
+// as a marker.
+func escapeValue(v any) (any, error) {
+	return mapStrings(v, func(s string) (string, error) {
+		if strings.HasPrefix(s, reservedPrefix) {
+			return escapePrefix + s, nil
+		}
+
+		return s, nil
+	})
+}
+
+// mapStrings returns a copy of the decoded JSON tree v with fn applied to every
+// string value (map keys are left alone). A json.RawMessage is decoded first so
+// its strings are reached too.
+func mapStrings(v any, fn func(string) (string, error)) (any, error) {
+	switch t := v.(type) {
+	case string:
+		return fn(t)
+	case json.RawMessage:
+		dv, err := decodeJSON(t)
+		if err != nil {
+			return nil, err
+		}
+
+		return mapStrings(dv, fn)
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			ne, err := mapStrings(e, fn)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = ne
+		}
+
+		return out, nil
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			ne, err := mapStrings(e, fn)
+			if err != nil {
+				return nil, err
+			}
+
+			out[k] = ne
+		}
+
+		return out, nil
+	default:
+		return v, nil
+	}
 }
 
 // ReadBundle loads a bundle directory's payload and rewrites every file marker
-// to an absolute path under the (staged) bundle, so callers see real paths. An
-// empty dir yields nil (an absent optional input). The resolution is
-// type-agnostic: any string carrying the marker prefix is a file leaf.
+// to an absolute path under the (staged) bundle, so callers see real paths, and
+// restores every escaped value. An empty dir yields nil (an absent optional
+// input). The rewrite needs no types: MarkFiles escapes every reserved string it
+// did not mark, so a marker here is a file leaf the writer's type walk found.
 func ReadBundle(dir string) (json.RawMessage, error) {
 	if dir == "" {
 		return nil, nil
@@ -95,12 +200,38 @@ func ReadBundle(dir string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("parse bundle %s: %w", dir, err)
 	}
 
-	out, err := json.Marshal(resolveMarkers(v, abs))
+	resolved, err := mapStrings(v, func(s string) (string, error) {
+		return resolveLeaf(s, abs)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve bundle %s: %w", dir, err)
+	}
+
+	out, err := json.Marshal(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("encode bundle %s: %w", dir, err)
 	}
 
 	return out, nil
+}
+
+// resolveLeaf maps one payload string read from the bundle at bundleAbs: an
+// escaped value to its original, a marker to its absolute staged path, any
+// other reserved string to ErrBadMarker, and everything else to itself.
+func resolveLeaf(s, bundleAbs string) (string, error) {
+	if orig, ok := strings.CutPrefix(s, escapePrefix); ok {
+		return orig, nil
+	}
+
+	if rel, _, ok := CutMarker(s); ok {
+		return filepath.Join(bundleAbs, rel), nil
+	}
+
+	if err := CheckReserved(s); err != nil {
+		return "", err
+	}
+
+	return s, nil
 }
 
 // decodeJSON decodes JSON into an any tree, keeping numbers as json.Number so a
@@ -115,33 +246,6 @@ func decodeJSON(raw json.RawMessage) (any, error) {
 	}
 
 	return v, nil
-}
-
-// resolveMarkers walks decoded JSON, replacing marker strings with absolute
-// paths under bundleAbs.
-func resolveMarkers(v any, bundleAbs string) any {
-	switch t := v.(type) {
-	case string:
-		if rel, _, ok := CutMarker(t); ok {
-			return filepath.Join(bundleAbs, rel)
-		}
-
-		return t
-	case []any:
-		for i, e := range t {
-			t[i] = resolveMarkers(e, bundleAbs)
-		}
-
-		return t
-	case map[string]any:
-		for k, e := range t {
-			t[k] = resolveMarkers(e, bundleAbs)
-		}
-
-		return t
-	default:
-		return v
-	}
 }
 
 // WriteBundle writes payload into dir as a bundle: every file leaf located by
@@ -206,12 +310,25 @@ func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.T
 // MarkFiles copies every file leaf in payload (located via params/tbl) into
 // dir/f/, replacing each with a bundle-relative marker, and returns the
 // rewritten payload. Names are sequenced so distinct leaves never collide.
+// Every other string that begins with the reserved prefix is escaped, a file
+// leaf naming no file included.
 func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) (map[string]any, error) {
+	escaped := make(map[string]any, len(payload))
+	for k, v := range payload {
+		ev, err := escapeValue(v)
+		if err != nil {
+			return nil, fmt.Errorf("escape bundle value %s: %w", k, err)
+		}
+
+		escaped[k] = ev
+	}
+
 	n := 0
 
-	copyIn := func(src string) (string, error) {
+	copyIn := func(leaf string) (string, error) {
+		src := strings.TrimPrefix(leaf, escapePrefix)
 		if src == "" {
-			return src, nil
+			return leaf, nil
 		}
 
 		// A declared output file the stage legitimately never wrote: keep the path
@@ -225,7 +342,7 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		// precisely.
 		info, err := os.Stat(src)
 		if os.IsNotExist(err) {
-			return src, nil
+			return leaf, nil
 		}
 
 		isDir := err == nil && info.IsDir()
@@ -255,7 +372,7 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		return Marker(rel, isDir), nil
 	}
 
-	marked, err := tbl.Apply(params, payload, copyIn)
+	marked, err := tbl.Apply(params, escaped, copyIn)
 	if err != nil {
 		return nil, fmt.Errorf("collect bundle files: %w", err)
 	}

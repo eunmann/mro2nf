@@ -264,6 +264,59 @@ class WalkAndMarkersTest(unittest.TestCase):
         self.assertEqual(resolved["arr"][0],
                          os.path.join(os.path.abspath(bdir), "f", "L0000.txt"))
 
+    def test_marker_shaped_strings_round_trip(self):
+        # #328: a string spelled like a transport marker comes back as the
+        # same string wherever it sits, exactly as mrp passes it on; the rels
+        # name the bundle's real leaf, so resolving one would hand a stage
+        # another file's path in place of its string.
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        made = os.path.join(tmp, "made.txt")
+        with open(made, "w") as fh:
+            fh.write("made")
+        params = [
+            {"name": "made", "baseType": "txt", "arrayDim": 0, "mapDim": 0,
+             "isFile": True},
+            {"name": "fake", "baseType": "txt", "arrayDim": 0, "mapDim": 0,
+             "isFile": True},
+            {"name": "s", "baseType": "string", "arrayDim": 0, "mapDim": 0},
+            {"name": "arr", "baseType": "string", "arrayDim": 1, "mapDim": 0},
+            {"name": "m", "baseType": "map", "arrayDim": 0, "mapDim": 0},
+        ]
+        strs = ["@mre:file:f/L0000.txt", "@mre:dir:f/L0000.txt",
+                "@mre:str:@mre:file:f/L0000.txt", "@mre:",
+                "@mre:file:../elsewhere", "plain"]
+        payload = {
+            "made": made,
+            "fake": "@mre:file:f/L0000.txt",
+            "s": "@mre:file:f/L0000.txt",
+            "arr": strs,
+            "m": {"k": "@mre:dir:f/L0000.txt", "nested": strs},
+            "extra": "@mre:file:f/L0000.txt",
+        }
+        bdir = os.path.join(tmp, "bundle")
+        rs.write_bundle(bdir, payload, params, {})
+        want = dict(payload)
+        want["made"] = os.path.join(os.path.abspath(bdir), "f", "L0000.txt")
+        self.assertEqual(rs.read_bundle(bdir), want)
+
+    def test_read_bundle_rejects_malformed_markers(self):
+        # #328: mre writes a marker only as f/L<ordinal>[.ext] inside the
+        # bundle and escapes every other reserved string, so any other
+        # reserved-prefix shape is a corrupt or forged bundle.
+        bad = ["@mre:file:../elsewhere", "@mre:dir:/abs/path",
+               "@mre:file:f/../../elsewhere", "@mre:file:f/L12.txt",
+               "@mre:file:g/L0000", "@mre:file:f/L0000/sub",
+               "@mre:other:x", "@mre:"]
+        for s in bad:
+            with self.subTest(s=s):
+                tmp = tempfile.mkdtemp()
+                self.addCleanup(shutil.rmtree, tmp, True)
+                with open(os.path.join(tmp, "data.json"), "w") as fh:
+                    json.dump({"v": [s]}, fh)
+                with self.assertRaises(rs.RunnerError):
+                    rs.read_bundle(tmp)
+
     def test_missing_and_empty_leaves_kept(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)

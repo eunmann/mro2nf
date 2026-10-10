@@ -28,6 +28,7 @@ import decimal
 import json
 import math
 import os
+import re
 import resource as _resource_mod
 import stat as _stat_mod
 import sys
@@ -37,11 +38,14 @@ from types import SimpleNamespace
 
 import martian  # the sibling runner martian.py (sys.path[0] is this dir)
 
-# Ports internal/shim/bundle.go marker constants.
-FILE_MARKER = "@mre:file:"
-DIR_MARKER = "@mre:dir:"
+# Ports internal/shim/bundle.go marker constants and markerRel.
+RESERVED_PREFIX = "@mre:"
+FILE_MARKER = RESERVED_PREFIX + "file:"
+DIR_MARKER = RESERVED_PREFIX + "dir:"
+ESCAPE_PREFIX = RESERVED_PREFIX + "str:"
 BUNDLE_DATA = "data.json"
 BUNDLE_FILES = "f"
+_MARKER_REL = re.compile(BUNDLE_FILES + r"/L[0-9]{4,}(\.[^/]*)?")
 
 # Ports internal/shim/shim.go constants.
 EXTRA_VMEM_GB = 3
@@ -435,17 +439,54 @@ def coerce_inputs(man, callable_, roles, vals):
 # ---------------------------------------------------------------------------
 
 def cut_marker(s):
-    """Returns (rel, is_dir, ok) for a transport marker string."""
+    """Returns (rel, is_dir, ok) for a transport marker string; ok is False
+    for anything but a well-formed marker (ports CutMarker)."""
     if s.startswith(DIR_MARKER):
-        return s[len(DIR_MARKER):], True, True
-    if s.startswith(FILE_MARKER):
-        return s[len(FILE_MARKER):], False, True
-    return "", False, False
+        rel, is_dir = s[len(DIR_MARKER):], True
+    elif s.startswith(FILE_MARKER):
+        rel, is_dir = s[len(FILE_MARKER):], False
+    else:
+        return "", False, False
+    if not _MARKER_REL.fullmatch(rel):
+        return "", False, False
+    return rel, is_dir, True
+
+
+def _map_strings(v, fn):
+    """A copy of the decoded JSON tree v with fn applied to every string
+    value; dict keys are left alone (ports mapStrings)."""
+    if isinstance(v, str):
+        return fn(v)
+    if isinstance(v, list):
+        return [_map_strings(e, fn) for e in v]
+    if isinstance(v, dict):
+        return {k: _map_strings(e, fn) for k, e in v.items()}
+    return v
+
+
+def _escape(s):
+    """Ports escapeValue's leaf rule: a reserved-prefix string MarkFiles did
+    not mark is escaped so it never reads back as a marker."""
+    return ESCAPE_PREFIX + s if s.startswith(RESERVED_PREFIX) else s
+
+
+def _resolve_leaf(s, bundle_abs):
+    """Ports resolveLeaf: escaped value -> original, marker -> absolute
+    staged path, any other reserved string -> error, else unchanged."""
+    if s.startswith(ESCAPE_PREFIX):
+        return s[len(ESCAPE_PREFIX):]
+    rel, _, ok = cut_marker(s)
+    if ok:
+        return os.path.join(bundle_abs, rel)
+    if s.startswith(RESERVED_PREFIX):
+        raise RunnerError("malformed bundle marker: %s" % json.dumps(s))
+    return s
 
 
 def read_bundle(dir_):
-    """Load a bundle payload, rewriting markers to absolute staged paths.
-    An empty dir yields None (an absent optional input)."""
+    """Load a bundle payload, rewriting markers to absolute staged paths and
+    restoring escaped values. An empty dir yields None (an absent optional
+    input)."""
     if not dir_:
         return None
     path = os.path.join(dir_, BUNDLE_DATA)
@@ -456,20 +497,11 @@ def read_bundle(dir_):
         raise RunnerError("read bundle %s: %s" % (dir_, err)) from None
     except ValueError as err:
         raise RunnerError("parse bundle %s: %s" % (dir_, err)) from None
-    return _resolve_markers(v, os.path.abspath(dir_))
-
-
-def _resolve_markers(v, bundle_abs):
-    if isinstance(v, str):
-        rel, _, ok = cut_marker(v)
-        if ok:
-            return os.path.join(bundle_abs, rel)
-        return v
-    if isinstance(v, list):
-        return [_resolve_markers(e, bundle_abs) for e in v]
-    if isinstance(v, dict):
-        return {k: _resolve_markers(e, bundle_abs) for k, e in v.items()}
-    return v
+    bundle_abs = os.path.abspath(dir_)
+    try:
+        return _map_strings(v, lambda s: _resolve_leaf(s, bundle_abs))
+    except RunnerError as err:
+        raise RunnerError("resolve bundle %s: %s" % (dir_, err)) from None
 
 
 def as_object(v, what):
@@ -796,19 +828,23 @@ def mark_files(bundle_dir, payload, params, structs):
     """Copy every file leaf into bundle_dir/f/L%04d<ext> (walk order) and replace
     it with a transport marker; ports MarkFiles. The ordinal drops the original
     basename but keeps the extension, so Martian typed-file readers that
-    reconstruct a leaf path from its filetype (Path::with_extension) resolve it."""
+    reconstruct a leaf path from its filetype (Path::with_extension) resolve it.
+    Every other reserved-prefix string is escaped, a file leaf naming no file
+    included."""
     counter = [0]
+    escaped = {k: _map_strings(v, _escape) for k, v in payload.items()}
 
-    def copy_in(src):
+    def copy_in(leaf):
+        src = leaf[len(ESCAPE_PREFIX):] if leaf.startswith(ESCAPE_PREFIX) else leaf
         if src == "":
-            return src
+            return leaf
         try:
             st = os.stat(src)  # follows symlinks, like Go os.Stat
             src_is_dir = _stat_mod.S_ISDIR(st.st_mode)
         except FileNotFoundError:
             # A declared output the stage never wrote (or a dangling
             # symlink): keep the path string unchanged.
-            return src
+            return leaf
         except OSError:
             src_is_dir = False  # copy_tree will surface the error precisely
         rel = os.path.join(BUNDLE_FILES, "L%04d%s" % (counter[0], _leaf_ext(src)))
@@ -819,7 +855,7 @@ def mark_files(bundle_dir, payload, params, structs):
         return (DIR_MARKER if src_is_dir else FILE_MARKER) + rel
 
     try:
-        return apply_params(structs, params, payload, copy_in)
+        return apply_params(structs, params, escaped, copy_in)
     except OSError as err:
         raise RunnerError("collect bundle files: %s" % err) from None
 

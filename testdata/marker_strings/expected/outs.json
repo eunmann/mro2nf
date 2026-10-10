@@ -1,0 +1,20 @@
+{
+    "arr": [
+        "@mre:file:f/L0000.txt",
+        "@mre:str:@mre:file:f/L0000.txt",
+        "@mre:",
+        "plain"
+    ],
+    "fake": null,
+    "fwd": "@mre:file:f/L0000.txt",
+    "lit": "@mre:dir:f/L0000.txt",
+    "m": {
+        "dir": "@mre:dir:f/L0000.txt",
+        "nested": [
+            "@mre:file:f/L0001"
+        ]
+    },
+    "made": "made.txt",
+    "s": "@mre:file:f/L0000.txt",
+    "seen": "@mre:file:f/L0000.txt exists=False"
+}

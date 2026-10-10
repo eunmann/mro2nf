@@ -542,9 +542,19 @@ Both prefixes resolve identically on read-back. The rules:
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
   This is `shim.MarkFiles`, which uses the type table to find exactly which leaves
   are files (§3's `Param.IsFile`, recursing into structs/arrays/maps).
+- **Escaping** (on write): every other string that begins with the reserved
+  `@mre:` prefix (a string input, a `.mro` literal, a stage's string output, a
+  file-typed out naming no file) is stored as `@mre:str:<original>`. A marker in
+  `data.json` is therefore always one `MarkFiles` wrote at a file leaf the type
+  walk found, never a user's string.
 - **On read** (a stage is about to consume a bundle): markers are *absolutized*
   back to real paths inside the staged bundle, so the stage opens a real local
-  file.
+  file, and escaped strings get their original value back, so the stage sees
+  exactly the string `mrp` would pass it. A marker is accepted only in the shape
+  `MarkFiles` writes (`f/L<nnnn>[.<ext>]`, bundle-local); any other `@mre:`
+  string fails the read. Readers of a raw `data.json` restore the escapes too:
+  `publish-layout` for the published outs, and `forkbind -elementfile` for the
+  element the driver slices out of a sidecar.
 
 Because the files travel *with* the bundle — declared as `path` outputs and
 inputs — Nextflow stages them between tasks automatically, with no shared

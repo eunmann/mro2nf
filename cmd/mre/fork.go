@@ -166,9 +166,9 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 		return errElementNoOut
 	}
 
-	element, err := readFile(elemFile)
+	element, err := readElement(elemFile)
 	if err != nil {
-		return fmt.Errorf("read element file: %w", err)
+		return err
 	}
 
 	args, err := bind.ResolveElement(spec, pipeArgs, callOuts, element)
@@ -177,6 +177,28 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 	}
 
 	return prod.writeBound(oDir, args)
+}
+
+// readElement reads a pre-sliced fork element. The driver cuts it verbatim out
+// of a bundle's data.json, so its strings are still bundle-encoded and are
+// restored here, as ReadBundle restores the -index path's collection.
+func readElement(path string) (json.RawMessage, error) {
+	raw, err := readFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read element file: %w", err)
+	}
+
+	v, err := shim.UnescapeValue(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode element file: %w", err)
+	}
+
+	out, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("encode element: %w", err)
+	}
+
+	return out, nil
 }
 
 // checkForkBindFlags diagnoses flag-combination misuse before any resolution

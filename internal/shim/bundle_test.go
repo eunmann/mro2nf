@@ -2,6 +2,7 @@ package shim_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/google/go-cmp/cmp"
 )
 
 func fileTable() *types.Table {
@@ -190,6 +192,125 @@ func TestMarkerRoundTrip(t *testing.T) {
 
 	if _, _, ok := shim.CutMarker("/plain/path"); ok {
 		t.Error("CutMarker on a non-marker string should report ok=false")
+	}
+}
+
+// TestBundleKeepsMarkerShapedStrings guards #328: a string value spelled like a
+// transport marker must come back from the bundle as the same string, wherever
+// it sits (a string param, a string array, an untyped map, a key no param
+// declares, or a file-typed leaf naming no file), exactly as mrp hands it to the
+// next stage. The rels name the bundle's real leaf, so resolving any of them
+// would hand a stage another file's path in place of its string.
+func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
+	dir := t.TempDir()
+
+	src := filepath.Join(dir, "made.txt")
+	if err := os.WriteFile(src, []byte("made"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	params := []ir.Param{
+		{Name: "made", BaseType: "txt", IsFile: true},
+		{Name: "fake", BaseType: "txt", IsFile: true},
+		{Name: "s", BaseType: "string"},
+		{Name: "arr", BaseType: "string", ArrayDim: 1},
+		{Name: "m", BaseType: "map"},
+	}
+	strs := []any{
+		"@mre:file:f/L0000.txt",
+		"@mre:dir:f/L0000.txt",
+		"@mre:str:@mre:file:f/L0000.txt",
+		"@mre:",
+		"@mre:file:../elsewhere",
+		"plain",
+	}
+	payload := map[string]any{
+		"made":  src,
+		"fake":  "@mre:file:f/L0000.txt",
+		"s":     "@mre:file:f/L0000.txt",
+		"arr":   strs,
+		"m":     map[string]any{"k": "@mre:dir:f/L0000.txt", "nested": strs},
+		"extra": "@mre:file:f/L0000.txt",
+	}
+
+	bundle := filepath.Join(dir, "bundle")
+	if err := shim.WriteBundle(bundle, payload, params, fileTable()); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+
+	resolved, err := shim.ReadBundle(bundle)
+	if err != nil {
+		t.Fatalf("ReadBundle: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(resolved, &got); err != nil {
+		t.Fatal(err)
+	}
+
+	abs, err := filepath.Abs(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]any{
+		"made":  filepath.Join(abs, "f", "L0000.txt"),
+		"fake":  payload["fake"],
+		"s":     payload["s"],
+		"arr":   strs,
+		"m":     payload["m"],
+		"extra": payload["extra"],
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("bundle round trip changed a marker-shaped string (-want +got):\n%s", diff)
+	}
+}
+
+// TestReadBundleRejectsMalformedMarkers guards #328's read side: mre writes a
+// marker only as f/L<ordinal>[.ext] inside the bundle and escapes every other
+// reserved string, so a payload string carrying the reserved prefix in any
+// other shape (a rel leaving the bundle, an absolute rel, an unknown kind) is a
+// corrupt or forged bundle and fails the read instead of resolving to a path.
+func TestReadBundleRejectsMalformedMarkers(t *testing.T) {
+	bad := []string{
+		"@mre:file:../elsewhere",
+		"@mre:dir:/abs/path",
+		"@mre:file:f/../../elsewhere",
+		"@mre:file:f/L12.txt",
+		"@mre:file:g/L0000",
+		"@mre:file:f/L0000/sub",
+		"@mre:other:x",
+		"@mre:",
+	}
+
+	for _, s := range bad {
+		t.Run(s, func(t *testing.T) {
+			dir := t.TempDir()
+			data, err := json.Marshal(map[string]any{"v": []any{s}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(filepath.Join(dir, "data.json"), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := shim.ReadBundle(dir); !errors.Is(err, shim.ErrBadMarker) {
+				t.Errorf("ReadBundle(%q) err = %v, want ErrBadMarker", s, err)
+			}
+		})
+	}
+
+	good := map[string]string{
+		"@mre:file:f/L0000":         "f/L0000",
+		"@mre:file:f/L12345.tar.gz": "f/L12345.tar.gz",
+		"@mre:dir:f/L0001":          "f/L0001",
+	}
+
+	for s, rel := range good {
+		if got, _, ok := shim.CutMarker(s); !ok || got != rel {
+			t.Errorf("CutMarker(%q) = %q, %v; want %q, true", s, got, ok, rel)
+		}
 	}
 }
 

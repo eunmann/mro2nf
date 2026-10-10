@@ -1,0 +1,89 @@
+# #328: string values that look like mro2nf's bundle transport markers
+# (`@mre:file:<rel>` / `@mre:dir:<rel>`) or its escape prefix must reach every
+# stage and the published outs exactly as mrp gives them: as the literal
+# strings. A marker-shaped value arrives here from an entry input, an untyped
+# map, a string array, a call-site literal and a stage's own string output. The
+# rels name the ordinal leaves the bundles here really hold (f/L0000.txt is
+# ECHO's `made` file), so treating the string as a marker would hand a stage a
+# different file's path instead of the string. ECHO also sets a file-typed
+# output to a marker-shaped string it never wrote: mrp passes the string on and
+# publishes null.
+filetype txt;
+
+stage ECHO(
+    in  string   s,
+    in  string[] arr,
+    in  map      m,
+    in  string   lit,
+    out string   s,
+    out string[] arr,
+    out map      m,
+    out string   lit,
+    out txt      made  "made.txt",
+    out txt      fake,
+    src py       "stages/echo",
+)
+
+stage FORWARD(
+    in  txt      made,
+    in  txt      fake,
+    in  string   s,
+    out txt      made,
+    out txt      fake,
+    out string   s,
+    out string   seen,
+    src py       "stages/forward",
+)
+
+pipeline MARKERS(
+    in  string   s,
+    in  string[] arr,
+    in  map      m,
+    out string   s,
+    out string[] arr,
+    out map      m,
+    out string   lit,
+    out txt      made,
+    out txt      fake,
+    out string   fwd,
+    out string   seen,
+)
+{
+    call ECHO(
+        s   = self.s,
+        arr = self.arr,
+        m   = self.m,
+        lit = "@mre:dir:f/L0000.txt",
+    )
+
+    call FORWARD(
+        made = ECHO.made,
+        fake = ECHO.fake,
+        s    = ECHO.s,
+    )
+
+    return (
+        s    = ECHO.s,
+        arr  = ECHO.arr,
+        m    = ECHO.m,
+        lit  = ECHO.lit,
+        made = FORWARD.made,
+        fake = FORWARD.fake,
+        fwd  = FORWARD.s,
+        seen = FORWARD.seen,
+    )
+}
+
+call MARKERS(
+    s   = "@mre:file:f/L0000.txt",
+    arr = [
+        "@mre:file:f/L0000.txt",
+        "@mre:str:@mre:file:f/L0000.txt",
+        "@mre:",
+        "plain",
+    ],
+    m   = {
+        "dir": "@mre:dir:f/L0000.txt",
+        "nested": ["@mre:file:f/L0001"],
+    },
+)
