@@ -9,6 +9,11 @@
 __pycache__/
 *.pyc
 
+# Agent worktrees and per-worktree lint caches.
+/.claude/worktrees/
+/.golangci-cache/
+/.tmp/
+
 # Local-only: point the Martian dependency at a fork checkout for parser hacking.
 go.work
 go.work.sum
