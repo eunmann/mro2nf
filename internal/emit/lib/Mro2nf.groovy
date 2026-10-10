@@ -390,15 +390,14 @@ class Mro2nf {
     // path.
     private static final Pattern URI_SCHEME = Pattern.compile('^([A-Za-z][A-Za-z0-9+.-]*):/')
 
-    private static final Set<String> CLOUD_TARGETS = ['awsbatch', 'healthomics'] as Set<String>
-
     // entryFile vets one file leaf of a launch-time entry override before the
     // generated flatten hands it to file() on the head node (#330). file()
     // fetches any URL it has a provider for (http, ftp, a cloud metadata
     // endpoint) and reads any head-node path into the run, and the value comes
-    // from whoever launches the run. So an s3:// URI is allowed on awsbatch and
-    // healthomics, a local path (a `file:` URI included, as Nextflow reads it)
-    // only on the local target, and any other scheme only when allowRemote
+    // from whoever launches the run. So an s3:// URI is allowed on every target
+    // (the local target ships an awsbatch profile that runs against S3), a local
+    // path (a `file:` URI included, as Nextflow reads it) only on the local
+    // target, and any other scheme only when allowRemote
     // (params.mro2nf_allow_remote_inputs) is true. An accepted value must still
     // be safe to stage (stageSafe). The errors name the input but not the value,
     // which may carry a credential.
@@ -420,9 +419,9 @@ class Mro2nf {
             throw new IllegalArgumentException(
                 "entry input '${input}': a local path is not allowed on target '${target}'; pass an s3:// URI")
         }
-        if (scheme == 's3' && CLOUD_TARGETS.contains(target)) return
+        if (scheme == 's3') return
         if (allowRemoteInputs(allowRemote)) return
-        String allowed = target == 'local' ? 'a local path' : 'an s3:// URI'
+        String allowed = target == 'local' ? 'a local path or an s3:// URI' : 'an s3:// URI'
         throw new IllegalArgumentException(
             "entry input '${input}': scheme '${scheme}' is not allowed on target '${target}'; pass ${allowed}, " +
             "or set params.mro2nf_allow_remote_inputs to true to fetch it")

@@ -93,9 +93,10 @@ func TestLibHelpers(t *testing.T) {
 }
 
 // TestLibEntryFile pins Mro2nf.entryFile, the head-node vetting of each entry
-// file-override leaf (#330): an s3:// URI on a cloud target, a local path on
-// the local target, anything else only with the remote-input opt-in, which
-// never admits a local path on a cloud target. An accepted value holding a
+// file-override leaf (#330): an s3:// URI on every target (the local target's
+// awsbatch profile reads S3 too), a local path on the local target, anything
+// else only with the remote-input opt-in, which never admits a local path on a
+// cloud target. An accepted value holding a
 // character Nextflow's stage-in leaves for bash to expand is still rejected
 // (#276). A rejection names the input and the scheme or character, never the
 // value.
@@ -121,8 +122,8 @@ func TestLibEntryFile(t *testing.T) {
 		{"local", "'http://169.254.169.254/latest/meta-data/'", "null", "entry input 'in': scheme 'http' is not allowed on target 'local'"},
 		{"local", "'HTTPS://example.com/x'", "null", "scheme 'https'"},
 		{"local", "'ftp://example.com/x'", "null", "scheme 'ftp'"},
-		{"local", "'s3://b/k'", "null", "scheme 's3'"},
-		{"local", "'s3:/b/k'", "null", "scheme 's3'"},
+		{"local", "'s3://b/k'", "null", ok},
+		{"local", "'S3://b/k'", "null", ok},
 		{"local", "'http://example.com/x'", "true", ok},
 		{"local", "'http://example.com/x'", "'true'", ok},
 		{"local", "'http://example.com/x'", "'false'", "scheme 'http'"},

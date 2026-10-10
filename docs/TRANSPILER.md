@@ -634,12 +634,12 @@ service, a shared HealthOmics workflow. So before `file()` sees a leaf,
 
 | Target | Accepted file value |
 |---|---|
-| `local` | a local path (relative, absolute, or `file:`) |
+| `local` | a local path (relative, absolute, or `file:`), or an `s3://` URI for its `awsbatch` profile |
 | `awsbatch`, `healthomics` | an `s3://` URI |
 
 Anything else fails the run on the head node, before anything is fetched, with
 an error naming the input and the scheme: `http(s)://`, `ftp://`, any other
-scheme, an `s3://` URI on the local target, a local path on a cloud target.
+scheme, a local path on a cloud target.
 `--mro2nf_allow_remote_inputs true` (or `"mro2nf_allow_remote_inputs": true` in
 a `-params-file`) admits any scheme, but never a local path on a cloud target.
 Set it only when you trust whoever supplies the run parameters: the `mro2nf_`
