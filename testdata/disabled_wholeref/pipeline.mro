@@ -1,0 +1,76 @@
+# A whole-call ref to a DISABLED stage call and to a DISABLED pipeline call
+# resolves to null (Martian wraps the call's whole output in its disable), not
+# to a struct of nulls (#339). Projections of each stay null, and a whole ref to
+# an ENABLED call whose outputs are all null keeps its struct of nulls.
+stage SCALE(
+    in  int x,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+stage ZERO(
+    out int v,
+    src py  "stages/zero",
+)
+
+stage SHOW(
+    in  SCALE  s,
+    in  SUB    t,
+    in  ZERO   z,
+    in  int    sp,
+    in  int    tp,
+    out string r,
+    src py     "stages/show",
+)
+
+pipeline SUB(
+    in  int x,
+    out int scaled,
+)
+{
+    call SCALE(
+        x = self.x,
+    )
+
+    return (
+        scaled = SCALE.scaled,
+    )
+}
+
+pipeline DW(
+    in  int    x,
+    in  bool   off,
+    out string r,
+)
+{
+    call SCALE(
+        x = self.x,
+    ) using (
+        disabled = self.off,
+    )
+
+    call SUB(
+        x = self.x,
+    ) using (
+        disabled = self.off,
+    )
+
+    call ZERO()
+
+    call SHOW(
+        s  = SCALE,
+        t  = SUB,
+        z  = ZERO,
+        sp = SCALE.scaled,
+        tp = SUB.scaled,
+    )
+
+    return (
+        r = SHOW.r,
+    )
+}
+
+call DW(
+    x   = 3,
+    off = true,
+)

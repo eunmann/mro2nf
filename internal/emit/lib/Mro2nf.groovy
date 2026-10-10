@@ -234,8 +234,10 @@ class Mro2nf {
     // doubles as full-document validation, so a corrupt data.json fails loudly
     // even when the split field itself scans clean. First match wins on a
     // duplicate key (unreachable: data.json is written by Go's json.Marshal,
-    // which never emits duplicate keys).
+    // which never emits duplicate keys). A whole-null document is a disabled
+    // call's output bundle, every field of which is null.
     private static String rawTopField(String json, String field) {
+        if (json.trim() == 'null') return null
         for (List<String> e : rawObjectEntries(json)) {
             if (e[0] == field) return e[1]
         }

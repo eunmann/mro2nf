@@ -1,6 +1,7 @@
 package emit
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -117,7 +118,7 @@ func inlineEligible(p *ir.Pipeline, prog *ir.Program, flat map[string]bool, subs
 
 		flattenPipeline(sub, prog, flat)
 
-		spliced, whole, ok := inlineOne(c, sub, prog, subs)
+		spliced, whole, ok := inlineOne(c, sub, p, prog, subs)
 		if !ok {
 			out = append(out, c) // un-composable or unsafe: keep the boundary task
 
@@ -139,13 +140,52 @@ func inlineEligible(p *ir.Pipeline, prog *ir.Program, flat map[string]bool, subs
 // the gate can be pushed onto every spliced internal call both safely and without
 // increasing orchestration (inlineDisabled). A gate that folds to a constant is
 // left to foldDisables (ok=false, boundary kept, then re-visited next round
-// undisabled or pruned).
-func inlineOne(c ir.Call, sub *ir.Pipeline, prog *ir.Program, subs map[string]ir.Value) ([]ir.Call, ir.Value, bool) {
+// undisabled or pruned). parent is the pipeline holding c.
+func inlineOne(c ir.Call, sub, parent *ir.Pipeline, prog *ir.Program, subs map[string]ir.Value) ([]ir.Call, ir.Value, bool) {
 	if c.Disabled == nil {
 		return inlineCall(c, sub)
 	}
 
+	// Martian resolves a whole ref to a disabled call to null, but the inlined
+	// whole output is an object of per-return refs that would resolve to a
+	// struct of nulls; only the boundary's null bundle yields null.
+	if refsWholeCall(parent, c.Name) {
+		return nil, ir.Value{}, false
+	}
+
 	return inlineDisabled(c, sub, prog, subs)
+}
+
+// refsWholeCall reports whether any binding or return in p references the call
+// named id as a whole (`x = id`, no output projection).
+func refsWholeCall(p *ir.Pipeline, id string) bool {
+	var whole func(v ir.Value) bool
+	whole = func(v ir.Value) bool {
+		switch {
+		case v.Ref != nil:
+			return v.Ref.Kind == ir.RefKindCall && v.Ref.ID == id && v.Ref.Output == ""
+		case v.Array != nil:
+			return slices.ContainsFunc(v.Array, whole)
+		case v.Object != nil:
+			for _, e := range v.Object {
+				if whole(e) {
+					return true
+				}
+			}
+		}
+
+		return false
+	}
+
+	bound := func(b ir.Binding) bool { return whole(b.Value) }
+
+	for _, c := range p.Calls {
+		if slices.ContainsFunc(c.Bindings, bound) {
+			return true
+		}
+	}
+
+	return slices.ContainsFunc(p.Returns, bound)
 }
 
 // inlineDisabled inlines a plain sub-pipeline call gated by a runtime disable X,
@@ -301,10 +341,11 @@ func foldPrune(calls []ir.Call, subs map[string]ir.Value) ([]ir.Call, bool) {
 	return kept, changed
 }
 
-// nullOutput is an inlined/pruned call's whole output when all of it is null: an
-// empty Object, so every projection into it resolves to null (composeProjection).
+// nullOutput is a pruned call's whole output: the null literal, which a whole
+// ref resolves to directly and every projection into it resolves to as well
+// (composeProjection), matching Martian's null for a disabled call.
 func nullOutput() ir.Value {
-	return ir.Value{Object: map[string]ir.Value{}}
+	return ir.Value{Literal: []byte("null")}
 }
 
 // foldDisable resolves a call's disable gate through the inlined-output subs,

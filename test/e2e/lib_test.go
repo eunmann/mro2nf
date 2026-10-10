@@ -31,6 +31,7 @@ func TestLibHelpers(t *testing.T) {
 	writeBundleSidecar(t, filepath.Join(proj, "probe_null"), `{"disabled": null}`)
 	writeBundleSidecar(t, filepath.Join(proj, "probe_chunk"), `{"resources": {"threads": 3}}`)
 	writeFileT(t, filepath.Join(proj, "probe_join.json"), `{"mem_gb": 7}`)
+	writeBundleSidecar(t, filepath.Join(proj, "probe_disabled"), `null`)
 
 	forks := filepath.Join(proj, "probe_forks")
 	if err := os.MkdirAll(forks, 0o755); err != nil {
@@ -64,6 +65,9 @@ func TestLibHelpers(t *testing.T) {
     println "R asList=" + Mro2nf.asList(5) + "/" + Mro2nf.asList([1, 2])
     println "R outerKey=" + Mro2nf.outerKey("a~b~c")
     println "R forkKeys=" + Mro2nf.forkTuples("K", forks).collect { it[0] }.join(",")
+    // A disabled upstream's null bundle scatters as an empty collection.
+    def disabledSrc = file("${projectDir}/probe_disabled/data.json")
+    println "R nullDocFork=" + Mro2nf.forkElements(disabledSrc, 'xs', 'array').collect { it[0] }.join(",")
 }
 `
 	writeFileT(t, filepath.Join(proj, "probe.nf"), probe)
@@ -79,6 +83,7 @@ func TestLibHelpers(t *testing.T) {
 		"R asList=[5]/[1, 2]",
 		"R outerKey=a~b",
 		"R forkKeys=K~fa,K~fb",
+		"R nullDocFork=fork_none",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("helper probe missing %q in:\n%s", want, out)

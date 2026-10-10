@@ -344,8 +344,10 @@ the staged `forknames.json`** (via `.resolve()`), never `java.io.File.listFiles(
 A `call … using (disabled = …)` is resolved at runtime: a **DISABLE process**
 (`mre bind … -o disable`) computes the boolean, and the workflow `branch`es on it
 — running the callee only for the enabled case and emitting a pre-baked
-*null-outputs* bundle (from `nulls/<call>`) for the skipped case. Disabled map
-calls gate per fork.
+*null* bundle (from `nulls/<call>`) for the skipped case. Its whole payload is
+JSON `null`, as mrp resolves a disabled call: a whole-call ref (`s = CALL`) and
+every projection into it (`CALL.out`) both bind null. Disabled map calls gate
+per fork.
 
 ### 4.6 Resources → process directives
 

@@ -349,7 +349,8 @@ func bakeEntryArgs(prog *ir.Program, opts Options) error {
 }
 
 // writeDisableArtifacts emits, for every disabled call, its disable bindspec
-// and a null-outputs file used when the call is skipped at runtime.
+// and the null bundle that stands in for its output when it is skipped at
+// runtime.
 func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 	nullsDir := filepath.Join(outDir, "nulls")
 
@@ -370,35 +371,13 @@ func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 				return err
 			}
 
-			// A skipped call emits a null-valued output bundle (no files).
-			nulls := nullOuts(prog, c.Callable)
-			nullDir := filepath.Join(nullsDir, qualify(p.Name, c.Name))
-			if err := shim.WriteBundle(nullDir, nulls, nil, types.NewTable(prog.Structs)); err != nil {
+			if err := shim.WriteNullBundle(filepath.Join(nullsDir, qualify(p.Name, c.Name))); err != nil {
 				return fmt.Errorf("write null bundle: %w", err)
 			}
 		}
 	}
 
 	return nil
-}
-
-// nullOuts returns a map of a callable's output names to null.
-func nullOuts(prog *ir.Program, callable string) map[string]any {
-	out := map[string]any{}
-
-	if s, ok := prog.Stages[callable]; ok {
-		for _, p := range s.Out {
-			out[p.Name] = nil
-		}
-	}
-
-	if p, ok := prog.Pipelines[callable]; ok {
-		for _, param := range p.Out {
-			out[param.Name] = nil
-		}
-	}
-
-	return out
 }
 
 func writeJSONFile(path string, v any) error {

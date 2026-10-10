@@ -333,6 +333,10 @@ func TestMrpDiff(t *testing.T) {
 		// the disabled-null branch stay byte-identical to mrp.
 		{name: "disabled_plain_sub", inline: true},
 		{name: "disabled_plain_skip", inline: true},
+		// #339: a whole ref to a disabled stage and to a disabled (flat,
+		// otherwise inlinable) sub-pipeline is null in the consumer's _args; the
+		// noinline leg covers the boundary path, the default leg the inliner.
+		{name: "disabled_wholeref", native: true, inline: true},
 		{name: "fork_fanout", native: true, runner: true},
 		{name: "map_file_array", native: true, runner: true},
 		// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.

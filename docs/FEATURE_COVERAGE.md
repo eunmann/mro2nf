@@ -70,6 +70,7 @@ out of scope for a transpiler.
 | nested pipeline calls (pipeline→pipeline) | ✅ | e2e `modifiers_min`, `kitchen_sink` |
 | non-linear / diamond DAGs | ✅ | e2e `diamond_min` |
 | `using (disabled = ref)` (self or call ref) | ✅ | e2e `modifiers_min` |
+| whole-call ref (`s = CALL`) to a **disabled** stage or pipeline call | ✅ null, as mrp (the skip bundle is a whole JSON null; a disabled sub referenced whole keeps its boundary rather than inlining) | e2e `disabled_wholeref`; unit `TestEmitDisabledNullBundleIsNull`, `TestInlineDisabledWholeRefKeepsBoundary` |
 | `(preflight)` | ✅ gates the pipeline (early-abort): an input-bound preflight runs first and the pipeline's `pa` is gated on its completion, so every downstream call waits — mrp's prenode behavior. A mapped, disabled, or call-output-bound preflight stays in DAG order (warns) | e2e `modifiers_min`, `kitchen_sink`; unit `TestEmitPreflightGate` |
 | `(local)` | ⚠️ no-op (scheduling only) | e2e `kitchen_sink` |
 | `(volatile)` / `volatile = strict` | ⚠️ no-op for outputs (VDR is 🚫) | e2e `kitchen_sink` |

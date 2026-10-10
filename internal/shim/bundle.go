@@ -156,6 +156,17 @@ func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *typ
 	return writePayload(dir, marked)
 }
 
+// WriteNullBundle writes a bundle whose whole payload is JSON null: the output
+// of a skipped (disabled) call, which Martian resolves to null for a whole-call
+// ref and for every projection into it alike.
+func WriteNullBundle(dir string) error {
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return fmt.Errorf("create bundle %s: %w", dir, err)
+	}
+
+	return writeRaw(filepath.Join(dir, bundleData), []byte("null"))
+}
+
 // writePayload writes a decoded payload as dir/data.json.
 func writePayload(dir string, payload map[string]any) error {
 	if err := os.MkdirAll(dir, dirPerm); err != nil {

@@ -462,6 +462,25 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 	}
 }
 
+// TestEmitDisabledNullBundleIsNull pins a skipped call's output bundle to a
+// whole JSON null (#339): Martian resolves any ref to a disabled call — a whole
+// `s = CALL` included — to null, so a struct of per-output nulls would hand a
+// whole-ref consumer {"out": null} where mrp gives None.
+func TestEmitDisabledNullBundleIsNull(t *testing.T) {
+	dir := emitFixture(t, "disabled_callref", map[string]string{"FLAG": "/x/flag", "WORK": "/x/work"})
+
+	matches, err := filepath.Glob(filepath.Join(dir, "nulls", "*", "data.json"))
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("no null bundle emitted for the disabled call (glob error: %v)", err)
+	}
+
+	for _, m := range matches {
+		if got := strings.TrimSpace(readFile(t, m)); got != "null" {
+			t.Errorf("%s = %s, want null (a disabled call's whole output)", m, got)
+		}
+	}
+}
+
 // TestEmitJoinResourceOverride checks the split-returned join override plumbing:
 // SPLIT emits joinres.json, the workflow parses it into a `join` val, and JOIN
 // provisions cpus/memory dynamically from it (falling back to the stage default)
