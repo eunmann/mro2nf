@@ -30,24 +30,13 @@ const goldenTreeDir = "expected/outs"
 // empty directory, so the recorder writes them here instead of into the tree.
 const goldenEmptyDirs = "expected/outs.emptydirs"
 
-const (
-	unresolvedInput = "mrp runs the stage in its own job dir, where the invocation's relative input/ path does not resolve"
-	launchOverride  = "launch-time -params-file override: mrp has no equivalent invocation to record"
-)
+const launchOverride = "launch-time -params-file override: mrp has no equivalent invocation to record"
 
-// jsonOnlyGoldens are the goldenCases entries with no mrp-recorded tree,
-// keyed by case name, each with the reason mrp cannot produce one. They are
-// checked on pipeline_outs.json alone.
+// jsonOnlyGoldens are the goldenCases entries whose fixture mrp runs but whose
+// case it cannot record, keyed by case name with the reason. They, and the
+// cases of mrpUnrunnable fixtures, have no mrp-recorded tree and are checked
+// on pipeline_outs.json alone.
 var jsonOnlyGoldens = map[string]string{
-	"exec_min":                    "mrp never completes it: the exec stub writes no journal entries",
-	"mixed_adapters":              "mrp never completes it: its stubs speak mre's wrapped-adapter contract, not mrp's journal protocol",
-	"map_pipe_nested":             "mrp rejects it: OUTER.INNER.DBL's merge cannot match a reference to a specific fork",
-	"entry_file":                  unresolvedInput,
-	"entry_filearr":               unresolvedInput,
-	"entry_struct_file":           unresolvedInput,
-	"entry_mapfile":               unresolvedInput,
-	"entry_dir":                   unresolvedInput,
-	"split_from_file":             unresolvedInput,
 	"entry_file_override":         launchOverride,
 	"entry_filearr_override":      launchOverride,
 	"entry_struct_file_override":  launchOverride,
@@ -65,7 +54,7 @@ func recordableFixtures() []string {
 	var fixtures []string
 
 	for _, tc := range goldenCases {
-		if _, jsonOnly := jsonOnlyGoldens[tc.name]; jsonOnly || slices.Contains(fixtures, tc.fixture) {
+		if jsonOnlyGolden(tc.name, tc.fixture) || slices.Contains(fixtures, tc.fixture) {
 			continue
 		}
 
@@ -75,13 +64,22 @@ func recordableFixtures() []string {
 	return fixtures
 }
 
+// jsonOnlyGolden reports whether golden case name, run from fixture, has no
+// mrp-recorded tree.
+func jsonOnlyGolden(name, fixture string) bool {
+	_, override := jsonOnlyGoldens[name]
+	_, unrunnable := mrpUnrunnable[fixture]
+
+	return override || unrunnable
+}
+
 // assertGoldenTree requires a run's published results/ tree to equal the
 // mrp-recorded expected/outs/ of golden case name: no file missing, none
 // extra, every file's sha256 equal, and the same empty directories.
 func assertGoldenTree(t *testing.T, name, fixture, proj string) {
 	t.Helper()
 
-	if _, jsonOnly := jsonOnlyGoldens[name]; jsonOnly {
+	if jsonOnlyGolden(name, fixture) {
 		return
 	}
 
