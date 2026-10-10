@@ -105,6 +105,9 @@ var goldenCases = []goldenCase{
 	// consumer's _args as null, not a struct of nulls.
 	{"disabled_wholeref", "disabled_wholeref", "expected/outs.json"},
 	{"struct_input", "struct_input", "expected/outs.json"},
+	// #239: a struct bound to a narrower struct type keeps only its declared
+	// members, in stage _args and pipeline outputs alike.
+	{"struct_narrow", "struct_narrow", "expected/outs.json"},
 	{"nested_struct", "nested_struct", "expected/outs.json"},
 	{"literals", "literals", "expected/outs.json"},
 	// #238: whole-number float literals >= 1e6 stay floats for a Python stage.

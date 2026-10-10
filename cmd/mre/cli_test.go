@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -520,6 +521,84 @@ func TestRunBindSmoke(t *testing.T) {
 
 	if diff := cmp.Diff(map[string]any{"y": 7.0}, readTestBundle(t, out)); diff != "" {
 		t.Errorf("bound args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// narrowManifest writes a manifest where DOWN takes `in S s` (struct S(a, b))
+// and returns the -types flag value.
+func narrowManifest(t *testing.T, dir string) string {
+	t.Helper()
+
+	man := types.Manifest{
+		Structs: map[string]*ir.StructType{"S": {Name: "S", Fields: []ir.Param{
+			{Name: "a", BaseType: "int"}, {Name: "b", BaseType: "int"},
+		}}},
+		Callables: map[string]types.Callable{"DOWN": {In: []ir.Param{{Name: "s", BaseType: "S"}}}},
+	}
+
+	path := filepath.Join(dir, "types.json")
+	if err := man.Write(path); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	return path
+}
+
+// TestRunBindNarrowsStructs checks a struct bound to a narrower struct param is
+// filtered to the declared fields in the args bundle, as mrp does (#239): a
+// whole ref to UP {a,b,c} binds DOWN's `in S s` as {a,b}.
+func TestRunBindNarrowsStructs(t *testing.T) {
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"s":{"ref":{"kind":"call","id":"UP","output":""}}}`)
+	up := filepath.Join(dir, "in_UP")
+	writeTestBundle(t, up, map[string]any{"a": 1, "b": 2, "c": 3})
+	out := filepath.Join(dir, "out")
+
+	if err := run(t.Context(), []string{
+		"bind", "-spec", spec, "-inputs", "UP=" + up, "-o", out,
+		"-types", narrowManifest(t, dir), "-callable", "DOWN", "-role", types.RoleIn,
+	}); err != nil {
+		t.Fatalf("run bind: %v", err)
+	}
+
+	want := map[string]any{"s": map[string]any{"a": 1.0, "b": 2.0}}
+	if diff := cmp.Diff(want, readTestBundle(t, out)); diff != "" {
+		t.Errorf("bound args mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestRunForkBindNarrowsStructs checks every forkbind write path narrows a
+// split struct element to the callee's declared struct (#239): the full-fork
+// write, -index, and the pre-sliced -elementfile.
+func TestRunForkBindNarrowsStructs(t *testing.T) {
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
+		`{"s":{"ref":{"kind":"self","id":"ws","output":""},"split":true}}`)
+	pipe := filepath.Join(dir, "pipeargs")
+	writeTestBundle(t, pipe, map[string]any{"ws": []any{map[string]any{"a": 1, "b": 2, "c": 3}}})
+	typesFlag := []string{"-types", narrowManifest(t, dir), "-callable", "DOWN", "-role", types.RoleIn}
+	base := []string{"forkbind", "-spec", spec, "-pipeargs", pipe}
+
+	forks := filepath.Join(dir, "forks")
+	byIndex := filepath.Join(dir, "by_index")
+	byElem := filepath.Join(dir, "by_element")
+	elem := writeTestFile(t, filepath.Join(dir, "e.json"), `{"a":1,"b":2,"c":3}`)
+
+	for _, argv := range [][]string{
+		{"-chunkdir", forks},
+		{"-index", "0", "-o", byIndex},
+		{"-elementfile", elem, "-o", byElem},
+	} {
+		if err := run(t.Context(), append(append(slices.Clone(base), argv...), typesFlag...)); err != nil {
+			t.Fatalf("run forkbind %v: %v", argv, err)
+		}
+	}
+
+	want := map[string]any{"s": map[string]any{"a": 1.0, "b": 2.0}}
+	for _, got := range []string{filepath.Join(forks, "fork_00000"), byIndex, byElem} {
+		if diff := cmp.Diff(want, readTestBundle(t, got)); diff != "" {
+			t.Errorf("%s args mismatch (-want +got):\n%s", got, diff)
+		}
 	}
 }
 

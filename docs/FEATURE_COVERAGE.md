@@ -59,7 +59,7 @@ out of scope for a transpiler.
 | literal edge cases: negative numbers, `>2^53` int64 precision, unicode/escape strings | ✅ | e2e `literals_edge` |
 | wildcard binding `* = self` / `* = REF` | ✅ | e2e `wildcard` (compiler expands) |
 | **refs nested in array/map literals** (`[A.x, B.x]` fan-in) | ✅ #14 | unit `bind`/`fork`, e2e `fanin` |
-| struct duck typing (extra fields) | ⚠️ via JSON pass-through | corpus parse |
+| struct duck typing (extra fields) | ✅ every bound value is narrowed to the receiving param's declared struct, as mrp's FilterJson (extra fields and their file leaves dropped, a missing field null), in stage `_args` and pipeline outputs; a forward whose receiving type differs keeps its BIND so the narrowing runs | e2e `struct_narrow`; unit `TestNarrow`, `TestRunBindNarrowsStructs`, `TestRunForkBindNarrowsStructs` |
 | null inputs / null propagation | ✅ | e2e `null_in`, `modifiers_min` |
 
 ## Calls & modifiers

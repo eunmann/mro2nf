@@ -49,6 +49,7 @@ func TestForwardProducerExactCoverage(t *testing.T) {
 		name     string
 		prodCall ir.Call
 		bindings []ir.Binding
+		dest     []ir.Param
 		wantID   string
 		wantOK   bool
 	}{
@@ -89,12 +90,26 @@ func TestForwardProducerExactCoverage(t *testing.T) {
 			bindings: []ir.Binding{{Param: "f", Value: ir.Value{Ref: &ir.Ref{Kind: "self", ID: "f"}}}},
 			wantOK:   false,
 		},
+		{
+			// #239: the BIND narrows a struct to the receiving type; a routed
+			// bundle would hand the receiver the producer's wider struct.
+			name:     "receiving param of another type does not route",
+			prodCall: ir.Call{Name: "P", Callable: "ONE"},
+			bindings: []ir.Binding{ref("f", "P")},
+			dest:     []ir.Param{{Name: "f", BaseType: "S"}},
+			wantOK:   false,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			dest := tc.dest
+			if dest == nil {
+				dest = []ir.Param{{Name: "f"}, {Name: "y"}}
+			}
+
 			p := &ir.Pipeline{Name: "PIPE", Calls: []ir.Call{tc.prodCall}}
-			id, ok := forwardProducer(tc.bindings, p, prog)
+			id, ok := forwardProducer(tc.bindings, dest, p, prog)
 			if ok != tc.wantOK || (ok && id != tc.wantID) {
 				t.Errorf("forwardProducer = (%q, %v), want (%q, %v)", id, ok, tc.wantID, tc.wantOK)
 			}
@@ -110,7 +125,7 @@ func TestForwardProducerExactCoverage(t *testing.T) {
 func TestFuseableStageCall(t *testing.T) {
 	prog := &ir.Program{
 		Stages: map[string]*ir.Stage{
-			"PLAIN": {Name: "PLAIN", Out: []ir.Param{{Name: "y"}}},
+			"PLAIN": {Name: "PLAIN", In: []ir.Param{{Name: "x"}, {Name: "y"}}, Out: []ir.Param{{Name: "y"}}},
 			"SPLIT": {Name: "SPLIT", Split: true, Out: []ir.Param{{Name: "y"}}},
 		},
 		Pipelines: map[string]*ir.Pipeline{"SUB": {Name: "SUB", Out: []ir.Param{{Name: "y"}}}},

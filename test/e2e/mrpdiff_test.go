@@ -294,6 +294,9 @@ func TestMrpDiff(t *testing.T) {
 		{name: "cli_typed"},
 		{name: "fork_min"},
 		{name: "struct_min"},
+		// #239: struct narrowing on every bind path; the noinline leg keeps the
+		// NARROW sub's return a would-be forward, the native legs fold binds.
+		{name: "struct_narrow", native: true, runner: true, inline: true},
 		{name: "kitchen_sink", inline: true},
 		{name: "file_tree", inline: true},
 		{name: "map_null_map"},

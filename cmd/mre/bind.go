@@ -47,7 +47,7 @@ func runBind(_ context.Context, argv []string) error {
 		return fmt.Errorf("bind: %w", err)
 	}
 
-	return prod.write(*outFile, args)
+	return prod.writeBound(*outFile, args)
 }
 
 func readSpec(path string) (bind.Spec, error) {

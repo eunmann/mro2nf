@@ -133,6 +133,25 @@ func (t *Table) mapNumbers(params []ir.Param, vals map[string]any, leaf numberLe
 	return out
 }
 
+// Narrow returns vals with every struct-typed value filtered to exactly its
+// declared fields, as mrp's FilterJson filters a bound value to the receiving
+// param's type (core/resolve.go filter, syntax StructType.FilterJson): extra
+// fields are dropped and a missing field is null, recursively through nested
+// structs, arrays, and typed maps. Keys without a matching param and values of
+// any other shape pass through. vals is not mutated.
+func (t *Table) Narrow(params []ir.Param, vals map[string]any) map[string]any {
+	out := make(map[string]any, len(vals))
+	maps.Copy(out, vals)
+
+	for _, p := range params {
+		if v, ok := vals[p.Name]; ok {
+			out[p.Name] = t.narrow(v, p.BaseType, p.ArrayDim, p.MapDim)
+		}
+	}
+
+	return out
+}
+
 // numberLeaf maps one number leaf given its declared base type.
 type numberLeaf func(n json.Number, base string) any
 
@@ -249,6 +268,47 @@ func coerceNumber(n json.Number, base string) any {
 	}
 
 	return n
+}
+
+// narrow filters one value against its type; it descends shapes the way coerce
+// does (a typed map is one level carrying mapDim-1 inner array dims).
+func (t *Table) narrow(v any, base string, arrayDim, mapDim int) any {
+	switch tv := v.(type) {
+	case []any:
+		if arrayDim <= 0 {
+			return v
+		}
+
+		out := make([]any, len(tv))
+		for i, e := range tv {
+			out[i] = t.narrow(e, base, arrayDim-1, mapDim)
+		}
+
+		return out
+	case map[string]any:
+		if mapDim > 0 {
+			out := make(map[string]any, len(tv))
+			for k, e := range tv {
+				out[k] = t.narrow(e, base, arrayDim+mapDim-1, 0)
+			}
+
+			return out
+		}
+
+		fields, ok := t.structs[base]
+		if !ok || arrayDim > 0 {
+			return v
+		}
+
+		out := make(map[string]any, len(fields))
+		for _, f := range fields {
+			out[f.Name] = t.narrow(tv[f.Name], f.BaseType, f.ArrayDim, f.MapDim)
+		}
+
+		return out
+	default:
+		return v
+	}
 }
 
 // walk descends one value. It dispatches on the value's actual JSON shape
