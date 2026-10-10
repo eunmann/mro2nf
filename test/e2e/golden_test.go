@@ -16,16 +16,18 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+type goldenCase struct {
+	name    string
+	fixture string
+	golden  string
+}
+
 // goldenCases mirrors the CASES table in run.sh: a fixture directory under
 // testdata/ plus the committed mrp golden (relative to the fixture dir) the
 // Nextflow run must reproduce. An *_override entry reruns its fixture with the
 // file-typed entry input(s) supplied at launch via -params-file, so the run's
 // output must reflect the OVERRIDE content, not the baked default.
-var goldenCases = []struct {
-	name    string
-	fixture string
-	golden  string
-}{
+var goldenCases = []goldenCase{
 	{"split_test", "split_test", "expected/SUM_SQUARE_PIPELINE/fork0/_outs"},
 	{"fork_min", "fork_min", "expected/scale_all_outs.json"},
 	{"fork_upstream", "fork_upstream", "expected/outs.json"},

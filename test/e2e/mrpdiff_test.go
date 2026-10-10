@@ -38,6 +38,20 @@ import (
 func martianBin(t *testing.T) string {
 	t.Helper()
 
+	bin, err := lookupMartianBin()
+	if err != nil {
+		t.Skip(err)
+	}
+
+	return bin
+}
+
+// errNoMrp reports that MARTIAN_BIN holds no executable mrp.
+var errNoMrp = errors.New("mrp not found (set MARTIAN_BIN=<martian>/bin)")
+
+// lookupMartianBin resolves the Martian bin dir from MARTIAN_BIN (default
+// ~/workdir/martian/bin) and requires an executable mrp in it.
+func lookupMartianBin() (string, error) {
 	bin := os.Getenv("MARTIAN_BIN")
 	if bin == "" {
 		bin = filepath.Join(os.Getenv("HOME"), "workdir", "martian", "bin")
@@ -45,10 +59,10 @@ func martianBin(t *testing.T) string {
 
 	info, err := os.Stat(filepath.Join(bin, "mrp"))
 	if err != nil || info.Mode()&0o111 == 0 {
-		t.Skipf("mrp not found at %s/mrp (set MARTIAN_BIN=<martian>/bin)", bin)
+		return "", fmt.Errorf("%s/mrp: %w", bin, errNoMrp)
 	}
 
-	return bin
+	return bin, nil
 }
 
 // runMrp runs the real Martian pipeline runner on a fixture inside tmp,
