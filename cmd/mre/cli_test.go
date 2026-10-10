@@ -505,6 +505,45 @@ func TestProducerCoerceChunk(t *testing.T) {
 	}
 }
 
+// TestProducerValidateOuts checks a stage's final outputs fail the phase the way
+// mrp fails the stage (#274): a struct output missing a declared key is an
+// error naming it, a complete one passes, and a callable with no declared
+// outputs (or no manifest) is not checked.
+func TestProducerValidateOuts(t *testing.T) {
+	man := types.Manifest{
+		Structs: map[string]*ir.StructType{"S": {Name: "S", Fields: []ir.Param{
+			{Name: "a", BaseType: "int"}, {Name: "b", BaseType: "int"},
+		}}},
+		Callables: map[string]types.Callable{
+			"UP":   {Out: []ir.Param{{Name: "s", Type: "S", BaseType: "S"}}},
+			"NONE": {},
+		},
+	}
+	path := filepath.Join(t.TempDir(), "types.json")
+	if err := man.Write(path); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	up := &producer{types: path, callable: "UP"}
+
+	err := up.validateOuts(json.RawMessage(`{"s":{"a":1}}`))
+	if !errors.Is(err, types.ErrInvalidOutputs) || !strings.Contains(err.Error(), "Expected S output value 's' missing key: b") {
+		t.Errorf("validateOuts(missing key) = %v, want ErrInvalidOutputs naming key b", err)
+	}
+
+	if err := up.validateOuts(json.RawMessage(`{"s":{"a":1,"b":2}}`)); err != nil {
+		t.Errorf("validateOuts(complete) = %v, want nil", err)
+	}
+
+	if err := (&producer{types: path, callable: "NONE"}).validateOuts(json.RawMessage(`""`)); err != nil {
+		t.Errorf("validateOuts(no outputs) = %v, want nil", err)
+	}
+
+	if err := (&producer{callable: "UP"}).validateOuts(json.RawMessage(`{}`)); err != nil {
+		t.Errorf("validateOuts(no manifest) = %v, want nil", err)
+	}
+}
+
 // TestRunBindSmoke drives the bind subcommand end to end: a self ref resolves
 // against the enclosing pipeline's args bundle into the output args bundle.
 func TestRunBindSmoke(t *testing.T) {

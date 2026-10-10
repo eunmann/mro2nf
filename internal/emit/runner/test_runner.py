@@ -404,6 +404,53 @@ class SkeletonTest(unittest.TestCase):
         self.assertIsNone(got["n"])
 
 
+class ValidateOutputsTest(unittest.TestCase):
+    """types/validate.go ValidateOutputs port (mrp output validation, #274)."""
+
+    STRUCTS = {"S": [
+        {"name": "a", "baseType": "int", "arrayDim": 0, "mapDim": 0, "isFile": False},
+        {"name": "b", "baseType": "int", "arrayDim": 0, "mapDim": 0, "isFile": False},
+    ]}
+
+    @staticmethod
+    def _param(name, base, array_dim=0, map_dim=0, is_file=False):
+        return {"name": name, "type": base, "baseType": base,
+                "arrayDim": array_dim, "mapDim": map_dim, "isFile": is_file}
+
+    def test_valid(self):
+        for param, outs in [
+            (self._param("s", "S"), {"s": {"a": 1, "b": 2, "x": 3}}),
+            (self._param("s", "S"), {"s": None}),
+            (self._param("s", "S"), {"s": {"a": None, "b": 2}}),
+            (self._param("f", "float"), {"f": 3}),
+            (self._param("m", "int", map_dim=2), {"m": {"k": [1, 2]}}),
+            (self._param("m", "int", map_dim=1), {"m": {"a/b": 1}}),
+            (self._param("f", "txt", is_file=True), {"f": 5}),
+        ]:
+            rs.validate_outputs(self.STRUCTS, [param], outs, "UP")
+
+    def test_invalid(self):
+        for param, outs, want in [
+            (self._param("s", "S"), {"s": {"a": 1}},
+             "Expected S output value 's' missing key: b"),
+            (self._param("s", "S"), {}, "Missing output value 's'"),
+            (self._param("n", "int"), {"n": 2.0}, "output value 'n'"),
+            (self._param("n", "int"), {"n": True}, "output value 'n'"),
+            (self._param("n", "int"), {"n": 2 ** 63}, "output value 'n'"),
+            (self._param("x", "string"), {"x": 3}, "output value 'x'"),
+            (self._param("ss", "S", array_dim=1), {"ss": [{"a": 1, "b": 2}, {"a": 1}]},
+             "element 1: missing key: b"),
+            (self._param("m", "S", map_dim=1), {"m": {"k": {"b": 1}}},
+             "key k: missing key: a"),
+            (self._param("m", "file", map_dim=1, is_file=True), {"m": {"a/b": "x"}},
+             "key a/b"),
+            (self._param("m", "map"), {"m": [1]}, "output value 'm'"),
+        ]:
+            with self.assertRaises(rs.RunnerError) as cm:
+                rs.validate_outputs(self.STRUCTS, [param], outs, "UP")
+            self.assertIn(want, str(cm.exception))
+
+
 class StageDefsTest(unittest.TestCase):
     """meta.go readStageDefs port + the falsy-return adapter-path parity."""
 

@@ -450,7 +450,9 @@ writes an output bundle:
 - **`mre main`** — runs the stage's `main()` for a whole stage (non-split) or for
   one chunk (`-chunk`), producing an output bundle.
 - **`mre join`** — runs the stage's `join()` over the chunk outputs, producing the
-  stage's final output bundle.
+  stage's final output bundle. Like a whole-stage `mre main`, it first checks
+  those final outputs as mrp's output validation does (every declared output
+  present and of its declared type) and fails the task on a violation.
 - **`mre bind` / `mre forkbind`** — resolve a call's input *bindings* (from a
   bindspec + the staged upstream bundles + pipeline args) into the callee's args
   bundle. `forkbind` produces one bundle per fork.

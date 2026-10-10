@@ -184,6 +184,38 @@ func (p *producer) coerceInputs(raw json.RawMessage, roles ...string) (json.RawM
 	return out, nil
 }
 
+// validateOuts applies mrp's stage output validation to a stage's final
+// outputs (types.ValidateOutputs): mrp fails the stage on an invalid _outs, so
+// the task fails too rather than hand the value downstream. Per-chunk outputs
+// are not passed here, as mrp's default enforcement level skips them, and a
+// callable with no declared outputs is not checked.
+func (p *producer) validateOuts(raw json.RawMessage) error {
+	man, err := p.manifest()
+	if err != nil {
+		return err
+	}
+
+	params, err := man.Params(p.callable, types.RoleOut)
+	if err != nil {
+		return fmt.Errorf("validate outputs: %w", err)
+	}
+
+	if len(params) == 0 {
+		return nil
+	}
+
+	outs, err := rawToMap(raw)
+	if err != nil {
+		return fmt.Errorf("validate outputs: %w", err)
+	}
+
+	if err := man.Table().ValidateOutputs(params, outs); err != nil {
+		return fmt.Errorf("validate outputs of %s: %w", p.callable, err)
+	}
+
+	return nil
+}
+
 // coerceChunk coerces a split chunk's per-chunk args (chunk.Args, keyed by the
 // ChunkIn param names) so whole-number floats bound to int chunk params become
 // integers — the stageArgs RoleChunkIn pass cannot, since per-chunk values live

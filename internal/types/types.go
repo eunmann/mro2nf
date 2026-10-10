@@ -25,6 +25,13 @@ import (
 // never produced, matching Martian's publish-time "absent file -> null".
 var ErrSkipLeaf = errors.New("skip file leaf")
 
+// Martian builtin type names the walks dispatch on.
+const (
+	typeInt  = "int"
+	typeFile = "file"
+	typePath = "path"
+)
+
 // Table resolves struct type names to their fields so the walk can descend into
 // struct-typed values.
 type Table struct {
@@ -63,7 +70,7 @@ func OutFilename(p ir.Param, isStruct func(name string) bool) string {
 		return p.OutName
 	case p.ArrayDim > 0 || p.MapDim > 0 || isStruct(p.BaseType):
 		return p.Name
-	case p.BaseType == "file" || p.BaseType == "path":
+	case p.BaseType == typeFile || p.BaseType == typePath:
 		return p.Name
 	default:
 		return p.Name + "." + p.BaseType
@@ -248,7 +255,7 @@ func formatFloat(n json.Number, base string) any {
 
 // coerceNumber converts a whole-number JSON value to an integer for an int param.
 func coerceNumber(n json.Number, base string) any {
-	if base != "int" {
+	if base != typeInt {
 		return n
 	}
 

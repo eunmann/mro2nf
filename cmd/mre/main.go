@@ -258,6 +258,12 @@ func runMain(ctx context.Context, argv []string) error {
 		return fmt.Errorf("main: %w", err)
 	}
 
+	if *chunkDir == "" {
+		if err := prod.validateOuts(outs); err != nil {
+			return fmt.Errorf("main: %w", err)
+		}
+	}
+
 	if err := prod.write(cf.outFile, outs); err != nil {
 		return err
 	}
@@ -306,6 +312,10 @@ func runJoin(ctx context.Context, argv []string) error {
 	final, err := shim.RunJoin(ctx, cf.work, cf.adapter(), stageArgs, defs, outs,
 		params, man.Table(), cf.resources(), cf.invocation(prod.callable, stageArgs))
 	if err != nil {
+		return fmt.Errorf("join: %w", err)
+	}
+
+	if err := prod.validateOuts(final); err != nil {
 		return fmt.Errorf("join: %w", err)
 	}
 
