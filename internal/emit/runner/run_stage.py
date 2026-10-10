@@ -71,7 +71,8 @@ class RunnerError(Exception):
 _COMMON_FLAGS = {
     "stagecode": str, "call": str, "mro": str, "work": str, "o": str,
     "threads": float, "memgb": float, "vmemgb": float,
-    "monitor": bool, "types": str, "callable": str, "role": str,
+    "monitor": bool, "confine": bool, "types": str, "callable": str,
+    "role": str,
 }
 _PHASE_FLAGS = {
     "split": {"args": str, "chunkdir": str, "joinres": str},
@@ -865,26 +866,33 @@ def mark_files(bundle_dir, payload, params, structs, confine):
         raise RunnerError("collect bundle files: %s" % err) from None
 
 
-def copy_tree(src, dst, confine):
+def copy_tree(src, dst, confine, copy_only=False):
     """Ports CopyTree: resolve a symlinked source, recurse into directories,
     hard-link files when possible, fall back to a byte copy. A non-None
-    confine checks the stage's own files and is dropped below a staged
-    input (copyTree's conf)."""
-    if confine is not None and confine.admit(src):
-        confine = None
+    confine classifies the stage's own files; it is dropped below a staged
+    input, and below a host path outside the task, whose tree is copied
+    without hard links (copyTree's copyPolicy)."""
+    if confine is not None:
+        kind = confine.admit(src)
+        if kind == LEAF_STAGED:
+            confine = None
+        elif kind == LEAF_OUTSIDE:
+            confine, copy_only = None, True
     if os.path.islink(src):
         src = os.path.realpath(src)
     st = os.stat(src)
     if _stat_mod.S_ISDIR(st.st_mode):
         os.makedirs(dst, mode=_stat_mod.S_IMODE(st.st_mode), exist_ok=True)
         for entry in sorted(os.listdir(src)):
-            copy_tree(os.path.join(src, entry), os.path.join(dst, entry), confine)
+            copy_tree(os.path.join(src, entry), os.path.join(dst, entry),
+                      confine, copy_only)
         return
-    try:
-        os.link(src, dst)
-        return
-    except OSError:
-        pass
+    if not copy_only:
+        try:
+            os.link(src, dst)
+            return
+        except OSError:
+            pass
     # Refuse to overwrite an existing destination (a truncating copy over a
     # hard-linked file would corrupt the shared inode).
     if os.path.lexists(dst):
@@ -906,15 +914,23 @@ def _within(p, root):
     return p == root or p.startswith(root.rstrip(os.sep) + os.sep)
 
 
+# Ports confine.go's leafKind: the stage's own file in the work dir, a path
+# reaching a Nextflow-staged input, or a host path outside the task.
+LEAF_OWN, LEAF_STAGED, LEAF_OUTSIDE = "own", "staged", "outside"
+
+
 class Confinement:
     """Ports internal/shim/confine.go Confinement: a stage's output leaf, and
-    each symlink it passes through, must stay inside the task work dir or
-    reach a path in it outside the phase dir (a Nextflow-staged input, then
-    followed wherever it points)."""
+    each symlink it passes through, either stays inside the task work dir,
+    reaches a path in it outside the phase dir (a Nextflow-staged input, then
+    followed wherever it points), or lands outside the task, which a strict
+    confinement (-confine, isolated container targets) refuses and otherwise
+    is copied, never hard-linked."""
 
-    def __init__(self, work, phase):
+    def __init__(self, work, phase, strict):
         self.work = _path_forms(work)
         self.phase = _path_forms(os.path.join(work, phase))
+        self.strict = strict
 
     def _staged(self, p):
         for w in self.work:
@@ -924,23 +940,25 @@ class Confinement:
         return False
 
     def admit(self, src):
-        """True when src reaches a staged input, False for the stage's own
-        file or dir in the work dir; raises RunnerError otherwise."""
+        """The LEAF_* kind of src, following its symlinks one hop at a time;
+        a strict confinement raises RunnerError instead of LEAF_OUTSIDE."""
         p = os.path.abspath(src)
         for _ in range(MAX_LINK_HOPS):
             if self._staged(p):
-                return True
+                return LEAF_STAGED
             p = os.path.join(os.path.realpath(os.path.dirname(p)),
                              os.path.basename(p))
             if self._staged(p):
-                return True
+                return LEAF_STAGED
             try:
                 st = os.lstat(p)
             except OSError as err:
                 raise RunnerError("stat %s: %s" % (p, err)) from None
             if not _stat_mod.S_ISLNK(st.st_mode):
                 if any(_within(p, w) for w in self.work):
-                    return False
+                    return LEAF_OWN
+                if not self.strict:
+                    return LEAF_OUTSIDE
                 raise RunnerError(
                     "stage output resolves outside the task work dir: "
                     "%s resolves to %s" % (src, p))
@@ -1235,7 +1253,8 @@ def run_split(fl):
     if fl.joinres:
         write_text(joinres, go_json(resources_struct(join_res)))
     if fl.chunkdir:
-        write_chunk_bundles(chunkdir, fl.work, defs, man, fl.callable)
+        write_chunk_bundles(chunkdir, defs, man, fl.callable,
+                            Confinement(fl.work, "split", fl.confine))
 
 
 def parse_stage_defs(result):
@@ -1297,10 +1316,9 @@ def chunk_defs_doc(defs):
     return doc
 
 
-def write_chunk_bundles(dir_, work, defs, man, callable_):
+def write_chunk_bundles(dir_, defs, man, callable_, confine):
     """Ports cmd/mre/main.go writeChunkBundles + shim.WriteChunkBundle."""
     chunk_in = man.params(callable_, "chunkin")
-    confine = Confinement(work, "split")
     for i, (res, cargs) in enumerate(defs):
         bdir = os.path.join(dir_, "chunk_%05d" % i)
         marked = mark_files(bdir, dict(cargs), chunk_in, man.structs, confine)
@@ -1338,7 +1356,7 @@ def run_outs_phase(fl, phase, files, eff, man, args, invoke):
         exited = True
     finally:
         os.chdir(task_cwd)
-    confine = Confinement(fl.work, phase)
+    confine = Confinement(fl.work, phase, fl.confine)
     if exited:
         payload = martian.json_sanitize(dict(skeleton))
     else:

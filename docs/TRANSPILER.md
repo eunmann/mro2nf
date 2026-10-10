@@ -572,13 +572,19 @@ Two details matter only on a real object store. Both are handled:
   a file leaf into a bundle, it dereferences the symlink to the real target first
   — otherwise the bundle would carry a dangling link that breaks once staged into
   the next isolated container (`shim.CopyTree`). For a stage's own outputs the
-  dereference is confined (`shim.Confinement`): an output, and every symlink it
-  passes through, must stay inside the task work dir, or reach a path in it
-  outside the stage's phase dir, i.e. a staged input, which is followed wherever
-  it points. An output that is, or links to, any other host file fails the task,
-  naming the output and the target. `mrp` would publish only a symlink there, so
-  copying the target into the bundle would publish and upload a file the stage
-  was never given.
+  dereference is confined (`shim.Confinement`). An output, and every symlink it
+  passes through, is classified as the stage's own file inside the task work dir
+  (hard-linked into the bundle), a path in the work dir outside the stage's
+  phase dir, i.e. a staged input (followed wherever it points, hard-linked), or
+  a host path outside the task:
+  - On the isolated container targets (`awsbatch`, `healthomics`, or any project
+    transpiled with `-confine-outputs`, which emits `-confine` on every stage
+    phase) such a path cannot be valid downstream, and copying it would upload
+    host data, so the task fails, naming the output and the target.
+  - On the `local` target, where `mrp` publishes a symlink and pipelines
+    legitimately return paths into host reference dirs, the target is staged as
+    a byte copy, never a hard link, so no later write through the bundle can
+    alias the host file.
 
 ---
 

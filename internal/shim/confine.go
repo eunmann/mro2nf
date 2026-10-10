@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 )
 
-// errOutsideWork is returned when a stage output resolves to a path outside the
-// task work dir that the stage did not receive as a staged input.
+// errOutsideWork is returned when a strict confinement meets a stage output
+// that resolves outside the task work dir to a path the stage did not receive
+// as a staged input.
 var errOutsideWork = errors.New("stage output resolves outside the task work dir")
 
 // maxLinkHops bounds a symlink chain the confinement check follows, as the
@@ -18,21 +19,43 @@ const maxLinkHops = 40
 // errLinkHops is returned for a symlink chain longer than maxLinkHops.
 var errLinkHops = errors.New("too many levels of symbolic links")
 
-// Confinement bounds which files a stage's outputs may pull into a bundle. The
-// stage writes inside its phase dir (<work>/<phase>); the rest of the task work
-// dir holds what Nextflow staged there as inputs and what mre wrote. An output
-// leaf, and each symlink it passes through, must stay inside the work dir, or
-// reach a path in it outside the phase dir: a staged input, which is followed
-// wherever it points. Anything else (a link to a host file, an absolute host
-// path) would copy a file the stage was never given into the bundle, where mrp
-// would only publish a symlink, so the write fails instead.
+// Confinement governs which files a stage's outputs may pull into a bundle, and
+// how. The stage writes inside its phase dir (<work>/<phase>); the rest of the
+// task work dir holds what Nextflow staged there as inputs and what mre wrote.
+// An output leaf, and each symlink it passes through, either stays inside the
+// work dir (the stage's own file, hard-linked into the bundle), reaches a path
+// in it outside the phase dir (a staged input, followed wherever it points), or
+// lands outside the task (a host file the stage was never given).
+//
+// What happens to a host file depends on the target. On an isolated container
+// target (strict) its path cannot be valid downstream and copying it would
+// upload host data, so the write fails. On a shared filesystem mrp publishes a
+// symlink to it and pipelines legitimately return paths into host reference
+// dirs, so it is copied, never hard-linked, so no later write through the
+// bundle can alias the host file.
 type Confinement struct {
 	work, phase []string
+	strict      bool
 }
 
+// leafKind classifies where a stage output leaf resolves.
+type leafKind int
+
+const (
+	// leafOwn is the stage's own file or dir inside the work dir; a dir's
+	// entries are classified in turn.
+	leafOwn leafKind = iota
+	// leafStaged reaches a Nextflow-staged input; its tree is copied as is.
+	leafStaged
+	// leafOutside lands outside the task work dir; a non-strict confinement
+	// copies its tree byte for byte.
+	leafOutside
+)
+
 // ConfineStage returns the Confinement for the outputs of a stage phase
-// ("split", "main" or "join") run in work.
-func ConfineStage(work, phase string) (*Confinement, error) {
+// ("split", "main" or "join") run in work. strict refuses an output that
+// resolves outside the task instead of copying it.
+func ConfineStage(work, phase string, strict bool) (*Confinement, error) {
 	workDirs, err := pathForms(work)
 	if err != nil {
 		return nil, err
@@ -43,7 +66,7 @@ func ConfineStage(work, phase string) (*Confinement, error) {
 		return nil, err
 	}
 
-	return &Confinement{work: workDirs, phase: phaseDirs}, nil
+	return &Confinement{work: workDirs, phase: phaseDirs, strict: strict}, nil
 }
 
 // pathForms returns dir's absolute path and, when it differs, its real path, so
@@ -108,47 +131,42 @@ func (c *Confinement) staged(p string) bool {
 	return false
 }
 
-// admit checks a leaf src against the confinement, following its symlinks one
-// hop at a time. It reports true when src reaches a staged input, whose tree is
-// then copied without further checks, and false when src is a file or dir of
-// the stage's own inside the work dir, whose entries are checked in turn.
-func (c *Confinement) admit(src string) (bool, error) {
+// admit classifies a leaf src, following its symlinks one hop at a time. A
+// strict confinement returns errOutsideWork, naming src and its target, where
+// it would otherwise report leafOutside.
+func (c *Confinement) admit(src string) (leafKind, error) {
 	p, err := filepath.Abs(src)
 	if err != nil {
-		return false, fmt.Errorf("resolve %s: %w", src, err)
+		return leafOwn, fmt.Errorf("resolve %s: %w", src, err)
 	}
 
 	for range maxLinkHops {
 		if c.staged(p) {
-			return true, nil
+			return leafStaged, nil
 		}
 
 		parent, err := filepath.EvalSymlinks(filepath.Dir(p))
 		if err != nil {
-			return false, fmt.Errorf("resolve %s: %w", p, err)
+			return leafOwn, fmt.Errorf("resolve %s: %w", p, err)
 		}
 
 		p = filepath.Join(parent, filepath.Base(p))
 		if c.staged(p) {
-			return true, nil
+			return leafStaged, nil
 		}
 
 		info, err := os.Lstat(p)
 		if err != nil {
-			return false, fmt.Errorf("stat %s: %w", p, err)
+			return leafOwn, fmt.Errorf("stat %s: %w", p, err)
 		}
 
 		if info.Mode()&os.ModeSymlink == 0 {
-			if withinAny(p, c.work) {
-				return false, nil
-			}
-
-			return false, fmt.Errorf("%w: %s resolves to %s", errOutsideWork, src, p)
+			return c.classify(src, p)
 		}
 
 		target, err := os.Readlink(p)
 		if err != nil {
-			return false, fmt.Errorf("read link %s: %w", p, err)
+			return leafOwn, fmt.Errorf("read link %s: %w", p, err)
 		}
 
 		if !filepath.IsAbs(target) {
@@ -158,5 +176,18 @@ func (c *Confinement) admit(src string) (bool, error) {
 		p = filepath.Clean(target)
 	}
 
-	return false, fmt.Errorf("resolve %s: %w", src, errLinkHops)
+	return leafOwn, fmt.Errorf("resolve %s: %w", src, errLinkHops)
+}
+
+// classify places the real, non-symlink path p that leaf src resolved to.
+func (c *Confinement) classify(src, p string) (leafKind, error) {
+	if withinAny(p, c.work) {
+		return leafOwn, nil
+	}
+
+	if c.strict {
+		return leafOwn, fmt.Errorf("%w: %s resolves to %s", errOutsideWork, src, p)
+	}
+
+	return leafOutside, nil
 }

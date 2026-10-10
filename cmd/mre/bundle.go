@@ -126,19 +126,6 @@ func writeBoundBundle(dir string, payload map[string]any, params []ir.Param, tbl
 	return nil
 }
 
-// confineStage confines the producer's writes to the outputs of a stage phase
-// run in work.
-func (p *producer) confineStage(work, phase string) error {
-	conf, err := shim.ConfineStage(work, phase)
-	if err != nil {
-		return fmt.Errorf("confine %s outputs: %w", phase, err)
-	}
-
-	p.confine = conf
-
-	return nil
-}
-
 // warnOutputScratchRefs loudly flags a stage output that baked this task's
 // ephemeral work-dir absolute path into its file CONTENT (rather than emitting a
 // declared file leaf). Such a path resolves under mrp's shared filesystem but

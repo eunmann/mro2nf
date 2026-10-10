@@ -368,7 +368,7 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 			return "", fmt.Errorf("create files dir: %w", err)
 		}
 
-		if err := copyTree(src, dst, make(map[dirID]struct{}), conf); err != nil {
+		if err := copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{conf: conf}); err != nil {
 			return "", err
 		}
 
@@ -388,7 +388,38 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 // for speed, falling back to a byte copy. It follows symlinks to any target,
 // so it is for trees the run was given, not a stage's outputs.
 func CopyTree(src, dst string) error {
-	return copyTree(src, dst, make(map[dirID]struct{}), nil)
+	return copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{})
+}
+
+// copyPolicy is how copyTree treats the tree it is copying: conf, while
+// non-nil, classifies each entry of a stage's own output (see Confinement), and
+// copyOnly forbids hard links below a host path outside the task.
+type copyPolicy struct {
+	conf     *Confinement
+	copyOnly bool
+}
+
+// admit returns the policy for src and its entries: unchanged for the stage's
+// own files, unconfined below a staged input, and unconfined but copy-only
+// below a host path outside the task.
+func (p copyPolicy) admit(src string) (copyPolicy, error) {
+	if p.conf == nil {
+		return p, nil
+	}
+
+	kind, err := p.conf.admit(src)
+	if err != nil {
+		return p, err
+	}
+
+	switch kind {
+	case leafStaged:
+		return copyPolicy{}, nil
+	case leafOutside:
+		return copyPolicy{copyOnly: true}, nil
+	default:
+		return p, nil
+	}
 }
 
 // resolveSymlink returns src, or its real target when src is a symlink, and ""
@@ -454,23 +485,14 @@ func enterDir(dir os.FileInfo, ancestors map[dirID]struct{}) (func(), bool) {
 // of its own ancestors would otherwise recurse until ENAMETOOLONG, duplicating
 // the tree on every pass; catching the repeat (dev, inode) bounds the recursion
 // to the finite number of distinct directories reachable once.
-// A non-nil conf confines a stage's own files (see Confinement); it is dropped
-// below a staged input, whose tree is copied as is.
-func copyTree(src, dst string, ancestors map[dirID]struct{}, conf *Confinement) error {
+func copyTree(src, dst string, ancestors map[dirID]struct{}, pol copyPolicy) error {
 	resolved, err := resolveSymlink(src)
 	if err != nil || resolved == "" {
 		return err
 	}
 
-	if conf != nil {
-		staged, err := conf.admit(src)
-		if err != nil {
-			return err
-		}
-
-		if staged {
-			conf = nil
-		}
+	if pol, err = pol.admit(src); err != nil {
+		return err
 	}
 
 	src = resolved
@@ -488,17 +510,19 @@ func copyTree(src, dst string, ancestors map[dirID]struct{}, conf *Confinement) 
 
 		defer release()
 
-		return copyDir(src, dst, info, ancestors, conf)
+		return copyDir(src, dst, info, ancestors, pol)
 	}
 
-	if err := os.Link(src, dst); err == nil {
-		return nil
+	if !pol.copyOnly {
+		if err := os.Link(src, dst); err == nil {
+			return nil
+		}
 	}
 
-	// Hard-linking failed. Refuse to overwrite an existing destination: a
+	// Not hard-linked. Refuse to overwrite an existing destination: a
 	// truncating copy over a file already hard-linked elsewhere would corrupt
 	// the shared inode. A genuinely absent dst means the link was unavailable
-	// (e.g. cross-device), so fall back to a byte copy.
+	// (e.g. cross-device) or not allowed, so make a byte copy.
 	if _, err := os.Lstat(dst); err == nil {
 		return fmt.Errorf("copy %s: %w", dst, errDestExists)
 	}
@@ -506,7 +530,7 @@ func copyTree(src, dst string, ancestors map[dirID]struct{}, conf *Confinement) 
 	return copyFileContents(src, dst, info)
 }
 
-func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}, conf *Confinement) error {
+func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}, pol copyPolicy) error {
 	// Create the destination writable regardless of the source's mode, then
 	// restore the source mode after populating: a read-only source directory
 	// (e.g. 0555) must still admit its children being written into the copy.
@@ -520,7 +544,7 @@ func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}, co
 	}
 
 	for _, e := range entries {
-		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors, conf); err != nil {
+		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors, pol); err != nil {
 			return err
 		}
 	}

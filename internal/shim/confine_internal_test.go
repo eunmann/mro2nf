@@ -15,7 +15,7 @@ import (
 // stage's own phase dir, an input Nextflow staged as a symlink to another
 // task's file and directory, and host files outside the work dir.
 type confineEnv struct {
-	work, files, host, hostDir, stagedFile, stagedDir string
+	work, files, host, hostDir, upstream, stagedFile, stagedDir string
 }
 
 func newConfineEnv(t *testing.T) confineEnv {
@@ -23,23 +23,24 @@ func newConfineEnv(t *testing.T) confineEnv {
 
 	root := t.TempDir()
 	e := confineEnv{
-		work:    filepath.Join(root, "work"),
-		host:    filepath.Join(root, "host", "outside.txt"),
-		hostDir: filepath.Join(root, "host", "refdir"),
+		work:     filepath.Join(root, "work"),
+		host:     filepath.Join(root, "host", "outside.txt"),
+		hostDir:  filepath.Join(root, "host", "refdir"),
+		upstream: filepath.Join(root, "upstream", "real.txt"),
 	}
 	e.files = filepath.Join(e.work, "main", "files")
 	e.stagedFile = filepath.Join(e.work, "args", "f", "L0000.txt")
 	e.stagedDir = filepath.Join(e.work, "args", "f", "L0001")
 
-	upstream := filepath.Join(root, "upstream")
-	mkdirs(t, e.files, filepath.Dir(e.stagedFile), e.hostDir, filepath.Join(upstream, "dir"))
+	upDir := filepath.Join(root, "upstream", "dir")
+	mkdirs(t, e.files, filepath.Dir(e.stagedFile), e.hostDir, upDir)
 	writeTestFile(t, e.host, "host")
 	writeTestFile(t, filepath.Join(e.hostDir, "x.txt"), "host dir")
-	writeTestFile(t, filepath.Join(upstream, "real.txt"), "upstream")
-	writeTestFile(t, filepath.Join(upstream, "dir", "y.txt"), "upstream dir")
-	symlink(t, filepath.Join(upstream, "dir", "host"), e.host)
-	symlink(t, e.stagedFile, filepath.Join(upstream, "real.txt"))
-	symlink(t, e.stagedDir, filepath.Join(upstream, "dir"))
+	writeTestFile(t, e.upstream, "upstream")
+	writeTestFile(t, filepath.Join(upDir, "y.txt"), "upstream dir")
+	symlink(t, filepath.Join(upDir, "host"), e.host)
+	symlink(t, e.stagedFile, e.upstream)
+	symlink(t, e.stagedDir, upDir)
 
 	return e
 }
@@ -70,12 +71,29 @@ func symlink(t *testing.T, link, target string) {
 	}
 }
 
-// markOut stages value as the stage's file-typed output `out` under the main
-// phase's confinement and returns the staged leaf's path in the bundle.
-func (e confineEnv) markOut(t *testing.T, value string) (string, error) {
+// sameFile reports whether a and b are the same inode.
+func sameFile(t *testing.T, a, b string) bool {
 	t.Helper()
 
-	conf, err := ConfineStage(e.work, "main")
+	ai, err := os.Stat(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bi, err := os.Stat(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return os.SameFile(ai, bi)
+}
+
+// markOut stages value as the stage's file-typed output `out` under the main
+// phase's confinement and returns the staged leaf's path in the bundle.
+func (e confineEnv) markOut(t *testing.T, value string, strict bool) (string, error) {
+	t.Helper()
+
+	conf, err := ConfineStage(e.work, "main", strict)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,13 +119,16 @@ func (e confineEnv) markOut(t *testing.T, value string) (string, error) {
 	return filepath.Join(bundle, rel), nil
 }
 
-// TestConfineRefusesOutOfTreeTargets guards #332: a stage output that is, or
-// reaches through a symlink, a host file or directory outside the task work dir
-// must fail the bundle write naming the output and the target. mrp publishes
-// only a symlink there, so copying or hard-linking the host file into the
-// bundle would publish and upload a file the stage was never given.
-func TestConfineRefusesOutOfTreeTargets(t *testing.T) {
-	e := newConfineEnv(t)
+// outOfTreeCase is a stage output that is, or reaches, a host file outside the
+// task work dir: the leaf value, and the staged file below the leaf (rel) that
+// must hold host's content.
+type outOfTreeCase struct {
+	name, value, rel, host string
+}
+
+// outOfTreeCases lays out the out-of-tree output shapes in e's phase dir.
+func (e confineEnv) outOfTreeCases(t *testing.T) []outOfTreeCase {
+	t.Helper()
 
 	ownDir := filepath.Join(e.files, "own_dir")
 	mkdirs(t, ownDir)
@@ -117,22 +138,31 @@ func TestConfineRefusesOutOfTreeTargets(t *testing.T) {
 	symlink(t, filepath.Join(e.files, "to_host"), e.host)
 	symlink(t, filepath.Join(e.files, "to_host_dir"), e.hostDir)
 
-	cases := map[string]string{
-		"link to a host file":       filepath.Join(e.files, "to_host"),
-		"link to a host dir":        filepath.Join(e.files, "to_host_dir"),
-		"chain to a host file":      filepath.Join(e.files, "hop1"),
-		"absolute host path":        e.host,
-		"own dir with a host child": ownDir,
+	return []outOfTreeCase{
+		{"link to a host file", filepath.Join(e.files, "to_host"), "", e.host},
+		{"link to a host dir", filepath.Join(e.files, "to_host_dir"), "x.txt", filepath.Join(e.hostDir, "x.txt")},
+		{"chain to a host file", filepath.Join(e.files, "hop1"), "", e.host},
+		{"absolute host path", e.host, "", e.host},
+		{"own dir with a host child", ownDir, "child", e.host},
 	}
+}
+
+// TestConfineStrictRefusesOutOfTreeTargets guards #332 on isolated container
+// targets: a stage output that is, or reaches through a symlink, a host file
+// or directory outside the task work dir must fail the bundle write naming the
+// output and the target, since copying it would upload host data the stage was
+// never given.
+func TestConfineStrictRefusesOutOfTreeTargets(t *testing.T) {
+	e := newConfineEnv(t)
 
 	hostRoot, err := filepath.EvalSymlinks(filepath.Dir(e.host))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for name, value := range cases {
-		t.Run(name, func(t *testing.T) {
-			_, err := e.markOut(t, value)
+	for _, tc := range e.outOfTreeCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := e.markOut(t, tc.value, true)
 			if !errors.Is(err, errOutsideWork) {
 				t.Fatalf("MarkFiles err = %v, want errOutsideWork", err)
 			}
@@ -144,11 +174,43 @@ func TestConfineRefusesOutOfTreeTargets(t *testing.T) {
 	}
 }
 
+// TestConfineLocalCopiesOutOfTreeTargets guards #332 on a shared filesystem,
+// where mrp publishes a symlink to a host file and pipelines return paths into
+// host reference dirs: the output stages, but as a byte copy, never a hard
+// link, so no later write through the bundle can alias the host file.
+func TestConfineLocalCopiesOutOfTreeTargets(t *testing.T) {
+	e := newConfineEnv(t)
+
+	for _, tc := range e.outOfTreeCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			leaf, err := e.markOut(t, tc.value, false)
+			if err != nil {
+				t.Fatalf("MarkFiles: %v", err)
+			}
+
+			staged := filepath.Join(leaf, tc.rel)
+
+			want, err := os.ReadFile(tc.host)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got, err := os.ReadFile(staged); err != nil || string(got) != string(want) {
+				t.Errorf("staged content = %q (err %v), want %q", got, err, want)
+			}
+
+			if sameFile(t, staged, tc.host) {
+				t.Errorf("%s is a hard link to the host file %s; it must be a copy", staged, tc.host)
+			}
+		})
+	}
+}
+
 // TestConfineAdmitsOwnAndStagedFiles checks the paths a stage legitimately
-// outputs still stage: its own files and dirs, and a Nextflow-staged input
-// (named directly or through the stage's own symlink, absolute or relative),
-// which is dereferenced to the other task's file it points at. A dangling link
-// in an output dir is still skipped.
+// outputs stage the same under either mode, hard-linked: its own files and
+// dirs, and a Nextflow-staged input (named directly or through the stage's own
+// symlink, absolute or relative), which is dereferenced to the other task's
+// file it points at. A dangling link in an output dir is still skipped.
 func TestConfineAdmitsOwnAndStagedFiles(t *testing.T) {
 	e := newConfineEnv(t)
 
@@ -163,36 +225,37 @@ func TestConfineAdmitsOwnAndStagedFiles(t *testing.T) {
 	symlink(t, filepath.Join(e.files, "rel_fwd"), filepath.Join("..", "..", "args", "f", "L0000.txt"))
 
 	cases := []struct {
-		name, value, rel, want string
+		name, value, rel, src string
 	}{
-		{"own file", own, "", "own"},
-		{"own dir", ownDir, "kept.txt", "own"},
-		{"staged input", e.stagedFile, "", "upstream"},
-		{"absolute link to a staged input", filepath.Join(e.files, "abs_fwd"), "", "upstream"},
-		{"relative link to a staged input", filepath.Join(e.files, "rel_fwd"), "", "upstream"},
-		{"staged input dir", e.stagedDir, "y.txt", "upstream dir"},
+		{"own file", own, "", own},
+		{"own dir", ownDir, "kept.txt", filepath.Join(ownDir, "kept.txt")},
+		{"staged input", e.stagedFile, "", e.upstream},
+		{"absolute link to a staged input", filepath.Join(e.files, "abs_fwd"), "", e.upstream},
+		{"relative link to a staged input", filepath.Join(e.files, "rel_fwd"), "", e.upstream},
+		{"staged input dir", e.stagedDir, "y.txt", filepath.Join(e.stagedDir, "y.txt")},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			leaf, err := e.markOut(t, tc.value)
-			if err != nil {
-				t.Fatalf("MarkFiles: %v", err)
-			}
+	for _, strict := range []bool{true, false} {
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				leaf, err := e.markOut(t, tc.value, strict)
+				if err != nil {
+					t.Fatalf("MarkFiles (strict %v): %v", strict, err)
+				}
 
-			got, err := os.ReadFile(filepath.Join(leaf, tc.rel))
-			if err != nil || string(got) != tc.want {
-				t.Errorf("staged content = %q (err %v), want %q", got, err, tc.want)
-			}
-		})
-	}
+				if staged := filepath.Join(leaf, tc.rel); !sameFile(t, staged, tc.src) {
+					t.Errorf("strict %v: %s is not a hard link to %s", strict, staged, tc.src)
+				}
+			})
+		}
 
-	leaf, err := e.markOut(t, ownDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+		leaf, err := e.markOut(t, ownDir, strict)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	if _, err := os.Lstat(filepath.Join(leaf, "dangling")); !os.IsNotExist(err) {
-		t.Errorf("dangling link in an output dir was reproduced: %v", err)
+		if _, err := os.Lstat(filepath.Join(leaf, "dangling")); !os.IsNotExist(err) {
+			t.Errorf("strict %v: dangling link in an output dir was reproduced: %v", strict, err)
+		}
 	}
 }

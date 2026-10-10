@@ -363,6 +363,7 @@ class ConfinementTest(unittest.TestCase):
                   os.path.join(upstream, "dir")):
             os.makedirs(d)
         self._write(self.host, "host")
+        self._write(os.path.join(self.host_dir, "x.txt"), "host dir")
         self._write(os.path.join(upstream, "real.txt"), "upstream")
         self._write(os.path.join(upstream, "dir", "y.txt"), "upstream dir")
         os.symlink(self.host, os.path.join(upstream, "dir", "host"))
@@ -376,45 +377,65 @@ class ConfinementTest(unittest.TestCase):
         with open(path, "w") as fh:
             fh.write(content)
 
-    def _mark(self, value):
+    def _mark(self, value, strict):
         bundle = tempfile.mkdtemp(dir=self.work)
-        conf = rs.Confinement(self.work, "main")
+        conf = rs.Confinement(self.work, "main", strict)
         marked = rs.mark_files(bundle, {"out": value}, self.PARAMS, {}, conf)
         rel, _, ok = rs.cut_marker(marked["out"])
         self.assertTrue(ok, marked["out"])
         return os.path.join(bundle, rel)
 
-    def test_refuses_out_of_tree_targets(self):
+    def _out_of_tree_cases(self):
+        """(value, rel below the leaf, host file it must hold) for each
+        out-of-tree output shape."""
         own_dir = os.path.join(self.files, "own_dir")
         os.mkdir(own_dir)
         os.symlink(self.host, os.path.join(own_dir, "child"))
         os.symlink(self.host, os.path.join(self.files, "to_host"))
         os.symlink(self.host_dir, os.path.join(self.files, "to_host_dir"))
+        return [(os.path.join(self.files, "to_host"), "", self.host),
+                (os.path.join(self.files, "to_host_dir"), "x.txt",
+                 os.path.join(self.host_dir, "x.txt")),
+                (self.host, "", self.host),
+                (own_dir, "child", self.host)]
+
+    def test_strict_refuses_out_of_tree_targets(self):
         host_root = os.path.realpath(os.path.dirname(self.host))
-        for value in (os.path.join(self.files, "to_host"),
-                      os.path.join(self.files, "to_host_dir"),
-                      self.host, own_dir):
+        for value, _, _ in self._out_of_tree_cases():
             with self.subTest(value=value):
                 with self.assertRaises(rs.RunnerError) as ctx:
-                    self._mark(value)
+                    self._mark(value, True)
                 msg = str(ctx.exception)
                 self.assertIn("outside the task work dir", msg)
                 self.assertIn("param out", msg)
                 self.assertIn(host_root, msg)
+
+    def test_local_copies_out_of_tree_targets(self):
+        for value, rel, host in self._out_of_tree_cases():
+            with self.subTest(value=value):
+                leaf = self._mark(value, False)
+                staged = os.path.join(leaf, rel) if rel else leaf
+                with open(staged) as fh, open(host) as want:
+                    self.assertEqual(fh.read(), want.read())
+                self.assertFalse(os.path.samefile(staged, host),
+                                 "%s must be a copy, not a hard link" % staged)
 
     def test_admits_own_and_staged_files(self):
         own = os.path.join(self.files, "own.txt")
         self._write(own, "own")
         rel_fwd = os.path.join(self.files, "rel_fwd")
         os.symlink(os.path.join("..", "..", "args", "f", "L0000.txt"), rel_fwd)
-        cases = [(own, "", "own"), (self.staged_file, "", "upstream"),
-                 (rel_fwd, "", "upstream"),
-                 (self.staged_dir, "y.txt", "upstream dir")]
-        for value, rel, want in cases:
-            with self.subTest(value=value):
-                leaf = self._mark(value)
-                with open(os.path.join(leaf, rel) if rel else leaf) as fh:
-                    self.assertEqual(fh.read(), want)
+        cases = [(own, "", own), (self.staged_file, "", self.staged_file),
+                 (rel_fwd, "", self.staged_file),
+                 (self.staged_dir, "y.txt",
+                  os.path.join(self.staged_dir, "y.txt"))]
+        for strict in (True, False):
+            for value, rel, src in cases:
+                with self.subTest(value=value, strict=strict):
+                    leaf = self._mark(value, strict)
+                    staged = os.path.join(leaf, rel) if rel else leaf
+                    self.assertTrue(os.path.samefile(staged, src),
+                                    "%s must hard-link %s" % (staged, src))
 
 
 class CoercionTest(unittest.TestCase):

@@ -27,6 +27,9 @@ type genCtx struct {
 	monitor    bool
 	// target decides which entry file-override schemes the head node accepts.
 	target Target
+	// confine passes -confine to every stage phase: an output that resolves
+	// outside the task work dir fails the task instead of being copied.
+	confine bool
 	// features holds the opt-in emission toggles (mirrored from Options).
 	features featureSet
 	code     map[string]string // stage name -> stage code path
@@ -58,6 +61,10 @@ func (g genCtx) stageCmd(phase string, s *ir.Stage, vmemExpr string) string {
 
 	if g.monitor {
 		cmd += " -monitor"
+	}
+
+	if g.confine {
+		cmd += " -confine"
 	}
 
 	return cmd

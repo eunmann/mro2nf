@@ -70,20 +70,24 @@ func TestAssertTerminatesWithoutRetry(t *testing.T) {
 	}
 }
 
-// TestStageOutputLinkOutsideWorkFails guards #332: a stage whose file output is
-// a symlink to a file outside its task work dir must fail the run, naming the
-// output and the target, under both runners, rather than staging the target
-// into its bundle and publishing it.
+// runnerLegs are the transpile flags of the two stage runners.
+var runnerLegs = map[string][]string{"mre": nil, "native_runner": {"-native-runner"}}
+
+// TestStageOutputLinkOutsideWorkFails guards #332 on isolated container
+// targets (-confine-outputs, implied by awsbatch/healthomics): a stage whose
+// file output is a symlink to a file outside its task work dir must fail the
+// run, naming the output and the target, under both runners, rather than
+// staging the target into its bundle and uploading it.
 func TestStageOutputLinkOutsideWorkFails(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java", "python3")
 
-	for name, flags := range map[string][]string{"mre": nil, "native_runner": {"-native-runner"}} {
+	for name, flags := range runnerLegs {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			proj := transpile(t, "symlink_escape", flags...)
+			proj := transpile(t, "symlink_escape", append([]string{"-confine-outputs"}, flags...)...)
 
 			if err := runNextflow(t, proj); err == nil {
 				t.Fatal("run succeeded; an output linked outside the work dir must fail it")
@@ -102,6 +106,59 @@ func TestStageOutputLinkOutsideWorkFails(t *testing.T) {
 
 			if fileExists(filepath.Join(proj, "results", "linked.txt")) {
 				t.Error("the link target was published")
+			}
+		})
+	}
+}
+
+// TestStageOutputLinkOutsideWorkCopiedLocally is the local-target side of
+// #332: on a shared filesystem mrp publishes the symlink, so the run succeeds
+// and publishes the target's content, but the stage's output bundle holds a
+// copy of the host file, never a hard link that a later write could alias.
+func TestStageOutputLinkOutsideWorkCopiedLocally(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	host := filepath.Join(root, "testdata", "symlink_escape", "stages", "link_out", "__init__.py")
+
+	want, err := os.ReadFile(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hostInfo, err := os.Stat(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, flags := range runnerLegs {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, "symlink_escape", flags...)
+			if err := runNextflow(t, proj); err != nil {
+				t.Fatal(err)
+			}
+
+			if got, err := os.ReadFile(filepath.Join(proj, "results", "linked.txt")); err != nil || string(got) != string(want) {
+				t.Errorf("published linked.txt = %q (err %v), want the link target's content", got, err)
+			}
+
+			leaves, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "outs*", "f", "L0000.txt"))
+			if err != nil || len(leaves) == 0 {
+				t.Fatalf("no staged output leaf in the work dir (err %v)", err)
+			}
+
+			for _, leaf := range leaves {
+				info, err := os.Stat(leaf)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if os.SameFile(info, hostInfo) {
+					t.Errorf("bundle leaf %s is a hard link to the host file %s; it must be a copy", leaf, host)
+				}
 			}
 		})
 	}
