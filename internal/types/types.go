@@ -125,21 +125,6 @@ func (t *Table) FormatFloats(params []ir.Param, vals map[string]any) map[string]
 	return t.mapNumbers(params, vals, formatFloat)
 }
 
-// mapNumbers returns a copy of vals with every number leaf of a declared param
-// replaced by leaf(number, base type).
-func (t *Table) mapNumbers(params []ir.Param, vals map[string]any, leaf numberLeaf) map[string]any {
-	out := make(map[string]any, len(vals))
-	maps.Copy(out, vals)
-
-	for _, p := range params {
-		if v, ok := vals[p.Name]; ok {
-			out[p.Name] = t.mapNumber(v, p.BaseType, p.ArrayDim, p.MapDim, leaf)
-		}
-	}
-
-	return out
-}
-
 // Narrow returns vals with every struct-typed value filtered to exactly its
 // declared fields, as mrp's FilterJson filters a bound value to the receiving
 // param's type (core/resolve.go filter, syntax StructType.FilterJson): extra
@@ -153,6 +138,21 @@ func (t *Table) Narrow(params []ir.Param, vals map[string]any) map[string]any {
 	for _, p := range params {
 		if v, ok := vals[p.Name]; ok {
 			out[p.Name] = t.narrow(v, p.BaseType, p.ArrayDim, p.MapDim)
+		}
+	}
+
+	return out
+}
+
+// mapNumbers returns a copy of vals with every number leaf of a declared param
+// replaced by leaf(number, base type).
+func (t *Table) mapNumbers(params []ir.Param, vals map[string]any, leaf numberLeaf) map[string]any {
+	out := make(map[string]any, len(vals))
+	maps.Copy(out, vals)
+
+	for _, p := range params {
+		if v, ok := vals[p.Name]; ok {
+			out[p.Name] = t.mapNumber(v, p.BaseType, p.ArrayDim, p.MapDim, leaf)
 		}
 	}
 
