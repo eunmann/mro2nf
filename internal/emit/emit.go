@@ -246,7 +246,12 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		}
 	}
 
-	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(configFile(opts.Container, target))); err != nil {
+	cfg, err := configFile(opts.Container, target)
+	if err != nil {
+		return err
+	}
+
+	if err := writeFile(filepath.Join(opts.OutDir, "nextflow.config"), []byte(cfg)); err != nil {
 		return err
 	}
 
@@ -1002,11 +1007,16 @@ func valueToEntry(prog *ir.Program, p *ir.Pipeline, v ir.Value) bind.Entry {
 // configFile renders nextflow.config for the chosen target: the common params +
 // retry/process block, the per-target executor wiring, and (cloud targets) a
 // parameterized container image.
-func configFile(container string, target Target) string {
+func configFile(container string, target Target) (string, error) {
+	proc, err := configProcess(container, target)
+	if err != nil {
+		return "", err
+	}
+
 	var b strings.Builder
 
 	b.WriteString(configCommon(target))
-	b.WriteString(configProcess(container, target))
+	b.WriteString(proc)
 
 	switch target {
 	case TargetAWSBatch:
@@ -1017,7 +1027,7 @@ func configFile(container string, target Target) string {
 		b.WriteString(configProfiles())
 	}
 
-	return b.String()
+	return b.String(), nil
 }
 
 // configCommon renders the params shared by every target.
@@ -1065,15 +1075,25 @@ params.outdir = params.aws_outdir
 
 // configProcess renders the process{} block: the content-based retry strategy
 // and, for container targets, a parameterized default image.
-func configProcess(container string, target Target) string {
+func configProcess(container string, target Target) (string, error) {
 	assertExit := strconv.Itoa(shim.AssertExitCode)
+
+	image := "null"
+	if container != "" {
+		lit, err := GroovySingleQuoted(container)
+		if err != nil {
+			return "", fmt.Errorf("render -container image: %w", err)
+		}
+
+		image = lit
+	}
 
 	containerLines := ""
 	if target.isContainer() {
 		// Cloud backends run every task in a container; expose the image as a param
 		// so an ECR URI can be supplied/validated at run time (required by
 		// HealthOmics). Per-stage overrides go in withName: blocks.
-		containerLines = "params.container = " + quoteOrNull(container) + "\n"
+		containerLines = "params.container = " + image + "\n"
 	}
 
 	block := containerLines + `
@@ -1088,10 +1108,10 @@ process {
 	case target.isContainer():
 		block += "    container = params.container\n"
 	case container != "":
-		block += "    container = '" + container + "'\n"
+		block += "    container = " + image + "\n"
 	}
 
-	return block + "}\n"
+	return block + "}\n", nil
 }
 
 // resourceClamp renders the max_cpus/max_memory params the local profile feeds to
@@ -1187,15 +1207,6 @@ func configHealthOmics() string {
 // (/mnt/workflow/pubdir). Containers must be private-ECR URIs (--container);
 // tasks have no internet, so everything must be baked into the image.
 `
-}
-
-// quoteOrNull renders a Groovy string literal, or `null` when empty.
-func quoteOrNull(s string) string {
-	if s == "" {
-		return "null"
-	}
-
-	return "'" + s + "'"
 }
 
 func writeFile(path string, data []byte) error {

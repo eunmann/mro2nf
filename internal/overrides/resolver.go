@@ -1,7 +1,6 @@
 package overrides
 
 import (
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -232,14 +231,10 @@ func (r *resolver) stagesOf(calls []string) []string {
 // name cannot. Without a program the single `.+`-qualified fragment is
 // returned — structurally ambiguous for such names (see the package doc). A
 // bare-stage entry contributes nothing: its process is plain-named, never
-// fused. `[0-9]` rather than `\d`: the selector is rendered inside a
-// single-quoted Groovy string, where a backslash escape fails config parsing.
+// fused.
 func (r *resolver) qualifiers(stage string) []string {
 	if r.prog == nil {
-		// Without a program the stage name is the raw override-key segment; escape
-		// it so a regex metacharacter in a hand-written key cannot corrupt the
-		// selector (a valid Martian identifier is unaffected).
-		return []string{`[0-9]+_.+__` + regexp.QuoteMeta(stage)}
+		return []string{`[0-9]+_.+__` + stage}
 	}
 
 	byPipe := map[string][]string{}

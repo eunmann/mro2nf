@@ -29,7 +29,10 @@ It maps each override field to the generated process names:
 | `join.mem_gb` / `join.threads` | `memory` / `cpus` | the join phase |
 | `""` (the empty key) | `memory` / `cpus` | all stages (global `process {}`) |
 
-The override key's **last segment** is taken as the stage/call name. Fields with
+The override key's **last segment** is taken as the stage/call name. Every key
+other than `""` must be a dot-separated path of Martian identifiers (the
+`PIPE.STAGE` names mrp itself writes); any other key fails the conversion with an
+error naming it, because key segments become part of the generated config. Fields with
 no faithful Nextflow directive are reported and skipped: `vmem_gb` (Nextflow has
 no virtual-memory directive — use `mro2nf -monitor`, which reads `vmem_gb` from
 the `.mro`), `force_volatile` (VDR is not modeled), and `profile` (use the
