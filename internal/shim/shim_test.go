@@ -117,6 +117,53 @@ func TestRunSumSquares(t *testing.T) {
 	}
 }
 
+// TestPhasesRecordStageName checks that split, main and join each record the
+// stage they ran in the phase metadata dir, without touching the adapter's
+// _args, the file the mrp ABI differential compares byte-for-byte.
+func TestPhasesRecordStageName(t *testing.T) {
+	adapter := sumSquaresAdapter(t)
+	res := Resources{Threads: 1, MemGB: 1}
+	inv := Invocation{Stage: "SUM_SQUARES", Call: "P", Args: json.RawMessage(`{"values":[2]}`), MROFile: "p.mro"}
+	stageArgs := json.RawMessage(`{"values":[2]}`)
+	work := t.TempDir()
+	ctx := context.Background()
+
+	defs, _, err := RunSplit(ctx, work, adapter, stageArgs, res, inv)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	out, err := RunMain(ctx, work, adapter, stageArgs, defs[0], scalarOuts("sum", "square"), types.NewTable(nil), res, inv)
+	if err != nil {
+		t.Fatalf("main: %v", err)
+	}
+
+	if _, err := RunJoin(ctx, work, adapter, stageArgs, defs, []json.RawMessage{out},
+		scalarOuts("sum"), types.NewTable(nil), res, inv); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+
+	for _, phase := range []string{"split", "main", "join"} {
+		got, err := os.ReadFile(filepath.Join(work, phase, "_mre_stage"))
+		if err != nil {
+			t.Fatalf("%s: read _mre_stage: %v", phase, err)
+		}
+
+		if string(got) != "SUM_SQUARES" {
+			t.Errorf("%s: _mre_stage = %q, want SUM_SQUARES", phase, got)
+		}
+	}
+
+	args, err := os.ReadFile(filepath.Join(work, "split", "_args"))
+	if err != nil {
+		t.Fatalf("read split _args: %v", err)
+	}
+
+	if string(args) != string(stageArgs) {
+		t.Errorf("split _args = %s, want the stage args unchanged %s", args, stageArgs)
+	}
+}
+
 // TestJobInfoResolvedResources checks that _jobinfo reports the per-chunk
 // resolved allocation (what the stage actually got) rather than the raw phase
 // request, matching mrp's golden _jobinfo.

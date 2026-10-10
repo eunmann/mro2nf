@@ -83,6 +83,17 @@ func writeJobInfo(meta, files, phase string, res Resources, inv Invocation) erro
 	return writeJSON(filepath.Join(meta, "_jobinfo"), info)
 }
 
+// stageNameFile names the stage a phase ran, in a file of mre's own beside the
+// adapter metadata. _jobinfo's "name" carries only the top-level call, and the
+// Nextflow task graph is not a stable identity, so the mrp ABI differential
+// reads this to group invocations by stage. The adapter never reads it, so it
+// adds nothing to the _args/_jobinfo/_outs ABI.
+const stageNameFile = "_mre_stage"
+
+func writeStageName(meta, stage string) error {
+	return writeRaw(filepath.Join(meta, stageNameFile), []byte(stage))
+}
+
 // writeSkeletonOuts writes the _outs skeleton the adapter reads before a stage
 // runs, pre-populating it the way Martian's makeOutArg does (core/stage.go):
 // array dims become [], map dims {}, a scalar file leaf its default writable

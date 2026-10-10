@@ -457,7 +457,10 @@ allocation `mrp` would give it, tees the stage's `_log`/stdout/stderr to the
 process's own streams (so logs survive on a cloud backend that discards the
 scratch dir), and classifies failures: an `ASSERT`-class error exits **42**
 (non-retryable), anything else exits 1 (retryable) — which the generated config
-turns into Nextflow's terminate-vs-retry policy.
+turns into Nextflow's terminate-vs-retry policy. Beside the adapter files it
+writes `_mre_stage`, the name of the stage the phase ran. The adapter never
+reads it; the `mrp` ABI differential (`TestMrpDiff`) uses it to group stage
+invocations without depending on the Nextflow task graph.
 
 All three adapter ABIs — `py`, `exec`, and `comp` (via `mrjob`) — have been run
 live in an isolated cloud container.
