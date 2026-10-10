@@ -45,6 +45,7 @@ package overrides
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -56,15 +57,21 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 )
 
+// ErrInvalidKey reports an override key with a segment that is not a Martian
+// identifier. mrp keys are always Martian names, and a segment is spliced into a
+// withName selector of the generated config, so anything else is refused.
+var ErrInvalidKey = errors.New("override key segment is not a Martian identifier")
+
 // Convert renders the Nextflow config equivalent of an mrp overrides JSON. prog
 // is the parsed pipeline (or nil): when present, pipeline-scoped keys are
 // expanded to their stages and unknown keys are reported rather than silently
 // dropped. It returns the config text and a list of fields/keys it could not
-// map (so the caller can surface them), or an error if the JSON is malformed.
+// map (so the caller can surface them), or an error if the JSON is malformed or
+// a key is not a path of Martian identifiers (ErrInvalidKey).
 func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
-	var spec map[string]map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &spec); err != nil {
-		return "", nil, fmt.Errorf("parse overrides: %w", err)
+	spec, err := parseSpec(raw)
+	if err != nil {
+		return "", nil, err
 	}
 
 	res := newResolver(prog)
@@ -120,7 +127,39 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 
 	globalDefault, groups := groupSelectors(resolved, res)
 
-	return render(globalDefault, groups), unmapped, nil
+	cfg, err := render(globalDefault, groups)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return cfg, unmapped, nil
+}
+
+// martianIdent is Martian's identifier token (syntax/tokenizer.go tokIdRule,
+// `_?[[:alpha:]]\w*`, whose classes are ASCII-only in Go's regexp).
+var martianIdent = regexp.MustCompile(`^_?[A-Za-z][A-Za-z0-9_]*$`)
+
+// parseSpec decodes an overrides JSON and checks that every key other than the
+// global "" is a dot-separated path of Martian identifiers.
+func parseSpec(raw []byte) (map[string]map[string]json.RawMessage, error) {
+	var spec map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return nil, fmt.Errorf("parse overrides: %w", err)
+	}
+
+	for _, key := range sortedKeys(spec) {
+		if key == "" {
+			continue
+		}
+
+		for seg := range strings.SplitSeq(key, ".") {
+			if !martianIdent.MatchString(seg) {
+				return nil, fmt.Errorf("%w: key %q, segment %q", ErrInvalidKey, key, seg)
+			}
+		}
+	}
+
+	return spec, nil
 }
 
 // kindWeight scales a target's specificity kind above any realistic override
@@ -265,7 +304,12 @@ func mapField(field string, val json.RawMessage) (string, string, string, string
 		// Config-file scope uses `directive = value` (not the .nf process-body
 		// `directive value` form), so a `-c` overlay parses.
 		if base == "mem_gb" {
-			return phase, base, "memory = " + memLiteral(n), ""
+			lit, err := memLiteral(n)
+			if err != nil {
+				return phase, base, "", err.Error()
+			}
+
+			return phase, base, "memory = " + lit, ""
 		}
 
 		// cpus must be a positive integer; round a fractional (centicore) thread
@@ -484,12 +528,6 @@ func selector(stage string, quals []string, phase string) string {
 		return ".*" + suffixAlt(suffixes)
 	}
 
-	// Escape the stage name: with a program it is a valid Martian identifier
-	// (QuoteMeta is a no-op), but without one it is the raw override-key segment,
-	// where a regex metacharacter would otherwise corrupt the selector. The quals
-	// are already escaped where they embed a raw name (see qualifiers).
-	stage = regexp.QuoteMeta(stage)
-
 	alts := []string{stage + suffixAlt(plain)}
 	for _, q := range quals {
 		alts = append(alts, "STAGE_"+q+suffixAlt(fused))
@@ -510,7 +548,7 @@ func selector(stage string, quals []string, phase string) string {
 // render emits the process{} block: the global process default first, then each
 // withName selector broad-to-narrow so the most specific one is applied last
 // (Nextflow's last-matching-withName-wins rule) and thus takes effect.
-func render(globalDefault []string, groups []selGroup) string {
+func render(globalDefault []string, groups []selGroup) (string, error) {
 	var b strings.Builder
 
 	b.WriteString("// Generated from an mrp --overrides file by `mro2nf overrides`.\n")
@@ -522,18 +560,28 @@ func render(globalDefault []string, groups []selGroup) string {
 	}
 
 	for _, g := range groups {
-		fmt.Fprintf(&b, "    withName: '%s' { %s }\n", g.sel, strings.Join(g.lines, "; "))
+		sel, err := emit.GroovySingleQuoted(g.sel)
+		if err != nil {
+			return "", fmt.Errorf("render withName selector: %w", err)
+		}
+
+		fmt.Fprintf(&b, "    withName: %s { %s }\n", sel, strings.Join(g.lines, "; "))
 	}
 
 	b.WriteString("}\n")
 
-	return b.String()
+	return b.String(), nil
 }
 
 // memLiteral renders a GB quantity as a Nextflow memory string, without
 // scientific notation (which MemoryUnit cannot parse).
-func memLiteral(gb float64) string {
-	return "'" + strconv.FormatFloat(gb, 'f', -1, 64) + " GB'"
+func memLiteral(gb float64) (string, error) {
+	lit, err := emit.GroovySingleQuoted(strconv.FormatFloat(gb, 'f', -1, 64) + " GB")
+	if err != nil {
+		return "", fmt.Errorf("render memory: %w", err)
+	}
+
+	return lit, nil
 }
 
 // keyDepth is the number of path segments in an override key; "" (the global

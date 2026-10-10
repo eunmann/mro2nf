@@ -1,7 +1,10 @@
 package overrides_test
 
 import (
+	"encoding/json"
+	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -743,28 +746,86 @@ func TestConvertCallNameCollision(t *testing.T) {
 	}
 }
 
-// TestConvertSelectorEscapesRawSegment guards #175: without a program the stage
-// name is the raw override-key segment, so a regex metacharacter in a hand-written
-// key must be escaped, not spliced into the withName regex where it would corrupt
-// the selector (or make it uncompilable).
-func TestConvertSelectorEscapesRawSegment(t *testing.T) {
-	cfg, _, err := overrides.Convert([]byte(`{"S.T*U": {"mem_gb": 8}}`), nil)
-	if err != nil {
-		t.Fatalf("Convert: %v", err)
+// TestConvertRejectsNonIdentifierKey guards #329 (and #175 before it): a key
+// segment is spliced into a withName regex inside a single-quoted Groovy string,
+// which the v1 config parser evaluates as code. mrp's keys are always Martian
+// names, so any segment that is not a Martian identifier is refused loudly,
+// naming the key, before anything is rendered — with or without a program.
+func TestConvertRejectsNonIdentifierKey(t *testing.T) {
+	cases := []struct{ name, key string }{
+		{"quote_breaks_out_of_selector", `P.S'X`},
+		{"newline_ends_selector_line", "P.S\nX"},
+		{"backslash_escapes_closing_quote", `P.S\`},
+		{"carriage_return_in_segment", "P.S\rX"},
+		{"regex_metacharacter", "S.T*U"},
+		{"wildcard_segment", "P.*"},
+		{"hyphenated_segment", "P.S-1"},
+		{"leading_digit", "P.1S"},
+		{"double_leading_underscore", "P.__S"},
+		{"empty_middle_segment", "P..S"},
+		{"trailing_dot", "P.S."},
+		{"leading_dot", ".S"},
+		{"space_in_segment", "P.S X"},
 	}
 
-	sel := regexp.MustCompile(`withName: '([^']+)'`).FindStringSubmatch(cfg)
-	if sel == nil {
-		t.Fatalf("no selector emitted:\n%s", cfg)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]map[string]float64{tc.key: {"mem_gb": 8}})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			for _, prog := range []*ir.Program{nil, sampleProgram()} {
+				cfg, _, err := overrides.Convert(raw, prog)
+				if !errors.Is(err, overrides.ErrInvalidKey) {
+					t.Fatalf("want ErrInvalidKey for key %q (program %t), got err=%v cfg:\n%s", tc.key, prog != nil, err, cfg)
+				}
+				if !strings.Contains(err.Error(), strconv.Quote(tc.key)) {
+					t.Errorf("error must name the key %q: %v", tc.key, err)
+				}
+				if cfg != "" {
+					t.Errorf("no config may be rendered for a rejected key:\n%s", cfg)
+				}
+			}
+		})
+	}
+}
+
+// TestConvertAcceptsIdentifierKeys pins the accepting side of #329: every key
+// shape mrp writes (the global "", a bare stage, PIPE.STAGE paths, Martian's
+// leading-underscore and "__"-containing identifiers) converts, under every
+// phase-qualified field, and each rendered selector is a compilable regex.
+func TestConvertAcceptsIdentifierKeys(t *testing.T) {
+	keys := []string{"", "STAGE", "PIPE.STAGE", "TOP.SUB.ALIGN", "_PRIV.STAGE_2", "P.X__TRIM", "p.lower9"}
+	fields := `{"mem_gb": 8, "threads": 2, "split.mem_gb": 4, "chunk.mem_gb": 16, "join.threads": 3}`
+
+	for _, key := range keys {
+		t.Run(orAllName(key), func(t *testing.T) {
+			cfg, _, err := overrides.Convert([]byte(`{"`+key+`": `+fields+`}`), nil)
+			if err != nil {
+				t.Fatalf("Convert(%q): %v", key, err)
+			}
+
+			sels := regexp.MustCompile(`withName: '([^']+)'`).FindAllStringSubmatch(cfg, -1)
+			if len(sels) == 0 {
+				t.Fatalf("no selector emitted:\n%s", cfg)
+			}
+
+			for _, sel := range sels {
+				if _, err := regexp.Compile("^(?:" + sel[1] + ")$"); err != nil {
+					t.Errorf("selector is not a valid regex: %v (%q)", err, sel[1])
+				}
+			}
+		})
+	}
+}
+
+func orAllName(key string) string {
+	if key == "" {
+		return "global"
 	}
 
-	// The escaped literal must appear, and the whole selector must compile.
-	if !strings.Contains(sel[1], `T\*U`) {
-		t.Errorf("raw segment metacharacter not escaped in %q", sel[1])
-	}
-	if _, err := regexp.Compile("^(?:" + sel[1] + ")$"); err != nil {
-		t.Errorf("selector is not a valid regex: %v (%q)", err, sel[1])
-	}
+	return key
 }
 
 // TestConvertResourceValueReported guards the #175 review: the 0 sentinel (mrp's
