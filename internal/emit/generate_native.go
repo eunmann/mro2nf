@@ -12,7 +12,7 @@ import (
 // process (#99), shared by the -native plain scatter and the keyed nested
 // scatter so a scatter-script fix lands once. fi<0 is the empty-collection
 // sentinel (keys-only resolve); fi==0 runs `forkbind -index 0` once, writing
-// the forkkeys sidecar alongside its own fork; every other instance assembles
+// the forkmeta sidecar alongside its own fork; every other instance assembles
 // its args from its own base64 element. The trailing [ -d outs__${key} ] keeps
 // the hard per-fork guarantee: an instance that exits 0 without its out bundle
 // fails the task instead of silently shortening the merge. arg is the staged-
@@ -29,11 +29,11 @@ func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 	return fmt.Sprintf(`  script:
     if( fi < 0 )
       """
-      %[1]s -keysonly -keysfile forkkeys.mro2nf.json
+      %[1]s -keysonly -keysfile forkmeta.mro2nf.json
       """
     else if( fi == 0 )
       """
-      %[1]s -index 0 -o fargs -keysfile forkkeys.mro2nf.json
+      %[1]s -index 0 -o fargs -keysfile forkmeta.mro2nf.json
       %[2]s
       [ -d outs__${key} ]
       """
@@ -52,16 +52,16 @@ func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 // no FORK task, and no per-instance collection re-parse. The driver sliced the
 // collection once, so a fork with index > 0 assembles its args from its own
 // base64 JSON element (`forkbind -elementfile`). Index 0 runs `forkbind -index
-// 0` once to write the forkkeys sidecar for the gather (parsing the collection
+// 0` once to write the forkmeta sidecar for the gather (parsing the collection
 // once — ONE instance, not N; a single deterministic producer, so -resume
 // rehashes the same path). The index -1 sentinel (empty fork collection) runs
 // `forkbind -keysonly`: every binding is resolved and validated exactly as the
 // always-running FORK task did — a wrong-kind or mis-zipped source still fails
 // loudly — and only the keys sidecar is produced, so both outputs are optional.
-// Out bundles are named outs__<key> so the gather's `sort -V` staging orders
-// forks exactly as the keyed path does; the sidecar's task-side name is
-// forkkeys.mro2nf.json because the stage main shares this cwd (-work .), so a
-// stage scratch file named forkkeys.json must not satisfy the optional keys
+// Out bundles are named outs__<key> so the gather orders forks by the key's
+// index exactly as the keyed path does; the sidecar's task-side name is
+// forkmeta.mro2nf.json because the stage main shares this cwd (-work .), so a
+// stage scratch file named forkmeta.json must not satisfy the optional keys
 // output (consumers rename it on staging anyway). The trailing [ -d
 // outs__<key> ] keeps the hard per-fork guarantee: an instance that exits 0
 // without its out bundle fails the task instead of silently shortening an
@@ -85,7 +85,7 @@ func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Ca
   input:
 %[3]s  output:
     path "outs__${key}", type: 'dir', emit: outs, optional: true
-    path 'forkkeys.mro2nf.json', emit: keys, optional: true
+    path 'forkmeta.mro2nf.json', emit: keys, optional: true
 %[4]s}
 
 `, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.scatterScript(c, s, arg))

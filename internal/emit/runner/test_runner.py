@@ -440,6 +440,63 @@ class StageDefsTest(unittest.TestCase):
         self.assertEqual(join.special, "gpu")
 
 
+class JoinGatherTest(unittest.TestCase):
+    """io.go readChunkData + gather.go port: the join lists its staged chunk
+    bundles itself, in index order, against the chunks.json count (#323,
+    #324)."""
+
+    def _stage(self, names, chunks):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        for name in names:
+            os.mkdir(os.path.join(tmp, name))
+        path = os.path.join(tmp, "chunks.json")
+        with open(path, "w") as fh:
+            json.dump(chunks, fh)
+        return tmp, path
+
+    def test_index_order_and_prefix_filter(self):
+        names = ["chunk_%05d" % i for i in (11, 2, 0, 10, 1, 3, 4, 5, 6, 7,
+                                            8, 9)]
+        tmp, _ = self._stage(names + ["out_chunk_00000", "types.json"], [])
+        got = rs.gather_indexed(tmp, rs.CHUNK_DEF_PREFIX, 12)
+        self.assertEqual([os.path.basename(p) for p in got],
+                         ["chunk_%05d" % i for i in range(12)])
+
+    def test_order_past_padding_width(self):
+        # Index 100000 is six digits: the index, not a lexical sort, orders.
+        self.assertEqual(rs.split_index("out_chunk_100000"),
+                         ("out_chunk_", 100000))
+        with self.assertRaises(rs.RunnerError):
+            rs.split_index("chunk_x")
+
+    def test_flags_default_chunkdir_to_task_dir(self):
+        self.assertEqual(rs.parse_flags("join", []).chunkdir, ".")
+        self.assertEqual(rs.parse_flags("split", []).chunkdir, "")
+
+    def test_zero_chunks(self):
+        tmp, path = self._stage([], [])
+        self.assertEqual(rs.read_chunk_data(path, tmp), ([], []))
+        tmp, path = self._stage([], None)
+        self.assertEqual(rs.read_chunk_data(path, os.path.join(tmp, "x")),
+                         ([], []))
+
+    def test_count_mismatch_fails(self):
+        cases = [
+            (["chunk_00000", "out_chunk_00000"], [{}, {}]),  # both short
+            (["chunk_00000", "chunk_00001", "out_chunk_00000"], [{}, {}]),
+            (["chunk_00000", "chunk_00002", "out_chunk_00000",
+              "out_chunk_00001"], [{}, {}]),  # index gap
+            ([], [{}]),  # nothing staged
+        ]
+        for names, chunks in cases:
+            tmp, path = self._stage(names, chunks)
+            with self.assertRaises(rs.RunnerError, msg=names):
+                rs.read_chunk_data(path, tmp)
+        with self.assertRaises(rs.RunnerError):
+            rs.read_chunk_data("", ".")
+
+
 class RSSMonitorTest(unittest.TestCase):
     """monitor.go sampler port (fix 3): statm parsing + quota message."""
 

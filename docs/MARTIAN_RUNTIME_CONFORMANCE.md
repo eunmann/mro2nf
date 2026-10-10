@@ -89,7 +89,8 @@ mre — accepted, as NF owns the supervision tree).
 
 ## B. Lifecycle & forks — faithful
 
-split→main→join, chunk ordering (recovered via `sort -V`, resources stripped for
+split→main→join, chunk ordering (recovered from the chunk index, count-checked
+against `chunks.json`, resources stripped for
 join), the zero-chunk join (`.ifEmpty([])` on the non-keyed path and remainder-
 joins on both keyed/mapped paths — verified complete across all four variants),
 no-split chunk[0]-forward, key-preserving fork merges, and disabled-call

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -45,16 +46,40 @@ func decodeChunk(raw json.RawMessage) (shim.ChunkDef, error) {
 	return chunk, nil
 }
 
-// readChunkData reads the ordered, comma-separated per-chunk DEFINITION bundle
-// directories and the per-chunk OUTPUT bundle directories. Both are resolved
-// through ReadBundle, so a file-typed leaf the split phase created and returned
-// in a chunk's args (e.g. a custom-filetype chunk arg) is rewritten from the
-// split worker's ephemeral scratch to a locally-staged path the join worker can
-// open — an object-store join never sees the split's absent scratch path (#217).
-// Defs and outs must be in matching chunk order; an empty list is a 0-chunk
-// split (the join still runs, with no chunks).
-func readChunkData(defsList, outsList string) ([]shim.ChunkDef, []json.RawMessage, error) {
-	defRaws, err := readBundleList(splitComma(defsList))
+// chunkDefPrefix and chunkOutPrefix name the per-chunk bundles a JOIN gathers:
+// the split writes chunk_%05d defs and the emitted MAIN names each output
+// out_${chunk.baseName}.
+const (
+	chunkDefPrefix = "chunk_"
+	chunkOutPrefix = "out_" + chunkDefPrefix
+)
+
+// readChunkData gathers the per-chunk DEFINITION and OUTPUT bundles staged in
+// chunkDir, in chunk-index order, checking both number exactly the chunks the
+// split's chunks.json lists. Both are resolved through ReadBundle, so a
+// file-typed leaf the split phase created and returned in a chunk's args (e.g.
+// a custom-filetype chunk arg) is rewritten from the split worker's ephemeral
+// scratch to a locally-staged path the join worker can open — an object-store
+// join never sees the split's absent scratch path (#217). chunks.json supplies
+// only the count, for the same reason. Zero chunks is a 0-chunk split (the
+// join still runs, with no chunks).
+func readChunkData(chunksFile, chunkDir string) ([]shim.ChunkDef, []json.RawMessage, error) {
+	count, err := readChunkCount(chunksFile)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defDirs, err := gatherIndexed(chunkDir, chunkDefPrefix, count)
+	if err != nil {
+		return nil, nil, fmt.Errorf("gather chunk defs: %w", err)
+	}
+
+	outDirs, err := gatherIndexed(chunkDir, chunkOutPrefix, count)
+	if err != nil {
+		return nil, nil, fmt.Errorf("gather chunk outs: %w", err)
+	}
+
+	defRaws, err := readBundleList(defDirs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -69,12 +94,35 @@ func readChunkData(defsList, outsList string) ([]shim.ChunkDef, []json.RawMessag
 		defs = append(defs, def)
 	}
 
-	outs, err := readBundleList(splitComma(outsList))
+	outs, err := readBundleList(outDirs)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return defs, outs, nil
+}
+
+// errNoChunksFile reports a join without the chunks.json it counts against.
+var errNoChunksFile = errors.New("join requires -chunksfile <the split's chunks.json>")
+
+// readChunkCount returns the number of chunk defs the split wrote to
+// chunks.json (a JSON array; null for a split that returned no chunks).
+func readChunkCount(path string) (int, error) {
+	if path == "" {
+		return 0, errNoChunksFile
+	}
+
+	data, err := readFile(path)
+	if err != nil {
+		return 0, err
+	}
+
+	var defs []json.RawMessage
+	if err := json.Unmarshal(data, &defs); err != nil {
+		return 0, fmt.Errorf("parse chunk defs %s: %w", path, err)
+	}
+
+	return len(defs), nil
 }
 
 // readBundle resolves a bundle directory into its payload (file leaves rewritten

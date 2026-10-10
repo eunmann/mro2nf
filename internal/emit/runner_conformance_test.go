@@ -61,9 +61,11 @@ func TestRunnerConformance(t *testing.T) {
 	// JOIN reads chunk DEFS from the staged chunk bundle dir(s), not the
 	// unstaged chunks.json summary (#217): the bundle carries the file-typed
 	// chunk-arg leaf as a resolvable marker, so both stacks localize it.
+	// chunks.json supplies only the count both stacks check the staged dir
+	// against.
 	joinFlags := []string{
-		"-chunkdefs", chunk,
-		"-chunkouts", filepath.Join(mreMain, "outs"),
+		"-chunksfile", filepath.Join(mreSplit, "chunks.json"),
+		"-chunkdir", env.stageJoinInputs(t, mreSplit, filepath.Join(mreMain, "outs")),
 	}
 	mreJoin := env.runPhase(t, "mre", "join", joinFlags)
 	pyJoin := env.runPhase(t, "py", "join", joinFlags)
@@ -423,6 +425,37 @@ func buildConformanceEnv(t *testing.T, code string, s *ir.Stage) *conformanceEnv
 	}
 
 	return env
+}
+
+// stageJoinInputs lays out a JOIN task dir the way Nextflow stages it: every
+// chunk_N def bundle the split wrote, plus an out_chunk_N per chunk. Each
+// chunk out links the one main bundle the test ran, since only the join's
+// parity is under test here.
+func (e *conformanceEnv) stageJoinInputs(t *testing.T, splitDir, mainOuts string) string {
+	t.Helper()
+
+	dir := filepath.Join(e.root, "join_inputs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := filepath.Glob(filepath.Join(splitDir, "chunk_*"))
+	if err != nil || len(defs) == 0 {
+		t.Fatalf("split wrote no chunk bundles (err %v)", err)
+	}
+
+	for _, def := range defs {
+		name := filepath.Base(def)
+		if err := os.Symlink(def, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.Symlink(mainOuts, filepath.Join(dir, "out_"+name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return dir
 }
 
 // runPhase runs one stack's phase and fails the test on a non-zero exit.

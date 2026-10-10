@@ -26,7 +26,7 @@ var errForkIndexNoOut = errors.New("forkbind -index requires -o <dir>")
 var errForkIndexNegative = errors.New("forkbind -index must be >= 0 (or -1 for the full write)")
 
 // errKeysFileNeedsIndex reports -keysfile without -index or -keysonly (the
-// full-fork write already emits forkkeys.json into -chunkdir).
+// full-fork write already emits forkmeta.json into -chunkdir).
 var errKeysFileNeedsIndex = errors.New("forkbind -keysfile requires -index or -keysonly")
 
 // errKeysOnlyNeedsFile reports -keysonly without the -keysfile destination.
@@ -57,7 +57,7 @@ func runForkBind(_ context.Context, argv []string) error {
 	mapMode := fs.String("mapmode", "array", "static fork kind: 'map' (typed map) or 'array'")
 	index := fs.Int("index", -1, "with -o, resolve and write ONLY this fork's args bundle (native-map scatter, #76)")
 	oDir := fs.String("o", "", "output args bundle dir when -index >= 0")
-	keysFile := fs.String("keysfile", "", "with -index or -keysonly, write the forkkeys sidecar to this path")
+	keysFile := fs.String("keysfile", "", "with -index or -keysonly, write the forkmeta sidecar to this path")
 	keysOnly := fs.Bool("keysonly", false, "resolve and validate every binding but write ONLY the -keysfile sidecar (native scatter's empty-fork instance, #76)")
 	elemFile := fs.String("elementfile", "", "with -o, assemble this fork's args from a PRE-SLICED split element (O(1), no whole-collection parse; native scatter #99)")
 
@@ -129,7 +129,7 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 	// wrong-kind or mis-zipped source still fails loudly), and only the keys
 	// sidecar is written — there is no fork to run.
 	if w.keysOnly {
-		return writeKeysFile(w.keysFile, keys)
+		return writeKeysFile(w.keysFile, len(forks), keys)
 	}
 
 	man, err := prod.manifest()
@@ -148,7 +148,7 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 	// standalone FORK task is replaced by an in-workflow scatter over 0..N-1 with
 	// each stage resolving its own fork inline. The per-fork args are identical
 	// to the corresponding full-fork write, and -keysfile emits the same
-	// forkkeys sidecar the full write would, so the gather still gets its keys.
+	// forkmeta sidecar the full write would, so the gather still gets its keys.
 	if w.index >= 0 {
 		return writeForkIndex(forks, keys, w.index, w.oDir, w.keysFile, params, tbl)
 	}
@@ -220,7 +220,7 @@ func checkForkBindFlags(fs *flag.FlagSet, index int, keysOnly bool, keysFile, el
 }
 
 // writeAllForks writes every fork's args bundle (fork_NNNNN/) into dir plus the
-// forknames/forkkeys sidecars — the default (FORK task) write.
+// forknames/forkmeta sidecars — the default (FORK task) write.
 func writeAllForks(forks []json.RawMessage, keys []string, dir string, params []ir.Param, tbl *types.Table) error {
 	names := make([]string, len(forks))
 
@@ -243,7 +243,7 @@ func writeAllForks(forks []json.RawMessage, keys []string, dir string, params []
 
 // writeForkIndex writes only fork[index]'s args bundle to oDir (the native-scatter
 // path); it is identical to the corresponding full-fork write. With keysFile it
-// also writes the forkkeys sidecar (identical to the full write's), so a scatter
+// also writes the forkmeta sidecar (identical to the full write's), so a scatter
 // instance can supply the gather's keys without a FORK task.
 func writeForkIndex(forks []json.RawMessage, keys []string, index int, oDir, keysFile string, params []ir.Param, tbl *types.Table) error {
 	if oDir == "" {
@@ -267,13 +267,13 @@ func writeForkIndex(forks []json.RawMessage, keys []string, index int, oDir, key
 		return nil
 	}
 
-	return writeKeysFile(keysFile, keys)
+	return writeKeysFile(keysFile, len(forks), keys)
 }
 
-// writeKeysFile writes the forkkeys sidecar to path — byte-identical to the
-// full-fork write's forkkeys.json (same keysJSON encoding).
-func writeKeysFile(path string, keys []string) error {
-	raw, err := keysJSON(keys)
+// writeKeysFile writes the forkmeta sidecar to path — byte-identical to the
+// full-fork write's forkmeta.json (same forkMetaJSON encoding).
+func writeKeysFile(path string, count int, keys []string) error {
+	raw, err := forkMetaJSON(count, keys)
 	if err != nil {
 		return err
 	}
@@ -285,8 +285,8 @@ func writeKeysFile(path string, keys []string) error {
 //   - forknames.json: the fork bundle dir names, so a keyed (nested-map) workflow
 //     can enumerate forks without a java.io listFiles() (which cannot list an
 //     object-store s3:// work dir).
-//   - forkkeys.json: the map keys for a map fork (null for an array fork), so
-//     merge can rebuild a keyed result.
+//   - forkmeta.json: the fork count and map keys (forkMeta), so merge can
+//     check it gathered every fork and rebuild a keyed result.
 func writeForkMeta(dir string, names, keys []string) error {
 	namesJSON, err := json.Marshal(names)
 	if err != nil {
@@ -297,18 +297,24 @@ func writeForkMeta(dir string, names, keys []string) error {
 		return err
 	}
 
-	raw, err := keysJSON(keys)
-	if err != nil {
-		return err
-	}
-
-	return writeRaw(filepath.Join(dir, "forkkeys.json"), raw)
+	return writeKeysFile(filepath.Join(dir, "forkmeta.json"), len(names), keys)
 }
 
-// keysJSON renders the forkkeys sidecar payload: the map fork's keys, or JSON
-// null for an array fork (json.Marshal encodes nil keys as null).
-func keysJSON(keys []string) (json.RawMessage, error) {
-	raw, err := json.Marshal(keys)
+// forkMeta is the forkmeta sidecar every fork producer writes and every merge
+// reads. Count is the gather's source of truth for how many outs__* bundles
+// it must find; an array fork has no keys of its own to count. Keys are the
+// map fork's keys in fork-index order, nil (JSON null) for an array fork.
+type forkMeta struct {
+	Count int      `json:"count"`
+	Keys  []string `json:"keys"`
+}
+
+// errForkMeta reports a forkmeta sidecar whose count and keys disagree.
+var errForkMeta = errors.New("inconsistent forkmeta sidecar")
+
+// forkMetaJSON renders the forkmeta sidecar payload.
+func forkMetaJSON(count int, keys []string) (json.RawMessage, error) {
+	raw, err := json.Marshal(forkMeta{Count: count, Keys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("marshal fork keys: %w", err)
 	}
@@ -316,14 +322,21 @@ func keysJSON(keys []string) (json.RawMessage, error) {
 	return raw, nil
 }
 
+// forkOutPrefix names every per-fork output bundle a merge gathers: the
+// emitter writes each fork's outs as outs__<fork key>.
+const forkOutPrefix = "outs__"
+
+// errNoKeysFile reports a merge without the forkmeta sidecar it counts against.
+var errNoKeysFile = errors.New("merge requires -keysfile <forkmeta sidecar>")
+
 // runMerge combines per-fork outputs into one map-call result: each named
 // output becomes an ordered array across forks.
 func runMerge(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("merge", flag.ContinueOnError)
 	prod := addProducer(fs, types.RoleOut)
 	outs := fs.String("outs", "", "comma-separated output parameter names")
-	files := fs.String("files", "", "comma-separated per-fork output bundle dirs, in order")
-	keysFile := fs.String("keysfile", "", "fork keys JSON (null for an array fork)")
+	forksDir := fs.String("forksdir", ".", "directory holding the staged "+forkOutPrefix+"<key> per-fork output bundles")
+	keysFile := fs.String("keysfile", "", "forkmeta sidecar: the fork count and map keys")
 	outFile := fs.String("o", "", "output merged bundle dir")
 	emptyNull := fs.Bool("emptynull", false, "zero forks merge to null instead of the typed empty (invocation-known split source, #99)")
 
@@ -331,17 +344,22 @@ func runMerge(_ context.Context, argv []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	forkOuts, err := readBundleList(splitComma(*files))
+	meta, err := readForkMeta(*keysFile)
 	if err != nil {
 		return err
 	}
 
-	keys, err := readForkKeys(*keysFile)
+	dirs, err := gatherIndexed(*forksDir, forkOutPrefix, meta.Count)
+	if err != nil {
+		return fmt.Errorf("merge: %w", err)
+	}
+
+	forkOuts, err := readBundleList(dirs)
 	if err != nil {
 		return err
 	}
 
-	merged, err := bind.Merge(splitComma(*outs), forkOuts, keys, *emptyNull)
+	merged, err := bind.Merge(splitComma(*outs), forkOuts, meta.Keys, *emptyNull)
 	if err != nil {
 		return fmt.Errorf("merge: %w", err)
 	}
@@ -350,7 +368,7 @@ func runMerge(_ context.Context, argv []string) error {
 	// fork, a keyed map for a map fork), so the file-leaf walk must descend one
 	// level deeper than the callee's declared output types or it will skip the
 	// per-fork files and leave dangling paths under object-store staging.
-	return writeMerged(*outFile, merged, prod, keys != nil)
+	return writeMerged(*outFile, merged, prod, meta.Keys != nil)
 }
 
 // writeMerged writes the merged map-call result as a bundle, bumping each output
@@ -396,22 +414,36 @@ func bumpForkDim(params []ir.Param, mapFork bool) []ir.Param {
 	return out
 }
 
-// readForkKeys reads forkkeys.json: a JSON null (array fork) yields nil keys; a
-// JSON array yields the map fork's keys.
-func readForkKeys(path string) ([]string, error) {
+// readForkMeta reads and validates the forkmeta sidecar: a JSON null keys
+// field (array fork) yields nil keys, an array the map fork's keys, which must
+// number exactly the fork count.
+func readForkMeta(path string) (forkMeta, error) {
+	if path == "" {
+		return forkMeta{}, errNoKeysFile
+	}
+
 	data, err := readFile(path)
 	if err != nil {
-		return nil, err
+		return forkMeta{}, err
 	}
 
-	if len(data) == 0 {
-		return nil, nil
+	// A pointer count tells an absent field from a zero-fork sidecar.
+	var raw struct {
+		Count *int     `json:"count"`
+		Keys  []string `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return forkMeta{}, fmt.Errorf("parse fork keys %s: %w", path, err)
 	}
 
-	var keys []string
-	if err := json.Unmarshal(data, &keys); err != nil {
-		return nil, fmt.Errorf("parse fork keys %s: %w", path, err)
+	if raw.Count == nil {
+		return forkMeta{}, fmt.Errorf("%w %s: no count", errForkMeta, path)
 	}
 
-	return keys, nil
+	meta := forkMeta{Count: *raw.Count, Keys: raw.Keys}
+	if meta.Count < 0 || (meta.Keys != nil && len(meta.Keys) != meta.Count) {
+		return forkMeta{}, fmt.Errorf("%w %s: count %d, %d keys", errForkMeta, path, meta.Count, len(meta.Keys))
+	}
+
+	return meta, nil
 }

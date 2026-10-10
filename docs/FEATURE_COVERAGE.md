@@ -99,7 +99,7 @@ out of scope for a transpiler.
 | Feature | Status | Test |
 |---|---|---|
 | split / main / join | ✅ | e2e `split_test`, `kitchen_sink` |
-| ordered chunk-outs aggregation in join | ✅ | shim `TestRunSumSquares`; `sort -V` |
+| ordered chunk-outs aggregation in join | ✅ | shim `TestRunSumSquares`; mre `TestReadChunkData`, `TestOrderByIndexMatchesSortV` |
 | `py` adapter | ✅ | e2e (all py) |
 | `exec` adapter | ✅ | e2e `exec_min` |
 | `comp` adapter (mrjob-wrapped) | ✅ | unit `TestRunSumSquaresComp` |

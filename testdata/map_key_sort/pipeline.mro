@@ -2,7 +2,7 @@
 # Mixed case, digits, and — critically — an astral code point (U+1F389) with a
 # private-use BMP char order DIFFERENTLY under Java's natural String order
 # (UTF-16 code units) vs Go's sort.Strings (UTF-8 bytes). forkElements must
-# order elements by the same byte order the forkkeys sidecar uses
+# order elements by the same byte order the forkmeta sidecar uses
 # (Mro2nf.compareUtf8 matches bind.go sortedKeys), or the merged map pairs
 # values with the wrong keys (#99).
 stage DBL(
