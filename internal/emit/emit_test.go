@@ -1413,11 +1413,14 @@ func TestEmitEntryFileParam(t *testing.T) {
 	main := string(data)
 	for _, want := range []string{
 		"params.reads = null", // the file input is overridable
+		"params.mro2nf_allow_remote_inputs = false\n",
 		// its file leaves staged as a list path input, each in a per-index subdir
 		// so same-basename leaves do not collide in the task work dir; 0..* lets
 		// an unset or empty value stage nothing and keeps one leaf a list
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*', arity: '0..*')",
-		"  flat_reads = (params.reads != null ? [file(params.reads, glob: false)] : [])\n",
+		// only a supplied value is vetted for the target, then file()'d
+		"  flat_reads = (params.reads != null ? [file(Mro2nf.entryFile('reads', params.reads, 'local', " +
+			"params.mro2nf_allow_remote_inputs), glob: false)] : [])\n",
 		// staged paths reach entryargs as heredoc-written JSON — collision-proof
 		// for legal filenames containing , ; =
 		`${groovy.json.JsonOutput.toJson([reads: inflat_reads*.toString()])}`,
@@ -1451,7 +1454,8 @@ func TestEmitEntryFileArray(t *testing.T) {
 	main := readFile(t, filepath.Join(dir, "main.nf"))
 	for _, want := range []string{
 		"path(inflat_reads, stageAs: 'inflat_reads_?/*', arity: '0..*')",
-		`(params.reads ?: []).collect { __e0 -> (__e0 != null ? [file(__e0, glob: false)] : []) }.flatten()`,
+		`(params.reads ?: []).collect { __e0 -> (__e0 != null ? [file(Mro2nf.entryFile('reads', __e0, 'local', ` +
+			`params.mro2nf_allow_remote_inputs), glob: false)] : []) }.flatten()`,
 		`${groovy.json.JsonOutput.toJson([reads: inflat_reads*.toString()])}`,
 	} {
 		if !strings.Contains(main, want) {

@@ -35,6 +35,8 @@ func writeHealthOmicsPackaging(prog *ir.Program, outDir string, native bool) err
 	// but the parameters stay declared — dropping them would make HealthOmics
 	// reject the whole request instead of the run failing with the workflow's own
 	// re-transpile message — with a description stating the bake.
+	// allowRemoteParam is deliberately left undeclared: HealthOmics then rejects
+	// it, so whoever starts a run cannot widen the file schemes it fetches.
 	for _, p := range entryInParams(prog) {
 		tmpl[p.Name] = healthOmicsParam{
 			Description: entryParamDesc(prog, p, native),

@@ -305,6 +305,12 @@ nextflow run main.nf -params-file inputs.json     # e.g. {"values": [5, 6, 7]}
 nextflow run main.nf --n 5 --scale 2.5 --skip false  # scalars, parsed as declared
 ```
 
+A file-typed input accepts a local path on `-target local` and an `s3://` URI on
+`awsbatch`/`healthomics`. Any other value (an `http(s)://` or `ftp://` URL, a
+local path on a cloud target) fails the run before the head node fetches or
+reads it. `--mro2nf_allow_remote_inputs true` admits other URL schemes for
+trusted callers; see `docs/TRANSPILER.md` §8.
+
 A minimal **AWS CDK** app in `deploy/awsbatch-cdk/` provisions exactly the infra
 needed to test live (S3 bucket, ECR repo, Batch compute env + queue, and a
 HealthOmics service role) — see its README for `cdk deploy` + run steps.

@@ -25,6 +25,8 @@ type genCtx struct {
 	// project dir is not mounted into the isolated task.
 	runnerBase string
 	monitor    bool
+	// target decides which entry file-override schemes the head node accepts.
+	target Target
 	// features holds the opt-in emission toggles (mirrored from Options).
 	features featureSet
 	code     map[string]string // stage name -> stage code path

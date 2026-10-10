@@ -180,6 +180,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		// container backend rebinds this to the baked ctrRunner below.
 		runnerBase: "${projectDir}/" + assetsDir + "/" + runnerDir,
 		monitor:    opts.Monitor,
+		target:     target,
 		features:   features,
 		code:       opts.StageCode,
 		plan:       buildPlan(prog, features),
@@ -814,13 +815,19 @@ func resolveEntryFileLeaves(payload map[string]any, params []ir.Param, tbl *type
 	return resolved, nil
 }
 
-// reservedParams returns the Nextflow params the emitted config defines for
-// target. An entry input sharing one of these names would be silently overridden
-// by the config declaration (config params beat script params), so the transpile
-// must reject the collision. Mirror configCommon / outdirConfig / configProcess /
-// configAWSBatch — keep this in sync with what those emit.
+// allowRemoteParam is the run param that lets an entry file override use a
+// scheme other than the target's own (Mro2nf.entryFile). The mro2nf_ prefix
+// keeps it out of the pipeline-input namespace (#303).
+const allowRemoteParam = "mro2nf_allow_remote_inputs"
+
+// reservedParams returns the Nextflow params the emitter defines for target.
+// An entry input sharing a config-defined name would be silently overridden by
+// the config declaration (config params beat script params), and one named
+// allowRemoteParam would double as the opt-in, so the transpile must reject the
+// collision. Mirror configCommon / outdirConfig / configProcess /
+// configAWSBatch and entryParamWiring — keep this in sync with what those emit.
 func reservedParams(target Target) map[string]bool {
-	set := map[string]bool{"outdir": true, "job_resources": true}
+	set := map[string]bool{"outdir": true, "job_resources": true, allowRemoteParam: true}
 
 	if target == TargetAWSBatch || target == TargetLocal {
 		set["aws_queue"] = true

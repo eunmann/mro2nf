@@ -4,12 +4,15 @@ package e2e
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -526,6 +529,85 @@ func TestEntryFileGlobCharName(t *testing.T) {
 	goldenJSON(t,
 		filepath.Join(proj, "results", "pipeline_outs.json"),
 		filepath.Join(fixtureDir, "expected", "epa_override_outs.json"))
+}
+
+// TestEntryFileRemoteURL checks an http:// file override is refused on the head
+// node before anything is fetched (#330): file() would otherwise GET any URL,
+// the cloud metadata endpoint included. With the mro2nf_allow_remote_inputs
+// opt-in the same override is fetched and staged.
+func TestEntryFileRemoteURL(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	fixtureDir := filepath.Join(root, "testdata", "entry_file")
+
+	content, err := os.ReadFile(filepath.Join(fixtureDir, "input", "override.txt"))
+	if err != nil {
+		t.Fatalf("read override input: %v", err)
+	}
+
+	t.Run("rejected", func(t *testing.T) {
+		t.Parallel()
+
+		proj, hits := remoteReadsProject(t, content)
+
+		if err := runNextflow(t, proj, "-params-file", "params.json"); err == nil {
+			t.Fatal("an http:// file override must fail the run")
+		}
+
+		runLog, err := os.ReadFile(filepath.Join(proj, "run.log"))
+		if err != nil {
+			t.Fatalf("read run.log: %v", err)
+		}
+
+		if want := "entry input 'reads': scheme 'http' is not allowed on target 'local'"; !strings.Contains(string(runLog), want) {
+			t.Errorf("run log does not report %q:\n%s", want, runLog)
+		}
+
+		if n := hits.Load(); n != 0 {
+			t.Errorf("the rejected URL was fetched %d time(s)", n)
+		}
+	})
+
+	t.Run("opted_in", func(t *testing.T) {
+		t.Parallel()
+
+		proj, hits := remoteReadsProject(t, content)
+
+		if err := runNextflow(t, proj, "-params-file", "params.json", "--mro2nf_allow_remote_inputs", "true"); err != nil {
+			t.Fatal(err)
+		}
+
+		goldenJSON(t,
+			filepath.Join(proj, "results", "pipeline_outs.json"),
+			filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
+
+		if hits.Load() == 0 {
+			t.Error("the opted-in URL was never fetched")
+		}
+	})
+}
+
+// remoteReadsProject transpiles entry_file with a params.json overriding reads
+// with the URL of a local http server that serves body, and returns the
+// project dir and the server's request count.
+func remoteReadsProject(t *testing.T, body []byte) (string, *atomic.Int32) {
+	t.Helper()
+
+	var hits atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	proj := transpile(t, "entry_file")
+	writeFileT(t, filepath.Join(proj, "params.json"), `{"reads": "`+srv.URL+`/reads.txt"}`)
+
+	return proj, &hits
 }
 
 // assertFileContent asserts a published text file's content, ignoring a

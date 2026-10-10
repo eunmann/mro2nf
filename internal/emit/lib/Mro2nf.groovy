@@ -17,6 +17,8 @@
 import groovy.json.JsonSlurper
 import groovy.transform.CompileStatic
 import java.nio.file.Path
+import java.util.regex.Matcher
+import java.util.regex.Pattern
 
 @CompileStatic
 class Mro2nf {
@@ -380,5 +382,52 @@ class Mro2nf {
             if (d != 0) return d
         }
         return x.length - y.length
+    }
+
+    // URI_SCHEME matches the prefix Nextflow's file() dispatches on: a value
+    // starting `<scheme>:/` names a filesystem provider (or is rejected by
+    // Nextflow when none exists); anything else, `a:b.txt` included, is a local
+    // path.
+    private static final Pattern URI_SCHEME = Pattern.compile('^([A-Za-z][A-Za-z0-9+.-]*):/')
+
+    private static final Set<String> CLOUD_TARGETS = ['awsbatch', 'healthomics'] as Set<String>
+
+    // entryFile vets one file leaf of a launch-time entry override before the
+    // generated flatten hands it to file() on the head node (#330). file()
+    // fetches any URL it has a provider for (http, ftp, a cloud metadata
+    // endpoint) and reads any head-node path into the run, and the value comes
+    // from whoever launches the run. So an s3:// URI is allowed on awsbatch and
+    // healthomics, a local path (a `file:` URI included, as Nextflow reads it)
+    // only on the local target, and any other scheme only when allowRemote
+    // (params.mro2nf_allow_remote_inputs) is true. The error names the input and
+    // the scheme but not the value, which may carry a credential.
+    static String entryFile(String input, Object value, String target, Object allowRemote) {
+        if (!(value instanceof CharSequence)) {
+            String kind = value == null ? 'null' : value.getClass().getSimpleName()
+            throw new IllegalArgumentException("entry input '${input}': a file value must be a string, got ${kind}")
+        }
+        String s = value.toString()
+        Matcher m = URI_SCHEME.matcher(s)
+        String scheme = m.find() ? m.group(1).toLowerCase(Locale.ROOT) : 'file'
+        if (scheme == 'file') {
+            if (target == 'local') return s
+            throw new IllegalArgumentException(
+                "entry input '${input}': a local path is not allowed on target '${target}'; pass an s3:// URI")
+        }
+        if (scheme == 's3' && CLOUD_TARGETS.contains(target)) return s
+        if (allowRemoteInputs(allowRemote)) return s
+        String allowed = target == 'local' ? 'a local path' : 'an s3:// URI'
+        throw new IllegalArgumentException(
+            "entry input '${input}': scheme '${scheme}' is not allowed on target '${target}'; pass ${allowed}, " +
+            "or set params.mro2nf_allow_remote_inputs to true to fetch it")
+    }
+
+    // allowRemoteInputs reads the opt-in strictly: a command-line value arrives
+    // as the string 'true'/'false' (or Boolean true for a bare flag), and any
+    // other value is a mistake that must not silently pick either side.
+    private static boolean allowRemoteInputs(Object flag) {
+        if (flag == null || flag == Boolean.FALSE || flag == 'false') return false
+        if (flag == Boolean.TRUE || flag == 'true') return true
+        throw new IllegalArgumentException("params.mro2nf_allow_remote_inputs must be true or false, got '${flag}'")
     }
 }
