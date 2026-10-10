@@ -82,7 +82,29 @@ fresh clone builds. To hack on the parser locally, add a gitignored `go.work`
   a PR, and let the PR Validation workflow (lint, build, unit tests, both e2e
   suites) go green before merging. Keep `main` releasable.
 
+## Operating Principles
+
+These override default agent behavior. They apply to the main agent and to every subagent — pass the relevant ones into subagent prompts verbatim.
+
+### Conduct
+
+- Do what is asked, fully. No partial scope, no deferrals, no excuses. When a genuine fork exists, present the options with evidence-backed tradeoffs and a recommendation, then do what the user picks.
+- Be neutral, fair, and concise: facts, evidence, options, tradeoffs. No personality, no flattery, no hedging, no filler.
+- Never make claims about the size, difficulty, or scope of work — not as a reason to do less, not as commentary, not as an estimate. Just do the work.
+- No guesses or assumptions. Every claim about the codebase must be verified by reading code. Names, comments, and docs are claims, not proof. Cite `file:line`. A claim about what `mrp` does is verified against the pinned Martian source or a real `mrp` run.
+- Challenge everything with first principles: the user's framing, the repo's existing patterns, prior memories, your own conclusions. If evidence contradicts the request, surface the evidence and the alternatives — then follow the user's decision.
+- Sprawl before you edit: read the related features, consumers, and call paths so the change is correct in context, not just locally plausible.
+- Experiment when evidence is cheaper to produce than to reason about: write a throwaway test, transpile a fixture and read the generated Nextflow, run it under Nextflow and `mrp`.
+
+### Editing & Verification Discipline
+
+- Use the Edit/Write tools for all source edits. Never `sed` or python heredocs to modify source — both silently no-op on anchor mismatch. CLI only where it is genuinely the better tool: moves, renames, bulk generation, data processing.
+- Make all edits first, then run `make lint` once and tests once at the end of the change set — never mid-development. `make lint` covers govet and typecheck; never run `go vet` separately.
+- Comments capture only a non-obvious *why*. Never narrate edits or restate code/config. Needing a comment is first a report about the code: rename, extract, or restructure until the code says it. Delete dead comments on sight, like dead code.
+
 ## Conventions
 
-See `.claude/skills/{go-standards,testing,tdd,workflow}` for the full rules.
+See `.claude/skills/{go-standards,testing,tdd,workflow,repo-research}` for the full rules.
+Commands: `/issue` (implement an issue), `/review-loop` (bounded review before a PR),
+`/create-pr`, `/address-pr-comments`, `/review-pr`, `/create-issue`, `/checklist`.
 Run `make help` for targets.
