@@ -5,7 +5,8 @@ package e2e
 // True differential test (port of mrp_diff.sh): run each fixture through REAL
 // Martian (mrp) AND the transpiled Nextflow, then compare the published outs/
 // tree — the set of output file paths relative to the outs dir plus their
-// contents — and the (path-normalized) _outs JSON. This validates mre's
+// contents — the (path-normalized) _outs JSON, and every stage invocation's
+// _args/_outs (abidiff_test.go). This validates mre's
 // publish layout and the whole transpile+runtime path against Martian itself,
 // not a hand-written golden. Anchor fixtures additionally run -native (and
 // -native -native-runner) Nextflow legs against the same mrp pipestance
@@ -64,8 +65,12 @@ func runMrp(t *testing.T, bin, fixture, tmp string) {
 		}
 	}
 
+	// --vdrmode=disable keeps intermediate stage files, which the stage-ABI diff
+	// hashes through the paths in each invocation's _args/_outs; mrp's default
+	// rolling VDR deletes them once their consumers finish. Preflight stages run
+	// (no --nopreflight) because mro2nf runs them, so their invocations pair up.
 	cmd := exec.Command(filepath.Join(bin, "mrp"), filepath.Join(dir, "pipeline.mro"), "mrp",
-		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--nopreflight")
+		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode=disable")
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "MROPATH="+dir)
 
@@ -305,7 +310,7 @@ func TestMrpDiff(t *testing.T) {
 				extra = append(extra, "-mrjob", mrjob)
 			}
 
-			diffNextflow(t, tc.name, tmp, extra)
+			compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, extra))
 
 			// The extra legs are Nextflow-only: each re-transpiles and re-runs
 			// against the pipestance the default leg's runMrp already produced,
@@ -313,10 +318,12 @@ func TestMrpDiff(t *testing.T) {
 			if tc.native {
 				t.Run("native", func(t *testing.T) {
 					t.Parallel()
-					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native"))
+					compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native")))
 				})
 			}
 
+			// No stage-ABI diff here: the runner calls the stage functions in-process
+			// and writes no _args/_outs, so there is no adapter ABI to compare.
 			if tc.runner {
 				t.Run("native_runner", func(t *testing.T) {
 					t.Parallel()
@@ -331,7 +338,7 @@ func TestMrpDiff(t *testing.T) {
 			if tc.inline {
 				t.Run("noinline", func(t *testing.T) {
 					t.Parallel()
-					diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false"))
+					compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
 				})
 			}
 		})
@@ -339,9 +346,9 @@ func TestMrpDiff(t *testing.T) {
 }
 
 // diffNextflow transpiles a fixture with the given flags, runs the generated
-// project under Nextflow, and diffs its published tree + _outs JSON against
-// the mrp pipestance at <tmp>/mrp.
-func diffNextflow(t *testing.T, fixture, tmp string, flags []string) {
+// project under Nextflow, diffs its published tree + _outs JSON against the mrp
+// pipestance at <tmp>/mrp, and returns the project dir.
+func diffNextflow(t *testing.T, fixture, tmp string, flags []string) string {
 	t.Helper()
 
 	proj := transpile(t, fixture, flags...)
@@ -351,6 +358,34 @@ func diffNextflow(t *testing.T, fixture, tmp string, flags []string) {
 	}
 
 	compareMrpToNextflow(t, tmp, proj)
+
+	return proj
+}
+
+// compareStageABI requires every stage phase's normalized _args and _outs to
+// match between the mrp pipestance and the Nextflow work dir (#348), less the
+// known divergences in divergences.json.
+func compareStageABI(t *testing.T, tmp, proj string) {
+	t.Helper()
+
+	divs, err := loadDivergences(filepath.Join(root, "test", "e2e", "divergences.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mrpInvs, err := collectMrpInvocations(filepath.Join(tmp, "mrp"), divs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nfInvs, err := collectNextflowInvocations(proj, divs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, r := range diffABI(mrpInvs, nfInvs) {
+		t.Errorf("stage ABI differs from mrp: %s", r)
+	}
 }
 
 // compareMrpToNextflow diffs the published file tree (paths + contents) and
