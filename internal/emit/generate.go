@@ -44,30 +44,36 @@ type genCtx struct {
 // phase through `mre` + the Martian adapter (-shell); under -native-runner a
 // Python stage instead execs the embedded run_stage.py directly (#79) — no
 // martian_shell.py adapter and no mre broker on the stage-execution hop. The
-// runner accepts the identical flag tail every call site appends (and the
-// -vmemgb/-monitor suffixes below), so this branch is the only emitter change.
-func (g genCtx) stageCmd(phase string, s *ir.Stage, vmemExpr string) string {
-	cmd := g.stageHead(phase, s)
+// runner accepts the identical flag tail, so this branch is the only emitter
+// change.
+func (g genCtx) stageCmd(phase string, s *ir.Stage) string {
+	return g.stageHead(phase, s) + g.resourceFlags(phase, s)
+}
+
+// resourceFlags renders the resources a phase reports to its stage (_args,
+// _jobinfo) and enforces under -monitor. They are kept apart from the
+// scheduler request (stageDirectives), which only sizes the task.
+func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
+	flags := " -threads ${task.cpus} -memgb ${task.memory.toGiga()}"
 
 	// A declared `using(vmem_gb)` is passed so the shim's --monitor caps virtual
 	// memory (and reports it in _jobinfo) at the declared value instead of the
 	// memory-derived default. A per-chunk __vmem_gb still wins for main (it
-	// arrives in the chunk def); a split-returned join override refines it via
-	// vmemExpr. When no vmem_gb is declared, vmemExpr is empty and the shim
-	// derives vmem from memory as before.
-	if vmemExpr != "" {
-		cmd += " -vmemgb " + vmemExpr
+	// arrives in the chunk def); a split-returned join override refines it. When
+	// no vmem_gb is declared the shim derives vmem from memory.
+	if v := vmemFlag(s, phase); v != "" {
+		flags += " -vmemgb " + v
 	}
 
 	if g.monitor {
-		cmd += " -monitor"
+		flags += " -monitor"
 	}
 
 	if g.confine {
-		cmd += " -confine"
+		flags += " -confine"
 	}
 
-	return cmd
+	return flags
 }
 
 // stageHead renders the phase invocation up to the shared flag tail: the
@@ -348,7 +354,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 }
 
 func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
-	base := g.stageCmd("main", s, vmemFlag(s, "main"))
+	base := g.stageCmd("main", s)
 
 	// The fork-keyed variants are only ever invoked for a stage reachable under a
 	// map call; for any other stage they are dead process definitions, so emit
@@ -386,7 +392,7 @@ func genSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx) {
     %[6]s
   script:
     """
-    %[3]s -args args%[4]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[3]s -args args%[4]s -work . -o outs
     """
 }
 
@@ -404,8 +410,8 @@ workflow wf_%[1]s {
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
-	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
-	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
+	splitCmd := g.stageCmd("split", s)
+	joinCmd := g.stageCmd("join", s)
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
 %[2]s
@@ -418,7 +424,7 @@ func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
     path 'chunk_*', emit: chunks, type: 'dir', optional: true
   script:
     """
-    %[3]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[6]s
+    %[3]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir .%[6]s
     """
 }
 
@@ -431,7 +437,7 @@ process %[1]s_MAIN {
     path "out_${chunk.baseName}", type: 'dir'
   script:
     """
-    %[4]s -args args -chunk ${chunk}%[7]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
+    %[4]s -args args -chunk ${chunk}%[7]s -work . -o out_${chunk.baseName}
     """
 }
 
@@ -448,7 +454,7 @@ process %[1]s_JOIN {
     %[13]s
   script:
     """
-    %[5]s -args args %[14]s%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[5]s -args args %[14]s%[8]s -work . -o outs
     """
 }
 
@@ -1176,7 +1182,7 @@ func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink
 	for i, link := range chain {
 		fmt.Fprintf(&specInputs, "    path 'spec_%d.json'\n", i)
 
-		base := g.stageCmd("main", link.stage, vmemFlag(link.stage, "main"))
+		base := g.stageCmd("main", link.stage)
 
 		inputs := ""
 		if i > 0 {
@@ -1190,7 +1196,7 @@ func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink
 
 		fmt.Fprintf(&script, "    '%s' bind -spec 'spec_%d.json' -pipeargs pipeargs%s -o args_%d%s\n",
 			g.mre, i, inputs, i, g.producerArgs(link.call.Callable, types.RoleIn))
-		fmt.Fprintf(&script, "    %s -args args_%d%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o %s\n",
+		fmt.Fprintf(&script, "    %s -args args_%d%s -work . -o %s\n",
 			base, i, g.producerArgs(link.call.Callable, types.RoleMainOut), outVar)
 	}
 
@@ -1322,7 +1328,7 @@ func fusedSplitCallArgsPa(bindings []ir.Binding, pa string) string {
 // defs/resources so the aliased MAIN/JOIN can consume them.
 func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg := bindInputs(refCalls(c.Bindings))
-	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
+	splitCmd := g.stageCmd("split", s)
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
@@ -1335,7 +1341,7 @@ func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.
   script:
     """
     '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
-    %[6]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[9]s
+    %[6]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir .%[9]s
     """
 }
 
@@ -1392,7 +1398,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 // merge runs first in the same task (#76).
 func genFusedStageProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
-	base := g.stageCmd("main", s, vmemFlag(s, "main"))
+	base := g.stageCmd("main", s)
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
@@ -1402,7 +1408,7 @@ func genFusedStageProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, 
   script:
     """
 %[10]s    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
-    %[6]s -args args%[9]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[6]s -args args%[9]s -work . -o outs
     """
 }
 

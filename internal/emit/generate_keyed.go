@@ -111,7 +111,7 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 // wiring change.
 func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg := keyedInputs(refCalls(c.Bindings))
-	main := g.stageCmd("main", s, vmemFlag(s, "main"))
+	main := g.stageCmd("main", s)
 
 	fmt.Fprintf(b, `process %[1]s_K {
 %[2]s
@@ -121,7 +121,7 @@ func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s
   script:
     """
     '%[4]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[5]s -o args%[6]s
-    %[7]s -args args%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[7]s -args args%[8]s -work . -o outs__${key}
     """
 }
 
@@ -551,8 +551,8 @@ func boolKey(b bool) string {
 // processes: every channel item is tuple(key, ...), so chunks and joins stay
 // partitioned by fork. Outputs are named by key so the merge orders them.
 func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
-	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
-	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
+	splitCmd := g.stageCmd("split", s)
+	joinCmd := g.stageCmd("join", s)
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT_K {
 %[2]s
@@ -565,7 +565,7 @@ func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base stri
     tuple val(key), path('chunk_*', type: 'dir'), emit: chunks, optional: true
   script:
     """
-    %[3]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[4]s
+    %[3]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir .%[4]s
     """
 }
 
@@ -578,7 +578,7 @@ process %[1]s_MAIN_K {
     tuple val(key), path("out_${chunk.baseName}", type: 'dir')
   script:
     """
-    %[5]s -args ${args} -chunk ${chunk}%[7]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
+    %[5]s -args ${args} -chunk ${chunk}%[7]s -work . -o out_${chunk.baseName}
     """
 }
 
@@ -591,7 +591,7 @@ process %[1]s_JOIN_K {
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[6]s -args ${args} %[11]s%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[6]s -args ${args} %[11]s%[8]s -work . -o outs__${key}
     """
 }
 
@@ -649,7 +649,7 @@ func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx)
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[3]s -args ${args}%[4]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[3]s -args ${args}%[4]s -work . -o outs__${key}
     """
 }
 

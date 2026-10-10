@@ -542,7 +542,7 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		"path 'joinres.json', emit: joinres",
 		"-joinres joinres.json",
 		// the split's own _jobinfo is now accurate (passes its allocation)
-		"-work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}",
+		"-threads ${task.cpus} -memgb ${task.memory.toGiga()} -args args -work . -o chunks.json -joinres joinres.json -chunkdir .",
 		// JOIN provisions from the override, falling back to the stage default
 		"cpus { def t = Math.abs((join?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : 1 }",
 		`memory { def m = Math.abs((join?.mem_gb ?: 0) as double); m = m > 0 ? m : 1; (m * task.attempt) + ' GB' }`,

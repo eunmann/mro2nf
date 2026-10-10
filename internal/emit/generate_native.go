@@ -22,8 +22,8 @@ func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 	// full-collection flag forkbind rejects alongside -elementfile.
 	forkbind := fmt.Sprintf("'%s' forkbind -spec 'spec.json' -pipeargs pipeargs%s", g.mre, arg)
 	forkbindAll := fmt.Sprintf("%s -mapmode %s", forkbind, mapModeArg(c))
-	main := fmt.Sprintf("%s -args fargs%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}",
-		g.stageCmd("main", s, vmemFlag(s, "main")),
+	main := fmt.Sprintf("%s -args fargs%s -work . -o outs__${key}",
+		g.stageCmd("main", s),
 		g.producerArgs(c.Callable, types.RoleMainOut))
 
 	return fmt.Sprintf(`  script:
