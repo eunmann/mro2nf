@@ -425,7 +425,7 @@ func assertPublishedTreeExact(t *testing.T, resultsDir, goldenPath string) {
 	assertPublishedLeaves(t, resultsDir, goldenPath)
 
 	want := slices.Compact(slices.Sorted(slices.Values(goldenStringLeaves(t, goldenPath))))
-	got := slices.Sorted(maps.Keys(hashTree(t, resultsDir, "pipeline_outs.json", "manifest.json.gz")))
+	got := slices.Sorted(maps.Keys(hashTree(t, resultsDir, nfResultsMeta...)))
 
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("published results/ file set != golden leaf set (-want +got):\n%s", diff)
