@@ -41,7 +41,7 @@ func TestMarkFilesPreservesExtension(t *testing.T) {
 
 	params := []ir.Param{{Name: "f", BaseType: "bincode", IsFile: true}}
 	bundle := filepath.Join(dir, "bundle")
-	if err := shim.WriteBundle(bundle, map[string]any{"f": src}, params, fileTable()); err != nil {
+	if err := shim.WriteBundle(bundle, map[string]any{"f": src}, params, fileTable(), nil); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -84,7 +84,7 @@ func TestBundleRoundTrip(t *testing.T) {
 	payload := map[string]any{"f": src, "n": float64(7)}
 
 	bundle := filepath.Join(dir, "bundle")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable()); err != nil {
+	if err := shim.WriteBundle(bundle, payload, params, fileTable(), nil); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestMarkFilesDirLeaf(t *testing.T) {
 	params := []ir.Param{{Name: "d", BaseType: "file", IsFile: true}}
 	payload := map[string]any{"d": srcDir}
 
-	marked, err := shim.MarkFiles(dir, payload, params, fileTable())
+	marked, err := shim.MarkFiles(dir, payload, params, fileTable(), nil)
 	if err != nil {
 		t.Fatalf("MarkFiles: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
 	}
 
 	bundle := filepath.Join(dir, "bundle")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable()); err != nil {
+	if err := shim.WriteBundle(bundle, payload, params, fileTable(), nil); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -326,7 +326,7 @@ func TestBundleNestedStructFile(t *testing.T) {
 	params := []ir.Param{{Name: "c", BaseType: "Cfg"}}
 
 	bundle := filepath.Join(dir, "b")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable()); err != nil {
+	if err := shim.WriteBundle(bundle, payload, params, fileTable(), nil); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -370,7 +370,7 @@ func TestBundleMissingFileKeepsPath(t *testing.T) {
 	}
 	payload := map[string]any{"f": missing, "n": float64(3)}
 
-	marked, err := shim.MarkFiles(dir, payload, params, fileTable())
+	marked, err := shim.MarkFiles(dir, payload, params, fileTable(), nil)
 	if err != nil {
 		t.Fatalf("MarkFiles must not error on an absent declared output: %v", err)
 	}
@@ -543,7 +543,7 @@ func TestMarkFilesDanglingSymlink(t *testing.T) {
 	}
 
 	params := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
-	marked, err := shim.MarkFiles(dir, map[string]any{"f": dangling}, params, fileTable())
+	marked, err := shim.MarkFiles(dir, map[string]any{"f": dangling}, params, fileTable(), nil)
 	if err != nil {
 		t.Fatalf("MarkFiles must treat a dangling symlink as absent, not error: %v", err)
 	}

@@ -412,7 +412,7 @@ func writeMerged(dir string, merged json.RawMessage, prod *producer, mapFork boo
 	}
 
 	params := bumpForkDim(outParams, mapFork)
-	if err := shim.WriteBundle(dir, payload, params, man.Table()); err != nil {
+	if err := shim.WriteBundle(dir, payload, params, man.Table(), nil); err != nil {
 		return fmt.Errorf("write merged bundle %s: %w", dir, err)
 	}
 

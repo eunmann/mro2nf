@@ -40,7 +40,7 @@ func TestWriteChunkBundleStagesFilesAndPreservesResources(t *testing.T) {
 	chunkIn := []ir.Param{{Name: "f", BaseType: "txt", IsFile: true}}
 
 	bundle := filepath.Join(dir, "bundle")
-	if err := WriteChunkBundle(bundle, def, chunkIn, types.NewTable(nil)); err != nil {
+	if err := WriteChunkBundle(bundle, def, chunkIn, types.NewTable(nil), nil); err != nil {
 		t.Fatalf("WriteChunkBundle: %v", err)
 	}
 

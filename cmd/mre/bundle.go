@@ -25,6 +25,10 @@ type producer struct {
 	callable string
 	role     string
 
+	// confine is set by the stage phases, whose output bundle carries files
+	// the stage chose; it stays nil for bundles of bound or merged values.
+	confine *shim.Confinement
+
 	// manifest is loaded lazily and cached: a single mre invocation reads it
 	// from coerceInputs/write/reconstruct, and the path never changes after
 	// flag parse, so it is loaded from disk at most once.
@@ -71,7 +75,7 @@ func (p *producer) write(dir string, raw json.RawMessage) error {
 		return fmt.Errorf("write bundle %s: %w", dir, err)
 	}
 
-	if err := shim.WriteBundle(dir, payload, params, tbl); err != nil {
+	if err := shim.WriteBundle(dir, payload, params, tbl, p.confine); err != nil {
 		return fmt.Errorf("write bundle %s: %w", dir, err)
 	}
 
@@ -112,11 +116,25 @@ func (p *producer) decode(raw json.RawMessage) (map[string]any, []ir.Param, *typ
 // writeBoundBundle writes a resolved binding payload as a bundle after
 // narrowing each value to its receiving param's type, as mrp filters every
 // bound value (#239): a field the receiver does not declare, and any file leaf
-// inside it, never reaches the callee.
+// inside it, never reaches the callee. Its files are the run's own inputs, so
+// the write is unconfined.
 func writeBoundBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) error {
-	if err := shim.WriteBundle(dir, tbl.Narrow(params, payload), params, tbl); err != nil {
+	if err := shim.WriteBundle(dir, tbl.Narrow(params, payload), params, tbl, nil); err != nil {
 		return fmt.Errorf("write bound bundle %s: %w", dir, err)
 	}
+
+	return nil
+}
+
+// confineStage confines the producer's writes to the outputs of a stage phase
+// run in work.
+func (p *producer) confineStage(work, phase string) error {
+	conf, err := shim.ConfineStage(work, phase)
+	if err != nil {
+		return fmt.Errorf("confine %s outputs: %w", phase, err)
+	}
+
+	p.confine = conf
 
 	return nil
 }

@@ -571,7 +571,14 @@ Two details matter only on a real object store. Both are handled:
 - **Symlink dereference.** Nextflow stages inputs as *symlinks*. When `mre` copies
   a file leaf into a bundle, it dereferences the symlink to the real target first
   — otherwise the bundle would carry a dangling link that breaks once staged into
-  the next isolated container (`shim.CopyTree`).
+  the next isolated container (`shim.CopyTree`). For a stage's own outputs the
+  dereference is confined (`shim.Confinement`): an output, and every symlink it
+  passes through, must stay inside the task work dir, or reach a path in it
+  outside the stage's phase dir, i.e. a staged input, which is followed wherever
+  it points. An output that is, or links to, any other host file fails the task,
+  naming the output and the target. `mrp` would publish only a symlink there, so
+  copying the target into the bundle would publish and upload a file the stage
+  was never given.
 
 ---
 

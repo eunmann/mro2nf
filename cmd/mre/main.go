@@ -177,18 +177,24 @@ func runSplit(ctx context.Context, argv []string) error {
 	}
 
 	if *chunkDir != "" {
-		return writeChunkBundles(*chunkDir, defs, prod)
+		return writeChunkBundles(*chunkDir, cf.work, defs, prod)
 	}
 
 	return nil
 }
 
 // writeChunkBundles writes each chunk definition as a zero-padded bundle dir so
-// a lexical sort of the names recovers chunk order downstream.
-func writeChunkBundles(dir string, defs []shim.ChunkDef, prod *producer) error {
+// a lexical sort of the names recovers chunk order downstream. The files are the
+// split's own, so they are confined to the split run in work.
+func writeChunkBundles(dir, work string, defs []shim.ChunkDef, prod *producer) error {
 	man, err := prod.manifest()
 	if err != nil {
 		return err
+	}
+
+	conf, err := shim.ConfineStage(work, "split")
+	if err != nil {
+		return fmt.Errorf("confine split outputs: %w", err)
 	}
 
 	chunkIn, err := man.Params(prod.callable, types.RoleChunkIn)
@@ -200,7 +206,7 @@ func writeChunkBundles(dir string, defs []shim.ChunkDef, prod *producer) error {
 
 	for i, def := range defs {
 		name := fmt.Sprintf(chunkDefPrefix+"%05d", i)
-		if err := shim.WriteChunkBundle(filepath.Join(dir, name), def, chunkIn, tbl); err != nil {
+		if err := shim.WriteChunkBundle(filepath.Join(dir, name), def, chunkIn, tbl, conf); err != nil {
 			return fmt.Errorf("write chunk bundle %s: %w", name, err)
 		}
 	}
@@ -264,6 +270,10 @@ func runMain(ctx context.Context, argv []string) error {
 		}
 	}
 
+	if err := prod.confineStage(cf.work, "main"); err != nil {
+		return err
+	}
+
 	if err := prod.write(cf.outFile, outs); err != nil {
 		return err
 	}
@@ -317,6 +327,10 @@ func runJoin(ctx context.Context, argv []string) error {
 
 	if err := prod.validateOuts(final); err != nil {
 		return fmt.Errorf("join: %w", err)
+	}
+
+	if err := prod.confineStage(cf.work, "join"); err != nil {
+		return err
 	}
 
 	if err := prod.write(cf.outFile, final); err != nil {

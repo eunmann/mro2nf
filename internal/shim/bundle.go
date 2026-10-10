@@ -250,9 +250,11 @@ func decodeJSON(raw json.RawMessage) (any, error) {
 
 // WriteBundle writes payload into dir as a bundle: every file leaf located by
 // params/tbl is copied into dir/f/ and replaced with a marker, then the
-// rewritten payload is written to dir/data.json.
-func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) error {
-	marked, err := MarkFiles(dir, payload, params, tbl)
+// rewritten payload is written to dir/data.json. conf confines a stage's
+// outputs; it is nil for a payload a stage did not choose (bindings, merges,
+// entry args), whose files the run was given.
+func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, conf *Confinement) error {
+	marked, err := MarkFiles(dir, payload, params, tbl, conf)
 	if err != nil {
 		return err
 	}
@@ -287,8 +289,9 @@ func writePayload(dir string, payload map[string]any) error {
 
 // WriteChunkBundle writes a chunk definition as a bundle: the chunk's args have
 // their file leaves (located via chunkIn) staged into the bundle, while the
-// resource overrides are preserved verbatim for the scheduler to read.
-func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.Table) error {
+// resource overrides are preserved verbatim for the scheduler to read. conf
+// confines the split's files as WriteBundle's does.
+func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.Table, conf *Confinement) error {
 	argsMap := make(map[string]any, len(def.Args))
 	for k, v := range def.Args {
 		dv, err := decodeJSON(v)
@@ -299,7 +302,7 @@ func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.T
 		argsMap[k] = dv
 	}
 
-	marked, err := MarkFiles(dir, argsMap, chunkIn, tbl)
+	marked, err := MarkFiles(dir, argsMap, chunkIn, tbl, conf)
 	if err != nil {
 		return err
 	}
@@ -311,8 +314,8 @@ func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.T
 // dir/f/, replacing each with a bundle-relative marker, and returns the
 // rewritten payload. Names are sequenced so distinct leaves never collide.
 // Every other string that begins with the reserved prefix is escaped, a file
-// leaf naming no file included.
-func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) (map[string]any, error) {
+// leaf naming no file included. A non-nil conf confines the leaves' files.
+func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, conf *Confinement) (map[string]any, error) {
 	escaped := make(map[string]any, len(payload))
 	for k, v := range payload {
 		ev, err := escapeValue(v)
@@ -365,7 +368,7 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 			return "", fmt.Errorf("create files dir: %w", err)
 		}
 
-		if err := CopyTree(src, dst); err != nil {
+		if err := copyTree(src, dst, make(map[dirID]struct{}), conf); err != nil {
 			return "", err
 		}
 
@@ -382,9 +385,40 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 
 // CopyTree links or copies src to dst, recursing into directories (Martian file
 // outputs may be directories). It hard-links files when possible (same device)
-// for speed, falling back to a byte copy.
+// for speed, falling back to a byte copy. It follows symlinks to any target,
+// so it is for trees the run was given, not a stage's outputs.
 func CopyTree(src, dst string) error {
-	return copyTree(src, dst, make(map[dirID]struct{}))
+	return copyTree(src, dst, make(map[dirID]struct{}), nil)
+}
+
+// resolveSymlink returns src, or its real target when src is a symlink, and ""
+// for a dangling symlink. Nextflow stages inputs as symlinks, and link(2) does
+// not follow them — hard-linking the symlink would leave a dangling link once
+// the bundle is staged into another isolated task (AWS Batch + S3 /
+// HealthOmics), where the original target is absent. A dangling symlink inside
+// a copied directory is treated as absent — the same way MarkFiles' top-level
+// guard does (os.Stat -> IsNotExist -> keep the path) — rather than aborting
+// the whole bundle.
+func resolveSymlink(src string) (string, error) {
+	lst, err := os.Lstat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat %s: %w", src, err)
+	}
+
+	if lst.Mode()&os.ModeSymlink == 0 {
+		return src, nil
+	}
+
+	resolved, err := filepath.EvalSymlinks(src)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %s: %w", src, err)
+	}
+
+	return resolved, nil
 }
 
 // dirID identifies a directory by (device, inode) — the same identity os.SameFile
@@ -420,26 +454,26 @@ func enterDir(dir os.FileInfo, ancestors map[dirID]struct{}) (func(), bool) {
 // of its own ancestors would otherwise recurse until ENAMETOOLONG, duplicating
 // the tree on every pass; catching the repeat (dev, inode) bounds the recursion
 // to the finite number of distinct directories reachable once.
-func copyTree(src, dst string, ancestors map[dirID]struct{}) error {
-	// Resolve a symlinked source to its real target first. Nextflow stages inputs
-	// as symlinks, and link(2) does not follow them — hard-linking the symlink
-	// would leave a dangling link once the bundle is staged into another isolated
-	// task (AWS Batch + S3 / HealthOmics), where the original target is absent.
-	if lst, err := os.Lstat(src); err == nil && lst.Mode()&os.ModeSymlink != 0 {
-		resolved, err := filepath.EvalSymlinks(src)
-		if err != nil {
-			// A dangling symlink inside a copied directory: treat it as absent —
-			// the same way MarkFiles' top-level guard does (os.Stat -> IsNotExist
-			// -> keep the path) — rather than aborting the whole bundle.
-			if os.IsNotExist(err) {
-				return nil
-			}
+// A non-nil conf confines a stage's own files (see Confinement); it is dropped
+// below a staged input, whose tree is copied as is.
+func copyTree(src, dst string, ancestors map[dirID]struct{}, conf *Confinement) error {
+	resolved, err := resolveSymlink(src)
+	if err != nil || resolved == "" {
+		return err
+	}
 
-			return fmt.Errorf("resolve symlink %s: %w", src, err)
+	if conf != nil {
+		staged, err := conf.admit(src)
+		if err != nil {
+			return err
 		}
 
-		src = resolved
+		if staged {
+			conf = nil
+		}
 	}
+
+	src = resolved
 
 	info, err := os.Stat(src)
 	if err != nil {
@@ -454,7 +488,7 @@ func copyTree(src, dst string, ancestors map[dirID]struct{}) error {
 
 		defer release()
 
-		return copyDir(src, dst, info, ancestors)
+		return copyDir(src, dst, info, ancestors, conf)
 	}
 
 	if err := os.Link(src, dst); err == nil {
@@ -472,7 +506,7 @@ func copyTree(src, dst string, ancestors map[dirID]struct{}) error {
 	return copyFileContents(src, dst, info)
 }
 
-func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}) error {
+func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}, conf *Confinement) error {
 	// Create the destination writable regardless of the source's mode, then
 	// restore the source mode after populating: a read-only source directory
 	// (e.g. 0555) must still admit its children being written into the copy.
@@ -486,7 +520,7 @@ func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}) er
 	}
 
 	for _, e := range entries {
-		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors); err != nil {
+		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors, conf); err != nil {
 			return err
 		}
 	}

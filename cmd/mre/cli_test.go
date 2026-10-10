@@ -23,7 +23,7 @@ import (
 func writeTestBundle(t *testing.T, dir string, payload map[string]any) {
 	t.Helper()
 
-	if err := shim.WriteBundle(dir, payload, nil, types.NewTable(nil)); err != nil {
+	if err := shim.WriteBundle(dir, payload, nil, types.NewTable(nil), nil); err != nil {
 		t.Fatalf("write bundle %s: %v", dir, err)
 	}
 }
@@ -335,7 +335,7 @@ func TestReadChunkDataResolvesFileLeaves(t *testing.T) {
 		"ref":      json.RawMessage(`"` + src + `"`),
 	}}
 	tbl := types.NewTable(nil)
-	if err := shim.WriteChunkBundle(bundle, def, []ir.Param{{Name: "ref", BaseType: "bin", IsFile: true}}, tbl); err != nil {
+	if err := shim.WriteChunkBundle(bundle, def, []ir.Param{{Name: "ref", BaseType: "bin", IsFile: true}}, tbl, nil); err != nil {
 		t.Fatalf("WriteChunkBundle: %v", err)
 	}
 

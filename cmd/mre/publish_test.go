@@ -178,7 +178,7 @@ func TestPublishKeepsMarkerShapedStrings(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "outs")
-	if err := shim.WriteBundle(dir, outs, params, types.NewTable(nil)); err != nil {
+	if err := shim.WriteBundle(dir, outs, params, types.NewTable(nil), nil); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 

@@ -247,7 +247,7 @@ class WalkAndMarkersTest(unittest.TestCase):
             "passthru": src["a"],  # no matching param: untouched
         }
         bdir = os.path.join(tmp, "bundle")
-        rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS)
+        rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS, None)
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
         # Ordinals follow param order, then sorted map keys (aa before zz); each
@@ -295,7 +295,7 @@ class WalkAndMarkersTest(unittest.TestCase):
             "extra": "@mre:file:f/L0000.txt",
         }
         bdir = os.path.join(tmp, "bundle")
-        rs.write_bundle(bdir, payload, params, {})
+        rs.write_bundle(bdir, payload, params, {}, None)
         want = dict(payload)
         want["made"] = os.path.join(os.path.abspath(bdir), "f", "L0000.txt")
         self.assertEqual(rs.read_bundle(bdir), want)
@@ -322,7 +322,7 @@ class WalkAndMarkersTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         payload = {"arr": [os.path.join(tmp, "nope"), ""]}
         bdir = os.path.join(tmp, "bundle")
-        rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS)
+        rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS, None)
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
         self.assertEqual(data["arr"], [os.path.join(tmp, "nope"), ""])
@@ -335,12 +335,86 @@ class WalkAndMarkersTest(unittest.TestCase):
         with open(os.path.join(d, "x"), "w") as fh:
             fh.write("x")
         bdir = os.path.join(tmp, "bundle")
-        rs.write_bundle(bdir, {"arr": [d]}, self.PARAMS, self.STRUCTS)
+        rs.write_bundle(bdir, {"arr": [d]}, self.PARAMS, self.STRUCTS, None)
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
         self.assertEqual(data["arr"], ["@mre:dir:f/L0000"])
         with open(os.path.join(bdir, "f", "L0000", "x")) as fh:
             self.assertEqual(fh.read(), "x")
+
+
+class ConfinementTest(unittest.TestCase):
+    """#332: copy_tree's confinement of a stage's outputs (ports
+    internal/shim/confine.go)."""
+
+    PARAMS = [{"name": "out", "baseType": "txt", "arrayDim": 0,
+               "mapDim": 0, "isFile": True}]
+
+    def setUp(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        self.work = os.path.join(root, "work")
+        self.files = os.path.join(self.work, "main", "files")
+        self.host = os.path.join(root, "host", "outside.txt")
+        self.host_dir = os.path.join(root, "host", "refdir")
+        upstream = os.path.join(root, "upstream")
+        staged = os.path.join(self.work, "args", "f")
+        for d in (self.files, staged, self.host_dir,
+                  os.path.join(upstream, "dir")):
+            os.makedirs(d)
+        self._write(self.host, "host")
+        self._write(os.path.join(upstream, "real.txt"), "upstream")
+        self._write(os.path.join(upstream, "dir", "y.txt"), "upstream dir")
+        os.symlink(self.host, os.path.join(upstream, "dir", "host"))
+        self.staged_file = os.path.join(staged, "L0000.txt")
+        self.staged_dir = os.path.join(staged, "L0001")
+        os.symlink(os.path.join(upstream, "real.txt"), self.staged_file)
+        os.symlink(os.path.join(upstream, "dir"), self.staged_dir)
+
+    @staticmethod
+    def _write(path, content):
+        with open(path, "w") as fh:
+            fh.write(content)
+
+    def _mark(self, value):
+        bundle = tempfile.mkdtemp(dir=self.work)
+        conf = rs.Confinement(self.work, "main")
+        marked = rs.mark_files(bundle, {"out": value}, self.PARAMS, {}, conf)
+        rel, _, ok = rs.cut_marker(marked["out"])
+        self.assertTrue(ok, marked["out"])
+        return os.path.join(bundle, rel)
+
+    def test_refuses_out_of_tree_targets(self):
+        own_dir = os.path.join(self.files, "own_dir")
+        os.mkdir(own_dir)
+        os.symlink(self.host, os.path.join(own_dir, "child"))
+        os.symlink(self.host, os.path.join(self.files, "to_host"))
+        os.symlink(self.host_dir, os.path.join(self.files, "to_host_dir"))
+        host_root = os.path.realpath(os.path.dirname(self.host))
+        for value in (os.path.join(self.files, "to_host"),
+                      os.path.join(self.files, "to_host_dir"),
+                      self.host, own_dir):
+            with self.subTest(value=value):
+                with self.assertRaises(rs.RunnerError) as ctx:
+                    self._mark(value)
+                msg = str(ctx.exception)
+                self.assertIn("outside the task work dir", msg)
+                self.assertIn("param out", msg)
+                self.assertIn(host_root, msg)
+
+    def test_admits_own_and_staged_files(self):
+        own = os.path.join(self.files, "own.txt")
+        self._write(own, "own")
+        rel_fwd = os.path.join(self.files, "rel_fwd")
+        os.symlink(os.path.join("..", "..", "args", "f", "L0000.txt"), rel_fwd)
+        cases = [(own, "", "own"), (self.staged_file, "", "upstream"),
+                 (rel_fwd, "", "upstream"),
+                 (self.staged_dir, "y.txt", "upstream dir")]
+        for value, rel, want in cases:
+            with self.subTest(value=value):
+                leaf = self._mark(value)
+                with open(os.path.join(leaf, rel) if rel else leaf) as fh:
+                    self.assertEqual(fh.read(), want)
 
 
 class CoercionTest(unittest.TestCase):

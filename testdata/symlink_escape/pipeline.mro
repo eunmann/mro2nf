@@ -1,0 +1,31 @@
+# #332 failure-path fixture: the stage creates its file output as a symlink to
+# a file outside its task work dir (its own source file, standing in for any
+# host file it was never given). mrp publishes that symlink and copies nothing;
+# staging the target into a bundle would instead publish and upload the host
+# file, so the run must fail loudly, naming the output and the target.
+# Exercised by test/e2e/failure_test.go (behavioral; no mrp golden).
+filetype txt;
+
+stage LINK_OUT(
+    in  int x,
+    out txt linked  "linked.txt",
+    src py  "stages/link_out",
+)
+
+pipeline SE(
+    in  int x,
+    out txt linked,
+)
+{
+    call LINK_OUT(
+        x = self.x,
+    )
+
+    return (
+        linked = LINK_OUT.linked,
+    )
+}
+
+call SE(
+    x = 1,
+)

@@ -70,6 +70,43 @@ func TestAssertTerminatesWithoutRetry(t *testing.T) {
 	}
 }
 
+// TestStageOutputLinkOutsideWorkFails guards #332: a stage whose file output is
+// a symlink to a file outside its task work dir must fail the run, naming the
+// output and the target, under both runners, rather than staging the target
+// into its bundle and publishing it.
+func TestStageOutputLinkOutsideWorkFails(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	for name, flags := range map[string][]string{"mre": nil, "native_runner": {"-native-runner"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, "symlink_escape", flags...)
+
+			if err := runNextflow(t, proj); err == nil {
+				t.Fatal("run succeeded; an output linked outside the work dir must fail it")
+			}
+
+			log, err := os.ReadFile(filepath.Join(proj, "run.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !strings.Contains(string(log), "outside the task work dir") ||
+				!strings.Contains(string(log), "linked") ||
+				!strings.Contains(string(log), filepath.Join("stages", "link_out", "__init__.py")) {
+				t.Errorf("run log must name the output and its target:\n%s", tail(log, 40))
+			}
+
+			if fileExists(filepath.Join(proj, "results", "linked.txt")) {
+				t.Error("the link target was published")
+			}
+		})
+	}
+}
+
 // TestOrdinaryFailureRetriesWithEscalatedMemory: a stage that fails while its
 // allocation is 1 GB and succeeds once escalated must be retried and see
 // mem_gb == 2 — proving both the retry and the memory * task.attempt growth

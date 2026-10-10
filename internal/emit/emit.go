@@ -793,7 +793,7 @@ func writeEntryArgs(prog *ir.Program, outDir, mroDir string) error {
 		}
 	}
 
-	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), payload, params, tbl); err != nil {
+	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), payload, params, tbl, nil); err != nil {
 		return fmt.Errorf("write entry args bundle: %w", err)
 	}
 

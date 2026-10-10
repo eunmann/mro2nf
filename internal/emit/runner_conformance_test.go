@@ -63,11 +63,12 @@ func TestRunnerConformance(t *testing.T) {
 	// chunk-arg leaf as a resolvable marker, so both stacks localize it.
 	// chunks.json supplies only the count both stacks check the staged dir
 	// against.
-	joinFlags := []string{
-		"-chunksfile", filepath.Join(mreSplit, "chunks.json"),
-		"-chunkdir", env.stageJoinInputs(t, mreSplit, filepath.Join(mreMain, "outs")),
-	}
+	joinFlags := []string{"-chunksfile", filepath.Join(mreSplit, "chunks.json"), "-chunkdir", "."}
+
+	env.stageJoinInputs(t, mreSplit, filepath.Join(mreMain, "outs"))
 	mreJoin := env.runPhase(t, "mre", "join", joinFlags)
+
+	env.stageJoinInputs(t, mreSplit, filepath.Join(mreMain, "outs"))
 	pyJoin := env.runPhase(t, "py", "join", joinFlags)
 	diffDirs(t, "join", mreJoin, pyJoin)
 }
@@ -269,7 +270,7 @@ func requirePython(t *testing.T) {
 const conformanceStage = `import martian
 
 def split(args):
-    src = args.srcdir + '/chunk_src.txt'
+    src = martian.make_path('chunk_src.txt').decode()
     with open(src, 'w') as f:
         f.write('chunk-input-payload')
     return {
@@ -306,7 +307,6 @@ func newConformanceEnv(t *testing.T) *conformanceEnv {
 		Name: "CONF",
 		In: []ir.Param{
 			{Name: "value", Type: "float", BaseType: "float"},
-			{Name: "srcdir", Type: "string", BaseType: "string"},
 		},
 		Out: []ir.Param{
 			{Name: "total", Type: "float", BaseType: "float"},
@@ -393,16 +393,6 @@ func buildConformanceEnv(t *testing.T, code string, s *ir.Stage) *conformanceEnv
 		t.Fatal(err)
 	}
 
-	// srcdir is a shared scratch dir OUTSIDE both stacks' work dirs: the split
-	// writes a chunk-input file there, so the path string recorded in
-	// chunks.json is byte-identical across stacks (both runs write the same
-	// bytes to the same path) while the staged copies under each chunk bundle
-	// are what the parity diff compares.
-	srcdir := filepath.Join(root, "shared")
-	if err := os.MkdirAll(srcdir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	env.argsDir = filepath.Join(root, "args")
 	man := types.BuildManifest(prog)
 
@@ -411,8 +401,8 @@ func buildConformanceEnv(t *testing.T, code string, s *ir.Stage) *conformanceEnv
 		t.Fatal(err)
 	}
 
-	stageArgs := map[string]any{"value": 1.5, "srcdir": srcdir}
-	if err := shim.WriteBundle(env.argsDir, stageArgs, inParams, man.Table()); err != nil {
+	stageArgs := map[string]any{"value": 1.5}
+	if err := shim.WriteBundle(env.argsDir, stageArgs, inParams, man.Table(), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -427,14 +417,14 @@ func buildConformanceEnv(t *testing.T, code string, s *ir.Stage) *conformanceEnv
 	return env
 }
 
-// stageJoinInputs lays out a JOIN task dir the way Nextflow stages it: every
-// chunk_N def bundle the split wrote, plus an out_chunk_N per chunk. Each
-// chunk out links the one main bundle the test ran, since only the join's
-// parity is under test here.
-func (e *conformanceEnv) stageJoinInputs(t *testing.T, splitDir, mainOuts string) string {
+// stageJoinInputs lays out the next phase's work dir the way Nextflow stages a
+// JOIN task: every chunk_N def bundle the split wrote, plus an out_chunk_N per
+// chunk, each a symlink in the work dir. Each chunk out links the one main
+// bundle the test ran, since only the join's parity is under test here.
+func (e *conformanceEnv) stageJoinInputs(t *testing.T, splitDir, mainOuts string) {
 	t.Helper()
 
-	dir := filepath.Join(e.root, "join_inputs")
+	dir := e.workDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -454,8 +444,11 @@ func (e *conformanceEnv) stageJoinInputs(t *testing.T, splitDir, mainOuts string
 			t.Fatal(err)
 		}
 	}
+}
 
-	return dir
+// workDir is the path every phase runs in before runPhaseCode moves it aside.
+func (e *conformanceEnv) workDir() string {
+	return filepath.Join(e.root, "task")
 }
 
 // runPhase runs one stack's phase and fails the test on a non-zero exit.
@@ -472,12 +465,15 @@ func (e *conformanceEnv) runPhase(t *testing.T, stack, phase string, extra []str
 
 // runPhaseCode runs one stack's phase in a fresh work dir, returning the exit
 // code and the dir. Both stacks get the identical flag tail the emitter
-// appends (see stageCmd), differing only in the head.
+// appends (see stageCmd), differing only in the head. Every run uses the same
+// work dir path and is then moved to <stack>_<phase>, so a path a stage writes
+// in its own work dir (a split's chunk-input file, recorded verbatim in
+// chunks.json) is byte-identical across stacks.
 func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra []string) (int, string) {
 	t.Helper()
 
-	dir := filepath.Join(e.root, stack+"_"+phase)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	work := e.workDir()
+	if err := os.MkdirAll(work, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -515,13 +511,18 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 	}
 
 	cmd := exec.Command(bin, args...)
-	cmd.Dir = dir
+	cmd.Dir = work
 
 	out, err := cmd.CombinedOutput()
 	// Persist the combined output so cases can pin diagnostic-surface parity
 	// (e.g. the ASSERT line both stacks must emit), not just exit codes.
-	if werr := os.WriteFile(filepath.Join(dir, "combined.log"), out, 0o644); werr != nil {
+	if werr := os.WriteFile(filepath.Join(work, "combined.log"), out, 0o644); werr != nil {
 		t.Fatal(werr)
+	}
+
+	dir := filepath.Join(e.root, stack+"_"+phase)
+	if rerr := os.Rename(work, dir); rerr != nil {
+		t.Fatal(rerr)
 	}
 
 	if err == nil {
@@ -541,8 +542,8 @@ func (e *conformanceEnv) runPhaseCode(t *testing.T, stack, phase string, extra [
 // diffDirs byte-compares every produced-artifact file under two directories
 // (relative tree + content), skipping only the per-phase scratch dirs (split/,
 // main/, join/) that the two stacks lay out differently and that are not part of
-// the produced-artifact contract (see treeFiles). Every other file must match
-// byte-for-byte.
+// the produced-artifact contract, and the staged-input symlinks (see treeFiles).
+// Every other file must match byte-for-byte.
 func diffDirs(t *testing.T, what, a, b string) {
 	t.Helper()
 
@@ -583,14 +584,15 @@ func diffDirs(t *testing.T, what, a, b string) {
 
 // treeFiles maps the relative paths of regular files under root, skipping the
 // per-phase scratch dirs (split/, main/, join/) whose tmp contents are not
-// part of the produced-artifact contract.
+// part of the produced-artifact contract, and the symlinks stageJoinInputs
+// staged as inputs.
 func treeFiles(t *testing.T, root string) map[string]bool {
 	t.Helper()
 
 	out := map[string]bool{}
 
 	err := filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+		if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return err
 		}
 
