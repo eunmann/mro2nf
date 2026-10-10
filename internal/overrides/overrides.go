@@ -304,12 +304,7 @@ func mapField(field string, val json.RawMessage) (string, string, string, string
 		// Config-file scope uses `directive = value` (not the .nf process-body
 		// `directive value` form), so a `-c` overlay parses.
 		if base == "mem_gb" {
-			lit, err := memLiteral(n)
-			if err != nil {
-				return phase, base, "", err.Error()
-			}
-
-			return phase, base, "memory = " + lit, ""
+			return phase, base, "memory = " + memLiteral(n), ""
 		}
 
 		// cpus must be a positive integer; round a fractional (centicore) thread
@@ -573,15 +568,11 @@ func render(globalDefault []string, groups []selGroup) (string, error) {
 	return b.String(), nil
 }
 
-// memLiteral renders a GB quantity as a Nextflow memory string, without
-// scientific notation (which MemoryUnit cannot parse).
-func memLiteral(gb float64) (string, error) {
-	lit, err := emit.GroovySingleQuoted(strconv.FormatFloat(gb, 'f', -1, 64) + " GB")
-	if err != nil {
-		return "", fmt.Errorf("render memory: %w", err)
-	}
-
-	return lit, nil
+// memLiteral renders a GB quantity as a single-quoted Nextflow memory string,
+// without scientific notation (which MemoryUnit cannot parse). The literal is
+// digits, '.' and " GB" by construction, so it needs no Groovy escaping.
+func memLiteral(gb float64) string {
+	return "'" + strconv.FormatFloat(gb, 'f', -1, 64) + " GB'"
 }
 
 // keyDepth is the number of path segments in an override key; "" (the global
