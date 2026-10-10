@@ -1,0 +1,16 @@
+{
+  "divergences": [
+    {
+      "issue": 284,
+      "summary": "mro2nf stages each file leaf under an ordinal basename (L0000<ext>), so a path a stage receives in _args ends in that name where mrp passes the original basename; the extension is preserved, so received basenames are compared by extension only",
+      "file": "_args",
+      "rule": "basename-extension-only"
+    },
+    {
+      "issue": 284,
+      "summary": "the same ordinal staging reaches _outs when a phase returns a path it received, e.g. a join forwarding its chunks' file outputs; files the phase wrote in its own files dir keep full-basename comparison",
+      "file": "_outs",
+      "rule": "basename-extension-only"
+    }
+  ]
+}

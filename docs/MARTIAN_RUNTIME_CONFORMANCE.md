@@ -300,6 +300,19 @@ every output file's path (relative to the outs dir) and its content hash — and
 the path-normalized `_outs` JSON. This validates the whole transpile + runtime +
 publish path against Martian itself, not a hand-written golden.
 
+It also diffs the **stage ABI**: every split, main (per chunk and fork) and join
+that ran under `mrp` must have a twin under mro2nf with the same `_args` and
+`_outs`, and vice versa (`test/e2e/abidiff_test.go`). Invocations are matched as a
+multiset per (stage, phase), not through the task graph. Both files are
+canonicalized (sorted keys, number tokens byte-exact); an existing absolute path
+becomes its content hash (a tree hash for a directory) plus its basename, and an
+absent path under the phase's own `files` dir loses that host prefix. `mrp` runs
+with `--vdrmode=disable` so intermediate files still exist to hash. The
+`-native-runner` leg is excluded: it calls stage functions in-process and writes
+no `_args`/`_outs`. Known divergences live in `test/e2e/divergences.json`, one
+entry per open issue with the normalization rule it needs; fixing the issue means
+deleting its entry.
+
 It needs a local Martian build: set `MARTIAN_BIN` (default `~/workdir/martian/bin`,
 which holds `mrp`/`mrjob`). It skips cleanly when `mrp`, `nextflow`, `java`, or
 `python3` is absent, so CI without a Martian checkout is unaffected. Run one case

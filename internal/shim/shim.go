@@ -88,8 +88,11 @@ type Resources struct {
 	Special string  `json:"special,omitempty"`
 }
 
-// Invocation is the minimal pipeline invocation recorded in _jobinfo.
+// Invocation identifies a phase run: the minimal pipeline invocation recorded
+// in _jobinfo, plus the stage the phase runs.
 type Invocation struct {
+	// Stage is the stage (callable) name, recorded in mre's own _mre_stage file.
+	Stage   string
 	Call    string
 	Args    json.RawMessage
 	MROFile string
@@ -123,6 +126,10 @@ func RunSplit(
 	// rather than leaking the raw negative to the split's get_memory_allocation().
 	eff := resolveResources(Resources{}, res)
 	if err := writeJobInfo(meta, files, "split", eff, inv); err != nil {
+		return nil, Resources{}, err
+	}
+
+	if err := writeStageName(meta, inv.Stage); err != nil {
 		return nil, Resources{}, err
 	}
 
@@ -195,7 +202,8 @@ func RunJoin(
 	return readRaw(filepath.Join(meta, "_outs"))
 }
 
-// stageInputs writes the per-phase _args, _jobinfo, and skeleton _outs.
+// stageInputs writes the per-phase _args, _jobinfo, stage name, and skeleton
+// _outs.
 func stageInputs(
 	meta, files string, args json.RawMessage,
 	outParams []ir.Param, tbl *types.Table, res Resources, inv Invocation, phase string,
@@ -205,6 +213,10 @@ func stageInputs(
 	}
 
 	if err := writeJobInfo(meta, files, phase, res, inv); err != nil {
+		return err
+	}
+
+	if err := writeStageName(meta, inv.Stage); err != nil {
 		return err
 	}
 

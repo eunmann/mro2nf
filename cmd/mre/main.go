@@ -132,8 +132,8 @@ func (c *commonFlags) resources() shim.Resources {
 	return shim.Resources{Threads: c.threads, MemGB: c.memGB, VMemGB: c.vmemGB}
 }
 
-func (c *commonFlags) invocation(args json.RawMessage) shim.Invocation {
-	return shim.Invocation{Call: c.call, Args: args, MROFile: c.mro}
+func (c *commonFlags) invocation(stage string, args json.RawMessage) shim.Invocation {
+	return shim.Invocation{Stage: stage, Call: c.call, Args: args, MROFile: c.mro}
 }
 
 func runSplit(ctx context.Context, argv []string) error {
@@ -157,7 +157,7 @@ func runSplit(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	defs, joinRes, err := shim.RunSplit(ctx, cf.work, cf.adapter(), stageArgs, cf.resources(), cf.invocation(stageArgs))
+	defs, joinRes, err := shim.RunSplit(ctx, cf.work, cf.adapter(), stageArgs, cf.resources(), cf.invocation(prod.callable, stageArgs))
 	if err != nil {
 		return fmt.Errorf("split: %w", err)
 	}
@@ -253,7 +253,7 @@ func runMain(ctx context.Context, argv []string) error {
 	}
 
 	outs, err := shim.RunMain(ctx, cf.work, cf.adapter(), stageArgs, chunk,
-		params, man.Table(), cf.resources(), cf.invocation(stageArgs))
+		params, man.Table(), cf.resources(), cf.invocation(prod.callable, stageArgs))
 	if err != nil {
 		return fmt.Errorf("main: %w", err)
 	}
@@ -304,7 +304,7 @@ func runJoin(ctx context.Context, argv []string) error {
 	}
 
 	final, err := shim.RunJoin(ctx, cf.work, cf.adapter(), stageArgs, defs, outs,
-		params, man.Table(), cf.resources(), cf.invocation(stageArgs))
+		params, man.Table(), cf.resources(), cf.invocation(prod.callable, stageArgs))
 	if err != nil {
 		return fmt.Errorf("join: %w", err)
 	}
