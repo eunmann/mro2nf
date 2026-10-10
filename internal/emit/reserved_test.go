@@ -2,6 +2,7 @@ package emit
 
 import (
 	"errors"
+	"regexp"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/apperror"
@@ -39,6 +40,9 @@ func TestCheckReservedEntryNames(t *testing.T) {
 		{"container reserved on container target", "container", TargetAWSBatch, true},
 		{"container free on local", "container", TargetLocal, false},
 		{"aws_queue free on healthomics", "aws_queue", TargetHealthOmics, false},
+		{"max_cpus reserved on local", "max_cpus", TargetLocal, true},
+		{"max_memory reserved on local", "max_memory", TargetLocal, true},
+		{"max_cpus free on awsbatch", "max_cpus", TargetAWSBatch, false},
 		{"ordinary name free", "samples", TargetAWSBatch, false},
 	}
 
@@ -53,5 +57,27 @@ func TestCheckReservedEntryNames(t *testing.T) {
 				t.Errorf("input %q on %q: err = %v, want nil", tc.input, tc.target, err)
 			}
 		})
+	}
+}
+
+// TestReservedParamsCoverConfig guards #244: every param the rendered
+// nextflow.config assigns for a target must be in that target's reserved set,
+// so the hand-kept list cannot drift from the config again.
+func TestReservedParamsCoverConfig(t *testing.T) {
+	assign := regexp.MustCompile(`(?m)^\s*params\.(\w+)\s*=`)
+
+	for _, target := range []Target{TargetLocal, TargetAWSBatch, TargetHealthOmics} {
+		cfg, err := configFile("img", target)
+		if err != nil {
+			t.Fatalf("render %s config: %v", target, err)
+		}
+
+		reserved := reservedParams(target)
+
+		for _, m := range assign.FindAllStringSubmatch(cfg, -1) {
+			if !reserved[m[1]] {
+				t.Errorf("%s config assigns params.%s, which reservedParams(%s) omits", target, m[1], target)
+			}
+		}
 	}
 }
