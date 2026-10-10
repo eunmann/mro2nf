@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // goldenTreeDir is where, relative to the fixture dir, the mrp-published tree
@@ -63,6 +65,25 @@ func recordableFixtures() []string {
 	}
 
 	return fixtures
+}
+
+// assertGoldenTree requires a run's published results/ tree to equal the
+// mrp-recorded expected/outs/ of golden case name: no file missing, none
+// extra, every file's sha256 equal, and the same empty directories.
+func assertGoldenTree(t *testing.T, name, fixture, proj string) {
+	t.Helper()
+
+	if _, jsonOnly := jsonOnlyGoldens[name]; jsonOnly {
+		return
+	}
+
+	want := hashTree(t, filepath.Join(root, "testdata", fixture, filepath.FromSlash(goldenTreeDir)))
+	got := hashTree(t, filepath.Join(proj, "results"), nfResultsMeta...)
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("published results/ differs from mrp's recorded %s/%s (-mrp +nextflow):\n%s",
+			fixture, goldenTreeDir, diff)
+	}
 }
 
 // TestRecordGoldens rewrites every recordable fixture's expected/outs/ from a

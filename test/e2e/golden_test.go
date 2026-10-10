@@ -183,7 +183,8 @@ var goldenCases = []goldenCase{
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
 // each fixture, run it under real Nextflow, and assert the published
-// pipeline_outs.json matches the committed golden mrp output. Cases run in
+// pipeline_outs.json matches the committed golden and the published file tree
+// matches the one mrp published (assertGoldenTree). Cases run in
 // parallel because each is an independent `nextflow run` and JVM startup
 // dominates; bound the pool with go test's -parallel flag.
 func TestGolden(t *testing.T) {
@@ -209,22 +210,10 @@ func TestGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// file_min additionally verifies the published file's content.
-			if tc.name == "file_min" {
-				assertFileContent(t, filepath.Join(proj, "results", "note.txt"), "x=42")
-			}
-
 			goldenJSON(t,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(fixtureDir, tc.golden))
-
-			// file_tree additionally verifies the PHYSICAL placement of every
-			// published leaf: multi-segment rels through the layout ->
-			// PUBLISH_LEAF join, which the JSON diff above cannot see.
-			if tc.name == "file_tree" {
-				assertPublishedLeaves(t, filepath.Join(proj, "results"),
-					filepath.Join(fixtureDir, tc.golden))
-			}
+			assertGoldenTree(t, tc.name, tc.fixture, proj)
 		})
 	}
 }
