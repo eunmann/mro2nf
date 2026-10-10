@@ -1,0 +1,7 @@
+{
+    "call_arr2": "[float 3000000.0, float 1.5]",
+    "call_big2": "float 2500000.0",
+    "entry_arr2": "[float 7000000.0, int 2]",
+    "entry_big2": "float 1000000.0",
+    "entry_huge2": "float 1e+20"
+}
