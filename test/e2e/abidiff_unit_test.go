@@ -311,19 +311,31 @@ func TestABINormalizeKeyRules(t *testing.T) {
 		}
 	}
 
-	for _, threads := range []string{"1", "2", "1.0"} {
-		mrp, err := newABINormalizer(nil, argsFile, divs).normalize([]byte(`{"__threads":0.5}`))
+	pairs := []struct {
+		mrp, nf string
+		equal   bool
+	}{
+		{"0.5", "1", true},
+		{"0.5", "2", false},
+		{"0.5", "1.0", false},
+		{"1", "1.0", false},
+		{"1.0", "1", false},
+		{"2", "2", true},
+	}
+
+	for _, p := range pairs {
+		mrp, err := newABINormalizer(nil, argsFile, divs).normalize([]byte(`{"__threads":` + p.mrp + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		nf, err := newABINormalizer(nil, argsFile, divs).normalize([]byte(`{"__threads":` + threads + `}`))
+		nf, err := newABINormalizer(nil, argsFile, divs).normalize([]byte(`{"__threads":` + p.nf + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if equal := mrp == nf; equal != (threads != "2") {
-			t.Errorf("__threads 0.5 vs %s: equal=%v, want equal only when %s is 0.5 rounded up", threads, equal, threads)
+		if equal := mrp == nf; equal != p.equal {
+			t.Errorf("__threads %s vs %s: equal=%v, want %v", p.mrp, p.nf, equal, p.equal)
 		}
 	}
 

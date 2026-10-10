@@ -51,8 +51,9 @@ const (
 	// on both sides.
 	ruleIgnoreKey = "ignore-key"
 
-	// ruleCeilKey compares the numeric top-level key the divergence names by its
-	// ceiling, so a fractional value equals the whole number it rounds up to.
+	// ruleCeilKey replaces a fractional value of the numeric top-level key the
+	// divergence names with its ceiling, so it equals the whole number it rounds
+	// up to; integral tokens are kept, so 1 and 1.0 still differ.
 	ruleCeilKey = "ceil-number"
 )
 
@@ -190,7 +191,9 @@ func (n abiNormalizer) topLevelKeys(v any) (any, error) {
 			return nil, fmt.Errorf("%w: %s: %w", errABIMeta, k, err)
 		}
 
-		obj[k] = json.Number(strconv.FormatFloat(math.Ceil(f), 'f', -1, 64))
+		if f != math.Trunc(f) {
+			obj[k] = json.Number(strconv.FormatFloat(math.Ceil(f), 'f', -1, 64))
+		}
 	}
 
 	return obj, nil
