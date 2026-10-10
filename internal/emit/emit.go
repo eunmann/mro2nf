@@ -34,11 +34,6 @@ const (
 	// (AWS Batch + S3, HealthOmics) and not just on a shared filesystem — and a
 	// task transfers only its own bindspec, not every call's.
 	assetsDir = "_assets"
-	// entrySentinel is a baked empty file fed to BUILD_ENTRY_ARGS for a file-typed
-	// entry input the run did not override, so the process still has a staged path
-	// input (and keeps the baked default). Lives under _assets/ so it is packaged
-	// for HealthOmics. See genEntry.
-	entrySentinel = ".entry_empty"
 )
 
 // hasFileLeaf reports whether a param has any file leaf — directly (a
@@ -57,14 +52,6 @@ func hasFileLeaf(p ir.Param, structs map[string]*ir.StructType) bool {
 
 	return slices.ContainsFunc(st.Fields, func(f ir.Param) bool {
 		return hasFileLeaf(f, structs)
-	})
-}
-
-// hasStagedFileEntry reports whether the entry callable has any file-bearing
-// input staged as a run parameter (so the sentinel file is worth baking).
-func hasStagedFileEntry(prog *ir.Program) bool {
-	return slices.ContainsFunc(entryInParams(prog), func(p ir.Param) bool {
-		return hasFileLeaf(p, prog.Structs)
 	})
 }
 
@@ -261,17 +248,6 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 
 	if target == TargetHealthOmics {
 		if err := writeHealthOmicsPackaging(prog, opts.OutDir, opts.Native); err != nil {
-			return err
-		}
-	}
-
-	// The empty sentinel is only consumed by the default BUILD_ENTRY_ARGS task
-	// (genEntry); native bakes the entry args and emits no such task, so a
-	// native project needs no sentinel.
-	if !opts.Native && hasStagedFileEntry(prog) {
-		// A staged-but-unset file input is fed this empty sentinel so BUILD_ENTRY_ARGS
-		// still has its path input (and keeps the baked default); see genEntry.
-		if err := writeFile(filepath.Join(opts.OutDir, assetsDir, entrySentinel), []byte{}); err != nil {
 			return err
 		}
 	}

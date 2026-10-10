@@ -95,6 +95,10 @@ var goldenCases = []goldenCase{
 	{"entry_mapfile_override", "entry_mapfile", "expected/epm_override_outs.json"},
 	{"entry_dir", "entry_dir", "expected/epd_outs.json"},
 	{"entry_dir_override", "entry_dir", "expected/epd_override_outs.json"},
+	// #261: file-bearing entry inputs overridden with values that hold no file
+	// (an empty file[] and map<file>, a struct with a null file field).
+	{"entry_file_empty", "entry_file_empty", "expected/outs.json"},
+	{"entry_file_empty_override", "entry_file_empty", "expected/override_outs.json"},
 	{"split_from_file", "split_from_file", "expected/sp_outs.json"},
 	{"split_from_file_override", "split_from_file", "expected/sp_override_outs.json"},
 	{"cli_typed", "cli_typed", "expected/outs.json"},

@@ -608,7 +608,9 @@ bundle. This works for **every shape** — a scalar `file`/`path`/directory, a
 flatten-and-reconstruct mechanism whose ordering (arrays by index, maps by sorted
 key, struct fields in declaration order) is shared between the Groovy flatten and
 the Go reconstruction so they can't drift. An unset input keeps its baked default.
-Each leaf is staged with `file(x, glob: false)`, so a name holding `[`, `*`, `?`
+An unset input, and a value with no file in it (`[]`, `{}`, a struct whose file
+field is null), stage zero files: the `path` input takes `arity: '0..*'`, so
+no placeholder file is needed. Each leaf is staged with `file(x, glob: false)`, so a name holding `[`, `*`, `?`
 or `{` stages that exact file. Nextflow 26.04's own stage-in script still leaves
 the source path unquoted in the task, so a name that bash would glob to another
 file in the same directory, or a `{a,b}` brace, is not staged as written.

@@ -366,7 +366,7 @@ type entryWiring struct {
 // entryParamWiring accumulates each entry input's wiring: every input gets a
 // nullable params.<name> declaration and a values-map pair; a file-bearing
 // input is additionally routed through Nextflow staging — a `path` input, a
-// head-node flatten channel (falling back to the empty sentinel when unset),
+// head-node flatten channel (empty when the value is unset or holds no file),
 // and a -fileflat map entry so entryargs can pop the staged paths back in.
 func entryParamWiring(prog *ir.Program) entryWiring {
 	ins := entryInParams(prog)
@@ -377,7 +377,6 @@ func entryParamWiring(prog *ir.Program) entryWiring {
 		pairs:    make([]string, 0, len(ins)),
 		callArgs: []string{`file("${projectDir}/entry_args")`, "values", "types"},
 	}
-	sentinel := fmt.Sprintf(`file("${projectDir}/%s/%s")`, assetsDir, entrySentinel)
 
 	for _, p := range ins {
 		fmt.Fprintf(&decls, "params.%s = null\n", p.Name)
@@ -393,21 +392,17 @@ func entryParamWiring(prog *ir.Program) entryWiring {
 		// basename (e.g. sampleA/reads.fastq + sampleB/reads.fastq) do not collide
 		// in the task work dir, while the original basename is preserved for the
 		// stage. The order matches the head-node flatten (canonical type order).
-		fmt.Fprintf(&fileInputs, "    path(%s, stageAs: '%s_?/*')\n", in, in)
+		// arity '0..*' lets an unset or leafless value stage no file at all, and
+		// makes the input a List even for one leaf: toJson would serialize a
+		// bare Path as its segment list.
+		fmt.Fprintf(&fileInputs, "    path(%s, stageAs: '%s_?/*', arity: '0..*')\n", in, in)
 		// The staged paths (one per file leaf, canonical order) reach entryargs
 		// as one JSON object written via heredoc — JSON escaping keeps legal
 		// filenames containing , ; = intact, which a flat separator encoding
-		// cannot. The list-coercion matters: a single staged file is a lone
-		// Groovy Path, and toJson would serialize a bare Path as its segment
-		// list; wrapping it in a list and spreading toString() yields one path
-		// string per leaf. A multi-leaf input is already a List, left as-is.
-		w.flatPairs = append(w.flatPairs, fmt.Sprintf("%[1]s: (%[2]s instanceof List ? %[2]s : [%[2]s])*.toString()", p.Name, in))
+		// cannot.
+		w.flatPairs = append(w.flatPairs, fmt.Sprintf("%s: %s*.toString()", p.Name, in))
 		w.callArgs = append(w.callArgs, "flat_"+p.Name)
-		// Flatten the override's file leaves to a list of staged files on the head node;
-		// an unset input (or one with no file leaves) falls back to the empty sentinel so
-		// the process still runs (entryargs ignores the sentinel when the input is unset).
-		fmt.Fprintf(&fileChans, "  flat_%[1]s = (params.%[1]s != null ? (%[2]s) : []) ?: [%[3]s]\n",
-			p.Name, fileFlattenExpr("params."+p.Name, p, prog.Structs), sentinel)
+		fmt.Fprintf(&fileChans, "  flat_%s = %s\n", p.Name, fileFlattenExpr("params."+p.Name, p, prog.Structs))
 	}
 
 	w.decls, w.fileInputs, w.fileChans = decls.String(), fileInputs.String(), fileChans.String()
@@ -426,8 +421,8 @@ func entryParamWiring(prog *ir.Program) entryWiring {
 // node, and declared as a `path` input, so the worker reads real local files (an
 // isolated AWS Batch / HealthOmics task cannot stat the raw values). entryargs
 // pops the staged paths back into the value in the canonical type-walk order and
-// marks them into the bundle. An unset input is fed the empty sentinel and keeps
-// its baked default.
+// marks them into the bundle. An unset input stages no file and keeps its baked
+// default.
 func genEntry(b *strings.Builder, prog *ir.Program, entryWorkflow string, g genCtx) {
 	if g.features.native {
 		genNativeEntry(b, prog, entryWorkflow, g)

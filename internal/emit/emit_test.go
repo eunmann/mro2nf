@@ -1400,8 +1400,8 @@ func TestEmitEntryParams(t *testing.T) {
 
 // TestEmitEntryFileParam checks file-typed entry-input staging (C1): a scalar
 // file input's leaves are flattened, staged through Nextflow as a `path` input,
-// and reconstructed by entryargs via -fileflat, with the empty sentinel feeding
-// the unset case.
+// and reconstructed by entryargs via -fileflat. An unset or leafless value
+// stages zero files (#261): no placeholder file, no fallback.
 func TestEmitEntryFileParam(t *testing.T) {
 	dir := emitFixture(t, "entry_file", map[string]string{"COUNT": "/x/count"})
 
@@ -1414,13 +1414,13 @@ func TestEmitEntryFileParam(t *testing.T) {
 	for _, want := range []string{
 		"params.reads = null", // the file input is overridable
 		// its file leaves staged as a list path input, each in a per-index subdir
-		// so same-basename leaves do not collide in the task work dir
-		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
-		`[file(params.reads, glob: false)]`,               // flattened + file()'d on the head node
-		`?: [file("${projectDir}/_assets/.entry_empty")]`, // unset / no-leaf falls back to the sentinel
+		// so same-basename leaves do not collide in the task work dir; 0..* lets
+		// an unset or empty value stage nothing and keeps one leaf a list
+		"path(inflat_reads, stageAs: 'inflat_reads_?/*', arity: '0..*')",
+		"  flat_reads = (params.reads != null ? [file(params.reads, glob: false)] : [])\n",
 		// staged paths reach entryargs as heredoc-written JSON — collision-proof
 		// for legal filenames containing , ; =
-		`${groovy.json.JsonOutput.toJson([reads: (inflat_reads instanceof List ? inflat_reads : [inflat_reads])*.toString()])}`,
+		`${groovy.json.JsonOutput.toJson([reads: inflat_reads*.toString()])}`,
 		"-fileflat fileflat.json",
 		`BUILD_ENTRY_ARGS(file("${projectDir}/entry_args"), values, types, flat_reads)`,
 	} {
@@ -1429,9 +1429,12 @@ func TestEmitEntryFileParam(t *testing.T) {
 		}
 	}
 
-	// The sentinel file must exist (fed to BUILD_ENTRY_ARGS when the input is unset).
-	if _, err := os.Stat(filepath.Join(dir, "_assets", ".entry_empty")); err != nil {
-		t.Errorf("missing entry sentinel _assets/.entry_empty: %v", err)
+	if strings.Contains(main, ".entry_empty") {
+		t.Error("main.nf still feeds the .entry_empty sentinel")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "_assets", ".entry_empty")); !os.IsNotExist(err) {
+		t.Errorf("_assets/.entry_empty still written (stat err = %v)", err)
 	}
 
 	// The non-file input flows through the values map, not as a staged path input.
@@ -1447,9 +1450,9 @@ func TestEmitEntryFileArray(t *testing.T) {
 
 	main := readFile(t, filepath.Join(dir, "main.nf"))
 	for _, want := range []string{
-		"path(inflat_reads, stageAs: 'inflat_reads_?/*')",
+		"path(inflat_reads, stageAs: 'inflat_reads_?/*', arity: '0..*')",
 		`(params.reads ?: []).collect { __e0 -> (__e0 != null ? [file(__e0, glob: false)] : []) }.flatten()`,
-		`${groovy.json.JsonOutput.toJson([reads: (inflat_reads instanceof List ? inflat_reads : [inflat_reads])*.toString()])}`,
+		`${groovy.json.JsonOutput.toJson([reads: inflat_reads*.toString()])}`,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing file-array staging %q", want)
@@ -1466,9 +1469,9 @@ func TestEmitEntryStructFile(t *testing.T) {
 	// The struct param 'cfg' descends to its file field 'ref'; the int field 'n'
 	// contributes nothing to the flattened file list.
 	for _, want := range []string{
-		"path(inflat_cfg, stageAs: 'inflat_cfg_?/*')",
+		"path(inflat_cfg, stageAs: 'inflat_cfg_?/*', arity: '0..*')",
 		`)?.ref != null ? [file(`,
-		`${groovy.json.JsonOutput.toJson([cfg: (inflat_cfg instanceof List ? inflat_cfg : [inflat_cfg])*.toString()])}`,
+		`${groovy.json.JsonOutput.toJson([cfg: inflat_cfg*.toString()])}`,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing struct-file staging %q", want)

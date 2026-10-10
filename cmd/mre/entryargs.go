@@ -149,7 +149,8 @@ func overlayEntry(payload map[string]any, valuesFile string, flatMap map[string]
 // over and flatMap with a non-null value), walks the override value's file leaves
 // in the canonical type order and replaces each with the next staged path, then
 // stores the result in payload and removes the key from over so overlayValues
-// does not re-copy the raw (unstaged) value.
+// does not re-copy the raw (unstaged) value. An unset input keeps its baked
+// default and must have nothing staged.
 func reconstructFiles(payload, over map[string]any, flatMap map[string][]string, params []ir.Param, tbl *types.Table) error {
 	byName := make(map[string]ir.Param, len(params))
 	for _, p := range params {
@@ -157,9 +158,13 @@ func reconstructFiles(payload, over map[string]any, flatMap map[string][]string,
 	}
 
 	for name, staged := range flatMap {
-		v, ok := over[name]
-		if !ok || v == nil {
-			continue // unset → keep the baked default
+		v := over[name]
+		if v == nil {
+			if len(staged) > 0 {
+				return fmt.Errorf("%w: %q is unset (%d staged)", errStagedMany, name, len(staged))
+			}
+
+			continue
 		}
 
 		p, ok := byName[name]

@@ -1,0 +1,55 @@
+filetype txt;
+
+# File-bearing entry inputs overridden with values that hold no file at all:
+# an empty file[], an empty map<file>, and a struct whose file field is null.
+# The stage reports each value's Python type and size, so the override run
+# matches expected/override_outs.json (mrp run with those values as invocation
+# literals) only if each empty value reached it as written.
+
+struct Cfg(
+    txt ref,
+    int n,
+)
+
+stage SUMMARIZE(
+    in  txt[]    reads,
+    in  map<txt> named,
+    in  Cfg      cfg,
+    out string   desc,
+    out float    total,
+    src py       "stages/summarize",
+)
+
+pipeline EPE(
+    in  txt[]    reads,
+    in  map<txt> named,
+    in  Cfg      cfg,
+    out string   desc,
+    out float    total,
+)
+{
+    call SUMMARIZE(
+        reads = self.reads,
+        named = self.named,
+        cfg   = self.cfg,
+    )
+
+    return (
+        desc  = SUMMARIZE.desc,
+        total = SUMMARIZE.total,
+    )
+}
+
+call EPE(
+    reads = [
+        "input/a.txt",
+        "input/b.txt",
+    ],
+    named = {
+        "c": "input/c.txt",
+    },
+    cfg   = {
+        ref: "input/ref.txt",
+        n:   2,
+    },
+)
