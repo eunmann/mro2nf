@@ -40,10 +40,15 @@ func TestConsumerCount(t *testing.T) {
 // leaves) into the consumer's args — a data-movement regression the projecting
 // BIND avoids.
 func TestForwardProducerExactCoverage(t *testing.T) {
-	prog := &ir.Program{Stages: map[string]*ir.Stage{
-		"ONE": {Name: "ONE", Out: []ir.Param{{Name: "f"}}},
-		"TWO": {Name: "TWO", Out: []ir.Param{{Name: "f"}, {Name: "g"}}},
-	}}
+	prog := &ir.Program{
+		Stages: map[string]*ir.Stage{
+			"ONE":  {Name: "ONE", Out: []ir.Param{{Name: "f"}}},
+			"TWO":  {Name: "TWO", Out: []ir.Param{{Name: "f"}, {Name: "g"}}},
+			"STR":  {Name: "STR", Out: []ir.Param{{Name: "f", BaseType: "S"}}},
+			"STRS": {Name: "STRS", Out: []ir.Param{{Name: "f", BaseType: "S", ArrayDim: 1}}},
+		},
+		Structs: map[string]*ir.StructType{"S": {Name: "S", Fields: []ir.Param{{Name: "a", BaseType: "int"}}}},
+	}
 
 	tests := []struct {
 		name     string
@@ -97,6 +102,22 @@ func TestForwardProducerExactCoverage(t *testing.T) {
 			prodCall: ir.Call{Name: "P", Callable: "ONE"},
 			bindings: []ir.Binding{ref("f", "P")},
 			dest:     []ir.Param{{Name: "f", BaseType: "S"}},
+			wantOK:   false,
+		},
+		{
+			// mrp filters every bound struct to its declared members even when
+			// the types match, dropping keys the producer added beyond them.
+			name:     "identical struct type does not route",
+			prodCall: ir.Call{Name: "P", Callable: "STR"},
+			bindings: []ir.Binding{ref("f", "P")},
+			dest:     []ir.Param{{Name: "f", BaseType: "S"}},
+			wantOK:   false,
+		},
+		{
+			name:     "identical array-of-struct type does not route",
+			prodCall: ir.Call{Name: "P", Callable: "STRS"},
+			bindings: []ir.Binding{ref("f", "P")},
+			dest:     []ir.Param{{Name: "f", BaseType: "S", ArrayDim: 1}},
 			wantOK:   false,
 		},
 	}

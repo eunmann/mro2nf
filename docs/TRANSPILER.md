@@ -307,9 +307,11 @@ Two optimizations remove standalone BINDs where they would be pure plumbing:
   stage into that one task once, instead of into a BIND task and again into the
   stage task.
 - **Emit-once forward (#14).** When a call's bindings (or the pipeline's
-  returns) forward one upstream call's entire output bundle verbatim, no
-  process is emitted at all: the producer's output channel is routed straight
-  to the consumer.
+  returns) forward one upstream call's entire output bundle verbatim, each
+  under its producer's exact type and no struct among them, no process is
+  emitted at all: the producer's output channel is routed straight to the
+  consumer. A struct-typed forward keeps its BIND, since mrp filters every
+  bound struct to its declared members.
 
 ### 4.4 Map / fork calls → FORK + MERGE (and keyed variants)
 

@@ -2,7 +2,8 @@
 # members, as mrp's FilterJson does (#239): a whole callable ref (UP), a wider
 # struct output (UPW.w, whose extra field is a file), an array and a typed map of
 # them, the pipeline outputs, a call whose bind would otherwise be a pure
-# forward (PEEK), and a sub-pipeline return forward (NARROW). The extra file
+# forward (PEEK), a sub-pipeline return forward (NARROW), and a forward whose
+# types match but whose producer adds an undeclared key (SAME). The extra file
 # never reaches a consumer and no output publishes it.
 filetype txt;
 
@@ -29,6 +30,11 @@ stage UP(
 stage UPW(
     out W   w,
     src py  "stages/upw",
+)
+
+stage UPX(
+    out S   w,
+    src py  "stages/upx",
 )
 
 stage DOWN(
@@ -61,6 +67,7 @@ pipeline P(
     out S      s,
     out S      nw,
     out string pr,
+    out string sr,
     out S[]    ss,
     out map<S> sm,
     out string z,
@@ -74,6 +81,12 @@ pipeline P(
 
     call PEEK(
         w = UPW.w,
+    )
+
+    call UPX()
+
+    call PEEK as SAME(
+        w = UPX.w,
     )
 
     call DOWN(
@@ -100,6 +113,7 @@ pipeline P(
         z  = DOWN.z,
         nw = NARROW.w,
         pr = PEEK.r,
+        sr = SAME.r,
     )
 }
 
