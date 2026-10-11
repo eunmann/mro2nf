@@ -177,7 +177,8 @@ func TestDockerIsolation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			proj := transpile(t, tc.name)
+			// Isolated like awsbatch/healthomics, so confined like them too.
+			proj := transpile(t, tc.name, "-confine-outputs")
 			writeFileT(t, filepath.Join(proj, "iso.config"), isoConfig())
 
 			if err := runNextflow(t, proj, "-c", "iso.config", "-with-docker", isoImage()); err != nil {
@@ -283,7 +284,7 @@ func TestDockerEntryOverrides(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			proj := transpile(t, tc.fixture)
+			proj := transpile(t, tc.fixture, "-confine-outputs")
 
 			params, err := json.Marshal(tc.params)
 			if err != nil {

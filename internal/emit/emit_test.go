@@ -413,6 +413,49 @@ func TestEmitContainerIsGroovyQuoted(t *testing.T) {
 	}
 }
 
+// TestEmitConfineOutputs checks #332's target split: every stage phase gets
+// -confine (fail on an output outside the task work dir) on the isolated
+// container targets, and on the local target only when ConfineOutputs asks.
+func TestEmitConfineOutputs(t *testing.T) {
+	ast, err := frontend.Parse("../../testdata/split_test/pipeline.mro", []string{"../../testdata/split_test"}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	mre, shell, stages := realRuntime(t)
+	cases := []struct {
+		target  emit.Target
+		confine bool
+		want    int
+	}{
+		{emit.TargetLocal, false, 0},
+		{emit.TargetLocal, true, 3},
+		{emit.TargetAWSBatch, false, 3},
+		{emit.TargetHealthOmics, false, 3},
+	}
+
+	for _, tc := range cases {
+		prog, err := frontend.Lower(ast, nil)
+		if err != nil {
+			t.Fatalf("lower: %v", err)
+		}
+
+		dir := t.TempDir()
+		if err := emit.Emit(prog, emit.Options{
+			OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro",
+			Target: tc.target, ConfineOutputs: tc.confine, Container: "ecr/mro2nf:1",
+			StageCode: stages,
+		}); err != nil {
+			t.Fatalf("emit %s: %v", tc.target, err)
+		}
+
+		mod := readFile(t, filepath.Join(dir, "modules", "stage_SUM_SQUARES.nf"))
+		if got := strings.Count(mod, " -confine"); got != tc.want {
+			t.Errorf("target %s, ConfineOutputs %v: %d phases pass -confine, want %d", tc.target, tc.confine, got, tc.want)
+		}
+	}
+}
+
 // TestEmitDisabledNestedMap checks the keyed (nested) disable gate: a map call
 // that is BOTH disabled and itself nested inside an outer map must, per outer
 // fork, resolve its disable flag and either run its inner map or emit the null

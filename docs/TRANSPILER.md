@@ -542,9 +542,19 @@ Both prefixes resolve identically on read-back. The rules:
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
   This is `shim.MarkFiles`, which uses the type table to find exactly which leaves
   are files (§3's `Param.IsFile`, recursing into structs/arrays/maps).
+- **Escaping** (on write): every other string that begins with the reserved
+  `@mre:` prefix (a string input, a `.mro` literal, a stage's string output, a
+  file-typed out naming no file) is stored as `@mre:str:<original>`. A marker in
+  `data.json` is therefore always one `MarkFiles` wrote at a file leaf the type
+  walk found, never a user's string.
 - **On read** (a stage is about to consume a bundle): markers are *absolutized*
   back to real paths inside the staged bundle, so the stage opens a real local
-  file.
+  file, and escaped strings get their original value back, so the stage sees
+  exactly the string `mrp` would pass it. A marker is accepted only in the shape
+  `MarkFiles` writes (`f/L<nnnn>[.<ext>]`, bundle-local); any other `@mre:`
+  string fails the read. Readers of a raw `data.json` restore the escapes too:
+  `publish-layout` for the published outs, and `forkbind -elementfile` for the
+  element the driver slices out of a sidecar.
 
 Because the files travel *with* the bundle — declared as `path` outputs and
 inputs — Nextflow stages them between tasks automatically, with no shared
@@ -561,7 +571,20 @@ Two details matter only on a real object store. Both are handled:
 - **Symlink dereference.** Nextflow stages inputs as *symlinks*. When `mre` copies
   a file leaf into a bundle, it dereferences the symlink to the real target first
   — otherwise the bundle would carry a dangling link that breaks once staged into
-  the next isolated container (`shim.CopyTree`).
+  the next isolated container (`shim.CopyTree`). For a stage's own outputs the
+  dereference is confined (`shim.Confinement`). An output, and every symlink it
+  passes through, is classified as the stage's own file inside the task work dir
+  (hard-linked into the bundle), a path in the work dir outside the stage's
+  phase dir, i.e. a staged input (followed wherever it points, hard-linked), or
+  a host path outside the task:
+  - On the isolated container targets (`awsbatch`, `healthomics`, or any project
+    transpiled with `-confine-outputs`, which emits `-confine` on every stage
+    phase) such a path cannot be valid downstream, and copying it would upload
+    host data, so the task fails, naming the output and the target.
+  - On the `local` target, where `mrp` publishes a symlink and pipelines
+    legitimately return paths into host reference dirs, the target is staged as
+    a byte copy, never a hard link, so no later write through the bundle can
+    alias the host file.
 
 ---
 

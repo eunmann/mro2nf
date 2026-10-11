@@ -23,7 +23,7 @@ import (
 func writeTestBundle(t *testing.T, dir string, payload map[string]any) {
 	t.Helper()
 
-	if err := shim.WriteBundle(dir, payload, nil, types.NewTable(nil)); err != nil {
+	if err := shim.WriteBundle(dir, payload, nil, types.NewTable(nil), nil); err != nil {
 		t.Fatalf("write bundle %s: %v", dir, err)
 	}
 }
@@ -335,7 +335,7 @@ func TestReadChunkDataResolvesFileLeaves(t *testing.T) {
 		"ref":      json.RawMessage(`"` + src + `"`),
 	}}
 	tbl := types.NewTable(nil)
-	if err := shim.WriteChunkBundle(bundle, def, []ir.Param{{Name: "ref", BaseType: "bin", IsFile: true}}, tbl); err != nil {
+	if err := shim.WriteChunkBundle(bundle, def, []ir.Param{{Name: "ref", BaseType: "bin", IsFile: true}}, tbl, nil); err != nil {
 		t.Fatalf("WriteChunkBundle: %v", err)
 	}
 
@@ -758,6 +758,64 @@ func TestRunForkBindElement(t *testing.T) {
 	err := run(t.Context(), []string{"forkbind", "-spec", spec, "-pipeargs", pipe, "-elementfile", elem})
 	if !errors.Is(err, errElementNoOut) {
 		t.Errorf("forkbind -elementfile without -o: err = %v, want errElementNoOut", err)
+	}
+}
+
+// TestRunForkBindElementMarkerShapedString guards #328 on the native-scatter
+// path: the driver slices the element straight out of pipeargs' data.json, so
+// a marker-shaped string arrives in its bundle-encoded form and must still
+// reach the fork's args as the literal string, the same as the -index write.
+func TestRunForkBindElementMarkerShapedString(t *testing.T) {
+	const shaped = "@mre:file:f/L0000"
+
+	dir := t.TempDir()
+	spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
+		`{"v":{"ref":{"kind":"self","id":"vals","output":""},"split":true}}`)
+	pipe := filepath.Join(dir, "pipeargs")
+	writeTestBundle(t, pipe, map[string]any{"vals": []any{"plain", shaped}})
+
+	var sidecar struct {
+		Vals []json.RawMessage `json:"vals"`
+	}
+
+	readJSONFile(t, filepath.Join(pipe, "data.json"), &sidecar)
+
+	if len(sidecar.Vals) != 2 {
+		t.Fatalf("pipeargs vals = %d elements, want 2", len(sidecar.Vals))
+	}
+
+	elem := writeTestFile(t, filepath.Join(dir, "elem.json"), string(sidecar.Vals[1]))
+
+	byElem := filepath.Join(dir, "by_element")
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe, "-elementfile", elem, "-o", byElem,
+	}); err != nil {
+		t.Fatalf("run forkbind -elementfile: %v", err)
+	}
+
+	if diff := cmp.Diff(map[string]any{"v": shaped}, readTestBundle(t, byElem)); diff != "" {
+		t.Errorf("element args mismatch (-want +got):\n%s", diff)
+	}
+
+	byIndex := filepath.Join(dir, "by_index")
+	if err := run(t.Context(), []string{
+		"forkbind", "-spec", spec, "-pipeargs", pipe, "-index", "1", "-o", byIndex,
+	}); err != nil {
+		t.Fatalf("run forkbind -index: %v", err)
+	}
+
+	elemData, err := os.ReadFile(filepath.Join(byElem, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	indexData, err := os.ReadFile(filepath.Join(byIndex, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(string(indexData), string(elemData)); diff != "" {
+		t.Errorf("-elementfile data.json differs from -index 1 (-index +element):\n%s", diff)
 	}
 }
 

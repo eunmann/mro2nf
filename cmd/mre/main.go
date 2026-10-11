@@ -85,6 +85,7 @@ type commonFlags struct {
 	call, mro, work, outFile string
 	threads, memGB, vmemGB   float64
 	monitor                  bool
+	confine                  bool
 }
 
 // repeatedFlag collects every occurrence of a repeatable string flag, in order.
@@ -113,6 +114,7 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.Float64Var(&c.memGB, "memgb", 1, "allocated memory in GB")
 	fs.Float64Var(&c.vmemGB, "vmemgb", 0, "allocated virtual memory in GB")
 	fs.BoolVar(&c.monitor, "monitor", false, "enforce mrp --monitor memory limits: an RSS kill at memgb plus a prlimit vmem cap at vmemgb")
+	fs.BoolVar(&c.confine, "confine", false, "fail on a stage output that resolves outside the task work dir (isolated container targets) instead of copying it")
 
 	return c
 }
@@ -126,6 +128,17 @@ func (c *commonFlags) adapter() shim.Adapter {
 		Mrjob:     c.mrjob,
 		Monitor:   c.monitor,
 	}
+}
+
+// confinement returns the Confinement for the outputs of phase run in the work
+// dir, strict under -confine.
+func (c *commonFlags) confinement(phase string) (*shim.Confinement, error) {
+	conf, err := shim.ConfineStage(c.work, phase, c.confine)
+	if err != nil {
+		return nil, fmt.Errorf("confine %s outputs: %w", phase, err)
+	}
+
+	return conf, nil
 }
 
 func (c *commonFlags) resources() shim.Resources {
@@ -176,16 +189,22 @@ func runSplit(ctx context.Context, argv []string) error {
 		}
 	}
 
-	if *chunkDir != "" {
-		return writeChunkBundles(*chunkDir, defs, prod)
+	if *chunkDir == "" {
+		return nil
 	}
 
-	return nil
+	conf, err := cf.confinement("split")
+	if err != nil {
+		return err
+	}
+
+	return writeChunkBundles(*chunkDir, defs, prod, conf)
 }
 
 // writeChunkBundles writes each chunk definition as a zero-padded bundle dir so
-// a lexical sort of the names recovers chunk order downstream.
-func writeChunkBundles(dir string, defs []shim.ChunkDef, prod *producer) error {
+// a lexical sort of the names recovers chunk order downstream. The files are the
+// split's own, so conf confines them.
+func writeChunkBundles(dir string, defs []shim.ChunkDef, prod *producer, conf *shim.Confinement) error {
 	man, err := prod.manifest()
 	if err != nil {
 		return err
@@ -200,7 +219,7 @@ func writeChunkBundles(dir string, defs []shim.ChunkDef, prod *producer) error {
 
 	for i, def := range defs {
 		name := fmt.Sprintf(chunkDefPrefix+"%05d", i)
-		if err := shim.WriteChunkBundle(filepath.Join(dir, name), def, chunkIn, tbl); err != nil {
+		if err := shim.WriteChunkBundle(filepath.Join(dir, name), def, chunkIn, tbl, conf); err != nil {
 			return fmt.Errorf("write chunk bundle %s: %w", name, err)
 		}
 	}
@@ -264,6 +283,10 @@ func runMain(ctx context.Context, argv []string) error {
 		}
 	}
 
+	if prod.confine, err = cf.confinement("main"); err != nil {
+		return err
+	}
+
 	if err := prod.write(cf.outFile, outs); err != nil {
 		return err
 	}
@@ -317,6 +340,10 @@ func runJoin(ctx context.Context, argv []string) error {
 
 	if err := prod.validateOuts(final); err != nil {
 		return fmt.Errorf("join: %w", err)
+	}
+
+	if prod.confine, err = cf.confinement("join"); err != nil {
+		return err
 	}
 
 	if err := prod.write(cf.outFile, final); err != nil {

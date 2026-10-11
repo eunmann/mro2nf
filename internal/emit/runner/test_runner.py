@@ -247,7 +247,7 @@ class WalkAndMarkersTest(unittest.TestCase):
             "passthru": src["a"],  # no matching param: untouched
         }
         bdir = os.path.join(tmp, "bundle")
-        rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS)
+        rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS, None)
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
         # Ordinals follow param order, then sorted map keys (aa before zz); each
@@ -264,12 +264,65 @@ class WalkAndMarkersTest(unittest.TestCase):
         self.assertEqual(resolved["arr"][0],
                          os.path.join(os.path.abspath(bdir), "f", "L0000.txt"))
 
+    def test_marker_shaped_strings_round_trip(self):
+        # #328: a string spelled like a transport marker comes back as the
+        # same string wherever it sits, exactly as mrp passes it on; the rels
+        # name the bundle's real leaf, so resolving one would hand a stage
+        # another file's path in place of its string.
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        made = os.path.join(tmp, "made.txt")
+        with open(made, "w") as fh:
+            fh.write("made")
+        params = [
+            {"name": "made", "baseType": "txt", "arrayDim": 0, "mapDim": 0,
+             "isFile": True},
+            {"name": "fake", "baseType": "txt", "arrayDim": 0, "mapDim": 0,
+             "isFile": True},
+            {"name": "s", "baseType": "string", "arrayDim": 0, "mapDim": 0},
+            {"name": "arr", "baseType": "string", "arrayDim": 1, "mapDim": 0},
+            {"name": "m", "baseType": "map", "arrayDim": 0, "mapDim": 0},
+        ]
+        strs = ["@mre:file:f/L0000.txt", "@mre:dir:f/L0000.txt",
+                "@mre:str:@mre:file:f/L0000.txt", "@mre:",
+                "@mre:file:../elsewhere", "plain"]
+        payload = {
+            "made": made,
+            "fake": "@mre:file:f/L0000.txt",
+            "s": "@mre:file:f/L0000.txt",
+            "arr": strs,
+            "m": {"k": "@mre:dir:f/L0000.txt", "nested": strs},
+            "extra": "@mre:file:f/L0000.txt",
+        }
+        bdir = os.path.join(tmp, "bundle")
+        rs.write_bundle(bdir, payload, params, {}, None)
+        want = dict(payload)
+        want["made"] = os.path.join(os.path.abspath(bdir), "f", "L0000.txt")
+        self.assertEqual(rs.read_bundle(bdir), want)
+
+    def test_read_bundle_rejects_malformed_markers(self):
+        # #328: mre writes a marker only as f/L<ordinal>[.ext] inside the
+        # bundle and escapes every other reserved string, so any other
+        # reserved-prefix shape is a corrupt or forged bundle.
+        bad = ["@mre:file:../elsewhere", "@mre:dir:/abs/path",
+               "@mre:file:f/../../elsewhere", "@mre:file:f/L12.txt",
+               "@mre:file:g/L0000", "@mre:file:f/L0000/sub",
+               "@mre:other:x", "@mre:"]
+        for s in bad:
+            with self.subTest(s=s):
+                tmp = tempfile.mkdtemp()
+                self.addCleanup(shutil.rmtree, tmp, True)
+                with open(os.path.join(tmp, "data.json"), "w") as fh:
+                    json.dump({"v": [s]}, fh)
+                with self.assertRaises(rs.RunnerError):
+                    rs.read_bundle(tmp)
+
     def test_missing_and_empty_leaves_kept(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)
         payload = {"arr": [os.path.join(tmp, "nope"), ""]}
         bdir = os.path.join(tmp, "bundle")
-        rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS)
+        rs.write_bundle(bdir, payload, self.PARAMS, self.STRUCTS, None)
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
         self.assertEqual(data["arr"], [os.path.join(tmp, "nope"), ""])
@@ -282,12 +335,155 @@ class WalkAndMarkersTest(unittest.TestCase):
         with open(os.path.join(d, "x"), "w") as fh:
             fh.write("x")
         bdir = os.path.join(tmp, "bundle")
-        rs.write_bundle(bdir, {"arr": [d]}, self.PARAMS, self.STRUCTS)
+        rs.write_bundle(bdir, {"arr": [d]}, self.PARAMS, self.STRUCTS, None)
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
         self.assertEqual(data["arr"], ["@mre:dir:f/L0000"])
         with open(os.path.join(bdir, "f", "L0000", "x")) as fh:
             self.assertEqual(fh.read(), "x")
+
+
+class CopyTreeTest(unittest.TestCase):
+    """copy_tree's symlink handling, matching copyTree's (bundle.go)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_symlink_cycle_fails(self):
+        # out/sub/loop -> out: recursing into loop re-enters an ancestor, which
+        # would otherwise recurse until ENAMETOOLONG.
+        root = os.path.join(self.tmp, "out")
+        os.makedirs(os.path.join(root, "sub"))
+        os.symlink(root, os.path.join(root, "sub", "loop"))
+        with self.assertRaises(rs.RunnerError) as ctx:
+            rs.copy_tree(root, os.path.join(self.tmp, "copy"), None)
+        self.assertIn("directory symlink cycle", str(ctx.exception))
+
+    def test_dangling_symlink_in_dir_skipped(self):
+        src = os.path.join(self.tmp, "out")
+        os.mkdir(src)
+        with open(os.path.join(src, "real.txt"), "w") as fh:
+            fh.write("keep")
+        os.symlink(os.path.join(self.tmp, "gone"), os.path.join(src, "broken"))
+        dst = os.path.join(self.tmp, "copy")
+        rs.copy_tree(src, dst, None)
+        with open(os.path.join(dst, "real.txt")) as fh:
+            self.assertEqual(fh.read(), "keep")
+        self.assertFalse(os.path.lexists(os.path.join(dst, "broken")))
+
+    def test_looping_symlink_in_dir_fails(self):
+        # ELOOP is not a dangling link: resolveSymlink fails it, so must we.
+        src = os.path.join(self.tmp, "out")
+        os.mkdir(src)
+        os.symlink("a", os.path.join(src, "a"))
+        with self.assertRaises(rs.RunnerError) as ctx:
+            rs.copy_tree(src, os.path.join(self.tmp, "copy"), None)
+        self.assertIn("resolve symlink", str(ctx.exception))
+
+    def test_looping_symlink_leaf_fails(self):
+        leaf = os.path.join(self.tmp, "loop.txt")
+        os.symlink(leaf, leaf)
+        params = [{"name": "out", "baseType": "txt", "arrayDim": 0,
+                   "mapDim": 0, "isFile": True}]
+        bundle = os.path.join(self.tmp, "bundle")
+        with self.assertRaises(rs.RunnerError):
+            rs.mark_files(bundle, {"out": leaf}, params, {}, None)
+
+
+class ConfinementTest(unittest.TestCase):
+    """#332: copy_tree's confinement of a stage's outputs (ports
+    internal/shim/confine.go)."""
+
+    PARAMS = [{"name": "out", "baseType": "txt", "arrayDim": 0,
+               "mapDim": 0, "isFile": True}]
+
+    def setUp(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        self.work = os.path.join(root, "work")
+        self.files = os.path.join(self.work, "main", "files")
+        self.host = os.path.join(root, "host", "outside.txt")
+        self.host_dir = os.path.join(root, "host", "refdir")
+        upstream = os.path.join(root, "upstream")
+        staged = os.path.join(self.work, "args", "f")
+        for d in (self.files, staged, self.host_dir,
+                  os.path.join(upstream, "dir")):
+            os.makedirs(d)
+        self._write(self.host, "host")
+        self._write(os.path.join(self.host_dir, "x.txt"), "host dir")
+        self._write(os.path.join(upstream, "real.txt"), "upstream")
+        self._write(os.path.join(upstream, "dir", "y.txt"), "upstream dir")
+        os.symlink(self.host, os.path.join(upstream, "dir", "host"))
+        self.staged_file = os.path.join(staged, "L0000.txt")
+        self.staged_dir = os.path.join(staged, "L0001")
+        os.symlink(os.path.join(upstream, "real.txt"), self.staged_file)
+        os.symlink(os.path.join(upstream, "dir"), self.staged_dir)
+
+    @staticmethod
+    def _write(path, content):
+        with open(path, "w") as fh:
+            fh.write(content)
+
+    def _mark(self, value, strict):
+        bundle = tempfile.mkdtemp(dir=self.work)
+        conf = rs.Confinement(self.work, "main", strict)
+        marked = rs.mark_files(bundle, {"out": value}, self.PARAMS, {}, conf)
+        rel, _, ok = rs.cut_marker(marked["out"])
+        self.assertTrue(ok, marked["out"])
+        return os.path.join(bundle, rel)
+
+    def _out_of_tree_cases(self):
+        """(value, rel below the leaf, host file it must hold) for each
+        out-of-tree output shape."""
+        own_dir = os.path.join(self.files, "own_dir")
+        os.mkdir(own_dir)
+        os.symlink(self.host, os.path.join(own_dir, "child"))
+        os.symlink(self.host, os.path.join(self.files, "to_host"))
+        os.symlink(self.host_dir, os.path.join(self.files, "to_host_dir"))
+        return [(os.path.join(self.files, "to_host"), "", self.host),
+                (os.path.join(self.files, "to_host_dir"), "x.txt",
+                 os.path.join(self.host_dir, "x.txt")),
+                (self.host, "", self.host),
+                (own_dir, "child", self.host)]
+
+    def test_strict_refuses_out_of_tree_targets(self):
+        host_root = os.path.realpath(os.path.dirname(self.host))
+        for value, _, _ in self._out_of_tree_cases():
+            with self.subTest(value=value):
+                with self.assertRaises(rs.RunnerError) as ctx:
+                    self._mark(value, True)
+                msg = str(ctx.exception)
+                self.assertIn("outside the task work dir", msg)
+                self.assertIn("param out", msg)
+                self.assertIn(host_root, msg)
+
+    def test_local_copies_out_of_tree_targets(self):
+        for value, rel, host in self._out_of_tree_cases():
+            with self.subTest(value=value):
+                leaf = self._mark(value, False)
+                staged = os.path.join(leaf, rel) if rel else leaf
+                with open(staged) as fh, open(host) as want:
+                    self.assertEqual(fh.read(), want.read())
+                self.assertFalse(os.path.samefile(staged, host),
+                                 "%s must be a copy, not a hard link" % staged)
+
+    def test_admits_own_and_staged_files(self):
+        own = os.path.join(self.files, "own.txt")
+        self._write(own, "own")
+        rel_fwd = os.path.join(self.files, "rel_fwd")
+        os.symlink(os.path.join("..", "..", "args", "f", "L0000.txt"), rel_fwd)
+        cases = [(own, "", own), (self.staged_file, "", self.staged_file),
+                 (rel_fwd, "", self.staged_file),
+                 (self.staged_dir, "y.txt",
+                  os.path.join(self.staged_dir, "y.txt"))]
+        for strict in (True, False):
+            for value, rel, src in cases:
+                with self.subTest(value=value, strict=strict):
+                    leaf = self._mark(value, strict)
+                    staged = os.path.join(leaf, rel) if rel else leaf
+                    self.assertTrue(os.path.samefile(staged, src),
+                                    "%s must hard-link %s" % (staged, src))
 
 
 class CoercionTest(unittest.TestCase):

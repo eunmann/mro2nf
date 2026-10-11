@@ -92,6 +92,11 @@ type Options struct {
 	FuseChains bool
 	// Target is the execution backend the project is shaped for (default local).
 	Target Target
+	// ConfineOutputs makes every stage task fail on an output that resolves
+	// outside its work dir instead of copying it into the bundle. It is always
+	// on for the isolated container targets (awsbatch, healthomics); set it for
+	// a local-target project run under an isolating executor such as docker.
+	ConfineOutputs bool
 	// Native opts into channel-native orchestration (#61 M1 / #76). M1 step 1:
 	// the entry args are baked at transpile time and staged directly, so no
 	// BUILD_ENTRY_ARGS task runs (entry inputs are fixed — no launch-time param
@@ -181,6 +186,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		runnerBase: "${projectDir}/" + assetsDir + "/" + runnerDir,
 		monitor:    opts.Monitor,
 		target:     target,
+		confine:    opts.ConfineOutputs || target.isContainer(),
 		features:   features,
 		code:       opts.StageCode,
 		plan:       buildPlan(prog, features),
@@ -793,7 +799,7 @@ func writeEntryArgs(prog *ir.Program, outDir, mroDir string) error {
 		}
 	}
 
-	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), payload, params, tbl); err != nil {
+	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), payload, params, tbl, nil); err != nil {
 		return fmt.Errorf("write entry args bundle: %w", err)
 	}
 

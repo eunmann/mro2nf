@@ -196,6 +196,10 @@ var goldenCases = []goldenCase{
 	{"cellranger_shaped", "cellranger_shaped", "expected/count_outs.json"},
 	// #76: a transform return with a file output — the native LAYOUT file-leaf path.
 	{"native_file_return", "native_file_return", "expected/nf_outs.json"},
+	// #328: marker-shaped string values (entry input, untyped map, call-site
+	// literal, stage output, a file out naming no file) reach every stage and
+	// the published outs as the literal strings mrp gives them.
+	{"marker_strings", "marker_strings", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile

@@ -1,0 +1,32 @@
+# #332 fixture: the stage creates its file output as a symlink to a file
+# outside its task work dir (its own source file, standing in for a host file
+# such as a shared reference). mrp publishes that symlink and copies nothing.
+# On an isolated container target (-confine) staging the target would upload a
+# host file, so the run must fail loudly, naming the output and the target; on
+# the local target it succeeds, with the target copied, not hard-linked, into
+# the bundle. Exercised by test/e2e/failure_test.go (behavioral; no mrp golden).
+filetype txt;
+
+stage LINK_OUT(
+    in  int x,
+    out txt linked  "linked.txt",
+    src py  "stages/link_out",
+)
+
+pipeline SE(
+    in  int x,
+    out txt linked,
+)
+{
+    call LINK_OUT(
+        x = self.x,
+    )
+
+    return (
+        linked = LINK_OUT.linked,
+    )
+}
+
+call SE(
+    x = 1,
+)

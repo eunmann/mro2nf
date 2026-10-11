@@ -28,6 +28,7 @@ import decimal
 import json
 import math
 import os
+import re
 import resource as _resource_mod
 import stat as _stat_mod
 import sys
@@ -37,11 +38,14 @@ from types import SimpleNamespace
 
 import martian  # the sibling runner martian.py (sys.path[0] is this dir)
 
-# Ports internal/shim/bundle.go marker constants.
-FILE_MARKER = "@mre:file:"
-DIR_MARKER = "@mre:dir:"
+# Ports internal/shim/bundle.go marker constants and markerRel.
+RESERVED_PREFIX = "@mre:"
+FILE_MARKER = RESERVED_PREFIX + "file:"
+DIR_MARKER = RESERVED_PREFIX + "dir:"
+ESCAPE_PREFIX = RESERVED_PREFIX + "str:"
 BUNDLE_DATA = "data.json"
 BUNDLE_FILES = "f"
+_MARKER_REL = re.compile(BUNDLE_FILES + r"/L[0-9]{4,}(\.[^/]*)?")
 
 # Ports internal/shim/shim.go constants.
 EXTRA_VMEM_GB = 3
@@ -67,7 +71,8 @@ class RunnerError(Exception):
 _COMMON_FLAGS = {
     "stagecode": str, "call": str, "mro": str, "work": str, "o": str,
     "threads": float, "memgb": float, "vmemgb": float,
-    "monitor": bool, "types": str, "callable": str, "role": str,
+    "monitor": bool, "confine": bool, "types": str, "callable": str,
+    "role": str,
 }
 _PHASE_FLAGS = {
     "split": {"args": str, "chunkdir": str, "joinres": str},
@@ -213,10 +218,14 @@ def apply_params(structs, params, vals, fn):
         name = p["name"]
         if name not in vals:
             continue
-        out[name] = _walk(
-            structs, vals[name], p.get("baseType", ""),
-            p.get("arrayDim", 0), p.get("mapDim", 0), p.get("isFile", False), fn,
-        )
+        try:
+            out[name] = _walk(
+                structs, vals[name], p.get("baseType", ""),
+                p.get("arrayDim", 0), p.get("mapDim", 0), p.get("isFile", False),
+                fn,
+            )
+        except RunnerError as err:
+            raise RunnerError("param %s: %s" % (name, err)) from None
     return out
 
 
@@ -435,17 +444,54 @@ def coerce_inputs(man, callable_, roles, vals):
 # ---------------------------------------------------------------------------
 
 def cut_marker(s):
-    """Returns (rel, is_dir, ok) for a transport marker string."""
+    """Returns (rel, is_dir, ok) for a transport marker string; ok is False
+    for anything but a well-formed marker (ports CutMarker)."""
     if s.startswith(DIR_MARKER):
-        return s[len(DIR_MARKER):], True, True
-    if s.startswith(FILE_MARKER):
-        return s[len(FILE_MARKER):], False, True
-    return "", False, False
+        rel, is_dir = s[len(DIR_MARKER):], True
+    elif s.startswith(FILE_MARKER):
+        rel, is_dir = s[len(FILE_MARKER):], False
+    else:
+        return "", False, False
+    if not _MARKER_REL.fullmatch(rel):
+        return "", False, False
+    return rel, is_dir, True
+
+
+def _map_strings(v, fn):
+    """A copy of the decoded JSON tree v with fn applied to every string
+    value; dict keys are left alone (ports mapStrings)."""
+    if isinstance(v, str):
+        return fn(v)
+    if isinstance(v, list):
+        return [_map_strings(e, fn) for e in v]
+    if isinstance(v, dict):
+        return {k: _map_strings(e, fn) for k, e in v.items()}
+    return v
+
+
+def _escape(s):
+    """Ports escapeValue's leaf rule: a reserved-prefix string MarkFiles did
+    not mark is escaped so it never reads back as a marker."""
+    return ESCAPE_PREFIX + s if s.startswith(RESERVED_PREFIX) else s
+
+
+def _resolve_leaf(s, bundle_abs):
+    """Ports resolveLeaf: escaped value -> original, marker -> absolute
+    staged path, any other reserved string -> error, else unchanged."""
+    if s.startswith(ESCAPE_PREFIX):
+        return s[len(ESCAPE_PREFIX):]
+    rel, _, ok = cut_marker(s)
+    if ok:
+        return os.path.join(bundle_abs, rel)
+    if s.startswith(RESERVED_PREFIX):
+        raise RunnerError("malformed bundle marker: %s" % json.dumps(s))
+    return s
 
 
 def read_bundle(dir_):
-    """Load a bundle payload, rewriting markers to absolute staged paths.
-    An empty dir yields None (an absent optional input)."""
+    """Load a bundle payload, rewriting markers to absolute staged paths and
+    restoring escaped values. An empty dir yields None (an absent optional
+    input)."""
     if not dir_:
         return None
     path = os.path.join(dir_, BUNDLE_DATA)
@@ -456,20 +502,11 @@ def read_bundle(dir_):
         raise RunnerError("read bundle %s: %s" % (dir_, err)) from None
     except ValueError as err:
         raise RunnerError("parse bundle %s: %s" % (dir_, err)) from None
-    return _resolve_markers(v, os.path.abspath(dir_))
-
-
-def _resolve_markers(v, bundle_abs):
-    if isinstance(v, str):
-        rel, _, ok = cut_marker(v)
-        if ok:
-            return os.path.join(bundle_abs, rel)
-        return v
-    if isinstance(v, list):
-        return [_resolve_markers(e, bundle_abs) for e in v]
-    if isinstance(v, dict):
-        return {k: _resolve_markers(e, bundle_abs) for k, e in v.items()}
-    return v
+    bundle_abs = os.path.abspath(dir_)
+    try:
+        return _map_strings(v, lambda s: _resolve_leaf(s, bundle_abs))
+    except RunnerError as err:
+        raise RunnerError("resolve bundle %s: %s" % (dir_, err)) from None
 
 
 def as_object(v, what):
@@ -792,59 +829,165 @@ def _leaf_ext(path):
     return base[dot:] if dot >= 0 else ""
 
 
-def mark_files(bundle_dir, payload, params, structs):
+def mark_files(bundle_dir, payload, params, structs, confine):
     """Copy every file leaf into bundle_dir/f/L%04d<ext> (walk order) and replace
     it with a transport marker; ports MarkFiles. The ordinal drops the original
     basename but keeps the extension, so Martian typed-file readers that
-    reconstruct a leaf path from its filetype (Path::with_extension) resolve it."""
+    reconstruct a leaf path from its filetype (Path::with_extension) resolve it.
+    Every other reserved-prefix string is escaped, a file leaf naming no file
+    included. A Confinement (every runner write is a stage's) confines the
+    leaves' files."""
     counter = [0]
+    escaped = {k: _map_strings(v, _escape) for k, v in payload.items()}
 
-    def copy_in(src):
+    def copy_in(leaf):
+        src = leaf[len(ESCAPE_PREFIX):] if leaf.startswith(ESCAPE_PREFIX) else leaf
         if src == "":
-            return src
+            return leaf
         try:
             st = os.stat(src)  # follows symlinks, like Go os.Stat
             src_is_dir = _stat_mod.S_ISDIR(st.st_mode)
         except FileNotFoundError:
             # A declared output the stage never wrote (or a dangling
             # symlink): keep the path string unchanged.
-            return src
+            return leaf
         except OSError:
             src_is_dir = False  # copy_tree will surface the error precisely
         rel = os.path.join(BUNDLE_FILES, "L%04d%s" % (counter[0], _leaf_ext(src)))
         counter[0] += 1
         dst = os.path.join(bundle_dir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        copy_tree(src, dst)
+        copy_tree(src, dst, confine)
         return (DIR_MARKER if src_is_dir else FILE_MARKER) + rel
 
     try:
-        return apply_params(structs, params, payload, copy_in)
+        return apply_params(structs, params, escaped, copy_in)
     except OSError as err:
         raise RunnerError("collect bundle files: %s" % err) from None
 
 
-def copy_tree(src, dst):
+def copy_tree(src, dst, confine, copy_only=False, ancestors=None):
     """Ports CopyTree: resolve a symlinked source, recurse into directories,
-    hard-link files when possible, fall back to a byte copy."""
+    hard-link files when possible, fall back to a byte copy. A dangling
+    symlink (ENOENT) is skipped; any other resolve failure, such as a link
+    loop, is an error, as in resolveSymlink. A directory reached again on its
+    own recursion path (a symlink back to an ancestor) is a cycle error. A
+    non-None confine classifies the stage's own files; it is dropped below a
+    staged input, and below a host path outside the task, whose tree is
+    copied without hard links (copyTree's copyPolicy)."""
     if os.path.islink(src):
-        src = os.path.realpath(src)
+        try:
+            os.stat(src)
+        except FileNotFoundError:
+            return
+        except OSError as err:
+            raise RunnerError("resolve symlink %s: %s" % (src, err)) from None
+        resolved = os.path.realpath(src)
+    else:
+        resolved = src
+    if confine is not None:
+        kind = confine.admit(src)
+        if kind == LEAF_STAGED:
+            confine = None
+        elif kind == LEAF_OUTSIDE:
+            confine, copy_only = None, True
+    src = resolved
     st = os.stat(src)
     if _stat_mod.S_ISDIR(st.st_mode):
-        os.makedirs(dst, mode=_stat_mod.S_IMODE(st.st_mode), exist_ok=True)
-        for entry in sorted(os.listdir(src)):
-            copy_tree(os.path.join(src, entry), os.path.join(dst, entry))
+        ancestors = set() if ancestors is None else ancestors
+        dir_id = (st.st_dev, st.st_ino)
+        if dir_id in ancestors:
+            raise RunnerError("copy %s: directory symlink cycle" % src)
+        ancestors.add(dir_id)
+        try:
+            os.makedirs(dst, mode=_stat_mod.S_IMODE(st.st_mode), exist_ok=True)
+            for entry in sorted(os.listdir(src)):
+                copy_tree(os.path.join(src, entry), os.path.join(dst, entry),
+                          confine, copy_only, ancestors)
+        finally:
+            ancestors.discard(dir_id)
         return
-    try:
-        os.link(src, dst)
-        return
-    except OSError:
-        pass
+    if not copy_only:
+        try:
+            os.link(src, dst)
+            return
+        except OSError:
+            pass
     # Refuse to overwrite an existing destination (a truncating copy over a
     # hard-linked file would corrupt the shared inode).
     if os.path.lexists(dst):
         raise RunnerError("copy %s: destination already exists" % dst)
     _copy_file_contents(src, dst, _stat_mod.S_IMODE(st.st_mode))
+
+
+MAX_LINK_HOPS = 40
+
+
+def _path_forms(dir_):
+    """dir_'s absolute path and, when it differs, its real path."""
+    abs_ = os.path.abspath(dir_)
+    real = os.path.realpath(abs_)
+    return [abs_] if real == abs_ else [abs_, real]
+
+
+def _within(p, root):
+    return p == root or p.startswith(root.rstrip(os.sep) + os.sep)
+
+
+# Ports confine.go's leafKind: the stage's own file in the work dir, a path
+# reaching a Nextflow-staged input, or a host path outside the task.
+LEAF_OWN, LEAF_STAGED, LEAF_OUTSIDE = "own", "staged", "outside"
+
+
+class Confinement:
+    """Ports internal/shim/confine.go Confinement: a stage's output leaf, and
+    each symlink it passes through, either stays inside the task work dir,
+    reaches a path in it outside the phase dir (a Nextflow-staged input, then
+    followed wherever it points), or lands outside the task, which a strict
+    confinement (-confine, isolated container targets) refuses and otherwise
+    is copied, never hard-linked."""
+
+    def __init__(self, work, phase, strict):
+        self.work = _path_forms(work)
+        self.phase = _path_forms(os.path.join(work, phase))
+        self.strict = strict
+
+    def _staged(self, p):
+        for w in self.work:
+            if p == w or not _within(p, w):
+                continue
+            return not any(_within(p, ph) or _within(ph, p) for ph in self.phase)
+        return False
+
+    def admit(self, src):
+        """The LEAF_* kind of src, following its symlinks one hop at a time;
+        a strict confinement raises RunnerError instead of LEAF_OUTSIDE."""
+        p = os.path.abspath(src)
+        for _ in range(MAX_LINK_HOPS):
+            if self._staged(p):
+                return LEAF_STAGED
+            p = os.path.join(os.path.realpath(os.path.dirname(p)),
+                             os.path.basename(p))
+            if self._staged(p):
+                return LEAF_STAGED
+            try:
+                st = os.lstat(p)
+            except OSError as err:
+                raise RunnerError("stat %s: %s" % (p, err)) from None
+            if not _stat_mod.S_ISLNK(st.st_mode):
+                if any(_within(p, w) for w in self.work):
+                    return LEAF_OWN
+                if not self.strict:
+                    return LEAF_OUTSIDE
+                raise RunnerError(
+                    "stage output resolves outside the task work dir: "
+                    "%s resolves to %s" % (src, p))
+            target = os.readlink(p)
+            if not os.path.isabs(target):
+                target = os.path.join(os.path.dirname(p), target)
+            p = os.path.normpath(target)
+        raise RunnerError(
+            "resolve %s: too many levels of symbolic links" % src)
 
 
 def _copy_file_contents(src, dst, mode):
@@ -865,9 +1008,9 @@ def write_payload(dir_, payload):
         out.write(data)
 
 
-def write_bundle(dir_, payload, params, structs):
+def write_bundle(dir_, payload, params, structs, confine):
     """Ports WriteBundle: stage file leaves, then write the marked payload."""
-    write_payload(dir_, mark_files(dir_, payload, params, structs))
+    write_payload(dir_, mark_files(dir_, payload, params, structs, confine))
 
 
 def write_text(path, text):
@@ -1130,7 +1273,8 @@ def run_split(fl):
     if fl.joinres:
         write_text(joinres, go_json(resources_struct(join_res)))
     if fl.chunkdir:
-        write_chunk_bundles(chunkdir, defs, man, fl.callable)
+        write_chunk_bundles(chunkdir, defs, man, fl.callable,
+                            Confinement(fl.work, "split", fl.confine))
 
 
 def parse_stage_defs(result):
@@ -1192,12 +1336,12 @@ def chunk_defs_doc(defs):
     return doc
 
 
-def write_chunk_bundles(dir_, defs, man, callable_):
+def write_chunk_bundles(dir_, defs, man, callable_, confine):
     """Ports cmd/mre/main.go writeChunkBundles + shim.WriteChunkBundle."""
     chunk_in = man.params(callable_, "chunkin")
     for i, (res, cargs) in enumerate(defs):
         bdir = os.path.join(dir_, "chunk_%05d" % i)
-        marked = mark_files(bdir, dict(cargs), chunk_in, man.structs)
+        marked = mark_files(bdir, dict(cargs), chunk_in, man.structs, confine)
         write_payload(bdir, {"args": marked, "resources": resources_struct(res)})
 
 
@@ -1232,6 +1376,7 @@ def run_outs_phase(fl, phase, files, eff, man, args, invoke):
         exited = True
     finally:
         os.chdir(task_cwd)
+    confine = Confinement(fl.work, phase, fl.confine)
     if exited:
         payload = martian.json_sanitize(dict(skeleton))
     else:
@@ -1241,7 +1386,7 @@ def run_outs_phase(fl, phase, files, eff, man, args, invoke):
     if phase == "join" or not fl.chunk:
         validate_outputs(man.structs, man.params(fl.callable, "out"), payload,
                          fl.callable)
-    write_bundle(out_path, payload, out_params, man.structs)
+    write_bundle(out_path, payload, out_params, man.structs, confine)
 
 
 def run_main(fl):

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -23,28 +24,45 @@ var errDestExists = errors.New("destination already exists")
 // its own ancestors through a symlink, which would otherwise recurse unbounded.
 var errSymlinkCycle = errors.New("directory symlink cycle")
 
+// ErrBadMarker reports a payload string carrying the reserved marker prefix in
+// a shape mre never writes: a corrupt or forged bundle.
+var ErrBadMarker = errors.New("malformed bundle marker")
+
 // The bundle is the object-store-portable channel item exchanged between
 // Nextflow processes: a directory holding a JSON payload plus the actual files
 // it references, so Nextflow stages files (not bare absolute paths) across task
 // boundaries. File leaves in the payload are stored as markers; the real files
 // live under the files subdir, named collision-free.
+//
+// Every payload string beginning with reservedPrefix is mre's own: a marker
+// MarkFiles wrote at a file leaf the type walk found, or an escaped value.
+// MarkFiles escapes any other string that begins with the prefix, whatever its
+// type, so a user's string can never be read back as a marker; ReadBundle
+// unescapes it, and the stage receives the string mrp would give it.
 const (
+	reservedPrefix = "@mre:"
 	// FileMarker prefixes a plain-file leaf value in a bundle's payload. The
-	// remainder is the bundle-relative path to the staged file. The prefix is
-	// distinctive enough that no real data value collides with it.
-	FileMarker = "@mre:file:"
+	// remainder is the bundle-relative path to the staged file.
+	FileMarker = reservedPrefix + "file:"
 	// DirMarker is FileMarker's counterpart for a leaf staged from a directory
 	// (a Martian `path` output, or a directory a stage wrote into a `file`-typed
 	// out). Both markers resolve to a path identically; the distinction records
 	// the leaf's ground-truth dir-ness — measured by stat at staging time — so a
 	// downstream consumer (publish's manifest) need not infer it from the declared
 	// output type. See MarkFiles and cmd/mre/publish.go emitFile.
-	DirMarker = "@mre:dir:"
+	DirMarker = reservedPrefix + "dir:"
+	// escapePrefix prefixes a payload value that is not a marker but itself
+	// begins with reservedPrefix; the remainder is the original string.
+	escapePrefix = reservedPrefix + "str:"
 	// bundleData is the payload filename inside a bundle directory.
 	bundleData = "data.json"
 	// bundleFiles is the files subdirectory inside a bundle directory.
 	bundleFiles = "f"
 )
+
+// markerRel is the only bundle-relative shape MarkFiles writes: an ordinal leaf
+// directly under the files subdir, keeping the source's extension.
+var markerRel = regexp.MustCompile(`^` + bundleFiles + `/L[0-9]{4,}(\.[^/]*)?$`)
 
 // Marker returns the transport marker for a leaf staged at bundle-relative rel,
 // choosing FileMarker or DirMarker by the leaf's stat'd dir-ness.
@@ -58,23 +76,110 @@ func Marker(rel string, isDir bool) string {
 
 // CutMarker splits a transport marker into (rel, isDir, ok): its bundle-relative
 // path and whether the leaf is a directory. ok is false for a string that is not
-// a marker (a plain scalar, or a raw path for a declared output never written).
+// a well-formed marker (a plain scalar, an escaped value, a raw path for a
+// declared output never written, or a marker whose rel MarkFiles never writes).
 func CutMarker(s string) (string, bool, bool) {
-	if rel, ok := strings.CutPrefix(s, DirMarker); ok {
-		return rel, true, true
+	rel, isDir := strings.CutPrefix(s, DirMarker)
+	if !isDir {
+		var ok bool
+		if rel, ok = strings.CutPrefix(s, FileMarker); !ok {
+			return "", false, false
+		}
 	}
 
-	if rel, ok := strings.CutPrefix(s, FileMarker); ok {
-		return rel, false, true
+	if !markerRel.MatchString(rel) || !filepath.IsLocal(rel) {
+		return "", false, false
 	}
 
-	return "", false, false
+	return rel, isDir, true
+}
+
+// CheckReserved returns ErrBadMarker for a string that begins with the reserved
+// prefix but is neither a well-formed marker nor an escaped value, and nil for
+// any other string.
+func CheckReserved(s string) error {
+	if !strings.HasPrefix(s, reservedPrefix) || strings.HasPrefix(s, escapePrefix) {
+		return nil
+	}
+
+	if _, _, ok := CutMarker(s); ok {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %q", ErrBadMarker, s)
+}
+
+// UnescapeValue returns a copy of v with every escaped string restored to its
+// original value, leaving markers and all other values as they are. It is for
+// payload read raw rather than through ReadBundle: the published outs and the
+// element the driver slices out of a sidecar.
+func UnescapeValue(v any) (any, error) {
+	return mapStrings(v, func(s string) (string, error) {
+		return strings.TrimPrefix(s, escapePrefix), nil
+	})
+}
+
+// escapeValue returns a copy of v with every string that begins with the
+// reserved prefix escaped, so no value MarkFiles did not itself mark reads back
+// as a marker.
+func escapeValue(v any) (any, error) {
+	return mapStrings(v, func(s string) (string, error) {
+		if strings.HasPrefix(s, reservedPrefix) {
+			return escapePrefix + s, nil
+		}
+
+		return s, nil
+	})
+}
+
+// mapStrings returns a copy of the decoded JSON tree v with fn applied to every
+// string value (map keys are left alone). A json.RawMessage is decoded first so
+// its strings are reached too.
+func mapStrings(v any, fn func(string) (string, error)) (any, error) {
+	switch t := v.(type) {
+	case string:
+		return fn(t)
+	case json.RawMessage:
+		dv, err := decodeJSON(t)
+		if err != nil {
+			return nil, err
+		}
+
+		return mapStrings(dv, fn)
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			ne, err := mapStrings(e, fn)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = ne
+		}
+
+		return out, nil
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			ne, err := mapStrings(e, fn)
+			if err != nil {
+				return nil, err
+			}
+
+			out[k] = ne
+		}
+
+		return out, nil
+	default:
+		return v, nil
+	}
 }
 
 // ReadBundle loads a bundle directory's payload and rewrites every file marker
-// to an absolute path under the (staged) bundle, so callers see real paths. An
-// empty dir yields nil (an absent optional input). The resolution is
-// type-agnostic: any string carrying the marker prefix is a file leaf.
+// to an absolute path under the (staged) bundle, so callers see real paths, and
+// restores every escaped value. An empty dir yields nil (an absent optional
+// input). The rewrite needs no types: MarkFiles escapes every reserved string it
+// did not mark, so a marker here is a file leaf the writer's type walk found.
 func ReadBundle(dir string) (json.RawMessage, error) {
 	if dir == "" {
 		return nil, nil
@@ -95,12 +200,38 @@ func ReadBundle(dir string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("parse bundle %s: %w", dir, err)
 	}
 
-	out, err := json.Marshal(resolveMarkers(v, abs))
+	resolved, err := mapStrings(v, func(s string) (string, error) {
+		return resolveLeaf(s, abs)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve bundle %s: %w", dir, err)
+	}
+
+	out, err := json.Marshal(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("encode bundle %s: %w", dir, err)
 	}
 
 	return out, nil
+}
+
+// resolveLeaf maps one payload string read from the bundle at bundleAbs: an
+// escaped value to its original, a marker to its absolute staged path, any
+// other reserved string to ErrBadMarker, and everything else to itself.
+func resolveLeaf(s, bundleAbs string) (string, error) {
+	if orig, ok := strings.CutPrefix(s, escapePrefix); ok {
+		return orig, nil
+	}
+
+	if rel, _, ok := CutMarker(s); ok {
+		return filepath.Join(bundleAbs, rel), nil
+	}
+
+	if err := CheckReserved(s); err != nil {
+		return "", err
+	}
+
+	return s, nil
 }
 
 // decodeJSON decodes JSON into an any tree, keeping numbers as json.Number so a
@@ -117,38 +248,13 @@ func decodeJSON(raw json.RawMessage) (any, error) {
 	return v, nil
 }
 
-// resolveMarkers walks decoded JSON, replacing marker strings with absolute
-// paths under bundleAbs.
-func resolveMarkers(v any, bundleAbs string) any {
-	switch t := v.(type) {
-	case string:
-		if rel, _, ok := CutMarker(t); ok {
-			return filepath.Join(bundleAbs, rel)
-		}
-
-		return t
-	case []any:
-		for i, e := range t {
-			t[i] = resolveMarkers(e, bundleAbs)
-		}
-
-		return t
-	case map[string]any:
-		for k, e := range t {
-			t[k] = resolveMarkers(e, bundleAbs)
-		}
-
-		return t
-	default:
-		return v
-	}
-}
-
 // WriteBundle writes payload into dir as a bundle: every file leaf located by
 // params/tbl is copied into dir/f/ and replaced with a marker, then the
-// rewritten payload is written to dir/data.json.
-func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) error {
-	marked, err := MarkFiles(dir, payload, params, tbl)
+// rewritten payload is written to dir/data.json. conf confines a stage's
+// outputs; it is nil for a payload a stage did not choose (bindings, merges,
+// entry args), whose files the run was given.
+func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, conf *Confinement) error {
+	marked, err := MarkFiles(dir, payload, params, tbl, conf)
 	if err != nil {
 		return err
 	}
@@ -183,8 +289,9 @@ func writePayload(dir string, payload map[string]any) error {
 
 // WriteChunkBundle writes a chunk definition as a bundle: the chunk's args have
 // their file leaves (located via chunkIn) staged into the bundle, while the
-// resource overrides are preserved verbatim for the scheduler to read.
-func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.Table) error {
+// resource overrides are preserved verbatim for the scheduler to read. conf
+// confines the split's files as WriteBundle's does.
+func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.Table, conf *Confinement) error {
 	argsMap := make(map[string]any, len(def.Args))
 	for k, v := range def.Args {
 		dv, err := decodeJSON(v)
@@ -195,7 +302,7 @@ func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.T
 		argsMap[k] = dv
 	}
 
-	marked, err := MarkFiles(dir, argsMap, chunkIn, tbl)
+	marked, err := MarkFiles(dir, argsMap, chunkIn, tbl, conf)
 	if err != nil {
 		return err
 	}
@@ -206,12 +313,25 @@ func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.T
 // MarkFiles copies every file leaf in payload (located via params/tbl) into
 // dir/f/, replacing each with a bundle-relative marker, and returns the
 // rewritten payload. Names are sequenced so distinct leaves never collide.
-func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) (map[string]any, error) {
+// Every other string that begins with the reserved prefix is escaped, a file
+// leaf naming no file included. A non-nil conf confines the leaves' files.
+func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, conf *Confinement) (map[string]any, error) {
+	escaped := make(map[string]any, len(payload))
+	for k, v := range payload {
+		ev, err := escapeValue(v)
+		if err != nil {
+			return nil, fmt.Errorf("escape bundle value %s: %w", k, err)
+		}
+
+		escaped[k] = ev
+	}
+
 	n := 0
 
-	copyIn := func(src string) (string, error) {
+	copyIn := func(leaf string) (string, error) {
+		src := strings.TrimPrefix(leaf, escapePrefix)
 		if src == "" {
-			return src, nil
+			return leaf, nil
 		}
 
 		// A declared output file the stage legitimately never wrote: keep the path
@@ -225,7 +345,7 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		// precisely.
 		info, err := os.Stat(src)
 		if os.IsNotExist(err) {
-			return src, nil
+			return leaf, nil
 		}
 
 		isDir := err == nil && info.IsDir()
@@ -248,14 +368,14 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 			return "", fmt.Errorf("create files dir: %w", err)
 		}
 
-		if err := CopyTree(src, dst); err != nil {
+		if err := copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{conf: conf}); err != nil {
 			return "", err
 		}
 
 		return Marker(rel, isDir), nil
 	}
 
-	marked, err := tbl.Apply(params, payload, copyIn)
+	marked, err := tbl.Apply(params, escaped, copyIn)
 	if err != nil {
 		return nil, fmt.Errorf("collect bundle files: %w", err)
 	}
@@ -265,9 +385,71 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 
 // CopyTree links or copies src to dst, recursing into directories (Martian file
 // outputs may be directories). It hard-links files when possible (same device)
-// for speed, falling back to a byte copy.
+// for speed, falling back to a byte copy. It follows symlinks to any target,
+// so it is for trees the run was given, not a stage's outputs.
 func CopyTree(src, dst string) error {
-	return copyTree(src, dst, make(map[dirID]struct{}))
+	return copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{})
+}
+
+// copyPolicy is how copyTree treats the tree it is copying: conf, while
+// non-nil, classifies each entry of a stage's own output (see Confinement), and
+// copyOnly forbids hard links below a host path outside the task.
+type copyPolicy struct {
+	conf     *Confinement
+	copyOnly bool
+}
+
+// admit returns the policy for src and its entries: unchanged for the stage's
+// own files, unconfined below a staged input, and unconfined but copy-only
+// below a host path outside the task.
+func (p copyPolicy) admit(src string) (copyPolicy, error) {
+	if p.conf == nil {
+		return p, nil
+	}
+
+	kind, err := p.conf.admit(src)
+	if err != nil {
+		return p, err
+	}
+
+	switch kind {
+	case leafStaged:
+		return copyPolicy{}, nil
+	case leafOutside:
+		return copyPolicy{copyOnly: true}, nil
+	default:
+		return p, nil
+	}
+}
+
+// resolveSymlink returns src, or its real target when src is a symlink, and ""
+// for a dangling symlink. Nextflow stages inputs as symlinks, and link(2) does
+// not follow them — hard-linking the symlink would leave a dangling link once
+// the bundle is staged into another isolated task (AWS Batch + S3 /
+// HealthOmics), where the original target is absent. A dangling symlink inside
+// a copied directory is treated as absent — the same way MarkFiles' top-level
+// guard does (os.Stat -> IsNotExist -> keep the path) — rather than aborting
+// the whole bundle.
+func resolveSymlink(src string) (string, error) {
+	lst, err := os.Lstat(src)
+	if err != nil {
+		return "", fmt.Errorf("stat %s: %w", src, err)
+	}
+
+	if lst.Mode()&os.ModeSymlink == 0 {
+		return src, nil
+	}
+
+	resolved, err := filepath.EvalSymlinks(src)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink %s: %w", src, err)
+	}
+
+	return resolved, nil
 }
 
 // dirID identifies a directory by (device, inode) — the same identity os.SameFile
@@ -303,26 +485,17 @@ func enterDir(dir os.FileInfo, ancestors map[dirID]struct{}) (func(), bool) {
 // of its own ancestors would otherwise recurse until ENAMETOOLONG, duplicating
 // the tree on every pass; catching the repeat (dev, inode) bounds the recursion
 // to the finite number of distinct directories reachable once.
-func copyTree(src, dst string, ancestors map[dirID]struct{}) error {
-	// Resolve a symlinked source to its real target first. Nextflow stages inputs
-	// as symlinks, and link(2) does not follow them — hard-linking the symlink
-	// would leave a dangling link once the bundle is staged into another isolated
-	// task (AWS Batch + S3 / HealthOmics), where the original target is absent.
-	if lst, err := os.Lstat(src); err == nil && lst.Mode()&os.ModeSymlink != 0 {
-		resolved, err := filepath.EvalSymlinks(src)
-		if err != nil {
-			// A dangling symlink inside a copied directory: treat it as absent —
-			// the same way MarkFiles' top-level guard does (os.Stat -> IsNotExist
-			// -> keep the path) — rather than aborting the whole bundle.
-			if os.IsNotExist(err) {
-				return nil
-			}
-
-			return fmt.Errorf("resolve symlink %s: %w", src, err)
-		}
-
-		src = resolved
+func copyTree(src, dst string, ancestors map[dirID]struct{}, pol copyPolicy) error {
+	resolved, err := resolveSymlink(src)
+	if err != nil || resolved == "" {
+		return err
 	}
+
+	if pol, err = pol.admit(src); err != nil {
+		return err
+	}
+
+	src = resolved
 
 	info, err := os.Stat(src)
 	if err != nil {
@@ -337,17 +510,19 @@ func copyTree(src, dst string, ancestors map[dirID]struct{}) error {
 
 		defer release()
 
-		return copyDir(src, dst, info, ancestors)
+		return copyDir(src, dst, info, ancestors, pol)
 	}
 
-	if err := os.Link(src, dst); err == nil {
-		return nil
+	if !pol.copyOnly {
+		if err := os.Link(src, dst); err == nil {
+			return nil
+		}
 	}
 
-	// Hard-linking failed. Refuse to overwrite an existing destination: a
+	// Not hard-linked. Refuse to overwrite an existing destination: a
 	// truncating copy over a file already hard-linked elsewhere would corrupt
 	// the shared inode. A genuinely absent dst means the link was unavailable
-	// (e.g. cross-device), so fall back to a byte copy.
+	// (e.g. cross-device) or not allowed, so make a byte copy.
 	if _, err := os.Lstat(dst); err == nil {
 		return fmt.Errorf("copy %s: %w", dst, errDestExists)
 	}
@@ -355,7 +530,7 @@ func copyTree(src, dst string, ancestors map[dirID]struct{}) error {
 	return copyFileContents(src, dst, info)
 }
 
-func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}) error {
+func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}, pol copyPolicy) error {
 	// Create the destination writable regardless of the source's mode, then
 	// restore the source mode after populating: a read-only source directory
 	// (e.g. 0555) must still admit its children being written into the copy.
@@ -369,7 +544,7 @@ func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}) er
 	}
 
 	for _, e := range entries {
-		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors); err != nil {
+		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors, pol); err != nil {
 			return err
 		}
 	}
