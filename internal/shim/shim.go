@@ -5,6 +5,7 @@
 package shim
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -57,6 +58,7 @@ const (
 	// stderrTailBytes bounds the _stderr tail a failure message carries; the
 	// whole stream already reached the task log through the tee.
 	stderrTailBytes = 64 << 10
+	maxAlarmLine    = 1 << 20
 )
 
 var (
@@ -175,7 +177,7 @@ func RunSplit(
 		return nil, Resources{}, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "split", monitorLimits(eff, a)); err != nil {
+	if err := runPhase(ctx, meta, files, journal, a, "split", monitorLimits(eff, a), inv.Stage); err != nil {
 		return nil, Resources{}, err
 	}
 
@@ -204,7 +206,7 @@ func RunMain(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "main", monitorLimits(eff, a)); err != nil {
+	if err := runPhase(ctx, meta, files, journal, a, "main", monitorLimits(eff, a), inv.Stage); err != nil {
 		return nil, err
 	}
 
@@ -238,7 +240,7 @@ func RunJoin(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "join", monitorLimits(eff, a)); err != nil {
+	if err := runPhase(ctx, meta, files, journal, a, "join", monitorLimits(eff, a), inv.Stage); err != nil {
 		return nil, err
 	}
 
@@ -558,6 +560,42 @@ func stderrTail(path string) string {
 	}
 
 	return fmt.Sprintf("[first %d bytes of _stderr omitted]\n%s", off, strings.TrimSpace(string(buf)))
+}
+
+// runPhase runs the adapter for one phase of stage, then surfaces the alarms
+// the phase raised, whatever its outcome.
+func runPhase(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources, stage string) error {
+	err := runAdapter(ctx, meta, files, journal, a, phase, res)
+	forwardAlarms(meta, stage, phase)
+
+	return err
+}
+
+// forwardAlarms writes each line of the phase's _alarm (martian.alarm) to the
+// shim's stderr, prefixed for grepping the task logs, so they carry the alerts
+// mrp prints when a stage completes (core/stage.go doComplete).
+func forwardAlarms(meta, stage, phase string) {
+	path := filepath.Join(meta, "_alarm")
+
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	prefix := fmt.Sprintf("mre: ALARM: %s %s: ", stage, phase)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, maxAlarmLine)
+
+	for sc.Scan() {
+		if line := strings.TrimRight(sc.Text(), "\r"); strings.TrimSpace(line) != "" {
+			fmt.Fprintln(os.Stderr, prefix+line)
+		}
+	}
+
+	if err := sc.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "%sread %s: %v\n", prefix, path, err)
+	}
 }
 
 // forwardStageLog surfaces a stage's Martian log (_log, written via
