@@ -80,6 +80,13 @@ func (r sourceRoots) check(what, path string) error {
 		return fmt.Errorf("%s: %w", what, err)
 	}
 
+	// The null device reads as an empty file on every host and container, so
+	// copying it carries no host data; fixtures use it as a portable absolute
+	// default, since mrp does not resolve a relative one.
+	if resolved == os.DevNull {
+		return nil
+	}
+
 	if !r.contains(resolved) {
 		return refuseExternal(what, path, resolved)
 	}

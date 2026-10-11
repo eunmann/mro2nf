@@ -628,3 +628,20 @@ func TestEmitRefusesSourceInBuildContext(t *testing.T) {
 		})
 	}
 }
+
+// TestEmitAllowsNullDeviceDefault checks the null device passes the roots
+// check: it reads as an empty file everywhere, so it carries no host data, and
+// fixtures use it as a portable absolute entry default (mrp does not resolve a
+// relative one).
+func TestEmitAllowsNullDeviceDefault(t *testing.T) {
+	c := hygieneCase{
+		name: "entry_default_dev_null",
+		setup: func(_ *testing.T, tr hygieneTree) (string, string) {
+			return os.DevNull, inTreeCode(tr)
+		},
+	}
+
+	if err := c.emit(t); err != nil {
+		t.Errorf("Emit with a %s default: %v", os.DevNull, err)
+	}
+}
