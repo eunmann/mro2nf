@@ -364,6 +364,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// #241: SUB at two call sites (invocation-known empty vs runtime empty),
 	// disable-gated so every leg keeps both SUB boundaries.
 	{name: "empty_fork_two_sites", native: true, inline: true},
+	// #383: splits over disable-gated producers of invocation-known sources,
+	// under literal and runtime gates; mrp prunes each to null.
+	{name: "empty_fork_gated", native: true, runner: true, inline: true},
+	{name: "empty_fork_gated_sub", native: true, runner: true, inline: true},
 	// The native-suite golden anchors: their committed expected/outs.json
 	// files claim mrp provenance, so the live differential machine-checks
 	// that claim — otherwise TestGolden + the native suites would prove

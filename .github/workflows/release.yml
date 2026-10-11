@@ -125,7 +125,7 @@ jobs:
           subject-checksums: SHA256SUMS
       - if: github.event.repository.private
         run: echo "::warning::no build provenance for the binaries or the image; GitHub attestations need a public repository here"
-      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             mro2nf-*

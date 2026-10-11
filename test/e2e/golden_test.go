@@ -175,6 +175,11 @@ var goldenCases = []goldenCase{
 	// #241: one sub-pipeline at two call sites, one invocation-known empty
 	// (null) and one runtime-empty ([]); the rule is decided per call site.
 	{"empty_fork_two_sites", "empty_fork_two_sites", "expected/outs.json"},
+	// #383: a split over a disable-gated producer of an invocation-known
+	// source (map call, mapping sub-pipeline, pass-through sub-pipeline) is
+	// null under literal and runtime gates alike.
+	{"empty_fork_gated", "empty_fork_gated", "expected/outs.json"},
+	{"empty_fork_gated_sub", "empty_fork_gated_sub", "expected/outs.json"},
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},

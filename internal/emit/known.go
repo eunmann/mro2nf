@@ -292,8 +292,11 @@ func (e *knownEval) splitKnown(in *knownInst, c ir.Call) bool {
 // named output projects to the per-fork collection. A composite CONTAINING
 // refs (fan-in `[A.out, B.out]`) is rejected even though its static length
 // makes the zero-fork case unreachable today — the guard is structural, not
-// an unstated invariant. A disabled call is never known: its gate may null it
-// at runtime, where mrp's typed-empty rule (not the static prune) applies.
+// an unstated invariant. A disable gate does not affect known-ness (#383):
+// mrp folds a literal gate statically (false runs the call, true makes its
+// outputs null, which a consumer's zero-fork merge also gives), and under a
+// runtime gate it either prunes the producer's known-empty split to null or
+// rejects the consumer's split of the gated value as a binding error.
 func (e *knownEval) known(in *knownInst, v ir.Value, lenOnly bool) bool {
 	r := v.Ref
 	if r == nil {
@@ -316,7 +319,7 @@ func (e *knownEval) known(in *knownInst, v ir.Value, lenOnly bool) bool {
 	}
 
 	c, ok := callByName(in.p, r.ID)
-	if !ok || c.Disabled != nil {
+	if !ok {
 		return false
 	}
 
