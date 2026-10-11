@@ -134,10 +134,11 @@ func TestOverridesOverlayReachesStage(t *testing.T) {
 }
 
 // TestOverridesBeatChunkRequest pins #248 against real mrp: under
-// `--overrides {"FRAC_MEM.CHUNKED": {"chunk.mem_gb": 3}}` mrp gives BOTH of
-// CHUNKED's chunks 3 GB in _jobinfo and __mem_gb (and __vmem_gb 6), although its
-// split asked 0.5 GB for chunk 0: mrp's getJobReqs applies the override after
-// the chunk's own request. The untargeted MEM stage keeps its 1.5.
+// `--overrides {"FRAC_MEM.CHUNKED": {"chunk.mem_gb": 3, "join.mem_gb": 4}}` mrp
+// gives BOTH of CHUNKED's chunks 3 GB in _jobinfo and __mem_gb (and __vmem_gb
+// 6), although its split asked 0.5 GB for chunk 0, and the join 4 GB over the
+// split-returned 0.5: mrp's getJobReqs applies the override after the chunk's
+// and join's own request. The untargeted MEM stage keeps its 1.5.
 func TestOverridesBeatChunkRequest(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 	buildBinaries(t)
@@ -145,7 +146,7 @@ func TestOverridesBeatChunkRequest(t *testing.T) {
 	work := t.TempDir()
 	overridesJSON := filepath.Join(work, "overrides.json")
 
-	if err := os.WriteFile(overridesJSON, []byte(`{ "FRAC_MEM.CHUNKED": { "chunk.mem_gb": 3 } }`), 0o644); err != nil {
+	if err := os.WriteFile(overridesJSON, []byte(`{ "FRAC_MEM.CHUNKED": { "chunk.mem_gb": 3, "join.mem_gb": 4 } }`), 0o644); err != nil {
 		t.Fatalf("write overrides.json: %v", err)
 	}
 
@@ -168,6 +169,8 @@ func TestOverridesBeatChunkRequest(t *testing.T) {
 	var outs struct {
 		ChunkM  []float64 `json:"chunk_m"`
 		ChunkAM []float64 `json:"chunk_am"`
+		JoinM   float64   `json:"join_m"`
+		JoinAM  float64   `json:"join_am"`
 		MemM    float64   `json:"mem_m"`
 	}
 
@@ -177,6 +180,11 @@ func TestOverridesBeatChunkRequest(t *testing.T) {
 	if fmt.Sprint(outs.ChunkM) != fmt.Sprint(want) || fmt.Sprint(outs.ChunkAM) != fmt.Sprint(want) {
 		t.Errorf("chunks saw mem %v / __mem_gb %v, want %v (mrp: the chunk.mem_gb override beats the chunk's own request)",
 			outs.ChunkM, outs.ChunkAM, want)
+	}
+
+	if outs.JoinM != 4 || outs.JoinAM != 4 {
+		t.Errorf("join saw mem %v / __mem_gb %v, want 4 (mrp: the join.mem_gb override beats the split's join request)",
+			outs.JoinM, outs.JoinAM)
 	}
 
 	if outs.MemM != 1.5 {

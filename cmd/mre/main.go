@@ -163,6 +163,18 @@ func (c *commonFlags) overridden(def shim.Resources) shim.Resources {
 	return shim.ApplyOverride(def, shim.Resources{Threads: c.overrideThreads, MemGB: c.overrideMemGB})
 }
 
+// joinRequest is the join's own request: the split-returned joinres.json with
+// the phase's override over it, since mrp's getJobReqs applies --overrides
+// after the join def.
+func (c *commonFlags) joinRequest(path string) (shim.Resources, error) {
+	res, err := readJoinRes(path)
+	if err != nil {
+		return res, err
+	}
+
+	return c.overridden(res), nil
+}
+
 func (c *commonFlags) invocation(stage string, args json.RawMessage) shim.Invocation {
 	return shim.Invocation{Stage: stage, Call: c.call, Args: args, MROFile: c.mro}
 }
@@ -343,7 +355,7 @@ func runJoin(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	joinRes, err := readJoinRes(*joinResFile)
+	joinRes, err := cf.joinRequest(*joinResFile)
 	if err != nil {
 		return err
 	}
@@ -359,7 +371,7 @@ func runJoin(ctx context.Context, argv []string) error {
 	}
 
 	final, err := shim.RunJoin(ctx, cf.work, cf.adapter(), stageArgs, defs, outs,
-		params, man.Table(), cf.overridden(joinRes), cf.resources(), cf.invocation(prod.callable, stageArgs))
+		params, man.Table(), joinRes, cf.resources(), cf.invocation(prod.callable, stageArgs))
 	if err != nil {
 		return fmt.Errorf("join: %w", err)
 	}

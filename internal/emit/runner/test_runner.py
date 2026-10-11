@@ -590,6 +590,19 @@ class ResourcesTest(unittest.TestCase):
             rs.overridden(fl, _res(mem_gb=0.5)), rs.cli_resources(fl))
         self.assertEqual((eff.mem_gb, eff.vmem_gb), (3.0, 6.0))
 
+    def test_override_beats_join_request(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "joinres.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"threads": 2, "mem_gb": 0.5}, fh)
+        fl = rs.parse_flags(
+            "join", ["-joinres", path, "-overridememgb", "4"])
+        req = rs.join_request(fl)
+        self.assertEqual((req.threads, req.mem_gb), (2.0, 4.0))
+        fl = rs.parse_flags("join", ["-joinres", path])
+        self.assertEqual(rs.join_request(fl).mem_gb, 0.5)
+
     def test_retry_monitor_limits_follow_allocation(self):
         eff = rs.resolve_resources(_res(), _res(mem_gb=0.5))
         first = rs.parse_flags("main", ["-allocbytes", str(1 << 30)])

@@ -624,8 +624,8 @@ def _resource_num(v):
 
 
 def _js_num(v):
-    """A resolved resource as the stage would see it after mre's
-    numRaw ('g' format) -> json.load round trip: whole values become ints."""
+    """A resolved resource as the stage reads it from _jobinfo: mirrors shim
+    writeJobInfo's json.Marshal of the float, so whole values become ints."""
     f = float(v)
     if f.is_integer() and abs(f) < 1e21:
         return int(f)
@@ -1244,6 +1244,12 @@ def overridden(fl, d):
                      vmem_gb=d.vmem_gb, special=d.special)
 
 
+def join_request(fl):
+    """Ports cmd/mre/main.go joinRequest: the split-returned join request with
+    the phase's --overrides values over it."""
+    return overridden(fl, read_join_res(fl.joinres))
+
+
 def abs_out(path):
     """Pin an output path to the invocation cwd: mre writes -o/-joinres/
     -chunkdir relative to its own cwd, but the runner chdirs into the phase
@@ -1482,8 +1488,7 @@ def run_join(fl):
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
     chunk_defs, chunk_outs = read_chunk_data(fl.chunksfile, fl.chunkdir)
-    eff = resolve_resources(
-        overridden(fl, read_join_res(fl.joinres)), cli_resources(fl))
+    eff = resolve_resources(join_request(fl), cli_resources(fl))
     merged = dict(args)
     inject_resources(merged, eff)
     run_outs_phase(
