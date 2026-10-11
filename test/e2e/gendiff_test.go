@@ -42,7 +42,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -432,6 +431,11 @@ func evalGenProgram(t *testing.T, env genEnv, prog *gen.Program) (genVerdict, er
 func evalGenFixture(t *testing.T, env genEnv, dir, work string) (genVerdict, error) {
 	t.Helper()
 
+	transpileErrs, skip := transpileGenLegs(env, dir, work)
+	if skip != "" {
+		return genVerdict{skip: skip}, nil
+	}
+
 	ctx, cancel := context.WithTimeout(t.Context(), env.mrpTimeout)
 	defer cancel()
 
@@ -441,10 +445,7 @@ func evalGenFixture(t *testing.T, env genEnv, dir, work string) (genVerdict, err
 	case errors.Is(err, errMrpUnfinished) && t.Context().Err() == nil:
 		return genVerdict{skip: fmt.Sprintf("mrp did not finish in %s:\n%s", env.mrpTimeout,
 			tailFile(filepath.Join(work, "mrp.log")))}, nil
-	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, errABIMeta):
-		// mrp failed a fork it never invoked as a call, in its own fork
-		// resolution ("matched 2 out of 2 forks ..., need exactly 1"): it
-		// rejects the program at run time.
+	case mrpFailedOutsideStages(err):
 		return genVerdict{skip: fmt.Sprintf("mrp failed outside any stage (%v):\n%s", err,
 			tailFile(filepath.Join(work, "mrp.log")))}, nil
 	case err != nil:
@@ -458,14 +459,10 @@ func evalGenFixture(t *testing.T, env genEnv, dir, work string) (genVerdict, err
 
 	var v genVerdict
 
-	for _, leg := range env.legs {
-		lv, err := runGenLeg(t, env, leg, dir, work, mrp)
+	for i, leg := range env.legs {
+		lv, err := runGenLeg(t, env, leg, dir, work, mrp, transpileErrs[i])
 		if err != nil {
 			return genVerdict{}, fmt.Errorf("leg %s: %w", leg.name, err)
-		}
-
-		if lv.skip != "" {
-			return lv, nil
 		}
 
 		v.findings = append(v.findings, lv.findings...)
@@ -475,6 +472,28 @@ func evalGenFixture(t *testing.T, env genEnv, dir, work string) (genVerdict, err
 	return v, nil
 }
 
+// transpileGenLegs transpiles the fixture at dir for every leg into its
+// genLegProj before anything runs, so a program one leg rejects as
+// unsupported is no test before any leg runs, never after another leg found
+// a divergence in it. It returns each leg's transpile error, or why the
+// program is no test.
+func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
+	errs := make([]error, len(env.legs))
+
+	for i, leg := range env.legs {
+		err := transpileInto(env.tools, dir, "pipeline.mro", genLegProj(work, leg), leg.flags...)
+		if err != nil && strings.Contains(err.Error(), "unsupported construct") {
+			return nil, fmt.Sprintf("mro2nf rejects it as unsupported (%s leg): %v", leg.name, err)
+		}
+
+		errs[i] = err
+	}
+
+	return errs, ""
+}
+
+func genLegProj(work string, leg genLeg) string { return filepath.Join(work, "nf-"+leg.name) }
+
 // isStageDir reports whether name is a stage of the fixture at dir, rather
 // than a pipeline: mrp records its own failures resolving a pipeline's
 // forks or merging its outputs at the pipeline, and sometimes only by chance
@@ -483,21 +502,17 @@ func isStageDir(dir, name string) bool {
 	return name != "" && fileExists(filepath.Join(dir, filepath.FromSlash(gen.StageDir(name))))
 }
 
-// runGenLeg transpiles and runs the fixture under one leg and diffs the run
-// against mrp's: its outcome when either failed, else its outputs.
-func runGenLeg(t *testing.T, env genEnv, leg genLeg, dir, work string, mrp runOutcome) (genVerdict, error) {
+// runGenLeg runs the leg's transpiled project, which transpileErr reports
+// failed to transpile, and diffs the run against mrp's: its outcome when
+// either failed, else its outputs.
+func runGenLeg(t *testing.T, env genEnv, leg genLeg, dir, work string, mrp runOutcome, transpileErr error) (genVerdict, error) {
 	t.Helper()
 
-	proj := filepath.Join(work, "nf-"+leg.name)
-
-	if err := transpileInto(env.tools, dir, "pipeline.mro", proj, leg.flags...); err != nil {
-		if strings.Contains(err.Error(), "unsupported construct") {
-			return genVerdict{skip: fmt.Sprintf("mro2nf rejects it as unsupported (%s leg): %v", leg.name, err)}, nil
-		}
-
-		return outcomeVerdict(leg.name, mrp, failedWith(nil), err.Error()), nil
+	if transpileErr != nil {
+		return outcomeVerdict(leg.name, mrp, failedWith(nil), transpileErr.Error()), nil
 	}
 
+	proj := genLegProj(work, leg)
 	fixture := filepath.Base(dir)
 	runErr := runNextflow(t, proj, "-with-trace", "trace.txt")
 	recovered := errors.Is(runErr, errFailedAttempt)
@@ -847,11 +862,17 @@ func shrinkTarget(v genVerdict, keep *regexp.Regexp) map[string]bool {
 		}
 	}
 
-	for _, class := range []string{"outcome", "abi:", ""} {
+	classes := []func(key string) bool{
+		func(key string) bool { return key == "outcome" },
+		func(key string) bool { return strings.HasPrefix(key, "abi:") },
+		func(string) bool { return true },
+	}
+
+	for _, inClass := range classes {
 		want := map[string]bool{}
 
 		for _, f := range v.findings {
-			if strings.HasPrefix(f.key, class) {
+			if inClass(f.key) {
 				want[f.id()] = true
 			}
 		}

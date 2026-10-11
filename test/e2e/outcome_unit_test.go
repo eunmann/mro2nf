@@ -3,6 +3,7 @@ package e2e
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,20 @@ func TestMrpFailedOutcomeUnattributable(t *testing.T) {
 	got, err := mrpFailedOutcome(ps)
 	if err == nil {
 		t.Fatalf("outcome %s, want an error for the unattributable _errors", got)
+	}
+
+	if !mrpFailedOutsideStages(err) {
+		t.Errorf("err = %v, want a failure outside any stage", err)
+	}
+}
+
+// TestMrpFailedOutsideStagesIsNarrow checks a missing file other than a
+// fork's _invocation, such as an mrp binary that is not there, is not taken
+// for mrp failing outside any stage.
+func TestMrpFailedOutsideStagesIsNarrow(t *testing.T) {
+	err := fmt.Errorf("run mrp: %w", &fs.PathError{Op: "fork/exec", Path: "/no/mrp", Err: fs.ErrNotExist})
+	if mrpFailedOutsideStages(err) {
+		t.Errorf("mrpFailedOutsideStages(%v) = true, want false", err)
 	}
 }
 

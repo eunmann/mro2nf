@@ -48,6 +48,10 @@ const (
 // errABIMeta reports metadata the differential cannot attribute or decode.
 var errABIMeta = errors.New("stage metadata")
 
+// errNoStageInvocation reports an mrp fork dir with no _invocation: mrp
+// never invoked a stage there.
+var errNoStageInvocation = errors.New("no stage invocation")
+
 // abiInvocation is one stage phase as the stage saw it: its normalized _args
 // and _outs in canonical JSON. Origin locates it for reports only.
 type abiInvocation struct {
@@ -375,6 +379,10 @@ func collectMrpInvocations(ps string, rules abiRules) ([]abiInvocation, error) {
 
 func mrpStageName(fork string) (string, error) {
 	src, err := os.ReadFile(filepath.Join(fork, "_invocation"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("%w: %s: %w", errNoStageInvocation, fork, err)
+	}
+
 	if err != nil {
 		return "", fmt.Errorf("read stage invocation: %w", err)
 	}

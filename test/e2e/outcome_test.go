@@ -106,6 +106,14 @@ func (o runOutcome) equal(p runOutcome) bool {
 	return o.Failed == p.Failed && slices.Equal(o.Failures, p.Failures)
 }
 
+// mrpFailedOutsideStages reports whether err, from mrpFailedOutcome, is a
+// failure mrp recorded in a fork it never invoked as a call: its own fork
+// resolution ("matched 2 out of 2 forks ..., need exactly 1") rejected the
+// program at run time.
+func mrpFailedOutsideStages(err error) bool {
+	return errors.Is(err, errNoStageInvocation) || errors.Is(err, errABIMeta)
+}
+
 // mrpFailedOutcome classifies a pipestance mrp exited non-zero on, from the
 // _assert and _errors files it left. A missing pipestance (a compile error) is
 // a failure blaming no stage.
