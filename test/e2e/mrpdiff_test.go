@@ -587,7 +587,7 @@ func TestMrpDiff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if tc.emitRefused != "" {
+			if tc.emitRefused != "" && !v2Emitter() {
 				t.Skip(tc.emitRefused)
 			}
 
@@ -627,6 +627,7 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	if tc.native {
 		t.Run("native", func(t *testing.T) {
 			t.Parallel()
+			skipUnderV2(t, "-native")
 			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, append(slices.Clone(extra), "-native")))
 		})
 	}
@@ -638,6 +639,7 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	if tc.inline {
 		t.Run("noinline", func(t *testing.T) {
 			t.Parallel()
+			skipUnderV2(t, "-inline-pipelines=false")
 			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
 		})
 	}

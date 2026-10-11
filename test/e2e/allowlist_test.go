@@ -15,8 +15,8 @@ var checkedInAllowlist = sync.OnceValues(func() (divergence.Allowlist, error) {
 	return divergence.Load(allowlistFile)
 })
 
-// mustAllowlist returns the checked-in allowlist, failing the test when it does
-// not load.
+// mustAllowlist returns the checked-in allowlist's entries for the emitter
+// under test, failing the test when it does not load.
 func mustAllowlist(tb testing.TB) divergence.Allowlist {
 	tb.Helper()
 
@@ -25,5 +25,5 @@ func mustAllowlist(tb testing.TB) divergence.Allowlist {
 		tb.Fatal(err)
 	}
 
-	return allow
+	return allow.ForEmitter(emitter())
 }

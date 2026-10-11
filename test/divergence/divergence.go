@@ -86,6 +86,12 @@ func ComparatorRules() map[string]string {
 	}
 }
 
+// The emitters an entry can be scoped to while both exist (#463).
+const (
+	EmitterV1 = "v1"
+	EmitterV2 = "v2"
+)
+
 // Failure kinds an outcome matcher records.
 const (
 	FailAssert = "assert"
@@ -104,6 +110,9 @@ type Entry struct {
 	Summary       string `json:"summary"`
 	Justification string `json:"justification"`
 	Issue         int    `json:"issue,omitempty"`
+	// Emitter, when set, is the one emitter that diverges (EmitterV1 or
+	// EmitterV2); the differential of the other applies no matcher of it.
+	Emitter string `json:"emitter,omitempty"`
 	// Evidence names the tests that apply the matcher, or for a mechanism
 	// entry the tests that prove the outputs identical.
 	Evidence   []string           `json:"evidence"`
@@ -208,6 +217,14 @@ func (a Allowlist) Entry(id string) (Entry, bool) {
 // can show the differential fails once the entry is gone.
 func (a Allowlist) Without(id string) Allowlist {
 	return Allowlist{entries: slices.DeleteFunc(slices.Clone(a.entries), func(e Entry) bool { return e.ID == id })}
+}
+
+// ForEmitter returns the entries that hold for emitter: those scoped to no
+// emitter or to it.
+func (a Allowlist) ForEmitter(emitter string) Allowlist {
+	return Allowlist{entries: slices.DeleteFunc(slices.Clone(a.entries), func(e Entry) bool {
+		return e.Emitter != "" && e.Emitter != emitter
+	})}
 }
 
 // RulesEverywhere returns the allowlist a program no fixture names, such as a
@@ -333,13 +350,27 @@ func (e Entry) validate() error {
 		return fmt.Errorf("%w: %q cites no evidence", ErrInvalid, e.ID)
 	}
 
+	if err := e.validateScope(); err != nil {
+		return err
+	}
+
+	return e.validateMatcher()
+}
+
+// validateScope checks the tests an entry cites and the emitter it is
+// scoped to.
+func (e Entry) validateScope() error {
 	for _, ev := range e.Evidence {
 		if !evidenceName.MatchString(ev) {
 			return fmt.Errorf("%w: %q evidence %q is not a test name", ErrInvalid, e.ID, ev)
 		}
 	}
 
-	return e.validateMatcher()
+	if e.Emitter != "" && e.Emitter != EmitterV1 && e.Emitter != EmitterV2 {
+		return fmt.Errorf("%w: %q has unknown emitter %q", ErrInvalid, e.ID, e.Emitter)
+	}
+
+	return nil
 }
 
 // markdownSafe reports whether s closes every backtick code span and has no <
