@@ -483,7 +483,7 @@ workflow {
   types = file("${projectDir}/_assets/types.json")
   values = groovy.json.JsonOutput.toJson(%[4]s)
 %[8]s  BUILD_ENTRY_ARGS(%[9]s)
-  pipeargs = BUILD_ENTRY_ARGS.out.first()
+  pipeargs = BUILD_ENTRY_ARGS.out
   %[5]s(pipeargs)
 `, w.decls, g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
 		w.fileInputs, flatFlag, w.fileChans, strings.Join(w.callArgs, ", "),

@@ -96,7 +96,7 @@ internal/
   bind/        → resolve call bindings into _args (refs, projections, fan-in)
   overrides/   → mrp --overrides file -> Nextflow -c config
   config/      → .mro2nf.yml project defaults for the transpiler flags
-  logging/     → zerolog setup (stderr)
+  logging/     → log/slog setup (stderr)
   apperror/    → sentinel + typed errors
 ```
 
@@ -832,7 +832,9 @@ Two cloud-specific defaults to know about:
   S3 location.
 - **The CDK example deploys cost-safe infra.** `deploy/awsbatch-cdk/` provisions a
   minimal Batch + S3 + ECR setup that scales to zero between runs (no idle cost),
-  on spot, with no NAT and S3-lifecycle expiry.
+  on spot, with no NAT. Its S3 lifecycle expires only the `work/` dir after 14
+  days, so an awsbatch run there keeps its outputs only with `--aws_outdir`;
+  `results/` and the HealthOmics `omics-out/` never expire.
 
 ---
 
