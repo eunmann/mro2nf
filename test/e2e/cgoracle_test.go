@@ -287,14 +287,21 @@ func normLeaf(t *testing.T, s string, mode leafMode) string {
 		return s
 	}
 
+	// mrp leaves a symlink in the job's files dir to each output it moved
+	// into outs/, and WalkDir does not follow a root that is one.
+	walkRoot, err := filepath.EvalSymlinks(s)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", s, err)
+	}
+
 	h := sha256.New()
 
-	err := filepath.WalkDir(s, func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(walkRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 
-		rel, _ := filepath.Rel(s, p)
+		rel, _ := filepath.Rel(walkRoot, p)
 
 		b, err := os.ReadFile(p)
 		if err != nil {
