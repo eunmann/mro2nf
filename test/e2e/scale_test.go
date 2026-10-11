@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/eunmann/mro2nf/test/scale"
 )
@@ -38,7 +40,7 @@ type scaleShape struct {
 // default wide width runs about 10,000 tasks per mode, 20,000 per shape: the
 // nightly runner ran the 1,000-fork forks shape, 2,020 tasks over both modes
 // at once, in 315 s (6.4 tasks/s), and a 4,000-fork run's submit rate held
-// steady, so 20,000 tasks take about 52 minutes of the 100-minute timeout.
+// steady, so 20,000 tasks take about 52 minutes of scaleShapeTimeout.
 var scaleShapes = map[string]scaleShape{
 	"forks": {
 		name: "forks", probe: "MRE_BENCH_FORKS_PROBE", narrow: 4, wide: 10000,
@@ -121,6 +123,30 @@ var scaleLimits = scale.Limits{
 // budget fails the heap gate with its size rather than the run with an
 // OutOfMemoryError.
 const scaleJVM = "-Xmx2g -Xlog:gc:file=%s/gc-%%p.log"
+
+// scaleShapeTimeout is the go test timeout one shape at its default widths
+// runs under. The shapes run one after another.
+const scaleShapeTimeout = 100 * time.Minute
+
+// TestMakeScaleTimeoutFitsEveryShape requires make test-scale's default
+// SCALE_TIMEOUT, which its default SCALE_RUN spends on every shape, to give
+// each shape scaleShapeTimeout. Its name keeps it out of ^TestScale.
+func TestMakeScaleTimeoutFitsEveryShape(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := regexp.MustCompile(`(?m)^SCALE_TIMEOUT \?= (\S+)$`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("Makefile sets no default SCALE_TIMEOUT")
+	}
+
+	got, err := time.ParseDuration(string(m[1]))
+	if want := time.Duration(len(scaleShapes)) * scaleShapeTimeout; err != nil || got < want {
+		t.Errorf("Makefile SCALE_TIMEOUT ?= %s (%v), want at least %v for %d shapes", m[1], err, want, len(scaleShapes))
+	}
+}
 
 func TestScaleForks(t *testing.T)       { runScaleShape(t, scaleShapes["forks"]) }
 func TestScaleSplit(t *testing.T)       { runScaleShape(t, scaleShapes["split"]) }

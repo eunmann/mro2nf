@@ -91,8 +91,10 @@ bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 re
 # a narrow and a wide width (SCALE_WIDTH overrides every selected shape's)
 # and gates the overhead rule. SCALE_RUN selects shapes; the nightly runs one
 # per job. Metrics and verdicts land in SCALE_ARTIFACTS (artifacts/scale).
+# The shapes run one after another, 100 minutes each at the default widths
+# (scaleShapeTimeout), so the default SCALE_TIMEOUT fits all five.
 SCALE_RUN ?= ^TestScale
-SCALE_TIMEOUT ?= 100m
+SCALE_TIMEOUT ?= 500m
 test-scale: build ## Nightly scale tier: bench shapes at production widths (SCALE_RUN=<-run regexp> SCALE_WIDTH=<n>)
 	$(GO_E2E) -timeout $(SCALE_TIMEOUT) -run '$(SCALE_RUN)'
 

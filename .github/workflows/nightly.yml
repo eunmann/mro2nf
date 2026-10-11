@@ -186,8 +186,8 @@ jobs:
           if-no-files-found: ignore
 
   # The scale tier (#352), one bench shape per job so each gets a runner. Each
-  # shape's default wide width is sized to finish within make test-scale's
-  # 100-minute go-test timeout (scaleShapes in test/e2e/scale_test.go).
+  # shape's default wide width is sized to finish within the 100-minute
+  # SCALE_TIMEOUT it runs under (scaleShapeTimeout in test/e2e/scale_test.go).
   scale:
     name: Nightly scale ${{ matrix.shape }}
     needs: gate
@@ -213,7 +213,7 @@ jobs:
       # The action is pinned; the Nextflow it installs is latest, deliberately.
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       # No shape name is a prefix of another, so the regexp needs no end anchor.
-      - run: make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}'
+      - run: make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}' SCALE_TIMEOUT=100m
       - if: ${{ always() }}
         run: |
           { echo '```'; cat artifacts/scale/*.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

@@ -41,7 +41,9 @@ and runs both in default and `-native` mode:
 `SCALE_WIDTH` replaces the wide width of every selected shape. The default
 widths keep each job near 52 minutes: the nightly runner ran 2,020 tasks (the
 1,000-fork shape in both modes at once) in 315 s, and a local 4,000-fork run
-submitted tasks at a steady rate.
+submitted tasks at a steady rate. The selected shapes run one after another,
+so the default `SCALE_TIMEOUT` of 500 minutes gives each of the five 100; the
+nightly runs one shape per job with `SCALE_TIMEOUT=100m`.
 
 Each run must complete and gather every fork's or chunk's output. On top of the
 `bench_metrics.py` metrics below, the tier reads a staging probe of every task

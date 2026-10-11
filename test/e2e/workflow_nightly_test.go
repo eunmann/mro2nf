@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -358,7 +359,7 @@ func TestNightlyScaleMatrixRunsEveryShape(t *testing.T) {
 		t.Errorf("%s scale matrix shapes != TestScale functions (-want +got):\n%s", nightlyWorkflow, diff)
 	}
 
-	const run = "make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}'"
+	run := fmt.Sprintf("make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}' SCALE_TIMEOUT=%.0fm", scaleShapeTimeout.Minutes())
 	if !slices.ContainsFunc(job.get("steps").items, func(s *yamlNode) bool { return scalarOf(s.get("run")) == run }) {
 		t.Errorf("%s scale job never runs %q", nightlyWorkflow, run)
 	}
