@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -144,8 +143,8 @@ func TestRequiredContextsExact(t *testing.T) {
 }
 
 // TestRequiredContextsGatedOnChanges checks every required job skips only on
-// the `changes` job's docs-only verdict, and names an explicit status
-// function: under the implicit success(), a failed `changes` would skip every
+// the `changes` job's successful docs-only verdict, under an explicit status
+// function: with the implicit success(), a failed `changes` would skip every
 // required job, and GitHub counts those skips as passing.
 func TestRequiredContextsGatedOnChanges(t *testing.T) {
 	jobs := workflowJobs(t, gateWorkflow)
@@ -162,16 +161,18 @@ func TestRequiredContextsGatedOnChanges(t *testing.T) {
 			t.Errorf("job %q needs %v, want it to include changes", j.id, j.needs)
 		}
 
-		for _, part := range []string{"needs.changes.result == 'success'", "needs.changes.outputs.code == 'false'"} {
-			if !strings.Contains(j.cond, part) {
-				t.Errorf("job %q if %q lacks %q", j.id, j.cond, part)
-			}
-		}
-
-		if !strings.Contains(j.cond, "!cancelled()") && !strings.Contains(j.cond, "always()") {
-			t.Errorf("job %q if %q has no explicit status function (!cancelled() or always())", j.id, j.cond)
+		if !slices.Contains(docsOnlyGates, j.cond) {
+			t.Errorf("job %q if %q, want one of %q", j.id, j.cond, docsOnlyGates)
 		}
 	}
+}
+
+// docsOnlyGates are the only accepted `if:` of a required job, pinned whole:
+// a dropped negation or a `||` for the inner `&&` still mentions every
+// operand, yet skips the job on every code PR.
+var docsOnlyGates = []string{
+	"${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}",
+	"${{ always() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}",
 }
 
 // TestRequiredContextsReportOnEveryPR fails if pr-validation.yml's
