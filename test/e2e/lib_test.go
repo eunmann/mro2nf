@@ -25,11 +25,12 @@ func TestLibHelpers(t *testing.T) {
 	// Transpile any fixture to obtain a project whose lib/ carries Mro2nf.groovy.
 	proj := transpile(t, "file_min")
 
-	// Probe bundles: disable gate (true/false), a chunk with resources, and a
+	// Probe bundles: disable gate (true/false/null), a chunk with resources, and a
 	// keyed FORKBIND-style dir enumerated from forknames.json.
 	writeBundleSidecar(t, filepath.Join(proj, "probe_on"), `{"disabled": true}`)
 	writeBundleSidecar(t, filepath.Join(proj, "probe_off"), `{"disabled": false}`)
 	writeBundleSidecar(t, filepath.Join(proj, "probe_null"), `{"disabled": null}`)
+	writeFileT(t, filepath.Join(proj, "probe_gate.json"), `{"on": null, "cfg": {"flag": null}, "nocfg": null, "n": 1}`)
 	writeBundleSidecar(t, filepath.Join(proj, "probe_chunk"), `{"resources": {"threads": 3}}`)
 	writeFileT(t, filepath.Join(proj, "probe_join.json"), `{"mem_gb": 7}`)
 	writeBundleSidecar(t, filepath.Join(proj, "probe_disabled"), `null`)
@@ -50,17 +51,24 @@ func TestLibHelpers(t *testing.T) {
     def chunk = file("${projectDir}/probe_chunk")
     def joinf = file("${projectDir}/probe_join.json")
     def forks = file("${projectDir}/probe_forks")
-    // A null disable flag must fail loudly (mrp errors), not coerce to false.
-    def nullResult = "NO_THROW"
-    try { Mro2nf.disabled(nullp) } catch (IllegalArgumentException e) { nullResult = "THREW" }
-    println "R nullDisabled=" + nullResult
+    // A gate null at run time is enabled, as in mrp (#253); a gate projected
+    // through a null struct, or of another type, fails like mrp.
+    def gate = file("${projectDir}/probe_gate.json")
+    println "R nullDisabled=" + Mro2nf.disabledDir(nullp, 'disabled')
+    println "R nullField=" + Mro2nf.disabledField(gate, 'on') + "/" + Mro2nf.disabledField(gate, 'cfg.flag')
+    def nullParent = "NO_THROW"
+    try { Mro2nf.disabledField(gate, 'nocfg.flag') } catch (IllegalArgumentException e) { nullParent = "THREW" }
+    println "R nullParent=" + nullParent
+    def intGate = "NO_THROW"
+    try { Mro2nf.disabledField(gate, 'n') } catch (IllegalArgumentException e) { intGate = "THREW" }
+    println "R intGate=" + intGate
     // compareUtf8 must order by UTF-8 byte value (matching Go sort.Strings), so
     // the native entry-file flatten pairs with mre's Go type-walk for keys whose
     // Groovy natural (UTF-16) order would diverge — a supplementary-plane key
     // (F0 9F ...) sorts AFTER a BMP key (EF ...), unlike UTF-16 (surrogate < FFxx).
     def ukeys = ["😀x", "！y", "az"]
     println "R utf8sort=" + ukeys.sort(false) { a, b -> Mro2nf.compareUtf8(a, b) }.join(",")
-    println "R disabled=" + Mro2nf.disabled(on) + "/" + Mro2nf.disabled(off)
+    println "R disabled=" + Mro2nf.disabledDir(on, 'disabled') + "/" + Mro2nf.disabledDir(off, 'disabled')
     println "R chunkRes=" + Mro2nf.chunkRes(chunk).threads
     println "R parseJson=" + Mro2nf.parseJson(joinf).mem_gb
     println "R asList=" + Mro2nf.asList(5) + "/" + Mro2nf.asList([1, 2])
@@ -76,7 +84,10 @@ func TestLibHelpers(t *testing.T) {
 	out := runNextflowCapture(t, proj, "probe.nf")
 
 	for _, want := range []string{
-		"R nullDisabled=THREW",
+		"R nullDisabled=false",
+		"R nullField=false/false",
+		"R nullParent=THREW",
+		"R intGate=THREW",
 		"R utf8sort=az,！y,😀x", // UTF-8 byte order (== Go sort.Strings), NOT UTF-16
 		"R disabled=true/false",
 		"R chunkRes=3",

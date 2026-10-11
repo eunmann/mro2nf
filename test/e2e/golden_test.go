@@ -114,6 +114,8 @@ var goldenCases = []goldenCase{
 	{"special_resource", "special_resource", "expected/outs.json"},
 	{"null_in", "null_in", "expected/outs.json"},
 	{"disabled_callref", "disabled_callref", "expected/outs.json"},
+	// #253: a disable gate that is null at run time leaves the call enabled.
+	{"null_gate", "null_gate", "expected/outs.json"},
 	// #339: a whole ref to a disabled stage / pipeline call reaches its
 	// consumer's _args as null, not a struct of nulls.
 	{"disabled_wholeref", "disabled_wholeref", "expected/outs.json"},

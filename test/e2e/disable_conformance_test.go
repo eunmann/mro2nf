@@ -7,9 +7,8 @@ package e2e
 // Mro2nf.disabledField's dotted-path walk, instead of spending a DISABLE task.
 // This drives the ACTUAL Groovy walk under real Nextflow over a nested sidecar
 // and asserts: a single top-level flag, a nested struct path (true and false),
-// and loud failure (throw) when an intermediate is missing/null or a scalar
-// instead of a bool — the null case matching mrp's "disabled bound to a null
-// value" refusal rather than silently running a branch.
+// a null leaf read as false as mrp reads it (#253), and loud failure (throw)
+// when an intermediate is null or a scalar, or a field is absent (#274).
 
 import (
 	"os"
@@ -27,8 +26,8 @@ const disabledProbe = `workflow {
         try { println 'OK ' + p + ' ' + Mro2nf.disabledField(data, p) }
         catch (IllegalArgumentException e) { println 'THROW ' + p }
     }
-    // Loud-failure paths: a null flag, a null intermediate, a missing field, and
-    // a scalar where an object is expected — each must THROW, never resolve false.
+    // A null flag is a false gate; a null intermediate, a missing field, and a
+    // scalar where an object is expected must each THROW, never resolve false.
     ['nullflag', 'nullcfg.flag', 'cfg.missing', 'scalar.flag'].each { p ->
         try { println 'OK ' + p + ' ' + Mro2nf.disabledField(data, p) }
         catch (IllegalArgumentException e) { println 'THROW ' + p }
@@ -77,9 +76,9 @@ func TestDisabledFieldPathConformance(t *testing.T) {
 		"OK cfg.flag_on true":   "nested struct path (true)",
 		"OK cfg.flag_off false": "nested struct path (false)",
 		"OK cfg.deep.flag true": "two-level nested path",
-		"THROW nullflag":        "a null flag must fail loudly, not run",
+		"OK nullflag false":     "a null flag is a false gate, as in mrp (#253)",
 		"THROW nullcfg.flag":    "a null intermediate must fail loudly",
-		"THROW cfg.missing":     "a missing field resolves to null -> fail loudly",
+		"THROW cfg.missing":     "a missing field must fail loudly, as in mrp (#274)",
 		"THROW scalar.flag":     "a scalar where an object is expected must fail loudly",
 		// disabledDir (bundle-directory read) walks the same dotted path — the keyed
 		// disable gate's native read for a nested self path.

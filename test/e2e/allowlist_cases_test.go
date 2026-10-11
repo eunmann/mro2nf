@@ -232,8 +232,13 @@ func allowlistWithout(t *testing.T, path, id string) string {
 // TestRemovingAnOutcomeEntryFailsItsCase replays each mrpOutcomeCases entry
 // that names a divergence on its recorded outcomes, mrp's from the case and
 // mro2nf's from the allowlist entry: the case holds with the entry, and fails
-// once the entry is removed, whether or not the case still names it.
+// once the entry is removed, whether or not the case still names it. A
+// synthetic case keeps the check live while no checked-in case diverges.
 func TestRemovingAnOutcomeEntryFailsItsCase(t *testing.T) {
+	t.Run("synthetic", func(t *testing.T) {
+		replayOutcomeDivergence(t, outcomeTestAllowlist(t), mrpOutcomeCase{name: "f", divergence: "nf-fails"})
+	})
+
 	allow := mustAllowlist(t)
 
 	for _, tc := range mrpOutcomeCases {
@@ -242,22 +247,28 @@ func TestRemovingAnOutcomeEntryFailsItsCase(t *testing.T) {
 		}
 
 		t.Run(tc.name, func(t *testing.T) {
-			d, err := tc.validate(allow)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if bad := tc.check(d, tc.mrp, d.nf); len(bad) > 0 {
-				t.Errorf("the recorded outcomes fail the case: %q", bad)
-			}
-
-			if _, err := tc.validate(allow.Without(tc.divergence)); err == nil {
-				t.Errorf("the case still validates without entry %s", tc.divergence)
-			}
-
-			if bad := tc.check(nil, tc.mrp, d.nf); len(bad) == 0 {
-				t.Errorf("with no divergence the recorded outcomes still pass the case")
-			}
+			replayOutcomeDivergence(t, allow, tc)
 		})
+	}
+}
+
+func replayOutcomeDivergence(t *testing.T, allow divergence.Allowlist, tc mrpOutcomeCase) {
+	t.Helper()
+
+	d, err := tc.validate(allow)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bad := tc.check(d, tc.mrp, d.nf); len(bad) > 0 {
+		t.Errorf("the recorded outcomes fail the case: %q", bad)
+	}
+
+	if _, err := tc.validate(allow.Without(tc.divergence)); err == nil {
+		t.Errorf("the case still validates without entry %s", tc.divergence)
+	}
+
+	if bad := tc.check(nil, tc.mrp, d.nf); len(bad) == 0 {
+		t.Errorf("with no divergence the recorded outcomes still pass the case")
 	}
 }

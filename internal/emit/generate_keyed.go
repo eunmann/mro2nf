@@ -327,14 +327,14 @@ func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call, cp call
 	nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
 	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
 	fmt.Fprintf(body, `    g_%[1]s = %[2]s_K.out.join(%[3]s_K.out).branch { key, args, d ->
-        def off = Mro2nf.disabled(d)
+        def off = Mro2nf.disabledDir(d, '%[6]s')
         run: !off
         skip: off
     }
     r_%[1]s = %[4]s(g_%[1]s.run.map { key, args, d -> tuple(key, args) })
     s_%[1]s = g_%[1]s.skip.map { key, args, d -> tuple(key, file("%[5]s")) }
     ch_%[1]s_l = r_%[1]s.mix(s_%[1]s).toList()
-`, c.Name, bind, dis, alias, nulls)
+`, c.Name, bind, dis, alias, nulls, disablePath(c))
 }
 
 // genKeyedMappedCallBody emits a nested map call inside a keyed pipeline. Per
@@ -429,12 +429,12 @@ func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call
 
 	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
 	fmt.Fprintf(body, `    gk_%[1]s = %[2]s.join(%[3]s_K.out).branch { row ->
-        def off = Mro2nf.disabled(row[-1])
+        def off = Mro2nf.disabledDir(row[-1], '%[5]s')
         run: !off
         skip: off
     }
     sk_%[1]s = gk_%[1]s.skip.map { row -> tuple(row[0], file("%[4]s")) }
-`, c.Name, keyedBindInput(c.Bindings), dis, nulls)
+`, c.Name, keyedBindInput(c.Bindings), dis, nulls, disablePath(c))
 
 	return fmt.Sprintf("gk_%s.run.map { row -> row[0..<row.size() - 1] }, types, %s", c.Name, specFile(bindName(pipeline, c.Name)))
 }

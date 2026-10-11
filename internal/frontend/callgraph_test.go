@@ -135,3 +135,91 @@ func TestCheckCallGraphWithoutCall(t *testing.T) {
 		t.Errorf("CheckCallGraph without a call: %v", err)
 	}
 }
+
+const gateStages = `stage FLAG(
+    in  bool b,
+    out bool on,
+    src py   "stages/flag",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline GATED(
+    in  int  x,
+    in  bool b,
+    out int  y,
+)
+{
+    call WORK(
+        x = self.x,
+    ) using (
+        disabled = self.b,
+    )
+
+    return (
+        y = WORK.y,
+    )
+}
+`
+
+// TestCheckCallGraphStaticNullGate checks that a disable gate whose value is
+// null before any stage runs is refused, as mrp's call-graph resolution rejects
+// it ("disabled cannot be bound to a null value"), while a gate on a stage
+// output, which is null only at run time, resolves (#253).
+func TestCheckCallGraphStaticNullGate(t *testing.T) {
+	cases := []struct {
+		name, pipeline string
+		wantErr        bool
+	}{
+		{"invocation null", `pipeline P(in int x, in bool b, out int y,)
+{
+    call GATED(x = self.x, b = self.b,)
+    return (y = GATED.y,)
+}
+
+call P(x = 3, b = null,)
+`, true},
+		{"literal null into a sub-pipeline input", `pipeline P(in int x, out int y,)
+{
+    call GATED(x = self.x, b = null,)
+    return (y = GATED.y,)
+}
+
+call P(x = 3,)
+`, true},
+		{"runtime null from a stage output", `pipeline P(in int x, in bool b, out int y,)
+{
+    call FLAG(b = self.b,)
+    call GATED(x = self.x, b = FLAG.on,)
+    return (y = GATED.y,)
+}
+
+call P(x = 3, b = null,)
+`, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := parseSource(t, gateStages+"\n"+tc.pipeline)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("CheckCallGraph: %v", err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, apperror.ErrParse) {
+				t.Fatalf("CheckCallGraph = %v, want an error wrapping apperror.ErrParse", err)
+			}
+
+			if !strings.Contains(err.Error(), "disabled cannot be bound to a null value") {
+				t.Errorf("CheckCallGraph error = %v, want mrp's null-disabled binding error", err)
+			}
+		})
+	}
+}

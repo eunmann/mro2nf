@@ -502,7 +502,7 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 		t.Error("a natively-gated keyed disable must emit no DISABLE_K process (#59)")
 	}
 
-	if strings.Contains(mod, "Mro2nf.disabled(row[-1])") {
+	if strings.Contains(mod, "Mro2nf.disabledDir(row[-1]") {
 		t.Error("keyed disable must read the flag natively (disabledDir), not from a DISABLE bundle")
 	}
 }

@@ -1548,11 +1548,11 @@ func genMappedDisableGate(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCt
 	dis := disableName(pipeline, c.Name)
 	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c), dis))
 	fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s.out).branch { data, leaves, d ->
-        def off = Mro2nf.disabled(d)
+        def off = Mro2nf.disabledDir(d, '%[3]s')
         run: !off
         skip: off
     }
-`, c.Name, dis)
+`, c.Name, dis, disablePath(c))
 
 	// Feeds the FORK process, which reuses the call's bind spec.
 	return foldCallArgs(g, p, c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, d -> tuple(data, leaves) }", c.Name), bind)
@@ -1583,14 +1583,14 @@ func genDisabledWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee str
 
 	fmt.Fprintf(b, "    %s(%s)\n", dis, bindCallArgs(disableBindings(c), dis))
 	fmt.Fprintf(b, `    g_%[1]s = %[2]s.out.combine(%[3]s.out).branch { data, leaves, d ->
-        def off = Mro2nf.disabled(d)
+        def off = Mro2nf.disabledDir(d, '%[6]s')
         run: !off
         skip: off
     }
     r_%[1]s = %[4]s(g_%[1]s.run.map { data, leaves, d -> tuple(data, leaves) })
     s_%[1]s = g_%[1]s.skip.map { data, leaves, d -> %[5]s }
     ch_%[1]s = r_%[1]s.mix(s_%[1]s).first()
-`, c.Name, bind, dis, callee, nullBundle(nulls))
+`, c.Name, bind, dis, callee, nullBundle(nulls), disablePath(c))
 }
 
 // genGatedBindDisabledWiring gates BOTH the standalone BIND and the callee of a
@@ -1770,9 +1770,39 @@ func callAlias(pipeline, call string) string {
 	return "wf_" + Qualify(pipeline, call)
 }
 
-// disableBindings builds a one-entry binding list for a call's disabled ref.
+// disableBindings builds a one-entry binding list for a call's disabled ref,
+// bound only to its top-level value: the whole input for self.<in>.<path>, the
+// first output field for CALL.<out>.<path>. Mro2nf.disabledDir walks the rest
+// (disablePath), failing on a null struct along the way as mrp does, where the
+// binder would project it to a null gate and run the call.
 func disableBindings(c ir.Call) []ir.Binding {
-	return []ir.Binding{{Param: "disabled", Value: ir.Value{Ref: c.Disabled}}}
+	head, _ := splitGatePath(*c.Disabled)
+
+	return []ir.Binding{{Param: "disabled", Value: ir.Value{Ref: &head}}}
+}
+
+// disablePath is the dotted path of a call's gate flag inside its DISABLE
+// bundle (see disableBindings).
+func disablePath(c ir.Call) string {
+	_, rest := splitGatePath(*c.Disabled)
+
+	return joinRefPath("disabled", rest)
+}
+
+// splitGatePath splits a gate ref into the ref to its top-level value and the
+// struct path below it.
+func splitGatePath(r ir.Ref) (ir.Ref, string) {
+	if r.Kind == ir.RefKindSelf {
+		rest := r.Output
+		r.Output = ""
+
+		return r, rest
+	}
+
+	field, rest, _ := strings.Cut(r.Output, ".")
+	r.Output = field
+
+	return r, rest
 }
 
 func disableName(pipeline, call string) string {

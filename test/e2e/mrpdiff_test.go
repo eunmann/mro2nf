@@ -395,6 +395,11 @@ var mrpDiffCases = []mrpDiffCase{
 	// otherwise inlinable) sub-pipeline is null in the consumer's _args; the
 	// noinline leg covers the boundary path, the default leg the inliner.
 	{name: "disabled_wholeref", native: true, inline: true},
+	// #253: disable gates that are null at run time leave their calls
+	// enabled on every gate path: upstream output and struct field, a
+	// sub-pipeline input (inlined, and a boundary on the noinline leg), and
+	// the keyed gates of a map call over a sub-pipeline.
+	{name: "null_gate", native: true, runner: true, inline: true},
 	{name: "fork_fanout", native: true, runner: true},
 	{name: "map_file_array", native: true, runner: true},
 	// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
@@ -504,13 +509,6 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "rt_gate_split_reject", mrp: runOutcome{Failed: true}},
 	{name: "rt_gate_split_reject_sub", mrp: runOutcome{Failed: true}},
 	{name: "rt_gate_split_reject_pass", mrp: runOutcome{Failed: true}},
-	// The reverse: mrp runs WORK behind a runtime-null disable gate, mro2nf's
-	// driver aborts on it. Once fixed, the fixture moves to mrpDiffCases.
-	{
-		name:       "null_disable_gate",
-		mrp:        runOutcome{},
-		divergence: "runtime-null-disable-gate-aborts",
-	},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
