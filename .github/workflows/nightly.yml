@@ -94,7 +94,7 @@ jobs:
       matrix:
         # The floor must equal manifest.nextflowVersion in the generated
         # nextflow.config, here and in the docker job (TestNightlyNextflowFloor).
-        nextflow: ["23.10.0", latest-stable]
+        nextflow: ["24.04.0", latest-stable]
         shard: [0, 1, 2, 3]
     env:
       E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
@@ -136,7 +136,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        nextflow: ["23.10.0", latest-stable]
+        nextflow: ["24.04.0", latest-stable]
     env:
       E2E_REQUIRE: "1"
     steps:

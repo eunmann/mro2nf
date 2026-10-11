@@ -143,9 +143,9 @@ func TestEmitConfig(t *testing.T) {
 		"task.exitStatus == 42 ? 'terminate' : 'retry'",
 		"maxRetries = 2",
 		"params.aws_queue = null",
-		// #188: the Nextflow >=23.10.0 floor (path arity) must be declared for
-		// every target, not just HealthOmics — assert it on the local config too.
-		"manifest.nextflowVersion = '!>=23.10.0'",
+		// #188, #224: the Nextflow >=24.04.0 floor (path arity, resourceLimits)
+		// must be declared for every target — assert it on the local config too.
+		"manifest.nextflowVersion = '!>=24.04.0'",
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("nextflow.config missing %q", want)
@@ -276,7 +276,7 @@ func TestEmitConfigTargets(t *testing.T) {
 		"params.aws_outdir = null",
 		"params.outdir = params.aws_outdir",
 		// #188: the Nextflow floor is declared for awsbatch too, not just HealthOmics.
-		"manifest.nextflowVersion = '!>=23.10.0'",
+		"manifest.nextflowVersion = '!>=24.04.0'",
 		// Wide-fan-out throughput + resilience tuning (config-only): submission
 		// rate-limit, S3 transfer retries, and transparent Spot-reclaim retries.
 		"executor.submitRateLimit",
@@ -301,7 +301,7 @@ func TestEmitConfigTargets(t *testing.T) {
 	// The local resource clamp is local-only: a Batch scheduler places an oversized
 	// request on a big-enough node itself, so clamping to the launcher host would be
 	// wrong. It must not leak into the cloud config.
-	if strings.Contains(batch, "resourceLimits") || strings.Contains(batch, "max_memory") {
+	if strings.Contains(batch, "resourceLimits =") || strings.Contains(batch, "max_memory") {
 		t.Error("awsbatch config should not carry the local-only resource clamp")
 	}
 

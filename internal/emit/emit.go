@@ -1113,10 +1113,12 @@ const traceFields = "task_id,hash,native_id,name,status,exit,attempt,submit,dura
 // configCommon renders the params shared by every target.
 func configCommon(target Target) string {
 	common := outdirConfig(target) + `
-// Every generated project uses the path 'arity' option (Nextflow >= 23.10.0), so
-// declare the floor for ALL targets — Nextflow then aborts cleanly on an older
-// engine instead of failing cryptically mid-run (#188).
-manifest.nextflowVersion = '!>=23.10.0'
+// Every generated project uses the path 'arity' option (Nextflow >= 23.10.0) and
+// the local profile's process.resourceLimits clamp (Nextflow >= 24.04.0, which
+// an older engine silently ignores), so declare the floor for ALL targets —
+// Nextflow then aborts cleanly on an older engine instead of failing
+// cryptically mid-run (#188) or running unclamped (#224).
+manifest.nextflowVersion = '!>=24.04.0'
 
 // Martian 'special' scheduler-resource map (the MRO_JOBRESOURCES analog): maps a
 // stage's special key to scheduler options applied via clusterOptions on grid
