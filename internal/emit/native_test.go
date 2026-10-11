@@ -201,10 +201,10 @@ func TestGenerateNativeMergeFold(t *testing.T) {
 
 	for _, want := range []string{
 		"path(souts_SCALE, stageAs: 'souts_SCALE/*')",
-		"path 'forkmeta_SCALE.json'",
+		"path 'forkmeta2_SCALE.json'",
 		// -emptynull: fork_min's split source is an entry self ref, so a zero-fork
 		// merge yields null (mrp's invocation-known-empty rule, #99).
-		`'mre' merge -emptynull -outs 'scaled' -forksdir souts_SCALE -keysfile forkmeta_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
+		`'mre' merge -emptynull -outs 'scaled' -forksdir souts_SCALE -keysfile forkmeta2_SCALE.json -o merged_SCALE -types 'types.json' -callable 'SCALE' -role out`,
 		"-inputs SCALE=merged_SCALE",
 		".out.ref_SCALE_souts, ",
 		".out.ref_SCALE_keys",
@@ -302,15 +302,15 @@ func TestGenerateNativeScatter(t *testing.T) {
 		// per-element path (#99): index 0 computes keys, index >0 assembles
 		// from its own base64 element, no whole-collection re-parse.
 		"tuple val(key), val(fi), val(element)",
-		"-mapmode array -index 0 -o fargs -keysfile forkmeta.mro2nf.json",
+		"-mapmode array -index 0 -o fargs -keysfile forkmeta2.mro2nf.json",
 		"printf %s '${element}' | base64 -d > element.json",
 		// The element branch carries no full-collection flags (forkbind
 		// rejects -mapmode and friends alongside -elementfile).
 		"-pipeargs pipeargs -elementfile element.json -o fargs",
-		"-mapmode array -keysonly -keysfile forkmeta.mro2nf.json",
+		"-mapmode array -keysonly -keysfile forkmeta2.mro2nf.json",
 		"Mro2nf.forkElements(data, 'values', 'array')",
 		"path \"outs__${key}\", type: 'dir', emit: outs, optional: true",
-		"path 'forkmeta.mro2nf.json', emit: keys, optional: true",
+		"path 'forkmeta2.mro2nf.json', emit: keys, optional: true",
 		// The MERGE folds into the entry return's LAYOUT (#76): the workflow
 		// exposes the per-fork outs + keys channels for it instead.
 		"ch_SCALE_souts = STAGE_9_SCALE_ALL__SCALE.out.outs.toSortedList { a, b -> a.name <=> b.name }",

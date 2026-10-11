@@ -156,7 +156,16 @@ type Call struct {
 	// MapMode is the fork collection kind for a map call: one of MapModeArray,
 	// MapModeMap, or MapModeUnknown (empty for a non-map call).
 	MapMode string
+	// Gate marks a synthetic call the transpiler adds, with no Callable, whose
+	// one output `off` disables the calls it lifts out of a map call (#433):
+	// off when a non-split binding resolves to true or its split bindings, the
+	// map call's, resolve to the zero forks mrp prunes statically. MapMode is
+	// the kind of those splits.
+	Gate bool
 }
+
+// GateOutput is the one output of a Gate call.
+const GateOutput = "off"
 
 // Map-call fork collection kinds for Call.MapMode, derived from Martian's
 // syntax.CallMode. The values feed the generated `-mapmode` data-plane flag

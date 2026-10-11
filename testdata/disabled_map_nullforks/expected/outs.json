@@ -1,0 +1,42 @@
+{
+    "arr": [
+        null,
+        null,
+        null
+    ],
+    "arr_r": [
+        null,
+        null,
+        null
+    ],
+    "emp": [],
+    "lit": null,
+    "mp": {
+        "a": null,
+        "b": null
+    },
+    "nul": [],
+    "off": [
+        {
+            "r": 1
+        },
+        {
+            "r": 2
+        },
+        {
+            "r": 3
+        }
+    ],
+    "outer": [
+        [
+            null,
+            null,
+            null
+        ],
+        [
+            null
+        ]
+    ],
+    "stg": null,
+    "took": "[[null, null, null], [\"[null, null, null]\", \"[null, null, null]\"]]"
+}

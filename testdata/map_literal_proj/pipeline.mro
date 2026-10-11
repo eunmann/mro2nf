@@ -1,0 +1,48 @@
+# #433: a sub-pipeline input bound to a typed-map literal and split through a
+# field projection, `split self.items.name`. Martian projects the field over
+# the map's values, a null entry included, so EACH forks once per key.
+# Inlining EACH would read the literal as a struct instead, find no `name`
+# key, and fork zero times, so its boundary stays.
+struct Item(
+    string name,
+)
+
+stage ECHO(
+    in  string v,
+    out string r,
+    src py     "stages/echo",
+)
+
+pipeline EACH(
+    in  map<Item>   items,
+    out map<string> rs,
+)
+{
+    map call ECHO(
+        v = split self.items.name,
+    )
+
+    return (
+        rs = ECHO.r,
+    )
+}
+
+pipeline TOP(
+    out map<string> rs,
+)
+{
+    call EACH(
+        items = {
+            "":  null,
+            "k": {
+                name: "x",
+            },
+        },
+    )
+
+    return (
+        rs = EACH.rs,
+    )
+}
+
+call TOP()

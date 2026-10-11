@@ -143,7 +143,7 @@ func inlineEligible(p *ir.Pipeline, prog *ir.Program, flat map[string]bool, subs
 // undisabled or pruned). parent is the pipeline holding c.
 func inlineOne(c ir.Call, sub, parent *ir.Pipeline, prog *ir.Program, subs map[string]ir.Value) ([]ir.Call, ir.Value, bool) {
 	if c.Disabled == nil {
-		return inlineCall(c, sub)
+		return inlineCall(c, sub, prog)
 	}
 
 	// Martian resolves a whole ref to a disabled call to null, but the inlined
@@ -203,7 +203,7 @@ func inlineDisabled(c ir.Call, sub *ir.Pipeline, prog *ir.Program, subs map[stri
 		return nil, ir.Value{}, false
 	}
 
-	spliced, whole, ok := inlineCall(c, sub)
+	spliced, whole, ok := inlineCall(c, sub, prog)
 	if !ok {
 		return nil, ir.Value{}, false
 	}
@@ -400,9 +400,16 @@ func litIsFalse(v ir.Value) bool {
 // return values — so a ref to c or any of its outputs resolves by projecting
 // into that Object. Returns ok=false if any self-substitution or return would
 // push a projection into a scalar literal (not expressible as a ref path).
-func inlineCall(c ir.Call, sub *ir.Pipeline) ([]ir.Call, ir.Value, bool) {
+func inlineCall(c ir.Call, sub *ir.Pipeline, prog *ir.Program) ([]ir.Call, ir.Value, bool) {
 	self := map[string]ir.Value{} // sub input name -> parent's bound value
 	for _, b := range c.Bindings {
+		// composeProjection reads an Object literal as a struct, so a typed-map
+		// literal (`{"": null}` for map<S>) would project `.f` to the missing
+		// key's null instead of over the map's values (#433).
+		if (b.Value.Array != nil || b.Value.Object != nil) && paramHasMap(prog, sub, b.Param) {
+			return nil, ir.Value{}, false
+		}
+
 		self[b.Param] = b.Value
 	}
 
@@ -432,6 +439,35 @@ func inlineCall(c ir.Call, sub *ir.Pipeline) ([]ir.Call, ir.Value, bool) {
 	}
 
 	return spliced, ir.Value{Object: whole}, true
+}
+
+// paramHasMap reports whether sub's input param has a typed map anywhere in
+// its type: at its own level or in a struct field it reaches.
+func paramHasMap(prog *ir.Program, sub *ir.Pipeline, param string) bool {
+	for i := range sub.In {
+		if sub.In[i].Name == param {
+			return typeHasMap(prog, sub.In[i], map[string]bool{})
+		}
+	}
+
+	return false
+}
+
+// typeHasMap reports whether p's type is or contains a typed map; seen guards
+// a recursive struct.
+func typeHasMap(prog *ir.Program, p ir.Param, seen map[string]bool) bool {
+	if p.MapDim > 0 {
+		return true
+	}
+
+	st, ok := prog.Structs[p.BaseType]
+	if !ok || seen[p.BaseType] {
+		return false
+	}
+
+	seen[p.BaseType] = true
+
+	return slices.ContainsFunc(st.Fields, func(f ir.Param) bool { return typeHasMap(prog, f, seen) })
 }
 
 // spliceCalls renames and rewrites each of a sub-pipeline's internal calls into

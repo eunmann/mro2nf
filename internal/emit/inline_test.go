@@ -146,6 +146,25 @@ func TestInlineComposesObjectProjection(t *testing.T) {
 	}
 }
 
+// TestInlineKeepsTypedMapLiteralBoundary pins #433: a typed-map literal bound
+// to a sub input keeps the boundary, because composing `self.x.out` into the
+// literal would read it as a struct and give the missing key's null instead of
+// projecting over the map's values.
+func TestInlineKeepsTypedMapLiteralBoundary(t *testing.T) {
+	prog := inlineFixtureProg()
+	prog.Pipelines["SUB"].In[0] = ir.Param{Name: "x", BaseType: "S", MapDim: 1}
+	prog.Pipelines["SUB"].Calls[0].Bindings[0].Value.Ref.Output = "out"
+	prog.Pipelines["TOP"].Calls[1].Bindings = []ir.Binding{{Param: "x", Value: ir.Value{Object: map[string]ir.Value{
+		"k": {Literal: []byte("null")},
+	}}}}
+
+	inlinePipelines(prog)
+
+	if inlineFindCall(prog.Pipelines["TOP"].Calls, "S") == nil {
+		t.Errorf("a typed-map literal must keep the SUB boundary, got %v", inlineCallNames(prog.Pipelines["TOP"].Calls))
+	}
+}
+
 // TestInlineSelfPassthroughReturn checks a sub whose return passes its own input
 // straight through (out = self.x): the parent's ref to S.out must resolve to the
 // parent's binding for x.

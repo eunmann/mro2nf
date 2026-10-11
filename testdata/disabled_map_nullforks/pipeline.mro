@@ -1,0 +1,167 @@
+# #434: a map call over a sub-pipeline that a RUNTIME gate disables. mrp
+# disables each fork's outputs inside the merge, so the call resolves to one
+# null per fork — in the whole ref, every projection, and a split stage's
+# _args — and to the typed empty for an empty or null source. A gate the
+# invocation knows (an entry value) folds statically: the call is null, as is
+# a disabled map call over a stage. OUTER repeats the runtime gate inside every
+# fork of a map call, and the OFF lanes run normally.
+stage GEN(
+    out int[]    empty,
+    out int[]    nul,
+    out map<int> m,
+    src py       "stages/gen",
+)
+
+stage FLAG(
+    in  bool v,
+    out bool on,
+    src py   "stages/flag",
+)
+
+stage ECHO(
+    in  int v,
+    out int r,
+    src py  "stages/echo",
+)
+
+stage TAKE(
+    in  SUB[]    subs,
+    out string   seen,
+    src py       "stages/take",
+) split (
+    in  int      i,
+)
+
+pipeline SUB(
+    in  int v,
+    out int r,
+)
+{
+    call ECHO(
+        v = self.v,
+    )
+
+    return (
+        r = ECHO.r,
+    )
+}
+
+pipeline OUTER(
+    in  int[] xs,
+    in  bool  skip,
+    out SUB[] subs,
+)
+{
+    call FLAG(
+        v = self.skip,
+    )
+
+    map call SUB(
+        v = split self.xs,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    return (
+        subs = SUB,
+    )
+}
+
+pipeline DMN(
+    in  int[]      xs,
+    in  bool       yes,
+    out SUB[]      arr,
+    out int[]      arr_r,
+    out map<SUB>   mp,
+    out SUB[]      emp,
+    out SUB[]      nul,
+    out SUB[]      lit,
+    out ECHO[]     stg,
+    out SUB[]      off,
+    out string     took,
+    out SUB[][]    outer,
+)
+{
+    call FLAG(
+        v = true,
+    )
+
+    call FLAG as NOFLAG(
+        v = false,
+    )
+
+    call GEN()
+
+    map call SUB as A(
+        v = split self.xs,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    map call SUB as M(
+        v = split GEN.m,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    map call SUB as E(
+        v = split GEN.empty,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    map call SUB as N(
+        v = split GEN.nul,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    map call SUB as L(
+        v = split self.xs,
+    ) using (
+        disabled = self.yes,
+    )
+
+    map call ECHO as S(
+        v = split self.xs,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    map call SUB as O(
+        v = split self.xs,
+    ) using (
+        disabled = NOFLAG.on,
+    )
+
+    call TAKE(
+        subs = A,
+    )
+
+    map call OUTER(
+        xs   = split [self.xs, [7]],
+        skip = split [true, true],
+    )
+
+    return (
+        arr   = A,
+        arr_r = A.r,
+        mp    = M,
+        emp   = E,
+        nul   = N,
+        lit   = L,
+        stg   = S,
+        off   = O,
+        took  = TAKE.seen,
+        outer = OUTER.subs,
+    )
+}
+
+call DMN(
+    xs  = [
+        1,
+        2,
+        3,
+    ],
+    yes = true,
+)

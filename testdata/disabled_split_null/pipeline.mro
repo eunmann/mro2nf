@@ -1,0 +1,285 @@
+# #436: a map call over the output of a call that an entry value disables.
+# mrp resolves the disabled call to null when it builds the call graph and
+# prunes the map call over it to null, while a call the same kind of gate
+# leaves enabled produces a runtime empty, which merges to []. The lanes cover
+# a disabled stage, a disabled sub-pipeline, a disabled map call and a
+# disabled stage inside every fork of a map call over a sub-pipeline, the
+# prune cascading to a split of the pruned call or of its whole ref (W_ON,
+# and WS_ON through a sub-pipeline input), and the null crossing a
+# sub-pipeline boundary as an input (EACH) and as a return (PASS), which the
+# noinline leg keeps. KEYED is the map-typed form: a split of a projection
+# through a disabled call's typed map is null, and {} when the call ran.
+# LITSUB is seed 61's shape: a literal gate bound at the call site disables a
+# stage whose struct field the sub-pipeline splits.
+stage GEN(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/gen",
+)
+
+struct Item(
+    int n,
+)
+
+stage KEYED(
+    out map<Item> byname,
+    src py        "stages/keyed",
+)
+
+stage ECHO(
+    in  int v,
+    out int r,
+    src py  "stages/echo",
+)
+
+stage TAKE(
+    in  ECHO st,
+    out int  r,
+    src py   "stages/take",
+)
+
+pipeline WHOLE(
+    in  ECHO[] es,
+    out int[]  rs,
+)
+{
+    map call TAKE(
+        st = split self.es,
+    )
+
+    return (
+        rs = TAKE.r,
+    )
+}
+
+pipeline MAKE(
+    in  int   n,
+    out int[] xs,
+)
+{
+    call GEN(
+        n = self.n,
+    )
+
+    return (
+        xs = GEN.xs,
+    )
+}
+
+pipeline EACH(
+    in  int[] xs,
+    out int[] rs,
+)
+{
+    map call ECHO(
+        v = split self.xs,
+    )
+
+    return (
+        rs = ECHO.r,
+    )
+}
+
+struct Pack(
+    int[] ns,
+)
+
+stage PACK(
+    out Pack st,
+    src py   "stages/pack",
+)
+
+pipeline LITSUB(
+    in  bool  skip,
+    out int[] rs,
+)
+{
+    call PACK() using (
+        disabled = self.skip,
+    )
+
+    map call ECHO(
+        v = split PACK.st.ns,
+    )
+
+    return (
+        rs = ECHO.r,
+    )
+}
+
+pipeline PASS(
+    in  bool  skip,
+    out int[] xs,
+)
+{
+    call GEN(
+        n = 2,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        xs = GEN.xs,
+    )
+}
+
+pipeline INNER(
+    in  int    x,
+    in  bool   skip,
+    out int[]  rs,
+)
+{
+    call GEN(
+        n = self.x,
+    ) using (
+        disabled = self.skip,
+    )
+
+    map call ECHO(
+        v = split GEN.xs,
+    )
+
+    return (
+        rs = ECHO.r,
+    )
+}
+
+pipeline DSN(
+    in  bool    on,
+    in  bool    off,
+    in  int[]   ns,
+    out ECHO[]  stage_on,
+    out ECHO[]  stage_off,
+    out int[]   sub_on,
+    out int[]   map_on,
+    out int[][] fork_on,
+    out int[]   cascade_on,
+    out int[]   each_on,
+    out int[]   each_off,
+    out int[]   pass_on,
+    out map<ECHO> keyed_on,
+    out map<ECHO> keyed_off,
+    out int[]   lit_on,
+    out int[]   whole_on,
+    out int[]   whole_sub,
+)
+{
+    call GEN as G_ON(
+        n = 0,
+    ) using (
+        disabled = self.on,
+    )
+
+    call GEN as G_OFF(
+        n = 0,
+    ) using (
+        disabled = self.off,
+    )
+
+    map call ECHO as E_ON(
+        v = split G_ON.xs,
+    )
+
+    map call ECHO as E_OFF(
+        v = split G_OFF.xs,
+    )
+
+    call MAKE as M_ON(
+        n = 2,
+    ) using (
+        disabled = self.on,
+    )
+
+    map call ECHO as S_ON(
+        v = split M_ON.xs,
+    )
+
+    map call ECHO as F_ON(
+        v = split self.ns,
+    ) using (
+        disabled = self.on,
+    )
+
+    map call ECHO as FF_ON(
+        v = split F_ON.r,
+    )
+
+    map call INNER as I_ON(
+        x    = split self.ns,
+        skip = self.on,
+    )
+
+    map call ECHO as C_ON(
+        v = split E_ON.r,
+    )
+
+    call EACH as EACH_ON(
+        xs = G_ON.xs,
+    )
+
+    call EACH as EACH_OFF(
+        xs = G_OFF.xs,
+    )
+
+    call PASS(
+        skip = self.on,
+    )
+
+    call LITSUB(
+        skip = true,
+    )
+
+    call KEYED as K_ON() using (
+        disabled = self.on,
+    )
+
+    call KEYED as K_OFF() using (
+        disabled = self.off,
+    )
+
+    map call ECHO as KE_ON(
+        v = split K_ON.byname.n,
+    )
+
+    map call ECHO as KE_OFF(
+        v = split K_OFF.byname.n,
+    )
+
+    map call ECHO as P_ON(
+        v = split PASS.xs,
+    )
+
+    map call TAKE as W_ON(
+        st = split E_ON,
+    )
+
+    call WHOLE as WS_ON(
+        es = E_ON,
+    )
+
+    return (
+        stage_on   = E_ON,
+        stage_off  = E_OFF,
+        sub_on     = S_ON.r,
+        map_on     = FF_ON.r,
+        fork_on    = I_ON.rs,
+        cascade_on = C_ON.r,
+        each_on    = EACH_ON.rs,
+        each_off   = EACH_OFF.rs,
+        pass_on    = P_ON.r,
+        keyed_on   = KE_ON,
+        keyed_off  = KE_OFF,
+        lit_on     = LITSUB.rs,
+        whole_on   = W_ON.r,
+        whole_sub  = WS_ON.rs,
+    )
+}
+
+call DSN(
+    on  = true,
+    off = false,
+    ns  = [
+        1,
+        2,
+    ],
+)

@@ -379,6 +379,23 @@ var mrpDiffCases = []mrpDiffCase{
 	// under literal and runtime gates; mrp prunes each to null.
 	{name: "empty_fork_gated", native: true, inline: true},
 	{name: "empty_fork_gated_sub", native: true, inline: true},
+	// #435: splits of a mapped call's whole ref over an invocation-known null
+	// and empty, into a stage and into a sub-pipeline.
+	{name: "empty_fork_wholeref", native: true, inline: true},
+	// #436: splits of a disabled stage, sub-pipeline, map call and per-fork
+	// stage, gated by entry values.
+	{name: "disabled_split_null", native: true, inline: true},
+	// #434: runtime-gated map calls over a sub-pipeline (array, map, empty and
+	// null sources, in a keyed layer, into a split stage) against an
+	// entry-gated one and a gated map call over a stage.
+	{name: "disabled_map_nullforks", native: true, inline: true},
+	// #433: a typed-map literal bound to a sub-pipeline input and split
+	// through a field projection keeps its boundary under inlining.
+	{name: "map_literal_proj", native: true, inline: true},
+	// #433: a map call's fork-independent calls run as often as mrp runs them,
+	// across literal, entry, empty, runtime-empty, gated, nested, plain-sub
+	// and keyed map calls.
+	{name: "fork_indep_call", native: true, inline: true},
 	// The native-suite golden anchors: their committed expected/outs.json
 	// files claim mrp provenance, so the live differential machine-checks
 	// that claim — otherwise TestGolden + the native suites would prove

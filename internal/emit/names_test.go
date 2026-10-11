@@ -202,7 +202,7 @@ func inventoryNames(prog *ir.Program) map[string]string {
 				names["FORK_"+q+s] = "scatter:" + s
 			}
 
-			for _, h := range []string{"BIND_" + q, "FORK_" + q, "MERGE_" + q, "DISABLE_" + q} {
+			for _, h := range []string{"BIND_" + q, "FORK_" + q, "MERGE_" + q, "DISABLE_" + q, "NULLFORKS_" + q, "GATE_" + q} {
 				names[h] = "helper"
 				names[h+"_K"] = "helper"
 			}

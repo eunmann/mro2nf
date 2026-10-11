@@ -201,6 +201,129 @@ func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.
 	return buildArrayForks(broadcast, splits, only)
 }
 
+// StaticNulls is what the binder knows at run time about the values mrp
+// resolves to null when it builds the call graph: Pipe holds the enclosing
+// pipeline's args fields and Calls each upstream call's output fields, as the
+// bundles that carry them record. A call whose bundle is null as a whole, a
+// call the run disabled, is statically null without an entry. mrp resolves a
+// call under an invocation-known true gate to null statically and prunes a map
+// call over it to null (#436), and a map call pruned that way is null in turn.
+// A split of a call under a runtime gate is a call graph mrp refuses (#387) or
+// panics on, so the rule holds for every gate.
+type StaticNulls struct {
+	Pipe  map[string]bool
+	Calls map[string]map[string]bool
+}
+
+// StaticNullCall is the field a merged bundle lists, beside its outputs, for
+// a map call mrp prunes to null as a whole: a whole ref to the call is then
+// statically null too, where a call whose outputs alone are null is a struct
+// of nulls. Martian identifiers cannot contain '@', so it never names an
+// output.
+const StaticNullCall = "@call"
+
+// staticNull reports whether e is a ref into a statically null value.
+func (e Entry) staticNull(nulls StaticNulls, callOuts map[string]json.RawMessage) bool {
+	r := e.Ref
+	if r == nil {
+		return false
+	}
+
+	if r.Kind == ir.RefKindSelf {
+		return nulls.Pipe[r.ID]
+	}
+
+	outs, ok := callOuts[r.ID]
+	if !ok {
+		return false
+	}
+
+	field, _, _ := strings.Cut(r.Output, ".")
+	if field == "" {
+		field = StaticNullCall
+	}
+
+	return isNullRaw(outs) || nulls.Calls[r.ID][field]
+}
+
+// SplitOfStaticNull reports whether a split binding of spec takes its
+// collection from a statically null value, so a map call over it is pruned.
+func SplitOfStaticNull(spec Spec, nulls StaticNulls, callOuts map[string]json.RawMessage) bool {
+	for _, e := range spec {
+		if e.Split && e.staticNull(nulls, callOuts) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// gateNoFork is a ResolveForks `only` that marshals no fork's args: GateOff
+// needs the fork count and validation, not the args.
+const gateNoFork = -2
+
+// errGateFlag reports a gate flag that resolved to neither a bool nor null.
+var errGateFlag = errors.New("gate flag is not a boolean")
+
+// GateOff evaluates a transpiler gate (ir.Call.Gate, #433): it is off when a
+// non-split binding resolves to true (a null flag leaves it on, as mrp reads a
+// null disable flag false) or when its split bindings, a map call's, resolve
+// to zero forks that mrp prunes statically: an invocation-known empty
+// (emptyNull) or a split of a statically null value.
+func GateOff(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, nulls StaticNulls, isMap, emptyNull bool) (bool, error) {
+	splits := Spec{}
+
+	for param, e := range spec {
+		if e.Split {
+			splits[param] = e
+
+			continue
+		}
+
+		raw, err := e.resolve(pipeArgs, callOuts)
+		if err != nil {
+			return false, fmt.Errorf("gate %q: %w", param, err)
+		}
+
+		var flag *bool
+		if err := json.Unmarshal(raw, &flag); err != nil {
+			return false, fmt.Errorf("gate %q = %s: %w", param, raw, errGateFlag)
+		}
+
+		if flag != nil && *flag {
+			return true, nil
+		}
+	}
+
+	if len(splits) == 0 {
+		return false, nil
+	}
+
+	forks, _, err := ResolveForks(splits, pipeArgs, callOuts, isMap, gateNoFork)
+	if err != nil {
+		return false, err
+	}
+
+	return len(forks) == 0 && (emptyNull || SplitOfStaticNull(splits, nulls, callOuts)), nil
+}
+
+// StaticNullParams returns, sorted, the params of spec bound to a statically
+// null value by a non-split binding: what a bundle bound from spec records for
+// the bindings that read it.
+func StaticNullParams(spec Spec, nulls StaticNulls, callOuts map[string]json.RawMessage) []string {
+	var out []string
+
+	for param, e := range spec {
+		if !e.Split && e.staticNull(nulls, callOuts) {
+			out = append(out, param)
+		}
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
 func buildArrayForks(broadcast, splits map[string]json.RawMessage, only int) ([]json.RawMessage, []string, error) {
 	arrays := make(map[string][]json.RawMessage, len(splits))
 	count := -1
@@ -306,6 +429,8 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage, only int) ([]js
 // output, whose merged size is the fork count); one such side of a MIXED zip
 // suffices, because zipped splits must agree in length (errSplitLen fails
 // loudly otherwise), so zero forks implies the known side resolved empty.
+// `mre merge` also sets it for a split of a statically null value, which its
+// forkmeta records (SplitOfStaticNull, #436).
 // The flag only ever WIDENS the zero-fork case to null: with one or more
 // forks mergeOne runs untouched, which keeps launch-time entry overrides
 // invocation-correct. A zero-fork merge for an UNMARKED call (runtime-sourced
@@ -346,6 +471,43 @@ func Merge(names []string, outs []json.RawMessage, keys []string, emptyNull bool
 	}
 
 	return raw, nil
+}
+
+// NullForksKey is the merged-bundle member NullForks writes: the whole-call
+// value, one null per fork. Martian identifiers cannot contain '@', so it
+// never names an output.
+const NullForksKey = "@nullforks"
+
+// NullForks is the result of a map call over a sub-pipeline that a runtime
+// gate disables: mrp disables each fork's pipeline outputs inside the merge
+// (syntax/resolve_pipeline.go resolvePipelineOuts), so every output, and the
+// whole-call ref, is one null per fork, in an array for an array fork (keys
+// nil) or keyed by fork for a map fork (#434). Zero forks give the typed empty.
+func NullForks(names []string, count int, keys []string) (json.RawMessage, error) {
+	var perFork any = make([]any, count)
+
+	if keys != nil {
+		nulls := make(map[string]any, len(keys))
+		for _, k := range keys {
+			nulls[k] = nil
+		}
+
+		perFork = nulls
+	}
+
+	forks, err := marshalRaw(perFork, "per-fork nulls")
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]json.RawMessage, len(names)+1)
+	for _, name := range names {
+		result[name] = forks
+	}
+
+	result[NullForksKey] = forks
+
+	return marshalRaw(result, "null forks")
 }
 
 func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMessage) (json.RawMessage, error) {
@@ -548,7 +710,7 @@ func projectArray(raw json.RawMessage, path string) (json.RawMessage, error) {
 // for zero forks).
 func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessage, error) {
 	if keys != nil {
-		// The keys (forkmeta.json) and outs (collected per-fork bundles) are
+		// The keys (forkmeta2.json) and outs (collected per-fork bundles) are
 		// produced independently; a desync would index outs out of range. Fail
 		// with a clear error rather than panicking the merge process.
 		if len(outs) != len(keys) {
@@ -606,6 +768,10 @@ func perFork(raw json.RawMessage, mapFork bool) (json.RawMessage, error) {
 	var merged map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &merged); err != nil {
 		return nil, fmt.Errorf("regroup merged forks: %w", err)
+	}
+
+	if forks, ok := merged[NullForksKey]; ok {
+		return forks, nil
 	}
 
 	nulls := 0

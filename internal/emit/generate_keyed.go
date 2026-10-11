@@ -53,6 +53,10 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 			genKeyedForkBindProcess(b, p.Name, c, g)
 			genKeyedMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 
+			if cp.nullForks {
+				genKeyedNullForksProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
+			}
+
 			// A natively-gated keyed disable (self.<field>) reads the flag from
 			// the per-fork args and needs no DISABLE_K bind.
 			if cp.keyedDisableTask {
@@ -63,6 +67,9 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 		// unfuseable one keeps its standalone BIND_K feeding the callee's variant.
 		case keyedFused:
 			genKeyedFusedStageProcess(b, p.Name, c, cp.keyedStage, g)
+
+		case keyedGate:
+			genKeyedGateProcess(b, p.Name, c, g)
 
 		case keyedBind:
 			genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
@@ -100,6 +107,23 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 }
 
 `, name, block, g.mre, arg, prodArgs, out)
+}
+
+// genKeyedGateProcess is genGateProcess for a keyed pipeline: one gate per fork.
+func genKeyedGateProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
+	block, arg := keyedInputs(refCalls(c.Bindings))
+
+	fmt.Fprintf(b, `process %[1]s_K {
+  input:
+%[2]s  output:
+    tuple val(key), path('gate', type: 'dir')
+  script:
+    """
+    %[3]s -pipeargs ${pipeargs}%[4]s -o gate
+    """
+}
+
+`, gateName(pipeline, c.Name), block, g.gateCmd(pipeline, c), arg)
 }
 
 // genKeyedFusedStageProcess emits a per-call fork-keyed process that runs
@@ -189,7 +213,7 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
   input:
 %[3]s  output:
     tuple val(key), path("outs__${key}", type: 'dir'), emit: outs, optional: true
-    tuple val(okey), path('forkmeta.mro2nf.json'), emit: keys, optional: true
+    tuple val(okey), path('forkmeta2.mro2nf.json'), emit: keys, optional: true
 %[4]s}
 
 `, forkName(pipeline, c.Name), stageDirectives(s, ""), block, g.scatterScript(c, s, arg))
@@ -206,16 +230,36 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
   input:
 %[2]s  output:
     tuple val(key), path('forks'), emit: forks
-    tuple val(key), path('forkmeta.json'), emit: keys
+    tuple val(key), path('forkmeta2.json'), emit: keys
   script:
     """
     mkdir -p forks
     '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks -mapmode %[6]s%[5]s
-    mv -f forks/forkmeta.json forkmeta.json
+    mv -f forks/forkmeta2.json forkmeta2.json
     """
 }
 
 `, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c))
+}
+
+// genKeyedNullForksProcess is genNullForksProcess for a nested map call: per
+// outer fork the gate skips, it merges one null per inner fork (#434).
+func genKeyedNullForksProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
+	block, arg := keyedInputs(refCalls(c.Bindings))
+
+	fmt.Fprintf(b, `process %[1]s_K {
+  input:
+%[2]s  output:
+    tuple val(key), path('merged', type: 'dir')
+  script:
+    """
+    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -keysonly -keysfile forkmeta2.json -mapmode %[6]s%[5]s
+    %[7]s
+    """
+}
+
+`, nullForksName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c),
+		g.nullForksMergeCmd(pipeline, c, calleeOuts))
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
@@ -228,7 +272,7 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
 func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
-    tuple val(key), path(souts), path('forkmeta.json')
+    tuple val(key), path(souts), path('forkmeta2.json')
     path 'types.json'
   output:
     tuple val(key), path('merged', type: 'dir')
@@ -239,8 +283,8 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 }
 
 `, mergeName(pipeline, c.Name),
-		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta.json", "merged",
-			g.plan.pipes[pipeline].calls[c.Name].emptyNull))
+		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta2.json", "merged",
+			g.plan.pipes[pipeline].calls[c.Name].mergeFlags()))
 }
 
 // genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,
@@ -294,6 +338,13 @@ func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 // branched, running the callee only for enabled forks and emitting the null
 // bundle for skipped ones.
 func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call, cp callPlan) {
+	if cp.keyedKind == keyedGate {
+		fmt.Fprintf(body, "    ch_%s_l = %s_K(%s).toList()\n",
+			c.Name, gateName(pipeline, c.Name), keyedBindCall(c.Bindings, bindName(pipeline, c.Name)))
+
+		return
+	}
+
 	if c.Mapped {
 		genKeyedMappedCallBody(body, pipeline, c, cp)
 
@@ -401,10 +452,8 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call, c
 // genKeyedMappedDisableGate emits a keyed DISABLE bind and a per-outer-fork
 // run/skip branch for a disabled nested map call. It returns the run-branch
 // channel expression (the FORKBIND input with the disable-flag bundle stripped)
-// and emits sk_<call>, the keyed null bundles for skipped outer forks.
+// and emits sk_<call>, the result for skipped outer forks (genKeyedMappedSkip).
 func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call, cp callPlan) string {
-	nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
-
 	// Native gating (#59, Lever 2) for a self.<field> flag: read it from the
 	// per-fork pipeline-args bundle (row[1]) — no keyed DISABLE task, no join.
 	// The DECISION is the plan's keyedDisableTask (set from keyedNativeDisable,
@@ -419,24 +468,41 @@ func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call
         run: !off
         skip: off
     }
-    sk_%[1]s = gk_%[1]s.skip.map { row -> tuple(row[0], file("%[4]s")) }
-`, c.Name, keyedBindInput(c.Bindings), field, nulls)
+`, c.Name, keyedBindInput(c.Bindings), field)
+		genKeyedMappedSkip(body, pipeline, c, cp, "")
 
 		return fmt.Sprintf("gk_%s.run, types, %s", c.Name, specFile(bindName(pipeline, c.Name)))
 	}
 
 	dis := disableName(pipeline, c.Name)
+	strip := ".map { row -> row[0..<row.size() - 1] }"
 
 	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
 	fmt.Fprintf(body, `    gk_%[1]s = %[2]s.join(%[3]s_K.out).branch { row ->
-        def off = Mro2nf.disabledDir(row[-1], '%[5]s')
+        def off = Mro2nf.disabledDir(row[-1], '%[4]s')
         run: !off
         skip: off
     }
-    sk_%[1]s = gk_%[1]s.skip.map { row -> tuple(row[0], file("%[4]s")) }
-`, c.Name, keyedBindInput(c.Bindings), dis, nulls, disablePath(c))
+`, c.Name, keyedBindInput(c.Bindings), dis, disablePath(c))
+	genKeyedMappedSkip(body, pipeline, c, cp, strip)
 
-	return fmt.Sprintf("gk_%s.run.map { row -> row[0..<row.size() - 1] }, types, %s", c.Name, specFile(bindName(pipeline, c.Name)))
+	return fmt.Sprintf("gk_%s.run%s, types, %s", c.Name, strip, specFile(bindName(pipeline, c.Name)))
+}
+
+// genKeyedMappedSkip emits sk_<call>, a disabled nested map call's result for
+// the outer forks its gate skips: one null per inner fork from NULLFORKS_K for
+// a runtime-gated call over a sub-pipeline (#434), else the whole-call null
+// bundle. strip drops the DISABLE_K bundle from a skip row.
+func genKeyedMappedSkip(body *strings.Builder, pipeline string, c ir.Call, cp callPlan, strip string) {
+	if cp.nullForks {
+		fmt.Fprintf(body, "    sk_%[1]s = %[2]s_K(gk_%[1]s.skip%[3]s, types, %[4]s)\n",
+			c.Name, nullForksName(pipeline, c.Name), strip, specFile(bindName(pipeline, c.Name)))
+
+		return
+	}
+
+	nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
+	fmt.Fprintf(body, "    sk_%[1]s = gk_%[1]s.skip.map { row -> tuple(row[0], file(\"%[2]s\")) }\n", c.Name, nulls)
 }
 
 // keyedBindInput renders the channel expression feeding a keyed bind: the fork

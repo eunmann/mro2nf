@@ -109,6 +109,12 @@ func TestBuildPlanEmptyNull(t *testing.T) {
 		{"empty_fork_cascade", "EFC", "FIRST"},
 		{"empty_fork_cascade", "EFC", "SECOND"},
 		{"empty_fork_mixed", "EFM", "PAIR"},
+		// #435: a split of a mapped call's WHOLE ref cascades too, into a
+		// stage and into a sub-pipeline.
+		{"empty_fork_wholeref", "EFW", "P_NUL"},
+		{"empty_fork_wholeref", "EFW", "W_NUL"},
+		{"empty_fork_wholeref", "EFW", "P_EMP"},
+		{"empty_fork_wholeref", "EFW", "W_EMP"},
 	} {
 		prog := lowerFixture(t, fx.fixture)
 
@@ -164,6 +170,77 @@ func TestKnownValueShapes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := e.known(tc.in, tc.v, true); got != tc.want {
 				t.Errorf("known(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildPlanNullForks pins #434: a disabled map call over a sub-pipeline
+// takes the per-fork null skip only under a runtime gate, at the top and in a
+// keyed layer; an entry-gated call and a gated map call over a stage keep the
+// whole-call null.
+func TestBuildPlanNullForks(t *testing.T) {
+	prog := lowerFixture(t, "disabled_map_nullforks")
+
+	for _, f := range []featureSet{{}, {native: true}} {
+		pl := buildPlan(prog, f)
+
+		for _, tc := range []struct {
+			pipe, call string
+			want       bool
+		}{
+			{"DMN", "A", true},
+			{"DMN", "M", true},
+			{"DMN", "E", true},
+			{"DMN", "N", true},
+			{"DMN", "O", true},
+			{"OUTER", "SUB", true},
+			{"DMN", "L", false},
+			{"DMN", "S", false},
+		} {
+			if got := pl.pipes[tc.pipe].calls[tc.call].nullForks; got != tc.want {
+				t.Errorf("native=%v: %s.%s nullForks = %v, want %v", f.native, tc.pipe, tc.call, got, tc.want)
+			}
+		}
+	}
+}
+
+// TestKnownWholeRefNeedsOutputs pins the #435 guard: a whole ref to a mapped
+// call is length-known only when the callee declares an output, because the
+// binder's per-fork regroup of an output-less merge is empty whatever the fork
+// count.
+func TestKnownWholeRefNeedsOutputs(t *testing.T) {
+	split := func(id string) ir.Binding {
+		return ir.Binding{Param: "v", Split: true, Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: id}}}
+	}
+
+	for _, tc := range []struct {
+		name string
+		out  []ir.Param
+		want bool
+	}{
+		{"with outputs", []ir.Param{{Name: "w"}}, true},
+		{"without outputs", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			top := &ir.Pipeline{
+				Name: "TOP",
+				In:   []ir.Param{{Name: "xs"}},
+				Calls: []ir.Call{
+					{Name: "A", Callable: "ST", Mapped: true, Bindings: []ir.Binding{
+						{Param: "v", Split: true, Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}},
+					}},
+					{Name: "B", Callable: "USE", Mapped: true, Bindings: []ir.Binding{split("A")}},
+				},
+			}
+			prog := &ir.Program{
+				Entry:     &ir.EntryCall{Callable: "TOP"},
+				Pipelines: map[string]*ir.Pipeline{"TOP": top},
+				Stages:    map[string]*ir.Stage{"ST": {Name: "ST", Out: tc.out}, "USE": {Name: "USE"}},
+			}
+
+			if got := knownInvocation(prog).emptySplit["TOP"]["B"]; got != tc.want {
+				t.Errorf("split of the whole ref of A marked = %v, want %v", got, tc.want)
 			}
 		})
 	}

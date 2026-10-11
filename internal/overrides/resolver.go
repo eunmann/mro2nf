@@ -44,7 +44,11 @@ type resolver struct {
 // newResolver builds a resolver over prog (may be nil). It resolves the
 // program as the emitter emits it: split per invocation-known context
 // (emit.SplitKnownContexts), so a stage's selector also names the per-call
-// processes of each sub-pipeline copy. prog itself is left unchanged.
+// processes of each sub-pipeline copy. A key names mrp's calls, so it resolves
+// against that program, while a stage's call sites are read after
+// fork-independent calls are lifted out of map calls
+// (emit.LiftForkIndependent), as the emitter names their processes. prog
+// itself is left unchanged.
 func newResolver(prog *ir.Program) *resolver {
 	r := &resolver{
 		stage: map[string]bool{}, leaves: map[string][]string{},
@@ -60,6 +64,10 @@ func newResolver(prog *ir.Program) *resolver {
 	emit.SplitKnownContexts(&split)
 	prog = &split
 	r.prog = prog
+
+	lifted := split
+	lifted.Pipelines = maps.Clone(split.Pipelines)
+	emit.LiftForkIndependent(&lifted)
 
 	// Collect in a deterministic pipeline order so a colliding call name resolves
 	// the same way every run (which callable wins is still order-dependent, but
@@ -77,6 +85,8 @@ func newResolver(prog *ir.Program) *resolver {
 		}
 	}
 
+	r.addCallSites(&lifted)
+
 	for stage, refs := range r.stageRefs {
 		slices.SortFunc(refs, func(a, b callRef) int {
 			if c := strings.Compare(a.pipe, b.pipe); c != 0 {
@@ -89,6 +99,18 @@ func newResolver(prog *ir.Program) *resolver {
 	}
 
 	return r
+}
+
+// addCallSites adds every stage call of lifted, the program after lifting, to
+// its stage's call sites; a lifted call is a site of its own.
+func (r *resolver) addCallSites(lifted *ir.Program) {
+	for _, name := range sortedKeys(lifted.Pipelines) {
+		for _, c := range lifted.Pipelines[name].Calls {
+			if lifted.Stages[c.Callable] != nil {
+				r.stageRefs[c.Callable] = append(r.stageRefs[c.Callable], callRef{name, c.Name})
+			}
+		}
+	}
 }
 
 // markStageCall records that call name invokes stage callable inside pipeline

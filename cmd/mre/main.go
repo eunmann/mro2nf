@@ -22,7 +22,7 @@ import (
 var version = "dev"
 
 var (
-	errUsage        = errors.New("usage: mre <split|main|join|bind|forkbind|merge|publish-layout|entryargs|version> [flags]")
+	errUsage        = errors.New("usage: mre <split|main|join|bind|forkbind|merge|gate|publish-layout|entryargs|version> [flags]")
 	errUnknownPhase = errors.New("unknown phase")
 	errBadInput     = errors.New("invalid -inputs pair (want id=file)")
 )
@@ -67,6 +67,8 @@ func run(ctx context.Context, args []string) error {
 		return runForkBind(ctx, args[1:])
 	case "merge":
 		return runMerge(ctx, args[1:])
+	case "gate":
+		return runGate(ctx, args[1:])
 	case "publish-layout":
 		return runPublishLayout(ctx, args[1:])
 	case "entryargs":

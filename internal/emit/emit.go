@@ -206,7 +206,8 @@ func Emit(prog *ir.Program, opts Options) error {
 // prepareProgram rewrites prog in place into the program Emit plans: split per
 // invocation-known context, then, under inlinePipelines, with eligible
 // sub-pipeline boundaries flattened so their entry/return BIND tasks never
-// exist (#221). The split runs first so internal/overrides, which resolves the
+// exist (#221), then with each map call's fork-independent calls lifted out of
+// it (#433). The split runs first so internal/overrides, which resolves the
 // un-inlined program, derives the same copy names. Diagnose prepares a
 // clonePipelines copy, so its diagnostics describe the emitted calls (#250).
 func prepareProgram(prog *ir.Program, f featureSet) {
@@ -215,6 +216,8 @@ func prepareProgram(prog *ir.Program, f featureSet) {
 	if f.inlinePipelines {
 		inlinePipelines(prog)
 	}
+
+	LiftForkIndependent(prog)
 }
 
 // clonePipelines returns a copy of prog that prepareProgram can rewrite without

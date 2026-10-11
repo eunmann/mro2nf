@@ -928,3 +928,34 @@ func TestConvertReachesKnownContextCopies(t *testing.T) {
 		t.Error("Convert must not add the copies to the caller's program")
 	}
 }
+
+// TestConvertReachesLiftedCalls pins #433: a key names mrp's call (TOP.ENT.INDEP)
+// and its selector reaches the process of the call lifted out of the map
+// call, which the emitter names after the map call (TOP__ENT_INDEP).
+func TestConvertReachesLiftedCalls(t *testing.T) {
+	const dir = "../../testdata/fork_indep_call"
+
+	ast, err := frontend.Parse(dir+"/pipeline.mro", []string{dir}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast, nil)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	cfg, unmapped, err := overrides.Convert([]byte(`{"TOP.ENT.INDEP": {"mem_gb": 8}}`), prog)
+	if err != nil || len(unmapped) != 0 {
+		t.Fatalf("Convert: err=%v unmapped=%v", err, unmapped)
+	}
+
+	sels := regexp.MustCompile(`withName: '([^']+)'`).FindAllStringSubmatch(cfg, -1)
+	if len(sels) != 1 {
+		t.Fatalf("want 1 selector, got %d:\n%s", len(sels), cfg)
+	}
+
+	if name := "STAGE_" + emit.Qualify("TOP", "ENT_INDEP"); !regexp.MustCompile("^(?:" + sels[0][1] + ")$").MatchString(name) {
+		t.Errorf("selector %q must full-match %q", sels[0][1], name)
+	}
+}

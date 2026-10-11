@@ -29,29 +29,43 @@ type invKnown struct {
 	// SplitKnownContexts every instance of a pipeline agrees, so the AND is
 	// exact; on an unsplit program it is the conservative merge.
 	emptySplit map[string]map[string]bool
+	// nullForks marks, per (pipeline, map call over a sub-pipeline), a disable
+	// gate that is not invocation-known in EVERY instance: mrp folds a known
+	// gate statically (true resolves the whole call to null) but disables a
+	// runtime-gated call fork by fork, inside the merge, so its gate-true
+	// result is one null per fork (#434).
+	nullForks map[string]map[string]bool
 }
 
 // knownInvocation evaluates every pipeline instance reachable from the entry
 // (knownEval) and merges each pipeline's per-instance marks into one plan.
 func knownInvocation(prog *ir.Program) invKnown {
-	k := invKnown{emptySplit: make(map[string]map[string]bool, len(prog.Pipelines))}
+	k := invKnown{
+		emptySplit: make(map[string]map[string]bool, len(prog.Pipelines)),
+		nullForks:  make(map[string]map[string]bool, len(prog.Pipelines)),
+	}
 
 	for _, in := range evalKnown(prog).insts {
-		name := in.p.Name
-
-		marks, seen := k.emptySplit[name]
-		if !seen {
-			k.emptySplit[name] = maps.Clone(in.split)
-
-			continue
-		}
-
-		for c, v := range marks {
-			marks[c] = v && in.split[c]
-		}
+		andMarks(k.emptySplit, in.p.Name, in.split)
+		andMarks(k.nullForks, in.p.Name, in.runtimeGate)
 	}
 
 	return k
+}
+
+// andMarks merges one instance's marks of pipeline name into all: a call is
+// marked only when every instance marks it.
+func andMarks(all map[string]map[string]bool, name string, inst map[string]bool) {
+	marks, seen := all[name]
+	if !seen {
+		all[name] = maps.Clone(inst)
+
+		return
+	}
+
+	for c, v := range marks {
+		marks[c] = v && inst[c]
+	}
 }
 
 // SplitKnownContexts gives every distinct invocation-known context of a
@@ -124,12 +138,13 @@ func (f knownFacts) sig(p *ir.Pipeline) string {
 // sub-pipeline call. Instances with equal id plan identically (same marks,
 // same callee classes), so they can share one emitted copy.
 type knownInst struct {
-	p     *ir.Pipeline
-	facts knownFacts
-	split map[string]bool
-	subs  map[string]*knownInst
-	seen  map[string]bool
-	id    int
+	p           *ir.Pipeline
+	facts       knownFacts
+	split       map[string]bool
+	runtimeGate map[string]bool
+	subs        map[string]*knownInst
+	seen        map[string]bool
+	id          int
 }
 
 // knownEval evaluates pipeline instances top-down from the entry, memoized by
@@ -178,7 +193,8 @@ func (e *knownEval) instance(p *ir.Pipeline, facts knownFacts) *knownInst {
 	}
 
 	in := &knownInst{
-		p: p, facts: facts, split: map[string]bool{}, subs: map[string]*knownInst{}, seen: map[string]bool{},
+		p: p, facts: facts, split: map[string]bool{}, runtimeGate: map[string]bool{},
+		subs: map[string]*knownInst{}, seen: map[string]bool{},
 	}
 	e.memo[key] = in
 
@@ -193,13 +209,17 @@ func (e *knownEval) instance(p *ir.Pipeline, facts knownFacts) *knownInst {
 }
 
 // classID numbers in's emission class within its pipeline in first-seen
-// order: the split marks plus each sub-pipeline call's callee class.
+// order: the split and gate marks plus each sub-pipeline call's callee class.
 func (e *knownEval) classID(in *knownInst) int {
 	var b strings.Builder
 
 	for _, c := range in.p.Calls {
-		if c.Mapped {
+		if c.Mapped || c.Gate {
 			b.WriteString(c.Name + "=" + strconv.FormatBool(in.split[c.Name]) + ";")
+		}
+
+		if gate, ok := in.runtimeGate[c.Name]; ok {
+			b.WriteString(c.Name + "!" + strconv.FormatBool(gate) + ";")
 		}
 
 		if sub := in.subs[c.Name]; sub != nil {
@@ -223,7 +243,8 @@ func (e *knownEval) classID(in *knownInst) int {
 }
 
 // ensure evaluates call c of instance in once: a sub-pipeline callee's
-// instance under the facts c's bindings give it, and a map call's split mark.
+// instance under the facts c's bindings give it, a map call's split mark, and
+// whether a disabled map call over a sub-pipeline has a runtime gate.
 func (e *knownEval) ensure(in *knownInst, c ir.Call) {
 	if in.seen[c.Name] {
 		return
@@ -231,12 +252,17 @@ func (e *knownEval) ensure(in *knownInst, c ir.Call) {
 
 	in.seen[c.Name] = true
 
-	if q, ok := e.prog.Pipelines[c.Callable]; ok {
+	q, isPipe := e.prog.Pipelines[c.Callable]
+	if isPipe {
 		in.subs[c.Name] = e.instance(q, e.calleeFacts(in, c, q))
 	}
 
-	if c.Mapped {
+	if c.Mapped || c.Gate {
 		in.split[c.Name] = e.splitKnown(in, c)
+	}
+
+	if c.Mapped && isPipe && c.Disabled != nil {
+		in.runtimeGate[c.Name] = !e.known(in, ir.Value{Ref: c.Disabled}, false)
 	}
 }
 
@@ -288,8 +314,10 @@ func (e *knownEval) splitKnown(in *knownInst, c ir.Call) bool {
 // output: the merged collection's size equals the fork count, which is
 // invocation-determined exactly when that call's own split source is (mrp's
 // KnownLength cascade) — its zero-fork merge yields null, and any projection
-// of null stays null. The whole-outs ref of a mapped call is excluded: only a
-// named output projects to the per-fork collection. A composite CONTAINING
+// of null stays null. The whole-outs ref of a mapped call qualifies too (#435):
+// the binder regroups it into one struct per fork, so its length is the fork
+// count — unless the callee has no outputs, whose regroup is always empty. A
+// composite CONTAINING
 // refs (fan-in `[A.out, B.out]`) is rejected even though its static length
 // makes the zero-fork case unreachable today — the guard is structural, not
 // an unstated invariant. A disable gate does not affect known-ness (#383):
@@ -326,7 +354,7 @@ func (e *knownEval) known(in *knownInst, v ir.Value, lenOnly bool) bool {
 	e.ensure(in, c)
 
 	if c.Mapped {
-		return lenOnly && r.Output != "" && in.split[c.Name]
+		return lenOnly && (r.Output != "" || e.hasOutputs(c.Callable)) && in.split[c.Name]
 	}
 
 	sub := in.subs[c.Name]
@@ -336,6 +364,19 @@ func (e *knownEval) known(in *knownInst, v ir.Value, lenOnly bool) bool {
 	}
 
 	return e.returnKnown(sub, r.Output, lenOnly)
+}
+
+// hasOutputs reports whether the named stage or pipeline declares an output.
+func (e *knownEval) hasOutputs(callable string) bool {
+	if s, ok := e.prog.Stages[callable]; ok {
+		return len(s.Out) > 0
+	}
+
+	if p, ok := e.prog.Pipelines[callable]; ok {
+		return len(p.Out) > 0
+	}
+
+	return false
 }
 
 // returnKnown resolves a ref THROUGH a plain sub-pipeline call: the ref's

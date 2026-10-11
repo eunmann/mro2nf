@@ -16,6 +16,9 @@ import (
 // gatherCmd matches an `mre merge` invocation or a join-phase stage command.
 var gatherCmd = regexp.MustCompile(`(?m)^.*' (merge|join) .*$`)
 
+// legacyForkMeta matches the fork sidecar names from before the pruned field.
+var legacyForkMeta = regexp.MustCompile(`forkmeta(_\w+)?\.(mro2nf\.)?json`)
+
 // TestGeneratedGathersTakeNoArgvList is the #323/#324 property over every
 // transpiled fixture, default and -native: no generated script builds a fork
 // or chunk list in the shell (`ls | sort -V | paste -sd,`), which hits the
@@ -55,12 +58,12 @@ func checkGathers(t *testing.T, where, src string, seen map[string]int) {
 		}
 	}
 
-	// The count-carrying fork sidecar is named forkmeta: a producer cached
-	// under -resume from before the format change holds only the legacy
-	// forkkeys sidecar, so it misses its output and re-runs instead of
-	// handing the merge a sidecar it cannot read.
-	if strings.Contains(src, "forkkeys") {
-		t.Errorf("%s names the legacy forkkeys sidecar", where)
+	// The fork sidecar is named forkmeta2: a producer cached under -resume
+	// from before a format change holds only a legacy sidecar (forkkeys,
+	// then forkmeta before the pruned field, #436), so it misses its output
+	// and re-runs instead of handing the merge a sidecar it misreads.
+	if strings.Contains(src, "forkkeys") || legacyForkMeta.MatchString(src) {
+		t.Errorf("%s names a legacy fork sidecar", where)
 	}
 
 	flags := map[string][]string{

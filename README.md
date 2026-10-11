@@ -43,7 +43,7 @@ targets — see **[`docs/TRANSPILER.md`](docs/TRANSPILER.md)**.
 cmd/mro2nf/      transpiler CLI: .mro -> Nextflow project (+ `overrides` subcommand)
 cmd/mre/       runtime shim: runs stage phases (split|main|join) against the
                Martian adapter, plus the data-plane subcommands the generated
-               processes call (bind, forkbind, merge, publish-layout, entryargs)
+               processes call (bind, forkbind, merge, gate, publish-layout, entryargs)
 internal/
   frontend/    parse .mro via github.com/martian-lang/martian/syntax -> IR
   ir/          normalized transpiler IR

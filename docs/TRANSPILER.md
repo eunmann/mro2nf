@@ -342,11 +342,19 @@ fork), the emitter renders:
   single array/map-shaped output bundle. `mre merge -forksdir <dir>` lists the
   staged `outs__<key>` bundles itself, orders them by the fork index each key
   ends in, and fails unless they number exactly the `count` in the
-  `forkmeta.json` sidecar (`{"count": N, "keys": [...] | null}`) — no fork
+  `forkmeta2.json` sidecar (`{"count": N, "keys": [...] | null}`) — no fork
   list rides on the command line, so the gather has no argv-length ceiling.
+  A `"pruned": true` field marks a split of a statically null value (below),
+  which merges zero forks to `null` as `mrp` prunes it (#436).
   The sidecar's file name is part of its format: a `-resume` across a format
   change finds no cached sidecar under the new name and re-runs the producer,
   so a merge never reads a stale-format one.
+- For a map call over a sub-pipeline under a runtime disable gate, a
+  **NULLFORKS process** on the gate's skip branch (`mre forkbind -keysonly`,
+  then `mre merge -nullforks`): `mrp` disables such a call fork by fork, so its
+  result is one `null` per fork. The merged bundle carries that whole-call
+  value under the `@nullforks` member, which the binder returns for a whole
+  ref (#434).
 
 Every stage and pipeline therefore gets **two** emitted workflows: the plain
 `wf_<name>` and the keyed `wf_<name>_map`. The keyed forms exist so a map call
@@ -354,6 +362,21 @@ over a split stage (or over a sub-pipeline that itself maps — *nested* maps) k
 every chunk and join by its fork. Fork directories are enumerated by **reading
 the staged `forknames.json`** (via `.resolve()`), never `java.io.File.listFiles()`
 — the latter cannot list an S3 work dir.
+
+**Fork-independent calls leave the map call (#433).** `mrp` forks a stage only
+over the map calls its inputs and disable read, and runs one with none once
+(`fork0`), whatever the fork count. Before planning, `LiftForkIndependent`
+(`internal/emit/lift.go`) moves each call of a map-called sub-pipeline that
+reads none of the map call's split inputs (directly, or through another such
+call) into the caller as `<mapcall>_<call>`, through plain and nested
+sub-pipeline calls alike, and hands the residual copy (`<SUB>_lift<n>`) the
+lifted calls' outputs as broadcast inputs (`__h_<call>`). Because `mrp` drops
+a map call over a statically empty or null source with its children, and
+disables them with it, the lifted calls are disabled by a **GATE** call
+(`mre gate`, one task per lift, not per fork) that reads the map call's split
+bindings (unless they are literals, never empty) and disable flag; a lifted
+call with its own gate gets a gate of both. A call reading an outer map
+call's element stays in that outer fork.
 
 ### 4.5 Disabled calls → a runtime gate
 
@@ -460,6 +483,10 @@ writes an output bundle:
   bindspec + the staged upstream bundles + pipeline args) into the callee's args
   bundle. `forkbind` produces one bundle per fork.
 - **`mre merge`** — gather per-fork output bundles into one array/map output.
+- **`mre gate`** — evaluate a transpiler gate (§4.4, #433) into a bundle whose
+  `off` field disables the calls lifted out of a map call: true when a gate
+  flag is true or the map call's split bindings resolve to the zero forks
+  `mrp` prunes statically.
 - **`mre entryargs`** — build the top-level args bundle from the baked defaults
   overlaid with launch-time run parameters (§8).
 - **`mre publish-layout`** — compute the mrp-style `outs/` layout from the final
@@ -523,7 +550,19 @@ including the files they reference." On disk it is a directory:
   f/L0001/reads.fastq    canonical type-walk order), so leaves never collide,
                          under the basename mrp passes the stage (#284);
                          data.json references them via a marker
+  f/staticnull.mro2nf.json  ← optional: the top-level fields mrp resolves
+                         to null when it builds the call graph (#436)
 ```
+
+`mrp` resolves a call under an invocation-known true gate to `null` statically,
+and prunes a map call over such a value to `null` where a runtime empty merges
+to the typed empty. At run time a disabled call's bundle is `null` as a whole;
+`mre bind` and `mre forkbind` list each param they bind to such a value (or to
+a field another bundle lists) in `f/staticnull.mro2nf.json`, and `mre merge`
+lists every output of a map call it prunes and `@call`, which marks a whole
+ref to the call null too, so the fact crosses sub-pipeline boundaries and
+cascades. The list sits under `f/` because a de-bundled channel
+item carries only `data.json` and the `f/*` items.
 
 The basename is the one the leaf's path had where `MarkFiles` found it: the
 file a stage wrote (Martian's `<out>.<ext>` default, or any path the stage chose),

@@ -226,6 +226,151 @@ func sliceElements(t *testing.T, collection string, keys []string) []json.RawMes
 	return out
 }
 
+// TestSplitOfStaticNull pins #436: a SPLIT of a disabled call's bundle (null
+// as a whole), of a call output field or a pipeline args field its bundle
+// records as statically null, or of the whole ref to a call its bundle records
+// as pruned, counts; a null output of a call that ran, a whole ref to a call
+// with only null fields, a broadcast binding and an unrecorded self field do
+// not.
+func TestSplitOfStaticNull(t *testing.T) {
+	callOuts := map[string]json.RawMessage{
+		"OFF":    json.RawMessage("null"),
+		"RAN":    json.RawMessage(`{"xs":null}`),
+		"PRUNED": json.RawMessage(`{"xs":null}`),
+		"FIELDS": json.RawMessage(`{"xs":null}`),
+	}
+	nulls := bind.StaticNulls{
+		Pipe: map[string]bool{"gone": true},
+		Calls: map[string]map[string]bool{
+			"PRUNED": {"xs": true, bind.StaticNullCall: true},
+			"FIELDS": {"xs": true},
+		},
+	}
+	call := func(id, out string, split bool) bind.Entry {
+		return bind.Entry{Ref: &bind.Ref{Kind: "call", ID: id, Output: out}, Split: split}
+	}
+	self := func(id string) bind.Entry {
+		return bind.Entry{Ref: &bind.Ref{Kind: "self", ID: id, Output: "a"}, Split: true}
+	}
+
+	for _, tc := range []struct {
+		name string
+		spec bind.Spec
+		want bool
+	}{
+		{"split of a disabled call", bind.Spec{"v": call("OFF", "xs", true)}, true},
+		{"split of a disabled call's whole ref", bind.Spec{"v": call("OFF", "", true)}, true},
+		{"split of a recorded output field", bind.Spec{"v": call("PRUNED", "xs.a", true)}, true},
+		{"split of a pruned call's whole ref", bind.Spec{"v": call("PRUNED", "", true)}, true},
+		{"split of a whole ref with only null fields", bind.Spec{"v": call("FIELDS", "", true)}, false},
+		{"split of a recorded args field", bind.Spec{"v": self("gone")}, true},
+		{"split of a ran call's null output", bind.Spec{"v": call("RAN", "xs", true)}, false},
+		{"broadcast of a disabled call", bind.Spec{"v": call("RAN", "xs", true), "w": call("OFF", "xs", false)}, false},
+		{"split of an unrecorded args field", bind.Spec{"v": self("xs")}, false},
+		{"unstaged call", bind.Spec{"v": call("GONE", "xs", true)}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := bind.SplitOfStaticNull(tc.spec, nulls, callOuts); got != tc.want {
+				t.Errorf("SplitOfStaticNull = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStaticNullParams pins which bound params a bundle records as
+// statically null: the non-split refs into a static null, sorted.
+func TestStaticNullParams(t *testing.T) {
+	callOuts := map[string]json.RawMessage{
+		"OFF": json.RawMessage("null"), "RAN": json.RawMessage(`{"xs":null}`), "PRUNED": json.RawMessage(`{"xs":null}`),
+	}
+	nulls := bind.StaticNulls{
+		Pipe:  map[string]bool{"gone": true},
+		Calls: map[string]map[string]bool{"PRUNED": {"xs": true, bind.StaticNullCall: true}},
+	}
+	spec := bind.Spec{
+		"z": {Ref: &bind.Ref{Kind: "call", ID: "OFF", Output: "xs"}},
+		"a": {Ref: &bind.Ref{Kind: "self", ID: "gone"}},
+		"w": {Ref: &bind.Ref{Kind: "call", ID: "PRUNED", Fork: bind.ForkArray}},
+		"s": {Ref: &bind.Ref{Kind: "call", ID: "OFF", Output: "xs"}, Split: true},
+		"r": {Ref: &bind.Ref{Kind: "call", ID: "RAN", Output: "xs"}},
+		"l": {Literal: json.RawMessage("null")},
+	}
+
+	if diff := cmp.Diff([]string{"a", "w", "z"}, bind.StaticNullParams(spec, nulls, callOuts)); diff != "" {
+		t.Errorf("StaticNullParams mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestGateOff pins the #433 gate: a true flag turns it off and a null one
+// does not; split bindings turn it off only for zero forks of an
+// invocation-known source or of a static null, not for a runtime empty.
+func TestGateOff(t *testing.T) {
+	callOuts := map[string]json.RawMessage{"OFF": json.RawMessage("null"), "UP": json.RawMessage(`{"xs":[],"f":true,"n":null}`)}
+	split := func(id, out string) bind.Entry {
+		return bind.Entry{Ref: &bind.Ref{Kind: "call", ID: id, Output: out}, Split: true}
+	}
+	flag := func(out string) bind.Entry {
+		return bind.Entry{Ref: &bind.Ref{Kind: "call", ID: "UP", Output: out}}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		spec      bind.Spec
+		emptyNull bool
+		want      bool
+	}{
+		{"true flag", bind.Spec{"@d": flag("f")}, false, true},
+		{"null flag", bind.Spec{"@d": flag("n")}, false, false},
+		{"runtime empty", bind.Spec{"v": split("UP", "xs")}, false, false},
+		{"known empty", bind.Spec{"v": split("UP", "xs")}, true, true},
+		{"static null", bind.Spec{"v": split("OFF", "xs")}, false, true},
+		{"forks", bind.Spec{"v": {Literal: json.RawMessage("[1]"), Split: true}}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := bind.GateOff(tc.spec, nil, callOuts, bind.StaticNulls{}, false, tc.emptyNull)
+			if err != nil {
+				t.Fatalf("gate: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("GateOff = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	if _, err := bind.GateOff(bind.Spec{"@d": flag("xs")}, nil, callOuts, bind.StaticNulls{}, false, false); err == nil {
+		t.Error("a non-boolean flag must fail the gate")
+	}
+}
+
+// TestNullForks pins #434's merge of disabled forks: every output and the
+// whole-call member are one null per fork, an array for an array fork and
+// keyed for a map fork, and zero forks give the typed empty.
+func TestNullForks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count int
+		keys  []string
+		want  string
+	}{
+		{"array forks", 2, nil, `{"@nullforks":[null,null],"a":[null,null],"b":[null,null]}`},
+		{"map forks", 2, []string{"p", "q"}, `{"@nullforks":{"p":null,"q":null},"a":{"p":null,"q":null},"b":{"p":null,"q":null}}`},
+		{"zero array forks", 0, nil, `{"@nullforks":[],"a":[],"b":[]}`},
+		{"zero map forks", 0, []string{}, `{"@nullforks":{},"a":{},"b":{}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := bind.NullForks([]string{"a", "b"}, tc.count, tc.keys)
+			if err != nil {
+				t.Fatalf("null forks: %v", err)
+			}
+
+			if string(got) != tc.want {
+				t.Errorf("NullForks = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveForksNoSplit(t *testing.T) {
 	spec := bind.Spec{"factor": {Ref: &bind.Ref{Kind: "self", ID: "factor"}}}
 

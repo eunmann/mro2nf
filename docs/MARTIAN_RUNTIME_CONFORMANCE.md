@@ -96,6 +96,16 @@ joins on both keyed/mapped paths — verified complete across all four variants)
 no-split chunk[0]-forward, key-preserving fork merges, and disabled-call
 null-forwarding all match Martian (`core/stage.go`, `fork.go`). Internal dir
 naming (`chunk_%05d`, `fork_%05d`) differs but is never observed by stage code.
+A call inside a map call over a sub-pipeline runs once per fork of only the
+map calls its inputs and disable read (`syntax/resolve_stage.go:320-351`
+`resolveForks`; `core/node.go:428-439` gives a call with no fork root one
+fork), so one that reads no fork runs once, even for zero runtime forks,
+unless the map call is pruned for a statically empty or null source
+(`resolve_pipeline.go:101-112`) or disabled. mro2nf lifts such calls out of
+the map call under a gate (#433, `fork_indep_call`). Not covered: a call
+that reads an inner map call's fork but not an enclosing one's, when the
+inner map call itself reads the enclosing fork, runs once per enclosing fork
+too, where `mrp` runs it once per inner fork.
 **Watch item:** a single map-call sweeping two *independent* sources is zipped
 element-wise (length/key-mismatch errors), not cartesian — matches Martian's
 nested-fork model but warrants a confirmatory test.
@@ -177,7 +187,9 @@ empty); all three run in the live mrp differential (`TestMrpDiff`).
 **Value chains and call sites (#127, #241):** the marking follows mrp's
 `KnownLength` propagation across the binding graph — a sub-pipeline split
 chained to an entry value, an in-pipeline `map call B(split A.out)` cascade,
-and a mixed zip (`empty_fork_sub`/`_cascade`/`_mixed`). It is evaluated per
+and a mixed zip (`empty_fork_sub`/`_cascade`/`_mixed`), including a split of
+a mapped call's whole ref into a stage or a sub-pipeline
+(`empty_fork_wholeref`, #435). It is evaluated per
 pipeline instance (`internal/emit/known.go`), and a sub-pipeline whose call
 sites need different marks is emitted once per context, so `SUB` called with
 an invocation-known empty and with a runtime empty gives `null` and `[]`
@@ -186,7 +198,18 @@ not change the marking (#383): mrp folds a literal gate statically and, under
 a runtime gate, prunes a known-empty split to null or rejects the consumer's
 split of the gated value, so a split over a gated producer of an
 invocation-known source gives `null` (`empty_fork_gated`,
-`empty_fork_gated_sub`). The rejected split never reaches the emitter (#387):
+`empty_fork_gated_sub`). A split of the output of a call an invocation-known
+gate disables is `null` too, whatever the call's own source (#436): `mrp`
+resolves the disabled call to `NullExp` (`syntax/resolve_stage.go:591-600`,
+`resolve_pipeline.go:101-112`) and a split of null disables its map call
+(`resolve_stage.go:370-383`). mro2nf records the null at run time instead,
+since the gate stays overridable at launch: a disabled call's bundle is `null`
+as a whole, `mre forkbind` marks a split of it `pruned` in `forkmeta2.json`, and
+the bound params and pruned map calls are listed in
+`f/staticnull.mro2nf.json` so the prune crosses sub-pipeline boundaries and
+cascades (`disabled_split_null`). A split of a call under a runtime gate is a
+call graph `mrp` refuses or panics on (`invalid reference`, `invalid merge
+kind null`), so the rule holds for every gate. The rejected split never reaches the emitter (#387):
 mro2nf resolves the invocation's call graph with the function `mrp` runs before
 it creates a pipestance (`syntax.Ast.MakePipelineCallGraph`,
 `frontend.CheckCallGraph`), so it refuses the transpile exactly when `mrp`
@@ -293,7 +316,16 @@ non-zero process exit on the Python path; `ASSERT:`→exit 42→NF `terminate`
 matches "assert never retries"; ordinary/signal/OOM→exit 1→NF `retry`
 (`maxRetries=2` == `default_retries`); disabled-call out shaping is exact (each
 top-level out param = JSON null, matching `makeOutArgs(nullAll=true)`); preflight
-gating reproduces early-abort/validation semantics.
+gating reproduces early-abort/validation semantics. A map call over a
+sub-pipeline under a runtime gate is disabled fork by fork, inside the merge
+(`syntax/resolve_pipeline.go:209-239` wraps each fork's outputs in the
+`DisabledExp` before the `MergeExp`), so a true gate gives one null per fork —
+`[null, null]` or `{"k": null}` in the whole ref and every projection, `[]`
+for an empty or null source — where a gated map call over a stage
+(`resolve_stage.go:650`, the disable wraps the merge) and a gate the
+invocation knows (folded statically) give `null`. mro2nf's skip branch for
+such a call runs one NULLFORKS task, `mre forkbind -keysonly` plus `mre merge
+-nullforks` (#434, `disabled_map_nullforks`).
 
 **CORRECTNESS:** see #2 (comp/exec `_assert`). **MINOR:** mre retries deterministic
 exceptions that mrp fails immediately (same final outcome, wasted compute);

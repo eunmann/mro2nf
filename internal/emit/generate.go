@@ -325,6 +325,9 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			if cp.disableTask {
 				genDisableProcess(b, p.Name, c, g)
 			}
+
+		case kindGate:
+			genGateProcess(b, p, c, prog, g)
 		}
 	}
 
@@ -558,11 +561,11 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 			continue
 		}
 
-		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkmeta_%[1]s.json'\n", id)
+		fmt.Fprintf(&inputs, "    path(souts_%[1]s, stageAs: 'souts_%[1]s/*')\n    path 'forkmeta2_%[1]s.json'\n", id)
 		pairs = append(pairs, fmt.Sprintf("%s=merged_%s", id, id))
 		fmt.Fprintf(&pre, "    %s\n", g.mergeCmd(prod.Callable, calleeOutNames(prog, prod.Callable),
-			"souts_"+id, "forkmeta_"+id+".json", "merged_"+id,
-			g.plan.pipes[p.Name].calls[prod.Name].emptyNull))
+			"souts_"+id, "forkmeta2_"+id+".json", "merged_"+id,
+			g.plan.pipes[p.Name].calls[prod.Name].mergeFlags()))
 	}
 
 	inputs.WriteString("    path 'types.json'\n")
@@ -583,16 +586,21 @@ func foldBindInputs(g genCtx, prog *ir.Program, p *ir.Pipeline, head string, ref
 // itself and checks the bundles against the keys sidecar's fork count: a
 // shell-expanded list would hit the kernel's per-argument limit at a few
 // thousand forks and hide a failed listing as an empty gather.
-// emptyNull applies mrp's invocation-known-empty rule: zero forks merge to
-// null instead of the typed empty (#99).
-func (g genCtx) mergeCmd(callable, outs, forksDir, keysFile, outDir string, emptyNull bool) string {
-	flag := ""
-	if emptyNull {
-		flag = " -emptynull"
+// flags are the call's mergeFlags.
+func (g genCtx) mergeCmd(callable, outs, forksDir, keysFile, outDir, flags string) string {
+	return fmt.Sprintf(`'%s' merge%s -outs '%s' -forksdir %s -keysfile %s -o %s%s`,
+		g.mre, flags, outs, forksDir, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
+}
+
+// mergeFlags are the `mre merge` flags of a map call's gather: -emptynull
+// applies mrp's invocation-known-empty rule, zero forks merging to null
+// instead of the typed empty (#99).
+func (cp callPlan) mergeFlags() string {
+	if cp.emptyNull {
+		return " -emptynull"
 	}
 
-	return fmt.Sprintf(`'%s' merge%s -outs '%s' -forksdir %s -keysfile %s -o %s%s`,
-		g.mre, flag, outs, forksDir, keysFile, outDir, g.producerArgs(callable, types.RoleOut))
+	return ""
 }
 
 // foldCallArgs is bindCallArgsPa for a fold-aware consumer invocation: a
@@ -648,7 +656,7 @@ func genForkBindProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c 
   input:
 %[2]s  output:
     path 'fork_*', emit: forks, type: 'dir', optional: true
-    path 'forkmeta.json', emit: keys
+    path 'forkmeta2.json', emit: keys
   script:
     """
 %[7]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -chunkdir . -mapmode %[6]s%[5]s
@@ -656,6 +664,60 @@ func genForkBindProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c 
 }
 
 `, forkName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre)
+}
+
+// genGateProcess emits a gate's task (#433): `mre gate` evaluates its flags
+// and its map call's split bindings into the bundle whose `off` field the
+// calls lifted out of that map call read as their disable flag.
+func genGateProcess(b *strings.Builder, p *ir.Pipeline, c ir.Call, prog *ir.Program, g genCtx) {
+	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
+
+	fmt.Fprintf(b, `process %[1]s {
+  input:
+%[2]s  output:
+    %[5]s
+  script:
+    """
+%[6]s    %[3]s -pipeargs pipeargs%[4]s -o gate
+    """
+}
+
+`, gateName(p.Name, c.Name), block, g.gateCmd(p.Name, c), arg, bundleOutput("gate"), pre)
+}
+
+// gateCmd is the `mre gate` command of gate c in pipeline, less its
+// -pipeargs, -inputs and -o.
+func (g genCtx) gateCmd(pipeline string, c ir.Call) string {
+	return fmt.Sprintf(`'%s' gate -spec 'spec.json' -mapmode %s%s`, g.mre, mapModeArg(c),
+		g.plan.pipes[pipeline].calls[c.Name].mergeFlags())
+}
+
+// genNullForksProcess emits the skip-branch result of a runtime-gated map call
+// over a sub-pipeline (#434): one task that resolves the fork keys as FORK
+// would and merges one null per fork, the shape mrp gives such a call.
+func genNullForksProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c ir.Call, g genCtx) {
+	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
+
+	fmt.Fprintf(b, `process %[1]s {
+  input:
+%[2]s  output:
+    %[8]s
+  script:
+    """
+%[7]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -keysonly -keysfile forkmeta2.json -mapmode %[6]s%[5]s
+    %[9]s
+    """
+}
+
+`, nullForksName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre,
+		bundleOutput("merged"), g.nullForksMergeCmd(p.Name, c, calleeOutNames(prog, c.Callable)))
+}
+
+// nullForksMergeCmd is the `mre merge -nullforks` of a NULLFORKS task, which
+// gathers nothing and reads the fork count and keys from forkmeta2.json.
+func (g genCtx) nullForksMergeCmd(pipeline string, c ir.Call, calleeOuts string) string {
+	return g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta2.json", "merged",
+		g.plan.pipes[pipeline].calls[c.Name].mergeFlags()+" -nullforks")
 }
 
 // mapModeArg is the static fork kind for a map call: "map" for a typed-map (or
@@ -678,7 +740,7 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 	fmt.Fprintf(b, `process %[1]s {
   input:
     path souts
-    path 'forkmeta.json'
+    path 'forkmeta2.json'
     path 'types.json'
   output:
     %[3]s
@@ -689,8 +751,8 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 }
 
 `, mergeName(pipeline, c.Name),
-		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta.json", "merged",
-			g.plan.pipes[pipeline].calls[c.Name].emptyNull),
+		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta2.json", "merged",
+			g.plan.pipes[pipeline].calls[c.Name].mergeFlags()),
 		bundleOutput("merged"))
 }
 
@@ -861,6 +923,10 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 
 	case kindPlainBind:
 		genPlainBindWiring(b, p, c, callee, g)
+
+	case kindGate:
+		fmt.Fprintf(b, "    ch_%s = %s(%s)\n", c.Name, gateName(pipeline, c.Name),
+			foldCallArgs(g, p, c.Bindings, "pa", bindName(pipeline, c.Name)))
 	}
 }
 
@@ -1256,6 +1322,10 @@ func genMappedProcesses(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c 
 		genMergeProcess(b, p.Name, c, calleeOutNames(prog, c.Callable), g)
 	}
 
+	if cp.nullForks {
+		genNullForksProcess(b, prog, p, c, g)
+	}
+
 	// A natively-gated disable reads the flag on the driver, so no DISABLE
 	// process; a keyed pipeline still emits its keyed DISABLE separately.
 	if cp.disableTask {
@@ -1273,11 +1343,14 @@ func genMappedWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee strin
 
 	// When the map call is disabled, gate the fork's pipeline-args by the runtime
 	// flag so the forks only run when enabled; on skip the call yields its null
-	// outputs bundle instead.
+	// result instead (genMappedSkip).
 	// The FORK process reuses the call's bind spec (see genForkBindProcess).
 	forkArgs := foldCallArgs(g, p, c.Bindings, "pa", bindName(pipeline, c.Name))
+
+	row := ""
 	if c.Disabled != nil {
-		forkArgs = genMappedDisableGate(b, p, c, g)
+		row = genMappedGateBranch(b, pipeline, c)
+		forkArgs = gatedForkArgs(g, p, c, "run", row)
 	}
 
 	fmt.Fprintf(b, "    %s(%s)\n", fork, forkArgs)
@@ -1310,12 +1383,7 @@ func genMappedWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee strin
 	fmt.Fprintf(b, "    %s(out_%s.toSortedList { x, y -> x.name <=> y.name }, %s.out.keys, types)\n", merge, c.Name, fork)
 
 	if c.Disabled != nil {
-		// On the disabled branch FORK is skipped, so MERGE produces nothing; mix
-		// in the null bundle. .first() makes the merged result reusable.
-		nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
-		// The skip item's arity varies with the gate (native reads add 0/2 extra
-		// tuple slots), and the null bundle ignores it — so accept any shape.
-		fmt.Fprintf(b, "    s_%[1]s = g_%[1]s.skip.map { %[2]s }\n", c.Name, nullBundle(nulls))
+		genMappedSkip(b, p, c, g, row)
 		fmt.Fprintf(b, "    ch_%s = %s.out.mix(s_%s).first()\n", c.Name, merge, c.Name)
 
 		return
@@ -1326,13 +1394,34 @@ func genMappedWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee strin
 	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
 }
 
-// genMappedDisableGate emits the DISABLE process and a run/skip branch on the
-// resolved flag, returning the fork's actual-args with pipeargs replaced by the
-// enabled (run) branch.
-func genMappedDisableGate(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) string {
-	pipeline := p.Name
-	bind := bindName(pipeline, c.Name)
+// genMappedSkip emits s_<call>, a disabled map call's result on its skip
+// branch, where FORK and MERGE never run: one null per fork from the
+// NULLFORKS task for a runtime-gated call over a sub-pipeline (#434), else the
+// whole-call null bundle. .first() at the mix makes the result reusable.
+func genMappedSkip(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx, row string) {
+	if g.plan.pipes[p.Name].calls[c.Name].nullForks {
+		fmt.Fprintf(b, "    s_%s = %s(%s)\n", c.Name, nullForksName(p.Name, c.Name), gatedForkArgs(g, p, c, "skip", row))
 
+		return
+	}
+
+	// The skip item's arity varies with the gate (native reads add 0/2 extra
+	// tuple slots), and the null bundle ignores it — so accept any shape.
+	nulls := "${projectDir}/nulls/" + Qualify(p.Name, c.Name)
+	fmt.Fprintf(b, "    s_%[1]s = g_%[1]s.skip.map { %[2]s }\n", c.Name, nullBundle(nulls))
+}
+
+// gatedForkArgs is the FORK-shaped argument list of a disabled map call's
+// branch ("run" or "skip") of g_<call>, whose items have the row shape row.
+func gatedForkArgs(g genCtx, p *ir.Pipeline, c ir.Call, branch, row string) string {
+	pa := fmt.Sprintf("g_%s.%s.map { %s -> tuple(data, leaves) }", c.Name, branch, row)
+
+	return foldCallArgs(g, p, c.Bindings, pa, bindName(p.Name, c.Name))
+}
+
+// genMappedGateBranch emits g_<call>, the run/skip branch of a disabled map
+// call's pipeline args on its flag, and returns the shape of its items.
+func genMappedGateBranch(b *strings.Builder, pipeline string, c ir.Call) string {
 	// Native gating (#59, Lever 2): read the flag directly instead of a DISABLE
 	// task. For self.<field> the flag is in the fork's own pipeline args (pa); for
 	// CALL.out.<field> it is in the upstream channel.
@@ -1345,7 +1434,7 @@ func genMappedDisableGate(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCt
     }
 `, c.Name, field)
 
-			return foldCallArgs(g, p, c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves -> tuple(data, leaves) }", c.Name), bind)
+			return "data, leaves"
 		}
 
 		fmt.Fprintf(b, `    g_%[1]s = pa.combine(%[2]s).branch { data, leaves, gd, gl ->
@@ -1355,7 +1444,7 @@ func genMappedDisableGate(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCt
     }
 `, c.Name, src, field)
 
-		return foldCallArgs(g, p, c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, gd, gl -> tuple(data, leaves) }", c.Name), bind)
+		return "data, leaves, gd, gl"
 	}
 
 	dis := disableName(pipeline, c.Name)
@@ -1367,8 +1456,7 @@ func genMappedDisableGate(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCt
     }
 `, c.Name, dis, disablePath(c))
 
-	// Feeds the FORK process, which reuses the call's bind spec.
-	return foldCallArgs(g, p, c.Bindings, fmt.Sprintf("g_%s.run.map { data, leaves, d -> tuple(data, leaves) }", c.Name), bind)
+	return "data, leaves, d"
 }
 
 // genDisabledWiring runs the standalone BIND + callee only when the resolved
@@ -1652,6 +1740,14 @@ func bindName(pipeline, call string) string {
 
 func forkName(pipeline, call string) string {
 	return "FORK_" + Qualify(pipeline, call)
+}
+
+func gateName(pipeline, call string) string {
+	return "GATE_" + Qualify(pipeline, call)
+}
+
+func nullForksName(pipeline, call string) string {
+	return "NULLFORKS_" + Qualify(pipeline, call)
 }
 
 func mergeName(pipeline, call string) string {
