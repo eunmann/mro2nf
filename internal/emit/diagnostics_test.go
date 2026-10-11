@@ -212,3 +212,40 @@ func TestDiagnoseNativeKeyedScatter(t *testing.T) {
 		t.Errorf("disabled nested map: want the plain FORK+MERGE remainder info, got %+v", dn)
 	}
 }
+
+// TestDiagnoseSplitContexts pins that Diagnose analyzes the program Emit plans:
+// split per invocation-known context, with the caller's program untouched. S1
+// (plain, invocation-known empty) and S2 (disabled, runtime collection) give
+// SUB two copies; only S2's copy receives a queue, so only SUB_ctx2.SCALE
+// (which also reads a sibling call) keeps its FORK resolve under -native.
+func TestDiagnoseSplitContexts(t *testing.T) {
+	prog := lowerMRO(t, `
+stage GEN(out int[] xs, out int k, src py "s/gen",)
+stage SCALE(in int v, in int k, out int w, src py "s/scale",)
+pipeline SUB(in int[] xs, out int[] ys,){
+    call GEN as PRE()
+    map call SCALE(v = split self.xs, k = PRE.k,)
+    return (ys = SCALE.w,)
+}
+pipeline TOP(in int[] empty, in bool off, out int[] a, out int[] b,){
+    call GEN()
+    call SUB as S1(xs = self.empty,)
+    call SUB as S2(xs = GEN.xs,) using (disabled = self.off,)
+    return (a = S1.ys, b = S2.ys,)
+}
+call TOP(empty = [], off = false,)
+`)
+
+	ds := Diagnose(prog, Options{Native: true})
+	if !hasMessage(ds, SevInfo, "map call SUB_ctx2.SCALE keeps") {
+		t.Errorf("S2's queued SUB copy keeps its FORK resolve: want a remainder info, got %+v", ds)
+	}
+
+	if hasMessage(ds, SevInfo, "map call SUB.SCALE") {
+		t.Errorf("S1's SUB copy scatters natively: want no remainder info, got %+v", ds)
+	}
+
+	if _, ok := prog.Pipelines["SUB_ctx2"]; ok {
+		t.Error("Diagnose must not split the caller's program")
+	}
+}

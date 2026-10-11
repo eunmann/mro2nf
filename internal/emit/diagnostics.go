@@ -2,6 +2,7 @@ package emit
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -30,8 +31,15 @@ type Diagnostic struct {
 // divergence warnings (preflight/local/volatile) plus flag-conditional
 // diagnostics that catch an opt-in flag being unsafe or a no-op for this
 // pipeline. Callers print the results and abort if HasError reports an Error —
-// the seam #72/#76 add their flag-specific error checks to.
+// the seam #72/#76 add their flag-specific error checks to. Like Emit it
+// analyzes the program split per invocation-known context (on a shallow copy,
+// so prog is left unchanged for Emit to split itself).
 func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
+	split := *prog
+	split.Pipelines = maps.Clone(prog.Pipelines)
+	SplitKnownContexts(&split)
+	prog = &split
+
 	f := opts.featureSet()
 	pl := buildPlan(prog, f)
 
