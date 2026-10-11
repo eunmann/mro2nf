@@ -167,7 +167,7 @@ modules/
   stage_SUM_SQUARES.nf               ← one module per stage
   stage_REPORT.nf
   pipe_SUM_SQUARE_PIPELINE.nf        ← one module per pipeline
-nextflow.config                      ← executor profiles, retry policy, params
+nextflow.config                      ← executor profiles, retry policy, params, task trace
 lib/Mro2nf.groovy                    ← driver-side channel helpers (see below)
 _assets/
   types.json                         ← the program's type manifest

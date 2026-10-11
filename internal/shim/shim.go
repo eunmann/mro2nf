@@ -563,12 +563,17 @@ func stderrTail(path string) string {
 }
 
 // runPhase runs the adapter for one phase of stage, then surfaces the alarms
-// the phase raised, whatever its outcome.
+// the phase raised, whatever its outcome. A failure names the stage and the
+// phase's metadata dir, which holds its _errors, _stdout and _stderr.
 func runPhase(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources, stage string) error {
 	err := runAdapter(ctx, meta, files, journal, a, phase, res)
 	forwardAlarms(meta, stage, phase)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("stage %s in %s: %w", stage, meta, err)
+	}
+
+	return nil
 }
 
 // forwardAlarms writes each line of the phase's _alarm (martian.alarm) to the
