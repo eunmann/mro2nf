@@ -167,13 +167,14 @@ pipeline GATED(
 `
 
 // TestCheckCallGraphStaticNullGate checks that a disable gate whose value is
-// null before any stage runs is refused, as mrp's call-graph resolution rejects
-// it ("disabled cannot be bound to a null value"), while a gate on a stage
-// output, which is null only at run time, resolves (#253).
+// known before any stage runs to be null, or to be disabled with a call, is
+// refused with mrp's call-graph binding error, while a gate on a stage output,
+// which is null only at run time, resolves (#253).
 func TestCheckCallGraphStaticNullGate(t *testing.T) {
+	const nullGate = "disabled cannot be bound to a null value"
+
 	cases := []struct {
-		name, pipeline string
-		wantErr        bool
+		name, pipeline, wantErr string
 	}{
 		{"invocation null", `pipeline P(in int x, in bool b, out int y,)
 {
@@ -182,7 +183,7 @@ func TestCheckCallGraphStaticNullGate(t *testing.T) {
 }
 
 call P(x = 3, b = null,)
-`, true},
+`, nullGate},
 		{"literal null into a sub-pipeline input", `pipeline P(in int x, out int y,)
 {
     call GATED(x = self.x, b = null,)
@@ -190,7 +191,26 @@ call P(x = 3, b = null,)
 }
 
 call P(x = 3,)
-`, true},
+`, nullGate},
+		{"output of a statically disabled call", `pipeline P(in int x, in bool b, in bool off, out int y,)
+{
+    call FLAG(b = self.b,) using (disabled = self.off,)
+    call GATED(x = self.x, b = FLAG.on,)
+    return (y = GATED.y,)
+}
+
+call P(x = 3, b = false, off = true,)
+`, nullGate},
+		{"output of a runtime-gated call", `pipeline P(in int x, in bool b, out int y,)
+{
+    call FLAG as OFF(b = self.b,)
+    call FLAG(b = self.b,) using (disabled = OFF.on,)
+    call GATED(x = self.x, b = FLAG.on,)
+    return (y = GATED.y,)
+}
+
+call P(x = 3, b = false,)
+`, "would be disabled at runtime"},
 		{"runtime null from a stage output", `pipeline P(in int x, in bool b, out int y,)
 {
     call FLAG(b = self.b,)
@@ -199,13 +219,13 @@ call P(x = 3,)
 }
 
 call P(x = 3, b = null,)
-`, false},
+`, ""},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := parseSource(t, gateStages+"\n"+tc.pipeline)
-			if !tc.wantErr {
+			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("CheckCallGraph: %v", err)
 				}
@@ -217,8 +237,8 @@ call P(x = 3, b = null,)
 				t.Fatalf("CheckCallGraph = %v, want an error wrapping apperror.ErrParse", err)
 			}
 
-			if !strings.Contains(err.Error(), "disabled cannot be bound to a null value") {
-				t.Errorf("CheckCallGraph error = %v, want mrp's null-disabled binding error", err)
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("CheckCallGraph error = %v, want mrp's binding error containing %q", err, tc.wantErr)
 			}
 		})
 	}

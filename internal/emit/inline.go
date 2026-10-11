@@ -389,7 +389,8 @@ func litIsTrue(v ir.Value) bool {
 }
 
 // litIsFalse reports whether v is the boolean literal false. A constant null
-// gate is mrp's binding error, which frontend.Parse already rejects.
+// gate is mrp's binding error, which frontend.CheckCallGraph (run by the CLI's
+// loadProgram) refuses before emit.
 func litIsFalse(v ir.Value) bool {
 	return strings.TrimSpace(string(v.Literal)) == "false"
 }
