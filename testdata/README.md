@@ -21,10 +21,8 @@ run must reproduce. A golden has two parts:
 
 - **`TestGolden`** and **`TestDockerIsolation`** transpile the fixture, run it
   under Nextflow (the latter under container isolation), and require:
-  - `results/pipeline_outs.json` to equal the outputs JSON, number tokens
-    included, with object keys sorted while the allowlist
-    (`test/e2e/divergences.json`) holds `outs-json-object-key-order` (#366);
-    and
+  - `results/pipeline_outs.json` to equal the outputs JSON, number tokens and
+    object key order included; and
   - `results/`, minus `pipeline_outs.json` and `manifest.json.gz` at its root
     (allowlist entry `results-metadata-files`), to equal `expected/outs/`: no
     file missing, no file extra, every file's sha256 equal, no file published

@@ -12,7 +12,6 @@ entry for its comparator rule, as in the Go differential (published_test.go):
 - outs-json-strip-outs-prefix: mrp writes absolute paths into the pipestance
   outs/ dir, mro2nf writes the same paths relative to its results/ dir, so the
   outs-dir prefix is stripped from mrp's strings.
-- outs-json-sort-object-keys: object keys are sorted on both sides (#366).
 
 An issue-tracked entry applies its rule only on the fixtures it names; the Go
 differential, not this script, fails it once it excuses nothing there.
@@ -25,7 +24,6 @@ import sys
 
 PUBLISHED_SYMLINKS = "follow-mrp-published-symlinks"
 STRIP_OUTS_PREFIX = "outs-json-strip-outs-prefix"
-SORT_OBJECT_KEYS = "outs-json-sort-object-keys"
 
 OBJECT = "<object>"
 NUMBER = "<number>"
@@ -83,16 +81,13 @@ def published_links(outs):
     return links
 
 
-def norm(v, rewrite, sort_keys):
+def norm(v, rewrite):
     if isinstance(v, str):
         return rewrite(v)
     if isinstance(v, list):
-        return [norm(x, rewrite, sort_keys) for x in v]
+        return [norm(x, rewrite) for x in v]
     if isinstance(v, tuple) and v[0] == OBJECT:
-        pairs = [(k, norm(x, rewrite, sort_keys)) for k, x in v[1]]
-        if sort_keys:
-            pairs.sort(key=lambda kv: kv[0])
-        return (OBJECT, pairs)
+        return (OBJECT, [(k, norm(x, rewrite)) for k, x in v[1]])
     return v
 
 
@@ -122,10 +117,9 @@ def main():
     allowlist = sys.argv[5] if len(sys.argv) > 5 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "divergences.json")
     rules = excused_rules(allowlist, name)
-    sort_keys = SORT_OBJECT_KEYS in rules
 
-    mrp = render(norm(load(mrp_json), mrp_rewrite(rules, mrp_dir), sort_keys))
-    nf = render(norm(load(nf_json), lambda s: s, sort_keys))
+    mrp = render(norm(load(mrp_json), mrp_rewrite(rules, mrp_dir)))
+    nf = render(norm(load(nf_json), lambda s: s))
 
     if mrp == nf:
         print("  json: match")

@@ -118,7 +118,7 @@ func loadOutsJSON(allow divergence.Allowlist, fixture, ps, results string) (any,
 		return nil, nil, err
 	}
 
-	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nil, allow.Excuses(divergence.RuleOutsSortKeys, fixture))
+	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -144,13 +144,13 @@ func mrpOutsJSON(allow divergence.Allowlist, fixture, ps string) (any, error) {
 		return nil, err
 	}
 
-	return decodeOutsFile(matches[0], rewrite, allow.Excuses(divergence.RuleOutsSortKeys, fixture))
+	return decodeOutsFile(matches[0], rewrite)
 }
 
-// normalizeOutsFile reads an outs JSON file into its compact form, its
-// strings passed through rewrite and its object keys sorted if sortKeys.
-func normalizeOutsFile(path string, rewrite func(string) string, sortKeys bool) (string, error) {
-	v, err := decodeOutsFile(path, rewrite, sortKeys)
+// normalizeOutsFile reads an outs JSON file into its compact form, its key
+// order kept and its strings passed through rewrite.
+func normalizeOutsFile(path string, rewrite func(string) string) (string, error) {
+	v, err := decodeOutsFile(path, rewrite)
 	if err != nil {
 		return "", err
 	}
@@ -159,7 +159,7 @@ func normalizeOutsFile(path string, rewrite func(string) string, sortKeys bool) 
 }
 
 // decodeOutsFile is normalizeOutsFile's value before it is encoded.
-func decodeOutsFile(path string, rewrite func(string) string, sortKeys bool) (any, error) {
+func decodeOutsFile(path string, rewrite func(string) string) (any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read outs json: %w", err)
@@ -175,10 +175,6 @@ func decodeOutsFile(path string, rewrite func(string) string, sortKeys bool) (an
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	if sortKeys {
-		v = sortJSONKeys(v)
 	}
 
 	return v, nil

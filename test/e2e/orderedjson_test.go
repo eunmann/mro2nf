@@ -2,8 +2,8 @@ package e2e
 
 // The comparators decode JSON into ordered objects: mrp passes a struct value
 // through with its producer's key order, so key order is a difference the
-// differential sees unless an allowlist rule sorts it away. Numbers keep their
-// source token, so an int-vs-float change stays visible too.
+// differential sees. Numbers keep their source token, so an int-vs-float
+// change stays visible too.
 
 import (
 	"bytes"
@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 )
 
@@ -172,29 +171,6 @@ func writeJSONScalar(b *strings.Builder, v any) error {
 	b.WriteString(strings.TrimSuffix(buf.String(), "\n"))
 
 	return nil
-}
-
-// sortJSONKeys sorts the members of every object in v by key, stably, so
-// duplicate keys keep their relative order.
-func sortJSONKeys(v any) any {
-	switch x := v.(type) {
-	case jsonObject:
-		for i := range x {
-			x[i].Value = sortJSONKeys(x[i].Value)
-		}
-
-		slices.SortStableFunc(x, func(a, b jsonMember) int { return strings.Compare(a.Key, b.Key) })
-
-		return x
-	case []any:
-		for i := range x {
-			x[i] = sortJSONKeys(x[i])
-		}
-
-		return x
-	default:
-		return v
-	}
 }
 
 // mapJSONStrings replaces every string value in v (not object keys) with

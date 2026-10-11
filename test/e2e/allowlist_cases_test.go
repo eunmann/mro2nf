@@ -20,8 +20,8 @@ import (
 // file output the stage wrote as a symlink to a host file (as symlink_escape
 // does), a file output the stage wrote as a relative symlink to a link to a
 // host file, and a struct output whose producer wrote its keys unsorted (as
-// kitchen_sink's stats, so pairFixture). It returns the pipestance and results
-// dirs.
+// kitchen_sink's stats), which both runtimes publish in that order. It returns
+// the pipestance and results dirs.
 func publishedPair(t *testing.T) (string, string) {
 	t.Helper()
 
@@ -50,13 +50,12 @@ func publishedPair(t *testing.T) (string, string) {
 	writeABITestFile(t, filepath.Join(results, "chained.txt"), "chained\n")
 	writeABITestFile(t, filepath.Join(results, "manifest.json.gz"), "index")
 	writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"),
-		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10.0}}`)
+		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "total": 10.0, "mean": 2.5}}`)
 
 	return ps, results
 }
 
-// pairFixture is the fixture publishedPair stands in for: one the
-// outs-json-object-key-order entry is scoped to.
+// pairFixture is the fixture publishedPair stands in for.
 const pairFixture = "kitchen_sink"
 
 // mrpChainedOutput lays out under the pipestance ps what mrp publishes for a
@@ -117,27 +116,36 @@ func TestRemovingAPublishedTreeEntryFailsTheComparison(t *testing.T) {
 }
 
 // TestScopedRuleEntryFailsWhereItExcusesNothing runs the published-output
-// comparison with the checked-in key-order entry: on a fixture outside its
-// scope the unsorted struct is a difference, and on its own fixture a pair
-// whose keys already agree fails as an entry that excuses nothing.
+// comparison with the checked-in relative-paths entry tracked by an issue and
+// scoped to pairFixture: on a fixture outside its scope mrp's absolute paths
+// are a difference, and on its own fixture an mrp outs JSON that names no path
+// under outs/ fails as an entry that excuses nothing.
 func TestScopedRuleEntryFailsWhereItExcusesNothing(t *testing.T) {
-	allow := mustAllowlist(t)
+	allow := allowlistScoping(t, "outs-json-relative-paths", pairFixture)
 	ps, results := publishedPair(t)
+	mrpJSON := filepath.Join(ps, "P", "fork0", "_outs")
+
+	relative, err := os.ReadFile(filepath.Join(results, "pipeline_outs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
-		name, fixture, nfStats, want string
+		name, fixture, want string
+		mrpOuts             []byte
 	}{
-		{"out_of_scope", "file_min", `{"count": 4, "mean": 2.5, "total": 10.0}`, "_outs json mismatch"},
+		{"out_of_scope", "file_min", "_outs json mismatch", nil},
 		{
-			"excuses_nothing", pairFixture, `{"count": 4, "total": 10.0, "mean": 2.5}`,
-			"allowlist entry outs-json-object-key-order excuses nothing in " + pairFixture,
+			"excuses_nothing", pairFixture,
+			"allowlist entry outs-json-relative-paths excuses nothing in " + pairFixture, relative,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"),
-				`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": `+tc.nfStats+`}`)
+			if tc.mrpOuts != nil {
+				writeABITestFile(t, mrpJSON, string(tc.mrpOuts))
+			}
 
 			reports, err := diffPublished(allow, tc.fixture, ps, results)
 			if err != nil {
@@ -153,9 +161,8 @@ func TestScopedRuleEntryFailsWhereItExcusesNothing(t *testing.T) {
 
 // TestNormcmpAppliesTheAllowlist runs normcmp.py, the AWS lanes' outs JSON
 // comparator, on the outs JSON of publishedPair: it matches under the
-// checked-in allowlist, fails without any of its entries or on a fixture
-// outside the key-order entry's scope, and fails on a number token change the
-// allowlist does not excuse.
+// checked-in allowlist, fails without any of its entries, and fails on a key
+// order or number token change the allowlist does not excuse.
 func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	requireTools(t, "python3")
 
@@ -163,8 +170,10 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	mrpOuts := filepath.Join(ps, "outs")
 	mrpJSON := filepath.Join(ps, "P", "fork0", "_outs")
 	nfJSON := filepath.Join(results, "pipeline_outs.json")
+	sortedJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_sorted.json"),
+		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10.0}}`)
 	intJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_int.json"),
-		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10}}`)
+		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "total": 10, "mean": 2.5}}`)
 
 	checkedIn := filepath.Join(root, "test", "e2e", allowlistFile)
 
@@ -173,10 +182,9 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 		match                        bool
 	}{
 		{"checked_in", pairFixture, nfJSON, checkedIn, true},
-		{"key_order_out_of_scope", "file_min", nfJSON, checkedIn, false},
+		{"key_order", pairFixture, sortedJSON, checkedIn, false},
 		{"number_token", pairFixture, intJSON, checkedIn, false},
 		{"without_relative_paths", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "outs-json-relative-paths"), false},
-		{"without_key_order", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "outs-json-object-key-order"), false},
 		{"without_published_symlinks", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "published-symlinks-copied"), false},
 	}
 
@@ -197,9 +205,13 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	}
 }
 
-// allowlistWithout writes a copy of the allowlist at path less the entry id
-// and returns the copy's path.
-func allowlistWithout(t *testing.T, path, id string) string {
+// allowlistDoc is the checked-in allowlist's entries as generic objects, for
+// tests that derive a variant of it.
+type allowlistDoc struct {
+	Divergences []map[string]any `json:"divergences"`
+}
+
+func readAllowlistDoc(t *testing.T, path string) allowlistDoc {
 	t.Helper()
 
 	data, err := os.ReadFile(path)
@@ -207,12 +219,53 @@ func allowlistWithout(t *testing.T, path, id string) string {
 		t.Fatal(err)
 	}
 
-	var doc struct {
-		Divergences []map[string]any `json:"divergences"`
-	}
+	var doc allowlistDoc
 	if err := json.Unmarshal(data, &doc); err != nil {
 		t.Fatal(err)
 	}
+
+	return doc
+}
+
+// allowlistScoping returns the checked-in allowlist with the permanent rule
+// entry id turned into one tracked by an issue and scoped to fixture.
+func allowlistScoping(t *testing.T, id, fixture string) divergence.Allowlist {
+	t.Helper()
+
+	doc := readAllowlistDoc(t, filepath.Join(root, "test", "e2e", allowlistFile))
+
+	i := slices.IndexFunc(doc.Divergences, func(e map[string]any) bool { return e["id"] == id })
+	if i < 0 {
+		t.Fatalf("checked-in allowlist has no entry %s", id)
+	}
+
+	comparator, ok := doc.Divergences[i]["comparator"].(map[string]any)
+	if !ok {
+		t.Fatalf("entry %s has no comparator rule", id)
+	}
+
+	doc.Divergences[i]["issue"] = 1
+	comparator["fixtures"] = []string{fixture}
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allow, err := divergence.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return allow
+}
+
+// allowlistWithout writes a copy of the allowlist at path less the entry id
+// and returns the copy's path.
+func allowlistWithout(t *testing.T, path, id string) string {
+	t.Helper()
+
+	doc := readAllowlistDoc(t, path)
 
 	n := len(doc.Divergences)
 	doc.Divergences = slices.DeleteFunc(doc.Divergences, func(e map[string]any) bool { return e["id"] == id })

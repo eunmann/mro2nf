@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/eunmann/mro2nf/internal/bind"
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -82,15 +83,15 @@ func (p *producer) write(dir string, raw json.RawMessage) error {
 	return nil
 }
 
-// writeBound is write for a resolved binding payload: a callee's args or a
+// writeBound is write for a payload resolved from spec: a callee's args or a
 // pipeline's outputs (see writeBoundBundle).
-func (p *producer) writeBound(dir string, raw json.RawMessage) error {
+func (p *producer) writeBound(dir string, raw json.RawMessage, spec bind.Spec) error {
 	payload, params, tbl, err := p.decode(raw)
 	if err != nil {
 		return fmt.Errorf("write bound bundle %s: %w", dir, err)
 	}
 
-	return writeBoundBundle(dir, payload, params, tbl)
+	return writeBoundBundle(dir, payload, spec, params, tbl)
 }
 
 // decode returns raw's payload with the producer's param set and type table.
@@ -113,13 +114,13 @@ func (p *producer) decode(raw json.RawMessage) (map[string]any, []ir.Param, *typ
 	return payload, params, man.Table(), nil
 }
 
-// writeBoundBundle writes a resolved binding payload as a bundle after
+// writeBoundBundle writes a payload resolved from spec as a bundle after
 // narrowing each value to its receiving param's type, as mrp filters every
-// bound value (#239): a field the receiver does not declare, and any file leaf
-// inside it, never reaches the callee. Its files are the run's own inputs, so
-// the write is unconfined.
-func writeBoundBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) error {
-	if err := shim.WriteBundle(dir, tbl.Narrow(params, payload), params, tbl, nil); err != nil {
+// bound value (#239, bind.Narrow): a field the receiver does not declare, and
+// any file leaf inside it, never reaches the callee. Its files are the run's
+// own inputs, so the write is unconfined.
+func writeBoundBundle(dir string, payload map[string]any, spec bind.Spec, params []ir.Param, tbl *types.Table) error {
+	if err := shim.WriteBundle(dir, bind.Narrow(spec, payload, params, tbl), params, tbl, nil); err != nil {
 		return fmt.Errorf("write bound bundle %s: %w", dir, err)
 	}
 
@@ -216,11 +217,14 @@ func (p *producer) validateOuts(raw json.RawMessage) error {
 	return nil
 }
 
-// rawToMap decodes a JSON object into a map. An empty payload, JSON null, or the
-// empty string the Martian adapter writes for a stage with no outputs yields an
-// empty map. Any other non-object payload (an array, a number, or corrupt JSON)
-// is an error, so genuinely malformed outputs surface instead of silently
-// becoming empty.
+// rawToMap decodes a JSON object into a map of its values, each decoded by
+// types.DecodeJSON, so a number keeps its token (42.0 stays 42.0) and a nested
+// object its key order across the bundle round-trip; the top level is written
+// back with its keys sorted, as mrp writes every _args and _outs. An empty
+// payload, JSON null, or the empty string the Martian adapter writes for a
+// stage with no outputs yields an empty map. Any other non-object payload (an
+// array, a number, or corrupt JSON) is an error, so genuinely malformed outputs
+// surface instead of silently becoming empty.
 func rawToMap(raw json.RawMessage) (map[string]any, error) {
 	out := map[string]any{}
 
@@ -233,11 +237,14 @@ func rawToMap(raw json.RawMessage) (map[string]any, error) {
 		return nil, fmt.Errorf("decode payload: %w, got %.32s", errNotObject, trimmed)
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	dec.UseNumber() // keep 42.0 from collapsing to 42 across the bundle round-trip
-
-	if err := dec.Decode(&out); err != nil {
+	v, err := types.DecodeJSON(trimmed)
+	if err != nil {
 		return nil, fmt.Errorf("decode payload: %w", err)
+	}
+
+	obj, _ := types.AsObject(v)
+	for _, m := range obj {
+		out[m.Key] = m.Value
 	}
 
 	return out, nil

@@ -149,11 +149,36 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 	// each stage resolving its own fork inline. The per-fork args are identical
 	// to the corresponding full-fork write, and -keysfile emits the same
 	// forkmeta sidecar the full write would, so the gather still gets its keys.
+	bound := forkBinding{spec: spec, keys: keys, params: params, tbl: tbl}
 	if w.index >= 0 {
-		return writeForkIndex(forks, keys, w.index, w.oDir, w.keysFile, params, tbl)
+		return writeForkIndex(forks, w.index, w.oDir, w.keysFile, bound)
 	}
 
-	return writeAllForks(forks, keys, w.dir, params, tbl)
+	return writeAllForks(forks, w.dir, bound)
+}
+
+// forkBinding is what writes a resolved fork's args bundle: the call's spec,
+// the map fork's keys (nil for an array fork), and its params.
+type forkBinding struct {
+	spec   bind.Spec
+	keys   []string
+	params []ir.Param
+	tbl    *types.Table
+}
+
+// write writes fork index's resolved args as a bundle at dir.
+func (b forkBinding) write(dir string, args json.RawMessage, index int) error {
+	payload, err := rawToMap(args)
+	if err != nil {
+		return err
+	}
+
+	key := ""
+	if b.keys != nil {
+		key = b.keys[index]
+	}
+
+	return writeBoundBundle(dir, payload, bind.ForkSpec(b.spec, index, key), b.params, b.tbl)
 }
 
 // writeForkElement assembles one fork's args bundle from a pre-sliced split
@@ -176,7 +201,7 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 		return fmt.Errorf("forkbind element: %w", err)
 	}
 
-	return prod.writeBound(oDir, args)
+	return prod.writeBound(oDir, args, bind.ForkSpec(spec, -1, ""))
 }
 
 // readElement reads a pre-sliced fork element. The driver cuts it verbatim out
@@ -243,31 +268,26 @@ func checkForkBindFlags(fs *flag.FlagSet, index int, keysOnly bool, keysFile, el
 
 // writeAllForks writes every fork's args bundle (fork_NNNNN/) into dir plus the
 // forknames/forkmeta sidecars — the default (FORK task) write.
-func writeAllForks(forks []json.RawMessage, keys []string, dir string, params []ir.Param, tbl *types.Table) error {
+func writeAllForks(forks []json.RawMessage, dir string, bound forkBinding) error {
 	names := make([]string, len(forks))
 
 	for i, args := range forks {
 		name := fmt.Sprintf("fork_%05d", i)
 		names[i] = name
 
-		payload, err := rawToMap(args)
-		if err != nil {
-			return err
-		}
-
-		if err := writeBoundBundle(filepath.Join(dir, name), payload, params, tbl); err != nil {
+		if err := bound.write(filepath.Join(dir, name), args, i); err != nil {
 			return fmt.Errorf("write fork bundle %s: %w", name, err)
 		}
 	}
 
-	return writeForkMeta(dir, names, keys)
+	return writeForkMeta(dir, names, bound.keys)
 }
 
 // writeForkIndex writes only fork[index]'s args bundle to oDir (the native-scatter
 // path); it is identical to the corresponding full-fork write. With keysFile it
 // also writes the forkmeta sidecar (identical to the full write's), so a scatter
 // instance can supply the gather's keys without a FORK task.
-func writeForkIndex(forks []json.RawMessage, keys []string, index int, oDir, keysFile string, params []ir.Param, tbl *types.Table) error {
+func writeForkIndex(forks []json.RawMessage, index int, oDir, keysFile string, bound forkBinding) error {
 	if oDir == "" {
 		return errForkIndexNoOut
 	}
@@ -276,12 +296,7 @@ func writeForkIndex(forks []json.RawMessage, keys []string, index int, oDir, key
 		return fmt.Errorf("%w: index %d, %d forks", errForkIndexRange, index, len(forks))
 	}
 
-	payload, err := rawToMap(forks[index])
-	if err != nil {
-		return err
-	}
-
-	if err := writeBoundBundle(oDir, payload, params, tbl); err != nil {
+	if err := bound.write(oDir, forks[index], index); err != nil {
 		return fmt.Errorf("write fork %d bundle: %w", index, err)
 	}
 
@@ -289,7 +304,7 @@ func writeForkIndex(forks []json.RawMessage, keys []string, index int, oDir, key
 		return nil
 	}
 
-	return writeKeysFile(keysFile, len(forks), keys)
+	return writeKeysFile(keysFile, len(forks), bound.keys)
 }
 
 // writeKeysFile writes the forkmeta sidecar to path — byte-identical to the

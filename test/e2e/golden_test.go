@@ -124,6 +124,8 @@ var goldenCases = []goldenCase{
 	// members, in stage _args and pipeline outputs alike.
 	{"struct_narrow", "struct_narrow", "expected/outs.json"},
 	{"nested_struct", "nested_struct", "expected/outs.json"},
+	// #366: struct values in mrp's key order, however they are built.
+	{"struct_key_order", "struct_key_order", "expected/outs.json"},
 	{"literals", "literals", "expected/outs.json"},
 	// #238: whole-number float literals >= 1e6 stay floats for a Python stage.
 	{"literals_big", "literals_big", "expected/outs.json"},

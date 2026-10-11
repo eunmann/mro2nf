@@ -119,7 +119,7 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"unknown field":         `{"divergences": [{"id": "a", "kind": "mechanism", ` + ok + `, "stage": "X"}]}`,
 		"bad id":                `{"divergences": [{"id": "A_b", "kind": "mechanism", ` + ok + `}]}`,
 		"duplicate id":          `{"divergences": [{"id": "a", "kind": "mechanism", ` + ok + `}, {"id": "a", "kind": "mechanism", ` + ok + `}]}`,
-		"unknown kind":          `{"divergences": [{"id": "a", "kind": "other", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}}]}`,
+		"unknown kind":          `{"divergences": [{"id": "a", "kind": "other", ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix"}}]}`,
 		"no summary":            `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f", "justification": "j", "evidence": ["TestX"]}]}`,
 		"line break":            `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f\n", "summary": "s", "justification": "j", "evidence": ["TestX"]}]}`,
 		"negative issue":        `{"divergences": [{"id": "a", "kind": "mechanism", "issue": -1, ` + ok + `}]}`,
@@ -131,16 +131,16 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"matcher of other kind": `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ignore-key", "key": "k"}}]}`,
 		"unknown rule":          `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "sort"}}]}`,
 		"rule of other kind":    `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "collapse-retried-attempts"}}]}`,
-		"rule matched twice":    `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}}, {"id": "b", "kind": "abi", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}}]}`,
+		"rule matched twice":    `{"divergences": [{"id": "a", "kind": "published-tree", ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix"}}, {"id": "b", "kind": "published-tree", ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix"}}]}`,
 		"abi no fixture":        `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": [], "file": "_args", "rule": "ignore-key", "key": "k"}}]}`,
 		"abi bad file":          `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_jobinfo", "rule": "ignore-key", "key": "k"}}]}`,
 		"abi unknown rule":      `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ignore", "key": "k"}}]}`,
 		"abi no key":            `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ceil-number", "key": ""}}]}`,
 		"success with failure":  `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": false, "failures": [{"kind": "error", "stage": "S"}]}}]}`,
 		"bad failure kind":      `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": true, "failures": [{"kind": "oom", "stage": "S"}]}}]}`,
-		"tracked rule unscoped": `{"divergences": [{"id": "a", "kind": "abi", "issue": 1, ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}}]}`,
-		"tracked rule blank":    `{"divergences": [{"id": "a", "kind": "abi", "issue": 1, ` + ok + `, "comparator": {"rule": "abi-sort-object-keys", "fixtures": [""]}}]}`,
-		"permanent rule scoped": `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys", "fixtures": ["fx"]}}]}`,
+		"tracked rule unscoped": `{"divergences": [{"id": "a", "kind": "published-tree", "issue": 1, ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix"}}]}`,
+		"tracked rule blank":    `{"divergences": [{"id": "a", "kind": "published-tree", "issue": 1, ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix", "fixtures": [""]}}]}`,
+		"permanent rule scoped": `{"divergences": [{"id": "a", "kind": "published-tree", ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix", "fixtures": ["fx"]}}]}`,
 	}
 
 	for name, doc := range cases {
@@ -162,7 +162,7 @@ func lookupAllowlist(t *testing.T) Allowlist {
 
 	allow, err := Parse([]byte(`{"divergences": [
 		{"id": "key", "kind": "abi", "issue": 7, ` + ok + `, "abi": {"fixtures": ["fx"], "file": "_args", "rule": "ignore-key", "key": "k"}},
-		{"id": "order", "kind": "abi", "issue": 8, ` + ok + `, "comparator": {"rule": "abi-sort-object-keys", "fixtures": ["fx"]}},
+		{"id": "paths", "kind": "published-tree", "issue": 8, ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix", "fixtures": ["fx"]}},
 		{"id": "by-stage", "kind": "outcome", ` + ok + `, "comparator": {"rule": "compare-failure-stage-and-kind"}},
 		{"id": "nf-fails", "kind": "outcome", ` + ok + `, "outcome": {"failed": true}},
 		{"id": "how", "kind": "mechanism", ` + ok + `}]}`))
@@ -185,9 +185,9 @@ func TestAllowlistRuleScope(t *testing.T) {
 		fixture string
 		want    bool
 	}{
-		{allow, RuleABISortKeys, "fx", true},
-		{allow, RuleABISortKeys, "other", false},
-		{allow.Without("order"), RuleABISortKeys, "fx", false},
+		{allow, RuleOutsRelativePaths, "fx", true},
+		{allow, RuleOutsRelativePaths, "other", false},
+		{allow.Without("paths"), RuleOutsRelativePaths, "fx", false},
 		{allow, RuleFailureStageAndKind, "any", true},
 		{allow, RuleRetriedAttempts, "fx", false},
 	}
@@ -198,11 +198,11 @@ func TestAllowlistRuleScope(t *testing.T) {
 		}
 	}
 
-	if got := allow.ScopedRules(KindABI, "fx"); len(got) != 1 || got[0].ID != "order" {
-		t.Errorf("ScopedRules(abi, fx) = %v, want the order entry", got)
+	if got := allow.ScopedRules(KindPublishedTree, "fx"); len(got) != 1 || got[0].ID != "paths" {
+		t.Errorf("ScopedRules(published-tree, fx) = %v, want the paths entry", got)
 	}
 
-	for _, c := range [][2]string{{KindABI, "other"}, {KindOutcome, "fx"}, {KindOutcome, "any"}} {
+	for _, c := range [][2]string{{KindPublishedTree, "other"}, {KindABI, "fx"}, {KindOutcome, "fx"}, {KindOutcome, "any"}} {
 		if got := allow.ScopedRules(c[0], c[1]); len(got) != 0 {
 			t.Errorf("ScopedRules(%s, %s) = %v, want none", c[0], c[1], got)
 		}
@@ -222,21 +222,21 @@ func TestAllowlistRulesEverywhere(t *testing.T) {
 		ids = append(ids, e.ID)
 	}
 
-	if want := []string{"order", "by-stage", "how"}; !slices.Equal(ids, want) {
+	if want := []string{"paths", "by-stage", "how"}; !slices.Equal(ids, want) {
 		t.Errorf("RulesEverywhere kept %v, want %v", ids, want)
 	}
 
-	for _, rule := range []string{RuleABISortKeys, RuleFailureStageAndKind} {
+	for _, rule := range []string{RuleOutsRelativePaths, RuleFailureStageAndKind} {
 		if !everywhere.Excuses(rule, "other") {
 			t.Errorf("RulesEverywhere does not apply %s on every fixture", rule)
 		}
 	}
 
-	if got := slices.Concat(everywhere.ABI("fx"), everywhere.ScopedRules(KindABI, "fx")); len(got) != 0 {
+	if got := slices.Concat(everywhere.ABI("fx"), everywhere.ScopedRules(KindPublishedTree, "fx")); len(got) != 0 {
 		t.Errorf("RulesEverywhere keeps %v scoped to fx", got)
 	}
 
-	if allow.Excuses(RuleABISortKeys, "other") || len(allow.ScopedRules(KindABI, "fx")) != 1 || len(allow.Entries()) != 5 {
+	if allow.Excuses(RuleOutsRelativePaths, "other") || len(allow.ScopedRules(KindPublishedTree, "fx")) != 1 || len(allow.Entries()) != 5 {
 		t.Error("RulesEverywhere changed the original allowlist")
 	}
 }

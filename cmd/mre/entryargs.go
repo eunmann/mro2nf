@@ -122,6 +122,12 @@ func overlayEntry(payload map[string]any, valuesFile string, flatMap map[string]
 		return fmt.Errorf("decode values: %w", err)
 	}
 
+	// An override stands in for the invocation's literal, which mrp encodes
+	// with its keys sorted, whatever order the params file lists them in.
+	for k, v := range over {
+		over[k] = types.Sorted(v)
+	}
+
 	man, err := prod.manifest()
 	if err != nil {
 		return err

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -80,26 +79,20 @@ func (t *Table) validate(v any, base string, arrayDim, mapDim int, isFile bool) 
 // validateMap checks a typed map: its values carry mapDim-1 inner array dims,
 // and a map of files (isFile) needs every key to be a legal unix filename.
 func (t *Table) validateMap(v any, base string, mapDim int, isFile bool) error {
-	m, ok := v.(map[string]any)
+	m, ok := AsObject(v)
 	if !ok {
 		return unparsable(v, aMap)
 	}
 
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-
-	sort.Strings(keys)
-
-	for _, k := range keys {
+	for _, i := range sortedIndices(m) {
+		k := m[i].Key
 		if isFile {
 			if err := legalFilename(k); err != nil {
 				return fmt.Errorf("key %s: %w", k, err)
 			}
 		}
 
-		if err := t.validate(m[k], base, mapDim-1, 0, isFile); err != nil {
+		if err := t.validate(m[i].Value, base, mapDim-1, 0, isFile); err != nil {
 			return fmt.Errorf("key %s: %w", k, err)
 		}
 	}
@@ -108,7 +101,7 @@ func (t *Table) validateMap(v any, base string, mapDim int, isFile bool) error {
 }
 
 func (t *Table) validateStruct(v any, fields []ir.Param) error {
-	m, ok := v.(map[string]any)
+	m, ok := AsObject(v)
 	if !ok {
 		return unparsable(v, aMap)
 	}
@@ -116,7 +109,7 @@ func (t *Table) validateStruct(v any, fields []ir.Param) error {
 	var errs []error
 
 	for _, f := range fields {
-		e, ok := m[f.Name]
+		e, ok := m.Get(f.Name)
 		if !ok {
 			errs = append(errs, fmt.Errorf("%w: %s", errMissingKey, f.Name))
 
@@ -157,7 +150,7 @@ func validateScalar(v any, base string) error {
 		_, ok = v.(bool)
 		what = "a boolean value"
 	case "map":
-		_, ok = v.(map[string]any)
+		_, ok = AsObject(v)
 		what = aMap
 	default:
 		return nil

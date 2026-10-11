@@ -10,9 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -84,26 +83,14 @@ type Transform func(path string) (string, error)
 // Apply walks each value in vals against the matching param's type, applying fn
 // to every file leaf, and returns the rewritten map. Keys without a matching
 // param (and values of non-file type) are passed through untouched, so the
-// result always preserves the full input.
+// result always preserves the full input, and every Object keeps its key order.
 func (t *Table) Apply(params []ir.Param, vals map[string]any, fn Transform) (map[string]any, error) {
-	out := make(map[string]any, len(vals))
-	maps.Copy(out, vals)
-
-	for _, p := range params {
-		v, ok := vals[p.Name]
-		if !ok {
-			continue
-		}
-
-		nv, err := t.walk(v, p.BaseType, p.ArrayDim, p.MapDim, p.IsFile, fn)
-		if err != nil {
-			return nil, fmt.Errorf("param %s: %w", p.Name, err)
-		}
-
-		out[p.Name] = nv
+	out, err := t.applyObject(params, sortedObject(vals), fn)
+	if err != nil {
+		return nil, err
 	}
 
-	return out, nil
+	return objectMap(out), nil
 }
 
 // CoerceScalars walks vals against params and coerces each int-typed leaf whose
@@ -125,34 +112,62 @@ func (t *Table) FormatFloats(params []ir.Param, vals map[string]any) map[string]
 	return t.mapNumbers(params, vals, formatFloat)
 }
 
-// Narrow returns vals with every struct-typed value filtered to exactly its
-// declared fields, as mrp's FilterJson filters a bound value to the receiving
-// param's type (core/resolve.go filter, syntax StructType.FilterJson): extra
+// NarrowValue returns v with every struct-typed value filtered to exactly its
+// declared fields, as mrp's StructType.FilterJson filters a value it resolves
+// from a producer's outputs to the receiving type (core/resolve.go Path): extra
 // fields are dropped and a missing field is null, recursively through nested
-// structs, arrays, and typed maps. Keys without a matching param and values of
-// any other shape pass through. vals is not mutated.
-func (t *Table) Narrow(params []ir.Param, vals map[string]any) map[string]any {
-	out := make(map[string]any, len(vals))
-	maps.Copy(out, vals)
+// structs, arrays, and typed maps. A struct Object that needs no filtering
+// keeps its key order, and one that does takes its declared field order, as
+// FilterJson returns its input unchanged or rewrites it member by member.
+// Values of any other shape pass through. v is not mutated.
+func (t *Table) NarrowValue(v any, p ir.Param) any {
+	nv, _ := t.narrow(v, p.BaseType, p.ArrayDim, p.MapDim)
+
+	return nv
+}
+
+// Fields returns the declared fields of struct type name, and whether name is a
+// struct type.
+func (t *Table) Fields(name string) ([]ir.Param, bool) {
+	fields, ok := t.structs[name]
+
+	return fields, ok
+}
+
+// applyObject is Apply over an Object, walking its members in params order.
+func (t *Table) applyObject(params []ir.Param, o Object, fn Transform) (Object, error) {
+	out := slices.Clone(o)
 
 	for _, p := range params {
-		if v, ok := vals[p.Name]; ok {
-			out[p.Name] = t.narrow(v, p.BaseType, p.ArrayDim, p.MapDim)
+		i := o.index(p.Name)
+		if i < 0 {
+			continue
 		}
+
+		nv, err := t.walk(o[i].Value, p.BaseType, p.ArrayDim, p.MapDim, p.IsFile, fn)
+		if err != nil {
+			return nil, fmt.Errorf("param %s: %w", p.Name, err)
+		}
+
+		out[i].Value = nv
 	}
 
-	return out
+	return out, nil
 }
 
 // mapNumbers returns a copy of vals with every number leaf of a declared param
 // replaced by leaf(number, base type).
 func (t *Table) mapNumbers(params []ir.Param, vals map[string]any, leaf numberLeaf) map[string]any {
-	out := make(map[string]any, len(vals))
-	maps.Copy(out, vals)
+	return objectMap(t.mapObjectNumbers(params, sortedObject(vals), leaf))
+}
+
+// mapObjectNumbers is mapNumbers over an Object, keeping its key order.
+func (t *Table) mapObjectNumbers(params []ir.Param, o Object, leaf numberLeaf) Object {
+	out := slices.Clone(o)
 
 	for _, p := range params {
-		if v, ok := vals[p.Name]; ok {
-			out[p.Name] = t.mapNumber(v, p.BaseType, p.ArrayDim, p.MapDim, leaf)
+		if i := o.index(p.Name); i >= 0 {
+			out[i].Value = t.mapNumber(o[i].Value, p.BaseType, p.ArrayDim, p.MapDim, leaf)
 		}
 	}
 
@@ -179,18 +194,20 @@ func (t *Table) mapNumber(v any, base string, arrayDim, mapDim int, leaf numberL
 
 		return out
 	case map[string]any:
+		return asMap(t.mapNumber(sortedObject(tv), base, arrayDim, mapDim, leaf))
+	case Object:
 		if mapDim > 0 {
 			// One typed-map level carrying mapDim-1 inner array dims (see walkMap).
-			out := make(map[string]any, len(tv))
-			for k, e := range tv {
-				out[k] = t.mapNumber(e, base, arrayDim+mapDim-1, 0, leaf)
+			out := slices.Clone(tv)
+			for i, m := range tv {
+				out[i].Value = t.mapNumber(m.Value, base, arrayDim+mapDim-1, 0, leaf)
 			}
 
 			return out
 		}
 
 		if fields, ok := t.structs[base]; ok {
-			return t.mapNumbers(fields, tv, leaf)
+			return t.mapObjectNumbers(fields, tv, leaf)
 		}
 
 		if base == untypedMap {
@@ -221,9 +238,11 @@ func mapUntyped(v any, leaf numberLeaf) any {
 
 		return out
 	case map[string]any:
-		out := make(map[string]any, len(tv))
-		for k, e := range tv {
-			out[k] = mapUntyped(e, leaf)
+		return asMap(mapUntyped(sortedObject(tv), leaf))
+	case Object:
+		out := slices.Clone(tv)
+		for i, m := range tv {
+			out[i].Value = mapUntyped(m.Value, leaf)
 		}
 
 		return out
@@ -277,53 +296,105 @@ func coerceNumber(n json.Number, base string) any {
 	return n
 }
 
-// narrow filters one value against its type; it descends shapes the way coerce
-// does (a typed map is one level carrying mapDim-1 inner array dims).
-func (t *Table) narrow(v any, base string, arrayDim, mapDim int) any {
+// narrow filters one value against its type and reports whether filtering
+// changed it; it descends shapes the way coerce does (a typed map is one level
+// carrying mapDim-1 inner array dims).
+func (t *Table) narrow(v any, base string, arrayDim, mapDim int) (any, bool) {
 	switch tv := v.(type) {
 	case []any:
 		if arrayDim <= 0 {
-			return v
+			return v, false
 		}
 
 		out := make([]any, len(tv))
+		changed := false
+
 		for i, e := range tv {
-			out[i] = t.narrow(e, base, arrayDim-1, mapDim)
+			var c bool
+
+			out[i], c = t.narrow(e, base, arrayDim-1, mapDim)
+			changed = changed || c
 		}
 
-		return out
+		return out, changed
 	case map[string]any:
-		if mapDim > 0 {
-			out := make(map[string]any, len(tv))
-			for k, e := range tv {
-				out[k] = t.narrow(e, base, arrayDim+mapDim-1, 0)
-			}
+		nv, changed := t.narrowObject(sortedObject(tv), base, arrayDim, mapDim)
 
-			return out
-		}
-
-		fields, ok := t.structs[base]
-		if !ok || arrayDim > 0 {
-			return v
-		}
-
-		out := make(map[string]any, len(fields))
-		for _, f := range fields {
-			out[f.Name] = t.narrow(tv[f.Name], f.BaseType, f.ArrayDim, f.MapDim)
-		}
-
-		return out
+		return asMap(nv), changed
+	case Object:
+		return t.narrowObject(tv, base, arrayDim, mapDim)
+	case json.Number:
+		return narrowNumber(tv, base, arrayDim, mapDim)
 	default:
-		return v
+		return v, false
 	}
+}
+
+// narrowNumber filters an int leaf as BuiltinType.FilterJson does: a
+// whole-number float such as 4.0 or 1e2 is re-encoded as an integer, which
+// counts as a change, so the enclosing struct is rebuilt in declared order.
+func narrowNumber(n json.Number, base string, arrayDim, mapDim int) (any, bool) {
+	if base != typeInt || arrayDim > 0 || mapDim > 0 {
+		return n, false
+	}
+
+	if _, err := n.Int64(); err == nil {
+		return n, false
+	}
+
+	c := coerceNumber(n, base)
+	_, same := c.(json.Number)
+
+	return c, !same
+}
+
+// narrowObject narrows a typed map's values in place, or filters a struct as
+// StructType.FilterJson does: unchanged when it has exactly its declared
+// fields and none of them changes, otherwise rebuilt in declared order.
+func (t *Table) narrowObject(o Object, base string, arrayDim, mapDim int) (any, bool) {
+	if mapDim > 0 {
+		out := slices.Clone(o)
+		changed := false
+
+		for i, m := range o {
+			var c bool
+
+			out[i].Value, c = t.narrow(m.Value, base, arrayDim+mapDim-1, 0)
+			changed = changed || c
+		}
+
+		return out, changed
+	}
+
+	fields, ok := t.structs[base]
+	if !ok || arrayDim > 0 {
+		return o, false
+	}
+
+	out := make(Object, len(fields))
+	changed := len(o) != len(fields)
+
+	for i, f := range fields {
+		v, ok := o.Get(f.Name)
+		nv, c := t.narrow(v, f.BaseType, f.ArrayDim, f.MapDim)
+		changed = changed || !ok || c
+		out[i] = Member{Key: f.Name, Value: nv}
+	}
+
+	if !changed {
+		return o, false
+	}
+
+	return out, true
 }
 
 // walk descends one value. It dispatches on the value's actual JSON shape
 // rather than on a fixed dimension order, so both map<T[]> (a map of arrays) and
 // the array-of-typed-map shape resolve correctly even though the IR flattens
-// ArrayDim/MapDim and loses their nesting order. Maps are walked in sorted key
-// order so the resulting file-leaf layout (and the markers written into the
-// bundle) are deterministic across runs, keeping -resume caching stable. Shape
+// ArrayDim/MapDim and loses their nesting order. Typed maps are walked in
+// sorted key order so the resulting file-leaf layout (and the markers written
+// into the bundle) do not depend on how a producer ordered its keys, keeping
+// -resume caching stable; every object keeps its own key order. Shape
 // mismatches (e.g. a null, or a json.Number where a file string is expected)
 // pass through untouched, since runtime values may legitimately be null.
 func (t *Table) walk(v any, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
@@ -337,6 +408,10 @@ func (t *Table) walk(v any, base string, arrayDim, mapDim int, isFile bool, fn T
 
 		return t.walkSlice(tv, base, arrayDim, mapDim, isFile, fn)
 	case map[string]any:
+		nv, err := t.walk(sortedObject(tv), base, arrayDim, mapDim, isFile, fn)
+
+		return asMap(nv), err
+	case Object:
 		if mapDim > 0 {
 			return t.walkMap(tv, base, arrayDim, mapDim, isFile, fn)
 		}
@@ -344,9 +419,9 @@ func (t *Table) walk(v any, base string, arrayDim, mapDim int, isFile bool, fn T
 		// A struct value descends regardless of isFile: Martian marks a struct
 		// that contains file fields as a directory kind (isFile true), but the
 		// struct itself is an object to recurse into, not a file leaf. (A real
-		// file leaf is a string, handled below, never a map.)
+		// file leaf is a string, handled below, never an object.)
 		if fields, ok := t.structs[base]; ok {
-			return t.Apply(fields, tv, fn)
+			return t.applyObject(fields, tv, fn)
 		}
 
 		return v, nil
@@ -381,28 +456,21 @@ func (t *Table) walkSlice(arr []any, base string, arrayDim, mapDim int, isFile b
 	return out, nil
 }
 
-func (t *Table) walkMap(m map[string]any, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
-	out := make(map[string]any, len(m))
-
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-
-	sort.Strings(keys)
+func (t *Table) walkMap(m Object, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
+	out := slices.Clone(m)
 
 	// A typed map is exactly one map level; Martian folds any inner array
 	// dimensions into MapDim (MapDim = 1 + innerArrayDim), so after descending
 	// this level the element carries mapDim-1 array dims (and never another typed
 	// map — nested typed maps are not representable). Treating mapDim as a count
 	// of nested map levels would leave map<T[]> inner arrays unwalked.
-	for _, k := range keys {
-		nv, err := t.walk(m[k], base, arrayDim+mapDim-1, 0, isFile, fn)
+	for _, i := range sortedIndices(m) {
+		nv, err := t.walk(m[i].Value, base, arrayDim+mapDim-1, 0, isFile, fn)
 		if err != nil {
 			return nil, err
 		}
 
-		out[k] = nv
+		out[i].Value = nv
 	}
 
 	return out, nil

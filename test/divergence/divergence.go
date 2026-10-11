@@ -47,12 +47,6 @@ const (
 // comparators that excuse a real difference. A comparator applies one only
 // while an entry matches it.
 const (
-	// RuleABISortKeys compares the objects in _args and _outs with their keys
-	// sorted.
-	RuleABISortKeys = "abi-sort-object-keys"
-	// RuleOutsSortKeys compares the objects in the pipeline outs JSON with their
-	// keys sorted.
-	RuleOutsSortKeys = "outs-json-sort-object-keys"
 	// RuleOutsRelativePaths strips mrp's outs-dir prefix from the paths in its
 	// outs JSON.
 	RuleOutsRelativePaths = "outs-json-strip-outs-prefix"
@@ -76,8 +70,6 @@ const (
 // must match it.
 func ComparatorRules() map[string]string {
 	return map[string]string{
-		RuleABISortKeys:          KindABI,
-		RuleOutsSortKeys:         KindPublishedTree,
 		RuleOutsRelativePaths:    KindPublishedTree,
 		RuleResultsMetadata:      KindPublishedTree,
 		RuleMrpPublishedSymlinks: KindPublishedTree,

@@ -21,17 +21,17 @@
         "parts/1.txt"
     ],
     "seen": {
-        "by_key": {
-            "k1": "data.txt",
-            "k2": "data.txt"
-        },
-        "entry": "null",
+        "named": "custom_name.txt",
+        "plain": "plain.txt",
         "lanes": [
             "reads.fastq",
             "reads.fastq"
         ],
-        "named": "custom_name.txt",
-        "plain": "plain.txt",
-        "sample_reads": "s1_R1.fastq"
+        "by_key": {
+            "k1": "data.txt",
+            "k2": "data.txt"
+        },
+        "sample_reads": "s1_R1.fastq",
+        "entry": "null"
     }
 }
