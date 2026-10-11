@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/frontend"
@@ -153,26 +154,30 @@ func TestBench(t *testing.T) {
 func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 	t.Helper()
 
-	line, _ := runBenchLaneIn(t, l, filepath.Join(root, "bench", l.dir), workdir)
+	line, _ := runLane(t, l, laneRun{dir: filepath.Join(root, "bench", l.dir), workdir: workdir})
 
 	return line
 }
 
-// runBenchLaneIn is runBenchLane for the lane's fixture at dir, which the
-// scale smoke generates outside bench/. It also returns the project dir.
-func runBenchLaneIn(t *testing.T, l benchLane, dir, workdir string) ([]byte, string) {
+// laneRun is where and how runLane runs a bench lane.
+type laneRun struct {
+	dir     string // fixture dir holding the lane's mro; the scale tier generates one
+	workdir string // BENCH_WORKDIR root, or "" for the project's own work/
+	mre     string // the mre the project calls, or "" for the repo build
+	jvm     string // appended to the driver's NXF_OPTS
+	gcLogs  string // dir the jvm options write GC logs to, or ""
+}
+
+// runLane transpiles, runs, and measures one lane as r says, returning its
+// bench_metrics.py JSON line and the project dir.
+func runLane(t *testing.T, l benchLane, r laneRun) ([]byte, string) {
 	t.Helper()
 
-	if !fileExists(filepath.Join(dir, l.mro)) {
+	if !fileExists(filepath.Join(r.dir, l.mro)) {
 		t.Fatalf("bench fixture %s/%s missing", l.dir, l.mro)
 	}
 
-	var flags []string
-	if l.native {
-		flags = append(flags, "-native")
-	}
-
-	proj := transpileMRO(t, dir, l.mro, flags...)
+	proj := transpileLane(t, l, r)
 
 	args := []string{"-with-trace", "trace.txt", "-with-dag", "dag.mmd"}
 	if p := os.Getenv("BENCH_PROFILE"); p != "" {
@@ -185,16 +190,20 @@ func runBenchLaneIn(t *testing.T, l benchLane, dir, workdir string) ([]byte, str
 	// otherwise one lane's stagings would inflate another's refs count.
 	scanRoot := proj
 
-	if workdir != "" {
-		scanRoot = filepath.Join(workdir, l.key)
+	if r.workdir != "" {
+		scanRoot = filepath.Join(r.workdir, l.key)
 		args = append(args, "-work-dir", filepath.Join(scanRoot, "work"))
 	}
 
-	if err := runNextflow(t, proj, args...); err != nil {
+	start := time.Now()
+
+	if err := runNextflowJVM(t, proj, r.jvm, args...); err != nil {
 		t.Fatalf("bench %s: %v", l.key, err)
 	}
 
-	stages, err := writeStageProcesses(dir, l.mro, t.TempDir())
+	wall := time.Since(start)
+
+	stages, err := writeStageProcesses(r.dir, l.mro, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +214,8 @@ func runBenchLaneIn(t *testing.T, l benchLane, dir, workdir string) ([]byte, str
 		"--name", l.key, "--trace", filepath.Join(proj, "trace.txt"), "--workdir", scanRoot,
 		"--probe", l.probe, "--producers", strconv.Itoa(l.producers),
 		"--stages", stages, "--dag", filepath.Join(proj, "dag.mmd"),
-		"--mrp-jobs", strconv.Itoa(l.mrpJobs), "--known-scaling", strconv.Itoa(l.knownScaling))
+		"--mrp-jobs", strconv.Itoa(l.mrpJobs), "--known-scaling", strconv.Itoa(l.knownScaling),
+		"--gc-logs", r.gcLogs, "--wall-seconds", strconv.FormatFloat(wall.Seconds(), 'f', 1, 64))
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 
@@ -216,6 +226,33 @@ func runBenchLaneIn(t *testing.T, l benchLane, dir, workdir string) ([]byte, str
 	return out.Bytes(), proj
 }
 
+// transpileLane transpiles the lane's mro in r.dir, with -native for a native
+// lane and r.mre as the mre the project calls.
+func transpileLane(t *testing.T, l benchLane, r laneRun) string {
+	t.Helper()
+
+	var flags []string
+	if l.native {
+		flags = append(flags, "-native")
+	}
+
+	if r.mre == "" {
+		return transpileMRO(t, r.dir, l.mro, flags...)
+	}
+
+	buildBinaries(t)
+
+	tools := repoTools()
+	tools.mre = r.mre
+
+	proj := t.TempDir()
+	if err := transpileInto(tools, r.dir, l.mro, proj, flags...); err != nil {
+		t.Fatalf("transpile %s: %v", l.key, err)
+	}
+
+	return proj
+}
+
 // writeStageProcesses writes, as a JSON array under tmp, every process name
 // the emitter can give a task that runs a stage's own code in the program of
 // dir/mro, and returns the file's path. stageProcessNames builds them from
@@ -223,16 +260,9 @@ func runBenchLaneIn(t *testing.T, l benchLane, dir, workdir string) ([]byte, str
 // every other task as plumbing, so a new helper process is plumbing without
 // being listed.
 func writeStageProcesses(dir, mro, tmp string) (string, error) {
-	mroPath := []string{dir}
-
-	ast, err := frontend.Parse(filepath.Join(dir, mro), mroPath, false)
+	prog, err := lowerMRO(dir, mro)
 	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", mro, err)
-	}
-
-	prog, err := frontend.Lower(ast, mroPath)
-	if err != nil {
-		return "", fmt.Errorf("lower %s: %w", mro, err)
+		return "", err
 	}
 
 	data, err := json.Marshal(stageProcessNames(prog))
@@ -246,6 +276,23 @@ func writeStageProcesses(dir, mro, tmp string) (string, error) {
 	}
 
 	return path, nil
+}
+
+// lowerMRO parses and lowers the program of dir/mro.
+func lowerMRO(dir, mro string) (*ir.Program, error) {
+	mroPath := []string{dir}
+
+	ast, err := frontend.Parse(filepath.Join(dir, mro), mroPath, false)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", mro, err)
+	}
+
+	prog, err := frontend.Lower(ast, mroPath)
+	if err != nil {
+		return nil, fmt.Errorf("lower %s: %w", mro, err)
+	}
+
+	return prog, nil
 }
 
 // stageProcessNames returns, sorted, every process name the emitter can give a

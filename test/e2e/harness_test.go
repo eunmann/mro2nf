@@ -278,12 +278,20 @@ func transpileInto(tools toolchain, dir, mro, proj string, extra ...string) erro
 func runNextflow(t *testing.T, proj string, args ...string) error {
 	t.Helper()
 
+	return runNextflowJVM(t, proj, "", args...)
+}
+
+// runNextflowJVM is runNextflow with jvm appended to the driver's NXF_OPTS,
+// after the harness's own options, so a flag in it wins.
+func runNextflowJVM(t *testing.T, proj, jvm string, args ...string) error {
+	t.Helper()
+
 	args, trace, err := traceArgs(proj, args, filepath.Join(t.TempDir(), "trace.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := execNextflow(t, proj, args); err != nil {
+	if err := execNextflowJVM(t, proj, jvm, args); err != nil {
 		return err
 	}
 
@@ -352,6 +360,13 @@ func checkAttempts(rows []traceRow) error {
 // execNextflow runs Nextflow in proj with args as given.
 func execNextflow(t *testing.T, proj string, args []string) error {
 	t.Helper()
+
+	return execNextflowJVM(t, proj, "", args)
+}
+
+// execNextflowJVM is execNextflow with jvm appended to the driver's NXF_OPTS.
+func execNextflowJVM(t *testing.T, proj, jvm string, args []string) error {
+	t.Helper()
 	shardSkip(t)
 
 	cmd := exec.Command("nextflow", append([]string{"run", "main.nf"}, args...)...)
@@ -371,7 +386,7 @@ func execNextflow(t *testing.T, proj string, args []string) error {
 	env := append(os.Environ(),
 		"NXF_ANSI_LOG=false",
 		"NXF_DISABLE_PARAMS_TYPE_DETECTION=true",
-		"NXF_OPTS="+strings.TrimSpace(os.Getenv("NXF_OPTS")+" -XX:TieredStopAtLevel=1 -Xms64m -Xmx512m"),
+		"NXF_OPTS="+strings.TrimSpace(os.Getenv("NXF_OPTS")+" -XX:TieredStopAtLevel=1 -Xms64m -Xmx512m "+jvm),
 	)
 	if os.Getenv("NXF_OFFLINE") == "" {
 		env = append(env, "NXF_OFFLINE=true")

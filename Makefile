@@ -85,8 +85,14 @@ lint-nf: build ## Static-lint generated Nextflow with `nextflow lint` (needs Nex
 bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline
 	$(GO_E2E) -timeout 20m -run '^TestBench'
 
-test-scale: build ## Nightly scale smoke: bench forks at SCALE_WIDTH forks (default 1000) vs width 4
-	$(GO_E2E) -timeout 50m -run '^TestScale'
+# The nightly scale tier (#352): each TestScale<Shape> runs a bench shape at
+# a narrow and a wide width (SCALE_WIDTH overrides every selected shape's)
+# and gates the overhead rule. SCALE_RUN selects shapes; the nightly runs one
+# per job. Metrics and verdicts land in SCALE_ARTIFACTS (artifacts/scale).
+SCALE_RUN ?= ^TestScale
+SCALE_TIMEOUT ?= 100m
+test-scale: build ## Nightly scale tier: bench shapes at production widths (SCALE_RUN=<-run regexp> SCALE_WIDTH=<n>)
+	$(GO_E2E) -timeout $(SCALE_TIMEOUT) -run '$(SCALE_RUN)'
 
 test-cellranger: build ## Real-CellRanger differential baseline (opt-in; set CELLRANGER_HOME=<extracted bundle>)
 	$(GO_E2E) -timeout 30m -run '^TestCellRanger'

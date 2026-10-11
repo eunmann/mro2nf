@@ -227,3 +227,72 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 		t.Errorf("mark job has if %q; it must keep the implicit success()", mark.cond)
 	}
 }
+
+var scaleTestFunc = regexp.MustCompile(`(?m)^func (TestScale\w+)\(`)
+
+// TestNightlyScaleMatrixRunsEveryShape requires the scale job's matrix to
+// run every TestScale function in test/e2e/scale_test.go, one per job, so a
+// new shape cannot go unrun.
+func TestNightlyScaleMatrixRunsEveryShape(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join(root, "test", "e2e", "scale_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	funcs := scaleTestFunc.FindAllSubmatch(src, -1)
+
+	want := make([]string, 0, len(funcs))
+	for _, m := range funcs {
+		want = append(want, string(m[1]))
+	}
+
+	job := readWorkflow(t, nightlyWorkflow).get("jobs").get("scale")
+	shapes := job.get("strategy").get("matrix").get("shape").list()
+
+	got := make([]string, 0, len(shapes))
+	for _, s := range shapes {
+		got = append(got, "TestScale"+s)
+	}
+
+	slices.Sort(want)
+	slices.Sort(got)
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s scale matrix shapes != TestScale functions (-want +got):\n%s", nightlyWorkflow, diff)
+	}
+
+	const run = "make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}'"
+	if !slices.ContainsFunc(job.get("steps").items, func(s *yamlNode) bool { return scalarOf(s.get("run")) == run }) {
+		t.Errorf("%s scale job never runs %q", nightlyWorkflow, run)
+	}
+}
+
+// nightlyArtifacts are the nightly jobs whose results are an artifact, with
+// the dir each uploads.
+var nightlyArtifacts = map[string]string{"scale": "artifacts/scale/"}
+
+// TestNightlyUploadsArtifacts requires each artifact job to upload its dir
+// in a step that runs whatever the suite's outcome, so a failed night keeps
+// the results that explain it.
+func TestNightlyUploadsArtifacts(t *testing.T) {
+	jobs := readWorkflow(t, nightlyWorkflow).get("jobs")
+
+	for id, dir := range nightlyArtifacts {
+		uploads := slices.ContainsFunc(jobs.get(id).get("steps").items, func(s *yamlNode) bool {
+			return strings.HasPrefix(scalarOf(s.get("uses")), "actions/upload-artifact@") &&
+				scalarOf(s.get("with").get("path")) == dir && scalarOf(s.get("if")) == "${{ always() }}"
+		})
+		if !uploads {
+			t.Errorf("%s job %q has no `if: ${{ always() }}` upload-artifact step for %s", nightlyWorkflow, id, dir)
+		}
+	}
+}
+
+// scalarOf is n's scalar, or "" for an absent node.
+func scalarOf(n *yamlNode) string {
+	if n == nil {
+		return ""
+	}
+
+	return n.scalar
+}

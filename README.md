@@ -371,7 +371,7 @@ CI (`.github/workflows/pr-validation.yml`) runs lint (golangci-lint + `govulnche
 PR. It doesn't run again on `main`: a PR merges only when it is up to date with
 `main`, so its run already validated the merged tree. `nightly.yml` reruns the e2e
 suites daily on the declared Nextflow floor and on latest stable, and adds the
-`make test-scale` smoke. A scheduled run is skipped when the current `main` commit
+`make test-scale` scale tier. A scheduled run is skipped when the current `main` commit
 and the latest-stable Nextflow release have already passed. A failed run opens,
 or comments on, a "Nightly CI is failing" issue. The Martian
 dependency is pinned to a published commit, so
