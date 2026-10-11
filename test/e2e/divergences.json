@@ -1,3 +1,129 @@
 {
-  "divergences": []
+  "divergences": [
+    {
+      "id": "abi-object-key-order",
+      "kind": "abi",
+      "feature": "struct and map values a stage receives",
+      "summary": "A stage receives struct and map values with their keys sorted, where mrp passes them in the order their producer wrote them.",
+      "justification": "The data plane decodes every bundle into Go maps (`cmd/mre/bundle.go` `rawToMap`), which re-encode sorted. Against mrp 4a558e7 a producer's `{\"b\": 1, \"a\": 2}` reaches the consumer's `_args` as `{\"a\": 2, \"b\": 1}`, so a stage that iterates the dict sees another order; `nested_struct`'s READN gets `{b, inner}` under mro2nf and `{inner, b}` under mrp. The ABI comparison sorts object keys on the fixtures whose stage invocations differ without this entry, and fails on any of them where it no longer does.",
+      "issue": 366,
+      "evidence": ["TestMrpDiff/nested_struct", "TestMrpDiff/split_struct_chunk", "TestMrpDiff/struct_input", "TestRemovingAnABIEntryFailsTheComparison"],
+      "comparator": {"rule": "abi-sort-object-keys", "fixtures": ["nested_struct", "split_struct_chunk", "struct_input"]}
+    },
+    {
+      "id": "outs-json-object-key-order",
+      "kind": "published-tree",
+      "feature": "struct and map values in the pipeline outs JSON",
+      "summary": "`pipeline_outs.json` writes struct and map values with their keys sorted, where mrp's `_outs` keeps the order their producer wrote them in.",
+      "justification": "The same Go-map re-encoding as `abi-object-key-order`: `kitchen_sink`'s `stats` struct is published as `{count, mean, total}` by mro2nf and `{count, total, mean}` by mrp 4a558e7. The outs JSON comparisons, against mrp and against the goldens, sort object keys on the fixtures whose outs JSON differs from mrp's without this entry, and the mrp comparison fails on any of them where it no longer does.",
+      "issue": 366,
+      "evidence": ["TestMrpDiff/basename_echo", "TestMrpDiff/kitchen_sink", "TestMrpDiff/struct_min", "TestRemovingAPublishedTreeEntryFailsTheComparison", "TestScopedRuleEntryFailsWhereItExcusesNothing"],
+      "comparator": {"rule": "outs-json-sort-object-keys", "fixtures": ["basename_echo", "kitchen_sink", "struct_min"]}
+    },
+    {
+      "id": "outs-json-relative-paths",
+      "kind": "published-tree",
+      "feature": "file paths in the pipeline outs JSON",
+      "summary": "`pipeline_outs.json` names each published file by its path relative to `results/`, where mrp's `_outs` names it by its absolute path in the pipestance's `outs/`.",
+      "justification": "`results/` may be a local dir, an S3 prefix or a HealthOmics output dir, so mro2nf writes paths that hold wherever the tree is published. The comparisons strip mrp's `outs/` prefix.",
+      "evidence": ["TestMrpDiff/file_min", "TestRemovingAPublishedTreeEntryFailsTheComparison", "TestNormcmpAppliesTheAllowlist"],
+      "comparator": {"rule": "outs-json-strip-outs-prefix"}
+    },
+    {
+      "id": "results-metadata-files",
+      "kind": "published-tree",
+      "feature": "metadata files at the root of the published tree",
+      "summary": "mro2nf publishes `pipeline_outs.json` and `manifest.json.gz` at the root of `results/`; mrp's `outs/` holds neither, since mrp writes its outs JSON to `<pipestance>/<PIPELINE>/fork0/_outs` and writes no manifest.",
+      "justification": "A Nextflow run has no pipestance to hold the outs JSON, so it is published beside the outputs, with a machine-readable index of them (`manifest.json.gz`). The tree comparisons drop the two files at the root only, so a stage output of either name deeper in the tree still compares.",
+      "evidence": ["TestMrpDiff", "TestGolden", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
+      "comparator": {"rule": "drop-results-metadata"}
+    },
+    {
+      "id": "published-symlinks-copied",
+      "kind": "published-tree",
+      "feature": "a published output that is a symlink",
+      "summary": "Where mrp publishes a symlink in `outs/`, because the stage's output was itself a symlink or lies outside the pipestance, mro2nf publishes a copy of the target, and mrp's `_outs` names the link target where `pipeline_outs.json` names the published path.",
+      "justification": "mrp links `outs/` to the target and reports the target (`martian/core/post_process.go` `moveOutFile`, `copyOutSymlink`). A publish dir may be an object store with no symlinks, and a host target is unreachable from an isolated worker, so mro2nf stages and publishes the content (#332). The comparison reads an mrp-published symlink by its target's content and maps the target path in mrp's `_outs` to the link's path.",
+      "evidence": ["TestMrpDiff/symlink_escape", "TestStageOutputLinkOutsideWorkCopiedLocally", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
+      "comparator": {"rule": "follow-mrp-published-symlinks"}
+    },
+    {
+      "id": "runtime-null-disable-gate-aborts",
+      "kind": "outcome",
+      "feature": "`using (disabled = ref)` resolving to null at runtime",
+      "summary": "A disable gate that resolves to null at runtime aborts mro2nf's run, where mrp treats it as false and runs the call.",
+      "justification": "A regression from the #180 fix: the driver rejects the null gate instead of reading it as false. `null_disable_gate` records mro2nf's failure; once fixed, the fixture moves to `mrpDiffCases`.",
+      "issue": 253,
+      "evidence": ["TestMrpDiffFailureParity/null_disable_gate", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true}
+    },
+    {
+      "id": "retried-stage-errors",
+      "kind": "outcome",
+      "feature": "`--autoretry` / retrying a failed stage",
+      "summary": "mro2nf retries every stage failure except an ASSERT up to twice (`errorStrategy` retry, `maxRetries 2`), where mrp retries only failures matching its `retry_on` patterns (signals, ENOMEM, scheduler errors) and never an ordinary stage exception.",
+      "justification": "A stage that fails and then succeeds on retry completes under mro2nf and fails under mrp (mrp's `jobmanagers/retry.json`; `internal/emit/emit.go` `errorStrategy`). The outcome comparison counts a retried stage task's failures once on the failure fixtures whose error-failing stage Nextflow retries, and fails on any of them where no task is retried.",
+      "issue": 299,
+      "evidence": ["TestMrpDiffFailureParity/stage_raise", "TestOutcomeRulesNeedTheirEntries"],
+      "comparator": {"rule": "collapse-retried-attempts", "fixtures": ["bad_out_type", "missing_struct_key", "split_bad_mem", "split_bad_special", "split_bad_threads", "stage_raise"]}
+    },
+    {
+      "id": "failure-report-details",
+      "kind": "outcome",
+      "feature": "failure messages and where a failure is recorded",
+      "summary": "A failed run's messages differ: mre words its own errors and Nextflow adds context, and mro2nf records an output-validation failure in the task that ran the phase, where mrp records it at the fork.",
+      "justification": "The failure contract is whether the run fails, which stages it blames and whether each failure is an ASSERT or an error, so the outcome comparison reads only those.",
+      "evidence": ["TestMrpDiffFailureParity", "TestOutcomeRulesNeedTheirEntries"],
+      "comparator": {"rule": "compare-failure-stage-and-kind"}
+    },
+    {
+      "id": "local-modifier-ignored",
+      "kind": "mechanism",
+      "feature": "`(local)`",
+      "summary": "mro2nf ignores `local` and schedules the stage on the configured executor like any other task; in a cluster jobmode mrp runs it through its local job manager on the head node, sized against the head node's capacity.",
+      "justification": "Scheduling only: the stage runs the same code on the same `_args`. Under `--jobmode=local`, which the differential uses, the local job manager is mrp's only one (`martian/core/node.go`, `stage.go`), so `kitchen_sink`'s local SUM_SQUARES matches mrp; cluster jobmodes are not compared with mrp.",
+      "evidence": ["TestMrpDiff/kitchen_sink"]
+    },
+    {
+      "id": "volatile-no-vdr",
+      "kind": "mechanism",
+      "feature": "`(volatile)` / `volatile = strict`",
+      "summary": "mro2nf ignores `volatile` and deletes no file mid-run, so `work/` keeps every intermediate file mrp's volatile data removal (VDR) deletes once its consumers finish (higher peak disk).",
+      "justification": "VDR deletes only files no later stage reads and never a published output: `vdr_volatile` publishes what mro2nf does under mrp's rolling and strict VDR, while mrp deletes the volatile file its consumer has read.",
+      "evidence": ["TestMrpDiffVDR/rolling", "TestMrpDiffVDR/strict", "TestMrpDiff/kitchen_sink"]
+    },
+    {
+      "id": "retain-no-vdr",
+      "kind": "mechanism",
+      "feature": "stage / pipeline `retain`",
+      "summary": "`retain` has nothing to do under mro2nf, which deletes no file, so every file is kept.",
+      "justification": "`retain` only exempts a file from VDR. `vdr_volatile` retains a volatile stage's file and publishes what mro2nf does under mrp's rolling and strict VDR.",
+      "evidence": ["TestMrpDiffVDR/rolling", "TestMrpDiffVDR/strict"]
+    },
+    {
+      "id": "outs-files-copied",
+      "kind": "mechanism",
+      "feature": "`outs/` move+symlink layout",
+      "summary": "mrp moves each output file into `outs/` and leaves a symlink to it in the stage's files dir; mro2nf copies each output into `results/` and leaves the task's work dir as it was.",
+      "justification": "Both publish regular files with the same paths and bytes: the tree comparison, which tells a symlink from a file, proves it on every `TestMrpDiff` fixture. Where mrp publishes a symlink instead, `published-symlinks-copied` applies.",
+      "evidence": ["TestMrpDiff/file_min", "TestMrpDiff/dir_out", "TestMrpDiff/map_file"]
+    },
+    {
+      "id": "resume-content-cache",
+      "kind": "mechanism",
+      "feature": "`-resume` ≈ restart-without-rerun",
+      "summary": "mro2nf resumes through Nextflow's `-resume`, which reuses each task whose inputs hash the same, where mrp restarts a pipestance from the stages it recorded as complete.",
+      "justification": "A cache hit replays the task's recorded outputs: an unchanged rerun re-executes no task and leaves the published tree and `pipeline_outs.json` unchanged, and a fresh run matches mrp. A rerun after a failure is not compared with mrp's restart.",
+      "evidence": ["TestResumeCachesEverything", "TestFreshRunsAreIdentical", "TestMrpDiff"]
+    },
+    {
+      "id": "preflight-dag-order",
+      "kind": "mechanism",
+      "feature": "a mapped or disabled `(preflight)`",
+      "summary": "A mapped or disabled preflight runs in DAG order, where mrp makes every other call in its pipeline wait for it, so a failing preflight stops that pipeline before they start.",
+      "justification": "A preflight has no outputs (mrp rejects one with `PreflightOutputError`), so the order changes no output: `preflight_ungated`'s outputs and stage invocations match mrp's. On a failing preflight, mrp has started no other call of its pipeline, while mro2nf may have. mro2nf warns at transpile time.",
+      "issue": 314,
+      "evidence": ["TestMrpDiff/preflight_ungated", "TestWarningsPreflightUngateable"]
+    }
+  ]
 }

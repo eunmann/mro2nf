@@ -72,3 +72,60 @@ func TestHashTreeAbsentDir(t *testing.T) {
 		t.Errorf("hashTree of an absent dir = %v, want empty", got)
 	}
 }
+
+// TestPublishedTreeMarksLinks checks that, unless it follows links,
+// publishedTree tells a file, a file in a directory and an empty directory
+// reached through a symlink from a copy.
+func TestPublishedTreeMarksLinks(t *testing.T) {
+	t.Parallel()
+
+	dir, elsewhere := t.TempDir(), t.TempDir()
+	writeABITestFile(t, filepath.Join(dir, "copy.txt"), "x")
+	target := writeABITestFile(t, filepath.Join(elsewhere, "target.txt"), "x")
+	writeABITestFile(t, filepath.Join(elsewhere, "tree", "in.txt"), "y")
+
+	if err := os.MkdirAll(filepath.Join(elsewhere, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	links := map[string]string{
+		"link.txt": target,
+		"tree":     filepath.Join(elsewhere, "tree"),
+		"empty":    filepath.Join(elsewhere, "empty"),
+	}
+
+	for link, to := range links {
+		if err := os.Symlink(to, filepath.Join(dir, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	digest := func(s string) string {
+		sum := sha256.Sum256([]byte(s))
+
+		return hex.EncodeToString(sum[:])
+	}
+
+	for _, follow := range []bool{true, false} {
+		mark := linkMark
+		if follow {
+			mark = ""
+		}
+
+		want := map[string]string{
+			"copy.txt":    digest("x"),
+			"link.txt":    mark + digest("x"),
+			"tree/in.txt": mark + digest("y"),
+			"empty/":      mark + emptyDirMark,
+		}
+
+		got, err := publishedTree(dir, follow, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("publishedTree(followLinks=%v) (-want +got):\n%s", follow, diff)
+		}
+	}
+}

@@ -1,0 +1,47 @@
+# preflight_ungated: a mapped preflight and a disabled preflight. mrp makes
+# every other call in their pipeline wait for them; mro2nf gates only a plain
+# preflight and runs these in DAG order (#314). The mrp differential shows the
+# outputs and every stage invocation still match.
+stage CHECK(
+    in  int x,
+    src py  "stages/check",
+)
+
+stage DOUBLE(
+    in  int x,
+    out int y,
+    src py  "stages/double",
+)
+
+pipeline PU(
+    in  int[] xs,
+    in  bool  skip_first,
+    out int[] ys,
+)
+{
+    map call CHECK as CHECK_EACH(
+        x = split self.xs,
+    ) using (
+        preflight = true,
+    )
+
+    call CHECK as CHECK_FIRST(
+        x = 1,
+    ) using (
+        preflight = true,
+        disabled  = self.skip_first,
+    )
+
+    map call DOUBLE(
+        x = split self.xs,
+    )
+
+    return (
+        ys = DOUBLE.y,
+    )
+}
+
+call PU(
+    xs         = [1, 2, 3],
+    skip_first = false,
+)

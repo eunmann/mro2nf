@@ -21,14 +21,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
 )
 
 // martianBin resolves the Martian bin dir and, like requireTools, skips the
@@ -107,12 +105,18 @@ func runMrpAt(t *testing.T, bin, dir, mro, tmp string) {
 // execMrp runs mrp as runMrpAt does and returns its combined output, which it
 // also writes to <tmp>/mrp.log, and its error.
 func execMrp(bin, dir, mro, tmp string) ([]byte, error) {
-	// --vdrmode=disable keeps intermediate stage files, which the stage-ABI diff
-	// hashes through the paths in each invocation's _args/_outs; mrp's default
-	// rolling VDR deletes them once their consumers finish. Preflight stages run
-	// (no --nopreflight) because mro2nf runs them, so their invocations pair up.
+	// disable keeps intermediate stage files, which the stage-ABI diff hashes
+	// through the paths in each invocation's _args/_outs; mrp's default rolling
+	// VDR deletes them once their consumers finish.
+	return execMrpVDR(bin, dir, mro, tmp, "disable")
+}
+
+// execMrpVDR is execMrp under the given --vdrmode.
+func execMrpVDR(bin, dir, mro, tmp, vdrMode string) ([]byte, error) {
+	// Preflight stages run (no --nopreflight) because mro2nf runs them, so their
+	// invocations pair up.
 	cmd := exec.Command(filepath.Join(bin, "mrp"), filepath.Join(dir, mro), "mrp",
-		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode=disable")
+		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode="+vdrMode)
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "MROPATH="+dir)
 
@@ -127,18 +131,20 @@ func execMrp(bin, dir, mro, tmp string) ([]byte, error) {
 	return out, nil
 }
 
-// mrpOutsMeta and nfResultsMeta are the runners' own metadata files at the
-// top of a published tree: they describe the outputs rather than being
-// outputs, so tree comparisons drop them — at the root only, because a stage
-// may publish a file of the same name deeper in the tree.
-var (
-	mrpOutsMeta   = []string{"_outs", "manifest.json.gz"}
-	nfResultsMeta = []string{"pipeline_outs.json", "manifest.json.gz"}
-)
+// nfResultsMeta are mro2nf's own metadata files at the root of results/. mrp
+// keeps its outs JSON outside outs/ and writes no manifest, so a tree compared
+// with mrp's drops them only under the allowlist's results-metadata rule, and
+// only at the root, because a stage may publish a file of the same name deeper
+// in the tree.
+var nfResultsMeta = []string{"pipeline_outs.json", "manifest.json.gz"}
 
 // emptyDirMark is hashTree's value for an empty directory, keyed by its path
 // plus a trailing slash so it cannot collide with a file's digest entry.
 const emptyDirMark = "<empty dir>"
+
+// linkMark prefixes publishedTree's value for a file reached through a
+// symlink, so a published link and a published copy of its target differ.
+const linkMark = "<symlink> "
 
 // hashTree maps relpath -> sha256 for every file under dir, plus relpath/ ->
 // emptyDirMark for every empty directory, skipping the rootMeta names at the
@@ -148,11 +154,27 @@ const emptyDirMark = "<empty dir>"
 func hashTree(t *testing.T, dir string, rootMeta ...string) map[string]string {
 	t.Helper()
 
+	tree, err := publishedTree(dir, true, rootMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return tree
+}
+
+// publishedTree is hashTree's map, except that unless followLinks an entry
+// reached through a symlink has linkMark before its value.
+func publishedTree(dir string, followLinks bool, rootMeta []string) (map[string]string, error) {
 	tree := map[string]string{}
 
-	err := walkPublished(dir, rootMeta, func(rel, path string, emptyDir bool) error {
+	err := walkPublished(dir, rootMeta, func(rel, path string, emptyDir, linked bool) error {
+		mark := ""
+		if linked && !followLinks {
+			mark = linkMark
+		}
+
 		if emptyDir {
-			tree[rel+"/"] = emptyDirMark
+			tree[rel+"/"] = mark + emptyDirMark
 
 			return nil
 		}
@@ -163,15 +185,15 @@ func hashTree(t *testing.T, dir string, rootMeta ...string) map[string]string {
 		}
 
 		sum := sha256.Sum256(data)
-		tree[rel] = hex.EncodeToString(sum[:])
+		tree[rel] = mark + hex.EncodeToString(sum[:])
 
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk %s: %v", dir, err)
+		return nil, fmt.Errorf("walk %s: %w", dir, err)
 	}
 
-	return tree
+	return tree, nil
 }
 
 // errUnpublishable reports a tree entry that is neither a file nor a
@@ -180,23 +202,24 @@ var errUnpublishable = errors.New("not a regular file or directory")
 
 // walkPublished calls visit for every file and every empty directory under
 // dir (following symlinks), skipping the rootMeta names directly under dir.
-// An absent dir visits nothing.
-func walkPublished(dir string, rootMeta []string, visit func(rel, path string, emptyDir bool) error) error {
+// linked reports that the entry or a directory above it, below dir, is a
+// symlink. An absent dir visits nothing.
+func walkPublished(dir string, rootMeta []string, visit func(rel, path string, emptyDir, linked bool) error) error {
 	if !fileExists(dir) {
 		return nil
 	}
 
-	return walkPublishedRel(dir, "", rootMeta, visit)
+	return walkPublishedRel(dir, "", false, rootMeta, visit)
 }
 
-func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path string, emptyDir bool) error) error {
+func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit func(rel, path string, emptyDir, linked bool) error) error {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return err
 	}
 
 	if len(entries) == 0 && rel != "" {
-		return visit(rel, path, true)
+		return visit(rel, path, true, linked)
 	}
 
 	for _, e := range entries {
@@ -205,6 +228,7 @@ func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path 
 		}
 
 		child, childRel := filepath.Join(path, e.Name()), filepath.Join(rel, e.Name())
+		childLinked := linked || e.Type()&fs.ModeSymlink != 0
 
 		info, err := os.Stat(child)
 		if err != nil {
@@ -213,9 +237,9 @@ func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path 
 
 		switch {
 		case info.IsDir():
-			err = walkPublishedRel(child, childRel, nil, visit)
+			err = walkPublishedRel(child, childRel, childLinked, nil, visit)
 		case info.Mode().IsRegular():
-			err = visit(childRel, child, false)
+			err = visit(childRel, child, false, childLinked)
 		default:
 			err = fmt.Errorf("%s (%s): %w", child, info.Mode(), errUnpublishable)
 		}
@@ -226,31 +250,6 @@ func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path 
 	}
 
 	return nil
-}
-
-// stripPathPrefix normalizes Martian's _outs values: mrp writes absolute
-// paths into the pipestance outs/ dir, mro2nf writes the same paths relative
-// to its results/ dir, so strings are stripped of the outs-dir prefix
-// recursively. (The Go port of normcmp.py.)
-func stripPathPrefix(v any, prefix string) any {
-	switch x := v.(type) {
-	case string:
-		return strings.TrimPrefix(x, prefix)
-	case []any:
-		for i := range x {
-			x[i] = stripPathPrefix(x[i], prefix)
-		}
-
-		return x
-	case map[string]any:
-		for k := range x {
-			x[k] = stripPathPrefix(x[k], prefix)
-		}
-
-		return x
-	default:
-		return v
-	}
 }
 
 // mrpDiffCase is one fixture of the differential, run from its pipeline.mro
@@ -463,13 +462,21 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "flaky_retry"},
 	// #324: a split returning no chunks still runs the join.
 	{name: "split_no_chunks"},
+	// #332: the stage's output is a symlink to a host file, which mrp
+	// publishes as a link and mro2nf as a copy (allowlist entry
+	// published-symlinks-copied).
+	{name: "symlink_escape"},
+	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
+	{name: "preflight_ungated"},
+	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
+	{name: "vdr_volatile"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
 // their outputs, is compared with mrp's by TestMrpDiffFailureParity: mrp
 // fails each by design, or mro2nf's outcome is a known divergence from mrp's,
-// recorded with its open issue. Fixing the issue fails the case until the
-// divergence is deleted.
+// named by its allowlist entry in divergences.json. Fixing the divergence fails
+// the case until the entry is deleted.
 var mrpOutcomeCases = []mrpOutcomeCase{
 	// An ASSERT in each phase: main, split and join.
 	{name: "assert_min", mrp: failedIn(failAssert, "BOOM")},
@@ -493,7 +500,7 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{
 		name:       "null_disable_gate",
 		mrp:        runOutcome{},
-		divergence: &outcomeDivergence{issue: 253, nf: runOutcome{Failed: true}},
+		divergence: "runtime-null-disable-gate-aborts",
 	},
 }
 
@@ -541,12 +548,12 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 		extra = append(extra, "-mrjob", mrjob)
 	}
 
-	compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, extra))
+	compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, extra))
 
 	if tc.native {
 		t.Run("native", func(t *testing.T) {
 			t.Parallel()
-			compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native")))
+			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native")))
 		})
 	}
 
@@ -566,7 +573,7 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	if tc.inline {
 		t.Run("noinline", func(t *testing.T) {
 			t.Parallel()
-			compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
+			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
 		})
 	}
 }
@@ -583,70 +590,43 @@ func diffNextflow(t *testing.T, fixture, tmp string, flags []string) string {
 		t.Fatalf("nextflow: %v", err)
 	}
 
-	compareMrpToNextflow(t, tmp, proj)
+	compareMrpToNextflow(t, fixture, tmp, proj)
 
 	return proj
 }
 
 // compareStageABI requires every stage phase's normalized _args and _outs to
-// match between the mrp pipestance and the Nextflow work dir (#348), less the
-// known divergences in divergences.json.
-func compareStageABI(t *testing.T, tmp, proj string) {
+// match between the mrp pipestance and the Nextflow work dir of fixture
+// (#348), less what the allowlist excuses, and every allowlist entry scoped to
+// the fixture to excuse something.
+func compareStageABI(t *testing.T, fixture, tmp, proj string) {
 	t.Helper()
 
-	divs, err := loadDivergences(filepath.Join(root, "test", "e2e", "divergences.json"))
+	reports, err := diffStageABI(mustAllowlist(t), fixture, filepath.Join(tmp, "mrp"), proj)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	mrpInvs, err := collectMrpInvocations(filepath.Join(tmp, "mrp"), divs)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	nfInvs, err := collectNextflowInvocations(proj, divs)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, r := range diffABI(mrpInvs, nfInvs) {
+	for _, r := range reports {
 		t.Errorf("stage ABI differs from mrp: %s", r)
 	}
 }
 
 // compareMrpToNextflow diffs the published file tree (paths + contents) and
-// the path-normalized _outs JSON between an mrp pipestance at <tmp>/mrp and
-// a Nextflow project's results/.
-func compareMrpToNextflow(t *testing.T, tmp, proj string) {
+// the outs JSON between fixture's mrp pipestance at <tmp>/mrp and a Nextflow
+// project's results/, less what the allowlist excuses, and requires every
+// issue-tracked rule entry scoped to fixture to excuse something
+// (published_test.go).
+func compareMrpToNextflow(t *testing.T, fixture, tmp, proj string) {
 	t.Helper()
 
-	mrpOuts := filepath.Join(tmp, "mrp", "outs")
-	nfOuts := filepath.Join(proj, "results")
-
-	mrpTree := hashTree(t, mrpOuts, mrpOutsMeta...)
-	nfTree := hashTree(t, nfOuts, nfResultsMeta...)
-
-	if diff := cmp.Diff(mrpTree, nfTree); diff != "" {
-		t.Errorf("published tree differs (-mrp +nextflow):\n%s", diff)
+	reports, err := diffPublished(mustAllowlist(t), fixture, filepath.Join(tmp, "mrp"), filepath.Join(proj, "results"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// Martian rewrites the published outs into the TOP pipeline's fork0
-	// metadata (<pipestance>/<PIPELINE>/fork0/_outs); outs/ holds only the
-	// file tree. Glob results come back sorted, so [0] is deterministic.
-	matches, err := filepath.Glob(filepath.Join(tmp, "mrp", "*", "fork0", "_outs"))
-	if err != nil || len(matches) == 0 {
-		t.Fatalf("no mrp fork0 _outs (glob error: %v)", err)
-	}
-
-	var mrpJSON, nfJSON any
-
-	readJSON(t, matches[0], &mrpJSON)
-	readJSON(t, filepath.Join(nfOuts, "pipeline_outs.json"), &nfJSON)
-
-	mrpJSON = stripPathPrefix(mrpJSON, strings.TrimSuffix(mrpOuts, "/")+"/")
-
-	if diff := cmp.Diff(mrpJSON, nfJSON); diff != "" {
-		t.Errorf("_outs json mismatch (-mrp(normalized) +nextflow):\n%s", diff)
+	for _, r := range reports {
+		t.Error(r)
 	}
 }
 
@@ -660,18 +640,24 @@ func TestMrpDiffFailureParity(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
 	bin := martianBin(t)
+	allow := mustAllowlist(t)
 
 	for _, tc := range mrpOutcomeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			shardSkip(t)
 
+			d, err := tc.validate(allow)
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			tmp := t.TempDir()
 			mrp := mrpRunOutcome(t, bin, tc.name, tmp)
 			proj := transpile(t, tc.name)
-			nf := nextflowRunOutcome(t, proj)
+			nf, attempts := nextflowRunOutcome(t, proj)
 
-			reports := tc.check(mrp, nf)
+			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts)...)
 			for _, r := range reports {
 				t.Error(r)
 			}
@@ -708,17 +694,26 @@ func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
 }
 
 // nextflowRunOutcome runs a transpiled project and classifies the run from the
-// FAILED attempts in its trace.
-func nextflowRunOutcome(t *testing.T, proj string) runOutcome {
+// FAILED attempts in its trace. It also returns the task name of every attempt
+// the trace lists.
+func nextflowRunOutcome(t *testing.T, proj string) (runOutcome, []string) {
 	t.Helper()
 
-	if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
-		return runOutcome{}
+	runErr := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt")
+	rows := readTrace(t, filepath.Join(proj, "trace.txt"))
+
+	attempts := make([]string, len(rows))
+	for i, r := range rows {
+		attempts[i] = r.Name
+	}
+
+	if runErr == nil {
+		return runOutcome{}, attempts
 	}
 
 	var failed []failedAttempt
 
-	for _, r := range readTrace(t, filepath.Join(proj, "trace.txt")) {
+	for _, r := range rows {
 		if r.Status == "FAILED" {
 			failed = append(failed, failedAttempt{Hash: r.Hash, Exit: r.Exit})
 		}
@@ -729,7 +724,7 @@ func nextflowRunOutcome(t *testing.T, proj string) runOutcome {
 		t.Fatal(err)
 	}
 
-	return o
+	return o, attempts
 }
 
 // tailFile is tail for a log file, or a note that it could not be read.

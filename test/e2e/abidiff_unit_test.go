@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -33,16 +34,16 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// TestABINormalizeCanonicalJSON checks key order is canonicalized while every
-// number keeps its source token, so int-vs-float and big-int precision stay
-// visible.
+// TestABINormalizeCanonicalJSON checks the compact form keeps key order and
+// every number's source token, so key order, int-vs-float and big-int
+// precision stay visible.
 func TestABINormalizeCanonicalJSON(t *testing.T) {
 	cases := []struct {
 		name string
 		in   string
 		want string
 	}{
-		{name: "sorted_keys", in: `{"b": 1, "a": {"y": true, "x": null}}`, want: `{"a":{"x":null,"y":true},"b":1}`},
+		{name: "key_order_kept", in: `{"b": 1, "a": {"y": true, "x": null}}`, want: `{"b":1,"a":{"y":true,"x":null}}`},
 		{name: "float_token_kept", in: `{"x": 1.0}`, want: `{"x":1.0}`},
 		{name: "exponent_token_kept", in: `{"x": 1e6}`, want: `{"x":1e6}`},
 		{name: "big_int_exact", in: `{"x": 9007199254740993}`, want: `{"x":9007199254740993}`},
@@ -84,8 +85,21 @@ func TestABINormalizeIntVsFloatDiffer(t *testing.T) {
 	}
 }
 
+// TestABINormalizeSortKeys checks the key-order rule sorts the keys of every
+// object, nested ones included, and leaves array order alone.
+func TestABINormalizeSortKeys(t *testing.T) {
+	got, err := abiNormalizer{sortKeys: true}.normalize([]byte(`{"b": [{"z": 1, "y": 2}, 0], "a": {"d": 1, "c": 2}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := `{"a":{"c":2,"d":1},"b":[{"y":2,"z":1},0]}`; got != want {
+		t.Errorf("normalize = %s, want %s", got, want)
+	}
+}
+
 func TestABINormalizeRejectsMalformed(t *testing.T) {
-	for _, in := range []string{`{"x": `, `{"x": 1} {"y": 2}`} {
+	for _, in := range []string{`{"x": `, `{"x": 1} {"y": 2}`, `{"x": 1}]`, `[1, 2`} {
 		if _, err := (abiNormalizer{}).normalize([]byte(in)); err == nil {
 			t.Errorf("normalize(%q) succeeded, want an error", in)
 		}
@@ -229,44 +243,13 @@ func TestHashDirTree(t *testing.T) {
 	}
 }
 
-func TestLoadDivergencesCheckedIn(t *testing.T) {
-	if _, err := loadDivergences("divergences.json"); err != nil {
-		t.Fatalf("load checked-in divergences: %v", err)
-	}
-}
-
-func TestLoadDivergencesRejectsInvalid(t *testing.T) {
-	cases := []struct {
-		name string
-		doc  string
-	}{
-		{name: "no_issue", doc: `{"divergences":[{"summary":"s","file":"_args","rule":"ignore-key","key":"k"}]}`},
-		{name: "no_summary", doc: `{"divergences":[{"issue":1,"file":"_args","rule":"ignore-key","key":"k"}]}`},
-		{name: "bad_file", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_jobinfo","rule":"ignore-key","key":"k"}]}`},
-		{name: "unknown_rule", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore","key":"k"}]}`},
-		{name: "unknown_field", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore-key","key":"k","stage":"X"}]}`},
-		{name: "ignore_key_no_key", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore-key"}]}`},
-		{name: "ceil_no_key", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ceil-number"}]}`},
-		{name: "malformed", doc: `{"divergences":[`},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			path := writeABITestFile(t, filepath.Join(t.TempDir(), "d.json"), tc.doc)
-			if _, err := loadDivergences(path); err == nil {
-				t.Errorf("loadDivergences accepted %s", tc.doc)
-			}
-		})
-	}
-}
-
 // TestABINormalizeKeyRules checks ignore-key and ceil-number touch only the
 // named top-level key of the named file.
 func TestABINormalizeKeyRules(t *testing.T) {
-	divs := []divergence{
-		{Issue: 1, Summary: "s", File: argsFile, Rule: ruleIgnoreKey, Key: "__special"},
-		{Issue: 2, Summary: "s", File: argsFile, Rule: ruleCeilKey, Key: "__threads"},
-	}
+	divs := abiRules{keys: []divergence.ABIMatcher{
+		{Fixtures: []string{"f"}, File: argsFile, Rule: divergence.ABIIgnoreKey, Key: "__special"},
+		{Fixtures: []string{"f"}, File: argsFile, Rule: divergence.ABICeilNumber, Key: "__threads"},
+	}}
 
 	const doc = `{"__special":"gpu","__threads":0.5,"__mem_gb":0.5,"x":{"__special":"gpu","__threads":0.5}}`
 
@@ -274,8 +257,8 @@ func TestABINormalizeKeyRules(t *testing.T) {
 		file string
 		want string
 	}{
-		{argsFile, `{"__mem_gb":0.5,"__threads":1,"x":{"__special":"gpu","__threads":0.5}}`},
-		{outsFile, `{"__mem_gb":0.5,"__special":"gpu","__threads":0.5,"x":{"__special":"gpu","__threads":0.5}}`},
+		{argsFile, `{"__threads":1,"__mem_gb":0.5,"x":{"__special":"gpu","__threads":0.5}}`},
+		{outsFile, doc},
 	}
 
 	for _, tc := range cases {
@@ -347,7 +330,7 @@ func groupCounts(invs []abiInvocation) []abiGroupCount {
 // three chunks and join all ran, while the non-split REPORT ran only chnk0 (its
 // split/ and join/ dirs hold bookkeeping no stage code saw).
 func TestCollectMrpInvocations(t *testing.T) {
-	invs, err := collectMrpInvocations(filepath.Join("..", "..", "testdata", "split_test", "expected"), nil)
+	invs, err := collectMrpInvocations(filepath.Join("..", "..", "testdata", "split_test", "expected"), abiRules{})
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -407,7 +390,7 @@ func TestCollectNextflowInvocations(t *testing.T) {
 	task("ok2", "0\n", phaseJoin, "SUM")
 	task("failed", "1", phaseMain, "SUM")
 
-	invs, err := collectNextflowInvocations(proj, nil)
+	invs, err := collectNextflowInvocations(proj, abiRules{})
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -419,7 +402,7 @@ func TestCollectNextflowInvocations(t *testing.T) {
 
 	task("anon", "0", phaseMain, "")
 
-	if _, err := collectNextflowInvocations(proj, nil); !errors.Is(err, errABIMeta) {
+	if _, err := collectNextflowInvocations(proj, abiRules{}); !errors.Is(err, errABIMeta) {
 		t.Errorf("empty stage name: err = %v, want errABIMeta", err)
 	}
 }
@@ -482,6 +465,117 @@ func TestDiffABI(t *testing.T) {
 				if !strings.Contains(got, want) {
 					t.Errorf("report lacks %q:\n%s", want, got)
 				}
+			}
+		})
+	}
+}
+
+// abiPair is one CONS main invocation as mrp leaves it in a pipestance and as
+// mre leaves it in a Nextflow project.
+type abiPair struct {
+	ps, proj string
+}
+
+func writeABIPair(t *testing.T, mrpArgs, nfArgs string) abiPair {
+	t.Helper()
+
+	p := abiPair{ps: t.TempDir(), proj: t.TempDir()}
+	fork := filepath.Join(p.ps, "P", "CONS", "fork0")
+	chunk := filepath.Join(fork, "chnk0-u1c28cb18e6")
+	task := filepath.Join(p.proj, "work", "ab", "cdef1234")
+
+	writeABITestFile(t, filepath.Join(fork, "_invocation"), "call CONS(\n    s = PROD.s,\n)\n")
+	writeABITestFile(t, filepath.Join(chunk, "_jobinfo"), "{}")
+	writeABITestFile(t, filepath.Join(chunk, argsFile), mrpArgs)
+	writeABITestFile(t, filepath.Join(chunk, outsFile), `{"keys": ["b", "a"]}`)
+	writeABITestFile(t, filepath.Join(task, ".exitcode"), "0")
+	writeABITestFile(t, filepath.Join(task, phaseMain, mreStageFile), "CONS")
+	writeABITestFile(t, filepath.Join(task, phaseMain, argsFile), nfArgs)
+	writeABITestFile(t, filepath.Join(task, phaseMain, outsFile), `{"keys":["b","a"]}`)
+
+	return p
+}
+
+func (p abiPair) diff(t *testing.T, allow divergence.Allowlist, fixture string) string {
+	t.Helper()
+
+	reports, err := diffStageABI(allow, fixture, p.ps, p.proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.Join(reports, "\n")
+}
+
+// TestRemovingAnABIEntryFailsTheComparison compares the consumer _args a real
+// mrp 4a558e7 run and an mro2nf run gave a stage whose struct input's producer
+// wrote {"b": 1, "a": 2}: mrp keeps the producer's order, mro2nf sorts it
+// (#366). The checked-in allowlist excuses that on a fixture its entry names;
+// without the entry, or on a fixture outside its scope, the comparison fails,
+// and on its own fixture a pair whose orders agree fails as an entry that
+// excuses nothing.
+func TestRemovingAnABIEntryFailsTheComparison(t *testing.T) {
+	const mrpArgs = `{"__mem_gb": 1, "__threads": 1, "__vmem_gb": 4, "m": {"y": 2, "z": 1}, "s": {"b": 1, "a": 2}}`
+
+	pair := writeABIPair(t, mrpArgs, `{"__mem_gb":1,"__threads":1,"__vmem_gb":4,"m":{"y":2,"z":1},"s":{"a":2,"b":1}}`)
+	agreeing := writeABIPair(t, mrpArgs, `{"__mem_gb":1,"__threads":1,"__vmem_gb":4,"m":{"y":2,"z":1},"s":{"b":1,"a":2}}`)
+	allow := mustAllowlist(t)
+
+	cases := []struct {
+		name    string
+		pair    abiPair
+		allow   divergence.Allowlist
+		fixture string
+		want    string
+	}{
+		{"excused", pair, allow, "nested_struct", ""},
+		{"entry_removed", pair, allow.Without("abi-object-key-order"), "nested_struct", "CONS main"},
+		{"out_of_scope", pair, allow, "file_min", "CONS main"},
+		{"excuses_nothing", agreeing, allow, "nested_struct", "abi-object-key-order excuses nothing in nested_struct"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.pair.diff(t, tc.allow, tc.fixture)
+			if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+				t.Errorf("reports %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestABIKeyEntryScopedAndStale checks a key-matcher entry excuses its key in
+// the fixtures it names and nowhere else, that removing it fails the
+// comparison, and that the comparison reports it once it excuses nothing.
+func TestABIKeyEntryScopedAndStale(t *testing.T) {
+	allow, err := divergence.Parse([]byte(`{"divergences": [{"id": "special-dropped", "kind": "abi",
+		"feature": "f", "summary": "s", "justification": "j", "issue": 1, "evidence": ["TestMrpDiff"],
+		"abi": {"fixtures": ["fx"], "file": "_args", "rule": "ignore-key", "key": "__special"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	differ := writeABIPair(t, `{"__special": "gpu", "n": 1}`, `{"n": 1}`)
+	same := writeABIPair(t, `{"n": 1}`, `{"n": 1}`)
+
+	cases := []struct {
+		name    string
+		pair    abiPair
+		fixture string
+		allow   divergence.Allowlist
+		want    string
+	}{
+		{"excused", differ, "fx", allow, ""},
+		{"other_fixture", differ, "other", allow, "CONS main"},
+		{"entry_removed", differ, "fx", allow.Without("special-dropped"), "CONS main"},
+		{"stale", same, "fx", allow, "special-dropped excuses nothing in fx"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.pair.diff(t, tc.allow, tc.fixture)
+			if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+				t.Errorf("reports %q, want %q", got, tc.want)
 			}
 		})
 	}

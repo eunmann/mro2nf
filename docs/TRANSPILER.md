@@ -831,13 +831,15 @@ feature is checked against the real `mrp` output. The validation tiers:
   and `file[]`/`map<file>`/struct file inputs from S3, data-dependent splits,
   and stage logs. See [`LIVE_AWS_TEST.md`](LIVE_AWS_TEST.md).
 
-The known **divergences** are documented in [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md)
-and are all behavior-only (never output-affecting): a `preflight` bound to
-pipeline inputs gates the rest of the pipeline (mrp's early abort), but a
-mapped, disabled, or call-output-bound one runs in plain DAG order;
-`local`/`volatile` are no-ops
-(no VDR / mid-run work-dir reclamation); and the published `outs/` tree is
-copied into place rather than mrp's move+symlink (same layout and contents).
+The known **divergences** are the allowlist `test/e2e/divergences.json`, which
+the differential applies and which generates the
+[divergence table of `FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md#divergences-from-mrp).
+Some change only how the outputs are reached: `local`, `volatile` and `retain`
+are no-ops (no VDR / mid-run work-dir reclamation), the published `outs/` tree
+is copied into place rather than moved and symlinked, `-resume` is Nextflow's
+content-addressed cache, and a mapped or disabled `preflight` runs in plain DAG
+order. Others are real output or outcome differences, each with its tracking
+issue or the reason it is kept.
 The transpiler is **loud** about anything it cannot lower faithfully —
 unsupported constructs are hard transpile errors, and documented behavioral
 no-ops are logged as warnings at transpile time.

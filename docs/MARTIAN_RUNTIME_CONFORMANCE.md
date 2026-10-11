@@ -318,32 +318,43 @@ and fixed. Only 7–9 remain, as documented, bounded divergences.
 
 `make test-mrp-diff` (the Go `TestMrpDiff` suite) runs each fixture through **real
 `mrp`** and the transpiled Nextflow, then compares the published `outs/` tree —
-every output file's path (relative to the outs dir) and its content hash — and
-the path-normalized `_outs` JSON. This validates the whole transpile + runtime +
+every output file's path (relative to the outs dir), its content hash, and
+whether it was published as a symlink — and the `_outs` JSON
+(`test/e2e/published_test.go`). This validates the whole transpile + runtime +
 publish path against Martian itself, not a hand-written golden.
 
 It also diffs the **stage ABI**: every split, main (per chunk and fork) and join
 that ran under `mrp` must have a twin under mro2nf with the same `_args` and
 `_outs`, and vice versa (`test/e2e/abidiff_test.go`). Invocations are matched as a
 multiset per (stage, phase), not through the task graph. Both files are
-canonicalized (sorted keys, number tokens byte-exact); an existing absolute path
-becomes its content hash (a tree hash for a directory) plus its basename, and an
-absent path under the phase's own `files` dir loses that host prefix. `mrp` runs
-with `--vdrmode=disable` so intermediate files still exist to hash. The
-`-native-runner` leg is excluded: it calls stage functions in-process and writes
-no `_args`/`_outs`. Known divergences live in `test/e2e/divergences.json`, one
-entry per open issue with the normalization rule it needs; fixing the issue means
-deleting its entry.
+compacted with object key order and number tokens byte-exact; an existing
+absolute path becomes its content hash (a tree hash for a directory) plus its
+basename, and an absent path under the phase's own `files` dir loses that host
+prefix. `mrp` runs with `--vdrmode=disable` so intermediate files still exist to
+hash. The `-native-runner` leg is excluded: it calls stage functions in-process
+and writes no `_args`/`_outs`. Every known divergence lives in one allowlist, `test/e2e/divergences.json`
+(`test/divergence` loads and validates it), and the comparison excuses a
+difference only through an entry there: a key-scoped ABI entry names its
+fixtures, file, rule and key, and a normalization built into a comparator (such
+as sorting object keys while #366 is open) applies only while its entry exists.
+An entry with an issue is temporary, one without is intentional and applies on
+every fixture. A key-scoped entry, and an issue-tracked comparator-rule entry,
+names the fixtures where it must excuse a difference and applies only there;
+the comparison of a fixture it no longer excuses anything in fails, so it
+cannot outlive its bug. `make docs-divergences` renders the allowlist as the
+divergence table of [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md#divergences-from-mrp),
+and `make test` fails while the checked-in table is stale.
 
 Whether a run fails is part of the contract too. `TestMrpDiffFailureParity` runs
 each fixture `mrp` fails on by design (`mrpOutcomeCases`) under both runners and
 requires mro2nf to fail exactly when `mrp` does (#349). Both runs must also blame
 the same stages, and each failure must be the same kind: an ASSERT (`mrp`'s
 `_assert`, mre's exit 42) or an error (`mrp`'s `_errors`, any other exit). Message
-text, phase, chunk index and attempt count are not compared
-(`test/e2e/outcome_test.go` gives the reasons). A known difference is recorded
-on its case with the open issue and the outcome mro2nf gives instead. The case
-then fails once mro2nf matches `mrp`, so the record cannot outlive the bug.
+text, phase and chunk index are not compared, and a retried task's failures
+count once; both are allowlist entries (`test/e2e/outcome_test.go` gives the
+reasons). A known difference in one fixture's outcome is an allowlist entry
+holding the outcome mro2nf gives instead, which the case names by id. The case
+then fails once mro2nf matches `mrp`, so the entry cannot outlive the bug.
 
 It needs a Martian build: set `MARTIAN_BIN` (default `~/workdir/martian/bin`,
 which holds `mrp`/`mrjob`). `make test-e2e` includes it, so it gates every PR: the

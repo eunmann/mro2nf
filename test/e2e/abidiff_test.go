@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -41,15 +42,6 @@ const (
 	// absentMeta stands in for a metadata file a phase did not write (a split
 	// phase has no _outs on either runtime).
 	absentMeta = "<absent>"
-
-	// ruleIgnoreKey drops the top-level key the divergence names from the file
-	// on both sides.
-	ruleIgnoreKey = "ignore-key"
-
-	// ruleCeilKey replaces a fractional value of the numeric top-level key the
-	// divergence names with its ceiling, so it equals the whole number it rounds
-	// up to; integral tokens are kept, so 1 and 1.0 still differ.
-	ruleCeilKey = "ceil-number"
 )
 
 // errABIMeta reports metadata the differential cannot attribute or decode.
@@ -69,58 +61,22 @@ func (inv abiInvocation) group() string { return inv.Stage + " " + inv.Phase }
 
 func (inv abiInvocation) value() string { return inv.Args + "\x00" + inv.Outs }
 
-// divergence is one known difference between mrp and mro2nf in the stage ABI.
-// Each names the open issue that tracks it; fixing the issue means deleting the
-// entry, after which the differential checks the field again.
-type divergence struct {
-	Issue   int    `json:"issue"`
-	Summary string `json:"summary"`
-	File    string `json:"file"`
-	Rule    string `json:"rule"`
-	Key     string `json:"key,omitempty"`
+// abiRules are the allowlist entries the ABI comparison of one fixture
+// applies.
+type abiRules struct {
+	keys     []divergence.ABIMatcher
+	sortKeys bool
 }
 
-// loadDivergences reads and validates the checked-in divergence list.
-func loadDivergences(path string) ([]divergence, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read divergences: %w", err)
+// abiRulesFor collects the entries of allow that apply to fixture.
+func abiRulesFor(allow divergence.Allowlist, fixture string) abiRules {
+	r := abiRules{sortKeys: allow.Excuses(divergence.RuleABISortKeys, fixture)}
+
+	for _, e := range allow.ABI(fixture) {
+		r.keys = append(r.keys, *e.ABI)
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-
-	var doc struct {
-		Divergences []divergence `json:"divergences"`
-	}
-	if err := dec.Decode(&doc); err != nil {
-		return nil, fmt.Errorf("parse divergences: %w", err)
-	}
-
-	for i, d := range doc.Divergences {
-		if err := d.validate(); err != nil {
-			return nil, fmt.Errorf("divergence %d: %w", i, err)
-		}
-	}
-
-	return doc.Divergences, nil
-}
-
-func (d divergence) validate() error {
-	switch {
-	case d.Issue <= 0:
-		return fmt.Errorf("%w: no tracking issue", errABIMeta)
-	case d.Summary == "":
-		return fmt.Errorf("%w: #%d has no summary", errABIMeta, d.Issue)
-	case d.File != argsFile && d.File != outsFile:
-		return fmt.Errorf("%w: #%d file %q is not %s or %s", errABIMeta, d.Issue, d.File, argsFile, outsFile)
-	case d.Rule != ruleIgnoreKey && d.Rule != ruleCeilKey:
-		return fmt.Errorf("%w: #%d unknown rule %q", errABIMeta, d.Issue, d.Rule)
-	case d.Key == "":
-		return fmt.Errorf("%w: #%d rule %q needs a key", errABIMeta, d.Issue, d.Rule)
-	default:
-		return nil
-	}
+	return r
 }
 
 // abiNormalizer rewrites one metadata file's JSON into a form that is equal
@@ -132,21 +88,22 @@ type abiNormalizer struct {
 	ownFiles   []string
 	ignoreKeys []string
 	ceilKeys   []string
+	sortKeys   bool
 }
 
-func newABINormalizer(ownFiles []string, file string, divs []divergence) abiNormalizer {
-	n := abiNormalizer{ownFiles: ownFiles}
+func newABINormalizer(ownFiles []string, file string, rules abiRules) abiNormalizer {
+	n := abiNormalizer{ownFiles: ownFiles, sortKeys: rules.sortKeys}
 
-	for _, d := range divs {
-		if d.File != file {
+	for _, m := range rules.keys {
+		if m.File != file {
 			continue
 		}
 
-		switch d.Rule {
-		case ruleIgnoreKey:
-			n.ignoreKeys = append(n.ignoreKeys, d.Key)
-		case ruleCeilKey:
-			n.ceilKeys = append(n.ceilKeys, d.Key)
+		switch m.Rule {
+		case divergence.ABIIgnoreKey:
+			n.ignoreKeys = append(n.ignoreKeys, m.Key)
+		case divergence.ABICeilNumber:
+			n.ceilKeys = append(n.ceilKeys, m.Key)
 		}
 	}
 
@@ -156,33 +113,30 @@ func newABINormalizer(ownFiles []string, file string, divs []divergence) abiNorm
 // topLevelKeys applies the key-scoped rules to a decoded document's top-level
 // object; nested keys of the same name are left alone.
 func (n abiNormalizer) topLevelKeys(v any) (any, error) {
-	obj, ok := v.(map[string]any)
+	obj, ok := v.(jsonObject)
 	if !ok {
 		return v, nil
 	}
 
-	for _, k := range n.ignoreKeys {
-		delete(obj, k)
-	}
+	obj = slices.DeleteFunc(obj, func(m jsonMember) bool { return slices.Contains(n.ignoreKeys, m.Key) })
 
-	for _, k := range n.ceilKeys {
-		raw, present := obj[k]
-		if !present {
+	for i, m := range obj {
+		if !slices.Contains(n.ceilKeys, m.Key) {
 			continue
 		}
 
-		num, isNum := raw.(json.Number)
+		num, isNum := m.Value.(json.Number)
 		if !isNum {
-			return nil, fmt.Errorf("%w: %s is %v, not a number", errABIMeta, k, raw)
+			return nil, fmt.Errorf("%w: %s is %v, not a number", errABIMeta, m.Key, m.Value)
 		}
 
 		f, err := num.Float64()
 		if err != nil {
-			return nil, fmt.Errorf("%w: %s: %w", errABIMeta, k, err)
+			return nil, fmt.Errorf("%w: %s: %w", errABIMeta, m.Key, err)
 		}
 
 		if f != math.Trunc(f) {
-			obj[k] = json.Number(strconv.FormatFloat(math.Ceil(f), 'f', -1, 64))
+			obj[i].Value = json.Number(strconv.FormatFloat(math.Ceil(f), 'f', -1, 64))
 		}
 	}
 
@@ -190,74 +144,30 @@ func (n abiNormalizer) topLevelKeys(v any) (any, error) {
 }
 
 // normalize decodes raw with numbers kept as their source token (an int-vs-float
-// change is exactly what the differential must catch), rewrites path strings, and
-// re-encodes with sorted keys.
+// change is exactly what the differential must catch) and objects in member
+// order, rewrites path strings, and re-encodes it, sorting object keys only
+// under the allowlist's key-order rule.
 func (n abiNormalizer) normalize(raw []byte) (string, error) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-
-	var v any
-	if err := dec.Decode(&v); err != nil {
+	v, err := decodeOrderedJSON(raw)
+	if err != nil {
 		return "", fmt.Errorf("decode: %w", err)
 	}
 
-	if dec.More() {
-		return "", fmt.Errorf("%w: trailing data after JSON value", errABIMeta)
-	}
-
-	v, err := n.topLevelKeys(v)
+	v, err = n.topLevelKeys(v)
 	if err != nil {
 		return "", err
 	}
 
-	v, err = n.value(v)
+	v, err = mapJSONStrings(v, n.path)
 	if err != nil {
 		return "", err
 	}
 
-	var buf bytes.Buffer
-
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-
-	if err := enc.Encode(v); err != nil {
-		return "", fmt.Errorf("encode: %w", err)
+	if n.sortKeys {
+		v = sortJSONKeys(v)
 	}
 
-	return strings.TrimSuffix(buf.String(), "\n"), nil
-}
-
-// value normalizes one JSON value. The recursion is bounded by the document's
-// nesting depth, which encoding/json caps at 10000.
-func (n abiNormalizer) value(v any) (any, error) {
-	switch x := v.(type) {
-	case string:
-		return n.path(x)
-	case []any:
-		for i := range x {
-			nv, err := n.value(x[i])
-			if err != nil {
-				return nil, err
-			}
-
-			x[i] = nv
-		}
-
-		return x, nil
-	case map[string]any:
-		for k := range x {
-			nv, err := n.value(x[k])
-			if err != nil {
-				return nil, err
-			}
-
-			x[k] = nv
-		}
-
-		return x, nil
-	default:
-		return v, nil
-	}
+	return encodeOrderedJSON(v)
 }
 
 // path replaces an absolute path that exists with its content identity plus the
@@ -378,7 +288,7 @@ func hashDirTree(dir string) (string, error) {
 // readABIInvocation reads and normalizes one phase metadata dir. _args is
 // required (both runtimes write it before the stage runs); a missing _outs is
 // recorded as absent so a phase that writes one on only one side still differs.
-func readABIInvocation(stage, phase, meta string, ownFiles []string, divs []divergence) (abiInvocation, error) {
+func readABIInvocation(stage, phase, meta string, ownFiles []string, rules abiRules) (abiInvocation, error) {
 	inv := abiInvocation{Stage: stage, Phase: phase, Origin: meta}
 
 	for _, f := range []struct {
@@ -396,7 +306,7 @@ func readABIInvocation(stage, phase, meta string, ownFiles []string, divs []dive
 			return abiInvocation{}, fmt.Errorf("read %s: %w", f.name, err)
 		}
 
-		norm, err := newABINormalizer(ownFiles, f.name, divs).normalize(raw)
+		norm, err := newABINormalizer(ownFiles, f.name, rules).normalize(raw)
 		if err != nil {
 			return abiInvocation{}, fmt.Errorf("normalize %s/%s: %w", meta, f.name, err)
 		}
@@ -419,7 +329,7 @@ var (
 // collectMrpInvocations walks an mrp pipestance for every phase that ran. A
 // phase ran when it has a _jobinfo: mrp also lays out split/ and join/ dirs for
 // a non-split stage, holding bookkeeping _args/_outs no stage code saw.
-func collectMrpInvocations(ps string, divs []divergence) ([]abiInvocation, error) {
+func collectMrpInvocations(ps string, rules abiRules) ([]abiInvocation, error) {
 	var invs []abiInvocation
 
 	err := filepath.WalkDir(ps, func(p string, d fs.DirEntry, err error) error {
@@ -446,7 +356,7 @@ func collectMrpInvocations(ps string, divs []divergence) ([]abiInvocation, error
 
 		own := []string{filepath.Join(p, "files"), filepath.Join(fork, m[1], "files")}
 
-		inv, err := readABIInvocation(stage, phase, p, own, divs)
+		inv, err := readABIInvocation(stage, phase, p, own, rules)
 		if err != nil {
 			return err
 		}
@@ -480,7 +390,7 @@ func mrpStageName(fork string) (string, error) {
 // (<work>/<xx>/<hash>/<phase>/). Only tasks that exited 0 count: a retried
 // attempt leaves its failed task dir behind, and that run's outputs never
 // reached the pipeline.
-func collectNextflowInvocations(proj string, divs []divergence) ([]abiInvocation, error) {
+func collectNextflowInvocations(proj string, rules abiRules) ([]abiInvocation, error) {
 	stamps, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "*", mreStageFile))
 	if err != nil {
 		return nil, fmt.Errorf("glob stage stamps: %w", err)
@@ -510,7 +420,7 @@ func collectNextflowInvocations(proj string, divs []divergence) ([]abiInvocation
 			return nil, fmt.Errorf("%w: empty stage name in %s", errABIMeta, stamp)
 		}
 
-		inv, err := readABIInvocation(string(stage), phase, meta, []string{filepath.Join(meta, "files")}, divs)
+		inv, err := readABIInvocation(string(stage), phase, meta, []string{filepath.Join(meta, "files")}, rules)
 		if err != nil {
 			return nil, err
 		}
@@ -525,6 +435,44 @@ func regularFileExists(path string) bool {
 	info, err := os.Stat(path)
 
 	return err == nil && info.Mode().IsRegular()
+}
+
+// diffStageABI compares every stage phase of the mrp pipestance ps with the
+// Nextflow project proj, applying the allowlist entries that cover fixture. It
+// also reports each fixture-scoped entry whose removal would change nothing, so
+// an entry cannot outlive the divergence it excuses.
+func diffStageABI(allow divergence.Allowlist, fixture, ps, proj string) ([]string, error) {
+	reports, err := diffStageABIUnder(abiRulesFor(allow, fixture), ps, proj)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, e := range slices.Concat(allow.ABI(fixture), allow.ScopedRules(divergence.KindABI, fixture)) {
+		without, err := diffStageABIUnder(abiRulesFor(allow.Without(e.ID), fixture), ps, proj)
+		if err != nil {
+			return nil, err
+		}
+
+		if slices.Equal(without, reports) {
+			reports = append(reports, fmt.Sprintf("allowlist entry %s excuses nothing in %s; delete it or narrow its fixtures", e.ID, fixture))
+		}
+	}
+
+	return reports, nil
+}
+
+func diffStageABIUnder(rules abiRules, ps, proj string) ([]string, error) {
+	mrp, err := collectMrpInvocations(ps, rules)
+	if err != nil {
+		return nil, err
+	}
+
+	nf, err := collectNextflowInvocations(proj, rules)
+	if err != nil {
+		return nil, err
+	}
+
+	return diffABI(mrp, nf), nil
 }
 
 // diffABI reports each (stage, phase) group whose invocation multisets differ.

@@ -1,0 +1,263 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/eunmann/mro2nf/test/divergence"
+)
+
+// publishedPair lays out, as an mrp pipestance and an mro2nf results dir,
+// what the two runtimes published for a pipeline with a plain file output, a
+// file output the stage wrote as a symlink to a host file (as symlink_escape
+// does), a file output the stage wrote as a relative symlink to a link to a
+// host file, and a struct output whose producer wrote its keys unsorted (as
+// kitchen_sink's stats, so pairFixture). It returns the pipestance and results
+// dirs.
+func publishedPair(t *testing.T) (string, string) {
+	t.Helper()
+
+	ps, results := t.TempDir(), t.TempDir()
+	outs := filepath.Join(ps, "outs")
+	host := writeABITestFile(t, filepath.Join(t.TempDir(), "host.py"), "print('linked')\n")
+
+	writeABITestFile(t, filepath.Join(outs, "note.txt"), "21.0")
+
+	if err := os.Symlink(host, filepath.Join(outs, "linked.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	chained := mrpChainedOutput(t, ps)
+
+	mrpOuts, err := json.Marshal(map[string]string{"chained": chained, "linked": host, "note": filepath.Join(outs, "note.txt")})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeABITestFile(t, filepath.Join(ps, "P", "fork0", "_outs"),
+		string(mrpOuts[:len(mrpOuts)-1])+`, "stats": {"count": 4, "total": 10.0, "mean": 2.5}}`)
+
+	writeABITestFile(t, filepath.Join(results, "note.txt"), "21.0")
+	writeABITestFile(t, filepath.Join(results, "linked.txt"), "print('linked')\n")
+	writeABITestFile(t, filepath.Join(results, "chained.txt"), "chained\n")
+	writeABITestFile(t, filepath.Join(results, "manifest.json.gz"), "index")
+	writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"),
+		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10.0}}`)
+
+	return ps, results
+}
+
+// pairFixture is the fixture publishedPair stands in for: one the
+// outs-json-object-key-order entry is scoped to.
+const pairFixture = "kitchen_sink"
+
+// mrpChainedOutput lays out under the pipestance ps what mrp publishes for a
+// stage output that is a relative symlink to a link to a host file: outs/
+// links to the intermediate link and the outs JSON names the host file
+// (martian/core/post_process.go copyOutSymlink). It returns the host file.
+func mrpChainedOutput(t *testing.T, ps string) string {
+	t.Helper()
+
+	host := writeABITestFile(t, filepath.Join(t.TempDir(), "chained.txt"), "chained\n")
+	files := filepath.Join(ps, "P", "CHAIN", "fork0", "files")
+	staged := filepath.Join(files, "staged.txt")
+
+	if err := os.MkdirAll(files, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, link := range [][2]string{
+		{host, staged},
+		{"staged.txt", filepath.Join(files, "chained.txt")},
+		{staged, filepath.Join(ps, "outs", "chained.txt")},
+	} {
+		if err := os.Symlink(link[0], link[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return host
+}
+
+// TestRemovingAPublishedTreeEntryFailsTheComparison runs the published-output
+// comparison on publishedPair: the checked-in allowlist excuses every
+// difference, and removing any published-tree entry makes it fail.
+func TestRemovingAPublishedTreeEntryFailsTheComparison(t *testing.T) {
+	allow := mustAllowlist(t)
+	ps, results := publishedPair(t)
+
+	if reports, err := diffPublished(allow, pairFixture, ps, results); err != nil || len(reports) > 0 {
+		t.Fatalf("the checked-in allowlist leaves reports %q (err %v)", reports, err)
+	}
+
+	for _, e := range allow.Entries() {
+		if e.Kind != divergence.KindPublishedTree {
+			continue
+		}
+
+		t.Run(e.ID, func(t *testing.T) {
+			reports, err := diffPublished(allow.Without(e.ID), pairFixture, ps, results)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if len(reports) == 0 {
+				t.Errorf("the comparison passes without entry %s", e.ID)
+			}
+		})
+	}
+}
+
+// TestScopedRuleEntryFailsWhereItExcusesNothing runs the published-output
+// comparison with the checked-in key-order entry: on a fixture outside its
+// scope the unsorted struct is a difference, and on its own fixture a pair
+// whose keys already agree fails as an entry that excuses nothing.
+func TestScopedRuleEntryFailsWhereItExcusesNothing(t *testing.T) {
+	allow := mustAllowlist(t)
+	ps, results := publishedPair(t)
+
+	cases := []struct {
+		name, fixture, nfStats, want string
+	}{
+		{"out_of_scope", "file_min", `{"count": 4, "mean": 2.5, "total": 10.0}`, "_outs json mismatch"},
+		{
+			"excuses_nothing", pairFixture, `{"count": 4, "total": 10.0, "mean": 2.5}`,
+			"allowlist entry outs-json-object-key-order excuses nothing in " + pairFixture,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"),
+				`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": `+tc.nfStats+`}`)
+
+			reports, err := diffPublished(allow, tc.fixture, ps, results)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := strings.Join(reports, "\n"); len(reports) != 1 || !strings.Contains(got, tc.want) {
+				t.Errorf("reports %q, want one containing %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormcmpAppliesTheAllowlist runs normcmp.py, the AWS lanes' outs JSON
+// comparator, on the outs JSON of publishedPair: it matches under the
+// checked-in allowlist, fails without any of its entries or on a fixture
+// outside the key-order entry's scope, and fails on a number token change the
+// allowlist does not excuse.
+func TestNormcmpAppliesTheAllowlist(t *testing.T) {
+	requireTools(t, "python3")
+
+	ps, results := publishedPair(t)
+	mrpOuts := filepath.Join(ps, "outs")
+	mrpJSON := filepath.Join(ps, "P", "fork0", "_outs")
+	nfJSON := filepath.Join(results, "pipeline_outs.json")
+	intJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_int.json"),
+		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10}}`)
+
+	checkedIn := filepath.Join(root, "test", "e2e", allowlistFile)
+
+	cases := []struct {
+		name, fixture, nf, allowlist string
+		match                        bool
+	}{
+		{"checked_in", pairFixture, nfJSON, checkedIn, true},
+		{"key_order_out_of_scope", "file_min", nfJSON, checkedIn, false},
+		{"number_token", pairFixture, intJSON, checkedIn, false},
+		{"without_relative_paths", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "outs-json-relative-paths"), false},
+		{"without_key_order", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "outs-json-object-key-order"), false},
+		{"without_published_symlinks", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "published-symlinks-copied"), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "normcmp.py"), mrpJSON, mrpOuts, tc.nf, tc.fixture, tc.allowlist)
+			out, err := cmd.CombinedOutput()
+
+			var exit *exec.ExitError
+			if err != nil && !errors.As(err, &exit) {
+				t.Fatalf("normcmp.py: %v\n%s", err, out)
+			}
+
+			if match := err == nil; match != tc.match {
+				t.Errorf("normcmp.py match = %v, want %v:\n%s", match, tc.match, out)
+			}
+		})
+	}
+}
+
+// allowlistWithout writes a copy of the allowlist at path less the entry id
+// and returns the copy's path.
+func allowlistWithout(t *testing.T, path, id string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var doc struct {
+		Divergences []map[string]any `json:"divergences"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	n := len(doc.Divergences)
+	doc.Divergences = slices.DeleteFunc(doc.Divergences, func(e map[string]any) bool { return e["id"] == id })
+
+	if len(doc.Divergences) != n-1 {
+		t.Fatalf("allowlist %s has no entry %s", path, id)
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return writeABITestFile(t, filepath.Join(t.TempDir(), allowlistFile), string(out))
+}
+
+// TestRemovingAnOutcomeEntryFailsItsCase replays each mrpOutcomeCases entry
+// that names a divergence on its recorded outcomes, mrp's from the case and
+// mro2nf's from the allowlist entry: the case holds with the entry, and fails
+// once the entry is removed, whether or not the case still names it.
+func TestRemovingAnOutcomeEntryFailsItsCase(t *testing.T) {
+	allow := mustAllowlist(t)
+
+	for _, tc := range mrpOutcomeCases {
+		if tc.divergence == "" {
+			continue
+		}
+
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := tc.validate(allow)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if bad := tc.check(d, tc.mrp, d.nf); len(bad) > 0 {
+				t.Errorf("the recorded outcomes fail the case: %q", bad)
+			}
+
+			if _, err := tc.validate(allow.Without(tc.divergence)); err == nil {
+				t.Errorf("the case still validates without entry %s", tc.divergence)
+			}
+
+			if bad := tc.check(nil, tc.mrp, d.nf); len(bad) == 0 {
+				t.Errorf("with no divergence the recorded outcomes still pass the case")
+			}
+		})
+	}
+}

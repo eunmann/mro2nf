@@ -1,0 +1,65 @@
+# vdr_volatile: mrp's volatile data removal (VDR) deletes a volatile stage's
+# files once their consumers finish; mro2nf deletes nothing. PUBLISHED's file
+# is a pipeline output, CONSUMED's is read downstream and then deletable, and
+# RETAINED's is read downstream but kept by `retain`. TestMrpDiffVDR runs it
+# under mrp's rolling and strict VDR and requires mrp's published outputs to
+# match mro2nf's.
+filetype txt;
+
+stage MAKEFILE(
+    in  float x,
+    out txt   f  "data"  "f.txt",
+    src py    "stages/makefile",
+) using (
+    volatile = strict,
+)
+
+stage READFILE(
+    in  txt   f,
+    out float y,
+    src py    "stages/readfile",
+)
+
+pipeline VDR(
+    in  float x,
+    out txt   kept,
+    out float read,
+    out float read_retained,
+)
+{
+    call MAKEFILE as PUBLISHED(
+        x = self.x,
+    )
+
+    call MAKEFILE as CONSUMED(
+        x = self.x,
+    ) using (
+        volatile = true,
+    )
+
+    call MAKEFILE as RETAINED(
+        x = self.x,
+    )
+
+    call READFILE as READ(
+        f = CONSUMED.f,
+    )
+
+    call READFILE as READ_RETAINED(
+        f = RETAINED.f,
+    )
+
+    return (
+        kept          = PUBLISHED.f,
+        read          = READ.y,
+        read_retained = READ_RETAINED.y,
+    )
+
+    retain (
+        RETAINED.f,
+    )
+}
+
+call VDR(
+    x = 21.0,
+)

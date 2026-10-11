@@ -15,9 +15,10 @@ fixtures cited below. Generated output targets the latest Nextflow (verified on
 26.04.x), DSL2 (the modern default — no `nextflow.enable.dsl` needed), and runs
 warning-free (no deprecated/`useless` operators).
 
-Status: ✅ supported & tested · ⚠️ supported with a documented divergence ·
-❌ unsupported, guarded with a clear error & tracked · 🚫 runtime/`mrp`-only,
-out of scope for a transpiler.
+Status: ✅ supported & tested · ⚠️ supported with a divergence from `mrp`, every
+one a row of [Divergences from mrp](#divergences-from-mrp), generated from the
+allowlist the differential applies · ❌ unsupported, guarded with a clear error &
+tracked · 🚫 runtime/`mrp`-only, out of scope for a transpiler.
 
 **How unsupported features are signalled (never silent):**
 - **❌ hard error** — the transpile fails (`UnsupportedError` / parse error,
@@ -26,8 +27,9 @@ out of scope for a transpiler.
   (`map<map<S>>.field`), an invalid `-target`. Lowering errors by default on any
   unrecognized expression, so a construct cannot be silently dropped.
 - **⚠️ warning** — the project transpiles but a no-op divergence is **logged**
-  by `mro2nf`: `local`, `volatile` (no VDR), and a `preflight` bound to a call
-  output (it runs in DAG order rather than gating early).
+  by `mro2nf`: a `local` or `volatile` call modifier (no VDR; a stage's
+  `volatile = strict` is not logged, #342), and a mapped or disabled
+  `preflight` (it runs in DAG order rather than gating early).
 - **🚫 / layout** — documented here with no output-observable impact.
 
 ## Language — writing-pipelines / language-details
@@ -71,9 +73,7 @@ out of scope for a transpiler.
 | non-linear / diamond DAGs | ✅ | e2e `diamond_min` |
 | `using (disabled = ref)` (self or call ref) | ✅ | e2e `modifiers_min` |
 | whole-call ref (`s = CALL`) to a **disabled** stage or pipeline call | ✅ null, as mrp (the skip bundle is a whole JSON null; a disabled sub referenced whole keeps its boundary rather than inlining) | e2e `disabled_wholeref`; unit `TestEmitDisabledNullBundleIsNull`, `TestInlineDisabledWholeRefKeepsBoundary` |
-| `(preflight)` | ✅ gates the pipeline (early-abort): an input-bound preflight runs first and the pipeline's `pa` is gated on its completion, so every downstream call waits — mrp's prenode behavior. A mapped, disabled, or call-output-bound preflight stays in DAG order (warns) | e2e `modifiers_min`, `kitchen_sink`; unit `TestEmitPreflightGate` |
-| `(local)` | ⚠️ no-op (scheduling only) | e2e `kitchen_sink` |
-| `(volatile)` / `volatile = strict` | ⚠️ no-op for outputs (VDR is 🚫) | e2e `kitchen_sink` |
+| `(preflight)` | ✅ gates the pipeline (early-abort): an input-bound preflight runs first and the pipeline's `pa` is gated on its completion, so every downstream call waits — mrp's prenode behavior. A mapped or disabled preflight stays in DAG order (warns; `preflight-dag-order`) | e2e `modifiers_min`, `kitchen_sink`; unit `TestEmitPreflightGate` |
 
 ## Map calls / forks — writing-stages / advanced-features
 
@@ -131,20 +131,17 @@ out of scope for a transpiler.
 | inter-stage file passing (object store, no shared FS) | ✅ #13 (de-bundled channels: each payload is a typed sidecar + individual leaf `path` items, referenced via `@mre:file:`/`@mre:dir:` markers; the shim absolutizes on input, relativizes on output) | e2e `TestCloudSim*`, `TestDockerIsolation`, unit `TestBundleRoundTrip` |
 | auxiliary files reach isolated workers (types.json, bindspecs) | ✅ each task stages only the files it needs — the shared `types.json` plus, for a bind/fork process, its own `spec.json` — as individual `path` inputs, never referenced by `${projectDir}` (invisible on an AWS Batch / HealthOmics worker, which mounts only its work dir). A task transfers only its own bindspec, not every call's | e2e `TestDockerIsolation` (container that does not mount the project dir), unit `TestEmitAssetsStaged` |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ #13 (PUBLISH walks the entry's output type, descending file-bearing structs) | e2e `map_file`, `map_file_keyed`, `struct_of_file`; unit `internal/types` |
-| stage / pipeline `retain` | ⚠️ trivially satisfied (Nextflow keeps `work/`) | parse |
-| VDR modes (disable/post/rolling/strict) timing | 🚫 no native dependency-gated mid-run deletion | — (terminal-state only) |
-| `outs/` move+symlink layout | ⚠️ files are *copied* into an mrp-style `outs/` tree via `publishDir` (same layout and contents; mrp moves + symlinks) | e2e `file_min`, `TestMrpDiff` |
+| VDR modes (disable/post/rolling/strict) timing | 🚫 no native dependency-gated mid-run deletion | e2e `TestMrpDiffVDR/rolling`, `TestMrpDiffVDR/strict` (published outputs match mrp's under its VDR) |
 
 ## Running / inspecting — running-pipelines / inspecting-pipelines
 
 | Feature | Status | Test |
 |---|---|---|
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles | unit `TestEmitConfig` |
-| `--autoretry` (content-based retry) | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it | unit `TestEmitConfig`, `TestStageFailureClassification`; e2e `TestAssertTerminatesWithoutRetry`, `TestOrdinaryFailureRetriesWithEscalatedMemory` (assert terminates after 1 attempt with exit 42; ordinary failure retries and sees the escalated allocation) |
+| an ASSERT fails the run on its first attempt; a retried failure gets escalated memory | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it (which failures are retried: `retried-stage-errors`) | unit `TestEmitConfig`, `TestStageFailureClassification`; e2e `TestAssertTerminatesWithoutRetry`, `TestOrdinaryFailureRetriesWithEscalatedMemory` |
 | cloud executors (awsbatch/k8s) | ✅ profiles emitted; #13 bundle data plane makes file flow object-store-correct; auxiliary files staged via `_assets` so isolated workers (no shared FS) can read them | config, e2e `TestCloudSim*` (copy-staging), `TestDockerIsolation` (true container isolation) |
 | `-target awsbatch` (AWS Batch + S3) | ✅ Batch executor + classic aws-CLI S3 staging, in-container `/opt/mro2nf` paths, a generated `Dockerfile` + self-contained `runtime/` build context (bash/ps, no ENTRYPOINT, x86_64, aws CLI) | unit `TestEmitConfigTargets`, `TestEmitContainerBuild`; e2e `TestGeneratedAWSBatchImage` (built from the generated Dockerfile) |
 | `-target healthomics` (AWS HealthOmics) | ✅ ECR-parameterized container, publishes to `/mnt/workflow/pubdir`, no executor (managed), pinned Nextflow version, `parameter-template.json` + `package.sh` (workflow zip) | unit `TestEmitConfigTargets`, `TestEmitHealthOmicsPackaging` |
-| `-resume` ≈ restart-without-rerun | ⚠️ content-addressed cache (different mechanism) | e2e `TestResumeCachesEverything` (unchanged rerun: zero tasks re-execute); `TestFreshRunsAreIdentical` (`jitter_wide`, 64 forks / 64 chunks under completion-order jitter: two fresh runs publish identical outputs, `-resume` re-executes nothing; default and `-native`) |
 | `mrp --overrides` (per-stage resource retune at launch) | ✅ `mro2nf overrides` converts the JSON to a `process`/`withName:` `-c` overlay; or write it natively. See `RUNTIME_TUNING.md` | unit `TestConvert` |
 | `--maxjobs` / `--jobinterval` / `--localcores` / `--localmem` (throttling) | ✅ Nextflow `executor.queueSize` / `submitRateLimit` / `cpus` / `memory`; documented in `RUNTIME_TUNING.md` | — |
 | `--profile` / `--inspect` / `--onfinish` (profile, dry-run, hook) | ✅ Nextflow `-with-trace`/`-with-report`, `-preview`, `workflow.onComplete`; see `RUNTIME_TUNING.md` | — |
@@ -179,6 +176,43 @@ each flag opts into are surfaced as transpile-time diagnostics
 | `-native-runner`: `py` stages via the embedded direct-call runner | ✅ `py` only — `exec`/`comp` stages keep the Martian adapter path (Info diagnostic per stage); `-monitor` enforcement runs in-process (RLIMIT_AS cap + RSS watchdog) | e2e `TestNativeRunner`, `TestNativeRunnerComposesWithNative`, `TestNativeRunnerExitContract`; unit `TestRunnerConformance*` (encoder/ABI conformance vs the adapter) |
 | `.mro2nf.yml` flag defaults (keys mirror flags; builtin < config < explicit flag) | ✅ | unit `internal/config` `TestLoad*`; `cmd/mro2nf` `TestApplyConfig*` |
 
+## Divergences from mrp
+
+Every known divergence from `mrp` is an entry of the allowlist
+[`test/e2e/divergences.json`](../test/e2e/divergences.json), and this table is
+generated from it. The differential (`TestMrpDiff`, `TestMrpDiffFailureParity`,
+the golden suites) excuses a difference only through an entry's matcher, so a
+difference it sees that no entry matches fails a test, and removing an entry
+fails the case it matched. Kinds: **abi** excuses a difference in a stage's `_args` or
+`_outs`; **published-tree** one in the published `results/` tree or
+`pipeline_outs.json`; **outcome** one in how a run ends; **mechanism** records a
+difference in how mro2nf reaches `mrp`'s outputs that leaves them identical, so
+it has no matcher and cites the tests that prove the outputs match. An entry
+with an issue lasts until the issue is fixed: unless its matcher is an outcome,
+which fails its case once mro2nf matches `mrp`, it is scoped to the fixtures
+where it must excuse a difference, applies only there, and fails each of them
+where it no longer does. A permanent entry is intentional and applies on every
+fixture.
+
+<!-- BEGIN GENERATED DIVERGENCES: `make docs-divergences` writes this table from test/e2e/divergences.json; edit that file, not the table. -->
+| Feature | Status | Divergence | Test |
+|---|---|---|---|
+| struct and map values a stage receives | ⚠️ abi, #366 | **`abi-object-key-order`**: A stage receives struct and map values with their keys sorted, where mrp passes them in the order their producer wrote them. The data plane decodes every bundle into Go maps (`cmd/mre/bundle.go` `rawToMap`), which re-encode sorted. Against mrp 4a558e7 a producer's `{"b": 1, "a": 2}` reaches the consumer's `_args` as `{"a": 2, "b": 1}`, so a stage that iterates the dict sees another order; `nested_struct`'s READN gets `{b, inner}` under mro2nf and `{inner, b}` under mrp. The ABI comparison sorts object keys on the fixtures whose stage invocations differ without this entry, and fails on any of them where it no longer does. Scoped to `nested_struct`, `split_struct_chunk`, `struct_input`. | `TestMrpDiff/nested_struct`, `TestMrpDiff/split_struct_chunk`, `TestMrpDiff/struct_input`, `TestRemovingAnABIEntryFailsTheComparison` |
+| struct and map values in the pipeline outs JSON | ⚠️ published-tree, #366 | **`outs-json-object-key-order`**: `pipeline_outs.json` writes struct and map values with their keys sorted, where mrp's `_outs` keeps the order their producer wrote them in. The same Go-map re-encoding as `abi-object-key-order`: `kitchen_sink`'s `stats` struct is published as `{count, mean, total}` by mro2nf and `{count, total, mean}` by mrp 4a558e7. The outs JSON comparisons, against mrp and against the goldens, sort object keys on the fixtures whose outs JSON differs from mrp's without this entry, and the mrp comparison fails on any of them where it no longer does. Scoped to `basename_echo`, `kitchen_sink`, `struct_min`. | `TestMrpDiff/basename_echo`, `TestMrpDiff/kitchen_sink`, `TestMrpDiff/struct_min`, `TestRemovingAPublishedTreeEntryFailsTheComparison`, `TestScopedRuleEntryFailsWhereItExcusesNothing` |
+| file paths in the pipeline outs JSON | ⚠️ published-tree, permanent | **`outs-json-relative-paths`**: `pipeline_outs.json` names each published file by its path relative to `results/`, where mrp's `_outs` names it by its absolute path in the pipestance's `outs/`. `results/` may be a local dir, an S3 prefix or a HealthOmics output dir, so mro2nf writes paths that hold wherever the tree is published. The comparisons strip mrp's `outs/` prefix. | `TestMrpDiff/file_min`, `TestRemovingAPublishedTreeEntryFailsTheComparison`, `TestNormcmpAppliesTheAllowlist` |
+| a published output that is a symlink | ⚠️ published-tree, permanent | **`published-symlinks-copied`**: Where mrp publishes a symlink in `outs/`, because the stage's output was itself a symlink or lies outside the pipestance, mro2nf publishes a copy of the target, and mrp's `_outs` names the link target where `pipeline_outs.json` names the published path. mrp links `outs/` to the target and reports the target (`martian/core/post_process.go` `moveOutFile`, `copyOutSymlink`). A publish dir may be an object store with no symlinks, and a host target is unreachable from an isolated worker, so mro2nf stages and publishes the content (#332). The comparison reads an mrp-published symlink by its target's content and maps the target path in mrp's `_outs` to the link's path. | `TestMrpDiff/symlink_escape`, `TestStageOutputLinkOutsideWorkCopiedLocally`, `TestRemovingAPublishedTreeEntryFailsTheComparison` |
+| metadata files at the root of the published tree | ⚠️ published-tree, permanent | **`results-metadata-files`**: mro2nf publishes `pipeline_outs.json` and `manifest.json.gz` at the root of `results/`; mrp's `outs/` holds neither, since mrp writes its outs JSON to `<pipestance>/<PIPELINE>/fork0/_outs` and writes no manifest. A Nextflow run has no pipestance to hold the outs JSON, so it is published beside the outputs, with a machine-readable index of them (`manifest.json.gz`). The tree comparisons drop the two files at the root only, so a stage output of either name deeper in the tree still compares. | `TestMrpDiff`, `TestGolden`, `TestRemovingAPublishedTreeEntryFailsTheComparison` |
+| failure messages and where a failure is recorded | ⚠️ outcome, permanent | **`failure-report-details`**: A failed run's messages differ: mre words its own errors and Nextflow adds context, and mro2nf records an output-validation failure in the task that ran the phase, where mrp records it at the fork. The failure contract is whether the run fails, which stages it blames and whether each failure is an ASSERT or an error, so the outcome comparison reads only those. | `TestMrpDiffFailureParity`, `TestOutcomeRulesNeedTheirEntries` |
+| `--autoretry` / retrying a failed stage | ⚠️ outcome, #299 | **`retried-stage-errors`**: mro2nf retries every stage failure except an ASSERT up to twice (`errorStrategy` retry, `maxRetries 2`), where mrp retries only failures matching its `retry_on` patterns (signals, ENOMEM, scheduler errors) and never an ordinary stage exception. A stage that fails and then succeeds on retry completes under mro2nf and fails under mrp (mrp's `jobmanagers/retry.json`; `internal/emit/emit.go` `errorStrategy`). The outcome comparison counts a retried stage task's failures once on the failure fixtures whose error-failing stage Nextflow retries, and fails on any of them where no task is retried. Scoped to `bad_out_type`, `missing_struct_key`, `split_bad_mem`, `split_bad_special`, `split_bad_threads`, `stage_raise`. | `TestMrpDiffFailureParity/stage_raise`, `TestOutcomeRulesNeedTheirEntries` |
+| `using (disabled = ref)` resolving to null at runtime | ⚠️ outcome, #253 | **`runtime-null-disable-gate-aborts`**: A disable gate that resolves to null at runtime aborts mro2nf's run, where mrp treats it as false and runs the call. A regression from the #180 fix: the driver rejects the null gate instead of reading it as false. `null_disable_gate` records mro2nf's failure; once fixed, the fixture moves to `mrpDiffCases`. | `TestMrpDiffFailureParity/null_disable_gate`, `TestRemovingAnOutcomeEntryFailsItsCase` |
+| `(local)` | ⚠️ mechanism, permanent | **`local-modifier-ignored`**: mro2nf ignores `local` and schedules the stage on the configured executor like any other task; in a cluster jobmode mrp runs it through its local job manager on the head node, sized against the head node's capacity. Scheduling only: the stage runs the same code on the same `_args`. Under `--jobmode=local`, which the differential uses, the local job manager is mrp's only one (`martian/core/node.go`, `stage.go`), so `kitchen_sink`'s local SUM_SQUARES matches mrp; cluster jobmodes are not compared with mrp. | `TestMrpDiff/kitchen_sink` |
+| `outs/` move+symlink layout | ⚠️ mechanism, permanent | **`outs-files-copied`**: mrp moves each output file into `outs/` and leaves a symlink to it in the stage's files dir; mro2nf copies each output into `results/` and leaves the task's work dir as it was. Both publish regular files with the same paths and bytes: the tree comparison, which tells a symlink from a file, proves it on every `TestMrpDiff` fixture. Where mrp publishes a symlink instead, `published-symlinks-copied` applies. | `TestMrpDiff/file_min`, `TestMrpDiff/dir_out`, `TestMrpDiff/map_file` |
+| a mapped or disabled `(preflight)` | ⚠️ mechanism, #314 | **`preflight-dag-order`**: A mapped or disabled preflight runs in DAG order, where mrp makes every other call in its pipeline wait for it, so a failing preflight stops that pipeline before they start. A preflight has no outputs (mrp rejects one with `PreflightOutputError`), so the order changes no output: `preflight_ungated`'s outputs and stage invocations match mrp's. On a failing preflight, mrp has started no other call of its pipeline, while mro2nf may have. mro2nf warns at transpile time. | `TestMrpDiff/preflight_ungated`, `TestWarningsPreflightUngateable` |
+| `-resume` ≈ restart-without-rerun | ⚠️ mechanism, permanent | **`resume-content-cache`**: mro2nf resumes through Nextflow's `-resume`, which reuses each task whose inputs hash the same, where mrp restarts a pipestance from the stages it recorded as complete. A cache hit replays the task's recorded outputs: an unchanged rerun re-executes no task and leaves the published tree and `pipeline_outs.json` unchanged, and a fresh run matches mrp. A rerun after a failure is not compared with mrp's restart. | `TestResumeCachesEverything`, `TestFreshRunsAreIdentical`, `TestMrpDiff` |
+| stage / pipeline `retain` | ⚠️ mechanism, permanent | **`retain-no-vdr`**: `retain` has nothing to do under mro2nf, which deletes no file, so every file is kept. `retain` only exempts a file from VDR. `vdr_volatile` retains a volatile stage's file and publishes what mro2nf does under mrp's rolling and strict VDR. | `TestMrpDiffVDR/rolling`, `TestMrpDiffVDR/strict` |
+| `(volatile)` / `volatile = strict` | ⚠️ mechanism, permanent | **`volatile-no-vdr`**: mro2nf ignores `volatile` and deletes no file mid-run, so `work/` keeps every intermediate file mrp's volatile data removal (VDR) deletes once its consumers finish (higher peak disk). VDR deletes only files no later stage reads and never a published output: `vdr_volatile` publishes what mro2nf does under mrp's rolling and strict VDR, while mrp deletes the volatile file its consumer has read. | `TestMrpDiffVDR/rolling`, `TestMrpDiffVDR/strict`, `TestMrpDiff/kitchen_sink` |
+<!-- END GENERATED DIVERGENCES -->
+
 ## Notes
 
 - Every e2e fixture's expected output is the real `mrp` result, captured under
@@ -189,11 +223,11 @@ each flag opts into are surfaced as transpile-time diagnostics
   2-D composite-key fork threading). The transpiler no longer emits an
   `UnsupportedError` for any map-call shape. (The `lower` stage still guards a
   genuinely unknown expression kind as defensive code.)
-- Former `mrp`-runtime-only items, now handled at the shim level (none affects
-  output equivalence — final `results/` always match `mrp`):
+- Former `mrp`-runtime-only items, now handled at the shim level:
   - **content-based retry (ASSERT vs retryable)** — ✅ done. The shim exits 42 for
     an `ASSERT:` failure and 1 otherwise; the config's dynamic `errorStrategy`
-    terminates the former and retries the latter.
+    terminates the former and retries the latter, where `mrp` retries only
+    transient failures (`retried-stage-errors`, #299).
   - **`--monitor` memory enforcement** — ✅ done (opt-in `mro2nf -monitor`). The
     shim polls the stage process group's RSS and kills it over `mem_gb` (mrp's
     primary monitor kill, same "exceeded its memory quota" message), and
@@ -219,11 +253,10 @@ each flag opts into are surfaced as transpile-time diagnostics
   is passed to the shim via `-vmemgb` on every phase, so `--monitor` caps virtual
   memory (and `_jobinfo` reports it) at the declared value (a per-chunk
   `__vmem_gb` still wins for main, a split-returned join `__vmem_gb` for join).
-- Remaining ⚠️ items are storage-*mechanism* fidelity: the published `outs/`
-  tree now reproduces mrp's nested layout and `GetOutFilename` naming
-  (verified by the Go `TestMrpDiff` suite against real mrp), but files are copied
-  into place rather than moved + symlinked, and `work/` is retained (no VDR) —
-  no output-observable correctness impact.
+- The published `outs/` tree reproduces mrp's nested layout and
+  `GetOutFilename` naming (verified by the Go `TestMrpDiff` suite against real
+  mrp). Every remaining ⚠️ item is a row of
+  [Divergences from mrp](#divergences-from-mrp).
 - **Embedded absolute paths (shared-filesystem assumption) — unsupported on
   object stores, flagged loudly.** The data plane stages *declared* file leaves;
   a path a stage bakes into another file's *content* (e.g. a JSON manifest that

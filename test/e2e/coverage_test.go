@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"fmt"
 	"go/scanner"
 	"go/token"
 	"maps"
@@ -12,7 +13,11 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/eunmann/mro2nf/test/divergence"
+	"github.com/google/go-cmp/cmp"
 )
 
 // nonE2EFixtures are testdata fixtures deliberately NOT exercised by any e2e
@@ -56,17 +61,17 @@ func TestEveryFixtureIsExercised(t *testing.T) {
 }
 
 // mrpUnrunnable are the pipeline fixtures neither TestMrpDiff nor
-// TestMrpDiffFailureParity can compare with real mrp, each with the reason:
-// mrp cannot run them, or its result holds a host path no other run can give.
-// A fixture mrp fails by design belongs in mrpOutcomeCases instead. The golden
-// suite's *_override cases are no fixtures of their own: a launch-time
-// -params-file override has no mrp invocation to diff against.
+// TestMrpDiffFailureParity can compare with real mrp, each with the reason mrp
+// cannot run them. A fixture mrp fails by design belongs in mrpOutcomeCases
+// instead, and a difference mrp's run shows belongs in the divergence
+// allowlist (divergences.json), not here. The golden suite's *_override cases
+// are no fixtures of their own: a launch-time -params-file override has no mrp
+// invocation to diff against.
 var mrpUnrunnable = map[string]string{
 	"exec_min":             "mrp never completes it (killed after 180 s): the exec stub writes no journal entries",
 	"mixed_adapters":       "mrp never completes it (killed after 180 s): its stubs speak mre's wrapped-adapter contract, not mrp's journal protocol",
 	"map_pipe_nested":      "mrp rejects it: OUTER.INNER.DBL's merge could not match a reference to a specific fork",
 	"map_pipe_nested_file": "emit-only fixture with no stage code: mrp cannot import stages/dbl",
-	"symlink_escape":       mrpHostLinkOut,
 	"entry_file":           mrpUnresolvedInput,
 	"entry_filearr":        mrpUnresolvedInput,
 	"entry_struct_file":    mrpUnresolvedInput,
@@ -79,13 +84,11 @@ var mrpUnrunnable = map[string]string{
 const mrpUnresolvedInput = "mrp passes the invocation's relative input/ path through verbatim and the stage opens it " +
 	"from its own job dir, where it does not resolve"
 
-const mrpHostLinkOut = "mrp runs it, but its _outs value for the linked output is the link target's absolute host path; " +
-	"the published tree and the stage ABI match"
-
 // TestEveryFixtureMrpDiffed fails unless every pipeline fixture is in exactly
 // one of mrpDiffCases (outputs diffed), mrpOutcomeCases (run outcome diffed)
 // and mrpUnrunnable (with a reason), when a table names a fixture that does
-// not exist, or when an mrpOutcomeCases entry is malformed: every fixture mrp
+// not exist, when an mrpOutcomeCases entry is malformed, or when an allowlist
+// entry is applied by no case (unappliedAllowlistEntries): every fixture mrp
 // can run faces live mrp.
 func TestEveryFixtureMrpDiffed(t *testing.T) {
 	present := pipelineFixtures(t)
@@ -95,12 +98,23 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 		tables[tc.name] = append(tables[tc.name], "mrpDiffCases")
 	}
 
+	allow := mustAllowlist(t)
+	named := map[string][]string{}
+
 	for _, tc := range mrpOutcomeCases {
 		tables[tc.name] = append(tables[tc.name], "mrpOutcomeCases")
 
-		if err := tc.validate(); err != nil {
+		if _, err := tc.validate(allow); err != nil {
 			t.Error(err)
 		}
+
+		if tc.divergence != "" {
+			named[tc.divergence] = append(named[tc.divergence], tc.name)
+		}
+	}
+
+	for _, bad := range unappliedAllowlistEntries(allow, named) {
+		t.Error(bad)
 	}
 
 	for name, reason := range mrpUnrunnable {
@@ -126,6 +140,102 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 			t.Errorf("fixture %q is not compared with mrp; add it to mrpDiffCases if mrp succeeds on it, "+
 				"to mrpOutcomeCases if mrp fails on it by design, or to mrpUnrunnable with the reason mrp cannot run it", name)
 		}
+	}
+}
+
+// unappliedAllowlistEntries reports each outcome entry not named by exactly
+// one mrpOutcomeCases case (named maps an entry to the cases naming it), each
+// ABI-matcher entry scoped to a fixture that is not in mrpDiffCases, where
+// diffStageABI would never apply it or report it stale, and each issue-tracked
+// rule entry scoped to a fixture its comparison never runs.
+func unappliedAllowlistEntries(allow divergence.Allowlist, named map[string][]string) []string {
+	diffed := map[string]bool{}
+	for _, tc := range mrpDiffCases {
+		diffed[tc.name] = true
+	}
+
+	var bad []string
+
+	for _, e := range allow.Entries() {
+		if e.Outcome != nil && len(named[e.ID]) != 1 {
+			bad = append(bad, fmt.Sprintf("outcome divergence %s is named by the mrpOutcomeCases %v; name it from exactly one case", e.ID, named[e.ID]))
+		}
+
+		if e.ABI != nil {
+			for _, f := range e.ABI.Fixtures {
+				if !diffed[f] {
+					bad = append(bad, fmt.Sprintf("ABI divergence %s names fixture %q, which is not in mrpDiffCases", e.ID, f))
+				}
+			}
+		}
+
+		if e.Comparator != nil {
+			bad = append(bad, unappliedRuleFixtures(e, diffed)...)
+		}
+	}
+
+	return bad
+}
+
+// unappliedRuleFixtures reports each fixture an issue-tracked rule entry
+// names that is not in the case table whose comparison applies the rule:
+// mrpOutcomeCases for an outcome rule, mrpDiffCases for the rest.
+func unappliedRuleFixtures(e divergence.Entry, diffed map[string]bool) []string {
+	table, cases := "mrpDiffCases", diffed
+
+	if e.Kind == divergence.KindOutcome {
+		table, cases = "mrpOutcomeCases", map[string]bool{}
+		for _, tc := range mrpOutcomeCases {
+			cases[tc.name] = true
+		}
+	}
+
+	var bad []string
+
+	for _, f := range e.Comparator.Fixtures {
+		if !cases[f] {
+			bad = append(bad, fmt.Sprintf("rule divergence %s names fixture %q, which is not in %s", e.ID, f, table))
+		}
+	}
+
+	return bad
+}
+
+// TestUnappliedAllowlistEntries reports an ABI entry scoped to a misspelled
+// fixture and to an outcome-diffed one, and an issue-tracked rule entry scoped
+// to a fixture outside the case table its comparison runs from; it passes each
+// entry's fixtures that are in that table.
+func TestUnappliedAllowlistEntries(t *testing.T) {
+	entry := func(id, fixture string) string {
+		return `{"id": "` + id + `", "kind": "abi", "feature": "f", "summary": "s", "justification": "j", "evidence": ["TestX"], ` +
+			`"abi": {"fixtures": ["` + fixture + `"], "file": "_args", "rule": "ignore-key", "key": "k"}}`
+	}
+
+	rule := func(id, kind, rule string, fixtures ...string) string {
+		return `{"id": "` + id + `", "kind": "` + kind + `", "feature": "f", "summary": "s", "justification": "j", "issue": 1, ` +
+			`"evidence": ["TestX"], "comparator": {"rule": "` + rule + `", "fixtures": ["` + strings.Join(fixtures, `", "`) + `"]}}`
+	}
+
+	diffed, failing := mrpDiffCases[0].name, mrpOutcomeCases[0].name
+
+	allow, err := divergence.Parse([]byte(`{"divergences": [` + entry("diffed", diffed) + `, ` +
+		entry("misspelled", "kitchen_snk") + `, ` + entry("outcome", failing) + `, ` +
+		rule("tree-rule", divergence.KindPublishedTree, divergence.RuleOutsSortKeys, diffed, failing) + `, ` +
+		rule("outcome-rule", divergence.KindOutcome, divergence.RuleRetriedAttempts, failing, diffed) + `]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := unappliedAllowlistEntries(allow, nil)
+	want := []string{
+		`ABI divergence misspelled names fixture "kitchen_snk", which is not in mrpDiffCases`,
+		`ABI divergence outcome names fixture "` + failing + `", which is not in mrpDiffCases`,
+		`rule divergence tree-rule names fixture "` + failing + `", which is not in mrpDiffCases`,
+		`rule divergence outcome-rule names fixture "` + diffed + `", which is not in mrpOutcomeCases`,
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("unappliedAllowlistEntries (-want +got):\n%s", diff)
 	}
 }
 

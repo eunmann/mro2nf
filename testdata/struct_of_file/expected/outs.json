@@ -1,6 +1,6 @@
 {
     "b": {
-        "report": "b/report.txt",
-        "n": 5
+        "n": 5,
+        "report": "b/report.txt"
     }
 }
