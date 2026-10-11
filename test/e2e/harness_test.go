@@ -340,8 +340,13 @@ func execNextflow(t *testing.T, proj string, args []string) error {
 	// within one NXF_OPTS the later flags win, keeping the heap cap. An
 	// explicitly exported NXF_OFFLINE is honored (fresh-launcher bootstrap
 	// needs the network once).
+	// NXF_DISABLE_PARAMS_TYPE_DETECTION is the documented launch setting for
+	// typed CLI overrides on the v1 parser (TRANSPILER.md §8): without it the
+	// floor engine turns `--b True` into a boolean before mre sees it. The v2
+	// parser, the default from 26.04, already passes CLI values as strings.
 	env := append(os.Environ(),
 		"NXF_ANSI_LOG=false",
+		"NXF_DISABLE_PARAMS_TYPE_DETECTION=true",
 		"NXF_OPTS="+strings.TrimSpace(os.Getenv("NXF_OPTS")+" -XX:TieredStopAtLevel=1 -Xms64m -Xmx512m"),
 	)
 	if os.Getenv("NXF_OFFLINE") == "" {
