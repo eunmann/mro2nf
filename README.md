@@ -54,9 +54,11 @@ internal/
   overrides/   mrp --overrides file -> Nextflow -c config
   config/      .mro2nf.yml project defaults for the transpiler flags
   logging/     slog setup       apperror/  typed errors
-vendor-martian/python/   pinned martian_shell.py + martian.py adapters
+vendor-martian/python/   pinned martian_shell.py + martian.py adapters (Martian's LICENSE beside)
+THIRD_PARTY_NOTICES      licenses of the code the binaries link and the images vendor
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
 test/e2e/      Go e2e suites (golden diff vs mrp, docker isolation) + AWS runbooks
+test/thirdparty/   THIRD_PARTY_NOTICES generator, vendored-license and vendor-martian drift checks
 deploy/awsbatch-cdk/   minimal AWS CDK: S3 + ECR + Batch + HealthOmics role
 docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
                 (support matrix), GPU.md, RUNTIME_TUNING.md (mrp knobs ->
@@ -284,7 +286,7 @@ nextflow run main.nf --aws_queue <q> --aws_region <r> \
 
 The emitted `Dockerfile` is self-contained (it vendors `mre` + the adapters). If
 you'd rather not vendor them, base your image on the published runtime image
-instead — it ships `mre` and the Martian adapters at `/opt/mro2nf`, multi-arch:
+instead — it ships `mre`, the Martian adapters and their notices at `/opt/mro2nf`, multi-arch:
 
 ```dockerfile
 FROM ghcr.io/eunmann/mro2nf-runtime:<version>   # match your mro2nf version
@@ -388,7 +390,7 @@ CI needs only a single checkout; to hack on the Martian parser locally, add a
 `go.work` pointing at a fork checkout (gitignored). Tagging `v*` triggers
 `release.yml`. It requires the tagged commit to be a PR's merge whose tree matches
 that PR's head, and that head to have a green PR Validation run. It then cross-compiles the `mro2nf` and `mre` binaries and publishes them in a
-GitHub release with a `SHA256SUMS` file. It also pushes the runtime image. A
+GitHub release with a `SHA256SUMS` file, `LICENSE` and `THIRD_PARTY_NOTICES`. It also pushes the runtime image. A
 pre-release tag (`v1.2.0-rc1`) never becomes the latest release or the image's
 `latest` tag. In a public repository the binaries and the image carry build
 provenance; check a download with `sha256sum -c SHA256SUMS --ignore-missing` and
@@ -396,4 +398,8 @@ provenance; check a download with `sha256sum -c SHA256SUMS --ignore-missing` and
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT — see [`LICENSE`](LICENSE). The binaries, the runtime image and the
+generated container build contexts also carry third-party code, listed with
+its licenses in [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) (`make notices`
+regenerates it). The vendored Martian adapters keep Martian's license in
+[`vendor-martian/LICENSE`](vendor-martian/LICENSE).

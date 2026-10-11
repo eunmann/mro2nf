@@ -818,8 +818,9 @@ only the surrounding plumbing changes.
 | packaging | — | `Dockerfile` + `.dockerignore` + `runtime/` build context | + `parameter-template.json` + `package.sh` (zip) |
 
 For container targets the emitter writes a **`Dockerfile`** plus a self-contained
-`runtime/` build context (the `mre` binary, the Martian adapters, your stage
-code, and — for `comp` stages — the `mrjob` wrapper) at fixed in-container paths
+`runtime/` build context (the `mre` binary with mro2nf's `LICENSE` and
+`THIRD_PARTY_NOTICES`, the Martian adapters, your stage code, and — for `comp`
+stages — the `mrjob` wrapper) at fixed in-container paths
 (`/opt/mro2nf/…`) that the generated scripts bake. HealthOmics tasks have **no
 internet**, so any third-party stage dependency (e.g. the Cell Ranger binary)
 must be added to the Dockerfile. A file such a step COPYs (e.g. the Cell
