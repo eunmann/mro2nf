@@ -5,6 +5,7 @@
 package shim
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,6 +54,9 @@ const (
 	// exits; the shim tees through pipes, which a background child the stage
 	// left running can hold open forever.
 	orphanStdioGrace = 2 * time.Second
+	// stderrTailBytes bounds the _stderr tail a failure message carries; the
+	// whole stream already reached the task log through the tee.
+	stderrTailBytes = 64 << 10
 )
 
 var (
@@ -509,12 +513,51 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	}
 
 	if runErr != nil {
-		tail, _ := os.ReadFile(filepath.Join(meta, "_stderr"))
-
-		return fmt.Errorf("adapter %s phase: %w: %s", phase, runErr, strings.TrimSpace(string(tail)))
+		return exitFailure(phase, meta, runErr)
 	}
 
 	return nil
+}
+
+// exitFailure is the error for an adapter that exited non-zero without a
+// stage-reported message, carrying the end of its _stderr.
+func exitFailure(phase, meta string, waitErr error) error {
+	return fmt.Errorf("adapter %s phase: %w: %s", phase, waitErr, stderrTail(filepath.Join(meta, "_stderr")))
+}
+
+// stderrTail returns at most the last stderrTailBytes of the file at path,
+// starting at a line boundary when it cuts, or "" if it cannot be read.
+func stderrTail(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+
+	off := max(info.Size()-stderrTailBytes, 0)
+	buf := make([]byte, info.Size()-off)
+
+	n, err := f.ReadAt(buf, off)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return ""
+	}
+
+	buf = buf[:n]
+	if off == 0 {
+		return strings.TrimSpace(string(buf))
+	}
+
+	if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+		off += int64(i + 1)
+		buf = buf[i+1:]
+	}
+
+	return fmt.Sprintf("[first %d bytes of _stderr omitted]\n%s", off, strings.TrimSpace(string(buf)))
 }
 
 // forwardStageLog surfaces a stage's Martian log (_log, written via
@@ -616,9 +659,7 @@ func classifyAdapterResult(phase, meta string, stageErr []byte, readErr, waitErr
 	}
 
 	if waitErr != nil {
-		tail, _ := os.ReadFile(filepath.Join(meta, "_stderr"))
-
-		return fmt.Errorf("adapter %s phase: %w: %s", phase, waitErr, strings.TrimSpace(string(tail)))
+		return exitFailure(phase, meta, waitErr)
 	}
 
 	return nil
