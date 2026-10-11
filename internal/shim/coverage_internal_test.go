@@ -172,6 +172,56 @@ func TestCopyTreeRefusesExistingDest(t *testing.T) {
 	}
 }
 
+// TestCopyFileContents checks the byte copy CopyTree falls back to where a
+// hard link is unavailable, as across devices from a cloud scratch volume: it
+// keeps the content and the source's permission bits, and an unreadable
+// source or an uncreatable destination fails naming the path.
+func TestCopyFileContents(t *testing.T) {
+	dir := t.TempDir()
+
+	src := filepath.Join(dir, "src.sh")
+	if err := os.WriteFile(src, []byte("#!/bin/sh\n"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(dir, "dst.sh")
+	if err := copyFileContents(src, dst, info); err != nil {
+		t.Fatalf("copyFileContents: %v", err)
+	}
+
+	got, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if data, _ := os.ReadFile(dst); string(data) != "#!/bin/sh\n" || got.Mode().Perm() != info.Mode().Perm() || os.SameFile(info, got) {
+		t.Errorf("copy = %q mode %v (same inode %v), want a separate %q with the source's mode %v",
+			data, got.Mode().Perm(), os.SameFile(info, got), "#!/bin/sh\n", info.Mode().Perm())
+	}
+
+	cases := []struct {
+		name, src, dst, msg string
+	}{
+		{"source_absent", filepath.Join(dir, "absent"), filepath.Join(dir, "out1"), "open "},
+		{"dest_dir_absent", src, filepath.Join(dir, "no", "out2"), "create "},
+		{"source_is_dir", dir, filepath.Join(dir, "out3"), "copy "},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := copyFileContents(tc.src, tc.dst, info)
+			if err == nil || !strings.HasPrefix(err.Error(), tc.msg) {
+				t.Errorf("copyFileContents(%s, %s) = %v, want an error starting %q", tc.src, tc.dst, err, tc.msg)
+			}
+		})
+	}
+}
+
 // TestMergeArgsChunkPrecedence checks the overlay order of a chunk's _args:
 // per-chunk args win over same-named stage args, other stage args survive, and
 // the resolved resource __keys are injected.

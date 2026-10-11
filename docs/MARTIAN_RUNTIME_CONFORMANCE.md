@@ -391,10 +391,13 @@ whether it was published as a symlink — and the `_outs` JSON
 publish path against Martian itself, not a hand-written golden.
 
 It also diffs the **stage ABI**: every split, main (per chunk and fork) and join
-that ran under `mrp` must have a twin under mro2nf with the same `_args` and
-`_outs`, and vice versa (`test/e2e/abidiff_test.go`). Invocations are matched as a
-multiset per (stage, phase), not through the task graph. Both files are
-compacted with object key order and number tokens byte-exact; an existing
+that ran under `mrp` must have a twin under mro2nf with the same `_args`, `_outs`
+and `_jobinfo` allocation (`threads`, `memGB`, `vmemGB`: what the adapters'
+`get_threads_allocation`/`get_memory_allocation` and `GetJobInfo` read), and vice
+versa (`test/e2e/abidiff_test.go`). Invocations are matched as a
+multiset per (stage, phase), not through the task graph. The files are
+compacted with object key order and number tokens byte-exact (the allocation in
+a fixed key order, since the adapter reads it by key); an existing
 absolute path becomes its content hash (a tree hash for a directory) plus its
 basename, and an absent path under the phase's own `files` dir loses that host
 prefix. `mrp` runs with `--vdrmode=disable` so intermediate files still exist to
@@ -436,7 +439,9 @@ paths into `_outs`; mre writes the **same tree** with paths **relative** to the
 outs dir (location-independent bundles). Tree structure, filenames, and contents
 are byte-identical.
 
-Every fixture is compared with `mrp`, by outputs or by outcome, except those
+Every fixture, `bench/`'s included, is compared with `mrp`, by outputs or by
+outcome: a bench fixture runs at its narrower width, with a `-native` leg like
+the bench's own lanes. The exceptions are
 listed with the reason in `mrpUnrunnable` (`test/e2e/coverage_test.go`;
 `TestEveryFixtureMrpDiffed` puts every fixture in exactly one of the three
 tables): relative `input/` paths `mrp` passes through unresolved, a nested map

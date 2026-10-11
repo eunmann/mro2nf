@@ -17,7 +17,8 @@ import (
 
 // The entry kinds, each naming the comparison its matcher applies to.
 const (
-	// KindABI excuses a difference in a stage invocation's _args or _outs.
+	// KindABI excuses a difference in a stage invocation's _args, _outs or
+	// _jobinfo allocation.
 	KindABI = "abi"
 	// KindOutcome excuses a difference in how a run ends.
 	KindOutcome = "outcome"
@@ -31,8 +32,9 @@ const (
 
 // The files and rules of an ABI matcher.
 const (
-	FileArgs = "_args"
-	FileOuts = "_outs"
+	FileArgs    = "_args"
+	FileOuts    = "_outs"
+	FileJobInfo = "_jobinfo"
 
 	// ABIIgnoreKey drops the matcher's top-level key from the file on both
 	// sides.
@@ -407,8 +409,8 @@ func (m ABIMatcher) validate(id string) error {
 	switch {
 	case len(m.Fixtures) == 0 || slices.Contains(m.Fixtures, ""):
 		return fmt.Errorf("%w: %q names no fixture", ErrInvalid, id)
-	case m.File != FileArgs && m.File != FileOuts:
-		return fmt.Errorf("%w: %q file %q is not %s or %s", ErrInvalid, id, m.File, FileArgs, FileOuts)
+	case !slices.Contains([]string{FileArgs, FileOuts, FileJobInfo}, m.File):
+		return fmt.Errorf("%w: %q file %q is not %s, %s or %s", ErrInvalid, id, m.File, FileArgs, FileOuts, FileJobInfo)
 	case m.Rule != ABIIgnoreKey && m.Rule != ABICeilNumber:
 		return fmt.Errorf("%w: %q has unknown ABI rule %q", ErrInvalid, id, m.Rule)
 	case m.Key == "":

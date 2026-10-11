@@ -6,7 +6,7 @@ package e2e
 // Martian (mrp) AND the transpiled Nextflow, then compare the published outs/
 // tree — the set of output file paths relative to the outs dir plus their
 // contents — the (path-normalized) _outs JSON, and every stage invocation's
-// _args/_outs (abidiff_test.go). This validates mre's
+// _args, _outs and _jobinfo allocation (abidiff_test.go). This validates mre's
 // publish layout and the whole transpile+runtime path against Martian itself,
 // not a hand-written golden. Anchor fixtures additionally run a -native
 // Nextflow leg against the same mrp pipestance (#120), so the native emit path
@@ -270,17 +270,29 @@ func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit fu
 // invocation, plus the extra Nextflow legs it runs against the same mrp
 // pipestance.
 //
-// native adds a -native transpile+Nextflow leg (#120): without it, -native
-// correctness would rest entirely on committed goldens and a Martian behavior
-// change at a pin bump — or a native-only divergence the golden JSON does not
-// capture — would be invisible until goldens were regenerated. realMrjob runs
-// the Nextflow side's comp stages through $MARTIAN_BIN/mrjob, the binary mrp
-// itself runs them with.
+// mro names the entry invocation of a bench/ fixture, whose name is then its
+// repo-relative dir (bench/<shape>); a testdata/ fixture leaves it empty and
+// runs its pipeline.mro. native adds a -native transpile+Nextflow leg (#120):
+// without it, -native correctness would rest entirely on committed goldens and
+// a Martian behavior change at a pin bump — or a native-only divergence the
+// golden JSON does not capture — would be invisible until goldens were
+// regenerated. realMrjob runs the Nextflow side's comp stages through
+// $MARTIAN_BIN/mrjob, the binary mrp itself runs them with.
 type mrpDiffCase struct {
 	name      string
+	mro       string
 	realMrjob bool
 	native    bool
 	inline    bool
+}
+
+// source returns the dir and entry .mro the case runs.
+func (tc mrpDiffCase) source() (string, string) {
+	if tc.mro != "" {
+		return filepath.Join(root, tc.name), tc.mro
+	}
+
+	return filepath.Join(root, "testdata", tc.name), "pipeline.mro"
 }
 
 // mrpDiffCases are the fixtures run under both mrp and Nextflow; every other
@@ -510,6 +522,15 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "preflight_ungated"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
 	{name: "vdr_volatile"},
+	// #472: every bench lane's invocation at its narrower width, in both
+	// TestBench modes, so a divergence on a bench shape fails here and not
+	// only the bench's task-count gates.
+	{name: "bench/chain", mro: "pipeline.mro", native: true},
+	{name: "bench/forks", mro: "pipeline_w4.mro", native: true},
+	{name: "bench/split", mro: "pipeline_c4.mro", native: true},
+	{name: "bench/mapsplit", mro: "pipeline_w4.mro", native: true},
+	{name: "bench/mapdisabled", mro: "pipeline_w4.mro", native: true},
+	{name: "bench/mapnested", mro: "pipeline_w2.mro", native: true},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -544,7 +565,7 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
 // and requires the published file tree, the _outs JSON and every stage
-// invocation's _args/_outs to match.
+// invocation's _args, _outs and _jobinfo allocation to match.
 func TestMrpDiff(t *testing.T) {
 	t.Parallel()
 
@@ -570,7 +591,8 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	t.Helper()
 
 	tmp := t.TempDir()
-	runMrp(t, bin, tc.name, tmp)
+	dir, mro := tc.source()
+	runMrpAt(t, bin, dir, mro, tmp)
 
 	// Extra transpile flags land AFTER the fixture's auto-added -mrjob;
 	// mro2nf's stdlib flag parsing keeps the LAST occurrence, so the real mrjob
@@ -586,12 +608,12 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 		extra = append(extra, "-mrjob", mrjob)
 	}
 
-	compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, extra))
+	compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, extra))
 
 	if tc.native {
 		t.Run("native", func(t *testing.T) {
 			t.Parallel()
-			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native")))
+			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, append(slices.Clone(extra), "-native")))
 		})
 	}
 
@@ -602,32 +624,33 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	if tc.inline {
 		t.Run("noinline", func(t *testing.T) {
 			t.Parallel()
-			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
+			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
 		})
 	}
 }
 
-// diffNextflow transpiles a fixture with the given flags, runs the generated
-// project under Nextflow, diffs its published tree + _outs JSON against the mrp
-// pipestance at <tmp>/mrp, and returns the project dir.
-func diffNextflow(t *testing.T, fixture, tmp string, flags []string) string {
+// diffNextflow transpiles a case's fixture with the given flags, runs the
+// generated project under Nextflow, diffs its published tree + _outs JSON
+// against the mrp pipestance at <tmp>/mrp, and returns the project dir.
+func diffNextflow(t *testing.T, tc mrpDiffCase, tmp string, flags []string) string {
 	t.Helper()
 
-	proj := transpile(t, fixture, flags...)
+	dir, mro := tc.source()
+	proj := transpileMRO(t, dir, mro, flags...)
 
 	if err := runNextflow(t, proj); err != nil {
 		t.Fatalf("nextflow: %v", err)
 	}
 
-	compareMrpToNextflow(t, fixture, tmp, proj)
+	compareMrpToNextflow(t, tc.name, tmp, proj)
 
 	return proj
 }
 
-// compareStageABI requires every stage phase's normalized _args and _outs to
-// match between the mrp pipestance and the Nextflow work dir of fixture
-// (#348), less what the allowlist excuses, and every allowlist entry scoped to
-// the fixture to excuse something.
+// compareStageABI requires every stage phase's normalized _args, _outs and
+// _jobinfo allocation to match between the mrp pipestance and the Nextflow
+// work dir of fixture (#348), less what the allowlist excuses, and every
+// allowlist entry scoped to the fixture to excuse something.
 func compareStageABI(t *testing.T, fixture, tmp, proj string) {
 	t.Helper()
 
