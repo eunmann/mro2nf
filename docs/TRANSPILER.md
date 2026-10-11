@@ -536,6 +536,47 @@ leg (`TestMrpDiffFailureParity`) to name the stage a failed task ran.
 All three adapter ABIs — `py`, `exec`, and `comp` (via `mrjob`) — have been run
 live in an isolated cloud container.
 
+### 5.1 The call-graph data plane (emitter v2, #463)
+
+Three more subcommands resolve values on Martian's own compiled call graph
+(`internal/cg`), not on bindspecs. Each takes the invocation `.mro` (`-mro`,
+`-mropath`), compiles it as `mrp` does (`syntax.Compile`, then
+`MakePipelineCallGraph`), and reads only the items its task staged (`-in`, an
+item or a dir of items). No generated project calls them yet; the v2 emitter
+(#466) will.
+
+- **`mre args -node <fqid>`** builds one stage instance's args bundle and prints
+  `enabled` or `disabled`. The instance's fork comes from the fork elements it
+  staged, and its values from its parents' stamped outs bundles. A disabled
+  instance gets only its stamp.
+- **`mre post`** runs after the stage. It stamps the outs bundle with the
+  instance (`instance.json`). For a disabled instance it first writes mrp's
+  disabled outs, with every output null. It checks enabled outs with Martian's
+  `LazyArgumentMap.ValidateOutputs`, as mrp's `Fork.verifyOutput` does. Then it
+  writes one dir per fork of every root this stage feeds:
+  `forks/<root fqid>/<ordinal>/`. The ordinal is zero-padded, in mrp's fork
+  order (array index, or map keys in byte order). Each dir holds that fork's
+  element of the source collection as a bundle, with its file leaves staged,
+  plus `fork.json`, which records the real fork (keys as JSON strings) and its
+  position. An instance therefore stages only its own element, and no key ever
+  needs escaping. `mre post -entry` writes the forks the call graph already
+  fixes (literal and entry-sourced sources) the same way, as fork records
+  without values. The name of a fork nested in an outer map call the
+  producer does not fix is prefixed with the outer ordinals, joined by dots.
+- **`mre outs`** resolves the pipeline outs into the bundle `publish-layout`
+  reads, checking them with `MarshalerMap.ValidatePipelineOutputs`.
+
+The resolver mirrors only what Martian does not export: per-instance
+resolution (`core/resolve.go` `resolveInputs` and `TopNode.resolve`), fork
+expansion (`core/fork.go`) and the disable test (`core/stage.go`
+`Fork.disabled`). For specialization, projection, narrowing and validation it
+calls Martian's exported functions (`ResolvedBinding.BindingPath`,
+`LazyArgumentMap.Path`, each type's `FilterJson`, and the validators).
+`TestMrpCallGraph` (e2e) replays every mrp-diff fixture's real mrp pipestance
+through these subcommands, and it requires byte-identical `_args` and the same
+pipeline outs. Its drift guard requires the same `_args` and fork set as
+mrp's own resolver, reattached read-only in-process.
+
 ---
 
 ## 6. Bindspecs: how input wiring is described
