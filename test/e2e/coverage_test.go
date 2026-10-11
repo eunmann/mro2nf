@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"fmt"
 	"go/scanner"
 	"go/token"
 	"maps"
@@ -13,6 +14,9 @@ import (
 	"slices"
 	"strconv"
 	"testing"
+
+	"github.com/eunmann/mro2nf/test/divergence"
+	"github.com/google/go-cmp/cmp"
 )
 
 // nonE2EFixtures are testdata fixtures deliberately NOT exercised by any e2e
@@ -82,9 +86,9 @@ const mrpUnresolvedInput = "mrp passes the invocation's relative input/ path thr
 // TestEveryFixtureMrpDiffed fails unless every pipeline fixture is in exactly
 // one of mrpDiffCases (outputs diffed), mrpOutcomeCases (run outcome diffed)
 // and mrpUnrunnable (with a reason), when a table names a fixture that does
-// not exist, when an mrpOutcomeCases entry is malformed, or when an outcome
-// divergence in the allowlist is not named by exactly one case: every fixture
-// mrp can run faces live mrp.
+// not exist, when an mrpOutcomeCases entry is malformed, or when an allowlist
+// entry is applied by no case (unappliedAllowlistEntries): every fixture mrp
+// can run faces live mrp.
 func TestEveryFixtureMrpDiffed(t *testing.T) {
 	present := pipelineFixtures(t)
 	tables := map[string][]string{}
@@ -108,10 +112,8 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 		}
 	}
 
-	for _, e := range allow.Entries() {
-		if e.Outcome != nil && len(named[e.ID]) != 1 {
-			t.Errorf("outcome divergence %s is named by the mrpOutcomeCases %v; name it from exactly one case", e.ID, named[e.ID])
-		}
+	for _, bad := range unappliedAllowlistEntries(allow, named) {
+		t.Error(bad)
 	}
 
 	for name, reason := range mrpUnrunnable {
@@ -137,6 +139,62 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 			t.Errorf("fixture %q is not compared with mrp; add it to mrpDiffCases if mrp succeeds on it, "+
 				"to mrpOutcomeCases if mrp fails on it by design, or to mrpUnrunnable with the reason mrp cannot run it", name)
 		}
+	}
+}
+
+// unappliedAllowlistEntries reports each outcome entry not named by exactly
+// one mrpOutcomeCases case (named maps an entry to the cases naming it), and
+// each ABI-matcher entry scoped to a fixture that is not in mrpDiffCases,
+// where diffStageABI would never apply it or report it stale.
+func unappliedAllowlistEntries(allow divergence.Allowlist, named map[string][]string) []string {
+	diffed := map[string]bool{}
+	for _, tc := range mrpDiffCases {
+		diffed[tc.name] = true
+	}
+
+	var bad []string
+
+	for _, e := range allow.Entries() {
+		if e.Outcome != nil && len(named[e.ID]) != 1 {
+			bad = append(bad, fmt.Sprintf("outcome divergence %s is named by the mrpOutcomeCases %v; name it from exactly one case", e.ID, named[e.ID]))
+		}
+
+		if e.ABI == nil {
+			continue
+		}
+
+		for _, f := range e.ABI.Fixtures {
+			if !diffed[f] {
+				bad = append(bad, fmt.Sprintf("ABI divergence %s names fixture %q, which is not in mrpDiffCases", e.ID, f))
+			}
+		}
+	}
+
+	return bad
+}
+
+// TestUnappliedAllowlistEntries reports an ABI entry scoped to a misspelled
+// fixture and to an outcome-diffed one, and passes a diffed fixture.
+func TestUnappliedAllowlistEntries(t *testing.T) {
+	entry := func(id, fixture string) string {
+		return `{"id": "` + id + `", "kind": "abi", "feature": "f", "summary": "s", "justification": "j", "evidence": ["TestX"], ` +
+			`"abi": {"fixtures": ["` + fixture + `"], "file": "_args", "rule": "ignore-key", "key": "k"}}`
+	}
+
+	allow, err := divergence.Parse([]byte(`{"divergences": [` + entry("diffed", mrpDiffCases[0].name) + `, ` +
+		entry("misspelled", "kitchen_snk") + `, ` + entry("outcome", mrpOutcomeCases[0].name) + `]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := unappliedAllowlistEntries(allow, nil)
+	want := []string{
+		`ABI divergence misspelled names fixture "kitchen_snk", which is not in mrpDiffCases`,
+		`ABI divergence outcome names fixture "` + mrpOutcomeCases[0].name + `", which is not in mrpDiffCases`,
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("unappliedAllowlistEntries (-want +got):\n%s", diff)
 	}
 }
 
