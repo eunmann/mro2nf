@@ -227,6 +227,7 @@ func unescape(name string, value any) (any, error) {
 // into place (no single-node funnel — #12).
 type publisher struct {
 	structs map[string]*ir.StructType
+	tbl     *types.Table
 	// warn receives per-skipped-key diagnostics (illegal map keys, #114) —
 	// os.Stderr in production, a buffer in tests.
 	warn io.Writer
@@ -245,7 +246,10 @@ type publisher struct {
 
 // newPublisher returns a publisher over the program's struct table.
 func newPublisher(structs map[string]*ir.StructType) *publisher {
-	return &publisher{structs: structs, warn: os.Stderr, seen: map[string]string{}, layout: map[string][]string{}}
+	return &publisher{
+		structs: structs, tbl: types.NewTable(structs), warn: os.Stderr,
+		seen: map[string]string{}, layout: map[string][]string{},
+	}
 }
 
 // manifestEntry is one published output file in the manifest index: a downstream
@@ -323,7 +327,7 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 	}
 
 	if p.ArrayDim > 1 {
-		return pub.unpublishedArray(rel, arr)
+		return pub.unpublishedArray(rel, p, arr)
 	}
 
 	width := len(strconv.Itoa(len(arr)))
@@ -346,20 +350,25 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 	return out, nil
 }
 
-// unpublishedArray returns the elements of the N-D array at rel unpublished,
-// warning once when any holds a file, as mrp prints "Could not move output
-// files" for them.
-func (pub *publisher) unpublishedArray(rel string, arr []any) (any, error) {
-	out := make([]any, len(arr))
+// unpublishedArray returns the N-D array arr of param p at rel as mrp leaves
+// an element it cannot move, except that every file in it, written or not, is
+// null, since an unpublished file has no path relative to results/. Every
+// other value keeps the stage's value, escaped strings restored. It warns once
+// when the array names a file, as mrp prints "Could not move output files".
+func (pub *publisher) unpublishedArray(rel string, p ir.Param, arr []any) (any, error) {
 	files := false
 
-	for i, ev := range arr {
-		uv, held, err := unpublished(ev)
-		if err != nil {
-			return nil, fmt.Errorf("publish %s: %w", rel, err)
+	nulled, err := pub.tbl.Apply([]ir.Param{p}, map[string]any{p.Name: arr}, func(leaf string) (string, error) {
+		if err := shim.CheckReserved(leaf); err != nil {
+			return "", fmt.Errorf("unpublished file: %w", err)
 		}
 
-		out[i], files = uv, files || held
+		files = files || leaf != ""
+
+		return "", types.ErrSkipLeaf
+	})
+	if err != nil {
+		return nil, fmt.Errorf("publish %s: %w", rel, err)
 	}
 
 	if files {
@@ -368,62 +377,7 @@ func (pub *publisher) unpublishedArray(rel string, arr []any) (any, error) {
 		_, _ = fmt.Fprintf(pub.warn, "mre: publish: leaving the files below %q unpublished and null, as mrp cannot move a file below an array of two or more dimensions\n", rel)
 	}
 
-	return out, nil
-}
-
-// unpublished returns v as mrp leaves an element it cannot move, with each
-// file marker in it null, since an unpublished file has no path relative to
-// results/, and every escaped string restored. held reports whether v holds a
-// file marker.
-func unpublished(v any) (any, bool, error) {
-	switch t := v.(type) {
-	case string:
-		if _, _, ok := shim.CutMarker(t); ok {
-			return nil, true, nil
-		}
-
-		if err := shim.CheckReserved(t); err != nil {
-			return nil, false, fmt.Errorf("unpublished value: %w", err)
-		}
-
-		s, err := shim.UnescapeValue(t)
-		if err != nil {
-			return nil, false, fmt.Errorf("unescape unpublished value: %w", err)
-		}
-
-		return s, false, nil
-	case []any:
-		out := make([]any, len(t))
-		held := false
-
-		for i, e := range t {
-			u, h, err := unpublished(e)
-			if err != nil {
-				return nil, false, err
-			}
-
-			out[i], held = u, held || h
-		}
-
-		return out, held, nil
-	case types.Object, map[string]any:
-		obj, _ := types.AsObject(t)
-		out := make(types.Object, len(obj))
-		held := false
-
-		for i, m := range obj {
-			u, h, err := unpublished(m.Value)
-			if err != nil {
-				return nil, false, err
-			}
-
-			out[i], held = types.Member{Key: m.Key, Value: u}, held || h
-		}
-
-		return out, held, nil
-	default:
-		return v, false, nil
-	}
+	return unescape(p.Name, nulled[p.Name])
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their

@@ -393,8 +393,9 @@ func TestPublishSharedLeafNamesFirstPath(t *testing.T) {
 
 // TestPublishNDArrayLeavesFilesUnpublished pins #432: below an array of two or
 // more dimensions, whether an output, a struct field or a typed map's value,
-// mrp moves no file, so nothing is published and each file is null; every
-// other value, an escaped string included, stays as the stage wrote it, one
+// mrp moves no file, so nothing is published and each file, one the stage
+// never wrote included, is null; every other value, an escaped string
+// included, stays as the stage wrote it, one
 // warning names each such output, and a 1-D array still publishes.
 func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 	params := []ir.Param{
@@ -410,7 +411,7 @@ func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 	escaped := "@mre:str:" + marker("L0009")
 	outs := map[string]any{
 		"r12":   []any{[]any{types.Object{{Key: "f0", Value: dirMarker("L0000")}, {Key: "s", Value: escaped}}}},
-		"grid":  []any{[]any{marker("L0001"), nil}, nil},
+		"grid":  []any{[]any{marker("L0001"), nil, "/work/ab/cdef/main/files/unwritten.txt"}, nil},
 		"lanes": types.Object{{Key: "k", Value: []any{[]any{marker("L0002")}}}},
 		"one":   []any{marker("L0003")},
 	}
@@ -423,7 +424,7 @@ func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 
 	want := map[string]any{
 		"r12":   []any{[]any{types.Object{{Key: "f0", Value: nil}, {Key: "s", Value: marker("L0009")}}}},
-		"grid":  []any{[]any{nil, nil}, nil},
+		"grid":  []any{[]any{nil, nil, nil}, nil},
 		"lanes": map[string]any{"k": []any{[]any{nil}}},
 		"one":   []any{"one/0.txt"},
 	}

@@ -8,13 +8,18 @@ stage MAKE2D(
 """
 
 
+def _path(name):
+    path = martian.make_path(name)
+    if isinstance(path, bytes):
+        path = path.decode("utf-8")
+    return path
+
+
 def main(args, outs):
     row = []
     for i in range(args.n):
-        path = martian.make_path("cell%d.txt" % i)
-        if isinstance(path, bytes):
-            path = path.decode("utf-8")
+        path = _path("cell%d.txt" % i)
         with open(path, "w") as handle:
             handle.write("n=%d i=%d" % (args.n, i))
         row.append(path)
-    outs.row = row + [None]
+    outs.row = row + [None, _path("never_written.txt")]
