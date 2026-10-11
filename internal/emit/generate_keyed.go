@@ -452,7 +452,7 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call, c
 // genKeyedMappedDisableGate emits a keyed DISABLE bind and a per-outer-fork
 // run/skip branch for a disabled nested map call. It returns the run-branch
 // channel expression (the FORKBIND input with the disable-flag bundle stripped)
-// and emits sk_<call>, the keyed null bundles for skipped outer forks.
+// and emits sk_<call>, the result for skipped outer forks (genKeyedMappedSkip).
 func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call, cp callPlan) string {
 	// Native gating (#59, Lever 2) for a self.<field> flag: read it from the
 	// per-fork pipeline-args bundle (row[1]) — no keyed DISABLE task, no join.
