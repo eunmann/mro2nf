@@ -24,11 +24,13 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// coreFork is one stage fork as mrp's own runtime resolves it. Its
+// coreFork is one stage fork as mrp's own runtime resolves it: its stage's
+// call-graph fqid, its args, and whether they are all resolved. Its
 // disabled verdict is not among them: core decides it only when it steps the
 // fork (Fork.disabled, core/stage.go:883, unexported), which a read-only
 // reattach never does.
 type coreFork struct {
+	node  string
 	args  json.RawMessage
 	ready bool
 }
@@ -71,6 +73,7 @@ func coreForks(ctx context.Context, t *testing.T, ps string, mroPaths []string) 
 	}
 
 	out := map[string]coreFork{}
+	psPrefix := "ID." + filepath.Base(ps) + "."
 
 	for _, n := range pipe.SerializeState(ctx) {
 		if n.Type != syntax.KindStage {
@@ -83,7 +86,11 @@ func coreForks(ctx context.Context, t *testing.T, ps string, mroPaths []string) 
 				t.Fatal(err)
 			}
 
-			out[rel] = coreFork{args: bindingArgs(t, f.Bindings.Argument), ready: bindingsReady(f.Bindings.Argument)}
+			out[rel] = coreFork{
+				node:  strings.TrimPrefix(n.Fqname, psPrefix),
+				args:  bindingArgs(t, f.Bindings.Argument),
+				ready: bindingsReady(f.Bindings.Argument),
+			}
 		}
 	}
 

@@ -30,10 +30,11 @@ import (
 // stand in for the stage, and `mre post` stamps them and writes the fork
 // elements downstream instances fan out over; `mre outs` then resolves the
 // pipeline outs. It requires:
-//   - every instance's _args byte-identical to mrp's (after file leaves are
-//     reduced to name and content digest), and its disabled state to match;
+//   - every instance's _args equal to mrp's after both are re-encoded and
+//     file leaves are reduced to name and content digest, and its disabled
+//     state to match mrp's _disabled marker;
 //   - mrp's own resolver, run in-process on the same pipestance (the drift
-//     guard), to resolve the same fork set, disabled states and _args;
+//     guard), to resolve the same fork set and _args;
 //   - the pipeline outs equal to mrp's, key order included.
 func TestMrpCallGraph(t *testing.T) {
 	t.Parallel()
@@ -69,7 +70,10 @@ type cgReplay struct {
 	entry   string
 	posted  map[string][]postedInstance
 	ours    map[string]replayedFork
-	seq     int
+	// emptyFork holds the stages with a fork root that has no fork under
+	// some fork of the roots before it.
+	emptyFork map[string]bool
+	seq       int
 }
 
 // postedInstance is one stage instance after `mre post`.
@@ -117,11 +121,12 @@ func newCGReplay(t *testing.T, fixture, tmp string) *cgReplay {
 
 	rp := &cgReplay{
 		t: t, fixture: fixture, g: g, call: call, dir: dir, mro: mro, tmp: tmp,
-		ps:     filepath.Join(tmp, "mrp"),
-		types:  filepath.Join(tmp, "types.json"),
-		entry:  filepath.Join(tmp, "cg", "entry"),
-		posted: map[string][]postedInstance{},
-		ours:   map[string]replayedFork{},
+		ps:        filepath.Join(tmp, "mrp"),
+		types:     filepath.Join(tmp, "types.json"),
+		entry:     filepath.Join(tmp, "cg", "entry"),
+		posted:    map[string][]postedInstance{},
+		ours:      map[string]replayedFork{},
+		emptyFork: map[string]bool{},
 	}
 
 	writeManifest(t, mro, dir, rp.types)
@@ -267,6 +272,10 @@ func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayIns
 				fork:  append(slices.Clip(prefix.fork), cg.Part{Root: roots[i], Index: el.Fork[len(el.Fork)-1].Index}),
 			})
 		}
+	}
+
+	if len(found) == 0 {
+		rp.emptyFork[st.Fqid] = true
 	}
 
 	var out []replayInstance
@@ -499,8 +508,9 @@ func (rp *cgReplay) mrpDisabled(rel string) bool {
 
 // checkCore is the drift guard: mrp's own resolver, reattached to the same
 // pipestance, must hold exactly the forks the replay ran, plus only the
-// disabled placeholder fork mrp keeps for a map call over an empty or null
-// source, and resolve the same _args for every fork that runs.
+// disabled placeholder fork0 mrp keeps for a stage whose map call has no
+// forks under some outer fork (an empty or null source), and resolve the
+// same _args for every fork that runs.
 func (rp *cgReplay) checkCore() {
 	cf := coreForks(rp.t.Context(), rp.t, rp.ps, []string{rp.dir})
 
@@ -523,7 +533,8 @@ func (rp *cgReplay) checkCore() {
 	}
 
 	for _, rel := range sortedKeys(cf) {
-		if _, ok := rp.ours[rel]; !ok && (filepath.Base(rel) != "fork0" || !rp.mrpDisabled(rel)) {
+		placeholder := filepath.Base(rel) == "fork0" && rp.mrpDisabled(rel) && rp.emptyFork[cf[rel].node]
+		if _, ok := rp.ours[rel]; !ok && !placeholder {
 			rp.t.Errorf("drift guard: %s: mrp's resolver runs a fork the replay has no instance for", rel)
 		}
 	}

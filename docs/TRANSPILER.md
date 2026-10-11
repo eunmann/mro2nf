@@ -577,8 +577,9 @@ expansion (`core/fork.go`) and the disable test (`core/stage.go`
 calls Martian's exported functions (`ResolvedBinding.BindingPath`,
 `LazyArgumentMap.Path`, each type's `FilterJson`, and the validators).
 `TestMrpCallGraph` (e2e) replays every mrp-diff fixture's real mrp pipestance
-through these subcommands, and it requires byte-identical `_args` and the same
-pipeline outs. Its drift guard requires the same `_args` and fork set as
+through these subcommands. It requires the same `_args` as mrp's, after both
+are re-encoded and file leaves are reduced to name and content digest, and the
+same pipeline outs. Its drift guard requires the same `_args` and fork set as
 mrp's own resolver, reattached read-only in-process.
 
 ---
