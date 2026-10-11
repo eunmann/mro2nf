@@ -499,6 +499,13 @@ var mrpDiffCases = []mrpDiffCase{
 	// publishes as a link and mro2nf as a copy (allowlist entry
 	// published-symlinks-copied).
 	{name: "symlink_escape"},
+	// #431: a file reached from several outputs, through a pass-through stage
+	// and a sub-pipeline boundary too, is named by the first path mrp
+	// published it at, through both LAYOUT variants and uninlined.
+	{name: "shared_out_file", native: true, inline: true},
+	// #432: files below a 2-D array, reached through a struct projection and
+	// a whole sub-pipeline ref, stay unpublished, as mrp leaves them.
+	{name: "nested_path_unpublished", native: true},
 	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
 	{name: "preflight_ungated"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -59,12 +60,31 @@ const (
 	bundleFiles = "f"
 )
 
-// markerRel is the only bundle-relative shape MarkFiles writes: the leaf's own
-// basename, alone in an ordinal dir directly under the files subdir.
-var markerRel = regexp.MustCompile(`^` + bundleFiles + `/L[0-9]{4,}/([^/\x00]+)$`)
+// ordinalName is the name of a leaf's ordinal dir under the files subdir.
+const ordinalName = `L[0-9]{4,}`
 
-// errNoBasename reports a file leaf whose path names no file, such as "/".
-var errNoBasename = errors.New("file leaf has no basename")
+// markerRel is the only bundle-relative shape MarkFiles writes: the leaf's own
+// basename in an ordinal dir directly under the files subdir.
+var markerRel = regexp.MustCompile(`^` + bundleFiles + `/` + ordinalName + `/([^/\x00]+)$`)
+
+var ordinalDir = regexp.MustCompile(`^` + ordinalName + `$`)
+
+// originFile names the file beside a leaf in its ordinal dir that holds the
+// leaf's origin. A file is one to mrp wherever it is referenced, so its origin
+// travels with every copy of it, from bundle to bundle and through a stage
+// that returns an input it was given: it is the absolute path the file was
+// first staged from, where its task wrote it, the path mrp would name.
+const originFile = ".mre-origin"
+
+var (
+	// errNoBasename reports a file leaf whose path names no file, such as "/".
+	errNoBasename = errors.New("file leaf has no basename")
+	// errReservedLeaf reports a file leaf named like the origin file it would
+	// share its ordinal dir with.
+	errReservedLeaf = errors.New("file leaf name is reserved")
+	// errBadOrigin reports an origin file that holds no origin MarkFiles writes.
+	errBadOrigin = errors.New("malformed leaf origin")
+)
 
 // validRel reports whether rel has markerRel's shape and stays in the bundle.
 func validRel(rel string) bool {
@@ -337,9 +357,10 @@ func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.T
 
 // MarkFiles copies every file leaf in payload (located via params/tbl) into
 // dir/f/, replacing each with a bundle-relative marker, and returns the
-// rewritten payload. Names are sequenced so distinct leaves never collide.
-// Every other string that begins with the reserved prefix is escaped, a file
-// leaf naming no file included. A non-nil conf confines the leaves' files.
+// rewritten payload. Names are sequenced so distinct files never collide, and
+// leaves of one origin share one copy. Every other string that begins with
+// the reserved prefix is escaped, a file leaf naming no file included. A
+// non-nil conf confines the leaves' files.
 func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, conf *Confinement) (map[string]any, error) {
 	escaped := make(map[string]any, len(payload))
 	for k, v := range payload {
@@ -351,54 +372,9 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		escaped[k] = ev
 	}
 
-	n := 0
+	m := leafMarker{dir: dir, conf: conf, marks: map[string]string{}}
 
-	copyIn := func(leaf string) (string, error) {
-		src := strings.TrimPrefix(leaf, escapePrefix)
-		if src == "" {
-			return leaf, nil
-		}
-
-		// A declared output file the stage legitimately never wrote: keep the path
-		// string unchanged rather than erroring on stat. Martian keeps it as-is at
-		// stage finalize and only nulls it at publish; a downstream join may still
-		// need the path string. See bug 4. os.Stat (not Lstat) follows symlinks so
-		// a dangling symlink is treated as absent too, rather than aborting the
-		// bundle in CopyTree's symlink resolution (matching publish's emitFile).
-		// The same stat records the leaf's ground-truth dir-ness for the marker;
-		// a non-IsNotExist error falls through to CopyTree, which reports it
-		// precisely.
-		info, err := os.Stat(src)
-		if os.IsNotExist(err) {
-			return leaf, nil
-		}
-
-		isDir := err == nil && info.IsDir()
-
-		name, err := leafName(src)
-		if err != nil {
-			return "", err
-		}
-
-		// Each leaf gets its own ordinal dir (f/L0000, f/L0001, … in canonical walk
-		// order), staged downstream as one path item, so leaves sharing a basename
-		// never collide; inside it the leaf keeps the basename mrp passes (#284).
-		rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d", n), name)
-		n++
-
-		dst := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
-			return "", fmt.Errorf("create files dir: %w", err)
-		}
-
-		if err := copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{conf: conf}); err != nil {
-			return "", err
-		}
-
-		return Marker(rel, isDir), nil
-	}
-
-	marked, err := tbl.Apply(params, escaped, copyIn)
+	marked, err := tbl.Apply(params, escaped, m.mark)
 	if err != nil {
 		return nil, fmt.Errorf("collect bundle files: %w", err)
 	}
@@ -406,18 +382,125 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 	return marked, nil
 }
 
-// leafName returns the basename of the file leaf at src: the name mrp's stage
-// sees, src being the path mrp would pass. A path ending in "/", "." or ".."
-// names the directory it resolves to.
-func leafName(src string) (string, error) {
+// leafMarker copies a payload's file leaves into the bundle dir. marks maps a
+// copied leaf's origin to its marker: a file the payload reaches at several
+// positions, or through several bundles, is one file to mrp, which publishes
+// it once and names that one published path at each (post_process.go
+// moveOutFile, copyOutSymlink), so it is copied once and every position gets
+// the same marker.
+type leafMarker struct {
+	dir   string
+	conf  *Confinement
+	marks map[string]string
+}
+
+// mark copies the file leaf to its own ordinal dir and returns its marker, or
+// returns leaf unchanged when it names no file.
+func (m leafMarker) mark(leaf string) (string, error) {
+	src := strings.TrimPrefix(leaf, escapePrefix)
+	if src == "" {
+		return leaf, nil
+	}
+
+	// A declared output file the stage legitimately never wrote: keep the path
+	// string unchanged rather than erroring on stat. Martian keeps it as-is at
+	// stage finalize and only nulls it at publish; a downstream join may still
+	// need the path string. See bug 4. os.Stat (not Lstat) follows symlinks so
+	// a dangling symlink is treated as absent too, rather than aborting the
+	// bundle in CopyTree's symlink resolution (matching publish's emitFile).
+	// The same stat records the leaf's ground-truth dir-ness for the marker;
+	// a non-IsNotExist error falls through to CopyTree, which reports it
+	// precisely.
+	info, err := os.Stat(src)
+	if os.IsNotExist(err) {
+		return leaf, nil
+	}
+
+	isDir := err == nil && info.IsDir()
+
 	abs, err := filepath.Abs(src)
 	if err != nil {
 		return "", fmt.Errorf("resolve file leaf %s: %w", src, err)
 	}
 
+	origin, err := LeafOrigin(abs)
+	if err != nil {
+		return "", err
+	}
+
+	if marker, ok := m.marks[origin]; ok {
+		return marker, nil
+	}
+
+	name, err := leafName(src, abs)
+	if err != nil {
+		return "", err
+	}
+
+	// Each leaf gets its own ordinal dir (f/L0000, f/L0001, … in canonical walk
+	// order), staged downstream as one path item, so leaves sharing a basename
+	// never collide; inside it the leaf keeps the basename mrp passes (#284).
+	rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d", len(m.marks)), name)
+
+	if err := m.stage(src, rel, origin); err != nil {
+		return "", err
+	}
+
+	m.marks[origin] = Marker(rel, isDir)
+
+	return m.marks[origin], nil
+}
+
+// stage copies the leaf at src to rel in the bundle and records its origin
+// beside it.
+func (m leafMarker) stage(src, rel, origin string) error {
+	dst := filepath.Join(m.dir, rel)
+	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
+		return fmt.Errorf("create files dir: %w", err)
+	}
+
+	if err := copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{conf: m.conf}); err != nil {
+		return err
+	}
+
+	return writeRaw(filepath.Join(filepath.Dir(dst), originFile), []byte(origin))
+}
+
+// LeafOrigin returns the origin of the file leaf at the absolute path abs: the
+// one recorded beside it when it is a leaf of a bundle, else abs itself.
+func LeafOrigin(abs string) (string, error) {
+	ordinal := filepath.Dir(abs)
+	if !ordinalDir.MatchString(filepath.Base(ordinal)) || filepath.Base(filepath.Dir(ordinal)) != bundleFiles {
+		return abs, nil
+	}
+
+	recorded, err := os.ReadFile(filepath.Join(ordinal, originFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return abs, nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read origin of %s: %w", abs, err)
+	}
+
+	if !filepath.IsAbs(string(recorded)) {
+		return "", fmt.Errorf("%w: %q beside %s", errBadOrigin, recorded, abs)
+	}
+
+	return string(recorded), nil
+}
+
+// leafName returns the basename of the file leaf at src, whose absolute path
+// is abs: the name mrp's stage sees, src being the path mrp would pass. A path
+// ending in "/", "." or ".." names the directory it resolves to.
+func leafName(src, abs string) (string, error) {
 	name := filepath.Base(abs)
 	if name == string(filepath.Separator) {
 		return "", fmt.Errorf("%w: %q", errNoBasename, src)
+	}
+
+	if name == originFile {
+		return "", fmt.Errorf("%w: %q", errReservedLeaf, src)
 	}
 
 	return name, nil

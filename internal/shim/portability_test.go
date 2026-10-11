@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 )
 
@@ -48,6 +49,26 @@ func TestScanOutputForScratchRefs(t *testing.T) {
 
 	if refs := shim.ScanOutputForScratchRefs(bundle, "/no/such/prefix/here"); refs != nil {
 		t.Errorf("unreferenced prefix must yield no findings, got %+v", refs)
+	}
+}
+
+// TestScanOutputForScratchRefsIgnoresOrigins checks that the origin MarkFiles
+// records beside each leaf, which names the leaf's path in the task work dir,
+// is not reported as stage output content.
+func TestScanOutputForScratchRefsIgnoresOrigins(t *testing.T) {
+	work := t.TempDir()
+	src := filepath.Join(work, "main", "files", "out.txt")
+	write(t, src, "plain content")
+
+	bundle := filepath.Join(work, "bundle")
+	params := []ir.Param{{Name: "out", BaseType: "file", IsFile: true}}
+
+	if _, err := shim.MarkFiles(bundle, map[string]any{"out": src}, params, fileTable(), nil); err != nil {
+		t.Fatalf("MarkFiles: %v", err)
+	}
+
+	if refs := shim.ScanOutputForScratchRefs(bundle, work); refs != nil {
+		t.Errorf("leaf origins must yield no findings, got %+v", refs)
 	}
 }
 

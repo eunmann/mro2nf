@@ -428,12 +428,13 @@ func tail(b []byte, n int) string {
 	return "    " + strings.Join(lines, "\n    ")
 }
 
-// goldenJSON asserts the JSON document at gotPath equals the one at
-// goldenPath, number tokens and key order included.
-func goldenJSON(t *testing.T, gotPath, goldenPath string) {
+// goldenJSON asserts the JSON document at gotPath, a pipeline_outs.json of
+// fixture read as the published-output comparison reads it, equals the golden
+// at goldenPath, number tokens and key order included.
+func goldenJSON(t *testing.T, fixture, gotPath, goldenPath string) {
 	t.Helper()
 
-	got, err := normalizeOutsFile(gotPath, nil)
+	got, err := normalizeOutsFile(gotPath, nfOutsRewrite(mustAllowlist(t), fixture))
 	if err != nil {
 		t.Fatal(err)
 	}
