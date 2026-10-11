@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -187,13 +188,25 @@ func TestNightlyShardsPartitionSuite(t *testing.T) {
 	}
 }
 
-// nightlyChangeGate is the `if:` of every nightly suite job: a scheduled run
-// skips the suites once their commit and Nextflow release have passed.
-const nightlyChangeGate = "${{ needs.gate.outputs.run == 'true' }}"
+// The `if:` of the nightly suite jobs: each runs in one tier, and a scheduled
+// run skips the suites once their commit, Nextflow release and tier passed.
+const (
+	nightlyDailyGate  = "${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'daily' }}"
+	nightlyWeeklyGate = "${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'weekly' }}"
+)
+
+// nightlyHeavyJobs are the suite jobs of the weekly tier; every other suite
+// job is daily.
+var nightlyHeavyJobs = []string{"scale", "gendiff"}
+
+// nightlyMarkGate lets the pass record run beside the other tier's skipped
+// jobs, which the implicit success() would treat as a reason to skip it.
+const nightlyMarkGate = "${{ !failure() && !cancelled() && needs.gate.outputs.run == 'true' }}"
 
 // TestNightlySuitesWaitOnChangeGate requires every suite job to need the
-// change gate and run only on its verdict, and the pass record to need every
-// suite job, so a pass is recorded only when all of them ran green.
+// change gate and run only on its verdict, in its tier, and the pass record
+// to need every suite job and run only when none failed, so a pass is
+// recorded only when all of its tier's suites ran green.
 func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 	var suites []string
 
@@ -207,8 +220,13 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 		default:
 			suites = append(suites, j.id)
 
-			if !slices.Contains(j.needs, "gate") || j.cond != nightlyChangeGate {
-				t.Errorf("job %q: needs %q, if %q; want needs gate, if %q", j.id, j.needs, j.cond, nightlyChangeGate)
+			want := nightlyDailyGate
+			if slices.Contains(nightlyHeavyJobs, j.id) {
+				want = nightlyWeeklyGate
+			}
+
+			if !slices.Contains(j.needs, "gate") || j.cond != want {
+				t.Errorf("job %q: needs %q, if %q; want needs gate, if %q", j.id, j.needs, j.cond, want)
 			}
 		}
 	}
@@ -223,9 +241,86 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 		}
 	}
 
-	if mark.cond != "" {
-		t.Errorf("mark job has if %q; it must keep the implicit success()", mark.cond)
+	if mark.cond != nightlyMarkGate {
+		t.Errorf("mark job has if %q, want %q", mark.cond, nightlyMarkGate)
 	}
+}
+
+// nightlyWeeklyCron is the schedule of the weekly tier.
+const nightlyWeeklyCron = "17 6 * * 0"
+
+// TestNightlyHeavyJobsRunWeekly runs the gate's tier step for every schedule
+// and for a dispatch with and without `heavy`: only the weekly cron and the
+// `heavy` input pick the weekly tier, which alone runs nightlyHeavyJobs, and
+// the tier is part of the pass key, so one tier's pass never skips the other.
+func TestNightlyHeavyJobsRunWeekly(t *testing.T) {
+	wf := readWorkflow(t, nightlyWorkflow)
+
+	heavy := wf.get("on").get("workflow_dispatch").get("inputs").get("heavy")
+	if scalarOf(heavy.get("type")) != "boolean" || scalarOf(heavy.get("default")) != "false" {
+		t.Errorf("%s workflow_dispatch input heavy: want type boolean, default false", nightlyWorkflow)
+	}
+
+	type trigger struct{ event, schedule, heavy, want string }
+
+	schedules := wf.get("on").get("schedule").items
+
+	triggers := make([]trigger, 0, len(schedules)+2)
+	triggers = append(triggers, trigger{"workflow_dispatch", "", "false", "daily"}, trigger{"workflow_dispatch", "", "true", "weekly"})
+
+	crons := make([]string, 0, len(schedules))
+
+	for _, s := range schedules {
+		cron := scalarOf(s.get("cron"))
+		crons = append(crons, cron)
+
+		want := "daily"
+		if cron == nightlyWeeklyCron {
+			want = "weekly"
+		}
+
+		triggers = append(triggers, trigger{"schedule", cron, "", want})
+	}
+
+	if !slices.Contains(crons, nightlyWeeklyCron) || len(crons) < 2 {
+		t.Errorf("%s schedules %q: want a daily cron and the weekly %q", nightlyWorkflow, crons, nightlyWeeklyCron)
+	}
+
+	steps := wf.get("jobs").get("gate").get("steps").items
+	tierStep := steps[slices.IndexFunc(steps, func(s *yamlNode) bool { return scalarOf(s.get("id")) == "tier" })]
+
+	for _, tr := range triggers {
+		if got := runTierStep(t, scalarOf(tierStep.get("run")), tr.event, tr.schedule, tr.heavy); got != tr.want {
+			t.Errorf("%s (schedule %q, heavy %q): tier %q, want %q", tr.event, tr.schedule, tr.heavy, got, tr.want)
+		}
+	}
+
+	key := steps[slices.IndexFunc(steps, func(s *yamlNode) bool { return scalarOf(s.get("id")) == "key" })]
+	if !strings.Contains(scalarOf(key.get("run")), "-$TIER\"") {
+		t.Errorf("%s gate key does not end in the tier", nightlyWorkflow)
+	}
+}
+
+// runTierStep runs the gate's tier script as Actions would for the trigger
+// and returns the tier it outputs.
+func runTierStep(t *testing.T, script, event, schedule, heavy string) string {
+	t.Helper()
+
+	out := filepath.Join(t.TempDir(), "output")
+
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "EVENT="+event, "SCHEDULE="+schedule, "HEAVY="+heavy, "GITHUB_OUTPUT="+out)
+
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("tier step: %v\n%s", err, b)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.TrimPrefix(strings.TrimSpace(string(data)), "tier=")
 }
 
 var scaleTestFunc = regexp.MustCompile(`(?m)^func (TestScale\w+)\(`)

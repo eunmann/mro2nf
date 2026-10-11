@@ -25,7 +25,8 @@ make test-scale SCALE_RUN=^TestScaleForks SCALE_WIDTH=1000
 ```
 
 `make bench` runs at widths small enough for every PR. The nightly workflow
-also runs the scale tier (#352), one shape per job. Each `TestScale<Shape>`
+runs the scale tier (#352) weekly, one shape per job, and `TestScaleForks` at
+`SCALE_WIDTH=1000` daily. Each `TestScale<Shape>`
 generates an invocation of a bench fixture at a narrow width and at a wide one,
 and runs both in default and `-native` mode:
 
