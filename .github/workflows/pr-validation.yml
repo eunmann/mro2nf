@@ -51,7 +51,7 @@ jobs:
     steps:
       # fetch-depth 2: a pull_request checkout is the PR's merge commit, and
       # its first parent is the base tip the PR merges into.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
       - id: diff
@@ -82,8 +82,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
@@ -96,7 +96,7 @@ jobs:
       # golangci-lint runs govet, so there is no separate `go vet` step.
       # --build-tags e2e pulls the tag-gated test/e2e harness into the lint
       # set (the tag is additive; nothing else carries an e2e constraint).
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.12.2
           args: --build-tags e2e
@@ -112,8 +112,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
@@ -127,8 +127,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
@@ -194,24 +194,25 @@ jobs:
       E2E_SHARD_INDEX: ${{ matrix.shard }}
       E2E_SHARD_TOTAL: ${{ needs.e2e-config.outputs.total }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
       - uses: ./.github/actions/setup-martian
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v3 # installs + caches the Nextflow binary
+      # Installs and caches the Nextflow binary.
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       - name: Resolve Nextflow version
         id: nxf
         # setup-nextflow exposes no version output, so read it back; keying the
         # plugin cache on it means a Nextflow bump can't be served stale plugins.
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
       - name: Cache Nextflow plugins
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
@@ -250,21 +251,21 @@ jobs:
     env:
       E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v3
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
       - name: Cache Nextflow plugins
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
@@ -281,21 +282,21 @@ jobs:
     env:
       E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v3
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
       - name: Cache Nextflow plugins
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
@@ -313,21 +314,21 @@ jobs:
     env:
       E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: "17"
-      - uses: nf-core/setup-nextflow@v3
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       - name: Resolve Nextflow version
         id: nxf
         run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
       - name: Cache Nextflow plugins
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}

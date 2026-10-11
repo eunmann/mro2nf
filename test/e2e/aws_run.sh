@@ -59,7 +59,7 @@ echo "stack=$STACK region=$REGION bucket=$BUCKET queue=$QUEUE"
 eval "$(aws configure export-credentials --profile "$AWS_PROFILE" --format env)"
 
 MRE="$ROOT/mre-linux"
-[ -x "$MRE" ] || { echo "building linux/amd64 mre-linux"; GOOS=linux GOARCH=amd64 go build -o "$MRE" ./cmd/mre; }
+[ -x "$MRE" ] || { echo "building linux/amd64 mre-linux"; CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$MRE" ./cmd/mre; }
 SHELL_PY="$ROOT/vendor-martian/python/martian_shell.py"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 

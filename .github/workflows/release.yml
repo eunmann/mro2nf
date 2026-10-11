@@ -8,19 +8,51 @@ on:
   # a GitHub release or pushing to GHCR. Only a tag push publishes.
   workflow_dispatch:
 
-# Least privilege at the workflow level: only the publish job needs write, and it
-# grants itself contents:write below. The build job (untrusted third-party actions
-# in the toolchain) and the image job thus run with a read-only token.
-permissions:
-  contents: read
+# No token scopes by default: each job grants only what it uses, so the build
+# job's toolchain never holds a write token.
+permissions: {}
 
-# A dispatch run is a dry run (no tag to publish against); a tag push is real.
 env:
+  # A dispatch run is a dry run (no tag to publish against); a tag push is real.
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+  # A semver pre-release (v1.2.0-rc1) is published but never becomes the
+  # latest GitHub release or the image's `latest` tag.
+  PRERELEASE: ${{ contains(github.ref_name, '-') }}
+  IMAGE: ghcr.io/${{ github.repository_owner }}/mro2nf-runtime
 
 jobs:
-  build:
+  # Publish only what CI validated. A tagged commit must be a main commit whose
+  # push ran PR Validation green; the tag usually lands while that run is still
+  # going, so wait for it rather than fail. Docs-only pushes skip PR Validation
+  # (paths-ignore) and so cannot be released.
+  ci-green:
+    name: CI green on the tagged commit
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read # resolve the tag to its commit
+      actions: read # read the PR Validation runs
+    steps:
+      - name: Wait for PR Validation on the tagged commit
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$GITHUB_REF_NAME" --jq .sha)
+          id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pr-validation.yml/runs?head_sha=$sha&event=push&branch=main" \
+            --jq '.workflow_runs | max_by(.run_number) | .id // empty')
+          [ -n "$id" ] || {
+            echo "::error::no PR Validation run for a push of $sha to main: tag a commit CI validated on main"
+            exit 1
+          }
+          gh run watch "$id" --repo "$GITHUB_REPOSITORY" --interval 30 --exit-status
+
+  build:
+    needs: ci-green
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         # Unix targets only: the mre runtime shim drives the Martian adapter ABI
@@ -32,21 +64,34 @@ jobs:
           - { goos: darwin, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No build cache: it is shared with main-branch jobs that run third-party
+      # actions, so a poisoned entry could reach the release binaries.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      # Static and path-free, as the Makefile's build target explains.
       - name: Build mro2nf + mre
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
         run: |
           for bin in mro2nf mre; do
             out="${bin}-${{ matrix.goos }}-${{ matrix.goarch }}"
-            go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" "./cmd/${bin}"
+            go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" "./cmd/${bin}"
           done
-      - uses: actions/upload-artifact@v7
+      - name: Check the linux binaries are static
+        if: matrix.goos == 'linux'
+        run: |
+          for bin in mro2nf mre; do
+            f="${bin}-linux-${{ matrix.goarch }}"
+            file "$f" | grep -q 'statically linked' || { file "$f"; echo "::error::$f is not statically linked"; exit 1; }
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -62,49 +107,71 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'workflow_dispatch' # dry run builds but never releases
     permissions:
-      contents: write # create the GitHub release (only this job needs it)
+      contents: write # create the GitHub release
+      id-token: write # sign the provenance with a Sigstore certificate
+      attestations: write # store the provenance
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: binaries-*
           merge-multiple: true
-      # Third-party action holding the write token: pin to a commit SHA (not the
-      # mutable v3 tag) so a compromised tag can't gain release-write access.
-      # Dependabot keeps the pin current via the trailing version comment.
-      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+      - name: Write SHA256SUMS
+        run: LC_ALL=C sha256sum mro2nf-* mre-* > SHA256SUMS && cat SHA256SUMS
+      # GitHub offers no attestations to private repositories owned by a user
+      # account, so the step would fail every release there.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-checksums: SHA256SUMS
+      - if: github.event.repository.private
+        run: echo "::warning::no build provenance for the binaries or the image; GitHub attestations need a public repository here"
+      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           files: |
             mro2nf-*
             mre-*
+            SHA256SUMS
           fail_on_unmatched_files: true
+          prerelease: ${{ env.PRERELEASE }}
 
   # Publish the runtime base image (mre + Martian adapters at /opt/mro2nf) to
   # GHCR so users build their pipeline image FROM it instead of vendoring mre.
-  # Tagged with the release version + latest, multi-arch (amd64 + arm64).
+  # Tagged with the release version (+ latest for a non-prerelease), multi-arch
+  # (amd64 + arm64).
   image:
     name: Runtime image (GHCR)
+    needs: ci-green
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write # push the image and its provenance
+      id-token: write # sign the provenance with a Sigstore certificate
+      attestations: write # store the provenance
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4 # arm64 emulation for the final stage
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # arm64 emulation for the final stage.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.DRY_RUN != 'true' # no registry auth needed to build-without-push
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/metadata-action@v6
+      # latest=false: the default (auto) adds `latest` to every
+      # type=ref,event=tag, pre-releases included.
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
         with:
-          images: ghcr.io/${{ github.repository_owner }}/mro2nf-runtime
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
           tags: |
             type=ref,event=tag
-            type=raw,value=latest
-      - uses: docker/build-push-action@v7
+            type=raw,value=latest,enable=${{ env.PRERELEASE != 'true' }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: push
         with:
           context: .
           file: deploy/runtime/Dockerfile
@@ -116,3 +183,10 @@ jobs:
           # name, which is fine — the image is never pushed).
           build-args: |
             VERSION=${{ github.ref_name }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: ${{ env.DRY_RUN != 'true' && !github.event.repository.private }}
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false

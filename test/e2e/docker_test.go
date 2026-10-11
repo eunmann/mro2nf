@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -94,6 +95,42 @@ var (
 	errIsoImg  error
 )
 
+var errNoRuntimeBase = errors.New("runtime Dockerfile: no FROM image")
+
+// runtimeBase returns deploy/runtime/Dockerfile's final-stage base, the
+// digest-pinned image generated Dockerfiles also build FROM
+// (TestGeneratedBaseMatchesRuntime), so the iso suite runs on what ships.
+func runtimeBase() (string, error) {
+	raw, err := os.ReadFile(filepath.Join(root, "deploy", "runtime", "Dockerfile"))
+	if err != nil {
+		return "", fmt.Errorf("read runtime Dockerfile: %w", err)
+	}
+
+	base := ""
+
+	for line := range strings.Lines(string(raw)) {
+		f := strings.Fields(line)
+		if len(f) == 0 || f[0] != "FROM" {
+			continue
+		}
+
+		f = f[1:]
+		if len(f) > 0 && strings.HasPrefix(f[0], "--platform=") {
+			f = f[1:]
+		}
+
+		if len(f) > 0 {
+			base = f[0]
+		}
+	}
+
+	if base == "" {
+		return "", errNoRuntimeBase
+	}
+
+	return base, nil
+}
+
 // buildIsoImage builds (once per test process) an image that bakes mre, the
 // Martian adapters, and the fixture stage code at the SAME absolute paths the
 // transpiler bakes into the generated scripts, so they resolve inside the
@@ -104,13 +141,20 @@ func buildIsoImage(t *testing.T) {
 	buildBinaries(t)
 
 	isoImgOnce.Do(func() {
-		dockerfile := fmt.Sprintf(`FROM python:3.12-slim
+		base, err := runtimeBase()
+		if err != nil {
+			errIsoImg = err
+
+			return
+		}
+
+		dockerfile := fmt.Sprintf(`FROM %[2]s
 RUN apt-get update && apt-get install -y --no-install-recommends procps coreutils && rm -rf /var/lib/apt/lists/*
 COPY mre %[1]s/mre
 COPY vendor-martian/python %[1]s/vendor-martian/python
 COPY testdata %[1]s/testdata
 RUN chmod +x %[1]s/mre
-`, root)
+`, root, base)
 
 		cmd := exec.Command("docker", "build", "-q", "-t", isoImage(), "-f", "-", root)
 		cmd.Stdin = strings.NewReader(dockerfile)

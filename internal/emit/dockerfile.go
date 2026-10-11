@@ -59,6 +59,12 @@ const (
 	buildCtxDir = "runtime"           // build-context subdir under the output project
 )
 
+// runtimeBase is the generated image's base, pinned by digest so a moved tag
+// cannot change a rebuilt image. Dependabot bumps the same reference in
+// deploy/runtime/Dockerfile, and TestGeneratedBaseMatchesRuntime fails until
+// this one follows.
+const runtimeBase = "python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
+
 // checkContainerSources fails loudly if a baked runtime source is missing,
 // rather than letting it surface as a cryptic `docker build` COPY error or a
 // silently broken image, and refuses a vendored stage src or a config-set tool
@@ -424,7 +430,7 @@ func dockerfile(target Target, hasAdapters, hasStages, hasMrjob, hasRunner bool,
 #   docker build --platform linux/amd64 -t <image> .
 # Then transpile with --container <image> and push to your registry
 # (a private ECR repo in the same region for AWS HealthOmics).
-FROM --platform=linux/amd64 python:3.12-slim
+FROM --platform=linux/amd64 %s
 
 # bash (launcher), ps (Nextflow metrics), coreutils%s. No ENTRYPOINT: the backend
 # invokes the generated command with a bash launcher directly.
@@ -436,7 +442,7 @@ RUN apt-get update \
 # Stage code and tools must be self-contained: HealthOmics tasks have no internet.
 # Add any third-party stage dependencies here, e.g.: RUN pip install --no-cache-dir numpy
 `,
-		awsCLIComment(target), awsCLI, copies, pathCmdContract(pathCmds))
+		runtimeBase, awsCLIComment(target), awsCLI, copies, pathCmdContract(pathCmds))
 }
 
 // pathCmdContract renders the container contract for any bare-command stage srcs:
