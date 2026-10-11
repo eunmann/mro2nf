@@ -209,6 +209,38 @@ func TestAllowlistRuleScope(t *testing.T) {
 	}
 }
 
+// TestAllowlistRulesEverywhere checks the allowlist for a program no fixture
+// names applies every comparator rule on every fixture, the issue-tracked one
+// with no fixture left to find it excusing nothing, keeps the mechanism, and
+// drops the ABI and outcome matchers.
+func TestAllowlistRulesEverywhere(t *testing.T) {
+	allow := lookupAllowlist(t)
+	everywhere := allow.RulesEverywhere()
+
+	ids := make([]string, 0, len(everywhere.Entries()))
+	for _, e := range everywhere.Entries() {
+		ids = append(ids, e.ID)
+	}
+
+	if want := []string{"order", "by-stage", "how"}; !slices.Equal(ids, want) {
+		t.Errorf("RulesEverywhere kept %v, want %v", ids, want)
+	}
+
+	for _, rule := range []string{RuleABISortKeys, RuleFailureStageAndKind} {
+		if !everywhere.Excuses(rule, "other") {
+			t.Errorf("RulesEverywhere does not apply %s on every fixture", rule)
+		}
+	}
+
+	if got := slices.Concat(everywhere.ABI("fx"), everywhere.ScopedRules(KindABI, "fx")); len(got) != 0 {
+		t.Errorf("RulesEverywhere keeps %v scoped to fx", got)
+	}
+
+	if allow.Excuses(RuleABISortKeys, "other") || len(allow.ScopedRules(KindABI, "fx")) != 1 || len(allow.Entries()) != 5 {
+		t.Error("RulesEverywhere changed the original allowlist")
+	}
+}
+
 func TestAllowlistLookups(t *testing.T) {
 	allow := lookupAllowlist(t)
 
