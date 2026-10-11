@@ -2,13 +2,11 @@ package cg
 
 import (
 	"bytes"
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // The expected _args below are those mrp wrote for the zip_runtime and
@@ -119,24 +117,4 @@ func TestZipLiteralMaster(t *testing.T) {
 
 	_, got = f.args("ZIP_LITERAL.INNER_SHORT.PAIR", outer[2], filepath.Join(filepath.Dir(inner[0]), "0002.0000"), two)
 	wantArgs(t, "ZIP_LITERAL.INNER_SHORT.PAIR fork2_fork0", got, `{"a":null,"b":40}`)
-}
-
-// TestZipStrictFails: under the error enforcement level a missing element
-// fails the instance, as mrp's getBindings fails the fork.
-func TestZipStrictFails(t *testing.T) {
-	f := loadFixture(t, "zip_runtime")
-
-	three := f.outs("ZIP_RUNTIME.THREE", nil, `{"xs":[1,2,3]}`)
-	two := f.outs("ZIP_RUNTIME.TWO", nil, `{"xs":[10,20]}`)
-	elems := elementDirs(t, f.post(three, three), "ZIP_RUNTIME.SHORT")
-
-	level := syntax.GetEnforcementLevel()
-	syntax.SetEnforcementLevel(syntax.EnforceError)
-
-	t.Cleanup(func() { syntax.SetEnforcementLevel(level) })
-
-	_, err := f.g.WriteArgs(ArgsSpec{Node: "ZIP_RUNTIME.SHORT", In: []string{elems[2], two}, Out: f.next("args")})
-	if err == nil || !errors.Is(err, errNoElement) || !strings.Contains(err.Error(), "resolve input bindings") {
-		t.Errorf("WriteArgs = %v, want the instance's unresolved input bindings, as mrp fails the fork", err)
-	}
 }

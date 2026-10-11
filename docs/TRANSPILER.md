@@ -554,8 +554,8 @@ item or a dir of items). No generated project calls them yet; the v2 emitter
   if one has it, else its first split in source order. The other splits
   resolve at the same index, and, as in `mrp`, read null past the end of a
   shorter source or from a null one, and drop a longer one's extra
-  elements. The missing element is logged, and fails the instance only
-  under the error enforcement level.
+  elements. The missing element is logged, as at `mrp`'s default
+  enforcement level; `mrp --strict` is not supported.
 - **`mre run -phase split|main|join`** runs one phase of the instance that
   `-args` stamps as `mrp` runs its job (`internal/job`). py and comp stages
   run under `mrjob`, built from the pinned module (`make build`), with `mrp`'s

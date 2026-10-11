@@ -78,18 +78,15 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 	return in, writeInstance(spec.Out, in)
 }
 
-// reportUnresolved handles the inputs of in that read a missing element as
-// mrp's getBindings does (core/stage.go:1402-1440): they fail the instance
-// under the error enforcement level, and are logged otherwise.
+// reportUnresolved logs the inputs of in that read a missing element, as
+// mrp's getBindings does at its default enforcement level
+// (core/stage.go:1402-1440). mrp's --strict mode is not supported.
 func reportUnresolved(log io.Writer, in Instance, unresolved []error) error {
 	if len(unresolved) == 0 {
 		return nil
 	}
 
 	err := fmt.Errorf("resolve input bindings for %s at fork %s: %w", in.Node, in.Fork, errors.Join(unresolved...))
-	if syntax.GetEnforcementLevel() == syntax.EnforceError {
-		return err
-	}
 
 	if log != nil {
 		if _, werr := fmt.Fprintln(log, err); werr != nil {
