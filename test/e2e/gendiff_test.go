@@ -7,7 +7,8 @@ package e2e
 // checks TestMrpDiff and TestMrpDiffFailureParity apply to the fixtures: the
 // published tree, the _outs JSON and every stage invocation's _args, _outs
 // and _jobinfo allocation when both runs succeed, the run outcome when either fails. A divergence is
-// shrunk to a minimal program and written as a fixture directory.
+// written as a fixture directory, shrunk to a minimal program first unless
+// GEN_SHRINK_EVALS is 0.
 //
 // A generated program is no fixture, so every comparator rule of the
 // allowlist (divergences.json) applies to it, an issue-tracked one included,
@@ -121,7 +122,7 @@ func (e genEnv) divergenceReporter(t *testing.T) func(format string, args ...any
 }
 
 // genDivergence is one GEN_FINDINGS line: a diverging seed, the ids of its
-// findings and the shrunk fixture's dir name under GEN_ARTIFACTS.
+// findings and its fixture's dir name under GEN_ARTIFACTS.
 type genDivergence struct {
 	Seed     uint64   `json:"seed"`
 	Findings []string `json:"findings"`
@@ -174,7 +175,7 @@ func (e genEnv) budgetSpent(now time.Time) bool {
 }
 
 // TestGenDiff runs each selected seed's program under mrp and mro2nf and
-// fails on any divergence, naming the seed and the shrunk fixture.
+// fails on any divergence, naming the seed and its fixture.
 func TestGenDiff(t *testing.T) {
 	t.Parallel()
 
@@ -367,14 +368,18 @@ func runGenSeed(t *testing.T, env genEnv, seed uint64, random bool) {
 	report := env.divergenceReporter(t)
 	report("seed %d diverges from mrp (rerun: GEN_SEEDS=%d GEN_COUNT=1 make gen-diff):\n%s", seed, seed, v)
 
-	small, sv := shrinkGenProgram(t, env, prog, v)
+	small, sv, kind := prog, v, "unshrunk fixture (the rerun line shrinks)"
+	if env.shrink.MaxEvals > 0 {
+		small, sv = shrinkGenProgram(t, env, prog, v)
+		kind = "shrunk fixture"
+	}
 
 	dir, err := writeGenFixture(t, env, small, sv)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	report("seed %d: shrunk fixture %s (%s):\n%s", seed, dir, gen.Size(small), sv)
+	report("seed %d: %s %s (%s):\n%s", seed, kind, dir, gen.Size(small), sv)
 
 	if err := env.recordDivergence(seed, v, dir); err != nil {
 		t.Fatal(err)
