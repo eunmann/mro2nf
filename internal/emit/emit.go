@@ -82,6 +82,11 @@ type Options struct {
 	// AllowExternalFiles lets the transpile copy an entry file default or stage
 	// src that resolves outside MRODir and MROPath.
 	AllowExternalFiles bool
+	// ConfigTools names the tools ("mre", "shell", "mrjob") whose path a
+	// .mro2nf.yml set rather than a flag. A container target bakes such a tool
+	// only when it resolves inside MRODir or MROPath, as for a stage src: a
+	// config file shipped beside a shared .mro is not the user's choice.
+	ConfigTools map[string]bool
 	// StageCode maps each stage name to its (absolute) stage code path.
 	StageCode map[string]string
 	// Container, when set, is the image used for every process (process.container

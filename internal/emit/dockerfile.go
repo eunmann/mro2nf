@@ -61,10 +61,10 @@ const (
 
 // checkContainerSources fails loudly if a baked runtime source is missing,
 // rather than letting it surface as a cryptic `docker build` COPY error or a
-// silently broken image, and refuses a vendored stage src outside roots. mre is
-// always required; -shell, -mrjob, and each stage's code are verified when
-// present (an exec/comp-only pipeline may have no -shell). Per-entry read
-// failures inside a stage tree still surface as copyTree errors.
+// silently broken image, and refuses a vendored stage src or a config-set tool
+// outside roots. mre is always required; -shell, -mrjob, and each stage's code
+// are verified when present (an exec/comp-only pipeline may have no -shell).
+// Per-entry read failures inside a stage tree still surface as copyTree errors.
 func checkContainerSources(opts Options, roots sourceRoots) error {
 	if opts.Mre == "" {
 		return &apperror.UnsupportedError{Construct: "container target", Detail: "-mre is required (it is baked into the image)"}
@@ -101,6 +101,38 @@ func checkContainerSources(opts Options, roots sourceRoots) error {
 		if src := opts.StageCode[name]; !isBakedToolkitCmd(src) {
 			if err := roots.check("stage "+name+" src", src); err != nil {
 				return fmt.Errorf("container target: %w", err)
+			}
+		}
+	}
+
+	return checkConfigTools(opts, roots)
+}
+
+// checkConfigTools refuses a tool path a config file set (opts.ConfigTools)
+// that resolves outside roots, and for -shell the adapter module copied
+// beside it too. A tool passed as a flag is the user's own and may live
+// anywhere.
+func checkConfigTools(opts Options, roots sourceRoots) error {
+	for _, tool := range []struct{ name, path string }{
+		{"mre", opts.Mre}, {"shell", opts.Shell}, {"mrjob", opts.Mrjob},
+	} {
+		if tool.path == "" || !opts.ConfigTools[tool.name] {
+			continue
+		}
+
+		paths := []string{tool.path}
+		if tool.name == "shell" {
+			module, err := adapterModulePath(tool.path)
+			if err != nil {
+				return fmt.Errorf("container target: %w", err)
+			}
+
+			paths = append(paths, module)
+		}
+
+		for _, p := range paths {
+			if err := roots.check("-"+tool.name+" set by the config file", p); err != nil {
+				return fmt.Errorf("container target: %w (or pass -%s as a flag)", err, tool.name)
 			}
 		}
 	}
@@ -231,17 +263,27 @@ func vendorAdapter(shell, dir string) error {
 		return err
 	}
 
-	resolved, err := filepath.EvalSymlinks(shell)
+	module, err := adapterModulePath(shell)
 	if err != nil {
-		return fmt.Errorf("resolve %s: %w", shell, err)
+		return err
 	}
 
-	module := filepath.Join(filepath.Dir(resolved), adapterModule)
 	if _, err := os.Stat(module); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 
 	return copyToolFile(module, filepath.Join(dir, adapterModule))
+}
+
+// adapterModulePath returns where the adapter at shell imports its
+// adapterModule from: beside the adapter's resolved link target.
+func adapterModulePath(shell string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(shell)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", shell, err)
+	}
+
+	return filepath.Join(filepath.Dir(resolved), adapterModule), nil
 }
 
 // errNotRegular is returned for a tool path or vendored entry that is not a

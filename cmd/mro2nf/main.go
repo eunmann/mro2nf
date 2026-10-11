@@ -66,7 +66,9 @@ func run(args []string) error {
 	}
 
 	src := fs.Arg(0)
-	if err := applyConfig(fs, *f.configPath, src, f.configPtrs()); err != nil {
+
+	fromConfig, err := applyConfig(fs, *f.configPath, src, f.configPtrs())
+	if err != nil {
 		return fmt.Errorf("transpile %s: %w", src, err)
 	}
 
@@ -77,7 +79,7 @@ func run(args []string) error {
 		return err
 	}
 
-	opts, err := f.options()
+	opts, err := f.options(fs, fromConfig)
 	if err != nil {
 		return err
 	}
@@ -148,10 +150,29 @@ func (f transpileFlags) configPtrs() cliPtrs {
 // options builds the single emit.Options both Diagnose and Emit consume — a new
 // flag added here reaches both, so they cannot diverge. emitProgram fills in
 // the source-derived fields (absolute tool paths, MROFile/MRODir, StageCode).
-func (f transpileFlags) options() (emit.Options, error) {
+// Only a -mropath given on fs bounds the copied files: the implicit "." would
+// trust the whole working directory, often $HOME. fromConfig names the flags a
+// config file set (applyConfig); the tools among them are not trusted.
+func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (emit.Options, error) {
 	target, err := emit.ParseTarget(*f.target)
 	if err != nil {
 		return emit.Options{}, fmt.Errorf("invalid -target: %w", err)
+	}
+
+	var roots []string
+
+	fs.Visit(func(fl *flag.Flag) {
+		if fl.Name == "mropath" {
+			roots = filepath.SplitList(*f.mroPath)
+		}
+	})
+
+	tools := map[string]bool{}
+
+	for _, name := range []string{"mre", "shell", "mrjob"} {
+		if fromConfig[name] {
+			tools[name] = true
+		}
 	}
 
 	return emit.Options{
@@ -160,7 +181,7 @@ func (f transpileFlags) options() (emit.Options, error) {
 		FuseChains: *f.fuseChains, FoldDisables: *f.foldDisables,
 		Native: *f.native, NativeRunner: *f.nativeRunner,
 		InlinePipelines: *f.inlinePipelines, ConfineOutputs: *f.confineOutputs,
-		MROPath: filepath.SplitList(*f.mroPath), AllowExternalFiles: *f.allowExternalFiles,
+		MROPath: roots, AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
 	}, nil
 }
 
@@ -305,8 +326,8 @@ type cliPtrs struct {
 // -config path must exist — a typo there must not silently drop the defaults —
 // while the implicit alongside-the-.mro probe tolerates a missing file. An
 // empty -config value is indistinguishable from an unset flag, so it takes the
-// implicit probe.
-func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
+// implicit probe. It returns the names of the flags the config set.
+func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) (map[string]bool, error) {
 	var (
 		cfg *config.Config
 		err error
@@ -319,21 +340,25 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
 	}
 
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return nil, fmt.Errorf("load config: %w", err)
 	}
 
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
+	applied := map[string]bool{}
+
 	applyStr := func(name string, dst, cv *string) {
 		if !set[name] && cv != nil {
 			*dst = *cv
+			applied[name] = true
 		}
 	}
 
 	applyBool := func(name string, dst, cv *bool) {
 		if !set[name] && cv != nil {
 			*dst = *cv
+			applied[name] = true
 		}
 	}
 
@@ -348,7 +373,7 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
 	applyBool("native", p.native, cfg.Native)
 	applyBool("native-runner", p.nativeRunner, cfg.NativeRunner)
 
-	return nil
+	return applied, nil
 }
 
 // stageCodePaths maps each stage to its absolute stage-code path. SrcPath is

@@ -3,12 +3,14 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/config"
+	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/google/go-cmp/cmp"
 )
@@ -33,7 +35,7 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	_ = fs.Parse([]string{mro})
 
 	ptrs := cliPtrs{target: target, fuseChains: fuse, native: native, nativeRunner: nativeRunner}
-	if err := applyConfig(fs, "", mro, ptrs); err != nil {
+	if _, err := applyConfig(fs, "", mro, ptrs); err != nil {
 		t.Fatal(err)
 	}
 	if *target != "awsbatch" || !*fuse {
@@ -53,7 +55,7 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	_ = fs2.Parse([]string{"-target", "healthomics", "-native=false", "-native-runner=false", mro})
 
 	ptrs2 := cliPtrs{target: target2, fuseChains: fuse2, native: native2, nativeRunner: nativeRunner2}
-	if err := applyConfig(fs2, "", mro, ptrs2); err != nil {
+	if _, err := applyConfig(fs2, "", mro, ptrs2); err != nil {
 		t.Fatal(err)
 	}
 	if *target2 != "healthomics" {
@@ -111,7 +113,7 @@ func TestApplyConfigExplicitMissingIsError(t *testing.T) {
 
 	typo := filepath.Join(dir, "typo.yml")
 
-	switch err := applyConfig(fs, typo, mro, cliPtrs{target: target}); {
+	switch _, err := applyConfig(fs, typo, mro, cliPtrs{target: target}); {
 	case err == nil:
 		t.Errorf("explicit -config %s is missing: want an error, got nil", typo)
 	case !errors.Is(err, os.ErrNotExist):
@@ -121,7 +123,7 @@ func TestApplyConfigExplicitMissingIsError(t *testing.T) {
 	}
 
 	// No explicit path: a missing probe file is still fine.
-	if err := applyConfig(fs, "", mro, cliPtrs{target: target}); err != nil {
+	if _, err := applyConfig(fs, "", mro, cliPtrs{target: target}); err != nil {
 		t.Errorf("implicit probe with no config file: want no error, got %v", err)
 	}
 }
@@ -143,11 +145,12 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 	f := defineTranspileFlags(fs)
 	_ = fs.Parse([]string{mro})
 
-	if err := applyConfig(fs, "", mro, f.configPtrs()); err != nil {
+	applied, err := applyConfig(fs, "", mro, f.configPtrs())
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	opts, err := f.options()
+	opts, err := f.options(fs, applied)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,9 +161,10 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 	}
 }
 
-// TestSourceRootFlagsReachOptions checks -mropath reaches Emit split into the
-// roots that bound copied files, and that copying an external file takes the
-// explicit -allow-external-files.
+// TestSourceRootFlagsReachOptions checks an explicit -mropath reaches Emit
+// split into the roots that bound copied files while the implicit "." adds
+// none, and that copying an external file takes the explicit
+// -allow-external-files.
 func TestSourceRootFlagsReachOptions(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -168,7 +172,8 @@ func TestSourceRootFlagsReachOptions(t *testing.T) {
 		wantPath  []string
 		wantAllow bool
 	}{
-		{"default", []string{"p.mro"}, []string{"."}, false},
+		{"default", []string{"p.mro"}, nil, false},
+		{"explicit_cwd", []string{"-mropath", ".", "p.mro"}, []string{"."}, false},
 		{"opt_in", []string{"-mropath", "a" + string(os.PathListSeparator) + "b", "-allow-external-files", "p.mro"}, []string{"a", "b"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -179,7 +184,7 @@ func TestSourceRootFlagsReachOptions(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			opts, err := f.options()
+			opts, err := f.options(fs, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -250,5 +255,103 @@ func TestStageCodePathsKeepsBareCommand(t *testing.T) {
 	cwd, _ := os.Getwd()
 	if want := filepath.Join(cwd, "code.py"); code["P"] != want {
 		t.Errorf("P = %q, want %q (py leaf still cwd-absolutized)", code["P"], want)
+	}
+}
+
+const sharedMRO = `stage COUNT(
+    in  path reads,
+    out int  total,
+    src py   "stages/count",
+)
+
+pipeline EP(
+    in  path reads,
+    out int  total,
+)
+{
+    call COUNT(
+        reads = self.reads,
+    )
+
+    return (
+        total = COUNT.total,
+    )
+}
+
+call EP(
+    reads = %q,
+)
+`
+
+// writeSharedPipeline writes a pipeline .mro with its stage code into dir, as
+// a shared repository ships it, with def as the reads default.
+func writeSharedPipeline(t *testing.T, dir, def string) string {
+	t.Helper()
+
+	writeTestFile(t, filepath.Join(dir, "stages", "count", "__init__.py"), "")
+	writeTestFile(t, filepath.Join(dir, "input.txt"), "reads")
+
+	mro := filepath.Join(dir, "pipeline.mro")
+	writeTestFile(t, mro, fmt.Sprintf(sharedMRO, def))
+
+	return mro
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRunDefaultMROPathIsNotARoot checks the implicit -mropath of the working
+// directory does not admit an entry default under it: transpiling a shared
+// .mro from $HOME must not stage a file elsewhere in $HOME. An explicit
+// -mropath still does.
+func TestRunDefaultMROPathIsNotARoot(t *testing.T) {
+	home := t.TempDir()
+	secret := filepath.Join(home, "secret.txt")
+	writeTestFile(t, secret, "SECRET")
+
+	mro := writeSharedPipeline(t, filepath.Join(home, "shared"), secret)
+	t.Chdir(home)
+
+	if err := run([]string{"-o", t.TempDir(), mro}); !errors.Is(err, emit.ErrExternalFile) {
+		t.Errorf("run from the default's parent: want ErrExternalFile, got %v", err)
+	}
+
+	if err := run([]string{"-o", t.TempDir(), "-mropath", ".", mro}); err != nil {
+		t.Errorf("run with an explicit -mropath holding the default: %v", err)
+	}
+}
+
+// TestRunRefusesConfigToolOutsideRoots checks a .mro2nf.yml shipped beside a
+// shared .mro cannot have a container target bake a host file as a tool,
+// while the same path passed as a flag is the user's choice and is baked.
+func TestRunRefusesConfigToolOutsideRoots(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "credentials")
+	writeTestFile(t, secret, "SECRET")
+
+	mre := filepath.Join(t.TempDir(), "mre")
+	writeTestFile(t, mre, "#!/bin/sh\n")
+
+	shared := t.TempDir()
+	mro := writeSharedPipeline(t, shared, "input.txt")
+	writeTestFile(t, filepath.Join(shared, config.FileName), "mrjob: "+secret+"\n")
+
+	base := []string{"-target", "awsbatch", "-container", "img", "-mre", mre}
+
+	err := run(append(append([]string{"-o", t.TempDir()}, base...), mro))
+	if !errors.Is(err, emit.ErrExternalFile) {
+		t.Errorf("config-set -mrjob outside the roots: want ErrExternalFile, got %v", err)
+	}
+
+	if err := run(append(append([]string{"-o", t.TempDir(), "-mrjob", secret}, base...), mro)); err != nil {
+		t.Errorf("explicit -mrjob: %v", err)
 	}
 }

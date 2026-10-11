@@ -97,7 +97,7 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-fold-disables` | constant-fold an entry-determinable disable gate: an always-disabled stage is pruned at transpile time (**trade-off:** overriding that gate input at launch will *not* re-enable the pruned stage — the transpiler warns which) |
 | `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native--native-runner)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
 | `-native-runner` | run `py` stages through the embedded direct-call runner instead of `mre` + `martian_shell.py` (`exec`/`comp` stages keep the adapter). On container backends the runner is baked into the image, so toggling it there means an image rebuild |
-| `-allow-external-files` | copy an entry file default, or (container targets) a stage `src`, that resolves outside the `.mro`'s directory and the `-mropath` roots into the project or image. Without it the transpile refuses such a file, so a shared `.mro` cannot ship host data such as `~/.aws` in `entry_args/`, the image, or `workflow.zip` |
+| `-allow-external-files` | copy an entry file default, or (container targets) a stage `src`, that resolves outside the `.mro`'s directory and the explicitly given `-mropath` roots (the implicit `.` is not one) into the project or image. Without it the transpile refuses such a file, so a shared `.mro` cannot ship host data such as `~/.aws` in `entry_args/`, the image, or `workflow.zip` |
 | `-config <path>` | path to a [`.mro2nf.yml`](#mro2nfyml-project-defaults) of per-project flag defaults (default: probed alongside the `.mro`) |
 | `-version` | print the mro2nf version and exit |
 
@@ -181,7 +181,11 @@ native-runner: true
 ```
 
 Supported keys: `target`, `container`, `mre`, `shell`, `mrjob`, `monitor`,
-`fuse-chains`, `fold-disables`, `native`, `native-runner`. Precedence is
+`fuse-chains`, `fold-disables`, `native`, `native-runner`. A container
+target bakes an `mre`, `shell` or `mrjob` path set here into the image only
+when it resolves inside the `.mro`'s directory or a `-mropath` root, since a
+config file shipped with a shared `.mro` is not trusted; pass the flag to use a
+tool from elsewhere. Precedence is
 **builtin default < config file < explicit flag**. To override a config `true`
 back off for one run, use the equals form — `-native=false` — because Go's flag
 parsing reads a space-separated `-native false` as a bare `-native` plus a

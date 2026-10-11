@@ -122,7 +122,9 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   `-native-runner` (§4.8), `-allow-external-files` (§8, §10), `-config` (a
   `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
   explicit flag always wins — see `internal/config`; `-allow-external-files`
-  has no key, so a config file shipped beside a shared `.mro` cannot set it),
+  and `-mropath` have no key, so a config file shipped beside a shared `.mro`
+  cannot set them, and a tool path it sets is baked into an image only from
+  inside the roots, §10),
   and `-version`.
 - It resolves the stage source paths and the runtime tool paths to **absolute**
   paths (so the generated project runs from any working directory), records the
@@ -617,10 +619,12 @@ the bundle is self-contained), and stages each file default into
 `entry_args/f/`.
 
 A file default is staged only when it resolves, after following symlinks,
-inside the `.mro`'s directory or a `-mropath` root (default `.`, the working
-directory), and so does every symlink staging would follow inside a directory
-default. Anything else fails the transpile naming the input and the path, so a
-shared `.mro` whose default points at `~/.ssh` cannot bake it into the project,
+inside the `.mro`'s directory or a `-mropath` root given on the command line
+(the implicit default `.` is an `@include` search path only, not a root, so
+transpiling from `$HOME` does not admit everything under it), and so does
+every symlink staging would follow inside a directory default. Anything else
+fails the transpile naming the input and the path, so a shared `.mro` whose
+default points at `~/.ssh` cannot bake it into the project,
 the HealthOmics `workflow.zip`, or a cluster copy. `-allow-external-files`
 stages it anyway; use it for defaults you know are yours, such as the Cell
 Ranger dry-run `.mro`'s absolute paths into the bundle's test data. A default
@@ -772,11 +776,13 @@ A stage `src` given as a path is vendored only when it resolves inside the
 `.mro`'s directory or a `-mropath` root, as for entry file defaults (§8);
 otherwise the transpile fails unless `-allow-external-files` is set. The local
 target runs stage code in place and copies none, so it does not check. The
-`-mre`, `-shell` and `-mrjob` tools are not user data and may live anywhere;
-each is copied as the one file named (plus the `martian.py` beside
-`martian_shell.py`), never with the rest of its directory. `runtime/` is
-emptied before vendoring, so a re-transpile into an existing project keeps
-nothing an earlier run put there.
+`-mre`, `-shell` and `-mrjob` tools passed as flags are the user's own and may
+live anywhere; one a `.mro2nf.yml` sets must resolve inside those roots too
+(with the `martian.py` beside a config-set `-shell`), since a config file
+shipped beside a shared `.mro` is not trusted. Each is copied as the one file
+named (plus the `martian.py` beside `martian_shell.py`), never with the rest of
+its directory. `runtime/` is emptied before vendoring, so a re-transpile into
+an existing project keeps nothing an earlier run put there.
 
 A vendored stage directory leaves out VCS metadata (`.git`, `.hg`, `.svn`,
 `.bzr`), `.env*` files, `__pycache__`/`*.pyc`/`*.pyo`, and editor and OS

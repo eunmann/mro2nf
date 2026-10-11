@@ -448,6 +448,61 @@ func TestEmitDockerignore(t *testing.T) {
 	}
 }
 
+// TestEmitConfigToolsMustResolveInRoots checks a container target bakes a tool
+// set by a config file only when it, and the adapter module beside a
+// config-set -shell, resolves inside the roots.
+func TestEmitConfigToolsMustResolveInRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		tool    string
+		setup   func(t *testing.T, tr hygieneTree) string
+		allow   bool
+		wantErr bool
+	}{
+		{"mrjob_outside", "mrjob", func(_ *testing.T, tr hygieneTree) string {
+			return filepath.Join(tr.outside, "secret.txt")
+		}, false, true},
+		{"mrjob_outside_allowed", "mrjob", func(_ *testing.T, tr hygieneTree) string {
+			return filepath.Join(tr.outside, "secret.txt")
+		}, true, false},
+		{"mrjob_in_tree", "mrjob", func(t *testing.T, tr hygieneTree) string {
+			t.Helper()
+			writeTreeFile(t, filepath.Join(tr.root, "bin", "mrjob"), "#!/bin/sh\n")
+
+			return filepath.Join(tr.root, "bin", "mrjob")
+		}, false, false},
+		{"shell_module_link_escaping", "shell", func(t *testing.T, tr hygieneTree) string {
+			t.Helper()
+			writeTreeFile(t, filepath.Join(tr.root, "bin", "martian_shell.py"), "# adapter\n")
+			symlinkT(t, filepath.Join(tr.outside, "secret.txt"), filepath.Join(tr.root, "bin", "martian.py"))
+
+			return filepath.Join(tr.root, "bin", "martian_shell.py")
+		}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := newHygieneTree(t)
+			mro := filepath.Join(tr.root, "pipeline.mro")
+			writeTreeFile(t, mro, fmt.Sprintf(hygieneMRO, "input/reads.txt"))
+
+			opts := emit.Options{
+				OutDir: t.TempDir(), Mre: tr.mre, Shell: tr.shell, MROFile: "pipeline.mro",
+				MRODir: tr.root, Target: emit.TargetAWSBatch, AllowExternalFiles: tc.allow,
+				StageCode: map[string]string{"COUNT": inTreeCode(tr)}, ConfigTools: map[string]bool{tc.tool: true},
+			}
+			if p := tc.setup(t, tr); tc.tool == "shell" {
+				opts.Shell = p
+			} else {
+				opts.Mrjob = p
+			}
+
+			err := emit.Emit(parseLowered(t, mro, tr.root), opts)
+			if got := errors.Is(err, emit.ErrExternalFile); got != tc.wantErr {
+				t.Errorf("Emit: want ErrExternalFile %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 // TestEmitContainerResetsBuildContext checks a re-transpile into an existing
 // project leaves nothing an earlier run vendored in runtime/: a dropped stage,
 // a whole -shell directory, or a stale symlink. The reads default does not
