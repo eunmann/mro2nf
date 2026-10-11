@@ -7,8 +7,8 @@ name: PR Validation
 # reports. TestRequiredContexts* guards that.
 on:
   # Pushes to main gate nothing, so a docs-only push can skip the whole run.
-  # paths-ignore fires only when EVERY changed file matches. Keep this list in
-  # step with the `changes` job's case pattern.
+  # paths-ignore fires only when EVERY changed file matches. It must list what
+  # the `changes` job's case pattern does (TestDocsOnlyPathsAgree).
   push:
     branches: [main]
     paths-ignore:

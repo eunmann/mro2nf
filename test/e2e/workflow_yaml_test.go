@@ -13,9 +13,10 @@ import (
 
 // yamlNode is one node of the YAML subset the workflow files use: block
 // mappings and sequences, plain and quoted scalars, flow sequences of scalars,
-// and block scalars (content discarded). A construct outside the subset is an
-// error, so the workflow tests fail loudly rather than miss a job. go.mod has
-// no YAML module, and these tests don't justify adding one.
+// and block scalars. A block scalar keeps its lines unindented and unfolded,
+// minus the blank and `#` lines the line scan drops. A construct outside the
+// subset is an error, so the workflow tests fail loudly rather than miss a
+// job. go.mod has no YAML module, and these tests don't justify adding one.
 type yamlNode struct {
 	scalar string
 	keys   []string
@@ -192,11 +193,13 @@ func (p *yamlParser) value(indent int, rest string) (*yamlNode, error) {
 
 		return &yamlNode{}, nil
 	case rest[0] == '|' || rest[0] == '>':
+		var body []string
 		for p.pos < len(p.lines) && p.lines[p.pos].indent > indent {
+			body = append(body, p.lines[p.pos].text)
 			p.pos++
 		}
 
-		return &yamlNode{}, nil
+		return &yamlNode{scalar: strings.Join(body, "\n")}, nil
 	case rest[0] == '{':
 		return &yamlNode{scalar: rest}, nil
 	case rest[0] == '[':
@@ -326,7 +329,11 @@ jobs:
 
 	steps := a.get("steps").items
 	if len(steps) != 2 || steps[1].get("uses").scalar != "foo@v1" {
-		t.Errorf("steps parsed wrong: %d items", len(steps))
+		t.Fatalf("steps parsed wrong: %d items", len(steps))
+	}
+
+	if got, want := steps[0].get("run").scalar, "name: not a key\nneeds: nope"; got != want {
+		t.Errorf("block scalar = %q, want %q", got, want)
 	}
 
 	if diff := cmp.Diff([]string{"a"}, jobs.get("b").get("needs").list()); diff != "" {
