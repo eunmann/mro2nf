@@ -99,6 +99,14 @@ func runMrp(t *testing.T, bin, fixture, tmp string) {
 func runMrpAt(t *testing.T, bin, dir, mro, tmp string) {
 	t.Helper()
 
+	if out, err := execMrp(bin, dir, mro, tmp); err != nil {
+		t.Fatalf("mrp %s: %v\n%s", filepath.Join(dir, mro), err, tail(out, 12))
+	}
+}
+
+// execMrp runs mrp as runMrpAt does and returns its combined output, which it
+// also writes to <tmp>/mrp.log, and its error.
+func execMrp(bin, dir, mro, tmp string) ([]byte, error) {
 	// --vdrmode=disable keeps intermediate stage files, which the stage-ABI diff
 	// hashes through the paths in each invocation's _args/_outs; mrp's default
 	// rolling VDR deletes them once their consumers finish. Preflight stages run
@@ -113,8 +121,10 @@ func runMrpAt(t *testing.T, bin, dir, mro, tmp string) {
 	_ = os.WriteFile(filepath.Join(tmp, "mrp.log"), out, 0o644)
 
 	if err != nil {
-		t.Fatalf("mrp %s: %v\n%s", filepath.Join(dir, mro), err, tail(out, 12))
+		return out, fmt.Errorf("run mrp: %w", err)
 	}
+
+	return out, nil
 }
 
 // mrpOutsMeta and nfResultsMeta are the runners' own metadata files at the
@@ -443,6 +453,46 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "typedmap_out"},
 	{name: "vmem_stage"},
 	{name: "wildcard"},
+	// The stage holds 0.75 GB against its 0.5 GB request. Without -monitor
+	// neither runner enforces that, so both succeed;
+	// TestOrdinaryFailureRetriesWithEscalatedMemory covers the -monitor kill.
+	{name: "flaky_retry"},
+	// #324: a split returning no chunks still runs the join.
+	{name: "split_no_chunks"},
+}
+
+// mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
+// their outputs, is compared with mrp's by TestMrpDiffFailureParity: mrp
+// fails each by design, or mro2nf's outcome is a known divergence from mrp's,
+// recorded with its open issue. Fixing the issue fails the case until the
+// divergence is deleted.
+var mrpOutcomeCases = []mrpOutcomeCase{
+	// An ASSERT in each phase: main, split and join.
+	{name: "assert_min", mrp: failedIn(failAssert, "BOOM")},
+	{name: "assert_split", mrp: failedIn(failAssert, "SPLIT_BOOM")},
+	{name: "assert_join", mrp: failedIn(failAssert, "JOIN_BOOM")},
+	// An ordinary exception is an error, never an ASSERT, however often
+	// mro2nf retries it.
+	{name: "stage_raise", mrp: failedIn(failError, "RAISE")},
+	// mrp's output validation fails the producer before its consumer binds
+	// the bad value: a missing struct key (#274), a float in an `out int`
+	// (#338).
+	{name: "missing_struct_key", mrp: failedIn(failError, "UP")},
+	{name: "bad_out_type", mrp: failedIn(failError, "BAD")},
+	// mrp fails the split ("Expected string for __special"); mro2nf ignores
+	// the malformed chunk resource key and succeeds.
+	{
+		name:       "split_bad_special",
+		mrp:        failedIn(failError, "BAD_SPECIAL"),
+		divergence: &outcomeDivergence{issue: 275, nf: runOutcome{}},
+	},
+	// The reverse: mrp runs WORK behind a runtime-null disable gate, mro2nf's
+	// driver aborts on it. Once fixed, the fixture moves to mrpDiffCases.
+	{
+		name:       "null_disable_gate",
+		mrp:        runOutcome{},
+		divergence: &outcomeDivergence{issue: 253, nf: runOutcome{Failed: true}},
+	},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -596,4 +646,96 @@ func compareMrpToNextflow(t *testing.T, tmp, proj string) {
 	if diff := cmp.Diff(mrpJSON, nfJSON); diff != "" {
 		t.Errorf("_outs json mismatch (-mrp(normalized) +nextflow):\n%s", diff)
 	}
+}
+
+// TestMrpDiffFailureParity runs each mrpOutcomeCases fixture under real mrp and
+// under transpiled Nextflow and requires both runs to end the same way: both
+// succeed, or both fail and blame the same stages with the same failure kinds
+// (outcome_test.go says what is compared and why).
+func TestMrpDiffFailureParity(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	bin := martianBin(t)
+
+	for _, tc := range mrpOutcomeCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			shardSkip(t)
+
+			tmp := t.TempDir()
+			mrp := mrpRunOutcome(t, bin, tc.name, tmp)
+			proj := transpile(t, tc.name)
+			nf := nextflowRunOutcome(t, proj)
+
+			reports := tc.check(mrp, nf)
+			for _, r := range reports {
+				t.Error(r)
+			}
+
+			if len(reports) > 0 {
+				t.Logf("mrp.log:\n%s\nrun.log:\n%s", tailFile(filepath.Join(tmp, "mrp.log")), tailFile(filepath.Join(proj, "run.log")))
+			}
+		})
+	}
+}
+
+// mrpRunOutcome runs a fixture under mrp in tmp and classifies the run. Only
+// mrp's non-zero exit counts as a failed run; mrp failing to start fails the
+// test.
+func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
+	t.Helper()
+
+	_, err := execMrp(bin, filepath.Join(root, "testdata", fixture), "pipeline.mro", tmp)
+	if err == nil {
+		return runOutcome{}
+	}
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatal(err)
+	}
+
+	o, err := mrpFailedOutcome(filepath.Join(tmp, "mrp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return o
+}
+
+// nextflowRunOutcome runs a transpiled project and classifies the run from the
+// FAILED attempts in its trace.
+func nextflowRunOutcome(t *testing.T, proj string) runOutcome {
+	t.Helper()
+
+	if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
+		return runOutcome{}
+	}
+
+	var failed []failedAttempt
+
+	for _, r := range readTrace(t, filepath.Join(proj, "trace.txt")) {
+		if r.Status == "FAILED" {
+			failed = append(failed, failedAttempt{Hash: r.Hash, Exit: r.Exit})
+		}
+	}
+
+	o, err := nextflowFailedOutcome(filepath.Join(proj, "work"), failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return o
+}
+
+// tailFile is tail for a log file, or a note that it could not be read.
+func tailFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("    (%v)", err)
+	}
+
+	return tail(data, 12)
 }

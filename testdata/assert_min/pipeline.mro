@@ -1,7 +1,8 @@
 # Failure-path fixture: the stage raises a Martian assertion (martian.exit).
 # The run must TERMINATE without a retry — the shim exits 42 and the generated
-# errorStrategy maps 42 to 'terminate'. Exercised by test/e2e/failure_paths.sh
-# (behavioral; no mrp golden — mrp has no retry policy to compare against).
+# errorStrategy maps 42 to 'terminate'. Exercised by
+# TestAssertTerminatesWithoutRetry, and against mrp's own assert by
+# TestMrpDiffFailureParity (a failed run has no golden).
 stage BOOM(
     in  float x,
     out float y,

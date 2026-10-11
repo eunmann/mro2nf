@@ -2,7 +2,8 @@
 # member. mrp fails UP at its own output validation ("Expected S output value
 # 's' missing key: b") before DOWN, which projects UP.s.b, can run; mro2nf must
 # fail the same stage rather than bind the projection as null. Exercised by
-# TestInvalidOutputFailsLikeMrp (behavioral; a failed run has no golden).
+# TestInvalidOutputFailsLikeMrp and TestMrpDiffFailureParity (a failed run has
+# no golden).
 struct S(
     int a,
     int b,

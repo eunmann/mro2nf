@@ -1,0 +1,27 @@
+# Failure-parity fixture: the stage raises an ordinary Python exception. mrp
+# fails the stage with an _errors (not an _assert); mro2nf must fail the same
+# stage as an error, after its retries, never as an ASSERT. Exercised by
+# TestMrpDiffFailureParity.
+stage RAISE(
+    in  int x,
+    out int y,
+    src py  "stages/raise_error",
+)
+
+pipeline SR(
+    in  int x,
+    out int y,
+)
+{
+    call RAISE(
+        x = self.x,
+    )
+
+    return (
+        y = RAISE.y,
+    )
+}
+
+call SR(
+    x = 1,
+)

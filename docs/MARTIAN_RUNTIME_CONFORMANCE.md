@@ -330,6 +330,16 @@ no `_args`/`_outs`. Known divergences live in `test/e2e/divergences.json`, one
 entry per open issue with the normalization rule it needs; fixing the issue means
 deleting its entry.
 
+Whether a run fails is part of the contract too. `TestMrpDiffFailureParity` runs
+each fixture `mrp` fails on by design (`mrpOutcomeCases`) under both runners and
+requires mro2nf to fail exactly when `mrp` does (#349). Both runs must also blame
+the same stages, and each failure must be the same kind: an ASSERT (`mrp`'s
+`_assert`, mre's exit 42) or an error (`mrp`'s `_errors`, any other exit). Message
+text, phase, chunk index and attempt count are not compared
+(`test/e2e/outcome_test.go` gives the reasons). A known difference is recorded
+on its case with the open issue and the outcome mro2nf gives instead. The case
+then fails once mro2nf matches `mrp`, so the record cannot outlive the bug.
+
 It needs a Martian build: set `MARTIAN_BIN` (default `~/workdir/martian/bin`,
 which holds `mrp`/`mrjob`). `make test-e2e` includes it, so it gates every PR: the
 e2e shards build `mrp` and `mrjob` at the commit `go.mod` pins
@@ -343,13 +353,13 @@ paths into `_outs`; mre writes the **same tree** with paths **relative** to the
 outs dir (location-independent bundles). Tree structure, filenames, and contents
 are byte-identical.
 
-Every fixture runs in the differential except those `mrp` cannot run, listed with
-the reason in `mrpUnrunnable` (`test/e2e/coverage_test.go`;
-`TestEveryFixtureMrpDiffed` keeps the two tables complete): relative `input/`
-paths `mrp` passes through unresolved, a nested map pipeline this `mrp` version
-rejects, exec/comp stubs `mrp` never completes, and the failure-path fixtures. The
-golden e2e still covers them, as it does the launch-time `-params` override
-cases. `testdata/file_tree` is the flagship complex
+Every fixture is compared with `mrp`, by outputs or by outcome, except those
+listed with the reason in `mrpUnrunnable` (`test/e2e/coverage_test.go`;
+`TestEveryFixtureMrpDiffed` puts every fixture in exactly one of the three
+tables): relative `input/` paths `mrp` passes through unresolved, a nested map
+pipeline this `mrp` version rejects, exec/comp stubs `mrp` never completes, and a
+symlinked output whose `_outs` value under `mrp` is a host path. The golden e2e
+still covers them, as it does the launch-time `-params` override cases. `testdata/file_tree` is the flagship complex
 case: a split→join file array, a nested sub-pipeline whose map call emits a
 per-fork file, and a struct output bundling an array, a map, and a scalar file —
 9 published files, all matching `mrp`.

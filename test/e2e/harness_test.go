@@ -431,8 +431,10 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// traceRow is one task attempt from a `-with-trace` TSV file.
+// traceRow is one task attempt from a `-with-trace` TSV file. Hash is the
+// work dir prefix (`ab/cdef12`).
 type traceRow struct {
+	Hash   string
 	Name   string
 	Status string
 	Exit   int
@@ -463,7 +465,7 @@ func readTrace(t *testing.T, path string) []traceRow {
 	for _, line := range lines[1:] {
 		f := strings.Split(string(line), "\t")
 
-		row := traceRow{Name: f[cols["name"]], Status: f[cols["status"]], Exit: -1}
+		row := traceRow{Hash: f[cols["hash"]], Name: f[cols["name"]], Status: f[cols["status"]], Exit: -1}
 		if n, err := strconv.Atoi(f[cols["exit"]]); err == nil {
 			row.Exit = n
 		}

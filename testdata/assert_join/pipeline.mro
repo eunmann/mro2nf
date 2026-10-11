@@ -1,0 +1,33 @@
+# Failure-parity fixture: the split and its chunks succeed, then the join
+# asserts (martian.exit). mrp fails the stage with an _assert; mro2nf must fail
+# the same stage with the ASSERT exit code. Exercised by
+# TestMrpDiffFailureParity.
+stage JOIN_BOOM(
+    in  int[] xs,
+    out int   total,
+    src py    "stages/join_boom",
+) split (
+    in  int   x,
+    out int   y,
+)
+
+pipeline AJP(
+    in  int[] xs,
+    out int   total,
+)
+{
+    call JOIN_BOOM(
+        xs = self.xs,
+    )
+
+    return (
+        total = JOIN_BOOM.total,
+    )
+}
+
+call AJP(
+    xs = [
+        1,
+        2,
+    ],
+)
