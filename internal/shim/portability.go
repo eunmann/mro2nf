@@ -28,7 +28,7 @@ const (
 
 // ScratchRef is one embedded absolute scratch path found in a staged output.
 type ScratchRef struct {
-	File string // bundle-relative path of the offending output file (f/L0000…)
+	File string // bundle-relative path of the offending output file (f/L0000/…)
 	Path string // the offending absolute-path substring, for the diagnostic
 }
 

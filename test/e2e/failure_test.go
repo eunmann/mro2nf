@@ -145,7 +145,7 @@ func TestStageOutputLinkOutsideWorkCopiedLocally(t *testing.T) {
 				t.Errorf("published linked.txt = %q (err %v), want the link target's content", got, err)
 			}
 
-			leaves, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "outs*", "f", "L0000.txt"))
+			leaves, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "outs*", "f", "L0000", "*"))
 			if err != nil || len(leaves) == 0 {
 				t.Fatalf("no staged output leaf in the work dir (err %v)", err)
 			}

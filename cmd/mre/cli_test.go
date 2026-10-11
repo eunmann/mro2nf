@@ -826,7 +826,7 @@ func TestRunForkBindElement(t *testing.T) {
 // a marker-shaped string arrives in its bundle-encoded form and must still
 // reach the fork's args as the literal string, the same as the -index write.
 func TestRunForkBindElementMarkerShapedString(t *testing.T) {
-	const shaped = "@mre:file:f/L0000"
+	const shaped = "@mre:file:f/L0000/x"
 
 	dir := t.TempDir()
 	spec := writeTestFile(t, filepath.Join(dir, "spec.json"),
@@ -1279,7 +1279,7 @@ func TestRunPublishLayoutSmoke(t *testing.T) {
 
 	readJSONFile(t, filepath.Join(outDir, "layout.json"), &layout)
 
-	if diff := cmp.Diff(map[string][]string{"L0000": {"aln.bam"}}, layout); diff != "" {
+	if diff := cmp.Diff(map[string][]string{leaf("L0000"): {"aln.bam"}}, layout); diff != "" {
 		t.Errorf("layout.json mismatch (-want +got):\n%s", diff)
 	}
 

@@ -251,18 +251,43 @@ class WalkAndMarkersTest(unittest.TestCase):
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
         # Ordinals follow param order, then sorted map keys (aa before zz); each
-        # leaf keeps the source extension (.txt) so typed-file readers resolve it.
-        self.assertEqual(data["arr"], ["@mre:file:f/L0000.txt", None])
-        self.assertEqual(data["st"], {"f": "@mre:file:f/L0001.txt", "n": 7})
-        self.assertEqual(data["m"], {"aa": "@mre:file:f/L0002.txt",
-                                     "zz": "@mre:file:f/L0003.txt"})
+        # leaf keeps its source basename (#284).
+        self.assertEqual(data["arr"], ["@mre:file:f/L0000/a.txt", None])
+        self.assertEqual(data["st"], {"f": "@mre:file:f/L0001/b.txt", "n": 7})
+        self.assertEqual(data["m"], {"aa": "@mre:file:f/L0002/d.txt",
+                                     "zz": "@mre:file:f/L0003/c.txt"})
         self.assertEqual(data["passthru"], src["a"])
-        with open(os.path.join(bdir, "f", "L0002.txt")) as fh:
-            self.assertEqual(fh.read(), "d")  # aa -> d.txt
+        with open(os.path.join(bdir, "f", "L0002", "d.txt")) as fh:
+            self.assertEqual(fh.read(), "d")
         # read_bundle resolves markers back to absolute staged paths.
         resolved = rs.read_bundle(bdir)
         self.assertEqual(resolved["arr"][0],
-                         os.path.join(os.path.abspath(bdir), "f", "L0000.txt"))
+                         os.path.join(os.path.abspath(bdir), "f", "L0000", "a.txt"))
+
+    def test_shared_basename_and_suffixed_dir(self):
+        # Leaves sharing a basename stay apart in their ordinal dirs, and a
+        # directory spelled with a trailing "/" or "/." keeps its own name.
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        leaves = []
+        for sample in ("sampleA", "sampleB"):
+            os.mkdir(os.path.join(tmp, sample))
+            p = os.path.join(tmp, sample, "reads.txt")
+            with open(p, "w") as fh:
+                fh.write(sample)
+            leaves.append(p)
+        d = os.path.join(tmp, "outdir")
+        os.mkdir(d)
+        leaves += [d + "/", d + "/."]
+        bdir = os.path.join(tmp, "bundle")
+        rs.write_bundle(bdir, {"arr": leaves}, self.PARAMS, self.STRUCTS, None)
+        with open(os.path.join(bdir, "data.json")) as fh:
+            data = json.load(fh)
+        self.assertEqual(data["arr"], [
+            "@mre:file:f/L0000/reads.txt", "@mre:file:f/L0001/reads.txt",
+            "@mre:dir:f/L0002/outdir", "@mre:dir:f/L0003/outdir"])
+        with open(os.path.join(bdir, "f", "L0001", "reads.txt")) as fh:
+            self.assertEqual(fh.read(), "sampleB")
 
     def test_marker_shaped_strings_round_trip(self):
         # #328: a string spelled like a transport marker comes back as the
@@ -283,30 +308,34 @@ class WalkAndMarkersTest(unittest.TestCase):
             {"name": "arr", "baseType": "string", "arrayDim": 1, "mapDim": 0},
             {"name": "m", "baseType": "map", "arrayDim": 0, "mapDim": 0},
         ]
-        strs = ["@mre:file:f/L0000.txt", "@mre:dir:f/L0000.txt",
-                "@mre:str:@mre:file:f/L0000.txt", "@mre:",
+        strs = ["@mre:file:f/L0000/made.txt", "@mre:dir:f/L0000/made.txt",
+                "@mre:str:@mre:file:f/L0000/made.txt", "@mre:",
                 "@mre:file:../elsewhere", "plain"]
         payload = {
             "made": made,
-            "fake": "@mre:file:f/L0000.txt",
-            "s": "@mre:file:f/L0000.txt",
+            "fake": "@mre:file:f/L0000/made.txt",
+            "s": "@mre:file:f/L0000/made.txt",
             "arr": strs,
-            "m": {"k": "@mre:dir:f/L0000.txt", "nested": strs},
-            "extra": "@mre:file:f/L0000.txt",
+            "m": {"k": "@mre:dir:f/L0000/made.txt", "nested": strs},
+            "extra": "@mre:file:f/L0000/made.txt",
         }
         bdir = os.path.join(tmp, "bundle")
         rs.write_bundle(bdir, payload, params, {}, None)
         want = dict(payload)
-        want["made"] = os.path.join(os.path.abspath(bdir), "f", "L0000.txt")
+        want["made"] = os.path.join(os.path.abspath(bdir), "f", "L0000", "made.txt")
         self.assertEqual(rs.read_bundle(bdir), want)
 
     def test_read_bundle_rejects_malformed_markers(self):
-        # #328: mre writes a marker only as f/L<ordinal>[.ext] inside the
-        # bundle and escapes every other reserved string, so any other
+        # #328: mre writes a marker only as f/L<ordinal>/<basename> inside
+        # the bundle and escapes every other reserved string, so any other
         # reserved-prefix shape is a corrupt or forged bundle.
         bad = ["@mre:file:../elsewhere", "@mre:dir:/abs/path",
-               "@mre:file:f/../../elsewhere", "@mre:file:f/L12.txt",
-               "@mre:file:g/L0000", "@mre:file:f/L0000/sub",
+               "@mre:file:f/../../elsewhere", "@mre:file:f/L12/a.txt",
+               "@mre:file:g/L0000/a.txt", "@mre:file:f/L0000",
+               "@mre:file:f/L0000.txt", "@mre:file:f/L0000/",
+               "@mre:file:f/L0000/.", "@mre:file:f/L0000/..",
+               "@mre:file:f/L0000/../../x", "@mre:file:f/L0000/sub/a.txt",
+               "@mre:file:f/L0000/a\x00b", "@mre:file:f/L0000a/b",
                "@mre:other:x", "@mre:"]
         for s in bad:
             with self.subTest(s=s):
@@ -338,8 +367,8 @@ class WalkAndMarkersTest(unittest.TestCase):
         rs.write_bundle(bdir, {"arr": [d]}, self.PARAMS, self.STRUCTS, None)
         with open(os.path.join(bdir, "data.json")) as fh:
             data = json.load(fh)
-        self.assertEqual(data["arr"], ["@mre:dir:f/L0000"])
-        with open(os.path.join(bdir, "f", "L0000", "x")) as fh:
+        self.assertEqual(data["arr"], ["@mre:dir:f/L0000/adir"])
+        with open(os.path.join(bdir, "f", "L0000", "adir", "x")) as fh:
             self.assertEqual(fh.read(), "x")
 
 
@@ -407,18 +436,19 @@ class ConfinementTest(unittest.TestCase):
         self.host_dir = os.path.join(root, "host", "refdir")
         upstream = os.path.join(root, "upstream")
         staged = os.path.join(self.work, "args", "f")
+        up_dir = os.path.join(upstream, "L0001", "dir")
         for d in (self.files, staged, self.host_dir,
-                  os.path.join(upstream, "dir")):
+                  os.path.join(upstream, "L0000"), up_dir):
             os.makedirs(d)
         self._write(self.host, "host")
         self._write(os.path.join(self.host_dir, "x.txt"), "host dir")
-        self._write(os.path.join(upstream, "real.txt"), "upstream")
-        self._write(os.path.join(upstream, "dir", "y.txt"), "upstream dir")
-        os.symlink(self.host, os.path.join(upstream, "dir", "host"))
-        self.staged_file = os.path.join(staged, "L0000.txt")
-        self.staged_dir = os.path.join(staged, "L0001")
-        os.symlink(os.path.join(upstream, "real.txt"), self.staged_file)
-        os.symlink(os.path.join(upstream, "dir"), self.staged_dir)
+        self._write(os.path.join(upstream, "L0000", "real.txt"), "upstream")
+        self._write(os.path.join(up_dir, "y.txt"), "upstream dir")
+        os.symlink(self.host, os.path.join(up_dir, "host"))
+        os.symlink(os.path.join(upstream, "L0000"), os.path.join(staged, "L0000"))
+        os.symlink(os.path.join(upstream, "L0001"), os.path.join(staged, "L0001"))
+        self.staged_file = os.path.join(staged, "L0000", "real.txt")
+        self.staged_dir = os.path.join(staged, "L0001", "dir")
 
     @staticmethod
     def _write(path, content):
@@ -472,7 +502,7 @@ class ConfinementTest(unittest.TestCase):
         own = os.path.join(self.files, "own.txt")
         self._write(own, "own")
         rel_fwd = os.path.join(self.files, "rel_fwd")
-        os.symlink(os.path.join("..", "..", "args", "f", "L0000.txt"), rel_fwd)
+        os.symlink(os.path.join("..", "..", "args", "f", "L0000", "real.txt"), rel_fwd)
         cases = [(own, "", own), (self.staged_file, "", self.staged_file),
                  (rel_fwd, "", self.staged_file),
                  (self.staged_dir, "y.txt",

@@ -18,13 +18,13 @@ func TestWarnOutputScratchRefs(t *testing.T) {
 		t.Fatalf("abs: %v", err)
 	}
 
-	fdir := filepath.Join(work, "outs", "f")
+	fdir := filepath.Join(work, "outs", "f", "L0000")
 	if err := os.MkdirAll(fdir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
 	baked := abs + "/main/files/report.txt"
-	if err := os.WriteFile(filepath.Join(fdir, "L0000.json"),
+	if err := os.WriteFile(filepath.Join(fdir, "index.json"),
 		[]byte(`{"report": "`+baked+`"}`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -37,12 +37,12 @@ func TestWarnOutputScratchRefs(t *testing.T) {
 		t.Errorf("expected a loud warning naming %q, got:\n%s", baked, out)
 	}
 
-	if !strings.Contains(out, filepath.Join("f", "L0000.json")) {
+	if !strings.Contains(out, filepath.Join("f", "L0000", "index.json")) {
 		t.Errorf("warning should name the offending output file, got:\n%s", out)
 	}
 
 	// A clean output produces no warning.
-	if err := os.WriteFile(filepath.Join(fdir, "L0000.json"),
+	if err := os.WriteFile(filepath.Join(fdir, "index.json"),
 		[]byte(`{"report": "report.txt", "n": 5}`), 0o644); err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}

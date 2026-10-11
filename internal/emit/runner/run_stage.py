@@ -45,7 +45,7 @@ DIR_MARKER = RESERVED_PREFIX + "dir:"
 ESCAPE_PREFIX = RESERVED_PREFIX + "str:"
 BUNDLE_DATA = "data.json"
 BUNDLE_FILES = "f"
-_MARKER_REL = re.compile(BUNDLE_FILES + r"/L[0-9]{4,}(\.[^/]*)?")
+_MARKER_REL = re.compile(BUNDLE_FILES + r"/L[0-9]{4,}/([^/\x00]+)")
 
 # Ports internal/shim/shim.go constants.
 EXTRA_VMEM_GB = 3
@@ -460,7 +460,8 @@ def cut_marker(s):
         rel, is_dir = s[len(FILE_MARKER):], False
     else:
         return "", False, False
-    if not _MARKER_REL.fullmatch(rel):
+    m = _MARKER_REL.fullmatch(rel)
+    if m is None or m.group(1) in (".", ".."):
         return "", False, False
     return rel, is_dir, True
 
@@ -862,20 +863,20 @@ def resources_struct(r):
 # CopyTree/WriteChunkBundle.
 # ---------------------------------------------------------------------------
 
-def _leaf_ext(path):
-    """The file leaf's extension, matching Go filepath.Ext: the suffix from the
-    last dot in the final path element (including a leading-dot name), or ""."""
-    base = os.path.basename(path)
-    dot = base.rfind(".")
-    return base[dot:] if dot >= 0 else ""
+def _leaf_name(src):
+    """The basename the stage sees for the file leaf at src; ports leafName. A
+    path ending in "/", "." or ".." names the directory it resolves to."""
+    name = os.path.basename(os.path.abspath(src))
+    if name == "":
+        raise RunnerError("file leaf has no basename: %r" % src)
+    return name
 
 
 def mark_files(bundle_dir, payload, params, structs, confine):
-    """Copy every file leaf into bundle_dir/f/L%04d<ext> (walk order) and replace
-    it with a transport marker; ports MarkFiles. The ordinal drops the original
-    basename but keeps the extension, so Martian typed-file readers that
-    reconstruct a leaf path from its filetype (Path::with_extension) resolve it.
-    Every other reserved-prefix string is escaped, a file leaf naming no file
+    """Copy every file leaf into bundle_dir/f/L%04d/<basename> (walk order) and
+    replace it with a transport marker; ports MarkFiles. Each leaf keeps the
+    basename mrp passes, in its own ordinal dir so leaves never collide. Every
+    other reserved-prefix string is escaped, a file leaf naming no file
     included. A Confinement (every runner write is a stage's) confines the
     leaves' files."""
     counter = [0]
@@ -894,7 +895,7 @@ def mark_files(bundle_dir, payload, params, structs, confine):
             return leaf
         except OSError:
             src_is_dir = False  # copy_tree will surface the error precisely
-        rel = os.path.join(BUNDLE_FILES, "L%04d%s" % (counter[0], _leaf_ext(src)))
+        rel = os.path.join(BUNDLE_FILES, "L%04d" % counter[0], _leaf_name(src))
         counter[0] += 1
         dst = os.path.join(bundle_dir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)

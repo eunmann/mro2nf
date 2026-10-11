@@ -431,8 +431,7 @@ class Mro2nf {
     // writes unescaped into its `ln -s <source> <name>` lines that bash still
     // expands there: a glob (`*?[]`) can match a different file and stage it
     // silently, a brace or `$` rewrites the path. Control characters are also
-    // left unescaped and split the word. The emitter's checkEntryFileDefaults
-    // holds the same set.
+    // left unescaped and split the word.
     private static final String STAGE_UNSAFE = '*?[]{}$'
 
     // stageSafe rejects a value holding a STAGE_UNSAFE or control character:

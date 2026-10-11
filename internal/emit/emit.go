@@ -789,10 +789,6 @@ func writeEntryArgs(prog *ir.Program, outDir, mroDir string) error {
 	params := entryInParams(prog)
 	tbl := types.NewTable(prog.Structs)
 
-	if err := checkEntryFileDefaults(payload, params, tbl); err != nil {
-		return err
-	}
-
 	if mroDir != "" {
 		if payload, err = resolveEntryFileLeaves(payload, params, tbl, mroDir); err != nil {
 			return err
@@ -823,47 +819,6 @@ func resolveEntryFileLeaves(payload map[string]any, params []ir.Param, tbl *type
 	}
 
 	return resolved, nil
-}
-
-// stageUnsafe are the characters Nextflow 26.04's task stage-in script leaves
-// unescaped and bash still expands (Mro2nf.entryFile's STAGE_UNSAFE, which
-// also rejects control characters).
-const stageUnsafe = "*?[]{}$"
-
-// checkEntryFileDefaults rejects a baked file default whose extension holds a
-// character Nextflow would mis-stage. The bundle copies each leaf in Go and
-// renames it L<n><ext>, so only the extension ever reaches a stage-in script,
-// in every task that stages the entry bundle's files.
-func checkEntryFileDefaults(payload map[string]any, params []ir.Param, tbl *types.Table) error {
-	for _, p := range params {
-		v, ok := payload[p.Name]
-		if !ok {
-			continue
-		}
-
-		_, err := tbl.Apply([]ir.Param{p}, map[string]any{p.Name: v}, func(path string) (string, error) {
-			ext := filepath.Ext(path)
-			if i := strings.IndexFunc(ext, isStageUnsafe); i >= 0 {
-				return "", &apperror.UnsupportedError{
-					Construct: "entry file default",
-					Detail: fmt.Sprintf("input %q: the extension %q contains %q, which Nextflow's task stage-in "+
-						"script leaves unquoted, so bash would expand it; rename the file "+
-						"(a Nextflow staging limitation, see docs/TRANSPILER.md section 8)", p.Name, ext, ext[i]),
-				}
-			}
-
-			return path, nil
-		})
-		if err != nil {
-			return fmt.Errorf("check entry file defaults: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func isStageUnsafe(r rune) bool {
-	return r < 0x20 || r == 0x7f || strings.ContainsRune(stageUnsafe, r)
 }
 
 // allowRemoteParam is the run param that lets an entry file override use a

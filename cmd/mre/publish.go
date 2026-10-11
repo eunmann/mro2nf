@@ -23,9 +23,8 @@ import (
 
 // runPublishLayout computes the outs/ layout from the final output sidecar ALONE
 // (no file leaves staged, so no single-node funnel — #12): it walks the raw
-// marker-bearing sidecar and writes layout.json (transport leaf basename -> outs/
-// rel path) plus the pipeline_outs.json value tree. A fan-out then publishes each
-// leaf into outs/<rel> in parallel.
+// marker-bearing sidecar and writes layout.json (leaf path below the bundle's
+// files dir -> outs/ rel path) plus the pipeline_outs.json value tree.
 func runPublishLayout(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("publish-layout", flag.ContinueOnError)
 	prod := addProducer(fs, types.RoleOut)
@@ -93,6 +92,10 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	return nil
 }
 
+// outsDirPerm is the mode for outs/ parent directories; publishDir copies the
+// tree out, so this is transient scratch, not a published permission.
+const outsDirPerm = 0o750
+
 // materializeOuts links each staged leaf into its published outs/ rel path(s),
 // reproducing the exact tree publish-layout computed. A leaf referenced by
 // several outputs is linked into each rel; CopyTree hard-links files (recursing
@@ -100,19 +103,15 @@ func runPublishLayout(_ context.Context, argv []string) error {
 // publishDir copies it into the results dir. A layout key with no matching
 // staged leaf is skipped — the leaf was absent at staging time and resolves to
 // null, exactly as the sidecar already recorded.
-// outsDirPerm is the mode for outs/ parent directories; publishDir copies the
-// tree out, so this is transient scratch, not a published permission.
-const outsDirPerm = 0o750
-
 func materializeOuts(leavesDir, outsDir string, layout map[string][]string) error {
-	for base, rels := range layout {
-		src := filepath.Join(leavesDir, base)
+	for leaf, rels := range layout {
+		src := filepath.Join(leavesDir, leaf)
 		if _, err := os.Stat(src); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 
-			return fmt.Errorf("stat leaf %q: %w", base, err)
+			return fmt.Errorf("stat leaf %q: %w", leaf, err)
 		}
 
 		for _, rel := range rels {
@@ -232,11 +231,13 @@ type publisher struct {
 	// warn receives per-skipped-key diagnostics (illegal map keys, #114) —
 	// os.Stderr in production, a buffer in tests.
 	warn io.Writer
-	// seen maps a published rel path to the transport basename it resolved from,
-	// so a repeated leaf dedups while two distinct leaves on one rel disambiguate.
+	// seen maps a published rel path to the leaf (its path below the bundle's
+	// files dir) it resolved from, so a repeated leaf dedups while two distinct
+	// leaves on one rel disambiguate.
 	seen map[string]string
-	// layout maps a transport leaf basename to the outs/ rel path(s) it publishes
-	// to — a list, since one file value may be referenced by several outputs.
+	// layout maps a leaf's path below the bundle's files dir to the outs/ rel
+	// path(s) it publishes to — a list, since one file value may be referenced by
+	// several outputs.
 	layout map[string][]string
 	// manifest accumulates one entry per published file leaf for the
 	// machine-readable output index (see manifestEntry).
@@ -404,7 +405,7 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error)
 	return out, nil
 }
 
-// emitFile records one scalar file/dir leaf's transport basename -> rel mapping
+// emitFile records one scalar file/dir leaf's leaf path -> rel mapping
 // and its manifest entry, and returns rel — the ACTUAL published path, which may
 // differ from the argument after collision disambiguation. It returns nil when
 // the leaf is absent (matching Martian's null): a present leaf carries a
@@ -431,21 +432,21 @@ func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 		return nil, nil
 	}
 
-	base := path.Base(transport)
+	leaf := shim.LeafPath(transport)
 	// The SAME leaf landing on the same rel twice (one value referenced by two
 	// identically-named outputs) publishes once; two DISTINCT leaves colliding on
 	// one rel (e.g. two outputs sharing an explicit OutName) are disambiguated
 	// with a numeric suffix so neither file is silently mapped over the other.
 	if prev, ok := pub.seen[rel]; ok {
-		if prev == base {
+		if prev == leaf {
 			return rel, nil
 		}
 
 		rel = pub.uniqueRel(rel)
 	}
 
-	pub.seen[rel] = base
-	pub.layout[base] = append(pub.layout[base], rel)
+	pub.seen[rel] = leaf
+	pub.layout[leaf] = append(pub.layout[leaf], rel)
 	// One manifest entry per published leaf. is_dir is the leaf's ground truth —
 	// the stat recorded in the marker at staging time — not an inference from the
 	// declared type, so a directory written into a `file`-typed out (or a file

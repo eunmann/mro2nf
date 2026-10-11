@@ -57,7 +57,7 @@ func TestWriteChunkBundleStagesFilesAndPreservesResources(t *testing.T) {
 		t.Fatalf("parse data.json: %v", err)
 	}
 
-	wantArgs := map[string]any{"f": FileMarker + filepath.Join("f", "L0000.txt")}
+	wantArgs := map[string]any{"f": FileMarker + filepath.Join("f", "L0000", "in.txt")}
 	if diff := cmp.Diff(wantArgs, got.Args); diff != "" {
 		t.Errorf("args mismatch (-want +got):\n%s", diff)
 	}
@@ -66,7 +66,7 @@ func TestWriteChunkBundleStagesFilesAndPreservesResources(t *testing.T) {
 		t.Errorf("resources not preserved (-want +got):\n%s", diff)
 	}
 
-	staged, err := os.ReadFile(filepath.Join(bundle, "f", "L0000.txt"))
+	staged, err := os.ReadFile(filepath.Join(bundle, "f", "L0000", "in.txt"))
 	if err != nil {
 		t.Fatalf("staged leaf: %v", err)
 	}
