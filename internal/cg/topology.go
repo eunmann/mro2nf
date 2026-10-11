@@ -119,11 +119,15 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 		}
 	}
 
-	elementOnly := map[*syntax.CallStm]string{}
+	elementOnly := map[*syntax.CallStm]*syntax.RefExp{}
 
 	for _, r := range st.ForkRoots() {
-		if p, ok := g.Producer(r); ok {
-			elementOnly[r.Call()] = p
+		if _, ok := g.Producer(r); !ok {
+			continue
+		}
+
+		if ref, ok := r.Split().Value.(*syntax.RefExp); ok {
+			elementOnly[r.Call()] = ref
 		}
 	}
 
@@ -205,9 +209,9 @@ func forkedBeyond(d syntax.Exp, roots syntax.ForkRootList) *syntax.CallStm {
 	return nil
 }
 
-// reads are the stage outs exps read, less a split of a root's own
-// producer, which the root's fork element serves (stagedElement).
-func reads(elementOnly map[*syntax.CallStm]string, exps ...syntax.Exp) []Read {
+// reads are the stage outs exps read, less a split of a root's own source,
+// which the root's fork element serves (stagedElement).
+func reads(elementOnly map[*syntax.CallStm]*syntax.RefExp, exps ...syntax.Exp) []Read {
 	fields := map[string]map[string]bool{}
 
 	for _, e := range exps {
@@ -228,10 +232,11 @@ func reads(elementOnly map[*syntax.CallStm]string, exps ...syntax.Exp) []Read {
 	return out
 }
 
-func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]string, fields map[string]map[string]bool) {
+func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]*syntax.RefExp, fields map[string]map[string]bool) {
 	switch x := e.(type) {
 	case *syntax.SplitExp:
-		if ref, ok := x.Value.(*syntax.RefExp); ok && elementOnly[x.Call] == ref.Id {
+		if ref, ok := x.Value.(*syntax.RefExp); ok && elementOnly[x.Call] != nil &&
+			ref.Id == elementOnly[x.Call].Id && ref.OutputId == elementOnly[x.Call].OutputId {
 			return
 		}
 
