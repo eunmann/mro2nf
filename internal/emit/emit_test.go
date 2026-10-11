@@ -132,7 +132,7 @@ func TestEmitConfig(t *testing.T) {
 		"params.outdir = 'results'",
 		"process.executor = 'local'",
 		// Local runs clamp each task's request to the machine (Martian parity), so
-		// an oversized reservation runs instead of parking the executor forever.
+		// an oversized reservation runs instead of failing the local executor.
 		"process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]",
 		"slurm    { process.executor = 'slurm' }",
 		"sge      { process.executor = 'sge' }",
