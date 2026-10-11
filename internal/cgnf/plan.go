@@ -60,7 +60,8 @@ func (p *project) values() string {
 	return "groovy.json.JsonOutput.toJson([" + strings.Join(entries, ", ") + "])"
 }
 
-// outs runs OUTS over every outs bundle the pipeline outs read.
+// outs runs OUTS over every outs bundle the pipeline outs read, ordered by
+// node and instance key, not by completion.
 func (p *project) outs(g *gen) {
 	srcs := make([]string, 0, len(p.topo.Outs))
 
@@ -70,12 +71,12 @@ func (p *project) outs(g *gen) {
 			sel = "ds.findAll { e -> e.name in " + glist(r.Fields) + " }"
 		}
 
-		srcs = append(srcs, fmt.Sprintf("o%d_outs.flatMap { _k, ds -> %s }", p.index[r.Node], sel))
+		srcs = append(srcs, fmt.Sprintf("o%[1]d_outs.flatMap { k, ds -> %[2]s.collect { e -> [[%[1]d] + k, e] } }", p.index[r.Node], sel))
 	}
 
 	ups := "channel.value([])"
 	if len(srcs) > 0 {
-		ups = "channel.empty().mix(" + strings.Join(srcs, ", ") + ").collect().ifEmpty([])"
+		ups = "channel.empty().mix(" + strings.Join(srcs, ", ") + ").toList().map { xs -> ordered(xs) }"
 	}
 
 	// The meta waits on PLAN, which writes the invocation OUTS compiles.

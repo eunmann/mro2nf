@@ -11,6 +11,19 @@ def shq(s) {
     return "'" + s.toString().replace("'", "'\\''") + "'"
 }
 
+// ordered is the dirs of [fork key, dir] pairs by key, ordinal by ordinal,
+// then by dir name. A task stages such a gather as one list, whose order is
+// part of its -resume key and would otherwise be the order the tasks
+// producing it completed in.
+def ordered(List pairs) {
+    return pairs.sort(false) { a, b -> keyOrder(a[0], b[0]) ?: a[1].name <=> b[1].name }.collect { p -> p[1] }
+}
+
+def keyOrder(List a, List b) {
+    def c = [a, b].transpose().collect { x, y -> x <=> y }.find { v -> v != 0 }
+    return c ?: a.size() <=> b.size()
+}
+
 // graph names the invocation an mre call-graph subcommand compiles: the
 // run's plan, linked into the task under the entry file's name so the
 // _jobinfo invocation records mrp's include.

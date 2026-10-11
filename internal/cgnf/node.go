@@ -134,7 +134,8 @@ func (p *project) gate(g *gen, i int, n cg.TopoNode) {
 // read adds to each enabled instance of node i the outs bundles it reads of
 // node r.Node: the instance agreeing on every root they share, or, when
 // the upstream is forked on roots node i is not, every such instance, a
-// gather seeded so an empty one still yields its consumer.
+// gather seeded so an empty one still yields its consumer and ordered by
+// the upstream's key, not by completion.
 func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
 	u := p.index[r.Node]
 	up := p.topo.Nodes[u]
@@ -156,12 +157,11 @@ func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
 		sel = "ds.findAll { e -> e.name in " + glist(r.Fields) + " }"
 	}
 
-	ku := param("ku", len(theirs) > 0)
-	src := fmt.Sprintf("o%d_outs.map { %s, ds -> [%s, %s] }", u, ku, pick("ku", theirs), sel)
+	src := fmt.Sprintf("o%d_outs.map { %s, ds -> [%s, %s] }", u, param("ku", len(theirs) > 0), pick("ku", theirs), sel)
 
 	if gather {
-		g.linef("h%d_%d = b%d.run.map { %s -> [%s, null] }.unique().mix(%s).groupTuple().map { c, dss -> [c, dss.findAll { x -> x != null }.flatten()] }",
-			i, u, i, param("v", len(mine) > 0), pick("v[0]", mine), src)
+		g.linef("h%d_%d = b%d.run.map { %s -> [%s, null] }.unique().mix(o%d_outs.map { ku, ds -> [%s, %s.collect { e -> [ku, e] }] }).groupTuple().map { c, dss -> [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })] }",
+			i, u, i, param("v", len(mine) > 0), pick("v[0]", mine), u, pick("ku", theirs), sel)
 		src = fmt.Sprintf("h%d_%d", i, u)
 	}
 
@@ -170,13 +170,14 @@ func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
 }
 
 // splitTriad runs a split node: its split, a main per chunk the split
-// returned, and its join over every chunk's outs once all are in.
+// returned, and its join over every chunk's outs once all are in, by chunk
+// name, not by completion.
 func (p *project) splitTriad(g *gen, i int, proc, in string) {
 	fmt.Fprintf(&g.incs, "include { STAGE_SPLIT as %[1]s_SP ; STAGE_MAIN as %[1]s_MN ; STAGE_JOIN as %[1]s_JN } from './stage.nf'\n", proc)
 	g.linef("%s_SP(%s)", proc, in)
 	g.linef("s%d = %s_SP.out.split", i, proc)
 	g.linef("%s_MN(s%d.flatMap { m, k, a, cs, _j -> cs.collect { c -> [m + [chunks: cs.size()], k, a, c] } })", proc, i)
-	g.linef("c%d = %s_MN.out.chunk.map { m, k, o -> [groupKey(k, m.chunks), o] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os] }.mix(s%d.filter { v -> v[3].isEmpty() }.map { v -> [v[1], []] })",
+	g.linef("c%d = %s_MN.out.chunk.map { m, k, o -> [groupKey(k, m.chunks), o] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }.mix(s%d.filter { v -> v[3].isEmpty() }.map { v -> [v[1], []] })",
 		i, proc, i)
 	g.linef("%s_JN(s%d.map { m, k, a, cs, j -> [k, m, a, cs, j] }.join(c%d).map { k, m, a, cs, j, os -> [m, k, a, cs, j, os] })", proc, i, i)
 }

@@ -128,6 +128,26 @@ func TestEmitGPUSelectors(t *testing.T) {
 	}
 }
 
+// TestEmitOrdersGathers: every list a task stages from several tasks is in
+// an order fixed by the run, not by completion, as that order is part of
+// the task's -resume key: a join's chunk outs by chunk name (split_test), a
+// gather by the upstream instance's key (fork_mid: SUMALL over SCALE's
+// forks), and OUTS's inputs by node and key.
+func TestEmitOrdersGathers(t *testing.T) {
+	split := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+	gather := readTree(t, emitFixture(t, "fork_mid"))["main.nf"]
+
+	for _, c := range []struct{ fixture, main, want string }{
+		{"split_test", split, "groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }"},
+		{"fork_mid", gather, ".collect { e -> [ku, e] }] }).groupTuple().map { c, dss -> [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })] }"},
+		{"split_test", split, "o0_outs.flatMap { k, ds -> ds.findAll { e -> e.name in ['sum'] }.collect { e -> [[0] + k, e] } }).toList().map { xs -> ordered(xs) }"},
+	} {
+		if !strings.Contains(c.main, c.want) {
+			t.Errorf("%s's main.nf lacks %q:\n%s", c.fixture, c.want, c.main)
+		}
+	}
+}
+
 // TestEmitRefusesReservedParam: an entry input named like a param the
 // project defines itself is refused.
 func TestEmitRefusesReservedParam(t *testing.T) {
