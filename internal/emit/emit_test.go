@@ -614,6 +614,27 @@ func TestEmitSplitJoinGatherSorted(t *testing.T) {
 	}
 }
 
+// TestEmitNoFirstOnValueChannels guards warning-free runs (#281): a process
+// whose inputs are all value channels emits a value channel, on which Nextflow
+// warns that `first` is useless. BUILD_ENTRY_ARGS and an ungated fused SPLIT
+// are such processes; a gated fused SPLIT's 0/1-item queue output is read by
+// both MAIN's combine and JOIN, which DSL2 allows without first().
+func TestEmitNoFirstOnValueChannels(t *testing.T) {
+	dir := emitFixture(t, "split_test", map[string]string{
+		"SUM_SQUARES": "/x/sum_squares",
+		"REPORT":      "/x/report",
+	})
+
+	for file, want := range map[string]string{
+		"main.nf":                             "  pipeargs = BUILD_ENTRY_ARGS.out\n",
+		"modules/pipe_SUM_SQUARE_PIPELINE.nf": "    a = STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_SP.out.args\n",
+	} {
+		if got := readFile(t, filepath.Join(dir, file)); !strings.Contains(got, want) {
+			t.Errorf("%s: missing %q:\n%s", file, want, got)
+		}
+	}
+}
+
 // TestEmitMappedMergeGatherSorted guards -resume stability (#123) for the
 // default-mode mapped call's gather: the per-fork out bundles must be sorted by
 // name, not collect()ed in completion order — the gather order is part of the
@@ -1378,7 +1399,7 @@ func TestEmitEntryParams(t *testing.T) {
 		"process BUILD_ENTRY_ARGS {", // builds the bundle at run time
 		"values = groovy.json.JsonOutput.toJson([values: params.values])",  // overrides from params
 		"entryargs -base entry_args -values values.json -o entry_resolved", // overlay on baked defaults
-		"pipeargs = BUILD_ENTRY_ARGS.out.first()",                          // feed the entry pipeline
+		"pipeargs = BUILD_ENTRY_ARGS.out\n",                                // feed the entry pipeline
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing entry-param wiring %q", want)
