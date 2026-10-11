@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,32 +75,91 @@ func readText(t *testing.T, path string) string {
 
 // TestPlanNestedEntryForks: a run of map_pipe_nested with its sets widened
 // at launch, which the witness transpile does not fix, keys the inner map
-// call's forks by the outer fork and its own, three under the first set and
-// one under the second, as mrp forks OUTER/INNER/DBL.
+// call's forks by the outer fork and its own, as mrp forks OUTER/INNER/DBL:
+// three under the first set and one under the second, and two under each
+// when every set has two, a fork set of known length the witness's varies
+// with the outer fork. Each DBL fork's records give it mrp's _args.
 func TestPlanNestedEntryForks(t *testing.T) {
-	work, err := plan(t, "map_pipe_nested", `{"sets":[[1,2,3],[4]]}`)
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		sets string
+		want []string
+	}{
+		{`[[1,2,3],[4]]`, []string{"0.0", "0.1", "0.2", "1.0"}},
+		{`[[1,2],[3,4]]`, []string{"0.0", "0.1", "1.0", "1.1"}},
 	}
 
-	lines := strings.Split(strings.TrimSpace(readText(t, filepath.Join(work, "roots", "OUTER.INNER.DBL"))), "\n")
-	keys := make([]string, len(lines))
+	wantArgs := []string{`{"x":1}`, `{"x":2}`, `{"x":3}`, `{"x":4}`}
+
+	for _, tc := range cases {
+		work, err := plan(t, "map_pipe_nested", `{"sets":`+tc.sets+`}`)
+		if err != nil {
+			t.Errorf("sets %s: %v", tc.sets, err)
+
+			continue
+		}
+
+		lines := strings.Split(strings.TrimSpace(readText(t, filepath.Join(work, "roots", "OUTER.INNER.DBL"))), "\n")
+		keys := make([]string, len(lines))
+
+		for i, line := range lines {
+			keys[i] = strings.Fields(line)[0]
+		}
+
+		if d := cmp.Diff(tc.want, keys); d != "" {
+			t.Errorf("sets %s: DBL's fork keys (-mrp +plan):\n%s", tc.sets, d)
+		}
+
+		if d := cmp.Diff(wantArgs, nestedArgs(t, work, lines)); d != "" {
+			t.Errorf("sets %s: DBL's _args (-mrp +mre):\n%s", tc.sets, d)
+		}
+
+		if inv := readText(t, filepath.Join(work, "plan", "pipeline.mro")); !strings.Contains(inv, "call OUTER(") || !strings.Contains(inv, "4") {
+			t.Errorf("sets %s: the invocation does not carry the launch values:\n%s", tc.sets, inv)
+		}
+
+		if nodes := readText(t, filepath.Join(work, "nodes")); !strings.HasPrefix(nodes, "OUTER.INNER.DBL ") || strings.Count(nodes, "\n") != 1 {
+			t.Errorf("sets %s: node records %q, want one for OUTER.INNER.DBL", tc.sets, nodes)
+		}
+	}
+}
+
+// nestedArgs runs mre args for each planned DBL fork of map_pipe_nested,
+// passing the INNER fork its key names and its own record as the driver
+// does, and returns each fork's _args.
+func nestedArgs(t *testing.T, work string, lines []string) []string {
+	t.Helper()
+
+	inner := map[string]string{}
+
+	for line := range strings.SplitSeq(strings.TrimSpace(readText(t, filepath.Join(work, "roots", "OUTER.INNER"))), "\n") {
+		f := strings.Fields(line)
+		inner[f[0]] = f[1]
+	}
+
+	fx := filepath.Join("..", "..", "testdata", "map_pipe_nested")
+	out := make([]string, len(lines))
 
 	for i, line := range lines {
-		keys[i] = strings.Fields(line)[0]
+		f := strings.Fields(line)
+		outer, _, _ := strings.Cut(f[0], ".")
+		dir := filepath.Join(work, "args", strconv.Itoa(i))
+
+		var err error
+
+		state := captureStdout(t, func() {
+			err = run(t.Context(), []string{
+				"args", "-mro", filepath.Join(work, "plan", "pipeline.mro"), "-mropath", fx,
+				"-node", "OUTER.INNER.DBL", "-fork", inner[outer], "-fork", f[1], "-o", dir,
+			})
+		})
+		if err != nil || state != "enabled\n" {
+			t.Fatalf("args of DBL fork %s: %q %v", f[0], state, err)
+		}
+
+		out[i] = compactBundle(t, dir)
 	}
 
-	if d := cmp.Diff([]string{"0.0", "0.1", "0.2", "1.0"}, keys); d != "" {
-		t.Errorf("DBL's fork keys (-mrp +plan):\n%s", d)
-	}
-
-	if inv := readText(t, filepath.Join(work, "plan", "pipeline.mro")); !strings.Contains(inv, "call OUTER(") || !strings.Contains(inv, "4") {
-		t.Errorf("the invocation does not carry the launch values:\n%s", inv)
-	}
-
-	if nodes := readText(t, filepath.Join(work, "nodes")); !strings.HasPrefix(nodes, "OUTER.INNER.DBL ") || strings.Count(nodes, "\n") != 1 {
-		t.Errorf("node records %q, want one for OUTER.INNER.DBL", nodes)
-	}
+	return out
 }
 
 // TestPlanDigestFollowsTheNode: a node's spec digest changes with the

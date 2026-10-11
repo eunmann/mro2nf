@@ -267,15 +267,19 @@ var errUncovered = errors.New("the invocation's call graph is not within the tra
 // Covers checks that every node, fork root and read of r is one of t's: the
 // stage nodes of r with the same stage and fork roots, reading no stage
 // outs and gated by no stage t's does not, and every fork root fed by the
-// same producer, varying with the same outer roots. Of a node r disables
-// outright only its presence counts, and so do the roots only such nodes
-// are forked on: it runs at no fork.
+// same producer, varying with the same outer roots. An entry-fed root may
+// vary with fewer: nested entry collections all of one length are a source
+// of known length, which varies with none (syntax InnerMapSource), and the
+// plan repeats its forks under every outer fork (entryForks). Of a node r
+// disables outright only its presence counts, and so do the roots only such
+// nodes are forked on: it runs at no fork.
 func (t Topology) Covers(r Topology) error {
 	errs, live := t.coverNodes(r.Nodes)
 
 	for _, rr := range r.Roots {
 		if live[rr.Fqid] && !slices.ContainsFunc(t.Roots, func(x TopoRoot) bool {
-			return x.Fqid == rr.Fqid && x.Producer == rr.Producer && slices.Equal(x.Outer, rr.Outer)
+			return x.Fqid == rr.Fqid && x.Producer == rr.Producer &&
+				(slices.Equal(x.Outer, rr.Outer) || (rr.Producer == "" && subset(x.Outer, rr.Outer)))
 		}) {
 			errs = append(errs, fmt.Errorf("%w: fork root %s fed by %q varying with %v", errUncovered, rr.Fqid, rr.Producer, rr.Outer))
 		}
