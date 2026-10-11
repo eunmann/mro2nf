@@ -235,12 +235,9 @@ func reads(elementOnly map[*syntax.CallStm]*syntax.RefExp, exps ...syntax.Exp) [
 func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]*syntax.RefExp, fields map[string]map[string]bool) {
 	switch x := e.(type) {
 	case *syntax.SplitExp:
-		if ref, ok := x.Value.(*syntax.RefExp); ok && elementOnly[x.Call] != nil &&
-			ref.Id == elementOnly[x.Call].Id && ref.OutputId == elementOnly[x.Call].OutputId {
-			return
+		if !elementServed(x, elementOnly) {
+			collectReads(x.Value, elementOnly, fields)
 		}
-
-		collectReads(x.Value, elementOnly, fields)
 	case *syntax.RefExp:
 		addRead(fields, x)
 	case *syntax.ArrayExp:
@@ -268,6 +265,15 @@ func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]*syntax.RefExp, 
 		collectReads(x.Disabled, elementOnly, fields)
 		collectReads(x.Value, elementOnly, fields)
 	}
+}
+
+// elementServed reports a split of its root's own source output, which the
+// root's fork element serves.
+func elementServed(x *syntax.SplitExp, elementOnly map[*syntax.CallStm]*syntax.RefExp) bool {
+	src := elementOnly[x.Call]
+	ref, ok := x.Value.(*syntax.RefExp)
+
+	return ok && src != nil && ref.Id == src.Id && ref.OutputId == src.OutputId
 }
 
 // addRead records the top-level output a reference reads, "" for the whole
