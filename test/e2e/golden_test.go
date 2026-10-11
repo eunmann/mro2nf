@@ -732,19 +732,18 @@ func TestNativeRejectsOverride(t *testing.T) {
 	}
 }
 
-// TestNativeContainerEmits verifies -native + -native-runner transpile cleanly
-// for a container target (#99): the project builds with the runner baked into
-// the image at ctrRunner and the generated scripts referencing that in-image
-// path (no mounted project dir). TestGeneratedAWSBatchImageNative runs the
-// built image end to end; here we assert the transpile succeeds and wires the
-// baked paths.
+// TestNativeContainerEmits verifies -native transpiles cleanly for a container
+// target (#99): the image bakes mre and the adapters, and the generated scripts
+// exec those in-image paths (no mounted project dir).
+// TestGeneratedAWSBatchImageNative runs the built image end to end; here we
+// assert the transpile succeeds and wires the baked paths.
 func TestNativeContainerEmits(t *testing.T) {
 	buildBinaries(t)
 
 	proj := t.TempDir()
 	dir := filepath.Join(root, "testdata", "diamond_min")
 	cmd := exec.Command(filepath.Join(root, "mro2nf"),
-		"-native", "-native-runner", "-target", "awsbatch", "-container", "example/img:1",
+		"-native", "-target", "awsbatch", "-container", "example/img:1",
 		"-o", proj, "-mre", filepath.Join(root, "mre"),
 		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
 		"-mropath", dir, filepath.Join(dir, "pipeline.mro"))
@@ -758,16 +757,16 @@ func TestNativeContainerEmits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(dockerfile), "/opt/mro2nf/runner") {
-		t.Error("container Dockerfile must bake the -native-runner runner")
+	if !strings.Contains(string(dockerfile), "COPY runtime/mre /opt/mro2nf/mre") {
+		t.Error("container Dockerfile must bake mre")
 	}
 
 	main, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_D.nf"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(main), "/opt/mro2nf/runner/run_stage.py") {
-		t.Error("container native-runner scripts must exec the baked runner path")
+	if !strings.Contains(string(main), "'/opt/mro2nf/mre' main -shell '/opt/mro2nf/adapters/martian_shell.py'") {
+		t.Error("container -native scripts must exec the baked mre and adapter")
 	}
 }
 

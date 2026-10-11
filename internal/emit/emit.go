@@ -107,13 +107,6 @@ type Options struct {
 	// BUILD_ENTRY_ARGS task runs (entry inputs are fixed — no launch-time param
 	// override in native mode). Further increments collapse BIND/FORK/MERGE.
 	Native bool
-	// NativeRunner opts a Python stage's split/main/join into the embedded
-	// direct-call runner (#61 M2 / #79): no martian_shell.py adapter, no mre
-	// broker on the stage-execution hop; `import martian` resolves to the
-	// shipped compat shim. Independent of Native (it swaps only the stage hop,
-	// so it composes with the default DAG too). Compiled/exec stages keep the
-	// adapter path.
-	NativeRunner bool
 	// InlinePipelines opts into flattening eligible sub-pipeline boundaries so
 	// their entry/return BIND tasks disappear (#221). Orchestration-only; outputs
 	// are byte-identical.
@@ -126,7 +119,6 @@ type Options struct {
 func (o Options) featureSet() featureSet {
 	return featureSet{
 		native:          o.Native,
-		nativeRunner:    o.NativeRunner,
 		inlinePipelines: o.InlinePipelines,
 	}
 }
@@ -190,25 +182,22 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	g := genCtx{
-		entry:   prog.Entry.Callable,
-		mroFile: opts.MROFile,
-		mre:     opts.Mre,
-		shell:   opts.Shell,
-		mrjob:   opts.Mrjob,
-		// On a shared filesystem the runner is read from the project dir; a
-		// container backend rebinds this to the baked ctrRunner below.
-		runnerBase: "${projectDir}/" + assetsDir + "/" + runnerDir,
-		monitor:    opts.Monitor,
-		target:     target,
-		confine:    opts.ConfineOutputs || target.isContainer(),
-		features:   features,
-		code:       opts.StageCode,
-		plan:       buildPlan(prog, features),
+		entry:    prog.Entry.Callable,
+		mroFile:  opts.MROFile,
+		mre:      opts.Mre,
+		shell:    opts.Shell,
+		mrjob:    opts.Mrjob,
+		monitor:  opts.Monitor,
+		target:   target,
+		confine:  opts.ConfineOutputs || target.isContainer(),
+		features: features,
+		code:     opts.StageCode,
+		plan:     buildPlan(prog, features),
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker
-	// build context (mre + adapters + stage code + runner), so the image — not
-	// the host — supplies the runtime.
+	// build context (mre + adapters + stage code), so the image — not the host —
+	// supplies the runtime.
 	if target.isContainer() {
 		cb, err := containerBuild(opts, target, roots)
 		if err != nil {
@@ -216,9 +205,6 @@ func Emit(prog *ir.Program, opts Options) error {
 		}
 
 		g.mre, g.shell, g.mrjob, g.code = cb.mre, cb.shell, cb.mrjob, cb.code
-		if cb.runnerBase != "" {
-			g.runnerBase = cb.runnerBase
-		}
 	}
 
 	if err := checkBakedPaths(g); err != nil {
@@ -257,7 +243,7 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		return err
 	}
 
-	if err := writeProjectAssets(prog, opts, target, specDir); err != nil {
+	if err := writeProjectAssets(prog, opts, specDir); err != nil {
 		return err
 	}
 
@@ -279,20 +265,10 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 }
 
 // writeProjectAssets writes the shared static assets: the Groovy helper lib,
-// the Python runner (under -native-runner), the per-call bindspecs, the
-// disable artifacts, and the type manifest.
-func writeProjectAssets(prog *ir.Program, opts Options, target Target, specDir string) error {
+// the per-call bindspecs, the disable artifacts, and the type manifest.
+func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
 	if err := writeLib(opts.OutDir); err != nil {
 		return err
-	}
-
-	// The runner ships in the project's _assets/ for a shared-filesystem run;
-	// a container backend bakes it into the image instead (containerBuild), so
-	// the project copy would be dead weight (and dead zip weight for HealthOmics).
-	if opts.NativeRunner && !target.isContainer() {
-		if err := writeRunner(opts.OutDir); err != nil {
-			return err
-		}
 	}
 
 	if err := writeBindSpecs(prog, specDir); err != nil {

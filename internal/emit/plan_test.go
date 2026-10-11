@@ -595,7 +595,6 @@ func TestPlanKeyedKindFlagInvariant(t *testing.T) {
 	sets := []featureSet{
 		{},
 		{native: true},
-		{native: true, nativeRunner: true},
 	}
 
 	for _, fixture := range []string{"map_pipe_nested", "map_pipe_disabled_nested", "map_pipe_split", "kitchen_sink"} {

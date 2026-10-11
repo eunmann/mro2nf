@@ -19,12 +19,7 @@ type genCtx struct {
 	mre     string
 	shell   string
 	mrjob   string
-	// runnerBase is the directory holding the -native-runner Python runner
-	// (run_stage.py + martian.py): "${projectDir}/_assets/runner" on a shared
-	// filesystem, or the baked ctrRunner path for a container backend where the
-	// project dir is not mounted into the isolated task.
-	runnerBase string
-	monitor    bool
+	monitor bool
 	// target decides which entry file-override schemes the head node accepts.
 	target Target
 	// confine passes -confine to every stage phase: an output that resolves
@@ -39,13 +34,9 @@ type genCtx struct {
 	plan emitPlan
 }
 
-// stageCmd renders a stage-phase invocation, single-quoting every path so
-// spaces and shell metacharacters in paths are safe. The default runs the
-// phase through `mre` + the Martian adapter (-shell); under -native-runner a
-// Python stage instead execs the embedded run_stage.py directly (#79) — no
-// martian_shell.py adapter and no mre broker on the stage-execution hop. The
-// runner accepts the identical flag tail, so this branch is the only emitter
-// change.
+// stageCmd renders a stage-phase invocation through `mre` + the Martian adapter
+// (-shell), single-quoting every path so spaces and shell metacharacters in
+// paths are safe.
 func (g genCtx) stageCmd(phase string, s *ir.Stage) string {
 	return g.stageHead(phase, s) + g.resourceFlags(phase, s)
 }
@@ -91,31 +82,16 @@ func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
 }
 
 // resourceArg renders a resource number as a shell argument that mre's
-// ParseFloat and run_stage.py's float() read back: no exponent, and the
-// float32 the Martian parser stores widened exactly as mrp widens it.
+// ParseFloat reads back: no exponent, and the float32 the Martian parser
+// stores widened exactly as mrp widens it.
 func resourceArg(f float64) string {
 	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
-// stageHead renders the phase invocation up to the shared flag tail: the
-// direct-call runner for a Python stage under -native-runner, else the
-// mre+adapter invocation (with -mrjob for comp stages when configured).
+// stageHead renders the mre+adapter phase invocation up to the shared flag
+// tail (with -mrjob for comp stages when configured).
 func (g genCtx) stageHead(phase string, s *ir.Stage) string {
 	code := g.code[s.Name]
-
-	// A py stage can never carry src args (the Martian compiler rejects them:
-	// syntax/compile_stages.go "py stage type cannot have additional
-	// arguments"), so the runner path has nothing to forward.
-	if g.features.nativeRunner && s.Lang == ir.LangPy {
-		// runnerBase deliberately embeds ${projectDir} (a GString ref) so it stays
-		// raw; every other baked path is host-literal and goes through gstringLit,
-		// so a $ or \ in a stage-code / .mro path reaches bash byte-identical
-		// instead of resolving a Groovy variable (MissingPropertyException at task
-		// launch, or silently wrong args). runnerBase is the project dir on a shared
-		// FS, or the baked ctrRunner in a container image.
-		return fmt.Sprintf(`'python3' '%s/run_stage.py' %s -stagecode '%s' -call '%s' -mro '%s'`,
-			g.runnerBase, phase, gstringLit(code), gstringLit(g.entry), gstringLit(g.mroFile))
-	}
 
 	var cmd strings.Builder
 
@@ -473,9 +449,8 @@ process %[1]s_JOIN {
 		bundleInput("args"), bundleInputElems("args"), bundleOutput("outs"), joinGatherFlags)
 }
 
-// joinGatherFlags points a JOIN at its staged chunk bundles: the stage (mre or
-// the native runner) lists the task dir for chunk_N defs and out_chunk_N outs
-// itself and checks both against the split's chunks.json count. A
+// joinGatherFlags points a JOIN at its staged chunk bundles: mre lists the task
+// dir for chunk_N defs and out_chunk_N outs itself and checks both against the split's chunks.json count. A
 // shell-expanded list would hit the kernel's per-argument limit at ~8k chunks
 // and hide a failed listing as an empty join.
 const joinGatherFlags = "-chunksfile chunks.json -chunkdir ."
@@ -1749,7 +1724,7 @@ func stageDirectives(s *ir.Stage, val string) string {
 	// Every stage-phase process is labeled with its Martian adapter language
 	// (py/comp/exec), so the DAG, trace, and reports retain which launcher runs
 	// each stage — and `withLabel:lang_<x>` config selectors can target them —
-	// across every emission mode (default, -native, -native-runner).
+	// in every emission mode.
 	fmt.Fprintf(&b, "  label 'lang_%s'\n", s.Lang)
 
 	if val == "" {

@@ -17,10 +17,10 @@ bundle; the harness is skip-if-absent.
 
 The full `count` pipeline runs to completion under the generated Nextflow and its
 published outputs are **byte-identical to `mrp`** — same 1,084 cells, 461,083
-reads, and every mapping metric in `metrics_summary.csv` — across the default
-emit and all four opt-in optimizer variations.
+reads, and every mapping metric in `metrics_summary.csv` — under the default
+emit and under `-native`.
 
-Getting there surfaced **five real transpiler/runtime bugs**, all now fixed with
+Getting there surfaced **real transpiler/runtime bugs**, all now fixed with
 regression tests (this branch). A real production pipeline exercises paths the
 synthetic fixtures never did.
 
@@ -30,9 +30,8 @@ synthetic fixtures never did.
 |---|---|---|
 | 1 | A comp/exec stage whose `src` is a bare command resolved on PATH (`cr_lib martian <subcmd>`) was baked as a nonexistent file path `mro/rna/cr_lib`, so `mrjob` failed `fork/exec … no such file`. | Keep a bare command unqualified through `resolveSrcPath` + `stageCodePaths` (Martian's `FindPath` does the same) so PATH resolves it. |
 | 1b | Launching the bare command left the process's `argv[0]` bare; `cr_lib` resolves its own executable from `argv[0]` (`martian::utils::current_executable`) and panicked. | `mre` `LookPath`-resolves a bare comp/exec stagecode to an absolute path before exec. |
-| 2 | The transport leaf-flatten renamed every file leaf to `f/L%04d`, dropping the extension. Martian typed-file readers reconstruct a path from the filetype (`bincode` → `with_extension`), so they looked for `f/L0002.bincode` beside a bare `f/L0002` and failed. `FILTER_BARCODES` join. | Preserve the source extension in the leaf name (`f/L0002.bincode`); applied in the Go shim and the native-runner Python port. Since #284 each leaf keeps its whole basename in an ordinal dir (`f/L0002/<basename>`). |
+| 2 | The transport leaf-flatten renamed every file leaf to `f/L%04d`, dropping the extension. Martian typed-file readers reconstruct a path from the filetype (`bincode` → `with_extension`), so they looked for `f/L0002.bincode` beside a bare `f/L0002` and failed. `FILTER_BARCODES` join. | Preserve the source extension in the leaf name (`f/L0002.bincode`) in the Go shim. Since #284 each leaf keeps its whole basename in an ordinal dir (`f/L0002/<basename>`). |
 | 4 | A stage RESERVES production-sized memory (the cloupe join asks for 30 GB). On a smaller machine Nextflow's local executor **parks** a task whose request exceeds the machine — forever — deadlocking a run that `mrp` completes fine (`mrp` clamps a job to its `--localmem` pool and runs it). | Emit `process.resourceLimits` in the local profile, clamping each task's request to the detected host resources. The generated pipeline now runs wherever `mrp` runs. |
-| 5 | The `-native-runner` direct-Python runner leaked a numpy `np.float64(…)` repr into bundle JSON (numpy ≥ 2.0 repr is not valid JSON), which Nextflow can't parse. `SUBSAMPLE_READS`. | Coerce numpy scalars/arrays via `.tolist()` before encoding, matching `martian_shell.py`. |
 
 ## Baselines and the lever matrix
 
@@ -46,7 +45,6 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
 | **Martian (`mrp`)** | **68 s** | in-process | — | **0** (in-core) | 22 | golden |
 | Nextflow `default` | 104 s | 223 | 108 | 115 | 11 | ✅ identical |
 | Nextflow `-native` | 104 s | 220 | 108 | 112 | 11 | ✅ identical |
-| Nextflow `-native -native-runner` | 105 s | 220 | 108 | 112 | 11 | ✅ identical |
 
 "Plumbing" = data-plane tasks Nextflow externalizes that Martian does in-process
 (`BIND`/`FORK`/`MERGE`/`DISABLE`/`PUBLISH`/`LAYOUT`/`BUILD_ENTRY_ARGS`).
@@ -67,11 +65,9 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
   of this, and oversubscribes (22-wide on 8 cores) where Nextflow's local
   executor honors reservations more strictly (11-wide).
 
-- **The opt-in levers cut orchestration *structure*, not local wall time.**
-  `-native` drops a few plumbing tasks (`BUILD_ENTRY_ARGS` + tighter scatter);
-  `-native-runner` removes the `mre`→`martian_shell.py` process hop but not the
-  dominant Python import. So wall time is flat across all variations. Their value is where the
-  bench gate measures it — task/plumbing count, bytes staged, container launches
+- **`-native` cuts orchestration *structure*, not local wall time.** It drops
+  a few plumbing tasks (`BUILD_ENTRY_ARGS` + tighter scatter), so wall time is
+  flat across the variations. Its value is where the bench gate measures it — task/plumbing count, bytes staged, container launches
   — which translates to **cost and scale on a real backend (AWS Batch), not
   local seconds on tiny data**. On production-sized inputs, stage compute
   dominates and this overhead amortizes away.
@@ -93,7 +89,7 @@ cellranger testrun --id=golden --localcores=8 --localmem=16 --disable-ui
 mro2nf -allow-external-files -mropath $CR/mro -mre ./mre \
        -mrjob $CR/external/martian/bin/mrjob \
        -shell $CR/external/martian/adapters/python/martian_shell.py \
-       -o out __<id>.mro           # add -native/-native-runner to compare
+       -o out __<id>.mro           # add -native to compare
 
 # 3. Run (source the bundle env so cr_* + the bundled python3 are on PATH)
 source $CR/sourceme.bash

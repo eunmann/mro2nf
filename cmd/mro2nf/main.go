@@ -109,7 +109,7 @@ func run(args []string) error {
 // pointers and emit.Options are derived rather than hand-copied.
 type transpileFlags struct {
 	outDir, mroPath, mre, shell, mrjob, container, target, configPath *string
-	monitor, native, nativeRunner                                     *bool
+	monitor, native                                                   *bool
 	inlinePipelines, confineOutputs, allowExternalFiles               *bool
 	showVersion                                                       *bool
 }
@@ -127,7 +127,6 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 		target:             fs.String("target", "local", "execution backend: local | awsbatch | healthomics"),
 		monitor:            fs.Bool("monitor", false, "enforce mrp --monitor memory limits per stage: an RSS kill at mem_gb plus a prlimit vmem cap at vmem_gb"),
 		native:             fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)"),
-		nativeRunner:       fs.Bool("native-runner", false, "opt-in direct-call Python stage runner (#79): no martian_shell.py adapter or mre broker on the stage hop (py stages only; the runner is baked into the image for container backends)"),
 		inlinePipelines:    fs.Bool("inline-pipelines", true, "flatten eligible sub-pipeline boundaries into their parent, dropping the entry/return BIND tasks (ON by default; orchestration-only, byte-identical outputs; pass -inline-pipelines=false to keep per-boundary tasks for finer -resume; #221)"),
 		confineOutputs:     fs.Bool("confine-outputs", false, "fail a stage task whose output resolves outside its work dir instead of copying it in (always on for awsbatch/healthomics; set it for a local project run under an isolating executor such as docker)"),
 		allowExternalFiles: fs.Bool("allow-external-files", false, "copy entry file defaults and container-target stage code that resolve outside the .mro's directory and the -mropath roots into the project or image (refused by default)"),
@@ -140,7 +139,7 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 func (f transpileFlags) configPtrs() cliPtrs {
 	return cliPtrs{
 		target: f.target, container: f.container, mre: f.mre, shell: f.shell,
-		mrjob: f.mrjob, monitor: f.monitor, native: f.native, nativeRunner: f.nativeRunner,
+		mrjob: f.mrjob, monitor: f.monitor, native: f.native,
 	}
 }
 
@@ -175,7 +174,7 @@ func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (e
 	return emit.Options{
 		OutDir: *f.outDir, Mre: *f.mre, Shell: *f.shell, Mrjob: *f.mrjob,
 		Container: *f.container, Monitor: *f.monitor, Target: target,
-		Native: *f.native, NativeRunner: *f.nativeRunner,
+		Native:          *f.native,
 		InlinePipelines: *f.inlinePipelines, ConfineOutputs: *f.confineOutputs,
 		MROPath: roots, AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
 	}, nil
@@ -316,7 +315,7 @@ func reportDiagnostics(log zerolog.Logger, prog *ir.Program, opts emit.Options) 
 // cliPtrs collects the transpile flag value pointers a .mro2nf.yml may default.
 type cliPtrs struct {
 	target, container, mre, shell, mrjob *string
-	monitor, native, nativeRunner        *bool
+	monitor, native                      *bool
 }
 
 // applyConfig loads the .mro2nf.yml (explicit path, else alongside the .mro) and
@@ -368,7 +367,6 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) (map[str
 	applyStr("mrjob", p.mrjob, cfg.Mrjob)
 	applyBool("monitor", p.monitor, cfg.Monitor)
 	applyBool("native", p.native, cfg.Native)
-	applyBool("native-runner", p.nativeRunner, cfg.NativeRunner)
 
 	return applied, nil
 }

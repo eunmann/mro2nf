@@ -121,8 +121,8 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   wrapper, all baked into the generated scripts), `-mropath` (search path for
   `@include`), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
   (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
-  the opt-in emission modes `-native` and `-native-runner` (§4.8), `-allow-external-files` (§8, §10), `-config` (a
-  `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
+  the opt-in emission mode `-native` (§4.8), `-allow-external-files` (§8,
+  §10), `-config` (a `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
   explicit flag always wins — see `internal/config`; `-allow-external-files`
   and `-mropath` have no key, so a config file shipped beside a shared `.mro`
   cannot set them, and a tool path it sets is baked into an image only from
@@ -389,10 +389,10 @@ each file leaf individually and publishes it to its `outs/` path via
 published tree matches an mrp pipestance `outs/` (verified by
 `the Go TestMrpDiff suite`); see §10 for where "results" lives on each target.
 
-### 4.8 Opt-in emission modes: channel-native orchestration (`-native`)
+### 4.8 Opt-in emission mode: channel-native orchestration (`-native`)
 
-Everything in §§4.1–4.7 describes the default emission. Two opt-in flags trade
-some launch-time flexibility for a smaller task graph. Both are
+Everything in §§4.1–4.7 describes the default emission. The opt-in `-native`
+flag trades some launch-time flexibility for a smaller task graph. It is
 **plan-decided**: `buildPlan` (`internal/emit/plan.go`) resolves every call to a
 single `callKind` — plain bind, mapped, forward, one of the fused kinds, or
 native scatter — once, up front, and the process, wiring, and include
@@ -430,21 +430,14 @@ how a call is rendered.
     is decided per call site: a sub-pipeline called from sites that need
     different marks is emitted once per context (`SplitKnownContexts`, copies
     named `<pipeline>_ctx<n>`), which adds no tasks.
-- **`-native-runner`** swaps the stage-execution hop for `py` stages from
-  `mre` + `martian_shell.py` to an embedded direct-call runner
-  (`internal/emit/runner/run_stage.py`, with a shipped `martian` compat shim).
-  `exec`/`comp` stages keep the adapter path. It is independent of `-native`
-  and composes with the default DAG; container backends bake the runner into
-  the image.
 
 **Detect and refuse, never under-deliver.** Every transpile runs the pre-emit
 diagnostics (`internal/emit/diagnostics.go`) over the *same plan* that is
 emitted. A flag/pipeline combination that would produce a wrong project is a
 hard error that aborts the transpile; a shape an opt-in flag cannot fully
 collapse prints an **Info** diagnostic naming exactly which orchestration
-remains and why (e.g. which map call keeps its one FORK resolve, or that a
-`py`-only runner leaves an `exec` stage on the adapter path) — an opt-in never
-silently does less than asked.
+remains and why (e.g. which map call keeps its one FORK resolve) — an opt-in
+never silently does less than asked.
 
 ---
 

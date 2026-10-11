@@ -27,7 +27,7 @@ func TestLoad(t *testing.T) {
 target: awsbatch
 container: "ecr/repo:1"   # inline comment kept out of the value
 native: true
-native-runner: false
+monitor: false
 `))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -42,12 +42,12 @@ native-runner: false
 	if cfg.Native == nil || !*cfg.Native {
 		t.Errorf("Native = %v, want true", cfg.Native)
 	}
-	if cfg.NativeRunner == nil || *cfg.NativeRunner {
-		t.Errorf("NativeRunner = %v, want false", cfg.NativeRunner)
+	if cfg.Monitor == nil || *cfg.Monitor {
+		t.Errorf("Monitor = %v, want false", cfg.Monitor)
 	}
 	// An unset key stays nil so the CLI keeps the flag default.
-	if cfg.Monitor != nil {
-		t.Errorf("Monitor = %v, want nil (unset)", cfg.Monitor)
+	if cfg.Mre != nil {
+		t.Errorf("Mre = %v, want nil (unset)", cfg.Mre)
 	}
 }
 
@@ -78,6 +78,7 @@ func TestLoadRejectsBadInput(t *testing.T) {
 		"non-bool native":   "native: yes-please\n",
 		"deleted fold key":  "fold-disables: true\n",
 		"deleted fuse key":  "fuse-chains: true\n",
+		"deleted runner":    "native-runner: true\n",
 	}
 
 	for name, body := range cases {

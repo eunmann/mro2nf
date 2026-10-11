@@ -11,39 +11,28 @@ import (
 
 // TestInvalidOutputFailsLikeMrp: a stage whose struct output lacks a declared
 // member fails at its own output validation, as real mrp fails the stage with
-// "Expected S output value 's' missing key: b" (#274), on the adapter path and
-// under the native runner alike. The consumer projecting UP.s.b never runs, so
-// the missing key is never bound as null.
+// "Expected S output value 's' missing key: b" (#274). The consumer projecting
+// UP.s.b never runs, so the missing key is never bound as null.
 func TestInvalidOutputFailsLikeMrp(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	for _, tc := range []struct {
-		name  string
-		flags []string
-	}{
-		{"adapter", nil},
-		{"native_runner", []string{"-native-runner"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			proj := transpile(t, "missing_struct_key", tc.flags...)
+	proj := transpile(t, "missing_struct_key")
 
-			if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
-				t.Fatal("run succeeded; a stage output missing a declared struct key must fail it")
-			}
+	if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
+		t.Fatal("run succeeded; a stage output missing a declared struct key must fail it")
+	}
 
-			log, err := os.ReadFile(filepath.Join(proj, "run.log"))
-			if err != nil {
-				t.Fatalf("read run.log: %v", err)
-			}
+	log, err := os.ReadFile(filepath.Join(proj, "run.log"))
+	if err != nil {
+		t.Fatalf("read run.log: %v", err)
+	}
 
-			if !strings.Contains(string(log), "Expected S output value 's' missing key: b") {
-				t.Errorf("run.log does not name mrp's validation failure:\n%s", log)
-			}
+	if !strings.Contains(string(log), "Expected S output value 's' missing key: b") {
+		t.Errorf("run.log does not name mrp's validation failure:\n%s", log)
+	}
 
-			if down := attempts(readTrace(t, filepath.Join(proj, "trace.txt")), "DOWN"); len(down) != 0 {
-				t.Errorf("DOWN ran %d time(s); it must never see UP's invalid output: %+v", len(down), down)
-			}
-		})
+	if down := attempts(readTrace(t, filepath.Join(proj, "trace.txt")), "DOWN"); len(down) != 0 {
+		t.Errorf("DOWN ran %d time(s); it must never see UP's invalid output: %+v", len(down), down)
 	}
 }
 
@@ -70,44 +59,35 @@ func TestAssertTerminatesWithoutRetry(t *testing.T) {
 	}
 }
 
-// runnerLegs are the transpile flags of the two stage runners.
-var runnerLegs = map[string][]string{"mre": nil, "native_runner": {"-native-runner"}}
-
 // TestStageOutputLinkOutsideWorkFails guards #332 on isolated container
 // targets (-confine-outputs, implied by awsbatch/healthomics): a stage whose
 // file output is a symlink to a file outside its task work dir must fail the
-// run, naming the output and the target, under both runners, rather than
-// staging the target into its bundle and uploading it.
+// run, naming the output and the target, rather than staging the target into
+// its bundle and uploading it.
 func TestStageOutputLinkOutsideWorkFails(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java", "python3")
 
-	for name, flags := range runnerLegs {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+	proj := transpile(t, "symlink_escape", "-confine-outputs")
 
-			proj := transpile(t, "symlink_escape", append([]string{"-confine-outputs"}, flags...)...)
+	if err := runNextflowAllowingFailedAttempts(t, proj); err == nil {
+		t.Fatal("run succeeded; an output linked outside the work dir must fail it")
+	}
 
-			if err := runNextflowAllowingFailedAttempts(t, proj); err == nil {
-				t.Fatal("run succeeded; an output linked outside the work dir must fail it")
-			}
+	log, err := os.ReadFile(filepath.Join(proj, "run.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-			log, err := os.ReadFile(filepath.Join(proj, "run.log"))
-			if err != nil {
-				t.Fatal(err)
-			}
+	if !strings.Contains(string(log), "outside the task work dir") ||
+		!strings.Contains(string(log), "linked") ||
+		!strings.Contains(string(log), filepath.Join("stages", "link_out", "__init__.py")) {
+		t.Errorf("run log must name the output and its target:\n%s", tail(log, 40))
+	}
 
-			if !strings.Contains(string(log), "outside the task work dir") ||
-				!strings.Contains(string(log), "linked") ||
-				!strings.Contains(string(log), filepath.Join("stages", "link_out", "__init__.py")) {
-				t.Errorf("run log must name the output and its target:\n%s", tail(log, 40))
-			}
-
-			if fileExists(filepath.Join(proj, "results", "linked.txt")) {
-				t.Error("the link target was published")
-			}
-		})
+	if fileExists(filepath.Join(proj, "results", "linked.txt")) {
+		t.Error("the link target was published")
 	}
 }
 
@@ -132,35 +112,29 @@ func TestStageOutputLinkOutsideWorkCopiedLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for name, flags := range runnerLegs {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+	proj := transpile(t, "symlink_escape")
+	if err := runNextflow(t, proj); err != nil {
+		t.Fatal(err)
+	}
 
-			proj := transpile(t, "symlink_escape", flags...)
-			if err := runNextflow(t, proj); err != nil {
-				t.Fatal(err)
-			}
+	if got, err := os.ReadFile(filepath.Join(proj, "results", "linked.txt")); err != nil || string(got) != string(want) {
+		t.Errorf("published linked.txt = %q (err %v), want the link target's content", got, err)
+	}
 
-			if got, err := os.ReadFile(filepath.Join(proj, "results", "linked.txt")); err != nil || string(got) != string(want) {
-				t.Errorf("published linked.txt = %q (err %v), want the link target's content", got, err)
-			}
+	leaves, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "outs*", "f", "L0000", "*"))
+	if err != nil || len(leaves) == 0 {
+		t.Fatalf("no staged output leaf in the work dir (err %v)", err)
+	}
 
-			leaves, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "outs*", "f", "L0000", "*"))
-			if err != nil || len(leaves) == 0 {
-				t.Fatalf("no staged output leaf in the work dir (err %v)", err)
-			}
+	for _, leaf := range leaves {
+		info, err := os.Stat(leaf)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-			for _, leaf := range leaves {
-				info, err := os.Stat(leaf)
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				if os.SameFile(info, hostInfo) {
-					t.Errorf("bundle leaf %s is a hard link to the host file %s; it must be a copy", leaf, host)
-				}
-			}
-		})
+		if os.SameFile(info, hostInfo) {
+			t.Errorf("bundle leaf %s is a hard link to the host file %s; it must be a copy", leaf, host)
+		}
 	}
 }
 

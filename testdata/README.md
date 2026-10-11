@@ -38,8 +38,8 @@ run must reproduce. A golden has two parts:
   transpiled Nextflow project on the same invocation and diffs the published
   trees (same comparison as above), the normalized `_outs` and every stage
   phase's `_args`/`_outs` for each fixture in its `mrpDiffCases`, so each
-  outputs JSON is machine-checked against mrp, and, where a `native` /
-  `runner` leg is set, the `-native` and `-native-runner` emit paths too.
+  outputs JSON is machine-checked against mrp, and, where a `native` leg is
+  set, the `-native` emit path too.
 - **`TestMrpDiffFailureParity`** runs the fixtures mrp fails on by design
   (`mrpOutcomeCases`) under both runners and requires that mro2nf fails exactly
   when mrp does, blaming the same stages with the same kind of failure (an

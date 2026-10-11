@@ -4,8 +4,61 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/google/go-cmp/cmp"
 )
+
+// TestStageCmdAdapter pins the stage-phase invocation: the phase runs through
+// mre and the Martian adapter, followed by the -vmemgb and -monitor flags the
+// call sites rely on.
+func TestStageCmdAdapter(t *testing.T) {
+	g := genCtx{
+		entry: "P", mroFile: "pipeline.mro", mre: "/x/mre", shell: "/x/shell.py",
+		monitor: true,
+		code:    map[string]string{"S": "/code/stage"},
+	}
+	s := &ir.Stage{Name: "S", Lang: ir.LangPy, Resources: ir.Resources{VMemGB: 4}}
+
+	head := `'/x/mre' main -shell '/x/shell.py' -stagecode '/code/stage' -lang py -call 'P' -mro 'pipeline.mro'`
+	tail := g.resourceFlags("main", s)
+
+	if got := g.stageCmd("main", s); got != head+tail {
+		t.Errorf("py stageCmd:\n got %q\nwant %q", got, head+tail)
+	}
+
+	if !strings.Contains(tail, " -vmemgb 4") || !strings.Contains(tail, " -monitor") {
+		t.Errorf("resource flags must carry -vmemgb and -monitor: %q", tail)
+	}
+}
+
+// TestStageCmdSrcArgs pins #113: src args declared after the stage code path
+// (`src exec "code.py a b"`) must ride to the adapter as one -srcarg flag each,
+// in declaration order — and a stage without src args must emit none.
+func TestStageCmdSrcArgs(t *testing.T) {
+	g := genCtx{
+		entry: "P", mroFile: "pipeline.mro", mre: "/x/mre", shell: "/x/shell.py",
+		code: map[string]string{"E": "/code/tool.py"},
+	}
+
+	got := g.stageHead("main", &ir.Stage{Name: "E", Lang: ir.LangExec, SrcArgs: []string{"3", "hello"}})
+	want := `'/x/mre' main -shell '/x/shell.py' -stagecode '/code/tool.py' -lang exec -call 'P' -mro 'pipeline.mro' -srcarg '3' -srcarg 'hello'`
+
+	if got != want {
+		t.Errorf("exec stageHead with src args:\n got %q\nwant %q", got, want)
+	}
+
+	if plain := g.stageCmd("main", &ir.Stage{Name: "E", Lang: ir.LangExec}); strings.Contains(plain, "-srcarg") {
+		t.Errorf("stage without src args must not emit -srcarg: %q", plain)
+	}
+
+	// Martian's grammar admits $ and \ in src args (it rejects only quotes),
+	// and the script block is a Groovy GString — both must be escaped or
+	// Groovy interpolates them before bash runs (wrong args or a parse error).
+	esc := g.stageCmd("main", &ir.Stage{Name: "E", Lang: ir.LangExec, SrcArgs: []string{"$INPUT", `a\nb`}})
+	if !strings.Contains(esc, `-srcarg '\$INPUT' -srcarg 'a\\nb'`) {
+		t.Errorf("src args must be GString-escaped for the script block: %q", esc)
+	}
+}
 
 // TestGenDisabledWiringNestedProjection pins #209: a PROJECTED disable ref
 // (CFG.cfg.flag — a nested output path) is read natively on the driver, NOT via a

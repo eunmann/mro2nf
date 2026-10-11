@@ -23,7 +23,7 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	mro := filepath.Join(dir, "pipeline.mro")
 
 	if err := os.WriteFile(filepath.Join(dir, config.FileName),
-		[]byte("target: awsbatch\nmonitor: true\nnative: true\nnative-runner: true\n"), 0o644); err != nil {
+		[]byte("target: awsbatch\nmonitor: true\nnative: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -32,18 +32,14 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	target := fs.String("target", "local", "")
 	monitor := fs.Bool("monitor", false, "")
 	native := fs.Bool("native", false, "")
-	nativeRunner := fs.Bool("native-runner", false, "")
 	_ = fs.Parse([]string{mro})
 
-	ptrs := cliPtrs{target: target, monitor: monitor, native: native, nativeRunner: nativeRunner}
+	ptrs := cliPtrs{target: target, monitor: monitor, native: native}
 	if _, err := applyConfig(fs, "", mro, ptrs); err != nil {
 		t.Fatal(err)
 	}
-	if *target != "awsbatch" || !*monitor {
-		t.Errorf("config should set unset flags: target=%q monitor=%v", *target, *monitor)
-	}
-	if !*native || !*nativeRunner {
-		t.Errorf("config should set unset native flags: native=%v native-runner=%v", *native, *nativeRunner)
+	if *target != "awsbatch" || !*monitor || !*native {
+		t.Errorf("config should set unset flags: target=%q monitor=%v native=%v", *target, *monitor, *native)
 	}
 
 	// An explicitly-passed flag overrides the config — including a bool passed
@@ -52,10 +48,9 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	target2 := fs2.String("target", "local", "")
 	monitor2 := fs2.Bool("monitor", false, "")
 	native2 := fs2.Bool("native", false, "")
-	nativeRunner2 := fs2.Bool("native-runner", false, "")
-	_ = fs2.Parse([]string{"-target", "healthomics", "-native=false", "-native-runner=false", mro})
+	_ = fs2.Parse([]string{"-target", "healthomics", "-native=false", mro})
 
-	ptrs2 := cliPtrs{target: target2, monitor: monitor2, native: native2, nativeRunner: nativeRunner2}
+	ptrs2 := cliPtrs{target: target2, monitor: monitor2, native: native2}
 	if _, err := applyConfig(fs2, "", mro, ptrs2); err != nil {
 		t.Fatal(err)
 	}
@@ -65,9 +60,8 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	if !*monitor2 {
 		t.Errorf("unset monitor should still take config value, got %v", *monitor2)
 	}
-	if *native2 || *nativeRunner2 {
-		t.Errorf("explicit -native=false/-native-runner=false should win over config: native=%v native-runner=%v",
-			*native2, *nativeRunner2)
+	if *native2 {
+		t.Errorf("explicit -native=false should win over config, got native=%v", *native2)
 	}
 }
 
@@ -138,7 +132,7 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 	mro := filepath.Join(dir, "pipeline.mro")
 
 	if err := os.WriteFile(filepath.Join(dir, config.FileName),
-		[]byte("native: true\nnative-runner: true\n"), 0o644); err != nil {
+		[]byte("native: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -156,9 +150,8 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !opts.Native || !opts.NativeRunner {
-		t.Errorf("config-sourced native flags must reach options(): Native=%v NativeRunner=%v",
-			opts.Native, opts.NativeRunner)
+	if !opts.Native {
+		t.Errorf("config-sourced native must reach options(): Native=%v", opts.Native)
 	}
 }
 
@@ -342,10 +335,9 @@ func TestRunRefusesPipelineMrpCannotInstantiate(t *testing.T) {
 	}
 
 	modes := map[string][]string{
-		"default":       nil,
-		"native":        {"-native"},
-		"native-runner": {"-native-runner"},
-		"no-inline":     {"-inline-pipelines=false"},
+		"default":   nil,
+		"native":    {"-native"},
+		"no-inline": {"-inline-pipelines=false"},
 	}
 
 	for fixture, binding := range refused {
@@ -378,7 +370,7 @@ func TestRunRefusesPipelineMrpCannotInstantiate(t *testing.T) {
 func TestRunRejectsDeletedFlags(t *testing.T) {
 	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
 
-	for _, name := range []string{"fold-disables", "fuse-chains"} {
+	for _, name := range []string{"fold-disables", "fuse-chains", "native-runner"} {
 		t.Run(name, func(t *testing.T) {
 			err := run([]string{"-o", t.TempDir(), "-" + name, mro})
 			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+name) {

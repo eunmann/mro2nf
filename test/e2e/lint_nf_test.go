@@ -43,19 +43,15 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// lintConfigs is the emission-branch dimension (#122): each opt-in flag routes
-// the emitter down generator branches the default emission never reaches
-// (native scatter/merge, the direct-call runner scripts), so each fixture is
-// linted under every single flag plus their composition, -native
-// -native-runner.
+// lintConfigs is the emission-branch dimension (#122): -native routes the
+// emitter down generator branches (native scatter/merge) the default emission
+// never reaches, so each fixture is linted under both.
 var lintConfigs = []struct {
 	name  string
 	flags []string
 }{
 	{"default", nil},
 	{"native", []string{"-native"}},
-	{"native-runner", []string{"-native-runner"}},
-	{"native+native-runner", []string{"-native", "-native-runner"}},
 }
 
 // minNextflowMajor/Minor is the first release with `nextflow lint`.

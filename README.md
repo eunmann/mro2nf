@@ -93,8 +93,7 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-container <image>` | set `process.container` for container backends (AWS Batch, k8s) |
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
 | `-monitor` | enforce mrp `--monitor`'s memory limits per stage: an RSS kill at `mem_gb` (the process-group monitor, mrp's primary kill) plus a `prlimit` virtual-memory cap at `vmem_gb` |
-| `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native--native-runner)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
-| `-native-runner` | run `py` stages through the embedded direct-call runner instead of `mre` + `martian_shell.py` (`exec`/`comp` stages keep the adapter). On container backends the runner is baked into the image, so toggling it there means an image rebuild |
+| `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
 | `-allow-external-files` | copy an entry file default, or (container targets) a stage `src`, that resolves outside the `.mro`'s directory and the explicitly given `-mropath` roots (the implicit `.` is not one) into the project or image. Without it the transpile refuses such a file, so a shared `.mro` cannot ship host data such as `~/.aws` in `entry_args/`, the image, or `workflow.zip` |
 | `-config <path>` | path to a [`.mro2nf.yml`](#mro2nfyml-project-defaults) of per-project flag defaults (default: probed alongside the `.mro`) |
 | `-version` | print the mro2nf version and exit |
@@ -123,7 +122,7 @@ FASTQ, say) are staged the same way, at any shape: a file or directory, a
 `file[]`, a `map<file>`, or a struct with file fields. So a run parameter that
 points at an `s3://` path or prefix is localized into the task by Nextflow.
 
-### Native mode (`-native`, `-native-runner`)
+### Native mode (`-native`)
 
 By default every piece of orchestration between stage tasks — binding, forking,
 merging, entry-arg resolution — runs as its own small task. `-native` collapses
@@ -148,16 +147,10 @@ sub-pipeline runs its fork-keyed layer. **Every non-collapsed shape prints an In
 transpile time** naming exactly which tasks remain and why, so a partial
 collapse is never silent (see `internal/emit/diagnostics.go`).
 
-`-native-runner` is independent: it swaps the *stage-execution* hop for `py`
-stages from `mre` + `martian_shell.py` to an embedded direct-call Python runner
-(`import martian` resolves to a shipped compat shim). `exec`/`comp` stages keep
-the adapter path (an Info diagnostic names each). It composes with or without
-`-native`, and on container backends the runner is baked into the image.
-
-Both modes are held to the same bar as the default emission: the native e2e
+`-native` is held to the same bar as the default emission: the native e2e
 suites diff their outputs against the committed real-`mrp` goldens, the live
-`mrp` differential runs `-native` and `-native-runner` legs, every fixture is
-statically linted under each opt-in flag, and the benchmark gate's `-native`
+`mrp` differential runs `-native` legs, every fixture is statically linted
+under `-native`, and the benchmark gate's `-native`
 lanes machine-check that the element scatter's orchestration stays flat across
 fork widths. The suites also pin the exact set of surviving data-plane
 processes per pipeline shape (see
@@ -174,11 +167,10 @@ team doesn't have to repeat them on every invocation:
 target: awsbatch
 container: 123456789.dkr.ecr.us-east-1.amazonaws.com/pipe:1
 native: true
-native-runner: true
 ```
 
 Supported keys: `target`, `container`, `mre`, `shell`, `mrjob`, `monitor`,
-`native`, `native-runner`. A container
+`native`. A container
 target bakes an `mre`, `shell` or `mrjob` path set here into the image only
 when it resolves inside the `.mro`'s directory or a `-mropath` root, since a
 config file shipped with a shared `.mro` is not trusted; pass the flag to use a
@@ -287,8 +279,7 @@ nextflow run main.nf --aws_queue <q> --aws_region <r> \
 
 The emitted `Dockerfile` is self-contained (it vendors `mre` + the adapters). If
 you'd rather not vendor them, base your image on the published runtime image
-instead — it ships `mre`, the Martian adapters, and the `-native-runner` runner
-at `/opt/mro2nf`, multi-arch:
+instead — it ships `mre` and the Martian adapters at `/opt/mro2nf`, multi-arch:
 
 ```dockerfile
 FROM ghcr.io/eunmann/mro2nf-runtime:<version>   # match your mro2nf version

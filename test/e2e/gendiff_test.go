@@ -60,28 +60,24 @@ import (
 
 // genSmokeSeeds are the seeds every PR runs: between them their programs
 // reach every construct and corpus value test/gen covers (gen.Features) at
-// least once, mrp runs each of them, and mro2nf matches mrp on all four legs.
+// least once, mrp runs each of them, and mro2nf matches mrp on every leg.
 var genSmokeSeeds = []uint64{1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15, 22, 43, 108, 154, 192, 193, 246}
 
 // genDefaultLegs run every program under each transpile mode: what a sub
 // pipeline does at a call site differs between inlined and kept boundaries.
-const genDefaultLegs = "default,noinline,native,native-runner"
+const genDefaultLegs = "default,noinline,native"
 
 // genLegs are the transpile modes a program can run under, as TestMrpDiff's
-// legs. The native runner calls stage functions in-process and records no
-// stage metadata, so its leg has no stage ABI to compare and no stage to
-// blame a failure on.
+// legs.
 var genLegs = map[string]genLeg{
-	"default":       {name: "default", stamped: true},
-	"noinline":      {name: "noinline", flags: []string{"-inline-pipelines=false"}, stamped: true},
-	"native":        {name: "native", flags: []string{"-native"}, stamped: true},
-	"native-runner": {name: "native-runner", flags: []string{"-native", "-native-runner"}},
+	"default":  {name: "default"},
+	"noinline": {name: "noinline", flags: []string{"-inline-pipelines=false"}},
+	"native":   {name: "native", flags: []string{"-native"}},
 }
 
 type genLeg struct {
-	name    string
-	flags   []string
-	stamped bool
+	name  string
+	flags []string
 }
 
 // genEnv is how TestGenDiff runs: the oracle, the binaries under test, the
@@ -514,7 +510,7 @@ func outcomeLegVerdict(env genEnv, leg genLeg, fixture, proj string, mrp runOutc
 		return genVerdict{}, err
 	}
 
-	stamped, err := stageStamped(env, leg, proj)
+	stamped, err := stageStamped(env, proj)
 	if err != nil {
 		return genVerdict{}, err
 	}
@@ -564,15 +560,13 @@ func outputsVerdict(env genEnv, leg genLeg, fixture, work, proj string) (genVerd
 
 	v := genVerdict{findings: findings}
 
-	stamped, err := stageStamped(env, leg, proj)
+	stamped, err := stageStamped(env, proj)
 	if err != nil {
 		return genVerdict{}, err
 	}
 
 	if !stamped {
-		if leg.stamped {
-			v.notes = append(v.notes, "the prebuilt mre wrote no "+mreStageFile+" stamps (it predates #363): stage ABI not compared")
-		}
+		v.notes = append(v.notes, "the prebuilt mre wrote no "+mreStageFile+" stamps (it predates #363): stage ABI not compared")
 
 		return v, nil
 	}
@@ -590,14 +584,9 @@ func outputsVerdict(env genEnv, leg genLeg, fixture, work, proj string) (genVerd
 }
 
 // stageStamped reports whether the run of proj recorded which stage each
-// task ran, which the stage ABI and failure attribution read: the native
-// runner's leg never does, and neither does a prebuilt mre older than the
-// stamps (#363).
-func stageStamped(env genEnv, leg genLeg, proj string) (bool, error) {
-	if !leg.stamped {
-		return false, nil
-	}
-
+// task ran, which the stage ABI and failure attribution read: a prebuilt mre
+// older than the stamps (#363) does not.
+func stageStamped(env genEnv, proj string) (bool, error) {
 	if !env.prebuilt {
 		return true, nil
 	}

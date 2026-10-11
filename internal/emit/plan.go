@@ -16,9 +16,6 @@ type featureSet struct {
 	// inlinePipelines flattens eligible sub-pipeline calls into their parent so
 	// the pipeline-boundary bind tasks (entry + return) disappear (#221).
 	inlinePipelines bool
-	// nativeRunner swaps the Python stage-execution hop from the Martian
-	// adapter (mre + martian_shell.py) to the embedded direct-call runner (#79).
-	nativeRunner bool
 }
 
 // callKind is how a single call is emitted — decided once in buildPlan so the

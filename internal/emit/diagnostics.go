@@ -51,9 +51,8 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 	}
 
 	ds = append(ds, nativeDiagnostics(prog, f, pl)...)
-	ds = append(ds, nativeTargetDiagnostics(prog, f, opts.Target)...)
 
-	return append(ds, runnerDiagnostics(prog, f, opts.Monitor)...)
+	return append(ds, nativeTargetDiagnostics(prog, f, opts.Target)...)
 }
 
 // nativeDiagnostics surfaces which map calls -native could NOT fully collapse,
@@ -156,36 +155,6 @@ func nativeTargetDiagnostics(prog *ir.Program, f featureSet, rawTarget Target) [
 		Severity: SevInfo,
 		Message:  "-native with -target healthomics: entry inputs are baked at transpile time; parameter-template.json still declares them (HealthOmics rejects undeclared parameters) but supplying one fails the run — re-transpile to change entry values",
 	}}
-}
-
-// runnerDiagnostics surfaces what -native-runner does NOT cover, so the opt-in
-// never silently under-delivers (#83): comp/exec stages keep the Martian
-// adapter path, and -monitor's RSS enforcement runs in-process (the runner's
-// watchdog) rather than mre's process-group monitor.
-func runnerDiagnostics(prog *ir.Program, f featureSet, monitor bool) []Diagnostic {
-	if !f.nativeRunner {
-		return nil
-	}
-
-	var ds []Diagnostic
-
-	for _, name := range sortedKeys(prog.Stages) {
-		if lang := prog.Stages[name].Lang; lang != ir.LangPy {
-			ds = append(ds, Diagnostic{
-				Severity: SevInfo,
-				Message:  fmt.Sprintf("-native-runner: stage %s is a %s stage and keeps the Martian adapter path", name, lang),
-			})
-		}
-	}
-
-	if monitor {
-		ds = append(ds, Diagnostic{
-			Severity: SevInfo,
-			Message:  "-native-runner: -monitor enforcement runs in-process (RLIMIT_AS vmem cap + RSS watchdog), not mre's process-group monitor",
-		})
-	}
-
-	return ds
 }
 
 // HasError reports whether any diagnostic is fatal.
