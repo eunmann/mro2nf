@@ -371,7 +371,10 @@ lines, wrap errors with `%w`, standard `testing` + `go-cmp` only, and
 
 CI (`.github/workflows/pr-validation.yml`) runs lint (golangci-lint + `govulncheck`
 + a `go mod tidy` check), build, unit tests (`-race`), and the e2e suites on every
-PR and push to `main`. The Martian dependency is pinned to a published commit, so
+PR and push to `main`. `nightly.yml` reruns the e2e suites daily on the declared
+Nextflow floor and on latest stable, adds the `make test-scale` smoke, and opens
+or comments on a "Nightly CI is failing" issue when a run fails. The Martian
+dependency is pinned to a published commit, so
 CI needs only a single checkout; to hack on the Martian parser locally, add a
 `go.work` pointing at a fork checkout (gitignored). Tagging `v*` triggers
 `release.yml`. It waits for PR Validation to pass on the tagged commit's push to

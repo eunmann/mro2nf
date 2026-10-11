@@ -1,0 +1,111 @@
+name: Nightly
+
+# The nightly tier (#354). PR Validation gates every merge, on the latest
+# Nextflow. This tier reruns the e2e suites when no PR does, on the Nextflow
+# floor the generated manifest declares as well as on latest stable, so a new
+# Nextflow release or a floor regression surfaces between PRs. It also runs
+# checks too slow for every PR. Every job name starts with "Nightly", so no job
+# here can post one of PR Validation's required contexts (TestNightly*). The
+# release tier lives in release.yml.
+on:
+  schedule:
+    - cron: "17 5 * * *" # daily 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: Nightly ${{ matrix.suite }} (Nextflow ${{ matrix.nextflow }})
+    runs-on: ubuntu-latest
+    # Unsharded: setup, a Martian build on a cache miss (~5 min) and the
+    # 30-minute go-test timeout, with headroom.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor must equal manifest.nextflowVersion in the generated
+        # nextflow.config (TestNightlyNextflowFloor).
+        nextflow: ["23.10.0", latest-stable]
+        suite: [test-e2e, test-e2e-docker]
+    env:
+      E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - if: matrix.suite == 'test-e2e'
+        uses: ./.github/actions/setup-martian
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+        with:
+          version: ${{ matrix.nextflow }}
+      - name: Check the installed Nextflow version
+        env:
+          WANT: ${{ matrix.nextflow }}
+        run: |
+          ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')
+          echo "Nextflow $ver"
+          [ "$WANT" = latest-stable ] || [ "$ver" = "$WANT" ] || {
+            echo "::error::installed Nextflow $ver, want $WANT"; exit 1;
+          }
+      - run: make ${{ matrix.suite }}
+
+  scale:
+    name: Nightly scale smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      E2E_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      # The action is pinned; the Nextflow it installs is latest, deliberately.
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - run: make test-scale
+
+  # One open issue tracks a failing nightly: the first failure opens it, later
+  # ones comment on it, and closing it re-arms the next failure to open a new
+  # one. The exact title is the dedupe key.
+  report:
+    name: Nightly failure report
+    needs: [e2e, scale]
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the nightly failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Nightly CI is failing"
+          body="Nightly run $RUN_URL failed on $GITHUB_SHA."
+          num=$(gh issue list --state open --limit 1000 --json number,title \
+            --jq "map(select(.title == \"$title\")) | first | .number // empty")
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
