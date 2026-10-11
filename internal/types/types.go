@@ -323,9 +323,29 @@ func (t *Table) narrow(v any, base string, arrayDim, mapDim int) (any, bool) {
 		return asMap(nv), changed
 	case Object:
 		return t.narrowObject(tv, base, arrayDim, mapDim)
+	case json.Number:
+		return narrowNumber(tv, base, arrayDim, mapDim)
 	default:
 		return v, false
 	}
+}
+
+// narrowNumber filters an int leaf as BuiltinType.FilterJson does: a
+// whole-number float such as 4.0 or 1e2 is re-encoded as an integer, which
+// counts as a change, so the enclosing struct is rebuilt in declared order.
+func narrowNumber(n json.Number, base string, arrayDim, mapDim int) (any, bool) {
+	if base != typeInt || arrayDim > 0 || mapDim > 0 {
+		return n, false
+	}
+
+	if _, err := n.Int64(); err == nil {
+		return n, false
+	}
+
+	c := coerceNumber(n, base)
+	_, same := c.(json.Number)
+
+	return c, !same
 }
 
 // narrowObject narrows a typed map's values in place, or filters a struct as

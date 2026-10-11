@@ -194,6 +194,21 @@ func TestNarrowObjectOrder(t *testing.T) {
 		{"exact_keeps_source_order", `{"a":1,"z":2}`, `{"a":1,"z":2}`, ir.Param{BaseType: "In"}},
 		{"extra_field_declared_order", `{"m":0,"a":1,"z":2}`, `{"z":2,"a":1}`, ir.Param{BaseType: "In"}},
 		{"missing_field_declared_order", `{"a":1}`, `{"z":null,"a":1}`, ir.Param{BaseType: "In"}},
+		{"whole_float_int_declared_order", `{"a":1,"z":4.0}`, `{"z":4,"a":1}`, ir.Param{BaseType: "In"}},
+		{"exponent_int_declared_order", `{"a":1,"z":1e2}`, `{"z":100,"a":1}`, ir.Param{BaseType: "In"}},
+		{"fractional_int_keeps_source_order", `{"a":1,"z":2.5}`, `{"a":1,"z":2.5}`, ir.Param{BaseType: "In"}},
+		{
+			"nested_whole_float_int_declared_order",
+			`{"b":1,"f":null,"q":{"a":1,"z":2.0}}`,
+			`{"q":{"z":2,"a":1},"f":null,"b":1}`,
+			ir.Param{BaseType: "Box"},
+		},
+		{
+			"whole_float_float_keeps_source_order",
+			`{"b":2.0,"f":null,"q":{"z":1,"a":2}}`,
+			`{"b":2.0,"f":null,"q":{"z":1,"a":2}}`,
+			ir.Param{BaseType: "Box"},
+		},
 		{
 			"nested_change_declared_order",
 			`{"b":1,"f":null,"q":{"m":0,"a":1,"z":2}}`,
