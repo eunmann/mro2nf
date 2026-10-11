@@ -139,8 +139,8 @@ func disabledOuts(st *syntax.CallGraphStage) core.MarshalerMap {
 
 // verifyOutputs checks a stage's outs as mrp's Fork.verifyOutput does
 // (core/stage.go:764-786) with Martian's own LazyArgumentMap.ValidateOutputs:
-// an error fails the stage, and an alarm only under the error enforcement
-// level.
+// an error fails the stage, and an alarm is dropped, as at mrp's default
+// enforcement level. mrp's --strict mode is not supported.
 func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fork) error {
 	params := st.Callable().GetOutParams()
 	if params == nil || len(params.List) == 0 {
@@ -154,8 +154,6 @@ func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fo
 
 	if err, alarms := outs.ValidateOutputs(g.types, params); err != nil {
 		return fmt.Errorf("%w of %s: %w%s", errInvalidOuts, st.Fqid, err, alarms)
-	} else if alarms != "" && syntax.GetEnforcementLevel() == syntax.EnforceError {
-		return fmt.Errorf("%w of %s: %s", errInvalidOuts, st.Fqid, alarms)
 	}
 
 	return nil

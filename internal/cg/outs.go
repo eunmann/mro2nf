@@ -49,7 +49,8 @@ func (g *Graph) WriteOuts(spec OutsSpec) error {
 
 // verifyPipelineOutputs checks resolved pipeline outs as mrp's
 // Fork.verifyPipelineOutput does (core/stage.go:788-833), with Martian's own
-// MarshalerMap.ValidatePipelineOutputs at each struct.
+// MarshalerMap.ValidatePipelineOutputs at each struct, dropping alarms as at
+// mrp's default enforcement level.
 func (g *Graph) verifyPipelineOutputs(v json.Marshaler, t syntax.Type) error {
 	switch t := t.(type) {
 	case *syntax.TypedMapType:
@@ -76,8 +77,6 @@ func (g *Graph) verifyPipelineOutputs(v json.Marshaler, t syntax.Type) error {
 
 		if err, alarms := m.ValidatePipelineOutputs(g.types, t); err != nil {
 			return fmt.Errorf("%w of the pipeline: %w%s", errInvalidOuts, err, alarms)
-		} else if alarms != "" && syntax.GetEnforcementLevel() == syntax.EnforceError {
-			return fmt.Errorf("%w of the pipeline: %s", errInvalidOuts, alarms)
 		}
 	}
 
