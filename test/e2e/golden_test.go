@@ -70,6 +70,8 @@ var goldenCases = []goldenCase{
 	{"arr_map_proj", "arr_map_proj", "expected/outs.json"},
 	{"literals_edge", "literals_edge", "expected/outs.json"},
 	{"dir_out", "dir_out", "expected/outs.json"},
+	// #242: directory outputs with dotfiles and an empty subdirectory.
+	{"dir_hidden", "dir_hidden", "expected/outs.json"},
 	{"api_smoke", "api_smoke", "expected/outs.json"},
 	{"float_to_int", "float_to_int", "expected/outs.json"},
 	{"disabled_map", "disabled_map", "expected/outs.json"},
@@ -1179,6 +1181,7 @@ func TestNativeComplete(t *testing.T) {
 		{fixture: "diamond_min", golden: "expected/outs.json"},
 		{fixture: "fold_disable", golden: "expected/outs.json"},
 		{fixture: "native_file_return", golden: "expected/nf_outs.json"},
+		{fixture: "dir_hidden", golden: "expected/outs.json"},
 		{fixture: "file_min", golden: "expected/outs.json"},
 		{fixture: "chain_fuse", golden: "expected/outs.json"},
 		{fixture: "struct_min", golden: "expected/stats_pipe_outs.json"},

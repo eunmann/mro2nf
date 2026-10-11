@@ -188,16 +188,19 @@ func genPublish(b *strings.Builder, prog *ir.Program, g genCtx) {
 
 // outsPublish carries the fragments that turn LAYOUT into a head-node publisher:
 // a second publishDir directive (saveAs strips the outs/ prefix), the staged-leaf
-// input, the outs/** output, and the mre flags that materialise the tree.
+// input, the outs/* output, and the mre flags that materialise the tree.
 type outsPublish struct{ dir, in, out, flags string }
 
 // outsFragments returns the LAYOUT fragments for head-node publishing. staged is
 // true when LAYOUT already has the leaves in f/ (the native return-bind moves
-// them there), so no separate f/ input is added.
+// them there), so no separate f/ input is added. The output captures each
+// top-level outs/ entry whole, so publishDir copies a directory output with its
+// dotfiles and empty subdirectories, as mrp publishes it (#242); an outs/**
+// glob matches only non-hidden files.
 func outsFragments(staged bool) outsPublish {
 	op := outsPublish{
 		dir:   "  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, saveAs: { it.startsWith('outs/') ? it.substring(5) : null }\n",
-		out:   "    path 'outs/**', arity: '0..*', optional: true\n",
+		out:   "    path 'outs/*', hidden: true, arity: '0..*', optional: true\n",
 		flags: " -leaves f -outs outs",
 	}
 	if !staged {
@@ -258,7 +261,7 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
 	flags := g.producerArgs(p.Name, types.RoleOut)
 
 	// The return bind moves the leaves into f/ (staged=true), so head-node
-	// publishing needs no extra f/ input — LAYOUT publishes outs/** directly.
+	// publishing needs no extra f/ input — LAYOUT publishes outs/* directly.
 	op := outsFragments(true)
 
 	fmt.Fprintf(b, `process LAYOUT {

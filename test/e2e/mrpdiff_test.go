@@ -258,6 +258,9 @@ func TestMrpDiff(t *testing.T) {
 	}{
 		{name: "file_min"},
 		{name: "dir_out"},
+		// #242: dotfiles and an empty subdirectory inside directory outputs,
+		// through both LAYOUT variants (the transform return folds under -native).
+		{name: "dir_hidden", native: true, runner: true},
 		{name: "map_file"},
 		{name: "map_file_keyed"},
 		{name: "map_split_file"},

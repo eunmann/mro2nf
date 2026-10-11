@@ -3,24 +3,32 @@
 package e2e
 
 // Published-tree goldens (#256): testdata/<fixture>/expected/outs/ holds the
-// file tree real mrp published for the fixture's invocation, so the golden
-// suites check published contents and the published file set, not only the
-// path strings in pipeline_outs.json. TestRecordGoldens is the only writer.
+// file tree real mrp published for the fixture's invocation, and
+// expected/outs.emptydirs its empty directories, so the golden suites check
+// published contents and the published file set, not only the path strings in
+// pipeline_outs.json. TestRecordGoldens is the only writer.
 
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
 // goldenTreeDir is where, relative to the fixture dir, the mrp-published tree
-// lives. A fixture without one published nothing under mrp.
+// lives. A fixture without one published no file under mrp.
 const goldenTreeDir = "expected/outs"
+
+// goldenEmptyDirs lists, one slash-separated path per line relative to
+// goldenTreeDir, the empty directories mrp published. Git cannot commit an
+// empty directory, so the recorder writes them here instead of into the tree.
+const goldenEmptyDirs = "expected/outs.emptydirs"
 
 const (
 	unresolvedInput = "mrp runs the stage in its own job dir, where the invocation's relative input/ path does not resolve"
@@ -77,7 +85,7 @@ func assertGoldenTree(t *testing.T, name, fixture, proj string) {
 		return
 	}
 
-	want := hashTree(t, filepath.Join(root, "testdata", fixture, filepath.FromSlash(goldenTreeDir)))
+	want := goldenTree(t, filepath.Join(root, "testdata", fixture))
 	got := hashTree(t, filepath.Join(proj, "results"), nfResultsMeta...)
 
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -86,9 +94,32 @@ func assertGoldenTree(t *testing.T, name, fixture, proj string) {
 	}
 }
 
-// TestRecordGoldens rewrites every recordable fixture's expected/outs/ from a
-// real mrp run (make record-goldens). It replaces the tree wholesale, and
-// writes none for a fixture whose mrp run published nothing.
+// goldenTree is the hashTree of fixtureDir's recorded mrp tree, with the empty
+// directories goldenEmptyDirs lists added back.
+func goldenTree(t *testing.T, fixtureDir string) map[string]string {
+	t.Helper()
+
+	tree := hashTree(t, filepath.Join(fixtureDir, filepath.FromSlash(goldenTreeDir)))
+
+	data, err := os.ReadFile(filepath.Join(fixtureDir, filepath.FromSlash(goldenEmptyDirs)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return tree
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for rel := range strings.Lines(string(data)) {
+		tree[filepath.FromSlash(strings.TrimSuffix(rel, "\n"))+"/"] = emptyDirMark
+	}
+
+	return tree
+}
+
+// TestRecordGoldens rewrites every recordable fixture's expected/outs/ and
+// expected/outs.emptydirs from a real mrp run (make record-goldens). It
+// replaces both wholesale, and writes neither for what mrp did not publish.
 func TestRecordGoldens(t *testing.T) {
 	t.Parallel()
 
@@ -108,51 +139,71 @@ func TestRecordGoldens(t *testing.T) {
 			tmp := t.TempDir()
 			runMrp(t, bin, fixture, tmp)
 
-			dst := filepath.Join(root, "testdata", fixture, goldenTreeDir)
-			if err := recordTree(filepath.Join(tmp, "mrp", "outs"), dst); err != nil {
+			if err := recordTree(filepath.Join(tmp, "mrp", "outs"), filepath.Join(root, "testdata", fixture)); err != nil {
 				t.Fatalf("record %s: %v", fixture, err)
 			}
 		})
 	}
 }
 
-// errEmptyDirGolden reports an empty directory in mrp's tree: git cannot
-// commit one, so the recorded golden would silently lose it.
-var errEmptyDirGolden = errors.New("empty directory cannot be committed as a golden")
+// recordTree replaces fixtureDir's goldenTreeDir with copies of the files
+// under mrp's outs dir src, minus mrp's root metadata, resolving symlinks to
+// their contents, and its goldenEmptyDirs with src's empty directories.
+func recordTree(src, fixtureDir string) error {
+	dst := filepath.Join(fixtureDir, filepath.FromSlash(goldenTreeDir))
+	manifest := filepath.Join(fixtureDir, filepath.FromSlash(goldenEmptyDirs))
 
-// recordTree replaces dst with copies of the files under mrp's outs dir src,
-// minus mrp's root metadata, resolving symlinks to their contents.
-func recordTree(src, dst string) error {
-	if err := os.RemoveAll(dst); err != nil {
-		return fmt.Errorf("clear %s: %w", dst, err)
+	for _, stale := range []string{dst, manifest} {
+		if err := os.RemoveAll(stale); err != nil {
+			return fmt.Errorf("clear %s: %w", stale, err)
+		}
 	}
 
-	return walkPublished(src, mrpOutsMeta, func(rel, path string, emptyDir bool) error {
+	var empty []string
+
+	err := walkPublished(src, mrpOutsMeta, func(rel, path string, emptyDir bool) error {
 		if emptyDir {
-			return fmt.Errorf("%s: %w", rel, errEmptyDirGolden)
+			empty = append(empty, filepath.ToSlash(rel)+"\n")
+
+			return nil
 		}
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read %s: %w", rel, err)
-		}
-
-		out := filepath.Join(dst, rel)
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-			return fmt.Errorf("mkdir for %s: %w", rel, err)
-		}
-
-		if err := os.WriteFile(out, data, 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", rel, err)
-		}
-
-		return nil
+		return recordFile(path, filepath.Join(dst, rel))
 	})
+	if err != nil || len(empty) == 0 {
+		return err
+	}
+
+	slices.Sort(empty)
+
+	if err := os.WriteFile(manifest, []byte(strings.Join(empty, "")), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", manifest, err)
+	}
+
+	return nil
+}
+
+// recordFile copies the contents of the published file src to out.
+func recordFile(src, out string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", src, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return fmt.Errorf("mkdir for %s: %w", out, err)
+	}
+
+	if err := os.WriteFile(out, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", out, err)
+	}
+
+	return nil
 }
 
 // TestGoldenTreeTables fails on a jsonOnlyGoldens entry naming no golden case,
-// and on an expected/outs/ tree TestRecordGoldens does not write (one the
-// recorder cannot reproduce from mrp).
+// and on an expected/outs/ tree or expected/outs.emptydirs TestRecordGoldens
+// does not write (one the recorder cannot reproduce from mrp).
 func TestGoldenTreeTables(t *testing.T) {
 	t.Parallel()
 
@@ -162,9 +213,15 @@ func TestGoldenTreeTables(t *testing.T) {
 		}
 	}
 
-	trees, err := filepath.Glob(filepath.Join(root, "testdata", "*", filepath.FromSlash(goldenTreeDir)))
-	if err != nil {
-		t.Fatal(err)
+	var trees []string
+
+	for _, golden := range []string{goldenTreeDir, goldenEmptyDirs} {
+		matches, err := filepath.Glob(filepath.Join(root, "testdata", "*", filepath.FromSlash(golden)))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		trees = append(trees, matches...)
 	}
 
 	recordable := recordableFixtures()

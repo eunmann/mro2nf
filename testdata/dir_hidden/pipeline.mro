@@ -1,0 +1,30 @@
+# Directory outputs holding dotfiles (top-level and in a subdirectory that has
+# nothing else) and an empty subdirectory, as a zarr store does (#242): the
+# published tree must keep all three. Two calls make the return a transform, so
+# -native publishes through the inline-bind LAYOUT as well as the default one.
+stage MKHIDDEN(
+    in  string tag,
+    out path   d,
+    src py     "stages/mkhidden",
+)
+
+pipeline DH(
+    out path d,
+    out path e,
+)
+{
+    call MKHIDDEN as MK_D(
+        tag = "d",
+    )
+
+    call MKHIDDEN as MK_E(
+        tag = "e",
+    )
+
+    return (
+        d = MK_D.d,
+        e = MK_E.d,
+    )
+}
+
+call DH()
