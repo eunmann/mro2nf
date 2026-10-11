@@ -26,6 +26,14 @@ on:
 permissions:
   contents: read
 
+# The Temurin LTS the Nextflow driver runs on; Nextflow 26.04 supports Java
+# 17 up to 26 (#237). The floor engine's launcher refuses any Java above 21,
+# so its lanes run FLOOR_JAVA_VERSION, which also keeps Nextflow's Java 17
+# minimum under test.
+env:
+  JAVA_VERSION: "25"
+  FLOOR_JAVA_VERSION: "17"
+
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
@@ -102,7 +110,7 @@ jobs:
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ matrix.nextflow == 'latest-stable' && env.JAVA_VERSION || env.FLOOR_JAVA_VERSION }}
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
         with:
           version: ${{ matrix.nextflow }}
@@ -140,7 +148,7 @@ jobs:
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ matrix.nextflow == 'latest-stable' && env.JAVA_VERSION || env.FLOOR_JAVA_VERSION }}
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
         with:
           version: ${{ matrix.nextflow }}
@@ -174,7 +182,7 @@ jobs:
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
       # The action is pinned; the Nextflow it installs is latest, deliberately.
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       - run: make test-scale SCALE_RUN='^TestScaleForks' SCALE_WIDTH=1000 SCALE_TIMEOUT=20m
@@ -209,7 +217,7 @@ jobs:
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
       # The action is pinned; the Nextflow it installs is latest, deliberately.
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       # No shape name is a prefix of another, so the regexp needs no end anchor.
@@ -257,7 +265,7 @@ jobs:
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: ${{ env.JAVA_VERSION }}
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       - run: make gen-diff GEN_COUNT=400 GEN_TIMEOUT=100m
       - id: upload

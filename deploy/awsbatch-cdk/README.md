@@ -24,9 +24,12 @@ Designed to cost **≈ $0 while idle** and only a few cents per test run:
 - **No NAT gateway** (~$32/mo each) and **no EFS/Lustre** — public subnets + a
   free S3 gateway endpoint are used instead. (Nextflow uses S3 as its work dir,
   so unlike the MRP/Batch pattern it needs no shared filesystem.)
-- **Storage is bounded.** S3 `work/` and `omics-out/` objects expire after 14
-  days and incomplete uploads are aborted; ECR keeps only the 5 newest images.
-  Idle storage is a few hundred MB (the image) ⇒ cents/month.
+- **Storage is bounded.** Objects under S3 `work/` (Nextflow's intermediate
+  work dir) expire after 14 days and incomplete uploads are aborted; ECR keeps
+  only the 20 newest images. Final outputs are kept until you delete them or
+  run `cdk destroy`: `results/` (the Batch `--aws_outdir` below) and
+  `omics-out/` (the HealthOmics `--output-uri`: each run's `pubdir/` outputs
+  and logs). Idle storage is a few hundred MB (the image) plus your outputs.
 - **HealthOmics** has no idle cost — you're billed per run (omics instance-hours
   + run storage) only while a run executes. Keep the default **DYNAMIC** run
   storage; do **not** request STATIC (it provisions ≥1,200 GiB of Lustre and is
@@ -75,6 +78,9 @@ nextflow run main.nf \
     -work-dir s3://<WorkBucketName>/work \
     --aws_outdir s3://<WorkBucketName>/results
 ```
+
+Keep `--aws_outdir`: without it the run publishes nothing, and its outputs
+exist only in the `work/` dir, which expires after 14 days.
 
 ## Run on AWS HealthOmics
 

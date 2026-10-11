@@ -14,7 +14,7 @@ unchanged and never knows it moved.
 ```
 .mro + stage code ──mro2nf──▶ Nextflow project ──nextflow run──▶ results/
                             (main.nf, modules/,                (== mrp outputs)
-                             nextflow.config, types.json)
+                             nextflow.config, _assets/)
                                     │ each process:
                                     ▼
                             mre <phase> → martian_shell.py → your stage code
@@ -53,7 +53,7 @@ internal/
   bind/        resolve call bindings into _args (refs, projections, fan-in)
   overrides/   mrp --overrides file -> Nextflow -c config
   config/      .mro2nf.yml project defaults for the transpiler flags
-  logging/     zerolog setup    apperror/  typed errors
+  logging/     slog setup       apperror/  typed errors
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
 test/e2e/      Go e2e suites (golden diff vs mrp, docker isolation) + AWS runbooks
@@ -66,8 +66,10 @@ docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
 
 ## Quickstart
 
-Prerequisites: Go ≥ 1.26, Java 17+, [Nextflow](https://www.nextflow.io)
-(`curl -s https://get.nextflow.io | bash`), Python 3.
+Prerequisites: Go ≥ 1.26, Java 17+ (CI and recommended: Temurin 25 LTS;
+Nextflow 26.04 supports up to Java 26, the 23.10 floor up to 21),
+[Nextflow](https://www.nextflow.io) (`curl -s https://get.nextflow.io | bash`),
+Python 3.
 
 ```bash
 make build                      # builds ./mro2nf and ./mre
@@ -116,8 +118,9 @@ only `runtime/` to the daemon. See
 for exactly what is vendored and what is refused.
 
 These backends have no shared filesystem, so each task stages in only the files
-it needs as individual `path` inputs (never via `${projectDir}`): the shared
-`types.json`, plus its own `spec.json` for a bind. File-bearing entry inputs (a
+it needs as individual `path` inputs (never via `${projectDir}`): its own
+`spec.json` for a bind, while every task's script writes its own type
+manifest. File-bearing entry inputs (a
 FASTQ, say) are staged the same way, at any shape: a file or directory, a
 `file[]`, a `map<file>`, or a struct with file fields. So a run parameter that
 points at an `s3://` path or prefix is localized into the task by Nextflow.
