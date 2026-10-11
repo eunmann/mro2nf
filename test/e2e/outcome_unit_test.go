@@ -50,6 +50,20 @@ func TestMrpFailedOutcomeNoPipestance(t *testing.T) {
 	}
 }
 
+// TestMrpFailedOutcomeUnattributable checks a failure file in a dir mrp left
+// no _invocation in fails the classification instead of being dropped.
+func TestMrpFailedOutcomeUnattributable(t *testing.T) {
+	ps := t.TempDir()
+	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM()\n")
+	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_assert"), "boom")
+	writeABITestFile(t, filepath.Join(ps, "P", "fork0", "_errors"), "pipeline failed")
+
+	got, err := mrpFailedOutcome(ps)
+	if err == nil {
+		t.Fatalf("outcome %s, want an error for the unattributable _errors", got)
+	}
+}
+
 // TestNextflowFailedOutcome checks each failed attempt is attributed to the
 // stage its task ran, exit 42 as an ASSERT and any other exit as an error,
 // with retried attempts of one stage counted once and a plumbing task blaming

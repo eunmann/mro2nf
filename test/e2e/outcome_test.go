@@ -104,8 +104,13 @@ func (o runOutcome) equal(p runOutcome) bool {
 }
 
 // mrpFailedOutcome classifies a pipestance mrp exited non-zero on, from the
-// _assert and _errors files it left.
+// _assert and _errors files it left. A missing pipestance (a compile error) is
+// a failure blaming no stage.
 func mrpFailedOutcome(ps string) (runOutcome, error) {
+	if _, err := os.Stat(ps); errors.Is(err, fs.ErrNotExist) {
+		return failedWith(nil), nil
+	}
+
 	var failures []stageFailure
 
 	err := filepath.WalkDir(ps, func(p string, d fs.DirEntry, err error) error {
@@ -132,7 +137,7 @@ func mrpFailedOutcome(ps string) (runOutcome, error) {
 
 		return nil
 	})
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err != nil {
 		return runOutcome{}, fmt.Errorf("classify mrp failure: %w", err)
 	}
 
