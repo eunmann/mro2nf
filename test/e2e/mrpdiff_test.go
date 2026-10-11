@@ -162,14 +162,19 @@ func hashTree(t *testing.T, dir string, rootMeta ...string) map[string]string {
 	return tree
 }
 
-// publishedTree is hashTree's map, except that unless followLinks a file
-// reached through a symlink has linkMark before its digest.
+// publishedTree is hashTree's map, except that unless followLinks an entry
+// reached through a symlink has linkMark before its value.
 func publishedTree(dir string, followLinks bool, rootMeta []string) (map[string]string, error) {
 	tree := map[string]string{}
 
 	err := walkPublished(dir, rootMeta, func(rel, path string, emptyDir, linked bool) error {
+		mark := ""
+		if linked && !followLinks {
+			mark = linkMark
+		}
+
 		if emptyDir {
-			tree[rel+"/"] = emptyDirMark
+			tree[rel+"/"] = mark + emptyDirMark
 
 			return nil
 		}
@@ -180,11 +185,7 @@ func publishedTree(dir string, followLinks bool, rootMeta []string) (map[string]
 		}
 
 		sum := sha256.Sum256(data)
-		tree[rel] = hex.EncodeToString(sum[:])
-
-		if linked && !followLinks {
-			tree[rel] = linkMark + tree[rel]
-		}
+		tree[rel] = mark + hex.EncodeToString(sum[:])
 
 		return nil
 	})
