@@ -32,6 +32,8 @@ var (
 	errPhase       = errors.New("-phase must be split, main or join")
 	errNotSplit    = errors.New("the stage does not split")
 	errNoChunk     = errors.New("no outs bundle for chunk")
+	errChunkCount  = errors.New("chunks dir holds fewer chunks than the split returned")
+	errNotChunkDir = errors.New("not a dir")
 )
 
 // runFlags are `mre run`'s inputs beside the call graph's.
@@ -304,29 +306,18 @@ func readChunk(dir string) (job.Chunk, error) {
 }
 
 // readChunksDir reads a split's chunks dir back into its stage defs, in
-// chunk order, and the chunks' names.
+// chunk order, and the chunks' names. It fails unless it reads every chunk
+// the split returned, as each chunk's record counts them.
 func readChunksDir(dir string) (*core.StageDefs, []string, error) {
 	defs := &core.StageDefs{}
 	if err := readRecordFile(filepath.Join(dir, joinRecord), &defs.JoinDef); err != nil {
 		return nil, nil, err
 	}
 
-	entries, err := os.ReadDir(dir)
+	names, err := chunkNames(dir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read chunks dir: %w", err)
+		return nil, nil, err
 	}
-
-	var names []string
-
-	// A task stages each chunk dir as a link to the split's, so a chunk is
-	// any name that resolves to a dir.
-	for _, e := range entries {
-		if info, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && info.IsDir() && strings.HasPrefix(e.Name(), "chnk") {
-			names = append(names, e.Name())
-		}
-	}
-
-	slices.Sort(names)
 
 	defs.ChunkDefs = make([]*core.ChunkDef, len(names))
 
@@ -336,10 +327,46 @@ func readChunksDir(dir string) (*core.StageDefs, []string, error) {
 			return nil, nil, err
 		}
 
+		if c.Count != len(names) {
+			return nil, nil, fmt.Errorf("%w: %s is one of %d, %d staged", errChunkCount, name, c.Count, len(names))
+		}
+
 		defs.ChunkDefs[i] = c.Def
 	}
 
 	return defs, names, nil
+}
+
+// chunkNames are the chunk dirs in dir, sorted. A task stages each as a
+// link to the split's, so each must resolve to a dir.
+func chunkNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read chunks dir: %w", err)
+	}
+
+	var names []string
+
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "chnk") {
+			continue
+		}
+
+		info, err := os.Stat(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("chunk %s: %w", e.Name(), err)
+		}
+
+		if !info.IsDir() {
+			return nil, fmt.Errorf("chunk %s: %w", e.Name(), errNotChunkDir)
+		}
+
+		names = append(names, e.Name())
+	}
+
+	slices.Sort(names)
+
+	return names, nil
 }
 
 // writeOutsBundle writes a job's _outs as a bundle of callable's role
