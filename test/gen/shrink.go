@@ -74,7 +74,7 @@ type reduction func(*Program) bool
 // candidates is every distinct valid program one reduction away from p,
 // tidied, in the order Shrink tries them.
 func candidates(p *Program) []*Program {
-	seen := map[string]bool{p.MRO(): true}
+	seen := map[string]bool{p.Key(): true}
 
 	var out []*Program
 
@@ -86,12 +86,12 @@ func candidates(p *Program) []*Program {
 
 		c.tidy()
 
-		src := c.MRO()
-		if seen[src] || Validate(c) != nil {
+		k := c.Key()
+		if seen[k] || Validate(c) != nil {
 			continue
 		}
 
-		seen[src] = true
+		seen[k] = true
 
 		out = append(out, c)
 	}
@@ -186,16 +186,16 @@ func paramReductions(p *Program) []reduction {
 	return out
 }
 
-// valueReductions null each bound value, then drop each element of each
+// valueReductions blank each bound value, then drop each element of each
 // collection literal, then replace each scalar literal with a plain one.
 func valueReductions(p *Program) []reduction {
 	slots := p.exprSlots()
 
-	var nulls, drops, plains []reduction
+	var blanks, drops, plains []reduction
 
 	for si, s := range slots {
-		if !s.split && (*s.e).Kind != ExprNull {
-			nulls = append(nulls, func(q *Program) bool { return q.nullSlot(si) })
+		if !s.split {
+			blanks = append(blanks, func(q *Program) bool { return q.blankSlot(si) })
 		}
 
 		for ni, n := range nodes(*s.e) {
@@ -216,7 +216,7 @@ func valueReductions(p *Program) []reduction {
 		}
 	}
 
-	return slices.Concat(nulls, drops, plains)
+	return slices.Concat(blanks, drops, plains)
 }
 
 // plainScalar is the unremarkable literal a scalar of kind k shrinks to.
@@ -239,8 +239,21 @@ func setText(e *Expr, text string) bool {
 	return true
 }
 
-func (p *Program) nullSlot(si int) bool {
-	*p.exprSlots()[si].e = null()
+// blankSlot sets the value of slot si to null, or false for a gate input,
+// and reports whether that changed it. A null value is already blank.
+func (p *Program) blankSlot(si int) bool {
+	s := p.exprSlots()[si]
+
+	blank := null()
+	if s.gate {
+		blank = boolLit(false)
+	}
+
+	if old := *s.e; old.Kind == ExprNull || (old.Kind == blank.Kind && old.Text == blank.Text) {
+		return false
+	}
+
+	*s.e = blank
 
 	return true
 }
@@ -292,10 +305,12 @@ func nodes(e *Expr) []*Expr {
 	return out
 }
 
-// exprSlot is a place a bound value lives, and whether it is split.
+// exprSlot is a place a bound value lives, whether it is split, and whether
+// it binds a gate input.
 type exprSlot struct {
 	e     **Expr
 	split bool
+	gate  bool
 }
 
 // exprSlots lists every bound value in a fixed order: entry bindings, then
@@ -303,14 +318,15 @@ type exprSlot struct {
 func (p *Program) exprSlots() []exprSlot {
 	var out []exprSlot
 
+	entry := p.EntryPipeline().Name
 	for _, b := range p.Entry {
-		out = append(out, exprSlot{e: &b.Value})
+		out = append(out, exprSlot{e: &b.Value, gate: p.gateInput(entry, b.Name)})
 	}
 
 	for _, pl := range p.Pipelines {
 		for _, c := range pl.Calls {
 			for _, b := range c.Bindings {
-				out = append(out, exprSlot{e: &b.Value, split: b.Split})
+				out = append(out, exprSlot{e: &b.Value, split: b.Split, gate: p.gateInput(c.Callee, b.Name)})
 			}
 		}
 

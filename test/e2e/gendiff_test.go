@@ -801,7 +801,7 @@ func shrinkGenProgram(t *testing.T, env genEnv, prog *gen.Program, v genVerdict)
 
 	var mu sync.Mutex
 
-	verdicts := map[string]genVerdict{progKey(prog): v}
+	verdicts := map[string]genVerdict{prog.Key(): v}
 	fails := func(p *gen.Program) bool {
 		cv, err := evalGenProgram(t, env, p)
 		if err != nil {
@@ -815,7 +815,7 @@ func shrinkGenProgram(t *testing.T, env genEnv, prog *gen.Program, v genVerdict)
 		}
 
 		mu.Lock()
-		verdicts[progKey(p)] = cv
+		verdicts[p.Key()] = cv
 		mu.Unlock()
 
 		return true
@@ -824,7 +824,7 @@ func shrinkGenProgram(t *testing.T, env genEnv, prog *gen.Program, v genVerdict)
 	small, evals := gen.Shrink(prog, fails, env.shrink)
 	t.Logf("shrank seed %d in %d runs: %s -> %s", prog.Seed, evals, gen.Size(prog), gen.Size(small))
 
-	return small, verdicts[progKey(small)]
+	return small, verdicts[small.Key()]
 }
 
 // shrinkTarget is the findings a shrink keeps one of: those keep matches,
@@ -864,21 +864,13 @@ func shrinkTarget(v genVerdict, keep *regexp.Regexp) map[string]bool {
 	return nil
 }
 
-// progKey identifies a program by its source, whatever its shrunk mark.
-func progKey(p *gen.Program) string {
-	c := *p
-	c.Shrunk = false
-
-	return c.MRO()
-}
-
 // writeGenFixture writes p under env.artifacts as gen_<hash>/ in the testdata
 // layout, with mrp's golden (expected/outs.json and the published tree in
 // expected/outs/) when mrp succeeds and the divergence report beside it.
 func writeGenFixture(t *testing.T, env genEnv, p *gen.Program, v genVerdict) (string, error) {
 	t.Helper()
 
-	sum := sha256.Sum256([]byte(progKey(p)))
+	sum := sha256.Sum256([]byte(p.Key()))
 	dir := filepath.Join(env.artifacts, "gen_"+hex.EncodeToString(sum[:])[:12])
 
 	if err := os.RemoveAll(dir); err != nil {

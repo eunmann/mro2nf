@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -107,9 +108,69 @@ func TestShrinkCandidatesAreValid(t *testing.T) {
 				t.Fatalf("seed %d: invalid candidate: %v", seed, err)
 			}
 
-			if c.MRO() == p.MRO() {
+			if c.Key() == p.Key() {
 				t.Fatalf("seed %d: a candidate equals its source", seed)
 			}
 		}
 	}
+}
+
+// TestShrinkDropsAFail checks the shrink tries dropping a stage's planned
+// failure, which changes the stage's spec but not the MRO.
+func TestShrinkDropsAFail(t *testing.T) {
+	p := seedWith(t, func(p *Program) bool { return Features(p)["stage:fail"] })
+	name := p.Stages[slices.IndexFunc(p.Stages, func(s *Stage) bool { return s.Fail != nil })].Name
+	keptWithoutFail := func(q *Program) bool {
+		s := q.stage(name)
+
+		return s != nil && s.Fail == nil
+	}
+
+	small, evals := Shrink(p, keptWithoutFail, ShrinkOptions{MaxEvals: 2000, Parallel: 3})
+	if !keptWithoutFail(small) {
+		t.Errorf("after %d evaluations %s still fails as planned or is gone:\n%s", evals, name, small.MRO())
+	}
+}
+
+// TestShrinkKeepsGateBoolsBound checks no candidate binds null to a bool a
+// gate may read: a sub pipeline's bool input, or an entry bool input its
+// source bound to a bool. A null disable flag is a known divergence (#253),
+// not the one being shrunk.
+func TestShrinkKeepsGateBoolsBound(t *testing.T) {
+	for seed := uint64(1); seed <= 30; seed++ {
+		p := mustGenerate(t, seed)
+
+		for _, c := range candidates(p) {
+			if b := nullGateBool(p, c); b != "" {
+				t.Fatalf("seed %d: a candidate binds %s to null:\n%s", seed, b, c.MRO())
+			}
+		}
+	}
+}
+
+// nullGateBool names a gate-readable bool input c binds to null that p did
+// not, or is empty.
+func nullGateBool(p, c *Program) string {
+	was := map[string]ExprKind{}
+	for _, b := range p.Entry {
+		was[b.Name] = b.Value.Kind
+	}
+
+	for _, b := range c.Entry {
+		if b.Value.Kind == ExprNull && was[b.Name] == ExprBool {
+			return "entry input " + b.Name
+		}
+	}
+
+	for _, pl := range c.Pipelines {
+		for _, call := range pl.Calls {
+			for _, b := range call.Bindings {
+				if b.Value.Kind == ExprNull && c.gateInput(call.Callee, b.Name) {
+					return call.ID + "." + b.Name
+				}
+			}
+		}
+	}
+
+	return ""
 }

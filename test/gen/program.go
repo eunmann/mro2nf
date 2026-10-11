@@ -142,17 +142,30 @@ func (e *Expr) walk(visit func(*Expr)) {
 
 // Clone deep-copies p.
 func (p *Program) Clone() *Program {
+	var c Program
+	if err := json.Unmarshal(marshal(p), &c); err != nil {
+		panic(fmt.Sprintf("unmarshal program: %v", err))
+	}
+
+	return &c
+}
+
+// Key identifies p by everything its fixture holds, the MRO and each stage's
+// spec alike, whatever its shrunk mark.
+func (p *Program) Key() string {
+	c := *p
+	c.Shrunk = false
+
+	return string(marshal(&c))
+}
+
+func marshal(p *Program) []byte {
 	data, err := json.Marshal(p)
 	if err != nil {
 		panic(fmt.Sprintf("marshal program: %v", err))
 	}
 
-	var c Program
-	if err := json.Unmarshal(data, &c); err != nil {
-		panic(fmt.Sprintf("unmarshal program: %v", err))
-	}
-
-	return &c
+	return data
 }
 
 // Size summarizes how big p is, for reports.
@@ -199,6 +212,21 @@ func (p *Program) calleeIO(name string) ([]Param, []Param) {
 	}
 
 	return nil, nil
+}
+
+// gateInput reports whether name is a bool input of the pipeline callee,
+// which the pipeline may read as a disable flag. A shrink must not bind it
+// null: a null disable flag is a known divergence (#253), not the one being
+// shrunk.
+func (p *Program) gateInput(callee, name string) bool {
+	pl := p.pipeline(callee)
+	if pl == nil {
+		return false
+	}
+
+	i := paramIndex(pl.In, name)
+
+	return i >= 0 && pl.In[i].Type == boolType()
 }
 
 // fields is the members of the struct type called name: a user struct's

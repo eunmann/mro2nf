@@ -3,9 +3,10 @@ package gen
 import "slices"
 
 // The reductions Shrink applies. Each keeps references consistent where it
-// can: a value that read something removed becomes null, and a call whose
-// split reads something removed goes too. What it cannot keep consistent
-// (a type that no longer matches) the compiler rejects, and Shrink skips it.
+// can: a value that read something removed becomes null (false for a gate
+// input, see gateInput), and a call whose split reads something removed goes
+// too. What it cannot keep consistent (a type that no longer matches) the
+// compiler rejects, and Shrink skips it.
 
 // nullify replaces each ref in e that dead matches with null.
 func nullify(e *Expr, dead func(*Expr) bool) *Expr {
@@ -24,12 +25,16 @@ func nullify(e *Expr, dead func(*Expr) bool) *Expr {
 	return e
 }
 
-// killRefs nulls every value in pl that reads a ref dead matches, and drops
+// killRefs blanks every value in pl that reads a ref dead matches, and drops
 // every gate that does.
-func killRefs(pl *Pipeline, dead func(*Expr) bool) {
+func (p *Program) killRefs(pl *Pipeline, dead func(*Expr) bool) {
 	for _, c := range pl.Calls {
 		for _, b := range c.Bindings {
-			b.Value = nullify(b.Value, dead)
+			if p.gateInput(c.Callee, b.Name) && reads(b.Value, dead) {
+				b.Value = boolLit(false)
+			} else {
+				b.Value = nullify(b.Value, dead)
+			}
 		}
 
 		if c.Disabled != nil && dead(c.Disabled) {
@@ -53,7 +58,7 @@ func (p *Program) killOutput(callee, name string) {
 			}
 		}
 
-		killRefs(pl, func(e *Expr) bool { return ids[e.Ref] && len(e.Path) > 0 && e.Path[0] == name })
+		p.killRefs(pl, func(e *Expr) bool { return ids[e.Ref] && len(e.Path) > 0 && e.Path[0] == name })
 	}
 }
 
@@ -85,7 +90,7 @@ func (p *Program) dropCall(pi, ci int) bool {
 	}
 
 	pl.Calls = slices.DeleteFunc(pl.Calls, func(c *Call) bool { return dead[c.ID] })
-	killRefs(pl, isDead)
+	p.killRefs(pl, isDead)
 
 	return true
 }
@@ -145,7 +150,7 @@ func (p *Program) dropPipelineIn(pi, i int) bool {
 	pl := p.Pipelines[pi]
 	name := pl.In[i].Name
 	pl.In = slices.Delete(pl.In, i, i+1)
-	killRefs(pl, func(e *Expr) bool { return e.Ref == selfRef && len(e.Path) > 0 && e.Path[0] == name })
+	p.killRefs(pl, func(e *Expr) bool { return e.Ref == selfRef && len(e.Path) > 0 && e.Path[0] == name })
 	p.dropBinding(pl.Name, name)
 
 	if pl == p.EntryPipeline() {
@@ -183,7 +188,7 @@ func (p *Program) dropField(ti, i int) bool {
 	}
 
 	for _, pl := range p.Pipelines {
-		killRefs(pl, func(e *Expr) bool { return len(e.Path) > 1 && slices.Contains(e.Path[1:], name) })
+		p.killRefs(pl, func(e *Expr) bool { return len(e.Path) > 1 && slices.Contains(e.Path[1:], name) })
 	}
 
 	return true
@@ -204,17 +209,30 @@ func (p *Program) tidy() {
 		}
 	}
 
-	called := map[string]bool{p.EntryPipeline().Name: true}
+	p.dropUncalled()
+	p.tidyTypes()
+}
 
-	for _, pl := range p.Pipelines {
-		for _, c := range pl.Calls {
-			called[c.Callee] = true
+// dropUncalled removes every stage and pipeline no remaining pipeline calls,
+// to a fixed point: a sub only an uncalled sub called goes too.
+func (p *Program) dropUncalled() {
+	for {
+		called := map[string]bool{p.EntryPipeline().Name: true}
+
+		for _, pl := range p.Pipelines {
+			for _, c := range pl.Calls {
+				called[c.Callee] = true
+			}
+		}
+
+		n := len(p.Stages) + len(p.Pipelines)
+		p.Stages = slices.DeleteFunc(p.Stages, func(s *Stage) bool { return !called[s.Name] })
+		p.Pipelines = slices.DeleteFunc(p.Pipelines, func(pl *Pipeline) bool { return !called[pl.Name] })
+
+		if len(p.Stages)+len(p.Pipelines) == n {
+			return
 		}
 	}
-
-	p.Stages = slices.DeleteFunc(p.Stages, func(s *Stage) bool { return !called[s.Name] })
-	p.Pipelines = slices.DeleteFunc(p.Pipelines, func(pl *Pipeline) bool { return !called[pl.Name] })
-	p.tidyTypes()
 }
 
 func (p *Program) tidyTypes() {
