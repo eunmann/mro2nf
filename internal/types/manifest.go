@@ -1,11 +1,13 @@
 package types
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -14,8 +16,9 @@ import (
 const filePerm = 0o644
 
 // Manifest is the serialized type information the runtime shim loads (via
-// `-types`) so it can run the file-leaf walk without the IR. It is written once
-// by the transpiler and staged into the project.
+// `-types`) so it can run the file-leaf walk without the IR. The transpiler
+// writes into each task's script the Subset of the callables its commands
+// name (Encoded.Subset).
 type Manifest struct {
 	// Structs holds every struct definition, keyed by name.
 	Structs map[string]*ir.StructType `json:"structs"`
@@ -51,19 +54,126 @@ func BuildManifest(prog *ir.Program) Manifest {
 	return m
 }
 
+// Subset returns the manifest of the named callables alone: their parameter
+// sets, and the structs those reach directly or through other structs. An
+// unknown name is left out, so the shim fails loudly on it.
+func (m Manifest) Subset(callables ...string) Manifest {
+	sub := Manifest{Structs: map[string]*ir.StructType{}, Callables: map[string]Callable{}}
+
+	var reach func(params []ir.Param)
+	reach = func(params []ir.Param) {
+		for _, p := range params {
+			st, ok := m.Structs[p.BaseType]
+			if !ok || sub.Structs[p.BaseType] != nil {
+				continue
+			}
+
+			sub.Structs[p.BaseType] = st
+			reach(st.Fields)
+		}
+	}
+
+	for _, name := range callables {
+		c, ok := m.Callables[name]
+		if !ok {
+			continue
+		}
+
+		sub.Callables[name] = c
+
+		for _, params := range [][]ir.Param{c.In, c.Out, c.ChunkIn, c.ChunkOut} {
+			reach(params)
+		}
+	}
+
+	return sub
+}
+
+// Encoded is a manifest with each struct and callable encoded once, so the
+// encoding of any subset of it is assembled without an encoding error.
+type Encoded struct {
+	m Manifest
+	// structs and callables map each name to its encoded `"name":value`
+	// object member.
+	structs, callables map[string]string
+}
+
+// Encode encodes each of the manifest's structs and callables.
+func (m Manifest) Encode() (Encoded, error) {
+	e := Encoded{
+		m:         m,
+		structs:   make(map[string]string, len(m.Structs)),
+		callables: make(map[string]string, len(m.Callables)),
+	}
+
+	for name, st := range m.Structs {
+		member, err := encodeMember(name, st)
+		if err != nil {
+			return Encoded{}, fmt.Errorf("encode struct %s: %w", name, err)
+		}
+
+		e.structs[name] = member
+	}
+
+	for name, c := range m.Callables {
+		member, err := encodeMember(name, c)
+		if err != nil {
+			return Encoded{}, fmt.Errorf("encode callable %s: %w", name, err)
+		}
+
+		e.callables[name] = member
+	}
+
+	return e, nil
+}
+
+// encodeMember encodes name and v as a JSON object member.
+func encodeMember(name string, v any) (string, error) {
+	key, err := json.Marshal(name)
+	if err != nil {
+		return "", fmt.Errorf("encode name: %w", err)
+	}
+
+	value, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("encode value: %w", err)
+	}
+
+	return string(key) + ":" + string(value), nil
+}
+
+// Subset returns the compact JSON of the manifest's Subset of callables, in
+// the shape LoadManifest reads, with every object's members sorted by name.
+func (e Encoded) Subset(callables ...string) string {
+	sub := e.m.Subset(callables...)
+
+	var b strings.Builder
+
+	b.WriteString(`{"structs":{`)
+	writeMembers(&b, slices.Sorted(maps.Keys(sub.Structs)), e.structs)
+	b.WriteString(`},"callables":{`)
+	writeMembers(&b, slices.Sorted(maps.Keys(sub.Callables)), e.callables)
+	b.WriteString("}}")
+
+	return b.String()
+}
+
+// writeMembers writes the encoded members of names, comma-separated.
+func writeMembers(b *strings.Builder, names []string, encoded map[string]string) {
+	for i, name := range names {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+
+		b.WriteString(encoded[name])
+	}
+}
+
 // Write serializes the manifest to path.
 func (m Manifest) Write(path string) error {
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
-	}
-
-	// Skip a byte-identical rewrite so a re-transpile preserves types.json's mtime:
-	// it is staged as a `path` input into every stage, and Nextflow's default
-	// -resume cache keys on path+size+mtime, so an unchanged rewrite would bust
-	// every task's cache on a re-emit (#188). A real change still rewrites.
-	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
-		return nil
 	}
 
 	if err := os.WriteFile(path, data, filePerm); err != nil {

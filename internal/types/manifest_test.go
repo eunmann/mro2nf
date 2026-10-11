@@ -1,6 +1,7 @@
 package types_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -64,5 +65,52 @@ func TestManifestRoundTrip(t *testing.T) {
 
 	if !seen["a.txt"] {
 		t.Error("table from loaded manifest did not visit file leaf")
+	}
+}
+
+// TestManifestSubset checks a task's manifest holds only its callables and
+// the structs they reach, through any parameter set and nested struct, so a
+// change to another callable's types leaves the task's cache key alone (#286).
+func TestManifestSubset(t *testing.T) {
+	inner := &ir.StructType{Name: "Inner", Fields: []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}}
+	outer := &ir.StructType{Name: "Outer", Fields: []ir.Param{{Name: "in", BaseType: "Inner", MapDim: 1}}}
+	chunk := &ir.StructType{Name: "Chunk", Fields: []ir.Param{{Name: "n", BaseType: "int"}}}
+	other := &ir.StructType{Name: "Other", Fields: []ir.Param{{Name: "n", BaseType: "int"}}}
+	a := types.Callable{
+		In:       []ir.Param{{Name: "x", BaseType: "Outer", ArrayDim: 1}},
+		ChunkOut: []ir.Param{{Name: "c", BaseType: "Chunk"}},
+	}
+	b := types.Callable{In: []ir.Param{{Name: "y", BaseType: "Other"}}}
+	m := types.Manifest{
+		Structs:   map[string]*ir.StructType{"Inner": inner, "Outer": outer, "Chunk": chunk, "Other": other},
+		Callables: map[string]types.Callable{"A": a, "B": b},
+	}
+
+	want := types.Manifest{
+		Structs:   map[string]*ir.StructType{"Inner": inner, "Outer": outer, "Chunk": chunk},
+		Callables: map[string]types.Callable{"A": a},
+	}
+
+	if diff := cmp.Diff(want, m.Subset("A", "MISSING")); diff != "" {
+		t.Errorf("Subset(A) mismatch (-want +got):\n%s", diff)
+	}
+
+	enc, err := m.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "types.json")
+	if err := os.WriteFile(path, []byte(enc.Subset("A", "MISSING")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := types.LoadManifest(path)
+	if err != nil {
+		t.Fatalf("load the encoded subset: %v", err)
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("encoded Subset(A) mismatch (-want +got):\n%s", diff)
 	}
 }

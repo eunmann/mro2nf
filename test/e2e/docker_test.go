@@ -9,8 +9,8 @@ package e2e
 // filesystem) that the plain local-executor suite cannot: a task can read a
 // file only if it was staged in as a declared `path` input.
 //
-// It is the regression guard for the _assets staging fix — if types.json or a
-// bindspec is ever referenced via ${projectDir} in a script again, these runs
+// It is the regression guard for the _assets staging fix — if a bindspec is
+// ever referenced via ${projectDir} in a script again, these runs
 // fail (the file is invisible inside the container) while the local suite
 // still passes.
 
@@ -134,8 +134,8 @@ func runtimeBase() (string, error) {
 // buildIsoImage builds (once per test process) an image that bakes mre, the
 // Martian adapters, and the fixture stage code at the SAME absolute paths the
 // transpiler bakes into the generated scripts, so they resolve inside the
-// isolated task container. types.json and the bindspecs are deliberately NOT
-// baked — they must arrive via the staged _assets input.
+// isolated task container. The bindspecs are deliberately NOT baked — they
+// must arrive via the staged _assets input.
 func buildIsoImage(t *testing.T) {
 	t.Helper()
 	buildBinaries(t)

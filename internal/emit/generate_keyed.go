@@ -60,7 +60,7 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 			// A natively-gated keyed disable (self.<field>) reads the flag from
 			// the per-fork args and needs no DISABLE_K bind.
 			if cp.keyedDisableTask {
-				genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
+				genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "", "disable")
 			}
 
 		// A fuseable leaf call runs bind+main in one keyed process (#99); an
@@ -72,12 +72,12 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 			genKeyedGateProcess(b, p.Name, c, g)
 
 		case keyedBind:
-			genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
+			genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, c.Callable, types.RoleIn, "args")
 
 			// A non-mapped keyed disabled call is gated by genKeyedCallBody, which
 			// still uses the keyed DISABLE bind — so keep emitting it here.
 			if cp.keyedDisableTask {
-				genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "disable")
+				genKeyedBindProcess(b, disableName(p.Name, c.Name), disableBindings(c), g, "", "", "disable")
 			}
 		}
 	}
@@ -85,16 +85,23 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 	// A pure-forward return needs no keyed return bind — genKeyedPipeline emits
 	// the producer's own per-fork bundle (#99).
 	if pp.retFwd == "" {
-		genKeyedBindProcess(b, bindName(p.Name, "return"), p.Returns, g, g.producerArgs(p.Name, types.RoleOut), `outs__${key}`)
+		genKeyedBindProcess(b, bindName(p.Name, "return"), p.Returns, g, p.Name, types.RoleOut, `outs__${key}`)
 	}
 }
 
 // genKeyedBindProcess emits a fork-key-carrying bind: it joins the fork's
 // pipeline args and referenced upstream outputs by key, then resolves them per
 // fork. out is the produced bundle's name ("args" for an intermediate call,
-// "outs__${key}" for the return so the merge can order forks).
-func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx, prodArgs, out string) {
+// "outs__${key}" for the return so the merge can order forks). The bundle's
+// file leaves are staged by the params of callable under role; a disable
+// bundle, with callable "", has none.
+func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g genCtx, callable, role, out string) {
 	block, arg := keyedInputs(refCalls(bindings))
+
+	prodArgs, head := "", g.scriptHead()
+	if callable != "" {
+		prodArgs, head = g.producerArgs(callable, role), g.scriptHead(callable)
+	}
 
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
@@ -106,7 +113,7 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
     """
 }
 
-`, name, block, g.mre, arg, prodArgs, out, g.scriptHead())
+`, name, block, g.mre, arg, prodArgs, out, head)
 }
 
 // genKeyedGateProcess is genGateProcess for a keyed pipeline: one gate per fork.
@@ -130,7 +137,7 @@ func genKeyedGateProcess(b *strings.Builder, pipeline string, c ir.Call, g genCt
 // `mre bind` then the stage's `main` in ONE task — the keyed-layer analog of
 // genFusedStageProcess (#16), folding away the standalone BIND_K a keyed leaf
 // call would otherwise run per outer fork (#99). Input/output match the
-// BIND_K→_MAP pair it replaces: tuple(key, pipeargs, in_refs) + types + spec in,
+// BIND_K→_MAP pair it replaces: tuple(key, pipeargs, in_refs) + spec in,
 // tuple(key, outs__<key>) out — so genKeyedCallBody drops it in with no other
 // wiring change.
 func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
@@ -151,7 +158,7 @@ func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s
 
 `, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.mre, arg,
 		g.producerArgs(c.Callable, types.RoleIn), main,
-		g.producerArgs(c.Callable, types.RoleMainOut), g.scriptHead())
+		g.producerArgs(c.Callable, types.RoleMainOut), g.scriptHead(c.Callable))
 }
 
 // keyedInputs renders a keyed process's input block — tuple(key, pipeargs, staged
@@ -177,10 +184,9 @@ func keyedInputsHead(head string, refs []string) (string, string) {
 	}
 
 	in.WriteString("\n")
-	// The shared type manifest and this process's own bindspec are staged as two
-	// individual files (not the whole _assets dir), so a task transfers only the
-	// one bindspec it needs rather than every call's spec; see assetsDir.
-	in.WriteString("    path 'types.json'\n")
+	// This process's own bindspec is staged as an individual file (not the
+	// whole _assets dir), so a task transfers only the one bindspec it needs
+	// rather than every call's spec; see assetsDir.
 	in.WriteString("    path 'spec.json'\n")
 
 	arg := ""
@@ -240,7 +246,7 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
 }
 
 `, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c),
-		g.scriptHead())
+		g.scriptHead(c.Callable))
 }
 
 // genKeyedNullForksProcess is genNullForksProcess for a nested map call: per
@@ -260,7 +266,7 @@ func genKeyedNullForksProcess(b *strings.Builder, pipeline string, c ir.Call, ca
 }
 
 `, nullForksName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c),
-		g.nullForksMergeCmd(pipeline, c, calleeOuts), g.scriptHead())
+		g.nullForksMergeCmd(pipeline, c, calleeOuts), g.scriptHead(c.Callable))
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
@@ -274,7 +280,6 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
     tuple val(key), path(souts), path('forkmeta2.json')
-    path 'types.json'
   output:
     tuple val(key), path('merged', type: 'dir')
   script:
@@ -285,7 +290,7 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 
 `, mergeName(pipeline, c.Name),
 		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta2.json", "merged",
-			g.plan.pipes[pipeline].calls[c.Name].mergeFlags()), g.scriptHead())
+			g.plan.pipes[pipeline].calls[c.Name].mergeFlags()), g.scriptHead(c.Callable))
 }
 
 // genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,
@@ -298,7 +303,6 @@ func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 	var body strings.Builder
 
 	body.WriteString("  main:\n    pa_l = keyed.toList()\n")
-	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
 	for _, c := range p.Calls {
 		genKeyedCallBody(&body, p.Name, c, pp.calls[c.Name])
@@ -408,14 +412,14 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call, c
 	if cp.keyedKind == keyedScatter {
 		fmt.Fprintf(body, "    ek_%[1]s = pa_l.flatMap { x -> x }.flatMap { ok, pab -> Mro2nf.forkElementsKeyed(ok, pab, '%[2]s', '%[3]s') }\n",
 			c.Name, cp.keyedScatterField, mapModeArg(c))
-		fmt.Fprintf(body, "    io_%[1]s = %[2]s_KS(ek_%[1]s, types, %[3]s)\n",
+		fmt.Fprintf(body, "    io_%[1]s = %[2]s_KS(ek_%[1]s, %[3]s)\n",
 			c.Name, fork, specFile(bindName(pipeline, c.Name)))
 		// groupTuple's per-group order is completion order; sorting the grouped
 		// bundles by name pins MERGE_K's input order — part of its -resume cache
 		// key — so a replay stays CACHED regardless of arrival order (the output
 		// bytes are already order-safe: mre merge orders forks by index).
 		fmt.Fprintf(body, "    mj_%[1]s = io_%[1]s.keys.join(io_%[1]s.outs.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, (so ?: []).sort { a, b -> a.name <=> b.name }, fk) }\n", c.Name)
-		fmt.Fprintf(body, "    %s_K(mj_%s, types)\n", merge, c.Name)
+		fmt.Fprintf(body, "    %s_K(mj_%s)\n", merge, c.Name)
 		fmt.Fprintf(body, "    ch_%[1]s_l = %[2]s_K.out.toList()\n", c.Name, merge)
 
 		return
@@ -437,7 +441,7 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call, c
 	fmt.Fprintf(body, "    io_%[1]s = %[2]s(ik_%[1]s)\n", c.Name, alias)
 	// Sorted for the same -resume cache-key reason as the scatter path above.
 	fmt.Fprintf(body, "    mj_%[1]s = %[2]s_K.out.keys.join(io_%[1]s.map { ck, bdl -> tuple(Mro2nf.outerKey(ck), bdl) }.groupTuple(), remainder: true).map { ok, fk, so -> tuple(ok, (so ?: []).sort { a, b -> a.name <=> b.name }, fk) }\n", c.Name, fork)
-	fmt.Fprintf(body, "    %s_K(mj_%s, types)\n", merge, c.Name)
+	fmt.Fprintf(body, "    %s_K(mj_%s)\n", merge, c.Name)
 
 	if c.Disabled != nil {
 		// Skipped outer forks bypass FORKBIND/MERGE entirely; mix their null
@@ -472,7 +476,7 @@ func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call
 `, c.Name, keyedBindInput(c.Bindings), field)
 		genKeyedMappedSkip(body, pipeline, c, cp, "")
 
-		return fmt.Sprintf("gk_%s.run, types, %s", c.Name, specFile(bindName(pipeline, c.Name)))
+		return fmt.Sprintf("gk_%s.run, %s", c.Name, specFile(bindName(pipeline, c.Name)))
 	}
 
 	dis := disableName(pipeline, c.Name)
@@ -487,7 +491,7 @@ func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call
 `, c.Name, keyedBindInput(c.Bindings), dis, disablePath(c))
 	genKeyedMappedSkip(body, pipeline, c, cp, strip)
 
-	return fmt.Sprintf("gk_%s.run%s, types, %s", c.Name, strip, specFile(bindName(pipeline, c.Name)))
+	return fmt.Sprintf("gk_%s.run%s, %s", c.Name, strip, specFile(bindName(pipeline, c.Name)))
 }
 
 // genKeyedMappedSkip emits sk_<call>, a disabled nested map call's result for
@@ -496,7 +500,7 @@ func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call
 // bundle. strip drops the DISABLE_K bundle from a skip row.
 func genKeyedMappedSkip(body *strings.Builder, pipeline string, c ir.Call, cp callPlan, strip string) {
 	if cp.nullForks {
-		fmt.Fprintf(body, "    sk_%[1]s = %[2]s_K(gk_%[1]s.skip%[3]s, types, %[4]s)\n",
+		fmt.Fprintf(body, "    sk_%[1]s = %[2]s_K(gk_%[1]s.skip%[3]s, %[4]s)\n",
 			c.Name, nullForksName(pipeline, c.Name), strip, specFile(bindName(pipeline, c.Name)))
 
 		return
@@ -520,12 +524,12 @@ func keyedBindInput(bindings []ir.Binding) string {
 }
 
 // keyedBindCall renders a keyed process invocation argument list: the keyed
-// channel expression plus the two final broadcast inputs every bind/fork process
-// takes — the shared type manifest and this process's own bindspec (specName).
-// Used where keyedBindInput feeds a process call (not where it is a channel
-// expression transformed further, e.g. the disable gate's join).
+// channel expression plus the final broadcast input every bind/fork process
+// takes, its own bindspec (specName). Used where keyedBindInput feeds a
+// process call (not where it is a channel expression transformed further,
+// e.g. the disable gate's join).
 func keyedBindCall(bindings []ir.Binding, specName string) string {
-	return keyedBindInput(bindings) + ", types, " + specFile(specName)
+	return keyedBindInput(bindings) + ", " + specFile(specName)
 }
 
 // keyedReachable returns the set of stage AND pipeline names that can run under a
@@ -625,7 +629,6 @@ func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base stri
 %[2]s
   input:
     tuple val(key), path(args)
-    path 'types.json'
   output:
     tuple val(key), path('chunks.json'), emit: defs
     tuple val(key), path('joinres.json'), emit: joinres
@@ -640,7 +643,6 @@ process %[1]s_MAIN_K {
 %[9]s
   input:
     tuple val(key), val(res), path(chunk), path(args)
-    path 'types.json'
   output:
     tuple val(key), path("out_${chunk.baseName}", type: 'dir')
   script:
@@ -653,7 +655,6 @@ process %[1]s_JOIN_K {
 %[10]s
   input:
     tuple val(key), val(join), path('joinres.json'), path(souts), path(args), path(cdefs), path('chunks.json')
-    path 'types.json'
   output:
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
@@ -665,7 +666,7 @@ process %[1]s_JOIN_K {
 `, s.Name, stageDirectives(s, ""), splitCmd, g.producerArgs(s.Name, types.RoleChunkIn),
 		base, joinCmd, g.producerArgs(s.Name, types.RoleMainOut),
 		g.producerArgs(s.Name, types.RoleOut),
-		stageDirectives(s, "res"), stageDirectives(s, "join"), joinGatherFlags, g.scriptHead())
+		stageDirectives(s, "res"), stageDirectives(s, "join"), joinGatherFlags, g.scriptHead(s.Name))
 }
 
 // genKeyedSplitWorkflow wires the keyed split processes. multiMap duplicates the
@@ -675,11 +676,10 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
 	fmt.Fprintf(b, `workflow wf_%[1]s_map {
   take: keyed
   main:
-    types = file("${projectDir}/_assets/types.json")
     ch = keyed.multiMap { k, a -> sp: tuple(k, a); mn: tuple(k, a); jn: tuple(k, a) }
-    %[1]s_SPLIT_K(ch.sp, types)
+    %[1]s_SPLIT_K(ch.sp)
     chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> Mro2nf.keyedChunks(key, cs) }
-    %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0), types)
+    %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0))
     joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, Mro2nf.parseJson(f), f) }
     // Drive the join from the full fork set (ch.jn) with remainder joins on the
     // staged chunk bundles and chunk outputs, so a fork whose split produced zero
@@ -694,7 +694,7 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     // grouped chunk outs are sorted by name: groupTuple order is completion order,
     // and JOIN_K's input order is part of its -resume cache key.
     joined = ch.jn.join(joinres).join(%[1]s_SPLIT_K.out.defs).join(%[1]s_SPLIT_K.out.chunks, remainder: true).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], t[3], (t[6] ?: []).sort { a, b -> a.name <=> b.name }, t[1], (t[5] ?: []), t[4]) }
-    %[1]s_JOIN_K(joined, types)
+    %[1]s_JOIN_K(joined)
   emit:
     %[1]s_JOIN_K.out
 }
@@ -711,7 +711,6 @@ func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx)
 %[2]s
   input:
     tuple val(key), path(args)
-    path 'types.json'
   output:
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
@@ -723,11 +722,10 @@ func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx)
 workflow wf_%[1]s_map {
   take: keyed
   main:
-    types = file("${projectDir}/_assets/types.json")
-    %[1]s_MAP(keyed, types)
+    %[1]s_MAP(keyed)
   emit:
     %[1]s_MAP.out
 }
 
-`, s.Name, stageDirectives(s, ""), base, g.producerArgs(s.Name, types.RoleMainOut), g.scriptHead())
+`, s.Name, stageDirectives(s, ""), base, g.producerArgs(s.Name, types.RoleMainOut), g.scriptHead(s.Name))
 }

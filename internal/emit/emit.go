@@ -28,11 +28,10 @@ import (
 const (
 	dirPerm  = 0o755
 	filePerm = 0o644
-	// assetsDir holds types.json + bindspecs/. Each task stages the individual
-	// files it needs (the shared types.json, plus its own bindspec for a bind/fork
-	// process) as `path` inputs, so they are present in an isolated task container
-	// (AWS Batch + S3, HealthOmics) and not just on a shared filesystem — and a
-	// task transfers only its own bindspec, not every call's.
+	// assetsDir holds bindspecs/. A bind/fork task stages its own bindspec as a
+	// `path` input, so it is present in an isolated task container (AWS Batch +
+	// S3, HealthOmics) and not just on a shared filesystem — and a task
+	// transfers only its own bindspec, not every call's.
 	assetsDir = "_assets"
 )
 
@@ -139,11 +138,11 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	// types.json and the bindspecs live under _assets/. A process script can only
-	// read files staged into its (isolated) task dir — referencing them via
-	// ${projectDir} works on a shared filesystem but not on AWS Batch + S3, where
-	// the worker is a separate container. Each task stages the specific asset files
-	// it needs (types.json, and its own bindspec for binds) so both cases work.
+	// The bindspecs live under _assets/. A process script can only read files
+	// staged into its (isolated) task dir — referencing them via ${projectDir}
+	// works on a shared filesystem but not on AWS Batch + S3, where the worker
+	// is a separate container. A bind task stages its own bindspec, and every
+	// task's script writes its own type manifest, so both cases work.
 	specDir := filepath.Join(opts.OutDir, assetsDir, "bindspecs")
 	modDir := filepath.Join(opts.OutDir, "modules")
 
@@ -172,6 +171,11 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
+	typeJSON, err := types.BuildManifest(prog).Encode()
+	if err != nil {
+		return fmt.Errorf("type manifest: %w", err)
+	}
+
 	g := genCtx{
 		entry:    prog.Entry.Callable,
 		mroFile:  opts.MROFile,
@@ -185,6 +189,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		code:     opts.StageCode,
 		plan:     buildPlan(prog, features),
 		version:  opts.Version,
+		typeJSON: typeJSON,
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker
@@ -243,8 +248,8 @@ func clonePipelines(prog *ir.Program) *ir.Program {
 }
 
 // writeProject renders every file of the Nextflow project (modules, main.nf,
-// config, bindspecs, type manifest, disable artifacts, target packaging, and the
-// entry args) into opts.OutDir.
+// config, bindspecs, disable artifacts, target packaging, and the entry args)
+// into opts.OutDir.
 func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specDir string, entry entryArgs) error {
 	// Render every .nf, then run the whole-project process-name collision check
 	// BEFORE writing any of them: a collision spans modules (global namespace) and
@@ -286,14 +291,14 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 	}
 
 	if opts.Native {
-		return bakeEntryArgs(prog, opts)
+		return bakeEntryArgs(prog, opts, g.typeJSON)
 	}
 
 	return nil
 }
 
 // writeProjectAssets writes the shared static assets: the Groovy helper lib,
-// the per-call bindspecs, the disable artifacts, and the type manifest.
+// the per-call bindspecs, and the disable artifacts.
 func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
 	if err := writeLib(opts.OutDir); err != nil {
 		return err
@@ -303,25 +308,23 @@ func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
 		return err
 	}
 
-	if err := writeDisableArtifacts(prog, opts.OutDir, specDir); err != nil {
-		return err
-	}
-
-	if err := types.BuildManifest(prog).Write(filepath.Join(opts.OutDir, assetsDir, "types.json")); err != nil {
-		return fmt.Errorf("write types manifest: %w", err)
-	}
-
-	return nil
+	return writeDisableArtifacts(prog, opts.OutDir, specDir)
 }
 
 // bakeEntryArgs resolves the entry args once at transpile time (no launch-time
 // override) by running the same `mre entryargs` the BUILD_ENTRY_ARGS task would,
 // writing entry_resolved/ into the project so the native workflow stages it
 // directly — no per-run entry task (#76 M1). Byte-identical to the runtime
-// resolution because it is the identical command on the identical baked defaults.
-func bakeEntryArgs(prog *ir.Program, opts Options) error {
+// resolution because it is the identical command on the identical baked
+// defaults and the entry's types from typeJSON.
+func bakeEntryArgs(prog *ir.Program, opts Options, typeJSON types.Encoded) error {
 	values := filepath.Join(opts.OutDir, assetsDir, "native_values.json")
 	if err := writeFile(values, []byte("{}")); err != nil {
+		return err
+	}
+
+	entryTypes := filepath.Join(opts.OutDir, assetsDir, "native_types.json")
+	if err := writeFile(entryTypes, []byte(typeJSON.Subset(prog.Entry.Callable))); err != nil {
 		return err
 	}
 
@@ -329,15 +332,17 @@ func bakeEntryArgs(prog *ir.Program, opts Options) error {
 		"-base", filepath.Join(opts.OutDir, "entry_args"),
 		"-values", values,
 		"-o", filepath.Join(opts.OutDir, "entry_resolved"),
-		"-types", filepath.Join(opts.OutDir, assetsDir, "types.json"),
+		"-types", entryTypes,
 		"-callable", prog.Entry.Callable, "-role", "in")
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("bake entry args for -native: %w: %s", err, out)
 	}
 
-	if err := os.Remove(values); err != nil {
-		return fmt.Errorf("clean up native values file: %w", err)
+	for _, tmp := range []string{values, entryTypes} {
+		if err := os.Remove(tmp); err != nil {
+			return fmt.Errorf("clean up native entry inputs: %w", err)
+		}
 	}
 
 	return nil
@@ -1265,11 +1270,11 @@ func configHealthOmics() string {
 
 func writeFile(path string, data []byte) error {
 	// Skip a byte-identical rewrite so a re-transpile preserves the file's mtime.
-	// Every stage stages _assets/types.json and its bindspec as `path` inputs, and
-	// Nextflow's default -resume cache keys on path+size+mtime, so rewriting an
-	// unchanged asset with a fresh mtime would needlessly bust every task's cache
-	// on a re-emit into the same project dir (#188). A real content change still
-	// rewrites (new mtime), so the affected tasks correctly re-run.
+	// Bind tasks stage their bindspec, and the entry its entry_args, as `path`
+	// inputs, and Nextflow's default -resume cache keys on path+size+mtime, so
+	// rewriting an unchanged asset with a fresh mtime would needlessly bust
+	// those tasks' caches on a re-emit into the same project dir (#188). A real
+	// content change still rewrites (new mtime), so the affected tasks re-run.
 	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
 		return nil
 	}

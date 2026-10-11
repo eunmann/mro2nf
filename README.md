@@ -14,7 +14,7 @@ unchanged and never knows it moved.
 ```
 .mro + stage code ──mro2nf──▶ Nextflow project ──nextflow run──▶ results/
                             (main.nf, modules/,                (== mrp outputs)
-                             nextflow.config, types.json)
+                             nextflow.config, _assets/)
                                     │ each process:
                                     ▼
                             mre <phase> → martian_shell.py → your stage code
@@ -116,8 +116,9 @@ only `runtime/` to the daemon. See
 for exactly what is vendored and what is refused.
 
 These backends have no shared filesystem, so each task stages in only the files
-it needs as individual `path` inputs (never via `${projectDir}`): the shared
-`types.json`, plus its own `spec.json` for a bind. File-bearing entry inputs (a
+it needs as individual `path` inputs (never via `${projectDir}`): its own
+`spec.json` for a bind, while every task's script writes its own type
+manifest. File-bearing entry inputs (a
 FASTQ, say) are staged the same way, at any shape: a file or directory, a
 `file[]`, a `map<file>`, or a struct with file fields. So a run parameter that
 points at an `s3://` path or prefix is localized into the task by Nextflow.

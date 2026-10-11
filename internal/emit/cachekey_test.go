@@ -1,6 +1,7 @@
 package emit_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/emit"
+	"github.com/google/go-cmp/cmp"
 )
 
 // processDecl matches an emitted process definition's opening line.
@@ -111,4 +113,84 @@ func TestEveryProcessScriptNamesTheBuild(t *testing.T) {
 	if len(scripts) == 0 {
 		t.Error("property is vacuous: no process scripts across the fixtures")
 	}
+}
+
+// callableFlag matches a command's -callable flag.
+var callableFlag = regexp.MustCompile(`-callable '([^']*)'`)
+
+// TestEveryTaskWritesOnlyItsOwnTypes (#286): a task's types.json is written
+// by its own script and holds exactly the callables its commands name, so a
+// change to another callable's types leaves the task's -resume cache key,
+// and the task, cached. A shared manifest staged into every task made any
+// type edit re-run the whole pipeline.
+func TestEveryTaskWritesOnlyItsOwnTypes(t *testing.T) {
+	written := 0
+
+	for _, s := range emittedScripts(t, "v1") {
+		want := map[string]bool{}
+		for _, m := range callableFlag.FindAllStringSubmatch(s.text, -1) {
+			want[m[1]] = true
+		}
+
+		got, ok := taskManifest(t, s)
+		if !ok {
+			if len(want) > 0 {
+				t.Errorf("%s: commands name %v but the script writes no types.json", s.where, want)
+			}
+
+			continue
+		}
+
+		written++
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("%s: types.json callables differ from the -callable flags (-want +got):\n%s", s.where, diff)
+		}
+	}
+
+	if written == 0 {
+		t.Error("property is vacuous: no script writes a types.json")
+	}
+}
+
+// manifestLine matches the script line that writes a task's type manifest.
+var manifestLine = regexp.MustCompile(`(?m)^\s*printf '%s' '(.*)' > types\.json$`)
+
+// taskManifest returns the callables of the types.json script s writes, or
+// false when it writes none. The JSON is undone from the script's two quoting
+// layers: Groovy's GString escapes, then bash's single quotes.
+func taskManifest(t *testing.T, s processScript) (map[string]bool, bool) {
+	t.Helper()
+
+	m := manifestLine.FindStringSubmatch(s.text)
+	if m == nil {
+		return nil, false
+	}
+
+	var raw strings.Builder
+
+	for i := 0; i < len(m[1]); i++ {
+		if m[1][i] == '\\' && i+1 < len(m[1]) {
+			i++
+		}
+
+		raw.WriteByte(m[1][i])
+	}
+
+	var man struct {
+		Callables map[string]json.RawMessage `json:"callables"`
+	}
+
+	if err := json.Unmarshal([]byte(strings.ReplaceAll(raw.String(), `'\''`, "'")), &man); err != nil {
+		t.Errorf("%s: types.json does not decode: %v\n%s", s.where, err, m[1])
+
+		return nil, true
+	}
+
+	got := map[string]bool{}
+	for name := range man.Callables {
+		got[name] = true
+	}
+
+	return got, true
 }

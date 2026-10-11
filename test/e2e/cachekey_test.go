@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +52,84 @@ func TestResumeKeysOnTheBuild(t *testing.T) {
 
 			assertNoneCached(t, readTrace(t, filepath.Join(proj, "other.txt")))
 		})
+	}
+}
+
+// TestResumeKeysOnlyOnATasksOwnTypes (#286): after one stage's signature
+// changes, a -resume re-run of the re-transpiled project re-runs that stage
+// but keeps the unrelated stage and the entry task cached. Every task used to
+// stage the one shared types.json, so any type edit re-ran the whole
+// pipeline.
+func TestResumeKeysOnlyOnATasksOwnTypes(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	fixture := t.TempDir()
+	if err := os.CopyFS(fixture, os.DirFS(filepath.Join(root, "testdata", "diamond_min"))); err != nil {
+		t.Fatalf("copy fixture: %v", err)
+	}
+
+	proj := transpileDir(t, fixture)
+
+	if err := runNextflow(t, proj); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	mro := filepath.Join(fixture, "pipeline.mro")
+	editMRO(t, mro,
+		"    in  float b,\n    out float c,", "    in  float b,\n    in  int   unused,\n    out float c,",
+		"        b = GEN.y,\n", "        b = GEN.y,\n        unused = 1,\n")
+
+	if err := transpileInto(repoTools(), fixture, "pipeline.mro", proj); err != nil {
+		t.Fatalf("re-transpile after the ADD edit: %v", err)
+	}
+
+	if err := runNextflow(t, proj, "-resume", "-with-trace", "edited.txt"); err != nil {
+		t.Fatalf("-resume after the ADD edit: %v", err)
+	}
+
+	status := map[string]string{}
+	for _, row := range readTrace(t, filepath.Join(proj, "edited.txt")) {
+		status[row.Name] = row.Status
+	}
+
+	for name, want := range map[string]bool{"BUILD_ENTRY_ARGS": true, "D:STAGE_1_D__GEN": true, "D:STAGE_1_D__ADD": false} {
+		got, ok := status[name]
+		if !ok {
+			t.Errorf("task %s missing from the trace %v", name, status)
+
+			continue
+		}
+
+		if (got == "CACHED") != want {
+			t.Errorf("task %s: status %s, want cached=%v", name, got, want)
+		}
+	}
+}
+
+// editMRO applies each old->new replacement pair to the .mro at path,
+// failing when a pair's old text is absent.
+func editMRO(t *testing.T, path string, pairs ...string) {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	src := string(data)
+
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if !strings.Contains(src, pairs[i]) {
+			t.Fatalf("%s has no %q to edit", path, pairs[i])
+		}
+
+		src = strings.Replace(src, pairs[i], pairs[i+1], 1)
+	}
+
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

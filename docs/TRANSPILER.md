@@ -75,7 +75,7 @@ frontend.Lower   → IR (internal/ir)  — a normalized, transpiler-friendly mod
    │
 emit.Emit        → a Nextflow project on disk:
    │                   main.nf, modules/*.nf, nextflow.config,
-   │                   _assets/ (types.json + bindspecs), entry_args/
+   │                   _assets/ (bindspecs), entry_args/
    │                   (+ Dockerfile / packaging for cloud targets)
    ▼
 nextflow run main.nf …   →  processes invoke the baked `mre` shim, which
@@ -170,7 +170,6 @@ modules/
 nextflow.config                      ← executor profiles, retry policy, params
 lib/Mro2nf.groovy                    ← driver-side channel helpers (see below)
 _assets/
-  types.json                         ← the program's type manifest
   bindspecs/BIND_*.json              ← one binding spec per call (see §6)
 entry_args/data.json                 ← the baked top-level call arguments (§8)
 ```
@@ -198,20 +197,19 @@ process SOMESTAGE {
   memory { 1 * task.attempt + ' GB' }        // grows on retry (OOM escalation)
   input:
     tuple(path('args/data.json'), path('args/f/*'))   // input bundle: sidecar + leaves
-    path 'types.json'          // the shared type manifest (staged; see §9)
   output:
     tuple(path("outs/data.json"), path("outs/f/*", arity: '0..*'))
   script:
     """
     # mro2nf "v0.6.0"
-    'mre' main … -args args -outs 'y' … -o outs
+    printf '%s' '{"structs":{},"callables":{"SOMESTAGE":{…}}}' > types.json
+    'mre' main … -args args -outs 'y' … -o outs -types 'types.json' -callable 'SOMESTAGE' -role mainout
     """
 }
 workflow wf_SOMESTAGE {
   take: args
   main:
-    types = file("${projectDir}/_assets/types.json")
-    SOMESTAGE(args, types)
+    SOMESTAGE(args)
   emit:
     SOMESTAGE.out
 }
@@ -232,6 +230,13 @@ version is the `-ldflags` stamp (`git describe --tags --always --dirty` under
 dev build keeps its commit's key, so local re-runs stay cached between
 rebuilds.
 
+The second line writes the task's **type manifest** (`types.json`, the
+parameter sets the shim's file-leaf walk, scalar coercion and output
+validation read), holding only the callables the task's commands name and the
+structs those reach. Because it is script text, a task's cache key covers
+exactly those types: editing one stage's signature re-runs the tasks that
+name it and leaves every other task cached (#286).
+
 ### 4.2 A split stage → SPLIT / MAIN / JOIN
 
 Martian's `split` runs a stage in three phases — split the work into chunks, run
@@ -246,19 +251,18 @@ process SUM_SQUARES_JOIN  { … script: "mre join  … -chunksfile chunks.json -
 workflow wf_SUM_SQUARES {
   take: args
   main:
-    types = file("${projectDir}/_assets/types.json")
-    SUM_SQUARES_SPLIT(args, types)
+    SUM_SQUARES_SPLIT(args)
     // each chunk dir carries its own resource request in data.json; the Mro2nf
     // helper reads it (raw-carriage, object-store-safe) and tuples it with the chunk:
     chunks = SUM_SQUARES_SPLIT.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
-    SUM_SQUARES_MAIN(chunks.combine(args), types)
+    SUM_SQUARES_MAIN(chunks.combine(args))
     join = SUM_SQUARES_SPLIT.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }
     // JOIN gathers the chunk outs sorted by name — NOT .collect(), whose
     // completion order would be part of JOIN's -resume cache key and would
     // starve a 0-chunk JOIN. toSortedList emits [] on an empty channel.
     SUM_SQUARES_JOIN(join, args, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]),
         SUM_SQUARES_SPLIT.out.defs,
-        SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)
+        SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name })
   emit:
     SUM_SQUARES_JOIN.out
 }
@@ -306,12 +310,11 @@ workflow SUM_SQUARE_PIPELINE {
   take: pipeargs
   main:
     pa = pipeargs
-    types = file("${projectDir}/_assets/types.json")
-    BIND_…__SUM_SQUARES(pa, types, file("${projectDir}/_assets/bindspecs/BIND_…__SUM_SQUARES.json"))
+    BIND_…__SUM_SQUARES(pa, file("${projectDir}/_assets/bindspecs/BIND_…__SUM_SQUARES.json"))
     ch_SUM_SQUARES = wf_…__SUM_SQUARES(BIND_…__SUM_SQUARES.out)
-    BIND_…__REPORT(pa, ch_SUM_SQUARES, types, file("…/BIND_…__REPORT.json"))
+    BIND_…__REPORT(pa, ch_SUM_SQUARES, file("…/BIND_…__REPORT.json"))
     ch_REPORT = wf_…__REPORT(BIND_…__REPORT.out)
-    BIND_…__return(pa, ch_SUM_SQUARES, types, file("…/BIND_…__return.json"))
+    BIND_…__return(pa, ch_SUM_SQUARES, file("…/BIND_…__return.json"))
   emit:
     BIND_…__return.out         // the pipeline's own output bundle
 }
@@ -767,16 +770,17 @@ into the task).
 ## 9. `_assets`: shipping the type manifest and bindspecs to isolated workers
 
 A process script can only read files that were staged into its (isolated) task
-dir. Two transpile-time artifacts must reach every task: the **type manifest**
+dir. Two transpile-time artifacts must reach a task: the **type manifest**
 (`types.json` — needed for the file-leaf walk and scalar coercion) and a bind
 process's own **bindspec**. Referencing them via `${projectDir}` works on a
 shared filesystem but is invisible on AWS Batch + S3.
 
-So each task stages exactly the asset files it needs as individual `path` inputs:
-the shared `types.json`, plus — for a bind/fork process — only its **own**
-`spec.json`. (An earlier design staged the whole `_assets` directory into every
-task, which transferred every call's bindspec to every task; the per-bind form
-cuts that to O(1) per task.)
+So a bind/fork process stages only its **own** `spec.json` as an individual
+`path` input, and every task's script writes its own `types.json` (§4.1). (An
+earlier design staged the whole `_assets` directory into every task, which
+transferred every call's bindspec to every task; the per-bind form cuts that
+to O(1) per task. A later one staged one shared `types.json` into every task,
+which put every callable's types in every task's `-resume` cache key.)
 
 ---
 
