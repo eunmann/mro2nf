@@ -110,38 +110,41 @@ func loadPublished(allow divergence.Allowlist, fixture, ps, results string) (pub
 	return pub, nil
 }
 
-// loadOutsJSON decodes mrp's outs JSON, which it writes to the top pipeline's
-// fork0 metadata (<pipestance>/<PIPELINE>/fork0/_outs), and mro2nf's
+// loadOutsJSON decodes the outs JSON of the mrp pipestance ps and mro2nf's
 // results/pipeline_outs.json.
 func loadOutsJSON(allow divergence.Allowlist, fixture, ps, results string) (any, any, error) {
-	// Glob results come back sorted, so [0] is deterministic.
-	matches, err := filepath.Glob(filepath.Join(ps, "*", "fork0", "_outs"))
-	if err != nil {
-		return nil, nil, fmt.Errorf("glob mrp fork0 _outs: %w", err)
-	}
-
-	if len(matches) == 0 {
-		return nil, nil, fmt.Errorf("%w: no mrp fork0 _outs in %s", fs.ErrNotExist, ps)
-	}
-
-	rewrite, err := mrpOutsRewrite(allow, fixture, filepath.Join(ps, "outs"))
+	mrp, err := mrpOutsJSON(allow, fixture, ps)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	sortKeys := allow.Excuses(divergence.RuleOutsSortKeys, fixture)
-
-	mrp, err := decodeOutsFile(matches[0], rewrite, sortKeys)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nil, sortKeys)
+	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nil, allow.Excuses(divergence.RuleOutsSortKeys, fixture))
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return mrp, nf, nil
+}
+
+// mrpOutsJSON decodes the outs JSON the mrp pipestance ps of fixture writes
+// to its top pipeline's fork0 metadata (<pipestance>/<PIPELINE>/fork0/_outs).
+func mrpOutsJSON(allow divergence.Allowlist, fixture, ps string) (any, error) {
+	// Glob results come back sorted, so [0] is deterministic.
+	matches, err := filepath.Glob(filepath.Join(ps, "*", "fork0", "_outs"))
+	if err != nil {
+		return nil, fmt.Errorf("glob mrp fork0 _outs: %w", err)
+	}
+
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("%w: no mrp fork0 _outs in %s", fs.ErrNotExist, ps)
+	}
+
+	rewrite, err := mrpOutsRewrite(allow, fixture, filepath.Join(ps, "outs"))
+	if err != nil {
+		return nil, err
+	}
+
+	return decodeOutsFile(matches[0], rewrite, allow.Excuses(divergence.RuleOutsSortKeys, fixture))
 }
 
 // normalizeOutsFile reads an outs JSON file into its compact form, its
