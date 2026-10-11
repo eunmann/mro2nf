@@ -1,10 +1,13 @@
 package emit
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -58,41 +61,84 @@ const (
 
 // checkContainerSources fails loudly if a baked runtime source is missing,
 // rather than letting it surface as a cryptic `docker build` COPY error or a
-// silently broken image. mre is always required; -shell, -mrjob, and each
-// stage's code are verified when present (an exec/comp-only pipeline may have
-// no -shell). Note the -shell check stats the FILE, while containerBuild
-// copies its parent adapters directory: the dir's existence is implied by the
-// file check, and per-entry read failures inside any tree still surface as
-// copyTree errors.
-func checkContainerSources(opts Options) error {
+// silently broken image, and refuses a vendored stage src or a config-set tool
+// outside roots. mre is always required; -shell, -mrjob, and each stage's code
+// are verified when present (an exec/comp-only pipeline may have no -shell).
+// Per-entry read failures inside a stage tree still surface as copyTree errors.
+func checkContainerSources(opts Options, roots sourceRoots) error {
 	if opts.Mre == "" {
 		return &apperror.UnsupportedError{Construct: "container target", Detail: "-mre is required (it is baked into the image)"}
 	}
 
-	toCheck := map[string]string{"-mre": opts.Mre}
-	if opts.Shell != "" {
-		toCheck["-shell"] = opts.Shell
-	}
-
-	if opts.Mrjob != "" {
-		toCheck["-mrjob"] = opts.Mrjob
-	}
-
-	for name, src := range opts.StageCode {
-		// A bare-command src is resolved on the image PATH, not vendored, so there
-		// is no host file to stat (see isBakedToolkitCmd / vendorStageCode).
-		if isBakedToolkitCmd(src) {
-			continue
-		}
-
-		toCheck["stage "+name] = src
-	}
+	toCheck := containerSources(opts)
 
 	// Sorted so that when several sources are missing the reported one is stable
 	// (map iteration order is randomized), keeping the error reproducible.
 	for _, what := range sortedKeys(toCheck) {
 		if _, err := os.Stat(toCheck[what]); err != nil {
 			return fmt.Errorf("container target: %s source %q: %w", what, toCheck[what], err)
+		}
+	}
+
+	for _, name := range sortedKeys(opts.StageCode) {
+		if src := opts.StageCode[name]; !isBakedToolkitCmd(src) {
+			if err := roots.check("stage "+name+" src", src); err != nil {
+				return fmt.Errorf("container target: %w", err)
+			}
+		}
+	}
+
+	return checkConfigTools(opts, roots)
+}
+
+// containerSources names each host source a container target vendors: the
+// set tools and every stage src that is not a bare command (resolved on the
+// image PATH, so nothing on the host to copy; see isBakedToolkitCmd).
+func containerSources(opts Options) map[string]string {
+	srcs := map[string]string{"-mre": opts.Mre}
+	if opts.Shell != "" {
+		srcs["-shell"] = opts.Shell
+	}
+
+	if opts.Mrjob != "" {
+		srcs["-mrjob"] = opts.Mrjob
+	}
+
+	for name, src := range opts.StageCode {
+		if !isBakedToolkitCmd(src) {
+			srcs["stage "+name] = src
+		}
+	}
+
+	return srcs
+}
+
+// checkConfigTools refuses a tool path a config file set (opts.ConfigTools)
+// that resolves outside roots, and for -shell the adapter module copied
+// beside it too. A tool passed as a flag is the user's own and may live
+// anywhere.
+func checkConfigTools(opts Options, roots sourceRoots) error {
+	for _, tool := range []struct{ name, path string }{
+		{"mre", opts.Mre}, {"shell", opts.Shell}, {"mrjob", opts.Mrjob},
+	} {
+		if tool.path == "" || !opts.ConfigTools[tool.name] {
+			continue
+		}
+
+		paths := []string{tool.path}
+		if tool.name == "shell" {
+			module, err := adapterModulePath(tool.path)
+			if err != nil {
+				return fmt.Errorf("container target: %w", err)
+			}
+
+			paths = append(paths, module)
+		}
+
+		for _, p := range paths {
+			if err := roots.check("-"+tool.name+" set by the config file", p); err != nil {
+				return fmt.Errorf("container target: %w (or pass -%s as a flag)", err, tool.name)
+			}
 		}
 	}
 
@@ -105,37 +151,34 @@ func checkContainerSources(opts Options) error {
 // Python runner resolve inside an isolated task). The host artifacts are copied
 // into <out>/runtime/ and a Dockerfile is written so `docker build -t <image>
 // <out>` produces the runtime image.
-func containerBuild(opts Options, target Target) (genCtx, error) {
+func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, error) {
 	g := genCtx{mre: ctrMre, shell: opts.Shell, mrjob: opts.Mrjob, code: map[string]string{}}
 
-	if err := checkContainerSources(opts); err != nil {
+	if err := checkContainerSources(opts, roots); err != nil {
 		return g, err
 	}
 
+	// runtime/ is wholly generated: start it empty so nothing an earlier
+	// transpile vendored reaches the image.
 	rt := filepath.Join(opts.OutDir, buildCtxDir)
+	if err := checkOutsideBuildContext(opts, rt); err != nil {
+		return g, err
+	}
+
+	if err := os.RemoveAll(rt); err != nil {
+		return g, fmt.Errorf("reset build context: %w", err)
+	}
+
 	if err := os.MkdirAll(rt, dirPerm); err != nil {
 		return g, fmt.Errorf("create build context: %w", err)
 	}
 
-	if err := copyTree(opts.Mre, filepath.Join(rt, "mre")); err != nil {
+	shell, mrjob, err := vendorTools(opts, rt)
+	if err != nil {
 		return g, err
 	}
 
-	if opts.Shell != "" {
-		if err := copyTree(filepath.Dir(opts.Shell), filepath.Join(rt, "adapters")); err != nil {
-			return g, err
-		}
-
-		g.shell = ctrAdapters + "/" + filepath.Base(opts.Shell)
-	}
-
-	if opts.Mrjob != "" {
-		if err := copyTree(opts.Mrjob, filepath.Join(rt, "mrjob")); err != nil {
-			return g, err
-		}
-
-		g.mrjob = ctrMrjob
-	}
+	g.shell, g.mrjob = shell, mrjob
 
 	if err := vendorStageCode(rt, opts.StageCode, g.code); err != nil {
 		return g, err
@@ -162,9 +205,113 @@ func containerBuild(opts Options, target Target) (genCtx, error) {
 		}
 	}
 
+	if err := writeFile(filepath.Join(opts.OutDir, ".dockerignore"), []byte(dockerignore())); err != nil {
+		return g, err
+	}
+
 	return g, writeFile(filepath.Join(opts.OutDir, "Dockerfile"),
 		[]byte(dockerfile(target, opts.Shell != "", hasVendored, opts.Mrjob != "",
 			opts.NativeRunner, bakedToolkitCmds(opts.StageCode))))
+}
+
+// dockerignore renders the .dockerignore beside the Dockerfile: the build
+// context is the whole project dir, but the image needs only runtime/, so
+// everything else (entry_args, logs, params files, work/) stays off the
+// daemon, and the vendorJunk names stay out of runtime/ even if added later.
+func dockerignore() string {
+	var b strings.Builder
+
+	b.WriteString("# Generated by mro2nf: only runtime/ is sent to the docker daemon.\n*\n!" + buildCtxDir + "\n")
+
+	for _, pat := range vendorJunk() {
+		b.WriteString("**/" + pat + "\n")
+	}
+
+	return b.String()
+}
+
+// adapterModule is the module martian_shell.py imports from its own directory.
+const adapterModule = "martian.py"
+
+// vendorTools copies the -mre, -shell and -mrjob tools into the build context
+// rt and returns the in-image -shell and -mrjob paths ("" when unset). Each is
+// copied as the one file named, plus the adapter's module, never with the
+// directory around it, which may hold anything.
+func vendorTools(opts Options, rt string) (string, string, error) {
+	if err := copyToolFile(opts.Mre, filepath.Join(rt, "mre")); err != nil {
+		return "", "", err
+	}
+
+	shell, mrjob := "", ""
+
+	if opts.Shell != "" {
+		if err := vendorAdapter(opts.Shell, filepath.Join(rt, "adapters")); err != nil {
+			return "", "", err
+		}
+
+		shell = ctrAdapters + "/" + filepath.Base(opts.Shell)
+	}
+
+	if opts.Mrjob != "" {
+		if err := copyToolFile(opts.Mrjob, filepath.Join(rt, "mrjob")); err != nil {
+			return "", "", err
+		}
+
+		mrjob = ctrMrjob
+	}
+
+	return shell, mrjob, nil
+}
+
+// vendorAdapter copies the -shell adapter into dir under its own name, with
+// the adapterModule beside it when there is one. Python puts the script's
+// resolved directory on sys.path, so the module is looked up beside the
+// adapter's link target.
+func vendorAdapter(shell, dir string) error {
+	if err := copyToolFile(shell, filepath.Join(dir, filepath.Base(shell))); err != nil {
+		return err
+	}
+
+	module, err := adapterModulePath(shell)
+	if err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(module); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	return copyToolFile(module, filepath.Join(dir, adapterModule))
+}
+
+// adapterModulePath returns where the adapter at shell imports its
+// adapterModule from: beside the adapter's resolved link target.
+func adapterModulePath(shell string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(shell)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", shell, err)
+	}
+
+	return filepath.Join(filepath.Dir(resolved), adapterModule), nil
+}
+
+// errNotRegular is returned for a tool path or vendored entry that is not a
+// regular file, directory, or symlink: nothing an image needs.
+var errNotRegular = errors.New("not a regular file")
+
+// copyToolFile copies the regular file src, a link resolved to its target, to
+// dst with the target's permission bits.
+func copyToolFile(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", src, err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("vendor %s: %w", src, errNotRegular)
+	}
+
+	return copyFile(src, dst, info.Mode().Perm())
 }
 
 // vendorStageCode copies each stage's code under runtime/stages/<name>, deduped
@@ -306,6 +453,8 @@ func pathCmdContract(cmds []string) string {
 # copied from its name alone): %s
 # You MUST install them, with their runtime dependencies, into this image so they
 # resolve on PATH (e.g. COPY the toolkit in and prepend its bin dir to PATH).
+# .dockerignore sends only runtime/ to the daemon, so put what you COPY there
+# (a re-transpile empties runtime/ and rewrites this file and .dockerignore).
 # Stage code given as a path is vendored into %s automatically above.
 `, strings.Join(cmds, ", "), ctrStages)
 }
@@ -318,46 +467,75 @@ func awsCLIComment(target Target) string {
 	return ""
 }
 
-// copyTree copies a file or directory tree from src to dst, preserving the
-// executable bit. It is not a best-effort copier: callers pre-verify sources
-// via checkContainerSources, so a missing src is a hard error (for the
-// adapters dir the pre-check stats the -shell file, which implies the parent
-// dir exists), and any per-entry read failure aborts the copy.
+// vendorJunk returns the name patterns a vendored tree never needs and that
+// commonly hold secrets or host state: VCS metadata, dotenv files, Python
+// bytecode, and editor and OS litter. The generated .dockerignore repeats them.
+func vendorJunk() []string {
+	return []string{
+		".git", ".hg", ".svn", ".bzr", ".env*", "__pycache__", "*.pyc", "*.pyo",
+		".DS_Store", "Thumbs.db", ".idea", ".vscode", "*~", "*.swp", "*.swo", ".#*", "#*#",
+	}
+}
+
+func isVendorJunk(name string) bool {
+	for _, pat := range vendorJunk() {
+		if ok, _ := filepath.Match(pat, name); ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ownerRWX is added to a vendored directory's mode so the copy stays writable
+// for its entries and a re-transpile; the owner is the transpiling user.
+const ownerRWX = 0o700
+
+// errLinkLeavesTree is returned for a symlink in a vendored tree whose target
+// is not itself vendored: outside the tree, or a vendorJunk entry in it.
+var errLinkLeavesTree = errors.New("symlink target is outside the vendored tree")
+
+// copyTree vendors the file or directory src into dst. A directory is copied
+// without its vendorJunk entries, and a symlink in it stays a relative symlink
+// when its target is vendored too and is refused otherwise, so the copy never
+// pulls in a file from beyond the tree. Every file keeps its own permission
+// bits; a linked src keeps its target's. Callers pre-verify sources via
+// checkContainerSources, so a missing src is a hard error, and any per-entry
+// failure aborts the copy.
 func copyTree(src, dst string) error {
-	info, err := os.Stat(src)
+	root, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", src, err)
+	}
+
+	info, err := os.Stat(root)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", src, err)
 	}
 
 	if !info.IsDir() {
-		return copyFile(src, dst, info.Mode())
+		return copyToolFile(root, dst)
 	}
 
-	err = filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return fmt.Errorf("rel %s: %w", path, err)
-		}
-
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			if err := os.MkdirAll(target, dirPerm); err != nil {
-				return fmt.Errorf("mkdir %s: %w", target, err)
+		if path != root && isVendorJunk(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
 			}
 
 			return nil
 		}
 
-		fi, err := d.Info()
+		rel, err := filepath.Rel(root, path)
 		if err != nil {
-			return fmt.Errorf("info %s: %w", path, err)
+			return fmt.Errorf("rel %s: %w", path, err)
 		}
 
-		return copyFile(path, target, fi.Mode())
+		return copyEntry(root, path, d, filepath.Join(dst, rel))
 	})
 	if err != nil {
 		return fmt.Errorf("copy tree %s: %w", src, err)
@@ -366,7 +544,61 @@ func copyTree(src, dst string) error {
 	return nil
 }
 
-func copyFile(src, dst string, mode os.FileMode) error {
+// copyEntry copies one walked entry at path, below the resolved tree root, to
+// target.
+func copyEntry(root, path string, d fs.DirEntry, target string) error {
+	info, err := d.Info()
+	if err != nil {
+		return fmt.Errorf("info %s: %w", path, err)
+	}
+
+	switch {
+	case d.IsDir():
+		if err := os.MkdirAll(target, dirPerm); err != nil {
+			return fmt.Errorf("mkdir %s: %w", target, err)
+		}
+
+		if err := os.Chmod(target, info.Mode().Perm()|ownerRWX); err != nil {
+			return fmt.Errorf("chmod %s: %w", target, err)
+		}
+
+		return nil
+	case d.Type()&fs.ModeSymlink != 0:
+		return copyLink(root, path, target)
+	case d.Type().IsRegular():
+		return copyFile(path, target, info.Mode().Perm())
+	default:
+		return fmt.Errorf("vendor %s: %w", path, errNotRegular)
+	}
+}
+
+// copyLink recreates the symlink at path as target, pointing relatively at the
+// same entry of the copy. It refuses a link whose target is not vendored: it
+// would dangle in the image, or, followed, ship a file from beyond the tree.
+func copyLink(root, path, target string) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve link %s: %w", path, err)
+	}
+
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || !filepath.IsLocal(rel) || slices.ContainsFunc(strings.Split(rel, string(filepath.Separator)), isVendorJunk) {
+		return fmt.Errorf("%w: %s -> %s", errLinkLeavesTree, path, resolved)
+	}
+
+	link, err := filepath.Rel(filepath.Dir(path), resolved)
+	if err != nil {
+		return fmt.Errorf("rel %s: %w", path, err)
+	}
+
+	if err := os.Symlink(link, target); err != nil {
+		return fmt.Errorf("symlink %s: %w", target, err)
+	}
+
+	return nil
+}
+
+func copyFile(src, dst string, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
 	}
@@ -377,7 +609,7 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	}
 	defer func() { _ = in.Close() }()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", dst, err)
 	}

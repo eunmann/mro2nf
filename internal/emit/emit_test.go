@@ -47,8 +47,10 @@ func emitFixture(t *testing.T, fixture string, stageCode map[string]string) stri
 
 // realRuntime creates existing on-disk runtime sources (mre binary, an adapter
 // dir with martian_shell.py, and stage code dirs) for tests that emit a container
-// target, which now verifies these sources exist before writing the Dockerfile.
-func realRuntime(t *testing.T) (string, string, map[string]string) {
+// target, which verifies these sources exist before writing the Dockerfile. The
+// last result is the dir holding them all: a container target vendors only stage
+// code under an -mropath root, so callers pass it as MROPath.
+func realRuntime(t *testing.T) (string, string, map[string]string, []string) {
 	t.Helper()
 
 	root := t.TempDir()
@@ -71,7 +73,7 @@ func realRuntime(t *testing.T) (string, string, map[string]string) {
 		}
 	}
 
-	return mre, shell, stages
+	return mre, shell, stages, []string{root}
 }
 
 func readFile(t *testing.T, path string) string {
@@ -250,10 +252,10 @@ func TestEmitConfigTargets(t *testing.T) {
 		dir := t.TempDir()
 		// Container targets stage real runtime sources into the build context, so
 		// provide existing files (a bare "mre" would now fail the existence check).
-		mre, shell, stages := realRuntime(t)
+		mre, shell, stages, mroPath := realRuntime(t)
 		if err := emit.Emit(prog, emit.Options{
 			OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro", Target: target,
-			Container: "ecr/mro2nf:1", StageCode: stages,
+			Container: "ecr/mro2nf:1", StageCode: stages, MROPath: mroPath,
 		}); err != nil {
 			t.Fatalf("emit: %v", err)
 		}
@@ -372,7 +374,7 @@ func TestEmitContainerIsGroovyQuoted(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	mre, shell, stages := realRuntime(t)
+	mre, shell, stages, mroPath := realRuntime(t)
 	emitCfg := func(target emit.Target, container string) (string, error) {
 		prog, err := frontend.Lower(ast, nil)
 		if err != nil {
@@ -382,7 +384,7 @@ func TestEmitContainerIsGroovyQuoted(t *testing.T) {
 		dir := t.TempDir()
 		if err := emit.Emit(prog, emit.Options{
 			OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro", Target: target,
-			Container: container, StageCode: stages,
+			Container: container, StageCode: stages, MROPath: mroPath,
 		}); err != nil {
 			return "", err
 		}
@@ -422,7 +424,7 @@ func TestEmitConfineOutputs(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
-	mre, shell, stages := realRuntime(t)
+	mre, shell, stages, mroPath := realRuntime(t)
 	cases := []struct {
 		target  emit.Target
 		confine bool
@@ -444,7 +446,7 @@ func TestEmitConfineOutputs(t *testing.T) {
 		if err := emit.Emit(prog, emit.Options{
 			OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro",
 			Target: tc.target, ConfineOutputs: tc.confine, Container: "ecr/mro2nf:1",
-			StageCode: stages,
+			StageCode: stages, MROPath: mroPath,
 		}); err != nil {
 			t.Fatalf("emit %s: %v", tc.target, err)
 		}
@@ -1060,8 +1062,8 @@ func TestEmitContainerMrjob(t *testing.T) {
 	ss, _ := filepath.Abs("../../testdata/split_test/stages/sum_squares")
 	if err := emit.Emit(prog, emit.Options{
 		OutDir: dir, Mre: filepath.Join(tmp, "mre"), Mrjob: filepath.Join(tmp, "mrjob"),
-		Shell: ss + "/__init__.py", MROFile: "pipeline.mro", Target: emit.TargetAWSBatch,
-		StageCode: map[string]string{"SUM_SQUARES": ss, "REPORT": ss},
+		Shell: ss + "/__init__.py", MROFile: "pipeline.mro", MRODir: "../../testdata/split_test",
+		Target: emit.TargetAWSBatch, StageCode: map[string]string{"SUM_SQUARES": ss, "REPORT": ss},
 	}); err != nil {
 		t.Fatalf("emit: %v", err)
 	}
@@ -1216,8 +1218,7 @@ func TestEmitCompRequiresMrjob(t *testing.T) {
 
 // TestEmitHealthOmicsPackaging checks the HealthOmics target emits the workflow
 // packaging artifacts: a parameter-template.json prompting for the ECR container
-// URI, and a package.sh that zips the workflow while excluding the Docker build
-// context (which ships as the image, not the workflow definition).
+// URI, and a package.sh (what it packages is TestPackageScriptZipsOnlyWorkflow's).
 func TestEmitHealthOmicsPackaging(t *testing.T) {
 	mre := filepath.Join(t.TempDir(), "mre")
 	if err := os.WriteFile(mre, []byte("x"), 0o755); err != nil {
@@ -1236,7 +1237,7 @@ func TestEmitHealthOmicsPackaging(t *testing.T) {
 	dir := t.TempDir()
 	if err := emit.Emit(prog, emit.Options{
 		OutDir: dir, Mre: mre, MROFile: "pipeline.mro", Target: emit.TargetHealthOmics,
-		StageCode: map[string]string{"SUM_SQUARES": mre, "REPORT": mre},
+		MROPath: []string{filepath.Dir(mre)}, StageCode: map[string]string{"SUM_SQUARES": mre, "REPORT": mre},
 	}); err != nil {
 		t.Fatalf("emit: %v", err)
 	}
@@ -1255,15 +1256,8 @@ func TestEmitHealthOmicsPackaging(t *testing.T) {
 		t.Error("parameter-template.json must prompt for the ECR container URI")
 	}
 
-	pkg, err := os.ReadFile(filepath.Join(dir, "package.sh"))
-	if err != nil {
-		t.Fatalf("read package.sh: %v", err)
-	}
-
-	for _, want := range []string{"zip -r workflow.zip", "-x 'runtime/*'", "-x 'Dockerfile'"} {
-		if !strings.Contains(string(pkg), want) {
-			t.Errorf("package.sh missing %q", want)
-		}
+	if _, err := os.Stat(filepath.Join(dir, "package.sh")); err != nil {
+		t.Errorf("package.sh not emitted: %v", err)
 	}
 }
 
@@ -1290,7 +1284,7 @@ func TestEmitContainerBuild(t *testing.T) {
 	ssDir, _ := filepath.Abs("../../testdata/split_test/stages/sum_squares")
 	shell, _ := filepath.Abs("../../vendor-martian/python/martian_shell.py")
 	if err := emit.Emit(prog, emit.Options{
-		OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro",
+		OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro", MRODir: "../../testdata/split_test",
 		Target: emit.TargetAWSBatch, Container: "ecr/mro2nf:1",
 		StageCode: map[string]string{"SUM_SQUARES": ssDir, "REPORT": ssDir},
 	}); err != nil {
@@ -1363,7 +1357,7 @@ func TestEmitContainerBuildDedupsSharedStageCode(t *testing.T) {
 	dir := t.TempDir()
 	shell, _ := filepath.Abs("../../vendor-martian/python/martian_shell.py")
 	if err := emit.Emit(prog, emit.Options{
-		OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro",
+		OutDir: dir, Mre: mre, Shell: shell, MROFile: "pipeline.mro", MROPath: []string{filepath.Dir(bin)},
 		Target: emit.TargetAWSBatch, Container: "ecr/mro2nf:1",
 		StageCode: map[string]string{"SUM_SQUARES": bin, "REPORT": bin},
 	}); err != nil {

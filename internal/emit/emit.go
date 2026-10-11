@@ -75,6 +75,18 @@ type Options struct {
 	// entry input default is resolved against it so the baked entry_args bundle is
 	// self-contained regardless of the transpile working directory.
 	MRODir string
+	// MROPath is the -mropath search roots. With MRODir they bound the host files
+	// the transpile copies: an entry file default, and on a container target a
+	// stage src, must resolve inside one of them.
+	MROPath []string
+	// AllowExternalFiles lets the transpile copy an entry file default or stage
+	// src that resolves outside MRODir and MROPath.
+	AllowExternalFiles bool
+	// ConfigTools names the tools ("mre", "shell", "mrjob") whose path a
+	// .mro2nf.yml set rather than a flag. A container target bakes such a tool
+	// only when it resolves inside MRODir or MROPath, as for a stage src: a
+	// config file shipped beside a shared .mro is not the user's choice.
+	ConfigTools map[string]bool
 	// StageCode maps each stage name to its (absolute) stage code path.
 	StageCode map[string]string
 	// Container, when set, is the image used for every process (process.container
@@ -175,6 +187,13 @@ func Emit(prog *ir.Program, opts Options) error {
 		inlinePipelines(prog)
 	}
 
+	roots := newSourceRoots(opts)
+
+	entry, err := resolveEntryArgs(prog, opts.MRODir, roots)
+	if err != nil {
+		return err
+	}
+
 	g := genCtx{
 		entry:   prog.Entry.Callable,
 		mroFile: opts.MROFile,
@@ -192,17 +211,11 @@ func Emit(prog *ir.Program, opts Options) error {
 		plan:       buildPlan(prog, features),
 	}
 
-	// Native/-native-runner now support container backends (#99): the entry args
-	// are baked and staged like any project asset, and the runner is baked into
-	// the image (containerBuild) at ctrRunner so an isolated task needs no
-	// mounted project dir — the same self-contained-image pattern the default
-	// container path already uses.
-
 	// Container targets bake in-container paths and ship a self-contained Docker
 	// build context (mre + adapters + stage code + runner), so the image — not
 	// the host — supplies the runtime.
 	if target.isContainer() {
-		cb, err := containerBuild(opts, target)
+		cb, err := containerBuild(opts, target, roots)
 		if err != nil {
 			return err
 		}
@@ -217,13 +230,13 @@ func Emit(prog *ir.Program, opts Options) error {
 		return err
 	}
 
-	return writeProject(prog, opts, target, g, specDir)
+	return writeProject(prog, opts, target, g, specDir, entry)
 }
 
 // writeProject renders every file of the Nextflow project (modules, main.nf,
 // config, bindspecs, type manifest, disable artifacts, target packaging, and the
 // entry args) into opts.OutDir.
-func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specDir string) error {
+func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specDir string, entry entryArgs) error {
 	// Render every .nf, then run the whole-project process-name collision check
 	// BEFORE writing any of them: a collision spans modules (global namespace) and
 	// module-vs-main, so it can only be seen across the full rendered set (#176).
@@ -259,7 +272,7 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		}
 	}
 
-	if err := writeEntryArgs(prog, opts.OutDir, opts.MRODir); err != nil {
+	if err := entry.write(opts.OutDir); err != nil {
 		return err
 	}
 
@@ -764,14 +777,30 @@ func writeSpec(specDir, name string, prog *ir.Program, p *ir.Pipeline, bindings 
 	return writeFile(filepath.Join(specDir, name+".json"), data)
 }
 
-// writeEntryArgs resolves the top-level call's inputs and writes them as the
-// entry_args bundle, staging any file-typed entry inputs so the run is
-// self-contained from the start. Relative file-default paths are resolved
+// entryArgs is the top-level call's resolved inputs, checked for baking.
+type entryArgs struct {
+	payload map[string]any
+	params  []ir.Param
+	tbl     *types.Table
+}
+
+// write bakes the entry args as the entry_args bundle, staging any file-typed
+// entry default in so the run is self-contained from the start.
+func (e entryArgs) write(outDir string) error {
+	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), e.payload, e.params, e.tbl, nil); err != nil {
+		return fmt.Errorf("write entry args bundle: %w", err)
+	}
+
+	return nil
+}
+
+// resolveEntryArgs resolves the top-level call's inputs and checks every file
+// default the bundle would stage. Relative file-default paths are resolved
 // against mroDir so the bundle does not depend on the transpile working dir.
-func writeEntryArgs(prog *ir.Program, outDir, mroDir string) error {
+func resolveEntryArgs(prog *ir.Program, mroDir string, roots sourceRoots) (entryArgs, error) {
 	args, err := bind.Resolve(bindSpec(prog, nil, prog.Entry.Bindings), nil, nil)
 	if err != nil {
-		return fmt.Errorf("resolve entry args: %w", err)
+		return entryArgs{}, fmt.Errorf("resolve entry args: %w", err)
 	}
 
 	payload := map[string]any{}
@@ -782,21 +811,43 @@ func writeEntryArgs(prog *ir.Program, outDir, mroDir string) error {
 		dec.UseNumber()
 
 		if err := dec.Decode(&payload); err != nil {
-			return fmt.Errorf("decode entry args: %w", err)
+			return entryArgs{}, fmt.Errorf("decode entry args: %w", err)
 		}
 	}
 
-	params := entryInParams(prog)
-	tbl := types.NewTable(prog.Structs)
+	e := entryArgs{payload: payload, params: entryInParams(prog), tbl: types.NewTable(prog.Structs)}
 
 	if mroDir != "" {
-		if payload, err = resolveEntryFileLeaves(payload, params, tbl, mroDir); err != nil {
-			return err
+		if e.payload, err = resolveEntryFileLeaves(e.payload, e.params, e.tbl, mroDir); err != nil {
+			return entryArgs{}, err
 		}
 	}
 
-	if err := shim.WriteBundle(filepath.Join(outDir, "entry_args"), payload, params, tbl, nil); err != nil {
-		return fmt.Errorf("write entry args bundle: %w", err)
+	err = e.eachFile(func(p ir.Param, path string) error {
+		return roots.check(fmt.Sprintf("entry input %q default", p.Name), path)
+	})
+	if err != nil {
+		return entryArgs{}, err
+	}
+
+	return e, nil
+}
+
+// eachFile calls fn on every file leaf of the payload, with the entry input
+// holding it.
+func (e entryArgs) eachFile(fn func(p ir.Param, path string) error) error {
+	for _, p := range e.params {
+		v, ok := e.payload[p.Name]
+		if !ok {
+			continue
+		}
+
+		_, err := e.tbl.Apply([]ir.Param{p}, map[string]any{p.Name: v}, func(path string) (string, error) {
+			return path, fn(p, path)
+		})
+		if err != nil {
+			return fmt.Errorf("check entry file defaults: %w", err)
+		}
 	}
 
 	return nil

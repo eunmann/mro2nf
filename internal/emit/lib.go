@@ -22,8 +22,8 @@ var libAssets embed.FS
 const libDir = "lib"
 
 // writeLib copies the embedded Groovy helper library into <out>/lib/. It rides
-// along in the HealthOmics packaging zip (package.sh zips the project, excluding
-// only runtime/) exactly like _assets/ and nulls/.
+// along in the HealthOmics packaging zip (healthOmicsZipEntries) exactly like
+// _assets/ and nulls/.
 func writeLib(outDir string) error {
 	return copyEmbeddedDir(libAssets, libDir, filepath.Join(outDir, libDir), "lib")
 }
