@@ -316,7 +316,9 @@ func (pg *pipeGen) returns(noMapOut bool) {
 	}
 
 	// Every call's results reach an output or a consumer, so whatever a
-	// call computes is compared with mrp's.
+	// call computes is compared with mrp's. The exception is a per-key map
+	// call in a sub its caller maps per key: all its results are maps, which
+	// such a sub cannot return.
 	for _, c := range pg.p.Calls {
 		if callRead(pg.p, c.ID) {
 			continue
