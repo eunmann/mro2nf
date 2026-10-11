@@ -16,10 +16,12 @@
         "alpha": "pair/alpha.txt",
         "zeta": "pair/alpha.txt"
     },
+    "passed": "pair/alpha.txt",
     "primary": [
         "primary/0.json",
         null,
         "primary/2.json",
         "primary/0.json"
-    ]
+    ],
+    "relayed": "pair/alpha.txt"
 }

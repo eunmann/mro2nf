@@ -1,10 +1,13 @@
 package shim
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -59,12 +62,34 @@ const (
 	bundleFiles = "f"
 )
 
-// markerRel is the only bundle-relative shape MarkFiles writes: the leaf's own
-// basename, alone in an ordinal dir directly under the files subdir.
-var markerRel = regexp.MustCompile(`^` + bundleFiles + `/L[0-9]{4,}/([^/\x00]+)$`)
+// ordinalName is the name of a leaf's ordinal dir under the files subdir.
+const ordinalName = `L[0-9]{4,}`
 
-// errNoBasename reports a file leaf whose path names no file, such as "/".
-var errNoBasename = errors.New("file leaf has no basename")
+// markerRel is the only bundle-relative shape MarkFiles writes: the leaf's own
+// basename in an ordinal dir directly under the files subdir.
+var markerRel = regexp.MustCompile(`^` + bundleFiles + `/` + ordinalName + `/([^/\x00]+)$`)
+
+var (
+	ordinalDir = regexp.MustCompile(`^` + ordinalName + `$`)
+	originID   = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
+
+// originFile names the file beside a leaf in its ordinal dir that holds the
+// leaf's origin. A file is one to mrp wherever it is referenced, so its origin
+// travels with every copy of it, from bundle to bundle and through a stage
+// that returns an input it was given: it is the SHA-256 of the absolute path
+// the file was first staged from, the path mrp would name.
+const originFile = ".mre-origin"
+
+var (
+	// errNoBasename reports a file leaf whose path names no file, such as "/".
+	errNoBasename = errors.New("file leaf has no basename")
+	// errReservedLeaf reports a file leaf named like the origin file it would
+	// share its ordinal dir with.
+	errReservedLeaf = errors.New("file leaf name is reserved")
+	// errBadOrigin reports an origin file that holds no origin MarkFiles writes.
+	errBadOrigin = errors.New("malformed leaf origin")
+)
 
 // validRel reports whether rel has markerRel's shape and stays in the bundle.
 func validRel(rel string) bool {
@@ -337,9 +362,10 @@ func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.T
 
 // MarkFiles copies every file leaf in payload (located via params/tbl) into
 // dir/f/, replacing each with a bundle-relative marker, and returns the
-// rewritten payload. Names are sequenced so distinct leaves never collide.
-// Every other string that begins with the reserved prefix is escaped, a file
-// leaf naming no file included. A non-nil conf confines the leaves' files.
+// rewritten payload. Names are sequenced so distinct files never collide, and
+// leaves of one origin share one copy. Every other string that begins with
+// the reserved prefix is escaped, a file leaf naming no file included. A
+// non-nil conf confines the leaves' files.
 func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, conf *Confinement) (map[string]any, error) {
 	escaped := make(map[string]any, len(payload))
 	for k, v := range payload {
@@ -362,10 +388,11 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 }
 
 // leafMarker copies a payload's file leaves into the bundle dir. marks maps a
-// copied leaf's absolute path to its marker: a path the payload names at
-// several positions is one file to mrp, which publishes it once and names that
-// one published path at each (post_process.go moveOutFile), so it is copied
-// once and every position gets the same marker.
+// copied leaf's origin to its marker: a file the payload reaches at several
+// positions, or through several bundles, is one file to mrp, which publishes
+// it once and names that one published path at each (post_process.go
+// moveOutFile, copyOutSymlink), so it is copied once and every position gets
+// the same marker.
 type leafMarker struct {
 	dir   string
 	conf  *Confinement
@@ -401,7 +428,12 @@ func (m leafMarker) mark(leaf string) (string, error) {
 		return "", fmt.Errorf("resolve file leaf %s: %w", src, err)
 	}
 
-	if marker, ok := m.marks[abs]; ok {
+	origin, err := leafOrigin(abs)
+	if err != nil {
+		return "", err
+	}
+
+	if marker, ok := m.marks[origin]; ok {
 		return marker, nil
 	}
 
@@ -415,18 +447,60 @@ func (m leafMarker) mark(leaf string) (string, error) {
 	// never collide; inside it the leaf keeps the basename mrp passes (#284).
 	rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d", len(m.marks)), name)
 
-	dst := filepath.Join(m.dir, rel)
-	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
-		return "", fmt.Errorf("create files dir: %w", err)
-	}
-
-	if err := copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{conf: m.conf}); err != nil {
+	if err := m.stage(src, rel, origin); err != nil {
 		return "", err
 	}
 
-	m.marks[abs] = Marker(rel, isDir)
+	m.marks[origin] = Marker(rel, isDir)
 
-	return m.marks[abs], nil
+	return m.marks[origin], nil
+}
+
+// stage copies the leaf at src to rel in the bundle and records its origin
+// beside it.
+func (m leafMarker) stage(src, rel, origin string) error {
+	dst := filepath.Join(m.dir, rel)
+	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
+		return fmt.Errorf("create files dir: %w", err)
+	}
+
+	if err := copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{conf: m.conf}); err != nil {
+		return err
+	}
+
+	return writeRaw(filepath.Join(filepath.Dir(dst), originFile), []byte(origin))
+}
+
+// leafOrigin returns the origin of the file leaf at abs: the one recorded
+// beside it when it is a leaf of a bundle, else that of a file first staged
+// from abs.
+func leafOrigin(abs string) (string, error) {
+	ordinal := filepath.Dir(abs)
+	if !ordinalDir.MatchString(filepath.Base(ordinal)) || filepath.Base(filepath.Dir(ordinal)) != bundleFiles {
+		return pathOrigin(abs), nil
+	}
+
+	recorded, err := os.ReadFile(filepath.Join(ordinal, originFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return pathOrigin(abs), nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read origin of %s: %w", abs, err)
+	}
+
+	if !originID.Match(recorded) {
+		return "", fmt.Errorf("%w: %q beside %s", errBadOrigin, recorded, abs)
+	}
+
+	return string(recorded), nil
+}
+
+// pathOrigin is the origin of a file first staged from abs.
+func pathOrigin(abs string) string {
+	sum := sha256.Sum256([]byte(abs))
+
+	return hex.EncodeToString(sum[:])
 }
 
 // leafName returns the basename of the file leaf at src, whose absolute path
@@ -436,6 +510,10 @@ func leafName(src, abs string) (string, error) {
 	name := filepath.Base(abs)
 	if name == string(filepath.Separator) {
 		return "", fmt.Errorf("%w: %q", errNoBasename, src)
+	}
+
+	if name == originFile {
+		return "", fmt.Errorf("%w: %q", errReservedLeaf, src)
 	}
 
 	return name, nil

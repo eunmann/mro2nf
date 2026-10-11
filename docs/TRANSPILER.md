@@ -550,6 +550,7 @@ including the files they reference." On disk it is a directory:
   f/L0001/reads.fastq    canonical type-walk order), so leaves never collide,
                          under the basename mrp passes the stage (#284);
                          data.json references them via a marker
+  f/L0000/.mre-origin  ← the leaf's origin (#431)
   f/staticnull.mro2nf.json  ← optional: the top-level fields mrp resolves
                          to null when it builds the call graph (#436)
 ```
@@ -594,6 +595,13 @@ Both prefixes resolve identically on read-back. The rules:
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
   This is `shim.MarkFiles`, which uses the type table to find exactly which leaves
   are files (§3's `Param.IsFile`, recursing into structs/arrays/maps).
+- **Origins** (on write): a file is one to `mrp` wherever it is referenced, so a
+  bundle copies it once and gives every position that reaches it one marker,
+  however many input bundles it arrived through. Its identity is its origin, the
+  SHA-256 of the absolute path it was first staged from, written to
+  `.mre-origin` beside the leaf; a leaf of a staged bundle, such as the input a
+  pass-through stage returns, keeps the origin recorded beside it. A leaf named
+  `.mre-origin` fails the write.
 - **Escaping** (on write): every other string that begins with the reserved
   `@mre:` prefix (a string input, a `.mro` literal, a stage's string output, a
   file-typed out naming no file) is stored as `@mre:str:<original>`. A marker in

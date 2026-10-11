@@ -1,7 +1,8 @@
 # One file reachable from several pipeline outputs (#431). mrp publishes it at
 # the first outs/ path its post-processing walk reaches (outputs in declaration
 # order, struct fields and map keys sorted, arrays by index) and names that
-# path wherever else the file is reached.
+# path wherever else the file is reached, through a stage that returns the
+# file it was given and a sub-pipeline that returns its input too.
 filetype json;
 filetype txt;
 
@@ -17,6 +18,22 @@ stage MAKE(
     out path      d,
     src py        "stages/make",
 )
+
+stage PASS(
+    in  txt x,
+    out txt y,
+    src py  "stages/pass",
+)
+
+pipeline RELAY(
+    in  txt x,
+    out txt z,
+)
+{
+    return (
+        z = self.x,
+    )
+}
 
 pipeline INNER(
     out json[]   js,
@@ -42,9 +59,19 @@ pipeline SHARED(
     out map<txt> m,
     out path     d2,
     out path     d1,
+    out txt      passed,
+    out txt      relayed,
 )
 {
     call INNER()
+
+    call PASS(
+        x = INNER.pair.alpha,
+    )
+
+    call RELAY(
+        x = INNER.pair.zeta,
+    )
 
     return (
         primary = INNER.js,
@@ -53,6 +80,8 @@ pipeline SHARED(
         m       = INNER.m,
         d2      = INNER.d,
         d1      = INNER.d,
+        passed  = PASS.y,
+        relayed = RELAY.z,
     )
 }
 
