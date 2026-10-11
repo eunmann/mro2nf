@@ -1,0 +1,37 @@
+{
+    "def_names": [
+        "ref_0.txt",
+        "ref_1.txt"
+    ],
+    "lane_names": [
+        "reads.fastq",
+        "reads.fastq"
+    ],
+    "main_names": [
+        "ref_0.txt",
+        "ref_1.txt"
+    ],
+    "named": "named.txt",
+    "out_names": [
+        "part.txt",
+        "part.txt"
+    ],
+    "parts": [
+        "parts/0.txt",
+        "parts/1.txt"
+    ],
+    "seen": {
+        "by_key": {
+            "k1": "data.txt",
+            "k2": "data.txt"
+        },
+        "entry": "null",
+        "lanes": [
+            "reads.fastq",
+            "reads.fastq"
+        ],
+        "named": "custom_name.txt",
+        "plain": "plain.txt",
+        "sample_reads": "s1_R1.fastq"
+    }
+}

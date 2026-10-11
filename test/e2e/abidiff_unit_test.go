@@ -103,7 +103,7 @@ func TestABINormalizePaths(t *testing.T) {
 	writeABITestFile(t, filepath.Join(dir, "tree", "a.txt"), "x")
 	ownFile := writeABITestFile(t, filepath.Join(own, "out.bam"), "BAM")
 
-	link := filepath.Join(dir, "staged", "L0000.txt")
+	link := filepath.Join(dir, "staged", "link.txt")
 	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -118,15 +118,13 @@ func TestABINormalizePaths(t *testing.T) {
 	}
 
 	cases := []struct {
-		name    string
-		in      string
-		extOnly bool
-		want    string
+		name string
+		in   string
+		want string
 	}{
 		{name: "file", in: file, want: "file:" + sha256Hex("ACGT") + ":reads.txt"},
-		{name: "symlink_keeps_link_basename", in: link, want: "file:" + sha256Hex("ACGT") + ":L0000.txt"},
-		{name: "ext_only_received", in: link, extOnly: true, want: "file:" + sha256Hex("ACGT") + ":*.txt"},
-		{name: "ext_only_spares_own_files", in: ownFile, extOnly: true, want: "file:" + sha256Hex("BAM") + ":out.bam"},
+		{name: "symlink_keeps_link_basename", in: link, want: "file:" + sha256Hex("ACGT") + ":link.txt"},
+		{name: "own_file", in: ownFile, want: "file:" + sha256Hex("BAM") + ":out.bam"},
 		{name: "dir", in: filepath.Join(dir, "tree"), want: "dir:" + treeSum + ":tree"},
 		{name: "absent_under_own_files", in: filepath.Join(own, "sub", "gone.bam"), want: "<files>/sub/gone.bam"},
 		{name: "absent_elsewhere_verbatim", in: filepath.Join(dir, "gone.txt"), want: filepath.Join(dir, "gone.txt")},
@@ -135,7 +133,7 @@ func TestABINormalizePaths(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := abiNormalizer{ownFiles: []string{own}, extOnly: tc.extOnly}.path(tc.in)
+			got, err := abiNormalizer{ownFiles: []string{own}}.path(tc.in)
 			if err != nil {
 				t.Fatalf("path: %v", err)
 			}
@@ -232,13 +230,8 @@ func TestHashDirTree(t *testing.T) {
 }
 
 func TestLoadDivergencesCheckedIn(t *testing.T) {
-	divs, err := loadDivergences("divergences.json")
-	if err != nil {
+	if _, err := loadDivergences("divergences.json"); err != nil {
 		t.Fatalf("load checked-in divergences: %v", err)
-	}
-
-	if len(divs) == 0 {
-		t.Fatal("divergences.json lists no entries")
 	}
 }
 
@@ -247,14 +240,13 @@ func TestLoadDivergencesRejectsInvalid(t *testing.T) {
 		name string
 		doc  string
 	}{
-		{name: "no_issue", doc: `{"divergences":[{"summary":"s","file":"_args","rule":"basename-extension-only"}]}`},
-		{name: "no_summary", doc: `{"divergences":[{"issue":1,"file":"_args","rule":"basename-extension-only"}]}`},
-		{name: "bad_file", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_jobinfo","rule":"basename-extension-only"}]}`},
-		{name: "unknown_rule", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore"}]}`},
-		{name: "unknown_field", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"basename-extension-only","stage":"X"}]}`},
+		{name: "no_issue", doc: `{"divergences":[{"summary":"s","file":"_args","rule":"ignore-key","key":"k"}]}`},
+		{name: "no_summary", doc: `{"divergences":[{"issue":1,"file":"_args","rule":"ignore-key","key":"k"}]}`},
+		{name: "bad_file", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_jobinfo","rule":"ignore-key","key":"k"}]}`},
+		{name: "unknown_rule", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore","key":"k"}]}`},
+		{name: "unknown_field", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore-key","key":"k","stage":"X"}]}`},
 		{name: "ignore_key_no_key", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ignore-key"}]}`},
 		{name: "ceil_no_key", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"ceil-number"}]}`},
-		{name: "basename_with_key", doc: `{"divergences":[{"issue":1,"summary":"s","file":"_args","rule":"basename-extension-only","key":"k"}]}`},
 		{name: "malformed", doc: `{"divergences":[`},
 	}
 
@@ -265,20 +257,6 @@ func TestLoadDivergencesRejectsInvalid(t *testing.T) {
 				t.Errorf("loadDivergences accepted %s", tc.doc)
 			}
 		})
-	}
-}
-
-// TestNewABINormalizerScopesRuleToFile checks a divergence applies only to the
-// metadata file it names.
-func TestNewABINormalizerScopesRuleToFile(t *testing.T) {
-	divs := []divergence{{Issue: 284, Summary: "s", File: argsFile, Rule: ruleBasenameExt}}
-
-	if !newABINormalizer(nil, argsFile, divs).extOnly {
-		t.Errorf("rule for %s not applied to %s", argsFile, argsFile)
-	}
-
-	if newABINormalizer(nil, outsFile, divs).extOnly {
-		t.Errorf("rule for %s leaked into %s", argsFile, outsFile)
 	}
 }
 

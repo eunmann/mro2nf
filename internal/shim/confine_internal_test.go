@@ -12,8 +12,9 @@ import (
 )
 
 // confineEnv lays out a task work dir the way a stage phase sees it: the
-// stage's own phase dir, an input Nextflow staged as a symlink to another
-// task's file and directory, and host files outside the work dir.
+// stage's own phase dir, inputs Nextflow staged as symlinks to another task's
+// leaf dirs (one holding a file, one a directory), and host files outside the
+// work dir.
 type confineEnv struct {
 	work, files, host, hostDir, upstream, stagedFile, stagedDir string
 }
@@ -26,21 +27,21 @@ func newConfineEnv(t *testing.T) confineEnv {
 		work:     filepath.Join(root, "work"),
 		host:     filepath.Join(root, "host", "outside.txt"),
 		hostDir:  filepath.Join(root, "host", "refdir"),
-		upstream: filepath.Join(root, "upstream", "real.txt"),
+		upstream: filepath.Join(root, "upstream", "L0000", "real.txt"),
 	}
 	e.files = filepath.Join(e.work, "main", "files")
-	e.stagedFile = filepath.Join(e.work, "args", "f", "L0000.txt")
-	e.stagedDir = filepath.Join(e.work, "args", "f", "L0001")
+	e.stagedFile = filepath.Join(e.work, "args", "f", "L0000", "real.txt")
+	e.stagedDir = filepath.Join(e.work, "args", "f", "L0001", "dir")
 
-	upDir := filepath.Join(root, "upstream", "dir")
-	mkdirs(t, e.files, filepath.Dir(e.stagedFile), e.hostDir, upDir)
+	upDir := filepath.Join(root, "upstream", "L0001", "dir")
+	mkdirs(t, e.files, filepath.Join(e.work, "args", "f"), filepath.Dir(e.upstream), e.hostDir, upDir)
 	writeTestFile(t, e.host, "host")
 	writeTestFile(t, filepath.Join(e.hostDir, "x.txt"), "host dir")
 	writeTestFile(t, e.upstream, "upstream")
 	writeTestFile(t, filepath.Join(upDir, "y.txt"), "upstream dir")
 	symlink(t, filepath.Join(upDir, "host"), e.host)
-	symlink(t, e.stagedFile, e.upstream)
-	symlink(t, e.stagedDir, upDir)
+	symlink(t, filepath.Dir(e.stagedFile), filepath.Dir(e.upstream))
+	symlink(t, filepath.Dir(e.stagedDir), filepath.Dir(upDir))
 
 	return e
 }
@@ -222,7 +223,7 @@ func TestConfineAdmitsOwnAndStagedFiles(t *testing.T) {
 	writeTestFile(t, filepath.Join(ownDir, "kept.txt"), "own")
 	symlink(t, filepath.Join(ownDir, "dangling"), filepath.Join(e.files, "gone"))
 	symlink(t, filepath.Join(e.files, "abs_fwd"), e.stagedFile)
-	symlink(t, filepath.Join(e.files, "rel_fwd"), filepath.Join("..", "..", "args", "f", "L0000.txt"))
+	symlink(t, filepath.Join(e.files, "rel_fwd"), filepath.Join("..", "..", "args", "f", "L0000", "real.txt"))
 
 	cases := []struct {
 		name, value, rel, src string

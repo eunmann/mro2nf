@@ -13,4 +13,4 @@ def main(args, outs):
         handle.write("made\n")
     outs.made = path
     # A file-typed output set to a marker-shaped string the stage never wrote.
-    outs.fake = "@mre:file:f/L0000.txt"
+    outs.fake = "@mre:file:f/L0000/made.txt"

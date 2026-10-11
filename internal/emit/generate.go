@@ -166,11 +166,13 @@ func (g genCtx) producerArgs(callable, role string) string {
 }
 
 // bundleOutput renders a producer process's output declaration for a payload
-// bundle mre writes into dir `name`: its typed sidecar (data.json) plus its flat
-// leaf files (f/L*) as INDIVIDUAL path items, so Nextflow stages each file rather
-// than the whole bundle directory (the de-bundle, epic #18 / #13). arity 0..*
-// admits a bundle whose payload has no file leaves. mre and the on-disk bundle
-// layout are unchanged; only how the bundle crosses a process boundary changes.
+// bundle mre writes into dir `name`: its typed sidecar (data.json) plus one path
+// item per file leaf, the leaf's ordinal dir f/L<n> holding it under its own
+// basename, so Nextflow stages each leaf rather than the whole bundle directory
+// (the de-bundle, epic #18 / #13). Staging the ordinal dir rather than the file
+// keeps the ordinal the markers name, and keeps a stage-chosen basename out of
+// Nextflow's stage-in script. arity 0..* admits a bundle whose payload has no
+// file leaves.
 func bundleOutput(name string) string {
 	return "tuple(" + bundleOutputElems(name) + ")"
 }
@@ -188,8 +190,8 @@ func bundleOutputElems(name string) string {
 }
 
 // bundleInput renders a consumer process's input staging for a payload bundle,
-// reconstructing the bundle dir `name` (data.json + f/ leaves) from the staged
-// sidecar and individual leaf items, so `mre -… name` reads it exactly as before.
+// reconstructing the bundle dir `name` (data.json + f/ leaf dirs) from the
+// staged sidecar and individual leaf items, so `mre -… name` reads it whole.
 func bundleInput(name string) string {
 	return "tuple(" + bundleInputElems(name) + ")"
 }

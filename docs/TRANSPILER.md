@@ -523,22 +523,33 @@ including the files they reference." On disk it is a directory:
 ```
 <bundle>/
   data.json        ← the typed JSON sidecar (scalars, arrays, maps, structs)
-  f/L0000          ← each file-typed leaf under a flat, ordinal name (the
-  f/L0001            canonical type-walk order), so leaves never collide;
-                     data.json references them via a marker
+  f/L0000/reads.fastq  ← each file-typed leaf in its own ordinal dir (the
+  f/L0001/reads.fastq    canonical type-walk order), so leaves never collide,
+                         under the basename mrp passes the stage (#284);
+                         data.json references them via a marker
 ```
+
+The basename is the one the leaf's path had where `MarkFiles` found it: the
+file a stage wrote (Martian's `<out>.<ext>` default, or any path the stage chose),
+the entry input's own file, a split's chunk-def file, or the upstream leaf a
+binding, fork or join forwarded unchanged. That is the path `mrp` passes on, so
+a stage that reads a sample name or an extension from `os.path.basename()` sees
+the same value under both runtimes.
 
 Between processes, a bundle travels **de-bundled** (#13): the channel item is a
 `tuple(path("X/data.json"), path("X/f/*", arity: '0..*'))` — the sidecar plus
-each leaf as its own `path` item — which Nextflow stages back into one `X/`
-directory in the consuming task. Leaves are individual objects on an
-object-store work dir (staged per file, never re-materialized as a copied
-bundle), and each input stages under its own directory so two inputs' ordinal
-leaf names cannot collide. (The keyed nested-map fork/merge subsystem still
+each leaf's ordinal dir as its own `path` item — which Nextflow stages back into
+one `X/` directory in the consuming task. Staging the ordinal dir rather than
+the file keeps the ordinal the marker names (Nextflow restages an item under its
+own name), and keeps a stage-chosen basename out of Nextflow's stage-in script,
+which does not quote every shell metacharacter (§8). Leaves are individual
+objects on an object-store work dir (staged per leaf, never re-materialized as a
+copied bundle), and each input stages under its own directory so two inputs'
+ordinal dirs cannot collide. (The keyed nested-map fork/merge subsystem still
 stages whole bundle directories.)
 
 In `data.json`, every file-typed leaf is replaced with a **marker** of the form
-`@mre:file:f/L<nnnn>` — a *bundle-relative* path. A leaf staged from a
+`@mre:file:f/L<nnnn>/<basename>` — a *bundle-relative* path. A leaf staged from a
 **directory** (a `path` output, or a directory a stage wrote into a `file`-typed
 out) uses `@mre:dir:` instead, so its ground-truth dir-ness — stat'd at staging
 time — travels to publish rather than being inferred from the declared type.
@@ -557,8 +568,9 @@ Both prefixes resolve identically on read-back. The rules:
   back to real paths inside the staged bundle, so the stage opens a real local
   file, and escaped strings get their original value back, so the stage sees
   exactly the string `mrp` would pass it. A marker is accepted only in the shape
-  `MarkFiles` writes (`f/L<nnnn>[.<ext>]`, bundle-local); any other `@mre:`
-  string fails the read. Readers of a raw `data.json` restore the escapes too:
+  `MarkFiles` writes (`f/L<nnnn>/<basename>`: exactly one name under the
+  ordinal dir, not `.` or `..`, bundle-local); any other `@mre:` string fails
+  the read. Readers of a raw `data.json` restore the escapes too:
   `publish-layout` for the published outs, and `forkbind -elementfile` for the
   element the driver slices out of a sidecar.
 
@@ -650,10 +662,10 @@ in the task: `s[1].txt` beside `s1.txt` stages `s1.txt` silently, `{a,b}`
 splits into two words, `$HOME` is substituted. The emitter cannot quote that
 script, so `Mro2nf.entryFile` rejects an override path holding any of these
 characters, anywhere in the path or URI, before anything is staged; the error
-names the input and the character. A baked default is copied into the entry
-bundle by `mro2nf` and renamed `L<n><ext>`, so only its extension ever reaches
-a stage-in script, and the transpile rejects a default whose extension holds
-one. Rename such a file, or the directory holding an override.
+names the input and the character. Rename such a file, or the directory
+holding an override. A baked default is not affected: `mro2nf` copies it into
+the entry bundle in Go, and a stage-in script only ever names the ordinal leaf
+directory that holds it (§7).
 
 **Which file values a run may supply.** `file()` on the head node fetches any
 URL Nextflow has a provider for and reads any path the head node can see, and a

@@ -42,11 +42,6 @@ const (
 	// phase has no _outs on either runtime).
 	absentMeta = "<absent>"
 
-	// ruleBasenameExt compares by extension only the basename of a path outside
-	// the invocation's own files dir, i.e. a file the phase received rather
-	// than wrote.
-	ruleBasenameExt = "basename-extension-only"
-
 	// ruleIgnoreKey drops the top-level key the divergence names from the file
 	// on both sides.
 	ruleIgnoreKey = "ignore-key"
@@ -119,12 +114,10 @@ func (d divergence) validate() error {
 		return fmt.Errorf("%w: #%d has no summary", errABIMeta, d.Issue)
 	case d.File != argsFile && d.File != outsFile:
 		return fmt.Errorf("%w: #%d file %q is not %s or %s", errABIMeta, d.Issue, d.File, argsFile, outsFile)
-	case d.Rule == ruleBasenameExt && d.Key != "":
-		return fmt.Errorf("%w: #%d rule %q takes no key", errABIMeta, d.Issue, d.Rule)
-	case (d.Rule == ruleIgnoreKey || d.Rule == ruleCeilKey) && d.Key == "":
-		return fmt.Errorf("%w: #%d rule %q needs a key", errABIMeta, d.Issue, d.Rule)
-	case d.Rule != ruleBasenameExt && d.Rule != ruleIgnoreKey && d.Rule != ruleCeilKey:
+	case d.Rule != ruleIgnoreKey && d.Rule != ruleCeilKey:
 		return fmt.Errorf("%w: #%d unknown rule %q", errABIMeta, d.Issue, d.Rule)
+	case d.Key == "":
+		return fmt.Errorf("%w: #%d rule %q needs a key", errABIMeta, d.Issue, d.Rule)
 	default:
 		return nil
 	}
@@ -137,7 +130,6 @@ type abiNormalizer struct {
 	// assigns that dir itself, so a path under it is host-specific by
 	// construction; the rest of the path is what the stage chose.
 	ownFiles   []string
-	extOnly    bool
 	ignoreKeys []string
 	ceilKeys   []string
 }
@@ -151,8 +143,6 @@ func newABINormalizer(ownFiles []string, file string, divs []divergence) abiNorm
 		}
 
 		switch d.Rule {
-		case ruleBasenameExt:
-			n.extOnly = true
 		case ruleIgnoreKey:
 			n.ignoreKeys = append(n.ignoreKeys, d.Key)
 		case ruleCeilKey:
@@ -291,23 +281,15 @@ func (n abiNormalizer) path(s string) (string, error) {
 			return "", err
 		}
 
-		return "dir:" + sum + ":" + n.basename(s), nil
+		return "dir:" + sum + ":" + filepath.Base(s), nil
 	default:
 		sum, err := hashFileContent(s)
 		if err != nil {
 			return "", err
 		}
 
-		return "file:" + sum + ":" + n.basename(s), nil
+		return "file:" + sum + ":" + filepath.Base(s), nil
 	}
-}
-
-func (n abiNormalizer) basename(s string) string {
-	if _, own := n.ownFilesRest(s); n.extOnly && !own {
-		return "*" + filepath.Ext(s)
-	}
-
-	return filepath.Base(s)
 }
 
 func (n abiNormalizer) ownFilesRel(s string) string {

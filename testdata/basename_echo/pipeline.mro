@@ -1,0 +1,101 @@
+# #284: a stage that reads a sample name or extension from its input's
+# basename must see the name mrp passes, for every way a file reaches it. ECHO
+# reports the basenames of the files it receives from an upstream stage (an
+# explicit out filename, a default out filename, an array and a map of files
+# whose leaves share one basename, a struct field) and from an entry input;
+# LANE from a fork over an upstream file array; CHUNKS' main from its split's
+# chunk-def file, and its join from the chunk defs and the chunk outs, which it
+# also forwards as an output. The entry input is /dev/null: mrp passes an
+# invocation path verbatim, so a relative one would not resolve in its job dir,
+# and /dev/null is an absolute path every host and container has.
+filetype txt;
+filetype fastq;
+
+struct Sample(
+    string name,
+    fastq  reads,
+)
+
+stage MAKE(
+    out txt        named  "an out with an explicit filename"  "custom_name.txt",
+    out txt        plain,
+    out fastq[]    lanes,
+    out map<txt>   by_key,
+    out Sample     sample,
+    src py         "stages/make",
+)
+
+stage ECHO(
+    in  txt        named,
+    in  txt        plain,
+    in  fastq[]    lanes,
+    in  map<txt>   by_key,
+    in  Sample     sample,
+    in  txt        entry,
+    out map        seen,
+    src py         "stages/echo",
+)
+
+stage LANE(
+    in  fastq      reads,
+    out string     name,
+    src py         "stages/lane",
+)
+
+stage CHUNKS(
+    in  int        n,
+    out string[]   def_names,
+    out string[]   main_names,
+    out string[]   out_names,
+    out txt[]      parts,
+    src py         "stages/chunks",
+) split (
+    in  txt        ref,
+    out string     ref_name,
+    out txt        part,
+)
+
+pipeline BASENAME_ECHO(
+    in  txt        entry,
+    out map        seen,
+    out string[]   lane_names,
+    out string[]   def_names,
+    out string[]   main_names,
+    out string[]   out_names,
+    out txt[]      parts,
+    out txt        named,
+)
+{
+    call MAKE()
+
+    call ECHO(
+        named  = MAKE.named,
+        plain  = MAKE.plain,
+        lanes  = MAKE.lanes,
+        by_key = MAKE.by_key,
+        sample = MAKE.sample,
+        entry  = self.entry,
+    )
+
+    map call LANE(
+        reads = split MAKE.lanes,
+    )
+
+    call CHUNKS(
+        n = 2,
+    )
+
+    return (
+        seen       = ECHO.seen,
+        lane_names = LANE.name,
+        def_names  = CHUNKS.def_names,
+        main_names = CHUNKS.main_names,
+        out_names  = CHUNKS.out_names,
+        parts      = CHUNKS.parts,
+        named      = MAKE.named,
+    )
+}
+
+call BASENAME_ECHO(
+    entry = "/dev/null",
+)

@@ -3,7 +3,7 @@
 # stage and the published outs exactly as mrp gives them: as the literal
 # strings. A marker-shaped value arrives here from an entry input, an untyped
 # map, a string array, a call-site literal and a stage's own string output. The
-# rels name the ordinal leaves the bundles here really hold (f/L0000.txt is
+# rels name the ordinal leaves the bundles here really hold (f/L0000/made.txt is
 # ECHO's `made` file), so treating the string as a marker would hand a stage a
 # different file's path instead of the string. ECHO also sets a file-typed
 # output to a marker-shaped string it never wrote: mrp passes the string on and
@@ -53,7 +53,7 @@ pipeline MARKERS(
         s   = self.s,
         arr = self.arr,
         m   = self.m,
-        lit = "@mre:dir:f/L0000.txt",
+        lit = "@mre:dir:f/L0000/made.txt",
     )
 
     call FORWARD(
@@ -75,15 +75,15 @@ pipeline MARKERS(
 }
 
 call MARKERS(
-    s   = "@mre:file:f/L0000.txt",
+    s   = "@mre:file:f/L0000/made.txt",
     arr = [
-        "@mre:file:f/L0000.txt",
-        "@mre:str:@mre:file:f/L0000.txt",
+        "@mre:file:f/L0000/made.txt",
+        "@mre:str:@mre:file:f/L0000/made.txt",
         "@mre:",
         "plain",
     ],
     m   = {
-        "dir": "@mre:dir:f/L0000.txt",
-        "nested": ["@mre:file:f/L0001"],
+        "dir": "@mre:dir:f/L0000/made.txt",
+        "nested": ["@mre:file:f/L0001/made.txt"],
     },
 )

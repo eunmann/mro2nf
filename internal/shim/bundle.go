@@ -60,9 +60,25 @@ const (
 	bundleFiles = "f"
 )
 
-// markerRel is the only bundle-relative shape MarkFiles writes: an ordinal leaf
-// directly under the files subdir, keeping the source's extension.
-var markerRel = regexp.MustCompile(`^` + bundleFiles + `/L[0-9]{4,}(\.[^/]*)?$`)
+// markerRel is the only bundle-relative shape MarkFiles writes: the leaf's own
+// basename, alone in an ordinal dir directly under the files subdir.
+var markerRel = regexp.MustCompile(`^` + bundleFiles + `/L[0-9]{4,}/([^/\x00]+)$`)
+
+// errNoBasename reports a file leaf whose path names no file, such as "/".
+var errNoBasename = errors.New("file leaf has no basename")
+
+// validRel reports whether rel has markerRel's shape and stays in the bundle.
+func validRel(rel string) bool {
+	m := markerRel.FindStringSubmatch(rel)
+
+	return m != nil && m[1] != "." && m[1] != ".." && filepath.IsLocal(rel)
+}
+
+// LeafPath returns the path of the leaf at bundle-relative rel below the files
+// subdir, the path a directory of staged leaves holds it at.
+func LeafPath(rel string) string {
+	return strings.TrimPrefix(rel, bundleFiles+"/")
+}
 
 // Marker returns the transport marker for a leaf staged at bundle-relative rel,
 // choosing FileMarker or DirMarker by the leaf's stat'd dir-ness.
@@ -87,7 +103,7 @@ func CutMarker(s string) (string, bool, bool) {
 		}
 	}
 
-	if !markerRel.MatchString(rel) || !filepath.IsLocal(rel) {
+	if !validRel(rel) {
 		return "", false, false
 	}
 
@@ -350,17 +366,15 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 
 		isDir := err == nil && info.IsDir()
 
-		// Each leaf is staged under a flat, ordinal name (f/L0000, f/L0001, …) in
-		// canonical walk order, so distinct leaves never collide and can be staged as
-		// individual path items (epic #18 / #13). The ordinal replaces the original
-		// basename — but the original EXTENSION is preserved, because Martian
-		// typed-file readers reconstruct a leaf's path from its filetype extension
-		// (the Rust `Path::with_extension("bincode")`); a bare `L0002` would send such
-		// a reader to a nonexistent `L0002.bincode`. The source file's extension is
-		// exactly the Martian filetype (Martian names outputs `<field>.<filetype>`),
-		// so carrying it makes the reconstruction round-trip while staying collision
-		// free.
-		rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d%s", n, filepath.Ext(src)))
+		name, err := leafName(src)
+		if err != nil {
+			return "", err
+		}
+
+		// Each leaf gets its own ordinal dir (f/L0000, f/L0001, … in canonical walk
+		// order), staged downstream as one path item, so leaves sharing a basename
+		// never collide; inside it the leaf keeps the basename mrp passes (#284).
+		rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d", n), name)
 		n++
 
 		dst := filepath.Join(dir, rel)
@@ -381,6 +395,23 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 	}
 
 	return marked, nil
+}
+
+// leafName returns the basename of the file leaf at src: the name mrp's stage
+// sees, src being the path mrp would pass. A path ending in "/", "." or ".."
+// names the directory it resolves to.
+func leafName(src string) (string, error) {
+	abs, err := filepath.Abs(src)
+	if err != nil {
+		return "", fmt.Errorf("resolve file leaf %s: %w", src, err)
+	}
+
+	name := filepath.Base(abs)
+	if name == string(filepath.Separator) {
+		return "", fmt.Errorf("%w: %q", errNoBasename, src)
+	}
+
+	return name, nil
 }
 
 // CopyTree links or copies src to dst, recursing into directories (Martian file

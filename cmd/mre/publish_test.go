@@ -14,10 +14,15 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
+// leaf is the path below the files dir of the leaf in ordinal dir n. Every
+// leaf shares one basename, as the outputs of sibling chunks do, so the layout
+// must tell leaves apart by their ordinal.
+func leaf(n string) string { return n + "/out" }
+
 // marker builds a file transport-marker leaf value as mre writes it into a
 // sidecar; dirMarker is its directory counterpart (a staged `path`/dir leaf).
-func marker(n string) string    { return shim.FileMarker + "f/" + n }
-func dirMarker(n string) string { return shim.DirMarker + "f/" + n }
+func marker(n string) string    { return shim.FileMarker + "f/" + leaf(n) }
+func dirMarker(n string) string { return shim.DirMarker + "f/" + leaf(n) }
 
 // mustPublish runs publishOuts and fails the test on a shape error, returning the
 // published outs tree.
@@ -33,8 +38,8 @@ func mustPublish(t *testing.T, pub *publisher, params []ir.Param, outs map[strin
 }
 
 // TestPublishLayoutMapping pins the funnel-free layout mode (#12): from the raw
-// marker-bearing sidecar (no files staged), it maps each leaf's transport
-// basename to its outs/ rel path(s) and records one manifest entry per leaf, with
+// marker-bearing sidecar (no files staged), it maps each leaf's path below the
+// files dir to its outs/ rel path(s) and records one manifest entry per leaf, with
 // is_dir taken from the leaf's marker (its ground-truth dir-ness stat'd at
 // staging time) — WITHOUT copying anything.
 func TestPublishLayoutMapping(t *testing.T) {
@@ -54,10 +59,10 @@ func TestPublishLayoutMapping(t *testing.T) {
 	published := mustPublish(t, pub, params, outs)
 
 	wantLayout := map[string][]string{
-		"L0000": {"aln.bam"},
-		"L0001": {"shards/0.txt"},
-		"L0002": {"shards/1.txt"},
-		"L0003": {"workdir"},
+		leaf("L0000"): {"aln.bam"},
+		leaf("L0001"): {"shards/0.txt"},
+		leaf("L0002"): {"shards/1.txt"},
+		leaf("L0003"): {"workdir"},
 	}
 	if diff := cmp.Diff(wantLayout, pub.layout); diff != "" {
 		t.Errorf("layout mismatch (-want +got):\n%s", diff)
@@ -163,7 +168,7 @@ func TestPublishShapeMismatchErrors(t *testing.T) {
 // publishes null and adds nothing to the layout. The sidecar is the one
 // WriteBundle produces, as on the real path.
 func TestPublishKeepsMarkerShapedStrings(t *testing.T) {
-	const shaped = "@mre:file:f/L0000.txt"
+	const shaped = "@mre:file:f/L0000/x.txt"
 
 	params := []ir.Param{
 		{Name: "s", BaseType: "string"},
@@ -282,7 +287,7 @@ func TestPublishLayoutOutNameCollision(t *testing.T) {
 		t.Fatalf("collision not disambiguated: a=%v b=%v", got["a"], got["b"])
 	}
 
-	want := map[string][]string{"L0000": {"shared.txt"}, "L0001": {"shared_1.txt"}}
+	want := map[string][]string{leaf("L0000"): {"shared.txt"}, leaf("L0001"): {"shared_1.txt"}}
 	if diff := cmp.Diff(want, pub.layout); diff != "" {
 		t.Errorf("collision layout mismatch (-want +got):\n%s", diff)
 	}
@@ -300,7 +305,7 @@ func TestPublishLayoutOutNameCollision(t *testing.T) {
 
 // TestPublishLayoutRepeatedLeafDedup pins that ONE leaf referenced by two
 // outputs resolving to the same rel publishes once: the rel appears once in
-// layout[base] and once in the manifest — re-establishing, for layout mode, the
+// layout[leaf] and once in the manifest — re-establishing, for layout mode, the
 // same-source dedup the copying mode had. Without it the PUBLISH_LEAF fan-out
 // would spawn two tasks writing the same outs/ destination and the manifest
 // would double-count the output.
@@ -319,7 +324,7 @@ func TestPublishLayoutRepeatedLeafDedup(t *testing.T) {
 		t.Fatalf("repeated leaf rels = %v/%v, want shared.txt/shared.txt", got["a"], got["b"])
 	}
 
-	wantLayout := map[string][]string{"L0000": {"shared.txt"}}
+	wantLayout := map[string][]string{leaf("L0000"): {"shared.txt"}}
 	if diff := cmp.Diff(wantLayout, pub.layout); diff != "" {
 		t.Errorf("repeated-leaf layout mismatch (-want +got):\n%s", diff)
 	}
@@ -427,7 +432,7 @@ func TestPublishOutsMapIllegalKeyWarns(t *testing.T) {
 		t.Errorf("published outs mismatch (-want +got):\n%s", diff)
 	}
 
-	wantLayout := map[string][]string{"L0004": {"reports/ok.txt"}}
+	wantLayout := map[string][]string{leaf("L0004"): {"reports/ok.txt"}}
 	if diff := cmp.Diff(wantLayout, pub.layout); diff != "" {
 		t.Errorf("layout mismatch (-want +got):\n%s", diff)
 	}
@@ -535,18 +540,17 @@ func TestMaterializeOuts(t *testing.T) {
 	leaves := filepath.Join(root, "f")
 	outs := filepath.Join(root, "outs")
 
-	if err := os.MkdirAll(filepath.Join(leaves, "L0002"), 0o750); err != nil {
-		t.Fatalf("mkdir leaf dir: %v", err)
-	}
-	writeLeaf(t, filepath.Join(leaves, "L0000.bam"), "aln")
-	writeLeaf(t, filepath.Join(leaves, "L0001.txt"), "shared")
-	writeLeaf(t, filepath.Join(leaves, "L0002", "part.txt"), "chunk")
+	writeLeaf(t, filepath.Join(leaves, "L0000", "x.bam"), "aln")
+	writeLeaf(t, filepath.Join(leaves, "L0001", "x.txt"), "shared")
+	writeLeaf(t, filepath.Join(leaves, "L0002", "work", "part.txt"), "chunk")
+	writeLeaf(t, filepath.Join(leaves, "L0003", "x.txt"), "other")
 
 	layout := map[string][]string{
-		"L0000.bam": {"aln.bam"},
-		"L0001.txt": {"a.txt", "b.txt"}, // one leaf referenced by two outputs
-		"L0002":     {"workdir"},        // directory leaf
-		"L9999.txt": {"absent.txt"},     // no staged leaf -> skipped
+		"L0000/x.bam": {"aln.bam"},
+		"L0001/x.txt": {"a.txt", "b.txt"}, // one leaf referenced by two outputs
+		"L0002/work":  {"workdir"},        // directory leaf
+		"L0003/x.txt": {"c.txt"},          // shares L0001's basename
+		"L9999/x.txt": {"absent.txt"},     // no staged leaf -> skipped
 	}
 
 	if err := materializeOuts(leaves, outs, layout); err != nil {
@@ -557,6 +561,7 @@ func TestMaterializeOuts(t *testing.T) {
 		"aln.bam":          "aln",
 		"a.txt":            "shared",
 		"b.txt":            "shared",
+		"c.txt":            "other",
 		"workdir/part.txt": "chunk",
 	}
 	for rel, content := range want {

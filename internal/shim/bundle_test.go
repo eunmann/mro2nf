@@ -20,43 +20,61 @@ func fileTable() *types.Table {
 	})
 }
 
-// TestMarkFilesPreservesExtension guards a real CellRanger failure: Martian
-// typed-file readers reconstruct a leaf's on-disk path from its filetype
-// extension (the Rust equivalent of Path::with_extension("bincode")). A staged
-// leaf therefore must keep the source file's extension, or the reader looks for
-// `<leaf>.bincode` next to a bare `<leaf>` and fails with NotFound. The transport
-// leaf stays ordinally named (collision-free) but carries the original extension.
-func TestMarkFilesPreservesExtension(t *testing.T) {
+// TestMarkFilesKeepsBasename guards #284: a stage reads sample names and
+// extensions from its inputs' basenames, so each leaf keeps the basename mrp
+// would pass, under its own ordinal dir so leaves sharing a basename never
+// collide. A second bundle written from the first's resolved paths keeps it too.
+func TestMarkFilesKeepsBasename(t *testing.T) {
 	dir := t.TempDir()
 
-	srcDir := filepath.Join(dir, "src")
-	if err := os.MkdirAll(srcDir, 0o755); err != nil {
-		t.Fatal(err)
+	samples := []string{"sampleA", "sampleB"}
+	srcs := make([]any, 0, len(samples))
+
+	for i, sample := range samples {
+		src := filepath.Join(dir, sample, "reads.fastq.gz")
+		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(src, []byte{byte('a' + i)}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		srcs = append(srcs, src)
 	}
 
-	src := filepath.Join(srcDir, "filtered_bcs_groups.bincode")
-	if err := os.WriteFile(src, []byte("payload"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	params := []ir.Param{{Name: "f", BaseType: "bincode", IsFile: true}}
-	bundle := filepath.Join(dir, "bundle")
-	if err := shim.WriteBundle(bundle, map[string]any{"f": src}, params, fileTable(), nil); err != nil {
+	params := []ir.Param{{Name: "fs", BaseType: "fastq.gz", IsFile: true, ArrayDim: 1}}
+	first := filepath.Join(dir, "first")
+	if err := shim.WriteBundle(first, map[string]any{"fs": srcs}, params, fileTable(), nil); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
-	// The leaf keeps the .bincode extension so with_extension("bincode") resolves.
-	if _, err := os.Stat(filepath.Join(bundle, "f", "L0000.bincode")); err != nil {
-		t.Errorf("leaf should be staged as f/L0000.bincode (extension preserved): %v", err)
+	resolved, err := shim.ReadBundle(first)
+	if err != nil {
+		t.Fatalf("ReadBundle: %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
-	if err != nil {
+	var mid map[string]any
+	if err := json.Unmarshal(resolved, &mid); err != nil {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(raw), "@mre:file:f/L0000.bincode") {
-		t.Errorf("marker should carry the .bincode extension, got: %s", raw)
+	second := filepath.Join(dir, "second")
+	marked, err := shim.MarkFiles(second, mid, params, fileTable(), nil)
+	if err != nil {
+		t.Fatalf("MarkFiles: %v", err)
+	}
+
+	want := map[string]any{"fs": []any{"@mre:file:f/L0000/reads.fastq.gz", "@mre:file:f/L0001/reads.fastq.gz"}}
+	if diff := cmp.Diff(want, marked); diff != "" {
+		t.Errorf("markers (-want +got):\n%s", diff)
+	}
+
+	for i, rel := range []string{"f/L0000/reads.fastq.gz", "f/L0001/reads.fastq.gz"} {
+		got, err := os.ReadFile(filepath.Join(second, rel))
+		if err != nil || string(got) != string(rune('a'+i)) {
+			t.Errorf("%s = %q (err %v), want %q", rel, got, err, string(rune('a'+i)))
+		}
 	}
 }
 
@@ -88,23 +106,15 @@ func TestBundleRoundTrip(t *testing.T) {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
-	// The file was staged into the bundle under a flat ordinal leaf name (the
-	// original basename is dropped, but its extension is preserved) and the payload
-	// now holds its marker.
 	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(string(raw), "@mre:file:f/L0000.txt") {
-		t.Errorf("data.json should contain a flat ordinal file marker, got: %s", raw)
+	if !strings.Contains(string(raw), "@mre:file:f/L0000/note.txt") {
+		t.Errorf("data.json should contain an ordinal file marker, got: %s", raw)
 	}
 
-	if _, err := os.Stat(filepath.Join(bundle, "f", "L0000.txt")); err != nil {
-		t.Errorf("leaf should be staged as f/L0000.txt: %v", err)
-	}
-
-	// Read it back; the marker resolves to an absolute path that exists.
 	resolved, err := shim.ReadBundle(bundle)
 	if err != nil {
 		t.Fatalf("ReadBundle: %v", err)
@@ -116,8 +126,8 @@ func TestBundleRoundTrip(t *testing.T) {
 	}
 
 	path, ok := got["f"].(string)
-	if !ok || !filepath.IsAbs(path) {
-		t.Fatalf("resolved f = %v, want an absolute path", got["f"])
+	if !ok || !filepath.IsAbs(path) || filepath.Base(path) != "note.txt" {
+		t.Fatalf("resolved f = %v, want an absolute path ending in note.txt", got["f"])
 	}
 
 	content, err := os.ReadFile(path)
@@ -171,14 +181,38 @@ func TestMarkFilesDirLeaf(t *testing.T) {
 	}
 }
 
+// TestMarkFilesNamesDirSpelledWithSuffix checks a directory leaf spelled with a
+// trailing "/" or "/." keeps the directory's own name, so its marker is valid.
+func TestMarkFilesNamesDirSpelledWithSuffix(t *testing.T) {
+	dir := t.TempDir()
+
+	srcDir := filepath.Join(dir, "outdir")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	params := []ir.Param{{Name: "d", BaseType: "path", IsFile: true, ArrayDim: 1}}
+	payload := map[string]any{"d": []any{srcDir + "/", srcDir + "/."}}
+
+	marked, err := shim.MarkFiles(filepath.Join(dir, "bundle"), payload, params, fileTable(), nil)
+	if err != nil {
+		t.Fatalf("MarkFiles: %v", err)
+	}
+
+	want := map[string]any{"d": []any{"@mre:dir:f/L0000/outdir", "@mre:dir:f/L0001/outdir"}}
+	if diff := cmp.Diff(want, marked); diff != "" {
+		t.Errorf("markers (-want +got):\n%s", diff)
+	}
+}
+
 // TestMarkerRoundTrip pins the marker encode/decode contract both ways.
 func TestMarkerRoundTrip(t *testing.T) {
 	cases := []struct {
 		rel   string
 		isDir bool
 	}{
-		{"f/L0000", false},
-		{"f/L0001", true},
+		{"f/L0000/reads.txt", false},
+		{"f/L0001/ref", true},
 	}
 
 	for _, c := range cases {
@@ -217,20 +251,20 @@ func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
 		{Name: "m", BaseType: "map"},
 	}
 	strs := []any{
-		"@mre:file:f/L0000.txt",
-		"@mre:dir:f/L0000.txt",
-		"@mre:str:@mre:file:f/L0000.txt",
+		"@mre:file:f/L0000/made.txt",
+		"@mre:dir:f/L0000/made.txt",
+		"@mre:str:@mre:file:f/L0000/made.txt",
 		"@mre:",
 		"@mre:file:../elsewhere",
 		"plain",
 	}
 	payload := map[string]any{
 		"made":  src,
-		"fake":  "@mre:file:f/L0000.txt",
-		"s":     "@mre:file:f/L0000.txt",
+		"fake":  "@mre:file:f/L0000/made.txt",
+		"s":     "@mre:file:f/L0000/made.txt",
 		"arr":   strs,
-		"m":     map[string]any{"k": "@mre:dir:f/L0000.txt", "nested": strs},
-		"extra": "@mre:file:f/L0000.txt",
+		"m":     map[string]any{"k": "@mre:dir:f/L0000/made.txt", "nested": strs},
+		"extra": "@mre:file:f/L0000/made.txt",
 	}
 
 	bundle := filepath.Join(dir, "bundle")
@@ -254,7 +288,7 @@ func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
 	}
 
 	want := map[string]any{
-		"made":  filepath.Join(abs, "f", "L0000.txt"),
+		"made":  filepath.Join(abs, "f", "L0000", "made.txt"),
 		"fake":  payload["fake"],
 		"s":     payload["s"],
 		"arr":   strs,
@@ -267,18 +301,27 @@ func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
 }
 
 // TestReadBundleRejectsMalformedMarkers guards #328's read side: mre writes a
-// marker only as f/L<ordinal>[.ext] inside the bundle and escapes every other
-// reserved string, so a payload string carrying the reserved prefix in any
-// other shape (a rel leaving the bundle, an absolute rel, an unknown kind) is a
-// corrupt or forged bundle and fails the read instead of resolving to a path.
+// marker only as f/L<ordinal>/<basename> inside the bundle and escapes every
+// other reserved string, so a payload string carrying the reserved prefix in any
+// other shape (a rel leaving the bundle, an absolute rel, no basename or more
+// than one name under the ordinal, an unknown kind) is a corrupt or forged
+// bundle and fails the read instead of resolving to a path.
 func TestReadBundleRejectsMalformedMarkers(t *testing.T) {
 	bad := []string{
 		"@mre:file:../elsewhere",
 		"@mre:dir:/abs/path",
 		"@mre:file:f/../../elsewhere",
-		"@mre:file:f/L12.txt",
-		"@mre:file:g/L0000",
-		"@mre:file:f/L0000/sub",
+		"@mre:file:f/L12/a.txt",
+		"@mre:file:g/L0000/a.txt",
+		"@mre:file:f/L0000",
+		"@mre:file:f/L0000.txt",
+		"@mre:file:f/L0000/",
+		"@mre:file:f/L0000/.",
+		"@mre:file:f/L0000/..",
+		"@mre:file:f/L0000/../../x",
+		"@mre:file:f/L0000/sub/a.txt",
+		"@mre:file:f/L0000/a\x00b",
+		"@mre:file:f/L0000a/b",
 		"@mre:other:x",
 		"@mre:",
 	}
@@ -302,9 +345,12 @@ func TestReadBundleRejectsMalformedMarkers(t *testing.T) {
 	}
 
 	good := map[string]string{
-		"@mre:file:f/L0000":         "f/L0000",
-		"@mre:file:f/L12345.tar.gz": "f/L12345.tar.gz",
-		"@mre:dir:f/L0001":          "f/L0001",
+		"@mre:file:f/L0000/reads":           "f/L0000/reads",
+		"@mre:file:f/L12345/a.tar.gz":       "f/L12345/a.tar.gz",
+		"@mre:dir:f/L0001/ref":              "f/L0001/ref",
+		"@mre:file:f/L0002/.hidden":         "f/L0002/.hidden",
+		"@mre:file:f/L0003/...":             "f/L0003/...",
+		"@mre:file:f/L0004/sp ace;$x*?.bam": "f/L0004/sp ace;$x*?.bam",
 	}
 
 	for s, rel := range good {

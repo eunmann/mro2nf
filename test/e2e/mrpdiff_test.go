@@ -279,6 +279,8 @@ var mrpDiffCases = []mrpDiffCase{
 	// #328: string values shaped like @mre: markers reach the stage and the
 	// published outs exactly as mrp gives them.
 	{name: "marker_strings", native: true, runner: true},
+	// #284: every file a stage receives keeps the basename mrp passes it.
+	{name: "basename_echo", native: true, runner: true},
 	{name: "map_file"},
 	{name: "map_file_keyed"},
 	{name: "map_split_file"},

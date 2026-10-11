@@ -3,6 +3,8 @@ package emit
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -680,25 +682,29 @@ func mustNotContain(t *testing.T, path string, unwanted ...string) {
 	}
 }
 
-// leafContains reports whether any file directly under dir contains want.
+// leafContains reports whether any file in the tree under dir contains want.
 func leafContains(t *testing.T, dir, want string) bool {
 	t.Helper()
 
-	entries, err := os.ReadDir(dir)
+	found := false
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || found {
+			return err
+		}
+
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read leaf: %w", err)
+		}
+
+		found = strings.Contains(string(b), want)
+
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, e := range entries {
-		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if strings.Contains(string(b), want) {
-			return true
-		}
-	}
-
-	return false
+	return found
 }
