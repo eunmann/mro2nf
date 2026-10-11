@@ -70,8 +70,12 @@ Each generated selector covers every naming family the emitter produces:
   These embed the **call** name, which is also what an mrp override key's last
   segment names, so aliased calls (`call STAGE as X`, keyed `X`) match too.
 
-To hand-write an overlay, use the same shapes, e.g.
-`withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '8 GB' }`.
+To hand-write an overlay, use the same shapes and set the `ext` value beside
+each directive, e.g.
+`withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '8 GB'; ext.mem_gb = 8; cpus = 4; ext.threads = 4 }`.
+A plain `memory` / `cpus` overlay only sizes the task: the stage still sees its
+`.mro` request in `__mem_gb`/`__threads` and `_jobinfo`, and `-monitor` still
+enforces that request on the first attempt.
 
 ## Scheduler throttling
 
