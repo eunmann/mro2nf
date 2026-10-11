@@ -341,8 +341,7 @@ compacted with object key order and number tokens byte-exact; an existing
 absolute path becomes its content hash (a tree hash for a directory) plus its
 basename, and an absent path under the phase's own `files` dir loses that host
 prefix. `mrp` runs with `--vdrmode=disable` so intermediate files still exist to
-hash. The `-native-runner` leg is excluded: it calls stage functions in-process
-and writes no `_args`/`_outs`. Every known divergence lives in one allowlist, `test/e2e/divergences.json`
+hash. Every known divergence lives in one allowlist, `test/e2e/divergences.json`
 (`test/divergence` loads and validates it), and the comparison excuses a
 difference only through an entry there: a key-scoped ABI entry names its
 fixtures, file, rule and key, and a normalization built into a comparator (such

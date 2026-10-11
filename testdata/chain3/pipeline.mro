@@ -1,6 +1,5 @@
-# #81 N-stage chain: A -> B -> C, each single-consumer & equal-resource, A a
-# source. With -fuse-chains all three fold into one task (C's process); A and B
-# fold away. Output byte-identical to mrp either way.
+# A three-stage linear chain A -> B -> C, each stage feeding only the next, A a
+# source.
 stage A(
     in  int x,
     out int y,

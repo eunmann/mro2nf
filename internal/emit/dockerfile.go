@@ -55,8 +55,7 @@ const (
 	ctrAdapters = ctrRoot + "/adapters"
 	ctrMrjob    = ctrRoot + "/mrjob"
 	ctrStages   = ctrRoot + "/stages"
-	ctrRunner   = ctrRoot + "/runner" // -native-runner Python runner, baked for container backends
-	buildCtxDir = "runtime"           // build-context subdir under the output project
+	buildCtxDir = "runtime" // build-context subdir under the output project
 )
 
 // runtimeBase is the generated image's base, pinned by digest so a moved tag
@@ -153,8 +152,8 @@ func checkConfigTools(opts Options, roots sourceRoots) error {
 
 // containerBuild assembles a self-contained Docker build context under the
 // output project and returns the in-container paths the generated scripts bake
-// (so mre, the adapters, the stage code, and — under -native-runner — the
-// Python runner resolve inside an isolated task). The host artifacts are copied
+// (so mre, the adapters, and the stage code resolve inside an isolated task).
+// The host artifacts are copied
 // into <out>/runtime/ and a Dockerfile is written so `docker build -t <image>
 // <out>` produces the runtime image.
 func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, error) {
@@ -190,18 +189,6 @@ func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, err
 		return g, err
 	}
 
-	// -native-runner reads run_stage.py from the project dir at task runtime,
-	// which an isolated container worker (AWS Batch / HealthOmics) cannot see —
-	// so bake the embedded runner into the image and point the generated scripts
-	// at the fixed in-image path (#99).
-	if opts.NativeRunner {
-		if err := copyEmbeddedDir(runnerAssets, runnerDir, filepath.Join(rt, "runner"), "runner"); err != nil {
-			return g, err
-		}
-
-		g.runnerBase = ctrRunner
-	}
-
 	hasVendored := false
 	for _, src := range opts.StageCode {
 		if !isBakedToolkitCmd(src) {
@@ -217,7 +204,7 @@ func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, err
 
 	return g, writeFile(filepath.Join(opts.OutDir, "Dockerfile"),
 		[]byte(dockerfile(target, opts.Shell != "", hasVendored, opts.Mrjob != "",
-			opts.NativeRunner, bakedToolkitCmds(opts.StageCode))))
+			bakedToolkitCmds(opts.StageCode))))
 }
 
 // dockerignore renders the .dockerignore beside the Dockerfile: the build
@@ -402,10 +389,8 @@ func symlinkSibling(stagesDir, target, name string) error {
 // with bash + ps and no ENTRYPOINT (both AWS Batch and HealthOmics inject a bash
 // launcher). x86_64 only. Each COPY is emitted only when its source was staged
 // (checkContainerSources verifies the on-disk sources and copyTree errors on a
-// missing one; the -native-runner runner is copied from the embedded FS by
-// copyEmbeddedDir, so it cannot be absent), so an absent optional piece never
-// breaks `docker build`.
-func dockerfile(target Target, hasAdapters, hasStages, hasMrjob, hasRunner bool, pathCmds []string) string {
+// missing one), so an absent optional piece never breaks `docker build`.
+func dockerfile(target Target, hasAdapters, hasStages, hasMrjob bool, pathCmds []string) string {
 	awsCLI := ""
 	if target == TargetAWSBatch {
 		// Classic AWS Batch staging copies inputs/outputs with the aws CLI.
@@ -421,9 +406,6 @@ func dockerfile(target Target, hasAdapters, hasStages, hasMrjob, hasRunner bool,
 	}
 	if hasMrjob {
 		copies += fmt.Sprintf("COPY %s/mrjob %s\nRUN chmod +x %s\n", buildCtxDir, ctrMrjob, ctrMrjob)
-	}
-	if hasRunner {
-		copies += fmt.Sprintf("COPY %s/runner %s\n", buildCtxDir, ctrRunner)
 	}
 
 	return fmt.Sprintf(`# Runtime image for the transpiled pipeline. Build (x86_64 only):

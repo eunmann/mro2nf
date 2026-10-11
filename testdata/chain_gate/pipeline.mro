@@ -1,6 +1,5 @@
-# #59 Lever 4 fold-safety: SRC feeds the transform-consumer USE *and* gates GATE
-# via disabled = SRC.flag. SRC therefore has two consumers and must NOT fold
-# under -fuse-chains (else GATE's disable gate would reference a dropped ch_SRC).
+# SRC feeds USE and also gates GATE via disabled = SRC.flag, so one producer
+# has a binding consumer and a disable-gate consumer.
 stage SRC(
     in  int  x,
     out int  y,

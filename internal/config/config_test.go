@@ -26,10 +26,8 @@ func TestLoad(t *testing.T) {
 # a project's transpiler defaults
 target: awsbatch
 container: "ecr/repo:1"   # inline comment kept out of the value
-fuse-chains: true
-fold-disables: false
 native: true
-native-runner: false
+monitor: false
 `))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -41,21 +39,15 @@ native-runner: false
 	if cfg.Container == nil || *cfg.Container != "ecr/repo:1" {
 		t.Errorf("Container = %v, want ecr/repo:1 (quotes + inline comment stripped)", cfg.Container)
 	}
-	if cfg.FuseChains == nil || !*cfg.FuseChains {
-		t.Errorf("FuseChains = %v, want true", cfg.FuseChains)
-	}
-	if cfg.FoldDisables == nil || *cfg.FoldDisables {
-		t.Errorf("FoldDisables = %v, want false", cfg.FoldDisables)
-	}
 	if cfg.Native == nil || !*cfg.Native {
 		t.Errorf("Native = %v, want true", cfg.Native)
 	}
-	if cfg.NativeRunner == nil || *cfg.NativeRunner {
-		t.Errorf("NativeRunner = %v, want false", cfg.NativeRunner)
+	if cfg.Monitor == nil || *cfg.Monitor {
+		t.Errorf("Monitor = %v, want false", cfg.Monitor)
 	}
 	// An unset key stays nil so the CLI keeps the flag default.
-	if cfg.Monitor != nil {
-		t.Errorf("Monitor = %v, want nil (unset)", cfg.Monitor)
+	if cfg.Mre != nil {
+		t.Errorf("Mre = %v, want nil (unset)", cfg.Mre)
 	}
 }
 
@@ -65,7 +57,7 @@ func TestLoadMissingIsNotAnError(t *testing.T) {
 		t.Fatalf("missing file: want no error, got %v", err)
 	}
 
-	if cfg.Target != nil || cfg.FuseChains != nil {
+	if cfg.Target != nil || cfg.Native != nil {
 		t.Errorf("missing file: want zero Config, got %+v", cfg)
 	}
 }
@@ -82,8 +74,11 @@ func TestLoadRejectsBadInput(t *testing.T) {
 		"unknown key":       "bogus: 1\n",
 		"typo'd native key": "natives: true\n",
 		"malformed line":    "no colon here\n",
-		"non-bool":          "fuse-chains: yes-please\n",
+		"non-bool":          "monitor: yes-please\n",
 		"non-bool native":   "native: yes-please\n",
+		"deleted fold key":  "fold-disables: true\n",
+		"deleted fuse key":  "fuse-chains: true\n",
+		"deleted runner":    "native-runner: true\n",
 	}
 
 	for name, body := range cases {

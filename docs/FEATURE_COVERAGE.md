@@ -51,7 +51,7 @@ tracked · 🚫 runtime/`mrp`-only, out of scope for a transpiler.
 | typed arrays `T[]`, multi-dim `T[][]` | ✅ | e2e `multidim`, `split_test` |
 | typed maps `map<T>` (output) | ✅ | e2e `typedmap_out` |
 | int→float coercion; float→int rejected | ✅ | `martian/syntax` (corpus parse) |
-| whole-number float literal → int param (`5.0` → `5`) | ✅ (type-directed `CoerceScalars` on bound inputs only; a split-returned chunk arg reaches main and join as the split wrote it, as mrp's `ChunkDef.Merge` passes it through) | e2e `float_to_int`, `chunk_float_int`; unit `TestCoerceScalars`, `TestProducerCoerceInputs`, `TestRunnerConformanceChunkArgsAsWritten` |
+| whole-number float literal → int param (`5.0` → `5`) | ✅ (type-directed `CoerceScalars` on bound inputs only; a split-returned chunk arg reaches main and join as the split wrote it, as mrp's `ChunkDef.Merge` passes it through) | e2e `float_to_int`, `chunk_float_int`; unit `TestCoerceScalars`, `TestProducerCoerceInputs` |
 | literals: int/float/sci, bool, null, arrays, maps, struct literals, escapes | ✅ | `martian/syntax`; e2e entry args |
 | bindings: `self.x`, `self.x.y`, `STAGE`, `STAGE.out`, `STAGE.out.field`, `STAGE.default` | ✅ | unit `bind`; e2e `struct_proj`, `default_out` |
 | **field projection through arrays** (`CALL.s.field`) | ✅ | unit `TestResolveArrayProjection`, e2e `struct_proj` |
@@ -116,10 +116,10 @@ tracked · 🚫 runtime/`mrp`-only, out of scope for a transpiler.
 | `martian` module API (make_path, log_info/log_warn, update_progress, exit, alarm) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain`, `api_smoke` |
 | `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` (using(mem_gb=3,threads=2)→mem 3,threads 2) |
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
-| stage output validation (mrp `verifyOutput`) | ✅ a stage's final `_outs` (non-split main, or join) are checked like mrp: every declared output present, each non-null value of its declared type (a struct with every member key, an int a JSON integer, a typed map of files with filename-legal keys); a violation fails the stage task before any consumer binds it. Per-chunk outs are not checked, as at mrp's default enforcement level. The native runner applies the same check | e2e `TestInvalidOutputFailsLikeMrp` (`missing_struct_key`), `TestMrpDiffFailureParity` (`missing_struct_key`, `bad_out_type` fail the same stage as under real mrp); unit `TestValidateOutputs`, `TestProducerValidateOuts`, runner `ValidateOutputsTest` |
+| stage output validation (mrp `verifyOutput`) | ✅ a stage's final `_outs` (non-split main, or join) are checked like mrp: every declared output present, each non-null value of its declared type (a struct with every member key, an int a JSON integer, a typed map of files with filename-legal keys); a violation fails the stage task before any consumer binds it. Per-chunk outs are not checked, as at mrp's default enforcement level | e2e `TestInvalidOutputFailsLikeMrp` (`missing_struct_key`), `TestMrpDiffFailureParity` (`missing_struct_key`, `bad_out_type` fail the same stage as under real mrp); unit `TestValidateOutputs`, `TestProducerValidateOuts` |
 | ASSERT vs retryable-error classification | ✅ shim exits 42 for an ASSERT (terminate) vs 1 for a retryable failure; config's dynamic `errorStrategy` routes accordingly | unit `TestStageFailureClassification`, `TestEmitConfig`; e2e `TestMrpDiffFailureParity` (`assert_min`, `assert_split`, `assert_join` are an ASSERT and `stage_raise` an error under real mrp and mro2nf alike) |
 | auto-adjust-memory / OOM escalation | ✅ memory directives grow with `task.attempt`, so an OOM-killed stage (a retryable failure) is retried with more memory instead of failing identically; cpus do not escalate. Attempt 1 is unchanged. The escalation sizes the task and the `-monitor` limits only; the stage keeps seeing its request | unit `TestEmitModules` (`* task.attempt`), `TestMonitorLimitsFollowRetryAllocation`; e2e `TestOrdinaryFailureRetriesWithEscalatedMemory` (`flaky_retry`) |
-| thread-limit env vars (mrp's `thread_envs`) | ✅ #247 every stage runs with `GOMAXPROCS`, `MKL_NUM_THREADS`, `NUMEXPR_MAX_THREADS`, `NUMEXPR_NUM_THREADS`, `OMP_NUM_THREADS`, `OMP_THREAD_LIMIT`, `POLARS_MAX_THREADS`, `ROOT_MAX_THREADS` and `TF_NUM_THREADS` set to ceil(threads), overriding inherited values as mrp does; the native runner sets them before importing the stage | unit `TestAdapterThreadEnvs`, runner `test_thread_envs_override_inherited`, `TestRunnerConformance` |
+| thread-limit env vars (mrp's `thread_envs`) | ✅ #247 every stage runs with `GOMAXPROCS`, `MKL_NUM_THREADS`, `NUMEXPR_MAX_THREADS`, `NUMEXPR_NUM_THREADS`, `OMP_NUM_THREADS`, `OMP_THREAD_LIMIT`, `POLARS_MAX_THREADS`, `ROOT_MAX_THREADS` and `TF_NUM_THREADS` set to ceil(threads), overriding inherited values as mrp does | unit `TestAdapterThreadEnvs` |
 | `--monitor` memory enforcement | ✅ with `mro2nf -monitor`: an RSS kill at `mem_gb` via the process-group monitor (mrp's primary kill) plus a `prlimit --as` vmem cap at `vmem_gb` | unit `TestMemMonitor*`, `TestRunAdapterMonitorMemoryQuota`, `TestLimitedCommandMonitor` |
 
 ## Outputs / storage — storage-management
@@ -148,32 +148,27 @@ tracked · 🚫 runtime/`mrp`-only, out of scope for a transpiler.
 | web UI / HTTP API / mrstat | 🚫 use `nextflow log`/`-with-report` instead | — |
 | `mro check` / `mro graph` as conformance oracle | ✅ used to validate every fixture; `mro graph` ≈ `nextflow run -with-dag` | `test/e2e`, `mro check` |
 
-## Opt-in emission modes — `-fuse-chains`, `-fold-disables`, `-native`, `-native-runner`
+## Opt-in emission mode — `-native`
 
-These flags change the emitted *task graph*, never the outputs, so each gate
+The flag changes the emitted *task graph*, never the outputs, so each gate
 compares its run against the committed real-`mrp` golden, and `TestMrpDiff`
-anchors those goldens to live `mrp`: its anchor fixtures additionally run
-`-native` (and, wherever a py stage actually executes, `-native
--native-runner`) Nextflow legs against the same mrp pipestance, so the native
-emit path faces real `mrp` output, not only committed goldens. The trade-offs
-each flag opts into are surfaced as transpile-time diagnostics
+anchors those goldens to live `mrp`: its anchor fixtures additionally run a
+`-native` Nextflow leg against the same mrp pipestance, so the native emit
+path faces real `mrp` output, not only committed goldens. The trade-offs the
+flag opts into are surfaced as transpile-time diagnostics
 (`internal/emit/diagnostics.go`) — see `docs/TRANSPILER.md` §4.8.
 
 | Shape under the flag | Status | Test |
 |---|---|---|
-| `-fuse-chains`: single-consumer, equal-resource chain folded into one task | ✅ (coarser `-resume`/retry for the fused stages; Info diagnostic counts the fused chains) | e2e `TestFuseChains`; unit `TestBuildPlanChainFusion`, `TestDiagnoseFuseChains` |
-| `-fold-disables`: entry-determinable always-disabled call pruned to its null output | ✅ (Warn diagnostic per pruned call: overriding the gate input will not re-enable it) | e2e `TestFoldDisables`; unit `TestBuildPlanFoldDisables`, `TestDiagnoseFoldDisables` |
-| `-native` full collapse (plain/diamond DAGs, fused chains, value-only array & map forks, upstream split sources, invocation-known & runtime empty forks, file outputs through the native LAYOUT, wildcard/alias, exec+comp adapters) | ✅ **no** data-plane task remains (`assertNativeComplete`: no BIND/FORK/MERGE/DISABLE/BUILD_ENTRY_ARGS) and output equals the mrp golden | e2e `TestNativeComplete` |
+| `-native` full collapse (plain/diamond DAGs, linear chains, value-only array & map forks, upstream split sources, invocation-known & runtime empty forks, file outputs through the native LAYOUT, wildcard/alias, exec+comp adapters) | ✅ **no** data-plane task remains (`assertNativeComplete`: no BIND/FORK/MERGE/DISABLE/BUILD_ENTRY_ARGS) and output equals the mrp golden | e2e `TestNativeComplete` |
 | `-native` bounded remainder (file-bearing / multi-split / split-stage forks keep exactly one FORK resolve; map-over-sub-pipeline runs the keyed layer; a disabled map keeps FORK+MERGE as the skip mix point; nested value-only maps ride the `_KS` driver scatter) | ✅ the exact surviving data-plane process names are pinned per fixture, and each prints an Info diagnostic at transpile | e2e `TestNativeMode` |
 | `-native` scatter/merge-fold specifics (disabled sub-pipeline callees, fan-out consumers keeping their MERGE, empty-fork cascades) | ✅ | e2e `TestNativeScatter` |
 | `-native` file- and directory-typed entry inputs (baked leaves staged into the workflow) | ✅ | e2e `TestNativeFileEntry` |
 | `-native` launch-time override of a baked entry arg | ❌ **by design**: loud error, never a silent ignore — re-transpile to change entry values (HealthOmics: `parameter-template.json` still declares the params; supplying one fails the run, per the transpile-time Info) | e2e `TestNativeRejectsOverride`; unit `TestDiagnoseNativeHealthOmics` |
-| `-native` (+ `-native-runner`) on container backends (baked runner + entry args in the image) | ✅ | e2e `TestNativeContainerEmits`; docker e2e `TestGeneratedAWSBatchImageNative` |
+| `-native` on container backends (baked entry args in the image) | ✅ | e2e `TestNativeContainerEmits`; docker e2e `TestGeneratedAWSBatchImageNative` |
 | `-native` plan eligibility (what scatters, what keeps the FORK path, merge-fold rules, queue-pipeargs contexts) | ✅ decided once in `buildPlan`, so emitters cannot disagree | unit `internal/emit/native_test.go` (`TestBuildPlanNativeScatter*`, `TestBuildPlanMergeFold`, `TestSplitValueOnly`, …) |
-| `-native` composed with `-fuse-chains` / `-fold-disables` | ✅ the levers fire under `-native` and the composition reproduces the mrp golden with the pinned (empty) data-plane set | e2e `TestNativeCombos` |
-| every fixture statically linted under each opt-in flag (and `-native -native-runner`) | ✅ a Groovy syntax error in any flag-only emission branch fails the lint gate | e2e `TestNextflowLint` |
+| every fixture statically linted with and without `-native` | ✅ a Groovy syntax error in any `-native`-only emission branch fails the lint gate | e2e `TestNextflowLint` |
 | `-native` orchestration stays flat across fork widths / chunk counts | ✅ the bench gate's `-native` lanes require identical plumbing-task counts at two widths (constant OK, scaling is a bug) | e2e `TestBench` (`bench/forks`, `bench/split` native lanes; gated in `bench/baseline.json`) |
-| `-native-runner`: `py` stages via the embedded direct-call runner | ✅ `py` only — `exec`/`comp` stages keep the Martian adapter path (Info diagnostic per stage); `-monitor` enforcement runs in-process (RLIMIT_AS cap + RSS watchdog) | e2e `TestNativeRunner`, `TestNativeRunnerComposesWithNative`, `TestNativeRunnerExitContract`; unit `TestRunnerConformance*` (encoder/ABI conformance vs the adapter) |
 | `.mro2nf.yml` flag defaults (keys mirror flags; builtin < config < explicit flag) | ✅ | unit `internal/config` `TestLoad*`; `cmd/mro2nf` `TestApplyConfig*` |
 
 ## Divergences from mrp

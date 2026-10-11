@@ -11,10 +11,11 @@ func ref(param, id string) ir.Binding {
 	return ir.Binding{Param: param, Value: ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: id, Output: param}}}
 }
 
-// TestConsumerCount guards #59 Lever 4's fold-safety: consumerCount must count
-// every dependent on a call's output — input bindings, pipeline returns, AND
-// disable refs (which live on the call, not in its bindings). Missing a disable
-// consumer would fold a producer whose ch_<producer> the gate still references.
+// TestConsumerCount guards mergeFoldable's single-consumer rule: consumerCount
+// must count every dependent on a call's output — input bindings, pipeline
+// returns, AND disable refs (which live on the call, not in its bindings).
+// Missing a disable consumer would fold a producer's merge into another
+// consumer while the gate still references ch_<producer>.
 func TestConsumerCount(t *testing.T) {
 	p := &ir.Pipeline{
 		Calls: []ir.Call{

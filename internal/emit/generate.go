@@ -19,12 +19,7 @@ type genCtx struct {
 	mre     string
 	shell   string
 	mrjob   string
-	// runnerBase is the directory holding the -native-runner Python runner
-	// (run_stage.py + martian.py): "${projectDir}/_assets/runner" on a shared
-	// filesystem, or the baked ctrRunner path for a container backend where the
-	// project dir is not mounted into the isolated task.
-	runnerBase string
-	monitor    bool
+	monitor bool
 	// target decides which entry file-override schemes the head node accepts.
 	target Target
 	// confine passes -confine to every stage phase: an output that resolves
@@ -35,17 +30,13 @@ type genCtx struct {
 	code     map[string]string // stage name -> stage code path
 	// plan is the whole-program emission plan (per-call kinds + the keyed set),
 	// resolved once in buildPlan so the process/wiring/include sites read a fixed
-	// decision instead of re-deriving fuseable*/forward/chain predicates.
+	// decision instead of re-deriving fuseable*/forward predicates.
 	plan emitPlan
 }
 
-// stageCmd renders a stage-phase invocation, single-quoting every path so
-// spaces and shell metacharacters in paths are safe. The default runs the
-// phase through `mre` + the Martian adapter (-shell); under -native-runner a
-// Python stage instead execs the embedded run_stage.py directly (#79) — no
-// martian_shell.py adapter and no mre broker on the stage-execution hop. The
-// runner accepts the identical flag tail, so this branch is the only emitter
-// change.
+// stageCmd renders a stage-phase invocation through `mre` + the Martian adapter
+// (-shell), single-quoting every path so spaces and shell metacharacters in
+// paths are safe.
 func (g genCtx) stageCmd(phase string, s *ir.Stage) string {
 	return g.stageHead(phase, s) + g.resourceFlags(phase, s)
 }
@@ -91,31 +82,16 @@ func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
 }
 
 // resourceArg renders a resource number as a shell argument that mre's
-// ParseFloat and run_stage.py's float() read back: no exponent, and the
-// float32 the Martian parser stores widened exactly as mrp widens it.
+// ParseFloat reads back: no exponent, and the float32 the Martian parser
+// stores widened exactly as mrp widens it.
 func resourceArg(f float64) string {
 	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
-// stageHead renders the phase invocation up to the shared flag tail: the
-// direct-call runner for a Python stage under -native-runner, else the
-// mre+adapter invocation (with -mrjob for comp stages when configured).
+// stageHead renders the mre+adapter phase invocation up to the shared flag
+// tail (with -mrjob for comp stages when configured).
 func (g genCtx) stageHead(phase string, s *ir.Stage) string {
 	code := g.code[s.Name]
-
-	// A py stage can never carry src args (the Martian compiler rejects them:
-	// syntax/compile_stages.go "py stage type cannot have additional
-	// arguments"), so the runner path has nothing to forward.
-	if g.features.nativeRunner && s.Lang == ir.LangPy {
-		// runnerBase deliberately embeds ${projectDir} (a GString ref) so it stays
-		// raw; every other baked path is host-literal and goes through gstringLit,
-		// so a $ or \ in a stage-code / .mro path reaches bash byte-identical
-		// instead of resolving a Groovy variable (MissingPropertyException at task
-		// launch, or silently wrong args). runnerBase is the project dir on a shared
-		// FS, or the baked ctrRunner in a container image.
-		return fmt.Sprintf(`'python3' '%s/run_stage.py' %s -stagecode '%s' -call '%s' -mro '%s'`,
-			g.runnerBase, phase, gstringLit(code), gstringLit(g.entry), gstringLit(g.mroFile))
-	}
 
 	var cmd strings.Builder
 
@@ -262,8 +238,8 @@ func genPipeIncludes(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g gen
 	for _, c := range p.Calls {
 		cp := pp.calls[c.Name]
 
-		// A fused non-split / chain call is a self-contained per-call process —
-		// no wf_ import.
+		// A fused non-split call is a self-contained per-call process — no wf_
+		// import.
 		if cp.fusedInclude() {
 			continue
 		}
@@ -314,16 +290,8 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 		cp := pp.calls[c.Name]
 
 		switch cp.kind {
-		// A folded chain source (kindFusedAway) emits nothing; a pure forward
-		// (kindForward) routes the producer straight in (#14); an always-disabled
-		// call (kindFoldedOff, #59 Lever 1) emits only its null output in the
-		// wiring — all three need no process.
-		case kindFusedAway, kindForward, kindFoldedOff:
-
-		// #59 Lever 4: the chain consumer emits the combined producer+consumer
-		// process instead of a plain fused stage.
-		case kindFusedChain:
-			genFusedChainProcess(b, p.Name, cp.chain, g)
+		// A pure forward routes the producer straight in (#14): no process.
+		case kindForward:
 
 		case kindMapped:
 			genMappedProcesses(b, prog, p, c, cp, g)
@@ -481,9 +449,8 @@ process %[1]s_JOIN {
 		bundleInput("args"), bundleInputElems("args"), bundleOutput("outs"), joinGatherFlags)
 }
 
-// joinGatherFlags points a JOIN at its staged chunk bundles: the stage (mre or
-// the native runner) lists the task dir for chunk_N defs and out_chunk_N outs
-// itself and checks both against the split's chunks.json count. A
+// joinGatherFlags points a JOIN at its staged chunk bundles: mre lists the task
+// dir for chunk_N defs and out_chunk_N outs itself and checks both against the split's chunks.json count. A
 // shell-expanded list would hit the kernel's per-argument limit at ~8k chunks
 // and hide a failed listing as an empty join.
 const joinGatherFlags = "-chunksfile chunks.json -chunkdir ."
@@ -860,23 +827,6 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 	cp := g.plan.pipes[pipeline].calls[c.Name]
 
 	switch cp.kind {
-	// #59 Lever 4: a source folded into its consumer emits no wiring of its own.
-	case kindFusedAway:
-
-	// #59 Lever 1: an always-disabled call is pruned to its pre-generated null
-	// output bundle — downstream reads it exactly as it would a runtime skip.
-	case kindFoldedOff:
-		fmt.Fprintf(b, "    ch_%s = Channel.value(%s)\n", c.Name,
-			nullBundle("${projectDir}/nulls/"+Qualify(pipeline, c.Name)))
-
-	// The chain consumer runs the combined producer+consumer process off pipeargs.
-	case kindFusedChain:
-		var specs strings.Builder
-		for _, l := range cp.chain {
-			fmt.Fprintf(&specs, ", %s", specFile(bindName(pipeline, l.call.Name)))
-		}
-		fmt.Fprintf(b, "    ch_%s = %s(pa, types%s)\n", c.Name, fusedName(pipeline, c.Name), specs.String())
-
 	case kindMapped:
 		genMappedWiring(b, p, c, callee, g)
 
@@ -1053,76 +1003,6 @@ func fuseableStageCall(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Stage, 
 	return s, true
 }
 
-// chainFusion returns the maximal linear run of leaf stages ending at c that
-// -fuse-chains folds into one task (#59 Lever 4, extended to N stages by #81):
-// source-first, each stage feeding only the next, all equal-resource fuseable
-// leaves, the first a source with no call inputs. It walks backward from c,
-// prepending a producer while it is a single-consumer, equal-resource fuseable
-// leaf; the run must reach a source so no stage needs an external channel (the
-// fused task takes only pipeargs). Returns nil unless the chain has >= 2 stages.
-func chainFusion(c ir.Call, p *ir.Pipeline, prog *ir.Program, fuseChains bool) ([]chainLink, bool) {
-	if !fuseChains {
-		return nil, false
-	}
-
-	cs, ok := chainConsumer(c, prog)
-	if !ok {
-		return nil, false
-	}
-
-	chain := []chainLink{{call: c, stage: cs}}
-	cur, curStage := c, cs
-
-	for {
-		refs := refCalls(cur.Bindings)
-		if len(refs) == 0 {
-			break // reached a source — the chain is complete
-		}
-
-		if len(refs) != 1 {
-			return nil, false // a stage with two call inputs can't be a clean link
-		}
-
-		prod, ok := callByName(p, refs[0])
-		if !ok || consumerCount(prod.Name, p) != 1 {
-			return nil, false // shared producer — the chain must start at a source
-		}
-
-		ps, ok := chainConsumer(prod, prog)
-		if !ok || ps.Resources != curStage.Resources {
-			return nil, false
-		}
-
-		chain = append([]chainLink{{call: prod, stage: ps}}, chain...)
-		cur, curStage = prod, ps
-	}
-
-	// A fusion needs at least a producer and a consumer.
-	const minChain = 2
-	if len(chain) < minChain {
-		return nil, false
-	}
-
-	return chain, true
-}
-
-// chainConsumer reports whether c can be a link in a fused chain: a non-split
-// leaf stage that is not mapped/disabled/preflight. It permits a pure-forward
-// stage (#73) — its bind is a forward the fused process runs inline — so a source
-// feeding a forwarding stage folds too.
-func chainConsumer(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
-	if c.Mapped || c.Disabled != nil || c.Preflight {
-		return nil, false
-	}
-
-	s, ok := prog.Stages[c.Callable]
-	if !ok || s.Split {
-		return nil, false
-	}
-
-	return s, true
-}
-
 // callByName returns the pipeline call with the given instance id.
 func callByName(p *ir.Pipeline, name string) (ir.Call, bool) {
 	for _, c := range p.Calls {
@@ -1148,8 +1028,8 @@ func consumerCount(name string, p *ir.Pipeline) int {
 
 		// A disable ref (using(disabled = <call>.flag)) lives on the call, not in
 		// its bindings, but still depends on the producer's output — so it counts
-		// as a consumer (else the producer would be folded away and the gate's
-		// ch_<producer> would dangle).
+		// as a consumer (else mergeFoldable would fold the producer's merge into
+		// another consumer while the gate still reads ch_<producer>).
 		if c.Disabled != nil && c.Disabled.Kind == ir.RefKindCall && c.Disabled.ID == name {
 			n++
 		}
@@ -1162,73 +1042,6 @@ func consumerCount(name string, p *ir.Pipeline) int {
 	}
 
 	return n
-}
-
-// fusedAwayProducers is the set of source calls folded into a downstream
-// consumer by -fuse-chains, which must therefore not be emitted or wired on
-// their own.
-func fusedAwayProducers(p *ir.Pipeline, prog *ir.Program, fuseChains bool) map[string]bool {
-	if !fuseChains {
-		return nil
-	}
-
-	away := map[string]bool{}
-
-	for _, c := range p.Calls {
-		if chain, ok := chainFusion(c, p, prog, fuseChains); ok {
-			for _, l := range chain[:len(chain)-1] {
-				away[l.call.Name] = true
-			}
-		}
-	}
-
-	return away
-}
-
-// genFusedChainProcess emits one process running producer then consumer inline:
-// bind+main for the source, then bind+main for the consumer with the source's
-// outputs fed in locally (#59, Lever 4). Both use the consumer's directives (the
-// resources are equal, per chainFusion).
-func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink, g genCtx) {
-	last := chain[len(chain)-1]
-
-	var specInputs, script strings.Builder
-
-	for i, link := range chain {
-		fmt.Fprintf(&specInputs, "    path 'spec_%d.json'\n", i)
-
-		base := g.stageCmd("main", link.stage)
-
-		inputs := ""
-		if i > 0 {
-			inputs = fmt.Sprintf(" -inputs %s=outs_%d", chain[i-1].call.Name, i-1)
-		}
-
-		outVar := fmt.Sprintf("outs_%d", i)
-		if i == len(chain)-1 {
-			outVar = "outs"
-		}
-
-		fmt.Fprintf(&script, "    '%s' bind -spec 'spec_%d.json' -pipeargs pipeargs%s -o args_%d%s\n",
-			g.mre, i, inputs, i, g.producerArgs(link.call.Callable, types.RoleIn))
-		fmt.Fprintf(&script, "    %s -args args_%d%s -work . -o %s\n",
-			base, i, g.producerArgs(link.call.Callable, types.RoleMainOut), outVar)
-	}
-
-	fmt.Fprintf(b, `process %[1]s {
-%[2]s
-  input:
-    %[3]s
-    path 'types.json'
-%[4]s  output:
-    %[5]s
-  script:
-    """
-%[6]s    """
-}
-
-`, fusedName(pipeline, last.call.Name), stageDirectives(last.stage, ""), bundleInput("pipeargs"),
-		specInputs.String(), bundleOutput("outs"), script.String())
 }
 
 // fuseableDisabledStage reports a non-split leaf-stage call whose disable is
@@ -1911,9 +1724,7 @@ func stageDirectives(s *ir.Stage, val string) string {
 	// Every stage-phase process is labeled with its Martian adapter language
 	// (py/comp/exec), so the DAG, trace, and reports retain which launcher runs
 	// each stage — and `withLabel:lang_<x>` config selectors can target them —
-	// across every emission mode (default, -native, -native-runner). A fused
-	// chain process carries its consumer's label; each folded link still runs
-	// through its own language's launcher inside the script.
+	// in every emission mode.
 	fmt.Fprintf(&b, "  label 'lang_%s'\n", s.Lang)
 
 	if val == "" {

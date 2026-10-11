@@ -121,9 +121,8 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   wrapper, all baked into the generated scripts), `-mropath` (search path for
   `@include`), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
   (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
-  the opt-in emission modes `-fuse-chains`, `-fold-disables`, `-native`, and
-  `-native-runner` (§4.8), `-allow-external-files` (§8, §10), `-config` (a
-  `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
+  the opt-in emission mode `-native` (§4.8), `-allow-external-files` (§8,
+  §10), `-config` (a `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
   explicit flag always wins — see `internal/config`; `-allow-external-files`
   and `-mropath` have no key, so a config file shipped beside a shared `.mro`
   cannot set them, and a tool path it sets is baked into an image only from
@@ -390,25 +389,16 @@ each file leaf individually and publishes it to its `outs/` path via
 published tree matches an mrp pipestance `outs/` (verified by
 `the Go TestMrpDiff suite`); see §10 for where "results" lives on each target.
 
-### 4.8 Opt-in emission modes: `-fuse-chains`, `-fold-disables`, and channel-native orchestration (`-native`)
+### 4.8 Opt-in emission mode: channel-native orchestration (`-native`)
 
-Everything in §§4.1–4.7 describes the default emission. Four opt-in flags trade
-some launch-time flexibility for a smaller task graph. All of them are
+Everything in §§4.1–4.7 describes the default emission. The opt-in `-native`
+flag trades some launch-time flexibility for a smaller task graph. It is
 **plan-decided**: `buildPlan` (`internal/emit/plan.go`) resolves every call to a
-single `callKind` — plain bind, mapped, forward, one of the fused kinds, folded
-off, or native scatter — once, up front, and the process, wiring, and include
+single `callKind` — plain bind, mapped, forward, one of the fused kinds, or
+native scatter — once, up front, and the process, wiring, and include
 emitters all read that fixed plan, so no two emission sites can disagree about
 how a call is rendered.
 
-- **`-fuse-chains`** folds a single-consumer, equal-resource source stage into
-  its consumer's task (`kindFusedChain`/`kindFusedAway`), dropping a node per
-  fused link. The cost is granularity: `-resume` and per-stage retry treat the
-  fused chain as one task.
-- **`-fold-disables`** constant-folds a disable gate the entry invocation
-  already determines (`disabled = self.x` where the entry call bakes `x = true`):
-  the always-disabled call is pruned to its null output (`kindFoldedOff`). The
-  transpiler warns per pruned call that overriding the gate input at launch
-  will **not** re-enable it.
 - **`-native`** replaces the data-plane *tasks* with driver-side channel wiring,
   without touching the stage tasks or the adapter ABI:
   - **Baked entry args.** The entry bundle is resolved once at transpile time by
@@ -440,21 +430,14 @@ how a call is rendered.
     is decided per call site: a sub-pipeline called from sites that need
     different marks is emitted once per context (`SplitKnownContexts`, copies
     named `<pipeline>_ctx<n>`), which adds no tasks.
-- **`-native-runner`** swaps the stage-execution hop for `py` stages from
-  `mre` + `martian_shell.py` to an embedded direct-call runner
-  (`internal/emit/runner/run_stage.py`, with a shipped `martian` compat shim).
-  `exec`/`comp` stages keep the adapter path. It is independent of `-native`
-  and composes with the default DAG; container backends bake the runner into
-  the image.
 
 **Detect and refuse, never under-deliver.** Every transpile runs the pre-emit
 diagnostics (`internal/emit/diagnostics.go`) over the *same plan* that is
 emitted. A flag/pipeline combination that would produce a wrong project is a
 hard error that aborts the transpile; a shape an opt-in flag cannot fully
 collapse prints an **Info** diagnostic naming exactly which orchestration
-remains and why (e.g. which map call keeps its one FORK resolve, or that a
-`py`-only runner leaves an `exec` stage on the adapter path), and a flag that
-had no effect at all says so — an opt-in never silently does less than asked.
+remains and why (e.g. which map call keeps its one FORK resolve) — an opt-in
+never silently does less than asked.
 
 ---
 

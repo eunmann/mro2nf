@@ -28,24 +28,19 @@ var (
 // Native changes launch-time behavior, not just the emitted orchestration:
 // -native bakes entry args at transpile time, so the project rejects
 // launch-time entry-arg overrides — a project that defaults `native: true`
-// opts every transpile into that contract. NativeRunner swaps the Python
-// stage-execution hop to the embedded direct-call runner (baked into the
-// image on container backends, so toggling it there means a rebuild).
+// opts every transpile into that contract.
 //
 // Overriding a config `true` back off for one run needs the equals form:
 // `-native=false` (Go's flag package reads a space-separated `-native false`
 // as bare -native plus a positional arg).
 type Config struct {
-	Target       *string
-	Container    *string
-	Mre          *string
-	Shell        *string
-	Mrjob        *string
-	Monitor      *bool
-	FuseChains   *bool
-	FoldDisables *bool
-	Native       *bool
-	NativeRunner *bool
+	Target    *string
+	Container *string
+	Mre       *string
+	Shell     *string
+	Mrjob     *string
+	Monitor   *bool
+	Native    *bool
 }
 
 // Load reads and parses the config at path. A missing file is not an error — it
@@ -120,14 +115,8 @@ func assign(cfg *Config, key, val string) error {
 		cfg.Mrjob = &val
 	case "monitor":
 		return assignBool(&cfg.Monitor, key, val)
-	case "fuse-chains":
-		return assignBool(&cfg.FuseChains, key, val)
-	case "fold-disables":
-		return assignBool(&cfg.FoldDisables, key, val)
 	case "native":
 		return assignBool(&cfg.Native, key, val)
-	case "native-runner":
-		return assignBool(&cfg.NativeRunner, key, val)
 	default:
 		return fmt.Errorf("%w %q", errUnknownKey, key)
 	}

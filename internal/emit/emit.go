@@ -95,13 +95,6 @@ type Options struct {
 	// Monitor enables per-stage virtual-memory enforcement in the shim (the mrp
 	// --monitor analog).
 	Monitor bool
-	// FoldDisables opts into constant-folding entry-determinable disable branches
-	// (#59 Lever 1): an always-disabled stage is pruned from the emitted project.
-	FoldDisables bool
-	// FuseChains opts into linear-chain stage fusion (#59 Lever 4): a single-
-	// consumer, equal-resource source stage is folded into its consumer's task,
-	// dropping a node at the cost of coarser -resume/retry granularity.
-	FuseChains bool
 	// Target is the execution backend the project is shaped for (default local).
 	Target Target
 	// ConfineOutputs makes every stage task fail on an output that resolves
@@ -114,13 +107,6 @@ type Options struct {
 	// BUILD_ENTRY_ARGS task runs (entry inputs are fixed — no launch-time param
 	// override in native mode). Further increments collapse BIND/FORK/MERGE.
 	Native bool
-	// NativeRunner opts a Python stage's split/main/join into the embedded
-	// direct-call runner (#61 M2 / #79): no martian_shell.py adapter, no mre
-	// broker on the stage-execution hop; `import martian` resolves to the
-	// shipped compat shim. Independent of Native (it swaps only the stage hop,
-	// so it composes with the default DAG too). Compiled/exec stages keep the
-	// adapter path.
-	NativeRunner bool
 	// InlinePipelines opts into flattening eligible sub-pipeline boundaries so
 	// their entry/return BIND tasks disappear (#221). Orchestration-only; outputs
 	// are byte-identical.
@@ -132,10 +118,7 @@ type Options struct {
 // through it, so they can never analyze different plans for the same options.
 func (o Options) featureSet() featureSet {
 	return featureSet{
-		fuseChains:      o.FuseChains,
-		foldDisables:    o.FoldDisables,
 		native:          o.Native,
-		nativeRunner:    o.NativeRunner,
 		inlinePipelines: o.InlinePipelines,
 	}
 }
@@ -178,18 +161,7 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	features := opts.featureSet()
-
-	// Split before inlining so internal/overrides, which resolves the
-	// un-inlined program, derives the same copy names.
-	SplitKnownContexts(prog)
-
-	// #221: flatten eligible sub-pipeline boundaries before planning, so their
-	// entry/return BIND tasks never exist. A pure orchestration transform (the
-	// data plane and every leaf binding's value are unchanged); opt-in while it
-	// proves out, since it renames inlined stage tasks (a one-time -resume reset).
-	if features.inlinePipelines {
-		inlinePipelines(prog)
-	}
+	prepareProgram(prog, features)
 
 	roots := newSourceRoots(opts)
 
@@ -199,25 +171,22 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	g := genCtx{
-		entry:   prog.Entry.Callable,
-		mroFile: opts.MROFile,
-		mre:     opts.Mre,
-		shell:   opts.Shell,
-		mrjob:   opts.Mrjob,
-		// On a shared filesystem the runner is read from the project dir; a
-		// container backend rebinds this to the baked ctrRunner below.
-		runnerBase: "${projectDir}/" + assetsDir + "/" + runnerDir,
-		monitor:    opts.Monitor,
-		target:     target,
-		confine:    opts.ConfineOutputs || target.isContainer(),
-		features:   features,
-		code:       opts.StageCode,
-		plan:       buildPlan(prog, features),
+		entry:    prog.Entry.Callable,
+		mroFile:  opts.MROFile,
+		mre:      opts.Mre,
+		shell:    opts.Shell,
+		mrjob:    opts.Mrjob,
+		monitor:  opts.Monitor,
+		target:   target,
+		confine:  opts.ConfineOutputs || target.isContainer(),
+		features: features,
+		code:     opts.StageCode,
+		plan:     buildPlan(prog, features),
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker
-	// build context (mre + adapters + stage code + runner), so the image — not
-	// the host — supplies the runtime.
+	// build context (mre + adapters + stage code), so the image — not the host —
+	// supplies the runtime.
 	if target.isContainer() {
 		cb, err := containerBuild(opts, target, roots)
 		if err != nil {
@@ -225,9 +194,6 @@ func Emit(prog *ir.Program, opts Options) error {
 		}
 
 		g.mre, g.shell, g.mrjob, g.code = cb.mre, cb.shell, cb.mrjob, cb.code
-		if cb.runnerBase != "" {
-			g.runnerBase = cb.runnerBase
-		}
 	}
 
 	if err := checkBakedPaths(g); err != nil {
@@ -235,6 +201,39 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	return writeProject(prog, opts, target, g, specDir, entry)
+}
+
+// prepareProgram rewrites prog in place into the program Emit plans: split per
+// invocation-known context, then, under inlinePipelines, with eligible
+// sub-pipeline boundaries flattened so their entry/return BIND tasks never
+// exist (#221). The split runs first so internal/overrides, which resolves the
+// un-inlined program, derives the same copy names. Diagnose prepares a
+// clonePipelines copy, so its diagnostics describe the emitted calls (#250).
+func prepareProgram(prog *ir.Program, f featureSet) {
+	SplitKnownContexts(prog)
+
+	if f.inlinePipelines {
+		inlinePipelines(prog)
+	}
+}
+
+// clonePipelines returns a copy of prog that prepareProgram can rewrite without
+// changing prog: its own Pipelines map, holding a copy of each pipeline with
+// its own Calls and Returns slices. The rewrites replace those slices and
+// their elements' fields and never write through a value they share with
+// prog, so this depth suffices.
+func clonePipelines(prog *ir.Program) *ir.Program {
+	c := *prog
+	c.Pipelines = make(map[string]*ir.Pipeline, len(prog.Pipelines))
+
+	for name, p := range prog.Pipelines {
+		cp := *p
+		cp.Calls = slices.Clone(p.Calls)
+		cp.Returns = slices.Clone(p.Returns)
+		c.Pipelines[name] = &cp
+	}
+
+	return &c
 }
 
 // writeProject renders every file of the Nextflow project (modules, main.nf,
@@ -266,7 +265,7 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 		return err
 	}
 
-	if err := writeProjectAssets(prog, opts, target, specDir); err != nil {
+	if err := writeProjectAssets(prog, opts, specDir); err != nil {
 		return err
 	}
 
@@ -288,20 +287,10 @@ func writeProject(prog *ir.Program, opts Options, target Target, g genCtx, specD
 }
 
 // writeProjectAssets writes the shared static assets: the Groovy helper lib,
-// the Python runner (under -native-runner), the per-call bindspecs, the
-// disable artifacts, and the type manifest.
-func writeProjectAssets(prog *ir.Program, opts Options, target Target, specDir string) error {
+// the per-call bindspecs, the disable artifacts, and the type manifest.
+func writeProjectAssets(prog *ir.Program, opts Options, specDir string) error {
 	if err := writeLib(opts.OutDir); err != nil {
 		return err
-	}
-
-	// The runner ships in the project's _assets/ for a shared-filesystem run;
-	// a container backend bakes it into the image instead (containerBuild), so
-	// the project copy would be dead weight (and dead zip weight for HealthOmics).
-	if opts.NativeRunner && !target.isContainer() {
-		if err := writeRunner(opts.OutDir); err != nil {
-			return err
-		}
 	}
 
 	if err := writeBindSpecs(prog, specDir); err != nil {

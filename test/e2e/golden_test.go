@@ -194,19 +194,14 @@ var goldenCases = []goldenCase{
 	// Regression for #59 Lever 2: a map call disabled on an UPSTREAM output ref
 	// (FLAG.on), gated natively from the upstream channel (no DISABLE task).
 	{"disabled_map_ref", "disabled_map_ref", "expected/outs.json"},
-	// #59 Lever 4 baseline: this chain fixture must be byte-identical with the
-	// default (no -fuse-chains); TestFuseChains reruns it with the flag on.
-	{"chain_fuse", "chain_fuse", "expected/outs.json"},
-	// #59 Lever 4 fold-safety: SRC has a second consumer via disabled = SRC.flag,
-	// so it must NOT fold under -fuse-chains; TestFuseChains asserts that + reruns.
-	{"chain_fuse_disable", "chain_fuse_disable", "expected/outs.json"},
-	// #59 Lever 1 baseline: entry bakes skip=true so GEN is always disabled; the
-	// default (gated) run must match the golden; TestFoldDisables reruns it with
-	// -fold-disables (GEN pruned) and asserts the same output.
-	{"fold_disable", "fold_disable", "expected/outs.json"},
-	// #81 baseline: a 3-stage linear chain A->B->C; default runs three tasks,
-	// TestFuseChains reruns it with -fuse-chains (all fold into one) — same output.
-	{"chain_fuse3", "chain_fuse3", "expected/outs.json"},
+	// Linear chains of two and three leaf stages, one task per stage.
+	{"chain", "chain", "expected/outs.json"},
+	{"chain3", "chain3", "expected/outs.json"},
+	// SRC feeds one call and gates another via disabled = SRC.flag.
+	{"chain_gate", "chain_gate", "expected/outs.json"},
+	// The entry bakes skip=true, so the runtime gate skips GEN and its consumer
+	// reads GEN's null output.
+	{"disabled_entry_skip", "disabled_entry_skip", "expected/outs.json"},
 	// #90: a trivial-compute fixture whose DAG mirrors CellRanger's
 	// _basic_sc_rna_counter shape — preflight, split, a disable fan-out gating
 	// aliased calls, a mapped per-sample stage, and nested sub-pipelines.
@@ -257,138 +252,6 @@ func TestGolden(t *testing.T) {
 			assertGoldenTree(t, tc.name, tc.fixture, proj)
 		})
 	}
-}
-
-// TestFuseChains verifies #59 Lever 4: with -fuse-chains, a single-consumer
-// source stage folds into its consumer's task, and the run stays byte-identical
-// to the golden. chain_fuse's SRC folds into the STAGE_2_CH__USE process (which
-// runs both stages' bind+main inline); no standalone SRC process remains.
-func TestFuseChains(t *testing.T) {
-	requireTools(t, "nextflow", "java")
-
-	proj := transpile(t, "chain_fuse", "-fuse-chains")
-
-	mod, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_CH.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !strings.Contains(string(mod), "spec_0.json") {
-		t.Errorf("-fuse-chains did not emit the fused chain process:\n%s", mod)
-	}
-
-	if strings.Contains(string(mod), "process STAGE_2_CH__SRC") {
-		t.Errorf("-fuse-chains left a standalone SRC process (not folded):\n%s", mod)
-	}
-
-	if err := runNextflow(t, proj); err != nil {
-		t.Fatal(err)
-	}
-
-	goldenJSON(t,
-		filepath.Join(proj, "results", "pipeline_outs.json"),
-		filepath.Join(root, "testdata", "chain_fuse", "expected", "outs.json"))
-
-	// Fold-safety: chain_fuse_disable's SRC gates a third call via disabled =
-	// SRC.flag, so SRC has two consumers and must NOT fold even with the flag on;
-	// output stays byte-identical.
-	dproj := transpile(t, "chain_fuse_disable", "-fuse-chains")
-
-	dmod, err := os.ReadFile(filepath.Join(dproj, "modules", "pipe_CH.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if strings.Contains(string(dmod), "spec_0.json") {
-		t.Errorf("SRC must not fold: it also gates a call via disabled = SRC.flag:\n%s", dmod)
-	}
-
-	if err := runNextflow(t, dproj); err != nil {
-		t.Fatal(err)
-	}
-
-	goldenJSON(t,
-		filepath.Join(dproj, "results", "pipeline_outs.json"),
-		filepath.Join(root, "testdata", "chain_fuse_disable", "expected", "outs.json"))
-
-	// #73: a source feeding a pure-FORWARD consumer folds too. file_chain's
-	// MAKEFILE forwards into READFILE; with -fuse-chains MAKEFILE folds away and
-	// the run stays byte-identical to the golden.
-	fproj := transpile(t, "file_chain", "-fuse-chains")
-
-	fmod, err := os.ReadFile(filepath.Join(fproj, "modules", "pipe_CP.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !strings.Contains(string(fmod), "spec_0.json") {
-		t.Errorf("-fuse-chains must fold MAKEFILE into the READFILE forward consumer:\n%s", fmod)
-	}
-
-	if strings.Contains(string(fmod), "process STAGE_1_CP__MAKEFILE") {
-		t.Errorf("-fuse-chains left a standalone MAKEFILE process:\n%s", fmod)
-	}
-
-	if err := runNextflow(t, fproj); err != nil {
-		t.Fatal(err)
-	}
-
-	goldenJSON(t,
-		filepath.Join(fproj, "results", "pipeline_outs.json"),
-		filepath.Join(root, "testdata", "file_chain", "expected", "cp_outs.json"))
-
-	// #81: a 3-stage chain A->B->C folds into one process (3 specs), byte-identical.
-	nproj := transpile(t, "chain_fuse3", "-fuse-chains")
-
-	nmod, err := os.ReadFile(filepath.Join(nproj, "modules", "pipe_P.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got := strings.Count(string(nmod), "path 'spec_"); got != 3 {
-		t.Errorf("3-stage chain: want one fused process staging 3 specs, got %d spec inputs:\n%s", got, nmod)
-	}
-
-	if err := runNextflow(t, nproj); err != nil {
-		t.Fatal(err)
-	}
-
-	goldenJSON(t,
-		filepath.Join(nproj, "results", "pipeline_outs.json"),
-		filepath.Join(root, "testdata", "chain_fuse3", "expected", "outs.json"))
-}
-
-// TestFoldDisables verifies #59 Lever 1: with -fold-disables, an entry-baked
-// always-disabled stage (GEN, gated on self.skip with skip=true) is pruned to
-// its null output — no GEN stage/bind/gate in the pipeline — and the run stays
-// byte-identical to the golden (which mrp produced by skipping GEN).
-func TestFoldDisables(t *testing.T) {
-	requireTools(t, "nextflow", "java")
-
-	proj := transpile(t, "fold_disable", "-fold-disables")
-
-	mod, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_P.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !strings.Contains(string(mod), "ch_GEN = Channel.value(") {
-		t.Errorf("-fold-disables must prune GEN to its null output:\n%s", mod)
-	}
-
-	// No stage/bind process definition for GEN remains (the return bind still
-	// consumes ch_GEN's null, which is correct).
-	if strings.Contains(string(mod), "_P__GEN {") {
-		t.Errorf("-fold-disables left a GEN process definition in the pipeline:\n%s", mod)
-	}
-
-	if err := runNextflow(t, proj); err != nil {
-		t.Fatal(err)
-	}
-
-	goldenJSON(t,
-		filepath.Join(proj, "results", "pipeline_outs.json"),
-		filepath.Join(root, "testdata", "fold_disable", "expected", "outs.json"))
 }
 
 // renderOverrideParams instantiates the fixture's override-params.json into
@@ -695,7 +558,7 @@ func TestNativeMode(t *testing.T) {
 		fixture, golden string
 		plane           []string // exact surviving data-plane process names
 	}{
-		{"chain_fuse3", "expected/outs.json", nil},
+		{"chain3", "expected/outs.json", nil},
 		// cellranger_shaped's PER_SAMPLE map call is not element-scatterable, so
 		// exactly ONE FORK resolve remains (the gather folds into the sole
 		// consumer); two fan-in calls keep plain BIND tasks.
@@ -822,99 +685,6 @@ func TestNativeMode(t *testing.T) {
 	}
 }
 
-// TestNativeCombos guards -native composed with the other plan levers (#122):
-// buildPlan folds -fuse-chains' kindFusedChain and -fold-disables'
-// kindFoldedOff into the same plan -native scatters, but nothing exercised the
-// compositions. Each case pins the exact surviving data-plane inventory
-// (empty: these linear value shapes collapse fully) and must reproduce the
-// committed mrp golden — but plane emptiness and golden output alone cannot
-// distinguish "composed" from "lever silently ignored", since each fixture
-// also collapses and matches under plain -native. So each case additionally
-// asserts the lever fired in the generated module: a fused chain runs as ONE
-// process staging every constituent's bind spec (specs counts them, absent
-// names the folded-away standalone processes), and a folded-off gate leaves
-// only its null channel (fired) with no stage process (absent), mirroring
-// TestFuseChains/TestFoldDisables' single-flag structural checks.
-func TestNativeCombos(t *testing.T) {
-	t.Parallel()
-
-	requireTools(t, "nextflow", "java", "python3")
-
-	cases := []struct {
-		fixture string
-		flags   []string
-		golden  string
-		module  string   // pipeline module the lever rewrites
-		specs   int      // fused-chain spec inputs the surviving process stages (0: not a fusion case)
-		fired   string   // substring proving the lever fired (fusion cases use specs instead)
-		absent  []string // declarations the lever must have removed
-	}{
-		{
-			fixture: "chain_fuse",
-			flags:   []string{"-native", "-fuse-chains"},
-			golden:  "expected/outs.json",
-			module:  "pipe_CH.nf",
-			specs:   2,
-			absent:  []string{"process STAGE_2_CH__SRC"},
-		},
-		{
-			fixture: "chain_fuse3",
-			flags:   []string{"-native", "-fuse-chains"},
-			golden:  "expected/outs.json",
-			module:  "pipe_P.nf",
-			specs:   3,
-			absent:  []string{"process STAGE_1_P__A", "process STAGE_1_P__B"},
-		},
-		{
-			fixture: "fold_disable",
-			flags:   []string{"-native", "-fold-disables"},
-			golden:  "expected/outs.json",
-			module:  "pipe_P.nf",
-			fired:   "ch_GEN = Channel.value(",
-			absent:  []string{"process STAGE_1_P__GEN"},
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.fixture, func(t *testing.T) {
-			t.Parallel()
-
-			proj := transpile(t, tc.fixture, tc.flags...)
-			assertPlaneProcesses(t, proj, nil)
-
-			mod, err := os.ReadFile(filepath.Join(proj, "modules", tc.module))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if tc.specs > 0 {
-				if got := strings.Count(string(mod), "path 'spec_"); got != tc.specs {
-					t.Errorf("%v: want one fused process staging %d specs, got %d spec inputs:\n%s",
-						tc.flags, tc.specs, got, mod)
-				}
-			}
-
-			if tc.fired != "" && !strings.Contains(string(mod), tc.fired) {
-				t.Errorf("%v: lever did not fire, missing %q:\n%s", tc.flags, tc.fired, mod)
-			}
-
-			for _, a := range tc.absent {
-				if strings.Contains(string(mod), a) {
-					t.Errorf("%v: lever left %q in the module:\n%s", tc.flags, a, mod)
-				}
-			}
-
-			if err := runNextflow(t, proj); err != nil {
-				t.Fatal(err)
-			}
-
-			goldenJSON(t,
-				filepath.Join(proj, "results", "pipeline_outs.json"),
-				filepath.Join(root, "testdata", tc.fixture, tc.golden))
-		})
-	}
-}
-
 // TestNativeFileEntry verifies -native supports file- AND directory-typed entry
 // inputs (#99): the entry args (including their file/dir leaves) are baked at
 // transpile time and staged into the workflow, so each fixture's -native run
@@ -962,19 +732,18 @@ func TestNativeRejectsOverride(t *testing.T) {
 	}
 }
 
-// TestNativeContainerEmits verifies -native + -native-runner transpile cleanly
-// for a container target (#99): the project builds with the runner baked into
-// the image at ctrRunner and the generated scripts referencing that in-image
-// path (no mounted project dir). TestGeneratedAWSBatchImageNative runs the
-// built image end to end; here we assert the transpile succeeds and wires the
-// baked paths.
+// TestNativeContainerEmits verifies -native transpiles cleanly for a container
+// target (#99): the image bakes mre and the adapters, and the generated scripts
+// exec those in-image paths (no mounted project dir).
+// TestGeneratedAWSBatchImageNative runs the built image end to end; here we
+// assert the transpile succeeds and wires the baked paths.
 func TestNativeContainerEmits(t *testing.T) {
 	buildBinaries(t)
 
 	proj := t.TempDir()
 	dir := filepath.Join(root, "testdata", "diamond_min")
 	cmd := exec.Command(filepath.Join(root, "mro2nf"),
-		"-native", "-native-runner", "-target", "awsbatch", "-container", "example/img:1",
+		"-native", "-target", "awsbatch", "-container", "example/img:1",
 		"-o", proj, "-mre", filepath.Join(root, "mre"),
 		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
 		"-mropath", dir, filepath.Join(dir, "pipeline.mro"))
@@ -988,16 +757,16 @@ func TestNativeContainerEmits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(dockerfile), "/opt/mro2nf/runner") {
-		t.Error("container Dockerfile must bake the -native-runner runner")
+	if !strings.Contains(string(dockerfile), "COPY runtime/mre /opt/mro2nf/mre") {
+		t.Error("container Dockerfile must bake mre")
 	}
 
 	main, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_D.nf"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(main), "/opt/mro2nf/runner/run_stage.py") {
-		t.Error("container native-runner scripts must exec the baked runner path")
+	if !strings.Contains(string(main), "'/opt/mro2nf/mre' main -shell '/opt/mro2nf/adapters/martian_shell.py'") {
+		t.Error("container -native scripts must exec the baked mre and adapter")
 	}
 }
 
@@ -1175,7 +944,7 @@ func assertHasProcess(t *testing.T, proj string, cat string) {
 // the default (bundle-mode) run. file_min exercises a file output through the
 // native LAYOUT's inline return bind. native_file_return has a TRANSFORM return
 // with a file output, so it exercises the native LAYOUT's file-leaf path (the
-// inline bind's args/f -> leaves -> PUBLISH_LEAF); file_min/chain_fuse/struct_min
+// inline bind's args/f -> leaves -> PUBLISH_LEAF); file_min/chain/struct_min
 // are forward returns (default LAYOUT) that only drop BUILD_ENTRY_ARGS. The
 // map-call fixtures collapse the whole fork machinery: the scatter kills FORK
 // and the sole-consumer merge fold kills MERGE — fork_min (array), map_fork
@@ -1203,11 +972,11 @@ func TestNativeComplete(t *testing.T) {
 		fixture, golden string
 	}{
 		{fixture: "diamond_min", golden: "expected/outs.json"},
-		{fixture: "fold_disable", golden: "expected/outs.json"},
+		{fixture: "disabled_entry_skip", golden: "expected/outs.json"},
 		{fixture: "native_file_return", golden: "expected/nf_outs.json"},
 		{fixture: "dir_hidden", golden: "expected/outs.json"},
 		{fixture: "file_min", golden: "expected/outs.json"},
-		{fixture: "chain_fuse", golden: "expected/outs.json"},
+		{fixture: "chain", golden: "expected/outs.json"},
 		{fixture: "struct_min", golden: "expected/stats_pipe_outs.json"},
 		{fixture: "fork_min", golden: "expected/scale_all_outs.json"},
 		{fixture: "map_fork", golden: "expected/outs.json"},

@@ -2,7 +2,6 @@ package emit
 
 import (
 	"fmt"
-	"maps"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -31,16 +30,15 @@ type Diagnostic struct {
 // divergence warnings (preflight/local/volatile) plus flag-conditional
 // diagnostics that catch an opt-in flag being unsafe or a no-op for this
 // pipeline. Callers print the results and abort if HasError reports an Error —
-// the seam #72/#76 add their flag-specific error checks to. Like Emit it
-// analyzes the program split per invocation-known context (on a shallow copy,
-// so prog is left unchanged for Emit to split itself).
+// the seam #72/#76 add their flag-specific error checks to. It analyzes the
+// program Emit plans — split per invocation-known context and, under
+// InlinePipelines, inlined — on a copy, so prog is left for Emit to prepare.
 func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
-	split := *prog
-	split.Pipelines = maps.Clone(prog.Pipelines)
-	SplitKnownContexts(&split)
-	prog = &split
-
 	f := opts.featureSet()
+
+	prog = clonePipelines(prog)
+	prepareProgram(prog, f)
+
 	pl := buildPlan(prog, f)
 
 	warns := Warnings(prog)
@@ -50,12 +48,9 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 		ds = append(ds, Diagnostic{Severity: SevWarn, Message: w})
 	}
 
-	ds = append(ds, chainDiagnostics(f, pl)...)
 	ds = append(ds, nativeDiagnostics(prog, f, pl)...)
-	ds = append(ds, nativeTargetDiagnostics(prog, f, opts.Target)...)
-	ds = append(ds, runnerDiagnostics(prog, f, opts.Monitor)...)
 
-	return append(ds, foldDiagnostics(prog, f, pl)...)
+	return append(ds, nativeTargetDiagnostics(prog, f, opts.Target)...)
 }
 
 // nativeDiagnostics surfaces which map calls -native could NOT fully collapse,
@@ -160,73 +155,6 @@ func nativeTargetDiagnostics(prog *ir.Program, f featureSet, rawTarget Target) [
 	}}
 }
 
-// runnerDiagnostics surfaces what -native-runner does NOT cover, so the opt-in
-// never silently under-delivers (#83): comp/exec stages keep the Martian
-// adapter path, and -monitor's RSS enforcement runs in-process (the runner's
-// watchdog) rather than mre's process-group monitor.
-func runnerDiagnostics(prog *ir.Program, f featureSet, monitor bool) []Diagnostic {
-	if !f.nativeRunner {
-		return nil
-	}
-
-	var ds []Diagnostic
-
-	for _, name := range sortedKeys(prog.Stages) {
-		if lang := prog.Stages[name].Lang; lang != ir.LangPy {
-			ds = append(ds, Diagnostic{
-				Severity: SevInfo,
-				Message:  fmt.Sprintf("-native-runner: stage %s is a %s stage and keeps the Martian adapter path", name, lang),
-			})
-		}
-	}
-
-	if monitor {
-		ds = append(ds, Diagnostic{
-			Severity: SevInfo,
-			Message:  "-native-runner: -monitor enforcement runs in-process (RLIMIT_AS vmem cap + RSS watchdog), not mre's process-group monitor",
-		})
-	}
-
-	return ds
-}
-
-// foldDiagnostics warns which disable gates -fold-disables pruned and on which
-// entry input, so the user knows overriding that input at run time will not
-// re-enable the pruned stage (the safety trade the flag opts into).
-func foldDiagnostics(prog *ir.Program, f featureSet, pl emitPlan) []Diagnostic {
-	if !f.foldDisables {
-		return nil
-	}
-
-	var ds []Diagnostic
-
-	for _, name := range sortedKeys(prog.Pipelines) {
-		p := prog.Pipelines[name]
-
-		for _, c := range p.Calls {
-			if pl.pipes[name].calls[c.Name].kind != kindFoldedOff {
-				continue
-			}
-
-			input, _ := foldDisableOff(prog, p, c)
-			ds = append(ds, Diagnostic{
-				Severity: SevWarn,
-				Message: fmt.Sprintf("call %s.%s pruned: disabled=self.%s folds to true; overriding %q at run time will NOT re-enable it",
-					name, c.Name, input, input),
-			})
-		}
-	}
-
-	if len(ds) == 0 {
-		return []Diagnostic{{
-			Severity: SevInfo,
-			Message:  "-fold-disables had no effect: no entry-determinable always-disabled stage to prune",
-		}}
-	}
-
-	return ds
-}
-
 // HasError reports whether any diagnostic is fatal.
 func HasError(ds []Diagnostic) bool {
 	for _, d := range ds {
@@ -236,35 +164,4 @@ func HasError(ds []Diagnostic) bool {
 	}
 
 	return false
-}
-
-// chainDiagnostics reports the -fuse-chains trade-off: how many chains fuse (with
-// the coarser-resume caveat), or that the flag had no effect so the user is not
-// misled into thinking it did something.
-func chainDiagnostics(f featureSet, pl emitPlan) []Diagnostic {
-	if !f.fuseChains {
-		return nil
-	}
-
-	fused := 0
-
-	for _, pp := range pl.pipes {
-		for _, cp := range pp.calls {
-			if cp.kind == kindFusedChain {
-				fused++
-			}
-		}
-	}
-
-	if fused == 0 {
-		return []Diagnostic{{
-			Severity: SevInfo,
-			Message:  "-fuse-chains had no effect: no single-consumer, equal-resource source stage qualified",
-		}}
-	}
-
-	return []Diagnostic{{
-		Severity: SevInfo,
-		Message:  fmt.Sprintf("-fuse-chains fused %d chain(s); -resume and per-stage retry granularity is coarser for those stages", fused),
-	}}
 }

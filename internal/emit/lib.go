@@ -28,9 +28,7 @@ func writeLib(outDir string) error {
 	return copyEmbeddedDir(libAssets, libDir, filepath.Join(outDir, libDir), "lib")
 }
 
-// copyEmbeddedDir writes every file of an embedded directory into dst, so the
-// static asset trees (lib/, _assets/runner/) share one copy loop and staging
-// fixes land in both.
+// copyEmbeddedDir writes every file of an embedded directory into dst.
 func copyEmbeddedDir(fsys embed.FS, srcDir, dst, what string) error {
 	entries, err := fsys.ReadDir(srcDir)
 	if err != nil {

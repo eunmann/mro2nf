@@ -62,46 +62,27 @@ func TestBuildPlan(t *testing.T) {
 	}
 }
 
-// TestBuildPlanChainFusion pins the -fuse-chains decisions: the source folds away
-// and its consumer becomes the chain process; without the flag both are plain
-// fused stages.
-func TestBuildPlanChainFusion(t *testing.T) {
-	prog := lowerFixture(t, "chain_fuse")
+// TestBuildPlanLinearChainKeepsOneTaskPerStage pins that every stage of a
+// linear chain runs as its own task, one per mrp job. B binds only A's whole
+// output, so it is a forward: A's bundle is routed straight into B's own stage.
+func TestBuildPlanLinearChainKeepsOneTaskPerStage(t *testing.T) {
+	calls := buildPlan(lowerFixture(t, "chain3"), featureSet{}).pipes["P"].calls
 
-	off := buildPlan(prog, featureSet{}).pipes["CH"].calls
-	if off["SRC"].kind != kindFusedStage || off["USE"].kind != kindFusedStage {
-		t.Errorf("without -fuse-chains: SRC=%d USE=%d, want both fused stages", off["SRC"].kind, off["USE"].kind)
-	}
-
-	on := buildPlan(prog, featureSet{fuseChains: true}).pipes["CH"].calls
-	if on["SRC"].kind != kindFusedAway {
-		t.Errorf("with -fuse-chains: SRC kind = %d, want kindFusedAway", on["SRC"].kind)
-	}
-	if on["USE"].kind != kindFusedChain || on["USE"].chain[0].call.Name != "SRC" {
-		t.Errorf("with -fuse-chains: USE kind = %d, want kindFusedChain with SRC first", on["USE"].kind)
+	for name, want := range map[string]callKind{"A": kindFusedStage, "B": kindForward, "C": kindFusedStage} {
+		if got := calls[name].kind; got != want {
+			t.Errorf("%s kind = %d, want %d", name, got, want)
+		}
 	}
 }
 
-// TestBuildPlanFoldDisables pins #59 Lever 1: with -fold-disables an entry
-// `disabled = self.skip` gate whose input the entry bakes true folds the call to
-// kindFoldedOff (pruned to its null output); without the flag it stays a normal
-// natively-gated disabled leaf. A disable that is NOT entry-determinable (an
-// upstream CALL.out ref) never folds, even with the flag on.
-func TestBuildPlanFoldDisables(t *testing.T) {
-	fd := lowerFixture(t, "fold_disable")
+// TestBuildPlanEntryBakedGateStaysRuntime pins that a `disabled = self.skip`
+// gate whose input the entry call bakes true stays a driver-read runtime gate,
+// so overriding the input at launch re-enables the call.
+func TestBuildPlanEntryBakedGateStaysRuntime(t *testing.T) {
+	prog := lowerFixture(t, "disabled_entry_skip")
 
-	if got := buildPlan(fd, featureSet{}).pipes["P"].calls["GEN"].kind; got != kindFusedDisabled {
-		t.Errorf("without -fold-disables: GEN kind = %d, want kindFusedDisabled", got)
-	}
-	if got := buildPlan(fd, featureSet{foldDisables: true}).pipes["P"].calls["GEN"].kind; got != kindFoldedOff {
-		t.Errorf("with -fold-disables: GEN kind = %d, want kindFoldedOff", got)
-	}
-
-	// disabled_callref's WORK is gated on an upstream output (FLAG.on) — runtime-
-	// derived, so it must NOT fold even with the flag on.
-	cr := lowerFixture(t, "disabled_callref")
-	if got := buildPlan(cr, featureSet{foldDisables: true}).pipes["DC"].calls["WORK"].kind; got == kindFoldedOff {
-		t.Errorf("WORK gated on FLAG.on must not fold (runtime-derived), got kindFoldedOff")
+	if got := buildPlan(prog, featureSet{}).pipes["P"].calls["GEN"].kind; got != kindFusedDisabled {
+		t.Errorf("GEN kind = %d, want kindFusedDisabled", got)
 	}
 }
 
@@ -525,42 +506,13 @@ call TOP(empty = [],)
 	}
 }
 
-// TestBuildPlanForwardChain guards #73: a source feeding a pure-FORWARD consumer
-// folds under -fuse-chains too. file_chain's MAKEFILE feeds READFILE, which just
-// forwards MAKEFILE.f — so with the flag MAKEFILE folds away and READFILE becomes
-// the chain process; without it, READFILE stays a plain forward.
-func TestBuildPlanForwardChain(t *testing.T) {
+// TestBuildPlanForward guards #73's forward planning: file_chain's READFILE
+// just forwards MAKEFILE.f, so it routes MAKEFILE's bundle straight in.
+func TestBuildPlanForward(t *testing.T) {
 	fc := lowerFixture(t, "file_chain")
 
 	if got := buildPlan(fc, featureSet{}).pipes["CP"].calls["READFILE"].kind; got != kindForward {
-		t.Errorf("without -fuse-chains: READFILE kind = %d, want kindForward", got)
-	}
-
-	on := buildPlan(fc, featureSet{fuseChains: true}).pipes["CP"].calls
-	if on["MAKEFILE"].kind != kindFusedAway {
-		t.Errorf("with -fuse-chains: MAKEFILE kind = %d, want kindFusedAway", on["MAKEFILE"].kind)
-	}
-	if on["READFILE"].kind != kindFusedChain || on["READFILE"].chain[0].call.Name != "MAKEFILE" {
-		t.Errorf("with -fuse-chains: READFILE kind = %d, want kindFusedChain with MAKEFILE first", on["READFILE"].kind)
-	}
-}
-
-// TestBuildPlanNStageChain guards #81: a 3-stage linear run A->B->C folds into
-// one chain ending at C (all three links) with A and B folded away.
-func TestBuildPlanNStageChain(t *testing.T) {
-	c3 := lowerFixture(t, "chain_fuse3")
-	on := buildPlan(c3, featureSet{fuseChains: true}).pipes["P"].calls
-
-	if on["A"].kind != kindFusedAway || on["B"].kind != kindFusedAway {
-		t.Errorf("A/B should fold away: A=%d B=%d", on["A"].kind, on["B"].kind)
-	}
-
-	cp := on["C"]
-	if cp.kind != kindFusedChain || len(cp.chain) != 3 {
-		t.Fatalf("C kind = %d, chain len = %d, want kindFusedChain of 3", cp.kind, len(cp.chain))
-	}
-	if cp.chain[0].call.Name != "A" || cp.chain[1].call.Name != "B" || cp.chain[2].call.Name != "C" {
-		t.Errorf("chain order = %s,%s,%s, want A,B,C", cp.chain[0].call.Name, cp.chain[1].call.Name, cp.chain[2].call.Name)
+		t.Errorf("READFILE kind = %d, want kindForward", got)
 	}
 }
 
@@ -643,7 +595,6 @@ func TestPlanKeyedKindFlagInvariant(t *testing.T) {
 	sets := []featureSet{
 		{},
 		{native: true},
-		{fuseChains: true, foldDisables: true, native: true, nativeRunner: true},
 	}
 
 	for _, fixture := range []string{"map_pipe_nested", "map_pipe_disabled_nested", "map_pipe_split", "kitchen_sink"} {

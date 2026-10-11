@@ -61,7 +61,7 @@ func TestGeneratedBaseMatchesRuntime(t *testing.T) {
 		}
 	}
 
-	generated := fromImages(t, dockerfile(TargetAWSBatch, true, true, true, true, nil))
+	generated := fromImages(t, dockerfile(TargetAWSBatch, true, true, true, nil))
 	if diff := cmp.Diff(published[len(published)-1:], generated); diff != "" {
 		t.Errorf("generated base vs runtime final stage (-runtime +generated):\n%s", diff)
 	}

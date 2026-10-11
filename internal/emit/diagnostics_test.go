@@ -1,6 +1,9 @@
 package emit
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,29 +20,6 @@ func hasMessage(ds []Diagnostic, sev Severity, substr string) bool {
 	return false
 }
 
-// TestDiagnoseFuseChains checks the -fuse-chains trade-off is surfaced: an Info
-// noting how many chains fused (with the coarser-resume caveat), and — when the
-// flag qualifies nothing — an Info that it had no effect, so the user is not
-// misled. Without the flag there is no chain diagnostic.
-func TestDiagnoseFuseChains(t *testing.T) {
-	chain := lowerFixture(t, "chain_fuse")
-
-	on := Diagnose(chain, Options{FuseChains: true})
-	if !hasMessage(on, SevInfo, "fused 1 chain") {
-		t.Errorf("chain_fuse with -fuse-chains: want a fused-chain info, got %+v", on)
-	}
-
-	if got := Diagnose(chain, Options{}); hasMessage(got, SevInfo, "fuse-chains") {
-		t.Errorf("chain_fuse without the flag: want no chain diagnostic, got %+v", got)
-	}
-
-	// diamond_min's source (GEN) has two consumers, so nothing qualifies.
-	noop := Diagnose(lowerFixture(t, "diamond_min"), Options{FuseChains: true})
-	if !hasMessage(noop, SevInfo, "had no effect") {
-		t.Errorf("diamond_min with -fuse-chains: want a no-op info, got %+v", noop)
-	}
-}
-
 // TestDiagnoseWrapsWarnings checks the existing divergence warnings flow through
 // Diagnose as Warn diagnostics (a `local` call is a documented no-op).
 func TestDiagnoseWrapsWarnings(t *testing.T) {
@@ -54,18 +34,62 @@ func TestDiagnoseWrapsWarnings(t *testing.T) {
 	}
 }
 
-// TestDiagnoseFoldDisables checks -fold-disables warns which gate it pruned and
-// on which entry input (the override caveat), and only with the flag on.
-func TestDiagnoseFoldDisables(t *testing.T) {
-	fd := lowerFixture(t, "fold_disable")
+// inlinedSubMRO's SUB inlines into TOP. Its map call splits self.xs, which TOP
+// binds to a projection of GEN's output, so the inlined TOP.SUB_SCALE splits
+// GEN.c.xs and keeps a FORK resolve under -native, where an un-inlined
+// SUB.SCALE would scatter.
+const inlinedSubMRO = `
+struct Cfg(int[] xs,)
+stage GEN(out Cfg c, src py "s/gen",)
+stage SCALE(in int v, out int w, src py "s/scale",)
+pipeline SUB(in int[] xs, out int[] ys,){
+    map call SCALE(v = split self.xs,) using (local = true,)
+    return (ys = SCALE.w,)
+}
+pipeline TOP(out int[] ys,){
+    call GEN()
+    call SUB(xs = GEN.c.xs,)
+    return (ys = SUB.ys,)
+}
+call TOP()
+`
 
-	on := Diagnose(fd, Options{FoldDisables: true})
-	if !hasMessage(on, SevWarn, "P.GEN pruned") || !hasMessage(on, SevWarn, "self.skip") {
-		t.Errorf("want a fold warning naming P.GEN and self.skip, got %+v", on)
+// TestDiagnoseAnalyzesTheEmittedProgram pins #250: with sub-pipeline inlining
+// on, as the CLI defaults, Diagnose reports on the calls Emit emits, and it
+// leaves the caller's program for Emit to prepare.
+func TestDiagnoseAnalyzesTheEmittedProgram(t *testing.T) {
+	prog := lowerMRO(t, inlinedSubMRO)
+	opts := Options{OutDir: t.TempDir(), Mre: "mre", Shell: "/x/s", MROFile: "pipeline.mro", InlinePipelines: true}
+
+	ds := Diagnose(prog, opts)
+	if !hasMessage(ds, SevWarn, "call TOP.SUB_SCALE: `local` modifier ignored") || hasMessage(ds, SevWarn, "call SUB.SCALE") {
+		t.Errorf("want the local warning on the inlined call TOP.SUB_SCALE only, got %+v", ds)
 	}
 
-	if got := Diagnose(fd, Options{}); hasMessage(got, SevWarn, "pruned") {
-		t.Errorf("no fold warning without the flag, got %+v", got)
+	if _, ok := prog.Pipelines["SUB"]; !ok || len(prog.Pipelines["TOP"].Calls) != 2 {
+		t.Fatal("Diagnose inlined the caller's program")
+	}
+
+	if err := Emit(prog, opts); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	top, err := os.ReadFile(filepath.Join(opts.OutDir, "modules", "pipe_TOP.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(top), "process FORK_3_TOP__SUB_SCALE") {
+		t.Errorf("Emit must fork the inlined TOP.SUB_SCALE:\n%s", top)
+	}
+
+	if _, err := os.Stat(filepath.Join(opts.OutDir, "modules", "pipe_SUB.nf")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Emit must not emit the inlined SUB module (stat: %v)", err)
+	}
+
+	nat := Diagnose(lowerMRO(t, inlinedSubMRO), Options{Native: true, InlinePipelines: true})
+	if !hasMessage(nat, SevInfo, "map call TOP.SUB_SCALE keeps one FORK resolve task") {
+		t.Errorf("-native: want the FORK remainder info on the inlined TOP.SUB_SCALE, got %+v", nat)
 	}
 }
 
@@ -146,42 +170,6 @@ func TestDiagnoseNativeMapped(t *testing.T) {
 	fm := Diagnose(lowerFixture(t, "fork_min"), Options{Native: true})
 	if hasMessage(fm, SevInfo, "keeps") {
 		t.Errorf("fork_min fully collapses under -native: want no map remainder info, got %+v", fm)
-	}
-}
-
-// TestDiagnoseNativeRunner checks -native-runner surfaces what it does NOT
-// cover (#83): each exec/comp stage gets a keeps-the-adapter-path Info, a py
-// stage gets none, and -monitor adds the in-process enforcement notice only
-// alongside the runner flag. Without -native-runner there is no runner
-// diagnostic at all. mixed_adapters has one stage per adapter (py/exec/comp).
-func TestDiagnoseNativeRunner(t *testing.T) {
-	ma := lowerFixture(t, "mixed_adapters")
-
-	on := Diagnose(ma, Options{NativeRunner: true})
-	if !hasMessage(on, SevInfo, "stage ADD is a comp stage and keeps the Martian adapter path") {
-		t.Errorf("comp stage: want an adapter-path info naming ADD, got %+v", on)
-	}
-
-	if !hasMessage(on, SevInfo, "stage DBL is a exec stage and keeps the Martian adapter path") {
-		t.Errorf("exec stage: want an adapter-path info naming DBL, got %+v", on)
-	}
-
-	if hasMessage(on, SevInfo, "stage GEN") {
-		t.Errorf("py stage GEN runs natively: want no adapter-path info for it, got %+v", on)
-	}
-
-	if hasMessage(on, SevInfo, "-monitor enforcement") {
-		t.Errorf("without -monitor: want no monitor notice, got %+v", on)
-	}
-
-	mon := Diagnose(ma, Options{NativeRunner: true, Monitor: true})
-	if !hasMessage(mon, SevInfo, "-monitor enforcement runs in-process") {
-		t.Errorf("with -monitor: want the in-process enforcement notice, got %+v", mon)
-	}
-
-	off := Diagnose(ma, Options{Monitor: true})
-	if hasMessage(off, SevInfo, "native-runner") {
-		t.Errorf("without -native-runner: want no runner diagnostic, got %+v", off)
 	}
 }
 

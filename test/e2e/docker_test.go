@@ -392,19 +392,16 @@ func TestGeneratedAWSBatchImage(t *testing.T) {
 		filepath.Join(root, "testdata", "diamond_min", "expected", "outs.json"))
 }
 
-// TestGeneratedAWSBatchImageNative validates -native + -native-runner on the
-// awsbatch container target (#99): the emitted image bakes the Python runner at
-// /opt/mro2nf/runner, the generated scripts exec that baked path (no mounted
-// project dir), and the baked entry_resolved (a file-typed entry) stages into
-// the isolated task — the same self-contained-image mechanism the default
-// container path uses. Executor overridden to local+docker (no live account).
+// TestGeneratedAWSBatchImageNative validates -native on the awsbatch container
+// target (#99): the baked entry_resolved (a file-typed entry) stages into the
+// isolated task, the same self-contained-image mechanism the default container
+// path uses. Executor overridden to local+docker (no live account).
 func TestGeneratedAWSBatchImageNative(t *testing.T) {
 	requireDocker(t)
 
 	genImage := checkoutImage("mro2nf-gen-native")
 
-	proj := transpile(t, "entry_file",
-		"-native", "-native-runner", "-target", "awsbatch", "-container", genImage)
+	proj := transpile(t, "entry_file", "-native", "-target", "awsbatch", "-container", genImage)
 
 	build := exec.Command("docker", "build", "-q", "-t", genImage, proj)
 	if out, err := build.CombinedOutput(); err != nil {

@@ -1,6 +1,6 @@
-# Runtime base image for transpiled mro2nf pipelines: the `mre` shim, the
-# Martian Python adapters, and the -native-runner Python runner at the same
-# /opt/mro2nf paths the transpiler bakes into its generated scripts. Build your
+# Runtime base image for transpiled mro2nf pipelines: the `mre` shim and the
+# Martian Python adapters at the same /opt/mro2nf paths the transpiler bakes
+# into its generated scripts. Build your
 # pipeline image FROM this and add stage code:
 #
 #   FROM ghcr.io/eunmann/mro2nf-runtime:<version>
@@ -38,8 +38,4 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/mre /opt/mro2nf/mre
 COPY vendor-martian/python /opt/mro2nf/adapters
-# The -native-runner runner at the fixed path generated container projects
-# reference. Named files (not the dir) so test_runner.py never ships, mirroring
-# the transpiler's embed (internal/emit/runnerassets.go).
-COPY internal/emit/runner/run_stage.py internal/emit/runner/martian.py /opt/mro2nf/runner/
 RUN chmod +x /opt/mro2nf/mre

@@ -109,7 +109,7 @@ func run(args []string) error {
 // pointers and emit.Options are derived rather than hand-copied.
 type transpileFlags struct {
 	outDir, mroPath, mre, shell, mrjob, container, target, configPath *string
-	monitor, fuseChains, foldDisables, native, nativeRunner           *bool
+	monitor, native                                                   *bool
 	inlinePipelines, confineOutputs, allowExternalFiles               *bool
 	showVersion                                                       *bool
 }
@@ -126,10 +126,7 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 		container:          fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)"),
 		target:             fs.String("target", "local", "execution backend: local | awsbatch | healthomics"),
 		monitor:            fs.Bool("monitor", false, "enforce mrp --monitor memory limits per stage: an RSS kill at mem_gb plus a prlimit vmem cap at vmem_gb"),
-		fuseChains:         fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)"),
-		foldDisables:       fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)"),
 		native:             fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)"),
-		nativeRunner:       fs.Bool("native-runner", false, "opt-in direct-call Python stage runner (#79): no martian_shell.py adapter or mre broker on the stage hop (py stages only; the runner is baked into the image for container backends)"),
 		inlinePipelines:    fs.Bool("inline-pipelines", true, "flatten eligible sub-pipeline boundaries into their parent, dropping the entry/return BIND tasks (ON by default; orchestration-only, byte-identical outputs; pass -inline-pipelines=false to keep per-boundary tasks for finer -resume; #221)"),
 		confineOutputs:     fs.Bool("confine-outputs", false, "fail a stage task whose output resolves outside its work dir instead of copying it in (always on for awsbatch/healthomics; set it for a local project run under an isolating executor such as docker)"),
 		allowExternalFiles: fs.Bool("allow-external-files", false, "copy entry file defaults and container-target stage code that resolve outside the .mro's directory and the -mropath roots into the project or image (refused by default)"),
@@ -142,8 +139,7 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 func (f transpileFlags) configPtrs() cliPtrs {
 	return cliPtrs{
 		target: f.target, container: f.container, mre: f.mre, shell: f.shell,
-		mrjob: f.mrjob, monitor: f.monitor, fuseChains: f.fuseChains, foldDisables: f.foldDisables,
-		native: f.native, nativeRunner: f.nativeRunner,
+		mrjob: f.mrjob, monitor: f.monitor, native: f.native,
 	}
 }
 
@@ -178,8 +174,7 @@ func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (e
 	return emit.Options{
 		OutDir: *f.outDir, Mre: *f.mre, Shell: *f.shell, Mrjob: *f.mrjob,
 		Container: *f.container, Monitor: *f.monitor, Target: target,
-		FuseChains: *f.fuseChains, FoldDisables: *f.foldDisables,
-		Native: *f.native, NativeRunner: *f.nativeRunner,
+		Native:          *f.native,
 		InlinePipelines: *f.inlinePipelines, ConfineOutputs: *f.confineOutputs,
 		MROPath: roots, AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
 	}, nil
@@ -320,8 +315,7 @@ func reportDiagnostics(log zerolog.Logger, prog *ir.Program, opts emit.Options) 
 // cliPtrs collects the transpile flag value pointers a .mro2nf.yml may default.
 type cliPtrs struct {
 	target, container, mre, shell, mrjob *string
-	monitor, fuseChains, foldDisables    *bool
-	native, nativeRunner                 *bool
+	monitor, native                      *bool
 }
 
 // applyConfig loads the .mro2nf.yml (explicit path, else alongside the .mro) and
@@ -372,10 +366,7 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) (map[str
 	applyStr("shell", p.shell, cfg.Shell)
 	applyStr("mrjob", p.mrjob, cfg.Mrjob)
 	applyBool("monitor", p.monitor, cfg.Monitor)
-	applyBool("fuse-chains", p.fuseChains, cfg.FuseChains)
-	applyBool("fold-disables", p.foldDisables, cfg.FoldDisables)
 	applyBool("native", p.native, cfg.Native)
-	applyBool("native-runner", p.nativeRunner, cfg.NativeRunner)
 
 	return applied, nil
 }

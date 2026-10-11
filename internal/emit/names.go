@@ -18,7 +18,7 @@ func PlainStageSuffixes() []string {
 
 // FusedCallSuffixes returns every suffix on a fused per-call process name,
 // STAGE_<n>_<pipeline>__<call> (see fusedName/Qualify): the bare fused
-// bind+main / native scatter / fused chain, the fused bind+split _SP with its
+// bind+main / native scatter, the fused bind+split _SP with its
 // _MN/_JN phase include-aliases, and the keyed fused bind+main _K (#99).
 func FusedCallSuffixes() []string {
 	return []string{"", "_SP", "_MN", "_JN", "_K"}
