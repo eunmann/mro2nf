@@ -30,6 +30,8 @@ Ensure a clean starting point:
 
 Fetch the issue: `gh issue view <number> --json title,body,labels,state,comments,assignees`.
 
+**Batch:** if the issue has the `batch` label, the work is every open sub-issue of it (`gh issue view <n> --json subIssues`, or the sub-issues panel), in one branch and one PR. Read each sub-issue. Order the work by their `blocked by` links. The PR body closes each sub-issue and the batch, one `Closes #<n>` line each.
+
 Read the title, body, labels, and comments. Summarize:
 
 - **Goal:** What does this issue ask for?
@@ -86,7 +88,7 @@ For each step in the plan:
 
 ## 6. Review
 
-Run `/review-loop`. Its final gate runs the unit, coverage, e2e, lint-nf, bench and mrp-diff suites the branch reaches; do not open the PR until it passes.
+Run `/review-loop`. Its final gate runs the fast local checks; do not open the PR until they pass. PR Validation runs the full suites on the PR.
 
 ## 7. Pull Request
 
