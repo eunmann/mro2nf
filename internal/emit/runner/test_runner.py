@@ -372,6 +372,24 @@ class CopyTreeTest(unittest.TestCase):
             self.assertEqual(fh.read(), "keep")
         self.assertFalse(os.path.lexists(os.path.join(dst, "broken")))
 
+    def test_looping_symlink_in_dir_fails(self):
+        # ELOOP is not a dangling link: resolveSymlink fails it, so must we.
+        src = os.path.join(self.tmp, "out")
+        os.mkdir(src)
+        os.symlink("a", os.path.join(src, "a"))
+        with self.assertRaises(rs.RunnerError) as ctx:
+            rs.copy_tree(src, os.path.join(self.tmp, "copy"), None)
+        self.assertIn("resolve symlink", str(ctx.exception))
+
+    def test_looping_symlink_leaf_fails(self):
+        leaf = os.path.join(self.tmp, "loop.txt")
+        os.symlink(leaf, leaf)
+        params = [{"name": "out", "baseType": "txt", "arrayDim": 0,
+                   "mapDim": 0, "isFile": True}]
+        bundle = os.path.join(self.tmp, "bundle")
+        with self.assertRaises(rs.RunnerError):
+            rs.mark_files(bundle, {"out": leaf}, params, {}, None)
+
 
 class ConfinementTest(unittest.TestCase):
     """#332: copy_tree's confinement of a stage's outputs (ports

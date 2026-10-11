@@ -869,14 +869,19 @@ def mark_files(bundle_dir, payload, params, structs, confine):
 def copy_tree(src, dst, confine, copy_only=False, ancestors=None):
     """Ports CopyTree: resolve a symlinked source, recurse into directories,
     hard-link files when possible, fall back to a byte copy. A dangling
-    symlink is skipped, and a directory reached again on its own recursion
-    path (a symlink back to an ancestor) is a cycle error. A non-None
-    confine classifies the stage's own files; it is dropped below a staged
-    input, and below a host path outside the task, whose tree is copied
-    without hard links (copyTree's copyPolicy)."""
+    symlink (ENOENT) is skipped; any other resolve failure, such as a link
+    loop, is an error, as in resolveSymlink. A directory reached again on its
+    own recursion path (a symlink back to an ancestor) is a cycle error. A
+    non-None confine classifies the stage's own files; it is dropped below a
+    staged input, and below a host path outside the task, whose tree is
+    copied without hard links (copyTree's copyPolicy)."""
     if os.path.islink(src):
-        if not os.path.exists(src):
+        try:
+            os.stat(src)
+        except FileNotFoundError:
             return
+        except OSError as err:
+            raise RunnerError("resolve symlink %s: %s" % (src, err)) from None
         resolved = os.path.realpath(src)
     else:
         resolved = src
