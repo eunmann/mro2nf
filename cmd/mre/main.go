@@ -23,7 +23,7 @@ import (
 var version = "dev"
 
 var (
-	errUsage        = errors.New("usage: mre <split|main|join|args|run|post|outs|bind|forkbind|merge|gate|publish-layout|entryargs|version> [flags]")
+	errUsage        = errors.New("usage: mre <split|main|join|plan|args|run|post|outs|bind|forkbind|merge|gate|publish-layout|entryargs|version> [flags]")
 	errUnknownPhase = errors.New("unknown phase")
 	errBadInput     = errors.New("invalid -inputs pair (want id=file)")
 )
@@ -70,6 +70,7 @@ func subcommands() map[string]func(context.Context, []string) error {
 		"split":          runSplit,
 		"main":           runMain,
 		"join":           runJoin,
+		"plan":           runPlan,
 		"args":           runArgs,
 		"post":           runPost,
 		"outs":           runOuts,

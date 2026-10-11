@@ -1,0 +1,176 @@
+// Package cgnf emits a Nextflow project from Martian's compiled call graph
+// (emitter v2, #463): one process per stage node of the witness invocation's
+// call graph, each an alias of the one hand-written stage module, wired by
+// the data the nodes exchange. A run-start PLAN task compiles the run's real
+// invocation as mrp does and hands every node its spec digest, its static
+// gates and the forks its entry-fed roots take.
+package cgnf
+
+import (
+	// The stage module ships inside the binary that emits it.
+	_ "embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+
+	"github.com/eunmann/mro2nf/internal/cg"
+	"github.com/martian-lang/martian/martian/syntax"
+)
+
+//go:embed assets/stage.nf
+var stageModule string
+
+const (
+	dirPerm  = 0o755
+	filePerm = 0o644
+)
+
+var (
+	errReservedParam = errors.New("entry input name is reserved by the generated project")
+	errNotStage      = errors.New("not a stage")
+)
+
+// reserved reports a param the generated project defines itself.
+func reserved(param string) bool {
+	return param == "outdir" || param == "job_resources"
+}
+
+// Options are the paths and knobs a generated project bakes in.
+type Options struct {
+	// OutDir receives the project.
+	OutDir string
+	// Mre, Mrjob and Adapters are the absolute paths of the mre binary, the
+	// mrjob py and comp stages run under, and Martian's adapters dir.
+	Mre, Mrjob, Adapters string
+	// MroPaths are the absolute include paths the invocation compiles with.
+	MroPaths []string
+	// Monitor is mrp's --monitor.
+	Monitor bool
+	// Version names the build in every task's cache key.
+	Version string
+}
+
+// project is one emission: the source, the witness's call graph and its
+// topology.
+type project struct {
+	opts  Options
+	src   cg.Source
+	g     *cg.Graph
+	topo  cg.Topology
+	index map[string]int
+	roots map[string]cg.TopoRoot
+	entry []string
+}
+
+// Emit writes the project for the entry .mro at entry into opts.OutDir.
+func Emit(entry string, opts Options) error {
+	src, err := cg.ReadSource(entry, opts.MroPaths)
+	if err != nil {
+		return fmt.Errorf("emit: %w", err)
+	}
+
+	p, err := newProject(src, opts)
+	if err != nil {
+		return err
+	}
+
+	man, err := src.Manifest(opts.MroPaths)
+	if err != nil {
+		return fmt.Errorf("emit: %w", err)
+	}
+
+	types, err := man.Encode()
+	if err != nil {
+		return fmt.Errorf("emit types: %w", err)
+	}
+
+	source, err := json.MarshalIndent(src, "", "  ")
+	if err != nil {
+		return fmt.Errorf("emit source: %w", err)
+	}
+
+	main, err := p.mainNF()
+	if err != nil {
+		return err
+	}
+
+	files := map[string]string{
+		"main.nf":             main,
+		"stage.nf":            stageModule,
+		"nextflow.config":     p.config(),
+		"_assets/source.json": string(source) + "\n",
+		"_assets/types.json":  types.Subset(slices.Sorted(maps.Keys(man.Callables))...),
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(files)) {
+		if err := writeFile(filepath.Join(opts.OutDir, name), files[name]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func newProject(src cg.Source, opts Options) (*project, error) {
+	g, err := src.Witness(opts.MroPaths)
+	if err != nil {
+		return nil, fmt.Errorf("emit: %w", err)
+	}
+
+	topo, err := g.Topology()
+	if err != nil {
+		return nil, fmt.Errorf("emit: %w", err)
+	}
+
+	for id := range src.Invocation.Args {
+		if reserved(id) {
+			return nil, fmt.Errorf("emit: %w: %s", errReservedParam, id)
+		}
+	}
+
+	p := &project{opts: opts, src: src, g: g, topo: topo, index: map[string]int{}, roots: map[string]cg.TopoRoot{}}
+
+	for i, n := range topo.Nodes {
+		p.index[n.Fqid] = i
+	}
+
+	for _, r := range topo.Roots {
+		p.roots[r.Fqid] = r
+		if r.Producer == "" {
+			p.entry = append(p.entry, r.Fqid)
+		}
+	}
+
+	return p, nil
+}
+
+// stage is the stage a node runs.
+func (p *project) stage(fqid string) (*syntax.Stage, error) {
+	st, err := p.g.Stage(fqid)
+	if err != nil {
+		return nil, fmt.Errorf("emit: %w", err)
+	}
+
+	s, ok := st.Callable().(*syntax.Stage)
+	if !ok {
+		return nil, fmt.Errorf("emit %s: %w", fqid, errNotStage)
+	}
+
+	return s, nil
+}
+
+func writeFile(path, body string) error {
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
+		return fmt.Errorf("emit: %w", err)
+	}
+
+	if err := os.WriteFile(path, []byte(body), filePerm); err != nil {
+		return fmt.Errorf("emit: %w", err)
+	}
+
+	return nil
+}

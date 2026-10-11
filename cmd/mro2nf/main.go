@@ -101,6 +101,20 @@ func run(args []string) error {
 
 	log := logging.New()
 
+	switch *f.emitter {
+	case "":
+	case emitterV2:
+		if err := emitV2(src, f); err != nil {
+			return fmt.Errorf("transpile %s: %w", src, err)
+		}
+
+		log.Info("emitted Nextflow project", "source", src, "emitter", emitterV2, "out", *f.outDir)
+
+		return nil
+	default:
+		return fmt.Errorf("%w %q", errBadEmitter, *f.emitter)
+	}
+
 	prog, err := loadProgram(src, *f.mroPath)
 	if err != nil {
 		return err
@@ -138,6 +152,7 @@ type transpileFlags struct {
 	monitor, native                                                   *bool
 	inlinePipelines, confineOutputs, allowExternalFiles               *bool
 	showVersion                                                       *bool
+	emitter                                                           *string
 }
 
 // defineTranspileFlags registers the transpile flags on fs and returns their
@@ -158,6 +173,7 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 		allowExternalFiles: fs.Bool("allow-external-files", false, "copy entry file defaults and container-target stage code that resolve outside the .mro's directory and the -mropath roots into the project or image (refused by default)"),
 		configPath:         fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win (bools need the equals form, e.g. -native=false)"),
 		showVersion:        fs.Bool("version", false, "print version and exit"),
+		emitter:            hiddenEmitterFlag(fs),
 	}
 }
 

@@ -49,13 +49,31 @@ func Load(mro string, mroPaths []string) (*Graph, error) {
 		return nil, fmt.Errorf("compile %s: %w", mro, err)
 	}
 
+	return graphOf(ast, mro, mroPaths)
+}
+
+// Compile compiles the invocation source src as Load compiles a file named
+// name (core/runtime.go instantiatePipeline: ParseSourceBytes, then
+// MakePipelineCallGraph).
+func Compile(src []byte, name string, mroPaths []string) (*Graph, error) {
+	var p syntax.Parser
+
+	_, _, ast, err := p.ParseSourceBytes(src, name, mroPaths, false)
+	if err != nil {
+		return nil, fmt.Errorf("compile %s: %w", name, err)
+	}
+
+	return graphOf(ast, name, mroPaths)
+}
+
+func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 	if ast.Call == nil {
-		return nil, fmt.Errorf("compile %s: %w", mro, errNoCall)
+		return nil, fmt.Errorf("compile %s: %w", name, errNoCall)
 	}
 
 	root, err := ast.MakePipelineCallGraph("", ast.Call)
 	if err != nil {
-		return nil, fmt.Errorf("call graph of %s: %w", mro, err)
+		return nil, fmt.Errorf("call graph of %s: %w", name, err)
 	}
 
 	g := &Graph{
