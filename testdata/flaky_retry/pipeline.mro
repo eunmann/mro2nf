@@ -4,7 +4,8 @@
 # task.attempt GB }`), the kill limit follows that allocation, and the stage
 # succeeds while still seeing mrp's 0.5 GB request. A successful run reporting
 # 0.5 therefore proves the retry, the escalated monitor limit, and that the
-# escalation never reaches the stage (#243).
+# escalation never reaches the stage (#243). Without -monitor neither mrp nor
+# mro2nf enforces the request, so TestMrpDiff diffs the plain run.
 stage FLAKY(
     in  float x,
     out float mem_gb,

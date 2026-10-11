@@ -33,12 +33,19 @@ run must reproduce. A golden has two parts:
 - **`TestMrpDiff`** re-derives the truth **live**: it runs `mrp` and the
   transpiled Nextflow project on the same invocation and diffs the published
   trees (same comparison as above), the normalized `_outs` and every stage
-  phase's `_args`/`_outs`. Every fixture not in `mrpUnrunnable` is in its
-  `mrpDiffCases`, so each outputs JSON is machine-checked against mrp, and,
-  where a `native` / `runner` leg is set, the `-native` and `-native-runner`
-  emit paths too. It needs a Martian build (`MARTIAN_BIN`, default
-  `~/workdir/martian/bin`); `make test-e2e` includes it and CI runs it on
-  every PR.
+  phase's `_args`/`_outs` for each fixture in its `mrpDiffCases`, so each
+  outputs JSON is machine-checked against mrp, and, where a `native` /
+  `runner` leg is set, the `-native` and `-native-runner` emit paths too.
+- **`TestMrpDiffFailureParity`** runs the fixtures mrp fails on by design
+  (`mrpOutcomeCases`) under both runners and requires that mro2nf fails exactly
+  when mrp does, blaming the same stages with the same kind of failure (an
+  ASSERT or an error). A case where the outcomes differ because of an open bug
+  records that issue, and the case fails once the bug is fixed.
+
+  Every fixture is in exactly one of `mrpDiffCases`, `mrpOutcomeCases` and
+  `mrpUnrunnable` (with the reason mrp cannot be compared on it). Both suites
+  need a Martian build (`MARTIAN_BIN`, default `~/workdir/martian/bin`);
+  `make test-e2e` includes them and CI runs them on every PR.
 
 ## Regenerating goldens
 
@@ -51,5 +58,6 @@ the way `TestMrpDiff` does and replaces each `expected/outs/` and
 Outputs JSON: run `mrp <fixture>/pipeline.mro mrp --jobmode=local --disable-ui
 --nopreflight` with `MROPATH` set to the fixture dir, and copy the
 path-normalized `<pipestance>/<PIPELINE>/fork0/_outs` into `expected/`. Add the
-fixture to `mrpDiffCases` so the copy is machine-checked (or to `mrpUnrunnable`
-with the reason mrp cannot run it); `TestEveryFixtureMrpDiffed` requires one.
+fixture to `mrpDiffCases` so the copy is machine-checked (or, if mrp fails on it
+by design, to `mrpOutcomeCases`, or to `mrpUnrunnable` with the reason mrp
+cannot run it); `TestEveryFixtureMrpDiffed` requires exactly one.
