@@ -538,6 +538,100 @@ func TestEmitContainerResetsBuildContext(t *testing.T) {
 	}
 }
 
+// TestEmitContainerRetranspileRepointsSharedStage is the #251 overwrite case:
+// two stages share a source, so COUNT is vendored as a symlink to ALIAS's
+// copy; re-pointing COUNT at other code and re-transpiling must vendor that
+// code for COUNT, not write it through the stale link over ALIAS's copy.
+func TestEmitContainerRetranspileRepointsSharedStage(t *testing.T) {
+	tr := newHygieneTree(t)
+	mro := filepath.Join(tr.root, "pipeline.mro")
+	writeTreeFile(t, mro, fmt.Sprintf(hygieneMRO, "input/absent.txt"))
+	writeTreeFile(t, filepath.Join(inTreeCode(tr), "__init__.py"), "SHARED")
+	other := filepath.Join(tr.root, "stages", "other")
+	writeTreeFile(t, filepath.Join(other, "__init__.py"), "OTHER")
+
+	opts := emit.Options{
+		OutDir: t.TempDir(), Mre: tr.mre, Shell: tr.shell, MROFile: "pipeline.mro",
+		MRODir: tr.root, Target: emit.TargetAWSBatch,
+		StageCode: map[string]string{"COUNT": inTreeCode(tr), "ALIAS": inTreeCode(tr)},
+	}
+	if err := emit.Emit(parseLowered(t, mro, tr.root), opts); err != nil {
+		t.Fatalf("first Emit: %v", err)
+	}
+
+	stages := filepath.Join(opts.OutDir, "runtime", "stages")
+	if fi, err := os.Lstat(filepath.Join(stages, "COUNT")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("first Emit: stages/COUNT must be the dedup symlink (lstat err %v)", err)
+	}
+
+	opts.StageCode["COUNT"] = other
+	if err := emit.Emit(parseLowered(t, mro, tr.root), opts); err != nil {
+		t.Fatalf("re-transpile: %v", err)
+	}
+
+	for name, want := range map[string]string{"ALIAS": "SHARED", "COUNT": "OTHER"} {
+		if got := readFile(t, filepath.Join(stages, name, "__init__.py")); got != want {
+			t.Errorf("stages/%s/__init__.py = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// TestEmitContainerRetranspileReadOnlySources is the #251 module-cache case:
+// sources the user cannot write (the Go module cache is 0444 files in 0555
+// dirs) are vendored with their modes, and a re-transpile into the same
+// project must replace those read-only copies instead of failing.
+func TestEmitContainerRetranspileReadOnlySources(t *testing.T) {
+	tr := newHygieneTree(t)
+	mro := filepath.Join(tr.root, "pipeline.mro")
+	writeTreeFile(t, mro, fmt.Sprintf(hygieneMRO, "input/absent.txt"))
+	writeTreeFile(t, filepath.Join(filepath.Dir(tr.shell), "martian.py"), "# module\n")
+
+	readOnly := []string{
+		tr.mre, tr.shell, filepath.Join(filepath.Dir(tr.shell), "martian.py"),
+		filepath.Join(inTreeCode(tr), "__init__.py"), inTreeCode(tr), filepath.Dir(tr.shell),
+	}
+	for _, p := range readOnly {
+		chmodReadOnly(t, p)
+	}
+
+	opts := emit.Options{
+		OutDir: t.TempDir(), Mre: tr.mre, Shell: tr.shell, MROFile: "pipeline.mro",
+		MRODir: tr.root, Target: emit.TargetAWSBatch,
+		StageCode: map[string]string{"COUNT": inTreeCode(tr), "ALIAS": inTreeCode(tr)},
+	}
+	for _, run := range []string{"first Emit", "re-transpile"} {
+		if err := emit.Emit(parseLowered(t, mro, tr.root), opts); err != nil {
+			t.Fatalf("%s: %v", run, err)
+		}
+	}
+
+	rt := filepath.Join(opts.OutDir, "runtime")
+	want := []string{
+		"adapters", "adapters/martian.py", "adapters/martian_shell.py", "mre",
+		"stages", "stages/ALIAS", "stages/ALIAS/__init__.py", "stages/COUNT",
+	}
+	if diff := cmp.Diff(want, relEntries(t, rt)); diff != "" {
+		t.Errorf("build context after re-transpile (-want +got):\n%s", diff)
+	}
+}
+
+// chmodReadOnly drops the write bits from p (0444 file, 0555 dir) and
+// restores them at cleanup so t.TempDir can remove the tree.
+func chmodReadOnly(t *testing.T, p string) {
+	t.Helper()
+
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(p, fi.Mode().Perm()&^0o222); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(p, fi.Mode().Perm()) })
+}
+
 // TestEmitRefusesSourceInBuildContext checks a container target refuses a
 // tool, the -shell adapter's module, or a stage src that lies in, or holds,
 // the runtime/ it empties, by its literal or resolved path, instead of
