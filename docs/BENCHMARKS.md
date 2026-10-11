@@ -17,6 +17,20 @@ BENCH_UPDATE=1 make bench      # record the current run as the new baseline
 The harness skips cleanly when `nextflow`, `java`, or `python3` is missing, so it
 is a no-op in an environment without them.
 
+### Scale smoke
+
+```sh
+make test-scale                  # bench/forks at 1000 forks
+SCALE_WIDTH=4000 make test-scale
+```
+
+`make bench` runs at widths small enough for every PR. The nightly workflow also
+runs `make test-scale` (`TestScaleForks`), which generates a `forks` invocation
+at `SCALE_WIDTH` forks and runs it in default and `-native` mode. Each run must
+have one stage task per `mrp` job and the same plumbing task count as
+`pipeline_w4.mro`, and it must gather all `SCALE_WIDTH` outputs in fork order.
+The full scale tier (10k forks and chunks, bytes staged, driver heap) is #352.
+
 ### Other backends (portability)
 
 The whole point of the epic is that the *same* generated project runs on any
