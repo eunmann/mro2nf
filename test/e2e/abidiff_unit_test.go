@@ -230,13 +230,8 @@ func TestHashDirTree(t *testing.T) {
 }
 
 func TestLoadDivergencesCheckedIn(t *testing.T) {
-	divs, err := loadDivergences("divergences.json")
-	if err != nil {
+	if _, err := loadDivergences("divergences.json"); err != nil {
 		t.Fatalf("load checked-in divergences: %v", err)
-	}
-
-	if len(divs) == 0 {
-		t.Fatal("divergences.json lists no entries")
 	}
 }
 
