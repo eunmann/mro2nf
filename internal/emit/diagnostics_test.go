@@ -1,6 +1,9 @@
 package emit
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -28,6 +31,65 @@ func TestDiagnoseWrapsWarnings(t *testing.T) {
 
 	if ds := Diagnose(prog, Options{}); !hasMessage(ds, SevWarn, "`local` modifier ignored") {
 		t.Errorf("Diagnose must surface the local-ignored warning, got %+v", ds)
+	}
+}
+
+// inlinedSubMRO's SUB inlines into TOP. Its map call splits self.xs, which TOP
+// binds to a projection of GEN's output, so the inlined TOP.SUB_SCALE splits
+// GEN.c.xs and keeps a FORK resolve under -native, where an un-inlined
+// SUB.SCALE would scatter.
+const inlinedSubMRO = `
+struct Cfg(int[] xs,)
+stage GEN(out Cfg c, src py "s/gen",)
+stage SCALE(in int v, out int w, src py "s/scale",)
+pipeline SUB(in int[] xs, out int[] ys,){
+    map call SCALE(v = split self.xs,) using (local = true,)
+    return (ys = SCALE.w,)
+}
+pipeline TOP(out int[] ys,){
+    call GEN()
+    call SUB(xs = GEN.c.xs,)
+    return (ys = SUB.ys,)
+}
+call TOP()
+`
+
+// TestDiagnoseAnalyzesTheEmittedProgram pins #250: with sub-pipeline inlining
+// on, as the CLI defaults, Diagnose reports on the calls Emit emits, and it
+// leaves the caller's program for Emit to prepare.
+func TestDiagnoseAnalyzesTheEmittedProgram(t *testing.T) {
+	prog := lowerMRO(t, inlinedSubMRO)
+	opts := Options{OutDir: t.TempDir(), Mre: "mre", Shell: "/x/s", MROFile: "pipeline.mro", InlinePipelines: true}
+
+	ds := Diagnose(prog, opts)
+	if !hasMessage(ds, SevWarn, "call TOP.SUB_SCALE: `local` modifier ignored") || hasMessage(ds, SevWarn, "call SUB.SCALE") {
+		t.Errorf("want the local warning on the inlined call TOP.SUB_SCALE only, got %+v", ds)
+	}
+
+	if _, ok := prog.Pipelines["SUB"]; !ok || len(prog.Pipelines["TOP"].Calls) != 2 {
+		t.Fatal("Diagnose inlined the caller's program")
+	}
+
+	if err := Emit(prog, opts); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	top, err := os.ReadFile(filepath.Join(opts.OutDir, "modules", "pipe_TOP.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(string(top), "process FORK_3_TOP__SUB_SCALE") {
+		t.Errorf("Emit must fork the inlined TOP.SUB_SCALE:\n%s", top)
+	}
+
+	if _, err := os.Stat(filepath.Join(opts.OutDir, "modules", "pipe_SUB.nf")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Emit must not emit the inlined SUB module (stat: %v)", err)
+	}
+
+	nat := Diagnose(lowerMRO(t, inlinedSubMRO), Options{Native: true, InlinePipelines: true})
+	if !hasMessage(nat, SevInfo, "map call TOP.SUB_SCALE keeps one FORK resolve task") {
+		t.Errorf("-native: want the FORK remainder info on the inlined TOP.SUB_SCALE, got %+v", nat)
 	}
 }
 

@@ -161,18 +161,7 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	features := opts.featureSet()
-
-	// Split before inlining so internal/overrides, which resolves the
-	// un-inlined program, derives the same copy names.
-	SplitKnownContexts(prog)
-
-	// #221: flatten eligible sub-pipeline boundaries before planning, so their
-	// entry/return BIND tasks never exist. A pure orchestration transform (the
-	// data plane and every leaf binding's value are unchanged); opt-in while it
-	// proves out, since it renames inlined stage tasks (a one-time -resume reset).
-	if features.inlinePipelines {
-		inlinePipelines(prog)
-	}
+	prepareProgram(prog, features)
 
 	roots := newSourceRoots(opts)
 
@@ -212,6 +201,39 @@ func Emit(prog *ir.Program, opts Options) error {
 	}
 
 	return writeProject(prog, opts, target, g, specDir, entry)
+}
+
+// prepareProgram rewrites prog in place into the program Emit plans: split per
+// invocation-known context, then, under inlinePipelines, with eligible
+// sub-pipeline boundaries flattened so their entry/return BIND tasks never
+// exist (#221). The split runs first so internal/overrides, which resolves the
+// un-inlined program, derives the same copy names. Diagnose prepares a
+// clonePipelines copy, so its diagnostics describe the emitted calls (#250).
+func prepareProgram(prog *ir.Program, f featureSet) {
+	SplitKnownContexts(prog)
+
+	if f.inlinePipelines {
+		inlinePipelines(prog)
+	}
+}
+
+// clonePipelines returns a copy of prog that prepareProgram can rewrite without
+// changing prog: its own Pipelines map, holding a copy of each pipeline with
+// its own Calls and Returns slices. The rewrites replace those slices and
+// their elements' fields and never write through a value they share with
+// prog, so this depth suffices.
+func clonePipelines(prog *ir.Program) *ir.Program {
+	c := *prog
+	c.Pipelines = make(map[string]*ir.Pipeline, len(prog.Pipelines))
+
+	for name, p := range prog.Pipelines {
+		cp := *p
+		cp.Calls = slices.Clone(p.Calls)
+		cp.Returns = slices.Clone(p.Returns)
+		c.Pipelines[name] = &cp
+	}
+
+	return &c
 }
 
 // writeProject renders every file of the Nextflow project (modules, main.nf,
