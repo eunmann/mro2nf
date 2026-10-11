@@ -202,7 +202,7 @@ func TestPublishKeepsMarkerShapedStrings(t *testing.T) {
 
 	want := map[string]any{
 		"s":     shaped,
-		"m":     map[string]any{"k": []any{shaped}},
+		"m":     types.Object{{Key: "k", Value: []any{shaped}}},
 		"fake":  nil,
 		"extra": shaped,
 	}

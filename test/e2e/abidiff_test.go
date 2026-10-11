@@ -69,13 +69,12 @@ func (inv abiInvocation) value() string { return inv.Args + "\x00" + inv.Outs }
 // abiRules are the allowlist entries the ABI comparison of one fixture
 // applies.
 type abiRules struct {
-	keys     []divergence.ABIMatcher
-	sortKeys bool
+	keys []divergence.ABIMatcher
 }
 
 // abiRulesFor collects the entries of allow that apply to fixture.
 func abiRulesFor(allow divergence.Allowlist, fixture string) abiRules {
-	r := abiRules{sortKeys: allow.Excuses(divergence.RuleABISortKeys, fixture)}
+	var r abiRules
 
 	for _, e := range allow.ABI(fixture) {
 		r.keys = append(r.keys, *e.ABI)
@@ -93,11 +92,10 @@ type abiNormalizer struct {
 	ownFiles   []string
 	ignoreKeys []string
 	ceilKeys   []string
-	sortKeys   bool
 }
 
 func newABINormalizer(ownFiles []string, file string, rules abiRules) abiNormalizer {
-	n := abiNormalizer{ownFiles: ownFiles, sortKeys: rules.sortKeys}
+	n := abiNormalizer{ownFiles: ownFiles}
 
 	for _, m := range rules.keys {
 		if m.File != file {
@@ -150,8 +148,7 @@ func (n abiNormalizer) topLevelKeys(v any) (any, error) {
 
 // normalize decodes raw with numbers kept as their source token (an int-vs-float
 // change is exactly what the differential must catch) and objects in member
-// order, rewrites path strings, and re-encodes it, sorting object keys only
-// under the allowlist's key-order rule.
+// order (a stage sees key order too), rewrites path strings, and re-encodes it.
 func (n abiNormalizer) normalize(raw []byte) (string, error) {
 	v, err := decodeOrderedJSON(raw)
 	if err != nil {
@@ -166,10 +163,6 @@ func (n abiNormalizer) normalize(raw []byte) (string, error) {
 	v, err = mapJSONStrings(v, n.path)
 	if err != nil {
 		return "", err
-	}
-
-	if n.sortKeys {
-		v = sortJSONKeys(v)
 	}
 
 	return encodeOrderedJSON(v)
@@ -456,7 +449,7 @@ func diffStageABI(allow divergence.Allowlist, fixture, ps, proj string) ([]strin
 		return nil, err
 	}
 
-	for _, e := range slices.Concat(allow.ABI(fixture), allow.ScopedRules(divergence.KindABI, fixture)) {
+	for _, e := range allow.ABI(fixture) {
 		without, err := diffStageABIUnder(abiRulesFor(allow.Without(e.ID), fixture), ps, proj)
 		if err != nil {
 			return nil, err

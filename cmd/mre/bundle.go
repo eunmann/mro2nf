@@ -217,11 +217,14 @@ func (p *producer) validateOuts(raw json.RawMessage) error {
 	return nil
 }
 
-// rawToMap decodes a JSON object into a map. An empty payload, JSON null, or the
-// empty string the Martian adapter writes for a stage with no outputs yields an
-// empty map. Any other non-object payload (an array, a number, or corrupt JSON)
-// is an error, so genuinely malformed outputs surface instead of silently
-// becoming empty.
+// rawToMap decodes a JSON object into a map of its values, each decoded by
+// types.DecodeJSON, so a number keeps its token (42.0 stays 42.0) and a nested
+// object its key order across the bundle round-trip; the top level is written
+// back with its keys sorted, as mrp writes every _args and _outs. An empty
+// payload, JSON null, or the empty string the Martian adapter writes for a
+// stage with no outputs yields an empty map. Any other non-object payload (an
+// array, a number, or corrupt JSON) is an error, so genuinely malformed outputs
+// surface instead of silently becoming empty.
 func rawToMap(raw json.RawMessage) (map[string]any, error) {
 	out := map[string]any{}
 
@@ -234,11 +237,14 @@ func rawToMap(raw json.RawMessage) (map[string]any, error) {
 		return nil, fmt.Errorf("decode payload: %w, got %.32s", errNotObject, trimmed)
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	dec.UseNumber() // keep 42.0 from collapsing to 42 across the bundle round-trip
-
-	if err := dec.Decode(&out); err != nil {
+	v, err := types.DecodeJSON(trimmed)
+	if err != nil {
 		return nil, fmt.Errorf("decode payload: %w", err)
+	}
+
+	obj, _ := types.AsObject(v)
+	for _, m := range obj {
+		out[m.Key] = m.Value
 	}
 
 	return out, nil

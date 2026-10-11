@@ -1,0 +1,152 @@
+# Every way a struct value is built reaches a stage, and the pipeline outs, in
+# mrp's key order (#366). Declared field orders are not alphabetical and PROD
+# writes its own orders, so declared, producer and sorted orders all differ:
+# a projection keeps PROD's order unless FilterJson filters it, which rebuilds
+# it in declared order; a struct, array or typed map built from bindings, a
+# literal, and a whole-call ref (one per fork for a mapped call) have their
+# keys sorted; an untyped map keeps PROD's order; a file-bearing struct output
+# is published with its keys sorted. CONS reports the key order it sees.
+filetype txt;
+
+struct In(
+    int z,
+    int a,
+)
+
+struct Wide(
+    int z,
+    int a,
+    int m,
+)
+
+struct Box(
+    In  q,
+    int b,
+)
+
+struct FBox(
+    txt f,
+    In  q,
+    int b,
+)
+
+stage PROD(
+    out In   s,
+    out Wide w,
+    out Box  bx,
+    out In   fl,
+    out map  um,
+    out FBox fb,
+    out int  z,
+    out int  a,
+    out int  m,
+    src py   "stages/prod",
+)
+
+stage PRODM(
+    in  int n,
+    out int z,
+    out int a,
+    out int m,
+    src py  "stages/prodm",
+)
+
+stage CONS(
+    in  In      s1,
+    in  In      s2,
+    in  Box     b1,
+    in  Box     b2,
+    in  In      s3,
+    in  map     m1,
+    in  Box     b3,
+    in  In      s4,
+    in  Box[]   arr,
+    in  map<In> mp,
+    in  Box     b4,
+    in  In[]    ms,
+    in  map<In> mk,
+    out Box     ob,
+    out map     om,
+    out string  seen,
+    src py      "stages/cons",
+)
+
+pipeline KO(
+    out Box    bx,
+    out map    um,
+    out Box    ob,
+    out map    om,
+    out FBox   fb,
+    out Box    built,
+    out In     w,
+    out string seen,
+)
+{
+    call PROD()
+
+    map call PRODM(
+        n = split [
+            1,
+            2,
+        ],
+    )
+
+    map call PRODM as PRODK(
+        n = split {
+            "k2": 3,
+            "k1": 4,
+        },
+    )
+
+    call CONS(
+        s1  = PROD.s,
+        s2  = PROD.w,
+        b1  = {
+            q: PROD.s,
+            b: 3,
+        },
+        b2  = {
+            q: PROD.w,
+            b: 3,
+        },
+        s3  = PROD,
+        m1  = PROD.um,
+        b3  = PROD.bx,
+        s4  = PROD.fl,
+        arr = [
+            {
+                q: PROD.s,
+                b: 1,
+            },
+        ],
+        mp  = {
+            "k2": PROD.s,
+            "k1": PROD.w,
+        },
+        b4  = {
+            q: {
+                z: 5,
+                a: 6,
+            },
+            b: 7,
+        },
+        ms  = PRODM,
+        mk  = PRODK,
+    )
+
+    return (
+        bx    = PROD.bx,
+        um    = PROD.um,
+        ob    = CONS.ob,
+        om    = CONS.om,
+        fb    = PROD.fb,
+        built = {
+            q: PROD.s,
+            b: 4,
+        },
+        w     = PROD.w,
+        seen  = CONS.seen,
+    )
+}
+
+call KO()

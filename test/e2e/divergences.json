@@ -1,26 +1,6 @@
 {
   "divergences": [
     {
-      "id": "abi-object-key-order",
-      "kind": "abi",
-      "feature": "struct and map values a stage receives",
-      "summary": "A stage receives struct and map values with their keys sorted, where mrp passes them in the order their producer wrote them.",
-      "justification": "The data plane decodes every bundle into Go maps (`cmd/mre/bundle.go` `rawToMap`), which re-encode sorted. Against mrp 4a558e7 a producer's `{\"b\": 1, \"a\": 2}` reaches the consumer's `_args` as `{\"a\": 2, \"b\": 1}`, so a stage that iterates the dict sees another order; `nested_struct`'s READN gets `{b, inner}` under mro2nf and `{inner, b}` under mrp. The ABI comparison sorts object keys on the fixtures whose stage invocations differ without this entry, and fails on any of them where it no longer does.",
-      "issue": 366,
-      "evidence": ["TestMrpDiff/nested_struct", "TestMrpDiff/split_struct_chunk", "TestMrpDiff/struct_input", "TestRemovingAnABIEntryFailsTheComparison"],
-      "comparator": {"rule": "abi-sort-object-keys", "fixtures": ["nested_struct", "split_struct_chunk", "struct_input"]}
-    },
-    {
-      "id": "outs-json-object-key-order",
-      "kind": "published-tree",
-      "feature": "struct and map values in the pipeline outs JSON",
-      "summary": "`pipeline_outs.json` writes struct and map values with their keys sorted, where mrp's `_outs` keeps the order their producer wrote them in.",
-      "justification": "The same Go-map re-encoding as `abi-object-key-order`: `kitchen_sink`'s `stats` struct is published as `{count, mean, total}` by mro2nf and `{count, total, mean}` by mrp 4a558e7. The outs JSON comparisons, against mrp and against the goldens, sort object keys on the fixtures whose outs JSON differs from mrp's without this entry, and the mrp comparison fails on any of them where it no longer does.",
-      "issue": 366,
-      "evidence": ["TestMrpDiff/basename_echo", "TestMrpDiff/kitchen_sink", "TestMrpDiff/struct_min", "TestRemovingAPublishedTreeEntryFailsTheComparison", "TestScopedRuleEntryFailsWhereItExcusesNothing"],
-      "comparator": {"rule": "outs-json-sort-object-keys", "fixtures": ["basename_echo", "kitchen_sink", "struct_min"]}
-    },
-    {
       "id": "outs-json-relative-paths",
       "kind": "published-tree",
       "feature": "file paths in the pipeline outs JSON",

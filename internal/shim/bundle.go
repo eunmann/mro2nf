@@ -1,7 +1,6 @@
 package shim
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -149,8 +148,8 @@ func escapeValue(v any) (any, error) {
 }
 
 // mapStrings returns a copy of the decoded JSON tree v with fn applied to every
-// string value (map keys are left alone). A json.RawMessage is decoded first so
-// its strings are reached too.
+// string value (object keys, and their order, are left alone). A
+// json.RawMessage is decoded first so its strings are reached too.
 func mapStrings(v any, fn func(string) (string, error)) (any, error) {
 	switch t := v.(type) {
 	case string:
@@ -171,6 +170,18 @@ func mapStrings(v any, fn func(string) (string, error)) (any, error) {
 			}
 
 			out[i] = ne
+		}
+
+		return out, nil
+	case types.Object:
+		out := make(types.Object, len(t))
+		for i, m := range t {
+			ne, err := mapStrings(m.Value, fn)
+			if err != nil {
+				return nil, err
+			}
+
+			out[i] = types.Member{Key: m.Key, Value: ne}
 		}
 
 		return out, nil
@@ -251,14 +262,12 @@ func resolveLeaf(s, bundleAbs string) (string, error) {
 }
 
 // decodeJSON decodes JSON into an any tree, keeping numbers as json.Number so a
-// whole-number float like 42.0 is not silently rewritten to 42 on re-encode.
+// whole-number float like 42.0 is not silently rewritten to 42 on re-encode, and
+// objects as types.Object so a value re-encodes with its producer's key order.
 func decodeJSON(raw json.RawMessage) (any, error) {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-
-	var v any
-	if err := dec.Decode(&v); err != nil {
-		return nil, fmt.Errorf("decode json: %w", err)
+	v, err := types.DecodeJSON(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decode bundle json: %w", err)
 	}
 
 	return v, nil

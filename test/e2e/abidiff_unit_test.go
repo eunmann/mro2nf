@@ -85,19 +85,6 @@ func TestABINormalizeIntVsFloatDiffer(t *testing.T) {
 	}
 }
 
-// TestABINormalizeSortKeys checks the key-order rule sorts the keys of every
-// object, nested ones included, and leaves array order alone.
-func TestABINormalizeSortKeys(t *testing.T) {
-	got, err := abiNormalizer{sortKeys: true}.normalize([]byte(`{"b": [{"z": 1, "y": 2}, 0], "a": {"d": 1, "c": 2}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if want := `{"a":{"c":2,"d":1},"b":[{"y":2,"z":1},0]}`; got != want {
-		t.Errorf("normalize = %s, want %s", got, want)
-	}
-}
-
 func TestABINormalizeRejectsMalformed(t *testing.T) {
 	for _, in := range []string{`{"x": `, `{"x": 1} {"y": 2}`, `{"x": 1}]`, `[1, 2`} {
 		if _, err := (abiNormalizer{}).normalize([]byte(in)); err == nil {
@@ -507,36 +494,32 @@ func (p abiPair) diff(t *testing.T, allow divergence.Allowlist, fixture string) 
 	return strings.Join(reports, "\n")
 }
 
-// TestRemovingAnABIEntryFailsTheComparison compares the consumer _args a real
-// mrp 4a558e7 run and an mro2nf run gave a stage whose struct input's producer
-// wrote {"b": 1, "a": 2}: mrp keeps the producer's order, mro2nf sorts it
-// (#366). The checked-in allowlist excuses that on a fixture its entry names;
-// without the entry, or on a fixture outside its scope, the comparison fails,
-// and on its own fixture a pair whose orders agree fails as an entry that
-// excuses nothing.
-func TestRemovingAnABIEntryFailsTheComparison(t *testing.T) {
+// TestABIComparesKeyOrder compares the consumer _args a real mrp 4a558e7 run
+// gave a stage whose struct input's producer wrote {"b": 1, "a": 2}, which mrp
+// passes in that order, with _args holding the same values: under the
+// checked-in allowlist the comparison fails on sorted keys, on any fixture, and
+// passes on the producer's order (#366).
+func TestABIComparesKeyOrder(t *testing.T) {
 	const mrpArgs = `{"__mem_gb": 1, "__threads": 1, "__vmem_gb": 4, "m": {"y": 2, "z": 1}, "s": {"b": 1, "a": 2}}`
 
-	pair := writeABIPair(t, mrpArgs, `{"__mem_gb":1,"__threads":1,"__vmem_gb":4,"m":{"y":2,"z":1},"s":{"a":2,"b":1}}`)
+	sorted := writeABIPair(t, mrpArgs, `{"__mem_gb":1,"__threads":1,"__vmem_gb":4,"m":{"y":2,"z":1},"s":{"a":2,"b":1}}`)
 	agreeing := writeABIPair(t, mrpArgs, `{"__mem_gb":1,"__threads":1,"__vmem_gb":4,"m":{"y":2,"z":1},"s":{"b":1,"a":2}}`)
 	allow := mustAllowlist(t)
 
 	cases := []struct {
 		name    string
 		pair    abiPair
-		allow   divergence.Allowlist
 		fixture string
 		want    string
 	}{
-		{"excused", pair, allow, "nested_struct", ""},
-		{"entry_removed", pair, allow.Without("abi-object-key-order"), "nested_struct", "CONS main"},
-		{"out_of_scope", pair, allow, "file_min", "CONS main"},
-		{"excuses_nothing", agreeing, allow, "nested_struct", "abi-object-key-order excuses nothing in nested_struct"},
+		{"sorted", sorted, "nested_struct", "CONS main"},
+		{"sorted_other_fixture", sorted, "file_min", "CONS main"},
+		{"producer_order", agreeing, "nested_struct", ""},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.pair.diff(t, tc.allow, tc.fixture)
+			got := tc.pair.diff(t, allow, tc.fixture)
 			if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
 				t.Errorf("reports %q, want %q", got, tc.want)
 			}

@@ -347,6 +347,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #239: struct narrowing on every bind path; the noinline leg keeps the
 	// NARROW sub's return a would-be forward, the native legs fold binds.
 	{name: "struct_narrow", native: true, inline: true},
+	// #366: every way a struct value is built reaches a stage and the outs
+	// JSON in mrp's key order, through plain and native-scattered forks.
+	{name: "struct_key_order", native: true},
 	{name: "kitchen_sink", inline: true},
 	{name: "file_tree", inline: true},
 	{name: "map_null_map"},

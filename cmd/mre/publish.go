@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -348,14 +347,15 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 // {MapDim:2, ArrayDim:0}), so the element is descended as an array of that
 // depth — not another map level.
 func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
-	m, ok := value.(map[string]any)
+	m, ok := types.AsObject(value)
 	if !ok {
 		return nil, shapeErr(rel, "map", p, value)
 	}
 
 	out := make(map[string]any, len(m))
 
-	for _, k := range slices.Sorted(maps.Keys(m)) {
+	for _, member := range slices.SortedFunc(slices.Values(m), byKey) {
+		k := member.Key
 		if err := legalFilenameErr(k); err != nil {
 			// Best-effort diagnostic write: a failed stderr warning must not
 			// fail the publish itself.
@@ -370,7 +370,7 @@ func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
 		elem.Name = k
 		elem.OutName = ""
 
-		ov, err := pub.emit(rel, elem, m[k])
+		ov, err := pub.emit(rel, elem, member.Value)
 		if err != nil {
 			return nil, err
 		}
@@ -381,10 +381,15 @@ func (pub *publisher) emitMap(rel string, p ir.Param, value any) (any, error) {
 	return out, nil
 }
 
+func byKey(a, b types.Member) int {
+	return strings.Compare(a.Key, b.Key)
+}
+
 // emitStruct publishes a struct into the rel/ subdir, recursing each field named
-// by its own GetOutFilename; the JSON object is keyed by field id.
+// by its own GetOutFilename; the JSON object is keyed by field id, with its keys
+// sorted as mrp's moveOutDir writes a file-bearing struct.
 func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error) {
-	sv, ok := value.(map[string]any)
+	sv, ok := types.AsObject(value)
 	if !ok {
 		return nil, shapeErr(rel, "struct", p, value)
 	}
@@ -394,7 +399,9 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error)
 	for _, f := range pub.structs[p.BaseType].Fields {
 		// Every declared member is emitted (an absent one as null), matching
 		// Martian; a non-file field passes through verbatim via emit's guard.
-		fv, err := pub.emit(rel, f, sv[f.Name])
+		fieldValue, _ := sv.Get(f.Name)
+
+		fv, err := pub.emit(rel, f, fieldValue)
 		if err != nil {
 			return nil, err
 		}

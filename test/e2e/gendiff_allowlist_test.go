@@ -5,6 +5,7 @@ package e2e
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,31 +15,47 @@ import (
 var errGenRunFailed = errors.New("run exited 1")
 
 // TestGenDiffPublishedAppliesEveryRule runs TestGenDiff's published-output
-// comparison on publishedPair as a program that is no fixture. Every rule
-// excuses its difference, the issue-tracked key-order one included; once the
-// keys agree that entry excuses nothing, which the comparison of a named
+// comparison on publishedPair as a program that is no fixture, with the
+// relative-paths entry tracked by an issue and scoped to pairFixture. The
+// scoped rule excuses mrp's absolute paths for the program too; once mrp's
+// paths agree the entry excuses nothing, which the comparison of the named
 // fixture reports and that of a generated program does not; and a difference
 // no entry excuses is still a finding.
 func TestGenDiffPublishedAppliesEveryRule(t *testing.T) {
 	const program = "fixture"
 
+	allow := allowlistScoping(t, "outs-json-relative-paths", pairFixture)
 	ps, results := publishedPair(t)
+	mrpJSON := filepath.Join(ps, "P", "fork0", "_outs")
 	nfOuts := filepath.Join(results, "pipeline_outs.json")
 
+	relative, err := os.ReadFile(nfOuts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
-		name, stats string
-		want        []string
+		name, mrpOuts, nfOuts string
+		want                  []string
 	}{
-		{"keys_unsorted", `{"count": 4, "mean": 2.5, "total": 10.0}`, nil},
-		{"keys_agree", `{"count": 4, "total": 10.0, "mean": 2.5}`, nil},
-		{"number_token", `{"count": 4, "total": 10, "mean": 2.5}`, []string{"outs:stats"}},
+		{"paths_absolute", "", string(relative), nil},
+		{"paths_agree", string(relative), string(relative), nil},
+		{
+			"number_token", string(relative),
+			`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "total": 10, "mean": 2.5}}`,
+			[]string{"outs:stats"},
+		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			writeABITestFile(t, nfOuts, `{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": `+c.stats+`}`)
+			if c.mrpOuts != "" {
+				writeABITestFile(t, mrpJSON, c.mrpOuts)
+			}
 
-			got, err := genPublishedFindings(genAllowlist(t), "default", program, ps, results)
+			writeABITestFile(t, nfOuts, c.nfOuts)
+
+			got, err := genPublishedFindings(allow.RulesEverywhere(), "default", program, ps, results)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -49,15 +66,16 @@ func TestGenDiffPublishedAppliesEveryRule(t *testing.T) {
 		})
 	}
 
-	writeABITestFile(t, nfOuts, `{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": `+cases[1].stats+`}`)
+	writeABITestFile(t, mrpJSON, string(relative))
+	writeABITestFile(t, nfOuts, string(relative))
 
-	reports, err := diffPublished(mustAllowlist(t), pairFixture, ps, results)
+	reports, err := diffPublished(allow, pairFixture, ps, results)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if len(reports) != 1 || !strings.Contains(reports[0], "excuses nothing in "+pairFixture) {
-		t.Errorf("the fixture comparison reports %q, want the key-order entry excusing nothing", reports)
+		t.Errorf("the fixture comparison reports %q, want the relative-paths entry excusing nothing", reports)
 	}
 }
 

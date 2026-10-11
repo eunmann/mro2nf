@@ -59,7 +59,7 @@ func TestMarkdown(t *testing.T) {
 	allow, err := Parse([]byte(`{"divergences": [
 		{"id": "how", "kind": "mechanism", "feature": "f", ` + ok + `},
 		{"id": "nf-fails", "kind": "outcome", "feature": "g", "issue": 9, ` + ok + `, "outcome": {"failed": true}},
-		{"id": "b-order", "kind": "abi", "feature": "h", "issue": 4, ` + ok + `, "comparator": {"rule": "abi-sort-object-keys", "fixtures": ["fx", "fy"]}},
+		{"id": "b-paths", "kind": "published-tree", "feature": "h", "issue": 4, ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix", "fixtures": ["fx", "fy"]}},
 		{"id": "c-stage", "kind": "outcome", "feature": "e", ` + ok + `, "comparator": {"rule": "compare-failure-stage-and-kind"}},
 		{"id": "a-key", "kind": "abi", "feature": "i", ` + ok + `, "abi": {"fixtures": ["fx"], "file": "_args", "rule": "ignore-key", "key": "k"}}]}`))
 	if err != nil {
@@ -68,7 +68,7 @@ func TestMarkdown(t *testing.T) {
 
 	want := "| Feature | Status | Divergence | Test |\n|---|---|---|---|\n" +
 		"| i | ⚠️ abi, permanent | **`a-key`**: s \\| t j Scoped to `fx`. | `TestX`, `TestY/sub` |\n" +
-		"| h | ⚠️ abi, #4 | **`b-order`**: s \\| t j Scoped to `fx`, `fy`. | `TestX`, `TestY/sub` |\n" +
+		"| h | ⚠️ published-tree, #4 | **`b-paths`**: s \\| t j Scoped to `fx`, `fy`. | `TestX`, `TestY/sub` |\n" +
 		"| e | ⚠️ outcome, permanent | **`c-stage`**: s \\| t j | `TestX`, `TestY/sub` |\n" +
 		"| g | ⚠️ outcome, #9 | **`nf-fails`**: s \\| t j | `TestX`, `TestY/sub` |\n" +
 		"| f | ⚠️ mechanism, permanent | **`how`**: s \\| t j | `TestX`, `TestY/sub` |\n"

@@ -345,7 +345,8 @@ hash. Every known divergence lives in one allowlist, `test/e2e/divergences.json`
 (`test/divergence` loads and validates it), and the comparison excuses a
 difference only through an entry there: a key-scoped ABI entry names its
 fixtures, file, rule and key, and a normalization built into a comparator (such
-as sorting object keys while #366 is open) applies only while its entry exists.
+as stripping mrp's outs-dir prefix from the outs JSON paths) applies only while
+its entry exists.
 An entry with an issue is temporary, one without is intentional and applies on
 every fixture. A key-scoped entry, and an issue-tracked comparator-rule entry,
 names the fixtures where it must excuse a difference and applies only there;

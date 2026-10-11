@@ -85,6 +85,37 @@ func AsObject(v any) (Object, bool) {
 	}
 }
 
+// Sorted returns v with every Object replaced by a map[string]any, so it
+// encodes with every key sorted, as mrp encodes a literal (syntax MapExp). v is
+// not mutated.
+func Sorted(v any) any {
+	switch t := v.(type) {
+	case Object:
+		out := make(map[string]any, len(t))
+		for _, m := range t {
+			out[m.Key] = Sorted(m.Value)
+		}
+
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, e := range t {
+			out[k] = Sorted(e)
+		}
+
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = Sorted(e)
+		}
+
+		return out
+	default:
+		return v
+	}
+}
+
 // sortedObject returns m's members sorted by key.
 func sortedObject(m map[string]any) Object {
 	o := make(Object, 0, len(m))
