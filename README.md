@@ -324,7 +324,8 @@ A minimal **AWS CDK** app in `deploy/awsbatch-cdk/` provisions exactly the infra
 needed to test live (S3 bucket, ECR repo, Batch compute env + queue, and a
 HealthOmics service role) — see its README for `cdk deploy` + run steps.
 
-> Provide a **linux/amd64** `mre` (build with `GOOS=linux GOARCH=amd64`). Cloud
+> Provide a static, path-free **linux/amd64** `mre` (build with
+> `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o mre ./cmd/mre`). Cloud
 > file flow is validated locally via the copy-staging suite (`TestCloudSim*`) and
 > the docker-isolation suite (`make test-e2e-docker`); a live Batch/S3 or HealthOmics run
 > additionally needs the AWS infrastructure (`deploy/awsbatch-cdk/`).
