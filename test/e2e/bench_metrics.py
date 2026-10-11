@@ -51,12 +51,14 @@ def parse_trace(path, stages):
     The trace holds one row per ATTEMPT: under `errorStrategy retry` a
     transient failure adds a FAILED row and then a fresh row for the retry.
     The e2e harness fails such a run (#269), but a trace read outside it must
-    still count each task once. The harness requests the default trace fields, which carry no attempt column —
-    but the fully qualified task name (`WF:PROC (n)`; the generated processes
-    set no `tag`, so the index makes each task's name unique) IS the stable
-    task identity, and every attempt of one task repeats it. Keying rows by
-    that name and letting the last attempt win therefore counts each task
-    once, retried or not, and reads rchar/wchar from the attempt that
+    still count each task once.
+
+    The harness requests the default trace fields, which carry no attempt
+    column — but the fully qualified task name (`WF:PROC (n)`; the generated
+    processes set no `tag`, so the index makes each task's name unique) IS the
+    stable task identity, and every attempt of one task repeats it. Keying
+    rows by that name and letting the last attempt win therefore counts each
+    task once, retried or not, and reads rchar/wchar from the attempt that
     actually completed.
 
     A task is plumbing unless its process is in `stages`, the stage-phase
