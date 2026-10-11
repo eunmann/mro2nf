@@ -50,6 +50,9 @@ type Options struct {
 	MroPaths []string
 	// Monitor is mrp's --monitor.
 	Monitor bool
+	// Confine fails a stage task whose output resolves outside its work
+	// dir instead of copying it in (mre run -confine).
+	Confine bool
 	// Version names the build in every task's cache key.
 	Version string
 }

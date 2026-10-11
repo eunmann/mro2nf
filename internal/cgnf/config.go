@@ -28,7 +28,8 @@ params.job_resources = [:]
 	fmt.Fprintf(&b, "params.mro2nf_mrjob = %s\n", gstr(p.opts.Mrjob))
 	fmt.Fprintf(&b, "params.mro2nf_adapters = %s\n", gstr(p.opts.Adapters))
 	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n", gstr(p.src.Invocation.Call))
-	fmt.Fprintf(&b, "params.mro2nf_monitor = %t\n\n", p.opts.Monitor)
+	fmt.Fprintf(&b, "params.mro2nf_monitor = %t\n", p.opts.Monitor)
+	fmt.Fprintf(&b, "params.mro2nf_confine = %t\n\n", p.opts.Confine)
 
 	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
 

@@ -23,8 +23,9 @@ func v2Run(t *testing.T, fixture string, flags ...string) (string, error) {
 }
 
 // TestEmitterV2: -emitter=v2 emits the call-graph project, its mrjob the
-// one built beside mre and its adapters the shell's, and the flag is left
-// out of the usage text.
+// one built beside mre and its adapters the shell's, confined under
+// -confine-outputs, and the flag is left out of the usage text, which
+// keeps every other flag's default.
 func TestEmitterV2(t *testing.T) {
 	out, err := v2Run(t, "file_min")
 	if err != nil {
@@ -36,10 +37,19 @@ func TestEmitterV2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, want := range []string{"params.mro2nf_mrjob = '/opt/bin/mrjob'", "params.mro2nf_adapters = '/opt/adapters'", "params.x = null"} {
+	for _, want := range []string{"params.mro2nf_mrjob = '/opt/bin/mrjob'", "params.mro2nf_adapters = '/opt/adapters'", "params.mro2nf_confine = false", "params.x = null"} {
 		if !strings.Contains(string(cfg), want) {
 			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
 		}
+	}
+
+	confined, err := v2Run(t, "file_min", "-confine-outputs")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg, err := os.ReadFile(filepath.Join(confined, "nextflow.config")); err != nil || !strings.Contains(string(cfg), "params.mro2nf_confine = true") {
+		t.Errorf("-confine-outputs does not confine the stage tasks (%v):\n%s", err, cfg)
 	}
 
 	if _, err := os.Stat(filepath.Join(out, "stage.nf")); err != nil {
@@ -52,10 +62,21 @@ func TestEmitterV2(t *testing.T) {
 
 	fs.SetOutput(&usage)
 	defineTranspileFlags(fs)
+
+	if err := fs.Parse([]string{"-mre", "/x/mre"}); err != nil {
+		t.Fatal(err)
+	}
+
 	fs.Usage()
 
 	if strings.Contains(usage.String(), "emitter") || !strings.Contains(usage.String(), "-mropath") {
 		t.Errorf("usage shows -emitter or lost the other flags:\n%s", usage.String())
+	}
+
+	for _, want := range []string{`(default "mre")`, `(default "local")`, "(default true)"} {
+		if !strings.Contains(usage.String(), want) {
+			t.Errorf("usage lacks the default %s:\n%s", want, usage.String())
+		}
 	}
 }
 
@@ -69,8 +90,10 @@ func TestEmitterV2Refuses(t *testing.T) {
 		t.Errorf("-emitter=v3: %v, want errBadEmitter", err)
 	}
 
-	if _, err := v2Run(t, "file_min", "-native"); !errors.Is(err, errV2Flag) {
-		t.Errorf("-native: %v, want errV2Flag", err)
+	for _, flag := range []string{"-native", "-allow-external-files", "-inline-pipelines=false"} {
+		if _, err := v2Run(t, "file_min", flag); !errors.Is(err, errV2Flag) {
+			t.Errorf("%s: %v, want errV2Flag", flag, err)
+		}
 	}
 
 	if err := run([]string{"-emitter=v2", "-o", t.TempDir(), mro}); !errors.Is(err, errV2NoShell) {

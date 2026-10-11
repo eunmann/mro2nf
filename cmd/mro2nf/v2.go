@@ -21,7 +21,8 @@ var (
 	errBadEmitter = errors.New("unknown -emitter")
 )
 
-// hiddenEmitterFlag registers -emitter, which the usage text leaves out.
+// hiddenEmitterFlag registers -emitter, which the usage text leaves out:
+// it prints flag.PrintDefaults of a copy of fs without it.
 func hiddenEmitterFlag(fs *flag.FlagSet) *string {
 	v := fs.String("emitter", "", "")
 
@@ -30,23 +31,27 @@ func hiddenEmitterFlag(fs *flag.FlagSet) *string {
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(fs.Output(), "Usage of %s:\n", fs.Name())
 
-		fs.VisitAll(func(f *flag.Flag) {
-			if f.Name == "emitter" {
-				return
-			}
+		shown := flag.NewFlagSet(fs.Name(), flag.ContinueOnError)
+		shown.SetOutput(fs.Output())
 
-			name, usage := flag.UnquoteUsage(f)
-			_, _ = fmt.Fprintf(fs.Output(), "  -%s %s\n    \t%s\n", f.Name, name, usage)
+		fs.VisitAll(func(f *flag.Flag) {
+			if f.Name != "emitter" {
+				shown.Var(f.Value, f.Name, f.Usage)
+				shown.Lookup(f.Name).DefValue = f.DefValue
+			}
 		})
+
+		shown.PrintDefaults()
 	}
 
 	return v
 }
 
-// emitV2 transpiles src with the call-graph emitter.
+// emitV2 transpiles src with the call-graph emitter, refusing the old
+// emitter's modes and file-copying.
 func emitV2(src string, f transpileFlags) error {
-	if *f.native || *f.container != "" || *f.target != "local" {
-		return fmt.Errorf("-native, -container and -target: %w", errV2Flag)
+	if *f.native || *f.container != "" || *f.target != "local" || *f.allowExternalFiles || !*f.inlinePipelines {
+		return fmt.Errorf("-native, -container, -target, -allow-external-files and -inline-pipelines=false: %w", errV2Flag)
 	}
 
 	if *f.shell == "" {
@@ -72,6 +77,7 @@ func emitV2(src string, f transpileFlags) error {
 		Adapters: filepath.Dir(filepath.Dir(absOrSelf(*f.shell))),
 		MroPaths: paths,
 		Monitor:  *f.monitor,
+		Confine:  *f.confineOutputs,
 		Version:  buildVersion(),
 	}
 
