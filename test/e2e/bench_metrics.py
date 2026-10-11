@@ -49,9 +49,9 @@ def parse_trace(path, stages):
     """Aggregate the trace by unique task identity, not by row.
 
     The trace holds one row per ATTEMPT: under `errorStrategy retry` a
-    transient failure adds a FAILED row and then a fresh row for the retry, so
-    raw row counts would fail the `tasks` gate on any unrelated retry. The
-    harness requests the default trace fields, which carry no attempt column —
+    transient failure adds a FAILED row and then a fresh row for the retry.
+    The e2e harness fails such a run (#269), but a trace read outside it must
+    still count each task once. The harness requests the default trace fields, which carry no attempt column —
     but the fully qualified task name (`WF:PROC (n)`; the generated processes
     set no `tag`, so the index makes each task's name unique) IS the stable
     task identity, and every attempt of one task repeats it. Keying rows by

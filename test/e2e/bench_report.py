@@ -32,10 +32,9 @@ import re
 import sys
 
 # Baseline-gated metrics: any increase over the committed baseline is a
-# regression. `tasks` counts unique task identities, not trace rows — a
-# transient executor retry re-runs a task under the same name and
-# bench_metrics.py keeps only the final attempt, so a retry on an unrelated
-# task cannot trip this gate (see bench_metrics.parse_trace).
+# regression. `tasks` counts unique task identities, not trace rows (see
+# bench_metrics.parse_trace); a run with a retried attempt fails in the
+# harness before it reaches this gate (runNextflow, #269).
 GATED = ("refs", "plumbing_tasks", "tasks")
 
 # A lane name of one fixture run at a given width: <base>_w<N> (fork width) or
