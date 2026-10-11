@@ -109,7 +109,10 @@ with the upstream `github.com/martian-lang/martian/syntax` package
 (`frontend.Parse`), then **lowers** that AST into a small, normalized
 intermediate representation (`frontend.Lower` → `internal/ir`). The IR exists so
 the emitter never has to think about Martian's surface syntax — only about a flat
-set of stages, pipelines, calls, and bindings.
+set of stages, pipelines, calls, and bindings. It then resolves the invocation's
+call graph with the same `syntax` function `mrp` runs before it creates a
+pipestance (`frontend.CheckCallGraph`), so a pipeline `mrp` refuses to start is
+refused at transpile time with `mrp`'s message.
 
 The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
 
@@ -179,7 +182,7 @@ enumerating forks from `forknames.json`, stripping a composite fork key — live
 in a hand-written **`lib/Mro2nf.groovy`** (`@CompileStatic`, `java.nio.Path`
 APIs only), shipped verbatim into every project (embedded in the transpiler, same
 as `_assets/`). Nextflow auto-adds `lib/` to the driver classpath, so generated
-code calls `Mro2nf.disabled(d)`, `Mro2nf.chunkRes(c)`, `Mro2nf.forkTuples(ok, d)`
+code calls `Mro2nf.disabledDir(d, 'disabled')`, `Mro2nf.chunkRes(c)`, `Mro2nf.forkTuples(ok, d)`
 etc. instead of stamping a dense one-line closure at each site. Every helper runs
 on the **driver** while wiring channels — never in a task — so it changes nothing
 for AWS Batch / S3 / HealthOmics execution, and the file rides along in the

@@ -504,9 +504,9 @@ func TestProducerManifestNoTypes(t *testing.T) {
 	}
 }
 
-// TestProducerCoerceInputs checks the int-from-whole-float coercion against a
-// manifest written to disk, concatenating the RoleIn and RoleChunkIn parameter
-// sets; a non-int value passes through untouched.
+// TestProducerCoerceInputs checks the int-from-whole-float coercion of a bound
+// int input against a manifest written to disk. A name only the split's chunk
+// inputs declare keeps its float (#245), and a non-int value passes through.
 func TestProducerCoerceInputs(t *testing.T) {
 	man := types.Manifest{Callables: map[string]types.Callable{
 		"S": {
@@ -521,7 +521,7 @@ func TestProducerCoerceInputs(t *testing.T) {
 
 	prod := &producer{types: path, callable: "S"}
 
-	raw, err := prod.coerceInputs(json.RawMessage(`{"x":5.0,"c":7.0,"other":1.5}`), types.RoleIn, types.RoleChunkIn)
+	raw, err := prod.coerceInputs(json.RawMessage(`{"x":5.0,"c":7.0,"other":1.5}`))
 	if err != nil {
 		t.Fatalf("coerceInputs: %v", err)
 	}
@@ -533,35 +533,11 @@ func TestProducerCoerceInputs(t *testing.T) {
 
 	want := map[string]json.RawMessage{
 		"x":     json.RawMessage("5"),
-		"c":     json.RawMessage("7"),
+		"c":     json.RawMessage("7.0"),
 		"other": json.RawMessage("1.5"),
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("coerced args mismatch (-want +got):\n%s", diff)
-	}
-}
-
-// TestProducerCoerceChunk checks that a whole-float per-chunk arg bound to an
-// int ChunkIn param is coerced to an integer.
-func TestProducerCoerceChunk(t *testing.T) {
-	man := types.Manifest{Callables: map[string]types.Callable{
-		"S": {ChunkIn: []ir.Param{{Name: "c", Type: "int", BaseType: "int"}}},
-	}}
-	path := filepath.Join(t.TempDir(), "types.json")
-	if err := man.Write(path); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
-
-	prod := &producer{types: path, callable: "S"}
-	chunk := shim.ChunkDef{Args: map[string]json.RawMessage{"c": json.RawMessage("5.0")}}
-
-	got, err := prod.coerceChunk(chunk)
-	if err != nil {
-		t.Fatalf("coerceChunk: %v", err)
-	}
-
-	if diff := cmp.Diff(map[string]json.RawMessage{"c": json.RawMessage("5")}, got.Args); diff != "" {
-		t.Errorf("coerced chunk args mismatch (-want +got):\n%s", diff)
 	}
 }
 

@@ -29,25 +29,20 @@ class Mro2nf {
         (Map) new JsonSlurper().parseText(bundleDir.resolve('data.json').text)
     }
 
-    // requireBool coerces a resolved disable flag to a boolean, failing loudly on
-    // a null or non-boolean value the way mrp does ("disabled is bound to a null
-    // value, which is not permitted", core/stage.go). Groovy's `(boolean)` cast
-    // would silently map null to false, running a branch mrp would have failed —
-    // a silent divergence.
-    private static boolean requireBool(Object value, String what) {
+    // gateFlag reads a resolved disable flag the way mrp's Fork.disabled does: it
+    // json.Unmarshals the value into a Go bool, which leaves a runtime null
+    // false, so the call runs (#253). Any other non-boolean fails loudly. A gate
+    // null before any stage runs never gets here: mro2nf rejects it at transpile
+    // time, as mrp's call-graph resolution does.
+    private static boolean gateFlag(Object value, String what) {
+        if (value == null) {
+            return false
+        }
         if (!(value instanceof Boolean)) {
-            String kind = value == null ? 'null' : value.getClass().getSimpleName()
             throw new IllegalArgumentException(
-                "disable flag ${what} resolved to ${kind} (${value}); a disabled binding must be a boolean")
+                "disable flag ${what} resolved to ${value.getClass().getSimpleName()} (${value}); a disabled binding must be a boolean")
         }
         return (boolean) value
-    }
-
-    // disabled reports a DISABLE gate's resolved flag: the `disabled` field of
-    // its output bundle's data.json. Used by the run/skip branch of a
-    // conditionally-disabled call.
-    static boolean disabled(Path bundleDir) {
-        requireBool(parseSidecar(bundleDir).get('disabled'), "'disabled'")
     }
 
     // disabledField reads a disable-gate boolean directly from a source bundle's
@@ -57,22 +52,23 @@ class Mro2nf {
     // single top-level field (#59) or a nested struct projection like
     // "config.disable_count" (#209).
     static boolean disabledField(Path jsonFile, String path) {
-        requireBool(navigatePath(parseJson(jsonFile), path), path)
+        gateFlag(navigatePath(parseJson(jsonFile), path), path)
     }
 
     // disabledDir is disabledField for a bundle DIRECTORY (its data.json) rather
     // than the data.json file — used by the keyed disable gate, whose per-fork
-    // pipeline args arrive as a staged bundle dir (#59).
+    // pipeline args arrive as a staged bundle dir (#59), and by a DISABLE task's
+    // bundle, whose `disabled` field holds the gate's top-level value.
     static boolean disabledDir(Path bundleDir, String path) {
-        requireBool(navigatePath(parseSidecar(bundleDir), path), path)
+        gateFlag(navigatePath(parseSidecar(bundleDir), path), path)
     }
 
     // navigatePath walks a dotted struct-field path (e.g. "config.disable_count")
-    // through nested JSON objects, matching the Go binder's struct projection of a
-    // disable ref. A valid scalar-bool disable ref is always pure struct
-    // navigation, so an intermediate that is missing/null or not an object is a
-    // real divergence — fail loudly (matching requireBool) rather than silently
-    // resolve to false and run a branch mrp would not.
+    // through nested JSON objects. A valid scalar-bool disable ref is always pure
+    // struct navigation, so an intermediate that is null or not an object, or a
+    // field that is absent, fails loudly: mrp errors on a projection through a
+    // null struct or onto a missing key (#274), where only a null leaf is a
+    // false gate.
     private static Object navigatePath(Object root, String path) {
         Object cur = root
         for (String seg : path.split('\\.')) {
@@ -80,6 +76,9 @@ class Mro2nf {
                 String kind = cur == null ? 'null' : cur.getClass().getSimpleName()
                 throw new IllegalArgumentException(
                     "disable gate path '${path}': cannot read field '${seg}' from a ${kind}")
+            }
+            if (!((Map) cur).containsKey(seg)) {
+                throw new IllegalArgumentException("disable gate path '${path}': no field '${seg}'")
             }
             cur = ((Map) cur).get(seg)
         }

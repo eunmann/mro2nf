@@ -350,7 +350,7 @@ func nullOutput() ir.Value {
 
 // foldDisable resolves a call's disable gate through the inlined-output subs,
 // returning (keep, dead, changed): a gate that resolves to a ref is rewritten; a
-// literal false/null drops the gate; a literal true prunes the call (dead).
+// literal false drops the gate; a literal true prunes the call (dead).
 func foldDisable(c *ir.Call, subs map[string]ir.Value) (bool, bool, bool) {
 	if c.Disabled == nil {
 		return true, false, false
@@ -372,7 +372,7 @@ func foldDisable(c *ir.Call, subs map[string]ir.Value) (bool, bool, bool) {
 	}
 
 	if litIsFalse(nv) {
-		c.Disabled = nil // constant false/null gate: the call always runs
+		c.Disabled = nil
 
 		return true, false, true
 	}
@@ -388,10 +388,11 @@ func litIsTrue(v ir.Value) bool {
 	return strings.TrimSpace(string(v.Literal)) == "true"
 }
 
-// litIsFalse reports whether v is a constant-false gate: the boolean literal
-// false or JSON null (a null disable gate never fires, so the call always runs).
+// litIsFalse reports whether v is the boolean literal false. A constant null
+// gate is mrp's binding error, which frontend.CheckCallGraph (run by the CLI's
+// loadProgram) refuses before emit.
 func litIsFalse(v ir.Value) bool {
-	return strings.TrimSpace(string(v.Literal)) == "false" || isNullLiteral(v)
+	return strings.TrimSpace(string(v.Literal)) == "false"
 }
 
 // inlineCall builds the renamed, ref-rewritten calls that replace call c to
@@ -472,7 +473,7 @@ func spliceCalls(prefix string, calls []ir.Call, self map[string]ir.Value) ([]ir
 }
 
 // spliceDisable rewrites an inlined call's disable into the parent scope: a ref
-// stays a gate, a literal false/null drops it (keep, gate cleared), a literal
+// stays a gate, a literal false drops it (keep, gate cleared), a literal
 // true prunes the call (keep=false). ok=false if the disable cannot compose.
 func spliceDisable(nic *ir.Call, self map[string]ir.Value, prefix string) (bool, bool) {
 	dv, ok := rewriteValue(ir.Value{Ref: nic.Disabled}, self, prefix)
@@ -486,7 +487,7 @@ func spliceDisable(nic *ir.Call, self map[string]ir.Value, prefix string) (bool,
 	case litIsTrue(dv):
 		return false, true // pruned
 	case litIsFalse(dv):
-		nic.Disabled = nil // literal false/null gate: the call always runs
+		nic.Disabled = nil
 	default:
 		// Unrecognized gate value (a type error in valid MRO): fail CLOSED —
 		// abort the inline and keep the boundary rather than enabling the call.

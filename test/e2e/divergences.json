@@ -48,16 +48,6 @@
       "comparator": {"rule": "follow-mrp-published-symlinks"}
     },
     {
-      "id": "runtime-null-disable-gate-aborts",
-      "kind": "outcome",
-      "feature": "`using (disabled = ref)` resolving to null at runtime",
-      "summary": "A disable gate that resolves to null at runtime aborts mro2nf's run, where mrp treats it as false and runs the call.",
-      "justification": "A regression from the #180 fix: the driver rejects the null gate instead of reading it as false. `null_disable_gate` records mro2nf's failure; once fixed, the fixture moves to `mrpDiffCases`.",
-      "issue": 253,
-      "evidence": ["TestMrpDiffFailureParity/null_disable_gate", "TestRemovingAnOutcomeEntryFailsItsCase"],
-      "outcome": {"failed": true}
-    },
-    {
       "id": "retried-stage-errors",
       "kind": "outcome",
       "feature": "`--autoretry` / retrying a failed stage",

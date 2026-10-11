@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -311,6 +312,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// region #217 lived in. Nested struct chunk-def, array-of-files chunk-out,
 	// and a directory chunk-out. Object-store staging verified on the AWS lane.
 	{name: "split_struct_chunk", native: true, runner: true},
+	// #245: split-returned chunk args reach main as written (5.0 stays a
+	// float for an int chunk input), on the mre and native-runner paths.
+	{name: "chunk_float_int", native: true, runner: true},
 	{name: "chunk_out_filearr", native: true, runner: true},
 	{name: "chunk_out_dir", native: true, runner: true},
 	// Matrix completeness: the builtin `file` type (corpus only used custom
@@ -391,6 +395,11 @@ var mrpDiffCases = []mrpDiffCase{
 	// otherwise inlinable) sub-pipeline is null in the consumer's _args; the
 	// noinline leg covers the boundary path, the default leg the inliner.
 	{name: "disabled_wholeref", native: true, inline: true},
+	// #253: disable gates that are null at run time leave their calls
+	// enabled on every gate path: upstream output and struct field, a
+	// sub-pipeline input (inlined, and a boundary on the noinline leg), and
+	// the keyed gates of a map call over a sub-pipeline.
+	{name: "null_gate", native: true, runner: true, inline: true},
 	{name: "fork_fanout", native: true, runner: true},
 	{name: "map_file_array", native: true, runner: true},
 	// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
@@ -495,13 +504,11 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "split_bad_special", mrp: failedIn(failError, "BAD_SPECIAL")},
 	{name: "split_bad_mem", mrp: failedIn(failError, "BAD_MEM")},
 	{name: "split_bad_threads", mrp: failedIn(failError, "BAD_THREADS")},
-	// The reverse: mrp runs WORK behind a runtime-null disable gate, mro2nf's
-	// driver aborts on it. Once fixed, the fixture moves to mrpDiffCases.
-	{
-		name:       "null_disable_gate",
-		mrp:        runOutcome{},
-		divergence: "runtime-null-disable-gate-aborts",
-	},
+	// mrp refuses to instantiate a split of a runtime-gated literal collection
+	// (#387), and mro2nf refuses to transpile it (transpileRefused).
+	{name: "rt_gate_split_reject", mrp: runOutcome{Failed: true}},
+	{name: "rt_gate_split_reject_sub", mrp: runOutcome{Failed: true}},
+	{name: "rt_gate_split_reject_pass", mrp: runOutcome{Failed: true}},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -654,8 +661,7 @@ func TestMrpDiffFailureParity(t *testing.T) {
 
 			tmp := t.TempDir()
 			mrp := mrpRunOutcome(t, bin, tc.name, tmp)
-			proj := transpile(t, tc.name)
-			nf, attempts := nextflowRunOutcome(t, proj)
+			nf, attempts, nfLog := nfRunOutcome(t, tc.name)
 
 			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts)...)
 			for _, r := range reports {
@@ -663,7 +669,7 @@ func TestMrpDiffFailureParity(t *testing.T) {
 			}
 
 			if len(reports) > 0 {
-				t.Logf("mrp.log:\n%s\nrun.log:\n%s", tailFile(filepath.Join(tmp, "mrp.log")), tailFile(filepath.Join(proj, "run.log")))
+				t.Logf("mrp.log:\n%s\nmro2nf:\n%s", tailFile(filepath.Join(tmp, "mrp.log")), nfLog)
 			}
 		})
 	}
@@ -691,6 +697,38 @@ func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
 	}
 
 	return o
+}
+
+// nfRunOutcome is the mro2nf outcome of a fixture, the task name of every
+// attempt (nextflowRunOutcome), and the log that explains it. A
+// transpileRefused fixture must fail to transpile in every mode, the
+// counterpart of mrp refusing it before it makes a pipestance, so its outcome
+// is a failure blaming no stage, with no attempts. Any other fixture is
+// transpiled and run.
+func nfRunOutcome(t *testing.T, fixture string) (runOutcome, []string, string) {
+	t.Helper()
+
+	if _, refused := transpileRefused[fixture]; !refused {
+		proj := transpile(t, fixture)
+		o, attempts := nextflowRunOutcome(t, proj)
+
+		return o, attempts, tailFile(filepath.Join(proj, "run.log"))
+	}
+
+	buildBinaries(t)
+
+	var logs []string
+
+	for _, flags := range [][]string{nil, {"-native"}, {"-inline-pipelines=false"}} {
+		err := transpileInto(filepath.Join(root, "testdata", fixture), "pipeline.mro", t.TempDir(), flags...)
+		if err == nil {
+			t.Fatalf("mro2nf transpiles %s under %v; mrp refuses it before any stage runs", fixture, flags)
+		}
+
+		logs = append(logs, fmt.Sprintf("%v: %v", flags, err))
+	}
+
+	return failedWith(nil), nil, strings.Join(logs, "\n")
 }
 
 // nextflowRunOutcome runs a transpiled project and classifies the run from the

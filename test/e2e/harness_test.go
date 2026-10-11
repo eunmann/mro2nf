@@ -216,6 +216,18 @@ func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
 	return proj
 }
 
+// transpileRefused are the fixtures mro2nf must refuse to transpile under
+// every flag set, each with the reason: mrp refuses them before any stage runs,
+// so no project may exist to run. Each is an mrpOutcomeCases entry, and
+// TestNextflowLint requires the refusal in place of a lint verdict.
+var transpileRefused = map[string]string{
+	"rt_gate_split_reject":      mrpRefusesGatedSplit,
+	"rt_gate_split_reject_sub":  mrpRefusesGatedSplit,
+	"rt_gate_split_reject_pass": mrpRefusesGatedSplit,
+}
+
+const mrpRefusesGatedSplit = "mrp refuses a split of a runtime-gated literal collection when it builds the call graph (#387)"
+
 // transpileInto runs mro2nf for the fixture mro under dir, emitting into proj.
 // It returns the failure (with the tool output) instead of failing the test, so
 // batch callers can attribute a broken combo without aborting the rest.

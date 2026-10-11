@@ -244,6 +244,10 @@ func loadProgram(src, mroPath string) (*ir.Program, error) {
 		return nil, fmt.Errorf("transpile %s: %w", src, err)
 	}
 
+	if err := frontend.CheckCallGraph(ast); err != nil {
+		return nil, fmt.Errorf("transpile %s: %w", src, err)
+	}
+
 	return prog, nil
 }
 

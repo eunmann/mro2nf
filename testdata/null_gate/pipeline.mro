@@ -1,0 +1,124 @@
+# A disable gate whose value is null at run time: FLAG passes its null input
+# through to both outputs. mrp decodes a runtime null gate into a Go bool, which
+# leaves it false, so every gated call runs. Covered: a gate on an upstream
+# output, on a field of an upstream struct output, on a sub-pipeline input bound
+# to that output, and on both inside a map call over a sub-pipeline (the keyed
+# gates). A statically null gate is mrp's BindingError instead.
+struct Cfg(
+    bool flag,
+    int  k,
+)
+
+stage FLAG(
+    in  int  x,
+    in  bool b,
+    out bool on,
+    out Cfg  cfg,
+    src py   "stages/flag",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline GATED(
+    in  int  x,
+    in  bool b,
+    out int  y,
+)
+{
+    call WORK(
+        x = self.x,
+    ) using (
+        disabled = self.b,
+    )
+
+    return (
+        y = WORK.y,
+    )
+}
+
+pipeline GATED_UP(
+    in  int  x,
+    in  bool b,
+    out int  y,
+)
+{
+    call FLAG(
+        x = self.x,
+        b = self.b,
+    )
+
+    call WORK(
+        x = self.x,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    return (
+        y = WORK.y,
+    )
+}
+
+pipeline NULL_GATE(
+    in  int   x,
+    in  int[] xs,
+    in  bool  b,
+    out int   direct,
+    out int   field,
+    out int   sub,
+    out int[] mapped,
+    out int[] mapped_up,
+)
+{
+    call FLAG(
+        x = self.x,
+        b = self.b,
+    )
+
+    call WORK as DIRECT(
+        x = self.x,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    call WORK as FIELD(
+        x = self.x,
+    ) using (
+        disabled = FLAG.cfg.flag,
+    )
+
+    call GATED as SUB(
+        x = self.x,
+        b = FLAG.on,
+    )
+
+    map call GATED as MAPPED(
+        x = split self.xs,
+        b = FLAG.on,
+    )
+
+    map call GATED_UP as MAPPED_UP(
+        x = split self.xs,
+        b = self.b,
+    )
+
+    return (
+        direct    = DIRECT.y,
+        field     = FIELD.y,
+        sub       = SUB.y,
+        mapped    = MAPPED.y,
+        mapped_up = MAPPED_UP.y,
+    )
+}
+
+call NULL_GATE(
+    x  = 3,
+    xs = [
+        1,
+        2,
+    ],
+    b  = null,
+)

@@ -151,11 +151,12 @@ func warnOutputScratchRefs(bundleDir, work string) {
 	}
 }
 
-// coerceInputs coerces whole-number float values bound to int params back to
-// integers in raw, walking the producer's callable under the given input roles
-// (e.g. RoleIn, plus RoleChunkIn for a split main). Returns raw unchanged when
-// no manifest is configured.
-func (p *producer) coerceInputs(raw json.RawMessage, roles ...string) (json.RawMessage, error) {
+// coerceInputs coerces whole-number float values bound to the callable's int
+// input params back to integers in raw, as mrp's FilterJson does for every
+// bound value. A split's chunk args never pass through here: mrp's
+// ChunkDef.Merge hands them to main as the split wrote them (#245). Returns raw
+// unchanged when no manifest is configured.
+func (p *producer) coerceInputs(raw json.RawMessage) (json.RawMessage, error) {
 	if p.types == "" || len(raw) == 0 {
 		return raw, nil
 	}
@@ -170,15 +171,9 @@ func (p *producer) coerceInputs(raw json.RawMessage, roles ...string) (json.RawM
 		return nil, err
 	}
 
-	var params []ir.Param
-
-	for _, r := range roles {
-		rp, err := man.Params(p.callable, r)
-		if err != nil {
-			return nil, fmt.Errorf("coerce inputs: %w", err)
-		}
-
-		params = append(params, rp...)
+	params, err := man.Params(p.callable, types.RoleIn)
+	if err != nil {
+		return nil, fmt.Errorf("coerce inputs: %w", err)
 	}
 
 	out, err := json.Marshal(man.Table().CoerceScalars(params, vals))
@@ -219,35 +214,6 @@ func (p *producer) validateOuts(raw json.RawMessage) error {
 	}
 
 	return nil
-}
-
-// coerceChunk coerces a split chunk's per-chunk args (chunk.Args, keyed by the
-// ChunkIn param names) so whole-number floats bound to int chunk params become
-// integers — the stageArgs RoleChunkIn pass cannot, since per-chunk values live
-// here, not in the stage args.
-func (p *producer) coerceChunk(chunk shim.ChunkDef) (shim.ChunkDef, error) {
-	if p.types == "" || len(chunk.Args) == 0 {
-		return chunk, nil
-	}
-
-	raw, err := json.Marshal(chunk.Args)
-	if err != nil {
-		return chunk, fmt.Errorf("encode chunk args: %w", err)
-	}
-
-	coerced, err := p.coerceInputs(raw, types.RoleChunkIn)
-	if err != nil {
-		return chunk, err
-	}
-
-	var args map[string]json.RawMessage
-	if err := json.Unmarshal(coerced, &args); err != nil {
-		return chunk, fmt.Errorf("decode coerced chunk args: %w", err)
-	}
-
-	chunk.Args = args
-
-	return chunk, nil
 }
 
 // rawToMap decodes a JSON object into a map. An empty payload, JSON null, or the

@@ -1,0 +1,33 @@
+# A split returns a whole-number float (total / 2) and an int (total // 2) for
+# the int chunk input n. mrp passes split-made chunk args through as written, so
+# main and join see 5.0 for the first chunk; only bound values get coerced. The
+# outputs are type+repr strings, since a numeric diff would equate 5.0 with 5.
+stage HALVE(
+    in  int      total,
+    out string[] mains,
+    out string[] defs,
+    src py       "stages/halve",
+) split (
+    in  int      n,
+    out string   seen,
+)
+
+pipeline CHUNK_FLOAT_INT(
+    in  int      total,
+    out string[] mains,
+    out string[] defs,
+)
+{
+    call HALVE(
+        total = self.total,
+    )
+
+    return (
+        mains = HALVE.mains,
+        defs  = HALVE.defs,
+    )
+}
+
+call CHUNK_FLOAT_INT(
+    total = 10,
+)

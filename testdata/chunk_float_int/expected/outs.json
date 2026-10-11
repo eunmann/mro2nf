@@ -1,0 +1,10 @@
+{
+    "defs": [
+        "n=5.0(float)",
+        "n=5(int)"
+    ],
+    "mains": [
+        "n=5.0(float)",
+        "n=5(int)"
+    ]
+}

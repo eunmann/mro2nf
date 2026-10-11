@@ -14,7 +14,7 @@ Ports, section by section:
   - bundle read/write:    internal/shim/bundle.go (ReadBundle, WriteBundle,
                           MarkFiles, CopyTree, WriteChunkBundle)
   - type manifest + walk: internal/types/manifest.go, internal/types/types.go
-  - scalar coercion:      cmd/mre/bundle.go coerceInputs/coerceChunk +
+  - scalar coercion:      cmd/mre/bundle.go coerceInputs +
                           internal/types/types.go CoerceScalars
   - output validation:    cmd/mre/bundle.go validateOuts +
                           internal/types/validate.go ValidateOutputs
@@ -432,14 +432,11 @@ def _legal_filename(name):
     return None
 
 
-def coerce_inputs(man, callable_, roles, vals):
+def coerce_inputs(man, callable_, vals):
     """Ports producer.coerceInputs: no-op without a manifest or empty args."""
     if not man.loaded or not vals:
         return vals
-    params = []
-    for role in roles:
-        params.extend(man.params(callable_, role))
-    return coerce_scalars(man.structs, params, vals)
+    return coerce_scalars(man.structs, man.params(callable_, "in"), vals)
 
 
 # ---------------------------------------------------------------------------
@@ -1285,7 +1282,7 @@ def abs_out(path):
 def load_stage_args(fl, man):
     """Read + int-coerce the stage args bundle (runSplit/runMain/runJoin)."""
     args = as_object(read_bundle(fl.args), "args bundle")
-    return coerce_inputs(man, fl.callable, ["in"], args)
+    return coerce_inputs(man, fl.callable, args)
 
 
 def setup_stage(fl, files, eff, invocation_args):
@@ -1507,7 +1504,6 @@ def run_main(fl):
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
     chunk_res, chunk_args = decode_chunk(read_bundle(fl.chunk))
-    chunk_args = coerce_inputs(man, fl.callable, ["chunkin"], chunk_args)
     eff = resolve_resources(overridden(fl, chunk_res), cli_resources(fl))
     merged = dict(args)
     merged.update(chunk_args)

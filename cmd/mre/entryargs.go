@@ -93,7 +93,7 @@ func runEntryArgs(_ context.Context, argv []string) error {
 		return fmt.Errorf("marshal entry args: %w", err)
 	}
 
-	if raw, err = prod.coerceInputs(raw, types.RoleIn); err != nil {
+	if raw, err = prod.coerceInputs(raw); err != nil {
 		return err
 	}
 

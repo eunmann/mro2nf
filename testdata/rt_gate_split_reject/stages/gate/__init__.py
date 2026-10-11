@@ -1,2 +1,2 @@
 def main(args, outs):
-    outs.on = args.b
+    outs.off = args.v

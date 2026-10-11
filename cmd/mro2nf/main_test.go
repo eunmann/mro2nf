@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/config"
 	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -327,6 +328,48 @@ func TestRunDefaultMROPathIsNotARoot(t *testing.T) {
 
 	if err := run([]string{"-o", t.TempDir(), "-mropath", ".", mro}); err != nil {
 		t.Errorf("run with an explicit -mropath holding the default: %v", err)
+	}
+}
+
+// TestRunRefusesPipelineMrpCannotInstantiate checks each pipeline mrp refuses
+// before any stage runs (#387) fails the transpile in every emission mode,
+// naming the call and binding as mrp does, and emits no project.
+func TestRunRefusesPipelineMrpCannotInstantiate(t *testing.T) {
+	refused := map[string]string{
+		"rt_gate_split_reject":      "RTG.B input value:",
+		"rt_gate_split_reject_sub":  "RTGS.B input value:",
+		"rt_gate_split_reject_pass": "RTGP.B input value:",
+	}
+
+	modes := map[string][]string{
+		"default":       nil,
+		"native":        {"-native"},
+		"native-runner": {"-native-runner"},
+		"no-inline":     {"-inline-pipelines=false"},
+	}
+
+	for fixture, binding := range refused {
+		for mode, flags := range modes {
+			t.Run(fixture+"/"+mode, func(t *testing.T) {
+				out := filepath.Join(t.TempDir(), "proj")
+				mro := filepath.Join("..", "..", "testdata", fixture, "pipeline.mro")
+
+				err := run(append(append([]string{"-o", out}, flags...), mro))
+				if !errors.Is(err, apperror.ErrParse) {
+					t.Fatalf("run: want ErrParse, got %v", err)
+				}
+
+				for _, want := range []string{binding, "unexpected array"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q does not contain %q", err, want)
+					}
+				}
+
+				if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("a refused transpile left %s (stat: %v)", out, err)
+				}
+			})
+		}
 	}
 }
 
