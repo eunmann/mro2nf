@@ -226,9 +226,13 @@ inputs, never on what the `mre` binary does, so the comment is what makes a
 project re-transpiled by another build re-run its tasks instead of reusing
 outputs an older `mre` shaped. A re-run of the same build stays cached. The
 version is the `-ldflags` stamp (`git describe --tags --always --dirty` under
-`make build`), else the module version Go stamps: an uncommitted edit to a
-dev build keeps its commit's key, so local re-runs stay cached between
-rebuilds.
+`make build`), else the module version Go stamps (a tag, or a pseudo-version
+naming the commit), else `dev` when Go stamps none (`-buildvcs=false`, no
+repository, a git worktree). A build with uncommitted changes is keyed
+`<commit>-dirty` (`+dirty` from Go), so it does not reuse the clean commit's
+cache, but every uncommitted state of that commit shares the one key, as
+every `dev` build does: after changing `mre` locally, a `-resume` reuses
+outputs the older `mre` shaped, so run without `-resume` after such an edit.
 
 The second line writes the task's **type manifest** (`types.json`, the
 parameter sets the shim's file-leaf walk, scalar coercion and output
