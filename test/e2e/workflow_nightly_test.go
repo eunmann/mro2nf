@@ -85,9 +85,10 @@ func TestNightlyFailureReport(t *testing.T) {
 	)
 
 	for _, j := range jobs {
-		if j.cond == nightlyFailureGate {
+		switch {
+		case j.cond == nightlyFailureGate:
 			reporters = append(reporters, j)
-		} else {
+		case !slices.Contains(nightlyDiscoveryJobs, j.id):
 			others = append(others, j.id)
 		}
 	}
@@ -102,7 +103,7 @@ func TestNightlyFailureReport(t *testing.T) {
 	slices.Sort(others)
 
 	if diff := cmp.Diff(others, needs); diff != "" {
-		t.Errorf("report job %q must need every other job (-want +got):\n%s", r.id, diff)
+		t.Errorf("report job %q must need every job but the discovery jobs (-want +got):\n%s", r.id, diff)
 	}
 
 	job := readWorkflow(t, nightlyWorkflow).get("jobs").get(r.id)
@@ -199,6 +200,11 @@ const (
 // job is daily.
 var nightlyHeavyJobs = []string{"scale", "gendiff"}
 
+// nightlyDiscoveryJobs report what they find to their own issue, so neither
+// the pass record nor the failure report needs them: a finding must neither
+// block a pass nor open the "Nightly CI is failing" issue.
+var nightlyDiscoveryJobs = []string{"gendiff"}
+
 // nightlyMarkGate lets the pass record run beside the other tier's skipped
 // jobs, which the implicit success() would treat as a reason to skip it.
 const nightlyMarkGate = "${{ !failure() && !cancelled() && needs.gate.outputs.run == 'true' }}"
@@ -236,8 +242,13 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 	}
 
 	for _, s := range suites {
-		if !slices.Contains(mark.needs, s) {
+		discovery := slices.Contains(nightlyDiscoveryJobs, s)
+
+		switch needed := slices.Contains(mark.needs, s); {
+		case !needed && !discovery:
 			t.Errorf("mark job does not need suite job %q, so a pass could be recorded without it", s)
+		case needed && discovery:
+			t.Errorf("mark job needs discovery job %q, so a finding would block the pass record", s)
 		}
 	}
 
@@ -254,6 +265,8 @@ const nightlyWeeklyCron = "17 6 * * 0"
 // `heavy` input pick the weekly tier, which alone runs nightlyHeavyJobs, and
 // the tier is part of the pass key, so one tier's pass never skips the other.
 func TestNightlyHeavyJobsRunWeekly(t *testing.T) {
+	requireTools(t, "bash")
+
 	wf := readWorkflow(t, nightlyWorkflow)
 
 	heavy := wf.get("on").get("workflow_dispatch").get("inputs").get("heavy")
@@ -408,6 +421,103 @@ func TestNightlyGenDiffRunsRandomSeeds(t *testing.T) {
 	if !runs || !martian {
 		t.Errorf("%s gendiff job: runs make gen-diff without GEN_SEEDS %v, sets up mrp %v; want both", nightlyWorkflow, runs, martian)
 	}
+}
+
+// nightlyDivergenceTitle is the exact title, and so the dedupe key, of the
+// issue the gen-diff job files its divergences on.
+const nightlyDivergenceTitle = "Generative differential: new divergences"
+
+// fakeGh stands in for gh: `issue list` prints $FAKE_ISSUE, and every other
+// call appends its arguments, one per line, to $FAKE_GH_LOG.
+const fakeGh = `#!/bin/bash
+if [ "$1 $2" = "issue list" ]; then echo "$FAKE_ISSUE"; exit 0; fi
+printf '%s\n' "$@" >> "$FAKE_GH_LOG"
+`
+
+// TestNightlyGenDiffFilesDivergences runs the gen-diff job's issue step
+// against a fake gh: with no open tracking issue it opens one, with one it
+// comments, and the body names the run, each seed with its finding keys and
+// the artifact. Only that job and the report job may write issues.
+func TestNightlyGenDiffFilesDivergences(t *testing.T) {
+	requireTools(t, "bash", "jq")
+
+	wf := readWorkflow(t, nightlyWorkflow)
+	job := wf.get("jobs").get("gendiff")
+
+	if wf.get("permissions").get("issues") != nil {
+		t.Errorf("%s grants issues at the workflow level", nightlyWorkflow)
+	}
+
+	for _, id := range wf.get("jobs").keys {
+		writes := scalarOf(wf.get("jobs").get(id).get("permissions").get("issues")) == "write"
+		if writes != (id == "gendiff" || id == "report") {
+			t.Errorf("%s job %q issues: write = %v, want it only on gendiff and report", nightlyWorkflow, id, writes)
+		}
+	}
+
+	steps := job.get("steps").items
+
+	i := slices.IndexFunc(steps, func(s *yamlNode) bool { return strings.Contains(scalarOf(s.get("run")), "gh issue") })
+	if i < 0 {
+		t.Fatalf("%s gendiff job has no issue step", nightlyWorkflow)
+	}
+
+	if cond := scalarOf(steps[i].get("if")); !strings.Contains(cond, "!cancelled()") || !strings.Contains(cond, "refs/heads/main") {
+		t.Errorf("gendiff issue step if %q: want it after a failed run too, and only on main", cond)
+	}
+
+	findings := filepath.Join(t.TempDir(), "divergences.jsonl")
+	lines := `{"seed":42,"findings":["default outs:r0","native abi:ST0 main"],"fixture":"gen_0123456789ab"}` + "\n"
+
+	if err := os.WriteFile(findings, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, issue := range []string{"", "17"} {
+		log := runIssueStep(t, scalarOf(steps[i].get("run")), findings, issue)
+
+		want := []string{"issue", "create", "--title", nightlyDivergenceTitle, "--body"}
+		if issue != "" {
+			want = []string{"issue", "comment", issue, "--body"}
+		}
+
+		if !strings.HasPrefix(log, strings.Join(want, "\n")+"\n") {
+			t.Errorf("open issue %q: gh got\n%s\nwant it to start %q", issue, log, want)
+		}
+
+		for _, part := range []string{"https://run/1", "https://artifact/2", "seed 42", "`gen_0123456789ab`", "`default outs:r0`, `native abi:ST0 main`"} {
+			if !strings.Contains(log, part) {
+				t.Errorf("open issue %q: body lacks %q:\n%s", issue, part, log)
+			}
+		}
+	}
+}
+
+// runIssueStep runs the gen-diff issue step with a fake gh on PATH, the
+// findings file and the open issue number (or "") gh reports, and returns
+// the arguments of gh's create or comment call.
+func runIssueStep(t *testing.T, script, findings, issue string) string {
+	t.Helper()
+
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "gh.log")
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FAKE_GH_LOG="+log, "FAKE_ISSUE="+issue,
+		"GEN_FINDINGS="+findings, "RUN_URL=https://run/1", "ARTIFACT_URL=https://artifact/2", "GITHUB_SHA=abc123")
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("issue step: %v\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(data)
 }
 
 // scalarOf is n's scalar, or "" for an absent node.

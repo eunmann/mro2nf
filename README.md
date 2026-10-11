@@ -376,7 +376,8 @@ runs the full `make test-scale` scale tier and a long `make gen-diff` run from a
 random seed, whose shrunk repros it keeps as an artifact. A scheduled run is
 skipped when the current `main` commit and the latest-stable Nextflow release
 have already passed its tier. A failed run opens,
-or comments on, a "Nightly CI is failing" issue. The Martian
+or comments on, a "Nightly CI is failing" issue. Gen-diff divergences don't fail
+the run: they go to a "Generative differential: new divergences" issue. The Martian
 dependency is pinned to a published commit, so
 CI needs only a single checkout; to hack on the Martian parser locally, add a
 `go.work` pointing at a fork checkout (gitignored). Tagging `v*` triggers
