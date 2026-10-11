@@ -562,6 +562,15 @@ class ResourcesTest(unittest.TestCase):
         self.assertEqual(rs.resolve_resources(
             _res(special="chunk"), rs.cli_resources(fl)).special, "chunk")
 
+    def test_threads_round_up_to_centicores(self):
+        eff = rs.resolve_resources(_res(), _res(threads=0.3400000035762787))
+        self.assertEqual(eff.threads, 0.35)
+        self.assertEqual(rs.resolve_resources(_res(), _res()).threads, 1.0)
+        fl = rs.parse_flags("main", ["-threads", "1", "-overridethreads", "0.5"])
+        eff = rs.resolve_resources(
+            rs.overridden(fl, _res(threads=4.0)), rs.cli_resources(fl))
+        self.assertEqual(eff.threads, 0.5)
+
     def test_override_beats_chunk_request(self):
         fl = rs.parse_flags("main", ["-memgb", "1.5", "-overridememgb", "3"])
         eff = rs.resolve_resources(

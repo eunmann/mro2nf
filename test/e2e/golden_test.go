@@ -86,6 +86,8 @@ var goldenCases = []goldenCase{
 	{"join_resources", "join_resources", "expected/outs.json"},
 	// #243: fractional, per-chunk and join memory reach the stage unrounded.
 	{"frac_mem", "frac_mem", "expected/outs.json"},
+	// #370: fractional, per-chunk and join threads reach the stage unrounded.
+	{"frac_threads", "frac_threads", "expected/outs.json"},
 	{"file_array", "file_array", "expected/outs.json"},
 	{"comp_split", "comp_split", "expected/outs.json"},
 	// #113: an exec stage whose src line carries arguments after the path —

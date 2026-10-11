@@ -16,7 +16,7 @@ func TestResourceFlagsPassStageMemory(t *testing.T) {
 	s := &ir.Stage{Name: "MEM", Lang: ir.LangPy, Resources: ir.Resources{MemGB: 1.5}}
 
 	plain := genCtx{}.resourceFlags("main", s)
-	if !strings.Contains(plain, " -memgb 1.5 -overridememgb ${task.ext.mem_gb ?: 0}") {
+	if !strings.Contains(plain, " -memgb 1.5 ") || !strings.Contains(plain, " -overridememgb ${task.ext.mem_gb ?: 0}") {
 		t.Errorf("main must pass the stage's mem_gb unrounded and the override apart: %q", plain)
 	}
 
@@ -34,6 +34,24 @@ func TestResourceFlagsPassStageMemory(t *testing.T) {
 	small := &ir.Stage{Name: "SMALL", Resources: ir.Resources{MemGB: float64(float32(0.3))}}
 	if got := (genCtx{}).resourceFlags("main", small); !strings.Contains(got, " -memgb 0.30000001192092896 ") {
 		t.Errorf("a float32 mem_gb must reach mre exactly as mrp widens it: %q", got)
+	}
+}
+
+// TestResourceFlagsPassStageThreads pins #370: the threads a stage sees are its
+// Martian request (0.5 stays 0.5, as in mrp), not Nextflow's integer task.cpus;
+// an overrides overlay's ext.threads rides as its own flag.
+func TestResourceFlagsPassStageThreads(t *testing.T) {
+	s := &ir.Stage{Name: "REPORT", Resources: ir.Resources{Threads: 0.5}}
+
+	got := genCtx{}.resourceFlags("main", s)
+	for _, want := range []string{" -threads 0.5 ", " -overridethreads ${task.ext.threads ?: 0}"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("main flags missing %q: %q", want, got)
+		}
+	}
+
+	if strings.Contains(got, "task.cpus") {
+		t.Errorf("the scheduler's cpus must not reach the stage: %q", got)
 	}
 }
 

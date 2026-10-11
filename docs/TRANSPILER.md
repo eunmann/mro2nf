@@ -264,7 +264,7 @@ Key points:
   -joinres` overlays it on the stage's request for the `_args`/`_jobinfo` the
   stage sees.
 - **What a stage sees vs. what the task gets.** Every phase passes `mre` the
-  stage's Martian memory request (`-memgb`/`-vmemgb`), which the shim
+  stage's Martian request (`-threads`/`-memgb`/`-vmemgb`/`-special`), which the shim
   resolves exactly as mrp does; the `cpus`/`memory` directives only size the
   task (whole units, escalating on retry) and never reach `_args`.
 - **Chunk gather.** JOIN stages the `chunk_N` def bundles, the `out_chunk_N`

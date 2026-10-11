@@ -269,18 +269,23 @@ func withResources(stageArgs json.RawMessage, join, res Resources) (json.RawMess
 
 // resolveResources overlays a chunk's or join's own request (def) on the phase
 // request — a non-zero field wins, as in mrp's getJobReqs — and resolves the
-// result as mrp's local job manager does (GetSystemReqs): an unset memory takes
-// the 1 GB job default, memory and vmem round up to whole MiB, and vmem defaults
-// to memory plus the standard headroom and never falls below memory.
+// result as mrp's local job manager does (GetSystemReqs): unset threads and
+// memory take the 1-thread / 1 GB job defaults, threads round up to whole
+// centicores (not CPUs), memory and vmem round up to whole MiB, and vmem
+// defaults to memory plus the standard headroom and never falls below memory.
 func resolveResources(def, res Resources) Resources {
 	// A negative request is Martian's adaptive sentinel ("at least |x|, ideally
 	// all available"). mrp's local job manager hands it the host's free capacity,
 	// which has no Nextflow-task equivalent, so it resolves to |x| as on mrp's
 	// cluster path rather than leaking a negative into _jobinfo and the __* keys.
-	eff := Resources{
-		Threads: absResource(coalesce(def.Threads, res.Threads)),
-		Special: def.Special,
+	eff := Resources{Special: def.Special}
+
+	centi := math.Ceil(math.Abs(coalesce(def.Threads, res.Threads)) * centiPerCore)
+	if centi == 0 {
+		centi = threadsPerJob * centiPerCore
 	}
+
+	eff.Threads = centi / centiPerCore
 
 	if eff.Special == "" {
 		eff.Special = res.Special
@@ -317,15 +322,6 @@ func ApplyOverride(def, override Resources) Resources {
 // ceilMB is a GB request's magnitude in whole MiB, rounded up.
 func ceilMB(gb float64) float64 {
 	return math.Ceil(math.Abs(gb) * mbPerGB)
-}
-
-// absResource resolves a negative adaptive sentinel to its magnitude.
-func absResource(f float64) float64 {
-	if f < 0 {
-		return -f
-	}
-
-	return f
 }
 
 // injectResources writes the resolved resource keys into an args map.

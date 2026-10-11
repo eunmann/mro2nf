@@ -201,8 +201,10 @@ the resolved (not raw) allocation reported to `get_*`, and `special`→
 **Contract (#243):** the resources a stage sees (`_args` `__*` keys, `_jobinfo`,
 the first attempt's `-monitor` limits) are mrp's **local** job manager's
 (`GetSystemReqs`), from the stage's Martian request, never from Nextflow's
-`cpus`/`memory` directives. Memory and vmem round up to whole MiB (a 0.3 GB
-request is 0.30078125 GB), an unset memory is 1 GB, vmem defaults to memory + 3
+`cpus`/`memory` directives. Threads round up to whole centicores, not CPUs
+(0.5 stays 0.5; the parser's 0.34 for `threads = 0.333` becomes mrp's 0.35, #370),
+memory and vmem to whole MiB (a 0.3 GB request is 0.30078125 GB), unset threads
+and memory are 1 thread and 1 GB, vmem defaults to memory + 3
 GB and is never below memory, and the `__*` values carry mrp's three significant
 digits. Two inputs are host-dependent in mrp and so are not copied: an adaptive
 negative request resolves to `|x|` (mrp local hands it the free capacity), and

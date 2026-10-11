@@ -270,7 +270,7 @@ func TestConvertLeafKeyStillWorks(t *testing.T) {
 		t.Errorf("unexpected unmapped: %v", unmapped)
 	}
 
-	if !strings.Contains(cfg, "withName: '"+stageSel("COLLATE", "TOP__COLLATE")+"' { cpus = 3 }") {
+	if !strings.Contains(cfg, "withName: '"+stageSel("COLLATE", "TOP__COLLATE")+"' { cpus = 3; ext.threads = 3 }") {
 		t.Errorf("leaf stage key mis-rendered:\n%s", cfg)
 	}
 }
@@ -294,10 +294,10 @@ func TestConvert(t *testing.T) {
 	for _, want := range []string{
 		"process {",
 		"memory = '2 GB'", // the "" key -> global default
-		"withName: '" + stageSel("ALIGN", ".+__ALIGN") + "' { memory = '8 GB'; ext.mem_gb = 8; cpus = 4 }",
-		"withName: '" + chunkSel("ALIGN", ".+__ALIGN") + "' { memory = '16 GB'; ext.mem_gb = 16 }",                               // chunk.* -> main phase
-		"withName: '" + phaseSel("COLLATE", "_JOIN", ".+__COLLATE", "_JN") + "' { memory = '32 GB'; ext.mem_gb = 32; cpus = 2 }", // join.* -> join phase
-		"withName: '" + phaseSel("SORT", "_SPLIT", ".+__SORT", "_SP") + "' { memory = '6 GB'; ext.mem_gb = 6 }",                  // split.* -> split phase
+		"withName: '" + stageSel("ALIGN", ".+__ALIGN") + "' { memory = '8 GB'; ext.mem_gb = 8; cpus = 4; ext.threads = 4 }",
+		"withName: '" + chunkSel("ALIGN", ".+__ALIGN") + "' { memory = '16 GB'; ext.mem_gb = 16 }",                                                // chunk.* -> main phase
+		"withName: '" + phaseSel("COLLATE", "_JOIN", ".+__COLLATE", "_JN") + "' { memory = '32 GB'; ext.mem_gb = 32; cpus = 2; ext.threads = 2 }", // join.* -> join phase
+		"withName: '" + phaseSel("SORT", "_SPLIT", ".+__SORT", "_SP") + "' { memory = '6 GB'; ext.mem_gb = 6 }",                                   // split.* -> split phase
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing %q\n--- got ---\n%s", want, cfg)
@@ -698,11 +698,11 @@ func TestConvertResourceValueNormalization(t *testing.T) {
 		in   string
 		want string
 	}{
-		{`{"P.S": {"mem_gb": -8}}`, "memory = '8 GB'"},     // negative sentinel -> magnitude
-		{`{"P.S": {"threads": -4}}`, "cpus = 4"},           // negative sentinel -> magnitude
-		{`{"P.S": {"threads": 2.5}}`, "cpus = 3"},          // fractional -> ceil (integer cpus)
-		{`{"P.S": {"mem_gb": 1e3}}`, "memory = '1000 GB'"}, // scientific -> plain
-		{`{"P.S": {"mem_gb": 7.5}}`, "memory = '7.5 GB'"},  // fractional GB is fine
+		{`{"P.S": {"mem_gb": -8}}`, "memory = '8 GB'"},               // negative sentinel -> magnitude
+		{`{"P.S": {"threads": -4}}`, "cpus = 4"},                     // negative sentinel -> magnitude
+		{`{"P.S": {"threads": 2.5}}`, "cpus = 3; ext.threads = 2.5"}, // fractional -> ceil cpus; the stage sees 2.5 (#370)
+		{`{"P.S": {"mem_gb": 1e3}}`, "memory = '1000 GB'"},           // scientific -> plain
+		{`{"P.S": {"mem_gb": 7.5}}`, "memory = '7.5 GB'"},            // fractional GB is fine
 	}
 
 	for _, tc := range cases {

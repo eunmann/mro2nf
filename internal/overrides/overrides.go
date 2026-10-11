@@ -352,7 +352,7 @@ func resourceLines(base string, val json.RawMessage) (fieldLines, string) {
 		return fieldLines{}, "threads value is too large to render as a cpu count"
 	}
 
-	return fieldLines{line: "cpus = " + strconv.FormatInt(int64(ceil), 10)}, ""
+	return fieldLines{line: "cpus = " + strconv.FormatInt(int64(ceil), 10), ext: "ext.threads = " + num}, ""
 }
 
 // phaseChunk is the mrp override phase for a stage's main job; every stage (split

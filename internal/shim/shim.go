@@ -27,14 +27,16 @@ const (
 	// extraVMemGB matches jobmanagers/config.json extra_vmem_per_job: the
 	// default virtual-memory headroom added on top of the memory request.
 	extraVMemGB = 3
-	// memGBPerJob is config.json's memGB_per_job: the memory an unset (0)
-	// request gets. mbPerGB is the MiB granularity mrp's local job manager rounds
-	// memory up to.
-	memGBPerJob = 1
-	mbPerGB     = 1024
-	filePerm    = 0o644
-	dirPerm     = 0o755
-	disableFlag = "disable"
+	// threadsPerJob and memGBPerJob are config.json's threads_per_job and
+	// memGB_per_job: what an unset (0) request gets. centiPerCore and mbPerGB are
+	// the granularities mrp's local job manager rounds threads and memory up to.
+	threadsPerJob = 1
+	memGBPerJob   = 1
+	centiPerCore  = 100
+	mbPerGB       = 1024
+	filePerm      = 0o644
+	dirPerm       = 0o755
+	disableFlag   = "disable"
 	// assertPrefix marks a non-retryable assertion failure on the adapter error
 	// channel (mrp's write_assert prepends it).
 	assertPrefix = "ASSERT:"

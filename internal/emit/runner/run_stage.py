@@ -49,7 +49,9 @@ _MARKER_REL = re.compile(BUNDLE_FILES + r"/L[0-9]{4,}(\.[^/]*)?")
 
 # Ports internal/shim/shim.go constants.
 EXTRA_VMEM_GB = 3
+THREADS_PER_JOB = 1
 MEM_GB_PER_JOB = 1
+CENTI_PER_CORE = 100
 MB_PER_GB = 1024
 ASSERT_EXIT_CODE = 42
 BYTES_PER_GB = 1 << 30
@@ -73,7 +75,8 @@ class RunnerError(Exception):
 _COMMON_FLAGS = {
     "stagecode": str, "call": str, "mro": str, "work": str, "o": str,
     "special": str,
-    "threads": float, "memgb": float, "vmemgb": float, "overridememgb": float,
+    "threads": float, "memgb": float, "vmemgb": float,
+    "overridethreads": float, "overridememgb": float,
     "monitor": bool, "confine": bool, "attempt": int, "allocbytes": int,
     "types": str, "callable": str, "role": str,
 }
@@ -579,13 +582,15 @@ def _ceil_mb(gb):
 
 def resolve_resources(chunk, res):
     """Ports resolveResources: chunk (or join) requests win; negative
-    adaptive sentinels resolve to |x|; memory and vmem round up to whole MiB,
-    an unset memory takes the job default, and vmem defaults to memory plus
-    headroom and never falls below memory (mrp's local GetSystemReqs)."""
-    eff = Resources(
-        threads=abs(_coalesce(chunk.threads, res.threads)),
-        special=chunk.special or res.special,
-    )
+    adaptive sentinels resolve to |x|; threads round up to whole centicores
+    and memory and vmem to whole MiB, unset threads and memory take the job
+    defaults, and vmem defaults to memory plus headroom and never falls below
+    memory (mrp's local GetSystemReqs)."""
+    eff = Resources(special=chunk.special or res.special)
+    centi = math.ceil(abs(_coalesce(chunk.threads, res.threads)) * CENTI_PER_CORE)
+    if centi == 0:
+        centi = THREADS_PER_JOB * CENTI_PER_CORE
+    eff.threads = centi / CENTI_PER_CORE
     mem_mb = _ceil_mb(_coalesce(chunk.mem_gb, res.mem_gb))
     if mem_mb == 0:
         mem_mb = MEM_GB_PER_JOB * MB_PER_GB
@@ -1219,7 +1224,7 @@ def cli_resources(fl):
 def overridden(fl, d):
     """Ports cmd/mre/main.go overridden (shim ApplyOverride): the phase's
     --overrides values beat a chunk's or join's own request."""
-    return Resources(threads=d.threads,
+    return Resources(threads=_coalesce(fl.overridethreads, d.threads),
                      mem_gb=_coalesce(fl.overridememgb, d.mem_gb),
                      vmem_gb=d.vmem_gb, special=d.special)
 

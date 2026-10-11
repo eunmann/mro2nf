@@ -253,35 +253,48 @@ func TestResolveResourcesOverlay(t *testing.T) {
 		{
 			name:  "explicit vmem below memory raised to memory",
 			chunk: Resources{VMemGB: 0.5},
-			phase: Resources{MemGB: 2},
-			want:  Resources{MemGB: 2, VMemGB: 2},
+			phase: Resources{Threads: 1, MemGB: 2},
+			want:  Resources{Threads: 1, MemGB: 2, VMemGB: 2},
 		},
 		{
 			name:  "fractional memory kept, rounded up to whole MiB",
-			phase: Resources{MemGB: float64(float32(0.3))},
-			want:  Resources{MemGB: 308.0 / 1024, VMemGB: (308.0 + 3072) / 1024},
+			phase: Resources{Threads: 1, MemGB: float64(float32(0.3))},
+			want:  Resources{Threads: 1, MemGB: 308.0 / 1024, VMemGB: (308.0 + 3072) / 1024},
 		},
 		{
 			name:  "chunk memory below 1 GB wins unrounded",
 			chunk: Resources{MemGB: 0.5},
-			phase: Resources{MemGB: 1.5},
-			want:  Resources{MemGB: 0.5, VMemGB: 3.5},
+			phase: Resources{Threads: 1, MemGB: 1.5},
+			want:  Resources{Threads: 1, MemGB: 0.5, VMemGB: 3.5},
 		},
 		{
-			name: "unset memory takes the job default",
-			want: Resources{MemGB: 1, VMemGB: 4},
+			name: "unset threads and memory take the job defaults",
+			want: Resources{Threads: 1, MemGB: 1, VMemGB: 4},
+		},
+		{
+			// The parser already rounds threads = 0.333 to the float32 0.34, and
+			// mrp's GetSystemReqs rounds that up again: frac_threads' THIRD sees 0.35.
+			name:  "fractional threads rounded up to whole centicores",
+			phase: Resources{Threads: float64(float32(0.34)), MemGB: 1},
+			want:  Resources{Threads: 0.35, MemGB: 1, VMemGB: 4},
+		},
+		{
+			name:  "chunk threads below one CPU win unrounded",
+			chunk: Resources{Threads: 0.25},
+			phase: Resources{Threads: 0.5, MemGB: 1},
+			want:  Resources{Threads: 0.25, MemGB: 1, VMemGB: 4},
 		},
 		{
 			name:  "chunk special wins over phase",
 			chunk: Resources{Special: "chunk"},
-			phase: Resources{MemGB: 1, Special: "phase"},
-			want:  Resources{MemGB: 1, VMemGB: 1 + extraVMemGB, Special: "chunk"},
+			phase: Resources{Threads: 1, MemGB: 1, Special: "phase"},
+			want:  Resources{Threads: 1, MemGB: 1, VMemGB: 1 + extraVMemGB, Special: "chunk"},
 		},
 		{
 			name:  "phase special used when chunk has none",
 			chunk: Resources{},
-			phase: Resources{MemGB: 1, Special: "phase"},
-			want:  Resources{MemGB: 1, VMemGB: 1 + extraVMemGB, Special: "phase"},
+			phase: Resources{Threads: 1, MemGB: 1, Special: "phase"},
+			want:  Resources{Threads: 1, MemGB: 1, VMemGB: 1 + extraVMemGB, Special: "phase"},
 		},
 	}
 
