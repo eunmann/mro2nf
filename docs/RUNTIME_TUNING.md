@@ -31,7 +31,8 @@ It maps each override field to the generated process names:
 
 A memory override also sets `ext.mem_gb` beside `memory` in its `withName:`
 selector. The stage command reads it, so the stage sees the override in
-`__mem_gb` and `_jobinfo`, as mrp writes it. The global `""` default sets no `ext` value: a stage process's own
+`__mem_gb` and `_jobinfo`, as mrp writes it, and it beats a chunk's own or a
+split-returned join `__mem_gb`, as in mrp's `getJobReqs`. The global `""` default sets no `ext` value: a stage process's own
 `memory` directive takes precedence over a global default, so the stage keeps
 its `.mro` value.
 

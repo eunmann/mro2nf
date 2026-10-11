@@ -68,6 +68,23 @@ func TestJoinOverrideReachesArgs(t *testing.T) {
 	}
 }
 
+// TestOverrideBeatsChunkRequest pins #248 to real mrp: under
+// {"chunk.mem_gb": 3} a chunk whose split asked 0.5 GB gets 3 GB (vmem 6),
+// because getJobReqs applies --overrides after the chunk's own request.
+func TestOverrideBeatsChunkRequest(t *testing.T) {
+	stage := Resources{Threads: 1, MemGB: 1.5}
+	override := Resources{MemGB: 3}
+
+	eff := resolveResources(ApplyOverride(Resources{MemGB: 0.5}, override), ApplyOverride(stage, override))
+	if eff.MemGB != 3 || eff.VMemGB != 6 {
+		t.Errorf("overridden chunk = %v/%v GB, want 3/6", eff.MemGB, eff.VMemGB)
+	}
+
+	if got := ApplyOverride(Resources{MemGB: 0.5, Threads: 2}, Resources{}); got != (Resources{MemGB: 0.5, Threads: 2}) {
+		t.Errorf("no override must keep the request, got %+v", got)
+	}
+}
+
 // TestMonitorLimitsFollowRetryAllocation: the first attempt enforces the
 // resolved request mrp would; a retry enforces the larger memory Nextflow
 // escalated the task to, vmem keeping its headroom above it (#243).

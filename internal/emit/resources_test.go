@@ -10,13 +10,14 @@ import (
 // TestResourceFlagsPassStageMemory pins #243: the memory a stage sees is its
 // Martian request, not Nextflow's integer-truncated, attempt-scaled task.memory
 // (mrp gives a using(mem_gb = 1.5) stage 1.5). An overrides overlay's
-// ext.mem_gb wins, and only the -monitor limits read the task's allocation.
+// ext.mem_gb rides as its own flag, since it beats a chunk's request (#248),
+// and only the -monitor limits read the task's allocation.
 func TestResourceFlagsPassStageMemory(t *testing.T) {
 	s := &ir.Stage{Name: "MEM", Lang: ir.LangPy, Resources: ir.Resources{MemGB: 1.5}}
 
 	plain := genCtx{}.resourceFlags("main", s)
-	if !strings.Contains(plain, " -memgb ${task.ext.mem_gb ?: 1.5}") {
-		t.Errorf("main must pass the stage's mem_gb unrounded: %q", plain)
+	if !strings.Contains(plain, " -memgb 1.5 -overridememgb ${task.ext.mem_gb ?: 0}") {
+		t.Errorf("main must pass the stage's mem_gb unrounded and the override apart: %q", plain)
 	}
 
 	if strings.Contains(plain, "task.memory") || strings.Contains(plain, "-attempt") {
@@ -31,7 +32,7 @@ func TestResourceFlagsPassStageMemory(t *testing.T) {
 	}
 
 	small := &ir.Stage{Name: "SMALL", Resources: ir.Resources{MemGB: float64(float32(0.3))}}
-	if got := (genCtx{}).resourceFlags("main", small); !strings.Contains(got, "?: 0.30000001192092896}") {
+	if got := (genCtx{}).resourceFlags("main", small); !strings.Contains(got, " -memgb 0.30000001192092896 ") {
 		t.Errorf("a float32 mem_gb must reach mre exactly as mrp widens it: %q", got)
 	}
 }

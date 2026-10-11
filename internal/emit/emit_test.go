@@ -546,7 +546,7 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		"cpus { def t = Math.abs((join?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : 1 }",
 		`memory { def m = Math.abs((join?.mem_gb ?: 0) as double); m = m > 0 ? m : 1; (m * task.attempt) + ' GB' }`,
 		"tuple val(join), path('joinres.json')",
-		"-memgb ${task.ext.mem_gb ?: 0} -joinres joinres.json -args args -chunksfile chunks.json",
+		"-overridememgb ${task.ext.mem_gb ?: 0} -joinres joinres.json -args args -chunksfile chunks.json",
 		// the workflow parses joinres.json into the join val via the shipped helper (#49)
 		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }",
 		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)",

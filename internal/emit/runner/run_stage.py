@@ -72,7 +72,7 @@ class RunnerError(Exception):
 
 _COMMON_FLAGS = {
     "stagecode": str, "call": str, "mro": str, "work": str, "o": str,
-    "threads": float, "memgb": float, "vmemgb": float,
+    "threads": float, "memgb": float, "vmemgb": float, "overridememgb": float,
     "monitor": bool, "confine": bool, "attempt": int, "allocbytes": int,
     "types": str, "callable": str, "role": str,
 }
@@ -1208,8 +1208,17 @@ def record(d):
 
 
 def cli_resources(fl):
-    """The phase allocation from -threads/-memgb/-vmemgb."""
-    return Resources(threads=fl.threads, mem_gb=fl.memgb, vmem_gb=fl.vmemgb)
+    """The phase request from -threads/-memgb/-vmemgb, with any override."""
+    return overridden(
+        fl, Resources(threads=fl.threads, mem_gb=fl.memgb, vmem_gb=fl.vmemgb))
+
+
+def overridden(fl, d):
+    """Ports cmd/mre/main.go overridden (shim ApplyOverride): the phase's
+    --overrides values beat a chunk's or join's own request."""
+    return Resources(threads=d.threads,
+                     mem_gb=_coalesce(fl.overridememgb, d.mem_gb),
+                     vmem_gb=d.vmem_gb, special=d.special)
 
 
 def abs_out(path):
@@ -1432,7 +1441,7 @@ def run_main(fl):
     args = load_stage_args(fl, man)
     chunk_res, chunk_args = decode_chunk(read_bundle(fl.chunk))
     chunk_args = coerce_inputs(man, fl.callable, ["chunkin"], chunk_args)
-    eff = resolve_resources(chunk_res, cli_resources(fl))
+    eff = resolve_resources(overridden(fl, chunk_res), cli_resources(fl))
     merged = dict(args)
     merged.update(chunk_args)
     inject_resources(merged, eff)
@@ -1449,7 +1458,8 @@ def run_join(fl):
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
     chunk_defs, chunk_outs = read_chunk_data(fl.chunksfile, fl.chunkdir)
-    eff = resolve_resources(read_join_res(fl.joinres), cli_resources(fl))
+    eff = resolve_resources(
+        overridden(fl, read_join_res(fl.joinres)), cli_resources(fl))
     merged = dict(args)
     inject_resources(merged, eff)
     run_outs_phase(

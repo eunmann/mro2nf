@@ -133,6 +133,57 @@ func TestOverridesOverlayReachesStage(t *testing.T) {
 	}
 }
 
+// TestOverridesBeatChunkRequest pins #248 against real mrp: under
+// `--overrides {"FRAC_MEM.CHUNKED": {"chunk.mem_gb": 3}}` mrp gives BOTH of
+// CHUNKED's chunks 3 GB in _jobinfo and __mem_gb (and __vmem_gb 6), although its
+// split asked 0.5 GB for chunk 0: mrp's getJobReqs applies the override after
+// the chunk's own request. The untargeted MEM stage keeps its 1.5.
+func TestOverridesBeatChunkRequest(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+	buildBinaries(t)
+
+	work := t.TempDir()
+	overridesJSON := filepath.Join(work, "overrides.json")
+
+	if err := os.WriteFile(overridesJSON, []byte(`{ "FRAC_MEM.CHUNKED": { "chunk.mem_gb": 3 } }`), 0o644); err != nil {
+		t.Fatalf("write overrides.json: %v", err)
+	}
+
+	out, err := exec.Command(filepath.Join(root, "mro2nf"), "overrides", overridesJSON).Output()
+	if err != nil {
+		t.Fatalf("mro2nf overrides: %v", err)
+	}
+
+	overlay := filepath.Join(work, "overrides.config")
+	if err := os.WriteFile(overlay, out, 0o644); err != nil {
+		t.Fatalf("write overrides.config: %v", err)
+	}
+
+	proj := transpile(t, "frac_mem")
+
+	if err := runNextflow(t, proj, "-c", overlay); err != nil {
+		t.Fatal(err)
+	}
+
+	var outs struct {
+		ChunkM  []float64 `json:"chunk_m"`
+		ChunkAM []float64 `json:"chunk_am"`
+		MemM    float64   `json:"mem_m"`
+	}
+
+	readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
+
+	want := []float64{3, 3}
+	if fmt.Sprint(outs.ChunkM) != fmt.Sprint(want) || fmt.Sprint(outs.ChunkAM) != fmt.Sprint(want) {
+		t.Errorf("chunks saw mem %v / __mem_gb %v, want %v (mrp: the chunk.mem_gb override beats the chunk's own request)",
+			outs.ChunkM, outs.ChunkAM, want)
+	}
+
+	if outs.MemM != 1.5 {
+		t.Errorf("untargeted MEM saw %v, want its own 1.5", outs.MemM)
+	}
+}
+
 // TestOverridesPipelineScopeReachesStages exercises the `-mro` path (#45): a
 // pipeline-scoped key (naming the pipeline D, not a leaf stage) must expand to
 // every stage beneath it, so BOTH GEN and ADD see the override. Without -mro the

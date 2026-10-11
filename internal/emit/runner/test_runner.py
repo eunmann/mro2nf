@@ -555,6 +555,12 @@ class ResourcesTest(unittest.TestCase):
         self.assertEqual(rs._resource_num(1e6), 1000000)
         self.assertEqual(rs.resolve_resources(_res(), _res()).mem_gb, 1.0)
 
+    def test_override_beats_chunk_request(self):
+        fl = rs.parse_flags("main", ["-memgb", "1.5", "-overridememgb", "3"])
+        eff = rs.resolve_resources(
+            rs.overridden(fl, _res(mem_gb=0.5)), rs.cli_resources(fl))
+        self.assertEqual((eff.mem_gb, eff.vmem_gb), (3.0, 6.0))
+
     def test_retry_monitor_limits_follow_allocation(self):
         eff = rs.resolve_resources(_res(), _res(mem_gb=0.5))
         first = rs.parse_flags("main", ["-allocbytes", str(1 << 30)])

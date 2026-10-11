@@ -302,6 +302,18 @@ func resolveResources(def, res Resources) Resources {
 	return eff
 }
 
+// ApplyOverride returns def — the stage's using() request, or a chunk's or
+// join's own request — with an operator --overrides value's non-zero fields
+// over it. mrp's getJobReqs applies overrides after the chunk or join request,
+// so an override wins over both (and is what the stage then sees).
+func ApplyOverride(def, override Resources) Resources {
+	def.Threads = coalesce(override.Threads, def.Threads)
+	def.MemGB = coalesce(override.MemGB, def.MemGB)
+	def.VMemGB = coalesce(override.VMemGB, def.VMemGB)
+
+	return def
+}
+
 // ceilMB is a GB request's magnitude in whole MiB, rounded up.
 func ceilMB(gb float64) float64 {
 	return math.Ceil(math.Abs(gb) * mbPerGB)

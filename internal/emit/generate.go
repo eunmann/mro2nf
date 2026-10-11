@@ -55,9 +55,12 @@ func (g genCtx) stageCmd(phase string, s *ir.Stage) string {
 // unrounded and without the retry escalation of the scheduler request
 // (stageDirectives), which only sizes the task: the shim overlays a chunk's or
 // the split-returned join's own request and resolves it as mrp does. An
-// `mro2nf overrides` memory override reaches the stage through task.ext.mem_gb.
+// `mro2nf overrides` memory override reaches the shim through task.ext.mem_gb
+// as its own flag, since it beats a chunk's or join's request where the
+// stage's using() does not.
 func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
-	flags := " -threads ${task.cpus} -memgb ${task.ext.mem_gb ?: " + groovyNum(s.Resources.MemGB) + "}"
+	flags := " -threads ${task.cpus} -memgb " + groovyNum(s.Resources.MemGB) +
+		" -overridememgb ${task.ext.mem_gb ?: 0}"
 
 	// Without a declared vmem_gb the shim derives vmem from memory.
 	if v := s.Resources.VMemGB; v > 0 {
