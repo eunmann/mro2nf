@@ -1,0 +1,33 @@
+# Failure-parity fixture (#275): the split returns a chunk whose __mem_gb
+# resource key is a string, not a number. mrp fails the stage (an unmarshal
+# error into float64); mro2nf must fail the same stage with an error rather than
+# run the chunk with default memory. Exercised by TestMrpDiffFailureParity.
+stage BAD_MEM(
+    in  int[] xs,
+    out int   total,
+    src py    "stages/bad_mem",
+) split (
+    in  int   x,
+    out int   y,
+)
+
+pipeline BMEM(
+    in  int[] xs,
+    out int   total,
+)
+{
+    call BAD_MEM(
+        xs = self.xs,
+    )
+
+    return (
+        total = BAD_MEM.total,
+    )
+}
+
+call BMEM(
+    xs = [
+        1,
+        2,
+    ],
+)

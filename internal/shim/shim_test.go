@@ -14,6 +14,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/google/go-cmp/cmp"
 )
 
 // scalarOuts builds non-file (float) output params, whose _outs skeleton is all
@@ -324,27 +325,67 @@ func TestCopyTreeSymlinkCycle(t *testing.T) {
 	}
 }
 
-// TestReadStageDefsJoinBadValue checks that a resource key with the wrong JSON
-// type in the join override is rejected (mrp fails the stage with an unmarshal
-// error), not coerced to a default and silently run.
-func TestReadStageDefsJoinBadValue(t *testing.T) {
-	cases := map[string]string{
-		"string mem_gb":  `{"chunks": [], "join": {"__mem_gb": "big"}}`,
-		"number special": `{"chunks": [], "join": {"__special": 5}}`,
+// TestReadStageDefsBadResourceValue checks that a resource key with the wrong
+// JSON type, in a chunk def or the join override, fails the split as mrp's
+// updateFromLazyArgs does, instead of running with default resources (#275).
+// The error names the offending chunk so the split is debuggable.
+func TestReadStageDefsBadResourceValue(t *testing.T) {
+	cases := []struct {
+		name, defs, want string
+	}{
+		{"chunk number special", `{"chunks": [{"x": 1}, {"x": 2, "__special": 5}]}`, "chunk 1: "},
+		{"chunk string mem_gb", `{"chunks": [{"x": 1, "__mem_gb": "lots"}]}`, "chunk 0: "},
+		{"chunk string threads", `{"chunks": [{"x": 1, "__threads": "x"}]}`, "chunk 0: "},
+		{"chunk bool vmem_gb", `{"chunks": [{"x": 1, "__vmem_gb": true}]}`, "chunk 0: "},
+		{"chunk object special", `{"chunks": [{"x": 1, "__special": {}}]}`, "chunk 0: "},
+		{"join string mem_gb", `{"chunks": [], "join": {"__mem_gb": "big"}}`, "join override: "},
+		{"join number special", `{"chunks": [], "join": {"__special": 5}}`, "join override: "},
 	}
 
-	for name, defsJSON := range cases {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			meta := t.TempDir()
-			if err := writeRaw(filepath.Join(meta, "_stage_defs"), []byte(defsJSON)); err != nil {
+			if err := writeRaw(filepath.Join(meta, "_stage_defs"), []byte(tc.defs)); err != nil {
 				t.Fatalf("write _stage_defs: %v", err)
 			}
 
 			_, _, err := readStageDefs(meta)
-			if !errors.Is(err, errJoinBadValue) {
-				t.Fatalf("readStageDefs with a wrong-typed join value: err = %v, want errJoinBadValue", err)
+			if !errors.Is(err, errBadResource) {
+				t.Fatalf("readStageDefs(%s): err = %v, want errBadResource", tc.defs, err)
+			}
+
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("readStageDefs(%s): err = %q, want it to name %q", tc.defs, err, tc.want)
 			}
 		})
+	}
+}
+
+// TestReadStageDefsNullResourceValue checks that a null resource key is unset,
+// not an error: Go's json.Unmarshal of null into mrp's float64 and string
+// fields is a no-op, so mrp runs such a chunk with default resources.
+func TestReadStageDefsNullResourceValue(t *testing.T) {
+	meta := t.TempDir()
+	defsJSON := `{
+		"chunks": [{"x": 1, "__threads": null, "__mem_gb": null, "__vmem_gb": null, "__special": null}],
+		"join": {"__mem_gb": null, "__special": null}
+	}`
+	if err := writeRaw(filepath.Join(meta, "_stage_defs"), []byte(defsJSON)); err != nil {
+		t.Fatalf("write _stage_defs: %v", err)
+	}
+
+	defs, join, err := readStageDefs(meta)
+	if err != nil {
+		t.Fatalf("readStageDefs: %v", err)
+	}
+
+	want := []ChunkDef{{Args: map[string]json.RawMessage{"x": json.RawMessage("1")}}}
+	if diff := cmp.Diff(want, defs); diff != "" {
+		t.Errorf("chunk defs (-want +got):\n%s", diff)
+	}
+
+	if (join != Resources{}) {
+		t.Errorf("join override = %+v, want zero", join)
 	}
 }
 
@@ -403,11 +444,16 @@ func TestMergeArgsNegativeResources(t *testing.T) {
 }
 
 func TestSpecialResourcePreserved(t *testing.T) {
-	chunk := splitChunk(map[string]json.RawMessage{
+	res, args, err := parseResources(map[string]json.RawMessage{
 		"value":     json.RawMessage("1"),
 		"__special": json.RawMessage(`"highmem"`),
 		"__mem_gb":  json.RawMessage("2"),
 	})
+	if err != nil {
+		t.Fatalf("parseResources: %v", err)
+	}
+
+	chunk := ChunkDef{Args: args, Resources: res}
 	if chunk.Resources.Special != "highmem" {
 		t.Fatalf("special not parsed from chunk def: %q", chunk.Resources.Special)
 	}

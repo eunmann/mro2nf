@@ -201,44 +201,6 @@ func TestMergeArgsChunkPrecedence(t *testing.T) {
 	}
 }
 
-// TestParseResourcesMalformedValues pins how malformed __-prefixed resource
-// values behave: the key is always CONSUMED (never passed through to the data
-// args), and an unparseable value leaves the resource at its zero value.
-func TestParseResourcesMalformedValues(t *testing.T) {
-	tests := []struct {
-		name     string
-		in       map[string]json.RawMessage
-		wantRes  Resources
-		wantArgs map[string]json.RawMessage
-	}{
-		{
-			name:     "non-numeric threads consumed and zero",
-			in:       map[string]json.RawMessage{"__threads": json.RawMessage(`"x"`), "a": json.RawMessage("1")},
-			wantRes:  Resources{},
-			wantArgs: map[string]json.RawMessage{"a": json.RawMessage("1")},
-		},
-		{
-			name:     "non-string special consumed and empty",
-			in:       map[string]json.RawMessage{"__special": json.RawMessage("5")},
-			wantRes:  Resources{},
-			wantArgs: map[string]json.RawMessage{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res, args := parseResources(tt.in)
-
-			if diff := cmp.Diff(tt.wantRes, res); diff != "" {
-				t.Errorf("resources mismatch (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff(tt.wantArgs, args); diff != "" {
-				t.Errorf("args mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
 // TestResolveResourcesOverlay covers the chunk-over-phase overlay arms and
 // mrp's local GetSystemReqs resolution: an explicit vmem below memory is raised
 // to memory, memory rounds up to whole MiB and an unset one takes the 1 GB

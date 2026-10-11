@@ -261,6 +261,8 @@ Key points:
 - **Per-chunk resources.** Each chunk dir's `data.json` carries a `resources`
   object (`__threads`/`__mem_gb`). The MAIN process's `cpus`/`memory` are dynamic
   closures reading that object, so each chunk is provisioned per its request.
+  A resource key of the wrong JSON type in a chunk or the join override fails
+  the split with an error, as it does under `mrp`.
 - **Split-returned join override.** A `split()` may also return a `join`
   resource request; SPLIT writes it to `joinres.json`, the workflow parses it
   into a `join` value, and JOIN's `cpus`/`memory` read it — so the join phase is

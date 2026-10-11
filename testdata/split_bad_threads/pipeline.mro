@@ -1,0 +1,33 @@
+# Failure-parity fixture (#275): the split returns a chunk whose __threads
+# resource key is a string, not a number. mrp fails the stage (an unmarshal
+# error into float64); mro2nf must fail the same stage with an error rather than
+# run the chunk with default threads. Exercised by TestMrpDiffFailureParity.
+stage BAD_THREADS(
+    in  int[] xs,
+    out int   total,
+    src py    "stages/bad_threads",
+) split (
+    in  int   x,
+    out int   y,
+)
+
+pipeline BTHR(
+    in  int[] xs,
+    out int   total,
+)
+{
+    call BAD_THREADS(
+        xs = self.xs,
+    )
+
+    return (
+        total = BAD_THREADS.total,
+    )
+}
+
+call BTHR(
+    xs = [
+        1,
+        2,
+    ],
+)
