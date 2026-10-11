@@ -44,93 +44,133 @@ func diffPublished(allow divergence.Allowlist, fixture, ps, results string) ([]s
 }
 
 func diffPublishedUnder(allow divergence.Allowlist, fixture, ps, results string) ([]string, error) {
-	outs := filepath.Join(ps, "outs")
-	followLinks := allow.Excuses(divergence.RuleMrpPublishedSymlinks, fixture)
-
-	var meta []string
-	if allow.Excuses(divergence.RuleResultsMetadata, fixture) {
-		meta = nfResultsMeta
-	}
-
-	mrpTree, err := publishedTree(outs, followLinks, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	nfTree, err := publishedTree(results, false, meta)
+	pub, err := loadPublished(allow, fixture, ps, results)
 	if err != nil {
 		return nil, err
 	}
 
 	var reports []string
 
-	if diff := cmp.Diff(mrpTree, nfTree); diff != "" {
+	if diff := cmp.Diff(pub.mrpTree, pub.nfTree); diff != "" {
 		reports = append(reports, "published tree differs (-mrp +nextflow):\n"+diff)
 	}
 
-	r, err := diffOutsJSON(allow, fixture, ps, results)
+	mrp, err := encodeOrderedJSON(pub.mrpOuts)
 	if err != nil {
 		return nil, err
 	}
 
-	return append(reports, r...), nil
+	nf, err := encodeOrderedJSON(pub.nfOuts)
+	if err != nil {
+		return nil, err
+	}
+
+	if mrp != nf {
+		reports = append(reports, "_outs json mismatch (-mrp(normalized) +nextflow):\n"+cmp.Diff(indentJSON(mrp), indentJSON(nf)))
+	}
+
+	return reports, nil
 }
 
-// diffOutsJSON compares mrp's outs JSON, which it writes to the top pipeline's
-// fork0 metadata (<pipestance>/<PIPELINE>/fork0/_outs), with mro2nf's
+// published is what the mrp pipestance of a fixture and mro2nf's results dir
+// published, less what the allowlist excuses: each file tree as publishedTree
+// gives it, and each outs JSON as decodeOrderedJSON gives it.
+type published struct {
+	mrpTree, nfTree map[string]string
+	mrpOuts, nfOuts any
+}
+
+// loadPublished reads what the mrp pipestance ps of fixture and mro2nf's
+// results dir published, applying the allowlist entries that cover fixture.
+func loadPublished(allow divergence.Allowlist, fixture, ps, results string) (published, error) {
+	var (
+		pub published
+		err error
+	)
+
+	var meta []string
+	if allow.Excuses(divergence.RuleResultsMetadata, fixture) {
+		meta = nfResultsMeta
+	}
+
+	followLinks := allow.Excuses(divergence.RuleMrpPublishedSymlinks, fixture)
+
+	if pub.mrpTree, err = publishedTree(filepath.Join(ps, "outs"), followLinks, nil); err != nil {
+		return published{}, err
+	}
+
+	if pub.nfTree, err = publishedTree(results, false, meta); err != nil {
+		return published{}, err
+	}
+
+	if pub.mrpOuts, pub.nfOuts, err = loadOutsJSON(allow, fixture, ps, results); err != nil {
+		return published{}, err
+	}
+
+	return pub, nil
+}
+
+// loadOutsJSON decodes mrp's outs JSON, which it writes to the top pipeline's
+// fork0 metadata (<pipestance>/<PIPELINE>/fork0/_outs), and mro2nf's
 // results/pipeline_outs.json.
-func diffOutsJSON(allow divergence.Allowlist, fixture, ps, results string) ([]string, error) {
+func loadOutsJSON(allow divergence.Allowlist, fixture, ps, results string) (any, any, error) {
 	// Glob results come back sorted, so [0] is deterministic.
 	matches, err := filepath.Glob(filepath.Join(ps, "*", "fork0", "_outs"))
 	if err != nil {
-		return nil, fmt.Errorf("glob mrp fork0 _outs: %w", err)
+		return nil, nil, fmt.Errorf("glob mrp fork0 _outs: %w", err)
 	}
 
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("%w: no mrp fork0 _outs in %s", fs.ErrNotExist, ps)
+		return nil, nil, fmt.Errorf("%w: no mrp fork0 _outs in %s", fs.ErrNotExist, ps)
 	}
 
 	rewrite, err := mrpOutsRewrite(allow, fixture, filepath.Join(ps, "outs"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	sortKeys := allow.Excuses(divergence.RuleOutsSortKeys, fixture)
 
-	mrp, err := normalizeOutsFile(matches[0], rewrite, sortKeys)
+	mrp, err := decodeOutsFile(matches[0], rewrite, sortKeys)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	nf, err := normalizeOutsFile(filepath.Join(results, "pipeline_outs.json"), nil, sortKeys)
+	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nil, sortKeys)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	if mrp == nf {
-		return nil, nil
-	}
-
-	return []string{"_outs json mismatch (-mrp(normalized) +nextflow):\n" + cmp.Diff(indentJSON(mrp), indentJSON(nf))}, nil
+	return mrp, nf, nil
 }
 
 // normalizeOutsFile reads an outs JSON file into its compact form, its
 // strings passed through rewrite and its object keys sorted if sortKeys.
 func normalizeOutsFile(path string, rewrite func(string) string, sortKeys bool) (string, error) {
+	v, err := decodeOutsFile(path, rewrite, sortKeys)
+	if err != nil {
+		return "", err
+	}
+
+	return encodeOrderedJSON(v)
+}
+
+// decodeOutsFile is normalizeOutsFile's value before it is encoded.
+func decodeOutsFile(path string, rewrite func(string) string, sortKeys bool) (any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read outs json: %w", err)
+		return nil, fmt.Errorf("read outs json: %w", err)
 	}
 
 	v, err := decodeOrderedJSON(raw)
 	if err != nil {
-		return "", fmt.Errorf("decode %s: %w", path, err)
+		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
 
 	if rewrite != nil {
 		v, err = mapJSONStrings(v, func(s string) (string, error) { return rewrite(s), nil })
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
@@ -138,7 +178,7 @@ func normalizeOutsFile(path string, rewrite func(string) string, sortKeys bool) 
 		v = sortJSONKeys(v)
 	}
 
-	return encodeOrderedJSON(v)
+	return v, nil
 }
 
 // mrpOutsRewrite returns the rewrite of mrp's outs JSON strings the

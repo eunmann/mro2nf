@@ -17,6 +17,7 @@ package e2e
 // it (.github/actions/setup-martian).
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -27,7 +28,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // martianBin resolves the Martian bin dir and, like requireTools, skips the
@@ -98,38 +101,48 @@ func runMrp(t *testing.T, bin, fixture, tmp string) {
 func runMrpAt(t *testing.T, bin, dir, mro, tmp string) {
 	t.Helper()
 
-	if out, err := execMrp(bin, dir, mro, tmp); err != nil {
+	if out, err := execMrp(t.Context(), bin, dir, mro, tmp); err != nil {
 		t.Fatalf("mrp %s: %v\n%s", filepath.Join(dir, mro), err, tail(out, 12))
 	}
 }
 
+// errMrpUnfinished reports an mrp run its context stopped before it ended.
+var errMrpUnfinished = errors.New("mrp did not finish")
+
 // execMrp runs mrp as runMrpAt does and returns its combined output, which it
-// also writes to <tmp>/mrp.log, and its error.
-func execMrp(bin, dir, mro, tmp string) ([]byte, error) {
+// also writes to <tmp>/mrp.log, and its error. When ctx ends first, mrp is
+// sent SIGTERM, on which it stops its jobs, and the error wraps
+// errMrpUnfinished.
+func execMrp(ctx context.Context, bin, dir, mro, tmp string) ([]byte, error) {
 	// disable keeps intermediate stage files, which the stage-ABI diff hashes
 	// through the paths in each invocation's _args/_outs; mrp's default rolling
 	// VDR deletes them once their consumers finish.
-	return execMrpVDR(bin, dir, mro, tmp, "disable")
+	return execMrpVDR(ctx, bin, dir, mro, tmp, "disable")
 }
 
 // execMrpVDR is execMrp under the given --vdrmode.
-func execMrpVDR(bin, dir, mro, tmp, vdrMode string) ([]byte, error) {
+func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string) ([]byte, error) {
 	// Preflight stages run (no --nopreflight) because mro2nf runs them, so their
 	// invocations pair up.
-	cmd := exec.Command(filepath.Join(bin, "mrp"), filepath.Join(dir, mro), "mrp",
+	cmd := exec.CommandContext(ctx, filepath.Join(bin, "mrp"), filepath.Join(dir, mro), "mrp",
 		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode="+vdrMode)
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "MROPATH="+dir)
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 30 * time.Second
 
 	out, err := cmd.CombinedOutput()
 
 	_ = os.WriteFile(filepath.Join(tmp, "mrp.log"), out, 0o644)
 
-	if err != nil {
+	switch {
+	case ctx.Err() != nil:
+		return out, fmt.Errorf("run mrp: %w: %w", errMrpUnfinished, ctx.Err())
+	case err != nil:
 		return out, fmt.Errorf("run mrp: %w", err)
+	default:
+		return out, nil
 	}
-
-	return out, nil
 }
 
 // nfResultsMeta are mro2nf's own metadata files at the root of results/. mrp
@@ -681,17 +694,7 @@ func TestMrpDiffFailureParity(t *testing.T) {
 func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
 	t.Helper()
 
-	_, err := execMrp(bin, filepath.Join(root, "testdata", fixture), "pipeline.mro", tmp)
-	if err == nil {
-		return runOutcome{}
-	}
-
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) {
-		t.Fatal(err)
-	}
-
-	o, err := mrpFailedOutcome(filepath.Join(tmp, "mrp"))
+	o, err := mrpOutcome(t.Context(), bin, filepath.Join(root, "testdata", fixture), tmp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -720,7 +723,7 @@ func nfRunOutcome(t *testing.T, fixture string) (runOutcome, []string, string) {
 	var logs []string
 
 	for _, flags := range [][]string{nil, {"-native"}, {"-inline-pipelines=false"}} {
-		err := transpileInto(filepath.Join(root, "testdata", fixture), "pipeline.mro", t.TempDir(), flags...)
+		err := transpileInto(repoTools(), filepath.Join(root, "testdata", fixture), "pipeline.mro", t.TempDir(), flags...)
 		if err == nil {
 			t.Fatalf("mro2nf transpiles %s under %v; mrp refuses it before any stage runs", fixture, flags)
 		}
@@ -731,14 +734,48 @@ func nfRunOutcome(t *testing.T, fixture string) (runOutcome, []string, string) {
 	return failedWith(nil), nil, strings.Join(logs, "\n")
 }
 
+// mrpOutcome runs dir's pipeline.mro under mrp in tmp and classifies the run.
+func mrpOutcome(ctx context.Context, bin, dir, tmp string) (runOutcome, error) {
+	_, err := execMrp(ctx, bin, dir, "pipeline.mro", tmp)
+	if err == nil {
+		return runOutcome{}, nil
+	}
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return runOutcome{}, err
+	}
+
+	return mrpFailedOutcome(filepath.Join(tmp, "mrp"))
+}
+
 // nextflowRunOutcome runs a transpiled project and classifies the run from the
 // FAILED attempts in its trace. It also returns the task name of every attempt
 // the trace lists.
 func nextflowRunOutcome(t *testing.T, proj string) (runOutcome, []string) {
 	t.Helper()
 
-	runErr := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt")
-	rows := readTrace(t, filepath.Join(proj, "trace.txt"))
+	o, attempts, err := nextflowOutcome(proj, runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return o, attempts
+}
+
+// nextflowOutcome classifies the Nextflow run of proj that ended with runErr
+// from the FAILED attempts in its trace.txt, and returns the task name of
+// every attempt the trace lists. A failed run that wrote no trace ran no task,
+// so it blames no stage.
+func nextflowOutcome(proj string, runErr error) (runOutcome, []string, error) {
+	rows, err := parseTrace(filepath.Join(proj, "trace.txt"))
+
+	switch {
+	case runErr != nil && errors.Is(err, fs.ErrNotExist):
+		return failedWith(nil), nil, nil
+	case err != nil:
+		return runOutcome{}, nil, err
+	}
 
 	attempts := make([]string, len(rows))
 	for i, r := range rows {
@@ -746,7 +783,7 @@ func nextflowRunOutcome(t *testing.T, proj string) (runOutcome, []string) {
 	}
 
 	if runErr == nil {
-		return runOutcome{}, attempts
+		return runOutcome{}, attempts, nil
 	}
 
 	var failed []failedAttempt
@@ -758,11 +795,8 @@ func nextflowRunOutcome(t *testing.T, proj string) (runOutcome, []string) {
 	}
 
 	o, err := nextflowFailedOutcome(filepath.Join(proj, "work"), failed)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	return o, attempts
+	return o, attempts, err
 }
 
 // tailFile is tail for a log file, or a note that it could not be read.

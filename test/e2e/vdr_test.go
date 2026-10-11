@@ -33,7 +33,7 @@ func TestMrpDiffVDR(t *testing.T) {
 			t.Parallel()
 
 			tmp := t.TempDir()
-			if out, err := execMrpVDR(bin, filepath.Join(root, "testdata", "vdr_volatile"), "pipeline.mro", tmp, mode); err != nil {
+			if out, err := execMrpVDR(t.Context(), bin, filepath.Join(root, "testdata", "vdr_volatile"), "pipeline.mro", tmp, mode); err != nil {
 				t.Fatalf("mrp --vdrmode=%s: %v\n%s", mode, err, tail(out, 12))
 			}
 
