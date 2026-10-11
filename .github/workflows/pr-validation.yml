@@ -1,9 +1,14 @@
 name: PR Validation
 
-# Docs-only changes skip validation entirely: markdown, docs/, and the agent
-# skills can't affect anything CI measures. paths-ignore only fires when EVERY
-# changed file matches, so a mixed docs+code PR still validates fully.
+# Docs-only changes (markdown, docs/, the agent skills, LICENSE) can't affect
+# anything CI measures, so they skip the heavy jobs. This workflow is the ONLY
+# source of the seven required contexts (#280): a second workflow posting the
+# same names lets branch protection accept its success before the real job
+# reports. TestRequiredContexts* guards that.
 on:
+  # Pushes to main gate nothing, so a docs-only push can skip the whole run.
+  # paths-ignore fires only when EVERY changed file matches. Keep this list in
+  # step with the `changes` job's case pattern.
   push:
     branches: [main]
     paths-ignore:
@@ -11,14 +16,11 @@ on:
       - "docs/**"
       - ".claude/**"
       - LICENSE
-  # Run for PRs against ANY base branch, not just main, so stacked PRs (a PR
-  # whose base is another feature branch) are validated too.
+  # No path or branch filter: every PR must run this workflow so its required
+  # contexts always report. A workflow that doesn't trigger reports nothing,
+  # and a required context that never reports deadlocks the PR (#182). Any
+  # base branch, so stacked PRs are validated too.
   pull_request:
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - ".claude/**"
-      - LICENSE
 
 permissions:
   contents: read
@@ -30,9 +32,53 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Every required job carries the same gate:
+#   needs: changes
+#   if: ${{ <status> && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
+# It skips only on a successful docs-only verdict, and GitHub counts a job
+# skipped by `if:` as a passing required check. The explicit status function
+# (`!cancelled()`, or `always()` for the e2e aggregate) replaces the implicit
+# success(): without it a FAILED `changes` job would skip every required job,
+# and those skips would pass branch protection. With it, a failed `changes`
+# runs full validation.
 jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      # fetch-depth 2: a pull_request checkout is the PR's merge commit, and
+      # its first parent is the base tip the PR merges into.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: diff
+        run: |
+          set -euo pipefail
+          code=true
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git rev-parse -q --verify HEAD^2 >/dev/null || {
+              echo "::error::HEAD is not the PR merge commit"; exit 1;
+            }
+            # --no-renames: a code file renamed into docs/ is still a code
+            # deletion. Written to a file so a git failure fails the step.
+            git diff --name-only --no-renames -z HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+            code=false
+            while IFS= read -r -d '' f; do
+              case "$f" in
+                *.md | docs/* | .claude/* | LICENSE) ;;
+                *) echo "code change: $f"; code=true ;;
+              esac
+            done < "$RUNNER_TEMP/changed"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -61,6 +107,8 @@ jobs:
 
   build:
     name: Build
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -74,6 +122,8 @@ jobs:
 
   test:
     name: Unit tests
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -93,13 +143,13 @@ jobs:
   # of the suite while CI stayed green). The step also asserts the list is the
   # contiguous range 0..N-1 that harness shardSkip's modulo partition requires.
   #
-  # NOTE: "E2E shard config" (and "E2E shard N") are internal implementation
-  # contexts — do NOT mark them required in branch protection. Only the seven
-  # aggregate contexts are gates, and only those are mirrored in
-  # pr-validation-skip.yml; a required context missing from that companion
-  # deadlocks docs-only PRs (#182). TestRequiredContextsMirrored guards the set.
+  # NOTE: "Detect code changes", "E2E shard config" and "E2E shard N" are
+  # internal contexts. Do NOT mark them required in branch protection: only the
+  # seven aggregate contexts are gates, and a docs-only PR skips the shards.
   e2e-config:
     name: E2E shard config
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -128,6 +178,9 @@ jobs:
   e2e-shard:
     name: E2E shard ${{ matrix.shard }}
     needs: e2e-config
+    # Explicit: the implicit success() also checks transitive needs, so a
+    # failed `changes` would skip the shards even though e2e-config ran.
+    if: ${{ !cancelled() && needs.e2e-config.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -165,14 +218,15 @@ jobs:
       - run: make test-e2e
 
   # Stable required branch-protection context aggregating the shards — DO NOT
-  # rename (a renamed required check deadlocks every PR). Green only when every
-  # shard is green; `if: always()` so it always reports rather than stalling
-  # pending when a shard fails.
+  # rename (a renamed required check deadlocks every PR). Skipped (passing) only
+  # on a docs-only verdict; otherwise green only when every shard is green.
+  # always() so it reports a failure, rather than stalling pending, when a
+  # shard fails, is cancelled, or never ran because e2e-config failed.
   e2e:
     name: E2E (Nextflow vs mrp goldens)
     runs-on: ubuntu-latest
-    needs: [e2e-shard]
-    if: always()
+    needs: [changes, e2e-shard]
+    if: ${{ always() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     steps:
       - name: All E2E shards passed
         run: |
@@ -189,6 +243,8 @@ jobs:
   # E2E_PARALLEL workers; budgeted with headroom over observed wall time.
   lint-nf:
     name: Lint generated Nextflow
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -218,6 +274,8 @@ jobs:
   # regress vs bench/baseline.json.
   bench:
     name: Bench (data movement gate)
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -248,6 +306,8 @@ jobs:
   # parallel with the local e2e job above.
   e2e-docker:
     name: E2E (container isolation)
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
