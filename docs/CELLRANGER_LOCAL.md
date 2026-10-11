@@ -33,10 +33,10 @@ synthetic fixtures never did.
 | 2 | The transport leaf-flatten renamed every file leaf to `f/L%04d`, dropping the extension. Martian typed-file readers reconstruct a path from the filetype (`bincode` → `with_extension`), so they looked for `f/L0002.bincode` beside a bare `f/L0002` and failed. `FILTER_BARCODES` join. | Preserve the source extension in the leaf name (`f/L0002.bincode`) in the Go shim. Since #284 each leaf keeps its whole basename in an ordinal dir (`f/L0002/<basename>`). |
 | 4 | A stage RESERVES production-sized memory (the cloupe join asks for 30 GB). On a smaller machine Nextflow's local executor **parks** a task whose request exceeds the machine — forever — deadlocking a run that `mrp` completes fine (`mrp` clamps a job to its `--localmem` pool and runs it). | Emit `process.resourceLimits` in the local profile, clamping each task's request to the detected host resources. The generated pipeline now runs wherever `mrp` runs. |
 
-## Baselines and the lever matrix
+## Baselines: default vs `-native`
 
-One machine: 32 cores / 31 GB. Martian: `--localcores=8 --localmem=16`. Nextflow
-variations: transpiled with the named flags and run with an aggressive local
+One machine: 32 cores / 31 GB. Martian: `--localcores=8 --localmem=16`. Both
+Nextflow emissions are run with an aggressive local
 scheduling config (large `executor.memory` pool + tight polling — safe only
 because the test data is tiny; the per-task `resourceLimits` clamp still applies).
 
@@ -51,7 +51,7 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
 
 ## What the differences actually are
 
-- **Faithfulness is total.** Every variation reproduces `mrp`'s outputs
+- **Faithfulness is total.** Both emissions reproduce `mrp`'s outputs
   byte-for-byte. The two contracts (stage ABI, pipeline outputs) hold on a real
   pipeline, not just fixtures.
 
@@ -67,7 +67,7 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
 
 - **`-native` cuts orchestration *structure*, not local wall time.** It drops
   a few plumbing tasks (`BUILD_ENTRY_ARGS` + tighter scatter), so wall time is
-  flat across the variations. Its value is where the bench gate measures it — task/plumbing count, bytes staged, container launches
+  flat across both emissions. Its value is where the bench gate measures it — task/plumbing count, bytes staged, container launches
   — which translates to **cost and scale on a real backend (AWS Batch), not
   local seconds on tiny data**. On production-sized inputs, stage compute
   dominates and this overhead amortizes away.

@@ -11,8 +11,7 @@ package e2e
 // (a real syntax bug); style warnings on the generated code exit 0.
 //
 // The matrix is fixtures × lintConfigs, but a per-combo `nextflow lint` pays a
-// ~2s JVM boot that dwarfs the linting itself (699s on the 2-core CI runner).
-// So one `nextflow lint` invocation lints many project dirs with per-file JSON
+// ~2s JVM boot that dwarfs the linting itself. So one `nextflow lint` invocation lints many project dirs with per-file JSON
 // diagnostics, and the emissions share a handful of JVMs instead of one each.
 // Every emission ships the identical static lib/ (asserted below), so a single
 // -project-dir serves the batch.
