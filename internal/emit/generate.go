@@ -759,9 +759,11 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 	var body strings.Builder
 
-	// pipeargs is always a value channel (the entry uses Channel.value and nested
-	// calls pass the parent's value-channel pa), so it is directly re-readable by
-	// every bind — no .first() needed (which would warn as useless on a value).
+	// Every bind re-reads pipeargs without .first() (which warns as useless on a
+	// value), so it must be a value channel. The native entry wraps it in
+	// Channel.value; BUILD_ENTRY_ARGS.out is one only because that process takes
+	// nothing but value inputs, which it must keep doing; nested calls pass the
+	// parent's pa.
 	body.WriteString("  main:\n    pa = pipeargs\n")
 	body.WriteString("    types = file(\"${projectDir}/_assets/types.json\")\n")
 
