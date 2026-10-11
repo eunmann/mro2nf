@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/frontend"
+	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // benchLane is one benchmark run: a fixture invocation (dir + entry .mro)
@@ -207,8 +209,8 @@ func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 
 // writeStageProcesses writes, as a JSON array under tmp, every process name
 // the emitter can give a task that runs a stage's own code in the program of
-// dir/mro, and returns the file's path. emit.StageProcessNames builds them
-// from the same inventory as the override selectors. bench_metrics.py counts
+// dir/mro, and returns the file's path. stageProcessNames builds them from
+// the same inventory as the override selectors. bench_metrics.py counts
 // every other task as plumbing, so a new helper process is plumbing without
 // being listed.
 func writeStageProcesses(dir, mro, tmp string) (string, error) {
@@ -224,7 +226,7 @@ func writeStageProcesses(dir, mro, tmp string) (string, error) {
 		return "", fmt.Errorf("lower %s: %w", mro, err)
 	}
 
-	data, err := json.Marshal(emit.StageProcessNames(prog))
+	data, err := json.Marshal(stageProcessNames(prog))
 	if err != nil {
 		return "", fmt.Errorf("encode stage processes: %w", err)
 	}
@@ -235,6 +237,40 @@ func writeStageProcesses(dir, mro, tmp string) (string, error) {
 	}
 
 	return path, nil
+}
+
+// stageProcessNames returns, sorted, every process name the emitter can give a
+// task that runs a stage's own code: per stage the plain family, per pipeline
+// call the fused family and the keyed element scatter. Built from the exported
+// suffix inventory and emit.Qualify, it is the list writeStageProcesses counts as stage tasks;
+// internal/emit's TestStageProcessNames pins the same loop against the
+// processes the emitter actually generates.
+func stageProcessNames(prog *ir.Program) []string {
+	var names []string
+
+	for stage := range prog.Stages {
+		for _, s := range emit.PlainStageSuffixes() {
+			names = append(names, stage+s)
+		}
+	}
+
+	for _, p := range prog.Pipelines {
+		for _, c := range p.Calls {
+			q := emit.Qualify(p.Name, c.Name)
+
+			for _, s := range emit.FusedCallSuffixes() {
+				names = append(names, "STAGE_"+q+s)
+			}
+
+			for _, s := range emit.ScatterCallSuffixes() {
+				names = append(names, "FORK_"+q+s)
+			}
+		}
+	}
+
+	slices.Sort(names)
+
+	return names
 }
 
 // TestMrpDiffBenchJobs runs every bench invocation under real mrp and

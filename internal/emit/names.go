@@ -1,11 +1,5 @@
 package emit
 
-import (
-	"slices"
-
-	"github.com/eunmann/mro2nf/internal/ir"
-)
-
 // The inventory below is the naming contract between this package and
 // internal/overrides: Nextflow full-matches a withName selector regex, so the
 // overrides converter must enumerate the exact, finite suffix set for each
@@ -23,7 +17,7 @@ func PlainStageSuffixes() []string {
 }
 
 // FusedCallSuffixes returns every suffix on a fused per-call process name,
-// STAGE_<n>_<pipeline>__<call> (see fusedName/qualify): the bare fused
+// STAGE_<n>_<pipeline>__<call> (see fusedName/Qualify): the bare fused
 // bind+main / native scatter / fused chain, the fused bind+split _SP with its
 // _MN/_JN phase include-aliases, and the keyed fused bind+main _K (#99).
 func FusedCallSuffixes() []string {
@@ -31,41 +25,9 @@ func FusedCallSuffixes() []string {
 }
 
 // ScatterCallSuffixes returns every suffix on a fork-named process,
-// FORK_<n>_<pipeline>__<call> (see forkName/qualify), that runs the stage's
+// FORK_<n>_<pipeline>__<call> (see forkName/Qualify), that runs the stage's
 // own main: the keyed element scatter _KS (#99). The bare FORK_ name and its
 // _K variant are forkbind helpers, not stage compute.
 func ScatterCallSuffixes() []string {
 	return []string{"_KS"}
-}
-
-// StageProcessNames returns, sorted, every process name the emitter can give
-// a task that runs a stage's own code in prog: per stage the plain family, and
-// per pipeline call the fused family and the keyed element scatter. Every
-// other process the emitter generates is data-plane plumbing.
-func StageProcessNames(prog *ir.Program) []string {
-	var names []string
-
-	for stage := range prog.Stages {
-		for _, s := range PlainStageSuffixes() {
-			names = append(names, stage+s)
-		}
-	}
-
-	for _, p := range prog.Pipelines {
-		for _, c := range p.Calls {
-			q := qualify(p.Name, c.Name)
-
-			for _, s := range FusedCallSuffixes() {
-				names = append(names, "STAGE_"+q+s)
-			}
-
-			for _, s := range ScatterCallSuffixes() {
-				names = append(names, "FORK_"+q+s)
-			}
-		}
-	}
-
-	slices.Sort(names)
-
-	return names
 }

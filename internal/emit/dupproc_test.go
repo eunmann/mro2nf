@@ -8,7 +8,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/apperror"
 )
 
-// TestCheckProcessCollisions guards #176: qualify() is injective on
+// TestCheckProcessCollisions guards #176: Qualify() is injective on
 // (pipeline, call) but not once an inventory suffix is appended, so a call named
 // FOO and a sibling FOO_K (or a fused call X and a sibling X_MN) can emit the
 // same name. The check catches every way that collision surfaces.
