@@ -391,10 +391,13 @@ whether it was published as a symlink — and the `_outs` JSON
 publish path against Martian itself, not a hand-written golden.
 
 It also diffs the **stage ABI**: every split, main (per chunk and fork) and join
-that ran under `mrp` must have a twin under mro2nf with the same `_args` and
-`_outs`, and vice versa (`test/e2e/abidiff_test.go`). Invocations are matched as a
-multiset per (stage, phase), not through the task graph. Both files are
-compacted with object key order and number tokens byte-exact; an existing
+that ran under `mrp` must have a twin under mro2nf with the same `_args`, `_outs`
+and `_jobinfo` allocation (`threads`, `memGB`, `vmemGB`: what the adapters'
+`get_threads_allocation`/`get_memory_allocation` and `GetJobInfo` read), and vice
+versa (`test/e2e/abidiff_test.go`). Invocations are matched as a
+multiset per (stage, phase), not through the task graph. The files are
+compacted with object key order and number tokens byte-exact (the allocation in
+a fixed key order, since the adapter reads it by key); an existing
 absolute path becomes its content hash (a tree hash for a directory) plus its
 basename, and an absent path under the phase's own `files` dir loses that host
 prefix. `mrp` runs with `--vdrmode=disable` so intermediate files still exist to

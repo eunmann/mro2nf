@@ -327,11 +327,70 @@ func TestCollectMrpInvocations(t *testing.T) {
 		t.Errorf("invocation groups (-want +got):\n%s", diff)
 	}
 
+	allocs := map[string][]string{}
 	for _, inv := range invs {
+		allocs[inv.group()] = append(allocs[inv.group()], inv.JobInfo)
+
 		if inv.Stage == "SUM_SQUARES" && inv.Phase == phaseSplit {
 			if inv.Args != `{"values":[1,2,3]}` || inv.Outs != absentMeta {
 				t.Errorf("split invocation = args %s outs %s, want {\"values\":[1,2,3]} and absent outs", inv.Args, inv.Outs)
 			}
+		}
+	}
+
+	const chunk = `{"threads":1,"memGB":1,"vmemGB":4}`
+
+	wantAllocs := map[string][]string{
+		"REPORT main":       {`{"threads":0.5,"memGB":1,"vmemGB":4}`},
+		"SUM_SQUARES split": {`{"threads":1,"memGB":2}`},
+		"SUM_SQUARES main":  {chunk, chunk, chunk},
+		"SUM_SQUARES join":  {`{"threads":1,"memGB":2}`},
+	}
+	if diff := cmp.Diff(wantAllocs, allocs); diff != "" {
+		t.Errorf("_jobinfo allocations (-want +got):\n%s", diff)
+	}
+}
+
+// TestABINormalizeAllocation checks a _jobinfo reduces to the allocation the
+// stage reads, in a fixed member order with number tokens kept, whatever host
+// facts and member order each runtime writes.
+func TestABINormalizeAllocation(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "mrp_member_order_and_host_facts",
+			in:   `{"name": "P.S.fork0.chnk0", "pid": 7, "host": "h", "cwd": "/x/files", "threads": 0.5, "memGB": 1.5, "vmemGB": 4.5, "invocation": {"call": "P"}}`,
+			want: `{"threads":0.5,"memGB":1.5,"vmemGB":4.5}`,
+		},
+		{
+			name: "mre_sorted_members",
+			in:   `{"cwd": "/w/main/files", "memGB": 1.5, "name": "P.main", "threads": 0.5, "vmemGB": 4.5}`,
+			want: `{"threads":0.5,"memGB":1.5,"vmemGB":4.5}`,
+		},
+		{name: "float_token_kept", in: `{"threads": 1.0, "memGB": 1, "vmemGB": 4}`, want: `{"threads":1.0,"memGB":1,"vmemGB":4}`},
+		{name: "omitted_key_absent", in: `{"threads": 1, "memGB": 2}`, want: `{"threads":1,"memGB":2}`},
+		{name: "nested_keys_ignored", in: `{"invocation": {"threads": 9}}`, want: `{}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := abiNormalizer{}.normalizeAllocation([]byte(tc.in))
+			if err != nil {
+				t.Fatalf("normalizeAllocation: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("normalizeAllocation(%s) = %s, want %s", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	for _, in := range []string{`[1]`, `{"threads": `} {
+		if _, err := (abiNormalizer{}).normalizeAllocation([]byte(in)); err == nil {
+			t.Errorf("normalizeAllocation(%q) succeeded, want an error", in)
 		}
 	}
 }
@@ -371,6 +430,7 @@ func TestCollectNextflowInvocations(t *testing.T) {
 		writeABITestFile(t, filepath.Join(dir, phase, mreStageFile), stage)
 		writeABITestFile(t, filepath.Join(dir, phase, argsFile), `{"n": 3}`)
 		writeABITestFile(t, filepath.Join(dir, phase, outsFile), `{"total": 6}`)
+		writeABITestFile(t, filepath.Join(dir, phase, jobInfoFile), `{"memGB": 1, "threads": 1, "vmemGB": 4}`)
 	}
 
 	task("ok1", "0", phaseMain, "SUM")
@@ -387,6 +447,12 @@ func TestCollectNextflowInvocations(t *testing.T) {
 		t.Errorf("invocation groups (-want +got):\n%s", diff)
 	}
 
+	for _, inv := range invs {
+		if inv.JobInfo != `{"threads":1,"memGB":1,"vmemGB":4}` {
+			t.Errorf("%s _jobinfo = %s, want the allocation in threads, memGB, vmemGB order", inv.Origin, inv.JobInfo)
+		}
+	}
+
 	task("anon", "0", phaseMain, "")
 
 	if _, err := collectNextflowInvocations(proj, abiRules{}); !errors.Is(err, errABIMeta) {
@@ -396,7 +462,7 @@ func TestCollectNextflowInvocations(t *testing.T) {
 
 func TestDiffABI(t *testing.T) {
 	inv := func(stage, phase, args, origin string) abiInvocation {
-		return abiInvocation{Stage: stage, Phase: phase, Args: args, Outs: absentMeta, Origin: origin}
+		return abiInvocation{Stage: stage, Phase: phase, Args: args, Outs: absentMeta, JobInfo: `{"memGB":1}`, Origin: origin}
 	}
 
 	mrp := []abiInvocation{
@@ -431,6 +497,14 @@ func TestDiffABI(t *testing.T) {
 			reports: []string{"mrp      mrp/chnk2", "nextflow nf/c", "_args (-mrp +nextflow)", "1.0"},
 		},
 		{
+			name: "allocation_differs",
+			nf: []abiInvocation{
+				inv("S", phaseMain, `{"i":0}`, "nf/a"), inv("S", phaseMain, `{"i":1}`, "nf/b"),
+				{Stage: "S", Phase: phaseMain, Args: `{"i":1}`, Outs: absentMeta, JobInfo: `{"memGB":2}`, Origin: "nf/c"},
+			},
+			reports: []string{"mrp      mrp/chnk", "nextflow nf/c", "_jobinfo (-mrp +nextflow)", `\"memGB\": 2`},
+		},
+		{
 			name: "extra_phase_on_one_side",
 			nf: []abiInvocation{
 				inv("S", phaseMain, `{"i":0}`, "nf/a"), inv("S", phaseMain, `{"i":1}`, "nf/b"),
@@ -463,7 +537,20 @@ type abiPair struct {
 	ps, proj string
 }
 
+// The _jobinfo of an abiPair's two sides: the same allocation, written as
+// each runtime writes it.
+const (
+	mrpJobInfo = `{"name": "P.CONS.fork0.chnk0", "pid": 7, "host": "h", "threads": 1, "memGB": 1, "vmemGB": 4}`
+	nfJobInfo  = `{"cwd": "/w/main/files", "memGB": 1, "name": "P.main", "threads": 1, "vmemGB": 4}`
+)
+
 func writeABIPair(t *testing.T, mrpArgs, nfArgs string) abiPair {
+	t.Helper()
+
+	return writeABIPairJobInfo(t, mrpArgs, nfArgs, mrpJobInfo, nfJobInfo)
+}
+
+func writeABIPairJobInfo(t *testing.T, mrpArgs, nfArgs, mrpInfo, nfInfo string) abiPair {
 	t.Helper()
 
 	p := abiPair{ps: t.TempDir(), proj: t.TempDir()}
@@ -472,11 +559,12 @@ func writeABIPair(t *testing.T, mrpArgs, nfArgs string) abiPair {
 	task := filepath.Join(p.proj, "work", "ab", "cdef1234")
 
 	writeABITestFile(t, filepath.Join(fork, "_invocation"), "call CONS(\n    s = PROD.s,\n)\n")
-	writeABITestFile(t, filepath.Join(chunk, "_jobinfo"), "{}")
+	writeABITestFile(t, filepath.Join(chunk, jobInfoFile), mrpInfo)
 	writeABITestFile(t, filepath.Join(chunk, argsFile), mrpArgs)
 	writeABITestFile(t, filepath.Join(chunk, outsFile), `{"keys": ["b", "a"]}`)
 	writeABITestFile(t, filepath.Join(task, ".exitcode"), "0")
 	writeABITestFile(t, filepath.Join(task, phaseMain, mreStageFile), "CONS")
+	writeABITestFile(t, filepath.Join(task, phaseMain, jobInfoFile), nfInfo)
 	writeABITestFile(t, filepath.Join(task, phaseMain, argsFile), nfArgs)
 	writeABITestFile(t, filepath.Join(task, phaseMain, outsFile), `{"keys":["b","a"]}`)
 
@@ -559,6 +647,63 @@ func TestABIKeyEntryScopedAndStale(t *testing.T) {
 			got := tc.pair.diff(t, tc.allow, tc.fixture)
 			if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
 				t.Errorf("reports %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestABIComparesJobInfoAllocation checks a stage whose _args agree still
+// differs when its _jobinfo allocation does (#397), as when #243 rounded the
+// memory a stage reads up to whole GB, and that a _jobinfo key-matcher entry
+// excuses its key and nothing else.
+func TestABIComparesJobInfoAllocation(t *testing.T) {
+	allow, err := divergence.Parse([]byte(`{"divergences": [{"id": "mem-rounded", "kind": "abi",
+		"feature": "f", "summary": "s", "justification": "j", "issue": 1, "evidence": ["TestMrpDiff"],
+		"abi": {"fixtures": ["fx"], "file": "_jobinfo", "rule": "ceil-number", "key": "memGB"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const args = `{"__mem_gb": 1.5, "n": 1}`
+
+	pair := func(mrpAlloc, nfAlloc string) abiPair {
+		return writeABIPairJobInfo(t, args, args,
+			`{"name": "P.CONS.fork0.chnk0", "pid": 7, `+mrpAlloc+`}`, `{"cwd": "/w/main/files", `+nfAlloc+`}`)
+	}
+
+	rounded := pair(`"threads": 1, "memGB": 1.5, "vmemGB": 4.5`, `"memGB": 2, "threads": 1, "vmemGB": 4.5`)
+
+	const allocDiff = jobInfoFile + " (-mrp +nextflow)"
+
+	cases := []struct {
+		name    string
+		pair    abiPair
+		fixture string
+		want    []string
+	}{
+		{"agree", pair(`"threads": 1, "memGB": 1.5, "vmemGB": 4.5`, `"memGB": 1.5, "threads": 1, "vmemGB": 4.5`), "other", nil},
+		{"mem_rounded", rounded, "other", []string{allocDiff, `"memGB": 2`}},
+		{"mem_rounded_excused", rounded, "fx", nil},
+		{"stale", pair(`"threads": 1, "memGB": 2, "vmemGB": 5`, `"memGB": 2, "threads": 1, "vmemGB": 5`), "fx", []string{"mem-rounded excuses nothing in fx"}},
+		{"threads_int_vs_float", pair(`"threads": 1, "memGB": 1.5`, `"memGB": 1.5, "threads": 1.0`), "other", []string{allocDiff, `"threads": 1.0`}},
+		{"vmem_missing", pair(`"threads": 1, "memGB": 2, "vmemGB": 5`, `"memGB": 2, "threads": 1`), "other", []string{allocDiff, `"vmemGB": 5`}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.pair.diff(t, allow, tc.fixture)
+			if (len(tc.want) == 0) != (got == "") {
+				t.Fatalf("reports %q, want %q", got, tc.want)
+			}
+
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("reports %q, want %q", got, w)
+				}
+			}
+
+			if strings.Contains(got, argsFile+" (") {
+				t.Errorf("reports an _args diff for agreeing _args: %q", got)
 			}
 		})
 	}

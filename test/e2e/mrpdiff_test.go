@@ -6,7 +6,7 @@ package e2e
 // Martian (mrp) AND the transpiled Nextflow, then compare the published outs/
 // tree — the set of output file paths relative to the outs dir plus their
 // contents — the (path-normalized) _outs JSON, and every stage invocation's
-// _args/_outs (abidiff_test.go). This validates mre's
+// _args, _outs and _jobinfo allocation (abidiff_test.go). This validates mre's
 // publish layout and the whole transpile+runtime path against Martian itself,
 // not a hand-written golden. Anchor fixtures additionally run a -native
 // Nextflow leg against the same mrp pipestance (#120), so the native emit path
@@ -544,7 +544,7 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
 // and requires the published file tree, the _outs JSON and every stage
-// invocation's _args/_outs to match.
+// invocation's _args, _outs and _jobinfo allocation to match.
 func TestMrpDiff(t *testing.T) {
 	t.Parallel()
 
@@ -624,8 +624,8 @@ func diffNextflow(t *testing.T, fixture, tmp string, flags []string) string {
 	return proj
 }
 
-// compareStageABI requires every stage phase's normalized _args and _outs to
-// match between the mrp pipestance and the Nextflow work dir of fixture
+// compareStageABI requires every stage phase's normalized _args, _outs and
+// _jobinfo allocation to match between the mrp pipestance and the Nextflow work dir of fixture
 // (#348), less what the allowlist excuses, and every allowlist entry scoped to
 // the fixture to excuse something.
 func compareStageABI(t *testing.T, fixture, tmp, proj string) {
