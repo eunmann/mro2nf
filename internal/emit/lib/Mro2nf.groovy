@@ -394,7 +394,7 @@ class Mro2nf {
     // fetches any URL it has a provider for (http, ftp, a cloud metadata
     // endpoint) and reads any head-node path into the run, and the value comes
     // from whoever launches the run. So an s3:// URI is allowed on every target
-    // (the local target ships an awsbatch profile that runs against S3), a local
+    // (a local run stages it into its work dir like any foreign file), a local
     // path (a `file:` URI included, as Nextflow reads it) only on the local
     // target, and any other scheme only when allowRemote
     // (params.mro2nf_allow_remote_inputs) is true. An accepted value must still

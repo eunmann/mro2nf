@@ -31,7 +31,7 @@ synthetic fixtures never did.
 | 1 | A comp/exec stage whose `src` is a bare command resolved on PATH (`cr_lib martian <subcmd>`) was baked as a nonexistent file path `mro/rna/cr_lib`, so `mrjob` failed `fork/exec … no such file`. | Keep a bare command unqualified through `resolveSrcPath` + `stageCodePaths` (Martian's `FindPath` does the same) so PATH resolves it. |
 | 1b | Launching the bare command left the process's `argv[0]` bare; `cr_lib` resolves its own executable from `argv[0]` (`martian::utils::current_executable`) and panicked. | `mre` `LookPath`-resolves a bare comp/exec stagecode to an absolute path before exec. |
 | 2 | The transport leaf-flatten renamed every file leaf to `f/L%04d`, dropping the extension. Martian typed-file readers reconstruct a path from the filetype (`bincode` → `with_extension`), so they looked for `f/L0002.bincode` beside a bare `f/L0002` and failed. `FILTER_BARCODES` join. | Preserve the source extension in the leaf name (`f/L0002.bincode`) in the Go shim. Since #284 each leaf keeps its whole basename in an ordinal dir (`f/L0002/<basename>`). |
-| 4 | A stage RESERVES production-sized memory (the cloupe join asks for 30 GB). On a smaller machine Nextflow's local executor **parks** a task whose request exceeds the machine — forever — deadlocking a run that `mrp` completes fine (`mrp` clamps a job to its `--localmem` pool and runs it). | Emit `process.resourceLimits` in the local profile, clamping each task's request to the detected host resources. The generated pipeline now runs wherever `mrp` runs. |
+| 4 | A stage RESERVES production-sized memory (the cloupe join asks for 30 GB). On a smaller machine Nextflow's local executor **fails** a task whose request exceeds the machine (`Process requirement exceeds available memory`), aborting a run that `mrp` completes fine (`mrp` clamps a job to its `--localmem` pool and runs it). | Emit `process.resourceLimits` in the local profile, clamping each task's request to the detected host resources. The generated pipeline now runs wherever `mrp` runs. |
 
 ## Baselines: default vs `-native`
 
@@ -113,8 +113,8 @@ CELLRANGER_HOME=~/Downloads/cellranger-10.1.0 make test-cellranger
 `CELLRANGER_HOME` points at an extracted bundle. When present it: emits the
 `count` invocation `.mro` (`cellranger testrun --dry`), runs the real Martian
 runner (`mrp`) for the golden, transpiles the **same** `.mro`, runs the generated
-Nextflow (the local profile's `resourceLimits` clamp keeps the 30 GB cloupe join
-from parking), and asserts `metrics_summary.csv` is **byte-identical** between the
+Nextflow (the local profile's `resourceLimits` clamp keeps the local executor
+from failing the 30 GB cloupe join), and asserts `metrics_summary.csv` is **byte-identical** between the
 two — then logs the task-shape baseline (stage vs plumbing task counts) for
 tracking optimizer changes over time. Size the golden with
 `CELLRANGER_LOCALCORES` / `CELLRANGER_LOCALMEM`; it runs the pipeline twice, so

@@ -12,7 +12,7 @@ const (
 	javaPin      = "${{ env.JAVA_VERSION }}"
 	floorJavaPin = "${{ matrix.nextflow == 'latest-stable' && env.JAVA_VERSION || env.FLOOR_JAVA_VERSION }}"
 
-	// floorJavaMax is the newest Java the Nextflow 23.10.0 launcher starts on:
+	// floorJavaMax is the newest Java the Nextflow 24.04.0 launcher starts on:
 	// its version check rejects anything else with "Java 8 or later (up to 21)".
 	floorJavaMax = 21
 	// nextflowJavaMin is the oldest Java Nextflow 26.04 supports.

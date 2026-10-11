@@ -886,22 +886,14 @@ const allowRemoteParam = "mro2nf_allow_remote_inputs"
 // the config declaration (config params beat script params), and one named
 // allowRemoteParam would double as the opt-in, so the transpile must reject the
 // collision. Mirror configCommon / outdirConfig / configProcess /
-// configAWSBatch / resourceClamp and entryParamWiring —
+// configAWSBatch and entryParamWiring —
 // TestReservedParamsCoverConfig checks the config-defined names.
 func reservedParams(target Target) map[string]bool {
 	set := map[string]bool{"outdir": true, "job_resources": true, allowRemoteParam: true}
 
-	if target == TargetAWSBatch || target == TargetLocal {
+	if target == TargetAWSBatch {
 		set["aws_queue"] = true
 		set["aws_region"] = true
-	}
-
-	if target == TargetLocal {
-		set["max_cpus"] = true
-		set["max_memory"] = true
-	}
-
-	if target == TargetAWSBatch {
 		set["aws_outdir"] = true
 		set["aws_cli_path"] = true
 	}
@@ -1112,11 +1104,13 @@ const traceFields = "task_id,hash,native_id,name,status,exit,attempt,submit,dura
 
 // configCommon renders the params shared by every target.
 func configCommon(target Target) string {
-	common := outdirConfig(target) + `
-// Every generated project uses the path 'arity' option (Nextflow >= 23.10.0), so
-// declare the floor for ALL targets — Nextflow then aborts cleanly on an older
-// engine instead of failing cryptically mid-run (#188).
-manifest.nextflowVersion = '!>=23.10.0'
+	return outdirConfig(target) + `
+// Every generated project uses the path 'arity' option (Nextflow >= 23.10.0) and
+// the local profile's process.resourceLimits clamp (Nextflow >= 24.04.0, which
+// an older engine silently ignores), so declare the floor for ALL targets —
+// Nextflow then aborts cleanly on an older engine instead of failing
+// cryptically mid-run (#188) or running unclamped (#224).
+manifest.nextflowVersion = '!>=24.04.0'
 
 // Martian 'special' scheduler-resource map (the MRO_JOBRESOURCES analog): maps a
 // stage's special key to scheduler options applied via clusterOptions on grid
@@ -1124,14 +1118,6 @@ manifest.nextflowVersion = '!>=23.10.0'
 // --job_resources.highmem='--partition=highmem' or in a -params-file.
 params.job_resources = [:]
 `
-	if target == TargetAWSBatch || target == TargetLocal {
-		common += `// Cloud knobs the awsbatch profile reads; override with --aws_queue/--aws_region.
-params.aws_queue = null
-params.aws_region = null
-`
-	}
-
-	return common
 }
 
 // outdirConfig renders the params.outdir declaration. AWS Batch defaults to no
@@ -1194,51 +1180,30 @@ process {
 	return block + "}\n", nil
 }
 
-// resourceClamp renders the max_cpus/max_memory params the local profile feeds to
-// process.resourceLimits. A Martian stage RESERVES production-sized resources
-// (CellRanger's cloupe join asks for 30 GB); on a smaller machine Nextflow's local
-// executor would park such a task forever because its request exceeds the machine,
-// deadlocking a run that mrp completes fine (mrp clamps a job to its
-// --localmem/--localcores pool and runs it). Clamping the REQUEST to the detected
-// host resources reproduces that: the task runs here, using only what it actually
-// needs. Detected from the host (Linux /proc/meminfo; a fallback otherwise);
-// override with --max_cpus / --max_memory. Only the local profile applies the
-// clamp — a grid/cloud scheduler places an oversized request on a big-enough node.
-func resourceClamp() string {
-	return `
-// Local-executor resource clamp (see the standard profile below).
-params.max_cpus = Runtime.runtime.availableProcessors()
-params.max_memory = {
-    try {
-        def kb = (new File('/proc/meminfo').text =~ /MemTotal:\s+(\d+)/)[0][1] as long
-        return new nextflow.util.MemoryUnit(kb * 1024L).toString()
-    } catch (Exception e) {
-        return '15 GB'
-    }
-}()
-`
-}
-
 // configProfiles renders the local + HPC executor profiles (the local target).
-// The standard (local) profile clamps each task's resource REQUEST to the machine
-// so an oversized reservation runs instead of parking — see resourceClamp.
+// It has no cloud profile: a local project bakes the host's mre and stage-code
+// paths into its scripts, which a cloud worker does not have (#320).
+//
+// The standard (local) profile clamps each task's resource REQUEST to the host.
+// A Martian stage RESERVES production-sized resources (CellRanger's cloupe join
+// asks for 30 GB); a request above the host fails Nextflow's local executor
+// ("Process requirement exceeds available CPUs"), where mrp clamps a job to its
+// --localmem/--localcores pool and runs it. The limits are the host totals
+// the local executor itself admits (SysHelper and LocalPollingMonitor both read
+// the OperatingSystemMXBean), on every OS. Only the local profile clamps: a
+// grid scheduler places an oversized request on a big-enough node.
 func configProfiles() string {
-	return resourceClamp() + `
+	return `
+// Override the clamp with a -c config setting process.resourceLimits.
 profiles {
     standard {
         process.executor = 'local'
-        process.resourceLimits = [ cpus: params.max_cpus as int, memory: params.max_memory as nextflow.util.MemoryUnit ]
+        process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]
     }
     slurm    { process.executor = 'slurm' }
     sge      { process.executor = 'sge' }
     lsf      { process.executor = 'lsf' }
     pbs      { process.executor = 'pbs' }
-    awsbatch {
-        process.executor = 'awsbatch'
-        process.queue    = params.aws_queue
-        aws.region       = params.aws_region
-    }
-    k8s { process.executor = 'k8s' }
 }
 `
 }
@@ -1250,11 +1215,14 @@ profiles {
 func configAWSBatch() string {
 	return `
 // AWS Batch + S3 (classic aws-CLI staging). Requirements:
+//  - a job queue + region: --aws_queue <q> --aws_region <r>
 //  - workDir on S3:        -work-dir s3://<bucket>/work
 //  - a container image:    --container <ecr-uri>  (see Dockerfile)
 //  - the aws CLI present in the image, OR set --aws_cli_path for a custom AMI.
 //  - (optional) a publish location: --aws_outdir s3://<bucket>/out (else the
 //    canonical outputs remain in the S3 work dir only).
+params.aws_queue = null
+params.aws_region = null
 params.aws_cli_path = null
 process.executor = 'awsbatch'
 process.queue    = params.aws_queue

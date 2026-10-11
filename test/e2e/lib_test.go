@@ -104,8 +104,8 @@ func TestLibHelpers(t *testing.T) {
 }
 
 // TestLibEntryFile pins Mro2nf.entryFile, the head-node vetting of each entry
-// file-override leaf (#330): an s3:// URI on every target (the local target's
-// awsbatch profile reads S3 too), a local path on the local target, anything
+// file-override leaf (#330): an s3:// URI on every target (a local run stages
+// it into its work dir), a local path on the local target, anything
 // else only with the remote-input opt-in, which never admits a local path on a
 // cloud target. An accepted value holding a
 // character Nextflow's stage-in leaves for bash to expand is still rejected

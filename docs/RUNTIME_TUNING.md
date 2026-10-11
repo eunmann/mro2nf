@@ -93,6 +93,17 @@ Example `-c`:
 executor { queueSize = 50; submitRateLimit = '10/1min' }
 ```
 
+mrp clamps a job's request to its `--localcores`/`--localmem` pool and runs it.
+The generated `standard` profile does the same against the whole host, through
+`process.resourceLimits`; Nextflow's local executor fails a task whose request
+exceeds `executor.cpus`/`executor.memory`. To shrink the pool, set the clamp
+with it:
+
+```groovy
+executor { cpus = 8; memory = '16 GB' }
+process.resourceLimits = [ cpus: 8, memory: 16.GB ]
+```
+
 ## Observability (`--profile`, `mro graph`, `--inspect`)
 
 Nextflow has these built in — no transpiler support needed:
