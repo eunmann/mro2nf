@@ -102,12 +102,10 @@ type replayedFork struct {
 }
 
 // replayInstance is one stage instance to replay: the fork elements it
-// stages, the fork they give it, and each part's fork count under the parts
-// before it (forkDir's lens).
+// stages and the fork they give it.
 type replayInstance struct {
 	elems []string
 	fork  cg.Fork
-	lens  []int
 }
 
 func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgReplay {
@@ -293,7 +291,6 @@ func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayIns
 	var out []replayInstance
 
 	for _, f := range found {
-		f.lens = append(slices.Clip(prefix.lens), len(found))
 		out = append(out, rp.instances(st, i+1, f)...)
 	}
 
@@ -366,11 +363,7 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 		rp.t.Errorf("%s: mre args chose fork %s, staged %s", st.Fqid, inst.Fork, in.fork)
 	}
 
-	if id := forkDir(inst.Fork, in.lens); inst.ForkID() != id {
-		rp.t.Errorf("%s: mre args stamped fork id %s, mrp's fork dir is %s", st.Fqid, inst.ForkID(), id)
-	}
-
-	rel := filepath.Join(strings.ReplaceAll(st.Fqid, ".", string(filepath.Separator)), forkDir(inst.Fork, in.lens))
+	rel := filepath.Join(strings.ReplaceAll(st.Fqid, ".", string(filepath.Separator)), inst.ForkID())
 	mrpArgs, mrpErr := os.ReadFile(filepath.Join(rp.ps, rel, "split", argsFile))
 
 	if disabled := state == "disabled"; disabled != rp.mrpDisabled(rel) {

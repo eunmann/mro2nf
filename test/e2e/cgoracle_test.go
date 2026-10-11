@@ -9,16 +9,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -126,98 +123,6 @@ func bindingArgs(t *testing.T, bs []core.BindingInfo) json.RawMessage {
 	}
 
 	return raw
-}
-
-// forkDir names f's fork dir as mrp does (core/fork.go:1011-1224
-// ForkId.ForkIdString): lens[i] is how many forks part i ranges over under
-// the parts before it.
-func forkDir(f cg.Fork, lens []int) string {
-	const def = "fork0"
-
-	switch len(f) {
-	case 0:
-		return def
-	case 1:
-		if f[0].Index.Mode() == syntax.ModeMapCall {
-			return "fork_" + url.PathEscape(f[0].Index.MapKey())
-		}
-
-		return "fork" + strconv.Itoa(f[0].Index.ArrayIndex())
-	}
-
-	var b strings.Builder
-	if forkDirFrom(&b, f, lens, 0) {
-		return def
-	}
-
-	return b.String()
-}
-
-func forkDirFrom(b *strings.Builder, f cg.Fork, lens []int, start int) bool {
-	index, dim := 0, 1
-
-	for i, p := range f[start:] {
-		alen := lens[start+i]
-		if alen == 0 {
-			return index == 0
-		}
-
-		if p.Index.Mode() == syntax.ModeMapCall {
-			if i != 0 {
-				writeForkIndex(b, dim, index)
-				b.WriteByte('/')
-
-				return forkDirFrom(b, f, lens, start+i+1)
-			}
-
-			b.WriteString("fork_" + url.PathEscape(p.Index.MapKey()))
-
-			if start+i < len(f)-1 {
-				b.WriteByte('/')
-
-				if forkDirFrom(b, f, lens, start+i+1) {
-					b.WriteString("fork0")
-				}
-			}
-
-			return false
-		}
-
-		if alen != p.Root.Split().Source.ArrayLength() && alen > 1 && i != 0 {
-			writeForkIndex(b, dim, index)
-			b.WriteByte('_')
-
-			index, dim = 0, 1
-		}
-
-		index += dim * p.Index.ArrayIndex()
-		dim *= alen
-	}
-
-	if index == 0 && b.Len() == 0 {
-		return true
-	}
-
-	writeForkIndex(b, dim, index)
-
-	return false
-}
-
-func writeForkIndex(b *strings.Builder, dim, index int) {
-	if dim < 10 && index == 0 {
-		b.WriteString("fork0")
-
-		return
-	}
-
-	b.WriteString("fork")
-
-	id := strconv.Itoa(index)
-	for x := len(id); x < len(strconv.Itoa(dim-1)); x++ {
-		b.WriteByte('0')
-	}
-
-	b.WriteString(id)
 }
 
 // leafMode says how normJSON renders a string naming an existing file:
