@@ -59,13 +59,13 @@ func (g genCtx) stageCmd(phase string, s *ir.Stage) string {
 // task.ext.mem_gb as its own flags, since it beats a chunk's or join's request
 // where the stage's using() does not.
 func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
-	flags := " -threads " + groovyNum(s.Resources.Threads) +
-		" -memgb " + groovyNum(s.Resources.MemGB) +
+	flags := " -threads " + resourceArg(s.Resources.Threads) +
+		" -memgb " + resourceArg(s.Resources.MemGB) +
 		" -overridethreads ${task.ext.threads ?: 0} -overridememgb ${task.ext.mem_gb ?: 0}"
 
 	// Without a declared vmem_gb the shim derives vmem from memory.
 	if v := s.Resources.VMemGB; v > 0 {
-		flags += " -vmemgb " + groovyNum(v)
+		flags += " -vmemgb " + resourceArg(v)
 	}
 
 	// mrp writes a static special into the main and join _args as __special; a
@@ -90,10 +90,10 @@ func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
 	return flags
 }
 
-// groovyNum renders a resource number as a Groovy literal: no exponent, which
-// a Groovy number literal may not carry in every form, and the float32 the
-// Martian parser stores widened exactly as mrp widens it.
-func groovyNum(f float64) string {
+// resourceArg renders a resource number as a shell argument that mre's
+// ParseFloat and run_stage.py's float() read back: no exponent, and the
+// float32 the Martian parser stores widened exactly as mrp widens it.
+func resourceArg(f float64) string {
 	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
