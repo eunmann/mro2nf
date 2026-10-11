@@ -153,7 +153,16 @@ func TestBench(t *testing.T) {
 func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 	t.Helper()
 
-	dir := filepath.Join(root, "bench", l.dir)
+	line, _ := runBenchLaneIn(t, l, filepath.Join(root, "bench", l.dir), workdir)
+
+	return line
+}
+
+// runBenchLaneIn is runBenchLane for the lane's fixture at dir, which the
+// scale smoke generates outside bench/. It also returns the project dir.
+func runBenchLaneIn(t *testing.T, l benchLane, dir, workdir string) ([]byte, string) {
+	t.Helper()
+
 	if !fileExists(filepath.Join(dir, l.mro)) {
 		t.Fatalf("bench fixture %s/%s missing", l.dir, l.mro)
 	}
@@ -204,7 +213,7 @@ func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 		t.Fatalf("bench_metrics %s: %v\n%s", l.key, err, errBuf.String())
 	}
 
-	return out.Bytes()
+	return out.Bytes(), proj
 }
 
 // writeStageProcesses writes, as a JSON array under tmp, every process name
