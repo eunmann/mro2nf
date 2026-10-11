@@ -73,14 +73,23 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # Static and path-free, as the Makefile's build target explains.
       - name: Build mro2nf + mre
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
         run: |
           for bin in mro2nf mre; do
             out="${bin}-${{ matrix.goos }}-${{ matrix.goarch }}"
-            go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" "./cmd/${bin}"
+            go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" "./cmd/${bin}"
+          done
+      - name: Check the linux binaries are static
+        if: matrix.goos == 'linux'
+        run: |
+          for bin in mro2nf mre; do
+            f="${bin}-linux-${{ matrix.goarch }}"
+            file "$f" | grep -q 'statically linked' || { file "$f"; echo "::error::$f is not statically linked"; exit 1; }
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

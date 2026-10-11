@@ -165,14 +165,16 @@ func missingPrereqf(tb testing.TB, format string, args ...any) {
 var buildOnce sync.Once
 
 // buildBinaries builds ./mro2nf and ./mre at the repo root exactly once per
-// test process.
+// test process, static and path-free like `make build`, so the suites run
+// (and the docker images bake) the binary a user builds.
 func buildBinaries(t *testing.T) {
 	t.Helper()
 
 	buildOnce.Do(func() {
 		for _, bin := range []string{"mro2nf", "mre"} {
-			cmd := exec.Command("go", "build", "-o", filepath.Join(root, bin), "./cmd/"+bin)
+			cmd := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(root, bin), "./cmd/"+bin)
 			cmd.Dir = root
+			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("build %s: %v\n%s", bin, err, out)

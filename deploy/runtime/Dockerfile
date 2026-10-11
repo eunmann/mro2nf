@@ -23,7 +23,7 @@ ARG TARGETOS TARGETARCH
 # -X main.version ldflag); release.yml passes it via --build-arg.
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/mre ./cmd/mre
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/mre ./cmd/mre
 
 FROM python:3.12-slim
 # bash launcher + ps (Nextflow task metrics) + coreutils + aws CLI (S3 staging on
