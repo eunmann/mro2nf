@@ -29,22 +29,22 @@ func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 	return fmt.Sprintf(`  script:
     if( fi < 0 )
       """
-      %[1]s -keysonly -keysfile forkmeta2.mro2nf.json
+%[4]s      %[1]s -keysonly -keysfile forkmeta2.mro2nf.json
       """
     else if( fi == 0 )
       """
-      %[1]s -index 0 -o fargs -keysfile forkmeta2.mro2nf.json
+%[5]s      %[1]s -index 0 -o fargs -keysfile forkmeta2.mro2nf.json
       %[2]s
       [ -d outs__${key} ]
       """
     else
       """
-      printf %%s '${element}' | base64 -d > element.json
+%[5]s      printf %%s '${element}' | base64 -d > element.json
       %[3]s -elementfile element.json -o fargs
       %[2]s
       [ -d outs__${key} ]
       """
-`, forkbindAll, main, forkbind)
+`, forkbindAll, main, forkbind, g.scriptHeadAt("      "), g.scriptHeadAt("      ", c.Callable))
 }
 
 // genNativeScatterElementProcess emits the O(1)-per-instance fused
@@ -153,14 +153,14 @@ func genNativeScatterWiring(b *strings.Builder, pipeline string, c ir.Call, cp c
 	}
 
 	merge := mergeName(pipeline, c.Name)
-	fmt.Fprintf(b, "    %s(%s, %s.out.keys.first(), types)\n", merge, souts, fused)
+	fmt.Fprintf(b, "    %s(%s, %s.out.keys.first())\n", merge, souts, fused)
 	fmt.Fprintf(b, "    ch_%s = %s.out\n", c.Name, merge)
 }
 
 // elementCallArgs renders the invocation for the O(1) element scatter process
 // (#99): the element tuple channel first, then the standard bind-style args with
 // pipeargs (`pa`) as the SEPARATE broadcast input — so the same one loop
-// (bindCallArgsPa/foldCallArgs) defines the ref/types/spec order the process's
+// (bindCallArgsPa/foldCallArgs) defines the ref/spec order the process's
 // input block reads, and the two can't drift.
 func elementCallArgs(c ir.Call, scatChan, specName string) string {
 	return scatChan + ", " + bindCallArgsPa(c.Bindings, "pa", specName)
@@ -221,17 +221,16 @@ func genDefaultLayout(b *strings.Builder, entry string, g genCtx) {
   publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
 %[3]s  input:
     path 'data.json'
-    path 'types.json'
 %[4]s  output:
     path 'layout.json', emit: layout
     path 'pipeline_outs.json'
     path 'manifest.json.gz'
 %[5]s  script:
     """
-    "%[1]s" publish-layout -sidecar data.json -dir .%[2]s%[6]s
+%[7]s    "%[1]s" publish-layout -sidecar data.json -dir .%[2]s%[6]s
     """
 }
-`, g.mre, g.producerArgs(entry, types.RoleOut), op.dir, op.in, op.out, op.flags)
+`, g.mre, g.producerArgs(entry, types.RoleOut), op.dir, op.in, op.out, op.flags, g.scriptHead(entry))
 }
 
 // nativeReturnBind returns the entry pipeline whose transform return LAYOUT binds
@@ -258,7 +257,8 @@ func nativeReturnBind(prog *ir.Program, g genCtx) *ir.Pipeline {
 // command the default LAYOUT does, and materialises + publishes the outs/ tree
 // from those bundle leaves.
 func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g genCtx) {
-	inBlock, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(p.Returns))
+	refs := refCalls(p.Returns)
+	inBlock, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refs)
 	flags := g.producerArgs(p.Name, types.RoleOut)
 
 	// The return bind moves the leaves into f/ (staged=true), so head-node
@@ -274,13 +274,14 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
     path 'manifest.json.gz'
 %[7]s  script:
     """
-%[5]s    '%[2]s' bind -spec 'spec.json' -pipeargs pipeargs%[3]s -o args%[4]s
+%[9]s%[5]s    '%[2]s' bind -spec 'spec.json' -pipeargs pipeargs%[3]s -o args%[4]s
     mv args/data.json data.json
     if [ -d args/f ]; then mv args/f f; fi
     '%[2]s' publish-layout -sidecar data.json -dir .%[4]s%[8]s
     """
 }
-`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags)
+`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags,
+		g.scriptHead(foldedCallables(g, p, refs, p.Name)...))
 }
 
 // genNativeEntry emits the native workflow (#76 M1): the entry args are baked
@@ -298,7 +299,6 @@ workflow {
     if( params.containsKey(n) )
       error "entry arg '${n}' was baked at transpile time (-native); re-transpile to change it"
   }
-  types = file("${projectDir}/_assets/types.json")
   pipeargs = Channel.value(tuple(file("${projectDir}/entry_resolved/data.json"), file("${projectDir}/entry_resolved/f/*", type: 'any')))
   %[1]s(pipeargs)
 `, entryWorkflow, groovyStringList(entryInNames(prog)))
@@ -354,7 +354,7 @@ func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow st
 		fmt.Fprintf(&refArgs, ", %s.out.ref_%s", entryWorkflow, id)
 	}
 
-	fmt.Fprintf(b, "  LAYOUT(%[1]s.out.pargs%[2]s, types, %[3]s)\n",
+	fmt.Fprintf(b, "  LAYOUT(%[1]s.out.pargs%[2]s, %[3]s)\n",
 		entryWorkflow, refArgs.String(), specFile(bindName(p.Name, "return")))
 }
 
@@ -381,7 +381,7 @@ func entryParamWiring(prog *ir.Program, target Target) entryWiring {
 
 	w := entryWiring{
 		pairs:    make([]string, 0, len(ins)),
-		callArgs: []string{`file("${projectDir}/entry_args")`, "values", "types"},
+		callArgs: []string{`file("${projectDir}/entry_args")`, "values"},
 	}
 
 	for _, p := range ins {
@@ -467,12 +467,11 @@ process BUILD_ENTRY_ARGS {
   input:
     path 'entry_args'
     val values
-    path 'types.json'
 %[6]s  output:
     %[10]s
   script:
     """
-    cat > values.json <<'MART_EOF'
+%[12]s    cat > values.json <<'MART_EOF'
 ${values}
 MART_EOF
 %[11]s    '%[2]s' entryargs -base entry_args -values values.json -o entry_resolved -types 'types.json' -callable '%[3]s' -role in%[7]s
@@ -480,14 +479,13 @@ MART_EOF
 }
 
 workflow {
-  types = file("${projectDir}/_assets/types.json")
   values = groovy.json.JsonOutput.toJson(%[4]s)
 %[8]s  BUILD_ENTRY_ARGS(%[9]s)
   pipeargs = BUILD_ENTRY_ARGS.out
   %[5]s(pipeargs)
 `, w.decls, g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
 		w.fileInputs, flatFlag, w.fileChans, strings.Join(w.callArgs, ", "),
-		bundleOutput("entry_resolved"), flatHeredoc)
+		bundleOutput("entry_resolved"), flatHeredoc, g.scriptHead(prog.Entry.Callable))
 
 	genPublishWiring(b, entryWorkflow)
 	b.WriteString("}\n")
@@ -504,7 +502,7 @@ func genPublishWiring(b *strings.Builder, entryWorkflow string) {
   // s3:// work dir), materialises outs/, and publishDir copies the tree into
   // place. multiMap splits the final output tuple.
   ep = %[1]s.out.multiMap { s, l -> side: s; leaves: l }
-  LAYOUT(ep.side, types, ep.leaves)
+  LAYOUT(ep.side, ep.leaves)
 `, entryWorkflow)
 }
 
