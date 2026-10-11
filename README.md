@@ -324,7 +324,8 @@ A minimal **AWS CDK** app in `deploy/awsbatch-cdk/` provisions exactly the infra
 needed to test live (S3 bucket, ECR repo, Batch compute env + queue, and a
 HealthOmics service role) — see its README for `cdk deploy` + run steps.
 
-> Provide a **linux/amd64** `mre` (build with `GOOS=linux GOARCH=amd64`). Cloud
+> Provide a static, path-free **linux/amd64** `mre` (build with
+> `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o mre ./cmd/mre`). Cloud
 > file flow is validated locally via the copy-staging suite (`TestCloudSim*`) and
 > the docker-isolation suite (`make test-e2e-docker`); a live Batch/S3 or HealthOmics run
 > additionally needs the AWS infrastructure (`deploy/awsbatch-cdk/`).
@@ -373,8 +374,13 @@ CI (`.github/workflows/pr-validation.yml`) runs lint (golangci-lint + `govulnche
 PR and push to `main`. The Martian dependency is pinned to a published commit, so
 CI needs only a single checkout; to hack on the Martian parser locally, add a
 `go.work` pointing at a fork checkout (gitignored). Tagging `v*` triggers
-`release.yml`, which cross-compiles the `mro2nf` and `mre` binaries and publishes a
-GitHub release.
+`release.yml`. It waits for PR Validation to pass on the tagged commit's push to
+`main`, then cross-compiles the `mro2nf` and `mre` binaries and publishes them in a
+GitHub release with a `SHA256SUMS` file. It also pushes the runtime image. A
+pre-release tag (`v1.2.0-rc1`) never becomes the latest release or the image's
+`latest` tag. In a public repository the binaries and the image carry build
+provenance; check a download with `sha256sum -c SHA256SUMS --ignore-missing` and
+`gh attestation verify <file> --repo eunmann/mro2nf`.
 
 ## License
 

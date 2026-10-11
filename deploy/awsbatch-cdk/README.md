@@ -96,7 +96,7 @@ aws omics start-run --workflow-id "$WF" --role-arn <OmicsRoleArn> \
     --parameters '{"container":"<EcrRepoUri>:latest"}'
 ```
 
-> Provide a **linux/amd64** `mre` (`GOOS=linux GOARCH=amd64 go build -o mre ./cmd/mre`).
+> Provide a **linux/amd64** `mre` (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o mre ./cmd/mre`).
 
 ## Teardown
 

@@ -14,14 +14,31 @@ updates:
       # version pin to an OLDER release.
       - dependency-name: github.com/martian-lang/martian
 
+  # Every action is pinned by commit SHA with a trailing `# vX.Y.Z` comment;
+  # Dependabot bumps the SHA and the comment together. "/" covers only
+  # .github/workflows, so the composite actions are listed too.
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: weekly
     groups:
       # Same policy as gomod: majors arrive individually for review.
       actions-minor-patch:
         update-types: ["minor", "patch"]
+
+  # Base images are pinned as tag@digest; Dependabot moves both. A golang bump
+  # must also move go.mod's toolchain line (TestRuntimeBuildGoIsToolchain). A
+  # new Go or Python minor is a deliberate upgrade (Python is the interpreter
+  # every py stage runs on), so only digest and patch refreshes arrive here.
+  - package-ecosystem: docker
+    directory: /deploy/runtime
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: golang
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   # AWS Batch CDK app. Its package-lock.json is committed, so bumps update the
   # lockfile, and CI (cdk-validation.yml) compiles + synths the app on every
