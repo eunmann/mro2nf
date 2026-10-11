@@ -52,7 +52,7 @@ func ScanOutputForScratchRefs(bundleDir, scratchPrefix string) []ScratchRef {
 	// Best-effort: a per-entry walk error (or a missing f/ dir for a stage with
 	// no file outs) yields a nil DirEntry, which we skip and keep scanning.
 	_ = filepath.WalkDir(filesDir, func(path string, d os.DirEntry, _ error) error {
-		if d == nil || d.IsDir() {
+		if d == nil || d.IsDir() || d.Name() == originFile {
 			return nil
 		}
 
