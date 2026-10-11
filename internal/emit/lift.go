@@ -1,6 +1,7 @@
 package emit
 
 import (
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,7 +25,8 @@ import (
 // Gate) that reads the map call's split bindings and disable flag: one task
 // per lift, not per fork. The pass walks plain and mapped sub-pipeline calls
 // alike, so it also lifts what a plain call's callee would run per fork. It
-// replaces prog.Pipelines entries and never mutates an existing pipeline, so
+// replaces prog.Pipelines entries, never mutates an existing pipeline, and
+// adds to prog.Structs only after cloning it, so
 // internal/overrides runs it on a shallow copy to name the lifted calls'
 // processes as Emit does.
 func LiftForkIndependent(prog *ir.Program) {
@@ -45,12 +47,13 @@ func LiftForkIndependent(prog *ir.Program) {
 	}
 }
 
-// lifter carries the pass's program, the pipelines it has processed and the
-// residual copies it made.
+// lifter carries the pass's program, the pipelines it has processed, the
+// residual copies it made, and whether prog.Structs is a map it cloned.
 type lifter struct {
-	prog *ir.Program
-	done map[string]bool
-	made map[string]bool
+	prog       *ir.Program
+	done       map[string]bool
+	made       map[string]bool
+	ownStructs bool
 }
 
 // process lifts, in pipeline name, every map call's fork-independent calls
@@ -173,7 +176,7 @@ func (l *lifter) escape(sub *ir.Pipeline, dep map[string]bool) (*ir.Pipeline, []
 		return nil, nil, nil, false
 	}
 
-	refd := residualRefs(s, keep, lifted, l.prog)
+	refd := l.residualRefs(s, keep, lifted)
 
 	return s, lifted, refd, true
 }
@@ -181,7 +184,7 @@ func (l *lifter) escape(sub *ir.Pipeline, dep map[string]bool) (*ir.Pipeline, []
 // residualRefs makes s the residual of lifting: keep are its calls, each ref
 // to a lifted call reads the liftedParam input it adds instead. It returns the
 // lifted calls those refs name.
-func residualRefs(s *ir.Pipeline, keep, lifted []ir.Call, prog *ir.Program) []string {
+func (l *lifter) residualRefs(s *ir.Pipeline, keep, lifted []ir.Call) []string {
 	moved := map[string]ir.Call{}
 	for _, c := range lifted {
 		moved[c.Name] = c
@@ -197,7 +200,7 @@ func residualRefs(s *ir.Pipeline, keep, lifted []ir.Call, prog *ir.Program) []st
 
 		if !slices.Contains(refd, r.ID) {
 			refd = append(refd, r.ID)
-			s.In = append(s.In, liftedInput(c, prog))
+			s.In = append(s.In, l.liftedInput(c))
 		}
 
 		return &ir.Ref{Kind: ir.RefKindSelf, ID: liftedParam(r.ID), Output: r.Output}
@@ -475,31 +478,43 @@ func liftedParam(id string) string {
 
 // liftedInput is the residual input for lifted call c: its callable's struct,
 // with the fork dimension of a map call.
-func liftedInput(c ir.Call, prog *ir.Program) ir.Param {
+func (l *lifter) liftedInput(c ir.Call) ir.Param {
 	mapDim, arrayDim := forkDims(&c)
 	if !c.Mapped {
 		mapDim, arrayDim = 0, 0
 	}
 
-	typ := c.Callable
-	var typSb480 strings.Builder
-	for range arrayDim {
-		typSb480.WriteString("[]")
-	}
-	typ += typSb480.String()
-
+	typ := c.Callable + strings.Repeat("[]", arrayDim)
 	if mapDim > 0 {
 		typ = "map<" + typ + ">"
 	}
 
-	_, isStruct := prog.Structs[c.Callable]
-	base := c.Callable
+	return ir.Param{Name: liftedParam(c.Name), Type: typ, BaseType: l.callableStruct(c.Callable), ArrayDim: arrayDim, MapDim: mapDim}
+}
 
-	if !isStruct {
-		base = ""
+// callableStruct names the struct of callable's outputs, "" for a callable
+// without outputs. The frontend registers one per declared stage and pipeline
+// (addCallableStructs); a copy that SplitKnownContexts or the lift names gets
+// its own here, in a map the pass owns, so a shallow copy of the program
+// leaves the original's Structs as they were.
+func (l *lifter) callableStruct(callable string) string {
+	if _, ok := l.prog.Structs[callable]; ok {
+		return callable
 	}
 
-	return ir.Param{Name: liftedParam(c.Name), Type: typ, BaseType: base, ArrayDim: arrayDim, MapDim: mapDim}
+	p, ok := l.prog.Pipelines[callable]
+	if !ok || len(p.Out) == 0 {
+		return ""
+	}
+
+	if !l.ownStructs {
+		l.prog.Structs = maps.Clone(l.prog.Structs)
+		l.ownStructs = true
+	}
+
+	l.prog.Structs[callable] = &ir.StructType{Name: callable, Fields: slices.Clone(p.Out)}
+
+	return callable
 }
 
 // isWildcard reports a `* = self` binding.

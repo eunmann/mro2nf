@@ -205,3 +205,57 @@ call TOP(xs = [1, 2],)
 		t.Errorf("TOP calls mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// TestLiftCopyCalleeStruct pins the residual input for a lifted call to a
+// pipeline copy (here a SplitKnownContexts-style Q_ctx2): it is typed by a
+// struct of the copy's outputs, so the file-leaf walk sees the lifted file,
+// and the struct is added to the lifted program only.
+func TestLiftCopyCalleeStruct(t *testing.T) {
+	prog := lowerMRO(t, `
+stage MAKE(out file f, src py "s/make",)
+stage TAKE(in int v, in file f, out int r, src py "s/take",)
+pipeline Q(out file f,){
+    call MAKE()
+    return (f = MAKE.f,)
+}
+pipeline SUB(in int x, out int r,){
+    call Q as MADE()
+    call TAKE(v = self.x, f = MADE.f,)
+    return (r = TAKE.r,)
+}
+pipeline TOP(in int[] xs, out SUB[] s,){
+    map call SUB(x = split self.xs,)
+    return (s = SUB,)
+}
+call TOP(xs = [1, 2],)
+`)
+	q := *prog.Pipelines["Q"]
+	q.Name = "Q_ctx2"
+	prog.Pipelines["Q_ctx2"] = &q
+
+	sub := clonePipeline(prog.Pipelines["SUB"], "SUB")
+	sub.Calls[0].Callable = "Q_ctx2"
+	prog.Pipelines["SUB"] = sub
+
+	lifted := *prog
+	lifted.Pipelines = maps.Clone(prog.Pipelines)
+	LiftForkIndependent(&lifted)
+
+	residual := lifted.Pipelines["SUB_lift1"]
+	if residual == nil {
+		t.Fatal("no residual SUB_lift1")
+	}
+
+	in := residual.In[len(residual.In)-1]
+	if in.Name != "__h_MADE" || in.BaseType != "Q_ctx2" {
+		t.Fatalf("residual input = %+v, want __h_MADE typed Q_ctx2", in)
+	}
+
+	if !hasFileLeaf(in, lifted.Structs) {
+		t.Errorf("__h_MADE has no file leaf under the lifted program's structs")
+	}
+
+	if _, ok := prog.Structs["Q_ctx2"]; ok {
+		t.Error("the input program gained a struct for the copy")
+	}
+}
