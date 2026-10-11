@@ -1,6 +1,6 @@
 # Runtime base image for transpiled mro2nf pipelines: the `mre` shim and the
 # Martian Python adapters at the same /opt/mro2nf paths the transpiler bakes
-# into its generated scripts. Build your
+# into its generated scripts, with their LICENSE and THIRD_PARTY_NOTICES. Build your
 # pipeline image FROM this and add stage code:
 #
 #   FROM ghcr.io/eunmann/mro2nf-runtime:<version>
@@ -38,4 +38,5 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/mre /opt/mro2nf/mre
 COPY vendor-martian/python /opt/mro2nf/adapters
+COPY LICENSE THIRD_PARTY_NOTICES /opt/mro2nf/
 RUN chmod +x /opt/mro2nf/mre

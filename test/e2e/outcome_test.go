@@ -27,6 +27,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -160,20 +161,25 @@ func mrpFailedOutcome(ps string) (runOutcome, error) {
 }
 
 // mrpKilledJob reports whether the failure file at path records a job mrp
-// killed while it stopped on another stage's failure: mrjob writes "Caught
-// signal <sig>" when it is signalled (martian cmd/mrjob HandleSignal), and
-// mrp's retry policy counts that a transient kill, not a stage failure
-// (jobmanagers/retry.json). Which jobs are still running at that moment
-// depends on timing, and Nextflow likewise aborts its running tasks without
-// marking them FAILED.
+// killed while it stopped on another stage's failure. mrjob writes "Caught
+// signal <sig>" when it is signalled (martian cmd/mrjob HandleSignal); a job
+// signalled before mrjob handles signals gets the local job manager's
+// "signal: <sig>" (martian/core/jobmanager_local.go). mrp's retry policy
+// counts both a transient kill, not a stage failure (jobmanagers/retry.json).
+// Which jobs are still running at that moment depends on timing, and
+// Nextflow likewise aborts its running tasks without marking them FAILED.
 func mrpKilledJob(path string) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	return strings.HasPrefix(string(data), "Caught signal "), nil
+	return mrpKillMessage.Match(data), nil
 }
+
+// mrpKillMessage is retry.json's two kill patterns, the second with its
+// optional timestamp.
+var mrpKillMessage = regexp.MustCompile(`^(?:signal: |(?:[0-9-]+ [0-9:]+ )?Caught signal )`)
 
 // failedAttempt is a FAILED row of a Nextflow trace: the task's work dir hash
 // prefix (`ab/cdef12`) and its exit status.
