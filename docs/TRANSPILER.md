@@ -759,7 +759,17 @@ A stage `src` given as a path is vendored only when it resolves inside the
 `.mro`'s directory or a `-mropath` root, as for entry file defaults (§8);
 otherwise the transpile fails unless `-allow-external-files` is set. The local
 target runs stage code in place and copies none, so it does not check. The
-`-mre`, `-shell` and `-mrjob` tools are not user data and may live anywhere.
+`-mre`, `-shell` and `-mrjob` tools are not user data and may live anywhere;
+each is copied as the one file named (plus the `martian.py` beside
+`martian_shell.py`), never with the rest of its directory.
+
+A vendored stage directory leaves out VCS metadata (`.git`, `.hg`, `.svn`,
+`.bzr`), `.env*` files, `__pycache__`/`*.pyc`/`*.pyo`, and editor and OS
+litter. A symlink in it stays a relative symlink when its target is vendored
+too; one that leaves the directory, dangles, or points at a left-out entry
+fails the transpile, since following it would ship a file from beyond the
+tree. Every copied file keeps its own permission bits (a linked `src` its
+target's), never the link's.
 
 Two cloud-specific defaults to know about:
 

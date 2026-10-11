@@ -10,6 +10,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/google/go-cmp/cmp"
 )
 
 const hygieneMRO = `filetype txt;
@@ -254,4 +255,69 @@ func TestEmitAdmitsTreeFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEmitContainerVendorsOnlyWhatRuns checks the build context holds the
+// named -mre, -mrjob and -shell files (with the adapter's martian.py) but
+// nothing else from their directories, and the stage code without its junk.
+func TestEmitContainerVendorsOnlyWhatRuns(t *testing.T) {
+	tr := newHygieneTree(t)
+	tools := filepath.Dir(tr.mre)
+	mrjob := filepath.Join(tools, "mrjob")
+
+	for _, p := range []string{
+		mrjob, filepath.Join(tools, "notes.txt"), filepath.Join(tools, "martian.py"),
+		filepath.Join(tools, ".env"), filepath.Join(tools, "tester", "x.py"),
+		filepath.Join(tr.root, "stages", "count", ".git", "config"),
+		filepath.Join(tr.root, "stages", "count", "__pycache__", "m.pyc"),
+	} {
+		writeTreeFile(t, p, "x")
+	}
+
+	mro := filepath.Join(tr.root, "pipeline.mro")
+	writeTreeFile(t, mro, fmt.Sprintf(hygieneMRO, "input/reads.txt"))
+
+	opts := emit.Options{
+		OutDir: t.TempDir(), Mre: tr.mre, Shell: tr.shell, Mrjob: mrjob, MROFile: "pipeline.mro",
+		MRODir: tr.root, Target: emit.TargetAWSBatch,
+		StageCode: map[string]string{"COUNT": inTreeCode(tr)},
+	}
+	if err := emit.Emit(parseLowered(t, mro, tr.root), opts); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	want := []string{
+		"adapters", "adapters/martian.py", "adapters/martian_shell.py", "mre", "mrjob",
+		"stages", "stages/COUNT", "stages/COUNT/__init__.py",
+	}
+	if diff := cmp.Diff(want, relEntries(t, filepath.Join(opts.OutDir, "runtime"))); diff != "" {
+		t.Errorf("build context (-want +got):\n%s", diff)
+	}
+
+	opts.OutDir, opts.Mre = t.TempDir(), tools
+	if err := emit.Emit(parseLowered(t, mro, tr.root), opts); err == nil {
+		t.Error("Emit with -mre naming a directory: want an error, not a copy of the directory")
+	}
+}
+
+func relEntries(t *testing.T, dir string) []string {
+	t.Helper()
+
+	var got []string
+
+	err := filepath.WalkDir(dir, func(p string, _ os.DirEntry, err error) error {
+		if err != nil || p == dir {
+			return err
+		}
+
+		rel, err := filepath.Rel(dir, p)
+		got = append(got, filepath.ToSlash(rel))
+
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return got
 }
