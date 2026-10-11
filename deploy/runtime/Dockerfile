@@ -12,8 +12,9 @@
 # your downstream image (this base covers the common py/exec stages).
 
 # Build mre on the native build platform and cross-compile to the target arch, so
-# only the small final stage is emulated when building arm64.
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+# only the small final stage is emulated when building arm64. The image's Go is
+# the go.mod toolchain: the image sets GOTOOLCHAIN=local, so it never switches.
+FROM --platform=$BUILDPLATFORM golang:1.26.9 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
