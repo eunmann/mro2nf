@@ -180,7 +180,7 @@ func TestNumberWalksKeepObjectOrder(t *testing.T) {
 	}
 }
 
-// TestNarrowObjectOrder checks Narrow orders a struct Object as mrp's
+// TestNarrowObjectOrder checks NarrowValue orders a struct Object as mrp's
 // StructType.FilterJson does: one with exactly its declared fields and nothing
 // to filter keeps its source order, one with an undeclared field, or with a
 // member that is filtered, is rebuilt in declared order. A typed map keeps its
@@ -223,11 +223,10 @@ func TestNarrowObjectOrder(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.p.Name = "v"
-			got := tbl.Narrow([]ir.Param{tc.p}, map[string]any{"v": decodeOrdered(t, tc.src)})
+			got := tbl.NarrowValue(decodeOrdered(t, tc.src), tc.p)
 
-			if enc := encode(t, got["v"]); enc != tc.want {
-				t.Errorf("Narrow(%s) = %s, want %s", tc.src, enc, tc.want)
+			if enc := encode(t, got); enc != tc.want {
+				t.Errorf("NarrowValue(%s) = %s, want %s", tc.src, enc, tc.want)
 			}
 		})
 	}

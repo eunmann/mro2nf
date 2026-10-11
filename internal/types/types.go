@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -113,26 +112,26 @@ func (t *Table) FormatFloats(params []ir.Param, vals map[string]any) map[string]
 	return t.mapNumbers(params, vals, formatFloat)
 }
 
-// Narrow returns vals with every struct-typed value filtered to exactly its
-// declared fields, as mrp's FilterJson filters a bound value to the receiving
-// param's type (core/resolve.go filter, syntax StructType.FilterJson): extra
+// NarrowValue returns v with every struct-typed value filtered to exactly its
+// declared fields, as mrp's StructType.FilterJson filters a value it resolves
+// from a producer's outputs to the receiving type (core/resolve.go Path): extra
 // fields are dropped and a missing field is null, recursively through nested
 // structs, arrays, and typed maps. A struct Object that needs no filtering
 // keeps its key order, and one that does takes its declared field order, as
-// FilterJson returns its input unchanged or rewrites it member by member. Keys
-// without a matching param and values of any other shape pass through. vals is
-// not mutated.
-func (t *Table) Narrow(params []ir.Param, vals map[string]any) map[string]any {
-	out := make(map[string]any, len(vals))
-	maps.Copy(out, vals)
+// FilterJson returns its input unchanged or rewrites it member by member.
+// Values of any other shape pass through. v is not mutated.
+func (t *Table) NarrowValue(v any, p ir.Param) any {
+	nv, _ := t.narrow(v, p.BaseType, p.ArrayDim, p.MapDim)
 
-	for _, p := range params {
-		if v, ok := vals[p.Name]; ok {
-			out[p.Name], _ = t.narrow(v, p.BaseType, p.ArrayDim, p.MapDim)
-		}
-	}
+	return nv
+}
 
-	return out
+// Fields returns the declared fields of struct type name, and whether name is a
+// struct type.
+func (t *Table) Fields(name string) ([]ir.Param, bool) {
+	fields, ok := t.structs[name]
+
+	return fields, ok
 }
 
 // applyObject is Apply over an Object, walking its members in params order.
