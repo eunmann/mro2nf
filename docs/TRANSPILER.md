@@ -824,6 +824,16 @@ feature is checked against the real `mrp` output. The validation tiers:
 - **Local e2e** (`make test-e2e`) — the golden fixture table transpiled, run
   under Nextflow, and diffed against committed `mrp` goldens (plus
   `TestCloudSim*`, the object-store data plane under copy-staging).
+- **Generative differential** (`TestGenDiff`, `make gen-diff`) — random
+  well-typed programs (`test/gen`) whose stub stages derive every output from
+  a hash of their inputs, run under live `mrp` and under mro2nf; any
+  difference in the published outputs, a stage's `_args`/`_outs` or the run
+  outcome is shrunk to a minimal fixture. Every comparator rule of the
+  divergence allowlist, issue-tracked ones included, excuses a difference
+  there, though none is reported as excusing nothing; the ABI and outcome
+  matchers, which name their fixtures, do not apply. `make test-e2e` runs a
+  fixed smoke set of seeds; `make gen-diff` runs a seed range for the long
+  tier.
 - **Container isolation** (`make test-e2e-docker`) — the same pipelines under the
   Docker executor, where each task mounts only its work dir. This is the
   license-free proxy for the cloud "no shared filesystem" model and the regression
