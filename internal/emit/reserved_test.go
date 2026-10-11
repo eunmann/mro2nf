@@ -40,9 +40,8 @@ func TestCheckReservedEntryNames(t *testing.T) {
 		{"container reserved on container target", "container", TargetAWSBatch, true},
 		{"container free on local", "container", TargetLocal, false},
 		{"aws_queue free on healthomics", "aws_queue", TargetHealthOmics, false},
-		{"max_cpus reserved on local", "max_cpus", TargetLocal, true},
-		{"max_memory reserved on local", "max_memory", TargetLocal, true},
-		{"max_cpus free on awsbatch", "max_cpus", TargetAWSBatch, false},
+		{"max_cpus free on local", "max_cpus", TargetLocal, false},
+		{"max_memory free on local", "max_memory", TargetLocal, false},
 		{"ordinary name free", "samples", TargetAWSBatch, false},
 	}
 

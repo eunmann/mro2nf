@@ -886,7 +886,7 @@ const allowRemoteParam = "mro2nf_allow_remote_inputs"
 // the config declaration (config params beat script params), and one named
 // allowRemoteParam would double as the opt-in, so the transpile must reject the
 // collision. Mirror configCommon / outdirConfig / configProcess /
-// configAWSBatch / resourceClamp and entryParamWiring —
+// configAWSBatch and entryParamWiring —
 // TestReservedParamsCoverConfig checks the config-defined names.
 func reservedParams(target Target) map[string]bool {
 	set := map[string]bool{"outdir": true, "job_resources": true, allowRemoteParam: true}
@@ -894,11 +894,6 @@ func reservedParams(target Target) map[string]bool {
 	if target == TargetAWSBatch || target == TargetLocal {
 		set["aws_queue"] = true
 		set["aws_region"] = true
-	}
-
-	if target == TargetLocal {
-		set["max_cpus"] = true
-		set["max_memory"] = true
 	}
 
 	if target == TargetAWSBatch {
@@ -1196,40 +1191,23 @@ process {
 	return block + "}\n", nil
 }
 
-// resourceClamp renders the max_cpus/max_memory params the local profile feeds to
-// process.resourceLimits. A Martian stage RESERVES production-sized resources
-// (CellRanger's cloupe join asks for 30 GB); on a smaller machine Nextflow's local
-// executor would park such a task forever because its request exceeds the machine,
-// deadlocking a run that mrp completes fine (mrp clamps a job to its
-// --localmem/--localcores pool and runs it). Clamping the REQUEST to the detected
-// host resources reproduces that: the task runs here, using only what it actually
-// needs. Detected from the host (Linux /proc/meminfo; a fallback otherwise);
-// override with --max_cpus / --max_memory. Only the local profile applies the
-// clamp — a grid/cloud scheduler places an oversized request on a big-enough node.
-func resourceClamp() string {
-	return `
-// Local-executor resource clamp (see the standard profile below).
-params.max_cpus = Runtime.runtime.availableProcessors()
-params.max_memory = {
-    try {
-        def kb = (new File('/proc/meminfo').text =~ /MemTotal:\s+(\d+)/)[0][1] as long
-        return new nextflow.util.MemoryUnit(kb * 1024L).toString()
-    } catch (Exception e) {
-        return '15 GB'
-    }
-}()
-`
-}
-
 // configProfiles renders the local + HPC executor profiles (the local target).
-// The standard (local) profile clamps each task's resource REQUEST to the machine
-// so an oversized reservation runs instead of parking — see resourceClamp.
+//
+// The standard (local) profile clamps each task's resource REQUEST to the host.
+// A Martian stage RESERVES production-sized resources (CellRanger's cloupe join
+// asks for 30 GB); a request above the host fails Nextflow's local executor
+// ("Process requirement exceeds available CPUs"), where mrp clamps a job to its
+// --localmem/--localcores pool and runs it. The limits are the host totals
+// the local executor itself admits (SysHelper and LocalPollingMonitor both read
+// the OperatingSystemMXBean), on every OS. Only the local profile clamps: a
+// grid scheduler places an oversized request on a big-enough node.
 func configProfiles() string {
-	return resourceClamp() + `
+	return `
+// Override the clamp with a -c config setting process.resourceLimits.
 profiles {
     standard {
         process.executor = 'local'
-        process.resourceLimits = [ cpus: params.max_cpus as int, memory: params.max_memory as nextflow.util.MemoryUnit ]
+        process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]
     }
     slurm    { process.executor = 'slurm' }
     sge      { process.executor = 'sge' }

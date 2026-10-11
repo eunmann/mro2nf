@@ -132,8 +132,7 @@ func TestEmitConfig(t *testing.T) {
 		"process.executor = 'local'",
 		// Local runs clamp each task's request to the machine (Martian parity), so
 		// an oversized reservation runs instead of parking the executor forever.
-		"process.resourceLimits = [ cpus: params.max_cpus as int, memory: params.max_memory as nextflow.util.MemoryUnit ]",
-		"params.max_memory =",
+		"process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]",
 		"slurm    { process.executor = 'slurm' }",
 		"sge      { process.executor = 'sge' }",
 		"lsf      { process.executor = 'lsf' }",
@@ -149,6 +148,13 @@ func TestEmitConfig(t *testing.T) {
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("nextflow.config missing %q", want)
+		}
+	}
+
+	// #321: the clamp reads the host itself, so it reserves no param names.
+	for _, gone := range []string{"params.max_cpus", "params.max_memory"} {
+		if strings.Contains(cfg, gone) {
+			t.Errorf("nextflow.config still defines %q", gone)
 		}
 	}
 }
