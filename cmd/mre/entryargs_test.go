@@ -439,10 +439,7 @@ func TestRunEntryArgsTypesCLIStrings(t *testing.T) {
 			{Name: "s", Type: "string", BaseType: "string"},
 		}},
 	}}
-	manPath := filepath.Join(dir, "types.json")
-	if err := man.Write(manPath); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	manPath := writeTestManifest(t, filepath.Join(dir, "types.json"), man)
 
 	base := filepath.Join(dir, "base")
 	writeTestBundle(t, base, map[string]any{"n": 1, "f": 0.5, "g": 0.5, "b": true, "s": "x"})

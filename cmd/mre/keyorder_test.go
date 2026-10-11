@@ -38,12 +38,7 @@ func keyOrderManifest(t *testing.T, dir string) string {
 		},
 	}
 
-	path := filepath.Join(dir, "types.json")
-	if err := man.Write(path); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
-
-	return path
+	return writeTestManifest(t, filepath.Join(dir, "types.json"), man)
 }
 
 func compactData(t *testing.T, path string) string {

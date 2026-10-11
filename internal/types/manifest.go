@@ -12,9 +12,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 )
 
-// filePerm is the mode for generated project artifacts (not secrets).
-const filePerm = 0o644
-
 // Manifest is the serialized type information the runtime shim loads (via
 // `-types`) so it can run the file-leaf walk without the IR. The transpiler
 // writes into each task's script the Subset of the callables its commands
@@ -169,21 +166,7 @@ func writeMembers(b *strings.Builder, names []string, encoded map[string]string)
 	}
 }
 
-// Write serializes the manifest to path.
-func (m Manifest) Write(path string) error {
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal manifest: %w", err)
-	}
-
-	if err := os.WriteFile(path, data, filePerm); err != nil {
-		return fmt.Errorf("write manifest: %w", err)
-	}
-
-	return nil
-}
-
-// LoadManifest reads a manifest written by Write.
+// LoadManifest reads a manifest rendered by Encoded.Subset.
 func LoadManifest(path string) (Manifest, error) {
 	var m Manifest
 

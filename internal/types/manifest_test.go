@@ -28,9 +28,14 @@ func TestManifestRoundTrip(t *testing.T) {
 		},
 	}
 
+	enc, err := types.BuildManifest(prog).Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
 	path := filepath.Join(t.TempDir(), "types.json")
-	if err := types.BuildManifest(prog).Write(path); err != nil {
-		t.Fatalf("write: %v", err)
+	if err := os.WriteFile(path, []byte(enc.Subset("S", "P")), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	got, err := types.LoadManifest(path)
