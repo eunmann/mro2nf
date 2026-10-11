@@ -1,6 +1,7 @@
 package emit_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -1268,7 +1269,7 @@ func TestEmitHealthOmicsPackaging(t *testing.T) {
 }
 
 // TestEmitContainerBuild checks that a container target assembles a self-contained
-// Docker build context (mre + adapters + stage code under runtime/), emits a
+// Docker build context (mre + notices + adapters + stage code under runtime/), emits a
 // Dockerfile, and bakes in-container /opt/mro2nf paths into the scripts — never the
 // host paths, which don't exist inside the image.
 func TestEmitContainerBuild(t *testing.T) {
@@ -1302,11 +1303,16 @@ func TestEmitContainerBuild(t *testing.T) {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
 
-	for _, want := range []string{"FROM --platform=linux/amd64", "COPY runtime/mre /opt/mro2nf/mre", "awscli"} {
+	for _, want := range []string{
+		"FROM --platform=linux/amd64", "COPY runtime/mre /opt/mro2nf/mre", "awscli",
+		"COPY runtime/LICENSE runtime/THIRD_PARTY_NOTICES /opt/mro2nf/",
+	} {
 		if !strings.Contains(string(df), want) {
 			t.Errorf("Dockerfile missing %q", want)
 		}
 	}
+
+	assertContextNotices(t, filepath.Join(dir, "runtime"))
 
 	// An ENTRYPOINT *instruction* starts a line; the explanatory comment ("No
 	// ENTRYPOINT: ...") does not, so anchor on a leading newline.
@@ -1331,6 +1337,24 @@ func TestEmitContainerBuild(t *testing.T) {
 
 	if strings.Contains(string(mod), ssDir) {
 		t.Error("scripts must not bake host stage-code paths for a container target")
+	}
+}
+
+// assertContextNotices checks the build context rt carries the repo's LICENSE
+// and THIRD_PARTY_NOTICES byte for byte.
+func assertContextNotices(t *testing.T, rt string) {
+	t.Helper()
+
+	for _, notice := range []string{"LICENSE", "THIRD_PARTY_NOTICES"} {
+		want, err := os.ReadFile(filepath.Join("../..", notice))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := os.ReadFile(filepath.Join(rt, notice))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Errorf("build context %s is not the repo's %s (read error: %v)", notice, notice, err)
+		}
 	}
 }
 

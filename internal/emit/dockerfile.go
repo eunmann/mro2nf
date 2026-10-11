@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/eunmann/mro2nf"
 	"github.com/eunmann/mro2nf/internal/apperror"
 )
 
@@ -153,9 +154,9 @@ func checkConfigTools(opts Options, roots sourceRoots) error {
 // containerBuild assembles a self-contained Docker build context under the
 // output project and returns the in-container paths the generated scripts bake
 // (so mre, the adapters, and the stage code resolve inside an isolated task).
-// The host artifacts are copied
-// into <out>/runtime/ and a Dockerfile is written so `docker build -t <image>
-// <out>` produces the runtime image.
+// The host artifacts and the notice files are copied into <out>/runtime/ and a
+// Dockerfile is written so `docker build -t <image> <out>` produces the
+// runtime image.
 func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, error) {
 	g := genCtx{mre: ctrMre, shell: opts.Shell, mrjob: opts.Mrjob, code: map[string]string{}}
 
@@ -184,6 +185,10 @@ func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, err
 	}
 
 	g.shell, g.mrjob = shell, mrjob
+
+	if err := writeNotices(rt); err != nil {
+		return g, err
+	}
 
 	if err := vendorStageCode(rt, opts.StageCode, g.code); err != nil {
 		return g, err
@@ -221,6 +226,22 @@ func dockerignore() string {
 	}
 
 	return b.String()
+}
+
+// Notice files baked beside mre: mro2nf's license and the third-party notices
+// covering mre's statically linked code and the Martian adapters.
+const (
+	licenseFile = "LICENSE"
+	noticesFile = "THIRD_PARTY_NOTICES"
+)
+
+// writeNotices writes the notice files into the build context rt.
+func writeNotices(rt string) error {
+	if err := writeFile(filepath.Join(rt, licenseFile), mro2nf.License); err != nil {
+		return err
+	}
+
+	return writeFile(filepath.Join(rt, noticesFile), mro2nf.ThirdPartyNotices)
 }
 
 // adapterModule is the module martian_shell.py imports from its own directory.
@@ -384,8 +405,9 @@ func symlinkSibling(stagesDir, target, name string) error {
 	return nil
 }
 
-// dockerfile renders the runtime image: the mre shim plus the Martian adapters,
-// stage code, and (comp pipelines) the mrjob wrapper at fixed paths, on a base
+// dockerfile renders the runtime image: the mre shim and its notice files plus
+// the Martian adapters, stage code, and (comp pipelines) the mrjob wrapper at
+// fixed paths, on a base
 // with bash + ps and no ENTRYPOINT (both AWS Batch and HealthOmics inject a bash
 // launcher). x86_64 only. Each COPY is emitted only when its source was staged
 // (checkContainerSources verifies the on-disk sources and copyTree errors on a
@@ -397,7 +419,8 @@ func dockerfile(target Target, hasAdapters, hasStages, hasMrjob bool, pathCmds [
 		awsCLI = " awscli"
 	}
 
-	copies := fmt.Sprintf("COPY %s/mre %s\nRUN chmod +x %s\n", buildCtxDir, ctrMre, ctrMre)
+	copies := fmt.Sprintf("COPY %[1]s/mre %[2]s\nRUN chmod +x %[2]s\nCOPY %[1]s/%[3]s %[1]s/%[4]s %[5]s/\n",
+		buildCtxDir, ctrMre, licenseFile, noticesFile, ctrRoot)
 	if hasAdapters {
 		copies += fmt.Sprintf("COPY %s/adapters %s\n", buildCtxDir, ctrAdapters)
 	}

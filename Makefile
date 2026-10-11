@@ -12,7 +12,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.47.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences cloc install clean help
+.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences notices cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
@@ -120,6 +120,10 @@ deadcode: ## Fail on functions unreachable from the mro2nf/mre binaries
 # make test fails while the checked-in table is stale (TestFeatureCoverageIsCurrent).
 docs-divergences: ## Regenerate FEATURE_COVERAGE.md's divergence table from test/e2e/divergences.json
 	go run ./test/divergence/gendoc
+
+# make test fails while THIRD_PARTY_NOTICES is stale (TestNoticesAreCurrent).
+notices: ## Regenerate THIRD_PARTY_NOTICES from the modules the release binaries link
+	go run ./test/thirdparty/gennotices
 
 cloc: ## Count lines of code (respects .gitignore; excludes vendored deps)
 	$(SCC) --exclude-dir vendor-martian .

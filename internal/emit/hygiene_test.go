@@ -289,6 +289,7 @@ func TestEmitContainerVendorsOnlyWhatRuns(t *testing.T) {
 	}
 
 	want := []string{
+		"LICENSE", "THIRD_PARTY_NOTICES",
 		"adapters", "adapters/martian.py", "adapters/martian_shell.py", "mre", "mrjob",
 		"stages", "stages/COUNT", "stages/COUNT/__init__.py",
 	}
@@ -530,7 +531,7 @@ func TestEmitContainerResetsBuildContext(t *testing.T) {
 	}
 
 	want := []string{
-		"adapters", "adapters/martian_shell.py", "mre",
+		"LICENSE", "THIRD_PARTY_NOTICES", "adapters", "adapters/martian_shell.py", "mre",
 		"stages", "stages/ALIAS", "stages/ALIAS/__init__.py", "stages/COUNT",
 	}
 	if diff := cmp.Diff(want, relEntries(t, rt)); diff != "" {
@@ -607,7 +608,7 @@ func TestEmitContainerRetranspileReadOnlySources(t *testing.T) {
 
 	rt := filepath.Join(opts.OutDir, "runtime")
 	want := []string{
-		"adapters", "adapters/martian.py", "adapters/martian_shell.py", "mre",
+		"LICENSE", "THIRD_PARTY_NOTICES", "adapters", "adapters/martian.py", "adapters/martian_shell.py", "mre",
 		"stages", "stages/ALIAS", "stages/ALIAS/__init__.py", "stages/COUNT",
 	}
 	if diff := cmp.Diff(want, relEntries(t, rt)); diff != "" {
