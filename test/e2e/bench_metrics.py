@@ -30,7 +30,9 @@ The staging probe reads every task work dir (see probe_task_dirs):
   probe_writes -- files in task work dirs that are a copy of the probe file
                  (the ideal is producers: each producer writes it once)
   max_argv_bytes / max_arg_bytes -- the largest mre command line, and the
-                 largest single argument on one (--mre-argv)
+                 largest single argument on one, from the .mre-argv files
+                 the scale tier's mre wrapper (scale_test.go writeArgvProbe)
+                 writes
 
 With --gc-logs the driver JVM's GC logs give driver_heap_bytes (the largest
 heap left after a collection) and driver_heap_peak_bytes (the largest before
@@ -157,7 +159,7 @@ _TASK_NAME = re.compile(r"^(?:### name: '(?P<yaml>.*)'|# NEXTFLOW TASK: (?P<old>
 # The files Nextflow itself writes into a task dir, which carry no task data.
 _NEXTFLOW_FILES = re.compile(r"^\.command\.\w+$|^\.exitcode$")
 
-# The argv probe file the -mre wrapper (bench_test.go argvProbe) appends to.
+# The argv probe file the -mre wrapper (scale_test.go writeArgvProbe) appends to.
 ARGV_PROBE = ".mre-argv"
 
 
@@ -176,8 +178,13 @@ def task_dirs(workdir):
 
 
 def read_command_run(d):
-    """Return the task's process base name and the sources nxf_stage links in."""
-    name, sources, in_stage = "", [], False
+    """Return the task's process base name and the sources its staging links in.
+
+    Nextflow writes the links into nxf_stage, or, once they reach
+    NXF_WRAPPER_STAGE_FILE_THRESHOLD (1 MB), into .command.stage, which
+    nxf_stage runs instead.
+    """
+    name, staging, in_stage = "", [], False
     with open(os.path.join(d, ".command.run")) as h:
         for line in h:
             line = line.rstrip("\n")
@@ -188,9 +195,13 @@ def read_command_run(d):
                 in_stage = True
             elif in_stage and line == "}":
                 break
-            elif in_stage and "ln -s " in line:
-                words = shlex.split(line.split("&& ")[-1])
-                sources.append(words[2])
+            elif in_stage:
+                staging.append(line)
+    stage_file = os.path.join(d, ".command.stage")
+    if os.path.exists(stage_file):
+        with open(stage_file) as h:
+            staging.extend(h)
+    sources = [shlex.split(line.split("&& ")[-1])[2] for line in staging if "ln -s " in line]
     return name.split(" (")[0].split(":")[-1], sources
 
 
