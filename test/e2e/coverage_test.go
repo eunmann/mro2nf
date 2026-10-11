@@ -202,7 +202,9 @@ func unappliedRuleFixtures(e divergence.Entry, diffed map[string]bool) []string 
 }
 
 // TestUnappliedAllowlistEntries reports an ABI entry scoped to a misspelled
-// fixture and to an outcome-diffed one, and passes a diffed fixture.
+// fixture and to an outcome-diffed one, and an issue-tracked rule entry scoped
+// to a fixture outside the case table its comparison runs from; it passes each
+// entry's fixtures that are in that table.
 func TestUnappliedAllowlistEntries(t *testing.T) {
 	entry := func(id, fixture string) string {
 		return `{"id": "` + id + `", "kind": "abi", "feature": "f", "summary": "s", "justification": "j", "evidence": ["TestX"], ` +
