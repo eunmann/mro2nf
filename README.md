@@ -66,8 +66,10 @@ docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
 
 ## Quickstart
 
-Prerequisites: Go ≥ 1.26, Java 17+, [Nextflow](https://www.nextflow.io)
-(`curl -s https://get.nextflow.io | bash`), Python 3.
+Prerequisites: Go ≥ 1.26, Java 17+ (CI and recommended: Temurin 25 LTS;
+Nextflow 26.04 supports up to Java 26, the 23.10 floor up to 21),
+[Nextflow](https://www.nextflow.io) (`curl -s https://get.nextflow.io | bash`),
+Python 3.
 
 ```bash
 make build                      # builds ./mro2nf and ./mre
