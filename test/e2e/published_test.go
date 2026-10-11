@@ -219,9 +219,13 @@ func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(stri
 // except for a stage's relative symlink that leads through further links:
 // there outs/ links to the last intermediate link and mrp names that link's
 // target (martian/core/post_process.go copyOutSymlink, moveOutFile). So both
-// the target and, when it is a link, its target map to the symlink.
+// the target and, when it is a link, its target map to the symlink. A target
+// under outs is the file mrp moved there for the first output that reached it,
+// and the path mro2nf names for every output that reaches it too, so it is
+// kept.
 func mrpPublishedLinks(outs string) (map[string]string, error) {
 	links := map[string]string{}
+	inOuts := strings.TrimSuffix(outs, "/") + "/"
 
 	err := filepath.WalkDir(outs, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.Type()&fs.ModeSymlink == 0 {
@@ -229,13 +233,13 @@ func mrpPublishedLinks(outs string) (map[string]string, error) {
 		}
 
 		target, err := readLinkAbs(p)
-		if err != nil {
+		if err != nil || strings.HasPrefix(target, inOuts) {
 			return err
 		}
 
 		links[target] = p
 
-		if next, err := readLinkAbs(target); err == nil {
+		if next, err := readLinkAbs(target); err == nil && !strings.HasPrefix(next, inOuts) {
 			links[next] = p
 		}
 

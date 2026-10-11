@@ -42,7 +42,7 @@ func TestGenDiffPublishedAppliesEveryRule(t *testing.T) {
 		{"paths_agree", string(relative), string(relative), nil},
 		{
 			"number_token", string(relative),
-			`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "total": 10, "mean": 2.5}}`,
+			pairOutsJSON(`{"count": 4, "total": 10, "mean": 2.5}`),
 			[]string{"outs:stats"},
 		},
 	}

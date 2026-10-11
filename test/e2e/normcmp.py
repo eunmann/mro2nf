@@ -66,18 +66,25 @@ def published_links(outs):
     mrp names the link's target, except for a stage's relative symlink that
     leads through further links: there outs/ links to the last intermediate
     link and mrp names that link's target (martian/core/post_process.go
-    copyOutSymlink). Mirrors mrpPublishedLinks in published_test.go.
+    copyOutSymlink). A target under outs is the file mrp moved there for the
+    first output that reached it, which mro2nf names too, so it is kept.
+    Mirrors mrpPublishedLinks in published_test.go.
     """
     links = {}
+    in_outs = outs.rstrip("/") + "/"
     for dirpath, dirnames, filenames in os.walk(outs):
         for name in dirnames + filenames:
             p = os.path.join(dirpath, name)
             if not os.path.islink(p):
                 continue
             target = read_link_abs(p)
+            if target.startswith(in_outs):
+                continue
             links[target] = p
             if os.path.islink(target):
-                links[read_link_abs(target)] = p
+                nxt = read_link_abs(target)
+                if not nxt.startswith(in_outs):
+                    links[nxt] = p
     return links
 
 

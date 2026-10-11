@@ -499,6 +499,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// publishes as a link and mro2nf as a copy (allowlist entry
 	// published-symlinks-copied).
 	{name: "symlink_escape"},
+	// #431: a file reached from several outputs is named by the first path
+	// mrp published it at, through both LAYOUT variants.
+	{name: "shared_out_file", native: true},
 	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
 	{name: "preflight_ungated"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.

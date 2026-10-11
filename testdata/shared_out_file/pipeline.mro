@@ -1,0 +1,59 @@
+# One file reachable from several pipeline outputs (#431). mrp publishes it at
+# the first outs/ path its post-processing walk reaches (outputs in declaration
+# order, struct fields and map keys sorted, arrays by index) and names that
+# path wherever else the file is reached.
+filetype json;
+filetype txt;
+
+struct Pair(
+    txt zeta,
+    txt alpha,
+)
+
+stage MAKE(
+    out json[]    js,
+    out Pair      pair,
+    out map<txt>  m,
+    out path      d,
+    src py        "stages/make",
+)
+
+pipeline INNER(
+    out json[]   js,
+    out Pair     pair,
+    out map<txt> m,
+    out path     d,
+)
+{
+    call MAKE()
+
+    return (
+        js   = MAKE.js,
+        pair = MAKE.pair,
+        m    = MAKE.m,
+        d    = MAKE.d,
+    )
+}
+
+pipeline SHARED(
+    out json[]   primary,
+    out json[]   alias,
+    out Pair     pair,
+    out map<txt> m,
+    out path     d2,
+    out path     d1,
+)
+{
+    call INNER()
+
+    return (
+        primary = INNER.js,
+        alias   = INNER.js,
+        pair    = INNER.pair,
+        m       = INNER.m,
+        d2      = INNER.d,
+        d1      = INNER.d,
+    )
+}
+
+call SHARED()

@@ -335,6 +335,62 @@ func TestPublishLayoutRepeatedLeafDedup(t *testing.T) {
 	}
 }
 
+// TestPublishSharedLeafNamesFirstPath pins #431: a leaf reached more than once
+// is named by the first path mrp's walk publishes it at (outputs in
+// declaration order, struct fields sorted, arrays by index) at every
+// reference, while each later path still gets its copy in the layout and the
+// manifest.
+func TestPublishSharedLeafNamesFirstPath(t *testing.T) {
+	params := []ir.Param{
+		{Name: "primary", BaseType: "json", IsFile: true, ArrayDim: 1},
+		{Name: "alias", BaseType: "json", IsFile: true, ArrayDim: 1},
+		{Name: "pair", BaseType: "Pair", IsFile: true},
+		{Name: "d2", BaseType: "path", IsFile: true},
+		{Name: "d1", BaseType: "path", IsFile: true},
+	}
+	structs := map[string]*ir.StructType{"Pair": {Name: "Pair", Fields: []ir.Param{
+		{Name: "zeta", BaseType: "txt", IsFile: true},
+		{Name: "alpha", BaseType: "txt", IsFile: true},
+	}}}
+	js := []any{marker("L0000"), nil, marker("L0001"), marker("L0000")}
+	outs := map[string]any{
+		"primary": js,
+		"alias":   js,
+		"pair":    map[string]any{"zeta": marker("L0002"), "alpha": marker("L0002")},
+		"d2":      dirMarker("L0003"),
+		"d1":      dirMarker("L0003"),
+	}
+
+	pub := newPublisher(structs)
+	got := mustPublish(t, pub, params, outs)
+
+	firsts := []any{"primary/0.json", nil, "primary/2.json", "primary/0.json"}
+	want := map[string]any{
+		"primary": firsts,
+		"alias":   firsts,
+		"pair":    map[string]any{"alpha": "pair/alpha.txt", "zeta": "pair/alpha.txt"},
+		"d2":      "d2",
+		"d1":      "d2",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("published outs mismatch (-want +got):\n%s", diff)
+	}
+
+	wantLayout := map[string][]string{
+		leaf("L0000"): {"primary/0.json", "primary/3.json", "alias/0.json", "alias/3.json"},
+		leaf("L0001"): {"primary/2.json", "alias/2.json"},
+		leaf("L0002"): {"pair/alpha.txt", "pair/zeta.txt"},
+		leaf("L0003"): {"d2", "d1"},
+	}
+	if diff := cmp.Diff(wantLayout, pub.layout); diff != "" {
+		t.Errorf("layout mismatch (-want +got):\n%s", diff)
+	}
+
+	if len(pub.manifest) != 10 {
+		t.Errorf("manifest has %d entries, want one per published path (10): %v", len(pub.manifest), pub.manifest)
+	}
+}
+
 // TestPublishOutsAbsentFileNull guards the null cases: an empty-string leaf and a
 // declared-but-never-written file (which keeps its raw, marker-less path in the
 // sidecar) both resolve to null, matching Martian.

@@ -385,18 +385,24 @@ func byKey(a, b types.Member) int {
 	return strings.Compare(a.Key, b.Key)
 }
 
+func byName(a, b ir.Param) int {
+	return strings.Compare(a.Name, b.Name)
+}
+
 // emitStruct publishes a struct into the rel/ subdir, recursing each field named
-// by its own GetOutFilename; the JSON object is keyed by field id, with its keys
-// sorted as mrp's moveOutDir writes a file-bearing struct.
+// by its own GetOutFilename; the JSON object is keyed by field id. The fields
+// are walked in sorted id order, as mrp's moveOutDir walks a file-bearing
+// struct, so a file two fields share is first reached where mrp reaches it.
 func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error) {
 	sv, ok := types.AsObject(value)
 	if !ok {
 		return nil, shapeErr(rel, "struct", p, value)
 	}
 
-	out := make(map[string]any, len(pub.structs[p.BaseType].Fields))
+	fields := slices.SortedFunc(slices.Values(pub.structs[p.BaseType].Fields), byName)
+	out := make(map[string]any, len(fields))
 
-	for _, f := range pub.structs[p.BaseType].Fields {
+	for _, f := range fields {
 		// Every declared member is emitted (an absent one as null), matching
 		// Martian; a non-file field passes through verbatim via emit's guard.
 		fieldValue, _ := sv.Get(f.Name)
@@ -413,11 +419,15 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error)
 }
 
 // emitFile records one scalar file/dir leaf's leaf path -> rel mapping
-// and its manifest entry, and returns rel — the ACTUAL published path, which may
-// differ from the argument after collision disambiguation. It returns nil when
-// the leaf is absent (matching Martian's null): a present leaf carries a
-// @mre:file:/@mre:dir: marker, while a declared output that was never written
-// keeps a raw path and resolves to null. Nothing is copied.
+// and its manifest entry, and returns the leaf's first published path: rel
+// (after collision disambiguation) the first time the walk reaches the leaf,
+// and that same first rel every later time, while each later rel still gets
+// its copy. mrp moves a file into outs/ the first time its walk reaches it and
+// names that path for every later reference, publishing a symlink to it at the
+// later rel (martian/core/post_process.go moveOutFile, copyOutSymlink). It
+// returns nil when the leaf is absent (matching Martian's null): a present
+// leaf carries a @mre:file:/@mre:dir: marker, while a declared output that was
+// never written keeps a raw path and resolves to null. Nothing is copied.
 func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 	src, ok := value.(string)
 	if !ok {
@@ -446,7 +456,7 @@ func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 	// with a numeric suffix so neither file is silently mapped over the other.
 	if prev, ok := pub.seen[rel]; ok {
 		if prev == leaf {
-			return rel, nil
+			return pub.layout[leaf][0], nil
 		}
 
 		rel = pub.uniqueRel(rel)
@@ -460,7 +470,7 @@ func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 	// into a `path`-typed out) is catalogued correctly.
 	pub.manifest = append(pub.manifest, manifestEntry{Path: rel, BaseType: p.BaseType, IsDir: isDir})
 
-	return rel, nil
+	return pub.layout[leaf][0], nil
 }
 
 // uniqueRel returns rel, or rel with a numeric suffix before its extension when

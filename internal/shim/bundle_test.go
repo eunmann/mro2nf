@@ -78,6 +78,59 @@ func TestMarkFilesKeepsBasename(t *testing.T) {
 	}
 }
 
+// TestMarkFilesSharedPathOneLeaf guards #431: a path the payload names at
+// several positions, under any spelling, is one file to mrp, so it is copied
+// once and each position gets its marker, while a distinct file with the same
+// basename keeps its own leaf.
+func TestMarkFilesSharedPathOneLeaf(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "a", "x.txt")
+	other := filepath.Join(dir, "b", "x.txt")
+
+	for _, src := range []string{shared, other} {
+		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(src, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	params := []ir.Param{
+		{Name: "fs", BaseType: "file", IsFile: true, ArrayDim: 1},
+		{Name: "cfg", BaseType: "Cfg", IsFile: true},
+	}
+	payload := map[string]any{
+		"fs":  []any{shared, other, filepath.Join(dir, "a", ".", "x.txt")},
+		"cfg": map[string]any{"ref": shared},
+	}
+
+	bundle := filepath.Join(dir, "bundle")
+
+	marked, err := shim.MarkFiles(bundle, payload, params, fileTable(), nil)
+	if err != nil {
+		t.Fatalf("MarkFiles: %v", err)
+	}
+
+	want := map[string]any{
+		"fs":  []any{"@mre:file:f/L0000/x.txt", "@mre:file:f/L0001/x.txt", "@mre:file:f/L0000/x.txt"},
+		"cfg": map[string]any{"ref": "@mre:file:f/L0000/x.txt"},
+	}
+	if diff := cmp.Diff(want, marked); diff != "" {
+		t.Errorf("markers (-want +got):\n%s", diff)
+	}
+
+	leaves, err := os.ReadDir(filepath.Join(bundle, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(leaves) != 2 {
+		t.Errorf("bundle holds %d leaves, want 2", len(leaves))
+	}
+}
+
 // TestBundleRoundTrip writes a payload with a file leaf into a bundle, then
 // reads it back from a different relative path, proving the file travels with
 // the payload and the marker resolves to a real absolute path.
@@ -182,7 +235,8 @@ func TestMarkFilesDirLeaf(t *testing.T) {
 }
 
 // TestMarkFilesNamesDirSpelledWithSuffix checks a directory leaf spelled with a
-// trailing "/" or "/." keeps the directory's own name, so its marker is valid.
+// trailing "/" or "/." keeps the directory's own name, so its marker is valid,
+// and that both spellings name one leaf.
 func TestMarkFilesNamesDirSpelledWithSuffix(t *testing.T) {
 	dir := t.TempDir()
 
@@ -199,7 +253,7 @@ func TestMarkFilesNamesDirSpelledWithSuffix(t *testing.T) {
 		t.Fatalf("MarkFiles: %v", err)
 	}
 
-	want := map[string]any{"d": []any{"@mre:dir:f/L0000/outdir", "@mre:dir:f/L0001/outdir"}}
+	want := map[string]any{"d": []any{"@mre:dir:f/L0000/outdir", "@mre:dir:f/L0000/outdir"}}
 	if diff := cmp.Diff(want, marked); diff != "" {
 		t.Errorf("markers (-want +got):\n%s", diff)
 	}

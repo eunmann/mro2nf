@@ -1,0 +1,25 @@
+{
+    "alias": [
+        "primary/0.json",
+        null,
+        "primary/2.json",
+        "primary/0.json"
+    ],
+    "d1": "d2",
+    "d2": "d2",
+    "m": {
+        "a": "pair/alpha.txt",
+        "b": "m/b.txt",
+        "z": "pair/alpha.txt"
+    },
+    "pair": {
+        "alpha": "pair/alpha.txt",
+        "zeta": "pair/alpha.txt"
+    },
+    "primary": [
+        "primary/0.json",
+        null,
+        "primary/2.json",
+        "primary/0.json"
+    ]
+}

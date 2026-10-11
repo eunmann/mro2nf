@@ -72,6 +72,8 @@ var goldenCases = []goldenCase{
 	{"dir_out", "dir_out", "expected/outs.json"},
 	// #242: directory outputs with dotfiles and an empty subdirectory.
 	{"dir_hidden", "dir_hidden", "expected/outs.json"},
+	// #431: a file reached from several outputs names its first published path.
+	{"shared_out_file", "shared_out_file", "expected/outs.json"},
 	{"api_smoke", "api_smoke", "expected/outs.json"},
 	{"float_to_int", "float_to_int", "expected/outs.json"},
 	{"disabled_map", "disabled_map", "expected/outs.json"},

@@ -135,6 +135,16 @@ the JSON leaf value is the path **relative to the outs dir** (e.g.
 location-independent bundles while matching the on-disk tree. Five goldens were
 updated to the tree layout.
 
+**FIXED (#431):** mrp moves a file into `outs/` the first time its walk reaches
+it (outputs in declaration order, struct fields and map keys sorted, arrays by
+index) and names that path for every later output that reaches the file, linking
+the later path to it (`post_process.go` `moveOutFile`, `copyOutSymlink`). A
+bundle copies a path its payload names at several positions once
+(`internal/shim` `MarkFiles`), so the file stays one leaf through every bind;
+`mre publish-layout` walks in mrp's order and names a leaf's first published
+path for every later reference, and each later path gets a copy (allowlist
+entry `published-symlinks-copied`). Fixture `shared_out_file`.
+
 ## D. Binding & resolution — faithful (two real divergences)
 
 **Faithful:** ref/struct/array/single-map projection, `array<map<S>>.field`

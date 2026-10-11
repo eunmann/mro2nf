@@ -19,9 +19,10 @@ import (
 // what the two runtimes published for a pipeline with a plain file output, a
 // file output the stage wrote as a symlink to a host file (as symlink_escape
 // does), a file output the stage wrote as a relative symlink to a link to a
-// host file, and a struct output whose producer wrote its keys unsorted (as
-// kitchen_sink's stats), which both runtimes publish in that order. It returns
-// the pipestance and results dirs.
+// host file, two file outputs bound to one stage file, which mrp publishes
+// once and links to from the second, and a struct output whose producer wrote
+// its keys unsorted (as kitchen_sink's stats), which both runtimes publish in
+// that order. It returns the pipestance and results dirs.
 func publishedPair(t *testing.T) (string, string) {
 	t.Helper()
 
@@ -30,14 +31,19 @@ func publishedPair(t *testing.T) (string, string) {
 	host := writeABITestFile(t, filepath.Join(t.TempDir(), "host.py"), "print('linked')\n")
 
 	writeABITestFile(t, filepath.Join(outs, "note.txt"), "21.0")
+	shared := writeABITestFile(t, filepath.Join(outs, "shared.txt"), "shared")
 
-	if err := os.Symlink(host, filepath.Join(outs, "linked.txt")); err != nil {
-		t.Fatal(err)
+	for _, link := range [][2]string{{host, "linked.txt"}, {"shared.txt", "again.txt"}} {
+		if err := os.Symlink(link[0], filepath.Join(outs, link[1])); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	chained := mrpChainedOutput(t, ps)
 
-	mrpOuts, err := json.Marshal(map[string]string{"chained": chained, "linked": host, "note": filepath.Join(outs, "note.txt")})
+	mrpOuts, err := json.Marshal(map[string]string{
+		"again": shared, "chained": chained, "linked": host, "note": filepath.Join(outs, "note.txt"), "shared": shared,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,11 +54,18 @@ func publishedPair(t *testing.T) (string, string) {
 	writeABITestFile(t, filepath.Join(results, "note.txt"), "21.0")
 	writeABITestFile(t, filepath.Join(results, "linked.txt"), "print('linked')\n")
 	writeABITestFile(t, filepath.Join(results, "chained.txt"), "chained\n")
+	writeABITestFile(t, filepath.Join(results, "shared.txt"), "shared")
+	writeABITestFile(t, filepath.Join(results, "again.txt"), "shared")
 	writeABITestFile(t, filepath.Join(results, "manifest.json.gz"), "index")
-	writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"),
-		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "total": 10.0, "mean": 2.5}}`)
+	writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"), pairOutsJSON(`{"count": 4, "total": 10.0, "mean": 2.5}`))
 
 	return ps, results
+}
+
+// pairOutsJSON is the pipeline_outs.json of publishedPair with stats as its
+// stats value.
+func pairOutsJSON(stats string) string {
+	return `{"again": "shared.txt", "chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "shared": "shared.txt", "stats": ` + stats + `}`
 }
 
 // pairFixture is the fixture publishedPair stands in for.
@@ -171,9 +184,9 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	mrpJSON := filepath.Join(ps, "P", "fork0", "_outs")
 	nfJSON := filepath.Join(results, "pipeline_outs.json")
 	sortedJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_sorted.json"),
-		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10.0}}`)
+		pairOutsJSON(`{"count": 4, "mean": 2.5, "total": 10.0}`))
 	intJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_int.json"),
-		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "total": 10, "mean": 2.5}}`)
+		pairOutsJSON(`{"count": 4, "total": 10, "mean": 2.5}`))
 
 	checkedIn := filepath.Join(root, "test", "e2e", allowlistFile)
 
