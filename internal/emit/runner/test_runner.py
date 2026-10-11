@@ -654,10 +654,10 @@ class ResourcesTest(unittest.TestCase):
     def test_split_resources_separates_dunder_keys(self):
         res, args = rs.split_resources(
             {"__mem_gb": 2, "__threads": 3.0, "__special": "gpu",
-             "__vmem_gb": "bad", "x": 1})
+             "__vmem_gb": None, "x": 1})
         self.assertEqual(res.mem_gb, 2.0)
         self.assertEqual(res.threads, 3.0)
-        self.assertEqual(res.vmem_gb, 0.0)  # non-numeric -> 0 (asFloat)
+        self.assertEqual(res.vmem_gb, 0.0)  # null is unset, as in Go
         self.assertEqual(res.special, "gpu")
         self.assertEqual(args, {"x": 1})
 
@@ -776,6 +776,42 @@ class StageDefsTest(unittest.TestCase):
         self.assertEqual(defs[0][1], {"x": 1})
         self.assertEqual(join.mem_gb, 5.0)
         self.assertEqual(join.special, "gpu")
+
+    def test_bad_resource_value_fails_the_split(self):
+        # #275: mrp fails the split on a resource value its Go types cannot
+        # hold, in a chunk def or the join override; the error names where.
+        cases = [
+            ({"chunks": [{"x": 1}, {"x": 2, "__special": 5}]}, "chunk 1: "),
+            ({"chunks": [{"x": 1, "__mem_gb": "lots"}]}, "chunk 0: "),
+            ({"chunks": [{"x": 1, "__threads": "x"}]}, "chunk 0: "),
+            ({"chunks": [{"x": 1, "__vmem_gb": True}]}, "chunk 0: "),
+            ({"chunks": [{"x": 1, "__mem_gb": 10 ** 400}]}, "chunk 0: "),
+            ({"chunks": [{"x": 1, "__special": {}}]}, "chunk 0: "),
+            ({"chunks": [], "join": {"__mem_gb": "big"}}, "join override: "),
+            ({"chunks": [], "join": {"__special": 5}}, "join override: "),
+        ]
+        for result, where in cases:
+            with self.subTest(result=result):
+                with self.assertRaises(rs.RunnerError) as cm:
+                    rs.parse_stage_defs(result)
+                self.assertIn(where, str(cm.exception))
+
+    def test_null_resource_value_is_unset(self):
+        defs, join = rs.parse_stage_defs(
+            {"chunks": [{"x": 1, "__threads": None, "__mem_gb": None,
+                         "__vmem_gb": None, "__special": None}],
+             "join": {"__mem_gb": None, "__special": None}})
+        res, args = defs[0]
+        self.assertEqual((res.threads, res.mem_gb, res.vmem_gb, res.special),
+                         (0.0, 0.0, 0.0, ""))
+        self.assertEqual(args, {"x": 1})
+        self.assertEqual((join.mem_gb, join.special), (0.0, ""))
+
+    def test_join_unknown_key_fails_the_split(self):
+        with self.assertRaises(rs.RunnerError) as cm:
+            rs.parse_stage_defs(
+                {"chunks": [], "join": {"__mem_gb": 4, "value": 7, "extra": True}})
+        self.assertIn("extra, value", str(cm.exception))
 
 
 class JoinGatherTest(unittest.TestCase):

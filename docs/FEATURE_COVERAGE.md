@@ -105,7 +105,7 @@ out of scope for a transpiler.
 | `py` adapter | ✅ | e2e (all py) |
 | `exec` adapter | ✅ | e2e `exec_min` |
 | `comp` adapter (mrjob-wrapped) | ✅ | unit `TestRunSumSquaresComp` |
-| per-chunk resources `__mem_gb/__threads/__vmem_gb/__special` | ✅ in `_args`/`_jobinfo` | unit `TestMergeArgs*`, `TestSpecialResourcePreserved`, `TestJobInfoResolvedResources` |
+| per-chunk resources `__mem_gb/__threads/__vmem_gb/__special` | ✅ in `_args`/`_jobinfo`; a value of the wrong JSON type (a non-number `__mem_gb`, a non-string `__special`) fails the split with an error, as under mrp (#275) | unit `TestMergeArgs*`, `TestSpecialResourcePreserved`, `TestJobInfoResolvedResources`, `TestReadStageDefsBadResourceValue`; e2e `TestMrpDiffFailureParity` (`split_bad_special`, `split_bad_mem`, `split_bad_threads`) |
 | per-chunk resources → Nextflow scheduler directives | ✅ #15 (dynamic `cpus`/`memory` closures read the chunk's resolved resources) | e2e `split_test`, unit |
 | resources a stage sees (`__*`, `_jobinfo`) | ✅ #243 every phase passes the stage's Martian request to the shim (not the integer, attempt-scaled `task.memory`), which overlays the chunk's or the staged `joinres.json`'s own request and resolves it as mrp's local job manager does: fractional memory kept to the MiB, mrp's `__*` number format | e2e `frac_mem` (golden + mrp ABI diff), unit `TestResourceFlagsPassStageMemory`, `TestResolveResourcesOverlay`, `TestResourceNumMatchesMrp` |
 | negative/adaptive resource sentinels | ✅ preserved | unit `TestMergeArgsNegativeResources` |

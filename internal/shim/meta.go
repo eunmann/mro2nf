@@ -20,10 +20,11 @@ import (
 // mrp rejects as an invalid join definition rather than silently ignoring.
 var errJoinUnknownKey = errors.New("unknown key in join override")
 
-// errJoinBadValue reports a resource key in a split's join override whose value
-// has the wrong JSON type (a non-number threads/mem, or a non-string __special),
-// which mrp rejects as an unmarshal error rather than coercing to a default.
-var errJoinBadValue = errors.New("invalid value in join override")
+// errBadResource reports a resource key in a split's chunk def or join override
+// whose value has the wrong JSON type (a non-number threads/mem/vmem, or a
+// non-string __special), which mrp's updateFromLazyArgs rejects as an unmarshal
+// error that fails the split rather than coercing to a default.
+var errBadResource = errors.New("invalid resource value")
 
 // prepDirs creates the metadata, files, and per-stage tmp directories for a
 // phase and returns the absolute metadata dir, files dir, and journal prefix
@@ -151,21 +152,23 @@ func readStageDefs(meta string) ([]ChunkDef, Resources, error) {
 	}
 
 	defs := make([]ChunkDef, 0, len(sd.Chunks))
-	for _, c := range sd.Chunks {
-		defs = append(defs, splitChunk(c))
+
+	for i, c := range sd.Chunks {
+		res, args, err := parseResources(c)
+		if err != nil {
+			return nil, Resources{}, fmt.Errorf("parse _stage_defs: chunk %d: %w", i, err)
+		}
+
+		defs = append(defs, ChunkDef{Args: args, Resources: res})
 	}
 
-	// The join override carries only the __-prefixed resource keys; any leftover
-	// data key, or a resource key with the wrong value type, is a malformed join
-	// definition. mrp rejects both loudly (an "Expected string for __special" /
-	// unmarshal error that fails the stage) rather than silently ignoring them, so
-	// match that — parseResources' asFloat/best-effort unmarshal would otherwise
-	// coerce a bad value to a default and run the JOIN with unintended resources.
-	if err := checkJoinResourceTypes(sd.Join); err != nil {
-		return nil, Resources{}, err
+	join, extra, err := parseResources(sd.Join)
+	if err != nil {
+		return nil, Resources{}, fmt.Errorf("parse _stage_defs: join override: %w", err)
 	}
 
-	join, extra := parseResources(sd.Join)
+	// The join override carries only resource keys: mrp fails the split on any
+	// other key ("Invalid parameter in join definition").
 	if len(extra) > 0 {
 		return nil, Resources{}, fmt.Errorf("%w: %s", errJoinUnknownKey, strings.Join(slices.Sorted(maps.Keys(extra)), ", "))
 	}
@@ -173,60 +176,41 @@ func readStageDefs(meta string) ([]ChunkDef, Resources, error) {
 	return defs, join, nil
 }
 
-// checkJoinResourceTypes rejects a join override whose resource keys carry the
-// wrong JSON type — a number-valued __special, or a non-number __threads/
-// __mem_gb/__vmem_gb — which parseResources would otherwise swallow. Keys are
-// checked in sorted order so the error names the same key deterministically.
-func checkJoinResourceTypes(m map[string]json.RawMessage) error {
-	for _, key := range slices.Sorted(maps.Keys(m)) {
-		val := m[key]
-
-		switch key {
-		case "__threads", "__mem_gb", "__vmem_gb":
-			var f float64
-			if err := json.Unmarshal(val, &f); err != nil {
-				return fmt.Errorf("%w: %s must be a number, got %s", errJoinBadValue, key, val)
-			}
-		case "__special":
-			var s string
-			if err := json.Unmarshal(val, &s); err != nil {
-				return fmt.Errorf("%w: %s must be a string, got %s", errJoinBadValue, key, val)
-			}
-		}
-	}
-
-	return nil
-}
-
-func splitChunk(chunk map[string]json.RawMessage) ChunkDef {
-	res, args := parseResources(chunk)
-
-	return ChunkDef{Args: args, Resources: res}
-}
-
 // parseResources splits a Martian arg map into its __-prefixed resource keys and
-// the remaining data args. Used for both per-chunk defs and the join override.
-func parseResources(m map[string]json.RawMessage) (Resources, map[string]json.RawMessage) {
+// the remaining data args, for both a chunk def and the join override. Like
+// mrp's updateFromLazyArgs, a value json.Unmarshal cannot decode into the
+// resource's type fails (null decodes to unset), and the keys are checked in its
+// order so the error names the key mrp's does.
+func parseResources(m map[string]json.RawMessage) (Resources, map[string]json.RawMessage, error) {
 	var res Resources
 
-	args := make(map[string]json.RawMessage, len(m))
-
-	for key, val := range m {
-		switch key {
-		case "__threads":
-			res.Threads = asFloat(val)
-		case "__mem_gb":
-			res.MemGB = asFloat(val)
-		case "__vmem_gb":
-			res.VMemGB = asFloat(val)
-		case "__special":
-			_ = json.Unmarshal(val, &res.Special) // best-effort; non-string leaves it empty
-		default:
-			args[key] = val
-		}
+	fields := []struct {
+		key string
+		dst any
+	}{
+		{"__threads", &res.Threads},
+		{"__mem_gb", &res.MemGB},
+		{"__vmem_gb", &res.VMemGB},
+		{"__special", &res.Special},
 	}
 
-	return res, args
+	args := make(map[string]json.RawMessage, len(m))
+	maps.Copy(args, m)
+
+	for _, f := range fields {
+		val, ok := args[f.key]
+		if !ok {
+			continue
+		}
+
+		if err := json.Unmarshal(val, f.dst); err != nil {
+			return Resources{}, nil, fmt.Errorf("%w: %s = %s: %w", errBadResource, f.key, val, err)
+		}
+
+		delete(args, f.key)
+	}
+
+	return res, args, nil
 }
 
 // mergeArgs builds a chunk's _args: the stage args, overlaid with the chunk's
@@ -391,15 +375,6 @@ func resourceNum(f float64) json.RawMessage {
 	}
 
 	return json.RawMessage(strconv.FormatFloat(f, 'f', 0, 64))
-}
-
-func asFloat(raw json.RawMessage) float64 {
-	var f float64
-	// A non-numeric resource value leaves f at 0 (treated as "unset"); Martian
-	// always writes numbers here, so a parse failure is not actionable.
-	_ = json.Unmarshal(raw, &f)
-
-	return f
 }
 
 // coalesce returns primary unless it is unset (0); Martian treats only 0 as
