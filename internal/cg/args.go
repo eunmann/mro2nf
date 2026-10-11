@@ -48,14 +48,14 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 		return Instance{}, err
 	}
 
-	fork, err := instanceFork(st, s)
+	fork, lens, err := instanceFork(st, s)
 	if err != nil {
 		return Instance{}, fmt.Errorf("fork of %s: %w", st.Fqid, err)
 	}
 
 	r := &resolver{g: g, st: s}
 
-	in := Instance{Node: st.Fqid, Fork: fork}
+	in := Instance{Node: st.Fqid, Fork: fork, Lens: lens}
 	if in.Disabled, err = r.disabled(st, fork); err != nil {
 		return Instance{}, err
 	}
@@ -100,32 +100,41 @@ func reportUnresolved(log io.Writer, in Instance, unresolved []error) error {
 	return nil
 }
 
-// instanceFork assembles the instance's fork root by root from the parts
-// the staged fork elements record, which must agree on one index per root.
-func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, error) {
+// instanceFork assembles the instance's fork, and each part's fork count,
+// root by root from the parts the staged fork elements record, which must
+// agree on one index per root.
+func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, []int, error) {
 	fork := make(Fork, 0, len(st.ForkRoots()))
+	lens := make([]int, 0, len(st.ForkRoots()))
 
 	for _, root := range st.ForkRoots() {
-		var found []Part
+		var (
+			found []Part
+			n     int
+		)
 
-		for _, f := range s.elementForks {
-			p, ok := f.rootPart(root)
-			if ok && agrees(f, fork) && !slices.ContainsFunc(found, func(q Part) bool { return indexEqual(q.Index, p.Index) }) {
-				found = append(found, p)
+		for _, el := range s.stagedElems {
+			i, ok := el.Fork.rootPos(root)
+			if !ok || !agrees(el.Fork, fork) {
+				continue
+			}
+
+			if p := el.Fork[i]; !slices.ContainsFunc(found, func(q Part) bool { return indexEqual(q.Index, p.Index) }) {
+				found, n = append(found, p), el.Lens[i]
 			}
 		}
 
 		switch len(found) {
 		case 0:
-			return nil, fmt.Errorf("%w %s", errNoForkPart, root.Fqid)
+			return nil, nil, fmt.Errorf("%w %s", errNoForkPart, root.Fqid)
 		case 1:
-			fork = append(fork, Part{Root: root, Index: found[0].Index})
+			fork, lens = append(fork, Part{Root: root, Index: found[0].Index}), append(lens, n)
 		default:
-			return nil, fmt.Errorf("%w root %s: %d indices", errAmbiguous, root.Fqid, len(found))
+			return nil, nil, fmt.Errorf("%w root %s: %d indices", errAmbiguous, root.Fqid, len(found))
 		}
 	}
 
-	return fork, nil
+	return fork, lens, nil
 }
 
 // writeValue writes a resolved object as a bundle of callable's role params.

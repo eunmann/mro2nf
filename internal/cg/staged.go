@@ -18,12 +18,12 @@ const elementField = "value"
 // stagedStore serves the instance outs bundles and fork elements one task
 // staged, each identified by its own record.
 type stagedStore struct {
-	g            *Graph
-	outsDirs     map[string]string
-	forks        map[string][]Fork
-	elements     map[string]string
-	elementForks []Fork
-	cache        map[string]core.LazyArgumentMap
+	g           *Graph
+	outsDirs    map[string]string
+	forks       map[string][]Fork
+	elements    map[string]string
+	stagedElems []Element
+	cache       map[string]core.LazyArgumentMap
 }
 
 func stagedKey(fqid string, f Fork) string { return fqid + "\x00" + f.key() }
@@ -85,7 +85,7 @@ func (s *stagedStore) add(dir string) error {
 
 		root := el.Fork[len(el.Fork)-1].Root
 		s.elements[stagedKey(root.Fqid, el.Fork)] = dir
-		s.elementForks = append(s.elementForks, el.Fork)
+		s.stagedElems = append(s.stagedElems, el)
 	default:
 		return fmt.Errorf("staged %s: %w", dir, errNotItem)
 	}

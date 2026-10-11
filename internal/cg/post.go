@@ -83,7 +83,7 @@ func (g *Graph) Post(spec PostSpec) error {
 		}
 
 		if p, ok := g.Producer(root); ok && p == in.Node {
-			if err := w.root(root, in.Fork); err != nil {
+			if err := w.root(root, counted{fork: in.Fork, lens: in.Lens}); err != nil {
 				return err
 			}
 		}
@@ -104,7 +104,7 @@ func (g *Graph) PostEntry(forks string) error {
 			continue
 		}
 
-		if err := w.root(root, nil); err != nil {
+		if err := w.root(root, counted{}); err != nil {
 			return err
 		}
 	}
@@ -174,36 +174,48 @@ type forkWriter struct {
 	values bool
 }
 
-func (w forkWriter) root(root *syntax.CallGraphStage, fixed Fork) error {
+// counted is a fork and the fork count of each of its parts.
+type counted struct {
+	fork Fork
+	lens []int
+}
+
+func (c counted) with(p Part, n int) counted {
+	return counted{fork: c.fork.with(p), lens: append(slices.Clip(c.lens), n)}
+}
+
+// root writes root's forks under the parts of fixed, the posting instance.
+func (w forkWriter) root(root *syntax.CallGraphStage, fixed counted) error {
 	dir := filepath.Join(w.dir, root.Fqid)
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 
-	return w.level(root, fixed, nil, w.r.g.outerRoots(root), nil, dir)
+	return w.level(root, fixed, counted{}, w.r.g.outerRoots(root), nil, dir)
 }
 
 // level enumerates root's outer parts one root at a time: a part the
 // posting instance's fork fixes, or every index of an outer root, from the
 // call graph and what the task staged.
-func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix Fork, rest syntax.ForkRootList, names []string, dir string) error {
+func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix counted, rest syntax.ForkRootList, names []string, dir string) error {
 	if len(rest) == 0 {
 		return w.elements(root, prefix, names, dir)
 	}
 
 	o := rest[0]
 
-	if p, ok := fixed.rootPart(o); ok {
-		return w.level(root, fixed, prefix.with(Part{Root: o, Index: p.Index}), rest[1:], names, dir)
+	if i, ok := fixed.fork.rootPos(o); ok {
+		return w.level(root, fixed, prefix.with(Part{Root: o, Index: fixed.fork[i].Index}, fixed.lens[i]), rest[1:], names, dir)
 	}
 
-	idx, err := w.r.sourceIndices(o, prefix)
+	idx, err := w.r.sourceIndices(o, prefix.fork)
 	if err != nil {
 		return fmt.Errorf("forks of %s: %w", o.Fqid, err)
 	}
 
 	for i, ix := range idx {
-		if err := w.level(root, fixed, prefix.with(Part{Root: o, Index: ix}), rest[1:], append(slices.Clip(names), ordinal(i, len(idx))), dir); err != nil {
+		next := prefix.with(Part{Root: o, Index: ix}, len(idx))
+		if err := w.level(root, fixed, next, rest[1:], append(slices.Clip(names), ordinal(i, len(idx))), dir); err != nil {
 			return err
 		}
 	}
@@ -211,7 +223,9 @@ func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix Fork, rest 
 	return nil
 }
 
-func (w forkWriter) elements(root *syntax.CallGraphStage, outer Fork, names []string, dir string) error {
+func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names []string, dir string) error {
+	outer := outerAt.fork
+
 	var (
 		v   json.Marshaler
 		idx []syntax.CollectionIndex
@@ -250,7 +264,8 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outer Fork, names []st
 			}
 		}
 
-		if err := writeElement(ed, Element{Fork: outer.with(Part{Root: root, Index: ix}), Position: i}); err != nil {
+		at := outerAt.with(Part{Root: root, Index: ix}, len(idx))
+		if err := writeElement(ed, Element{Fork: at.fork, Lens: at.lens, Position: i}); err != nil {
 			return err
 		}
 	}

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -24,11 +25,13 @@ var (
 // Graph is a compiled invocation's call graph, indexed by stage and by fork
 // root. A fork root can be a pipeline's map call, which is no stage node.
 type Graph struct {
-	root   *syntax.CallGraphPipeline
-	types  *syntax.TypeLookup
-	stages map[string]*syntax.CallGraphStage
-	roots  map[string]*syntax.CallGraphStage
-	outer  map[string]syntax.ForkRootList
+	ast      *syntax.Ast
+	mroPaths []string
+	root     *syntax.CallGraphPipeline
+	types    *syntax.TypeLookup
+	stages   map[string]*syntax.CallGraphStage
+	roots    map[string]*syntax.CallGraphStage
+	outer    map[string]syntax.ForkRootList
 }
 
 // Load compiles the invocation at mro, as mrp does before it creates a
@@ -54,11 +57,13 @@ func Load(mro string, mroPaths []string) (*Graph, error) {
 	}
 
 	g := &Graph{
-		root:   root,
-		types:  &ast.TypeTable,
-		stages: map[string]*syntax.CallGraphStage{},
-		roots:  map[string]*syntax.CallGraphStage{},
-		outer:  map[string]syntax.ForkRootList{},
+		ast:      ast,
+		mroPaths: mroPaths,
+		root:     root,
+		types:    &ast.TypeTable,
+		stages:   map[string]*syntax.CallGraphStage{},
+		roots:    map[string]*syntax.CallGraphStage{},
+		outer:    map[string]syntax.ForkRootList{},
 	}
 
 	closure := root.NodeClosure()
@@ -79,6 +84,22 @@ func Load(mro string, mroPaths []string) (*Graph, error) {
 
 	return g, nil
 }
+
+// Invocation is the run's invocation as mrp records it in every job's
+// _jobinfo: the top-level call, its bindings and its .mro file
+// (core/runtime.go:352 BuildDataForAst in instantiatePipeline).
+func (g *Graph) Invocation() (*core.InvocationData, error) {
+	inv, err := core.BuildDataForAst(g.ast)
+	if err != nil {
+		return nil, fmt.Errorf("invocation data: %w", err)
+	}
+
+	return inv, nil
+}
+
+// MroPaths are the include paths the invocation compiled with, mrp's
+// MROPATH (cmd/mrp/configure.go:247).
+func (g *Graph) MroPaths() []string { return g.mroPaths }
 
 // Stage returns the stage node fqid.
 func (g *Graph) Stage(fqid string) (*syntax.CallGraphStage, error) {

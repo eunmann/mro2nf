@@ -16,6 +16,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/bind"
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
@@ -94,6 +95,7 @@ func TestExitCode(t *testing.T) {
 		want int
 	}{
 		{name: "wrapped stage assert", err: fmt.Errorf("join: %w", shim.ErrStageAssert), want: shim.AssertExitCode},
+		{name: "wrapped job assert", err: fmt.Errorf("main: %w", job.ErrAssert), want: shim.AssertExitCode},
 		{name: "ordinary error", err: errUsage, want: 1},
 		{name: "wrapped ordinary error", err: fmt.Errorf("read: %w", os.ErrNotExist), want: 1},
 	}

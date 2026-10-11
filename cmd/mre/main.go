@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 )
@@ -22,7 +23,7 @@ import (
 var version = "dev"
 
 var (
-	errUsage        = errors.New("usage: mre <split|main|join|args|post|outs|bind|forkbind|merge|gate|publish-layout|entryargs|version> [flags]")
+	errUsage        = errors.New("usage: mre <split|main|join|args|run|post|outs|bind|forkbind|merge|gate|publish-layout|entryargs|version> [flags]")
 	errUnknownPhase = errors.New("unknown phase")
 	errBadInput     = errors.New("invalid -inputs pair (want id=file)")
 )
@@ -37,7 +38,7 @@ func main() {
 // exitCode maps a stage failure to a process exit code: an ASSERT-class failure
 // uses a distinct code so the generated Nextflow terminates rather than retries.
 func exitCode(err error) int {
-	if errors.Is(err, shim.ErrStageAssert) {
+	if errors.Is(err, shim.ErrStageAssert) || errors.Is(err, job.ErrAssert) {
 		return shim.AssertExitCode
 	}
 
@@ -72,6 +73,7 @@ func subcommands() map[string]func(context.Context, []string) error {
 		"args":           runArgs,
 		"post":           runPost,
 		"outs":           runOuts,
+		"run":            runJob,
 		"bind":           runBind,
 		"forkbind":       runForkBind,
 		"merge":          runMerge,
