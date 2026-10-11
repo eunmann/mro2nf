@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/eunmann/mro2nf/internal/frontend"
+	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -95,6 +97,17 @@ func (g *Graph) Invocation() (*core.InvocationData, error) {
 	}
 
 	return inv, nil
+}
+
+// Manifest is the type manifest of the invocation's declarations, the one
+// the transpiler builds from the same source (types.BuildManifest).
+func (g *Graph) Manifest() (types.Manifest, error) {
+	prog, err := frontend.Lower(g.ast, g.mroPaths)
+	if err != nil {
+		return types.Manifest{}, fmt.Errorf("type manifest: %w", err)
+	}
+
+	return types.BuildManifest(prog), nil
 }
 
 // MroPaths are the include paths the invocation compiled with, mrp's

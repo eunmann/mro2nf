@@ -96,6 +96,16 @@ func writeStageName(meta, stage string) error {
 	return writeRaw(filepath.Join(meta, stageNameFile), []byte(stage))
 }
 
+// StampStage records stage as the stage of the phase whose metadata dir is
+// meta, creating the dir, for a phase another runner (internal/job) runs.
+func StampStage(meta, stage string) error {
+	if err := os.MkdirAll(meta, dirPerm); err != nil {
+		return fmt.Errorf("create %s: %w", meta, err)
+	}
+
+	return writeStageName(meta, stage)
+}
+
 // writeSkeletonOuts writes the _outs skeleton the adapter reads before a stage
 // runs, pre-populating it the way Martian's makeOutArg does (core/stage.go):
 // array dims become [], map dims {}, a scalar file leaf its default writable

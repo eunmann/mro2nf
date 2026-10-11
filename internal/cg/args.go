@@ -25,6 +25,9 @@ type ArgsSpec struct {
 	// forked instance stages a fork element of each of its roots, or one
 	// whose fork holds the parts of several.
 	In []string
+	// Forks are fork records the task got as values rather than staged:
+	// those of the roots the invocation's entry values fix (DecodeElement).
+	Forks []Element
 	// Manifest locates the file leaves the args bundle stages.
 	Manifest types.Manifest
 	// Out is the args bundle dir. A disabled instance gets only its stamp.
@@ -43,7 +46,7 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 		return Instance{}, err
 	}
 
-	s, err := g.stage(spec.In)
+	s, err := g.stage(spec.In, spec.Forks...)
 	if err != nil {
 		return Instance{}, err
 	}

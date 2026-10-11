@@ -1,6 +1,7 @@
 package cg
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,17 +103,47 @@ func (g *Graph) ReadElement(dir string) (Element, error) {
 		return Element{}, err
 	}
 
-	f, err := g.decodeFork(rec.Fork)
+	el, err := g.element(rec)
 	if err != nil {
 		return Element{}, fmt.Errorf("fork element %s: %w", dir, err)
 	}
 
+	return el, nil
+}
+
+// DecodeElement reads a fork record passed as a value: the base64 of its
+// JSON, so a map key of any characters crosses a shell unquoted.
+func (g *Graph) DecodeElement(text string) (Element, error) {
+	raw, err := base64.StdEncoding.DecodeString(text)
+	if err != nil {
+		return Element{}, fmt.Errorf("decode fork record: %w", err)
+	}
+
+	var rec elementJSON
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return Element{}, fmt.Errorf("decode fork record: %w", err)
+	}
+
+	el, err := g.element(rec)
+	if err != nil {
+		return Element{}, fmt.Errorf("fork record: %w", err)
+	}
+
+	return el, nil
+}
+
+func (g *Graph) element(rec elementJSON) (Element, error) {
+	f, err := g.decodeFork(rec.Fork)
+	if err != nil {
+		return Element{}, err
+	}
+
 	if len(f) == 0 {
-		return Element{}, fmt.Errorf("fork element %s: %w: no parts", dir, errBadFork)
+		return Element{}, fmt.Errorf("%w: no parts", errBadFork)
 	}
 
 	if len(rec.Lens) != len(f) {
-		return Element{}, fmt.Errorf("fork element %s: %w: %d counts, %d parts", dir, errLens, len(rec.Lens), len(f))
+		return Element{}, fmt.Errorf("%w: %d counts, %d parts", errLens, len(rec.Lens), len(f))
 	}
 
 	return Element{Fork: f, Lens: rec.Lens, Position: rec.Position}, nil

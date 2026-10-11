@@ -130,6 +130,10 @@ func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArg
 		return fmt.Errorf("split of %s: %w", in.Stage.Fqid, errNotSplit)
 	}
 
+	if err := f.stamp(in, job.PhaseSplit); err != nil {
+		return err
+	}
+
 	defs, err := f.rt.Split(ctx, in, args)
 	if err != nil {
 		return fmt.Errorf("split: %w", err)
@@ -141,6 +145,17 @@ func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArg
 	}
 
 	return writeChunksDir(f.out, defs, man, callable(in), conf)
+}
+
+// stamp names the instance's stage in the job's metadata dir sub before the
+// job runs, as mre's own phases do (shim.StampStage), so a failed job is
+// attributed too.
+func (f *runFlags) stamp(in job.Instance, sub string) error {
+	if err := shim.StampStage(filepath.Join(f.rt.Work, sub), in.Stage.Callable); err != nil {
+		return fmt.Errorf("stamp %s: %w", sub, err)
+	}
+
+	return nil
 }
 
 // confinement confines the files a job, whose metadata dir under the work
@@ -164,6 +179,10 @@ func (f *runFlags) main(ctx context.Context, in job.Instance, args core.LazyArgu
 		}
 
 		chunk, role = c, types.RoleMainOut
+	}
+
+	if err := f.stamp(in, job.ChunkName(chunk.Index, chunk.Count)); err != nil {
+		return err
 	}
 
 	outs, err := f.rt.Main(ctx, in, args, chunk)
@@ -199,6 +218,10 @@ func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgu
 		if outs[i], err = readArgsMap(dir); err != nil {
 			return err
 		}
+	}
+
+	if err := f.stamp(in, job.PhaseJoin); err != nil {
+		return err
 	}
 
 	final, err := f.rt.Join(ctx, in, args, defs, outs)
@@ -295,8 +318,10 @@ func readChunksDir(dir string) (*core.StageDefs, []string, error) {
 
 	var names []string
 
+	// A task stages each chunk dir as a link to the split's, so a chunk is
+	// any name that resolves to a dir.
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "chnk") {
+		if info, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && info.IsDir() && strings.HasPrefix(e.Name(), "chnk") {
 			names = append(names, e.Name())
 		}
 	}

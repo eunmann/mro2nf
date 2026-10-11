@@ -62,6 +62,56 @@ func TestChunksDirRoundTrip(t *testing.T) {
 	}
 }
 
+// TestChunksDirStagedAsLinks: a join task stages the split's chunk dirs as
+// links, as Nextflow stages a path input, and reads every chunk through them.
+func TestChunksDirStagedAsLinks(t *testing.T) {
+	defs := &core.StageDefs{JoinDef: &core.JobResources{}}
+	for i := range 2 {
+		defs.ChunkDefs = append(defs.ChunkDefs, &core.ChunkDef{Args: core.LazyArgumentMap{"i": json.RawMessage(strconv.Itoa(i))}})
+	}
+
+	split := filepath.Join(t.TempDir(), "chunks")
+	if err := writeChunksDir(split, defs, types.Manifest{}, "S", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	staged := filepath.Join(t.TempDir(), "chunks")
+	if err := os.MkdirAll(staged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"chnk0", "chnk1", joinRecord} {
+		if err := os.Symlink(filepath.Join(split, name), filepath.Join(staged, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, names, err := readChunksDir(staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d := cmp.Diff([]string{"chnk0", "chnk1"}, names); d != "" || len(got.ChunkDefs) != 2 {
+		t.Errorf("chunks read through links (-want +got):\n%s", d)
+	}
+}
+
+// TestRunStampsStage: a job's metadata dir names its stage before the job
+// runs, where the mrp ABI differential and failure attribution read it.
+func TestRunStampsStage(t *testing.T) {
+	f := runFlags{rt: job.Runtime{Work: t.TempDir()}}
+	in := job.Instance{Stage: job.Stage{Callable: "SUM_SQUARES"}}
+
+	if err := f.stamp(in, job.ChunkName(0, 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(f.rt.Work, job.ChunkName(0, 1), "_mre_stage"))
+	if err != nil || string(got) != "SUM_SQUARES" {
+		t.Errorf("stage stamp %q (%v), want SUM_SQUARES", got, err)
+	}
+}
+
 // TestRunBundlesConfineStageOutputs: a file a job's _outs or chunk defs name
 // outside the task work dir is copied into the bundle, never hard-linked, and
 // refused under -confine, as the stage phases' bundles are.

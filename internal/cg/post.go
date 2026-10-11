@@ -38,40 +38,66 @@ type PostSpec struct {
 	Manifest types.Manifest
 	// Forks is the dir that receives <root>/<ordinal>/ fork elements.
 	Forks string
+	// Fields, when set, is the dir that receives one stamped bundle per
+	// output, named by it, so a consumer stages only the outputs it reads.
+	Fields string
+	// Gates, when set, is the file that receives the nodes this instance's
+	// outs disable at its fork (Gates).
+	Gates string
 }
 
 // Post stamps the instance's outs with its node and fork, writing a disabled
 // instance's outs as mrp does, checks enabled outs as mrp does, and writes
-// one fork element dir per fork of every root this stage feeds.
+// one fork element dir per fork of every root this stage feeds, then the
+// outs field by field and the gates they set, when asked.
 func (g *Graph) Post(spec PostSpec) error {
-	in, err := g.ReadInstance(spec.Args)
+	in, s, err := g.post(spec)
 	if err != nil {
 		return err
 	}
 
-	st, err := g.Stage(in.Node)
-	if err != nil {
-		return err
-	}
-
-	if in.Disabled {
-		if err := writeValue(spec.Outs, disabledOuts(st), spec.Manifest, st.Call().DecId, types.RoleOut); err != nil {
+	if spec.Fields != "" {
+		if err := g.writeFields(in, s, spec.Manifest, spec.Fields); err != nil {
 			return err
 		}
 	}
 
+	if spec.Gates != "" {
+		return g.writeGates(in, s, spec.Gates)
+	}
+
+	return nil
+}
+
+func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
+	in, err := g.ReadInstance(spec.Args)
+	if err != nil {
+		return Instance{}, nil, err
+	}
+
+	st, err := g.Stage(in.Node)
+	if err != nil {
+		return Instance{}, nil, err
+	}
+
+	if in.Disabled {
+		if err := writeValue(spec.Outs, disabledOuts(st), spec.Manifest, st.Call().DecId, types.RoleOut); err != nil {
+			return Instance{}, nil, err
+		}
+	}
+
 	if err := writeInstance(spec.Outs, in); err != nil {
-		return err
+		return Instance{}, nil, err
 	}
 
 	s, err := g.stage(append(slices.Clone(spec.In), spec.Outs))
 	if err != nil {
-		return err
+		return Instance{}, nil, err
 	}
 
 	if !in.Disabled {
 		if err := g.verifyOutputs(st, s, in.Fork); err != nil {
-			return err
+			return Instance{}, nil, err
 		}
 	}
 
@@ -79,17 +105,17 @@ func (g *Graph) Post(spec PostSpec) error {
 
 	for _, root := range g.sortedRoots() {
 		if runtimeMultiSource(root) && slices.Contains(refIDs(root.Split().Value), in.Node) {
-			return fmt.Errorf("%w: %s", errMultiSource, root.Fqid)
+			return Instance{}, nil, fmt.Errorf("%w: %s", errMultiSource, root.Fqid)
 		}
 
 		if p, ok := g.Producer(root); ok && p == in.Node {
 			if err := w.root(root, counted{fork: in.Fork, lens: in.Lens}); err != nil {
-				return err
+				return Instance{}, nil, err
 			}
 		}
 	}
 
-	return nil
+	return in, s, nil
 }
 
 // PostEntry writes the fork records of every root no stage feeds, as the
