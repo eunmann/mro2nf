@@ -24,7 +24,8 @@ package e2e
 //	GEN_MRO2NF_BIN,    prebuilt binaries to test instead of the repo build,
 //	GEN_MRE_BIN        e.g. an older commit's.
 //	GEN_ARTIFACTS      where shrunk fixtures go (default artifacts/gen-diff).
-//	GEN_SHRINK_EVALS   shrink budget in program runs (default 150; 0 skips).
+//	GEN_SHRINK_EVALS   shrink budget in program runs (default 150, or 0 for
+//	                   the smoke seeds; 0 skips).
 //	GEN_SHRINK_PARALLEL candidates run at once while shrinking (default 3).
 //	GEN_SHRINK_KEEP    regexp of finding ids ("<leg> <key>") the shrink must
 //	                   keep, to isolate one of several divergences.
@@ -404,6 +405,17 @@ func runGenFixture(t *testing.T, env genEnv, dir string) {
 	}
 }
 
+// defaultShrinkEvals is 0 for the smoke seeds, which only detect: a shrink
+// outlasts a PR's e2e job, which then reports nothing, and the rerun line
+// each divergence logs shrinks.
+func defaultShrinkEvals() int {
+	if os.Getenv("GEN_SEEDS") == "" {
+		return 0
+	}
+
+	return 150
+}
+
 func loadGenEnv(t *testing.T) genEnv {
 	t.Helper()
 
@@ -413,7 +425,7 @@ func loadGenEnv(t *testing.T) genEnv {
 		allow:     genAllowlist(t),
 		artifacts: rootPath(envOr("GEN_ARTIFACTS", filepath.Join("artifacts", "gen-diff"))),
 		shrink: gen.ShrinkOptions{
-			MaxEvals: envInt(t, "GEN_SHRINK_EVALS", 150),
+			MaxEvals: envInt(t, "GEN_SHRINK_EVALS", defaultShrinkEvals()),
 			Parallel: envInt(t, "GEN_SHRINK_PARALLEL", 3),
 		},
 		mrpTimeout: time.Duration(envInt(t, "GEN_MRP_TIMEOUT", 180)) * time.Second,
