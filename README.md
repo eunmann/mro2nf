@@ -53,7 +53,7 @@ internal/
   bind/        resolve call bindings into _args (refs, projections, fan-in)
   overrides/   mrp --overrides file -> Nextflow -c config
   config/      .mro2nf.yml project defaults for the transpiler flags
-  logging/     zerolog setup    apperror/  typed errors
+  logging/     slog setup       apperror/  typed errors
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
 test/e2e/      Go e2e suites (golden diff vs mrp, docker isolation) + AWS runbooks

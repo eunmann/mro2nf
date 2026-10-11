@@ -96,7 +96,7 @@ internal/
   bind/        → resolve call bindings into _args (refs, projections, fan-in)
   overrides/   → mrp --overrides file -> Nextflow -c config
   config/      → .mro2nf.yml project defaults for the transpiler flags
-  logging/     → zerolog setup (stderr)
+  logging/     → log/slog setup (stderr)
   apperror/    → sentinel + typed errors
 ```
 
