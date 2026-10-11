@@ -1246,7 +1246,7 @@ func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.
 
 // genFusedSplitWorkflow emits the per-call workflow wiring the fused SPLIT to the
 // aliased MAIN/JOIN, mirroring genSplitWorkflow but sourcing the bound args from
-// the fused SPLIT's `args` output (made re-readable with .first()).
+// the fused SPLIT's `args` output.
 func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 	var take strings.Builder
 	take.WriteString("    pipeargs\n")
@@ -1270,7 +1270,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
     types = file("${projectDir}/_assets/types.json")
     spec = %[6]s
     %[3]s(%[7]s)
-    a = %[3]s.out.args.first()
+    a = %[3]s.out.args
     chunks = %[3]s.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[4]s(chunks.combine(a), types)
     join = %[3]s.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }
