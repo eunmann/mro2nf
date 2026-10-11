@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -207,6 +208,40 @@ func TestOutcomes(t *testing.T) {
 				t.Errorf("outcome %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestAlarmsReachStderr: each alarm line a job writes reaches mre's stderr
+// under the job's name, which mrp prints when the run ends.
+func TestAlarmsReachStderr(t *testing.T) {
+	s, inv := stage(t, "file_min", "FP.WRITE", `printf 'low disk\n\n  slow\n' > "$meta/_alarm"; touch "$meta/_complete"`)
+	r := runtime(t, inv)
+
+	rd, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orig := os.Stderr
+	os.Stderr = w
+
+	_, err = r.Main(context.Background(), Instance{Stage: s, ForkID: "fork0"}, core.LazyArgumentMap{}, Unsplit())
+
+	os.Stderr = orig
+	_ = w.Close()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := io.ReadAll(rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "mre: ALARM: ID.mrp.FP.WRITE.fork0.chnk0: low disk\nmre: ALARM: ID.mrp.FP.WRITE.fork0.chnk0: slow\n"
+	if d := cmp.Diff(want, string(got)); d != "" {
+		t.Errorf("stderr (-want +got):\n%s", d)
 	}
 }
 
