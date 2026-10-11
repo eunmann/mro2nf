@@ -152,10 +152,12 @@ func mrpOutsRewrite(allow divergence.Allowlist, outs string) (func(string) strin
 	}, nil
 }
 
-// mrpPublishedLinks maps the target mrp's outs JSON names for each symlink it
-// published under outs to the symlink's path. mrp links outs/ to the path it
-// names, absolutely or relative to the link (martian/core/post_process.go
-// copyOutSymlink, moveOutFile), so resolving the link once gives that path.
+// mrpPublishedLinks maps the path mrp's outs JSON names for each symlink it
+// published under outs to the symlink's path. mrp names the link's target,
+// except for a stage's relative symlink that leads through further links:
+// there outs/ links to the last intermediate link and mrp names that link's
+// target (martian/core/post_process.go copyOutSymlink, moveOutFile). So both
+// the target and, when it is a link, its target map to the symlink.
 func mrpPublishedLinks(outs string) (map[string]string, error) {
 	links := map[string]string{}
 
@@ -164,16 +166,16 @@ func mrpPublishedLinks(outs string) (map[string]string, error) {
 			return err
 		}
 
-		target, err := os.Readlink(p)
+		target, err := readLinkAbs(p)
 		if err != nil {
 			return err
 		}
 
-		if !filepath.IsAbs(target) {
-			target = filepath.Clean(filepath.Join(filepath.Dir(p), target))
-		}
-
 		links[target] = p
+
+		if next, err := readLinkAbs(target); err == nil {
+			links[next] = p
+		}
 
 		return nil
 	})
@@ -182,4 +184,19 @@ func mrpPublishedLinks(outs string) (map[string]string, error) {
 	}
 
 	return links, nil
+}
+
+// readLinkAbs returns the target of the symlink p, a relative target joined
+// to p's directory.
+func readLinkAbs(p string) (string, error) {
+	target, err := os.Readlink(p)
+	if err != nil {
+		return "", fmt.Errorf("read link: %w", err)
+	}
+
+	if filepath.IsAbs(target) {
+		return target, nil
+	}
+
+	return filepath.Clean(filepath.Join(filepath.Dir(p), target)), nil
 }

@@ -17,7 +17,8 @@ import (
 // publishedPair lays out, as an mrp pipestance and an mro2nf results dir,
 // what the two runtimes published for a pipeline with a plain file output, a
 // file output the stage wrote as a symlink to a host file (as symlink_escape
-// does), and a struct output whose producer wrote its keys unsorted (as
+// does), a file output the stage wrote as a relative symlink to a link to a
+// host file, and a struct output whose producer wrote its keys unsorted (as
 // kitchen_sink's stats). It returns the pipestance and results dirs.
 func publishedPair(t *testing.T) (string, string) {
 	t.Helper()
@@ -32,7 +33,9 @@ func publishedPair(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 
-	mrpOuts, err := json.Marshal(map[string]string{"linked": host, "note": filepath.Join(outs, "note.txt")})
+	chained := mrpChainedOutput(t, ps)
+
+	mrpOuts, err := json.Marshal(map[string]string{"chained": chained, "linked": host, "note": filepath.Join(outs, "note.txt")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,11 +45,40 @@ func publishedPair(t *testing.T) (string, string) {
 
 	writeABITestFile(t, filepath.Join(results, "note.txt"), "21.0")
 	writeABITestFile(t, filepath.Join(results, "linked.txt"), "print('linked')\n")
+	writeABITestFile(t, filepath.Join(results, "chained.txt"), "chained\n")
 	writeABITestFile(t, filepath.Join(results, "manifest.json.gz"), "index")
 	writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"),
-		`{"linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10.0}}`)
+		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10.0}}`)
 
 	return ps, results
+}
+
+// mrpChainedOutput lays out under the pipestance ps what mrp publishes for a
+// stage output that is a relative symlink to a link to a host file: outs/
+// links to the intermediate link and the outs JSON names the host file
+// (martian/core/post_process.go copyOutSymlink). It returns the host file.
+func mrpChainedOutput(t *testing.T, ps string) string {
+	t.Helper()
+
+	host := writeABITestFile(t, filepath.Join(t.TempDir(), "chained.txt"), "chained\n")
+	files := filepath.Join(ps, "P", "CHAIN", "fork0", "files")
+	staged := filepath.Join(files, "staged.txt")
+
+	if err := os.MkdirAll(files, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, link := range [][2]string{
+		{host, staged},
+		{"staged.txt", filepath.Join(files, "chained.txt")},
+		{staged, filepath.Join(ps, "outs", "chained.txt")},
+	} {
+		if err := os.Symlink(link[0], link[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return host
 }
 
 // TestRemovingAPublishedTreeEntryFailsTheComparison runs the published-output
@@ -79,20 +111,18 @@ func TestRemovingAPublishedTreeEntryFailsTheComparison(t *testing.T) {
 }
 
 // TestNormcmpAppliesTheAllowlist runs normcmp.py, the AWS lanes' outs JSON
-// comparator, on the outs JSON of publishedPair less its symlinked output: it
-// matches under the checked-in allowlist, fails without either of its
-// entries, and fails on a number token change the allowlist does not excuse.
+// comparator, on the outs JSON of publishedPair: it matches under the
+// checked-in allowlist, fails without any of its entries, and fails on a
+// number token change the allowlist does not excuse.
 func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	requireTools(t, "python3")
 
-	dir := t.TempDir()
-	mrpOuts := filepath.Join(dir, "mrp", "outs")
-	mrpJSON := writeABITestFile(t, filepath.Join(dir, "mrp_outs.json"),
-		`{"note": "`+mrpOuts+`/note.txt", "stats": {"count": 4, "total": 10.0, "mean": 2.5}}`)
-	nfJSON := writeABITestFile(t, filepath.Join(dir, "nf_outs.json"),
-		`{"note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10.0}}`)
-	intJSON := writeABITestFile(t, filepath.Join(dir, "nf_int.json"),
-		`{"note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10}}`)
+	ps, results := publishedPair(t)
+	mrpOuts := filepath.Join(ps, "outs")
+	mrpJSON := filepath.Join(ps, "P", "fork0", "_outs")
+	nfJSON := filepath.Join(results, "pipeline_outs.json")
+	intJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_int.json"),
+		`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": {"count": 4, "mean": 2.5, "total": 10}}`)
 
 	checkedIn := filepath.Join(root, "test", "e2e", allowlistFile)
 
@@ -104,6 +134,7 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 		{"number_token", intJSON, checkedIn, false},
 		{"without_relative_paths", nfJSON, allowlistWithout(t, checkedIn, "outs-json-relative-paths"), false},
 		{"without_key_order", nfJSON, allowlistWithout(t, checkedIn, "outs-json-object-key-order"), false},
+		{"without_published_symlinks", nfJSON, allowlistWithout(t, checkedIn, "published-symlinks-copied"), false},
 	}
 
 	for _, tc := range cases {
