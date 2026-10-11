@@ -70,24 +70,7 @@ func checkContainerSources(opts Options, roots sourceRoots) error {
 		return &apperror.UnsupportedError{Construct: "container target", Detail: "-mre is required (it is baked into the image)"}
 	}
 
-	toCheck := map[string]string{"-mre": opts.Mre}
-	if opts.Shell != "" {
-		toCheck["-shell"] = opts.Shell
-	}
-
-	if opts.Mrjob != "" {
-		toCheck["-mrjob"] = opts.Mrjob
-	}
-
-	for name, src := range opts.StageCode {
-		// A bare-command src is resolved on the image PATH, not vendored, so there
-		// is no host file to stat (see isBakedToolkitCmd / vendorStageCode).
-		if isBakedToolkitCmd(src) {
-			continue
-		}
-
-		toCheck["stage "+name] = src
-	}
+	toCheck := containerSources(opts)
 
 	// Sorted so that when several sources are missing the reported one is stable
 	// (map iteration order is randomized), keeping the error reproducible.
@@ -106,6 +89,28 @@ func checkContainerSources(opts Options, roots sourceRoots) error {
 	}
 
 	return checkConfigTools(opts, roots)
+}
+
+// containerSources names each host source a container target vendors: the
+// set tools and every stage src that is not a bare command (resolved on the
+// image PATH, so nothing on the host to copy; see isBakedToolkitCmd).
+func containerSources(opts Options) map[string]string {
+	srcs := map[string]string{"-mre": opts.Mre}
+	if opts.Shell != "" {
+		srcs["-shell"] = opts.Shell
+	}
+
+	if opts.Mrjob != "" {
+		srcs["-mrjob"] = opts.Mrjob
+	}
+
+	for name, src := range opts.StageCode {
+		if !isBakedToolkitCmd(src) {
+			srcs["stage "+name] = src
+		}
+	}
+
+	return srcs
 }
 
 // checkConfigTools refuses a tool path a config file set (opts.ConfigTools)
@@ -156,6 +161,10 @@ func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, err
 	// runtime/ is wholly generated: start it empty so nothing an earlier
 	// transpile vendored reaches the image.
 	rt := filepath.Join(opts.OutDir, buildCtxDir)
+	if err := checkOutsideBuildContext(opts, rt); err != nil {
+		return g, err
+	}
+
 	if err := os.RemoveAll(rt); err != nil {
 		return g, fmt.Errorf("reset build context: %w", err)
 	}

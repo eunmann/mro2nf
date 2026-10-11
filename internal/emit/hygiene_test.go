@@ -537,3 +537,63 @@ func TestEmitContainerResetsBuildContext(t *testing.T) {
 		t.Errorf("build context after re-transpile (-want +got):\n%s", diff)
 	}
 }
+
+// TestEmitRefusesSourceInBuildContext checks a container target refuses a
+// tool or stage src that lies in, or holds, the runtime/ it empties, instead
+// of deleting the user's only copy before vendoring it.
+func TestEmitRefusesSourceInBuildContext(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, tr hygieneTree, opts *emit.Options) string
+	}{
+		{"mre_vendored_earlier", func(_ *testing.T, _ hygieneTree, opts *emit.Options) string {
+			opts.Mre = filepath.Join(opts.OutDir, "runtime", "mre")
+
+			return opts.Mre
+		}},
+		{"stage_src_under_runtime", func(t *testing.T, tr hygieneTree, opts *emit.Options) string {
+			t.Helper()
+			opts.OutDir = tr.root
+			src := filepath.Join(tr.root, "runtime", "count")
+			writeTreeFile(t, filepath.Join(src, "__init__.py"), "")
+			opts.StageCode = map[string]string{"COUNT": src}
+
+			return filepath.Join(src, "__init__.py")
+		}},
+		{"stage_src_holds_runtime", func(t *testing.T, tr hygieneTree, opts *emit.Options) string {
+			t.Helper()
+			opts.OutDir = filepath.Join(tr.root, "stages", "count", "out")
+			opts.StageCode = map[string]string{"COUNT": inTreeCode(tr)}
+			keep := filepath.Join(opts.OutDir, "runtime", "keep.txt")
+			writeTreeFile(t, keep, "keep")
+
+			return keep
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := newHygieneTree(t)
+			mro := filepath.Join(tr.root, "pipeline.mro")
+			writeTreeFile(t, mro, fmt.Sprintf(hygieneMRO, "input/absent.txt"))
+
+			opts := emit.Options{
+				OutDir: t.TempDir(), Mre: tr.mre, Shell: tr.shell, MROFile: "pipeline.mro",
+				MRODir: tr.root, Target: emit.TargetAWSBatch,
+				StageCode: map[string]string{"COUNT": inTreeCode(tr)},
+			}
+			if err := emit.Emit(parseLowered(t, mro, tr.root), opts); err != nil {
+				t.Fatalf("first Emit: %v", err)
+			}
+
+			kept := tc.setup(t, tr, &opts)
+
+			err := emit.Emit(parseLowered(t, mro, tr.root), opts)
+			if !errors.Is(err, emit.ErrSourceInBuildContext) {
+				t.Errorf("Emit: want ErrSourceInBuildContext, got %v", err)
+			}
+
+			if _, statErr := os.Stat(kept); statErr != nil {
+				t.Errorf("source %s was deleted: %v", kept, statErr)
+			}
+		})
+	}
+}

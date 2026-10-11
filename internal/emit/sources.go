@@ -165,3 +165,63 @@ func (r sourceRoots) checkDirLinks(what, dir string) ([]string, error) {
 
 	return linked, nil
 }
+
+// ErrSourceInBuildContext is returned for a tool or stage src that lies in,
+// or holds, the runtime/ build context a container target empties before it
+// vendors the sources.
+var ErrSourceInBuildContext = errors.New("source overlaps the build context, which the transpile empties")
+
+// checkOutsideBuildContext refuses a tool, the -shell adapter's module, or a
+// vendored stage src that lies in, or holds, the build context rt: emptying
+// rt would delete it before it is copied, and copying a tree that holds rt
+// into rt never ends.
+func checkOutsideBuildContext(opts Options, rt string) error {
+	srcs := containerSources(opts)
+	if opts.Shell != "" {
+		module, err := adapterModulePath(opts.Shell)
+		if err != nil {
+			return fmt.Errorf("container target: %w", err)
+		}
+
+		srcs["-shell module"] = module
+	}
+
+	ctx := pathForms(rt)
+	if out, err := realPath(opts.OutDir); err == nil {
+		ctx = append(ctx, filepath.Join(out, buildCtxDir))
+	}
+
+	for _, what := range sortedKeys(srcs) {
+		for _, s := range pathForms(srcs[what]) {
+			for _, c := range ctx {
+				if nested(s, c) || nested(c, s) {
+					return fmt.Errorf("container target: %s %q and %s: %w; move it out of the output directory or pick another -o",
+						what, srcs[what], rt, ErrSourceInBuildContext)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// pathForms returns p's absolute path and, when it resolves, its real path.
+func pathForms(p string) []string {
+	var forms []string
+	if abs, err := filepath.Abs(p); err == nil {
+		forms = append(forms, abs)
+	}
+
+	if resolved, err := realPath(p); err == nil {
+		forms = append(forms, resolved)
+	}
+
+	return forms
+}
+
+// nested reports whether path p is dir or lies below it.
+func nested(p, dir string) bool {
+	rel, err := filepath.Rel(dir, p)
+
+	return err == nil && filepath.IsLocal(rel)
+}
