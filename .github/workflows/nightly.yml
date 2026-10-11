@@ -83,11 +83,12 @@ jobs:
 
   # One open issue tracks a failing nightly: the first failure opens it, later
   # ones comment on it, and closing it re-arms the next failure to open a new
-  # one. The exact title is the dedupe key.
+  # one. The exact title is the dedupe key. Only main reports: a dispatch from
+  # another branch may be trying out its own broken nightly.
   report:
     name: Nightly failure report
     needs: [e2e, scale]
-    if: ${{ failure() }}
+    if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

@@ -20,7 +20,9 @@ const (
 	// starts with it, so no matrix expansion of a nightly name can post one.
 	nightlyJobPrefix = "Nightly"
 
-	nightlyFailureGate = "${{ failure() }}"
+	// nightlyFailureGate keeps a dispatch from another branch, which may be
+	// trying out its own broken nightly, from filing the main-branch issue.
+	nightlyFailureGate = "${{ failure() && github.ref == 'refs/heads/main' }}"
 )
 
 // TestNightlyRunsOnSchedule pins the nightly triggers: a cron schedule plus a
@@ -70,8 +72,8 @@ func TestNightlyNoRequiredContexts(t *testing.T) {
 }
 
 // TestNightlyFailureReport pins the job that opens or updates the nightly
-// failure issue: it runs only on failure, after every other job, and holds
-// the issues permission its gh calls need.
+// failure issue: it runs only on a main-branch failure, after every other
+// job, and holds the issues permission its gh calls need.
 func TestNightlyFailureReport(t *testing.T) {
 	jobs := workflowJobs(t, nightlyWorkflow)
 
