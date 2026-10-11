@@ -20,12 +20,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A scheduled run repeats a passed one only if one of its inputs changed: the
+  # main commit, or the Nextflow release latest-stable resolves to. The `mark`
+  # job records each pass as an empty cache entry under that key. A dispatch
+  # always runs. A failed run records nothing, so the next night retries it.
+  gate:
+    name: Nightly change gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ github.event_name != 'schedule' || steps.passed.outputs.cache-hit != 'true' }}
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - id: key
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          nf=$(gh api repos/nextflow-io/nextflow/releases/latest --jq .tag_name)
+          echo "key=nightly-passed-$GITHUB_SHA-nextflow-$nf" >> "$GITHUB_OUTPUT"
+      - id: passed
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .nightly-passed
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+
   # Sharded like PR Validation's e2e: unsharded, the suite ran ~25 minutes on
   # latest stable and hit make test-e2e's 30-minute go-test timeout on the
   # slower floor engine. E2E_SHARD_TOTAL must equal the shard list's length
   # (TestNightlyShardsPartitionSuite).
   e2e:
     name: Nightly test-e2e shard ${{ matrix.shard }} (Nextflow ${{ matrix.nextflow }})
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -66,6 +94,8 @@ jobs:
 
   docker:
     name: Nightly test-e2e-docker (Nextflow ${{ matrix.nextflow }})
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     # Setup and make test-e2e-docker's 30-minute go-test timeout, with headroom,
     # so a stuck test fails with go test's panic rather than a runner kill.
@@ -102,6 +132,8 @@ jobs:
 
   scale:
     name: Nightly scale smoke
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -120,13 +152,25 @@ jobs:
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
       - run: make test-scale
 
+  mark:
+    name: Nightly pass record
+    needs: [gate, e2e, docker, scale]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: touch .nightly-passed
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .nightly-passed
+          key: ${{ needs.gate.outputs.key }}
+
   # One open issue tracks a failing nightly: the first failure opens it, later
   # ones comment on it, and closing it re-arms the next failure to open a new
   # one. The exact title is the dedupe key. Only main reports: a dispatch from
   # another branch may be trying out its own broken nightly.
   report:
     name: Nightly failure report
-    needs: [e2e, docker, scale]
+    needs: [gate, e2e, docker, scale, mark]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
