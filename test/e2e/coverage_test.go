@@ -72,6 +72,7 @@ var mrpUnrunnable = map[string]string{
 	"entry_struct_file":    mrpUnresolvedInput,
 	"entry_mapfile":        mrpUnresolvedInput,
 	"entry_dir":            mrpUnresolvedInput,
+	"entry_file_empty":     mrpUnresolvedInput,
 	"split_from_file":      mrpUnresolvedInput,
 }
 
