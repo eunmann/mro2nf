@@ -204,6 +204,9 @@ var goldenCases = []goldenCase{
 	// literal, stage output, a file out naming no file) reach every stage and
 	// the published outs as the literal strings mrp gives them.
 	{"marker_strings", "marker_strings", "expected/outs.json"},
+	// #284: stages see the basename mrp passes for a file from an upstream
+	// stage, an entry input, a fork, a split's chunk def and a join's chunk outs.
+	{"basename_echo", "basename_echo", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
