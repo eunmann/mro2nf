@@ -58,7 +58,7 @@ vendor-martian/python/   pinned martian_shell.py + martian.py adapters (Martian'
 THIRD_PARTY_NOTICES      licenses of the code the binaries link and the images vendor
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
 test/e2e/      Go e2e suites (golden diff vs mrp, docker isolation) + AWS runbooks
-test/thirdparty/   THIRD_PARTY_NOTICES generator + vendored-license checks
+test/thirdparty/   THIRD_PARTY_NOTICES generator, vendored-license and vendor-martian drift checks
 deploy/awsbatch-cdk/   minimal AWS CDK: S3 + ECR + Batch + HealthOmics role
 docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
                 (support matrix), GPU.md, RUNTIME_TUNING.md (mrp knobs ->
