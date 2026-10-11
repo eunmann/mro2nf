@@ -10,6 +10,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/config"
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestApplyConfigPrecedence checks the .mro2nf.yml precedence: a config key sets
@@ -154,6 +155,43 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 	if !opts.Native || !opts.NativeRunner {
 		t.Errorf("config-sourced native flags must reach options(): Native=%v NativeRunner=%v",
 			opts.Native, opts.NativeRunner)
+	}
+}
+
+// TestSourceRootFlagsReachOptions checks -mropath reaches Emit split into the
+// roots that bound copied files, and that copying an external file takes the
+// explicit -allow-external-files.
+func TestSourceRootFlagsReachOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		wantPath  []string
+		wantAllow bool
+	}{
+		{"default", []string{"p.mro"}, []string{"."}, false},
+		{"opt_in", []string{"-mropath", "a" + string(os.PathListSeparator) + "b", "-allow-external-files", "p.mro"}, []string{"a", "b"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			f := defineTranspileFlags(fs)
+
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+
+			opts, err := f.options()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if diff := cmp.Diff(tc.wantPath, opts.MROPath); diff != "" {
+				t.Errorf("MROPath (-want +got):\n%s", diff)
+			}
+
+			if opts.AllowExternalFiles != tc.wantAllow {
+				t.Errorf("AllowExternalFiles = %v, want %v", opts.AllowExternalFiles, tc.wantAllow)
+			}
+		})
 	}
 }
 

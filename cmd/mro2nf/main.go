@@ -108,7 +108,7 @@ func run(args []string) error {
 type transpileFlags struct {
 	outDir, mroPath, mre, shell, mrjob, container, target, configPath *string
 	monitor, fuseChains, foldDisables, native, nativeRunner           *bool
-	inlinePipelines, confineOutputs                                   *bool
+	inlinePipelines, confineOutputs, allowExternalFiles               *bool
 	showVersion                                                       *bool
 }
 
@@ -116,22 +116,23 @@ type transpileFlags struct {
 // value pointers.
 func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 	return transpileFlags{
-		outDir:          fs.String("o", "out", "output directory for the generated Nextflow project"),
-		mroPath:         fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)"),
-		mre:             fs.String("mre", "mre", "path to the mre shim binary"),
-		shell:           fs.String("shell", "", "path to martian_shell.py"),
-		mrjob:           fs.String("mrjob", "", "path to mrjob (for comp stages)"),
-		container:       fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)"),
-		target:          fs.String("target", "local", "execution backend: local | awsbatch | healthomics"),
-		monitor:         fs.Bool("monitor", false, "enforce mrp --monitor memory limits per stage: an RSS kill at mem_gb plus a prlimit vmem cap at vmem_gb"),
-		fuseChains:      fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)"),
-		foldDisables:    fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)"),
-		native:          fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)"),
-		nativeRunner:    fs.Bool("native-runner", false, "opt-in direct-call Python stage runner (#79): no martian_shell.py adapter or mre broker on the stage hop (py stages only; the runner is baked into the image for container backends)"),
-		inlinePipelines: fs.Bool("inline-pipelines", true, "flatten eligible sub-pipeline boundaries into their parent, dropping the entry/return BIND tasks (ON by default; orchestration-only, byte-identical outputs; pass -inline-pipelines=false to keep per-boundary tasks for finer -resume; #221)"),
-		confineOutputs:  fs.Bool("confine-outputs", false, "fail a stage task whose output resolves outside its work dir instead of copying it in (always on for awsbatch/healthomics; set it for a local project run under an isolating executor such as docker)"),
-		configPath:      fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win (bools need the equals form, e.g. -native=false)"),
-		showVersion:     fs.Bool("version", false, "print version and exit"),
+		outDir:             fs.String("o", "out", "output directory for the generated Nextflow project"),
+		mroPath:            fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)"),
+		mre:                fs.String("mre", "mre", "path to the mre shim binary"),
+		shell:              fs.String("shell", "", "path to martian_shell.py"),
+		mrjob:              fs.String("mrjob", "", "path to mrjob (for comp stages)"),
+		container:          fs.String("container", "", "container image for processes (e.g. an ECR URI for cloud backends)"),
+		target:             fs.String("target", "local", "execution backend: local | awsbatch | healthomics"),
+		monitor:            fs.Bool("monitor", false, "enforce mrp --monitor memory limits per stage: an RSS kill at mem_gb plus a prlimit vmem cap at vmem_gb"),
+		fuseChains:         fs.Bool("fuse-chains", false, "fuse a single-consumer equal-resource source stage into its consumer's task, dropping a node (coarsens -resume; #59 Lever 4)"),
+		foldDisables:       fs.Bool("fold-disables", false, "constant-fold an entry-determinable disable branch: an always-disabled stage is pruned (asserts you will not override its gate input; #59 Lever 1)"),
+		native:             fs.Bool("native", false, "opt-in channel-native orchestration (#76 M1): bake entry args, no BUILD_ENTRY_ARGS task (entry inputs fixed at transpile; no launch override)"),
+		nativeRunner:       fs.Bool("native-runner", false, "opt-in direct-call Python stage runner (#79): no martian_shell.py adapter or mre broker on the stage hop (py stages only; the runner is baked into the image for container backends)"),
+		inlinePipelines:    fs.Bool("inline-pipelines", true, "flatten eligible sub-pipeline boundaries into their parent, dropping the entry/return BIND tasks (ON by default; orchestration-only, byte-identical outputs; pass -inline-pipelines=false to keep per-boundary tasks for finer -resume; #221)"),
+		confineOutputs:     fs.Bool("confine-outputs", false, "fail a stage task whose output resolves outside its work dir instead of copying it in (always on for awsbatch/healthomics; set it for a local project run under an isolating executor such as docker)"),
+		allowExternalFiles: fs.Bool("allow-external-files", false, "copy entry file defaults and container-target stage code that resolve outside the .mro's directory and the -mropath roots into the project or image (refused by default)"),
+		configPath:         fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win (bools need the equals form, e.g. -native=false)"),
+		showVersion:        fs.Bool("version", false, "print version and exit"),
 	}
 }
 
@@ -159,6 +160,7 @@ func (f transpileFlags) options() (emit.Options, error) {
 		FuseChains: *f.fuseChains, FoldDisables: *f.foldDisables,
 		Native: *f.native, NativeRunner: *f.nativeRunner,
 		InlinePipelines: *f.inlinePipelines, ConfineOutputs: *f.confineOutputs,
+		MROPath: filepath.SplitList(*f.mroPath), AllowExternalFiles: *f.allowExternalFiles,
 	}, nil
 }
 
@@ -349,7 +351,6 @@ func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) error {
 	return nil
 }
 
-// emitProgram fills in the source-derived Options fields (absolute tool paths,
 // stageCodePaths maps each stage to its absolute stage-code path. SrcPath is
 // already resolved against the declaring file's directory by the frontend (an
 // @included stage's src is relative to the included file, NOT the entry .mro), so
@@ -380,6 +381,7 @@ func stageCodePaths(prog *ir.Program) (map[string]string, error) {
 	return code, nil
 }
 
+// emitProgram fills in the source-derived Options fields (absolute tool paths,
 // MROFile/MRODir, StageCode) and emits the Nextflow project for prog.
 func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 	mroDir := filepath.Dir(src)

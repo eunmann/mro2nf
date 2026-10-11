@@ -216,13 +216,13 @@ func emitHealthOmicsEntryFile(t *testing.T, native bool) string {
 	}
 
 	code := map[string]string{}
-	for name := range prog.Stages {
-		code[name] = t.TempDir()
+	for name, s := range prog.Stages {
+		code[name] = s.SrcPath
 	}
 
 	dir := t.TempDir()
 	if err := emit.Emit(prog, emit.Options{
-		OutDir: dir, Mre: writeEntryArgsStub(t), MROFile: "pipeline.mro",
+		OutDir: dir, Mre: writeEntryArgsStub(t), MROFile: "pipeline.mro", MRODir: base,
 		Target: emit.TargetHealthOmics, StageCode: code, Native: native,
 	}); err != nil {
 		t.Fatalf("emit: %v", err)

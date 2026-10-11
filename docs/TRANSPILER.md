@@ -119,13 +119,15 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   `@include`), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
   (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
   the opt-in emission modes `-fuse-chains`, `-fold-disables`, `-native`, and
-  `-native-runner` (§4.8), `-config` (a `.mro2nf.yml` of per-project flag
-  defaults; keys mirror the flags, an explicit flag always wins — see
-  `internal/config`), and `-version`.
+  `-native-runner` (§4.8), `-allow-external-files` (§8, §10), `-config` (a
+  `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
+  explicit flag always wins — see `internal/config`; `-allow-external-files`
+  has no key, so a config file shipped beside a shared `.mro` cannot set it),
+  and `-version`.
 - It resolves the stage source paths and the runtime tool paths to **absolute**
   paths (so the generated project runs from any working directory), records the
   `.mro`'s directory as `MRODir` (used to resolve relative file defaults — see
-  §8), and calls `emit.Emit(prog, opts)`.
+  §8) and the `-mropath` roots as `MROPath`, and calls `emit.Emit(prog, opts)`.
 
 The IR (`internal/ir/ir.go`) is the contract between front end and emitter. Its
 core types:
@@ -611,8 +613,20 @@ Two details matter only on a real object store. Both are handled:
 The top-level `call EP(reads = …, scale = …)` provides the pipeline's default
 inputs. The emitter bakes those defaults into `entry_args/data.json` at transpile
 time (resolving any relative file-default paths against the `.mro`'s directory so
-the bundle is self-contained). But you can also override inputs **at launch**
-without re-transpiling:
+the bundle is self-contained), and stages each file default into
+`entry_args/f/`.
+
+A file default is staged only when it resolves, after following symlinks,
+inside the `.mro`'s directory or a `-mropath` root (default `.`, the working
+directory), and so does every symlink staging would follow inside a directory
+default. Anything else fails the transpile naming the input and the path, so a
+shared `.mro` whose default points at `~/.ssh` cannot bake it into the project,
+the HealthOmics `workflow.zip`, or a cluster copy. `-allow-external-files`
+stages it anyway; use it for defaults you know are yours, such as the Cell
+Ranger dry-run `.mro`'s absolute paths into the bundle's test data. A default
+that does not exist is not staged and is not checked.
+
+You can also override inputs **at launch** without re-transpiling:
 
 - Every entry input is exposed as a nullable Nextflow parameter, `params.<name>`.
 - At run start, a **`BUILD_ENTRY_ARGS`** process runs `mre entryargs`, which
@@ -740,6 +754,12 @@ code, and — for `comp` stages — the `mrjob` wrapper) at fixed in-container p
 (`/opt/mro2nf/…`) that the generated scripts bake. HealthOmics tasks have **no
 internet**, so any third-party stage dependency (e.g. the Cell Ranger binary)
 must be added to the Dockerfile.
+
+A stage `src` given as a path is vendored only when it resolves inside the
+`.mro`'s directory or a `-mropath` root, as for entry file defaults (§8);
+otherwise the transpile fails unless `-allow-external-files` is set. The local
+target runs stage code in place and copies none, so it does not check. The
+`-mre`, `-shell` and `-mrjob` tools are not user data and may live anywhere.
 
 Two cloud-specific defaults to know about:
 

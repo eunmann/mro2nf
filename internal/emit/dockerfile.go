@@ -58,13 +58,13 @@ const (
 
 // checkContainerSources fails loudly if a baked runtime source is missing,
 // rather than letting it surface as a cryptic `docker build` COPY error or a
-// silently broken image. mre is always required; -shell, -mrjob, and each
-// stage's code are verified when present (an exec/comp-only pipeline may have
-// no -shell). Note the -shell check stats the FILE, while containerBuild
-// copies its parent adapters directory: the dir's existence is implied by the
-// file check, and per-entry read failures inside any tree still surface as
-// copyTree errors.
-func checkContainerSources(opts Options) error {
+// silently broken image, and refuses a vendored stage src outside roots. mre is
+// always required; -shell, -mrjob, and each stage's code are verified when
+// present (an exec/comp-only pipeline may have no -shell). Note the -shell
+// check stats the FILE, while containerBuild copies its parent adapters
+// directory: the dir's existence is implied by the file check, and per-entry
+// read failures inside any tree still surface as copyTree errors.
+func checkContainerSources(opts Options, roots sourceRoots) error {
 	if opts.Mre == "" {
 		return &apperror.UnsupportedError{Construct: "container target", Detail: "-mre is required (it is baked into the image)"}
 	}
@@ -96,6 +96,14 @@ func checkContainerSources(opts Options) error {
 		}
 	}
 
+	for _, name := range sortedKeys(opts.StageCode) {
+		if src := opts.StageCode[name]; !isBakedToolkitCmd(src) {
+			if err := roots.check("stage "+name+" src", src); err != nil {
+				return fmt.Errorf("container target: %w", err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -105,10 +113,10 @@ func checkContainerSources(opts Options) error {
 // Python runner resolve inside an isolated task). The host artifacts are copied
 // into <out>/runtime/ and a Dockerfile is written so `docker build -t <image>
 // <out>` produces the runtime image.
-func containerBuild(opts Options, target Target) (genCtx, error) {
+func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, error) {
 	g := genCtx{mre: ctrMre, shell: opts.Shell, mrjob: opts.Mrjob, code: map[string]string{}}
 
-	if err := checkContainerSources(opts); err != nil {
+	if err := checkContainerSources(opts, roots); err != nil {
 		return g, err
 	}
 

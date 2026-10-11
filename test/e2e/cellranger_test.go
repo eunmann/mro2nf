@@ -160,11 +160,14 @@ func TestCellRangerDifferential(t *testing.T) {
 }
 
 // transpileCellRanger runs the built mro2nf on a bundle .mro into proj, wiring the
-// bundle's Martian runtime for the comp/py stages.
+// bundle's Martian runtime for the comp/py stages. The dry-run .mro's entry
+// defaults are the bundle's test inputs, outside its dir and the mropath, so
+// baking them takes -allow-external-files.
 func transpileCellRanger(t *testing.T, home, mro, proj string) {
 	t.Helper()
 
 	cmd := exec.Command(filepath.Join(root, "mro2nf"),
+		"-allow-external-files",
 		"-mropath", filepath.Join(home, "mro"),
 		"-mre", filepath.Join(root, "mre"),
 		"-mrjob", filepath.Join(home, "external", "martian", "bin", "mrjob"),
