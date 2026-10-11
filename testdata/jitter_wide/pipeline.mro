@@ -1,0 +1,69 @@
+# Determinism under completion-order jitter (#270): a 64-way map with a file
+# output per fork, broadcast an upstream file, feeding a 64-chunk split whose
+# chunk values and join summary depend on the order of the gathered fork
+# outputs. Every main and join sleeps a random interval, so tasks complete in
+# a different order on every run; the published outputs must not change.
+filetype txt;
+
+stage MKPAY(
+    in  int kb,
+    out txt f,
+    src py  "stages/mkpay",
+)
+
+stage FUSE(
+    in  int v,
+    in  txt payload,
+    out int w,
+    out txt f,
+    src py  "stages/fuse",
+)
+
+stage WSPLIT(
+    in  int[] ws,
+    out int   total,
+    out txt   summary,
+    src py    "stages/wsplit",
+) split (
+    in  int i,
+    in  int w,
+    out int part,
+)
+
+pipeline JITTER(
+    in  int[] vs,
+    out int[] ws,
+    out txt[] fs,
+    out int   total,
+    out txt   summary,
+)
+{
+    call MKPAY(
+        kb = 4,
+    )
+
+    map call FUSE(
+        v       = split self.vs,
+        payload = MKPAY.f,
+    )
+
+    call WSPLIT(
+        ws = FUSE.w,
+    )
+
+    return (
+        ws      = FUSE.w,
+        fs      = FUSE.f,
+        total   = WSPLIT.total,
+        summary = WSPLIT.summary,
+    )
+}
+
+call JITTER(
+    vs = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+        49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+    ],
+)

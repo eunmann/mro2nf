@@ -290,6 +290,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "map_file"},
 	{name: "map_file_keyed"},
 	{name: "map_split_file"},
+	// #270: the determinism fixture's fork and chunk gathers match mrp's
+	// order, not completion order.
+	{name: "jitter_wide"},
 	// #217: a split phase creates a custom-filetype file and returns it as a
 	// per-chunk arg the JOIN reads. Verifies output + native-runner parity;
 	// the object-store staging path itself is guarded by the AWS e2e lane and
