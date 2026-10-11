@@ -538,7 +538,7 @@ live in an isolated cloud container.
 
 ### 5.1 The call-graph data plane (emitter v2, #463)
 
-Three more subcommands resolve values on Martian's own compiled call graph
+Four more subcommands work on Martian's own compiled call graph
 (`internal/cg`), not on bindspecs. Each takes the invocation `.mro` (`-mro`,
 `-mropath`), compiles it as `mrp` does (`syntax.Compile`, then
 `MakePipelineCallGraph`), and reads only the items its task staged (`-in`, an
@@ -548,7 +548,31 @@ item or a dir of items). No generated project calls them yet; the v2 emitter
 - **`mre args -node <fqid>`** builds one stage instance's args bundle and prints
   `enabled` or `disabled`. The instance's fork comes from the fork elements it
   staged, and its values from its parents' stamped outs bundles. A disabled
-  instance gets only its stamp.
+  instance gets only its stamp, `instance.json`, which records the fork and
+  each part's fork count, from which `mrp`'s fork id follows. A map call that
+  zips several splits forks over its master source: a split of known length
+  if one has it, else its first split in source order. The other splits
+  resolve at the same index, and, as in `mrp`, read null past the end of a
+  shorter source or from a null one, and drop a longer one's extra
+  elements. The missing element is logged, and fails the instance only
+  under the error enforcement level.
+- **`mre run -phase split|main|join`** runs one phase of the instance that
+  `-args` stamps as `mrp` runs its job (`internal/job`). py and comp stages
+  run under `mrjob`, built from the pinned module (`make build`), with `mrp`'s
+  argv: `mrjob <adapters>/python/martian_shell.py <code> <phase> <meta>
+  <meta>/files <journal>`. Exec stages run directly. Before the job, mre
+  writes what `mrp` writes, through Martian's own types and metadata writer:
+  `_args` (the chunk or join def's resolved resources over the bindings),
+  `_jobinfo`, the pre-populated `_outs`, `_chunk_defs` and `_chunk_outs` for
+  a join, and the files, tmp and journal dirs. `_jobinfo` carries `mrp`'s
+  name, `ID.<psid>.<fqid>.<fork id>[.chnkN]`, the top-level call's invocation,
+  the Martian runtime's and the pipelines' versions, and `monitor_flag` under
+  `-monitor`, which `mrjob` enforces. `mrjob` exits 0 however the stage ends,
+  so mre reads the outcome from the metadata: `_assert` exits 42, which is
+  never retried, and `_errors` or a non-zero exit exits 1. A split writes
+  `-o` as one dir per chunk, named as `mrp` names it (`chnkN`), with its args
+  bundle and `chunk.json`, plus `join.json`. A main or join writes its outs
+  bundle.
 - **`mre post`** runs after the stage. It stamps the outs bundle with the
   instance (`instance.json`). For a disabled instance it first writes mrp's
   disabled outs, with every output null. It checks enabled outs with Martian's
@@ -577,10 +601,13 @@ expansion (`core/fork.go`) and the disable test (`core/stage.go`
 calls Martian's exported functions (`ResolvedBinding.BindingPath`,
 `LazyArgumentMap.Path`, each type's `FilterJson`, and the validators).
 `TestMrpCallGraph` (e2e) replays every mrp-diff fixture's real mrp pipestance
-through these subcommands. It requires the same `_args` as mrp's, after both
-are re-encoded and file leaves are reduced to name and content digest, and the
-same pipeline outs. Its drift guard requires the same `_args` and fork set as
-mrp's own resolver, reattached read-only in-process.
+through these subcommands, running every job through `mre run`. It requires
+the same `_args` as mrp's, after both are re-encoded and file leaves are
+reduced to name and content digest. Every job mrp ran must run, and no other,
+with the same `_args`, `_outs` and `_jobinfo` (its keys, and every value that
+does not vary per run). The published tree and pipeline outs must match. Its
+drift guard requires the same `_args` and fork set as mrp's own resolver,
+reattached read-only in-process.
 
 ---
 
