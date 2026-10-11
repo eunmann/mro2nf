@@ -87,8 +87,9 @@ const mrpUnresolvedInput = "mrp passes the invocation's relative input/ path thr
 // TestEveryFixtureMrpDiffed fails unless every pipeline fixture is in exactly
 // one of mrpDiffCases (outputs diffed), mrpOutcomeCases (run outcome diffed)
 // and mrpUnrunnable (with a reason), when a table names a fixture that does
-// not exist, when an mrpOutcomeCases entry is malformed, or when an allowlist
-// entry is applied by no case (unappliedAllowlistEntries): every fixture mrp
+// not exist, when an mrpOutcomeCases entry is malformed, when an allowlist
+// entry is applied by no case (unappliedAllowlistEntries), or when a
+// transpileRefused fixture is not an mrpOutcomeCases entry: every fixture mrp
 // can run faces live mrp.
 func TestEveryFixtureMrpDiffed(t *testing.T) {
 	present := pipelineFixtures(t)
@@ -132,6 +133,12 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 
 		if len(tables[name]) > 1 {
 			t.Errorf("%q is listed %d times, in %v; keep one entry", name, len(tables[name]), tables[name])
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(transpileRefused)) {
+		if !slices.Equal(tables[name], []string{"mrpOutcomeCases"}) {
+			t.Errorf("transpileRefused lists %q, which is in %v; a refused fixture is one mrpOutcomeCases entry", name, tables[name])
 		}
 	}
 

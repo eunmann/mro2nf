@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -495,6 +496,11 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "split_bad_special", mrp: failedIn(failError, "BAD_SPECIAL")},
 	{name: "split_bad_mem", mrp: failedIn(failError, "BAD_MEM")},
 	{name: "split_bad_threads", mrp: failedIn(failError, "BAD_THREADS")},
+	// mrp refuses to instantiate a split of a runtime-gated literal collection
+	// (#387), and mro2nf refuses to transpile it (transpileRefused).
+	{name: "rt_gate_split_reject", mrp: runOutcome{Failed: true}},
+	{name: "rt_gate_split_reject_sub", mrp: runOutcome{Failed: true}},
+	{name: "rt_gate_split_reject_pass", mrp: runOutcome{Failed: true}},
 	// The reverse: mrp runs WORK behind a runtime-null disable gate, mro2nf's
 	// driver aborts on it. Once fixed, the fixture moves to mrpDiffCases.
 	{
@@ -654,8 +660,7 @@ func TestMrpDiffFailureParity(t *testing.T) {
 
 			tmp := t.TempDir()
 			mrp := mrpRunOutcome(t, bin, tc.name, tmp)
-			proj := transpile(t, tc.name)
-			nf, attempts := nextflowRunOutcome(t, proj)
+			nf, attempts, nfLog := nfRunOutcome(t, tc.name)
 
 			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts)...)
 			for _, r := range reports {
@@ -663,7 +668,7 @@ func TestMrpDiffFailureParity(t *testing.T) {
 			}
 
 			if len(reports) > 0 {
-				t.Logf("mrp.log:\n%s\nrun.log:\n%s", tailFile(filepath.Join(tmp, "mrp.log")), tailFile(filepath.Join(proj, "run.log")))
+				t.Logf("mrp.log:\n%s\nmro2nf:\n%s", tailFile(filepath.Join(tmp, "mrp.log")), nfLog)
 			}
 		})
 	}
@@ -691,6 +696,38 @@ func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
 	}
 
 	return o
+}
+
+// nfRunOutcome is the mro2nf outcome of a fixture, the task name of every
+// attempt (nextflowRunOutcome), and the log that explains it. A
+// transpileRefused fixture must fail to transpile in every mode, the
+// counterpart of mrp refusing it before it makes a pipestance, so its outcome
+// is a failure blaming no stage, with no attempts. Any other fixture is
+// transpiled and run.
+func nfRunOutcome(t *testing.T, fixture string) (runOutcome, []string, string) {
+	t.Helper()
+
+	if _, refused := transpileRefused[fixture]; !refused {
+		proj := transpile(t, fixture)
+		o, attempts := nextflowRunOutcome(t, proj)
+
+		return o, attempts, tailFile(filepath.Join(proj, "run.log"))
+	}
+
+	buildBinaries(t)
+
+	var logs []string
+
+	for _, flags := range [][]string{nil, {"-native"}, {"-inline-pipelines=false"}} {
+		err := transpileInto(filepath.Join(root, "testdata", fixture), "pipeline.mro", t.TempDir(), flags...)
+		if err == nil {
+			t.Fatalf("mro2nf transpiles %s under %v; mrp refuses it before any stage runs", fixture, flags)
+		}
+
+		logs = append(logs, fmt.Sprintf("%v: %v", flags, err))
+	}
+
+	return failedWith(nil), nil, strings.Join(logs, "\n")
 }
 
 // nextflowRunOutcome runs a transpiled project and classifies the run from the

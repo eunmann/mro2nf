@@ -89,11 +89,11 @@ const lintBatchSize = 150
 // TestNextflowLint lints the generated project for every testdata fixture
 // under every lintConfigs flag set. It enumerates the fixtures (rather than a
 // hand-kept list) so any new fixture is linted automatically and the branch
-// space is covered by construction. ANY transpile failure is a test failure:
-// no flag/fixture combination is refused today, so there is nothing to skip.
-// If a future flag introduces a genuine SevError refusal, add an explicit
-// expected-refusal allowlist entry for that exact combo THEN — loud by
-// default, never classified by error-message substring.
+// space is covered by construction. ANY transpile failure is a test failure,
+// except for a transpileRefused fixture, which must fail to transpile under
+// every flag set. If a future flag introduces a genuine SevError refusal, add
+// an explicit expected-refusal allowlist entry for that exact combo THEN —
+// loud by default, never classified by error-message substring.
 func TestNextflowLint(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +120,14 @@ func TestNextflowLint(t *testing.T) {
 	for _, c := range combos {
 		t.Run(c.fixture+"/"+c.config, func(t *testing.T) {
 			t.Parallel() // verdicts are precomputed; subtests only read
+
+			if reason, refused := transpileRefused[c.fixture]; refused {
+				if c.transpileErr == nil {
+					t.Errorf("transpile %s under %v succeeded; it must be refused: %s", c.fixture, c.flags, reason)
+				}
+
+				return
+			}
 
 			if c.transpileErr != nil {
 				t.Fatalf("transpile %s under %v: %v", c.fixture, c.flags, c.transpileErr)

@@ -1,0 +1,55 @@
+# #387: rt_gate_split_reject with the gated producer a pass-through
+# sub-pipeline. PASS returns its literal input, so B splits a runtime-gated
+# array literal, which mrp refuses before any stage runs even when the array is
+# empty. mro2nf refuses it at transpile time.
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+pipeline PASS(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    return (
+        ys = self.xs,
+    )
+}
+
+pipeline RTGP(
+    in  int[] none,
+    in  bool  skip,
+    out int[] b,
+)
+{
+    call GATE(
+        v = self.skip,
+    )
+
+    call PASS as P(
+        xs = self.none,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as B(
+        value = split P.ys,
+    )
+
+    return (
+        b = B.scaled,
+    )
+}
+
+call RTGP(
+    none = [],
+    skip = false,
+)

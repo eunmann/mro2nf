@@ -186,7 +186,17 @@ not change the marking (#383): mrp folds a literal gate statically and, under
 a runtime gate, prunes a known-empty split to null or rejects the consumer's
 split of the gated value, so a split over a gated producer of an
 invocation-known source gives `null` (`empty_fork_gated`,
-`empty_fork_gated_sub`).
+`empty_fork_gated_sub`). The rejected split never reaches the emitter (#387):
+mro2nf resolves the invocation's call graph with the function `mrp` runs before
+it creates a pipestance (`syntax.Ast.MakePipelineCallGraph`,
+`frontend.CheckCallGraph`), so it refuses the transpile exactly when `mrp`
+refuses to start, with `mrp`'s message. The refusal comes from
+`SplitExp.FindTypedRefs` handing a disabled split value its element type
+instead of the collection type (`syntax/split_expression.go:141-146`), so a split of a
+runtime-gated literal collection fails `ArrayExp.FindTypedRefs`
+(`syntax/resolved_binding.go:255-261`): a map call over a non-empty literal,
+a mapping sub-pipeline over one, and a pass-through sub-pipeline returning a
+literal even when it is empty (`rt_gate_split_reject`, `_sub`, `_pass`).
 
 **MINOR/coverage (#7):** Martian's recursive `resolvePath` supports
 `map<map<S>>.field`; mro2nf rejects it loudly at transpile time

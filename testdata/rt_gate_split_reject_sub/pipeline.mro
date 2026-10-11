@@ -1,0 +1,58 @@
+# #387: rt_gate_split_reject with the gated producer a mapping sub-pipeline.
+# mrp refuses B's split of the runtime-gated SUB return before any stage runs,
+# and mro2nf refuses it at transpile time.
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+pipeline SUB(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    map call SCALE(
+        value = split self.xs,
+    )
+
+    return (
+        ys = SCALE.scaled,
+    )
+}
+
+pipeline RTGS(
+    in  int[] some,
+    in  bool  skip,
+    out int[] b,
+)
+{
+    call GATE(
+        v = self.skip,
+    )
+
+    call SUB as S(
+        xs = self.some,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as B(
+        value = split S.ys,
+    )
+
+    return (
+        b = B.scaled,
+    )
+}
+
+call RTGS(
+    some = [1, 2],
+    skip = false,
+)
