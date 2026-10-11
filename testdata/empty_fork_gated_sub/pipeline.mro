@@ -1,0 +1,153 @@
+# #383: a disable-gated sub-pipeline call whose return a downstream
+# `map call B(split S.ys)` forks over. SUB maps over its input, so mrp prunes
+# its known-empty split to null whatever the gate (S_LIT literal false, S_RT
+# runtime false, S_RTON runtime true) and statically disables S_OFF (literal
+# true over a non-empty input); PASS returns its input unchanged, so P_LIT
+# returns the empty list itself and P_OFF is statically disabled. B's
+# zero-fork merge gives null in every case. A runtime gate over a returned
+# value that is not statically null is not here: mrp rejects that binding.
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+pipeline SUB(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    map call SCALE(
+        value = split self.xs,
+    )
+
+    return (
+        ys = SCALE.scaled,
+    )
+}
+
+pipeline PASS(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    return (
+        ys = self.xs,
+    )
+}
+
+pipeline EFGS(
+    in  int[] none,
+    in  int[] some,
+    in  bool  skip,
+    in  bool  off,
+    out int[] s_lit,
+    out int[] b_s_lit,
+    out int[] s_rt,
+    out int[] b_s_rt,
+    out int[] s_rton,
+    out int[] b_s_rton,
+    out int[] s_off,
+    out int[] b_s_off,
+    out int[] p_lit,
+    out int[] b_p_lit,
+    out int[] p_off,
+    out int[] b_p_off,
+)
+{
+    call GATE(
+        v = self.skip,
+    )
+
+    call GATE as ON(
+        v = self.off,
+    )
+
+    call SUB as S_LIT(
+        xs = self.none,
+    ) using (
+        disabled = self.skip,
+    )
+
+    map call SCALE as B_S_LIT(
+        value = split S_LIT.ys,
+    )
+
+    call SUB as S_RT(
+        xs = self.none,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as B_S_RT(
+        value = split S_RT.ys,
+    )
+
+    call SUB as S_RTON(
+        xs = self.none,
+    ) using (
+        disabled = ON.off,
+    )
+
+    map call SCALE as B_S_RTON(
+        value = split S_RTON.ys,
+    )
+
+    call SUB as S_OFF(
+        xs = self.some,
+    ) using (
+        disabled = self.off,
+    )
+
+    map call SCALE as B_S_OFF(
+        value = split S_OFF.ys,
+    )
+
+    call PASS as P_LIT(
+        xs = self.none,
+    ) using (
+        disabled = self.skip,
+    )
+
+    map call SCALE as B_P_LIT(
+        value = split P_LIT.ys,
+    )
+
+    call PASS as P_OFF(
+        xs = self.some,
+    ) using (
+        disabled = self.off,
+    )
+
+    map call SCALE as B_P_OFF(
+        value = split P_OFF.ys,
+    )
+
+    return (
+        s_lit    = S_LIT.ys,
+        b_s_lit  = B_S_LIT.scaled,
+        s_rt     = S_RT.ys,
+        b_s_rt   = B_S_RT.scaled,
+        s_rton   = S_RTON.ys,
+        b_s_rton = B_S_RTON.scaled,
+        s_off    = S_OFF.ys,
+        b_s_off  = B_S_OFF.scaled,
+        p_lit    = P_LIT.ys,
+        b_p_lit  = B_P_LIT.scaled,
+        p_off    = P_OFF.ys,
+        b_p_off  = B_P_OFF.scaled,
+    )
+}
+
+call EFGS(
+    none = [],
+    some = [1, 2],
+    skip = false,
+    off  = true,
+)
