@@ -121,8 +121,7 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   wrapper, all baked into the generated scripts), `-mropath` (search path for
   `@include`), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
   (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
-  the opt-in emission modes `-fuse-chains`, `-native`, and `-native-runner`
-  (§4.8), `-allow-external-files` (§8, §10), `-config` (a
+  the opt-in emission modes `-native` and `-native-runner` (§4.8), `-allow-external-files` (§8, §10), `-config` (a
   `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
   explicit flag always wins — see `internal/config`; `-allow-external-files`
   and `-mropath` have no key, so a config file shipped beside a shared `.mro`
@@ -390,20 +389,16 @@ each file leaf individually and publishes it to its `outs/` path via
 published tree matches an mrp pipestance `outs/` (verified by
 `the Go TestMrpDiff suite`); see §10 for where "results" lives on each target.
 
-### 4.8 Opt-in emission modes: `-fuse-chains` and channel-native orchestration (`-native`)
+### 4.8 Opt-in emission modes: channel-native orchestration (`-native`)
 
-Everything in §§4.1–4.7 describes the default emission. Three opt-in flags trade
-some launch-time flexibility for a smaller task graph. All of them are
+Everything in §§4.1–4.7 describes the default emission. Two opt-in flags trade
+some launch-time flexibility for a smaller task graph. Both are
 **plan-decided**: `buildPlan` (`internal/emit/plan.go`) resolves every call to a
 single `callKind` — plain bind, mapped, forward, one of the fused kinds, or
 native scatter — once, up front, and the process, wiring, and include
 emitters all read that fixed plan, so no two emission sites can disagree about
 how a call is rendered.
 
-- **`-fuse-chains`** folds a single-consumer, equal-resource source stage into
-  its consumer's task (`kindFusedChain`/`kindFusedAway`), dropping a node per
-  fused link. The cost is granularity: `-resume` and per-stage retry treat the
-  fused chain as one task.
 - **`-native`** replaces the data-plane *tasks* with driver-side channel wiring,
   without touching the stage tasks or the adapter ABI:
   - **Baked entry args.** The entry bundle is resolved once at transpile time by
@@ -448,8 +443,8 @@ emitted. A flag/pipeline combination that would produce a wrong project is a
 hard error that aborts the transpile; a shape an opt-in flag cannot fully
 collapse prints an **Info** diagnostic naming exactly which orchestration
 remains and why (e.g. which map call keeps its one FORK resolve, or that a
-`py`-only runner leaves an `exec` stage on the adapter path), and a flag that
-had no effect at all says so — an opt-in never silently does less than asked.
+`py`-only runner leaves an `exec` stage on the adapter path) — an opt-in never
+silently does less than asked.
 
 ---
 

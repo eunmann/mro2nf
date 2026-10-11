@@ -37,7 +37,6 @@ func TestStageProcessNameInventory(t *testing.T) {
 		{"map_pipe_split", "default", emit.Options{}},                     // keyed split triad (_SPLIT_K/_MAIN_K/_JOIN_K)
 		{"map_pipe", "default", emit.Options{}},                           // keyed fused bind+main (_K, #99)
 		{"map_pipe_nested", "default", emit.Options{}},                    // keyed element scatter (_KS, #99)
-		{"chain_fuse3", "fuse-chains", emit.Options{FuseChains: true}},    // fused linear chain (#59 Lever 4)
 		{"split_test", "native-runner", emit.Options{NativeRunner: true}}, // direct-call runner stage hop (#79)
 	}
 
@@ -94,7 +93,6 @@ func TestStageProcessNames(t *testing.T) {
 		{"map_pipe_split", emit.Options{}},
 		{"map_pipe", emit.Options{}},
 		{"map_pipe_nested", emit.Options{}},
-		{"chain_fuse3", emit.Options{FuseChains: true}},
 	}
 
 	for _, fx := range fixtures {

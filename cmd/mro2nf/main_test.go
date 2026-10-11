@@ -23,24 +23,24 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	mro := filepath.Join(dir, "pipeline.mro")
 
 	if err := os.WriteFile(filepath.Join(dir, config.FileName),
-		[]byte("target: awsbatch\nfuse-chains: true\nnative: true\nnative-runner: true\n"), 0o644); err != nil {
+		[]byte("target: awsbatch\nmonitor: true\nnative: true\nnative-runner: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Unset flags take the config value.
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	target := fs.String("target", "local", "")
-	fuse := fs.Bool("fuse-chains", false, "")
+	monitor := fs.Bool("monitor", false, "")
 	native := fs.Bool("native", false, "")
 	nativeRunner := fs.Bool("native-runner", false, "")
 	_ = fs.Parse([]string{mro})
 
-	ptrs := cliPtrs{target: target, fuseChains: fuse, native: native, nativeRunner: nativeRunner}
+	ptrs := cliPtrs{target: target, monitor: monitor, native: native, nativeRunner: nativeRunner}
 	if _, err := applyConfig(fs, "", mro, ptrs); err != nil {
 		t.Fatal(err)
 	}
-	if *target != "awsbatch" || !*fuse {
-		t.Errorf("config should set unset flags: target=%q fuse=%v", *target, *fuse)
+	if *target != "awsbatch" || !*monitor {
+		t.Errorf("config should set unset flags: target=%q monitor=%v", *target, *monitor)
 	}
 	if !*native || !*nativeRunner {
 		t.Errorf("config should set unset native flags: native=%v native-runner=%v", *native, *nativeRunner)
@@ -50,20 +50,20 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	// as its default value (-native=false must beat the config's native: true).
 	fs2 := flag.NewFlagSet("t", flag.ContinueOnError)
 	target2 := fs2.String("target", "local", "")
-	fuse2 := fs2.Bool("fuse-chains", false, "")
+	monitor2 := fs2.Bool("monitor", false, "")
 	native2 := fs2.Bool("native", false, "")
 	nativeRunner2 := fs2.Bool("native-runner", false, "")
 	_ = fs2.Parse([]string{"-target", "healthomics", "-native=false", "-native-runner=false", mro})
 
-	ptrs2 := cliPtrs{target: target2, fuseChains: fuse2, native: native2, nativeRunner: nativeRunner2}
+	ptrs2 := cliPtrs{target: target2, monitor: monitor2, native: native2, nativeRunner: nativeRunner2}
 	if _, err := applyConfig(fs2, "", mro, ptrs2); err != nil {
 		t.Fatal(err)
 	}
 	if *target2 != "healthomics" {
 		t.Errorf("explicit -target should win over config, got %q", *target2)
 	}
-	if !*fuse2 {
-		t.Errorf("unset fuse-chains should still take config value, got %v", *fuse2)
+	if !*monitor2 {
+		t.Errorf("unset monitor should still take config value, got %v", *monitor2)
 	}
 	if *native2 || *nativeRunner2 {
 		t.Errorf("explicit -native=false/-native-runner=false should win over config: native=%v native-runner=%v",
@@ -378,7 +378,7 @@ func TestRunRefusesPipelineMrpCannotInstantiate(t *testing.T) {
 func TestRunRejectsDeletedFlags(t *testing.T) {
 	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
 
-	for _, name := range []string{"fold-disables"} {
+	for _, name := range []string{"fold-disables", "fuse-chains"} {
 		t.Run(name, func(t *testing.T) {
 			err := run([]string{"-o", t.TempDir(), "-" + name, mro})
 			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+name) {

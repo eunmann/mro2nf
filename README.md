@@ -93,7 +93,6 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-container <image>` | set `process.container` for container backends (AWS Batch, k8s) |
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
 | `-monitor` | enforce mrp `--monitor`'s memory limits per stage: an RSS kill at `mem_gb` (the process-group monitor, mrp's primary kill) plus a `prlimit` virtual-memory cap at `vmem_gb` |
-| `-fuse-chains` | fuse a single-consumer, equal-resource source stage into its consumer's task (fewer tasks; **trade-off:** `-resume` and per-stage retry are coarser for the fused stages) |
 | `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native--native-runner)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
 | `-native-runner` | run `py` stages through the embedded direct-call runner instead of `mre` + `martian_shell.py` (`exec`/`comp` stages keep the adapter). On container backends the runner is baked into the image, so toggling it there means an image rebuild |
 | `-allow-external-files` | copy an entry file default, or (container targets) a stage `src`, that resolves outside the `.mro`'s directory and the explicitly given `-mropath` roots (the implicit `.` is not one) into the project or image. Without it the transpile refuses such a file, so a shared `.mro` cannot ship host data such as `~/.aws` in `entry_args/`, the image, or `workflow.zip` |
@@ -156,9 +155,8 @@ the adapter path (an Info diagnostic names each). It composes with or without
 `-native`, and on container backends the runner is baked into the image.
 
 Both modes are held to the same bar as the default emission: the native e2e
-suites diff their outputs against the committed real-`mrp` goldens (including
-`-native` composed with `-fuse-chains`), the live `mrp`
-differential runs `-native` and `-native-runner` legs, every fixture is
+suites diff their outputs against the committed real-`mrp` goldens, the live
+`mrp` differential runs `-native` and `-native-runner` legs, every fixture is
 statically linted under each opt-in flag, and the benchmark gate's `-native`
 lanes machine-check that the element scatter's orchestration stays flat across
 fork widths. The suites also pin the exact set of surviving data-plane
@@ -180,7 +178,7 @@ native-runner: true
 ```
 
 Supported keys: `target`, `container`, `mre`, `shell`, `mrjob`, `monitor`,
-`fuse-chains`, `native`, `native-runner`. A container
+`native`, `native-runner`. A container
 target bakes an `mre`, `shell` or `mrjob` path set here into the image only
 when it resolves inside the `.mro`'s directory or a `-mropath` root, since a
 config file shipped with a shared `.mro` is not trusted; pass the flag to use a

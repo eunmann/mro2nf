@@ -95,10 +95,6 @@ type Options struct {
 	// Monitor enables per-stage virtual-memory enforcement in the shim (the mrp
 	// --monitor analog).
 	Monitor bool
-	// FuseChains opts into linear-chain stage fusion (#59 Lever 4): a single-
-	// consumer, equal-resource source stage is folded into its consumer's task,
-	// dropping a node at the cost of coarser -resume/retry granularity.
-	FuseChains bool
 	// Target is the execution backend the project is shaped for (default local).
 	Target Target
 	// ConfineOutputs makes every stage task fail on an output that resolves
@@ -129,7 +125,6 @@ type Options struct {
 // through it, so they can never analyze different plans for the same options.
 func (o Options) featureSet() featureSet {
 	return featureSet{
-		fuseChains:      o.FuseChains,
 		native:          o.Native,
 		nativeRunner:    o.NativeRunner,
 		inlinePipelines: o.InlinePipelines,

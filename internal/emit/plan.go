@@ -12,8 +12,7 @@ import (
 // keeps genCtx's runtime config (mre/shell/…) separate from behavior toggles and
 // gives the plan a single place to read policy from.
 type featureSet struct {
-	fuseChains bool
-	native     bool
+	native bool
 	// inlinePipelines flattens eligible sub-pipeline calls into their parent so
 	// the pipeline-boundary bind tasks (entry + return) disappear (#221).
 	inlinePipelines bool
@@ -35,8 +34,6 @@ const (
 	kindFusedSplit                         // #16 fused bind+split → MAIN → JOIN
 	kindFusedDisabled                      // #59 fused bind+main, natively-gated disable
 	kindFusedDisabledSplit                 // fused bind+split for a natively-gated disabled split stage
-	kindFusedChain                         // #59 Lever 4 chain consumer (folds its producer)
-	kindFusedAway                          // #59 Lever 4 chain producer folded into its consumer
 	kindNativeScatter                      // #76 -native map call: in-workflow scatter, no FORK task
 )
 
@@ -56,12 +53,6 @@ const (
 	keyedScatter                   // #99 value-only nested map: driver element scatter _KS
 )
 
-// chainLink is one stage in a fused linear chain: the call and its stage.
-type chainLink struct {
-	call  ir.Call
-	stage *ir.Stage
-}
-
 // callPlan is the decided emission strategy for one call plus the analysis payload
 // each site needs, so nothing is recomputed downstream.
 type callPlan struct {
@@ -70,9 +61,6 @@ type callPlan struct {
 	stage *ir.Stage
 	// fwd is the producer call name for kindForward.
 	fwd string
-	// chain is the fused linear run for kindFusedChain, source-first and ending at
-	// this call (length >= 2); every stage but the last folds away (#59 Lever 4).
-	chain []chainLink
 	// disableTask reports that a mapped/plain disabled call needs a standalone
 	// DISABLE process (the flag is not driver-gateable).
 	disableTask bool
@@ -135,19 +123,18 @@ type emitPlan struct {
 
 // buildPlan resolves every per-call emission decision up front so the process,
 // wiring, and include emitters read a fixed plan instead of re-running the
-// fuseable*/forward/chain predicates at each site (the class of drift that
-// produces dangling processes).
+// fuseable*/forward predicates at each site (the class of drift that produces
+// dangling processes).
 func buildPlan(prog *ir.Program, f featureSet) emitPlan {
 	pl := emitPlan{pipes: map[string]pipePlan{}}
 	queued := queuePipeArgs(prog)
 	known := knownInvocation(prog)
 
 	for name, p := range prog.Pipelines {
-		away := fusedAwayProducers(p, prog, f.fuseChains)
 		pp := pipePlan{calls: make(map[string]callPlan, len(p.Calls))}
 
 		for _, c := range p.Calls {
-			cp := planCall(c, p, prog, f, away, queued[name], known)
+			cp := planCall(c, p, prog, f, queued[name], known)
 			pp.calls[c.Name] = planKeyedCall(cp, c, prog)
 		}
 
@@ -268,19 +255,8 @@ func neededStageModules(prog *ir.Program, pl emitPlan) map[string]bool {
 }
 
 // planCall decides one call's kind in the same precedence the emitters used to
-// inline: chain fold, chain consumer, mapped, forward, fused stage/split/disabled,
-// else a plain bind.
-func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, away map[string]bool, queuedPa bool, known invKnown) callPlan {
-	if f.fuseChains {
-		if away[c.Name] {
-			return callPlan{kind: kindFusedAway}
-		}
-
-		if chain, ok := chainFusion(c, p, prog, f.fuseChains); ok {
-			return callPlan{kind: kindFusedChain, chain: chain}
-		}
-	}
-
+// inline: mapped, forward, fused stage/split/disabled, else a plain bind.
+func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, queuedPa bool, known invKnown) callPlan {
 	if c.Mapped {
 		// emptyNull may mark a DISABLED map call too. Load-bearing invariant:
 		// its MERGE executes only on the gate-false (run) branch — FORK feeds
@@ -547,9 +523,9 @@ func keyedFuseable(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
 }
 
 // mergeFoldable reports whether a native scatter's MERGE can run inline in its
-// consumer's task (#76): exactly one consumer (mirroring the #59 Lever 4
-// single-consumer rule — K consumers would duplicate the merge and stage the N
-// fork dirs K times), and that consumer is a task-hosted bind shape — the
+// consumer's task (#76): exactly one consumer (K consumers would duplicate the
+// merge and stage the N fork dirs K times), and that consumer is a task-hosted
+// bind shape — the
 // pipeline return (return BIND, or the native LAYOUT for the entry) or a
 // plain/fused/mapped call. A disable-gate reference is never foldable (the
 // driver reads that bundle directly; no task hosts the merge) — consumerCount
@@ -557,8 +533,8 @@ func keyedFuseable(c ir.Call, prog *ir.Program) (*ir.Stage, bool) {
 // its sole "consumer" is the gate, which matches neither the returns nor any
 // call bindings below and falls through to false. A downstream scatter
 // consumer keeps the MERGE: folding there would re-merge once per fork
-// instance. Forward/chain consumers cannot reference a mapped producer
-// (forwardProducer and chainFusion both reject them). Dormancy invariant: a
+// instance. A forward consumer cannot reference a mapped producer
+// (forwardProducer rejects it). Dormancy invariant: a
 // folded consumer must stage BOTH the souts and keys channels — souts emits []
 // even for a skipped pipeline; only the unbound keys channel keeps the
 // consumer dormant (see genNativeScatterWiring).
@@ -612,14 +588,13 @@ func keyedNativeDisable(c ir.Call) bool {
 }
 
 // fusedInclude reports whether a call's module include is suppressed — the fused
-// stage/chain/scatter kinds (and the natively-gated fused-disabled kind) are
+// stage and scatter kinds (and the natively-gated fused-disabled kind) are
 // self-contained per-call processes with no wf_ import. Without this the
 // fused-disabled call emitted a dead `include { wf_<stage> as ... }` that its
 // wiring (genFusedDisabledWiring uses the fused process, not the alias) never
 // invokes, keeping the stage module alive and defeating #82 pruning.
 func (cp callPlan) fusedInclude() bool {
-	return cp.kind == kindFusedStage || cp.kind == kindFusedChain || cp.kind == kindFusedAway ||
-		cp.kind == kindNativeScatter || cp.kind == kindFusedDisabled
+	return cp.kind == kindFusedStage || cp.kind == kindNativeScatter || cp.kind == kindFusedDisabled
 }
 
 // keyedFusedInclude reports whether a call's keyed-layer include is suppressed —

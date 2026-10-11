@@ -437,9 +437,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// not only its committed golden.
 	{name: "alias_min"},
 	{name: "api_smoke"},
-	{name: "chain_fuse"},
-	{name: "chain_fuse3"},
-	{name: "chain_fuse_disable"},
+	{name: "chain"},
+	{name: "chain3"},
+	{name: "chain_gate"},
 	{name: "dead_map_pipe"},
 	{name: "default_out"},
 	{name: "disabled_callref"},

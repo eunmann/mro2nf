@@ -42,7 +42,6 @@ type Config struct {
 	Shell        *string
 	Mrjob        *string
 	Monitor      *bool
-	FuseChains   *bool
 	Native       *bool
 	NativeRunner *bool
 }
@@ -119,8 +118,6 @@ func assign(cfg *Config, key, val string) error {
 		cfg.Mrjob = &val
 	case "monitor":
 		return assignBool(&cfg.Monitor, key, val)
-	case "fuse-chains":
-		return assignBool(&cfg.FuseChains, key, val)
 	case "native":
 		return assignBool(&cfg.Native, key, val)
 	case "native-runner":

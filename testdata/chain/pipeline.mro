@@ -1,7 +1,5 @@
-# #59 Lever 4 regression: SRC is a single-consumer source stage feeding only the
-# transform-consumer USE (which also reads self.k), and SRC's output is not
-# returned. With -fuse-chains, SRC folds into USE's task (one node); output is
-# byte-identical to mrp either way.
+# A two-stage linear chain: SRC is a source stage feeding only USE (which also
+# reads self.k), and SRC's output is not returned.
 stage SRC(
     in  int x,
     out int y,

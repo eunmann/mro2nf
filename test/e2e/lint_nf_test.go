@@ -10,20 +10,12 @@ package e2e
 // or which paths the golden fixtures happen to execute. It fails only on ERRORS
 // (a real syntax bug); style warnings on the generated code exit 0.
 //
-// The matrix is fixtures × lintConfigs (~700 combos), but a per-combo
-// `nextflow lint` pays a ~2s JVM boot that dwarfs the linting itself (699s on
-// the 2-core CI runner). Two multiplicative fixes keep the gate fast without
-// losing a single verdict:
-//
-//  1. Dedupe: most flag configs are no-ops for most fixtures, so the combos
-//     collapse to ~half as many byte-identical emissions. Every combo still
-//     transpiles (milliseconds) and hashes its tree; byte-identical projects
-//     necessarily lint identically, so each unique emission is linted once
-//     and the verdict fans back out to every member combo by name.
-//  2. Batching: one `nextflow lint` invocation lints many project dirs with
-//     per-file JSON diagnostics, so the unique emissions share a handful of
-//     JVMs instead of one each. Every emission ships the identical static
-//     lib/ (asserted below), so a single -project-dir serves the batch.
+// The matrix is fixtures × lintConfigs, but a per-combo `nextflow lint` pays a
+// ~2s JVM boot that dwarfs the linting itself (699s on the 2-core CI runner).
+// So one `nextflow lint` invocation lints many project dirs with per-file JSON
+// diagnostics, and the emissions share a handful of JVMs instead of one each.
+// Every emission ships the identical static lib/ (asserted below), so a single
+// -project-dir serves the batch.
 //
 // EVERY chunk carries its own injected-syntax-error guard project that MUST
 // report exactly its injected error, proving per invocation that the whole
@@ -53,11 +45,9 @@ import (
 
 // lintConfigs is the emission-branch dimension (#122): each opt-in flag routes
 // the emitter down generator branches the default emission never reaches
-// (native scatter/merge, the direct-call runner scripts, fused-chain
-// processes), so each fixture is linted under every single flag plus the
-// compositions that route down distinct combined branches: -native
-// -native-runner, and -native -fuse-chains (TestNativeCombos proves that
-// emits Groovy neither flag emits alone).
+// (native scatter/merge, the direct-call runner scripts), so each fixture is
+// linted under every single flag plus their composition, -native
+// -native-runner.
 var lintConfigs = []struct {
 	name  string
 	flags []string
@@ -65,9 +55,7 @@ var lintConfigs = []struct {
 	{"default", nil},
 	{"native", []string{"-native"}},
 	{"native-runner", []string{"-native-runner"}},
-	{"fuse-chains", []string{"-fuse-chains"}},
 	{"native+native-runner", []string{"-native", "-native-runner"}},
-	{"native+fuse-chains", []string{"-native", "-fuse-chains"}},
 }
 
 // minNextflowMajor/Minor is the first release with `nextflow lint`.
@@ -101,18 +89,17 @@ func TestNextflowLint(t *testing.T) {
 
 	parent := t.TempDir()
 	combos := transpileLintCombos(t, parent)
-	repByGroup, reps := dedupeLintCombos(combos)
+	projects := transpiledProjects(combos)
 
 	var errsByProj map[string][]string
 
-	if len(reps) > 0 { // every combo failing to transpile still reports below
-		t.Logf("linting %d unique emissions for %d fixture/config combos (%.1fx dedupe)",
-			len(reps), len(combos), float64(len(combos))/float64(len(reps)))
+	if len(projects) > 0 { // every combo failing to transpile still reports below
+		t.Logf("linting %d emissions for %d fixture/config combos", len(projects), len(combos))
 
-		assertDedupeFloor(t, combos, reps)
-		assertUniformLib(t, parent, reps)
+		assertPathIndependent(t, combos)
+		assertUniformLib(t, parent, projects)
 
-		errsByProj = batchLint(t, parent, reps)
+		errsByProj = batchLint(t, parent, projects)
 	}
 
 	for _, c := range combos {
@@ -131,9 +118,9 @@ func TestNextflowLint(t *testing.T) {
 				t.Fatalf("transpile %s under %v: %v", c.fixture, c.flags, c.transpileErr)
 			}
 
-			if errs := errsByProj[repByGroup[c.group]]; len(errs) > 0 {
-				t.Errorf("nextflow lint reported errors for %s under %v (linted as %s):\n%s",
-					c.fixture, c.flags, repByGroup[c.group], strings.Join(errs, "\n"))
+			if errs := errsByProj[c.dir]; len(errs) > 0 {
+				t.Errorf("nextflow lint reported errors for %s under %v:\n%s",
+					c.fixture, c.flags, strings.Join(errs, "\n"))
 			}
 		})
 	}
@@ -146,7 +133,7 @@ type lintCombo struct {
 	flags           []string
 	dir             string // project dir name under parent; the attribution key
 	transpileErr    error
-	group           string // emission content digest; empty on transpile failure
+	digest          string // emission content digest; empty on transpile failure
 }
 
 // transpileLintCombos transpiles every fixture under every lintConfigs flag
@@ -174,59 +161,52 @@ func transpileLintCombos(t *testing.T, parent string) []*lintCombo {
 				continue
 			}
 
-			c.group = treeDigest(t, proj)
+			c.digest = treeDigest(t, proj)
 		}
 	}
 
 	return combos
 }
 
-// dedupeLintCombos groups combos by emission digest and picks the first
-// member's directory as the group's lint representative: byte-identical
-// projects necessarily get identical lint verdicts, so each unique emission
-// is linted exactly once and the verdict fans back out to every member. It
-// returns the representative dir per digest plus the representatives in
-// first-seen (deterministic) order.
-func dedupeLintCombos(combos []*lintCombo) (map[string]string, []string) {
-	repByGroup := map[string]string{}
+// transpiledProjects returns the project dirs of the combos that transpiled,
+// in matrix (deterministic) order.
+func transpiledProjects(combos []*lintCombo) []string {
+	var dirs []string
 
-	var reps []string
+	for _, c := range combos {
+		if c.transpileErr == nil {
+			dirs = append(dirs, c.dir)
+		}
+	}
+
+	return dirs
+}
+
+// assertPathIndependent re-transpiles every combo into a directory of another
+// name and requires a byte-identical emission: an absolute output path, a
+// timestamp or an unstable map order in the emitter's output would change
+// every task's inputs between transpiles of the same pipeline.
+func assertPathIndependent(t *testing.T, combos []*lintCombo) {
+	t.Helper()
+
+	again := t.TempDir()
 
 	for _, c := range combos {
 		if c.transpileErr != nil {
 			continue
 		}
 
-		if _, ok := repByGroup[c.group]; !ok {
-			repByGroup[c.group] = c.dir
-			reps = append(reps, c.dir)
+		proj := filepath.Join(again, c.dir+"__again")
+		if err := transpileInto(repoTools(), filepath.Join(root, "testdata", c.fixture), "pipeline.mro", proj, c.flags...); err != nil {
+			t.Errorf("re-transpile %s under %v: %v", c.fixture, c.flags, err)
+
+			continue
 		}
-	}
 
-	return repByGroup, reps
-}
-
-// assertDedupeFloor asserts the dedupe actually collapses the matrix: unique
-// emissions must stay at or below 80% of the transpiled combos (historically
-// ~50%, so this is a generous floor). The dedupe is the perf win that keeps
-// this gate affordable; if the ratio collapses, path-dependence (absolute
-// paths, timestamps, unstable map ordering) crept into the emitter's output
-// and every "identical" combo silently became its own lint job. That
-// regression must fail the gate loudly, not evaporate into a slower log line.
-func assertDedupeFloor(t *testing.T, combos []*lintCombo, reps []string) {
-	t.Helper()
-
-	transpiled := 0
-
-	for _, c := range combos {
-		if c.transpileErr == nil {
-			transpiled++
+		if got := treeDigest(t, proj); got != c.digest {
+			t.Errorf("%s under %v: the emission into %s differs from the one into %s; it depends on its output path or is not deterministic",
+				c.fixture, c.flags, proj, c.dir)
 		}
-	}
-
-	if len(reps)*5 > transpiled*4 {
-		t.Errorf("dedupe floor breached: %d unique emissions for %d transpiled combos (want <= 80%%); emissions have become path-dependent",
-			len(reps), transpiled)
 	}
 }
 
@@ -259,7 +239,7 @@ var lintEmissionAllowList = []string{
 	"main.nf", "modules", "nextflow.config", "nulls",
 }
 
-// assertUniformLib proves every unique emission ships a byte-identical lib/
+// assertUniformLib proves every emission ships a byte-identical lib/
 // tree. Batch linting resolves the driver-classpath classes (lib/*.groovy)
 // from a single -project-dir, so if a flag ever made lib/ config-dependent,
 // batching would silently lint some projects against the wrong helper
@@ -271,29 +251,29 @@ var lintEmissionAllowList = []string{
 // outside the known emission shape — must be reviewed for whether it affects
 // lint resolution (and this allow-list extended) before the batch verdicts
 // can be trusted again.
-func assertUniformLib(t *testing.T, parent string, reps []string) {
+func assertUniformLib(t *testing.T, parent string, projects []string) {
 	t.Helper()
 
-	want := hashTree(t, filepath.Join(parent, reps[0], "lib"))
+	want := hashTree(t, filepath.Join(parent, projects[0], "lib"))
 
-	for _, rep := range reps[1:] {
-		got := hashTree(t, filepath.Join(parent, rep, "lib"))
+	for _, proj := range projects[1:] {
+		got := hashTree(t, filepath.Join(parent, proj, "lib"))
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Fatalf("lib/ differs between %s and %s; batch lint assumes one shared -project-dir classpath (-%s +%s):\n%s",
-				reps[0], rep, reps[0], rep, diff)
+				projects[0], proj, projects[0], proj, diff)
 		}
 	}
 
-	for _, rep := range reps {
-		entries, err := os.ReadDir(filepath.Join(parent, rep))
+	for _, proj := range projects {
+		entries, err := os.ReadDir(filepath.Join(parent, proj))
 		if err != nil {
-			t.Fatalf("read emission %s: %v", rep, err)
+			t.Fatalf("read emission %s: %v", proj, err)
 		}
 
 		for _, e := range entries {
 			if !slices.Contains(lintEmissionAllowList, e.Name()) {
 				t.Errorf("emission %s has unexpected top-level entry %q; batch lint assumes lib/ is the only project-dir-anchored lint context — review whether nextflow lint resolves it from -project-dir before extending lintEmissionAllowList",
-					rep, e.Name())
+					proj, e.Name())
 			}
 		}
 	}
@@ -346,17 +326,17 @@ type lintDiag struct {
 // whose invocation, JSON parse, or attribution silently broke cannot pass
 // green. Returns error strings keyed by project dir name; projects absent
 // from the map linted clean. Guard verdicts are consumed here, not returned.
-func batchLint(t *testing.T, parent string, reps []string) map[string][]string {
+func batchLint(t *testing.T, parent string, projects []string) map[string][]string {
 	t.Helper()
 
 	errsByProj := map[string][]string{}
 	chunkNum := 0
 
-	for chunk := range slices.Chunk(reps, lintBatchSize-1) {
+	for chunk := range slices.Chunk(projects, lintBatchSize-1) {
 		guard := injectLintGuard(t, parent, chunk[0], chunkNum)
 		chunkNum++
 
-		// slices.Concat, not append: chunk aliases reps' backing array, and
+		// slices.Concat, not append: chunk aliases projects' backing array, and
 		// appending the guard in place would overwrite the next chunk's first
 		// element.
 		lintChunk(t, parent, slices.Concat(chunk, []string{guard}), errsByProj)

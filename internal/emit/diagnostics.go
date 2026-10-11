@@ -50,7 +50,6 @@ func Diagnose(prog *ir.Program, opts Options) []Diagnostic {
 		ds = append(ds, Diagnostic{Severity: SevWarn, Message: w})
 	}
 
-	ds = append(ds, chainDiagnostics(f, pl)...)
 	ds = append(ds, nativeDiagnostics(prog, f, pl)...)
 	ds = append(ds, nativeTargetDiagnostics(prog, f, opts.Target)...)
 
@@ -198,35 +197,4 @@ func HasError(ds []Diagnostic) bool {
 	}
 
 	return false
-}
-
-// chainDiagnostics reports the -fuse-chains trade-off: how many chains fuse (with
-// the coarser-resume caveat), or that the flag had no effect so the user is not
-// misled into thinking it did something.
-func chainDiagnostics(f featureSet, pl emitPlan) []Diagnostic {
-	if !f.fuseChains {
-		return nil
-	}
-
-	fused := 0
-
-	for _, pp := range pl.pipes {
-		for _, cp := range pp.calls {
-			if cp.kind == kindFusedChain {
-				fused++
-			}
-		}
-	}
-
-	if fused == 0 {
-		return []Diagnostic{{
-			Severity: SevInfo,
-			Message:  "-fuse-chains had no effect: no single-consumer, equal-resource source stage qualified",
-		}}
-	}
-
-	return []Diagnostic{{
-		Severity: SevInfo,
-		Message:  fmt.Sprintf("-fuse-chains fused %d chain(s); -resume and per-stage retry granularity is coarser for those stages", fused),
-	}}
 }
