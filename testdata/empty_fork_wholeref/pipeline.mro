@@ -1,0 +1,125 @@
+# #435: a map call that splits the WHOLE ref of a mapped call (`split SCALE`,
+# not `split SCALE.scaled`). The whole ref regroups the merged forks into one
+# struct per fork, so its length is the producer's fork count: when the
+# producer forks over an invocation-known null or empty entry, mrp prunes it
+# and cascades the prune to the consumer (both resolve null). The cascade
+# covers a stage consumer (PAIR) and a sub-pipeline consumer (WRAP); SUM sees
+# the consumer's projection, and the SOME lane forks normally.
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+stage PAIR(
+    in  SCALE item,
+    out int[] pair,
+    src py    "stages/pair",
+)
+
+stage SUM(
+    in  int[][] pairs,
+    out string  seen,
+    src py      "stages/sum",
+)
+
+pipeline WRAP(
+    in  SCALE item,
+    out int   again,
+    out int[] none,
+)
+{
+    call SCALE as AGAIN(
+        value = self.item.scaled,
+    )
+
+    return (
+        again = AGAIN.scaled,
+        none  = null,
+    )
+}
+
+pipeline EFW(
+    in  int[]   nul,
+    in  int[]   emp,
+    in  int[]   some,
+    out int[][] pair_nul,
+    out string  sum_nul,
+    out int[][] none_nul,
+    out int[][] pair_emp,
+    out string  sum_emp,
+    out int[][] none_emp,
+    out int[][] pair_some,
+    out string  sum_some,
+    out int[]   again_some,
+)
+{
+    map call SCALE as S_NUL(
+        value = split self.nul,
+    )
+
+    map call PAIR as P_NUL(
+        item = split S_NUL,
+    )
+
+    call SUM as T_NUL(
+        pairs = P_NUL.pair,
+    )
+
+    map call WRAP as W_NUL(
+        item = split S_NUL,
+    )
+
+    map call SCALE as S_EMP(
+        value = split self.emp,
+    )
+
+    map call PAIR as P_EMP(
+        item = split S_EMP,
+    )
+
+    call SUM as T_EMP(
+        pairs = P_EMP.pair,
+    )
+
+    map call WRAP as W_EMP(
+        item = split S_EMP,
+    )
+
+    map call SCALE as S_SOME(
+        value = split self.some,
+    )
+
+    map call PAIR as P_SOME(
+        item = split S_SOME,
+    )
+
+    call SUM as T_SOME(
+        pairs = P_SOME.pair,
+    )
+
+    map call WRAP as W_SOME(
+        item = split S_SOME,
+    )
+
+    return (
+        pair_nul   = P_NUL.pair,
+        sum_nul    = T_NUL.seen,
+        none_nul   = W_NUL.none,
+        pair_emp   = P_EMP.pair,
+        sum_emp    = T_EMP.seen,
+        none_emp   = W_EMP.none,
+        pair_some  = P_SOME.pair,
+        sum_some   = T_SOME.seen,
+        again_some = W_SOME.again,
+    )
+}
+
+call EFW(
+    nul  = null,
+    emp  = [],
+    some = [
+        1,
+        2,
+    ],
+)

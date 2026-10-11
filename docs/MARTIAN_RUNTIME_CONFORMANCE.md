@@ -177,7 +177,9 @@ empty); all three run in the live mrp differential (`TestMrpDiff`).
 **Value chains and call sites (#127, #241):** the marking follows mrp's
 `KnownLength` propagation across the binding graph — a sub-pipeline split
 chained to an entry value, an in-pipeline `map call B(split A.out)` cascade,
-and a mixed zip (`empty_fork_sub`/`_cascade`/`_mixed`). It is evaluated per
+and a mixed zip (`empty_fork_sub`/`_cascade`/`_mixed`), including a split of
+a mapped call's whole ref into a stage or a sub-pipeline
+(`empty_fork_wholeref`, #435). It is evaluated per
 pipeline instance (`internal/emit/known.go`), and a sub-pipeline whose call
 sites need different marks is emitted once per context, so `SUB` called with
 an invocation-known empty and with a runtime empty gives `null` and `[]`

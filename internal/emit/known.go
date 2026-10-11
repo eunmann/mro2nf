@@ -288,8 +288,10 @@ func (e *knownEval) splitKnown(in *knownInst, c ir.Call) bool {
 // output: the merged collection's size equals the fork count, which is
 // invocation-determined exactly when that call's own split source is (mrp's
 // KnownLength cascade) — its zero-fork merge yields null, and any projection
-// of null stays null. The whole-outs ref of a mapped call is excluded: only a
-// named output projects to the per-fork collection. A composite CONTAINING
+// of null stays null. The whole-outs ref of a mapped call qualifies too (#435):
+// the binder regroups it into one struct per fork, so its length is the fork
+// count — unless the callee has no outputs, whose regroup is always empty. A
+// composite CONTAINING
 // refs (fan-in `[A.out, B.out]`) is rejected even though its static length
 // makes the zero-fork case unreachable today — the guard is structural, not
 // an unstated invariant. A disable gate does not affect known-ness (#383):
@@ -326,7 +328,7 @@ func (e *knownEval) known(in *knownInst, v ir.Value, lenOnly bool) bool {
 	e.ensure(in, c)
 
 	if c.Mapped {
-		return lenOnly && r.Output != "" && in.split[c.Name]
+		return lenOnly && (r.Output != "" || e.hasOutputs(c.Callable)) && in.split[c.Name]
 	}
 
 	sub := in.subs[c.Name]
@@ -336,6 +338,19 @@ func (e *knownEval) known(in *knownInst, v ir.Value, lenOnly bool) bool {
 	}
 
 	return e.returnKnown(sub, r.Output, lenOnly)
+}
+
+// hasOutputs reports whether the named stage or pipeline declares an output.
+func (e *knownEval) hasOutputs(callable string) bool {
+	if s, ok := e.prog.Stages[callable]; ok {
+		return len(s.Out) > 0
+	}
+
+	if p, ok := e.prog.Pipelines[callable]; ok {
+		return len(p.Out) > 0
+	}
+
+	return false
 }
 
 // returnKnown resolves a ref THROUGH a plain sub-pipeline call: the ref's
