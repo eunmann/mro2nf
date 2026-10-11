@@ -5,8 +5,8 @@ package e2e
 // The generative differential (#350): random well-typed Martian programs from
 // test/gen run under real mrp and under mro2nf + Nextflow, and face the same
 // checks TestMrpDiff and TestMrpDiffFailureParity apply to the fixtures: the
-// published tree, the _outs JSON and every stage invocation's _args/_outs
-// when both runs succeed, the run outcome when either fails. A divergence is
+// published tree, the _outs JSON and every stage invocation's _args, _outs
+// and _jobinfo allocation when both runs succeed, the run outcome when either fails. A divergence is
 // shrunk to a minimal program and written as a fixture directory.
 //
 // A generated program is no fixture, so every comparator rule of the

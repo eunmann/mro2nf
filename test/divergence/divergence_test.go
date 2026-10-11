@@ -133,7 +133,7 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"rule of other kind":    `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "collapse-retried-attempts"}}]}`,
 		"rule matched twice":    `{"divergences": [{"id": "a", "kind": "published-tree", ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix"}}, {"id": "b", "kind": "published-tree", ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix"}}]}`,
 		"abi no fixture":        `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": [], "file": "_args", "rule": "ignore-key", "key": "k"}}]}`,
-		"abi bad file":          `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_jobinfo", "rule": "ignore-key", "key": "k"}}]}`,
+		"abi bad file":          `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_stdout", "rule": "ignore-key", "key": "k"}}]}`,
 		"abi unknown rule":      `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ignore", "key": "k"}}]}`,
 		"abi no key":            `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ceil-number", "key": ""}}]}`,
 		"success with failure":  `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": false, "failures": [{"kind": "error", "stage": "S"}]}}]}`,

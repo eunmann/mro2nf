@@ -17,7 +17,7 @@ SCC := go run github.com/boyter/scc/v3@v3.7.0
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
 # a real regression still fails; ratchet it up as coverage grows.
-COVER_MIN ?= 76
+COVER_MIN ?= 87
 .DEFAULT_GOAL := help
 
 help: ## Show this help

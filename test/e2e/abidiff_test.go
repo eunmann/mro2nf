@@ -1,11 +1,12 @@
 package e2e
 
 // The per-stage ABI differential (#348): every stage phase that ran under mrp
-// must have a twin under mro2nf whose _args and _outs are identical after
-// normalization, and vice versa. Invocations are matched as a multiset per
-// (stage, phase) rather than through the task graph, because orchestration
-// between stages is not a contract. This file carries no build tag so its unit
-// tests run under `make test`; mrpdiff_test.go drives it against live runs.
+// must have a twin under mro2nf whose _args, _outs and _jobinfo allocation are
+// identical after normalization, and vice versa. Invocations are matched as a
+// multiset per (stage, phase) rather than through the task graph, because
+// orchestration between stages is not a contract. This file carries no build
+// tag so its unit tests run under `make test`; mrpdiff_test.go drives it
+// against live runs.
 
 import (
 	"bytes"
@@ -33,8 +34,9 @@ const (
 	phaseMain  = "main"
 	phaseJoin  = "join"
 
-	argsFile = "_args"
-	outsFile = "_outs"
+	argsFile    = "_args"
+	outsFile    = "_outs"
+	jobInfoFile = "_jobinfo"
 
 	// mreStageFile is the stage name mre records beside the adapter metadata
 	// (internal/shim stageNameFile).
@@ -52,19 +54,26 @@ var errABIMeta = errors.New("stage metadata")
 // never invoked a stage there.
 var errNoStageInvocation = errors.New("no stage invocation")
 
-// abiInvocation is one stage phase as the stage saw it: its normalized _args
-// and _outs in canonical JSON. Origin locates it for reports only.
+// abiInvocation is one stage phase as the stage saw it: its normalized _args,
+// _outs and _jobinfo allocation in canonical JSON. Origin locates it for
+// reports only.
 type abiInvocation struct {
-	Stage  string
-	Phase  string
-	Args   string
-	Outs   string
-	Origin string
+	Stage   string
+	Phase   string
+	Args    string
+	Outs    string
+	JobInfo string
+	Origin  string
 }
 
 func (inv abiInvocation) group() string { return inv.Stage + " " + inv.Phase }
 
-func (inv abiInvocation) value() string { return inv.Args + "\x00" + inv.Outs }
+func (inv abiInvocation) value() string { return inv.Args + "\x00" + inv.Outs + "\x00" + inv.JobInfo }
+
+// jobInfoAllocation are the _jobinfo keys a stage reads its allocation from:
+// martian.py's get_threads_allocation and get_memory_allocation read threads
+// and memGB, and the Go adapter's GetJobInfo exposes vmemGB as well.
+var jobInfoAllocation = []string{"threads", "memGB", "vmemGB"}
 
 // abiRules are the allowlist entries the ABI comparison of one fixture
 // applies.
@@ -166,6 +175,36 @@ func (n abiNormalizer) normalize(raw []byte) (string, error) {
 	}
 
 	return encodeOrderedJSON(v)
+}
+
+// normalizeAllocation reduces a _jobinfo document to its jobInfoAllocation
+// members, in that order, with number tokens kept: the adapter reads each by
+// key, so the runtimes' member orders are no difference.
+func (n abiNormalizer) normalizeAllocation(raw []byte) (string, error) {
+	v, err := decodeOrderedJSON(raw)
+	if err != nil {
+		return "", fmt.Errorf("decode: %w", err)
+	}
+
+	obj, ok := v.(jsonObject)
+	if !ok {
+		return "", fmt.Errorf("%w: _jobinfo is %T, not an object", errABIMeta, v)
+	}
+
+	var alloc jsonObject
+
+	for _, key := range jobInfoAllocation {
+		if i := slices.IndexFunc(obj, func(m jsonMember) bool { return m.Key == key }); i >= 0 {
+			alloc = append(alloc, obj[i])
+		}
+	}
+
+	kept, err := n.topLevelKeys(alloc)
+	if err != nil {
+		return "", err
+	}
+
+	return encodeOrderedJSON(kept)
 }
 
 // path replaces an absolute path that exists with its content identity plus the
@@ -283,16 +322,17 @@ func hashDirTree(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// readABIInvocation reads and normalizes one phase metadata dir. _args is
-// required (both runtimes write it before the stage runs); a missing _outs is
-// recorded as absent so a phase that writes one on only one side still differs.
+// readABIInvocation reads and normalizes one phase metadata dir. _args and
+// _jobinfo are required (both runtimes write them before the stage runs); a
+// missing _outs is recorded as absent so a phase that writes one on only one
+// side still differs.
 func readABIInvocation(stage, phase, meta string, ownFiles []string, rules abiRules) (abiInvocation, error) {
 	inv := abiInvocation{Stage: stage, Phase: phase, Origin: meta}
 
 	for _, f := range []struct {
 		name string
 		dst  *string
-	}{{argsFile, &inv.Args}, {outsFile, &inv.Outs}} {
+	}{{argsFile, &inv.Args}, {outsFile, &inv.Outs}, {jobInfoFile, &inv.JobInfo}} {
 		raw, err := os.ReadFile(filepath.Join(meta, f.name))
 		if f.name == outsFile && errors.Is(err, fs.ErrNotExist) {
 			*f.dst = absentMeta
@@ -304,7 +344,14 @@ func readABIInvocation(stage, phase, meta string, ownFiles []string, rules abiRu
 			return abiInvocation{}, fmt.Errorf("read %s: %w", f.name, err)
 		}
 
-		norm, err := newABINormalizer(ownFiles, f.name, rules).normalize(raw)
+		n := newABINormalizer(ownFiles, f.name, rules)
+		normalize := n.normalize
+
+		if f.name == jobInfoFile {
+			normalize = n.normalizeAllocation
+		}
+
+		norm, err := normalize(raw)
 		if err != nil {
 			return abiInvocation{}, fmt.Errorf("normalize %s/%s: %w", meta, f.name, err)
 		}
@@ -555,6 +602,7 @@ func diffABIGroup(key string, mrp, nf []abiInvocation) string {
 		for _, f := range []struct{ name, mrp, nf string }{
 			{argsFile, onlyMrp[0].Args, onlyNF[0].Args},
 			{outsFile, onlyMrp[0].Outs, onlyNF[0].Outs},
+			{jobInfoFile, onlyMrp[0].JobInfo, onlyNF[0].JobInfo},
 		} {
 			if d := cmp.Diff(indentJSON(f.mrp), indentJSON(f.nf)); d != "" {
 				fmt.Fprintf(&b, "  %s (-mrp +nextflow):\n%s", f.name, d)

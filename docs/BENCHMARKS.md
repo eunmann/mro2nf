@@ -200,6 +200,9 @@ checks:
   stage task per Martian job, so stage work is neither duplicated nor hidden
   in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make
   test-mrp-diff`, which have mrp) keeps each lane's `mrp_jobs` true to real mrp.
+- **outputs** — the gates above count tasks and bytes, not results:
+  `TestMrpDiff/bench/<fixture>` compares each fixture's narrower-width
+  invocation, in both modes, with real mrp like any testdata fixture.
 
 The intrinsic per-width growth (the stage's own fork/chunk tasks, and stagings
 of a file every fork genuinely consumes) lives in the per-width baseline keys,
