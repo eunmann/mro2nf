@@ -17,6 +17,12 @@ BENCH_UPDATE=1 make bench      # record the current run as the new baseline
 The harness skips cleanly when `nextflow`, `java`, or `python3` is missing, so it
 is a no-op in an environment without them.
 
+Under `E2E_EMITTER=v2` the lanes transpile with `-emitter=v2`, and both
+commands read and record `bench/baseline_v2.json` instead. That emitter has one
+emission mode, so only the base lanes run (no `_native` lanes), and no lane is
+exempt from the scaling gate: every lane must be width-flat. After a change to
+that emitter, re-record with `E2E_EMITTER=v2 BENCH_UPDATE=1 make bench`.
+
 ### Scale tier
 
 ```sh
@@ -183,7 +189,8 @@ checks:
   re-transfer, reintroduced data-plane bookkeeping, or extra task executions.
   Equal is fine; the target is monotone improvement. After a change legitimately
   lowers the numbers, re-record with `BENCH_UPDATE=1 make bench` and commit the
-  new `bench/baseline.json` in the same change, so the gate ratchets downward.
+  new `bench/baseline.json` (`bench/baseline_v2.json` under `E2E_EMITTER=v2`)
+  in the same change, so the gate ratchets downward.
 - **Scaling gate** — lanes that run one fixture at two widths must report an
   *identical* plumbing task count at every width: constant orchestration
   overhead is acceptable, overhead scaling with fork width or chunk count is a
