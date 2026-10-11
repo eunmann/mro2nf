@@ -108,5 +108,5 @@ EOF
 )"
 ```
 
-3. Copilot review: run `.claude/scripts/wait-copilot-review.sh <pr>` in the background, then address its threads with `/address-pr-comments` before the PR is merged.
+3. Optional Copilot review, when the account has quota: run `.claude/scripts/wait-copilot-review.sh <pr>` in the background, then address its threads with `/address-pr-comments` before the PR is merged.
 4. Report the PR URL to the user.
