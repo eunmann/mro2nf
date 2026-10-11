@@ -23,21 +23,30 @@ import (
 // version is set via -ldflags at build time.
 var version = "dev"
 
-// buildVersion is the -ldflags version, else the main module version the Go
-// toolchain stamps: the tag of a `go install …@v`, or for a plain `go build`
-// in a checkout a pseudo-version naming the commit (+dirty when modified).
-// Every task's -resume cache key names it (emit.Options.Version), so an
-// unstamped build must not share one "dev" key across commits.
+// buildVersion names this build in every task's -resume cache key
+// (emit.Options.Version).
 func buildVersion() string {
-	if version != "dev" {
-		return version
+	info, _ := debug.ReadBuildInfo()
+
+	return chooseVersion(version, info)
+}
+
+// chooseVersion is the -ldflags stamp, else the main module version the Go
+// toolchain stamps: the tag of a `go install …@v`, or for a plain `go build`
+// in a clone a pseudo-version naming the commit (+dirty when modified), so
+// unstamped builds of different commits do not share one "dev" key. Go
+// stamps no version ("(devel)") under -buildvcs=false, outside a repository
+// or in a git worktree, and those builds stay "dev".
+func chooseVersion(stamp string, info *debug.BuildInfo) string {
+	if stamp != "dev" {
+		return stamp
 	}
 
-	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+	if info != nil && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		return info.Main.Version
 	}
 
-	return version
+	return stamp
 }
 
 // errUsage is returned when the command-line arguments are invalid.
