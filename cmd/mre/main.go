@@ -22,7 +22,7 @@ import (
 var version = "dev"
 
 var (
-	errUsage        = errors.New("usage: mre <split|main|join|bind|forkbind|merge|gate|publish-layout|entryargs|version> [flags]")
+	errUsage        = errors.New("usage: mre <split|main|join|args|post|outs|bind|forkbind|merge|gate|publish-layout|entryargs|version> [flags]")
 	errUnknownPhase = errors.New("unknown phase")
 	errBadInput     = errors.New("invalid -inputs pair (want id=file)")
 )
@@ -49,32 +49,35 @@ func run(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	switch phase := args[0]; phase {
-	case "version":
+	if args[0] == "version" {
 		// Writing the version line to stdout cannot meaningfully fail.
 		_, _ = fmt.Fprintln(os.Stdout, "mre", version)
 
 		return nil
-	case "split":
-		return runSplit(ctx, args[1:])
-	case "main":
-		return runMain(ctx, args[1:])
-	case "join":
-		return runJoin(ctx, args[1:])
-	case "bind":
-		return runBind(ctx, args[1:])
-	case "forkbind":
-		return runForkBind(ctx, args[1:])
-	case "merge":
-		return runMerge(ctx, args[1:])
-	case "gate":
-		return runGate(ctx, args[1:])
-	case "publish-layout":
-		return runPublishLayout(ctx, args[1:])
-	case "entryargs":
-		return runEntryArgs(ctx, args[1:])
-	default:
-		return fmt.Errorf("%w: %q", errUnknownPhase, phase)
+	}
+
+	cmd, ok := subcommands()[args[0]]
+	if !ok {
+		return fmt.Errorf("%w: %q", errUnknownPhase, args[0])
+	}
+
+	return cmd(ctx, args[1:])
+}
+
+func subcommands() map[string]func(context.Context, []string) error {
+	return map[string]func(context.Context, []string) error{
+		"split":          runSplit,
+		"main":           runMain,
+		"join":           runJoin,
+		"args":           runArgs,
+		"post":           runPost,
+		"outs":           runOuts,
+		"bind":           runBind,
+		"forkbind":       runForkBind,
+		"merge":          runMerge,
+		"gate":           runGate,
+		"publish-layout": runPublishLayout,
+		"entryargs":      runEntryArgs,
 	}
 }
 

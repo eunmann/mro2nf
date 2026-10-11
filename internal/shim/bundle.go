@@ -222,6 +222,13 @@ func mapStrings(v any, fn func(string) (string, error)) (any, error) {
 	}
 }
 
+// IsBundle reports whether dir holds a bundle payload.
+func IsBundle(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, bundleData))
+
+	return err == nil
+}
+
 // ReadBundle loads a bundle directory's payload and rewrites every file marker
 // to an absolute path under the (staged) bundle, so callers see real paths, and
 // restores every escaped value. An empty dir yields nil (an absent optional
