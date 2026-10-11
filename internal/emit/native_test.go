@@ -208,12 +208,6 @@ func TestGenerateNativeMergeFold(t *testing.T) {
 		"-inputs SCALE=merged_SCALE",
 		".out.ref_SCALE_souts, ",
 		".out.ref_SCALE_keys",
-		// #432: the driver tells publish-layout where each staged input lives,
-		// from the same channels fed again unstaged.
-		"    val loc_pargs\n    val loc_SCALE\n",
-		"${Mro2nf.leafLocations(workflow.workDir, ['pipeargs/f': loc_pargs[1], 'souts_SCALE': loc_SCALE])}\nMART_EOF\n",
-		"-leaves f -outs outs -locations locations.json",
-		`_return.json"), SCALE_ALL.out.pargs, SCALE_ALL.out.ref_SCALE_souts)`,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("missing %q in native main.nf:\n%s", want, main)

@@ -76,11 +76,11 @@ func pairMrpGrid(ps string) []any {
 }
 
 // pairOutsJSON is the pipeline_outs.json of publishedPair with stats as its
-// stats value: its grid names a file where its task wrote it in a local work
-// dir, and one by its copy in an object-store work dir.
+// stats value: its grid names each file where its task wrote it, one in a
+// local work dir and one in an object-store work dir.
 func pairOutsJSON(stats string) string {
 	return pairOuts(`[["/nf/work/3f/0123456789abcdef0123456789abcd/main/files/cell.txt", null, `+
-		`"s3://bucket/work/7a/0123456789abcdef0123456789abcd/args/f/L0001/edge.txt"]]`, stats)
+		`"s3://bucket/work/7a/0123456789abcdef0123456789abcd/main/files/edge.txt"]]`, stats)
 }
 
 // pairMrpRelativeJSON is the outs JSON of the pipestance ps of publishedPair

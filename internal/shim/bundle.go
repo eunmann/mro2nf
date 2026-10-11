@@ -490,56 +490,6 @@ func LeafOrigin(abs string) (string, error) {
 	return string(recorded), nil
 }
 
-// StagedLeaves returns the path of each leaf below dir, a bundle's ordinal dir
-// or a bundle dir, as Nextflow stages either into a task.
-func StagedLeaves(dir string) ([]string, error) {
-	ordinals, err := ordinalDirs(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	leaves := make([]string, 0, len(ordinals))
-
-	for _, ordinal := range ordinals {
-		entries, err := os.ReadDir(ordinal)
-		if err != nil {
-			return nil, fmt.Errorf("list leaf dir %s: %w", ordinal, err)
-		}
-
-		for _, e := range entries {
-			if e.Name() != originFile {
-				leaves = append(leaves, filepath.Join(ordinal, e.Name()))
-			}
-		}
-	}
-
-	return leaves, nil
-}
-
-// ordinalDirs returns dir when it is an ordinal dir, else the ordinal dirs of
-// the bundle dir, which has no files subdir when its payload names no file.
-func ordinalDirs(dir string) ([]string, error) {
-	if ordinalDir.MatchString(filepath.Base(dir)) {
-		return []string{dir}, nil
-	}
-
-	entries, err := os.ReadDir(filepath.Join(dir, bundleFiles))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("list leaves of %s: %w", dir, err)
-	}
-
-	ordinals := make([]string, 0, len(entries))
-	for _, e := range entries {
-		ordinals = append(ordinals, filepath.Join(dir, bundleFiles, e.Name()))
-	}
-
-	return ordinals, nil
-}
-
 // leafName returns the basename of the file leaf at src, whose absolute path
 // is abs: the name mrp's stage sees, src being the path mrp would pass. A path
 // ending in "/", "." or ".." names the directory it resolves to.

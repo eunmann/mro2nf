@@ -183,8 +183,7 @@ func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
 // TestLeafOriginIsWhereTheTaskWroteIt guards #432: each leaf records the path
 // its producing task wrote the file at, and a pass-through stage's bundle and
 // the bundle after it keep that path, so the file can be named where it was
-// written. StagedLeaves lists the leaves of a staged bundle and of a staged
-// ordinal dir alike, and none for a bundle that holds no file.
+// written.
 func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
 	dir := t.TempDir()
 	params := []ir.Param{{Name: "f", BaseType: "txt", IsFile: true}}
@@ -199,36 +198,7 @@ func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
 
 	staged := stageBundle(t, pass, filepath.Join(dir, "layout", "in"))
 
-	bundleLeaves, err := shim.StagedLeaves(staged)
-	if err != nil {
-		t.Fatalf("StagedLeaves of a bundle: %v", err)
-	}
-
-	ordinalLeaves, err := shim.StagedLeaves(filepath.Join(staged, "f", "L0000"))
-	if err != nil {
-		t.Fatalf("StagedLeaves of an ordinal dir: %v", err)
-	}
-
-	empty := filepath.Join(dir, "empty")
-	if err := shim.WriteBundle(empty, map[string]any{"n": 1}, nil, fileTable(), nil); err != nil {
-		t.Fatalf("WriteBundle without files: %v", err)
-	}
-
-	emptyLeaves, err := shim.StagedLeaves(empty)
-	if err != nil {
-		t.Fatalf("StagedLeaves of a bundle without files: %v", err)
-	}
-
-	leaf := filepath.Join(staged, "f", "L0000", "a.txt")
-	if diff := cmp.Diff([][]string{{leaf}, {leaf}}, [][]string{bundleLeaves, ordinalLeaves}); diff != "" {
-		t.Errorf("staged leaves (-want +got):\n%s", diff)
-	}
-
-	if len(emptyLeaves) > 0 {
-		t.Errorf("staged leaves of a bundle without files = %q, want none", emptyLeaves)
-	}
-
-	for _, p := range []string{filepath.Join(make1, "f", "L0000", "a.txt"), leaf} {
+	for _, p := range []string{filepath.Join(make1, "f", "L0000", "a.txt"), filepath.Join(staged, "f", "L0000", "a.txt")} {
 		if got, err := shim.LeafOrigin(p); err != nil || got != written {
 			t.Errorf("LeafOrigin(%s) = %q (err %v), want %q", p, got, err, written)
 		}

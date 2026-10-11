@@ -31,15 +31,9 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	dir := fs.String("dir", ".", "directory to write layout.json and pipeline_outs.json")
 	leavesDir := fs.String("leaves", "", "dir of staged leaf files (head-node publish); empty leaves publishing off")
 	outsDir := fs.String("outs", "", "dir to materialise the outs/ tree into for head-node publishDir")
-	locations := fs.String("locations", "", "JSON of the Nextflow work dir and the URI each staged input was staged from")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	loc, err := newLocator(*leavesDir, *locations)
-	if err != nil {
-		return err
 	}
 
 	raw, err := readFile(*sidecar)
@@ -58,7 +52,7 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	}
 
 	pub := newPublisher(man.Structs)
-	pub.loc = loc
+	pub.leaves = *leavesDir
 
 	params, err := man.Params(prod.callable, prod.role)
 	if err != nil {
@@ -255,9 +249,8 @@ type publisher struct {
 	// manifest accumulates one entry per published file leaf for the
 	// machine-readable output index (see manifestEntry).
 	manifest []manifestEntry
-	// loc names a file left unpublished by where its task wrote it; nil
-	// without staged leaves.
-	loc *locator
+	// leaves is the dir of the staged leaves, "" when none are staged.
+	leaves string
 }
 
 // newPublisher returns a publisher over the program's struct table.
@@ -368,8 +361,9 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 
 // unpublishedArray returns the N-D array arr of param p at rel as mrp leaves
 // an element it cannot move: as the stage wrote it, escaped strings restored,
-// except that a file the stage wrote is named where its task wrote it, as
-// mrp's _outs names the file in the stage's dir. A file the stage never wrote
+// except that a file the stage wrote is named where its task wrote it (see
+// origin), as mrp's _outs names the file in the stage's dir. A file the stage
+// never wrote
 // keeps the path it was declared at, which mrp keeps too. It warns once when
 // the array names a file, as mrp prints "Could not move output files".
 func (pub *publisher) unpublishedArray(rel string, p ir.Param, arr []any) (any, error) {
@@ -387,7 +381,7 @@ func (pub *publisher) unpublishedArray(rel string, p ir.Param, arr []any) (any, 
 			return leaf, nil
 		}
 
-		return pub.loc.locate(shim.LeafPath(transport))
+		return pub.origin(shim.LeafPath(transport))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("publish %s: %w", rel, err)
@@ -400,6 +394,37 @@ func (pub *publisher) unpublishedArray(rel string, p ir.Param, arr []any) (any, 
 	}
 
 	return unescape(p.Name, named[p.Name])
+}
+
+// errNoOrigin reports an unpublished file whose producing task's path
+// publish-layout cannot read.
+var errNoOrigin = errors.New("no recorded origin for an unpublished file")
+
+// origin returns the absolute path the producing task recorded beside the
+// staged leaf at leafPath below the files dir. That path is the file's
+// location on a local or shared work dir; a task in a scratch dir records its
+// scratch path (#457). A leaf without a recorded origin would be named in
+// this task's own dir, where no other task holds it, so it fails instead.
+func (pub *publisher) origin(leafPath string) (string, error) {
+	if pub.leaves == "" {
+		return "", fmt.Errorf("%w %s: no staged leaves", errNoOrigin, leafPath)
+	}
+
+	staged, err := filepath.Abs(filepath.Join(pub.leaves, filepath.FromSlash(leafPath)))
+	if err != nil {
+		return "", fmt.Errorf("resolve staged leaf %s: %w", leafPath, err)
+	}
+
+	origin, err := shim.LeafOrigin(staged)
+	if err != nil {
+		return "", fmt.Errorf("name unpublished file %s: %w", leafPath, err)
+	}
+
+	if origin == staged {
+		return "", fmt.Errorf("%w %s", errNoOrigin, leafPath)
+	}
+
+	return origin, nil
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their

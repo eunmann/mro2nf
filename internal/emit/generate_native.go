@@ -202,7 +202,7 @@ func outsFragments(staged bool) outsPublish {
 	op := outsPublish{
 		dir:   "  publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, saveAs: { it.startsWith('outs/') ? it.substring(5) : null }\n",
 		out:   "    path 'outs/*', hidden: true, arity: '0..*', optional: true\n",
-		flags: " -leaves f -outs outs -locations locations.json",
+		flags: " -leaves f -outs outs",
 	}
 	if !staged {
 		op.in = "    path 'f/*', arity: '0..*'\n"
@@ -211,68 +211,27 @@ func outsFragments(staged bool) outsPublish {
 	return op
 }
 
-// stagedInput is a LAYOUT input whose items are bundle leaves or bundles: the
-// val input that receives the same items unstaged, the dir they are staged
-// under, and the channel feeding both. A bundle tuple's items are its second
-// element.
-type stagedInput struct {
-	name, dir, channel string
-	tuple              bool
-}
-
-// locationInputs renders the val inputs of ins.
-func locationInputs(ins []stagedInput) string {
-	var b strings.Builder
-	for _, in := range ins {
-		fmt.Fprintf(&b, "    val %s\n", in.name)
-	}
-
-	return b.String()
-}
-
-// locationsScript renders the script lines that write locations.json, the
-// -locations document of publish-layout: the driver computes it from the
-// unstaged items of ins (Mro2nf.leafLocations), since a task on an
-// object-store work dir runs in a scratch dir and cannot see where its
-// inputs, or its own outputs, live.
-func locationsScript(ins []stagedInput) string {
-	dirs := make([]string, len(ins))
-	for i, in := range ins {
-		items := in.name
-		if in.tuple {
-			items += "[1]"
-		}
-
-		dirs[i] = fmt.Sprintf("'%s': %s", in.dir, items)
-	}
-
-	return fmt.Sprintf("    cat > locations.json <<'MART_EOF'\n${Mro2nf.leafLocations(workflow.workDir, [%s])}\nMART_EOF\n",
-		strings.Join(dirs, ", "))
-}
-
 // genDefaultLayout emits the bundle-mode LAYOUT: it reads the pipeline's return
 // bundle sidecar (produced by a separate return BIND) and computes the outs/
-// layout + manifest. Its one staged input is the return bundle's leaves.
+// layout + manifest.
 func genDefaultLayout(b *strings.Builder, entry string, g genCtx) {
 	op := outsFragments(false)
-	leaves := []stagedInput{{name: "leaf_paths", dir: "f"}}
 
 	fmt.Fprintf(b, `process LAYOUT {
   publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
 %[3]s  input:
     path 'data.json'
     path 'types.json'
-%[4]s%[7]s  output:
+%[4]s  output:
     path 'layout.json', emit: layout
     path 'pipeline_outs.json'
     path 'manifest.json.gz'
 %[5]s  script:
     """
-%[8]s    "%[1]s" publish-layout -sidecar data.json -dir .%[2]s%[6]s
+    "%[1]s" publish-layout -sidecar data.json -dir .%[2]s%[6]s
     """
 }
-`, g.mre, g.producerArgs(entry, types.RoleOut), op.dir, op.in, op.out, op.flags,
-		locationInputs(leaves), locationsScript(leaves))
+`, g.mre, g.producerArgs(entry, types.RoleOut), op.dir, op.in, op.out, op.flags)
 }
 
 // nativeReturnBind returns the entry pipeline whose transform return LAYOUT binds
@@ -301,7 +260,6 @@ func nativeReturnBind(prog *ir.Program, g genCtx) *ir.Pipeline {
 func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g genCtx) {
 	inBlock, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(p.Returns))
 	flags := g.producerArgs(p.Name, types.RoleOut)
-	ins := nativeLayoutInputs(g, p)
 
 	// The return bind moves the leaves into f/ (staged=true), so head-node
 	// publishing needs no extra f/ input — LAYOUT publishes outs/* directly.
@@ -310,7 +268,7 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
 	fmt.Fprintf(b, `process LAYOUT {
   publishDir params.outdir ?: '.', mode: 'copy', enabled: params.outdir != null, pattern: '{pipeline_outs.json,manifest.json.gz}'
 %[6]s  input:
-%[1]s%[9]s  output:
+%[1]s  output:
     path 'layout.json', emit: layout
     path 'pipeline_outs.json'
     path 'manifest.json.gz'
@@ -319,29 +277,10 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
 %[5]s    '%[2]s' bind -spec 'spec.json' -pipeargs pipeargs%[3]s -o args%[4]s
     mv args/data.json data.json
     if [ -d args/f ]; then mv args/f f; fi
-%[10]s    '%[2]s' publish-layout -sidecar data.json -dir .%[4]s%[8]s
+    '%[2]s' publish-layout -sidecar data.json -dir .%[4]s%[8]s
     """
 }
-`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags, locationInputs(ins), locationsScript(ins))
-}
-
-// nativeLayoutInputs lists the native LAYOUT's staged bundle inputs in
-// foldBindInputs' order: the pipeline args, then each returned call's bundle,
-// or its per-fork bundles when its merge folds into LAYOUT.
-func nativeLayoutInputs(g genCtx, p *ir.Pipeline) []stagedInput {
-	ins := []stagedInput{{name: "loc_pargs", dir: "pipeargs/f", channel: "pargs", tuple: true}}
-
-	for _, id := range refCalls(p.Returns) {
-		if _, ok := mergeFoldProducer(g, p, id); ok {
-			ins = append(ins, stagedInput{name: "loc_" + id, dir: "souts_" + id, channel: soutsChan("ref_", id)})
-
-			continue
-		}
-
-		ins = append(ins, stagedInput{name: "loc_" + id, dir: "in_" + id + "/f", channel: "ref_" + id, tuple: true})
-	}
-
-	return ins
+`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags)
 }
 
 // genNativeEntry emits the native workflow (#76 M1): the entry args are baked
@@ -403,7 +342,7 @@ func groovyStringList(items []string) string {
 // call). LAYOUT then materialises and publishes the outs/ tree from the head node
 // itself, so there is no further publish task to wire.
 func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow string, g genCtx) {
-	var refArgs, locArgs strings.Builder
+	var refArgs strings.Builder
 	for _, id := range refCalls(p.Returns) {
 		if _, ok := mergeFoldProducer(g, p, id); ok {
 			fmt.Fprintf(&refArgs, ", %[1]s.out.%[2]s, %[1]s.out.%[3]s",
@@ -415,12 +354,8 @@ func genNativePublishWiring(b *strings.Builder, p *ir.Pipeline, entryWorkflow st
 		fmt.Fprintf(&refArgs, ", %s.out.ref_%s", entryWorkflow, id)
 	}
 
-	for _, in := range nativeLayoutInputs(g, p) {
-		fmt.Fprintf(&locArgs, ", %s.out.%s", entryWorkflow, in.channel)
-	}
-
-	fmt.Fprintf(b, "  LAYOUT(%[1]s.out.pargs%[2]s, types, %[3]s%[4]s)\n",
-		entryWorkflow, refArgs.String(), specFile(bindName(p.Name, "return")), locArgs.String())
+	fmt.Fprintf(b, "  LAYOUT(%[1]s.out.pargs%[2]s, types, %[3]s)\n",
+		entryWorkflow, refArgs.String(), specFile(bindName(p.Name, "return")))
 }
 
 // entryWiring is the per-input wiring genEntry assembles into the entry
@@ -567,10 +502,9 @@ func genPublishWiring(b *strings.Builder, entryWorkflow string) {
 	fmt.Fprintf(b, `  // Publish the final outs/ tree from the head node (no per-leaf task): LAYOUT
   // stages every leaf (a link on a shared filesystem; a stage+publish pass on the
   // s3:// work dir), materialises outs/, and publishDir copies the tree into
-  // place. multiMap splits the final output tuple, and hands LAYOUT the leaves
-  // unstaged too, so the driver can tell it where they live.
-  ep = %[1]s.out.multiMap { s, l -> side: s; leaves: l; paths: l }
-  LAYOUT(ep.side, types, ep.leaves, ep.paths)
+  // place. multiMap splits the final output tuple.
+  ep = %[1]s.out.multiMap { s, l -> side: s; leaves: l }
+  LAYOUT(ep.side, types, ep.leaves)
 `, entryWorkflow)
 }
 

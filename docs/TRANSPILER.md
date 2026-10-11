@@ -413,12 +413,10 @@ published tree matches an mrp pipestance `outs/` (verified by
 `the Go TestMrpDiff suite`); see §10 for where "results" lives on each target.
 
 A file below an array of two or more dimensions is not published, as under mrp
-(#432), and `pipeline_outs.json` names it where its task wrote it: its origin
-(§7) when that lies in the work dir. A task on an object-store work dir runs in
-a scratch dir, so neither it nor LAYOUT can see a work-dir URI; the driver
-writes LAYOUT's `locations.json` (`Mro2nf.leafLocations`: the work dir, and the
-URI each staged input item came from), and such a file is named by the URI of
-its copy that Nextflow staged into LAYOUT.
+(#432), and `pipeline_outs.json` names it where its task wrote it: the origin
+(§7) recorded beside its staged leaf, an absolute path in the work dir on a
+local or shared-filesystem executor. A task that runs in a scratch dir, as on
+an object-store work dir, records its scratch path instead (#457).
 
 ### 4.8 Opt-in emission mode: channel-native orchestration (`-native`)
 

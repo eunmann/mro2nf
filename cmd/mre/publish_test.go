@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -394,12 +395,10 @@ func TestPublishSharedLeafNamesFirstPath(t *testing.T) {
 // TestPublishNDArrayLeavesFilesUnpublished pins #432: below an array of two or
 // more dimensions, whether an output, a struct field or a typed map's value,
 // mrp moves no file, so nothing is published. A file the stage wrote is named
-// where its task wrote it, as mrp's _outs names it in the stage's dir: its
-// origin when that lies in the work dir, else, for a task that ran in a
-// scratch dir, the URI of the copy Nextflow staged into LAYOUT. A file the
-// stage never wrote keeps the path it was declared at, as do null, "" and an
-// escaped string; one warning names each such output, and a 1-D array still
-// publishes.
+// by the origin recorded beside its staged leaf, where its task wrote it, as
+// mrp's _outs names it in the stage's dir. A file the stage never wrote keeps
+// the path it was declared at, as do null, "" and an escaped string; one
+// warning names each such output, and a 1-D array still publishes.
 func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 	params := []ir.Param{
 		{Name: "r12", BaseType: "S0", IsFile: true, ArrayDim: 2},
@@ -420,27 +419,24 @@ func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 		"one":   []any{marker("L0003")},
 	}
 
-	task := t.TempDir()
+	leaves := filepath.Join(t.TempDir(), "f")
 	stageDir := "/nf/work/ab/0123456789abcdef0123456789abcd/main/files/"
-	writeOrdinal(t, filepath.Join(task, "f", "L0000"), stageDir+"a")
-	writeOrdinal(t, filepath.Join(task, "f", "L0001"), stageDir+"cell.txt")
-	writeOrdinal(t, filepath.Join(task, "f", "L0002"), "/tmp/nxf.Q1/main/files/lane.txt")
-	writeOrdinal(t, filepath.Join(task, "in_X", "f", "L0007"), "/tmp/nxf.Q1/main/files/lane.txt")
+	laneDir := "/nf/work/cd/0123456789abcdef0123456789abcd/main/files/"
+	writeOrdinal(t, filepath.Join(leaves, "L0000"), stageDir+"a")
+	writeOrdinal(t, filepath.Join(leaves, "L0001"), stageDir+"cell.txt")
+	writeOrdinal(t, filepath.Join(leaves, "L0002"), laneDir+"lane.txt")
 
 	var warnings strings.Builder
 
 	pub := newPublisher(structs)
 	pub.warn = &warnings
-	pub.loc = &locator{
-		leaves: filepath.Join(task, "f"), task: task, work: "/nf/work",
-		staged: map[string]string{"in_X/f/L0007": "/nf/work/cd/0123456789abcdef0123456789abcd/outs/f/L0007"},
-	}
+	pub.leaves = leaves
 	got := mustPublish(t, pub, params, outs)
 
 	want := map[string]any{
 		"r12":   []any{[]any{types.Object{{Key: "f0", Value: stageDir + "a"}, {Key: "s", Value: marker("L0009")}}}},
 		"grid":  []any{[]any{stageDir + "cell.txt", nil, unwritten, ""}, nil},
-		"lanes": map[string]any{"k": []any{[]any{"/nf/work/cd/0123456789abcdef0123456789abcd/outs/f/L0007/out"}}},
+		"lanes": map[string]any{"k": []any{[]any{laneDir + "lane.txt"}}},
 		"one":   []any{"one/0.txt"},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -461,40 +457,42 @@ func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 // TestPublishLayoutNamesUnpublishedFileByItsTask runs publish-layout as the
 // default LAYOUT does on a 2-D file array that a stage wrote, a return BIND
 // re-bundled and Nextflow staged into LAYOUT, each task in its own work dir:
-// the file is named at the path the stage's task wrote it, or, when that task
-// ran in a scratch dir outside the work dir, at the return BIND's copy Nextflow
-// staged into LAYOUT; never below LAYOUT's own dir.
+// the file is named at the path the stage's task wrote it, never at either
+// copy of it.
 func TestPublishLayoutNamesUnpublishedFileByItsTask(t *testing.T) {
 	work := filepath.Join(t.TempDir(), "work")
-	scratch := filepath.Join(t.TempDir(), "nxf.Q1")
+	stage := filepath.Join(work, "ab", "0123456789abcdef0123456789abcd")
+	bind := filepath.Join(work, "cd", "0123456789abcdef0123456789abcd")
+	layout := filepath.Join(work, "ef", "0123456789abcdef0123456789abcd")
+	written := filepath.Join(stage, "main", "files", "cell.txt")
 
-	for name, stage := range map[string]string{
-		"in_work": filepath.Join(work, "ab", "0123456789abcdef0123456789abcd"),
-		"scratch": scratch,
-	} {
+	writeLeaf(t, written, "cell")
+	gridBundle(t, filepath.Join(stage, "outs"), written)
+	gridBundle(t, filepath.Join(bind, "args"), readTestBundle(t, stageTestBundle(t, filepath.Join(stage, "outs"), filepath.Join(bind, "in")))["grid"])
+	stageTestBundle(t, filepath.Join(bind, "args"), layout)
+
+	if got := publishGrid(t, layout); got != written {
+		t.Errorf("unpublished file named %q, want %q", got, written)
+	}
+}
+
+// TestPublishNDArrayFileWithoutOriginFails checks that a file below an N-D
+// array fails the publish when no origin is recorded beside its staged leaf,
+// or no leaves are staged, rather than naming it in LAYOUT's own dir, where no
+// other task holds it.
+func TestPublishNDArrayFileWithoutOriginFails(t *testing.T) {
+	leaves := filepath.Join(t.TempDir(), "f")
+	writeLeaf(t, filepath.Join(leaves, "L0000", "out"), "cell")
+
+	for name, dir := range map[string]string{"no origin": leaves, "no leaves": ""} {
 		t.Run(name, func(t *testing.T) {
-			written := filepath.Join(stage, "main", "files", "cell.txt")
-			bind := filepath.Join(work, "cd", "0123456789abcdef0123456789abcd")
-			layout := filepath.Join(work, "ef", "0123456789abcdef0123456789abcd")
+			pub := newPublisher(nil)
+			pub.warn = io.Discard
+			pub.leaves = dir
 
-			for _, dir := range []string{stage, bind, layout} {
-				if err := os.RemoveAll(dir); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			writeLeaf(t, written, "cell")
-			gridBundle(t, filepath.Join(stage, "outs"), written)
-			gridBundle(t, filepath.Join(bind, "args"), readTestBundle(t, stageTestBundle(t, filepath.Join(stage, "outs"), filepath.Join(bind, "in")))["grid"])
-			stageTestBundle(t, filepath.Join(bind, "args"), layout)
-
-			want := written
-			if name == "scratch" {
-				want = filepath.Join(bind, "args", "f", "L0000", "cell.txt")
-			}
-
-			if got := publishGrid(t, work, layout, filepath.Join(bind, "args", "f", "L0000")); got != want || strings.HasPrefix(got, layout) {
-				t.Errorf("unpublished file named %q, want %q, outside LAYOUT's dir %s", got, want, layout)
+			_, err := pub.publishOuts(gridParams(), map[string]any{"grid": []any{[]any{marker("L0000")}}})
+			if !errors.Is(err, errNoOrigin) {
+				t.Errorf("publish err = %v, want %v", err, errNoOrigin)
 			}
 		})
 	}
@@ -548,10 +546,9 @@ func stageTestBundle(t *testing.T, src, dst string) string {
 	return dst
 }
 
-// publishGrid runs publish-layout in the LAYOUT task dir layout, whose one
-// staged leaf Nextflow staged from copy, and returns the name
-// pipeline_outs.json gives the grid's file.
-func publishGrid(t *testing.T, work, layout, copied string) string {
+// publishGrid runs publish-layout in the LAYOUT task dir layout and returns
+// the name pipeline_outs.json gives the grid's file.
+func publishGrid(t *testing.T, layout string) string {
 	t.Helper()
 
 	man := types.Manifest{Callables: map[string]types.Callable{"PIPE": {Out: gridParams()}}}
@@ -559,13 +556,11 @@ func publishGrid(t *testing.T, work, layout, copied string) string {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	writeTestFile(t, filepath.Join(layout, "locations.json"),
-		fmt.Sprintf(`{"work": %q, "staged": {"f/L0000": %q}}`, work, copied))
 	t.Chdir(layout)
 
 	argv := []string{
 		"publish-layout", "-types", "types.json", "-callable", "PIPE", "-sidecar", "data.json",
-		"-dir", ".", "-leaves", "f", "-outs", "outs", "-locations", "locations.json",
+		"-dir", ".", "-leaves", "f", "-outs", "outs",
 	}
 	if err := run(t.Context(), argv); err != nil {
 		t.Fatalf("run publish-layout: %v", err)

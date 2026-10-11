@@ -154,10 +154,10 @@ base type, so each element fails to move, is kept as the stage wrote it, and mrp
 prints `Could not move output files`, while its `_outs` names each file at its
 path in the stage's directory, a file the stage never wrote included. `mre
 publish-layout` publishes nothing there either, warns on stderr, and names each
-file the stage wrote where its task wrote it: in the Nextflow work dir, or, for
-a task that ran in a scratch dir, as on an object-store work dir, by the URI of
-its copy there. A file the stage never wrote keeps the path it was declared at,
-as under mrp (allowlist entry `unpublished-file-paths`). Fixture
+file the stage wrote by the absolute path its task recorded for it, in the
+Nextflow work dir (a scratch-dir task's path, as on an object-store work dir,
+is #457). A file the stage never wrote keeps the path it was declared at, as
+under mrp (allowlist entry `unpublished-file-paths`). Fixture
 `nested_path_unpublished`.
 
 ## D. Binding & resolution — faithful (two real divergences)
