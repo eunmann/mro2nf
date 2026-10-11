@@ -50,8 +50,9 @@ func TestMrpCallGraph(t *testing.T) {
 			shardSkip(t)
 
 			tmp := t.TempDir()
-			runMrp(t, bin, tc.name, tmp)
-			newCGReplay(t, tc.name, tmp).run()
+			dir, mro := tc.source()
+			runMrpAt(t, bin, dir, mro, tmp)
+			newCGReplay(t, tc.name, dir, mro, tmp).run()
 		})
 	}
 }
@@ -98,11 +99,10 @@ type replayInstance struct {
 	lens  []int
 }
 
-func newCGReplay(t *testing.T, fixture, tmp string) *cgReplay {
+func newCGReplay(t *testing.T, fixture, dir, entry, tmp string) *cgReplay {
 	t.Helper()
 
-	dir := filepath.Join(root, "testdata", fixture)
-	mro := filepath.Join(dir, "pipeline.mro")
+	mro := filepath.Join(dir, entry)
 
 	g, err := cg.Load(mro, []string{dir})
 	if err != nil {
