@@ -13,6 +13,7 @@ import (
 type Program struct {
 	Seed      uint64      `json:"seed"`
 	Attempt   uint64      `json:"attempt"`
+	Shrunk    bool        `json:"shrunk,omitempty"`
 	FileTypes []string    `json:"filetypes,omitempty"`
 	Structs   []*Struct   `json:"structs,omitempty"`
 	Stages    []*Stage    `json:"stages,omitempty"`
