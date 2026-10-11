@@ -228,17 +228,23 @@ func sliceElements(t *testing.T, collection string, keys []string) []json.RawMes
 
 // TestSplitOfStaticNull pins #436: a SPLIT of a disabled call's bundle (null
 // as a whole), of a call output field or a pipeline args field its bundle
-// records as statically null, counts; a null output of a call that ran, a
-// broadcast binding and an unrecorded self field do not.
+// records as statically null, or of the whole ref to a call its bundle records
+// as pruned, counts; a null output of a call that ran, a whole ref to a call
+// with only null fields, a broadcast binding and an unrecorded self field do
+// not.
 func TestSplitOfStaticNull(t *testing.T) {
 	callOuts := map[string]json.RawMessage{
 		"OFF":    json.RawMessage("null"),
 		"RAN":    json.RawMessage(`{"xs":null}`),
 		"PRUNED": json.RawMessage(`{"xs":null}`),
+		"FIELDS": json.RawMessage(`{"xs":null}`),
 	}
 	nulls := bind.StaticNulls{
-		Pipe:  map[string]bool{"gone": true},
-		Calls: map[string]map[string]bool{"PRUNED": {"xs": true}},
+		Pipe: map[string]bool{"gone": true},
+		Calls: map[string]map[string]bool{
+			"PRUNED": {"xs": true, bind.StaticNullCall: true},
+			"FIELDS": {"xs": true},
+		},
 	}
 	call := func(id, out string, split bool) bind.Entry {
 		return bind.Entry{Ref: &bind.Ref{Kind: "call", ID: id, Output: out}, Split: split}
@@ -255,6 +261,8 @@ func TestSplitOfStaticNull(t *testing.T) {
 		{"split of a disabled call", bind.Spec{"v": call("OFF", "xs", true)}, true},
 		{"split of a disabled call's whole ref", bind.Spec{"v": call("OFF", "", true)}, true},
 		{"split of a recorded output field", bind.Spec{"v": call("PRUNED", "xs.a", true)}, true},
+		{"split of a pruned call's whole ref", bind.Spec{"v": call("PRUNED", "", true)}, true},
+		{"split of a whole ref with only null fields", bind.Spec{"v": call("FIELDS", "", true)}, false},
 		{"split of a recorded args field", bind.Spec{"v": self("gone")}, true},
 		{"split of a ran call's null output", bind.Spec{"v": call("RAN", "xs", true)}, false},
 		{"broadcast of a disabled call", bind.Spec{"v": call("RAN", "xs", true), "w": call("OFF", "xs", false)}, false},
@@ -272,17 +280,23 @@ func TestSplitOfStaticNull(t *testing.T) {
 // TestStaticNullParams pins which bound params a bundle records as
 // statically null: the non-split refs into a static null, sorted.
 func TestStaticNullParams(t *testing.T) {
-	callOuts := map[string]json.RawMessage{"OFF": json.RawMessage("null"), "RAN": json.RawMessage(`{"xs":null}`)}
-	nulls := bind.StaticNulls{Pipe: map[string]bool{"gone": true}}
+	callOuts := map[string]json.RawMessage{
+		"OFF": json.RawMessage("null"), "RAN": json.RawMessage(`{"xs":null}`), "PRUNED": json.RawMessage(`{"xs":null}`),
+	}
+	nulls := bind.StaticNulls{
+		Pipe:  map[string]bool{"gone": true},
+		Calls: map[string]map[string]bool{"PRUNED": {"xs": true, bind.StaticNullCall: true}},
+	}
 	spec := bind.Spec{
 		"z": {Ref: &bind.Ref{Kind: "call", ID: "OFF", Output: "xs"}},
 		"a": {Ref: &bind.Ref{Kind: "self", ID: "gone"}},
+		"w": {Ref: &bind.Ref{Kind: "call", ID: "PRUNED", Fork: bind.ForkArray}},
 		"s": {Ref: &bind.Ref{Kind: "call", ID: "OFF", Output: "xs"}, Split: true},
 		"r": {Ref: &bind.Ref{Kind: "call", ID: "RAN", Output: "xs"}},
 		"l": {Literal: json.RawMessage("null")},
 	}
 
-	if diff := cmp.Diff([]string{"a", "z"}, bind.StaticNullParams(spec, nulls, callOuts)); diff != "" {
+	if diff := cmp.Diff([]string{"a", "w", "z"}, bind.StaticNullParams(spec, nulls, callOuts)); diff != "" {
 		t.Errorf("StaticNullParams mismatch (-want +got):\n%s", diff)
 	}
 }

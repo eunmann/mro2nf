@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/bind"
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -1290,14 +1291,15 @@ func TestRunMergeNullForks(t *testing.T) {
 	}
 }
 
-// TestRunMergeRecordsPrune pins that a zero-fork merge to null records every
-// output as statically null, and a typed-empty merge records none.
+// TestRunMergeRecordsPrune pins that a zero-fork merge to null records the
+// call and every output as statically null, and a typed-empty merge records
+// none.
 func TestRunMergeRecordsPrune(t *testing.T) {
 	for _, tc := range []struct {
 		name, keysJSON string
 		want           []string
 	}{
-		{name: "pruned", keysJSON: `{"count":0,"keys":null,"pruned":true}`, want: []string{"a", "b"}},
+		{name: "pruned", keysJSON: `{"count":0,"keys":null,"pruned":true}`, want: []string{bind.StaticNullCall, "a", "b"}},
 		{name: "runtime empty", keysJSON: `{"count":0,"keys":null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

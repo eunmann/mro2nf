@@ -215,6 +215,13 @@ type StaticNulls struct {
 	Calls map[string]map[string]bool
 }
 
+// StaticNullCall is the field a merged bundle lists, beside its outputs, for
+// a map call mrp prunes to null as a whole: a whole ref to the call is then
+// statically null too, where a call whose outputs alone are null is a struct
+// of nulls. Martian identifiers cannot contain '@', so it never names an
+// output.
+const StaticNullCall = "@call"
+
 // staticNull reports whether e is a ref into a statically null value.
 func (e Entry) staticNull(nulls StaticNulls, callOuts map[string]json.RawMessage) bool {
 	r := e.Ref
@@ -232,8 +239,11 @@ func (e Entry) staticNull(nulls StaticNulls, callOuts map[string]json.RawMessage
 	}
 
 	field, _, _ := strings.Cut(r.Output, ".")
+	if field == "" {
+		field = StaticNullCall
+	}
 
-	return isNullRaw(outs) || (field != "" && nulls.Calls[r.ID][field])
+	return isNullRaw(outs) || nulls.Calls[r.ID][field]
 }
 
 // SplitOfStaticNull reports whether a split binding of spec takes its

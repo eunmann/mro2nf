@@ -559,8 +559,9 @@ and prunes a map call over such a value to `null` where a runtime empty merges
 to the typed empty. At run time a disabled call's bundle is `null` as a whole;
 `mre bind` and `mre forkbind` list each param they bind to such a value (or to
 a field another bundle lists) in `f/staticnull.mro2nf.json`, and `mre merge`
-lists every output of a map call it prunes, so the fact crosses sub-pipeline
-boundaries and cascades. The list sits under `f/` because a de-bundled channel
+lists every output of a map call it prunes and `@call`, which marks a whole
+ref to the call null too, so the fact crosses sub-pipeline boundaries and
+cascades. The list sits under `f/` because a de-bundled channel
 item carries only `data.json` and the `f/*` items.
 
 The basename is the one the leaf's path had where `MarkFiles` found it: the

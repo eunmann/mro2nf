@@ -429,9 +429,9 @@ func runMerge(_ context.Context, argv []string) error {
 	}
 
 	// A map call merged to null this way is the call mrp prunes statically, so
-	// a split of any of its outputs is pruned in turn.
+	// a split of it or of any of its outputs is pruned in turn.
 	if zeroNull {
-		return writeStaticNulls(*outFile, names)
+		return writeStaticNulls(*outFile, append(names, bind.StaticNullCall))
 	}
 
 	return nil

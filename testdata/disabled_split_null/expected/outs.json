@@ -13,5 +13,7 @@
     "pass_on": null,
     "stage_off": [],
     "stage_on": null,
-    "sub_on": null
+    "sub_on": null,
+    "whole_on": null,
+    "whole_sub": null
 }
