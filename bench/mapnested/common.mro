@@ -1,0 +1,48 @@
+filetype txt;
+
+# Benchmark: a nested map. OUTER maps INNER over the samples, and INNER maps
+# CELL over a lane array broadcast unchanged to every sample, so the leaves are
+# the samples x lanes cross product and mrp runs W*W jobs. (testdata's
+# map_pipe_nested splits the inner map over each outer element instead, which
+# mrp rejects.) Run at two widths (pipeline_w2.mro: 2x2, pipeline_w4.mro: 4x4):
+# the plumbing task count must not grow with either dimension; until #255
+# lands it does, which the baseline records as known scaling.
+
+stage CELL(
+    in  int s,
+    in  int l,
+    out txt f,
+    src py  "stages/cell",
+)
+
+pipeline INNER(
+    in  int   s,
+    in  int[] ls,
+    out txt[] fs,
+)
+{
+    map call CELL(
+        s = self.s,
+        l = split self.ls,
+    )
+
+    return (
+        fs = CELL.f,
+    )
+}
+
+pipeline OUTER(
+    in  int[]   ss,
+    in  int[]   ls,
+    out txt[][] fss,
+)
+{
+    map call INNER(
+        s  = split self.ss,
+        ls = self.ls,
+    )
+
+    return (
+        fss = INNER.fs,
+    )
+}

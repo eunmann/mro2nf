@@ -2,7 +2,7 @@
 """Print a benchmark metrics table and gate on data movement and overhead.
 
 Reads the run's metrics (one JSON object per line) and a committed baseline,
-then applies two independent gates:
+then applies three independent gates:
 
   * baseline gate -- per lane, `refs` (the transfer multiplier), `plumbing_tasks`,
     and `tasks` must not exceed the committed baseline: a rise is respectively a
@@ -13,12 +13,18 @@ then applies two independent gates:
     count at every width: constant orchestration overhead is acceptable,
     overhead that scales with fork width or chunk count is a bug (the CLAUDE.md
     overhead rule). This gate compares the current run against itself, so it
-    holds even when re-baselining.
+    holds even when re-baselining. A group whose lanes carry `known_scaling`
+    (the open issue behind its per-fork plumbing) may differ by width — the
+    baseline gate still holds each width at or below its recorded count — but
+    fails once it is flat, so the marker is removed when the issue is fixed.
+  * mrp-jobs gate -- every lane's `stage_tasks` must equal `mrp_jobs`, the
+    jobs real mrp runs for the same invocation: one Nextflow task per Martian
+    job, so stage work is neither duplicated nor hidden in plumbing.
 
 With BENCH_UPDATE=1 it rewrites the baseline from the current run instead of
 gating on it (used to record a new, lower baseline after a data-plane
 improvement lands) — but still refuses to record a baseline that violates the
-scaling gate.
+scaling or mrp-jobs gate, or that raises a known-scaling lane's plumbing.
 """
 import json
 import os
@@ -63,12 +69,13 @@ def load_baseline(path):
 
 
 def fmt(m):
-    # plumb = tasks that add no Martian stage (BIND/FORK/MERGE/DISABLE/PUBLISH/
-    # entry) — the data-plane machinery Nextflow adds beyond Martian's DAG.
+    # plumb = tasks that run no Martian stage phase — the data-plane machinery
+    # Nextflow adds beyond Martian's DAG.
     return (
         f"tasks={m['tasks']:>3} (stage={m.get('stage_tasks', 0):>2} "
-        f"plumb={m.get('plumbing_tasks', 0):>2})  procs={m['processes']:>2}  "
-        f"refs={m['refs']:>3}  mult={m['multiplier']:<6}  wchar={m['wchar_bytes']:>9}"
+        f"plumb={m.get('plumbing_tasks', 0):>2} mrp={m.get('mrp_jobs', '-'):>2})  "
+        f"procs={m['processes']:>2}  refs={m['refs']:>3}  mult={m['multiplier']:<6}  "
+        f"wchar={m['wchar_bytes']:>9}"
     )
 
 
@@ -110,11 +117,72 @@ def check_scaling(cur):
             )
             rc = 1
             continue
-        counts = {n: cur[n]["plumbing_tasks"] for n in groups[g]}
-        if len(set(counts.values())) > 1:
+        rc = check_group(g, {n: cur[n] for n in groups[g]}) or rc
+    return rc
+
+
+def check_group(g, lanes):
+    """Gate one width group's plumbing counts (rc 1 on failure)."""
+    counts = {n: m["plumbing_tasks"] for n, m in lanes.items()}
+    flat = len(set(counts.values())) == 1
+    known = {m.get("known_scaling") for m in lanes.values()}
+    if len(known) > 1:
+        print(f"SCALING[{g}]: widths disagree on known_scaling: {sorted(map(str, known))}")
+        return 1
+    issue = known.pop()
+    if issue is None:
+        if not flat:
             print(
                 f"SCALING[{g}]: plumbing_tasks must be identical at every width "
                 f"(constant overhead only), got {counts}"
+            )
+            return 1
+        return 0
+    if flat:
+        print(
+            f"SCALING[{g}]: marked known_scaling #{issue} but plumbing_tasks is "
+            f"now width-flat {counts}; drop knownScaling from its lanes in "
+            f"test/e2e/bench_test.go and re-record with BENCH_UPDATE=1 make bench"
+        )
+        return 1
+    print(
+        f"KNOWN-SCALING[{g}]: plumbing_tasks grows with width (#{issue}), got "
+        f"{counts}; the baseline gate holds each width at its recorded count"
+    )
+    return 0
+
+
+def check_mrp_jobs(cur):
+    """Fail (rc 1) unless every lane's stage tasks equal mrp's job count."""
+    rc = 0
+    for name in sorted(cur):
+        m = cur[name]
+        if m.get("stage_tasks") != m.get("mrp_jobs"):
+            print(
+                f"MRP-JOBS[{name}]: stage_tasks {m.get('stage_tasks')} != mrp_jobs "
+                f"{m.get('mrp_jobs')}; each Martian job must be exactly one stage "
+                f"task (stage process names: test/e2e/bench_test.go writeStageProcesses)"
+            )
+            rc = 1
+    return rc
+
+
+def check_known_ratchet(cur, base):
+    """Fail (rc 1) if re-recording would raise a known-scaling lane's plumbing.
+
+    Re-recording otherwise writes whatever the run measured, and a scaling
+    lane is exempt from the flatness check, so this is what keeps its per-fork
+    plumbing from growing through BENCH_UPDATE=1.
+    """
+    rc = 0
+    for name in sorted(cur):
+        b = base.get(name)
+        if "known_scaling" not in cur[name] or b is None:
+            continue
+        if cur[name]["plumbing_tasks"] > b["plumbing_tasks"]:
+            print(
+                f"KNOWN-SCALING[{name}]: plumbing_tasks {cur[name]['plumbing_tasks']} "
+                f"> baseline {b['plumbing_tasks']}; known scaling may not get worse"
             )
             rc = 1
     return rc
@@ -161,8 +229,11 @@ def main():
     cur = load_jsonl(metrics_path)
 
     if os.environ.get("BENCH_UPDATE") == "1":
-        if check_scaling(cur):
-            print("refusing to record a baseline that violates the scaling gate")
+        bad = check_scaling(cur)
+        bad = check_mrp_jobs(cur) or bad
+        bad = check_known_ratchet(cur, load_baseline(baseline_path)) or bad
+        if bad:
+            print("refusing to record a baseline that violates a gate above")
             return 1
         with open(baseline_path, "w") as h:
             json.dump({k: cur[k] for k in sorted(cur)}, h, indent=2)
@@ -174,10 +245,12 @@ def main():
 
     rc = check_baseline(cur, load_baseline(baseline_path))
     rc = check_scaling(cur) or rc
+    rc = check_mrp_jobs(cur) or rc
     if rc == 0:
         print(
             "OK: no regression vs baseline (refs/plumbing_tasks/tasks); "
-            "plumbing is width-flat"
+            "plumbing is width-flat outside known-scaling groups; "
+            "stage tasks equal mrp jobs"
         )
     return rc
 

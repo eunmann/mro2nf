@@ -4,15 +4,21 @@ package e2e
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/eunmann/mro2nf/internal/emit"
+	"github.com/eunmann/mro2nf/internal/frontend"
 )
 
 // benchLane is one benchmark run: a fixture invocation (dir + entry .mro)
@@ -24,25 +30,52 @@ type benchLane struct {
 	mro       string // entry invocation .mro within dir
 	probe     string // marker string the fixture's probe file carries
 	producers int    // how many tasks legitimately write the probe file
-	native    bool   // transpile with -native
+	// mrpJobs is the number of jobs real mrp runs for this invocation, which
+	// the lane's stage tasks must equal (TestMrpDiffBenchJobs checks the
+	// number against mrp itself).
+	mrpJobs int
+	// knownScaling is the open issue whose per-fork plumbing makes this
+	// lane's plumbing grow with width; 0 when the lane must be width-flat.
+	knownScaling int
+	native       bool // transpile with -native
 }
 
-// benchLanes returns every benchmark lane: each fixture invocation in default
-// mode and again under -native (distinct `_native` baseline keys). The forks
-// and split fixtures run at two widths (N=4 / N=16 forks, 4 / 16 chunks) so
-// bench_report.py can assert the plumbing task count is IDENTICAL at both —
-// the CLAUDE.md overhead rule that orchestration cost must not scale with
-// fork width or chunk count. The forks×widths×native lanes are the ones that
-// prove the -native O(1) element scatter stays O(1).
-func benchLanes() []benchLane {
-	base := []benchLane{
-		{key: "chain", dir: "chain", mro: "pipeline.mro", probe: "MRE_BENCH_CHAIN_PROBE", producers: 1},
-		{key: "forks_w4", dir: "forks", mro: "pipeline_w4.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1},
-		{key: "forks_w16", dir: "forks", mro: "pipeline_w16.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1},
-		{key: "split_c4", dir: "split", mro: "pipeline_c4.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1},
-		{key: "split_c16", dir: "split", mro: "pipeline_c16.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1},
-	}
+// issuePerForkPlumbing tracks the per-fork BIND_K/MERGE_K/DISABLE_K tasks a
+// map over a sub-pipeline emits (#255).
+const issuePerForkPlumbing = 255
 
+// benchBaseLanes returns each fixture invocation once, in default mode. Every
+// fixture but chain runs at two widths so bench_report.py can assert the
+// plumbing task count is IDENTICAL at both — the CLAUDE.md overhead rule that
+// orchestration cost must not scale with fork width or chunk count — or, for
+// a lane marked knownScaling, that it has not got worse.
+func benchBaseLanes() []benchLane {
+	const known = issuePerForkPlumbing
+
+	return []benchLane{
+		{key: "chain", dir: "chain", mro: "pipeline.mro", probe: "MRE_BENCH_CHAIN_PROBE", producers: 1, mrpJobs: 5},
+		{key: "forks_w4", dir: "forks", mro: "pipeline_w4.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1, mrpJobs: 1 + 4},
+		{key: "forks_w16", dir: "forks", mro: "pipeline_w16.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1, mrpJobs: 1 + 16},
+		{key: "split_c4", dir: "split", mro: "pipeline_c4.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1, mrpJobs: 4 + 2},
+		{key: "split_c16", dir: "split", mro: "pipeline_c16.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1, mrpJobs: 16 + 2},
+		// N samples, each a split of 2 chunks: split + 2 mains + join per sample.
+		{key: "mapsplit_w4", dir: "mapsplit", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPSPLIT_PROBE", producers: 4, mrpJobs: 4 * 4, knownScaling: known},
+		{key: "mapsplit_w8", dir: "mapsplit", mro: "pipeline_w8.mro", probe: "MRE_BENCH_MAPSPLIT_PROBE", producers: 8, mrpJobs: 8 * 4, knownScaling: known},
+		// The disabled USE runs no job, so mrp runs only each fork's MKFILE.
+		{key: "mapdisabled_w4", dir: "mapdisabled", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPDISABLED_PROBE", producers: 4, mrpJobs: 4, knownScaling: known},
+		{key: "mapdisabled_w8", dir: "mapdisabled", mro: "pipeline_w8.mro", probe: "MRE_BENCH_MAPDISABLED_PROBE", producers: 8, mrpJobs: 8, knownScaling: known},
+		// W samples x W lanes leaves, one CELL job each.
+		{key: "mapnested_w2", dir: "mapnested", mro: "pipeline_w2.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 2 * 2, mrpJobs: 2 * 2, knownScaling: known},
+		{key: "mapnested_w4", dir: "mapnested", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 4 * 4, mrpJobs: 4 * 4, knownScaling: known},
+	}
+}
+
+// benchLanes returns every benchmark lane: each base lane in default mode and
+// again under -native (distinct `_native` baseline keys). The forks×widths×
+// native lanes are the ones that prove the -native O(1) element scatter stays
+// O(1).
+func benchLanes() []benchLane {
+	base := benchBaseLanes()
 	lanes := make([]benchLane, 0, 2*len(base))
 
 	for _, l := range base {
@@ -61,8 +94,9 @@ func benchLanes() []benchLane {
 // with tracing, bench_metrics.py measures the probe-file staging count and
 // the task/plumbing shape, and bench_report.py gates refs, plumbing_tasks,
 // and tasks against bench/baseline.json — plus the width-scaling invariant
-// that plumbing_tasks is identical across a fixture's widths (BENCH_UPDATE=1
-// records a new baseline; BENCH_PROFILE/BENCH_WORKDIR select another backend).
+// that plumbing_tasks is identical across a fixture's widths, and that each
+// lane's stage tasks equal mrp's job count (BENCH_UPDATE=1 records a new
+// baseline; BENCH_PROFILE/BENCH_WORKDIR select another backend).
 func TestBench(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
@@ -150,11 +184,18 @@ func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 		t.Fatalf("bench %s: %v", l.key, err)
 	}
 
+	stages, err := writeStageProcesses(dir, l.mro, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var out, errBuf bytes.Buffer
 
 	cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
-		l.key, filepath.Join(proj, "trace.txt"), scanRoot, l.probe,
-		strconv.Itoa(l.producers), filepath.Join(proj, "dag.mmd"))
+		"--name", l.key, "--trace", filepath.Join(proj, "trace.txt"), "--workdir", scanRoot,
+		"--probe", l.probe, "--producers", strconv.Itoa(l.producers),
+		"--stages", stages, "--dag", filepath.Join(proj, "dag.mmd"),
+		"--mrp-jobs", strconv.Itoa(l.mrpJobs), "--known-scaling", strconv.Itoa(l.knownScaling))
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 
@@ -163,6 +204,102 @@ func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 	}
 
 	return out.Bytes()
+}
+
+// writeStageProcesses writes, as a JSON array under tmp, every process name
+// the emitter can give a task that runs a stage's own code in the program of
+// dir/mro, and returns the file's path. These are the names the emit package
+// inventories for override selectors: per stage the plain family, and per
+// pipeline call the fused family and the keyed element scatter, qualified as
+// emit's qualify() does. bench_metrics.py counts every other task as
+// plumbing, so a new helper process is plumbing without being listed; a drift
+// in these names shows as stage tasks that no longer match mrp's job count.
+func writeStageProcesses(dir, mro, tmp string) (string, error) {
+	mroPath := []string{dir}
+
+	ast, err := frontend.Parse(filepath.Join(dir, mro), mroPath, false)
+	if err != nil {
+		return "", fmt.Errorf("parse %s: %w", mro, err)
+	}
+
+	prog, err := frontend.Lower(ast, mroPath)
+	if err != nil {
+		return "", fmt.Errorf("lower %s: %w", mro, err)
+	}
+
+	var names []string
+
+	for stage := range prog.Stages {
+		for _, s := range emit.PlainStageSuffixes() {
+			names = append(names, stage+s)
+		}
+	}
+
+	for _, p := range prog.Pipelines {
+		for _, c := range p.Calls {
+			q := strconv.Itoa(len(p.Name)) + "_" + p.Name + "__" + c.Name
+
+			for _, s := range emit.FusedCallSuffixes() {
+				names = append(names, "STAGE_"+q+s)
+			}
+
+			for _, s := range emit.ScatterCallSuffixes() {
+				names = append(names, "FORK_"+q+s)
+			}
+		}
+	}
+
+	slices.Sort(names)
+
+	data, err := json.Marshal(names)
+	if err != nil {
+		return "", fmt.Errorf("encode stage processes: %w", err)
+	}
+
+	path := filepath.Join(tmp, "stage_processes.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", fmt.Errorf("write stage processes: %w", err)
+	}
+
+	return path, nil
+}
+
+// TestMrpDiffBenchJobs runs every bench invocation under real mrp and
+// requires its job count to equal the lane's mrpJobs, the number TestBench
+// holds the lane's stage tasks to. mrp writes one _jobinfo per job (each
+// split, chunk and join of a split stage; one per non-split stage fork; none
+// for a disabled call).
+func TestMrpDiffBenchJobs(t *testing.T) {
+	t.Parallel()
+
+	bin := martianBin(t)
+
+	for _, l := range benchBaseLanes() {
+		t.Run(l.key, func(t *testing.T) {
+			t.Parallel()
+			shardSkip(t)
+
+			tmp := t.TempDir()
+			runMrpAt(t, bin, filepath.Join(root, "bench", l.dir), l.mro, tmp)
+
+			jobs := 0
+
+			err := filepath.WalkDir(filepath.Join(tmp, "mrp"), func(_ string, d fs.DirEntry, err error) error {
+				if err == nil && !d.IsDir() && d.Name() == "_jobinfo" {
+					jobs++
+				}
+
+				return err
+			})
+			if err != nil {
+				t.Fatalf("walk pipestance: %v", err)
+			}
+
+			if jobs != l.mrpJobs {
+				t.Errorf("mrp ran %d jobs for %s/%s, lane %s declares mrpJobs %d", jobs, l.dir, l.mro, l.key, l.mrpJobs)
+			}
+		})
+	}
 }
 
 // errNonLocalWorkdir rejects a BENCH_WORKDIR on an object store, where the

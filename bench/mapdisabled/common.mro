@@ -1,0 +1,59 @@
+filetype txt;
+
+# Benchmark: a map call over a sub-pipeline whose body holds a DISABLED call.
+# Each fork runs MKFILE; USE is disabled in every fork, so mrp runs N jobs.
+# Run at two widths (pipeline_w4.mro, pipeline_w8.mro): the plumbing task count
+# must not grow with N; until #255 lands the per-fork keyed disable gate and
+# bind do, which the baseline records as known scaling.
+
+stage MKFILE(
+    in  int x,
+    out txt f,
+    src py  "stages/mkfile",
+)
+
+stage USE(
+    in  txt f,
+    out int n,
+    src py  "stages/use",
+)
+
+pipeline INNER(
+    in  int  x,
+    in  bool skip,
+    out txt  f,
+    out int  n,
+)
+{
+    call MKFILE(
+        x = self.x,
+    )
+
+    call USE(
+        f = MKFILE.f,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        f = MKFILE.f,
+        n = USE.n,
+    )
+}
+
+pipeline OUTER(
+    in  int[] xs,
+    out txt[] fs,
+    out int[] ns,
+)
+{
+    map call INNER(
+        x    = split self.xs,
+        skip = true,
+    )
+
+    return (
+        fs = INNER.f,
+        ns = INNER.n,
+    )
+}

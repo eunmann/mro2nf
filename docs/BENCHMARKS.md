@@ -43,7 +43,7 @@ logs or a wrapping proxy and is out of scope here (see below).
 
 ## Fixtures and lanes
 
-Three fixtures live under `bench/`, exercising the costly patterns the epic and
+Six fixtures live under `bench/`, exercising the costly patterns the epic and
 the overhead rule target:
 
 - **`chain`** — one file (`MAKEBIG`) carried through a deep chain of pass-through
@@ -62,6 +62,18 @@ the overhead rule target:
   consumer-aware split staging, #15). Run at two chunk counts
   (`pipeline_c4.mro`, `pipeline_c16.mro`) with the same width-flat plumbing
   requirement.
+- **`mapsplit`** — the Cell Ranger per-sample shape: a map call over a
+  sub-pipeline whose body is a split stage writing one file per sample
+  (`pipeline_w4.mro`, `pipeline_w8.mro` samples).
+- **`mapdisabled`** — a map call over a sub-pipeline whose body holds a call
+  disabled in every fork (`pipeline_w4.mro`, `pipeline_w8.mro`).
+- **`mapnested`** — a nested map: samples × a broadcast lane array, W×W leaves
+  (`pipeline_w2.mro`, `pipeline_w4.mro`). testdata's `map_pipe_nested` splits
+  the inner map over each outer element instead, which mrp rejects.
+
+The three map-over-sub-pipeline fixtures still emit per-fork keyed
+BIND/MERGE/DISABLE tasks (#255), so their lanes carry `known_scaling: 255`
+(see the scaling gate below).
 
 Every fixture invocation runs as two lanes: transpiled with default (bundle)
 orchestration, and again with `-native` under a distinct `_native` baseline key,
@@ -76,7 +88,8 @@ reporting with a direct probe-file measurement:
 | metric       | source | meaning |
 |--------------|--------|---------|
 | `tasks`      | `-with-trace` rows | task executions |
-| `plumbing_tasks` / `stage_tasks` | trace, split by process name | tasks that add no Martian stage work (`BIND_*`/`FORK_*`/`MERGE_*`/`DISABLE_*`, `BUILD_ENTRY_ARGS`, `LAYOUT`, `PUBLISH_LEAF`) vs. real stage tasks |
+| `plumbing_tasks` / `stage_tasks` | trace, split by process name | stage tasks are those of a stage-phase process — the names the emitter gives a task that runs a stage's own code (`emit.PlainStageSuffixes`/`FusedCallSuffixes`/`ScatterCallSuffixes` over the lane's lowered program); every other task is plumbing |
+| `mrp_jobs`   | lane table, checked against real mrp | jobs mrp runs for the same invocation (`TestMrpDiffBenchJobs` counts its `_jobinfo` files) |
 | `processes`  | trace `name` (chunk tags collapsed) | distinct processes |
 | `plumbing_processes` / `stage_processes` / `plumbing` | same split | distinct plumbing vs. stage processes, and the plumbing names seen |
 | `edges`      | `-with-dag` mermaid | static process wiring (BIND nodes show here) |
@@ -91,7 +104,7 @@ every on-disk staging/materialization is locatable.
 
 ## The gates
 
-`make bench` (`test/e2e/bench_report.py`) fails on either of two independent
+`make bench` (`test/e2e/bench_report.py`) fails on any of three independent
 checks:
 
 - **Baseline gate** — per lane, `refs`, `plumbing_tasks`, and `tasks` must not
@@ -105,7 +118,17 @@ checks:
   overhead is acceptable, overhead scaling with fork width or chunk count is a
   bug. This gate compares the current run against itself (not the baseline), so
   it holds even under `BENCH_UPDATE=1` — the harness refuses to record a
-  baseline that violates it.
+  baseline that violates it. A lane whose `knownScaling` (in
+  `test/e2e/bench_test.go`, recorded as `known_scaling` in the baseline) names
+  an open issue is exempt while its plumbing still differs by width: the
+  baseline gate holds each width at its recorded count, and `BENCH_UPDATE=1`
+  refuses to record a higher one. Once the group is width-flat the gate fails
+  until the marker is dropped, so fixing the issue turns the lane into an
+  ordinary flat-gated one.
+- **mrp-jobs gate** — every lane's `stage_tasks` must equal `mrp_jobs`: one
+  stage task per Martian job, so stage work is neither duplicated nor hidden
+  in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make
+  test-mrp-diff`, which have mrp) keeps each lane's `mrp_jobs` true to real mrp.
 
 The intrinsic per-width growth (the stage's own fork/chunk tasks, and stagings
 of a file every fork genuinely consumes) lives in the per-width baseline keys,
@@ -118,8 +141,8 @@ and compare against these shapes.
 ## Baseline (local executor)
 
 `bench/baseline.json` is the machine source of truth for the current numbers —
-one entry per lane (`chain`, `forks_w4`, `split_c16`, …, plus their `_native`
-counterparts). For scale: the pre-epic bundle-copy design measured a ×11.0
+one entry per lane (`chain`, `forks_w4`, `split_c16`, `mapsplit_w8`, …, plus
+their `_native` counterparts). For scale: the pre-epic bundle-copy design measured a ×11.0
 transfer multiplier on `chain` and ×21.0 on `split`; the epic nearly halved
 chain's, while split's residual (the payload staged to every chunk) is the
 acknowledged floor pending consumer-aware split staging (#15). The `-native`
