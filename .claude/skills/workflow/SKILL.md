@@ -75,10 +75,11 @@ Run `/review-loop`: one full review of the branch, then checks of its own fixes,
 2. Open the PR (`/create-pr`).
 3. **Before merging**, in this order:
    1. `/review-loop` has finished on the branch.
-   2. Copilot has reviewed the PR's current head. Run `.claude/scripts/wait-copilot-review.sh <pr>` in the background (it requests the review if needed and notifies once it lands; reviews take a few minutes); don't poll by hand.
-   3. Every Copilot thread is addressed with `/address-pr-comments`.
-   4. PR Validation (lint, build, unit tests, both e2e suites, lint-nf, bench) is green on the final head. Branch protection requires the branch to be up to date with `main`, so update it after another PR lands.
-   5. Merge with `gh pr merge --squash --delete-branch`, or enable auto-merge (`gh pr merge --auto --squash`) once steps 1–3 are done. Never push directly to `main`.
+   2. Every open review thread (from a person, or from an optional Copilot review) is addressed with `/address-pr-comments`.
+   3. PR Validation (lint, build, unit tests, both e2e suites, lint-nf, bench) is green on the final head. Branch protection requires the branch to be up to date with `main`, so update it after another PR lands.
+   4. Merge with `gh pr merge --squash --delete-branch`, or enable auto-merge (`gh pr merge --auto --squash`) once steps 1–2 are done. Never push directly to `main`.
+
+   A Copilot review is optional, since `/review-loop` is the required review. When the account has Copilot quota, `.claude/scripts/wait-copilot-review.sh <pr>`, run in the background, requests one and notifies once it lands.
 4. After merge, remove the worktree and delete the local branch: `git worktree remove ../wt-<short-name>` and `git branch -d feature/<short-name>`.
 
 ## Working Multiple Issues / PRs at Once

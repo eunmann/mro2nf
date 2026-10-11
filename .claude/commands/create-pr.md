@@ -1,11 +1,11 @@
 ---
-description: Push branch, create a pull request, and request Copilot review. Use when your work is committed and ready for PR.
+description: Push branch, create a pull request, and optionally request a Copilot review. Use when your work is committed and ready for PR.
 allowed-tools: Bash(git push:*), Bash(gh pr create:*), Bash(.claude/scripts/wait-copilot-review.sh:*), Bash(gh pr edit:*), Bash(git log:*), Bash(git diff:*), Bash(git branch:*), Bash(git merge-base:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(git status:*), Bash(git add:*), Bash(git commit:*)
 ---
 
 # Create Pull Request
 
-Push the current branch, open a PR, and request a Copilot review.
+Push the current branch, open a PR, and optionally request a Copilot review.
 
 ## Current State
 
@@ -49,6 +49,6 @@ EOF
 )"
 ```
 
-3. **Copilot review**: run `.claude/scripts/wait-copilot-review.sh <pr>` in the background; when it reports, address the threads with `/address-pr-comments` (the `workflow` skill's Before merging steps).
+3. **Copilot review (optional)**: when the account has Copilot quota, run `.claude/scripts/wait-copilot-review.sh <pr>` in the background; when it reports, address the threads with `/address-pr-comments` (the `workflow` skill's Before merging steps).
 
 4. **Report** the PR URL to the user.
