@@ -546,7 +546,8 @@ class Resources:
 
 
 def _as_float(v):
-    """Ports shim asFloat: non-numeric (or out-of-range) values become 0."""
+    """Decode a resource field of an object mre or the runner wrote:
+    non-numeric (or out-of-range) values become 0."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return 0.0
     f = float(v)
@@ -555,21 +556,41 @@ def _as_float(v):
     return f
 
 
+# The split-returned resource keys in the order mrp's updateFromLazyArgs (and
+# meta.go parseResources) checks them, so an error names the key mrp's does.
+_RESOURCE_KEYS = (("__threads", "threads"), ("__mem_gb", "mem_gb"),
+                  ("__vmem_gb", "vmem_gb"), ("__special", "special"))
+
+
+def _resource_value(key, val):
+    """Decode one split-returned resource value as Go's json.Unmarshal into
+    the field's type does: null is unset, and any other JSON type, or a number
+    past float64's range, fails the split as it does under mrp."""
+    val = _numpy_native(val)
+    if key == "__special":
+        if val is None or isinstance(val, str):
+            return val or ""
+        want = "a string"
+    else:
+        if val is None:
+            return 0.0
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            try:
+                return float(val)
+            except OverflowError:
+                pass
+        want = "a float64 number"
+    raise RunnerError("invalid resource value: %s = %.80r: want %s"
+                      % (key, val, want))
+
+
 def split_resources(m):
     """Ports parseResources: split __-prefixed resource keys from data args."""
     res = Resources()
-    args = {}
-    for key, val in m.items():
-        if key == "__threads":
-            res.threads = _as_float(val)
-        elif key == "__mem_gb":
-            res.mem_gb = _as_float(val)
-        elif key == "__vmem_gb":
-            res.vmem_gb = _as_float(val)
-        elif key == "__special":
-            res.special = val if isinstance(val, str) else ""
-        else:
-            args[key] = val
+    args = dict(m)
+    for key, attr in _RESOURCE_KEYS:
+        if key in args:
+            setattr(res, attr, _resource_value(key, args.pop(key)))
     return res, args
 
 
@@ -1376,17 +1397,32 @@ def parse_stage_defs(result):
     if not isinstance(chunks, list):
         raise RunnerError("parse _stage_defs: chunks must be an array")
     defs = []
-    for c in chunks:
+    for i, c in enumerate(chunks):
         if not isinstance(c, dict):
             raise RunnerError("parse _stage_defs: each chunk must be an object")
-        defs.append(split_resources(c))
-    join = result.get("join")
-    join_res = Resources()
-    if isinstance(join, dict):
-        join_res, _ = split_resources(join)
-    elif join is not None:
+        try:
+            defs.append(split_resources(c))
+        except RunnerError as err:
+            raise RunnerError("parse _stage_defs: chunk %d: %s" % (i, err)) from None
+    return defs, _join_override(result.get("join"))
+
+
+def _join_override(join):
+    """Ports the join half of meta.go readStageDefs: the override carries only
+    resource keys, and mrp fails the split on any other ("Invalid parameter in
+    join definition")."""
+    if join is None:
+        return Resources()
+    if not isinstance(join, dict):
         raise RunnerError("parse _stage_defs: join override must be an object")
-    return defs, join_res
+    try:
+        join_res, extra = split_resources(join)
+    except RunnerError as err:
+        raise RunnerError("parse _stage_defs: join override: %s" % err) from None
+    if extra:
+        raise RunnerError("unknown key in join override: %s"
+                          % ", ".join(sorted(extra)))
+    return join_res
 
 
 def chunk_defs_doc(defs):
