@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -28,6 +29,10 @@ type ArgsSpec struct {
 	Manifest types.Manifest
 	// Out is the args bundle dir. A disabled instance gets only its stamp.
 	Out string
+	// Log receives the error of each input that read a missing element and
+	// resolved to null, which mrp logs before it runs the fork. Nil discards
+	// it.
+	Log io.Writer
 }
 
 // WriteArgs resolves the instance's disabled state and, when it runs, its
@@ -56,8 +61,12 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 	}
 
 	if !in.Disabled {
-		args, err := r.args(st, fork)
+		args, unresolved, err := r.args(st, fork)
 		if err != nil {
+			return Instance{}, err
+		}
+
+		if err := reportUnresolved(spec.Log, in, unresolved); err != nil {
 			return Instance{}, err
 		}
 
@@ -67,6 +76,28 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 	}
 
 	return in, writeInstance(spec.Out, in)
+}
+
+// reportUnresolved handles the inputs of in that read a missing element as
+// mrp's getBindings does (core/stage.go:1402-1440): they fail the instance
+// under the error enforcement level, and are logged otherwise.
+func reportUnresolved(log io.Writer, in Instance, unresolved []error) error {
+	if len(unresolved) == 0 {
+		return nil
+	}
+
+	err := fmt.Errorf("resolve input bindings for %s at fork %s: %w", in.Node, in.Fork, errors.Join(unresolved...))
+	if syntax.GetEnforcementLevel() == syntax.EnforceError {
+		return err
+	}
+
+	if log != nil {
+		if _, werr := fmt.Fprintln(log, err); werr != nil {
+			return fmt.Errorf("log unresolved inputs: %w", werr)
+		}
+	}
+
+	return nil
 }
 
 // instanceFork assembles the instance's fork root by root from the parts

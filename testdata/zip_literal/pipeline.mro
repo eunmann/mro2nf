@@ -1,0 +1,78 @@
+# Map calls that zip a split over a stage output with a split over a literal.
+# The literal's known length fixes the forks (syntax MergeMapCallSources makes
+# it the call's master source), and the stage output reads null past its end
+# and drops its extra elements. INNER_* also fork a sub-pipeline that way and
+# split its literal parameter again inside.
+stage EMIT(
+    in  int[] vals,
+    out int[] xs,
+    src py    "stages/emit",
+)
+
+stage PAIR(
+    in  int    a,
+    in  int    b,
+    out string s,
+    src py     "stages/pair",
+)
+
+pipeline SUB(
+    in  int      x,
+    in  int[]    ys,
+    out string[] s,
+)
+{
+    map call PAIR(
+        a = self.x,
+        b = split self.ys,
+    )
+
+    return (
+        s = PAIR.s,
+    )
+}
+
+pipeline ZIP_LITERAL(
+    out string[]   short,
+    out string[]   long,
+    out string[][] inner_short,
+    out string[][] inner_long,
+)
+{
+    call EMIT as TWO(
+        vals = [1, 2],
+    )
+
+    call EMIT as FOUR(
+        vals = [1, 2, 3, 4],
+    )
+
+    map call PAIR as SHORT(
+        a = split TWO.xs,
+        b = split [10, 20, 30],
+    )
+
+    map call PAIR as LONG(
+        a = split FOUR.xs,
+        b = split [10, 20, 30],
+    )
+
+    map call SUB as INNER_SHORT(
+        x  = split TWO.xs,
+        ys = split [[10, 20], [30], [40, 50]],
+    )
+
+    map call SUB as INNER_LONG(
+        x  = split FOUR.xs,
+        ys = split [[10, 20], [30]],
+    )
+
+    return (
+        short       = SHORT.s,
+        long        = LONG.s,
+        inner_short = INNER_SHORT.s,
+        inner_long  = INNER_LONG.s,
+    )
+}
+
+call ZIP_LITERAL()

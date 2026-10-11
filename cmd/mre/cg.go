@@ -78,7 +78,7 @@ func runArgs(_ context.Context, argv []string) error {
 		return err
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Manifest: man, Out: *out})
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Manifest: man, Out: *out, Log: os.Stderr})
 	if err != nil {
 		return fmt.Errorf("args: %w", err)
 	}

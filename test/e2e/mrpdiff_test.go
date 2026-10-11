@@ -277,13 +277,17 @@ func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit fu
 // a Martian behavior change at a pin bump — or a native-only divergence the
 // golden JSON does not capture — would be invisible until goldens were
 // regenerated. realMrjob runs the Nextflow side's comp stages through
-// $MARTIAN_BIN/mrjob, the binary mrp itself runs them with.
+// $MARTIAN_BIN/mrjob, the binary mrp itself runs them with. emitRefused, when
+// set, is why the current emitter refuses the fixture where mrp runs it:
+// TestMrpDiff skips it, and only the call-graph data plane (TestMrpCallGraph),
+// which replaces that emitter (#463), is diffed against mrp on it.
 type mrpDiffCase struct {
-	name      string
-	mro       string
-	realMrjob bool
-	native    bool
-	inline    bool
+	name        string
+	mro         string
+	realMrjob   bool
+	native      bool
+	inline      bool
+	emitRefused string
 }
 
 // source returns the dir and entry .mro the case runs.
@@ -531,7 +535,13 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "bench/mapsplit", mro: "pipeline_w4.mro", native: true},
 	{name: "bench/mapdisabled", mro: "pipeline_w4.mro", native: true},
 	{name: "bench/mapnested", mro: "pipeline_w2.mro", native: true},
+	// #464: a map call zipping splits forks over its master source, and the
+	// other sources read null past their end.
+	{name: "zip_runtime", emitRefused: emitRefusesZipLengths},
+	{name: "zip_literal", emitRefused: emitRefusesZipLengths},
 }
+
+const emitRefusesZipLengths = "mre forkbind fails a zipped split over sources of different lengths, where mrp reads null past the shorter one"
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
 // their outputs, is compared with mrp's by TestMrpDiffFailureParity: mrp
@@ -576,6 +586,10 @@ func TestMrpDiff(t *testing.T) {
 	for _, tc := range mrpDiffCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			if tc.emitRefused != "" {
+				t.Skip(tc.emitRefused)
+			}
 
 			// Gate before runMrp so one shard runs the fixture's mrp and all its
 			// legs (shardSkip's ancestor claim).
