@@ -210,6 +210,28 @@ func (a Allowlist) Without(id string) Allowlist {
 	return Allowlist{entries: slices.DeleteFunc(slices.Clone(a.entries), func(e Entry) bool { return e.ID == id })}
 }
 
+// RulesEverywhere returns the allowlist a program no fixture names, such as a
+// generated one, is compared under: every comparator rule, an issue-tracked
+// one unscoped so that it applies there and is never found excusing nothing,
+// and no ABI or outcome matcher, since each applies only to the fixtures or
+// the outcome case that name it.
+func (a Allowlist) RulesEverywhere() Allowlist {
+	out := make([]Entry, 0, len(a.entries))
+
+	for _, e := range a.entries {
+		switch {
+		case e.ABI != nil || e.Outcome != nil:
+			continue
+		case e.Comparator != nil:
+			e.Comparator = &ComparatorMatcher{Rule: e.Comparator.Rule}
+		}
+
+		out = append(out, e)
+	}
+
+	return Allowlist{entries: out}
+}
+
 // Excuses reports whether an entry lets the comparison of fixture apply the
 // comparator rule.
 func (a Allowlist) Excuses(rule, fixture string) bool {

@@ -3,6 +3,7 @@ package e2e
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,26 @@ func TestMrpFailedOutcome(t *testing.T) {
 	}
 }
 
+// TestMrpFailedOutcomeKilledJob checks a job mrp killed while stopping on
+// another stage's failure is not blamed: only the stage that failed is.
+func TestMrpFailedOutcomeKilledJob(t *testing.T) {
+	ps := t.TempDir()
+	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM()\n")
+	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk0-u1", "_errors"), "Traceback ...\nRuntimeError: boom")
+	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk1-u1", "_errors"), "Caught signal terminated")
+	writeABITestFile(t, filepath.Join(ps, "P", "SLOW", "fork0", "_invocation"), "call SLOW()\n")
+	writeABITestFile(t, filepath.Join(ps, "P", "SLOW", "fork0", "chnk0-u2", "_errors"), "Caught signal terminated")
+
+	got, err := mrpFailedOutcome(ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(failedIn(failError, "BOOM"), got); diff != "" {
+		t.Errorf("outcome (-want +got):\n%s", diff)
+	}
+}
+
 // TestMrpFailedOutcomeNoPipestance checks a failed mrp that left no pipestance
 // (a compile error) is a failure blaming no stage.
 func TestMrpFailedOutcomeNoPipestance(t *testing.T) {
@@ -63,6 +84,20 @@ func TestMrpFailedOutcomeUnattributable(t *testing.T) {
 	got, err := mrpFailedOutcome(ps)
 	if err == nil {
 		t.Fatalf("outcome %s, want an error for the unattributable _errors", got)
+	}
+
+	if !mrpFailedOutsideStages(err) {
+		t.Errorf("err = %v, want a failure outside any stage", err)
+	}
+}
+
+// TestMrpFailedOutsideStagesIsNarrow checks a missing file other than a
+// fork's _invocation, such as an mrp binary that is not there, is not taken
+// for mrp failing outside any stage.
+func TestMrpFailedOutsideStagesIsNarrow(t *testing.T) {
+	err := fmt.Errorf("run mrp: %w", &fs.PathError{Op: "fork/exec", Path: "/no/mrp", Err: fs.ErrNotExist})
+	if mrpFailedOutsideStages(err) {
+		t.Errorf("mrpFailedOutsideStages(%v) = true, want false", err)
 	}
 }
 

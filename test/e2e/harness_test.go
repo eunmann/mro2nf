@@ -209,7 +209,7 @@ func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
 	buildBinaries(t)
 
 	proj := t.TempDir()
-	if err := transpileInto(dir, mro, proj, extra...); err != nil {
+	if err := transpileInto(repoTools(), dir, mro, proj, extra...); err != nil {
 		t.Fatalf("transpile %s: %v", dir, err)
 	}
 
@@ -228,14 +228,26 @@ var transpileRefused = map[string]string{
 
 const mrpRefusesGatedSplit = "mrp refuses a split of a runtime-gated literal collection when it builds the call graph (#387)"
 
-// transpileInto runs mro2nf for the fixture mro under dir, emitting into proj.
-// It returns the failure (with the tool output) instead of failing the test, so
-// batch callers can attribute a broken combo without aborting the rest.
-// buildBinaries must have run first.
-func transpileInto(dir, mro, proj string, extra ...string) error {
+// toolchain is the mro2nf binary a test transpiles with and the mre binary
+// the generated project runs.
+type toolchain struct {
+	mro2nf string
+	mre    string
+}
+
+// repoTools is the toolchain buildBinaries builds at the repo root.
+func repoTools() toolchain {
+	return toolchain{mro2nf: filepath.Join(root, "mro2nf"), mre: filepath.Join(root, "mre")}
+}
+
+// transpileInto runs tools' mro2nf for the fixture mro under dir, emitting
+// into proj. It returns the failure (with the tool output) instead of failing
+// the test, so batch callers can attribute a broken combo without aborting the
+// rest. The binaries must exist: buildBinaries builds repoTools.
+func transpileInto(tools toolchain, dir, mro, proj string, extra ...string) error {
 	args := []string{
 		"-o", proj,
-		"-mre", filepath.Join(root, "mre"),
+		"-mre", tools.mre,
 		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
 		"-mropath", dir,
 	}
@@ -247,7 +259,7 @@ func transpileInto(dir, mro, proj string, extra ...string) error {
 	args = append(args, extra...)
 	args = append(args, filepath.Join(dir, mro))
 
-	cmd := exec.Command(filepath.Join(root, "mro2nf"), args...)
+	cmd := exec.Command(tools.mro2nf, args...)
 	cmd.Dir = root
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -488,14 +500,24 @@ type traceRow struct {
 func readTrace(t *testing.T, path string) []traceRow {
 	t.Helper()
 
+	rows, err := parseTrace(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return rows
+}
+
+// parseTrace is readTrace returning its error.
+func parseTrace(path string) ([]traceRow, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read trace %s: %v", path, err)
+		return nil, fmt.Errorf("read trace %s: %w", path, err)
 	}
 
 	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
 	if len(lines) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	cols := map[string]int{}
@@ -516,7 +538,7 @@ func readTrace(t *testing.T, path string) []traceRow {
 		rows = append(rows, row)
 	}
 
-	return rows
+	return rows, nil
 }
 
 // attempts counts trace rows whose task name contains name.

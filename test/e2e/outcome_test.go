@@ -106,6 +106,14 @@ func (o runOutcome) equal(p runOutcome) bool {
 	return o.Failed == p.Failed && slices.Equal(o.Failures, p.Failures)
 }
 
+// mrpFailedOutsideStages reports whether err, from mrpFailedOutcome, is a
+// failure mrp recorded in a fork it never invoked as a call: its own fork
+// resolution ("matched 2 out of 2 forks ..., need exactly 1") rejected the
+// program at run time.
+func mrpFailedOutsideStages(err error) bool {
+	return errors.Is(err, errNoStageInvocation) || errors.Is(err, errABIMeta)
+}
+
 // mrpFailedOutcome classifies a pipestance mrp exited non-zero on, from the
 // _assert and _errors files it left. A missing pipestance (a compile error) is
 // a failure blaming no stage.
@@ -124,6 +132,10 @@ func mrpFailedOutcome(ps string) (runOutcome, error) {
 		kind, ok := mrpFailureFiles[d.Name()]
 		if !ok || !d.Type().IsRegular() {
 			return nil
+		}
+
+		if killed, err := mrpKilledJob(p); err != nil || killed {
+			return err
 		}
 
 		fork := filepath.Dir(p)
@@ -145,6 +157,22 @@ func mrpFailedOutcome(ps string) (runOutcome, error) {
 	}
 
 	return failedWith(failures), nil
+}
+
+// mrpKilledJob reports whether the failure file at path records a job mrp
+// killed while it stopped on another stage's failure: mrjob writes "Caught
+// signal <sig>" when it is signalled (martian cmd/mrjob HandleSignal), and
+// mrp's retry policy counts that a transient kill, not a stage failure
+// (jobmanagers/retry.json). Which jobs are still running at that moment
+// depends on timing, and Nextflow likewise aborts its running tasks without
+// marking them FAILED.
+func mrpKilledJob(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	return strings.HasPrefix(string(data), "Caught signal "), nil
 }
 
 // failedAttempt is a FAILED row of a Nextflow trace: the task's work dir hash

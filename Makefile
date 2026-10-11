@@ -12,7 +12,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.47.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences cloc install clean help
+.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
@@ -64,6 +64,15 @@ test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (clou
 
 test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
 	$(GO_E2E) -timeout 30m -run '^TestMrpDiff'
+
+# The long generative differential (#350). test-e2e runs TestGenDiff on the
+# checked-in smoke seeds; this runs GEN_COUNT seeds from GEN_SEEDS (a number,
+# "random", or a comma list). The other GEN_* knobs (legs, prebuilt binaries,
+# artifact dir, shrink budget) are documented in test/e2e/gendiff_test.go.
+GEN_SEEDS ?= random
+GEN_COUNT ?= 200
+gen-diff: build ## Generative differential vs mrp (GEN_SEEDS=<start>|random|<a,b,...> GEN_COUNT=<n>)
+	GEN_SEEDS='$(GEN_SEEDS)' GEN_COUNT='$(GEN_COUNT)' $(GO_E2E) -timeout 180m -run '^TestGenDiff$$'
 
 # The only writer of testdata/*/expected/outs/: each recordable golden fixture
 # runs under real mrp and its published outs/ tree replaces the committed one.

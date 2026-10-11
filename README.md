@@ -199,6 +199,7 @@ make test          # unit tests (in-process, sub-second)
 make cover         # unit-test coverage gate (fails below COVER_MIN%)
 make test-e2e      # golden table + cloud-sim + failure paths + launch knobs
 make test-e2e-docker  # the same pipelines under docker (container isolation)
+make gen-diff      # generated programs vs real mrp (GEN_SEEDS=<start>|random GEN_COUNT=<n>)
 make lint-check    # golangci-lint (no auto-fix)
 ```
 
@@ -227,6 +228,14 @@ orchestrator, so "correct" means byte-identical to Martian:
   transpiled, run under Nextflow, diffed vs committed `mrp` goldens — covering
   every supported feature, including file-typed entry inputs (scalar, `file[]`,
   `map<file>`, struct-with-file) supplied at launch via `-params-file`.
+- **Generative differential** (`TestGenDiff`; `make gen-diff` for long runs):
+  random well-typed programs from `test/gen` — structs, typed maps, nested
+  arrays, files, split stages, sub-pipelines, map calls of every kind, disable
+  gates, projections, wildcards, fan-ins and boundary values — run under real
+  `mrp` and under mro2nf + Nextflow and face the same output, stage-ABI and
+  failure-parity checks as the fixtures. A divergence is shrunk to a minimal
+  fixture with its `mrp` golden. `make test-e2e` runs a fixed smoke set of
+  seeds.
 - **Container isolation** (`make test-e2e-docker`): a representative fixture
   slice — including the exec/comp adapters and the null-bundle / zero-chunk
   shapes — and the file-typed entry-input overrides under the docker executor

@@ -1,0 +1,188 @@
+package gen
+
+import (
+	"fmt"
+	"strings"
+)
+
+// MRO renders p as Martian source.
+func (p *Program) MRO() string {
+	var b strings.Builder
+
+	verb := "Generated"
+	if p.Shrunk {
+		verb = "Shrunk"
+	}
+
+	fmt.Fprintf(&b, "# %s by test/gen from seed %d (attempt %d).\n", verb, p.Seed, p.Attempt)
+
+	for _, ft := range p.FileTypes {
+		fmt.Fprintf(&b, "filetype %s;\n", ft)
+	}
+
+	for _, s := range p.Structs {
+		b.WriteString("\nstruct " + s.Name + "(\n")
+
+		for _, f := range s.Fields {
+			fmt.Fprintf(&b, "    %s %s,\n", f.Type, f.Name)
+		}
+
+		b.WriteString(")\n")
+	}
+
+	for _, s := range p.Stages {
+		renderStage(&b, s)
+	}
+
+	for _, pl := range p.Pipelines {
+		renderPipeline(&b, pl)
+	}
+
+	b.WriteString("\ncall " + p.EntryPipeline().Name + "(\n")
+	renderBindings(&b, p.Entry, "    ")
+	b.WriteString(")\n")
+
+	return b.String()
+}
+
+// StageDir is the stage's src path, relative to the program's directory.
+func StageDir(name string) string { return "stages/" + strings.ToLower(name) }
+
+func renderStage(b *strings.Builder, s *Stage) {
+	b.WriteString("\nstage " + s.Name + "(\n")
+	renderParams(b, "in", s.In)
+	renderParams(b, "out", s.Out)
+	fmt.Fprintf(b, "    src py %q,\n)", StageDir(s.Name))
+
+	if s.Split {
+		b.WriteString(" split (\n")
+		renderParams(b, "in", s.ChunkIn)
+		renderParams(b, "out", s.ChunkOut)
+		b.WriteString(")")
+	}
+
+	b.WriteString("\n")
+}
+
+func renderParams(b *strings.Builder, dir string, ps []Param) {
+	for _, q := range ps {
+		fmt.Fprintf(b, "    %-3s %s %s,\n", dir, q.Type, q.Name)
+	}
+}
+
+func renderPipeline(b *strings.Builder, pl *Pipeline) {
+	b.WriteString("\npipeline " + pl.Name + "(\n")
+	renderParams(b, "in", pl.In)
+	renderParams(b, "out", pl.Out)
+	b.WriteString(")\n{\n")
+
+	for _, c := range pl.Calls {
+		renderCall(b, c)
+	}
+
+	b.WriteString("    return (\n")
+	renderBindings(b, pl.Return, "        ")
+	b.WriteString("    )\n}\n")
+}
+
+func renderCall(b *strings.Builder, c *Call) {
+	b.WriteString("    ")
+
+	if c.IsMap() {
+		b.WriteString("map ")
+	}
+
+	b.WriteString("call " + c.Callee)
+
+	if c.ID != c.Callee {
+		b.WriteString(" as " + c.ID)
+	}
+
+	b.WriteString("(\n")
+	renderBindings(b, c.Bindings, "        ")
+
+	if c.Wildcard != nil {
+		b.WriteString("        * = " + renderExpr(c.Wildcard) + ",\n")
+	}
+
+	b.WriteString("    )")
+
+	if c.Disabled != nil {
+		b.WriteString(" using (\n        disabled = " + renderExpr(c.Disabled) + ",\n    )")
+	}
+
+	b.WriteString("\n\n")
+}
+
+func renderBindings(b *strings.Builder, bs []*Binding, indent string) {
+	for _, bd := range bs {
+		split := ""
+		if bd.Split {
+			split = "split "
+		}
+
+		fmt.Fprintf(b, "%s%s = %s%s,\n", indent, bd.Name, split, renderExpr(bd.Value))
+	}
+}
+
+func renderExpr(e *Expr) string {
+	switch e.Kind {
+	case ExprNull:
+		return "null"
+	case ExprString:
+		return quote(e.Text)
+	case ExprArray:
+		parts := make([]string, len(e.Elems))
+		for i, el := range e.Elems {
+			parts[i] = renderExpr(el)
+		}
+
+		return "[" + strings.Join(parts, ", ") + "]"
+	case ExprMap, ExprStruct:
+		parts := make([]string, len(e.Elems))
+		for i, el := range e.Elems {
+			key := e.Keys[i]
+			if e.Kind == ExprMap {
+				key = quote(key)
+			}
+
+			parts[i] = key + ": " + renderExpr(el)
+		}
+
+		return "{" + strings.Join(parts, ", ") + "}"
+	case ExprRef:
+		return strings.Join(append([]string{e.Ref}, e.Path...), ".")
+	default:
+		return e.Text
+	}
+}
+
+// quote renders s as an MRO string literal. Martian's unquote takes the C
+// escapes; non-ASCII text passes through as UTF-8.
+func quote(s string) string {
+	var b strings.Builder
+
+	b.WriteByte('"')
+
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+
+	b.WriteByte('"')
+
+	return b.String()
+}

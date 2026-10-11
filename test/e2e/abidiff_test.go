@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -46,6 +47,10 @@ const (
 
 // errABIMeta reports metadata the differential cannot attribute or decode.
 var errABIMeta = errors.New("stage metadata")
+
+// errNoStageInvocation reports an mrp fork dir with no _invocation: mrp
+// never invoked a stage there.
+var errNoStageInvocation = errors.New("no stage invocation")
 
 // abiInvocation is one stage phase as the stage saw it: its normalized _args
 // and _outs in canonical JSON. Origin locates it for reports only.
@@ -374,6 +379,10 @@ func collectMrpInvocations(ps string, rules abiRules) ([]abiInvocation, error) {
 
 func mrpStageName(fork string) (string, error) {
 	src, err := os.ReadFile(filepath.Join(fork, "_invocation"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("%w: %s: %w", errNoStageInvocation, fork, err)
+	}
+
 	if err != nil {
 		return "", fmt.Errorf("read stage invocation: %w", err)
 	}
@@ -462,6 +471,18 @@ func diffStageABI(allow divergence.Allowlist, fixture, ps, proj string) ([]strin
 }
 
 func diffStageABIUnder(rules abiRules, ps, proj string) ([]string, error) {
+	groups, err := stageABIGroups(rules, ps, proj)
+	if err != nil {
+		return nil, err
+	}
+
+	return inGroupOrder(groups), nil
+}
+
+// stageABIGroups compares every stage phase of the mrp pipestance ps with the
+// Nextflow project proj under rules, a report per differing (stage, phase)
+// group keyed by the group.
+func stageABIGroups(rules abiRules, ps, proj string) (map[string]string, error) {
 	mrp, err := collectMrpInvocations(ps, rules)
 	if err != nil {
 		return nil, err
@@ -472,11 +493,26 @@ func diffStageABIUnder(rules abiRules, ps, proj string) ([]string, error) {
 		return nil, err
 	}
 
-	return diffABI(mrp, nf), nil
+	return diffABIGroups(mrp, nf), nil
 }
 
-// diffABI reports each (stage, phase) group whose invocation multisets differ.
+// diffABI reports each (stage, phase) group whose invocation multisets
+// differ, in group order.
 func diffABI(mrp, nf []abiInvocation) []string {
+	return inGroupOrder(diffABIGroups(mrp, nf))
+}
+
+func inGroupOrder(reports map[string]string) []string {
+	out := make([]string, 0, len(reports))
+	for _, k := range slices.Sorted(maps.Keys(reports)) {
+		out = append(out, reports[k])
+	}
+
+	return out
+}
+
+// diffABIGroups is diffABI's reports keyed by their (stage, phase) group.
+func diffABIGroups(mrp, nf []abiInvocation) map[string]string {
 	groups := map[string]*[2][]abiInvocation{}
 
 	for side, invs := range [][]abiInvocation{mrp, nf} {
@@ -491,18 +527,11 @@ func diffABI(mrp, nf []abiInvocation) []string {
 		}
 	}
 
-	keys := make([]string, 0, len(groups))
-	for k := range groups {
-		keys = append(keys, k)
-	}
+	reports := map[string]string{}
 
-	slices.Sort(keys)
-
-	var reports []string
-
-	for _, k := range keys {
-		if r := diffABIGroup(k, groups[k][0], groups[k][1]); r != "" {
-			reports = append(reports, r)
+	for k, g := range groups {
+		if r := diffABIGroup(k, g[0], g[1]); r != "" {
+			reports[k] = r
 		}
 	}
 

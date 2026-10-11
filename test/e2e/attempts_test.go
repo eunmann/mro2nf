@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"errors"
+	"io/fs"
 	"slices"
 	"strings"
 	"testing"
@@ -65,5 +66,27 @@ func TestCheckAttempts(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %q", err, want)
 		}
+	}
+}
+
+var errTestRunFailed = errors.New("nextflow exited 1")
+
+// TestNextflowOutcomeWithoutTrace checks a run that failed before Nextflow
+// wrote a trace, such as one whose main.nf does not compile, is a failure
+// blaming no stage, and that a run that succeeded without one is an error.
+func TestNextflowOutcomeWithoutTrace(t *testing.T) {
+	proj := t.TempDir()
+
+	got, attempts, err := nextflowOutcome(proj, errTestRunFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(failedWith(nil), got); diff != "" || len(attempts) > 0 {
+		t.Errorf("outcome (-want +got):\n%s\nattempts %v, want none", diff, attempts)
+	}
+
+	if got, _, err := nextflowOutcome(proj, nil); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a successful run without a trace: outcome %s, err %v, want fs.ErrNotExist", got, err)
 	}
 }
