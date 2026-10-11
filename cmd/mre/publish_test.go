@@ -552,9 +552,7 @@ func publishGrid(t *testing.T, layout string) string {
 	t.Helper()
 
 	man := types.Manifest{Callables: map[string]types.Callable{"PIPE": {Out: gridParams()}}}
-	if err := man.Write(filepath.Join(layout, "types.json")); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	writeTestManifest(t, filepath.Join(layout, "types.json"), man)
 
 	t.Chdir(layout)
 
