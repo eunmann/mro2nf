@@ -31,8 +31,11 @@ test: ## Run unit tests
 
 # Cross-package attribution (-coverpkg) so e.g. types.OutFilename exercised from
 # cmd/mre tests counts; scoped to ./cmd + ./internal (deploy/ has no Go).
+# -count=1: a cached result for a package that does not import a -coverpkg
+# package replays that package's blocks from an older source, so the merged
+# profile mixes two versions of the file and the total collapses.
 cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
-	@go test -coverprofile=artifacts/cover.out -coverpkg=./cmd/...,./internal/... ./cmd/... ./internal/... >/dev/null
+	@go test -count=1 -coverprofile=artifacts/cover.out -coverpkg=./cmd/...,./internal/... ./cmd/... ./internal/... >/dev/null
 	@go tool cover -func=artifacts/cover.out | tail -1
 	@go tool cover -func=artifacts/cover.out | awk -v min="$(COVER_MIN)" \
 		'END { gsub(/%/,"",$$3); if ($$3+0 < min+0) { printf "FAIL: total coverage %s%% is below COVER_MIN=%s%%\n", $$3, min; exit 1 } \
