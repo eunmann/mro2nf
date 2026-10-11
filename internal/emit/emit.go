@@ -891,12 +891,9 @@ const allowRemoteParam = "mro2nf_allow_remote_inputs"
 func reservedParams(target Target) map[string]bool {
 	set := map[string]bool{"outdir": true, "job_resources": true, allowRemoteParam: true}
 
-	if target == TargetAWSBatch || target == TargetLocal {
+	if target == TargetAWSBatch {
 		set["aws_queue"] = true
 		set["aws_region"] = true
-	}
-
-	if target == TargetAWSBatch {
 		set["aws_outdir"] = true
 		set["aws_cli_path"] = true
 	}
@@ -1107,7 +1104,7 @@ const traceFields = "task_id,hash,native_id,name,status,exit,attempt,submit,dura
 
 // configCommon renders the params shared by every target.
 func configCommon(target Target) string {
-	common := outdirConfig(target) + `
+	return outdirConfig(target) + `
 // Every generated project uses the path 'arity' option (Nextflow >= 23.10.0) and
 // the local profile's process.resourceLimits clamp (Nextflow >= 24.04.0, which
 // an older engine silently ignores), so declare the floor for ALL targets —
@@ -1121,14 +1118,6 @@ manifest.nextflowVersion = '!>=24.04.0'
 // --job_resources.highmem='--partition=highmem' or in a -params-file.
 params.job_resources = [:]
 `
-	if target == TargetAWSBatch || target == TargetLocal {
-		common += `// Cloud knobs the awsbatch profile reads; override with --aws_queue/--aws_region.
-params.aws_queue = null
-params.aws_region = null
-`
-	}
-
-	return common
 }
 
 // outdirConfig renders the params.outdir declaration. AWS Batch defaults to no
@@ -1192,6 +1181,8 @@ process {
 }
 
 // configProfiles renders the local + HPC executor profiles (the local target).
+// It has no cloud profile: a local project bakes the host's mre and stage-code
+// paths into its scripts, which a cloud worker does not have (#320).
 //
 // The standard (local) profile clamps each task's resource REQUEST to the host.
 // A Martian stage RESERVES production-sized resources (CellRanger's cloupe join
@@ -1213,12 +1204,6 @@ profiles {
     sge      { process.executor = 'sge' }
     lsf      { process.executor = 'lsf' }
     pbs      { process.executor = 'pbs' }
-    awsbatch {
-        process.executor = 'awsbatch'
-        process.queue    = params.aws_queue
-        aws.region       = params.aws_region
-    }
-    k8s { process.executor = 'k8s' }
 }
 `
 }
@@ -1230,11 +1215,14 @@ profiles {
 func configAWSBatch() string {
 	return `
 // AWS Batch + S3 (classic aws-CLI staging). Requirements:
+//  - a job queue + region: --aws_queue <q> --aws_region <r>
 //  - workDir on S3:        -work-dir s3://<bucket>/work
 //  - a container image:    --container <ecr-uri>  (see Dockerfile)
 //  - the aws CLI present in the image, OR set --aws_cli_path for a custom AMI.
 //  - (optional) a publish location: --aws_outdir s3://<bucket>/out (else the
 //    canonical outputs remain in the S3 work dir only).
+params.aws_queue = null
+params.aws_region = null
 params.aws_cli_path = null
 process.executor = 'awsbatch'
 process.queue    = params.aws_queue

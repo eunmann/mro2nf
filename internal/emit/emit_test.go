@@ -116,8 +116,9 @@ func TestEmitFiles(t *testing.T) {
 	}
 }
 
-// TestEmitConfig checks nextflow.config declares every executor profile and the
-// auto-retry analog, so a -profile run resolves and transient failures retry.
+// TestEmitConfig checks the local nextflow.config declares the local and grid
+// executor profiles and the auto-retry analog, so a -profile run resolves and
+// transient failures retry.
 func TestEmitConfig(t *testing.T) {
 	dir := loadAndEmit(t)
 
@@ -137,11 +138,8 @@ func TestEmitConfig(t *testing.T) {
 		"sge      { process.executor = 'sge' }",
 		"lsf      { process.executor = 'lsf' }",
 		"pbs      { process.executor = 'pbs' }",
-		"process.executor = 'awsbatch'",
-		"k8s { process.executor = 'k8s' }",
 		"task.exitStatus == 42 ? 'terminate' : 'retry'",
 		"maxRetries = 2",
-		"params.aws_queue = null",
 		// #188, #224: the Nextflow >=24.04.0 floor (path arity, resourceLimits)
 		// must be declared for every target — assert it on the local config too.
 		"manifest.nextflowVersion = '!>=24.04.0'",
@@ -152,7 +150,12 @@ func TestEmitConfig(t *testing.T) {
 	}
 
 	// #321: the clamp reads the host itself, so it reserves no param names.
-	for _, gone := range []string{"params.max_cpus", "params.max_memory"} {
+	// #320: a local project's scripts bake host paths, so it ships no cloud
+	// profile and no cloud knobs.
+	for _, gone := range []string{
+		"params.max_cpus", "params.max_memory",
+		"awsbatch {", "'awsbatch'", "k8s", "params.aws_",
+	} {
 		if strings.Contains(cfg, gone) {
 			t.Errorf("nextflow.config still defines %q", gone)
 		}
@@ -277,6 +280,10 @@ func TestEmitConfigTargets(t *testing.T) {
 		"params.container = 'ecr/mro2nf:1'",
 		"container = params.container",
 		"process.executor = 'awsbatch'",
+		"params.aws_queue = null",
+		"params.aws_region = null",
+		"process.queue    = params.aws_queue",
+		"aws.region       = params.aws_region",
 		"aws.batch.cliPath = params.aws_cli_path",
 		// C2: no launcher-local publish by default; the curated copy is opt-in.
 		"params.aws_outdir = null",

@@ -92,7 +92,7 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-mre <path>` | path to the `mre` shim binary as it will appear **at run time** |
 | `-shell <path>` | path to `martian_shell.py` at run time |
 | `-mrjob <path>` | path to `mrjob` (only needed for `comp` stages) |
-| `-container <image>` | set `process.container` for container backends (AWS Batch, k8s) |
+| `-container <image>` | set `process.container` for container backends (AWS Batch, HealthOmics) |
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
 | `-monitor` | enforce mrp `--monitor`'s memory limits per stage: an RSS kill at `mem_gb` (the process-group monitor, mrp's primary kill) plus a `prlimit` virtual-memory cap at `vmem_gb` |
 | `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
@@ -249,13 +249,15 @@ orchestrator, so "correct" means byte-identical to Martian:
 
 ## Running on a cluster
 
-`nextflow.config` (local target) ships executor profiles; select one with `-profile`:
+`nextflow.config` (local target) ships grid executor profiles; select one with
+`-profile`:
 
 ```bash
-nextflow run main.nf -profile slurm          # or sge / lsf / pbs / k8s
-nextflow run main.nf -profile awsbatch \
-    --aws_queue <job-queue> --aws_region <region> -work-dir s3://<bucket>/work
+nextflow run main.nf -profile slurm          # or sge / lsf / pbs
 ```
+
+A local project's scripts name the host's `mre` and stage code, so it has no
+cloud profile; for AWS Batch, transpile with `-target awsbatch` (below).
 
 The object-store data plane is what makes file flow work without a shared
 filesystem. Every payload between processes travels as a typed JSON sidecar

@@ -742,7 +742,7 @@ service, a shared HealthOmics workflow. So before `file()` sees a leaf,
 
 | Target | Accepted file value |
 |---|---|
-| `local` | a local path (relative, absolute, or `file:`), or an `s3://` URI for its `awsbatch` profile |
+| `local` | a local path (relative, absolute, or `file:`), or an `s3://` URI, which Nextflow stages into the work dir |
 | `awsbatch`, `healthomics` | an `s3://` URI |
 
 Anything else fails the run on the head node, before anything is fetched, with
