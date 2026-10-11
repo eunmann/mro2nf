@@ -14,7 +14,7 @@ Every turn re-reads your whole context, so cost grows with what you load. Locate
 Read the parts of `docs/TRANSPILER.md` and `docs/FEATURE_COVERAGE.md` that cover the task, not all of them. The package map, for orientation:
 
 - **Front end:** `internal/frontend` (parse via `martian/syntax`, lower), `internal/ir`
-- **Emitter:** `internal/emit` — `plan.go` decides each call's kind once; `generate*.go` render processes and wiring; `inline.go`; `diagnostics.go`; `lib/Mro2nf.groovy` (driver-side helpers); `runner/` (the `-native-runner` Python runner)
+- **Emitter:** `internal/emit` — `plan.go` decides each call's kind once; `generate*.go` render processes and wiring; `inline.go`; `diagnostics.go`; `lib/Mro2nf.groovy` (driver-side helpers)
 - **Runtime (`mre`):** `cmd/mre` subcommands (`split|main|join|bind|forkbind|merge|entryargs|publish-layout`), `internal/shim` (bundles, markers, adapter launch, `_jobinfo`, monitor), `internal/bind` (binding resolution), `internal/types` (type-directed file-leaf walk and the `types.json` manifest)
 - **Around it:** `internal/overrides` + `mro2nf overrides`, `internal/config` (`.mro2nf.yml`), `cmd/mro2nf`
 - **Tests:** unit tests beside each package; `test/e2e` (build tag `e2e`: goldens, mrp-diff, docker, bench, lint-nf); fixtures and real-`mrp` goldens in `testdata/<name>/`; `bench/`
