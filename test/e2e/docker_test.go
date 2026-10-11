@@ -16,6 +16,8 @@ package e2e
 
 import (
 	"archive/zip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -76,7 +78,16 @@ func isoConfig() string {
 	return isoCfgContent
 }
 
-const isoImage = "mro2nf-iso:test"
+// checkoutImage tags a test image per checkout. The images bake this
+// checkout's absolute paths, so a tag shared across worktrees lets a
+// concurrent run in another worktree replace the image mid-suite.
+func checkoutImage(name string) string {
+	sum := sha256.Sum256([]byte(root))
+
+	return name + ":" + hex.EncodeToString(sum[:6])
+}
+
+func isoImage() string { return checkoutImage("mro2nf-iso") }
 
 var (
 	isoImgOnce sync.Once
@@ -101,11 +112,11 @@ COPY testdata %[1]s/testdata
 RUN chmod +x %[1]s/mre
 `, root)
 
-		cmd := exec.Command("docker", "build", "-q", "-t", isoImage, "-f", "-", root)
+		cmd := exec.Command("docker", "build", "-q", "-t", isoImage(), "-f", "-", root)
 		cmd.Stdin = strings.NewReader(dockerfile)
 
 		if out, err := cmd.CombinedOutput(); err != nil {
-			errIsoImg = fmt.Errorf("docker build %s: %w\n%s", isoImage, err, out)
+			errIsoImg = fmt.Errorf("docker build %s: %w\n%s", isoImage(), err, out)
 		}
 	})
 
@@ -169,7 +180,7 @@ func TestDockerIsolation(t *testing.T) {
 			proj := transpile(t, tc.name)
 			writeFileT(t, filepath.Join(proj, "iso.config"), isoConfig())
 
-			if err := runNextflow(t, proj, "-c", "iso.config", "-with-docker", isoImage); err != nil {
+			if err := runNextflow(t, proj, "-c", "iso.config", "-with-docker", isoImage()); err != nil {
 				t.Fatalf("nextflow (isolated): %v", err)
 			}
 
@@ -283,7 +294,7 @@ func TestDockerEntryOverrides(t *testing.T) {
 			writeFileT(t, filepath.Join(proj, "iso.config"), isoConfig())
 
 			err = runNextflow(t, proj,
-				"-c", "iso.config", "-params-file", "params.json", "-with-docker", isoImage)
+				"-c", "iso.config", "-params-file", "params.json", "-with-docker", isoImage())
 			if err != nil {
 				t.Fatalf("nextflow (isolated): %v", err)
 			}
@@ -312,7 +323,7 @@ func TestDockerEntryOverrides(t *testing.T) {
 func TestGeneratedAWSBatchImage(t *testing.T) {
 	requireDocker(t)
 
-	const genImage = "mro2nf-gen:test"
+	genImage := checkoutImage("mro2nf-gen")
 
 	// transpile() always passes -mre/-shell host paths; that is correct here
 	// too — container targets copy them into the project's runtime/ dir.
@@ -345,7 +356,7 @@ func TestGeneratedAWSBatchImage(t *testing.T) {
 func TestGeneratedAWSBatchImageNative(t *testing.T) {
 	requireDocker(t)
 
-	const genImage = "mro2nf-gen-native:test"
+	genImage := checkoutImage("mro2nf-gen-native")
 
 	proj := transpile(t, "entry_file",
 		"-native", "-native-runner", "-target", "awsbatch", "-container", genImage)
