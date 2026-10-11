@@ -80,6 +80,44 @@ func TestStageProcessNameInventory(t *testing.T) {
 	}
 }
 
+// TestStageProcessNames pins emit.StageProcessNames, the list the bench gate
+// counts as stage tasks, against the independently built inventory: every
+// name it returns is a stage-code (non-helper) inventory name, and every
+// stage-code process the emitter actually generates is in it.
+func TestStageProcessNames(t *testing.T) {
+	fixtures := []struct {
+		name string
+		opts emit.Options
+	}{
+		{"split_test", emit.Options{}},
+		{"fork_min", emit.Options{Native: true}},
+		{"map_pipe_split", emit.Options{}},
+		{"map_pipe", emit.Options{}},
+		{"map_pipe_nested", emit.Options{}},
+		{"chain_fuse3", emit.Options{FuseChains: true}},
+	}
+
+	for _, fx := range fixtures {
+		prog := lowerNamesFixture(t, fx.name)
+		inv := inventoryNames(prog)
+		got := map[string]bool{}
+
+		for _, name := range emit.StageProcessNames(prog) {
+			got[name] = true
+
+			if tag, ok := inv[name]; !ok || tag == "helper" {
+				t.Errorf("%s: StageProcessNames returned %q, inventory tag %q", fx.name, name, tag)
+			}
+		}
+
+		for _, name := range emittedProcessNames(t, fx.name, prog, fx.opts) {
+			if tag := inv[name]; tag != "helper" && !got[name] {
+				t.Errorf("%s: emitted stage process %q (tag %q) missing from StageProcessNames", fx.name, name, tag)
+			}
+		}
+	}
+}
+
 // lowerNamesFixture parses and lowers a testdata fixture (external-package
 // twin of plan_test's lowerFixture).
 func lowerNamesFixture(t *testing.T, fixture string) *ir.Program {

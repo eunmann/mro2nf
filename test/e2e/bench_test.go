@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -208,12 +207,10 @@ func runBenchLane(t *testing.T, l benchLane, workdir string) []byte {
 
 // writeStageProcesses writes, as a JSON array under tmp, every process name
 // the emitter can give a task that runs a stage's own code in the program of
-// dir/mro, and returns the file's path. These are the names the emit package
-// inventories for override selectors: per stage the plain family, and per
-// pipeline call the fused family and the keyed element scatter, qualified as
-// emit's qualify() does. bench_metrics.py counts every other task as
-// plumbing, so a new helper process is plumbing without being listed; a drift
-// in these names shows as stage tasks that no longer match mrp's job count.
+// dir/mro, and returns the file's path. emit.StageProcessNames builds them
+// from the same inventory as the override selectors. bench_metrics.py counts
+// every other task as plumbing, so a new helper process is plumbing without
+// being listed.
 func writeStageProcesses(dir, mro, tmp string) (string, error) {
 	mroPath := []string{dir}
 
@@ -227,31 +224,7 @@ func writeStageProcesses(dir, mro, tmp string) (string, error) {
 		return "", fmt.Errorf("lower %s: %w", mro, err)
 	}
 
-	var names []string
-
-	for stage := range prog.Stages {
-		for _, s := range emit.PlainStageSuffixes() {
-			names = append(names, stage+s)
-		}
-	}
-
-	for _, p := range prog.Pipelines {
-		for _, c := range p.Calls {
-			q := strconv.Itoa(len(p.Name)) + "_" + p.Name + "__" + c.Name
-
-			for _, s := range emit.FusedCallSuffixes() {
-				names = append(names, "STAGE_"+q+s)
-			}
-
-			for _, s := range emit.ScatterCallSuffixes() {
-				names = append(names, "FORK_"+q+s)
-			}
-		}
-	}
-
-	slices.Sort(names)
-
-	data, err := json.Marshal(names)
+	data, err := json.Marshal(emit.StageProcessNames(prog))
 	if err != nil {
 		return "", fmt.Errorf("encode stage processes: %w", err)
 	}
