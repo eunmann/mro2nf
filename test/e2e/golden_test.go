@@ -194,6 +194,8 @@ var goldenCases = []goldenCase{
 	{"disabled_split_null", "disabled_split_null", "expected/outs.json"},
 	// #434: a runtime-gated map call over a sub-pipeline is one null per fork.
 	{"disabled_map_nullforks", "disabled_map_nullforks", "expected/outs.json"},
+	// #433: a split through a field of a typed-map literal forks once per key.
+	{"map_literal_proj", "map_literal_proj", "expected/outs.json"},
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},

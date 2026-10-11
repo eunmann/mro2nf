@@ -389,6 +389,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// null sources, in a keyed layer, into a split stage) against an
 	// entry-gated one and a gated map call over a stage.
 	{name: "disabled_map_nullforks", native: true, inline: true},
+	// #433: a typed-map literal bound to a sub-pipeline input and split
+	// through a field projection keeps its boundary under inlining.
+	{name: "map_literal_proj", native: true, inline: true},
 	// The native-suite golden anchors: their committed expected/outs.json
 	// files claim mrp provenance, so the live differential machine-checks
 	// that claim — otherwise TestGolden + the native suites would prove
