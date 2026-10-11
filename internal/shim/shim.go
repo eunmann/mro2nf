@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -273,7 +275,7 @@ func writeChunkData(meta string, defs []ChunkDef, outs []json.RawMessage) error 
 // runAdapter invokes the Martian adapter for one phase, dispatching by language.
 // res holds the monitor limits (monitorLimits): its vmem_gb caps address space
 // (prlimit) and its mem_gb bounds resident memory (the RSS monitor) when
-// monitoring is enabled.
+// monitoring is enabled; its threads size the thread-limit env vars.
 func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources) error {
 	switch a.Lang {
 	// py never sees SrcArgs: mrp's python arm builds a fixed argv with no args
@@ -367,12 +369,33 @@ func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string,
 	return exec.CommandContext(ctx, argv[0], argv[1:]...)
 }
 
-// adapterEnv is the stage child's environment: the shim's own env with TMPDIR
-// pointed at the phase's per-stage tmp dir (created by prepDirs), matching
-// mrp's per-job TMPDIR so stage tempfiles land on the task's scratch volume
-// rather than the container's (possibly tiny) /tmp.
-func adapterEnv(meta string) []string {
-	return append(os.Environ(), "TMPDIR="+filepath.Join(meta, "tmp"))
+// threadEnvs returns jobmanagers/config.json's thread_envs: the variables mrp
+// sets on every job so thread pools (OpenMP, MKL, numexpr, polars, Go,
+// TensorFlow) size to the job's threads rather than the host's cores.
+func threadEnvs() []string {
+	return []string{
+		"GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS", "NUMEXPR_NUM_THREADS",
+		"OMP_NUM_THREADS", "OMP_THREAD_LIMIT", "POLARS_MAX_THREADS", "ROOT_MAX_THREADS",
+		"TF_NUM_THREADS",
+	}
+}
+
+// adapterEnv is the stage child's environment: the shim's own env with
+// TMPDIR pointed at the phase's per-stage tmp dir (created by prepDirs),
+// matching mrp's per-job TMPDIR so stage tempfiles land on the task's scratch
+// volume rather than the container's (possibly tiny) /tmp, and each threadEnvs
+// variable set to ceil(threads). mrp merges these job variables over its own
+// environment (util.MergeEnv), so an inherited value is overridden, and exec
+// keeps the last of duplicate keys.
+func adapterEnv(meta string, threads float64) []string {
+	env := os.Environ()
+
+	n := strconv.Itoa(int(math.Ceil(threads)))
+	for _, key := range threadEnvs() {
+		env = append(env, key+"="+n)
+	}
+
+	return append(env, "TMPDIR="+filepath.Join(meta, "tmp"))
 }
 
 // runPyAdapter runs a python stage directly. The adapter expects fd 3 to be its
@@ -381,7 +404,7 @@ func adapterEnv(meta string) []string {
 func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources) error {
 	cmd := limitedCommand(ctx, a, res.VMemGB, defaultPython, a.Shell, a.Stagecode, phase, meta, files, journal)
 	cmd.Dir = files
-	cmd.Env = adapterEnv(meta)
+	cmd.Env = adapterEnv(meta, res.Threads)
 	mon := startMonitor(cmd, a, res.MemGB)
 
 	aio, err := openAdapterIO(meta)
@@ -408,7 +431,7 @@ func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, p
 func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapter, argv []string, phase string, res Resources) error {
 	cmd := limitedCommand(ctx, a, res.VMemGB, argv[0], append(argv[1:], meta, files, journal)...)
 	cmd.Dir = files
-	cmd.Env = adapterEnv(meta)
+	cmd.Env = adapterEnv(meta, res.Threads)
 	mon := startMonitor(cmd, a, res.MemGB)
 
 	stdout, err := os.Create(filepath.Join(meta, "_stdout"))

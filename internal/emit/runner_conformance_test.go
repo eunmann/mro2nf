@@ -55,6 +55,10 @@ func TestRunnerConformance(t *testing.T) {
 	mreMain := env.runPhase(t, "mre", "main", []string{"-chunk", chunk})
 	pyMain := env.runPhase(t, "py", "main", []string{"-chunk", chunk})
 	diffDirs(t, "main", mreMain, pyMain)
+	// mrp's thread-limit env vars reach the stage on both stacks (#247).
+	if !leafContains(t, filepath.Join(mreMain, "outs", "f"), "omp=1 ") {
+		t.Error("main report does not show OMP_NUM_THREADS=1")
+	}
 	mustContain(t, filepath.Join(mreMain, "outs", "data.json"),
 		`\u003c`, `\u0026`, `\u0001`, `\u0002`, `\u2028`, `\u2029`)
 
@@ -272,7 +276,9 @@ func requirePython(t *testing.T) {
 // file-typed chunk-in the split writes (write_chunk_bundles' mark_files vs
 // shim.WriteChunkBundle staging), fractional resource overrides (GoFloat's
 // formatting in chunks.json + joinres.json), and a file output.
-const conformanceStage = `import martian
+const conformanceStage = `import os
+
+import martian
 
 def split(args):
     src = martian.make_path('chunk_src.txt').decode()
@@ -293,9 +299,10 @@ def main(args, outs):
     with open(args.src) as f:
         payload = f.read()
     with open(p, 'w') as f:
-        f.write('value=%s threads=%s mem=%s src=%s' % (
+        f.write('value=%s threads=%s mem=%s omp=%s src=%s' % (
             args.value, martian.get_threads_allocation(),
-            martian.get_memory_allocation(), payload))
+            martian.get_memory_allocation(),
+            os.environ.get('OMP_NUM_THREADS'), payload))
     outs.report = p
     outs.note = args.html + ' <main>&\x02'
 
@@ -671,4 +678,27 @@ func mustNotContain(t *testing.T, path string, unwanted ...string) {
 			t.Errorf("%s: unexpectedly contains %q", path, u)
 		}
 	}
+}
+
+// leafContains reports whether any file directly under dir contains want.
+func leafContains(t *testing.T, dir, want string) bool {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if strings.Contains(string(b), want) {
+			return true
+		}
+	}
+
+	return false
 }

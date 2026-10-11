@@ -53,3 +53,42 @@ func TestAdapterTMPDIR(t *testing.T) {
 		t.Errorf("TMPDIR = %q, want %q", got.T, want)
 	}
 }
+
+// TestAdapterThreadEnvs pins #247: like mrp (core/jobmanager.go threadEnvs),
+// the stage child runs with every jobmanagers/config.json thread_envs variable
+// set to ceil(threads), overriding a value inherited from the environment.
+func TestAdapterThreadEnvs(t *testing.T) {
+	t.Setenv("OMP_NUM_THREADS", "96")
+
+	work := t.TempDir()
+	script := filepath.Join(work, "stage.sh")
+	body := "#!/bin/sh\nprintf '{\"v\":\"%s %s %s %s %s %s %s %s %s\"}' " +
+		"\"$GOMAXPROCS\" \"$MKL_NUM_THREADS\" \"$NUMEXPR_MAX_THREADS\" \"$NUMEXPR_NUM_THREADS\" " +
+		"\"$OMP_NUM_THREADS\" \"$OMP_THREAD_LIMIT\" \"$POLARS_MAX_THREADS\" \"$ROOT_MAX_THREADS\" " +
+		"\"$TF_NUM_THREADS\" > \"$2/_outs\"\n"
+
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := Adapter{Lang: ir.LangExec, Stagecode: script}
+	chunk := ChunkDef{Args: map[string]json.RawMessage{}}
+
+	outs, err := RunMain(context.Background(), work, a, nil, chunk,
+		nil, types.NewTable(nil), Resources{Threads: 1.5, MemGB: 1}, Invocation{Call: "T"})
+	if err != nil {
+		t.Fatalf("RunMain: %v", err)
+	}
+
+	var got struct {
+		V string `json:"v"`
+	}
+
+	if err := json.Unmarshal(outs, &got); err != nil {
+		t.Fatalf("parse outs %q: %v", outs, err)
+	}
+
+	if want := "2 2 2 2 2 2 2 2 2"; got.V != want {
+		t.Errorf("thread envs = %q, want %q (ceil(1.5) for each, overriding the inherited 96)", got.V, want)
+	}
+}

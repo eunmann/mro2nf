@@ -1197,6 +1197,21 @@ class monitored_phase:
         return False
 
 
+THREAD_ENVS = (
+    "GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS",
+    "NUMEXPR_NUM_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
+    "POLARS_MAX_THREADS", "ROOT_MAX_THREADS", "TF_NUM_THREADS",
+)
+
+
+def apply_thread_envs(threads):
+    """Ports shim.go adapterEnv's thread-limit variables (mrp's threadEnvs):
+    each set to ceil(threads), overriding an inherited value. Set before the
+    stage module is imported, since thread pools read them at load time."""
+    for key in THREAD_ENVS:
+        os.environ[key] = str(math.ceil(threads))
+
+
 def import_stage(stagecode):
     """Ports martian_shell.py StageWrapper's stage-module import mechanics."""
     # Allow shells and stage code to import martian easily.
@@ -1254,6 +1269,7 @@ def setup_stage(fl, files, eff, invocation_args):
         files, _js_num(eff.threads), _js_num(eff.mem_gb),
         call=fl.call, invocation_args=invocation_args,
     )
+    apply_thread_envs(eff.threads)
     os.chdir(files)
     try:
         return import_stage(fl.stagecode)

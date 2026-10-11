@@ -571,6 +571,19 @@ class ResourcesTest(unittest.TestCase):
             rs.overridden(fl, _res(threads=4.0)), rs.cli_resources(fl))
         self.assertEqual(eff.threads, 0.5)
 
+    def test_thread_envs_override_inherited(self):
+        saved = {k: os.environ.get(k) for k in rs.THREAD_ENVS}
+        try:
+            os.environ["OMP_NUM_THREADS"] = "96"
+            rs.apply_thread_envs(1.5)
+            self.assertEqual({os.environ[k] for k in rs.THREAD_ENVS}, {"2"})
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
     def test_override_beats_chunk_request(self):
         fl = rs.parse_flags("main", ["-memgb", "1.5", "-overridememgb", "3"])
         eff = rs.resolve_resources(
