@@ -131,10 +131,10 @@ func loadOutsJSON(allow divergence.Allowlist, fixture, ps, results string) (any,
 // of the path of a file left unpublished.
 const unpublishedPath = "<unpublished>"
 
-// nfTaskPath matches a path inside a Nextflow task work dir, local or an
-// object-store URI: one below the task's <2 hex>/<30 hex> hash dirs. Mirrors
-// NF_TASK_PATH in normcmp.py.
-var nfTaskPath = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9+.-]*://[^/]*)?/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.`)
+// nfTaskPath matches an absolute path inside a Nextflow task work dir: one
+// below the task's <2 hex>/<30 hex> hash dirs. Mirrors NF_TASK_PATH in
+// normcmp.py.
+var nfTaskPath = regexp.MustCompile(`^/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.`)
 
 // nfOutsRewrite returns the rewrite of pipeline_outs.json strings the
 // allowlist excuses for fixture, nil for none: a path inside a task work dir,

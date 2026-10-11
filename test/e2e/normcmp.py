@@ -14,8 +14,8 @@ entry for its comparator rule, as in the Go differential (published_test.go):
   outs-dir prefix is stripped from mrp's strings.
 - placeholder-unpublished-paths: a file left unpublished is named where its
   task wrote it, by mrp in the pipestance outside outs/, by mro2nf in a
-  Nextflow task work dir, local or an object store, so that path on either
-  side becomes one placeholder.
+  Nextflow task work dir, so that path on either side becomes one
+  placeholder.
 
 An issue-tracked entry applies its rule only on the fixtures it names; the Go
 differential, not this script, fails it once it excuses nothing there.
@@ -33,10 +33,9 @@ UNPUBLISHED_PATHS = "placeholder-unpublished-paths"
 
 UNPUBLISHED = "<unpublished>"
 
-# A path inside a Nextflow task work dir, local or an object-store URI: one
-# below the task's <2 hex>/<30 hex> hash dirs. Mirrors nfTaskPath in
-# published_test.go.
-NF_TASK_PATH = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*://[^/]*)?/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.")
+# An absolute path inside a Nextflow task work dir: one below the task's
+# <2 hex>/<30 hex> hash dirs. Mirrors nfTaskPath in published_test.go.
+NF_TASK_PATH = re.compile(r"^/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.")
 
 OBJECT = "<object>"
 NUMBER = "<number>"
