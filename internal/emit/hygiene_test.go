@@ -539,8 +539,9 @@ func TestEmitContainerResetsBuildContext(t *testing.T) {
 }
 
 // TestEmitRefusesSourceInBuildContext checks a container target refuses a
-// tool or stage src that lies in, or holds, the runtime/ it empties, instead
-// of deleting the user's only copy before vendoring it.
+// tool, the -shell adapter's module, or a stage src that lies in, or holds,
+// the runtime/ it empties, by its literal or resolved path, instead of
+// deleting the user's only copy before vendoring it.
 func TestEmitRefusesSourceInBuildContext(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -569,9 +570,39 @@ func TestEmitRefusesSourceInBuildContext(t *testing.T) {
 
 			return keep
 		}},
+		{"stage_src_holds_runtime_through_symlinked_out", func(t *testing.T, tr hygieneTree, opts *emit.Options) string {
+			t.Helper()
+			link := filepath.Join(t.TempDir(), "link")
+			if err := os.Symlink(inTreeCode(tr), link); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.Mkdir(filepath.Join(inTreeCode(tr), "out"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			opts.OutDir = filepath.Join(link, "out")
+
+			return filepath.Join(inTreeCode(tr), "__init__.py")
+		}},
+		{"shell_module_links_into_runtime", func(t *testing.T, _ hygieneTree, opts *emit.Options) string {
+			t.Helper()
+			vendored := filepath.Join(opts.OutDir, "runtime", "adapters", "martian.py")
+			module := filepath.Join(filepath.Dir(opts.Shell), "martian.py")
+			if err := os.Remove(module); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.Symlink(vendored, module); err != nil {
+				t.Fatal(err)
+			}
+
+			return vendored
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := newHygieneTree(t)
+			writeTreeFile(t, filepath.Join(filepath.Dir(tr.shell), "martian.py"), "# module\n")
 			mro := filepath.Join(tr.root, "pipeline.mro")
 			writeTreeFile(t, mro, fmt.Sprintf(hygieneMRO, "input/absent.txt"))
 
