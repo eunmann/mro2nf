@@ -220,6 +220,38 @@ func TestStubOutputsConform(t *testing.T) {
 	}
 }
 
+// TestStubSplitNamesChunkFilesApart checks the chunks of one split, which all
+// make their files in the split's one files dir, never pick the same name.
+func TestStubSplitNamesChunkFilesApart(t *testing.T) {
+	p := stubProgram()
+	p.Stages[0].ChunkIn = []Param{{Name: "c0", Type: Type{Base: typePath, Arr: 1}}}
+	r := newStubRunner(t, p)
+
+	for i := range 100 {
+		defs, _ := r.run("split", map[string]any{"i0": nil, "i1": []any{float64(i)}})
+
+		var sd struct {
+			Chunks []struct {
+				C0 []any `json:"c0"`
+			} `json:"chunks"`
+		}
+
+		decodeInto(t, defs, &sd)
+
+		seen := map[any]bool{}
+
+		for _, c := range sd.Chunks {
+			for _, path := range c.C0 {
+				if path != nil && seen[path] {
+					t.Fatalf("split %d: two chunks share %v:\n%s", i, path, defs)
+				}
+
+				seen[path] = true
+			}
+		}
+	}
+}
+
 func decodeInto(t *testing.T, s string, v any) {
 	t.Helper()
 

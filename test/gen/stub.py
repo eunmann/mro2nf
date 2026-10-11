@@ -244,8 +244,10 @@ def split(args):
     maybe_fail("split", h)
     r = Rng(h)
     chunks = []
+    # Every chunk makes its files in the split's one files dir.
+    used = set()
     for i in range(r.below(4)):
-        maker = Maker(Rng("%s/%d" % (h, i)), "%s:chunk%d" % (SPEC["name"], i), set())
+        maker = Maker(Rng("%s/%d" % (h, i)), "%s:chunk%d" % (SPEC["name"], i), used)
         chunk = {name: maker.value(ptype(t)) for name, t in SPEC["chunk_in"]}
         chunk["__mem_gb"] = r.pick([1, 0.5, 2])
         chunk["__threads"] = r.pick([1, 2])
