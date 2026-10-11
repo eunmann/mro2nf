@@ -454,6 +454,8 @@ var mrpDiffCases = []mrpDiffCase{
 	// neither runner enforces that, so both succeed;
 	// TestOrdinaryFailureRetriesWithEscalatedMemory covers the -monitor kill.
 	{name: "flaky_retry"},
+	// #324: a split returning no chunks still runs the join.
+	{name: "split_no_chunks"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -462,9 +464,32 @@ var mrpDiffCases = []mrpDiffCase{
 // recorded with its open issue. Fixing the issue fails the case until the
 // divergence is deleted.
 var mrpOutcomeCases = []mrpOutcomeCase{
+	// An ASSERT in each phase: main, split and join.
 	{name: "assert_min", mrp: failedIn(failAssert, "BOOM")},
-	// #274: mrp's output validation fails UP before DOWN binds UP.s.b.
+	{name: "assert_split", mrp: failedIn(failAssert, "SPLIT_BOOM")},
+	{name: "assert_join", mrp: failedIn(failAssert, "JOIN_BOOM")},
+	// An ordinary exception is an error, never an ASSERT, however often
+	// mro2nf retries it.
+	{name: "stage_raise", mrp: failedIn(failError, "RAISE")},
+	// mrp's output validation fails the producer before its consumer binds
+	// the bad value: a missing struct key (#274), a float in an `out int`
+	// (#338).
 	{name: "missing_struct_key", mrp: failedIn(failError, "UP")},
+	{name: "bad_out_type", mrp: failedIn(failError, "BAD")},
+	// mrp fails the split ("Expected string for __special"); mro2nf ignores
+	// the malformed chunk resource key and succeeds.
+	{
+		name:       "split_bad_special",
+		mrp:        failedIn(failError, "BAD_SPECIAL"),
+		divergence: &outcomeDivergence{issue: 275, nf: runOutcome{}},
+	},
+	// The reverse: mrp runs WORK behind a runtime-null disable gate, mro2nf's
+	// driver aborts on it. Once fixed, the fixture moves to mrpDiffCases.
+	{
+		name:       "null_disable_gate",
+		mrp:        runOutcome{},
+		divergence: &outcomeDivergence{issue: 253, nf: runOutcome{Failed: true}},
+	},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow

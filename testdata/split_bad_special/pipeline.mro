@@ -1,0 +1,33 @@
+# Failure-parity fixture (#275): the split returns a chunk whose __special
+# resource key is a number, not a string. mrp fails the stage ("Expected string
+# for __special"); mro2nf runs the chunk with default resources, a known
+# divergence until #275 is fixed. Exercised by TestMrpDiffFailureParity.
+stage BAD_SPECIAL(
+    in  int[] xs,
+    out int   total,
+    src py    "stages/bad_special",
+) split (
+    in  int   x,
+    out int   y,
+)
+
+pipeline BSP(
+    in  int[] xs,
+    out int   total,
+)
+{
+    call BAD_SPECIAL(
+        xs = self.xs,
+    )
+
+    return (
+        total = BAD_SPECIAL.total,
+    )
+}
+
+call BSP(
+    xs = [
+        1,
+        2,
+    ],
+)

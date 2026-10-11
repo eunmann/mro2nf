@@ -1,0 +1,33 @@
+# #324 fixture: the split returns no chunks. mrp skips straight to the join,
+# which sees empty chunk_defs and chunk_outs (total = 0) and succeeds; mro2nf
+# must run the join the same way rather than fail or publish nothing.
+# Exercised by TestMrpDiff.
+stage NO_CHUNKS(
+    in  int[] xs,
+    out int   total,
+    src py    "stages/no_chunks",
+) split (
+    in  int   x,
+    out int   y,
+)
+
+pipeline SNC(
+    in  int[] xs,
+    out int   total,
+)
+{
+    call NO_CHUNKS(
+        xs = self.xs,
+    )
+
+    return (
+        total = NO_CHUNKS.total,
+    )
+}
+
+call SNC(
+    xs = [
+        1,
+        2,
+    ],
+)

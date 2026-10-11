@@ -1,0 +1,41 @@
+# Outcome-parity fixture (#253): WORK's disable gate is FLAG.on, which resolves
+# to null at runtime. mrp treats the null gate as false and runs WORK (y = 30);
+# mro2nf aborts the run, a known divergence until #253 is fixed. Exercised by
+# TestMrpDiffFailureParity.
+stage FLAG(
+    in  bool b,
+    out bool on,
+    src py   "stages/flag",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline DC(
+    in  int  x,
+    in  bool b,
+    out int  y,
+)
+{
+    call FLAG(
+        b = self.b,
+    )
+
+    call WORK(
+        x = self.x,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    return (
+        y = WORK.y,
+    )
+}
+
+call DC(
+    x = 3,
+    b = null,
+)
