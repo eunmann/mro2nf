@@ -139,19 +139,21 @@ updated to the tree layout.
 it (outputs in declaration order, struct fields and map keys sorted, arrays by
 index) and names that path for every later output that reaches the file, linking
 the later path to it (`post_process.go` `moveOutFile`, `copyOutSymlink`). A
-bundle copies a path its payload names at several positions once
-(`internal/shim` `MarkFiles`), so the file stays one leaf through every bind;
-`mre publish-layout` walks in mrp's order and names a leaf's first published
-path for every later reference, and each later path gets a copy (allowlist
-entry `published-symlinks-copied`). Fixture `shared_out_file`.
+bundle records each leaf's origin beside it and copies a file of one origin
+once, however many positions or input bundles reach it (`internal/shim`
+`MarkFiles`), so the file stays one leaf through every bind, pass-through stage
+and sub-pipeline boundary; `mre publish-layout` walks in mrp's order and names
+a leaf's first published path for every later reference, and each later path
+gets a copy (allowlist entry `published-symlinks-copied`). Fixture
+`shared_out_file`.
 
 **FIXED (#432):** below an array of two or more dimensions (`T[][]`,
 `map<T[][]>`, `map<T>[][]`, as an output or a struct field) mrp publishes no
 file: `moveOutArrayDir` descends the array one level as if its elements had the
 base type, so each element fails to move, is kept as the stage wrote it, and mrp
 prints `Could not move output files`. `mre publish-layout` publishes nothing
-there either, warns on stderr, and names each such file null, since an
-unpublished file has no path relative to `results/` (allowlist entry
+there either, warns on stderr, and names each such file null, written or not,
+since an unpublished file has no path relative to `results/` (allowlist entry
 `unpublished-files-null`). Fixture `nested_path_unpublished`.
 
 ## D. Binding & resolution — faithful (two real divergences)
