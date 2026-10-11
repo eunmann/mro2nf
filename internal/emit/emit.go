@@ -179,6 +179,10 @@ func Emit(prog *ir.Program, opts Options) error {
 
 	features := opts.featureSet()
 
+	// Split before inlining so internal/overrides, which resolves the
+	// un-inlined program, derives the same copy names.
+	SplitKnownContexts(prog)
+
 	// #221: flatten eligible sub-pipeline boundaries before planning, so their
 	// entry/return BIND tasks never exist. A pure orchestration transform (the
 	// data plane and every leaf binding's value are unchanged); opt-in while it

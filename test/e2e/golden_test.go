@@ -172,6 +172,9 @@ var goldenCases = []goldenCase{
 	{"empty_fork_cascade", "empty_fork_cascade", "expected/outs.json"},
 	{"empty_fork_cascade_override", "empty_fork_cascade", "expected/override_outs.json"},
 	{"empty_fork_mixed", "empty_fork_mixed", "expected/outs.json"},
+	// #241: one sub-pipeline at two call sites, one invocation-known empty
+	// (null) and one runtime-empty ([]); the rule is decided per call site.
+	{"empty_fork_two_sites", "empty_fork_two_sites", "expected/outs.json"},
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},

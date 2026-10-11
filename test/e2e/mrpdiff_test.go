@@ -361,6 +361,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "empty_fork_sub", native: true, inline: true},
 	{name: "empty_fork_cascade", native: true},
 	{name: "empty_fork_mixed", native: true, runner: true},
+	// #241: SUB at two call sites (invocation-known empty vs runtime empty),
+	// disable-gated so every leg keeps both SUB boundaries.
+	{name: "empty_fork_two_sites", native: true, inline: true},
 	// The native-suite golden anchors: their committed expected/outs.json
 	// files claim mrp provenance, so the live differential machine-checks
 	// that claim — otherwise TestGolden + the native suites would prove

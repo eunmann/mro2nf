@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/emit"
+	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/overrides"
 )
@@ -885,5 +887,44 @@ func TestConvertCallNameCollisionViaPipeline(t *testing.T) {
 	}
 	if strings.Contains(cfg, "withName") {
 		t.Errorf("no selector should be emitted for the ambiguous expansion:\n%s", cfg)
+	}
+}
+
+// TestConvertReachesKnownContextCopies guards the #241 seam: the emitter gives
+// SUB one copy per invocation-known context (S1's SUB, S2's SUB_ctx2), so an
+// override of the stage inside must also reach the copy's per-call processes
+// (a -native scatter of SCALE runs as STAGE_<Qualify(pipe, call)>).
+func TestConvertReachesKnownContextCopies(t *testing.T) {
+	const dir = "../../testdata/empty_fork_two_sites"
+
+	ast, err := frontend.Parse(dir+"/pipeline.mro", []string{dir}, false)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	prog, err := frontend.Lower(ast, nil)
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+
+	cfg, unmapped, err := overrides.Convert([]byte(`{"TOP.S2.SCALE": {"mem_gb": 8}}`), prog)
+	if err != nil || len(unmapped) != 0 {
+		t.Fatalf("Convert: err=%v unmapped=%v", err, unmapped)
+	}
+
+	sels := regexp.MustCompile(`withName: '([^']+)'`).FindAllStringSubmatch(cfg, -1)
+	if len(sels) != 1 {
+		t.Fatalf("want 1 selector, got %d:\n%s", len(sels), cfg)
+	}
+
+	re := regexp.MustCompile("^(?:" + sels[0][1] + ")$")
+	for _, pipe := range []string{"SUB", "SUB_ctx2"} {
+		if name := "STAGE_" + emit.Qualify(pipe, "SCALE"); !re.MatchString(name) {
+			t.Errorf("selector %q must full-match %q", sels[0][1], name)
+		}
+	}
+
+	if prog.Pipelines["SUB_ctx2"] != nil {
+		t.Error("Convert must not add the copies to the caller's program")
 	}
 }
