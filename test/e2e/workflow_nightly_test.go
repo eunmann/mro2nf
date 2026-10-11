@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -124,7 +125,11 @@ func TestNightlyFailureReport(t *testing.T) {
 
 var manifestFloor = regexp.MustCompile(`(?m)^manifest\.nextflowVersion = '!>=([0-9.]+)'$`)
 
-// TestNightlyNextflowFloor requires the nightly e2e matrix to run the
+// nightlySuiteJobs are the nightly jobs that run an e2e suite on the Nextflow
+// matrix.
+var nightlySuiteJobs = []string{"e2e", "docker"}
+
+// TestNightlyNextflowFloor requires every nightly suite matrix to run the
 // Nextflow floor the generated nextflow.config declares, and latest stable,
 // so a floor bump in the emitter moves the CI floor with it.
 func TestNightlyNextflowFloor(t *testing.T) {
@@ -140,12 +145,44 @@ func TestNightlyNextflowFloor(t *testing.T) {
 		t.Fatalf("generated nextflow.config declares no manifest.nextflowVersion floor:\n%s", cfg)
 	}
 
-	matrix := readWorkflow(t, nightlyWorkflow).get("jobs").get("e2e").get("strategy").get("matrix")
-	got := matrix.get("nextflow").list()
+	jobs := readWorkflow(t, nightlyWorkflow).get("jobs")
 
-	for _, want := range []string{string(m[1]), "latest-stable"} {
-		if !slices.Contains(got, want) {
-			t.Errorf("%s e2e matrix nextflow %q lacks %q", nightlyWorkflow, got, want)
+	for _, id := range nightlySuiteJobs {
+		got := jobs.get(id).get("strategy").get("matrix").get("nextflow").list()
+
+		for _, want := range []string{string(m[1]), "latest-stable"} {
+			if !slices.Contains(got, want) {
+				t.Errorf("%s %s matrix nextflow %q lacks %q", nightlyWorkflow, id, got, want)
+			}
 		}
+	}
+}
+
+// TestNightlyShardsPartitionSuite holds the nightly e2e shards to harness
+// shardSkip's contract: E2E_SHARD_TOTAL is the shard count and the shards are
+// 0..N-1, so their union runs every test exactly once.
+func TestNightlyShardsPartitionSuite(t *testing.T) {
+	job := readWorkflow(t, nightlyWorkflow).get("jobs").get("e2e")
+
+	shards := job.get("strategy").get("matrix").get("shard").list()
+	if len(shards) < 2 {
+		t.Fatalf("%s e2e matrix shard %q: want at least 2 shards", nightlyWorkflow, shards)
+	}
+
+	for i, s := range shards {
+		if s != strconv.Itoa(i) {
+			t.Errorf("%s e2e matrix shard %q is not the contiguous range 0..%d", nightlyWorkflow, shards, len(shards)-1)
+
+			break
+		}
+	}
+
+	env := job.get("env")
+	if got, want := env.get("E2E_SHARD_TOTAL").scalar, strconv.Itoa(len(shards)); got != want {
+		t.Errorf("%s e2e E2E_SHARD_TOTAL = %q, want %q (the shard count)", nightlyWorkflow, got, want)
+	}
+
+	if got := env.get("E2E_SHARD_INDEX").scalar; got != "${{ matrix.shard }}" {
+		t.Errorf("%s e2e E2E_SHARD_INDEX = %q, want the matrix shard", nightlyWorkflow, got)
 	}
 }

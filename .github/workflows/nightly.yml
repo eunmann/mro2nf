@@ -20,29 +20,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Sharded like PR Validation's e2e: unsharded, the suite ran ~25 minutes on
+  # latest stable and hit make test-e2e's 30-minute go-test timeout on the
+  # slower floor engine. E2E_SHARD_TOTAL must equal the shard list's length
+  # (TestNightlyShardsPartitionSuite).
   e2e:
-    name: Nightly ${{ matrix.suite }} (Nextflow ${{ matrix.nextflow }})
+    name: Nightly test-e2e shard ${{ matrix.shard }} (Nextflow ${{ matrix.nextflow }})
     runs-on: ubuntu-latest
-    # Unsharded: setup, a Martian build on a cache miss (~5 min) and the
-    # 30-minute go-test timeout, with headroom.
-    timeout-minutes: 60
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         # The floor must equal manifest.nextflowVersion in the generated
-        # nextflow.config (TestNightlyNextflowFloor).
+        # nextflow.config, here and in the docker job (TestNightlyNextflowFloor).
         nextflow: ["23.10.0", latest-stable]
-        suite: [test-e2e, test-e2e-docker]
+        shard: [0, 1, 2, 3]
     env:
       E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
+      E2E_SHARD_INDEX: ${{ matrix.shard }}
+      E2E_SHARD_TOTAL: "4"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - if: matrix.suite == 'test-e2e'
-        uses: ./.github/actions/setup-martian
+      - uses: ./.github/actions/setup-martian
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
@@ -59,7 +62,41 @@ jobs:
           [ "$WANT" = latest-stable ] || [ "$ver" = "$WANT" ] || {
             echo "::error::installed Nextflow $ver, want $WANT"; exit 1;
           }
-      - run: make ${{ matrix.suite }}
+      - run: make test-e2e
+
+  docker:
+    name: Nightly test-e2e-docker (Nextflow ${{ matrix.nextflow }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        nextflow: ["23.10.0", latest-stable]
+    env:
+      E2E_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+        with:
+          version: ${{ matrix.nextflow }}
+      - name: Check the installed Nextflow version
+        env:
+          WANT: ${{ matrix.nextflow }}
+        run: |
+          ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')
+          echo "Nextflow $ver"
+          [ "$WANT" = latest-stable ] || [ "$ver" = "$WANT" ] || {
+            echo "::error::installed Nextflow $ver, want $WANT"; exit 1;
+          }
+      - run: make test-e2e-docker
 
   scale:
     name: Nightly scale smoke
@@ -87,7 +124,7 @@ jobs:
   # another branch may be trying out its own broken nightly.
   report:
     name: Nightly failure report
-    needs: [e2e, scale]
+    needs: [e2e, docker, scale]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
