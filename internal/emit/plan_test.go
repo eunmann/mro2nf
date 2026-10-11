@@ -583,6 +583,91 @@ call TOP(empty = [],)
 	}
 }
 
+// returnKnownProg is an entry TOP whose sub-pipeline calls return: KNOWN only
+// invocation-known values, MIXED a stage output too, NONE nothing, and CASCADE
+// a mapped call over its input, whose length (not value) is known.
+func returnKnownProg() *ir.Program {
+	self := func(id string) ir.Value { return ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: id}} }
+	call := func(id, out string) ir.Value {
+		return ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: id, Output: out}}
+	}
+	in := []ir.Param{{Name: "xs"}}
+	pass := []ir.Binding{{Param: "xs", Value: self("xs")}}
+
+	return &ir.Program{
+		Entry: &ir.EntryCall{Callable: "TOP"},
+		Stages: map[string]*ir.Stage{
+			"GEN": {Name: "GEN", Out: []ir.Param{{Name: "o"}}},
+			"SC":  {Name: "SC", Out: []ir.Param{{Name: "w"}}},
+		},
+		Pipelines: map[string]*ir.Pipeline{
+			"KNOWN": {Name: "KNOWN", In: in, Returns: []ir.Binding{
+				{Param: "ys", Value: self("xs")}, {Param: "lit", Value: ir.Value{Literal: []byte("[1]")}},
+			}},
+			"MIXED": {Name: "MIXED", In: in, Calls: []ir.Call{{Name: "GEN", Callable: "GEN"}}, Returns: []ir.Binding{
+				{Param: "ys", Value: self("xs")}, {Param: "up", Value: call("GEN", "o")},
+			}},
+			"NONE": {Name: "NONE", In: in},
+			"CASCADE": {Name: "CASCADE", In: in, Calls: []ir.Call{{Name: "SC", Callable: "SC", Mapped: true, Bindings: []ir.Binding{
+				{Param: "v", Split: true, Value: self("xs")},
+			}}}, Returns: []ir.Binding{{Param: "w", Value: call("SC", "w")}}},
+			"TOP": {Name: "TOP", In: in, Calls: []ir.Call{
+				{Name: "K", Callable: "KNOWN", Bindings: pass},
+				{Name: "M", Callable: "MIXED", Bindings: pass},
+				{Name: "N", Callable: "NONE", Bindings: pass},
+				{Name: "C", Callable: "CASCADE", Bindings: pass},
+			}},
+		},
+	}
+}
+
+// TestReturnKnown pins how a ref through a plain sub-pipeline call reads the
+// callee's return bindings: a whole-outs ref needs every one known (and at
+// least one), a field or projected-field ref reads only its own binding, a
+// field the callee does not return is unknown, and a mapped call's output is
+// known by length only.
+func TestReturnKnown(t *testing.T) {
+	e := evalKnown(returnKnownProg())
+
+	var top *knownInst
+
+	for _, in := range e.insts {
+		if in.p.Name == "TOP" {
+			top = in
+		}
+	}
+
+	if top == nil {
+		t.Fatal("no TOP instance")
+	}
+
+	cases := []struct {
+		call, output string
+		lenOnly      bool
+		want         bool
+	}{
+		{"K", "", false, true},
+		{"K", "ys", false, true},
+		{"K", "ys.x", false, true},
+		{"K", "lit", false, true},
+		{"K", "absent", false, false},
+		{"M", "", false, false},
+		{"M", "ys", false, true},
+		{"M", "up", false, false},
+		{"M", "up", true, false},
+		{"N", "", true, false},
+		{"C", "w", false, false},
+		{"C", "w", true, true},
+		{"C", "", true, true},
+	}
+
+	for _, tc := range cases {
+		if got := e.returnKnown(top.subs[tc.call], tc.output, tc.lenOnly); got != tc.want {
+			t.Errorf("returnKnown(%s, %q, lenOnly=%v) = %v, want %v", tc.call, tc.output, tc.lenOnly, got, tc.want)
+		}
+	}
+}
+
 // TestBuildPlanForward guards #73's forward planning: file_chain's READFILE
 // just forwards MAKEFILE.f, so it routes MAKEFILE's bundle straight in.
 func TestBuildPlanForward(t *testing.T) {

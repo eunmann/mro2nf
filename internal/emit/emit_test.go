@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,6 +87,30 @@ func readFile(t *testing.T, path string) string {
 	}
 
 	return string(data)
+}
+
+var moduleDecl = regexp.MustCompile(`(?m)^(process|workflow) (\w+) \{`)
+
+// checkDeclared requires the module src to declare exactly the want blocks of
+// kind ("process" or "workflow"), in any order. A check that a module lacks
+// some name passes vacuously once the emitter renames it; an exact list fails.
+func checkDeclared(t *testing.T, module, src, kind string, want ...string) {
+	t.Helper()
+
+	got := []string{}
+
+	for _, m := range moduleDecl.FindAllStringSubmatch(src, -1) {
+		if m[1] == kind {
+			got = append(got, m[2])
+		}
+	}
+
+	slices.Sort(got)
+	slices.Sort(want)
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s %s declarations (-want +got):\n%s", module, kind, diff)
+	}
 }
 
 func loadAndEmit(t *testing.T) string {
@@ -220,9 +246,7 @@ func TestEmitHeadNodePublish(t *testing.T) {
 	// Every backend folds leaf publishing into LAYOUT — no per-leaf task.
 	for _, target := range []emit.Target{emit.TargetLocal, emit.TargetHealthOmics, emit.TargetAWSBatch} {
 		nf := emitMain(target)
-		if strings.Contains(nf, "PUBLISH_LEAF") {
-			t.Errorf("%s target must not emit a PUBLISH_LEAF process (head-node publish)", target)
-		}
+		checkDeclared(t, string(target)+" main.nf", nf, "process", "BUILD_ENTRY_ARGS", "LAYOUT")
 
 		for _, want := range []string{"-leaves f -outs outs", "path 'outs/*', hidden: true,", "it.startsWith('outs/')"} {
 			if !strings.Contains(nf, want) {
@@ -497,9 +521,9 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 	}
 
 	// The keyed disable is native now — no DISABLE_K bind, no join on its output.
-	if strings.Contains(mod, "process DISABLE_5_INNER__DBL_K") {
-		t.Error("a natively-gated keyed disable must emit no DISABLE_K process (#59)")
-	}
+	checkDeclared(t, "pipe_INNER.nf", mod, "process",
+		"FORK_5_INNER__DBL", "MERGE_5_INNER__DBL", "BIND_5_INNER__return",
+		"FORK_5_INNER__DBL_K", "MERGE_5_INNER__DBL_K", "BIND_5_INNER__return_K")
 
 	if strings.Contains(mod, "Mro2nf.disabledDir(row[-1]") {
 		t.Error("keyed disable must read the flag natively (disabledDir), not from a DISABLE bundle")
@@ -810,9 +834,8 @@ func TestEmitGPUAccelerator(t *testing.T) {
 		t.Errorf("TRAIN has %d accelerator directives, want 1 (MAIN only, not SPLIT/JOIN)", got)
 	}
 
-	if strings.Contains(train, "TRAIN_MAIN_K") {
-		t.Error("TRAIN is not map-called; its keyed _MAIN_K variant must be pruned (#59)")
-	}
+	checkDeclared(t, "stage_TRAIN.nf", train, "process", "TRAIN_SPLIT", "TRAIN_MAIN", "TRAIN_JOIN")
+	checkDeclared(t, "stage_TRAIN.nf", train, "workflow", "wf_TRAIN")
 }
 
 // TestEmitNativeDisableGate guards #59 Levers 2+3: a disabled call whose flag is
@@ -833,12 +856,9 @@ func TestEmitNativeDisableGate(t *testing.T) {
 	if !strings.Contains(top, "r_TRIPLE = STAGE_3_TOP__TRIPLE(g_TRIPLE.run") {
 		t.Errorf("a disabled leaf stage must fuse bind into the stage task:\n%s", top)
 	}
-	if strings.Contains(top, "process BIND_3_TOP__TRIPLE") {
-		t.Errorf("a fused disabled leaf stage must emit no standalone BIND:\n%s", top)
-	}
-	if strings.Contains(top, "process DISABLE") {
-		t.Errorf("a natively-gated disable must emit no DISABLE process:\n%s", top)
-	}
+	// No standalone BIND for the fused leaf, and no DISABLE process.
+	checkDeclared(t, "pipe_TOP.nf", top, "process",
+		"STAGE_3_TOP__CHECK", "BIND_3_TOP__INNER", "STAGE_3_TOP__TRIPLE", "BIND_3_TOP__return")
 
 	d := emitFixture(t, "disabled_callref", map[string]string{"FLAG": "/x/f", "WORK": "/x/w"})
 
@@ -851,9 +871,7 @@ func TestEmitNativeDisableGate(t *testing.T) {
 	if !strings.Contains(dp, "r_WORK = STAGE_2_DC__WORK(") {
 		t.Errorf("a disabled upstream-ref leaf stage must fuse bind into the stage task:\n%s", dp)
 	}
-	if strings.Contains(dp, "process DISABLE") {
-		t.Errorf("a natively-gated upstream-ref disable must emit no DISABLE process:\n%s", dp)
-	}
+	checkDeclared(t, "pipe_DC.nf", dp, "process", "STAGE_2_DC__FLAG", "STAGE_2_DC__WORK", "BIND_2_DC__return")
 
 	// A disabled MAP call gates natively (reads the flag from pa) but is NOT fused
 	// — it still needs the FORK for fan-out: disabled_map's `map call DBL using
@@ -864,9 +882,7 @@ func TestEmitNativeDisableGate(t *testing.T) {
 	if !strings.Contains(dmp, "Mro2nf.disabledField(data, 'skip')") {
 		t.Errorf("a disabled map call must gate natively on pa:\n%s", dmp)
 	}
-	if strings.Contains(dmp, "process DISABLE") {
-		t.Errorf("a natively-gated disabled map call must emit no DISABLE process:\n%s", dmp)
-	}
+	checkDeclared(t, "pipe_Q.nf", dmp, "process", "FORK_1_Q__DBL", "MERGE_1_Q__DBL", "BIND_1_Q__return")
 }
 
 // TestEmitPrunesUnusedKeyedVariants guards #59: a stage/pipeline that never runs
@@ -884,13 +900,10 @@ func TestEmitPrunesUnusedKeyedVariants(t *testing.T) {
 		t.Error("GEN is fused everywhere; its dead stage module must not be emitted (#82)")
 	}
 
+	// Neither GEN nor D is ever map-called, so neither has a keyed variant.
 	pipeD := readFile(t, filepath.Join(d, "modules", "pipe_D.nf"))
-	if strings.Contains(pipeD, "GEN_MAP") || strings.Contains(pipeD, "wf_GEN_map") {
-		t.Error("GEN is never map-called; its keyed variant must be pruned (#59)")
-	}
-	if strings.Contains(pipeD, "wf_D_map") || strings.Contains(pipeD, "wfk_") {
-		t.Error("pipeline D is never map-called; its keyed layer must be pruned (#59)")
-	}
+	checkDeclared(t, "pipe_D.nf", pipeD, "process", "STAGE_1_D__GEN", "STAGE_1_D__ADD", "BIND_1_D__return")
+	checkDeclared(t, "pipe_D.nf", pipeD, "workflow", "D")
 
 	// map_pipe maps sub-pipeline INNER over an array, so INNER keeps its keyed
 	// variant; the top-level OUTER does not.
@@ -901,23 +914,17 @@ func TestEmitPrunesUnusedKeyedVariants(t *testing.T) {
 	// keyed variant AND its now-unused stage module are pruned, and no separate
 	// BIND_5_INNER__ADD1_K remains.
 	inner := readFile(t, filepath.Join(m, "modules", "pipe_INNER.nf"))
-	if !strings.Contains(inner, "STAGE_5_INNER__ADD1_K") {
-		t.Error("ADD1 is a fuseable keyed leaf; it must run as a fused STAGE_..._K process")
-	}
-	if strings.Contains(inner, "BIND_5_INNER__ADD1_K") {
-		t.Error("ADD1 is fused; its standalone keyed BIND must be gone")
-	}
+	checkDeclared(t, "pipe_INNER.nf", inner, "process", "STAGE_5_INNER__ADD1", "STAGE_5_INNER__ADD1_K")
+	checkDeclared(t, "pipe_INNER.nf", inner, "workflow", "INNER", "wf_INNER_map")
+
 	if _, err := os.Stat(filepath.Join(m, "modules", "stage_ADD1.nf")); err == nil {
 		t.Error("ADD1 is fused everywhere; its now-unused stage module must not be emitted")
 	}
 
-	if !strings.Contains(inner, "wf_INNER_map") {
-		t.Error("INNER is map-called; its keyed variant must be emitted")
-	}
-
-	if outer := readFile(t, filepath.Join(m, "modules", "pipe_OUTER.nf")); strings.Contains(outer, "wf_OUTER_map") {
-		t.Error("OUTER is the top-level pipeline (not map-called); its keyed layer must be pruned (#59)")
-	}
+	// OUTER is the top-level pipeline (not map-called), so it has no keyed layer.
+	outer := readFile(t, filepath.Join(m, "modules", "pipe_OUTER.nf"))
+	checkDeclared(t, "pipe_OUTER.nf", outer, "process", "FORK_5_OUTER__INNER", "BIND_5_OUTER__return")
+	checkDeclared(t, "pipe_OUTER.nf", outer, "workflow", "OUTER")
 }
 
 // TestEmitAssetsStaged checks the cloud-portability fix: a process's own
@@ -1635,22 +1642,23 @@ func TestEmitNestedScatter(t *testing.T) {
 
 	for _, want := range []string{
 		"Mro2nf.forkElementsKeyed(ok, pab, 'xs', 'array')",
-		"process FORK_5_INNER__DBL_KS {",
 		"-elementfile element.json -o fargs",
 	} {
 		if !strings.Contains(inner, want) {
 			t.Errorf("nested scatter missing %q in pipe_INNER.nf", want)
 		}
 	}
-	if strings.Contains(inner, "process FORK_5_INNER__DBL_K {") {
-		t.Error("a value-only nested map must not emit a per-outer-fork FORK_K resolve")
-	}
+
+	// The scatter (_KS) replaces the per-outer-fork FORK_K resolve.
+	checkDeclared(t, "map_pipe_nested pipe_INNER.nf", inner, "process",
+		"FORK_5_INNER__DBL", "BIND_5_INNER__return",
+		"FORK_5_INNER__DBL_KS", "MERGE_5_INNER__DBL_K", "BIND_5_INNER__return_K")
 
 	// A disabled inner map keeps the FORK_K path (per-fork run/skip gate).
 	dis := readFile(t, filepath.Join(
 		emitFixture(t, "map_pipe_disabled_nested", map[string]string{"DBL": "/x/dbl"}),
 		"modules", "pipe_INNER.nf"))
-	if !strings.Contains(dis, "_K {") || strings.Contains(dis, "_KS {") {
-		t.Error("a disabled nested map must keep the keyed FORK_K path, not the scatter")
-	}
+	checkDeclared(t, "map_pipe_disabled_nested pipe_INNER.nf", dis, "process",
+		"FORK_5_INNER__DBL", "MERGE_5_INNER__DBL", "BIND_5_INNER__return",
+		"FORK_5_INNER__DBL_K", "MERGE_5_INNER__DBL_K", "BIND_5_INNER__return_K")
 }
