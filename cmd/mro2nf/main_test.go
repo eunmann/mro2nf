@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -432,6 +433,53 @@ func TestRunRejectsDeletedFlags(t *testing.T) {
 			err := run([]string{"-o", t.TempDir(), "-" + name, mro})
 			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+name) {
 				t.Errorf("run with -%s: want an undefined-flag error, got %v", name, err)
+			}
+		})
+	}
+}
+
+// TestReportDiagnostics checks each diagnostic is logged at its severity and
+// that warnings and notes let the transpile proceed: kitchen_sink's local and
+// volatile calls are documented divergences (WARN), and under -native
+// map_split's map call over a split stage keeps its FORK task (INFO).
+func TestReportDiagnostics(t *testing.T) {
+	cases := []struct {
+		fixture string
+		opts    emit.Options
+		want    []string
+	}{
+		{"kitchen_sink", emit.Options{}, []string{
+			"level=WARN msg=\"call MAIN.SUM_SQUARES: `local` modifier ignored",
+			"level=WARN msg=\"call MAIN.SUM_SQUARES: `volatile` ignored",
+		}},
+		{"map_split", emit.Options{Native: true}, []string{"level=INFO msg=\"-native: map call "}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
+			mro := filepath.Join("..", "..", "testdata", tc.fixture, "pipeline.mro")
+
+			prog, err := loadProgram(mro, filepath.Dir(mro))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var buf strings.Builder
+
+			log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+			if err := reportDiagnostics(log, prog, tc.opts); err != nil {
+				t.Fatalf("reportDiagnostics: %v", err)
+			}
+
+			for _, want := range tc.want {
+				if !strings.Contains(buf.String(), want) {
+					t.Errorf("diagnostics log lacks %q:\n%s", want, buf.String())
+				}
+			}
+
+			if strings.Contains(buf.String(), "level=ERROR") {
+				t.Errorf("no diagnostic of %s is fatal, but one logged an error:\n%s", tc.fixture, buf.String())
 			}
 		})
 	}

@@ -84,21 +84,19 @@ var mrpUnrunnable = map[string]string{
 const mrpUnresolvedInput = "mrp passes the invocation's relative input/ path through verbatim and the stage opens it " +
 	"from its own job dir, where it does not resolve"
 
-// TestEveryFixtureMrpDiffed fails unless every pipeline fixture is in exactly
-// one of mrpDiffCases (outputs diffed), mrpOutcomeCases (run outcome diffed)
-// and mrpUnrunnable (with a reason), when a table names a fixture that does
-// not exist, when an mrpOutcomeCases entry is malformed, when an allowlist
-// entry is applied by no case (unappliedAllowlistEntries), or when a
+// TestEveryFixtureMrpDiffed fails unless every pipeline fixture, testdata's
+// and bench's, is in exactly one of mrpDiffCases (outputs diffed),
+// mrpOutcomeCases (run outcome diffed) and mrpUnrunnable (with a reason), when
+// a table names a fixture that does not exist or a bench case an invocation
+// its fixture lacks, when an mrpOutcomeCases entry is malformed, when an
+// allowlist entry is applied by no case (unappliedAllowlistEntries), or when a
 // transpileRefused fixture is not an mrpOutcomeCases entry: every fixture mrp
 // can run faces live mrp.
 func TestEveryFixtureMrpDiffed(t *testing.T) {
 	present := pipelineFixtures(t)
-	tables := map[string][]string{}
+	maps.Copy(present, benchFixtures(t))
 
-	for _, tc := range mrpDiffCases {
-		tables[tc.name] = append(tables[tc.name], "mrpDiffCases")
-	}
-
+	tables := diffCaseTables(t, present)
 	allow := mustAllowlist(t)
 	named := map[string][]string{}
 
@@ -128,7 +126,7 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 
 	for _, name := range slices.Sorted(maps.Keys(tables)) {
 		if !present[name] {
-			t.Errorf("%v list %q but testdata/%s/pipeline.mro does not exist", tables[name], name, name)
+			t.Errorf("%v list %q, which is neither a testdata/<fixture> with a pipeline.mro nor a bench/<fixture> with an invocation", tables[name], name)
 		}
 
 		if len(tables[name]) > 1 {
@@ -148,6 +146,25 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 				"to mrpOutcomeCases if mrp fails on it by design, or to mrpUnrunnable with the reason mrp cannot run it", name)
 		}
 	}
+}
+
+// diffCaseTables maps each fixture an mrpDiffCases case names to the table
+// list TestEveryFixtureMrpDiffed counts, failing a case of a present fixture
+// whose entry invocation does not exist.
+func diffCaseTables(t *testing.T, present map[string]bool) map[string][]string {
+	t.Helper()
+
+	tables := map[string][]string{}
+
+	for _, tc := range mrpDiffCases {
+		tables[tc.name] = append(tables[tc.name], "mrpDiffCases")
+
+		if dir, mro := tc.source(); present[tc.name] && !fileExists(filepath.Join(dir, mro)) {
+			t.Errorf("mrpDiffCases runs %s, which does not exist", filepath.Join(dir, mro))
+		}
+	}
+
+	return tables
 }
 
 // unappliedAllowlistEntries reports each outcome entry not named by exactly
@@ -262,6 +279,25 @@ func pipelineFixtures(t *testing.T) map[string]bool {
 		if e.IsDir() && fileExists(filepath.Join(root, "testdata", e.Name(), "pipeline.mro")) {
 			present[e.Name()] = true
 		}
+	}
+
+	return present
+}
+
+// benchFixtures is the set of bench fixtures, each named by its repo-relative
+// dir (bench/<fixture>): the directories under bench/ holding an .mro.
+func benchFixtures(t *testing.T) map[string]bool {
+	t.Helper()
+
+	mros, err := filepath.Glob(filepath.Join(root, "bench", "*", "*.mro"))
+	if err != nil {
+		t.Fatalf("glob bench fixtures: %v", err)
+	}
+
+	present := map[string]bool{}
+
+	for _, mro := range mros {
+		present[filepath.ToSlash(filepath.Join("bench", filepath.Base(filepath.Dir(mro))))] = true
 	}
 
 	return present
