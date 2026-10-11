@@ -1,0 +1,208 @@
+package cg
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+
+	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/syntax"
+)
+
+// elementField is the one field of a fork element's bundle payload.
+const elementField = "value"
+
+// stagedStore serves the instance outs bundles and fork elements one task
+// staged, each identified by its own record.
+type stagedStore struct {
+	g            *Graph
+	outsDirs     map[string]string
+	forks        map[string][]Fork
+	elements     map[string]string
+	elementForks []Fork
+	cache        map[string]core.LazyArgumentMap
+}
+
+func stagedKey(fqid string, f Fork) string { return fqid + "\x00" + f.key() }
+
+// stage indexes the staged items under dirs. Each dir is an item (an
+// instance bundle or a fork element) or holds items as its subdirectories.
+func (g *Graph) stage(dirs []string) (*stagedStore, error) {
+	s := &stagedStore{
+		g:        g,
+		outsDirs: map[string]string{},
+		forks:    map[string][]Fork{},
+		elements: map[string]string{},
+		cache:    map[string]core.LazyArgumentMap{},
+	}
+
+	for _, d := range dirs {
+		if err := s.addTree(d); err != nil {
+			return nil, err
+		}
+	}
+
+	return s, nil
+}
+
+func (s *stagedStore) addTree(dir string) error {
+	if itemKind(dir) != "" {
+		return s.add(dir)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("scan staged %s: %w", dir, err)
+	}
+
+	for _, e := range entries {
+		if err := s.add(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *stagedStore) add(dir string) error {
+	switch itemKind(dir) {
+	case instanceFile:
+		in, err := s.g.ReadInstance(dir)
+		if err != nil {
+			return err
+		}
+
+		s.outsDirs[stagedKey(in.Node, in.Fork)] = dir
+		s.forks[in.Node] = append(s.forks[in.Node], in.Fork)
+	case elementFile:
+		el, err := s.g.ReadElement(dir)
+		if err != nil {
+			return err
+		}
+
+		root := el.Fork[len(el.Fork)-1].Root
+		s.elements[stagedKey(root.Fqid, el.Fork)] = dir
+		s.elementForks = append(s.elementForks, el.Fork)
+	default:
+		return fmt.Errorf("staged %s: %w", dir, errNotItem)
+	}
+
+	return nil
+}
+
+func (s *stagedStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgumentMap, error) {
+	k := stagedKey(st.Fqid, f)
+	if m, ok := s.cache[k]; ok {
+		return m, nil
+	}
+
+	dir, ok := s.outsDirs[k]
+	if !ok {
+		return nil, fmt.Errorf("outs of %s at fork %s: %w", st.Fqid, f, ErrNotStaged)
+	}
+
+	raw, err := shim.ReadBundle(dir)
+	if err != nil {
+		return nil, fmt.Errorf("staged outs of %s: %w", st.Fqid, err)
+	}
+
+	var m core.LazyArgumentMap
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("decode staged outs of %s: %w", st.Fqid, err)
+	}
+
+	s.cache[k] = m
+
+	return m, nil
+}
+
+// instances collects root's indices from the forks of the staged instances
+// of every stage forked on root that agree with outer.
+func (s *stagedStore) instances(root *syntax.CallGraphStage, outer Fork) []syntax.CollectionIndex {
+	seen := map[string]bool{}
+
+	var out []syntax.CollectionIndex
+
+	for _, forks := range s.forks {
+		for _, f := range forks {
+			p, ok := f.rootPart(root)
+			if !ok || !agrees(f, outer) {
+				continue
+			}
+
+			k := Fork{p}.key()
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, p.Index)
+			}
+		}
+	}
+
+	slices.SortFunc(out, compareIndex)
+
+	return out
+}
+
+// agrees reports whether f and outer give every root they share the same
+// index.
+func agrees(f, outer Fork) bool {
+	for _, o := range outer {
+		if p, ok := f.rootPart(o.Root); ok && !indexEqual(p.Index, o.Index) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// compareIndex orders indices as mrp orders forks: array position, or map
+// keys in byte order.
+func compareIndex(a, b syntax.CollectionIndex) int {
+	if a.Mode() == syntax.ModeMapCall {
+		switch {
+		case a.MapKey() < b.MapKey():
+			return -1
+		case a.MapKey() > b.MapKey():
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	return a.ArrayIndex() - b.ArrayIndex()
+}
+
+func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork) (json.RawMessage, bool, error) {
+	dir, ok := s.elements[stagedKey(root.Fqid, f)]
+	if !ok || !shim.IsBundle(dir) {
+		return nil, false, nil
+	}
+
+	raw, err := shim.ReadBundle(dir)
+	if err != nil {
+		return nil, false, fmt.Errorf("fork element of %s: %w", root.Fqid, err)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, false, fmt.Errorf("decode fork element of %s: %w", root.Fqid, err)
+	}
+
+	return payload[elementField], true, nil
+}
+
+// emptyStore is a task with nothing staged: what the call graph alone fixes.
+type emptyStore struct{}
+
+func (emptyStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgumentMap, error) {
+	return nil, fmt.Errorf("outs of %s at fork %s: %w", st.Fqid, f, ErrNotStaged)
+}
+
+func (emptyStore) instances(*syntax.CallGraphStage, Fork) []syntax.CollectionIndex { return nil }
+
+func (emptyStore) element(*syntax.CallGraphStage, Fork) (json.RawMessage, bool, error) {
+	return nil, false, nil
+}

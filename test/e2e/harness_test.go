@@ -122,6 +122,13 @@ func TestMain(m *testing.M) {
 		mustSetenv("NXF_OPTS", "-Xms256m -Xmx1g -XX:+UseSerialGC")
 	}
 
+	// Martian's runtime, which the call-graph drift guard runs in-process,
+	// finds jobmanagers/ beside MARTIAN_BASE; the test binary's own dir has
+	// none.
+	if bin, err := lookupMartianBin(); err == nil && os.Getenv("MARTIAN_BASE") == "" {
+		mustSetenv("MARTIAN_BASE", bin)
+	}
+
 	os.Exit(m.Run())
 }
 
