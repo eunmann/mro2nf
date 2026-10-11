@@ -57,9 +57,9 @@ type TopoRoot struct {
 
 // Topology computes g's topology, failing on a shape whose data the
 // stage tasks cannot exchange: a fork root whose forks several stages fix,
-// a disable binding that reads several stages or a stage forked on roots
-// the gated node is not, or a fork root's outer root that a node forked on
-// it is not forked on first.
+// a disable binding that reads several stages, a stage forked on roots the
+// gated node is not, or is forked on a map call that stage is not, or a
+// fork root's outer root that a node forked on it is not forked on first.
 func (g *Graph) Topology() (Topology, error) {
 	t := Topology{}
 
@@ -175,6 +175,10 @@ func (g *Graph) gates(st *syntax.CallGraphStage) ([]string, error) {
 			}
 		}
 
+		if c := forkedBeyond(d, up.ForkRoots()); c != nil {
+			return nil, fmt.Errorf("%w: a disable binding of %s is forked on %s, whose forks %s's one gate value per fork cannot tell apart", errShapeUnsupported, st.Fqid, c.Id, up.Fqid)
+		}
+
 		if !slices.Contains(out, up.Fqid) {
 			out = append(out, up.Fqid)
 		}
@@ -183,6 +187,22 @@ func (g *Graph) gates(st *syntax.CallGraphStage) ([]string, error) {
 	slices.Sort(out)
 
 	return out, nil
+}
+
+// forkedBeyond returns a map call d is forked on that none of roots is, nil
+// when there is none: d then resolves at a fork of roots alone, as the
+// producer's post resolves it (writeGates).
+func forkedBeyond(d syntax.Exp, roots syntax.ForkRootList) *syntax.CallStm {
+	calls := map[*syntax.CallStm]bool{}
+	splitCalls(d, calls)
+
+	for _, c := range slices.SortedFunc(maps.Keys(calls), func(a, b *syntax.CallStm) int { return strings.Compare(a.Id, b.Id) }) {
+		if !slices.ContainsFunc(roots, func(r *syntax.CallGraphStage) bool { return r.Call() == c }) {
+			return c
+		}
+	}
+
+	return nil
 }
 
 // reads are the stage outs exps read, less a split of a root's own

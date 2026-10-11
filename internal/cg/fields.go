@@ -57,10 +57,11 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, man types.Manifest, dir
 
 // writeGates writes to path the nodes the posted instance disables at its
 // fork: those with a disable binding that reads this stage alone and
-// resolves true at the instance (core/stage.go:883 Fork.disabled). A node's
-// instances read the binding at the fork they share with this instance, so
-// one value serves them all. A binding that does not resolve is left to the
-// node's own task, which fails on it as mrp fails the fork.
+// resolves true at the instance (core/stage.go:883 Fork.disabled). Topology
+// admits only a binding forked on this stage's roots alone, so a node's
+// instances read it at the fork they share with this instance and one value
+// serves them all. A binding that does not resolve is left to the node's
+// own task, which fails on it as mrp fails the fork.
 func (g *Graph) writeGates(in Instance, s *stagedStore, path string) error {
 	r := &resolver{g: g, st: s}
 

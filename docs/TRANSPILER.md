@@ -640,7 +640,10 @@ invocation's only while `mrp` still accepts the call. `cg.Topology` reduces
 the graph to what tasks exchange: per node its fork roots, the outputs it
 reads of other nodes, and the nodes whose outs gate it; per fork root what
 feeds its forks (the entry, or one stage) and the outer roots its forks vary
-with. `TestWitnessCoversLiteral` checks every fixture's literal invocation is
+with. A gating stage posts one gate value per fork of its own, so a disable
+binding forked on a map call that stage is not (a split of its outs, as in
+`map call X(item = split SRC.items)` under `disabled = self.item.skip`) is
+refused at transpile time. `TestWitnessCoversLiteral` checks every fixture's literal invocation is
 within its witness's.
 
 **The project.** `main.nf` is wiring only: it includes the one hand-written
