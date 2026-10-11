@@ -15,10 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/go-cmp/cmp"
@@ -44,6 +46,15 @@ const (
 	// the invocation's own files dir, i.e. a file the phase received rather
 	// than wrote.
 	ruleBasenameExt = "basename-extension-only"
+
+	// ruleIgnoreKey drops the top-level key the divergence names from the file
+	// on both sides.
+	ruleIgnoreKey = "ignore-key"
+
+	// ruleCeilKey replaces a fractional value of the numeric top-level key the
+	// divergence names with its ceiling, so it equals the whole number it rounds
+	// up to; integral tokens are kept, so 1 and 1.0 still differ.
+	ruleCeilKey = "ceil-number"
 )
 
 // errABIMeta reports metadata the differential cannot attribute or decode.
@@ -71,6 +82,7 @@ type divergence struct {
 	Summary string `json:"summary"`
 	File    string `json:"file"`
 	Rule    string `json:"rule"`
+	Key     string `json:"key,omitempty"`
 }
 
 // loadDivergences reads and validates the checked-in divergence list.
@@ -107,7 +119,11 @@ func (d divergence) validate() error {
 		return fmt.Errorf("%w: #%d has no summary", errABIMeta, d.Issue)
 	case d.File != argsFile && d.File != outsFile:
 		return fmt.Errorf("%w: #%d file %q is not %s or %s", errABIMeta, d.Issue, d.File, argsFile, outsFile)
-	case d.Rule != ruleBasenameExt:
+	case d.Rule == ruleBasenameExt && d.Key != "":
+		return fmt.Errorf("%w: #%d rule %q takes no key", errABIMeta, d.Issue, d.Rule)
+	case (d.Rule == ruleIgnoreKey || d.Rule == ruleCeilKey) && d.Key == "":
+		return fmt.Errorf("%w: #%d rule %q needs a key", errABIMeta, d.Issue, d.Rule)
+	case d.Rule != ruleBasenameExt && d.Rule != ruleIgnoreKey && d.Rule != ruleCeilKey:
 		return fmt.Errorf("%w: #%d unknown rule %q", errABIMeta, d.Issue, d.Rule)
 	default:
 		return nil
@@ -120,20 +136,67 @@ type abiNormalizer struct {
 	// ownFiles are the spellings of the invocation's own files dir. Each runtime
 	// assigns that dir itself, so a path under it is host-specific by
 	// construction; the rest of the path is what the stage chose.
-	ownFiles []string
-	extOnly  bool
+	ownFiles   []string
+	extOnly    bool
+	ignoreKeys []string
+	ceilKeys   []string
 }
 
 func newABINormalizer(ownFiles []string, file string, divs []divergence) abiNormalizer {
 	n := abiNormalizer{ownFiles: ownFiles}
 
 	for _, d := range divs {
-		if d.File == file && d.Rule == ruleBasenameExt {
+		if d.File != file {
+			continue
+		}
+
+		switch d.Rule {
+		case ruleBasenameExt:
 			n.extOnly = true
+		case ruleIgnoreKey:
+			n.ignoreKeys = append(n.ignoreKeys, d.Key)
+		case ruleCeilKey:
+			n.ceilKeys = append(n.ceilKeys, d.Key)
 		}
 	}
 
 	return n
+}
+
+// topLevelKeys applies the key-scoped rules to a decoded document's top-level
+// object; nested keys of the same name are left alone.
+func (n abiNormalizer) topLevelKeys(v any) (any, error) {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return v, nil
+	}
+
+	for _, k := range n.ignoreKeys {
+		delete(obj, k)
+	}
+
+	for _, k := range n.ceilKeys {
+		raw, present := obj[k]
+		if !present {
+			continue
+		}
+
+		num, isNum := raw.(json.Number)
+		if !isNum {
+			return nil, fmt.Errorf("%w: %s is %v, not a number", errABIMeta, k, raw)
+		}
+
+		f, err := num.Float64()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s: %w", errABIMeta, k, err)
+		}
+
+		if f != math.Trunc(f) {
+			obj[k] = json.Number(strconv.FormatFloat(math.Ceil(f), 'f', -1, 64))
+		}
+	}
+
+	return obj, nil
 }
 
 // normalize decodes raw with numbers kept as their source token (an int-vs-float
@@ -152,7 +215,12 @@ func (n abiNormalizer) normalize(raw []byte) (string, error) {
 		return "", fmt.Errorf("%w: trailing data after JSON value", errABIMeta)
 	}
 
-	v, err := n.value(v)
+	v, err := n.topLevelKeys(v)
+	if err != nil {
+		return "", err
+	}
+
+	v, err = n.value(v)
 	if err != nil {
 		return "", err
 	}

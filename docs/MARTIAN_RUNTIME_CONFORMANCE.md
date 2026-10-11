@@ -313,20 +313,26 @@ no `_args`/`_outs`. Known divergences live in `test/e2e/divergences.json`, one
 entry per open issue with the normalization rule it needs; fixing the issue means
 deleting its entry.
 
-It needs a local Martian build: set `MARTIAN_BIN` (default `~/workdir/martian/bin`,
-which holds `mrp`/`mrjob`). It skips cleanly when `mrp`, `nextflow`, `java`, or
-`python3` is absent, so CI without a Martian checkout is unaffected. Run one case
-with `go test -tags e2e -count=1 -run "TestMrpDiff/<fixture>" ./test/e2e/`.
+It needs a Martian build: set `MARTIAN_BIN` (default `~/workdir/martian/bin`,
+which holds `mrp`/`mrjob`). `make test-e2e` includes it, so it gates every PR: the
+e2e shards build `mrp` and `mrjob` at the commit `go.mod` pins
+(`.github/actions/setup-martian`, cached per commit). Locally it skips when `mrp`,
+`nextflow`, `java`, or `python3` is absent; under `E2E_REQUIRE=1` (CI) a missing
+one fails it. Run one case with
+`go test -tags e2e -count=1 -run "TestMrpDiff/<fixture>" ./test/e2e/`.
 
 The one intended difference the harness normalizes: Martian writes **absolute**
 paths into `_outs`; mre writes the **same tree** with paths **relative** to the
 outs dir (location-independent bundles). Tree structure, filenames, and contents
 are byte-identical.
 
-Fixtures that read a launch-time file input (relative-path or `-params`) or that
-the local `mrp` build can't run standalone (e.g. a nested map pipeline binding
-this `mrp` version rejects) are covered by the golden e2e (`make test-e2e`) but
-excluded from the mrp differential. `testdata/file_tree` is the flagship complex
+Every fixture runs in the differential except those `mrp` cannot run, listed with
+the reason in `mrpUnrunnable` (`test/e2e/coverage_test.go`;
+`TestEveryFixtureMrpDiffed` keeps the two tables complete): relative `input/`
+paths `mrp` passes through unresolved, a nested map pipeline this `mrp` version
+rejects, exec/comp stubs `mrp` never completes, and the failure-path fixtures. The
+golden e2e still covers them, as it does the launch-time `-params` override
+cases. `testdata/file_tree` is the flagship complex
 case: a split→join file array, a nested sub-pipeline whose map call emits a
 per-fork file, and a struct output bundling an array, a map, and a scalar file —
 9 published files, all matching `mrp`.

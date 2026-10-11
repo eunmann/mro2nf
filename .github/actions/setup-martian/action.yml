@@ -1,0 +1,48 @@
+name: Set up Martian
+description: >-
+  Restore or build mrp + mrjob at the Martian commit go.mod pins, and export
+  MARTIAN_BIN for the mrp differential (TestMrpDiff). Run after checkout and
+  setup-go.
+
+runs:
+  using: composite
+  steps:
+    # The commit comes from go.mod's github.com/martian-lang/martian
+    # pseudo-version, so the differential runs against the exact Martian the
+    # transpiler parses with and a pin bump moves both at once.
+    - id: pin
+      shell: bash
+      run: |
+        version=$(go list -m -f '{{.Version}}' github.com/martian-lang/martian)
+        commit=${version##*-}
+        [[ $commit =~ ^[0-9a-f]{12}$ ]] || {
+          echo "go.mod pins github.com/martian-lang/martian at $version, not a pseudo-version ending in a commit"
+          exit 1
+        }
+        echo "commit=$commit" >> "$GITHUB_OUTPUT"
+        echo "MARTIAN_BIN=$RUNNER_TEMP/martian/bin" >> "$GITHUB_ENV"
+    # mrp resolves jobmanagers/ and adapters/ as siblings of its bin dir, so
+    # those travel with the binaries.
+    - id: cache
+      uses: actions/cache@v6
+      with:
+        path: |
+          ${{ runner.temp }}/martian/bin
+          ${{ runner.temp }}/martian/jobmanagers
+          ${{ runner.temp }}/martian/adapters
+        key: martian-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.commit }}
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        MARTIAN_COMMIT: ${{ steps.pin.outputs.commit }}
+      run: |
+        src="$RUNNER_TEMP/martian"
+        git clone --filter=blob:none https://github.com/martian-lang/martian.git "$src"
+        git -C "$src" checkout "$MARTIAN_COMMIT"
+        for bin in mrp mrjob; do
+          ( cd "$src" && go build -o "bin/$bin" "./cmd/$bin" )
+        done
+    # A missing binary would fail TestMrpDiff under E2E_REQUIRE=1 anyway; this
+    # names the cause at setup.
+    - shell: bash
+      run: test -x "$MARTIAN_BIN/mrp" && test -x "$MARTIAN_BIN/mrjob"

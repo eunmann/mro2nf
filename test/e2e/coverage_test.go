@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"go/scanner"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"testing"
 )
@@ -17,11 +19,6 @@ import (
 // suite, each with the reason. A fixture here is exempt from the completeness
 // check below; anything else under testdata/ must be named by some e2e test.
 var nonE2EFixtures = map[string]string{
-	// GPU/vmem resolve to config-text directives (accelerator, the -monitor
-	// vmem cap), not runtime behavior diffable against mrp, so they are pinned
-	// by emit unit tests (TestEmitGPUAccelerator / TestEmitVmemFlag) instead.
-	"gpu_stage":  "emit-only: accelerator directive text (internal/emit unit test)",
-	"vmem_stage": "emit-only: -monitor vmem cap text (internal/emit unit test)",
 	// Runtime-wise it behaves like map_pipe_nested (which the golden + docker
 	// suites run); only the -native diagnostic wording differs.
 	"map_pipe_nested_file": "emit-only: keyed native-scatter FORK_K+MERGE_K diagnostic (internal/emit unit test)",
@@ -35,26 +32,9 @@ var nonE2EFixtures = map[string]string{
 // entry, so the exemptions can't outlive their fixtures.
 func TestEveryFixtureIsExercised(t *testing.T) {
 	sources := readTestSources(t)
+	present := pipelineFixtures(t)
 
-	entries, err := os.ReadDir(filepath.Join(root, "testdata"))
-	if err != nil {
-		t.Fatalf("read testdata: %v", err)
-	}
-
-	present := map[string]bool{}
-
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-
-		name := e.Name()
-		if !fileExists(filepath.Join(root, "testdata", name, "pipeline.mro")) {
-			continue
-		}
-
-		present[name] = true
-
+	for _, name := range slices.Sorted(maps.Keys(present)) {
 		if _, exempt := nonE2EFixtures[name]; exempt {
 			continue
 		}
@@ -73,6 +53,88 @@ func TestEveryFixtureIsExercised(t *testing.T) {
 				"drop the stale allowlist entry", name, reason, name)
 		}
 	}
+}
+
+// mrpUnrunnable are the pipeline fixtures TestMrpDiff cannot run under real
+// mrp, each with the reason. The golden suite's *_override cases are no
+// fixtures of their own: a launch-time -params-file override has no mrp
+// invocation to diff against.
+var mrpUnrunnable = map[string]string{
+	"exec_min":             "mrp never completes it (killed after 180 s): the exec stub writes no journal entries",
+	"mixed_adapters":       "mrp never completes it (killed after 180 s): its stubs speak mre's wrapped-adapter contract, not mrp's journal protocol",
+	"map_pipe_nested":      "mrp rejects it: OUTER.INNER.DBL's merge could not match a reference to a specific fork",
+	"map_pipe_nested_file": "emit-only fixture with no stage code: mrp cannot import stages/dbl",
+	"assert_min":           "fails by design: the stage asserts, for the failure-path test",
+	"flaky_retry":          "fails by design: the stage fails until Nextflow's retry escalates its memory; mrp does not retry it",
+	"missing_struct_key":   "fails by design: UP's struct output lacks a declared key, for the output-validation failure test",
+	"entry_file":           mrpUnresolvedInput,
+	"entry_filearr":        mrpUnresolvedInput,
+	"entry_struct_file":    mrpUnresolvedInput,
+	"entry_mapfile":        mrpUnresolvedInput,
+	"entry_dir":            mrpUnresolvedInput,
+	"entry_file_empty":     mrpUnresolvedInput,
+	"split_from_file":      mrpUnresolvedInput,
+}
+
+const mrpUnresolvedInput = "mrp passes the invocation's relative input/ path through verbatim and the stage opens it " +
+	"from its own job dir, where it does not resolve"
+
+// TestEveryFixtureMrpDiffed fails when a pipeline fixture is neither in
+// mrpDiffCases nor in mrpUnrunnable, is in both, or when either table names a
+// fixture that does not exist: every fixture mrp can run faces live mrp.
+func TestEveryFixtureMrpDiffed(t *testing.T) {
+	present := pipelineFixtures(t)
+	diffed := map[string]bool{}
+
+	for _, tc := range mrpDiffCases {
+		if diffed[tc.name] {
+			t.Errorf("mrpDiffCases lists %q twice", tc.name)
+		}
+
+		diffed[tc.name] = true
+
+		if !present[tc.name] {
+			t.Errorf("mrpDiffCases lists %q but testdata/%s/pipeline.mro does not exist", tc.name, tc.name)
+		}
+
+		if reason, ok := mrpUnrunnable[tc.name]; ok {
+			t.Errorf("%q is in mrpDiffCases and in mrpUnrunnable (%q); keep one", tc.name, reason)
+		}
+	}
+
+	for name := range mrpUnrunnable {
+		if !present[name] {
+			t.Errorf("mrpUnrunnable lists %q but testdata/%s/pipeline.mro does not exist", name, name)
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(present)) {
+		if _, ok := mrpUnrunnable[name]; !ok && !diffed[name] {
+			t.Errorf("fixture %q is not diffed against mrp; add it to mrpDiffCases, "+
+				"or to mrpUnrunnable with the reason mrp cannot run it", name)
+		}
+	}
+}
+
+// pipelineFixtures is the set of testdata fixtures: the directories holding a
+// pipeline.mro.
+func pipelineFixtures(t *testing.T) map[string]bool {
+	t.Helper()
+
+	entries, err := os.ReadDir(filepath.Join(root, "testdata"))
+	if err != nil {
+		t.Fatalf("read testdata: %v", err)
+	}
+
+	present := map[string]bool{}
+
+	for _, e := range entries {
+		if e.IsDir() && fileExists(filepath.Join(root, "testdata", e.Name(), "pipeline.mro")) {
+			present[e.Name()] = true
+		}
+	}
+
+	return present
 }
 
 // readTestSources extracts the STRING LITERALS (one per line) from every .go

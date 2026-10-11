@@ -40,8 +40,13 @@ var root string
 // Gating here (rather than at each t.Run) covers every suite uniformly through
 // the single chokepoint; the preceding transpile is milliseconds against a
 // multi-second run, so the skipped work is negligible.
-func shardSkip(t *testing.T) {
-	t.Helper()
+//
+// A test admitted to this shard claims it for its subtests: they run here
+// without hashing their own names. A test that does expensive shared work
+// before its legs (TestMrpDiff's one mrp run per fixture) gates itself first,
+// so that work runs on one shard and every leg runs beside it.
+func shardSkip(tb testing.TB) {
+	tb.Helper()
 
 	total, err := strconv.Atoi(os.Getenv("E2E_SHARD_TOTAL"))
 	if err != nil || total <= 1 {
@@ -50,15 +55,52 @@ func shardSkip(t *testing.T) {
 
 	index, err := strconv.Atoi(os.Getenv("E2E_SHARD_INDEX"))
 	if err != nil || index < 0 || index >= total {
-		t.Fatalf("E2E_SHARD_INDEX=%q invalid for E2E_SHARD_TOTAL=%d", os.Getenv("E2E_SHARD_INDEX"), total)
+		tb.Fatalf("E2E_SHARD_INDEX=%q invalid for E2E_SHARD_TOTAL=%d", os.Getenv("E2E_SHARD_INDEX"), total)
+
+		return
 	}
 
+	name := tb.Name()
+	if claimedAncestor(name) {
+		return
+	}
+
+	if shardOf(name, total) != index {
+		tb.Skipf("shard %d/%d: %s runs in another shard", index, total, name)
+
+		return
+	}
+
+	shardClaims.Store(name, true)
+}
+
+// shardClaims holds the names of the tests shardSkip admitted to this shard.
+var shardClaims sync.Map
+
+// claimedAncestor reports whether the test name, or a test it is nested
+// under, was admitted to this shard.
+func claimedAncestor(name string) bool {
+	for {
+		if _, ok := shardClaims.Load(name); ok {
+			return true
+		}
+
+		i := strings.LastIndex(name, "/")
+		if i < 0 {
+			return false
+		}
+
+		name = name[:i]
+	}
+}
+
+// shardOf is the shard a test name hashes to: a stable FNV hash, so the
+// partition is deterministic and disjoint across runners.
+func shardOf(name string, total int) int {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(t.Name()))
+	_, _ = h.Write([]byte(name))
 
-	if int(h.Sum32()%uint32(total)) != index {
-		t.Skipf("shard %d/%d: %s runs in another shard", index, total, t.Name())
-	}
+	return int(h.Sum32() % uint32(total))
 }
 
 // TestMain builds the transpiler + shim once and pins the Nextflow environment
@@ -92,23 +134,31 @@ func mustSetenv(key, value string) {
 	}
 }
 
-// requireTools skips the test when a prerequisite is missing — unless
-// E2E_REQUIRE=1 (set in CI), where a missing tool must FAIL, not silently
-// green-skip the gate.
+// requireTools skips the test when a prerequisite is missing, or fails it
+// under E2E_REQUIRE=1 (missingPrereqf).
 func requireTools(t *testing.T, tools ...string) {
 	t.Helper()
 
 	for _, tool := range tools {
-		if _, err := exec.LookPath(tool); err == nil {
-			continue
+		if _, err := exec.LookPath(tool); err != nil {
+			missingPrereqf(t, "%s not found", tool)
 		}
-
-		if os.Getenv("E2E_REQUIRE") == "1" {
-			t.Fatalf("%s not found (required by E2E_REQUIRE=1)", tool)
-		}
-
-		t.Skipf("%s not found", tool)
 	}
+}
+
+// missingPrereqf skips the test for an absent prerequisite — unless
+// E2E_REQUIRE=1 (set in CI), where a missing tool must FAIL, not silently
+// green-skip the gate.
+func missingPrereqf(tb testing.TB, format string, args ...any) {
+	tb.Helper()
+
+	if os.Getenv("E2E_REQUIRE") == "1" {
+		tb.Fatalf(format+" (required by E2E_REQUIRE=1)", args...)
+
+		return
+	}
+
+	tb.Skipf(format, args...)
 }
 
 var buildOnce sync.Once

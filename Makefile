@@ -41,15 +41,16 @@ cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
 # The e2e suites live in the test/e2e Go package (build tag e2e). -count=1 is
 # load-bearing: the test cache would otherwise return a cached ok without
 # running Nextflow. Partitioned by -run/-skip so CI can parallelize the docker
-# job; the mrp differential needs a local Martian (skips without one).
+# job. test-e2e includes the mrp differential, which needs a Martian build at
+# MARTIAN_BIN: it skips without one, and fails under E2E_REQUIRE=1 (CI).
 # Each parallel case is an idle-heavy `nextflow run` (JVM startup + tiny
 # tasks), so oversubscribing cores is a win; the harness caps every JVM at
 # -Xmx512m, bounding 10 concurrent runs to ~5 GB.
 E2E_PARALLEL ?= 10
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
-test-e2e: build ## Run the e2e suite (golden table, cloud-sim, failure paths, knobs)
-	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestMrpDiff|^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger'
+test-e2e: build ## Run the e2e suite (golden table, mrp differential, cloud-sim, failure paths, knobs)
+	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger'
 
 test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
 	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
