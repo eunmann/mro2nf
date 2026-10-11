@@ -286,7 +286,7 @@ at `/opt/mro2nf`, multi-arch:
 
 ```dockerfile
 FROM ghcr.io/eunmann/mro2nf-runtime:<version>   # match your mro2nf version
-COPY stages /opt/mro2nf/stages                  # your stage code
+COPY runtime/stages /opt/mro2nf/stages          # your stage code
 # comp-adapter stages also need an mrjob at /opt/mro2nf/mrjob
 ```
 
