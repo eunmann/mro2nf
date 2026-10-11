@@ -439,7 +439,9 @@ paths into `_outs`; mre writes the **same tree** with paths **relative** to the
 outs dir (location-independent bundles). Tree structure, filenames, and contents
 are byte-identical.
 
-Every fixture is compared with `mrp`, by outputs or by outcome, except those
+Every fixture, `bench/`'s included, is compared with `mrp`, by outputs or by
+outcome: a bench fixture runs at its narrower width, with a `-native` leg like
+the bench's own lanes. The exceptions are
 listed with the reason in `mrpUnrunnable` (`test/e2e/coverage_test.go`;
 `TestEveryFixtureMrpDiffed` puts every fixture in exactly one of the three
 tables): relative `input/` paths `mrp` passes through unresolved, a nested map
