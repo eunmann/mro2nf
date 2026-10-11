@@ -24,7 +24,6 @@ const minOrdinalWidth = 4
 var (
 	errInvalidOuts = errors.New("invalid stage outs")
 	errMultiSource = errors.New("fork root reads several stages")
-	errOuterFork   = errors.New("fork root nested in a map call its producer is not forked on")
 )
 
 // PostSpec is one finished stage instance a task posts.
@@ -185,7 +184,8 @@ func (w forkWriter) root(root *syntax.CallGraphStage, fixed Fork) error {
 }
 
 // level enumerates root's outer parts one root at a time: a part the
-// producer fixes, or every index of an outer root the call graph fixes.
+// posting instance's fork fixes, or every index of an outer root, from the
+// call graph and what the task staged.
 func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix Fork, rest syntax.ForkRootList, names []string, dir string) error {
 	if len(rest) == 0 {
 		return w.elements(root, prefix, names, dir)
@@ -195,10 +195,6 @@ func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix Fork, rest 
 
 	if p, ok := fixed.rootPart(o); ok {
 		return w.level(root, fixed, prefix.with(Part{Root: o, Index: p.Index}), rest[1:], names, dir)
-	}
-
-	if w.values {
-		return fmt.Errorf("%w: %s in %s", errOuterFork, root.Fqid, o.Fqid)
 	}
 
 	idx, err := w.r.sourceIndices(o, prefix)

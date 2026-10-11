@@ -561,8 +561,12 @@ item or a dir of items). No generated project calls them yet; the v2 emitter
   position. An instance therefore stages only its own element, and no key ever
   needs escaping. `mre post -entry` writes the forks the call graph already
   fixes (literal and entry-sourced sources) the same way, as fork records
-  without values. The name of a fork nested in an outer map call the
-  producer does not fix is prefixed with the outer ordinals, joined by dots.
+  without values. A root whose fork set varies with an outer map call (its
+  source, of unknown length, is forked on that call) gets its forks under
+  each fork of that call. The posting task enumerates an outer call its own
+  fork does not fix from what it staged, and prefixes the name with the
+  ordinal of each such call, joined by dots. A root of known length is keyed
+  by its own forks alone, whatever outer calls its stages are also forked on.
 - **`mre outs`** resolves the pipeline outs into the bundle `publish-layout`
   reads, checking them with `MarshalerMap.ValidatePipelineOutputs`.
 

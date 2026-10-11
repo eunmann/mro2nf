@@ -9,7 +9,9 @@ package cg
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
 
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -59,8 +61,10 @@ func Load(mro string, mroPaths []string) (*Graph, error) {
 		outer:  map[string]syntax.ForkRootList{},
 	}
 
-	for fqid, n := range root.NodeClosure() {
-		st, ok := n.(*syntax.CallGraphStage)
+	closure := root.NodeClosure()
+
+	for _, fqid := range slices.Sorted(maps.Keys(closure)) {
+		st, ok := closure[fqid].(*syntax.CallGraphStage)
 		if !ok {
 			continue
 		}
@@ -69,7 +73,7 @@ func Load(mro string, mroPaths []string) (*Graph, error) {
 
 		for i, r := range st.ForkRoots() {
 			g.roots[r.Fqid] = r
-			g.outer[r.Fqid] = st.ForkRoots()[:i:i]
+			g.addOuter(r, st.ForkRoots()[:i])
 		}
 	}
 
@@ -114,9 +118,31 @@ func (g *Graph) forkRoot(fqid string) (*syntax.CallGraphStage, error) {
 	return r, nil
 }
 
-// outerRoots are the map calls root's forks are nested in, outermost first:
-// the fork roots before it in the fork of any stage forked on it. A
-// pipeline's map call keeps no fork roots of its own.
+// addOuter adds to root's outer roots those of before, the fork roots ahead
+// of root in a stage's fork, that root's fork set depends on. Every stage's
+// fork orders the roots it shares with another stage alike, so the stages
+// agree on the order, and visiting them sorted fixes it when one stage lacks
+// a root another has.
+func (g *Graph) addOuter(root *syntax.CallGraphStage, before syntax.ForkRootList) {
+	sp := root.Split()
+	if sp == nil || sp.Source.KnownLength() {
+		return
+	}
+
+	deps := map[*syntax.CallStm]bool{}
+	splitCalls(sp.Value, deps)
+
+	for _, o := range before {
+		if deps[o.Call()] && !slices.ContainsFunc(g.outer[root.Fqid], func(c *syntax.CallGraphStage) bool { return c.Fqid == o.Fqid }) {
+			g.outer[root.Fqid] = append(g.outer[root.Fqid], o)
+		}
+	}
+}
+
+// outerRoots are the map calls root's fork set varies with, outermost
+// first: those its split source is forked on, none when the source's length
+// is known. A root's fork elements are keyed by these and root alone,
+// whatever else a stage forked on root is forked on.
 func (g *Graph) outerRoots(root *syntax.CallGraphStage) syntax.ForkRootList {
 	return g.outer[root.Fqid]
 }
@@ -127,6 +153,42 @@ func runtimeMultiSource(root *syntax.CallGraphStage) bool {
 	sp := root.Split()
 
 	return sp != nil && !sp.Source.KnownLength() && len(refIDs(sp.Value)) > 1
+}
+
+// splitCalls adds the map calls e is forked on to out, as Martian's
+// unexported findSplitCalls finds a stage's fork roots in its inputs
+// (syntax/resolve_stage.go:791): every split's call, and each call a ref is
+// forked on at an index not yet fixed, less the calls a merge gathers.
+func splitCalls(e syntax.Exp, out map[*syntax.CallStm]bool) {
+	switch x := e.(type) {
+	case *syntax.SplitExp:
+		out[x.Call] = true
+		splitCalls(x.Value, out)
+	case *syntax.MergeExp:
+		had := out[x.GetCall()]
+		splitCalls(x.Value, out)
+
+		if !had {
+			delete(out, x.GetCall())
+		}
+	case *syntax.ArrayExp:
+		for _, v := range x.Value {
+			splitCalls(v, out)
+		}
+	case *syntax.MapExp:
+		for _, v := range x.Value {
+			splitCalls(v, out)
+		}
+	case *syntax.DisabledExp:
+		splitCalls(x.Value, out)
+		splitCalls(x.Disabled, out)
+	case *syntax.RefExp:
+		for c, ix := range x.Forks {
+			if ix != nil && ix.IndexSource() != nil {
+				out[c] = true
+			}
+		}
+	}
 }
 
 func refIDs(e syntax.Exp) []string {
