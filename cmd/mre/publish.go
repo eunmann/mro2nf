@@ -363,9 +363,9 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 // an element it cannot move: as the stage wrote it, escaped strings restored,
 // except that a file the stage wrote is named where its task wrote it (see
 // origin), as mrp's _outs names the file in the stage's dir. A file the stage
-// never wrote
-// keeps the path it was declared at, which mrp keeps too. It warns once when
-// the array names a file, as mrp prints "Could not move output files".
+// never wrote keeps the path it was declared at, which mrp keeps too. It warns
+// once when the array names a file, as mrp prints "Could not move output
+// files".
 func (pub *publisher) unpublishedArray(rel string, p ir.Param, arr []any) (any, error) {
 	files := false
 
