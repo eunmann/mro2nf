@@ -280,6 +280,8 @@ func TestGenFindingsRecordDivergences(t *testing.T) {
 // harness error, here mrp missing, still fails the run. It reruns this test
 // binary on TestGenDiff alone.
 func TestGenDiffHarnessErrorFails(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
 	cmd := exec.Command(os.Args[0], "-test.run=^TestGenDiff$", "-test.count=1")
 	cmd.Dir = filepath.Join(root, "test", "e2e")
 	cmd.Env = append(os.Environ(), "E2E_REQUIRE=1", "MARTIAN_BIN="+t.TempDir(),
@@ -290,6 +292,20 @@ func TestGenDiffHarnessErrorFails(t *testing.T) {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || !strings.Contains(string(out), errNoMrp.Error()) {
 		t.Errorf("TestGenDiff without mrp: err %v, want a failed run naming %q:\n%s", err, errNoMrp, out)
+	}
+}
+
+// TestGenDiffHarnessErrorFailsSkipsWithoutTools pins that test's guard:
+// without TestGenDiff's tools and E2E_REQUIRE it skips, as TestGenDiff does,
+// rather than failing on the tool its E2E_REQUIRE=1 rerun finds missing.
+func TestGenDiffHarnessErrorFailsSkipsWithoutTools(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGenDiffHarnessErrorFails$", "-test.count=1", "-test.v")
+	cmd.Dir = filepath.Join(root, "test", "e2e")
+	cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "E2E_REQUIRE=")
+
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- SKIP: TestGenDiffHarnessErrorFails") {
+		t.Errorf("TestGenDiffHarnessErrorFails without its tools: err %v, want a skip:\n%s", err, out)
 	}
 }
 
