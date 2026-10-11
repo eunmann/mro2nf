@@ -2,11 +2,13 @@ package e2e
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -104,55 +106,108 @@ func TestNextflowFailedOutcomeUnknownTask(t *testing.T) {
 	}
 }
 
+// outcomeTestAllowlist holds an outcome entry recording a failure that blames
+// no stage, one recording an ASSERT in BOOM, and a comparator entry.
+func outcomeTestAllowlist(t *testing.T) divergence.Allowlist {
+	t.Helper()
+
+	const entry = `{"id": %q, "kind": "outcome", "feature": "f", "summary": "s", "justification": "j",
+		"evidence": ["TestMrpDiffFailureParity"], %s}`
+
+	allow, err := divergence.Parse([]byte(`{"divergences": [` +
+		fmt.Sprintf(entry, "nf-fails", `"outcome": {"failed": true}`) + "," +
+		fmt.Sprintf(entry, "nf-asserts", `"outcome": {"failed": true, "failures": [{"kind": "assert", "stage": "BOOM"}]}`) + "," +
+		fmt.Sprintf(entry, "by-stage", `"comparator": {"rule": "compare-failure-stage-and-kind"}`) + "]}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return allow
+}
+
 func TestMrpOutcomeCaseValidate(t *testing.T) {
 	boom := failedIn(failAssert, "BOOM")
+	allow := outcomeTestAllowlist(t)
 
 	cases := []struct {
 		name    string
 		tc      mrpOutcomeCase
+		want    *outcomeDivergence
 		wantErr bool
 	}{
-		{"mrp fails", mrpOutcomeCase{name: "f", mrp: boom}, false},
-		{"mrp succeeds without a divergence", mrpOutcomeCase{name: "f"}, true},
-		{"mrp succeeds with a divergence", mrpOutcomeCase{name: "f", divergence: &outcomeDivergence{issue: 1, nf: runOutcome{Failed: true}}}, false},
-		{"divergence without an issue", mrpOutcomeCase{name: "f", mrp: boom, divergence: &outcomeDivergence{}}, true},
-		{"divergence equal to mrp", mrpOutcomeCase{name: "f", mrp: boom, divergence: &outcomeDivergence{issue: 1, nf: boom}}, true},
+		{"mrp fails", mrpOutcomeCase{name: "f", mrp: boom}, nil, false},
+		{"mrp succeeds without a divergence", mrpOutcomeCase{name: "f"}, nil, true},
+		{"mrp succeeds with a divergence", mrpOutcomeCase{name: "f", divergence: "nf-fails"}, &outcomeDivergence{id: "nf-fails", nf: runOutcome{Failed: true}}, false},
+		{"divergence not in the allowlist", mrpOutcomeCase{name: "f", mrp: boom, divergence: "gone"}, nil, true},
+		{"divergence with no outcome matcher", mrpOutcomeCase{name: "f", mrp: boom, divergence: "by-stage"}, nil, true},
+		{"divergence equal to mrp", mrpOutcomeCase{name: "f", mrp: boom, divergence: "nf-asserts"}, nil, true},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := c.tc.validate()
+			got, err := c.tc.validate(allow)
 			if (err != nil) != c.wantErr || (err != nil && !errors.Is(err, errOutcomeCase)) {
 				t.Errorf("validate() = %v, want an error: %v", err, c.wantErr)
 			}
+
+			if diff := cmp.Diff(c.want, got, cmp.AllowUnexported(outcomeDivergence{})); diff != "" {
+				t.Errorf("divergence (-want +got):\n%s", diff)
+			}
 		})
+	}
+}
+
+// TestOutcomeRulesNeedTheirEntries feeds the outcome comparator rules the
+// attempts of a real stage_raise run, where Nextflow tried RAISE three times:
+// the checked-in allowlist excuses the retries and the stage-and-kind
+// comparison, and removing either entry fails the case.
+func TestOutcomeRulesNeedTheirEntries(t *testing.T) {
+	attempts := []string{"BUILD_ENTRY_ARGS", "SR:STAGE_2_SR__RAISE", "SR:STAGE_2_SR__RAISE", "SR:STAGE_2_SR__RAISE"}
+	allow := mustAllowlist(t)
+
+	if got := outcomeRuleReports(allow, attempts); len(got) != 0 {
+		t.Errorf("the checked-in allowlist leaves reports: %q", got)
+	}
+
+	for id, want := range map[string]string{
+		"retried-stage-errors":   "attempted SR:STAGE_2_SR__RAISE more than once",
+		"failure-report-details": "reads only each failure's stage and kind",
+	} {
+		got := strings.Join(outcomeRuleReports(allow.Without(id), attempts), "\n")
+		if !strings.Contains(got, want) {
+			t.Errorf("without %s the reports are %q, want one containing %q", id, got, want)
+		}
+	}
+
+	if got := outcomeRuleReports(allow.Without("retried-stage-errors"), attempts[:2]); len(got) != 0 {
+		t.Errorf("a run with no retried task needs no retry entry, got %q", got)
 	}
 }
 
 func TestMrpOutcomeCaseCheck(t *testing.T) {
 	boom := failedIn(failAssert, "BOOM")
 	asError := failedIn(failError, "BOOM")
-	div := &outcomeDivergence{issue: 275, nf: runOutcome{}}
+	div := &outcomeDivergence{id: "nf-succeeds", nf: runOutcome{}}
 
 	cases := []struct {
 		name string
-		tc   mrpOutcomeCase
+		div  *outcomeDivergence
 		mrp  runOutcome
 		nf   runOutcome
 		want []string
 	}{
-		{"parity", mrpOutcomeCase{mrp: boom}, boom, boom, nil},
-		{"mro2nf succeeds", mrpOutcomeCase{mrp: boom}, boom, runOutcome{}, []string{"mro2nf outcome is success"}},
-		{"kind differs", mrpOutcomeCase{mrp: boom}, boom, asError, []string{"mro2nf outcome is failure: error in BOOM"}},
-		{"mrp changed", mrpOutcomeCase{mrp: boom}, asError, boom, []string{"mrp outcome is failure: error in BOOM"}},
-		{"divergence holds", mrpOutcomeCase{mrp: boom, divergence: div}, boom, runOutcome{}, nil},
-		{"divergence gone", mrpOutcomeCase{mrp: boom, divergence: div}, boom, boom, []string{"divergence #275 is gone"}},
-		{"divergence changed", mrpOutcomeCase{mrp: boom, divergence: div}, boom, asError, []string{"divergence #275 records success"}},
+		{"parity", nil, boom, boom, nil},
+		{"mro2nf succeeds", nil, boom, runOutcome{}, []string{"mro2nf outcome is success"}},
+		{"kind differs", nil, boom, asError, []string{"mro2nf outcome is failure: error in BOOM"}},
+		{"mrp changed", nil, asError, boom, []string{"mrp outcome is failure: error in BOOM"}},
+		{"divergence holds", div, boom, runOutcome{}, nil},
+		{"divergence gone", div, boom, boom, []string{"divergence nf-succeeds is gone"}},
+		{"divergence changed", div, boom, asError, []string{"divergence nf-succeeds records success"}},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := c.tc.check(c.mrp, c.nf)
+			got := mrpOutcomeCase{mrp: boom}.check(c.div, c.mrp, c.nf)
 			if len(got) != len(c.want) {
 				t.Fatalf("check() = %q, want %d report(s) containing %q", got, len(c.want), c.want)
 			}

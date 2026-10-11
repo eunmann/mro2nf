@@ -85,8 +85,9 @@ const mrpHostLinkOut = "mrp runs it, but its _outs value for the linked output i
 // TestEveryFixtureMrpDiffed fails unless every pipeline fixture is in exactly
 // one of mrpDiffCases (outputs diffed), mrpOutcomeCases (run outcome diffed)
 // and mrpUnrunnable (with a reason), when a table names a fixture that does
-// not exist, or when an mrpOutcomeCases entry is malformed: every fixture mrp
-// can run faces live mrp.
+// not exist, when an mrpOutcomeCases entry is malformed, or when an outcome
+// divergence in the allowlist is not named by exactly one case: every fixture
+// mrp can run faces live mrp.
 func TestEveryFixtureMrpDiffed(t *testing.T) {
 	present := pipelineFixtures(t)
 	tables := map[string][]string{}
@@ -95,11 +96,24 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 		tables[tc.name] = append(tables[tc.name], "mrpDiffCases")
 	}
 
+	allow := mustAllowlist(t)
+	named := map[string][]string{}
+
 	for _, tc := range mrpOutcomeCases {
 		tables[tc.name] = append(tables[tc.name], "mrpOutcomeCases")
 
-		if err := tc.validate(); err != nil {
+		if _, err := tc.validate(allow); err != nil {
 			t.Error(err)
+		}
+
+		if tc.divergence != "" {
+			named[tc.divergence] = append(named[tc.divergence], tc.name)
+		}
+	}
+
+	for _, e := range allow.Entries() {
+		if e.Outcome != nil && len(named[e.ID]) != 1 {
+			t.Errorf("outcome divergence %s is named by the mrpOutcomeCases %v; name it from exactly one case", e.ID, named[e.ID])
 		}
 	}
 

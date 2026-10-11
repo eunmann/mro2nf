@@ -1,0 +1,193 @@
+package divergence
+
+import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+)
+
+const (
+	checkedIn = "../e2e/divergences.json"
+	repoRoot  = "../.."
+)
+
+func TestCheckedInAllowlistLoads(t *testing.T) {
+	if _, err := Load(checkedIn); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEveryComparatorRuleHasAnEntry fails on a comparator rule the
+// differential applies with no allowlist entry to excuse it.
+func TestEveryComparatorRuleHasAnEntry(t *testing.T) {
+	allow, err := Load(checkedIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for rule := range ComparatorRules() {
+		if !allow.Excuses(rule) {
+			t.Errorf("comparator rule %q has no allowlist entry", rule)
+		}
+	}
+}
+
+var (
+	testFunc   = regexp.MustCompile(`(?m)^func (Test\w+)\(`)
+	stringLits = regexp.MustCompile(`"([^"\\\n]*)"`)
+)
+
+// TestEvidenceNamesTests fails on evidence naming a test function that does
+// not exist, or a subtest whose name no test source spells as a string.
+func TestEvidenceNamesTests(t *testing.T) {
+	allow, err := Load(checkedIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	funcs, lits := testSources(t)
+
+	for _, e := range allow.Entries() {
+		for _, ev := range e.Evidence {
+			parts := strings.Split(ev, "/")
+			if !funcs[parts[0]] {
+				t.Errorf("%s cites %s, but no test function %s exists", e.ID, ev, parts[0])
+			}
+
+			for _, sub := range parts[1:] {
+				if !lits[sub] {
+					t.Errorf("%s cites %s, but no test source names subtest %q", e.ID, ev, sub)
+				}
+			}
+		}
+	}
+}
+
+// testSources returns the test function names and the string literals of
+// every _test.go file in the repo.
+func testSources(t *testing.T) (map[string]bool, map[string]bool) {
+	t.Helper()
+
+	funcs, lits := map[string]bool{}, map[string]bool{}
+
+	err := filepath.WalkDir(repoRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() && slices.Contains([]string{".git", "deploy", "vendor-martian"}, d.Name()) {
+			return filepath.SkipDir
+		}
+
+		if d.IsDir() || !strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+
+		src, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+
+		for _, m := range testFunc.FindAllSubmatch(src, -1) {
+			funcs[string(m[1])] = true
+		}
+
+		for _, m := range stringLits.FindAllSubmatch(src, -1) {
+			lits[string(m[1])] = true
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return funcs, lits
+}
+
+func TestParseRejectsInvalid(t *testing.T) {
+	const ok = `"feature": "f", "summary": "s", "justification": "j", "evidence": ["TestX"]`
+
+	cases := map[string]string{
+		"malformed":             `{"divergences": [`,
+		"trailing data":         `{"divergences": []} {}`,
+		"unknown field":         `{"divergences": [{"id": "a", "kind": "mechanism", ` + ok + `, "stage": "X"}]}`,
+		"bad id":                `{"divergences": [{"id": "A_b", "kind": "mechanism", ` + ok + `}]}`,
+		"duplicate id":          `{"divergences": [{"id": "a", "kind": "mechanism", ` + ok + `}, {"id": "a", "kind": "mechanism", ` + ok + `}]}`,
+		"unknown kind":          `{"divergences": [{"id": "a", "kind": "other", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}}]}`,
+		"no summary":            `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f", "justification": "j", "evidence": ["TestX"]}]}`,
+		"line break":            `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f\n", "summary": "s", "justification": "j", "evidence": ["TestX"]}]}`,
+		"negative issue":        `{"divergences": [{"id": "a", "kind": "mechanism", "issue": -1, ` + ok + `}]}`,
+		"no evidence":           `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f", "summary": "s", "justification": "j"}]}`,
+		"evidence not a test":   `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f", "summary": "s", "justification": "j", "evidence": ["kitchen_sink"]}]}`,
+		"mechanism matcher":     `{"divergences": [{"id": "a", "kind": "mechanism", ` + ok + `, "outcome": {"failed": true}}]}`,
+		"no matcher":            `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `}]}`,
+		"two matchers":          `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": true}, "comparator": {"rule": "collapse-retried-attempts"}}]}`,
+		"matcher of other kind": `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ignore-key", "key": "k"}}]}`,
+		"unknown rule":          `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "sort"}}]}`,
+		"rule of other kind":    `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "collapse-retried-attempts"}}]}`,
+		"rule matched twice":    `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}}, {"id": "b", "kind": "abi", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}}]}`,
+		"abi no fixture":        `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": [], "file": "_args", "rule": "ignore-key", "key": "k"}}]}`,
+		"abi bad file":          `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_jobinfo", "rule": "ignore-key", "key": "k"}}]}`,
+		"abi unknown rule":      `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ignore", "key": "k"}}]}`,
+		"abi no key":            `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ceil-number", "key": ""}}]}`,
+		"success with failure":  `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": false, "failures": [{"kind": "error", "stage": "S"}]}}]}`,
+		"bad failure kind":      `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": true, "failures": [{"kind": "oom", "stage": "S"}]}}]}`,
+	}
+
+	for name, doc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(doc)); err == nil {
+				t.Errorf("Parse accepted %s", doc)
+			}
+		})
+	}
+}
+
+func TestAllowlistLookups(t *testing.T) {
+	const ok = `"feature": "f", "summary": "s", "justification": "j", "evidence": ["TestX"]`
+
+	allow, err := Parse([]byte(`{"divergences": [
+		{"id": "key", "kind": "abi", "issue": 7, ` + ok + `, "abi": {"fixtures": ["fx"], "file": "_args", "rule": "ignore-key", "key": "k"}},
+		{"id": "order", "kind": "abi", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}},
+		{"id": "nf-fails", "kind": "outcome", ` + ok + `, "outcome": {"failed": true}},
+		{"id": "how", "kind": "mechanism", ` + ok + `}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := allow.ABI("fx"); len(got) != 1 || got[0].ID != "key" {
+		t.Errorf("ABI(fx) = %v, want the key entry", got)
+	}
+
+	if got := allow.ABI("other"); len(got) != 0 {
+		t.Errorf("ABI(other) = %v, want none", got)
+	}
+
+	if !allow.Excuses(RuleABISortKeys) || allow.Without("order").Excuses(RuleABISortKeys) {
+		t.Error("Excuses does not follow the order entry")
+	}
+
+	if _, err := allow.Outcome("nf-fails"); err != nil {
+		t.Errorf("Outcome(nf-fails): %v", err)
+	}
+
+	for _, id := range []string{"how", "missing"} {
+		if _, err := allow.Outcome(id); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Outcome(%s) err = %v, want ErrInvalid", id, err)
+		}
+	}
+
+	if _, ok := allow.Without("how").Entry("how"); ok {
+		t.Error("Without kept the entry")
+	}
+
+	if len(allow.Entries()) != 4 {
+		t.Errorf("Without changed the original allowlist: %d entries", len(allow.Entries()))
+	}
+}

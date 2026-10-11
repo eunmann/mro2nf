@@ -1,3 +1,43 @@
 {
-  "divergences": []
+  "divergences": [
+    {
+      "id": "abi-object-key-order",
+      "kind": "abi",
+      "feature": "struct and map values a stage receives",
+      "summary": "A stage receives struct and map values with their keys sorted, where mrp passes them in the order their producer wrote them.",
+      "justification": "The data plane decodes every bundle into Go maps (cmd/mre/bundle.go rawToMap), which re-encode sorted. Against mrp 4a558e7 a producer's {\"b\": 1, \"a\": 2} reaches the consumer's _args as {\"a\": 2, \"b\": 1}, so a stage that iterates the dict sees another order; nested_struct's READN gets {\"b\", \"inner\"} under mro2nf and {\"inner\", \"b\"} under mrp. The ABI comparison sorts object keys while this entry exists.",
+      "issue": 366,
+      "evidence": ["TestMrpDiff/nested_struct", "TestRemovingAnABIEntryFailsTheComparison"],
+      "comparator": {"rule": "abi-sort-object-keys"}
+    },
+    {
+      "id": "runtime-null-disable-gate-aborts",
+      "kind": "outcome",
+      "feature": "`using (disabled = ref)` resolving to null at runtime",
+      "summary": "A disable gate that resolves to null at runtime aborts mro2nf's run, where mrp treats it as false and runs the call.",
+      "justification": "A regression from the #180 fix: the driver rejects the null gate instead of reading it as false. null_disable_gate records mro2nf's failure; once fixed, the fixture moves to mrpDiffCases.",
+      "issue": 253,
+      "evidence": ["TestMrpDiffFailureParity/null_disable_gate", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true}
+    },
+    {
+      "id": "retried-stage-errors",
+      "kind": "outcome",
+      "feature": "`--autoretry` / retrying a failed stage",
+      "summary": "mro2nf retries every stage failure except an ASSERT up to twice (errorStrategy retry, maxRetries 2), where mrp retries only failures matching its retry_on patterns (signals, ENOMEM, scheduler errors) and never an ordinary stage exception.",
+      "justification": "A stage that fails and then succeeds on retry completes under mro2nf and fails under mrp (mrp jobmanagers/retry.json; internal/emit/emit.go errorStrategy). The outcome comparison counts a retried stage task's failures once while this entry exists.",
+      "issue": 299,
+      "evidence": ["TestMrpDiffFailureParity/stage_raise", "TestOutcomeRulesNeedTheirEntries"],
+      "comparator": {"rule": "collapse-retried-attempts"}
+    },
+    {
+      "id": "failure-report-details",
+      "kind": "outcome",
+      "feature": "failure messages and where a failure is recorded",
+      "summary": "A failed run's messages differ: mre words its own errors and Nextflow adds context, and mro2nf records an output-validation failure in the task that ran the phase, where mrp records it at the fork.",
+      "justification": "The failure contract is whether the run fails, which stages it blames and whether each failure is an ASSERT or an error, so the outcome comparison reads only those.",
+      "evidence": ["TestMrpDiffFailureParity", "TestOutcomeRulesNeedTheirEntries"],
+      "comparator": {"rule": "compare-failure-stage-and-kind"}
+    }
+  ]
 }

@@ -468,8 +468,8 @@ var mrpDiffCases = []mrpDiffCase{
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
 // their outputs, is compared with mrp's by TestMrpDiffFailureParity: mrp
 // fails each by design, or mro2nf's outcome is a known divergence from mrp's,
-// recorded with its open issue. Fixing the issue fails the case until the
-// divergence is deleted.
+// named by its allowlist entry in divergences.json. Fixing the divergence fails
+// the case until the entry is deleted.
 var mrpOutcomeCases = []mrpOutcomeCase{
 	// An ASSERT in each phase: main, split and join.
 	{name: "assert_min", mrp: failedIn(failAssert, "BOOM")},
@@ -493,7 +493,7 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{
 		name:       "null_disable_gate",
 		mrp:        runOutcome{},
-		divergence: &outcomeDivergence{issue: 253, nf: runOutcome{Failed: true}},
+		divergence: "runtime-null-disable-gate-aborts",
 	},
 }
 
@@ -541,12 +541,12 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 		extra = append(extra, "-mrjob", mrjob)
 	}
 
-	compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, extra))
+	compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, extra))
 
 	if tc.native {
 		t.Run("native", func(t *testing.T) {
 			t.Parallel()
-			compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native")))
+			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-native")))
 		})
 	}
 
@@ -566,7 +566,7 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	if tc.inline {
 		t.Run("noinline", func(t *testing.T) {
 			t.Parallel()
-			compareStageABI(t, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
+			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc.name, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
 		})
 	}
 }
@@ -589,27 +589,18 @@ func diffNextflow(t *testing.T, fixture, tmp string, flags []string) string {
 }
 
 // compareStageABI requires every stage phase's normalized _args and _outs to
-// match between the mrp pipestance and the Nextflow work dir (#348), less the
-// known divergences in divergences.json.
-func compareStageABI(t *testing.T, tmp, proj string) {
+// match between the mrp pipestance and the Nextflow work dir of fixture
+// (#348), less what the allowlist excuses, and every allowlist entry scoped to
+// the fixture to excuse something.
+func compareStageABI(t *testing.T, fixture, tmp, proj string) {
 	t.Helper()
 
-	divs, err := loadDivergences(filepath.Join(root, "test", "e2e", "divergences.json"))
+	reports, err := diffStageABI(mustAllowlist(t), fixture, filepath.Join(tmp, "mrp"), proj)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	mrpInvs, err := collectMrpInvocations(filepath.Join(tmp, "mrp"), divs)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	nfInvs, err := collectNextflowInvocations(proj, divs)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, r := range diffABI(mrpInvs, nfInvs) {
+	for _, r := range reports {
 		t.Errorf("stage ABI differs from mrp: %s", r)
 	}
 }
@@ -660,18 +651,24 @@ func TestMrpDiffFailureParity(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
 	bin := martianBin(t)
+	allow := mustAllowlist(t)
 
 	for _, tc := range mrpOutcomeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			shardSkip(t)
 
+			d, err := tc.validate(allow)
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			tmp := t.TempDir()
 			mrp := mrpRunOutcome(t, bin, tc.name, tmp)
 			proj := transpile(t, tc.name)
-			nf := nextflowRunOutcome(t, proj)
+			nf, attempts := nextflowRunOutcome(t, proj)
 
-			reports := tc.check(mrp, nf)
+			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, attempts)...)
 			for _, r := range reports {
 				t.Error(r)
 			}
@@ -708,17 +705,26 @@ func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
 }
 
 // nextflowRunOutcome runs a transpiled project and classifies the run from the
-// FAILED attempts in its trace.
-func nextflowRunOutcome(t *testing.T, proj string) runOutcome {
+// FAILED attempts in its trace. It also returns the task name of every attempt
+// the trace lists.
+func nextflowRunOutcome(t *testing.T, proj string) (runOutcome, []string) {
 	t.Helper()
 
-	if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
-		return runOutcome{}
+	runErr := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt")
+	rows := readTrace(t, filepath.Join(proj, "trace.txt"))
+
+	attempts := make([]string, len(rows))
+	for i, r := range rows {
+		attempts[i] = r.Name
+	}
+
+	if runErr == nil {
+		return runOutcome{}, attempts
 	}
 
 	var failed []failedAttempt
 
-	for _, r := range readTrace(t, filepath.Join(proj, "trace.txt")) {
+	for _, r := range rows {
 		if r.Status == "FAILED" {
 			failed = append(failed, failedAttempt{Hash: r.Hash, Exit: r.Exit})
 		}
@@ -729,7 +735,7 @@ func nextflowRunOutcome(t *testing.T, proj string) runOutcome {
 		t.Fatal(err)
 	}
 
-	return o
+	return o, attempts
 }
 
 // tailFile is tail for a log file, or a note that it could not be read.

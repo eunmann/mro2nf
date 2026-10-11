@@ -9,12 +9,14 @@ package e2e
 // any other failure with _errors, in the phase dir when stage code failed and in
 // the fork dir when mrp's own checks did. mro2nf marks an ASSERT with exit 42
 // (shim.AssertExitCode) and any other failure with another exit, and mre names
-// the stage in the task's _mre_stage. The rest is left out on purpose. Message
-// text differs by design: mre words its errors itself and Nextflow adds context.
-// The phase is not reliable either, because mrp records an output-validation
-// failure at the fork while mre records it in the task that ran the phase. The
-// chunk index and the attempt count are also left out, because mro2nf retries
-// an error and mrp does not.
+// the stage in the task's _mre_stage. Leaving the rest out excuses real
+// differences, so each is an allowlist rule the comparison applies only while
+// its entry exists (divergences.json). Message text differs by design: mre
+// words its errors itself and Nextflow adds context. The phase is not reliable
+// either, because mrp records an output-validation failure at the fork while
+// mre records it in the task that ran the phase, and neither is the chunk
+// index (RuleFailureStageAndKind). mro2nf retries an error and mrp does not,
+// so a retried stage task's failures count once (RuleRetriedAttempts).
 //
 // This file carries no build tag so its unit tests run under `make test`;
 // mrpdiff_test.go drives it against live runs.
@@ -29,11 +31,12 @@ import (
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/test/divergence"
 )
 
 const (
-	failAssert = "assert"
-	failError  = "error"
+	failAssert = divergence.FailAssert
+	failError  = divergence.FailError
 )
 
 // mrpFailureFiles maps the metadata files mrp writes for a failed stage to the
@@ -206,53 +209,74 @@ func taskStage(work, hash string) (string, error) {
 	}
 }
 
-// outcomeDivergence is a known difference between mrp's outcome and mro2nf's
-// on one fixture: the outcome mro2nf gives instead while the issue is open.
+// outcomeDivergence is the allowlist entry a case names: the outcome mro2nf
+// gives instead of mrp's on the case's fixture.
 type outcomeDivergence struct {
-	issue int
-	nf    runOutcome
+	id string
+	nf runOutcome
+}
+
+// outcomeOf is the run outcome an allowlist outcome matcher records.
+func outcomeOf(m divergence.OutcomeMatcher) runOutcome {
+	if !m.Failed {
+		return runOutcome{}
+	}
+
+	failures := make([]stageFailure, len(m.Failures))
+	for i, f := range m.Failures {
+		failures[i] = stageFailure{Kind: f.Kind, Stage: f.Stage}
+	}
+
+	return failedWith(failures)
 }
 
 // mrpOutcomeCase is a fixture whose run outcome, not its outputs, is compared
 // with mrp's: mrp fails it by design, or mro2nf's outcome is a known
-// divergence from mrp's.
+// divergence from mrp's, recorded by the allowlist entry divergence names.
 type mrpOutcomeCase struct {
 	name       string
 	mrp        runOutcome
-	divergence *outcomeDivergence
+	divergence string
 }
 
 // errOutcomeCase reports a malformed mrpOutcomeCases entry.
 var errOutcomeCase = errors.New("outcome case")
 
-// validate rejects an entry that belongs in mrpDiffCases, because both sides
-// succeed on it, and a divergence that names no issue or no difference.
-func (c mrpOutcomeCase) validate() error {
-	switch d := c.divergence; {
-	case d == nil && !c.mrp.Failed:
-		return fmt.Errorf("%w %q: mrp succeeds and no divergence is recorded; diff it in mrpDiffCases", errOutcomeCase, c.name)
-	case d == nil:
-		return nil
-	case d.issue <= 0:
-		return fmt.Errorf("%w %q: the divergence names no tracking issue", errOutcomeCase, c.name)
-	case d.nf.equal(c.mrp):
-		return fmt.Errorf("%w %q: divergence #%d records mrp's own outcome", errOutcomeCase, c.name, d.issue)
-	default:
-		return nil
+// validate resolves the case's divergence against allow. It rejects a case
+// that belongs in mrpDiffCases, because both sides succeed on it, and a
+// divergence that is no outcome entry or records mrp's own outcome.
+func (c mrpOutcomeCase) validate(allow divergence.Allowlist) (*outcomeDivergence, error) {
+	if c.divergence == "" {
+		if !c.mrp.Failed {
+			return nil, fmt.Errorf("%w %q: mrp succeeds and no divergence is recorded; diff it in mrpDiffCases", errOutcomeCase, c.name)
+		}
+
+		return nil, nil
 	}
+
+	e, err := allow.Outcome(c.divergence)
+	if err != nil {
+		return nil, fmt.Errorf("%w %q: %w", errOutcomeCase, c.name, err)
+	}
+
+	d := &outcomeDivergence{id: e.ID, nf: outcomeOf(*e.Outcome)}
+	if d.nf.equal(c.mrp) {
+		return nil, fmt.Errorf("%w %q: divergence %s records mrp's own outcome", errOutcomeCase, c.name, d.id)
+	}
+
+	return d, nil
 }
 
 // check compares the live outcomes with the case: mrp must give the recorded
-// outcome and mro2nf the same one. With a divergence, mro2nf must give the
+// outcome and mro2nf the same one. With a divergence d, mro2nf must give the
 // divergent outcome instead, so a fix fails the check until the entry is gone.
-func (c mrpOutcomeCase) check(mrp, nf runOutcome) []string {
+func (c mrpOutcomeCase) check(d *outcomeDivergence, mrp, nf runOutcome) []string {
 	var bad []string
 
 	if !mrp.equal(c.mrp) {
 		bad = append(bad, fmt.Sprintf("mrp outcome is %s; the case records %s", mrp, c.mrp))
 	}
 
-	d := c.divergence
 	if d == nil {
 		if !nf.equal(c.mrp) {
 			bad = append(bad, fmt.Sprintf("mro2nf outcome is %s; mrp's is %s", nf, c.mrp))
@@ -263,12 +287,51 @@ func (c mrpOutcomeCase) check(mrp, nf runOutcome) []string {
 
 	switch {
 	case nf.equal(c.mrp):
-		bad = append(bad, fmt.Sprintf("divergence #%d is gone: mro2nf now matches mrp (%s); delete it, "+
-			"and move a fixture both sides succeed on to mrpDiffCases", d.issue, nf))
+		bad = append(bad, fmt.Sprintf("divergence %s is gone: mro2nf now matches mrp (%s); delete it, "+
+			"and move a fixture both sides succeed on to mrpDiffCases", d.id, nf))
 	case !nf.equal(d.nf):
-		bad = append(bad, fmt.Sprintf("mro2nf outcome is %s; mrp's is %s and divergence #%d records %s",
-			nf, c.mrp, d.issue, d.nf))
+		bad = append(bad, fmt.Sprintf("mro2nf outcome is %s; mrp's is %s and divergence %s records %s",
+			nf, c.mrp, d.id, d.nf))
 	}
 
 	return bad
+}
+
+// outcomeRuleReports reports each outcome comparator rule a run needs that
+// allow has no entry for. attempts names the task of every attempt in the
+// Nextflow run's trace; a name seen twice is a retried task.
+func outcomeRuleReports(allow divergence.Allowlist, attempts []string) []string {
+	var bad []string
+
+	if !allow.Excuses(divergence.RuleFailureStageAndKind) {
+		bad = append(bad, "the outcome comparison reads only each failure's stage and kind, "+
+			"and no allowlist entry excuses leaving out its message, phase and chunk")
+	}
+
+	if retried := retriedTasks(attempts); len(retried) > 0 && !allow.Excuses(divergence.RuleRetriedAttempts) {
+		bad = append(bad, fmt.Sprintf("mro2nf attempted %s more than once, where mrp does not retry a stage error, "+
+			"and no allowlist entry excuses it", strings.Join(retried, ", ")))
+	}
+
+	return bad
+}
+
+// retriedTasks returns, sorted, the task names attempts lists more than once.
+func retriedTasks(attempts []string) []string {
+	count := map[string]int{}
+	for _, name := range attempts {
+		count[name]++
+	}
+
+	var retried []string
+
+	for name, n := range count {
+		if n > 1 {
+			retried = append(retried, name)
+		}
+	}
+
+	slices.Sort(retried)
+
+	return retried
 }
