@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -174,66 +173,6 @@ func TestRequiredContextsGatedOnChanges(t *testing.T) {
 var docsOnlyGates = []string{
 	"${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}",
 	"${{ always() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}",
-}
-
-// TestDocsOnlyPathsAgree checks the push trigger's paths-ignore and the
-// `changes` step's docs-only case pattern list the same paths, so a push to
-// main and a PR agree on what is docs-only. A case `*` also matches `/`, so
-// the case form of a glob is its `**` written as `*`.
-func TestDocsOnlyPathsAgree(t *testing.T) {
-	doc := readWorkflow(t, gateWorkflow)
-	globs := doc.get("on").get("push").get("paths-ignore").list()
-
-	want := make([]string, 0, len(globs))
-	for _, glob := range globs {
-		if strings.ContainsAny(strings.ReplaceAll(glob, "**", ""), "*?[]!") {
-			t.Fatalf("paths-ignore %q has no case-pattern equivalent; use only literal paths and **", glob)
-		}
-
-		want = append(want, strings.ReplaceAll(glob, "**", "*"))
-	}
-
-	got := docsOnlyCasePatterns(t, doc)
-
-	slices.Sort(want)
-	slices.Sort(got)
-
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("push paths-ignore (-) vs changes case pattern (+):\n%s", diff)
-	}
-}
-
-// docsOnlyCasePatterns returns the alternatives of the `changes` job's
-// `diff` step's single no-op case arm, `pat | pat) ;;`.
-func docsOnlyCasePatterns(t *testing.T, doc *yamlNode) []string {
-	t.Helper()
-
-	var script string
-
-	for _, step := range doc.get("jobs").get("changes").get("steps").items {
-		if step.get("id") != nil && step.get("id").scalar == "diff" {
-			script = step.get("run").scalar
-		}
-	}
-
-	var arms []string
-
-	for line := range strings.SplitSeq(script, "\n") {
-		if arm, ok := strings.CutSuffix(line, ") ;;"); ok {
-			arms = append(arms, arm)
-		}
-	}
-
-	if len(arms) != 1 {
-		t.Fatalf("changes step diff has %d docs-only case arms %q, want 1", len(arms), arms)
-	}
-
-	var out []string
-	for pat := range strings.SplitSeq(arms[0], "|") {
-		out = append(out, strings.TrimSpace(pat))
-	}
-
-	return out
 }
 
 // TestRequiredContextsReportOnEveryPR fails if pr-validation.yml's

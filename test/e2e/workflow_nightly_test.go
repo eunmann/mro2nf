@@ -186,3 +186,44 @@ func TestNightlyShardsPartitionSuite(t *testing.T) {
 		t.Errorf("%s e2e E2E_SHARD_INDEX = %q, want the matrix shard", nightlyWorkflow, got)
 	}
 }
+
+// nightlyChangeGate is the `if:` of every nightly suite job: a scheduled run
+// skips the suites once their commit and Nextflow release have passed.
+const nightlyChangeGate = "${{ needs.gate.outputs.run == 'true' }}"
+
+// TestNightlySuitesWaitOnChangeGate requires every suite job to need the
+// change gate and run only on its verdict, and the pass record to need every
+// suite job, so a pass is recorded only when all of them ran green.
+func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
+	var suites []string
+
+	var mark workflowJob
+
+	for _, j := range workflowJobs(t, nightlyWorkflow) {
+		switch j.id {
+		case "gate", "report":
+		case "mark":
+			mark = j
+		default:
+			suites = append(suites, j.id)
+
+			if !slices.Contains(j.needs, "gate") || j.cond != nightlyChangeGate {
+				t.Errorf("job %q: needs %q, if %q; want needs gate, if %q", j.id, j.needs, j.cond, nightlyChangeGate)
+			}
+		}
+	}
+
+	if mark.id == "" {
+		t.Fatalf("%s has no mark job", nightlyWorkflow)
+	}
+
+	for _, s := range suites {
+		if !slices.Contains(mark.needs, s) {
+			t.Errorf("mark job does not need suite job %q, so a pass could be recorded without it", s)
+		}
+	}
+
+	if mark.cond != "" {
+		t.Errorf("mark job has if %q; it must keep the implicit success()", mark.cond)
+	}
+}

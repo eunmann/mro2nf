@@ -371,14 +371,17 @@ lines, wrap errors with `%w`, standard `testing` + `go-cmp` only, and
 
 CI (`.github/workflows/pr-validation.yml`) runs lint (golangci-lint + `govulncheck`
 + a `go mod tidy` check), build, unit tests (`-race`), and the e2e suites on every
-PR and push to `main`. `nightly.yml` reruns the e2e suites daily on the declared
-Nextflow floor and on latest stable, adds the `make test-scale` smoke, and opens
-or comments on a "Nightly CI is failing" issue when a run fails. The Martian
+PR. It doesn't run again on `main`: a PR merges only when it is up to date with
+`main`, so its run already validated the merged tree. `nightly.yml` reruns the e2e
+suites daily on the declared Nextflow floor and on latest stable, and adds the
+`make test-scale` smoke. A scheduled run is skipped when the current `main` commit
+and the latest-stable Nextflow release have already passed. A failed run opens,
+or comments on, a "Nightly CI is failing" issue. The Martian
 dependency is pinned to a published commit, so
 CI needs only a single checkout; to hack on the Martian parser locally, add a
 `go.work` pointing at a fork checkout (gitignored). Tagging `v*` triggers
-`release.yml`. It waits for PR Validation to pass on the tagged commit's push to
-`main`, then cross-compiles the `mro2nf` and `mre` binaries and publishes them in a
+`release.yml`. It requires the tagged commit to be a PR's merge whose tree matches
+that PR's head, and that head to have a green PR Validation run. It then cross-compiles the `mro2nf` and `mre` binaries and publishes them in a
 GitHub release with a `SHA256SUMS` file. It also pushes the runtime image. A
 pre-release tag (`v1.2.0-rc1`) never becomes the latest release or the image's
 `latest` tag. In a public repository the binaries and the image carry build

@@ -21,32 +21,41 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/mro2nf-runtime
 
 jobs:
-  # Publish only what CI validated. A tagged commit must be a main commit whose
-  # push ran PR Validation green; the tag usually lands while that run is still
-  # going, so wait for it rather than fail. Docs-only pushes skip PR Validation
-  # (paths-ignore) and so cannot be released.
+  # Publish only what CI validated. PR Validation runs on PRs only, so the
+  # tagged commit must be a PR's squash merge with the same tree as the PR's
+  # head, and that head must have a green run. A commit pushed past a PR has
+  # no such run and cannot be released.
   ci-green:
     name: CI green on the tagged commit
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 5
     permissions:
-      contents: read # resolve the tag to its commit
+      contents: read # resolve the tag and compare trees
+      pull-requests: read # find the PR that merged the commit
       actions: read # read the PR Validation runs
     steps:
-      - name: Wait for PR Validation on the tagged commit
+      - name: Require a green PR Validation run on the tagged tree
         if: env.DRY_RUN != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$GITHUB_REF_NAME" --jq .sha)
-          id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/pr-validation.yml/runs?head_sha=$sha&event=push&branch=main" \
-            --jq '.workflow_runs | max_by(.run_number) | .id // empty')
-          [ -n "$id" ] || {
-            echo "::error::no PR Validation run for a push of $sha to main: tag a commit CI validated on main"
+          api() { gh api "repos/$GITHUB_REPOSITORY/$1" --jq "$2"; }
+          sha=$(api "commits/refs/tags/$GITHUB_REF_NAME" .sha)
+          head=$(api "commits/$sha/pulls" "map(select(.merge_commit_sha == \"$sha\")) | .[0].head.sha // empty")
+          [ -n "$head" ] || {
+            echo "::error::$sha is not a PR's merge commit: tag a commit that landed through a PR"
             exit 1
           }
-          gh run watch "$id" --repo "$GITHUB_REPOSITORY" --interval 30 --exit-status
+          [ "$(api "git/commits/$sha" .tree.sha)" = "$(api "git/commits/$head" .tree.sha)" ] || {
+            echo "::error::$sha's tree differs from its PR head $head, so no PR run validated it"
+            exit 1
+          }
+          green=$(api "actions/workflows/pr-validation.yml/runs?head_sha=$head&event=pull_request&status=success" .total_count)
+          [ "$green" -gt 0 ] || {
+            echo "::error::no successful PR Validation run on $head"
+            exit 1
+          }
 
   build:
     needs: ci-green
