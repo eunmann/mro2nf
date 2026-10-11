@@ -32,6 +32,7 @@ const (
 	kindFusedDisabled                      // #59 fused bind+main, natively-gated disable
 	kindFusedDisabledSplit                 // fused bind+split for a natively-gated disabled split stage
 	kindNativeScatter                      // #76 -native map call: in-workflow scatter, no FORK task
+	kindGate                               // #433 GATE: the off flag of calls lifted out of a map call
 )
 
 // keyedKind is how a call is emitted inside its pipeline's fork-keyed layer
@@ -48,6 +49,7 @@ const (
 	keyedFused                     // #99 fused bind+main _K process for a leaf stage
 	keyedForkBind                  // nested map: FORK_K resolve → callee _map → MERGE_K
 	keyedScatter                   // #99 value-only nested map: driver element scatter _KS
+	keyedGate                      // #433 GATE_K per fork
 )
 
 // callPlan is the decided emission strategy for one call plus the analysis payload
@@ -258,6 +260,10 @@ func neededStageModules(prog *ir.Program, pl emitPlan) map[string]bool {
 // planCall decides one call's kind in the same precedence the emitters used to
 // inline: mapped, forward, fused stage/split/disabled, else a plain bind.
 func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, queuedPa bool, known invKnown) callPlan {
+	if c.Gate {
+		return callPlan{kind: kindGate, emptyNull: known.emptySplit[p.Name][c.Name]}
+	}
+
 	if c.Mapped {
 		// emptyNull may mark a DISABLED map call too. Load-bearing invariant:
 		// its MERGE executes only on the gate-false (run) branch — FORK feeds
@@ -324,6 +330,12 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, queuedP
 // keyed folds (fused leaf, element scatter, native disable gate) are
 // unconditional, so a keyed layer folds the same way under every flag set.
 func planKeyedCall(cp callPlan, c ir.Call, prog *ir.Program) callPlan {
+	if c.Gate {
+		cp.keyedKind = keyedGate
+
+		return cp
+	}
+
 	if c.Mapped {
 		if s, field, ok := keyedScatterable(c, prog); ok {
 			cp.keyedKind, cp.keyedStage, cp.keyedScatterField = keyedScatter, s, field
@@ -596,15 +608,16 @@ func keyedNativeDisable(c ir.Call) bool {
 // self-contained per-call processes with no wf_ import. Without this the
 // fused-disabled call emitted a dead `include { wf_<stage> as ... }` that its
 // wiring (genFusedDisabledWiring uses the fused process, not the alias) never
-// invokes, keeping the stage module alive and defeating #82 pruning.
+// invokes, keeping the stage module alive and defeating #82 pruning. A gate
+// has no callee to import.
 func (cp callPlan) fusedInclude() bool {
-	return cp.kind == kindFusedStage || cp.kind == kindNativeScatter || cp.kind == kindFusedDisabled
+	return cp.kind == kindFusedStage || cp.kind == kindNativeScatter || cp.kind == kindFusedDisabled || cp.kind == kindGate
 }
 
 // keyedFusedInclude reports whether a call's keyed-layer include is suppressed —
 // the fused-leaf (_K) and element-scatter (_KS) kinds embed the stage's main in
 // a self-contained per-call process, so they need no wf_<callee>_map import
-// (the keyed analog of fusedInclude).
+// (the keyed analog of fusedInclude), and a gate has no callee.
 func (cp callPlan) keyedFusedInclude() bool {
-	return cp.keyedKind == keyedFused || cp.keyedKind == keyedScatter
+	return cp.keyedKind == keyedFused || cp.keyedKind == keyedScatter || cp.keyedKind == keyedGate
 }

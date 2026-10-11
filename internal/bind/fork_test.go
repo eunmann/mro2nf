@@ -287,6 +287,48 @@ func TestStaticNullParams(t *testing.T) {
 	}
 }
 
+// TestGateOff pins the #433 gate: a true flag turns it off and a null one
+// does not; split bindings turn it off only for zero forks of an
+// invocation-known source or of a static null, not for a runtime empty.
+func TestGateOff(t *testing.T) {
+	callOuts := map[string]json.RawMessage{"OFF": json.RawMessage("null"), "UP": json.RawMessage(`{"xs":[],"f":true,"n":null}`)}
+	split := func(id, out string) bind.Entry {
+		return bind.Entry{Ref: &bind.Ref{Kind: "call", ID: id, Output: out}, Split: true}
+	}
+	flag := func(out string) bind.Entry {
+		return bind.Entry{Ref: &bind.Ref{Kind: "call", ID: "UP", Output: out}}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		spec      bind.Spec
+		emptyNull bool
+		want      bool
+	}{
+		{"true flag", bind.Spec{"@d": flag("f")}, false, true},
+		{"null flag", bind.Spec{"@d": flag("n")}, false, false},
+		{"runtime empty", bind.Spec{"v": split("UP", "xs")}, false, false},
+		{"known empty", bind.Spec{"v": split("UP", "xs")}, true, true},
+		{"static null", bind.Spec{"v": split("OFF", "xs")}, false, true},
+		{"forks", bind.Spec{"v": {Literal: json.RawMessage("[1]"), Split: true}}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := bind.GateOff(tc.spec, nil, callOuts, bind.StaticNulls{}, false, tc.emptyNull)
+			if err != nil {
+				t.Fatalf("gate: %v", err)
+			}
+
+			if got != tc.want {
+				t.Errorf("GateOff = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	if _, err := bind.GateOff(bind.Spec{"@d": flag("xs")}, nil, callOuts, bind.StaticNulls{}, false, false); err == nil {
+		t.Error("a non-boolean flag must fail the gate")
+	}
+}
+
 // TestNullForks pins #434's merge of disabled forks: every output and the
 // whole-call member are one null per fork, an array for an array fork and
 // keyed for a map fork, and zero forks give the typed empty.

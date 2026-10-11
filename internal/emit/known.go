@@ -214,7 +214,7 @@ func (e *knownEval) classID(in *knownInst) int {
 	var b strings.Builder
 
 	for _, c := range in.p.Calls {
-		if c.Mapped {
+		if c.Mapped || c.Gate {
 			b.WriteString(c.Name + "=" + strconv.FormatBool(in.split[c.Name]) + ";")
 		}
 
@@ -257,7 +257,7 @@ func (e *knownEval) ensure(in *knownInst, c ir.Call) {
 		in.subs[c.Name] = e.instance(q, e.calleeFacts(in, c, q))
 	}
 
-	if c.Mapped {
+	if c.Mapped || c.Gate {
 		in.split[c.Name] = e.splitKnown(in, c)
 	}
 

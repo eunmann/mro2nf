@@ -325,6 +325,9 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 			if cp.disableTask {
 				genDisableProcess(b, p.Name, c, g)
 			}
+
+		case kindGate:
+			genGateProcess(b, p, c, prog, g)
 		}
 	}
 
@@ -663,6 +666,32 @@ func genForkBindProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c 
 `, forkName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre)
 }
 
+// genGateProcess emits a gate's task (#433): `mre gate` evaluates its flags
+// and its map call's split bindings into the bundle whose `off` field the
+// calls lifted out of that map call read as their disable flag.
+func genGateProcess(b *strings.Builder, p *ir.Pipeline, c ir.Call, prog *ir.Program, g genCtx) {
+	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
+
+	fmt.Fprintf(b, `process %[1]s {
+  input:
+%[2]s  output:
+    %[5]s
+  script:
+    """
+%[6]s    %[3]s -pipeargs pipeargs%[4]s -o gate
+    """
+}
+
+`, gateName(p.Name, c.Name), block, g.gateCmd(p.Name, c), arg, bundleOutput("gate"), pre)
+}
+
+// gateCmd is the `mre gate` command of gate c in pipeline, less its
+// -pipeargs, -inputs and -o.
+func (g genCtx) gateCmd(pipeline string, c ir.Call) string {
+	return fmt.Sprintf(`'%s' gate -spec 'spec.json' -mapmode %s%s`, g.mre, mapModeArg(c),
+		g.plan.pipes[pipeline].calls[c.Name].mergeFlags())
+}
+
 // genNullForksProcess emits the skip-branch result of a runtime-gated map call
 // over a sub-pipeline (#434): one task that resolves the fork keys as FORK
 // would and merges one null per fork, the shape mrp gives such a call.
@@ -894,6 +923,10 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 
 	case kindPlainBind:
 		genPlainBindWiring(b, p, c, callee, g)
+
+	case kindGate:
+		fmt.Fprintf(b, "    ch_%s = %s(%s)\n", c.Name, gateName(pipeline, c.Name),
+			foldCallArgs(g, p, c.Bindings, "pa", bindName(pipeline, c.Name)))
 	}
 }
 
@@ -1707,6 +1740,10 @@ func bindName(pipeline, call string) string {
 
 func forkName(pipeline, call string) string {
 	return "FORK_" + Qualify(pipeline, call)
+}
+
+func gateName(pipeline, call string) string {
+	return "GATE_" + Qualify(pipeline, call)
 }
 
 func nullForksName(pipeline, call string) string {

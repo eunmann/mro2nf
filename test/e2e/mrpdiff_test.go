@@ -392,6 +392,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// #433: a typed-map literal bound to a sub-pipeline input and split
 	// through a field projection keeps its boundary under inlining.
 	{name: "map_literal_proj", native: true, inline: true},
+	// #433: a map call's fork-independent calls run as often as mrp runs them,
+	// across literal, entry, empty, runtime-empty, gated, nested, plain-sub
+	// and keyed map calls.
+	{name: "fork_indep_call", native: true, inline: true},
 	// The native-suite golden anchors: their committed expected/outs.json
 	// files claim mrp provenance, so the live differential machine-checks
 	// that claim — otherwise TestGolden + the native suites would prove

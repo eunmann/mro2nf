@@ -96,6 +96,16 @@ joins on both keyed/mapped paths — verified complete across all four variants)
 no-split chunk[0]-forward, key-preserving fork merges, and disabled-call
 null-forwarding all match Martian (`core/stage.go`, `fork.go`). Internal dir
 naming (`chunk_%05d`, `fork_%05d`) differs but is never observed by stage code.
+A call inside a map call over a sub-pipeline runs once per fork of only the
+map calls its inputs and disable read (`syntax/resolve_stage.go:320-351`
+`resolveForks`; `core/node.go:428-439` gives a call with no fork root one
+fork), so one that reads no fork runs once, even for zero runtime forks,
+unless the map call is pruned for a statically empty or null source
+(`resolve_pipeline.go:101-112`) or disabled. mro2nf lifts such calls out of
+the map call under a gate (#433, `fork_indep_call`). Not covered: a call
+that reads an inner map call's fork but not an enclosing one's, when the
+inner map call itself reads the enclosing fork, runs once per enclosing fork
+too, where `mrp` runs it once per inner fork.
 **Watch item:** a single map-call sweeping two *independent* sources is zipped
 element-wise (length/key-mismatch errors), not cartesian — matches Martian's
 nested-fork model but warrants a confirmatory test.

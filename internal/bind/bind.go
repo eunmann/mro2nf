@@ -248,6 +248,55 @@ func SplitOfStaticNull(spec Spec, nulls StaticNulls, callOuts map[string]json.Ra
 	return false
 }
 
+// gateNoFork is a ResolveForks `only` that marshals no fork's args: GateOff
+// needs the fork count and validation, not the args.
+const gateNoFork = -2
+
+// errGateFlag reports a gate flag that resolved to neither a bool nor null.
+var errGateFlag = errors.New("gate flag is not a boolean")
+
+// GateOff evaluates a transpiler gate (ir.Call.Gate, #433): it is off when a
+// non-split binding resolves to true (a null flag leaves it on, as mrp reads a
+// null disable flag false) or when its split bindings, a map call's, resolve
+// to zero forks that mrp prunes statically: an invocation-known empty
+// (emptyNull) or a split of a statically null value.
+func GateOff(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, nulls StaticNulls, isMap, emptyNull bool) (bool, error) {
+	splits := Spec{}
+
+	for param, e := range spec {
+		if e.Split {
+			splits[param] = e
+
+			continue
+		}
+
+		raw, err := e.resolve(pipeArgs, callOuts)
+		if err != nil {
+			return false, fmt.Errorf("gate %q: %w", param, err)
+		}
+
+		var flag *bool
+		if err := json.Unmarshal(raw, &flag); err != nil {
+			return false, fmt.Errorf("gate %q = %s: %w", param, raw, errGateFlag)
+		}
+
+		if flag != nil && *flag {
+			return true, nil
+		}
+	}
+
+	if len(splits) == 0 {
+		return false, nil
+	}
+
+	forks, _, err := ResolveForks(splits, pipeArgs, callOuts, isMap, gateNoFork)
+	if err != nil {
+		return false, err
+	}
+
+	return len(forks) == 0 && (emptyNull || SplitOfStaticNull(splits, nulls, callOuts)), nil
+}
+
 // StaticNullParams returns, sorted, the params of spec bound to a statically
 // null value by a non-split binding: what a bundle bound from spec records for
 // the bindings that read it.

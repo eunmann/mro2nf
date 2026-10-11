@@ -1230,6 +1230,33 @@ func TestRunBindRecordsStaticNulls(t *testing.T) {
 	}
 }
 
+// TestRunGate drives `mre gate` end to end: it writes the gate as a bundle
+// whose off field reads the flag, here a pruned zero-fork split.
+func TestRunGate(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		want  bool
+	}{
+		{"runtime empty", nil, false},
+		{"known empty", []string{"-emptynull"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			out := filepath.Join(dir, "gate")
+			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"v":{"literal":[],"split":true}}`)
+
+			if err := run(t.Context(), append([]string{"gate", "-spec", spec, "-o", out}, tc.flags...)); err != nil {
+				t.Fatalf("run gate: %v", err)
+			}
+
+			if diff := cmp.Diff(map[string]any{"off": tc.want}, readTestBundle(t, out)); diff != "" {
+				t.Errorf("gate bundle mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestRunMergeNullForks pins #434's `merge -nullforks`: it gathers nothing
 // and gives one null per fork the sidecar counts, the typed empty for zero
 // forks, and null for zero forks under -emptynull.

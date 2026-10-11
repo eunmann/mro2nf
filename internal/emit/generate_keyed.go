@@ -68,6 +68,9 @@ func genKeyedPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program,
 		case keyedFused:
 			genKeyedFusedStageProcess(b, p.Name, c, cp.keyedStage, g)
 
+		case keyedGate:
+			genKeyedGateProcess(b, p.Name, c, g)
+
 		case keyedBind:
 			genKeyedBindProcess(b, bindName(p.Name, c.Name), c.Bindings, g, g.producerArgs(c.Callable, types.RoleIn), "args")
 
@@ -104,6 +107,23 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 }
 
 `, name, block, g.mre, arg, prodArgs, out)
+}
+
+// genKeyedGateProcess is genGateProcess for a keyed pipeline: one gate per fork.
+func genKeyedGateProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx) {
+	block, arg := keyedInputs(refCalls(c.Bindings))
+
+	fmt.Fprintf(b, `process %[1]s_K {
+  input:
+%[2]s  output:
+    tuple val(key), path('gate', type: 'dir')
+  script:
+    """
+    %[3]s -pipeargs ${pipeargs}%[4]s -o gate
+    """
+}
+
+`, gateName(pipeline, c.Name), block, g.gateCmd(pipeline, c), arg)
 }
 
 // genKeyedFusedStageProcess emits a per-call fork-keyed process that runs
@@ -318,6 +338,13 @@ func genKeyedPipeline(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 // branched, running the callee only for enabled forks and emitting the null
 // bundle for skipped ones.
 func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call, cp callPlan) {
+	if cp.keyedKind == keyedGate {
+		fmt.Fprintf(body, "    ch_%s_l = %s_K(%s).toList()\n",
+			c.Name, gateName(pipeline, c.Name), keyedBindCall(c.Bindings, bindName(pipeline, c.Name)))
+
+		return
+	}
+
 	if c.Mapped {
 		genKeyedMappedCallBody(body, pipeline, c, cp)
 

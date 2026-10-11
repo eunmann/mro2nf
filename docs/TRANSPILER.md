@@ -363,6 +363,21 @@ every chunk and join by its fork. Fork directories are enumerated by **reading
 the staged `forknames.json`** (via `.resolve()`), never `java.io.File.listFiles()`
 — the latter cannot list an S3 work dir.
 
+**Fork-independent calls leave the map call (#433).** `mrp` forks a stage only
+over the map calls its inputs and disable read, and runs one with none once
+(`fork0`), whatever the fork count. Before planning, `LiftForkIndependent`
+(`internal/emit/lift.go`) moves each call of a map-called sub-pipeline that
+reads none of the map call's split inputs (directly, or through another such
+call) into the caller as `<mapcall>_<call>`, through plain and nested
+sub-pipeline calls alike, and hands the residual copy (`<SUB>_lift<n>`) the
+lifted calls' outputs as broadcast inputs (`__h_<call>`). Because `mrp` drops
+a map call over a statically empty or null source with its children, and
+disables them with it, the lifted calls are disabled by a **GATE** call
+(`mre gate`, one task per lift, not per fork) that reads the map call's split
+bindings (unless they are literals, never empty) and disable flag; a lifted
+call with its own gate gets a gate of both. A call reading an outer map
+call's element stays in that outer fork.
+
 ### 4.5 Disabled calls → a runtime gate
 
 A `call … using (disabled = …)` is resolved at runtime: a **DISABLE process**
@@ -468,6 +483,10 @@ writes an output bundle:
   bindspec + the staged upstream bundles + pipeline args) into the callee's args
   bundle. `forkbind` produces one bundle per fork.
 - **`mre merge`** — gather per-fork output bundles into one array/map output.
+- **`mre gate`** — evaluate a transpiler gate (§4.4, #433) into a bundle whose
+  `off` field disables the calls lifted out of a map call: true when a gate
+  flag is true or the map call's split bindings resolve to the zero forks
+  `mrp` prunes statically.
 - **`mre entryargs`** — build the top-level args bundle from the baked defaults
   overlaid with launch-time run parameters (§8).
 - **`mre publish-layout`** — compute the mrp-style `outs/` layout from the final

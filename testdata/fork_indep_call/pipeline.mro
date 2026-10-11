@@ -1,0 +1,218 @@
+# #433: inside a map call over a sub-pipeline, a call that reads nothing of
+# the fork runs once under mrp (fork0), whatever the fork count, none
+# included, unless the map call is pruned for a statically empty source or
+# disabled. Each lane's fork-independent calls must run exactly as often as
+# mrp runs them, which the stage ABI diff counts.
+#
+#   LIT    literal split (seed 34): a literal-input call and a nested map
+#   ENT    entry split: a broadcast-input call returned by every fork
+#   EMPTY  entry split over [] (pruned: nothing runs)
+#   RT     split of a runtime [] (the independent calls still run once)
+#   OFF    runtime-disabled map call, and ON enabled by the same kind of gate
+#   NEST   a nested map whose bindings are all broadcast (6 vs 3 jobs)
+#   PLAIN  the map call sits in a plain sub-pipeline (seed 960)
+#   OWN    an independent call with its own disable gate
+#   OUTER  the map call sits in every fork of another map call: INDEP reads
+#          the outer fork's element, so it runs once per outer fork under
+#          the inner map call's gate, and NOTE once
+stage ECHO(
+    in  int v,
+    out int r,
+    src py  "stages/echo",
+)
+
+stage NOTE(
+    out string n,
+    src py     "stages/note",
+)
+
+stage GEN(
+    out int[] xs,
+    src py    "stages/gen",
+)
+
+stage FLAG(
+    in  bool v,
+    out bool on,
+    src py   "stages/flag",
+)
+
+pipeline SUB(
+    in  int   x,
+    in  int   b,
+    in  int[] ys,
+    in  bool  skip,
+    out int   fx,
+    out int   fb,
+    out int[] fy,
+)
+{
+    call ECHO as DEP(
+        v = self.x,
+    )
+
+    call ECHO as INDEP(
+        v = self.b,
+    )
+
+    call NOTE()
+
+    map call ECHO as EACH(
+        v = split self.ys,
+    )
+
+    call ECHO as OWN(
+        v = 9,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        fx = DEP.r,
+        fb = INDEP.r,
+        fy = EACH.r,
+    )
+}
+
+pipeline PLAIN(
+    in  int[] xs,
+    out SUB[] subs,
+)
+{
+    map call SUB(
+        x    = split self.xs,
+        b    = 4,
+        ys   = [1],
+        skip = false,
+    )
+
+    return (
+        subs = SUB,
+    )
+}
+
+pipeline OUTER(
+    in  int   o,
+    in  int[] xs,
+    out SUB[] subs,
+)
+{
+    map call SUB(
+        x    = split self.xs,
+        b    = self.o,
+        ys   = [],
+        skip = true,
+    )
+
+    return (
+        subs = SUB,
+    )
+}
+
+pipeline TOP(
+    in  int[]   xs,
+    in  int[]   empty,
+    out SUB[]   lit,
+    out SUB[]   ent,
+    out SUB[]   none,
+    out SUB[]   rt,
+    out SUB[]   off,
+    out SUB[]   on,
+    out SUB[]   nest,
+    out SUB[]   plain,
+    out SUB[][] outer,
+)
+{
+    call GEN()
+
+    call FLAG(
+        v = true,
+    )
+
+    call FLAG as NOFLAG(
+        v = false,
+    )
+
+    map call SUB as LIT(
+        x    = split [1, 2],
+        b    = 5,
+        ys   = split [[], [3]],
+        skip = false,
+    )
+
+    map call SUB as ENT(
+        x    = split self.xs,
+        b    = 6,
+        ys   = [],
+        skip = true,
+    )
+
+    map call SUB as EMPTY(
+        x    = split self.empty,
+        b    = 7,
+        ys   = [],
+        skip = false,
+    )
+
+    map call SUB as RT(
+        x    = split GEN.xs,
+        b    = 8,
+        ys   = [],
+        skip = false,
+    )
+
+    map call SUB as OFF(
+        x    = split self.xs,
+        b    = 10,
+        ys   = [],
+        skip = false,
+    ) using (
+        disabled = FLAG.on,
+    )
+
+    map call SUB as ON(
+        x    = split self.xs,
+        b    = 11,
+        ys   = [],
+        skip = false,
+    ) using (
+        disabled = NOFLAG.on,
+    )
+
+    map call SUB as NEST(
+        x    = split self.xs,
+        b    = 12,
+        ys   = [5, 6],
+        skip = true,
+    )
+
+    call PLAIN(
+        xs = [1, 2],
+    )
+
+    map call OUTER(
+        o  = split [20, 30],
+        xs = split [[1, 2], [3]],
+    )
+
+    return (
+        lit   = LIT,
+        ent   = ENT,
+        none  = EMPTY,
+        rt    = RT,
+        off   = OFF,
+        on    = ON,
+        nest  = NEST,
+        plain = PLAIN.subs,
+        outer = OUTER.subs,
+    )
+}
+
+call TOP(
+    xs    = [
+        1,
+        2,
+        3,
+    ],
+    empty = [],
+)
