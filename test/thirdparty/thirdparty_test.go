@@ -65,6 +65,41 @@ func TestNoticesCoverShippedCode(t *testing.T) {
 	}
 }
 
+// TestCollectIgnoresWorkspace runs Collect under a go.work that uses the
+// Martian module, as CLAUDE.md suggests for parser work: the notices must
+// still come from the go.mod build list release builds use.
+func TestCollectIgnoresWorkspace(t *testing.T) {
+	const martian = "github.com/martian-lang/martian"
+
+	martianDir, err := ModuleDir(t.Context(), repoRoot, martian)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := filepath.Abs(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	work := filepath.Join(t.TempDir(), "go.work")
+	if err := os.WriteFile(work, []byte("go 1.26\n\nuse (\n\t"+root+"\n\t"+martianDir+"\n)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GOWORK", work)
+
+	notices, err := Collect(t.Context(), repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, n := range notices {
+		if n.Name == martian && !slices.Contains(n.ShippedIn, "mro2nf") {
+			t.Errorf("under %s, Martian ships in %v, want mro2nf among them", work, n.ShippedIn)
+		}
+	}
+}
+
 // TestVendoredDirsCarryLicense fails on a vendor-* directory at the repo root
 // that Vendored does not map to its module, or whose LICENSE is missing or
 // differs from that module's.

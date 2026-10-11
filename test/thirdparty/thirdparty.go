@@ -84,11 +84,13 @@ func LicenseFile(dir string) (string, string, error) {
 }
 
 // goCmd runs the go command in dir with extra environment and returns its
-// stdout.
+// stdout. Workspace mode is off: a go.work would make each used module a
+// main module and swap its pinned source for a local checkout, so the graph
+// would not be the one release builds link.
 func goCmd(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append(os.Environ(), "GOWORK=off"), env...)
 
 	var stderr bytes.Buffer
 
