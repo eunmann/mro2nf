@@ -196,7 +196,7 @@ func runSplit(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	if stageArgs, err = prod.coerceInputs(stageArgs, types.RoleIn); err != nil {
+	if stageArgs, err = prod.coerceInputs(stageArgs); err != nil {
 		return err
 	}
 
@@ -273,7 +273,7 @@ func runMain(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	if stageArgs, err = prod.coerceInputs(stageArgs, types.RoleIn); err != nil {
+	if stageArgs, err = prod.coerceInputs(stageArgs); err != nil {
 		return err
 	}
 
@@ -284,10 +284,6 @@ func runMain(ctx context.Context, argv []string) error {
 
 	chunk, err := decodeChunk(chunkRaw)
 	if err != nil {
-		return err
-	}
-
-	if chunk, err = prod.coerceChunk(chunk); err != nil {
 		return err
 	}
 
@@ -346,7 +342,7 @@ func runJoin(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	if stageArgs, err = prod.coerceInputs(stageArgs, types.RoleIn); err != nil {
+	if stageArgs, err = prod.coerceInputs(stageArgs); err != nil {
 		return err
 	}
 

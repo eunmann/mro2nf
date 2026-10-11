@@ -51,7 +51,7 @@ tracked · 🚫 runtime/`mrp`-only, out of scope for a transpiler.
 | typed arrays `T[]`, multi-dim `T[][]` | ✅ | e2e `multidim`, `split_test` |
 | typed maps `map<T>` (output) | ✅ | e2e `typedmap_out` |
 | int→float coercion; float→int rejected | ✅ | `martian/syntax` (corpus parse) |
-| whole-number float literal → int param (`5.0` → `5`) | ✅ (type-directed `CoerceScalars`) | e2e `float_to_int`, unit `TestCoerceScalars` |
+| whole-number float literal → int param (`5.0` → `5`) | ✅ (type-directed `CoerceScalars` on bound inputs only; a split-returned chunk arg reaches main and join as the split wrote it, as mrp's `ChunkDef.Merge` passes it through) | e2e `float_to_int`, `chunk_float_int`; unit `TestCoerceScalars`, `TestProducerCoerceInputs`, `TestRunnerConformanceChunkArgsAsWritten` |
 | literals: int/float/sci, bool, null, arrays, maps, struct literals, escapes | ✅ | `martian/syntax`; e2e entry args |
 | bindings: `self.x`, `self.x.y`, `STAGE`, `STAGE.out`, `STAGE.out.field`, `STAGE.default` | ✅ | unit `bind`; e2e `struct_proj`, `default_out` |
 | **field projection through arrays** (`CALL.s.field`) | ✅ | unit `TestResolveArrayProjection`, e2e `struct_proj` |

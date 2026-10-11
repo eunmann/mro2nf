@@ -131,6 +131,9 @@ var goldenCases = []goldenCase{
 	{"split_chunk_file", "split_chunk_file", "expected/outs.json"},
 	// Coverage matrix: file leaves at the split/join chunk boundary.
 	{"split_struct_chunk", "split_struct_chunk", "expected/outs.json"},
+	// #245: a whole-number float a split returns for an int chunk input
+	// reaches main and join uncoerced.
+	{"chunk_float_int", "chunk_float_int", "expected/outs.json"},
 	{"chunk_out_filearr", "chunk_out_filearr", "expected/outs.json"},
 	{"chunk_out_dir", "chunk_out_dir", "expected/outs.json"},
 	// Matrix completeness: builtin `file` type; file forwarded into a split arg.

@@ -2,6 +2,7 @@ package emit
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -156,6 +157,48 @@ func TestRunnerConformanceRelativeChunkPath(t *testing.T) {
 	chunkData := filepath.Join(mreSplit, "chunk_00000", "data.json")
 	mustContain(t, chunkData, "rel_chunk.txt")
 	mustNotContain(t, chunkData, shim.FileMarker)
+}
+
+// TestRunnerConformanceChunkArgsAsWritten is the #245 guard: a split that
+// returns a whole-number float for an int chunk input hands main that float in
+// both stacks, as mrp's ChunkDef.Merge passes split-made chunk args through
+// unconverted. The bound stage input is still coerced, as mrp's FilterJson does.
+func TestRunnerConformanceChunkArgsAsWritten(t *testing.T) {
+	requirePython(t)
+
+	code := "import martian\n\n" +
+		"def split(args):\n" +
+		"    return {'chunks': [{'n': 10 / 2}, {'n': 10 // 2}]}\n\n" +
+		"def main(args, outs):\n" +
+		"    outs.seen = '%r(%s) total=%r' % (args.n, type(args.n).__name__, args.total)\n\n" +
+		"def join(args, outs, chunk_defs, chunk_outs):\n    outs.seen = ''\n"
+
+	env := buildConformanceEnv(t, code, &ir.Stage{
+		Name:     "CONF",
+		In:       []ir.Param{{Name: "value", Type: "float", BaseType: "float"}, {Name: "total", Type: "int", BaseType: "int"}},
+		Out:      []ir.Param{{Name: "seen", Type: "string", BaseType: "string"}},
+		Split:    true,
+		ChunkIn:  []ir.Param{{Name: "n", Type: "int", BaseType: "int"}},
+		ChunkOut: []ir.Param{{Name: "seen", Type: "string", BaseType: "string"}},
+		Lang:     ir.LangPy,
+	})
+	env.writeArgs(t, map[string]any{"value": 1.5, "total": json.Number("10.0")})
+
+	split := env.runPhase(t, "mre", "split", nil)
+
+	for i, want := range []string{"5.0(float) total=10", "5(int) total=10"} {
+		chunk := filepath.Join(split, fmt.Sprintf("chunk_%05d", i))
+		mreMain := env.runPhase(t, "mre", "main", []string{"-chunk", chunk})
+		pyMain := env.runPhase(t, "py", "main", []string{"-chunk", chunk})
+		diffDirs(t, "chunk-args main", mreMain, pyMain)
+		mustContain(t, filepath.Join(mreMain, "outs", "data.json"), want)
+
+		for _, dir := range []string{mreMain, pyMain} {
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }
 
 // TestRunnerConformanceExitCodes pins the exit-code matrix against mre: an
@@ -409,17 +452,7 @@ func buildConformanceEnv(t *testing.T, code string, s *ir.Stage) *conformanceEnv
 	}
 
 	env.argsDir = filepath.Join(root, "args")
-	man := types.BuildManifest(prog)
-
-	inParams, err := man.Params(s.Name, types.RoleIn)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	stageArgs := map[string]any{"value": 1.5}
-	if err := shim.WriteBundle(env.argsDir, stageArgs, inParams, man.Table(), nil); err != nil {
-		t.Fatal(err)
-	}
+	env.writeArgs(t, map[string]any{"value": 1.5})
 
 	env.stageCode = filepath.Join(root, "stages", "conf")
 	if err := os.MkdirAll(env.stageCode, 0o755); err != nil {
@@ -430,6 +463,25 @@ func buildConformanceEnv(t *testing.T, code string, s *ir.Stage) *conformanceEnv
 	}
 
 	return env
+}
+
+// writeArgs writes stageArgs as the stage args bundle both stacks read.
+func (e *conformanceEnv) writeArgs(t *testing.T, stageArgs map[string]any) {
+	t.Helper()
+
+	man, err := types.LoadManifest(e.typesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inParams, err := man.Params(e.callable, types.RoleIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := shim.WriteBundle(e.argsDir, stageArgs, inParams, man.Table(), nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // stageJoinInputs lays out the next phase's work dir the way Nextflow stages a

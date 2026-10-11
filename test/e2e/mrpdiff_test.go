@@ -312,6 +312,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// region #217 lived in. Nested struct chunk-def, array-of-files chunk-out,
 	// and a directory chunk-out. Object-store staging verified on the AWS lane.
 	{name: "split_struct_chunk", native: true, runner: true},
+	// #245: split-returned chunk args reach main as written (5.0 stays a
+	// float for an int chunk input), on the mre and native-runner paths.
+	{name: "chunk_float_int", native: true, runner: true},
 	{name: "chunk_out_filearr", native: true, runner: true},
 	{name: "chunk_out_dir", native: true, runner: true},
 	// Matrix completeness: the builtin `file` type (corpus only used custom
