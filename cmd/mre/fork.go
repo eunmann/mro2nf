@@ -401,6 +401,7 @@ func runMerge(_ context.Context, argv []string) error {
 	keysFile := fs.String("keysfile", "", "forkmeta sidecar: the fork count and map keys")
 	outFile := fs.String("o", "", "output merged bundle dir")
 	emptyNull := fs.Bool("emptynull", false, "zero forks merge to null instead of the typed empty (invocation-known split source, #99)")
+	nullForks := fs.Bool("nullforks", false, "gather nothing: every fork in the keys sidecar is null (a map call over a sub-pipeline a runtime gate disables, #434)")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -411,22 +412,12 @@ func runMerge(_ context.Context, argv []string) error {
 		return err
 	}
 
-	dirs, err := gatherIndexed(*forksDir, forkOutPrefix, meta.Count)
-	if err != nil {
-		return fmt.Errorf("merge: %w", err)
-	}
+	names := splitComma(*outs)
+	zeroNull := (*emptyNull || meta.Pruned) && meta.Count == 0
 
-	forkOuts, err := readBundleList(dirs)
+	merged, err := mergeForks(names, meta, *forksDir, zeroNull, *nullForks)
 	if err != nil {
 		return err
-	}
-
-	names := splitComma(*outs)
-	zeroNull := *emptyNull || meta.Pruned
-
-	merged, err := bind.Merge(names, forkOuts, meta.Keys, zeroNull)
-	if err != nil {
-		return fmt.Errorf("merge: %w", err)
 	}
 
 	// The merge adds a fork dimension to every output (an array for an array
@@ -439,11 +430,43 @@ func runMerge(_ context.Context, argv []string) error {
 
 	// A map call merged to null this way is the call mrp prunes statically, so
 	// a split of any of its outputs is pruned in turn.
-	if zeroNull && meta.Count == 0 {
+	if zeroNull {
 		return writeStaticNulls(*outFile, names)
 	}
 
 	return nil
+}
+
+// mergeForks is the merged value of the forks meta counts: null outputs for
+// a zero-fork prune (zeroNull), one null per fork for a disabled map call
+// over a sub-pipeline (nullForks), else the staged outs__<key> bundles under
+// forksDir merged.
+func mergeForks(names []string, meta forkMeta, forksDir string, zeroNull, nullForks bool) (json.RawMessage, error) {
+	if nullForks && !zeroNull {
+		merged, err := bind.NullForks(names, meta.Count, meta.Keys)
+		if err != nil {
+			return nil, fmt.Errorf("merge: %w", err)
+		}
+
+		return merged, nil
+	}
+
+	dirs, err := gatherIndexed(forksDir, forkOutPrefix, meta.Count)
+	if err != nil {
+		return nil, fmt.Errorf("merge: %w", err)
+	}
+
+	forkOuts, err := readBundleList(dirs)
+	if err != nil {
+		return nil, err
+	}
+
+	merged, err := bind.Merge(names, forkOuts, meta.Keys, zeroNull)
+	if err != nil {
+		return nil, fmt.Errorf("merge: %w", err)
+	}
+
+	return merged, nil
 }
 
 // writeMerged writes the merged map-call result as a bundle, bumping each output

@@ -385,6 +385,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// #436: splits of a disabled stage, sub-pipeline, map call and per-fork
 	// stage, gated by entry values.
 	{name: "disabled_split_null", native: true, inline: true},
+	// #434: runtime-gated map calls over a sub-pipeline (array, map, empty and
+	// null sources, in a keyed layer, into a split stage) against an
+	// entry-gated one and a gated map call over a stage.
+	{name: "disabled_map_nullforks", native: true, inline: true},
 	// The native-suite golden anchors: their committed expected/outs.json
 	// files claim mrp provenance, so the live differential machine-checks
 	// that claim — otherwise TestGolden + the native suites would prove

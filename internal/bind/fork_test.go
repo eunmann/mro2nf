@@ -287,6 +287,34 @@ func TestStaticNullParams(t *testing.T) {
 	}
 }
 
+// TestNullForks pins #434's merge of disabled forks: every output and the
+// whole-call member are one null per fork, an array for an array fork and
+// keyed for a map fork, and zero forks give the typed empty.
+func TestNullForks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count int
+		keys  []string
+		want  string
+	}{
+		{"array forks", 2, nil, `{"@nullforks":[null,null],"a":[null,null],"b":[null,null]}`},
+		{"map forks", 2, []string{"p", "q"}, `{"@nullforks":{"p":null,"q":null},"a":{"p":null,"q":null},"b":{"p":null,"q":null}}`},
+		{"zero array forks", 0, nil, `{"@nullforks":[],"a":[],"b":[]}`},
+		{"zero map forks", 0, []string{}, `{"@nullforks":{},"a":{},"b":{}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := bind.NullForks([]string{"a", "b"}, tc.count, tc.keys)
+			if err != nil {
+				t.Fatalf("null forks: %v", err)
+			}
+
+			if string(got) != tc.want {
+				t.Errorf("NullForks = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveForksNoSplit(t *testing.T) {
 	spec := bind.Spec{"factor": {Ref: &bind.Ref{Kind: "self", ID: "factor"}}}
 

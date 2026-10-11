@@ -142,6 +142,9 @@ func TestResolveWholeRefToMappedCall(t *testing.T) {
 		{"zero map forks", bind.ForkMap, `{"a":{},"n":{}}`, `{}`},
 		{"known-empty null merge", bind.ForkArray, `{"a":null,"n":null}`, `null`},
 		{"disabled null bundle", bind.ForkMap, `null`, `null`},
+		// #434: a merge of disabled forks carries its whole-call value.
+		{"null array forks", bind.ForkArray, `{"@nullforks":[null,null],"a":[null,null]}`, `[null,null]`},
+		{"null map forks", bind.ForkMap, `{"@nullforks":{"p":null},"a":{"p":null}}`, `{"p":null}`},
 	}
 
 	for _, tc := range cases {

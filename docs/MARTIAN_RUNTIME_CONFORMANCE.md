@@ -306,7 +306,16 @@ non-zero process exit on the Python path; `ASSERT:`→exit 42→NF `terminate`
 matches "assert never retries"; ordinary/signal/OOM→exit 1→NF `retry`
 (`maxRetries=2` == `default_retries`); disabled-call out shaping is exact (each
 top-level out param = JSON null, matching `makeOutArgs(nullAll=true)`); preflight
-gating reproduces early-abort/validation semantics.
+gating reproduces early-abort/validation semantics. A map call over a
+sub-pipeline under a runtime gate is disabled fork by fork, inside the merge
+(`syntax/resolve_pipeline.go:209-239` wraps each fork's outputs in the
+`DisabledExp` before the `MergeExp`), so a true gate gives one null per fork —
+`[null, null]` or `{"k": null}` in the whole ref and every projection, `[]`
+for an empty or null source — where a gated map call over a stage
+(`resolve_stage.go:650`, the disable wraps the merge) and a gate the
+invocation knows (folded statically) give `null`. mro2nf's skip branch for
+such a call runs one NULLFORKS task, `mre forkbind -keysonly` plus `mre merge
+-nullforks` (#434, `disabled_map_nullforks`).
 
 **CORRECTNESS:** see #2 (comp/exec `_assert`). **MINOR:** mre retries deterministic
 exceptions that mrp fails immediately (same final outcome, wasted compute);

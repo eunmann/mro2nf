@@ -346,6 +346,12 @@ fork), the emitter renders:
   list rides on the command line, so the gather has no argv-length ceiling.
   A `"pruned": true` field marks a split of a statically null value (below),
   which merges zero forks to `null` as `mrp` prunes it (#436).
+- For a map call over a sub-pipeline under a runtime disable gate, a
+  **NULLFORKS process** on the gate's skip branch (`mre forkbind -keysonly`,
+  then `mre merge -nullforks`): `mrp` disables such a call fork by fork, so its
+  result is one `null` per fork. The merged bundle carries that whole-call
+  value under the `@nullforks` member, which the binder returns for a whole
+  ref (#434).
   The sidecar's file name is part of its format: a `-resume` across a format
   change finds no cached sidecar under the new name and re-runs the producer,
   so a merge never reads a stale-format one.

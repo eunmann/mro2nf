@@ -192,6 +192,8 @@ var goldenCases = []goldenCase{
 	// #436: a split of a call an entry value disables is null, while the same
 	// gate left false gives the runtime empty [].
 	{"disabled_split_null", "disabled_split_null", "expected/outs.json"},
+	// #434: a runtime-gated map call over a sub-pipeline is one null per fork.
+	{"disabled_map_nullforks", "disabled_map_nullforks", "expected/outs.json"},
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},

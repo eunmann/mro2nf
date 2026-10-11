@@ -1230,6 +1230,39 @@ func TestRunBindRecordsStaticNulls(t *testing.T) {
 	}
 }
 
+// TestRunMergeNullForks pins #434's `merge -nullforks`: it gathers nothing
+// and gives one null per fork the sidecar counts, the typed empty for zero
+// forks, and null for zero forks under -emptynull.
+func TestRunMergeNullForks(t *testing.T) {
+	for _, tc := range []struct {
+		name, keysJSON string
+		flags          []string
+		want           any
+	}{
+		{"array forks", `{"count":2,"keys":null}`, nil, map[string]any{"@nullforks": []any{nil, nil}, "s": []any{nil, nil}}},
+		{"map forks", `{"count":1,"keys":["k"]}`, nil, map[string]any{"@nullforks": map[string]any{"k": nil}, "s": map[string]any{"k": nil}}},
+		{"zero forks", `{"count":0,"keys":null}`, nil, map[string]any{"@nullforks": []any{}, "s": []any{}}},
+		{"zero known-empty forks", `{"count":0,"keys":null}`, []string{"-emptynull"}, map[string]any{"s": nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			out := filepath.Join(dir, "merged")
+			argv := append([]string{
+				"merge", "-nullforks", "-outs", "s", "-forksdir", dir, "-o", out,
+				"-keysfile", writeTestFile(t, filepath.Join(dir, "keys.json"), tc.keysJSON),
+			}, tc.flags...)
+
+			if err := run(t.Context(), argv); err != nil {
+				t.Fatalf("run merge -nullforks: %v", err)
+			}
+
+			if diff := cmp.Diff(tc.want, any(readTestBundle(t, out))); diff != "" {
+				t.Errorf("merged outs mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestRunMergeRecordsPrune pins that a zero-fork merge to null records every
 // output as statically null, and a typed-empty merge records none.
 func TestRunMergeRecordsPrune(t *testing.T) {

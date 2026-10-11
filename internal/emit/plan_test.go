@@ -175,6 +175,36 @@ func TestKnownValueShapes(t *testing.T) {
 	}
 }
 
+// TestBuildPlanNullForks pins #434: a disabled map call over a sub-pipeline
+// takes the per-fork null skip only under a runtime gate, at the top and in a
+// keyed layer; an entry-gated call and a gated map call over a stage keep the
+// whole-call null.
+func TestBuildPlanNullForks(t *testing.T) {
+	prog := lowerFixture(t, "disabled_map_nullforks")
+
+	for _, f := range []featureSet{{}, {native: true}} {
+		pl := buildPlan(prog, f)
+
+		for _, tc := range []struct {
+			pipe, call string
+			want       bool
+		}{
+			{"DMN", "A", true},
+			{"DMN", "M", true},
+			{"DMN", "E", true},
+			{"DMN", "N", true},
+			{"DMN", "O", true},
+			{"OUTER", "SUB", true},
+			{"DMN", "L", false},
+			{"DMN", "S", false},
+		} {
+			if got := pl.pipes[tc.pipe].calls[tc.call].nullForks; got != tc.want {
+				t.Errorf("native=%v: %s.%s nullForks = %v, want %v", f.native, tc.pipe, tc.call, got, tc.want)
+			}
+		}
+	}
+}
+
 // TestKnownWholeRefNeedsOutputs pins the #435 guard: a whole ref to a mapped
 // call is length-known only when the callee declares an output, because the
 // binder's per-fork regroup of an output-less merge is empty whatever the fork

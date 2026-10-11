@@ -78,6 +78,10 @@ type callPlan struct {
 	// typed empty, matching mrp's static resolver pruning a statically-empty
 	// fork (#99).
 	emptyNull bool
+	// nullForks marks a disabled map call over a sub-pipeline whose gate is a
+	// runtime value (invKnown.nullForks, #434): its gate-true branch merges one
+	// null per fork instead of taking the whole-call null bundle.
+	nullForks bool
 	// foldMerge marks a kindNativeScatter call whose MERGE gather runs inline in
 	// its sole consumer's task (#76): no standalone MERGE process; the consumer
 	// stages the per-fork outs dirs + keys sidecar and reconstructs merged_<id>
@@ -285,7 +289,10 @@ func planCall(c ir.Call, p *ir.Pipeline, prog *ir.Program, f featureSet, queuedP
 			}
 		}
 
-		return callPlan{kind: kindMapped, disableTask: needsDisableTask(c), emptyNull: emptyNull}
+		return callPlan{
+			kind: kindMapped, disableTask: needsDisableTask(c), emptyNull: emptyNull,
+			nullForks: known.nullForks[p.Name][c.Name],
+		}
 	}
 
 	if prod, ok := callForwardProducer(c, p, prog); ok {

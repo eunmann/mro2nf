@@ -414,6 +414,43 @@ func Merge(names []string, outs []json.RawMessage, keys []string, emptyNull bool
 	return raw, nil
 }
 
+// NullForksKey is the merged-bundle member NullForks writes: the whole-call
+// value, one null per fork. Martian identifiers cannot contain '@', so it
+// never names an output.
+const NullForksKey = "@nullforks"
+
+// NullForks is the result of a map call over a sub-pipeline that a runtime
+// gate disables: mrp disables each fork's pipeline outputs inside the merge
+// (syntax/resolve_pipeline.go resolvePipelineOuts), so every output, and the
+// whole-call ref, is one null per fork, in an array for an array fork (keys
+// nil) or keyed by fork for a map fork (#434). Zero forks give the typed empty.
+func NullForks(names []string, count int, keys []string) (json.RawMessage, error) {
+	var perFork any = make([]any, count)
+
+	if keys != nil {
+		nulls := make(map[string]any, len(keys))
+		for _, k := range keys {
+			nulls[k] = nil
+		}
+
+		perFork = nulls
+	}
+
+	forks, err := marshalRaw(perFork, "per-fork nulls")
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]json.RawMessage, len(names)+1)
+	for _, name := range names {
+		result[name] = forks
+	}
+
+	result[NullForksKey] = forks
+
+	return marshalRaw(result, "null forks")
+}
+
 func (e Entry) resolve(pipeArgs json.RawMessage, callOuts map[string]json.RawMessage) (json.RawMessage, error) {
 	switch {
 	case e.Array != nil:
@@ -672,6 +709,10 @@ func perFork(raw json.RawMessage, mapFork bool) (json.RawMessage, error) {
 	var merged map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &merged); err != nil {
 		return nil, fmt.Errorf("regroup merged forks: %w", err)
+	}
+
+	if forks, ok := merged[NullForksKey]; ok {
+		return forks, nil
 	}
 
 	nulls := 0
