@@ -72,6 +72,10 @@ var goldenCases = []goldenCase{
 	{"dir_out", "dir_out", "expected/outs.json"},
 	// #242: directory outputs with dotfiles and an empty subdirectory.
 	{"dir_hidden", "dir_hidden", "expected/outs.json"},
+	// #431: a file reached from several outputs names its first published path.
+	{"shared_out_file", "shared_out_file", "expected/outs.json"},
+	// #432: files below an N-D array stay unpublished, as under mrp.
+	{"nested_path_unpublished", "nested_path_unpublished", "expected/outs.json"},
 	{"api_smoke", "api_smoke", "expected/outs.json"},
 	{"float_to_int", "float_to_int", "expected/outs.json"},
 	{"disabled_map", "disabled_map", "expected/outs.json"},
@@ -259,7 +263,7 @@ func TestGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(fixtureDir, tc.golden))
 			assertGoldenTree(t, tc.name, tc.fixture, proj)
@@ -321,7 +325,7 @@ func TestCLITypedOverrides(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), golden)
+			goldenJSON(t, fixture, filepath.Join(proj, "results", "pipeline_outs.json"), golden)
 		})
 	}
 
@@ -385,7 +389,7 @@ func TestEntryFileAdversarialName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	goldenJSON(t,
+	goldenJSON(t, "entry_file",
 		filepath.Join(proj, "results", "pipeline_outs.json"),
 		filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
 }
@@ -501,7 +505,7 @@ func TestEntryFileRemoteURL(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		goldenJSON(t,
+		goldenJSON(t, "entry_file",
 			filepath.Join(proj, "results", "pipeline_outs.json"),
 			filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
 
@@ -691,7 +695,7 @@ func TestNativeMode(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 		})
@@ -726,7 +730,7 @@ func TestNativeFileEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 		})
@@ -921,7 +925,7 @@ func TestNativeScatter(t *testing.T) {
 			// native==golden covers native==default transitively in half the runs
 			// — and anchors native to mrp truth rather than to whatever the
 			// default path happens to produce.
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(native, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, "expected", "outs.json"))
 		})
@@ -1032,7 +1036,7 @@ func TestNativeComplete(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(native, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 			assertGoldenTree(t, tc.fixture, tc.fixture, native)

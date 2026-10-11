@@ -135,6 +135,31 @@ the JSON leaf value is the path **relative to the outs dir** (e.g.
 location-independent bundles while matching the on-disk tree. Five goldens were
 updated to the tree layout.
 
+**FIXED (#431):** mrp moves a file into `outs/` the first time its walk reaches
+it (outputs in declaration order, struct fields and map keys sorted, arrays by
+index) and names that path for every later output that reaches the file, linking
+the later path to it (`post_process.go` `moveOutFile`, `copyOutSymlink`). A
+bundle records each leaf's origin beside it and copies a file of one origin
+once, however many positions or input bundles reach it (`internal/shim`
+`MarkFiles`), so the file stays one leaf through every bind, pass-through stage
+and sub-pipeline boundary; `mre publish-layout` walks in mrp's order and names
+a leaf's first published path for every later reference, and each later path
+gets a copy (allowlist entry `published-symlinks-copied`). Fixture
+`shared_out_file`.
+
+**FIXED (#432):** below an array of two or more dimensions (`T[][]`,
+`map<T[][]>`, `map<T>[][]`, as an output or a struct field) mrp publishes no
+file: `moveOutArrayDir` descends the array one level as if its elements had the
+base type, so each element fails to move, is kept as the stage wrote it, and mrp
+prints `Could not move output files`, while its `_outs` names each file at its
+path in the stage's directory, a file the stage never wrote included. `mre
+publish-layout` publishes nothing there either, warns on stderr, and names each
+file the stage wrote by the absolute path its task recorded for it, in the
+Nextflow work dir (a scratch-dir task's path, as on an object-store work dir,
+is #457). A file the stage never wrote keeps the path it was declared at, as
+under mrp (allowlist entry `unpublished-file-paths`). Fixture
+`nested_path_unpublished`.
+
 ## D. Binding & resolution — faithful (two real divergences)
 
 **Faithful:** ref/struct/array/single-map projection, `array<map<S>>.field`

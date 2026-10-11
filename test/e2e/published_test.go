@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -118,12 +119,38 @@ func loadOutsJSON(allow divergence.Allowlist, fixture, ps, results string) (any,
 		return nil, nil, err
 	}
 
-	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nil)
+	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nfOutsRewrite(allow, fixture))
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return mrp, nf, nil
+}
+
+// unpublishedPath is the placeholder both outs JSONs are read with in place
+// of the path of a file left unpublished.
+const unpublishedPath = "<unpublished>"
+
+// nfTaskPath matches an absolute path inside a Nextflow task work dir: one
+// below the task's <2 hex>/<30 hex> hash dirs. Mirrors NF_TASK_PATH in
+// normcmp.py.
+var nfTaskPath = regexp.MustCompile(`^/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.`)
+
+// nfOutsRewrite returns the rewrite of pipeline_outs.json strings the
+// allowlist excuses for fixture, nil for none: a path inside a task work dir,
+// where mro2nf names a file it left unpublished, becomes the placeholder.
+func nfOutsRewrite(allow divergence.Allowlist, fixture string) func(string) string {
+	if !allow.Excuses(divergence.RuleUnpublishedPaths, fixture) {
+		return nil
+	}
+
+	return func(s string) string {
+		if nfTaskPath.MatchString(s) {
+			return unpublishedPath
+		}
+
+		return s
+	}
 }
 
 // mrpOutsJSON decodes the outs JSON the mrp pipestance ps of fixture writes
@@ -182,8 +209,10 @@ func decodeOutsFile(path string, rewrite func(string) string) (any, error) {
 
 // mrpOutsRewrite returns the rewrite of mrp's outs JSON strings the
 // allowlist excuses: the target path mrp names for a symlink it published
-// becomes the link's own path, and the outs dir prefix is stripped from a
-// path, since mro2nf names published files relative to results/.
+// becomes the link's own path, a path in the pipestance outside its outs dir,
+// where mrp names a file it left unpublished, becomes the placeholder, and
+// the outs dir prefix is stripped from a path, since mro2nf names published
+// files relative to results/.
 func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(string) string, error) {
 	links := map[string]string{}
 
@@ -196,14 +225,25 @@ func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(stri
 		}
 	}
 
+	inOuts := strings.TrimSuffix(outs, "/") + "/"
+
 	prefix := ""
 	if allow.Excuses(divergence.RuleOutsRelativePaths, fixture) {
-		prefix = strings.TrimSuffix(outs, "/") + "/"
+		prefix = inOuts
+	}
+
+	inPs := ""
+	if allow.Excuses(divergence.RuleUnpublishedPaths, fixture) {
+		inPs = filepath.Dir(strings.TrimSuffix(outs, "/")) + "/"
 	}
 
 	return func(s string) string {
 		if link, ok := links[s]; ok {
 			s = link
+		}
+
+		if inPs != "" && strings.HasPrefix(s, inPs) && !strings.HasPrefix(s, inOuts) {
+			return unpublishedPath
 		}
 
 		if prefix != "" {
@@ -219,9 +259,13 @@ func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(stri
 // except for a stage's relative symlink that leads through further links:
 // there outs/ links to the last intermediate link and mrp names that link's
 // target (martian/core/post_process.go copyOutSymlink, moveOutFile). So both
-// the target and, when it is a link, its target map to the symlink.
+// the target and, when it is a link, its target map to the symlink. A target
+// under outs is the file mrp moved there for the first output that reached it,
+// and the path mro2nf names for every output that reaches it too, so it is
+// kept.
 func mrpPublishedLinks(outs string) (map[string]string, error) {
 	links := map[string]string{}
+	inOuts := strings.TrimSuffix(outs, "/") + "/"
 
 	err := filepath.WalkDir(outs, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.Type()&fs.ModeSymlink == 0 {
@@ -229,13 +273,13 @@ func mrpPublishedLinks(outs string) (map[string]string, error) {
 		}
 
 		target, err := readLinkAbs(p)
-		if err != nil {
+		if err != nil || strings.HasPrefix(target, inOuts) {
 			return err
 		}
 
 		links[target] = p
 
-		if next, err := readLinkAbs(target); err == nil {
+		if next, err := readLinkAbs(target); err == nil && !strings.HasPrefix(next, inOuts) {
 			links[next] = p
 		}
 

@@ -229,7 +229,7 @@ func TestDockerIsolation(t *testing.T) {
 				t.Fatalf("nextflow (isolated): %v", err)
 			}
 
-			goldenJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"),
+			goldenJSON(t, tc.name, filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.name, tc.golden))
 			assertGoldenTree(t, tc.name, tc.name, proj)
 		})
@@ -388,7 +388,7 @@ func TestGeneratedAWSBatchImage(t *testing.T) {
 		t.Fatalf("nextflow (generated image): %v", err)
 	}
 
-	goldenJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"),
+	goldenJSON(t, "diamond_min", filepath.Join(proj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "diamond_min", "expected", "outs.json"))
 }
 
@@ -416,7 +416,7 @@ func TestGeneratedAWSBatchImageNative(t *testing.T) {
 		t.Fatalf("nextflow (generated native image): %v", err)
 	}
 
-	goldenJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"),
+	goldenJSON(t, "entry_file", filepath.Join(proj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "entry_file", "expected", "ep_outs.json"))
 }
 

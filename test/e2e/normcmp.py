@@ -12,6 +12,10 @@ entry for its comparator rule, as in the Go differential (published_test.go):
 - outs-json-strip-outs-prefix: mrp writes absolute paths into the pipestance
   outs/ dir, mro2nf writes the same paths relative to its results/ dir, so the
   outs-dir prefix is stripped from mrp's strings.
+- placeholder-unpublished-paths: a file left unpublished is named where its
+  task wrote it, by mrp in the pipestance outside outs/, by mro2nf in a
+  Nextflow task work dir, so that path on either side becomes one
+  placeholder.
 
 An issue-tracked entry applies its rule only on the fixtures it names; the Go
 differential, not this script, fails it once it excuses nothing there.
@@ -20,10 +24,18 @@ Usage: normcmp.py <mrp_outs_json> <mrp_outs_dir> <nf_outs_json> <fixture> [<allo
 """
 import json
 import os
+import re
 import sys
 
 PUBLISHED_SYMLINKS = "follow-mrp-published-symlinks"
 STRIP_OUTS_PREFIX = "outs-json-strip-outs-prefix"
+UNPUBLISHED_PATHS = "placeholder-unpublished-paths"
+
+UNPUBLISHED = "<unpublished>"
+
+# An absolute path inside a Nextflow task work dir: one below the task's
+# <2 hex>/<30 hex> hash dirs. Mirrors nfTaskPath in published_test.go.
+NF_TASK_PATH = re.compile(r"^/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.")
 
 OBJECT = "<object>"
 NUMBER = "<number>"
@@ -66,18 +78,25 @@ def published_links(outs):
     mrp names the link's target, except for a stage's relative symlink that
     leads through further links: there outs/ links to the last intermediate
     link and mrp names that link's target (martian/core/post_process.go
-    copyOutSymlink). Mirrors mrpPublishedLinks in published_test.go.
+    copyOutSymlink). A target under outs is the file mrp moved there for the
+    first output that reached it, which mro2nf names too, so it is kept.
+    Mirrors mrpPublishedLinks in published_test.go.
     """
     links = {}
+    in_outs = outs.rstrip("/") + "/"
     for dirpath, dirnames, filenames in os.walk(outs):
         for name in dirnames + filenames:
             p = os.path.join(dirpath, name)
             if not os.path.islink(p):
                 continue
             target = read_link_abs(p)
+            if target.startswith(in_outs):
+                continue
             links[target] = p
             if os.path.islink(target):
-                links[read_link_abs(target)] = p
+                nxt = read_link_abs(target)
+                if not nxt.startswith(in_outs):
+                    links[nxt] = p
     return links
 
 
@@ -93,13 +112,25 @@ def norm(v, rewrite):
 
 def mrp_rewrite(rules, mrp_dir):
     links = published_links(mrp_dir) if PUBLISHED_SYMLINKS in rules else {}
-    prefix = mrp_dir.rstrip("/") + "/" if STRIP_OUTS_PREFIX in rules else ""
+    in_outs = mrp_dir.rstrip("/") + "/"
+    prefix = in_outs if STRIP_OUTS_PREFIX in rules else ""
+    in_ps = os.path.dirname(mrp_dir.rstrip("/")) + "/" if UNPUBLISHED_PATHS in rules else ""
 
     def rewrite(s):
         s = links.get(s, s)
-        return s[len(prefix):] if prefix and s.startswith(prefix) else s
+        if in_ps and s.startswith(in_ps) and not s.startswith(in_outs):
+            return UNPUBLISHED
+        if prefix and s.startswith(prefix):
+            return s[len(prefix):]
+        return s
 
     return rewrite
+
+
+def nf_rewrite(rules):
+    if UNPUBLISHED_PATHS not in rules:
+        return lambda s: s
+    return lambda s: UNPUBLISHED if NF_TASK_PATH.match(s) else s
 
 
 def render(v):
@@ -119,7 +150,7 @@ def main():
     rules = excused_rules(allowlist, name)
 
     mrp = render(norm(load(mrp_json), mrp_rewrite(rules, mrp_dir)))
-    nf = render(norm(load(nf_json), lambda s: s))
+    nf = render(norm(load(nf_json), nf_rewrite(rules)))
 
     if mrp == nf:
         print("  json: match")

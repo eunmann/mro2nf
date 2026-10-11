@@ -52,6 +52,7 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	}
 
 	pub := newPublisher(man.Structs)
+	pub.leaves = *leavesDir
 
 	params, err := man.Params(prod.callable, prod.role)
 	if err != nil {
@@ -63,20 +64,7 @@ func runPublishLayout(_ context.Context, argv []string) error {
 		return err
 	}
 
-	if err := writeJSON(filepath.Join(*dir, "layout.json"), pub.layout); err != nil {
-		return err
-	}
-
-	if err := writeManifest(filepath.Join(*dir, "manifest.json.gz"), prod.callable, pub.manifest); err != nil {
-		return err
-	}
-
-	out, err := json.MarshalIndent(published, "", "    ")
-	if err != nil {
-		return fmt.Errorf("marshal published outs: %w", err)
-	}
-
-	if err := writeRaw(filepath.Join(*dir, "pipeline_outs.json"), out); err != nil {
+	if err := writeLayout(*dir, prod.callable, pub, published); err != nil {
 		return err
 	}
 
@@ -89,6 +77,25 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	}
 
 	return nil
+}
+
+// writeLayout writes into dir what pub computed for the outputs of pipeline:
+// layout.json, manifest.json.gz and the published outs as pipeline_outs.json.
+func writeLayout(dir, pipeline string, pub *publisher, published map[string]any) error {
+	if err := writeJSON(filepath.Join(dir, "layout.json"), pub.layout); err != nil {
+		return err
+	}
+
+	if err := writeManifest(filepath.Join(dir, "manifest.json.gz"), pipeline, pub.manifest); err != nil {
+		return err
+	}
+
+	out, err := json.MarshalIndent(published, "", "    ")
+	if err != nil {
+		return fmt.Errorf("marshal published outs: %w", err)
+	}
+
+	return writeRaw(filepath.Join(dir, "pipeline_outs.json"), out)
 }
 
 // outsDirPerm is the mode for outs/ parent directories; publishDir copies the
@@ -227,6 +234,7 @@ func unescape(name string, value any) (any, error) {
 // into place (no single-node funnel — #12).
 type publisher struct {
 	structs map[string]*ir.StructType
+	tbl     *types.Table
 	// warn receives per-skipped-key diagnostics (illegal map keys, #114) —
 	// os.Stderr in production, a buffer in tests.
 	warn io.Writer
@@ -241,11 +249,16 @@ type publisher struct {
 	// manifest accumulates one entry per published file leaf for the
 	// machine-readable output index (see manifestEntry).
 	manifest []manifestEntry
+	// leaves is the dir of the staged leaves, "" when none are staged.
+	leaves string
 }
 
 // newPublisher returns a publisher over the program's struct table.
 func newPublisher(structs map[string]*ir.StructType) *publisher {
-	return &publisher{structs: structs, warn: os.Stderr, seen: map[string]string{}, layout: map[string][]string{}}
+	return &publisher{
+		structs: structs, tbl: types.NewTable(structs), warn: os.Stderr,
+		seen: map[string]string{}, layout: map[string][]string{},
+	}
 }
 
 // manifestEntry is one published output file in the manifest index: a downstream
@@ -311,11 +324,19 @@ func (pub *publisher) isStruct(name string) bool {
 
 // emitArray publishes an array into the rel/ subdir, naming elements by a
 // zero-padded index (width = digits of the element count, matching Martian's
-// WidthForInt) plus the element type's own GetOutFilename suffix.
+// WidthForInt) plus the element type's own GetOutFilename suffix. An array of
+// two or more dimensions publishes nothing: mrp descends it one level as if
+// its elements had the base type, so each element fails to move and mrp
+// leaves it as the stage wrote it (martian/core/post_process.go
+// moveOutArrayDir, moveOutFile, moveOutDir).
 func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) {
 	arr, ok := value.([]any)
 	if !ok {
 		return nil, shapeErr(rel, "array", p, value)
+	}
+
+	if p.ArrayDim > 1 {
+		return pub.unpublishedArray(rel, p, arr)
 	}
 
 	width := len(strconv.Itoa(len(arr)))
@@ -336,6 +357,74 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 	}
 
 	return out, nil
+}
+
+// unpublishedArray returns the N-D array arr of param p at rel as mrp leaves
+// an element it cannot move: as the stage wrote it, escaped strings restored,
+// except that a file the stage wrote is named where its task wrote it (see
+// origin), as mrp's _outs names the file in the stage's dir. A file the stage
+// never wrote keeps the path it was declared at, which mrp keeps too. It warns
+// once when the array names a file, as mrp prints "Could not move output
+// files".
+func (pub *publisher) unpublishedArray(rel string, p ir.Param, arr []any) (any, error) {
+	files := false
+
+	named, err := pub.tbl.Apply([]ir.Param{p}, map[string]any{p.Name: arr}, func(leaf string) (string, error) {
+		if err := shim.CheckReserved(leaf); err != nil {
+			return "", fmt.Errorf("unpublished file: %w", err)
+		}
+
+		files = files || leaf != ""
+
+		transport, _, ok := shim.CutMarker(leaf)
+		if !ok {
+			return leaf, nil
+		}
+
+		return pub.origin(shim.LeafPath(transport))
+	})
+	if err != nil {
+		return nil, fmt.Errorf("publish %s: %w", rel, err)
+	}
+
+	if files {
+		// Best-effort diagnostic write: a failed stderr warning must not fail
+		// the publish itself.
+		_, _ = fmt.Fprintf(pub.warn, "mre: publish: leaving the files below %q unpublished, named where their tasks wrote them, as mrp cannot move a file below an array of two or more dimensions\n", rel)
+	}
+
+	return unescape(p.Name, named[p.Name])
+}
+
+// errNoOrigin reports an unpublished file whose producing task's path
+// publish-layout cannot read.
+var errNoOrigin = errors.New("no recorded origin for an unpublished file")
+
+// origin returns the absolute path the producing task recorded beside the
+// staged leaf at leafPath below the files dir. That path is the file's
+// location on a local or shared work dir; a task in a scratch dir records its
+// scratch path (#457). A leaf without a recorded origin would be named in
+// this task's own dir, where no other task holds it, so it fails instead.
+func (pub *publisher) origin(leafPath string) (string, error) {
+	if pub.leaves == "" {
+		return "", fmt.Errorf("%w %s: no staged leaves", errNoOrigin, leafPath)
+	}
+
+	staged, err := filepath.Abs(filepath.Join(pub.leaves, filepath.FromSlash(leafPath)))
+	if err != nil {
+		return "", fmt.Errorf("resolve staged leaf %s: %w", leafPath, err)
+	}
+
+	origin, err := shim.LeafOrigin(staged)
+	if err != nil {
+		return "", fmt.Errorf("name unpublished file %s: %w", leafPath, err)
+	}
+
+	if origin == staged {
+		return "", fmt.Errorf("%w %s", errNoOrigin, leafPath)
+	}
+
+	return origin, nil
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their
@@ -385,18 +474,24 @@ func byKey(a, b types.Member) int {
 	return strings.Compare(a.Key, b.Key)
 }
 
+func byName(a, b ir.Param) int {
+	return strings.Compare(a.Name, b.Name)
+}
+
 // emitStruct publishes a struct into the rel/ subdir, recursing each field named
-// by its own GetOutFilename; the JSON object is keyed by field id, with its keys
-// sorted as mrp's moveOutDir writes a file-bearing struct.
+// by its own GetOutFilename; the JSON object is keyed by field id. The fields
+// are walked in sorted id order, as mrp's moveOutDir walks a file-bearing
+// struct, so a file two fields share is first reached where mrp reaches it.
 func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error) {
 	sv, ok := types.AsObject(value)
 	if !ok {
 		return nil, shapeErr(rel, "struct", p, value)
 	}
 
-	out := make(map[string]any, len(pub.structs[p.BaseType].Fields))
+	fields := slices.SortedFunc(slices.Values(pub.structs[p.BaseType].Fields), byName)
+	out := make(map[string]any, len(fields))
 
-	for _, f := range pub.structs[p.BaseType].Fields {
+	for _, f := range fields {
 		// Every declared member is emitted (an absent one as null), matching
 		// Martian; a non-file field passes through verbatim via emit's guard.
 		fieldValue, _ := sv.Get(f.Name)
@@ -413,11 +508,15 @@ func (pub *publisher) emitStruct(rel string, p ir.Param, value any) (any, error)
 }
 
 // emitFile records one scalar file/dir leaf's leaf path -> rel mapping
-// and its manifest entry, and returns rel — the ACTUAL published path, which may
-// differ from the argument after collision disambiguation. It returns nil when
-// the leaf is absent (matching Martian's null): a present leaf carries a
-// @mre:file:/@mre:dir: marker, while a declared output that was never written
-// keeps a raw path and resolves to null. Nothing is copied.
+// and its manifest entry, and returns the leaf's first published path: rel
+// (after collision disambiguation) the first time the walk reaches the leaf,
+// and that same first rel every later time, while each later rel still gets
+// its copy. mrp moves a file into outs/ the first time its walk reaches it and
+// names that path for every later reference, publishing a symlink to it at the
+// later rel (martian/core/post_process.go moveOutFile, copyOutSymlink). It
+// returns nil when the leaf is absent (matching Martian's null): a present
+// leaf carries a @mre:file:/@mre:dir: marker, while a declared output that was
+// never written keeps a raw path and resolves to null. Nothing is copied.
 func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 	src, ok := value.(string)
 	if !ok {
@@ -446,7 +545,7 @@ func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 	// with a numeric suffix so neither file is silently mapped over the other.
 	if prev, ok := pub.seen[rel]; ok {
 		if prev == leaf {
-			return rel, nil
+			return pub.layout[leaf][0], nil
 		}
 
 		rel = pub.uniqueRel(rel)
@@ -460,7 +559,7 @@ func (pub *publisher) emitFile(rel string, p ir.Param, value any) (any, error) {
 	// into a `path`-typed out) is catalogued correctly.
 	pub.manifest = append(pub.manifest, manifestEntry{Path: rel, BaseType: p.BaseType, IsDir: isDir})
 
-	return rel, nil
+	return pub.layout[leaf][0], nil
 }
 
 // uniqueRel returns rel, or rel with a numeric suffix before its extension when

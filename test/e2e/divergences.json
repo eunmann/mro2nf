@@ -22,10 +22,19 @@
       "id": "published-symlinks-copied",
       "kind": "published-tree",
       "feature": "a published output that is a symlink",
-      "summary": "Where mrp publishes a symlink in `outs/`, because the stage's output was itself a symlink or lies outside the pipestance, mro2nf publishes a copy of the target, and mrp's `_outs` names the link target where `pipeline_outs.json` names the published path.",
-      "justification": "mrp links `outs/` to the target and reports the target (`martian/core/post_process.go` `moveOutFile`, `copyOutSymlink`). A publish dir may be an object store with no symlinks, and a host target is unreachable from an isolated worker, so mro2nf stages and publishes the content (#332). The comparison reads an mrp-published symlink by its target's content and maps the target path in mrp's `_outs` to the link's path.",
-      "evidence": ["TestMrpDiff/symlink_escape", "TestStageOutputLinkOutsideWorkCopiedLocally", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
+      "summary": "Where mrp publishes a symlink in `outs/`, mro2nf publishes a copy of its target. For a stage output that was itself a symlink or lies outside the pipestance, mrp's `_outs` names the link target where `pipeline_outs.json` names the published copy. For a file that a second output also reaches, mrp links the second output's path to the file it already moved into `outs/`, and both outs JSONs name that first path.",
+      "justification": "mrp links `outs/` to the target and reports the target (`martian/core/post_process.go` `moveOutFile`, `copyOutSymlink`). A publish dir may be an object store with no symlinks, and a host target is unreachable from an isolated worker, so mro2nf stages and publishes the content (#332, #431). The comparison reads an mrp-published symlink by its target's content, and maps a target outside `outs/` in mrp's `_outs` to the link's path.",
+      "evidence": ["TestMrpDiff/symlink_escape", "TestMrpDiff/shared_out_file", "TestStageOutputLinkOutsideWorkCopiedLocally", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
       "comparator": {"rule": "follow-mrp-published-symlinks"}
+    },
+    {
+      "id": "unpublished-file-paths",
+      "kind": "published-tree",
+      "feature": "a file below an array of two or more dimensions in a pipeline output",
+      "summary": "Both runtimes leave such a file unpublished and name it where its task wrote it: mrp's `_outs` by its absolute path in the stage's directory of the pipestance, `pipeline_outs.json` by the absolute path its producing task recorded for it: in the Nextflow work dir, or in its scratch dir for a task that ran in one, as on an object-store work dir (#457). A file the stage never wrote keeps, in both, the path it was declared at.",
+      "justification": "mrp descends an array of two or more dimensions one level as if its elements had the base type, so each element fails to move and is written as the stage wrote it, and mrp prints `Could not move output files` (`martian/core/post_process.go` `moveOutArrayDir`, `moveOutFile`, `moveOutDir`; `martian/core/node.go` `postProcess`). The two names cannot match: mrp's holds the pipestance's own chunk id (`chnk0-u<id>`) and mro2nf's the task's work hash, both new on every run. mre prints a warning for each such output. The comparison reads a path in mrp's `_outs` that lies in the pipestance outside `outs/`, and a path in `pipeline_outs.json` below a task's work dir, as one placeholder, `<unpublished>`.",
+      "evidence": ["TestMrpDiff/nested_path_unpublished", "TestPublishNDArrayLeavesFilesUnpublished", "TestPublishLayoutNamesUnpublishedFileByItsTask", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
+      "comparator": {"rule": "placeholder-unpublished-paths"}
     },
     {
       "id": "retried-stage-errors",

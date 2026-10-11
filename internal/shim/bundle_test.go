@@ -78,6 +78,216 @@ func TestMarkFilesKeepsBasename(t *testing.T) {
 	}
 }
 
+// TestMarkFilesSharedPathOneLeaf guards #431: a path the payload names at
+// several positions, under any spelling, is one file to mrp, so it is copied
+// once and each position gets its marker, while a distinct file with the same
+// basename keeps its own leaf.
+func TestMarkFilesSharedPathOneLeaf(t *testing.T) {
+	dir := t.TempDir()
+	shared := filepath.Join(dir, "a", "x.txt")
+	other := filepath.Join(dir, "b", "x.txt")
+
+	for _, src := range []string{shared, other} {
+		if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(src, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	params := []ir.Param{
+		{Name: "fs", BaseType: "file", IsFile: true, ArrayDim: 1},
+		{Name: "cfg", BaseType: "Cfg", IsFile: true},
+	}
+	payload := map[string]any{
+		"fs":  []any{shared, other, filepath.Join(dir, "a", ".", "x.txt")},
+		"cfg": map[string]any{"ref": shared},
+	}
+
+	bundle := filepath.Join(dir, "bundle")
+
+	marked, err := shim.MarkFiles(bundle, payload, params, fileTable(), nil)
+	if err != nil {
+		t.Fatalf("MarkFiles: %v", err)
+	}
+
+	want := map[string]any{
+		"fs":  []any{"@mre:file:f/L0000/x.txt", "@mre:file:f/L0001/x.txt", "@mre:file:f/L0000/x.txt"},
+		"cfg": map[string]any{"ref": "@mre:file:f/L0000/x.txt"},
+	}
+	if diff := cmp.Diff(want, marked); diff != "" {
+		t.Errorf("markers (-want +got):\n%s", diff)
+	}
+
+	leaves, err := os.ReadDir(filepath.Join(bundle, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(leaves) != 2 {
+		t.Errorf("bundle holds %d leaves, want 2", len(leaves))
+	}
+}
+
+// TestMarkFilesSameFileAcrossBundlesOneLeaf guards #431 across bundles: a
+// file a pass-through stage returns reaches the pipeline outputs through its
+// producer's bundle and the pass-through's, each staged as Nextflow links it.
+// mrp sees one path, so the outputs' bundle copies it once, while another
+// producer's file of the same basename keeps its own leaf.
+func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
+	dir := t.TempDir()
+	params := []ir.Param{{Name: "f", BaseType: "txt", IsFile: true}}
+
+	make1 := writeFileBundle(t, filepath.Join(dir, "make1"), params, filepath.Join(dir, "m1", "a.txt"))
+	make2 := writeFileBundle(t, filepath.Join(dir, "make2"), params, filepath.Join(dir, "m2", "a.txt"))
+
+	passIn := stageBundle(t, make1, filepath.Join(dir, "pass", "in"))
+	pass := filepath.Join(dir, "pass", "outs")
+
+	if err := shim.WriteBundle(pass, readPayload(t, passIn), params, fileTable(), nil); err != nil {
+		t.Fatalf("WriteBundle pass-through: %v", err)
+	}
+
+	outs := []ir.Param{
+		{Name: "a", BaseType: "txt", IsFile: true},
+		{Name: "b", BaseType: "txt", IsFile: true},
+		{Name: "c", BaseType: "txt", IsFile: true},
+	}
+	payload := map[string]any{"a": nil, "b": nil, "c": nil}
+
+	for name, src := range map[string]string{"a": make1, "b": pass, "c": make2} {
+		payload[name] = readPayload(t, stageBundle(t, src, filepath.Join(dir, "return", "in_"+name)))["f"]
+	}
+
+	bundle := filepath.Join(dir, "return", "args")
+
+	marked, err := shim.MarkFiles(bundle, payload, outs, fileTable(), nil)
+	if err != nil {
+		t.Fatalf("MarkFiles: %v", err)
+	}
+
+	want := map[string]any{"a": "@mre:file:f/L0000/a.txt", "b": "@mre:file:f/L0000/a.txt", "c": "@mre:file:f/L0001/a.txt"}
+	if diff := cmp.Diff(want, marked); diff != "" {
+		t.Errorf("markers (-want +got):\n%s", diff)
+	}
+
+	for rel, content := range map[string]string{"f/L0000/a.txt": filepath.Join(dir, "m1", "a.txt"), "f/L0001/a.txt": filepath.Join(dir, "m2", "a.txt")} {
+		if got, err := os.ReadFile(filepath.Join(bundle, rel)); err != nil || string(got) != content {
+			t.Errorf("%s = %q (err %v), want %q", rel, got, err, content)
+		}
+	}
+}
+
+// TestLeafOriginIsWhereTheTaskWroteIt guards #432: each leaf records the path
+// its producing task wrote the file at, and a pass-through stage's bundle and
+// the bundle after it keep that path, so the file can be named where it was
+// written.
+func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
+	dir := t.TempDir()
+	params := []ir.Param{{Name: "f", BaseType: "txt", IsFile: true}}
+	written := filepath.Join(dir, "make", "main", "files", "a.txt")
+
+	make1 := writeFileBundle(t, filepath.Join(dir, "make", "outs"), params, written)
+	pass := filepath.Join(dir, "pass", "outs")
+
+	if err := shim.WriteBundle(pass, readPayload(t, stageBundle(t, make1, filepath.Join(dir, "pass", "in"))), params, fileTable(), nil); err != nil {
+		t.Fatalf("WriteBundle pass-through: %v", err)
+	}
+
+	staged := stageBundle(t, pass, filepath.Join(dir, "layout", "in"))
+
+	for _, p := range []string{filepath.Join(make1, "f", "L0000", "a.txt"), filepath.Join(staged, "f", "L0000", "a.txt")} {
+		if got, err := shim.LeafOrigin(p); err != nil || got != written {
+			t.Errorf("LeafOrigin(%s) = %q (err %v), want %q", p, got, err, written)
+		}
+	}
+}
+
+// TestMarkFilesRefusesOriginFileName checks a leaf named like the origin file
+// it would share its ordinal dir with fails the write rather than overwrite
+// either.
+func TestMarkFilesRefusesOriginFileName(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, ".mre-origin")
+
+	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	params := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
+
+	_, err := shim.MarkFiles(filepath.Join(dir, "bundle"), map[string]any{"f": src}, params, fileTable(), nil)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("MarkFiles of a leaf named .mre-origin = %v, want a reserved-name error", err)
+	}
+}
+
+// writeFileBundle writes a file at src holding its own path and a bundle at
+// dir whose param f names it, and returns dir.
+func writeFileBundle(t *testing.T, dir string, params []ir.Param, src string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(src, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := shim.WriteBundle(dir, map[string]any{"f": src}, params, fileTable(), nil); err != nil {
+		t.Fatalf("WriteBundle %s: %v", dir, err)
+	}
+
+	return dir
+}
+
+// stageBundle stages the bundle at src into dst as a Nextflow process input
+// does, data.json and a link to each leaf dir, and returns dst.
+func stageBundle(t *testing.T, src, dst string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Join(dst, "f"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Symlink(filepath.Join(src, "data.json"), filepath.Join(dst, "data.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	leaves, err := os.ReadDir(filepath.Join(src, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, leaf := range leaves {
+		if err := os.Symlink(filepath.Join(src, "f", leaf.Name()), filepath.Join(dst, "f", leaf.Name())); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return dst
+}
+
+// readPayload reads the bundle at dir as a stage or bind reads it.
+func readPayload(t *testing.T, dir string) map[string]any {
+	t.Helper()
+
+	raw, err := shim.ReadBundle(dir)
+	if err != nil {
+		t.Fatalf("ReadBundle %s: %v", dir, err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+
+	return payload
+}
+
 // TestBundleRoundTrip writes a payload with a file leaf into a bundle, then
 // reads it back from a different relative path, proving the file travels with
 // the payload and the marker resolves to a real absolute path.
@@ -182,7 +392,8 @@ func TestMarkFilesDirLeaf(t *testing.T) {
 }
 
 // TestMarkFilesNamesDirSpelledWithSuffix checks a directory leaf spelled with a
-// trailing "/" or "/." keeps the directory's own name, so its marker is valid.
+// trailing "/" or "/." keeps the directory's own name, so its marker is valid,
+// and that both spellings name one leaf.
 func TestMarkFilesNamesDirSpelledWithSuffix(t *testing.T) {
 	dir := t.TempDir()
 
@@ -199,7 +410,7 @@ func TestMarkFilesNamesDirSpelledWithSuffix(t *testing.T) {
 		t.Fatalf("MarkFiles: %v", err)
 	}
 
-	want := map[string]any{"d": []any{"@mre:dir:f/L0000/outdir", "@mre:dir:f/L0001/outdir"}}
+	want := map[string]any{"d": []any{"@mre:dir:f/L0000/outdir", "@mre:dir:f/L0000/outdir"}}
 	if diff := cmp.Diff(want, marked); diff != "" {
 		t.Errorf("markers (-want +got):\n%s", diff)
 	}
