@@ -31,7 +31,7 @@ func TestEveryComparatorRuleHasAnEntry(t *testing.T) {
 	}
 
 	for rule := range ComparatorRules() {
-		if !allow.Excuses(rule) {
+		if !slices.ContainsFunc(allow.Entries(), func(e Entry) bool { return e.Comparator != nil && e.Comparator.Rule == rule }) {
 			t.Errorf("comparator rule %q has no allowlist entry", rule)
 		}
 	}
@@ -138,6 +138,9 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"abi no key":            `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ceil-number", "key": ""}}]}`,
 		"success with failure":  `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": false, "failures": [{"kind": "error", "stage": "S"}]}}]}`,
 		"bad failure kind":      `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": true, "failures": [{"kind": "oom", "stage": "S"}]}}]}`,
+		"tracked rule unscoped": `{"divergences": [{"id": "a", "kind": "abi", "issue": 1, ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}}]}`,
+		"tracked rule blank":    `{"divergences": [{"id": "a", "kind": "abi", "issue": 1, ` + ok + `, "comparator": {"rule": "abi-sort-object-keys", "fixtures": [""]}}]}`,
+		"permanent rule scoped": `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys", "fixtures": ["fx"]}}]}`,
 	}
 
 	for name, doc := range cases {
@@ -149,17 +152,65 @@ func TestParseRejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestAllowlistLookups(t *testing.T) {
+// lookupAllowlist holds one entry of each matcher shape: a key-scoped ABI
+// entry, an issue-tracked rule scoped to fx, a permanent rule, an outcome
+// and a mechanism.
+func lookupAllowlist(t *testing.T) Allowlist {
+	t.Helper()
+
 	const ok = `"feature": "f", "summary": "s", "justification": "j", "evidence": ["TestX"]`
 
 	allow, err := Parse([]byte(`{"divergences": [
 		{"id": "key", "kind": "abi", "issue": 7, ` + ok + `, "abi": {"fixtures": ["fx"], "file": "_args", "rule": "ignore-key", "key": "k"}},
-		{"id": "order", "kind": "abi", ` + ok + `, "comparator": {"rule": "abi-sort-object-keys"}},
+		{"id": "order", "kind": "abi", "issue": 8, ` + ok + `, "comparator": {"rule": "abi-sort-object-keys", "fixtures": ["fx"]}},
+		{"id": "by-stage", "kind": "outcome", ` + ok + `, "comparator": {"rule": "compare-failure-stage-and-kind"}},
 		{"id": "nf-fails", "kind": "outcome", ` + ok + `, "outcome": {"failed": true}},
 		{"id": "how", "kind": "mechanism", ` + ok + `}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	return allow
+}
+
+// TestAllowlistRuleScope checks an issue-tracked rule applies only on its
+// fixtures and a permanent one on every fixture, and that only the scoped one
+// is a rule the comparison must find still excusing something.
+func TestAllowlistRuleScope(t *testing.T) {
+	allow := lookupAllowlist(t)
+
+	excuses := []struct {
+		allow   Allowlist
+		rule    string
+		fixture string
+		want    bool
+	}{
+		{allow, RuleABISortKeys, "fx", true},
+		{allow, RuleABISortKeys, "other", false},
+		{allow.Without("order"), RuleABISortKeys, "fx", false},
+		{allow, RuleFailureStageAndKind, "any", true},
+		{allow, RuleRetriedAttempts, "fx", false},
+	}
+
+	for _, c := range excuses {
+		if got := c.allow.Excuses(c.rule, c.fixture); got != c.want {
+			t.Errorf("Excuses(%s, %s) = %v, want %v", c.rule, c.fixture, got, c.want)
+		}
+	}
+
+	if got := allow.ScopedRules(KindABI, "fx"); len(got) != 1 || got[0].ID != "order" {
+		t.Errorf("ScopedRules(abi, fx) = %v, want the order entry", got)
+	}
+
+	for _, c := range [][2]string{{KindABI, "other"}, {KindOutcome, "fx"}, {KindOutcome, "any"}} {
+		if got := allow.ScopedRules(c[0], c[1]); len(got) != 0 {
+			t.Errorf("ScopedRules(%s, %s) = %v, want none", c[0], c[1], got)
+		}
+	}
+}
+
+func TestAllowlistLookups(t *testing.T) {
+	allow := lookupAllowlist(t)
 
 	if got := allow.ABI("fx"); len(got) != 1 || got[0].ID != "key" {
 		t.Errorf("ABI(fx) = %v, want the key entry", got)
@@ -167,10 +218,6 @@ func TestAllowlistLookups(t *testing.T) {
 
 	if got := allow.ABI("other"); len(got) != 0 {
 		t.Errorf("ABI(other) = %v, want none", got)
-	}
-
-	if !allow.Excuses(RuleABISortKeys) || allow.Without("order").Excuses(RuleABISortKeys) {
-		t.Error("Excuses does not follow the order entry")
 	}
 
 	if _, err := allow.Outcome("nf-fails"); err != nil {
@@ -187,7 +234,7 @@ func TestAllowlistLookups(t *testing.T) {
 		t.Error("Without kept the entry")
 	}
 
-	if len(allow.Entries()) != 4 {
+	if len(allow.Entries()) != 5 {
 		t.Errorf("Without changed the original allowlist: %d entries", len(allow.Entries()))
 	}
 }

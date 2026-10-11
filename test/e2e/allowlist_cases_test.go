@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/test/divergence"
@@ -19,7 +20,8 @@ import (
 // file output the stage wrote as a symlink to a host file (as symlink_escape
 // does), a file output the stage wrote as a relative symlink to a link to a
 // host file, and a struct output whose producer wrote its keys unsorted (as
-// kitchen_sink's stats). It returns the pipestance and results dirs.
+// kitchen_sink's stats, so pairFixture). It returns the pipestance and results
+// dirs.
 func publishedPair(t *testing.T) (string, string) {
 	t.Helper()
 
@@ -52,6 +54,10 @@ func publishedPair(t *testing.T) (string, string) {
 
 	return ps, results
 }
+
+// pairFixture is the fixture publishedPair stands in for: one the
+// outs-json-object-key-order entry is scoped to.
+const pairFixture = "kitchen_sink"
 
 // mrpChainedOutput lays out under the pipestance ps what mrp publishes for a
 // stage output that is a relative symlink to a link to a host file: outs/
@@ -88,7 +94,7 @@ func TestRemovingAPublishedTreeEntryFailsTheComparison(t *testing.T) {
 	allow := mustAllowlist(t)
 	ps, results := publishedPair(t)
 
-	if reports, err := diffPublished(allow, ps, results); err != nil || len(reports) > 0 {
+	if reports, err := diffPublished(allow, pairFixture, ps, results); err != nil || len(reports) > 0 {
 		t.Fatalf("the checked-in allowlist leaves reports %q (err %v)", reports, err)
 	}
 
@@ -98,7 +104,7 @@ func TestRemovingAPublishedTreeEntryFailsTheComparison(t *testing.T) {
 		}
 
 		t.Run(e.ID, func(t *testing.T) {
-			reports, err := diffPublished(allow.Without(e.ID), ps, results)
+			reports, err := diffPublished(allow.Without(e.ID), pairFixture, ps, results)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,10 +116,46 @@ func TestRemovingAPublishedTreeEntryFailsTheComparison(t *testing.T) {
 	}
 }
 
+// TestScopedRuleEntryFailsWhereItExcusesNothing runs the published-output
+// comparison with the checked-in key-order entry: on a fixture outside its
+// scope the unsorted struct is a difference, and on its own fixture a pair
+// whose keys already agree fails as an entry that excuses nothing.
+func TestScopedRuleEntryFailsWhereItExcusesNothing(t *testing.T) {
+	allow := mustAllowlist(t)
+	ps, results := publishedPair(t)
+
+	cases := []struct {
+		name, fixture, nfStats, want string
+	}{
+		{"out_of_scope", "file_min", `{"count": 4, "mean": 2.5, "total": 10.0}`, "_outs json mismatch"},
+		{
+			"excuses_nothing", pairFixture, `{"count": 4, "total": 10.0, "mean": 2.5}`,
+			"allowlist entry outs-json-object-key-order excuses nothing in " + pairFixture,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"),
+				`{"chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "stats": `+tc.nfStats+`}`)
+
+			reports, err := diffPublished(allow, tc.fixture, ps, results)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := strings.Join(reports, "\n"); len(reports) != 1 || !strings.Contains(got, tc.want) {
+				t.Errorf("reports %q, want one containing %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestNormcmpAppliesTheAllowlist runs normcmp.py, the AWS lanes' outs JSON
 // comparator, on the outs JSON of publishedPair: it matches under the
-// checked-in allowlist, fails without any of its entries, and fails on a
-// number token change the allowlist does not excuse.
+// checked-in allowlist, fails without any of its entries or on a fixture
+// outside the key-order entry's scope, and fails on a number token change the
+// allowlist does not excuse.
 func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	requireTools(t, "python3")
 
@@ -127,19 +169,20 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	checkedIn := filepath.Join(root, "test", "e2e", allowlistFile)
 
 	cases := []struct {
-		name, nf, allowlist string
-		match               bool
+		name, fixture, nf, allowlist string
+		match                        bool
 	}{
-		{"checked_in", nfJSON, checkedIn, true},
-		{"number_token", intJSON, checkedIn, false},
-		{"without_relative_paths", nfJSON, allowlistWithout(t, checkedIn, "outs-json-relative-paths"), false},
-		{"without_key_order", nfJSON, allowlistWithout(t, checkedIn, "outs-json-object-key-order"), false},
-		{"without_published_symlinks", nfJSON, allowlistWithout(t, checkedIn, "published-symlinks-copied"), false},
+		{"checked_in", pairFixture, nfJSON, checkedIn, true},
+		{"key_order_out_of_scope", "file_min", nfJSON, checkedIn, false},
+		{"number_token", pairFixture, intJSON, checkedIn, false},
+		{"without_relative_paths", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "outs-json-relative-paths"), false},
+		{"without_key_order", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "outs-json-object-key-order"), false},
+		{"without_published_symlinks", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "published-symlinks-copied"), false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "normcmp.py"), mrpJSON, mrpOuts, tc.nf, tc.name, tc.allowlist)
+			cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "normcmp.py"), mrpJSON, mrpOuts, tc.nf, tc.fixture, tc.allowlist)
 			out, err := cmd.CombinedOutput()
 
 			var exit *exec.ExitError

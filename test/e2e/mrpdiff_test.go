@@ -590,7 +590,7 @@ func diffNextflow(t *testing.T, fixture, tmp string, flags []string) string {
 		t.Fatalf("nextflow: %v", err)
 	}
 
-	compareMrpToNextflow(t, tmp, proj)
+	compareMrpToNextflow(t, fixture, tmp, proj)
 
 	return proj
 }
@@ -613,12 +613,14 @@ func compareStageABI(t *testing.T, fixture, tmp, proj string) {
 }
 
 // compareMrpToNextflow diffs the published file tree (paths + contents) and
-// the outs JSON between an mrp pipestance at <tmp>/mrp and a Nextflow
-// project's results/, less what the allowlist excuses (published_test.go).
-func compareMrpToNextflow(t *testing.T, tmp, proj string) {
+// the outs JSON between fixture's mrp pipestance at <tmp>/mrp and a Nextflow
+// project's results/, less what the allowlist excuses, and requires every
+// issue-tracked rule entry scoped to fixture to excuse something
+// (published_test.go).
+func compareMrpToNextflow(t *testing.T, fixture, tmp, proj string) {
 	t.Helper()
 
-	reports, err := diffPublished(mustAllowlist(t), filepath.Join(tmp, "mrp"), filepath.Join(proj, "results"))
+	reports, err := diffPublished(mustAllowlist(t), fixture, filepath.Join(tmp, "mrp"), filepath.Join(proj, "results"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +657,7 @@ func TestMrpDiffFailureParity(t *testing.T) {
 			proj := transpile(t, tc.name)
 			nf, attempts := nextflowRunOutcome(t, proj)
 
-			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, attempts)...)
+			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts)...)
 			for _, r := range reports {
 				t.Error(r)
 			}

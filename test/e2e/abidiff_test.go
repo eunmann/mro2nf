@@ -70,7 +70,7 @@ type abiRules struct {
 
 // abiRulesFor collects the entries of allow that apply to fixture.
 func abiRulesFor(allow divergence.Allowlist, fixture string) abiRules {
-	r := abiRules{sortKeys: allow.Excuses(divergence.RuleABISortKeys)}
+	r := abiRules{sortKeys: allow.Excuses(divergence.RuleABISortKeys, fixture)}
 
 	for _, e := range allow.ABI(fixture) {
 		r.keys = append(r.keys, *e.ABI)
@@ -447,7 +447,7 @@ func diffStageABI(allow divergence.Allowlist, fixture, ps, proj string) ([]strin
 		return nil, err
 	}
 
-	for _, e := range allow.ABI(fixture) {
+	for _, e := range slices.Concat(allow.ABI(fixture), allow.ScopedRules(divergence.KindABI, fixture)) {
 		without, err := diffStageABIUnder(abiRulesFor(allow.Without(e.ID), fixture), ps, proj)
 		if err != nil {
 			return nil, err

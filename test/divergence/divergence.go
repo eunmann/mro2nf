@@ -93,7 +93,10 @@ const (
 )
 
 // Entry is one divergence. An entry with no issue is intentional and
-// permanent; one with an issue lasts until the issue is fixed.
+// permanent; one with an issue lasts until the issue is fixed. A fixture-scoped
+// matcher (an ABI matcher, or the comparator matcher of an issue-tracked entry)
+// fails the comparison of each fixture it names once it excuses nothing
+// there; an outcome matcher fails its case once mro2nf matches mrp.
 type Entry struct {
 	ID            string `json:"id"`
 	Kind          string `json:"kind"`
@@ -133,9 +136,17 @@ type Failure struct {
 }
 
 // ComparatorMatcher names the comparator rule the entry lets a comparator
-// apply.
+// apply. A permanent entry applies the rule on every fixture. An issue-tracked
+// entry applies it only on Fixtures, and the comparison of each of them fails
+// once the rule excuses nothing there, so the entry cannot outlive its bug.
 type ComparatorMatcher struct {
-	Rule string `json:"rule"`
+	Rule     string   `json:"rule"`
+	Fixtures []string `json:"fixtures,omitempty"`
+}
+
+// covers reports whether the matcher applies on fixture.
+func (m ComparatorMatcher) covers(fixture string) bool {
+	return len(m.Fixtures) == 0 || slices.Contains(m.Fixtures, fixture)
 }
 
 // Allowlist is a validated list of divergences.
@@ -199,11 +210,26 @@ func (a Allowlist) Without(id string) Allowlist {
 	return Allowlist{entries: slices.DeleteFunc(slices.Clone(a.entries), func(e Entry) bool { return e.ID == id })}
 }
 
-// Excuses reports whether an entry matches the comparator rule.
-func (a Allowlist) Excuses(rule string) bool {
+// Excuses reports whether an entry lets the comparison of fixture apply the
+// comparator rule.
+func (a Allowlist) Excuses(rule, fixture string) bool {
 	return slices.ContainsFunc(a.entries, func(e Entry) bool {
-		return e.Comparator != nil && e.Comparator.Rule == rule
+		return e.Comparator != nil && e.Comparator.Rule == rule && e.Comparator.covers(fixture)
 	})
+}
+
+// ScopedRules returns the issue-tracked comparator-rule entries of kind
+// that name fixture: those its comparison must find still excusing something.
+func (a Allowlist) ScopedRules(kind, fixture string) []Entry {
+	var out []Entry
+
+	for _, e := range a.entries {
+		if e.Kind == kind && e.Comparator != nil && slices.Contains(e.Comparator.Fixtures, fixture) {
+			out = append(out, e)
+		}
+	}
+
+	return out
 }
 
 // ABI returns the ABI-matcher entries scoped to fixture.
@@ -348,6 +374,10 @@ func (m ComparatorMatcher) validate(e Entry) error {
 		return fmt.Errorf("%w: %q names unknown comparator rule %q", ErrInvalid, e.ID, m.Rule)
 	case kind != e.Kind:
 		return fmt.Errorf("%w: %q is of kind %q but rule %q belongs to kind %q", ErrInvalid, e.ID, e.Kind, m.Rule, kind)
+	case e.Issue > 0 && (len(m.Fixtures) == 0 || slices.Contains(m.Fixtures, "")):
+		return fmt.Errorf("%w: issue-tracked rule entry %q names no fixtures where it must excuse a difference", ErrInvalid, e.ID)
+	case e.Issue == 0 && len(m.Fixtures) > 0:
+		return fmt.Errorf("%w: permanent rule entry %q applies on every fixture, so it takes no fixtures", ErrInvalid, e.ID)
 	default:
 		return nil
 	}

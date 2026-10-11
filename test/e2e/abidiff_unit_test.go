@@ -510,20 +510,37 @@ func (p abiPair) diff(t *testing.T, allow divergence.Allowlist, fixture string) 
 // TestRemovingAnABIEntryFailsTheComparison compares the consumer _args a real
 // mrp 4a558e7 run and an mro2nf run gave a stage whose struct input's producer
 // wrote {"b": 1, "a": 2}: mrp keeps the producer's order, mro2nf sorts it
-// (#366). The checked-in allowlist excuses that; without the entry the
-// comparison fails.
+// (#366). The checked-in allowlist excuses that on a fixture its entry names;
+// without the entry, or on a fixture outside its scope, the comparison fails,
+// and on its own fixture a pair whose orders agree fails as an entry that
+// excuses nothing.
 func TestRemovingAnABIEntryFailsTheComparison(t *testing.T) {
-	pair := writeABIPair(t,
-		`{"__mem_gb": 1, "__threads": 1, "__vmem_gb": 4, "m": {"y": 2, "z": 1}, "s": {"b": 1, "a": 2}}`,
-		`{"__mem_gb":1,"__threads":1,"__vmem_gb":4,"m":{"y":2,"z":1},"s":{"a":2,"b":1}}`)
+	const mrpArgs = `{"__mem_gb": 1, "__threads": 1, "__vmem_gb": 4, "m": {"y": 2, "z": 1}, "s": {"b": 1, "a": 2}}`
+
+	pair := writeABIPair(t, mrpArgs, `{"__mem_gb":1,"__threads":1,"__vmem_gb":4,"m":{"y":2,"z":1},"s":{"a":2,"b":1}}`)
+	agreeing := writeABIPair(t, mrpArgs, `{"__mem_gb":1,"__threads":1,"__vmem_gb":4,"m":{"y":2,"z":1},"s":{"b":1,"a":2}}`)
 	allow := mustAllowlist(t)
 
-	if got := pair.diff(t, allow, "struct_keys"); got != "" {
-		t.Errorf("the checked-in allowlist does not excuse the key order:\n%s", got)
+	cases := []struct {
+		name    string
+		pair    abiPair
+		allow   divergence.Allowlist
+		fixture string
+		want    string
+	}{
+		{"excused", pair, allow, "nested_struct", ""},
+		{"entry_removed", pair, allow.Without("abi-object-key-order"), "nested_struct", "CONS main"},
+		{"out_of_scope", pair, allow, "file_min", "CONS main"},
+		{"excuses_nothing", agreeing, allow, "nested_struct", "abi-object-key-order excuses nothing in nested_struct"},
 	}
 
-	if got := pair.diff(t, allow.Without("abi-object-key-order"), "struct_keys"); !strings.Contains(got, "CONS main") {
-		t.Errorf("without its entry the key order still compares equal: %q", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.pair.diff(t, tc.allow, tc.fixture)
+			if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
+				t.Errorf("reports %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

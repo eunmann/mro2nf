@@ -160,27 +160,39 @@ func TestMrpOutcomeCaseValidate(t *testing.T) {
 // TestOutcomeRulesNeedTheirEntries feeds the outcome comparator rules the
 // attempts of a real stage_raise run, where Nextflow tried RAISE three times:
 // the checked-in allowlist excuses the retries and the stage-and-kind
-// comparison, and removing either entry fails the case.
+// comparison, and removing either entry fails the case. The retry entry is
+// scoped: outside its fixtures the retries fail the case, and on stage_raise a
+// run with no retried task fails it as an entry that excuses nothing.
 func TestOutcomeRulesNeedTheirEntries(t *testing.T) {
 	attempts := []string{"BUILD_ENTRY_ARGS", "SR:STAGE_2_SR__RAISE", "SR:STAGE_2_SR__RAISE", "SR:STAGE_2_SR__RAISE"}
 	allow := mustAllowlist(t)
 
-	if got := outcomeRuleReports(allow, attempts); len(got) != 0 {
+	if got := outcomeRuleReports(allow, "stage_raise", attempts); len(got) != 0 {
 		t.Errorf("the checked-in allowlist leaves reports: %q", got)
 	}
 
-	for id, want := range map[string]string{
-		"retried-stage-errors":   "attempted SR:STAGE_2_SR__RAISE more than once",
-		"failure-report-details": "reads only each failure's stage and kind",
-	} {
-		got := strings.Join(outcomeRuleReports(allow.Without(id), attempts), "\n")
-		if !strings.Contains(got, want) {
-			t.Errorf("without %s the reports are %q, want one containing %q", id, got, want)
+	cases := []struct {
+		name     string
+		allow    divergence.Allowlist
+		fixture  string
+		attempts []string
+		want     string
+	}{
+		{"retry_entry_removed", allow.Without("retried-stage-errors"), "stage_raise", attempts, "attempted SR:STAGE_2_SR__RAISE more than once"},
+		{"stage_entry_removed", allow.Without("failure-report-details"), "stage_raise", attempts, "reads only each failure's stage and kind"},
+		{"retry_out_of_scope", allow, "assert_min", attempts, "attempted SR:STAGE_2_SR__RAISE more than once"},
+		{"retry_excuses_nothing", allow, "stage_raise", attempts[:2], "retried-stage-errors excuses nothing in stage_raise"},
+	}
+
+	for _, c := range cases {
+		got := outcomeRuleReports(c.allow, c.fixture, c.attempts)
+		if len(got) != 1 || !strings.Contains(got[0], c.want) {
+			t.Errorf("%s: reports %q, want one containing %q", c.name, got, c.want)
 		}
 	}
 
-	if got := outcomeRuleReports(allow.Without("retried-stage-errors"), attempts[:2]); len(got) != 0 {
-		t.Errorf("a run with no retried task needs no retry entry, got %q", got)
+	if got := outcomeRuleReports(allow, "assert_min", attempts[:2]); len(got) != 0 {
+		t.Errorf("a run outside the retry entry's scope with no retried task needs nothing, got %q", got)
 	}
 }
 

@@ -86,7 +86,7 @@ func assertGoldenTree(t *testing.T, name, fixture, proj string) {
 	}
 
 	var meta []string
-	if mustAllowlist(t).Excuses(divergence.RuleResultsMetadata) {
+	if mustAllowlist(t).Excuses(divergence.RuleResultsMetadata, fixture) {
 		meta = nfResultsMeta
 	}
 
@@ -141,9 +141,11 @@ func TestRecordGoldens(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	followLinks := mustAllowlist(t).Excuses(divergence.RuleMrpPublishedSymlinks)
+	allow := mustAllowlist(t)
 
 	for _, fixture := range recordableFixtures() {
+		followLinks := allow.Excuses(divergence.RuleMrpPublishedSymlinks, fixture)
+
 		t.Run(fixture, func(t *testing.T) {
 			t.Parallel()
 

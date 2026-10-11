@@ -379,11 +379,11 @@ func tail(b []byte, n int) string {
 
 // goldenJSON asserts the JSON document at gotPath equals the one at
 // goldenPath, number tokens and key order included, less the key order the
-// allowlist excuses.
+// allowlist excuses for the golden's fixture.
 func goldenJSON(t *testing.T, gotPath, goldenPath string) {
 	t.Helper()
 
-	sortKeys := mustAllowlist(t).Excuses(divergence.RuleOutsSortKeys)
+	sortKeys := mustAllowlist(t).Excuses(divergence.RuleOutsSortKeys, goldenFixture(t, goldenPath))
 
 	got, err := normalizeOutsFile(gotPath, nil, sortKeys)
 	if err != nil {
@@ -398,6 +398,21 @@ func goldenJSON(t *testing.T, gotPath, goldenPath string) {
 	if diff := cmp.Diff(indentJSON(want), indentJSON(got)); diff != "" {
 		t.Errorf("pipeline outs mismatch (-golden +got):\n%s", diff)
 	}
+}
+
+// goldenFixture is the fixture whose testdata/<fixture>/expected/ dir holds
+// goldenPath, where every golden JSON lives.
+func goldenFixture(t *testing.T, goldenPath string) string {
+	t.Helper()
+
+	rel, err := filepath.Rel(filepath.Join(root, "testdata"), goldenPath)
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+
+	if err != nil || len(parts) < 3 || parts[0] == ".." || parts[1] != "expected" {
+		t.Fatalf("golden %s is not under testdata/<fixture>/expected/", goldenPath)
+	}
+
+	return parts[0]
 }
 
 func readJSON(t *testing.T, path string, v any) {

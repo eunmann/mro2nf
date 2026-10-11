@@ -47,11 +47,30 @@ func Markdown(a Allowlist) string {
 			tests[i] = "`" + ev + "`"
 		}
 
-		fmt.Fprintf(&b, "| %s | ⚠️ %s, %s | **`%s`**: %s %s | %s |\n",
-			cell(e.Feature), e.Kind, tracking, e.ID, cell(e.Summary), cell(e.Justification), strings.Join(tests, ", "))
+		fmt.Fprintf(&b, "| %s | ⚠️ %s, %s | **`%s`**: %s %s%s | %s |\n",
+			cell(e.Feature), e.Kind, tracking, e.ID, cell(e.Summary), cell(e.Justification), scope(e), strings.Join(tests, ", "))
 	}
 
 	return b.String()
+}
+
+// scope renders the fixtures a fixture-scoped matcher applies on, or nothing
+// for a matcher that applies on every fixture.
+func scope(e Entry) string {
+	var fixtures []string
+
+	switch {
+	case e.ABI != nil:
+		fixtures = e.ABI.Fixtures
+	case e.Comparator != nil:
+		fixtures = e.Comparator.Fixtures
+	}
+
+	if len(fixtures) == 0 {
+		return ""
+	}
+
+	return " Scoped to `" + strings.Join(fixtures, "`, `") + "`."
 }
 
 // cell escapes the one character that ends a table cell even inside a code

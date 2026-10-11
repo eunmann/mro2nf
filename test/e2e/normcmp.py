@@ -14,7 +14,10 @@ entry for its comparator rule, as in the Go differential (published_test.go):
   outs-dir prefix is stripped from mrp's strings.
 - outs-json-sort-object-keys: object keys are sorted on both sides (#366).
 
-Usage: normcmp.py <mrp_outs_json> <mrp_outs_dir> <nf_outs_json> <name> [<allowlist>]
+An issue-tracked entry applies its rule only on the fixtures it names; the Go
+differential, not this script, fails it once it excuses nothing there.
+
+Usage: normcmp.py <mrp_outs_json> <mrp_outs_dir> <nf_outs_json> <fixture> [<allowlist>]
 """
 import json
 import os
@@ -43,10 +46,15 @@ def load(path):
         )
 
 
-def excused_rules(path):
+def excused_rules(path, fixture):
     with open(path) as f:
         doc = json.load(f)
-    return {e["comparator"]["rule"] for e in doc["divergences"] if "comparator" in e}
+    rules = set()
+    for e in doc["divergences"]:
+        matcher = e.get("comparator")
+        if matcher and fixture in matcher.get("fixtures", [fixture]):
+            rules.add(matcher["rule"])
+    return rules
 
 
 def read_link_abs(p):
@@ -113,7 +121,7 @@ def main():
     mrp_json, mrp_dir, nf_json, name = sys.argv[1:5]
     allowlist = sys.argv[5] if len(sys.argv) > 5 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "divergences.json")
-    rules = excused_rules(allowlist)
+    rules = excused_rules(allowlist, name)
     sort_keys = SORT_OBJECT_KEYS in rules
 
     mrp = render(norm(load(mrp_json), mrp_rewrite(rules, mrp_dir), sort_keys))

@@ -12,20 +12,43 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/google/go-cmp/cmp"
 )
 
-// diffPublished compares what the mrp pipestance ps published with mro2nf's
-// results dir, returning one report per differing part.
-func diffPublished(allow divergence.Allowlist, ps, results string) ([]string, error) {
+// diffPublished compares what the mrp pipestance ps of fixture published with
+// mro2nf's results dir, returning one report per differing part. It also
+// reports each issue-tracked rule entry scoped to fixture whose removal would
+// change nothing, so the entry cannot outlive the divergence it excuses.
+func diffPublished(allow divergence.Allowlist, fixture, ps, results string) ([]string, error) {
+	reports, err := diffPublishedUnder(allow, fixture, ps, results)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, e := range allow.ScopedRules(divergence.KindPublishedTree, fixture) {
+		without, err := diffPublishedUnder(allow.Without(e.ID), fixture, ps, results)
+		if err != nil {
+			return nil, err
+		}
+
+		if slices.Equal(without, reports) {
+			reports = append(reports, fmt.Sprintf("allowlist entry %s excuses nothing in %s; delete it or narrow its fixtures", e.ID, fixture))
+		}
+	}
+
+	return reports, nil
+}
+
+func diffPublishedUnder(allow divergence.Allowlist, fixture, ps, results string) ([]string, error) {
 	outs := filepath.Join(ps, "outs")
-	followLinks := allow.Excuses(divergence.RuleMrpPublishedSymlinks)
+	followLinks := allow.Excuses(divergence.RuleMrpPublishedSymlinks, fixture)
 
 	var meta []string
-	if allow.Excuses(divergence.RuleResultsMetadata) {
+	if allow.Excuses(divergence.RuleResultsMetadata, fixture) {
 		meta = nfResultsMeta
 	}
 
@@ -45,7 +68,7 @@ func diffPublished(allow divergence.Allowlist, ps, results string) ([]string, er
 		reports = append(reports, "published tree differs (-mrp +nextflow):\n"+diff)
 	}
 
-	r, err := diffOutsJSON(allow, ps, results)
+	r, err := diffOutsJSON(allow, fixture, ps, results)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +79,7 @@ func diffPublished(allow divergence.Allowlist, ps, results string) ([]string, er
 // diffOutsJSON compares mrp's outs JSON, which it writes to the top pipeline's
 // fork0 metadata (<pipestance>/<PIPELINE>/fork0/_outs), with mro2nf's
 // results/pipeline_outs.json.
-func diffOutsJSON(allow divergence.Allowlist, ps, results string) ([]string, error) {
+func diffOutsJSON(allow divergence.Allowlist, fixture, ps, results string) ([]string, error) {
 	// Glob results come back sorted, so [0] is deterministic.
 	matches, err := filepath.Glob(filepath.Join(ps, "*", "fork0", "_outs"))
 	if err != nil {
@@ -67,12 +90,12 @@ func diffOutsJSON(allow divergence.Allowlist, ps, results string) ([]string, err
 		return nil, fmt.Errorf("%w: no mrp fork0 _outs in %s", fs.ErrNotExist, ps)
 	}
 
-	rewrite, err := mrpOutsRewrite(allow, filepath.Join(ps, "outs"))
+	rewrite, err := mrpOutsRewrite(allow, fixture, filepath.Join(ps, "outs"))
 	if err != nil {
 		return nil, err
 	}
 
-	sortKeys := allow.Excuses(divergence.RuleOutsSortKeys)
+	sortKeys := allow.Excuses(divergence.RuleOutsSortKeys, fixture)
 
 	mrp, err := normalizeOutsFile(matches[0], rewrite, sortKeys)
 	if err != nil {
@@ -122,10 +145,10 @@ func normalizeOutsFile(path string, rewrite func(string) string, sortKeys bool) 
 // allowlist excuses: the target path mrp names for a symlink it published
 // becomes the link's own path, and the outs dir prefix is stripped from a
 // path, since mro2nf names published files relative to results/.
-func mrpOutsRewrite(allow divergence.Allowlist, outs string) (func(string) string, error) {
+func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(string) string, error) {
 	links := map[string]string{}
 
-	if allow.Excuses(divergence.RuleMrpPublishedSymlinks) {
+	if allow.Excuses(divergence.RuleMrpPublishedSymlinks, fixture) {
 		var err error
 
 		links, err = mrpPublishedLinks(outs)
@@ -135,7 +158,7 @@ func mrpOutsRewrite(allow divergence.Allowlist, outs string) (func(string) strin
 	}
 
 	prefix := ""
-	if allow.Excuses(divergence.RuleOutsRelativePaths) {
+	if allow.Excuses(divergence.RuleOutsRelativePaths, fixture) {
 		prefix = strings.TrimSuffix(outs, "/") + "/"
 	}
 

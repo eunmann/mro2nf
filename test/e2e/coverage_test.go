@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/test/divergence"
@@ -143,9 +144,10 @@ func TestEveryFixtureMrpDiffed(t *testing.T) {
 }
 
 // unappliedAllowlistEntries reports each outcome entry not named by exactly
-// one mrpOutcomeCases case (named maps an entry to the cases naming it), and
-// each ABI-matcher entry scoped to a fixture that is not in mrpDiffCases,
-// where diffStageABI would never apply it or report it stale.
+// one mrpOutcomeCases case (named maps an entry to the cases naming it), each
+// ABI-matcher entry scoped to a fixture that is not in mrpDiffCases, where
+// diffStageABI would never apply it or report it stale, and each issue-tracked
+// rule entry scoped to a fixture its comparison never runs.
 func unappliedAllowlistEntries(allow divergence.Allowlist, named map[string][]string) []string {
 	diffed := map[string]bool{}
 	for _, tc := range mrpDiffCases {
@@ -159,14 +161,40 @@ func unappliedAllowlistEntries(allow divergence.Allowlist, named map[string][]st
 			bad = append(bad, fmt.Sprintf("outcome divergence %s is named by the mrpOutcomeCases %v; name it from exactly one case", e.ID, named[e.ID]))
 		}
 
-		if e.ABI == nil {
-			continue
+		if e.ABI != nil {
+			for _, f := range e.ABI.Fixtures {
+				if !diffed[f] {
+					bad = append(bad, fmt.Sprintf("ABI divergence %s names fixture %q, which is not in mrpDiffCases", e.ID, f))
+				}
+			}
 		}
 
-		for _, f := range e.ABI.Fixtures {
-			if !diffed[f] {
-				bad = append(bad, fmt.Sprintf("ABI divergence %s names fixture %q, which is not in mrpDiffCases", e.ID, f))
-			}
+		if e.Comparator != nil {
+			bad = append(bad, unappliedRuleFixtures(e, diffed)...)
+		}
+	}
+
+	return bad
+}
+
+// unappliedRuleFixtures reports each fixture an issue-tracked rule entry
+// names that is not in the case table whose comparison applies the rule:
+// mrpOutcomeCases for an outcome rule, mrpDiffCases for the rest.
+func unappliedRuleFixtures(e divergence.Entry, diffed map[string]bool) []string {
+	table, cases := "mrpDiffCases", diffed
+
+	if e.Kind == divergence.KindOutcome {
+		table, cases = "mrpOutcomeCases", map[string]bool{}
+		for _, tc := range mrpOutcomeCases {
+			cases[tc.name] = true
+		}
+	}
+
+	var bad []string
+
+	for _, f := range e.Comparator.Fixtures {
+		if !cases[f] {
+			bad = append(bad, fmt.Sprintf("rule divergence %s names fixture %q, which is not in %s", e.ID, f, table))
 		}
 	}
 
@@ -181,8 +209,17 @@ func TestUnappliedAllowlistEntries(t *testing.T) {
 			`"abi": {"fixtures": ["` + fixture + `"], "file": "_args", "rule": "ignore-key", "key": "k"}}`
 	}
 
-	allow, err := divergence.Parse([]byte(`{"divergences": [` + entry("diffed", mrpDiffCases[0].name) + `, ` +
-		entry("misspelled", "kitchen_snk") + `, ` + entry("outcome", mrpOutcomeCases[0].name) + `]}`))
+	rule := func(id, kind, rule string, fixtures ...string) string {
+		return `{"id": "` + id + `", "kind": "` + kind + `", "feature": "f", "summary": "s", "justification": "j", "issue": 1, ` +
+			`"evidence": ["TestX"], "comparator": {"rule": "` + rule + `", "fixtures": ["` + strings.Join(fixtures, `", "`) + `"]}}`
+	}
+
+	diffed, failing := mrpDiffCases[0].name, mrpOutcomeCases[0].name
+
+	allow, err := divergence.Parse([]byte(`{"divergences": [` + entry("diffed", diffed) + `, ` +
+		entry("misspelled", "kitchen_snk") + `, ` + entry("outcome", failing) + `, ` +
+		rule("tree-rule", divergence.KindPublishedTree, divergence.RuleOutsSortKeys, diffed, failing) + `, ` +
+		rule("outcome-rule", divergence.KindOutcome, divergence.RuleRetriedAttempts, failing, diffed) + `]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +227,9 @@ func TestUnappliedAllowlistEntries(t *testing.T) {
 	got := unappliedAllowlistEntries(allow, nil)
 	want := []string{
 		`ABI divergence misspelled names fixture "kitchen_snk", which is not in mrpDiffCases`,
-		`ABI divergence outcome names fixture "` + mrpOutcomeCases[0].name + `", which is not in mrpDiffCases`,
+		`ABI divergence outcome names fixture "` + failing + `", which is not in mrpDiffCases`,
+		`rule divergence tree-rule names fixture "` + failing + `", which is not in mrpDiffCases`,
+		`rule divergence outcome-rule names fixture "` + diffed + `", which is not in mrpOutcomeCases`,
 	}
 
 	if diff := cmp.Diff(want, got); diff != "" {

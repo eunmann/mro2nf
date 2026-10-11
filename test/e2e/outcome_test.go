@@ -297,18 +297,31 @@ func (c mrpOutcomeCase) check(d *outcomeDivergence, mrp, nf runOutcome) []string
 	return bad
 }
 
-// outcomeRuleReports reports each outcome comparator rule a run needs that
-// allow has no entry for. attempts names the task of every attempt in the
-// Nextflow run's trace; a name seen twice is a retried task.
-func outcomeRuleReports(allow divergence.Allowlist, attempts []string) []string {
+// outcomeRuleReports reports each outcome comparator rule fixture's run needs
+// that allow has no entry for, and each issue-tracked rule entry scoped to
+// fixture that the run does not need. attempts names the task of every attempt
+// in the Nextflow run's trace; a name seen twice is a retried task.
+func outcomeRuleReports(allow divergence.Allowlist, fixture string, attempts []string) []string {
+	bad := outcomeRuleReportsUnder(allow, fixture, attempts)
+
+	for _, e := range allow.ScopedRules(divergence.KindOutcome, fixture) {
+		if slices.Equal(outcomeRuleReportsUnder(allow.Without(e.ID), fixture, attempts), bad) {
+			bad = append(bad, fmt.Sprintf("allowlist entry %s excuses nothing in %s; delete it or narrow its fixtures", e.ID, fixture))
+		}
+	}
+
+	return bad
+}
+
+func outcomeRuleReportsUnder(allow divergence.Allowlist, fixture string, attempts []string) []string {
 	var bad []string
 
-	if !allow.Excuses(divergence.RuleFailureStageAndKind) {
+	if !allow.Excuses(divergence.RuleFailureStageAndKind, fixture) {
 		bad = append(bad, "the outcome comparison reads only each failure's stage and kind, "+
 			"and no allowlist entry excuses leaving out its message, phase and chunk")
 	}
 
-	if retried := retriedTasks(attempts); len(retried) > 0 && !allow.Excuses(divergence.RuleRetriedAttempts) {
+	if retried := retriedTasks(attempts); len(retried) > 0 && !allow.Excuses(divergence.RuleRetriedAttempts, fixture) {
 		bad = append(bad, fmt.Sprintf("mro2nf attempted %s more than once, where mrp does not retry a stage error, "+
 			"and no allowlist entry excuses it", strings.Join(retried, ", ")))
 	}

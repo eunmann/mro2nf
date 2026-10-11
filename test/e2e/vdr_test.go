@@ -41,7 +41,7 @@ func TestMrpDiffVDR(t *testing.T) {
 				t.Errorf("mrp --vdrmode=%s deleted no file, so the comparison shows nothing about VDR", mode)
 			}
 
-			compareMrpToNextflow(t, tmp, proj)
+			compareMrpToNextflow(t, "vdr_volatile", tmp, proj)
 		})
 	}
 }

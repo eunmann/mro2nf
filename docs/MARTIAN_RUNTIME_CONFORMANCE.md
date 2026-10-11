@@ -337,8 +337,10 @@ and writes no `_args`/`_outs`. Every known divergence lives in one allowlist, `t
 difference only through an entry there: a key-scoped ABI entry names its
 fixtures, file, rule and key, and a normalization built into a comparator (such
 as sorting object keys while #366 is open) applies only while its entry exists.
-An entry with an issue is temporary, one without is intentional. A key-scoped
-entry that stops excusing anything in its fixtures fails the comparison, so it
+An entry with an issue is temporary, one without is intentional and applies on
+every fixture. A key-scoped entry, and an issue-tracked comparator-rule entry,
+names the fixtures where it must excuse a difference and applies only there;
+the comparison of a fixture it no longer excuses anything in fails, so it
 cannot outlive its bug. `make docs-divergences` renders the allowlist as the
 divergence table of [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md#divergences-from-mrp),
 and `make test` fails while the checked-in table is stale.
