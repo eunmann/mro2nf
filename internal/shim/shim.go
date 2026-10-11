@@ -5,6 +5,8 @@
 package shim
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -46,6 +49,16 @@ const (
 	// failure, letting the generated Nextflow terminate rather than retry it.
 	AssertExitCode = 42
 	bytesPerGB     = 1 << 30
+	// orphanStdioGrace is how long a phase waits, once the stage has exited,
+	// for its stdout/stderr to reach EOF. mrp hands a job real files
+	// (jobmanager_local.go executeLocal), so its Wait returns when the stage
+	// exits; the shim tees through pipes, which a background child the stage
+	// left running can hold open forever.
+	orphanStdioGrace = 2 * time.Second
+	// stderrTailBytes bounds the _stderr tail a failure message carries; the
+	// whole stream already reached the task log through the tee.
+	stderrTailBytes = 64 << 10
+	maxAlarmLine    = 1 << 20
 )
 
 var (
@@ -164,7 +177,7 @@ func RunSplit(
 		return nil, Resources{}, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "split", monitorLimits(eff, a)); err != nil {
+	if err := runPhase(ctx, meta, files, journal, a, "split", monitorLimits(eff, a), inv.Stage); err != nil {
 		return nil, Resources{}, err
 	}
 
@@ -193,7 +206,7 @@ func RunMain(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "main", monitorLimits(eff, a)); err != nil {
+	if err := runPhase(ctx, meta, files, journal, a, "main", monitorLimits(eff, a), inv.Stage); err != nil {
 		return nil, err
 	}
 
@@ -227,7 +240,7 @@ func RunJoin(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "join", monitorLimits(eff, a)); err != nil {
+	if err := runPhase(ctx, meta, files, journal, a, "join", monitorLimits(eff, a), inv.Stage); err != nil {
 		return nil, err
 	}
 
@@ -366,7 +379,30 @@ func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string,
 		}
 	}
 
-	return exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.WaitDelay = orphanStdioGrace
+
+	return cmd
+}
+
+// waitStage waits for the adapter to exit. Wait reports ErrWaitDelay when it
+// closed pipes a background process still held after orphanStdioGrace; mrjob
+// only logs such orphans (mrjob_unix.go reportChildren), so it is not a stage
+// failure.
+func waitStage(cmd *exec.Cmd) error {
+	err := cmd.Wait()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		fmt.Fprintf(os.Stderr, "mre: the stage exited leaving a background process holding its stdout/stderr; "+
+			"output it writes from now on is not captured\n")
+
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("wait for adapter: %w", err)
+	}
+
+	return nil
 }
 
 // threadEnvs returns jobmanagers/config.json's thread_envs: the variables mrp
@@ -454,7 +490,7 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	}
 
 	stop := beginMonitor(ctx, cmd, mon)
-	runErr := cmd.Wait()
+	runErr := waitStage(cmd)
 
 	stop() // join the monitor before reading its verdict; no sample in flight
 	mon.recordExitPeak(cmd.ProcessState)
@@ -479,12 +515,92 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	}
 
 	if runErr != nil {
-		tail, _ := os.ReadFile(filepath.Join(meta, "_stderr"))
-
-		return fmt.Errorf("adapter %s phase: %w: %s", phase, runErr, strings.TrimSpace(string(tail)))
+		return exitFailure(phase, meta, runErr)
 	}
 
 	return nil
+}
+
+// exitFailure is the error for an adapter that exited non-zero without a
+// stage-reported message, carrying the end of its _stderr.
+func exitFailure(phase, meta string, waitErr error) error {
+	return fmt.Errorf("adapter %s phase: %w: %s", phase, waitErr, stderrTail(filepath.Join(meta, "_stderr")))
+}
+
+// stderrTail returns at most the last stderrTailBytes of the file at path,
+// starting at a line boundary when it cuts, or "" if it cannot be read.
+func stderrTail(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+
+	off := max(info.Size()-stderrTailBytes, 0)
+	buf := make([]byte, info.Size()-off)
+
+	n, err := f.ReadAt(buf, off)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return ""
+	}
+
+	buf = buf[:n]
+	if off == 0 {
+		return strings.TrimSpace(string(buf))
+	}
+
+	if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+		off += int64(i + 1)
+		buf = buf[i+1:]
+	}
+
+	return fmt.Sprintf("[first %d bytes of _stderr omitted]\n%s", off, strings.TrimSpace(string(buf)))
+}
+
+// runPhase runs the adapter for one phase of stage, then surfaces the alarms
+// the phase raised, whatever its outcome. A failure names the stage and the
+// phase's metadata dir, which holds its _errors, _stdout and _stderr.
+func runPhase(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources, stage string) error {
+	err := runAdapter(ctx, meta, files, journal, a, phase, res)
+	forwardAlarms(meta, stage, phase)
+
+	if err != nil {
+		return fmt.Errorf("stage %s in %s: %w", stage, meta, err)
+	}
+
+	return nil
+}
+
+// forwardAlarms writes each line of the phase's _alarm (martian.alarm) to the
+// shim's stderr, prefixed for grepping the task logs, so they carry the alerts
+// mrp prints when a stage completes (core/stage.go doComplete).
+func forwardAlarms(meta, stage, phase string) {
+	path := filepath.Join(meta, "_alarm")
+
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	prefix := fmt.Sprintf("mre: ALARM: %s %s: ", stage, phase)
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, maxAlarmLine)
+
+	for sc.Scan() {
+		if line := strings.TrimRight(sc.Text(), "\r"); strings.TrimSpace(line) != "" {
+			fmt.Fprintln(os.Stderr, prefix+line)
+		}
+	}
+
+	if err := sc.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "%sread %s: %v\n", prefix, path, err)
+	}
 }
 
 // forwardStageLog surfaces a stage's Martian log (_log, written via
@@ -551,7 +667,7 @@ func (a *adapterIO) run(ctx context.Context, cmd *exec.Cmd, phase, meta string, 
 	a.errW = nil
 
 	stageErr, readErr := io.ReadAll(a.errR)
-	waitErr := cmd.Wait()
+	waitErr := waitStage(cmd)
 	stop() // join the monitor before reading its verdict; no sample in flight
 	mon.recordExitPeak(cmd.ProcessState)
 	forwardStageLog(meta)
@@ -586,9 +702,7 @@ func classifyAdapterResult(phase, meta string, stageErr []byte, readErr, waitErr
 	}
 
 	if waitErr != nil {
-		tail, _ := os.ReadFile(filepath.Join(meta, "_stderr"))
-
-		return fmt.Errorf("adapter %s phase: %w: %s", phase, waitErr, strings.TrimSpace(string(tail)))
+		return exitFailure(phase, meta, waitErr)
 	}
 
 	return nil
