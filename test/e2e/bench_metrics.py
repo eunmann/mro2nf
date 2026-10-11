@@ -6,6 +6,10 @@ backend-agnostic measure of how many times a benchmark's probe file is staged
 across the run's work dir:
 
   tasks       -- number of unique tasks (retried attempts collapsed; see parse_trace)
+  stage_tasks -- tasks of a stage-phase process (the --stages list); every
+                 other task is plumbing_tasks
+  mrp_jobs    -- the jobs real mrp runs for the same invocation, which
+                 stage_tasks must equal (bench_report.py gates it)
   processes   -- distinct process names (chunk tags collapsed)
   rchar/wchar -- aggregate characters read/written (trace; copy-volume proxy)
   edges       -- DAG edge count (-with-dag mermaid), the static process wiring
@@ -18,10 +22,10 @@ same generated pipeline's shape either way. A file written once and carried
 through k stages should trend toward multiplier 1 as the epic's data-plane work
 lands; a regression that reintroduces per-hop re-transfer pushes it back up.
 """
+import argparse
 import json
 import os
 import subprocess
-import sys
 
 # Nextflow renders trace sizes with binary (1024) unit steps (KB/MB/GB); the
 # absolute scale is irrelevant to the before/after comparison, only consistency.
@@ -41,32 +45,25 @@ def parse_size(s):
         return 0.0
 
 
-# A Nextflow process is PLUMBING (adds no Martian stage — pure data-plane
-# machinery the epic removes: bind resolution, map fork/merge, disable gating,
-# entry-arg build, terminal publish) when its base name matches one of these.
-# Everything else is a genuine stage phase (SPLIT/MAIN/JOIN or a single stage),
-# which DOES correspond to a Martian stage.
-_PLUMBING_PREFIXES = ("BIND_", "FORK_", "MERGE_", "DISABLE_")
-_PLUMBING_EXACT = ("PUBLISH", "BUILD_ENTRY_ARGS", "LAYOUT", "PUBLISH_LEAF")
-
-
-def is_plumbing(base):
-    return base.startswith(_PLUMBING_PREFIXES) or base in _PLUMBING_EXACT
-
-
-def parse_trace(path):
+def parse_trace(path, stages):
     """Aggregate the trace by unique task identity, not by row.
 
     The trace holds one row per ATTEMPT: under `errorStrategy retry` a
-    transient failure adds a FAILED row and then a fresh row for the retry, so
-    raw row counts would fail the `tasks` gate on any unrelated retry. The
-    harness requests the default trace fields, which carry no attempt column —
-    but the fully qualified task name (`WF:PROC (n)`; the generated processes
-    set no `tag`, so the index makes each task's name unique) IS the stable
-    task identity, and every attempt of one task repeats it. Keying rows by
-    that name and letting the last attempt win therefore counts each task
-    once, retried or not, and reads rchar/wchar from the attempt that
+    transient failure adds a FAILED row and then a fresh row for the retry.
+    The e2e harness fails such a run (#269), but a trace read outside it must
+    still count each task once.
+
+    The harness requests the default trace fields, which carry no attempt
+    column — but the fully qualified task name (`WF:PROC (n)`; the generated
+    processes set no `tag`, so the index makes each task's name unique) IS the
+    stable task identity, and every attempt of one task repeats it. Keying
+    rows by that name and letting the last attempt win therefore counts each
+    task once, retried or not, and reads rchar/wchar from the attempt that
     actually completed.
+
+    A task is plumbing unless its process is in `stages`, the stage-phase
+    process names of the lane's program: an allowlist of plumbing names would
+    count any new helper process as stage work.
     """
     by_name = {}
     with open(path) as h:
@@ -83,13 +80,13 @@ def parse_trace(path):
         # Strip the workflow path prefix (A:B:PROC) and the chunk tag " (n)".
         base = name.split(" (")[0].split(":")[-1]
         procs.add(base)
-        if is_plumbing(base):
+        if base not in stages:
             plumb_tasks += 1
         if "rchar" in idx:
             rchar += parse_size(cols[idx["rchar"]])
         if "wchar" in idx:
             wchar += parse_size(cols[idx["wchar"]])
-    plumbing = sorted(p for p in procs if is_plumbing(p))
+    plumbing = sorted(p for p in procs if p not in stages)
     return tasks, plumb_tasks, len(procs), int(rchar), int(wchar), plumbing
 
 
@@ -129,43 +126,56 @@ def count_refs(workdir, probe):
     return refs
 
 
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--name", required=True, help="lane (baseline key)")
+    p.add_argument("--trace", required=True, help="-with-trace TSV")
+    p.add_argument("--workdir", required=True, help="dir holding the run's work/")
+    p.add_argument("--probe", required=True, help="probe file marker string")
+    p.add_argument("--producers", required=True, type=int, help="tasks that write the probe file")
+    p.add_argument("--stages", required=True, help="JSON array of stage-phase process names")
+    p.add_argument("--dag", default="", help="-with-dag mermaid file")
+    p.add_argument("--mrp-jobs", required=True, type=int, help="jobs mrp runs for this invocation")
+    p.add_argument(
+        "--known-scaling",
+        type=int,
+        default=0,
+        help="open issue whose plumbing grows with this lane's width (0: none)",
+    )
+    return p.parse_args()
+
+
 def main():
-    name, trace, workdir, probe, producers = (
-        sys.argv[1],
-        sys.argv[2],
-        sys.argv[3],
-        sys.argv[4],
-        int(sys.argv[5]),
-    )
-    dag = sys.argv[6] if len(sys.argv) > 6 else ""
+    a = parse_args()
+    with open(a.stages) as h:
+        stages = frozenset(json.load(h))
 
-    tasks, plumb_tasks, procs, rchar, wchar, plumbing = parse_trace(trace)
-    refs = count_refs(workdir, probe)
-    mult = round(refs / producers, 3) if producers else float(refs)
+    tasks, plumb_tasks, procs, rchar, wchar, plumbing = parse_trace(a.trace, stages)
+    refs = count_refs(a.workdir, a.probe)
+    mult = round(refs / a.producers, 3) if a.producers else float(refs)
 
-    print(
-        json.dumps(
-            {
-                "name": name,
-                "tasks": tasks,
-                # plumbing = processes/tasks that add NO Martian stage (bind/fork/
-                # merge/disable/entry/publish) — the data-plane machinery Nextflow
-                # adds beyond Martian's DAG, which #16/#12 remove.
-                "plumbing_tasks": plumb_tasks,
-                "stage_tasks": tasks - plumb_tasks,
-                "processes": procs,
-                "stage_processes": procs - len(plumbing),
-                "plumbing_processes": len(plumbing),
-                "plumbing": plumbing,
-                "edges": count_edges(dag),
-                "rchar_bytes": rchar,
-                "wchar_bytes": wchar,
-                "refs": refs,
-                "producers": producers,
-                "multiplier": mult,
-            }
-        )
-    )
+    m = {
+        "name": a.name,
+        "tasks": tasks,
+        # plumbing = tasks that run no Martian stage phase — the data-plane
+        # machinery Nextflow adds beyond Martian's DAG.
+        "plumbing_tasks": plumb_tasks,
+        "stage_tasks": tasks - plumb_tasks,
+        "mrp_jobs": a.mrp_jobs,
+        "processes": procs,
+        "stage_processes": procs - len(plumbing),
+        "plumbing_processes": len(plumbing),
+        "plumbing": plumbing,
+        "edges": count_edges(a.dag),
+        "rchar_bytes": rchar,
+        "wchar_bytes": wchar,
+        "refs": refs,
+        "producers": a.producers,
+        "multiplier": mult,
+    }
+    if a.known_scaling:
+        m["known_scaling"] = a.known_scaling
+    print(json.dumps(m))
 
 
 if __name__ == "__main__":

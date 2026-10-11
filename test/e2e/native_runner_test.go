@@ -133,7 +133,7 @@ func TestNativeRunnerExitContract(t *testing.T) {
 		t.Parallel()
 
 		proj := transpile(t, "assert_min", "-native-runner")
-		if err := runNextflow(t, proj, "-with-trace", "trace.txt"); err == nil {
+		if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
 			t.Fatal("run succeeded; an assertion must fail the pipeline")
 		}
 
@@ -150,7 +150,7 @@ func TestNativeRunnerExitContract(t *testing.T) {
 		t.Parallel()
 
 		proj := transpile(t, "flaky_retry", "-native-runner", "-monitor")
-		if err := runNextflow(t, proj, "-with-trace", "trace.txt"); err != nil {
+		if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err != nil {
 			t.Fatalf("run failed; the retry should have recovered it: %v", err)
 		}
 

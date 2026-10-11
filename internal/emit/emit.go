@@ -354,7 +354,7 @@ func writeDisableArtifacts(prog *ir.Program, outDir, specDir string) error {
 				return err
 			}
 
-			if err := shim.WriteNullBundle(filepath.Join(nullsDir, qualify(p.Name, c.Name))); err != nil {
+			if err := shim.WriteNullBundle(filepath.Join(nullsDir, Qualify(p.Name, c.Name))); err != nil {
 				return fmt.Errorf("write null bundle: %w", err)
 			}
 		}
@@ -667,9 +667,9 @@ func includeBoundNames(body string) []string {
 }
 
 // checkProcessCollisions rejects a generated project whose emitted process names
-// collide. qualify() length-prefixes only the pipeline segment, so it is
+// collide. Qualify() length-prefixes only the pipeline segment, so it is
 // injective on the (pipeline, call) pair but NOT once an inventory suffix is
-// appended: qualify(P,C)+"_K" == qualify(P,C+"_K"), and a fused call X's
+// appended: Qualify(P,C)+"_K" == Qualify(P,C+"_K"), and a fused call X's
 // _MN/_JN aliases equal a sibling call X_MN's bare fused name. Two failure modes
 // follow, both of which leave Nextflow to fail opaquely at `nextflow run`:
 //

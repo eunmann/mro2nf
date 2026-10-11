@@ -17,7 +17,7 @@ func PlainStageSuffixes() []string {
 }
 
 // FusedCallSuffixes returns every suffix on a fused per-call process name,
-// STAGE_<n>_<pipeline>__<call> (see fusedName/qualify): the bare fused
+// STAGE_<n>_<pipeline>__<call> (see fusedName/Qualify): the bare fused
 // bind+main / native scatter / fused chain, the fused bind+split _SP with its
 // _MN/_JN phase include-aliases, and the keyed fused bind+main _K (#99).
 func FusedCallSuffixes() []string {
@@ -25,7 +25,7 @@ func FusedCallSuffixes() []string {
 }
 
 // ScatterCallSuffixes returns every suffix on a fork-named process,
-// FORK_<n>_<pipeline>__<call> (see forkName/qualify), that runs the stage's
+// FORK_<n>_<pipeline>__<call> (see forkName/Qualify), that runs the stage's
 // own main: the keyed element scatter _KS (#99). The bare FORK_ name and its
 // _K variant are forkbind helpers, not stage compute.
 func ScatterCallSuffixes() []string {

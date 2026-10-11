@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,6 +81,77 @@ func TestStageProcessNameInventory(t *testing.T) {
 	}
 }
 
+// TestStageProcessNames pins stageProcessNames, the list the bench gate
+// counts as stage tasks, against the independently built inventory: every
+// name it returns is a stage-code (non-helper) inventory name, and every
+// stage-code process the emitter actually generates is in it.
+func TestStageProcessNames(t *testing.T) {
+	fixtures := []struct {
+		name string
+		opts emit.Options
+	}{
+		{"split_test", emit.Options{}},
+		{"fork_min", emit.Options{Native: true}},
+		{"map_pipe_split", emit.Options{}},
+		{"map_pipe", emit.Options{}},
+		{"map_pipe_nested", emit.Options{}},
+		{"chain_fuse3", emit.Options{FuseChains: true}},
+	}
+
+	for _, fx := range fixtures {
+		prog := lowerNamesFixture(t, fx.name)
+		inv := inventoryNames(prog)
+		got := map[string]bool{}
+
+		for _, name := range stageProcessNames(prog) {
+			got[name] = true
+
+			if tag, ok := inv[name]; !ok || tag == "helper" {
+				t.Errorf("%s: StageProcessNames returned %q, inventory tag %q", fx.name, name, tag)
+			}
+		}
+
+		for _, name := range emittedProcessNames(t, fx.name, prog, fx.opts) {
+			if tag := inv[name]; tag != "helper" && !got[name] {
+				t.Errorf("%s: emitted stage process %q (tag %q) missing from stageProcessNames", fx.name, name, tag)
+			}
+		}
+	}
+}
+
+// stageProcessNames returns, sorted, every process name the emitter can give a
+// task that runs a stage's own code: per stage the plain family, per pipeline
+// call the fused family and the keyed element scatter. Built from the exported
+// suffix inventory and emit.Qualify, it is the list bench_test.go's
+// writeStageProcesses counts as stage tasks.
+func stageProcessNames(prog *ir.Program) []string {
+	var names []string
+
+	for stage := range prog.Stages {
+		for _, s := range emit.PlainStageSuffixes() {
+			names = append(names, stage+s)
+		}
+	}
+
+	for _, p := range prog.Pipelines {
+		for _, c := range p.Calls {
+			q := emit.Qualify(p.Name, c.Name)
+
+			for _, s := range emit.FusedCallSuffixes() {
+				names = append(names, "STAGE_"+q+s)
+			}
+
+			for _, s := range emit.ScatterCallSuffixes() {
+				names = append(names, "FORK_"+q+s)
+			}
+		}
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
 // lowerNamesFixture parses and lowers a testdata fixture (external-package
 // twin of plan_test's lowerFixture).
 func lowerNamesFixture(t *testing.T, fixture string) *ir.Program {
@@ -144,7 +216,7 @@ func inventoryNames(prog *ir.Program) map[string]string {
 	return names
 }
 
-// qualifyName mirrors emit's unexported qualify(); the overrides selector
+// qualifyName mirrors emit.Qualify; the overrides selector
 // prefixes (STAGE_[0-9]+_.+__ / FORK_[0-9]+_.+__) assume exactly this shape,
 // so a change to it must fail this test.
 func qualifyName(pipeline, call string) string {

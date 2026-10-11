@@ -27,7 +27,7 @@ func TestInvalidOutputFailsLikeMrp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			proj := transpile(t, "missing_struct_key", tc.flags...)
 
-			if err := runNextflow(t, proj, "-with-trace", "trace.txt"); err == nil {
+			if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
 				t.Fatal("run succeeded; a stage output missing a declared struct key must fail it")
 			}
 
@@ -56,7 +56,7 @@ func TestAssertTerminatesWithoutRetry(t *testing.T) {
 
 	proj := transpile(t, "assert_min")
 
-	if err := runNextflow(t, proj, "-with-trace", "trace.txt"); err == nil {
+	if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
 		t.Fatal("run succeeded; an assertion must fail the pipeline")
 	}
 
@@ -89,7 +89,7 @@ func TestStageOutputLinkOutsideWorkFails(t *testing.T) {
 
 			proj := transpile(t, "symlink_escape", append([]string{"-confine-outputs"}, flags...)...)
 
-			if err := runNextflow(t, proj); err == nil {
+			if err := runNextflowAllowingFailedAttempts(t, proj); err == nil {
 				t.Fatal("run succeeded; an output linked outside the work dir must fail it")
 			}
 
@@ -174,7 +174,7 @@ func TestOrdinaryFailureRetriesWithEscalatedMemory(t *testing.T) {
 
 	proj := transpile(t, "flaky_retry", "-monitor")
 
-	if err := runNextflow(t, proj, "-with-trace", "trace.txt"); err != nil {
+	if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err != nil {
 		t.Fatalf("run failed; the retry should have recovered it: %v", err)
 	}
 

@@ -441,7 +441,7 @@ func TestCLITypedOverrides(t *testing.T) {
 
 		proj := transpile(t, fixture)
 
-		err := runNextflow(t, proj, "--b", "True")
+		err := runNextflowAllowingFailedAttempts(t, proj, "--b", "True")
 		if err == nil {
 			t.Fatal("--b True must fail the run, not reach the stage as a string")
 		}
@@ -542,7 +542,7 @@ func TestEntryFileGlobCharName(t *testing.T) {
 
 			writeFileT(t, filepath.Join(proj, "params.json"), string(params))
 
-			if err := runNextflow(t, proj, "-params-file", "params.json"); err == nil {
+			if err := runNextflowAllowingFailedAttempts(t, proj, "-params-file", "params.json"); err == nil {
 				t.Fatal("an override naming a file Nextflow would mis-stage must fail the run")
 			}
 
@@ -585,7 +585,7 @@ func TestEntryFileRemoteURL(t *testing.T) {
 
 		proj, hits := remoteReadsProject(t, content)
 
-		if err := runNextflow(t, proj, "-params-file", "params.json"); err == nil {
+		if err := runNextflowAllowingFailedAttempts(t, proj, "-params-file", "params.json"); err == nil {
 			t.Fatal("an http:// file override must fail the run")
 		}
 
@@ -944,7 +944,7 @@ func TestNativeRejectsOverride(t *testing.T) {
 	requireTools(t, "nextflow", "java")
 
 	proj := transpile(t, "entry_file", "-native")
-	if err := runNextflow(t, proj, "--reads", "/tmp/whatever.txt"); err == nil {
+	if err := runNextflowAllowingFailedAttempts(t, proj, "--reads", "/tmp/whatever.txt"); err == nil {
 		t.Error("-native must reject a launch-time override of a baked entry arg")
 	}
 }

@@ -91,13 +91,19 @@ func TestMartianBinMissing(t *testing.T) {
 func runMrp(t *testing.T, bin, fixture, tmp string) {
 	t.Helper()
 
-	dir := filepath.Join(root, "testdata", fixture)
+	runMrpAt(t, bin, filepath.Join(root, "testdata", fixture), "pipeline.mro", tmp)
+}
+
+// runMrpAt is runMrp for the entry .mro of a fixture at an arbitrary dir (e.g.
+// a bench/ width variant).
+func runMrpAt(t *testing.T, bin, dir, mro, tmp string) {
+	t.Helper()
 
 	// --vdrmode=disable keeps intermediate stage files, which the stage-ABI diff
 	// hashes through the paths in each invocation's _args/_outs; mrp's default
 	// rolling VDR deletes them once their consumers finish. Preflight stages run
 	// (no --nopreflight) because mro2nf runs them, so their invocations pair up.
-	cmd := exec.Command(filepath.Join(bin, "mrp"), filepath.Join(dir, "pipeline.mro"), "mrp",
+	cmd := exec.Command(filepath.Join(bin, "mrp"), filepath.Join(dir, mro), "mrp",
 		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode=disable")
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "MROPATH="+dir)
@@ -107,7 +113,7 @@ func runMrp(t *testing.T, bin, fixture, tmp string) {
 	_ = os.WriteFile(filepath.Join(tmp, "mrp.log"), out, 0o644)
 
 	if err != nil {
-		t.Fatalf("mrp %s: %v\n%s", fixture, err, tail(out, 12))
+		t.Fatalf("mrp %s: %v\n%s", filepath.Join(dir, mro), err, tail(out, 12))
 	}
 }
 
@@ -284,6 +290,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "map_file"},
 	{name: "map_file_keyed"},
 	{name: "map_split_file"},
+	// #270: the determinism fixture's fork and chunk gathers match mrp's
+	// order, not completion order.
+	{name: "jitter_wide"},
 	// #217: a split phase creates a custom-filetype file and returns it as a
 	// per-chunk arg the JOIN reads. Verifies output + native-runner parity;
 	// the object-store staging path itself is guarded by the AWS e2e lane and

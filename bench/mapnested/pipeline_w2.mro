@@ -1,0 +1,6 @@
+@include "common.mro"
+
+call OUTER(
+    ss = [1, 2],
+    ls = [1, 2],
+)

@@ -867,7 +867,7 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 	// output bundle — downstream reads it exactly as it would a runtime skip.
 	case kindFoldedOff:
 		fmt.Fprintf(b, "    ch_%s = Channel.value(%s)\n", c.Name,
-			nullBundle("${projectDir}/nulls/"+qualify(pipeline, c.Name)))
+			nullBundle("${projectDir}/nulls/"+Qualify(pipeline, c.Name)))
 
 	// The chain consumer runs the combined producer+consumer process off pipeargs.
 	case kindFusedChain:
@@ -1259,7 +1259,7 @@ func fuseableDisabledStage(c ir.Call, p *ir.Pipeline, prog *ir.Program) (*ir.Sta
 }
 
 func fusedName(pipeline, call string) string {
-	return "STAGE_" + qualify(pipeline, call)
+	return "STAGE_" + Qualify(pipeline, call)
 }
 
 // The fused split emits a per-call bind+split process plus per-call aliased
@@ -1499,7 +1499,7 @@ func genMappedWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee strin
 	if c.Disabled != nil {
 		// On the disabled branch FORK is skipped, so MERGE produces nothing; mix
 		// in the null bundle. .first() makes the merged result reusable.
-		nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+		nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
 		// The skip item's arity varies with the gate (native reads add 0/2 extra
 		// tuple slots), and the null bundle ignores it — so accept any shape.
 		fmt.Fprintf(b, "    s_%[1]s = g_%[1]s.skip.map { %[2]s }\n", c.Name, nullBundle(nulls))
@@ -1569,7 +1569,7 @@ func genMappedDisableGate(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCt
 func genDisabledWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, callee string, g genCtx) {
 	pipeline := p.Name
 	bind := bindName(pipeline, c.Name)
-	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
 
 	if src, field, ok := nativeDisableGate(c); ok {
 		genGatedBindDisabledWiring(b, p, c, callee, g, src, field, bind, nulls)
@@ -1640,7 +1640,7 @@ func genFusedDisabledWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g gen
 	pipeline := p.Name
 	bind := bindName(pipeline, c.Name)
 	fused := fusedName(pipeline, c.Name)
-	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
 	src, field, _ := nativeDisableGate(c)
 
 	if src == "pa" {
@@ -1679,7 +1679,7 @@ func genFusedDisabledWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g gen
 func genFusedDisabledSplitWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call) {
 	pipeline := p.Name
 	fused := fusedName(pipeline, c.Name)
-	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
 	src, field, _ := nativeDisableGate(c)
 
 	if src == "pa" {
@@ -1767,7 +1767,7 @@ func calleeModule(prog *ir.Program, callable string) (string, string) {
 // callAlias is the per-call workflow alias, unique within a pipeline, so each
 // call (including repeated/aliased calls) is an independent instance.
 func callAlias(pipeline, call string) string {
-	return "wf_" + qualify(pipeline, call)
+	return "wf_" + Qualify(pipeline, call)
 }
 
 // disableBindings builds a one-entry binding list for a call's disabled ref.
@@ -1776,7 +1776,7 @@ func disableBindings(c ir.Call) []ir.Binding {
 }
 
 func disableName(pipeline, call string) string {
-	return "DISABLE_" + qualify(pipeline, call)
+	return "DISABLE_" + Qualify(pipeline, call)
 }
 
 // bindCallArgs renders the actual-argument list for a BIND invocation: the
@@ -1796,23 +1796,23 @@ func bindCallArgsPa(bindings []ir.Binding, pa, specName string) string {
 	return foldCallArgs(genCtx{}, nil, bindings, pa, specName)
 }
 
-// qualify builds a collision-free, valid-identifier suffix from a (pipeline,
+// Qualify builds a collision-free, valid-identifier suffix from a (pipeline,
 // call) pair. The length prefix disambiguates pairs whose names themselves
 // contain the "__" separator (e.g. pipeline "A"/call "B__C" vs "A__B"/"C").
-func qualify(pipeline, call string) string {
+func Qualify(pipeline, call string) string {
 	return strconv.Itoa(len(pipeline)) + "_" + pipeline + "__" + call
 }
 
 func bindName(pipeline, call string) string {
-	return "BIND_" + qualify(pipeline, call)
+	return "BIND_" + Qualify(pipeline, call)
 }
 
 func forkName(pipeline, call string) string {
-	return "FORK_" + qualify(pipeline, call)
+	return "FORK_" + Qualify(pipeline, call)
 }
 
 func mergeName(pipeline, call string) string {
-	return "MERGE_" + qualify(pipeline, call)
+	return "MERGE_" + Qualify(pipeline, call)
 }
 
 // calleeOutNames returns the comma-joined output parameter names of a callable.

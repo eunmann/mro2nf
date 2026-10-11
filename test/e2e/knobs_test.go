@@ -65,18 +65,7 @@ func TestResumeCachesEverything(t *testing.T) {
 				t.Fatalf("-resume rerun: %v", err)
 			}
 
-			rows := readTrace(t, filepath.Join(proj, "trace2.txt"))
-			if len(rows) == 0 {
-				t.Fatal("empty trace on -resume rerun, want >0 rows")
-			}
-
-			// Any non-CACHED row is a task that re-executed, i.e. an unstable
-			// cache key.
-			for _, row := range rows {
-				if row.Status != "CACHED" {
-					t.Errorf("task %s re-executed under -resume (status %s), want CACHED", row.Name, row.Status)
-				}
-			}
+			assertAllCached(t, readTrace(t, filepath.Join(proj, "trace2.txt")))
 		})
 	}
 }

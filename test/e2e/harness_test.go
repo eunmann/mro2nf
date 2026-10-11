@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -242,9 +243,88 @@ func transpileInto(dir, mro, proj string, extra ...string) error {
 }
 
 // runNextflow runs `nextflow run main.nf <args...>` in proj, always capturing
-// the combined output to proj/run.log. On error the log tail is attached to
-// the returned error so failures are never silent.
+// the combined output to proj/run.log and tracing every task attempt (to the
+// caller's -with-trace file, or a temp one). On error the log tail is attached
+// to the returned error so failures are never silent. A run that succeeds
+// still fails if any attempt in its trace did not complete: the generated
+// config retries failed tasks, so a flaky failure that passes on retry would
+// otherwise keep the suite green (#269).
 func runNextflow(t *testing.T, proj string, args ...string) error {
+	t.Helper()
+
+	args, trace, err := traceArgs(proj, args, filepath.Join(t.TempDir(), "trace.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := execNextflow(t, proj, args); err != nil {
+		return err
+	}
+
+	return checkAttempts(readTrace(t, trace))
+}
+
+// runNextflowAllowingFailedAttempts is runNextflow for a test that makes
+// tasks fail on purpose — a retry, an assertion, a run that must fail — so
+// its own assertions on the run and the trace decide, not the failed-attempt
+// check.
+func runNextflowAllowingFailedAttempts(t *testing.T, proj string, args ...string) error {
+	t.Helper()
+
+	return execNextflow(t, proj, args)
+}
+
+// errTraceArg reports a -with-trace flag runNextflow cannot locate a file for.
+var errTraceArg = errors.New("-with-trace needs a file name")
+
+// traceArgs returns args with a -with-trace flag and the trace file the run
+// will write: the caller's own -with-trace file (relative to proj, where
+// Nextflow runs), or else fallback, appended as a new flag.
+func traceArgs(proj string, args []string, fallback string) ([]string, string, error) {
+	for i, a := range args {
+		if a != "-with-trace" {
+			continue
+		}
+
+		if i+1 == len(args) || strings.HasPrefix(args[i+1], "-") {
+			return nil, "", fmt.Errorf("runNextflow %v: %w", args, errTraceArg)
+		}
+
+		if filepath.IsAbs(args[i+1]) {
+			return args, args[i+1], nil
+		}
+
+		return args, filepath.Join(proj, args[i+1]), nil
+	}
+
+	return append(slices.Clone(args), "-with-trace", fallback), fallback, nil
+}
+
+// errFailedAttempt reports a task attempt that did not complete in a run
+// that succeeded.
+var errFailedAttempt = errors.New("task attempt did not complete")
+
+// checkAttempts fails on any trace row that is neither COMPLETED nor CACHED
+// (a FAILED attempt a retry recovered, an ABORTED one), naming each.
+func checkAttempts(rows []traceRow) error {
+	var bad []string
+
+	for _, r := range rows {
+		if r.Status != "COMPLETED" && r.Status != "CACHED" {
+			bad = append(bad, fmt.Sprintf("%s %s (exit %d)", r.Name, r.Status, r.Exit))
+		}
+	}
+
+	if len(bad) > 0 {
+		return fmt.Errorf("%w: the run succeeded but %d attempt(s) failed, which a retry hid: %s",
+			errFailedAttempt, len(bad), strings.Join(bad, "; "))
+	}
+
+	return nil
+}
+
+// execNextflow runs Nextflow in proj with args as given.
+func execNextflow(t *testing.T, proj string, args []string) error {
 	t.Helper()
 	shardSkip(t)
 

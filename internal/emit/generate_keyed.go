@@ -11,7 +11,7 @@ import (
 // keyedCallAlias is the per-call alias under which a callee's fork-key-threaded
 // variant (wf_<callable>_map) is imported into a keyed pipeline.
 func keyedCallAlias(pipeline, call string) string {
-	return "wfk_" + qualify(pipeline, call)
+	return "wfk_" + Qualify(pipeline, call)
 }
 
 // genKeyedPipeIncludes imports the fork-key-threaded variant of each callee so a
@@ -324,7 +324,7 @@ func genKeyedCallBody(body *strings.Builder, pipeline string, c ir.Call, cp call
 	}
 
 	dis := disableName(pipeline, c.Name)
-	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
 	fmt.Fprintf(body, "    %s_K(%s)\n", dis, keyedBindCall(disableBindings(c), dis))
 	fmt.Fprintf(body, `    g_%[1]s = %[2]s_K.out.join(%[3]s_K.out).branch { key, args, d ->
         def off = Mro2nf.disabled(d)
@@ -403,7 +403,7 @@ func genKeyedMappedCallBody(body *strings.Builder, pipeline string, c ir.Call, c
 // channel expression (the FORKBIND input with the disable-flag bundle stripped)
 // and emits sk_<call>, the keyed null bundles for skipped outer forks.
 func genKeyedMappedDisableGate(body *strings.Builder, pipeline string, c ir.Call, cp callPlan) string {
-	nulls := "${projectDir}/nulls/" + qualify(pipeline, c.Name)
+	nulls := "${projectDir}/nulls/" + Qualify(pipeline, c.Name)
 
 	// Native gating (#59, Lever 2) for a self.<field> flag: read it from the
 	// per-fork pipeline-args bundle (row[1]) — no keyed DISABLE task, no join.

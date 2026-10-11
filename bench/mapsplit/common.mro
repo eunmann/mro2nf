@@ -1,0 +1,49 @@
+filetype txt;
+
+# Benchmark: the Cell Ranger per-sample shape — a map call over a sub-pipeline
+# whose body is a split stage that writes one file per sample. mrp runs
+# N * (split + 2 chunks + join) jobs. Run at two widths (pipeline_w4.mro,
+# pipeline_w8.mro): the plumbing task count must not grow with the sample
+# count; until #255 lands it grows by the per-fork keyed BIND, which the
+# baseline records as known scaling.
+
+stage ALIGN(
+    in  int sample,
+    in  int nlanes,
+    out txt aligned,
+    src py  "stages/align",
+) split (
+    in  int lane,
+    out int laneval,
+)
+
+pipeline PERSAMPLE(
+    in  int sample,
+    in  int nlanes,
+    out txt aligned,
+)
+{
+    call ALIGN(
+        sample = self.sample,
+        nlanes = self.nlanes,
+    )
+
+    return (
+        aligned = ALIGN.aligned,
+    )
+}
+
+pipeline COHORT(
+    in  int[] samples,
+    out txt[] bams,
+)
+{
+    map call PERSAMPLE(
+        sample = split self.samples,
+        nlanes = 2,
+    )
+
+    return (
+        bams = PERSAMPLE.aligned,
+    )
+}

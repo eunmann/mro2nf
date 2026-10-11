@@ -1,0 +1,5 @@
+@include "common.mro"
+
+call COHORT(
+    samples = [1, 2, 3, 4],
+)
