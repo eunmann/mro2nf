@@ -67,6 +67,7 @@ var mrpUnrunnable = map[string]string{
 	"assert_min":           "fails by design: the stage asserts, for the failure-path test",
 	"flaky_retry":          "fails by design: the stage fails until Nextflow's retry escalates its memory; mrp does not retry it",
 	"missing_struct_key":   "fails by design: UP's struct output lacks a declared key, for the output-validation failure test",
+	"symlink_escape":       "fails by design under -confine-outputs: a stage output links outside its task, for the confinement failure test",
 	"entry_file":           mrpUnresolvedInput,
 	"entry_filearr":        mrpUnresolvedInput,
 	"entry_struct_file":    mrpUnresolvedInput,
