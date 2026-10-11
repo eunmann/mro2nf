@@ -11,6 +11,43 @@
       "comparator": {"rule": "abi-sort-object-keys"}
     },
     {
+      "id": "outs-json-object-key-order",
+      "kind": "published-tree",
+      "feature": "struct and map values in the pipeline outs JSON",
+      "summary": "pipeline_outs.json writes struct and map values with their keys sorted, where mrp's _outs keeps the order their producer wrote them in.",
+      "justification": "The same Go-map re-encoding as abi-object-key-order: kitchen_sink's stats struct is published as {count, mean, total} by mro2nf and {count, total, mean} by mrp 4a558e7. The outs JSON comparisons, against mrp and against the goldens, sort object keys while this entry exists.",
+      "issue": 366,
+      "evidence": ["TestMrpDiff/kitchen_sink", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
+      "comparator": {"rule": "outs-json-sort-object-keys"}
+    },
+    {
+      "id": "outs-json-relative-paths",
+      "kind": "published-tree",
+      "feature": "file paths in the pipeline outs JSON",
+      "summary": "pipeline_outs.json names each published file by its path relative to results/, where mrp's _outs names it by its absolute path in the pipestance's outs/.",
+      "justification": "results/ may be a local dir, an S3 prefix or a HealthOmics output dir, so mro2nf writes paths that hold wherever the tree is published. The comparisons strip mrp's outs/ prefix.",
+      "evidence": ["TestMrpDiff/file_min", "TestRemovingAPublishedTreeEntryFailsTheComparison", "TestNormcmpAppliesTheAllowlist"],
+      "comparator": {"rule": "outs-json-strip-outs-prefix"}
+    },
+    {
+      "id": "results-metadata-files",
+      "kind": "published-tree",
+      "feature": "metadata files at the root of the published tree",
+      "summary": "mro2nf publishes pipeline_outs.json and manifest.json.gz at the root of results/; mrp's outs/ holds neither, since mrp writes its outs JSON to <pipestance>/<PIPELINE>/fork0/_outs and writes no manifest.",
+      "justification": "A Nextflow run has no pipestance to hold the outs JSON, so it is published beside the outputs, with a machine-readable index of them (manifest.json.gz). The tree comparisons drop the two files at the root only, so a stage output of either name deeper in the tree still compares.",
+      "evidence": ["TestMrpDiff", "TestGolden", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
+      "comparator": {"rule": "drop-results-metadata"}
+    },
+    {
+      "id": "published-symlinks-copied",
+      "kind": "published-tree",
+      "feature": "a published output that is a symlink",
+      "summary": "Where mrp publishes a symlink in outs/, because the stage's output was itself a symlink or lies outside the pipestance, mro2nf publishes a copy of the target, and mrp's _outs names the link target where pipeline_outs.json names the published path.",
+      "justification": "mrp links outs/ to the target and reports the target (martian/core/post_process.go moveOutFile, copyOutSymlink). A publish dir may be an object store with no symlinks, and a host target is unreachable from an isolated worker, so mro2nf stages and publishes the content (#332). The comparison reads an mrp-published symlink by its target's content and maps the target path in mrp's _outs to the link's path.",
+      "evidence": ["TestMrpDiff/symlink_escape", "TestStageOutputLinkOutsideWorkCopiedLocally", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
+      "comparator": {"rule": "follow-mrp-published-symlinks"}
+    },
+    {
       "id": "runtime-null-disable-gate-aborts",
       "kind": "outcome",
       "feature": "`using (disabled = ref)` resolving to null at runtime",

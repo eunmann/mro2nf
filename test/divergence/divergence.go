@@ -50,6 +50,19 @@ const (
 	// RuleABISortKeys compares the objects in _args and _outs with their keys
 	// sorted.
 	RuleABISortKeys = "abi-sort-object-keys"
+	// RuleOutsSortKeys compares the objects in the pipeline outs JSON with their
+	// keys sorted.
+	RuleOutsSortKeys = "outs-json-sort-object-keys"
+	// RuleOutsRelativePaths strips mrp's outs-dir prefix from the paths in its
+	// outs JSON.
+	RuleOutsRelativePaths = "outs-json-strip-outs-prefix"
+	// RuleResultsMetadata drops mro2nf's own metadata files from the root of
+	// the published results/ tree.
+	RuleResultsMetadata = "drop-results-metadata"
+	// RuleMrpPublishedSymlinks compares a symlink mrp published by its target's
+	// content, and the target path mrp's outs JSON names for it as the link's
+	// path.
+	RuleMrpPublishedSymlinks = "follow-mrp-published-symlinks"
 	// RuleRetriedAttempts lets a stage task fail more than once before its
 	// last failure counts.
 	RuleRetriedAttempts = "collapse-retried-attempts"
@@ -63,9 +76,13 @@ const (
 // must match it.
 func ComparatorRules() map[string]string {
 	return map[string]string{
-		RuleABISortKeys:         KindABI,
-		RuleRetriedAttempts:     KindOutcome,
-		RuleFailureStageAndKind: KindOutcome,
+		RuleABISortKeys:          KindABI,
+		RuleOutsSortKeys:         KindPublishedTree,
+		RuleOutsRelativePaths:    KindPublishedTree,
+		RuleResultsMetadata:      KindPublishedTree,
+		RuleMrpPublishedSymlinks: KindPublishedTree,
+		RuleRetriedAttempts:      KindOutcome,
+		RuleFailureStageAndKind:  KindOutcome,
 	}
 }
 

@@ -21,14 +21,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
 )
 
 // martianBin resolves the Martian bin dir and, like requireTools, skips the
@@ -127,18 +125,20 @@ func execMrp(bin, dir, mro, tmp string) ([]byte, error) {
 	return out, nil
 }
 
-// mrpOutsMeta and nfResultsMeta are the runners' own metadata files at the
-// top of a published tree: they describe the outputs rather than being
-// outputs, so tree comparisons drop them — at the root only, because a stage
-// may publish a file of the same name deeper in the tree.
-var (
-	mrpOutsMeta   = []string{"_outs", "manifest.json.gz"}
-	nfResultsMeta = []string{"pipeline_outs.json", "manifest.json.gz"}
-)
+// nfResultsMeta are mro2nf's own metadata files at the root of results/. mrp
+// keeps its outs JSON outside outs/ and writes no manifest, so a tree compared
+// with mrp's drops them only under the allowlist's results-metadata rule, and
+// only at the root, because a stage may publish a file of the same name deeper
+// in the tree.
+var nfResultsMeta = []string{"pipeline_outs.json", "manifest.json.gz"}
 
 // emptyDirMark is hashTree's value for an empty directory, keyed by its path
 // plus a trailing slash so it cannot collide with a file's digest entry.
 const emptyDirMark = "<empty dir>"
+
+// linkMark prefixes publishedTree's value for a file reached through a
+// symlink, so a published link and a published copy of its target differ.
+const linkMark = "<symlink> "
 
 // hashTree maps relpath -> sha256 for every file under dir, plus relpath/ ->
 // emptyDirMark for every empty directory, skipping the rootMeta names at the
@@ -148,9 +148,20 @@ const emptyDirMark = "<empty dir>"
 func hashTree(t *testing.T, dir string, rootMeta ...string) map[string]string {
 	t.Helper()
 
+	tree, err := publishedTree(dir, true, rootMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return tree
+}
+
+// publishedTree is hashTree's map, except that unless followLinks a file
+// reached through a symlink has linkMark before its digest.
+func publishedTree(dir string, followLinks bool, rootMeta []string) (map[string]string, error) {
 	tree := map[string]string{}
 
-	err := walkPublished(dir, rootMeta, func(rel, path string, emptyDir bool) error {
+	err := walkPublished(dir, rootMeta, func(rel, path string, emptyDir, linked bool) error {
 		if emptyDir {
 			tree[rel+"/"] = emptyDirMark
 
@@ -165,13 +176,17 @@ func hashTree(t *testing.T, dir string, rootMeta ...string) map[string]string {
 		sum := sha256.Sum256(data)
 		tree[rel] = hex.EncodeToString(sum[:])
 
+		if linked && !followLinks {
+			tree[rel] = linkMark + tree[rel]
+		}
+
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk %s: %v", dir, err)
+		return nil, fmt.Errorf("walk %s: %w", dir, err)
 	}
 
-	return tree
+	return tree, nil
 }
 
 // errUnpublishable reports a tree entry that is neither a file nor a
@@ -180,23 +195,24 @@ var errUnpublishable = errors.New("not a regular file or directory")
 
 // walkPublished calls visit for every file and every empty directory under
 // dir (following symlinks), skipping the rootMeta names directly under dir.
-// An absent dir visits nothing.
-func walkPublished(dir string, rootMeta []string, visit func(rel, path string, emptyDir bool) error) error {
+// linked reports that the entry or a directory above it, below dir, is a
+// symlink. An absent dir visits nothing.
+func walkPublished(dir string, rootMeta []string, visit func(rel, path string, emptyDir, linked bool) error) error {
 	if !fileExists(dir) {
 		return nil
 	}
 
-	return walkPublishedRel(dir, "", rootMeta, visit)
+	return walkPublishedRel(dir, "", false, rootMeta, visit)
 }
 
-func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path string, emptyDir bool) error) error {
+func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit func(rel, path string, emptyDir, linked bool) error) error {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return err
 	}
 
 	if len(entries) == 0 && rel != "" {
-		return visit(rel, path, true)
+		return visit(rel, path, true, linked)
 	}
 
 	for _, e := range entries {
@@ -205,6 +221,7 @@ func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path 
 		}
 
 		child, childRel := filepath.Join(path, e.Name()), filepath.Join(rel, e.Name())
+		childLinked := linked || e.Type()&fs.ModeSymlink != 0
 
 		info, err := os.Stat(child)
 		if err != nil {
@@ -213,9 +230,9 @@ func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path 
 
 		switch {
 		case info.IsDir():
-			err = walkPublishedRel(child, childRel, nil, visit)
+			err = walkPublishedRel(child, childRel, childLinked, nil, visit)
 		case info.Mode().IsRegular():
-			err = visit(childRel, child, false)
+			err = visit(childRel, child, false, childLinked)
 		default:
 			err = fmt.Errorf("%s (%s): %w", child, info.Mode(), errUnpublishable)
 		}
@@ -226,31 +243,6 @@ func walkPublishedRel(path, rel string, rootMeta []string, visit func(rel, path 
 	}
 
 	return nil
-}
-
-// stripPathPrefix normalizes Martian's _outs values: mrp writes absolute
-// paths into the pipestance outs/ dir, mro2nf writes the same paths relative
-// to its results/ dir, so strings are stripped of the outs-dir prefix
-// recursively. (The Go port of normcmp.py.)
-func stripPathPrefix(v any, prefix string) any {
-	switch x := v.(type) {
-	case string:
-		return strings.TrimPrefix(x, prefix)
-	case []any:
-		for i := range x {
-			x[i] = stripPathPrefix(x[i], prefix)
-		}
-
-		return x
-	case map[string]any:
-		for k := range x {
-			x[k] = stripPathPrefix(x[k], prefix)
-		}
-
-		return x
-	default:
-		return v
-	}
 }
 
 // mrpDiffCase is one fixture of the differential, run from its pipeline.mro
@@ -463,6 +455,10 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "flaky_retry"},
 	// #324: a split returning no chunks still runs the join.
 	{name: "split_no_chunks"},
+	// #332: the stage's output is a symlink to a host file, which mrp
+	// publishes as a link and mro2nf as a copy (allowlist entry
+	// published-symlinks-copied).
+	{name: "symlink_escape"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -606,38 +602,18 @@ func compareStageABI(t *testing.T, fixture, tmp, proj string) {
 }
 
 // compareMrpToNextflow diffs the published file tree (paths + contents) and
-// the path-normalized _outs JSON between an mrp pipestance at <tmp>/mrp and
-// a Nextflow project's results/.
+// the outs JSON between an mrp pipestance at <tmp>/mrp and a Nextflow
+// project's results/, less what the allowlist excuses (published_test.go).
 func compareMrpToNextflow(t *testing.T, tmp, proj string) {
 	t.Helper()
 
-	mrpOuts := filepath.Join(tmp, "mrp", "outs")
-	nfOuts := filepath.Join(proj, "results")
-
-	mrpTree := hashTree(t, mrpOuts, mrpOutsMeta...)
-	nfTree := hashTree(t, nfOuts, nfResultsMeta...)
-
-	if diff := cmp.Diff(mrpTree, nfTree); diff != "" {
-		t.Errorf("published tree differs (-mrp +nextflow):\n%s", diff)
+	reports, err := diffPublished(mustAllowlist(t), filepath.Join(tmp, "mrp"), filepath.Join(proj, "results"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// Martian rewrites the published outs into the TOP pipeline's fork0
-	// metadata (<pipestance>/<PIPELINE>/fork0/_outs); outs/ holds only the
-	// file tree. Glob results come back sorted, so [0] is deterministic.
-	matches, err := filepath.Glob(filepath.Join(tmp, "mrp", "*", "fork0", "_outs"))
-	if err != nil || len(matches) == 0 {
-		t.Fatalf("no mrp fork0 _outs (glob error: %v)", err)
-	}
-
-	var mrpJSON, nfJSON any
-
-	readJSON(t, matches[0], &mrpJSON)
-	readJSON(t, filepath.Join(nfOuts, "pipeline_outs.json"), &nfJSON)
-
-	mrpJSON = stripPathPrefix(mrpJSON, strings.TrimSuffix(mrpOuts, "/")+"/")
-
-	if diff := cmp.Diff(mrpJSON, nfJSON); diff != "" {
-		t.Errorf("_outs json mismatch (-mrp(normalized) +nextflow):\n%s", diff)
+	for _, r := range reports {
+		t.Error(r)
 	}
 }
 

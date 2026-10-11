@@ -56,17 +56,17 @@ func TestEveryFixtureIsExercised(t *testing.T) {
 }
 
 // mrpUnrunnable are the pipeline fixtures neither TestMrpDiff nor
-// TestMrpDiffFailureParity can compare with real mrp, each with the reason:
-// mrp cannot run them, or its result holds a host path no other run can give.
-// A fixture mrp fails by design belongs in mrpOutcomeCases instead. The golden
-// suite's *_override cases are no fixtures of their own: a launch-time
-// -params-file override has no mrp invocation to diff against.
+// TestMrpDiffFailureParity can compare with real mrp, each with the reason mrp
+// cannot run them. A fixture mrp fails by design belongs in mrpOutcomeCases
+// instead, and a difference mrp's run shows belongs in the divergence
+// allowlist (divergences.json), not here. The golden suite's *_override cases
+// are no fixtures of their own: a launch-time -params-file override has no mrp
+// invocation to diff against.
 var mrpUnrunnable = map[string]string{
 	"exec_min":             "mrp never completes it (killed after 180 s): the exec stub writes no journal entries",
 	"mixed_adapters":       "mrp never completes it (killed after 180 s): its stubs speak mre's wrapped-adapter contract, not mrp's journal protocol",
 	"map_pipe_nested":      "mrp rejects it: OUTER.INNER.DBL's merge could not match a reference to a specific fork",
 	"map_pipe_nested_file": "emit-only fixture with no stage code: mrp cannot import stages/dbl",
-	"symlink_escape":       mrpHostLinkOut,
 	"entry_file":           mrpUnresolvedInput,
 	"entry_filearr":        mrpUnresolvedInput,
 	"entry_struct_file":    mrpUnresolvedInput,
@@ -78,9 +78,6 @@ var mrpUnrunnable = map[string]string{
 
 const mrpUnresolvedInput = "mrp passes the invocation's relative input/ path through verbatim and the stage opens it " +
 	"from its own job dir, where it does not resolve"
-
-const mrpHostLinkOut = "mrp runs it, but its _outs value for the linked output is the link target's absolute host path; " +
-	"the published tree and the stage ABI match"
 
 // TestEveryFixtureMrpDiffed fails unless every pipeline fixture is in exactly
 // one of mrpDiffCases (outputs diffed), mrpOutcomeCases (run outcome diffed)

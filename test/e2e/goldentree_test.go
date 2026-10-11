@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -75,7 +76,8 @@ func jsonOnlyGolden(name, fixture string) bool {
 
 // assertGoldenTree requires a run's published results/ tree to equal the
 // mrp-recorded expected/outs/ of golden case name: no file missing, none
-// extra, every file's sha256 equal, and the same empty directories.
+// extra, every file's sha256 equal, the same empty directories, and no
+// published symlink, less what the allowlist excuses.
 func assertGoldenTree(t *testing.T, name, fixture, proj string) {
 	t.Helper()
 
@@ -83,8 +85,17 @@ func assertGoldenTree(t *testing.T, name, fixture, proj string) {
 		return
 	}
 
+	var meta []string
+	if mustAllowlist(t).Excuses(divergence.RuleResultsMetadata) {
+		meta = nfResultsMeta
+	}
+
 	want := goldenTree(t, filepath.Join(root, "testdata", fixture))
-	got := hashTree(t, filepath.Join(proj, "results"), nfResultsMeta...)
+
+	got, err := publishedTree(filepath.Join(proj, "results"), false, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("published results/ differs from mrp's recorded %s/%s (-mrp +nextflow):\n%s",
@@ -130,6 +141,8 @@ func TestRecordGoldens(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	followLinks := mustAllowlist(t).Excuses(divergence.RuleMrpPublishedSymlinks)
+
 	for _, fixture := range recordableFixtures() {
 		t.Run(fixture, func(t *testing.T) {
 			t.Parallel()
@@ -137,17 +150,22 @@ func TestRecordGoldens(t *testing.T) {
 			tmp := t.TempDir()
 			runMrp(t, bin, fixture, tmp)
 
-			if err := recordTree(filepath.Join(tmp, "mrp", "outs"), filepath.Join(root, "testdata", fixture)); err != nil {
+			if err := recordTree(filepath.Join(tmp, "mrp", "outs"), filepath.Join(root, "testdata", fixture), followLinks); err != nil {
 				t.Fatalf("record %s: %v", fixture, err)
 			}
 		})
 	}
 }
 
+// errRecordLink reports a symlink in mrp's outs dir that the recorder cannot
+// record because no allowlist entry excuses reading it as a copy.
+var errRecordLink = errors.New("mrp published a symlink")
+
 // recordTree replaces fixtureDir's goldenTreeDir with copies of the files
-// under mrp's outs dir src, minus mrp's root metadata, resolving symlinks to
-// their contents, and its goldenEmptyDirs with src's empty directories.
-func recordTree(src, fixtureDir string) error {
+// under mrp's outs dir src, and its goldenEmptyDirs with src's empty
+// directories. A file mrp published through a symlink is recorded as its
+// content only when followLinks, since mro2nf publishes a copy.
+func recordTree(src, fixtureDir string, followLinks bool) error {
 	dst := filepath.Join(fixtureDir, filepath.FromSlash(goldenTreeDir))
 	manifest := filepath.Join(fixtureDir, filepath.FromSlash(goldenEmptyDirs))
 
@@ -159,14 +177,17 @@ func recordTree(src, fixtureDir string) error {
 
 	var empty []string
 
-	err := walkPublished(src, mrpOutsMeta, func(rel, path string, emptyDir bool) error {
-		if emptyDir {
+	err := walkPublished(src, nil, func(rel, path string, emptyDir, linked bool) error {
+		switch {
+		case linked && !followLinks:
+			return fmt.Errorf("%w at %s and no allowlist entry excuses recording its content", errRecordLink, rel)
+		case emptyDir:
 			empty = append(empty, filepath.ToSlash(rel)+"\n")
 
 			return nil
+		default:
+			return recordFile(path, filepath.Join(dst, rel))
 		}
-
-		return recordFile(path, filepath.Join(dst, rel))
 	})
 	if err != nil || len(empty) == 0 {
 		return err

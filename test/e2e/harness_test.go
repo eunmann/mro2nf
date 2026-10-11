@@ -25,6 +25,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -376,17 +377,25 @@ func tail(b []byte, n int) string {
 	return "    " + strings.Join(lines, "\n    ")
 }
 
-// goldenJSON asserts the JSON document at gotPath structurally equals the one
-// at goldenPath.
+// goldenJSON asserts the JSON document at gotPath equals the one at
+// goldenPath, number tokens and key order included, less the key order the
+// allowlist excuses.
 func goldenJSON(t *testing.T, gotPath, goldenPath string) {
 	t.Helper()
 
-	var got, want any
+	sortKeys := mustAllowlist(t).Excuses(divergence.RuleOutsSortKeys)
 
-	readJSON(t, gotPath, &got)
-	readJSON(t, goldenPath, &want)
+	got, err := normalizeOutsFile(gotPath, nil, sortKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if diff := cmp.Diff(want, got); diff != "" {
+	want, err := normalizeOutsFile(goldenPath, nil, sortKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(indentJSON(want), indentJSON(got)); diff != "" {
 		t.Errorf("pipeline outs mismatch (-golden +got):\n%s", diff)
 	}
 }
@@ -405,8 +414,8 @@ func readJSON(t *testing.T, path string, v any) {
 }
 
 // decodeJSONNumber decodes JSON with UseNumber so numbers keep their exact token
-// (json.Number), not float64: a plain json.Unmarshal would make the golden and
-// mrp-differential comparators blind to an int-vs-float regression (21 vs 21.0)
+// (json.Number), not float64: a plain json.Unmarshal would make a comparator
+// blind to an int-vs-float regression (21 vs 21.0)
 // and to >2^53 integer precision loss (the literals_edge / src_args fixtures
 // target exactly those ranges). The producer keeps the token via UseNumber
 // (cmd/mre/bundle.go rawToMap); a comparison must decode BOTH sides this way, so

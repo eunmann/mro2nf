@@ -318,8 +318,9 @@ and fixed. Only 7–9 remain, as documented, bounded divergences.
 
 `make test-mrp-diff` (the Go `TestMrpDiff` suite) runs each fixture through **real
 `mrp`** and the transpiled Nextflow, then compares the published `outs/` tree —
-every output file's path (relative to the outs dir) and its content hash — and
-the path-normalized `_outs` JSON. This validates the whole transpile + runtime +
+every output file's path (relative to the outs dir), its content hash, and
+whether it was published as a symlink — and the `_outs` JSON
+(`test/e2e/published_test.go`). This validates the whole transpile + runtime +
 publish path against Martian itself, not a hand-written golden.
 
 It also diffs the **stage ABI**: every split, main (per chunk and fork) and join

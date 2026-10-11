@@ -4,8 +4,9 @@
 # On an isolated container target (-confine) staging the target would upload a
 # host file, so the run must fail loudly, naming the output and the target; on
 # the local target it succeeds, with the target copied, not hard-linked, into
-# the bundle. Exercised by test/e2e/failure_test.go (behavioral; no mrp golden:
-# mrp's _outs value is the link target's host path).
+# the bundle. Exercised by test/e2e/failure_test.go and by the mrp differential,
+# where the allowlist entry published-symlinks-copied excuses mrp's published
+# link and the link target's host path its _outs names.
 filetype txt;
 
 stage LINK_OUT(
