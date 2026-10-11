@@ -230,9 +230,9 @@ jobs:
   # run; the seeds still running and a shrink cut to GEN_SHRINK_EVALS program
   # runs then fit in GEN_TIMEOUT. The shrunk repros are the artifact.
   #
-  # It is a discovery job, so neither mark nor report needs it: a divergence
-  # goes to GEN_FINDINGS, not the job's status, and from there to the one
-  # tracking issue below; the job fails only when the harness does.
+  # A divergence goes to GEN_FINDINGS, not the job's status, and from there to
+  # the one tracking issue below, so the job fails, blocking the pass record
+  # and opening the failure issue, only when the harness does.
   gendiff:
     name: Nightly gen-diff
     needs: gate
@@ -294,7 +294,7 @@ jobs:
   # implicit success(), so it runs unless a job failed or the gate skipped them all.
   mark:
     name: Nightly pass record
-    needs: [gate, e2e, docker, smoke, scale]
+    needs: [gate, e2e, docker, smoke, scale, gendiff]
     if: ${{ !failure() && !cancelled() && needs.gate.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -311,7 +311,7 @@ jobs:
   # another branch may be trying out its own broken nightly.
   report:
     name: Nightly failure report
-    needs: [gate, e2e, docker, smoke, scale, mark]
+    needs: [gate, e2e, docker, smoke, scale, gendiff, mark]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

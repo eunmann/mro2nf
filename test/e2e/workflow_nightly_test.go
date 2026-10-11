@@ -85,10 +85,9 @@ func TestNightlyFailureReport(t *testing.T) {
 	)
 
 	for _, j := range jobs {
-		switch {
-		case j.cond == nightlyFailureGate:
+		if j.cond == nightlyFailureGate {
 			reporters = append(reporters, j)
-		case !slices.Contains(nightlyDiscoveryJobs, j.id):
+		} else {
 			others = append(others, j.id)
 		}
 	}
@@ -103,7 +102,7 @@ func TestNightlyFailureReport(t *testing.T) {
 	slices.Sort(others)
 
 	if diff := cmp.Diff(others, needs); diff != "" {
-		t.Errorf("report job %q must need every job but the discovery jobs (-want +got):\n%s", r.id, diff)
+		t.Errorf("report job %q must need every other job (-want +got):\n%s", r.id, diff)
 	}
 
 	job := readWorkflow(t, nightlyWorkflow).get("jobs").get(r.id)
@@ -200,11 +199,6 @@ const (
 // job is daily.
 var nightlyHeavyJobs = []string{"scale", "gendiff"}
 
-// nightlyDiscoveryJobs report what they find to their own issue, so neither
-// the pass record nor the failure report needs them: a finding must neither
-// block a pass nor open the "Nightly CI is failing" issue.
-var nightlyDiscoveryJobs = []string{"gendiff"}
-
 // nightlyMarkGate lets the pass record run beside the other tier's skipped
 // jobs, which the implicit success() would treat as a reason to skip it.
 const nightlyMarkGate = "${{ !failure() && !cancelled() && needs.gate.outputs.run == 'true' }}"
@@ -242,13 +236,8 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 	}
 
 	for _, s := range suites {
-		discovery := slices.Contains(nightlyDiscoveryJobs, s)
-
-		switch needed := slices.Contains(mark.needs, s); {
-		case !needed && !discovery:
+		if !slices.Contains(mark.needs, s) {
 			t.Errorf("mark job does not need suite job %q, so a pass could be recorded without it", s)
-		case needed && discovery:
-			t.Errorf("mark job needs discovery job %q, so a finding would block the pass record", s)
 		}
 	}
 
