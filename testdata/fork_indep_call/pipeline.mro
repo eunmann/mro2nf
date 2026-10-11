@@ -15,6 +15,9 @@
 #   OUTER  the map call sits in every fork of another map call: INDEP reads
 #          the outer fork's element, so it runs once per outer fork under
 #          the inner map call's gate, and NOTE once
+#   QNEST  the nested map is over a pipeline Q, whose NOTE runs once, not
+#          once per inner fork
+#   QRT    the same over a runtime [] (Q's NOTE still runs once)
 stage ECHO(
     in  int v,
     out int r,
@@ -74,6 +77,43 @@ pipeline SUB(
     )
 }
 
+pipeline Q(
+    in  int v,
+    out int r,
+)
+{
+    call ECHO(
+        v = self.v,
+    )
+
+    call NOTE()
+
+    return (
+        r = ECHO.r,
+    )
+}
+
+pipeline QSUB(
+    in  int   x,
+    in  int[] ys,
+    out int   fx,
+    out Q[]   q,
+)
+{
+    call ECHO as DEP(
+        v = self.x,
+    )
+
+    map call Q as QE(
+        v = split self.ys,
+    )
+
+    return (
+        fx = DEP.r,
+        q  = QE,
+    )
+}
+
 pipeline PLAIN(
     in  int[] xs,
     out SUB[] subs,
@@ -121,6 +161,8 @@ pipeline TOP(
     out SUB[]   nest,
     out SUB[]   plain,
     out SUB[][] outer,
+    out QSUB[]  qnest,
+    out QSUB[]  qrt,
 )
 {
     call GEN()
@@ -195,6 +237,16 @@ pipeline TOP(
         xs = split [[1, 2], [3]],
     )
 
+    map call QSUB as QNEST(
+        x  = split self.xs,
+        ys = [5, 6],
+    )
+
+    map call QSUB as QRT(
+        x  = split self.xs,
+        ys = GEN.xs,
+    )
+
     return (
         lit   = LIT,
         ent   = ENT,
@@ -205,6 +257,8 @@ pipeline TOP(
         nest  = NEST,
         plain = PLAIN.subs,
         outer = OUTER.subs,
+        qnest = QNEST,
+        qrt   = QRT,
     )
 }
 

@@ -168,3 +168,40 @@ call TOP()
 		t.Errorf("OUTER calls mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// TestLiftLiftedMapCall pins that a map call over a sub-pipeline that itself
+// leaves an enclosing map call gets its own fork-independent calls lifted:
+// mrp runs NOTE once, not once per EACH fork.
+func TestLiftLiftedMapCall(t *testing.T) {
+	prog := lowerMRO(t, `
+stage ECHO(in int v, out int r, src py "s/echo",)
+stage NOTE(out string n, src py "s/note",)
+pipeline Q(in int v, out int r,){
+    call ECHO(v = self.v,)
+    call NOTE()
+    return (r = ECHO.r,)
+}
+pipeline SUB(in int x, in int[] ys, out int fx, out Q[] q,){
+    call ECHO as DEP(v = self.x,)
+    map call Q as EACH(v = split self.ys,)
+    return (fx = DEP.r, q = EACH,)
+}
+pipeline TOP(in int[] xs, out SUB[] s,){
+    map call SUB(x = split self.xs, ys = [5, 6],)
+    return (s = SUB,)
+}
+call TOP(xs = [1, 2],)
+`)
+	LiftForkIndependent(prog)
+
+	want := []liftedCall{
+		{Name: "SUB_gate", Gate: true},
+		{Name: "SUB_EACH_gate", Gate: true},
+		{Name: "SUB_EACH_NOTE", Callable: "NOTE", Disabled: "SUB_EACH_gate.off"},
+		{Name: "SUB_EACH", Callable: "Q_lift1", Disabled: "SUB_gate.off"},
+		{Name: "SUB", Callable: "SUB_lift1"},
+	}
+	if diff := cmp.Diff(want, liftedCalls(prog.Pipelines["TOP"])); diff != "" {
+		t.Errorf("TOP calls mismatch (-want +got):\n%s", diff)
+	}
+}

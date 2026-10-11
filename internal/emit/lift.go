@@ -65,12 +65,16 @@ func (l *lifter) process(name string) {
 
 	np := clonePipeline(p, p.Name)
 	changed := false
+	residual := map[string]bool{}
 
+	// The loop revisits the calls a lift inserts at i, so a map call lifted
+	// out of an enclosing one has its own fork-independent calls lifted.
 	for i := 0; i < len(np.Calls); i++ {
 		c := np.Calls[i]
-		if sub, ok := l.prog.Pipelines[c.Callable]; ok && c.Mapped {
-			if n := l.liftOut(np, i, sub, splitParams(c), true); n > 0 {
-				i += n
+		if sub, ok := l.prog.Pipelines[c.Callable]; ok && c.Mapped && !residual[c.Name] {
+			if l.liftOut(np, i, sub, splitParams(c), true) > 0 {
+				residual[c.Name] = true
+				i--
 				changed = true
 			}
 		}
