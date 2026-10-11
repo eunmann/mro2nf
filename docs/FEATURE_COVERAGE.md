@@ -131,13 +131,14 @@ tracked · 🚫 runtime/`mrp`-only, out of scope for a transpiler.
 | inter-stage file passing (object store, no shared FS) | ✅ #13 (de-bundled channels: each payload is a typed sidecar + individual leaf `path` items, referenced via `@mre:file:`/`@mre:dir:` markers; the shim absolutizes on input, relativizes on output) | e2e `TestCloudSim*`, `TestDockerIsolation`, unit `TestBundleRoundTrip` |
 | auxiliary files reach isolated workers (types.json, bindspecs) | ✅ each task stages only the files it needs — the shared `types.json` plus, for a bind/fork process, its own `spec.json` — as individual `path` inputs, never referenced by `${projectDir}` (invisible on an AWS Batch / HealthOmics worker, which mounts only its work dir). A task transfers only its own bindspec, not every call's | e2e `TestDockerIsolation` (container that does not mount the project dir), unit `TestEmitAssetsStaged` |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ #13 (PUBLISH walks the entry's output type, descending file-bearing structs) | e2e `map_file`, `map_file_keyed`, `struct_of_file`; unit `internal/types` |
-| VDR modes (disable/post/rolling/strict) timing | 🚫 no native dependency-gated mid-run deletion | — (terminal-state only) |
+| VDR modes (disable/post/rolling/strict) timing | 🚫 no native dependency-gated mid-run deletion | e2e `TestMrpDiffVDR/rolling`, `TestMrpDiffVDR/strict` (published outputs match mrp's under its VDR) |
 
 ## Running / inspecting — running-pipelines / inspecting-pipelines
 
 | Feature | Status | Test |
 |---|---|---|
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles | unit `TestEmitConfig` |
+| an ASSERT fails the run on its first attempt; a retried failure gets escalated memory | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2`; the shim's ASSERT exit code drives it (which failures are retried: `retried-stage-errors`) | unit `TestEmitConfig`, `TestStageFailureClassification`; e2e `TestAssertTerminatesWithoutRetry`, `TestOrdinaryFailureRetriesWithEscalatedMemory` |
 | cloud executors (awsbatch/k8s) | ✅ profiles emitted; #13 bundle data plane makes file flow object-store-correct; auxiliary files staged via `_assets` so isolated workers (no shared FS) can read them | config, e2e `TestCloudSim*` (copy-staging), `TestDockerIsolation` (true container isolation) |
 | `-target awsbatch` (AWS Batch + S3) | ✅ Batch executor + classic aws-CLI S3 staging, in-container `/opt/mro2nf` paths, a generated `Dockerfile` + self-contained `runtime/` build context (bash/ps, no ENTRYPOINT, x86_64, aws CLI) | unit `TestEmitConfigTargets`, `TestEmitContainerBuild`; e2e `TestGeneratedAWSBatchImage` (built from the generated Dockerfile) |
 | `-target healthomics` (AWS HealthOmics) | ✅ ECR-parameterized container, publishes to `/mnt/workflow/pubdir`, no executor (managed), pinned Nextflow version, `parameter-template.json` + `package.sh` (workflow zip) | unit `TestEmitConfigTargets`, `TestEmitHealthOmicsPackaging` |

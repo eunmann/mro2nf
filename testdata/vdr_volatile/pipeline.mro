@@ -2,7 +2,8 @@
 # files once their consumers finish; mro2nf deletes nothing. PUBLISHED's file
 # is a pipeline output, CONSUMED's is read downstream and then deletable, and
 # RETAINED's is read downstream but kept by `retain`. TestMrpDiffVDR runs it
-# under mrp's rolling and strict VDR and requires mro2nf's published outputs.
+# under mrp's rolling and strict VDR and requires mrp's published outputs to
+# match mro2nf's.
 filetype txt;
 
 stage MAKEFILE(
