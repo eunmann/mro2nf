@@ -201,6 +201,70 @@ func ResolveForks(spec Spec, pipeArgs json.RawMessage, callOuts map[string]json.
 	return buildArrayForks(broadcast, splits, only)
 }
 
+// StaticNulls is what the binder knows at run time about the values mrp
+// resolves to null when it builds the call graph: Pipe holds the enclosing
+// pipeline's args fields and Calls each upstream call's output fields, as the
+// bundles that carry them record. A call whose bundle is null as a whole, a
+// call the run disabled, is statically null without an entry. mrp resolves a
+// call under an invocation-known true gate to null statically and prunes a map
+// call over it to null (#436), and a map call pruned that way is null in turn.
+// A split of a call under a runtime gate is a call graph mrp refuses (#387) or
+// panics on, so the rule holds for every gate.
+type StaticNulls struct {
+	Pipe  map[string]bool
+	Calls map[string]map[string]bool
+}
+
+// staticNull reports whether e is a ref into a statically null value.
+func (e Entry) staticNull(nulls StaticNulls, callOuts map[string]json.RawMessage) bool {
+	r := e.Ref
+	if r == nil {
+		return false
+	}
+
+	if r.Kind == ir.RefKindSelf {
+		return nulls.Pipe[r.ID]
+	}
+
+	outs, ok := callOuts[r.ID]
+	if !ok {
+		return false
+	}
+
+	field, _, _ := strings.Cut(r.Output, ".")
+
+	return isNullRaw(outs) || (field != "" && nulls.Calls[r.ID][field])
+}
+
+// SplitOfStaticNull reports whether a split binding of spec takes its
+// collection from a statically null value, so a map call over it is pruned.
+func SplitOfStaticNull(spec Spec, nulls StaticNulls, callOuts map[string]json.RawMessage) bool {
+	for _, e := range spec {
+		if e.Split && e.staticNull(nulls, callOuts) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// StaticNullParams returns, sorted, the params of spec bound to a statically
+// null value by a non-split binding: what a bundle bound from spec records for
+// the bindings that read it.
+func StaticNullParams(spec Spec, nulls StaticNulls, callOuts map[string]json.RawMessage) []string {
+	var out []string
+
+	for param, e := range spec {
+		if !e.Split && e.staticNull(nulls, callOuts) {
+			out = append(out, param)
+		}
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
 func buildArrayForks(broadcast, splits map[string]json.RawMessage, only int) ([]json.RawMessage, []string, error) {
 	arrays := make(map[string][]json.RawMessage, len(splits))
 	count := -1
@@ -306,6 +370,8 @@ func buildMapForks(broadcast, splits map[string]json.RawMessage, only int) ([]js
 // output, whose merged size is the fork count); one such side of a MIXED zip
 // suffices, because zipped splits must agree in length (errSplitLen fails
 // loudly otherwise), so zero forks implies the known side resolved empty.
+// `mre merge` also sets it for a split of a statically null value, which its
+// forkmeta records (SplitOfStaticNull, #436).
 // The flag only ever WIDENS the zero-fork case to null: with one or more
 // forks mergeOne runs untouched, which keeps launch-time entry overrides
 // invocation-correct. A zero-fork merge for an UNMARKED call (runtime-sourced

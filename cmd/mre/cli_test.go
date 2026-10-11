@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -272,7 +273,7 @@ func TestForkMetaRoundTrip(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := writeForkMeta(dir, names, tc.keys); err != nil {
+			if err := writeForkMeta(dir, names, forkMeta{Count: len(names), Keys: tc.keys}); err != nil {
 				t.Fatalf("writeForkMeta: %v", err)
 			}
 
@@ -1113,6 +1114,155 @@ func TestRunForkBindKeysOnly(t *testing.T) {
 	}
 }
 
+// TestRunForkBindKeysOnlyPruned pins #436: forkbind marks a split of a
+// disabled call's bundle, or of a field a bundle records as statically null,
+// pruned; a split of a null that ran is not.
+func TestRunForkBindKeysOnlyPruned(t *testing.T) {
+	for _, tc := range []struct {
+		name, spec string
+		upNull     bool
+		recorded   bool
+		want       string
+	}{
+		{name: "split of a disabled call", spec: upSplit, upNull: true, want: `{"count":0,"keys":null,"pruned":true}`},
+		{name: "split of a null output", spec: upSplit, want: `{"count":0,"keys":null}`},
+		{name: "split of a recorded output", spec: upSplit, recorded: true, want: `{"count":0,"keys":null,"pruned":true}`},
+		{name: "split of a recorded args field", spec: selfSplit, recorded: true, want: `{"count":0,"keys":null,"pruned":true}`},
+		{name: "split of a null args field", spec: selfSplit, want: `{"count":0,"keys":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			up, pa := filepath.Join(dir, "up"), filepath.Join(dir, "pa")
+
+			if tc.upNull {
+				if err := shim.WriteNullBundle(up); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeTestBundle(t, up, map[string]any{"xs": nil})
+			}
+
+			writeTestBundle(t, pa, map[string]any{"xs": nil})
+
+			if tc.recorded {
+				for _, b := range []string{up, pa} {
+					if err := writeStaticNulls(b, []string{"xs"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+
+			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
+			keys := filepath.Join(dir, "forkmeta.json")
+
+			if err := run(t.Context(), []string{
+				"forkbind", "-spec", spec, "-pipeargs", pa, "-inputs", "UP=" + up, "-keysonly", "-keysfile", keys,
+			}); err != nil {
+				t.Fatalf("run forkbind -keysonly: %v", err)
+			}
+
+			got, err := os.ReadFile(keys)
+			if err != nil {
+				t.Fatalf("read keysfile: %v", err)
+			}
+
+			if string(got) != tc.want {
+				t.Errorf("keysfile = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The split specs of TestRunForkBindKeysOnlyPruned's cases.
+const (
+	upSplit   = `{"n":{"ref":{"kind":"call","id":"UP","output":"xs"},"split":true}}`
+	selfSplit = `{"n":{"ref":{"kind":"self","id":"xs"},"split":true}}`
+)
+
+// TestRunBindRecordsStaticNulls pins the #436 sidecar a bind writes: the
+// params bound to a disabled call's output, and through a bundle that records
+// a static null, are listed; a bind with none writes no sidecar.
+func TestRunBindRecordsStaticNulls(t *testing.T) {
+	dir := t.TempDir()
+	off, ran, pa := filepath.Join(dir, "off"), filepath.Join(dir, "ran"), filepath.Join(dir, "pa")
+
+	if err := shim.WriteNullBundle(off); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestBundle(t, ran, map[string]any{"xs": nil})
+	writeTestBundle(t, pa, map[string]any{"gone": nil, "kept": nil})
+	if err := writeStaticNulls(pa, []string{"gone"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, spec string
+		want       []string
+	}{
+		{
+			name: "static nulls",
+			spec: `{"v":{"ref":{"kind":"call","id":"OFF","output":"xs"}},"g":{"ref":{"kind":"self","id":"gone"}},` +
+				`"r":{"ref":{"kind":"call","id":"RAN","output":"xs"}},"k":{"ref":{"kind":"self","id":"kept"}}}`,
+			want: []string{"g", "v"},
+		},
+		{name: "none", spec: `{"r":{"ref":{"kind":"call","id":"RAN","output":"xs"}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "args")
+			spec := writeTestFile(t, filepath.Join(t.TempDir(), "spec.json"), tc.spec)
+
+			if err := run(t.Context(), []string{
+				"bind", "-spec", spec, "-pipeargs", pa, "-inputs", "OFF=" + off + ",RAN=" + ran, "-o", out,
+			}); err != nil {
+				t.Fatalf("run bind: %v", err)
+			}
+
+			got, err := readNullFields(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if diff := cmp.Diff(tc.want, slices.Sorted(maps.Keys(got))); diff != "" {
+				t.Errorf("recorded static nulls mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestRunMergeRecordsPrune pins that a zero-fork merge to null records every
+// output as statically null, and a typed-empty merge records none.
+func TestRunMergeRecordsPrune(t *testing.T) {
+	for _, tc := range []struct {
+		name, keysJSON string
+		want           []string
+	}{
+		{name: "pruned", keysJSON: `{"count":0,"keys":null,"pruned":true}`, want: []string{"a", "b"}},
+		{name: "runtime empty", keysJSON: `{"count":0,"keys":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			out := filepath.Join(dir, "merged")
+
+			if err := run(t.Context(), []string{
+				"merge", "-outs", "a,b", "-forksdir", filepath.Join(dir, "souts"), "-o", out,
+				"-keysfile", writeTestFile(t, filepath.Join(dir, "keys.json"), tc.keysJSON),
+			}); err != nil {
+				t.Fatalf("run merge: %v", err)
+			}
+
+			got, err := readNullFields(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if diff := cmp.Diff(tc.want, slices.Sorted(maps.Keys(got))); diff != "" {
+				t.Errorf("recorded static nulls mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestRunMergeSmoke drives merge end to end from a staged forks dir: an array
 // fork collects each output into an array in fork-index order; a keyed (map)
 // fork rebuilds a map from the keys sidecar; zero forks (no staged dir at all,
@@ -1144,6 +1294,8 @@ func TestRunMergeSmoke(t *testing.T) {
 		},
 		{name: "zero array forks", keysJSON: `{"count":0,"keys":null}`, want: map[string]any{"s": []any{}}},
 		{name: "zero map forks", keysJSON: `{"count":0,"keys":[]}`, want: map[string]any{"s": map[string]any{}}},
+		// #436: a split of a disabled call's output is pruned to null.
+		{name: "zero pruned forks", keysJSON: `{"count":0,"keys":null,"pruned":true}`, want: map[string]any{"s": nil}},
 	}
 
 	for _, tc := range tests {

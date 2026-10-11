@@ -188,7 +188,18 @@ not change the marking (#383): mrp folds a literal gate statically and, under
 a runtime gate, prunes a known-empty split to null or rejects the consumer's
 split of the gated value, so a split over a gated producer of an
 invocation-known source gives `null` (`empty_fork_gated`,
-`empty_fork_gated_sub`). The rejected split never reaches the emitter (#387):
+`empty_fork_gated_sub`). A split of the output of a call an invocation-known
+gate disables is `null` too, whatever the call's own source (#436): `mrp`
+resolves the disabled call to `NullExp` (`syntax/resolve_stage.go:591-600`,
+`resolve_pipeline.go:101-112`) and a split of null disables its map call
+(`resolve_stage.go:370-383`). mro2nf records the null at run time instead,
+since the gate stays overridable at launch: a disabled call's bundle is `null`
+as a whole, `mre forkbind` marks a split of it `pruned` in `forkmeta.json`, and
+the bound params and pruned map calls are listed in
+`f/staticnull.mro2nf.json` so the prune crosses sub-pipeline boundaries and
+cascades (`disabled_split_null`). A split of a call under a runtime gate is a
+call graph `mrp` refuses or panics on (`invalid reference`, `invalid merge
+kind null`), so the rule holds for every gate. The rejected split never reaches the emitter (#387):
 mro2nf resolves the invocation's call graph with the function `mrp` runs before
 it creates a pipestance (`syntax.Ast.MakePipelineCallGraph`,
 `frontend.CheckCallGraph`), so it refuses the transpile exactly when `mrp`

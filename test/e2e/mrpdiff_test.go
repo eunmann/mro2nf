@@ -382,6 +382,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #435: splits of a mapped call's whole ref over an invocation-known null
 	// and empty, into a stage and into a sub-pipeline.
 	{name: "empty_fork_wholeref", native: true, inline: true},
+	// #436: splits of a disabled stage, sub-pipeline, map call and per-fork
+	// stage, gated by entry values.
+	{name: "disabled_split_null", native: true, inline: true},
 	// The native-suite golden anchors: their committed expected/outs.json
 	// files claim mrp provenance, so the live differential machine-checks
 	// that claim — otherwise TestGolden + the native suites would prove

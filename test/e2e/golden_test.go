@@ -189,6 +189,9 @@ var goldenCases = []goldenCase{
 	{"empty_fork_gated_sub", "empty_fork_gated_sub", "expected/outs.json"},
 	// #435: a split of a mapped call's whole ref cascades the prune to null.
 	{"empty_fork_wholeref", "empty_fork_wholeref", "expected/outs.json"},
+	// #436: a split of a call an entry value disables is null, while the same
+	// gate left false gives the runtime empty [].
+	{"disabled_split_null", "disabled_split_null", "expected/outs.json"},
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},

@@ -344,6 +344,8 @@ fork), the emitter renders:
   ends in, and fails unless they number exactly the `count` in the
   `forkmeta.json` sidecar (`{"count": N, "keys": [...] | null}`) — no fork
   list rides on the command line, so the gather has no argv-length ceiling.
+  A `"pruned": true` field marks a split of a statically null value (below),
+  which merges zero forks to `null` as `mrp` prunes it (#436).
   The sidecar's file name is part of its format: a `-resume` across a format
   change finds no cached sidecar under the new name and re-runs the producer,
   so a merge never reads a stale-format one.
@@ -523,7 +525,18 @@ including the files they reference." On disk it is a directory:
   f/L0001/reads.fastq    canonical type-walk order), so leaves never collide,
                          under the basename mrp passes the stage (#284);
                          data.json references them via a marker
+  f/staticnull.mro2nf.json  ← optional: the top-level fields mrp resolves
+                         to null when it builds the call graph (#436)
 ```
+
+`mrp` resolves a call under an invocation-known true gate to `null` statically,
+and prunes a map call over such a value to `null` where a runtime empty merges
+to the typed empty. At run time a disabled call's bundle is `null` as a whole;
+`mre bind` and `mre forkbind` list each param they bind to such a value (or to
+a field another bundle lists) in `f/staticnull.mro2nf.json`, and `mre merge`
+lists every output of a map call it prunes, so the fact crosses sub-pipeline
+boundaries and cascades. The list sits under `f/` because a de-bundled channel
+item carries only `data.json` and the `f/*` items.
 
 The basename is the one the leaf's path had where `MarkFiles` found it: the
 file a stage wrote (Martian's `<out>.<ext>` default, or any path the stage chose),

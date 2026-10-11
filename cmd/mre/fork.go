@@ -84,27 +84,33 @@ func runForkBind(_ context.Context, argv []string) error {
 		return err
 	}
 
+	nulls, err := readStaticNulls(*pipeFile, *inputs)
+	if err != nil {
+		return err
+	}
+
 	// -elementfile is the O(1) native-scatter path (#99): the driver sliced the
 	// fork collection once and handed this instance only its element, so the args
 	// are assembled without re-parsing the whole collection (the O(N^2) that the
 	// per-fork -index path did across N instances).
 	if *elemFile != "" {
-		return writeForkElement(spec, pipeArgs, callOuts, *elemFile, *oDir, prod)
+		return writeForkElement(spec, pipeArgs, callOuts, nulls, *elemFile, *oDir, prod)
 	}
 
 	return resolveAndWriteForks(spec, pipeArgs, callOuts, prod, forkWrite{
 		mapMode: *mapMode, index: *index, oDir: *oDir, dir: *dir,
-		keysFile: *keysFile, keysOnly: *keysOnly,
+		keysFile: *keysFile, keysOnly: *keysOnly, nulls: nulls,
 	})
 }
 
 // forkWrite bundles the destination flags for the full-collection forkbind
-// modes (all-forks / -index / -keysonly).
+// modes (all-forks / -index / -keysonly), and the static nulls of its inputs.
 type forkWrite struct {
 	mapMode             string
 	index               int
 	oDir, dir, keysFile string
 	keysOnly            bool
+	nulls               bind.StaticNulls
 }
 
 // resolveAndWriteForks resolves the whole fork collection and writes the
@@ -124,12 +130,14 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 		return fmt.Errorf("forkbind: %w", err)
 	}
 
+	meta := forkMeta{Count: len(forks), Keys: keys, Pruned: bind.SplitOfStaticNull(spec, w.nulls, callOuts)}
+
 	// -keysonly is the native scatter's empty-collection instance (#76): the
 	// resolve above validated every binding exactly as the FORK task would (a
 	// wrong-kind or mis-zipped source still fails loudly), and only the keys
 	// sidecar is written — there is no fork to run.
 	if w.keysOnly {
-		return writeKeysFile(w.keysFile, len(forks), keys)
+		return writeKeysFile(w.keysFile, meta)
 	}
 
 	man, err := prod.manifest()
@@ -149,7 +157,10 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 	// each stage resolving its own fork inline. The per-fork args are identical
 	// to the corresponding full-fork write, and -keysfile emits the same
 	// forkmeta sidecar the full write would, so the gather still gets its keys.
-	bound := forkBinding{spec: spec, keys: keys, params: params, tbl: tbl}
+	bound := forkBinding{
+		spec: spec, meta: meta, params: params, tbl: tbl,
+		nulls: bind.StaticNullParams(spec, w.nulls, callOuts),
+	}
 	if w.index >= 0 {
 		return writeForkIndex(forks, w.index, w.oDir, w.keysFile, bound)
 	}
@@ -158,12 +169,14 @@ func resolveAndWriteForks(spec bind.Spec, pipeArgs json.RawMessage, callOuts map
 }
 
 // forkBinding is what writes a resolved fork's args bundle: the call's spec,
-// the map fork's keys (nil for an array fork), and its params.
+// the forkmeta (whose keys are nil for an array fork), its params, and the
+// broadcast params bound to a static null, which every fork's bundle records.
 type forkBinding struct {
 	spec   bind.Spec
-	keys   []string
+	meta   forkMeta
 	params []ir.Param
 	tbl    *types.Table
+	nulls  []string
 }
 
 // write writes fork index's resolved args as a bundle at dir.
@@ -174,11 +187,15 @@ func (b forkBinding) write(dir string, args json.RawMessage, index int) error {
 	}
 
 	key := ""
-	if b.keys != nil {
-		key = b.keys[index]
+	if b.meta.Keys != nil {
+		key = b.meta.Keys[index]
 	}
 
-	return writeBoundBundle(dir, payload, bind.ForkSpec(b.spec, index, key), b.params, b.tbl)
+	if err := writeBoundBundle(dir, payload, bind.ForkSpec(b.spec, index, key), b.params, b.tbl); err != nil {
+		return err
+	}
+
+	return writeStaticNulls(dir, b.nulls)
 }
 
 // writeForkElement assembles one fork's args bundle from a pre-sliced split
@@ -186,7 +203,7 @@ func (b forkBinding) write(dir string, args json.RawMessage, index int) error {
 // The bundle is byte-identical to the corresponding -index write (same
 // ResolveElement result, same WriteBundle) — the element the driver sliced is
 // the same value ResolveForks would have placed at that fork's split param.
-func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, elemFile, oDir string, prod *producer) error {
+func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[string]json.RawMessage, nulls bind.StaticNulls, elemFile, oDir string, prod *producer) error {
 	if oDir == "" {
 		return errElementNoOut
 	}
@@ -201,7 +218,11 @@ func writeForkElement(spec bind.Spec, pipeArgs json.RawMessage, callOuts map[str
 		return fmt.Errorf("forkbind element: %w", err)
 	}
 
-	return prod.writeBound(oDir, args, bind.ForkSpec(spec, -1, ""))
+	if err := prod.writeBound(oDir, args, bind.ForkSpec(spec, -1, "")); err != nil {
+		return err
+	}
+
+	return writeStaticNulls(oDir, bind.StaticNullParams(spec, nulls, callOuts))
 }
 
 // readElement reads a pre-sliced fork element. The driver cuts it verbatim out
@@ -280,7 +301,7 @@ func writeAllForks(forks []json.RawMessage, dir string, bound forkBinding) error
 		}
 	}
 
-	return writeForkMeta(dir, names, bound.keys)
+	return writeForkMeta(dir, names, bound.meta)
 }
 
 // writeForkIndex writes only fork[index]'s args bundle to oDir (the native-scatter
@@ -304,13 +325,13 @@ func writeForkIndex(forks []json.RawMessage, index int, oDir, keysFile string, b
 		return nil
 	}
 
-	return writeKeysFile(keysFile, len(forks), bound.keys)
+	return writeKeysFile(keysFile, bound.meta)
 }
 
 // writeKeysFile writes the forkmeta sidecar to path — byte-identical to the
 // full-fork write's forkmeta.json (same forkMetaJSON encoding).
-func writeKeysFile(path string, count int, keys []string) error {
-	raw, err := forkMetaJSON(count, keys)
+func writeKeysFile(path string, meta forkMeta) error {
+	raw, err := forkMetaJSON(meta)
 	if err != nil {
 		return err
 	}
@@ -324,7 +345,7 @@ func writeKeysFile(path string, count int, keys []string) error {
 //     object-store s3:// work dir).
 //   - forkmeta.json: the fork count and map keys (forkMeta), so merge can
 //     check it gathered every fork and rebuild a keyed result.
-func writeForkMeta(dir string, names, keys []string) error {
+func writeForkMeta(dir string, names []string, meta forkMeta) error {
 	namesJSON, err := json.Marshal(names)
 	if err != nil {
 		return fmt.Errorf("marshal fork names: %w", err)
@@ -334,24 +355,28 @@ func writeForkMeta(dir string, names, keys []string) error {
 		return err
 	}
 
-	return writeKeysFile(filepath.Join(dir, "forkmeta.json"), len(names), keys)
+	return writeKeysFile(filepath.Join(dir, "forkmeta.json"), meta)
 }
 
 // forkMeta is the forkmeta sidecar every fork producer writes and every merge
 // reads. Count is the gather's source of truth for how many outs__* bundles
 // it must find; an array fork has no keys of its own to count. Keys are the
 // map fork's keys in fork-index order, nil (JSON null) for an array fork.
+// Pruned marks a split of a statically null value (bind.SplitOfStaticNull),
+// which merges zero forks to null; it is omitted when false, so every other
+// sidecar keeps its bytes and -resume cache keys.
 type forkMeta struct {
-	Count int      `json:"count"`
-	Keys  []string `json:"keys"`
+	Count  int      `json:"count"`
+	Keys   []string `json:"keys"`
+	Pruned bool     `json:"pruned,omitempty"`
 }
 
 // errForkMeta reports a forkmeta sidecar whose count and keys disagree.
 var errForkMeta = errors.New("inconsistent forkmeta sidecar")
 
 // forkMetaJSON renders the forkmeta sidecar payload.
-func forkMetaJSON(count int, keys []string) (json.RawMessage, error) {
-	raw, err := json.Marshal(forkMeta{Count: count, Keys: keys})
+func forkMetaJSON(meta forkMeta) (json.RawMessage, error) {
+	raw, err := json.Marshal(meta)
 	if err != nil {
 		return nil, fmt.Errorf("marshal fork keys: %w", err)
 	}
@@ -396,7 +421,10 @@ func runMerge(_ context.Context, argv []string) error {
 		return err
 	}
 
-	merged, err := bind.Merge(splitComma(*outs), forkOuts, meta.Keys, *emptyNull)
+	names := splitComma(*outs)
+	zeroNull := *emptyNull || meta.Pruned
+
+	merged, err := bind.Merge(names, forkOuts, meta.Keys, zeroNull)
 	if err != nil {
 		return fmt.Errorf("merge: %w", err)
 	}
@@ -405,7 +433,17 @@ func runMerge(_ context.Context, argv []string) error {
 	// fork, a keyed map for a map fork), so the file-leaf walk must descend one
 	// level deeper than the callee's declared output types or it will skip the
 	// per-fork files and leave dangling paths under object-store staging.
-	return writeMerged(*outFile, merged, prod, meta.Keys != nil)
+	if err := writeMerged(*outFile, merged, prod, meta.Keys != nil); err != nil {
+		return err
+	}
+
+	// A map call merged to null this way is the call mrp prunes statically, so
+	// a split of any of its outputs is pruned in turn.
+	if zeroNull && meta.Count == 0 {
+		return writeStaticNulls(*outFile, names)
+	}
+
+	return nil
 }
 
 // writeMerged writes the merged map-call result as a bundle, bumping each output
@@ -466,8 +504,9 @@ func readForkMeta(path string) (forkMeta, error) {
 
 	// A pointer count tells an absent field from a zero-fork sidecar.
 	var raw struct {
-		Count *int     `json:"count"`
-		Keys  []string `json:"keys"`
+		Count  *int     `json:"count"`
+		Keys   []string `json:"keys"`
+		Pruned bool     `json:"pruned"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return forkMeta{}, fmt.Errorf("parse fork keys %s: %w", path, err)
@@ -477,7 +516,7 @@ func readForkMeta(path string) (forkMeta, error) {
 		return forkMeta{}, fmt.Errorf("%w %s: no count", errForkMeta, path)
 	}
 
-	meta := forkMeta{Count: *raw.Count, Keys: raw.Keys}
+	meta := forkMeta{Count: *raw.Count, Keys: raw.Keys, Pruned: raw.Pruned}
 	if meta.Count < 0 || (meta.Keys != nil && len(meta.Keys) != meta.Count) {
 		return forkMeta{}, fmt.Errorf("%w %s: count %d, %d keys", errForkMeta, path, meta.Count, len(meta.Keys))
 	}
