@@ -213,7 +213,7 @@ func genKeyedNestedScatterProcess(b *strings.Builder, pipeline string, c ir.Call
   input:
 %[3]s  output:
     tuple val(key), path("outs__${key}", type: 'dir'), emit: outs, optional: true
-    tuple val(okey), path('forkmeta.mro2nf.json'), emit: keys, optional: true
+    tuple val(okey), path('forkmeta2.mro2nf.json'), emit: keys, optional: true
 %[4]s}
 
 `, forkName(pipeline, c.Name), stageDirectives(s, ""), block, g.scatterScript(c, s, arg))
@@ -230,12 +230,12 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
   input:
 %[2]s  output:
     tuple val(key), path('forks'), emit: forks
-    tuple val(key), path('forkmeta.json'), emit: keys
+    tuple val(key), path('forkmeta2.json'), emit: keys
   script:
     """
     mkdir -p forks
     '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks -mapmode %[6]s%[5]s
-    mv -f forks/forkmeta.json forkmeta.json
+    mv -f forks/forkmeta2.json forkmeta2.json
     """
 }
 
@@ -253,7 +253,7 @@ func genKeyedNullForksProcess(b *strings.Builder, pipeline string, c ir.Call, ca
     tuple val(key), path('merged', type: 'dir')
   script:
     """
-    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -keysonly -keysfile forkmeta.json -mapmode %[6]s%[5]s
+    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -keysonly -keysfile forkmeta2.json -mapmode %[6]s%[5]s
     %[7]s
     """
 }
@@ -272,7 +272,7 @@ func genKeyedNullForksProcess(b *strings.Builder, pipeline string, c ir.Call, ca
 func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts string, g genCtx) {
 	fmt.Fprintf(b, `process %[1]s_K {
   input:
-    tuple val(key), path(souts), path('forkmeta.json')
+    tuple val(key), path(souts), path('forkmeta2.json')
     path 'types.json'
   output:
     tuple val(key), path('merged', type: 'dir')
@@ -283,7 +283,7 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
 }
 
 `, mergeName(pipeline, c.Name),
-		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta.json", "merged",
+		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta2.json", "merged",
 			g.plan.pipes[pipeline].calls[c.Name].mergeFlags()))
 }
 

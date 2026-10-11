@@ -204,7 +204,7 @@ resolves the disabled call to `NullExp` (`syntax/resolve_stage.go:591-600`,
 `resolve_pipeline.go:101-112`) and a split of null disables its map call
 (`resolve_stage.go:370-383`). mro2nf records the null at run time instead,
 since the gate stays overridable at launch: a disabled call's bundle is `null`
-as a whole, `mre forkbind` marks a split of it `pruned` in `forkmeta.json`, and
+as a whole, `mre forkbind` marks a split of it `pruned` in `forkmeta2.json`, and
 the bound params and pruned map calls are listed in
 `f/staticnull.mro2nf.json` so the prune crosses sub-pipeline boundaries and
 cascades (`disabled_split_null`). A split of a call under a runtime gate is a

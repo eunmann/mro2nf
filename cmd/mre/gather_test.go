@@ -83,7 +83,7 @@ func sortV(t *testing.T, names []string) []string {
 // Nextflow list stages.
 func TestGatherIndexed(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"outs__fork_00002", "outs__fork_00000", "outs__fork_00001", "forkmeta.json", "types.json"} {
+	for _, name := range []string{"outs__fork_00002", "outs__fork_00000", "outs__fork_00001", "forkmeta2.json", "types.json"} {
 		if err := os.Mkdir(filepath.Join(dir, name), 0o755); err != nil {
 			t.Fatal(err)
 		}

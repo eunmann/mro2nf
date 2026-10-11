@@ -710,7 +710,7 @@ func projectArray(raw json.RawMessage, path string) (json.RawMessage, error) {
 // for zero forks).
 func mergeOne(name string, outs []json.RawMessage, keys []string) (json.RawMessage, error) {
 	if keys != nil {
-		// The keys (forkmeta.json) and outs (collected per-fork bundles) are
+		// The keys (forkmeta2.json) and outs (collected per-fork bundles) are
 		// produced independently; a desync would index outs out of range. Fail
 		// with a clear error rather than panicking the merge process.
 		if len(outs) != len(keys) {

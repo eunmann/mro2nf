@@ -29,11 +29,11 @@ func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 	return fmt.Sprintf(`  script:
     if( fi < 0 )
       """
-      %[1]s -keysonly -keysfile forkmeta.mro2nf.json
+      %[1]s -keysonly -keysfile forkmeta2.mro2nf.json
       """
     else if( fi == 0 )
       """
-      %[1]s -index 0 -o fargs -keysfile forkmeta.mro2nf.json
+      %[1]s -index 0 -o fargs -keysfile forkmeta2.mro2nf.json
       %[2]s
       [ -d outs__${key} ]
       """
@@ -60,8 +60,8 @@ func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 // loudly — and only the keys sidecar is produced, so both outputs are optional.
 // Out bundles are named outs__<key> so the gather orders forks by the key's
 // index exactly as the keyed path does; the sidecar's task-side name is
-// forkmeta.mro2nf.json because the stage main shares this cwd (-work .), so a
-// stage scratch file named forkmeta.json must not satisfy the optional keys
+// forkmeta2.mro2nf.json because the stage main shares this cwd (-work .), so a
+// stage scratch file named forkmeta2.json must not satisfy the optional keys
 // output (consumers rename it on staging anyway). The trailing [ -d
 // outs__<key> ] keeps the hard per-fork guarantee: an instance that exits 0
 // without its out bundle fails the task instead of silently shortening an
@@ -85,7 +85,7 @@ func genNativeScatterElementProcess(b *strings.Builder, pipeline string, c ir.Ca
   input:
 %[3]s  output:
     path "outs__${key}", type: 'dir', emit: outs, optional: true
-    path 'forkmeta.mro2nf.json', emit: keys, optional: true
+    path 'forkmeta2.mro2nf.json', emit: keys, optional: true
 %[4]s}
 
 `, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.scatterScript(c, s, arg))

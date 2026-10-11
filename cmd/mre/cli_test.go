@@ -255,7 +255,7 @@ func TestBumpForkDim(t *testing.T) {
 	}
 }
 
-// TestForkMetaRoundTrip round-trips the fork sidecars: forkmeta.json carries
+// TestForkMetaRoundTrip round-trips the fork sidecars: forkmeta2.json carries
 // the fork count plus a JSON null keys field for an array fork (read back as
 // nil keys) or the map fork's key array; forknames.json always lists the fork
 // bundle dirs.
@@ -278,15 +278,15 @@ func TestForkMetaRoundTrip(t *testing.T) {
 				t.Fatalf("writeForkMeta: %v", err)
 			}
 
-			keysPath := filepath.Join(dir, "forkmeta.json")
+			keysPath := filepath.Join(dir, "forkmeta2.json")
 
 			data, err := os.ReadFile(keysPath)
 			if err != nil {
-				t.Fatalf("read forkmeta.json: %v", err)
+				t.Fatalf("read forkmeta2.json: %v", err)
 			}
 
 			if string(data) != tc.wantFile {
-				t.Errorf("forkmeta.json = %q, want %q", data, tc.wantFile)
+				t.Errorf("forkmeta2.json = %q, want %q", data, tc.wantFile)
 			}
 
 			got, err := readForkMeta(keysPath)
@@ -681,7 +681,7 @@ func TestRunForkBindNarrowsStructs(t *testing.T) {
 
 // TestRunForkBindArraySmoke drives forkbind in array mode over a literal split:
 // one fork bundle per element, forknames.json listing them in order, and a
-// forkmeta.json with the fork count and null keys.
+// forkmeta2.json with the fork count and null keys.
 func TestRunForkBindArraySmoke(t *testing.T) {
 	dir := t.TempDir()
 	spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"n":{"literal":[1,2],"split":true}}`)
@@ -706,13 +706,13 @@ func TestRunForkBindArraySmoke(t *testing.T) {
 		t.Errorf("forknames.json mismatch (-want +got):\n%s", diff)
 	}
 
-	keysRaw, err := os.ReadFile(filepath.Join(forks, "forkmeta.json"))
+	keysRaw, err := os.ReadFile(filepath.Join(forks, "forkmeta2.json"))
 	if err != nil {
-		t.Fatalf("read forkmeta.json: %v", err)
+		t.Fatalf("read forkmeta2.json: %v", err)
 	}
 
 	if want := `{"count":2,"keys":null}`; string(keysRaw) != want {
-		t.Errorf("forkmeta.json = %q, want %q", keysRaw, want)
+		t.Errorf("forkmeta2.json = %q, want %q", keysRaw, want)
 	}
 }
 
@@ -1003,7 +1003,7 @@ func TestRunForkBindIndexKeysFile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
-			keys := filepath.Join(dir, "forkmeta.json")
+			keys := filepath.Join(dir, "forkmeta2.json")
 
 			if err := run(t.Context(), []string{
 				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
@@ -1020,7 +1020,7 @@ func TestRunForkBindIndexKeysFile(t *testing.T) {
 				t.Errorf("keysfile = %q, want %q", got, tc.want)
 			}
 
-			// Byte-identical to the full-fork write's forkmeta.json.
+			// Byte-identical to the full-fork write's forkmeta2.json.
 			forks := filepath.Join(dir, "forks")
 			if err := run(t.Context(), []string{
 				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
@@ -1029,9 +1029,9 @@ func TestRunForkBindIndexKeysFile(t *testing.T) {
 				t.Fatalf("run default forkbind: %v", err)
 			}
 
-			full, err := os.ReadFile(filepath.Join(forks, "forkmeta.json"))
+			full, err := os.ReadFile(filepath.Join(forks, "forkmeta2.json"))
 			if err != nil {
-				t.Fatalf("read full-write forkmeta.json: %v", err)
+				t.Fatalf("read full-write forkmeta2.json: %v", err)
 			}
 			if string(got) != string(full) {
 				t.Errorf("keysfile %q not byte-identical to full write %q", got, full)
@@ -1066,7 +1066,7 @@ func TestRunForkBindKeysOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
-			keys := filepath.Join(dir, "forkmeta.json")
+			keys := filepath.Join(dir, "forkmeta2.json")
 
 			if err := run(t.Context(), []string{
 				"forkbind", "-spec", spec, "-mapmode", tc.mapMode,
@@ -1154,7 +1154,7 @@ func TestRunForkBindKeysOnlyPruned(t *testing.T) {
 			}
 
 			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), tc.spec)
-			keys := filepath.Join(dir, "forkmeta.json")
+			keys := filepath.Join(dir, "forkmeta2.json")
 
 			if err := run(t.Context(), []string{
 				"forkbind", "-spec", spec, "-pipeargs", pa, "-inputs", "UP=" + up, "-keysonly", "-keysfile", keys,

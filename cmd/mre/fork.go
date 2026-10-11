@@ -26,7 +26,7 @@ var errForkIndexNoOut = errors.New("forkbind -index requires -o <dir>")
 var errForkIndexNegative = errors.New("forkbind -index must be >= 0 (or -1 for the full write)")
 
 // errKeysFileNeedsIndex reports -keysfile without -index or -keysonly (the
-// full-fork write already emits forkmeta.json into -chunkdir).
+// full-fork write already emits forkmeta2.json into -chunkdir).
 var errKeysFileNeedsIndex = errors.New("forkbind -keysfile requires -index or -keysonly")
 
 // errKeysOnlyNeedsFile reports -keysonly without the -keysfile destination.
@@ -329,7 +329,7 @@ func writeForkIndex(forks []json.RawMessage, index int, oDir, keysFile string, b
 }
 
 // writeKeysFile writes the forkmeta sidecar to path — byte-identical to the
-// full-fork write's forkmeta.json (same forkMetaJSON encoding).
+// full-fork write's forkmeta2.json (same forkMetaJSON encoding).
 func writeKeysFile(path string, meta forkMeta) error {
 	raw, err := forkMetaJSON(meta)
 	if err != nil {
@@ -343,7 +343,7 @@ func writeKeysFile(path string, meta forkMeta) error {
 //   - forknames.json: the fork bundle dir names, so a keyed (nested-map) workflow
 //     can enumerate forks without a java.io listFiles() (which cannot list an
 //     object-store s3:// work dir).
-//   - forkmeta.json: the fork count and map keys (forkMeta), so merge can
+//   - forkmeta2.json: the fork count and map keys (forkMeta), so merge can
 //     check it gathered every fork and rebuild a keyed result.
 func writeForkMeta(dir string, names []string, meta forkMeta) error {
 	namesJSON, err := json.Marshal(names)
@@ -355,7 +355,7 @@ func writeForkMeta(dir string, names []string, meta forkMeta) error {
 		return err
 	}
 
-	return writeKeysFile(filepath.Join(dir, "forkmeta.json"), meta)
+	return writeKeysFile(filepath.Join(dir, "forkmeta2.json"), meta)
 }
 
 // forkMeta is the forkmeta sidecar every fork producer writes and every merge

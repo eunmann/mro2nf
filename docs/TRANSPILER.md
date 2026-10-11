@@ -342,7 +342,7 @@ fork), the emitter renders:
   single array/map-shaped output bundle. `mre merge -forksdir <dir>` lists the
   staged `outs__<key>` bundles itself, orders them by the fork index each key
   ends in, and fails unless they number exactly the `count` in the
-  `forkmeta.json` sidecar (`{"count": N, "keys": [...] | null}`) — no fork
+  `forkmeta2.json` sidecar (`{"count": N, "keys": [...] | null}`) — no fork
   list rides on the command line, so the gather has no argv-length ceiling.
   A `"pruned": true` field marks a split of a statically null value (below),
   which merges zero forks to `null` as `mrp` prunes it (#436).
