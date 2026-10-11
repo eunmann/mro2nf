@@ -3,12 +3,114 @@ package emit
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
+
+var digestPinned = regexp.MustCompile(`^[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}$`)
+
+// fromImages returns the image reference of each FROM instruction in a
+// Dockerfile, without its --platform flag or stage name.
+func fromImages(t *testing.T, df string) []string {
+	t.Helper()
+
+	var refs []string
+
+	for line := range strings.Lines(df) {
+		f := strings.Fields(line)
+		if len(f) == 0 || f[0] != "FROM" {
+			continue
+		}
+
+		f = f[1:]
+		if len(f) > 0 && strings.HasPrefix(f[0], "--platform=") {
+			f = f[1:]
+		}
+
+		if len(f) == 0 {
+			t.Fatalf("FROM without an image: %q", line)
+		}
+
+		refs = append(refs, f[0])
+	}
+
+	return refs
+}
+
+// TestGeneratedBaseMatchesRuntime keeps the generated image on the published
+// runtime image's base. Dependabot bumps only the committed Dockerfile, so a
+// bump fails here until runtimeBase follows, and both stay digest-pinned.
+func TestGeneratedBaseMatchesRuntime(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/runtime/Dockerfile")
+	if err != nil {
+		t.Fatalf("read runtime Dockerfile: %v", err)
+	}
+
+	published := fromImages(t, string(raw))
+	if len(published) == 0 {
+		t.Fatal("deploy/runtime/Dockerfile has no FROM")
+	}
+
+	for _, ref := range published {
+		if !digestPinned.MatchString(ref) {
+			t.Errorf("deploy/runtime/Dockerfile FROM %s is not pinned as name:tag@sha256:<digest>", ref)
+		}
+	}
+
+	generated := fromImages(t, dockerfile(TargetAWSBatch, true, true, true, true, nil))
+	if diff := cmp.Diff(published[len(published)-1:], generated); diff != "" {
+		t.Errorf("generated base vs runtime final stage (-runtime +generated):\n%s", diff)
+	}
+}
+
+// TestRuntimeBuildGoIsToolchain keeps the runtime image's mre on the Go that
+// go.mod's toolchain line names (the golang image never switches toolchains),
+// so a Dependabot golang bump also has to move the toolchain line.
+func TestRuntimeBuildGoIsToolchain(t *testing.T) {
+	mod, err := os.ReadFile("../../go.mod")
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+
+	toolchain := ""
+
+	for line := range strings.Lines(string(mod)) {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "toolchain go"); ok {
+			toolchain = v
+		}
+	}
+
+	if toolchain == "" {
+		t.Fatal("go.mod has no toolchain line")
+	}
+
+	raw, err := os.ReadFile("../../deploy/runtime/Dockerfile")
+	if err != nil {
+		t.Fatalf("read runtime Dockerfile: %v", err)
+	}
+
+	want, found := "golang:"+toolchain, false
+
+	for _, ref := range fromImages(t, string(raw)) {
+		if !strings.HasPrefix(ref, "golang:") {
+			continue
+		}
+
+		found = true
+
+		if tag, _, _ := strings.Cut(ref, "@"); tag != want {
+			t.Errorf("runtime build stage FROM %s, want %s (go.mod toolchain)", tag, want)
+		}
+	}
+
+	if !found {
+		t.Error("deploy/runtime/Dockerfile has no golang build stage")
+	}
+}
 
 // TestCopyTreeMissingSource pins copyTree's hard-error contract directly:
 // callers pre-verify sources (checkContainerSources), so a nonexistent src

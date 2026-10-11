@@ -26,6 +26,17 @@ updates:
       actions-minor-patch:
         update-types: ["minor", "patch"]
 
+  # Base images are pinned as tag@digest; Dependabot moves both. A golang bump
+  # must also move go.mod's toolchain line (TestRuntimeBuildGoIsToolchain), and
+  # a new Go minor is a deliberate upgrade, so only patches arrive here.
+  - package-ecosystem: docker
+    directory: /deploy/runtime
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: golang
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
   # AWS Batch CDK app. Its package-lock.json is committed, so bumps update the
   # lockfile, and CI (cdk-validation.yml) compiles + synths the app on every
   # bump. versioning-strategy (not lockfile presence) governs package.json:
