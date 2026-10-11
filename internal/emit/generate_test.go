@@ -118,7 +118,7 @@ call P(x = 1,)
         run: !off
         skip: off
     }
-    BIND_1_P__SUB(g_SUB.run.map { data, leaves, gd, gl -> tuple(data, leaves) }, types, file("${projectDir}/_assets/bindspecs/BIND_1_P__SUB.json"))
+    BIND_1_P__SUB(g_SUB.run.map { data, leaves, gd, gl -> tuple(data, leaves) }, file("${projectDir}/_assets/bindspecs/BIND_1_P__SUB.json"))
     r_SUB = wf_1_P__SUB(BIND_1_P__SUB.out)
     s_SUB = g_SUB.skip.map { data, leaves, gd, gl -> tuple(file("${projectDir}/nulls/1_P__SUB/data.json"), []) }
     ch_SUB = r_SUB.mix(s_SUB).first()

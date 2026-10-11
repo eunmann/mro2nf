@@ -58,6 +58,19 @@ func writeTestFile(t *testing.T, path, content string) string {
 	return path
 }
 
+// writeTestManifest writes man to path as the generated scripts render a
+// task's manifest (Encoded.Subset over every callable) and returns path.
+func writeTestManifest(t *testing.T, path string, man types.Manifest) string {
+	t.Helper()
+
+	enc, err := man.Encode()
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+
+	return writeTestFile(t, path, enc.Subset(slices.Collect(maps.Keys(man.Callables))...))
+}
+
 // readJSONFile decodes the JSON file at path into v.
 func readJSONFile(t *testing.T, path string, v any) {
 	t.Helper()
@@ -516,10 +529,7 @@ func TestProducerCoerceInputs(t *testing.T) {
 			ChunkIn: []ir.Param{{Name: "c", Type: "int", BaseType: "int"}},
 		},
 	}}
-	path := filepath.Join(t.TempDir(), "types.json")
-	if err := man.Write(path); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	path := writeTestManifest(t, filepath.Join(t.TempDir(), "types.json"), man)
 
 	prod := &producer{types: path, callable: "S"}
 
@@ -557,10 +567,7 @@ func TestProducerValidateOuts(t *testing.T) {
 			"NONE": {},
 		},
 	}
-	path := filepath.Join(t.TempDir(), "types.json")
-	if err := man.Write(path); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	path := writeTestManifest(t, filepath.Join(t.TempDir(), "types.json"), man)
 
 	up := &producer{types: path, callable: "UP"}
 
@@ -613,10 +620,7 @@ func narrowManifest(t *testing.T, dir string) string {
 		Callables: map[string]types.Callable{"DOWN": {In: []ir.Param{{Name: "s", BaseType: "S"}}}},
 	}
 
-	path := filepath.Join(dir, "types.json")
-	if err := man.Write(path); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	path := writeTestManifest(t, filepath.Join(dir, "types.json"), man)
 
 	return path
 }
@@ -1448,10 +1452,7 @@ func TestRunPublishLayoutSmoke(t *testing.T) {
 	man := types.Manifest{Callables: map[string]types.Callable{
 		"PIPE": {Out: []ir.Param{{Name: "aln", BaseType: "bam", IsFile: true}}},
 	}}
-	manPath := filepath.Join(dir, "types.json")
-	if err := man.Write(manPath); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	manPath := writeTestManifest(t, filepath.Join(dir, "types.json"), man)
 
 	sidecar := writeTestFile(t, filepath.Join(dir, "data.json"),
 		`{"aln":"`+marker("L0000")+`"}`)

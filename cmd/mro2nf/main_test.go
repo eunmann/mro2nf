@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -152,6 +153,62 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 
 	if !opts.Native {
 		t.Errorf("config-sourced native must reach options(): Native=%v", opts.Native)
+	}
+}
+
+// TestBuildVersionReachesOptions checks the -ldflags version reaches Emit,
+// whose every process script names it as the task's -resume cache key (#449).
+// A test binary has no stamped module version, so an unstamped build is dev.
+func TestBuildVersionReachesOptions(t *testing.T) {
+	for _, stamp := range []string{"v1.2.3-4-gabcdef0-dirty", "dev"} {
+		t.Run(stamp, func(t *testing.T) {
+			old := version
+			version = stamp
+
+			t.Cleanup(func() { version = old })
+
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			f := defineTranspileFlags(fs)
+
+			opts, err := f.options(fs, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if opts.Version != stamp {
+				t.Errorf("Version = %q, want %q", opts.Version, stamp)
+			}
+		})
+	}
+}
+
+// TestChooseVersion checks an unstamped build takes the module version Go
+// stamps, so builds of different commits get different -resume cache keys
+// (#449), and stays dev only when Go stamps none.
+func TestChooseVersion(t *testing.T) {
+	const pseudo = "v0.5.1-0.20261011171927-bab46362db39+dirty"
+
+	withMain := func(v string) *debug.BuildInfo {
+		return &debug.BuildInfo{Main: debug.Module{Path: "github.com/eunmann/mro2nf", Version: v}}
+	}
+
+	for _, tc := range []struct {
+		name  string
+		stamp string
+		info  *debug.BuildInfo
+		want  string
+	}{
+		{"ldflags_stamp_wins", "v1.2.3", withMain(pseudo), "v1.2.3"},
+		{"module_version", "dev", withMain(pseudo), pseudo},
+		{"devel", "dev", withMain("(devel)"), "dev"},
+		{"empty_module_version", "dev", withMain(""), "dev"},
+		{"no_build_info", "dev", nil, "dev"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chooseVersion(tc.stamp, tc.info); got != tc.want {
+				t.Errorf("chooseVersion(%q) = %q, want %q", tc.stamp, got, tc.want)
+			}
+		})
 	}
 }
 

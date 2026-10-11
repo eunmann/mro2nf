@@ -104,7 +104,6 @@ func TestEmitFiles(t *testing.T) {
 		"nextflow.config",
 		"lib/Mro2nf.groovy",
 		"entry_args/data.json",
-		"_assets/types.json",
 		"modules/pipe_SUM_SQUARE_PIPELINE.nf",
 		"modules/stage_SUM_SQUARES.nf",
 		"_assets/bindspecs/BIND_19_SUM_SQUARE_PIPELINE__SUM_SQUARES.json",
@@ -480,8 +479,8 @@ func TestEmitDisabledNestedMap(t *testing.T) {
 		// skipped outer forks emit the null bundle keyed by their key
 		`sk_DBL = gk_DBL.skip.map { row -> tuple(row[0], file("${projectDir}/nulls/5_INNER__DBL")) }`,
 		// enabled forks feed FORKBIND directly (no disable bundle to strip); the
-		// fork stages the shared types + its (reused) bind spec, not all assets
-		`FORK_5_INNER__DBL_K(gk_DBL.run, types, file("${projectDir}/_assets/bindspecs/BIND_5_INNER__DBL.json"))`,
+		// fork stages its (reused) bind spec, not all assets
+		`FORK_5_INNER__DBL_K(gk_DBL.run, file("${projectDir}/_assets/bindspecs/BIND_5_INNER__DBL.json"))`,
 		// skipped forks are mixed back so every outer key has a result
 		"ch_DBL_l = MERGE_5_INNER__DBL_K.out.mix(sk_DBL).toList()",
 		// forks are enumerated from forknames.json (object-store-safe, not
@@ -551,7 +550,7 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		"-overridememgb ${task.ext.mem_gb ?: 0} -joinres joinres.json -args args -chunksfile chunks.json",
 		// the workflow parses joinres.json into the join val via the shipped helper (#49)
 		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }",
-		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)",
+		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name })",
 	} {
 		if !strings.Contains(mod, want) {
 			t.Errorf("stage_SUM_SQUARES.nf missing join-override wiring %q", want)
@@ -572,7 +571,7 @@ func TestEmitSplitJoinRunsWithZeroChunks(t *testing.T) {
 		t.Fatalf("read stage module: %v", err)
 	}
 
-	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)"
+	want := "SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name })"
 	if !strings.Contains(string(data), want) {
 		t.Errorf("non-keyed JOIN wiring must gather sorted and guard the empty channel; missing %q", want)
 	}
@@ -593,7 +592,7 @@ func TestEmitSplitJoinGatherSorted(t *testing.T) {
 
 	// x/y, not the a/b comparator params used elsewhere: `a` is a workflow
 	// local in both split workflows, and Groovy rejects shadowing it.
-	sorted := ".out.toSortedList { x, y -> x.name <=> y.name }, types)"
+	sorted := ".out.toSortedList { x, y -> x.name <=> y.name })"
 
 	for module, want := range map[string]string{
 		// The plain per-stage workflow (genSplitWorkflow).
@@ -608,8 +607,29 @@ func TestEmitSplitJoinGatherSorted(t *testing.T) {
 			t.Errorf("%s: JOIN must gather MAIN's chunk outs sorted by name; missing %q:\n%s", module, want, mod)
 		}
 
-		if strings.Contains(mod, ".collect().ifEmpty([]), types)") {
+		if strings.Contains(mod, ".collect().ifEmpty([]))") {
 			t.Errorf("%s: JOIN still gathers chunk outs in arrival order:\n%s", module, mod)
+		}
+	}
+}
+
+// TestEmitNoFirstOnValueChannels guards warning-free runs (#281): a process
+// whose inputs are all value channels emits a value channel, on which Nextflow
+// warns that `first` is useless. BUILD_ENTRY_ARGS and an ungated fused SPLIT
+// are such processes; a gated fused SPLIT's 0/1-item queue output is read by
+// both MAIN's combine and JOIN, which DSL2 allows without first().
+func TestEmitNoFirstOnValueChannels(t *testing.T) {
+	dir := emitFixture(t, "split_test", map[string]string{
+		"SUM_SQUARES": "/x/sum_squares",
+		"REPORT":      "/x/report",
+	})
+
+	for file, want := range map[string]string{
+		"main.nf":                             "  pipeargs = BUILD_ENTRY_ARGS.out\n",
+		"modules/pipe_SUM_SQUARE_PIPELINE.nf": "    a = STAGE_19_SUM_SQUARE_PIPELINE__SUM_SQUARES_SP.out.args\n",
+	} {
+		if got := readFile(t, filepath.Join(dir, file)); !strings.Contains(got, want) {
+			t.Errorf("%s: missing %q:\n%s", file, want, got)
 		}
 	}
 }
@@ -637,7 +657,7 @@ func TestEmitMappedMergeGatherSorted(t *testing.T) {
 		// point downstream of MERGE must survive untouched.
 		{
 			"disabled_map", "pipe_Q.nf",
-			"MERGE_1_Q__DBL(out_DBL.toSortedList { x, y -> x.name <=> y.name }, FORK_1_Q__DBL.out.keys, types)",
+			"MERGE_1_Q__DBL(out_DBL.toSortedList { x, y -> x.name <=> y.name }, FORK_1_Q__DBL.out.keys)",
 		},
 	} {
 		dir := emitFixture(t, tc.fixture, map[string]string{"DBL": "/x/dbl"})
@@ -900,11 +920,13 @@ func TestEmitPrunesUnusedKeyedVariants(t *testing.T) {
 	}
 }
 
-// TestEmitAssetsStaged checks the cloud-portability fix: the type manifest and a
-// process's own bindspec are staged into its task as individual `path` inputs
-// (not referenced by ${projectDir}, which is invisible to an isolated AWS Batch /
+// TestEmitAssetsStaged checks the cloud-portability fix: a process's own
+// bindspec is staged into its task as an individual `path` input (not
+// referenced by ${projectDir}, which is invisible to an isolated AWS Batch /
 // HealthOmics worker), and a task stages only its own bindspec rather than the
-// whole _assets dir (C3). The head-node file() resolution still uses ${projectDir}.
+// whole _assets dir (C3). The head-node file() resolution still uses
+// ${projectDir}. The type manifest is written by the task's own script, so no
+// shared manifest exists to stage (#286).
 func TestEmitAssetsStaged(t *testing.T) {
 	dir := loadAndEmit(t)
 
@@ -934,13 +956,20 @@ func TestEmitAssetsStaged(t *testing.T) {
 
 	mod := string(stage)
 	for _, want := range []string{
-		"path 'types.json'",   // the shared manifest staged into the task
-		"-types 'types.json'", // command reads the staged copy
-		`types = file("${projectDir}/_assets/types.json")`, // workflow resolves it on the head node
+		"' > types.json\n",    // the script writes the task's manifest
+		"-types 'types.json'", // the command reads it
 	} {
 		if !strings.Contains(mod, want) {
-			t.Errorf("stage_SUM_SQUARES.nf missing type-manifest staging %q", want)
+			t.Errorf("stage_SUM_SQUARES.nf missing the task-written type manifest %q", want)
 		}
+	}
+
+	if strings.Contains(mod, "path 'types.json'") || strings.Contains(mod, "_assets/types.json") {
+		t.Error("stage_SUM_SQUARES.nf stages a shared type manifest, which keys every task on every callable's types")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "_assets", "types.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("_assets/types.json: stat err %v, want not exist", err)
 	}
 
 	// A bind process stages its own bindspec as spec.json (not the whole dir).
@@ -1378,7 +1407,7 @@ func TestEmitEntryParams(t *testing.T) {
 		"process BUILD_ENTRY_ARGS {", // builds the bundle at run time
 		"values = groovy.json.JsonOutput.toJson([values: params.values])",  // overrides from params
 		"entryargs -base entry_args -values values.json -o entry_resolved", // overlay on baked defaults
-		"pipeargs = BUILD_ENTRY_ARGS.out.first()",                          // feed the entry pipeline
+		"pipeargs = BUILD_ENTRY_ARGS.out\n",                                // feed the entry pipeline
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing entry-param wiring %q", want)
@@ -1413,7 +1442,7 @@ func TestEmitEntryFileParam(t *testing.T) {
 		// for legal filenames containing , ; =
 		`${groovy.json.JsonOutput.toJson([reads: inflat_reads*.toString()])}`,
 		"-fileflat fileflat.json",
-		`BUILD_ENTRY_ARGS(file("${projectDir}/entry_args"), values, types, flat_reads)`,
+		`BUILD_ENTRY_ARGS(file("${projectDir}/entry_args"), values, flat_reads)`,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf missing entry-file staging %q", want)

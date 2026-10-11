@@ -37,12 +37,12 @@ export class Mro2nfStack extends cdk.Stack {
     const bucket = new s3.Bucket(this, 'WorkBucket', {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
-      // Cost guards: expire the (intermediate) Nextflow work dir, drop old
-      // HealthOmics scratch, and clean up orphaned multipart-upload parts so
-      // storage can't silently accumulate. results/ is left for you to retrieve.
+      // Cost guards: expire the intermediate Nextflow work dir and orphaned
+      // multipart-upload parts. Final outputs never expire: results/ (the
+      // awsbatch --aws_outdir) and omics-out/ (the HealthOmics --output-uri,
+      // which receives each run's pubdir/ outputs and logs).
       lifecycleRules: [
         { prefix: 'work/', expiration: cdk.Duration.days(14) },
-        { prefix: 'omics-out/', expiration: cdk.Duration.days(14) },
         { abortIncompleteMultipartUploadAfter: cdk.Duration.days(3) },
       ],
     });

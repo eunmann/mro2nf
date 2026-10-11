@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/config"
@@ -16,11 +18,36 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/logging"
 	"github.com/eunmann/mro2nf/internal/overrides"
-	"github.com/rs/zerolog"
 )
 
 // version is set via -ldflags at build time.
 var version = "dev"
+
+// buildVersion names this build in every task's -resume cache key
+// (emit.Options.Version).
+func buildVersion() string {
+	info, _ := debug.ReadBuildInfo()
+
+	return chooseVersion(version, info)
+}
+
+// chooseVersion is the -ldflags stamp, else the main module version the Go
+// toolchain stamps: the tag of a `go install …@v`, or for a plain `go build`
+// in a clone a pseudo-version naming the commit (+dirty when modified), so
+// unstamped builds of different commits do not share one "dev" key. Go
+// stamps no version ("(devel)") under -buildvcs=false, outside a repository
+// or in a git worktree, and those builds stay "dev".
+func chooseVersion(stamp string, info *debug.BuildInfo) string {
+	if stamp != "dev" {
+		return stamp
+	}
+
+	if info != nil && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	return stamp
+}
 
 // errUsage is returned when the command-line arguments are invalid.
 var errUsage = errors.New("usage: mro2nf [-o dir] [-mropath path] <pipeline.mro>")
@@ -56,7 +83,7 @@ func run(args []string) error {
 
 	if *f.showVersion {
 		// Writing the version line to stdout cannot meaningfully fail.
-		_, _ = fmt.Fprintln(os.Stdout, "mro2nf", version)
+		_, _ = fmt.Fprintln(os.Stdout, "mro2nf", buildVersion())
 
 		return nil
 	}
@@ -94,12 +121,11 @@ func run(args []string) error {
 		return fmt.Errorf("transpile %s: %w", src, err)
 	}
 
-	log.Info().
-		Str("source", src).
-		Int("stages", len(prog.Stages)).
-		Int("pipelines", len(prog.Pipelines)).
-		Str("out", opts.OutDir).
-		Msg("emitted Nextflow project")
+	log.Info("emitted Nextflow project",
+		"source", src,
+		"stages", len(prog.Stages),
+		"pipelines", len(prog.Pipelines),
+		"out", opts.OutDir)
 
 	return nil
 }
@@ -177,6 +203,7 @@ func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (e
 		Native:          *f.native,
 		InlinePipelines: *f.inlinePipelines, ConfineOutputs: *f.confineOutputs,
 		MROPath: roots, AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
+		Version: buildVersion(),
 	}, nil
 }
 
@@ -291,17 +318,17 @@ func readOverridesInput(arg string) ([]byte, error) {
 // that would produce a wrong or broken project for this pipeline. It receives
 // the same Options that emitProgram passes to Emit, so Diagnose analyzes the
 // plan that is actually emitted.
-func reportDiagnostics(log zerolog.Logger, prog *ir.Program, opts emit.Options) error {
+func reportDiagnostics(log *slog.Logger, prog *ir.Program, opts emit.Options) error {
 	diags := emit.Diagnose(prog, opts)
 
 	for _, d := range diags {
 		switch d.Severity {
 		case emit.SevError:
-			log.Error().Msg(d.Message)
+			log.Error(d.Message)
 		case emit.SevWarn:
-			log.Warn().Msg(d.Message)
+			log.Warn(d.Message)
 		default:
-			log.Info().Msg(d.Message)
+			log.Info(d.Message)
 		}
 	}
 

@@ -99,7 +99,7 @@ Nextflow has these built in — no transpiler support needed:
 
 | mrp | Nextflow |
 |---|---|
-| `--profile cpu` / `mem` (stage profiling) | `nextflow run -with-trace` / `-with-report` |
+| `--profile cpu` / `mem` (stage profiling) | the task trace the generated config enables (`trace-<timestamp>.txt` in the launch dir: status, exit, attempt, realtime, peak RSS, work dir; local and AWS Batch targets), `-with-report` |
 | `mro graph` (DAG visualization) | `nextflow run -with-dag dag.html` |
 | `--inspect` (dry-run / inspect) | `nextflow run -preview` |
 | `mrstat` / web UI (live status) | `nextflow log`, `-with-report`, `-with-timeline` |

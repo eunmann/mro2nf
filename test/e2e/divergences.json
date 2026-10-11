@@ -91,9 +91,9 @@
       "id": "resume-content-cache",
       "kind": "mechanism",
       "feature": "`-resume` ≈ restart-without-rerun",
-      "summary": "mro2nf resumes through Nextflow's `-resume`, which reuses each task whose inputs hash the same, where mrp restarts a pipestance from the stages it recorded as complete.",
-      "justification": "A cache hit replays the task's recorded outputs: an unchanged rerun re-executes no task and leaves the published tree and `pipeline_outs.json` unchanged, and a fresh run matches mrp. A rerun after a failure is not compared with mrp's restart.",
-      "evidence": ["TestResumeCachesEverything", "TestFreshRunsAreIdentical", "TestMrpDiff"]
+      "summary": "mro2nf resumes through Nextflow's `-resume`, which reuses each task whose script and inputs hash the same, where mrp restarts a pipestance from the stages it recorded as complete.",
+      "justification": "A cache hit replays the task's recorded outputs: an unchanged rerun re-executes no task and leaves the published tree and `pipeline_outs.json` unchanged, and a fresh run matches mrp. Every script names the mro2nf build, so a project re-transpiled by another build re-runs every task. A rerun after a failure is not compared with mrp's restart.",
+      "evidence": ["TestResumeCachesEverything", "TestFreshRunsAreIdentical", "TestResumeKeysOnTheBuild", "TestMrpDiff"]
     },
     {
       "id": "preflight-dag-order",
