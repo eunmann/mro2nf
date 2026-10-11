@@ -118,63 +118,48 @@ Every issue gets exactly one **type** label, one **priority** label, the **area*
 
 ### Special (add when applicable)
 
-`security`, `simplification` (a step of the simplification epic), `needs-verification` (plausible, not yet reproduced), `epic` (a parent issue)
+`security`, `simplification` (a step of the simplification epic), `needs-verification` (plausible, not yet reproduced), `epic` (a parent issue), `batch` (the issues one PR lands together)
 
 ### Milestone (required)
 
 Pick the roadmap milestone the work belongs to (M0 Oracle → M5 Packaging + docs + hygiene); the master index issue lists their goals and exit criteria.
 
-## Step 6: Scope Check — Single Issue or Parent + Children
+## Step 6: Place the Issue in the Tree
 
-Before filing, decide whether this is one issue or a parent with sub-issues:
+Relationships carry all structure, never body text. GitHub shows sub-issues, progress and `blocked by` links on every issue, and keeps them current as issues close; a list of issue numbers in a body goes stale the moment one is filed or closed.
 
-- **Single issue:** The work can be done in one PR with a clear scope. File one issue.
-- **Parent issue with children:** The work spans multiple independent PRs or has distinct phases. File a parent issue first, then create child issues and link them as sub-issues.
+The tree is: master index (#283) → epics (label `epic`) → batches (label `batch`) → issues. A **batch** is the set of issues one PR lands together, because they share files and code paths. Its PR closes every sub-issue.
 
-**When to create a parent issue:**
-- The implementation plan has 3+ steps that are independently mergeable
-- Different steps touch unrelated subsystems (e.g., binder + emitter + packaging changes)
-- The user explicitly asks for it to be broken up
+1. **Find the parent.** Read the open batches (`gh issue list --label batch`) and their sub-issues.
+   - If one shares files or code paths with the new issue, file the issue under that batch.
+   - Otherwise, file it under the epic that owns the area, and create a batch when two or more of the epic's issues would share a PR.
+   - An issue has exactly one parent.
+2. **Add dependencies.** When the work can't start until another issue lands, add `blocked by` links. Link issue to issue for a precise dependency, and batch to batch for the order of whole PRs.
+3. **Split work across issues, not checklists.** Work that spans several PRs becomes a parent with one sub-issue per PR. An epic's remaining work must exist as open sub-issues, never as checklist lines in its body.
 
-**Workflow for parent + children:**
+Don't write `Part of #N`, related-issue lists or dependency lists in the body. Don't edit the master index either: it never lists issues. Mention another issue in prose only where the reasoning needs it, for example "mrp gives X here, as in #253".
 
-1. Create the parent issue first (using the Step 7 template). Its body should describe the overall goal and list the planned sub-issues in a summary section.
-2. Create each child issue. Each child's body should reference the parent: `Part of #<parent-number>` at the top.
-3. Link each child as a sub-issue of the parent using the GitHub GraphQL API:
+Set relationships with `gh` (v2.94+):
 
 ```bash
-# Get the parent issue's node ID
-PARENT_ID=$(gh issue view <parent-number> --json id --jq '.id')
-
-# Get the child issue's node ID
-CHILD_ID=$(gh issue view <child-number> --json id --jq '.id')
-
-# Add the child as a sub-issue of the parent
-gh api graphql -f query='
-  mutation($parentId: ID!, $childId: ID!) {
-    addSubIssue(input: { issueId: $parentId, subIssueId: $childId }) {
-      issue { number }
-      subIssue { number }
-    }
-  }
-' -f parentId="$PARENT_ID" -f childId="$CHILD_ID"
+gh issue create ... --parent <batch-or-epic> --blocked-by <n>,<m>   # at creation
+gh issue edit <n> --parent <new-parent>                             # move: replaces the old parent
+gh issue edit <n> --add-blocked-by <m>                              # add a dependency later
 ```
 
-Repeat step 3 for each child issue. A `Part of #N` line alone is not a link: GitHub tracks only the sub-issue relationship.
-
-**Every child is a linked sub-issue, whenever it is filed.** That includes an issue filed later under an existing epic, and one split out of an issue during implementation, review or user testing. Link it with step 3 when it is created.
-
-**Track work as sub-issues, not checklist lines.** Any work an epic still needs must exist as an open sub-issue: a step left only as a checklist line in the parent's body is invisible to the epic's progress. Also add a new issue to the master index issue's roadmap.
+An issue split out later, during implementation, review or user testing, is placed the same way when it is filed.
 
 ## Step 7: Create the Issue
 
-Create the GitHub Issue using `gh issue create`. Always include the `--label` and `--milestone` flags.
+Create the GitHub Issue using `gh issue create`. Always include the `--label`, `--milestone` and `--parent` flags, plus `--blocked-by` when Step 6 found a dependency.
 
 ```
 gh issue create \
   --title "<concise title, under 70 chars>" \
   --label "<type>" --label "<area>" --label "<priority>" \
   --milestone "<milestone title>" \
+  --parent <batch or epic number> \
+  --blocked-by <issue numbers, when any> \
   --body "$(cat <<'EOF'
 ## Summary
 
@@ -217,9 +202,8 @@ gh issue create \
 
 ## Verification
 
-- [ ] `make lint-check` passes with zero issues
-- [ ] `make test`, `make cover`, `make test-e2e` pass (plus `make test-e2e-docker` / `make lint-nf` / `make bench` when the emitter or data plane changes)
-- [ ] `make test-mrp-diff` passes against real `mrp`
+- [ ] Locally: `make lint`, `make test`, and targeted e2e for <the fixtures and suites this touches>
+- [ ] PR Validation is green (full e2e with the mrp differential, docker, lint-nf, bench, cover)
 
 ## Risks
 
@@ -229,4 +213,4 @@ EOF
 )"
 ```
 
-After creating the issue, display the issue URL, the labels applied, and a brief summary of what was filed.
+After creating the issue, display the issue URL, the labels applied, its parent and blocked-by links, and a brief summary of what was filed.

@@ -34,13 +34,12 @@ State lives in `$(git rev-parse --git-dir)/review-loop/` (inside the git dir, so
 
 ## Final gate
 
-Each command once, output to a log file, never piped (600000 ms timeout):
+Only the fast checks run locally. PR Validation on GitHub is the full gate: e2e with the mrp differential, docker, lint-nf, bench, cover and `-race`.
 
-1. `make test` and `make cover`.
-2. `make test-e2e` when the branch touches `internal/emit`, `internal/shim`, `internal/bind`, `internal/types`, `cmd/` or `testdata/`; plus `make test-e2e-docker` when it touches the emitter, shim or data plane; plus `make lint-nf` when it touches what the emitter generates; plus `make bench` when it can change task counts or bytes staged.
-3. `make test-mrp-diff` when `$MARTIAN_BIN/mrp` exists (default `~/workdir/martian/bin`) and the branch can change outputs or `_args`.
-4. CDK changes: `cdk synth` emits the stack.
-5. Push; update the PR body if the loop changed what the PR does; delete `$(git rev-parse --git-dir)/review-loop/`.
+1. `make test`, plus targeted e2e (`go test -tags e2e -count=1 -run '<suites>' ./test/e2e/`) for the fixtures the fixes touched. Keep each run under about 4 minutes.
+2. CDK changes: `cdk synth` emits the stack.
+3. Push; update the PR body if the loop changed what the PR does; delete `$(git rev-parse --git-dir)/review-loop/`.
+4. Merge only on a green PR Validation run on the final head. On a failure, read only the failing job's log tail (`gh run view <id> --log-failed | tail -n 100`).
 
 Export `JAVA_HOME` for the Nextflow suites when Java is not on `PATH`.
 
@@ -56,4 +55,4 @@ Per round, one line:
 Round N (full|check, range X..Y): findings F (high H, medium M, low L) -> fixed K, refuted R, asked Q | next: check|stop
 ```
 
-At the end: rounds run, totals by severity, and each final-gate suite's result.
+At the end: rounds run, totals by severity, and the final gate's local results.
