@@ -164,27 +164,29 @@ func TestStageOutputLinkOutsideWorkCopiedLocally(t *testing.T) {
 	}
 }
 
-// TestOrdinaryFailureRetriesWithEscalatedMemory: a stage that fails while its
-// allocation is 1 GB and succeeds once escalated must be retried and see
-// mem_gb == 2 — proving both the retry and the memory * task.attempt growth
-// reached the stage. (Port of the flaky_retry half of failure_paths.sh.)
+// TestOrdinaryFailureRetriesWithEscalatedMemory: under -monitor, a stage the
+// RSS kill fails at its 0.5 GB request must be retried, succeed because the
+// kill limit follows the escalated allocation, and still see mrp's 0.5 GB in
+// _jobinfo and __mem_gb — the escalation sizes the task, never the stage
+// (#243). (Port of the flaky_retry half of failure_paths.sh.)
 func TestOrdinaryFailureRetriesWithEscalatedMemory(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	proj := transpile(t, "flaky_retry")
+	proj := transpile(t, "flaky_retry", "-monitor")
 
 	if err := runNextflow(t, proj, "-with-trace", "trace.txt"); err != nil {
 		t.Fatalf("run failed; the retry should have recovered it: %v", err)
 	}
 
 	var outs struct {
-		MemGB float64 `json:"mem_gb"`
+		MemGB    float64 `json:"mem_gb"`
+		ArgMemGB float64 `json:"arg_mem_gb"`
 	}
 
 	readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
 
-	if outs.MemGB != 2 {
-		t.Errorf("mem_gb = %v, want 2 (attempt-2 escalated allocation)", outs.MemGB)
+	if outs.MemGB != 0.5 || outs.ArgMemGB != 0.5 {
+		t.Errorf("stage saw mem_gb=%v __mem_gb=%v, want 0.5/0.5 (mrp's request, no retry factor)", outs.MemGB, outs.ArgMemGB)
 	}
 
 	flaky := attempts(readTrace(t, filepath.Join(proj, "trace.txt")), "FLAKY")

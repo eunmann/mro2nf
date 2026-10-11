@@ -1,0 +1,77 @@
+# Fractional thread requests (#370): each stage reports the threads it was
+# given through martian.get_threads_allocation() (_jobinfo) and args.__threads
+# (_args). mrp passes 0.5 as 0.5 and rounds 0.333 up to whole centicores (0.34);
+# a split's per-chunk __threads of 0.25 and join __threads of 1.5 reach main and
+# join unrounded.
+stage HALF(
+    in  int   x,
+    out float t,
+    out float at,
+    src py    "stages/thr",
+) using (
+    threads = 0.5,
+)
+
+stage THIRD(
+    in  int   x,
+    out float t,
+    out float at,
+    src py    "stages/thr",
+) using (
+    threads = 0.333,
+)
+
+stage CHUNKED(
+    in  int     x,
+    out float[] ct,
+    out float[] cat,
+    out float   jt,
+    out float   jat,
+    src py      "stages/chunked",
+) split using (
+    in  int     i,
+    out float   t,
+    out float   at,
+) using (
+    threads = 0.5,
+)
+
+pipeline FRAC_THREADS(
+    in  int     x,
+    out float   half_t,
+    out float   half_at,
+    out float   third_t,
+    out float   third_at,
+    out float[] chunk_t,
+    out float[] chunk_at,
+    out float   join_t,
+    out float   join_at,
+)
+{
+    call HALF(
+        x = self.x,
+    )
+
+    call THIRD(
+        x = self.x,
+    )
+
+    call CHUNKED(
+        x = self.x,
+    )
+
+    return (
+        half_t   = HALF.t,
+        half_at  = HALF.at,
+        third_t  = THIRD.t,
+        third_at = THIRD.at,
+        chunk_t  = CHUNKED.ct,
+        chunk_at = CHUNKED.cat,
+        join_t   = CHUNKED.jt,
+        join_at  = CHUNKED.jat,
+    )
+}
+
+call FRAC_THREADS(
+    x = 1,
+)

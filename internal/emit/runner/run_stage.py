@@ -49,6 +49,10 @@ _MARKER_REL = re.compile(BUNDLE_FILES + r"/L[0-9]{4,}(\.[^/]*)?")
 
 # Ports internal/shim/shim.go constants.
 EXTRA_VMEM_GB = 3
+THREADS_PER_JOB = 1
+MEM_GB_PER_JOB = 1
+CENTI_PER_CORE = 100
+MB_PER_GB = 1024
 ASSERT_EXIT_CODE = 42
 BYTES_PER_GB = 1 << 30
 
@@ -70,14 +74,16 @@ class RunnerError(Exception):
 
 _COMMON_FLAGS = {
     "stagecode": str, "call": str, "mro": str, "work": str, "o": str,
+    "special": str,
     "threads": float, "memgb": float, "vmemgb": float,
-    "monitor": bool, "confine": bool, "types": str, "callable": str,
-    "role": str,
+    "overridethreads": float, "overridememgb": float,
+    "monitor": bool, "confine": bool, "attempt": int, "allocbytes": int,
+    "types": str, "callable": str, "role": str,
 }
 _PHASE_FLAGS = {
     "split": {"args": str, "chunkdir": str, "joinres": str},
     "main": {"args": str, "chunk": str},
-    "join": {"args": str, "chunksfile": str, "chunkdir": str},
+    "join": {"args": str, "chunksfile": str, "chunkdir": str, "joinres": str},
 }
 # Ports the non-empty string flag defaults (cmd/mre/main.go addCommon -work,
 # runJoin -chunkdir); split's -chunkdir defaults to "" (no chunk bundles).
@@ -97,6 +103,8 @@ def _flag_defaults(phase, spec):
             vals[name] = False
         elif kind is float:
             vals[name] = 1.0 if name in ("threads", "memgb") else 0.0
+        elif kind is int:
+            vals[name] = 1 if name == "attempt" else 0
         else:
             vals[name] = _STR_DEFAULTS.get(
                 (phase, name), _STR_DEFAULTS.get(("*", name), ""))
@@ -137,9 +145,9 @@ def parse_flags(phase, argv):
             if i >= len(argv):
                 raise RunnerError("flag needs an argument: -%s" % name)
             inline = argv[i]
-        if kind is float:
+        if kind is float or kind is int:
             try:
-                vals[name] = float(inline)
+                vals[name] = float(inline) if kind is float else int(inline, 0)
             except ValueError:
                 raise RunnerError(
                     "invalid value %r for flag -%s" % (inline, name)
@@ -568,23 +576,56 @@ def _coalesce(primary, fallback):
     return primary if primary != 0 else fallback
 
 
+def _ceil_mb(gb):
+    return math.ceil(abs(gb) * MB_PER_GB)
+
+
 def resolve_resources(chunk, res):
-    """Ports resolveResources: chunk overrides win; negative adaptive
-    sentinels resolve to |x|; vmem < 1 GB recomputes as mem + headroom."""
-    eff = Resources(
-        threads=abs(_coalesce(chunk.threads, res.threads)),
-        mem_gb=abs(_coalesce(chunk.mem_gb, res.mem_gb)),
-        special=chunk.special or res.special,
-    )
-    eff.vmem_gb = abs(_coalesce(chunk.vmem_gb, res.vmem_gb))
-    if eff.vmem_gb < 1:
-        eff.vmem_gb = eff.mem_gb + EXTRA_VMEM_GB
+    """Ports resolveResources: chunk (or join) requests win; negative
+    adaptive sentinels resolve to |x|; threads round up to whole centicores
+    and memory and vmem to whole MiB, unset threads and memory take the job
+    defaults, and vmem defaults to memory plus headroom and never falls below
+    memory (mrp's local GetSystemReqs)."""
+    eff = Resources(special=chunk.special or res.special)
+    centi = math.ceil(abs(_coalesce(chunk.threads, res.threads)) * CENTI_PER_CORE)
+    if centi == 0:
+        centi = THREADS_PER_JOB * CENTI_PER_CORE
+    eff.threads = centi / CENTI_PER_CORE
+    mem_mb = _ceil_mb(_coalesce(chunk.mem_gb, res.mem_gb))
+    if mem_mb == 0:
+        mem_mb = MEM_GB_PER_JOB * MB_PER_GB
+    vmem_mb = _ceil_mb(_coalesce(chunk.vmem_gb, res.vmem_gb))
+    if vmem_mb == 0:
+        vmem_mb = mem_mb + EXTRA_VMEM_GB * MB_PER_GB
+    eff.mem_gb = mem_mb / MB_PER_GB
+    eff.vmem_gb = max(vmem_mb, mem_mb) / MB_PER_GB
     return eff
 
 
+def monitor_limits(eff, fl):
+    """Ports shim.go monitorLimits: a retry enforces the larger allocation
+    Nextflow escalated the task to."""
+    alloc = fl.allocbytes / float(BYTES_PER_GB)
+    if fl.attempt <= 1 or alloc <= eff.mem_gb:
+        return eff
+    return Resources(threads=eff.threads, mem_gb=alloc,
+                     vmem_gb=max(eff.vmem_gb, alloc + EXTRA_VMEM_GB),
+                     special=eff.special)
+
+
+def _resource_num(v):
+    """A resolved resource as the stage reads it back from mre's _args
+    (meta.go resourceNum, mrp's ToLazyMap): three significant digits, no
+    exponent from 999.5 up."""
+    f = float(v)
+    if -999.5 < f < 999.5:
+        return json.loads("%.3g" % f)
+    return json.loads("%.0f" % f)
+
+
 def _js_num(v):
-    """A resolved resource as the stage would see it after mre's
-    numRaw ('g' format) -> json.load round trip: whole values become ints."""
+    """A resolved resource as the stage reads it from _jobinfo: mirrors shim
+    writeJobInfo's json.Marshal of the float, so whole values become ints."""
     f = float(v)
     if f.is_integer() and abs(f) < 1e21:
         return int(f)
@@ -593,9 +634,9 @@ def _js_num(v):
 
 def inject_resources(merged, eff):
     """Ports injectResources: write the resolved __* keys into an args map."""
-    merged["__mem_gb"] = _js_num(eff.mem_gb)
-    merged["__threads"] = _js_num(eff.threads)
-    merged["__vmem_gb"] = _js_num(eff.vmem_gb)
+    merged["__mem_gb"] = _resource_num(eff.mem_gb)
+    merged["__threads"] = _resource_num(eff.threads)
+    merged["__vmem_gb"] = _resource_num(eff.vmem_gb)
     if eff.special:
         merged["__special"] = eff.special
 
@@ -1156,6 +1197,21 @@ class monitored_phase:
         return False
 
 
+THREAD_ENVS = (
+    "GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS",
+    "NUMEXPR_NUM_THREADS", "OMP_NUM_THREADS", "OMP_THREAD_LIMIT",
+    "POLARS_MAX_THREADS", "ROOT_MAX_THREADS", "TF_NUM_THREADS",
+)
+
+
+def apply_thread_envs(threads):
+    """Ports shim.go adapterEnv's thread-limit variables (mrp's threadEnvs):
+    each set to ceil(threads), overriding an inherited value. Set before the
+    stage module is imported, since thread pools read them at load time."""
+    for key in THREAD_ENVS:
+        os.environ[key] = str(math.ceil(threads))
+
+
 def import_stage(stagecode):
     """Ports martian_shell.py StageWrapper's stage-module import mechanics."""
     # Allow shells and stage code to import martian easily.
@@ -1173,8 +1229,25 @@ def record(d):
 
 
 def cli_resources(fl):
-    """The phase allocation from -threads/-memgb/-vmemgb."""
-    return Resources(threads=fl.threads, mem_gb=fl.memgb, vmem_gb=fl.vmemgb)
+    """The phase request from -threads/-memgb/-vmemgb/-special, with any
+    override."""
+    return overridden(
+        fl, Resources(threads=fl.threads, mem_gb=fl.memgb, vmem_gb=fl.vmemgb,
+                      special=fl.special))
+
+
+def overridden(fl, d):
+    """Ports cmd/mre/main.go overridden (shim ApplyOverride): the phase's
+    --overrides values beat a chunk's or join's own request."""
+    return Resources(threads=_coalesce(fl.overridethreads, d.threads),
+                     mem_gb=_coalesce(fl.overridememgb, d.mem_gb),
+                     vmem_gb=d.vmem_gb, special=d.special)
+
+
+def join_request(fl):
+    """Ports cmd/mre/main.go joinRequest: the split-returned join request with
+    the phase's --overrides values over it."""
+    return overridden(fl, read_join_res(fl.joinres))
 
 
 def abs_out(path):
@@ -1202,6 +1275,7 @@ def setup_stage(fl, files, eff, invocation_args):
         files, _js_num(eff.threads), _js_num(eff.mem_gb),
         call=fl.call, invocation_args=invocation_args,
     )
+    apply_thread_envs(eff.threads)
     os.chdir(files)
     try:
         return import_stage(fl.stagecode)
@@ -1254,7 +1328,7 @@ def run_split(fl):
         # setup_stage is inside the try so the finally's chdir also covers a
         # setup/import failure that leaves the cwd in files/.
         module = setup_stage(fl, files, eff, args)
-        with monitored_phase(fl.monitor, eff):
+        with monitored_phase(fl.monitor, monitor_limits(eff, fl)):
             raw_result = module.split(record(args))
     except martian.StageAssertion:
         raise
@@ -1367,7 +1441,7 @@ def run_outs_phase(fl, phase, files, eff, man, args, invoke):
         # setup_stage is inside the try so the finally's chdir also covers a
         # setup/import failure that leaves the cwd in files/.
         module = setup_stage(fl, files, eff, args)
-        with monitored_phase(fl.monitor, eff):
+        with monitored_phase(fl.monitor, monitor_limits(eff, fl)):
             invoke(module, outs)
     except martian.StageAssertion:
         raise
@@ -1397,7 +1471,7 @@ def run_main(fl):
     args = load_stage_args(fl, man)
     chunk_res, chunk_args = decode_chunk(read_bundle(fl.chunk))
     chunk_args = coerce_inputs(man, fl.callable, ["chunkin"], chunk_args)
-    eff = resolve_resources(chunk_res, cli_resources(fl))
+    eff = resolve_resources(overridden(fl, chunk_res), cli_resources(fl))
     merged = dict(args)
     merged.update(chunk_args)
     inject_resources(merged, eff)
@@ -1413,10 +1487,10 @@ def run_join(fl):
     _, files = prep_dirs(fl.work, "join")
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
-    eff = resolve_resources(Resources(), cli_resources(fl))
+    chunk_defs, chunk_outs = read_chunk_data(fl.chunksfile, fl.chunkdir)
+    eff = resolve_resources(join_request(fl), cli_resources(fl))
     merged = dict(args)
     inject_resources(merged, eff)
-    chunk_defs, chunk_outs = read_chunk_data(fl.chunksfile, fl.chunkdir)
     run_outs_phase(
         fl, "join", files, eff, man, args,
         lambda module, outs: module.join(
@@ -1448,6 +1522,15 @@ def read_chunk_data(chunks_file, chunk_dir):
         payload = as_object(read_bundle(dir_), "chunk outs bundle %s" % dir_)
         out_recs.append(record(payload))
     return def_recs, out_recs
+
+
+def read_join_res(path):
+    """Ports cmd/mre/io.go readJoinRes: the split's join resource override,
+    none for an empty path."""
+    if not path:
+        return Resources()
+    with open(path, encoding="utf-8") as fh:
+        return resources_from_object(json.load(fh))
 
 
 def read_chunk_count(path):

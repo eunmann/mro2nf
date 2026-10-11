@@ -29,6 +29,14 @@ It maps each override field to the generated process names:
 | `join.mem_gb` / `join.threads` | `memory` / `cpus` | the join phase |
 | `""` (the empty key) | `memory` / `cpus` | all stages (global `process {}`) |
 
+A memory or threads override also sets `ext.mem_gb` / `ext.threads` (the
+unrounded value; `cpus` is rounded up to a whole CPU) beside the directive in
+its `withName:` selector. The stage command reads it, so the stage sees the
+override in `__mem_gb`/`__threads` and `_jobinfo`, as mrp writes it, and it beats a chunk's own or a
+split-returned join request, as in mrp's `getJobReqs`. The global `""` default sets no `ext` value: a stage process's own
+`memory` directive takes precedence over a global default, so the stage keeps
+its `.mro` value.
+
 The override key's **last segment** is taken as the stage/call name. Every key
 other than `""` must be a dot-separated path of Martian identifiers (the
 `PIPE.STAGE` names mrp itself writes); any other key fails the conversion with an
@@ -62,8 +70,12 @@ Each generated selector covers every naming family the emitter produces:
   These embed the **call** name, which is also what an mrp override key's last
   segment names, so aliased calls (`call STAGE as X`, keyed `X`) match too.
 
-To hand-write an overlay, use the same shapes, e.g.
-`withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '8 GB' }`.
+To hand-write an overlay, use the same shapes and set the `ext` value beside
+each directive, e.g.
+`withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '8 GB'; ext.mem_gb = 8; cpus = 4; ext.threads = 4 }`.
+A plain `memory` / `cpus` overlay only sizes the task: the stage still sees its
+`.mro` request in `__mem_gb`/`__threads` and `_jobinfo`, and `-monitor` still
+enforces that request on the first attempt.
 
 ## Scheduler throttling
 

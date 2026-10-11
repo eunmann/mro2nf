@@ -94,7 +94,7 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 		rank := kind*kindWeight + keyDepth(key)
 
 		for _, field := range sortedKeys(spec[key]) {
-			phase, base, line, fnote := mapField(field, spec[key][field])
+			phase, base, lines, fnote := mapField(field, spec[key][field])
 			if fnote != "" {
 				unmapped = append(unmapped, fmt.Sprintf("%s.%s: %s", orAll(key), field, fnote))
 
@@ -119,7 +119,7 @@ func Convert(raw []byte, prog *ir.Program) (string, []string, error) {
 			for _, stage := range targets {
 				rk := [3]string{stage, phase, base}
 				if cur, ok := resolved[rk]; !ok || rank >= cur.rank {
-					resolved[rk] = directive{rank, line}
+					resolved[rk] = directive{fieldLines: lines, rank: rank}
 				}
 			}
 		}
@@ -169,8 +169,18 @@ const kindWeight = 1000
 // directive is one resolved override line for a (stage, phase, field) triple.
 // The most specific source key wins (see the rank computed in Convert).
 type directive struct {
+	fieldLines
+
 	rank int
-	line string
+}
+
+// fieldLines are the config lines one override field renders: the scheduler
+// directive, and the task.ext entry carrying the unrounded value to the stage's
+// _args/_jobinfo (mrp writes an override into both). ext is only set inside a
+// withName selector: the global process default never applies to a stage
+// process's own memory/cpus, so the stage must not see it either.
+type fieldLines struct {
+	line, ext string
 }
 
 // Selector breadth levels, from broadest to narrowest. render emits selectors in
@@ -229,7 +239,12 @@ func groupSelectors(resolved map[[3]string]directive, res *resolver) ([]string, 
 				bySel[sel] = a
 			}
 
-			a.items = append(a.items, baseLine{rk[2], d.line})
+			line := d.line
+			if d.ext != "" {
+				line += "; " + d.ext
+			}
+
+			a.items = append(a.items, baseLine{rk[2], line})
 		} else {
 			globalDefault = append(globalDefault, baseLine{rk[2], d.line})
 		}
@@ -264,70 +279,80 @@ func groupSelectors(resolved map[[3]string]directive, res *resolver) ([]string, 
 	return linesOf(globalDefault), groups
 }
 
-// mapField maps one override field to (phase, base, directive line, note). The
-// note is non-empty instead of the line when the field has no faithful Nextflow
-// directive; the returned line omits the selector (the caller applies it).
-func mapField(field string, val json.RawMessage) (string, string, string, string) {
+// mapField maps one override field to (phase, base, config lines, note). The
+// note is non-empty instead of the lines when the field has no faithful
+// Nextflow directive; the lines omit the selector (the caller applies it).
+func mapField(field string, val json.RawMessage) (string, string, fieldLines, string) {
 	phase, base, ok := strings.Cut(field, ".")
 	if !ok { // a stage-level field: phase holds the whole name
 		phase, base = "", field
 	}
 
 	if _, _, known := familySuffixes(phase); !known {
-		return phase, base, "", "unrecognized phase prefix"
+		return phase, base, fieldLines{}, "unrecognized phase prefix"
 	}
 
 	switch base {
 	case "mem_gb", "threads":
-		// mrp writes a float64 here; anything else would render a broken directive
-		// (e.g. `memory = 'true GB'`), so report it instead.
-		var n float64
-		if err := json.Unmarshal(val, &n); err != nil {
-			return phase, base, "", "value is not a number"
-		}
+		lines, note := resourceLines(base, val)
 
-		// 0 is mrp's "use the site default" sentinel (GetSystemReqs fills in
-		// ThreadsPerJob/MemGBPerJob), which varies by jobmode/profile and has no
-		// static Nextflow equivalent — emitting `memory = '0 GB'` / `cpus = 0` would
-		// pin the stage to nothing, so report it instead of diverging silently.
-		if n == 0 {
-			return phase, base, "", "0 requests mrp's site default resource; no static Nextflow equivalent"
-		}
-
-		// mrp treats a negative request as a sentinel ("as much as possible" —
-		// magnitude on remote schedulers), so normalize to the magnitude; Nextflow
-		// has no negative directive and would reject `memory = '-8 GB'` / `cpus = -4`
-		// at config parse. FormatFloat also avoids scientific notation (1e3), which
-		// MemoryUnit cannot parse.
-		n = math.Abs(n)
-
-		// Config-file scope uses `directive = value` (not the .nf process-body
-		// `directive value` form), so a `-c` overlay parses.
-		if base == "mem_gb" {
-			return phase, base, "memory = " + memLiteral(n), ""
-		}
-
-		// cpus must be a positive integer; round a fractional (centicore) thread
-		// request up so the stage is not under-provisioned. Guard the int64
-		// conversion: a finite-but-absurd value would otherwise wrap to a negative
-		// cpu count — the very directive this normalization prevents.
-		ceil := math.Ceil(n)
-		if ceil > math.MaxInt64 {
-			return phase, base, "", "threads value is too large to render as a cpu count"
-		}
-
-		return phase, base, "cpus = " + strconv.FormatInt(int64(ceil), 10), ""
+		return phase, base, lines, note
 	case "vmem_gb":
-		return phase, base, "", "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
+		return phase, base, fieldLines{}, "no Nextflow directive for virtual memory; mro2nf -monitor enforces vmem_gb from the .mro"
 	case "profile":
-		return phase, base, "", "use `nextflow run -with-trace`/`-with-report` for stage profiling"
+		return phase, base, fieldLines{}, "use `nextflow run -with-trace`/`-with-report` for stage profiling"
 	default:
 		if field == "force_volatile" {
-			return phase, base, "", "VDR is not modeled (Nextflow retains work/); see FEATURE_COVERAGE.md"
+			return phase, base, fieldLines{}, "VDR is not modeled (Nextflow retains work/); see FEATURE_COVERAGE.md"
 		}
 
-		return phase, base, "", "unrecognized override field"
+		return phase, base, fieldLines{}, "unrecognized override field"
 	}
+}
+
+// resourceLines renders a mem_gb or threads override as its scheduler
+// directive plus the task.ext entry the stage command reads, or a note when the
+// value has no faithful directive.
+func resourceLines(base string, val json.RawMessage) (fieldLines, string) {
+	// mrp writes a float64 here; anything else would render a broken directive
+	// (e.g. `memory = 'true GB'`), so report it instead.
+	var n float64
+	if err := json.Unmarshal(val, &n); err != nil {
+		return fieldLines{}, "value is not a number"
+	}
+
+	// 0 is mrp's "use the site default" sentinel (GetSystemReqs fills in
+	// ThreadsPerJob/MemGBPerJob), which varies by jobmode/profile and has no
+	// static Nextflow equivalent — emitting `memory = '0 GB'` / `cpus = 0` would
+	// pin the stage to nothing, so report it instead of diverging silently.
+	if n == 0 {
+		return fieldLines{}, "0 requests mrp's site default resource; no static Nextflow equivalent"
+	}
+
+	// mrp treats a negative request as a sentinel ("as much as possible" —
+	// magnitude on remote schedulers), so normalize to the magnitude; Nextflow
+	// has no negative directive and would reject `memory = '-8 GB'` / `cpus = -4`
+	// at config parse. FormatFloat also avoids scientific notation (1e3), which
+	// MemoryUnit cannot parse.
+	n = math.Abs(n)
+	num := strconv.FormatFloat(n, 'f', -1, 64)
+
+	// Config-file scope uses `directive = value` (not the .nf process-body
+	// `directive value` form), so a `-c` overlay parses.
+	if base == "mem_gb" {
+		return fieldLines{line: "memory = " + memLiteral(n), ext: "ext.mem_gb = " + num}, ""
+	}
+
+	// cpus must be a positive integer; round a fractional (centicore) thread
+	// request up so the stage is not under-provisioned. Guard the int64
+	// conversion: a finite-but-absurd value would otherwise wrap to a negative
+	// cpu count — the very directive this normalization prevents.
+	ceil := math.Ceil(n)
+	if ceil > math.MaxInt64 {
+		return fieldLines{}, "threads value is too large to render as a cpu count"
+	}
+
+	return fieldLines{line: "cpus = " + strconv.FormatInt(int64(ceil), 10), ext: "ext.threads = " + num}, ""
 }
 
 // phaseChunk is the mrp override phase for a stage's main job; every stage (split

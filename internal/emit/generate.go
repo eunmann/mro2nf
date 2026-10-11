@@ -44,30 +44,57 @@ type genCtx struct {
 // phase through `mre` + the Martian adapter (-shell); under -native-runner a
 // Python stage instead execs the embedded run_stage.py directly (#79) — no
 // martian_shell.py adapter and no mre broker on the stage-execution hop. The
-// runner accepts the identical flag tail every call site appends (and the
-// -vmemgb/-monitor suffixes below), so this branch is the only emitter change.
-func (g genCtx) stageCmd(phase string, s *ir.Stage, vmemExpr string) string {
-	cmd := g.stageHead(phase, s)
+// runner accepts the identical flag tail, so this branch is the only emitter
+// change.
+func (g genCtx) stageCmd(phase string, s *ir.Stage) string {
+	return g.stageHead(phase, s) + g.resourceFlags(phase, s)
+}
 
-	// A declared `using(vmem_gb)` is passed so the shim's --monitor caps virtual
-	// memory (and reports it in _jobinfo) at the declared value instead of the
-	// memory-derived default. A per-chunk __vmem_gb still wins for main (it
-	// arrives in the chunk def); a split-returned join override refines it via
-	// vmemExpr. When no vmem_gb is declared, vmemExpr is empty and the shim
-	// derives vmem from memory as before.
-	if vmemExpr != "" {
-		cmd += " -vmemgb " + vmemExpr
+// resourceFlags renders the resources a phase reports to its stage (_args,
+// _jobinfo) and enforces under -monitor. They are the stage's Martian request,
+// unrounded and without the retry escalation of the scheduler request
+// (stageDirectives), which only sizes the task: the shim overlays a chunk's or
+// the split-returned join's own request and resolves it as mrp does. An
+// `mro2nf overrides` override reaches the shim through task.ext.threads /
+// task.ext.mem_gb as its own flags, since it beats a chunk's or join's request
+// where the stage's using() does not.
+func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
+	flags := " -threads " + resourceArg(s.Resources.Threads) +
+		" -memgb " + resourceArg(s.Resources.MemGB) +
+		" -overridethreads ${task.ext.threads ?: 0} -overridememgb ${task.ext.mem_gb ?: 0}"
+
+	// Without a declared vmem_gb the shim derives vmem from memory.
+	if v := s.Resources.VMemGB; v > 0 {
+		flags += " -vmemgb " + resourceArg(v)
 	}
 
+	// mrp writes a static special into the main and join _args as __special; a
+	// chunk's or join's own __special still wins in the shim.
+	if sp := s.Resources.Special; sp != "" {
+		flags += " -special " + scriptArg(sp)
+	}
+
+	if phase == "join" {
+		flags += " -joinres joinres.json"
+	}
+
+	// A retry's escalated allocation moves only the -monitor limits.
 	if g.monitor {
-		cmd += " -monitor"
+		flags += " -monitor -attempt ${task.attempt} -allocbytes ${task.memory.toBytes()}"
 	}
 
 	if g.confine {
-		cmd += " -confine"
+		flags += " -confine"
 	}
 
-	return cmd
+	return flags
+}
+
+// resourceArg renders a resource number as a shell argument that mre's
+// ParseFloat and run_stage.py's float() read back: no exponent, and the
+// float32 the Martian parser stores widened exactly as mrp widens it.
+func resourceArg(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
 // stageHead renders the phase invocation up to the shared flag tail: the
@@ -122,22 +149,14 @@ func gstringLit(s string) string {
 	return strings.ReplaceAll(s, "$", `\$`)
 }
 
-// vmemFlag renders the -vmemgb value for a stage phase from its static
-// using(vmem_gb): empty when none is declared (the shim then derives vmem from
-// memory). The join phase wraps it so a split-returned join __vmem_gb override
-// refines the static default at runtime.
-func vmemFlag(s *ir.Stage, phase string) string {
-	v := s.Resources.VMemGB
-	if v <= 0 {
-		return ""
-	}
+// scriptArg renders an arbitrary string as one bash word inside a process
+// script GString: single-quoted for bash (a quote closes, escapes and reopens),
+// then GString-escaped, since Groovy resolves \, $ and a closing """ before
+// bash sees the line.
+func scriptArg(s string) string {
+	quoted := "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 
-	static := strconv.FormatFloat(v, 'g', -1, 64)
-	if phase == "join" {
-		return fmt.Sprintf("${(join?.vmem_gb ?: 0) > 0 ? join.vmem_gb : %s}", static)
-	}
-
-	return static
+	return strings.ReplaceAll(gstringLit(quoted), `"`, `\"`)
 }
 
 // producerArgs renders the flags a bundle-producing mre command needs to stage
@@ -348,7 +367,7 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 }
 
 func genStage(b *strings.Builder, s *ir.Stage, g genCtx) {
-	base := g.stageCmd("main", s, vmemFlag(s, "main"))
+	base := g.stageCmd("main", s)
 
 	// The fork-keyed variants are only ever invoked for a stage reachable under a
 	// map call; for any other stage they are dead process definitions, so emit
@@ -386,7 +405,7 @@ func genSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx) {
     %[6]s
   script:
     """
-    %[3]s -args args%[4]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[3]s -args args%[4]s -work . -o outs
     """
 }
 
@@ -404,8 +423,8 @@ workflow wf_%[1]s {
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
-	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
-	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
+	splitCmd := g.stageCmd("split", s)
+	joinCmd := g.stageCmd("join", s)
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT {
 %[2]s
@@ -418,7 +437,7 @@ func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
     path 'chunk_*', emit: chunks, type: 'dir', optional: true
   script:
     """
-    %[3]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[6]s
+    %[3]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir .%[6]s
     """
 }
 
@@ -431,14 +450,14 @@ process %[1]s_MAIN {
     path "out_${chunk.baseName}", type: 'dir'
   script:
     """
-    %[4]s -args args -chunk ${chunk}%[7]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
+    %[4]s -args args -chunk ${chunk}%[7]s -work . -o out_${chunk.baseName}
     """
 }
 
 process %[1]s_JOIN {
 %[10]s
   input:
-    val join
+    tuple val(join), path('joinres.json')
     %[11]s
     path cdefs
     path 'chunks.json'
@@ -448,7 +467,7 @@ process %[1]s_JOIN {
     %[13]s
   script:
     """
-    %[5]s -args args %[14]s%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[5]s -args args %[14]s%[8]s -work . -o outs
     """
 }
 
@@ -476,7 +495,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     %[1]s_SPLIT(a, types)
     chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[1]s_MAIN(chunks.combine(a), types)
-    join = %[1]s_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }
+    join = %[1]s_SPLIT.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }
     // JOIN's chunk outs (out_chunk_NNNNN) are gathered sorted by name: collect()
     // order is completion order, which is part of JOIN's -resume cache key.
     // toSortedList emits [] on an empty channel, so a 0-chunk split still joins.
@@ -1176,7 +1195,7 @@ func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink
 	for i, link := range chain {
 		fmt.Fprintf(&specInputs, "    path 'spec_%d.json'\n", i)
 
-		base := g.stageCmd("main", link.stage, vmemFlag(link.stage, "main"))
+		base := g.stageCmd("main", link.stage)
 
 		inputs := ""
 		if i > 0 {
@@ -1190,7 +1209,7 @@ func genFusedChainProcess(b *strings.Builder, pipeline string, chain []chainLink
 
 		fmt.Fprintf(&script, "    '%s' bind -spec 'spec_%d.json' -pipeargs pipeargs%s -o args_%d%s\n",
 			g.mre, i, inputs, i, g.producerArgs(link.call.Callable, types.RoleIn))
-		fmt.Fprintf(&script, "    %s -args args_%d%s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o %s\n",
+		fmt.Fprintf(&script, "    %s -args args_%d%s -work . -o %s\n",
 			base, i, g.producerArgs(link.call.Callable, types.RoleMainOut), outVar)
 	}
 
@@ -1322,7 +1341,7 @@ func fusedSplitCallArgsPa(bindings []ir.Binding, pa string) string {
 // defs/resources so the aliased MAIN/JOIN can consume them.
 func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg := bindInputs(refCalls(c.Bindings))
-	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
+	splitCmd := g.stageCmd("split", s)
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
@@ -1335,7 +1354,7 @@ func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.
   script:
     """
     '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
-    %[6]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[9]s
+    %[6]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir .%[9]s
     """
 }
 
@@ -1373,7 +1392,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
     a = %[3]s.out.args.first()
     chunks = %[3]s.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[4]s(chunks.combine(a), types)
-    join = %[3]s.out.joinres.map { f -> Mro2nf.parseJson(f) }
+    join = %[3]s.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }
     // Sorted for the same -resume cache-key reason as genSplitWorkflow's JOIN.
     %[5]s(join, a, %[3]s.out.chunks.ifEmpty([]), %[3]s.out.defs, %[4]s.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:
@@ -1392,7 +1411,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 // merge runs first in the same task (#76).
 func genFusedStageProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg, pre := foldBindInputs(g, prog, p, bundleInput("pipeargs"), refCalls(c.Bindings))
-	base := g.stageCmd("main", s, vmemFlag(s, "main"))
+	base := g.stageCmd("main", s)
 
 	fmt.Fprintf(b, `process %[1]s {
 %[2]s
@@ -1402,7 +1421,7 @@ func genFusedStageProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, 
   script:
     """
 %[10]s    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
-    %[6]s -args args%[9]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs
+    %[6]s -args args%[9]s -work . -o outs
     """
 }
 

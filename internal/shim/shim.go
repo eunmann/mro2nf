@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,9 +29,16 @@ const (
 	// extraVMemGB matches jobmanagers/config.json extra_vmem_per_job: the
 	// default virtual-memory headroom added on top of the memory request.
 	extraVMemGB = 3
-	filePerm    = 0o644
-	dirPerm     = 0o755
-	disableFlag = "disable"
+	// threadsPerJob and memGBPerJob are config.json's threads_per_job and
+	// memGB_per_job: what an unset (0) request gets. centiPerCore and mbPerGB are
+	// the granularities mrp's local job manager rounds threads and memory up to.
+	threadsPerJob = 1
+	memGBPerJob   = 1
+	centiPerCore  = 100
+	mbPerGB       = 1024
+	filePerm      = 0o644
+	dirPerm       = 0o755
+	disableFlag   = "disable"
 	// assertPrefix marks a non-retryable assertion failure on the adapter error
 	// channel (mrp's write_assert prepends it).
 	assertPrefix = "ASSERT:"
@@ -78,6 +87,28 @@ type Adapter struct {
 	// address space via prlimit, plus a resident-memory (RSS) kill at mem_gb via
 	// the process-group monitor (mrp's primary monitor kill).
 	Monitor bool
+	// Attempt and AllocBytes are the Nextflow task attempt and the memory the
+	// scheduler gave it; a retry's escalated allocation moves the -monitor
+	// limits (monitorLimits) but never the resources the stage sees.
+	Attempt    int
+	AllocBytes int64
+}
+
+// monitorLimits returns the memory limits -monitor enforces for a phase whose
+// stage sees eff. The first attempt enforces eff, as mrp does; a retry enforces
+// the larger allocation Nextflow escalated the task to, so a memory-killed
+// stage can succeed on retry while the stage still sees mrp's request.
+func monitorLimits(eff Resources, a Adapter) Resources {
+	alloc := float64(a.AllocBytes) / bytesPerGB
+	if a.Attempt <= 1 || alloc <= eff.MemGB {
+		return eff
+	}
+
+	lim := eff
+	lim.MemGB = alloc
+	lim.VMemGB = max(eff.VMemGB, alloc+extraVMemGB)
+
+	return lim
 }
 
 // Resources is the per-phase resource allocation surfaced to stage code.
@@ -133,7 +164,7 @@ func RunSplit(
 		return nil, Resources{}, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "split", eff); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "split", monitorLimits(eff, a)); err != nil {
 		return nil, Resources{}, err
 	}
 
@@ -162,7 +193,7 @@ func RunMain(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "main", eff); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "main", monitorLimits(eff, a)); err != nil {
 		return nil, err
 	}
 
@@ -170,23 +201,24 @@ func RunMain(
 }
 
 // RunJoin runs the join phase and returns the stage's final _outs. chunkDefs
-// and chunkOuts must be in matching chunk order.
+// and chunkOuts must be in matching chunk order; join is the split's join
+// resource override, which overlays res like a chunk's own request.
 func RunJoin(
 	ctx context.Context, workDir string, a Adapter, stageArgs json.RawMessage,
 	chunkDefs []ChunkDef, chunkOuts []json.RawMessage,
-	outParams []ir.Param, tbl *types.Table, res Resources, inv Invocation,
+	outParams []ir.Param, tbl *types.Table, join, res Resources, inv Invocation,
 ) (json.RawMessage, error) {
 	meta, files, journal, err := prepDirs(workDir, "join")
 	if err != nil {
 		return nil, err
 	}
 
-	args, err := withResources(stageArgs, res)
+	args, err := withResources(stageArgs, join, res)
 	if err != nil {
 		return nil, err
 	}
 
-	eff := resolveResources(Resources{}, res)
+	eff := resolveResources(join, res)
 	if err := stageInputs(meta, files, args, outParams, tbl, eff, inv, "join"); err != nil {
 		return nil, err
 	}
@@ -195,7 +227,7 @@ func RunJoin(
 		return nil, err
 	}
 
-	if err := runAdapter(ctx, meta, files, journal, a, "join", eff); err != nil {
+	if err := runAdapter(ctx, meta, files, journal, a, "join", monitorLimits(eff, a)); err != nil {
 		return nil, err
 	}
 
@@ -241,8 +273,9 @@ func writeChunkData(meta string, defs []ChunkDef, outs []json.RawMessage) error 
 }
 
 // runAdapter invokes the Martian adapter for one phase, dispatching by language.
-// res is the resolved allocation: its vmem_gb caps address space (prlimit) and
-// its mem_gb bounds resident memory (the RSS monitor) when monitoring is enabled.
+// res holds the monitor limits (monitorLimits): its vmem_gb caps address space
+// (prlimit) and its mem_gb bounds resident memory (the RSS monitor) when
+// monitoring is enabled; its threads size the thread-limit env vars.
 func runAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources) error {
 	switch a.Lang {
 	// py never sees SrcArgs: mrp's python arm builds a fixed argv with no args
@@ -336,12 +369,33 @@ func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string,
 	return exec.CommandContext(ctx, argv[0], argv[1:]...)
 }
 
-// adapterEnv is the stage child's environment: the shim's own env with TMPDIR
-// pointed at the phase's per-stage tmp dir (created by prepDirs), matching
-// mrp's per-job TMPDIR so stage tempfiles land on the task's scratch volume
-// rather than the container's (possibly tiny) /tmp.
-func adapterEnv(meta string) []string {
-	return append(os.Environ(), "TMPDIR="+filepath.Join(meta, "tmp"))
+// threadEnvs returns jobmanagers/config.json's thread_envs: the variables mrp
+// sets on every job so thread pools (OpenMP, MKL, numexpr, polars, Go,
+// TensorFlow) size to the job's threads rather than the host's cores.
+func threadEnvs() []string {
+	return []string{
+		"GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS", "NUMEXPR_NUM_THREADS",
+		"OMP_NUM_THREADS", "OMP_THREAD_LIMIT", "POLARS_MAX_THREADS", "ROOT_MAX_THREADS",
+		"TF_NUM_THREADS",
+	}
+}
+
+// adapterEnv is the stage child's environment: the shim's own env with
+// TMPDIR pointed at the phase's per-stage tmp dir (created by prepDirs),
+// matching mrp's per-job TMPDIR so stage tempfiles land on the task's scratch
+// volume rather than the container's (possibly tiny) /tmp, and each threadEnvs
+// variable set to ceil(threads). mrp merges these job variables over its own
+// environment (util.MergeEnv), so an inherited value is overridden, and exec
+// keeps the last of duplicate keys.
+func adapterEnv(meta string, threads float64) []string {
+	env := os.Environ()
+
+	n := strconv.Itoa(int(math.Ceil(threads)))
+	for _, key := range threadEnvs() {
+		env = append(env, key+"="+n)
+	}
+
+	return append(env, "TMPDIR="+filepath.Join(meta, "tmp"))
 }
 
 // runPyAdapter runs a python stage directly. The adapter expects fd 3 to be its
@@ -350,7 +404,7 @@ func adapterEnv(meta string) []string {
 func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, phase string, res Resources) error {
 	cmd := limitedCommand(ctx, a, res.VMemGB, defaultPython, a.Shell, a.Stagecode, phase, meta, files, journal)
 	cmd.Dir = files
-	cmd.Env = adapterEnv(meta)
+	cmd.Env = adapterEnv(meta, res.Threads)
 	mon := startMonitor(cmd, a, res.MemGB)
 
 	aio, err := openAdapterIO(meta)
@@ -377,7 +431,7 @@ func runPyAdapter(ctx context.Context, meta, files, journal string, a Adapter, p
 func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapter, argv []string, phase string, res Resources) error {
 	cmd := limitedCommand(ctx, a, res.VMemGB, argv[0], append(argv[1:], meta, files, journal)...)
 	cmd.Dir = files
-	cmd.Env = adapterEnv(meta)
+	cmd.Env = adapterEnv(meta, res.Threads)
 	mon := startMonitor(cmd, a, res.MemGB)
 
 	stdout, err := os.Create(filepath.Join(meta, "_stdout"))

@@ -106,18 +106,20 @@ out of scope for a transpiler.
 | `exec` adapter | ✅ | e2e `exec_min` |
 | `comp` adapter (mrjob-wrapped) | ✅ | unit `TestRunSumSquaresComp` |
 | per-chunk resources `__mem_gb/__threads/__vmem_gb/__special` | ✅ in `_args`/`_jobinfo` | unit `TestMergeArgs*`, `TestSpecialResourcePreserved`, `TestJobInfoResolvedResources` |
-| per-chunk resources → Nextflow scheduler directives | ✅ #15 (dynamic `cpus`/`memory` closures read the chunk's resolved resources; split & join phases also pass their resolved allocation to the shim so every phase's `_jobinfo` matches mrp) | e2e `split_test`, unit |
+| per-chunk resources → Nextflow scheduler directives | ✅ #15 (dynamic `cpus`/`memory` closures read the chunk's resolved resources) | e2e `split_test`, unit |
+| resources a stage sees (`__*`, `_jobinfo`) | ✅ #243 every phase passes the stage's Martian request to the shim (not the integer, attempt-scaled `task.memory`), which overlays the chunk's or the staged `joinres.json`'s own request and resolves it as mrp's local job manager does: fractional memory kept to the MiB, mrp's `__*` number format | e2e `frac_mem` (golden + mrp ABI diff), unit `TestResourceFlagsPassStageMemory`, `TestResolveResourcesOverlay`, `TestResourceNumMatchesMrp` |
 | negative/adaptive resource sentinels | ✅ preserved | unit `TestMergeArgsNegativeResources` |
-| stage `using(mem_gb/threads)` incl. fractional → cpus/memory | ✅ | unit `TestEmitModules` (`memory '2 GB'`, `cpus 1`), shim |
+| stage `using(mem_gb/threads)` incl. fractional → cpus/memory | ✅ the scheduler gets whole units; the stage sees the fractional request (#370: `threads = 0.5` reaches `__threads` as 0.5) | unit `TestEmitModules` (`memory '2 GB'`, `cpus 1`), `TestResourceFlagsPassStageThreads`; e2e `frac_threads`, `split_test` (mrp ABI diff) |
 | `using(vmem_gb)` enforcement | ✅ the declared value is passed to the shim via `-vmemgb` on every phase, so `mro2nf -monitor` caps the adapter's virtual memory (`prlimit --as`) at it and `_jobinfo` reports it; a per-chunk `__vmem_gb` overrides for main, a split-returned join `__vmem_gb` for join | unit `TestEmitVmemFlag`, `TestLimitedCommandMonitor` |
-| `using(special)` → scheduler | ✅ mapped to a `clusterOptions` directive on every phase, looked up from `params.job_resources` (the `MRO_JOBRESOURCES` analog: a `special` string keys into a deploy-supplied map of scheduler options). Default map is empty (no-op on local; populate per deployment). A per-task `__special` (per-chunk / split-returned join) wins over the static key | e2e `special_resource`, unit `TestEmitSpecialScheduler`, `TestSpecialResourcePreserved` |
+| `using(special)` → scheduler | ✅ mapped to a `clusterOptions` directive on every phase, looked up from `params.job_resources` (the `MRO_JOBRESOURCES` analog: a `special` string keys into a deploy-supplied map of scheduler options). Default map is empty (no-op on local; populate per deployment). A per-task `__special` (per-chunk / split-returned join) wins over the static key. The static key also reaches main and join `_args` as `__special` (`-special`), as mrp writes it | e2e `special_resource`, `gpu_stage` (mrp ABI diff), unit `TestResourceFlagsPassStaticSpecial`, unit `TestEmitSpecialScheduler`, `TestSpecialResourcePreserved` |
 | split-returned `join` resource override → join phase directives | ✅ the split's `{"join": {...}}` block (`readStageDefs`) is emitted as `joinres.json` and read by the JOIN process's dynamic `cpus`/`memory`/`clusterOptions`, overlaying the stage's static `using()` field-by-field — matching mrp's `getJobReqs`. JOIN provisions and reports the overridden allocation | e2e `join_resources`, unit `TestReadStageDefsJoinOverride`, `TestEmitJoinResourceOverride` |
 | `martian` module API (make_path, log_info/log_warn, update_progress, exit, alarm) | ✅ (real adapter drives it) | e2e `kitchen_sink`, `file_chain`, `api_smoke` |
 | `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` (using(mem_gb=3,threads=2)→mem 3,threads 2) |
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out` (CopyTree dir recursion) |
 | stage output validation (mrp `verifyOutput`) | ✅ a stage's final `_outs` (non-split main, or join) are checked like mrp: every declared output present, each non-null value of its declared type (a struct with every member key, an int a JSON integer, a typed map of files with filename-legal keys); a violation fails the stage task before any consumer binds it. Per-chunk outs are not checked, as at mrp's default enforcement level. The native runner applies the same check | e2e `TestInvalidOutputFailsLikeMrp` (`missing_struct_key`); unit `TestValidateOutputs`, `TestProducerValidateOuts`, runner `ValidateOutputsTest` |
 | ASSERT vs retryable-error classification | ✅ shim exits 42 for an ASSERT (terminate) vs 1 for a retryable failure; config's dynamic `errorStrategy` routes accordingly | unit `TestStageFailureClassification`, `TestEmitConfig` |
-| auto-adjust-memory / OOM escalation | ✅ memory directives grow with `task.attempt`, so an OOM-killed stage (a retryable failure) is retried with more memory instead of failing identically; cpus do not escalate. Attempt 1 is unchanged | unit `TestEmitModules` (`* task.attempt`) |
+| auto-adjust-memory / OOM escalation | ✅ memory directives grow with `task.attempt`, so an OOM-killed stage (a retryable failure) is retried with more memory instead of failing identically; cpus do not escalate. Attempt 1 is unchanged. The escalation sizes the task and the `-monitor` limits only; the stage keeps seeing its request | unit `TestEmitModules` (`* task.attempt`), `TestMonitorLimitsFollowRetryAllocation`; e2e `TestOrdinaryFailureRetriesWithEscalatedMemory` (`flaky_retry`) |
+| thread-limit env vars (mrp's `thread_envs`) | ✅ #247 every stage runs with `GOMAXPROCS`, `MKL_NUM_THREADS`, `NUMEXPR_MAX_THREADS`, `NUMEXPR_NUM_THREADS`, `OMP_NUM_THREADS`, `OMP_THREAD_LIMIT`, `POLARS_MAX_THREADS`, `ROOT_MAX_THREADS` and `TF_NUM_THREADS` set to ceil(threads), overriding inherited values as mrp does; the native runner sets them before importing the stage | unit `TestAdapterThreadEnvs`, runner `test_thread_envs_override_inherited`, `TestRunnerConformance` |
 | `--monitor` memory enforcement | ✅ with `mro2nf -monitor`: an RSS kill at `mem_gb` via the process-group monitor (mrp's primary kill) plus a `prlimit --as` vmem cap at `vmem_gb` | unit `TestMemMonitor*`, `TestRunAdapterMonitorMemoryQuota`, `TestLimitedCommandMonitor` |
 
 ## Outputs / storage — storage-management
@@ -210,13 +212,13 @@ each flag opts into are surfaced as transpile-time diagnostics
     stage retries with more — see the resources table above.)
 - Scheduler-*allocation* fidelity is now broad: per-chunk `cpus`/`memory`, the
   split-returned `join` override, and `special` → `clusterOptions` all reach the
-  scheduler, and every phase reports its resolved allocation in `_jobinfo`, so a
-  transpiled run provisions like mrp and runs in a comparable duration. A
+  scheduler, so a transpiled run provisions like mrp and runs in a comparable
+  duration, while every phase reports mrp's resolved request in `_jobinfo`. A
   purely split-returned `__special` is now routed even with no static key (the
   main/join phases read the per-task `__special`), and a declared `using(vmem_gb)`
   is passed to the shim via `-vmemgb` on every phase, so `--monitor` caps virtual
   memory (and `_jobinfo` reports it) at the declared value (a per-chunk
-  `__vmem_gb` still wins for main; a split-returned join override refines it).
+  `__vmem_gb` still wins for main, a split-returned join `__vmem_gb` for join).
 - Remaining ⚠️ items are storage-*mechanism* fidelity: the published `outs/`
   tree now reproduces mrp's nested layout and `GetOutFilename` naming
   (verified by the Go `TestMrpDiff` suite against real mrp), but files are copied

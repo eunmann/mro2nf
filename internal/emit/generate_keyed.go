@@ -111,7 +111,7 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
 // wiring change.
 func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.Stage, g genCtx) {
 	block, arg := keyedInputs(refCalls(c.Bindings))
-	main := g.stageCmd("main", s, vmemFlag(s, "main"))
+	main := g.stageCmd("main", s)
 
 	fmt.Fprintf(b, `process %[1]s_K {
 %[2]s
@@ -121,7 +121,7 @@ func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s
   script:
     """
     '%[4]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[5]s -o args%[6]s
-    %[7]s -args args%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[7]s -args args%[8]s -work . -o outs__${key}
     """
 }
 
@@ -551,8 +551,8 @@ func boolKey(b bool) string {
 // processes: every channel item is tuple(key, ...), so chunks and joins stay
 // partitioned by fork. Outputs are named by key so the merge orders them.
 func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
-	splitCmd := g.stageCmd("split", s, vmemFlag(s, "split"))
-	joinCmd := g.stageCmd("join", s, vmemFlag(s, "join"))
+	splitCmd := g.stageCmd("split", s)
+	joinCmd := g.stageCmd("join", s)
 
 	fmt.Fprintf(b, `process %[1]s_SPLIT_K {
 %[2]s
@@ -565,7 +565,7 @@ func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base stri
     tuple val(key), path('chunk_*', type: 'dir'), emit: chunks, optional: true
   script:
     """
-    %[3]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir . -threads ${task.cpus} -memgb ${task.memory.toGiga()}%[4]s
+    %[3]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir .%[4]s
     """
 }
 
@@ -578,20 +578,20 @@ process %[1]s_MAIN_K {
     tuple val(key), path("out_${chunk.baseName}", type: 'dir')
   script:
     """
-    %[5]s -args ${args} -chunk ${chunk}%[7]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o out_${chunk.baseName}
+    %[5]s -args ${args} -chunk ${chunk}%[7]s -work . -o out_${chunk.baseName}
     """
 }
 
 process %[1]s_JOIN_K {
 %[10]s
   input:
-    tuple val(key), val(join), path(souts), path(args), path(cdefs), path('chunks.json')
+    tuple val(key), val(join), path('joinres.json'), path(souts), path(args), path(cdefs), path('chunks.json')
     path 'types.json'
   output:
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[6]s -args ${args} %[11]s%[8]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[6]s -args ${args} %[11]s%[8]s -work . -o outs__${key}
     """
 }
 
@@ -613,7 +613,7 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     %[1]s_SPLIT_K(ch.sp, types)
     chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> Mro2nf.keyedChunks(key, cs) }
     %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0), types)
-    joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, Mro2nf.parseJson(f)) }
+    joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, Mro2nf.parseJson(f), f) }
     // Drive the join from the full fork set (ch.jn) with remainder joins on the
     // staged chunk bundles and chunk outputs, so a fork whose split produced zero
     // chunks (no chunk_* dirs, no groupTuple group) still runs JOIN_K — with empty
@@ -626,7 +626,7 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     // path (#217). The
     // grouped chunk outs are sorted by name: groupTuple order is completion order,
     // and JOIN_K's input order is part of its -resume cache key.
-    joined = ch.jn.join(joinres).join(%[1]s_SPLIT_K.out.defs).join(%[1]s_SPLIT_K.out.chunks, remainder: true).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[5] ?: []).sort { a, b -> a.name <=> b.name }, t[1], (t[4] ?: []), t[3]) }
+    joined = ch.jn.join(joinres).join(%[1]s_SPLIT_K.out.defs).join(%[1]s_SPLIT_K.out.chunks, remainder: true).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], t[3], (t[6] ?: []).sort { a, b -> a.name <=> b.name }, t[1], (t[5] ?: []), t[4]) }
     %[1]s_JOIN_K(joined, types)
   emit:
     %[1]s_JOIN_K.out
@@ -649,7 +649,7 @@ func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx)
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[3]s -args ${args}%[4]s -threads ${task.cpus} -memgb ${task.memory.toGiga()} -work . -o outs__${key}
+    %[3]s -args ${args}%[4]s -work . -o outs__${key}
     """
 }
 

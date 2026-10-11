@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -248,14 +249,15 @@ func mergeArgs(stageArgs json.RawMessage, chunk ChunkDef, res Resources) (json.R
 }
 
 // withResources returns the stage args with the resolved resource keys added,
-// used for the join phase (which has no per-chunk args).
-func withResources(stageArgs json.RawMessage, res Resources) (json.RawMessage, error) {
+// used for the join phase (which has no per-chunk args): join is the split's
+// join override, res the phase request.
+func withResources(stageArgs json.RawMessage, join, res Resources) (json.RawMessage, error) {
 	merged, err := toMap(stageArgs)
 	if err != nil {
 		return nil, fmt.Errorf("stage args: %w", err)
 	}
 
-	injectResources(merged, resolveResources(Resources{}, res))
+	injectResources(merged, resolveResources(join, res))
 
 	raw, err := json.Marshal(merged)
 	if err != nil {
@@ -265,50 +267,68 @@ func withResources(stageArgs json.RawMessage, res Resources) (json.RawMessage, e
 	return raw, nil
 }
 
-// resolveResources overlays a chunk's per-chunk overrides on the phase
-// allocation. A non-zero override wins (including negative adaptive sentinels);
-// vmem defaults to the resolved memory plus the standard headroom.
-func resolveResources(chunk, res Resources) Resources {
+// resolveResources overlays a chunk's or join's own request (def) on the phase
+// request — a non-zero field wins, as in mrp's getJobReqs — and resolves the
+// result as mrp's local job manager does (GetSystemReqs): unset threads and
+// memory take the 1-thread / 1 GB job defaults, threads round up to whole
+// centicores (not CPUs), memory and vmem round up to whole MiB, and vmem
+// defaults to memory plus the standard headroom and never falls below memory.
+func resolveResources(def, res Resources) Resources {
 	// A negative request is Martian's adaptive sentinel ("at least |x|, ideally
-	// all available"); its cluster path resolves it to the positive |x| before
-	// reporting it, so do the same here to avoid leaking a negative mem_gb/threads
-	// into _jobinfo and the __* keys the stage reads.
-	eff := Resources{
-		MemGB:   absResource(coalesce(chunk.MemGB, res.MemGB)),
-		Threads: absResource(coalesce(chunk.Threads, res.Threads)),
-		Special: chunk.Special,
+	// all available"). mrp's local job manager hands it the host's free capacity,
+	// which has no Nextflow-task equivalent, so it resolves to |x| as on mrp's
+	// cluster path rather than leaking a negative into _jobinfo and the __* keys.
+	eff := Resources{Special: def.Special}
+
+	centi := math.Ceil(math.Abs(coalesce(def.Threads, res.Threads)) * centiPerCore)
+	if centi == 0 {
+		centi = threadsPerJob * centiPerCore
 	}
+
+	eff.Threads = centi / centiPerCore
 
 	if eff.Special == "" {
 		eff.Special = res.Special
 	}
 
-	// vmem defaults to the resolved memory plus the standard headroom. Matching
-	// Martian's remote GetSystemReqs, any resolved vmem below 1 GB (an unset 0, or
-	// a too-small explicit value) is recomputed from memory rather than used
-	// as-is.
-	eff.VMemGB = absResource(coalesce(chunk.VMemGB, res.VMemGB))
-	if eff.VMemGB < 1 {
-		eff.VMemGB = eff.MemGB + extraVMemGB
+	memMB := ceilMB(coalesce(def.MemGB, res.MemGB))
+	if memMB == 0 {
+		memMB = memGBPerJob * mbPerGB
 	}
+
+	vmemMB := ceilMB(coalesce(def.VMemGB, res.VMemGB))
+	if vmemMB == 0 {
+		vmemMB = memMB + extraVMemGB*mbPerGB
+	}
+
+	eff.MemGB = memMB / mbPerGB
+	eff.VMemGB = max(vmemMB, memMB) / mbPerGB
 
 	return eff
 }
 
-// absResource resolves a negative adaptive sentinel to its magnitude.
-func absResource(f float64) float64 {
-	if f < 0 {
-		return -f
-	}
+// ApplyOverride returns def — the stage's using() request, or a chunk's or
+// join's own request — with an operator --overrides value's non-zero fields
+// over it. mrp's getJobReqs applies overrides after the chunk or join request,
+// so an override wins over both (and is what the stage then sees).
+func ApplyOverride(def, override Resources) Resources {
+	def.Threads = coalesce(override.Threads, def.Threads)
+	def.MemGB = coalesce(override.MemGB, def.MemGB)
+	def.VMemGB = coalesce(override.VMemGB, def.VMemGB)
 
-	return f
+	return def
+}
+
+// ceilMB is a GB request's magnitude in whole MiB, rounded up.
+func ceilMB(gb float64) float64 {
+	return math.Ceil(math.Abs(gb) * mbPerGB)
 }
 
 // injectResources writes the resolved resource keys into an args map.
 func injectResources(merged map[string]json.RawMessage, eff Resources) {
-	merged["__mem_gb"] = numRaw(eff.MemGB)
-	merged["__threads"] = numRaw(eff.Threads)
-	merged["__vmem_gb"] = numRaw(eff.VMemGB)
+	merged["__mem_gb"] = resourceNum(eff.MemGB)
+	merged["__threads"] = resourceNum(eff.Threads)
+	merged["__vmem_gb"] = resourceNum(eff.VMemGB)
 
 	if eff.Special != "" {
 		if raw, err := json.Marshal(eff.Special); err == nil {
@@ -363,8 +383,14 @@ func orEmptyObj(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
-func numRaw(f float64) json.RawMessage {
-	return json.RawMessage(strconv.FormatFloat(f, 'g', -1, 64))
+// resourceNum formats a resolved resource as mrp's JobResources.ToLazyMap
+// writes it into _args: three significant digits, and no exponent from 999.5 up.
+func resourceNum(f float64) json.RawMessage {
+	if f < 999.5 && f > -999.5 {
+		return json.RawMessage(strconv.FormatFloat(f, 'g', 3, 64))
+	}
+
+	return json.RawMessage(strconv.FormatFloat(f, 'f', 0, 64))
 }
 
 func asFloat(raw json.RawMessage) float64 {

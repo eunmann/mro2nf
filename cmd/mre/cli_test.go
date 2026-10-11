@@ -92,6 +92,66 @@ func TestExitCode(t *testing.T) {
 	}
 }
 
+// TestCommonFlagsRequest covers the phase request flags: a static -special
+// (#369) and an override that replaces the stage's and a chunk's memory
+// (#248) but keeps the chunk's own __special.
+func TestCommonFlagsRequest(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	cf := addCommon(fs)
+
+	if err := fs.Parse([]string{"-memgb", "1.5", "-special", "gpu:2", "-overridememgb", "3"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	if diff := cmp.Diff(shim.Resources{Threads: 1, MemGB: 3, Special: "gpu:2"}, cf.resources()); diff != "" {
+		t.Errorf("request mismatch (-want +got):\n%s", diff)
+	}
+
+	chunk := cf.overridden(shim.Resources{MemGB: 0.5, Special: "chunk"})
+	if diff := cmp.Diff(shim.Resources{MemGB: 3, Special: "chunk"}, chunk); diff != "" {
+		t.Errorf("overridden chunk mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestJoinRequestOverride pins the join half of #248 to mrp's getJobReqs:
+// under {"join.mem_gb": 4} a join whose split returned __mem_gb 0.5 gets 4,
+// and without an override it keeps the split's 0.5.
+func TestJoinRequestOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "joinres.json")
+	if err := os.WriteFile(path, []byte(`{"threads":2,"mem_gb":0.5}`), 0o644); err != nil {
+		t.Fatalf("write joinres: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		argv []string
+		want shim.Resources
+	}{
+		{"override", []string{"-overridememgb", "4"}, shim.Resources{Threads: 2, MemGB: 4}},
+		{"no override", nil, shim.Resources{Threads: 2, MemGB: 0.5}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			cf := addCommon(fs)
+
+			if err := fs.Parse(tt.argv); err != nil {
+				t.Fatalf("parse flags: %v", err)
+			}
+
+			got, err := cf.joinRequest(path)
+			if err != nil {
+				t.Fatalf("joinRequest: %v", err)
+			}
+
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("join request mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestCommonFlagsSrcArgs covers the -srcarg plumbing (#113): each repeated
 // occurrence lands on Adapter.SrcArgs in order, and omitting the flag leaves
 // SrcArgs empty.
@@ -104,7 +164,7 @@ func TestCommonFlagsSrcArgs(t *testing.T) {
 		t.Fatalf("parse flags: %v", err)
 	}
 
-	want := shim.Adapter{Lang: ir.LangExec, Stagecode: "/code/tool.py", SrcArgs: []string{"3", "hello"}}
+	want := shim.Adapter{Lang: ir.LangExec, Stagecode: "/code/tool.py", SrcArgs: []string{"3", "hello"}, Attempt: 1}
 	if diff := cmp.Diff(want, cf.adapter()); diff != "" {
 		t.Errorf("adapter mismatch (-want +got):\n%s", diff)
 	}

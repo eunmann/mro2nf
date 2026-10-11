@@ -1,0 +1,16 @@
+{
+    "chunk_at": [
+        0.25,
+        0.5
+    ],
+    "chunk_t": [
+        0.25,
+        0.5
+    ],
+    "half_at": 0.5,
+    "half_t": 0.5,
+    "join_at": 1.5,
+    "join_t": 1.5,
+    "third_at": 0.35,
+    "third_t": 0.35
+}

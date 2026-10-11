@@ -55,6 +55,10 @@ func TestRunnerConformance(t *testing.T) {
 	mreMain := env.runPhase(t, "mre", "main", []string{"-chunk", chunk})
 	pyMain := env.runPhase(t, "py", "main", []string{"-chunk", chunk})
 	diffDirs(t, "main", mreMain, pyMain)
+	// mrp's thread-limit env vars reach the stage on both stacks (#247).
+	if !leafContains(t, filepath.Join(mreMain, "outs", "f"), "omp=1 ") {
+		t.Error("main report does not show OMP_NUM_THREADS=1")
+	}
 	mustContain(t, filepath.Join(mreMain, "outs", "data.json"),
 		`\u003c`, `\u0026`, `\u0001`, `\u0002`, `\u2028`, `\u2029`)
 
@@ -63,7 +67,11 @@ func TestRunnerConformance(t *testing.T) {
 	// chunk-arg leaf as a resolvable marker, so both stacks localize it.
 	// chunks.json supplies only the count both stacks check the staged dir
 	// against.
-	joinFlags := []string{"-chunksfile", filepath.Join(mreSplit, "chunks.json"), "-chunkdir", "."}
+	joinFlags := []string{
+		"-chunksfile", filepath.Join(mreSplit, "chunks.json"),
+		"-chunkdir", ".",
+		"-joinres", filepath.Join(mreSplit, "joinres.json"),
+	}
 
 	env.stageJoinInputs(t, mreSplit, filepath.Join(mreMain, "outs"))
 	mreJoin := env.runPhase(t, "mre", "join", joinFlags)
@@ -71,6 +79,7 @@ func TestRunnerConformance(t *testing.T) {
 	env.stageJoinInputs(t, mreSplit, filepath.Join(mreMain, "outs"))
 	pyJoin := env.runPhase(t, "py", "join", joinFlags)
 	diffDirs(t, "join", mreJoin, pyJoin)
+	mustContain(t, filepath.Join(mreJoin, "outs", "data.json"), " mem=1.25 am=1.25")
 }
 
 // TestRunnerConformanceRelativeOutPath is the #179 regression guard: a stage
@@ -267,7 +276,9 @@ func requirePython(t *testing.T) {
 // file-typed chunk-in the split writes (write_chunk_bundles' mark_files vs
 // shim.WriteChunkBundle staging), fractional resource overrides (GoFloat's
 // formatting in chunks.json + joinres.json), and a file output.
-const conformanceStage = `import martian
+const conformanceStage = `import os
+
+import martian
 
 def split(args):
     src = martian.make_path('chunk_src.txt').decode()
@@ -288,16 +299,18 @@ def main(args, outs):
     with open(args.src) as f:
         payload = f.read()
     with open(p, 'w') as f:
-        f.write('value=%s threads=%s mem=%s src=%s' % (
+        f.write('value=%s threads=%s mem=%s omp=%s src=%s' % (
             args.value, martian.get_threads_allocation(),
-            martian.get_memory_allocation(), payload))
+            martian.get_memory_allocation(),
+            os.environ.get('OMP_NUM_THREADS'), payload))
     outs.report = p
     outs.note = args.html + ' <main>&\x02'
 
 def join(args, outs, chunk_defs, chunk_outs):
     outs.total = sum(c.part for c in chunk_outs)
     outs.report = chunk_outs[0].report
-    outs.note = chunk_outs[0].note + ' <join>'
+    outs.note = chunk_outs[0].note + ' <join> mem=%s am=%s' % (
+        martian.get_memory_allocation(), args.__mem_gb)
 `
 
 func newConformanceEnv(t *testing.T) *conformanceEnv {
@@ -665,4 +678,27 @@ func mustNotContain(t *testing.T, path string, unwanted ...string) {
 			t.Errorf("%s: unexpectedly contains %q", path, u)
 		}
 	}
+}
+
+// leafContains reports whether any file directly under dir contains want.
+func leafContains(t *testing.T, dir, want string) bool {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if strings.Contains(string(b), want) {
+			return true
+		}
+	}
+
+	return false
 }

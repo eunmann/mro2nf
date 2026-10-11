@@ -122,8 +122,8 @@ func TestNativeRunnerComposesWithNative(t *testing.T) {
 
 // TestNativeRunnerExitContract re-proves the assert/retry contract through the
 // runner: an ASSERT (martian.exit) terminates after one attempt with exit 42;
-// an ordinary failure retries with escalated memory and the shim's
-// get_memory_allocation reports the attempt-2 value.
+// an ordinary failure (a -monitor kill at the request) retries under a larger
+// allocation while the stage still sees mrp's request, as under mre.
 func TestNativeRunnerExitContract(t *testing.T) {
 	t.Parallel()
 
@@ -149,19 +149,20 @@ func TestNativeRunnerExitContract(t *testing.T) {
 	t.Run("ordinary failure retries", func(t *testing.T) {
 		t.Parallel()
 
-		proj := transpile(t, "flaky_retry", "-native-runner")
+		proj := transpile(t, "flaky_retry", "-native-runner", "-monitor")
 		if err := runNextflow(t, proj, "-with-trace", "trace.txt"); err != nil {
 			t.Fatalf("run failed; the retry should have recovered it: %v", err)
 		}
 
 		var outs struct {
-			MemGB float64 `json:"mem_gb"`
+			MemGB    float64 `json:"mem_gb"`
+			ArgMemGB float64 `json:"arg_mem_gb"`
 		}
 
 		readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
 
-		if outs.MemGB != 2 {
-			t.Errorf("mem_gb = %v, want 2 (attempt-2 escalated allocation)", outs.MemGB)
+		if outs.MemGB != 0.5 || outs.ArgMemGB != 0.5 {
+			t.Errorf("stage saw mem_gb=%v __mem_gb=%v, want 0.5/0.5 (mrp's request, no retry factor)", outs.MemGB, outs.ArgMemGB)
 		}
 
 		flaky := attempts(readTrace(t, filepath.Join(proj, "trace.txt")), "FLAKY")

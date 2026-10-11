@@ -1,0 +1,82 @@
+# Fractional memory requests (#243): each stage reports the memory it was given
+# through both martian.get_memory_allocation() (_jobinfo) and args.__mem_gb /
+# __vmem_gb (_args). mrp passes 1.5 GB as 1.5 and rounds 0.3 GB up to whole MiB
+# only; a split's per-chunk and join __mem_gb of 0.5 reach main and join as 0.5.
+stage MEM(
+    in  int   x,
+    out float m,
+    out float am,
+    out float avm,
+    src py    "stages/mem",
+) using (
+    mem_gb = 1.5,
+)
+
+stage SMALL(
+    in  int   x,
+    out float m,
+    out float am,
+    out float avm,
+    src py    "stages/mem",
+) using (
+    mem_gb = 0.3,
+)
+
+stage CHUNKED(
+    in  int     x,
+    out float[] cm,
+    out float[] cam,
+    out float   jm,
+    out float   jam,
+    src py      "stages/chunked",
+) split using (
+    in  int     i,
+    out float   m,
+    out float   am,
+) using (
+    mem_gb = 1.5,
+)
+
+pipeline FRAC_MEM(
+    in  int     x,
+    out float   mem_m,
+    out float   mem_am,
+    out float   mem_avm,
+    out float   small_m,
+    out float   small_am,
+    out float   small_avm,
+    out float[] chunk_m,
+    out float[] chunk_am,
+    out float   join_m,
+    out float   join_am,
+)
+{
+    call MEM(
+        x = self.x,
+    )
+
+    call SMALL(
+        x = self.x,
+    )
+
+    call CHUNKED(
+        x = self.x,
+    )
+
+    return (
+        mem_m     = MEM.m,
+        mem_am    = MEM.am,
+        mem_avm   = MEM.avm,
+        small_m   = SMALL.m,
+        small_am  = SMALL.am,
+        small_avm = SMALL.avm,
+        chunk_m   = CHUNKED.cm,
+        chunk_am  = CHUNKED.cam,
+        join_m    = CHUNKED.jm,
+        join_am   = CHUNKED.jam,
+    )
+}
+
+call FRAC_MEM(
+    x = 1,
+)
