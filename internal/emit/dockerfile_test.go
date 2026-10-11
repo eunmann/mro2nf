@@ -208,8 +208,7 @@ func TestCopyTreeRefusesLeavingLinks(t *testing.T) {
 }
 
 // TestCopyTreeMode checks a vendored file keeps its own permission bits and a
-// linked src its target's, never the link's 0777, and that a re-vendor over
-// a wider stale copy does not keep the stale mode.
+// linked src its target's, never the link's 0777.
 func TestCopyTreeMode(t *testing.T) {
 	src := t.TempDir()
 	writeT(t, filepath.Join(src, "dir", "secret.cfg"), "s", 0o600)
@@ -217,8 +216,6 @@ func TestCopyTreeMode(t *testing.T) {
 	linkT(t, filepath.Join(src, "dir", "secret.cfg"), filepath.Join(src, "link.cfg"))
 
 	dst := t.TempDir()
-	writeT(t, filepath.Join(dst, "dir", "secret.cfg"), "stale", 0o777)
-
 	if err := copyTree(filepath.Join(src, "dir"), filepath.Join(dst, "dir")); err != nil {
 		t.Fatalf("copyTree dir: %v", err)
 	}

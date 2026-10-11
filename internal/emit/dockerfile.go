@@ -121,7 +121,13 @@ func containerBuild(opts Options, target Target, roots sourceRoots) (genCtx, err
 		return g, err
 	}
 
+	// runtime/ is wholly generated: start it empty so nothing an earlier
+	// transpile vendored reaches the image.
 	rt := filepath.Join(opts.OutDir, buildCtxDir)
+	if err := os.RemoveAll(rt); err != nil {
+		return g, fmt.Errorf("reset build context: %w", err)
+	}
+
 	if err := os.MkdirAll(rt, dirPerm); err != nil {
 		return g, fmt.Errorf("create build context: %w", err)
 	}
@@ -396,6 +402,8 @@ func pathCmdContract(cmds []string) string {
 # copied from its name alone): %s
 # You MUST install them, with their runtime dependencies, into this image so they
 # resolve on PATH (e.g. COPY the toolkit in and prepend its bin dir to PATH).
+# .dockerignore sends only runtime/ to the daemon, so put what you COPY there
+# (a re-transpile empties runtime/ and rewrites this file and .dockerignore).
 # Stage code given as a path is vendored into %s automatically above.
 `, strings.Join(cmds, ", "), ctrStages)
 }
@@ -532,22 +540,8 @@ func copyLink(root, path, target string) error {
 		return fmt.Errorf("rel %s: %w", path, err)
 	}
 
-	if err := removeStale(target); err != nil {
-		return err
-	}
-
 	if err := os.Symlink(link, target); err != nil {
 		return fmt.Errorf("symlink %s: %w", target, err)
-	}
-
-	return nil
-}
-
-// removeStale removes what a previous transpile left at path, so the copy
-// replaces it instead of writing through it or inheriting its mode.
-func removeStale(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("remove stale %s: %w", path, err)
 	}
 
 	return nil
@@ -563,10 +557,6 @@ func copyFile(src, dst string, perm os.FileMode) error {
 		return fmt.Errorf("open %s: %w", src, err)
 	}
 	defer func() { _ = in.Close() }()
-
-	if err := removeStale(dst); err != nil {
-		return err
-	}
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
 	if err != nil {

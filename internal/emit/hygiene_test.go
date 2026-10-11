@@ -447,3 +447,38 @@ func TestEmitDockerignore(t *testing.T) {
 		}
 	}
 }
+
+// TestEmitContainerResetsBuildContext checks a re-transpile into an existing
+// project leaves nothing an earlier run vendored in runtime/: a dropped stage,
+// a whole -shell directory, or a stale symlink. The reads default does not
+// exist, so it is not staged into entry_args/.
+func TestEmitContainerResetsBuildContext(t *testing.T) {
+	tr := newHygieneTree(t)
+	mro := filepath.Join(tr.root, "pipeline.mro")
+	writeTreeFile(t, mro, fmt.Sprintf(hygieneMRO, "input/absent.txt"))
+
+	opts := emit.Options{
+		OutDir: t.TempDir(), Mre: tr.mre, Shell: tr.shell, MROFile: "pipeline.mro",
+		MRODir: tr.root, Target: emit.TargetAWSBatch,
+		StageCode: map[string]string{"COUNT": inTreeCode(tr), "ALIAS": inTreeCode(tr)},
+	}
+	if err := emit.Emit(parseLowered(t, mro, tr.root), opts); err != nil {
+		t.Fatalf("first Emit: %v", err)
+	}
+
+	rt := filepath.Join(opts.OutDir, "runtime")
+	writeTreeFile(t, filepath.Join(rt, "stages", "GONE", "secret.txt"), "SECRET")
+	writeTreeFile(t, filepath.Join(rt, "adapters", "tester", "notes.txt"), "old")
+
+	if err := emit.Emit(parseLowered(t, mro, tr.root), opts); err != nil {
+		t.Fatalf("re-transpile: %v", err)
+	}
+
+	want := []string{
+		"adapters", "adapters/martian_shell.py", "mre",
+		"stages", "stages/ALIAS", "stages/ALIAS/__init__.py", "stages/COUNT",
+	}
+	if diff := cmp.Diff(want, relEntries(t, rt)); diff != "" {
+		t.Errorf("build context after re-transpile (-want +got):\n%s", diff)
+	}
+}

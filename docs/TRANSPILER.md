@@ -753,9 +753,12 @@ For container targets the emitter writes a **`Dockerfile`** plus a self-containe
 code, and — for `comp` stages — the `mrjob` wrapper) at fixed in-container paths
 (`/opt/mro2nf/…`) that the generated scripts bake. HealthOmics tasks have **no
 internet**, so any third-party stage dependency (e.g. the Cell Ranger binary)
-must be added to the Dockerfile. The `.dockerignore` beside it admits only
-`runtime/` into the build context and excludes the same junk names the
-vendoring skips (below), so `docker build <project>` never uploads
+must be added to the Dockerfile. A file such a step COPYs (e.g. the Cell
+Ranger tarball) must sit under `runtime/` or be un-ignored in `.dockerignore`;
+a re-transpile regenerates both files and empties `runtime/`, so redo the
+additions after one. The `.dockerignore` beside it admits only `runtime/` into
+the build context and excludes the same junk names the vendoring skips
+(below), so `docker build <project>` never uploads
 `entry_args/`, run logs or a stray `.env` to the daemon.
 
 HealthOmics' `package.sh` zips an allowlist, never the project dir: `main.nf`,
@@ -771,7 +774,9 @@ otherwise the transpile fails unless `-allow-external-files` is set. The local
 target runs stage code in place and copies none, so it does not check. The
 `-mre`, `-shell` and `-mrjob` tools are not user data and may live anywhere;
 each is copied as the one file named (plus the `martian.py` beside
-`martian_shell.py`), never with the rest of its directory.
+`martian_shell.py`), never with the rest of its directory. `runtime/` is
+emptied before vendoring, so a re-transpile into an existing project keeps
+nothing an earlier run put there.
 
 A vendored stage directory leaves out VCS metadata (`.git`, `.hg`, `.svn`,
 `.bzr`), `.env*` files, `__pycache__`/`*.pyc`/`*.pyo`, and editor and OS
