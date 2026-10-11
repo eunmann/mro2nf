@@ -14,8 +14,11 @@ updates:
       # version pin to an OLDER release.
       - dependency-name: github.com/martian-lang/martian
 
+  # Every action is pinned by commit SHA with a trailing `# vX.Y.Z` comment;
+  # Dependabot bumps the SHA and the comment together. "/" covers only
+  # .github/workflows, so the composite actions are listed too.
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: weekly
     groups:
