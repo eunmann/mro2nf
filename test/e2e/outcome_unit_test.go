@@ -49,6 +49,10 @@ func TestMrpFailedOutcomeKilledJob(t *testing.T) {
 	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk1-u1", "_errors"), "Caught signal terminated")
 	writeABITestFile(t, filepath.Join(ps, "P", "SLOW", "fork0", "_invocation"), "call SLOW()\n")
 	writeABITestFile(t, filepath.Join(ps, "P", "SLOW", "fork0", "chnk0-u2", "_errors"), "Caught signal terminated")
+	writeABITestFile(t, filepath.Join(ps, "P", "EARLY", "fork0", "_invocation"), "call EARLY()\n")
+	writeABITestFile(t, filepath.Join(ps, "P", "EARLY", "fork0", "chnk0-u3", "_errors"), "signal: terminated")
+	writeABITestFile(t, filepath.Join(ps, "P", "STAMPED", "fork0", "_invocation"), "call STAMPED()\n")
+	writeABITestFile(t, filepath.Join(ps, "P", "STAMPED", "fork0", "chnk0-u4", "_errors"), "2026-10-11 22:41:07 Caught signal interrupt")
 
 	got, err := mrpFailedOutcome(ps)
 	if err != nil {
