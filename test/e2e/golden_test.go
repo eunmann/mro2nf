@@ -263,7 +263,7 @@ func TestGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(fixtureDir, tc.golden))
 			assertGoldenTree(t, tc.name, tc.fixture, proj)
@@ -325,7 +325,7 @@ func TestCLITypedOverrides(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), golden)
+			goldenJSON(t, fixture, filepath.Join(proj, "results", "pipeline_outs.json"), golden)
 		})
 	}
 
@@ -389,7 +389,7 @@ func TestEntryFileAdversarialName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	goldenJSON(t,
+	goldenJSON(t, "entry_file",
 		filepath.Join(proj, "results", "pipeline_outs.json"),
 		filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
 }
@@ -505,7 +505,7 @@ func TestEntryFileRemoteURL(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		goldenJSON(t,
+		goldenJSON(t, "entry_file",
 			filepath.Join(proj, "results", "pipeline_outs.json"),
 			filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
 
@@ -695,7 +695,7 @@ func TestNativeMode(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 		})
@@ -730,7 +730,7 @@ func TestNativeFileEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(proj, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 		})
@@ -925,7 +925,7 @@ func TestNativeScatter(t *testing.T) {
 			// native==golden covers native==default transitively in half the runs
 			// — and anchors native to mrp truth rather than to whatever the
 			// default path happens to produce.
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(native, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, "expected", "outs.json"))
 		})
@@ -1036,7 +1036,7 @@ func TestNativeComplete(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			goldenJSON(t,
+			goldenJSON(t, tc.fixture,
 				filepath.Join(native, "results", "pipeline_outs.json"),
 				filepath.Join(root, "testdata", tc.fixture, tc.golden))
 			assertGoldenTree(t, tc.fixture, tc.fixture, native)

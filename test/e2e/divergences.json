@@ -28,13 +28,13 @@
       "comparator": {"rule": "follow-mrp-published-symlinks"}
     },
     {
-      "id": "unpublished-files-null",
+      "id": "unpublished-file-paths",
       "kind": "published-tree",
       "feature": "a file below an array of two or more dimensions in a pipeline output",
-      "summary": "mrp leaves such a file unpublished, and its `_outs` names the file's absolute path in the stage's directory of the pipestance. mro2nf leaves it unpublished too, and `pipeline_outs.json` names it null.",
-      "justification": "mrp descends an array of two or more dimensions one level as if its elements had the base type, so each element fails to move and is written as the stage wrote it, and mrp prints `Could not move output files` (`martian/core/post_process.go` `moveOutArrayDir`, `moveOutFile`, `moveOutDir`; `martian/core/node.go` `postProcess`). That path holds the pipestance's own chunk id (`chnk0-u<id>`), so no other run reproduces it, and `pipeline_outs.json` names files relative to `results/`, where an unpublished file has no path. mre prints a warning for each such output. The comparison reads a path in mrp's `_outs` that lies in the pipestance outside `outs/` as null.",
-      "evidence": ["TestMrpDiff/nested_path_unpublished", "TestPublishNDArrayLeavesFilesUnpublished", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
-      "comparator": {"rule": "null-mrp-unpublished-paths"}
+      "summary": "Both runtimes leave such a file unpublished and name it where its task wrote it: mrp's `_outs` by its absolute path in the stage's directory of the pipestance, `pipeline_outs.json` by its absolute path in the Nextflow work dir, or, when the task ran in a scratch dir, as on an object-store work dir, by the URI of its copy there. A file the stage never wrote keeps, in both, the path it was declared at.",
+      "justification": "mrp descends an array of two or more dimensions one level as if its elements had the base type, so each element fails to move and is written as the stage wrote it, and mrp prints `Could not move output files` (`martian/core/post_process.go` `moveOutArrayDir`, `moveOutFile`, `moveOutDir`; `martian/core/node.go` `postProcess`). The two names cannot match: mrp's holds the pipestance's own chunk id (`chnk0-u<id>`) and mro2nf's the task's work hash, both new on every run. mre prints a warning for each such output. The comparison reads a path in mrp's `_outs` that lies in the pipestance outside `outs/`, and a path in `pipeline_outs.json` below a task's work dir, as one placeholder, `<unpublished>`.",
+      "evidence": ["TestMrpDiff/nested_path_unpublished", "TestPublishNDArrayLeavesFilesUnpublished", "TestPublishLayoutNamesUnpublishedFileByItsTask", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
+      "comparator": {"rule": "placeholder-unpublished-paths"}
     },
     {
       "id": "retried-stage-errors",

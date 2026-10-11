@@ -393,10 +393,13 @@ func TestPublishSharedLeafNamesFirstPath(t *testing.T) {
 
 // TestPublishNDArrayLeavesFilesUnpublished pins #432: below an array of two or
 // more dimensions, whether an output, a struct field or a typed map's value,
-// mrp moves no file, so nothing is published and each file, one the stage
-// never wrote included, is null; every other value, an escaped string
-// included, stays as the stage wrote it, one
-// warning names each such output, and a 1-D array still publishes.
+// mrp moves no file, so nothing is published. A file the stage wrote is named
+// where its task wrote it, as mrp's _outs names it in the stage's dir: its
+// origin when that lies in the work dir, else, for a task that ran in a
+// scratch dir, the URI of the copy Nextflow staged into LAYOUT. A file the
+// stage never wrote keeps the path it was declared at, as do null, "" and an
+// escaped string; one warning names each such output, and a 1-D array still
+// publishes.
 func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 	params := []ir.Param{
 		{Name: "r12", BaseType: "S0", IsFile: true, ArrayDim: 2},
@@ -409,23 +412,35 @@ func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 		{Name: "s", BaseType: "string"},
 	}}}
 	escaped := "@mre:str:" + marker("L0009")
+	unwritten := "/nf/work/ab/0123456789abcdef0123456789abcd/main/files/unwritten.txt"
 	outs := map[string]any{
 		"r12":   []any{[]any{types.Object{{Key: "f0", Value: dirMarker("L0000")}, {Key: "s", Value: escaped}}}},
-		"grid":  []any{[]any{marker("L0001"), nil, "/work/ab/cdef/main/files/unwritten.txt"}, nil},
+		"grid":  []any{[]any{marker("L0001"), nil, unwritten, ""}, nil},
 		"lanes": types.Object{{Key: "k", Value: []any{[]any{marker("L0002")}}}},
 		"one":   []any{marker("L0003")},
 	}
+
+	task := t.TempDir()
+	stageDir := "/nf/work/ab/0123456789abcdef0123456789abcd/main/files/"
+	writeOrdinal(t, filepath.Join(task, "f", "L0000"), stageDir+"a")
+	writeOrdinal(t, filepath.Join(task, "f", "L0001"), stageDir+"cell.txt")
+	writeOrdinal(t, filepath.Join(task, "f", "L0002"), "/tmp/nxf.Q1/main/files/lane.txt")
+	writeOrdinal(t, filepath.Join(task, "in_X", "f", "L0007"), "/tmp/nxf.Q1/main/files/lane.txt")
 
 	var warnings strings.Builder
 
 	pub := newPublisher(structs)
 	pub.warn = &warnings
+	pub.loc = &locator{
+		leaves: filepath.Join(task, "f"), task: task, work: "/nf/work",
+		staged: map[string]string{"in_X/f/L0007": "/nf/work/cd/0123456789abcdef0123456789abcd/outs/f/L0007"},
+	}
 	got := mustPublish(t, pub, params, outs)
 
 	want := map[string]any{
-		"r12":   []any{[]any{types.Object{{Key: "f0", Value: nil}, {Key: "s", Value: marker("L0009")}}}},
-		"grid":  []any{[]any{nil, nil, nil}, nil},
-		"lanes": map[string]any{"k": []any{[]any{nil}}},
+		"r12":   []any{[]any{types.Object{{Key: "f0", Value: stageDir + "a"}, {Key: "s", Value: marker("L0009")}}}},
+		"grid":  []any{[]any{stageDir + "cell.txt", nil, unwritten, ""}, nil},
+		"lanes": map[string]any{"k": []any{[]any{"/nf/work/cd/0123456789abcdef0123456789abcd/outs/f/L0007/out"}}},
 		"one":   []any{"one/0.txt"},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -441,6 +456,132 @@ func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
 			t.Errorf("no warning for %s in %q", rel, warnings.String())
 		}
 	}
+}
+
+// TestPublishLayoutNamesUnpublishedFileByItsTask runs publish-layout as the
+// default LAYOUT does on a 2-D file array that a stage wrote, a return BIND
+// re-bundled and Nextflow staged into LAYOUT, each task in its own work dir:
+// the file is named at the path the stage's task wrote it, or, when that task
+// ran in a scratch dir outside the work dir, at the return BIND's copy Nextflow
+// staged into LAYOUT; never below LAYOUT's own dir.
+func TestPublishLayoutNamesUnpublishedFileByItsTask(t *testing.T) {
+	work := filepath.Join(t.TempDir(), "work")
+	scratch := filepath.Join(t.TempDir(), "nxf.Q1")
+
+	for name, stage := range map[string]string{
+		"in_work": filepath.Join(work, "ab", "0123456789abcdef0123456789abcd"),
+		"scratch": scratch,
+	} {
+		t.Run(name, func(t *testing.T) {
+			written := filepath.Join(stage, "main", "files", "cell.txt")
+			bind := filepath.Join(work, "cd", "0123456789abcdef0123456789abcd")
+			layout := filepath.Join(work, "ef", "0123456789abcdef0123456789abcd")
+
+			for _, dir := range []string{stage, bind, layout} {
+				if err := os.RemoveAll(dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			writeLeaf(t, written, "cell")
+			gridBundle(t, filepath.Join(stage, "outs"), written)
+			gridBundle(t, filepath.Join(bind, "args"), readTestBundle(t, stageTestBundle(t, filepath.Join(stage, "outs"), filepath.Join(bind, "in")))["grid"])
+			stageTestBundle(t, filepath.Join(bind, "args"), layout)
+
+			want := written
+			if name == "scratch" {
+				want = filepath.Join(bind, "args", "f", "L0000", "cell.txt")
+			}
+
+			if got := publishGrid(t, work, layout, filepath.Join(bind, "args", "f", "L0000")); got != want || strings.HasPrefix(got, layout) {
+				t.Errorf("unpublished file named %q, want %q, outside LAYOUT's dir %s", got, want, layout)
+			}
+		})
+	}
+}
+
+// gridParams declare a 2-D file array output, which mrp leaves unpublished.
+func gridParams() []ir.Param {
+	return []ir.Param{{Name: "grid", BaseType: "txt", IsFile: true, ArrayDim: 2}}
+}
+
+// gridBundle writes a bundle at dir whose grid output holds file, or is
+// file when it is a staged grid value.
+func gridBundle(t *testing.T, dir string, file any) {
+	t.Helper()
+
+	grid := file
+	if path, ok := file.(string); ok {
+		grid = []any{[]any{path}}
+	}
+
+	if err := shim.WriteBundle(dir, map[string]any{"grid": grid}, gridParams(), types.NewTable(nil), nil); err != nil {
+		t.Fatalf("write bundle %s: %v", dir, err)
+	}
+}
+
+// stageTestBundle stages the bundle at src into dst as Nextflow stages a
+// process input, its sidecar and a link to each leaf dir, and returns dst.
+func stageTestBundle(t *testing.T, src, dst string) string {
+	t.Helper()
+
+	leaves, err := os.ReadDir(filepath.Join(src, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	links := map[string]string{filepath.Join(src, "data.json"): filepath.Join(dst, "data.json")}
+	for _, l := range leaves {
+		links[filepath.Join(src, "f", l.Name())] = filepath.Join(dst, "f", l.Name())
+	}
+
+	for from, to := range links {
+		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.Symlink(from, to); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return dst
+}
+
+// publishGrid runs publish-layout in the LAYOUT task dir layout, whose one
+// staged leaf Nextflow staged from copy, and returns the name
+// pipeline_outs.json gives the grid's file.
+func publishGrid(t *testing.T, work, layout, copied string) string {
+	t.Helper()
+
+	man := types.Manifest{Callables: map[string]types.Callable{"PIPE": {Out: gridParams()}}}
+	if err := man.Write(filepath.Join(layout, "types.json")); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	writeTestFile(t, filepath.Join(layout, "locations.json"),
+		fmt.Sprintf(`{"work": %q, "staged": {"f/L0000": %q}}`, work, copied))
+	t.Chdir(layout)
+
+	argv := []string{
+		"publish-layout", "-types", "types.json", "-callable", "PIPE", "-sidecar", "data.json",
+		"-dir", ".", "-leaves", "f", "-outs", "outs", "-locations", "locations.json",
+	}
+	if err := run(t.Context(), argv); err != nil {
+		t.Fatalf("run publish-layout: %v", err)
+	}
+
+	var outs struct {
+		Grid [][]string `json:"grid"`
+	}
+
+	readJSONFile(t, filepath.Join(layout, "pipeline_outs.json"), &outs)
+
+	if len(outs.Grid) != 1 || len(outs.Grid[0]) != 1 {
+		t.Fatalf("grid = %v, want one file", outs.Grid)
+	}
+
+	return outs.Grid[0][0]
 }
 
 // TestPublishOutsAbsentFileNull guards the null cases: an empty-string leaf and a
@@ -686,6 +827,15 @@ func TestMaterializeOuts(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outs, "absent.txt")); !os.IsNotExist(err) {
 		t.Errorf("absent leaf published: got err %v, want IsNotExist", err)
 	}
+}
+
+// writeOrdinal writes the ordinal dir of a staged bundle leaf: the leaf "out"
+// and the origin recorded beside it.
+func writeOrdinal(t *testing.T, dir, origin string) {
+	t.Helper()
+
+	writeLeaf(t, filepath.Join(dir, "out"), origin)
+	writeLeaf(t, filepath.Join(dir, ".mre-origin"), origin)
 }
 
 // writeLeaf writes content to path, creating parent dirs, failing the test on

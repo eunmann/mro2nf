@@ -1,8 +1,6 @@
 package shim
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,16 +67,13 @@ const ordinalName = `L[0-9]{4,}`
 // basename in an ordinal dir directly under the files subdir.
 var markerRel = regexp.MustCompile(`^` + bundleFiles + `/` + ordinalName + `/([^/\x00]+)$`)
 
-var (
-	ordinalDir = regexp.MustCompile(`^` + ordinalName + `$`)
-	originID   = regexp.MustCompile(`^[0-9a-f]{64}$`)
-)
+var ordinalDir = regexp.MustCompile(`^` + ordinalName + `$`)
 
 // originFile names the file beside a leaf in its ordinal dir that holds the
 // leaf's origin. A file is one to mrp wherever it is referenced, so its origin
 // travels with every copy of it, from bundle to bundle and through a stage
-// that returns an input it was given: it is the SHA-256 of the absolute path
-// the file was first staged from, the path mrp would name.
+// that returns an input it was given: it is the absolute path the file was
+// first staged from, where its task wrote it, the path mrp would name.
 const originFile = ".mre-origin"
 
 var (
@@ -428,7 +423,7 @@ func (m leafMarker) mark(leaf string) (string, error) {
 		return "", fmt.Errorf("resolve file leaf %s: %w", src, err)
 	}
 
-	origin, err := leafOrigin(abs)
+	origin, err := LeafOrigin(abs)
 	if err != nil {
 		return "", err
 	}
@@ -471,36 +466,78 @@ func (m leafMarker) stage(src, rel, origin string) error {
 	return writeRaw(filepath.Join(filepath.Dir(dst), originFile), []byte(origin))
 }
 
-// leafOrigin returns the origin of the file leaf at abs: the one recorded
-// beside it when it is a leaf of a bundle, else that of a file first staged
-// from abs.
-func leafOrigin(abs string) (string, error) {
+// LeafOrigin returns the origin of the file leaf at the absolute path abs: the
+// one recorded beside it when it is a leaf of a bundle, else abs itself.
+func LeafOrigin(abs string) (string, error) {
 	ordinal := filepath.Dir(abs)
 	if !ordinalDir.MatchString(filepath.Base(ordinal)) || filepath.Base(filepath.Dir(ordinal)) != bundleFiles {
-		return pathOrigin(abs), nil
+		return abs, nil
 	}
 
 	recorded, err := os.ReadFile(filepath.Join(ordinal, originFile))
 	if errors.Is(err, fs.ErrNotExist) {
-		return pathOrigin(abs), nil
+		return abs, nil
 	}
 
 	if err != nil {
 		return "", fmt.Errorf("read origin of %s: %w", abs, err)
 	}
 
-	if !originID.Match(recorded) {
+	if !filepath.IsAbs(string(recorded)) {
 		return "", fmt.Errorf("%w: %q beside %s", errBadOrigin, recorded, abs)
 	}
 
 	return string(recorded), nil
 }
 
-// pathOrigin is the origin of a file first staged from abs.
-func pathOrigin(abs string) string {
-	sum := sha256.Sum256([]byte(abs))
+// StagedLeaves returns the path of each leaf below dir, a bundle's ordinal dir
+// or a bundle dir, as Nextflow stages either into a task.
+func StagedLeaves(dir string) ([]string, error) {
+	ordinals, err := ordinalDirs(dir)
+	if err != nil {
+		return nil, err
+	}
 
-	return hex.EncodeToString(sum[:])
+	leaves := make([]string, 0, len(ordinals))
+
+	for _, ordinal := range ordinals {
+		entries, err := os.ReadDir(ordinal)
+		if err != nil {
+			return nil, fmt.Errorf("list leaf dir %s: %w", ordinal, err)
+		}
+
+		for _, e := range entries {
+			if e.Name() != originFile {
+				leaves = append(leaves, filepath.Join(ordinal, e.Name()))
+			}
+		}
+	}
+
+	return leaves, nil
+}
+
+// ordinalDirs returns dir when it is an ordinal dir, else the ordinal dirs of
+// the bundle dir, which has no files subdir when its payload names no file.
+func ordinalDirs(dir string) ([]string, error) {
+	if ordinalDir.MatchString(filepath.Base(dir)) {
+		return []string{dir}, nil
+	}
+
+	entries, err := os.ReadDir(filepath.Join(dir, bundleFiles))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("list leaves of %s: %w", dir, err)
+	}
+
+	ordinals := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ordinals = append(ordinals, filepath.Join(dir, bundleFiles, e.Name()))
+	}
+
+	return ordinals, nil
 }
 
 // leafName returns the basename of the file leaf at src, whose absolute path

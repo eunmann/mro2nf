@@ -225,7 +225,13 @@ func TestEmitHeadNodePublish(t *testing.T) {
 			t.Errorf("%s target must not emit a PUBLISH_LEAF process (head-node publish)", target)
 		}
 
-		for _, want := range []string{"-leaves f -outs outs", "path 'outs/*', hidden: true,", "it.startsWith('outs/')"} {
+		for _, want := range []string{
+			"-leaves f -outs outs -locations locations.json", "path 'outs/*', hidden: true,", "it.startsWith('outs/')",
+			// #432: the driver writes where each staged leaf lives, as no task
+			// on an object-store work dir can see it.
+			"    val leaf_paths\n", "${Mro2nf.leafLocations(workflow.workDir, ['f': leaf_paths])}\nMART_EOF\n",
+			"ep.side, types, ep.leaves, ep.paths)",
+		} {
 			if !strings.Contains(nf, want) {
 				t.Errorf("%s LAYOUT missing head-node publish fragment %q", target, want)
 			}

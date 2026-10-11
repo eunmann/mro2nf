@@ -31,9 +31,15 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	dir := fs.String("dir", ".", "directory to write layout.json and pipeline_outs.json")
 	leavesDir := fs.String("leaves", "", "dir of staged leaf files (head-node publish); empty leaves publishing off")
 	outsDir := fs.String("outs", "", "dir to materialise the outs/ tree into for head-node publishDir")
+	locations := fs.String("locations", "", "JSON of the Nextflow work dir and the URI each staged input was staged from")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	loc, err := newLocator(*leavesDir, *locations)
+	if err != nil {
+		return err
 	}
 
 	raw, err := readFile(*sidecar)
@@ -52,6 +58,7 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	}
 
 	pub := newPublisher(man.Structs)
+	pub.loc = loc
 
 	params, err := man.Params(prod.callable, prod.role)
 	if err != nil {
@@ -63,20 +70,7 @@ func runPublishLayout(_ context.Context, argv []string) error {
 		return err
 	}
 
-	if err := writeJSON(filepath.Join(*dir, "layout.json"), pub.layout); err != nil {
-		return err
-	}
-
-	if err := writeManifest(filepath.Join(*dir, "manifest.json.gz"), prod.callable, pub.manifest); err != nil {
-		return err
-	}
-
-	out, err := json.MarshalIndent(published, "", "    ")
-	if err != nil {
-		return fmt.Errorf("marshal published outs: %w", err)
-	}
-
-	if err := writeRaw(filepath.Join(*dir, "pipeline_outs.json"), out); err != nil {
+	if err := writeLayout(*dir, prod.callable, pub, published); err != nil {
 		return err
 	}
 
@@ -89,6 +83,25 @@ func runPublishLayout(_ context.Context, argv []string) error {
 	}
 
 	return nil
+}
+
+// writeLayout writes into dir what pub computed for the outputs of pipeline:
+// layout.json, manifest.json.gz and the published outs as pipeline_outs.json.
+func writeLayout(dir, pipeline string, pub *publisher, published map[string]any) error {
+	if err := writeJSON(filepath.Join(dir, "layout.json"), pub.layout); err != nil {
+		return err
+	}
+
+	if err := writeManifest(filepath.Join(dir, "manifest.json.gz"), pipeline, pub.manifest); err != nil {
+		return err
+	}
+
+	out, err := json.MarshalIndent(published, "", "    ")
+	if err != nil {
+		return fmt.Errorf("marshal published outs: %w", err)
+	}
+
+	return writeRaw(filepath.Join(dir, "pipeline_outs.json"), out)
 }
 
 // outsDirPerm is the mode for outs/ parent directories; publishDir copies the
@@ -242,6 +255,9 @@ type publisher struct {
 	// manifest accumulates one entry per published file leaf for the
 	// machine-readable output index (see manifestEntry).
 	manifest []manifestEntry
+	// loc names a file left unpublished by where its task wrote it; nil
+	// without staged leaves.
+	loc *locator
 }
 
 // newPublisher returns a publisher over the program's struct table.
@@ -351,21 +367,27 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 }
 
 // unpublishedArray returns the N-D array arr of param p at rel as mrp leaves
-// an element it cannot move, except that every file in it, written or not, is
-// null, since an unpublished file has no path relative to results/. Every
-// other value keeps the stage's value, escaped strings restored. It warns once
-// when the array names a file, as mrp prints "Could not move output files".
+// an element it cannot move: as the stage wrote it, escaped strings restored,
+// except that a file the stage wrote is named where its task wrote it, as
+// mrp's _outs names the file in the stage's dir. A file the stage never wrote
+// keeps the path it was declared at, which mrp keeps too. It warns once when
+// the array names a file, as mrp prints "Could not move output files".
 func (pub *publisher) unpublishedArray(rel string, p ir.Param, arr []any) (any, error) {
 	files := false
 
-	nulled, err := pub.tbl.Apply([]ir.Param{p}, map[string]any{p.Name: arr}, func(leaf string) (string, error) {
+	named, err := pub.tbl.Apply([]ir.Param{p}, map[string]any{p.Name: arr}, func(leaf string) (string, error) {
 		if err := shim.CheckReserved(leaf); err != nil {
 			return "", fmt.Errorf("unpublished file: %w", err)
 		}
 
 		files = files || leaf != ""
 
-		return "", types.ErrSkipLeaf
+		transport, _, ok := shim.CutMarker(leaf)
+		if !ok {
+			return leaf, nil
+		}
+
+		return pub.loc.locate(shim.LeafPath(transport))
 	})
 	if err != nil {
 		return nil, fmt.Errorf("publish %s: %w", rel, err)
@@ -374,10 +396,10 @@ func (pub *publisher) unpublishedArray(rel string, p ir.Param, arr []any) (any, 
 	if files {
 		// Best-effort diagnostic write: a failed stderr warning must not fail
 		// the publish itself.
-		_, _ = fmt.Fprintf(pub.warn, "mre: publish: leaving the files below %q unpublished and null, as mrp cannot move a file below an array of two or more dimensions\n", rel)
+		_, _ = fmt.Fprintf(pub.warn, "mre: publish: leaving the files below %q unpublished, named where their tasks wrote them, as mrp cannot move a file below an array of two or more dimensions\n", rel)
 	}
 
-	return unescape(p.Name, nulled[p.Name])
+	return unescape(p.Name, named[p.Name])
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their

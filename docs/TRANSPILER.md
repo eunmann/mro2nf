@@ -412,6 +412,14 @@ each file leaf individually and publishes it to its `outs/` path via
 published tree matches an mrp pipestance `outs/` (verified by
 `the Go TestMrpDiff suite`); see §10 for where "results" lives on each target.
 
+A file below an array of two or more dimensions is not published, as under mrp
+(#432), and `pipeline_outs.json` names it where its task wrote it: its origin
+(§7) when that lies in the work dir. A task on an object-store work dir runs in
+a scratch dir, so neither it nor LAYOUT can see a work-dir URI; the driver
+writes LAYOUT's `locations.json` (`Mro2nf.leafLocations`: the work dir, and the
+URI each staged input item came from), and such a file is named by the URI of
+its copy that Nextflow staged into LAYOUT.
+
 ### 4.8 Opt-in emission mode: channel-native orchestration (`-native`)
 
 Everything in §§4.1–4.7 describes the default emission. The opt-in `-native`
@@ -598,10 +606,11 @@ Both prefixes resolve identically on read-back. The rules:
 - **Origins** (on write): a file is one to `mrp` wherever it is referenced, so a
   bundle copies it once and gives every position that reaches it one marker,
   however many input bundles it arrived through. Its identity is its origin, the
-  SHA-256 of the absolute path it was first staged from, written to
+  absolute path it was first staged from, where its task wrote it, written to
   `.mre-origin` beside the leaf; a leaf of a staged bundle, such as the input a
   pass-through stage returns, keeps the origin recorded beside it. A leaf named
-  `.mre-origin` fails the write.
+  `.mre-origin` fails the write. `mre publish-layout` names a file it leaves
+  unpublished by its origin (#432, §4.7).
 - **Escaping** (on write): every other string that begins with the reserved
   `@mre:` prefix (a string input, a `.mro` literal, a stage's string output, a
   file-typed out naming no file) is stored as `@mre:str:<original>`. A marker in

@@ -12,9 +12,10 @@ entry for its comparator rule, as in the Go differential (published_test.go):
 - outs-json-strip-outs-prefix: mrp writes absolute paths into the pipestance
   outs/ dir, mro2nf writes the same paths relative to its results/ dir, so the
   outs-dir prefix is stripped from mrp's strings.
-- null-mrp-unpublished-paths: for a file mrp left unpublished, mrp's _outs
-  names its path in the pipestance outside outs/, mro2nf null, so that path in
-  mrp's strings becomes null.
+- placeholder-unpublished-paths: a file left unpublished is named where its
+  task wrote it, by mrp in the pipestance outside outs/, by mro2nf in a
+  Nextflow task work dir, local or an object store, so that path on either
+  side becomes one placeholder.
 
 An issue-tracked entry applies its rule only on the fixtures it names; the Go
 differential, not this script, fails it once it excuses nothing there.
@@ -23,11 +24,19 @@ Usage: normcmp.py <mrp_outs_json> <mrp_outs_dir> <nf_outs_json> <fixture> [<allo
 """
 import json
 import os
+import re
 import sys
 
 PUBLISHED_SYMLINKS = "follow-mrp-published-symlinks"
 STRIP_OUTS_PREFIX = "outs-json-strip-outs-prefix"
-UNPUBLISHED_NULL = "null-mrp-unpublished-paths"
+UNPUBLISHED_PATHS = "placeholder-unpublished-paths"
+
+UNPUBLISHED = "<unpublished>"
+
+# A path inside a Nextflow task work dir, local or an object-store URI: one
+# below the task's <2 hex>/<30 hex> hash dirs. Mirrors nfTaskPath in
+# published_test.go.
+NF_TASK_PATH = re.compile(r"^(?:[A-Za-z][A-Za-z0-9+.-]*://[^/]*)?/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.")
 
 OBJECT = "<object>"
 NUMBER = "<number>"
@@ -106,17 +115,23 @@ def mrp_rewrite(rules, mrp_dir):
     links = published_links(mrp_dir) if PUBLISHED_SYMLINKS in rules else {}
     in_outs = mrp_dir.rstrip("/") + "/"
     prefix = in_outs if STRIP_OUTS_PREFIX in rules else ""
-    in_ps = os.path.dirname(mrp_dir.rstrip("/")) + "/" if UNPUBLISHED_NULL in rules else ""
+    in_ps = os.path.dirname(mrp_dir.rstrip("/")) + "/" if UNPUBLISHED_PATHS in rules else ""
 
     def rewrite(s):
         s = links.get(s, s)
+        if in_ps and s.startswith(in_ps) and not s.startswith(in_outs):
+            return UNPUBLISHED
         if prefix and s.startswith(prefix):
             return s[len(prefix):]
-        if in_ps and s.startswith(in_ps) and not s.startswith(in_outs):
-            return None
         return s
 
     return rewrite
+
+
+def nf_rewrite(rules):
+    if UNPUBLISHED_PATHS not in rules:
+        return lambda s: s
+    return lambda s: UNPUBLISHED if NF_TASK_PATH.match(s) else s
 
 
 def render(v):
@@ -136,7 +151,7 @@ def main():
     rules = excused_rules(allowlist, name)
 
     mrp = render(norm(load(mrp_json), mrp_rewrite(rules, mrp_dir)))
-    nf = render(norm(load(nf_json), lambda s: s))
+    nf = render(norm(load(nf_json), nf_rewrite(rules)))
 
     if mrp == nf:
         print("  json: match")

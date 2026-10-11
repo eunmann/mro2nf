@@ -5,7 +5,6 @@ package e2e
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,20 +27,17 @@ func TestGenDiffPublishedAppliesEveryRule(t *testing.T) {
 	ps, results := publishedPair(t)
 	mrpJSON := filepath.Join(ps, "P", "fork0", "_outs")
 	nfOuts := filepath.Join(results, "pipeline_outs.json")
-
-	relative, err := os.ReadFile(nfOuts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	nf := pairOutsJSON(pairStats)
+	relative := pairMrpRelativeJSON(t, ps)
 
 	cases := []struct {
 		name, mrpOuts, nfOuts string
 		want                  []string
 	}{
-		{"paths_absolute", "", string(relative), nil},
-		{"paths_agree", string(relative), string(relative), nil},
+		{"paths_absolute", "", nf, nil},
+		{"paths_agree", relative, nf, nil},
 		{
-			"number_token", string(relative),
+			"number_token", relative,
 			pairOutsJSON(`{"count": 4, "total": 10, "mean": 2.5}`),
 			[]string{"outs:stats"},
 		},
@@ -66,8 +62,8 @@ func TestGenDiffPublishedAppliesEveryRule(t *testing.T) {
 		})
 	}
 
-	writeABITestFile(t, mrpJSON, string(relative))
-	writeABITestFile(t, nfOuts, string(relative))
+	writeABITestFile(t, mrpJSON, relative)
+	writeABITestFile(t, nfOuts, nf)
 
 	reports, err := diffPublished(allow, pairFixture, ps, results)
 	if err != nil {

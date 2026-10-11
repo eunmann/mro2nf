@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -118,12 +119,38 @@ func loadOutsJSON(allow divergence.Allowlist, fixture, ps, results string) (any,
 		return nil, nil, err
 	}
 
-	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nil)
+	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nfOutsRewrite(allow, fixture))
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return mrp, nf, nil
+}
+
+// unpublishedPath is the placeholder both outs JSONs are read with in place
+// of the path of a file left unpublished.
+const unpublishedPath = "<unpublished>"
+
+// nfTaskPath matches a path inside a Nextflow task work dir, local or an
+// object-store URI: one below the task's <2 hex>/<30 hex> hash dirs. Mirrors
+// NF_TASK_PATH in normcmp.py.
+var nfTaskPath = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z0-9+.-]*://[^/]*)?/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.`)
+
+// nfOutsRewrite returns the rewrite of pipeline_outs.json strings the
+// allowlist excuses for fixture, nil for none: a path inside a task work dir,
+// where mro2nf names a file it left unpublished, becomes the placeholder.
+func nfOutsRewrite(allow divergence.Allowlist, fixture string) func(string) string {
+	if !allow.Excuses(divergence.RuleUnpublishedPaths, fixture) {
+		return nil
+	}
+
+	return func(s string) string {
+		if nfTaskPath.MatchString(s) {
+			return unpublishedPath
+		}
+
+		return s
+	}
 }
 
 // mrpOutsJSON decodes the outs JSON the mrp pipestance ps of fixture writes
@@ -144,43 +171,7 @@ func mrpOutsJSON(allow divergence.Allowlist, fixture, ps string) (any, error) {
 		return nil, err
 	}
 
-	v, err := decodeOutsFile(matches[0], rewrite)
-	if err != nil || !allow.Excuses(divergence.RuleMrpUnpublishedNull, fixture) {
-		return v, err
-	}
-
-	return nullUnpublished(v, ps), nil
-}
-
-// nullUnpublished returns v, mrp's outs JSON of the pipestance ps once
-// rewritten, with each path in ps outside its outs dir null: a file mrp left
-// unpublished, which pipeline_outs.json names null.
-func nullUnpublished(v any, ps string) any {
-	inPs := strings.TrimSuffix(ps, "/") + "/"
-	inOuts := inPs + "outs/"
-
-	switch x := v.(type) {
-	case string:
-		if strings.HasPrefix(x, inPs) && !strings.HasPrefix(x, inOuts) {
-			return nil
-		}
-
-		return x
-	case jsonObject:
-		for i := range x {
-			x[i].Value = nullUnpublished(x[i].Value, ps)
-		}
-
-		return x
-	case []any:
-		for i := range x {
-			x[i] = nullUnpublished(x[i], ps)
-		}
-
-		return x
-	default:
-		return v
-	}
+	return decodeOutsFile(matches[0], rewrite)
 }
 
 // normalizeOutsFile reads an outs JSON file into its compact form, its key
@@ -218,8 +209,10 @@ func decodeOutsFile(path string, rewrite func(string) string) (any, error) {
 
 // mrpOutsRewrite returns the rewrite of mrp's outs JSON strings the
 // allowlist excuses: the target path mrp names for a symlink it published
-// becomes the link's own path, and the outs dir prefix is stripped from a
-// path, since mro2nf names published files relative to results/.
+// becomes the link's own path, a path in the pipestance outside its outs dir,
+// where mrp names a file it left unpublished, becomes the placeholder, and
+// the outs dir prefix is stripped from a path, since mro2nf names published
+// files relative to results/.
 func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(string) string, error) {
 	links := map[string]string{}
 
@@ -232,14 +225,25 @@ func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(stri
 		}
 	}
 
+	inOuts := strings.TrimSuffix(outs, "/") + "/"
+
 	prefix := ""
 	if allow.Excuses(divergence.RuleOutsRelativePaths, fixture) {
-		prefix = strings.TrimSuffix(outs, "/") + "/"
+		prefix = inOuts
+	}
+
+	inPs := ""
+	if allow.Excuses(divergence.RuleUnpublishedPaths, fixture) {
+		inPs = filepath.Dir(strings.TrimSuffix(outs, "/")) + "/"
 	}
 
 	return func(s string) string {
 		if link, ok := links[s]; ok {
 			s = link
+		}
+
+		if inPs != "" && strings.HasPrefix(s, inPs) && !strings.HasPrefix(s, inOuts) {
+			return unpublishedPath
 		}
 
 		if prefix != "" {

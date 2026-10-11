@@ -14,9 +14,11 @@
 // No package declaration: Nextflow adds lib/ to the classpath in the default
 // package, so generated code references `Mro2nf` directly.
 
+import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import groovy.transform.CompileStatic
 import java.nio.file.Path
+import nextflow.extension.FilesEx
 import java.util.regex.Matcher
 import java.util.regex.Pattern
 
@@ -102,6 +104,24 @@ class Mro2nf {
     // bundles otherwise.
     static List asList(Object x) {
         (x instanceof List) ? (List) x : [x]
+    }
+
+    // leafLocations renders the `mre publish-layout -locations` JSON for a
+    // LAYOUT task: the work dir, and the URI each input item was staged from,
+    // keyed by its path below the task dir (<stage dir>/<item name>, as
+    // Nextflow stages a `<stage dir>/*` input). Only the driver knows them: a
+    // task on an object-store work dir runs in a scratch dir. toUriString keeps
+    // an s3:// scheme that Path.toString drops.
+    static String leafLocations(Path workDir, Map<String, Object> stageDirs) {
+        Map<String, String> staged = new TreeMap<String, String>()
+        for (Map.Entry<String, Object> dir : stageDirs.entrySet()) {
+            if (dir.value == null) continue
+            for (Object item : asList(dir.value)) {
+                Path p = (Path) item
+                staged.put(dir.key + '/' + p.fileName.toString(), FilesEx.toUriString(p))
+            }
+        }
+        JsonOutput.toJson([work: FilesEx.toUriString(workDir), staged: staged])
     }
 
     // keyedChunks expands one keyed SPLIT output into per-chunk

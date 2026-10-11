@@ -151,10 +151,14 @@ gets a copy (allowlist entry `published-symlinks-copied`). Fixture
 `map<T[][]>`, `map<T>[][]`, as an output or a struct field) mrp publishes no
 file: `moveOutArrayDir` descends the array one level as if its elements had the
 base type, so each element fails to move, is kept as the stage wrote it, and mrp
-prints `Could not move output files`. `mre publish-layout` publishes nothing
-there either, warns on stderr, and names each such file null, written or not,
-since an unpublished file has no path relative to `results/` (allowlist entry
-`unpublished-files-null`). Fixture `nested_path_unpublished`.
+prints `Could not move output files`, while its `_outs` names each file at its
+path in the stage's directory, a file the stage never wrote included. `mre
+publish-layout` publishes nothing there either, warns on stderr, and names each
+file the stage wrote where its task wrote it: in the Nextflow work dir, or, for
+a task that ran in a scratch dir, as on an object-store work dir, by the URI of
+its copy there. A file the stage never wrote keeps the path it was declared at,
+as under mrp (allowlist entry `unpublished-file-paths`). Fixture
+`nested_path_unpublished`.
 
 ## D. Binding & resolution — faithful (two real divergences)
 

@@ -57,10 +57,11 @@ const (
 	// content, and the target path mrp's outs JSON names for it as the link's
 	// path.
 	RuleMrpPublishedSymlinks = "follow-mrp-published-symlinks"
-	// RuleMrpUnpublishedNull reads a path mrp's outs JSON names inside the
-	// pipestance but outside its outs dir, a file mrp left unpublished, as
-	// null.
-	RuleMrpUnpublishedNull = "null-mrp-unpublished-paths"
+	// RuleUnpublishedPaths reads the path of a file left unpublished as one
+	// placeholder on both sides: in mrp's outs JSON a path inside the
+	// pipestance but outside its outs dir, in pipeline_outs.json a path inside
+	// a Nextflow task work dir.
+	RuleUnpublishedPaths = "placeholder-unpublished-paths"
 	// RuleRetriedAttempts lets a stage task fail more than once before its
 	// last failure counts.
 	RuleRetriedAttempts = "collapse-retried-attempts"
@@ -77,7 +78,7 @@ func ComparatorRules() map[string]string {
 		RuleOutsRelativePaths:    KindPublishedTree,
 		RuleResultsMetadata:      KindPublishedTree,
 		RuleMrpPublishedSymlinks: KindPublishedTree,
-		RuleMrpUnpublishedNull:   KindPublishedTree,
+		RuleUnpublishedPaths:     KindPublishedTree,
 		RuleRetriedAttempts:      KindOutcome,
 		RuleFailureStageAndKind:  KindOutcome,
 	}
