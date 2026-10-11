@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -155,6 +156,54 @@ func TestRunForkBindElementKeepsKeyOrder(t *testing.T) {
 		if got := compactData(t, filepath.Join(dir, "data.json")); got != want {
 			t.Errorf("%s args = %s, want %s", filepath.Base(dir), got, want)
 		}
+	}
+}
+
+// TestRunForkBindLiteralElementsKeepKeyOrder checks each fork of a split
+// array or map literal is narrowed by its own element's binding, on the full
+// write and on -index: a struct literal keeps its sorted keys with its
+// projected member filtered into declared order, and a whole-struct ref is
+// filtered into declared order.
+func TestRunForkBindLiteralElementsKeepKeyOrder(t *testing.T) {
+	const (
+		built = `{"object":{"inner":{"ref":{"kind":"call","id":"UP","output":"w"}},"b":{"literal":1}}}`
+		whole = `{"ref":{"kind":"call","id":"UP","output":"o"}}`
+	)
+
+	cases := []struct{ name, mapMode, split string }{
+		{"array", "array", `{"array":[` + built + `,` + whole + `],"split":true}`},
+		{"map", "map", `{"object":{"k1":` + built + `,"k2":` + whole + `},"split":true}`},
+	}
+	want := []string{`{"o":{"b":1,"inner":{"z":1,"a":2}}}`, `{"o":{"inner":{"a":2,"z":1},"b":3}}`}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := writeTestFile(t, filepath.Join(dir, "spec.json"), `{"o":`+tc.split+`}`)
+			up := filepath.Join(dir, "in_UP")
+			writeRawBundle(t, up, `{"w":{"a":2,"m":9,"z":1},"o":{"b":3,"x":0,"inner":{"a":2,"z":1}}}`)
+			base := []string{
+				"forkbind", "-spec", spec, "-inputs", "UP=" + up, "-mapmode", tc.mapMode,
+				"-types", keyOrderManifest(t, dir), "-callable", "S", "-role", types.RoleIn,
+			}
+			forks := filepath.Join(dir, "forks")
+			byIndex0, byIndex1 := filepath.Join(dir, "by_index_0"), filepath.Join(dir, "by_index_1")
+			got := []string{filepath.Join(forks, "fork_00000"), filepath.Join(forks, "fork_00001"), byIndex0, byIndex1}
+
+			for _, argv := range [][]string{
+				{"-chunkdir", forks}, {"-index", "0", "-o", byIndex0}, {"-index", "1", "-o", byIndex1},
+			} {
+				if err := run(t.Context(), append(slices.Clone(base), argv...)); err != nil {
+					t.Fatalf("run forkbind %v: %v", argv, err)
+				}
+			}
+
+			for i, path := range got {
+				if data := compactData(t, filepath.Join(path, "data.json")); data != want[i%2] {
+					t.Errorf("%s args = %s, want %s", path, data, want[i%2])
+				}
+			}
+		})
 	}
 }
 
