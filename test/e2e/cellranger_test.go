@@ -127,7 +127,7 @@ func TestCellRangerDifferential(t *testing.T) {
 
 	// 4. Run the generated Nextflow with the bundle env sourced. The emitted
 	//    local profile clamps each task's request to the host (#207), so an
-	//    oversized reservation (the 30 GB cloupe join) runs instead of parking.
+	//    oversized reservation (the 30 GB cloupe join) runs instead of failing.
 	crBash(t, home, proj, "nextflow run",
 		"NXF_ANSI_LOG=false NXF_OFFLINE=true NXF_OPTS='-Xms256m -Xmx2g' "+
 			"nextflow -q run main.nf -profile standard -with-trace trace.txt "+

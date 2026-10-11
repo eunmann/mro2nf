@@ -10,7 +10,7 @@ type Target string
 
 const (
 	// TargetLocal targets a POSIX filesystem: the local executor and the HPC grid
-	// profiles (slurm/sge/lsf/pbs/k8s). The default.
+	// profiles (slurm/sge/lsf/pbs). The default.
 	TargetLocal Target = "local"
 	// TargetAWSBatch targets AWS Batch with an S3 work dir (classic aws-CLI
 	// staging): every process needs a container, and a Dockerfile is emitted.

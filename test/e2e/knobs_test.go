@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestResumeCachesEverything: rerunning an unchanged, successful pipeline with
@@ -223,6 +225,118 @@ func TestOverridesPipelineScopeReachesStages(t *testing.T) {
 	if gen.MemGB != 3 || add.MemGB != 3 {
 		t.Errorf("pipeline-scoped D override reached GEN memGB=%v, ADD memGB=%v; want both 3", gen.MemGB, add.MemGB)
 	}
+}
+
+// TestLocalClampRunsOversizedRequest pins #321: on the standard profile a stage
+// requesting more cpus and memory than the host runs with the host's
+// process.resourceLimits, where Nextflow's local executor would otherwise fail
+// it ("Process requirement exceeds available CPUs"). The untargeted ADD keeps
+// its own request.
+func TestLocalClampRunsOversizedRequest(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	proj := transpile(t, "diamond_min")
+
+	overlay := filepath.Join(proj, "oversized.config")
+	body := "process { withName: 'STAGE_1_D__GEN' { cpus = 4096; memory = '100000 GB' } }\n" +
+		"trace.fields = 'task_id,hash,name,status,exit,cpus,memory'\n"
+
+	if err := os.WriteFile(overlay, []byte(body), 0o644); err != nil {
+		t.Fatalf("write overlay: %v", err)
+	}
+
+	if err := runNextflow(t, proj, "-c", overlay, "-with-trace", "clamp-trace.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	wantCpus, wantMem := resolvedLimits(t, proj)
+
+	got := map[string][2]string{}
+	for _, row := range readTraceColumns(t, filepath.Join(proj, "clamp-trace.txt"), "name", "cpus", "memory") {
+		got[row[0]] = [2]string{row[1], row[2]}
+	}
+
+	want := map[string][2]string{
+		"D:STAGE_1_D__GEN": {wantCpus, wantMem},
+		"D:STAGE_1_D__ADD": {"1", "1 GB"},
+	}
+
+	stages := map[string][2]string{}
+	for name := range want {
+		stages[name] = got[name]
+	}
+
+	if diff := cmp.Diff(want, stages); diff != "" {
+		t.Errorf("task cpus/memory (-want +got):\n%s", diff)
+	}
+}
+
+// resolvedLimits returns the cpus and memory the project's standard profile
+// resolves process.resourceLimits to on this host, as `nextflow config -flat`
+// and the trace both render them.
+func resolvedLimits(t *testing.T, proj string) (string, string) {
+	t.Helper()
+
+	cmd := exec.Command("nextflow", "config", "-flat", "-profile", "standard")
+	cmd.Dir = proj
+	cmd.Env = append(os.Environ(), "NXF_ANSI_LOG=false", "NXF_OFFLINE=true")
+
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("nextflow config: %v", err)
+	}
+
+	limits := map[string]string{}
+
+	for line := range strings.SplitSeq(string(out), "\n") {
+		key, val, ok := strings.Cut(line, " = ")
+		if ok && strings.HasPrefix(key, "process.resourceLimits.") {
+			limits[strings.TrimPrefix(key, "process.resourceLimits.")] = strings.Trim(val, "'")
+		}
+	}
+
+	if limits["cpus"] == "" || limits["memory"] == "" {
+		t.Fatalf("nextflow config resolves no process.resourceLimits cpus/memory:\n%s", out)
+	}
+
+	return limits["cpus"], limits["memory"]
+}
+
+// readTraceColumns returns the named columns of every row of a Nextflow trace.
+func readTraceColumns(t *testing.T, path string, names ...string) [][]string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+
+	cols := map[string]int{}
+	for i, h := range strings.Split(lines[0], "\t") {
+		cols[h] = i
+	}
+
+	rows := make([][]string, 0, len(lines)-1)
+
+	for _, line := range lines[1:] {
+		f := strings.Split(line, "\t")
+		row := make([]string, len(names))
+
+		for i, n := range names {
+			c, ok := cols[n]
+			if !ok {
+				t.Fatalf("trace %s has no %q column", path, n)
+			}
+
+			row[i] = f[c]
+		}
+
+		rows = append(rows, row)
+	}
+
+	return rows
 }
 
 // stageJobinfos walks the work tree and returns the _jobinfo the GEN and ADD

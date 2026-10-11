@@ -116,8 +116,9 @@ func TestEmitFiles(t *testing.T) {
 	}
 }
 
-// TestEmitConfig checks nextflow.config declares every executor profile and the
-// auto-retry analog, so a -profile run resolves and transient failures retry.
+// TestEmitConfig checks the local nextflow.config declares the local and grid
+// executor profiles and the auto-retry analog, so a -profile run resolves and
+// transient failures retry.
 func TestEmitConfig(t *testing.T) {
 	dir := loadAndEmit(t)
 
@@ -131,24 +132,32 @@ func TestEmitConfig(t *testing.T) {
 		"params.outdir = 'results'",
 		"process.executor = 'local'",
 		// Local runs clamp each task's request to the machine (Martian parity), so
-		// an oversized reservation runs instead of parking the executor forever.
-		"process.resourceLimits = [ cpus: params.max_cpus as int, memory: params.max_memory as nextflow.util.MemoryUnit ]",
-		"params.max_memory =",
+		// an oversized reservation runs instead of failing the local executor.
+		"process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]",
 		"slurm    { process.executor = 'slurm' }",
 		"sge      { process.executor = 'sge' }",
 		"lsf      { process.executor = 'lsf' }",
 		"pbs      { process.executor = 'pbs' }",
-		"process.executor = 'awsbatch'",
-		"k8s { process.executor = 'k8s' }",
 		"task.exitStatus == 42 ? 'terminate' : 'retry'",
 		"maxRetries = 2",
-		"params.aws_queue = null",
-		// #188: the Nextflow >=23.10.0 floor (path arity) must be declared for
-		// every target, not just HealthOmics — assert it on the local config too.
-		"manifest.nextflowVersion = '!>=23.10.0'",
+		// #188, #224: the Nextflow >=24.04.0 floor (path arity, resourceLimits)
+		// must be declared for every target — assert it on the local config too.
+		"manifest.nextflowVersion = '!>=24.04.0'",
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("nextflow.config missing %q", want)
+		}
+	}
+
+	// #321: the clamp reads the host itself, so it reserves no param names.
+	// #320: a local project's scripts bake host paths, so it ships no cloud
+	// profile and no cloud knobs.
+	for _, gone := range []string{
+		"params.max_cpus", "params.max_memory",
+		"awsbatch {", "'awsbatch'", "k8s", "params.aws_",
+	} {
+		if strings.Contains(cfg, gone) {
+			t.Errorf("nextflow.config still defines %q", gone)
 		}
 	}
 }
@@ -271,12 +280,16 @@ func TestEmitConfigTargets(t *testing.T) {
 		"params.container = 'ecr/mro2nf:1'",
 		"container = params.container",
 		"process.executor = 'awsbatch'",
+		"params.aws_queue = null",
+		"params.aws_region = null",
+		"process.queue    = params.aws_queue",
+		"aws.region       = params.aws_region",
 		"aws.batch.cliPath = params.aws_cli_path",
 		// C2: no launcher-local publish by default; the curated copy is opt-in.
 		"params.aws_outdir = null",
 		"params.outdir = params.aws_outdir",
 		// #188: the Nextflow floor is declared for awsbatch too, not just HealthOmics.
-		"manifest.nextflowVersion = '!>=23.10.0'",
+		"manifest.nextflowVersion = '!>=24.04.0'",
 		// Wide-fan-out throughput + resilience tuning (config-only): submission
 		// rate-limit, S3 transfer retries, and transparent Spot-reclaim retries.
 		"executor.submitRateLimit",
@@ -301,7 +314,7 @@ func TestEmitConfigTargets(t *testing.T) {
 	// The local resource clamp is local-only: a Batch scheduler places an oversized
 	// request on a big-enough node itself, so clamping to the launcher host would be
 	// wrong. It must not leak into the cloud config.
-	if strings.Contains(batch, "resourceLimits") || strings.Contains(batch, "max_memory") {
+	if strings.Contains(batch, "resourceLimits =") || strings.Contains(batch, "max_memory") {
 		t.Error("awsbatch config should not carry the local-only resource clamp")
 	}
 
