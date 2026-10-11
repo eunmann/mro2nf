@@ -572,7 +572,9 @@ item or a dir of items). No generated project calls them yet; the v2 emitter
   never retried, and `_errors` or a non-zero exit exits 1. A split writes
   `-o` as one dir per chunk, named as `mrp` names it (`chnkN`), with its args
   bundle and `chunk.json`, plus `join.json`. A main or join writes its outs
-  bundle.
+  bundle. The files a job names in either are confined to the work dir as a
+  stage phase's outputs are (see Symlink dereference), strict under
+  `-confine`.
 - **`mre post`** runs after the stage. It stamps the outs bundle with the
   instance (`instance.json`). For a disabled instance it first writes mrp's
   disabled outs, with every output null. It checks enabled outs with Martian's
