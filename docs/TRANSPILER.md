@@ -538,16 +538,22 @@ live in an isolated cloud container.
 
 ### 5.1 The call-graph data plane (emitter v2, #463)
 
-Four more subcommands work on Martian's own compiled call graph
+Five more subcommands work on Martian's own compiled call graph
 (`internal/cg`), not on bindspecs. Each takes the invocation `.mro` (`-mro`,
 `-mropath`), compiles it as `mrp` does (`syntax.Compile`, then
 `MakePipelineCallGraph`), and reads only the items its task staged (`-in`, an
-item or a dir of items). No generated project calls them yet; the v2 emitter
-(#466) will.
+item or a dir of items). Without `-types`, each builds the type manifest from
+the invocation's own declarations. The projects of `-emitter=v2` (§5.2) call
+them.
 
+- **`mre plan`** starts a run (§5.2). It rebuilds the run's invocation from
+  the transpiled source and the run's entry values, compiles it, checks it
+  against the witness, and writes the invocation every task compiles, one
+  record per witness node and the forks of each entry-fed fork root.
 - **`mre args -node <fqid>`** builds one stage instance's args bundle and prints
   `enabled` or `disabled`. The instance's fork comes from the fork elements it
-  staged, and its values from its parents' stamped outs bundles. A disabled
+  staged, or the fork records it got as values (`-fork`, base64 of a
+  `fork.json`), and its values from its parents' stamped outs bundles. A disabled
   instance gets only its stamp, `instance.json`, which records the fork and
   each part's fork count, from which `mrp`'s fork id follows. A map call that
   zips several splits forks over its master source: a split of known length
@@ -593,6 +599,11 @@ item or a dir of items). No generated project calls them yet; the v2 emitter
   fork does not fix from what it staged, and prefixes the name with the
   ordinal of each such call, joined by dots. A root of known length is keyed
   by its own forks alone, whatever outer calls its stages are also forked on.
+  With `-fields`, it also writes the outs as one stamped bundle per output,
+  `<dir>/<output>/`, so a consumer stages only the outputs it reads. With
+  `-gates`, it writes the nodes the instance's outs disable at its fork: those
+  with a disable binding that reads this stage alone and resolves true, as
+  `mrp`'s `Fork.disabled` reads it (a null reads false).
 - **`mre outs`** resolves the pipeline outs into the bundle `publish-layout`
   reads, checking them with `MarshalerMap.ValidatePipelineOutputs`.
 
@@ -610,6 +621,70 @@ with the same `_args`, `_outs` and `_jobinfo` (its keys, and every value that
 does not vary per run). The published tree and pipeline outs must match. Its
 drift guard requires the same `_args` and fork set as mrp's own resolver,
 reattached read-only in-process.
+
+### 5.2 The call-graph project (`-emitter=v2`)
+
+`mro2nf -emitter=v2` (`internal/cgnf`) emits a project from Martian's
+compiled call graph. The flag is hidden and temporary: it selects the new
+emitter while the integration branch carries both (#463).
+
+**Witness transpile.** A transpile cannot know a run's invocation, so it
+compiles a *witness* one (`cg.Source.Witness`): every entry input a value of
+its type with two elements in every collection, nested collections of
+different lengths, false for every bool and no null anywhere. No map call is
+pruned on an empty or null source and no call is disabled by an entry value,
+so its call graph holds every stage node, with its fork roots, of any
+invocation. Where `mrp` refuses the witness (it refuses a runtime-gated split
+of a non-empty literal), each input takes its witness value over the literal
+invocation's only while `mrp` still accepts the call. `cg.Topology` reduces
+the graph to what tasks exchange: per node its fork roots, the outputs it
+reads of other nodes, and the nodes whose outs gate it; per fork root what
+feeds its forks (the entry, or one stage) and the outer roots its forks vary
+with. `TestWitnessCoversLiteral` checks every fixture's literal invocation is
+within its witness's.
+
+**The project.** `main.nf` is wiring only: it includes the one hand-written
+stage module, `stage.nf`, once per node (`include { STAGE as N3_DBL }`, a
+split stage as `STAGE_SPLIT`, `STAGE_MAIN` and `STAGE_JOIN`), so a
+`withName:` selector names the node. Every task runs `mre args`, then its
+jobs through `mre run`, then `mre post`. `_assets/source.json` is the entry
+file's declarations, its call and the call's invocation data
+(`core.InvocationData`).
+
+**PLAN.** One task starts every run. `mre plan` overlays the run's entry
+params on the transpiled invocation data (a string param of a scalar input
+parsed as its type), rebuilds the call as `mrp`'s invocation generator does
+(`core.BuildCallAst`), and compiles it, so `mrp`'s refusals fail the run
+before any stage starts. It fails if the call graph has a node, a fork root
+or a read the witness lacks (`Topology.Covers`); a node the invocation
+disables outright counts only by its presence. Its records reach the driver
+as `eval` values: per node a digest of its resolved spec (stage, bindings,
+disable bindings and fork roots in Martian's JSON form), whether the
+invocation disables it, and the fork keys a static per-fork binding
+disables; per entry-fed root its forks, keyed by the witness's outer roots,
+each with its fork record.
+
+**Cache identity.** A task's `-resume` key holds its own node's digest (in
+`meta`) and its fork records and staged dirs, not the invocation. PLAN runs
+uncached and writes the invocation to a path constant per session,
+`<workDir>/mro2nf-plan/<sessionId>/<entry .mro>`, which each task links in
+by that path instead of staging it. Entry forks reach tasks as values, so no
+task stages a file of PLAN's.
+
+**Wiring.** An instance's key is the ordinal of its fork of each of its
+roots. The driver enumerates a node's instances root by root: an entry-fed
+root's forks come from PLAN, a stage-fed root's from its producer's
+`forks/<root>/<ordinal>/` output, and each instance joins the forks agreeing
+on the outer roots. A node's gates are decided on the driver: PLAN's record
+and each gating stage's posted `gates` (an `eval` output), joined on the
+roots they share. A disabled instance runs no task and stands in with no outs
+and no forks; Martian's call graph already reads its outputs as null in every
+consumer (`X unless GATE`). An enabled instance stages, of each node it reads,
+only the outputs it reads (`outs/<output>/`): from the instance that shares
+its roots, or, a gather, from every such instance under a seeded
+`groupTuple`. A split's chunk outs are gathered by `groupKey` over the
+chunk count. OUTS resolves the pipeline outs with `mre outs` and lays them out
+with `publish-layout`.
 
 ---
 
