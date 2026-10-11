@@ -18,32 +18,43 @@ const (
 	dirPerm  = 0o755
 )
 
-var errNotItem = errors.New("neither an instance bundle nor a fork element")
+var (
+	errNotItem = errors.New("neither an instance bundle nor a fork element")
+	errLens    = errors.New("fork counts do not match the fork's parts")
+)
 
 // Instance identifies one stage instance: its node, its fork, and whether
-// it is disabled.
+// it is disabled. Lens are the fork counts of its parts (Fork.ID).
 type Instance struct {
 	Node     string
 	Fork     Fork
+	Lens     []int
 	Disabled bool
 }
 
 type instanceJSON struct {
 	Node     string     `json:"node"`
 	Fork     []partJSON `json:"fork"`
+	Lens     []int      `json:"lens"`
 	Disabled bool       `json:"disabled"`
 }
 
+// ForkID is the instance's fork id as mrp names the fork (Fork.ID).
+func (in Instance) ForkID() string { return in.Fork.ID(in.Lens) }
+
 // Element is one fork of a runtime fork root: its fork (the root's outer
-// parts, then the root's own) and its position among the root's forks under
-// those outer parts, in mrp's order.
+// parts, then the root's own), the fork counts of those parts (Fork.ID),
+// and its position among the root's forks under its outer parts, in mrp's
+// order.
 type Element struct {
 	Fork     Fork
+	Lens     []int
 	Position int
 }
 
 type elementJSON struct {
 	Fork     []partJSON `json:"fork"`
+	Lens     []int      `json:"lens"`
 	Position int        `json:"position"`
 }
 
@@ -63,11 +74,25 @@ func (g *Graph) ReadInstance(dir string) (Instance, error) {
 		return Instance{}, fmt.Errorf("instance stamp in %s: %w", dir, err)
 	}
 
-	return Instance{Node: rec.Node, Fork: f, Disabled: rec.Disabled}, nil
+	if len(rec.Lens) != len(f) {
+		return Instance{}, fmt.Errorf("instance stamp in %s: %w: %d counts, %d parts", dir, errLens, len(rec.Lens), len(f))
+	}
+
+	return Instance{Node: rec.Node, Fork: f, Lens: rec.Lens, Disabled: rec.Disabled}, nil
 }
 
 func writeInstance(dir string, in Instance) error {
-	return writeRecord(filepath.Join(dir, instanceFile), instanceJSON{Node: in.Node, Fork: in.Fork.encode(), Disabled: in.Disabled})
+	return writeRecord(filepath.Join(dir, instanceFile), instanceJSON{
+		Node: in.Node, Fork: in.Fork.encode(), Lens: orEmpty(in.Lens), Disabled: in.Disabled,
+	})
+}
+
+func orEmpty(lens []int) []int {
+	if lens == nil {
+		return []int{}
+	}
+
+	return lens
 }
 
 // ReadElement reads the fork record of the fork element dir.
@@ -86,11 +111,15 @@ func (g *Graph) ReadElement(dir string) (Element, error) {
 		return Element{}, fmt.Errorf("fork element %s: %w: no parts", dir, errBadFork)
 	}
 
-	return Element{Fork: f, Position: rec.Position}, nil
+	if len(rec.Lens) != len(f) {
+		return Element{}, fmt.Errorf("fork element %s: %w: %d counts, %d parts", dir, errLens, len(rec.Lens), len(f))
+	}
+
+	return Element{Fork: f, Lens: rec.Lens, Position: rec.Position}, nil
 }
 
 func writeElement(dir string, el Element) error {
-	return writeRecord(filepath.Join(dir, elementFile), elementJSON{Fork: el.Fork.encode(), Position: el.Position})
+	return writeRecord(filepath.Join(dir, elementFile), elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position})
 }
 
 func readRecord(path string, v any) error {

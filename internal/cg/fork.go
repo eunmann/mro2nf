@@ -136,13 +136,23 @@ func (f Fork) part(call *syntax.CallStm) (Part, bool) {
 // map calls' CallStm, which part matches by, as core matches fork parts
 // within one node's resolution.
 func (f Fork) rootPart(root *syntax.CallGraphStage) (Part, bool) {
-	for _, p := range f {
+	i, ok := f.rootPos(root)
+	if !ok {
+		return Part{}, false
+	}
+
+	return f[i], true
+}
+
+// rootPos is the position of root's part in f, matched as rootPart matches.
+func (f Fork) rootPos(root *syntax.CallGraphStage) (int, bool) {
+	for i, p := range f {
 		if p.Root.Fqid == root.Fqid {
-			return p, true
+			return i, true
 		}
 	}
 
-	return Part{}, false
+	return 0, false
 }
 
 // with returns a copy of f with p appended.

@@ -38,7 +38,7 @@ func (r *resolver) resolveSplit(e *syntax.SplitExp, t syntax.Type, fork Fork) (j
 
 		v, err := r.resolve(e.Value, innerT, fork)
 		if err != nil {
-			return nil, fmt.Errorf("split %s: %w", e.Source.CallMode().String(), err)
+			return v, fmt.Errorf("split %s: %w", e.Source.CallMode().String(), err)
 		}
 
 		if ref, ok := e.Value.(*syntax.RefExp); ok {
@@ -108,7 +108,8 @@ func sameRef(a, b *syntax.RefExp) bool {
 }
 
 // element takes the element of a resolved collection at ix (core/resolve.go
-// getElement, getArrayElement, getMapElement).
+// getElement, getArrayElement, getMapElement): null for a null collection,
+// and null with errNoElement past an array's end or for a key a map lacks.
 func element(v json.Marshaler, ix syntax.CollectionIndex) (json.Marshaler, error) {
 	raw, err := marshal(v)
 	if err != nil {
@@ -127,7 +128,7 @@ func element(v json.Marshaler, ix syntax.CollectionIndex) (json.Marshaler, error
 
 		el, ok := m[ix.MapKey()]
 		if !ok {
-			return nil, fmt.Errorf("%w: map key %q not found", errShape, ix.MapKey())
+			return nil, fmt.Errorf("%w: map key %q not found", errNoElement, ix.MapKey())
 		}
 
 		return el, nil
@@ -139,7 +140,7 @@ func element(v json.Marshaler, ix syntax.CollectionIndex) (json.Marshaler, error
 	}
 
 	if ix.ArrayIndex() < 0 || ix.ArrayIndex() >= len(a) {
-		return nil, fmt.Errorf("%w: array index %d out of %d", errShape, ix.ArrayIndex(), len(a))
+		return nil, fmt.Errorf("%w: array index %d >= %d", errNoElement, ix.ArrayIndex(), len(a))
 	}
 
 	return a[ix.ArrayIndex()], nil

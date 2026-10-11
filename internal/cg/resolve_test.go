@@ -72,7 +72,8 @@ func (f *fixture) outs(node string, fork Fork, outs string) string {
 		f.t.Fatal(err)
 	}
 
-	if err := writeInstance(dir, Instance{Node: node, Fork: fork}); err != nil {
+	// Resolution never reads an instance's fork counts.
+	if err := writeInstance(dir, Instance{Node: node, Fork: fork, Lens: make([]int, len(fork))}); err != nil {
 		f.t.Fatal(err)
 	}
 

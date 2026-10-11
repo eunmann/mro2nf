@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -28,6 +29,10 @@ type ArgsSpec struct {
 	Manifest types.Manifest
 	// Out is the args bundle dir. A disabled instance gets only its stamp.
 	Out string
+	// Log receives the error of each input that read a missing element and
+	// resolved to null, which mrp logs before it runs the fork. Nil discards
+	// it.
+	Log io.Writer
 }
 
 // WriteArgs resolves the instance's disabled state and, when it runs, its
@@ -43,21 +48,25 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 		return Instance{}, err
 	}
 
-	fork, err := instanceFork(st, s)
+	fork, lens, err := instanceFork(st, s)
 	if err != nil {
 		return Instance{}, fmt.Errorf("fork of %s: %w", st.Fqid, err)
 	}
 
 	r := &resolver{g: g, st: s}
 
-	in := Instance{Node: st.Fqid, Fork: fork}
+	in := Instance{Node: st.Fqid, Fork: fork, Lens: lens}
 	if in.Disabled, err = r.disabled(st, fork); err != nil {
 		return Instance{}, err
 	}
 
 	if !in.Disabled {
-		args, err := r.args(st, fork)
+		args, unresolved, err := r.args(st, fork)
 		if err != nil {
+			return Instance{}, err
+		}
+
+		if err := reportUnresolved(spec.Log, in, unresolved); err != nil {
 			return Instance{}, err
 		}
 
@@ -69,32 +78,60 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 	return in, writeInstance(spec.Out, in)
 }
 
-// instanceFork assembles the instance's fork root by root from the parts
-// the staged fork elements record, which must agree on one index per root.
-func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, error) {
+// reportUnresolved logs the inputs of in that read a missing element, as
+// mrp's getBindings does at its default enforcement level
+// (core/stage.go:1402-1440). mrp's --strict mode is not supported.
+func reportUnresolved(log io.Writer, in Instance, unresolved []error) error {
+	if len(unresolved) == 0 {
+		return nil
+	}
+
+	err := fmt.Errorf("resolve input bindings for %s at fork %s: %w", in.Node, in.Fork, errors.Join(unresolved...))
+
+	if log != nil {
+		if _, werr := fmt.Fprintln(log, err); werr != nil {
+			return fmt.Errorf("log unresolved inputs: %w", werr)
+		}
+	}
+
+	return nil
+}
+
+// instanceFork assembles the instance's fork, and each part's fork count,
+// root by root from the parts the staged fork elements record, which must
+// agree on one index per root.
+func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, []int, error) {
 	fork := make(Fork, 0, len(st.ForkRoots()))
+	lens := make([]int, 0, len(st.ForkRoots()))
 
 	for _, root := range st.ForkRoots() {
-		var found []Part
+		var (
+			found []Part
+			n     int
+		)
 
-		for _, f := range s.elementForks {
-			p, ok := f.rootPart(root)
-			if ok && agrees(f, fork) && !slices.ContainsFunc(found, func(q Part) bool { return indexEqual(q.Index, p.Index) }) {
-				found = append(found, p)
+		for _, el := range s.stagedElems {
+			i, ok := el.Fork.rootPos(root)
+			if !ok || !agrees(el.Fork, fork) {
+				continue
+			}
+
+			if p := el.Fork[i]; !slices.ContainsFunc(found, func(q Part) bool { return indexEqual(q.Index, p.Index) }) {
+				found, n = append(found, p), el.Lens[i]
 			}
 		}
 
 		switch len(found) {
 		case 0:
-			return nil, fmt.Errorf("%w %s", errNoForkPart, root.Fqid)
+			return nil, nil, fmt.Errorf("%w %s", errNoForkPart, root.Fqid)
 		case 1:
-			fork = append(fork, Part{Root: root, Index: found[0].Index})
+			fork, lens = append(fork, Part{Root: root, Index: found[0].Index}), append(lens, n)
 		default:
-			return nil, fmt.Errorf("%w root %s: %d indices", errAmbiguous, root.Fqid, len(found))
+			return nil, nil, fmt.Errorf("%w root %s: %d indices", errAmbiguous, root.Fqid, len(found))
 		}
 	}
 
-	return fork, nil
+	return fork, lens, nil
 }
 
 // writeValue writes a resolved object as a bundle of callable's role params.

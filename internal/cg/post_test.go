@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -257,7 +258,7 @@ func TestForkRecordRoundTrip(t *testing.T) {
 	for _, key := range []string{"a\tb", "line\nbreak", "x,y", `q"uote`, `back\slash`, "ünï😀", "", "\x00nul"} {
 		dir := f.next("fork")
 
-		want := Element{Fork: Fork{f.part("MFU.DBL", MapKey(key))}, Position: 3}
+		want := Element{Fork: Fork{f.part("MFU.DBL", MapKey(key))}, Lens: []int{4}, Position: 3}
 		if err := writeElement(dir, want); err != nil {
 			t.Fatal(err)
 		}
@@ -267,8 +268,9 @@ func TestForkRecordRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if got.Fork.String() != want.Fork.String() || got.Position != want.Position || got.Fork[0].Index.MapKey() != key {
-			t.Errorf("key %q round-trips to %s at %d", key, got.Fork, got.Position)
+		if got.Fork.String() != want.Fork.String() || got.Position != want.Position || got.Fork[0].Index.MapKey() != key ||
+			!slices.Equal(got.Lens, want.Lens) {
+			t.Errorf("key %q round-trips to %s of %v at %d", key, got.Fork, got.Lens, got.Position)
 		}
 	}
 }

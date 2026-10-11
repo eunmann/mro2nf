@@ -2,6 +2,9 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
 BINS := mro2nf mre
+# The call-graph data plane runs py and comp stages through mrjob, built from
+# the Martian module go.mod pins (its `tool` directive).
+MRJOB_PKG := github.com/martian-lang/martian/cmd/mrjob
 PREFIX ?= $(HOME)/.local
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -27,8 +30,9 @@ help: ## Show this help
 # runtime images; -trimpath keeps the builder's paths out of the binaries.
 # release.yml, deploy/runtime/Dockerfile and the e2e harness build the same way
 # (TestBuildRecipesStaticAndTrimmed, TestBinariesStaticAndPathFree).
-build: ## Build mro2nf and mre
+build: ## Build mro2nf, mre and mrjob
 	@for b in $(BINS); do CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $$b ./cmd/$$b; done
+	@CGO_ENABLED=0 go build -trimpath -o mrjob $(MRJOB_PKG)
 
 test: ## Run unit tests
 	go test ./... 2>&1 | tee artifacts/test.log
@@ -126,7 +130,7 @@ cloc: ## Count lines of code (respects .gitignore; excludes vendored deps)
 
 install: build ## Install binaries into PREFIX/bin
 	install -d $(PREFIX)/bin
-	@for b in $(BINS); do install -m 0755 $$b $(PREFIX)/bin/$$b; done
+	@for b in $(BINS) mrjob; do install -m 0755 $$b $(PREFIX)/bin/$$b; done
 
 clean: ## Remove built binaries
-	rm -f $(BINS)
+	rm -f $(BINS) mrjob
