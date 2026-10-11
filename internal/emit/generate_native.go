@@ -167,9 +167,10 @@ func elementCallArgs(c ir.Call, scatChan, specName string) string {
 }
 
 // genPublish emits the terminal publish as a single LAYOUT task: it computes the
-// outs/ layout (leaf basename -> outs/ rel path) and the pipeline_outs.json value
-// tree from the return sidecar, materialises the outs/ tree from the staged
-// leaves, and a publishDir directive copies that tree into the results location.
+// outs/ layout (leaf path below the bundle's files dir -> outs/ rel path) and
+// the pipeline_outs.json value tree from the return sidecar, materialises the
+// outs/ tree from the staged leaves, and a publishDir directive copies that
+// tree into the results location.
 // Every backend publishes this way from the head node — there is no per-leaf task.
 // On a shared filesystem (local, HealthOmics' /mnt/workflow) staging each leaf
 // into LAYOUT is an intra-FS link; on the s3:// AWS Batch work dir Nextflow
