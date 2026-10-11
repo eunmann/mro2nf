@@ -7,10 +7,21 @@ name: Nightly
 # checks too slow for every PR. Every job name starts with "Nightly", so no job
 # here can post one of PR Validation's required contexts (TestNightly*). The
 # release tier lives in release.yml.
+#
+# Two tiers share the workflow. The daily one runs the e2e suites and the
+# scale smoke. The weekly one, from its own cron or a dispatch with `heavy`,
+# runs the full scale tier and the generative differential's long run, which
+# cost too many runner minutes to run every day (TestNightlyHeavyJobsRunWeekly).
 on:
   schedule:
     - cron: "17 5 * * *" # daily 05:17 UTC
+    - cron: "17 6 * * 0" # weekly, Sunday 06:17 UTC
   workflow_dispatch:
+    inputs:
+      heavy:
+        description: Run the weekly tier (scale tier, gen-diff long run) instead of the daily one
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,9 +32,10 @@ concurrency:
 
 jobs:
   # A scheduled run repeats a passed one only if one of its inputs changed: the
-  # main commit, or the Nextflow release latest-stable resolves to. The `mark`
-  # job records each pass as an empty cache entry under that key. A dispatch
-  # always runs. A failed run records nothing, so the next night retries it.
+  # main commit, the Nextflow release latest-stable resolves to, or the tier.
+  # The `mark` job records each pass as an empty cache entry under that key,
+  # so a daily pass never skips the weekly tier. A dispatch always runs. A
+  # failed run records nothing, so the next run of its tier retries it.
   gate:
     name: Nightly change gate
     runs-on: ubuntu-latest
@@ -31,14 +43,27 @@ jobs:
     outputs:
       run: ${{ github.event_name != 'schedule' || steps.passed.outputs.cache-hit != 'true' }}
       key: ${{ steps.key.outputs.key }}
+      tier: ${{ steps.tier.outputs.tier }}
     steps:
+      - id: tier
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          HEAVY: ${{ inputs.heavy }}
+        run: |
+          set -euo pipefail
+          tier=daily
+          if [ "$EVENT" = schedule ] && [ "$SCHEDULE" = "17 6 * * 0" ]; then tier=weekly; fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$HEAVY" = true ]; then tier=weekly; fi
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
       - id: key
         env:
           GH_TOKEN: ${{ github.token }}
+          TIER: ${{ steps.tier.outputs.tier }}
         run: |
           set -euo pipefail
           nf=$(gh api repos/nextflow-io/nextflow/releases/latest --jq .tag_name)
-          echo "key=nightly-passed-$GITHUB_SHA-nextflow-$nf" >> "$GITHUB_OUTPUT"
+          echo "key=nightly-passed-$GITHUB_SHA-nextflow-$nf-$TIER" >> "$GITHUB_OUTPUT"
       - id: passed
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -53,7 +78,7 @@ jobs:
   e2e:
     name: Nightly test-e2e shard ${{ matrix.shard }} (Nextflow ${{ matrix.nextflow }})
     needs: gate
-    if: ${{ needs.gate.outputs.run == 'true' }}
+    if: ${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'daily' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -95,7 +120,7 @@ jobs:
   docker:
     name: Nightly test-e2e-docker (Nextflow ${{ matrix.nextflow }})
     needs: gate
-    if: ${{ needs.gate.outputs.run == 'true' }}
+    if: ${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'daily' }}
     runs-on: ubuntu-latest
     # Setup and make test-e2e-docker's 30-minute go-test timeout, with headroom,
     # so a stuck test fails with go test's panic rather than a runner kill.
@@ -130,12 +155,14 @@ jobs:
           }
       - run: make test-e2e-docker
 
-  scale:
+  # The daily cut of the scale tier: the forks shape at 1,000 forks, which
+  # holds the same gates and known failures as the weekly 10,000.
+  smoke:
     name: Nightly scale smoke
     needs: gate
-    if: ${{ needs.gate.outputs.run == 'true' }}
+    if: ${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'daily' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     env:
       E2E_REQUIRE: "1"
     steps:
@@ -150,11 +177,125 @@ jobs:
           java-version: "17"
       # The action is pinned; the Nextflow it installs is latest, deliberately.
       - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
-      - run: make test-scale
+      - run: make test-scale SCALE_RUN='^TestScaleForks' SCALE_WIDTH=1000 SCALE_TIMEOUT=20m
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scale-smoke
+          path: artifacts/scale/
+          if-no-files-found: ignore
 
+  # The scale tier (#352), one bench shape per job so each gets a runner. Each
+  # shape's default wide width is sized to finish within the 100-minute
+  # SCALE_TIMEOUT it runs under (scaleShapeTimeout in test/e2e/scale_test.go).
+  scale:
+    name: Nightly scale ${{ matrix.shape }}
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'weekly' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 115
+    strategy:
+      fail-fast: false
+      matrix:
+        shape: [Forks, Split, MapSplit, MapNested, MapDisabled]
+    env:
+      E2E_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+      # The action is pinned; the Nextflow it installs is latest, deliberately.
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      # No shape name is a prefix of another, so the regexp needs no end anchor.
+      - run: make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}' SCALE_TIMEOUT=100m
+      - if: ${{ always() }}
+        run: |
+          { echo '```'; cat artifacts/scale/*.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scale-${{ matrix.shape }}
+          path: artifacts/scale/
+          if-no-files-found: ignore
+
+  # The generative differential's long run (#350): seeds from a random start,
+  # which the log names, so a divergence reruns as GEN_SEEDS=<seed>. GEN_COUNT
+  # is more seeds than start within GEN_BUDGET minutes, so the budget ends the
+  # run; the seeds still running and a shrink cut to GEN_SHRINK_EVALS program
+  # runs then fit in GEN_TIMEOUT. The shrunk repros are the artifact.
+  #
+  # A divergence goes to GEN_FINDINGS, not the job's status, and from there to
+  # the one tracking issue below, so the job fails, blocking the pass record
+  # and opening the failure issue, only when the harness does.
+  gendiff:
+    name: Nightly gen-diff
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'weekly' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 115
+    permissions:
+      contents: read
+      issues: write
+    env:
+      E2E_REQUIRE: "1"
+      GEN_BUDGET: "50"
+      GEN_SHRINK_EVALS: "45"
+      GEN_FINDINGS: artifacts/gen-diff/divergences.jsonl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: ./.github/actions/setup-martian
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - run: make gen-diff GEN_COUNT=400 GEN_TIMEOUT=100m
+      - id: upload
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gen-diff
+          path: artifacts/gen-diff/
+          if-no-files-found: ignore
+      # The report job's open-or-comment pattern, on its own title. Only main
+      # files: a dispatch from another branch tests that branch's code.
+      - name: Open or update the divergence tracking issue
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && hashFiles('artifacts/gen-diff/divergences.jsonl') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          title="Generative differential: new divergences"
+          seeds=$(jq -r '"- seed \(.seed), shrunk to `\(.fixture)`: " + (.findings | map("`" + . + "`") | join(", "))' "$GEN_FINDINGS")
+          body=$(printf 'Gen-diff run %s on %s diverged from mrp. Rerun a seed with `GEN_SEEDS=<seed> GEN_COUNT=1 make gen-diff`; the shrunk repros are in %s.\n\n%s\n' \
+            "$RUN_URL" "$GITHUB_SHA" "$ARTIFACT_URL" "$seeds")
+          num=$(gh issue list --state open --limit 1000 --json number,title \
+            --jq "map(select(.title == \"$title\")) | first | .number // empty")
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+
+  # The other tier's jobs are skipped, which would skip this job under the
+  # implicit success(), so it runs unless a job failed or the gate skipped them all.
   mark:
     name: Nightly pass record
-    needs: [gate, e2e, docker, scale]
+    needs: [gate, e2e, docker, smoke, scale, gendiff]
+    if: ${{ !failure() && !cancelled() && needs.gate.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -170,7 +311,7 @@ jobs:
   # another branch may be trying out its own broken nightly.
   report:
     name: Nightly failure report
-    needs: [gate, e2e, docker, scale, mark]
+    needs: [gate, e2e, docker, smoke, scale, gendiff, mark]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

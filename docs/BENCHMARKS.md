@@ -17,19 +17,71 @@ BENCH_UPDATE=1 make bench      # record the current run as the new baseline
 The harness skips cleanly when `nextflow`, `java`, or `python3` is missing, so it
 is a no-op in an environment without them.
 
-### Scale smoke
+### Scale tier
 
 ```sh
-make test-scale                  # bench/forks at 1000 forks
-SCALE_WIDTH=4000 make test-scale
+make test-scale                                  # every shape at its default width
+make test-scale SCALE_RUN=^TestScaleForks SCALE_WIDTH=1000
 ```
 
-`make bench` runs at widths small enough for every PR. The nightly workflow also
-runs `make test-scale` (`TestScaleForks`), which generates a `forks` invocation
-at `SCALE_WIDTH` forks and runs it in default and `-native` mode. Each run must
-have one stage task per `mrp` job and the same plumbing task count as
-`pipeline_w4.mro`, and it must gather all `SCALE_WIDTH` outputs in fork order.
-The full scale tier (10k forks and chunks, bytes staged, driver heap) is #352.
+`make bench` runs at widths small enough for every PR. The nightly workflow
+runs the scale tier (#352) weekly, one shape per job, and `TestScaleForks` at
+`SCALE_WIDTH=1000` daily. Each `TestScale<Shape>`
+generates an invocation of a bench fixture at a narrow width and at a wide one,
+and runs both in default and `-native` mode:
+
+| test | fixture | narrow | wide (default) | tasks per mode, wide |
+|------|---------|--------|----------------|----------------------|
+| `TestScaleForks` | `forks` | 4 forks | 10,000 forks | 10,005 |
+| `TestScaleSplit` | `split` | 4 chunks | 10,000 chunks | 10,004 |
+| `TestScaleMapSplit` | `mapsplit` (the Cell Ranger shape) | 4 samples | 2,000 samples | 10,004 |
+| `TestScaleMapNested` | `mapnested` | 2 × 2 | 100 × 100 | 10,204 |
+| `TestScaleMapDisabled` | `mapdisabled` | 4 forks | 2,500 forks | 10,004 |
+
+`SCALE_WIDTH` replaces the wide width of every selected shape. The default
+widths keep each job near 52 minutes: the nightly runner ran 2,020 tasks (the
+1,000-fork shape in both modes at once) in 315 s, and a local 4,000-fork run
+submitted tasks at a steady rate. The selected shapes run one after another,
+so the default `SCALE_TIMEOUT` of 500 minutes gives each of the five 100; the
+nightly runs one shape per job with `SCALE_TIMEOUT=100m`.
+
+Each run must complete and gather every fork's or chunk's output. On top of the
+`bench_metrics.py` metrics below, the tier reads a staging probe of every task
+work dir: the inputs `nxf_stage` links in (bytes staged, what an object store
+downloads), the files each task wrote (bytes uploaded, every hard link
+counted), and the copies of the probe file among them. It wraps `mre` in a
+script that logs each task's command line, and reads the driver JVM's GC log.
+`test/scale` holds every mode's narrow and wide runs to these gates:
+
+- **plumbing tasks** identical at both widths;
+- **stage tasks** equal to `mrp`'s jobs at both widths;
+- **bytes staged per stage task** — per stage process, the most bytes staged
+  into one of its tasks — within 64 bytes of the narrow width's. A split's join,
+  which reads every chunk's output, is exempt in the `split` shape, whose width
+  is the chunk count;
+- **probe copies per producer** identical at both widths, so no task copies a
+  broadcast file into every fork;
+- **longest command-line argument** within 64 bytes of the narrow width's
+  (Linux caps one argument at 128 KiB, #323);
+- **driver heap** after a GC under 768 MiB at the wide width (the JVM may grow
+  to 2 GiB, so an overrun fails this gate rather than the run).
+
+A gate an open issue still fails is a known failure: `scaleKnown` in
+`test/e2e/scale_test.go` keys it to the issue, and the tier reports it without
+failing. A known failure whose gate passes fails the tier as "stale known
+failure, remove it", the rule `test/e2e/divergences.json` applies to its
+issue-tracked entries; so does one that matches no gate. The known failures at
+the default widths are #255 (per-fork keyed plumbing in every map over a
+sub-pipeline), #285 (a stage task stages the whole pipeline-args bundle), #325
+(the default FORK copies the broadcast payload into every fork) and #326 (an
+element-scatter instance stages the whole collection it scatters). The byte
+gates grow linearly with the width, so at a small `SCALE_WIDTH` one can fall
+within its slack and report its known failure stale.
+
+Each job writes `<shape>.jsonl` (the four metrics lines) and `<shape>.txt` (a
+summary of each run and the verdicts) to `SCALE_ARTIFACTS`
+(`artifacts/scale`), uploads them as the `scale-<Shape>` artifact and adds the
+summary to the job's step summary.
 
 ### Other backends (portability)
 
@@ -110,6 +162,11 @@ reporting with a direct probe-file measurement:
 | `wchar`/`rchar` | trace | aggregate characters written/read (copy-volume proxy) |
 | `refs`       | work-dir scan | task dirs into which the probe file is staged/materialized |
 | `multiplier` | `refs / producers` | **per-file transfer multiplier (ideal = 1)** |
+| `staged_bytes` / `stage_staged_bytes` / `stage_staged_bytes_max` | `nxf_stage` in each `.command.run` | bytes of the inputs staged into all tasks / stage tasks / the largest task of each stage process |
+| `uploaded_bytes` / `plumbing_uploaded_bytes` | task work dirs | bytes of the files all tasks / plumbing tasks wrote, every hard link counted |
+| `probe_writes` | task work dirs | files that are a copy of the probe file (ideal = `producers`) |
+| `max_argv_bytes` / `max_arg_bytes` | the scale tier's `mre` wrapper | the longest `mre` command line, and its longest argument |
+| `driver_heap_bytes` / `wall_seconds` | the scale tier's GC log and clock | the driver heap after a GC, and the run's wall time |
 
 `refs` follows symlinked input dirs (`grep -R`), so a chunk that stages a shared
 bundle through a symlinked input is counted — exactly the per-task transfer S3

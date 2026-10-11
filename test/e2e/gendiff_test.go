@@ -31,6 +31,11 @@ package e2e
 //	GEN_FIXTURES       comma list of fixture dirs (such as shrunk ones) to
 //	                   rerun instead of generating programs.
 //	GEN_MRP_TIMEOUT    seconds an mrp run may take (default 180).
+//	GEN_BUDGET         minutes after which no further seed starts; those
+//	                   left skip (default 0: no limit).
+//	GEN_FINDINGS       file each diverging seed is appended to as a JSON
+//	                   line instead of failing the test, so the run fails
+//	                   only on a harness error (default: fail the test).
 
 import (
 	"bytes"
@@ -44,6 +49,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -95,6 +101,75 @@ type genEnv struct {
 	// mrpTimeout bounds one mrp run: mrp livelocks on some valid programs
 	// (a nested fork it re-completes forever), which are then no test.
 	mrpTimeout time.Duration
+	// deadline is when GEN_BUDGET is spent; zero for no budget.
+	deadline time.Time
+	// findings is the GEN_FINDINGS file, or "" to fail on a divergence.
+	findings string
+}
+
+// divergenceReporter is how runGenSeed reports a divergence: as a test
+// failure, or, with GEN_FINDINGS, as a log line beside the record.
+func (e genEnv) divergenceReporter(t *testing.T) func(format string, args ...any) {
+	t.Helper()
+
+	if e.findings == "" {
+		return t.Errorf
+	}
+
+	return t.Logf
+}
+
+// genDivergence is one GEN_FINDINGS line: a diverging seed, the ids of its
+// findings and the shrunk fixture's dir name under GEN_ARTIFACTS.
+type genDivergence struct {
+	Seed     uint64   `json:"seed"`
+	Findings []string `json:"findings"`
+	Fixture  string   `json:"fixture"`
+}
+
+// recordDivergence appends the seed's divergence to GEN_FINDINGS, if set.
+// Each line is one O_APPEND write, which Linux applies whole, so seeds that
+// diverge at once cannot interleave their lines.
+func (e genEnv) recordDivergence(seed uint64, v genVerdict, fixture string) error {
+	if e.findings == "" {
+		return nil
+	}
+
+	d := genDivergence{Seed: seed, Fixture: filepath.Base(fixture)}
+	for _, f := range v.findings {
+		d.Findings = append(d.Findings, f.id())
+	}
+
+	line, err := json.Marshal(d)
+	if err != nil {
+		return fmt.Errorf("encode divergence: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(e.findings), 0o755); err != nil {
+		return fmt.Errorf("create findings dir: %w", err)
+	}
+
+	f, err := os.OpenFile(e.findings, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open findings: %w", err)
+	}
+
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		_ = f.Close()
+
+		return fmt.Errorf("append divergence: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close findings: %w", err)
+	}
+
+	return nil
+}
+
+// budgetSpent reports whether a seed starting at now is past the budget.
+func (e genEnv) budgetSpent(now time.Time) bool {
+	return !e.deadline.IsZero() && now.After(e.deadline)
 }
 
 // TestGenDiff runs each selected seed's program under mrp and mro2nf and
@@ -123,8 +198,114 @@ func TestGenDiff(t *testing.T) {
 		t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
 			shardSkip(t)
+
+			if env.budgetSpent(time.Now()) {
+				t.Skipf("GEN_BUDGET spent before seed %d started", seed)
+			}
+
 			runGenSeed(t, env, seed, random)
 		})
+	}
+}
+
+// TestGenBudgetSpent pins GEN_BUDGET's cutoff: a seed starts until the
+// deadline passes, and without a budget always starts.
+func TestGenBudgetSpent(t *testing.T) {
+	now := time.Now()
+
+	cases := []struct {
+		name     string
+		deadline time.Time
+		want     bool
+	}{
+		{"no budget", time.Time{}, false},
+		{"before the deadline", now.Add(time.Minute), false},
+		{"past the deadline", now.Add(-time.Minute), true},
+	}
+
+	for _, tc := range cases {
+		if got := (genEnv{deadline: tc.deadline}).budgetSpent(now); got != tc.want {
+			t.Errorf("%s: budgetSpent = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestGenFindingsRecordDivergences pins GEN_FINDINGS's half of the exit
+// split: a divergence leaves the test passing, and every diverging seed is
+// one whole line of the file even when many diverge at once.
+func TestGenFindingsRecordDivergences(t *testing.T) {
+	env := genEnv{findings: filepath.Join(t.TempDir(), "gen-diff", "divergences.jsonl")}
+	v := genVerdict{findings: []genFinding{{leg: "default", key: "outs:r0"}, {leg: "native", key: "abi:ST0 main"}}}
+
+	if !t.Run("divergence", func(t *testing.T) { env.divergenceReporter(t)("seed %d diverges", 7) }) {
+		t.Error("a divergence failed the test under GEN_FINDINGS")
+	}
+
+	const seeds = 50
+
+	var wg sync.WaitGroup
+	for seed := range uint64(seeds) {
+		wg.Go(func() {
+			if err := env.recordDivergence(seed, v, "/artifacts/gen-diff/gen_0123456789ab"); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	data, err := os.ReadFile(env.findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[uint64]genDivergence{}
+
+	for line := range strings.Lines(string(data)) {
+		var d genDivergence
+		if err := json.Unmarshal([]byte(line), &d); err != nil {
+			t.Fatalf("line %q: %v", line, err)
+		}
+
+		got[d.Seed] = d
+	}
+
+	want := genDivergence{Seed: 3, Findings: []string{"default outs:r0", "native abi:ST0 main"}, Fixture: "gen_0123456789ab"}
+	if diff := cmp.Diff(want, got[3]); len(got) != seeds || diff != "" {
+		t.Errorf("%d seeds recorded, want %d; seed 3 (-want +got):\n%s", len(got), seeds, diff)
+	}
+}
+
+// TestGenDiffHarnessErrorFails pins the other half: under GEN_FINDINGS a
+// harness error, here mrp missing, still fails the run. It reruns this test
+// binary on TestGenDiff alone.
+func TestGenDiffHarnessErrorFails(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGenDiff$", "-test.count=1")
+	cmd.Dir = filepath.Join(root, "test", "e2e")
+	cmd.Env = append(os.Environ(), "E2E_REQUIRE=1", "MARTIAN_BIN="+t.TempDir(),
+		"GEN_SEEDS=1", "GEN_COUNT=1", "GEN_FINDINGS="+filepath.Join(t.TempDir(), "divergences.jsonl"))
+
+	out, err := cmd.CombinedOutput()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || !strings.Contains(string(out), errNoMrp.Error()) {
+		t.Errorf("TestGenDiff without mrp: err %v, want a failed run naming %q:\n%s", err, errNoMrp, out)
+	}
+}
+
+// TestGenDiffHarnessErrorFailsSkipsWithoutTools pins that test's guard:
+// without TestGenDiff's tools and E2E_REQUIRE it skips, as TestGenDiff does,
+// rather than failing on the tool its E2E_REQUIRE=1 rerun finds missing.
+func TestGenDiffHarnessErrorFailsSkipsWithoutTools(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGenDiffHarnessErrorFails$", "-test.count=1", "-test.v")
+	cmd.Dir = filepath.Join(root, "test", "e2e")
+	cmd.Env = append(os.Environ(), "PATH="+t.TempDir(), "E2E_REQUIRE=")
+
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- SKIP: TestGenDiffHarnessErrorFails") {
+		t.Errorf("TestGenDiffHarnessErrorFails without its tools: err %v, want a skip:\n%s", err, out)
 	}
 }
 
@@ -182,7 +363,8 @@ func runGenSeed(t *testing.T, env genEnv, seed uint64, random bool) {
 		return
 	}
 
-	t.Errorf("seed %d diverges from mrp (rerun: GEN_SEEDS=%d GEN_COUNT=1 make gen-diff):\n%s", seed, seed, v)
+	report := env.divergenceReporter(t)
+	report("seed %d diverges from mrp (rerun: GEN_SEEDS=%d GEN_COUNT=1 make gen-diff):\n%s", seed, seed, v)
 
 	small, sv := shrinkGenProgram(t, env, prog, v)
 
@@ -191,7 +373,11 @@ func runGenSeed(t *testing.T, env genEnv, seed uint64, random bool) {
 		t.Fatal(err)
 	}
 
-	t.Errorf("seed %d: shrunk fixture %s (%s):\n%s", seed, dir, gen.Size(small), sv)
+	report("seed %d: shrunk fixture %s (%s):\n%s", seed, dir, gen.Size(small), sv)
+
+	if err := env.recordDivergence(seed, v, dir); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // runGenFixture reruns a fixture a shrink wrote, from a copy so the runs
@@ -231,6 +417,14 @@ func loadGenEnv(t *testing.T) genEnv {
 			Parallel: envInt(t, "GEN_SHRINK_PARALLEL", 3),
 		},
 		mrpTimeout: time.Duration(envInt(t, "GEN_MRP_TIMEOUT", 180)) * time.Second,
+	}
+
+	if findings := os.Getenv("GEN_FINDINGS"); findings != "" {
+		env.findings = rootPath(findings)
+	}
+
+	if budget := envInt(t, "GEN_BUDGET", 0); budget > 0 {
+		env.deadline = time.Now().Add(time.Duration(budget) * time.Minute)
 	}
 
 	if keep := os.Getenv("GEN_SHRINK_KEEP"); keep != "" {

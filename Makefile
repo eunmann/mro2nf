@@ -67,12 +67,14 @@ test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; 
 
 # The long generative differential (#350). test-e2e runs TestGenDiff on the
 # checked-in smoke seeds; this runs GEN_COUNT seeds from GEN_SEEDS (a number,
-# "random", or a comma list). The other GEN_* knobs (legs, prebuilt binaries,
-# artifact dir, shrink budget) are documented in test/e2e/gendiff_test.go.
+# "random", or a comma list), within GEN_TIMEOUT. The other GEN_* knobs (legs,
+# prebuilt binaries, artifact dir, shrink and time budgets) are documented in
+# test/e2e/gendiff_test.go.
 GEN_SEEDS ?= random
 GEN_COUNT ?= 200
+GEN_TIMEOUT ?= 180m
 gen-diff: build ## Generative differential vs mrp (GEN_SEEDS=<start>|random|<a,b,...> GEN_COUNT=<n>)
-	GEN_SEEDS='$(GEN_SEEDS)' GEN_COUNT='$(GEN_COUNT)' $(GO_E2E) -timeout 180m -run '^TestGenDiff$$'
+	GEN_SEEDS='$(GEN_SEEDS)' GEN_COUNT='$(GEN_COUNT)' $(GO_E2E) -timeout $(GEN_TIMEOUT) -run '^TestGenDiff$$'
 
 # The only writer of testdata/*/expected/outs/: each recordable golden fixture
 # runs under real mrp and its published outs/ tree replaces the committed one.
@@ -85,8 +87,16 @@ lint-nf: build ## Static-lint generated Nextflow with `nextflow lint` (needs Nex
 bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline
 	$(GO_E2E) -timeout 20m -run '^TestBench'
 
-test-scale: build ## Nightly scale smoke: bench forks at SCALE_WIDTH forks (default 1000) vs width 4
-	$(GO_E2E) -timeout 50m -run '^TestScale'
+# The nightly scale tier (#352): each TestScale<Shape> runs a bench shape at
+# a narrow and a wide width (SCALE_WIDTH overrides every selected shape's)
+# and gates the overhead rule. SCALE_RUN selects shapes; the nightly runs one
+# per job. Metrics and verdicts land in SCALE_ARTIFACTS (artifacts/scale).
+# The shapes run one after another, 100 minutes each at the default widths
+# (scaleShapeTimeout), so the default SCALE_TIMEOUT fits all five.
+SCALE_RUN ?= ^TestScale
+SCALE_TIMEOUT ?= 500m
+test-scale: build ## Nightly scale tier: bench shapes at production widths (SCALE_RUN=<-run regexp> SCALE_WIDTH=<n>)
+	$(GO_E2E) -timeout $(SCALE_TIMEOUT) -run '$(SCALE_RUN)'
 
 test-cellranger: build ## Real-CellRanger differential baseline (opt-in; set CELLRANGER_HOME=<extracted bundle>)
 	$(GO_E2E) -timeout 30m -run '^TestCellRanger'

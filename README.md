@@ -370,10 +370,14 @@ CI (`.github/workflows/pr-validation.yml`) runs lint (golangci-lint + `govulnche
 + a `go mod tidy` check), build, unit tests (`-race`), and the e2e suites on every
 PR. It doesn't run again on `main`: a PR merges only when it is up to date with
 `main`, so its run already validated the merged tree. `nightly.yml` reruns the e2e
-suites daily on the declared Nextflow floor and on latest stable, and adds the
-`make test-scale` smoke. A scheduled run is skipped when the current `main` commit
-and the latest-stable Nextflow release have already passed. A failed run opens,
-or comments on, a "Nightly CI is failing" issue. The Martian
+suites daily on the declared Nextflow floor and on latest stable, with a
+1,000-fork `make test-scale` smoke. Weekly, or on a dispatch with `heavy`, it
+runs the full `make test-scale` scale tier and a long `make gen-diff` run from a
+random seed, whose shrunk repros it keeps as an artifact. A scheduled run is
+skipped when the current `main` commit and the latest-stable Nextflow release
+have already passed its tier. A failed run opens,
+or comments on, a "Nightly CI is failing" issue. Gen-diff divergences don't fail
+the run: they go to a "Generative differential: new divergences" issue. The Martian
 dependency is pinned to a published commit, so
 CI needs only a single checkout; to hack on the Martian parser locally, add a
 `go.work` pointing at a fork checkout (gitignored). Tagging `v*` triggers

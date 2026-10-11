@@ -3,7 +3,9 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -187,13 +189,25 @@ func TestNightlyShardsPartitionSuite(t *testing.T) {
 	}
 }
 
-// nightlyChangeGate is the `if:` of every nightly suite job: a scheduled run
-// skips the suites once their commit and Nextflow release have passed.
-const nightlyChangeGate = "${{ needs.gate.outputs.run == 'true' }}"
+// The `if:` of the nightly suite jobs: each runs in one tier, and a scheduled
+// run skips the suites once their commit, Nextflow release and tier passed.
+const (
+	nightlyDailyGate  = "${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'daily' }}"
+	nightlyWeeklyGate = "${{ needs.gate.outputs.run == 'true' && needs.gate.outputs.tier == 'weekly' }}"
+)
+
+// nightlyHeavyJobs are the suite jobs of the weekly tier; every other suite
+// job is daily.
+var nightlyHeavyJobs = []string{"scale", "gendiff"}
+
+// nightlyMarkGate lets the pass record run beside the other tier's skipped
+// jobs, which the implicit success() would treat as a reason to skip it.
+const nightlyMarkGate = "${{ !failure() && !cancelled() && needs.gate.outputs.run == 'true' }}"
 
 // TestNightlySuitesWaitOnChangeGate requires every suite job to need the
-// change gate and run only on its verdict, and the pass record to need every
-// suite job, so a pass is recorded only when all of them ran green.
+// change gate and run only on its verdict, in its tier, and the pass record
+// to need every suite job and run only when none failed, so a pass is
+// recorded only when all of its tier's suites ran green.
 func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 	var suites []string
 
@@ -207,8 +221,13 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 		default:
 			suites = append(suites, j.id)
 
-			if !slices.Contains(j.needs, "gate") || j.cond != nightlyChangeGate {
-				t.Errorf("job %q: needs %q, if %q; want needs gate, if %q", j.id, j.needs, j.cond, nightlyChangeGate)
+			want := nightlyDailyGate
+			if slices.Contains(nightlyHeavyJobs, j.id) {
+				want = nightlyWeeklyGate
+			}
+
+			if !slices.Contains(j.needs, "gate") || j.cond != want {
+				t.Errorf("job %q: needs %q, if %q; want needs gate, if %q", j.id, j.needs, j.cond, want)
 			}
 		}
 	}
@@ -223,7 +242,279 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 		}
 	}
 
-	if mark.cond != "" {
-		t.Errorf("mark job has if %q; it must keep the implicit success()", mark.cond)
+	if mark.cond != nightlyMarkGate {
+		t.Errorf("mark job has if %q, want %q", mark.cond, nightlyMarkGate)
 	}
+}
+
+// nightlyWeeklyCron is the schedule of the weekly tier.
+const nightlyWeeklyCron = "17 6 * * 0"
+
+// TestNightlyHeavyJobsRunWeekly runs the gate's tier step for every schedule
+// and for a dispatch with and without `heavy`: only the weekly cron and the
+// `heavy` input pick the weekly tier, which alone runs nightlyHeavyJobs, and
+// the tier is part of the pass key, so one tier's pass never skips the other.
+func TestNightlyHeavyJobsRunWeekly(t *testing.T) {
+	requireTools(t, "bash")
+
+	wf := readWorkflow(t, nightlyWorkflow)
+
+	heavy := wf.get("on").get("workflow_dispatch").get("inputs").get("heavy")
+	if scalarOf(heavy.get("type")) != "boolean" || scalarOf(heavy.get("default")) != "false" {
+		t.Errorf("%s workflow_dispatch input heavy: want type boolean, default false", nightlyWorkflow)
+	}
+
+	type trigger struct{ event, schedule, heavy, want string }
+
+	schedules := wf.get("on").get("schedule").items
+
+	triggers := make([]trigger, 0, len(schedules)+2)
+	triggers = append(triggers, trigger{"workflow_dispatch", "", "false", "daily"}, trigger{"workflow_dispatch", "", "true", "weekly"})
+
+	crons := make([]string, 0, len(schedules))
+
+	for _, s := range schedules {
+		cron := scalarOf(s.get("cron"))
+		crons = append(crons, cron)
+
+		want := "daily"
+		if cron == nightlyWeeklyCron {
+			want = "weekly"
+		}
+
+		triggers = append(triggers, trigger{"schedule", cron, "", want})
+	}
+
+	if !slices.Contains(crons, nightlyWeeklyCron) || len(crons) < 2 {
+		t.Errorf("%s schedules %q: want a daily cron and the weekly %q", nightlyWorkflow, crons, nightlyWeeklyCron)
+	}
+
+	steps := wf.get("jobs").get("gate").get("steps").items
+	tierStep := steps[slices.IndexFunc(steps, func(s *yamlNode) bool { return scalarOf(s.get("id")) == "tier" })]
+
+	for _, tr := range triggers {
+		if got := runTierStep(t, scalarOf(tierStep.get("run")), tr.event, tr.schedule, tr.heavy); got != tr.want {
+			t.Errorf("%s (schedule %q, heavy %q): tier %q, want %q", tr.event, tr.schedule, tr.heavy, got, tr.want)
+		}
+	}
+
+	key := steps[slices.IndexFunc(steps, func(s *yamlNode) bool { return scalarOf(s.get("id")) == "key" })]
+	if !strings.Contains(scalarOf(key.get("run")), "-$TIER\"") {
+		t.Errorf("%s gate key does not end in the tier", nightlyWorkflow)
+	}
+}
+
+// runTierStep runs the gate's tier script as Actions would for the trigger
+// and returns the tier it outputs.
+func runTierStep(t *testing.T, script, event, schedule, heavy string) string {
+	t.Helper()
+
+	out := filepath.Join(t.TempDir(), "output")
+
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "EVENT="+event, "SCHEDULE="+schedule, "HEAVY="+heavy, "GITHUB_OUTPUT="+out)
+
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("tier step: %v\n%s", err, b)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.TrimPrefix(strings.TrimSpace(string(data)), "tier=")
+}
+
+var scaleTestFunc = regexp.MustCompile(`(?m)^func (TestScale\w+)\(`)
+
+// TestNightlyScaleMatrixRunsEveryShape requires the scale job's matrix to
+// run every TestScale function in test/e2e/scale_test.go, one per job, so a
+// new shape cannot go unrun.
+func TestNightlyScaleMatrixRunsEveryShape(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join(root, "test", "e2e", "scale_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	funcs := scaleTestFunc.FindAllSubmatch(src, -1)
+
+	want := make([]string, 0, len(funcs))
+	for _, m := range funcs {
+		want = append(want, string(m[1]))
+	}
+
+	job := readWorkflow(t, nightlyWorkflow).get("jobs").get("scale")
+	shapes := job.get("strategy").get("matrix").get("shape").list()
+
+	got := make([]string, 0, len(shapes))
+	for _, s := range shapes {
+		got = append(got, "TestScale"+s)
+	}
+
+	slices.Sort(want)
+	slices.Sort(got)
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s scale matrix shapes != TestScale functions (-want +got):\n%s", nightlyWorkflow, diff)
+	}
+
+	run := fmt.Sprintf("make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}' SCALE_TIMEOUT=%.0fm", scaleShapeTimeout.Minutes())
+	if !slices.ContainsFunc(job.get("steps").items, func(s *yamlNode) bool { return scalarOf(s.get("run")) == run }) {
+		t.Errorf("%s scale job never runs %q", nightlyWorkflow, run)
+	}
+}
+
+// nightlyArtifacts are the nightly jobs whose results are an artifact, with
+// the dir each uploads.
+var nightlyArtifacts = map[string]string{"scale": "artifacts/scale/", "gendiff": "artifacts/gen-diff/"}
+
+// TestNightlyUploadsArtifacts requires each artifact job to upload its dir
+// in a step that runs whatever the suite's outcome, so a failed night keeps
+// the results that explain it.
+func TestNightlyUploadsArtifacts(t *testing.T) {
+	jobs := readWorkflow(t, nightlyWorkflow).get("jobs")
+
+	for id, dir := range nightlyArtifacts {
+		uploads := slices.ContainsFunc(jobs.get(id).get("steps").items, func(s *yamlNode) bool {
+			return strings.HasPrefix(scalarOf(s.get("uses")), "actions/upload-artifact@") &&
+				scalarOf(s.get("with").get("path")) == dir && scalarOf(s.get("if")) == "${{ always() }}"
+		})
+		if !uploads {
+			t.Errorf("%s job %q has no `if: ${{ always() }}` upload-artifact step for %s", nightlyWorkflow, id, dir)
+		}
+	}
+}
+
+// TestNightlyGenDiffRunsRandomSeeds requires the gen-diff job to run make
+// gen-diff on its default random seeds, under a time budget, with the mrp
+// the differential needs.
+func TestNightlyGenDiffRunsRandomSeeds(t *testing.T) {
+	job := readWorkflow(t, nightlyWorkflow).get("jobs").get("gendiff")
+
+	if scalarOf(job.get("env").get("GEN_BUDGET")) == "" {
+		t.Errorf("%s gendiff job sets no GEN_BUDGET", nightlyWorkflow)
+	}
+
+	if job.get("env").get("GEN_SEEDS") != nil {
+		t.Errorf("%s gendiff job sets GEN_SEEDS; the nightly runs the random default", nightlyWorkflow)
+	}
+
+	var runs, martian bool
+
+	for _, s := range job.get("steps").items {
+		run := scalarOf(s.get("run"))
+		runs = runs || strings.HasPrefix(run, "make gen-diff ") && !strings.Contains(run, "GEN_SEEDS")
+		martian = martian || scalarOf(s.get("uses")) == "./.github/actions/setup-martian"
+	}
+
+	if !runs || !martian {
+		t.Errorf("%s gendiff job: runs make gen-diff without GEN_SEEDS %v, sets up mrp %v; want both", nightlyWorkflow, runs, martian)
+	}
+}
+
+// nightlyDivergenceTitle is the exact title, and so the dedupe key, of the
+// issue the gen-diff job files its divergences on.
+const nightlyDivergenceTitle = "Generative differential: new divergences"
+
+// fakeGh stands in for gh: `issue list` prints $FAKE_ISSUE, and every other
+// call appends its arguments, one per line, to $FAKE_GH_LOG.
+const fakeGh = `#!/bin/bash
+if [ "$1 $2" = "issue list" ]; then echo "$FAKE_ISSUE"; exit 0; fi
+printf '%s\n' "$@" >> "$FAKE_GH_LOG"
+`
+
+// TestNightlyGenDiffFilesDivergences runs the gen-diff job's issue step
+// against a fake gh: with no open tracking issue it opens one, with one it
+// comments, and the body names the run, each seed with its finding keys and
+// the artifact. Only that job and the report job may write issues.
+func TestNightlyGenDiffFilesDivergences(t *testing.T) {
+	requireTools(t, "bash", "jq")
+
+	wf := readWorkflow(t, nightlyWorkflow)
+	job := wf.get("jobs").get("gendiff")
+
+	if wf.get("permissions").get("issues") != nil {
+		t.Errorf("%s grants issues at the workflow level", nightlyWorkflow)
+	}
+
+	for _, id := range wf.get("jobs").keys {
+		writes := scalarOf(wf.get("jobs").get(id).get("permissions").get("issues")) == "write"
+		if writes != (id == "gendiff" || id == "report") {
+			t.Errorf("%s job %q issues: write = %v, want it only on gendiff and report", nightlyWorkflow, id, writes)
+		}
+	}
+
+	steps := job.get("steps").items
+
+	i := slices.IndexFunc(steps, func(s *yamlNode) bool { return strings.Contains(scalarOf(s.get("run")), "gh issue") })
+	if i < 0 {
+		t.Fatalf("%s gendiff job has no issue step", nightlyWorkflow)
+	}
+
+	if cond := scalarOf(steps[i].get("if")); !strings.Contains(cond, "!cancelled()") || !strings.Contains(cond, "refs/heads/main") {
+		t.Errorf("gendiff issue step if %q: want it after a failed run too, and only on main", cond)
+	}
+
+	findings := filepath.Join(t.TempDir(), "divergences.jsonl")
+	lines := `{"seed":42,"findings":["default outs:r0","native abi:ST0 main"],"fixture":"gen_0123456789ab"}` + "\n"
+
+	if err := os.WriteFile(findings, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, issue := range []string{"", "17"} {
+		log := runIssueStep(t, scalarOf(steps[i].get("run")), findings, issue)
+
+		want := []string{"issue", "create", "--title", nightlyDivergenceTitle, "--body"}
+		if issue != "" {
+			want = []string{"issue", "comment", issue, "--body"}
+		}
+
+		if !strings.HasPrefix(log, strings.Join(want, "\n")+"\n") {
+			t.Errorf("open issue %q: gh got\n%s\nwant it to start %q", issue, log, want)
+		}
+
+		for _, part := range []string{"https://run/1", "https://artifact/2", "seed 42", "`gen_0123456789ab`", "`default outs:r0`, `native abi:ST0 main`"} {
+			if !strings.Contains(log, part) {
+				t.Errorf("open issue %q: body lacks %q:\n%s", issue, part, log)
+			}
+		}
+	}
+}
+
+// runIssueStep runs the gen-diff issue step with a fake gh on PATH, the
+// findings file and the open issue number (or "") gh reports, and returns
+// the arguments of gh's create or comment call.
+func runIssueStep(t *testing.T, script, findings, issue string) string {
+	t.Helper()
+
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "gh.log")
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "FAKE_GH_LOG="+log, "FAKE_ISSUE="+issue,
+		"GEN_FINDINGS="+findings, "RUN_URL=https://run/1", "ARTIFACT_URL=https://artifact/2", "GITHUB_SHA=abc123")
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("issue step: %v\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(data)
+}
+
+// scalarOf is n's scalar, or "" for an absent node.
+func scalarOf(n *yamlNode) string {
+	if n == nil {
+		return ""
+	}
+
+	return n.scalar
 }
