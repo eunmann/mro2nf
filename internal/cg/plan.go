@@ -338,7 +338,7 @@ func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, wt Topology, pl
 			}
 
 			if on, err := gateValue(v); err == nil && on {
-				off = append(off, joinKey(entryFork{ords: in.ords}.key(n.Roots)))
+				off = append(off, DottedKey(entryFork{ords: in.ords}.key(n.Roots)))
 
 				break
 			}
@@ -348,7 +348,9 @@ func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, wt Topology, pl
 	return off, nil
 }
 
-func joinKey(key []int) string {
+// DottedKey is a fork key as the plan's records write it and the driver
+// matches it, `k.join('.')`: its ordinals joined by dots.
+func DottedKey(key []int) string {
 	parts := make([]string, len(key))
 	for i, k := range key {
 		parts[i] = strconv.Itoa(k)
@@ -393,20 +395,12 @@ func specDigest(st *syntax.CallGraphStage) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// inTypes and outTypes are a parameter list's names and types, without the
-// source locations its declaration carries.
 func inTypes(ps *syntax.InParams) []string {
 	if ps == nil {
 		return nil
 	}
 
-	out := make([]string, len(ps.List))
-	for i, p := range ps.List {
-		t := p.GetTname()
-		out[i] = p.GetId() + " " + t.String()
-	}
-
-	return out
+	return paramTypes(ps.List)
 }
 
 func outTypes(ps *syntax.OutParams) []string {
@@ -414,8 +408,14 @@ func outTypes(ps *syntax.OutParams) []string {
 		return nil
 	}
 
-	out := make([]string, len(ps.List))
-	for i, p := range ps.List {
+	return paramTypes(ps.List)
+}
+
+// paramTypes are a parameter list's names and types, without the source
+// locations its declaration carries.
+func paramTypes[P syntax.StructMemberLike](list []P) []string {
+	out := make([]string, len(list))
+	for i, p := range list {
 		t := p.GetTname()
 		out[i] = p.GetId() + " " + t.String()
 	}

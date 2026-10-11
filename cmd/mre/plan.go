@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
@@ -153,7 +152,7 @@ func (f *planFlags) write(name string, p cg.Plan) error {
 		var b strings.Builder
 
 		for _, pf := range forks {
-			fmt.Fprintf(&b, "%s %s\n", dotted(pf.Key), pf.Record)
+			fmt.Fprintf(&b, "%s %s\n", cg.DottedKey(pf.Key), pf.Record)
 		}
 
 		if err := writeText(filepath.Join(f.roots, root), b.String()); err != nil {
@@ -170,15 +169,6 @@ func orDash(s string) string {
 	}
 
 	return s
-}
-
-func dotted(key []int) string {
-	parts := make([]string, len(key))
-	for i, k := range key {
-		parts[i] = strconv.Itoa(k)
-	}
-
-	return strings.Join(parts, ".")
 }
 
 func writeText(path, text string) error {
