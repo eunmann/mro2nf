@@ -169,9 +169,44 @@ jobs:
           path: artifacts/scale/
           if-no-files-found: ignore
 
+  # The generative differential's long run (#350): seeds from a random start,
+  # which the log names, so a divergence reruns as GEN_SEEDS=<seed>. GEN_COUNT
+  # is more seeds than start within GEN_BUDGET minutes, so the budget ends the
+  # run; the seeds still running and a shrink cut to GEN_SHRINK_EVALS program
+  # runs then fit in GEN_TIMEOUT. The shrunk repros are the artifact.
+  gendiff:
+    name: Nightly gen-diff
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 115
+    env:
+      E2E_REQUIRE: "1"
+      GEN_BUDGET: "50"
+      GEN_SHRINK_EVALS: "45"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: ./.github/actions/setup-martian
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - run: make gen-diff GEN_COUNT=400 GEN_TIMEOUT=100m
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gen-diff
+          path: artifacts/gen-diff/
+          if-no-files-found: ignore
+
   mark:
     name: Nightly pass record
-    needs: [gate, e2e, docker, scale]
+    needs: [gate, e2e, docker, scale, gendiff]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -187,7 +222,7 @@ jobs:
   # another branch may be trying out its own broken nightly.
   report:
     name: Nightly failure report
-    needs: [gate, e2e, docker, scale, mark]
+    needs: [gate, e2e, docker, scale, gendiff, mark]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

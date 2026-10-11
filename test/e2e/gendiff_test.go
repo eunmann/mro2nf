@@ -31,6 +31,8 @@ package e2e
 //	GEN_FIXTURES       comma list of fixture dirs (such as shrunk ones) to
 //	                   rerun instead of generating programs.
 //	GEN_MRP_TIMEOUT    seconds an mrp run may take (default 180).
+//	GEN_BUDGET         minutes after which no further seed starts; those
+//	                   left skip (default 0: no limit).
 
 import (
 	"bytes"
@@ -95,6 +97,13 @@ type genEnv struct {
 	// mrpTimeout bounds one mrp run: mrp livelocks on some valid programs
 	// (a nested fork it re-completes forever), which are then no test.
 	mrpTimeout time.Duration
+	// deadline is when GEN_BUDGET is spent; zero for no budget.
+	deadline time.Time
+}
+
+// budgetSpent reports whether a seed starting at now is past the budget.
+func (e genEnv) budgetSpent(now time.Time) bool {
+	return !e.deadline.IsZero() && now.After(e.deadline)
 }
 
 // TestGenDiff runs each selected seed's program under mrp and mro2nf and
@@ -123,8 +132,35 @@ func TestGenDiff(t *testing.T) {
 		t.Run(strconv.FormatUint(seed, 10), func(t *testing.T) {
 			t.Parallel()
 			shardSkip(t)
+
+			if env.budgetSpent(time.Now()) {
+				t.Skipf("GEN_BUDGET spent before seed %d started", seed)
+			}
+
 			runGenSeed(t, env, seed, random)
 		})
+	}
+}
+
+// TestGenBudgetSpent pins GEN_BUDGET's cutoff: a seed starts until the
+// deadline passes, and without a budget always starts.
+func TestGenBudgetSpent(t *testing.T) {
+	now := time.Now()
+
+	cases := []struct {
+		name     string
+		deadline time.Time
+		want     bool
+	}{
+		{"no budget", time.Time{}, false},
+		{"before the deadline", now.Add(time.Minute), false},
+		{"past the deadline", now.Add(-time.Minute), true},
+	}
+
+	for _, tc := range cases {
+		if got := (genEnv{deadline: tc.deadline}).budgetSpent(now); got != tc.want {
+			t.Errorf("%s: budgetSpent = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -231,6 +267,10 @@ func loadGenEnv(t *testing.T) genEnv {
 			Parallel: envInt(t, "GEN_SHRINK_PARALLEL", 3),
 		},
 		mrpTimeout: time.Duration(envInt(t, "GEN_MRP_TIMEOUT", 180)) * time.Second,
+	}
+
+	if budget := envInt(t, "GEN_BUDGET", 0); budget > 0 {
+		env.deadline = time.Now().Add(time.Duration(budget) * time.Minute)
 	}
 
 	if keep := os.Getenv("GEN_SHRINK_KEEP"); keep != "" {

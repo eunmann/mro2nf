@@ -67,12 +67,14 @@ test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; 
 
 # The long generative differential (#350). test-e2e runs TestGenDiff on the
 # checked-in smoke seeds; this runs GEN_COUNT seeds from GEN_SEEDS (a number,
-# "random", or a comma list). The other GEN_* knobs (legs, prebuilt binaries,
-# artifact dir, shrink budget) are documented in test/e2e/gendiff_test.go.
+# "random", or a comma list), within GEN_TIMEOUT. The other GEN_* knobs (legs,
+# prebuilt binaries, artifact dir, shrink and time budgets) are documented in
+# test/e2e/gendiff_test.go.
 GEN_SEEDS ?= random
 GEN_COUNT ?= 200
+GEN_TIMEOUT ?= 180m
 gen-diff: build ## Generative differential vs mrp (GEN_SEEDS=<start>|random|<a,b,...> GEN_COUNT=<n>)
-	GEN_SEEDS='$(GEN_SEEDS)' GEN_COUNT='$(GEN_COUNT)' $(GO_E2E) -timeout 180m -run '^TestGenDiff$$'
+	GEN_SEEDS='$(GEN_SEEDS)' GEN_COUNT='$(GEN_COUNT)' $(GO_E2E) -timeout $(GEN_TIMEOUT) -run '^TestGenDiff$$'
 
 # The only writer of testdata/*/expected/outs/: each recordable golden fixture
 # runs under real mrp and its published outs/ tree replaces the committed one.

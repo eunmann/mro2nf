@@ -816,7 +816,8 @@ feature is checked against the real `mrp` output. The validation tiers:
   there, though none is reported as excusing nothing; the ABI and outcome
   matchers, which name their fixtures, do not apply. `make test-e2e` runs a
   fixed smoke set of seeds; `make gen-diff` runs a seed range for the long
-  tier.
+  tier, which the nightly starts from a random seed and ends after
+  `GEN_BUDGET` minutes.
 - **Container isolation** (`make test-e2e-docker`) — the same pipelines under the
   Docker executor, where each task mounts only its work dir. This is the
   license-free proxy for the cloud "no shared filesystem" model and the regression

@@ -269,7 +269,7 @@ func TestNightlyScaleMatrixRunsEveryShape(t *testing.T) {
 
 // nightlyArtifacts are the nightly jobs whose results are an artifact, with
 // the dir each uploads.
-var nightlyArtifacts = map[string]string{"scale": "artifacts/scale/"}
+var nightlyArtifacts = map[string]string{"scale": "artifacts/scale/", "gendiff": "artifacts/gen-diff/"}
 
 // TestNightlyUploadsArtifacts requires each artifact job to upload its dir
 // in a step that runs whatever the suite's outcome, so a failed night keeps
@@ -285,6 +285,33 @@ func TestNightlyUploadsArtifacts(t *testing.T) {
 		if !uploads {
 			t.Errorf("%s job %q has no `if: ${{ always() }}` upload-artifact step for %s", nightlyWorkflow, id, dir)
 		}
+	}
+}
+
+// TestNightlyGenDiffRunsRandomSeeds requires the gen-diff job to run make
+// gen-diff on its default random seeds, under a time budget, with the mrp
+// the differential needs.
+func TestNightlyGenDiffRunsRandomSeeds(t *testing.T) {
+	job := readWorkflow(t, nightlyWorkflow).get("jobs").get("gendiff")
+
+	if scalarOf(job.get("env").get("GEN_BUDGET")) == "" {
+		t.Errorf("%s gendiff job sets no GEN_BUDGET", nightlyWorkflow)
+	}
+
+	if job.get("env").get("GEN_SEEDS") != nil {
+		t.Errorf("%s gendiff job sets GEN_SEEDS; the nightly runs the random default", nightlyWorkflow)
+	}
+
+	var runs, martian bool
+
+	for _, s := range job.get("steps").items {
+		run := scalarOf(s.get("run"))
+		runs = runs || strings.HasPrefix(run, "make gen-diff ") && !strings.Contains(run, "GEN_SEEDS")
+		martian = martian || scalarOf(s.get("uses")) == "./.github/actions/setup-martian"
+	}
+
+	if !runs || !martian {
+		t.Errorf("%s gendiff job: runs make gen-diff without GEN_SEEDS %v, sets up mrp %v; want both", nightlyWorkflow, runs, martian)
 	}
 }
 
