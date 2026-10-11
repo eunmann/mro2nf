@@ -6,16 +6,11 @@ name: PR Validation
 # same names lets branch protection accept its success before the real job
 # reports. TestRequiredContexts* guards that.
 on:
-  # Pushes to main gate nothing, so a docs-only push can skip the whole run.
-  # paths-ignore fires only when EVERY changed file matches. It must list what
-  # the `changes` job's case pattern does (TestDocsOnlyPathsAgree).
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - ".claude/**"
-      - LICENSE
+  # PRs only. Branch protection squash-merges a PR only once it is up to date
+  # with main, so the merged tree is the tree the PR's run validated and a push
+  # run would repeat it. release.yml releases only a commit whose tree a PR run
+  # validated, and the nightly tier reruns the suites on main.
+  #
   # No path or branch filter: every PR must run this workflow so its required
   # contexts always report. A workflow that doesn't trigger reports nothing,
   # and a required context that never reports deadlocks the PR (#182). Any
@@ -25,12 +20,9 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs for PR branches, but never for main: pushes to main
-# all share ref refs/heads/main, so cancel-in-progress there would leave merged
-# commits with no completed validation run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 # Every required job carries the same gate:
 #   needs: changes
@@ -57,22 +49,19 @@ jobs:
       - id: diff
         run: |
           set -euo pipefail
-          code=true
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            git rev-parse -q --verify HEAD^2 >/dev/null || {
-              echo "::error::HEAD is not the PR merge commit"; exit 1;
-            }
-            # --no-renames: a code file renamed into docs/ is still a code
-            # deletion. Written to a file so a git failure fails the step.
-            git diff --name-only --no-renames -z HEAD^1 HEAD > "$RUNNER_TEMP/changed"
-            code=false
-            while IFS= read -r -d '' f; do
-              case "$f" in
-                *.md | docs/* | .claude/* | LICENSE) ;;
-                *) echo "code change: $f"; code=true ;;
-              esac
-            done < "$RUNNER_TEMP/changed"
-          fi
+          git rev-parse -q --verify HEAD^2 >/dev/null || {
+            echo "::error::HEAD is not the PR merge commit"; exit 1;
+          }
+          # --no-renames: a code file renamed into docs/ is still a code
+          # deletion. Written to a file so a git failure fails the step.
+          git diff --name-only --no-renames -z HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+          code=false
+          while IFS= read -r -d '' f; do
+            case "$f" in
+              *.md | docs/* | .claude/* | LICENSE) ;;
+              *) echo "code change: $f"; code=true ;;
+            esac
+          done < "$RUNNER_TEMP/changed"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
   lint:
