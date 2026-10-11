@@ -1,0 +1,32 @@
+# Failure-parity fixture: the stage asserts (martian.exit) in its split phase.
+# mrp fails the stage with an _assert; mro2nf must fail the same stage with the
+# ASSERT exit code. Exercised by TestMrpDiffFailureParity.
+stage SPLIT_BOOM(
+    in  int[] xs,
+    out int   total,
+    src py    "stages/split_boom",
+) split (
+    in  int   x,
+    out int   y,
+)
+
+pipeline ASP(
+    in  int[] xs,
+    out int   total,
+)
+{
+    call SPLIT_BOOM(
+        xs = self.xs,
+    )
+
+    return (
+        total = SPLIT_BOOM.total,
+    )
+}
+
+call ASP(
+    xs = [
+        1,
+        2,
+    ],
+)

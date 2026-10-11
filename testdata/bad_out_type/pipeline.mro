@@ -1,0 +1,31 @@
+# Failure-parity fixture (#338): BAD writes 1.5 to its `out int i`. mrp fails
+# BAD at its output validation ("cannot be parsed as an integer") before USE
+# runs; mro2nf must fail the same stage rather than publish the value.
+# Exercised by TestMrpDiffFailureParity.
+stage BAD(
+    out int i,
+    src py  "stages/bad",
+)
+
+stage USE(
+    in  int i,
+    out int j,
+    src py  "stages/use",
+)
+
+pipeline BOT(
+    out int j,
+)
+{
+    call BAD()
+
+    call USE(
+        i = BAD.i,
+    )
+
+    return (
+        j = USE.j,
+    )
+}
+
+call BOT()

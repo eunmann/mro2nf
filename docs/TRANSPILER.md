@@ -488,7 +488,8 @@ scratch dir), and classifies failures: an `ASSERT`-class error exits **42**
 turns into Nextflow's terminate-vs-retry policy. Beside the adapter files it
 writes `_mre_stage`, the name of the stage the phase ran. The adapter never
 reads it; the `mrp` ABI differential (`TestMrpDiff`) uses it to group stage
-invocations without depending on the Nextflow task graph.
+invocations without depending on the Nextflow task graph, and the failure-parity
+leg (`TestMrpDiffFailureParity`) to name the stage a failed task ran.
 
 All three adapter ABIs — `py`, `exec`, and `comp` (via `mrjob`) — have been run
 live in an isolated cloud container.

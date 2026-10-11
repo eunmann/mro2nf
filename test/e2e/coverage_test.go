@@ -55,19 +55,18 @@ func TestEveryFixtureIsExercised(t *testing.T) {
 	}
 }
 
-// mrpUnrunnable are the pipeline fixtures TestMrpDiff cannot run under real
-// mrp, each with the reason. The golden suite's *_override cases are no
-// fixtures of their own: a launch-time -params-file override has no mrp
-// invocation to diff against.
+// mrpUnrunnable are the pipeline fixtures neither TestMrpDiff nor
+// TestMrpDiffFailureParity can compare with real mrp, each with the reason:
+// mrp cannot run them, or its result holds a host path no other run can give.
+// A fixture mrp fails by design belongs in mrpOutcomeCases instead. The golden
+// suite's *_override cases are no fixtures of their own: a launch-time
+// -params-file override has no mrp invocation to diff against.
 var mrpUnrunnable = map[string]string{
 	"exec_min":             "mrp never completes it (killed after 180 s): the exec stub writes no journal entries",
 	"mixed_adapters":       "mrp never completes it (killed after 180 s): its stubs speak mre's wrapped-adapter contract, not mrp's journal protocol",
 	"map_pipe_nested":      "mrp rejects it: OUTER.INNER.DBL's merge could not match a reference to a specific fork",
 	"map_pipe_nested_file": "emit-only fixture with no stage code: mrp cannot import stages/dbl",
-	"assert_min":           "fails by design: the stage asserts, for the failure-path test",
-	"flaky_retry":          "fails by design: the stage fails until Nextflow's retry escalates its memory; mrp does not retry it",
-	"missing_struct_key":   "fails by design: UP's struct output lacks a declared key, for the output-validation failure test",
-	"symlink_escape":       "fails by design under -confine-outputs: a stage output links outside its task, for the confinement failure test",
+	"symlink_escape":       mrpHostLinkOut,
 	"entry_file":           mrpUnresolvedInput,
 	"entry_filearr":        mrpUnresolvedInput,
 	"entry_struct_file":    mrpUnresolvedInput,
@@ -80,39 +79,52 @@ var mrpUnrunnable = map[string]string{
 const mrpUnresolvedInput = "mrp passes the invocation's relative input/ path through verbatim and the stage opens it " +
 	"from its own job dir, where it does not resolve"
 
-// TestEveryFixtureMrpDiffed fails when a pipeline fixture is neither in
-// mrpDiffCases nor in mrpUnrunnable, is in both, or when either table names a
-// fixture that does not exist: every fixture mrp can run faces live mrp.
+const mrpHostLinkOut = "mrp runs it, but its _outs value for the linked output is the link target's absolute host path; " +
+	"the published tree and the stage ABI match"
+
+// TestEveryFixtureMrpDiffed fails unless every pipeline fixture is in exactly
+// one of mrpDiffCases (outputs diffed), mrpOutcomeCases (run outcome diffed)
+// and mrpUnrunnable (with a reason), when a table names a fixture that does
+// not exist, or when an mrpOutcomeCases entry is malformed: every fixture mrp
+// can run faces live mrp.
 func TestEveryFixtureMrpDiffed(t *testing.T) {
 	present := pipelineFixtures(t)
-	diffed := map[string]bool{}
+	tables := map[string][]string{}
 
 	for _, tc := range mrpDiffCases {
-		if diffed[tc.name] {
-			t.Errorf("mrpDiffCases lists %q twice", tc.name)
-		}
+		tables[tc.name] = append(tables[tc.name], "mrpDiffCases")
+	}
 
-		diffed[tc.name] = true
+	for _, tc := range mrpOutcomeCases {
+		tables[tc.name] = append(tables[tc.name], "mrpOutcomeCases")
 
-		if !present[tc.name] {
-			t.Errorf("mrpDiffCases lists %q but testdata/%s/pipeline.mro does not exist", tc.name, tc.name)
-		}
-
-		if reason, ok := mrpUnrunnable[tc.name]; ok {
-			t.Errorf("%q is in mrpDiffCases and in mrpUnrunnable (%q); keep one", tc.name, reason)
+		if err := tc.validate(); err != nil {
+			t.Error(err)
 		}
 	}
 
-	for name := range mrpUnrunnable {
+	for name, reason := range mrpUnrunnable {
+		tables[name] = append(tables[name], "mrpUnrunnable")
+
+		if reason == "" {
+			t.Errorf("mrpUnrunnable lists %q without a reason", name)
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(tables)) {
 		if !present[name] {
-			t.Errorf("mrpUnrunnable lists %q but testdata/%s/pipeline.mro does not exist", name, name)
+			t.Errorf("%v list %q but testdata/%s/pipeline.mro does not exist", tables[name], name, name)
+		}
+
+		if len(tables[name]) > 1 {
+			t.Errorf("%q is listed %d times, in %v; keep one entry", name, len(tables[name]), tables[name])
 		}
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(present)) {
-		if _, ok := mrpUnrunnable[name]; !ok && !diffed[name] {
-			t.Errorf("fixture %q is not diffed against mrp; add it to mrpDiffCases, "+
-				"or to mrpUnrunnable with the reason mrp cannot run it", name)
+		if len(tables[name]) == 0 {
+			t.Errorf("fixture %q is not compared with mrp; add it to mrpDiffCases if mrp succeeds on it, "+
+				"to mrpOutcomeCases if mrp fails on it by design, or to mrpUnrunnable with the reason mrp cannot run it", name)
 		}
 	}
 }
