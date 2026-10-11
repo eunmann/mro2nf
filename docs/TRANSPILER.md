@@ -430,8 +430,11 @@ how a call is rendered.
     keeping only the data-proportional MERGE_K gather.
   - **Empty-fork fidelity.** mrp's static resolver prunes an invocation-known
     empty fork to null while a runtime-empty collection merges to the typed
-    empty; the `knownInvocation` analysis in `plan.go` reproduces that split as
-    a runtime shape rule, so entry inputs stay overridable in default mode.
+    empty; the `knownInvocation` analysis in `known.go` reproduces that split as
+    a runtime shape rule, so entry inputs stay overridable in default mode. It
+    is decided per call site: a sub-pipeline called from sites that need
+    different marks is emitted once per context (`SplitKnownContexts`, copies
+    named `<pipeline>_ctx<n>`), which adds no tasks.
 - **`-native-runner`** swaps the stage-execution hop for `py` stages from
   `mre` + `martian_shell.py` to an embedded direct-call runner
   (`internal/emit/runner/run_stage.py`, with a shipped `martian` compat shim).

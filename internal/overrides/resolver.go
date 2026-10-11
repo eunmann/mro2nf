@@ -1,10 +1,12 @@
 package overrides
 
 import (
+	"maps"
 	"slices"
 	"sort"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/emit"
 	"github.com/eunmann/mro2nf/internal/ir"
 )
 
@@ -39,16 +41,25 @@ type resolver struct {
 	collisions map[string]bool
 }
 
-// newResolver builds a resolver over prog (may be nil).
+// newResolver builds a resolver over prog (may be nil). It resolves the
+// program as the emitter emits it: split per invocation-known context
+// (emit.SplitKnownContexts), so a stage's selector also names the per-call
+// processes of each sub-pipeline copy. prog itself is left unchanged.
 func newResolver(prog *ir.Program) *resolver {
 	r := &resolver{
-		prog: prog, stage: map[string]bool{}, leaves: map[string][]string{},
+		stage: map[string]bool{}, leaves: map[string][]string{},
 		callStage: map[string]string{}, stageRefs: map[string][]callRef{},
 		collisions: map[string]bool{},
 	}
 	if prog == nil {
 		return r
 	}
+
+	split := *prog
+	split.Pipelines = maps.Clone(prog.Pipelines)
+	emit.SplitKnownContexts(&split)
+	prog = &split
+	r.prog = prog
 
 	// Collect in a deterministic pipeline order so a colliding call name resolves
 	// the same way every run (which callable wins is still order-dependent, but

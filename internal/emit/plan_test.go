@@ -2,12 +2,14 @@ package emit
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/google/go-cmp/cmp"
 )
 
 func lowerFixture(t *testing.T, fixture string) *ir.Program {
@@ -145,35 +147,41 @@ func TestBuildPlanEmptyNull(t *testing.T) {
 	}
 }
 
-// TestKnownValueShapes pins invKnown.known's leaf classification: literals and
-// ANY entry self ref (whole-field or projected — self.cfg.list is equally
+// TestKnownValueShapes pins knownEval.known's leaf classification: literals
+// and ANY entry self ref (whole-field or projected — self.cfg.list is equally
 // invocation-known) flag; upstream refs and unbound sub-pipeline self refs do
 // not.
 func TestKnownValueShapes(t *testing.T) {
-	entry := &ir.Pipeline{Name: "TOP"}
-	sub := &ir.Pipeline{Name: "SUB"}
+	entry := &ir.Pipeline{Name: "TOP", In: []ir.Param{{Name: "xs"}, {Name: "cfg"}}}
+	sub := &ir.Pipeline{Name: "SUB", In: []ir.Param{{Name: "xs"}}}
 	prog := &ir.Program{
 		Entry:     &ir.EntryCall{Callable: "TOP"},
 		Pipelines: map[string]*ir.Pipeline{"TOP": entry, "SUB": sub},
 	}
-	k := knownInvocation(prog)
+
+	e := evalKnown(prog)
+	if len(e.insts) != 1 {
+		t.Fatalf("want only the entry instance, got %d", len(e.insts))
+	}
+
+	top, unbound := e.insts[0], e.instance(sub, knownFacts{})
 
 	cases := []struct {
 		name string
-		p    *ir.Pipeline
+		in   *knownInst
 		v    ir.Value
 		want bool
 	}{
-		{"literal", entry, ir.Value{Literal: []byte("[]")}, true},
-		{"whole-field entry self", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, true},
-		{"projected entry self", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "cfg", Output: "list"}}, true},
-		{"unbound sub-pipeline self", sub, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, false},
-		{"upstream ref", entry, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: "UP", Output: "xs"}}, false},
+		{"literal", top, ir.Value{Literal: []byte("[]")}, true},
+		{"whole-field entry self", top, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, true},
+		{"projected entry self", top, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "cfg", Output: "list"}}, true},
+		{"unbound sub-pipeline self", unbound, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindSelf, ID: "xs"}}, false},
+		{"upstream ref", top, ir.Value{Ref: &ir.Ref{Kind: ir.RefKindCall, ID: "UP", Output: "xs"}}, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := k.known(prog, tc.p, tc.v, true); got != tc.want {
+			if got := e.known(tc.in, tc.v, true); got != tc.want {
 				t.Errorf("known(%s) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
@@ -209,9 +217,10 @@ func lowerMRO(t *testing.T, src string) *ir.Program {
 // propagation — the shapes that must NOT be marked, because marking them
 // would turn a RUNTIME-empty fork into null where mrp merges the typed empty.
 func TestKnownInvocationConservative(t *testing.T) {
-	// A pipeline instantiated at several sites shares one plan, so an input is
-	// invocation-known only when EVERY site binds it so: S2 binds a stage
-	// output, which must unmark SUB.SC for S1 too.
+	// Until SplitKnownContexts gives each site its own copy, a pipeline
+	// instantiated at several sites shares one plan, so its split is marked
+	// only when EVERY instance marks it: S2 binds a stage output, which must
+	// unmark SUB.SC for S1 too.
 	multi := lowerMRO(t, `
 stage GEN(out int[] xs, src py "s/gen",)
 stage SC(in int v, out int w, src py "s/sc",)
@@ -302,13 +311,183 @@ pipeline TOP(in int[] xs, out int[] w,){
 call TOP(xs = [],)
 `)
 
-	pk := knownInvocation(proj)
-	if !pk.lenIn["INNER"]["ps"] || pk.valIn["INNER"]["ps"] {
-		t.Fatal("test premise: INNER.ps must be lenIn-only (cascade-bound)")
+	inner := instancesOf(evalKnown(proj), "INNER")
+	if len(inner) != 1 || !inner[0].facts.len["ps"] || inner[0].facts.val["ps"] {
+		t.Fatal("test premise: INNER.ps must be length-known only (cascade-bound)")
 	}
 
-	if pk.emptySplit["INNER"]["SC"] {
+	if knownInvocation(proj).emptySplit["INNER"]["SC"] {
 		t.Error("a projected split of a lenIn-only input must not be marked (value knowledge required)")
+	}
+}
+
+// instancesOf returns the evaluated instances of the named pipeline.
+func instancesOf(e *knownEval, name string) []*knownInst {
+	var out []*knownInst
+
+	for _, in := range e.insts {
+		if in.p.Name == name {
+			out = append(out, in)
+		}
+	}
+
+	return out
+}
+
+// calleeOf returns the callable a pipeline's call names.
+func calleeOf(t *testing.T, prog *ir.Program, pipe, call string) string {
+	t.Helper()
+
+	c, ok := callByName(prog.Pipelines[pipe], call)
+	if !ok {
+		t.Fatalf("%s has no call %s", pipe, call)
+	}
+
+	return c.Callable
+}
+
+// TestEmptyNullPerCallSite pins #241: empty_fork_two_sites calls SUB from an
+// invocation-known empty (S1, mrp: null) and a runtime empty (S2, mrp: []),
+// both disable-gated so inlining keeps the boundaries. Each site gets its own
+// copy of SUB, and only S1's copy merges zero forks to null — in every mode,
+// with and without inlining (split first, as Emit does).
+func TestEmptyNullPerCallSite(t *testing.T) {
+	for _, f := range []featureSet{{}, {native: true}, {inlinePipelines: true}, {native: true, inlinePipelines: true}} {
+		prog := lowerFixture(t, "empty_fork_two_sites")
+		SplitKnownContexts(prog)
+
+		if f.inlinePipelines {
+			inlinePipelines(prog)
+		}
+
+		s1, s2 := calleeOf(t, prog, "TOP", "S1"), calleeOf(t, prog, "TOP", "S2")
+		if s1 != "SUB" || s2 != "SUB_ctx2" {
+			t.Fatalf("%+v: S1 calls %s and S2 calls %s, want SUB and SUB_ctx2", f, s1, s2)
+		}
+
+		pl := buildPlan(prog, f)
+		if !pl.pipes[s1].calls["SCALE"].emptyNull {
+			t.Errorf("%+v: S1's SUB splits an invocation-known empty; its merge must give null", f)
+		}
+
+		if pl.pipes[s2].calls["SCALE"].emptyNull {
+			t.Errorf("%+v: S2's SUB splits a runtime empty; its merge must keep the typed empty", f)
+		}
+	}
+}
+
+// TestSplitKnownContexts pins the split itself: copies propagate down the call
+// tree (MID's two contexts give SUB two), a context difference no plan reads
+// clones nothing, and the input program survives a split of a shallow copy
+// (internal/overrides relies on that).
+func TestSplitKnownContexts(t *testing.T) {
+	src := `
+stage GEN(out int[] xs, out string tag, src py "s/gen",)
+stage SC(in int v, in string tag, out int w, src py "s/sc",)
+pipeline SUB(in int[] vals, in string tag, out int[] w,){
+    map call SC(v = split self.vals, tag = self.tag,)
+    return (w = SC.w,)
+}
+pipeline MID(in int[] xs, in string tag, out int[] w,){
+    call SUB(vals = self.xs, tag = self.tag,)
+    return (w = SUB.w,)
+}
+pipeline TOP(in int[] empty, in string tag, out int[] a, out int[] b, out int[] c,){
+    call GEN()
+    call MID as M1(xs = self.empty, tag = self.tag,)
+    call MID as M2(xs = GEN.xs, tag = self.tag,)
+    call MID as M3(xs = self.empty, tag = GEN.tag,)
+    return (a = M1.w, b = M2.w, c = M3.w,)
+}
+call TOP(empty = [], tag = "t",)
+`
+	orig := lowerMRO(t, src)
+	before := maps.Clone(orig.Pipelines)
+
+	prog := *orig
+	prog.Pipelines = maps.Clone(orig.Pipelines)
+	SplitKnownContexts(&prog)
+
+	got := map[string]string{}
+	for _, call := range []string{"M1", "M2", "M3"} {
+		mid := calleeOf(t, &prog, "TOP", call)
+		got[call] = mid + ">" + calleeOf(t, &prog, mid, "SUB")
+	}
+
+	want := map[string]string{"M1": "MID>SUB", "M2": "MID_ctx2>SUB_ctx2", "M3": "MID>SUB"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("call targets (-want +got):\n%s", diff)
+	}
+
+	k := knownInvocation(&prog)
+	if !k.emptySplit["SUB"]["SC"] || k.emptySplit["SUB_ctx2"]["SC"] {
+		t.Errorf("SUB.SC must be marked and SUB_ctx2.SC not: %v", k.emptySplit)
+	}
+
+	if len(orig.Pipelines) != len(before) || calleeOf(t, orig, "TOP", "M2") != "MID" {
+		t.Error("splitting a shallow copy must leave the input program untouched")
+	}
+
+	for name, p := range before {
+		if orig.Pipelines[name] != p {
+			t.Errorf("input pipeline %s was replaced", name)
+		}
+	}
+}
+
+// TestSplitKnownContextsNoop pins that a program whose call sites agree is
+// left exactly as it was (no copies, the same pipeline values), so existing
+// projects emit unchanged.
+func TestSplitKnownContextsNoop(t *testing.T) {
+	for _, fixture := range []string{"empty_fork_sub", "fork_disabled_sub", "cellranger_shaped", "kitchen_sink", "map_pipe_nested"} {
+		prog := lowerFixture(t, fixture)
+		before := maps.Clone(prog.Pipelines)
+
+		SplitKnownContexts(prog)
+
+		if len(prog.Pipelines) != len(before) {
+			t.Errorf("%s: split added pipelines", fixture)
+		}
+
+		for name, p := range before {
+			if prog.Pipelines[name] != p {
+				t.Errorf("%s: pipeline %s was replaced", fixture, name)
+			}
+		}
+	}
+}
+
+// TestReturnKnownPerCallSite pins that a ref THROUGH a sub-pipeline call reads
+// that call's own instance: PASS forwards its input, so `split P1.ys` is
+// invocation-known while `split P2.ys` is not — mrp gives a: null, b: [] for
+// this program (checked against mrp). PASS plans the same under both sites, so
+// nothing is copied.
+func TestReturnKnownPerCallSite(t *testing.T) {
+	prog := lowerMRO(t, `
+stage GEN(out int[] xs, src py "s/gen",)
+stage SC(in int v, out int w, src py "s/sc",)
+pipeline PASS(in int[] xs, out int[] ys,){
+    return (ys = self.xs,)
+}
+pipeline TOP(in int[] empty, out int[] a, out int[] b,){
+    call GEN()
+    call PASS as P1(xs = self.empty,)
+    call PASS as P2(xs = GEN.xs,)
+    map call SC as SA(v = split P1.ys,)
+    map call SC as SB(v = split P2.ys,)
+    return (a = SA.w, b = SB.w,)
+}
+call TOP(empty = [],)
+`)
+	SplitKnownContexts(prog)
+
+	if _, ok := prog.Pipelines["PASS_ctx2"]; ok {
+		t.Error("PASS plans identically at both sites; it must not be copied")
+	}
+
+	k := knownInvocation(prog)
+	if !k.emptySplit["TOP"]["SA"] || k.emptySplit["TOP"]["SB"] {
+		t.Errorf("SA (through P1) must be marked and SB (through P2) not: %v", k.emptySplit["TOP"])
 	}
 }
 
