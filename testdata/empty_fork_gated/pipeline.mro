@@ -1,0 +1,101 @@
+# #383: `map call B(split A.scaled)` where A forks over an invocation-known
+# source under a disable gate. mrp folds a literal gate at static time and
+# prunes A's known-empty split to null whatever the gate, so A and B both
+# resolve to null under every gate kind it runs: a literal false (LIT), an
+# upstream output that is false (RT) or true (RTON) at runtime, and a literal
+# true over a non-empty source (OFF, statically disabled). B's zero-fork merge
+# must give null in each, not the typed empty. A runtime gate over a non-empty
+# source is not here: mrp rejects that binding statically.
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+pipeline EFG(
+    in  int[] none,
+    in  int[] some,
+    in  bool  skip,
+    in  bool  off,
+    out int[] a_lit,
+    out int[] b_lit,
+    out int[] a_rt,
+    out int[] b_rt,
+    out int[] a_rton,
+    out int[] b_rton,
+    out int[] a_off,
+    out int[] b_off,
+)
+{
+    call GATE(
+        v = self.skip,
+    )
+
+    call GATE as ON(
+        v = self.off,
+    )
+
+    map call SCALE as A_LIT(
+        value = split self.none,
+    ) using (
+        disabled = self.skip,
+    )
+
+    map call SCALE as B_LIT(
+        value = split A_LIT.scaled,
+    )
+
+    map call SCALE as A_RT(
+        value = split self.none,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as B_RT(
+        value = split A_RT.scaled,
+    )
+
+    map call SCALE as A_RTON(
+        value = split self.none,
+    ) using (
+        disabled = ON.off,
+    )
+
+    map call SCALE as B_RTON(
+        value = split A_RTON.scaled,
+    )
+
+    map call SCALE as A_OFF(
+        value = split self.some,
+    ) using (
+        disabled = self.off,
+    )
+
+    map call SCALE as B_OFF(
+        value = split A_OFF.scaled,
+    )
+
+    return (
+        a_lit  = A_LIT.scaled,
+        b_lit  = B_LIT.scaled,
+        a_rt   = A_RT.scaled,
+        b_rt   = B_RT.scaled,
+        a_rton = A_RTON.scaled,
+        b_rton = B_RTON.scaled,
+        a_off  = A_OFF.scaled,
+        b_off  = B_OFF.scaled,
+    )
+}
+
+call EFG(
+    none = [],
+    some = [1, 2],
+    skip = false,
+    off  = true,
+)

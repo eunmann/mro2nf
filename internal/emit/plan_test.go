@@ -268,25 +268,23 @@ call TOP(grid = [],)
 		t.Error("INNER's elements are runtime values (DUP outputs); its inner split must not be marked")
 	}
 
-	// A DISABLED producer is never known: its gate may null it at runtime,
-	// where mrp's typed-empty rule applies — the consumer must stay unmarked.
+	// A disable gate adds no knowledge: a gated producer over a RUNTIME
+	// source leaves its consumer unmarked, as it would ungated.
 	dis := lowerMRO(t, `
+stage GEN(out int[] xs, src py "s/gen",)
 stage SC(in int v, out int w, src py "s/sc",)
-pipeline P(in int[] xs, in bool skip, out int[] a, out int[] b,){
-    map call SC as A(v = split self.xs,) using (disabled = self.skip,)
+pipeline P(in bool skip, out int[] a, out int[] b,){
+    call GEN()
+    map call SC as A(v = split GEN.xs,) using (disabled = self.skip,)
     map call SC as B(v = split A.w,)
     return (a = A.w, b = B.w,)
 }
-call P(xs = [], skip = false,)
+call P(skip = false,)
 `)
 
 	dk := knownInvocation(dis)
-	if !dk.emptySplit["P"]["A"] {
-		t.Error("A splits an entry source; its own merge is marked even when disable-gated")
-	}
-
-	if dk.emptySplit["P"]["B"] {
-		t.Error("B splits a disabled call's output — runtime-nullable, must not be marked")
+	if dk.emptySplit["P"]["A"] || dk.emptySplit["P"]["B"] {
+		t.Error("A splits an upstream output; neither A nor its consumer B may be marked, gated or not")
 	}
 
 	// A PROJECTED split of a length-only-known input must not mark: INNER.ps
@@ -372,6 +370,42 @@ func TestEmptyNullPerCallSite(t *testing.T) {
 
 		if pl.pipes[s2].calls["SCALE"].emptyNull {
 			t.Errorf("%+v: S2's SUB splits a runtime empty; its merge must keep the typed empty", f)
+		}
+	}
+}
+
+// TestEmptyNullThroughDisableGate pins #383: a map call splitting the output
+// of a disable-gated producer whose own split source is invocation-known is
+// marked whatever the gate, because mrp folds a literal gate statically and
+// prunes the producer's known-empty split to null under a runtime one (a
+// runtime gate over a value that is not statically null is a binding error
+// in mrp). The two fixtures cover a gated map call, a gated sub-pipeline that
+// maps, and a gated pass-through sub-pipeline, under literal and runtime
+// gates — in every mode, with and without inlining.
+func TestEmptyNullThroughDisableGate(t *testing.T) {
+	cases := []struct {
+		fixture, pipe string
+		calls         []string
+	}{
+		{"empty_fork_gated", "EFG", []string{"A_LIT", "B_LIT", "A_RT", "B_RT", "A_RTON", "B_RTON", "A_OFF", "B_OFF"}},
+		{"empty_fork_gated_sub", "EFGS", []string{"B_S_LIT", "B_S_RT", "B_S_RTON", "B_S_OFF", "B_P_LIT", "B_P_OFF"}},
+	}
+
+	for _, tc := range cases {
+		for _, f := range []featureSet{{}, {native: true}, {inlinePipelines: true}, {native: true, inlinePipelines: true}} {
+			prog := lowerFixture(t, tc.fixture)
+			SplitKnownContexts(prog)
+
+			if f.inlinePipelines {
+				inlinePipelines(prog)
+			}
+
+			pl := buildPlan(prog, f)
+			for _, call := range tc.calls {
+				if !pl.pipes[tc.pipe].calls[call].emptyNull {
+					t.Errorf("%s %+v: %s must merge zero forks to null", tc.fixture, f, call)
+				}
+			}
 		}
 	}
 }
