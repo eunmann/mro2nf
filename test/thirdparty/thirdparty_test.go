@@ -101,8 +101,8 @@ func TestCollectIgnoresWorkspace(t *testing.T) {
 }
 
 // TestVendoredDirsCarryLicense fails on a vendor-* directory at the repo root
-// that Vendored does not map to its module, or whose LICENSE is missing or
-// differs from that module's.
+// that Vendored does not map to its module, or that lacks its LICENSE.
+// TestVendoredMartianMatchesModule compares the LICENSE bytes.
 func TestVendoredDirsCarryLicense(t *testing.T) {
 	entries, err := os.ReadDir(repoRoot)
 	if err != nil {
@@ -119,32 +119,14 @@ func TestVendoredDirsCarryLicense(t *testing.T) {
 
 		seen++
 
-		mod, ok := vendored[e.Name()]
-		if !ok {
+		if _, ok := vendored[e.Name()]; !ok {
 			t.Errorf("%s/ is not in Vendored, so its notice is not in %s", e.Name(), NoticesFile)
 
 			continue
 		}
 
-		got, err := os.ReadFile(filepath.Join(repoRoot, e.Name(), licenseName))
-		if err != nil {
+		if _, err := os.Stat(filepath.Join(repoRoot, e.Name(), licenseName)); err != nil {
 			t.Errorf("%s/ lacks its license: %v", e.Name(), err)
-
-			continue
-		}
-
-		dir, err := ModuleDir(t.Context(), repoRoot, mod)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		_, want, err := LicenseFile(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if want != string(got) {
-			t.Errorf("%s/%s differs from %s's license", e.Name(), licenseName, mod)
 		}
 	}
 
