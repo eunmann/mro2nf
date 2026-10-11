@@ -130,7 +130,7 @@ cloc: ## Count lines of code (respects .gitignore; excludes vendored deps)
 
 install: build ## Install binaries into PREFIX/bin
 	install -d $(PREFIX)/bin
-	@for b in $(BINS); do install -m 0755 $$b $(PREFIX)/bin/$$b; done
+	@for b in $(BINS) mrjob; do install -m 0755 $$b $(PREFIX)/bin/$$b; done
 
 clean: ## Remove built binaries
 	rm -f $(BINS) mrjob
