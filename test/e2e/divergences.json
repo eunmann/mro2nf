@@ -75,6 +75,55 @@
       "justification": "The failure contract is whether the run fails, which stages it blames and whether each failure is an ASSERT or an error, so the outcome comparison reads only those.",
       "evidence": ["TestMrpDiffFailureParity", "TestOutcomeRulesNeedTheirEntries"],
       "comparator": {"rule": "compare-failure-stage-and-kind"}
+    },
+    {
+      "id": "local-modifier-ignored",
+      "kind": "mechanism",
+      "feature": "`(local)`",
+      "summary": "mro2nf ignores `local` and schedules the stage on the configured executor like any other task; in a cluster jobmode mrp runs it through its local job manager on the head node, sized against the head node's capacity.",
+      "justification": "Scheduling only: the stage runs the same code on the same _args. Under --jobmode=local, which the differential uses, the local job manager is mrp's only one (martian/core/node.go, stage.go), so kitchen_sink's local SUM_SQUARES matches mrp; cluster jobmodes are not compared with mrp.",
+      "evidence": ["TestMrpDiff/kitchen_sink"]
+    },
+    {
+      "id": "volatile-no-vdr",
+      "kind": "mechanism",
+      "feature": "`(volatile)` / `volatile = strict`",
+      "summary": "mro2nf ignores `volatile` and deletes no file mid-run, so work/ keeps every intermediate file mrp's volatile data removal deletes once its consumers finish (higher peak disk).",
+      "justification": "VDR deletes only files no later stage reads and never a published output: vdr_volatile publishes what mro2nf does under mrp's rolling and strict VDR, while mrp deletes the volatile file its consumer has read.",
+      "evidence": ["TestMrpDiffVDR/rolling", "TestMrpDiffVDR/strict", "TestMrpDiff/kitchen_sink"]
+    },
+    {
+      "id": "retain-no-vdr",
+      "kind": "mechanism",
+      "feature": "stage / pipeline `retain`",
+      "summary": "`retain` has nothing to do under mro2nf, which deletes no file, so every file is kept.",
+      "justification": "retain only exempts a file from VDR. vdr_volatile retains a volatile stage's file and publishes what mro2nf does under mrp's rolling and strict VDR.",
+      "evidence": ["TestMrpDiffVDR/rolling", "TestMrpDiffVDR/strict"]
+    },
+    {
+      "id": "outs-files-copied",
+      "kind": "mechanism",
+      "feature": "`outs/` move+symlink layout",
+      "summary": "mrp moves each output file into outs/ and leaves a symlink to it in the stage's files dir; mro2nf copies each output into results/ and leaves the task's work dir as it was.",
+      "justification": "Both publish regular files with the same paths and bytes: the tree comparison, which tells a symlink from a file, proves it on every TestMrpDiff fixture. Where mrp publishes a symlink instead, published-symlinks-copied applies.",
+      "evidence": ["TestMrpDiff/file_min", "TestMrpDiff/dir_out", "TestMrpDiff/map_file"]
+    },
+    {
+      "id": "resume-content-cache",
+      "kind": "mechanism",
+      "feature": "`-resume` ≈ restart-without-rerun",
+      "summary": "mro2nf resumes through Nextflow's -resume, which reuses each task whose inputs hash the same, where mrp restarts a pipestance from the stages it recorded as complete.",
+      "justification": "A cache hit replays the task's recorded outputs: an unchanged rerun re-executes no task and leaves the published tree and pipeline_outs.json unchanged, and a fresh run matches mrp. A rerun after a failure is not compared with mrp's restart.",
+      "evidence": ["TestResumeCachesEverything", "TestFreshRunsAreIdentical", "TestMrpDiff"]
+    },
+    {
+      "id": "preflight-dag-order",
+      "kind": "mechanism",
+      "feature": "a mapped or disabled `(preflight)`",
+      "summary": "A mapped or disabled preflight runs in DAG order, where mrp makes every other call in its pipeline wait for it, so a failing preflight stops that pipeline before they start.",
+      "justification": "A preflight has no outputs (mrp rejects one with PreflightOutputError), so the order changes no output: preflight_ungated's outputs and stage invocations match mrp's. On a failing preflight, mrp has started no other call of its pipeline, while mro2nf may have. mro2nf warns at transpile time.",
+      "issue": 314,
+      "evidence": ["TestMrpDiff/preflight_ungated", "TestWarningsPreflightUngateable"]
     }
   ]
 }

@@ -105,12 +105,18 @@ func runMrpAt(t *testing.T, bin, dir, mro, tmp string) {
 // execMrp runs mrp as runMrpAt does and returns its combined output, which it
 // also writes to <tmp>/mrp.log, and its error.
 func execMrp(bin, dir, mro, tmp string) ([]byte, error) {
-	// --vdrmode=disable keeps intermediate stage files, which the stage-ABI diff
-	// hashes through the paths in each invocation's _args/_outs; mrp's default
-	// rolling VDR deletes them once their consumers finish. Preflight stages run
-	// (no --nopreflight) because mro2nf runs them, so their invocations pair up.
+	// disable keeps intermediate stage files, which the stage-ABI diff hashes
+	// through the paths in each invocation's _args/_outs; mrp's default rolling
+	// VDR deletes them once their consumers finish.
+	return execMrpVDR(bin, dir, mro, tmp, "disable")
+}
+
+// execMrpVDR is execMrp under the given --vdrmode.
+func execMrpVDR(bin, dir, mro, tmp, vdrMode string) ([]byte, error) {
+	// Preflight stages run (no --nopreflight) because mro2nf runs them, so their
+	// invocations pair up.
 	cmd := exec.Command(filepath.Join(bin, "mrp"), filepath.Join(dir, mro), "mrp",
-		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode=disable")
+		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode="+vdrMode)
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "MROPATH="+dir)
 
@@ -459,6 +465,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// publishes as a link and mro2nf as a copy (allowlist entry
 	// published-symlinks-copied).
 	{name: "symlink_escape"},
+	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
+	{name: "preflight_ungated"},
+	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
+	{name: "vdr_volatile"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
