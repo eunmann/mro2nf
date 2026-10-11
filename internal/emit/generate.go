@@ -806,9 +806,11 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
 func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
 	var body strings.Builder
 
-	// pipeargs is always a value channel (the entry uses Channel.value and nested
-	// calls pass the parent's value-channel pa), so it is directly re-readable by
-	// every bind — no .first() needed (which would warn as useless on a value).
+	// Every bind re-reads pipeargs without .first() (which warns as useless on a
+	// value), so it must be a value channel. The native entry wraps it in
+	// Channel.value; BUILD_ENTRY_ARGS.out is one only because that process takes
+	// nothing but value inputs, which it must keep doing; nested calls pass the
+	// parent's pa.
 	body.WriteString("  main:\n    pa = pipeargs\n")
 
 	// Preflight gating: wire the gateable preflight calls first (against the raw
@@ -1292,7 +1294,7 @@ func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.
 
 // genFusedSplitWorkflow emits the per-call workflow wiring the fused SPLIT to the
 // aliased MAIN/JOIN, mirroring genSplitWorkflow but sourcing the bound args from
-// the fused SPLIT's `args` output (made re-readable with .first()).
+// the fused SPLIT's `args` output.
 func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 	var take strings.Builder
 	take.WriteString("    pipeargs\n")
@@ -1315,7 +1317,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
 %[2]s  main:
     spec = %[6]s
     %[3]s(%[7]s)
-    a = %[3]s.out.args.first()
+    a = %[3]s.out.args
     chunks = %[3]s.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[4]s(chunks.combine(a))
     join = %[3]s.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }

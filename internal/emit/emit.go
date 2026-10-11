@@ -1079,15 +1079,36 @@ func configFile(container string, target Target) (string, error) {
 
 	switch target {
 	case TargetAWSBatch:
+		b.WriteString(configTrace())
 		b.WriteString(configAWSBatch())
 	case TargetHealthOmics:
 		b.WriteString(configHealthOmics())
 	case TargetLocal:
+		b.WriteString(configTrace())
 		b.WriteString(configProfiles())
 	}
 
 	return b.String(), nil
 }
+
+// configTrace turns on Nextflow's task trace, which is neither a task input
+// nor in the published tree, so outputs and -resume hashes are unchanged.
+// HealthOmics runs the engine itself and reports each task (GetRunTask).
+func configTrace() string {
+	return `
+// A failed run is diagnosable without a rerun: every task attempt's status,
+// exit code, peak memory and work dir land in trace-<timestamp>.txt in the
+// launch dir (-with-trace <file> picks another file).
+trace {
+    enabled = true
+    fields  = '` + traceFields + `'
+}
+`
+}
+
+// traceFields are Nextflow's default trace fields plus attempt and workdir.
+const traceFields = "task_id,hash,native_id,name,status,exit,attempt,submit,duration,realtime," +
+	"%cpu,peak_rss,peak_vmem,rchar,wchar,workdir"
 
 // configCommon renders the params shared by every target.
 func configCommon(target Target) string {

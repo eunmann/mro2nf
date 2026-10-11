@@ -394,12 +394,25 @@ func execNextflowJVM(t *testing.T, proj, jvm string, args []string) error {
 
 	cmd.Env = env
 
+	keepRunLogsOnFailure(t, proj)
+
 	out, err := cmd.CombinedOutput()
 
 	_ = os.WriteFile(filepath.Join(proj, "run.log"), out, 0o644)
 
+	return nextflowRunError(err, out)
+}
+
+// runLogTailLines is how much of a failed run's output its error carries:
+// enough for Nextflow's whole error report, whose "Command error" block
+// follows the failed task's command, exit status and output.
+const runLogTailLines = 40
+
+// nextflowRunError is the error for a `nextflow run` that returned err, with
+// the end of its output out attached.
+func nextflowRunError(err error, out []byte) error {
 	if err != nil {
-		return fmt.Errorf("nextflow run: %w\n%s", err, tail(out, 8))
+		return fmt.Errorf("nextflow run: %w\n%s", err, tail(out, runLogTailLines))
 	}
 
 	return nil

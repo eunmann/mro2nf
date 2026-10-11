@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -17,7 +18,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/logging"
 	"github.com/eunmann/mro2nf/internal/overrides"
-	"github.com/rs/zerolog"
 )
 
 // version is set via -ldflags at build time.
@@ -121,12 +121,11 @@ func run(args []string) error {
 		return fmt.Errorf("transpile %s: %w", src, err)
 	}
 
-	log.Info().
-		Str("source", src).
-		Int("stages", len(prog.Stages)).
-		Int("pipelines", len(prog.Pipelines)).
-		Str("out", opts.OutDir).
-		Msg("emitted Nextflow project")
+	log.Info("emitted Nextflow project",
+		"source", src,
+		"stages", len(prog.Stages),
+		"pipelines", len(prog.Pipelines),
+		"out", opts.OutDir)
 
 	return nil
 }
@@ -319,17 +318,17 @@ func readOverridesInput(arg string) ([]byte, error) {
 // that would produce a wrong or broken project for this pipeline. It receives
 // the same Options that emitProgram passes to Emit, so Diagnose analyzes the
 // plan that is actually emitted.
-func reportDiagnostics(log zerolog.Logger, prog *ir.Program, opts emit.Options) error {
+func reportDiagnostics(log *slog.Logger, prog *ir.Program, opts emit.Options) error {
 	diags := emit.Diagnose(prog, opts)
 
 	for _, d := range diags {
 		switch d.Severity {
 		case emit.SevError:
-			log.Error().Msg(d.Message)
+			log.Error(d.Message)
 		case emit.SevWarn:
-			log.Warn().Msg(d.Message)
+			log.Warn(d.Message)
 		default:
-			log.Info().Msg(d.Message)
+			log.Info(d.Message)
 		}
 	}
 
