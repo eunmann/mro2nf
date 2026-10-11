@@ -25,7 +25,8 @@ help: ## Show this help
 
 # Static (no cgo), so a binary runs on any Linux libc, including inside the
 # runtime images; -trimpath keeps the builder's paths out of the binaries.
-# release.yml, deploy/runtime/Dockerfile and the e2e harness build the same way.
+# release.yml, deploy/runtime/Dockerfile and the e2e harness build the same way
+# (TestBuildRecipesStaticAndTrimmed, TestBinariesStaticAndPathFree).
 build: ## Build mro2nf and mre
 	@for b in $(BINS); do CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $$b ./cmd/$$b; done
 
