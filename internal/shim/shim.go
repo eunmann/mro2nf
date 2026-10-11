@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -46,6 +47,12 @@ const (
 	// failure, letting the generated Nextflow terminate rather than retry it.
 	AssertExitCode = 42
 	bytesPerGB     = 1 << 30
+	// orphanStdioGrace is how long a phase waits, once the stage has exited,
+	// for its stdout/stderr to reach EOF. mrp hands a job real files
+	// (jobmanager_local.go executeLocal), so its Wait returns when the stage
+	// exits; the shim tees through pipes, which a background child the stage
+	// left running can hold open forever.
+	orphanStdioGrace = 2 * time.Second
 )
 
 var (
@@ -366,7 +373,30 @@ func limitedCommand(ctx context.Context, a Adapter, vmemGB float64, name string,
 		}
 	}
 
-	return exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.WaitDelay = orphanStdioGrace
+
+	return cmd
+}
+
+// waitStage waits for the adapter to exit. Wait reports ErrWaitDelay when it
+// closed pipes a background process still held after orphanStdioGrace; mrjob
+// only logs such orphans (mrjob_unix.go reportChildren), so it is not a stage
+// failure.
+func waitStage(cmd *exec.Cmd) error {
+	err := cmd.Wait()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		fmt.Fprintf(os.Stderr, "mre: the stage exited leaving a background process holding its stdout/stderr; "+
+			"output it writes from now on is not captured\n")
+
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("wait for adapter: %w", err)
+	}
+
+	return nil
 }
 
 // threadEnvs returns jobmanagers/config.json's thread_envs: the variables mrp
@@ -454,7 +484,7 @@ func runWrappedAdapter(ctx context.Context, meta, files, journal string, a Adapt
 	}
 
 	stop := beginMonitor(ctx, cmd, mon)
-	runErr := cmd.Wait()
+	runErr := waitStage(cmd)
 
 	stop() // join the monitor before reading its verdict; no sample in flight
 	mon.recordExitPeak(cmd.ProcessState)
@@ -551,7 +581,7 @@ func (a *adapterIO) run(ctx context.Context, cmd *exec.Cmd, phase, meta string, 
 	a.errW = nil
 
 	stageErr, readErr := io.ReadAll(a.errR)
-	waitErr := cmd.Wait()
+	waitErr := waitStage(cmd)
 	stop() // join the monitor before reading its verdict; no sample in flight
 	mon.recordExitPeak(cmd.ProcessState)
 	forwardStageLog(meta)
