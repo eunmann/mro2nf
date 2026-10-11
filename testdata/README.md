@@ -12,8 +12,10 @@ run must reproduce. A golden has two parts:
   goldens that no mrp run produced.
 - **The published tree** (`expected/outs/`): every file mrp published under the
   pipestance's `outs/`, byte for byte, minus mrp's own root metadata (`_outs`,
-  `manifest.json.gz`). Only `make record-goldens` writes it (see below). A
-  fixture without `expected/outs/` published nothing under mrp.
+  `manifest.json.gz`). Git cannot hold an empty directory, so the empty
+  directories mrp published are listed instead in `expected/outs.emptydirs`,
+  one path relative to `outs/` per line. Only `make record-goldens` writes
+  either (see below). A fixture with neither published nothing under mrp.
 
 ## What the suites check
 
@@ -45,10 +47,9 @@ common `make test-e2e` path. Prefer adding new correctness fixtures to both.
 
 Published trees: `MARTIAN_BIN=<martian>/bin make record-goldens`. It runs every
 `goldenCases` fixture not in `jsonOnlyGoldens` through mrp the way
-`TestMrpDiff` does and replaces each `expected/outs/` with what mrp published.
-Never edit `expected/outs/` by hand; `TestGoldenTreeTables` rejects a tree the
-recorder would not write. Git cannot hold an empty directory, so the recorder
-fails if mrp publishes one.
+`TestMrpDiff` does and replaces each `expected/outs/` and
+`expected/outs.emptydirs` with what mrp published. Never edit either by hand;
+`TestGoldenTreeTables` rejects one the recorder would not write.
 
 Outputs JSON: run `mrp <fixture>/pipeline.mro mrp --jobmode=local --disable-ui
 --nopreflight` with `MROPATH` set to the fixture dir, and copy the

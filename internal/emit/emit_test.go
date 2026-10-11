@@ -223,7 +223,7 @@ func TestEmitHeadNodePublish(t *testing.T) {
 			t.Errorf("%s target must not emit a PUBLISH_LEAF process (head-node publish)", target)
 		}
 
-		for _, want := range []string{"-leaves f -outs outs", "path 'outs/**'", "it.startsWith('outs/')"} {
+		for _, want := range []string{"-leaves f -outs outs", "path 'outs/*', hidden: true,", "it.startsWith('outs/')"} {
 			if !strings.Contains(nf, want) {
 				t.Errorf("%s LAYOUT missing head-node publish fragment %q", target, want)
 			}

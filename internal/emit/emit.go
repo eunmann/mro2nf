@@ -870,13 +870,19 @@ const allowRemoteParam = "mro2nf_allow_remote_inputs"
 // the config declaration (config params beat script params), and one named
 // allowRemoteParam would double as the opt-in, so the transpile must reject the
 // collision. Mirror configCommon / outdirConfig / configProcess /
-// configAWSBatch and entryParamWiring — keep this in sync with what those emit.
+// configAWSBatch / resourceClamp and entryParamWiring —
+// TestReservedParamsCoverConfig checks the config-defined names.
 func reservedParams(target Target) map[string]bool {
 	set := map[string]bool{"outdir": true, "job_resources": true, allowRemoteParam: true}
 
 	if target == TargetAWSBatch || target == TargetLocal {
 		set["aws_queue"] = true
 		set["aws_region"] = true
+	}
+
+	if target == TargetLocal {
+		set["max_cpus"] = true
+		set["max_memory"] = true
 	}
 
 	if target == TargetAWSBatch {
