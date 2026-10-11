@@ -746,14 +746,24 @@ only the surrounding plumbing changes.
 | container | none (host tools) | required ECR image | required private-ECR image |
 | data plane | shared FS | S3 object store | managed run filesystem |
 | outputs | `results/` | S3 work dir; `--aws_outdir s3://…` to publish | `/mnt/workflow/pubdir` → S3 |
-| packaging | — | `Dockerfile` + `runtime/` build context | + `parameter-template.json` + `package.sh` (zip) |
+| packaging | — | `Dockerfile` + `.dockerignore` + `runtime/` build context | + `parameter-template.json` + `package.sh` (zip) |
 
 For container targets the emitter writes a **`Dockerfile`** plus a self-contained
 `runtime/` build context (the `mre` binary, the Martian adapters, your stage
 code, and — for `comp` stages — the `mrjob` wrapper) at fixed in-container paths
 (`/opt/mro2nf/…`) that the generated scripts bake. HealthOmics tasks have **no
 internet**, so any third-party stage dependency (e.g. the Cell Ranger binary)
-must be added to the Dockerfile.
+must be added to the Dockerfile. The `.dockerignore` beside it admits only
+`runtime/` into the build context and excludes the same junk names the
+vendoring skips (below), so `docker build <project>` never uploads
+`entry_args/`, run logs or a stray `.env` to the daemon.
+
+HealthOmics' `package.sh` zips an allowlist, never the project dir: `main.nf`,
+`nextflow.config`, `parameter-template.json`, `modules/`, `lib/`, `_assets/`,
+`entry_args/` (`entry_resolved/` instead under `-native`), and `nulls/` when a
+call can be disabled. It fails if one of them is missing, and anything else in
+the directory — `.nextflow.log*`, params files, `work/`, `results/`, `.env` —
+stays out of `workflow.zip`.
 
 A stage `src` given as a path is vendored only when it resolves inside the
 `.mro`'s directory or a `-mropath` root, as for entry file defaults (§8);

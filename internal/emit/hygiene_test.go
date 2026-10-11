@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/emit"
@@ -320,4 +322,128 @@ func relEntries(t *testing.T, dir string) []string {
 	}
 
 	return got
+}
+
+// emitHealthOmics emits a fixture for HealthOmics with its own stage code.
+func emitHealthOmics(t *testing.T, fixture string, native bool) string {
+	t.Helper()
+
+	base := filepath.Join("..", "..", "testdata", fixture)
+	prog := parseLowered(t, filepath.Join(base, "pipeline.mro"), base)
+
+	code := map[string]string{}
+	for name, s := range prog.Stages {
+		code[name] = s.SrcPath
+	}
+
+	dir := t.TempDir()
+	if err := emit.Emit(prog, emit.Options{
+		OutDir: dir, Mre: writeEntryArgsStub(t), MROFile: "pipeline.mro", MRODir: base,
+		Target: emit.TargetHealthOmics, StageCode: code, Native: native,
+	}); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+
+	return dir
+}
+
+// fakeZip puts a zip on PATH that records its arguments, one per line.
+func fakeZip(t *testing.T) (string, string) {
+	t.Helper()
+
+	bin := t.TempDir()
+	argsFile := filepath.Join(bin, "args")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\n"
+
+	if err := os.WriteFile(filepath.Join(bin, "zip"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	return bin + string(os.PathListSeparator) + os.Getenv("PATH"), argsFile
+}
+
+// TestPackageScriptZipsOnlyWorkflow checks package.sh hands zip exactly the
+// files the workflow reads (entry_resolved instead of entry_args under
+// -native, nulls/ only when a call can be disabled), whatever else a run or
+// the user left in the project dir.
+func TestPackageScriptZipsOnlyWorkflow(t *testing.T) {
+	common := []string{"main.nf", "nextflow.config", "parameter-template.json", "modules", "lib", "_assets"}
+
+	for _, tc := range []struct {
+		name, fixture string
+		native        bool
+		want          []string
+	}{
+		{"default", "entry_file", false, append(append([]string{}, common...), "entry_args")},
+		{"native", "entry_file", true, append(append([]string{}, common...), "entry_resolved")},
+		{"disabled_calls", "disabled_plain_skip", false, append(append([]string{}, common...), "entry_args", "nulls")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := emitHealthOmics(t, tc.fixture, tc.native)
+			for _, junk := range []string{".nextflow.log", "params.json", ".env", "work/ab/secret", "results/x", "notes.txt"} {
+				writeTreeFile(t, filepath.Join(dir, junk), "junk")
+			}
+
+			path, argsFile := fakeZip(t)
+			cmd := exec.Command("bash", "package.sh")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "PATH="+path)
+
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("package.sh: %v\n%s", err, out)
+			}
+
+			args := strings.Fields(readFile(t, argsFile))
+			if len(args) < 2 || args[0] != "-r" || args[1] != "workflow.zip" {
+				t.Fatalf("zip args = %q, want -r workflow.zip <files>", args)
+			}
+
+			if diff := cmp.Diff(tc.want, args[2:]); diff != "" {
+				t.Errorf("packaged paths (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestPackageScriptFailsOnMissingEntry checks package.sh refuses to build a
+// zip missing a file the workflow reads instead of registering a broken one.
+func TestPackageScriptFailsOnMissingEntry(t *testing.T) {
+	dir := emitHealthOmics(t, "entry_file", false)
+	if err := os.RemoveAll(filepath.Join(dir, "entry_args")); err != nil {
+		t.Fatal(err)
+	}
+
+	path, _ := fakeZip(t)
+	cmd := exec.Command("bash", "package.sh")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+path)
+
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "entry_args is missing") {
+		t.Errorf("package.sh without entry_args: err = %v, output:\n%s", err, out)
+	}
+}
+
+// TestEmitDockerignore checks a container target emits a .dockerignore
+// beside the Dockerfile that sends only runtime/ to the daemon and keeps the
+// vendoring junk names out of it.
+func TestEmitDockerignore(t *testing.T) {
+	dir := emitHealthOmics(t, "entry_file", false)
+
+	var rules []string
+
+	for line := range strings.SplitSeq(readFile(t, filepath.Join(dir, ".dockerignore")), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			rules = append(rules, line)
+		}
+	}
+
+	if len(rules) < 2 || rules[0] != "*" || rules[1] != "!runtime" {
+		t.Fatalf(".dockerignore must exclude everything but runtime/ first; rules = %q", rules)
+	}
+
+	for _, want := range []string{"**/.git", "**/.env*", "**/__pycache__", "**/*.pyc", "**/.DS_Store", "**/*.swp"} {
+		if !strings.Contains(strings.Join(rules[2:], "\n")+"\n", want+"\n") {
+			t.Errorf(".dockerignore missing %q; rules = %q", want, rules)
+		}
+	}
 }

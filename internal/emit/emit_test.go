@@ -1218,8 +1218,7 @@ func TestEmitCompRequiresMrjob(t *testing.T) {
 
 // TestEmitHealthOmicsPackaging checks the HealthOmics target emits the workflow
 // packaging artifacts: a parameter-template.json prompting for the ECR container
-// URI, and a package.sh that zips the workflow while excluding the Docker build
-// context (which ships as the image, not the workflow definition).
+// URI, and a package.sh (what it packages is TestPackageScriptZipsOnlyWorkflow's).
 func TestEmitHealthOmicsPackaging(t *testing.T) {
 	mre := filepath.Join(t.TempDir(), "mre")
 	if err := os.WriteFile(mre, []byte("x"), 0o755); err != nil {
@@ -1257,15 +1256,8 @@ func TestEmitHealthOmicsPackaging(t *testing.T) {
 		t.Error("parameter-template.json must prompt for the ECR container URI")
 	}
 
-	pkg, err := os.ReadFile(filepath.Join(dir, "package.sh"))
-	if err != nil {
-		t.Fatalf("read package.sh: %v", err)
-	}
-
-	for _, want := range []string{"zip -r workflow.zip", "-x 'runtime/*'", "-x 'Dockerfile'"} {
-		if !strings.Contains(string(pkg), want) {
-			t.Errorf("package.sh missing %q", want)
-		}
+	if _, err := os.Stat(filepath.Join(dir, "package.sh")); err != nil {
+		t.Errorf("package.sh not emitted: %v", err)
 	}
 }
 

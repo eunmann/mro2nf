@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/ir"
 )
@@ -17,8 +18,8 @@ type healthOmicsParam struct {
 
 // writeHealthOmicsPackaging emits the artifacts AWS HealthOmics needs alongside
 // the workflow definition: parameter-template.json (the run-time inputs the
-// console/API prompts for) and package.sh (builds the upload zip, excluding the
-// Docker build context which ships as the image instead).
+// console/API prompts for) and package.sh (builds the upload zip from the
+// healthOmicsZipEntries allowlist).
 func writeHealthOmicsPackaging(prog *ir.Program, outDir string, native bool) error {
 	tmpl := map[string]healthOmicsParam{
 		"container": {
@@ -53,7 +54,43 @@ func writeHealthOmicsPackaging(prog *ir.Program, outDir string, native bool) err
 		return err
 	}
 
-	return writeFile(filepath.Join(outDir, "package.sh"), []byte(healthOmicsPackageScript))
+	script := fmt.Sprintf(healthOmicsPackageScript, strings.Join(healthOmicsZipEntries(prog, native), " "))
+
+	return writeFile(filepath.Join(outDir, "package.sh"), []byte(script))
+}
+
+// healthOmicsZipEntries returns the project paths the workflow zip holds:
+// exactly what main.nf reads at run time. The runtime/ build context and the
+// Dockerfile ship as the image, and nothing a run or the user leaves in the
+// project dir (logs, params files, work/, .env) is ever packaged.
+func healthOmicsZipEntries(prog *ir.Program, native bool) []string {
+	entries := []string{"main.nf", "nextflow.config", "parameter-template.json", "modules", libDir, assetsDir}
+
+	if native {
+		entries = append(entries, "entry_resolved")
+	} else {
+		entries = append(entries, "entry_args")
+	}
+
+	if hasDisabledCall(prog) {
+		entries = append(entries, "nulls")
+	}
+
+	return entries
+}
+
+// hasDisabledCall reports whether any call has a disable gate, so the project
+// has the nulls/ bundles writeDisableArtifacts writes for them.
+func hasDisabledCall(prog *ir.Program) bool {
+	for _, p := range prog.Pipelines {
+		for _, c := range p.Calls {
+			if c.Disabled != nil {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // entryParamDesc describes one entry input in the parameter template. Under
@@ -71,10 +108,8 @@ func entryParamDesc(prog *ir.Program, p ir.Param, native bool) string {
 	return fmt.Sprintf("pipeline input %q (optional; defaults to the value baked from the .mro)", p.Name)
 }
 
-// healthOmicsPackageScript zips the workflow for `aws omics create-workflow`. The
-// runtime/ build context and the Dockerfile are excluded: they become the ECR
-// image, not part of the workflow definition. _assets, modules, nulls, and
-// entry_args ARE included — HealthOmics stages them with the run.
+// healthOmicsPackageScript zips the workflow for `aws omics create-workflow`;
+// %s is the healthOmicsZipEntries allowlist.
 const healthOmicsPackageScript = `#!/usr/bin/env bash
 # Package this project for AWS HealthOmics and register it.
 #
@@ -87,10 +122,19 @@ const healthOmicsPackageScript = `#!/usr/bin/env bash
 #
 # Tasks run with no internet and a private-ECR-only container, so all tools must
 # be baked into the image and all data passed as S3-URI run parameters.
+#
+# The zip holds exactly the files the workflow reads, listed below; anything
+# else in this directory (logs, params files, work/, .env) is never packaged.
 set -euo pipefail
 cd "$(dirname "$0")"
+files=(%s)
+for f in "${files[@]}"; do
+    if [ ! -e "$f" ]; then
+        echo "package.sh: $f is missing; re-run mro2nf" >&2
+        exit 1
+    fi
+done
 rm -f workflow.zip
-zip -r workflow.zip . \
-    -x 'runtime/*' -x 'Dockerfile' -x 'package.sh' -x 'work/*' -x '.nextflow/*' -x 'results/*'
+zip -r workflow.zip "${files[@]}"
 echo "wrote workflow.zip"
 `

@@ -113,7 +113,10 @@ For `-target awsbatch` and `-target healthomics` (container backends) `mro2nf`
 ignores those host paths. It bakes fixed in-container paths under `/opt/mro2nf/`,
 copies the `mre` shim, the Martian adapters, and your stage code into a
 self-contained `runtime/` build context, and writes a `Dockerfile` so
-`docker build` produces the runtime image.
+`docker build` produces the runtime image, plus a `.dockerignore` that sends
+only `runtime/` to the daemon. See
+[`docs/TRANSPILER.md` §10](docs/TRANSPILER.md#10-targets-local-aws-batch--s3-aws-healthomics)
+for exactly what is vendored and what is refused.
 
 These backends have no shared filesystem, so each task stages in only the files
 it needs as individual `path` inputs (never via `${projectDir}`): the shared
@@ -290,7 +293,8 @@ ABI matches the generated scripts. The image is published on each release (see
 - **`-target awsbatch`** wires the Batch executor with classic aws-CLI S3 staging
   (the image includes the aws CLI; or set `--aws_cli_path` for a custom AMI).
 - **`-target healthomics`** additionally emits `parameter-template.json` and
-  `package.sh` (builds the upload `.zip`), publishes to `/mnt/workflow/pubdir`,
+  `package.sh` (builds the upload `.zip` from only the files the workflow reads,
+  never logs, params files or `.env` left in the project), publishes to `/mnt/workflow/pubdir`,
   sets no executor (execution is managed), and pins a supported Nextflow version.
   The image must be a **private ECR** URI in the run's region; tasks have no
   internet, so everything is baked into the image. Register with
