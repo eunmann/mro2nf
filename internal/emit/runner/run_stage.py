@@ -72,6 +72,7 @@ class RunnerError(Exception):
 
 _COMMON_FLAGS = {
     "stagecode": str, "call": str, "mro": str, "work": str, "o": str,
+    "special": str,
     "threads": float, "memgb": float, "vmemgb": float, "overridememgb": float,
     "monitor": bool, "confine": bool, "attempt": int, "allocbytes": int,
     "types": str, "callable": str, "role": str,
@@ -1208,9 +1209,11 @@ def record(d):
 
 
 def cli_resources(fl):
-    """The phase request from -threads/-memgb/-vmemgb, with any override."""
+    """The phase request from -threads/-memgb/-vmemgb/-special, with any
+    override."""
     return overridden(
-        fl, Resources(threads=fl.threads, mem_gb=fl.memgb, vmem_gb=fl.vmemgb))
+        fl, Resources(threads=fl.threads, mem_gb=fl.memgb, vmem_gb=fl.vmemgb,
+                      special=fl.special))
 
 
 def overridden(fl, d):

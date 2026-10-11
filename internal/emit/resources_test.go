@@ -37,6 +37,26 @@ func TestResourceFlagsPassStageMemory(t *testing.T) {
 	}
 }
 
+// TestResourceFlagsPassStaticSpecial pins #369: mrp writes a static
+// using(special) into main and join _args as __special, so every phase passes
+// it to mre as one bash word that survives both the GString and bash.
+func TestResourceFlagsPassStaticSpecial(t *testing.T) {
+	s := &ir.Stage{Name: "S", Resources: ir.Resources{Special: "gpu:2"}}
+	if got := (genCtx{}).resourceFlags("main", s); !strings.Contains(got, " -special 'gpu:2'") {
+		t.Errorf("static special missing from the main flags: %q", got)
+	}
+
+	if got := (genCtx{}).resourceFlags("main", &ir.Stage{Name: "N"}); strings.Contains(got, "-special") {
+		t.Errorf("a stage without special must pass none: %q", got)
+	}
+
+	// Groovy turns \\ into \, \$ into $ and \" into ", leaving the bash word
+	// 'a'\''b"c$d\e', which bash reads as a'b"c$d\e.
+	if got, want := scriptArg(`a'b"c$d\e`), `'a'\\''b\"c\$d\\e'`; got != want {
+		t.Errorf("scriptArg = %s, want %s", got, want)
+	}
+}
+
 // TestResourceDirectivesAbsNegativeSentinel guards the adaptive-resource model:
 // a negative request is Martian's "at least |x|" sentinel, which its cluster path
 // resolves to |x|. The emitted Nextflow directives must provision |x|, not floor

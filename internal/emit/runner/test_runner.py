@@ -555,6 +555,13 @@ class ResourcesTest(unittest.TestCase):
         self.assertEqual(rs._resource_num(1e6), 1000000)
         self.assertEqual(rs.resolve_resources(_res(), _res()).mem_gb, 1.0)
 
+    def test_static_special_unless_chunk_sets_one(self):
+        fl = rs.parse_flags("main", ["-special", "gpu:2"])
+        self.assertEqual(rs.resolve_resources(
+            _res(), rs.cli_resources(fl)).special, "gpu:2")
+        self.assertEqual(rs.resolve_resources(
+            _res(special="chunk"), rs.cli_resources(fl)).special, "chunk")
+
     def test_override_beats_chunk_request(self):
         fl = rs.parse_flags("main", ["-memgb", "1.5", "-overridememgb", "3"])
         eff = rs.resolve_resources(

@@ -80,7 +80,7 @@ func run(ctx context.Context, args []string) error {
 // phase subcommand.
 type commonFlags struct {
 	shell, stagecode, lang   string
-	mrjob                    string
+	mrjob, special           string
 	srcArgs                  repeatedFlag
 	call, mro, work, outFile string
 	threads, memGB, vmemGB   float64
@@ -116,6 +116,7 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.Float64Var(&c.threads, "threads", 1, "the stage's requested threads")
 	fs.Float64Var(&c.memGB, "memgb", 1, "the stage's requested memory in GB (0: the 1 GB job default)")
 	fs.Float64Var(&c.vmemGB, "vmemgb", 0, "the stage's requested virtual memory in GB (0: memory plus headroom)")
+	fs.StringVar(&c.special, "special", "", "the stage's using(special), reported as __special unless a chunk or join sets its own")
 	fs.Float64Var(&c.overrideMemGB, "overridememgb", 0, "an mrp --overrides memory for this phase in GB, beating a chunk's or join's own request (0: none)")
 	fs.BoolVar(&c.monitor, "monitor", false, "enforce mrp --monitor memory limits: an RSS kill at memgb plus a prlimit vmem cap at vmemgb")
 	fs.BoolVar(&c.confine, "confine", false, "fail on a stage output that resolves outside the task work dir (isolated container targets) instead of copying it")
@@ -151,7 +152,7 @@ func (c *commonFlags) confinement(phase string) (*shim.Confinement, error) {
 
 // resources is the phase's request: the stage's using() with any override.
 func (c *commonFlags) resources() shim.Resources {
-	return c.overridden(shim.Resources{Threads: c.threads, MemGB: c.memGB, VMemGB: c.vmemGB})
+	return c.overridden(shim.Resources{Threads: c.threads, MemGB: c.memGB, VMemGB: c.vmemGB, Special: c.special})
 }
 
 // overridden applies the phase's overrides over def, a chunk's or join's own

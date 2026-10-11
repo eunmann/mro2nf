@@ -92,6 +92,27 @@ func TestExitCode(t *testing.T) {
 	}
 }
 
+// TestCommonFlagsRequest covers the phase request flags: a static -special
+// (#369) and an override that replaces the stage's and a chunk's memory
+// (#248) but keeps the chunk's own __special.
+func TestCommonFlagsRequest(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	cf := addCommon(fs)
+
+	if err := fs.Parse([]string{"-memgb", "1.5", "-special", "gpu:2", "-overridememgb", "3"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	if diff := cmp.Diff(shim.Resources{Threads: 1, MemGB: 3, Special: "gpu:2"}, cf.resources()); diff != "" {
+		t.Errorf("request mismatch (-want +got):\n%s", diff)
+	}
+
+	chunk := cf.overridden(shim.Resources{MemGB: 0.5, Special: "chunk"})
+	if diff := cmp.Diff(shim.Resources{MemGB: 3, Special: "chunk"}, chunk); diff != "" {
+		t.Errorf("overridden chunk mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // TestCommonFlagsSrcArgs covers the -srcarg plumbing (#113): each repeated
 // occurrence lands on Adapter.SrcArgs in order, and omitting the flag leaves
 // SrcArgs empty.

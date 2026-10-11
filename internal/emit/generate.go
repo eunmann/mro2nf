@@ -67,6 +67,12 @@ func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
 		flags += " -vmemgb " + groovyNum(v)
 	}
 
+	// mrp writes a static special into the main and join _args as __special; a
+	// chunk's or join's own __special still wins in the shim.
+	if sp := s.Resources.Special; sp != "" {
+		flags += " -special " + scriptArg(sp)
+	}
+
 	if phase == "join" {
 		flags += " -joinres joinres.json"
 	}
@@ -140,6 +146,16 @@ func gstringLit(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 
 	return strings.ReplaceAll(s, "$", `\$`)
+}
+
+// scriptArg renders an arbitrary string as one bash word inside a process
+// script GString: single-quoted for bash (a quote closes, escapes and reopens),
+// then GString-escaped, since Groovy resolves \, $ and a closing """ before
+// bash sees the line.
+func scriptArg(s string) string {
+	quoted := "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+
+	return strings.ReplaceAll(gstringLit(quoted), `"`, `\"`)
 }
 
 // producerArgs renders the flags a bundle-producing mre command needs to stage
