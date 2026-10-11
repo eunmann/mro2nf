@@ -29,6 +29,12 @@ It maps each override field to the generated process names:
 | `join.mem_gb` / `join.threads` | `memory` / `cpus` | the join phase |
 | `""` (the empty key) | `memory` / `cpus` | all stages (global `process {}`) |
 
+A memory override also sets `ext.mem_gb` beside `memory` in its `withName:`
+selector. The stage command reads it, so the stage sees the override in
+`__mem_gb` and `_jobinfo`, as mrp writes it. The global `""` default sets no `ext` value: a stage process's own
+`memory` directive takes precedence over a global default, so the stage keeps
+its `.mro` value.
+
 The override key's **last segment** is taken as the stage/call name. Every key
 other than `""` must be a dot-separated path of Martian identifiers (the
 `PIPE.STAGE` names mrp itself writes); any other key fails the conversion with an

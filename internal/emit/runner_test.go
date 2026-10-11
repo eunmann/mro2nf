@@ -31,8 +31,8 @@ func TestStageCmdNativeRunner(t *testing.T) {
 		t.Errorf("native-runner py stageCmd:\n got %q\nwant %q", py, want)
 	}
 
-	if tail := g.resourceFlags("main", pyStage); !strings.Contains(tail, " -vmemgb 4") || !strings.HasSuffix(tail, " -monitor") {
-		t.Errorf("resource flags must carry -vmemgb and end with -monitor: %q", tail)
+	if tail := g.resourceFlags("main", pyStage); !strings.Contains(tail, " -vmemgb 4") || !strings.Contains(tail, " -monitor") {
+		t.Errorf("resource flags must carry -vmemgb and -monitor: %q", tail)
 	}
 
 	// A container backend rebinds runnerBase to the baked in-image path.

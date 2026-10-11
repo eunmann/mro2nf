@@ -86,6 +86,8 @@ type commonFlags struct {
 	threads, memGB, vmemGB   float64
 	monitor                  bool
 	confine                  bool
+	attempt                  int
+	allocBytes               int64
 }
 
 // repeatedFlag collects every occurrence of a repeatable string flag, in order.
@@ -110,23 +112,27 @@ func addCommon(fs *flag.FlagSet) *commonFlags {
 	fs.StringVar(&c.mro, "mro", "", "source MRO filename (for _jobinfo)")
 	fs.StringVar(&c.work, "work", ".", "work directory for metadata/files")
 	fs.StringVar(&c.outFile, "o", "", "output file (default stdout)")
-	fs.Float64Var(&c.threads, "threads", 1, "allocated threads")
-	fs.Float64Var(&c.memGB, "memgb", 1, "allocated memory in GB")
-	fs.Float64Var(&c.vmemGB, "vmemgb", 0, "allocated virtual memory in GB")
+	fs.Float64Var(&c.threads, "threads", 1, "the stage's requested threads")
+	fs.Float64Var(&c.memGB, "memgb", 1, "the stage's requested memory in GB (0: the 1 GB job default)")
+	fs.Float64Var(&c.vmemGB, "vmemgb", 0, "the stage's requested virtual memory in GB (0: memory plus headroom)")
 	fs.BoolVar(&c.monitor, "monitor", false, "enforce mrp --monitor memory limits: an RSS kill at memgb plus a prlimit vmem cap at vmemgb")
 	fs.BoolVar(&c.confine, "confine", false, "fail on a stage output that resolves outside the task work dir (isolated container targets) instead of copying it")
+	fs.IntVar(&c.attempt, "attempt", 1, "the Nextflow task attempt; a retry's -monitor limits follow -allocbytes")
+	fs.Int64Var(&c.allocBytes, "allocbytes", 0, "the memory Nextflow allocated the task, in bytes")
 
 	return c
 }
 
 func (c *commonFlags) adapter() shim.Adapter {
 	return shim.Adapter{
-		Lang:      ir.Lang(c.lang),
-		Shell:     c.shell,
-		Stagecode: c.stagecode,
-		SrcArgs:   c.srcArgs,
-		Mrjob:     c.mrjob,
-		Monitor:   c.monitor,
+		Lang:       ir.Lang(c.lang),
+		Shell:      c.shell,
+		Stagecode:  c.stagecode,
+		SrcArgs:    c.srcArgs,
+		Mrjob:      c.mrjob,
+		Monitor:    c.monitor,
+		Attempt:    c.attempt,
+		AllocBytes: c.allocBytes,
 	}
 }
 
@@ -303,6 +309,7 @@ func runJoin(ctx context.Context, argv []string) error {
 	argsDir := fs.String("args", "", "stage args bundle dir")
 	chunksFile := fs.String("chunksfile", "", "the split's chunks.json, whose chunk count the gather checks against")
 	chunkDir := fs.String("chunkdir", ".", "directory holding the staged "+chunkDefPrefix+"N def and "+chunkOutPrefix+"N output bundles")
+	joinResFile := fs.String("joinres", "", "the split's joinres.json, the join phase's resource override")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -322,6 +329,11 @@ func runJoin(ctx context.Context, argv []string) error {
 		return err
 	}
 
+	joinRes, err := readJoinRes(*joinResFile)
+	if err != nil {
+		return err
+	}
+
 	man, err := prod.manifest()
 	if err != nil {
 		return err
@@ -333,7 +345,7 @@ func runJoin(ctx context.Context, argv []string) error {
 	}
 
 	final, err := shim.RunJoin(ctx, cf.work, cf.adapter(), stageArgs, defs, outs,
-		params, man.Table(), cf.resources(), cf.invocation(prod.callable, stageArgs))
+		params, man.Table(), joinRes, cf.resources(), cf.invocation(prod.callable, stageArgs))
 	if err != nil {
 		return fmt.Errorf("join: %w", err)
 	}

@@ -80,7 +80,7 @@ func TestConvertPipelineScopeExpands(t *testing.T) {
 	}
 
 	for _, stage := range []string{"ALIGN", "SORT"} {
-		want := "withName: '" + stageSel(stage, "SUB__"+stage) + "' { memory = '8 GB' }"
+		want := "withName: '" + stageSel(stage, "SUB__"+stage) + "' { memory = '8 GB'; ext.mem_gb = 8 }"
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing expanded selector for %s:\n%s\n--- got ---\n%s", stage, want, cfg)
 		}
@@ -109,7 +109,7 @@ func TestConvertPipelineScopeTransitive(t *testing.T) {
 	for stage, qual := range map[string]string{
 		"ALIGN": "SUB__ALIGN", "SORT": "SUB__SORT", "COLLATE": "TOP__COLLATE",
 	} {
-		want := "withName: '" + stageSel(stage, qual) + "' { memory = '8 GB' }"
+		want := "withName: '" + stageSel(stage, qual) + "' { memory = '8 GB'; ext.mem_gb = 8 }"
 		if !strings.Contains(cfg, want) {
 			t.Errorf("TOP must expand transitively to %s:\n%s", stage, cfg)
 		}
@@ -125,7 +125,7 @@ func TestConvertPipelineScopePhase(t *testing.T) {
 	}
 
 	for _, stage := range []string{"ALIGN", "SORT"} {
-		want := "withName: '" + chunkSel(stage, "SUB__"+stage) + "' { memory = '8 GB' }"
+		want := "withName: '" + chunkSel(stage, "SUB__"+stage) + "' { memory = '8 GB'; ext.mem_gb = 8 }"
 		if !strings.Contains(cfg, want) {
 			t.Errorf("chunk.mem_gb must reach %s's main-phase selector:\n%s", stage, cfg)
 		}
@@ -153,7 +153,7 @@ func TestConvertResolvesByAlias(t *testing.T) {
 	// callable-named plain/keyed process (ALIGN, ALIGN_MAP) that the same stage
 	// runs through in default mode.
 	sel := stageSel("ALIGN", "SUB__TRIM")
-	if !strings.Contains(cfg, "withName: '"+sel+"' { memory = '8 GB' }") {
+	if !strings.Contains(cfg, "withName: '"+sel+"' { memory = '8 GB'; ext.mem_gb = 8 }") {
 		t.Errorf("alias key must target both TRIM (fused) and ALIGN (plain/keyed):\n%s", cfg)
 	}
 
@@ -175,16 +175,16 @@ func TestConvertStageKeyBeatsPipelineScope(t *testing.T) {
 		t.Fatalf("Convert: %v", err)
 	}
 
-	if !strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '16 GB' }") {
+	if !strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '16 GB'; ext.mem_gb = 16 }") {
 		t.Errorf("explicit ALIGN key (16) must win over the pipeline scope (8):\n%s", cfg)
 	}
 
-	if strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '8 GB' }") {
+	if strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '8 GB'; ext.mem_gb = 8 }") {
 		t.Errorf("ALIGN must not take the pipeline-scoped 8 GB:\n%s", cfg)
 	}
 
 	// SORT, covered only by the pipeline scope, keeps 8 GB.
-	if !strings.Contains(cfg, "withName: '"+stageSel("SORT", "SUB__SORT")+"' { memory = '8 GB' }") {
+	if !strings.Contains(cfg, "withName: '"+stageSel("SORT", "SUB__SORT")+"' { memory = '8 GB'; ext.mem_gb = 8 }") {
 		t.Errorf("SORT should keep the pipeline-scoped 8 GB:\n%s", cfg)
 	}
 }
@@ -242,8 +242,8 @@ func TestConvertDeeperKeyWins(t *testing.T) {
 		t.Fatalf("Convert: %v", err)
 	}
 
-	alignSel := "withName: '" + stageSel("ALIGN", "SUB__ALIGN") + "' { memory = '16 GB' }"
-	sortSel := "withName: '" + stageSel("SORT", "SUB__SORT") + "' { memory = '8 GB' }"
+	alignSel := "withName: '" + stageSel("ALIGN", "SUB__ALIGN") + "' { memory = '16 GB'; ext.mem_gb = 16 }"
+	sortSel := "withName: '" + stageSel("SORT", "SUB__SORT") + "' { memory = '8 GB'; ext.mem_gb = 8 }"
 
 	if !strings.Contains(cfg, alignSel) {
 		t.Errorf("ALIGN should take the deeper 16 GB override:\n%s", cfg)
@@ -253,7 +253,7 @@ func TestConvertDeeperKeyWins(t *testing.T) {
 		t.Errorf("SORT should keep the pipeline-scoped 8 GB override:\n%s", cfg)
 	}
 
-	if strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '8 GB' }") {
+	if strings.Contains(cfg, "withName: '"+stageSel("ALIGN", "SUB__ALIGN")+"' { memory = '8 GB'; ext.mem_gb = 8 }") {
 		t.Errorf("ALIGN must not also carry the shallower 8 GB value:\n%s", cfg)
 	}
 }
@@ -294,10 +294,10 @@ func TestConvert(t *testing.T) {
 	for _, want := range []string{
 		"process {",
 		"memory = '2 GB'", // the "" key -> global default
-		"withName: '" + stageSel("ALIGN", ".+__ALIGN") + "' { memory = '8 GB'; cpus = 4 }",
-		"withName: '" + chunkSel("ALIGN", ".+__ALIGN") + "' { memory = '16 GB' }",                               // chunk.* -> main phase
-		"withName: '" + phaseSel("COLLATE", "_JOIN", ".+__COLLATE", "_JN") + "' { memory = '32 GB'; cpus = 2 }", // join.* -> join phase
-		"withName: '" + phaseSel("SORT", "_SPLIT", ".+__SORT", "_SP") + "' { memory = '6 GB' }",                 // split.* -> split phase
+		"withName: '" + stageSel("ALIGN", ".+__ALIGN") + "' { memory = '8 GB'; ext.mem_gb = 8; cpus = 4 }",
+		"withName: '" + chunkSel("ALIGN", ".+__ALIGN") + "' { memory = '16 GB'; ext.mem_gb = 16 }",                               // chunk.* -> main phase
+		"withName: '" + phaseSel("COLLATE", "_JOIN", ".+__COLLATE", "_JN") + "' { memory = '32 GB'; ext.mem_gb = 32; cpus = 2 }", // join.* -> join phase
+		"withName: '" + phaseSel("SORT", "_SPLIT", ".+__SORT", "_SP") + "' { memory = '6 GB'; ext.mem_gb = 6 }",                  // split.* -> split phase
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config missing %q\n--- got ---\n%s", want, cfg)
@@ -306,6 +306,12 @@ func TestConvert(t *testing.T) {
 
 	if len(unmapped) != 0 {
 		t.Errorf("unexpected unmapped fields: %v", unmapped)
+	}
+
+	// The global default never sizes a stage process (its own memory directive
+	// wins), so the stage must not see it as an override either.
+	if strings.Contains(cfg, "ext.mem_gb = 2") {
+		t.Errorf("global default must not set ext.mem_gb:\n%s", cfg)
 	}
 }
 
@@ -625,7 +631,7 @@ func TestConvertGlobalPhaseSelector(t *testing.T) {
 	// The global chunk selector adds the distinctive non-split main markers (_MAP,
 	// _KS) so it reaches non-split stages too, but omits the bare/_K mains that
 	// would over-match split/join behind `.*` (#170).
-	if !strings.Contains(cfg, `withName: '.*(_MAP|_MAIN|_MAIN_K|_MN|_KS)' { memory = '4 GB' }`) {
+	if !strings.Contains(cfg, `withName: '.*(_MAP|_MAIN|_MAIN_K|_MN|_KS)' { memory = '4 GB'; ext.mem_gb = 4 }`) {
 		t.Errorf("global chunk override must use the phase-wide main selector, got:\n%s", cfg)
 	}
 

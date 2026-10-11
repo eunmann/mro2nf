@@ -543,9 +543,26 @@ class ResourcesTest(unittest.TestCase):
         eff = rs.resolve_resources(_res(), _res(mem_gb=4.0))
         self.assertEqual(eff.vmem_gb, 7.0)
         eff = rs.resolve_resources(_res(), _res(mem_gb=4.0, vmem_gb=0.5))
-        self.assertEqual(eff.vmem_gb, 7.0)  # <1GB recomputes
+        self.assertEqual(eff.vmem_gb, 4.0)  # below memory: raised to it
         eff = rs.resolve_resources(_res(), _res(mem_gb=4.0, vmem_gb=9.0))
         self.assertEqual(eff.vmem_gb, 9.0)
+
+    def test_memory_rounds_up_to_whole_mib(self):
+        eff = rs.resolve_resources(_res(), _res(mem_gb=0.30000001192092896))
+        self.assertEqual(eff.mem_gb, 308 / 1024)
+        self.assertEqual(rs._resource_num(eff.mem_gb), 0.301)
+        self.assertEqual(rs._resource_num(eff.vmem_gb), 3.3)
+        self.assertEqual(rs._resource_num(1e6), 1000000)
+        self.assertEqual(rs.resolve_resources(_res(), _res()).mem_gb, 1.0)
+
+    def test_retry_monitor_limits_follow_allocation(self):
+        eff = rs.resolve_resources(_res(), _res(mem_gb=0.5))
+        first = rs.parse_flags("main", ["-allocbytes", str(1 << 30)])
+        self.assertEqual(rs.monitor_limits(eff, first).mem_gb, 0.5)
+        retry = rs.parse_flags(
+            "main", ["-attempt", "2", "-allocbytes", str(2 << 30)])
+        lim = rs.monitor_limits(eff, retry)
+        self.assertEqual((lim.mem_gb, lim.vmem_gb), (2.0, 5.0))
 
     def test_chunk_overrides_win(self):
         eff = rs.resolve_resources(

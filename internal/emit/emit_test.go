@@ -525,9 +525,10 @@ func TestEmitDisabledNullBundleIsNull(t *testing.T) {
 }
 
 // TestEmitJoinResourceOverride checks the split-returned join override plumbing:
-// SPLIT emits joinres.json, the workflow parses it into a `join` val, and JOIN
-// provisions cpus/memory dynamically from it (falling back to the stage default)
-// and passes the resolved allocation to the shim so its _jobinfo matches mrp.
+// SPLIT emits joinres.json, the workflow parses it into a `join` val that JOIN
+// provisions cpus/memory dynamically from (falling back to the stage default),
+// and JOIN stages the file itself so the shim overlays it on the stage's request
+// for _args/_jobinfo, unrounded as in mrp (#243).
 func TestEmitJoinResourceOverride(t *testing.T) {
 	dir := emitFixture(t, "join_resources", map[string]string{"SUM_SQUARES": "/x/sum_squares"})
 
@@ -541,14 +542,13 @@ func TestEmitJoinResourceOverride(t *testing.T) {
 		// the split emits the join override as a file output
 		"path 'joinres.json', emit: joinres",
 		"-joinres joinres.json",
-		// the split's own _jobinfo is now accurate (passes its allocation)
-		"-threads ${task.cpus} -memgb ${task.memory.toGiga()} -args args -work . -o chunks.json -joinres joinres.json -chunkdir .",
 		// JOIN provisions from the override, falling back to the stage default
 		"cpus { def t = Math.abs((join?.threads ?: 0) as double); t > 0 ? Math.max(1, Math.ceil(t) as int) : 1 }",
 		`memory { def m = Math.abs((join?.mem_gb ?: 0) as double); m = m > 0 ? m : 1; (m * task.attempt) + ' GB' }`,
-		"val join",
+		"tuple val(join), path('joinres.json')",
+		"-memgb ${task.ext.mem_gb ?: 0} -joinres joinres.json -args args -chunksfile chunks.json",
 		// the workflow parses joinres.json into the join val via the shipped helper (#49)
-		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }",
+		"join = SUM_SQUARES_SPLIT.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }",
 		"SUM_SQUARES_JOIN(join, a, SUM_SQUARES_SPLIT.out.chunks.ifEmpty([]), SUM_SQUARES_SPLIT.out.defs, SUM_SQUARES_MAIN.out.toSortedList { x, y -> x.name <=> y.name }, types)",
 	} {
 		if !strings.Contains(mod, want) {
@@ -721,20 +721,14 @@ func TestEmitNoSpecialClusterOptions(t *testing.T) {
 
 // TestEmitVmemFlag checks that a stage's static using(vmem_gb) is passed to the
 // shim via -vmemgb on every phase (so --monitor caps at the declared value, not
-// the memory-derived default): a plain value on split/main, and a join phase that
-// lets a split-returned join __vmem_gb override refine it. A stage with no
-// vmem_gb emits no -vmemgb.
+// the memory-derived default); the shim overlays a chunk's or the join's own
+// __vmem_gb. A stage with no vmem_gb emits no -vmemgb.
 func TestEmitVmemFlag(t *testing.T) {
 	dir := emitFixture(t, "vmem_stage", map[string]string{"VSTAGE": "/x/vstage"})
 	mod := readFile(t, filepath.Join(dir, "modules", "stage_VSTAGE.nf"))
 
-	for _, want := range []string{
-		"-vmemgb 8",
-		"-vmemgb ${(join?.vmem_gb ?: 0) > 0 ? join.vmem_gb : 8}",
-	} {
-		if !strings.Contains(mod, want) {
-			t.Errorf("stage_VSTAGE.nf missing vmem flag %q", want)
-		}
+	if n := strings.Count(mod, " -vmemgb 8 "); n != 3 {
+		t.Errorf("stage_VSTAGE.nf passes -vmemgb 8 to %d phases, want split, main and join", n)
 	}
 
 	// A stage with no using(vmem_gb) must not emit -vmemgb (no noise; the shim

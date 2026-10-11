@@ -104,7 +104,7 @@ func TestCommonFlagsSrcArgs(t *testing.T) {
 		t.Fatalf("parse flags: %v", err)
 	}
 
-	want := shim.Adapter{Lang: ir.LangExec, Stagecode: "/code/tool.py", SrcArgs: []string{"3", "hello"}}
+	want := shim.Adapter{Lang: ir.LangExec, Stagecode: "/code/tool.py", SrcArgs: []string{"3", "hello"}, Attempt: 1}
 	if diff := cmp.Diff(want, cf.adapter()); diff != "" {
 		t.Errorf("adapter mismatch (-want +got):\n%s", diff)
 	}

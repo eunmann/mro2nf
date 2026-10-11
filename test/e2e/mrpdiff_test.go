@@ -266,6 +266,9 @@ type mrpDiffCase struct {
 // pipeline fixture is in mrpUnrunnable (coverage_test.go) with the reason.
 var mrpDiffCases = []mrpDiffCase{
 	{name: "file_min"},
+	// #243: fractional mem_gb (and split-returned chunk/join mem) reaches the
+	// stage as mrp resolves it, not Nextflow's truncated GB.
+	{name: "frac_mem", native: true, runner: true},
 	{name: "dir_out"},
 	// #242: dotfiles and an empty subdirectory inside directory outputs,
 	// through both LAYOUT variants (the transform return folds under -native).

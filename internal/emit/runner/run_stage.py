@@ -49,6 +49,8 @@ _MARKER_REL = re.compile(BUNDLE_FILES + r"/L[0-9]{4,}(\.[^/]*)?")
 
 # Ports internal/shim/shim.go constants.
 EXTRA_VMEM_GB = 3
+MEM_GB_PER_JOB = 1
+MB_PER_GB = 1024
 ASSERT_EXIT_CODE = 42
 BYTES_PER_GB = 1 << 30
 
@@ -71,13 +73,13 @@ class RunnerError(Exception):
 _COMMON_FLAGS = {
     "stagecode": str, "call": str, "mro": str, "work": str, "o": str,
     "threads": float, "memgb": float, "vmemgb": float,
-    "monitor": bool, "confine": bool, "types": str, "callable": str,
-    "role": str,
+    "monitor": bool, "confine": bool, "attempt": int, "allocbytes": int,
+    "types": str, "callable": str, "role": str,
 }
 _PHASE_FLAGS = {
     "split": {"args": str, "chunkdir": str, "joinres": str},
     "main": {"args": str, "chunk": str},
-    "join": {"args": str, "chunksfile": str, "chunkdir": str},
+    "join": {"args": str, "chunksfile": str, "chunkdir": str, "joinres": str},
 }
 # Ports the non-empty string flag defaults (cmd/mre/main.go addCommon -work,
 # runJoin -chunkdir); split's -chunkdir defaults to "" (no chunk bundles).
@@ -97,6 +99,8 @@ def _flag_defaults(phase, spec):
             vals[name] = False
         elif kind is float:
             vals[name] = 1.0 if name in ("threads", "memgb") else 0.0
+        elif kind is int:
+            vals[name] = 1 if name == "attempt" else 0
         else:
             vals[name] = _STR_DEFAULTS.get(
                 (phase, name), _STR_DEFAULTS.get(("*", name), ""))
@@ -137,9 +141,9 @@ def parse_flags(phase, argv):
             if i >= len(argv):
                 raise RunnerError("flag needs an argument: -%s" % name)
             inline = argv[i]
-        if kind is float:
+        if kind is float or kind is int:
             try:
-                vals[name] = float(inline)
+                vals[name] = float(inline) if kind is float else int(inline, 0)
             except ValueError:
                 raise RunnerError(
                     "invalid value %r for flag -%s" % (inline, name)
@@ -568,18 +572,49 @@ def _coalesce(primary, fallback):
     return primary if primary != 0 else fallback
 
 
+def _ceil_mb(gb):
+    return math.ceil(abs(gb) * MB_PER_GB)
+
+
 def resolve_resources(chunk, res):
-    """Ports resolveResources: chunk overrides win; negative adaptive
-    sentinels resolve to |x|; vmem < 1 GB recomputes as mem + headroom."""
+    """Ports resolveResources: chunk (or join) requests win; negative
+    adaptive sentinels resolve to |x|; memory and vmem round up to whole MiB,
+    an unset memory takes the job default, and vmem defaults to memory plus
+    headroom and never falls below memory (mrp's local GetSystemReqs)."""
     eff = Resources(
         threads=abs(_coalesce(chunk.threads, res.threads)),
-        mem_gb=abs(_coalesce(chunk.mem_gb, res.mem_gb)),
         special=chunk.special or res.special,
     )
-    eff.vmem_gb = abs(_coalesce(chunk.vmem_gb, res.vmem_gb))
-    if eff.vmem_gb < 1:
-        eff.vmem_gb = eff.mem_gb + EXTRA_VMEM_GB
+    mem_mb = _ceil_mb(_coalesce(chunk.mem_gb, res.mem_gb))
+    if mem_mb == 0:
+        mem_mb = MEM_GB_PER_JOB * MB_PER_GB
+    vmem_mb = _ceil_mb(_coalesce(chunk.vmem_gb, res.vmem_gb))
+    if vmem_mb == 0:
+        vmem_mb = mem_mb + EXTRA_VMEM_GB * MB_PER_GB
+    eff.mem_gb = mem_mb / MB_PER_GB
+    eff.vmem_gb = max(vmem_mb, mem_mb) / MB_PER_GB
     return eff
+
+
+def monitor_limits(eff, fl):
+    """Ports shim.go monitorLimits: a retry enforces the larger allocation
+    Nextflow escalated the task to."""
+    alloc = fl.allocbytes / float(BYTES_PER_GB)
+    if fl.attempt <= 1 or alloc <= eff.mem_gb:
+        return eff
+    return Resources(threads=eff.threads, mem_gb=alloc,
+                     vmem_gb=max(eff.vmem_gb, alloc + EXTRA_VMEM_GB),
+                     special=eff.special)
+
+
+def _resource_num(v):
+    """A resolved resource as the stage reads it back from mre's _args
+    (meta.go resourceNum, mrp's ToLazyMap): three significant digits, no
+    exponent from 999.5 up."""
+    f = float(v)
+    if -999.5 < f < 999.5:
+        return json.loads("%.3g" % f)
+    return json.loads("%.0f" % f)
 
 
 def _js_num(v):
@@ -593,9 +628,9 @@ def _js_num(v):
 
 def inject_resources(merged, eff):
     """Ports injectResources: write the resolved __* keys into an args map."""
-    merged["__mem_gb"] = _js_num(eff.mem_gb)
-    merged["__threads"] = _js_num(eff.threads)
-    merged["__vmem_gb"] = _js_num(eff.vmem_gb)
+    merged["__mem_gb"] = _resource_num(eff.mem_gb)
+    merged["__threads"] = _resource_num(eff.threads)
+    merged["__vmem_gb"] = _resource_num(eff.vmem_gb)
     if eff.special:
         merged["__special"] = eff.special
 
@@ -1254,7 +1289,7 @@ def run_split(fl):
         # setup_stage is inside the try so the finally's chdir also covers a
         # setup/import failure that leaves the cwd in files/.
         module = setup_stage(fl, files, eff, args)
-        with monitored_phase(fl.monitor, eff):
+        with monitored_phase(fl.monitor, monitor_limits(eff, fl)):
             raw_result = module.split(record(args))
     except martian.StageAssertion:
         raise
@@ -1367,7 +1402,7 @@ def run_outs_phase(fl, phase, files, eff, man, args, invoke):
         # setup_stage is inside the try so the finally's chdir also covers a
         # setup/import failure that leaves the cwd in files/.
         module = setup_stage(fl, files, eff, args)
-        with monitored_phase(fl.monitor, eff):
+        with monitored_phase(fl.monitor, monitor_limits(eff, fl)):
             invoke(module, outs)
     except martian.StageAssertion:
         raise
@@ -1413,10 +1448,10 @@ def run_join(fl):
     _, files = prep_dirs(fl.work, "join")
     man = Manifest.load(fl.types)
     args = load_stage_args(fl, man)
-    eff = resolve_resources(Resources(), cli_resources(fl))
+    chunk_defs, chunk_outs = read_chunk_data(fl.chunksfile, fl.chunkdir)
+    eff = resolve_resources(read_join_res(fl.joinres), cli_resources(fl))
     merged = dict(args)
     inject_resources(merged, eff)
-    chunk_defs, chunk_outs = read_chunk_data(fl.chunksfile, fl.chunkdir)
     run_outs_phase(
         fl, "join", files, eff, man, args,
         lambda module, outs: module.join(
@@ -1448,6 +1483,15 @@ def read_chunk_data(chunks_file, chunk_dir):
         payload = as_object(read_bundle(dir_), "chunk outs bundle %s" % dir_)
         out_recs.append(record(payload))
     return def_recs, out_recs
+
+
+def read_join_res(path):
+    """Ports cmd/mre/io.go readJoinRes: the split's join resource override,
+    none for an empty path."""
+    if not path:
+        return Resources()
+    with open(path, encoding="utf-8") as fh:
+        return resources_from_object(json.load(fh))
 
 
 def read_chunk_count(path):

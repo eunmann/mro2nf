@@ -58,7 +58,7 @@ func TestRunSumSquaresComp(t *testing.T) {
 
 	finalRaw, err := RunJoin(
 		ctx, filepath.Join(work, "join"), adapter, stageArgs,
-		defs, chunkOuts, scalarOuts("sum"), types.NewTable(nil), res, inv,
+		defs, chunkOuts, scalarOuts("sum"), types.NewTable(nil), Resources{}, res, inv,
 	)
 	if err != nil {
 		t.Fatalf("join: %v", err)

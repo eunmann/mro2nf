@@ -235,7 +235,7 @@ workflow wf_SUM_SQUARES {
     // helper reads it (raw-carriage, object-store-safe) and tuples it with the chunk:
     chunks = SUM_SQUARES_SPLIT.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     SUM_SQUARES_MAIN(chunks.combine(args), types)
-    join = SUM_SQUARES_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }
+    join = SUM_SQUARES_SPLIT.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }
     // JOIN gathers the chunk outs sorted by name — NOT .collect(), whose
     // completion order would be part of JOIN's -resume cache key and would
     // starve a 0-chunk JOIN. toSortedList emits [] on an empty channel.
@@ -260,7 +260,13 @@ Key points:
 - **Split-returned join override.** A `split()` may also return a `join`
   resource request; SPLIT writes it to `joinres.json`, the workflow parses it
   into a `join` value, and JOIN's `cpus`/`memory` read it — so the join phase is
-  scheduled like `mrp` would.
+  scheduled like `mrp` would. JOIN also stages the file, and `mre join
+  -joinres` overlays it on the stage's request for the `_args`/`_jobinfo` the
+  stage sees.
+- **What a stage sees vs. what the task gets.** Every phase passes `mre` the
+  stage's Martian memory request (`-memgb`/`-vmemgb`), which the shim
+  resolves exactly as mrp does; the `cpus`/`memory` directives only size the
+  task (whole units, escalating on retry) and never reach `_args`.
 - **Chunk gather.** JOIN stages the `chunk_N` def bundles, the `out_chunk_N`
   outs, and the split's `chunks.json`. `mre join` lists the task dir itself,
   orders both sets by chunk index, and fails unless each numbers exactly the

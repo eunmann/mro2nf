@@ -46,6 +46,23 @@ func decodeChunk(raw json.RawMessage) (shim.ChunkDef, error) {
 	return chunk, nil
 }
 
+// readJoinRes decodes the split's joinres.json (the join phase's resource
+// override); an empty path is no override.
+func readJoinRes(path string) (shim.Resources, error) {
+	var res shim.Resources
+
+	raw, err := readFile(path)
+	if err != nil || raw == nil {
+		return res, err
+	}
+
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return res, fmt.Errorf("parse join resources %s: %w", path, err)
+	}
+
+	return res, nil
+}
+
 // chunkDefPrefix and chunkOutPrefix name the per-chunk bundles a JOIN gathers:
 // the split writes chunk_%05d defs and the emitted MAIN names each output
 // out_${chunk.baseName}.

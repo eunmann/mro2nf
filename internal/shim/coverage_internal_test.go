@@ -239,10 +239,11 @@ func TestParseResourcesMalformedValues(t *testing.T) {
 	}
 }
 
-// TestResolveResourcesOverlay covers the chunk-over-phase overlay arms not
-// already pinned elsewhere: an explicit vmem override below 1 GB is recomputed
-// from memory (matching Martian's remote GetSystemReqs floor), and the chunk's
-// __special wins over the phase's only when the chunk actually set one.
+// TestResolveResourcesOverlay covers the chunk-over-phase overlay arms and
+// mrp's local GetSystemReqs resolution: an explicit vmem below memory is raised
+// to memory, memory rounds up to whole MiB and an unset one takes the 1 GB
+// default (the values real mrp reports for frac_mem's SMALL stage), and the
+// chunk's __special wins over the phase's only when the chunk actually set one.
 func TestResolveResourcesOverlay(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -250,10 +251,25 @@ func TestResolveResourcesOverlay(t *testing.T) {
 		want         Resources
 	}{
 		{
-			name:  "explicit vmem below 1GB recomputed from memory",
+			name:  "explicit vmem below memory raised to memory",
 			chunk: Resources{VMemGB: 0.5},
 			phase: Resources{MemGB: 2},
-			want:  Resources{MemGB: 2, VMemGB: 2 + extraVMemGB},
+			want:  Resources{MemGB: 2, VMemGB: 2},
+		},
+		{
+			name:  "fractional memory kept, rounded up to whole MiB",
+			phase: Resources{MemGB: float64(float32(0.3))},
+			want:  Resources{MemGB: 308.0 / 1024, VMemGB: (308.0 + 3072) / 1024},
+		},
+		{
+			name:  "chunk memory below 1 GB wins unrounded",
+			chunk: Resources{MemGB: 0.5},
+			phase: Resources{MemGB: 1.5},
+			want:  Resources{MemGB: 0.5, VMemGB: 3.5},
+		},
+		{
+			name: "unset memory takes the job default",
+			want: Resources{MemGB: 1, VMemGB: 4},
 		},
 		{
 			name:  "chunk special wins over phase",

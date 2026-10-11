@@ -51,22 +51,26 @@ func (g genCtx) stageCmd(phase string, s *ir.Stage) string {
 }
 
 // resourceFlags renders the resources a phase reports to its stage (_args,
-// _jobinfo) and enforces under -monitor. They are kept apart from the
-// scheduler request (stageDirectives), which only sizes the task.
+// _jobinfo) and enforces under -monitor. They are the stage's Martian request,
+// unrounded and without the retry escalation of the scheduler request
+// (stageDirectives), which only sizes the task: the shim overlays a chunk's or
+// the split-returned join's own request and resolves it as mrp does. An
+// `mro2nf overrides` memory override reaches the stage through task.ext.mem_gb.
 func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
-	flags := " -threads ${task.cpus} -memgb ${task.memory.toGiga()}"
+	flags := " -threads ${task.cpus} -memgb ${task.ext.mem_gb ?: " + groovyNum(s.Resources.MemGB) + "}"
 
-	// A declared `using(vmem_gb)` is passed so the shim's --monitor caps virtual
-	// memory (and reports it in _jobinfo) at the declared value instead of the
-	// memory-derived default. A per-chunk __vmem_gb still wins for main (it
-	// arrives in the chunk def); a split-returned join override refines it. When
-	// no vmem_gb is declared the shim derives vmem from memory.
-	if v := vmemFlag(s, phase); v != "" {
-		flags += " -vmemgb " + v
+	// Without a declared vmem_gb the shim derives vmem from memory.
+	if v := s.Resources.VMemGB; v > 0 {
+		flags += " -vmemgb " + groovyNum(v)
 	}
 
+	if phase == "join" {
+		flags += " -joinres joinres.json"
+	}
+
+	// A retry's escalated allocation moves only the -monitor limits.
 	if g.monitor {
-		flags += " -monitor"
+		flags += " -monitor -attempt ${task.attempt} -allocbytes ${task.memory.toBytes()}"
 	}
 
 	if g.confine {
@@ -74,6 +78,13 @@ func (g genCtx) resourceFlags(phase string, s *ir.Stage) string {
 	}
 
 	return flags
+}
+
+// groovyNum renders a resource number as a Groovy literal: no exponent, which
+// a Groovy number literal may not carry in every form, and the float32 the
+// Martian parser stores widened exactly as mrp widens it.
+func groovyNum(f float64) string {
+	return strconv.FormatFloat(f, 'f', -1, 64)
 }
 
 // stageHead renders the phase invocation up to the shared flag tail: the
@@ -126,24 +137,6 @@ func gstringLit(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 
 	return strings.ReplaceAll(s, "$", `\$`)
-}
-
-// vmemFlag renders the -vmemgb value for a stage phase from its static
-// using(vmem_gb): empty when none is declared (the shim then derives vmem from
-// memory). The join phase wraps it so a split-returned join __vmem_gb override
-// refines the static default at runtime.
-func vmemFlag(s *ir.Stage, phase string) string {
-	v := s.Resources.VMemGB
-	if v <= 0 {
-		return ""
-	}
-
-	static := strconv.FormatFloat(v, 'g', -1, 64)
-	if phase == "join" {
-		return fmt.Sprintf("${(join?.vmem_gb ?: 0) > 0 ? join.vmem_gb : %s}", static)
-	}
-
-	return static
 }
 
 // producerArgs renders the flags a bundle-producing mre command needs to stage
@@ -444,7 +437,7 @@ process %[1]s_MAIN {
 process %[1]s_JOIN {
 %[10]s
   input:
-    val join
+    tuple val(join), path('joinres.json')
     %[11]s
     path cdefs
     path 'chunks.json'
@@ -482,7 +475,7 @@ func genSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     %[1]s_SPLIT(a, types)
     chunks = %[1]s_SPLIT.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[1]s_MAIN(chunks.combine(a), types)
-    join = %[1]s_SPLIT.out.joinres.map { f -> Mro2nf.parseJson(f) }
+    join = %[1]s_SPLIT.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }
     // JOIN's chunk outs (out_chunk_NNNNN) are gathered sorted by name: collect()
     // order is completion order, which is part of JOIN's -resume cache key.
     // toSortedList emits [] on an empty channel, so a 0-chunk split still joins.
@@ -1379,7 +1372,7 @@ func genFusedSplitWorkflow(b *strings.Builder, pipeline string, c ir.Call) {
     a = %[3]s.out.args.first()
     chunks = %[3]s.out.chunks.flatten().map { f -> tuple(Mro2nf.chunkRes(f), f) }
     %[4]s(chunks.combine(a), types)
-    join = %[3]s.out.joinres.map { f -> Mro2nf.parseJson(f) }
+    join = %[3]s.out.joinres.map { f -> tuple(Mro2nf.parseJson(f), f) }
     // Sorted for the same -resume cache-key reason as genSplitWorkflow's JOIN.
     %[5]s(join, a, %[3]s.out.chunks.ifEmpty([]), %[3]s.out.defs, %[4]s.out.toSortedList { x, y -> x.name <=> y.name }, types)
   emit:

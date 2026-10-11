@@ -40,7 +40,7 @@ small number of design/minor divergences remain. Ranked:
 | 6 | `--monitor` enforced vmem (`RLIMIT_AS`) only, not mrp's primary RSS-vs-`mem_gb` kill | **CORRECTNESS** (was DESIGN) | E | fixed |
 | 7 | `map<map<S>>.field` nested-map projection rejected at transpile time (loud) | MINOR (coverage) | D | document |
 | 8 | over-retry: deterministic stage exceptions are retried (mrp fails them immediately) | MINOR | G | document |
-| 9 | vmem cap not scaled on retry while mem is; join block accepts stray keys; `invocation` = stage args not top-level; version string `mro2nf`; `MRO_UUID` unset; empty-string output leaf → `""` not `null` | MINOR | A,C,E | document |
+| 9 | join block accepts stray keys; `invocation` = stage args not top-level; version string `mro2nf`; `MRO_UUID` unset; empty-string output leaf → `""` not `null` | MINOR | A,C,E | document |
 
 Items 5–6 were initially raised as design decisions; both were confirmed as
 requirements and fixed (publish tree consumed downstream; RSS kill is mrp's
@@ -198,6 +198,17 @@ unreachable for compiler-valid pipelines.
 the resolved (not raw) allocation reported to `get_*`, and `special`→
 `clusterOptions`/`params.job_resources` as the `MRO_JOBRESOURCES` analog.
 
+**Contract (#243):** the resources a stage sees (`_args` `__*` keys, `_jobinfo`,
+the first attempt's `-monitor` limits) are mrp's **local** job manager's
+(`GetSystemReqs`), from the stage's Martian request, never from Nextflow's
+`cpus`/`memory` directives. Memory and vmem round up to whole MiB (a 0.3 GB
+request is 0.30078125 GB), an unset memory is 1 GB, vmem defaults to memory + 3
+GB and is never below memory, and the `__*` values carry mrp's three significant
+digits. Two inputs are host-dependent in mrp and so are not copied: an adaptive
+negative request resolves to `|x|` (mrp local hands it the free capacity), and
+mrp's `--localcores`/`--localmem` caps do not apply. The scheduler request is a
+separate concern: whole GB, at least 1, escalating with `task.attempt`.
+
 **CORRECTNESS (#3) — FIXED:** negative-adaptive sentinels (Martian's "at least
 `|x|`") were not resolved to `|x|`: NF `dynMem`/`dynCpus` gated on `> 0` so a
 negative request fell back to the static default, and `coalesce` kept the
@@ -214,11 +225,14 @@ group leader, and a monitor samples the group's resident memory every second
 (summed from `/proc/<pid>/statm` over the group, like mrp's mrjob) and SIGKILLs
 the group when it exceeds `mem_gb`, writing mrp's quota message to `_errors`. The
 kill is not an ASSERT, so it stays retryable — Nextflow retries with the escalated
-memory (`memory * task.attempt`). The `RLIMIT_AS`/`vmem_gb` cap still applies as
-the hard address-space bound.
+memory (`memory * task.attempt`), and on a retry both limits follow that
+allocation (`-attempt`/`-allocbytes`, the vmem cap keeping its 3 GB headroom),
+while the stage still sees its unescalated request. The `RLIMIT_AS`/`vmem_gb` cap
+still applies as the hard address-space bound.
 
 **Minor/intentional:** linear OOM escalation (`mem * task.attempt`, always on) vs
-mrp's `--auto-adjust-memory` RSS formula; vmem cap not scaled on retry; GPU
+mrp's `--auto-adjust-memory` RSS formula, which mrp also writes into the stage's
+`__mem_gb`; GPU
 (`special="gpu:N"`→`accelerator`) is an mro2nf extension; mem→threads packing
 left to the executor. All documented design choices.
 

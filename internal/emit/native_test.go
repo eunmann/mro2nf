@@ -417,8 +417,8 @@ func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
 	}
 
 	triad := generateStageModule(ms.Stages["SUMSQ"], gm)
-	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[5] ?: [])" +
-		sortedGather + ", t[1], (t[4] ?: []), t[3]) }"
+	wantTriad := ".join(SUMSQ_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], t[3], (t[6] ?: [])" +
+		sortedGather + ", t[1], (t[5] ?: []), t[4]) }"
 
 	if !strings.Contains(triad, wantTriad) {
 		t.Errorf("keyed split triad must sort JOIN_K's grouped chunk outs by name:\n%s", triad)
@@ -426,7 +426,7 @@ func TestGenerateKeyedGatherPinsInputOrder(t *testing.T) {
 
 	// No gather may keep the bare arrival-ordered list.
 	for name, mod := range map[string]string{"scatter": scatter, "fork_k": forked, "triad": triad} {
-		if strings.Contains(mod, "so ?: [], fk") || strings.Contains(mod, "t[5] ?: [], t[1]") {
+		if strings.Contains(mod, "so ?: [], fk") || strings.Contains(mod, "t[6] ?: [], t[1]") {
 			t.Errorf("%s module still gathers in arrival order:\n%s", name, mod)
 		}
 	}

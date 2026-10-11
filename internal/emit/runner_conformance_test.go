@@ -63,7 +63,11 @@ func TestRunnerConformance(t *testing.T) {
 	// chunk-arg leaf as a resolvable marker, so both stacks localize it.
 	// chunks.json supplies only the count both stacks check the staged dir
 	// against.
-	joinFlags := []string{"-chunksfile", filepath.Join(mreSplit, "chunks.json"), "-chunkdir", "."}
+	joinFlags := []string{
+		"-chunksfile", filepath.Join(mreSplit, "chunks.json"),
+		"-chunkdir", ".",
+		"-joinres", filepath.Join(mreSplit, "joinres.json"),
+	}
 
 	env.stageJoinInputs(t, mreSplit, filepath.Join(mreMain, "outs"))
 	mreJoin := env.runPhase(t, "mre", "join", joinFlags)
@@ -71,6 +75,7 @@ func TestRunnerConformance(t *testing.T) {
 	env.stageJoinInputs(t, mreSplit, filepath.Join(mreMain, "outs"))
 	pyJoin := env.runPhase(t, "py", "join", joinFlags)
 	diffDirs(t, "join", mreJoin, pyJoin)
+	mustContain(t, filepath.Join(mreJoin, "outs", "data.json"), " mem=1.25 am=1.25")
 }
 
 // TestRunnerConformanceRelativeOutPath is the #179 regression guard: a stage
@@ -297,7 +302,8 @@ def main(args, outs):
 def join(args, outs, chunk_defs, chunk_outs):
     outs.total = sum(c.part for c in chunk_outs)
     outs.report = chunk_outs[0].report
-    outs.note = chunk_outs[0].note + ' <join>'
+    outs.note = chunk_outs[0].note + ' <join> mem=%s am=%s' % (
+        martian.get_memory_allocation(), args.__mem_gb)
 `
 
 func newConformanceEnv(t *testing.T) *conformanceEnv {

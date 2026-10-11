@@ -1,0 +1,18 @@
+{
+    "chunk_am": [
+        0.5,
+        1.5
+    ],
+    "chunk_m": [
+        0.5,
+        1.5
+    ],
+    "join_am": 0.5,
+    "join_m": 0.5,
+    "mem_am": 1.5,
+    "mem_avm": 4.5,
+    "mem_m": 1.5,
+    "small_am": 0.301,
+    "small_avm": 3.3,
+    "small_m": 0.30078125
+}

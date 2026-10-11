@@ -7,6 +7,35 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 )
 
+// TestResourceFlagsPassStageMemory pins #243: the memory a stage sees is its
+// Martian request, not Nextflow's integer-truncated, attempt-scaled task.memory
+// (mrp gives a using(mem_gb = 1.5) stage 1.5). An overrides overlay's
+// ext.mem_gb wins, and only the -monitor limits read the task's allocation.
+func TestResourceFlagsPassStageMemory(t *testing.T) {
+	s := &ir.Stage{Name: "MEM", Lang: ir.LangPy, Resources: ir.Resources{MemGB: 1.5}}
+
+	plain := genCtx{}.resourceFlags("main", s)
+	if !strings.Contains(plain, " -memgb ${task.ext.mem_gb ?: 1.5}") {
+		t.Errorf("main must pass the stage's mem_gb unrounded: %q", plain)
+	}
+
+	if strings.Contains(plain, "task.memory") || strings.Contains(plain, "-attempt") {
+		t.Errorf("without -monitor no task allocation may reach mre: %q", plain)
+	}
+
+	mon := genCtx{monitor: true}.resourceFlags("join", s)
+	for _, want := range []string{" -joinres joinres.json", " -monitor -attempt ${task.attempt} -allocbytes ${task.memory.toBytes()}"} {
+		if !strings.Contains(mon, want) {
+			t.Errorf("join under -monitor missing %q: %q", want, mon)
+		}
+	}
+
+	small := &ir.Stage{Name: "SMALL", Resources: ir.Resources{MemGB: float64(float32(0.3))}}
+	if got := (genCtx{}).resourceFlags("main", small); !strings.Contains(got, "?: 0.30000001192092896}") {
+		t.Errorf("a float32 mem_gb must reach mre exactly as mrp widens it: %q", got)
+	}
+}
+
 // TestResourceDirectivesAbsNegativeSentinel guards the adaptive-resource model:
 // a negative request is Martian's "at least |x|" sentinel, which its cluster path
 // resolves to |x|. The emitted Nextflow directives must provision |x|, not floor

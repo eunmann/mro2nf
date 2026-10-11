@@ -585,7 +585,7 @@ process %[1]s_MAIN_K {
 process %[1]s_JOIN_K {
 %[10]s
   input:
-    tuple val(key), val(join), path(souts), path(args), path(cdefs), path('chunks.json')
+    tuple val(key), val(join), path('joinres.json'), path(souts), path(args), path(cdefs), path('chunks.json')
     path 'types.json'
   output:
     tuple val(key), path("outs__${key}", type: 'dir')
@@ -613,7 +613,7 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     %[1]s_SPLIT_K(ch.sp, types)
     chunks = %[1]s_SPLIT_K.out.chunks.flatMap { key, cs -> Mro2nf.keyedChunks(key, cs) }
     %[1]s_MAIN_K(chunks.combine(ch.mn, by: 0), types)
-    joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, Mro2nf.parseJson(f)) }
+    joinres = %[1]s_SPLIT_K.out.joinres.map { key, f -> tuple(key, Mro2nf.parseJson(f), f) }
     // Drive the join from the full fork set (ch.jn) with remainder joins on the
     // staged chunk bundles and chunk outputs, so a fork whose split produced zero
     // chunks (no chunk_* dirs, no groupTuple group) still runs JOIN_K — with empty
@@ -626,7 +626,7 @@ func genKeyedSplitWorkflow(b *strings.Builder, s *ir.Stage) {
     // path (#217). The
     // grouped chunk outs are sorted by name: groupTuple order is completion order,
     // and JOIN_K's input order is part of its -resume cache key.
-    joined = ch.jn.join(joinres).join(%[1]s_SPLIT_K.out.defs).join(%[1]s_SPLIT_K.out.chunks, remainder: true).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], (t[5] ?: []).sort { a, b -> a.name <=> b.name }, t[1], (t[4] ?: []), t[3]) }
+    joined = ch.jn.join(joinres).join(%[1]s_SPLIT_K.out.defs).join(%[1]s_SPLIT_K.out.chunks, remainder: true).join(%[1]s_MAIN_K.out.groupTuple(), remainder: true).map { t -> tuple(t[0], t[2], t[3], (t[6] ?: []).sort { a, b -> a.name <=> b.name }, t[1], (t[5] ?: []), t[4]) }
     %[1]s_JOIN_K(joined, types)
   emit:
     %[1]s_JOIN_K.out
