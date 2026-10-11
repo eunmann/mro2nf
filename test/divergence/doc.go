@@ -54,8 +54,9 @@ func Markdown(a Allowlist) string {
 	return b.String()
 }
 
-// scope renders the fixtures a fixture-scoped matcher applies on, or nothing
-// for a matcher that applies on every fixture.
+// scope renders the fixtures a fixture-scoped matcher applies on and the one
+// emitter that diverges, or nothing for an entry true of every fixture under
+// either emitter.
 func scope(e Entry) string {
 	var fixtures []string
 
@@ -66,11 +67,19 @@ func scope(e Entry) string {
 		fixtures = e.Comparator.Fixtures
 	}
 
-	if len(fixtures) == 0 {
-		return ""
+	var s string
+	if len(fixtures) > 0 {
+		s = " Scoped to `" + strings.Join(fixtures, "`, `") + "`."
 	}
 
-	return " Scoped to `" + strings.Join(fixtures, "`, `") + "`."
+	switch e.Emitter {
+	case EmitterV1:
+		s += " Not under `-emitter=v2`."
+	case EmitterV2:
+		s += " Only under `-emitter=v2`."
+	}
+
+	return s
 }
 
 // cell escapes the one character that ends a table cell even inside a code
