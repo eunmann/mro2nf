@@ -339,7 +339,9 @@ fixtures, file, rule and key, and a normalization built into a comparator (such
 as sorting object keys while #366 is open) applies only while its entry exists.
 An entry with an issue is temporary, one without is intentional. A key-scoped
 entry that stops excusing anything in its fixtures fails the comparison, so it
-cannot outlive its bug.
+cannot outlive its bug. `make docs-divergences` renders the allowlist as the
+divergence table of [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md#divergences-from-mrp),
+and `make test` fails while the checked-in table is stale.
 
 Whether a run fails is part of the contract too. `TestMrpDiffFailureParity` runs
 each fixture `mrp` fails on by design (`mrpOutcomeCases`) under both runners and

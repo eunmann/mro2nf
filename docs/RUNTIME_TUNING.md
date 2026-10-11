@@ -115,8 +115,8 @@ workflow.onComplete = { ["/path/to/hook", "${workflow.success}"].execute().waitF
 
 ## Skipping preflight (`--nopreflight`)
 
-There is no built-in flag. A `(preflight)` stage now gates the pipeline (it runs
-first and downstream stages wait — see [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md)),
+There is no built-in flag. A plain `(preflight)` stage now gates the pipeline (it
+runs first and downstream stages wait — see [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md)),
 so to skip a slow or broken validation, remove the `(preflight)` modifier (or the
 call) and re-transpile.
 

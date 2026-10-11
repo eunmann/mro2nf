@@ -277,6 +277,8 @@ func (e Entry) validate() error {
 		return fmt.Errorf("%w: %q needs a feature, a summary and a justification", ErrInvalid, e.ID)
 	case strings.ContainsAny(e.Feature+e.Summary+e.Justification, "\n\r"):
 		return fmt.Errorf("%w: %q has a line break, which the generated table cannot hold", ErrInvalid, e.ID)
+	case !markdownSafe(e.Feature) || !markdownSafe(e.Summary) || !markdownSafe(e.Justification):
+		return fmt.Errorf("%w: %q has an unclosed code span or a < outside one, which Markdown renders as HTML", ErrInvalid, e.ID)
 	case e.Issue < 0:
 		return fmt.Errorf("%w: %q has issue %d", ErrInvalid, e.ID, e.Issue)
 	case len(e.Evidence) == 0:
@@ -290,6 +292,23 @@ func (e Entry) validate() error {
 	}
 
 	return e.validateMatcher()
+}
+
+// markdownSafe reports whether s closes every backtick code span and has no <
+// outside one.
+func markdownSafe(s string) bool {
+	spans := strings.Split(s, "`")
+	if len(spans)%2 == 0 {
+		return false
+	}
+
+	for i := 0; i < len(spans); i += 2 {
+		if strings.Contains(spans[i], "<") {
+			return false
+		}
+	}
+
+	return true
 }
 
 // validateMatcher requires exactly the one matcher the entry's kind allows:
