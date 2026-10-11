@@ -171,13 +171,14 @@ func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
 
 // splitTriad runs a split node: its split, a main per chunk the split
 // returned, and its join over every chunk's outs once all are in, by chunk
-// name, not by completion.
+// name, not by completion. Each chunk and the join are scheduled with the
+// resources the split returned for them.
 func (p *project) splitTriad(g *gen, i int, proc, in string) {
 	fmt.Fprintf(&g.incs, "include { STAGE_SPLIT as %[1]s_SP ; STAGE_MAIN as %[1]s_MN ; STAGE_JOIN as %[1]s_JN } from './stage.nf'\n", proc)
 	g.linef("%s_SP(%s)", proc, in)
 	g.linef("s%d = %s_SP.out.split", i, proc)
-	g.linef("%s_MN(s%d.flatMap { m, k, a, cs, _j -> cs.collect { c -> [m + [chunks: cs.size()], k, a, c] } })", proc, i)
+	g.linef("%s_MN(s%d.flatMap { m, k, a, cs, _j -> cs.collect { c -> [sized(m, jsonOf(c.resolve('chunk.json')).resources) + [chunks: cs.size()], k, a, c] } })", proc, i)
 	g.linef("c%d = %s_MN.out.chunk.map { m, k, o -> [groupKey(k, m.chunks), o] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }.mix(s%d.filter { v -> v[3].isEmpty() }.map { v -> [v[1], []] })",
 		i, proc, i)
-	g.linef("%s_JN(s%d.map { m, k, a, cs, j -> [k, m, a, cs, j] }.join(c%d).map { k, m, a, cs, j, os -> [m, k, a, cs, j, os] })", proc, i, i)
+	g.linef("%s_JN(s%d.map { m, k, a, cs, j -> [k, sized(m, jsonOf(j)), a, cs, j] }.join(c%d).map { k, m, a, cs, j, os -> [m, k, a, cs, j, os] })", proc, i, i)
 }

@@ -686,7 +686,9 @@ consumer (`X unless GATE`). An enabled instance stages, of each node it reads,
 only the outputs it reads (`outs/<output>/`): from the instance that shares
 its roots, or, a gather, from every such instance under a seeded
 `groupTuple`. A split's chunk outs are gathered by `groupKey` over the
-chunk count. OUTS resolves the pipeline outs with `mre outs` and lays them out
+chunk count. Each chunk's main and the join are scheduled with the
+`__threads`, `__mem_gb` and `__special` the split returned for them, read on
+the driver from the chunk's `chunk.json` and the split's `join.json`. OUTS resolves the pipeline outs with `mre outs` and lays them out
 with `publish-layout`. Each such list is staged in an order the run fixes, a
 gather's and OUTS's by instance key and a join's by chunk name, since list
 order is part of a task's `-resume` key and arrival order is completion

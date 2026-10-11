@@ -57,6 +57,27 @@ def post(Map meta) {
     return "${shq(params.mro2nf_mre)} post ${graph(meta)} -args args -outs stage_outs -fields outs -forks forks -gates gates"
 }
 
+def jsonOf(Path p) {
+    return new groovy.json.JsonSlurper().parseText(p.text)
+}
+
+// sized is meta scheduled with the resources a split returned for a chunk
+// or for its join (chunk.json, join.json), read on the driver: each of
+// __threads, __mem_gb and __special it sets replaces the stage's, a
+// negative count at its magnitude, as the stage's own.
+def sized(Map meta, Object res) {
+    if (!(res instanceof Map)) {
+        return meta
+    }
+    def t = Math.abs((res['__threads'] ?: 0) as double)
+    def m = Math.abs((res['__mem_gb'] ?: 0) as double)
+    return meta + [
+        cpus: t > 0 ? Math.max(1, Math.ceil(t) as int) : meta.cpus,
+        mem_gb: m > 0 ? m : meta.mem_gb,
+        special: res['__special'] ?: meta.special,
+    ]
+}
+
 // mem is the memory a task is scheduled with, raised on each retry.
 def mem(Map meta, int attempt) {
     return "${meta.mem_gb * attempt} GB"

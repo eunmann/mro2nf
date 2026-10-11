@@ -148,6 +148,22 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 }
 
+// TestEmitSizesChunksAndJoin: each chunk's main and the join are scheduled
+// with the resources the split returned for them, mrp's per-chunk and join
+// reservations (join_resources: the join requests 2 threads and 3 GB).
+func TestEmitSizesChunksAndJoin(t *testing.T) {
+	main := readTree(t, emitFixture(t, "join_resources"))["main.nf"]
+
+	for _, want := range []string{
+		"cs.collect { c -> [sized(m, jsonOf(c.resolve('chunk.json')).resources) + [chunks: cs.size()], k, a, c] }",
+		"s0.map { m, k, a, cs, j -> [k, sized(m, jsonOf(j)), a, cs, j] }",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("join_resources's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+}
+
 // TestEmitRefusesReservedParam: an entry input named like a param the
 // project defines itself is refused.
 func TestEmitRefusesReservedParam(t *testing.T) {
