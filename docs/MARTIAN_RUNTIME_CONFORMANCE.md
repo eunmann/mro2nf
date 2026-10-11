@@ -181,7 +181,12 @@ and a mixed zip (`empty_fork_sub`/`_cascade`/`_mixed`). It is evaluated per
 pipeline instance (`internal/emit/known.go`), and a sub-pipeline whose call
 sites need different marks is emitted once per context, so `SUB` called with
 an invocation-known empty and with a runtime empty gives `null` and `[]`
-respectively (`empty_fork_two_sites`).
+respectively (`empty_fork_two_sites`). A disable gate on the producer does
+not change the marking (#383): mrp folds a literal gate statically and, under
+a runtime gate, prunes a known-empty split to null or rejects the consumer's
+split of the gated value, so a split over a gated producer of an
+invocation-known source gives `null` (`empty_fork_gated`,
+`empty_fork_gated_sub`).
 
 **MINOR/coverage (#7):** Martian's recursive `resolvePath` supports
 `map<map<S>>.field`; mro2nf rejects it loudly at transpile time
