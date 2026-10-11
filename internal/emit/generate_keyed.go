@@ -102,11 +102,11 @@ func genKeyedBindProcess(b *strings.Builder, name string, bindings []ir.Binding,
     tuple val(key), path("%[6]s", type: 'dir')
   script:
     """
-    '%[3]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -o %[6]s%[5]s
+%[7]s    '%[3]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -o %[6]s%[5]s
     """
 }
 
-`, name, block, g.mre, arg, prodArgs, out)
+`, name, block, g.mre, arg, prodArgs, out, g.scriptHead())
 }
 
 // genKeyedGateProcess is genGateProcess for a keyed pipeline: one gate per fork.
@@ -119,11 +119,11 @@ func genKeyedGateProcess(b *strings.Builder, pipeline string, c ir.Call, g genCt
     tuple val(key), path('gate', type: 'dir')
   script:
     """
-    %[3]s -pipeargs ${pipeargs}%[4]s -o gate
+%[5]s    %[3]s -pipeargs ${pipeargs}%[4]s -o gate
     """
 }
 
-`, gateName(pipeline, c.Name), block, g.gateCmd(pipeline, c), arg)
+`, gateName(pipeline, c.Name), block, g.gateCmd(pipeline, c), arg, g.scriptHead())
 }
 
 // genKeyedFusedStageProcess emits a per-call fork-keyed process that runs
@@ -144,14 +144,14 @@ func genKeyedFusedStageProcess(b *strings.Builder, pipeline string, c ir.Call, s
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    '%[4]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[5]s -o args%[6]s
+%[9]s    '%[4]s' bind -spec 'spec.json' -pipeargs ${pipeargs}%[5]s -o args%[6]s
     %[7]s -args args%[8]s -work . -o outs__${key}
     """
 }
 
 `, fusedName(pipeline, c.Name), stageDirectives(s, ""), block, g.mre, arg,
 		g.producerArgs(c.Callable, types.RoleIn), main,
-		g.producerArgs(c.Callable, types.RoleMainOut))
+		g.producerArgs(c.Callable, types.RoleMainOut), g.scriptHead())
 }
 
 // keyedInputs renders a keyed process's input block — tuple(key, pipeargs, staged
@@ -233,13 +233,14 @@ func genKeyedForkBindProcess(b *strings.Builder, pipeline string, c ir.Call, g g
     tuple val(key), path('forkmeta2.json'), emit: keys
   script:
     """
-    mkdir -p forks
+%[7]s    mkdir -p forks
     '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -chunkdir forks -mapmode %[6]s%[5]s
     mv -f forks/forkmeta2.json forkmeta2.json
     """
 }
 
-`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c))
+`, forkName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c),
+		g.scriptHead())
 }
 
 // genKeyedNullForksProcess is genNullForksProcess for a nested map call: per
@@ -253,13 +254,13 @@ func genKeyedNullForksProcess(b *strings.Builder, pipeline string, c ir.Call, ca
     tuple val(key), path('merged', type: 'dir')
   script:
     """
-    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -keysonly -keysfile forkmeta2.json -mapmode %[6]s%[5]s
+%[8]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs ${pipeargs}%[4]s -keysonly -keysfile forkmeta2.json -mapmode %[6]s%[5]s
     %[7]s
     """
 }
 
 `, nullForksName(pipeline, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c),
-		g.nullForksMergeCmd(pipeline, c, calleeOuts))
+		g.nullForksMergeCmd(pipeline, c, calleeOuts), g.scriptHead())
 }
 
 // genKeyedMergeProcess emits the fork-key-threaded merge for a nested map call:
@@ -278,13 +279,13 @@ func genKeyedMergeProcess(b *strings.Builder, pipeline string, c ir.Call, callee
     tuple val(key), path('merged', type: 'dir')
   script:
     """
-    %[2]s
+%[3]s    %[2]s
     """
 }
 
 `, mergeName(pipeline, c.Name),
 		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta2.json", "merged",
-			g.plan.pipes[pipeline].calls[c.Name].mergeFlags()))
+			g.plan.pipes[pipeline].calls[c.Name].mergeFlags()), g.scriptHead())
 }
 
 // genKeyedPipeline emits wf_<pipeline>_map: the pipeline body run once per fork,
@@ -631,7 +632,7 @@ func genKeyedSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base stri
     tuple val(key), path('chunk_*', type: 'dir'), emit: chunks, optional: true
   script:
     """
-    %[3]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir .%[4]s
+%[12]s    %[3]s -args ${args} -work . -o chunks.json -joinres joinres.json -chunkdir .%[4]s
     """
 }
 
@@ -644,7 +645,7 @@ process %[1]s_MAIN_K {
     tuple val(key), path("out_${chunk.baseName}", type: 'dir')
   script:
     """
-    %[5]s -args ${args} -chunk ${chunk}%[7]s -work . -o out_${chunk.baseName}
+%[12]s    %[5]s -args ${args} -chunk ${chunk}%[7]s -work . -o out_${chunk.baseName}
     """
 }
 
@@ -657,14 +658,14 @@ process %[1]s_JOIN_K {
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[6]s -args ${args} %[11]s%[8]s -work . -o outs__${key}
+%[12]s    %[6]s -args ${args} %[11]s%[8]s -work . -o outs__${key}
     """
 }
 
 `, s.Name, stageDirectives(s, ""), splitCmd, g.producerArgs(s.Name, types.RoleChunkIn),
 		base, joinCmd, g.producerArgs(s.Name, types.RoleMainOut),
 		g.producerArgs(s.Name, types.RoleOut),
-		stageDirectives(s, "res"), stageDirectives(s, "join"), joinGatherFlags)
+		stageDirectives(s, "res"), stageDirectives(s, "join"), joinGatherFlags, g.scriptHead())
 }
 
 // genKeyedSplitWorkflow wires the keyed split processes. multiMap duplicates the
@@ -715,7 +716,7 @@ func genKeyedSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx)
     tuple val(key), path("outs__${key}", type: 'dir')
   script:
     """
-    %[3]s -args ${args}%[4]s -work . -o outs__${key}
+%[5]s    %[3]s -args ${args}%[4]s -work . -o outs__${key}
     """
 }
 
@@ -728,5 +729,5 @@ workflow wf_%[1]s_map {
     %[1]s_MAP.out
 }
 
-`, s.Name, stageDirectives(s, ""), base, g.producerArgs(s.Name, types.RoleMainOut))
+`, s.Name, stageDirectives(s, ""), base, g.producerArgs(s.Name, types.RoleMainOut), g.scriptHead())
 }

@@ -29,22 +29,22 @@ func (g genCtx) scatterScript(c ir.Call, s *ir.Stage, arg string) string {
 	return fmt.Sprintf(`  script:
     if( fi < 0 )
       """
-      %[1]s -keysonly -keysfile forkmeta2.mro2nf.json
+%[4]s      %[1]s -keysonly -keysfile forkmeta2.mro2nf.json
       """
     else if( fi == 0 )
       """
-      %[1]s -index 0 -o fargs -keysfile forkmeta2.mro2nf.json
+%[4]s      %[1]s -index 0 -o fargs -keysfile forkmeta2.mro2nf.json
       %[2]s
       [ -d outs__${key} ]
       """
     else
       """
-      printf %%s '${element}' | base64 -d > element.json
+%[4]s      printf %%s '${element}' | base64 -d > element.json
       %[3]s -elementfile element.json -o fargs
       %[2]s
       [ -d outs__${key} ]
       """
-`, forkbindAll, main, forkbind)
+`, forkbindAll, main, forkbind, g.scriptHeadAt("      "))
 }
 
 // genNativeScatterElementProcess emits the O(1)-per-instance fused
@@ -228,10 +228,10 @@ func genDefaultLayout(b *strings.Builder, entry string, g genCtx) {
     path 'manifest.json.gz'
 %[5]s  script:
     """
-    "%[1]s" publish-layout -sidecar data.json -dir .%[2]s%[6]s
+%[7]s    "%[1]s" publish-layout -sidecar data.json -dir .%[2]s%[6]s
     """
 }
-`, g.mre, g.producerArgs(entry, types.RoleOut), op.dir, op.in, op.out, op.flags)
+`, g.mre, g.producerArgs(entry, types.RoleOut), op.dir, op.in, op.out, op.flags, g.scriptHead())
 }
 
 // nativeReturnBind returns the entry pipeline whose transform return LAYOUT binds
@@ -274,13 +274,13 @@ func genNativeLayout(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, g gen
     path 'manifest.json.gz'
 %[7]s  script:
     """
-%[5]s    '%[2]s' bind -spec 'spec.json' -pipeargs pipeargs%[3]s -o args%[4]s
+%[9]s%[5]s    '%[2]s' bind -spec 'spec.json' -pipeargs pipeargs%[3]s -o args%[4]s
     mv args/data.json data.json
     if [ -d args/f ]; then mv args/f f; fi
     '%[2]s' publish-layout -sidecar data.json -dir .%[4]s%[8]s
     """
 }
-`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags)
+`, inBlock, g.mre, arg, flags, pre, op.dir, op.out, op.flags, g.scriptHead())
 }
 
 // genNativeEntry emits the native workflow (#76 M1): the entry args are baked
@@ -472,7 +472,7 @@ process BUILD_ENTRY_ARGS {
     %[10]s
   script:
     """
-    cat > values.json <<'MART_EOF'
+%[12]s    cat > values.json <<'MART_EOF'
 ${values}
 MART_EOF
 %[11]s    '%[2]s' entryargs -base entry_args -values values.json -o entry_resolved -types 'types.json' -callable '%[3]s' -role in%[7]s
@@ -487,7 +487,7 @@ workflow {
   %[5]s(pipeargs)
 `, w.decls, g.mre, prog.Entry.Callable, valuesMap, entryWorkflow,
 		w.fileInputs, flatFlag, w.fileChans, strings.Join(w.callArgs, ", "),
-		bundleOutput("entry_resolved"), flatHeredoc)
+		bundleOutput("entry_resolved"), flatHeredoc, g.scriptHead())
 
 	genPublishWiring(b, entryWorkflow)
 	b.WriteString("}\n")

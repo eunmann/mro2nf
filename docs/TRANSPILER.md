@@ -203,6 +203,7 @@ process SOMESTAGE {
     tuple(path("outs/data.json"), path("outs/f/*", arity: '0..*'))
   script:
     """
+    # mro2nf "v0.6.0"
     'mre' main … -args args -outs 'y' … -o outs
     """
 }
@@ -220,6 +221,16 @@ The process consumes and emits a **bundle** — a typed JSON sidecar
 (`data.json`) plus its file leaves as individual `path` items, which Nextflow
 stages back into one directory (`args/`, `outs/`) inside the task. Bundles are
 the universal currency between processes (§7).
+
+Every process script opens with a comment naming the mro2nf build that
+transpiled it. Nextflow keys a task's `-resume` cache on its script text and
+inputs, never on what the `mre` binary does, so the comment is what makes a
+project re-transpiled by another build re-run its tasks instead of reusing
+outputs an older `mre` shaped. A re-run of the same build stays cached. The
+version is the `-ldflags` stamp (`git describe --tags --always --dirty` under
+`make build`), else the module version Go stamps: an uncommitted edit to a
+dev build keeps its commit's key, so local re-runs stay cached between
+rebuilds.
 
 ### 4.2 A split stage → SPLIT / MAIN / JOIN
 

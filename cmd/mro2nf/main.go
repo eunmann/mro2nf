@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/config"
@@ -21,6 +22,23 @@ import (
 
 // version is set via -ldflags at build time.
 var version = "dev"
+
+// buildVersion is the -ldflags version, else the main module version the Go
+// toolchain stamps: the tag of a `go install …@v`, or for a plain `go build`
+// in a checkout a pseudo-version naming the commit (+dirty when modified).
+// Every task's -resume cache key names it (emit.Options.Version), so an
+// unstamped build must not share one "dev" key across commits.
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	return version
+}
 
 // errUsage is returned when the command-line arguments are invalid.
 var errUsage = errors.New("usage: mro2nf [-o dir] [-mropath path] <pipeline.mro>")
@@ -56,7 +74,7 @@ func run(args []string) error {
 
 	if *f.showVersion {
 		// Writing the version line to stdout cannot meaningfully fail.
-		_, _ = fmt.Fprintln(os.Stdout, "mro2nf", version)
+		_, _ = fmt.Fprintln(os.Stdout, "mro2nf", buildVersion())
 
 		return nil
 	}
@@ -177,6 +195,7 @@ func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (e
 		Native:          *f.native,
 		InlinePipelines: *f.inlinePipelines, ConfineOutputs: *f.confineOutputs,
 		MROPath: roots, AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
+		Version: buildVersion(),
 	}, nil
 }
 

@@ -111,6 +111,8 @@ type Options struct {
 	// their entry/return BIND tasks disappear (#221). Orchestration-only; outputs
 	// are byte-identical.
 	InlinePipelines bool
+	// Version is the transpiler build, part of every task's -resume cache key.
+	Version string
 }
 
 // featureSet extracts the opt-in emission toggles from o. It is the single
@@ -182,6 +184,7 @@ func Emit(prog *ir.Program, opts Options) error {
 		features: features,
 		code:     opts.StageCode,
 		plan:     buildPlan(prog, features),
+		version:  opts.Version,
 	}
 
 	// Container targets bake in-container paths and ship a self-contained Docker

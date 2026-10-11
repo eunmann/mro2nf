@@ -32,6 +32,26 @@ type genCtx struct {
 	// resolved once in buildPlan so the process/wiring/include sites read a fixed
 	// decision instead of re-deriving fuseable*/forward predicates.
 	plan emitPlan
+	// version is the transpiler build every process script names (scriptHead).
+	version string
+}
+
+// scriptHead renders the lines every process script opens with, at the
+// script's four-space indent.
+func (g genCtx) scriptHead() string {
+	return g.scriptHeadAt("    ")
+}
+
+// scriptHeadAt is scriptHead at a given indent. Nextflow keys a task's -resume
+// cache on its script text and inputs, never on what the mre binary does, so
+// the build is named in the text: a project transpiled by another build then
+// misses the caches of tasks whose outputs that build may shape differently,
+// and a re-run of the same build stays cached (#449). Quoting keeps the
+// version on one line.
+func (g genCtx) scriptHeadAt(indent string) string {
+	quoted := strings.ReplaceAll(gstringLit(strconv.Quote(g.version)), `"`, `\"`)
+
+	return indent + "# mro2nf " + quoted + "\n"
 }
 
 // stageCmd renders a stage-phase invocation through `mre` + the Martian adapter
@@ -378,7 +398,7 @@ func genSingleStage(b *strings.Builder, s *ir.Stage, base string, g genCtx) {
     %[6]s
   script:
     """
-    %[3]s -args args%[4]s -work . -o outs
+%[7]s    %[3]s -args args%[4]s -work . -o outs
     """
 }
 
@@ -392,7 +412,7 @@ workflow wf_%[1]s {
 }
 
 `, s.Name, stageDirectives(s, ""), base, g.producerArgs(s.Name, types.RoleMainOut),
-		bundleInput("args"), bundleOutput("outs"))
+		bundleInput("args"), bundleOutput("outs"), g.scriptHead())
 }
 
 func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
@@ -410,7 +430,7 @@ func genSplitProcesses(b *strings.Builder, s *ir.Stage, g genCtx, base string) {
     path 'chunk_*', emit: chunks, type: 'dir', optional: true
   script:
     """
-    %[3]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir .%[6]s
+%[15]s    %[3]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir .%[6]s
     """
 }
 
@@ -423,7 +443,7 @@ process %[1]s_MAIN {
     path "out_${chunk.baseName}", type: 'dir'
   script:
     """
-    %[4]s -args args -chunk ${chunk}%[7]s -work . -o out_${chunk.baseName}
+%[15]s    %[4]s -args args -chunk ${chunk}%[7]s -work . -o out_${chunk.baseName}
     """
 }
 
@@ -440,7 +460,7 @@ process %[1]s_JOIN {
     %[13]s
   script:
     """
-    %[5]s -args args %[14]s%[8]s -work . -o outs
+%[15]s    %[5]s -args args %[14]s%[8]s -work . -o outs
     """
 }
 
@@ -449,7 +469,8 @@ process %[1]s_JOIN {
 		g.producerArgs(s.Name, types.RoleMainOut),
 		g.producerArgs(s.Name, types.RoleOut),
 		stageDirectives(s, "res"), stageDirectives(s, "join"),
-		bundleInput("args"), bundleInputElems("args"), bundleOutput("outs"), joinGatherFlags)
+		bundleInput("args"), bundleInputElems("args"), bundleOutput("outs"), joinGatherFlags,
+		g.scriptHead())
 }
 
 // joinGatherFlags points a JOIN at its staged chunk bundles: mre lists the task
@@ -492,11 +513,11 @@ func genDisableProcess(b *strings.Builder, pipeline string, c ir.Call, g genCtx)
     path 'disable', type: 'dir'
   script:
     """
-    '%[3]s' bind -spec 'spec.json' -pipeargs pipeargs%[4]s -o disable
+%[5]s    '%[3]s' bind -spec 'spec.json' -pipeargs pipeargs%[4]s -o disable
     """
 }
 
-`, disableName(pipeline, c.Name), block, g.mre, arg)
+`, disableName(pipeline, c.Name), block, g.mre, arg, g.scriptHead())
 }
 
 // bindInputs renders the input block and the -inputs argument for a bind/fork
@@ -640,11 +661,11 @@ func genBindProcess(b *strings.Builder, name string, bindings []ir.Binding, g ge
     %[6]s
   script:
     """
-%[7]s    '%[3]s' bind -spec 'spec.json' -pipeargs pipeargs%[4]s -o args%[5]s
+%[8]s%[7]s    '%[3]s' bind -spec 'spec.json' -pipeargs pipeargs%[4]s -o args%[5]s
     """
 }
 
-`, name, block, g.mre, arg, prodArgs, bundleOutput("args"), pre)
+`, name, block, g.mre, arg, prodArgs, bundleOutput("args"), pre, g.scriptHead())
 }
 
 // genForkBindProcess emits a process that resolves a map call's bindings into
@@ -659,11 +680,12 @@ func genForkBindProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c 
     path 'forkmeta2.json', emit: keys
   script:
     """
-%[7]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -chunkdir . -mapmode %[6]s%[5]s
+%[8]s%[7]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -chunkdir . -mapmode %[6]s%[5]s
     """
 }
 
-`, forkName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre)
+`, forkName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre,
+		g.scriptHead())
 }
 
 // genGateProcess emits a gate's task (#433): `mre gate` evaluates its flags
@@ -678,11 +700,11 @@ func genGateProcess(b *strings.Builder, p *ir.Pipeline, c ir.Call, prog *ir.Prog
     %[5]s
   script:
     """
-%[6]s    %[3]s -pipeargs pipeargs%[4]s -o gate
+%[7]s%[6]s    %[3]s -pipeargs pipeargs%[4]s -o gate
     """
 }
 
-`, gateName(p.Name, c.Name), block, g.gateCmd(p.Name, c), arg, bundleOutput("gate"), pre)
+`, gateName(p.Name, c.Name), block, g.gateCmd(p.Name, c), arg, bundleOutput("gate"), pre, g.scriptHead())
 }
 
 // gateCmd is the `mre gate` command of gate c in pipeline, less its
@@ -704,13 +726,13 @@ func genNullForksProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, c
     %[8]s
   script:
     """
-%[7]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -keysonly -keysfile forkmeta2.json -mapmode %[6]s%[5]s
+%[10]s%[7]s    '%[3]s' forkbind -spec 'spec.json' -pipeargs pipeargs%[4]s -keysonly -keysfile forkmeta2.json -mapmode %[6]s%[5]s
     %[9]s
     """
 }
 
 `, nullForksName(p.Name, c.Name), block, g.mre, arg, g.producerArgs(c.Callable, types.RoleIn), mapModeArg(c), pre,
-		bundleOutput("merged"), g.nullForksMergeCmd(p.Name, c, calleeOutNames(prog, c.Callable)))
+		bundleOutput("merged"), g.nullForksMergeCmd(p.Name, c, calleeOutNames(prog, c.Callable)), g.scriptHead())
 }
 
 // nullForksMergeCmd is the `mre merge -nullforks` of a NULLFORKS task, which
@@ -746,14 +768,14 @@ func genMergeProcess(b *strings.Builder, pipeline string, c ir.Call, calleeOuts 
     %[3]s
   script:
     """
-    %[2]s
+%[4]s    %[2]s
     """
 }
 
 `, mergeName(pipeline, c.Name),
 		g.mergeCmd(c.Callable, calleeOuts, ".", "forkmeta2.json", "merged",
 			g.plan.pipes[pipeline].calls[c.Name].mergeFlags()),
-		bundleOutput("merged"))
+		bundleOutput("merged"), g.scriptHead())
 }
 
 func genPipelineWorkflow(b *strings.Builder, p *ir.Pipeline, g genCtx) {
@@ -1234,14 +1256,14 @@ func genFusedSplitProcess(b *strings.Builder, pipeline string, c ir.Call, s *ir.
     path 'chunk_*', emit: chunks, type: 'dir', optional: true
   script:
     """
-    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
+%[10]s    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
     %[6]s -args args -work . -o chunks.json -joinres joinres.json -chunkdir .%[9]s
     """
 }
 
 `, fusedSplitProc(pipeline, c.Name), stageDirectives(s, ""), block, g.mre, arg, splitCmd,
 		bundleOutputEmit("args", "args"), g.producerArgs(c.Callable, types.RoleIn),
-		g.producerArgs(s.Name, types.RoleChunkIn))
+		g.producerArgs(s.Name, types.RoleChunkIn), g.scriptHead())
 }
 
 // genFusedSplitWorkflow emits the per-call workflow wiring the fused SPLIT to the
@@ -1301,14 +1323,14 @@ func genFusedStageProcess(b *strings.Builder, prog *ir.Program, p *ir.Pipeline, 
     %[7]s
   script:
     """
-%[10]s    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
+%[11]s%[10]s    '%[4]s' bind -spec 'spec.json' -pipeargs pipeargs%[5]s -o args%[8]s
     %[6]s -args args%[9]s -work . -o outs
     """
 }
 
 `, fusedName(p.Name, c.Name), stageDirectives(s, ""), block, g.mre, arg, base,
 		bundleOutput("outs"), g.producerArgs(c.Callable, types.RoleIn),
-		g.producerArgs(c.Callable, types.RoleMainOut), pre)
+		g.producerArgs(c.Callable, types.RoleMainOut), pre, g.scriptHead())
 }
 
 // genMappedProcesses emits the processes a kindMapped call needs: the FORK

@@ -87,6 +87,14 @@ func checkGathers(t *testing.T, where, src string, seen map[string]int) {
 func emitNF(t *testing.T, mro string, native bool) map[string]string {
 	t.Helper()
 
+	return emitNFOpts(t, mro, emit.Options{Native: native})
+}
+
+// emitNFOpts is emitNF under the mode flags and version in opts; the paths
+// are filled in here.
+func emitNFOpts(t *testing.T, mro string, opts emit.Options) map[string]string {
+	t.Helper()
+
 	base := filepath.Dir(mro)
 
 	ast, err := frontend.Parse(mro, []string{base}, false)
@@ -100,11 +108,11 @@ func emitNF(t *testing.T, mro string, native bool) map[string]string {
 	}
 
 	dir := t.TempDir()
-	if err := emit.Emit(prog, emit.Options{
-		OutDir: dir, Mre: stubMre(t), Shell: "/x/martian_shell.py", Mrjob: "/x/mrjob",
-		MROFile: "pipeline.mro", MRODir: base, Native: native,
-	}); err != nil {
-		t.Fatalf("emit %s (native=%v): %v", mro, native, err)
+	opts.OutDir, opts.Mre, opts.Shell, opts.Mrjob = dir, stubMre(t), "/x/martian_shell.py", "/x/mrjob"
+	opts.MROFile, opts.MRODir = "pipeline.mro", base
+
+	if err := emit.Emit(prog, opts); err != nil {
+		t.Fatalf("emit %s (native=%v, inline=%v): %v", mro, opts.Native, opts.InlinePipelines, err)
 	}
 
 	out := map[string]string{}

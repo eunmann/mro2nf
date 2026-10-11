@@ -155,6 +155,32 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 	}
 }
 
+// TestBuildVersionReachesOptions checks the -ldflags version reaches Emit,
+// whose every process script names it as the task's -resume cache key (#449).
+// A test binary has no stamped module version, so an unstamped build is dev.
+func TestBuildVersionReachesOptions(t *testing.T) {
+	for _, stamp := range []string{"v1.2.3-4-gabcdef0-dirty", "dev"} {
+		t.Run(stamp, func(t *testing.T) {
+			old := version
+			version = stamp
+
+			t.Cleanup(func() { version = old })
+
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			f := defineTranspileFlags(fs)
+
+			opts, err := f.options(fs, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if opts.Version != stamp {
+				t.Errorf("Version = %q, want %q", opts.Version, stamp)
+			}
+		})
+	}
+}
+
 // TestSourceRootFlagsReachOptions checks an explicit -mropath reaches Emit
 // split into the roots that bound copied files while the implicit "." adds
 // none, and that copying an external file takes the explicit
