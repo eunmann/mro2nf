@@ -47,8 +47,6 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
 | Nextflow `default` | 104 s | 223 | 108 | 115 | 11 | ✅ identical |
 | Nextflow `-native` | 104 s | 220 | 108 | 112 | 11 | ✅ identical |
 | Nextflow `-native -native-runner` | 105 s | 220 | 108 | 112 | 11 | ✅ identical |
-| Nextflow `-fold-disables -fuse-chains` | 105 s | 223 | 108 | 115 | 11 | ✅ identical |
-| Nextflow *all four* | 105 s | 220 | 108 | 112 | 11 | ✅ identical |
 
 "Plumbing" = data-plane tasks Nextflow externalizes that Martian does in-process
 (`BIND`/`FORK`/`MERGE`/`DISABLE`/`PUBLISH`/`LAYOUT`/`BUILD_ENTRY_ARGS`).
@@ -71,11 +69,8 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
 
 - **The opt-in levers cut orchestration *structure*, not local wall time.**
   `-native` drops a few plumbing tasks (`BUILD_ENTRY_ARGS` + tighter scatter);
-  `-fold-disables`/`-fuse-chains` find little to prune or fuse here because
-  CellRanger's disables are **runtime-data-dependent** (not entry-constant-
-  foldable) and few chains are single-consumer equal-resource; `-native-runner`
-  removes the `mre`→`martian_shell.py` process hop but not the dominant Python
-  import. So wall time is flat across all variations. Their value is where the
+  `-native-runner` removes the `mre`→`martian_shell.py` process hop but not the
+  dominant Python import. So wall time is flat across all variations. Their value is where the
   bench gate measures it — task/plumbing count, bytes staged, container launches
   — which translates to **cost and scale on a real backend (AWS Batch), not
   local seconds on tiny data**. On production-sized inputs, stage compute
@@ -98,7 +93,7 @@ cellranger testrun --id=golden --localcores=8 --localmem=16 --disable-ui
 mro2nf -allow-external-files -mropath $CR/mro -mre ./mre \
        -mrjob $CR/external/martian/bin/mrjob \
        -shell $CR/external/martian/adapters/python/martian_shell.py \
-       -o out __<id>.mro           # add -native/-native-runner/-fold-disables/-fuse-chains to compare
+       -o out __<id>.mro           # add -native/-native-runner to compare
 
 # 3. Run (source the bundle env so cr_* + the bundled python3 are on PATH)
 source $CR/sourceme.bash

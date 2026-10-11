@@ -200,10 +200,9 @@ var goldenCases = []goldenCase{
 	// #59 Lever 4 fold-safety: SRC has a second consumer via disabled = SRC.flag,
 	// so it must NOT fold under -fuse-chains; TestFuseChains asserts that + reruns.
 	{"chain_fuse_disable", "chain_fuse_disable", "expected/outs.json"},
-	// #59 Lever 1 baseline: entry bakes skip=true so GEN is always disabled; the
-	// default (gated) run must match the golden; TestFoldDisables reruns it with
-	// -fold-disables (GEN pruned) and asserts the same output.
-	{"fold_disable", "fold_disable", "expected/outs.json"},
+	// The entry bakes skip=true, so the runtime gate skips GEN and its consumer
+	// reads GEN's null output.
+	{"disabled_entry_skip", "disabled_entry_skip", "expected/outs.json"},
 	// #81 baseline: a 3-stage linear chain A->B->C; default runs three tasks,
 	// TestFuseChains reruns it with -fuse-chains (all fold into one) — same output.
 	{"chain_fuse3", "chain_fuse3", "expected/outs.json"},
@@ -356,39 +355,6 @@ func TestFuseChains(t *testing.T) {
 	goldenJSON(t,
 		filepath.Join(nproj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "chain_fuse3", "expected", "outs.json"))
-}
-
-// TestFoldDisables verifies #59 Lever 1: with -fold-disables, an entry-baked
-// always-disabled stage (GEN, gated on self.skip with skip=true) is pruned to
-// its null output — no GEN stage/bind/gate in the pipeline — and the run stays
-// byte-identical to the golden (which mrp produced by skipping GEN).
-func TestFoldDisables(t *testing.T) {
-	requireTools(t, "nextflow", "java")
-
-	proj := transpile(t, "fold_disable", "-fold-disables")
-
-	mod, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_P.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !strings.Contains(string(mod), "ch_GEN = Channel.value(") {
-		t.Errorf("-fold-disables must prune GEN to its null output:\n%s", mod)
-	}
-
-	// No stage/bind process definition for GEN remains (the return bind still
-	// consumes ch_GEN's null, which is correct).
-	if strings.Contains(string(mod), "_P__GEN {") {
-		t.Errorf("-fold-disables left a GEN process definition in the pipeline:\n%s", mod)
-	}
-
-	if err := runNextflow(t, proj); err != nil {
-		t.Fatal(err)
-	}
-
-	goldenJSON(t,
-		filepath.Join(proj, "results", "pipeline_outs.json"),
-		filepath.Join(root, "testdata", "fold_disable", "expected", "outs.json"))
 }
 
 // renderOverrideParams instantiates the fixture's override-params.json into
@@ -822,19 +788,16 @@ func TestNativeMode(t *testing.T) {
 	}
 }
 
-// TestNativeCombos guards -native composed with the other plan levers (#122):
-// buildPlan folds -fuse-chains' kindFusedChain and -fold-disables'
-// kindFoldedOff into the same plan -native scatters, but nothing exercised the
-// compositions. Each case pins the exact surviving data-plane inventory
-// (empty: these linear value shapes collapse fully) and must reproduce the
-// committed mrp golden — but plane emptiness and golden output alone cannot
-// distinguish "composed" from "lever silently ignored", since each fixture
-// also collapses and matches under plain -native. So each case additionally
-// asserts the lever fired in the generated module: a fused chain runs as ONE
-// process staging every constituent's bind spec (specs counts them, absent
-// names the folded-away standalone processes), and a folded-off gate leaves
-// only its null channel (fired) with no stage process (absent), mirroring
-// TestFuseChains/TestFoldDisables' single-flag structural checks.
+// TestNativeCombos guards -native composed with -fuse-chains (#122): buildPlan
+// folds kindFusedChain into the same plan -native scatters. Each case pins the
+// exact surviving data-plane inventory (empty: these linear value shapes
+// collapse fully) and must reproduce the committed mrp golden — but plane
+// emptiness and golden output alone cannot distinguish "composed" from "lever
+// silently ignored", since each fixture also collapses and matches under plain
+// -native. So each case additionally asserts the lever fired in the generated
+// module: a fused chain runs as ONE process staging every constituent's bind
+// spec (specs counts them, absent names the folded-away standalone processes),
+// mirroring TestFuseChains' single-flag structural checks.
 func TestNativeCombos(t *testing.T) {
 	t.Parallel()
 
@@ -845,8 +808,7 @@ func TestNativeCombos(t *testing.T) {
 		flags   []string
 		golden  string
 		module  string   // pipeline module the lever rewrites
-		specs   int      // fused-chain spec inputs the surviving process stages (0: not a fusion case)
-		fired   string   // substring proving the lever fired (fusion cases use specs instead)
+		specs   int      // fused-chain spec inputs the surviving process stages
 		absent  []string // declarations the lever must have removed
 	}{
 		{
@@ -865,14 +827,6 @@ func TestNativeCombos(t *testing.T) {
 			specs:   3,
 			absent:  []string{"process STAGE_1_P__A", "process STAGE_1_P__B"},
 		},
-		{
-			fixture: "fold_disable",
-			flags:   []string{"-native", "-fold-disables"},
-			golden:  "expected/outs.json",
-			module:  "pipe_P.nf",
-			fired:   "ch_GEN = Channel.value(",
-			absent:  []string{"process STAGE_1_P__GEN"},
-		},
 	}
 
 	for _, tc := range cases {
@@ -887,15 +841,9 @@ func TestNativeCombos(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if tc.specs > 0 {
-				if got := strings.Count(string(mod), "path 'spec_"); got != tc.specs {
-					t.Errorf("%v: want one fused process staging %d specs, got %d spec inputs:\n%s",
-						tc.flags, tc.specs, got, mod)
-				}
-			}
-
-			if tc.fired != "" && !strings.Contains(string(mod), tc.fired) {
-				t.Errorf("%v: lever did not fire, missing %q:\n%s", tc.flags, tc.fired, mod)
+			if got := strings.Count(string(mod), "path 'spec_"); got != tc.specs {
+				t.Errorf("%v: want one fused process staging %d specs, got %d spec inputs:\n%s",
+					tc.flags, tc.specs, got, mod)
 			}
 
 			for _, a := range tc.absent {
@@ -1203,7 +1151,7 @@ func TestNativeComplete(t *testing.T) {
 		fixture, golden string
 	}{
 		{fixture: "diamond_min", golden: "expected/outs.json"},
-		{fixture: "fold_disable", golden: "expected/outs.json"},
+		{fixture: "disabled_entry_skip", golden: "expected/outs.json"},
 		{fixture: "native_file_return", golden: "expected/nf_outs.json"},
 		{fixture: "dir_hidden", golden: "expected/outs.json"},
 		{fixture: "file_min", golden: "expected/outs.json"},

@@ -30,16 +30,15 @@ func TestStageProcessNameInventory(t *testing.T) {
 		mode string       // labels the emit mode in failure messages
 		opts emit.Options // only the mode flags; emittedProcessNames fills the rest
 	}{
-		{"split_test", "default", emit.Options{}},                           // plain + fused split triads, fused non-split (#16)
-		{"stage_entry", "default", emit.Options{}},                          // bare stage process
-		{"fork_min", "default", emit.Options{}},                             // keyed non-split _MAP
-		{"fork_min", "native", emit.Options{Native: true}},                  // native scatter: bare fused per-call process (#76)
-		{"map_pipe_split", "default", emit.Options{}},                       // keyed split triad (_SPLIT_K/_MAIN_K/_JOIN_K)
-		{"map_pipe", "default", emit.Options{}},                             // keyed fused bind+main (_K, #99)
-		{"map_pipe_nested", "default", emit.Options{}},                      // keyed element scatter (_KS, #99)
-		{"chain_fuse3", "fuse-chains", emit.Options{FuseChains: true}},      // fused linear chain (#59 Lever 4)
-		{"fold_disable", "fold-disables", emit.Options{FoldDisables: true}}, // always-off stage pruned (#59 Lever 1)
-		{"split_test", "native-runner", emit.Options{NativeRunner: true}},   // direct-call runner stage hop (#79)
+		{"split_test", "default", emit.Options{}},                         // plain + fused split triads, fused non-split (#16)
+		{"stage_entry", "default", emit.Options{}},                        // bare stage process
+		{"fork_min", "default", emit.Options{}},                           // keyed non-split _MAP
+		{"fork_min", "native", emit.Options{Native: true}},                // native scatter: bare fused per-call process (#76)
+		{"map_pipe_split", "default", emit.Options{}},                     // keyed split triad (_SPLIT_K/_MAIN_K/_JOIN_K)
+		{"map_pipe", "default", emit.Options{}},                           // keyed fused bind+main (_K, #99)
+		{"map_pipe_nested", "default", emit.Options{}},                    // keyed element scatter (_KS, #99)
+		{"chain_fuse3", "fuse-chains", emit.Options{FuseChains: true}},    // fused linear chain (#59 Lever 4)
+		{"split_test", "native-runner", emit.Options{NativeRunner: true}}, // direct-call runner stage hop (#79)
 	}
 
 	seen := map[string]bool{}

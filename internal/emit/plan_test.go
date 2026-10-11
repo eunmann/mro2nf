@@ -82,26 +82,14 @@ func TestBuildPlanChainFusion(t *testing.T) {
 	}
 }
 
-// TestBuildPlanFoldDisables pins #59 Lever 1: with -fold-disables an entry
-// `disabled = self.skip` gate whose input the entry bakes true folds the call to
-// kindFoldedOff (pruned to its null output); without the flag it stays a normal
-// natively-gated disabled leaf. A disable that is NOT entry-determinable (an
-// upstream CALL.out ref) never folds, even with the flag on.
-func TestBuildPlanFoldDisables(t *testing.T) {
-	fd := lowerFixture(t, "fold_disable")
+// TestBuildPlanEntryBakedGateStaysRuntime pins that a `disabled = self.skip`
+// gate whose input the entry call bakes true stays a driver-read runtime gate,
+// so overriding the input at launch re-enables the call.
+func TestBuildPlanEntryBakedGateStaysRuntime(t *testing.T) {
+	prog := lowerFixture(t, "disabled_entry_skip")
 
-	if got := buildPlan(fd, featureSet{}).pipes["P"].calls["GEN"].kind; got != kindFusedDisabled {
-		t.Errorf("without -fold-disables: GEN kind = %d, want kindFusedDisabled", got)
-	}
-	if got := buildPlan(fd, featureSet{foldDisables: true}).pipes["P"].calls["GEN"].kind; got != kindFoldedOff {
-		t.Errorf("with -fold-disables: GEN kind = %d, want kindFoldedOff", got)
-	}
-
-	// disabled_callref's WORK is gated on an upstream output (FLAG.on) — runtime-
-	// derived, so it must NOT fold even with the flag on.
-	cr := lowerFixture(t, "disabled_callref")
-	if got := buildPlan(cr, featureSet{foldDisables: true}).pipes["DC"].calls["WORK"].kind; got == kindFoldedOff {
-		t.Errorf("WORK gated on FLAG.on must not fold (runtime-derived), got kindFoldedOff")
+	if got := buildPlan(prog, featureSet{}).pipes["P"].calls["GEN"].kind; got != kindFusedDisabled {
+		t.Errorf("GEN kind = %d, want kindFusedDisabled", got)
 	}
 }
 
@@ -643,7 +631,7 @@ func TestPlanKeyedKindFlagInvariant(t *testing.T) {
 	sets := []featureSet{
 		{},
 		{native: true},
-		{fuseChains: true, foldDisables: true, native: true, nativeRunner: true},
+		{fuseChains: true, native: true, nativeRunner: true},
 	}
 
 	for _, fixture := range []string{"map_pipe_nested", "map_pipe_disabled_nested", "map_pipe_split", "kitchen_sink"} {

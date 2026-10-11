@@ -27,7 +27,6 @@ func TestLoad(t *testing.T) {
 target: awsbatch
 container: "ecr/repo:1"   # inline comment kept out of the value
 fuse-chains: true
-fold-disables: false
 native: true
 native-runner: false
 `))
@@ -43,9 +42,6 @@ native-runner: false
 	}
 	if cfg.FuseChains == nil || !*cfg.FuseChains {
 		t.Errorf("FuseChains = %v, want true", cfg.FuseChains)
-	}
-	if cfg.FoldDisables == nil || *cfg.FoldDisables {
-		t.Errorf("FoldDisables = %v, want false", cfg.FoldDisables)
 	}
 	if cfg.Native == nil || !*cfg.Native {
 		t.Errorf("Native = %v, want true", cfg.Native)
@@ -84,6 +80,7 @@ func TestLoadRejectsBadInput(t *testing.T) {
 		"malformed line":    "no colon here\n",
 		"non-bool":          "fuse-chains: yes-please\n",
 		"non-bool native":   "native: yes-please\n",
+		"deleted key":       "fold-disables: true\n",
 	}
 
 	for name, body := range cases {

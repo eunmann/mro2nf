@@ -315,10 +315,9 @@ func genPipeProcesses(b *strings.Builder, p *ir.Pipeline, prog *ir.Program, g ge
 
 		switch cp.kind {
 		// A folded chain source (kindFusedAway) emits nothing; a pure forward
-		// (kindForward) routes the producer straight in (#14); an always-disabled
-		// call (kindFoldedOff, #59 Lever 1) emits only its null output in the
-		// wiring — all three need no process.
-		case kindFusedAway, kindForward, kindFoldedOff:
+		// (kindForward) routes the producer straight in (#14) — neither needs a
+		// process.
+		case kindFusedAway, kindForward:
 
 		// #59 Lever 4: the chain consumer emits the combined producer+consumer
 		// process instead of a plain fused stage.
@@ -862,12 +861,6 @@ func genCallWiring(b *strings.Builder, p *ir.Pipeline, c ir.Call, g genCtx) {
 	switch cp.kind {
 	// #59 Lever 4: a source folded into its consumer emits no wiring of its own.
 	case kindFusedAway:
-
-	// #59 Lever 1: an always-disabled call is pruned to its pre-generated null
-	// output bundle — downstream reads it exactly as it would a runtime skip.
-	case kindFoldedOff:
-		fmt.Fprintf(b, "    ch_%s = Channel.value(%s)\n", c.Name,
-			nullBundle("${projectDir}/nulls/"+Qualify(pipeline, c.Name)))
 
 	// The chain consumer runs the combined producer+consumer process off pipeargs.
 	case kindFusedChain:

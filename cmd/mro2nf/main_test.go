@@ -373,6 +373,21 @@ func TestRunRefusesPipelineMrpCannotInstantiate(t *testing.T) {
 	}
 }
 
+// TestRunRejectsDeletedFlags checks a deleted emission-mode flag is an unknown
+// flag, so a stale invocation fails instead of emitting a different project.
+func TestRunRejectsDeletedFlags(t *testing.T) {
+	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
+
+	for _, name := range []string{"fold-disables"} {
+		t.Run(name, func(t *testing.T) {
+			err := run([]string{"-o", t.TempDir(), "-" + name, mro})
+			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+name) {
+				t.Errorf("run with -%s: want an undefined-flag error, got %v", name, err)
+			}
+		})
+	}
+}
+
 // TestRunRefusesConfigToolOutsideRoots checks a .mro2nf.yml shipped beside a
 // shared .mro cannot have a container target bake a host file as a tool,
 // while the same path passed as a flag is the user's choice and is baked.

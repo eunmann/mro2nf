@@ -54,10 +54,10 @@ import (
 // lintConfigs is the emission-branch dimension (#122): each opt-in flag routes
 // the emitter down generator branches the default emission never reaches
 // (native scatter/merge, the direct-call runner scripts, fused-chain
-// processes, folded-off null channels), so each fixture is linted under every
-// single flag plus the compositions that route down distinct combined
-// branches: -native -native-runner, and -native with each plan lever
-// (TestNativeCombos proves those emit Groovy neither flag emits alone).
+// processes), so each fixture is linted under every single flag plus the
+// compositions that route down distinct combined branches: -native
+// -native-runner, and -native -fuse-chains (TestNativeCombos proves that
+// emits Groovy neither flag emits alone).
 var lintConfigs = []struct {
 	name  string
 	flags []string
@@ -66,10 +66,8 @@ var lintConfigs = []struct {
 	{"native", []string{"-native"}},
 	{"native-runner", []string{"-native-runner"}},
 	{"fuse-chains", []string{"-fuse-chains"}},
-	{"fold-disables", []string{"-fold-disables"}},
 	{"native+native-runner", []string{"-native", "-native-runner"}},
 	{"native+fuse-chains", []string{"-native", "-fuse-chains"}},
-	{"native+fold-disables", []string{"-native", "-fold-disables"}},
 }
 
 // minNextflowMajor/Minor is the first release with `nextflow lint`.

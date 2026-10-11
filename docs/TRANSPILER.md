@@ -121,8 +121,8 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   wrapper, all baked into the generated scripts), `-mropath` (search path for
   `@include`), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
   (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
-  the opt-in emission modes `-fuse-chains`, `-fold-disables`, `-native`, and
-  `-native-runner` (§4.8), `-allow-external-files` (§8, §10), `-config` (a
+  the opt-in emission modes `-fuse-chains`, `-native`, and `-native-runner`
+  (§4.8), `-allow-external-files` (§8, §10), `-config` (a
   `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
   explicit flag always wins — see `internal/config`; `-allow-external-files`
   and `-mropath` have no key, so a config file shipped beside a shared `.mro`
@@ -390,13 +390,13 @@ each file leaf individually and publishes it to its `outs/` path via
 published tree matches an mrp pipestance `outs/` (verified by
 `the Go TestMrpDiff suite`); see §10 for where "results" lives on each target.
 
-### 4.8 Opt-in emission modes: `-fuse-chains`, `-fold-disables`, and channel-native orchestration (`-native`)
+### 4.8 Opt-in emission modes: `-fuse-chains` and channel-native orchestration (`-native`)
 
-Everything in §§4.1–4.7 describes the default emission. Four opt-in flags trade
+Everything in §§4.1–4.7 describes the default emission. Three opt-in flags trade
 some launch-time flexibility for a smaller task graph. All of them are
 **plan-decided**: `buildPlan` (`internal/emit/plan.go`) resolves every call to a
-single `callKind` — plain bind, mapped, forward, one of the fused kinds, folded
-off, or native scatter — once, up front, and the process, wiring, and include
+single `callKind` — plain bind, mapped, forward, one of the fused kinds, or
+native scatter — once, up front, and the process, wiring, and include
 emitters all read that fixed plan, so no two emission sites can disagree about
 how a call is rendered.
 
@@ -404,11 +404,6 @@ how a call is rendered.
   its consumer's task (`kindFusedChain`/`kindFusedAway`), dropping a node per
   fused link. The cost is granularity: `-resume` and per-stage retry treat the
   fused chain as one task.
-- **`-fold-disables`** constant-folds a disable gate the entry invocation
-  already determines (`disabled = self.x` where the entry call bakes `x = true`):
-  the always-disabled call is pruned to its null output (`kindFoldedOff`). The
-  transpiler warns per pruned call that overriding the gate input at launch
-  will **not** re-enable it.
 - **`-native`** replaces the data-plane *tasks* with driver-side channel wiring,
   without touching the stage tasks or the adapter ABI:
   - **Baked entry args.** The entry bundle is resolved once at transpile time by
