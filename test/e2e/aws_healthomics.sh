@@ -54,7 +54,7 @@ BUCKET="$(out WorkBucketName)"; OMICS_ROLE="$(out OmicsRoleArn)"
 echo "stack=$STACK region=$REGION bucket=$BUCKET omics_role=$OMICS_ROLE"
 
 MRE="$ROOT/mre-linux"
-[ -x "$MRE" ] || GOOS=linux GOARCH=amd64 go build -o "$MRE" ./cmd/mre
+[ -x "$MRE" ] || CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$MRE" ./cmd/mre
 SHELL_PY="$ROOT/vendor-martian/python/martian_shell.py"
 WORK="$(mktemp -d)"
 

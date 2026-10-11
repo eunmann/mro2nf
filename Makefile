@@ -23,8 +23,12 @@ COVER_MIN ?= 76
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-12s %s\n", $$1, $$2}'
 
+# Static (no cgo), so a binary runs on any Linux libc, including inside the
+# runtime images; -trimpath keeps the builder's paths out of the binaries.
+# release.yml, deploy/runtime/Dockerfile and the e2e harness build the same way
+# (TestBuildRecipesStaticAndTrimmed, TestBinariesStaticAndPathFree).
 build: ## Build mro2nf and mre
-	@for b in $(BINS); do go build -ldflags "$(LDFLAGS)" -o $$b ./cmd/$$b; done
+	@for b in $(BINS); do CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $$b ./cmd/$$b; done
 
 test: ## Run unit tests
 	go test ./... 2>&1 | tee artifacts/test.log

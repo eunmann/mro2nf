@@ -12,8 +12,13 @@
 # your downstream image (this base covers the common py/exec stages).
 
 # Build mre on the native build platform and cross-compile to the target arch, so
-# only the small final stage is emulated when building arm64.
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+# only the small final stage is emulated when building arm64. The image's Go is
+# the go.mod toolchain: the image sets GOTOOLCHAIN=local, so it never switches.
+#
+# Base images are pinned by digest, so a moved tag cannot change the image;
+# Dependabot (docker) bumps tag and digest together. internal/emit's generated
+# Dockerfile uses the same final-stage base (TestGeneratedBaseMatchesRuntime).
+FROM --platform=$BUILDPLATFORM golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -23,9 +28,9 @@ ARG TARGETOS TARGETARCH
 # -X main.version ldflag); release.yml passes it via --build-arg.
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/mre ./cmd/mre
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/mre ./cmd/mre
 
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 # bash launcher + ps (Nextflow task metrics) + coreutils + aws CLI (S3 staging on
 # AWS Batch). No ENTRYPOINT: the backend invokes the generated command directly.
 RUN apt-get update \

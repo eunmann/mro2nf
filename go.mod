@@ -2,6 +2,8 @@ module github.com/eunmann/mro2nf
 
 go 1.26
 
+toolchain go1.26.9
+
 require (
 	github.com/google/go-cmp v0.7.0
 	github.com/martian-lang/martian v0.0.0-20260506211707-4a558e7dd93b
