@@ -502,6 +502,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #431: a file reached from several outputs is named by the first path
 	// mrp published it at, through both LAYOUT variants.
 	{name: "shared_out_file", native: true},
+	// #432: files below a 2-D array, reached through a struct projection and
+	// a whole sub-pipeline ref, stay unpublished, as mrp leaves them.
+	{name: "nested_path_unpublished", native: true},
 	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
 	{name: "preflight_ungated"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.

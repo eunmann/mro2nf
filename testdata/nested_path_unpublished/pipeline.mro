@@ -1,0 +1,65 @@
+# Files below an array of two or more dimensions (#432): mrp's post-processing
+# descends an N-D array one level as if its elements had the base type, so
+# each element fails to move and is left unpublished, while a 1-D array of
+# the same files is published.
+filetype txt;
+
+struct S0(
+    path f0,
+)
+
+struct S2(
+    S0[] f4,
+)
+
+stage MAKES2(
+    out S2 o4,
+    src py "stages/makes2",
+)
+
+stage MAKE2D(
+    in  int   n,
+    out txt[] row,
+    src py    "stages/make2d",
+)
+
+pipeline P1(
+    out S2[] r8,
+)
+{
+    call MAKES2()
+
+    return (
+        r8 = [MAKES2.o4],
+    )
+}
+
+pipeline P0(
+    out txt[][] r3,
+)
+{
+    map call MAKE2D(
+        n = split [1, 2],
+    )
+
+    return (
+        r3 = MAKE2D.row,
+    )
+}
+
+pipeline TOP(
+    out S0[][]  r12,
+    out P0      r7,
+)
+{
+    call P1()
+
+    call P0 as C1()
+
+    return (
+        r12 = P1.r8.f4,
+        r7  = C1,
+    )
+}
+
+call TOP()

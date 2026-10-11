@@ -391,6 +391,57 @@ func TestPublishSharedLeafNamesFirstPath(t *testing.T) {
 	}
 }
 
+// TestPublishNDArrayLeavesFilesUnpublished pins #432: below an array of two or
+// more dimensions, whether an output, a struct field or a typed map's value,
+// mrp moves no file, so nothing is published and each file is null; every
+// other value, an escaped string included, stays as the stage wrote it, one
+// warning names each such output, and a 1-D array still publishes.
+func TestPublishNDArrayLeavesFilesUnpublished(t *testing.T) {
+	params := []ir.Param{
+		{Name: "r12", BaseType: "S0", IsFile: true, ArrayDim: 2},
+		{Name: "grid", BaseType: "txt", IsFile: true, ArrayDim: 2},
+		{Name: "lanes", BaseType: "txt", IsFile: true, MapDim: 3},
+		{Name: "one", BaseType: "txt", IsFile: true, ArrayDim: 1},
+	}
+	structs := map[string]*ir.StructType{"S0": {Name: "S0", Fields: []ir.Param{
+		{Name: "f0", BaseType: "path", IsFile: true},
+		{Name: "s", BaseType: "string"},
+	}}}
+	escaped := "@mre:str:" + marker("L0009")
+	outs := map[string]any{
+		"r12":   []any{[]any{types.Object{{Key: "f0", Value: dirMarker("L0000")}, {Key: "s", Value: escaped}}}},
+		"grid":  []any{[]any{marker("L0001"), nil}, nil},
+		"lanes": types.Object{{Key: "k", Value: []any{[]any{marker("L0002")}}}},
+		"one":   []any{marker("L0003")},
+	}
+
+	var warnings strings.Builder
+
+	pub := newPublisher(structs)
+	pub.warn = &warnings
+	got := mustPublish(t, pub, params, outs)
+
+	want := map[string]any{
+		"r12":   []any{[]any{types.Object{{Key: "f0", Value: nil}, {Key: "s", Value: marker("L0009")}}}},
+		"grid":  []any{[]any{nil, nil}, nil},
+		"lanes": map[string]any{"k": []any{[]any{nil}}},
+		"one":   []any{"one/0.txt"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("published outs mismatch (-want +got):\n%s", diff)
+	}
+
+	if diff := cmp.Diff(map[string][]string{leaf("L0003"): {"one/0.txt"}}, pub.layout); diff != "" {
+		t.Errorf("layout mismatch (-want +got):\n%s", diff)
+	}
+
+	for _, rel := range []string{"r12", "grid", "lanes/k"} {
+		if !strings.Contains(warnings.String(), fmt.Sprintf("files below %q unpublished", rel)) {
+			t.Errorf("no warning for %s in %q", rel, warnings.String())
+		}
+	}
+}
+
 // TestPublishOutsAbsentFileNull guards the null cases: an empty-string leaf and a
 // declared-but-never-written file (which keeps its raw, marker-less path in the
 // sidecar) both resolve to null, matching Martian.
@@ -552,30 +603,30 @@ func TestPublishOutsNonFilePassthrough(t *testing.T) {
 	}
 }
 
-// TestPublishOutsDeepNesting guards the dim arithmetic at depth: a map<txt[][]>
-// (MapDim=3) descends map -> array -> array, and a struct whose field is a
-// map<txt> nests as <param>/<field>/<key>.txt. Both are reachable shapes not
-// covered by the shallower tests.
+// TestPublishOutsDeepNesting guards the dim arithmetic at depth: a
+// map<txt[]>[] ({ArrayDim:1, MapDim:2}) descends array -> map -> array, and a
+// struct whose field is a map<txt> nests as <param>/<field>/<key>.txt. Both
+// are reachable shapes not covered by the shallower tests.
 func TestPublishOutsDeepNesting(t *testing.T) {
 	params := []ir.Param{
-		{Name: "grid", BaseType: "txt", IsFile: true, MapDim: 3}, // map<txt[][]>
-		{Name: "cfg", BaseType: "Cfg", IsFile: true},             // struct{ map<txt> reports }
+		{Name: "grid", BaseType: "txt", IsFile: true, ArrayDim: 1, MapDim: 2}, // map<txt[]>[]
+		{Name: "cfg", BaseType: "Cfg", IsFile: true},                          // struct{ map<txt> reports }
 	}
 	structs := map[string]*ir.StructType{
 		"Cfg": {Name: "Cfg", Fields: []ir.Param{{Name: "reports", BaseType: "txt", IsFile: true, MapDim: 1}}},
 	}
 	outs := map[string]any{
-		"grid": map[string]any{"k": []any{[]any{marker("L0000"), marker("L0001")}, []any{marker("L0002")}}},
+		"grid": []any{map[string]any{"k": []any{marker("L0000"), marker("L0001")}}, map[string]any{"j": []any{marker("L0002")}}},
 		"cfg":  map[string]any{"reports": map[string]any{"r1": marker("L0003"), "r2": marker("L0004")}},
 	}
 
 	got := mustPublish(t, newPublisher(structs), params, outs)
 
 	want := map[string]any{
-		"grid": map[string]any{"k": []any{
-			[]any{"grid/k/0/0.txt", "grid/k/0/1.txt"},
-			[]any{"grid/k/1/0.txt"},
-		}},
+		"grid": []any{
+			map[string]any{"k": []any{"grid/0/k/0.txt", "grid/0/k/1.txt"}},
+			map[string]any{"j": []any{"grid/1/j/0.txt"}},
+		},
 		"cfg": map[string]any{"reports": map[string]any{
 			"r1": "cfg/reports/r1.txt",
 			"r2": "cfg/reports/r2.txt",

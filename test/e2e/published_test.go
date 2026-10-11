@@ -144,7 +144,43 @@ func mrpOutsJSON(allow divergence.Allowlist, fixture, ps string) (any, error) {
 		return nil, err
 	}
 
-	return decodeOutsFile(matches[0], rewrite)
+	v, err := decodeOutsFile(matches[0], rewrite)
+	if err != nil || !allow.Excuses(divergence.RuleMrpUnpublishedNull, fixture) {
+		return v, err
+	}
+
+	return nullUnpublished(v, ps), nil
+}
+
+// nullUnpublished returns v, mrp's outs JSON of the pipestance ps once
+// rewritten, with each path in ps outside its outs dir null: a file mrp left
+// unpublished, which pipeline_outs.json names null.
+func nullUnpublished(v any, ps string) any {
+	inPs := strings.TrimSuffix(ps, "/") + "/"
+	inOuts := inPs + "outs/"
+
+	switch x := v.(type) {
+	case string:
+		if strings.HasPrefix(x, inPs) && !strings.HasPrefix(x, inOuts) {
+			return nil
+		}
+
+		return x
+	case jsonObject:
+		for i := range x {
+			x[i].Value = nullUnpublished(x[i].Value, ps)
+		}
+
+		return x
+	case []any:
+		for i := range x {
+			x[i] = nullUnpublished(x[i], ps)
+		}
+
+		return x
+	default:
+		return v
+	}
 }
 
 // normalizeOutsFile reads an outs JSON file into its compact form, its key

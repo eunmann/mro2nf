@@ -20,7 +20,8 @@ import (
 // file output the stage wrote as a symlink to a host file (as symlink_escape
 // does), a file output the stage wrote as a relative symlink to a link to a
 // host file, two file outputs bound to one stage file, which mrp publishes
-// once and links to from the second, and a struct output whose producer wrote
+// once and links to from the second, a 2-D file array mrp leaves unpublished
+// and names in the stage's files dir, and a struct output whose producer wrote
 // its keys unsorted (as kitchen_sink's stats), which both runtimes publish in
 // that order. It returns the pipestance and results dirs.
 func publishedPair(t *testing.T) (string, string) {
@@ -41,8 +42,10 @@ func publishedPair(t *testing.T) (string, string) {
 
 	chained := mrpChainedOutput(t, ps)
 
-	mrpOuts, err := json.Marshal(map[string]string{
-		"again": shared, "chained": chained, "linked": host, "note": filepath.Join(outs, "note.txt"), "shared": shared,
+	grid := []any{[]any{filepath.Join(ps, "P", "GRID", "fork0", "files", "cell.txt"), nil}}
+
+	mrpOuts, err := json.Marshal(map[string]any{
+		"again": shared, "chained": chained, "grid": grid, "linked": host, "note": filepath.Join(outs, "note.txt"), "shared": shared,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +68,7 @@ func publishedPair(t *testing.T) (string, string) {
 // pairOutsJSON is the pipeline_outs.json of publishedPair with stats as its
 // stats value.
 func pairOutsJSON(stats string) string {
-	return `{"again": "shared.txt", "chained": "chained.txt", "linked": "linked.txt", "note": "note.txt", "shared": "shared.txt", "stats": ` + stats + `}`
+	return `{"again": "shared.txt", "chained": "chained.txt", "grid": [[null, null]], "linked": "linked.txt", "note": "note.txt", "shared": "shared.txt", "stats": ` + stats + `}`
 }
 
 // pairFixture is the fixture publishedPair stands in for.
@@ -199,6 +202,7 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 		{"number_token", pairFixture, intJSON, checkedIn, false},
 		{"without_relative_paths", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "outs-json-relative-paths"), false},
 		{"without_published_symlinks", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "published-symlinks-copied"), false},
+		{"without_unpublished_null", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "unpublished-files-null"), false},
 	}
 
 	for _, tc := range cases {

@@ -311,11 +311,19 @@ func (pub *publisher) isStruct(name string) bool {
 
 // emitArray publishes an array into the rel/ subdir, naming elements by a
 // zero-padded index (width = digits of the element count, matching Martian's
-// WidthForInt) plus the element type's own GetOutFilename suffix.
+// WidthForInt) plus the element type's own GetOutFilename suffix. An array of
+// two or more dimensions publishes nothing: mrp descends it one level as if
+// its elements had the base type, so each element fails to move and mrp
+// leaves it as the stage wrote it (martian/core/post_process.go
+// moveOutArrayDir, moveOutFile, moveOutDir).
 func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) {
 	arr, ok := value.([]any)
 	if !ok {
 		return nil, shapeErr(rel, "array", p, value)
+	}
+
+	if p.ArrayDim > 1 {
+		return pub.unpublishedArray(rel, arr)
 	}
 
 	width := len(strconv.Itoa(len(arr)))
@@ -336,6 +344,86 @@ func (pub *publisher) emitArray(rel string, p ir.Param, value any) (any, error) 
 	}
 
 	return out, nil
+}
+
+// unpublishedArray returns the elements of the N-D array at rel unpublished,
+// warning once when any holds a file, as mrp prints "Could not move output
+// files" for them.
+func (pub *publisher) unpublishedArray(rel string, arr []any) (any, error) {
+	out := make([]any, len(arr))
+	files := false
+
+	for i, ev := range arr {
+		uv, held, err := unpublished(ev)
+		if err != nil {
+			return nil, fmt.Errorf("publish %s: %w", rel, err)
+		}
+
+		out[i], files = uv, files || held
+	}
+
+	if files {
+		// Best-effort diagnostic write: a failed stderr warning must not fail
+		// the publish itself.
+		_, _ = fmt.Fprintf(pub.warn, "mre: publish: leaving the files below %q unpublished and null, as mrp cannot move a file below an array of two or more dimensions\n", rel)
+	}
+
+	return out, nil
+}
+
+// unpublished returns v as mrp leaves an element it cannot move, with each
+// file marker in it null, since an unpublished file has no path relative to
+// results/, and every escaped string restored. held reports whether v holds a
+// file marker.
+func unpublished(v any) (any, bool, error) {
+	switch t := v.(type) {
+	case string:
+		if _, _, ok := shim.CutMarker(t); ok {
+			return nil, true, nil
+		}
+
+		if err := shim.CheckReserved(t); err != nil {
+			return nil, false, fmt.Errorf("unpublished value: %w", err)
+		}
+
+		s, err := shim.UnescapeValue(t)
+		if err != nil {
+			return nil, false, fmt.Errorf("unescape unpublished value: %w", err)
+		}
+
+		return s, false, nil
+	case []any:
+		out := make([]any, len(t))
+		held := false
+
+		for i, e := range t {
+			u, h, err := unpublished(e)
+			if err != nil {
+				return nil, false, err
+			}
+
+			out[i], held = u, held || h
+		}
+
+		return out, held, nil
+	case types.Object, map[string]any:
+		obj, _ := types.AsObject(t)
+		out := make(types.Object, len(obj))
+		held := false
+
+		for i, m := range obj {
+			u, h, err := unpublished(m.Value)
+			if err != nil {
+				return nil, false, err
+			}
+
+			out[i], held = types.Member{Key: m.Key, Value: u}, held || h
+		}
+
+		return out, held, nil
+	default:
+		return v, false, nil
+	}
 }
 
 // emitMap publishes a typed map into the rel/ subdir, naming elements by their

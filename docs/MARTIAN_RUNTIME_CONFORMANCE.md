@@ -145,6 +145,15 @@ bundle copies a path its payload names at several positions once
 path for every later reference, and each later path gets a copy (allowlist
 entry `published-symlinks-copied`). Fixture `shared_out_file`.
 
+**FIXED (#432):** below an array of two or more dimensions (`T[][]`,
+`map<T[][]>`, `map<T>[][]`, as an output or a struct field) mrp publishes no
+file: `moveOutArrayDir` descends the array one level as if its elements had the
+base type, so each element fails to move, is kept as the stage wrote it, and mrp
+prints `Could not move output files`. `mre publish-layout` publishes nothing
+there either, warns on stderr, and names each such file null, since an
+unpublished file has no path relative to `results/` (allowlist entry
+`unpublished-files-null`). Fixture `nested_path_unpublished`.
+
 ## D. Binding & resolution — faithful (two real divergences)
 
 **Faithful:** ref/struct/array/single-map projection, `array<map<S>>.field`

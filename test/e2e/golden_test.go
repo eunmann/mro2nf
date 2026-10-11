@@ -74,6 +74,8 @@ var goldenCases = []goldenCase{
 	{"dir_hidden", "dir_hidden", "expected/outs.json"},
 	// #431: a file reached from several outputs names its first published path.
 	{"shared_out_file", "shared_out_file", "expected/outs.json"},
+	// #432: files below an N-D array stay unpublished, as under mrp.
+	{"nested_path_unpublished", "nested_path_unpublished", "expected/outs.json"},
 	{"api_smoke", "api_smoke", "expected/outs.json"},
 	{"float_to_int", "float_to_int", "expected/outs.json"},
 	{"disabled_map", "disabled_map", "expected/outs.json"},

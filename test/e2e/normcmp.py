@@ -12,6 +12,9 @@ entry for its comparator rule, as in the Go differential (published_test.go):
 - outs-json-strip-outs-prefix: mrp writes absolute paths into the pipestance
   outs/ dir, mro2nf writes the same paths relative to its results/ dir, so the
   outs-dir prefix is stripped from mrp's strings.
+- null-mrp-unpublished-paths: for a file mrp left unpublished, mrp's _outs
+  names its path in the pipestance outside outs/, mro2nf null, so that path in
+  mrp's strings becomes null.
 
 An issue-tracked entry applies its rule only on the fixtures it names; the Go
 differential, not this script, fails it once it excuses nothing there.
@@ -24,6 +27,7 @@ import sys
 
 PUBLISHED_SYMLINKS = "follow-mrp-published-symlinks"
 STRIP_OUTS_PREFIX = "outs-json-strip-outs-prefix"
+UNPUBLISHED_NULL = "null-mrp-unpublished-paths"
 
 OBJECT = "<object>"
 NUMBER = "<number>"
@@ -100,11 +104,17 @@ def norm(v, rewrite):
 
 def mrp_rewrite(rules, mrp_dir):
     links = published_links(mrp_dir) if PUBLISHED_SYMLINKS in rules else {}
-    prefix = mrp_dir.rstrip("/") + "/" if STRIP_OUTS_PREFIX in rules else ""
+    in_outs = mrp_dir.rstrip("/") + "/"
+    prefix = in_outs if STRIP_OUTS_PREFIX in rules else ""
+    in_ps = os.path.dirname(mrp_dir.rstrip("/")) + "/" if UNPUBLISHED_NULL in rules else ""
 
     def rewrite(s):
         s = links.get(s, s)
-        return s[len(prefix):] if prefix and s.startswith(prefix) else s
+        if prefix and s.startswith(prefix):
+            return s[len(prefix):]
+        if in_ps and s.startswith(in_ps) and not s.startswith(in_outs):
+            return None
+        return s
 
     return rewrite
 

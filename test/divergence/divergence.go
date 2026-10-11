@@ -57,6 +57,10 @@ const (
 	// content, and the target path mrp's outs JSON names for it as the link's
 	// path.
 	RuleMrpPublishedSymlinks = "follow-mrp-published-symlinks"
+	// RuleMrpUnpublishedNull reads a path mrp's outs JSON names inside the
+	// pipestance but outside its outs dir, a file mrp left unpublished, as
+	// null.
+	RuleMrpUnpublishedNull = "null-mrp-unpublished-paths"
 	// RuleRetriedAttempts lets a stage task fail more than once before its
 	// last failure counts.
 	RuleRetriedAttempts = "collapse-retried-attempts"
@@ -73,6 +77,7 @@ func ComparatorRules() map[string]string {
 		RuleOutsRelativePaths:    KindPublishedTree,
 		RuleResultsMetadata:      KindPublishedTree,
 		RuleMrpPublishedSymlinks: KindPublishedTree,
+		RuleMrpUnpublishedNull:   KindPublishedTree,
 		RuleRetriedAttempts:      KindOutcome,
 		RuleFailureStageAndKind:  KindOutcome,
 	}
