@@ -483,13 +483,11 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// (#338).
 	{name: "missing_struct_key", mrp: failedIn(failError, "UP")},
 	{name: "bad_out_type", mrp: failedIn(failError, "BAD")},
-	// mrp fails the split ("Expected string for __special"); mro2nf ignores
-	// the malformed chunk resource key and succeeds.
-	{
-		name:       "split_bad_special",
-		mrp:        failedIn(failError, "BAD_SPECIAL"),
-		divergence: &outcomeDivergence{issue: 275, nf: runOutcome{}},
-	},
+	// A split returning a chunk resource key of the wrong JSON type fails the
+	// split (#275): a number __special, a string __mem_gb or __threads.
+	{name: "split_bad_special", mrp: failedIn(failError, "BAD_SPECIAL")},
+	{name: "split_bad_mem", mrp: failedIn(failError, "BAD_MEM")},
+	{name: "split_bad_threads", mrp: failedIn(failError, "BAD_THREADS")},
 	// The reverse: mrp runs WORK behind a runtime-null disable gate, mro2nf's
 	// driver aborts on it. Once fixed, the fixture moves to mrpDiffCases.
 	{
