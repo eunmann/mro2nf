@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -171,15 +172,23 @@ func missingPrereqf(tb testing.TB, format string, args ...any) {
 
 var buildOnce sync.Once
 
-// buildBinaries builds ./mro2nf and ./mre at the repo root exactly once per
-// test process, static and path-free like `make build`, so the suites run
-// (and the docker images bake) the binary a user builds.
+// builtBinaries are the binaries `make build` writes at the repo root, each
+// with its package: mrjob is the pinned Martian module's.
+var builtBinaries = map[string]string{
+	"mro2nf": "./cmd/mro2nf",
+	"mre":    "./cmd/mre",
+	"mrjob":  "github.com/martian-lang/martian/cmd/mrjob",
+}
+
+// buildBinaries builds builtBinaries at the repo root exactly once per test
+// process, static and path-free like `make build`, so the suites run (and the
+// docker images bake) the binary a user builds.
 func buildBinaries(t *testing.T) {
 	t.Helper()
 
 	buildOnce.Do(func() {
-		for _, bin := range []string{"mro2nf", "mre"} {
-			cmd := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(root, bin), "./cmd/"+bin)
+		for _, bin := range slices.Sorted(maps.Keys(builtBinaries)) {
+			cmd := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(root, bin), builtBinaries[bin])
 			cmd.Dir = root
 			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 

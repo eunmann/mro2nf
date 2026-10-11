@@ -72,7 +72,7 @@ Nextflow 26.04 supports up to Java 26, the 24.04 floor up to 21),
 Python 3.
 
 ```bash
-make build                      # builds ./mro2nf and ./mre
+make build                      # builds ./mro2nf, ./mre and ./mrjob (the pinned Martian's)
 
 ./mro2nf -o out \
     -mre "$PWD/mre" \
