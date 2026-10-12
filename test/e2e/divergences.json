@@ -46,6 +46,15 @@
       "comparator": {"rule": "compare-failure-stage-and-kind"}
     },
     {
+      "id": "dir-and-inner-file",
+      "kind": "outcome",
+      "feature": "pipeline outs publishing a directory and a file inside it",
+      "summary": "When the outs reach both a directory output and a file inside it, mrp publishes the file at its own name and leaves a dangling relative symlink where it sat in the directory, and the run succeeds; mro2nf fails the run loudly while delivering the published tree.",
+      "justification": "mro2nf builds the tree with Martian's PostProcess, as mrp does, but a results dir, possibly an object store, cannot hold a dangling link, and delivering the file in both places or dropping the link would change the published tree silently. The failure names the directory and the link.",
+      "evidence": ["TestMrpDiffFailureParity/dir_and_inner_file", "TestWriteOutsHoldsOneTree", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
+    },
+    {
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",

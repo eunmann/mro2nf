@@ -1,0 +1,36 @@
+filetype txt;
+
+# A pipeline whose outs reach a stage's directory and, through a stage that
+# returns a path inside the directory it was given, a file inside it. mrp
+# publishes outs/x.txt and leaves outs/d/sub/x.txt a dangling link, and the run
+# succeeds; mro2nf fails the delivery instead (divergences.json,
+# dir-and-inner-file). Exercised by TestMrpDiffFailureParity.
+stage MKDIR(
+    out path d,
+    src py   "stages/mkdir",
+)
+
+stage PICK(
+    in  path d,
+    out txt  x,
+    src py   "stages/pick",
+)
+
+pipeline DI(
+    out path d,
+    out txt  x,
+)
+{
+    call MKDIR()
+
+    call PICK(
+        d = MKDIR.d,
+    )
+
+    return (
+        d = MKDIR.d,
+        x = PICK.x,
+    )
+}
+
+call DI()
