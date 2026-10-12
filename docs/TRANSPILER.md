@@ -615,7 +615,9 @@ and code are, which executor runs the tasks and in which images.
   `Dockerfile` builds the stage image `FROM` it and copies each code root (the
   entry's dir, the search path's roots, every `.mro` file's dir and every
   stage's code Martian finds as a file) from a named build context
-  `./build.sh <tag>` passes, so no code is copied into the project. A stage
+  `./build.sh <tag>` passes, so no code is copied into the project; the code
+  of a stage whose `src` is absolute goes at that path itself, where Martian
+  looks for it unchanged. A stage
   `src` found on no root (a bare command such as a compiled toolkit) must be on
   the image's `PATH`; `--build-arg BASE=<toolkit image>` layers the runtime onto
   such an image. `mre args` refuses a node the image compiles to another spec

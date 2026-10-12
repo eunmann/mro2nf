@@ -1,6 +1,7 @@
 package cgnf
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,19 +9,26 @@ import (
 	"strings"
 )
 
-// codeRoots are the host dirs the stage image holds, each at its own path
-// below imageCode: the entry's dir, the search path's roots, the dir of
-// every .mro file the entry compiles from, and every stage's code Martian
-// finds as a file; none below another. pathCommands are the stage srcs
-// found on no root, which the image's PATH must provide.
-func (p *project) codeRoots() ([]string, []string, error) {
+// codeRoot is a host dir the stage image holds, at image.
+type codeRoot struct {
+	host, image string
+}
+
+// codeRoots are the host dirs the stage image holds, none below another:
+// each at its own path below imageCode, the entry's dir, the search path's
+// roots, the dir of every .mro file the entry compiles from, and every
+// stage's code Martian finds as a file; and at its own path, the code of
+// a stage whose src is absolute, which Martian finds there unchanged.
+// commands are the stage srcs found on no root, which the image's PATH must
+// provide.
+func (p *project) codeRoots() ([]codeRoot, []string, error) {
 	dirs := append([]string{p.src.Dir}, p.opts.MroPaths...)
 
 	for _, f := range p.src.Files {
 		dirs = append(dirs, filepath.Dir(f))
 	}
 
-	var commands []string
+	var abs, commands []string
 
 	for _, n := range p.topo.Nodes {
 		s, err := p.stage(n.Fqid)
@@ -41,12 +49,26 @@ func (p *project) codeRoots() ([]string, []string, error) {
 			code = filepath.Dir(code)
 		}
 
-		dirs = append(dirs, code)
+		if filepath.IsAbs(s.Src.Path) {
+			abs = append(abs, code)
+		} else {
+			dirs = append(dirs, code)
+		}
 	}
 
 	slices.Sort(commands)
 
-	return outermost(dirs), commands, nil
+	var roots []codeRoot
+
+	for _, d := range outermost(dirs) {
+		roots = append(roots, codeRoot{host: d, image: imageCode + d})
+	}
+
+	for _, d := range outermost(abs) {
+		roots = append(roots, codeRoot{host: d, image: d})
+	}
+
+	return roots, commands, nil
 }
 
 // outermost are the dirs, cleaned, each once, less those below another.
@@ -82,12 +104,13 @@ func within(p, root string) bool {
 // image, the one definition of /opt/mro2nf, and the pipeline's code, each
 // root a named build context (build.sh), so no code is copied into the
 // project. BASE layers the runtime onto a toolkit image instead.
-func (p *project) dockerfile(roots, commands []string) string {
+func (p *project) dockerfile(roots []codeRoot, commands []string) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, `# This project's stage image: mro2nf's runtime image (mre, mrjob and
 # Martian's adapters below %[1]s) and the pipeline's code, each root at its
-# host path below %[2]s, where the container profiles find it. Build it with
+# host path below %[2]s, where the container profiles find it, and the code
+# of a stage whose src is absolute at that path itself. Build it with
 # ./build.sh <tag>. RUNTIME names another runtime image; BASE layers the
 # runtime onto a toolkit image, which must provide bash, ps and, for py
 # stages, python3.
@@ -99,7 +122,8 @@ COPY --from=runtime %[1]s %[1]s
 `, imageRoot, imageCode, runtimeImage, p.opts.Version)
 
 	for i, r := range roots {
-		fmt.Fprintf(&b, "COPY --from=code%d . %s\n", i, imageCode+r)
+		dest, _ := json.Marshal(r.image)
+		fmt.Fprintf(&b, "COPY --from=code%d [\".\", %s]\n", i, dest)
 	}
 
 	if len(commands) > 0 {
@@ -111,7 +135,7 @@ COPY --from=runtime %[1]s %[1]s
 
 // buildScript is build.sh, which builds the stage image with each code
 // root as its named build context.
-func buildScript(roots []string) string {
+func buildScript(roots []codeRoot) string {
 	var b strings.Builder
 
 	b.WriteString(`#!/usr/bin/env bash
@@ -129,7 +153,7 @@ shift
 exec docker build`)
 
 	for i, r := range roots {
-		fmt.Fprintf(&b, " \\\n    --build-context code%d=%s", i, shellQuote(r))
+		fmt.Fprintf(&b, " \\\n    --build-context code%d=%s", i, shellQuote(r.host))
 	}
 
 	b.WriteString(` \

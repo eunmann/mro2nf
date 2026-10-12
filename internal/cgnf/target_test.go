@@ -82,7 +82,7 @@ func TestEmitStageImageRecipe(t *testing.T) {
 
 	for _, want := range []string{
 		"ARG RUNTIME=ghcr.io/eunmann/mro2nf-runtime:test\nARG BASE=${RUNTIME}\nFROM ${RUNTIME} AS runtime\nFROM ${BASE}\nCOPY --from=runtime /opt/mro2nf /opt/mro2nf\n",
-		"COPY --from=code0 . /opt/mro2nf/code" + dir + "\n",
+		"COPY --from=code0 [\".\", \"/opt/mro2nf/code" + dir + "\"]\n",
 	} {
 		if !strings.Contains(tree["Dockerfile"], want) {
 			t.Errorf("Dockerfile lacks %q:\n%s", want, tree["Dockerfile"])
@@ -104,6 +104,49 @@ func TestEmitStageImageRecipe(t *testing.T) {
 	info, err := os.Stat(filepath.Join(emitFixture(t, "include_test"), "build.sh"))
 	if err != nil || info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("build.sh is not executable: %v %v", info, err)
+	}
+}
+
+// TestEmitStageImageAbsoluteSrc: the code of a stage whose src is absolute
+// is copied to that path itself, where Martian's FindPath looks for it in
+// the image unchanged, beside the entry's dir below /opt/mro2nf/code; each
+// destination is a JSON string, so a path with a space stays one.
+func TestEmitStageImageAbsoluteSrc(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "My Pipelines")
+	code := filepath.Join(t.TempDir(), "shared", "stages", "abs")
+
+	for _, d := range []string{dir, code} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(code, "__init__.py"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mro := filepath.Join(dir, "pipeline.mro")
+	if err := os.WriteFile(mro, []byte("stage ABS(\n    out int y,\n    src py \""+code+"\",\n)\n\ncall ABS()\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := t.TempDir()
+	if err := Emit(mro, Options{OutDir: out, MroPaths: []string{dir}, Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	tree := readTree(t, out)
+	for _, want := range []string{
+		"COPY --from=code0 [\".\", \"/opt/mro2nf/code" + dir + "\"]\n",
+		"COPY --from=code1 [\".\", \"" + code + "\"]\n",
+	} {
+		if !strings.Contains(tree["Dockerfile"], want) {
+			t.Errorf("Dockerfile lacks %q:\n%s", want, tree["Dockerfile"])
+		}
+	}
+
+	if want := "--build-context code1='" + code + "'"; !strings.Contains(tree["build.sh"], want) {
+		t.Errorf("build.sh lacks %q:\n%s", want, tree["build.sh"])
 	}
 }
 
