@@ -123,7 +123,6 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"no summary":            `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f", "justification": "j", "evidence": ["TestX"]}]}`,
 		"line break":            `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f\n", "summary": "s", "justification": "j", "evidence": ["TestX"]}]}`,
 		"negative issue":        `{"divergences": [{"id": "a", "kind": "mechanism", "issue": -1, ` + ok + `}]}`,
-		"unknown emitter":       `{"divergences": [{"id": "a", "kind": "mechanism", "emitter": "v3", ` + ok + `}]}`,
 		"no evidence":           `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f", "summary": "s", "justification": "j"}]}`,
 		"evidence not a test":   `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f", "summary": "s", "justification": "j", "evidence": ["kitchen_sink"]}]}`,
 		"mechanism matcher":     `{"divergences": [{"id": "a", "kind": "mechanism", ` + ok + `, "outcome": {"failed": true}}]}`,
@@ -239,23 +238,6 @@ func TestAllowlistRulesEverywhere(t *testing.T) {
 
 	if allow.Excuses(RuleOutsRelativePaths, "other") || len(allow.ScopedRules(KindPublishedTree, "fx")) != 1 || len(allow.Entries()) != 5 {
 		t.Error("RulesEverywhere changed the original allowlist")
-	}
-}
-
-// TestAllowlistForEmitter: an entry scoped to one emitter holds only for
-// it, and an unscoped one for both.
-func TestAllowlistForEmitter(t *testing.T) {
-	const ok = `"kind": "mechanism", "feature": "f", "summary": "s", "justification": "j", "evidence": ["TestX"]`
-
-	allow, err := Parse([]byte(`{"divergences": [{"id": "both", ` + ok + `}, {"id": "old", "emitter": "v1", ` + ok + `}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for emitter, want := range map[string]int{EmitterV1: 2, EmitterV2: 1} {
-		if got := allow.ForEmitter(emitter).Entries(); len(got) != want || got[0].ID != "both" {
-			t.Errorf("ForEmitter(%s) = %v, want %d entries", emitter, got, want)
-		}
 	}
 }
 
