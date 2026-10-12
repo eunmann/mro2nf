@@ -129,7 +129,7 @@ too.
 |---|---|---|
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles; the local one clamps a request to the host | e2e `TestLocalClampRunsOversizedRequest` |
 | an ASSERT fails the run on its first attempt; a retried failure gets escalated memory | ✅ dynamic `errorStrategy { exitStatus==42 ? terminate : retry }` + `maxRetries 2` (which failures are retried: `retried-stage-errors`) | e2e `TestAssertTerminatesWithoutRetry`, `TestOrdinaryFailureRetriesWithEscalatedMemory` |
-| isolated containers, AWS Batch, HealthOmics | ❌ not yet: the project runs on a local or shared filesystem (#489) | e2e `TestDockerIsolation`, `TestDockerEntryOverrides` |
+| isolated containers, AWS Batch, HealthOmics | ❌ not yet: the project runs on a local or shared filesystem (#489) | — |
 | `mrp --overrides` (per-stage resource retune at launch) | ❌ not yet (#301); retune a stage with a `-c` config's `withName:` selector on its node alias. See `RUNTIME_TUNING.md` | — |
 | `--maxjobs` / `--jobinterval` / `--localcores` / `--localmem` (throttling) | ✅ Nextflow `executor.queueSize` / `submitRateLimit` / `cpus` / `memory`; documented in `RUNTIME_TUNING.md` | — |
 | `--profile` / `--inspect` / `--onfinish` (profile, dry-run, hook) | ✅ Nextflow `-with-trace`/`-with-report`, `-preview`, `workflow.onComplete`; see `RUNTIME_TUNING.md` | — |

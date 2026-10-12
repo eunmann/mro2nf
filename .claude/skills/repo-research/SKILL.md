@@ -18,7 +18,7 @@ Read the parts of `docs/TRANSPILER.md` and `docs/FEATURE_COVERAGE.md` that cover
 - **Emitter:** `internal/cgnf` — the call graph to a Nextflow project: `main.nf` wiring, `assets/stage.nf`, `nextflow.config`
 - **Runtime (`mre`):** `cmd/mre` subcommands (`plan|args|run|post|outs|publish-layout`), `internal/job` (one stage job through `mrjob`), `internal/shim` (bundles, markers, output confinement), `internal/types` (type-directed file-leaf walk and the `types.json` manifest)
 - **Around it:** `internal/config` (`.mro2nf.yml`), `cmd/mro2nf`
-- **Tests:** unit tests beside each package; `test/e2e` (build tag `e2e`: goldens, mrp-diff, docker, bench, lint-nf); fixtures and real-`mrp` goldens in `testdata/<name>/`; `bench/`
+- **Tests:** unit tests beside each package; `test/e2e` (build tag `e2e`: goldens, mrp-diff, bench, lint-nf); fixtures and real-`mrp` goldens in `testdata/<name>/`; `bench/`
 - **Reference oracle:** the pinned Martian module (`go env GOMODCACHE`, version in `go.mod`) — `martian/syntax` for the language, `martian/core` for what `mrp` does at run time; a local `mrp` build at `$MARTIAN_BIN` (default `~/workdir/martian/bin`)
 
 ## 2. Locate

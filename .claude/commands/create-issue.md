@@ -203,7 +203,7 @@ gh issue create \
 ## Verification
 
 - [ ] Locally: `make lint`, `make test`, and targeted e2e for <the fixtures and suites this touches>
-- [ ] PR Validation is green (full e2e with the mrp differential, docker, lint-nf, bench, cover)
+- [ ] PR Validation is green (full e2e with the mrp differential, lint-nf, bench, cover)
 
 ## Risks
 

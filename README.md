@@ -56,7 +56,7 @@ internal/
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters (Martian's LICENSE beside)
 THIRD_PARTY_NOTICES      licenses of the code the binaries link and the images vendor
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
-test/e2e/      Go e2e suites (golden diff vs mrp, mrp differential, docker isolation)
+test/e2e/      Go e2e suites (golden diff vs mrp, mrp differential)
 test/gen/      generator of random well-typed programs for the generative differential
 test/thirdparty/   THIRD_PARTY_NOTICES generator, vendored-license and vendor-martian drift checks
 scripts/aws/   live AWS Batch and HealthOmics runbooks
@@ -151,7 +151,6 @@ as an absolute path every task can see. See `docs/TRANSPILER.md` §8.
 make test          # unit tests (in-process)
 make cover         # unit-test coverage gate (fails below COVER_MIN%)
 make test-e2e      # golden table + mrp differential + failure parity + knobs
-make test-e2e-docker  # the same pipelines under docker (container isolation)
 make lint-nf       # nextflow lint of every fixture's project
 make bench         # orchestration overhead at two widths per shape
 make gen-diff      # generated programs vs real mrp (GEN_SEEDS=<start>|random GEN_COUNT=<n>)
@@ -165,9 +164,6 @@ each fixture's transpiled pipeline under Nextflow in a bounded parallel pool
 real-`mrp` golden; it also runs each fixture under a live `mrp` and diffs the
 published tree and every stage's `_args`, `_outs` and `_jobinfo`, and covers
 the retry/ASSERT failure contract and `-resume` cache stability.
-`make test-e2e-docker` runs pipelines under the Nextflow **docker** executor —
-tasks in containers that mount only their work dir — the no-shared-filesystem
-model of the cloud backends (#489).
 
 ### How it's validated
 

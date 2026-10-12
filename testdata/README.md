@@ -19,8 +19,8 @@ run must reproduce. A golden has two parts:
 
 ## What the suites check
 
-- **`TestGolden`** and **`TestDockerIsolation`** transpile the fixture, run it
-  under Nextflow (the latter under container isolation), and require:
+- **`TestGolden`** transpiles the fixture, runs it under Nextflow, and
+  requires:
   - `results/pipeline_outs.json` to equal the outputs JSON, number tokens and
     object key order included; and
   - `results/`, minus `pipeline_outs.json` and `manifest.json.gz` at its root

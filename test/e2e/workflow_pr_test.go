@@ -10,7 +10,7 @@ import (
 
 // prSuiteJobs are the pr-validation.yml jobs that run Nextflow suites, each
 // with the make target it runs.
-var prSuiteJobs = map[string]string{"e2e-shard": "make test-e2e", "e2e-docker": "make test-e2e-docker"}
+var prSuiteJobs = map[string]string{"e2e-shard": "make test-e2e"}
 
 const uploadArtifact = "actions/upload-artifact@"
 

@@ -519,9 +519,6 @@ feature is checked against the real `mrp` output. The validation tiers:
 - **Overhead** (`make bench`, nightly `make test-scale`) — tasks, staged bytes
   and driver heap at two widths per shape; the plumbing task count must not
   change with the width, and the stage tasks must equal `mrp`'s job count.
-- **Container isolation** (`make test-e2e-docker`) — pipelines under the Docker
-  executor, where each task mounts only its work dir: the license-free proxy
-  for the cloud "no shared filesystem" model (#489).
 
 The known **divergences** are the allowlist `test/e2e/divergences.json`, which
 the differential applies and which generates the

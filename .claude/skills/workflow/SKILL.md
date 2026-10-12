@@ -63,7 +63,7 @@ Locally, run only the fast checks; PR Validation is the full gate.
 2. `make test`, all green.
 3. Targeted e2e for what the change touches: `go test -tags e2e -count=1 -run '<the touched fixtures and suites>' ./test/e2e/`. Keep each run under about 4 minutes, because an agent's prompt cache expires after 5 idle minutes.
 
-Do not run the full `make test-e2e`, `make test-e2e-docker`, `make lint-nf`, `make bench` or `make cover` locally before a PR. PR Validation runs all of them, plus `-race`, govulncheck and deadcode, on GitHub's runners. When a run fails, read only the failing job's log tail (`gh run view <id> --log-failed | tail -n 100`) and fix that.
+Do not run the full `make test-e2e`, `make lint-nf`, `make bench` or `make cover` locally before a PR. PR Validation runs all of them, plus `-race`, govulncheck and deadcode, on GitHub's runners. When a run fails, read only the failing job's log tail (`gh run view <id> --log-failed | tail -n 100`) and fix that.
 
 ## Review
 

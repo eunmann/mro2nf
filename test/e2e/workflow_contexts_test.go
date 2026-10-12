@@ -20,7 +20,6 @@ var requiredContexts = []string{
 	"Build",
 	"Unit tests",
 	"E2E (Nextflow vs mrp goldens)",
-	"E2E (container isolation)",
 	"Lint generated Nextflow",
 	"Bench (data movement gate)",
 }

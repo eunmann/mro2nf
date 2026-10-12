@@ -439,6 +439,14 @@ func tail(b []byte, n int) string {
 	return "    " + strings.Join(lines, "\n    ")
 }
 
+func writeFileT(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 // goldenJSON asserts the JSON document at gotPath, a pipeline_outs.json of
 // fixture read as the published-output comparison reads it, equals the golden
 // at goldenPath, number tokens and key order included.

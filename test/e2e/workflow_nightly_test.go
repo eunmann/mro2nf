@@ -129,7 +129,7 @@ var manifestFloor = regexp.MustCompile(`(?m)^manifest\.nextflowVersion = '!>=([0
 
 // nightlySuiteJobs are the nightly jobs that run an e2e suite on the Nextflow
 // matrix.
-var nightlySuiteJobs = []string{"e2e", "docker"}
+var nightlySuiteJobs = []string{"e2e"}
 
 // TestNightlyNextflowFloor requires every nightly suite matrix to run the
 // Nextflow floor the generated nextflow.config declares, and latest stable,

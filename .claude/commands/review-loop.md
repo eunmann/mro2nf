@@ -34,7 +34,7 @@ State lives in `$(git rev-parse --git-dir)/review-loop/` (inside the git dir, so
 
 ## Final gate
 
-Only the fast checks run locally. PR Validation on GitHub is the full gate: e2e with the mrp differential, docker, lint-nf, bench, cover and `-race`.
+Only the fast checks run locally. PR Validation on GitHub is the full gate: e2e with the mrp differential, lint-nf, bench, cover and `-race`.
 
 1. `make test`, plus targeted e2e (`go test -tags e2e -count=1 -run '<suites>' ./test/e2e/`) for the fixtures the fixes touched. Keep each run under about 4 minutes.
 2. CDK changes: `cdk synth` emits the stack.

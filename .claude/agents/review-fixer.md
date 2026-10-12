@@ -24,6 +24,6 @@ A finding is a claim. Read the cited lines and confirm the failure path executes
 
 ## Procedure
 
-1. Work in severity order. Make all edits, then run `make lint` once and the touched packages' tests once (`go test ./internal/a/ ./cmd/b/ -count=1`). Never run `make test-e2e`, `make test-e2e-docker`, `make test-mrp-diff` or `make bench`; the coordinator does. In a worktree other than the main checkout, run lint as `GOLANGCI_LINT_CACHE=$PWD/.golangci-cache TMPDIR=$PWD/.tmp make lint` (create `.tmp` first; remove both afterwards).
+1. Work in severity order. Make all edits, then run `make lint` once and the touched packages' tests once (`go test ./internal/a/ ./cmd/b/ -count=1`). Never run `make test-e2e`, `make test-mrp-diff` or `make bench`; the coordinator does. In a worktree other than the main checkout, run lint as `GOLANGCI_LINT_CACHE=$PWD/.golangci-cache TMPDIR=$PWD/.tmp make lint` (create `.tmp` first; remove both afterwards).
 2. Commit one logical change at a time (related findings together) with `git add <explicit paths>`, in the `workflow` skill's Commit Messages format, labelled `Task: review R<round>`, ending with the trailer from the prompt. Never rewrite history.
 3. Finish with `git status --porcelain` empty. Reply briefly, since the coordinator reads only this: per finding `CONFIRMED <id> <sha>`, `REFUTED <id> <file:line reason>` or `SKIPPED <id> <question>`, and the e2e suites the coordinator should run.
