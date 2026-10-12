@@ -54,7 +54,6 @@ internal/
   ir/                → typed parameters of the program's callables and structs
   types/             → type-directed file-leaf walk + type manifest (shared by cg + shim)
   shim/              → bundle I/O, markers, output confinement
-  config/            → .mro2nf.yml project defaults for the transpiler flags
   logging/           → log/slog setup (stderr)
 ```
 

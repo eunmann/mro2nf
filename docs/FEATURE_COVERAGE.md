@@ -136,7 +136,6 @@ too.
 | `--profile` / `--inspect` / `--onfinish` (profile, dry-run, hook) | ✅ Nextflow `-with-trace`/`-with-report`, `-preview`, `workflow.onComplete`; see `RUNTIME_TUNING.md` | — |
 | web UI / HTTP API / mrstat | 🚫 use `nextflow log`/`-with-report` instead | — |
 | `mro check` / `mro graph` as conformance oracle | ✅ used to validate every fixture; `mro graph` ≈ `nextflow run -with-dag` | `test/e2e`, `mro check` |
-| `.mro2nf.yml` flag defaults (keys mirror flags; builtin < config < explicit flag) | ✅ | unit `internal/config` `TestLoad*`; `cmd/mro2nf` `TestApplyConfig*` |
 
 ## Divergences from mrp
 

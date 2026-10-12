@@ -91,7 +91,6 @@ internal/
   ir/            → typed parameters of the program's callables and structs
   types/         → type-directed file-leaf walk + type manifest
   shim/          → bundle I/O, markers, output confinement
-  config/        → .mro2nf.yml project defaults for the transpiler flags
   logging/       → log/slog setup (stderr)
 ```
 
@@ -121,8 +120,6 @@ with `mrp`'s message, and no project is written.
 - `-confine-outputs`: fail a stage task whose output resolves outside its work
   dir instead of copying it in (§7) on the local and grid profiles too; the
   container profiles always confine.
-- `-config <path>`: a `.mro2nf.yml` of per-project defaults (`monitor`); an
-  explicit flag always wins.
 - `-version`.
 
 **The witness.** A transpile cannot know a run's invocation, so it compiles a

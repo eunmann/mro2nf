@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/config"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -86,9 +85,8 @@ func TestUsageShowsDefaults(t *testing.T) {
 }
 
 // TestRunRefusesBadInvocations checks a transpile fails, emitting no
-// project, on an undefined flag, a missing .mro or one too many, an
-// explicit -config that does not exist and a .mro that does not exist, and
-// that -version transpiles nothing.
+// project, on an undefined flag, a missing .mro or one too many and a .mro
+// that does not exist, and that -version transpiles nothing.
 func TestRunRefusesBadInvocations(t *testing.T) {
 	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
 	out := filepath.Join(t.TempDir(), "proj")
@@ -97,7 +95,6 @@ func TestRunRefusesBadInvocations(t *testing.T) {
 		"flag":    {"-bogus", mro},
 		"no mro":  {"-o", out},
 		"two mro": {"-o", out, mro, mro},
-		"config":  {"-o", out, "-config", filepath.Join(t.TempDir(), "absent.yml"), mro},
 		"mro":     {"-o", out, filepath.Join(t.TempDir(), "absent.mro")},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -116,90 +113,25 @@ func TestRunRefusesBadInvocations(t *testing.T) {
 	}
 }
 
-// TestApplyConfigPrecedence checks the .mro2nf.yml precedence: a config key sets
-// a flag the user did not pass, but an explicit flag always wins.
-func TestApplyConfigPrecedence(t *testing.T) {
+// TestRunReadsNoConfigFile checks a .mro2nf.yml beside the .mro sets
+// nothing: the project is the command line's alone.
+func TestRunReadsNoConfigFile(t *testing.T) {
 	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, ".mro2nf.yml"), "monitor: true\n")
+	writeTestFile(t, filepath.Join(dir, "lib.mro"), libMRO)
+	writeTestFile(t, filepath.Join(dir, "stages", "count", "__init__.py"), "")
+	writeTestFile(t, filepath.Join(dir, "input.txt"), "reads")
+
 	mro := filepath.Join(dir, "pipeline.mro")
-	writeTestFile(t, filepath.Join(dir, config.FileName), "monitor: true\n")
+	writeTestFile(t, mro, includingMRO)
 
-	for _, tc := range []struct {
-		name        string
-		args        []string
-		wantMonitor bool
-	}{
-		{"unset_flags_take_config", []string{mro}, true},
-		// -monitor=false must beat the config's monitor: true.
-		{"explicit_flags_win", []string{"-monitor=false", mro}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fs := flag.NewFlagSet("t", flag.ContinueOnError)
-			f := defineTranspileFlags(fs)
-
-			if err := fs.Parse(tc.args); err != nil {
-				t.Fatal(err)
-			}
-
-			if err := applyConfig(fs, "", mro, f.configPtrs()); err != nil {
-				t.Fatal(err)
-			}
-
-			if *f.monitor != tc.wantMonitor {
-				t.Errorf("monitor=%v, want %v", *f.monitor, tc.wantMonitor)
-			}
-		})
-	}
-}
-
-// TestApplyConfigMonitorReachesOptions checks a monitor value sourced purely
-// from the config reaches the emitted options.
-func TestApplyConfigMonitorReachesOptions(t *testing.T) {
-	dir := t.TempDir()
-	mro := filepath.Join(dir, "pipeline.mro")
-	writeTestFile(t, filepath.Join(dir, config.FileName), "monitor: true\n")
-
-	fs := flag.NewFlagSet("t", flag.ContinueOnError)
-	f := defineTranspileFlags(fs)
-	_ = fs.Parse([]string{mro})
-
-	if err := applyConfig(fs, "", mro, f.configPtrs()); err != nil {
+	out := t.TempDir()
+	if err := run([]string{"-o", out, mro}); err != nil {
 		t.Fatal(err)
 	}
 
-	opts, err := f.options(mro)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !opts.Monitor {
-		t.Errorf("config-sourced monitor must reach options(): Monitor=%v", opts.Monitor)
-	}
-}
-
-// TestApplyConfigExplicitMissingIsError ensures an explicit -config path that
-// does not exist fails loudly instead of silently dropping the user's defaults.
-// The implicit alongside-the-.mro probe stays tolerant of a missing file.
-func TestApplyConfigExplicitMissingIsError(t *testing.T) {
-	dir := t.TempDir()
-	mro := filepath.Join(dir, "pipeline.mro")
-
-	fs := flag.NewFlagSet("t", flag.ContinueOnError)
-	f := defineTranspileFlags(fs)
-	_ = fs.Parse([]string{mro})
-
-	typo := filepath.Join(dir, "typo.yml")
-
-	switch err := applyConfig(fs, typo, mro, f.configPtrs()); {
-	case err == nil:
-		t.Errorf("explicit -config %s is missing: want an error, got nil", typo)
-	case !errors.Is(err, os.ErrNotExist):
-		t.Errorf("want os.ErrNotExist for the missing config, got %v", err)
-	case !strings.Contains(err.Error(), typo):
-		t.Errorf("error should name the missing path %s, got %v", typo, err)
-	}
-
-	if err := applyConfig(fs, "", mro, f.configPtrs()); err != nil {
-		t.Errorf("implicit probe with no config file: want no error, got %v", err)
+	if cfg := readConfig(t, out); !strings.Contains(cfg, "params.mro2nf_monitor = false") {
+		t.Errorf("a .mro2nf.yml beside the .mro set the project's monitor:\n%s", cfg)
 	}
 }
 
@@ -421,7 +353,7 @@ func TestRunRejectsDeletedFlags(t *testing.T) {
 	for _, name := range []string{
 		"emitter=v2", "native", "inline-pipelines=false", "target=awsbatch", "container=img",
 		"allow-external-files", "fold-disables", "fuse-chains", "native-runner",
-		"mre=/opt/mre", "shell=martian_shell.py", "mrjob=/opt/mrjob",
+		"mre=/opt/mre", "shell=martian_shell.py", "mrjob=/opt/mrjob", "config=.mro2nf.yml",
 	} {
 		t.Run(name, func(t *testing.T) {
 			flagName, _, _ := strings.Cut(name, "=")

@@ -51,7 +51,6 @@ internal/
   ir/          typed parameters of callables and structs
   types/       type-directed file-leaf walk + type manifest
   shim/        bundle I/O, markers, output confinement
-  config/      .mro2nf.yml project defaults for the transpiler flags
   logging/     slog setup
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters, which mre embeds (Martian's LICENSE beside)
 THIRD_PARTY_NOTICES      licenses of the code the binaries link and the images vendor
@@ -90,7 +89,6 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp`; as in `mrp`, the `.mro`'s own directory is searched first, for its own includes and its stages' code only, and the working directory never |
 | `-monitor` | mrp's `--monitor`: `mrjob` enforces each job's memory and thread limits |
 | `-confine-outputs` | fail a stage task whose output resolves outside its work dir instead of copying it in, for a project run under an isolating executor such as docker |
-| `-config <path>` | path to a [`.mro2nf.yml`](#mro2nfyml-project-defaults) of per-project flag defaults (default: probed alongside the `.mro`) |
 | `-version` | print the mro2nf version and exit |
 
 The tasks run the `mre` on `PATH` where the pipeline runs (`make install` on
@@ -161,23 +159,6 @@ The runtime image itself serves as `--mro2nf_image` when the code is
 reachable at those paths without copying it, such as a docker profile run
 whose `-c` config mounts it (`docker.runOptions = '-v
 /opt/pipeline:/opt/pipeline:ro'`).
-
-### `.mro2nf.yml` project defaults
-
-A `.mro2nf.yml` next to the pipeline `.mro` (or named via `-config`, in which
-case it must exist) sets per-project defaults for the transpile flags, so a
-team doesn't have to repeat them on every invocation:
-
-```yaml
-# keys mirror the CLI flags
-monitor: true
-```
-
-Supported keys: `monitor`. Precedence is **builtin default < config file < explicit
-flag**. To override a config `true` back off for one run, use the equals form —
-`-monitor=false` — because Go's flag parsing reads a space-separated
-`-monitor false` as a bare `-monitor` plus a positional argument. Unknown keys
-and malformed values are errors, so typos are loud.
 
 ### Run parameters
 

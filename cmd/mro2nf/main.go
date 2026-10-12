@@ -11,7 +11,6 @@ import (
 	"slices"
 
 	"github.com/eunmann/mro2nf/internal/cgnf"
-	"github.com/eunmann/mro2nf/internal/config"
 	"github.com/eunmann/mro2nf/internal/logging"
 )
 
@@ -74,10 +73,6 @@ func run(args []string) error {
 
 	src := fs.Arg(0)
 
-	if err := applyConfig(fs, *f.configPath, src, f.configPtrs()); err != nil {
-		return fmt.Errorf("transpile %s: %w", src, err)
-	}
-
 	opts, err := f.options(src)
 	if err != nil {
 		return fmt.Errorf("transpile %s: %w", src, err)
@@ -93,10 +88,10 @@ func run(args []string) error {
 }
 
 // transpileFlags collects every transpile flag in one struct, so run() reads
-// parsed values from a single place and the config pointers and cgnf.Options
-// are derived rather than hand-copied.
+// parsed values from a single place and cgnf.Options is derived rather than
+// hand-copied.
 type transpileFlags struct {
-	outDir, mroPath, configPath          *string
+	outDir, mroPath                      *string
 	monitor, confineOutputs, showVersion *bool
 }
 
@@ -108,14 +103,8 @@ func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 		mroPath:        fs.String("mropath", "", mroPathUsage),
 		monitor:        fs.Bool("monitor", false, "mrp's --monitor: mrjob enforces each job's memory and thread limits"),
 		confineOutputs: fs.Bool("confine-outputs", false, "fail a stage task whose output resolves outside its work dir instead of copying it in (set it for a project run under an isolating executor such as docker)"),
-		configPath:     fs.String("config", "", "path to .mro2nf.yml (default: alongside the .mro); its keys set flag defaults, explicit flags win (bools need the equals form, e.g. -monitor=false)"),
 		showVersion:    fs.Bool("version", false, "print version and exit"),
 	}
-}
-
-// configPtrs returns the flag value pointers a .mro2nf.yml may default.
-func (f transpileFlags) configPtrs() cliPtrs {
-	return cliPtrs{monitor: f.monitor}
 }
 
 // options builds the cgnf.Options of a transpile of src: the include paths
@@ -171,37 +160,4 @@ func mroPaths(search []string) ([]string, error) {
 	}
 
 	return out, nil
-}
-
-// cliPtrs collects the transpile flag value pointers a .mro2nf.yml may default.
-type cliPtrs struct {
-	monitor *bool
-}
-
-// applyConfig loads the .mro2nf.yml (explicit path, else alongside the .mro) and
-// sets each flag the user did NOT pass explicitly to the config's value —
-// precedence is builtin default < config file < explicit flag. An explicit
-// -config path must exist — a typo there must not silently drop the defaults —
-// while the implicit alongside-the-.mro probe tolerates a missing file. An
-// empty -config value is indistinguishable from an unset flag, so it takes the
-// implicit probe.
-func applyConfig(fs *flag.FlagSet, explicit, mroFile string, p cliPtrs) error {
-	path, load := explicit, config.LoadRequired
-	if path == "" {
-		path, load = filepath.Join(filepath.Dir(mroFile), config.FileName), config.Load
-	}
-
-	cfg, err := load(path)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-
-	if !set["monitor"] && cfg.Monitor != nil {
-		*p.monitor = *cfg.Monitor
-	}
-
-	return nil
 }
