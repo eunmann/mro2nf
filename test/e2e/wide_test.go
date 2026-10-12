@@ -15,8 +15,8 @@ import (
 // TestWidePipelineRuns (#503): the project emitted for a pipeline of over
 // 500 stage calls of every shape the emitter wires compiles under
 // Nextflow, where one workflow of them all passed the JVM's 64 KiB limit
-// on a method, and a call of FANIN, reading 210 stages, its limit of 255
-// arguments, and runs to the outputs its stages compute.
+// on a method, and runs to the outputs its stages compute. FANIN reads 210
+// stages, more than a workflow takes, so its calls are wired in its caller.
 func TestWidePipelineRuns(t *testing.T) {
 	t.Parallel()
 
