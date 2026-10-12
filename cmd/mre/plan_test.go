@@ -259,6 +259,31 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 	}
 }
 
+// TestPlanTypesStringParams: Nextflow passes every --param as a string, so
+// the plan parses one given to a scalar input as a literal of the input's
+// declared type, as mrp would read the literal, and a string that is no
+// such literal fails the run before any stage starts, never reaching the
+// stage as a string (#246; cli_typed: --b false would otherwise be truthy).
+func TestPlanTypesStringParams(t *testing.T) {
+	work, err := plan(t, "cli_typed", `{"n":"5","f":"2.5","g":"1e6","b":"false"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inv := readText(t, filepath.Join(work, "plan", "pipeline.mro"))
+	for _, want := range []string{"n = 5,", "f = 2.5,", "g = 1e+06,", "b = false,"} {
+		if !strings.Contains(inv, want) {
+			t.Errorf("the invocation lacks %q:\n%s", want, inv)
+		}
+	}
+
+	for _, values := range []string{`{"b":"True"}`, `{"n":"2.5"}`, `{"f":"x"}`} {
+		if _, err := plan(t, "cli_typed", values); !errors.Is(err, errOverrideParse) {
+			t.Errorf("plan with %s: %v, want errOverrideParse", values, err)
+		}
+	}
+}
+
 // TestPlanRefusesAsMrp: an invocation mrp refuses to instantiate fails the
 // plan, so no stage runs (rt_gate_split_reject_pass: mrp refuses a split of
 // a runtime-gated literal collection, #387), and a value that is not a
