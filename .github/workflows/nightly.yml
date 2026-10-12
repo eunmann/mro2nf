@@ -27,9 +27,9 @@ permissions:
   contents: read
 
 # The Temurin LTS the Nextflow driver runs on; Nextflow 26.04 supports Java
-# 17 up to 26 (#237). The floor engine's launcher refuses any Java above 21,
-# so its lanes run FLOOR_JAVA_VERSION, which also keeps Nextflow's Java 17
-# minimum under test.
+# 17 up to 26 (#237) and the 25.10 floor 17 up to 25. The floor lanes run
+# FLOOR_JAVA_VERSION, the oldest Java Nextflow supports, so the nightly spans
+# the supported range.
 env:
   JAVA_VERSION: "25"
   FLOOR_JAVA_VERSION: "17"
@@ -95,7 +95,7 @@ jobs:
         # The floor must equal manifest.nextflowVersion in the generated
         # nextflow.config, here and in the docker job
         # (TestNightlyNextflowFloor).
-        nextflow: ["24.04.0", latest-stable]
+        nextflow: ["25.10.0", latest-stable]
         shard: [0, 1, 2, 3]
     env:
       E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
@@ -137,7 +137,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        nextflow: ["24.04.0", latest-stable]
+        nextflow: ["25.10.0", latest-stable]
     env:
       E2E_REQUIRE: "1"
     steps:

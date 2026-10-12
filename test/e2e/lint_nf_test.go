@@ -3,7 +3,7 @@
 package e2e
 
 // Static Nextflow lint gate (#48): transpile every fixture and run
-// `nextflow lint` over the generated project. `nextflow lint` (>= 25.04) drives
+// `nextflow lint` over the generated project. `nextflow lint` (>= 26.04) drives
 // the formal language-server parser, so a Groovy syntax error in rarely-run
 // wiring — a split triad, a gate, a fork's gather — becomes an immediate,
 // precise CI failure with file/line, independent of containers, AWS, or which
@@ -40,9 +40,10 @@ import (
 	"testing"
 )
 
-// minNextflowMajor/Minor is the first release with `nextflow lint`.
+// minNextflowMajor/Minor is the first release whose `nextflow lint` takes
+// -project-dir; 25.10 rejects the option.
 const (
-	minNextflowMajor = 25
+	minNextflowMajor = 26
 	minNextflowMinor = 4
 )
 

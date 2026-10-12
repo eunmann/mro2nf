@@ -86,7 +86,7 @@ gen-diff: build ## Generative differential vs mrp (GEN_SEEDS=<start>|random|<a,b
 record-goldens: ## Re-record expected/outs/ golden trees from real mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
 	GOLDEN_RECORD=1 $(GO_E2E) -timeout 30m -run '^TestRecordGoldens$$'
 
-lint-nf: build ## Static-lint generated Nextflow with `nextflow lint` (needs Nextflow >= 25.04)
+lint-nf: build ## Static-lint generated Nextflow with `nextflow lint` (needs Nextflow >= 26.04)
 	$(GO_E2E) -timeout 25m -run '^TestNextflowLint'
 
 bench: build ## Benchmark data movement (bytes/objects/tasks); BENCH_UPDATE=1 records baseline

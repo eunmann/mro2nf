@@ -387,6 +387,18 @@ func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 	}
 }
 
+// TestEmitDeclaresTheEngineFloor: the config declares the oldest Nextflow
+// the project runs on, with the `!` that fails an older launch rather than
+// warning (#498). The nightly suite matrix runs this floor
+// (TestNightlyNextflowFloor).
+func TestEmitDeclaresTheEngineFloor(t *testing.T) {
+	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
+
+	if want := "\nmanifest.nextflowVersion = '!>=25.10.0'\n"; !strings.Contains(cfg, want) {
+		t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+	}
+}
+
 // TestEmitRefusesReservedParam: an entry input named like a param the
 // project defines itself, or might, under the mro2nf_ prefix, is refused.
 func TestEmitRefusesReservedParam(t *testing.T) {

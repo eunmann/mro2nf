@@ -69,8 +69,8 @@ docs/          TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
 ## Quickstart
 
 Prerequisites: Go ≥ 1.26, Java 17+ (CI and recommended: Temurin 25 LTS;
-Nextflow 26.04 supports up to Java 26, the 24.04 floor up to 21),
-[Nextflow](https://www.nextflow.io) ≥ 24.04 (`curl -s https://get.nextflow.io | bash`),
+Nextflow 26.04 supports up to Java 26, the 25.10 floor up to 25),
+[Nextflow](https://www.nextflow.io) ≥ 25.10 (`curl -s https://get.nextflow.io | bash`),
 Python 3.
 
 ```bash

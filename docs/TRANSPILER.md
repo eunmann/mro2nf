@@ -320,10 +320,7 @@ driver splits into rows without parsing a record.
 each bundle's location as a value (`toUriString()`, a path or an `s3://` URI),
 and publishes them with `mre outs` through `mrp`'s own post-processing: the
 `outs/` tree and `pipeline_outs.json`, which `publishDir` copies into
-`params.outdir`. The workflow `output {}` block would declare that tree as
-data, but Nextflow 24.04, the engine floor, accepts it only under the
-`nextflow.preview.output` flag, in a `publish:` syntax (`ch >> 'name'`) that
-26.04 rejects, and 26.04's syntax does not compile on 24.04 (#356).
+`params.outdir`.
 
 **Order.** Each staged list is staged in an order the run fixes, a gather's and
 OUTS's by instance key and a join's by chunk name, since list order is part of
@@ -628,7 +625,7 @@ relative path names nothing from the stage's job dir under either runtime and
 reaches the stage as given. A file default is staged from where it is at run
 time; it is never copied into the project.
 
-**Names Nextflow cannot stage.** Nextflow's stage-in script, on 24.04 and
+**Names Nextflow cannot stage.** Nextflow's stage-in script, on 25.10 and
 26.04, writes each staged file as `ln -s <source> <name>`, leaving `*`, `?`,
 `[`, `]`, `{`, `}`, `$` and control characters such as a tab for bash to
 expand: `s[1].txt` beside `s1.txt` stages `s1.txt` silently. So PLAN refuses a
