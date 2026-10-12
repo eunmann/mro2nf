@@ -299,12 +299,12 @@ emitted dynamic `cpus`/`memory` directives.
 
 **FIXED (#6):** `--monitor` previously capped address space (`RLIMIT_AS`≈`vmem_gb`)
 only; mrp's *primary* monitor kill fires on RSS exceeding `mem_gb` (`mrjob.go`).
-`internal/shim/monitor.go` now adds that RSS kill: the adapter runs as a process-
-group leader, and a monitor samples the group's resident memory every second
-(summed from `/proc/<pid>/statm` over the group, like mrp's mrjob) and SIGKILLs
-the group when it exceeds `mem_gb`, writing mrp's quota message to `_errors`. The
-kill is not an ASSERT, so it stays retryable. The `RLIMIT_AS`/`vmem_gb` cap
-still applies as the hard address-space bound.
+Every job now runs through Martian's own `mrjob`, and `-monitor` sets
+`_jobinfo`'s `monitor_flag` (`internal/job/launch.go` `jobInfo`), so `mrjob`
+applies both the RSS-vs-`mem_gb` kill and the `RLIMIT_AS`/`vmem_gb` cap exactly
+as under mrp. The kill is not retried: mrp retries it only under
+`--auto-adjust-memory`, which mro2nf does not support (`internal/job/retry.go`
+`ErrTransient`), so the run fails on the first attempt, as mrp's does.
 
 **Minor/intentional:** no OOM escalation: a retry requests the first attempt's
 cpus and memory, as mrp does without `--auto-adjust-memory` (#506), whose RSS
@@ -382,8 +382,8 @@ only pipeline-input-bound preflights gate the rest of the pipeline.
    residual (matching would break entry-override). Validate with
    `test/e2e/mapcall_matrix.sh`.
 5. **#5 (publish naming): done** — mre reproduces mrp's `outs/` tree (downstream
-   pipelines consume it). **#6 (monitor RSS): done** — the RSS-vs-`mem_gb` kill is
-   implemented alongside the `RLIMIT_AS` vmem cap.
+   pipelines consume it). **#6 (monitor RSS): done** — `mrjob` applies the RSS-vs-`mem_gb`
+   kill alongside the `RLIMIT_AS` vmem cap.
 6. **Document #7–#9** as known, bounded divergences.
 
 Items 1–3 were unambiguous correctness fixes with no design tradeoff and landed
