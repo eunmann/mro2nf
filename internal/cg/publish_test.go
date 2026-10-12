@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -333,8 +334,19 @@ func TestWriteOutsHoldsOneTree(t *testing.T) {
 		locations[at] = "s3://bucket" + item
 	}
 
-	if err := r.writeOuts(locations); !errors.Is(err, errUnpublished) {
-		t.Errorf("pipeline outs reaching a directory and a file inside it: %v, want %v", err, errUnpublished)
+	err := r.writeOuts(locations)
+	if !errors.Is(err, errUnpublished) {
+		t.Fatalf("pipeline outs reaching a directory and a file inside it: %v, want %v", err, errUnpublished)
+	}
+
+	for _, want := range []string{
+		"inside the published directory output d is also published separately",
+		"outs/d/sub/x.txt is a link that reaches nothing",
+		"mrp leaves this dangling link and succeeds",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
 	}
 
 	outs := filepath.Join("work", "pipestance", "outs")
@@ -392,8 +404,13 @@ func TestPublishedNamesFailLoudly(t *testing.T) {
 		}
 	}
 
-	if err := p.materialize(filepath.Join(t.TempDir(), "results")); !errors.Is(err, errUnpublished) {
+	err = p.materialize(filepath.Join(t.TempDir(), "results"))
+	if !errors.Is(err, errUnpublished) {
 		t.Errorf("materialize outs/ holding a dangling link: %v, want %v", err, errUnpublished)
+	}
+
+	if err != nil && strings.Contains(err.Error(), "published directory") {
+		t.Errorf("a dangling link outside any directory: %v, want no directory shape named", err)
 	}
 }
 
