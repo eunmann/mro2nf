@@ -649,7 +649,8 @@ with. A disable binding forked on a map call its gating stage feeds (a
 split of its outs, as in `map call X(item = split SRC.items)` under
 `disabled = self.item.skip`) has a value per fork of that call; the gating
 stage's post resolves it at each and posts the forks it disables
-(`split_gate`). A binding forked on a map call another stage feeds is
+(`split_gate`), and so it does when the entry forks that call
+(`split_gate_entry`). A binding forked on a map call another stage feeds is
 refused at transpile time. `TestWitnessCoversLiteral` checks every
 fixture's literal invocation is within its witness's.
 

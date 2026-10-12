@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -186,6 +187,66 @@ func TestPlanDigestFollowsTheNode(t *testing.T) {
 
 	if base["CH.USE"] == k["CH.USE"] || base["CH.SRC"] != k["CH.SRC"] || base["CH.GATE"] != k["CH.GATE"] {
 		t.Errorf("digests %v with k unset, %v with k = 7: want only USE's to change", base, k)
+	}
+}
+
+// TestPlanAndPostAgreeOnEntryGates: SRC's post names the forks it disables
+// of a map call the entry forks by the ordinals the plan keys those forks
+// by, so the driver's token match disables the elements mrp disables
+// (split_gate_entry, its map named with unsorted keys at launch: mrp
+// disables INNER/WORK/fork0 and fork1, KEYED/WORK/fork_b and fork_c).
+func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
+	work, err := plan(t, "split_gate_entry", `{"named":{"c":3,"a":1,"b":2}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fx := filepath.Join("..", "..", "testdata", "split_gate_entry")
+	mro := filepath.Join(work, "plan", "pipeline.mro")
+	src, outs, gates := "SPLIT_GATE_ENTRY.SRC", filepath.Join(work, "src", "outs"), filepath.Join(work, "src", "gates")
+	args := filepath.Join(work, "src", "args")
+
+	captureStdout(t, func() {
+		err = run(t.Context(), []string{"args", "-mro", mro, "-mropath", fx, "-node", src, "-o", args})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestBundle(t, outs, map[string]any{"skips": []any{true, true, false}, "flags": map[string]any{"a": false, "b": true, "c": true}})
+
+	if err := run(t.Context(), []string{"post", "-mro", mro, "-mropath", fx, "-args", args, "-outs", outs, "-forks", filepath.Join(work, "src", "forks"), "-gates", gates}); err != nil {
+		t.Fatal(err)
+	}
+
+	posted := strings.Fields(readText(t, gates))
+
+	g, err := cg.Load(mro, []string{fx})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for root, want := range map[string]map[string]bool{
+		"SPLIT_GATE_ENTRY.INNER": {"0": true, "1": true, "2": false},
+		"SPLIT_GATE_ENTRY.KEYED": {`"a"`: false, `"b"`: true, `"c"`: true},
+	} {
+		gate := cg.Gate{Node: src, Roots: []string{root}}
+		got := map[string]bool{}
+
+		for line := range strings.SplitSeq(strings.TrimSpace(readText(t, filepath.Join(work, "roots", root))), "\n") {
+			f := strings.Fields(line)
+
+			el, err := g.DecodeElement(f[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got[el.Fork[len(el.Fork)-1].Index.GoString()] = slices.Contains(posted, cg.GateToken(root+".WORK", gate, f[0]))
+		}
+
+		if d := cmp.Diff(want, got); d != "" {
+			t.Errorf("%s: disabled WORK forks by element (-mrp +mre):\n%s", root, d)
+		}
 	}
 }
 

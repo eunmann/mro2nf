@@ -529,6 +529,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// A disable gate split per fork of a map call over a sub-pipeline: each
 	// fork of the gated stage has its own gate value from the one producer.
 	{name: "split_gate"},
+	// The same gate under map calls the entry forks, an array and a map with
+	// unsorted keys: the producer's outs give each fork its gate value.
+	{name: "split_gate_entry"},
 	// #472: every bench lane's invocation at its narrower width, in both
 	// TestBench modes, so a divergence on a bench shape fails here and not
 	// only the bench's task-count gates.
