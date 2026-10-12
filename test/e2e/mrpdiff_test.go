@@ -142,12 +142,12 @@ func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string) ([]byte
 	}
 }
 
-// nfResultsMeta are mro2nf's own metadata files at the root of results/. mrp
-// keeps its outs JSON outside outs/ and writes no manifest, so a tree compared
-// with mrp's drops them only under the allowlist's results-metadata rule, and
-// only at the root, because a stage may publish a file of the same name deeper
-// in the tree.
-var nfResultsMeta = []string{"pipeline_outs.json", "manifest.json.gz"}
+// nfResultsMeta is mro2nf's own metadata at the root of results/, the outs
+// JSON. mrp keeps its outs JSON outside outs/, so a tree compared with mrp's
+// drops it only under the allowlist's results-metadata rule, and only at the
+// root, because a stage may publish a file of the same name deeper in the
+// tree.
+var nfResultsMeta = []string{"pipeline_outs.json"}
 
 // emptyDirMark is hashTree's value for an empty directory, keyed by its path
 // plus a trailing slash so it cannot collide with a file's digest entry.
@@ -268,10 +268,13 @@ func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit fu
 //
 // mro names the entry invocation of a bench/ fixture, whose name is then its
 // repo-relative dir (bench/<shape>); a testdata/ fixture leaves it empty and
-// runs its pipeline.mro.
+// runs its pipeline.mro. cloud adds a leg run under cloudConfig, each task in
+// its own scratch dir with its inputs copied in, as on an object-store work
+// dir.
 type mrpDiffCase struct {
-	name string
-	mro  string
+	name  string
+	mro   string
+	cloud bool
 }
 
 // source returns the dir and entry .mro the case runs.
@@ -478,15 +481,20 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "split_no_chunks"},
 	// #332: the stage's output is a symlink to a host file, which mrp
 	// publishes as a link and mro2nf as a copy (allowlist entry
-	// published-symlinks-copied).
+	// published-symlinks-copied). #485: two outputs reach it, and each gets
+	// its own link.
 	{name: "symlink_escape"},
 	// #431: a file reached from several outputs, through a pass-through stage
 	// and a sub-pipeline boundary too, is named by the first path mrp
 	// published it at.
 	{name: "shared_out_file"},
 	// #432: files below a 2-D array, reached through a struct projection and
-	// a whole sub-pipeline ref, stay unpublished, as mrp leaves them.
-	{name: "nested_path_unpublished"},
+	// a whole sub-pipeline ref, stay unpublished, as mrp leaves them. #457:
+	// each is named in its producer's work dir, from a scratch dir too.
+	{name: "nested_path_unpublished", cloud: true},
+	// #341: a fork key holding a newline publishes its file, from a scratch
+	// dir too, which Nextflow unstages a line at a time.
+	{name: "map_key_newline", cloud: true},
 	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
 	{name: "preflight_ungated"},
 	// #314: a sub-pipeline's preflight, fed by a parent call, waits for its
@@ -611,6 +619,23 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	runMrpAt(t, bin, dir, mro, tmp)
 
 	compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp))
+
+	// A scratch dir is gone after its task, and with it the stage metadata
+	// the ABI comparison reads, so this leg compares the published outputs.
+	if tc.cloud {
+		t.Run("cloud", func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpileMRO(t, dir, mro)
+			writeCloudConfig(t, proj)
+
+			if err := runNextflow(t, proj, "-c", "cloud.config"); err != nil {
+				t.Fatalf("nextflow: %v", err)
+			}
+
+			compareMrpToNextflow(t, tc.name, tmp, proj)
+		})
+	}
 }
 
 // diffNextflow transpiles a case's fixture, runs the generated project under

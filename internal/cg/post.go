@@ -87,7 +87,7 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 		}
 	}
 
-	if err := writeInstance(spec.Outs, in); err != nil {
+	if err := stampPosted(spec.Outs, in); err != nil {
 		return Instance{}, nil, err
 	}
 

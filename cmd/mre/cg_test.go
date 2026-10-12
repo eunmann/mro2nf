@@ -114,10 +114,48 @@ func TestCallGraphSubcommands(t *testing.T) {
 	outs := filepath.Join(work, "sumx", "outs")
 	writeTestBundle(t, outs, map[string]any{"total": 6})
 	runCG(t, "post", "-args", filepath.Join(work, "sumx", "args"), "-outs", outs)
-	runCG(t, "outs", "-in", outs, "-o", filepath.Join(work, "pipeline"))
+	pipeline := filepath.Join(work, "pipeline_outs.json")
+	runCG(t, "outs", "-in", outs, "-work", filepath.Join(work, "ps"), "-o", filepath.Join(work, "results"), "-json", pipeline)
 
-	if d := cmp.Diff(`{"total":6}`, compactBundle(t, filepath.Join(work, "pipeline"))); d != "" {
+	got, err := os.ReadFile(pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d := cmp.Diff("{\n    \"total\": 6\n}", string(got)); d != "" {
 		t.Errorf("pipeline outs (-mrp +mre):\n%s", d)
+	}
+}
+
+// TestReadLocations: each line of a locations file maps a staged bundle, by
+// its absolute path, to its location, and a line without both fails.
+func TestReadLocations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "locations")
+	if err := os.WriteFile(path, []byte("in/u1\ts3://bucket/work/ab/cd/outs/x\n\n/abs/u2\t/work/ef/01/outs/y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readLocations(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	u1, err := filepath.Abs("in/u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{u1: "s3://bucket/work/ab/cd/outs/x", "/abs/u2": "/work/ef/01/outs/y"}
+	if d := cmp.Diff(want, got); d != "" {
+		t.Errorf("locations (-want +got):\n%s", d)
+	}
+
+	if err := os.WriteFile(path, []byte("in/u1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := readLocations(path); !errors.Is(err, errBadLocation) {
+		t.Errorf("a line without a location: %v, want errBadLocation", err)
 	}
 }
 

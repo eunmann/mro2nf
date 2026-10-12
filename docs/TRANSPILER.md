@@ -50,7 +50,7 @@ This one decision shapes everything else:
    │      │  compile (Martian) │  emits    │         invocation, fix its forks   │
    │      ▼                    │  ──────►  │  N0_X   mre args → mre run → post   │
    │  witness call graph      │           │  N1_Y   … one process per stage node│
-   │      │  topology          │           │  OUTS   mre outs → publish-layout   │
+   │      │  topology          │           │  OUTS   mre outs: mrp's PostProcess │
    │      ▼                    │           │  each mre run drives the real stage │
    │  main.nf + stage.nf      │           │  through mrjob and the adapter      │
    └──────────────────────────┘           └─────────────────────────────────────┘
@@ -81,7 +81,7 @@ Source layout:
 
 ```
 cmd/mro2nf/      → transpiler CLI: .mro -> Nextflow project
-cmd/mre/         → runtime shim: plan | args | run | post | outs | publish-layout
+cmd/mre/         → runtime shim: plan | args | run | post | outs
 internal/
   cg/            → Martian's compiled call graph: witness, topology, plan,
                    the _args resolver, fork elements, gates, pipeline outs
@@ -261,10 +261,14 @@ chunk count. Each chunk's main and the join are scheduled with the cpus, memory
 and special their jobs get, the split's `resources.tsv`, an `eval` value the
 driver splits into rows without parsing a record.
 
-**OUTS.** The last task resolves the pipeline outs with `mre outs` and lays them
-out with `mre publish-layout` as `mrp` publishes them: the `outs/` tree, named
-by Martian's `GetOutFilename` rules, `pipeline_outs.json`, and
-`manifest.json.gz`, which `publishDir` copies into `params.outdir`.
+**OUTS.** The last task stages every outs bundle the pipeline outs read, gets
+each bundle's location as a value (`toUriString()`, a path or an `s3://` URI),
+and publishes them with `mre outs` through `mrp`'s own post-processing: the
+`outs/` tree and `pipeline_outs.json`, which `publishDir` copies into
+`params.outdir`. The workflow `output {}` block would declare that tree as
+data, but Nextflow 24.04, the engine floor, accepts it only under the
+`nextflow.preview.output` flag, in a `publish:` syntax (`ch >> 'name'`) that
+26.04 rejects, and 26.04's syntax does not compile on 24.04 (#356).
 
 **Order.** Each staged list is staged in an order the run fixes, a gather's and
 OUTS's by instance key and a join's by chunk name, since list order is part of
@@ -363,15 +367,30 @@ the invocation's own declarations.
   that reads this stage alone, every fork it resolves true at, as `mrp`'s
   `Fork.disabled` reads it (a null reads false), named
   `<node>@<roots>@<ordinals>` by the node's ordinals of the roots, beyond this
-  stage's, the binding is forked on.
-- **`mre outs`** resolves the pipeline outs into the bundle `publish-layout`
-  reads, checking them with `MarshalerMap.ValidatePipelineOutputs`.
-- **`mre publish-layout`** walks the pipeline outs bundle's raw sidecar against
-  the top-level callable's output types and writes `pipeline_outs.json` and
-  `manifest.json.gz`, linking each staged leaf into its `outs/` path. A file
-  reached from several outputs is linked into each; a file below an array of
-  two or more dimensions stays unpublished and is named by its origin, as
-  `mrp` leaves it (#432).
+  stage's, the binding is forked on. Each bundle it posts also records, in
+  `task.json`, the dir it posted from, where its stage ran, and the bundle's
+  path there.
+- **`mre outs`** resolves the pipeline outs, checks them with
+  `MarshalerMap.ValidatePipelineOutputs`, and publishes them with `mrp`'s own
+  post-processing (`Pipestance.PostProcess`), so the published tree and the
+  outs JSON follow `mrp`'s rules by construction. It reconstructs a pipestance
+  (`-work`): the top fork's `_outs` holds the resolved outs, each file leaf
+  placed by its origin (§7). A stage's own file is one path in the pipestance
+  however many outputs reach it, which PostProcess moves into `outs/` at the
+  first and links the others to; a linked file is a path outside the
+  pipestance per output that reaches it, which PostProcess links into `outs/`
+  at that output. The pipestance is attached read-only from the invocation,
+  with a runtime that needs no job manager, so no Martian install is read.
+  PostProcess reports no error, so `mre outs` then checks every name it wrote:
+  a path in `outs/` must exist, and no path of the reconstruction may reach the
+  outs JSON. It writes `outs/` with each link replaced by what it reaches
+  (`-o`) and the outs JSON (`-json`), naming a published file by its path in
+  the tree, a linked one by its own link's path, and a file left unpublished
+  (below an array of two or more dimensions) by where its producer's work dir
+  keeps the copy it staged: `-locations` maps each staged bundle to that
+  location, which no task sees of itself. A path the stage declared and never
+  wrote is named below the work dir of the task that posted it (`task.json`),
+  which a scratch dir is not.
 
 The resolver mirrors only what Martian does not export: per-instance resolution
 (`core/resolve.go` `resolveInputs` and `TopNode.resolve`), fork expansion
@@ -431,9 +450,16 @@ Both prefixes resolve identically on read-back. The rules:
   however many input bundles it arrived through. Its identity is its origin, the
   absolute path it was first staged from, where its task wrote it, written to
   `.mre-origin` beside the leaf; a leaf of a staged bundle, such as the input a
-  pass-through stage returns, keeps the origin recorded beside it. A leaf named
-  `.mre-origin` fails the write. `mre publish-layout` names a file it leaves
-  unpublished by its origin (#432).
+  pass-through stage returns, keeps the origin recorded beside it, and a path
+  inside a staged directory leaf takes that leaf's origin joined with the path
+  below it, so a file inside a directory the run was given stays linked. The record
+  also says how `mrp` publishes the file (`linked:` before the path): a stage
+  output that was a symlink, or a file from outside every task (a host file,
+  or one the run was given), is linked into `outs/` at each output that
+  reaches it, where a stage's own file is moved to the first and the others
+  link to it (`post_process.go` `moveOutFile`, `copyOutSymlink`). A leaf named
+  `.mre-origin` fails the write. `mre outs` places each file of the pipeline
+  outs in the pipestance it reconstructs by its origin (§6).
 - **Escaping** (on write): every other string that begins with the reserved
   `@mre:` prefix (a string input, a `.mro` literal, a stage's string output, a
   file-typed out naming no file) is stored as `@mre:str:<original>`. A marker in
@@ -445,7 +471,8 @@ Both prefixes resolve identically on read-back. The rules:
   exactly the string `mrp` would pass it. A marker is accepted only in the shape
   `MarkFiles` writes (`f/L<nnnn>/<basename>`: exactly one name under the
   ordinal dir, not `.` or `..`, bundle-local); any other `@mre:` string fails
-  the read. `publish-layout` restores the escapes for the published outs.
+  the read. `mre outs` reads the pipeline outs this way, so the published outs
+  carry the original strings.
 
 **Symlink dereference.** Nextflow stages inputs as *symlinks*. When `mre` copies
 a file leaf into a bundle, it dereferences the symlink to the real target first

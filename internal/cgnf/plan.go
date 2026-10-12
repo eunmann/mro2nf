@@ -80,8 +80,9 @@ func (p *project) outs(g *gen) {
 		ups = "channel.empty().mix(" + strings.Join(srcs, ", ") + ").toList().map { xs -> ordered(xs) }"
 	}
 
+	g.linef("outs_in = %s", ups)
 	// The meta waits on PLAN, which writes the invocation OUTS compiles.
-	g.linef("OUTS(nodes.map { _ns -> %s }, %s, file(\"${projectDir}/_assets/types.json\"))", p.graphMeta("plan", "call: "+gstr(p.src.Invocation.Call)), ups)
+	g.linef("OUTS(nodes.map { _ns -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(\"${projectDir}/_assets/types.json\"))", p.graphMeta("plan"))
 }
 
 // shellQuote is s single-quoted for the shell.

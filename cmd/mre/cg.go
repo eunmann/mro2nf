@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -147,12 +148,15 @@ func runPost(_ context.Context, argv []string) error {
 	return nil
 }
 
-// runOuts resolves the pipeline outs from the staged stage outs into the
-// bundle publish-layout reads.
-func runOuts(_ context.Context, argv []string) error {
+// runOuts resolves the pipeline outs from the staged stage outs and
+// publishes them as mrp does: the published tree and the outs JSON naming it.
+func runOuts(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("outs", flag.ContinueOnError)
 	gf := addGraph(fs)
-	out := fs.String("o", "outs", "pipeline outs bundle dir to write")
+	out := fs.String("o", "results", "dir to write the published tree into")
+	outsJSON := fs.String("json", "pipeline_outs.json", "file to write the outs JSON to")
+	work := fs.String("work", "pipestance", "dir to reconstruct the pipestance in")
+	locations := fs.String("locations", "", "file of tab-separated lines: a staged outs bundle, and where its producing task's work dir keeps it")
 
 	var in repeatedFlag
 
@@ -167,9 +171,54 @@ func runOuts(_ context.Context, argv []string) error {
 		return err
 	}
 
-	if err := g.WriteOuts(cg.OutsSpec{In: in, Manifest: man, Out: *out}); err != nil {
+	locs, err := readLocations(*locations)
+	if err != nil {
+		return err
+	}
+
+	spec := cg.OutsSpec{In: in, Locations: locs, Manifest: man, Source: gf.mro, Work: *work, Results: *out, OutsJSON: *outsJSON}
+	if err := g.WriteOuts(ctx, spec); err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}
 
 	return nil
+}
+
+// errBadLocation reports a locations line that is not a bundle and a
+// location separated by a tab.
+var errBadLocation = errors.New("malformed location line")
+
+// readLocations reads the locations file at path into a map from each
+// bundle's absolute path to its location; "" reads none.
+func readLocations(path string) (map[string]string, error) {
+	locs := map[string]string{}
+	if path == "" {
+		return locs, nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read locations: %w", err)
+	}
+
+	for line := range strings.Lines(string(raw)) {
+		line = strings.TrimSuffix(line, "\n")
+		if line == "" {
+			continue
+		}
+
+		bundle, loc, ok := strings.Cut(line, "\t")
+		if !ok || bundle == "" || loc == "" {
+			return nil, fmt.Errorf("%w: %q", errBadLocation, line)
+		}
+
+		abs, err := filepath.Abs(bundle)
+		if err != nil {
+			return nil, fmt.Errorf("read locations: %w", err)
+		}
+
+		locs[abs] = loc
+	}
+
+	return locs, nil
 }

@@ -79,7 +79,7 @@ func loadSource(t *testing.T, src string) *fixture {
 		t.Fatal(err)
 	}
 
-	return &fixture{t: t, g: g, dir: t.TempDir()}
+	return &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
 }
 
 func baseNames(dirs []string) []string {

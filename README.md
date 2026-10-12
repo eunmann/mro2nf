@@ -42,7 +42,7 @@ exchange — see **[`docs/TRANSPILER.md`](docs/TRANSPILER.md)**.
 ```
 cmd/mro2nf/    transpiler CLI: .mro -> Nextflow project
 cmd/mre/       runtime shim the generated tasks call:
-               plan | args | run | post | outs | publish-layout
+               plan | args | run | post | outs
 internal/
   cg/          Martian's compiled call graph: witness, topology, plan, resolver
   cgnf/        call graph -> Nextflow project (main.nf wiring, stage.nf module)

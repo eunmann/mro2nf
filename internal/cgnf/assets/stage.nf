@@ -158,26 +158,36 @@ process STAGE_JOIN {
     """
 }
 
-// OUTS resolves the pipeline outs from the stage outs they read and lays
-// them out as mrp publishes them.
+// locations writes the file mre outs names an unpublished file by: each
+// item OUTS staged and where its producing task's work dir keeps it, which
+// no task sees of itself. The here-document's lines start their own lines,
+// where the script's indent does not reach.
+def locations(ups, List locs) {
+    def lines = [ups, locs].transpose().collect { u, l -> "${u}\t${l}\n" }.join('')
+    return "cat > locations <<'MRO2NF_LOCATIONS'\n${lines}MRO2NF_LOCATIONS"
+}
+
+// OUTS resolves the pipeline outs from the stage outs they read and
+// publishes them with mrp's own post-processing. The workflow output block
+// would publish the tree as data, but Nextflow 24.04 accepts it only under
+// the nextflow.preview.output flag and in a syntax 26.04 rejects (#356).
 process OUTS {
-    publishDir params.outdir, mode: 'copy', pattern: '{pipeline_outs.json,manifest.json.gz}'
-    publishDir params.outdir, mode: 'copy', saveAs: { f -> f.startsWith('outs/') ? f.substring(5) : null }
+    publishDir params.outdir, mode: 'copy', saveAs: { f -> f.startsWith('results/') ? f.substring(8) : f }
 
     input:
     val meta
     path ups, stageAs: 'in/u*', arity: '0..*'
+    val locs
     path 'types.json'
 
     output:
     path 'pipeline_outs.json'
-    path 'manifest.json.gz'
-    path 'outs/*', hidden: true, arity: '0..*'
+    path 'results/*', hidden: true, arity: '0..*'
 
     script:
     """
     mkdir -p in
-    ${shq(params.mro2nf_mre)} outs ${graph(meta)} -types types.json -in in -o final
-    ${shq(params.mro2nf_mre)} publish-layout -sidecar final/data.json -dir . -types types.json -callable ${shq(meta.call)} -role out -leaves final/f -outs outs
+    ${locations(ups, locs)}
+    ${shq(params.mro2nf_mre)} outs ${graph(meta)} -types types.json -in in -locations locations -o results -json pipeline_outs.json
     """
 }

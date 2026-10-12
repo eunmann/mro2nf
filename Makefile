@@ -37,7 +37,7 @@ build: ## Build mro2nf, mre and mrjob
 test: ## Run unit tests
 	go test ./... 2>&1 | tee artifacts/test.log
 
-# Cross-package attribution (-coverpkg) so e.g. types.OutFilename exercised from
+# Cross-package attribution (-coverpkg) so e.g. internal/cg exercised from
 # cmd/mre tests counts; scoped to ./cmd + ./internal (deploy/ has no Go).
 # -count=1: a cached result for a package that does not import a -coverpkg
 # package replays that package's blocks from an older source, so the merged

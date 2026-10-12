@@ -199,10 +199,162 @@ func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
 	staged := stageBundle(t, pass, filepath.Join(dir, "layout", "in"))
 
 	for _, p := range []string{filepath.Join(make1, "f", "L0000", "a.txt"), filepath.Join(staged, "f", "L0000", "a.txt")} {
-		if got, err := shim.LeafOrigin(p); err != nil || got != written {
-			t.Errorf("LeafOrigin(%s) = %q (err %v), want %q", p, got, err, written)
+		if got, ok, err := shim.ReadOrigin(p); err != nil || !ok || got.Path != written {
+			t.Errorf("ReadOrigin(%s) = %+v, %t (err %v), want %q", p, got, ok, err, written)
 		}
 	}
+}
+
+// TestLeafOriginRecordsHowMrpPublishesIt guards #485: a stage output that is
+// a symlink, a host file outside the task and a file the run was given are
+// linked into outs/ by mrp at every output that reaches them, a stage's own
+// file is moved there once, and a bundle that forwards a leaf keeps how.
+func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
+	dir := t.TempDir()
+	work := filepath.Join(dir, "work")
+	files := filepath.Join(work, "main", "files")
+	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
+	own := writeSelfNamed(t, filepath.Join(files, "own.txt"))
+	link := filepath.Join(files, "link.txt")
+
+	if err := os.Symlink(host, link); err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := shim.ConfineStage(work, "main", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	params := []ir.Param{{Name: "own", BaseType: "txt", IsFile: true}, {Name: "link", BaseType: "txt", IsFile: true}, {Name: "host", BaseType: "txt", IsFile: true}}
+	outs := filepath.Join(work, "outs")
+
+	if err := shim.WriteBundle(outs, map[string]any{"own": own, "link": link, "host": host}, params, fileTable(), conf); err != nil {
+		t.Fatal(err)
+	}
+
+	given := filepath.Join(dir, "given")
+	if err := shim.WriteBundle(given, map[string]any{"own": host}, params[:1], fileTable(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	forwarded := filepath.Join(dir, "forwarded")
+	if err := shim.WriteBundle(forwarded, readPayload(t, stageBundle(t, outs, filepath.Join(dir, "in"))), params, fileTable(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]shim.Origin{"own": {Path: own}, "link": {Path: link, Linked: true}, "host": {Path: host, Linked: true}}
+
+	for _, bundle := range []string{outs, forwarded} {
+		if d := cmp.Diff(want, leafOrigins(t, bundle)); d != "" {
+			t.Errorf("origins in %s (-want +got):\n%s", bundle, d)
+		}
+	}
+
+	if d := cmp.Diff(map[string]shim.Origin{"own": {Path: host, Linked: true}}, leafOrigins(t, given)); d != "" {
+		t.Errorf("origin of a file the run was given (-want +got):\n%s", d)
+	}
+}
+
+// TestLeafOriginInheritsEnclosingLeaf checks a stage output naming a file
+// inside a staged directory leaf is the file mrp sees there: below a
+// directory the run was given it is a host file mrp links, and below another
+// stage's directory output it is that stage's file, one identity in every
+// task that returns it.
+func TestLeafOriginInheritsEnclosingLeaf(t *testing.T) {
+	dir := t.TempDir()
+	params := []ir.Param{{Name: "d", BaseType: "path", IsFile: true}}
+
+	host := filepath.Dir(writeSelfNamed(t, filepath.Join(dir, "host", "ref", "fasta", "genome.fa")))
+	given := filepath.Join(dir, "given")
+
+	if err := shim.WriteBundle(given, map[string]any{"d": filepath.Dir(host)}, params, fileTable(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	producer := filepath.Join(dir, "producer")
+	own := filepath.Dir(writeSelfNamed(t, filepath.Join(producer, "main", "files", "out", "sub", "x.txt")))
+	produced := writeStageOuts(t, producer, map[string]any{"d": filepath.Dir(own)}, params)
+
+	cases := map[string]struct {
+		bundle, rel string
+		want        shim.Origin
+	}{
+		"inside a given dir":    {given, "fasta/genome.fa", shim.Origin{Path: filepath.Join(host, "genome.fa"), Linked: true}},
+		"inside a stage's dir":  {produced, "sub/x.txt", shim.Origin{Path: filepath.Join(own, "x.txt")}},
+		"a given dir itself":    {given, "", shim.Origin{Path: filepath.Dir(host), Linked: true}},
+		"a stage's dir itself":  {produced, "", shim.Origin{Path: filepath.Dir(own)}},
+		"inside a given subdir": {given, "fasta", shim.Origin{Path: host, Linked: true}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			work := filepath.Join(t.TempDir(), "work")
+			staged, _ := readPayload(t, stageBundle(t, tc.bundle, filepath.Join(work, "args")))["d"].(string)
+			outs := writeStageOuts(t, work, map[string]any{"d": filepath.Join(staged, tc.rel)}, params)
+
+			if d := cmp.Diff(map[string]shim.Origin{"d": tc.want}, leafOrigins(t, outs)); d != "" {
+				t.Errorf("origin (-want +got):\n%s", d)
+			}
+		})
+	}
+}
+
+// writeStageOuts writes payload as the outs bundle of a main phase run in
+// the task work dir work, and returns the bundle dir.
+func writeStageOuts(t *testing.T, work string, payload map[string]any, params []ir.Param) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Join(work, "main"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := shim.ConfineStage(work, "main", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outs := filepath.Join(work, "outs")
+	if err := shim.WriteBundle(outs, payload, params, fileTable(), conf); err != nil {
+		t.Fatal(err)
+	}
+
+	return outs
+}
+
+// leafOrigins maps each file leaf of the bundle at dir to its origin.
+func leafOrigins(t *testing.T, dir string) map[string]shim.Origin {
+	t.Helper()
+
+	out := map[string]shim.Origin{}
+
+	for name, v := range readPayload(t, dir) {
+		leaf, _ := v.(string)
+
+		o, ok, err := shim.ReadOrigin(leaf)
+		if err != nil || !ok {
+			t.Fatalf("origin of %s in %s: %v (recorded %v)", name, dir, err, ok)
+		}
+
+		out[name] = o
+	}
+
+	return out
+}
+
+// writeSelfNamed writes a file at path holding its path, and returns path.
+func writeSelfNamed(t *testing.T, path string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(path, []byte(path), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
 }
 
 // TestMarkFilesRefusesOriginFileName checks a leaf named like the origin file

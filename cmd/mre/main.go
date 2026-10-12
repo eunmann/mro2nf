@@ -1,8 +1,8 @@
 // Command mre is the Martian runtime executor the generated Nextflow tasks
 // call: it compiles the run's call graph (plan), builds a stage instance's
 // _args (args), runs one phase of the stage as mrp runs its job (run), and
-// stamps and splits its outs (post); the OUTS task resolves and lays out the
-// pipeline outs (outs, publish-layout).
+// stamps and splits its outs (post); the OUTS task resolves and publishes the
+// pipeline outs (outs).
 package main
 
 import (
@@ -19,7 +19,7 @@ import (
 var version = "dev"
 
 var (
-	errUsage          = errors.New("usage: mre <plan|args|run|post|outs|publish-layout|version> [flags]")
+	errUsage          = errors.New("usage: mre <plan|args|run|post|outs|version> [flags]")
 	errUnknownCommand = errors.New("unknown subcommand")
 )
 
@@ -66,12 +66,11 @@ func run(ctx context.Context, args []string) error {
 
 func subcommands() map[string]func(context.Context, []string) error {
 	return map[string]func(context.Context, []string) error{
-		"plan":           runPlan,
-		"args":           runArgs,
-		"post":           runPost,
-		"outs":           runOuts,
-		"run":            runJob,
-		"publish-layout": runPublishLayout,
+		"plan": runPlan,
+		"args": runArgs,
+		"post": runPost,
+		"outs": runOuts,
+		"run":  runJob,
 	}
 }
 

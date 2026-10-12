@@ -102,12 +102,6 @@ func validRel(rel string) bool {
 	return m != nil && m[1] != "." && m[1] != ".." && filepath.IsLocal(rel)
 }
 
-// LeafPath returns the path of the leaf at bundle-relative rel below the files
-// subdir, the path a directory of staged leaves holds it at.
-func LeafPath(rel string) string {
-	return strings.TrimPrefix(rel, bundleFiles+"/")
-}
-
 // Marker returns the transport marker for a leaf staged at bundle-relative rel,
 // choosing FileMarker or DirMarker by the leaf's stat'd dir-ness.
 func Marker(rel string, isDir bool) string {
@@ -151,16 +145,6 @@ func CheckReserved(s string) error {
 	}
 
 	return fmt.Errorf("%w: %q", ErrBadMarker, s)
-}
-
-// UnescapeValue returns a copy of v with every escaped string restored to its
-// original value, leaving markers and all other values as they are. It is for
-// payload read raw rather than through ReadBundle: the published outs and the
-// element the driver slices out of a sidecar.
-func UnescapeValue(v any) (any, error) {
-	return mapStrings(v, func(s string) (string, error) {
-		return strings.TrimPrefix(s, escapePrefix), nil
-	})
 }
 
 // escapeValue returns a copy of v with every string that begins with the
@@ -413,12 +397,12 @@ func (m leafMarker) mark(leaf string) (string, error) {
 		return "", fmt.Errorf("resolve file leaf %s: %w", src, err)
 	}
 
-	origin, err := LeafOrigin(abs)
+	origin, err := m.origin(src, abs)
 	if err != nil {
 		return "", err
 	}
 
-	if marker, ok := m.marks[origin]; ok {
+	if marker, ok := m.marks[origin.Path]; ok {
 		return marker, nil
 	}
 
@@ -436,14 +420,76 @@ func (m leafMarker) mark(leaf string) (string, error) {
 		return "", err
 	}
 
-	m.marks[origin] = Marker(rel, isDir)
+	m.marks[origin.Path] = Marker(rel, isDir)
 
-	return m.marks[origin], nil
+	return m.marks[origin.Path], nil
+}
+
+// origin is the origin of the leaf at src, whose absolute path is abs, that
+// the bundle leaf holding it recorded, or the one this write establishes for
+// a leaf no bundle recorded.
+func (m leafMarker) origin(src, abs string) (Origin, error) {
+	o, ok, err := enclosingOrigin(abs)
+	if err != nil || ok {
+		return o, err
+	}
+
+	linked, err := m.linked(src)
+
+	return Origin{Path: abs, Linked: linked}, err
+}
+
+// enclosingOrigin returns the origin of the path abs from the nearest bundle
+// leaf that is or holds it: a file inside a staged directory leaf is, to mrp,
+// that file inside the directory its producer wrote or the run was given, and
+// mrp publishes it as it does that directory.
+func enclosingOrigin(abs string) (Origin, bool, error) {
+	for leaf := abs; leaf != filepath.Dir(leaf); leaf = filepath.Dir(leaf) {
+		if _, _, ok := LeafBundle(leaf); !ok {
+			continue
+		}
+
+		o, ok, err := ReadOrigin(leaf)
+		if err != nil || !ok {
+			return Origin{}, false, err
+		}
+
+		rel, err := filepath.Rel(leaf, abs)
+		if err != nil {
+			return Origin{}, false, fmt.Errorf("resolve %s in leaf %s: %w", abs, leaf, err)
+		}
+
+		return Origin{Path: filepath.Join(o.Path, rel), Linked: o.Linked}, true, nil
+	}
+
+	return Origin{}, false, nil
+}
+
+// linked reports whether mrp links the leaf src, which no bundle recorded:
+// a file the run was given, written without a confinement, or a stage output
+// that is a symlink or lies outside its task.
+func (m leafMarker) linked(src string) (bool, error) {
+	if m.conf == nil {
+		return true, nil
+	}
+
+	info, err := os.Lstat(src)
+	if err != nil {
+		return false, fmt.Errorf("stat file leaf %s: %w", src, err)
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true, nil
+	}
+
+	kind, err := m.conf.admit(src)
+
+	return kind == leafOutside, err
 }
 
 // stage copies the leaf at src to rel in the bundle and records its origin
 // beside it.
-func (m leafMarker) stage(src, rel, origin string) error {
+func (m leafMarker) stage(src, rel string, origin Origin) error {
 	dst := filepath.Join(m.dir, rel)
 	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
 		return fmt.Errorf("create files dir: %w", err)
@@ -453,31 +499,67 @@ func (m leafMarker) stage(src, rel, origin string) error {
 		return err
 	}
 
-	return writeRaw(filepath.Join(filepath.Dir(dst), originFile), []byte(origin))
-}
-
-// LeafOrigin returns the origin of the file leaf at the absolute path abs: the
-// one recorded beside it when it is a leaf of a bundle, else abs itself.
-func LeafOrigin(abs string) (string, error) {
-	ordinal := filepath.Dir(abs)
-	if !ordinalDir.MatchString(filepath.Base(ordinal)) || filepath.Base(filepath.Dir(ordinal)) != bundleFiles {
-		return abs, nil
+	record := origin.Path
+	if origin.Linked {
+		record = linkedPrefix + record
 	}
 
-	recorded, err := os.ReadFile(filepath.Join(ordinal, originFile))
+	return writeRaw(filepath.Join(filepath.Dir(dst), originFile), []byte(record))
+}
+
+// Origin is a file leaf's identity: the absolute path it was first staged
+// from, where its task wrote it, and how mrp publishes it.
+type Origin struct {
+	Path string
+	// Linked is a stage output that was a symlink, or a file from outside
+	// every task: a host file, or one the run was given. mrp's
+	// post-processing links such a file into outs/ at each output that
+	// reaches it, where it moves a stage's own file to the first and links
+	// the others to that (post_process.go moveOutFile, copyOutSymlink).
+	Linked bool
+}
+
+// linkedPrefix begins the recorded origin of a Linked leaf; a recorded path
+// is absolute, so the two never read alike.
+const linkedPrefix = "linked:"
+
+// ReadOrigin returns the origin recorded beside the file leaf at the absolute
+// path abs, and false when abs is no leaf of a bundle or none is recorded.
+func ReadOrigin(abs string) (Origin, bool, error) {
+	if _, _, ok := LeafBundle(abs); !ok {
+		return Origin{}, false, nil
+	}
+
+	recorded, err := os.ReadFile(filepath.Join(filepath.Dir(abs), originFile))
 	if errors.Is(err, fs.ErrNotExist) {
-		return abs, nil
+		return Origin{}, false, nil
 	}
 
 	if err != nil {
-		return "", fmt.Errorf("read origin of %s: %w", abs, err)
+		return Origin{}, false, fmt.Errorf("read origin of %s: %w", abs, err)
 	}
 
-	if !filepath.IsAbs(string(recorded)) {
-		return "", fmt.Errorf("%w: %q beside %s", errBadOrigin, recorded, abs)
+	path, linked := strings.CutPrefix(string(recorded), linkedPrefix)
+	if !filepath.IsAbs(path) {
+		return Origin{}, false, fmt.Errorf("%w: %q beside %s", errBadOrigin, recorded, abs)
 	}
 
-	return string(recorded), nil
+	return Origin{Path: path, Linked: linked}, true, nil
+}
+
+// LeafBundle returns the bundle dir holding the file leaf at path and the
+// leaf's path in it, and false for a path that is no bundle leaf.
+func LeafBundle(path string) (string, string, bool) {
+	ordinal := filepath.Dir(path)
+	files := filepath.Dir(ordinal)
+
+	if !ordinalDir.MatchString(filepath.Base(ordinal)) || filepath.Base(files) != bundleFiles {
+		return "", "", false
+	}
+
+	dir := filepath.Dir(files)
+
+	return dir, filepath.Join(bundleFiles, filepath.Base(ordinal), filepath.Base(path)), true
 }
 
 // leafName returns the basename of the file leaf at src, whose absolute path

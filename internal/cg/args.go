@@ -146,16 +146,9 @@ func writeValue(dir string, v json.Marshaler, man types.Manifest, callable, role
 		return err
 	}
 
-	dv, err := types.DecodeJSON(raw)
+	payload, err := decodePayload(raw)
 	if err != nil {
-		return fmt.Errorf("decode %s %s value: %w", callable, role, err)
-	}
-
-	payload := map[string]any{}
-	if obj, ok := types.AsObject(dv); ok {
-		for _, m := range obj {
-			payload[m.Key] = m.Value
-		}
+		return fmt.Errorf("%s %s value: %w", callable, role, err)
 	}
 
 	params, err := man.Params(callable, role)

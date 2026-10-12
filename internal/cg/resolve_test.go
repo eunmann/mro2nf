@@ -1,6 +1,7 @@
 package cg
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 type fixture struct {
 	t   *testing.T
 	g   *Graph
+	mro string
 	dir string
 	seq int
 }
@@ -31,7 +33,6 @@ func loadFixture(t *testing.T, name string) *fixture {
 	t.Helper()
 
 	dir := filepath.Join("..", "..", "testdata", name)
-
 	mro := filepath.Join(dir, "pipeline.mro")
 
 	g, err := Load(mro, mro, nil)
@@ -39,7 +40,32 @@ func loadFixture(t *testing.T, name string) *fixture {
 		t.Fatal(err)
 	}
 
-	return &fixture{t: t, g: g, dir: t.TempDir()}
+	return &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
+}
+
+// writeOuts publishes the pipeline outs from the staged items in and
+// returns the outs JSON, compacted, or the error.
+func (f *fixture) writeOuts(man types.Manifest, in ...string) (string, error) {
+	f.t.Helper()
+
+	outs := f.next("pipeline_outs.json")
+	spec := OutsSpec{In: in, Manifest: man, Source: f.mro, Work: f.next("work"), Results: f.next("results"), OutsJSON: outs}
+
+	if err := f.g.WriteOuts(f.t.Context(), spec); err != nil {
+		return "", err
+	}
+
+	raw, err := os.ReadFile(outs)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		f.t.Fatal(err)
+	}
+
+	return compact.String(), nil
 }
 
 func (f *fixture) next(name string) string {
@@ -276,17 +302,12 @@ func TestEmptyForksPrune(t *testing.T) {
 		}
 	}
 
-	out := f.next("pipeline")
-	if err := f.g.WriteOuts(OutsSpec{In: []string{gen}, Out: out}); err != nil {
-		t.Fatal(err)
-	}
-
-	raw, err := shim.ReadBundle(out)
+	raw, err := f.writeOuts(types.Manifest{}, gen)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	wantArgs(t, "REF outs", string(raw), `{"ea":[],"em":{},"na":[],"nm":{}}`)
+	wantArgs(t, "REF outs", raw, `{"ea":[],"em":{},"na":[],"nm":{}}`)
 }
 
 // TestKeyOrder: every way a struct value is built reaches CONS in mrp's

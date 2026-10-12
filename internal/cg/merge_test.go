@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/eunmann/mro2nf/internal/shim"
 )
 
 // subOuts stages the outs of TOP.SUB's stages in the merge_across fixtures:
@@ -78,17 +76,12 @@ func TestMergeAcrossOuterForks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := tc.load(t)
 
-			out := f.next("pipeline")
-			if err := f.g.WriteOuts(OutsSpec{In: subOuts(f, tc.widths), Out: out}); err != nil {
-				t.Fatal(err)
-			}
-
-			raw, err := shim.ReadBundle(out)
+			raw, err := f.writeOuts(f.g.Manifest(), subOuts(f, tc.widths)...)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			wantArgs(t, "TOP outs", string(raw), tc.want)
+			wantArgs(t, "TOP outs", raw, tc.want)
 		})
 	}
 }
@@ -121,7 +114,7 @@ func TestMergeAcrossOuterForksFails(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.f.g.WriteOuts(OutsSpec{In: tc.in, Out: tc.f.next("pipeline")})
+			_, err := tc.f.writeOuts(tc.f.g.Manifest(), tc.in...)
 			if !errors.Is(err, errMergeUnmatched) {
 				t.Fatalf("pipeline outs: %v, want %v", err, errMergeUnmatched)
 			}
@@ -207,7 +200,7 @@ pipeline TOP(out SUB[] subs,)
 call TOP()
 `)
 
-			err := f.g.WriteOuts(OutsSpec{In: tc.in(f), Out: f.next("pipeline")})
+			_, err := f.writeOuts(f.g.Manifest(), tc.in(f)...)
 			if !errors.Is(err, errMergeAcrossForks) {
 				t.Fatalf("pipeline outs: %v, want %v", err, errMergeAcrossForks)
 			}

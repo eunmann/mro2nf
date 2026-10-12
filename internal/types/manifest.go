@@ -191,7 +191,7 @@ func (m Manifest) Table() *Table {
 // are walked with.
 const (
 	RoleIn      = "in"      // a callable's input params (mre args, plan)
-	RoleOut     = "out"     // a callable's output params (mre run, post, outs, publish-layout)
+	RoleOut     = "out"     // a callable's output params (mre run, post, outs)
 	RoleMainOut = "mainout" // a split stage's per-chunk main outputs, out + chunkOut (mre run)
 	RoleChunkIn = "chunkin" // a split stage's per-chunk input params (mre run)
 )
