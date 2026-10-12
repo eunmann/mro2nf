@@ -1,0 +1,34 @@
+filetype txt;
+
+# #520: a stage that opens a companion file beside its entry file input, as a
+# tool opens an index beside a BAM. mrp passes the invocation's path, so the
+# companion is found; mro2nf stages only the named file into the task, so it
+# is not, and the stage fails (divergences.json, entry-file-siblings).
+# Exercised by TestMrpDiffFailureParity. The input is /dev/null and the
+# companion /dev/zero: mrp passes an invocation path verbatim, so a relative
+# one would not resolve in its job dir, and /dev holds both on every host.
+stage READ_WITH_INDEX(
+    in  txt    reads,
+    in  string companion,
+    out int    index_bytes,
+    src py     "stages/read_with_index",
+)
+
+pipeline EFS(
+    in  txt    reads,
+    out int    index_bytes,
+)
+{
+    call READ_WITH_INDEX(
+        reads     = self.reads,
+        companion = "zero",
+    )
+
+    return (
+        index_bytes = READ_WITH_INDEX.index_bytes,
+    )
+}
+
+call EFS(
+    reads = "/dev/null",
+)

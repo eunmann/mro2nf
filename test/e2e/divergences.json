@@ -64,6 +64,15 @@
       "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
     },
     {
+      "id": "entry-file-siblings",
+      "kind": "outcome",
+      "feature": "a stage opening files beside an entry file input",
+      "summary": "A stage that opens a companion file beside an entry file input, such as an index beside a BAM, finds it under mrp, which passes the invocation's path, and the run succeeds; under mro2nf the stage finds nothing there and fails, because its task stages only the named file.",
+      "justification": "A task sees only the files its inputs name: on an isolated worker or an object-store work dir, the input's directory on the launch host does not exist, and staging that whole directory would copy files no input names. A stage that needs a companion file gets it as its own input, or as a file in a directory input (`RUNNING.md`, Pipeline inputs).",
+      "evidence": ["TestMrpDiffFailureParity/entry_file_sibling", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true, "failures": [{"kind": "error", "stage": "READ_WITH_INDEX"}]}
+    },
+    {
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",
