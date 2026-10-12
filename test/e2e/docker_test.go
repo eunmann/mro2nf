@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -45,29 +47,45 @@ func requireDocker(t *testing.T) {
 }
 
 var (
-	isoCfgOnce    sync.Once
-	isoCfgContent string
+	rootlessOnce sync.Once
+	rootless     bool
 )
 
-// isoConfig returns the Nextflow config lines for isolation runs, detected
-// once per test process. On rootful Docker (GitHub Actions) containers default
-// to root, so task outputs come back root-owned and work-dir cleanup fails
-// with "Permission denied". Mapping the container to the runner's uid/gid
-// (with a writable HOME) keeps files owned by the runner. On ROOTLESS Docker
-// the container's root already maps to the host user, and forcing -u maps to
-// an unprivileged subuid that cannot write the bind-mounted work dir, so the
-// mapping applies only when rootful.
-func isoConfig() string {
-	isoCfgOnce.Do(func() {
+// rootlessDocker reports, once per test process, whether the docker daemon
+// is rootless.
+func rootlessDocker() bool {
+	rootlessOnce.Do(func() {
 		out, err := exec.Command("docker", "info", "-f", "{{.SecurityOptions}}").Output()
-		if err == nil && strings.Contains(string(out), "rootless") {
-			return
-		}
-
-		isoCfgContent = fmt.Sprintf("docker.runOptions = '-u %d:%d -e HOME=/tmp'\n", os.Getuid(), os.Getgid())
+		rootless = err == nil && strings.Contains(string(out), "rootless")
 	})
 
-	return isoCfgContent
+	return rootless
+}
+
+// dockerProfileConfig returns the -c config lines for a run of the generated
+// docker profile: none on rootful Docker, where the profile's own user
+// mapping is under test. On ROOTLESS Docker the container's root already
+// maps to the host user, and the mapping maps to an unprivileged subuid that
+// cannot write the bind-mounted work dir, so the run clears it, as README
+// tells a rootless user to.
+func dockerProfileConfig() string {
+	if rootlessDocker() {
+		return "process.containerOptions = ''\n"
+	}
+
+	return ""
+}
+
+// localDockerConfig returns the -c config lines that run the awsbatch
+// profile's tasks in local docker as the invoking user, which the docker
+// profile does itself: rootful containers default to root, so task outputs
+// come back root-owned and work-dir cleanup fails with "Permission denied".
+func localDockerConfig() string {
+	if rootlessDocker() {
+		return ""
+	}
+
+	return fmt.Sprintf("docker.runOptions = '-u %d:%d -e HOME=/tmp'\n", os.Getuid(), os.Getgid())
 }
 
 // checkoutImage tags a test image per checkout, so a concurrent run in
@@ -219,12 +237,69 @@ func addTarEntry(tw *tar.Writer, path, name string, d fs.DirEntry) error {
 func runDocker(t *testing.T, proj, dir, name string, args ...string) error {
 	t.Helper()
 
-	writeFileT(t, filepath.Join(proj, "iso.config"), isoConfig())
+	writeFileT(t, filepath.Join(proj, "iso.config"), dockerProfileConfig())
 
 	return runNextflow(t, proj, append([]string{
 		"-profile", "docker", "-c", "iso.config", "--mro2nf_image", pipelineImage(t, dir, name),
 	}, args...)...)
 }
+
+// TestDockerWorkOwnership: a run of the generated docker profile, with no
+// user mapping from the harness, leaves every file under work/ owned by the
+// invoking user, so the user can delete or -resume-clean it without sudo.
+func TestDockerWorkOwnership(t *testing.T) {
+	t.Parallel()
+
+	requireDocker(t)
+
+	if rootlessDocker() {
+		t.Skip("rootless docker maps the container's root to the invoking user already")
+	}
+
+	dir := filepath.Join(root, "testdata", "split_test")
+	proj := transpile(t, "split_test")
+
+	if err := runDocker(t, proj, dir, "work_ownership"); err != nil {
+		t.Fatalf("nextflow (docker profile): %v", err)
+	}
+
+	uid := os.Getuid()
+	seen := 0
+
+	err := filepath.WalkDir(filepath.Join(proj, "work"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", path, err)
+		}
+
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("stat %s: %w", path, errNoOwner)
+		}
+
+		seen++
+
+		if int(st.Uid) != uid {
+			t.Errorf("%s is owned by uid %d, not the invoking user %d", path, st.Uid, uid)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk work/: %v", err)
+	}
+
+	if seen < 2 {
+		t.Fatalf("work/ holds %d entries; the run left no task dirs to check", seen)
+	}
+}
+
+// errNoOwner reports a file whose ownership the platform does not expose.
+var errNoOwner = errors.New("no owner in the file info")
 
 // dockerCases are the golden cases TestDockerIsolation runs isolated: every
 // process kind (split, map call, keyed fork, disabled call, a split's join
@@ -396,7 +471,7 @@ func TestGeneratedAWSBatchProfile(t *testing.T) {
 	proj := transpile(t, "diamond_min")
 	image := pipelineImage(t, filepath.Join(root, "testdata", "diamond_min"), "awsbatch_diamond_min")
 
-	writeFileT(t, filepath.Join(proj, "local.config"), "process.executor = 'local'\ndocker.enabled = true\n"+isoConfig())
+	writeFileT(t, filepath.Join(proj, "local.config"), "process.executor = 'local'\ndocker.enabled = true\n"+localDockerConfig())
 
 	err := runNextflow(t, proj, "-profile", "awsbatch", "-c", "local.config",
 		"--mro2nf_image", image, "--outdir", filepath.Join(proj, "results"))
