@@ -14,12 +14,17 @@ type templateParam struct {
 	Optional    bool   `json:"optional"`
 }
 
-// parameterTemplate is parameter-template.json: every entry input, each
-// optional, and none of the project's own params, so a HealthOmics run can
-// neither swap the image the package pins nor widen the file values it
-// stages.
+// parameterTemplate is parameter-template.json: every entry input and the
+// run's mrp --overrides file, which only resizes jobs, each optional, and
+// none of the project's other params, so a HealthOmics run can neither swap
+// the image the package pins nor widen the file values it stages.
 func (p *project) parameterTemplate() (string, error) {
-	tmpl := map[string]templateParam{}
+	tmpl := map[string]templateParam{
+		"mro2nf_overrides": {
+			Description: "an s3:// URI of mrp's --overrides file, over each stage's resources",
+			Optional:    true,
+		},
+	}
 
 	for _, id := range slices.Sorted(maps.Keys(p.src.Invocation.Args)) {
 		tmpl[id] = templateParam{

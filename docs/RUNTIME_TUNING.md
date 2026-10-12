@@ -12,6 +12,9 @@ Pass mrp's `--overrides` file at launch:
 nextflow run main.nf --mro2nf_overrides overrides.json
 ```
 
+A HealthOmics run takes it as the run parameter `mro2nf_overrides`, an
+`s3://` URI, which the packaged parameter template declares.
+
 The run's PLAN task reads it with Martian's own reader, so a key mrp does not
 know (a phaseless `mem_gb`, say) fails the run before any stage starts, as mrp
 refuses to start. Each job's resources then resolve through Martian's own
