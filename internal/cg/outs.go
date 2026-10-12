@@ -19,6 +19,9 @@ type OutsSpec struct {
 	// its producing task's work dir keeps it: the name of a file the
 	// pipeline outs leave unpublished.
 	Locations map[string]string
+	// EntryFiles maps each entry file value the task staged to the path it
+	// reads it at (StagedEntryFiles).
+	EntryFiles map[string]string
 	// Manifest locates the file leaves of the outs.
 	Manifest types.Manifest
 	// Work is the dir the pipestance is reconstructed in.

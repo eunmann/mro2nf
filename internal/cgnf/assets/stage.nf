@@ -190,8 +190,8 @@ def locations(ups, List locs) {
     return "cat > locations <<'MRO2NF_LOCATIONS'\n${lines}MRO2NF_LOCATIONS"
 }
 
-// OUTS resolves the pipeline outs from the stage outs they read and
-// publishes them with mrp's own post-processing. It runs no stage, so it
+// OUTS resolves the pipeline outs from the stage outs and the entry files
+// they read and publishes them with mrp's own post-processing. It runs no stage, so it
 // compiles the project's copy of the .mro files it stages, in the runtime
 // image on a container profile. The workflow output block
 // would publish the tree as data, but Nextflow 24.04 accepts it only under
@@ -203,6 +203,7 @@ process OUTS {
     val meta
     path ups, stageAs: 'in/u*', arity: '0..*'
     val locs
+    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
     path 'types.json'
     path 'mro'
 
@@ -215,6 +216,6 @@ process OUTS {
     mkdir -p in
     ${callFile(meta)}
     ${locations(ups, locs)}
-    ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -types types.json -in in -locations locations -o results -json pipeline_outs.json
+    ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -types types.json -in in -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
     """
 }

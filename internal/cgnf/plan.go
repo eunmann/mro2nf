@@ -65,7 +65,8 @@ func (p *project) values() string {
 }
 
 // outs runs OUTS over every outs bundle the pipeline outs read, ordered by
-// node and instance key, not by completion.
+// node and instance key, not by completion, and the entry files they read,
+// which PLAN lists by the pipeline's fqid.
 func (p *project) outs(g *gen) {
 	srcs := make([]string, 0, len(p.topo.Outs))
 
@@ -83,8 +84,13 @@ func (p *project) outs(g *gen) {
 		ups = "channel.empty().mix(" + strings.Join(srcs, ", ") + ").toList().map { xs -> ordered(xs) }"
 	}
 
+	entry := "channel.value([[], []])"
+	if p.readers[p.g.Fqid()] {
+		entry = fmt.Sprintf("entry.map { ef -> def ids = ef.files[%s] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }", gstr(p.g.Fqid()+" -"))
+	}
+
 	g.linef("outs_in = %s", ups)
-	g.linef("OUTS(call.map { c -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(\"${projectDir}/_assets/types.json\"), file(\"${projectDir}/%s\"))", p.graphMeta("call: c"), mroAssets)
+	g.linef("OUTS(call.map { c -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/_assets/types.json\"), file(\"${projectDir}/%s\"))", p.graphMeta("call: c"), entry, mroAssets)
 }
 
 // shellQuote is s single-quoted for the shell.

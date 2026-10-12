@@ -93,7 +93,7 @@ func runPlan(_ context.Context, argv []string) error {
 
 // writeEntryFiles writes the run's entry file values, each by its index,
 // and per node and fork of its entry-fed roots, those its instance there
-// stages.
+// stages, and by the pipeline's fqid, those OUTS stages.
 func (f *planFlags) writeEntryFiles(p cg.Plan) error {
 	var leaves, files strings.Builder
 
@@ -101,7 +101,7 @@ func (f *planFlags) writeEntryFiles(p cg.Plan) error {
 		fmt.Fprintf(&leaves, "%d %s\n", i, base64.StdEncoding.EncodeToString([]byte(l.Value)))
 	}
 
-	for _, n := range p.Nodes {
+	for _, n := range append(slices.Clone(p.Nodes), p.Outs) {
 		for _, pf := range n.Files {
 			ids := make([]string, len(pf.Leaves))
 			for i, x := range pf.Leaves {

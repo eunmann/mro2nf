@@ -113,7 +113,8 @@ func (g *Graph) entryFileValues(man types.Manifest) ([]EntryLeaf, error) {
 }
 
 // EntryFileReaders are the stage nodes a binding of which reads a file
-// value of the call's arguments.
+// value of the call's arguments, and the pipeline, by its Fqid, when its
+// outs do.
 func (g *Graph) EntryFileReaders(man types.Manifest) (map[string]bool, error) {
 	all, err := g.entryFileValues(man)
 	if err != nil {
@@ -141,7 +142,39 @@ func (g *Graph) EntryFileReaders(man types.Manifest) (map[string]bool, error) {
 		}
 	}
 
+	outs, err := g.outsEntryFiles(values)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(outs) > 0 {
+		out[g.Fqid()] = true
+	}
+
 	return out, nil
+}
+
+// Fqid is the pipeline the invocation calls: the prefix of every node's
+// fqid, and the one PLAN's entry files of the pipeline outs are keyed by.
+func (g *Graph) Fqid() string {
+	return g.root.Fqid
+}
+
+// outsEntryFiles are the indices in values of the entry file values the
+// pipeline outs read, which OUTS stages: Martian's post-processing reads
+// such a file where the value names it.
+func (g *Graph) outsEntryFiles(values map[string]int) ([]int, error) {
+	ro := g.root.ResolvedOutputs()
+	if ro == nil {
+		return nil, nil
+	}
+
+	found := map[int]bool{}
+	if err := collectValues(ro.Exp, values, found); err != nil {
+		return nil, fmt.Errorf("pipeline outs: %w", err)
+	}
+
+	return slices.Sorted(maps.Keys(found)), nil
 }
 
 // VetEntryLeaf refuses an entry file value a run may not stage. file()

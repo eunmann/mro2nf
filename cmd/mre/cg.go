@@ -214,6 +214,7 @@ func runOuts(ctx context.Context, argv []string) error {
 	outsJSON := fs.String("json", "pipeline_outs.json", "file to write the outs JSON to")
 	work := fs.String("work", "pipestance", "dir to reconstruct the pipestance in")
 	locations := fs.String("locations", "", "file of tab-separated lines: a staged outs bundle, and where its producing task's work dir keeps it")
+	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 
 	var in repeatedFlag
 
@@ -233,7 +234,12 @@ func runOuts(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	spec := cg.OutsSpec{In: in, Locations: locs, Manifest: man, Work: *work, Results: *out, OutsJSON: *outsJSON}
+	files, err := stagedEntryFiles(g, man, *leaves)
+	if err != nil {
+		return fmt.Errorf("outs: %w", err)
+	}
+
+	spec := cg.OutsSpec{In: in, Locations: locs, EntryFiles: files, Manifest: man, Work: *work, Results: *out, OutsJSON: *outsJSON}
 	if err := g.WriteOuts(ctx, spec); err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}

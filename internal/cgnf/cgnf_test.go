@@ -217,11 +217,11 @@ func TestEmitOrdersGathers(t *testing.T) {
 func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
-	if !strings.Contains(main, "OUTS(call.map { c -> [entry: ") || !strings.Contains(main, "outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(") {
+	if !strings.Contains(main, "OUTS(call.map { c -> [entry: ") || !strings.Contains(main, "outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
 		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
 	}
 
-	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", "-in in -locations locations -o results -json pipeline_outs.json"} {
+	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", "-in in -locations locations"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}
@@ -339,6 +339,45 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 	for _, want := range []string{"val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')", "-leaves ${shq(leaves.join(','))}"} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+}
+
+// TestEmitStagesEntryFilesIntoOuts: pipeline outs that return an entry
+// file value stage it into OUTS, as PLAN lists it by the pipeline's fqid,
+// for post-processing to publish it from inside a container; outs that
+// read none stage none (diamond_min).
+func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
+	dir := t.TempDir()
+	mro := filepath.Join(dir, "pipeline.mro")
+	src := "filetype txt;\n\npipeline ECHO(\n    in  txt ref,\n    out txt echoed,\n)\n{\n    return (\n        echoed = self.ref,\n    )\n}\n\ncall ECHO(\n    ref = \"/data/ref.txt\",\n)\n"
+
+	if err := os.WriteFile(mro, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := t.TempDir()
+	if err := Emit(mro, Options{OutDir: out, MroPaths: []string{dir}, Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	main := readTree(t, out)["main.nf"]
+	for _, want := range []string{
+		"entry = PLAN.out.files.combine(PLAN.out.leaves)",
+		"outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, entry.map { ef -> def ids = ef.files['ECHO -'] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }, file(",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("ECHO's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]; !strings.Contains(plain, "outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
+		t.Errorf("diamond_min's outs read no entry file, yet OUTS stages some:\n%s", plain)
+	}
+
+	for _, want := range []string{"    val locs\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results"} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("OUTS lacks %q", want)
 		}
 	}
 }

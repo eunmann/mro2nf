@@ -317,7 +317,8 @@ type manifest from the invocation's own declarations.
   transpiled entry and the run's entry values, compiles it, checks it against
   the witness, vets the entry file values a task stages (§8), and writes the
   call every task compiles, one record per witness node, the entry files of
-  each node's instances, and the forks of each entry-fed fork root.
+  each node's instances and of the pipeline outs, and the forks of each
+  entry-fed fork root.
 - **`mre args -node <fqid> -digest <d>`** builds one stage instance's args
   bundle and prints `enabled` or `disabled`, once the node compiles to the spec
   digest PLAN planned. The instance's fork comes from the fork elements it
@@ -555,10 +556,12 @@ absolute path or a URI (`s3://`, and others under the opt-in below) is staged
 by Nextflow into the tasks that read it, and only those: PLAN lists the values
 (`leaves`) and, per node and fork of its entry-fed roots, the ones Martian's
 specialization of its bindings to that fork reads (`files`), so a map call over
-entry files stages each fork's own element. The driver hands each to
-`file(x, glob: false)`, so the head node never globs a name, and a task stages
-its list as `entry/<i>/<name>`; `mre args -leaves` maps each value to the path
-it reads it at. Nextflow links a file it can reach in place, so on a shared
+entry files stages each fork's own element. The pipeline outs' own reads,
+keyed by the pipeline's fqid, are staged into OUTS, whose post-processing
+publishes such a file only where it finds it, as `mrp`'s does. The driver
+hands each to `file(x, glob: false)`, so the head node never globs a name, and
+a task stages its list as `entry/<i>/<name>`; `mre args -leaves` and `mre outs
+-leaves` map each value to the path it reads it at. Nextflow links a file it can reach in place, so on a shared
 filesystem, and in a docker container, which mounts the link's target, the
 stage gets the value's own path, as `mrp` passes it; a file Nextflow fetched
 (an `s3://` object, a file on an object-store work dir) is read where it was

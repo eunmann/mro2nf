@@ -23,11 +23,13 @@ import (
 // values tasks stage (EntryLeaves), per stage node of the witness, the
 // node's spec digest, the instances the invocation itself disables and the
 // entry files each instance reads, and the forks of every fork root the
-// entry values feed.
+// entry values feed. Outs is the pipeline, by its fqid, and the entry
+// files its outs read, at the one instance, keyed "".
 type Plan struct {
 	Call   string
 	Leaves []EntryLeaf
 	Nodes  []PlanNode
+	Outs   PlanNode
 	Roots  map[string]PlanRoot
 }
 
@@ -128,7 +130,27 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 		p.Nodes = append(p.Nodes, pn)
 	}
 
+	if p.Outs, err = g.planOuts(leaves); err != nil {
+		return Plan{}, err
+	}
+
 	return p, nil
+}
+
+// planOuts is the pipeline and the entry files its outs read.
+func (g *Graph) planOuts(leaves map[string]int) (PlanNode, error) {
+	pn := PlanNode{Fqid: g.Fqid()}
+
+	outs, err := g.outsEntryFiles(leaves)
+	if err != nil {
+		return PlanNode{}, err
+	}
+
+	if len(outs) > 0 {
+		pn.Files = []PlanFiles{{Leaves: outs}}
+	}
+
+	return pn, nil
 }
 
 // EncodeElement is el as a fork record value, DecodeElement's text.

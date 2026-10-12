@@ -1,6 +1,7 @@
 package cg
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -218,5 +219,90 @@ func TestStagedEntryFiles(t *testing.T) {
 
 	if _, err := g.StagedEntryFiles(g.Manifest(), "entry", []int{7}); !errors.Is(err, errStagedEntry) {
 		t.Errorf("an index past the run's values: %v, want errStagedEntry", err)
+	}
+}
+
+// echoMRO's pipeline outs return its entry file value, which no stage
+// reads.
+const echoMRO = `filetype txt;
+
+pipeline ECHO(
+    in  txt ref,
+    out txt echoed,
+)
+{
+    return (
+        echoed = self.ref,
+    )
+}
+
+call ECHO(
+    ref = "/absent/mro2nf/ref.txt",
+)
+`
+
+// TestOutsPublishStagedEntryFiles: the pipeline outs that return an entry
+// file value read it in OUTS, so OUTS stages it, and post-processing
+// publishes it where OUTS staged it, as mrp publishes the file it finds at
+// the value: a link in outs/ the outs JSON names. A container sees only
+// what its task stages.
+func TestOutsPublishStagedEntryFiles(t *testing.T) {
+	p := planOf(t, echoMRO)
+
+	if d := cmp.Diff(PlanNode{Fqid: "ECHO", Files: []PlanFiles{{Leaves: []int{0}}}}, p.Outs); d != "" {
+		t.Errorf("the pipeline outs' entry files (-want +plan):\n%s", d)
+	}
+
+	path := filepath.Join(t.TempDir(), "pipeline.mro")
+	if err := os.WriteFile(path, []byte(echoMRO), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := Load(path, p.Call, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if readers, err := g.EntryFileReaders(g.Manifest()); err != nil || !readers["ECHO"] {
+		t.Errorf("entry file readers %v (%v), want the pipeline ECHO among them", readers, err)
+	}
+
+	t.Chdir(t.TempDir())
+
+	if err := os.MkdirAll("entry/1", 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile("entry/1/ref.txt", []byte("ref"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := g.StagedEntryFiles(g.Manifest(), "entry", []int{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spec := OutsSpec{EntryFiles: files, Manifest: g.Manifest(), Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
+	if err := g.WriteOuts(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+
+	raw, err := os.ReadFile("pipeline_outs.json")
+	if err == nil {
+		err = json.Unmarshal(raw, &got)
+	}
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d := cmp.Diff(map[string]any{"echoed": "echoed.txt"}, got); d != "" {
+		t.Errorf("pipeline_outs.json (-want +got):\n%s", d)
+	}
+
+	if d := cmp.Diff(map[string]string{"echoed.txt": "ref"}, publishedFiles(t, "results")); d != "" {
+		t.Errorf("published tree (-want +got):\n%s", d)
 	}
 }
