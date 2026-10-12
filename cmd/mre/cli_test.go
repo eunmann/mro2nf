@@ -196,9 +196,9 @@ func TestProducerManifestNoTypes(t *testing.T) {
 }
 
 // TestRunPublishLayoutSmoke drives publish-layout end to end from a raw
-// marker-bearing sidecar: layout.json maps the transport basename to its outs/
-// rel path, pipeline_outs.json carries the rewritten value tree, and
-// manifest.json.gz gunzips to the versioned output index.
+// marker-bearing sidecar: pipeline_outs.json carries the rewritten value
+// tree, manifest.json.gz gunzips to the versioned output index, and no
+// layout.json is written, as nothing reads one (#293).
 func TestRunPublishLayoutSmoke(t *testing.T) {
 	dir := t.TempDir()
 	man := types.Manifest{Callables: map[string]types.Callable{
@@ -218,12 +218,8 @@ func TestRunPublishLayoutSmoke(t *testing.T) {
 		t.Fatalf("run publish-layout: %v", err)
 	}
 
-	var layout map[string][]string
-
-	readJSONFile(t, filepath.Join(outDir, "layout.json"), &layout)
-
-	if diff := cmp.Diff(map[string][]string{leaf("L0000"): {"aln.bam"}}, layout); diff != "" {
-		t.Errorf("layout.json mismatch (-want +got):\n%s", diff)
+	if _, err := os.Stat(filepath.Join(outDir, "layout.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("publish-layout wrote layout.json (stat: %v)", err)
 	}
 
 	var outs map[string]any

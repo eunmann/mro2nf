@@ -22,24 +22,7 @@ func readFile(path string) (json.RawMessage, error) {
 	return data, nil
 }
 
-func writeJSON(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal output: %w", err)
-	}
-
-	return writeRaw(path, data)
-}
-
 func writeRaw(path string, data []byte) error {
-	if path == "" || path == "-" {
-		if _, err := os.Stdout.Write(data); err != nil {
-			return fmt.Errorf("write stdout: %w", err)
-		}
-
-		return nil
-	}
-
 	if err := os.WriteFile(path, data, filePerm); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}

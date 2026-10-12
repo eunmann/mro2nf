@@ -20,15 +20,15 @@ import (
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-// runPublishLayout computes the outs/ layout from the final output sidecar ALONE
-// (no file leaves staged, so no single-node funnel — #12): it walks the raw
-// marker-bearing sidecar and writes layout.json (leaf path below the bundle's
-// files dir -> outs/ rel path) plus the pipeline_outs.json value tree.
+// runPublishLayout computes the outs/ layout from the final output sidecar
+// alone: it walks the raw marker-bearing sidecar for each leaf's outs/ rel
+// path, writes the pipeline_outs.json value tree and manifest.json.gz, and
+// links the staged leaves into the outs/ tree.
 func runPublishLayout(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("publish-layout", flag.ContinueOnError)
 	prod := addProducer(fs, types.RoleOut)
 	sidecar := fs.String("sidecar", "", "raw output sidecar (data.json, markers intact)")
-	dir := fs.String("dir", ".", "directory to write layout.json and pipeline_outs.json")
+	dir := fs.String("dir", ".", "directory to write pipeline_outs.json and manifest.json.gz")
 	leavesDir := fs.String("leaves", "", "dir of staged leaf files (head-node publish); empty leaves publishing off")
 	outsDir := fs.String("outs", "", "dir to materialise the outs/ tree into for head-node publishDir")
 
@@ -80,12 +80,8 @@ func runPublishLayout(_ context.Context, argv []string) error {
 }
 
 // writeLayout writes into dir what pub computed for the outputs of pipeline:
-// layout.json, manifest.json.gz and the published outs as pipeline_outs.json.
+// manifest.json.gz and the published outs as pipeline_outs.json.
 func writeLayout(dir, pipeline string, pub *publisher, published map[string]any) error {
-	if err := writeJSON(filepath.Join(dir, "layout.json"), pub.layout); err != nil {
-		return err
-	}
-
 	if err := writeManifest(filepath.Join(dir, "manifest.json.gz"), pipeline, pub.manifest); err != nil {
 		return err
 	}
