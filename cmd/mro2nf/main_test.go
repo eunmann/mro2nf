@@ -69,7 +69,7 @@ func TestApplyConfigPrecedence(t *testing.T) {
 
 // TestToolPaths pins the tool-path rules: an exec'd tool's bare name (any
 // name, not just "mre") stays a PATH command, while every other tool path —
-// and a file argument even when bare — is made absolute.
+// and a file argument even when bare — is made absolute, relative to base.
 func TestToolPaths(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -77,32 +77,35 @@ func TestToolPaths(t *testing.T) {
 	}
 
 	cases := []struct {
-		name    string
-		resolve func(string) (string, error)
-		in      string
-		want    string
+		name     string
+		resolve  func(p, base string) (string, error)
+		in, base string
+		want     string
 	}{
-		{"command/empty", commandPath, "", ""},
-		{"command/bare_mre", commandPath, "mre", "mre"},
-		{"command/any_bare_name", commandPath, "mrjob", "mrjob"},
-		{"command/relative", commandPath, "bin/mre", filepath.Join(cwd, "bin", "mre")},
-		{"command/dot_relative", commandPath, "./mre", filepath.Join(cwd, "mre")},
-		{"command/absolute", commandPath, "/usr/bin/mre", "/usr/bin/mre"},
-		{"file/empty", filePath, "", ""},
-		{"file/bare", filePath, "martian_shell.py", filepath.Join(cwd, "martian_shell.py")},
-		{"file/relative", filePath, "py/martian_shell.py", filepath.Join(cwd, "py", "martian_shell.py")},
-		{"file/absolute", filePath, "/opt/martian_shell.py", "/opt/martian_shell.py"},
+		{"command/empty", commandPath, "", "", ""},
+		{"command/bare_mre", commandPath, "mre", "", "mre"},
+		{"command/any_bare_name", commandPath, "mrjob", "/cfg", "mrjob"},
+		{"command/relative", commandPath, "bin/mre", "", filepath.Join(cwd, "bin", "mre")},
+		{"command/dot_relative", commandPath, "./mre", "", filepath.Join(cwd, "mre")},
+		{"command/relative_to_base", commandPath, "bin/mre", "/cfg", "/cfg/bin/mre"},
+		{"command/relative_base", commandPath, "bin/mre", "cfg", filepath.Join(cwd, "cfg", "bin", "mre")},
+		{"command/absolute", commandPath, "/usr/bin/mre", "/cfg", "/usr/bin/mre"},
+		{"file/empty", filePath, "", "/cfg", ""},
+		{"file/bare", filePath, "martian_shell.py", "", filepath.Join(cwd, "martian_shell.py")},
+		{"file/bare_relative_to_base", filePath, "martian_shell.py", "/cfg", "/cfg/martian_shell.py"},
+		{"file/relative", filePath, "py/martian_shell.py", "", filepath.Join(cwd, "py", "martian_shell.py")},
+		{"file/absolute", filePath, "/opt/martian_shell.py", "/cfg", "/opt/martian_shell.py"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := tc.resolve(tc.in)
+			got, err := tc.resolve(tc.in, tc.base)
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			if got != tc.want {
-				t.Errorf("resolve(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Errorf("resolve(%q, %q) = %q, want %q", tc.in, tc.base, got, tc.want)
 			}
 		})
 	}
@@ -132,6 +135,58 @@ func TestRunBakesBareShellAbsolute(t *testing.T) {
 
 	if want := "-shell '" + filepath.Join(cwd, "martian_shell.py") + "'"; !strings.Contains(string(body), want) {
 		t.Errorf("generated module does not bake %s:\n%s", want, body)
+	}
+}
+
+// TestApplyConfigToolsRelativeToConfigFile checks a relative mre, shell or
+// mrjob in a .mro2nf.yml resolves against the file's directory, not the
+// working directory, under the CLI's rules (a bare mre or mrjob stays a PATH
+// command, a bare shell is a file), and that an explicit flag is left for the
+// working directory.
+func TestApplyConfigToolsRelativeToConfigFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, filepath.Join("proj", config.FileName), "mre: mre\nshell: martian_shell.py\nmrjob: tools/mrjob\n")
+	writeTestFile(t, filepath.Join("conf", "x.yml"), "mre: bin/mre\nshell: ../py/martian_shell.py\n")
+
+	mro := filepath.Join("proj", "pipeline.mro")
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want [3]string
+	}{
+		{"alongside_mro", []string{mro}, [3]string{
+			"mre", filepath.Join(cwd, "proj", "martian_shell.py"), filepath.Join(cwd, "proj", "tools", "mrjob"),
+		}},
+		{"explicit_config", []string{"-config", filepath.Join("conf", "x.yml"), mro}, [3]string{
+			filepath.Join(cwd, "conf", "bin", "mre"), filepath.Join(cwd, "py", "martian_shell.py"), "",
+		}},
+		{"explicit_flag_wins", []string{"-shell", "s.py", mro}, [3]string{
+			"mre", "s.py", filepath.Join(cwd, "proj", "tools", "mrjob"),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			f := defineTranspileFlags(fs)
+
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := applyConfig(fs, *f.configPath, fs.Arg(0), f.configPtrs()); err != nil {
+				t.Fatal(err)
+			}
+
+			if diff := cmp.Diff(tc.want, [3]string{*f.mre, *f.shell, *f.mrjob}); diff != "" {
+				t.Errorf("mre, shell, mrjob (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

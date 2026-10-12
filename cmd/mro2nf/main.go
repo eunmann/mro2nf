@@ -351,21 +351,22 @@ type cliPtrs struct {
 // -config path must exist — a typo there must not silently drop the defaults —
 // while the implicit alongside-the-.mro probe tolerates a missing file. An
 // empty -config value is indistinguishable from an unset flag, so it takes the
-// implicit probe. It returns the names of the flags the config set.
-func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) (map[string]bool, error) {
-	var (
-		cfg *config.Config
-		err error
-	)
-
-	if explicit != "" {
-		cfg, err = config.LoadRequired(explicit)
-	} else {
-		cfg, err = config.Load(filepath.Join(filepath.Dir(mroPath), config.FileName))
+// implicit probe. A relative tool path in the file is relative to the file's
+// directory, so a checked-in config names the same tools from any working
+// directory. It returns the names of the flags the config set.
+func applyConfig(fs *flag.FlagSet, explicit, mroFile string, p cliPtrs) (map[string]bool, error) {
+	path, load := explicit, config.LoadRequired
+	if path == "" {
+		path, load = filepath.Join(filepath.Dir(mroFile), config.FileName), config.Load
 	}
 
+	cfg, err := load(path)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	if err := resolveTools(cfg.Mre, cfg.Shell, cfg.Mrjob, filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 
 	set := map[string]bool{}
@@ -459,18 +460,29 @@ func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 // -shell is the interpreter's script argument, which mre runs from the task's
 // files dir, so even a bare name is a file.
 func resolveToolPaths(opts *emit.Options) error {
-	var err error
+	return resolveTools(&opts.Mre, &opts.Shell, &opts.Mrjob, "")
+}
 
-	if opts.Mre, err = commandPath(opts.Mre); err != nil {
-		return fmt.Errorf("resolve -mre: %w", err)
-	}
+// resolveTools resolves the mre, shell and mrjob paths in place against base
+// (see filePath) by the rules resolveToolPaths states.
+func resolveTools(mre, shell, mrjob *string, base string) error {
+	for _, tool := range []struct {
+		name    string
+		path    *string
+		resolve func(p, base string) (string, error)
+	}{
+		{"mre", mre, commandPath}, {"shell", shell, filePath}, {"mrjob", mrjob, commandPath},
+	} {
+		if tool.path == nil {
+			continue
+		}
 
-	if opts.Shell, err = filePath(opts.Shell); err != nil {
-		return fmt.Errorf("resolve -shell: %w", err)
-	}
+		resolved, err := tool.resolve(*tool.path, base)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", tool.name, err)
+		}
 
-	if opts.Mrjob, err = commandPath(opts.Mrjob); err != nil {
-		return fmt.Errorf("resolve -mrjob: %w", err)
+		*tool.path = resolved
 	}
 
 	return nil
@@ -478,19 +490,24 @@ func resolveToolPaths(opts *emit.Options) error {
 
 // commandPath resolves an exec'd tool the way exec.LookPath dispatches: a
 // bare name (no path separator) stays a PATH command, any other path is made
-// absolute.
-func commandPath(p string) (string, error) {
+// absolute (see filePath).
+func commandPath(p, base string) (string, error) {
 	if !strings.ContainsRune(p, filepath.Separator) {
 		return p, nil
 	}
 
-	return filePath(p)
+	return filePath(p, base)
 }
 
-// filePath makes a non-empty p absolute.
-func filePath(p string) (string, error) {
+// filePath makes a non-empty p absolute, a relative p taken relative to base,
+// itself relative to the working directory.
+func filePath(p, base string) (string, error) {
 	if p == "" {
 		return "", nil
+	}
+
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
 	}
 
 	abs, err := filepath.Abs(p)

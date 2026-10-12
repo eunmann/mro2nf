@@ -123,7 +123,8 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
   the opt-in emission mode `-native` (§4.8), `-allow-external-files` (§8,
   §10), `-config` (a `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
-  explicit flag always wins — see `internal/config`; `-allow-external-files`
+  explicit flag always wins — see `internal/config`; a relative tool path in
+  it resolves against the file's directory; `-allow-external-files`
   and `-mropath` have no key, so a config file shipped beside a shared `.mro`
   cannot set them, and a tool path it sets is baked into an image only from
   inside the roots, §10),

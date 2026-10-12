@@ -175,7 +175,11 @@ native: true
 ```
 
 Supported keys: `target`, `container`, `mre`, `shell`, `mrjob`, `monitor`,
-`native`. A container
+`native`. A relative `mre`, `shell` or `mrjob` path resolves against the config
+file's directory, not the working directory, so a checked-in
+`shell: tools/martian_shell.py` names the same file wherever you run
+`mro2nf`; a bare `mre` or `mrjob` name stays a `PATH` command, as for the
+flags. A container
 target bakes an `mre`, `shell` or `mrjob` path set here into the image only
 when it resolves inside the `.mro`'s directory or a `-mropath` root, since a
 config file shipped with a shared `.mro` is not trusted; pass the flag to use a
