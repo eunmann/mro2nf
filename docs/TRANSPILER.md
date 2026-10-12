@@ -161,6 +161,8 @@ core types:
 
 ## 4. Emit: mapping every Martian construct to Nextflow
 
+> Old emitter: deleted at the switch-over (#470). v2 is §5.1–§5.2.
+
 The emitter (`internal/emit`) writes a complete Nextflow DSL2 project. The shape
 of the output is the heart of the transpiler, so it helps to see a concrete
 example. For a simple pipeline that calls a split stage `SUM_SQUARES` then
@@ -711,6 +713,8 @@ order.
 
 ## 6. Bindspecs: how input wiring is described
 
+> Old emitter: deleted at the switch-over (#470). v2 is §5.1–§5.2.
+
 Martian bindings ("this call's input `x` comes from that call's output `y`,
 input `z` is the literal `5`") are compiled at transpile time into small JSON
 **bindspecs**, one per call, under `_assets/bindspecs/`. Example:
@@ -734,6 +738,8 @@ Groovy per call.
 ---
 
 ## 7. The bundle data plane
+
+> Old emitter: deleted at the switch-over (#470). v2 is §5.1–§5.2.
 
 A **bundle** is the transpiler's neutral container for "a set of typed values,
 including the files they reference." On disk it is a directory:
@@ -847,6 +853,8 @@ Two details matter only on a real object store. Both are handled:
 
 ## 8. Pipeline inputs: run parameters and file staging
 
+> Old emitter: deleted at the switch-over (#470). v2 is §5.1–§5.2.
+
 The top-level `call EP(reads = …, scale = …)` provides the pipeline's default
 inputs. The emitter bakes those defaults into `entry_args/data.json` at transpile
 time (resolving any relative file-default paths against the `.mro`'s directory so
@@ -959,6 +967,8 @@ into the task).
 
 ## 9. `_assets`: shipping the type manifest and bindspecs to isolated workers
 
+> Old emitter: deleted at the switch-over (#470). v2 is §5.1–§5.2.
+
 A process script can only read files that were staged into its (isolated) task
 dir. Two transpile-time artifacts must reach a task: the **type manifest**
 (`types.json` — needed for the file-leaf walk and scalar coercion) and a bind
@@ -975,6 +985,8 @@ which put every callable's types in every task's `-resume` cache key.)
 ---
 
 ## 10. Targets: local, AWS Batch + S3, AWS HealthOmics
+
+> Old emitter: deleted at the switch-over (#470). v2 is §5.1–§5.2.
 
 `-target` shapes the config, the publish location, the container build, and the
 packaging. The orchestration (`main.nf`, modules) is identical across targets;

@@ -31,7 +31,9 @@ split triad (split → per-chunk main → join, per fork) is the only intrinsic
 fan-out; it matches Martian's own jobs 1:1. When judging a change, measure
 tasks and per-instance work against `mrp`'s job count at two widths — `make
 bench` does exactly this: the `bench/forks` and `bench/split` fixtures run at
-two widths (default and `-native` lanes) and the gate fails if the plumbing
+two widths (the default lanes, and the v2 lanes under `E2E_EMITTER=v2`, which
+gate against `bench/baseline_v2.json`; the `-native` lanes belong to the old
+emitter, deleted at #470) and the gate fails if the plumbing
 task count differs between widths. Constant overhead is acceptable, scaling
 overhead is a bug.
 
@@ -42,16 +44,23 @@ cmd/mro2nf/            → transpiler CLI: .mro -> Nextflow project
                        (+ `overrides` subcommand: mrp --overrides -> -c config)
 cmd/mre/             → runtime shim: runs stage phases (split|main|join)
                        against the real Martian adapter inside a NF process,
-                       plus the data-plane subcommands the generated processes
-                       call (bind|forkbind|merge|publish-layout|entryargs)
+                       plus the v2 data-plane subcommands the generated
+                       processes call (args|post|outs|run|plan; emitter v2,
+                       epic #463) and the old emitter's (bind|forkbind|merge|
+                       gate|entryargs|publish-layout; deleted at #470 — don't
+                       extend them)
 internal/
   frontend/          → parse .mro via github.com/martian-lang/martian/syntax
   ir/                → normalized transpiler IR (stages, pipelines, bindings)
-  emit/              → IR -> Nextflow (.nf + nextflow.config) templates
+  cg/                → v2: resolve stage instances on Martian's compiled call graph
+  cgnf/              → v2: call graph -> Nextflow (main.nf, embedded stage.nf, nextflow.config)
+  job/               → v2: run one stage phase as mrp runs a job
+  emit/              → old emitter, deleted at #470: IR -> Nextflow templates
   types/             → type-directed file-leaf walk (shared by emit + shim)
   shim/              → _args/_jobinfo/_outs I/O, path rewrite, adapter launch
-  bind/              → resolve call bindings into _args (refs, projections, fan-in)
-  overrides/         → mrp --overrides file -> Nextflow -c config
+  bind/              → old emitter, deleted at #470: resolve call bindings into _args
+  overrides/         → mrp --overrides file -> Nextflow -c config (deleted at #470:
+                       v2 applies --overrides at launch with Martian's own code, #301)
   config/            → .mro2nf.yml project defaults for the transpiler flags
   logging/           → log/slog setup (stderr)
   apperror/          → sentinel + typed errors

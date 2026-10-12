@@ -22,7 +22,7 @@ Before branching, challenge whether this is the right scope — a single branch 
 
 ## Implementation
 
-1. **Sprawl first.** Read the related features, consumers, and call paths the change touches. For non-trivial work, apply the `repo-research` skill. A transpiler change usually spans layers — check whether the frontend/IR, emitter, shim, and bindspec sides all agree before editing one of them.
+1. **Sprawl first.** Read the related features, consumers, and call paths the change touches. For non-trivial work, apply the `repo-research` skill. A transpiler change usually spans layers — check whether the frontend/IR, `internal/cg`, `internal/cgnf`, `internal/job`, and `mre` sides all agree before editing one of them (bindspecs and the old `internal/emit` are deleted at #470: don't extend them).
 2. **Implement directly.** Write code and its tests together. Use the `tdd` skill only for bug fixes, where the failing test proves the bug.
 3. **Refactor where warranted.** If existing code near the change should be restructured for clarity or correctness, do it — in its own commit. No hacks, no workarounds, no compatibility shims (pre-production).
 4. **Edit discipline.** Edit/Write tools for all source edits. Complete the full edit set before any lint or test run.

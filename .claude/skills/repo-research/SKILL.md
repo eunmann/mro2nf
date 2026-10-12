@@ -14,15 +14,16 @@ Every turn re-reads your whole context, so cost grows with what you load. Locate
 Read the parts of `docs/TRANSPILER.md` and `docs/FEATURE_COVERAGE.md` that cover the task, not all of them. The package map, for orientation:
 
 - **Front end:** `internal/frontend` (parse via `martian/syntax`, lower), `internal/ir`
-- **Emitter:** `internal/emit` — `plan.go` decides each call's kind once; `generate*.go` render processes and wiring; `inline.go`; `diagnostics.go`; `lib/Mro2nf.groovy` (driver-side helpers)
-- **Runtime (`mre`):** `cmd/mre` subcommands (`split|main|join|bind|forkbind|merge|entryargs|publish-layout`), `internal/shim` (bundles, markers, adapter launch, `_jobinfo`, monitor), `internal/bind` (binding resolution), `internal/types` (type-directed file-leaf walk and the `types.json` manifest)
+- **Emitter (v2, epic #463):** `internal/cg` (call-graph resolver), `internal/cgnf` (main.nf, the embedded `stage.nf`, nextflow.config), `internal/job` (job runner)
+- **Old emitter, deleted at #470: don't extend it:** `internal/emit` (`plan.go`, `generate*.go`, `inline.go`, `diagnostics.go`), `lib/Mro2nf.groovy`, bindspecs, `internal/bind`
+- **Runtime (`mre`):** `cmd/mre` subcommands (`split|main|join|args|post|outs|run|plan`; old, deleted at #470: `bind|forkbind|merge|gate|entryargs|publish-layout`), `internal/shim` (bundles, markers, adapter launch, `_jobinfo`, monitor), `internal/types` (type-directed file-leaf walk and the `types.json` manifest)
 - **Around it:** `internal/overrides` + `mro2nf overrides`, `internal/config` (`.mro2nf.yml`), `cmd/mro2nf`
 - **Tests:** unit tests beside each package; `test/e2e` (build tag `e2e`: goldens, mrp-diff, docker, bench, lint-nf); fixtures and real-`mrp` goldens in `testdata/<name>/`; `bench/`
 - **Reference oracle:** the pinned Martian module (`go env GOMODCACHE`, version in `go.mod`) — `martian/syntax` for the language, `martian/core` for what `mrp` does at run time; a local `mrp` build at `$MARTIAN_BIN` (default `~/workdir/martian/bin`)
 
 ## 2. Locate
 
-Grep for the symbols, flags, bindspec fields, sidecar names and generated Nextflow constructs the task touches, and list each affected layer with one line on why. A change usually crosses a seam — emitter ↔ `mre` (flags, bindspecs, bundle shapes), Go walk ↔ `lib/Mro2nf.groovy` (ordering, JSON), plain ↔ keyed emitters — so find both sides.
+Grep for the symbols, flags, bindspec fields, sidecar names and generated Nextflow constructs the task touches, and list each affected layer with one line on why. A change usually crosses a seam — `internal/cgnf` ↔ `mre args|post|outs|run|plan` (flags, records, sidecars), `internal/cg` ↔ `internal/job` — so find both sides. (Old emitter, deleted at #470, don't extend it: bindspecs, bundle shapes, `lib/Mro2nf.groovy`, keyed emitters.)
 
 Check, without reading them in full, whether the change needs: a new or re-recorded golden (record it from real `mrp`), a fixture in the e2e tables (`TestEveryFixtureIsExercised` enforces registration), a bench re-baseline (`BENCH_UPDATE=1 make bench` when task counts change), a target-specific path (awsbatch, healthomics), or a docs update (`FEATURE_COVERAGE.md`, `TRANSPILER.md`).
 
