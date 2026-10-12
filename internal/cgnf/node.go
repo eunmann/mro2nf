@@ -117,7 +117,8 @@ func (p *project) input(w *wiring, n cg.TopoNode, run, meta string) string {
 
 // instances is the expression of node i's instances: root by root, each
 // with the partner elements it zips, held until its preflights are done.
-// Each step but the last is assigned to i<i>.
+// Each step is assigned to i<i>, which it returns, or the seed channel when
+// the node has no step.
 func (p *project) instances(w *wiring, i int, n cg.TopoNode) string {
 	inst := "channel.of([[], [], [], []])"
 	step := func(expr string) {

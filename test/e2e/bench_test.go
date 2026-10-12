@@ -240,7 +240,7 @@ func transpileLane(t *testing.T, l benchLane, r laneRun) string {
 
 // writeStageProcesses writes, as a JSON array under tmp, every process name
 // that runs a stage's own code in proj, the stage module's aliases its
-// main.nf includes, and returns the file's path. bench_metrics.py counts
+// main.nf and sub-workflow modules include, and returns the file's path. bench_metrics.py counts
 // every other task as plumbing, so a new helper process is plumbing without
 // being listed.
 func writeStageProcesses(proj, tmp string) (string, error) {

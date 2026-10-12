@@ -57,7 +57,7 @@ type scope struct {
 	takes, emits []string
 }
 
-// unit is one node's wiring, or one sub-workflow's call.
+// unit is the call of sub-workflow sub or, when sub is nil, node's wiring.
 type unit struct {
 	node int
 	sub  *scope
@@ -152,7 +152,7 @@ func (p *project) pipelineTree() *scope {
 			if !ok {
 				sub = &scope{fqid: fqid}
 				byFqid[fqid] = sub
-				s.units = append(s.units, &unit{node: rootUser, sub: sub})
+				s.units = append(s.units, &unit{sub: sub})
 			}
 
 			s = sub
@@ -328,7 +328,7 @@ func (l *layout) runs(s *scope, units []*unit) []*unit {
 		if end-start == 1 {
 			out = append(out, units[start])
 		} else {
-			out = append(out, &unit{node: rootUser, sub: l.run(s, units[start:end])})
+			out = append(out, &unit{sub: l.run(s, units[start:end])})
 		}
 
 		start = end
