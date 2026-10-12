@@ -123,6 +123,36 @@ func TestCoversRefuses(t *testing.T) {
 	}
 }
 
+// TestSourceIncludesIgnoreWorkingDir: a source read from its entry file
+// resolves the entry's includes beside it, as mrp does, and never in the
+// working directory, whose unrelated lib.mro would make them ambiguous.
+func TestSourceIncludesIgnoreWorkingDir(t *testing.T) {
+	write := func(path, body string) {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cwd, dir := t.TempDir(), t.TempDir()
+	write(filepath.Join(cwd, "lib.mro"), "stage OTHER(\n    src py \"stages/other\",\n)\n")
+	write(filepath.Join(dir, "lib.mro"), "stage COUNT(\n    in  int n,\n    out int total,\n    src py \"stages/count\",\n)\n")
+	write(filepath.Join(dir, "pipeline.mro"), "@include \"lib.mro\"\n\ncall COUNT(\n    n = 1,\n)\n")
+	t.Chdir(cwd)
+
+	src, err := ReadSource(filepath.Join(dir, "pipeline.mro"), []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := src.Witness([]string{dir}); err != nil {
+		t.Errorf("witness: %v", err)
+	}
+
+	if _, err := src.Manifest([]string{dir}); err != nil {
+		t.Errorf("manifest: %v", err)
+	}
+}
+
 // TestReadSourceKeepsInclude: the rebuilt literal invocation is the one mrp
 // runs, its call after the entry file's declarations, and records the
 // include mrp records (include_test: "pipeline.mro").

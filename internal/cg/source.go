@@ -34,6 +34,11 @@ type Source struct {
 	Decls      string               `json:"decls"`
 	Call       string               `json:"call"`
 	Invocation *core.InvocationData `json:"invocation"`
+	// dir is the entry file's dir for a source ReadSource read. Martian
+	// resolves a file's includes beside it first, so the declarations must
+	// compile there and not in the working directory. A decoded source has
+	// none: a run links it under Name in its task's dir.
+	dir string
 }
 
 // ReadSource reads the entry .mro at path, compiling its invocation as mrp
@@ -73,7 +78,7 @@ func ReadSource(path string, mroPaths []string) (Source, error) {
 		return Source{}, err
 	}
 
-	return Source{Name: filepath.Base(path), Decls: file.Format(), Call: call, Invocation: inv}, nil
+	return Source{Name: filepath.Base(path), Decls: file.Format(), Call: call, Invocation: inv, dir: filepath.Dir(path)}, nil
 }
 
 // Rebuild is the invocation source of inv over the declarations: the call
@@ -102,7 +107,7 @@ func (s Source) Rebuild(inv *core.InvocationData, mroPaths []string) (string, er
 func (s Source) Manifest(mroPaths []string) (types.Manifest, error) {
 	var p syntax.Parser
 
-	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.Name, mroPaths, false)
+	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.file(), mroPaths, false)
 	if err != nil {
 		return types.Manifest{}, fmt.Errorf("compile %s: %w", s.Name, err)
 	}
@@ -173,12 +178,17 @@ func (s Source) with(call string) string {
 	return strings.TrimRight(s.Decls, "\n") + "\n\n" + call
 }
 
+// file is the path the declarations compile under.
+func (s Source) file() string {
+	return filepath.Join(s.dir, s.Name)
+}
+
 // callable compiles the entry file and returns the callable id and the
 // type table it is declared with.
 func (s Source) callable(id string, mroPaths []string) (syntax.Callable, *syntax.TypeLookup, error) {
 	var p syntax.Parser
 
-	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.Name, mroPaths, false)
+	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.file(), mroPaths, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("compile the declarations of %s: %w", s.Name, err)
 	}
@@ -200,7 +210,7 @@ func (s Source) compileArgs(args core.LazyArgumentMap, mroPaths []string) (*Grap
 		return nil, fmt.Errorf("witness of %s: %w", s.Name, err)
 	}
 
-	return Compile([]byte(src), s.Name, mroPaths)
+	return Compile([]byte(src), s.file(), mroPaths)
 }
 
 // witnessValue is the witness value of type t whose collections hold n
