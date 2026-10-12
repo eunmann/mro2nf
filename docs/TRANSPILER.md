@@ -242,7 +242,10 @@ root's forks come from PLAN, a stage-fed root's from its producer's
 the outer roots. An instance zipping another stage's output over a root joins
 that stage's partner dir at its own fork's token, or the absent record, so each
 fork stages one element of it whatever the fork width (the `zip` bench lanes
-gate the bytes one task stages flat in N).
+gate the bytes one task stages flat in N). A split of an output of a stage a
+runtime gate disables, `split Q.o unless G.f`, is zipped the same way: the
+instance reads the gate, and `Q`'s element only where the gate holds `Q`
+enabled (the `zipgated` lanes).
 
 **Preflights.** As in `mrp`, each instance waits until every instance of each
 preflight it is gated by is done: a pipeline's preflights gate every other call

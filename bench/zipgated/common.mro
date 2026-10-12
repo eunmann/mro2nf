@@ -1,0 +1,66 @@
+filetype txt;
+
+# Benchmark: a map call zipping a split over MKVALS's values (its master
+# source) with a split over MKFILES's files, where a runtime gate, GATE.off,
+# disables MKFILES, so the second split is `split MKFILES.fs unless
+# GATE.off` (#494). Run at two widths (pipeline_w4.mro, pipeline_w16.mro):
+# plumbing tasks must be identical at both, and so must the bytes each USE
+# task stages, one value and one file, never all N of MKFILES's files.
+
+stage MKVALS(
+    in  int   n,
+    out int[] vs,
+    src py    "stages/mkvals",
+)
+
+stage GATE(
+    in  bool skip,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage MKFILES(
+    in  int   n,
+    in  int   kb,
+    out txt[] fs,
+    src py    "stages/mkfiles",
+)
+
+stage USE(
+    in  int v,
+    in  txt f,
+    out int w,
+    src py  "stages/use",
+)
+
+pipeline ZIPGATED(
+    in  int   n,
+    in  int   kb,
+    in  bool  skip,
+    out int[] ws,
+)
+{
+    call MKVALS(
+        n = self.n,
+    )
+
+    call GATE(
+        skip = self.skip,
+    )
+
+    call MKFILES(
+        n  = self.n,
+        kb = self.kb,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call USE(
+        v = split MKVALS.vs,
+        f = split MKFILES.fs,
+    )
+
+    return (
+        ws = USE.w,
+    )
+}

@@ -61,22 +61,17 @@ func (r *resolver) resolveSplit(e *syntax.SplitExp, t syntax.Type, fork Fork) (j
 // filters each element of the collection to t's array or map (syntax
 // ArrayType.FilterJson and TypedMapType.FilterJson filter element-wise).
 func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p Part) (json.Marshaler, bool, error) {
-	ref, ok := e.Value.(*syntax.RefExp)
+	ref, gate, ok := partnerSource(e)
 	if !ok {
 		return nil, false, nil
 	}
 
 	if prod, fed := r.g.Producer(p.Root); !fed || prod != ref.Id {
-		raw, ok, err := r.st.partner(p.Root, ref, p.Index)
-		if err != nil || !ok || raw == nil {
-			return nil, ok, err
-		}
-
-		return r.filterElement(raw, t, p)
+		return r.partnerElement(ref, gate, t, fork, p)
 	}
 
 	outer, ok := fork.restrict(r.g.outerRoots(p.Root))
-	if !ok {
+	if !ok || gate != nil {
 		return nil, false, nil
 	}
 
@@ -93,6 +88,24 @@ func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p
 
 	raw, ok, err := r.st.element(p.Root, outer.with(p), member)
 	if err != nil || !ok {
+		return nil, ok, err
+	}
+
+	return r.filterElement(raw, t, p)
+}
+
+// partnerElement serves a split of ref's output from its partner element
+// at p, read through gate, when set: where the gate disables ref's stage,
+// the split resolves as the gated value, which reads null.
+func (r *resolver) partnerElement(ref, gate *syntax.RefExp, t syntax.Type, fork Fork, p Part) (json.Marshaler, bool, error) {
+	if gate != nil {
+		if off, err := r.disabledBy(gate, fork); err != nil || off {
+			return nil, false, err
+		}
+	}
+
+	raw, ok, err := r.st.partner(p.Root, ref, p.Index)
+	if err != nil || !ok || raw == nil {
 		return nil, ok, err
 	}
 

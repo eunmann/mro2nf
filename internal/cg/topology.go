@@ -362,6 +362,8 @@ func collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, fields map[s
 	case *syntax.SplitExp:
 		if served == nil || !served(x) {
 			collectReads(x.Value, served, fields)
+		} else if d, ok := x.Value.(*syntax.DisabledExp); ok {
+			collectReads(d.Disabled, served, fields)
 		}
 	case *syntax.RefExp:
 		addRead(fields, x)

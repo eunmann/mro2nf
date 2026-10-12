@@ -66,6 +66,10 @@ func benchLanes() []benchLane {
 		// MKVALS and MKFILES, then one USE per fork zipping their outputs.
 		{key: "zip_w4", dir: "zip", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIP_PROBE", producers: 1, mrpJobs: 2 + 4, flatStaging: true},
 		{key: "zip_w16", dir: "zip", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIP_PROBE", producers: 1, mrpJobs: 2 + 16, flatStaging: true},
+		// MKVALS, GATE and the MKFILES it gates, then one USE per fork zipping
+		// MKVALS's values with MKFILES's files through the gate (#494).
+		{key: "zipgated_w4", dir: "zipgated", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 1, mrpJobs: 3 + 4, flatStaging: true},
+		{key: "zipgated_w16", dir: "zipgated", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 1, mrpJobs: 3 + 16, flatStaging: true},
 	}
 }
 
