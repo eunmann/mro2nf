@@ -231,6 +231,16 @@ func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
 	return proj
 }
 
+// skipUnderV2 skips a leg that exercises an emission mode the call-graph
+// emitter does not have.
+func skipUnderV2(t *testing.T, mode string) {
+	t.Helper()
+
+	if v2Emitter() {
+		t.Skipf("-emitter=v2 has one emission mode; %s is the old emitter's", mode)
+	}
+}
+
 // transpileRefused are the fixtures mro2nf must refuse to transpile under
 // every flag set, each with the reason: mrp refuses them before any stage runs,
 // so no project may exist to run. Each is an mrpOutcomeCases entry, and
@@ -267,7 +277,10 @@ func transpileInto(tools toolchain, dir, mro, proj string, extra ...string) erro
 		"-mropath", dir,
 	}
 
-	if mrjob := filepath.Join(dir, "mrjob.sh"); fileExists(mrjob) {
+	switch mrjob := filepath.Join(dir, "mrjob.sh"); {
+	case v2Emitter():
+		args = append(args, "-emitter=v2", "-mrjob", filepath.Join(root, "mrjob"))
+	case fileExists(mrjob):
 		args = append(args, "-mrjob", mrjob)
 	}
 

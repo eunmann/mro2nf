@@ -1,0 +1,61 @@
+# A disable gate split per fork of a map call the entry forks: each map call
+# zips an entry collection with SRC's outs, so the entry fixes its forks
+# while SRC's outs give each fork of the gated WORK its gate value. The
+# skips are asymmetric and the map's literal keys unsorted, so a post that
+# numbered the forks in another order than the plan disables other forks.
+# mrp disables INNER/WORK/fork0 and fork1, and KEYED/WORK/fork_b and fork_c.
+# The sub-pipelines publish nothing, as in split_gate.
+stage SRC(
+    out bool[]     skips,
+    out map<bool>  flags,
+    src py         "stages/src",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline INNER(
+    in  int  x,
+    in  bool skip,
+)
+{
+    call WORK(
+        x = self.x,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return ()
+}
+
+pipeline SPLIT_GATE_ENTRY(
+    in  int[]    xs,
+    in  map<int> named,
+)
+{
+    call SRC()
+
+    map call INNER(
+        x    = split self.xs,
+        skip = split SRC.skips,
+    )
+
+    map call INNER as KEYED(
+        x    = split self.named,
+        skip = split SRC.flags,
+    )
+
+    return ()
+}
+
+call SPLIT_GATE_ENTRY(
+    xs    = [1, 2, 3],
+    named = {
+        "c": 3,
+        "a": 1,
+        "b": 2,
+    },
+)

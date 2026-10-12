@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -478,10 +477,6 @@ var jobInfoStable = []string{
 	"stackvars_flag", "monitor_flag", "invocation", "version",
 }
 
-// mrpChunkDir names a chunk's metadata dir; its uniquified twin is
-// chnkN-u<id>, which the chnkN symlink points to.
-var mrpChunkDir = regexp.MustCompile(`^chnk[0-9]+$`)
-
 // runStage runs the instance's jobs with `mre run`, each in its own work
 // dir as each runs in its own task, into the outs bundle outs, and checks
 // them against the jobs mrp ran for the fork at rel: a stage that does not
@@ -524,7 +519,8 @@ func (rp *cgReplay) chunkNames(dir string) []string {
 	var out []string
 
 	for _, e := range entries {
-		if mrpChunkDir.MatchString(e.Name()) {
+		// chnkN is mrp's link to its uniquified chunk dir, chnkN-u<id>.
+		if chunkDir.MatchString(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}

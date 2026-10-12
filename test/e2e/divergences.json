@@ -41,10 +41,10 @@
       "kind": "outcome",
       "feature": "`--autoretry` / retrying a failed stage",
       "summary": "mro2nf retries every stage failure except an ASSERT up to twice (`errorStrategy` retry, `maxRetries 2`), where mrp retries only failures matching its `retry_on` patterns (signals, ENOMEM, scheduler errors) and never an ordinary stage exception.",
-      "justification": "A stage that fails and then succeeds on retry completes under mro2nf and fails under mrp (mrp's `jobmanagers/retry.json`; `internal/emit/emit.go` `errorStrategy`). The outcome comparison counts a retried stage task's failures once on the failure fixtures whose error-failing stage Nextflow retries, and fails on any of them where no task is retried.",
+      "justification": "A stage that fails and then succeeds on retry completes under mro2nf and fails under mrp (mrp's `jobmanagers/retry.json`; `internal/emit/emit.go` `errorStrategy`). The outcome comparison counts a retried task's failures once on the failure fixtures whose error-failing task Nextflow retries (a stage, or the call-graph project's OUTS on `map_pipe_nested`), and fails on any of them where no task is retried.",
       "issue": 299,
       "evidence": ["TestMrpDiffFailureParity/stage_raise", "TestOutcomeRulesNeedTheirEntries"],
-      "comparator": {"rule": "collapse-retried-attempts", "fixtures": ["bad_out_type", "missing_struct_key", "split_bad_mem", "split_bad_special", "split_bad_threads", "stage_raise"]}
+      "comparator": {"rule": "collapse-retried-attempts", "fixtures": ["bad_out_type", "entry_dir", "entry_file", "entry_file_empty", "entry_filearr", "entry_mapfile", "entry_struct_file", "map_pipe_nested", "missing_struct_key", "split_bad_mem", "split_bad_special", "split_bad_threads", "split_from_file", "stage_raise"]}
     },
     {
       "id": "failure-report-details",
@@ -54,15 +54,6 @@
       "justification": "The failure contract is whether the run fails, which stages it blames and whether each failure is an ASSERT or an error, so the outcome comparison reads only those.",
       "evidence": ["TestMrpDiffFailureParity", "TestOutcomeRulesNeedTheirEntries"],
       "comparator": {"rule": "compare-failure-stage-and-kind"}
-    },
-    {
-      "id": "relative-entry-paths-resolved",
-      "kind": "abi",
-      "feature": "a relative file path in the invocation",
-      "summary": "mro2nf resolves a relative path the invocation gives a file input against the `.mro`'s directory and stages that file, so the stage sees the file; mrp passes the relative string to the stage verbatim.",
-      "justification": "A stage resolves mrp's relative string from its own job dir, where it names nothing, so under mrp a stage that opens it fails (the `entry_*` fixtures `mrpUnrunnable` lists); mro2nf's entry bundle carries the file itself (`internal/emit/emit.go` `resolveEntryArgs`). `bench/split`'s stages never open `payload`, so mrp completes it, and `payload` is the only difference.",
-      "evidence": ["TestMrpDiff/bench/split"],
-      "abi": {"fixtures": ["bench/split"], "file": "_args", "rule": "ignore-key", "key": "payload"}
     },
     {
       "id": "local-modifier-ignored",

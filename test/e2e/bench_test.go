@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -58,8 +59,9 @@ func benchBaseLanes() []benchLane {
 		{key: "chain", dir: "chain", mro: "pipeline.mro", probe: "MRE_BENCH_CHAIN_PROBE", producers: 1, mrpJobs: 5},
 		{key: "forks_w4", dir: "forks", mro: "pipeline_w4.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1, mrpJobs: 1 + 4},
 		{key: "forks_w16", dir: "forks", mro: "pipeline_w16.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1, mrpJobs: 1 + 16},
-		{key: "split_c4", dir: "split", mro: "pipeline_c4.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1, mrpJobs: 4 + 2},
-		{key: "split_c16", dir: "split", mro: "pipeline_c16.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1, mrpJobs: 16 + 2},
+		// MKPAY, then WSPLIT's split, N chunks and join.
+		{key: "split_c4", dir: "split", mro: "pipeline_c4.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1, mrpJobs: 1 + 4 + 2},
+		{key: "split_c16", dir: "split", mro: "pipeline_c16.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1, mrpJobs: 1 + 16 + 2},
 		// N samples, each a split of 2 chunks: split + 2 mains + join per sample.
 		{key: "mapsplit_w4", dir: "mapsplit", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPSPLIT_PROBE", producers: 4, mrpJobs: 4 * 4, knownScaling: known},
 		{key: "mapsplit_w8", dir: "mapsplit", mro: "pipeline_w8.mro", probe: "MRE_BENCH_MAPSPLIT_PROBE", producers: 8, mrpJobs: 8 * 4, knownScaling: known},
@@ -78,6 +80,17 @@ func benchBaseLanes() []benchLane {
 // O(1).
 func benchLanes() []benchLane {
 	base := benchBaseLanes()
+
+	// The call-graph emitter has one emission mode and no per-fork
+	// plumbing: every lane must be width-flat.
+	if v2Emitter() {
+		for i := range base {
+			base[i].knownScaling = 0
+		}
+
+		return base
+	}
+
 	lanes := make([]benchLane, 0, 2*len(base))
 
 	for _, l := range base {
@@ -203,7 +216,7 @@ func runLane(t *testing.T, l benchLane, r laneRun) ([]byte, string) {
 
 	wall := time.Since(start)
 
-	stages, err := writeStageProcesses(r.dir, l.mro, t.TempDir())
+	stages, err := writeStageProcesses(r.dir, l.mro, proj, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,16 +269,28 @@ func transpileLane(t *testing.T, l benchLane, r laneRun) string {
 // writeStageProcesses writes, as a JSON array under tmp, every process name
 // the emitter can give a task that runs a stage's own code in the program of
 // dir/mro, and returns the file's path. stageProcessNames builds them from
-// the same inventory as the override selectors. bench_metrics.py counts
-// every other task as plumbing, so a new helper process is plumbing without
-// being listed.
-func writeStageProcesses(dir, mro, tmp string) (string, error) {
-	prog, err := lowerMRO(dir, mro)
-	if err != nil {
-		return "", err
+// the same inventory as the override selectors; under the call-graph
+// emitter they are the stage module's aliases proj's main.nf includes.
+// bench_metrics.py counts every other task as plumbing, so a new helper
+// process is plumbing without being listed.
+func writeStageProcesses(dir, mro, proj, tmp string) (string, error) {
+	var names []string
+
+	if v2Emitter() {
+		var err error
+		if names, err = stageAliases(proj); err != nil {
+			return "", err
+		}
+	} else {
+		prog, err := lowerMRO(dir, mro)
+		if err != nil {
+			return "", err
+		}
+
+		names = stageProcessNames(prog)
 	}
 
-	data, err := json.Marshal(stageProcessNames(prog))
+	data, err := json.Marshal(names)
 	if err != nil {
 		return "", fmt.Errorf("encode stage processes: %w", err)
 	}
@@ -276,6 +301,28 @@ func writeStageProcesses(dir, mro, tmp string) (string, error) {
 	}
 
 	return path, nil
+}
+
+// stageInclude matches one alias of the stage module a call-graph project's
+// main.nf includes: `STAGE as N0_X`, `STAGE_SPLIT as N1_Y_SP`, ...
+var stageInclude = regexp.MustCompile(`\bSTAGE(?:_SPLIT|_MAIN|_JOIN)? as (\w+)`)
+
+// stageAliases are the process aliases of the stage module in proj's
+// main.nf, sorted.
+func stageAliases(proj string) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(proj, "main.nf"))
+	if err != nil {
+		return nil, fmt.Errorf("read main.nf: %w", err)
+	}
+
+	var names []string
+	for _, m := range stageInclude.FindAllStringSubmatch(string(raw), -1) {
+		names = append(names, m[1])
+	}
+
+	slices.Sort(names)
+
+	return names, nil
 }
 
 // lowerMRO parses and lowers the program of dir/mro.
@@ -481,8 +528,13 @@ func TestAbsLocalWorkdir(t *testing.T) {
 func runBenchReport(t *testing.T, metrics string) {
 	t.Helper()
 
+	baseline := "baseline.json"
+	if v2Emitter() {
+		baseline = "baseline_v2.json"
+	}
+
 	report := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_report.py"),
-		metrics, filepath.Join(root, "bench", "baseline.json"))
+		metrics, filepath.Join(root, "bench", baseline))
 
 	out, err := report.CombinedOutput()
 

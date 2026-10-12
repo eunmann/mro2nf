@@ -3,6 +3,7 @@ package cg
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,27 +17,35 @@ import (
 const elementField = "value"
 
 // stagedStore serves the instance outs bundles and fork elements one task
-// staged, each identified by its own record.
+// staged, each identified by its own record. An instance's outs may come as
+// one bundle or as one bundle per field (Post's Fields), which merge.
 type stagedStore struct {
 	g           *Graph
-	outsDirs    map[string]string
+	outsDirs    map[string][]string
 	forks       map[string][]Fork
 	elements    map[string]string
+	missing     map[string][]string
 	stagedElems []Element
 	cache       map[string]core.LazyArgumentMap
 }
 
 func stagedKey(fqid string, f Fork) string { return fqid + "\x00" + f.key() }
 
-// stage indexes the staged items under dirs. Each dir is an item (an
-// instance bundle or a fork element) or holds items as its subdirectories.
-func (g *Graph) stage(dirs []string) (*stagedStore, error) {
+// stage indexes the staged items under dirs and the fork records recs. Each
+// dir is an item (an instance bundle or a fork element) or holds items as
+// its subdirectories.
+func (g *Graph) stage(dirs []string, recs ...Element) (*stagedStore, error) {
 	s := &stagedStore{
 		g:        g,
-		outsDirs: map[string]string{},
+		outsDirs: map[string][]string{},
 		forks:    map[string][]Fork{},
 		elements: map[string]string{},
+		missing:  map[string][]string{},
 		cache:    map[string]core.LazyArgumentMap{},
+	}
+
+	for _, el := range recs {
+		s.addElement(el, "")
 	}
 
 	for _, d := range dirs {
@@ -75,22 +84,36 @@ func (s *stagedStore) add(dir string) error {
 			return err
 		}
 
-		s.outsDirs[stagedKey(in.Node, in.Fork)] = dir
-		s.forks[in.Node] = append(s.forks[in.Node], in.Fork)
+		k := stagedKey(in.Node, in.Fork)
+		if _, seen := s.outsDirs[k]; !seen {
+			s.forks[in.Node] = append(s.forks[in.Node], in.Fork)
+		}
+
+		s.outsDirs[k] = append(s.outsDirs[k], dir)
 	case elementFile:
 		el, err := s.g.ReadElement(dir)
 		if err != nil {
 			return err
 		}
 
-		root := el.Fork[len(el.Fork)-1].Root
-		s.elements[stagedKey(root.Fqid, el.Fork)] = dir
-		s.stagedElems = append(s.stagedElems, el)
+		s.addElement(el, dir)
 	default:
 		return fmt.Errorf("staged %s: %w", dir, errNotItem)
 	}
 
 	return nil
+}
+
+// addElement indexes a fork element; dir is its bundle, or "" for a fork
+// record that carries no value.
+func (s *stagedStore) addElement(el Element, dir string) {
+	root := el.Fork[len(el.Fork)-1].Root
+	if dir != "" {
+		s.elements[stagedKey(root.Fqid, el.Fork)] = dir
+		s.missing[stagedKey(root.Fqid, el.Fork)] = el.Missing
+	}
+
+	s.stagedElems = append(s.stagedElems, el)
 }
 
 func (s *stagedStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgumentMap, error) {
@@ -99,24 +122,43 @@ func (s *stagedStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgument
 		return m, nil
 	}
 
-	dir, ok := s.outsDirs[k]
-	if !ok {
+	dirs, ok := s.outsDirs[k]
+
+	switch {
+	case !ok && !hasOutputs(st):
+		return core.LazyArgumentMap{}, nil
+	case !ok:
 		return nil, fmt.Errorf("outs of %s at fork %s: %w", st.Fqid, f, ErrNotStaged)
 	}
 
-	raw, err := shim.ReadBundle(dir)
-	if err != nil {
-		return nil, fmt.Errorf("staged outs of %s: %w", st.Fqid, err)
-	}
+	m := core.LazyArgumentMap{}
 
-	var m core.LazyArgumentMap
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return nil, fmt.Errorf("decode staged outs of %s: %w", st.Fqid, err)
+	for _, dir := range dirs {
+		raw, err := shim.ReadBundle(dir)
+		if err != nil {
+			return nil, fmt.Errorf("staged outs of %s: %w", st.Fqid, err)
+		}
+
+		var part core.LazyArgumentMap
+		if err := json.Unmarshal(raw, &part); err != nil {
+			return nil, fmt.Errorf("decode staged outs of %s: %w", st.Fqid, err)
+		}
+
+		maps.Copy(m, part)
 	}
 
 	s.cache[k] = m
 
 	return m, nil
+}
+
+// hasOutputs reports whether st declares outputs. A stage without any has
+// the same empty outs at every instance, which no bundle carries when its
+// outs are posted field by field.
+func hasOutputs(st *syntax.CallGraphStage) bool {
+	ps := st.Callable().GetOutParams()
+
+	return ps != nil && len(ps.List) > 0
 }
 
 // instances collects root's indices from the forks of the staged instances
@@ -175,10 +217,16 @@ func compareIndex(a, b syntax.CollectionIndex) int {
 	return a.ArrayIndex() - b.ArrayIndex()
 }
 
-func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork) (json.RawMessage, bool, error) {
-	dir, ok := s.elements[stagedKey(root.Fqid, f)]
+func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork, member string) (json.RawMessage, bool, error) {
+	k := stagedKey(root.Fqid, f)
+
+	dir, ok := s.elements[k]
 	if !ok || !shim.IsBundle(dir) {
 		return nil, false, nil
+	}
+
+	if slices.Contains(s.missing[k], member) {
+		return nil, true, fmt.Errorf("%w: %s at fork %s of %s", errNoElement, member, f, root.Fqid)
 	}
 
 	raw, err := shim.ReadBundle(dir)
@@ -191,7 +239,9 @@ func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork) (json.RawMess
 		return nil, false, fmt.Errorf("decode fork element of %s: %w", root.Fqid, err)
 	}
 
-	return payload[elementField], true, nil
+	v, ok := payload[member]
+
+	return v, ok, nil
 }
 
 // emptyStore is a task with nothing staged: what the call graph alone fixes.
@@ -203,6 +253,6 @@ func (emptyStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgumentMap,
 
 func (emptyStore) instances(*syntax.CallGraphStage, Fork) []syntax.CollectionIndex { return nil }
 
-func (emptyStore) element(*syntax.CallGraphStage, Fork) (json.RawMessage, bool, error) {
+func (emptyStore) element(*syntax.CallGraphStage, Fork, string) (json.RawMessage, bool, error) {
 	return nil, false, nil
 }

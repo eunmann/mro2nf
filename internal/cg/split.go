@@ -55,10 +55,10 @@ func (r *resolver) resolveSplit(e *syntax.SplitExp, t syntax.Type, fork Fork) (j
 
 // stagedElement serves a split from the fork element the root's producer
 // wrote (Post), so an instance never reads the whole collection. It applies
-// when the split reads the root's own source, and filters the element to t
-// as Path filters each element of the collection to t's array or map
-// (syntax ArrayType.FilterJson and TypedMapType.FilterJson filter
-// element-wise).
+// when the split reads the root's own source, or another output of its
+// producer (zipSources), and filters the element to t as Path filters each
+// element of the collection to t's array or map (syntax
+// ArrayType.FilterJson and TypedMapType.FilterJson filter element-wise).
 func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p Part) (json.Marshaler, bool, error) {
 	ref, ok := e.Value.(*syntax.RefExp)
 	if !ok {
@@ -70,18 +70,24 @@ func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p
 		return nil, false, nil
 	}
 
-	raw, ok, err := r.st.element(p.Root, outer.with(p))
-	if err != nil || !ok {
-		return nil, false, err
-	}
-
 	src, err := r.sourceExp(p.Root, outer)
 	if err != nil {
 		return nil, false, err
 	}
 
+	member := elementField
+
 	if sref, ok := src.Value.(*syntax.RefExp); !ok || !sameRef(ref, sref) {
-		return nil, false, nil
+		if prod, ok := r.g.Producer(p.Root); !ok || prod != ref.Id {
+			return nil, false, nil
+		}
+
+		member = zipMember(ref.OutputId)
+	}
+
+	raw, ok, err := r.st.element(p.Root, outer.with(p), member)
+	if err != nil || !ok {
+		return nil, ok, err
 	}
 
 	v, fatal, err := t.FilterJson(raw, r.g.types)

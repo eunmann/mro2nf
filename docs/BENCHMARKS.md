@@ -17,6 +17,12 @@ BENCH_UPDATE=1 make bench      # record the current run as the new baseline
 The harness skips cleanly when `nextflow`, `java`, or `python3` is missing, so it
 is a no-op in an environment without them.
 
+Under `E2E_EMITTER=v2` the lanes transpile with `-emitter=v2`, and both
+commands read and record `bench/baseline_v2.json` instead. That emitter has one
+emission mode, so only the base lanes run (no `_native` lanes), and no lane is
+exempt from the scaling gate: every lane must be width-flat. After a change to
+that emitter, re-record with `E2E_EMITTER=v2 BENCH_UPDATE=1 make bench`.
+
 ### Scale tier
 
 ```sh
@@ -33,7 +39,7 @@ and runs both in default and `-native` mode:
 | test | fixture | narrow | wide (default) | tasks per mode, wide |
 |------|---------|--------|----------------|----------------------|
 | `TestScaleForks` | `forks` | 4 forks | 10,000 forks | 10,005 |
-| `TestScaleSplit` | `split` | 4 chunks | 10,000 chunks | 10,004 |
+| `TestScaleSplit` | `split` | 4 chunks | 10,000 chunks | 10,005 |
 | `TestScaleMapSplit` | `mapsplit` (the Cell Ranger shape) | 4 samples | 2,000 samples | 10,004 |
 | `TestScaleMapNested` | `mapnested` | 2 × 2 | 100 × 100 | 10,204 |
 | `TestScaleMapDisabled` | `mapdisabled` | 4 forks | 2,500 forks | 10,004 |
@@ -122,8 +128,9 @@ the overhead rule target:
   identical at both, so any per-fork bookkeeping task a change reintroduces
   fails the gate. The `-native` lanes of this fixture are what prove the
   channel-native O(1) element scatter (#99) stays O(1).
-- **`split`** — a split stage whose large stage-level file arg (`payload`) is
-  broadcast to every chunk via `chunks.combine(args)`, even though `main` never
+- **`split`** — a split stage whose large stage-level file arg (`payload`,
+  written by a producer stage, `MKPAY`) is broadcast to every chunk via
+  `chunks.combine(args)`, even though `main` never
   reads it: O(N) redundant staging over an N-way split (headroom for
   consumer-aware split staging, #15). Run at two chunk counts
   (`pipeline_c4.mro`, `pipeline_c16.mro`) with the same width-flat plumbing
@@ -183,7 +190,8 @@ checks:
   re-transfer, reintroduced data-plane bookkeeping, or extra task executions.
   Equal is fine; the target is monotone improvement. After a change legitimately
   lowers the numbers, re-record with `BENCH_UPDATE=1 make bench` and commit the
-  new `bench/baseline.json` in the same change, so the gate ratchets downward.
+  new `bench/baseline.json` (`bench/baseline_v2.json` under `E2E_EMITTER=v2`)
+  in the same change, so the gate ratchets downward.
 - **Scaling gate** — lanes that run one fixture at two widths must report an
   *identical* plumbing task count at every width: constant orchestration
   overhead is acceptable, overhead scaling with fork width or chunk count is a

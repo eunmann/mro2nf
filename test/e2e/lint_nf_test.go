@@ -8,7 +8,8 @@ package e2e
 // emission branch — a keyed variant, a disable gate, a fused split — becomes an
 // immediate, precise CI failure with file/line, independent of containers, AWS,
 // or which paths the golden fixtures happen to execute. It fails only on ERRORS
-// (a real syntax bug); style warnings on the generated code exit 0.
+// (a real syntax bug); style warnings on the generated code exit 0, except
+// under E2E_EMITTER=v2, whose projects must lint warning-free (#343).
 //
 // The matrix is fixtures × lintConfigs, but a per-combo `nextflow lint` pays a
 // ~2s JVM boot that dwarfs the linting itself. So one `nextflow lint` invocation lints many project dirs with per-file JSON
@@ -42,15 +43,22 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// lintConfigs is the emission-branch dimension (#122): -native routes the
-// emitter down generator branches (native scatter/merge) the default emission
-// never reaches, so each fixture is linted under both.
-var lintConfigs = []struct {
+// lintConfig is one emission-branch flag set.
+type lintConfig struct {
 	name  string
 	flags []string
-}{
-	{"default", nil},
-	{"native", []string{"-native"}},
+}
+
+// lintConfigs is the emission-branch dimension (#122): -native routes the
+// emitter down generator branches (native scatter/merge) the default emission
+// never reaches, so each fixture is linted under both. The call-graph
+// emitter has one emission mode.
+func lintConfigs() []lintConfig {
+	if v2Emitter() {
+		return []lintConfig{{"default", nil}}
+	}
+
+	return []lintConfig{{"default", nil}, {"native", []string{"-native"}}}
 }
 
 // minNextflowMajor/Minor is the first release with `nextflow lint`.
@@ -139,10 +147,11 @@ func transpileLintCombos(t *testing.T, parent string) []*lintCombo {
 	t.Helper()
 
 	fixtures := lintFixtures(t)
-	combos := make([]*lintCombo, 0, len(fixtures)*len(lintConfigs))
+	configs := lintConfigs()
+	combos := make([]*lintCombo, 0, len(fixtures)*len(configs))
 
 	for _, fx := range fixtures {
-		for _, cfg := range lintConfigs {
+		for _, cfg := range configs {
 			c := &lintCombo{
 				fixture: fx, config: cfg.name, flags: cfg.flags,
 				dir: fx + "__" + cfg.name,
@@ -232,6 +241,9 @@ func treeDigest(t *testing.T, dir string) string {
 var lintEmissionAllowList = []string{
 	"_assets", "entry_args", "entry_resolved", "lib",
 	"main.nf", "modules", "nextflow.config", "nulls",
+	// The call-graph emitter's stage module, which main.nf includes by its
+	// path beside it.
+	"stage.nf",
 }
 
 // assertUniformLib proves every emission ships a byte-identical lib/
@@ -360,7 +372,8 @@ func lintChunk(t *testing.T, parent string, chunk []string, errsByProj map[strin
 	out, runErr := cmd.Output()
 
 	var report struct {
-		Errors []lintDiag `json:"errors"`
+		Errors   []lintDiag `json:"errors"`
+		Warnings []lintDiag `json:"warnings"`
 	}
 	if err := json.Unmarshal(out, &report); err != nil {
 		t.Fatalf("nextflow lint batch produced no JSON (%v; run: %v):\nstdout:\n%s\nstderr:\n%s",
@@ -371,7 +384,17 @@ func lintChunk(t *testing.T, parent string, chunk []string, errsByProj map[strin
 		t.Fatalf("nextflow lint batch failed without diagnostics: %v\nstderr:\n%s", runErr, stderr.Bytes())
 	}
 
-	for _, d := range report.Errors {
+	diags := report.Errors
+
+	// The call-graph emitter's projects lint warning-free (#343).
+	if v2Emitter() {
+		for _, w := range report.Warnings {
+			w.Message = "warning: " + w.Message
+			diags = append(diags, w)
+		}
+	}
+
+	for _, d := range diags {
 		proj, rest, ok := attributeLintDiag(chunk, d.Filename)
 		if !ok {
 			// Never Fatalf: one oddly-reported path must not vaporize the

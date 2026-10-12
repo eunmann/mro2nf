@@ -24,7 +24,7 @@ func addGraph(fs *flag.FlagSet) *graphFlags {
 	g := &graphFlags{}
 	fs.StringVar(&g.mro, "mro", "", "the invocation .mro, compiled as mrp compiles it")
 	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the .mro's dir)")
-	fs.StringVar(&g.types, "types", "", "type manifest (types.json) path")
+	fs.StringVar(&g.types, "types", "", "type manifest (types.json) path (default: built from the invocation's declarations)")
 
 	return g
 }
@@ -45,7 +45,12 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 	}
 
 	if g.types == "" {
-		return graph, types.Manifest{}, nil
+		man, err := graph.Manifest()
+		if err != nil {
+			return nil, types.Manifest{}, fmt.Errorf("load call graph: %w", err)
+		}
+
+		return graph, man, nil
 	}
 
 	man, err := types.LoadManifest(g.types)
@@ -65,9 +70,10 @@ func runArgs(_ context.Context, argv []string) error {
 	node := fs.String("node", "", "stage fqid")
 	out := fs.String("o", "args", "args bundle dir to write")
 
-	var in repeatedFlag
+	var in, forkRecs repeatedFlag
 
 	fs.Var(&in, "in", "staged item, or dir of staged items: instance outs bundles and fork elements (repeatable)")
+	fs.Var(&forkRecs, "fork", "a fork record passed as a value, base64 of its JSON (repeatable)")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -78,7 +84,14 @@ func runArgs(_ context.Context, argv []string) error {
 		return err
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Manifest: man, Out: *out, Log: os.Stderr})
+	forks := make([]cg.Element, len(forkRecs))
+	for i, rec := range forkRecs {
+		if forks[i], err = g.DecodeElement(rec); err != nil {
+			return fmt.Errorf("args: %w", err)
+		}
+	}
+
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr})
 	if err != nil {
 		return fmt.Errorf("args: %w", err)
 	}
@@ -104,6 +117,8 @@ func runPost(_ context.Context, argv []string) error {
 	outs := fs.String("outs", "outs", "the stage's outs bundle dir")
 	forks := fs.String("forks", "forks", "dir to write <root>/<ordinal>/ fork elements into")
 	entry := fs.Bool("entry", false, "write the forks the invocation's entry values fix, not a stage's")
+	fields := fs.String("fields", "", "dir to write one stamped bundle per output into, named by it")
+	gates := fs.String("gates", "", "file to write the instances the instance disables into, space-separated gate tokens (<node>@<roots>@<ordinals>)")
 
 	var in repeatedFlag
 
@@ -121,7 +136,7 @@ func runPost(_ context.Context, argv []string) error {
 	if *entry {
 		err = g.PostEntry(*forks)
 	} else {
-		err = g.Post(cg.PostSpec{Args: *args, Outs: *outs, In: in, Manifest: man, Forks: *forks})
+		err = g.Post(cg.PostSpec{Args: *args, Outs: *outs, In: in, Manifest: man, Forks: *forks, Fields: *fields, Gates: *gates})
 	}
 
 	if err != nil {

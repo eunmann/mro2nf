@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -117,6 +118,35 @@ func TestCallGraphSubcommands(t *testing.T) {
 
 	if d := cmp.Diff(`{"total":6}`, compactBundle(t, filepath.Join(work, "pipeline"))); d != "" {
 		t.Errorf("pipeline outs (-mrp +mre):\n%s", d)
+	}
+}
+
+// TestArgsForkRecord: an entry fork passed to mre args as a value, the
+// base64 of its fork record, gives the instance the _args staging the fork
+// element does (struct_proj: PP/MAKE/fork<i> gets n = i+1).
+func TestArgsForkRecord(t *testing.T) {
+	work := t.TempDir()
+	forks := filepath.Join(work, "entry")
+
+	runCG(t, "post", "-entry", "-forks", forks)
+
+	elems, err := filepath.Glob(filepath.Join(forks, "PP.MAKE", "*"))
+	if err != nil || len(elems) != 3 {
+		t.Fatalf("entry forks of MAKE: %v %v", elems, err)
+	}
+
+	for i, el := range elems {
+		rec, err := os.ReadFile(filepath.Join(el, "fork.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		args := filepath.Join(work, strconv.Itoa(i))
+		runCG(t, "args", "-node", "PP.MAKE", "-fork", base64.StdEncoding.EncodeToString(rec), "-o", args)
+
+		if d := cmp.Diff(`{"n":`+strconv.Itoa(i+1)+`}`, compactBundle(t, args)); d != "" {
+			t.Errorf("MAKE fork %d _args (-mrp +mre):\n%s", i, d)
+		}
 	}
 }
 

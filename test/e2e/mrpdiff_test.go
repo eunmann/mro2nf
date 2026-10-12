@@ -526,6 +526,12 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "preflight_ungated"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
 	{name: "vdr_volatile"},
+	// A disable gate split per fork of a map call over a sub-pipeline: each
+	// fork of the gated stage has its own gate value from the one producer.
+	{name: "split_gate"},
+	// The same gate under map calls the entry forks, an array and a map with
+	// unsorted keys: the producer's outs give each fork its gate value.
+	{name: "split_gate_entry"},
 	// #472: every bench lane's invocation at its narrower width, in both
 	// TestBench modes, so a divergence on a bench shape fails here and not
 	// only the bench's task-count gates.
@@ -573,6 +579,40 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "rt_gate_split_reject_pass", mrp: runOutcome{Failed: true}},
 }
 
+// v2OutcomeCases are fixtures mrp fails on that the old emitter runs to a
+// committed golden (mrpUnrunnable says why mrp cannot run them). The
+// call-graph emitter fails each as mrp does, so under E2E_EMITTER=v2 they
+// are outcome cases and no golden cases: a relative entry path names
+// nothing from the stage's job dir, and a merge of a nested map call over a
+// sub-pipeline matches no fork. Step D folds them into mrpOutcomeCases with
+// the old emitter's goldens (#470).
+var v2OutcomeCases = []mrpOutcomeCase{
+	{name: "entry_file", mrp: failedIn(failError, "COUNT")},
+	{name: "entry_filearr", mrp: failedIn(failError, "COUNTARR")},
+	{name: "entry_struct_file", mrp: failedIn(failError, "READCFG")},
+	{name: "entry_mapfile", mrp: failedIn(failError, "COUNTMAP")},
+	{name: "entry_dir", mrp: failedIn(failError, "COUNTDIR")},
+	{name: "entry_file_empty", mrp: failedIn(failError, "SUMMARIZE")},
+	{name: "split_from_file", mrp: failedIn(failError, "SQUARELINES")},
+	{name: "map_pipe_nested", mrp: failedIn(failError, "")},
+}
+
+// outcomeCases are the cases TestMrpDiffFailureParity compares for the
+// emitter under test.
+func outcomeCases() []mrpOutcomeCase {
+	if v2Emitter() {
+		return slices.Concat(mrpOutcomeCases, v2OutcomeCases)
+	}
+
+	return mrpOutcomeCases
+}
+
+// v2OutcomeCase reports a fixture that is an outcome case, not a golden
+// one, under the emitter under test.
+func v2OutcomeCase(fixture string) bool {
+	return v2Emitter() && slices.ContainsFunc(v2OutcomeCases, func(c mrpOutcomeCase) bool { return c.name == fixture })
+}
+
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
 // and requires the published file tree, the _outs JSON and every stage
 // invocation's _args, _outs and _jobinfo allocation to match.
@@ -587,7 +627,7 @@ func TestMrpDiff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if tc.emitRefused != "" {
+			if tc.emitRefused != "" && !v2Emitter() {
 				t.Skip(tc.emitRefused)
 			}
 
@@ -627,6 +667,7 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	if tc.native {
 		t.Run("native", func(t *testing.T) {
 			t.Parallel()
+			skipUnderV2(t, "-native")
 			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, append(slices.Clone(extra), "-native")))
 		})
 	}
@@ -638,6 +679,7 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	if tc.inline {
 		t.Run("noinline", func(t *testing.T) {
 			t.Parallel()
+			skipUnderV2(t, "-inline-pipelines=false")
 			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
 		})
 	}
@@ -708,7 +750,7 @@ func TestMrpDiffFailureParity(t *testing.T) {
 	bin := martianBin(t)
 	allow := mustAllowlist(t)
 
-	for _, tc := range mrpOutcomeCases {
+	for _, tc := range outcomeCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			shardSkip(t)

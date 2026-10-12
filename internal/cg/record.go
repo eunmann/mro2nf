@@ -1,6 +1,7 @@
 package cg
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,12 +51,16 @@ type Element struct {
 	Fork     Fork
 	Lens     []int
 	Position int
+	// Missing are the zipped sources (zipSources) the element has no value
+	// of: a shorter source, past whose end a split reads a missing element.
+	Missing []string
 }
 
 type elementJSON struct {
 	Fork     []partJSON `json:"fork"`
 	Lens     []int      `json:"lens"`
 	Position int        `json:"position"`
+	Missing  []string   `json:"missing,omitempty"`
 }
 
 // ReadInstance reads the instance stamp in dir, an args or outs bundle.
@@ -102,24 +107,54 @@ func (g *Graph) ReadElement(dir string) (Element, error) {
 		return Element{}, err
 	}
 
-	f, err := g.decodeFork(rec.Fork)
+	el, err := g.element(rec)
 	if err != nil {
 		return Element{}, fmt.Errorf("fork element %s: %w", dir, err)
 	}
 
+	return el, nil
+}
+
+// DecodeElement reads a fork record passed as a value: the base64 of its
+// JSON, so a map key of any characters crosses a shell unquoted.
+func (g *Graph) DecodeElement(text string) (Element, error) {
+	raw, err := base64.StdEncoding.DecodeString(text)
+	if err != nil {
+		return Element{}, fmt.Errorf("decode fork record: %w", err)
+	}
+
+	var rec elementJSON
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return Element{}, fmt.Errorf("decode fork record: %w", err)
+	}
+
+	el, err := g.element(rec)
+	if err != nil {
+		return Element{}, fmt.Errorf("fork record: %w", err)
+	}
+
+	return el, nil
+}
+
+func (g *Graph) element(rec elementJSON) (Element, error) {
+	f, err := g.decodeFork(rec.Fork)
+	if err != nil {
+		return Element{}, err
+	}
+
 	if len(f) == 0 {
-		return Element{}, fmt.Errorf("fork element %s: %w: no parts", dir, errBadFork)
+		return Element{}, fmt.Errorf("%w: no parts", errBadFork)
 	}
 
 	if len(rec.Lens) != len(f) {
-		return Element{}, fmt.Errorf("fork element %s: %w: %d counts, %d parts", dir, errLens, len(rec.Lens), len(f))
+		return Element{}, fmt.Errorf("%w: %d counts, %d parts", errLens, len(rec.Lens), len(f))
 	}
 
-	return Element{Fork: f, Lens: rec.Lens, Position: rec.Position}, nil
+	return Element{Fork: f, Lens: rec.Lens, Position: rec.Position, Missing: rec.Missing}, nil
 }
 
 func writeElement(dir string, el Element) error {
-	return writeRecord(filepath.Join(dir, elementFile), elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position})
+	return writeRecord(filepath.Join(dir, elementFile), elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position, Missing: el.Missing})
 }
 
 func readRecord(path string, v any) error {

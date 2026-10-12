@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/eunmann/mro2nf/internal/frontend"
+	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -47,13 +49,31 @@ func Load(mro string, mroPaths []string) (*Graph, error) {
 		return nil, fmt.Errorf("compile %s: %w", mro, err)
 	}
 
+	return graphOf(ast, mro, mroPaths)
+}
+
+// Compile compiles the invocation source src as Load compiles a file named
+// name (core/runtime.go instantiatePipeline: ParseSourceBytes, then
+// MakePipelineCallGraph).
+func Compile(src []byte, name string, mroPaths []string) (*Graph, error) {
+	var p syntax.Parser
+
+	_, _, ast, err := p.ParseSourceBytes(src, name, mroPaths, false)
+	if err != nil {
+		return nil, fmt.Errorf("compile %s: %w", name, err)
+	}
+
+	return graphOf(ast, name, mroPaths)
+}
+
+func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 	if ast.Call == nil {
-		return nil, fmt.Errorf("compile %s: %w", mro, errNoCall)
+		return nil, fmt.Errorf("compile %s: %w", name, errNoCall)
 	}
 
 	root, err := ast.MakePipelineCallGraph("", ast.Call)
 	if err != nil {
-		return nil, fmt.Errorf("call graph of %s: %w", mro, err)
+		return nil, fmt.Errorf("call graph of %s: %w", name, err)
 	}
 
 	g := &Graph{
@@ -95,6 +115,17 @@ func (g *Graph) Invocation() (*core.InvocationData, error) {
 	}
 
 	return inv, nil
+}
+
+// Manifest is the type manifest of the invocation's declarations, the one
+// the transpiler builds from the same source (types.BuildManifest).
+func (g *Graph) Manifest() (types.Manifest, error) {
+	prog, err := frontend.Lower(g.ast, g.mroPaths)
+	if err != nil {
+		return types.Manifest{}, fmt.Errorf("type manifest: %w", err)
+	}
+
+	return types.BuildManifest(prog), nil
 }
 
 // MroPaths are the include paths the invocation compiled with, mrp's

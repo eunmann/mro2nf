@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -56,6 +57,10 @@ func TestResumeCachesEverything(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			if slices.Contains(tc.flags, "-native") {
+				skipUnderV2(t, "-native")
+			}
 
 			proj := transpile(t, tc.fixture, tc.flags...)
 

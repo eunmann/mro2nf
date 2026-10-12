@@ -115,6 +115,22 @@ func mrpFailedOutsideStages(err error) bool {
 	return errors.Is(err, errNoStageInvocation) || errors.Is(err, errABIMeta)
 }
 
+// mrpFailedStage is the stage a failure file in fork blames: the fork's
+// stage, or "" for a pipeline's fork, which fails resolving its bindings
+// and runs no stage code.
+func mrpFailedStage(fork string) (string, error) {
+	name, err := mrpStageName(fork)
+	if err != nil {
+		return "", err
+	}
+
+	if _, isStage, err := mrpForkNode(fork); err != nil || !isStage {
+		return "", err
+	}
+
+	return name, nil
+}
+
 // mrpFailedOutcome classifies a pipestance mrp exited non-zero on, from the
 // _assert and _errors files it left. A missing pipestance (a compile error) is
 // a failure blaming no stage.
@@ -144,7 +160,7 @@ func mrpFailedOutcome(ps string) (runOutcome, error) {
 			fork = filepath.Dir(fork)
 		}
 
-		stage, err := mrpStageName(fork)
+		stage, err := mrpFailedStage(fork)
 		if err != nil {
 			return err
 		}
