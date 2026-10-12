@@ -13,8 +13,8 @@
       "id": "results-metadata-files",
       "kind": "published-tree",
       "feature": "metadata files at the root of the published tree",
-      "summary": "mro2nf publishes `pipeline_outs.json` and `manifest.json.gz` at the root of `results/`; mrp's `outs/` holds neither, since mrp writes its outs JSON to `<pipestance>/<PIPELINE>/fork0/_outs` and writes no manifest.",
-      "justification": "A Nextflow run has no pipestance to hold the outs JSON, so it is published beside the outputs, with a machine-readable index of them (`manifest.json.gz`). The tree comparisons drop the two files at the root only, so a stage output of either name deeper in the tree still compares.",
+      "summary": "mro2nf publishes `pipeline_outs.json` at the root of `results/`; mrp's `outs/` holds no outs JSON, since mrp writes it to `<pipestance>/<PIPELINE>/fork0/_outs`.",
+      "justification": "A Nextflow run has no pipestance to hold the outs JSON, so it is published beside the outputs. The tree comparisons drop it at the root only, so a stage output of that name deeper in the tree still compares.",
       "evidence": ["TestMrpDiff", "TestGolden", "TestRemovingAPublishedTreeEntryFailsTheComparison"],
       "comparator": {"rule": "drop-results-metadata"}
     },
