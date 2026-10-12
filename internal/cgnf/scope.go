@@ -48,14 +48,20 @@ func linesWeight(lines []string) int {
 
 // scope is one workflow: a Martian pipeline's calls, or a run of them. It
 // takes the channels its nodes read and do not define, and emits those it
-// defines that a node outside it, or OUTS, reads.
+// defines that a node outside it reads. Its published statement mixes the
+// outs bundles its units publish for OUTS into one channel, which it emits
+// too, so no workflow mixes more sources than it has units.
 type scope struct {
 	name, fqid   string
 	part         bool
 	units        []*unit
 	nodes        []int
 	takes, emits []string
+	published    []string
 }
+
+// publishedChannel is the channel of a workflow's published statement.
+const publishedChannel = "published"
 
 // unit is the call of sub-workflow sub or, when sub is nil, node's wiring.
 type unit struct {
@@ -85,18 +91,17 @@ func (s *scope) call() []string {
 }
 
 // layout places the nodes' wirings in workflows: the channel each defines,
-// by its defining node, the nodes reading each, and the order each is
-// defined in.
+// by its defining node, the nodes reading each, the order each is defined
+// in, and the source of the outs bundles each node the pipeline outs read
+// publishes.
 type layout struct {
 	nodes []*wiring
 	owner map[string]int
 	users map[string][]int
 	order map[string]int
+	pubs  map[int]string
 	names int
 }
-
-// rootUser is the user of a channel the entry workflow itself reads.
-const rootUser = -1
 
 // scopes lays the nodes' wirings out by the pipelines they are called
 // from: the root pipeline's in the entry workflow, beside its plan and
@@ -104,7 +109,7 @@ const rootUser = -1
 // units in dependency order, as the calls of a Martian pipeline depend on
 // each other acyclically.
 func (p *project) scopes(nodes []*wiring, plan, outs *wiring) (*scope, error) {
-	l := &layout{nodes: nodes, owner: map[string]int{}, users: map[string][]int{}, order: map[string]int{}}
+	l := &layout{nodes: nodes, owner: map[string]int{}, users: map[string][]int{}, order: map[string]int{}, pubs: p.publications()}
 
 	for _, d := range plan.defs {
 		l.order[d] = len(l.order)
@@ -120,16 +125,13 @@ func (p *project) scopes(nodes []*wiring, plan, outs *wiring) (*scope, error) {
 		}
 	}
 
-	for _, u := range outs.uses {
-		l.users[u] = append(l.users[u], rootUser)
-	}
-
 	root := p.pipelineTree()
 	if err := l.place(root, maxWeight-linesWeight(plan.lines)-linesWeight(outs.lines)); err != nil {
 		return nil, err
 	}
 
 	l.name(root)
+	l.publish(root)
 
 	return root, nil
 }
@@ -283,17 +285,66 @@ func (l *layout) statements(u *unit) int {
 	return linesWeight(l.nodes[u.node].lines)
 }
 
-// measure is the weight of a workflow of units, their statements and its
-// takes and emits, and how many channels it takes.
+// measure is the weight of a workflow of units, their statements, its
+// published statement and its takes and emits, and how many channels it
+// takes.
 func (l *layout) measure(units []*unit) (int, int) {
-	w := 0
+	published := l.published(units)
+
+	w := linesWeight(published)
 	for _, u := range units {
 		w += l.statements(u)
 	}
 
 	takes, emits := l.ports(runNodes(units))
+	ports := len(takes) + len(emits) + len(published)
 
-	return w + portCost*(len(takes)+len(emits)), len(takes)
+	return w + portCost*ports, len(takes)
+}
+
+// published is the statement that mixes the outs bundles units publish,
+// maxTakes sources at a time: a node's, if the pipeline outs read it, and
+// a sub-workflow's published channel, if it has one. Its weight does not
+// depend on the sub-workflows' names, which a scope is given only once
+// every scope is laid out.
+func (l *layout) published(units []*unit) []string {
+	var srcs []string
+
+	for _, u := range units {
+		if u.sub == nil {
+			if src, ok := l.pubs[u.node]; ok {
+				srcs = append(srcs, src)
+			}
+		} else if slices.ContainsFunc(u.sub.nodes, func(i int) bool {
+			_, ok := l.pubs[i]
+
+			return ok
+		}) {
+			srcs = append(srcs, u.sub.name+".out."+publishedChannel)
+		}
+	}
+
+	if len(srcs) == 0 {
+		return nil
+	}
+
+	var mixes strings.Builder
+	for group := range slices.Chunk(srcs, maxTakes) {
+		mixes.WriteString(".mix(" + strings.Join(group, ", ") + ")")
+	}
+
+	return []string{publishedChannel + " = channel.empty()" + mixes.String()}
+}
+
+// publish sets the published statement of s and every scope below it.
+func (l *layout) publish(s *scope) {
+	s.published = l.published(s.units)
+
+	for _, u := range s.units {
+		if u.sub != nil {
+			l.publish(u.sub)
+		}
+	}
 }
 
 // bound groups units, while they weigh more than budget, into runs, each

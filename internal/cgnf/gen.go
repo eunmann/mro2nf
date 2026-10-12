@@ -11,7 +11,7 @@ import (
 
 // wiringWorkflows are the stage module's node wiring sub-workflows, which
 // every workflow of the project includes.
-const wiringWorkflows = "FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; GATHER_SIZED ; COUNTS ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; OR_SKIPPED"
+const wiringWorkflows = "FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; GATHER_SIZED ; COUNTS ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; OR_SKIPPED ; PUBLISHED"
 
 // subworkflowDir holds a module per sub-workflow main.nf calls.
 const subworkflowDir = "subworkflows"
@@ -43,7 +43,7 @@ func (p *project) workflows() (map[string]string, error) {
 
 	var b strings.Builder
 
-	b.WriteString("include { shq ; code ; ordered ; on ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; ENTRY_COUNTS ; PUBLISHED ; " + wiringWorkflows + " } from './stage.nf'\n")
+	b.WriteString("include { shq ; code ; ordered ; on ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; ENTRY_COUNTS ; " + wiringWorkflows + " } from './stage.nf'\n")
 	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
 	p.planProcess(&b)
@@ -82,9 +82,14 @@ func addModules(files map[string]string, s *scope, nodes []*wiring) {
 		b.WriteString("    main:\n")
 		writeUnits(&b, u.sub, nodes)
 
-		if len(u.sub.emits) > 0 {
+		emits := u.sub.emits
+		if len(u.sub.published) > 0 {
+			emits = append(slices.Clone(emits), publishedChannel)
+		}
+
+		if len(emits) > 0 {
 			b.WriteString("\n    emit:\n")
-			writeLines(&b, u.sub.emits)
+			writeLines(&b, emits)
 		}
 
 		b.WriteString("}\n")
@@ -109,8 +114,9 @@ func writeIncludes(b *strings.Builder, s *scope, nodes []*wiring, stage, subs st
 	}
 }
 
-// writeUnits writes the statements of s's units: a node's wiring, or a
-// sub-workflow's call and the channels it emits.
+// writeUnits writes the statements of s's units, a node's wiring or a
+// sub-workflow's call and the channels it emits, and s's published
+// statement.
 func writeUnits(b *strings.Builder, s *scope, nodes []*wiring) {
 	for _, u := range s.units {
 		if u.sub == nil {
@@ -121,6 +127,8 @@ func writeUnits(b *strings.Builder, s *scope, nodes []*wiring) {
 
 		writeLines(b, u.sub.call())
 	}
+
+	writeLines(b, s.published)
 }
 
 func writeLines(b *strings.Builder, lines []string) {

@@ -65,12 +65,10 @@ func (p *project) values() string {
 	return "groovy.json.JsonOutput.toJson([" + strings.Join(entries, ", ") + "])"
 }
 
-// outs runs OUTS over every outs bundle the pipeline outs read, ordered by
-// node and instance key, not by completion, and the entry files they read,
-// which PLAN lists by the pipeline's fqid.
-func (p *project) outs() *wiring {
-	w := &wiring{}
-	srcs := make([]string, 0, len(p.topo.Outs))
+// publications maps each node the pipeline outs read to the source of the
+// outs bundles it publishes for OUTS, which the workflow wiring it mixes.
+func (p *project) publications() map[int]string {
+	pubs := make(map[int]string, len(p.topo.Outs))
 
 	for _, r := range p.topo.Outs {
 		fields := "null"
@@ -79,17 +77,22 @@ func (p *project) outs() *wiring {
 		}
 
 		u := p.index[r.Node]
-		srcs = append(srcs, fmt.Sprintf("PUBLISHED(%s, %d, %s)", w.use(outsOf(u)), u, fields))
+		pubs[u] = fmt.Sprintf("PUBLISHED(%s, %d, %s)", outsOf(u), u, fields)
 	}
 
-	ups := "channel.value([])"
-	if len(srcs) > 0 {
-		var mixes []string
-		for group := range slices.Chunk(srcs, maxTakes) {
-			mixes = append(mixes, ".mix("+strings.Join(group, ", ")+")")
-		}
+	return pubs
+}
 
-		ups = "channel.empty()" + strings.Join(mixes, "") + ".toList().map { xs -> ordered(xs) }"
+// outs runs OUTS over every outs bundle the pipeline outs read, which the
+// entry workflow's published channel mixes, ordered by node and instance
+// key, not by completion, and the entry files they read, which PLAN lists
+// by the pipeline's fqid.
+func (p *project) outs() *wiring {
+	w := &wiring{}
+
+	ups := "channel.value([])"
+	if len(p.topo.Outs) > 0 {
+		ups = publishedChannel + ".toList().map { xs -> ordered(xs) }"
 	}
 
 	entry := "channel.value([[], []])"

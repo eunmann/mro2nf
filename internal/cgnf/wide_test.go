@@ -79,16 +79,39 @@ func emitWide(t *testing.T, p wide.Pipeline) (string, map[string]string) {
 // of its own, the root's the entry workflow, and one whose calls outweigh a
 // workflow, as WIDE.TREE's 150 do, is wired in runs of them; one whose call
 // would take more than maxTakes channels, as WIDE.FANIN's of 210 stages
-// would, is wired in its caller, and OUTS mixes the 210 outs bundles WIDE's
-// rs reads maxTakes at a time. No workflow weighs more than maxWeight or
-// takes more than maxTakes channels, and each defines every channel before
-// it reads it. A node's own wiring is a few lines and one per edge of it,
-// the same in any pipeline.
+// would, is wired in its caller. Each workflow mixes the outs bundles its
+// own units publish for OUTS, so neither the 210 nor the 1600 nodes WIDE's
+// rs reads outgrow the entry workflow. No workflow weighs more than
+// maxWeight or takes more than maxTakes channels, and each defines every
+// channel before it reads it. A node's own wiring is a few lines and one
+// per edge of it, the same in any pipeline.
 func TestEmitBoundsEveryWorkflow(t *testing.T) {
-	p := wide.New(32, 150, 210)
-	if p.Stages < 500 {
-		t.Fatalf("the wide pipeline has %d stage calls, want at least 500", p.Stages)
+	t.Parallel()
+
+	for _, c := range []struct {
+		name   string
+		p      wide.Pipeline
+		labels []string
+	}{
+		{"calls", wide.New(32, 150, 210), []string{"part of WIDE.TREE", "WIDE.B31", "WIDE.TREE", "part of WIDE.FANIN"}},
+		{"outs", wide.New(2, 3, 1600), []string{"part of WIDE", "WIDE.B1", "part of WIDE.FANIN"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			if c.p.Stages < 500 {
+				t.Fatalf("the wide pipeline has %d stage calls, want at least 500", c.p.Stages)
+			}
+
+			checkBounds(t, c.p, c.labels)
+		})
 	}
+}
+
+// checkBounds checks every workflow of p's project against the JVM's
+// limits, and that the workflows labelled exist.
+func checkBounds(t *testing.T, p wide.Pipeline, labels []string) {
+	t.Helper()
 
 	_, tree := emitWide(t, p)
 
@@ -118,7 +141,7 @@ func TestEmitBoundsEveryWorkflow(t *testing.T) {
 		return slices.ContainsFunc(bodies, func(b workflowBody) bool { return strings.Contains(tree[b.file], "\n// "+label+"\nworkflow ") })
 	}
 
-	for _, want := range []string{"part of WIDE.TREE", "WIDE.B31", "WIDE.TREE", "part of WIDE.FANIN"} {
+	for _, want := range labels {
 		if !labelled(want) {
 			t.Errorf("no workflow wires %s", want)
 		}
@@ -129,7 +152,7 @@ func TestEmitBoundsEveryWorkflow(t *testing.T) {
 	}
 
 	checkWiring(t, bodies)
-	checkOutsMix(t, tree["main.nf"], len(p.Rs))
+	checkPublished(t, bodies, len(p.Rs)+1)
 }
 
 // checkWiring checks that each workflow defines every channel of the
@@ -224,32 +247,68 @@ func readNames(expr string) []string {
 	return out
 }
 
-// checkOutsMix checks that OUTS mixes the n outs bundles the pipeline outs
-// read in mixes of at most maxTakes each, more than one.
-func checkOutsMix(t *testing.T, main string, n int) {
+var (
+	publishedNode = regexp.MustCompile(`PUBLISHED\(\w+, (\d+), `)
+	publishedSub  = regexp.MustCompile(`(W\d+_\w+)\.out\.published`)
+)
+
+// checkPublished checks that the n nodes the pipeline outs read each
+// publish once, in the workflow that wires it, that each workflow mixes
+// its sources at most maxTakes at a time and emits the mix, which its
+// caller mixes once, and that OUTS reads the entry workflow's mix.
+func checkPublished(t *testing.T, bodies []workflowBody, n int) {
 	t.Helper()
 
-	start := strings.Index(main, "outs_in = channel.empty()")
-	if start < 0 {
-		t.Fatalf("main.nf mixes no outs bundles:\n%s", main)
-	}
+	nodes, mixed, emitted := map[string]int{}, map[string]int{}, map[string]bool{}
 
-	line, _, _ := strings.Cut(main[start:], "\n")
-	mixes := strings.Split(line, ".mix(")[1:]
+	for _, b := range bodies {
+		emitted[b.name] = slices.Contains(b.emits, "published")
 
-	total := 0
-
-	for _, m := range mixes {
-		k := strings.Count(m, "PUBLISHED(")
-		total += k
-
-		if k > maxTakes {
-			t.Errorf("OUTS mixes %d outs bundles at once (max %d)", k, maxTakes)
+		for _, l := range b.main {
+			if strings.HasPrefix(l, "published = channel.empty().mix(") {
+				checkMix(t, b, l, emitted[b.name])
+				countMatches(nodes, publishedNode, l)
+				countMatches(mixed, publishedSub, l)
+			}
 		}
 	}
 
-	if len(mixes) < 2 || total < n {
-		t.Errorf("OUTS mixes %d outs bundles in %d mixes, want at least %d in more than one", total, len(mixes), n)
+	if len(nodes) != n || slices.ContainsFunc(slices.Collect(maps.Values(nodes)), func(k int) bool { return k != 1 }) {
+		t.Errorf("%d nodes publish, some more than once (%v), want %d once each", len(nodes), nodes, n)
+	}
+
+	for name, e := range emitted {
+		if e != (mixed[name] == 1) {
+			t.Errorf("workflow %s emits published %t, and its caller mixes it %d times", name, e, mixed[name])
+		}
+	}
+
+	entry := slices.IndexFunc(bodies, func(b workflowBody) bool { return b.name == "{" })
+	if entry < 0 || !slices.Contains(bodies[entry].main, "outs_in = published.toList().map { xs -> ordered(xs) }") {
+		t.Errorf("OUTS does not read the entry workflow's published mix")
+	}
+}
+
+// checkMix checks b's published statement l: a sub-workflow emits it, and
+// it mixes at most maxTakes sources at a time.
+func checkMix(t *testing.T, b workflowBody, l string, emitted bool) {
+	t.Helper()
+
+	if b.name != "{" && !emitted {
+		t.Errorf("%s: workflow %s mixes what it publishes but does not emit it", b.file, b.name)
+	}
+
+	for _, m := range strings.Split(l, ".mix(")[1:] {
+		if k := len(publishedNode.FindAllString(m, -1)) + len(publishedSub.FindAllString(m, -1)); k > maxTakes {
+			t.Errorf("%s: workflow %s mixes %d sources at once (max %d)", b.file, b.name, k, maxTakes)
+		}
+	}
+}
+
+// countMatches counts in counts each of re's first submatches in l.
+func countMatches(counts map[string]int, re *regexp.Regexp, l string) {
+	for _, m := range re.FindAllStringSubmatch(l, -1) {
+		counts[m[1]]++
 	}
 }
 

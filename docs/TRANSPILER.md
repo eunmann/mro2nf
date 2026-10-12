@@ -178,7 +178,12 @@ which may not pass 64 KiB of bytecode, and a call into one of at most 255
 arguments. The project mirrors the `.mro`: the root pipeline's calls are
 wired in `main.nf`'s entry workflow, and each sub-pipeline call is a workflow
 of its own, which takes the channels its nodes read from outside it and emits
-those read outside it. Its calls are wired in dependency order, as Martian's
+those read outside it, and `published`: one channel that mixes the outs
+bundles of its own nodes the pipeline outs read (`PUBLISHED`) with its
+sub-workflows' `published`. The entry workflow's `published` is OUTS's input,
+which `ordered` sorts by node and instance key, so where a bundle is mixed
+does not change it, and no workflow mixes more sources than it has calls.
+Its calls are wired in dependency order, as Martian's
 calls of one pipeline depend on each other acyclically. A pipeline whose calls
 weigh more than one workflow holds (`maxWeight`), such as one of hundreds of
 stage calls, is wired in runs of them, each a workflow of its own; a

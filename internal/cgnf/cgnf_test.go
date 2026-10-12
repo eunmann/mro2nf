@@ -246,7 +246,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 	for _, c := range []struct{ fixture, main, want string }{
 		{"split_test", split, "N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk))"},
 		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']), [])"},
-		{"split_test", split, "outs_in = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum'])).toList().map { xs -> ordered(xs) }"},
+		{"split_test", split, "    published = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum']))\n    outs_in = published.toList().map { xs -> ordered(xs) }"},
 	} {
 		if !strings.Contains(c.main, c.want) {
 			t.Errorf("%s's main.nf lacks %q:\n%s", c.fixture, c.want, c.main)
