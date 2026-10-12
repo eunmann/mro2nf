@@ -102,7 +102,7 @@ logs or a wrapping proxy and is out of scope here (see below).
 
 ## Fixtures and lanes
 
-Eight fixtures live under `bench/`, exercising the costly patterns the overhead
+Nine fixtures live under `bench/`, exercising the costly patterns the overhead
 rule targets:
 
 - **`chain`** — one file (`MAKEBIG`) carried through a deep chain of pass-through
@@ -134,6 +134,11 @@ rule targets:
   so the split reads `MKFILES.fs unless GATE.off` (#494), under the same
   flat-staging gate. Both lanes hold the gate enabled (`skip = false`); the
   disabled branch is covered only by the unit `TestZipGatedPartner`.
+- **`splitbroadcast`** — one file (`MKREF`'s `ref`) broadcast into a map
+  call over a split stage, whose every chunk and join reads it
+  (`pipeline_w4.mro`, `pipeline_w8.mro` samples): no task may copy it into
+  a fork's args, so its `restaged_bytes` per producer stay flat (#507),
+  under the flat-staging gate.
 
 Every fixture invocation runs as one lane, keyed by its invocation (`chain`,
 `forks_w4`, `split_c16`, …). Every lane's plumbing is the run's PLAN and OUTS

@@ -1,0 +1,44 @@
+filetype txt;
+
+# Benchmark: one file (MKREF's ref) broadcast into a map call over a split
+# stage, whose every chunk reads it. mrp runs MKREF, then per sample ALIGN's
+# split, 2 chunks and join. Run at two widths (pipeline_w4.mro,
+# pipeline_w8.mro): the plumbing task count, and the bytes tasks write that
+# copy a file they staged, per producer, must not grow with the sample count,
+# so no task copies the ref into a fork's args (#507).
+
+stage MKREF(
+    in  int kb,
+    out txt ref,
+    src py  "stages/mkref",
+)
+
+stage ALIGN(
+    in  int sample,
+    in  txt ref,
+    out int total,
+    src py  "stages/align",
+) split (
+    in  int lane,
+    out int laneval,
+)
+
+pipeline COHORT(
+    in  int[] samples,
+    in  int   kb,
+    out int[] totals,
+)
+{
+    call MKREF(
+        kb = self.kb,
+    )
+
+    map call ALIGN(
+        sample = split self.samples,
+        ref    = MKREF.ref,
+    )
+
+    return (
+        totals = ALIGN.total,
+    )
+}
