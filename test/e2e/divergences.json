@@ -56,16 +56,6 @@
       "comparator": {"rule": "compare-failure-stage-and-kind"}
     },
     {
-      "id": "relative-entry-paths-resolved",
-      "kind": "abi",
-      "emitter": "v1",
-      "feature": "a relative file path in the invocation",
-      "summary": "mro2nf resolves a relative path the invocation gives a file input against the `.mro`'s directory and stages that file, so the stage sees the file; mrp passes the relative string to the stage verbatim.",
-      "justification": "A stage resolves mrp's relative string from its own job dir, where it names nothing, so under mrp a stage that opens it fails (the `entry_*` fixtures `mrpUnrunnable` lists); mro2nf's entry bundle carries the file itself (`internal/emit/emit.go` `resolveEntryArgs`). `bench/split`'s stages never open `payload`, so mrp completes it, and `payload` is the only difference.",
-      "evidence": ["TestMrpDiff/bench/split"],
-      "abi": {"fixtures": ["bench/split"], "file": "_args", "rule": "ignore-key", "key": "payload"}
-    },
-    {
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",

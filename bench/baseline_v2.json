@@ -13,26 +13,26 @@
       "PLAN"
     ],
     "edges": 35,
-    "rchar_bytes": 11216998,
-    "wchar_bytes": 1111725,
+    "rchar_bytes": 11195084,
+    "wchar_bytes": 1113833,
     "refs": 6,
     "producers": 1,
     "multiplier": 6.0,
-    "staged_bytes": 2680816,
-    "stage_staged_bytes": 2143185,
-    "uploaded_bytes": 9125054,
-    "plumbing_uploaded_bytes": 1071897,
+    "staged_bytes": 2681116,
+    "stage_staged_bytes": 2143425,
+    "uploaded_bytes": 9126825,
+    "plumbing_uploaded_bytes": 1071957,
     "probe_writes": 17,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
-      "N4_P4": 535795,
-      "N3_P3": 535795,
-      "N1_P1": 535800,
-      "N2_P2": 535795,
-      "N0_MAKEBIG": 0
+      "N4_P4": 535855,
+      "N3_P3": 535855,
+      "N1_P1": 535860,
+      "N0_MAKEBIG": 0,
+      "N2_P2": 535855
     },
-    "wall_seconds": 3.7
+    "wall_seconds": 8.6
   },
   "forks_w16": {
     "name": "forks_w16",
@@ -48,23 +48,23 @@
       "PLAN"
     ],
     "edges": 20,
-    "rchar_bytes": 37676339,
-    "wchar_bytes": 2242629,
+    "rchar_bytes": 37676544,
+    "wchar_bytes": 2248056,
     "refs": 17,
     "producers": 1,
     "multiplier": 17.0,
-    "staged_bytes": 4291707,
-    "stage_staged_bytes": 4288576,
-    "uploaded_bytes": 5160315,
+    "staged_bytes": 4292651,
+    "stage_staged_bytes": 4289520,
+    "uploaded_bytes": 5163609,
     "plumbing_uploaded_bytes": 3278,
     "probe_writes": 19,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
-      "N1_FUSE": 268036,
+      "N1_FUSE": 268095,
       "N0_MKPAY": 0
     },
-    "wall_seconds": 3.2
+    "wall_seconds": 8.3
   },
   "forks_w4": {
     "name": "forks_w4",
@@ -80,23 +80,23 @@
       "PLAN"
     ],
     "edges": 20,
-    "rchar_bytes": 11246080,
-    "wchar_bytes": 844820,
+    "rchar_bytes": 11246284,
+    "wchar_bytes": 846458,
     "refs": 5,
     "producers": 1,
     "multiplier": 5.0,
-    "staged_bytes": 1073691,
-    "stage_staged_bytes": 1072140,
-    "uploaded_bytes": 1894670,
+    "staged_bytes": 1073927,
+    "stage_staged_bytes": 1072376,
+    "uploaded_bytes": 1895606,
     "plumbing_uploaded_bytes": 1022,
     "probe_writes": 7,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
-      "N1_FUSE": 268035,
-      "N0_MKPAY": 0
+      "N0_MKPAY": 0,
+      "N1_FUSE": 268094
     },
-    "wall_seconds": 2.5
+    "wall_seconds": 4.6
   },
   "mapdisabled_w4": {
     "name": "mapdisabled_w4",
@@ -112,22 +112,22 @@
       "PLAN"
     ],
     "edges": 21,
-    "rchar_bytes": 9045811,
-    "wchar_bytes": 464076,
+    "rchar_bytes": 9046220,
+    "wchar_bytes": 466124,
     "refs": 5,
     "producers": 4,
     "multiplier": 1.25,
-    "staged_bytes": 2584,
+    "staged_bytes": 2820,
     "stage_staged_bytes": 0,
-    "uploaded_bytes": 18415,
-    "plumbing_uploaded_bytes": 2299,
+    "uploaded_bytes": 19596,
+    "plumbing_uploaded_bytes": 2535,
     "probe_writes": 20,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
       "N0_MKFILE": 0
     },
-    "wall_seconds": 2.7
+    "wall_seconds": 5.8
   },
   "mapdisabled_w8": {
     "name": "mapdisabled_w8",
@@ -143,22 +143,22 @@
       "PLAN"
     ],
     "edges": 21,
-    "rchar_bytes": 17856614,
-    "wchar_bytes": 929075,
+    "rchar_bytes": 17847398,
+    "wchar_bytes": 933171,
     "refs": 9,
     "producers": 8,
     "multiplier": 1.125,
-    "staged_bytes": 3892,
+    "staged_bytes": 4364,
     "stage_staged_bytes": 0,
-    "uploaded_bytes": 37089,
-    "plumbing_uploaded_bytes": 4223,
+    "uploaded_bytes": 39452,
+    "plumbing_uploaded_bytes": 4695,
     "probe_writes": 40,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
       "N0_MKFILE": 0
     },
-    "wall_seconds": 3.1
+    "wall_seconds": 7.0
   },
   "mapnested_w2": {
     "name": "mapnested_w2",
@@ -174,22 +174,22 @@
       "PLAN"
     ],
     "edges": 15,
-    "rchar_bytes": 9068953,
-    "wchar_bytes": 465408,
+    "rchar_bytes": 9047859,
+    "wchar_bytes": 467148,
     "refs": 5,
     "producers": 4,
     "multiplier": 1.25,
-    "staged_bytes": 2610,
+    "staged_bytes": 2846,
     "stage_staged_bytes": 0,
-    "uploaded_bytes": 19207,
-    "plumbing_uploaded_bytes": 2386,
+    "uploaded_bytes": 20631,
+    "plumbing_uploaded_bytes": 2858,
     "probe_writes": 16,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
       "N0_CELL": 0
     },
-    "wall_seconds": 2.5
+    "wall_seconds": 7.6
   },
   "mapnested_w4": {
     "name": "mapnested_w4",
@@ -205,22 +205,22 @@
       "PLAN"
     ],
     "edges": 15,
-    "rchar_bytes": 35500544,
-    "wchar_bytes": 1858559,
+    "rchar_bytes": 35502592,
+    "wchar_bytes": 1867059,
     "refs": 17,
     "producers": 16,
     "multiplier": 1.062,
-    "staged_bytes": 6854,
+    "staged_bytes": 7798,
     "stage_staged_bytes": 0,
-    "uploaded_bytes": 76022,
-    "plumbing_uploaded_bytes": 7412,
+    "uploaded_bytes": 81718,
+    "plumbing_uploaded_bytes": 9300,
     "probe_writes": 64,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
       "N0_CELL": 0
     },
-    "wall_seconds": 3.1
+    "wall_seconds": 8.0
   },
   "mapsplit_w4": {
     "name": "mapsplit_w4",
@@ -236,24 +236,24 @@
       "PLAN"
     ],
     "edges": 20,
-    "rchar_bytes": 35469619,
-    "wchar_bytes": 1838694,
+    "rchar_bytes": 35447910,
+    "wchar_bytes": 1844121,
     "refs": 5,
     "producers": 4,
     "multiplier": 1.25,
-    "staged_bytes": 58569,
-    "stage_staged_bytes": 55920,
-    "uploaded_bytes": 62398,
-    "plumbing_uploaded_bytes": 2226,
+    "staged_bytes": 61525,
+    "stage_staged_bytes": 58640,
+    "uploaded_bytes": 66146,
+    "plumbing_uploaded_bytes": 2462,
     "probe_writes": 20,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
+      "N0_ALIGN_JN": 7542,
       "N0_ALIGN_SP": 0,
-      "N0_ALIGN_MN": 3458,
-      "N0_ALIGN_JN": 7109
+      "N0_ALIGN_MN": 3652
     },
-    "wall_seconds": 3.4
+    "wall_seconds": 8.3
   },
   "mapsplit_w8": {
     "name": "mapsplit_w8",
@@ -269,89 +269,91 @@
       "PLAN"
     ],
     "edges": 20,
-    "rchar_bytes": 70704640,
-    "wchar_bytes": 3685068,
+    "rchar_bytes": 70705254,
+    "wchar_bytes": 3698380,
     "refs": 9,
     "producers": 8,
     "multiplier": 1.125,
-    "staged_bytes": 118189,
-    "stage_staged_bytes": 114160,
-    "uploaded_bytes": 126713,
-    "plumbing_uploaded_bytes": 4161,
+    "staged_bytes": 124131,
+    "stage_staged_bytes": 119614,
+    "uploaded_bytes": 133887,
+    "plumbing_uploaded_bytes": 4649,
     "probe_writes": 40,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
-      "N0_ALIGN_MN": 3537,
-      "N0_ALIGN_JN": 7260,
-      "N0_ALIGN_SP": 0
+      "N0_ALIGN_JN": 7711,
+      "N0_ALIGN_SP": 0,
+      "N0_ALIGN_MN": 3728
     },
-    "wall_seconds": 3.5
+    "wall_seconds": 8.5
   },
   "split_c16": {
     "name": "split_c16",
-    "tasks": 20,
+    "tasks": 21,
     "plumbing_tasks": 2,
-    "stage_tasks": 18,
-    "mrp_jobs": 18,
-    "processes": 5,
-    "stage_processes": 3,
+    "stage_tasks": 19,
+    "mrp_jobs": 19,
+    "processes": 6,
+    "stage_processes": 4,
     "plumbing_processes": 2,
     "plumbing": [
       "OUTS",
       "PLAN"
     ],
-    "edges": 20,
-    "rchar_bytes": 39848345,
-    "wchar_bytes": 2054244,
-    "refs": 0,
+    "edges": 25,
+    "rchar_bytes": 41843097,
+    "wchar_bytes": 2710374,
+    "refs": 19,
     "producers": 1,
-    "multiplier": 0.0,
-    "staged_bytes": 103376,
-    "stage_staged_bytes": 102196,
-    "uploaded_bytes": 61367,
-    "plumbing_uploaded_bytes": 230,
-    "probe_writes": 0,
+    "multiplier": 19.0,
+    "staged_bytes": 9755388,
+    "stage_staged_bytes": 9754062,
+    "uploaded_bytes": 2212230,
+    "plumbing_uploaded_bytes": 305,
+    "probe_writes": 4,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
-      "N0_WSPLIT_MN": 3237,
-      "N0_WSPLIT_JN": 50525,
-      "N0_WSPLIT_SP": 0
+      "N1_WSPLIT_JN": 590174,
+      "N1_WSPLIT_MN": 539343,
+      "N1_WSPLIT_SP": 535868,
+      "N0_MKPAY": 0
     },
-    "wall_seconds": 3.3
+    "wall_seconds": 8.7
   },
   "split_c4": {
     "name": "split_c4",
-    "tasks": 8,
+    "tasks": 9,
     "plumbing_tasks": 2,
-    "stage_tasks": 6,
-    "mrp_jobs": 6,
-    "processes": 5,
-    "stage_processes": 3,
+    "stage_tasks": 7,
+    "mrp_jobs": 7,
+    "processes": 6,
+    "stage_processes": 4,
     "plumbing_processes": 2,
     "plumbing": [
       "OUTS",
       "PLAN"
     ],
-    "edges": 20,
-    "rchar_bytes": 13424230,
-    "wchar_bytes": 685151,
-    "refs": 0,
+    "edges": 25,
+    "rchar_bytes": 15606988,
+    "wchar_bytes": 1337197,
+    "refs": 7,
     "producers": 1,
-    "multiplier": 0.0,
-    "staged_bytes": 26712,
-    "stage_staged_bytes": 25537,
-    "uploaded_bytes": 20301,
-    "plumbing_uploaded_bytes": 226,
-    "probe_writes": 0,
+    "multiplier": 7.0,
+    "staged_bytes": 3243392,
+    "stage_staged_bytes": 3242071,
+    "uploaded_bytes": 2168186,
+    "plumbing_uploaded_bytes": 301,
+    "probe_writes": 4,
     "max_argv_bytes": 0,
     "max_arg_bytes": 0,
     "stage_staged_bytes_max": {
-      "N0_WSPLIT_SP": 0,
-      "N0_WSPLIT_MN": 3222,
-      "N0_WSPLIT_JN": 12668
+      "N0_MKPAY": 0,
+      "N1_WSPLIT_MN": 539221,
+      "N1_WSPLIT_SP": 535868,
+      "N1_WSPLIT_JN": 549331
     },
-    "wall_seconds": 3.1
+    "wall_seconds": 8.6
   }
 }

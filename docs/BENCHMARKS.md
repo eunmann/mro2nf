@@ -39,7 +39,7 @@ and runs both in default and `-native` mode:
 | test | fixture | narrow | wide (default) | tasks per mode, wide |
 |------|---------|--------|----------------|----------------------|
 | `TestScaleForks` | `forks` | 4 forks | 10,000 forks | 10,005 |
-| `TestScaleSplit` | `split` | 4 chunks | 10,000 chunks | 10,004 |
+| `TestScaleSplit` | `split` | 4 chunks | 10,000 chunks | 10,005 |
 | `TestScaleMapSplit` | `mapsplit` (the Cell Ranger shape) | 4 samples | 2,000 samples | 10,004 |
 | `TestScaleMapNested` | `mapnested` | 2 × 2 | 100 × 100 | 10,204 |
 | `TestScaleMapDisabled` | `mapdisabled` | 4 forks | 2,500 forks | 10,004 |
@@ -128,8 +128,9 @@ the overhead rule target:
   identical at both, so any per-fork bookkeeping task a change reintroduces
   fails the gate. The `-native` lanes of this fixture are what prove the
   channel-native O(1) element scatter (#99) stays O(1).
-- **`split`** — a split stage whose large stage-level file arg (`payload`) is
-  broadcast to every chunk via `chunks.combine(args)`, even though `main` never
+- **`split`** — a split stage whose large stage-level file arg (`payload`,
+  written by a producer stage, `MKPAY`) is broadcast to every chunk via
+  `chunks.combine(args)`, even though `main` never
   reads it: O(N) redundant staging over an N-way split (headroom for
   consumer-aware split staging, #15). Run at two chunk counts
   (`pipeline_c4.mro`, `pipeline_c16.mro`) with the same width-flat plumbing

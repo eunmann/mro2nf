@@ -52,9 +52,9 @@ var scaleShapes = map[string]scaleShape{
 	"split": {
 		name: "split", probe: "MRE_BENCH_SPLIT_PROBE", narrow: 4, wide: 10000, chunked: true,
 		call: func(w int) string {
-			return fmt.Sprintf("WIDE(\n    nchunks = %d,\n    payload = \"input/payload.txt\",\n)", w)
+			return fmt.Sprintf("WIDE(\n    nchunks = %d,\n    kb      = 512,\n)", w)
 		},
-		jobs:  func(w int) int { return w + 2 },
+		jobs:  func(w int) int { return w + 3 },
 		prods: func(int) int { return 1 },
 		check: checkSplitJoin,
 	},
