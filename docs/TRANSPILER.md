@@ -253,7 +253,7 @@ inner map call is a `groupKey` of its share's fork count, which PLAN writes for
 an entry-fed root and the producer's posted forks give for a stage-fed one, an
 empty share gathering at once, so each instance starts when its own share is
 done (`mrp` itself waits for every fork of a node it reads;
-`TestForkedGatherStreams`). Any other gather is a seeded `groupTuple` over all
+`TestEmitSizesForkedGathers`). Any other gather is a seeded `groupTuple` over all
 of its upstream, which an unforked consumer needs anyway.
 
 **Split stages.** A split's chunk outs are gathered by `groupKey` over the

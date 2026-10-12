@@ -245,8 +245,8 @@ func TestEmitZipsByToken(t *testing.T) {
 // TestEmitSizesForkedGathers: a forked call's gather of its share of an
 // inner map call is a groupKey of that share's fork count, from PLAN's
 // counts for an entry-fed root (BY_ENTRY) or the producer's posted forks
-// (BY_STAGE, by MKLIST), with an empty gather for a share with no fork;
-// TestForkedGatherStreams runs one (map_nested_gather).
+// (BY_STAGE, by MKLIST), with an empty gather for a share with no fork.
+// TestMrpDiff/map_nested_gather runs the fixture against mrp.
 func TestEmitSizesForkedGathers(t *testing.T) {
 	main := readTree(t, emitFixture(t, "map_nested_gather"))["main.nf"]
 
