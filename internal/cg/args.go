@@ -57,7 +57,7 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 		return Instance{}, err
 	}
 
-	if err := checkDigest(st, spec.Digest); err != nil {
+	if err := g.checkDigest(st, spec.Digest); err != nil {
 		return Instance{}, err
 	}
 
@@ -97,12 +97,12 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 }
 
 // checkDigest fails unless st compiles to the spec digest want, when set.
-func checkDigest(st *syntax.CallGraphStage, want string) error {
+func (g *Graph) checkDigest(st *syntax.CallGraphStage, want string) error {
 	if want == "" {
 		return nil
 	}
 
-	got, err := specDigest(st)
+	got, err := g.specDigest(st)
 	if err != nil {
 		return err
 	}

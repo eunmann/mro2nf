@@ -117,11 +117,11 @@ func (w forkWriter) posted(in Instance) error {
 		if runtimeMultiSource(root) && slices.Contains(refIDs(root.Split().Value), in.Node) {
 			return fmt.Errorf("%w: %s", errMultiSource, root.Fqid)
 		}
+	}
 
-		if p, ok := w.r.g.Producer(root); ok && p == in.Node {
-			if err := w.root(root, counted{fork: in.Fork, lens: in.Lens}); err != nil {
-				return err
-			}
+	for _, root := range w.r.g.fedBy(in.Node) {
+		if err := w.root(root, counted{fork: in.Fork, lens: in.Lens}); err != nil {
+			return err
 		}
 	}
 

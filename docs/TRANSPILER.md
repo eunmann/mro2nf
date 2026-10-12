@@ -221,7 +221,10 @@ fails if the call graph has a node, a fork root or a read the witness lacks
 (`Topology.Covers`); a node the invocation disables outright counts only by
 its presence. Its records reach the driver as `eval` values: the run's call;
 per node a digest of its resolved spec (stage, bindings, disable bindings and
-fork roots in Martian's JSON form), whether the invocation disables it, and the
+fork roots in Martian's JSON form) and of what its `mre post` writes for its
+readers (the splits of the roots it feeds and the outputs their fork elements
+zip, its partners' splits, and the disable bindings whose value it posts with
+their roots), whether the invocation disables it, and the
 fork keys a static per-fork binding disables; per entry-fed root its forks,
 keyed by the witness's outer roots, each with its fork record and its index
 token.
@@ -232,8 +235,10 @@ copy and its meta. A task's `-resume` key holds its own node's digest (in
 dirs. No task stages a file of PLAN's: the call and the digests reach it as
 values, which Nextflow keys on by content, so a re-transpile whose `.mro` edit
 leaves a node's spec and the call as they were re-runs PLAN but keeps the node
-cached (`TestResumeKeysOnlyOnATasksOwnTypes`). A changed entry value changes
-the call, and so re-runs every task.
+cached (`TestResumeKeysOnlyOnATasksOwnTypes`). An edit of how a consumer
+splits or gates on a node's outs changes what the node's post writes, so it
+re-runs the node too (`TestResumeKeysOnTheReadersAPostWritesFor`). A changed
+entry value changes the call, and so re-runs every task.
 
 **Code.** A stage task compiles the run's call over the entry `.mro` where the
 run finds its code: its includes and its stages' code resolve beside it, as

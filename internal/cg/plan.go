@@ -49,10 +49,10 @@ type PlanCount struct {
 }
 
 // PlanNode is one witness node at run start. Digest identifies the node's
-// resolved spec in the invocation, so a task's cache key changes only with
-// its own node. Off disables every instance; OffAt the instances, by fork
-// key, a static per-fork binding disables. Files are the entry files its
-// instances read.
+// resolved spec in the invocation and what its post writes for its readers,
+// so a task's cache key changes only with its own node and those. Off
+// disables every instance; OffAt the instances, by fork key, a static
+// per-fork binding disables. Files are the entry files its instances read.
 type PlanNode struct {
 	Fqid   string
 	Digest string
@@ -393,7 +393,7 @@ func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks, leaves 
 
 	var err error
 
-	if pn.Digest, err = specDigest(st); err != nil {
+	if pn.Digest, err = g.specDigest(st); err != nil {
 		return PlanNode{}, err
 	}
 
@@ -473,15 +473,22 @@ func DottedKey(key []int) string {
 }
 
 // specDigest identifies a stage node's resolved spec: its stage's code,
-// resources and parameters, and its bindings, disable bindings and fork
-// roots in Martian's own JSON form of a call graph.
-func specDigest(st *syntax.CallGraphStage) (string, error) {
+// resources and parameters, its bindings, disable bindings and fork roots
+// in Martian's own JSON form of a call graph, and what its post writes for
+// its readers.
+func (g *Graph) specDigest(st *syntax.CallGraphStage) (string, error) {
 	s, ok := st.Callable().(*syntax.Stage)
 	if !ok {
 		return "", fmt.Errorf("%s: %w: not a stage", st.Fqid, errShapeUnsupported)
 	}
 
+	readers, err := g.postReaders(st)
+	if err != nil {
+		return "", err
+	}
+
 	spec := map[string]any{
+		"readers":   readers,
 		"stage":     s.Id,
 		"split":     s.Split,
 		"src":       []any{s.Src.Type, s.Src.Path, s.Src.Args},
