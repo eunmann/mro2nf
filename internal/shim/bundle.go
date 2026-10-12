@@ -307,6 +307,20 @@ func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *typ
 	return writePayload(dir, marked)
 }
 
+// WriteLinkedBundle writes payload into dir as a bundle that no other task
+// stages, such as a non-split stage's args: each file leaf is a symlink to
+// the file payload names, which the task staged, not a copy of it. A leaf of
+// a staged bundle is linked by its ordinal dir, so its recorded origin comes
+// with it. A bundle another task stages must carry its files: WriteBundle.
+func WriteLinkedBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table) error {
+	marked, err := markFiles(leafMarker{dir: dir, link: true, marks: map[string]string{}}, payload, params, tbl)
+	if err != nil {
+		return err
+	}
+
+	return writePayload(dir, marked)
+}
+
 // writePayload writes a decoded payload as dir/data.json.
 func writePayload(dir string, payload map[string]any) error {
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
@@ -336,6 +350,10 @@ func writeRaw(path string, data []byte) error {
 // the reserved prefix is escaped, a file leaf naming no file included. A
 // non-nil conf confines the leaves' files.
 func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, conf *Confinement) (map[string]any, error) {
+	return markFiles(leafMarker{dir: dir, conf: conf, marks: map[string]string{}}, payload, params, tbl)
+}
+
+func markFiles(m leafMarker, payload map[string]any, params []ir.Param, tbl *types.Table) (map[string]any, error) {
 	escaped := make(map[string]any, len(payload))
 	for k, v := range payload {
 		ev, err := escapeValue(v)
@@ -346,8 +364,6 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 		escaped[k] = ev
 	}
 
-	m := leafMarker{dir: dir, conf: conf, marks: map[string]string{}}
-
 	marked, err := tbl.Apply(params, escaped, m.mark)
 	if err != nil {
 		return nil, fmt.Errorf("collect bundle files: %w", err)
@@ -356,15 +372,16 @@ func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types
 	return marked, nil
 }
 
-// leafMarker copies a payload's file leaves into the bundle dir. marks maps a
-// copied leaf's origin to its marker: a file the payload reaches at several
-// positions, or through several bundles, is one file to mrp, which publishes
-// it once and names that one published path at each (post_process.go
-// moveOutFile, copyOutSymlink), so it is copied once and every position gets
-// the same marker.
+// leafMarker copies, or with link set links, a payload's file leaves into the
+// bundle dir. marks maps a copied leaf's origin to its marker: a file the
+// payload reaches at several positions, or through several bundles, is one
+// file to mrp, which publishes it once and names that one published path at
+// each (post_process.go moveOutFile, copyOutSymlink), so it is copied once
+// and every position gets the same marker.
 type leafMarker struct {
 	dir   string
 	conf  *Confinement
+	link  bool
 	marks map[string]string
 }
 
@@ -416,7 +433,7 @@ func (m leafMarker) mark(leaf string) (string, error) {
 	// never collide; inside it the leaf keeps the basename mrp passes (#284).
 	rel := filepath.Join(bundleFiles, fmt.Sprintf("L%04d", len(m.marks)), name)
 
-	if err := m.stage(src, rel, origin); err != nil {
+	if err := m.stage(src, abs, rel, origin); err != nil {
 		return "", err
 	}
 
@@ -487,10 +504,14 @@ func (m leafMarker) linked(src string) (bool, error) {
 	return kind == leafOutside, err
 }
 
-// stage copies the leaf at src to rel in the bundle and records its origin
-// beside it.
-func (m leafMarker) stage(src, rel string, origin Origin) error {
+// stage copies, or links, the leaf at src, whose absolute path is abs, to
+// rel in the bundle and records its origin beside it.
+func (m leafMarker) stage(src, abs, rel string, origin Origin) error {
 	dst := filepath.Join(m.dir, rel)
+	if m.link {
+		return linkLeaf(abs, dst, origin)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
 		return fmt.Errorf("create files dir: %w", err)
 	}
@@ -499,12 +520,56 @@ func (m leafMarker) stage(src, rel string, origin Origin) error {
 		return err
 	}
 
+	return writeOrigin(filepath.Dir(dst), origin)
+}
+
+// linkLeaf links dst to the leaf at abs: its ordinal dir to the leaf's own,
+// whose origin record it shares, when abs is a bundle leaf that recorded
+// one, and otherwise the leaf itself, its origin recorded beside it.
+func linkLeaf(abs, dst string, origin Origin) error {
+	ordinal := filepath.Dir(dst)
+
+	_, recorded, err := ReadOrigin(abs)
+	if err != nil {
+		return err
+	}
+
+	if recorded {
+		if err := os.MkdirAll(filepath.Dir(ordinal), dirPerm); err != nil {
+			return fmt.Errorf("create files dir: %w", err)
+		}
+
+		return linkAt(filepath.Dir(abs), ordinal)
+	}
+
+	if err := os.MkdirAll(ordinal, dirPerm); err != nil {
+		return fmt.Errorf("create files dir: %w", err)
+	}
+
+	if err := linkAt(abs, dst); err != nil {
+		return err
+	}
+
+	return writeOrigin(ordinal, origin)
+}
+
+func linkAt(target, link string) error {
+	if err := os.Symlink(target, link); err != nil {
+		return fmt.Errorf("link %s: %w", link, err)
+	}
+
+	return nil
+}
+
+// writeOrigin records origin in the ordinal dir of the leaf it is the
+// origin of.
+func writeOrigin(ordinal string, origin Origin) error {
 	record := origin.Path
 	if origin.Linked {
 		record = linkedPrefix + record
 	}
 
-	return writeRaw(filepath.Join(filepath.Dir(dst), originFile), []byte(record))
+	return writeRaw(filepath.Join(ordinal, originFile), []byte(record))
 }
 
 // Origin is a file leaf's identity: the absolute path it was first staged

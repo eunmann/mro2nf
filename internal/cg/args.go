@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 
+	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -47,6 +48,11 @@ type ArgsSpec struct {
 	// EntryFiles maps each entry file value the task staged to the path it
 	// reads it at (StagedEntryFiles).
 	EntryFiles map[string]string
+	// Link is set when no other task stages the args bundle: its file
+	// leaves link to the files the task staged (shim.WriteLinkedBundle), so
+	// a file every fork of a map call reads exists once, its producer's. A
+	// split's args travels to its chunks and join, so it carries its files.
+	Link bool
 }
 
 // WriteArgs resolves the instance's disabled state and, when it runs, its
@@ -88,7 +94,7 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 			return Instance{}, err
 		}
 
-		if err := writeValue(spec.Out, args, spec.Manifest, st.Call().DecId, types.RoleIn, spec.EntryFiles); err != nil {
+		if err := writeArgs(spec, args, st.Call().DecId); err != nil {
 			return Instance{}, err
 		}
 	}
@@ -170,24 +176,59 @@ func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, []int, error
 	return fork, lens, nil
 }
 
-// writeValue writes a resolved object as a bundle of callable's role params.
-// Its top-level keys are written sorted, as a MarshalerMap encodes them, and
-// nested values keep their encoded order and number lexemes. A file leaf
-// staged names the path the bundle copies it from.
-func writeValue(dir string, v json.Marshaler, man types.Manifest, callable, role string, staged map[string]string) error {
-	raw, err := marshal(v)
+// writeArgs writes the instance's resolved args as its args bundle, linked
+// when spec.Link is set.
+func writeArgs(spec ArgsSpec, args json.Marshaler, callable string) error {
+	if !spec.Link {
+		return writeValue(spec.Out, args, spec.Manifest, callable, types.RoleIn, spec.EntryFiles)
+	}
+
+	payload, params, err := bundlePayload(args, spec.Manifest, callable, types.RoleIn, spec.EntryFiles)
 	if err != nil {
 		return err
 	}
 
+	if err := shim.WriteLinkedBundle(spec.Out, payload, params, spec.Manifest.Table()); err != nil {
+		return fmt.Errorf("write %s bundle %s: %w", types.RoleIn, spec.Out, err)
+	}
+
+	return nil
+}
+
+// writeValue writes a resolved object as a bundle of callable's role params
+// (bundlePayload).
+func writeValue(dir string, v json.Marshaler, man types.Manifest, callable, role string, staged map[string]string) error {
+	payload, params, err := bundlePayload(v, man, callable, role, staged)
+	if err != nil {
+		return err
+	}
+
+	if err := shim.WriteBundle(dir, payload, params, man.Table(), nil); err != nil {
+		return fmt.Errorf("write %s bundle %s: %w", role, dir, err)
+	}
+
+	return nil
+}
+
+// bundlePayload is a resolved object as the payload of a bundle of
+// callable's role params, and the params. Its top-level keys are written
+// sorted, as a MarshalerMap encodes them, and nested values keep their
+// encoded order and number lexemes. A file leaf staged names the path the
+// bundle stages it from.
+func bundlePayload(v json.Marshaler, man types.Manifest, callable, role string, staged map[string]string) (map[string]any, []ir.Param, error) {
+	raw, err := marshal(v)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	payload, err := decodePayload(raw)
 	if err != nil {
-		return fmt.Errorf("%s %s value: %w", callable, role, err)
+		return nil, nil, fmt.Errorf("%s %s value: %w", callable, role, err)
 	}
 
 	params, err := man.Params(callable, role)
 	if err != nil {
-		return fmt.Errorf("params of %s: %w", callable, err)
+		return nil, nil, fmt.Errorf("params of %s: %w", callable, err)
 	}
 
 	if len(staged) > 0 {
@@ -199,13 +240,9 @@ func writeValue(dir string, v json.Marshaler, man types.Manifest, callable, role
 			return leaf, nil
 		})
 		if err != nil {
-			return fmt.Errorf("staged entry files of %s: %w", callable, err)
+			return nil, nil, fmt.Errorf("staged entry files of %s: %w", callable, err)
 		}
 	}
 
-	if err := shim.WriteBundle(dir, payload, params, man.Table(), nil); err != nil {
-		return fmt.Errorf("write %s bundle %s: %w", role, dir, err)
-	}
-
-	return nil
+	return payload, params, nil
 }

@@ -52,9 +52,12 @@ def callFile(Map meta) {
 // fork records, which are base64 and need no quoting, and the entry files
 // it staged below entry/, by their indices among the run's. The driver ran
 // the instance because its gates hold it enabled; mre args must agree, and
-// the node must compile to the spec PLAN planned.
-def args(Map meta, List forks, List leaves) {
-    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, '')} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args"
+// the node must compile to the spec PLAN planned. A bundle no other task
+// stages links the files it names (link), so a file every fork of a map
+// call reads is not copied into each; a split's args travels to its chunks
+// and join, so it carries them.
+def args(Map meta, List forks, List leaves, boolean link) {
+    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, '')} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args${link ? ' -link' : ''}"
     forks.each { f -> cmd += " -fork ${f}" }
     if (leaves) {
         cmd += " -leaves ${shq(leaves.join(','))}"
@@ -127,7 +130,7 @@ process STAGE {
     script:
     """
     ${callFile(meta)}
-    ${args(meta, forks, leaves)}
+    ${args(meta, forks, leaves, true)}
     ${job(meta, 'main', '-args args -o stage_outs')}
     ${post(meta)}
     """
@@ -148,7 +151,7 @@ process STAGE_SPLIT {
     script:
     """
     ${callFile(meta)}
-    ${args(meta, forks, leaves)}
+    ${args(meta, forks, leaves, false)}
     ${job(meta, 'split', '-args args -o chunks')}
     """
 }

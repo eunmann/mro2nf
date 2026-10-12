@@ -3,6 +3,7 @@ package shim_test
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -355,6 +356,96 @@ func writeSelfNamed(t *testing.T, path string) string {
 	}
 
 	return path
+}
+
+// TestWriteLinkedBundle: a linked bundle holds no copy of a file it names
+// (#498). A leaf of a staged bundle is linked by its ordinal dir, origin
+// record and all, and a host file by itself, its origin recorded beside it;
+// both read back as the files, with the origins a copying bundle records.
+func TestWriteLinkedBundle(t *testing.T) {
+	dir := t.TempDir()
+	one := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
+	params := []ir.Param{{Name: "host", BaseType: "file", IsFile: true}, {Name: "up", BaseType: "file", IsFile: true}}
+
+	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
+	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
+	produced := writeStageOuts(t, filepath.Join(dir, "producer"), map[string]any{"f": own}, one)
+	staged, _ := readPayload(t, stageBundle(t, produced, filepath.Join(dir, "task", "in", "u0")))["f"].(string)
+
+	bundle := filepath.Join(dir, "task", "args")
+	if err := shim.WriteLinkedBundle(bundle, map[string]any{"host": host, "up": staged}, params, fileTable()); err != nil {
+		t.Fatalf("WriteLinkedBundle: %v", err)
+	}
+
+	var files []string
+
+	err := filepath.WalkDir(bundle, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			files = append(files, d.Name())
+		}
+
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d := cmp.Diff([]string{"data.json", ".mre-origin"}, files); d != "" {
+		t.Errorf("files the bundle holds (-want +got):\n%s", d)
+	}
+
+	want := map[string]shim.Origin{"host": {Path: host, Linked: true}, "up": {Path: own}}
+	if d := cmp.Diff(want, leafOrigins(t, bundle)); d != "" {
+		t.Errorf("origins (-want +got):\n%s", d)
+	}
+
+	for name, src := range map[string]string{"host": host, "up": own} {
+		leaf, _ := readPayload(t, bundle)[name].(string)
+		if got, err := os.ReadFile(leaf); err != nil || string(got) != src {
+			t.Errorf("%s reads %q (%v), want %s's bytes", name, got, err, src)
+		}
+	}
+}
+
+// TestWriteLinkedBundleFails: a linked bundle fails loudly where it cannot
+// place a leaf's link, whether the files dir is blocked or a link already
+// holds the leaf's place, for a host file and for a staged bundle's leaf.
+func TestWriteLinkedBundleFails(t *testing.T) {
+	dir := t.TempDir()
+	one := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
+
+	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
+	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
+	produced := writeStageOuts(t, filepath.Join(dir, "producer"), map[string]any{"f": own}, one)
+	staged, _ := readPayload(t, stageBundle(t, produced, filepath.Join(dir, "task", "in", "u0")))["f"].(string)
+
+	for name, leaf := range map[string]string{"host file": host, "staged leaf": staged} {
+		t.Run(name, func(t *testing.T) {
+			payload := map[string]any{"f": leaf}
+
+			blocked := filepath.Join(t.TempDir(), "args")
+			if err := os.MkdirAll(blocked, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := os.WriteFile(filepath.Join(blocked, "f"), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := shim.WriteLinkedBundle(blocked, payload, one, fileTable()); err == nil {
+				t.Error("WriteLinkedBundle with the files dir blocked succeeded")
+			}
+
+			twice := filepath.Join(t.TempDir(), "args")
+			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable()); err != nil {
+				t.Fatalf("WriteLinkedBundle: %v", err)
+			}
+
+			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable()); err == nil {
+				t.Error("WriteLinkedBundle over a bundle that holds the leaf's link succeeded")
+			}
+		})
+	}
 }
 
 // TestMarkFilesRefusesOriginFileName checks a leaf named like the origin file

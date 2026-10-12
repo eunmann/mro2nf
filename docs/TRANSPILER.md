@@ -479,6 +479,14 @@ Both prefixes resolve identically on read-back. The rules:
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
   This is `shim.MarkFiles`, which uses the type manifest to find exactly which
   leaves are files (recursing into structs, arrays and maps).
+- **Linked bundles** (on write): the args bundle of a non-split stage is read
+  only by its own task, so `mre args -link` (`shim.WriteLinkedBundle`) links
+  each leaf instead of copying it: a leaf of a staged bundle by its ordinal
+  dir, whose origin record comes with it, any other file by itself beside its
+  origin record. A file every fork of a map call reads, such as a broadcast
+  upstream output or entry file, exists once, its producer's, however wide the
+  fork (#498). A split's args travels to its chunks and join, so it carries
+  its files.
 - **Origins** (on write): a file is one to `mrp` wherever it is referenced, so a
   bundle copies it once and gives every position that reaches it one marker,
   however many input bundles it arrived through. Its identity is its origin, the
