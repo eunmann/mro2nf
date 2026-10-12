@@ -74,9 +74,9 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 }
 
 // TestEmitHealthOmicsTemplate: the HealthOmics parameter template declares
-// every entry input, optional, and none of the project's own params, which
-// a run then cannot set: the image the package pins (#334), and the file
-// values it stages.
+// every entry input and the run's mrp --overrides file, optional, and none
+// of the project's other params, which a run then cannot set: the image
+// the package pins (#334), and the file values it stages.
 func TestEmitHealthOmicsTemplate(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
 
@@ -85,8 +85,8 @@ func TestEmitHealthOmicsTemplate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(tmpl) != 2 || !tmpl["reads"].Optional || !tmpl["scale"].Optional {
-		t.Errorf("parameter template %v, want reads and scale, optional", tmpl)
+	if len(tmpl) != 3 || !tmpl["reads"].Optional || !tmpl["scale"].Optional || !tmpl["mro2nf_overrides"].Optional {
+		t.Errorf("parameter template %v, want reads, scale and mro2nf_overrides, optional", tmpl)
 	}
 
 	for _, want := range []string{

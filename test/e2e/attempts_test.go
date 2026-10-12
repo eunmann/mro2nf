@@ -5,6 +5,8 @@ package e2e
 import (
 	"errors"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -88,5 +90,26 @@ func TestNextflowOutcomeWithoutTrace(t *testing.T) {
 
 	if got, _, err := nextflowOutcome(proj, nil); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a successful run without a trace: outcome %s, err %v, want fs.ErrNotExist", got, err)
+	}
+}
+
+// TestNextflowOutcomeOfAFailedPlan checks a run whose PLAN failed, as mrp
+// refuses to start a run, is a failure blaming no stage, as mrp's refusal
+// is (mrpFailedOutcome).
+func TestNextflowOutcomeOfAFailedPlan(t *testing.T) {
+	proj := t.TempDir()
+	trace := "task_id\thash\tname\tstatus\texit\n1\tab/cdef12\tPLAN\tFAILED\t1\n"
+
+	if err := os.WriteFile(filepath.Join(proj, "trace.txt"), []byte(trace), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, attempts, err := nextflowOutcome(proj, errTestRunFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(failedWith(nil), got); diff != "" || !slices.Equal(attempts, []string{"PLAN"}) {
+		t.Errorf("outcome (-want +got):\n%s\nattempts %v, want PLAN's", diff, attempts)
 	}
 }

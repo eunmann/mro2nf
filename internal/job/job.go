@@ -54,6 +54,9 @@ type Runtime struct {
 	Mrjob string
 	// Monitor is mrp's --monitor, which mrjob enforces from _jobinfo.
 	Monitor bool
+	// Overrides is mrp's --overrides, over every job's resources; nil
+	// overrides none.
+	Overrides *core.PipestanceOverrides
 	// PSID is the run's pipestance id, which names every job.
 	PSID string
 	// Invocation and Version are recorded in every job's _jobinfo.
@@ -107,22 +110,27 @@ func NewStage(st *syntax.CallGraphStage, mroPaths []string) (Stage, error) {
 		return Stage{}, fmt.Errorf("stage code of %s: %w", st.Fqid, err)
 	}
 
-	out := Stage{
+	return Stage{
 		Fqid:      st.Fqid,
 		Callable:  st.Call().DecId,
 		Code:      Code{Type: s.Src.Type, Cmd: cmd, Args: s.Src.Args},
+		Using:     Using(s),
 		Split:     s.Split,
 		Outs:      s.OutParams,
 		ChunkOuts: s.ChunkOuts,
+	}, nil
+}
+
+// Using is s's using() resources, nil when it declares none.
+func Using(s *syntax.Stage) *core.JobResources {
+	r := s.Resources
+	if r == nil {
+		return nil
 	}
 
-	if r := s.Resources; r != nil {
-		out.Using = &core.JobResources{
-			Threads: float64(r.Threads), MemGB: float64(r.MemGB), VMemGB: float64(r.VMemGB), Special: r.Special,
-		}
+	return &core.JobResources{
+		Threads: float64(r.Threads), MemGB: float64(r.MemGB), VMemGB: float64(r.VMemGB), Special: r.Special,
 	}
-
-	return out, nil
 }
 
 // Instance is one stage instance: its stage and mrp's id of its fork.
@@ -149,7 +157,11 @@ func ChunkName(i, n int) string { return fmt.Sprintf("chnk%0*d", util.WidthForIn
 // top is the run's top node name (core/runtime.go:360).
 func (r Runtime) top() string { return "ID." + r.PSID }
 
+// fqname is mrp's name of node fqid, the top node's name before the call
+// graph's fqid (core/runtime.go:360).
+func (r Runtime) fqname(fqid string) string { return r.top() + "." + fqid }
+
 // forkName is the instance's fork's job name (core/stage.go:438 updateId).
 func (r Runtime) forkName(in Instance) string {
-	return r.top() + "." + in.Stage.Fqid + "." + journalSafe(in.ForkID)
+	return r.fqname(in.Stage.Fqid) + "." + journalSafe(in.ForkID)
 }

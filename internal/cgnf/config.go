@@ -58,6 +58,10 @@ params.mro2nf_allow_remote_inputs = false
 params.mro2nf_image = null
 params.mro2nf_require_image = false
 
+// mrp's --overrides file, over each stage's resources; PLAN reads it as
+// mrp does.
+params.mro2nf_overrides = null
+
 `)
 
 	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
@@ -79,7 +83,8 @@ func processConfig() string {
 // scheduler failure (jobmanagers/retry.json), for which mre exits %d; a
 // task the executor killed by a signal exits 128 + the signal. Any other
 // failure, a stage exception or ASSERT (42) or a failed mre step, ends the
-// run, as it ends mrp's.
+// run, as it ends mrp's. A retry requests the same cpus and memory, as mrp
+// retries a job at its request without --auto-adjust-memory.
 process {
     errorStrategy = { task.exitStatus in [%d, 137, 143] ? 'retry' : 'terminate' }
     maxRetries = %d

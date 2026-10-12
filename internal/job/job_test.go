@@ -355,7 +355,7 @@ func TestReqs(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		if got := Resources(tc.using, tc.def); got != tc.want {
+		if got := (Runtime{}).Resources(Stage{Using: tc.using}, PhaseMain, tc.def); got != tc.want {
 			t.Errorf("%s: Resources = %+v, want %+v", tc.name, got, tc.want)
 		}
 	}

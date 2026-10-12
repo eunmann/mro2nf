@@ -53,12 +53,14 @@ type PlanCount struct {
 // so a task's cache key changes only with its own node and those. Off
 // disables every instance; OffAt the instances, by fork key, a static
 // per-fork binding disables. Files are the entry files its instances read.
+// Stage is the stage it runs, which the pipeline outs' node has none of.
 type PlanNode struct {
 	Fqid   string
 	Digest string
 	Off    bool
 	OffAt  []string
 	Files  []PlanFiles
+	Stage  *syntax.Stage
 }
 
 // PlanFork is one fork of an entry-fed root: its fork key, the ordinals of
@@ -124,6 +126,10 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 	for _, n := range wt.Nodes {
 		pn, err := g.planNode(n, wt, planned, leaves)
 		if err != nil {
+			return Plan{}, err
+		}
+
+		if pn.Stage, err = w.decl(n.Fqid); err != nil {
 			return Plan{}, err
 		}
 
@@ -470,6 +476,21 @@ func DottedKey(key []int) string {
 	}
 
 	return strings.Join(parts, ".")
+}
+
+// decl is the stage node fqid runs.
+func (g *Graph) decl(fqid string) (*syntax.Stage, error) {
+	st, err := g.Stage(fqid)
+	if err != nil {
+		return nil, err
+	}
+
+	s, ok := st.Callable().(*syntax.Stage)
+	if !ok {
+		return nil, fmt.Errorf("%s: %w: not a stage", fqid, errShapeUnsupported)
+	}
+
+	return s, nil
 }
 
 // specDigest identifies a stage node's resolved spec: its stage's code,

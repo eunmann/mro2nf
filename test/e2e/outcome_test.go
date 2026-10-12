@@ -284,10 +284,13 @@ func outcomeOf(m divergence.OutcomeMatcher) runOutcome {
 // mrpOutcomeCase is a fixture whose run outcome, not its outputs, is compared
 // with mrp's: mrp fails it by design, or mro2nf's outcome is a known
 // divergence from mrp's, recorded by the allowlist entry divergence names.
+// overrides names an mrp --overrides file in the fixture's dir, which both
+// runs are launched with.
 type mrpOutcomeCase struct {
 	name       string
 	mrp        runOutcome
 	divergence string
+	overrides  string
 }
 
 // errOutcomeCase reports a malformed mrpOutcomeCases entry.

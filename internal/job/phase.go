@@ -33,7 +33,7 @@ func (r Runtime) Split(ctx context.Context, in Instance, args core.LazyArgumentM
 		return nil, err
 	}
 
-	j.res = Resources(in.Stage.Using, nil)
+	j.res = r.Resources(in.Stage, PhaseSplit, nil)
 
 	if err := j.write(core.ArgsFile, args); err != nil {
 		return nil, err
@@ -69,7 +69,7 @@ func (r Runtime) Main(ctx context.Context, in Instance, args core.LazyArgumentMa
 	}
 
 	def := *c.Def
-	res := Resources(in.Stage.Using, def.Resources)
+	res := r.Resources(in.Stage, PhaseMain, def.Resources)
 	def.Resources = &res
 	j.res = res
 
@@ -99,7 +99,7 @@ func (r Runtime) Join(ctx context.Context, in Instance, args core.LazyArgumentMa
 		return nil, err
 	}
 
-	res := Resources(in.Stage.Using, defs.JoinDef)
+	res := r.Resources(in.Stage, PhaseJoin, defs.JoinDef)
 	j.res = res
 
 	if err := j.write(core.ArgsFile, &core.ChunkDef{Resources: &res, Args: args}); err != nil {
@@ -187,14 +187,23 @@ func outArgs(params *syntax.OutParams, files string) map[string]any {
 	return out
 }
 
-// Resources resolves a job's resources as core's getJobReqs does
-// (core/stage.go:1494): the stage's using() with the def's non-zero fields
-// over it, resolved as the local job manager resolves a request
-// (core/jobmanager_local.go:375 GetSystemReqs). A Nextflow task is sized to
-// its request, so no host cap applies, and an adaptive negative request,
-// which mrp's local manager grants the host's free capacity, resolves to its
-// magnitude.
-func Resources(using, def *core.JobResources) core.JobResources {
+// Resources resolves the resources of st's job in phase as core's
+// getJobReqs does (core/stage.go:1494): the stage's using() with the def's
+// non-zero fields over it, then the run's overrides of the node's phase
+// (core/override.go:159 ApplyResourceOverrides), resolved as the local job
+// manager resolves a request (core/jobmanager_local.go:375 GetSystemReqs).
+// A Nextflow task is sized to its request, so no host cap applies, and an
+// adaptive negative request, which mrp's local manager grants the host's
+// free capacity, resolves to its magnitude.
+func (r Runtime) Resources(st Stage, phase string, def *core.JobResources) core.JobResources {
+	res := request(st.Using, def)
+	r.Overrides.ApplyResourceOverrides(r.fqname(st.Fqid), stageType(phase), &res)
+
+	return granted(res)
+}
+
+// request is using with def's non-zero fields over it.
+func request(using, def *core.JobResources) core.JobResources {
 	var res core.JobResources
 	if using != nil {
 		res = *using
@@ -210,6 +219,11 @@ func Resources(using, def *core.JobResources) core.JobResources {
 		}
 	}
 
+	return res
+}
+
+// granted is res as the local job manager grants it, with no host cap.
+func granted(res core.JobResources) core.JobResources {
 	centi := math.Ceil(math.Abs(res.Threads) * centiPerCore)
 	if centi == 0 {
 		centi = threadsPerJob * centiPerCore

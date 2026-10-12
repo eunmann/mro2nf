@@ -36,8 +36,8 @@ func plan(t *testing.T, fixture, values string) (string, error) {
 }
 
 // planEntry runs mre plan on the pipeline.mro in dir with the entry values
-// values, and returns the plan dir.
-func planEntry(t *testing.T, dir, values string) (string, error) {
+// and flags, and returns the plan dir.
+func planEntry(t *testing.T, dir, values string, flags ...string) (string, error) {
 	t.Helper()
 
 	work := t.TempDir()
@@ -47,11 +47,11 @@ func planEntry(t *testing.T, dir, values string) (string, error) {
 		t.Fatal(err)
 	}
 
-	err := run(t.Context(), []string{
-		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work,
+	err := run(t.Context(), append([]string{
+		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
 		"-counts", filepath.Join(work, "counts"), "-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
-	})
+	}, flags...))
 
 	return work, err
 }
@@ -370,7 +370,7 @@ func TestRunFindsStageCodeBesideEntry(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	if err := run(t.Context(), []string{
-		"plan", "-entry", entry, "-mropath", shared, "-work", work,
+		"plan", "-entry", entry, "-mropath", shared, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
 	}); err != nil {
 		t.Fatal(err)
@@ -405,7 +405,7 @@ func planEntryFile(t *testing.T, value string, flags ...string) (string, error) 
 	vf := writeTestFile(t, filepath.Join(work, "values.json"), `{"reads": "`+value+`"}`)
 
 	err := run(t.Context(), append([]string{
-		"plan", "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work,
+		"plan", "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
 		"-counts", filepath.Join(work, "counts"), "-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
 	}, flags...))

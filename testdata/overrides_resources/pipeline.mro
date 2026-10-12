@@ -1,0 +1,108 @@
+# mrp's --overrides file (overrides.json) over a stage's using(), a split's
+# chunk and join requests and the defaults: keys scoped to a stage, a
+# sub-pipeline, the top-level pipeline, an aliased call and a map call, and
+# the empty key, which mrp's walk never reaches. Every stage reports the
+# threads and memory its job was given (_jobinfo) and the __threads,
+# __mem_gb and __vmem_gb of its _args.
+stage PREP(
+    in  int    n,
+    out int[]  xs,
+    out string res,
+    src py     "stages/prep",
+) using (
+    threads = 1,
+    mem_gb  = 1,
+)
+
+stage SQUARES(
+    in  int[]    xs,
+    out int      total,
+    out string   split_res,
+    out string[] chunk_res,
+    out string   join_res,
+    src py       "stages/squares",
+) split using (
+    in  int      x,
+    in  string   split_res,
+    out int      sq,
+    out string   res,
+) using (
+    mem_gb = 1,
+)
+
+stage REPORT(
+    in  int    total,
+    out string line,
+    out string res,
+    src py     "stages/report",
+)
+
+pipeline INNER(
+    in  int      n,
+    out int      total,
+    out string   prep_res,
+    out string   split_res,
+    out string[] chunk_res,
+    out string   join_res,
+)
+{
+    call PREP(
+        n = self.n,
+    )
+
+    call SQUARES(
+        xs = PREP.xs,
+    )
+
+    return (
+        total     = SQUARES.total,
+        prep_res  = PREP.res,
+        split_res = SQUARES.split_res,
+        chunk_res = SQUARES.chunk_res,
+        join_res  = SQUARES.join_res,
+    )
+}
+
+pipeline OVR(
+    in  int      n,
+    out int      total,
+    out string   prep_res,
+    out string   split_res,
+    out string[] chunk_res,
+    out string   join_res,
+    out string   report_res,
+    out string   other_res,
+    out string[] each_res,
+)
+{
+    call INNER(
+        n = self.n,
+    )
+
+    call REPORT(
+        total = INNER.total,
+    )
+
+    call REPORT as OTHER(
+        total = 7,
+    )
+
+    map call REPORT as EACH(
+        total = split [1, 2],
+    )
+
+    return (
+        total      = INNER.total,
+        prep_res   = INNER.prep_res,
+        split_res  = INNER.split_res,
+        chunk_res  = INNER.chunk_res,
+        join_res   = INNER.join_res,
+        report_res = REPORT.res,
+        other_res  = OTHER.res,
+        each_res   = EACH.res,
+    )
+}
+
+call OVR(
+    n = 3,
+)

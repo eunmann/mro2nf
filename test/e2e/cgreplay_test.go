@@ -58,8 +58,15 @@ func TestMrpCallGraph(t *testing.T) {
 
 			tmp := t.TempDir()
 			dir, mro := tc.source()
-			runMrpAt(t, bin, dir, mro, tmp)
-			newCGReplay(t, tc.name, dir, mro, tmp, filepath.Join(filepath.Dir(bin), "adapters")).run()
+			mrpFlags, _ := tc.flags()
+			runMrpAt(t, bin, dir, mro, tmp, mrpFlags...)
+
+			rp := newCGReplay(t, tc.name, dir, mro, tmp, filepath.Join(filepath.Dir(bin), "adapters"))
+			if tc.overrides != "" {
+				rp.overrides = filepath.Join(dir, tc.overrides)
+			}
+
+			rp.run()
 		})
 	}
 }
@@ -78,8 +85,11 @@ type cgReplay struct {
 	entry   string
 	// adapters is mrp's adapters dir, which `mre run` runs py stages with.
 	adapters string
-	posted   map[string][]postedInstance
-	ours     map[string]replayedFork
+	// overrides is the mrp --overrides file mrp ran with, which every job
+	// runs with too.
+	overrides string
+	posted    map[string][]postedInstance
+	ours      map[string]replayedFork
 	// emptyFork holds the stages with a fork root that has no fork under
 	// some fork of the roots before it.
 	emptyFork map[string]bool
@@ -546,6 +556,11 @@ func (rp *cgReplay) taskDir(id string) string {
 func (rp *cgReplay) runJob(rel, name, work, phase string, argv ...string) {
 	rp.jobs++
 	jw := rp.taskDir(work + "\x00" + name)
+
+	if rp.overrides != "" {
+		argv = append([]string{"-overrides", rp.overrides}, argv...)
+	}
+
 	rp.mre(append([]string{
 		"run", "-phase", phase, "-psid", "mrp", "-adapters", rp.adapters,
 		"-mrjob", filepath.Join(root, "mrjob"), "-work", jw,

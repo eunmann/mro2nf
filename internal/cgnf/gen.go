@@ -2,7 +2,6 @@ package cgnf
 
 import (
 	"fmt"
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -80,7 +79,8 @@ func pick(v string, idx []int) string {
 }
 
 // planWiring parses PLAN's records: nodes maps each witness node to its
-// digest, its off flag and its statically disabled fork keys; entry maps
+// digest, its off flag, its statically disabled fork keys, the cpus and
+// memory its first task is scheduled with and its own overrides; entry maps
 // each node and fork of its entry-fed roots to the entry files staged
 // there, and each of those to its file(), which globs no name; f<j> are the
 // forks of entry-fed root j, each [outer key, own ordinal, record, index
@@ -89,7 +89,7 @@ func (p *project) planWiring(g *gen) {
 	g.linef("if (on(params.mro2nf_require_image) && !params.mro2nf_image) {")
 	g.linef("  error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
 	g.linef("}")
-	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"))", p.values(), p.graphMeta(), mroAssets)
+	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(), mroAssets)
 	g.linef("call = PLAN.out.call")
 
 	if len(p.topo.Nodes) > 0 {
@@ -117,36 +117,29 @@ func (p *project) graphMeta(extra ...string) string {
 	return "[" + strings.Join(entries, ", ") + "]"
 }
 
-// nodeMeta is node n's meta: its identity and the resources it is
-// scheduled with.
+// nodeMeta is node n's meta: its identity, its PLAN record d, and the
+// resources it is scheduled with, which PLAN resolved under the run's
+// overrides, and the overrides file of its own that its jobs resolve
+// theirs under, empty when none applies.
 func (p *project) nodeMeta(n cg.TopoNode) (string, error) {
 	s, err := p.stage(n.Fqid)
 	if err != nil {
 		return "", err
 	}
 
-	var threads, memGB float64
-
 	special := ""
-
 	if r := s.Resources; r != nil {
-		threads, memGB, special = float64(r.Threads), float64(r.MemGB), r.Special
-	}
-
-	cpus := int(math.Max(1, math.Ceil(math.Abs(threads))))
-
-	mem := math.Abs(memGB)
-	if mem == 0 {
-		mem = 1
+		special = r.Special
 	}
 
 	return p.graphMeta(
 		"call: c",
 		"node: "+gstr(n.Fqid),
-		"cpus: "+strconv.Itoa(cpus),
-		"mem_gb: "+strconv.FormatFloat(mem, 'f', -1, 64),
+		"cpus: d[3] as int",
+		"mem_gb: d[4] as double",
+		"overrides: (d[5] == '-' ? '' : d[5])",
 		"special: "+gstr(special),
-		"digest: d",
+		"digest: d[0]",
 	), nil
 }
 

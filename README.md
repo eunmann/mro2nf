@@ -98,8 +98,8 @@ A run names others with `--mro2nf_mre <path>`, `--mro2nf_mrjob <path>` and
 `--mro2nf_monitor true` is mrp's `--monitor`: `mrjob` enforces each job's
 memory and thread limits. `--mro2nf_confine true` fails a stage task whose
 output resolves outside its work dir instead of copying it in, which the
-container profiles always do. A launch-time mrp `--overrides` file is tracked
-by #301.
+container profiles always do. An mrp `--overrides` file is a launch
+parameter, not a flag ([Resource overrides](#resource-overrides)).
 
 ### Targets: one project, chosen with `-profile`
 
@@ -178,6 +178,19 @@ nextflow run main.nf --n 5 --scale 2.5 --skip false  # scalars, parsed as declar
 A file-typed input is a path the stages open as given, as under `mrp`: give it
 as an absolute path every task can see. See `docs/TRANSPILER.md` §8.
 
+### Resource overrides
+
+`--mro2nf_overrides` takes the file `mrp --overrides` takes, and sizes every
+job as `mrp` does under it: each task's `cpus` and `memory`, and the threads
+and memory its stage sees in `_jobinfo` and `__threads`/`__mem_gb`/`__vmem_gb`.
+A key `mrp` does not know fails the run at its start.
+
+```bash
+nextflow run main.nf --mro2nf_overrides overrides.json  # e.g. {"P.ALIGN": {"chunk.mem_gb": 8}}
+```
+
+See `docs/RUNTIME_TUNING.md`.
+
 ## Testing
 
 ```bash
@@ -246,9 +259,9 @@ maps, split stages, and sub-pipelines, nested and zipped; disabled calls and
 map calls, decided per fork; structs and typed maps (including `map<S>.field`
 projection); file, array, map, and struct-of-file outputs; the `py`, `exec`,
 and `comp` adapters; dynamic per-chunk resources; content-based retry (only
-the failures mrp retries, a signal, ENOMEM or a scheduler failure, retry, with
-escalated memory; an ASSERT or a stage exception ends the run); and mrp's
-`--monitor` (`--mro2nf_monitor true`).
+the failures mrp retries, a signal, ENOMEM or a scheduler failure, retry, at
+the same memory and cpus, as under mrp; an ASSERT or a stage exception ends
+the run); and mrp's `--monitor` (`--mro2nf_monitor true`).
 
 Resources track mrp, so a transpiled run schedules and finishes comparably.
 Per-chunk `cpus` and `memory`, the split-returned `join` override, and the

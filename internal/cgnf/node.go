@@ -203,12 +203,13 @@ func (p *project) elements(r cg.TopoRoot) string {
 }
 
 // gate decides each instance of node i enabled or disabled, b<i>.run or
-// b<i>.skip, from PLAN's record of the node and the gate values each stage
-// whose outs gate it posted at the fork they share, keyed by the
-// instance's ordinals of the gate's own roots.
+// b<i>.skip, from PLAN's record of the node, which each instance carries
+// on as its d, and the gate values each stage whose outs gate it posted at
+// the fork they share, keyed by the instance's ordinals of the gate's own
+// roots.
 func (p *project) gate(g *gen, i int, n cg.TopoNode) {
 	fq := gstr(n.Fqid)
-	g.linef("g%d = i%d.combine(nodes).map { k, fs, es, ns -> [k, fs, es, ns[%s][0], ns[%s][1] == '1' || ns[%s][2].tokenize(',').contains(k.join('.'))] }",
+	g.linef("g%d = i%d.combine(nodes).map { k, fs, es, ns -> [k, fs, es, ns[%s], ns[%s][1] == '1' || ns[%s][2].tokenize(',').contains(k.join('.'))] }",
 		i, i, fq, fq, fq)
 
 	for _, gp := range n.Gates {

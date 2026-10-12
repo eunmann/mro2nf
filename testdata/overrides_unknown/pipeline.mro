@@ -1,0 +1,27 @@
+# An mrp --overrides file (overrides.json) with a key mrp's reader does not
+# know: mem_gb without its phase, as the example in mrp's own
+# core/override.go comment spells it. mrp refuses to start the run, so the
+# run fails before any stage runs.
+stage ECHO(
+    in  int x,
+    out int y,
+    src py  "stages/echo",
+)
+
+pipeline UNKNOWN(
+    in  int x,
+    out int y,
+)
+{
+    call ECHO(
+        x = self.x,
+    )
+
+    return (
+        y = ECHO.y,
+    )
+}
+
+call UNKNOWN(
+    x = 1,
+)
