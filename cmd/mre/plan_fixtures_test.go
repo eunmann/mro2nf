@@ -9,8 +9,8 @@ import (
 
 // TestPlanEveryFixture: mre plan starts a run of every fixture's transpiled
 // invocation, writing one nodes line per witness node, and refuses the
-// fixtures mrp refuses to instantiate (#387); mre post -entry-forks then
-// writes the fork elements of every entry-fed root of the run's call.
+// fixtures mrp refuses to instantiate (#387); a task then compiles the
+// run's call it wrote, and writes the fork elements of every entry-fed root.
 func TestPlanEveryFixture(t *testing.T) {
 	refused := []string{"rt_gate_split_reject", "rt_gate_split_reject_pass", "rt_gate_split_reject_sub"}
 
@@ -38,12 +38,7 @@ func TestPlanEveryFixture(t *testing.T) {
 				}
 			}
 
-			dir := filepath.Dir(mro)
-			argv := []string{"post", "-entry", mro, "-call", filepath.Join(work, "call"), "-mropath", dir, "-entry-forks", "-forks", filepath.Join(work, "entry")}
-
-			if err := run(t.Context(), argv); err != nil {
-				t.Fatalf("post -entry-forks: %v", err)
-			}
+			entryForks(t, graphFlags{entry: mro, call: filepath.Join(work, "call"), mropath: filepath.Dir(mro)}, filepath.Join(work, "entry"))
 		})
 	}
 }

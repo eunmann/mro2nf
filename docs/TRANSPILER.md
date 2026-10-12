@@ -385,10 +385,8 @@ type manifest from the invocation's own declarations.
   under `mre run`, and no post follows it; a failed args or post step
   exits 1. The bundles are written to disk between steps and read back, so
   `_args` names the staged paths a step reads them at. No generated task
-  calls `mre args`, `mre run` or `mre post`; they remain for the call-graph
-  replay against `mrp` (`TestMrpCallGraph`), the unit test that pins
-  `mre stage` to them (`TestStageMatchesArgsRunPost`), and running one step
-  by hand.
+  calls `mre args`, `mre run` or `mre post`; they remain only for running
+  one step by hand.
 - **`mre args -node <fqid> -digest <d>`** builds one stage instance's args
   bundle and prints `enabled` or `disabled`, once the node compiles to the spec
   digest PLAN planned. The instance's fork comes from the fork elements it
