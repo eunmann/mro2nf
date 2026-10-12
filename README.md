@@ -91,9 +91,9 @@ cd out && nextflow run main.nf  # results land in out/results/
 |---|---|
 | `-o <dir>` | output directory for the Nextflow project (default `out`) |
 | `-mropath <path>` | `@include` search path (`:`-separated) |
-| `-mre <path>` | path to the `mre` shim binary as it will appear **at run time** |
-| `-shell <path>` | path to `martian_shell.py` at run time |
-| `-mrjob <path>` | path to `mrjob` (only needed for `comp` stages) |
+| `-mre <path>` | path to the `mre` shim binary as it will appear **at run time** (a bare name is looked up on `PATH`) |
+| `-shell <path>` | path to `martian_shell.py` at run time (a relative path, even a bare name, resolves against the working directory: it is a script argument, not a command) |
+| `-mrjob <path>` | path to `mrjob` (only needed for `comp` stages; a bare name is looked up on `PATH`) |
 | `-container <image>` | set `process.container` for container backends (AWS Batch, HealthOmics) |
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
 | `-monitor` | enforce mrp `--monitor`'s memory limits per stage: an RSS kill at `mem_gb` (the process-group monitor, mrp's primary kill) plus a `prlimit` virtual-memory cap at `vmem_gb` |

@@ -438,9 +438,10 @@ func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 		return err
 	}
 
-	opts.Mre = absOrSelf(opts.Mre)
-	opts.Shell = absOrSelf(opts.Shell)
-	opts.Mrjob = absOrSelf(opts.Mrjob)
+	if err := resolveToolPaths(&opts); err != nil {
+		return err
+	}
+
 	opts.MROFile = filepath.Base(src)
 	opts.MRODir = mroDir
 	opts.StageCode = code
@@ -452,18 +453,50 @@ func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 	return nil
 }
 
-// absOrSelf resolves a tool flag the way exec.LookPath dispatches: a bare
-// command name (no path separator) is left as-is for PATH lookup at task run
-// time, while any path containing a separator is absolutized so the generated
-// project does not depend on Nextflow's per-task working directory.
-func absOrSelf(p string) string {
+// resolveToolPaths makes the -mre, -shell and -mrjob paths baked into the
+// project absolute, so it does not depend on Nextflow's per-task working
+// directory. -mre and -mrjob are exec'd, so a bare name stays a PATH command;
+// -shell is the interpreter's script argument, which mre runs from the task's
+// files dir, so even a bare name is a file.
+func resolveToolPaths(opts *emit.Options) error {
+	var err error
+
+	if opts.Mre, err = commandPath(opts.Mre); err != nil {
+		return fmt.Errorf("resolve -mre: %w", err)
+	}
+
+	if opts.Shell, err = filePath(opts.Shell); err != nil {
+		return fmt.Errorf("resolve -shell: %w", err)
+	}
+
+	if opts.Mrjob, err = commandPath(opts.Mrjob); err != nil {
+		return fmt.Errorf("resolve -mrjob: %w", err)
+	}
+
+	return nil
+}
+
+// commandPath resolves an exec'd tool the way exec.LookPath dispatches: a
+// bare name (no path separator) stays a PATH command, any other path is made
+// absolute.
+func commandPath(p string) (string, error) {
 	if !strings.ContainsRune(p, filepath.Separator) {
-		return p
+		return p, nil
 	}
 
-	if abs, err := filepath.Abs(p); err == nil {
-		return abs
+	return filePath(p)
+}
+
+// filePath makes a non-empty p absolute.
+func filePath(p string) (string, error) {
+	if p == "" {
+		return "", nil
 	}
 
-	return p
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", fmt.Errorf("absolute path of %s: %w", p, err)
+	}
+
+	return abs, nil
 }

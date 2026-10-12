@@ -67,33 +67,71 @@ func TestApplyConfigPrecedence(t *testing.T) {
 	}
 }
 
-// TestAbsOrSelf pins the tool-path resolution rule: a bare command name (no
-// path separator) is left for PATH lookup — ANY name, not just "mre" — while
-// anything containing a separator is anchored to an absolute path so the
-// generated project does not depend on Nextflow's task working directory.
-func TestAbsOrSelf(t *testing.T) {
+// TestToolPaths pins the tool-path rules: an exec'd tool's bare name (any
+// name, not just "mre") stays a PATH command, while every other tool path —
+// and a file argument even when bare — is made absolute.
+func TestToolPaths(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	cases := []struct {
-		name, in, want string
+		name    string
+		resolve func(string) (string, error)
+		in      string
+		want    string
 	}{
-		{"empty stays empty", "", ""},
-		{"bare mre stays PATH-resolved", "mre", "mre"},
-		{"any bare command stays PATH-resolved", "mrjob", "mrjob"},
-		{"relative path absolutized", "bin/mre", filepath.Join(cwd, "bin", "mre")},
-		{"dot-relative path absolutized", "./mre", filepath.Join(cwd, "mre")},
-		{"absolute path unchanged", "/usr/bin/mre", "/usr/bin/mre"},
+		{"command/empty", commandPath, "", ""},
+		{"command/bare_mre", commandPath, "mre", "mre"},
+		{"command/any_bare_name", commandPath, "mrjob", "mrjob"},
+		{"command/relative", commandPath, "bin/mre", filepath.Join(cwd, "bin", "mre")},
+		{"command/dot_relative", commandPath, "./mre", filepath.Join(cwd, "mre")},
+		{"command/absolute", commandPath, "/usr/bin/mre", "/usr/bin/mre"},
+		{"file/empty", filePath, "", ""},
+		{"file/bare", filePath, "martian_shell.py", filepath.Join(cwd, "martian_shell.py")},
+		{"file/relative", filePath, "py/martian_shell.py", filepath.Join(cwd, "py", "martian_shell.py")},
+		{"file/absolute", filePath, "/opt/martian_shell.py", "/opt/martian_shell.py"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := absOrSelf(tc.in); got != tc.want {
-				t.Errorf("absOrSelf(%q) = %q, want %q", tc.in, got, tc.want)
+			got, err := tc.resolve(tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got != tc.want {
+				t.Errorf("resolve(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRunBakesBareShellAbsolute checks a bare -shell is baked as the file in
+// the working directory: mre runs the adapter from the task's files dir, so
+// a bare name there names no file.
+func TestRunBakesBareShellAbsolute(t *testing.T) {
+	mro := writeSharedPipeline(t, t.TempDir(), "input.txt")
+	t.Chdir(t.TempDir())
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := t.TempDir()
+	if err := run([]string{"-o", out, "-shell", "martian_shell.py", mro}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(out, "modules", "pipe_EP.nf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "-shell '" + filepath.Join(cwd, "martian_shell.py") + "'"; !strings.Contains(string(body), want) {
+		t.Errorf("generated module does not bake %s:\n%s", want, body)
 	}
 }
 

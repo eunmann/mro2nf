@@ -129,7 +129,10 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   inside the roots, §10),
   and `-version`.
 - It resolves the stage source paths and the runtime tool paths to **absolute**
-  paths (so the generated project runs from any working directory), records the
+  paths (so the generated project runs from any working directory) — except a
+  bare `-mre`/`-mrjob` name or comp/exec stage `src`, which is exec'd and so
+  stays a PATH command; `-shell` is the interpreter's script argument, so even
+  a bare name is a file in the working directory — records the
   `.mro`'s directory as `MRODir` (used to resolve relative file defaults — see
   §8) and the `-mropath` roots as `MROPath`, and calls `emit.Emit(prog, opts)`.
 
