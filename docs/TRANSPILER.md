@@ -221,7 +221,8 @@ token.
 `meta`), the mro2nf build, and its fork records and staged dirs, not the
 invocation. PLAN runs uncached and writes the invocation to a path constant per
 session, `<workDir>/mro2nf-plan/<sessionId>/<entry .mro>`, which each task
-links in by that path instead of staging it. Entry forks reach tasks as values,
+reads by that path (`-mro`) and compiles as the entry file (`-as`) instead of
+staging it. Entry forks reach tasks as values,
 so no task stages a file of PLAN's.
 
 **Instances.** An instance's key is the ordinal of its fork of each of its

@@ -91,7 +91,7 @@ cd out && nextflow run main.nf  # results land in out/results/
 | Flag | Meaning |
 |---|---|
 | `-o <dir>` | output directory for the Nextflow project (default `out`) |
-| `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp`; the `.mro`'s directory is searched after it, the working directory never |
+| `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp`; as in `mrp`, the `.mro`'s own directory is searched first, for its own includes and its stages' code only, and the working directory never |
 | `-mre <path>` | path to the `mre` shim binary as it will appear **at run time** (a bare name is looked up on `PATH`) |
 | `-shell <path>` | **required**: path to `martian_shell.py` in Martian's adapters dir (`<adapters>/python/martian_shell.py`), which the tasks run the adapter from (a relative path, even a bare name, resolves against the working directory) |
 | `-mrjob <path>` | path to `mrjob`, which runs the py and comp stages (default: the `mrjob` beside `-mre`; a bare name is looked up on `PATH`) |
