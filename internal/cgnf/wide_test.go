@@ -249,7 +249,7 @@ func readNames(expr string) []string {
 
 var (
 	publishedNode = regexp.MustCompile(`PUBLISHED\(\w+, (\d+), `)
-	publishedSub  = regexp.MustCompile(`(W\d+_\w+)\.out\.published`)
+	publishedSub  = regexp.MustCompile(`(W\d+_\w+)\.out\.` + publishedChannel)
 )
 
 // checkPublished checks that the n nodes the pipeline outs read each
@@ -262,10 +262,10 @@ func checkPublished(t *testing.T, bodies []workflowBody, n int) {
 	nodes, mixed, emitted := map[string]int{}, map[string]int{}, map[string]bool{}
 
 	for _, b := range bodies {
-		emitted[b.name] = slices.Contains(b.emits, "published")
+		emitted[b.name] = slices.Contains(b.emits, publishedChannel)
 
 		for _, l := range b.main {
-			if strings.HasPrefix(l, "published = channel.empty().mix(") {
+			if strings.HasPrefix(l, publishedChannel+" = channel.empty().mix(") {
 				checkMix(t, b, l, emitted[b.name])
 				countMatches(nodes, publishedNode, l)
 				countMatches(mixed, publishedSub, l)
@@ -284,7 +284,7 @@ func checkPublished(t *testing.T, bodies []workflowBody, n int) {
 	}
 
 	entry := slices.IndexFunc(bodies, func(b workflowBody) bool { return b.name == "{" })
-	if entry < 0 || !slices.Contains(bodies[entry].main, "outs_in = published.toList().map { xs -> ordered(xs) }") {
+	if entry < 0 || !slices.Contains(bodies[entry].main, "outs_in = "+publishedChannel+".toList().map { xs -> ordered(xs) }") {
 		t.Errorf("OUTS does not read the entry workflow's published mix")
 	}
 }

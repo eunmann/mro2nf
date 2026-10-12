@@ -60,8 +60,10 @@ type scope struct {
 	published    []string
 }
 
-// publishedChannel is the channel of a workflow's published statement.
-const publishedChannel = "published"
+// publishedChannel is the channel of a workflow's published statement. It
+// is not "published": Nextflow 26.10 binds that name in every workflow as a
+// Map, and assigning a channel to it fails the run.
+const publishedChannel = "outs_pub"
 
 // unit is the call of sub-workflow sub or, when sub is nil, node's wiring.
 type unit struct {
