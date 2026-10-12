@@ -172,23 +172,29 @@ func TestStageOutputLinkOutsideWorkCopiedLocally(t *testing.T) {
 	}
 }
 
-// TestMonitorMemoryKillFailsLikeMrp: -monitor matches mrp's --monitor
-// (#473). mrjob kills FLAKY, which holds 0.75 GB, at its 0.5 GB request
-// and writes "Stage exceeded its memory quota", which mrp retries only
-// under --auto-adjust-memory (core/runtime.go:86 getRetryRegexps), so a
-// real mrp --monitor run of flaky_retry fails FLAKY after one job. The run
-// fails with FLAKY's error after one attempt.
+// TestMonitorMemoryKillFailsLikeMrp: --mro2nf_monitor true matches mrp's
+// --monitor (#473). mrjob kills FLAKY, which holds 0.75 GB, at its 0.5 GB
+// request and writes "Stage exceeded its memory quota", which mrp retries
+// only under --auto-adjust-memory (core/runtime.go:86 getRetryRegexps), so
+// a real mrp --monitor run of flaky_retry fails FLAKY after one job. The
+// run fails with FLAKY's error after one attempt. Under --mro2nf_monitor
+// false, a string at launch, nothing enforces the request, as under mrp
+// without --monitor, and the run succeeds.
 func TestMonitorMemoryKillFailsLikeMrp(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	proj := transpile(t, "flaky_retry", "-monitor")
+	proj := transpile(t, "flaky_retry")
 
-	o, names := nextflowRunOutcome(t, proj)
+	o, names := nextflowRunOutcome(t, proj, "--mro2nf_monitor", "true")
 	if want := failedIn(failError, "FLAKY"); !o.equal(want) {
 		t.Errorf("outcome %s, want mrp's %s", o, want)
 	}
 
 	if n := len(slices.DeleteFunc(names, func(s string) bool { return !strings.Contains(s, "FLAKY") })); n != 1 {
 		t.Errorf("%d FLAKY attempts, want 1: mrp does not retry a memory-quota kill", n)
+	}
+
+	if err := runNextflow(t, transpile(t, "flaky_retry"), "--mro2nf_monitor", "false"); err != nil {
+		t.Errorf("--mro2nf_monitor false: %v", err)
 	}
 }

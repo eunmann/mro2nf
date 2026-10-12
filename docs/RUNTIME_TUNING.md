@@ -22,7 +22,7 @@ process {
 ```
 
 Such an overlay only sizes the task: the stage still sees its `.mro` request in
-`__mem_gb`/`__threads` and `_jobinfo`, and `-monitor` still enforces that
+`__mem_gb`/`__threads` and `_jobinfo`, and `--mro2nf_monitor true` still enforces that
 request.
 
 ## Scheduler throttling

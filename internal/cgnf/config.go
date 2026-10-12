@@ -34,10 +34,12 @@ params.mro2nf_mre = 'mre'
 params.mro2nf_mrjob = null
 params.mro2nf_adapters = null
 
+// mrp's --monitor: mrjob enforces each job's memory and thread limits.
+params.mro2nf_monitor = false
+
 `)
 
 	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n", gstr(p.src.Invocation.Call))
-	fmt.Fprintf(&b, "params.mro2nf_monitor = %t\n", p.opts.Monitor)
 	fmt.Fprintf(&b, "params.mro2nf_confine = %t\n\n", p.opts.Confine)
 
 	b.WriteString(`// The entry file values a run stages: a head-node path where the profile

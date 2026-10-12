@@ -473,9 +473,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "typedmap_out"},
 	{name: "vmem_stage"},
 	{name: "wildcard"},
-	// The stage holds 0.75 GB against its 0.5 GB request. Without -monitor
+	// The stage holds 0.75 GB against its 0.5 GB request. Without --monitor
 	// neither runner enforces that, so both succeed;
-	// TestMonitorMemoryKillFailsLikeMrp covers the -monitor kill.
+	// TestMonitorMemoryKillFailsLikeMrp covers the monitor kill.
 	{name: "flaky_retry"},
 	// #324: a split returning no chunks still runs the join.
 	{name: "split_no_chunks"},
@@ -786,11 +786,11 @@ func mrpOutcome(ctx context.Context, bin, dir, tmp string) (runOutcome, error) {
 
 // nextflowRunOutcome runs a transpiled project and classifies the run from the
 // FAILED attempts in its trace. It also returns the task name of every attempt
-// the trace lists.
-func nextflowRunOutcome(t *testing.T, proj string) (runOutcome, []string) {
+// the trace lists. args are the run's launch args.
+func nextflowRunOutcome(t *testing.T, proj string, args ...string) (runOutcome, []string) {
 	t.Helper()
 
-	o, attempts, err := nextflowOutcome(proj, runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"))
+	o, attempts, err := nextflowOutcome(proj, runNextflowAllowingFailedAttempts(t, proj, append([]string{"-with-trace", "trace.txt"}, args...)...))
 	if err != nil {
 		t.Fatal(err)
 	}

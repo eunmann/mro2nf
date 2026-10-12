@@ -110,9 +110,9 @@ too.
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out`, `dir_hidden` |
 | stage output validation (mrp `verifyOutput`) | ✅ `mre post` checks a stage's final outs with Martian's `ValidateOutputs` and fails the task before any consumer binds them | e2e `TestInvalidOutputFailsLikeMrp`, `TestMrpDiffFailureParity` (`missing_struct_key`, `bad_out_type`); unit `TestPostRejectsInvalidOuts` |
 | ASSERT vs retryable-error classification | ✅ `mre run` exits 42 for an `_assert`, 75 for a failure a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` matches, and 1 for any other; the config retries only 75 and a task's signal exits | unit `TestOutcomes`, `TestExitCode`; e2e `TestAssertTerminatesWithoutRetry`, `TestMrpDiffFailureParity` (`assert_min`, `assert_split`, `assert_join`, `stage_raise`) |
-| OOM escalation | ✅ as in `mrp` without `--auto-adjust-memory`, which has no `mro2nf` counterpart, a stage `-monitor` kills over its request fails the run. Without `-monitor`, a task the executor killed by a signal is retried with its memory times the attempt; the stage keeps seeing its request in `_jobinfo` and `__mem_gb` | unit `TestEmitRetriesWhatMrpRetries`, `TestOutcomes`; e2e `TestMonitorMemoryKillFailsLikeMrp` (`flaky_retry`) |
+| OOM escalation | ✅ as in `mrp` without `--auto-adjust-memory`, which has no `mro2nf` counterpart, a stage killed over its request under `--mro2nf_monitor true` fails the run. Without it, a task the executor killed by a signal is retried with its memory times the attempt; the stage keeps seeing its request in `_jobinfo` and `__mem_gb` | unit `TestEmitRetriesWhatMrpRetries`, `TestOutcomes`; e2e `TestMonitorMemoryKillFailsLikeMrp` (`flaky_retry`) |
 | thread-limit env vars (mrp's `thread_envs`) | ✅ every job runs with mrp's thread env vars set to its threads rounded up, over any inherited value (`internal/job` `threadEnvs`) | unit `TestThreadEnvs` |
-| `--monitor` memory enforcement | ✅ with `mro2nf -monitor`: `_jobinfo`'s `monitor_flag`, which `mrjob` enforces as under mrp | unit `TestMonitorFlag` |
+| `--monitor` memory enforcement | ✅ with `nextflow run main.nf --mro2nf_monitor true`: `_jobinfo`'s `monitor_flag`, which `mrjob` enforces as under mrp | unit `TestMonitorFlag` |
 
 ## Outputs / storage — storage-management
 
@@ -185,7 +185,7 @@ fixture.
     `_assert`, 75 for a failure `mrp`'s `retry_on` patterns name transient,
     and 1 otherwise; the config retries only 75 and a task's signal exits, as
     `mrp` retries only transient failures (#299).
-  - **`--monitor` memory enforcement** — `mro2nf -monitor` sets `_jobinfo`'s
+  - **`--monitor` memory enforcement** — `--mro2nf_monitor true` sets `_jobinfo`'s
     `monitor_flag`, which `mrjob` enforces as under `mrp`.
   - **VDR rolling/strict mid-run deletion** — not implemented: the whole `work/`
     tree is retained (higher peak disk, identical outputs).

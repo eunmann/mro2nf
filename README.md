@@ -87,7 +87,6 @@ cd out && nextflow run main.nf  # results land in out/results/
 |---|---|
 | `-o <dir>` | output directory for the Nextflow project (default `out`) |
 | `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp`; as in `mrp`, the `.mro`'s own directory is searched first, for its own includes and its stages' code only, and the working directory never |
-| `-monitor` | mrp's `--monitor`: `mrjob` enforces each job's memory and thread limits |
 | `-confine-outputs` | fail a stage task whose output resolves outside its work dir instead of copying it in, for a project run under an isolating executor such as docker |
 | `-version` | print the mro2nf version and exit |
 
@@ -96,8 +95,10 @@ the host, the runtime image in a container), which runs py and comp stages
 under the `mrjob` beside it and py stages with the Martian adapters it embeds.
 A run names others with `--mro2nf_mre <path>`, `--mro2nf_mrjob <path>` and
 `--mro2nf_adapters <dir>` (Martian's adapters dir, holding
-`python/martian_shell.py`), such as a pipeline bundle's own Martian runtime. A
-launch-time mrp `--overrides` file is tracked by #301.
+`python/martian_shell.py`), such as a pipeline bundle's own Martian runtime.
+`--mro2nf_monitor true` is mrp's `--monitor`: `mrjob` enforces each job's
+memory and thread limits. A launch-time mrp `--overrides` file is tracked by
+#301.
 
 ### Targets: one project, chosen with `-profile`
 
@@ -245,7 +246,8 @@ map calls, decided per fork; structs and typed maps (including `map<S>.field`
 projection); file, array, map, and struct-of-file outputs; the `py`, `exec`,
 and `comp` adapters; dynamic per-chunk resources; content-based retry (only
 the failures mrp retries, a signal, ENOMEM or a scheduler failure, retry, with
-escalated memory; an ASSERT or a stage exception ends the run); and `-monitor`.
+escalated memory; an ASSERT or a stage exception ends the run); and mrp's
+`--monitor` (`--mro2nf_monitor true`).
 
 Resources track mrp, so a transpiled run schedules and finishes comparably.
 Per-chunk `cpus` and `memory`, the split-returned `join` override, and the

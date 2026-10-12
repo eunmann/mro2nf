@@ -1,7 +1,7 @@
 # Failure-path fixture: the stage requests 0.5 GB but holds about 0.75 GB
-# resident. Under -monitor, as under mrp --monitor, the kill at its 0.5 GB
-# request fails the run, which mrp does not retry without
-# --auto-adjust-memory (TestMonitorMemoryKillFailsLikeMrp). Without -monitor
+# resident. Under --mro2nf_monitor true, as under mrp --monitor, the kill at
+# its 0.5 GB request fails the run, which mrp does not retry without
+# --auto-adjust-memory (TestMonitorMemoryKillFailsLikeMrp). Without monitor
 # neither mrp nor mro2nf enforces the request, so TestMrpDiff diffs the plain
 # run, in which the stage sees its 0.5 GB request.
 stage FLAKY(

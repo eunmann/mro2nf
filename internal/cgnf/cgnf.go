@@ -46,8 +46,6 @@ type Options struct {
 	OutDir string
 	// MroPaths are the absolute include paths the invocation compiles with.
 	MroPaths []string
-	// Monitor is mrp's --monitor.
-	Monitor bool
 	// Confine fails a stage task whose output resolves outside its work
 	// dir instead of copying it in (mre run -confine).
 	Confine bool

@@ -115,8 +115,6 @@ with `mrp`'s message, and no project is written.
   `mrp`, the entry's own directory is searched first for the entry's includes
   and its stages' code only: every compile of the run's invocation, in the
   transpiler and in each task, compiles it as the entry file.
-- `-monitor`: mrp's `--monitor`; `mrjob` enforces each job's memory and thread
-  limits.
 - `-confine-outputs`: fail a stage task whose output resolves outside its work
   dir instead of copying it in (§7) on the local and grid profiles too; the
   container profiles always confine.
@@ -181,6 +179,10 @@ records mre wrote; it parses no stage-controlled JSON.
   it embeds (§6). A run names other tools with `--mro2nf_mre`,
   `--mro2nf_mrjob` and `--mro2nf_adapters`, such as a pipeline bundle's own
   Martian runtime, so the project names no host path of the tools.
+  `--mro2nf_monitor true` is `mrp`'s `--monitor`: `mrjob` enforces each job's
+  memory and thread limits. A boolean param is on only when it is `true` or
+  the string `'true'`, as a launch's `--<name> <value>` sets it under the v2
+  parser or `NXF_DISABLE_PARAMS_TYPE_DETECTION` (§8).
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
   values a run stages (§8), and `mro2nf_image` the one image the container
   profiles run every task in, which they require (`mro2nf_require_image`,
@@ -190,7 +192,7 @@ records mre wrote; it parses no stage-controlled JSON.
   the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
   such as the executor's out-of-memory kill. An ASSERT (42), a stage exception
   or a failed `mre` step ends the run on its first attempt. A retry gets the
-  stage's memory times the attempt, except under `-monitor`, where `mrjob`
+  stage's memory times the attempt, except under monitor, where `mrjob`
   kills the stage at its own request as `mrp` does and `mrp` does not retry
   that kill.
 - One `accelerator` rule, evaluated per task, that requests N GPUs for a job
@@ -339,9 +341,10 @@ type manifest from the invocation's own declarations.
   <meta>/files <journal>`. Exec stages run directly. `-mrjob` defaults to the
   `mrjob` beside mre's binary, and `-adapters` to Martian's adapters mre
   embeds (`vendor-martian/python`, the pinned module's `adapters/python`),
-  which a py stage's job writes below its work dir, as `_mre_adapters`. Before the job, mre writes
-  what `mrp` writes, through Martian's own types and metadata writer: `_args`
-  (the chunk or join def's resolved resources over the bindings), `_jobinfo`,
+  which a py stage's job writes below its work dir, as `_mre_adapters`.
+  Before the job, mre writes what `mrp` writes, through Martian's own types and
+  metadata writer: `_args` (the chunk or join def's resolved resources over the
+  bindings), `_jobinfo`,
   the pre-populated `_outs`, `_chunk_defs` and `_chunk_outs` for a join, and the
   files, tmp and journal dirs. `_jobinfo` carries `mrp`'s name,
   `ID.<psid>.<fqid>.<fork id>[.chnkN]`, the top-level call's invocation, the

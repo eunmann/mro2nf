@@ -353,7 +353,7 @@ func TestRunRejectsDeletedFlags(t *testing.T) {
 	for _, name := range []string{
 		"emitter=v2", "native", "inline-pipelines=false", "target=awsbatch", "container=img",
 		"allow-external-files", "fold-disables", "fuse-chains", "native-runner",
-		"mre=/opt/mre", "shell=martian_shell.py", "mrjob=/opt/mrjob", "config=.mro2nf.yml",
+		"mre=/opt/mre", "shell=martian_shell.py", "mrjob=/opt/mrjob", "config=.mro2nf.yml", "monitor",
 	} {
 		t.Run(name, func(t *testing.T) {
 			flagName, _, _ := strings.Cut(name, "=")
