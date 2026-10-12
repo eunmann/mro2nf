@@ -59,53 +59,60 @@ Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleAr
 
 ## Run on AWS Batch + S3
 
-These runs take the cloud targets, which mro2nf does not emit until #489:
-the steps below are the shape those targets run in.
+One transpiled project runs on every target; `-profile` chooses it
+(`docs/TRANSPILER.md` §9). Both runs use two images in the ECR repo: the
+runtime image (`deploy/runtime/Dockerfile`, which PLAN and OUTS run in) and
+the pipeline's stage image, which `./build.sh` builds FROM it.
 
 ```bash
-# 1. transpile for awsbatch (bakes /opt/mro2nf paths + Dockerfile + runtime/ context)
-./mro2nf -o out -target awsbatch -container <EcrRepoUri>:latest \
-    -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
+# 1. transpile (the same project serves Batch and HealthOmics)
+./mro2nf -o out -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
     -mropath testdata/split_test testdata/split_test/pipeline.mro
 
-# 2. build + push the runtime image
-cd out
+# 2. build + push the runtime and stage images (linux/amd64 compute)
 aws ecr get-login-password --region <Region> | docker login --username AWS --password-stdin <EcrRepoUri>
-docker build --platform linux/amd64 -t <EcrRepoUri>:latest .
-docker push <EcrRepoUri>:latest
+docker build --platform linux/amd64 -t <EcrRepoUri>:runtime -f deploy/runtime/Dockerfile .
+docker push <EcrRepoUri>:runtime
+cd out
+./build.sh <EcrRepoUri>:split_test --platform linux/amd64 --build-arg RUNTIME=<EcrRepoUri>:runtime
+docker push <EcrRepoUri>:split_test
 
-# 3. run (override inputs with a -params-file if desired)
-nextflow run main.nf \
-    --aws_queue <BatchJobQueue> --aws_region <Region> \
-    --container <EcrRepoUri>:latest \
+# 3. run; a site config names the queue and region
+cat > batch.config <<'EOF'
+process.queue = '<BatchJobQueue>'
+aws.region = '<Region>'
+EOF
+nextflow run main.nf -profile awsbatch -c batch.config \
+    --mro2nf_image <EcrRepoUri>:split_test --mro2nf_runtime_image <EcrRepoUri>:runtime \
     -work-dir s3://<WorkBucketName>/work \
-    --aws_outdir s3://<WorkBucketName>/results
+    --outdir s3://<WorkBucketName>/results
 ```
 
-Keep `--aws_outdir`: without it the run publishes nothing, and its outputs
-exist only in the `work/` dir, which expires after 14 days.
+Keep `--outdir` on S3: the default `results` publishes to the head node's
+working dir, and the work dir expires after 14 days. Entry files are staged
+from S3: pass them as `s3://` URIs (a `-params-file` or `--<input>`); the
+`awsbatch` profile refuses a head-node path.
 
 ## Run on AWS HealthOmics
 
 ```bash
-# 1. transpile for healthomics (also emits parameter-template.json + package.sh)
-./mro2nf -o out -target healthomics -container <EcrRepoUri>:latest \
-    -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
-    -mropath testdata/split_test testdata/split_test/pipeline.mro
-
-# 2. build + push the image (same as Batch step 2)
-# 3. package + register + run
-cd out && bash package.sh   # builds workflow.zip
+# 1-2. transpile and push the two images, as for Batch
+# 3. package with both images pinned by digest, then register + run
+cd out
+STAGE=$(docker inspect --format '{{index .RepoDigests 0}}' <EcrRepoUri>:split_test)
+RUNTIME=$(docker inspect --format '{{index .RepoDigests 0}}' <EcrRepoUri>:runtime)
+./package.sh "$STAGE" "$RUNTIME"   # builds workflow.zip
 WF=$(aws omics create-workflow --engine NEXTFLOW --main main.nf \
     --definition-zip fileb://workflow.zip \
     --parameter-template file://parameter-template.json \
     --query 'id' --output text)
 aws omics start-run --workflow-id "$WF" --role-arn <OmicsRoleArn> \
-    --output-uri s3://<WorkBucketName>/omics-out \
-    --parameters '{"container":"<EcrRepoUri>:latest"}'
+    --output-uri s3://<WorkBucketName>/omics-out
 ```
 
-> Provide a **linux/amd64** `mre` (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o mre ./cmd/mre`).
+The workflow pins both images, so every run executes the code it was
+validated with; the parameter template declares only the pipeline's inputs,
+so a run cannot name another image.
 
 ## Teardown
 

@@ -84,7 +84,7 @@ func (p *project) outs(g *gen) {
 	}
 
 	g.linef("outs_in = %s", ups)
-	g.linef("OUTS(call.map { c -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(\"${projectDir}/_assets/types.json\"))", p.graphMeta("call: c"))
+	g.linef("OUTS(call.map { c -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(\"${projectDir}/_assets/types.json\"), file(\"${projectDir}/%s\"))", p.graphMeta("call: c"), mroAssets)
 }
 
 // shellQuote is s single-quoted for the shell.

@@ -130,7 +130,7 @@ too.
 |---|---|---|
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles; the local one clamps a request to the host | e2e `TestLocalClampRunsOversizedRequest` |
 | a failure is retried only when `mrp` retries it | ✅ `mre` exits 75 for a job failure a line of whose `_errors` matches a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` (a signal, ENOMEM, a scheduler failure); the config retries only exit 75 and a task's signal exits (137, 143), `maxRetries 2` as `default_retries`. An ASSERT (42), a stage exception or a failed `mre` step ends the run on its first attempt | unit `TestOutcomes`, `TestExitCode`, `TestEmitRetriesWhatMrpRetries`, `TestRetryPatternsMatchModule`; e2e `TestAssertTerminatesWithoutRetry`, `TestMrpDiffFailureParity`, `TestMonitorMemoryKillFailsLikeMrp` |
-| isolated containers, AWS Batch, HealthOmics | ❌ not yet: the project runs on a local or shared filesystem (#489) | — |
+| isolated containers, AWS Batch, HealthOmics | ✅ profiles of one project (`docker`, `awsbatch`, `healthomics`): every task stages what it reads, the run's call reaches it as a value, stage tasks run in the stage image the generated Dockerfile builds FROM the release runtime image, PLAN and OUTS in the runtime image, and the HealthOmics package pins both by digest. Live AWS runs are manual (`LIVE_AWS_TEST.md`) | e2e `TestDockerIsolation`, `TestDockerEntryOverrides`, `TestGeneratedAWSBatchImage`, `TestGeneratedHealthOmicsPackage`; unit `TestEmitTargetsAsProfiles`, `TestEmitStageImageRecipe`, `TestEmitHealthOmicsTemplate` |
 | `mrp --overrides` (per-stage resource retune at launch) | ❌ not yet (#301); retune a stage with a `-c` config's `withName:` selector on its node alias. See `RUNTIME_TUNING.md` | — |
 | `--maxjobs` / `--jobinterval` / `--localcores` / `--localmem` (throttling) | ✅ Nextflow `executor.queueSize` / `submitRateLimit` / `cpus` / `memory`; documented in `RUNTIME_TUNING.md` | — |
 | `--profile` / `--inspect` / `--onfinish` (profile, dry-run, hook) | ✅ Nextflow `-with-trace`/`-with-report`, `-preview`, `workflow.onComplete`; see `RUNTIME_TUNING.md` | — |
@@ -203,4 +203,4 @@ fixture.
   *declared* file leaves; a path a stage bakes into another file's *content*
   (e.g. a JSON manifest that names other files by absolute path) is invisible
   to the type walk and cannot be relocated. On a shared filesystem it resolves,
-  as under `mrp`; an isolated container downstream would not see it (#489).
+  as under `mrp`; an isolated container downstream does not see it.

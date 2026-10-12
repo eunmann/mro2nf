@@ -100,11 +100,35 @@ cd out && nextflow run main.nf  # results land in out/results/
 | `-config <path>` | path to a [`.mro2nf.yml`](#mro2nfyml-project-defaults) of per-project flag defaults (default: probed alongside the `.mro`) |
 | `-version` | print the mro2nf version and exit |
 
-The tool paths are baked into `nextflow.config`, so set them to the paths that
-will exist **where the pipeline runs** (the local repo, or shared-filesystem
-cluster paths). The project runs on a local or shared filesystem;
-isolated-container and cloud targets are tracked by #489, and a launch-time
-mrp `--overrides` file by #301.
+The tool paths are baked into `nextflow.config` for the local and grid
+profiles, so set them to the paths that exist **where those runs happen** (the
+local repo, or shared-filesystem cluster paths). A launch-time mrp
+`--overrides` file is tracked by #301.
+
+### Targets: one project, chosen with `-profile`
+
+Every target runs the same generated project; `nextflow run -profile <name>`
+chooses it:
+
+| Profile | Runs on | Needs |
+|---|---|---|
+| `standard` (default), `slurm`, `sge`, `lsf`, `pbs` | the host's tools and code, a shared filesystem | — |
+| `docker` | local docker, each task in its own container | `--mro2nf_image <tag>` from `./build.sh <tag>` |
+| `awsbatch` | AWS Batch over an S3 work dir | the stage image in ECR (`--mro2nf_image`), `-work-dir s3://…`, `process.queue` and `aws.region` in a `-c` config |
+| `healthomics` | AWS HealthOmics | `./package.sh <stage image>@sha256:… <runtime image>@sha256:…`, which makes it the workflow's own config |
+
+The container profiles run every stage task in the **stage image**, which
+`./build.sh <tag>` builds from the project's `Dockerfile`: `FROM` mro2nf's
+release runtime image (`ghcr.io/eunmann/mro2nf-runtime:<version>`, built from
+`deploy/runtime/Dockerfile`, the one definition of `/opt/mro2nf`), plus the
+pipeline's code, each root at its host path below `/opt/mro2nf/code`, passed
+as a named build context so the project copies no code. `--build-arg
+RUNTIME=<image>` names another runtime image; `--build-arg BASE=<image>`
+layers the runtime onto a toolkit image. PLAN and OUTS, which run `mre`
+alone, run in the runtime image itself (`--mro2nf_runtime_image`). Entry file
+values are staged into the tasks that read them (`s3://` URIs on every
+profile); see `docs/TRANSPILER.md` §8 and §9, and `docs/LIVE_AWS_TEST.md` for
+the AWS runs.
 
 ### `.mro2nf.yml` project defaults
 

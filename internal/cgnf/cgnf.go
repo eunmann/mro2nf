@@ -27,6 +27,7 @@ var stageModule string
 const (
 	dirPerm  = 0o755
 	filePerm = 0o644
+	execPerm = 0o755
 )
 
 var (
@@ -108,15 +109,46 @@ func Emit(entry string, opts Options) error {
 		return err
 	}
 
+	if err := p.addTargetFiles(files); err != nil {
+		return err
+	}
+
 	if err := os.RemoveAll(filepath.Join(opts.OutDir, mroAssets)); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(files)) {
-		if err := writeFile(filepath.Join(opts.OutDir, name), files[name]); err != nil {
+		if err := writeFile(filepath.Join(opts.OutDir, name), files[name], fileMode(name)); err != nil {
 			return err
 		}
 	}
+
+	return nil
+}
+
+// addTargetFiles adds what the container profiles need beside the
+// project: their configs, the stage image's recipe and its build script,
+// and the HealthOmics package script and parameter template.
+func (p *project) addTargetFiles(files map[string]string) error {
+	roots, commands, err := p.codeRoots()
+	if err != nil {
+		return err
+	}
+
+	tmpl, err := p.parameterTemplate()
+	if err != nil {
+		return err
+	}
+
+	maps.Copy(files, map[string]string{
+		"conf/container.config":   containerConfig(),
+		"conf/healthomics.config": healthomicsConfig,
+		"Dockerfile":              p.dockerfile(roots, commands),
+		".dockerignore":           dockerignore,
+		"build.sh":                buildScript(roots),
+		"package.sh":              packageScript,
+		"parameter-template.json": tmpl,
+	})
 
 	return nil
 }
@@ -194,12 +226,16 @@ func (p *project) stage(fqid string) (*syntax.Stage, error) {
 	return s, nil
 }
 
-func writeFile(path, body string) error {
+func writeFile(path, body string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}
 
-	if err := os.WriteFile(path, []byte(body), filePerm); err != nil {
+	if err := os.WriteFile(path, []byte(body), mode); err != nil {
+		return fmt.Errorf("emit: %w", err)
+	}
+
+	if err := os.Chmod(path, mode); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}
 

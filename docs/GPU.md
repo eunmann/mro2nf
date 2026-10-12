@@ -36,9 +36,10 @@ the stage and return `__special = "gpu"` for its chunks. One rule in the
 generated `nextflow.config` evaluates this per task (a process directive cannot
 read a task's inputs on Nextflow 24.04).
 
-The project runs on a local or shared filesystem; the container and AWS
-setups below are what the isolated-container and cloud targets need, which
-#489 tracks.
+The `awsbatch` and `healthomics` profiles (`TRANSPILER.md` §9) run the setups
+below. A GPU stage needs a CUDA image: build the stage image with
+`./build.sh <tag> --build-arg BASE=<your CUDA image>`, which layers mro2nf's
+runtime onto it (`mre` and `mrjob` are static).
 
 On the AWS Batch and HealthOmics executors, Nextflow turns `accelerator N` into a
 GPU `resourceRequirement` on the job. That requirement is the routing signal the
@@ -90,9 +91,12 @@ without one lands on the cheaper CPU environment first. The result:
 …through the **same queue**, chosen only at launch:
 
 ```bash
-nextflow run main.nf --aws_queue <the-one-queue> --aws_region <r> \
-    --container <your-cuda-ecr-uri> -work-dir s3://<bucket>/work
+nextflow run main.nf -profile awsbatch -c batch.config \
+    --mro2nf_image <your-cuda-stage-image> -work-dir s3://<bucket>/work
 ```
+
+where `batch.config` sets `process.queue = '<the-one-queue>'` and
+`aws.region = '<r>'`.
 
 Two things to keep in mind:
 
@@ -111,8 +115,9 @@ Two things to keep in mind:
 Simpler — HealthOmics has no queues. The `accelerator N` directive routes the task
 to a GPU-backed instance, managed by the service. You only need:
 
-- the CUDA image in a **private ECR** repo in the run's region, passed as the
-  `container` run parameter, and
+- the CUDA stage image in a **private ECR** repo in the run's region, pinned
+  by digest in the package (`./package.sh <stage image>@sha256:… <runtime
+  image>@sha256:…`), and
 - (if applicable) a HealthOmics service quota that permits GPU instance families.
 
 Everything else (packaging, `parameter-template.json`) is unchanged.
@@ -136,9 +141,10 @@ decided at deploy or launch — never in the pipeline:
   environment's instance types. To use a particular GPU class, deploy a GPU
   compute environment built from those instances. There is no Batch request field
   for GPU memory, so there is nothing to put in the `.mro`.
-- **The queue** is a launch argument (`--aws_queue`), and routing is handled by the
-  ordered compute environments above.
-- **The image** is a launch argument (`--container`).
+- **The queue** is a launch setting (`process.queue`), and routing is handled
+  by the ordered compute environments above.
+- **The image** is a launch argument (`--mro2nf_image`), or pinned in the
+  HealthOmics package.
 
 The pipeline says *how many* GPUs each stage needs; the deployment decides *what
 kind* and *where they run*.

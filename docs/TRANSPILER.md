@@ -126,8 +126,8 @@ with `mrp`'s message, and no project is written.
 - `-monitor`: mrp's `--monitor`; `mrjob` enforces each job's memory and thread
   limits.
 - `-confine-outputs`: fail a stage task whose output resolves outside its work
-  dir instead of copying it in (§7), for a project run under an isolating
-  executor such as docker.
+  dir instead of copying it in (§7) on the local and grid profiles too; the
+  container profiles always confine.
 - `-config <path>`: a `.mro2nf.yml` of per-project defaults (`mre`, `shell`,
   `mrjob`, `monitor`); an explicit flag always wins.
 - `-version`.
@@ -162,7 +162,10 @@ one forked on a map call another stage feeds — is refused at transpile time.
 ```
 main.nf               ← PLAN, one process call per stage node, then OUTS: wiring only
 stage.nf              ← the one hand-written stage module every node includes
-nextflow.config       ← params, retry policy, GPU requests, trace, executor profiles
+nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
+conf/                 ← the container profiles' and the HealthOmics profile's configs
+Dockerfile, build.sh  ← the stage image the container profiles run (§9)
+package.sh, parameter-template.json ← the HealthOmics package (§9)
 _assets/mro/          ← a copy of every .mro file the entry compiles from, each
                         at its absolute path below it; PLAN compiles it
 _assets/types.json    ← the type manifest the OUTS task lays the outs out with
@@ -182,9 +185,12 @@ records mre wrote; it parses no stage-controlled JSON.
 - `params.outdir` (`results`), and `params.job_resources`, Martian's
   `MRO_JOBRESOURCES` analog: a map from a stage's `special` key to the
   `clusterOptions` of a grid executor.
-- `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
-  `mro2nf_monitor` and `mro2nf_confine`: the tools and knobs the stage module
-  reads.
+- `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_code`,
+  `mro2nf_psid`, `mro2nf_monitor` and `mro2nf_confine`: the tools, code root
+  and knobs the stage module reads; `mro2nf_host_inputs` and
+  `mro2nf_allow_remote_inputs`, the entry file values a run stages (§8); and
+  `mro2nf_image` and `mro2nf_runtime_image`, the container profiles' images
+  (§9).
 - One `params.<name> = null` per entry input (§8).
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
   the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
@@ -197,9 +203,9 @@ records mre wrote; it parses no stage-controlled JSON.
   whose special, as `mrp` resolves it, is `"gpu"` or `"gpu:N"`: the stage's own,
   or for a chunk or the join the `__special` the split returned for it (see
   [`GPU.md`](GPU.md)).
-- Task tracing, and the executor profiles: `standard` (local, clamped to the
-  host's cpus and memory with `process.resourceLimits`), `slurm`, `sge`,
-  `lsf` and `pbs`.
+- Task tracing, and the target profiles (§9): `standard` (local, clamped to
+  the host's cpus and memory with `process.resourceLimits`), `slurm`, `sge`,
+  `lsf`, `pbs`, `docker`, `awsbatch` and `healthomics`.
 
 ---
 
@@ -578,11 +584,50 @@ neither param, so a HealthOmics run cannot set them.
 
 ---
 
-## 9. Executors and resources
+## 9. Targets, executors and resources
 
-The project runs on a local or shared filesystem, under the `standard` profile
-(the local executor) or a grid profile (`-profile slurm`, `sge`, `lsf`, `pbs`).
-Isolated-container and cloud targets are tracked by #489.
+**Targets are profiles of one project** (`nextflow run -profile <name>`): the
+`.nf` files are the same everywhere, and a profile sets only where the tools
+and code are, which executor runs the tasks and in which images.
+
+- `standard` (the local executor) and the grid profiles (`slurm`, `sge`,
+  `lsf`, `pbs`) run on the host's tools (`params.mro2nf_mre`, `_mrjob`,
+  `_adapters`, the transpile's `-mre`, `-mrjob`, `-shell`) and code
+  (`params.mro2nf_code` empty: the entry `.mro`, its includes and its stages'
+  code at their host paths), on a shared filesystem.
+- The container profiles, `docker`, `awsbatch` and `healthomics`, include
+  `conf/container.config`: the tools at `/opt/mro2nf`, the code below
+  `params.mro2nf_code = /opt/mro2nf/code`, each code root at its host path
+  there, and outputs confined to the task (§7). Every stage task runs in
+  `params.mro2nf_image`, the **stage image**; PLAN and OUTS, which run `mre`
+  alone and compile the project's `.mro` copy, run in
+  `params.mro2nf_runtime_image`, mro2nf's **runtime image**, so they never pull
+  the stage image. A container profile without a stage image fails at once.
+- **One image recipe.** `deploy/runtime/Dockerfile` is the one definition of
+  `/opt/mro2nf` (`mre`, `mrjob`, Martian's adapters), published as
+  `ghcr.io/eunmann/mro2nf-runtime:<version>`; `params.mro2nf_runtime_image`
+  defaults to the tag of the build that transpiled the project. The project's
+  `Dockerfile` builds the stage image `FROM` it and copies each code root (the
+  entry's dir, the search path's roots, every `.mro` file's dir and every
+  stage's code Martian finds as a file) from a named build context
+  `./build.sh <tag>` passes, so no code is copied into the project. A stage
+  `src` found on no root (a bare command such as a compiled toolkit) must be on
+  the image's `PATH`; `--build-arg BASE=<toolkit image>` layers the runtime onto
+  such an image. `mre args` refuses a node the image compiles to another spec
+  than PLAN planned (§5), so a stale image fails loudly.
+- `docker` runs each task in a container that mounts only what it stages.
+- `awsbatch` runs on AWS Batch over an S3 work dir (`-work-dir s3://…`); every
+  task stages its inputs from S3, so nothing reads a head-node path, and a
+  head-node path as an entry file is refused (§8). Set `process.queue` and
+  `aws.region` in a `-c` config; `--outdir s3://…` publishes to S3.
+- `healthomics` (HealthOmics takes no `-profile`): `./package.sh <stage
+  image>@sha256:… <runtime image>@sha256:…` zips the files `main.nf` reads,
+  appends the two images and `includeConfig 'conf/healthomics.config'` to the
+  zip's `nextflow.config`, so the profile is the workflow's own, and publishes
+  to `/mnt/workflow/pubdir`. Both images must be pinned by digest: a workflow
+  version then runs the code it was validated with, and as
+  `parameter-template.json` declares only the entry inputs, no run can name
+  another image.
 
 - A stage's `using (threads = …, mem_gb = …)` sets each task's `cpus` (at least
   1, rounded up) and `memory` (1 GB when unset); a chunk and a join take the

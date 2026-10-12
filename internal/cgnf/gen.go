@@ -86,9 +86,15 @@ func pick(v string, idx []int) string {
 // forks of entry-fed root j, each [outer key, own ordinal, record, index
 // token].
 func (p *project) planWiring(g *gen) {
+	g.linef("if (params.mro2nf_code && !params.mro2nf_image) {")
+	g.linef("  error 'a container profile runs every stage task in params.mro2nf_image: build it with ./build.sh <tag>, then pass --mro2nf_image <tag>'")
+	g.linef("}")
 	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"))", p.values(), p.graphMeta(), mroAssets)
 	g.linef("call = PLAN.out.call")
-	g.linef("nodes = PLAN.out.nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }")
+
+	if len(p.topo.Nodes) > 0 {
+		g.linef("nodes = PLAN.out.nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }")
+	}
 
 	if len(p.readers) > 0 {
 		g.linef("entry = PLAN.out.files.combine(PLAN.out.leaves).map { fl, ll -> [files: fl.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0] + ' ' + f[1]): f[2].tokenize(',')] }, leaves: ll.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)] }] }")

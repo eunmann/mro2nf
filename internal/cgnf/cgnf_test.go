@@ -55,17 +55,24 @@ func readTree(t *testing.T, dir string) map[string]string {
 }
 
 // TestEmitProject: a project is main.nf wiring, the one stage module, the
-// config, the type manifest and a copy of the entry's .mro files; it does
-// not depend on where it is emitted.
+// config and its container profiles' configs, the type manifest, a copy of
+// the entry's .mro files, the stage image's recipe and build script, and
+// the HealthOmics package script and parameter template; it does not
+// depend on where it is emitted, and holds no other file of the pipeline's,
+// an entry file's default included (entry_file: input/default.txt).
 func TestEmitProject(t *testing.T) {
-	a, b := readTree(t, emitFixture(t, "split_test")), readTree(t, emitFixture(t, "split_test"))
+	a, b := readTree(t, emitFixture(t, "entry_file")), readTree(t, emitFixture(t, "entry_file"))
 
 	if d := cmp.Diff(a, b); d != "" {
 		t.Errorf("two emissions differ:\n%s", d)
 	}
 
-	entry := filepath.Join(fixturePath(t, "split_test"), "pipeline.mro")
-	want := []string{filepath.Join("_assets/mro", entry), "_assets/types.json", "main.nf", "nextflow.config", "stage.nf"}
+	entry := filepath.Join(fixturePath(t, "entry_file"), "pipeline.mro")
+	want := []string{
+		".dockerignore", "Dockerfile", filepath.Join("_assets/mro", entry), "_assets/types.json", "build.sh",
+		"conf/container.config", "conf/healthomics.config", "main.nf", "nextflow.config", "package.sh",
+		"parameter-template.json", "stage.nf",
+	}
 
 	if d := cmp.Diff(want, slices.Sorted(maps.Keys(a))); d != "" {
 		t.Errorf("project files (-want +got):\n%s", d)

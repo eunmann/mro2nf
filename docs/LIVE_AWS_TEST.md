@@ -4,8 +4,10 @@
 > emitter's `-target awsbatch` and `-target healthomics` projects. The
 > call-graph emitter has no `-target` or `-container` flag, and the runbooks
 > named below (`aws_run.sh`, `aws_healthomics.sh`) were deleted with those
-> targets; only `scripts/aws/normcmp.py` remains. Isolated-container and cloud
-> targets return under #489. Every flag, file and make target the report names
+> targets; only `scripts/aws/normcmp.py` remains. The targets are now profiles
+> of one project (`docs/TRANSPILER.md` §9); `deploy/awsbatch-cdk/README.md`
+> has the commands to run one on AWS Batch and HealthOmics, which no run since
+> has repeated live. Every flag, file and make target the report names
 > is the old emitter's, and the `manifest.json.gz` its alignment check reads is
 > no longer emitted: the OUTS task publishes only the `outs/` tree and
 > `pipeline_outs.json`.
