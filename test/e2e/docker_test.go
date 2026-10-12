@@ -11,12 +11,15 @@ package e2e
 // fails here while the local suite still passes.
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,16 +119,99 @@ func pipelineImage(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 
-	recipe := filepath.Join(t.TempDir(), "Dockerfile")
-	writeFileT(t, recipe, "FROM "+runtimeImage(t)+"\nCOPY [\".\", "+string(dest)+"]\n")
-
 	tag := checkoutImage("mro2nf-pipeline-" + strings.ToLower(name))
 
-	if out, err := exec.Command("docker", "build", "-q", "-t", tag, "-f", recipe, dir).CombinedOutput(); err != nil {
+	cmd := exec.Command("docker", "build", "-q", "-t", tag, "-")
+	cmd.Stdin = codeContext(t, dir, "FROM "+runtimeImage(t)+"\nCOPY [\"code\", "+string(dest)+"]\n")
+
+	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("docker build %s: %v\n%s", tag, err, out)
 	}
 
 	return tag
+}
+
+// fixtureDataDirs hold a fixture's entry files and goldens, which a run
+// reads only through what its tasks stage, so the image must not hold them.
+var fixtureDataDirs = []string{"input", "expected"}
+
+// codeContext returns a docker build context, as a tar stream, of recipe as
+// its Dockerfile and the fixture at dir under code/, less its data dirs.
+func codeContext(t *testing.T, dir, recipe string) io.Reader {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	tw := tar.NewWriter(&buf)
+
+	if err := tw.WriteHeader(&tar.Header{Name: "Dockerfile", Mode: 0o644, Size: int64(len(recipe))}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := tw.Write([]byte(recipe)); err != nil {
+		t.Fatal(err)
+	}
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return fmt.Errorf("relativize %s: %w", path, err)
+		}
+
+		if d.IsDir() && slices.Contains(fixtureDataDirs, rel) {
+			return filepath.SkipDir
+		}
+
+		return addTarEntry(tw, path, filepath.ToSlash(filepath.Join("code", rel)), d)
+	})
+	if err != nil {
+		t.Fatalf("tar the code of %s: %v", dir, err)
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	return &buf
+}
+
+// addTarEntry writes the file or directory at path to tw as name, keeping
+// its mode, so a stage stays executable in the image.
+func addTarEntry(tw *tar.Writer, path, name string, d fs.DirEntry) error {
+	info, err := d.Info()
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	hdr, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		return fmt.Errorf("tar header of %s: %w", path, err)
+	}
+
+	hdr.Name = name
+
+	if err := tw.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("write tar header of %s: %w", path, err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	if _, err := tw.Write(raw); err != nil {
+		return fmt.Errorf("tar %s: %w", path, err)
+	}
+
+	return nil
 }
 
 // runDocker runs proj, transpiled from the fixture at dir, under its docker
