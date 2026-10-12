@@ -3,7 +3,8 @@
 > **Historical (2026-10-11).** This audit describes the pre-call-graph emitter.
 > The files it cites in `internal/emit` and `internal/shim` (`shim.go`,
 > `monitor.go`) are deleted, and so are the `-native` leg and mre's own RSS-kill
-> monitor: `-monitor` now only sets `_jobinfo`'s `monitor_flag`, which `mrjob`
+> monitor: `--mro2nf_monitor true` (`mre run`'s `-monitor`) now only sets
+> `_jobinfo`'s `monitor_flag`, which `mrjob`
 > enforces as under `mrp`. Stage instances now resolve on Martian's call graph
 > (`internal/cg`), jobs run through `mrjob` (`internal/job`), and the `mre`
 > subcommands are in `cmd/mre`; `TRANSPILER.md` and `FEATURE_COVERAGE.md`
