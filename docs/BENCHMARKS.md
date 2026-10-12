@@ -130,9 +130,10 @@ rule targets:
   of them a file array (`pipeline_w4.mro`, `pipeline_w16.mro`): the most
   bytes one fork stages must be the same at both widths, one element of
   each, never the whole file array.
-- **`zipgated`** — `zip` with the file array's stage disabled by a runtime
-  gate, so the split reads `MKFILES.fs unless GATE.off` (#494), under the
-  same flat-staging gate.
+- **`zipgated`** — `zip` with the file array's stage behind a runtime gate,
+  so the split reads `MKFILES.fs unless GATE.off` (#494), under the same
+  flat-staging gate. Both lanes hold the gate enabled (`skip = false`); the
+  disabled branch is covered only by the unit `TestZipGatedPartner`.
 
 Every fixture invocation runs as one lane, keyed by its invocation (`chain`,
 `forks_w4`, `split_c16`, …). Every lane's plumbing is the run's PLAN and OUTS

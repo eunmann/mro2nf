@@ -2,8 +2,8 @@ filetype txt;
 
 # Benchmark: a map call zipping a split over MKVALS's values (its master
 # source) with a split over MKFILES's files, where a runtime gate, GATE.off,
-# disables MKFILES, so the second split is `split MKFILES.fs unless
-# GATE.off` (#494). Run at two widths (pipeline_w4.mro, pipeline_w16.mro):
+# gates MKFILES, so the second split is `split MKFILES.fs unless GATE.off`
+# (#494); both widths hold it enabled (skip = false). Run at two widths (pipeline_w4.mro, pipeline_w16.mro):
 # plumbing tasks must be identical at both, and so must the bytes each USE
 # task stages, one value and one file, never all N of MKFILES's files.
 
