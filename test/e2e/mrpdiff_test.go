@@ -495,6 +495,8 @@ var mrpDiffCases = []mrpDiffCase{
 	// #259: a forked call gathers its own share of an inner map call, from a
 	// stage's or the entry's source, also an empty one.
 	{name: "map_nested_gather"},
+	// #342: the modifiers mrp accepts on a top-level call.
+	{name: "toplevel_stage_modifiers"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
 	{name: "vdr_volatile"},
 	// A disable gate split per fork of a map call over a sub-pipeline: each
