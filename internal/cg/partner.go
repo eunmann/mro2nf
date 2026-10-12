@@ -25,11 +25,30 @@ var errPartnerSources = errors.New("splits of one output over one root disagree"
 // partner is a split over a fork root of an output of a stage that does
 // not fix the root's forks: a map call zipping the outputs of different
 // stages. The stage's post writes the output's elements one dir per index,
-// and an instance stages only the one at its own index (zip_runtime).
+// and an instance stages only the one at its own index (zip_runtime). A
+// stage a runtime gate disables is read through the gate, `split Q.o
+// unless G.f`: an instance reads the gate, and the element only where the
+// gate holds Q enabled (#494).
 type partner struct {
 	root  *syntax.CallGraphStage
 	split *syntax.SplitExp
 	ref   *syntax.RefExp
+}
+
+// partnerSource is the stage output a split reads, and the gate it reads
+// it through: `split Q.o`, or `split Q.o unless G.f`.
+func partnerSource(sp *syntax.SplitExp) (*syntax.RefExp, *syntax.RefExp, bool) {
+	switch v := sp.Value.(type) {
+	case *syntax.RefExp:
+		return v, nil, true
+	case *syntax.DisabledExp:
+		ref, rok := v.Value.(*syntax.RefExp)
+		gate, gok := v.Disabled.(*syntax.RefExp)
+
+		return ref, gate, rok && gok
+	default:
+		return nil, nil, false
+	}
 }
 
 // PartnerDir names the dir of root's partner elements of node's output, in
@@ -56,8 +75,8 @@ func IndexToken(ix syntax.CollectionIndex) string {
 // and forked on no root st is not. A partner stage forked on such a root
 // gathers there, which no one element serves.
 func (g *Graph) partnerOf(st *syntax.CallGraphStage, sp *syntax.SplitExp) (partner, bool) {
-	ref, ok := sp.Value.(*syntax.RefExp)
-	if !ok || ref.Kind == syntax.KindSelf {
+	ref, gate, ok := partnerSource(sp)
+	if !ok || ref.Kind == syntax.KindSelf || gate != nil && gate.Kind == syntax.KindSelf {
 		return partner{}, false
 	}
 

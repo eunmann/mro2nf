@@ -35,7 +35,7 @@ func loadFixture(t *testing.T, name string) *fixture {
 	dir := filepath.Join("..", "..", "testdata", name)
 	mro := filepath.Join(dir, "pipeline.mro")
 
-	g, err := Load(mro, mro, nil)
+	g, err := Load(mro, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func (f *fixture) writeOuts(man types.Manifest, in ...string) (string, error) {
 	f.t.Helper()
 
 	outs := f.next("pipeline_outs.json")
-	spec := OutsSpec{In: in, Manifest: man, Source: f.mro, Work: f.next("work"), Results: f.next("results"), OutsJSON: outs}
+	spec := OutsSpec{In: in, Manifest: man, Work: f.next("work"), Results: f.next("results"), OutsJSON: outs}
 
 	if err := f.g.WriteOuts(f.t.Context(), spec); err != nil {
 		return "", err
@@ -96,7 +96,7 @@ func (f *fixture) outs(node string, fork Fork, outs string) string {
 	}
 
 	dir := f.next("outs")
-	if err := writeValue(dir, json.RawMessage(outs), types.Manifest{}, st.Call().DecId, types.RoleOut); err != nil {
+	if err := writeValue(dir, json.RawMessage(outs), types.Manifest{}, st.Call().DecId, types.RoleOut, nil); err != nil {
 		f.t.Fatal(err)
 	}
 

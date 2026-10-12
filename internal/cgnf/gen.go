@@ -25,7 +25,7 @@ func (g *gen) linef(format string, args ...any) {
 func (p *project) mainNF() (string, error) {
 	g := &gen{}
 
-	g.incs.WriteString("include { shq ; ordered ; resources ; OUTS } from './stage.nf'\n")
+	g.incs.WriteString("include { shq ; code ; ordered ; resources ; OUTS } from './stage.nf'\n")
 	p.planProcess(g)
 	p.planWiring(g)
 
@@ -80,27 +80,37 @@ func pick(v string, idx []int) string {
 }
 
 // planWiring parses PLAN's records: nodes maps each witness node to its
-// digest, its off flag and its statically disabled fork keys; f<j> are the
+// digest, its off flag and its statically disabled fork keys; entry maps
+// each node and fork of its entry-fed roots to the entry files staged
+// there, and each of those to its file(), which globs no name; f<j> are the
 // forks of entry-fed root j, each [outer key, own ordinal, record, index
 // token].
 func (p *project) planWiring(g *gen) {
-	g.linef("plan = \"${workflow.workDir}/mro2nf-plan/${workflow.sessionId}\".toString()")
-	g.linef("PLAN(%s, %s, file(\"${projectDir}/_assets/source.json\"))", p.values(), p.graphMeta("plan"))
-	g.linef("nodes = PLAN.out.nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }")
+	g.linef("if (params.mro2nf_require_image && !params.mro2nf_image) {")
+	g.linef("  error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
+	g.linef("}")
+	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"))", p.values(), p.graphMeta(), mroAssets)
+	g.linef("call = PLAN.out.call")
+
+	if len(p.topo.Nodes) > 0 {
+		g.linef("nodes = PLAN.out.nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }")
+	}
+
+	if len(p.readers) > 0 {
+		g.linef("entry = PLAN.out.files.combine(PLAN.out.leaves).map { fl, ll -> [files: fl.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0] + ' ' + f[1]): f[2].tokenize(',')] }, leaves: ll.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)] }] }")
+	}
 
 	for j := range p.entry {
 		g.linef("f%d = PLAN.out.r%d.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); def k = f[0].tokenize('.').collect { t -> t as int }; [k.take(k.size() - 1), k[-1], f[1], f[2]] } }", j, j)
 	}
 }
 
-// graphMeta is the meta map naming the run's invocation, with extra
-// entries.
-func (p *project) graphMeta(plan string, extra ...string) string {
+// graphMeta is the meta map naming the entry .mro and the include path the
+// run's invocation compiles with, with extra entries.
+func (p *project) graphMeta(extra ...string) string {
 	entries := append([]string{
-		"mro: " + gstr(p.src.Name),
 		"entry: " + gstr(p.src.Path()),
 		"mropath: " + gstr(strings.Join(p.opts.MroPaths, ":")),
-		"plan: " + plan,
 		"build: " + gstr(p.opts.Version),
 	}, extra...)
 
@@ -130,7 +140,8 @@ func (p *project) nodeMeta(n cg.TopoNode) (string, error) {
 		mem = 1
 	}
 
-	return p.graphMeta("plan",
+	return p.graphMeta(
+		"call: c",
 		"node: "+gstr(n.Fqid),
 		"cpus: "+strconv.Itoa(cpus),
 		"mem_gb: "+strconv.FormatFloat(mem, 'f', -1, 64),

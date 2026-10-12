@@ -1,6 +1,7 @@
 package cg
 
 import (
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -54,7 +55,7 @@ func nestedPlan(tb testing.TB, n int) (*Graph, Topology) {
 		tb.Fatal(err)
 	}
 
-	g, err := Load(mro, mro, nil)
+	g, err := Load(mro, "", nil)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -199,5 +200,63 @@ func BenchmarkPlanEntry(b *testing.B) {
 
 			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*forkCount(own)), "ns/fork")
 		})
+	}
+}
+
+// readersMRO maps PAIR over A.xs beside a second SRC, B, with PAIR's input b
+// bound to b and its disable binding to gate.
+func readersMRO(b, gate string) string {
+	return `stage SRC(in int n, out int[] xs, out int[] ys, out bool off, src py "stages/src",)
+stage PAIR(in int a, in int b, out string s, src py "stages/pair",)
+pipeline R(in bool skip, out string[] s,)
+{
+    call SRC as A(n = 1,)
+    call SRC as B(n = 2,) using (disabled = self.skip,)
+    map call PAIR(a = split A.xs, b = ` + b + `,) using (disabled = ` + gate + `,)
+    return (s = PAIR.s,)
+}
+call R(skip = false,)
+`
+}
+
+// TestPlanDigestKeysOnThePostsReaders (#499): a node's digest changes with
+// what its post writes for the nodes that read it, the outputs its fork
+// elements zip, its partner elements and the gates it posts, and with
+// nothing else of theirs, so a -resume re-runs a producer whose post would
+// write for other readers, and only such a producer.
+func TestPlanDigestKeysOnThePostsReaders(t *testing.T) {
+	digests := func(b, gate string) map[string]string {
+		out := map[string]string{}
+		for _, n := range planOf(t, readersMRO(b, gate)).Nodes {
+			out[n.Fqid] = n.Digest
+		}
+
+		return out
+	}
+
+	base := digests("0", "self.skip")
+
+	for _, tc := range []struct {
+		name, b, gate string
+		changed       []string
+	}{
+		{name: "a plain binding", b: "1", gate: "self.skip", changed: []string{"R.PAIR"}},
+		{name: "a zipped output", b: "split A.ys", gate: "self.skip", changed: []string{"R.A", "R.PAIR"}},
+		{name: "a partner", b: "split B.ys", gate: "self.skip", changed: []string{"R.B", "R.PAIR"}},
+		{name: "a gate", b: "0", gate: "B.off", changed: []string{"R.B", "R.PAIR"}},
+	} {
+		got := digests(tc.b, tc.gate)
+
+		var changed []string
+
+		for _, n := range slices.Sorted(maps.Keys(base)) {
+			if got[n] != base[n] {
+				changed = append(changed, n)
+			}
+		}
+
+		if diff := cmp.Diff(tc.changed, changed); diff != "" {
+			t.Errorf("%s: nodes whose digest changed (-want +got):\n%s", tc.name, diff)
+		}
 	}
 }

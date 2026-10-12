@@ -45,6 +45,9 @@ type pipestance struct {
 	names map[string]string
 	// links maps a Linked file's placed path to its link in outs/.
 	links map[string]string
+	// entry maps each entry file value the task staged to the path it reads
+	// it at.
+	entry map[string]string
 	n     int
 }
 
@@ -60,6 +63,7 @@ func newPipestance(spec OutsSpec, items []string, tbl *types.Table, params []ir.
 		dir: filepath.Join(work, "pipestance"), linked: filepath.Join(work, "linked"), tbl: tbl, params: params,
 		locations: map[string]string{}, tasks: map[string]string{},
 		origins: map[string]string{}, placed: map[string]string{}, names: map[string]string{}, links: map[string]string{},
+		entry: spec.EntryFiles,
 	}
 	p.outs = filepath.Join(p.dir, "outs")
 
@@ -112,6 +116,10 @@ func (p *pipestance) reconstruct(v json.Marshaler, path string) error {
 		return err
 	}
 
+	if payload, err = p.tbl.Apply(p.params, payload, p.staged); err != nil {
+		return fmt.Errorf("pipeline outs: %w", err)
+	}
+
 	if _, err := p.tbl.Apply(p.params, payload, p.survey); err != nil {
 		return fmt.Errorf("pipeline outs: %w", err)
 	}
@@ -122,6 +130,16 @@ func (p *pipestance) reconstruct(v json.Marshaler, path string) error {
 	}
 
 	return writeJSONFile(path, placed)
+}
+
+// staged is the path the task reads the file leaf at: an entry file value
+// where the task staged it, which Martian's post-processing then finds.
+func (p *pipestance) staged(leaf string) (string, error) {
+	if at, ok := p.entry[leaf]; ok {
+		return at, nil
+	}
+
+	return leaf, nil
 }
 
 // survey records a leaf holding each stage file the pipeline outs reach, by

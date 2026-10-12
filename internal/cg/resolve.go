@@ -312,27 +312,9 @@ func (m *missingElements) err() error { return errors.Join(*m...) }
 // resolveDisabled resolves a disable-wrapped value: null when its gate is
 // true (core/resolve.go:247-290).
 func (r *resolver) resolveDisabled(e *syntax.DisabledExp, t syntax.Type, fork Fork) (json.Marshaler, error) {
-	d, err := r.resolve(e.Disabled, r.boolType(), fork)
-	if err != nil {
-		return nil, fmt.Errorf("disabled binding: %w", err)
-	}
-
-	switch g := d.(type) {
-	case *syntax.BoolExp:
-		if g.Value {
-			return nil, nil
-		}
-	case json.RawMessage:
-		var on bool
-		if err := json.Unmarshal(g, &on); err != nil {
-			return nil, fmt.Errorf("disabled binding: %w", err)
-		}
-
-		if on {
-			return nil, nil
-		}
-	default:
-		return nil, fmt.Errorf("%w: disabled binding of type %T from %s", errShape, d, e.Disabled.GoString())
+	off, err := r.disabledBy(e.Disabled, fork)
+	if err != nil || off {
+		return nil, err
 	}
 
 	v, err := r.resolve(e.Value, t, fork)
@@ -341,6 +323,29 @@ func (r *resolver) resolveDisabled(e *syntax.DisabledExp, t syntax.Type, fork Fo
 	}
 
 	return v, nil
+}
+
+// disabledBy reports whether the gate of a disable-wrapped value, resolved
+// at fork, disables it: a true, and no null.
+func (r *resolver) disabledBy(gate syntax.Exp, fork Fork) (bool, error) {
+	d, err := r.resolve(gate, r.boolType(), fork)
+	if err != nil {
+		return false, fmt.Errorf("disabled binding: %w", err)
+	}
+
+	switch g := d.(type) {
+	case *syntax.BoolExp:
+		return g.Value, nil
+	case json.RawMessage:
+		var on bool
+		if err := json.Unmarshal(g, &on); err != nil {
+			return false, fmt.Errorf("disabled binding: %w", err)
+		}
+
+		return on, nil
+	default:
+		return false, fmt.Errorf("%w: disabled binding of type %T from %s", errShape, d, gate.GoString())
+	}
 }
 
 func marshal(v json.Marshaler) (json.RawMessage, error) {

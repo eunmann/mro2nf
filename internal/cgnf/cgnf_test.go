@@ -16,13 +16,9 @@ import (
 func emitFixture(t *testing.T, name string) string {
 	t.Helper()
 
-	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	dir := fixturePath(t, name)
 	out := t.TempDir()
-	opts := Options{OutDir: out, Mre: "/opt/mre", Mrjob: "/opt/mrjob", Adapters: "/opt/adapters", MroPaths: []string{dir}, Version: "test"}
+	opts := Options{OutDir: out, Mre: "/opt/mre", Mrjob: "/opt/mrjob", Adapters: "/opt/adapters", MroPaths: []string{dir}, Version: "v1.2.3"}
 
 	if err := Emit(filepath.Join(dir, "pipeline.mro"), opts); err != nil {
 		t.Fatal(err)
@@ -59,16 +55,24 @@ func readTree(t *testing.T, dir string) map[string]string {
 }
 
 // TestEmitProject: a project is main.nf wiring, the one stage module, the
-// config and the transpiled source; it does not depend on where it is
-// emitted.
+// config and its container profiles' configs, the type manifest, a copy of
+// the entry's .mro files, and the HealthOmics package script, executable,
+// and parameter template; it does not depend on where it is emitted, and
+// holds no other file of the pipeline's, an entry file's default included
+// (entry_file: input/default.txt).
 func TestEmitProject(t *testing.T) {
-	a, b := readTree(t, emitFixture(t, "split_test")), readTree(t, emitFixture(t, "split_test"))
+	out := emitFixture(t, "entry_file")
+	a, b := readTree(t, out), readTree(t, emitFixture(t, "entry_file"))
 
 	if d := cmp.Diff(a, b); d != "" {
 		t.Errorf("two emissions differ:\n%s", d)
 	}
 
-	want := []string{"_assets/source.json", "_assets/types.json", "main.nf", "nextflow.config", "stage.nf"}
+	entry := filepath.Join(fixturePath(t, "entry_file"), "pipeline.mro")
+	want := []string{
+		filepath.Join("_assets/mro", entry), "_assets/types.json", "conf/container.config", "conf/healthomics.config",
+		"main.nf", "nextflow.config", "package.sh", "parameter-template.json", "stage.nf",
+	}
 
 	if d := cmp.Diff(want, slices.Sorted(maps.Keys(a))); d != "" {
 		t.Errorf("project files (-want +got):\n%s", d)
@@ -77,6 +81,69 @@ func TestEmitProject(t *testing.T) {
 	if a["stage.nf"] != stageModule {
 		t.Error("stage.nf is not the stage module")
 	}
+
+	for name, mode := range map[string]os.FileMode{"package.sh": execPerm, "main.nf": filePerm} {
+		info, err := os.Stat(filepath.Join(out, name))
+		if err != nil || info.Mode().Perm() != mode {
+			t.Errorf("%s mode %v %v, want %v", name, info, err, mode)
+		}
+	}
+}
+
+// TestEmitCopiesTheMroFiles: the project holds every .mro file the entry
+// compiles from, its includes too, unchanged at its absolute path below
+// _assets/mro, and none of the stage code beside them; PLAN stages the copy
+// and caches on it, so a re-run of an unchanged project starts from
+// PLAN's cached records.
+func TestEmitCopiesTheMroFiles(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "include_test"))
+	dir := fixturePath(t, "include_test")
+
+	var got []string
+
+	for name := range tree {
+		if rest, ok := strings.CutPrefix(name, "_assets/mro/"); ok {
+			got = append(got, "/"+rest)
+		}
+	}
+
+	want := []string{filepath.Join(dir, "pipeline.mro"), filepath.Join(dir, "stages.mro")}
+	if d := cmp.Diff(want, slices.Sorted(slices.Values(got))); d != "" {
+		t.Fatalf("copied .mro files (-want +got):\n%s", d)
+	}
+
+	for _, path := range want {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if tree[filepath.Join("_assets/mro", path)] != string(raw) {
+			t.Errorf("the copy of %s differs from it", path)
+		}
+	}
+
+	main := tree["main.nf"]
+	for _, want := range []string{"    path 'mro'\n", "file(\"${projectDir}/_assets/mro\")", "${code(meta, 'mro')}"} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if strings.Contains(main, "cache false") {
+		t.Errorf("PLAN does not cache:\n%s", main)
+	}
+}
+
+func fixturePath(t *testing.T, name string) string {
+	t.Helper()
+
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
 }
 
 // TestEmitAliases: every stage node of the witness's call graph is one
@@ -157,13 +224,32 @@ func TestEmitOrdersGathers(t *testing.T) {
 func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
-	if !strings.Contains(main, "OUTS(nodes.map { _ns -> [mro: 'pipeline.mro'") || !strings.Contains(main, "outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(") {
+	if !strings.Contains(main, "OUTS(call.map { c -> [entry: ") || !strings.Contains(main, "outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
 		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
 	}
 
-	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", "-in in -locations locations -o results -json pipeline_outs.json"} {
+	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", "-in in -locations locations"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
+		}
+	}
+}
+
+// TestEmitWritesTheCallToAFile: every process that runs mre writes the
+// run's call, its value, to the file mre reads it from, before mre runs, as
+// a wide run's call would pass the kernel's 128 KiB limit on one argument.
+func TestEmitWritesTheCallToAFile(t *testing.T) {
+	if !strings.Contains(stageModule, "\"${code(meta, root)} -call call.b64\"") || !strings.Contains(stageModule, "\"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"") {
+		t.Error("stage.nf does not hand mre the call in a file")
+	}
+
+	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN", "OUTS"} {
+		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
+		_, script, _ := strings.Cut(body, "script:\n")
+		script, _, _ = strings.Cut(script, "\n}\n")
+
+		if at := strings.Index(script, "${callFile(meta)}"); at < 0 || at != strings.Index(script, "${") {
+			t.Errorf("%s does not write the call before it runs mre:\n%s", proc, script)
 		}
 	}
 }
@@ -217,19 +303,89 @@ func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 }
 
 // TestEmitRefusesReservedParam: an entry input named like a param the
-// project defines itself is refused.
+// project defines itself, or might, under the mro2nf_ prefix, is refused.
 func TestEmitRefusesReservedParam(t *testing.T) {
+	for _, name := range []string{"outdir", "mro2nf_image"} {
+		dir := t.TempDir()
+		mro := filepath.Join(dir, "pipeline.mro")
+		src := "stage S(\n    in  int " + name + ",\n    out int y,\n    src py \"s\",\n)\n\ncall S(\n    " + name + " = 1,\n)\n"
+
+		if err := os.WriteFile(mro, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		err := Emit(mro, Options{OutDir: t.TempDir(), MroPaths: []string{dir}})
+		if !errors.Is(err, errReservedParam) {
+			t.Errorf("Emit of input %s = %v, want errReservedParam", name, err)
+		}
+	}
+}
+
+// TestEmitStagesEntryFilesIntoTheirReaders: a node whose bindings read an
+// entry file stages, of PLAN's entry files, those listed for its fork of its
+// entry-fed roots; a node that reads none stages none and joins no entry
+// record (entry_filearr: COUNTARR reads reads; diamond_min has no file).
+func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
+	arr := readTree(t, emitFixture(t, "entry_filearr"))["main.nf"]
+
+	for _, want := range []string{
+		"entry = PLAN.out.files.combine(PLAN.out.leaves)",
+		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
+		"N0_COUNTARR(u0.combine(call).combine(entry).map { k, fs, es, d, us, c, ef -> def ids = ef.files['EPA.COUNTARR' + ' ' + ([].join('.') ?: '-')] ?: [];",
+	} {
+		if !strings.Contains(arr, want) {
+			t.Errorf("entry_filearr's main.nf lacks %q:\n%s", want, arr)
+		}
+	}
+
+	plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
+	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "k, fs, es + us, [], []]") {
+		t.Errorf("diamond_min reads no entry file, yet stages some:\n%s", plain)
+	}
+
+	for _, want := range []string{"val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')", "-leaves ${shq(leaves.join(','))}"} {
+		if strings.Count(stageModule, want) < 1 {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+}
+
+// TestEmitStagesEntryFilesIntoOuts: pipeline outs that return an entry
+// file value stage it into OUTS, as PLAN lists it by the pipeline's fqid,
+// for post-processing to publish it from inside a container; outs that
+// read none stage none (diamond_min).
+func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 	dir := t.TempDir()
 	mro := filepath.Join(dir, "pipeline.mro")
-	src := "stage S(\n    in  int outdir,\n    out int y,\n    src py \"s\",\n)\n\ncall S(\n    outdir = 1,\n)\n"
+	src := "filetype txt;\n\npipeline ECHO(\n    in  txt ref,\n    out txt echoed,\n)\n{\n    return (\n        echoed = self.ref,\n    )\n}\n\ncall ECHO(\n    ref = \"/data/ref.txt\",\n)\n"
 
 	if err := os.WriteFile(mro, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	err := Emit(mro, Options{OutDir: t.TempDir(), MroPaths: []string{dir}})
-	if !errors.Is(err, errReservedParam) {
-		t.Errorf("Emit = %v, want errReservedParam", err)
+	out := t.TempDir()
+	if err := Emit(mro, Options{OutDir: out, MroPaths: []string{dir}, Version: "test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	main := readTree(t, out)["main.nf"]
+	for _, want := range []string{
+		"entry = PLAN.out.files.combine(PLAN.out.leaves)",
+		"outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, entry.map { ef -> def ids = ef.files['ECHO -'] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }, file(",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("ECHO's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]; !strings.Contains(plain, "outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
+		t.Errorf("diamond_min's outs read no entry file, yet OUTS stages some:\n%s", plain)
+	}
+
+	for _, want := range []string{"    val locs\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results"} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("OUTS lacks %q", want)
+		}
 	}
 }
 

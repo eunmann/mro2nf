@@ -95,12 +95,6 @@ func assertAllCached(t *testing.T, rows []traceRow) {
 	ran := 0
 
 	for _, row := range rows {
-		// PLAN never caches: it rewrites the run's invocation, which every
-		// other task reads by a constant path.
-		if row.Name == "PLAN" {
-			continue
-		}
-
 		if row.Status != "CACHED" {
 			ran++
 

@@ -15,7 +15,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.47.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: all build test cover test-e2e test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences notices cloc install clean help
+.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences notices cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
@@ -51,7 +51,8 @@ cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
 
 # The e2e suites live in the test/e2e Go package (build tag e2e). -count=1 is
 # load-bearing: the test cache would otherwise return a cached ok without
-# running Nextflow. test-e2e includes the mrp differential, which needs a
+# running Nextflow. Partitioned by -run/-skip so CI runs the docker suite as
+# its own job. test-e2e includes the mrp differential, which needs a
 # Martian build at MARTIAN_BIN: it skips without one, and fails under
 # E2E_REQUIRE=1 (CI).
 # Each parallel case is an idle-heavy `nextflow run` (JVM startup + tiny
@@ -61,7 +62,10 @@ E2E_PARALLEL ?= 10
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
 test-e2e: build ## Run the e2e suite (golden table, mrp differential, cloud-sim, failure paths, knobs)
-	$(GO_E2E) -timeout 30m -skip '^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger|^TestScale'
+	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger|^TestScale'
+
+test-e2e-docker: build ## Run pipelines under the generated docker profile, each in an image built FROM the runtime image (cloud isolation)
+	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
 
 test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
 	$(GO_E2E) -timeout 30m -run '^TestMrpDiff'

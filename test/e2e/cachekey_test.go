@@ -3,11 +3,15 @@
 package e2e
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestResumeKeysOnTheBuild (#449): a -resume re-run of an unchanged project
@@ -103,6 +107,167 @@ func TestResumeKeysOnlyOnATasksOwnTypes(t *testing.T) {
 		if (got == "CACHED") != want {
 			t.Errorf("task %s: status %s, want cached=%v", name, got, want)
 		}
+	}
+}
+
+// readersMRO maps PAIR over the forks of A.xs, beside a second SRC, B, that
+// nothing reads. Each readersEdits case changes only how PAIR reads A or B.
+const readersMRO = `stage SRC(
+    in  int   n,
+    out int[] xs,
+    out int[] ys,
+    out bool  off,
+    src py    "stages/src",
+)
+
+stage PAIR(
+    in  int    a,
+    in  int    b,
+    out string s,
+    src py     "stages/pair",
+)
+
+pipeline READERS(
+    in  bool     skip,
+    out string[] s,
+)
+{
+    call SRC as A(
+        n = 1,
+    )
+
+    call SRC as B(
+        n = 2,
+    ) using (
+        disabled = self.skip,
+    )
+
+    map call PAIR(
+        a = split A.xs,
+        b = 0,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        s = PAIR.s,
+    )
+}
+
+call READERS(
+    skip = false,
+)
+`
+
+const readersSrc = `def main(args, outs):
+    outs.xs = [args.n, args.n + 1, args.n + 2]
+    outs.ys = [10 * args.n, 10 * args.n + 1, 10 * args.n + 2]
+    outs.off = args.n == 2
+`
+
+const readersPair = `def main(args, outs):
+    outs.s = "%s,%s" % (args.a, args.b)
+`
+
+// readersEdits are edits of readersMRO that change only what a producer's
+// post writes for PAIR, by the producer's task: a fork element member of
+// A.ys zipped with A.xs, B's partner elements of B.ys, and the gate B posts.
+var readersEdits = map[string]struct {
+	producer string
+	edit     []string
+}{
+	"zip":     {"(READERS.A)", []string{"        b = 0,\n", "        b = split A.ys,\n"}},
+	"partner": {"(READERS.B)", []string{"        b = 0,\n", "        b = split B.ys,\n"}},
+	"gate":    {"(READERS.B)", []string{"        b = 0,\n    ) using (\n        disabled = self.skip,\n", "        b = 0,\n    ) using (\n        disabled = B.off,\n"}},
+}
+
+// TestResumeKeysOnTheReadersAPostWritesFor (#499): a stage's post writes
+// fork elements, partner elements and gates for the stages that read its
+// outs, so after a re-transpile changes only how a consumer splits or gates
+// on a producer, a -resume re-run must re-run the producer, and publish what
+// a fresh run of the edited pipeline publishes. A producer cached with its
+// old post's elements left the consumer reading stale or missing ones.
+func TestResumeKeysOnTheReadersAPostWritesFor(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	for _, name := range slices.Sorted(maps.Keys(readersEdits)) {
+		tc := readersEdits[name]
+
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := readersFixture(t)
+			proj := transpileDir(t, fixture)
+
+			if err := runNextflow(t, proj); err != nil {
+				t.Fatalf("first run: %v", err)
+			}
+
+			editMRO(t, filepath.Join(fixture, "pipeline.mro"), tc.edit...)
+
+			if err := transpileInto(repoTools(), fixture, "pipeline.mro", proj); err != nil {
+				t.Fatalf("re-transpile after the edit: %v", err)
+			}
+
+			if err := runNextflow(t, proj, "-resume", "-with-trace", "edited.txt"); err != nil {
+				t.Fatalf("-resume after the edit: %v", err)
+			}
+
+			assertRan(t, readTrace(t, filepath.Join(proj, "edited.txt")), tc.producer)
+
+			fresh := transpileDir(t, fixture)
+			if err := runNextflow(t, fresh); err != nil {
+				t.Fatalf("fresh run of the edited pipeline: %v", err)
+			}
+
+			if diff := cmp.Diff(publishedOutputs(t, fresh), publishedOutputs(t, proj)); diff != "" {
+				t.Errorf("-resume after the edit published other outputs than a fresh run (-fresh +resumed):\n%s", diff)
+			}
+		})
+	}
+}
+
+// readersFixture writes readersMRO and its stage code into a temp dir.
+func readersFixture(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	for _, stage := range []string{"src", "pair"} {
+		if err := os.MkdirAll(filepath.Join(dir, "stages", stage), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeFileT(t, filepath.Join(dir, "pipeline.mro"), readersMRO)
+	writeFileT(t, filepath.Join(dir, "stages", "src", "__init__.py"), readersSrc)
+	writeFileT(t, filepath.Join(dir, "stages", "pair", "__init__.py"), readersPair)
+
+	return dir
+}
+
+// assertRan fails unless the trace holds a task named with suffix, and
+// none of them was CACHED.
+func assertRan(t *testing.T, rows []traceRow, suffix string) {
+	t.Helper()
+
+	found := false
+
+	for _, row := range rows {
+		if !strings.HasSuffix(row.Name, suffix) {
+			continue
+		}
+
+		found = true
+
+		if row.Status == "CACHED" {
+			t.Errorf("task %s was reused from the cache, want it re-run", row.Name)
+		}
+	}
+
+	if !found {
+		t.Errorf("no task %s in the trace %v", suffix, rows)
 	}
 }
 

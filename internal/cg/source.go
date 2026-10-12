@@ -32,13 +32,16 @@ const witnessWidth = 2
 // invocation rebuilt from it, is a compile of the file at Path, as mrp
 // compiles the invocation under the path it was given, so Martian resolves
 // the entry's includes and its stages' code beside the entry before the
-// search path, and _jobinfo records the include mrp records.
+// search path, and _jobinfo records the include mrp records. Files are the
+// absolute paths of every .mro file the entry compiles from, itself and its
+// includes, sorted.
 type Source struct {
-	Name       string               `json:"name"`
-	Dir        string               `json:"dir"`
-	Decls      string               `json:"decls"`
-	Call       string               `json:"call"`
-	Invocation *core.InvocationData `json:"invocation"`
+	Name       string
+	Dir        string
+	Decls      string
+	Call       string
+	Invocation *core.InvocationData
+	Files      []string
 }
 
 // ReadSource reads the entry .mro at path, compiling its invocation as mrp
@@ -50,15 +53,10 @@ func ReadSource(path string, mroPaths []string) (Source, error) {
 		return Source{}, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	var p syntax.Parser
-
-	file, err := p.UncheckedParse(raw, path)
+	decls, call, err := splitEntry(raw, path)
 	if err != nil {
-		return Source{}, fmt.Errorf("parse %s: %w", path, err)
+		return Source{}, err
 	}
-
-	call := keepNegativeZero((&syntax.Ast{Call: file.Call}).Format())
-	file.Call = nil
 
 	_, _, ast, err := syntax.Compile(path, mroPaths, false)
 	if err != nil {
@@ -83,14 +81,44 @@ func ReadSource(path string, mroPaths []string) (Source, error) {
 		return Source{}, fmt.Errorf("resolve %s: %w", path, err)
 	}
 
-	return Source{Name: filepath.Base(abs), Dir: filepath.Dir(abs), Decls: keepNegativeZero(file.Format()), Call: call, Invocation: inv}, nil
+	return Source{
+		Name: filepath.Base(abs), Dir: filepath.Dir(abs), Decls: decls, Call: call, Invocation: inv,
+		Files: slices.Sorted(maps.Keys(ast.Files)),
+	}, nil
+}
+
+// splitEntry splits the entry .mro src, read from path, into its
+// declarations and its call, each as Martian's formatter prints it.
+func splitEntry(src []byte, path string) (string, string, error) {
+	var p syntax.Parser
+
+	file, err := p.UncheckedParse(src, path)
+	if err != nil {
+		return "", "", fmt.Errorf("parse %s: %w", path, err)
+	}
+
+	call := keepNegativeZero((&syntax.Ast{Call: file.Call}).Format())
+	file.Call = nil
+
+	return keepNegativeZero(file.Format()), call, nil
 }
 
 // Rebuild is the invocation source of inv over the declarations: the call
 // mrp's invocation generator builds from invocation data (core.BuildCallAst,
-// as `mrg` runs it), after them. An argument inv keeps from the source's own
-// invocation keeps its float -0.0 (keepNegativeZero).
+// as `mrg` runs it), after them (RebuildCall).
 func (s Source) Rebuild(inv *core.InvocationData, mroPaths []string) (string, error) {
+	call, err := s.RebuildCall(inv, mroPaths)
+	if err != nil {
+		return "", err
+	}
+
+	return withCall(s.Decls, call), nil
+}
+
+// RebuildCall is the call mrp's invocation generator builds from inv over
+// the declarations. An argument inv keeps from the source's own invocation
+// keeps its float -0.0 (keepNegativeZero).
+func (s Source) RebuildCall(inv *core.InvocationData, mroPaths []string) (string, error) {
 	callable, lookup, err := s.callable(inv.Call, mroPaths)
 	if err != nil {
 		return "", err
@@ -110,7 +138,7 @@ func (s Source) Rebuild(inv *core.InvocationData, mroPaths []string) (string, er
 		return "", fmt.Errorf("build call of %s: %w", inv.Call, err)
 	}
 
-	return s.with(keepNegativeZero((&syntax.Ast{Call: ast.Call}).Format())), nil
+	return keepNegativeZero((&syntax.Ast{Call: ast.Call}).Format()), nil
 }
 
 // Manifest is the type manifest of the source's declarations.
@@ -185,7 +213,12 @@ func (s Source) Path() string {
 
 // with is the source with call after the declarations.
 func (s Source) with(call string) string {
-	return strings.TrimRight(s.Decls, "\n") + "\n\n" + call
+	return withCall(s.Decls, call)
+}
+
+// withCall is the invocation source of call after the declarations decls.
+func withCall(decls, call string) string {
+	return strings.TrimRight(decls, "\n") + "\n\n" + call
 }
 
 // callable compiles the entry file and returns the callable id and the

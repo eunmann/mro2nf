@@ -1,11 +1,10 @@
 // The stage processes every call-graph node runs through, each node
 // including them under its own alias, so a withName: selector names the
 // node. meta carries the node's identity, the cache key of its spec
-// (digest), where its run's invocation lives (plan), and the resources it
-// is scheduled with; its GPU request is the config's, which reads
-// meta.special per task where a Nextflow 24.04 process directive cannot.
-// Each phase runs `mre args`, then the phase's jobs through `mre run` as mrp
-// runs them, then `mre post`.
+// (digest), the run's call (call), and the resources it is scheduled with;
+// its GPU request is the config's, which reads meta.special per task where
+// a Nextflow 24.04 process directive cannot. Each phase runs `mre args`,
+// then the phase's jobs through `mre run` as mrp runs them, then `mre post`.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -25,26 +24,47 @@ def keyOrder(List a, List b) {
     return c ?: a.size() <=> b.size()
 }
 
-// graph names the invocation an mre call-graph subcommand compiles: the
-// run's plan, compiled as the entry file, so Martian resolves the entry's
-// includes and stage code beside it and the _jobinfo invocation records
-// mrp's include.
-def graph(Map meta) {
-    return "-mro ${shq(meta.plan + '/' + meta.mro)} -as ${shq(meta.entry)} -mropath ${shq(meta.mropath)}"
+// code names the entry .mro and the include path of the run's invocation
+// below root: '' for a stage task, which finds the code at the paths the
+// project was transpiled from, on the host or in the image, or the
+// project's copy of its .mro files a task staged. Martian resolves the
+// entry's includes and stage code beside it, and the _jobinfo invocation
+// records its include.
+def code(Map meta, String root) {
+    return "-entry ${shq(root + meta.entry)} -mropath ${shq(meta.mropath.tokenize(':').collect { p -> root + p }.join(':'))}"
 }
 
-// args builds the instance's args bundle from what it staged and its entry
-// fork records, which are base64 and need no quoting. The driver ran the
-// instance because its gates hold it enabled; mre args must agree.
-def args(Map meta, List forks) {
-    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta)} -node ${shq(meta.node)} -in in -o args"
+// graph names the invocation an mre call-graph subcommand compiles: the
+// run's call callFile wrote, over the entry's declarations.
+def graph(Map meta, String root) {
+    return "${code(meta, root)} -call call.b64"
+}
+
+// callFile writes the run's call, base64, from the task's own value, which
+// stays its -resume key. As an argument, a wide run's call would pass the
+// kernel's limit on one argument (128 KiB). The here-document's lines start
+// their own lines, where the script's indent does not reach.
+def callFile(Map meta) {
+    return "cat > call.b64 <<'MRO2NF_CALL'\n${meta.call}\nMRO2NF_CALL"
+}
+
+// args builds the instance's args bundle from what it staged, its entry
+// fork records, which are base64 and need no quoting, and the entry files
+// it staged below entry/, by their indices among the run's. The driver ran
+// the instance because its gates hold it enabled; mre args must agree, and
+// the node must compile to the spec PLAN planned.
+def args(Map meta, List forks, List leaves) {
+    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, '')} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args"
     forks.each { f -> cmd += " -fork ${f}" }
+    if (leaves) {
+        cmd += " -leaves ${shq(leaves.join(','))}"
+    }
     return cmd + ")\n[ \"\$state\" = enabled ] || { echo ${shq('mre args: ' + meta.node + ' is not enabled where its gates said enabled')} >&2; exit 1; }"
 }
 
 // rest may be a GString, which Nextflow 24.04 does not pass for a String.
 def job(Map meta, phase, rest) {
-    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta)} -adapters ${shq(params.mro2nf_adapters)} -mrjob ${shq(params.mro2nf_mrjob)} -psid ${shq(params.mro2nf_psid)} -work ."
+    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -adapters ${shq(params.mro2nf_adapters)} -mrjob ${shq(params.mro2nf_mrjob)} -psid ${shq(params.mro2nf_psid)} -work ."
     if (params.mro2nf_monitor) {
         cmd += ' -monitor'
     }
@@ -55,7 +75,7 @@ def job(Map meta, phase, rest) {
 }
 
 def post(Map meta) {
-    return "${shq(params.mro2nf_mre)} post ${graph(meta)} -args args -outs stage_outs -fields outs -forks forks -gates gates"
+    return "${shq(params.mro2nf_mre)} post ${graph(meta, '')} -args args -outs stage_outs -fields outs -forks forks -gates gates"
 }
 
 // resources reads the table a split writes (mre run -phase split): per
@@ -83,7 +103,7 @@ process STAGE {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
 
     output:
     tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), emit: outs
@@ -92,7 +112,8 @@ process STAGE {
 
     script:
     """
-    ${args(meta, forks)}
+    ${callFile(meta)}
+    ${args(meta, forks, leaves)}
     ${job(meta, 'main', '-args args -o stage_outs')}
     ${post(meta)}
     """
@@ -105,14 +126,15 @@ process STAGE_SPLIT {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
 
     output:
     tuple val(meta), val(key), path('args', type: 'dir'), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), eval('cat chunks/resources.tsv'), emit: split
 
     script:
     """
-    ${args(meta, forks)}
+    ${callFile(meta)}
+    ${args(meta, forks, leaves)}
     ${job(meta, 'split', '-args args -o chunks')}
     """
 }
@@ -133,6 +155,7 @@ process STAGE_MAIN {
 
     script:
     """
+    ${callFile(meta)}
     ${job(meta, 'main', "-args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
 }
@@ -153,6 +176,7 @@ process STAGE_JOIN {
 
     script:
     """
+    ${callFile(meta)}
     ${job(meta, 'join', '-args args -chunks chunks -chunkouts chunkouts -o stage_outs')}
     ${post(meta)}
     """
@@ -167,10 +191,12 @@ def locations(ups, List locs) {
     return "cat > locations <<'MRO2NF_LOCATIONS'\n${lines}MRO2NF_LOCATIONS"
 }
 
-// OUTS resolves the pipeline outs from the stage outs they read and
-// publishes them with mrp's own post-processing. The workflow output block
-// would publish the tree as data, but Nextflow 24.04 accepts it only under
-// the nextflow.preview.output flag and in a syntax 26.04 rejects (#356).
+// OUTS resolves the pipeline outs from the stage outs and the entry files
+// they read and publishes them with mrp's own post-processing. It runs no
+// stage, so it compiles the project's copy of the .mro files it stages. The
+// workflow output block would publish the tree as data, but Nextflow 24.04
+// accepts it only under the nextflow.preview.output flag and in a syntax
+// 26.04 rejects (#356).
 process OUTS {
     publishDir params.outdir, mode: 'copy', saveAs: { f -> f.startsWith('results/') ? f.substring(8) : f }
 
@@ -178,7 +204,9 @@ process OUTS {
     val meta
     path ups, stageAs: 'in/u*', arity: '0..*'
     val locs
+    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
     path 'types.json'
+    path 'mro'
 
     output:
     path 'pipeline_outs.json'
@@ -187,7 +215,8 @@ process OUTS {
     script:
     """
     mkdir -p in
+    ${callFile(meta)}
     ${locations(ups, locs)}
-    ${shq(params.mro2nf_mre)} outs ${graph(meta)} -types types.json -in in -locations locations -o results -json pipeline_outs.json
+    ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -types types.json -in in -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
     """
 }

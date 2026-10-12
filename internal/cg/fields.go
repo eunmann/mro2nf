@@ -2,7 +2,6 @@ package cg
 
 import (
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -74,21 +73,13 @@ func (g *Graph) writeGates(in Instance, s *stagedStore, path string) error {
 
 	var off []string
 
-	for _, fqid := range slices.Sorted(maps.Keys(g.stages)) {
-		st := g.stages[fqid]
-
-		for _, d := range st.Disabled() {
-			if refs := refIDs(d); len(refs) != 1 || refs[0] != in.Node {
-				continue
-			}
-
-			tokens, err := g.gateTokens(r, st, d, up, in.Fork)
-			if err != nil {
-				return err
-			}
-
-			off = append(off, tokens...)
+	for st, d := range g.gatedBy(in.Node) {
+		tokens, err := g.gateTokens(r, st, d, up, in.Fork)
+		if err != nil {
+			return err
 		}
+
+		off = append(off, tokens...)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {

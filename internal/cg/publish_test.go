@@ -123,7 +123,7 @@ func newRun(t *testing.T, mro string) *publishRun {
 	writeFileOf(t, r.mro, mro)
 
 	var err error
-	if r.g, err = Load(r.mro, r.mro, nil); err != nil {
+	if r.g, err = Load(r.mro, "", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -253,7 +253,7 @@ func (r *publishRun) post(node, scratch string, outs map[string]any) error {
 // writeOuts publishes the pipeline outs from the staged bundles with
 // locations, into the working dir.
 func (r *publishRun) writeOuts(locations map[string]string) error {
-	spec := OutsSpec{In: []string{"in"}, Locations: locations, Manifest: r.man, Source: r.mro, Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
+	spec := OutsSpec{In: []string{"in"}, Locations: locations, Manifest: r.man, Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
 
 	return r.g.WriteOuts(r.t.Context(), spec)
 }

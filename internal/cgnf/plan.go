@@ -7,11 +7,13 @@ import (
 	"strings"
 )
 
-// planProcess declares PLAN, the run's one start task. It never caches: it
-// rewrites the invocation at the session's plan path, which tasks read by
-// that constant path instead of staging it, so a task's cache key holds
-// its own node's digest and not the whole invocation. Its records reach
-// the driver as values: per entry-fed root, its forks and their counts.
+// planProcess declares PLAN, the run's one start task, which compiles the
+// project's copy of the entry's .mro files. Its records reach the driver as
+// values, so a task's cache key holds what PLAN fixed for it, not the
+// task's path: the run's call, which every task compiles over the entry's
+// declarations where the run finds its code, each node's digest, the entry
+// files each instance stages, and per entry-fed root, its forks and their
+// counts.
 func (p *project) planProcess(g *gen) {
 	var outs strings.Builder
 
@@ -21,22 +23,23 @@ func (p *project) planProcess(g *gen) {
 	}
 
 	fmt.Fprintf(&g.procs, `process PLAN {
-    cache false
-
     input:
     val values
     val meta
-    path 'source.json'
+    path 'mro'
 
     output:
+    eval('cat call'), emit: call
     eval('cat nodes'), emit: nodes
+    eval('cat leaves'), emit: leaves
+    eval('cat files'), emit: files
 %s
     script:
     """
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(params.mro2nf_mre)} plan -source source.json -values values.json -mropath ${shq(meta.mropath)} -o ${shq(meta.plan)} -nodes nodes -roots roots -counts counts
+    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json -host-inputs=${shq(params.mro2nf_host_inputs)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)} -call call -nodes nodes -roots roots -counts counts -leaves leaves -files files
     """
 }
 
@@ -62,7 +65,8 @@ func (p *project) values() string {
 }
 
 // outs runs OUTS over every outs bundle the pipeline outs read, ordered by
-// node and instance key, not by completion.
+// node and instance key, not by completion, and the entry files they read,
+// which PLAN lists by the pipeline's fqid.
 func (p *project) outs(g *gen) {
 	srcs := make([]string, 0, len(p.topo.Outs))
 
@@ -80,9 +84,13 @@ func (p *project) outs(g *gen) {
 		ups = "channel.empty().mix(" + strings.Join(srcs, ", ") + ").toList().map { xs -> ordered(xs) }"
 	}
 
+	entry := "channel.value([[], []])"
+	if p.readers[p.g.Fqid()] {
+		entry = fmt.Sprintf("entry.map { ef -> def ids = ef.files[%s] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }", gstr(p.g.Fqid()+" -"))
+	}
+
 	g.linef("outs_in = %s", ups)
-	// The meta waits on PLAN, which writes the invocation OUTS compiles.
-	g.linef("OUTS(nodes.map { _ns -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(\"${projectDir}/_assets/types.json\"))", p.graphMeta("plan"))
+	g.linef("OUTS(call.map { c -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/_assets/types.json\"), file(\"${projectDir}/%s\"))", p.graphMeta("call: c"), entry, mroAssets)
 }
 
 // shellQuote is s single-quoted for the shell.

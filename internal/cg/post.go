@@ -82,7 +82,7 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 	}
 
 	if in.Disabled {
-		if err := writeValue(spec.Outs, disabledOuts(st), spec.Manifest, st.Call().DecId, types.RoleOut); err != nil {
+		if err := writeValue(spec.Outs, disabledOuts(st), spec.Manifest, st.Call().DecId, types.RoleOut, nil); err != nil {
 			return Instance{}, nil, err
 		}
 	}
@@ -117,11 +117,11 @@ func (w forkWriter) posted(in Instance) error {
 		if runtimeMultiSource(root) && slices.Contains(refIDs(root.Split().Value), in.Node) {
 			return fmt.Errorf("%w: %s", errMultiSource, root.Fqid)
 		}
+	}
 
-		if p, ok := w.r.g.Producer(root); ok && p == in.Node {
-			if err := w.root(root, counted{fork: in.Fork, lens: in.Lens}); err != nil {
-				return err
-			}
+	for _, root := range w.r.g.fedBy(in.Node) {
+		if err := w.root(root, counted{fork: in.Fork, lens: in.Lens}); err != nil {
+			return err
 		}
 	}
 

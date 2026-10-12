@@ -72,7 +72,7 @@ cg.Graph.Topology → per node its fork roots, reads and gates
    │
 cgnf.Emit         → a Nextflow project on disk:
    │                  main.nf, stage.nf, nextflow.config,
-   │                  _assets/source.json, _assets/types.json
+   │                  _assets/mro/, _assets/types.json
    ▼
 nextflow run main.nf …  →  PLAN, a task per stage instance, then OUTS
 ```
@@ -126,8 +126,8 @@ with `mrp`'s message, and no project is written.
 - `-monitor`: mrp's `--monitor`; `mrjob` enforces each job's memory and thread
   limits.
 - `-confine-outputs`: fail a stage task whose output resolves outside its work
-  dir instead of copying it in (§7), for a project run under an isolating
-  executor such as docker.
+  dir instead of copying it in (§7) on the local and grid profiles too; the
+  container profiles always confine.
 - `-config <path>`: a `.mro2nf.yml` of per-project defaults (`mre`, `shell`,
   `mrjob`, `monitor`); an explicit flag always wins.
 - `-version`.
@@ -162,8 +162,11 @@ one forked on a map call another stage feeds — is refused at transpile time.
 ```
 main.nf               ← PLAN, one process call per stage node, then OUTS: wiring only
 stage.nf              ← the one hand-written stage module every node includes
-nextflow.config       ← params, retry policy, GPU requests, trace, executor profiles
-_assets/source.json   ← the entry file's declarations, call and invocation data
+nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
+conf/                 ← the container profiles' and the HealthOmics profile's configs
+package.sh, parameter-template.json ← the HealthOmics package (§9)
+_assets/mro/          ← a copy of every .mro file the entry compiles from, each
+                        at its absolute path below it; PLAN compiles it
 _assets/types.json    ← the type manifest the OUTS task lays the outs out with
 ```
 
@@ -183,7 +186,10 @@ records mre wrote; it parses no stage-controlled JSON.
   `clusterOptions` of a grid executor.
 - `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
   `mro2nf_monitor` and `mro2nf_confine`: the tools and knobs the stage module
-  reads.
+  reads; `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs`, the entry
+  file values a run stages (§8); and `mro2nf_image`, the one image the
+  container profiles run every task in, which they require
+  (`mro2nf_require_image`, §9).
 - One `params.<name> = null` per entry input (§8).
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
   the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
@@ -196,34 +202,48 @@ records mre wrote; it parses no stage-controlled JSON.
   whose special, as `mrp` resolves it, is `"gpu"` or `"gpu:N"`: the stage's own,
   or for a chunk or the join the `__special` the split returned for it (see
   [`GPU.md`](GPU.md)).
-- Task tracing, and the executor profiles: `standard` (local, clamped to the
-  host's cpus and memory with `process.resourceLimits`), `slurm`, `sge`,
-  `lsf` and `pbs`.
+- Task tracing, and the target profiles (§9): `standard` (local, clamped to
+  the host's cpus and memory with `process.resourceLimits`), `slurm`, `sge`,
+  `lsf`, `pbs`, `docker`, `awsbatch` and `healthomics`.
 
 ---
 
 ## 5. Run time
 
-**PLAN.** One task starts every run. `mre plan` overlays the run's entry params
-on the transpiled invocation data (a string param of a scalar input parsed as
-its type, §8), rebuilds the call as `mrp`'s invocation generator does
-(`core.BuildCallAst`), and compiles it, so `mrp`'s refusals fail the run before
-any stage starts. It fails if the call graph has a node, a fork root or a read
-the witness lacks (`Topology.Covers`); a node the invocation disables outright
-counts only by its presence. Its records reach the driver as `eval` values:
+**PLAN.** One task starts every run. It stages the project's copy of the
+entry's `.mro` files (`_assets/mro/`) and compiles that. `mre plan` overlays
+the run's entry params on the entry's invocation data (a string param of a
+scalar input parsed as its type, §8), rebuilds the call as `mrp`'s invocation
+generator does (`core.BuildCallAst`), and compiles it over the entry's
+declarations, so `mrp`'s refusals fail the run before any stage starts. It
+fails if the call graph has a node, a fork root or a read the witness lacks
+(`Topology.Covers`); a node the invocation disables outright counts only by
+its presence. Its records reach the driver as `eval` values: the run's call;
 per node a digest of its resolved spec (stage, bindings, disable bindings and
-fork roots in Martian's JSON form), whether the invocation disables it, and the
+fork roots in Martian's JSON form) and of what its `mre post` writes for its
+readers (the splits of the roots it feeds and the outputs their fork elements
+zip, its partners' splits, and the disable bindings whose value it posts with
+their roots), whether the invocation disables it, and the
 fork keys a static per-fork binding disables; per entry-fed root its forks,
 keyed by the witness's outer roots, each with its fork record and its index
 token.
 
-**Cache identity.** A task's `-resume` key holds its own node's digest (in
-`meta`), the mro2nf build, and its fork records and staged dirs, not the
-invocation. PLAN runs uncached and writes the invocation to a path constant per
-session, `<workDir>/mro2nf-plan/<sessionId>/<entry .mro>`, which each task
-reads by that path (`-mro`) and compiles as the entry file (`-as`) instead of
-staging it. Entry forks reach tasks as values,
-so no task stages a file of PLAN's.
+**Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
+copy and its meta. A task's `-resume` key holds its own node's digest (in
+`meta`), the run's call, the mro2nf build, and its fork records and staged
+dirs. No task stages a file of PLAN's: the call and the digests reach it as
+values, which Nextflow keys on by content, so a re-transpile whose `.mro` edit
+leaves a node's spec and the call as they were re-runs PLAN but keeps the node
+cached (`TestResumeKeysOnlyOnATasksOwnTypes`). An edit of how a consumer
+splits or gates on a node's outs changes what the node's post writes, so it
+re-runs the node too (`TestResumeKeysOnTheReadersAPostWritesFor`). A changed
+entry value changes the call, and so re-runs every task.
+
+**Code.** A stage task compiles the run's call over the entry `.mro` where the
+run finds its code: its includes and its stages' code resolve beside it, as
+under `mrp`. `mre args` fails the task when the node compiles to another spec
+than the digest PLAN planned (`cg.ErrSpecDrift`): a `.mro` edited since the
+transpile, or an image built from other sources, fails loudly rather than run.
 
 **Instances.** An instance's key is the ordinal of its fork of each of its
 roots. The driver enumerates a node's instances root by root: an entry-fed
@@ -232,7 +252,10 @@ root's forks come from PLAN, a stage-fed root's from its producer's
 the outer roots. An instance zipping another stage's output over a root joins
 that stage's partner dir at its own fork's token, or the absent record, so each
 fork stages one element of it whatever the fork width (the `zip` bench lanes
-gate the bytes one task stages flat in N).
+gate the bytes one task stages flat in N). A split of an output of a stage a
+runtime gate disables, `split Q.o unless G.f`, is zipped the same way: the
+instance reads the gate, and `Q`'s element only where the gate holds `Q`
+enabled (the `zipgated` lanes).
 
 **Preflights.** As in `mrp`, each instance waits until every instance of each
 preflight it is gated by is done: a pipeline's preflights gate every other call
@@ -284,18 +307,25 @@ so the plumbing task count does not grow with fork width or chunk count
 
 ## 6. The runtime shim `mre`
 
-Each subcommand that works on the call graph takes the invocation `.mro`
-(`-mro`, `-mropath`), compiles it as `mrp` does (`ParseSourceBytes`, then
-`MakePipelineCallGraph`) as the entry file `-as` names, and reads only the items its task staged (`-in`, an
-item or a dir of items). Without `-types`, each builds the type manifest from
-the invocation's own declarations.
+Each subcommand that works on the call graph takes the entry `.mro`
+(`-entry`, `-mropath`) and the run's call (`-call`, a file holding base64 of
+the call PLAN rebuilt, which each task writes from its own value, as a wide
+run's call would pass the kernel's 128 KiB limit on one argument; the entry's
+own call without it), compiles the call over the entry's
+declarations as `mrp` compiles an invocation (`ParseSourceBytes`, then
+`MakePipelineCallGraph`) as the entry file, and reads only the items its task
+staged (`-in`, an item or a dir of items). Without `-types`, each builds the
+type manifest from the invocation's own declarations.
 
 - **`mre plan`** starts a run (§5). It rebuilds the run's invocation from the
-  transpiled source and the run's entry values, compiles it, checks it against
-  the witness, and writes the invocation every task compiles, one record per
-  witness node and the forks of each entry-fed fork root.
-- **`mre args -node <fqid>`** builds one stage instance's args bundle and prints
-  `enabled` or `disabled`. The instance's fork comes from the fork elements it
+  transpiled entry and the run's entry values, compiles it, checks it against
+  the witness, vets the entry file values a task stages (§8), and writes the
+  call every task compiles, one record per witness node, the entry files of
+  each node's instances and of the pipeline outs, and the forks of each
+  entry-fed fork root.
+- **`mre args -node <fqid> -digest <d>`** builds one stage instance's args
+  bundle and prints `enabled` or `disabled`, once the node compiles to the spec
+  digest PLAN planned. The instance's fork comes from the fork elements it
   staged, or the fork records it got as values (`-fork`, base64 of a
   `fork.json`), and its values from its parents' stamped outs bundles. A
   disabled instance gets only its stamp, `instance.json`, which records the fork
@@ -353,7 +383,7 @@ the invocation's own declarations.
   reads null where the output is null and a missing element, logged, at any
   index it lacks, as `mrp` reads it; a zip of maps at run time need not share
   keys (`zip_runtime_map`). An instance therefore stages only its own elements,
-  and no key ever needs escaping. `mre post -entry` writes the forks the call graph already
+  and no key ever needs escaping. `mre post -entry-forks` writes the forks the call graph already
   fixes (literal and entry-sourced sources) the same way, as fork records
   without values. A root whose fork set varies with an outer map call (its
   source, of unknown length, is forked on that call) gets its forks under each
@@ -496,7 +526,7 @@ task:
 ## 8. Pipeline inputs: run parameters
 
 The top-level `call EP(reads = …, scale = …)` provides the pipeline's default
-inputs, which the transpiled invocation data in `_assets/source.json` carries.
+inputs, which the project's copy of the entry `.mro` (`_assets/mro/`) carries.
 You can override inputs **at launch** without re-transpiling:
 
 - Every entry input is a nullable Nextflow parameter, `params.<name>`; null
@@ -525,19 +555,84 @@ You can override inputs **at launch** without re-transpiling:
 - An entry input named `outdir` or `job_resources` collides with a param the
   project defines itself and fails the transpile.
 
-**File-typed inputs.** A file value is a path, passed through verbatim as `mrp`
-passes it: the stage opens it as given. A relative path names nothing from the
-stage's job dir under either runtime, so give file inputs as absolute paths on a
-filesystem every task can see. Staging file inputs into isolated containers,
-and `s3://` and other remote values, are tracked by #489.
+**File-typed inputs.** Every file value of the run's entry inputs that is an
+absolute path or a URI (`s3://`, and others under the opt-in below) is staged
+by Nextflow into the tasks that read it, and only those: PLAN lists the values
+(`leaves`) and, per node and fork of its entry-fed roots, the ones Martian's
+specialization of its bindings to that fork reads (`files`), so a map call over
+entry files stages each fork's own element. The pipeline outs' own reads,
+keyed by the pipeline's fqid, are staged into OUTS, whose post-processing
+publishes such a file only where it finds it, as `mrp`'s does. The driver
+hands each to `file(x, glob: false)`, so the head node never globs a name, and
+a task stages its list as `entry/<i>/<name>`; `mre args -leaves` and `mre outs
+-leaves` map each value to the path it reads it at. Nextflow links a file it can reach in place, so on a shared
+filesystem, and in a docker container, which mounts the link's target, the
+stage gets the value's own path, as `mrp` passes it; a file Nextflow fetched
+(an `s3://` object, a file on an object-store work dir) is read where it was
+staged. A value with no file (`[]`, `{}`, a null field) stages nothing. A
+relative path names nothing from the stage's job dir under either runtime and
+reaches the stage as given. A file default is staged from where it is at run
+time; it is never copied into the project.
+
+**Names Nextflow cannot stage.** Nextflow's stage-in script, on 24.04 and
+26.04, writes each staged file as `ln -s <source> <name>`, leaving `*`, `?`,
+`[`, `]`, `{`, `}`, `$` and control characters such as a tab for bash to
+expand: `s[1].txt` beside `s1.txt` stages `s1.txt` silently. So PLAN refuses a
+value holding any of them, naming the input and the character, before anything
+is staged (a Nextflow staging limitation); rename such a file.
+
+**Which file values a run may stage.** `file()` on the head node fetches any
+URL Nextflow has a provider for and reads any path the head node sees, and a
+run parameter comes from whoever launches the run. So PLAN checks every value
+it lists: an `s3://` URI is staged on every profile; a head-node path (absolute,
+or a `file:` URI) only where `params.mro2nf_host_inputs` holds (the local, grid
+and docker profiles); any other scheme (`http(s)://`, `ftp://`) only with
+`--mro2nf_allow_remote_inputs true`. The errors name the input, not the value,
+which may carry a credential. The HealthOmics parameter template declares
+neither param, so a HealthOmics run cannot set them.
 
 ---
 
-## 9. Executors and resources
+## 9. Targets, executors and resources
 
-The project runs on a local or shared filesystem, under the `standard` profile
-(the local executor) or a grid profile (`-profile slurm`, `sge`, `lsf`, `pbs`).
-Isolated-container and cloud targets are tracked by #489.
+**Targets are profiles of one project** (`nextflow run -profile <name>`): the
+`.nf` files are the same everywhere, and a profile sets only where the tools
+are, which executor runs the tasks and in which image.
+
+- Every profile finds the code where the project was transpiled from: a
+  stage task compiles the entry `.mro`, its includes and its stages' code at
+  their absolute transpile-time paths; PLAN and OUTS compile the project's
+  `.mro` copy (§4) and need no code.
+- `standard` (the local executor) and the grid profiles (`slurm`, `sge`,
+  `lsf`, `pbs`) run on the host's tools (`params.mro2nf_mre`, `_mrjob`,
+  `_adapters`, the transpile's `-mre`, `-mrjob`, `-shell`) and code, on a
+  shared filesystem.
+- The container profiles, `docker`, `awsbatch` and `healthomics`, include
+  `conf/container.config`: the tools at `/opt/mro2nf`, outputs confined to the
+  task (§7), and every task, PLAN and OUTS included, in the one image
+  `params.mro2nf_image`. They set `params.mro2nf_require_image`, so a launch
+  without an image fails before PLAN.
+- **The image.** `deploy/runtime/Dockerfile` is the one definition of
+  `/opt/mro2nf` (`mre`, `mrjob`, Martian's adapters), published as
+  `ghcr.io/eunmann/mro2nf-runtime:<version>` by each release (its `v*` tag).
+  The user's image builds `FROM` it and adds the pipeline's code at the paths
+  the project was transpiled from (README, "Container image"); a stage `src`
+  that names a command must be on the image's `PATH`. The runtime image
+  itself serves where a `-c` config mounts the code at those paths. `mre
+  args` refuses a node the image compiles to another spec than PLAN planned
+  (§5), so a stale image fails loudly.
+- `docker` runs each task in a container that mounts only what it stages.
+- `awsbatch` runs on AWS Batch over an S3 work dir (`-work-dir s3://…`); every
+  task stages its inputs from S3, so nothing reads a head-node path, and a
+  head-node path as an entry file is refused (§8). Set `process.queue` and
+  `aws.region` in a `-c` config; `--outdir s3://…` publishes to S3.
+- `healthomics` (HealthOmics takes no `-profile`): `./package.sh
+  <image>@sha256:…` zips the files `main.nf` reads, appends the image and
+  `includeConfig 'conf/healthomics.config'` to the zip's `nextflow.config`, so
+  the profile is the workflow's own, and publishes to `/mnt/workflow/pubdir`.
+  The image must be pinned by digest: a workflow version then runs the code
+  it was validated with, and as `parameter-template.json` declares only the
+  entry inputs, no run can name another image.
 
 - A stage's `using (threads = …, mem_gb = …)` sets each task's `cpus` (at least
   1, rounded up) and `memory` (1 GB when unset); a chunk and a join take the

@@ -63,7 +63,7 @@ touch "$meta/_complete"
 func runSQ(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 
-	argv := append([]string{args[0], "-mro", filepath.Join(dir, "pipeline.mro")}, args[1:]...)
+	argv := append([]string{args[0], "-entry", filepath.Join(dir, "pipeline.mro")}, args[1:]...)
 
 	var err error
 

@@ -102,7 +102,7 @@ logs or a wrapping proxy and is out of scope here (see below).
 
 ## Fixtures and lanes
 
-Six fixtures live under `bench/`, exercising the costly patterns the overhead
+Eight fixtures live under `bench/`, exercising the costly patterns the overhead
 rule targets:
 
 - **`chain`** — one file (`MAKEBIG`) carried through a deep chain of pass-through
@@ -126,6 +126,14 @@ rule targets:
 - **`mapnested`** — a nested map: samples × a broadcast lane array, W×W leaves
   (`pipeline_w2.mro`, `pipeline_w4.mro`). testdata's `map_pipe_nested` splits
   the inner map over each outer element instead, which mrp rejects.
+- **`zip`** — a map call zipping splits over the outputs of two stages, one
+  of them a file array (`pipeline_w4.mro`, `pipeline_w16.mro`): the most
+  bytes one fork stages must be the same at both widths, one element of
+  each, never the whole file array.
+- **`zipgated`** — `zip` with the file array's stage behind a runtime gate,
+  so the split reads `MKFILES.fs unless GATE.off` (#494), under the same
+  flat-staging gate. Both lanes hold the gate enabled (`skip = false`); the
+  disabled branch is covered only by the unit `TestZipGatedPartner`.
 
 Every fixture invocation runs as one lane, keyed by its invocation (`chain`,
 `forks_w4`, `split_c16`, …). Every lane's plumbing is the run's PLAN and OUTS

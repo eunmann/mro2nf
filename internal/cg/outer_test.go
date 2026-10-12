@@ -74,7 +74,7 @@ func loadSource(t *testing.T, src string) *fixture {
 		t.Fatal(err)
 	}
 
-	g, err := Load(mro, mro, nil)
+	g, err := Load(mro, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

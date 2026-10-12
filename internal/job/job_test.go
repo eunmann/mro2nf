@@ -28,7 +28,7 @@ func stage(t *testing.T, fixture, node, body string) (Stage, *core.InvocationDat
 
 	mro := filepath.Join("..", "..", "testdata", fixture, "pipeline.mro")
 
-	g, err := cg.Load(mro, mro, nil)
+	g, err := cg.Load(mro, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

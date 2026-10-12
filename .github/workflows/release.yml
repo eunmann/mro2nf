@@ -154,10 +154,10 @@ jobs:
           fail_on_unmatched_files: true
           prerelease: ${{ env.PRERELEASE }}
 
-  # Publish the runtime base image (mre + Martian adapters at /opt/mro2nf) to
-  # GHCR so users build their pipeline image FROM it instead of vendoring mre.
-  # Tagged with the release version (+ latest for a non-prerelease), multi-arch
-  # (amd64 + arm64).
+  # Publish the runtime image (mre, mrjob and Martian's adapters at
+  # /opt/mro2nf) to GHCR: the image a pipeline's own image builds FROM, which
+  # every task of a container profile runs in. Tagged with the release version (+ latest for
+  # a non-prerelease), multi-arch (amd64 + arm64).
   image:
     name: Runtime image (GHCR)
     needs: ci-green

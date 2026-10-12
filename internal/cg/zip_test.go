@@ -251,3 +251,49 @@ func TestZipPartnerMapKeys(t *testing.T) {
 	_, got = f.args("ZIP_RUNTIME_MAP.BY_AX", byAX[1], abcs[AbsentName])
 	wantArgs(t, "ZIP_RUNTIME_MAP.BY_AX fork_x", got, `{"a":20,"b":null}`)
 }
+
+// TestZipGatedPartner: a split over an output of a stage a runtime gate
+// disables, `split MKFILES.fs unless GATE.off`, is a partner too (#494): a
+// fork reads the gate, and MKFILES's element at its own index where the gate
+// holds MKFILES enabled, never MKFILES's whole output; where the gate
+// disables it, the fork reads null, staging no element.
+func TestZipGatedPartner(t *testing.T) {
+	mro := filepath.Join("..", "..", "bench", "zipgated", "pipeline_w4.mro")
+
+	g, err := Load(mro, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	topo, err := g.Topology()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, n := range topo.Nodes {
+		if n.Fqid != "ZIPGATED.USE" {
+			continue
+		}
+
+		if d := cmp.Diff([]Zip{{Root: "ZIPGATED.USE", Node: "ZIPGATED.MKFILES", Output: "fs"}}, n.Zips); d != "" {
+			t.Errorf("USE's zips (-want +got):\n%s", d)
+		}
+
+		if d := cmp.Diff([]Read{{Node: "ZIPGATED.GATE", Fields: []string{"off"}}}, n.Reads); d != "" {
+			t.Errorf("USE's reads (-want +got):\n%s", d)
+		}
+	}
+
+	f := &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
+
+	vals := f.outs("ZIPGATED.MKVALS", nil, `{"vs":[0,1,2,3]}`)
+	files := f.outs("ZIPGATED.MKFILES", nil, `{"fs":["/w/part0.txt","/w/part1.txt","/w/part2.txt","/w/part3.txt"]}`)
+	use := elementDirs(t, f.post(vals, vals), "ZIPGATED.USE")
+	fs := partnerDirs(t, f.post(files, files), "ZIPGATED.USE", "ZIPGATED.MKFILES", "fs")
+
+	_, got := f.args("ZIPGATED.USE", use[1], fs["1"], f.outs("ZIPGATED.GATE", nil, `{"off":false}`))
+	wantArgs(t, "ZIPGATED.USE fork1", got, `{"f":"/w/part1.txt","v":1}`)
+
+	_, got = f.args("ZIPGATED.USE", use[1], f.outs("ZIPGATED.GATE", nil, `{"off":true}`))
+	wantArgs(t, "ZIPGATED.USE fork1, MKFILES disabled", got, `{"f":null,"v":1}`)
+}

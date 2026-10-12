@@ -2,38 +2,40 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-var errNoMRO = errors.New("-mro is required")
+var errNoEntry = errors.New("-entry is required")
 
 // graphFlags locate the invocation a call-graph subcommand resolves against
 // and the type manifest its bundles are written with.
 type graphFlags struct {
-	mro, as, mropath, types string
+	entry, call, mropath, types string
 }
 
 func addGraph(fs *flag.FlagSet) *graphFlags {
 	g := &graphFlags{}
-	fs.StringVar(&g.mro, "mro", "", "the invocation .mro, compiled as mrp compiles it")
-	fs.StringVar(&g.as, "as", "", "the entry .mro the invocation compiles as, beside which Martian resolves its includes and stage code (default: -mro)")
-	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the -as file's dir)")
+	fs.StringVar(&g.entry, "entry", "", "the entry .mro, compiled as mrp compiles it; Martian resolves its includes and stage code beside it")
+	fs.StringVar(&g.call, "call", "", "file holding the run's call, base64 of the call mre plan rebuilt, in place of the entry's own (default: the entry's call)")
+	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the -entry file's dir)")
 	fs.StringVar(&g.types, "types", "", "type manifest (types.json) path (default: built from the invocation's declarations)")
 
 	return g
 }
 
 func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
-	if g.mro == "" {
-		return nil, types.Manifest{}, errNoMRO
+	if g.entry == "" {
+		return nil, types.Manifest{}, errNoEntry
 	}
 
 	var paths []string
@@ -41,12 +43,12 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 		paths = filepath.SplitList(g.mropath)
 	}
 
-	entry := g.as
-	if entry == "" {
-		entry = g.mro
+	call, err := readCall(g.call)
+	if err != nil {
+		return nil, types.Manifest{}, err
 	}
 
-	graph, err := cg.Load(g.mro, entry, paths)
+	graph, err := cg.Load(g.entry, call, paths)
 	if err != nil {
 		return nil, types.Manifest{}, fmt.Errorf("load call graph: %w", err)
 	}
@@ -63,6 +65,27 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 	return graph, man, nil
 }
 
+// readCall is the call the file at path holds, base64; "" reads none. A
+// task writes it from its own value: as an argument, a wide run's call
+// would pass the kernel's limit on one argument (MAX_ARG_STRLEN, 128 KiB).
+func readCall(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read -call: %w", err)
+	}
+
+	call, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return "", fmt.Errorf("decode -call %s: %w", path, err)
+	}
+
+	return string(call), nil
+}
+
 // runArgs writes one stage instance's args bundle from its staged upstream
 // outs and fork elements, and prints the instance's state, enabled or
 // disabled, on stdout.
@@ -70,7 +93,9 @@ func runArgs(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("args", flag.ContinueOnError)
 	gf := addGraph(fs)
 	node := fs.String("node", "", "stage fqid")
+	digest := fs.String("digest", "", "the node's spec digest in the run's plan, which it must compile to")
 	out := fs.String("o", "args", "args bundle dir to write")
+	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 
 	var in, forkRecs repeatedFlag
 
@@ -93,7 +118,12 @@ func runArgs(_ context.Context, argv []string) error {
 		}
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr})
+	files, err := stagedEntryFiles(g, man, *leaves)
+	if err != nil {
+		return fmt.Errorf("args: %w", err)
+	}
+
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr, Digest: *digest, EntryFiles: files})
 	if err != nil {
 		return fmt.Errorf("args: %w", err)
 	}
@@ -110,15 +140,42 @@ func runArgs(_ context.Context, argv []string) error {
 	return nil
 }
 
+// stagedEntryFiles maps the entry file values -leaves lists, which the
+// task staged below entry/, to the paths it reads them at.
+func stagedEntryFiles(g *cg.Graph, man types.Manifest, leaves string) (map[string]string, error) {
+	if leaves == "" {
+		return nil, nil
+	}
+
+	var ids []int
+
+	for f := range strings.SplitSeq(leaves, ",") {
+		id, err := strconv.Atoi(f)
+		if err != nil {
+			return nil, fmt.Errorf("-leaves: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	files, err := g.StagedEntryFiles(man, "entry", ids)
+	if err != nil {
+		return nil, fmt.Errorf("staged entry files: %w", err)
+	}
+
+	return files, nil
+}
+
 // runPost stamps a finished instance's outs and writes the fork elements of
-// every root it feeds; -entry writes those of the roots no stage feeds.
+// every root it feeds; -entry-forks writes those of the roots no stage
+// feeds.
 func runPost(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("post", flag.ContinueOnError)
 	gf := addGraph(fs)
 	args := fs.String("args", "args", "the instance's args bundle dir")
 	outs := fs.String("outs", "outs", "the stage's outs bundle dir")
 	forks := fs.String("forks", "forks", "dir to write <root>/<ordinal>/ fork elements into")
-	entry := fs.Bool("entry", false, "write the forks the invocation's entry values fix, not a stage's")
+	entry := fs.Bool("entry-forks", false, "write the forks the invocation's entry values fix, not a stage's")
 	fields := fs.String("fields", "", "dir to write one stamped bundle per output into, named by it")
 	gates := fs.String("gates", "", "file to write the instances the instance disables into, space-separated gate tokens (<node>@<roots>@<ordinals>)")
 
@@ -157,6 +214,7 @@ func runOuts(ctx context.Context, argv []string) error {
 	outsJSON := fs.String("json", "pipeline_outs.json", "file to write the outs JSON to")
 	work := fs.String("work", "pipestance", "dir to reconstruct the pipestance in")
 	locations := fs.String("locations", "", "file of tab-separated lines: a staged outs bundle, and where its producing task's work dir keeps it")
+	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 
 	var in repeatedFlag
 
@@ -176,7 +234,12 @@ func runOuts(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	spec := cg.OutsSpec{In: in, Locations: locs, Manifest: man, Source: gf.mro, Work: *work, Results: *out, OutsJSON: *outsJSON}
+	files, err := stagedEntryFiles(g, man, *leaves)
+	if err != nil {
+		return fmt.Errorf("outs: %w", err)
+	}
+
+	spec := cg.OutsSpec{In: in, Locations: locs, EntryFiles: files, Manifest: man, Work: *work, Results: *out, OutsJSON: *outsJSON}
 	if err := g.WriteOuts(ctx, spec); err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}
