@@ -65,11 +65,12 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   URIs.
 - A stage receives a file input at a path in its own task directory, with the
   same file name and content. Under `mrp` it receives the original path.
-- Only the named file is staged, not the files beside it. A stage that opens
-  a companion file next to its input, such as an index beside a BAM, finds it
-  under `mrp` but not under mro2nf. Declare the companion as its own input and
-  have the stage open it from that input, or pass a directory input that holds
-  both files.
+- Only the named file is staged, not the files beside it, whether it is a
+  pipeline input or another stage's output. A stage that opens a companion
+  file next to its input, such as an index beside a BAM, finds it under `mrp`
+  but not under mro2nf. Declare the companion as its own input, and as its
+  own output of the stage that writes it, and have the stage open it from
+  that input, or pass a directory input that holds both files.
 - Nextflow's v1 syntax parser, the default before 26.04 or under
   `NXF_SYNTAX_PARSER=v1`, converts command-line values before the run sees
   them: `--s 007` becomes the number `7`, which fails a `string` input. Set

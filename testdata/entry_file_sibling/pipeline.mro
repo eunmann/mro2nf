@@ -3,7 +3,7 @@ filetype txt;
 # #520: a stage that opens a companion file beside its entry file input, as a
 # tool opens an index beside a BAM. mrp passes the invocation's path, so the
 # companion is found; mro2nf stages only the named file into the task, so it
-# is not, and the stage fails (divergences.json, entry-file-siblings).
+# is not, and the stage fails (divergences.json, input-file-siblings).
 # Exercised by TestMrpDiffFailureParity. The input is /dev/null and the
 # companion /dev/zero: mrp passes an invocation path verbatim, so a relative
 # one would not resolve in its job dir, and /dev holds both on every host.

@@ -64,11 +64,11 @@
       "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
     },
     {
-      "id": "entry-file-siblings",
+      "id": "input-file-siblings",
       "kind": "outcome",
-      "feature": "a stage opening files beside an entry file input",
-      "summary": "A stage that opens a companion file beside an entry file input, such as an index beside a BAM, finds it under mrp, which passes the invocation's path, and the run succeeds; under mro2nf the stage finds nothing there and fails, because its task stages only the named file.",
-      "justification": "A task sees only the files its inputs name: on an isolated worker or an object-store work dir, the input's directory on the launch host does not exist, and staging that whole directory would copy files no input names. A stage that needs a companion file gets it as its own input, or as a file in a directory input (`RUNNING.md`, Pipeline inputs).",
+      "feature": "a stage opening files beside a file input",
+      "summary": "A stage that opens a companion file beside a file input, such as an index beside a BAM, finds it under mrp, which passes an entry input's path in the invocation and a stage output's path in its producer's job dir, beside every file the producer wrote, and the run succeeds; under mro2nf the stage finds nothing there and fails, because its task stages only the named file: of an entry input the file alone, and of a stage output only the files its producer's outs name.",
+      "justification": "A task sees only the files its inputs name: on an isolated worker or an object-store work dir, an entry input's directory on the launch host does not exist, and a producer passes on only its outs, not its task's directory; staging either whole directory would copy files no input names. A stage that needs a companion file gets it as its own input, which a producing stage declares as its own output, or as a file in a directory input (`RUNNING.md`, Pipeline inputs).",
       "evidence": ["TestMrpDiffFailureParity/entry_file_sibling", "TestRemovingAnOutcomeEntryFailsItsCase"],
       "outcome": {"failed": true, "failures": [{"kind": "error", "stage": "READ_WITH_INDEX"}]}
     },
@@ -108,8 +108,8 @@
       "id": "staged-input-paths",
       "kind": "mechanism",
       "feature": "file and directory paths in a stage's `_args`",
-      "summary": "mro2nf's `_args` names each file or directory a stage receives by its copy staged in the task's work dir, `args/f/L0000/<name>` and on, with the basename and content mrp gives it. mrp's `_args` names an entry input by the path in the invocation or launch value, and a stage output by its path in the producer's job dir in the pipestance.",
-      "justification": "A task on any executor reads only what Nextflow stages into its work dir, and the paths mrp names are on the launch host or in a pipestance that does not exist under Nextflow. A stage reading its inputs by the paths it is given reads the same bytes under the same names, which the stage-ABI comparison checks: it compares each existing path by its content and basename, not its directory. A stage that opens files beside an input, which only the input's directory holds, is the outcome divergence `entry-file-siblings`.",
+      "summary": "mro2nf's `_args` names each file or directory a stage receives by its copy staged in the task's work dir, `args/f/L0000/<name>` and on, with the basename and content mrp gives it. mrp's `_args` names an entry input by the path in the invocation, and a stage output by its path in the producer's job dir in the pipestance.",
+      "justification": "A task on any executor reads only what Nextflow stages into its work dir, and the paths mrp names are on the launch host or in a pipestance that does not exist under Nextflow. A stage reading its inputs by the paths it is given reads the same bytes under the same names, which the stage-ABI comparison checks: it compares each existing path by its content and basename, not its directory. A stage that opens files beside an input, which only the input's directory holds, is the outcome divergence `input-file-siblings`.",
       "evidence": ["TestMrpDiff/basename_echo", "TestMrpDiff/file_min", "TestABINormalizeSameContentAcrossHosts", "TestMrpDiffFailureParity/entry_file_sibling"]
     },
     {

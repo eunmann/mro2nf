@@ -626,7 +626,7 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// #520: a stage opening a companion file beside its entry file input.
 	// mrp passes the invocation's path and finds it; mro2nf stages only the
 	// named file, so the stage fails.
-	{name: "entry_file_sibling", mrp: runOutcome{}, divergence: "entry-file-siblings"},
+	{name: "entry_file_sibling", mrp: runOutcome{}, divergence: "input-file-siblings"},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
