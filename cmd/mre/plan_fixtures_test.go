@@ -39,7 +39,7 @@ func TestPlanEveryFixture(t *testing.T) {
 			}
 
 			dir := filepath.Dir(mro)
-			argv := []string{"post", "-entry", mro, "-call", readText(t, filepath.Join(work, "call")), "-mropath", dir, "-entry-forks", "-forks", filepath.Join(work, "entry")}
+			argv := []string{"post", "-entry", mro, "-call", filepath.Join(work, "call"), "-mropath", dir, "-entry-forks", "-forks", filepath.Join(work, "entry")}
 
 			if err := run(t.Context(), argv); err != nil {
 				t.Fatalf("post -entry-forks: %v", err)

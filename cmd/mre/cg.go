@@ -26,7 +26,7 @@ type graphFlags struct {
 func addGraph(fs *flag.FlagSet) *graphFlags {
 	g := &graphFlags{}
 	fs.StringVar(&g.entry, "entry", "", "the entry .mro, compiled as mrp compiles it; Martian resolves its includes and stage code beside it")
-	fs.StringVar(&g.call, "call", "", "the run's call, base64 of the call mre plan rebuilt, in place of the entry's own (default: the entry's call)")
+	fs.StringVar(&g.call, "call", "", "file holding the run's call, base64 of the call mre plan rebuilt, in place of the entry's own (default: the entry's call)")
 	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the -entry file's dir)")
 	fs.StringVar(&g.types, "types", "", "type manifest (types.json) path (default: built from the invocation's declarations)")
 
@@ -43,12 +43,12 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 		paths = filepath.SplitList(g.mropath)
 	}
 
-	call, err := base64.StdEncoding.DecodeString(g.call)
+	call, err := readCall(g.call)
 	if err != nil {
-		return nil, types.Manifest{}, fmt.Errorf("decode -call: %w", err)
+		return nil, types.Manifest{}, err
 	}
 
-	graph, err := cg.Load(g.entry, string(call), paths)
+	graph, err := cg.Load(g.entry, call, paths)
 	if err != nil {
 		return nil, types.Manifest{}, fmt.Errorf("load call graph: %w", err)
 	}
@@ -63,6 +63,27 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 	}
 
 	return graph, man, nil
+}
+
+// readCall is the call the file at path holds, base64; "" reads none. A
+// task writes it from its own value: as an argument, a wide run's call
+// would pass the kernel's limit on one argument (MAX_ARG_STRLEN, 128 KiB).
+func readCall(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read -call: %w", err)
+	}
+
+	call, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return "", fmt.Errorf("decode -call %s: %w", path, err)
+	}
+
+	return string(call), nil
 }
 
 // runArgs writes one stage instance's args bundle from its staged upstream

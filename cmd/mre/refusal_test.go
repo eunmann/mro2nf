@@ -16,7 +16,8 @@ func TestSubcommandsRefuseBadInputs(t *testing.T) {
 	cases := map[string][]string{
 		"args flag":        {"args", "-bogus"},
 		"args entry":       {"args", "-entry", absent},
-		"args call":        {"args", "-entry", mro, "-call", "not base64!"},
+		"args call":        {"args", "-entry", mro, "-call", writeTestFile(t, filepath.Join(t.TempDir(), "call"), "not base64!")},
+		"args call file":   {"args", "-entry", mro, "-call", absent},
 		"args types":       {"args", "-entry", mro, "-types", absent},
 		"args fork record": {"args", "-entry", mro, "-node", "PP.MAKE", "-fork", "not base64!"},
 		"args node":        {"args", "-entry", mro, "-node", "PP.NONE", "-o", filepath.Join(t.TempDir(), "args")},

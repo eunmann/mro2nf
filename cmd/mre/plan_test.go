@@ -161,7 +161,7 @@ func nestedArgs(t *testing.T, work string, lines []string) []string {
 
 		state := captureStdout(t, func() {
 			err = run(t.Context(), []string{
-				"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", readText(t, filepath.Join(work, "call")), "-mropath", fx,
+				"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", filepath.Join(work, "call"), "-mropath", fx,
 				"-node", "OUTER.INNER.DBL", "-fork", inner[outer], "-fork", f[1], "-o", dir,
 			})
 		})
@@ -202,6 +202,31 @@ func TestPlanDigestFollowsTheNode(t *testing.T) {
 	}
 }
 
+// TestArgsReadsAWideCallFromItsFile: a task reads the run's call from the
+// file -call names, as a call wider than the kernel's limit on one argument
+// (MAX_ARG_STRLEN, 128 KiB) could not reach mre as an argument.
+func TestArgsReadsAWideCallFromItsFile(t *testing.T) {
+	work, err := plan(t, "chain_gate", `{"x":"5"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wide := planCall(t, work) + "\n# " + strings.Repeat("w", 256<<10) + "\n"
+	call := writeTestFile(t, filepath.Join(work, "wide.b64"), base64.StdEncoding.EncodeToString([]byte(wide))+"\n")
+	fx, args := fixtureDir(t, "chain_gate"), filepath.Join(work, "args")
+
+	captureStdout(t, func() {
+		err = run(t.Context(), []string{"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", call, "-mropath", fx, "-node", "CH.SRC", "-o", args})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := compactBundle(t, args); !strings.Contains(got, `"x":5`) {
+		t.Errorf("SRC's args %s, want the call's x = 5", got)
+	}
+}
+
 // TestPlanAndPostAgreeOnEntryGates: SRC's post names the forks it disables
 // of a map call the entry forks by the ordinals the plan keys those forks
 // by, so the driver's token match disables the elements mrp disables
@@ -214,7 +239,7 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 	}
 
 	fx := fixtureDir(t, "split_gate_entry")
-	mro, call := filepath.Join(fx, "pipeline.mro"), readText(t, filepath.Join(work, "call"))
+	mro, call := filepath.Join(fx, "pipeline.mro"), filepath.Join(work, "call")
 	src, outs, gates := "SPLIT_GATE_ENTRY.SRC", filepath.Join(work, "src", "outs"), filepath.Join(work, "src", "gates")
 	args := filepath.Join(work, "src", "args")
 
@@ -445,7 +470,7 @@ func TestArgsReadsStagedEntryFiles(t *testing.T) {
 
 	captureStdout(t, func() {
 		err = run(t.Context(), []string{
-			"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", readText(t, filepath.Join(work, "call")), "-mropath", fx,
+			"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", filepath.Join(work, "call"), "-mropath", fx,
 			"-node", "EP.COUNT", "-leaves", "0", "-o", "args",
 		})
 	})
@@ -485,7 +510,7 @@ func TestArgsRefusesCodeThePlanDidNotPlan(t *testing.T) {
 
 		captureStdout(t, func() {
 			err = run(t.Context(), []string{
-				"args", "-entry", mro, "-call", readText(t, filepath.Join(work, "call")), "-mropath", dir,
+				"args", "-entry", mro, "-call", filepath.Join(work, "call"), "-mropath", dir,
 				"-node", "CH.SRC", "-digest", digest, "-o", filepath.Join(t.TempDir(), "args"),
 			})
 		})

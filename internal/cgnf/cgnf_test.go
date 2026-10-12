@@ -228,6 +228,25 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 	}
 }
 
+// TestEmitWritesTheCallToAFile: every process that runs mre writes the
+// run's call, its value, to the file mre reads it from, before mre runs, as
+// a wide run's call would pass the kernel's 128 KiB limit on one argument.
+func TestEmitWritesTheCallToAFile(t *testing.T) {
+	if !strings.Contains(stageModule, "\"${code(meta, root)} -call call.b64\"") || !strings.Contains(stageModule, "\"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"") {
+		t.Error("stage.nf does not hand mre the call in a file")
+	}
+
+	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN", "OUTS"} {
+		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
+		_, script, _ := strings.Cut(body, "script:\n")
+		script, _, _ = strings.Cut(script, "\n}\n")
+
+		if at := strings.Index(script, "${callFile(meta)}"); at < 0 || at != strings.Index(script, "${") {
+			t.Errorf("%s does not write the call before it runs mre:\n%s", proc, script)
+		}
+	}
+}
+
 // TestEmitStagesChunkApart: a chunk's main stages the split's chunk dir
 // below chunk/, apart from the job's metadata dir of the chunk's name, so
 // the job writes nothing into the split's outputs, which would change their

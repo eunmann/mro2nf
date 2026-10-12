@@ -304,8 +304,10 @@ so the plumbing task count does not grow with fork width or chunk count
 ## 6. The runtime shim `mre`
 
 Each subcommand that works on the call graph takes the entry `.mro`
-(`-entry`, `-mropath`) and the run's call (`-call`, base64 of the call PLAN
-rebuilt; the entry's own call without it), compiles the call over the entry's
+(`-entry`, `-mropath`) and the run's call (`-call`, a file holding base64 of
+the call PLAN rebuilt, which each task writes from its own value, as a wide
+run's call would pass the kernel's 128 KiB limit on one argument; the entry's
+own call without it), compiles the call over the entry's
 declarations as `mrp` compiles an invocation (`ParseSourceBytes`, then
 `MakePipelineCallGraph`) as the entry file, and reads only the items its task
 staged (`-in`, an item or a dir of items). Without `-types`, each builds the

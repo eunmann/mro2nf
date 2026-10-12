@@ -34,9 +34,17 @@ def code(Map meta, String root) {
 }
 
 // graph names the invocation an mre call-graph subcommand compiles: the
-// run's call, base64 and so unquoted, over the entry's declarations.
+// run's call callFile wrote, over the entry's declarations.
 def graph(Map meta, String root) {
-    return "${code(meta, root)} -call ${meta.call}"
+    return "${code(meta, root)} -call call.b64"
+}
+
+// callFile writes the run's call, base64, from the task's own value, which
+// stays its -resume key. As an argument, a wide run's call would pass the
+// kernel's limit on one argument (128 KiB). The here-document's lines start
+// their own lines, where the script's indent does not reach.
+def callFile(Map meta) {
+    return "cat > call.b64 <<'MRO2NF_CALL'\n${meta.call}\nMRO2NF_CALL"
 }
 
 // args builds the instance's args bundle from what it staged, its entry
@@ -103,6 +111,7 @@ process STAGE {
 
     script:
     """
+    ${callFile(meta)}
     ${args(meta, forks, leaves)}
     ${job(meta, 'main', '-args args -o stage_outs')}
     ${post(meta)}
@@ -123,6 +132,7 @@ process STAGE_SPLIT {
 
     script:
     """
+    ${callFile(meta)}
     ${args(meta, forks, leaves)}
     ${job(meta, 'split', '-args args -o chunks')}
     """
@@ -144,6 +154,7 @@ process STAGE_MAIN {
 
     script:
     """
+    ${callFile(meta)}
     ${job(meta, 'main', "-args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
 }
@@ -164,6 +175,7 @@ process STAGE_JOIN {
 
     script:
     """
+    ${callFile(meta)}
     ${job(meta, 'join', '-args args -chunks chunks -chunkouts chunkouts -o stage_outs')}
     ${post(meta)}
     """
@@ -201,6 +213,7 @@ process OUTS {
     script:
     """
     mkdir -p in
+    ${callFile(meta)}
     ${locations(ups, locs)}
     ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -types types.json -in in -locations locations -o results -json pipeline_outs.json
     """
