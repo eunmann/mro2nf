@@ -484,7 +484,8 @@ func enclosingOrigin(abs string) (Origin, bool, error) {
 
 // linked reports whether mrp links the leaf src, which no bundle recorded:
 // a file the run was given, written without a confinement, or a stage output
-// that is a symlink or lies outside its task.
+// that is a symlink or lies outside its task, such as the real path of an
+// entry file its args name.
 func (m leafMarker) linked(src string) (bool, error) {
 	if m.conf == nil {
 		return true, nil
@@ -501,7 +502,7 @@ func (m leafMarker) linked(src string) (bool, error) {
 
 	kind, err := m.conf.admit(src)
 
-	return kind == leafOutside, err
+	return kind == leafInput || kind == leafOutside, err
 }
 
 // stage copies, or links, the leaf at src, whose absolute path is abs, to
@@ -660,8 +661,8 @@ type copyPolicy struct {
 }
 
 // admit returns the policy for src and its entries: unchanged for the stage's
-// own files, unconfined below a staged input, and unconfined but copy-only
-// below a host path outside the task.
+// own files, unconfined below a staged input or what one links to, and
+// unconfined but copy-only below any other host path outside the task.
 func (p copyPolicy) admit(src string) (copyPolicy, error) {
 	if p.conf == nil {
 		return p, nil
@@ -673,7 +674,7 @@ func (p copyPolicy) admit(src string) (copyPolicy, error) {
 	}
 
 	switch kind {
-	case leafStaged:
+	case leafStaged, leafInput:
 		return copyPolicy{}, nil
 	case leafOutside:
 		return copyPolicy{copyOnly: true}, nil

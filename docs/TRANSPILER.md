@@ -523,8 +523,10 @@ task (`shim.CopyTree`). For a stage's own outputs the dereference is confined
 (`shim.Confinement`). An output, and every symlink it passes through, is
 classified as the stage's own file inside the task work dir (hard-linked into
 the bundle), a path in the work dir outside the stage's phase dir, i.e. a staged
-input (followed wherever it points, hard-linked), or a host path outside the
-task:
+input (followed wherever it points, hard-linked), a path outside the task
+inside what a staged input links to, i.e. an input's real path, which a stage
+that resolves its args' paths returns (hard-linked, as the input it resolves
+from), or any other host path outside the task:
 
 - Under `--mro2nf_confine true` (`mre run -confine`), such a path cannot be
   valid in an isolated container downstream, and copying it would upload host

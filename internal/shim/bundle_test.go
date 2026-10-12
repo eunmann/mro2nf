@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -446,6 +447,97 @@ func TestWriteLinkedBundleFails(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRealPathOfLinkedArgsStages: a stage that returns the real path of a
+// file its linked args name, an upstream stage's file or an entry file, names
+// a file outside its task. Under either confinement it stages as the args
+// file it resolves from does, hard-linked with that file's origin: mrp's
+// stage returns the same file either way.
+func TestRealPathOfLinkedArgsStages(t *testing.T) {
+	dir := t.TempDir()
+	one := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
+	params := []ir.Param{{Name: "host", BaseType: "file", IsFile: true}, {Name: "up", BaseType: "file", IsFile: true}}
+
+	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
+	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
+	produced := writeStageOuts(t, filepath.Join(dir, "producer"), map[string]any{"f": own}, one)
+
+	task := filepath.Join(dir, "task")
+	entry := filepath.Join(task, "entry", "1", "ref.txt")
+
+	for _, d := range []string{filepath.Join(task, "in"), filepath.Dir(entry), filepath.Join(task, "main")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := errors.Join(os.Symlink(produced, filepath.Join(task, "in", "u0")), os.Symlink(host, entry)); err != nil {
+		t.Fatal(err)
+	}
+
+	staged, _ := readPayload(t, filepath.Join(task, "in", "u0"))["f"].(string)
+	args := filepath.Join(task, "args")
+
+	if err := shim.WriteLinkedBundle(args, map[string]any{"host": entry, "up": staged}, params, fileTable()); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := map[string]any{}
+
+	for name, v := range readPayload(t, args) {
+		leaf, _ := v.(string)
+
+		r, err := filepath.EvalSymlinks(leaf)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		resolved[name] = r
+	}
+
+	realHost, err := filepath.EvalSymlinks(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, strict := range []bool{true, false} {
+		conf, err := shim.ConfineStage(task, "main", strict)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		outs := filepath.Join(dir, "outs", strconv.FormatBool(strict))
+		if err := shim.WriteBundle(outs, resolved, params, fileTable(), conf); err != nil {
+			t.Fatalf("strict %v: WriteBundle of the real paths of linked args: %v", strict, err)
+		}
+
+		want := map[string]shim.Origin{"host": {Path: realHost, Linked: true}, "up": {Path: own}}
+		if d := cmp.Diff(want, leafOrigins(t, outs)); d != "" {
+			t.Errorf("strict %v: origins (-want +got):\n%s", strict, d)
+		}
+
+		leaf, _ := readPayload(t, outs)["up"].(string)
+		if !sameInode(t, leaf, own) {
+			t.Errorf("strict %v: %s is not a hard link to the upstream file %s", strict, leaf, own)
+		}
+	}
+}
+
+func sameInode(t *testing.T, a, b string) bool {
+	t.Helper()
+
+	ai, err := os.Stat(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bi, err := os.Stat(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return os.SameFile(ai, bi)
 }
 
 // TestMarkFilesRefusesOriginFileName checks a leaf named like the origin file
