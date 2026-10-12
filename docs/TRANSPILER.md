@@ -193,10 +193,11 @@ records mre wrote; it parses no stage-controlled JSON.
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
   the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
   such as the executor's out-of-memory kill. An ASSERT (42), a stage exception
-  or a failed `mre` step ends the run on its first attempt. A retry gets the
-  stage's memory times the attempt, except under monitor, where `mrjob`
-  kills the stage at its own request as `mrp` does and `mrp` does not retry
-  that kill.
+  or a failed `mre` step ends the run on its first attempt. A retry requests
+  the memory and cpus of the first attempt, as `mrp` retries a job at its
+  request: it escalates only under `--auto-adjust-memory`, which `mro2nf`
+  does not support. Under `--mro2nf_monitor true`, `mrjob` kills the stage at
+  its own request as `mrp` does, and `mrp` does not retry that kill.
 - One `accelerator` rule, evaluated per task, that requests N GPUs for a job
   whose special, as `mrp` resolves it, is `"gpu"` or `"gpu:N"`: the stage's own,
   or for a chunk or the join the `__special` the split returned for it (see

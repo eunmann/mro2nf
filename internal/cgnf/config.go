@@ -83,7 +83,8 @@ func processConfig() string {
 // scheduler failure (jobmanagers/retry.json), for which mre exits %d; a
 // task the executor killed by a signal exits 128 + the signal. Any other
 // failure, a stage exception or ASSERT (42) or a failed mre step, ends the
-// run, as it ends mrp's.
+// run, as it ends mrp's. A retry requests the same cpus and memory, as mrp
+// retries a job at its request without --auto-adjust-memory.
 process {
     errorStrategy = { task.exitStatus in [%d, 137, 143] ? 'retry' : 'terminate' }
     maxRetries = %d

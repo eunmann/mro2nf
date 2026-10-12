@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -196,5 +197,68 @@ func TestMonitorMemoryKillFailsLikeMrp(t *testing.T) {
 
 	if err := runNextflow(t, transpile(t, "flaky_retry"), "--mro2nf_monitor", "false"); err != nil {
 		t.Errorf("--mro2nf_monitor false: %v", err)
+	}
+}
+
+// retryMRO's ONCE kills itself by a signal on its first attempt, which mrp
+// retries (jobmanagers/retry.json "^signal: "), and leaves marker behind,
+// so its retry succeeds.
+const retryMRO = `stage ONCE(
+    in  string marker,
+    out bool   done,
+    src py     "stages/once",
+) using (
+    mem_gb = 1,
+)
+
+call ONCE(
+    marker = "%s",
+)
+`
+
+const retryOnce = `import os
+import signal
+
+
+def main(args, outs):
+    if not os.path.exists(args.marker):
+        open(args.marker, "w").close()
+        os.kill(os.getpid(), signal.SIGKILL)
+    outs.done = True
+`
+
+// TestRetryRequestsTheSameResources (#506): a retried task requests the
+// memory and cpus of its first attempt, the job's own under the run's
+// overrides, as mrp retries a job at its request; it escalates only under
+// --auto-adjust-memory, which mro2nf does not support.
+func TestRetryRequestsTheSameResources(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "stages", "once"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFileT(t, filepath.Join(dir, "pipeline.mro"), fmt.Sprintf(retryMRO, filepath.Join(dir, "marker")))
+	writeFileT(t, filepath.Join(dir, "stages", "once", "__init__.py"), retryOnce)
+	writeFileT(t, filepath.Join(dir, "overrides.json"), `{"ONCE": {"chunk.threads": 2, "chunk.mem_gb": 2}}`)
+	writeFileT(t, filepath.Join(dir, "trace.config"), "trace.fields = 'name,status,exit,attempt,cpus,memory'\n")
+
+	proj := transpileDir(t, dir)
+	if err := runNextflowAllowingFailedAttempts(t, proj, "-c", filepath.Join(dir, "trace.config"),
+		"-with-trace", "trace.txt", "--mro2nf_overrides", filepath.Join(dir, "overrides.json")); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	var got []string
+
+	for _, row := range readTraceColumns(t, filepath.Join(proj, "trace.txt"), "name", "attempt", "status", "cpus", "memory") {
+		if strings.HasPrefix(row[0], "N0_ONCE") {
+			got = append(got, strings.Join(row[1:], " "))
+		}
+	}
+
+	if want := []string{"1 FAILED 2 2 GB", "2 COMPLETED 2 2 GB"}; !slices.Equal(got, want) {
+		t.Errorf("ONCE attempts (attempt status cpus memory) %q, want %q", got, want)
 	}
 }

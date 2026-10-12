@@ -344,9 +344,9 @@ func TestEmitSizesNodesUnderOverrides(t *testing.T) {
 
 // TestEmitRetriesWhatMrpRetries: a task is retried, as many times as mrp
 // retries a job, only on mre's transient exit or a signal's, never on a
-// stage exception, an ASSERT or a failed mre step; and under monitor, a
-// launch param off by default, a retry keeps the stage's own memory, at
-// which mrjob kills it as mrp does.
+// stage exception, an ASSERT or a failed mre step; and a retry requests the
+// memory and cpus of the first attempt, as mrp retries a job at its request
+// (#506).
 func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
 
@@ -360,8 +360,8 @@ func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(stageModule, `"${on(params.mro2nf_monitor) ? meta.mem_gb : meta.mem_gb * attempt} GB"`) {
-		t.Error("stage.nf escalates a retry's memory under monitor")
+	if n := strings.Count(stageModule, `memory { "${meta.mem_gb} GB" }`); n != 4 || strings.Contains(stageModule, "attempt") {
+		t.Errorf("stage.nf sizes %d of its 4 stage processes by their job's memory alone, or by the attempt", n)
 	}
 }
 

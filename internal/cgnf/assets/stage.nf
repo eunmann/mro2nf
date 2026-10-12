@@ -109,19 +109,10 @@ def resources(String table) {
     }
 }
 
-// mem is the memory a task is scheduled with. Under params.mro2nf_monitor
-// mrjob kills a stage at its own request, as mrp does, so a retry gets the
-// same memory;
-// otherwise a retry, after a signal such as the executor's out-of-memory
-// kill, gets more. The stage sees its request either way (_jobinfo).
-def mem(Map meta, int attempt) {
-    return "${on(params.mro2nf_monitor) ? meta.mem_gb : meta.mem_gb * attempt} GB"
-}
-
 process STAGE {
     tag "${meta.node} ${key.join('.')}"
     cpus { meta.cpus }
-    memory { mem(meta, task.attempt) }
+    memory { "${meta.mem_gb} GB" }
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
@@ -144,7 +135,7 @@ process STAGE {
 process STAGE_SPLIT {
     tag "${meta.node} ${key.join('.')}"
     cpus { meta.cpus }
-    memory { mem(meta, task.attempt) }
+    memory { "${meta.mem_gb} GB" }
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
@@ -164,7 +155,7 @@ process STAGE_SPLIT {
 process STAGE_MAIN {
     tag "${meta.node} ${key.join('.')} ${name}"
     cpus { meta.cpus }
-    memory { mem(meta, task.attempt) }
+    memory { "${meta.mem_gb} GB" }
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     // The chunk is staged below chunk/: the job's metadata dir is named as
@@ -185,7 +176,7 @@ process STAGE_MAIN {
 process STAGE_JOIN {
     tag "${meta.node} ${key.join('.')}"
     cpus { meta.cpus }
-    memory { mem(meta, task.attempt) }
+    memory { "${meta.mem_gb} GB" }
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
