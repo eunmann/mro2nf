@@ -84,7 +84,8 @@ func readJSONFile(t *testing.T, path string, v any) {
 }
 
 // TestExitCode pins the exit-code mapping: an ASSERT-class stage failure (even
-// wrapped) uses the distinct non-retryable code; anything else exits 1.
+// wrapped) uses the distinct non-retryable code, a job failure mrp retries the
+// one retryable code; anything else exits 1.
 func TestExitCode(t *testing.T) {
 	tests := []struct {
 		name string
@@ -92,6 +93,7 @@ func TestExitCode(t *testing.T) {
 		want int
 	}{
 		{name: "wrapped job assert", err: fmt.Errorf("main: %w", job.ErrAssert), want: job.AssertExitCode},
+		{name: "wrapped transient job failure", err: fmt.Errorf("main: %w", job.ErrTransient), want: job.TransientExitCode},
 		{name: "ordinary error", err: errUsage, want: 1},
 		{name: "wrapped ordinary error", err: fmt.Errorf("read: %w", os.ErrNotExist), want: 1},
 	}

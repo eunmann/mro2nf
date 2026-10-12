@@ -78,9 +78,12 @@ def sized(Map meta, Object res) {
     ]
 }
 
-// mem is the memory a task is scheduled with, raised on each retry.
+// mem is the memory a task is scheduled with. Under -monitor mrjob kills a
+// stage at its own request, as mrp does, so a retry gets the same memory;
+// otherwise a retry, after a signal such as the executor's out-of-memory
+// kill, gets more. The stage sees its request either way (_jobinfo).
 def mem(Map meta, int attempt) {
-    return "${meta.mem_gb * attempt} GB"
+    return "${params.mro2nf_monitor ? meta.mem_gb : meta.mem_gb * attempt} GB"
 }
 
 process STAGE {

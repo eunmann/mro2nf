@@ -185,9 +185,13 @@ records mre wrote; it parses no stage-controlled JSON.
   `mro2nf_monitor` and `mro2nf_confine`: the tools and knobs the stage module
   reads.
 - One `params.<name> = null` per entry input (§8).
-- The retry policy: `mre` exits 42 for an ASSERT, which mrp never retries, so
-  the task terminates the run; any other failure retries up to twice, each
-  retry with the stage's memory times the attempt.
+- The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
+  the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
+  such as the executor's out-of-memory kill. An ASSERT (42), a stage exception
+  or a failed `mre` step ends the run on its first attempt. A retry gets the
+  stage's memory times the attempt, except under `-monitor`, where `mrjob`
+  kills the stage at its own request as `mrp` does and `mrp` does not retry
+  that kill.
 - A `withName:` `accelerator` for each node whose stage asks for
   `special = "gpu"` or `"gpu:N"` (see [`GPU.md`](GPU.md)).
 - Task tracing, and the executor profiles: `standard` (local, clamped to the
@@ -296,9 +300,11 @@ the invocation's own declarations.
   Martian runtime's and the pipelines' versions, and `monitor_flag` under
   `-monitor`, which `mrjob` enforces. `mrjob` exits 0 however the stage ends,
   so mre reads the outcome from the metadata: `_assert` exits 42, which is
-  never retried, and `_errors` or a non-zero exit exits 1. A split writes `-o`
-  as one dir per chunk, named as `mrp` names it (`chnkN`), with its args bundle
-  and `chunk.json`, plus `join.json`. A main or join writes its outs bundle. The
+  never retried, and `_errors` or a non-zero exit exits 1, or 75 when a line of
+  the error matches a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` (a
+  signal, ENOMEM, a scheduler failure). A split writes `-o` as one dir per
+  chunk, named as `mrp` names it (`chnkN`), with its args bundle and
+  `chunk.json`, plus `join.json`. A main or join writes its outs bundle. The
   files a job names in either are confined to the work dir (§7), strict under
   `-confine`. Beside the job's metadata mre writes `_mre_stage`, the name of
   the stage the job ran. The adapter never reads it; the `mrp` ABI differential

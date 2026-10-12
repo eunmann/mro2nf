@@ -174,6 +174,27 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 }
 
+// TestEmitRetriesWhatMrpRetries: a task is retried, as many times as mrp
+// retries a job, only on mre's transient exit or a signal's, never on a
+// stage exception, an ASSERT or a failed mre step; and under -monitor a
+// retry keeps the stage's own memory, at which mrjob kills it as mrp does.
+func TestEmitRetriesWhatMrpRetries(t *testing.T) {
+	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
+
+	for _, want := range []string{
+		"errorStrategy = { task.exitStatus in [75, 137, 143] ? 'retry' : 'terminate' }",
+		"maxRetries = 2",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+		}
+	}
+
+	if !strings.Contains(stageModule, `"${params.mro2nf_monitor ? meta.mem_gb : meta.mem_gb * attempt} GB"`) {
+		t.Error("stage.nf escalates a retry's memory under -monitor")
+	}
+}
+
 // TestEmitRefusesReservedParam: an entry input named like a param the
 // project defines itself is refused.
 func TestEmitRefusesReservedParam(t *testing.T) {

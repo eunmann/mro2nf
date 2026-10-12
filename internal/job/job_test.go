@@ -226,17 +226,26 @@ func TestThreadEnvs(t *testing.T) {
 
 // TestOutcomes: mrjob exits 0 however the stage ends, so the job's state
 // is read from its metadata as mrp reads it: an assertion, which no retry
-// may rerun, an error, a non-zero exit, or no completion.
+// may rerun, an error, a non-zero exit, or no completion. An error is
+// transient, which mrp retries, only when a line of its _errors matches a
+// retry_on pattern: a killed job ("signal: killed", as mrp's local job
+// manager records it), mrjob's caught signal, ENOMEM; never a stage
+// exception or, without --auto-adjust-memory, the monitor's memory kill.
 func TestOutcomes(t *testing.T) {
 	cases := []struct {
 		name, body string
 		want       error
+		transient  bool
 	}{
-		{"complete", `touch "$meta/_complete"`, nil},
-		{"assert", `printf 'nope' > "$meta/_assert"; touch "$meta/_errors"`, ErrAssert},
-		{"errors", `printf 'Traceback' > "$meta/_errors"`, errFailed},
-		{"exit", `exit 3`, errFailed},
-		{"incomplete", `true`, errIncomplete},
+		{"complete", `touch "$meta/_complete"`, nil, false},
+		{"assert", `printf 'nope' > "$meta/_assert"; printf 'signal: killed' > "$meta/_errors"`, ErrAssert, false},
+		{"errors", `printf 'Traceback' > "$meta/_errors"`, errFailed, false},
+		{"exit", `exit 3`, errFailed, false},
+		{"killed", `kill -9 $$`, errFailed, true},
+		{"caught signal", `printf 'Job failed\n2026-10-11 21:00:00 Caught signal terminated\n' > "$meta/_errors"`, errFailed, true},
+		{"enomem", `printf 'error: [Errno 12] Cannot allocate memory' > "$meta/_errors"`, errFailed, true},
+		{"memory quota", `printf 'Job failed in stage code\n\nStage exceeded its memory quota (using 0.8, allowed 0.5G)\n' > "$meta/_errors"`, errFailed, false},
+		{"incomplete", `true`, errIncomplete, false},
 	}
 
 	for _, tc := range cases {
@@ -251,6 +260,8 @@ func TestOutcomes(t *testing.T) {
 				t.Errorf("a complete job failed: %v", err)
 			case tc.want != nil && !errors.Is(err, tc.want):
 				t.Errorf("outcome %v, want %v", err, tc.want)
+			case errors.Is(err, ErrTransient) != tc.transient:
+				t.Errorf("outcome %v: transient %t, mrp's retry_on says %t", err, !tc.transient, tc.transient)
 			}
 		})
 	}

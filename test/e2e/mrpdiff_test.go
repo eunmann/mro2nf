@@ -472,7 +472,7 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "wildcard"},
 	// The stage holds 0.75 GB against its 0.5 GB request. Without -monitor
 	// neither runner enforces that, so both succeed;
-	// TestOrdinaryFailureRetriesWithEscalatedMemory covers the -monitor kill.
+	// TestMonitorMemoryKillFailsLikeMrp covers the -monitor kill.
 	{name: "flaky_retry"},
 	// #324: a split returning no chunks still runs the join.
 	{name: "split_no_chunks"},

@@ -212,8 +212,9 @@ Supported: stages, pipelines, and calls; split/main/join; map calls over arrays,
 maps, split stages, and sub-pipelines, nested and zipped; disabled calls and
 map calls, decided per fork; structs and typed maps (including `map<S>.field`
 projection); file, array, map, and struct-of-file outputs; the `py`, `exec`,
-and `comp` adapters; dynamic per-chunk resources; content-based retry (ASSERT
-terminates, everything else retries with escalated memory); and `-monitor`.
+and `comp` adapters; dynamic per-chunk resources; content-based retry (only
+the failures mrp retries, a signal, ENOMEM or a scheduler failure, retry, with
+escalated memory; an ASSERT or a stage exception ends the run); and `-monitor`.
 
 Resources track mrp, so a transpiled run schedules and finishes comparably.
 Per-chunk `cpus` and `memory`, the split-returned `join` override, and the

@@ -5,6 +5,7 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -138,33 +139,23 @@ func TestStageOutputLinkOutsideWorkCopiedLocally(t *testing.T) {
 	}
 }
 
-// TestOrdinaryFailureRetriesWithEscalatedMemory: under -monitor, a stage the
-// RSS kill fails at its 0.5 GB request must be retried, succeed because the
-// kill limit follows the escalated allocation, and still see mrp's 0.5 GB in
-// _jobinfo and __mem_gb — the escalation sizes the task, never the stage
-// (#243). (Port of the flaky_retry half of failure_paths.sh.)
-func TestOrdinaryFailureRetriesWithEscalatedMemory(t *testing.T) {
+// TestMonitorMemoryKillFailsLikeMrp: -monitor matches mrp's --monitor
+// (#473). mrjob kills FLAKY, which holds 0.75 GB, at its 0.5 GB request
+// and writes "Stage exceeded its memory quota", which mrp retries only
+// under --auto-adjust-memory (core/runtime.go:86 getRetryRegexps), so a
+// real mrp --monitor run of flaky_retry fails FLAKY after one job. The run
+// fails with FLAKY's error after one attempt.
+func TestMonitorMemoryKillFailsLikeMrp(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
 	proj := transpile(t, "flaky_retry", "-monitor")
 
-	if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err != nil {
-		t.Fatalf("run failed; the retry should have recovered it: %v", err)
+	o, names := nextflowRunOutcome(t, proj)
+	if want := failedIn(failError, "FLAKY"); !o.equal(want) {
+		t.Errorf("outcome %s, want mrp's %s", o, want)
 	}
 
-	var outs struct {
-		MemGB    float64 `json:"mem_gb"`
-		ArgMemGB float64 `json:"arg_mem_gb"`
-	}
-
-	readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
-
-	if outs.MemGB != 0.5 || outs.ArgMemGB != 0.5 {
-		t.Errorf("stage saw mem_gb=%v __mem_gb=%v, want 0.5/0.5 (mrp's request, no retry factor)", outs.MemGB, outs.ArgMemGB)
-	}
-
-	flaky := attempts(readTrace(t, filepath.Join(proj, "trace.txt")), "FLAKY")
-	if len(flaky) != 2 {
-		t.Errorf("%d FLAKY attempts, want 2 (fail once, succeed on retry): %+v", len(flaky), flaky)
+	if n := len(slices.DeleteFunc(names, func(s string) bool { return !strings.Contains(s, "FLAKY") })); n != 1 {
+		t.Errorf("%d FLAKY attempts, want 1: mrp does not retry a memory-quota kill", n)
 	}
 }

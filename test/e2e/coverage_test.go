@@ -229,7 +229,7 @@ func TestUnappliedAllowlistEntries(t *testing.T) {
 	allow, err := divergence.Parse([]byte(`{"divergences": [` + entry("diffed", diffed) + `, ` +
 		entry("misspelled", "kitchen_snk") + `, ` + entry("outcome", failing) + `, ` +
 		rule("tree-rule", divergence.KindPublishedTree, divergence.RuleOutsRelativePaths, diffed, failing) + `, ` +
-		rule("outcome-rule", divergence.KindOutcome, divergence.RuleRetriedAttempts, failing, diffed) + `]}`))
+		rule("outcome-rule", divergence.KindOutcome, divergence.RuleFailureStageAndKind, failing, diffed) + `]}`))
 	if err != nil {
 		t.Fatal(err)
 	}

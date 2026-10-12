@@ -64,9 +64,6 @@ const (
 	// pipestance but outside its outs dir, in pipeline_outs.json a path inside
 	// a Nextflow task work dir.
 	RuleUnpublishedPaths = "placeholder-unpublished-paths"
-	// RuleRetriedAttempts lets a stage task fail more than once before its
-	// last failure counts.
-	RuleRetriedAttempts = "collapse-retried-attempts"
 	// RuleFailureStageAndKind compares a failed run by the stages it blamed
 	// and the failure kind of each, not by its messages or where they were
 	// recorded.
@@ -81,7 +78,6 @@ func ComparatorRules() map[string]string {
 		RuleResultsMetadata:      KindPublishedTree,
 		RuleMrpPublishedSymlinks: KindPublishedTree,
 		RuleUnpublishedPaths:     KindPublishedTree,
-		RuleRetriedAttempts:      KindOutcome,
 		RuleFailureStageAndKind:  KindOutcome,
 	}
 }

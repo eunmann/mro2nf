@@ -246,30 +246,40 @@ func (j *job) stdio(cmd *exec.Cmd) (func() error, error) {
 
 // outcome reads the job's state as mrp does (core/metadata.go:465
 // _getStateNoLock): an assertion, which mrp never retries
-// (core/node.go:848 isErrorTransient), then an error, then completion. A
-// job that exited non-zero without an error gets one, as mrp's local job
-// manager writes it (core/jobmanager_local.go:667-672).
+// (core/node.go:848 isErrorTransient), then an error, transient when mrp
+// retries it, then completion. A job that exited non-zero without an error
+// gets one, as mrp's local job manager writes it
+// (core/jobmanager_local.go:667-672): "signal: killed" for a killed job.
 func (j *job) outcome(runErr error) error {
-	for _, f := range []struct {
-		name     core.MetadataFileName
-		sentinel error
-	}{{core.Assert, ErrAssert}, {core.Errors, errFailed}} {
-		raw, ok, err := j.read(f.name)
-		if err != nil {
-			return err
-		}
-
-		if ok {
-			return fmt.Errorf("%s in %s: %w: %s", j.name, j.dir, f.sentinel, strings.TrimSpace(string(raw)))
-		}
+	raw, ok, err := j.read(core.Assert)
+	if err != nil {
+		return err
 	}
 
-	if runErr != nil {
+	if ok {
+		return fmt.Errorf("%s in %s: %w: %s", j.name, j.dir, ErrAssert, strings.TrimSpace(string(raw)))
+	}
+
+	raw, ok, err = j.read(core.Errors)
+	if err != nil {
+		return err
+	}
+
+	if !ok && runErr != nil {
 		if err := j.meta.WriteRaw(core.Errors, runErr.Error()); err != nil {
 			return fmt.Errorf("write _errors of %s: %w", j.name, err)
 		}
 
-		return fmt.Errorf("%s in %s: %w: %w", j.name, j.dir, errFailed, runErr)
+		raw, ok = []byte(runErr.Error()), true
+	}
+
+	if ok {
+		failed := errFailed
+		if transient(string(raw)) {
+			failed = fmt.Errorf("%w (%w)", errFailed, ErrTransient)
+		}
+
+		return fmt.Errorf("%s in %s: %w: %s", j.name, j.dir, failed, strings.TrimSpace(string(raw)))
 	}
 
 	if _, ok, err := j.read(core.CompleteFile); err != nil || !ok {

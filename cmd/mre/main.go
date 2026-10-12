@@ -31,13 +31,17 @@ func main() {
 }
 
 // exitCode maps a stage failure to a process exit code: an ASSERT-class failure
-// uses a distinct code so the generated Nextflow terminates rather than retries.
+// uses a distinct code so the generated Nextflow terminates rather than retries,
+// and a job failure mrp retries another, the one the project retries.
 func exitCode(err error) int {
-	if errors.Is(err, job.ErrAssert) {
+	switch {
+	case errors.Is(err, job.ErrAssert):
 		return job.AssertExitCode
+	case errors.Is(err, job.ErrTransient):
+		return job.TransientExitCode
+	default:
+		return 1
 	}
-
-	return 1
 }
 
 func run(ctx context.Context, args []string) error {

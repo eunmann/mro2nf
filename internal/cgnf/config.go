@@ -5,6 +5,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/eunmann/mro2nf/internal/job"
 )
 
 // config renders nextflow.config: the engine floor, the tools and knobs
@@ -37,13 +39,16 @@ params.job_resources = [:]
 		fmt.Fprintf(&b, "params.%s = null\n", id)
 	}
 
-	b.WriteString(`
-// mre exits 42 for an ASSERT-class stage failure, which mrp never retries,
-// and 1 for any other.
+	fmt.Fprintf(&b, `
+// mrp retries a job only when its error names a signal, ENOMEM or a
+// scheduler failure (jobmanagers/retry.json), for which mre exits %d; a
+// task the executor killed by a signal exits 128 + the signal. Any other
+// failure, a stage exception or ASSERT (42) or a failed mre step, ends the
+// run, as it ends mrp's.
 process {
-    errorStrategy = { task.exitStatus == 42 ? 'terminate' : 'retry' }
-    maxRetries = 2
-`)
+    errorStrategy = { task.exitStatus in [%d, 137, 143] ? 'retry' : 'terminate' }
+    maxRetries = %d
+`, job.TransientExitCode, job.TransientExitCode, job.DefaultRetries)
 
 	p.gpuSelectors(&b)
 
