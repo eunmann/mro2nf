@@ -497,6 +497,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "map_nested_gather"},
 	// #342: the modifiers mrp accepts on a top-level call.
 	{name: "toplevel_stage_modifiers"},
+	// #448: inside a map call over a sub-pipeline, a call reading only an
+	// inner map call's fork runs once per inner fork.
+	{name: "inner_only_fork"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
 	{name: "vdr_volatile"},
 	// A disable gate split per fork of a map call over a sub-pipeline: each
