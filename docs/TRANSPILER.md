@@ -173,7 +173,8 @@ records mre wrote; it parses no stage-controlled JSON.
   `clusterOptions` of a grid executor.
 - `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
   `mro2nf_monitor` and `mro2nf_confine`: the tools and knobs the stage module
-  reads. Every task runs the `mre` on `PATH`; `mre` runs the `mrjob` beside
+  reads, PLAN refusing a psid `mrp` refuses (letters, digits, `-` and `_`
+  only). Every task runs the `mre` on `PATH`; `mre` runs the `mrjob` beside
   its own binary, as `mrp` runs the `mrjob` beside its own, and the adapters
   it embeds (§6). A run names other tools with `--mro2nf_mre`,
   `--mro2nf_mrjob` and `--mro2nf_adapters`, such as a pipeline bundle's own
@@ -656,7 +657,7 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   the profile is the workflow's own, and publishes to `/mnt/workflow/pubdir`.
   The image must be pinned by digest: a workflow version then runs the code
   it was validated with, and as `parameter-template.json` declares only the
-  entry inputs, no run can name another image.
+  entry inputs and `mro2nf_overrides`, no run can name another image.
 
 - A stage's `using (threads = …, mem_gb = …)` sets each task's `cpus` (at least
   1, rounded up) and `memory` (1 GB when unset); a chunk and a join take the

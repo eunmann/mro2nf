@@ -82,3 +82,18 @@ func TestPlanRefusesOverridesMrpRefuses(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanRefusesPsidMrpRefuses: a psid mrp refuses (cmd/mrp/main.go:494
+// util.ValidateID), such as one with a '.' that would shift the prefix
+// Martian strips from every fqname an override matches, fails the run at
+// its start.
+func TestPlanRefusesPsidMrpRefuses(t *testing.T) {
+	fx := fixtureDir(t, "overrides_resources")
+
+	for _, psid := range []string{"sample.1", ""} {
+		_, err := planEntry(t, fx, "{}", "-overrides", filepath.Join(fx, "overrides.json"), "-psid", psid)
+		if err == nil || !strings.Contains(err.Error(), "Invalid name") {
+			t.Errorf("plan with psid %q: %v, want mrp's invalid name error", psid, err)
+		}
+	}
+}

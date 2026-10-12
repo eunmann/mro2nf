@@ -17,6 +17,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/util"
 )
 
 // planFlags are `mre plan`'s inputs and outputs.
@@ -31,7 +32,7 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null keeps the transpiled one")
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
 	fs.StringVar(&f.overrides, "overrides", "", "the run's mrp --overrides file")
-	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk")
+	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk, as mrp requires it: letters, digits, '-' and '_'")
 	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the call as mrp's invocation generator builds it")
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys cpus mem-gb overrides")
 	fs.StringVar(&f.roots, "roots", "roots", "dir to write one file per entry-fed fork root into, a line per fork: key record index-token")
@@ -63,6 +64,10 @@ func runPlan(_ context.Context, argv []string) error {
 
 	if f.entry == "" {
 		return errNoEntry
+	}
+
+	if err := util.ValidateID(f.psid); err != nil {
+		return fmt.Errorf("plan: psid: %w", err)
 	}
 
 	over, err := readOverrides(f.overrides)
