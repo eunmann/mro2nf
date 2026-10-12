@@ -48,10 +48,10 @@ This one decision shapes everything else:
    ┌──────────────────────────┐           ┌─────────────────────────────────────┐
    │  pipeline.mro            │           │  PLAN   mre plan: compile the run's │
    │      │  compile (Martian) │  emits    │         invocation, fix its forks   │
-   │      ▼                    │  ──────►  │  N0_X   mre args → mre run → post   │
+   │      ▼                    │  ──────►  │  N0_X   mre stage: args, job, post  │
    │  witness call graph      │           │  N1_Y   … one process per stage node│
    │      │  topology          │           │  OUTS   mre outs: mrp's PostProcess │
-   │      ▼                    │           │  each mre run drives the real stage │
+   │      ▼                    │           │  each mre stage runs the real stage │
    │  main.nf + stage.nf      │           │  through mrjob and the adapter      │
    └──────────────────────────┘           └─────────────────────────────────────┘
 ```
@@ -163,7 +163,13 @@ _assets/types.json    ← the type manifest the OUTS task lays the outs out with
 The workflow that wires a node includes them once for it under its own alias
 (`include { STAGE as N3_DBL }`, a split stage as `N1_SUM_SQUARES_SP`, `_MN`
 and `_JN`), so a `withName:` selector names the node. Every stage task runs
-`mre args`, then its job through `mre run`, then `mre post`. `stage.nf` also
+one `mre stage` call (§6), which compiles the call graph once and runs the
+phase's job as `mrp` runs it, building the instance's args bundle before it
+in a split and a non-split stage's main, and posting its outs after it in a
+join and a non-split stage's main. Each process declares only the outputs
+its consumers stage; the args and outs bundles between steps stay
+undeclared files of its work dir, except the split's args bundle, which its
+chunks and join stage. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_COUNTS`, `ENTRY_ROOT`) and that take a node's
 instances through each step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
@@ -252,7 +258,7 @@ fails if the call graph has a node, a fork root or a read the witness lacks
 (`Topology.Covers`); a node the invocation disables outright counts only by
 its presence. Its records reach the driver as `eval` values: the run's call;
 per node a digest of its resolved spec (stage, bindings, disable bindings and
-fork roots in Martian's JSON form) and of what its `mre post` writes for its
+fork roots in Martian's JSON form) and of what its post step writes for its
 readers (the splits of the roots it feeds and the outputs their fork elements
 zip, its partners' splits, and the disable bindings whose value it posts with
 their roots), whether the invocation disables it, the
@@ -279,7 +285,7 @@ by (`TestResumeKeysOnANodesOverrides`).
 
 **Code.** A stage task compiles the run's call over the entry `.mro` where the
 run finds its code: its includes and its stages' code resolve beside it, as
-under `mrp`. `mre args` fails the task when the node compiles to another spec
+under `mrp`. `mre stage` fails the task when the node compiles to another spec
 than the digest PLAN planned (`cg.ErrSpecDrift`): a `.mro` edited since the
 transpile, or an image built from other sources, fails loudly rather than run.
 
@@ -537,8 +543,8 @@ Both prefixes resolve identically on read-back. The rules:
   This is `shim.MarkFiles`, which uses the type manifest to find exactly which
   leaves are files (recursing into structs, arrays and maps).
 - **Linked bundles** (on write): the args bundle of a non-split stage is read
-  only by its own task, so `mre args -link` (`shim.WriteLinkedBundle`) links
-  each leaf instead of copying it: a leaf of a staged bundle by its ordinal
+  only by its own task, so the task's `mre stage` writes it as `mre args
+  -link` does (`shim.WriteLinkedBundle`), linking each leaf instead of copying it: a leaf of a staged bundle by its ordinal
   dir, whose origin record comes with it, any other file by itself beside its
   origin record. A file every fork of a map call reads, such as a broadcast
   upstream output or entry file, exists once, its producer's, however wide the
@@ -585,7 +591,7 @@ inside what a staged input links to, i.e. an input's real path, which a stage
 that resolves its args' paths returns (hard-linked, as the input it resolves
 from), or any other host path outside the task:
 
-- Under `--mro2nf_confine true` (`mre run -confine`), such a path cannot be
+- Under `--mro2nf_confine true` (`mre stage -confine`), such a path cannot be
   valid in an isolated container downstream, and copying it would upload host
   data, so the task fails, naming the output.
 - Otherwise, where `mrp` publishes a symlink and pipelines legitimately return
@@ -635,7 +641,7 @@ entry files stages each fork's own element. The pipeline outs' own reads,
 keyed by the pipeline's fqid, are staged into OUTS, whose post-processing
 publishes such a file only where it finds it, as `mrp`'s does. The driver
 hands each to `file(x, glob: false)`, so the head node never globs a name, and
-a task stages its list as `entry/<i>/<name>`; `mre args -leaves` and `mre outs
+a task stages its list as `entry/<i>/<name>`; `mre stage -leaves` and `mre outs
 -leaves` map each value to the path it reads it at. The stage gets the
 value as a leaf of its args bundle (§7), `<task>/args/f/L<nnnn>/<name>`: the
 same file name and content, at another path than the value's own, which

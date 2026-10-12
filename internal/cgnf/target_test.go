@@ -66,7 +66,7 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 		t.Errorf("main.nf does not refuse a container profile without an image before PLAN:\n%s", main)
 	}
 
-	for _, want := range []string{"args ${graph(meta, '')}", "run -phase ${phase} ${graph(meta, '')}", "post ${graph(meta, '')}", "outs ${graph(meta, 'mro')}"} {
+	for _, want := range []string{"stage -phase ${phase} ${graph(meta, '')}", "outs ${graph(meta, 'mro')}"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
 		}
