@@ -1,127 +1,37 @@
-# CellRanger `count` end-to-end: mrp vs generated Nextflow (local)
+# CellRanger `count` under mrp and under the generated Nextflow
 
-A point-in-time report of running 10x Genomics **CellRanger 10.1.0** `cellranger
-testrun` (the `SC_RNA_COUNTER_CS` / `count` pipeline on the bundled ~1,084-cell
-tiny dataset) two ways on one machine and comparing them:
-
-1. **Martian** — `cellranger testrun` (real `mrp`), the golden baseline.
-2. **Generated Nextflow** — `mro2nf` transpiles the same `.mro`, then Nextflow
-   runs it, each stage executed by the `mre` shim against the **original**
-   CellRanger stage code (Python stages + the `cr_lib`/`cr_vdj`/`cr_aggr`/`cr_ana`
-   Rust binaries via `mrjob`).
-
-CellRanger is **not** committed to this repo. The run reads a locally-downloaded
-bundle; the harness is skip-if-absent.
-
-> **Historical results.** The headline, the bugs table and the baselines below
-> were measured with the pre-call-graph emitter and its two emissions (default
-> and `-native`), whose `BIND`/`FORK`/`MERGE`/`DISABLE`/`PUBLISH`/`LAYOUT`/
-> `BUILD_ENTRY_ARGS` plumbing no longer exists. The call-graph emitter has one
-> emission and two plumbing tasks, `PLAN` and `OUTS`; its task counts on this
-> pipeline have not been measured. The [reproduction recipe](#reproducing) and
-> the [opt-in harness](#repeatable-baseline-opt-in-test-harness) are current.
-
-## Headline result
-
-The full `count` pipeline runs to completion under the generated Nextflow and its
-published outputs are **byte-identical to `mrp`** — same 1,084 cells, 461,083
-reads, and every mapping metric in `metrics_summary.csv` — under the default
-emit and under `-native`.
-
-Getting there surfaced **real transpiler/runtime bugs**, all now fixed with
-regression tests (this branch). A real production pipeline exercises paths the
-synthetic fixtures never did.
-
-## Bugs found and fixed
-
-| # | Bug | Fix |
-|---|---|---|
-| 1 | A comp/exec stage whose `src` is a bare command resolved on PATH (`cr_lib martian <subcmd>`) was baked as a nonexistent file path `mro/rna/cr_lib`, so `mrjob` failed `fork/exec … no such file`. | Keep a bare command unqualified through `resolveSrcPath` + `stageCodePaths` (Martian's `FindPath` does the same) so PATH resolves it. |
-| 1b | Launching the bare command left the process's `argv[0]` bare; `cr_lib` resolves its own executable from `argv[0]` (`martian::utils::current_executable`) and panicked. | `mre` `LookPath`-resolves a bare comp/exec stagecode to an absolute path before exec. |
-| 2 | The transport leaf-flatten renamed every file leaf to `f/L%04d`, dropping the extension. Martian typed-file readers reconstruct a path from the filetype (`bincode` → `with_extension`), so they looked for `f/L0002.bincode` beside a bare `f/L0002` and failed. `FILTER_BARCODES` join. | Preserve the source extension in the leaf name (`f/L0002.bincode`) in the Go shim. Since #284 each leaf keeps its whole basename in an ordinal dir (`f/L0002/<basename>`). |
-| 4 | A stage RESERVES production-sized memory (the cloupe join asks for 30 GB). On a smaller machine Nextflow's local executor **fails** a task whose request exceeds the machine (`Process requirement exceeds available memory`), aborting a run that `mrp` completes fine (`mrp` clamps a job to its `--localmem` pool and runs it). | Emit `process.resourceLimits` in the local profile, clamping each task's request to the detected host resources. The generated pipeline now runs wherever `mrp` runs. |
-
-## Baselines: default vs `-native` (pre-call-graph emitter)
-
-One machine: 32 cores / 31 GB. Martian: `--localcores=8 --localmem=16`. Both
-Nextflow emissions are run with an aggressive local
-scheduling config (large `executor.memory` pool + tight polling — safe only
-because the test data is tiny; the per-task `resourceLimits` clamp still applies).
-
-| Run | Wall | Total tasks | Stage | Plumbing | Peak concurrency | Outputs |
-|---|---|---|---|---|---|---|
-| **Martian (`mrp`)** | **68 s** | in-process | — | **0** (in-core) | 22 | golden |
-| Nextflow `default` | 104 s | 223 | 108 | 115 | 11 | ✅ identical |
-| Nextflow `-native` | 104 s | 220 | 108 | 112 | 11 | ✅ identical |
-
-"Plumbing" = data-plane tasks Nextflow externalizes that Martian does in-process
-(`BIND`/`FORK`/`MERGE`/`DISABLE`/`PUBLISH`/`LAYOUT`/`BUILD_ENTRY_ARGS`).
-
-## What the differences actually are
-
-- **Faithfulness is total.** Both emissions reproduce `mrp`'s outputs
-  byte-for-byte. The two contracts (stage ABI, pipeline outputs) hold on a real
-  pipeline, not just fixtures.
-
-- **The wall-time gap (~68 s → ~104 s, ~1.5×) is orchestration overhead, not
-  compute.** Median Nextflow task compute is ~0.02 s and the sum of all task
-  wall-time is ~90 s; packed at the observed concurrency that is ~10–20 s of
-  actual work. The rest is per-task startup — a `.command.run` wrapper → input
-  staging → the `mre`/Python (or `mrjob`/Rust) launch, with the heavy cost being
-  **CellRanger's Python-library import on every py task** — paid along the DAG's
-  critical path. `mrp` runs stages as lean in-process jobs and pays almost none
-  of this, and oversubscribes (22-wide on 8 cores) where Nextflow's local
-  executor honors reservations more strictly (11-wide).
-
-- **`-native` cuts orchestration *structure*, not local wall time.** It drops
-  a few plumbing tasks (`BUILD_ENTRY_ARGS` + tighter scatter), so wall time is
-  flat across both emissions. Its value is where the bench gate measures it — task/plumbing count, bytes staged, container launches
-  — which translates to **cost and scale on a real backend (AWS Batch), not
-  local seconds on tiny data**. On production-sized inputs, stage compute
-  dominates and this overhead amortizes away.
-
-- **A generated pipeline that deadlocks where `mrp` runs is a bug (fixed).** The
-  cloupe-join park (bug 4) was not a wiring error — it was Nextflow strictly
-  honoring a 30 GB reservation on a 31 GB machine. The `resourceLimits` clamp
-  reproduces Martian's clamp-and-run so the pipeline runs wherever `mrp` does.
-
-## Reproducing
-
-```sh
-# 1. Golden baseline
-cellranger testrun --id=golden --localcores=8 --localmem=16 --disable-ui
-
-# 2. Transpile
-mro2nf -mropath $CR/mro -o out __<id>.mro
-
-# 3. Run (source the bundle env so cr_* + the bundled python3 are on PATH),
-#    the stages under the bundle's own Martian runtime and mre on PATH
-source $CR/sourceme.bash
-cd out && nextflow run main.nf -profile standard \
-    --mro2nf_mrjob $CR/external/martian/bin/mrjob \
-    --mro2nf_adapters $CR/external/martian/adapters   # add -c oversubscribe.config for aggressive scheduling
-```
-
-Then diff `out/results/metrics_summary.csv` against the golden
-`<id>/outs/metrics_summary.csv`.
-
-## Repeatable baseline (opt-in test harness)
-
-The manual flow above is wrapped as an **opt-in** e2e test so CellRanger stays a
-one-command local baseline — never a CI or normal-`make test` gate (the bundle is
-licensed and not committed):
+An opt-in local check against a real production pipeline: 10x Genomics
+CellRanger's `cellranger testrun`, the `count` pipeline on its bundled tiny
+dataset, run by `mrp` and by the transpiled Nextflow project, with
+`metrics_summary.csv` compared byte for byte. CellRanger is licensed software
+and is not in this repository, so the check runs only where a bundle is
+extracted, never in CI.
 
 ```sh
 CELLRANGER_HOME=~/Downloads/cellranger-10.1.0 make test-cellranger
 ```
 
-`test/e2e/cellranger_test.go` (`TestCellRangerDifferential`) **skips** unless
-`CELLRANGER_HOME` points at an extracted bundle. When present it: emits the
-`count` invocation `.mro` (`cellranger testrun --dry`), runs the real Martian
-runner (`mrp`) for the golden, transpiles the **same** `.mro`, runs the generated
-Nextflow (the local profile's `resourceLimits` clamp keeps the local executor
-from failing the 30 GB cloupe join), and asserts `metrics_summary.csv` is **byte-identical** between the
-two — then logs the task-shape baseline (stage vs plumbing task counts) for
-tracking optimizer changes over time. Size the golden with
-`CELLRANGER_LOCALCORES` / `CELLRANGER_LOCALMEM`; it runs the pipeline twice, so
-budget a few minutes. It is excluded from `make test-e2e`.
+`TestCellRangerDifferential` (`test/e2e/cellranger_test.go`) skips unless
+`CELLRANGER_HOME` points at an extracted bundle holding `bin/cellranger`,
+`sourceme.bash`, `mro` and the bundled Martian runtime. With the bundle's
+environment sourced, it:
+
+1. writes the `count` invocation `.mro` with `cellranger testrun --dry`;
+2. runs it under the bundle's `mrp` (`--jobmode=local --nopreflight`), sized
+   by `CELLRANGER_LOCALCORES` and `CELLRANGER_LOCALMEM` (default 4 cores,
+   8 GB);
+3. transpiles the same `.mro` with `-mropath <bundle>/mro`;
+4. runs the project on the `standard` profile, with the stages under the
+   bundle's own `mrjob` and adapters (`--mro2nf_mrjob`, `--mro2nf_adapters`).
+   The profile clamps each task to the host, so the 30 GB cloupe join runs on
+   a smaller machine, as `mrp` clamps it;
+5. requires `metrics_summary.csv` to be byte-identical, and the main outputs
+   (`filtered_feature_bc_matrix.h5`, `raw_feature_bc_matrix.h5`,
+   `cloupe.cloupe`, `web_summary.html`, `possorted_genome_bam.bam`,
+   `molecule_info.h5`) to be published;
+6. logs the task counts from the trace.
+
+With CellRanger 10.1.0 the test passes: `metrics_summary.csv` is
+byte-identical to `mrp`'s, and the Nextflow run has 110 tasks, 108 stage
+tasks plus PLAN and OUTS. It runs the pipeline twice; on the machine it was
+last run on it took about 8 minutes. `make test-e2e` excludes it.
