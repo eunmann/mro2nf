@@ -24,10 +24,10 @@ var (
 // pipestance is the pipestance Martian's post-processing publishes the
 // pipeline outs from. Each file leaf is placed where mrp's pipestance would
 // hold it: a stage's own file at one path in the pipestance however many
-// outputs reach it, which PostProcess moves into outs/ at the first and
-// links the others to, and a Linked file at its own path outside the
-// pipestance for each output that reaches it, which PostProcess links into
-// outs/ there.
+// outputs reach it, inside the directory of the stage's that holds it, which
+// PostProcess moves into outs/ at the first and links the others to, and a
+// Linked file at its own path outside the pipestance for each output that
+// reaches it, which PostProcess links into outs/ there.
 type pipestance struct {
 	dir, outs, linked string
 	tbl               *types.Table
@@ -36,8 +36,10 @@ type pipestance struct {
 	// work dir keeps it, and tasks the dir each such task ran in to its work
 	// dir.
 	locations, tasks map[string]string
-	// placed maps a stage file's origin to its path in the pipestance.
-	placed map[string]string
+	// origins maps the origin of each stage file the pipeline outs reach to
+	// a leaf holding it, and placed each origin copied to the pipestance to
+	// its path there.
+	origins, placed map[string]string
 	// names maps a placed path to the name of the file it holds when the
 	// pipeline outs leave it unpublished.
 	names map[string]string
@@ -57,7 +59,7 @@ func newPipestance(spec OutsSpec, items []string, tbl *types.Table, params []ir.
 	p := &pipestance{
 		dir: filepath.Join(work, "pipestance"), linked: filepath.Join(work, "linked"), tbl: tbl, params: params,
 		locations: map[string]string{}, tasks: map[string]string{},
-		placed: map[string]string{}, names: map[string]string{}, links: map[string]string{},
+		origins: map[string]string{}, placed: map[string]string{}, names: map[string]string{}, links: map[string]string{},
 	}
 	p.outs = filepath.Join(p.dir, "outs")
 
@@ -110,6 +112,10 @@ func (p *pipestance) reconstruct(v json.Marshaler, path string) error {
 		return err
 	}
 
+	if _, err := p.tbl.Apply(p.params, payload, p.survey); err != nil {
+		return fmt.Errorf("pipeline outs: %w", err)
+	}
+
 	placed, err := p.tbl.Apply(p.params, payload, p.place)
 	if err != nil {
 		return fmt.Errorf("pipeline outs: %w", err)
@@ -118,30 +124,76 @@ func (p *pipestance) reconstruct(v json.Marshaler, path string) error {
 	return writeJSONFile(path, placed)
 }
 
+// survey records a leaf holding each stage file the pipeline outs reach, by
+// its origin, so place can put a file inside a stage's directory inside that
+// directory whichever output reaches it first.
+func (p *pipestance) survey(leaf string) (string, error) {
+	o, ok, err := p.origin(leaf)
+	if err != nil || !ok || o.Linked {
+		return leaf, err
+	}
+
+	if _, ok := p.origins[o.Path]; !ok {
+		p.origins[o.Path] = leaf
+	}
+
+	return leaf, nil
+}
+
 // place links the file leaf at leaf into the pipestance and returns its path
 // there. A path naming no file is a file the stage never wrote, which
 // PostProcess reads as mrp does.
 func (p *pipestance) place(leaf string) (string, error) {
-	if _, err := os.Lstat(leaf); errors.Is(err, fs.ErrNotExist) {
-		return leaf, nil
-	} else if err != nil {
-		return "", fmt.Errorf("pipeline outs: %w", err)
+	o, ok, err := p.origin(leaf)
+	if err != nil || !ok {
+		return leaf, err
 	}
 
-	o, name, err := p.identify(leaf)
+	var at string
+	if o.Linked {
+		at, err = p.copy(leaf, p.linked)
+	} else {
+		at, err = p.placeOwn(o.Path)
+	}
+
 	if err != nil {
 		return "", err
 	}
 
-	if at, ok := p.placed[o.Path]; ok && !o.Linked {
-		return at, nil
+	if _, ok := p.names[at]; !ok {
+		p.names[at] = o.name
 	}
 
-	root := filepath.Join(p.dir, "files")
-	if o.Linked {
-		root = p.linked
+	return at, nil
+}
+
+// placeOwn returns the path in the pipestance of the stage's own file at
+// origin: one path however many outputs reach it, inside the outermost
+// directory of the stage's that holds it, as mrp's pipestance holds one tree.
+func (p *pipestance) placeOwn(origin string) (string, error) {
+	top := origin
+	for dir := filepath.Dir(origin); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if _, ok := p.origins[dir]; ok {
+			top = dir
+		}
 	}
 
+	at, ok := p.placed[top]
+	if !ok {
+		var err error
+		if at, err = p.copy(p.origins[top], filepath.Join(p.dir, "files")); err != nil {
+			return "", err
+		}
+
+		p.placed[top] = at
+	}
+
+	return filepath.Join(at, strings.TrimPrefix(origin, top)), nil
+}
+
+// copy copies the file leaf at leaf to a dir of its own below root and
+// returns the copy's path.
+func (p *pipestance) copy(leaf, root string) (string, error) {
 	p.n++
 	at := filepath.Join(root, strconv.Itoa(p.n), filepath.Base(leaf))
 
@@ -153,27 +205,44 @@ func (p *pipestance) place(leaf string) (string, error) {
 		return "", fmt.Errorf("pipeline outs: place %s: %w", leaf, err)
 	}
 
-	p.names[at] = name
-	if !o.Linked {
-		p.placed[o.Path] = at
+	return at, nil
+}
+
+// leafOrigin is the origin of a file leaf and its name when left
+// unpublished.
+type leafOrigin struct {
+	shim.Origin
+
+	name string
+}
+
+// origin identifies the file leaf at leaf, and reports false for a path
+// naming no file.
+func (p *pipestance) origin(leaf string) (leafOrigin, bool, error) {
+	if _, err := os.Lstat(leaf); errors.Is(err, fs.ErrNotExist) {
+		return leafOrigin{}, false, nil
+	} else if err != nil {
+		return leafOrigin{}, false, fmt.Errorf("pipeline outs: %w", err)
 	}
 
-	return at, nil
+	o, err := p.identify(leaf)
+
+	return o, err == nil, err
 }
 
 // identify returns the origin of the file leaf at leaf and its name when
 // left unpublished: where its producer's work dir keeps the copy staged
 // here, or for a file the invocation names, which no bundle holds, its own
 // path.
-func (p *pipestance) identify(leaf string) (shim.Origin, string, error) {
+func (p *pipestance) identify(leaf string) (leafOrigin, error) {
 	item, rel, ok := shim.LeafBundle(leaf)
 	if !ok {
-		return shim.Origin{Path: leaf, Linked: true}, leaf, nil
+		return leafOrigin{shim.Origin{Path: leaf, Linked: true}, leaf}, nil
 	}
 
 	o, recorded, err := shim.ReadOrigin(leaf)
 	if err != nil {
-		return shim.Origin{}, "", fmt.Errorf("pipeline outs: %w", err)
+		return leafOrigin{}, fmt.Errorf("pipeline outs: %w", err)
 	}
 
 	if !recorded {
@@ -182,10 +251,10 @@ func (p *pipestance) identify(leaf string) (shim.Origin, string, error) {
 
 	loc, ok := p.locations[item]
 	if !ok {
-		return shim.Origin{}, "", fmt.Errorf("%w: %s", errNoLocation, item)
+		return leafOrigin{}, fmt.Errorf("%w: %s", errNoLocation, item)
 	}
 
-	return o, loc + "/" + filepath.ToSlash(rel), nil
+	return leafOrigin{o, loc + "/" + filepath.ToSlash(rel)}, nil
 }
 
 // published reads the post-processed outs at path and names each file as
