@@ -142,12 +142,12 @@ func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string) ([]byte
 	}
 }
 
-// nfResultsMeta are mro2nf's own metadata files at the root of results/. mrp
-// keeps its outs JSON outside outs/ and writes no manifest, so a tree compared
-// with mrp's drops them only under the allowlist's results-metadata rule, and
-// only at the root, because a stage may publish a file of the same name deeper
-// in the tree.
-var nfResultsMeta = []string{"pipeline_outs.json", "manifest.json.gz"}
+// nfResultsMeta is mro2nf's own metadata at the root of results/, the outs
+// JSON. mrp keeps its outs JSON outside outs/, so a tree compared with mrp's
+// drops it only under the allowlist's results-metadata rule, and only at the
+// root, because a stage may publish a file of the same name deeper in the
+// tree.
+var nfResultsMeta = []string{"pipeline_outs.json"}
 
 // emptyDirMark is hashTree's value for an empty directory, keyed by its path
 // plus a trailing slash so it cannot collide with a file's digest entry.

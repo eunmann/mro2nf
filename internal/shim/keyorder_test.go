@@ -96,21 +96,3 @@ func TestWriteBundleKeepsKeyOrder(t *testing.T) {
 		t.Errorf("data.json = %s, want %s", got, want)
 	}
 }
-
-// TestUnescapeValueKeepsKeyOrder checks unescaping raw payload, as the
-// pre-sliced fork element and the published outs are, keeps its key order.
-func TestUnescapeValueKeepsKeyOrder(t *testing.T) {
-	v, err := shim.UnescapeValue(json.RawMessage(`{"b":"@mre:str:@mre:x","a":{"d":1,"c":2}}`))
-	if err != nil {
-		t.Fatalf("UnescapeValue: %v", err)
-	}
-
-	raw, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got, want := string(raw), `{"b":"@mre:x","a":{"d":1,"c":2}}`; got != want {
-		t.Errorf("UnescapeValue = %s, want %s", got, want)
-	}
-}

@@ -16,7 +16,7 @@ Read the parts of `docs/TRANSPILER.md` and `docs/FEATURE_COVERAGE.md` that cover
 - **Front end:** `internal/frontend` (parse via `martian/syntax`, lower), `internal/ir`
 - **Call graph:** `internal/cg` — Martian's compiled call graph: the witness, topology, plan, the `_args` resolver, fork elements, gates, pipeline outs
 - **Emitter:** `internal/cgnf` — the call graph to a Nextflow project: `main.nf` wiring, `assets/stage.nf`, `nextflow.config`
-- **Runtime (`mre`):** `cmd/mre` subcommands (`plan|args|run|post|outs|publish-layout`), `internal/job` (one stage job through `mrjob`), `internal/shim` (bundles, markers, output confinement), `internal/types` (type-directed file-leaf walk and the `types.json` manifest)
+- **Runtime (`mre`):** `cmd/mre` subcommands (`plan|args|run|post|outs`), `internal/job` (one stage job through `mrjob`), `internal/shim` (bundles, markers, output confinement), `internal/types` (type-directed file-leaf walk and the `types.json` manifest)
 - **Around it:** `internal/config` (`.mro2nf.yml`), `cmd/mro2nf`
 - **Tests:** unit tests beside each package; `test/e2e` (build tag `e2e`: goldens, mrp-diff, bench, lint-nf); fixtures and real-`mrp` goldens in `testdata/<name>/`; `bench/`
 - **Reference oracle:** the pinned Martian module (`go env GOMODCACHE`, version in `go.mod`) — `martian/syntax` for the language, `martian/core` for what `mrp` does at run time; a local `mrp` build at `$MARTIAN_BIN` (default `~/workdir/martian/bin`)

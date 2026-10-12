@@ -81,7 +81,7 @@ Source layout:
 
 ```
 cmd/mro2nf/      → transpiler CLI: .mro -> Nextflow project
-cmd/mre/         → runtime shim: plan | args | run | post | outs | publish-layout
+cmd/mre/         → runtime shim: plan | args | run | post | outs
 internal/
   cg/            → Martian's compiled call graph: witness, topology, plan,
                    the _args resolver, fork elements, gates, pipeline outs

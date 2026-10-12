@@ -52,8 +52,8 @@ const (
 	// RuleOutsRelativePaths strips mrp's outs-dir prefix from the paths in its
 	// outs JSON.
 	RuleOutsRelativePaths = "outs-json-strip-outs-prefix"
-	// RuleResultsMetadata drops mro2nf's own metadata files from the root of
-	// the published results/ tree.
+	// RuleResultsMetadata drops mro2nf's outs JSON from the root of the
+	// published results/ tree.
 	RuleResultsMetadata = "drop-results-metadata"
 	// RuleMrpPublishedSymlinks compares a symlink mrp published by its target's
 	// content, and the target path mrp's outs JSON names for it as the link's

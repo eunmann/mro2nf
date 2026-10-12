@@ -102,12 +102,6 @@ func validRel(rel string) bool {
 	return m != nil && m[1] != "." && m[1] != ".." && filepath.IsLocal(rel)
 }
 
-// LeafPath returns the path of the leaf at bundle-relative rel below the files
-// subdir, the path a directory of staged leaves holds it at.
-func LeafPath(rel string) string {
-	return strings.TrimPrefix(rel, bundleFiles+"/")
-}
-
 // Marker returns the transport marker for a leaf staged at bundle-relative rel,
 // choosing FileMarker or DirMarker by the leaf's stat'd dir-ness.
 func Marker(rel string, isDir bool) string {
@@ -151,16 +145,6 @@ func CheckReserved(s string) error {
 	}
 
 	return fmt.Errorf("%w: %q", ErrBadMarker, s)
-}
-
-// UnescapeValue returns a copy of v with every escaped string restored to its
-// original value, leaving markers and all other values as they are. It is for
-// payload read raw rather than through ReadBundle: the published outs and the
-// element the driver slices out of a sidecar.
-func UnescapeValue(v any) (any, error) {
-	return mapStrings(v, func(s string) (string, error) {
-		return strings.TrimPrefix(s, escapePrefix), nil
-	})
 }
 
 // escapeValue returns a copy of v with every string that begins with the
@@ -576,22 +560,6 @@ func LeafBundle(path string) (string, string, bool) {
 	dir := filepath.Dir(files)
 
 	return dir, filepath.Join(bundleFiles, filepath.Base(ordinal), filepath.Base(path)), true
-}
-
-// LeafOrigin returns the origin path of the file leaf at the absolute path
-// abs: the one recorded beside it when it is a leaf of a bundle, else abs
-// itself.
-func LeafOrigin(abs string) (string, error) {
-	o, ok, err := ReadOrigin(abs)
-	if err != nil {
-		return "", err
-	}
-
-	if !ok {
-		return abs, nil
-	}
-
-	return o.Path, nil
 }
 
 // leafName returns the basename of the file leaf at src, whose absolute path

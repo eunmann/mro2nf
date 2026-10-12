@@ -41,7 +41,7 @@ acceptable, scaling overhead is a bug.
 ```
 cmd/mro2nf/            → transpiler CLI: .mro -> Nextflow project
 cmd/mre/               → runtime shim every generated process calls:
-                         plan|args|run|post|outs|publish-layout (`run` drives
+                         plan|args|run|post|outs (`run` drives
                          one stage phase, split|main|join, through mrjob and
                          the real Martian adapter)
 internal/

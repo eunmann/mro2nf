@@ -199,8 +199,8 @@ func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
 	staged := stageBundle(t, pass, filepath.Join(dir, "layout", "in"))
 
 	for _, p := range []string{filepath.Join(make1, "f", "L0000", "a.txt"), filepath.Join(staged, "f", "L0000", "a.txt")} {
-		if got, err := shim.LeafOrigin(p); err != nil || got != written {
-			t.Errorf("LeafOrigin(%s) = %q (err %v), want %q", p, got, err, written)
+		if got, ok, err := shim.ReadOrigin(p); err != nil || !ok || got.Path != written {
+			t.Errorf("ReadOrigin(%s) = %+v, %t (err %v), want %q", p, got, ok, err, written)
 		}
 	}
 }

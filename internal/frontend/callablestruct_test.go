@@ -91,19 +91,12 @@ func TestLowerRegistersCallableStructs(t *testing.T) {
 }
 
 // TestCallableStructWalksFileLeaf crosses the seam into the type-walk — the
-// behavior #173 is actually about. The callable-typed output `made` must publish
-// as the bare name `made` (a directory) and its inner `data` file leaf must be
-// rewritten, not published as `made.MAKE` with the file lost. Both assertions are
-// red against the pre-fix lower.go.
+// behavior #173 is actually about. The inner `data` file leaf of the
+// callable-typed output `made` must be rewritten, not lost.
 func TestCallableStructWalksFileLeaf(t *testing.T) {
 	prog := lowerMakeTop(t)
 	made := madeParam(t, prog)
 	tbl := types.NewTable(prog.Structs)
-
-	// Without the registered struct, OutFilename falls to the `name.type` arm.
-	if got := types.OutFilename(made, tbl.IsStruct); got != "made" {
-		t.Errorf("OutFilename(made) = %q, want %q (callable struct must be recognized)", got, "made")
-	}
 
 	var rewritten []string
 

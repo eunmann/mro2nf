@@ -60,7 +60,6 @@ func publishedPair(t *testing.T) (string, string) {
 	writeABITestFile(t, filepath.Join(results, "chained.txt"), "chained\n")
 	writeABITestFile(t, filepath.Join(results, "shared.txt"), "shared")
 	writeABITestFile(t, filepath.Join(results, "again.txt"), "shared")
-	writeABITestFile(t, filepath.Join(results, "manifest.json.gz"), "index")
 	writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"), pairOutsJSON(pairStats))
 
 	return ps, results

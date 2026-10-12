@@ -132,8 +132,9 @@ scalar directory kind is a struct, which `IsStruct` already nulls.
 arrays/maps/structs into index/key/field-named subdirectories
 (`post_process.go:237-486`). mre previously published flat under the source
 basename. Because downstream pipelines consume an upstream's `outs/` tree, this
-is a correctness requirement, not a preference. `cmd/mre/publish.go` now
-reproduces mrp's layout exactly: a scalar named by `GetOutFilename` (`OutName`,
+is a correctness requirement, not a preference. `mre outs` now publishes
+through Martian's own `Pipestance.PostProcess` (#475), so the layout is mrp's
+by construction: a scalar named by `GetOutFilename` (`OutName`,
 else bare name for builtin file/path or complex, else `name.<typename>`); an
 array → `<param>/<idx>.<ext>` with index width = digits of the element count
 (Martian's `WidthForInt`); a typed map → `<param>/<key>.<ext>` (illegal Unix
@@ -151,8 +152,9 @@ the later path to it (`post_process.go` `moveOutFile`, `copyOutSymlink`). A
 bundle records each leaf's origin beside it and copies a file of one origin
 once, however many positions or input bundles reach it (`internal/shim`
 `MarkFiles`), so the file stays one leaf through every bind, pass-through stage
-and sub-pipeline boundary; `mre publish-layout` walks in mrp's order and names
-a leaf's first published path for every later reference, and each later path
+and sub-pipeline boundary; `mre outs` places it at one path of the pipestance
+it reconstructs and publishes it with mrp's own `Pipestance.PostProcess`, which
+names its first published path for every later reference, and each later path
 gets a copy (allowlist entry `published-symlinks-copied`). Fixture
 `shared_out_file`.
 
@@ -162,12 +164,12 @@ file: `moveOutArrayDir` descends the array one level as if its elements had the
 base type, so each element fails to move, is kept as the stage wrote it, and mrp
 prints `Could not move output files`, while its `_outs` names each file at its
 path in the stage's directory, a file the stage never wrote included. `mre
-publish-layout` publishes nothing there either, warns on stderr, and names each
-file the stage wrote by the absolute path its task recorded for it, in the
-Nextflow work dir (a scratch-dir task's path, as on an object-store work dir,
-is #457). A file the stage never wrote keeps the path it was declared at, as
-under mrp (allowlist entry `unpublished-file-paths`). Fixture
-`nested_path_unpublished`.
+outs` publishes through the same post-processing, so it publishes nothing there
+either and prints the same message, and names each file the stage wrote by the
+copy its producing task's work dir keeps, a path or an object-store URI, also
+for a task that ran in a scratch dir (#457). A file the stage never wrote keeps
+the path it was declared at, below the producing task's work dir (allowlist
+entry `unpublished-file-paths`). Fixture `nested_path_unpublished`.
 
 ## D. Binding & resolution — faithful (two real divergences)
 

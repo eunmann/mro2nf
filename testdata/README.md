@@ -11,8 +11,8 @@ run must reproduce. A golden has two parts:
   `test/e2e/coverage_test.go`, e.g. `exec_min`, `mixed_adapters`) have JSON
   goldens that no mrp run produced.
 - **The published tree** (`expected/outs/`): every file mrp published under the
-  pipestance's `outs/`, byte for byte; mrp keeps its outs JSON outside `outs/`
-  and writes no manifest. Git cannot hold an empty directory, so the empty
+  pipestance's `outs/`, byte for byte; mrp keeps its outs JSON outside
+  `outs/`. Git cannot hold an empty directory, so the empty
   directories mrp published are listed instead in `expected/outs.emptydirs`,
   one path relative to `outs/` per line. Only `make record-goldens` writes
   either (see below). A fixture with neither published nothing under mrp.
@@ -23,7 +23,7 @@ run must reproduce. A golden has two parts:
   requires:
   - `results/pipeline_outs.json` to equal the outputs JSON, number tokens and
     object key order included; and
-  - `results/`, minus `pipeline_outs.json` and `manifest.json.gz` at its root
+  - `results/`, minus `pipeline_outs.json` at its root
     (allowlist entry `results-metadata-files`), to equal `expected/outs/`: no
     file missing, no file extra, every file's sha256 equal, no file published
     as a symlink, and the same empty directories.
