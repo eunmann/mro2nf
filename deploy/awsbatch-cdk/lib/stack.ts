@@ -15,8 +15,8 @@ import * as batch from 'aws-cdk-lib/aws-batch';
  *                       the package.sh zip with `aws omics create-workflow`).
  *
  * Shared by both: one S3 bucket (work dir + outputs) and one ECR repo (the
- * runtime image built from deploy/runtime/Dockerfile and the stage images
- * each project's build.sh builds FROM it). Everything is tagged for
+ * runtime image built from deploy/runtime/Dockerfile and the pipeline images
+ * built FROM it, each the one image a run names). Everything is tagged for
  * easy teardown — `cdk destroy` removes it all. This is an example, not a
  * hardened production deployment.
  */
@@ -49,11 +49,11 @@ export class Mro2nfStack extends cdk.Stack {
     });
 
     // ECR repo for the runtime image (deploy/runtime/Dockerfile, tagged
-    // runtime*) and the stage images build.sh builds FROM it. Keep a bounded
-    // number of recent images so layers can't pile up (room for version history
-    // and a multi-pipeline test matrix; they share base layers). The runtime
-    // images get their own rule, which ECR evaluates first, so stage pushes
-    // never expire the image PLAN and OUTS pull and HealthOmics workflows pin.
+    // runtime*) and the pipeline images built FROM it. Keep a bounded number
+    // of recent images so layers can't pile up (room for version history and
+    // a multi-pipeline test matrix; they share base layers). The runtime
+    // images get their own rule, which ECR evaluates first, so pipeline
+    // pushes never expire the image they build FROM.
     const repo = new ecr.Repository(this, 'RuntimeRepo', {
       repositoryName: 'mro2nf-runtime',
       removalPolicy: cdk.RemovalPolicy.DESTROY,

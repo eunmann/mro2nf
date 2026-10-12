@@ -64,7 +64,7 @@ GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 test-e2e: build ## Run the e2e suite (golden table, mrp differential, cloud-sim, failure paths, knobs)
 	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger|^TestScale'
 
-test-e2e-docker: build ## Run pipelines under the generated docker profile, in the images the project ships (cloud isolation)
+test-e2e-docker: build ## Run pipelines under the generated docker profile, each in an image built FROM the runtime image (cloud isolation)
 	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
 
 test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)

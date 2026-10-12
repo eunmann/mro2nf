@@ -6,7 +6,7 @@ a transpiled Martian→Nextflow pipeline live, for **both** cloud targets:
 | Resource | Used by |
 |---|---|
 | S3 bucket (work dir + outputs) | `awsbatch` + `healthomics` |
-| ECR repo `mro2nf-runtime` (the image built from the generated `Dockerfile`) | both |
+| ECR repo `mro2nf-runtime` (the runtime image and the pipeline images built FROM it) | both |
 | VPC (public subnets, S3 gateway endpoint, no NAT) | `awsbatch` |
 | Batch compute environment + job queue + instance role | `awsbatch` |
 | HealthOmics service role + ECR pull policy | `healthomics` |
@@ -27,7 +27,8 @@ Designed to cost **≈ $0 while idle** and only a few cents per test run:
 - **Storage is bounded.** Objects under S3 `work/` (Nextflow's intermediate
   work dir) expire after 14 days and incomplete uploads are aborted; ECR keeps
   only the 5 newest runtime images (tags starting `runtime`, below) and the 20
-  newest stage images, so stage pushes never expire the runtime image. Final
+  newest pipeline images, so pipeline pushes never expire the runtime image.
+  Final
   outputs are kept until you delete them or run `cdk destroy`: `results/` (the
   Batch `--outdir` below) and
   `omics-out/` (the HealthOmics `--output-uri`: each run's `pubdir/` outputs
@@ -46,7 +47,7 @@ starved; still $0 idle on spot + `minvCpus: 0`), or leaving data in S3/ECR. Run
 
 - Node 18+ and the AWS CDK: `npm i -g aws-cdk` (or use the local `npx cdk`).
 - AWS credentials in your environment (the live test credentials).
-- Docker (to build the runtime image) and Nextflow (for the Batch run).
+- Docker (to build the images) and Nextflow (for the Batch run).
 
 ## Deploy
 
@@ -62,30 +63,36 @@ Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleAr
 ## Run on AWS Batch + S3
 
 One transpiled project runs on every target; `-profile` chooses it
-(`docs/TRANSPILER.md` §9). Both runs use two images in the ECR repo: the
-runtime image (`deploy/runtime/Dockerfile`, which PLAN and OUTS run in) and
-the pipeline's stage image, which `./build.sh` builds FROM it.
+(`docs/TRANSPILER.md` §9), every task in the one image `--mro2nf_image`
+names: the pipeline's image, built FROM the runtime image
+(`deploy/runtime/Dockerfile`) with the pipeline's code at the paths it was
+transpiled from (the README's "Container image").
 
 ```bash
 # 1. transpile (the same project serves Batch and HealthOmics)
 ./mro2nf -o out -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
     -mropath testdata/split_test testdata/split_test/pipeline.mro
 
-# 2. build + push the runtime and stage images (linux/amd64 compute)
+# 2. build + push the runtime image, then the pipeline's image FROM it with
+#    the fixture at the path step 1 transpiled it from (linux/amd64 compute)
 aws ecr get-login-password --region <Region> | docker login --username AWS --password-stdin <EcrRepoUri>
 docker build --platform linux/amd64 -t <EcrRepoUri>:runtime -f deploy/runtime/Dockerfile .
 docker push <EcrRepoUri>:runtime
-cd out
-./build.sh <EcrRepoUri>:split_test --platform linux/amd64 --build-arg RUNTIME=<EcrRepoUri>:runtime
+cat > split_test.Dockerfile <<EOF
+FROM <EcrRepoUri>:runtime
+COPY . $PWD/testdata/split_test/
+EOF
+docker build --platform linux/amd64 -t <EcrRepoUri>:split_test -f split_test.Dockerfile testdata/split_test
 docker push <EcrRepoUri>:split_test
 
 # 3. run; a site config names the queue and region
+cd out
 cat > batch.config <<'EOF'
 process.queue = '<BatchJobQueue>'
 aws.region = '<Region>'
 EOF
 nextflow run main.nf -profile awsbatch -c batch.config \
-    --mro2nf_image <EcrRepoUri>:split_test --mro2nf_runtime_image <EcrRepoUri>:runtime \
+    --mro2nf_image <EcrRepoUri>:split_test \
     -work-dir s3://<WorkBucketName>/work \
     --outdir s3://<WorkBucketName>/results
 ```
@@ -98,12 +105,11 @@ from S3: pass them as `s3://` URIs (a `-params-file` or `--<input>`); the
 ## Run on AWS HealthOmics
 
 ```bash
-# 1-2. transpile and push the two images, as for Batch
-# 3. package with both images pinned by digest, then register + run
+# 1-2. transpile and push the pipeline's image, as for Batch
+# 3. package with the image pinned by digest, then register + run
 cd out
-STAGE=$(docker inspect --format '{{index .RepoDigests 0}}' <EcrRepoUri>:split_test)
-RUNTIME=$(docker inspect --format '{{index .RepoDigests 0}}' <EcrRepoUri>:runtime)
-./package.sh "$STAGE" "$RUNTIME"   # builds workflow.zip
+IMAGE=$(docker inspect --format '{{index .RepoDigests 0}}' <EcrRepoUri>:split_test)
+./package.sh "$IMAGE"   # builds workflow.zip
 WF=$(aws omics create-workflow --engine NEXTFLOW --main main.nf \
     --definition-zip fileb://workflow.zip \
     --parameter-template file://parameter-template.json \
@@ -112,7 +118,7 @@ aws omics start-run --workflow-id "$WF" --role-arn <OmicsRoleArn> \
     --output-uri s3://<WorkBucketName>/omics-out
 ```
 
-The workflow pins both images, so every run executes the code it was
+The workflow pins the image, so every run executes the code it was
 validated with; the parameter template declares only the pipeline's inputs,
 so a run cannot name another image.
 

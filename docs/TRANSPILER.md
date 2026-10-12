@@ -164,7 +164,6 @@ main.nf               ← PLAN, one process call per stage node, then OUTS: wiri
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
 conf/                 ← the container profiles' and the HealthOmics profile's configs
-Dockerfile, build.sh  ← the stage image the container profiles run (§9)
 package.sh, parameter-template.json ← the HealthOmics package (§9)
 _assets/mro/          ← a copy of every .mro file the entry compiles from, each
                         at its absolute path below it; PLAN compiles it
@@ -185,12 +184,12 @@ records mre wrote; it parses no stage-controlled JSON.
 - `params.outdir` (`results`), and `params.job_resources`, Martian's
   `MRO_JOBRESOURCES` analog: a map from a stage's `special` key to the
   `clusterOptions` of a grid executor.
-- `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_code`,
-  `mro2nf_psid`, `mro2nf_monitor` and `mro2nf_confine`: the tools, code root
-  and knobs the stage module reads; `mro2nf_host_inputs` and
-  `mro2nf_allow_remote_inputs`, the entry file values a run stages (§8); and
-  `mro2nf_image` and `mro2nf_runtime_image`, the container profiles' images
-  (§9).
+- `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
+  `mro2nf_monitor` and `mro2nf_confine`: the tools and knobs the stage module
+  reads; `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs`, the entry
+  file values a run stages (§8); and `mro2nf_image`, the one image the
+  container profiles run every task in, which they require
+  (`mro2nf_require_image`, §9).
 - One `params.<name> = null` per entry input (§8).
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
   the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
@@ -598,54 +597,42 @@ neither param, so a HealthOmics run cannot set them.
 
 **Targets are profiles of one project** (`nextflow run -profile <name>`): the
 `.nf` files are the same everywhere, and a profile sets only where the tools
-and code are, which executor runs the tasks and in which images.
+are, which executor runs the tasks and in which image.
 
+- Every profile finds the code where the project was transpiled from: a
+  stage task compiles the entry `.mro`, its includes and its stages' code at
+  their absolute transpile-time paths; PLAN and OUTS compile the project's
+  `.mro` copy (§4) and need no code.
 - `standard` (the local executor) and the grid profiles (`slurm`, `sge`,
   `lsf`, `pbs`) run on the host's tools (`params.mro2nf_mre`, `_mrjob`,
-  `_adapters`, the transpile's `-mre`, `-mrjob`, `-shell`) and code
-  (`params.mro2nf_code` empty: the entry `.mro`, its includes and its stages'
-  code at their host paths), on a shared filesystem.
+  `_adapters`, the transpile's `-mre`, `-mrjob`, `-shell`) and code, on a
+  shared filesystem.
 - The container profiles, `docker`, `awsbatch` and `healthomics`, include
-  `conf/container.config`: the tools at `/opt/mro2nf`, the code below
-  `params.mro2nf_code = /opt/mro2nf/code`, each code root at its host path
-  there, and outputs confined to the task (§7). Every stage task runs in
-  `params.mro2nf_image`, the **stage image**; PLAN and OUTS, which run `mre`
-  alone and compile the project's `.mro` copy, run in
-  `params.mro2nf_runtime_image`, mro2nf's **runtime image**, so they never pull
-  the stage image. A container profile without a stage image fails at once.
-- **One image recipe.** `deploy/runtime/Dockerfile` is the one definition of
+  `conf/container.config`: the tools at `/opt/mro2nf`, outputs confined to the
+  task (§7), and every task, PLAN and OUTS included, in the one image
+  `params.mro2nf_image`. They set `params.mro2nf_require_image`, so a launch
+  without an image fails before PLAN.
+- **The image.** `deploy/runtime/Dockerfile` is the one definition of
   `/opt/mro2nf` (`mre`, `mrjob`, Martian's adapters), published as
-  `ghcr.io/eunmann/mro2nf-runtime:<version>` by each release (its `v*` tag);
-  `params.mro2nf_runtime_image` and the `Dockerfile`'s `RUNTIME` default to
-  the tag of the release that transpiled the project. A transpiler built from
-  any other commit has no published runtime image, so the project names none,
-  and `build.sh` and the container profiles refuse to start until one is
-  named: build it from the same checkout (`docker build -f
-  deploy/runtime/Dockerfile -t <image> .`) and pass it as `--build-arg
-  RUNTIME=<image>` and `--mro2nf_runtime_image <image>`. The project's
-  `Dockerfile` builds the stage image `FROM` it and copies each code root (the
-  entry's dir, the search path's roots, every `.mro` file's dir and every
-  stage's code Martian finds as a file) from a named build context
-  `./build.sh <tag>` passes, so no code is copied into the project; the code
-  of a stage whose `src` is absolute goes at that path itself, where Martian
-  looks for it unchanged. A stage
-  `src` found on no root (a bare command such as a compiled toolkit) must be on
-  the image's `PATH`; `--build-arg BASE=<toolkit image>` layers the runtime onto
-  such an image. `mre args` refuses a node the image compiles to another spec
-  than PLAN planned (§5), so a stale image fails loudly.
+  `ghcr.io/eunmann/mro2nf-runtime:<version>` by each release (its `v*` tag).
+  The user's image builds `FROM` it and adds the pipeline's code at the paths
+  the project was transpiled from (README, "Container image"); a stage `src`
+  that names a command must be on the image's `PATH`. The runtime image
+  itself serves where a `-c` config mounts the code at those paths. `mre
+  args` refuses a node the image compiles to another spec than PLAN planned
+  (§5), so a stale image fails loudly.
 - `docker` runs each task in a container that mounts only what it stages.
 - `awsbatch` runs on AWS Batch over an S3 work dir (`-work-dir s3://…`); every
   task stages its inputs from S3, so nothing reads a head-node path, and a
   head-node path as an entry file is refused (§8). Set `process.queue` and
   `aws.region` in a `-c` config; `--outdir s3://…` publishes to S3.
-- `healthomics` (HealthOmics takes no `-profile`): `./package.sh <stage
-  image>@sha256:… <runtime image>@sha256:…` zips the files `main.nf` reads,
-  appends the two images and `includeConfig 'conf/healthomics.config'` to the
-  zip's `nextflow.config`, so the profile is the workflow's own, and publishes
-  to `/mnt/workflow/pubdir`. Both images must be pinned by digest: a workflow
-  version then runs the code it was validated with, and as
-  `parameter-template.json` declares only the entry inputs, no run can name
-  another image.
+- `healthomics` (HealthOmics takes no `-profile`): `./package.sh
+  <image>@sha256:…` zips the files `main.nf` reads, appends the image and
+  `includeConfig 'conf/healthomics.config'` to the zip's `nextflow.config`, so
+  the profile is the workflow's own, and publishes to `/mnt/workflow/pubdir`.
+  The image must be pinned by digest: a workflow version then runs the code
+  it was validated with, and as `parameter-template.json` declares only the
+  entry inputs, no run can name another image.
 
 - A stage's `using (threads = …, mem_gb = …)` sets each task's `cpus` (at least
   1, rounded up) and `memory` (1 GB when unset); a chunk and a join take the

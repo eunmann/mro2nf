@@ -37,9 +37,7 @@ generated `nextflow.config` evaluates this per task (a process directive cannot
 read a task's inputs on Nextflow 24.04).
 
 The `awsbatch` and `healthomics` profiles (`TRANSPILER.md` §9) run the setups
-below. A GPU stage needs a CUDA image: build the stage image with
-`./build.sh <tag> --build-arg BASE=<your CUDA image>`, which layers mro2nf's
-runtime onto it (`mre` and `mrjob` are static).
+below. A GPU stage needs a CUDA image (below).
 
 On the AWS Batch and HealthOmics executors, Nextflow turns `accelerator N` into a
 GPU `resourceRequirement` on the job. That requirement is the routing signal the
@@ -54,16 +52,21 @@ using ( threads = 8, mem_gb = 32, special = "gpu" )
 
 ## The container
 
-The transpiler bakes every stage into one image and runs all stages from it. So
-GPU support needs no per-stage container: build that **one** image on a
-CUDA-capable base when the pipeline has any GPU stage.
+A container profile runs every task in the one image `--mro2nf_image` names
+(README, "Container image"). So GPU support needs no per-stage container:
+build that **one** image on a CUDA-capable base when the pipeline has any GPU
+stage, with mro2nf's runtime copied from its image (`mre` and `mrjob` are
+static) and the pipeline's code at the paths it was transpiled from.
 
 ```dockerfile
+FROM ghcr.io/eunmann/mro2nf-runtime:<version> AS mro2nf
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
-# install python3 + the aws CLI, then add the runtime the usual way:
-COPY mre /opt/mro2nf/mre
-COPY adapters /opt/mro2nf/adapters
-COPY stages /opt/mro2nf/stages
+# bash, ps (Nextflow task metrics), python3 for py stages, the aws CLI for Batch
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends procps python3 awscli \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=mro2nf /opt/mro2nf /opt/mro2nf
+COPY my-pipeline/ /opt/pipeline/
 ```
 
 CPU stages run in the same image and simply never touch the GPU. The NVIDIA
@@ -92,7 +95,7 @@ without one lands on the cheaper CPU environment first. The result:
 
 ```bash
 nextflow run main.nf -profile awsbatch -c batch.config \
-    --mro2nf_image <your-cuda-stage-image> -work-dir s3://<bucket>/work
+    --mro2nf_image <your-cuda-image> -work-dir s3://<bucket>/work
 ```
 
 where `batch.config` sets `process.queue = '<the-one-queue>'` and
@@ -115,9 +118,8 @@ Two things to keep in mind:
 Simpler — HealthOmics has no queues. The `accelerator N` directive routes the task
 to a GPU-backed instance, managed by the service. You only need:
 
-- the CUDA stage image in a **private ECR** repo in the run's region, pinned
-  by digest in the package (`./package.sh <stage image>@sha256:… <runtime
-  image>@sha256:…`), and
+- the CUDA image in a **private ECR** repo in the run's region, pinned by
+  digest in the package (`./package.sh <image>@sha256:…`), and
 - (if applicable) a HealthOmics service quota that permits GPU instance families.
 
 Everything else (packaging, `parameter-template.json`) is unchanged.

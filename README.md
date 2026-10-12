@@ -113,35 +113,59 @@ chooses it:
 | Profile | Runs on | Needs |
 |---|---|---|
 | `standard` (default), `slurm`, `sge`, `lsf`, `pbs` | the host's tools and code, a shared filesystem | — |
-| `docker` | local docker, each task in its own container | `--mro2nf_image <tag>` from `./build.sh <tag>`; `--mro2nf_runtime_image` unless a release transpiled it |
-| `awsbatch` | AWS Batch over an S3 work dir | the stage image in ECR (`--mro2nf_image`), `-work-dir s3://…`, `process.queue` and `aws.region` in a `-c` config; `--mro2nf_runtime_image` unless a release transpiled it |
-| `healthomics` | AWS HealthOmics | `./package.sh <stage image>@sha256:… <runtime image>@sha256:…`, which makes it the workflow's own config |
+| `docker` | local docker, each task in its own container | `--mro2nf_image <image>` |
+| `awsbatch` | AWS Batch over an S3 work dir | `--mro2nf_image <image in ECR>`, `-work-dir s3://…`, `process.queue` and `aws.region` in a `-c` config |
+| `healthomics` | AWS HealthOmics | `./package.sh <image>@sha256:…`, which makes it the workflow's own config |
 
-The container profiles run every stage task in the **stage image**, which
-`./build.sh <tag>` builds from the project's `Dockerfile`: `FROM` mro2nf's
-release runtime image (`ghcr.io/eunmann/mro2nf-runtime:<version>`, built from
-`deploy/runtime/Dockerfile`, the one definition of `/opt/mro2nf`), plus the
-pipeline's code, each root at its host path below `/opt/mro2nf/code`, passed
-as a named build context so the project copies no code. `--build-arg
-RUNTIME=<image>` names another runtime image; `--build-arg BASE=<image>`
-layers the runtime onto a toolkit image. PLAN and OUTS, which run `mre`
-alone, run in the runtime image itself (`--mro2nf_runtime_image`). Entry file
-values are staged into the tasks that read them (`s3://` URIs on every
-profile); see `docs/TRANSPILER.md` §8 and §9, and `docs/LIVE_AWS_TEST.md` for
-the AWS runs.
+A container profile launched without `--mro2nf_image` fails before any task
+runs. Entry file values are staged into the tasks that read them (`s3://`
+URIs on every profile); see `docs/TRANSPILER.md` §8 and §9, and
+`docs/LIVE_AWS_TEST.md` for the AWS runs.
 
-A release publishes the runtime image under its own tag, so a project
-transpiled by a release binary names it by default. A transpiler built from a
-clone (`make build`, any commit but a release tag) has no published runtime
-image, and the project names none: build one from the same checkout and pass
-it to both the stage build and the run, or `build.sh` and the container
-profiles refuse to start.
+### Container image
+
+The container profiles run every task, PLAN, the stages and OUTS, in one
+image: `--mro2nf_image`. Build it `FROM` mro2nf's runtime image, which holds
+`mre`, `mrjob` and Martian's adapters below `/opt/mro2nf`
+(`deploy/runtime/Dockerfile`), and add your pipeline's code:
+
+```dockerfile
+FROM ghcr.io/eunmann/mro2nf-runtime:<version>
+COPY my-pipeline/ /opt/pipeline/
+```
+
+Use the runtime tag of the mro2nf release that transpiles the project, so the
+`mre` ABI matches; for a transpiler built from a clone, build the runtime
+image from the same checkout (`docker build -f deploy/runtime/Dockerfile -t
+mro2nf-runtime:local .`) and use that. Install anything else your stages run
+in the same Dockerfile: a stage whose `src` names a command finds it on the
+image's `PATH`.
+
+A stage task finds the entry `.mro`, its includes and its stages' code at the
+absolute paths the project was transpiled from, so transpile the pipeline
+where it sits at the path the image holds it: with the tree at
+`/opt/pipeline` on the transpiling host too, point the entry and `-mropath`
+there, and every relative stage `src` resolves below it. Equivalently, keep
+the tree where it is and `COPY` it to that same path in the image (`COPY
+my-pipeline/ /home/me/my-pipeline/`), as the docker e2e suite does.
 
 ```bash
-docker build -f deploy/runtime/Dockerfile -t mro2nf-runtime:local .
-./build.sh my-pipeline --build-arg RUNTIME=mro2nf-runtime:local
-nextflow run main.nf -profile docker --mro2nf_image my-pipeline --mro2nf_runtime_image mro2nf-runtime:local
+docker build -t my/image:tag .
+mro2nf -o proj -mre "$PWD/mre" -shell "$PWD/vendor-martian/python/martian_shell.py" \
+    -mropath /opt/pipeline/mro /opt/pipeline/mro/pipeline.mro
+cd proj
+nextflow run main.nf -profile docker --mro2nf_image my/image:tag
+
+# AWS Batch: push the image to ECR; batch.config sets process.queue and aws.region
+nextflow run main.nf -profile awsbatch -c batch.config -work-dir s3://<bucket>/work \
+    --mro2nf_image <account>.dkr.ecr.<region>.amazonaws.com/my-image:tag \
+    --outdir s3://<bucket>/results
 ```
+
+The runtime image itself serves as `--mro2nf_image` when the code is
+reachable at those paths without copying it, such as a docker profile run
+whose `-c` config mounts it (`docker.runOptions = '-v
+/opt/pipeline:/opt/pipeline:ro'`).
 
 ### `.mro2nf.yml` project defaults
 
