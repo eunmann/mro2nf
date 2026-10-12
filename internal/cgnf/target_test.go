@@ -62,7 +62,7 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 	}
 
 	main := tree["main.nf"]
-	if !strings.Contains(main, "if (params.mro2nf_require_image && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
+	if !strings.Contains(main, "if (on(params.mro2nf_require_image) && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
 		t.Errorf("main.nf does not refuse a container profile without an image before PLAN:\n%s", main)
 	}
 

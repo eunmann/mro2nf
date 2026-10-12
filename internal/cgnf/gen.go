@@ -25,7 +25,7 @@ func (g *gen) linef(format string, args ...any) {
 func (p *project) mainNF() (string, error) {
 	g := &gen{}
 
-	g.incs.WriteString("include { shq ; code ; ordered ; resources ; OUTS } from './stage.nf'\n")
+	g.incs.WriteString("include { shq ; code ; ordered ; resources ; on ; OUTS } from './stage.nf'\n")
 	p.planProcess(g)
 	p.planWiring(g)
 
@@ -86,7 +86,7 @@ func pick(v string, idx []int) string {
 // forks of entry-fed root j, each [outer key, own ordinal, record, index
 // token].
 func (p *project) planWiring(g *gen) {
-	g.linef("if (params.mro2nf_require_image && !params.mro2nf_image) {")
+	g.linef("if (on(params.mro2nf_require_image) && !params.mro2nf_image) {")
 	g.linef("  error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
 	g.linef("}")
 	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"))", p.values(), p.graphMeta(), mroAssets)
