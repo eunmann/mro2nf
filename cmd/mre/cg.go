@@ -86,22 +86,58 @@ func readCall(path string) (string, error) {
 	return string(call), nil
 }
 
-// runArgs writes one stage instance's args bundle from its staged upstream
-// outs and fork elements, and prints the instance's state, enabled or
-// disabled, on stdout.
+// argsFlags are the stage instance an args step builds the args bundle of.
+type argsFlags struct {
+	node, digest, leaves string
+	in, forks            repeatedFlag
+}
+
+func (a *argsFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&a.node, "node", "", "stage fqid")
+	fs.StringVar(&a.digest, "digest", "", "the node's spec digest in the run's plan, which it must compile to")
+	fs.StringVar(&a.leaves, "leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
+	fs.Var(&a.in, "in", "staged item, or dir of staged items: instance outs bundles and fork elements (repeatable)")
+	fs.Var(&a.forks, "fork", "a fork record passed as a value, base64 of its JSON (repeatable)")
+}
+
+// write writes the instance's args bundle into out from its staged upstream
+// outs and fork elements, its file leaves linked to the staged files when
+// link is set.
+func (a *argsFlags) write(g *cg.Graph, man types.Manifest, out string, link bool) (cg.Instance, error) {
+	forks := make([]cg.Element, len(a.forks))
+	for i, rec := range a.forks {
+		el, err := g.DecodeElement(rec)
+		if err != nil {
+			return cg.Instance{}, fmt.Errorf("args: %w", err)
+		}
+
+		forks[i] = el
+	}
+
+	files, err := stagedEntryFiles(g, man, a.leaves)
+	if err != nil {
+		return cg.Instance{}, fmt.Errorf("args: %w", err)
+	}
+
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Forks: forks, Manifest: man, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Link: link})
+	if err != nil {
+		return cg.Instance{}, fmt.Errorf("args: %w", err)
+	}
+
+	return inst, nil
+}
+
+// runArgs writes one stage instance's args bundle and prints the instance's
+// state, enabled or disabled, on stdout.
 func runArgs(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("args", flag.ContinueOnError)
 	gf := addGraph(fs)
-	node := fs.String("node", "", "stage fqid")
-	digest := fs.String("digest", "", "the node's spec digest in the run's plan, which it must compile to")
+
+	var a argsFlags
+
+	a.register(fs)
 	out := fs.String("o", "args", "args bundle dir to write")
-	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 	link := fs.Bool("link", false, "no other task stages the bundle: link its file leaves to the staged files instead of copying them")
-
-	var in, forkRecs repeatedFlag
-
-	fs.Var(&in, "in", "staged item, or dir of staged items: instance outs bundles and fork elements (repeatable)")
-	fs.Var(&forkRecs, "fork", "a fork record passed as a value, base64 of its JSON (repeatable)")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -112,21 +148,9 @@ func runArgs(_ context.Context, argv []string) error {
 		return err
 	}
 
-	forks := make([]cg.Element, len(forkRecs))
-	for i, rec := range forkRecs {
-		if forks[i], err = g.DecodeElement(rec); err != nil {
-			return fmt.Errorf("args: %w", err)
-		}
-	}
-
-	files, err := stagedEntryFiles(g, man, *leaves)
+	inst, err := a.write(g, man, *out, *link)
 	if err != nil {
-		return fmt.Errorf("args: %w", err)
-	}
-
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr, Digest: *digest, EntryFiles: files, Link: *link})
-	if err != nil {
-		return fmt.Errorf("args: %w", err)
+		return err
 	}
 
 	state := "enabled"
@@ -167,18 +191,41 @@ func stagedEntryFiles(g *cg.Graph, man types.Manifest, leaves string) (map[strin
 	return files, nil
 }
 
+// postFlags are where a post step writes what a finished instance feeds.
+type postFlags struct {
+	forks, fields, gates string
+}
+
+func (p *postFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&p.forks, "forks", "forks", "dir to write <root>/<ordinal>/ fork elements into")
+	fs.StringVar(&p.fields, "fields", "", "dir to write one stamped bundle per output into, named by it")
+	fs.StringVar(&p.gates, "gates", "", "file to write the instances the instance disables into, space-separated gate tokens (<node>@<roots>@<ordinals>)")
+}
+
+// post stamps the outs bundle outs of the instance the args bundle args
+// stamps and writes the fork elements of every root it feeds; in are the
+// staged items a fork source also reads.
+func (p *postFlags) post(g *cg.Graph, man types.Manifest, args, outs string, in []string) error {
+	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, In: in, Manifest: man, Forks: p.forks, Fields: p.fields, Gates: p.gates}); err != nil {
+		return fmt.Errorf("post: %w", err)
+	}
+
+	return nil
+}
+
 // runPost stamps a finished instance's outs and writes the fork elements of
 // every root it feeds; -entry-forks writes those of the roots no stage
 // feeds.
 func runPost(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("post", flag.ContinueOnError)
 	gf := addGraph(fs)
+
+	var p postFlags
+
+	p.register(fs)
 	args := fs.String("args", "args", "the instance's args bundle dir")
 	outs := fs.String("outs", "outs", "the stage's outs bundle dir")
-	forks := fs.String("forks", "forks", "dir to write <root>/<ordinal>/ fork elements into")
 	entry := fs.Bool("entry-forks", false, "write the forks the invocation's entry values fix, not a stage's")
-	fields := fs.String("fields", "", "dir to write one stamped bundle per output into, named by it")
-	gates := fs.String("gates", "", "file to write the instances the instance disables into, space-separated gate tokens (<node>@<roots>@<ordinals>)")
 
 	var in repeatedFlag
 
@@ -193,13 +240,11 @@ func runPost(_ context.Context, argv []string) error {
 		return err
 	}
 
-	if *entry {
-		err = g.PostEntry(*forks)
-	} else {
-		err = g.Post(cg.PostSpec{Args: *args, Outs: *outs, In: in, Manifest: man, Forks: *forks, Fields: *fields, Gates: *gates})
+	if !*entry {
+		return p.post(g, man, *args, *outs, in)
 	}
 
-	if err != nil {
+	if err := g.PostEntry(p.forks); err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
 
