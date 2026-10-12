@@ -302,3 +302,44 @@ jobs:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
       - run: make bench
+
+  # The same pipelines under the generated docker profile, in the images the
+  # project ships (the runtime image deploy/runtime/Dockerfile builds, and the
+  # stage image the project's Dockerfile builds FROM it), where a task sees
+  # only what it stages: the AWS Batch / HealthOmics no-shared-filesystem
+  # model. Also the awsbatch profile on local docker and the HealthOmics
+  # package. Runs in parallel with the local e2e jobs above.
+  e2e-docker:
+    name: E2E (container isolation)
+    needs: changes
+    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: nf-core/setup-nextflow@893c28b667aedeba26e37f296d260ccc5bc4d914 # v3.0.1
+      - name: Resolve Nextflow version
+        id: nxf
+        run: echo "ver=$(nextflow -version 2>&1 | grep -oP 'version \K[0-9.]+')" >> "$GITHUB_OUTPUT"
+      - name: Cache Nextflow plugins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nextflow
+          key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
+      - run: make test-e2e-docker
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-docker-run-logs
+          path: artifacts/e2e/
+          if-no-files-found: ignore
