@@ -15,14 +15,20 @@ import (
 // TestWidePipelineRuns (#503): the project emitted for a pipeline of over
 // 500 stage calls of every shape the emitter wires compiles under
 // Nextflow, where one workflow of them all passed the JVM's 64 KiB limit
-// on a method, and runs to the outputs its stages compute. FANIN reads 210
-// stages, more than a workflow takes, so its calls are wired in its caller.
+// on a method, and runs to the outputs its stages compute.
 func TestWidePipelineRuns(t *testing.T) {
 	t.Parallel()
 
+	runWide(t, wide.New(32, 150, 0))
+}
+
+// runWide writes p, transpiles and runs it under Nextflow, and checks the
+// pipeline outs its stages compute.
+func runWide(t *testing.T, p wide.Pipeline) {
+	t.Helper()
+
 	requireTools(t, "nextflow", "java", "python3")
 
-	p := wide.New(32, 150, 210)
 	if p.Stages < 500 {
 		t.Fatalf("the wide pipeline has %d stage calls, want at least 500", p.Stages)
 	}
@@ -41,12 +47,17 @@ func TestWidePipelineRuns(t *testing.T) {
 
 	readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
 
-	rs := make([]any, len(p.Rs))
-	for i, r := range p.Rs {
-		rs[i] = json.Number(strconv.Itoa(r))
+	want := map[string]any{"all": json.Number(strconv.Itoa(p.All))}
+	if len(p.Rs) > 0 {
+		rs := make([]any, len(p.Rs))
+		for i, r := range p.Rs {
+			rs[i] = json.Number(strconv.Itoa(r))
+		}
+
+		want["rs"] = rs
 	}
 
-	if d := cmp.Diff(map[string]any{"all": json.Number(strconv.Itoa(p.All)), "rs": rs}, outs); d != "" {
+	if d := cmp.Diff(want, outs); d != "" {
 		t.Errorf("pipeline outs (-want +got):\n%s", d)
 	}
 }
