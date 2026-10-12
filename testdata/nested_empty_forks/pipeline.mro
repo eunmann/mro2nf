@@ -1,0 +1,41 @@
+# A map call over a sub-pipeline whose own map call has no fork in any outer
+# fork: xss = [[]]. The fork set of SQ, the product of the outer and inner
+# forks, is empty, and mrp panics on it building the pipestance (#522);
+# [[], [5]] runs.
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+pipeline SUB(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    map call SQ(
+        x = split self.xs,
+    )
+
+    return (
+        ys = SQ.y,
+    )
+}
+
+pipeline TOP(
+    in  int[][] xss,
+    out int[][] yss,
+)
+{
+    map call SUB(
+        xs = split self.xss,
+    )
+
+    return (
+        yss = SUB.ys,
+    )
+}
+
+call TOP(
+    xss = [[]],
+)
