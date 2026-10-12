@@ -26,8 +26,10 @@ Designed to cost **≈ $0 while idle** and only a few cents per test run:
   so unlike the MRP/Batch pattern it needs no shared filesystem.)
 - **Storage is bounded.** Objects under S3 `work/` (Nextflow's intermediate
   work dir) expire after 14 days and incomplete uploads are aborted; ECR keeps
-  only the 20 newest images. Final outputs are kept until you delete them or
-  run `cdk destroy`: `results/` (the Batch `--aws_outdir` below) and
+  only the 5 newest runtime images (tags starting `runtime`, below) and the 20
+  newest stage images, so stage pushes never expire the runtime image. Final
+  outputs are kept until you delete them or run `cdk destroy`: `results/` (the
+  Batch `--outdir` below) and
   `omics-out/` (the HealthOmics `--output-uri`: each run's `pubdir/` outputs
   and logs). Idle storage is a few hundred MB (the image) plus your outputs.
 - **HealthOmics** has no idle cost — you're billed per run (omics instance-hours

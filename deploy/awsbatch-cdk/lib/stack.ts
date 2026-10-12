@@ -8,14 +8,15 @@ import * as batch from 'aws-cdk-lib/aws-batch';
 
 /**
  * Minimal infrastructure to run a transpiled Martian->Nextflow pipeline live on
- * AWS, for BOTH supported cloud targets:
+ * AWS, for BOTH supported cloud profiles of the one generated project:
  *
- *   -target awsbatch  : the Batch compute environment + queue + S3 work dir.
- *   -target healthomics: the ECR repo + S3 + an Omics service role (you register
- *                        the workflow zip with `aws omics create-workflow`).
+ *   -profile awsbatch : the Batch compute environment + queue + S3 work dir.
+ *   healthomics       : the ECR repo + S3 + an Omics service role (you register
+ *                       the package.sh zip with `aws omics create-workflow`).
  *
  * Shared by both: one S3 bucket (work dir + outputs) and one ECR repo (the
- * runtime image built from the generated Dockerfile). Everything is tagged for
+ * runtime image built from deploy/runtime/Dockerfile and the stage images
+ * each project's build.sh builds FROM it). Everything is tagged for
  * easy teardown — `cdk destroy` removes it all. This is an example, not a
  * hardened production deployment.
  */
@@ -39,7 +40,7 @@ export class Mro2nfStack extends cdk.Stack {
       autoDeleteObjects: true,
       // Cost guards: expire the intermediate Nextflow work dir and orphaned
       // multipart-upload parts. Final outputs never expire: results/ (the
-      // awsbatch --aws_outdir) and omics-out/ (the HealthOmics --output-uri,
+      // awsbatch --outdir) and omics-out/ (the HealthOmics --output-uri,
       // which receives each run's pubdir/ outputs and logs).
       lifecycleRules: [
         { prefix: 'work/', expiration: cdk.Duration.days(14) },
@@ -47,17 +48,23 @@ export class Mro2nfStack extends cdk.Stack {
       ],
     });
 
-    // ECR repo for the runtime image (built from the generated Dockerfile).
-    // Keep a bounded number of recent images so layers can't pile up (room for
-    // version history and a multi-pipeline test matrix; they share base layers).
+    // ECR repo for the runtime image (deploy/runtime/Dockerfile, tagged
+    // runtime*) and the stage images build.sh builds FROM it. Keep a bounded
+    // number of recent images so layers can't pile up (room for version history
+    // and a multi-pipeline test matrix; they share base layers). The runtime
+    // images get their own rule, which ECR evaluates first, so stage pushes
+    // never expire the image PLAN and OUTS pull and HealthOmics workflows pin.
     const repo = new ecr.Repository(this, 'RuntimeRepo', {
       repositoryName: 'mro2nf-runtime',
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       emptyOnDelete: true,
-      lifecycleRules: [{ maxImageCount: 20 }],
+      lifecycleRules: [
+        { rulePriority: 1, tagPrefixList: ['runtime'], maxImageCount: 5 },
+        { rulePriority: 2, maxImageCount: 20 },
+      ],
     });
 
-    // --- AWS Batch (-target awsbatch) ---
+    // --- AWS Batch (-profile awsbatch) ---
 
     // The EC2 instances Batch launches need to pull the image (ECR) and stage
     // files to/from S3 (the aws CLI baked into the image uses this role).
@@ -90,7 +97,7 @@ export class Mro2nfStack extends cdk.Stack {
       computeEnvironments: [{ computeEnvironment: computeEnv, order: 1 }],
     });
 
-    // --- AWS HealthOmics (-target healthomics) ---
+    // --- AWS HealthOmics (the healthomics profile, package.sh) ---
 
     // The role HealthOmics assumes to read inputs / write outputs to S3 and pull
     // the image from ECR. Pass its ARN as --role-arn to `aws omics start-run`.
