@@ -334,7 +334,7 @@ func forkAgrees(a, b cg.Fork) bool {
 // and reports whether it is disabled.
 func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.seq++
-	work := filepath.Join(rp.tmp, "cg", fmt.Sprintf("%04d", rp.seq))
+	work := rp.taskDir(fmt.Sprintf("instance %04d", rp.seq))
 	args, outs := filepath.Join(work, "args"), filepath.Join(work, "outs")
 
 	staged := append(slices.Clone(in.elems), rp.upstreamOuts(st, in.fork)...)
@@ -531,15 +531,21 @@ func (rp *cgReplay) chunkNames(dir string) []string {
 	return out
 }
 
+// taskDir is the work dir of the task id names, laid out as a Nextflow
+// task's, work/<2 hex>/<30 hex>, as the unpublished-file-paths allowlist
+// rule recognizes it.
+func (rp *cgReplay) taskDir(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	hash := hex.EncodeToString(sum[:])
+
+	return filepath.Join(rp.tmp, "work", hash[:2], hash[2:32])
+}
+
 // runJob runs one `mre run` job, whose metadata dir is name, in its own
 // work dir, and checks its metadata against mrp's job of that name at rel.
-// The work dir is laid out as a Nextflow task's, work/<2 hex>/<30 hex>, as
-// the unpublished-file-paths allowlist rule recognizes it.
 func (rp *cgReplay) runJob(rel, name, work, phase string, argv ...string) {
 	rp.jobs++
-	sum := sha256.Sum256([]byte(work + "\x00" + name))
-	hash := hex.EncodeToString(sum[:])
-	jw := filepath.Join(rp.tmp, "work", hash[:2], hash[2:32])
+	jw := rp.taskDir(work + "\x00" + name)
 	rp.mre(append([]string{
 		"run", "-phase", phase, "-psid", "mrp", "-adapters", rp.adapters,
 		"-mrjob", filepath.Join(root, "mrjob"), "-work", jw,
@@ -673,45 +679,35 @@ func (rp *cgReplay) checkCore() {
 	}
 }
 
-// checkPipelineOuts resolves the pipeline outs with `mre outs` from the
-// posted outs of the stages they read, lays them out with publish-layout,
+// checkPipelineOuts publishes the pipeline outs with `mre outs` from the
+// posted outs of the stages they read, each located where it was posted,
 // and requires the tree and outs JSON mrp published, as TestMrpDiff compares
-// them.
+// them, with the outs JSON at the root of the tree as OUTS publishes it.
 func (rp *cgReplay) checkPipelineOuts() {
-	out := filepath.Join(rp.tmp, "cg", "pipeline_outs")
-	argv := []string{"outs", "-o", out}
+	results := filepath.Join(rp.tmp, "cg", "results")
+	locations := filepath.Join(rp.tmp, "cg", "locations")
+	argv := []string{"outs", "-locations", locations, "-work", filepath.Join(rp.tmp, "cg", "pipestance"), "-o", results, "-json", filepath.Join(results, "pipeline_outs.json")}
+
+	var lines strings.Builder
 
 	if ro := rp.call.ResolvedOutputs(); ro != nil && ro.Exp != nil {
 		for _, id := range refIDsOf(ro.Exp) {
 			for _, pi := range rp.posted[id] {
 				argv = append(argv, "-in", pi.outs)
+				lines.WriteString(pi.outs + "\t" + pi.outs + "\n")
 			}
 		}
 	}
 
+	if err := os.MkdirAll(filepath.Dir(locations), 0o755); err != nil {
+		rp.t.Fatal(err)
+	}
+
+	if err := os.WriteFile(locations, []byte(lines.String()), 0o644); err != nil {
+		rp.t.Fatal(err)
+	}
+
 	rp.mre(argv...)
-
-	pub := filepath.Join(rp.tmp, "cg", "published")
-	if err := os.MkdirAll(pub, 0o755); err != nil {
-		rp.t.Fatal(err)
-	}
-
-	rp.run1(filepath.Join(root, "mre"), "publish-layout", "-sidecar", filepath.Join(out, "data.json"), "-dir", pub,
-		"-leaves", filepath.Join(out, "f"), "-outs", "outs",
-		"-types", rp.types, "-callable", rp.call.Call().DecId, "-role", types.RoleOut)
-
-	// The OUTS task's publishDir copies the outs tree and these two files
-	// into results/ (internal/cgnf/assets/stage.nf).
-	results := filepath.Join(pub, "outs")
-	if err := os.MkdirAll(results, 0o755); err != nil {
-		rp.t.Fatal(err)
-	}
-
-	for _, f := range []string{"pipeline_outs.json", "manifest.json.gz"} {
-		if err := os.Rename(filepath.Join(pub, f), filepath.Join(results, f)); err != nil {
-			rp.t.Fatal(err)
-		}
-	}
 
 	reports, err := diffPublished(mustAllowlist(rp.t), rp.fixture, rp.ps, results)
 	if err != nil {

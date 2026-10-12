@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
 
 // The records only mre reads: an instance stamp beside an args or outs
-// bundle's data.json, the fork record of a fork element dir, and the record
-// of a partner element dir (partnerJSON).
+// bundle's data.json, the task record beside a posted outs bundle's stamp,
+// the fork record of a fork element dir, and the record of a partner element
+// dir (partnerJSON).
 const (
 	instanceFile = "instance.json"
+	taskFile     = "task.json"
 	elementFile  = "fork.json"
 	partnerFile  = "partner.json"
 
@@ -92,6 +95,53 @@ func writeInstance(dir string, in Instance) error {
 	return writeRecord(filepath.Join(dir, instanceFile), instanceJSON{
 		Node: in.Node, Fork: in.Fork.encode(), Lens: orEmpty(in.Lens), Disabled: in.Disabled,
 	})
+}
+
+// taskJSON is where a posted outs bundle was written: the dir of the task
+// that posted it, where its stage ran, and the bundle's path below it. The
+// pipeline outs name a path the stage declared in that dir, a file it never
+// wrote, below the task's work dir, which a scratch dir is not (#457).
+type taskJSON struct {
+	Dir string `json:"dir"`
+	At  string `json:"at"`
+}
+
+// stampPosted stamps the posted outs bundle dir with its instance and the
+// task posting it, which runs in the dir its stage ran in.
+func stampPosted(dir string, in Instance) error {
+	if err := writeInstance(dir, in); err != nil {
+		return err
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("task dir: %w", err)
+	}
+
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("task dir: %w", err)
+	}
+
+	at, err := filepath.Rel(wd, abs)
+	if err != nil {
+		return fmt.Errorf("task dir: %w", err)
+	}
+
+	return writeRecord(filepath.Join(dir, taskFile), taskJSON{Dir: wd, At: filepath.ToSlash(at)})
+}
+
+// readTask reads the task record beside the posted outs bundle dir, and
+// false for a bundle without one.
+func readTask(dir string) (taskJSON, bool, error) {
+	var rec taskJSON
+
+	err := readRecord(filepath.Join(dir, taskFile), &rec)
+	if errors.Is(err, fs.ErrNotExist) {
+		return rec, false, nil
+	}
+
+	return rec, err == nil, err
 }
 
 func orEmpty(lens []int) []int {

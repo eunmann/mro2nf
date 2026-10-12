@@ -158,6 +158,19 @@ func (s *stagedStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgument
 	return m, nil
 }
 
+// outsItems are the staged instance outs bundles.
+func (s *stagedStore) outsItems() []string {
+	var out []string
+
+	for _, dirs := range s.outsDirs {
+		out = append(out, dirs...)
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
 // hasOutputs reports whether st declares outputs. A stage without any has
 // the same empty outs at every instance, which no bundle carries when its
 // outs are posted field by field.

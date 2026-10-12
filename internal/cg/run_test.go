@@ -301,7 +301,7 @@ func (s *standIn) node(n TopoNode) int {
 // TestStandInRunOfEveryFixture runs every fixture's call graph end to end
 // on stand-in outs: every instance's _args resolve from what its task
 // stages, every enabled one posts its outs and fork elements, and the
-// pipeline outs resolve from the outs they read.
+// pipeline outs resolve from the outs they read and publish.
 func TestStandInRunOfEveryFixture(t *testing.T) {
 	skipped := map[string]string{
 		"rt_gate_split_reject":      "mrp refuses to instantiate it (#387)",
@@ -336,8 +336,11 @@ func TestStandInRunOfEveryFixture(t *testing.T) {
 				ran += s.node(n)
 			}
 
-			out := OutsSpec{In: []string{s.staged(s.read(topo.Outs))}, Manifest: s.man, Out: s.next("pipeline")}
-			if err := s.g.WriteOuts(out); err != nil {
+			out := OutsSpec{
+				In: []string{s.staged(s.read(topo.Outs))}, Manifest: s.man, Source: mro,
+				Work: s.next("work"), Results: s.next("results"), OutsJSON: s.next("pipeline_outs.json"),
+			}
+			if err := s.g.WriteOuts(t.Context(), out); err != nil {
 				t.Fatalf("pipeline outs: %v", err)
 			}
 		})

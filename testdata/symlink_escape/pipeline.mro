@@ -6,7 +6,10 @@
 # the local target it succeeds, with the target copied, not hard-linked, into
 # the bundle. Exercised by test/e2e/failure_test.go and by the mrp differential,
 # where the allowlist entry published-symlinks-copied excuses mrp's published
-# link and the link target's host path its _outs names.
+# link and the link target's host path its _outs names. A second pipeline
+# output reaches the same link (#485): mrp links each output's own outs/ path
+# to the host file, so mro2nf publishes a copy at each and names each by its
+# own path.
 filetype txt;
 
 stage LINK_OUT(
@@ -18,6 +21,7 @@ stage LINK_OUT(
 pipeline SE(
     in  int x,
     out txt linked,
+    out txt relinked,
 )
 {
     call LINK_OUT(
@@ -25,7 +29,8 @@ pipeline SE(
     )
 
     return (
-        linked = LINK_OUT.linked,
+        linked   = LINK_OUT.linked,
+        relinked = LINK_OUT.linked,
     )
 }
 

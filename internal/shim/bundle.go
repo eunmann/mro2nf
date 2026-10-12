@@ -515,12 +515,11 @@ const linkedPrefix = "linked:"
 // ReadOrigin returns the origin recorded beside the file leaf at the absolute
 // path abs, and false when abs is no leaf of a bundle or none is recorded.
 func ReadOrigin(abs string) (Origin, bool, error) {
-	ordinal := filepath.Dir(abs)
-	if !ordinalDir.MatchString(filepath.Base(ordinal)) || filepath.Base(filepath.Dir(ordinal)) != bundleFiles {
+	if _, _, ok := LeafBundle(abs); !ok {
 		return Origin{}, false, nil
 	}
 
-	recorded, err := os.ReadFile(filepath.Join(ordinal, originFile))
+	recorded, err := os.ReadFile(filepath.Join(filepath.Dir(abs), originFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		return Origin{}, false, nil
 	}
@@ -535,6 +534,21 @@ func ReadOrigin(abs string) (Origin, bool, error) {
 	}
 
 	return Origin{Path: path, Linked: linked}, true, nil
+}
+
+// LeafBundle returns the bundle dir holding the file leaf at path and the
+// leaf's path in it, and false for a path that is no bundle leaf.
+func LeafBundle(path string) (string, string, bool) {
+	ordinal := filepath.Dir(path)
+	files := filepath.Dir(ordinal)
+
+	if !ordinalDir.MatchString(filepath.Base(ordinal)) || filepath.Base(files) != bundleFiles {
+		return "", "", false
+	}
+
+	dir := filepath.Dir(files)
+
+	return dir, filepath.Join(bundleFiles, filepath.Base(ordinal), filepath.Base(path)), true
 }
 
 // LeafOrigin returns the origin path of the file leaf at the absolute path

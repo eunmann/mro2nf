@@ -151,6 +151,23 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 }
 
+// TestEmitLocatesOutsInputs: OUTS gets, beside each outs bundle it stages,
+// where its producing task's work dir keeps it, which names a file the
+// pipeline outs leave unpublished (#457), and passes both to mre outs.
+func TestEmitLocatesOutsInputs(t *testing.T) {
+	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
+
+	if !strings.Contains(main, "OUTS(nodes.map { _ns -> [mro: 'pipeline.mro'") || !strings.Contains(main, "outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(") {
+		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
+	}
+
+	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", "-in in -locations locations -o results -json pipeline_outs.json"} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("OUTS lacks %q", want)
+		}
+	}
+}
+
 // TestEmitStagesChunkApart: a chunk's main stages the split's chunk dir
 // below chunk/, apart from the job's metadata dir of the chunk's name, so
 // the job writes nothing into the split's outputs, which would change their

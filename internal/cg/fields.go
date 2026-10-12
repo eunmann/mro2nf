@@ -48,7 +48,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, man types.Manifest, dir
 			return fmt.Errorf("write %s output %s: %w", st.Fqid, p.Name, err)
 		}
 
-		if err := writeInstance(fd, in); err != nil {
+		if err := stampPosted(fd, in); err != nil {
 			return err
 		}
 	}
