@@ -89,7 +89,7 @@ func TestEmitEveryFixture(t *testing.T) {
 				}
 			}
 
-			if nodes, incs := strings.Count(string(main), "\n  // "), strings.Count(string(main), "include { STAGE"); nodes != incs {
+			if nodes, incs := strings.Count(string(main), "\n    // "), strings.Count(string(main), "include { STAGE"); nodes != incs {
 				t.Errorf("main.nf wires %d nodes but includes the stage module %d times", nodes, incs)
 			}
 		})

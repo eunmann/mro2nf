@@ -198,7 +198,7 @@ func TestEmitAliases(t *testing.T) {
 	for _, want := range []string{
 		"include { STAGE as N0_GEN } from './stage.nf'",
 		"include { STAGE as N1_DBL } from './stage.nf'",
-		"o0_forks.flatMap { _kp, ds -> ds.findAll { e -> e.parent.name == 'MFU.DBL' }",
+		"i1 = FORK(channel.of([[], [], [], []]), ELEMENTS(o0_forks, 'MFU.DBL', [], true), [], false, false)",
 	} {
 		if !strings.Contains(up, want) {
 			t.Errorf("map_fork_upstream's main.nf lacks %q:\n%s", want, up)
@@ -244,12 +244,22 @@ func TestEmitOrdersGathers(t *testing.T) {
 	gather := readTree(t, emitFixture(t, "fork_mid"))["main.nf"]
 
 	for _, c := range []struct{ fixture, main, want string }{
-		{"split_test", split, "groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }"},
-		{"fork_mid", gather, ".collect { e -> [ku, e] }] }).groupTuple().map { c, dss -> [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })] }"},
-		{"split_test", split, "o0_outs.flatMap { k, ds -> ds.findAll { e -> e.name in ['sum'] }.collect { e -> [[0] + k, e] } }).toList().map { xs -> ordered(xs) }"},
+		{"split_test", split, "N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk))"},
+		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']), [])"},
+		{"split_test", split, "outs_in = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum'])).toList().map { xs -> ordered(xs) }"},
 	} {
 		if !strings.Contains(c.main, c.want) {
 			t.Errorf("%s's main.nf lacks %q:\n%s", c.fixture, c.want, c.main)
+		}
+	}
+
+	for _, want := range []string{
+		"groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }",
+		".collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->\n        [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]",
+		"outs.flatMap { k, ds -> selected(ds, fields).collect { e -> [[node] + k, e] } }",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
 		}
 	}
 }
@@ -260,7 +270,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
-	if !strings.Contains(main, "OUTS(call.map { c -> [entry: ") || !strings.Contains(main, "outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
+	if !strings.Contains(main, "OUTS(shared, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
 		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
 	}
 
@@ -308,11 +318,20 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	main := readTree(t, emitFixture(t, "join_resources"))["main.nf"]
 
 	for _, want := range []string{
-		"def r = resources(res); cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, a, c.name, c] }",
-		"s0.map { m, k, a, cs, j, res -> [k, m + resources(res).join, a, cs, j] }",
+		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split))",
+		"N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk))",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("join_resources's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	for _, want := range []string{
+		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, a, c.name, c] }",
+		"split.map { m, k, a, cs, j, res -> [k, m + resources(res).join, a, cs, j] }",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
 		}
 	}
 }
@@ -330,9 +349,12 @@ func TestEmitSizesNodesUnderOverrides(t *testing.T) {
 			"params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : []",
 			"path overrides, stageAs: 'overrides/*', arity: '0..*'",
 			"${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)}",
-			"cpus: d[3] as int, mem_gb: d[4] as double, overrides: (d[5] == '-' ? '' : d[5])",
 		},
-		"stage.nf": {"${cmd} -overrides overrides.json"},
+		"stage.nf": {
+			"${cmd} -overrides overrides.json",
+			"[k, fs, es, ns[node], ns[node][1] == '1'",
+			"cpus: d[3] as int, mem_gb: d[4] as double, overrides: d[5] == '-' ? '' : d[5], special: meta.special, digest: d[0]]",
+		},
 	} {
 		for _, want := range wants {
 			if !strings.Contains(tree[file], want) {
@@ -392,9 +414,8 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 	arr := readTree(t, emitFixture(t, "entry_filearr"))["main.nf"]
 
 	for _, want := range []string{
-		"entry = PLAN.out.files.combine(PLAN.out.leaves)",
-		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
-		"N0_COUNTARR(u0.combine(call).combine(entry).map { k, fs, es, d, us, c, ef -> def ids = ef.files['EPA.COUNTARR' + ' ' + ([].join('.') ?: '-')] ?: [];",
+		"entry = ENTRY(PLAN.out.files, PLAN.out.leaves)",
+		"N0_COUNTARR(INPUT_ENTRY(b0.run, shared, entry, [node: 'EPA.COUNTARR', special: ''], []))",
 	} {
 		if !strings.Contains(arr, want) {
 			t.Errorf("entry_filearr's main.nf lacks %q:\n%s", want, arr)
@@ -402,11 +423,17 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 	}
 
 	plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
-	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "k, fs, es + us, [], []]") {
+	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "N1_ADD(INPUT(u1, shared, [node: 'D.ADD', ") {
 		t.Errorf("diamond_min reads no entry file, yet stages some:\n%s", plain)
 	}
 
-	for _, want := range []string{"val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')", "-leaves ${shq(leaves.join(','))}"} {
+	for _, want := range []string{
+		"val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')",
+		"-leaves ${shq(leaves.join(','))}",
+		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
+		"def ids = ef.files[meta.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
+		"[planned(c, meta, d), k, fs, es + us, [], []]",
+	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)
 		}
@@ -433,7 +460,7 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 
 	main := readTree(t, out)["main.nf"]
 	for _, want := range []string{
-		"entry = PLAN.out.files.combine(PLAN.out.leaves)",
+		"entry = ENTRY(PLAN.out.files, PLAN.out.leaves)",
 		"outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, entry.map { ef -> def ids = ef.files['ECHO -'] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }, file(",
 	} {
 		if !strings.Contains(main, want) {
@@ -457,23 +484,29 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 // absent record, never the whole output (zip_runtime: LONG zips THREE.xs;
 // zip_runtime_map: BY_AX zips ABC.m by key token).
 func TestEmitZipsByToken(t *testing.T) {
-	for _, c := range []struct{ fixture, root, partner, token string }{
-		{"zip_runtime", "ZIP_RUNTIME.LONG", "ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs", "t[-1].toString()"},
-		{"zip_runtime_map", "ZIP_RUNTIME_MAP.BY_AX", "ZIP_RUNTIME_MAP.BY_AX@ZIP_RUNTIME_MAP.ABC.m", "e.name.tokenize('@')[1]"},
+	for _, c := range []struct{ fixture, fork, zip string }{
+		{"zip_runtime", "i2 = FORK(channel.of([[], [], [], []]), ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false), [], false, true)", "i2 = ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')"},
+		{"zip_runtime_map", "i3 = FORK(channel.of([[], [], [], []]), ELEMENTS(o1_forks, 'ZIP_RUNTIME_MAP.BY_AX', [], true), [], false, true)", "i3 = ZIP(i3, o0_forks, [], 'ZIP_RUNTIME_MAP.BY_AX@ZIP_RUNTIME_MAP.ABC.m', 0, 'none')"},
 	} {
 		main := readTree(t, emitFixture(t, c.fixture))["main.nf"]
 
-		for _, want := range []string{
-			"e.parent.name == '" + c.root + "' }.collect { e -> def t = e.name.tokenize('@')[0].tokenize('.').collect { x -> x as int }; [[], t[-1], e, " + c.token + "] }",
-			"ds.findAll { e -> e.parent.name == '" + c.partner + "' }.collectEntries { e -> [(e.name): e] }] }, by: 0).map { _q, k, fs, es, tk, m -> [k, fs, es + ([m[tk[0]] ?: m['none']] - [null]), tk] }",
-		} {
+		for _, want := range []string{c.fork, c.zip} {
 			if !strings.Contains(main, want) {
 				t.Errorf("%s's main.nf lacks %q:\n%s", c.fixture, want, main)
 			}
 		}
 
-		if strings.Contains(main, "us -> [k, fs, es, d, us + ds]") {
+		if strings.Contains(main, "READ(") {
 			t.Errorf("%s: an instance stages a whole output:\n%s", c.fixture, main)
+		}
+	}
+
+	for _, want := range []string{
+		"keyed ? e.name.tokenize('@')[1] : t[-1].toString()",
+		"[k, fs, es + ([m[tk[token]] ?: m[absent]] - [null]), tk]",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
 		}
 	}
 }
@@ -487,9 +520,9 @@ func TestEmitSizesForkedGathers(t *testing.T) {
 	main := readTree(t, emitFixture(t, "map_nested_gather"))["main.nf"]
 
 	for _, want := range []string{
-		".combine(PLAN.out.n1.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); [f.size() > 1 ? f[1].tokenize('.').collect { t -> t as int } : [], f[0] as int] } }, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }",
-		".combine(o2_forks.map { kp, ds -> [[kp[0]], ds.count { e -> e.parent.name == 'MNG.BY_STAGE.SQ' }] }, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }",
-		".filter { v -> v[2] == 0 }.map { v -> [v[1], []] })",
+		"n1 = ENTRY_COUNTS(PLAN.out.n1)",
+		"u1 = READ(b1.run, GATHER_SIZED(b1.run, o0_outs, n1, [0], [0], [0], [0], ['y']), [0])",
+		"u4 = READ(u4, GATHER_SIZED(b4.run, o3_outs, COUNTS(o2_forks, [0], 'MNG.BY_STAGE.SQ'), [0], [0], [0], [0], ['y']), [0])",
 		`eval('cat \'counts/MNG.BY_ENTRY.SQ\''), emit: n1`,
 	} {
 		if !strings.Contains(main, want) {
@@ -497,8 +530,19 @@ func TestEmitSizesForkedGathers(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(main, ".unique().mix(") {
+	if strings.Contains(main, "GATHER(") {
 		t.Errorf("a forked gather waits for all of its upstream:\n%s", main)
+	}
+
+	for _, want := range []string{
+		".combine(counts, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }",
+		".unique().combine(counts, by: 0).filter { v -> v[2] == 0 }.map { v -> [v[1], []] }",
+		"[f.size() > 1 ? f[1].tokenize('.').collect { t -> t as int } : [], f[0] as int]",
+		"forks.map { kp, ds -> [kp[at], ds.count { e -> e.parent.name == root }] }",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
 	}
 }
 
@@ -509,16 +553,16 @@ func TestEmitWaitsForPreflights(t *testing.T) {
 	main := readTree(t, emitFixture(t, "modifiers_min"))["main.nf"]
 
 	for _, want := range []string{
-		"d0 = N0_CHECK.out.outs.toList().map { _xs -> true }",
-		"i1 = i1.combine(d0).map { k, fs, es, _d -> [k, fs, es] }",
-		"i2 = i2.combine(d0).map { k, fs, es, _d -> [k, fs, es] }",
+		"d0 = DONE(N0_CHECK.out.outs)",
+		"i1 = AFTER(channel.of([[], [], [], []]), d0)",
+		"i2 = AFTER(channel.of([[], [], [], []]), d0)",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("modifiers_min's main.nf lacks %q:\n%s", want, main)
 		}
 	}
 
-	if strings.Contains(main, "i0 = i0.combine(d") {
+	if strings.Contains(main, "i0 = AFTER(") {
 		t.Errorf("the preflight waits for itself:\n%s", main)
 	}
 }

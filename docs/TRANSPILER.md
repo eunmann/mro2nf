@@ -162,9 +162,15 @@ _assets/types.json    ← the type manifest the OUTS task lays the outs out with
 `main.nf` includes them once per node under its own alias
 (`include { STAGE as N3_DBL }`, a split stage as `N1_SUM_SQUARES_SP`, `_MN`
 and `_JN`), so a `withName:` selector names the node. Every stage task runs
-`mre args`, then its job through `mre run`, then `mre post`. The driver runs a
-handful of named Groovy helpers (`ordered`, `jsonOf`, `sized`), which read only
-records mre wrote; it parses no stage-controlled JSON.
+`mre args`, then its job through `mre run`, then `mre post`. `stage.nf` also
+holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
+`ENTRY_FORKS`, `ENTRY_COUNTS`) and that take a node's instances through each
+step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
+`INPUT`, `CHUNKS`, `JOIN`, …), each given the node's static data, so a
+node's wiring is a few lines and one per root, read, gate or preflight of
+it. The driver runs only those and a few Groovy helpers (`ordered`,
+`resources`), which read only records mre wrote; it parses no
+stage-controlled JSON.
 
 **`nextflow.config`** holds:
 

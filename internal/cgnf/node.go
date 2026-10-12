@@ -4,67 +4,104 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
 )
 
-// node renders node i: its instances, enumerated root by root from the fork
+// wiring is a run of workflow statements: its lines, the stage module
+// aliases they call, and the channels they define and read, which tie it
+// to the runs before and after it.
+type wiring struct {
+	lines, incs []string
+	uses, defs  []string
+}
+
+func (w *wiring) linef(format string, args ...any) {
+	w.lines = append(w.lines, fmt.Sprintf(format, args...))
+}
+
+// use is channel name, which w reads.
+func (w *wiring) use(name string) string {
+	if !slices.Contains(w.uses, name) {
+		w.uses = append(w.uses, name)
+	}
+
+	return name
+}
+
+// def is channel name, which w defines.
+func (w *wiring) def(name string) string {
+	w.defs = append(w.defs, name)
+
+	return name
+}
+
+// The channels a node defines for the nodes after it.
+func outsOf(i int) string  { return "o" + strconv.Itoa(i) + "_outs" }
+func forksOf(i int) string { return "o" + strconv.Itoa(i) + "_forks" }
+func gatesOf(i int) string { return "o" + strconv.Itoa(i) + "_gates" }
+func doneOf(i int) string  { return "d" + strconv.Itoa(i) }
+
+// The channels of PLAN's records for an entry-fed root.
+func entryForksOf(j int) string  { return "f" + strconv.Itoa(j) }
+func entryCountsOf(j int) string { return "n" + strconv.Itoa(j) }
+
+// node wires node i: its instances, enumerated root by root from the fork
 // elements and records its roots' feeders write, each held until its
 // preflights are done; its gates, which the driver evaluates so a disabled
 // instance runs no task; the outs its enabled instances stage, field by
 // field; its process call; and its outputs, a disabled instance standing in
 // with none.
-func (p *project) node(g *gen, i int, n cg.TopoNode) error {
-	g.linef("// %s", n.Fqid)
-	p.instances(g, i, n)
-	p.gate(g, i, n)
-	g.linef("u%d = b%d.run.map { k, fs, es, d, _off -> [k, fs, es, d, []] }", i, i)
+func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
+	w := &wiring{}
+	w.linef("// %s", n.Fqid)
+	p.gate(w, i, n, p.instances(w, i, n))
 
+	run := fmt.Sprintf("b%d.run", i)
 	for _, r := range n.Reads {
-		p.read(g, i, n, r)
+		w.linef("u%d = READ(%s, %s)", i, run, p.read(w, i, n, r))
+		run = "u" + strconv.Itoa(i)
 	}
 
 	meta, err := p.nodeMeta(n)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	proc := alias(i, n.Fqid)
-	in := p.input(i, n, meta)
+	in := p.input(w, n, run, meta)
 
 	if n.Split {
-		p.splitTriad(g, i, proc, in)
+		splitTriad(w, proc, in)
 		proc += "_JN"
 	} else {
-		fmt.Fprintf(&g.incs, "include { STAGE as %s } from './stage.nf'\n", proc)
-		g.linef("%s(%s)", proc, in)
+		w.incs = append(w.incs, "STAGE as "+proc)
+		w.linef("%s(%s)", proc, in)
 	}
 
 	if p.awaited(n.Fqid) {
-		g.linef("d%d = %s.out.outs.toList().map { _xs -> true }", i, proc)
+		w.linef("%s = DONE(%s.out.outs)", w.def(doneOf(i)), proc)
 	}
 
 	outs, forks, gates := p.consumed(n.Fqid)
 	for _, o := range []struct {
-		used       bool
-		name, none string
-	}{{outs, "outs", "[]"}, {forks, "forks", "[]"}, {gates, "gates", "''"}} {
+		used             bool
+		name, out, empty string
+	}{{outs, outsOf(i), "outs", "[]"}, {forks, forksOf(i), "forks", "[]"}, {gates, gatesOf(i), "gates", "''"}} {
 		if o.used {
-			g.linef("o%d_%s = %s.out.%s.mix(b%d.skip.map { v -> [v[0], %s] })", i, o.name, proc, o.name, i, o.none)
+			w.linef("%s = OR_SKIPPED(%s.out.%s, b%d.skip, %s)", w.def(o.name), proc, o.out, i, o.empty)
 		}
 	}
 
-	return nil
+	return w, nil
 }
 
-// input is the channel of node i's enabled instances as its process takes
-// them, each with the entry files it reads: those PLAN lists for its fork
-// of the node's entry-fed roots, and their indices, which mre args maps
-// back to the run's values.
-func (p *project) input(i int, n cg.TopoNode, meta string) string {
+// input is the channel of node i's enabled instances, run, as its process
+// takes them, each with the entry files it reads: those PLAN lists for its
+// fork of the node's entry-fed roots.
+func (p *project) input(w *wiring, n cg.TopoNode, run, meta string) string {
 	if !p.readers[n.Fqid] {
-		return fmt.Sprintf("u%d.combine(call).map { k, fs, es, d, us, c -> [%s, k, fs, es + us, [], []] }", i, meta)
+		return fmt.Sprintf("INPUT(%s, %s, %s)", run, w.use("shared"), meta)
 	}
 
 	var at []int
@@ -75,35 +112,33 @@ func (p *project) input(i int, n cg.TopoNode, meta string) string {
 		}
 	}
 
-	return fmt.Sprintf("u%d.combine(call).combine(entry).map { k, fs, es, d, us, c, ef -> def ids = ef.files[%s + ' ' + (%s.join('.') ?: '-')] ?: []; [%s, k, fs, es + us, ids, ids.collect { x -> ef.leaves[x] }] }",
-		i, gstr(n.Fqid), pick("k", at), meta)
+	return fmt.Sprintf("INPUT_ENTRY(%s, %s, %s, %s, %s)", run, w.use("shared"), w.use("entry"), meta, ilist(at))
 }
 
-// instances enumerates node i's instances, i<i>: root by root, each with
-// the partner elements it zips, held until its preflights are done.
-func (p *project) instances(g *gen, i int, n cg.TopoNode) {
-	zr := zipRoots(n)
-	if len(n.Zips) == 0 {
-		g.linef("i%d = channel.of([[], [], []])", i)
-	} else {
-		g.linef("i%d = channel.of([[], [], [], []])", i)
+// instances is the expression of node i's instances: root by root, each
+// with the partner elements it zips, held until its preflights are done.
+// Each step but the last is assigned to i<i>.
+func (p *project) instances(w *wiring, i int, n cg.TopoNode) string {
+	inst := "channel.of([[], [], [], []])"
+	step := func(expr string) {
+		w.linef("i%d = %s", i, expr)
+		inst = "i" + strconv.Itoa(i)
 	}
 
+	zr := zipRoots(n)
 	for _, root := range n.Roots {
-		p.forkOn(g, i, n, root, zr)
+		step(p.forkOn(w, inst, n, root, zr))
 	}
 
 	for _, z := range n.Zips {
-		p.zip(g, i, z, n, zr)
-	}
-
-	if len(n.Zips) > 0 {
-		g.linef("i%d = i%d.map { k, fs, es, _tk -> [k, fs, es] }", i, i)
+		step(p.zip(w, inst, z, n, zr))
 	}
 
 	for _, pf := range n.Preflights {
-		g.linef("i%d = i%d.combine(d%d).map { k, fs, es, _d -> [k, fs, es] }", i, i, p.index[pf])
+		step(fmt.Sprintf("AFTER(%s, %s)", inst, w.use(doneOf(p.index[pf]))))
 	}
+
+	return inst
 }
 
 // zipRoots are node n's roots, in its order, that one of its zips splits
@@ -120,126 +155,78 @@ func zipRoots(n cg.TopoNode) []string {
 	return out
 }
 
-// forkOn extends node i's instances by one of its roots: each instance
-// joins every fork of root under the instance's parts for root's outer
-// roots. An entry-fed root's forks are PLAN's records, passed as values; a
-// stage-fed root's are the element dirs its producer posted. A node with
-// zips carries the index token of its fork of each root in zr.
-func (p *project) forkOn(g *gen, i int, n cg.TopoNode, root string, zr []string) {
+// positions are the positions in roots of each of xs, -1 for one it lacks.
+func positions(roots, xs []string) []int {
+	out := make([]int, len(xs))
+	for x, r := range xs {
+		out[x] = slices.Index(roots, r)
+	}
+
+	return out
+}
+
+// forkOn extends node n's instances, inst, by one of its roots. An
+// entry-fed root's forks are PLAN's records, passed as values; a stage-fed
+// root's are the element dirs its producer posted. A root in zr takes its
+// index token.
+func (p *project) forkOn(w *wiring, inst string, n cg.TopoNode, root string, zr []string) string {
 	r := p.roots[root]
 
-	outer := make([]int, len(r.Outer))
-	for o, ro := range r.Outer {
-		outer[o] = slices.Index(n.Roots, ro)
+	entryFed := r.Producer == ""
+
+	var src string
+	if entryFed {
+		src = w.use(entryForksOf(slices.Index(p.entry, root)))
+	} else {
+		src = p.elements(w, r)
 	}
 
-	src, add := "f"+strconv.Itoa(slices.Index(p.entry, root)), "k + [own], fs + [x], es"
-	if r.Producer != "" {
-		src, add = p.elements(r), "k + [own], fs, es + [x]"
-	}
-
-	tup, zipped := "k, fs, es", false
-	if len(n.Zips) > 0 {
-		zipped = slices.Contains(zr, root)
-		tup = "k, fs, es, tk"
-		add += ", tk"
-
-		if zipped {
-			add += " + [t]"
-		}
-	}
-
-	g.linef("i%d = i%d.map { %s -> [%s, %s] }.combine(%s, by: 0).map { _o, %s, own, x, %s -> [%s] }",
-		i, i, tup, pick("k", outer), tup, src, tup, param("t", zipped), add)
+	return fmt.Sprintf("FORK(%s, %s, %s, %t, %t)", inst, src, ilist(positions(n.Roots, r.Outer)), entryFed, slices.Contains(zr, root))
 }
 
-// zip adds to each instance of node i, whose fork of root z.Root has the
-// index token tk[j], z.Node's partner element at that token, posted by the
-// instance of z.Node agreeing with it on z.Node's roots, or, where it has
-// none, its absent record, which reads null or a missing element as mrp
-// reads the output's element there.
-func (p *project) zip(g *gen, i int, z cg.Zip, n cg.TopoNode, zr []string) {
-	q := p.topo.Nodes[p.index[z.Node]]
+// zip adds to node n's instances, inst, z.Node's partner element at the
+// index token of their fork of z.Root.
+func (p *project) zip(w *wiring, inst string, z cg.Zip, n cg.TopoNode, zr []string) string {
+	q := p.index[z.Node]
 
-	at := make([]int, len(q.Roots))
-	for x, r := range q.Roots {
-		at[x] = slices.Index(n.Roots, r)
-	}
-
-	g.linef("i%d = i%d.map { k, fs, es, tk -> [%s, k, fs, es, tk] }.combine(o%d_forks.map { kq, ds -> [kq, ds.findAll { e -> e.parent.name == %s }.collectEntries { e -> [(e.name): e] }] }, by: 0).map { _q, k, fs, es, tk, m -> [k, fs, es + ([m[tk[%d]] ?: m[%s]] - [null]), tk] }",
-		i, i, pick("k", at), p.index[z.Node], gstr(cg.PartnerDir(z.Root, z.Node, z.Output)), slices.Index(zr, z.Root), gstr(cg.AbsentName))
+	return fmt.Sprintf("ZIP(%s, %s, %s, %s, %d, %s)", inst, w.use(forksOf(q)), ilist(positions(n.Roots, p.topo.Nodes[q].Roots)),
+		gstr(cg.PartnerDir(z.Root, z.Node, z.Output)), slices.Index(zr, z.Root), gstr(cg.AbsentName))
 }
 
-// elements is the channel of root's fork element dirs its producer posted,
-// each [outer key, own ordinal, dir, index token]: an outer root the
-// producer is forked on takes the producer's ordinal for it, any other the
-// ordinal the dir's name carries before its own. A map key's token follows
-// the ordinals after an @; an array fork's is its ordinal.
-func (p *project) elements(r cg.TopoRoot) string {
-	prod := p.topo.Nodes[p.index[r.Producer]]
+// elements is the channel of root's fork element dirs its producer posted:
+// an outer root the producer is forked on takes the producer's ordinal for
+// it, any other the ordinal the dir's name carries.
+func (p *project) elements(w *wiring, r cg.TopoRoot) string {
+	prod := p.index[r.Producer]
 
-	keys := make([]string, 0, len(r.Outer))
-	named, usesKey := 0, false
-
-	for _, o := range r.Outer {
-		if at := slices.Index(prod.Roots, o); at >= 0 {
-			keys = append(keys, "kp["+strconv.Itoa(at)+"]")
-			usesKey = true
-
-			continue
-		}
-
-		keys = append(keys, "t["+strconv.Itoa(named)+"]")
-		named++
-	}
-
-	ix := "t[-1].toString()"
-	if r.Keyed {
-		ix = "e.name.tokenize('@')[1]"
-	}
-
-	return fmt.Sprintf("o%d_forks.flatMap { %s, ds -> ds.findAll { e -> e.parent.name == %s }.collect { e -> def t = e.name.tokenize('@')[0].tokenize('.').collect { x -> x as int }; [[%s], t[-1], e, %s] } }",
-		p.index[r.Producer], param("kp", usesKey), gstr(r.Fqid), strings.Join(keys, ", "), ix)
+	return fmt.Sprintf("ELEMENTS(%s, %s, %s, %t)", w.use(forksOf(prod)), gstr(r.Fqid), ilist(positions(p.topo.Nodes[prod].Roots, r.Outer)), r.Keyed)
 }
 
-// gate decides each instance of node i enabled or disabled, b<i>.run or
-// b<i>.skip, from PLAN's record of the node, which each instance carries
-// on as its d, and the gate values each stage whose outs gate it posted at
-// the fork they share, keyed by the instance's ordinals of the gate's own
-// roots.
-func (p *project) gate(g *gen, i int, n cg.TopoNode) {
-	fq := gstr(n.Fqid)
-	g.linef("g%d = i%d.combine(nodes).map { k, fs, es, ns -> [k, fs, es, ns[%s], ns[%s][1] == '1' || ns[%s][2].tokenize(',').contains(k.join('.'))] }",
-		i, i, fq, fq, fq)
+// gate decides each of node i's instances, inst, enabled or disabled,
+// b<i>.run or b<i>.skip, from PLAN's record of the node, which each
+// instance carries on as its d, and the gate values each stage whose outs
+// gate it posted at the fork they share, keyed by the instance's ordinals
+// of the gate's own roots.
+func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst string) {
+	gated := fmt.Sprintf("GATE(%s, %s, %s)", inst, w.use("nodes"), gstr(n.Fqid))
 
 	for _, gp := range n.Gates {
-		prod := p.topo.Nodes[p.index[gp.Node]]
+		w.linef("g%d = %s", i, gated)
 
-		at := make([]int, len(prod.Roots))
-		for x, r := range prod.Roots {
-			at[x] = slices.Index(n.Roots, r)
-		}
-
-		ext := make([]int, len(gp.Roots))
-		for x, r := range gp.Roots {
-			ext[x] = slices.Index(n.Roots, r)
-		}
-
-		g.linef("g%d = g%d.map { k, fs, es, d, off -> [%s, k, fs, es, d, off] }.combine(o%d_gates.map { kp, gs -> [kp, gs.tokenize(' ')] }, by: 0).map { _c, k, fs, es, d, off, gs -> [k, fs, es, d, off || gs.contains(%s + %s.join('.'))] }",
-			i, i, pick("k", at), p.index[gp.Node], gstr(cg.GateToken(n.Fqid, gp, "")), pick("k", ext))
+		q := p.index[gp.Node]
+		gated = fmt.Sprintf("GATED(g%d, %s, %s, %s, %s)", i, w.use(gatesOf(q)), ilist(positions(n.Roots, p.topo.Nodes[q].Roots)),
+			ilist(positions(n.Roots, gp.Roots)), gstr(cg.GateToken(n.Fqid, gp, "")))
 	}
 
-	g.linef("b%d = g%d.branch { v ->", i, i)
-	g.linef("  skip: v[4]")
-	g.linef("  run: true")
-	g.linef("}")
+	w.linef("b%d = ENABLED(%s)", i, gated)
 }
 
-// read adds to each enabled instance of node i the outs bundles it reads of
-// node r.Node: the instance agreeing on every root they share, or, when
-// the upstream is forked on roots node i is not, every such instance, a
-// gather ordered by the upstream's key, not by completion.
-func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
+// read is the channel of the outs bundles each enabled instance of node i
+// reads of node r.Node, keyed by the roots they share, with those roots'
+// positions in node i's key: from the instance agreeing on every root they
+// share, or, when the upstream is forked on roots node i is not, every
+// such instance, a gather ordered by the upstream's key, not by completion.
+func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
 	u := p.index[r.Node]
 	up := p.topo.Nodes[u]
 
@@ -255,36 +242,36 @@ func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
 		}
 	}
 
-	sel := "ds"
+	fields := "null"
 	if r.Fields != nil {
-		sel = "ds.findAll { e -> e.name in " + glist(r.Fields) + " }"
+		fields = glist(r.Fields)
 	}
 
-	src := fmt.Sprintf("o%d_outs.map { %s, ds -> [%s, %s] }", u, param("ku", len(theirs) > 0), pick("ku", theirs), sel)
+	outs, run := w.use(outsOf(u)), fmt.Sprintf("b%d.run", i)
 
-	switch cnt, sized := p.forkCounts(n, up, extra); {
+	var src string
+
+	switch counts, sized := p.forkCounts(w, n, up, extra); {
 	case sized:
-		p.sizedGather(g, i, n, up, sel, cnt)
-		src = fmt.Sprintf("h%d_%d", i, u)
+		src = p.sizedGather(n, up, run, outs, counts, fields)
 	case len(extra) > 0:
-		g.linef("h%d_%d = b%d.run.map { %s -> [%s, null] }.unique().mix(o%d_outs.map { ku, ds -> [%s, %s.collect { e -> [ku, e] }] }).groupTuple().map { c, dss -> [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })] }",
-			i, u, i, param("v", len(mine) > 0), pick("v[0]", mine), u, pick("ku", theirs), sel)
-		src = fmt.Sprintf("h%d_%d", i, u)
+		src = fmt.Sprintf("GATHER(%s, %s, %s, %s, %s)", run, outs, ilist(mine), ilist(theirs), fields)
+	default:
+		src = fmt.Sprintf("SELECT(%s, %s, %s)", outs, ilist(theirs), fields)
 	}
 
-	g.linef("u%d = u%d.map { k, fs, es, d, us -> [%s, k, fs, es, d, us] }.combine(%s, by: 0).map { _c, k, fs, es, d, us, ds -> [k, fs, es, d, us + ds] }",
-		i, i, pick("k", mine), src)
+	return src + ", " + ilist(mine)
 }
 
 // forkCounts is the channel of the fork counts of root extra[0] under each
 // fork of its outer roots, [outer key, count], none left out, for a gather
-// over it by a node i that is forked, each of whose instances then starts
+// over it by a node n that is forked, each of whose instances then starts
 // once its own share of the gather is in, not the whole of it. It is false
-// for another gather: over several roots, or over one whose outer roots i
+// for another gather: over several roots, or over one whose outer roots n
 // does not share or whose producer's post enumerates them itself, whose
 // counts no one item carries; such a gather waits for all of its upstream,
 // as one consumed by an unforked node does by nature.
-func (p *project) forkCounts(n, up cg.TopoNode, extra []string) (string, bool) {
+func (p *project) forkCounts(w *wiring, n, up cg.TopoNode, extra []string) (string, bool) {
 	if len(extra) != 1 || len(n.Roots) == 0 || len(up.Roots) == 1 {
 		return "", false
 	}
@@ -297,28 +284,24 @@ func (p *project) forkCounts(n, up cg.TopoNode, extra []string) (string, bool) {
 	}
 
 	if r.Producer == "" {
-		return fmt.Sprintf("PLAN.out.n%d.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); [f.size() > 1 ? f[1].tokenize('.').collect { t -> t as int } : [], f[0] as int] } }",
-			slices.Index(p.entry, r.Fqid)), true
+		return w.use(entryCountsOf(slices.Index(p.entry, r.Fqid))), true
 	}
 
-	prod := p.topo.Nodes[p.index[r.Producer]]
+	prod := p.index[r.Producer]
 
-	at := make([]int, len(r.Outer))
-	for x, o := range r.Outer {
-		if at[x] = slices.Index(prod.Roots, o); at[x] < 0 {
-			return "", false
-		}
+	at := positions(p.topo.Nodes[prod].Roots, r.Outer)
+	if slices.Contains(at, -1) {
+		return "", false
 	}
 
-	return fmt.Sprintf("o%d_forks.map { %s, ds -> [%s, ds.count { e -> e.parent.name == %s }] }",
-		p.index[r.Producer], param("kp", len(at) > 0), pick("kp", at), gstr(r.Fqid)), true
+	return fmt.Sprintf("COUNTS(%s, %s, %s)", w.use(forksOf(prod)), ilist(at), gstr(r.Fqid)), true
 }
 
-// sizedGather gathers, for each instance of node i, the outs of every
-// instance of up under it, by groupKey with their count, which cnt gives
-// for the outer fork of the gathered root the instance's key fixes; an
-// instance under which the root has no fork gets an empty gather at once.
-func (p *project) sizedGather(g *gen, i int, n, up cg.TopoNode, sel, cnt string) {
+// sizedGather gathers, for each enabled instance of node n, run, the outs
+// of every instance of up under it, by groupKey with their count, which
+// counts gives for the outer fork of the gathered root the instance's key
+// fixes.
+func (p *project) sizedGather(n, up cg.TopoNode, run, outs, counts, fields string) string {
 	extra := slices.IndexFunc(up.Roots, func(r string) bool { return !slices.Contains(n.Roots, r) })
 	outer := p.roots[up.Roots[extra]].Outer
 
@@ -334,21 +317,14 @@ func (p *project) sizedGather(g *gen, i int, n, up cg.TopoNode, sel, cnt string)
 		}
 	}
 
-	u := p.index[up.Fqid]
-	g.linef("h%d_%d = o%d_outs.map { ku, ds -> [%s, %s, %s.collect { e -> [ku, e] }] }.combine(%s, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }.groupTuple().map { gk, dss -> [gk.getGroupTarget(), ordered(dss.collectMany { x -> x })] }.mix(b%d.run.map { v -> [%s, %s] }.unique().combine(%s, by: 0).filter { v -> v[2] == 0 }.map { v -> [v[1], []] })",
-		i, u, u, pick("ku", outerTheirs), pick("ku", theirs), sel, cnt, i, pick("v[0]", outerMine), pick("v[0]", mine), cnt)
+	return fmt.Sprintf("GATHER_SIZED(%s, %s, %s, %s, %s, %s, %s, %s)", run, outs, counts, ilist(mine), ilist(theirs), ilist(outerMine), ilist(outerTheirs), fields)
 }
 
 // splitTriad runs a split node: its split, a main per chunk the split
-// returned, and its join over every chunk's outs once all are in, by chunk
-// name, not by completion. Each chunk and the join are scheduled with the
-// resources their jobs get, from the split's resources table.
-func (p *project) splitTriad(g *gen, i int, proc, in string) {
-	fmt.Fprintf(&g.incs, "include { STAGE_SPLIT as %[1]s_SP ; STAGE_MAIN as %[1]s_MN ; STAGE_JOIN as %[1]s_JN } from './stage.nf'\n", proc)
-	g.linef("%s_SP(%s)", proc, in)
-	g.linef("s%d = %s_SP.out.split", i, proc)
-	g.linef("%s_MN(s%d.flatMap { m, k, a, cs, _j, res -> def r = resources(res); cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, a, c.name, c] } })", proc, i)
-	g.linef("c%d = %s_MN.out.chunk.map { m, k, o -> [groupKey(k, m.chunks), o] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }.mix(s%d.filter { v -> v[3].isEmpty() }.map { v -> [v[1], []] })",
-		i, proc, i)
-	g.linef("%s_JN(s%d.map { m, k, a, cs, j, res -> [k, m + resources(res).join, a, cs, j] }.join(c%d).map { k, m, a, cs, j, os -> [m, k, a, cs, j, os] })", proc, i, i)
+// returned, and its join over every chunk's outs.
+func splitTriad(w *wiring, proc, in string) {
+	w.incs = append(w.incs, fmt.Sprintf("STAGE_SPLIT as %[1]s_SP ; STAGE_MAIN as %[1]s_MN ; STAGE_JOIN as %[1]s_JN", proc))
+	w.linef("%s_SP(%s)", proc, in)
+	w.linef("%[1]s_MN(CHUNKS(%[1]s_SP.out.split))", proc)
+	w.linef("%[1]s_JN(JOIN(%[1]s_SP.out.split, %[1]s_MN.out.chunk))", proc)
 }

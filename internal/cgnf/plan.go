@@ -14,7 +14,7 @@ import (
 // declarations where the run finds its code, each node's digest and its
 // resources under the run's mrp --overrides file, the entry files each
 // instance stages, and per entry-fed root, its forks and their counts.
-func (p *project) planProcess(g *gen) {
+func (p *project) planProcess(b *strings.Builder) {
 	var outs strings.Builder
 
 	for j, root := range p.entry {
@@ -22,7 +22,7 @@ func (p *project) planProcess(g *gen) {
 		fmt.Fprintf(&outs, "    eval(%s), emit: n%d\n", gstr("cat "+shellQuote("counts/"+root)), j)
 	}
 
-	fmt.Fprintf(&g.procs, `process PLAN {
+	fmt.Fprintf(b, `process PLAN {
     input:
     val values
     val meta
@@ -68,16 +68,18 @@ func (p *project) values() string {
 // outs runs OUTS over every outs bundle the pipeline outs read, ordered by
 // node and instance key, not by completion, and the entry files they read,
 // which PLAN lists by the pipeline's fqid.
-func (p *project) outs(g *gen) {
+func (p *project) outs() *wiring {
+	w := &wiring{}
 	srcs := make([]string, 0, len(p.topo.Outs))
 
 	for _, r := range p.topo.Outs {
-		sel := "ds"
+		fields := "null"
 		if r.Fields != nil {
-			sel = "ds.findAll { e -> e.name in " + glist(r.Fields) + " }"
+			fields = glist(r.Fields)
 		}
 
-		srcs = append(srcs, fmt.Sprintf("o%[1]d_outs.flatMap { k, ds -> %[2]s.collect { e -> [[%[1]d] + k, e] } }", p.index[r.Node], sel))
+		u := p.index[r.Node]
+		srcs = append(srcs, fmt.Sprintf("PUBLISHED(%s, %d, %s)", w.use(outsOf(u)), u, fields))
 	}
 
 	ups := "channel.value([])"
@@ -87,11 +89,13 @@ func (p *project) outs(g *gen) {
 
 	entry := "channel.value([[], []])"
 	if p.readers[p.g.Fqid()] {
-		entry = fmt.Sprintf("entry.map { ef -> def ids = ef.files[%s] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }", gstr(p.g.Fqid()+" -"))
+		entry = fmt.Sprintf("%s.map { ef -> def ids = ef.files[%s] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }", w.use("entry"), gstr(p.g.Fqid()+" -"))
 	}
 
-	g.linef("outs_in = %s", ups)
-	g.linef("OUTS(call.map { c -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/_assets/types.json\"), file(\"${projectDir}/%s\"))", p.graphMeta("call: c"), entry, mroAssets)
+	w.linef("outs_in = %s", ups)
+	w.linef("OUTS(%s, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/_assets/types.json\"), file(\"${projectDir}/%s\"))", w.use("shared"), entry, mroAssets)
+
+	return w
 }
 
 // shellQuote is s single-quoted for the shell.
