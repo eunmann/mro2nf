@@ -6,7 +6,9 @@
 > named below (`aws_run.sh`, `aws_healthomics.sh`) were deleted with those
 > targets; only `scripts/aws/normcmp.py` remains. Isolated-container and cloud
 > targets return under #489. Every flag, file and make target the report names
-> is the old emitter's.
+> is the old emitter's, and the `manifest.json.gz` its alignment check reads is
+> no longer emitted: the OUTS task publishes only the `outs/` tree and
+> `pipeline_outs.json`.
 
 Tracks what was actually run on real AWS infrastructure (not just local/Docker)
 and verified against `mrp` golden outputs. Updated as runs complete.
