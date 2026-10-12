@@ -23,7 +23,7 @@ One table, most severe first, using the finder's severities:
 
 ```
 # | File:Line                 | Severity | Kind     | Description
-1 | internal/bind/bind.go:42  | high     | bug      | <one line>
+1 | internal/cg/args.go:42    | high     | bug      | <one line>
 ```
 
 Verdict: **request changes** for any high or medium, **comment** for low only, **approve** for none. GitHub rejects approving or requesting changes on your own PR, so when the PR's author is the current `gh` user, post the verdict as a `--comment` review. Pre-production: retained compatibility code is a finding; a breaking change is not.

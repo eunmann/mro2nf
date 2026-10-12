@@ -77,7 +77,7 @@ Use a concise, descriptive branch name derived from the issue title.
 
 ## 5. Implement
 
-If the issue changes what the emitter generates, transpile the affected fixtures before and after and read the generated `main.nf`/`modules/` diff. If it is an `mrp`-parity bug, reproduce it first under real `mrp` (`$MARTIAN_BIN`, default `~/workdir/martian/bin`) and record that output as the golden.
+If the issue changes what the emitter generates, transpile the affected fixtures before and after and read the generated `main.nf`/`stage.nf`/`nextflow.config` diff. If it is an `mrp`-parity bug, reproduce it first under real `mrp` (`$MARTIAN_BIN`, default `~/workdir/martian/bin`) and record that output as the golden.
 
 For each step in the plan:
 

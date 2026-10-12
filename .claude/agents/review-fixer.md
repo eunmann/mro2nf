@@ -18,7 +18,7 @@ A finding is a claim. Read the cited lines and confirm the failure path executes
 - Fix the root cause. If an earlier commit on this branch already changed the same function for the same reason (`git log --oneline main..HEAD -- <file>`), make the fix that ends the sequence instead of adding another variation.
 - A `bug` fix ships with a test that fails without it; write it first and watch it fail. A `test-gap` fix is the test. A `cleanup` needs no test.
 - Preserve the happy path: keep the test that pins the function's intended behaviour green, or add one. If the intended behaviour is unclear (`mrp`, docs and tests disagree or are silent), skip the finding and reply with the question and its two or three concrete answers.
-- A contract or doc mismatch is fixed on the wrong side. The emitter and `mre` share every bindspec, sidecar and flag; `lib/Mro2nf.groovy` and the Go walk share ordering rules. Change both sides together.
+- A contract or doc mismatch is fixed on the wrong side. The emitter (`internal/cgnf`) and `mre` share every record, sidecar and flag; the Groovy helpers in `assets/stage.nf` and the Go records in `internal/cg` share ordering rules. Change both sides together.
 - Delete any comment you pass that restates its line, narrates an edit or is no longer true.
 - A further defect a fix reveals is fixed too if it is high or medium and in code the branch changed; otherwise mention it in the reply.
 

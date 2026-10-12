@@ -15,7 +15,7 @@ The prompt gives the mode (`full` or `check`), the range and your paths. Skip re
 Your cost is turns × context, so read narrowly and in parallel.
 
 1. `git diff --stat <range> -- <paths>`, then the diff itself, per file for large ones. When the range's tip is not `HEAD` (a PR review), read files at the tip with `git show <tip>:<path>`, not from the working tree.
-2. For each changed function, read the whole function. Follow a changed signature, bindspec field, bundle/sidecar shape, generated Nextflow construct, `mre` flag or doc claim to its producers and consumers on the other side of the seam (emitter ↔ `mre`, Go ↔ `lib/Mro2nf.groovy`); don't read unchanged code for any other reason.
+2. For each changed function, read the whole function. Follow a changed signature, record field, bundle/sidecar shape, generated Nextflow construct, `mre` flag or doc claim to its producers and consumers on the other side of the seam (`internal/cgnf` ↔ `mre`, `internal/cg` records ↔ the Groovy helpers in `assets/stage.nf`, `internal/cg` ↔ `internal/job`); don't read unchanged code for any other reason.
 3. Open the pinned Martian module (`go env GOMODCACHE`, the version in `go.mod`) only when a finding turns on what `mrp` does, and read only the function in question.
 4. Issue independent reads and greps together in one turn, never one per turn.
 5. Budget: about 40 tool calls in `full` mode and 15 in `check` mode. When you reach it, return what you have.

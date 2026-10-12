@@ -20,7 +20,7 @@ Faithfulness means exactly two contracts, nothing more:
 Everything between stage tasks — binding, forking, gathering, disabling,
 staging — is **not** a contract. Implement it as idiomatic, modern Nextflow
 (channels, operators, native `path` staging), NOT as a byte-identical replica
-of Martian's internal orchestration or of the current emitter's task graph.
+of Martian's internal orchestration or of any fixed task graph.
 100% Martian feature parity is not the goal; identical outputs are.
 
 **Overhead rule**: orchestration cost (tasks, driver work, bytes staged, work
@@ -30,31 +30,32 @@ chunk count M, and per-fork/per-chunk bookkeeping tasks are a smell — the
 split triad (split → per-chunk main → join, per fork) is the only intrinsic
 fan-out; it matches Martian's own jobs 1:1. When judging a change, measure
 tasks and per-instance work against `mrp`'s job count at two widths — `make
-bench` does exactly this: the `bench/forks` and `bench/split` fixtures run at
-two widths (default and `-native` lanes) and the gate fails if the plumbing
-task count differs between widths. Constant overhead is acceptable, scaling
-overhead is a bug.
+bench` does exactly this: the `bench/` fixtures (`chain`, `forks`, `split`,
+`mapsplit`, `mapdisabled`, `mapnested`) each run at two widths (`chain` at one),
+and the gate fails if the plumbing task count differs between widths or a
+lane's stage tasks differ from `mrp`'s job count. Constant overhead is
+acceptable, scaling overhead is a bug.
 
 ## Architecture
 
 ```
 cmd/mro2nf/            → transpiler CLI: .mro -> Nextflow project
-                       (+ `overrides` subcommand: mrp --overrides -> -c config)
-cmd/mre/             → runtime shim: runs stage phases (split|main|join)
-                       against the real Martian adapter inside a NF process,
-                       plus the data-plane subcommands the generated processes
-                       call (bind|forkbind|merge|publish-layout|entryargs)
+cmd/mre/               → runtime shim every generated process calls:
+                         plan|args|run|post|outs|publish-layout (`run` drives
+                         one stage phase, split|main|join, through mrjob and
+                         the real Martian adapter)
 internal/
-  frontend/          → parse .mro via github.com/martian-lang/martian/syntax
-  ir/                → normalized transpiler IR (stages, pipelines, bindings)
-  emit/              → IR -> Nextflow (.nf + nextflow.config) templates
-  types/             → type-directed file-leaf walk (shared by emit + shim)
-  shim/              → _args/_jobinfo/_outs I/O, path rewrite, adapter launch
-  bind/              → resolve call bindings into _args (refs, projections, fan-in)
-  overrides/         → mrp --overrides file -> Nextflow -c config
+  cg/                → Martian's compiled call graph: witness, topology, plan,
+                       the _args resolver, fork elements, gates, pipeline outs
+  cgnf/              → call graph -> Nextflow project (main.nf wiring, stage.nf,
+                       nextflow.config)
+  job/               → runs one stage job through mrjob as mrp runs it
+  frontend/          → lowers a Martian AST to the typed parameters of the manifest
+  ir/                → typed parameters of the program's callables and structs
+  types/             → type-directed file-leaf walk + type manifest (shared by cg + shim)
+  shim/              → bundle I/O, markers, output confinement
   config/            → .mro2nf.yml project defaults for the transpiler flags
   logging/           → log/slog setup (stderr)
-  apperror/          → sentinel + typed errors
 ```
 
 The Martian parser is consumed as a normal module dependency, pinned by commit

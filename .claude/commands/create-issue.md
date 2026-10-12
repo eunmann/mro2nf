@@ -34,7 +34,7 @@ If anything is unclear, ask the user to clarify before proceeding. Do not guess.
 
 Apply the `repo-research` skill scoped to this request, steps 1–5; the output of `/create-issue` is an issue body, not code.
 
-A good issue captures the change's blast radius so the implementer isn't surprised: every layer (frontend/IR, emitter, `lib/Mro2nf.groovy`, bindspecs, `mre`, shim), target (local, awsbatch, healthomics), fixture, golden, CI suite and doc it needs, each grounded in `file:line`. An `mrp`-parity bug carries a minimal `.mro` repro with the real `mrp` output beside mro2nf's.
+A good issue captures the change's blast radius so the implementer isn't surprised: every layer (frontend/IR, call graph `internal/cg`, emitter `internal/cgnf` (`main.nf`, `assets/stage.nf`, `nextflow.config`), job runner `internal/job`, `mre`, shim), target (local, awsbatch, healthomics), fixture, golden, CI suite and doc it needs, each grounded in `file:line`. An `mrp`-parity bug carries a minimal `.mro` repro with the real `mrp` output beside mro2nf's.
 
 ## Step 3: Challenge the User's Design
 
