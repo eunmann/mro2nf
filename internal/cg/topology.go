@@ -135,15 +135,11 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 		}
 	}
 
-	elementOnly := map[*syntax.CallStm]*syntax.RefExp{}
+	elementOnly := map[*syntax.CallStm]string{}
 
 	for _, r := range st.ForkRoots() {
-		if _, ok := g.Producer(r); !ok {
-			continue
-		}
-
-		if ref, ok := r.Split().Value.(*syntax.RefExp); ok {
-			elementOnly[r.Call()] = ref
+		if p, ok := g.Producer(r); ok {
+			elementOnly[r.Call()] = p
 		}
 	}
 
@@ -252,9 +248,9 @@ func (g *Graph) gateRoots(st *syntax.CallGraphStage, d syntax.Exp, up *syntax.Ca
 	return out, nil
 }
 
-// reads are the stage outs exps read, less a split of a root's own source,
-// which the root's fork element serves (stagedElement).
-func reads(elementOnly map[*syntax.CallStm]*syntax.RefExp, exps ...syntax.Exp) []Read {
+// reads are the stage outs exps read, less a split of an output of the stage
+// that feeds its root, which the root's fork element serves (stagedElement).
+func reads(elementOnly map[*syntax.CallStm]string, exps ...syntax.Exp) []Read {
 	fields := map[string]map[string]bool{}
 
 	for _, e := range exps {
@@ -275,7 +271,7 @@ func reads(elementOnly map[*syntax.CallStm]*syntax.RefExp, exps ...syntax.Exp) [
 	return out
 }
 
-func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]*syntax.RefExp, fields map[string]map[string]bool) {
+func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]string, fields map[string]map[string]bool) {
 	switch x := e.(type) {
 	case *syntax.SplitExp:
 		if !elementServed(x, elementOnly) {
@@ -310,13 +306,12 @@ func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]*syntax.RefExp, 
 	}
 }
 
-// elementServed reports a split of its root's own source output, which the
-// root's fork element serves.
-func elementServed(x *syntax.SplitExp, elementOnly map[*syntax.CallStm]*syntax.RefExp) bool {
-	src := elementOnly[x.Call]
+// elementServed reports a split of an output of the stage that feeds its
+// root, whose element the root's fork element carries (zipSources).
+func elementServed(x *syntax.SplitExp, elementOnly map[*syntax.CallStm]string) bool {
 	ref, ok := x.Value.(*syntax.RefExp)
 
-	return ok && src != nil && ref.Id == src.Id && ref.OutputId == src.OutputId
+	return ok && elementOnly[x.Call] != "" && ref.Id == elementOnly[x.Call]
 }
 
 // addRead records the top-level output a reference reads, "" for the whole

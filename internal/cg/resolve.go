@@ -37,9 +37,12 @@ type store interface {
 	// instances returns root's indices under outer as the staged instances
 	// of the stages forked on root record them, in mrp's order.
 	instances(root *syntax.CallGraphStage, outer Fork) []syntax.CollectionIndex
-	// element returns the staged fork element of root at f, the fork of
-	// root's outer roots plus root's own part.
-	element(root *syntax.CallGraphStage, f Fork) (json.RawMessage, bool, error)
+	// element returns member of the staged fork element of root at f, the
+	// fork of root's outer roots plus root's own part: elementField for
+	// root's own source, or a zipped source's zipMember. It is false when
+	// no element is staged or it carries no such member, and errNoElement
+	// for a member the element records as missing.
+	element(root *syntax.CallGraphStage, f Fork, member string) (json.RawMessage, bool, error)
 }
 
 // resolver evaluates call-graph expressions at a fork as core TopNode.resolve

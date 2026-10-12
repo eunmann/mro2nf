@@ -589,9 +589,12 @@ them.
   `forks/<root fqid>/<ordinal>/`. The ordinal is zero-padded, in mrp's fork
   order (array index, or map keys in byte order). Each dir holds that fork's
   element of the source collection as a bundle, with its file leaves staged,
-  plus `fork.json`, which records the real fork (keys as JSON strings) and its
-  position. An instance therefore stages only its own element, and no key ever
-  needs escaping. `mre post -entry` writes the forks the call graph already
+  and its element of every other output of this stage a split over the root
+  reads (a map call zipping two outputs, a disable binding splitting one),
+  plus `fork.json`, which records the real fork (keys as JSON strings), its
+  position, and the zipped outputs too short to have an element there, which
+  read null as in `mrp`. An instance therefore stages only its own elements,
+  and no key ever needs escaping. `mre post -entry` writes the forks the call graph already
   fixes (literal and entry-sourced sources) the same way, as fork records
   without values. A root whose fork set varies with an outer map call (its
   source, of unknown length, is forked on that call) gets its forks under

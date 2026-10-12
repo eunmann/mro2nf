@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -127,6 +128,10 @@ call P()
 		if d := cmp.Diff([]Gate{{Node: "P.SRC", Roots: []string{root}}}, topo.Nodes[i].Gates); d != "" {
 			t.Errorf("%s: WORK's gates (-want +got):\n%s", name, d)
 		}
+
+		if len(topo.Nodes[i].Reads) != 0 {
+			t.Errorf("%s: WORK reads %v, want only its fork elements, which carry the gate's element", name, topo.Nodes[i].Reads)
+		}
 	}
 }
 
@@ -173,8 +178,10 @@ call P()
 }
 
 // TestTopologyZipOneProducer: a map call zipping two outputs of one stage
-// is forked over the first, which the fork element serves, and reads the
-// other from the stage's outs, as resolveSplit does.
+// is forked over the first, and each fork's element carries that fork's
+// element of both, so a fork stages none of the stage's outs: O(1) bytes
+// per fork, not the whole second output. A fork past the end of the
+// shorter output reads null, as mrp reads it.
 func TestTopologyZipOneProducer(t *testing.T) {
 	src := gateDecls + `
 stage PAIR(
@@ -218,18 +225,32 @@ call P()
 		t.Fatalf("no P.PAIR node in %+v", topo.Nodes)
 	}
 
-	if d := cmp.Diff([]Read{{Node: "P.SRC", Fields: []string{"skips"}}}, topo.Nodes[i].Reads); d != "" {
-		t.Errorf("P.PAIR's reads (-want +got):\n%s", d)
+	if len(topo.Nodes[i].Reads) != 0 {
+		t.Errorf("P.PAIR reads %v, want only its fork elements", topo.Nodes[i].Reads)
 	}
 
 	f := &fixture{t: t, g: g, dir: t.TempDir()}
-	outs := f.outs("P.SRC", nil, `{"xs":[1,2],"skips":[false,true],"items":null}`)
+	outs := f.outs("P.SRC", nil, `{"xs":[1,2,3],"skips":[false,true],"items":null}`)
 
 	elems := elementDirs(t, f.post(outs, outs), "P.PAIR")
-	if len(elems) != 2 {
-		t.Fatalf("SRC posted %d forks of PAIR, want 2", len(elems))
+	if len(elems) != 3 {
+		t.Fatalf("SRC posted %d forks of PAIR, want 3", len(elems))
 	}
 
-	_, got := f.args("P.PAIR", elems[1], outs)
+	for i, want := range []string{`{"out:skips":false,"value":1}`, `{"out:skips":true,"value":2}`, `{"value":3}`} {
+		raw, err := shim.ReadBundle(elems[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if d := cmp.Diff(want, string(raw)); d != "" {
+			t.Errorf("fork %d element (-want +got):\n%s", i, d)
+		}
+	}
+
+	_, got := f.args("P.PAIR", elems[1])
 	wantArgs(t, "P.PAIR fork1", got, `{"skip":true,"x":2}`)
+
+	_, got = f.args("P.PAIR", elems[2])
+	wantArgs(t, "P.PAIR fork2", got, `{"skip":null,"x":3}`)
 }

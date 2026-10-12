@@ -24,6 +24,7 @@ type stagedStore struct {
 	outsDirs    map[string][]string
 	forks       map[string][]Fork
 	elements    map[string]string
+	missing     map[string][]string
 	stagedElems []Element
 	cache       map[string]core.LazyArgumentMap
 }
@@ -39,6 +40,7 @@ func (g *Graph) stage(dirs []string, recs ...Element) (*stagedStore, error) {
 		outsDirs: map[string][]string{},
 		forks:    map[string][]Fork{},
 		elements: map[string]string{},
+		missing:  map[string][]string{},
 		cache:    map[string]core.LazyArgumentMap{},
 	}
 
@@ -108,6 +110,7 @@ func (s *stagedStore) addElement(el Element, dir string) {
 	root := el.Fork[len(el.Fork)-1].Root
 	if dir != "" {
 		s.elements[stagedKey(root.Fqid, el.Fork)] = dir
+		s.missing[stagedKey(root.Fqid, el.Fork)] = el.Missing
 	}
 
 	s.stagedElems = append(s.stagedElems, el)
@@ -214,10 +217,16 @@ func compareIndex(a, b syntax.CollectionIndex) int {
 	return a.ArrayIndex() - b.ArrayIndex()
 }
 
-func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork) (json.RawMessage, bool, error) {
-	dir, ok := s.elements[stagedKey(root.Fqid, f)]
+func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork, member string) (json.RawMessage, bool, error) {
+	k := stagedKey(root.Fqid, f)
+
+	dir, ok := s.elements[k]
 	if !ok || !shim.IsBundle(dir) {
 		return nil, false, nil
+	}
+
+	if slices.Contains(s.missing[k], member) {
+		return nil, true, fmt.Errorf("%w: %s at fork %s of %s", errNoElement, member, f, root.Fqid)
 	}
 
 	raw, err := shim.ReadBundle(dir)
@@ -230,7 +239,9 @@ func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork) (json.RawMess
 		return nil, false, fmt.Errorf("decode fork element of %s: %w", root.Fqid, err)
 	}
 
-	return payload[elementField], true, nil
+	v, ok := payload[member]
+
+	return v, ok, nil
 }
 
 // emptyStore is a task with nothing staged: what the call graph alone fixes.
@@ -242,6 +253,6 @@ func (emptyStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgumentMap,
 
 func (emptyStore) instances(*syntax.CallGraphStage, Fork) []syntax.CollectionIndex { return nil }
 
-func (emptyStore) element(*syntax.CallGraphStage, Fork) (json.RawMessage, bool, error) {
+func (emptyStore) element(*syntax.CallGraphStage, Fork, string) (json.RawMessage, bool, error) {
 	return nil, false, nil
 }
