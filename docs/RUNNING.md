@@ -200,6 +200,24 @@ each.
 nextflow run main.nf -profile slurm      # or sge, lsf, pbs
 ```
 
+### Docker
+
+```bash
+nextflow run main.nf -profile docker --mro2nf_image <image>
+```
+
+The `docker` profile runs each container as the invoking user, with
+`HOME=/tmp`, so the files a run leaves in `work/` are yours to delete. It sets
+`process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'`, which the
+task's shell expands. A `docker.runOptions` in a `-c` config adds to that; a
+`process.containerOptions` in a `-c` config replaces it, and with it the user
+mapping. On rootless Docker, set `process.containerOptions = ''`: the
+container's root already is the invoking user, and `-u` would map to a subuid
+that cannot write `work/`. The image has no passwd entry for that uid, so a
+stage that looks up its user name (`whoami`) fails. The `awsbatch` and
+`healthomics` profiles set no user: their containers run on AWS's own hosts,
+not under your account.
+
 ### AWS Batch
 
 Push the pipeline's image to ECR, built for the compute environment's

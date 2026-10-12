@@ -120,11 +120,15 @@ profiles {
     pbs      { process.executor = 'pbs' }
 
     // Every task in its own container of --mro2nf_image, which mounts only
-    // what the task stages.
+    // what the task stages. The container runs as the invoking user so work/
+    // is not root-owned; the task's shell expands $(id), and the image has no
+    // home for that uid, so HOME is /tmp. containerOptions, not
+    // docker.runOptions, so a -c docker.runOptions adds to the mapping.
     docker {
         process.executor = 'local'
         process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]
         docker.enabled = true
+        process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'
         includeConfig 'conf/container.config'
     }
 

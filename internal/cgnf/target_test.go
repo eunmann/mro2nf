@@ -22,7 +22,8 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 		"params.mro2nf_mre = 'mre'\n",
 		"params.mro2nf_image = null\nparams.mro2nf_require_image = false\n",
 		"    docker {\n        process.executor = 'local'\n",
-		"        docker.enabled = true\n        includeConfig 'conf/container.config'\n",
+		"        docker.enabled = true\n        process.containerOptions = ",
+		"'\n        includeConfig 'conf/container.config'\n",
 		"    awsbatch {\n        process.executor = 'awsbatch'\n        includeConfig 'conf/container.config'\n        params.mro2nf_host_inputs = false\n",
 		"    healthomics {\n        includeConfig 'conf/healthomics.config'\n",
 	} {
@@ -103,5 +104,32 @@ func TestEmitHealthOmicsTemplate(t *testing.T) {
 
 	if strings.Index(tree["package.sh"], "params.mro2nf_image = '$1'") > strings.Index(tree["package.sh"], "includeConfig 'conf/healthomics.config'") {
 		t.Error("package.sh pins the image after the profile reads it")
+	}
+}
+
+// TestDockerProfileRunsAsInvokingUser: the docker profile runs each
+// container as the invoking user with a writable HOME so work/ is not
+// root-owned (#519), through process.containerOptions so a -c
+// docker.runOptions adds to it; only the docker profile maps the user, as
+// AWS Batch runs the container on its own instance.
+func TestDockerProfileRunsAsInvokingUser(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "diamond_min"))
+	cfg := tree["nextflow.config"]
+
+	const opts = "process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'\n"
+
+	docker := cfg[strings.Index(cfg, "    docker {"):strings.Index(cfg, "    awsbatch {")]
+	if !strings.Contains(docker, opts) {
+		t.Errorf("the docker profile lacks %q:\n%s", opts, docker)
+	}
+
+	if strings.Count(cfg, "process.containerOptions =") != 1 || strings.Contains(cfg, "docker.runOptions =") {
+		t.Errorf("nextflow.config sets container options outside the docker profile:\n%s", cfg)
+	}
+
+	for _, name := range []string{"conf/container.config", "conf/healthomics.config"} {
+		if strings.Contains(tree[name], "Options") {
+			t.Errorf("%s sets container options, which AWS Batch and HealthOmics do not take from a user mapping:\n%s", name, tree[name])
+		}
 	}
 }
