@@ -56,12 +56,13 @@ func readTree(t *testing.T, dir string) map[string]string {
 
 // TestEmitProject: a project is main.nf wiring, the one stage module, the
 // config and its container profiles' configs, the type manifest, a copy of
-// the entry's .mro files, the stage image's recipe and build script, and
-// the HealthOmics package script and parameter template; it does not
-// depend on where it is emitted, and holds no other file of the pipeline's,
-// an entry file's default included (entry_file: input/default.txt).
+// the entry's .mro files, and the HealthOmics package script, executable,
+// and parameter template; it does not depend on where it is emitted, and
+// holds no other file of the pipeline's, an entry file's default included
+// (entry_file: input/default.txt).
 func TestEmitProject(t *testing.T) {
-	a, b := readTree(t, emitFixture(t, "entry_file")), readTree(t, emitFixture(t, "entry_file"))
+	out := emitFixture(t, "entry_file")
+	a, b := readTree(t, out), readTree(t, emitFixture(t, "entry_file"))
 
 	if d := cmp.Diff(a, b); d != "" {
 		t.Errorf("two emissions differ:\n%s", d)
@@ -69,9 +70,8 @@ func TestEmitProject(t *testing.T) {
 
 	entry := filepath.Join(fixturePath(t, "entry_file"), "pipeline.mro")
 	want := []string{
-		".dockerignore", "Dockerfile", filepath.Join("_assets/mro", entry), "_assets/types.json", "build.sh",
-		"conf/container.config", "conf/healthomics.config", "main.nf", "nextflow.config", "package.sh",
-		"parameter-template.json", "stage.nf",
+		filepath.Join("_assets/mro", entry), "_assets/types.json", "conf/container.config", "conf/healthomics.config",
+		"main.nf", "nextflow.config", "package.sh", "parameter-template.json", "stage.nf",
 	}
 
 	if d := cmp.Diff(want, slices.Sorted(maps.Keys(a))); d != "" {
@@ -80,6 +80,13 @@ func TestEmitProject(t *testing.T) {
 
 	if a["stage.nf"] != stageModule {
 		t.Error("stage.nf is not the stage module")
+	}
+
+	for name, mode := range map[string]os.FileMode{"package.sh": execPerm, "main.nf": filePerm} {
+		info, err := os.Stat(filepath.Join(out, name))
+		if err != nil || info.Mode().Perm() != mode {
+			t.Errorf("%s mode %v %v, want %v", name, info, err, mode)
+		}
 	}
 }
 

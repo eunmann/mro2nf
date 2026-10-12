@@ -127,20 +127,10 @@ func Emit(entry string, opts Options) error {
 }
 
 // addTargetFiles adds what the container profiles need beside the
-// project: their configs, the stage image's recipe and its build script,
-// and the HealthOmics package script and parameter template.
+// project: their configs, and the HealthOmics package script and parameter
+// template.
 func (p *project) addTargetFiles(files map[string]string) error {
-	roots, commands, err := p.codeRoots()
-	if err != nil {
-		return err
-	}
-
 	tmpl, err := p.parameterTemplate()
-	if err != nil {
-		return err
-	}
-
-	recipe, err := p.dockerfile(roots, commands)
 	if err != nil {
 		return err
 	}
@@ -148,14 +138,21 @@ func (p *project) addTargetFiles(files map[string]string) error {
 	maps.Copy(files, map[string]string{
 		"conf/container.config":   containerConfig(),
 		"conf/healthomics.config": healthomicsConfig,
-		"Dockerfile":              recipe,
-		".dockerignore":           dockerignore,
-		"build.sh":                buildScript(roots, p.releaseRuntime()),
 		"package.sh":              packageScript,
 		"parameter-template.json": tmpl,
 	})
 
 	return nil
+}
+
+// fileMode is the mode a generated file is written with: package.sh is
+// the one a user runs.
+func fileMode(name string) os.FileMode {
+	if name == "package.sh" {
+		return execPerm
+	}
+
+	return filePerm
 }
 
 // mroAssets is the project's copy of the .mro files the entry compiles

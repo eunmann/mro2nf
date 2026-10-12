@@ -2,7 +2,7 @@ Third-party notices
 
 mro2nf is under the MIT license in LICENSE. Its release binaries (mro2nf,
 mre) and its runtime image (mre, mrjob and Martian's adapters at
-/opt/mro2nf), which the stage images it generates build FROM, also contain
+/opt/mro2nf), which a pipeline's own image builds FROM, also contain
 the third-party code below, each under the license reproduced with its
 entry. "Shipped in" names the binaries that statically link the code and the
 vendored directories that copy it.

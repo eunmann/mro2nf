@@ -3,13 +3,12 @@
 package e2e
 
 // Container-isolation e2e: run transpiled pipelines under the generated
-// project's docker profile, where every task runs in a container of the
-// images the project ships, the stage image its Dockerfile builds FROM the
-// runtime image deploy/runtime/Dockerfile builds, and the runtime image for
-// PLAN and OUTS. A container sees its code below /opt/mro2nf/code, not at its
-// host path, and an entry file only if the task staged it, as on AWS Batch
-// and HealthOmics; a task that reads a host path the run did not stage fails
-// here while the local suite still passes.
+// project's docker profile, where every task runs in a container of the one
+// image a user builds FROM the runtime image deploy/runtime/Dockerfile
+// builds, with the pipeline's code at the paths it was transpiled from. A
+// container sees an entry file only if the task staged it, as on AWS Batch
+// and HealthOmics; a task that reads a host path the run did not stage
+// fails here while the local suite still passes.
 
 import (
 	"archive/zip"
@@ -105,33 +104,39 @@ func runtimeImage(t *testing.T) string {
 	return tag
 }
 
-// stageImage builds proj's stage image with its build.sh, FROM the runtime
-// image, under a tag named for name, and returns the tag.
-func stageImage(t *testing.T, proj, name string) string {
+// pipelineImage builds the image a user builds for the fixture at dir, the
+// README's recipe: FROM the runtime image, with the fixture's code at the
+// path the project was transpiled from, under a tag named for name, and
+// returns the tag.
+func pipelineImage(t *testing.T, dir, name string) string {
 	t.Helper()
 
-	tag := checkoutImage("mro2nf-stage-" + strings.ToLower(name))
+	dest, err := json.Marshal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	cmd := exec.Command("bash", "build.sh", tag, "-q", "--build-arg", "RUNTIME="+runtimeImage(t))
-	cmd.Dir = proj
+	recipe := filepath.Join(t.TempDir(), "Dockerfile")
+	writeFileT(t, recipe, "FROM "+runtimeImage(t)+"\nCOPY [\".\", "+string(dest)+"]\n")
 
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build.sh %s: %v\n%s", tag, err, out)
+	tag := checkoutImage("mro2nf-pipeline-" + strings.ToLower(name))
+
+	if out, err := exec.Command("docker", "build", "-q", "-t", tag, "-f", recipe, dir).CombinedOutput(); err != nil {
+		t.Fatalf("docker build %s: %v\n%s", tag, err, out)
 	}
 
 	return tag
 }
 
-// runDocker runs proj under its docker profile in the stage image built
-// for name and the runtime image.
-func runDocker(t *testing.T, proj, name string, args ...string) error {
+// runDocker runs proj, transpiled from the fixture at dir, under its docker
+// profile in the image built for name.
+func runDocker(t *testing.T, proj, dir, name string, args ...string) error {
 	t.Helper()
 
 	writeFileT(t, filepath.Join(proj, "iso.config"), isoConfig())
 
 	return runNextflow(t, proj, append([]string{
-		"-profile", "docker", "-c", "iso.config",
-		"--mro2nf_image", stageImage(t, proj, name), "--mro2nf_runtime_image", runtimeImage(t),
+		"-profile", "docker", "-c", "iso.config", "--mro2nf_image", pipelineImage(t, dir, name),
 	}, args...)...)
 }
 
@@ -176,7 +181,7 @@ func TestDockerIsolation(t *testing.T) {
 				args = append(args, "-params-file", "params.json")
 			}
 
-			if err := runDocker(t, proj, tc.name, args...); err != nil {
+			if err := runDocker(t, proj, fixtureDir, tc.name, args...); err != nil {
 				t.Fatalf("nextflow (isolated): %v", err)
 			}
 
@@ -188,7 +193,7 @@ func TestDockerIsolation(t *testing.T) {
 
 // TestDockerEntryOverrides checks file-typed entry-input overrides under
 // isolation, the strictest staging proof: every override file lives in a
-// host temp dir, neither in the image nor below a code root, so the stage
+// host temp dir, neither in the image nor below the fixture, so the stage
 // can read it only if the task staged it, the AWS Batch and HealthOmics S3
 // path. It covers a scalar file, a file[], a file[] of one basename, a
 // struct with a file, a map of files and a directory.
@@ -249,7 +254,7 @@ func TestDockerEntryOverrides(t *testing.T) {
 
 			writeFileT(t, filepath.Join(proj, "params.json"), string(params))
 
-			if err := runDocker(t, proj, tc.fixture, "-params-file", "params.json"); err != nil {
+			if err := runDocker(t, proj, filepath.Join(root, "testdata", tc.fixture), "overrides_"+tc.name, "-params-file", "params.json"); err != nil {
 				t.Fatalf("nextflow (isolated): %v", err)
 			}
 
@@ -268,23 +273,22 @@ func TestDockerEntryOverrides(t *testing.T) {
 	}
 }
 
-// TestGeneratedAWSBatchImage validates the awsbatch profile without a live
-// account: its stage image built from the generated Dockerfile FROM the
-// runtime image (#310), and a run of the awsbatch profile with only the
-// executor swapped for local docker, so the profile's tools, code root,
-// images and staging policy are the ones under test.
-func TestGeneratedAWSBatchImage(t *testing.T) {
+// TestGeneratedAWSBatchProfile validates the awsbatch profile without a
+// live account: a run of it with only the executor swapped for local
+// docker, in the one image built FROM the runtime image, so the profile's
+// tools, image and staging policy are the ones under test.
+func TestGeneratedAWSBatchProfile(t *testing.T) {
 	t.Parallel()
 
 	requireDocker(t)
 
 	proj := transpile(t, "diamond_min")
-	image := stageImage(t, proj, "awsbatch_diamond_min")
+	image := pipelineImage(t, filepath.Join(root, "testdata", "diamond_min"), "awsbatch_diamond_min")
 
 	writeFileT(t, filepath.Join(proj, "local.config"), "process.executor = 'local'\ndocker.enabled = true\n"+isoConfig())
 
 	err := runNextflow(t, proj, "-profile", "awsbatch", "-c", "local.config",
-		"--mro2nf_image", image, "--mro2nf_runtime_image", runtimeImage(t), "--outdir", filepath.Join(proj, "results"))
+		"--mro2nf_image", image, "--outdir", filepath.Join(proj, "results"))
 	if err != nil {
 		t.Fatalf("nextflow (awsbatch profile, local docker): %v", err)
 	}
@@ -293,13 +297,47 @@ func TestGeneratedAWSBatchImage(t *testing.T) {
 		filepath.Join(root, "testdata", "diamond_min", "expected", "outs.json"))
 }
 
+// TestGeneratedProfilesRequireImage: a container profile launched without
+// --mro2nf_image fails before any task, saying which image it needs.
+func TestGeneratedProfilesRequireImage(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	for _, profile := range []string{"docker", "awsbatch"} {
+		t.Run(profile, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, "diamond_min")
+
+			if err := runNextflowAllowingFailedAttempts(t, proj, "-profile", profile); err == nil {
+				t.Fatal("the run started without an image")
+			}
+
+			raw, err := os.ReadFile(filepath.Join(proj, "run.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			want := "a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>"
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("run.log lacks %q:\n%s", want, raw)
+			}
+
+			if strings.Contains(string(raw), "PLAN") {
+				t.Errorf("PLAN started:\n%s", raw)
+			}
+		})
+	}
+}
+
 // TestGeneratedHealthOmicsPackage validates the HealthOmics package without
 // a live account: package.sh refuses an image not pinned by digest (#334)
 // and zips the files main.nf reads, with the healthomics profile the
-// workflow's own config and the images pinned, so `nextflow config` of the
+// workflow's own config and the image pinned, so `nextflow config` of the
 // unzipped workflow, given no -profile as HealthOmics gives none, resolves
-// the pinned images and the HealthOmics pubdir (#309). Neither the build
-// recipe nor any file of the pipeline's, an entry default included, is in it.
+// the pinned image, required, and the HealthOmics pubdir (#309). No file of
+// the pipeline's, an entry default included, is in it.
 func TestGeneratedHealthOmicsPackage(t *testing.T) {
 	t.Parallel()
 
@@ -307,21 +345,23 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 
 	proj := transpile(t, "entry_file")
 
-	pkg := func(images ...string) ([]byte, error) {
-		cmd := exec.Command("bash", append([]string{"package.sh"}, images...)...)
+	pkg := func(args ...string) ([]byte, error) {
+		cmd := exec.Command("bash", append([]string{"package.sh"}, args...)...)
 		cmd.Dir = proj
 
 		return cmd.CombinedOutput()
 	}
 
-	stage := "123456789012.dkr.ecr.us-east-1.amazonaws.com/stage@sha256:" + strings.Repeat("a", 64)
-	runtime := "123456789012.dkr.ecr.us-east-1.amazonaws.com/runtime@sha256:" + strings.Repeat("b", 64)
+	repo := "123456789012.dkr.ecr.us-east-1.amazonaws.com/pipeline"
+	image := repo + "@sha256:" + strings.Repeat("a", 64)
 
-	if out, err := pkg(strings.TrimSuffix(stage, "@sha256:"+strings.Repeat("a", 64))+":latest", runtime); err == nil {
-		t.Errorf("package.sh packaged a stage image pinned by a tag:\n%s", out)
+	for _, bad := range [][]string{{repo + ":latest"}, {image, image}, {}} {
+		if out, err := pkg(bad...); err == nil {
+			t.Errorf("package.sh %v packaged:\n%s", bad, out)
+		}
 	}
 
-	if out, err := pkg(stage, runtime); err != nil {
+	if out, err := pkg(image); err != nil {
 		t.Fatalf("package.sh: %v\n%s", err, out)
 	}
 
@@ -336,15 +376,18 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"process.container = '" + stage + "'",
-		"process.'withName:PLAN|OUTS'.container = '" + runtime + "'",
+		"process.container = '" + image + "'",
 		"params.outdir = '/mnt/workflow/pubdir'",
-		"params.mro2nf_code = '/opt/mro2nf/code'",
+		"params.mro2nf_require_image = true",
 		"params.mro2nf_host_inputs = false",
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("the package's config lacks %q:\n%s", want, out)
 		}
+	}
+
+	if strings.Contains(string(out), "withName") {
+		t.Errorf("the package's config gives a task an image of its own:\n%s", out)
 	}
 }
 

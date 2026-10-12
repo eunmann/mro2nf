@@ -1,9 +1,8 @@
 # Runtime image for transpiled mro2nf pipelines, and the one definition of
 # /opt/mro2nf: the `mre` shim, the `mrjob` py and comp stages run under, and the
 # Martian adapters, at the paths the generated project's container profiles
-# name, with their LICENSE and THIRD_PARTY_NOTICES. PLAN and OUTS run in it as
-# is; a generated project's Dockerfile builds its stage image FROM it and adds
-# the pipeline's code (docs/TRANSPILER.md §9).
+# name, with their LICENSE and THIRD_PARTY_NOTICES. A pipeline's image builds
+# FROM it and adds the pipeline's code (README: Container image).
 #
 # Use the tag matching the mro2nf version that generated your project so the mre
 # ABI matches. Published multi-arch (linux/amd64, linux/arm64) on each release.

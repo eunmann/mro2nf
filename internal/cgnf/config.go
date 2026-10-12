@@ -3,53 +3,15 @@ package cgnf
 import (
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/job"
 )
 
-// runtimeImage is the repository of mro2nf's release runtime image
-// (deploy/runtime/Dockerfile), tagged with the release version.
-const runtimeImage = "ghcr.io/eunmann/mro2nf-runtime"
-
-// releaseVersion matches a version a release publishes the runtime image
-// under (release.yml: the v* tag): v<major>.<minor>.<patch>, with at most a
-// pre-release such as -rc1. A git describe past a tag (-6-gb025b83), a Go
-// pseudo-version, a dirty tree or dev names no published image.
-var releaseVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
-
-// runtimeParam sets params.mro2nf_runtime_image to the release's runtime
-// image, or, for a build no release published, to null, which a container
-// profile refuses at launch.
-func (p *project) runtimeParam() string {
-	if rt := p.releaseRuntime(); rt != "" {
-		return "params.mro2nf_runtime_image = " + gstr(rt) + "\n\n"
-	}
-
-	return "// No release published this build's runtime image: build it with\n" +
-		"// docker build -f deploy/runtime/Dockerfile -t <image> . in an mro2nf\n" +
-		"// checkout and pass --mro2nf_runtime_image <image>.\n" +
-		"params.mro2nf_runtime_image = null\n\n"
-}
-
-// releaseRuntime is the runtime image of the release that transpiled the
-// project, or "" for a build no release published.
-func (p *project) releaseRuntime() string {
-	v := p.opts.Version
-	if !releaseVersion.MatchString(v) || strings.HasSuffix(v, "-dirty") {
-		return ""
-	}
-
-	return runtimeImage + ":" + v
-}
-
-// In-image paths of the runtime image and the stage image built from it.
-const (
-	imageRoot = "/opt/mro2nf"
-	imageCode = imageRoot + "/code"
-)
+// imageRoot is where mro2nf's runtime image (deploy/runtime/Dockerfile)
+// holds mre, mrjob and Martian's adapters.
+const imageRoot = "/opt/mro2nf"
 
 // config renders nextflow.config: the engine floor, the tools, code and
 // knobs the stage module reads, one param per entry input, the retry
@@ -67,15 +29,13 @@ params.outdir = 'results'
 // a stage's special key to the clusterOptions of a grid executor.
 params.job_resources = [:]
 
-// The tools every task runs and the root its code is found below: the
-// host's for the local and grid profiles, the image's for the container
-// profiles (conf/container.config).
+// The tools every task runs: the host's for the local and grid profiles,
+// the image's for the container profiles (conf/container.config).
 `)
 
 	fmt.Fprintf(&b, "params.mro2nf_mre = %s\n", gstr(p.opts.Mre))
 	fmt.Fprintf(&b, "params.mro2nf_mrjob = %s\n", gstr(p.opts.Mrjob))
 	fmt.Fprintf(&b, "params.mro2nf_adapters = %s\n", gstr(p.opts.Adapters))
-	b.WriteString("params.mro2nf_code = ''\n")
 	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n", gstr(p.src.Invocation.Call))
 	fmt.Fprintf(&b, "params.mro2nf_monitor = %t\n", p.opts.Monitor)
 	fmt.Fprintf(&b, "params.mro2nf_confine = %t\n\n", p.opts.Confine)
@@ -86,13 +46,15 @@ params.job_resources = [:]
 params.mro2nf_host_inputs = true
 params.mro2nf_allow_remote_inputs = false
 
-// The container profiles' images: the stage image ./build.sh builds from
-// this project's Dockerfile, and mro2nf's runtime image, which PLAN and OUTS
-// run in, as they run no stage code.
+// The image every task of a container profile runs in, which those
+// profiles require: one built FROM mro2nf's runtime image that holds the
+// pipeline's code at the paths it was transpiled from, or the runtime image
+// itself where a -c config mounts the code there.
 params.mro2nf_image = null
+params.mro2nf_require_image = false
+
 `)
 
-	b.WriteString(p.runtimeParam())
 	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
 
 	for _, id := range slices.Sorted(maps.Keys(p.src.Invocation.Args)) {
@@ -148,8 +110,8 @@ profiles {
     lsf      { process.executor = 'lsf' }
     pbs      { process.executor = 'pbs' }
 
-    // Every task in its own container, which mounts only what the task
-    // stages: --mro2nf_image names the stage image ./build.sh built.
+    // Every task in its own container of --mro2nf_image, which mounts only
+    // what the task stages.
     docker {
         process.executor = 'local'
         process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]
@@ -158,8 +120,8 @@ profiles {
     }
 
     // AWS Batch over an S3 work dir (-work-dir s3://<bucket>/work): set
-    // process.queue and aws.region in a -c config, push the stage image to
-    // ECR and name it with --mro2nf_image; --outdir s3://<bucket>/<prefix>
+    // process.queue and aws.region in a -c config, push the image to ECR
+    // and name it with --mro2nf_image; --outdir s3://<bucket>/<prefix>
     // publishes to S3. The submission and transfer limits keep a wide fan-out
     // from throttling the Batch and S3 APIs and re-run a Spot reclaim.
     awsbatch {
@@ -176,34 +138,27 @@ profiles {
     }
 
     // AWS HealthOmics, which takes no -profile: package.sh makes it the
-    // workflow's own config, with the images it pins.
+    // workflow's own config, with the image it pins.
     healthomics {
         includeConfig 'conf/healthomics.config'
     }
 }
 `
 
-// containerConfig is conf/container.config, the container profiles' tools
-// and code, which the stage image holds where the runtime image puts them,
-// and each task's image: the stage image's, but the runtime image's for
-// PLAN and OUTS. Outputs are confined to the task, as no other task could
-// see a path outside it.
+// containerConfig is conf/container.config, the container profiles' tools,
+// where the runtime image puts them, and the one image every task runs in.
+// Outputs are confined to the task, as no other task could see a path
+// outside it.
 func containerConfig() string {
-	return fmt.Sprintf(`// The container profiles' tools, code and images (nextflow.config).
+	return fmt.Sprintf(`// The container profiles' tools and image (nextflow.config).
 params.mro2nf_mre = '%[1]s/mre'
 params.mro2nf_mrjob = '%[1]s/mrjob'
 params.mro2nf_adapters = '%[1]s/adapters'
-params.mro2nf_code = '%[2]s'
 params.mro2nf_confine = true
+params.mro2nf_require_image = true
 
-process {
-    container = params.mro2nf_image
-
-    withName: 'PLAN|OUTS' {
-        container = params.mro2nf_runtime_image
-    }
-}
-`, imageRoot, imageCode)
+process.container = params.mro2nf_image
+`, imageRoot)
 }
 
 // healthomicsConfig is conf/healthomics.config: HealthOmics runs every

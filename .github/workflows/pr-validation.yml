@@ -303,12 +303,11 @@ jobs:
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
       - run: make bench
 
-  # The same pipelines under the generated docker profile, in the images the
-  # project ships (the runtime image deploy/runtime/Dockerfile builds, and the
-  # stage image the project's Dockerfile builds FROM it), where a task sees
-  # only what it stages: the AWS Batch / HealthOmics no-shared-filesystem
-  # model. Also the awsbatch profile on local docker and the HealthOmics
-  # package. Runs in parallel with the local e2e jobs above.
+  # The same pipelines under the generated docker profile, in one image per
+  # fixture built FROM the runtime image deploy/runtime/Dockerfile builds,
+  # where a task sees only what it stages: the AWS Batch / HealthOmics
+  # no-shared-filesystem model. Also the awsbatch profile on local docker and
+  # the HealthOmics package. Runs in parallel with the local e2e jobs above.
   e2e-docker:
     name: E2E (container isolation)
     needs: changes

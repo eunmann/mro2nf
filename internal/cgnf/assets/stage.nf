@@ -25,10 +25,11 @@ def keyOrder(List a, List b) {
 }
 
 // code names the entry .mro and the include path of the run's invocation
-// below root: params.mro2nf_code, where the run finds the code, the host's
-// or the image's, or the project's copy of its .mro files a task staged.
-// Martian resolves the entry's includes and stage code beside it, and the
-// _jobinfo invocation records its include.
+// below root: '' for a stage task, which finds the code at the paths the
+// project was transpiled from, on the host or in the image, or the
+// project's copy of its .mro files a task staged. Martian resolves the
+// entry's includes and stage code beside it, and the _jobinfo invocation
+// records its include.
 def code(Map meta, String root) {
     return "-entry ${shq(root + meta.entry)} -mropath ${shq(meta.mropath.tokenize(':').collect { p -> root + p }.join(':'))}"
 }
@@ -53,7 +54,7 @@ def callFile(Map meta) {
 // the instance because its gates hold it enabled; mre args must agree, and
 // the node must compile to the spec PLAN planned.
 def args(Map meta, List forks, List leaves) {
-    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, params.mro2nf_code)} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args"
+    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, '')} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args"
     forks.each { f -> cmd += " -fork ${f}" }
     if (leaves) {
         cmd += " -leaves ${shq(leaves.join(','))}"
@@ -63,7 +64,7 @@ def args(Map meta, List forks, List leaves) {
 
 // rest may be a GString, which Nextflow 24.04 does not pass for a String.
 def job(Map meta, phase, rest) {
-    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, params.mro2nf_code)} -adapters ${shq(params.mro2nf_adapters)} -mrjob ${shq(params.mro2nf_mrjob)} -psid ${shq(params.mro2nf_psid)} -work ."
+    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -adapters ${shq(params.mro2nf_adapters)} -mrjob ${shq(params.mro2nf_mrjob)} -psid ${shq(params.mro2nf_psid)} -work ."
     if (params.mro2nf_monitor) {
         cmd += ' -monitor'
     }
@@ -74,7 +75,7 @@ def job(Map meta, phase, rest) {
 }
 
 def post(Map meta) {
-    return "${shq(params.mro2nf_mre)} post ${graph(meta, params.mro2nf_code)} -args args -outs stage_outs -fields outs -forks forks -gates gates"
+    return "${shq(params.mro2nf_mre)} post ${graph(meta, '')} -args args -outs stage_outs -fields outs -forks forks -gates gates"
 }
 
 // resources reads the table a split writes (mre run -phase split): per
@@ -191,11 +192,11 @@ def locations(ups, List locs) {
 }
 
 // OUTS resolves the pipeline outs from the stage outs and the entry files
-// they read and publishes them with mrp's own post-processing. It runs no stage, so it
-// compiles the project's copy of the .mro files it stages, in the runtime
-// image on a container profile. The workflow output block
-// would publish the tree as data, but Nextflow 24.04 accepts it only under
-// the nextflow.preview.output flag and in a syntax 26.04 rejects (#356).
+// they read and publishes them with mrp's own post-processing. It runs no
+// stage, so it compiles the project's copy of the .mro files it stages. The
+// workflow output block would publish the tree as data, but Nextflow 24.04
+// accepts it only under the nextflow.preview.output flag and in a syntax
+// 26.04 rejects (#356).
 process OUTS {
     publishDir params.outdir, mode: 'copy', saveAs: { f -> f.startsWith('results/') ? f.substring(8) : f }
 

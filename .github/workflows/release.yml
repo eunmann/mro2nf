@@ -155,8 +155,8 @@ jobs:
           prerelease: ${{ env.PRERELEASE }}
 
   # Publish the runtime image (mre, mrjob and Martian's adapters at
-  # /opt/mro2nf) to GHCR: PLAN and OUTS run in it, and a generated project's
-  # stage image builds FROM it. Tagged with the release version (+ latest for
+  # /opt/mro2nf) to GHCR: the image a pipeline's own image builds FROM, which
+  # every task of a container profile runs in. Tagged with the release version (+ latest for
   # a non-prerelease), multi-arch (amd64 + arm64).
   image:
     name: Runtime image (GHCR)
