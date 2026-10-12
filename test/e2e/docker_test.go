@@ -359,6 +359,30 @@ func TestDockerEntryOverrides(t *testing.T) {
 	}
 }
 
+var (
+	amazonPluginOnce sync.Once
+	errAmazonPlugin  error
+)
+
+// requireAmazonPlugin installs nf-amazon once before any awsbatch-profile run.
+// Nextflow downloads it on first use, and two runs downloading it at once
+// into the same plugins dir race: one fails "Plugin with id nf-amazon not
+// found in any repository".
+func requireAmazonPlugin(t *testing.T) {
+	t.Helper()
+
+	amazonPluginOnce.Do(func() {
+		out, err := exec.Command("nextflow", "plugin", "install", "nf-amazon").CombinedOutput()
+		if err != nil {
+			errAmazonPlugin = fmt.Errorf("nextflow plugin install nf-amazon: %w\n%s", err, out)
+		}
+	})
+
+	if errAmazonPlugin != nil {
+		t.Fatal(errAmazonPlugin)
+	}
+}
+
 // TestGeneratedAWSBatchProfile validates the awsbatch profile without a
 // live account: a run of it with only the executor swapped for local
 // docker, in the one image built FROM the runtime image, so the profile's
@@ -367,6 +391,7 @@ func TestGeneratedAWSBatchProfile(t *testing.T) {
 	t.Parallel()
 
 	requireDocker(t)
+	requireAmazonPlugin(t)
 
 	proj := transpile(t, "diamond_min")
 	image := pipelineImage(t, filepath.Join(root, "testdata", "diamond_min"), "awsbatch_diamond_min")
@@ -393,6 +418,10 @@ func TestGeneratedProfilesRequireImage(t *testing.T) {
 	for _, profile := range []string{"docker", "awsbatch"} {
 		t.Run(profile, func(t *testing.T) {
 			t.Parallel()
+
+			if profile == "awsbatch" {
+				requireAmazonPlugin(t)
+			}
 
 			proj := transpile(t, "diamond_min")
 
