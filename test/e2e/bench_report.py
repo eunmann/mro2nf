@@ -21,8 +21,9 @@ then applies three independent gates:
     largest stage task, the same bytes at every width (within STAGING_SLACK):
     a fork stages its own share of the data, never all N forks' shares.
     Every group must write, per producer, the same `restaged_bytes` at every
-    width (within STAGING_SLACK): a file every fork reads is referenced where
-    it was staged, never copied into each fork (#498).
+    width (within STAGING_SLACK): a file every fork of a non-split stage
+    reads is referenced where it was staged, not copied into each fork
+    (#498). A split stage's args still carries one copy per fork (#507).
   * mrp-jobs gate -- every lane's `stage_tasks` must equal `mrp_jobs`, the
     jobs real mrp runs for the same invocation: one Nextflow task per Martian
     job, so stage work is neither duplicated nor hidden in plumbing.

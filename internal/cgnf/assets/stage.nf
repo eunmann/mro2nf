@@ -54,8 +54,9 @@ def callFile(Map meta) {
 // the instance because its gates hold it enabled; mre args must agree, and
 // the node must compile to the spec PLAN planned. A bundle no other task
 // stages links the files it names (link), so a file every fork of a map
-// call reads is not copied into each; a split's args travels to its chunks
-// and join, so it carries them.
+// call over a non-split stage reads is not copied into each; a split
+// stage's args travels to its chunks and join, so it carries them, one copy
+// per fork (#507).
 def args(Map meta, List forks, List leaves, boolean link) {
     def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, '')} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args${link ? ' -link' : ''}"
     forks.each { f -> cmd += " -fork ${f}" }

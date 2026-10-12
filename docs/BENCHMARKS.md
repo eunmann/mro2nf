@@ -191,9 +191,10 @@ checks:
   until the marker is dropped, so fixing the issue turns the lane into an
   ordinary flat-gated one. Every group must also write the same
   `restaged_bytes` per producer at every width (within 5%): a file every fork
-  reads is referenced where it was staged, never copied into each fork
-  (#498). Per fork such a copy would read flat; per producer, the unit of the
-  data, it grows with the width.
+  of a non-split stage reads is referenced where it was staged, not copied
+  into each fork (#498). Per fork such a copy would read flat; per producer,
+  the unit of the data, it grows with the width. A split stage's `args` still
+  carries one copy per fork, which no lane covers yet (#507).
 - **mrp-jobs gate** — every lane's `stage_tasks` must equal `mrp_jobs`: one
   stage task per Martian job, so stage work is neither duplicated nor hidden
   in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make

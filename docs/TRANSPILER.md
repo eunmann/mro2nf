@@ -485,8 +485,8 @@ Both prefixes resolve identically on read-back. The rules:
   dir, whose origin record comes with it, any other file by itself beside its
   origin record. A file every fork of a map call reads, such as a broadcast
   upstream output or entry file, exists once, its producer's, however wide the
-  fork (#498). A split's args travels to its chunks and join, so it carries
-  its files.
+  fork of a non-split stage (#498). A split stage's args travels to its chunks
+  and join, so it still carries its files, one copy per fork (#507).
 - **Origins** (on write): a file is one to `mrp` wherever it is referenced, so a
   bundle copies it once and gives every position that reaches it one marker,
   however many input bundles it arrived through. Its identity is its origin, the
