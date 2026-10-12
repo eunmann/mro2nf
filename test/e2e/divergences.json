@@ -55,6 +55,15 @@
       "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
     },
     {
+      "id": "nested-empty-forks",
+      "kind": "outcome",
+      "feature": "a nested map call over an outer split whose elements are all empty",
+      "summary": "When the inner map call of a map call over a sub-pipeline splits the outer split's element, and every element is empty and known at run start, as with `xss = [[]]` or `[[], []]`, mrp panics with `index out of range` while it makes the pipestance, before any stage runs; mro2nf runs the pipeline's other stages, then its OUTS task fails with the same panic.",
+      "justification": "The panic is a Martian bug: `ForkIdSet.expandStaticForks` (`martian/core/fork.go`) indexes the first fork of the empty fork set. mro2nf's plan resolves forks without Martian's pipestance, which only OUTS builds, for Martian's PostProcess, so both runs fail, mro2nf's in a task that runs no stage. One non-empty element, as in `[[], [5]]`, runs under both. So do an inner split of a bound empty literal (`ys = []`, `fork_indep_call`'s ENT), which Martian makes a null map call, and an inner split of a stage output that is empty in every outer fork (`fork_indep_call`'s QRT), whose length is unknown: `makeForkIdParts` gives both a placeholder fork.",
+      "evidence": ["TestMrpDiffFailureParity/nested_empty_forks", "TestStandInRunOfEveryFixture/nested_empty_forks", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
+    },
+    {
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",
