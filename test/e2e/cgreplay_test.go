@@ -639,9 +639,9 @@ func (rp *cgReplay) mrpDisabled(rel string) bool {
 
 // checkCore is the drift guard: mrp's own resolver, reattached to the same
 // pipestance, must hold exactly the forks the replay ran, plus only the
-// disabled placeholder fork0 mrp keeps for a stage whose map call has no
-// forks under some outer fork (an empty or null source), and resolve the
-// same _args for every fork that runs.
+// disabled placeholder mrp keeps for a stage whose map call has no forks
+// under some outer fork (an empty or null source), fork0 or the node's own
+// dir, and resolve the same _args for every fork that runs.
 func (rp *cgReplay) checkCore() {
 	cf := coreForks(rp.t.Context(), rp.t, rp.ps, []string{rp.dir})
 
@@ -664,7 +664,9 @@ func (rp *cgReplay) checkCore() {
 	}
 
 	for _, rel := range sortedKeys(cf) {
-		placeholder := filepath.Base(rel) == "fork0" && rp.mrpDisabled(rel) && rp.emptyFork[cf[rel].node]
+		node := cf[rel].node
+		named := filepath.Base(rel) == "fork0" || rel == filepath.Join(strings.Split(node, ".")...)
+		placeholder := named && rp.mrpDisabled(rel) && rp.emptyFork[node]
 		if _, ok := rp.ours[rel]; !ok && !placeholder {
 			rp.t.Errorf("drift guard: %s: mrp's resolver runs a fork the replay has no instance for", rel)
 		}
