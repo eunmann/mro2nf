@@ -5,8 +5,9 @@
 // run's call (call), the resources it is scheduled with, and its own
 // overrides file (overrides), which PLAN resolved; its GPU request is the
 // config's, which reads meta.special per task where a Nextflow 25.10
-// process accelerator directive cannot. Each phase runs `mre args`, then the phase's
-// jobs through `mre run` as mrp runs them, then `mre post`.
+// process accelerator directive cannot. Each task runs one `mre stage`
+// call: its phase's job as mrp runs it, with the args before it and the
+// post after it that the phase has.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -50,22 +51,18 @@ def callFile(Map meta) {
     return "cat > call.b64 <<'MRO2NF_CALL'\n${meta.call}\nMRO2NF_CALL"
 }
 
-// args builds the instance's args bundle from what it staged, its entry
-// fork records, which are base64 and need no quoting, and the entry files
-// it staged below entry/, by their indices among the run's. The driver ran
-// the instance because its gates hold it enabled; mre args must agree, and
-// the node must compile to the spec PLAN planned. A bundle no other task
-// stages links the files it names (link), so a file every fork of a map
-// call over a non-split stage reads is not copied into each; a split
-// stage's args travels to its chunks and join, so it carries them, one copy
-// per fork (#507).
-def args(Map meta, List forks, List leaves, boolean link) {
-    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, '')} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args${link ? ' -link' : ''}"
+// args is what a task builds the instance's args bundle from: what it
+// staged, its entry fork records, which are base64 and need no quoting,
+// and the entry files it staged below entry/, by their indices among the
+// run's. The driver ran the instance because its gates hold it enabled; mre
+// must agree, and the node must compile to the spec PLAN planned.
+def args(Map meta, List forks, List leaves) {
+    def cmd = "-digest ${meta.digest} -in in"
     forks.each { f -> cmd += " -fork ${f}" }
     if (leaves) {
         cmd += " -leaves ${shq(leaves.join(','))}"
     }
-    return cmd + ")\n[ \"\$state\" = enabled ] || { echo ${shq('mre args: ' + meta.node + ' is not enabled where its gates said enabled')} >&2; exit 1; }"
+    return cmd
 }
 
 // on reads a boolean param, which a launch's --<name> false sets to the
@@ -75,8 +72,9 @@ def on(v) {
     return v.toString() == 'true'
 }
 
-def job(Map meta, phase, rest) {
-    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -psid ${shq(params.mro2nf_psid)} -work ."
+// mreStage runs the task's phase through mre stage.
+def mreStage(Map meta, phase, rest) {
+    def cmd = "${shq(params.mro2nf_mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(params.mro2nf_psid)} -work ."
     if (params.mro2nf_adapters) {
         cmd += " -adapters ${shq(params.mro2nf_adapters)}"
     }
@@ -95,11 +93,13 @@ def job(Map meta, phase, rest) {
     return cmd + ' ' + rest
 }
 
-def post(Map meta) {
-    return "${shq(params.mro2nf_mre)} post ${graph(meta, '')} -args args -outs stage_outs -fields outs -forks forks -gates gates"
+// postFlags name where a task that posts its instance's outs writes them,
+// one bundle per output, and the fork elements and gates they set.
+def postFlags() {
+    return '-fields outs -forks forks -gates gates'
 }
 
-// resources reads the table a split writes (mre run -phase split): per
+// resources reads the table a split writes (mre stage -phase split): per
 // chunk, by its name, and for the join, the cpus, memory and special its
 // job is scheduled with, those its _jobinfo records.
 def resources(String table) {
@@ -126,9 +126,8 @@ process STAGE {
     script:
     """
     ${callFile(meta)}
-    ${args(meta, forks, leaves, true)}
-    ${job(meta, 'main', '-args args -o stage_outs')}
-    ${post(meta)}
+    mkdir -p in
+    ${mreStage(meta, 'main', "${args(meta, forks, leaves)} -args args -o stage_outs ${postFlags()}")}
     """
 }
 
@@ -147,8 +146,8 @@ process STAGE_SPLIT {
     script:
     """
     ${callFile(meta)}
-    ${args(meta, forks, leaves, false)}
-    ${job(meta, 'split', '-args args -o chunks')}
+    mkdir -p in
+    ${mreStage(meta, 'split', "${args(meta, forks, leaves)} -args args -o chunks")}
     """
 }
 
@@ -169,7 +168,7 @@ process STAGE_MAIN {
     script:
     """
     ${callFile(meta)}
-    ${job(meta, 'main', "-args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
+    ${mreStage(meta, 'main', "-args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
 }
 
@@ -190,8 +189,7 @@ process STAGE_JOIN {
     script:
     """
     ${callFile(meta)}
-    ${job(meta, 'join', '-args args -chunks chunks -chunkouts chunkouts -o stage_outs')}
-    ${post(meta)}
+    ${mreStage(meta, 'join', "-args args -chunks chunks -chunkouts chunkouts -o stage_outs ${postFlags()}")}
     """
 }
 
@@ -597,7 +595,7 @@ workflow INPUT {
 
 // INPUT_ENTRY is INPUT staging the entry files PLAN lists for the
 // instance's fork of its node's entry-fed roots, at positions at, and their
-// indices, which mre args maps back to the run's values.
+// indices, which mre stage maps back to the run's values.
 workflow INPUT_ENTRY {
     take:
     inst

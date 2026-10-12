@@ -13,25 +13,24 @@ func TestSubcommandsRefuseBadInputs(t *testing.T) {
 	mro := filepath.Join(dir, "pipeline.mro")
 	absent := filepath.Join(t.TempDir(), "absent")
 
+	stage := func(argv ...string) []string {
+		return append([]string{"stage", "-entry", mro, "-args", filepath.Join(t.TempDir(), "args"), "-work", t.TempDir()}, argv...)
+	}
+
 	cases := map[string][]string{
-		"args flag":        {"args", "-bogus"},
-		"args entry":       {"args", "-entry", absent},
-		"args call":        {"args", "-entry", mro, "-call", writeTestFile(t, filepath.Join(t.TempDir(), "call"), "not base64!")},
-		"args call file":   {"args", "-entry", mro, "-call", absent},
-		"args types":       {"args", "-entry", mro, "-types", absent},
-		"args fork record": {"args", "-entry", mro, "-node", "PP.MAKE", "-fork", "not base64!"},
-		"args node":        {"args", "-entry", mro, "-node", "PP.NONE", "-o", filepath.Join(t.TempDir(), "args")},
-		"post flag":        {"post", "-bogus"},
-		"post entry":       {"post", "-entry", absent},
-		"post args":        {"post", "-entry", mro, "-args", absent, "-outs", absent},
-		"outs flag":        {"outs", "-bogus"},
-		"outs entry":       {"outs", "-entry", absent},
-		"outs staged":      {"outs", "-entry", mro, "-in", absent},
-		"run flag":         {"run", "-bogus"},
-		"run entry":        {"run", "-entry", absent, "-phase", "main"},
-		"run args":         {"run", "-entry", mro, "-phase", "main", "-args", absent},
-		"plan flag":        {"plan", "-bogus"},
-		"plan entry":       {"plan", "-entry", absent},
+		"outs flag":         {"outs", "-bogus"},
+		"outs entry":        {"outs", "-entry", absent},
+		"outs staged":       {"outs", "-entry", mro, "-in", absent},
+		"stage flag":        {"stage", "-bogus"},
+		"stage entry":       {"stage", "-entry", absent, "-phase", "main"},
+		"stage call":        stage("-call", writeTestFile(t, filepath.Join(t.TempDir(), "call"), "not base64!"), "-phase", "main", "-node", "PP.SUMX"),
+		"stage call file":   stage("-call", absent, "-phase", "main", "-node", "PP.SUMX"),
+		"stage types":       stage("-types", absent, "-phase", "main", "-node", "PP.SUMX"),
+		"stage fork record": stage("-phase", "main", "-node", "PP.MAKE", "-fork", "not base64!"),
+		"stage node":        stage("-phase", "split", "-node", "PP.NONE"),
+		"stage args":        {"stage", "-entry", mro, "-phase", "join", "-node", "PP.SUMX", "-args", absent},
+		"plan flag":         {"plan", "-bogus"},
+		"plan entry":        {"plan", "-entry", absent},
 	}
 
 	for name, argv := range cases {

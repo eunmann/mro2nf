@@ -161,7 +161,8 @@ func (s *standIn) instances(n TopoNode) [][]elemDir {
 	return out
 }
 
-// args writes the args of n's instance at elems, as mre args does.
+// args writes the args of n's instance at elems, as mre stage's args step
+// does.
 func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 	s.t.Helper()
 

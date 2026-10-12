@@ -14,7 +14,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
-	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -30,10 +29,8 @@ var (
 type PostSpec struct {
 	// Args is the instance's args bundle dir, whose stamp names it.
 	Args string
-	// Outs is the stage's outs bundle; a disabled instance's is written here.
+	// Outs is the stage's outs bundle.
 	Outs string
-	// In are staged items a fork source of this stage also reads.
-	In []string
 	// Manifest locates the file leaves of the outs and fork elements.
 	Manifest types.Manifest
 	// Forks is the dir that receives <root>/<ordinal>/ fork elements.
@@ -46,11 +43,10 @@ type PostSpec struct {
 	Gates string
 }
 
-// Post stamps the instance's outs with its node and fork, writing a disabled
-// instance's outs as mrp does, checks enabled outs as mrp does, and writes
-// one fork element dir per fork of every root this stage feeds and one
-// partner element dir per element of each output a partner reads, then the
-// outs field by field and the gates they set, when asked.
+// Post stamps the instance's outs with its node and fork, checks them as mrp
+// does, and writes one fork element dir per fork of every root this stage
+// feeds and one partner element dir per element of each output a partner
+// reads, then the outs field by field and the gates they set, when asked.
 func (g *Graph) Post(spec PostSpec) error {
 	in, s, err := g.post(spec)
 	if err != nil {
@@ -81,25 +77,17 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 		return Instance{}, nil, err
 	}
 
-	if in.Disabled {
-		if err := writeValue(spec.Outs, disabledOuts(st), spec.Manifest, st.Call().DecId, types.RoleOut, nil); err != nil {
-			return Instance{}, nil, err
-		}
-	}
-
 	if err := stampPosted(spec.Outs, in); err != nil {
 		return Instance{}, nil, err
 	}
 
-	s, err := g.stage(append(slices.Clone(spec.In), spec.Outs))
+	s, err := g.stage([]string{spec.Outs})
 	if err != nil {
 		return Instance{}, nil, err
 	}
 
-	if !in.Disabled {
-		if err := g.verifyOutputs(st, s, in.Fork); err != nil {
-			return Instance{}, nil, err
-		}
+	if err := g.verifyOutputs(st, s, in.Fork); err != nil {
+		return Instance{}, nil, err
 	}
 
 	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: spec.Manifest.Table(), values: true}
@@ -154,20 +142,6 @@ func (g *Graph) sortedRoots() []*syntax.CallGraphStage {
 
 	for i, k := range keys {
 		out[i] = g.roots[k]
-	}
-
-	return out
-}
-
-// disabledOuts are a disabled fork's outs: every declared output null
-// (core/stage.go:928 writeDisable, :57 makeOutArgs).
-func disabledOuts(st *syntax.CallGraphStage) core.MarshalerMap {
-	out := core.MarshalerMap{}
-
-	if ps := st.Callable().GetOutParams(); ps != nil {
-		for _, p := range ps.List {
-			out[p.Id] = nil
-		}
 	}
 
 	return out
