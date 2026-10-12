@@ -149,9 +149,18 @@ jobs:
     outputs:
       shards: ${{ steps.set.outputs.shards }}
       total: ${{ steps.set.outputs.total }}
+      emitters: ${{ steps.set.outputs.emitters }}
     steps:
       - id: set
+        # PRs into the v2 integration branch run every shard under both
+        # emitters, so a sync or a step can't regress -emitter=v2 unseen; the
+        # switch-over (#470) deletes the old emitter and this dimension.
+        env:
+          BASE: ${{ github.base_ref }}
         run: |
+          emitters='[""]'
+          [ "$BASE" = integration/emitter-v2 ] && emitters='["", "v2"]'
+          echo "emitters=$emitters" >> "$GITHUB_OUTPUT"
           shards='[0, 1, 2, 3]'
           total=$(echo "$shards" | jq 'length')
           echo "$shards" | jq -e 'to_entries | all(.key == .value)' >/dev/null \
@@ -170,7 +179,7 @@ jobs:
   # coverage is the union of shards, enforced by the `e2e` gate below. To change
   # the shard count, edit only the e2e-config shard list — the total derives.
   e2e-shard:
-    name: E2E shard ${{ matrix.shard }}
+    name: E2E shard ${{ matrix.shard }}${{ matrix.emitter && format(' ({0})', matrix.emitter) || '' }}
     needs: e2e-config
     # Explicit: the implicit success() also checks transitive needs, so a
     # failed `changes` would skip the shards even though e2e-config ran.
@@ -181,10 +190,12 @@ jobs:
       fail-fast: false # run every shard so all failures surface in one CI round
       matrix:
         shard: ${{ fromJSON(needs.e2e-config.outputs.shards) }}
+        emitter: ${{ fromJSON(needs.e2e-config.outputs.emitters) }}
     env:
       # The harnesses skip cleanly on a dev box missing a tool, but in CI a
       # missing prerequisite must FAIL the job, not silently pass it.
       E2E_REQUIRE: "1"
+      E2E_EMITTER: ${{ matrix.emitter }}
       E2E_SHARD_INDEX: ${{ matrix.shard }}
       E2E_SHARD_TOTAL: ${{ needs.e2e-config.outputs.total }}
     steps:
@@ -216,7 +227,7 @@ jobs:
       - if: ${{ failure() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: e2e-shard-${{ matrix.shard }}-run-logs
+          name: e2e-shard-${{ matrix.shard }}${{ matrix.emitter && format('-{0}', matrix.emitter) || '' }}-run-logs
           path: artifacts/e2e/
           if-no-files-found: ignore
 
@@ -272,6 +283,10 @@ jobs:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
       - run: make lint-nf
+      - if: ${{ github.base_ref == 'integration/emitter-v2' }}
+        run: make lint-nf
+        env:
+          E2E_EMITTER: v2
 
   # Data-plane epic gate (#17/#13): the transfer-multiplier benchmark must not
   # regress vs bench/baseline.json.
@@ -303,6 +318,10 @@ jobs:
           path: ~/.nextflow
           key: nextflow-${{ runner.os }}-${{ steps.nxf.outputs.ver }}
       - run: make bench
+      - if: ${{ github.base_ref == 'integration/emitter-v2' }}
+        run: make bench
+        env:
+          E2E_EMITTER: v2
 
   # The same pipelines under the docker executor (containers that mount only their
   # work dir) — the AWS Batch / HealthOmics no-shared-filesystem model. Runs in
