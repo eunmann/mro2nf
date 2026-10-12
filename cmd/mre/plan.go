@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
@@ -19,20 +20,11 @@ import (
 
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
-	entry, values, mropath, call, nodes, roots, counts, work string
+	entry, values, mropath, call, nodes, roots, counts, leaves, files, work string
+	hostInputs, remoteInputs                                                bool
 }
 
-// runPlan starts a run: it rebuilds the invocation from the transpiled
-// entry and the run's entry values as mrp builds an invocation from its
-// JSON form, compiles it as mrp does, so mrp's refusals fail the run before
-// any stage starts, and checks its call graph is within the witness's. It
-// writes the call every task compiles, each witness node's spec digest and
-// disabled instances, and the forks of each entry-fed root.
-func runPlan(_ context.Context, argv []string) error {
-	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
-
-	var f planFlags
-
+func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.entry, "entry", "", "the transpiled entry .mro")
 	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null keeps the transpiled one")
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
@@ -40,7 +32,26 @@ func runPlan(_ context.Context, argv []string) error {
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys")
 	fs.StringVar(&f.roots, "roots", "roots", "dir to write one file per entry-fed fork root into, a line per fork: key record index-token")
 	fs.StringVar(&f.counts, "counts", "counts", "dir to write one file per entry-fed fork root into, a line per fork of its outer roots: count key")
+	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
+	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
+	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
+	fs.BoolVar(&f.remoteInputs, "remote-inputs", false, "an entry file value may name a URI of any scheme, not only s3")
 	fs.StringVar(&f.work, "work", ".", "scratch dir")
+}
+
+// runPlan starts a run: it rebuilds the invocation from the transpiled
+// entry and the run's entry values as mrp builds an invocation from its
+// JSON form, compiles it as mrp does, so mrp's refusals fail the run before
+// any stage starts, and checks its call graph is within the witness's, and
+// that every entry file value is one the run may stage. It writes the call
+// every task compiles, each witness node's spec digest, disabled instances
+// and entry files, and the forks of each entry-fed root.
+func runPlan(_ context.Context, argv []string) error {
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+
+	var f planFlags
+
+	f.define(fs)
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -67,7 +78,45 @@ func runPlan(_ context.Context, argv []string) error {
 		return fmt.Errorf("plan: %w", err)
 	}
 
+	for _, l := range p.Leaves {
+		if err := cg.VetEntryLeaf(l, f.hostInputs, f.remoteInputs); err != nil {
+			return fmt.Errorf("plan: %w", err)
+		}
+	}
+
+	if err := f.writeEntryFiles(p); err != nil {
+		return err
+	}
+
 	return f.write(p)
+}
+
+// writeEntryFiles writes the run's entry file values, each by its index,
+// and per node and fork of its entry-fed roots, those its instance there
+// stages.
+func (f *planFlags) writeEntryFiles(p cg.Plan) error {
+	var leaves, files strings.Builder
+
+	for i, l := range p.Leaves {
+		fmt.Fprintf(&leaves, "%d %s\n", i, base64.StdEncoding.EncodeToString([]byte(l.Value)))
+	}
+
+	for _, n := range p.Nodes {
+		for _, pf := range n.Files {
+			ids := make([]string, len(pf.Leaves))
+			for i, x := range pf.Leaves {
+				ids[i] = strconv.Itoa(x)
+			}
+
+			fmt.Fprintf(&files, "%s %s %s\n", n.Fqid, orDash(pf.Key), strings.Join(ids, ","))
+		}
+	}
+
+	if err := writeText(f.leaves, leaves.String()); err != nil {
+		return err
+	}
+
+	return writeText(f.files, files.String())
 }
 
 // overlayInvocation is the source's invocation with the run's entry values

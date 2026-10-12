@@ -33,6 +33,14 @@ params.job_resources = [:]
 	fmt.Fprintf(&b, "params.mro2nf_monitor = %t\n", p.opts.Monitor)
 	fmt.Fprintf(&b, "params.mro2nf_confine = %t\n\n", p.opts.Confine)
 
+	b.WriteString(`// The entry file values a run stages: a head-node path where the profile
+// sees the head node's files, an s3:// URI always, and a URI of any other
+// scheme only when whoever supplies the run's params is trusted to fetch it.
+params.mro2nf_host_inputs = true
+params.mro2nf_allow_remote_inputs = false
+
+`)
+
 	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
 
 	for _, id := range slices.Sorted(maps.Keys(p.src.Invocation.Args)) {

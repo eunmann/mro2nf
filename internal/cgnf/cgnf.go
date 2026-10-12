@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -35,7 +36,7 @@ var (
 
 // reserved reports a param the generated project defines itself.
 func reserved(param string) bool {
-	return param == "outdir" || param == "job_resources"
+	return param == "outdir" || param == "job_resources" || strings.HasPrefix(param, "mro2nf_")
 }
 
 // Options are the paths and knobs a generated project bakes in.
@@ -57,15 +58,16 @@ type Options struct {
 }
 
 // project is one emission: the source, the witness's call graph and its
-// topology.
+// topology, and the nodes that read entry files.
 type project struct {
-	opts  Options
-	src   cg.Source
-	g     *cg.Graph
-	topo  cg.Topology
-	index map[string]int
-	roots map[string]cg.TopoRoot
-	entry []string
+	opts    Options
+	src     cg.Source
+	g       *cg.Graph
+	topo    cg.Topology
+	index   map[string]int
+	roots   map[string]cg.TopoRoot
+	entry   []string
+	readers map[string]bool
 }
 
 // Emit writes the project for the entry .mro at entry into opts.OutDir.
@@ -156,7 +158,12 @@ func newProject(src cg.Source, opts Options) (*project, error) {
 		}
 	}
 
-	p := &project{opts: opts, src: src, g: g, topo: topo, index: map[string]int{}, roots: map[string]cg.TopoRoot{}}
+	readers, err := g.EntryFileReaders(g.Manifest())
+	if err != nil {
+		return nil, fmt.Errorf("emit: %w", err)
+	}
+
+	p := &project{opts: opts, src: src, g: g, topo: topo, index: map[string]int{}, roots: map[string]cg.TopoRoot{}, readers: readers}
 
 	for i, n := range topo.Nodes {
 		p.index[n.Fqid] = i

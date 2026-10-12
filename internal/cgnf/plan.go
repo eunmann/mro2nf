@@ -11,8 +11,9 @@ import (
 // project's copy of the entry's .mro files. Its records reach the driver as
 // values, so a task's cache key holds what PLAN fixed for it, not the
 // task's path: the run's call, which every task compiles over the entry's
-// declarations where the run finds its code, each node's digest, and per
-// entry-fed root, its forks and their counts.
+// declarations where the run finds its code, each node's digest, the entry
+// files each instance stages, and per entry-fed root, its forks and their
+// counts.
 func (p *project) planProcess(g *gen) {
 	var outs strings.Builder
 
@@ -30,13 +31,15 @@ func (p *project) planProcess(g *gen) {
     output:
     eval('cat call'), emit: call
     eval('cat nodes'), emit: nodes
+    eval('cat leaves'), emit: leaves
+    eval('cat files'), emit: files
 %s
     script:
     """
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json -call call -nodes nodes -roots roots -counts counts
+    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json -host-inputs=${shq(params.mro2nf_host_inputs)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)} -call call -nodes nodes -roots roots -counts counts -leaves leaves -files files
     """
 }
 

@@ -38,13 +38,17 @@ def graph(Map meta, String root) {
     return "${code(meta, root)} -call ${meta.call}"
 }
 
-// args builds the instance's args bundle from what it staged and its entry
-// fork records, which are base64 and need no quoting. The driver ran the
-// instance because its gates hold it enabled; mre args must agree, and the
-// node must compile to the spec PLAN planned.
-def args(Map meta, List forks) {
+// args builds the instance's args bundle from what it staged, its entry
+// fork records, which are base64 and need no quoting, and the entry files
+// it staged below entry/, by their indices among the run's. The driver ran
+// the instance because its gates hold it enabled; mre args must agree, and
+// the node must compile to the spec PLAN planned.
+def args(Map meta, List forks, List leaves) {
     def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, '')} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args"
     forks.each { f -> cmd += " -fork ${f}" }
+    if (leaves) {
+        cmd += " -leaves ${shq(leaves.join(','))}"
+    }
     return cmd + ")\n[ \"\$state\" = enabled ] || { echo ${shq('mre args: ' + meta.node + ' is not enabled where its gates said enabled')} >&2; exit 1; }"
 }
 
@@ -89,7 +93,7 @@ process STAGE {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
 
     output:
     tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), emit: outs
@@ -98,7 +102,7 @@ process STAGE {
 
     script:
     """
-    ${args(meta, forks)}
+    ${args(meta, forks, leaves)}
     ${job(meta, 'main', '-args args -o stage_outs')}
     ${post(meta)}
     """
@@ -111,14 +115,14 @@ process STAGE_SPLIT {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
 
     output:
     tuple val(meta), val(key), path('args', type: 'dir'), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), eval('cat chunks/resources.tsv'), emit: split
 
     script:
     """
-    ${args(meta, forks)}
+    ${args(meta, forks, leaves)}
     ${job(meta, 'split', '-args args -o chunks')}
     """
 }

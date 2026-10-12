@@ -31,7 +31,7 @@ func (p *project) node(g *gen, i int, n cg.TopoNode) error {
 	}
 
 	proc := alias(i, n.Fqid)
-	in := fmt.Sprintf("u%d.combine(call).map { k, fs, es, d, us, c -> [%s, k, fs, es + us] }", i, meta)
+	in := p.input(i, n, meta)
 
 	if n.Split {
 		p.splitTriad(g, i, proc, in)
@@ -56,6 +56,27 @@ func (p *project) node(g *gen, i int, n cg.TopoNode) error {
 	}
 
 	return nil
+}
+
+// input is the channel of node i's enabled instances as its process takes
+// them, each with the entry files it reads: those PLAN lists for its fork
+// of the node's entry-fed roots, and their indices, which mre args maps
+// back to the run's values.
+func (p *project) input(i int, n cg.TopoNode, meta string) string {
+	if !p.readers[n.Fqid] {
+		return fmt.Sprintf("u%d.combine(call).map { k, fs, es, d, us, c -> [%s, k, fs, es + us, [], []] }", i, meta)
+	}
+
+	var at []int
+
+	for x, r := range n.Roots {
+		if p.roots[r].Producer == "" {
+			at = append(at, x)
+		}
+	}
+
+	return fmt.Sprintf("u%d.combine(call).combine(entry).map { k, fs, es, d, us, c, ef -> def ids = ef.files[%s + ' ' + (%s.join('.') ?: '-')] ?: []; [%s, k, fs, es + us, ids, ids.collect { x -> ef.leaves[x] }] }",
+		i, gstr(n.Fqid), pick("k", at), meta)
 }
 
 // instances enumerates node i's instances, i<i>: root by root, each with

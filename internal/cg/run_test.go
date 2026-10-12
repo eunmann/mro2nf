@@ -272,7 +272,7 @@ func (s *standIn) node(n TopoNode) int {
 		}
 
 		outs := s.next("outs")
-		if err := writeValue(outs, s.standInOuts(n.Fqid), s.man, st.Call().DecId, types.RoleOut); err != nil {
+		if err := writeValue(outs, s.standInOuts(n.Fqid), s.man, st.Call().DecId, types.RoleOut, nil); err != nil {
 			s.t.Fatal(err)
 		}
 

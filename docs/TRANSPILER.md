@@ -304,8 +304,9 @@ type manifest from the invocation's own declarations.
 
 - **`mre plan`** starts a run (§5). It rebuilds the run's invocation from the
   transpiled entry and the run's entry values, compiles it, checks it against
-  the witness, and writes the call every task compiles, one record per witness
-  node and the forks of each entry-fed fork root.
+  the witness, vets the entry file values a task stages (§8), and writes the
+  call every task compiles, one record per witness node, the entry files of
+  each node's instances, and the forks of each entry-fed fork root.
 - **`mre args -node <fqid> -digest <d>`** builds one stage instance's args
   bundle and prints `enabled` or `disabled`, once the node compiles to the spec
   digest PLAN planned. The instance's fork comes from the fork elements it
@@ -538,11 +539,39 @@ You can override inputs **at launch** without re-transpiling:
 - An entry input named `outdir` or `job_resources` collides with a param the
   project defines itself and fails the transpile.
 
-**File-typed inputs.** A file value is a path, passed through verbatim as `mrp`
-passes it: the stage opens it as given. A relative path names nothing from the
-stage's job dir under either runtime, so give file inputs as absolute paths on a
-filesystem every task can see. Staging file inputs into isolated containers,
-and `s3://` and other remote values, are tracked by #489.
+**File-typed inputs.** Every file value of the run's entry inputs that is an
+absolute path or a URI (`s3://`, and others under the opt-in below) is staged
+by Nextflow into the tasks that read it, and only those: PLAN lists the values
+(`leaves`) and, per node and fork of its entry-fed roots, the ones Martian's
+specialization of its bindings to that fork reads (`files`), so a map call over
+entry files stages each fork's own element. The driver hands each to
+`file(x, glob: false)`, so the head node never globs a name, and a task stages
+its list as `entry/<i>/<name>`; `mre args -leaves` maps each value to the path
+it reads it at. Nextflow links a file it can reach in place, so on a shared
+filesystem, and in a docker container, which mounts the link's target, the
+stage gets the value's own path, as `mrp` passes it; a file Nextflow fetched
+(an `s3://` object, a file on an object-store work dir) is read where it was
+staged. A value with no file (`[]`, `{}`, a null field) stages nothing. A
+relative path names nothing from the stage's job dir under either runtime and
+reaches the stage as given. A file default is staged from where it is at run
+time; it is never copied into the project.
+
+**Names Nextflow cannot stage.** Nextflow's stage-in script, on 24.04 and
+26.04, writes each staged file as `ln -s <source> <name>`, leaving `*`, `?`,
+`[`, `]`, `{`, `}`, `$` and control characters such as a tab for bash to
+expand: `s[1].txt` beside `s1.txt` stages `s1.txt` silently. So PLAN refuses a
+value holding any of them, naming the input and the character, before anything
+is staged (a Nextflow staging limitation); rename such a file.
+
+**Which file values a run may stage.** `file()` on the head node fetches any
+URL Nextflow has a provider for and reads any path the head node sees, and a
+run parameter comes from whoever launches the run. So PLAN checks every value
+it lists: an `s3://` URI is staged on every profile; a head-node path (absolute,
+or a `file:` URI) only where `params.mro2nf_host_inputs` holds (the local, grid
+and docker profiles); any other scheme (`http(s)://`, `ftp://`) only with
+`--mro2nf_allow_remote_inputs true`. The errors name the input, not the value,
+which may carry a credential. The HealthOmics parameter template declares
+neither param, so a HealthOmics run cannot set them.
 
 ---
 

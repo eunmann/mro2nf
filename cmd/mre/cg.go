@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
@@ -73,6 +74,7 @@ func runArgs(_ context.Context, argv []string) error {
 	node := fs.String("node", "", "stage fqid")
 	digest := fs.String("digest", "", "the node's spec digest in the run's plan, which it must compile to")
 	out := fs.String("o", "args", "args bundle dir to write")
+	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 
 	var in, forkRecs repeatedFlag
 
@@ -95,7 +97,12 @@ func runArgs(_ context.Context, argv []string) error {
 		}
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr, Digest: *digest})
+	files, err := stagedEntryFiles(g, man, *leaves)
+	if err != nil {
+		return fmt.Errorf("args: %w", err)
+	}
+
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr, Digest: *digest, EntryFiles: files})
 	if err != nil {
 		return fmt.Errorf("args: %w", err)
 	}
@@ -110,6 +117,32 @@ func runArgs(_ context.Context, argv []string) error {
 	}
 
 	return nil
+}
+
+// stagedEntryFiles maps the entry file values -leaves lists, which the
+// task staged below entry/, to the paths it reads them at.
+func stagedEntryFiles(g *cg.Graph, man types.Manifest, leaves string) (map[string]string, error) {
+	if leaves == "" {
+		return nil, nil
+	}
+
+	var ids []int
+
+	for f := range strings.SplitSeq(leaves, ",") {
+		id, err := strconv.Atoi(f)
+		if err != nil {
+			return nil, fmt.Errorf("-leaves: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	files, err := g.StagedEntryFiles(man, "entry", ids)
+	if err != nil {
+		return nil, fmt.Errorf("staged entry files: %w", err)
+	}
+
+	return files, nil
 }
 
 // runPost stamps a finished instance's outs and writes the fork elements of

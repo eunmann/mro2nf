@@ -50,7 +50,7 @@ func planEntry(t *testing.T, dir, values string) (string, error) {
 	err := run(t.Context(), []string{
 		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work,
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-counts", filepath.Join(work, "counts"),
+		"-counts", filepath.Join(work, "counts"), "-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
 	})
 
 	return work, err
@@ -368,6 +368,93 @@ func TestRunFindsStageCodeBesideEntry(t *testing.T) {
 
 	if want := filepath.Join(proj, "stages", "foo"); stage.Code.Cmd != want {
 		t.Errorf("stage code = %s, want %s beside the entry", stage.Code.Cmd, want)
+	}
+}
+
+// planEntryFile runs mre plan on entry_file with reads set to value and
+// the given policy flags, and returns the plan dir.
+func planEntryFile(t *testing.T, value string, flags ...string) (string, error) {
+	t.Helper()
+
+	work, fx := t.TempDir(), fixtureDir(t, "entry_file")
+	vf := writeTestFile(t, filepath.Join(work, "values.json"), `{"reads": "`+value+`"}`)
+
+	err := run(t.Context(), append([]string{
+		"plan", "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work,
+		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
+		"-counts", filepath.Join(work, "counts"), "-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+	}, flags...))
+
+	return work, err
+}
+
+// TestPlanRefusesEntryFilesItMayNotStage: an entry file value is vetted
+// before the driver hands it to file(): a glob character fails on every
+// profile, a head-node path where the profile sees no head-node file, and
+// a URI scheme but s3 unless remote inputs are allowed.
+func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
+	cases := []struct {
+		value string
+		flags []string
+		ok    bool
+	}{
+		{"/data/reads.txt", nil, true},
+		{"/data/s[1].txt", []string{"-remote-inputs"}, false},
+		{"/data/reads.txt", []string{"-host-inputs=false"}, false},
+		{"s3://bucket/reads.txt", []string{"-host-inputs=false"}, true},
+		{"http://host/reads.txt", nil, false},
+		{"http://host/reads.txt", []string{"-remote-inputs"}, true},
+	}
+
+	for _, tc := range cases {
+		_, err := planEntryFile(t, tc.value, tc.flags...)
+		if (err == nil) != tc.ok || (err != nil && !errors.Is(err, cg.ErrEntryFile)) {
+			t.Errorf("plan with reads %s %v: %v, want ok %t", tc.value, tc.flags, err, tc.ok)
+		}
+	}
+}
+
+// TestArgsReadsStagedEntryFiles: the plan lists the run's entry file and
+// the instance that reads it, and mre args reads the copy the task staged,
+// not the value's path, which an isolated task cannot see.
+func TestArgsReadsStagedEntryFiles(t *testing.T) {
+	value := filepath.Join(t.TempDir(), "reads.txt")
+
+	work, err := planEntryFile(t, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "0 " + base64.StdEncoding.EncodeToString([]byte(value)) + "\n"; readText(t, filepath.Join(work, "leaves")) != want {
+		t.Errorf("leaves %q, want %q", readText(t, filepath.Join(work, "leaves")), want)
+	}
+
+	if got := readText(t, filepath.Join(work, "files")); got != "EP.COUNT - 0\n" {
+		t.Errorf("files %q, want COUNT's instance to stage the one value", got)
+	}
+
+	fx := fixtureDir(t, "entry_file")
+
+	t.Chdir(t.TempDir())
+
+	if err := os.MkdirAll(filepath.Join("entry", "1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, filepath.Join("entry", "1", "reads.txt"), "7\n")
+
+	captureStdout(t, func() {
+		err = run(t.Context(), []string{
+			"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", readText(t, filepath.Join(work, "call")), "-mropath", fx,
+			"-node", "EP.COUNT", "-leaves", "0", "-o", "args",
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readText(t, filepath.Join("args", "f", "L0000", "reads.txt")); got != "7\n" {
+		t.Errorf("the args bundle's reads holds %q, want the staged copy's", got)
 	}
 }
 

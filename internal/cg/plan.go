@@ -19,14 +19,16 @@ import (
 )
 
 // Plan is what a run's start fixes once its invocation is known: the call
-// every task compiles over the entry's declarations (Load), and per stage
-// node of the witness, the node's spec digest and the instances the
-// invocation itself disables, and the forks of every fork root the entry
-// values feed.
+// every task compiles over the entry's declarations (Load), the entry file
+// values tasks stage (EntryLeaves), per stage node of the witness, the
+// node's spec digest, the instances the invocation itself disables and the
+// entry files each instance reads, and the forks of every fork root the
+// entry values feed.
 type Plan struct {
-	Call  string
-	Nodes []PlanNode
-	Roots map[string]PlanRoot
+	Call   string
+	Leaves []EntryLeaf
+	Nodes  []PlanNode
+	Roots  map[string]PlanRoot
 }
 
 // PlanRoot is an entry-fed root's forks, and their count under each fork
@@ -47,12 +49,14 @@ type PlanCount struct {
 // PlanNode is one witness node at run start. Digest identifies the node's
 // resolved spec in the invocation, so a task's cache key changes only with
 // its own node. Off disables every instance; OffAt the instances, by fork
-// key, a static per-fork binding disables.
+// key, a static per-fork binding disables. Files are the entry files its
+// instances read.
 type PlanNode struct {
 	Fqid   string
 	Digest string
 	Off    bool
 	OffAt  []string
+	Files  []PlanFiles
 }
 
 // PlanFork is one fork of an entry-fed root: its fork key, the ordinals of
@@ -99,6 +103,10 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 
 	p := Plan{Call: call}
 
+	if p.Leaves, err = g.EntryLeaves(g.Manifest()); err != nil {
+		return Plan{}, err
+	}
+
 	roots, planned, err := g.entryForks(wt, scratch)
 	if err != nil {
 		return Plan{}, err
@@ -106,8 +114,13 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 
 	p.Roots = roots
 
+	leaves := make(map[string]int, len(p.Leaves))
+	for i, l := range p.Leaves {
+		leaves[l.Value] = i
+	}
+
 	for _, n := range wt.Nodes {
-		pn, err := g.planNode(n, wt, planned)
+		pn, err := g.planNode(n, wt, planned, leaves)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -346,8 +359,9 @@ func mergeForks(a, b Fork) Fork {
 	return out
 }
 
-// planNode is the plan of the witness node n in the invocation's graph.
-func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks) (PlanNode, error) {
+// planNode is the plan of the witness node n in the invocation's graph,
+// whose entry file values leaves indexes.
+func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks, leaves map[string]int) (PlanNode, error) {
 	st, ok := g.stages[n.Fqid]
 	if !ok {
 		return PlanNode{Fqid: n.Fqid, Off: true}, nil
@@ -367,10 +381,16 @@ func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks) (PlanNo
 		return ok && b.Value
 	})
 
-	if !pn.Off {
-		if pn.OffAt, err = g.staticOff(st, n, wt, planned); err != nil {
-			return PlanNode{}, err
-		}
+	if pn.Off {
+		return pn, nil
+	}
+
+	if pn.OffAt, err = g.staticOff(st, n, wt, planned); err != nil {
+		return PlanNode{}, err
+	}
+
+	if pn.Files, err = g.entryFiles(st, n, wt, planned, leaves); err != nil {
+		return PlanNode{}, err
 	}
 
 	return pn, nil

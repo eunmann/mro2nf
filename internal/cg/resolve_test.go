@@ -96,7 +96,7 @@ func (f *fixture) outs(node string, fork Fork, outs string) string {
 	}
 
 	dir := f.next("outs")
-	if err := writeValue(dir, json.RawMessage(outs), types.Manifest{}, st.Call().DecId, types.RoleOut); err != nil {
+	if err := writeValue(dir, json.RawMessage(outs), types.Manifest{}, st.Call().DecId, types.RoleOut, nil); err != nil {
 		f.t.Fatal(err)
 	}
 

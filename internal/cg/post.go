@@ -82,7 +82,7 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 	}
 
 	if in.Disabled {
-		if err := writeValue(spec.Outs, disabledOuts(st), spec.Manifest, st.Call().DecId, types.RoleOut); err != nil {
+		if err := writeValue(spec.Outs, disabledOuts(st), spec.Manifest, st.Call().DecId, types.RoleOut, nil); err != nil {
 			return Instance{}, nil, err
 		}
 	}

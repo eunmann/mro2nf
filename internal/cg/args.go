@@ -44,6 +44,9 @@ type ArgsSpec struct {
 	// Digest, when set, is the node's spec digest in the run's plan
 	// (PlanNode.Digest), which the node must compile to.
 	Digest string
+	// EntryFiles maps each entry file value the task staged to the path it
+	// reads it at (StagedEntryFiles).
+	EntryFiles map[string]string
 }
 
 // WriteArgs resolves the instance's disabled state and, when it runs, its
@@ -85,7 +88,7 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 			return Instance{}, err
 		}
 
-		if err := writeValue(spec.Out, args, spec.Manifest, st.Call().DecId, types.RoleIn); err != nil {
+		if err := writeValue(spec.Out, args, spec.Manifest, st.Call().DecId, types.RoleIn, spec.EntryFiles); err != nil {
 			return Instance{}, err
 		}
 	}
@@ -169,8 +172,9 @@ func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, []int, error
 
 // writeValue writes a resolved object as a bundle of callable's role params.
 // Its top-level keys are written sorted, as a MarshalerMap encodes them, and
-// nested values keep their encoded order and number lexemes.
-func writeValue(dir string, v json.Marshaler, man types.Manifest, callable, role string) error {
+// nested values keep their encoded order and number lexemes. A file leaf
+// staged names the path the bundle copies it from.
+func writeValue(dir string, v json.Marshaler, man types.Manifest, callable, role string, staged map[string]string) error {
 	raw, err := marshal(v)
 	if err != nil {
 		return err
@@ -184,6 +188,19 @@ func writeValue(dir string, v json.Marshaler, man types.Manifest, callable, role
 	params, err := man.Params(callable, role)
 	if err != nil {
 		return fmt.Errorf("params of %s: %w", callable, err)
+	}
+
+	if len(staged) > 0 {
+		payload, err = man.Table().Apply(params, payload, func(leaf string) (string, error) {
+			if p, ok := staged[leaf]; ok {
+				return p, nil
+			}
+
+			return leaf, nil
+		})
+		if err != nil {
+			return fmt.Errorf("staged entry files of %s: %w", callable, err)
+		}
 	}
 
 	if err := shim.WriteBundle(dir, payload, params, man.Table(), nil); err != nil {

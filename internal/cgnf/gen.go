@@ -80,13 +80,19 @@ func pick(v string, idx []int) string {
 }
 
 // planWiring parses PLAN's records: nodes maps each witness node to its
-// digest, its off flag and its statically disabled fork keys; f<j> are the
+// digest, its off flag and its statically disabled fork keys; entry maps
+// each node and fork of its entry-fed roots to the entry files staged
+// there, and each of those to its file(), which globs no name; f<j> are the
 // forks of entry-fed root j, each [outer key, own ordinal, record, index
 // token].
 func (p *project) planWiring(g *gen) {
 	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"))", p.values(), p.graphMeta(), mroAssets)
 	g.linef("call = PLAN.out.call")
 	g.linef("nodes = PLAN.out.nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }")
+
+	if len(p.readers) > 0 {
+		g.linef("entry = PLAN.out.files.combine(PLAN.out.leaves).map { fl, ll -> [files: fl.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0] + ' ' + f[1]): f[2].tokenize(',')] }, leaves: ll.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)] }] }")
+	}
 
 	for j := range p.entry {
 		g.linef("f%d = PLAN.out.r%d.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); def k = f[0].tokenize('.').collect { t -> t as int }; [k.take(k.size() - 1), k[-1], f[1], f[2]] } }", j, j)

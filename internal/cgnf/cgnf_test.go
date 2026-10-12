@@ -270,19 +270,50 @@ func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 }
 
 // TestEmitRefusesReservedParam: an entry input named like a param the
-// project defines itself is refused.
+// project defines itself, or might, under the mro2nf_ prefix, is refused.
 func TestEmitRefusesReservedParam(t *testing.T) {
-	dir := t.TempDir()
-	mro := filepath.Join(dir, "pipeline.mro")
-	src := "stage S(\n    in  int outdir,\n    out int y,\n    src py \"s\",\n)\n\ncall S(\n    outdir = 1,\n)\n"
+	for _, name := range []string{"outdir", "mro2nf_image"} {
+		dir := t.TempDir()
+		mro := filepath.Join(dir, "pipeline.mro")
+		src := "stage S(\n    in  int " + name + ",\n    out int y,\n    src py \"s\",\n)\n\ncall S(\n    " + name + " = 1,\n)\n"
 
-	if err := os.WriteFile(mro, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
+		if err := os.WriteFile(mro, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		err := Emit(mro, Options{OutDir: t.TempDir(), MroPaths: []string{dir}})
+		if !errors.Is(err, errReservedParam) {
+			t.Errorf("Emit of input %s = %v, want errReservedParam", name, err)
+		}
+	}
+}
+
+// TestEmitStagesEntryFilesIntoTheirReaders: a node whose bindings read an
+// entry file stages, of PLAN's entry files, those listed for its fork of its
+// entry-fed roots; a node that reads none stages none and joins no entry
+// record (entry_filearr: COUNTARR reads reads; diamond_min has no file).
+func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
+	arr := readTree(t, emitFixture(t, "entry_filearr"))["main.nf"]
+
+	for _, want := range []string{
+		"entry = PLAN.out.files.combine(PLAN.out.leaves)",
+		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
+		"N0_COUNTARR(u0.combine(call).combine(entry).map { k, fs, es, d, us, c, ef -> def ids = ef.files['EPA.COUNTARR' + ' ' + ([].join('.') ?: '-')] ?: [];",
+	} {
+		if !strings.Contains(arr, want) {
+			t.Errorf("entry_filearr's main.nf lacks %q:\n%s", want, arr)
+		}
 	}
 
-	err := Emit(mro, Options{OutDir: t.TempDir(), MroPaths: []string{dir}})
-	if !errors.Is(err, errReservedParam) {
-		t.Errorf("Emit = %v, want errReservedParam", err)
+	plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
+	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "k, fs, es + us, [], []]") {
+		t.Errorf("diamond_min reads no entry file, yet stages some:\n%s", plain)
+	}
+
+	for _, want := range []string{"val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')", "-leaves ${shq(leaves.join(','))}"} {
+		if strings.Count(stageModule, want) < 1 {
+			t.Errorf("stage.nf lacks %q", want)
+		}
 	}
 }
 
