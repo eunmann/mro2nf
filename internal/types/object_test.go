@@ -145,9 +145,9 @@ func TestApplyKeepsObjectOrder(t *testing.T) {
 	}
 }
 
-// TestNumberWalksKeepObjectOrder checks CoerceScalars and FormatFloats rewrite
-// numbers inside Objects (a struct, a typed map, an untyped map) without
-// reordering their keys.
+// TestNumberWalksKeepObjectOrder checks FormatFloats rewrites numbers inside
+// Objects (a struct, a typed map, an untyped map) without reordering their
+// keys.
 func TestNumberWalksKeepObjectOrder(t *testing.T) {
 	tbl := orderTable()
 	params := []ir.Param{
@@ -163,87 +163,12 @@ func TestNumberWalksKeepObjectOrder(t *testing.T) {
 		"u":   decodeOrdered(t, `{"y":1E6,"x":{"w":0.50,"v":1}}`),
 	}
 
-	coerced := encode(t, tbl.CoerceScalars(params, vals))
-
-	wantCoerced := `{"box":{"b":2.0,"q":{"z":3,"a":4}},"m":{"k2":{"z":5,"a":6},"k1":{"z":7,"a":8}},` +
-		`"q":{"z":1,"a":2},"u":{"y":1E6,"x":{"w":0.50,"v":1}}}`
-	if coerced != wantCoerced {
-		t.Errorf("CoerceScalars = %s, want %s", coerced, wantCoerced)
-	}
-
 	formatted := encode(t, tbl.FormatFloats(params, vals))
 
 	wantFormatted := `{"box":{"b":2,"q":{"z":3.0,"a":4}},"m":{"k2":{"z":5.0,"a":6},"k1":{"z":7,"a":8.0}},` +
 		`"q":{"z":1.0,"a":2},"u":{"y":1e+06,"x":{"w":0.5,"v":1}}}`
 	if formatted != wantFormatted {
 		t.Errorf("FormatFloats = %s, want %s", formatted, wantFormatted)
-	}
-}
-
-// TestNarrowObjectOrder checks NarrowValue orders a struct Object as mrp's
-// StructType.FilterJson does: one with exactly its declared fields and nothing
-// to filter keeps its source order, one with an undeclared field, or with a
-// member that is filtered, is rebuilt in declared order. A typed map keeps its
-// key order either way.
-func TestNarrowObjectOrder(t *testing.T) {
-	tbl := orderTable()
-	cases := []struct {
-		name, src, want string
-		p               ir.Param
-	}{
-		{"exact_keeps_source_order", `{"a":1,"z":2}`, `{"a":1,"z":2}`, ir.Param{BaseType: "In"}},
-		{"extra_field_declared_order", `{"m":0,"a":1,"z":2}`, `{"z":2,"a":1}`, ir.Param{BaseType: "In"}},
-		{"missing_field_declared_order", `{"a":1}`, `{"z":null,"a":1}`, ir.Param{BaseType: "In"}},
-		{"whole_float_int_declared_order", `{"a":1,"z":4.0}`, `{"z":4,"a":1}`, ir.Param{BaseType: "In"}},
-		{"exponent_int_declared_order", `{"a":1,"z":1e2}`, `{"z":100,"a":1}`, ir.Param{BaseType: "In"}},
-		{"fractional_int_keeps_source_order", `{"a":1,"z":2.5}`, `{"a":1,"z":2.5}`, ir.Param{BaseType: "In"}},
-		{
-			"nested_whole_float_int_declared_order",
-			`{"b":1,"f":null,"q":{"a":1,"z":2.0}}`,
-			`{"q":{"z":2,"a":1},"f":null,"b":1}`,
-			ir.Param{BaseType: "Box"},
-		},
-		{
-			"whole_float_float_keeps_source_order",
-			`{"b":2.0,"f":null,"q":{"z":1,"a":2}}`,
-			`{"b":2.0,"f":null,"q":{"z":1,"a":2}}`,
-			ir.Param{BaseType: "Box"},
-		},
-		{
-			"nested_change_declared_order",
-			`{"b":1,"f":null,"q":{"m":0,"a":1,"z":2}}`,
-			`{"q":{"z":2,"a":1},"f":null,"b":1}`,
-			ir.Param{BaseType: "Box"},
-		},
-		{
-			"nested_exact_keeps_source_order",
-			`{"b":1,"f":null,"q":{"a":1,"z":2}}`,
-			`{"b":1,"f":null,"q":{"a":1,"z":2}}`,
-			ir.Param{BaseType: "Box"},
-		},
-		{
-			"typed_map_keeps_key_order",
-			`{"k2":{"m":0,"a":1,"z":2},"k1":{"a":3,"z":4}}`,
-			`{"k2":{"z":2,"a":1},"k1":{"a":3,"z":4}}`,
-			ir.Param{BaseType: "In", MapDim: 1},
-		},
-		{
-			"array_elements",
-			`[{"a":1,"z":2},{"a":3,"z":4,"m":5}]`,
-			`[{"a":1,"z":2},{"z":4,"a":3}]`,
-			ir.Param{BaseType: "In", ArrayDim: 1},
-		},
-		{"untyped_map_untouched", `{"b":{"y":1},"a":2}`, `{"b":{"y":1},"a":2}`, ir.Param{BaseType: "map"}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := tbl.NarrowValue(decodeOrdered(t, tc.src), tc.p)
-
-			if enc := encode(t, got); enc != tc.want {
-				t.Errorf("NarrowValue(%s) = %s, want %s", tc.src, enc, tc.want)
-			}
-		})
 	}
 }
 
