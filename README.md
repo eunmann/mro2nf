@@ -116,7 +116,7 @@ chooses it:
 A container profile launched without `--mro2nf_image` fails before any task
 runs. Entry file values are staged into the tasks that read them (`s3://`
 URIs on every profile); see `docs/TRANSPILER.md` §8 and §9, and
-`docs/LIVE_AWS_TEST.md` for the AWS runs.
+`deploy/awsbatch-cdk/README.md` for the AWS infrastructure.
 
 ### Container image
 
