@@ -19,7 +19,7 @@ import (
 // build, no task is: Nextflow keys a task on its script text and inputs, not
 // on the mre binary, so a task cached by an older build would otherwise hand
 // on outputs shaped by that build's mre (fork element dirs without a record
-// the new mre args reads). The fixtures cover a map call's forks and the
+// the new mre stage reads). The fixtures cover a map call's forks and the
 // split triad.
 func TestResumeKeysOnTheBuild(t *testing.T) {
 	t.Parallel()

@@ -108,8 +108,8 @@ too.
 | `martian.alarm` | ✅ each job writes every `_alarm` line to its task's stderr, where mrp prints `Alerts for <stage>:` as the stage completes. No run-level `Alerts:` summary on the Nextflow console | unit `TestAlarmsReachStderr` |
 | `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` |
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out`, `dir_hidden` |
-| stage output validation (mrp `verifyOutput`) | ✅ `mre post` checks a stage's final outs with Martian's `ValidateOutputs` and fails the task before any consumer binds them | e2e `TestInvalidOutputFailsLikeMrp`, `TestMrpDiffFailureParity` (`missing_struct_key`, `bad_out_type`); unit `TestPostRejectsInvalidOuts` |
-| ASSERT vs retryable-error classification | ✅ `mre run` exits 42 for an `_assert`, 75 for a failure a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` matches, and 1 for any other; the config retries only 75 and a task's signal exits | unit `TestOutcomes`, `TestExitCode`; e2e `TestAssertTerminatesWithoutRetry`, `TestMrpDiffFailureParity` (`assert_min`, `assert_split`, `assert_join`, `stage_raise`) |
+| stage output validation (mrp `verifyOutput`) | ✅ the post step of `mre stage` checks a stage's final outs with Martian's `ValidateOutputs` and fails the task before any consumer binds them | e2e `TestInvalidOutputFailsLikeMrp`, `TestMrpDiffFailureParity` (`missing_struct_key`, `bad_out_type`); unit `TestPostRejectsInvalidOuts` |
+| ASSERT vs retryable-error classification | ✅ `mre stage` exits 42 when its job writes an `_assert`, 75 for a failure a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` matches, and 1 for any other; the config retries only 75 and a task's signal exits | unit `TestOutcomes`, `TestExitCode`; e2e `TestAssertTerminatesWithoutRetry`, `TestMrpDiffFailureParity` (`assert_min`, `assert_split`, `assert_join`, `stage_raise`) |
 | OOM escalation | ✅ none, as in `mrp` without `--auto-adjust-memory`, which has no `mro2nf` counterpart: a stage `--mro2nf_monitor true` kills over its request fails the run, and a retried task, such as one the executor killed by a signal, requests the memory and cpus of its first attempt, Martian's resolution of its job's request (#506); the stage sees that request in `_jobinfo` and `__mem_gb`. A `-c` config may set `memory = { … * task.attempt }` to escalate (`RUNNING.md`, Retries) | unit `TestEmitRetriesWhatMrpRetries`, `TestOutcomes`; e2e `TestRetryRequestsTheSameResources`, `TestMonitorMemoryKillFailsLikeMrp` (`flaky_retry`) |
 | thread-limit env vars (mrp's `thread_envs`) | ✅ every job runs with mrp's thread env vars set to its threads rounded up, over any inherited value (`internal/job` `threadEnvs`) | unit `TestThreadEnvs` |
 | `--monitor` memory enforcement | ✅ with `nextflow run main.nf --mro2nf_monitor true`: `_jobinfo`'s `monitor_flag`, which `mrjob` enforces as under mrp | unit `TestMonitorFlag` |
@@ -184,9 +184,10 @@ fixture.
   only the per-instance resolution, fork expansion and disable test Martian
   does not export (`docs/TRANSPILER.md` §6).
 - Former `mrp`-runtime-only items:
-  - **content-based retry (ASSERT vs retryable)** — `mre run` exits 42 for an
-    `_assert`, 75 for a failure `mrp`'s `retry_on` patterns name transient,
-    and 1 otherwise; the config retries only 75 and a task's signal exits, as
+  - **content-based retry (ASSERT vs retryable)** — `mre stage` exits 42 when
+    its job writes an `_assert`, 75 for a failure `mrp`'s `retry_on` patterns
+    name transient, and 1 otherwise; the config retries only 75 and a task's
+    signal exits, as
     `mrp` retries only transient failures (#299).
   - **`--monitor` memory enforcement** — `--mro2nf_monitor true` sets `_jobinfo`'s
     `monitor_flag`, which `mrjob` enforces as under `mrp`.

@@ -1,9 +1,11 @@
 // Command mre is the Martian runtime executor the generated Nextflow tasks
-// call: it compiles the run's call graph (plan), builds a stage instance's
-// _args (args), runs one phase of the stage as mrp runs its job (run), and
-// stamps and splits its outs (post); a stage task runs those steps its
-// phase has in one call (stage), and the OUTS task resolves and publishes
-// the pipeline outs (outs).
+// call: PLAN compiles the run's call graph (plan), a stage task runs the
+// steps its phase has in one call (stage), and the OUTS task resolves and
+// publishes the pipeline outs (outs). No generated task calls args, run or
+// post, each one of stage's steps: building a stage instance's _args,
+// running one phase of the stage as mrp runs its job, and stamping and
+// splitting its outs. They remain for the call-graph replay against mrp
+// and the tests that pin stage to them, and for running a step by hand.
 package main
 
 import (

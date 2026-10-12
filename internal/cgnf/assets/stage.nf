@@ -595,7 +595,7 @@ workflow INPUT {
 
 // INPUT_ENTRY is INPUT staging the entry files PLAN lists for the
 // instance's fork of its node's entry-fed roots, at positions at, and their
-// indices, which mre args maps back to the run's values.
+// indices, which mre stage maps back to the run's values.
 workflow INPUT_ENTRY {
     take:
     inst
