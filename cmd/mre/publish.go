@@ -68,10 +68,9 @@ func runPublishLayout(_ context.Context, argv []string) error {
 		return err
 	}
 
-	// Head-node publish (POSIX targets): materialise the outs/ tree from the
-	// staged leaves so a single publishDir directive on LAYOUT copies it into the
-	// results tree — no per-leaf PUBLISH_LEAF task. Off (both flags empty) on
-	// object-store backends, which keep the parallel fan-out.
+	// OUTS materialises the outs/ tree in its own task, which its publishDir
+	// copies into the results tree; without -outs only the layout files are
+	// written.
 	if *outsDir != "" {
 		return materializeOuts(*leavesDir, filepath.Join(*dir, *outsDir), pub.layout)
 	}
@@ -226,8 +225,8 @@ func unescape(name string, value any) (any, error) {
 }
 
 // publisher computes a pipeline's mrp-style outs/ layout from the raw sidecar
-// markers WITHOUT copying files, so a distributed fan-out can publish each leaf
-// into place (no single-node funnel — #12).
+// markers without copying files; materializeOuts then links the staged leaves
+// into that layout.
 type publisher struct {
 	structs map[string]*ir.StructType
 	tbl     *types.Table
