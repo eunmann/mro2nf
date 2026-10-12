@@ -63,8 +63,6 @@ func TestChunksDirRoundTrip(t *testing.T) {
 	}
 }
 
-// TestChunksDirStagedAsLinks: a join task stages the split's chunk dirs as
-// links, as Nextflow stages a path input, and reads every chunk through them.
 // TestWriteResources: the resources table holds, per chunk and for the join,
 // the cpus, memory and special its job's _jobinfo records: a def's request
 // over the stage's, a fractional or negative count at its rounded-up
@@ -101,6 +99,8 @@ func TestWriteResources(t *testing.T) {
 	}
 }
 
+// TestChunksDirStagedAsLinks: a join task stages the split's chunk dirs as
+// links, as Nextflow stages a path input, and reads every chunk through them.
 func TestChunksDirStagedAsLinks(t *testing.T) {
 	defs := &core.StageDefs{JoinDef: &core.JobResources{}}
 	for i := range 2 {
