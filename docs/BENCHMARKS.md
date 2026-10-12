@@ -114,9 +114,9 @@ rule targets:
   fails the gate.
 - **`split`** — a split stage whose large stage-level file arg (`payload`,
   written by a producer stage, `MKPAY`) reaches every chunk's main in the
-  split's args bundle, even though `main` never reads it: O(N) redundant
-  staging over an N-way split (headroom for consumer-aware split staging,
-  #15). Run at two chunk counts (`pipeline_c4.mro`, `pipeline_c16.mro`) with
+  split's args bundle, even though `main` never reads it: O(N) stagings over
+  an N-way split, intrinsic as a chunk's `main` receives every stage arg, as
+  under `mrp`. Run at two chunk counts (`pipeline_c4.mro`, `pipeline_c16.mro`) with
   the same width-flat plumbing requirement.
 - **`mapsplit`** — the Cell Ranger per-sample shape: a map call over a
   sub-pipeline whose body is a split stage writing one file per sample
@@ -215,8 +215,7 @@ and compare against these shapes.
 
 `bench/baseline.json` is the machine source of truth for the current numbers —
 one entry per lane (`chain`, `forks_w4`, `split_c16`, `mapsplit_w8`, …). Every
-lane runs mrp's jobs plus the two plumbing tasks, PLAN and OUTS. `chain`'s
-transfer multiplier is ×6.0, and `split`'s grows with the chunk count (the
-payload staged to every chunk), the acknowledged floor pending consumer-aware
-split staging (#15). Further drops re-record via `BENCH_UPDATE=1 make bench` so the gate
+lane runs mrp's jobs plus the two plumbing tasks, PLAN and OUTS. `split`'s
+transfer multiplier grows with the chunk count, as every chunk stages the
+payload. Further drops re-record via `BENCH_UPDATE=1 make bench` so the gate
 ratchets downward.

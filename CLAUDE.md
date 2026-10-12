@@ -31,7 +31,8 @@ split triad (split → per-chunk main → join, per fork) is the only intrinsic
 fan-out; it matches Martian's own jobs 1:1. When judging a change, measure
 tasks and per-instance work against `mrp`'s job count at two widths — `make
 bench` does exactly this: the `bench/` fixtures (`chain`, `forks`, `split`,
-`mapsplit`, `mapdisabled`, `mapnested`) each run at two widths (`chain` at one),
+`mapsplit`, `mapdisabled`, `mapnested`, `zip`, `zipgated`) each run at two widths
+(`chain` at one),
 and the gate fails if the plumbing task count differs between widths or a
 lane's stage tasks differ from `mrp`'s job count. Constant overhead is
 acceptable, scaling overhead is a bug.
