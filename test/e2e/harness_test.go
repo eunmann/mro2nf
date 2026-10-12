@@ -231,18 +231,8 @@ func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
 	return proj
 }
 
-// skipUnderV2 skips a leg that exercises an emission mode the call-graph
-// emitter does not have.
-func skipUnderV2(t *testing.T, mode string) {
-	t.Helper()
-
-	if v2Emitter() {
-		t.Skipf("-emitter=v2 has one emission mode; %s is the old emitter's", mode)
-	}
-}
-
-// transpileRefused are the fixtures mro2nf must refuse to transpile under
-// every flag set, each with the reason: mrp refuses them before any stage runs,
+// transpileRefused are the fixtures mro2nf must refuse to transpile, each
+// with the reason: mrp refuses them before any stage runs,
 // so no project may exist to run. Each is an mrpOutcomeCases entry, and
 // TestNextflowLint requires the refusal in place of a lint verdict.
 var transpileRefused = map[string]string{

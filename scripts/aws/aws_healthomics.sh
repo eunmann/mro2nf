@@ -13,9 +13,9 @@ set -euo pipefail
 #   Prereqs: `npx cdk deploy` in a HealthOmics region; `aws sso login`; docker;
 #            a local Martian build (MARTIAN_BIN); a linux/amd64 mre; zip.
 #
-#   AWS_PROFILE=default ./test/e2e/aws_healthomics.sh                # default subset
-#   AWS_PROFILE=default ./test/e2e/aws_healthomics.sh file_min map_file
-#   NO_BUILD=1 ./test/e2e/aws_healthomics.sh file_min                # reuse images
+#   AWS_PROFILE=default ./scripts/aws/aws_healthomics.sh                # default subset
+#   AWS_PROFILE=default ./scripts/aws/aws_healthomics.sh file_min map_file
+#   NO_BUILD=1 ./scripts/aws/aws_healthomics.sh file_min                # reuse images
 #
 # Env: AWS_PROFILE (default), STACK (Mro2nfStack), MARTIAN_BIN, NO_BUILD,
 #      POLL_SECS (30), MAX_WAIT_SECS (2400), KEEP_RESOURCES (1 = skip teardown).
@@ -173,7 +173,7 @@ for fx in "${FIXTURES[@]}"; do
     if [ -z "$key" ] || ! aws s3 cp "s3://${BUCKET}/${key}" "$mt/nf_outs.json" >/dev/null 2>&1; then
         echo "FAIL[$fx]: no exported pipeline_outs.json"; rc=1; rm -rf "$mt"; continue
     fi
-    if python3 "$ROOT/test/e2e/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" >/dev/null 2>&1; then
+    if python3 "$ROOT/scripts/aws/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" >/dev/null 2>&1; then
         echo "OK[$fx]: AWS HealthOmics pipeline_outs matches mrp"; VERIFIED[$fx]=1
     else
         echo "FAIL[$fx]: pipeline_outs mismatch"; rc=1

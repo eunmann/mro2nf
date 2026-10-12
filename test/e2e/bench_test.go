@@ -20,9 +20,8 @@ import (
 	"time"
 )
 
-// benchLane is one benchmark run: a fixture invocation (dir + entry .mro)
-// transpiled in either default or -native mode, measured under its own
-// baseline key.
+// benchLane is one benchmark run: a fixture invocation (dir + entry .mro),
+// measured under its own baseline key.
 type benchLane struct {
 	key       string // metrics name and bench/baseline.json key
 	dir       string // fixture dir under bench/
@@ -33,24 +32,17 @@ type benchLane struct {
 	// the lane's stage tasks must equal (TestMrpDiffBenchJobs checks the
 	// number against mrp itself).
 	mrpJobs int
-	// knownScaling is the open issue whose per-fork plumbing makes this
-	// lane's plumbing grow with width; 0 when the lane must be width-flat.
+	// knownScaling is the open issue whose plumbing makes this lane's
+	// plumbing grow with width; 0 when the lane must be width-flat.
 	knownScaling int
-	native       bool // transpile with -native
 }
 
-// issuePerForkPlumbing tracks the per-fork BIND_K/MERGE_K/DISABLE_K tasks a
-// map over a sub-pipeline emits (#255).
-const issuePerForkPlumbing = 255
-
-// benchBaseLanes returns each fixture invocation once, in default mode. Every
-// fixture but chain runs at two widths so bench_report.py can assert the
-// plumbing task count is IDENTICAL at both — the CLAUDE.md overhead rule that
-// orchestration cost must not scale with fork width or chunk count — or, for
-// a lane marked knownScaling, that it has not got worse.
-func benchBaseLanes() []benchLane {
-	const known = issuePerForkPlumbing
-
+// benchLanes returns each fixture invocation once. Every fixture but chain
+// runs at two widths so bench_report.py can assert the plumbing task count is
+// IDENTICAL at both — the CLAUDE.md overhead rule that orchestration cost
+// must not scale with fork width or chunk count — or, for a lane marked
+// knownScaling, that it has not got worse.
+func benchLanes() []benchLane {
 	return []benchLane{
 		{key: "chain", dir: "chain", mro: "pipeline.mro", probe: "MRE_BENCH_CHAIN_PROBE", producers: 1, mrpJobs: 5},
 		{key: "forks_w4", dir: "forks", mro: "pipeline_w4.mro", probe: "MRE_BENCH_FORKS_PROBE", producers: 1, mrpJobs: 1 + 4},
@@ -59,45 +51,15 @@ func benchBaseLanes() []benchLane {
 		{key: "split_c4", dir: "split", mro: "pipeline_c4.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1, mrpJobs: 1 + 4 + 2},
 		{key: "split_c16", dir: "split", mro: "pipeline_c16.mro", probe: "MRE_BENCH_SPLIT_PROBE", producers: 1, mrpJobs: 1 + 16 + 2},
 		// N samples, each a split of 2 chunks: split + 2 mains + join per sample.
-		{key: "mapsplit_w4", dir: "mapsplit", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPSPLIT_PROBE", producers: 4, mrpJobs: 4 * 4, knownScaling: known},
-		{key: "mapsplit_w8", dir: "mapsplit", mro: "pipeline_w8.mro", probe: "MRE_BENCH_MAPSPLIT_PROBE", producers: 8, mrpJobs: 8 * 4, knownScaling: known},
+		{key: "mapsplit_w4", dir: "mapsplit", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPSPLIT_PROBE", producers: 4, mrpJobs: 4 * 4},
+		{key: "mapsplit_w8", dir: "mapsplit", mro: "pipeline_w8.mro", probe: "MRE_BENCH_MAPSPLIT_PROBE", producers: 8, mrpJobs: 8 * 4},
 		// The disabled USE runs no job, so mrp runs only each fork's MKFILE.
-		{key: "mapdisabled_w4", dir: "mapdisabled", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPDISABLED_PROBE", producers: 4, mrpJobs: 4, knownScaling: known},
-		{key: "mapdisabled_w8", dir: "mapdisabled", mro: "pipeline_w8.mro", probe: "MRE_BENCH_MAPDISABLED_PROBE", producers: 8, mrpJobs: 8, knownScaling: known},
+		{key: "mapdisabled_w4", dir: "mapdisabled", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPDISABLED_PROBE", producers: 4, mrpJobs: 4},
+		{key: "mapdisabled_w8", dir: "mapdisabled", mro: "pipeline_w8.mro", probe: "MRE_BENCH_MAPDISABLED_PROBE", producers: 8, mrpJobs: 8},
 		// W samples x W lanes leaves, one CELL job each.
-		{key: "mapnested_w2", dir: "mapnested", mro: "pipeline_w2.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 2 * 2, mrpJobs: 2 * 2, knownScaling: known},
-		{key: "mapnested_w4", dir: "mapnested", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 4 * 4, mrpJobs: 4 * 4, knownScaling: known},
+		{key: "mapnested_w2", dir: "mapnested", mro: "pipeline_w2.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 2 * 2, mrpJobs: 2 * 2},
+		{key: "mapnested_w4", dir: "mapnested", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 4 * 4, mrpJobs: 4 * 4},
 	}
-}
-
-// benchLanes returns every benchmark lane: each base lane in default mode and
-// again under -native (distinct `_native` baseline keys). The forks×widths×
-// native lanes are the ones that prove the -native O(1) element scatter stays
-// O(1).
-func benchLanes() []benchLane {
-	base := benchBaseLanes()
-
-	// The call-graph emitter has one emission mode and no per-fork
-	// plumbing: every lane must be width-flat.
-	if v2Emitter() {
-		for i := range base {
-			base[i].knownScaling = 0
-		}
-
-		return base
-	}
-
-	lanes := make([]benchLane, 0, 2*len(base))
-
-	for _, l := range base {
-		lanes = append(lanes, l)
-
-		l.key += "_native"
-		l.native = true
-		lanes = append(lanes, l)
-	}
-
-	return lanes
 }
 
 // TestBench is the data-movement and orchestration-overhead benchmark gate
@@ -235,18 +197,13 @@ func runLane(t *testing.T, l benchLane, r laneRun) ([]byte, string) {
 	return out.Bytes(), proj
 }
 
-// transpileLane transpiles the lane's mro in r.dir, with -native for a native
-// lane and r.mre as the mre the project calls.
+// transpileLane transpiles the lane's mro in r.dir, with r.mre as the mre the
+// project calls.
 func transpileLane(t *testing.T, l benchLane, r laneRun) string {
 	t.Helper()
 
-	var flags []string
-	if l.native {
-		flags = append(flags, "-native")
-	}
-
 	if r.mre == "" {
-		return transpileMRO(t, r.dir, l.mro, flags...)
+		return transpileMRO(t, r.dir, l.mro)
 	}
 
 	buildBinaries(t)
@@ -255,7 +212,7 @@ func transpileLane(t *testing.T, l benchLane, r laneRun) string {
 	tools.mre = r.mre
 
 	proj := t.TempDir()
-	if err := transpileInto(tools, r.dir, l.mro, proj, flags...); err != nil {
+	if err := transpileInto(tools, r.dir, l.mro, proj); err != nil {
 		t.Fatalf("transpile %s: %v", l.key, err)
 	}
 
@@ -318,7 +275,7 @@ func TestMrpDiffBenchJobs(t *testing.T) {
 
 	bin := martianBin(t)
 
-	for _, l := range benchBaseLanes() {
+	for _, l := range benchLanes() {
 		t.Run(l.key, func(t *testing.T) {
 			t.Parallel()
 			shardSkip(t)
@@ -460,13 +417,8 @@ func TestAbsLocalWorkdir(t *testing.T) {
 func runBenchReport(t *testing.T, metrics string) {
 	t.Helper()
 
-	baseline := "baseline.json"
-	if v2Emitter() {
-		baseline = "baseline_v2.json"
-	}
-
 	report := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_report.py"),
-		metrics, filepath.Join(root, "bench", baseline))
+		metrics, filepath.Join(root, "bench", "baseline.json"))
 
 	out, err := report.CombinedOutput()
 

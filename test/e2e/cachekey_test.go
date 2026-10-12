@@ -14,10 +14,9 @@ import (
 // is fully cached, but once the project is re-transpiled by another mro2nf
 // build, no task is: Nextflow keys a task on its script text and inputs, not
 // on the mre binary, so a task cached by an older build would otherwise hand
-// on outputs shaped by that build's mre (a FORK sidecar without the field the
-// new merge reads). The fixtures cover the FORK/MERGE fan-out and the split
-// triad. A -native re-transpile is left out: it re-bakes entry_resolved/ with
-// a fresh mtime, which re-runs every task whatever the build.
+// on outputs shaped by that build's mre (fork element dirs without a record
+// the new mre args reads). The fixtures cover a map call's forks and the
+// split triad.
 func TestResumeKeysOnTheBuild(t *testing.T) {
 	t.Parallel()
 

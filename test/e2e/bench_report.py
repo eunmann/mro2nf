@@ -9,7 +9,7 @@ then applies three independent gates:
     reintroduced per-hop re-transfer, reintroduced data-plane bookkeeping, or
     extra task executions. Equal is fine; the target is monotone improvement.
   * scaling gate -- lanes that run one fixture at two widths (`<base>_wN` /
-    `<base>_cN`, optionally `_native`) must report an IDENTICAL plumbing task
+    `<base>_cN`) must report an IDENTICAL plumbing task
     count at every width: constant orchestration overhead is acceptable,
     overhead that scales with fork width or chunk count is a bug (the CLAUDE.md
     overhead rule). This gate compares the current run against itself, so it
@@ -38,15 +38,14 @@ import sys
 GATED = ("refs", "plumbing_tasks", "tasks")
 
 # A lane name of one fixture run at a given width: <base>_w<N> (fork width) or
-# <base>_c<N> (chunk count), with an optional _native suffix. All widths of one
-# (base, mode) pair form a scaling group.
-_WIDTH = re.compile(r"^(?P<base>.+)_[wc]\d+(?P<native>_native)?$")
+# <base>_c<N> (chunk count). All widths of one base form a scaling group.
+_WIDTH = re.compile(r"^(?P<base>.+)_[wc]\d+$")
 
 # Lanes that intentionally run at a single width and therefore carry no
 # scaling group. Every lane must either match _WIDTH or be listed here:
 # anything else is a naming mistake that would silently escape the scaling
 # gate, so check_scaling fails it loudly instead.
-SINGLE_WIDTH_LANES = frozenset({"chain", "chain_native"})
+SINGLE_WIDTH_LANES = frozenset({"chain"})
 
 
 def load_jsonl(path):
@@ -82,14 +81,14 @@ def scaling_group(name):
     m = _WIDTH.match(name)
     if not m:
         return None
-    return m.group("base") + (m.group("native") or "")
+    return m.group("base")
 
 
 def check_scaling(cur):
     """Fail (rc 1) if any width group's plumbing task count varies with width.
 
     Also fails on the two ways a lane could silently escape this gate: a lane
-    name that neither parses as <base>_[wc]<N>[_native] nor is an allow-listed
+    name that neither parses as <base>_[wc]<N> nor is an allow-listed
     single-width lane (a typo'd lane would otherwise skip the check), and a
     width group left with fewer than two widths (one width proves nothing
     about flatness).
@@ -103,7 +102,7 @@ def check_scaling(cur):
         elif name not in SINGLE_WIDTH_LANES:
             print(
                 f"SCALING[{name}]: unrecognized bench lane naming — neither "
-                f"<base>_[wc]<N>[_native] nor an allow-listed single-width lane "
+                f"<base>_[wc]<N> nor an allow-listed single-width lane "
                 f"({', '.join(sorted(SINGLE_WIDTH_LANES))}); a mis-named lane "
                 f"would silently skip the width-flatness gate"
             )

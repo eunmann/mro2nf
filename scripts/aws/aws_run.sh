@@ -10,10 +10,10 @@ set -euo pipefail
 #   Prereqs: `npx cdk deploy` done; `aws sso login --profile $AWS_PROFILE`; docker;
 #            nextflow; a local Martian build (MARTIAN_BIN); a linux/amd64 mre.
 #
-#   AWS_PROFILE=default ./test/e2e/aws_run.sh                 # default fixture set
-#   AWS_PROFILE=default ./test/e2e/aws_run.sh file_min map_file
-#   NO_BUILD=1 ./test/e2e/aws_run.sh file_min                 # reuse pushed images
-#   RUN_PARALLEL=8 ./test/e2e/aws_run.sh ...                  # concurrency cap
+#   AWS_PROFILE=default ./scripts/aws/aws_run.sh                 # default fixture set
+#   AWS_PROFILE=default ./scripts/aws/aws_run.sh file_min map_file
+#   NO_BUILD=1 ./scripts/aws/aws_run.sh file_min                 # reuse pushed images
+#   RUN_PARALLEL=8 ./scripts/aws/aws_run.sh ...                  # concurrency cap
 #
 # Env: AWS_PROFILE (default: default), STACK (Mro2nfStack), MARTIAN_BIN
 #      (~/workdir/martian/bin), NO_BUILD, RUN_PARALLEL (6).
@@ -134,13 +134,13 @@ for fx in "${FIXTURES[@]}"; do
     if ! aws s3 cp "s3://${BUCKET}/results/${fx}/pipeline_outs.json" "$mt/nf_outs.json" >/dev/null 2>&1; then
         echo "FAIL[$fx]: no S3 pipeline_outs.json (see $WORK/$fx.run.log)"; rc=1; rm -rf "$mt"; continue
     fi
-    if python3 "$ROOT/test/e2e/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" >/dev/null 2>&1; then
+    if python3 "$ROOT/scripts/aws/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" >/dev/null 2>&1; then
         echo "OK[$fx]: AWS Batch pipeline_outs matches mrp"
     else
         echo "FAIL[$fx]: pipeline_outs mismatch (run log: $WORK/$fx.run.log)"
         # normcmp exits nonzero here by construction; without the guard,
         # pipefail + set -e would abort the loop on the first mismatch.
-        python3 "$ROOT/test/e2e/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" | sed 's/^/    /' || true
+        python3 "$ROOT/scripts/aws/normcmp.py" "$mrp_json" "$mt/mrp/outs" "$mt/nf_outs.json" "$fx" | sed 's/^/    /' || true
         rc=1
     fi
     rm -rf "$mt"

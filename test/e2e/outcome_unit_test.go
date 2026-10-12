@@ -242,7 +242,7 @@ func TestMrpOutcomeCaseValidate(t *testing.T) {
 // scoped: outside its fixtures the retries fail the case, and on stage_raise a
 // run with no retried task fails it as an entry that excuses nothing.
 func TestOutcomeRulesNeedTheirEntries(t *testing.T) {
-	attempts := []string{"BUILD_ENTRY_ARGS", "SR:STAGE_2_SR__RAISE", "SR:STAGE_2_SR__RAISE", "SR:STAGE_2_SR__RAISE"}
+	attempts := []string{"PLAN", "N0_RAISE (SR.RAISE)", "N0_RAISE (SR.RAISE)", "N0_RAISE (SR.RAISE)"}
 	allow := mustAllowlist(t)
 
 	if got := outcomeRuleReports(allow, "stage_raise", attempts); len(got) != 0 {
@@ -256,9 +256,9 @@ func TestOutcomeRulesNeedTheirEntries(t *testing.T) {
 		attempts []string
 		want     string
 	}{
-		{"retry_entry_removed", allow.Without("retried-stage-errors"), "stage_raise", attempts, "attempted SR:STAGE_2_SR__RAISE more than once"},
+		{"retry_entry_removed", allow.Without("retried-stage-errors"), "stage_raise", attempts, "attempted N0_RAISE (SR.RAISE) more than once"},
 		{"stage_entry_removed", allow.Without("failure-report-details"), "stage_raise", attempts, "reads only each failure's stage and kind"},
-		{"retry_out_of_scope", allow, "assert_min", attempts, "attempted SR:STAGE_2_SR__RAISE more than once"},
+		{"retry_out_of_scope", allow, "assert_min", attempts, "attempted N0_RAISE (SR.RAISE) more than once"},
 		{"retry_excuses_nothing", allow, "stage_raise", attempts[:2], "retried-stage-errors excuses nothing in stage_raise"},
 	}
 

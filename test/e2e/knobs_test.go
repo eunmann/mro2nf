@@ -3,13 +3,9 @@
 package e2e
 
 import (
-	"errors"
-	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -20,49 +16,22 @@ import (
 // -resume must execute ZERO new tasks (everything cached). A cache-key
 // instability — e.g. a timestamp leaking into a staged asset, or a gather task
 // whose input order is completion order — would otherwise ship silently and
-// destroy resumability on long runs. The table pins the gather shapes that
-// carry order countermeasures (#123): the -native element scatter, the keyed
-// split triad's JOIN_K, the keyed nested-map MERGE_K, the non-keyed split
-// triad's JOIN (plain + fused), and the default-mode mapped call's MERGE.
-// These runtime cases are probabilistic guards —
-// an unsorted gather only re-executes when completion order happens to churn;
-// the emit-side text pins are the deterministic ones. (Port of the -resume
-// half of runtime_knobs.sh.)
+// destroy resumability on long runs. The fixtures pin the gather shapes: a
+// split triad's join of its chunk outs, a map call's gather of its forks, a
+// split stage under a map call and a map call over a sub-pipeline holding
+// a split.
+// These runtime cases are probabilistic guards: an unsorted gather only
+// re-executes when completion order happens to churn.
 func TestResumeCachesEverything(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java", "python3")
 
-	cases := []struct {
-		name    string
-		fixture string
-		flags   []string
-	}{
-		{"diamond_min", "diamond_min", nil},
-		// Default-mode non-keyed split triad: a >=2-chunk split whose JOIN
-		// gathers the chunk outs sorted by name (toSortedList, not collect()).
-		{"split_test", "split_test", nil},
-		// Default-mode mapped call: FORK fan-out whose MERGE gathers the
-		// per-fork outs sorted by name (off -native, MERGE never folds away).
-		{"map_fork", "map_fork", nil},
-		// The -native shapes whose gathers carry the -resume cache-key
-		// countermeasures (#123): the O(1) element scatter (toSortedList over
-		// bundle names), the keyed split triad (sorted JOIN_K chunk outs), and
-		// the keyed nested map (_KS scatter + sorted MERGE_K gather).
-		{"native_fork_min", "fork_min", []string{"-native"}},
-		{"native_map_split", "map_split", []string{"-native"}},
-		{"native_map_pipe_nested", "map_pipe_nested", []string{"-native"}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, fixture := range []string{"diamond_min", "split_test", "map_fork", "fork_min", "map_split", "map_pipe_split"} {
+		t.Run(fixture, func(t *testing.T) {
 			t.Parallel()
 
-			if slices.Contains(tc.flags, "-native") {
-				skipUnderV2(t, "-native")
-			}
-
-			proj := transpile(t, tc.fixture, tc.flags...)
+			proj := transpile(t, fixture)
 
 			if err := runNextflow(t, proj); err != nil {
 				t.Fatalf("first run: %v", err)
@@ -74,161 +43,6 @@ func TestResumeCachesEverything(t *testing.T) {
 
 			assertAllCached(t, readTrace(t, filepath.Join(proj, "trace2.txt")))
 		})
-	}
-}
-
-// jobinfo is the slice of a stage's _jobinfo the overrides overlay must reach.
-type jobinfo struct {
-	MemGB   float64 `json:"memGB"`
-	Threads float64 `json:"threads"`
-}
-
-// TestOverridesOverlayReachesStage: an `mro2nf overrides` -c overlay must
-// actually retune the targeted stage — verified from the _jobinfo the stage
-// saw, not from the generated config text. The untargeted sibling must keep
-// its default. (Port of the overrides half of runtime_knobs.sh.)
-func TestOverridesOverlayReachesStage(t *testing.T) {
-	requireTools(t, "nextflow", "java")
-	buildBinaries(t)
-
-	work := t.TempDir()
-	overridesJSON := filepath.Join(work, "overrides.json")
-
-	if err := os.WriteFile(overridesJSON, []byte(`{ "D.GEN": { "mem_gb": 3, "threads": 2 } }`), 0o644); err != nil {
-		t.Fatalf("write overrides.json: %v", err)
-	}
-
-	out, err := exec.Command(filepath.Join(root, "mro2nf"), "overrides", overridesJSON).Output()
-	if err != nil {
-		t.Fatalf("mro2nf overrides: %v", err)
-	}
-
-	overlay := filepath.Join(work, "overrides.config")
-	if err := os.WriteFile(overlay, out, 0o644); err != nil {
-		t.Fatalf("write overrides.config: %v", err)
-	}
-
-	proj := transpile(t, "diamond_min")
-
-	if err := runNextflow(t, proj, "-c", overlay); err != nil {
-		t.Fatal(err)
-	}
-
-	gen, add := stageJobinfos(t, filepath.Join(proj, "work"))
-
-	if gen == nil || add == nil {
-		t.Fatalf("GEN found=%v, ADD found=%v; want both stages' _jobinfo under work/", gen != nil, add != nil)
-	}
-
-	if gen.MemGB != 3 || gen.Threads != 2 {
-		t.Errorf("GEN saw memGB=%v threads=%v, want 3/2 (override did not reach the stage)", gen.MemGB, gen.Threads)
-	}
-
-	if add.MemGB == 3 {
-		t.Error("ADD saw memGB=3; the D.GEN override must not leak to an untargeted stage")
-	}
-}
-
-// TestOverridesBeatChunkRequest pins #248 against real mrp: under
-// `--overrides {"FRAC_MEM.CHUNKED": {"chunk.mem_gb": 3, "join.mem_gb": 4}}` mrp
-// gives BOTH of CHUNKED's chunks 3 GB in _jobinfo and __mem_gb (and __vmem_gb
-// 6), although its split asked 0.5 GB for chunk 0, and the join 4 GB over the
-// split-returned 0.5: mrp's getJobReqs applies the override after the chunk's
-// and join's own request. The untargeted MEM stage keeps its 1.5.
-func TestOverridesBeatChunkRequest(t *testing.T) {
-	requireTools(t, "nextflow", "java", "python3")
-	buildBinaries(t)
-
-	work := t.TempDir()
-	overridesJSON := filepath.Join(work, "overrides.json")
-
-	if err := os.WriteFile(overridesJSON, []byte(`{ "FRAC_MEM.CHUNKED": { "chunk.mem_gb": 3, "join.mem_gb": 4 } }`), 0o644); err != nil {
-		t.Fatalf("write overrides.json: %v", err)
-	}
-
-	out, err := exec.Command(filepath.Join(root, "mro2nf"), "overrides", overridesJSON).Output()
-	if err != nil {
-		t.Fatalf("mro2nf overrides: %v", err)
-	}
-
-	overlay := filepath.Join(work, "overrides.config")
-	if err := os.WriteFile(overlay, out, 0o644); err != nil {
-		t.Fatalf("write overrides.config: %v", err)
-	}
-
-	proj := transpile(t, "frac_mem")
-
-	if err := runNextflow(t, proj, "-c", overlay); err != nil {
-		t.Fatal(err)
-	}
-
-	var outs struct {
-		ChunkM  []float64 `json:"chunk_m"`
-		ChunkAM []float64 `json:"chunk_am"`
-		JoinM   float64   `json:"join_m"`
-		JoinAM  float64   `json:"join_am"`
-		MemM    float64   `json:"mem_m"`
-	}
-
-	readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
-
-	want := []float64{3, 3}
-	if fmt.Sprint(outs.ChunkM) != fmt.Sprint(want) || fmt.Sprint(outs.ChunkAM) != fmt.Sprint(want) {
-		t.Errorf("chunks saw mem %v / __mem_gb %v, want %v (mrp: the chunk.mem_gb override beats the chunk's own request)",
-			outs.ChunkM, outs.ChunkAM, want)
-	}
-
-	if outs.JoinM != 4 || outs.JoinAM != 4 {
-		t.Errorf("join saw mem %v / __mem_gb %v, want 4 (mrp: the join.mem_gb override beats the split's join request)",
-			outs.JoinM, outs.JoinAM)
-	}
-
-	if outs.MemM != 1.5 {
-		t.Errorf("untargeted MEM saw %v, want its own 1.5", outs.MemM)
-	}
-}
-
-// TestOverridesPipelineScopeReachesStages exercises the `-mro` path (#45): a
-// pipeline-scoped key (naming the pipeline D, not a leaf stage) must expand to
-// every stage beneath it, so BOTH GEN and ADD see the override. Without -mro the
-// key would render a dead selector for the pipeline name and reach neither.
-func TestOverridesPipelineScopeReachesStages(t *testing.T) {
-	requireTools(t, "nextflow", "java")
-	buildBinaries(t)
-
-	work := t.TempDir()
-	overridesJSON := filepath.Join(work, "overrides.json")
-
-	if err := os.WriteFile(overridesJSON, []byte(`{ "D": { "mem_gb": 3 } }`), 0o644); err != nil {
-		t.Fatalf("write overrides.json: %v", err)
-	}
-
-	fixture := filepath.Join(root, "testdata", "diamond_min")
-
-	out, err := exec.Command(filepath.Join(root, "mro2nf"), "overrides",
-		"-mro", filepath.Join(fixture, "pipeline.mro"), "-mropath", fixture, overridesJSON).Output()
-	if err != nil {
-		t.Fatalf("mro2nf overrides -mro: %v", err)
-	}
-
-	overlay := filepath.Join(work, "overrides.config")
-	if err := os.WriteFile(overlay, out, 0o644); err != nil {
-		t.Fatalf("write overrides.config: %v", err)
-	}
-
-	proj := transpile(t, "diamond_min")
-
-	if err := runNextflow(t, proj, "-c", overlay); err != nil {
-		t.Fatal(err)
-	}
-
-	gen, add := stageJobinfos(t, filepath.Join(proj, "work"))
-	if gen == nil || add == nil {
-		t.Fatalf("GEN found=%v, ADD found=%v; want both stages' _jobinfo", gen != nil, add != nil)
-	}
-
-	if gen.MemGB != 3 || add.MemGB != 3 {
-		t.Errorf("pipeline-scoped D override reached GEN memGB=%v, ADD memGB=%v; want both 3", gen.MemGB, add.MemGB)
 	}
 }
 
@@ -342,62 +156,4 @@ func readTraceColumns(t *testing.T, path string, names ...string) [][]string {
 	}
 
 	return rows
-}
-
-// stageJobinfos walks the work tree and returns the _jobinfo the GEN and ADD
-// stages saw. _jobinfo's own `name` carries the entry callable, so the stage
-// is identified from the task dir's .command.run header instead.
-func stageJobinfos(t *testing.T, work string) (*jobinfo, *jobinfo) {
-	t.Helper()
-
-	var gen, add *jobinfo
-
-	walkErr := filepath.WalkDir(work, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || d.Name() != "_jobinfo" {
-			return err
-		}
-
-		// work/<xx>/<hash>/main/_jobinfo -> the task dir holds .command.run.
-		runFile := filepath.Join(filepath.Dir(filepath.Dir(path)), ".command.run")
-
-		raw, readErr := os.ReadFile(runFile)
-		if errors.Is(readErr, fs.ErrNotExist) {
-			return nil // no .command.run two levels up: not a task's _jobinfo
-		}
-
-		if readErr != nil {
-			return fmt.Errorf("read %s: %w", runFile, readErr)
-		}
-
-		header := commandRunHeader(raw)
-
-		var info jobinfo
-
-		readJSON(t, path, &info)
-
-		switch {
-		case strings.Contains(header, "__GEN"):
-			gen = &info
-		case strings.Contains(header, "__ADD"):
-			add = &info
-		}
-
-		return nil
-	})
-	if walkErr != nil {
-		t.Fatalf("walk %s: %v", work, walkErr)
-	}
-
-	return gen, add
-}
-
-// commandRunHeader returns the first three lines of a .command.run script —
-// enough to carry Nextflow's "NEXTFLOW TASK: <process>" banner.
-func commandRunHeader(raw []byte) string {
-	lines := strings.SplitN(string(raw), "\n", 4)
-	if len(lines) > 3 {
-		lines = lines[:3]
-	}
-
-	return strings.Join(lines, " ")
 }

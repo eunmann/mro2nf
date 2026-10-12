@@ -14,21 +14,20 @@ import (
 // each sleep a random interval, so tasks complete in a different order on
 // every run. Two runs from scratch, in separate projects and work dirs, must
 // publish byte-identical trees and pipeline_outs.json, and a -resume of the
-// first must re-execute no task and leave its published tree unchanged — in
-// default and -native mode.
+// first must re-execute no task and leave its published tree unchanged.
 func TestFreshRunsAreIdentical(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java", "python3")
 
-	for name, flags := range map[string][]string{"default": nil, "native": {"-native"}} {
+	for _, name := range []string{"default"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			// Claim the shard here so both fresh runs and the resume run beside
 			// each other (shardSkip's ancestor claim).
 			shardSkip(t)
 
-			projs := []string{transpile(t, "jitter_wide", flags...), transpile(t, "jitter_wide", flags...)}
+			projs := []string{transpile(t, "jitter_wide"), transpile(t, "jitter_wide")}
 
 			t.Run("fresh", func(t *testing.T) {
 				for i, proj := range projs {
@@ -95,9 +94,9 @@ func assertAllCached(t *testing.T, rows []traceRow) {
 	ran := 0
 
 	for _, row := range rows {
-		// The call-graph project's PLAN never caches: it rewrites the run's
-		// invocation, which every other task reads by a constant path.
-		if v2Emitter() && row.Name == "PLAN" {
+		// PLAN never caches: it rewrites the run's invocation, which every
+		// other task reads by a constant path.
+		if row.Name == "PLAN" {
 			continue
 		}
 

@@ -3,7 +3,7 @@
 
 Objects compare with their key order and numbers by their source token. A
 normalization that excuses a real difference applies only while the divergence
-allowlist (divergences.json beside this script, or the fifth argument) has an
+allowlist (test/e2e/divergences.json, or the fifth argument) has an
 entry for its comparator rule, as in the Go differential (published_test.go):
 
 - follow-mrp-published-symlinks: for an output mrp publishes as a symlink in
@@ -174,7 +174,7 @@ def render(v):
 def main():
     mrp_json, mrp_dir, nf_json, name = sys.argv[1:5]
     allowlist = sys.argv[5] if len(sys.argv) > 5 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "divergences.json")
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "test", "e2e", "divergences.json")
     rules = excused_rules(allowlist, name)
 
     nf_outs = norm(load(nf_json), nf_rewrite(rules))

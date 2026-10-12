@@ -23,11 +23,7 @@ import (
 // nonE2EFixtures are testdata fixtures deliberately NOT exercised by any e2e
 // suite, each with the reason. A fixture here is exempt from the completeness
 // check below; anything else under testdata/ must be named by some e2e test.
-var nonE2EFixtures = map[string]string{
-	// Runtime-wise it behaves like map_pipe_nested (which the golden + docker
-	// suites run); only the -native diagnostic wording differs.
-	"map_pipe_nested_file": "emit-only: keyed native-scatter FORK_K+MERGE_K diagnostic (internal/emit unit test)",
-}
+var nonE2EFixtures = map[string]string{}
 
 // TestEveryFixtureIsExercised fails when a testdata fixture (a directory with a
 // pipeline.mro) is named by no e2e test and is not on the nonE2EFixtures
@@ -68,21 +64,9 @@ func TestEveryFixtureIsExercised(t *testing.T) {
 // are no fixtures of their own: a launch-time -params-file override has no mrp
 // invocation to diff against.
 var mrpUnrunnable = map[string]string{
-	"exec_min":             "mrp never completes it (killed after 180 s): the exec stub writes no journal entries",
-	"mixed_adapters":       "mrp never completes it (killed after 180 s): its stubs speak mre's wrapped-adapter contract, not mrp's journal protocol",
-	"map_pipe_nested":      "mrp rejects it: OUTER.INNER.DBL's merge could not match a reference to a specific fork",
-	"map_pipe_nested_file": "emit-only fixture with no stage code: mrp cannot import stages/dbl",
-	"entry_file":           mrpUnresolvedInput,
-	"entry_filearr":        mrpUnresolvedInput,
-	"entry_struct_file":    mrpUnresolvedInput,
-	"entry_mapfile":        mrpUnresolvedInput,
-	"entry_dir":            mrpUnresolvedInput,
-	"entry_file_empty":     mrpUnresolvedInput,
-	"split_from_file":      mrpUnresolvedInput,
+	"exec_min":       "mrp never completes it (killed after 180 s): the exec stub writes no journal entries",
+	"mixed_adapters": "mrp never completes it (killed after 180 s): its exec stage DBL's stub writes no journal entries",
 }
-
-const mrpUnresolvedInput = "mrp passes the invocation's relative input/ path through verbatim and the stage opens it " +
-	"from its own job dir, where it does not resolve"
 
 // TestEveryFixtureMrpDiffed fails unless every pipeline fixture, testdata's
 // and bench's, is in exactly one of mrpDiffCases (outputs diffed),
@@ -203,14 +187,13 @@ func unappliedAllowlistEntries(allow divergence.Allowlist, named map[string][]st
 
 // unappliedRuleFixtures reports each fixture an issue-tracked rule entry
 // names that is not in the case table whose comparison applies the rule:
-// mrpOutcomeCases or, compared under -emitter=v2 only, v2OutcomeCases for
-// an outcome rule, mrpDiffCases for the rest.
+// mrpOutcomeCases for an outcome rule, mrpDiffCases for the rest.
 func unappliedRuleFixtures(e divergence.Entry, diffed map[string]bool) []string {
 	table, cases := "mrpDiffCases", diffed
 
 	if e.Kind == divergence.KindOutcome {
 		table, cases = "mrpOutcomeCases", map[string]bool{}
-		for _, tc := range slices.Concat(mrpOutcomeCases, v2OutcomeCases) {
+		for _, tc := range mrpOutcomeCases {
 			cases[tc.name] = true
 		}
 	}

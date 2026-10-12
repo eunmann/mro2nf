@@ -133,7 +133,7 @@ const unpublishedPath = "<unpublished>"
 
 // nfTaskPath matches an absolute path inside a Nextflow task work dir: one
 // below the task's <2 hex>/<30 hex> hash dirs. Mirrors NF_TASK_PATH in
-// normcmp.py.
+// scripts/aws/normcmp.py.
 var nfTaskPath = regexp.MustCompile(`^/(?:[^/]+/)*[0-9a-f]{2}/[0-9a-f]{30}/.`)
 
 // nfOutsRewrite returns the rewrite of pipeline_outs.json strings the

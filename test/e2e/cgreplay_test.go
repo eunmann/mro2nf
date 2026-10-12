@@ -690,8 +690,8 @@ func (rp *cgReplay) checkPipelineOuts() {
 		"-leaves", filepath.Join(out, "f"), "-outs", "outs",
 		"-types", rp.types, "-callable", rp.call.Call().DecId, "-role", types.RoleOut)
 
-	// LAYOUT's publishDir copies the outs tree and these two files into
-	// results/ (internal/emit generate_native.go genDefaultLayout).
+	// The OUTS task's publishDir copies the outs tree and these two files
+	// into results/ (internal/cgnf/assets/stage.nf).
 	results := filepath.Join(pub, "outs")
 	if err := os.MkdirAll(results, 0o755); err != nil {
 		rp.t.Fatal(err)

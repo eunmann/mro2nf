@@ -1,5 +1,3 @@
-//go:build e2e
-
 package e2e
 
 import (
@@ -37,6 +35,11 @@ var internalJobs = []string{
 
 const gateWorkflow = "pr-validation.yml"
 
+// workflowsDir is the repo's workflow dir, relative to this package's dir,
+// where go test runs it: these tests read files only, so they need no
+// harness and run under make test.
+var workflowsDir = filepath.Join("..", "..", ".github", "workflows")
+
 type workflowJob struct {
 	id    string
 	name  string
@@ -47,7 +50,7 @@ type workflowJob struct {
 func readWorkflow(t *testing.T, file string) *yamlNode {
 	t.Helper()
 
-	raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", file))
+	raw, err := os.ReadFile(filepath.Join(workflowsDir, file))
 	if err != nil {
 		t.Fatalf("read %s: %v", file, err)
 	}
@@ -96,7 +99,7 @@ func TestRequiredContextsOnlyFromPRValidation(t *testing.T) {
 	var files []string
 
 	for _, pattern := range []string{"*.yml", "*.yaml"} {
-		m, err := filepath.Glob(filepath.Join(root, ".github", "workflows", pattern))
+		m, err := filepath.Glob(filepath.Join(workflowsDir, pattern))
 		if err != nil {
 			t.Fatalf("glob workflows: %v", err)
 		}

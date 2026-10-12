@@ -7,15 +7,11 @@ package e2e
 // that mounts ONLY its work dir — not the project directory. This reproduces
 // the AWS Batch + S3 / HealthOmics model (isolated workers, no shared
 // filesystem) that the plain local-executor suite cannot: a task can read a
-// file only if it was staged in as a declared `path` input.
-//
-// It is the regression guard for the _assets staging fix — if a bindspec is
-// ever referenced via ${projectDir} in a script again, these runs
-// fail (the file is invisible inside the container) while the local suite
-// still passes.
+// file only if it was staged in as a declared `path` input. A script that
+// reads a project file through ${projectDir} fails here (the file is
+// invisible inside the container) while the local suite still passes.
 
 import (
-	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -98,8 +94,8 @@ var (
 var errNoRuntimeBase = errors.New("runtime Dockerfile: no FROM image")
 
 // runtimeBase returns deploy/runtime/Dockerfile's final-stage base, the
-// digest-pinned image generated Dockerfiles also build FROM
-// (TestGeneratedBaseMatchesRuntime), so the iso suite runs on what ships.
+// digest-pinned image the release runtime builds FROM, so the iso suite runs
+// on what ships.
 func runtimeBase() (string, error) {
 	raw, err := os.ReadFile(filepath.Join(root, "deploy", "runtime", "Dockerfile"))
 	if err != nil {
@@ -134,8 +130,8 @@ func runtimeBase() (string, error) {
 // buildIsoImage builds (once per test process) an image that bakes mre, the
 // Martian adapters, and the fixture stage code at the SAME absolute paths the
 // transpiler bakes into the generated scripts, so they resolve inside the
-// isolated task container. The bindspecs are deliberately NOT baked — they
-// must arrive via the staged _assets input.
+// isolated task container. The project's _assets are deliberately NOT baked:
+// they must arrive as staged task inputs.
 func buildIsoImage(t *testing.T) {
 	t.Helper()
 	buildBinaries(t)
@@ -178,12 +174,11 @@ func writeFileT(t *testing.T, path, content string) {
 	}
 }
 
-// TestDockerIsolation runs a representative slice across process kinds under
-// full container isolation: single-stage, split, map call (fork/merge +
-// keyed), disabled call (null-bundle staging), split-returned join override,
-// and the `special` scheduler key — plus adapter coverage (exec, comp via
-// -mrjob) and the null-bundle / zero-chunk shapes most likely to break on
-// isolated workers.
+// TestDockerIsolation runs a representative slice of shapes under full
+// container isolation: single-stage, split, map call (array and keyed),
+// disabled call, split-returned join override, and the `special` scheduler
+// key — plus adapter coverage (exec, comp) and the null and zero-chunk shapes
+// most likely to break on isolated workers.
 func TestDockerIsolation(t *testing.T) {
 	t.Parallel()
 
@@ -196,22 +191,15 @@ func TestDockerIsolation(t *testing.T) {
 		{"disabled_map", "expected/outs.json"},
 		{"join_resources", "expected/outs.json"},
 		{"special_resource", "expected/outs.json"},
-		{"map_pipe_nested", "expected/outs.json"},
+		{"map_pipe_disabled_nested", "expected/outs.json"},
 		{"kitchen_sink", "expected/main_outs.json"},
-		{"entry_file", "expected/ep_outs.json"},
-		{"entry_filearr", "expected/epa_outs.json"},
-		{"entry_struct_file", "expected/eps_outs.json"},
-		{"entry_mapfile", "expected/epm_outs.json"},
-		{"split_from_file", "expected/sp_outs.json"},
 		{"map_split_file", "expected/outs.json"},
 		{"struct_file_array", "expected/outs.json"},
-		// Adapter coverage under isolation: exec and comp (comp needs -mrjob,
-		// which transpile() adds automatically; the fixture's mrjob.sh is
-		// baked into the image with testdata/).
+		// Adapter coverage under isolation: exec and comp.
 		{"exec_min", "expected/ep_outs.json"},
 		{"mixed_adapters", "expected/outs.json"},
-		// Null-bundle / zero-chunk staging — the shapes most likely to break
-		// on isolated workers.
+		// Null and zero-chunk staging — the shapes most likely to break on
+		// isolated workers.
 		{"empty_fork_min", "expected/outs.json"},
 		{"map_null_map", "expected/outs.json"},
 		{"disabled_callref", "expected/outs.json"},
@@ -241,7 +229,7 @@ func TestDockerIsolation(t *testing.T) {
 // temp dir (NOT baked into the image), so the stage can only read its content
 // if Nextflow staged file(params.<name>) into the container — exactly the AWS
 // Batch / HealthOmics S3-localization path. Covers a scalar file, a file[]
-// (list), and a struct-with-file, each reconstructed by mre entryargs.
+// (list), a struct-with-file, a map of files and a directory.
 func TestDockerEntryOverrides(t *testing.T) {
 	t.Parallel()
 
@@ -358,126 +346,5 @@ func TestDockerEntryOverrides(t *testing.T) {
 				t.Errorf("pipeline outs mismatch (-want +got):\n%s", diff)
 			}
 		})
-	}
-}
-
-// TestGeneratedAWSBatchImage validates the -target awsbatch cloud artifacts
-// without a live account: build the runtime image from the EMITTED Dockerfile
-// (not this harness's inline one) and run the pipeline with only that image's
-// baked /opt/mro2nf runtime, executor overridden to local+docker.
-func TestGeneratedAWSBatchImage(t *testing.T) {
-	requireDocker(t)
-
-	genImage := checkoutImage("mro2nf-gen")
-
-	// transpile() always passes -mre/-shell host paths; that is correct here
-	// too — container targets copy them into the project's runtime/ dir.
-	proj := transpile(t, "diamond_min", "-target", "awsbatch", "-container", genImage)
-
-	build := exec.Command("docker", "build", "-q", "-t", genImage, proj)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("docker build of the generated Dockerfile: %v\n%s", err, out)
-	}
-
-	cfg := "process.executor = 'local'\ndocker.enabled = true\n" + isoConfig()
-	writeFileT(t, filepath.Join(proj, "local.config"), cfg)
-
-	err := runNextflow(t, proj,
-		"-c", "local.config", "--aws_outdir", filepath.Join(proj, "results"))
-	if err != nil {
-		t.Fatalf("nextflow (generated image): %v", err)
-	}
-
-	goldenJSON(t, "diamond_min", filepath.Join(proj, "results", "pipeline_outs.json"),
-		filepath.Join(root, "testdata", "diamond_min", "expected", "outs.json"))
-}
-
-// TestGeneratedAWSBatchImageNative validates -native on the awsbatch container
-// target (#99): the baked entry_resolved (a file-typed entry) stages into the
-// isolated task, the same self-contained-image mechanism the default container
-// path uses. Executor overridden to local+docker (no live account).
-func TestGeneratedAWSBatchImageNative(t *testing.T) {
-	requireDocker(t)
-
-	genImage := checkoutImage("mro2nf-gen-native")
-
-	proj := transpile(t, "entry_file", "-native", "-target", "awsbatch", "-container", genImage)
-
-	build := exec.Command("docker", "build", "-q", "-t", genImage, proj)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("docker build of the generated native Dockerfile: %v\n%s", err, out)
-	}
-
-	cfg := "process.executor = 'local'\ndocker.enabled = true\n" + isoConfig()
-	writeFileT(t, filepath.Join(proj, "local.config"), cfg)
-
-	if err := runNextflow(t, proj,
-		"-c", "local.config", "--aws_outdir", filepath.Join(proj, "results")); err != nil {
-		t.Fatalf("nextflow (generated native image): %v", err)
-	}
-
-	goldenJSON(t, "entry_file", filepath.Join(proj, "results", "pipeline_outs.json"),
-		filepath.Join(root, "testdata", "entry_file", "expected", "ep_outs.json"))
-}
-
-// TestGeneratedHealthOmicsPackage validates the -target healthomics packaging
-// artifacts without a live account: package.sh must build a zip containing the
-// workflow (not the docker build context), and parameter-template.json must
-// parse with the container + entry params.
-func TestGeneratedHealthOmicsPackage(t *testing.T) {
-	requireDocker(t)
-
-	// docker_iso.sh skips this section on a missing zip even under
-	// E2E_REQUIRE=1 (only the top-level docker/nextflow/java gate hard-fails).
-	if _, err := exec.LookPath("zip"); err != nil {
-		t.Skip("zip not found")
-	}
-
-	proj := transpile(t, "entry_file", "-target", "healthomics", "-container", "mro2nf-gen:test")
-
-	pkg := exec.Command("bash", "package.sh")
-	pkg.Dir = proj
-
-	if out, err := pkg.CombinedOutput(); err != nil {
-		t.Fatalf("package.sh: %v\n%s", err, out)
-	}
-
-	zr, err := zip.OpenReader(filepath.Join(proj, "workflow.zip"))
-	if err != nil {
-		t.Fatalf("open workflow.zip: %v", err)
-	}
-	defer func() { _ = zr.Close() }()
-
-	var hasMain bool
-
-	for _, f := range zr.File {
-		if f.Name == "main.nf" || strings.HasSuffix(f.Name, "/main.nf") {
-			hasMain = true
-		}
-
-		if strings.Contains(f.Name, "runtime/mre") {
-			t.Errorf("workflow.zip must exclude the docker build context; found %s", f.Name)
-		}
-	}
-
-	if !hasMain {
-		t.Error("workflow.zip missing main.nf")
-	}
-
-	var tpl map[string]any
-
-	readJSON(t, filepath.Join(proj, "parameter-template.json"), &tpl)
-
-	if _, ok := tpl["container"]; !ok {
-		t.Error("parameter-template.json missing container entry")
-	}
-
-	reads, ok := tpl["reads"].(map[string]any)
-	if !ok {
-		t.Fatalf("parameter-template.json missing reads entry: %v", tpl)
-	}
-
-	if opt, _ := reads["optional"].(bool); !opt {
-		t.Errorf("parameter-template.json reads must be optional: %v", reads)
 	}
 }

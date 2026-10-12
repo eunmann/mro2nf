@@ -457,7 +457,7 @@ func TestNightlyGenDiffFilesDivergences(t *testing.T) {
 	}
 
 	findings := filepath.Join(t.TempDir(), "divergences.jsonl")
-	lines := `{"seed":42,"findings":["default outs:r0","native abi:ST0 main"],"fixture":"gen_0123456789ab"}` + "\n"
+	lines := `{"seed":42,"findings":["default outs:r0","default abi:ST0 main"],"fixture":"gen_0123456789ab"}` + "\n"
 
 	if err := os.WriteFile(findings, []byte(lines), 0o644); err != nil {
 		t.Fatal(err)
@@ -475,7 +475,7 @@ func TestNightlyGenDiffFilesDivergences(t *testing.T) {
 			t.Errorf("open issue %q: gh got\n%s\nwant it to start %q", issue, log, want)
 		}
 
-		for _, part := range []string{"https://run/1", "https://artifact/2", "seed 42", "`gen_0123456789ab`", "`default outs:r0`, `native abi:ST0 main`"} {
+		for _, part := range []string{"https://run/1", "https://artifact/2", "seed 42", "`gen_0123456789ab`", "`default outs:r0`, `default abi:ST0 main`"} {
 			if !strings.Contains(log, part) {
 				t.Errorf("open issue %q: body lacks %q:\n%s", issue, part, log)
 			}

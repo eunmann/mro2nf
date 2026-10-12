@@ -71,16 +71,12 @@ import (
 // least once, mrp runs each of them, and mro2nf matches mrp on every leg.
 var genSmokeSeeds = []uint64{1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15, 22, 43, 108, 154, 192, 193, 246}
 
-// genDefaultLegs run every program under each transpile mode: what a sub
-// pipeline does at a call site differs between inlined and kept boundaries.
-const genDefaultLegs = "default,noinline,native"
+// genDefaultLegs are the legs every program runs under.
+const genDefaultLegs = "default"
 
-// genLegs are the transpile modes a program can run under, as TestMrpDiff's
-// legs.
+// genLegs are the transpiles a program can run under.
 var genLegs = map[string]genLeg{
-	"default":  {name: "default"},
-	"noinline": {name: "noinline", flags: []string{"-inline-pipelines=false"}},
-	"native":   {name: "native", flags: []string{"-native"}},
+	"default": {name: "default"},
 }
 
 type genLeg struct {
@@ -237,7 +233,7 @@ func TestGenBudgetSpent(t *testing.T) {
 // one whole line of the file even when many diverge at once.
 func TestGenFindingsRecordDivergences(t *testing.T) {
 	env := genEnv{findings: filepath.Join(t.TempDir(), "gen-diff", "divergences.jsonl")}
-	v := genVerdict{findings: []genFinding{{leg: "default", key: "outs:r0"}, {leg: "native", key: "abi:ST0 main"}}}
+	v := genVerdict{findings: []genFinding{{leg: "default", key: "outs:r0"}, {leg: "default", key: "abi:ST0 main"}}}
 
 	if !t.Run("divergence", func(t *testing.T) { env.divergenceReporter(t)("seed %d diverges", 7) }) {
 		t.Error("a divergence failed the test under GEN_FINDINGS")
@@ -272,7 +268,7 @@ func TestGenFindingsRecordDivergences(t *testing.T) {
 		got[d.Seed] = d
 	}
 
-	want := genDivergence{Seed: 3, Findings: []string{"default outs:r0", "native abi:ST0 main"}, Fixture: "gen_0123456789ab"}
+	want := genDivergence{Seed: 3, Findings: []string{"default outs:r0", "default abi:ST0 main"}, Fixture: "gen_0123456789ab"}
 	if diff := cmp.Diff(want, got[3]); len(got) != seeds || diff != "" {
 		t.Errorf("%d seeds recorded, want %d; seed 3 (-want +got):\n%s", len(got), seeds, diff)
 	}

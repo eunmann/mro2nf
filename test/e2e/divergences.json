@@ -41,7 +41,7 @@
       "kind": "outcome",
       "feature": "`--autoretry` / retrying a failed stage",
       "summary": "mro2nf retries every stage failure except an ASSERT up to twice (`errorStrategy` retry, `maxRetries 2`), where mrp retries only failures matching its `retry_on` patterns (signals, ENOMEM, scheduler errors) and never an ordinary stage exception.",
-      "justification": "A stage that fails and then succeeds on retry completes under mro2nf and fails under mrp (mrp's `jobmanagers/retry.json`; `internal/emit/emit.go` `errorStrategy`). The outcome comparison counts a retried task's failures once on the failure fixtures whose error-failing task Nextflow retries (a stage, or the call-graph project's OUTS on `map_pipe_nested`), and fails on any of them where no task is retried.",
+      "justification": "A stage that fails and then succeeds on retry completes under mro2nf and fails under mrp (mrp's `jobmanagers/retry.json`; `internal/cgnf/config.go` `errorStrategy`). The outcome comparison counts a retried task's failures once on the failure fixtures whose error-failing task Nextflow retries (a stage, or the OUTS task on `map_pipe_nested`), and fails on any of them where no task is retried.",
       "issue": 299,
       "evidence": ["TestMrpDiffFailureParity/stage_raise", "TestOutcomeRulesNeedTheirEntries"],
       "comparator": {"rule": "collapse-retried-attempts", "fixtures": ["bad_out_type", "entry_dir", "entry_file", "entry_file_empty", "entry_filearr", "entry_mapfile", "entry_struct_file", "map_pipe_nested", "missing_struct_key", "split_bad_mem", "split_bad_special", "split_bad_threads", "split_from_file", "stage_raise"]}
