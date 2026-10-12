@@ -233,7 +233,7 @@ selector of its alias alone still names it.
 - One `accelerator` rule, evaluated per task, that requests N GPUs for a job
   whose special, as `mrp` resolves it, is `"gpu"` or `"gpu:N"`: the stage's own,
   or for a chunk or the join the `__special` the split returned for it (see
-  [`GPU.md`](GPU.md)).
+  [`RUNNING.md`](RUNNING.md#gpu-stages)).
 - Task tracing, and the target profiles (§9): `standard` (local, clamped to
   the host's cpus and memory with `process.resourceLimits`), `slurm`, `sge`,
   `lsf`, `pbs`, `docker`, `awsbatch` and `healthomics`.
@@ -610,8 +610,8 @@ You can override inputs **at launch** without re-transpiling:
   later step can recover. On such a launch, set
   `NXF_DISABLE_PARAMS_TYPE_DETECTION=true`. `-params-file` values are
   unaffected.
-- An entry input named `outdir` or `job_resources` collides with a param the
-  project defines itself and fails the transpile.
+- An entry input named `outdir`, `job_resources` or `mro2nf_*` collides with
+  a param the project defines itself and fails the transpile.
 
 **File-typed inputs.** Every file value of the run's entry inputs that is an
 absolute path or a URI (`s3://`, and others under the opt-in below) is staged
@@ -623,11 +623,10 @@ keyed by the pipeline's fqid, are staged into OUTS, whose post-processing
 publishes such a file only where it finds it, as `mrp`'s does. The driver
 hands each to `file(x, glob: false)`, so the head node never globs a name, and
 a task stages its list as `entry/<i>/<name>`; `mre args -leaves` and `mre outs
--leaves` map each value to the path it reads it at. Nextflow links a file it can reach in place, so on a shared
-filesystem, and in a docker container, which mounts the link's target, the
-stage gets the value's own path, as `mrp` passes it; a file Nextflow fetched
-(an `s3://` object, a file on an object-store work dir) is read where it was
-staged. A value with no file (`[]`, `{}`, a null field) stages nothing. A
+-leaves` map each value to the path it reads it at. The stage gets the
+value as a leaf of its args bundle (§7), `<task>/args/f/L<nnnn>/<name>`: the
+same file name and content, at another path than the value's own, which
+`mrp` passes. A value with no file (`[]`, `{}`, a null field) stages nothing. A
 relative path names nothing from the stage's job dir under either runtime and
 reaches the stage as given. A file default is staged from where it is at run
 time; it is never copied into the project.
@@ -701,7 +700,7 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   parses none of it: each task gets its node's resources and own overrides
   file as values of PLAN's record, and a chunk and the join take theirs from
   the split's `resources.tsv`. `force_volatile` and `*.profile` change no
-  output and have no effect (`RUNTIME_TUNING.md`).
+  output and have no effect ([`RUNNING.md`](RUNNING.md#resources)).
 - On the `standard` profile, `process.resourceLimits` clamps a request to the
   host's cpus and memory, so an oversized one runs rather than fails; a `-c`
   config setting `process.resourceLimits` overrides the clamp.
@@ -715,8 +714,10 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
 
 ## 10. Faithful vs. divergent, and how it's validated
 
-The transpiler aims for **byte-identical outputs to `mrp`**, and every supported
-feature is checked against the real `mrp` output. The validation tiers:
+A transpiled pipeline publishes the same outputs as `mrp`, except for the
+allowlisted divergences below. Every fixture `mrp` can run is checked against
+the real `mrp` output; `exec_min` and `mixed_adapters`, which `mrp` never
+completes, have goldens only. The validation tiers:
 
 - **Unit tests** (`make test`) — the call graph, resolver, topology, plan and
   posted records, the type walk and bundles, the generated project, and a

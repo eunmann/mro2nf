@@ -118,8 +118,10 @@ aws omics start-run --workflow-id "$WF" --role-arn <OmicsRoleArn> \
 ```
 
 The workflow pins the image, so every run executes the code it was
-validated with; the parameter template declares only the pipeline's inputs,
-so a run cannot name another image.
+validated with; the parameter template declares only the pipeline's inputs
+and `mro2nf_overrides`, so a run cannot name another image. See
+[`docs/RUNNING.md`](../../docs/RUNNING.md) for the launch parameters and the
+other profiles.
 
 ## Teardown
 
