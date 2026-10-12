@@ -77,10 +77,24 @@ export class Mro2nfStack extends cdk.Stack {
     });
     bucket.grantReadWrite(instanceRole);
 
+    // Every task downloads its S3 inputs, a directory input whole, onto the
+    // instance's root volume, and neither Martian nor Batch on EC2 sizes disk:
+    // Batch picks an instance by vCPU and memory, and the AMI's 30 GiB root
+    // fills once a few tasks on one instance stage a large reference. The
+    // volume is deleted with the instance, so it costs nothing while idle.
+    const launchTemplate = new ec2.LaunchTemplate(this, 'BatchLaunchTemplate', {
+      requireImdsv2: true,
+      blockDevices: [{
+        deviceName: '/dev/xvda',
+        volume: ec2.BlockDeviceVolume.ebs(500, { volumeType: ec2.EbsDeviceVolumeType.GP3 }),
+      }],
+    });
+
     const computeEnv = new batch.ManagedEc2EcsComputeEnvironment(this, 'ComputeEnv', {
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       instanceRole,
+      launchTemplate,
       useOptimalInstanceClasses: true,
       // Cost: spot (~70% cheaper) and — critically — minvCpus 0 so Batch runs NO
       // instances while idle (it scales to zero between runs; you pay only for
