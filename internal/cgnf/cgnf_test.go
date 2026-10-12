@@ -184,8 +184,9 @@ func TestEmitConfinesAtLaunch(t *testing.T) {
 
 // TestEmitAliases: every stage node of the witness's call graph is one
 // alias of the stage module, a split stage the split, main and join
-// processes, and every entry-fed fork root is one PLAN output
-// (map_fork_upstream: GEN, then DBL forked on GEN's map).
+// processes, and every entry-fed fork root takes its forks from PLAN's one
+// record of them all (map_fork_upstream: GEN, then DBL forked on GEN's
+// map, reads none).
 func TestEmitAliases(t *testing.T) {
 	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
 
@@ -205,13 +206,19 @@ func TestEmitAliases(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(up, "emit: r0") {
-		t.Errorf("map_fork_upstream has no entry-fed root, yet PLAN emits one:\n%s", up)
+	if strings.Contains(up, entryForks) {
+		t.Errorf("map_fork_upstream has no entry-fed root, yet reads PLAN's forks:\n%s", up)
 	}
 
-	nested := readTree(t, emitFixture(t, "map_pipe_nested"))["main.nf"]
-	if !strings.Contains(nested, "emit: r0") || !strings.Contains(nested, "emit: r1") {
-		t.Errorf("map_pipe_nested's two entry-fed roots are not two PLAN outputs:\n%s", nested)
+	nested := wiringNF(readTree(t, emitFixture(t, "map_pipe_nested")))
+	for _, want := range []string{
+		"entry_forks = ENTRY_FORKS(PLAN.out.roots)",
+		"ENTRY_ROOT(entry_forks, 'OUTER.INNER')",
+		"ENTRY_ROOT(entry_forks, 'OUTER.INNER.DBL')",
+	} {
+		if !strings.Contains(nested, want) {
+			t.Errorf("map_pipe_nested's wiring lacks %q:\n%s", want, nested)
+		}
 	}
 }
 
@@ -532,10 +539,10 @@ func TestEmitSizesForkedGathers(t *testing.T) {
 	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
 
 	for _, want := range []string{
-		"n1 = ENTRY_COUNTS(PLAN.out.n1)",
-		"u1 = READ(b1.run, GATHER_SIZED(b1.run, o0_outs, n1, [0], [0], [0], [0], ['y']), [0])",
+		"entry_counts = ENTRY_COUNTS(PLAN.out.counts)",
+		"u1 = READ(b1.run, GATHER_SIZED(b1.run, o0_outs, ENTRY_ROOT(entry_counts, 'MNG.BY_ENTRY.SQ'), [0], [0], [0], [0], ['y']), [0])",
 		"u4 = READ(u4, GATHER_SIZED(b4.run, o3_outs, COUNTS(o2_forks, [0], 'MNG.BY_STAGE.SQ'), [0], [0], [0], [0], ['y']), [0])",
-		`eval('cat \'counts/MNG.BY_ENTRY.SQ\''), emit: n1`,
+		"eval('cat counts'), emit: counts",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
@@ -549,7 +556,8 @@ func TestEmitSizesForkedGathers(t *testing.T) {
 	for _, want := range []string{
 		".combine(counts, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }",
 		".unique().combine(counts, by: 0).filter { v -> v[2] == 0 }.map { v -> [v[1], []] }",
-		"[f.size() > 1 ? f[1].tokenize('.').collect { t -> t as int } : [], f[0] as int]",
+		"[f.size() > 2 ? f[2].tokenize('.').collect { t -> t as int } : [], f[1] as int]",
+		"out = records.flatMap { m -> m[root] ?: [] }",
 		"forks.map { kp, ds -> [kp[at], ds.count { e -> e.parent.name == root }] }",
 	} {
 		if !strings.Contains(stageModule, want) {

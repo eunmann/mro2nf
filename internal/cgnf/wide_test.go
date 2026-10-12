@@ -10,6 +10,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/test/wide"
+	"github.com/google/go-cmp/cmp"
 )
 
 // workflowBody is one workflow of a generated file: its takes, the
@@ -114,26 +115,9 @@ func checkBounds(t *testing.T, p wide.Pipeline, labels []string) {
 	t.Helper()
 
 	_, tree := emitWide(t, p)
+	bodies := workflowBodies(tree)
 
-	var bodies []workflowBody
-
-	for _, name := range slices.Sorted(maps.Keys(tree)) {
-		if name == "main.nf" || strings.HasPrefix(name, subworkflowDir+"/") {
-			bodies = append(bodies, parseWorkflows(name, tree[name])...)
-		}
-	}
-
-	total := 0
-
-	for _, b := range bodies {
-		total += b.weight()
-
-		if b.weight() > maxWeight || len(b.takes) > maxTakes {
-			t.Errorf("%s: workflow %s weighs %d (max %d) and takes %d channels (max %d)", b.file, b.name, b.weight(), maxWeight, len(b.takes), maxTakes)
-		}
-	}
-
-	if total < 4*maxWeight {
+	if total := checkLimits(t, bodies); total < 4*maxWeight {
 		t.Errorf("the wide pipeline weighs %d, too little to need more than a few workflows", total)
 	}
 
@@ -153,6 +137,111 @@ func checkBounds(t *testing.T, p wide.Pipeline, labels []string) {
 
 	checkWiring(t, bodies)
 	checkPublished(t, bodies, len(p.Rs)+1)
+}
+
+// workflowBodies lists the workflows of a project's main.nf and its
+// sub-workflow modules.
+func workflowBodies(tree map[string]string) []workflowBody {
+	var bodies []workflowBody
+
+	for _, name := range slices.Sorted(maps.Keys(tree)) {
+		if name == "main.nf" || strings.HasPrefix(name, subworkflowDir+"/") {
+			bodies = append(bodies, parseWorkflows(name, tree[name])...)
+		}
+	}
+
+	return bodies
+}
+
+// checkLimits checks that no workflow weighs more than maxWeight or takes
+// more than maxTakes channels, and returns their total weight.
+func checkLimits(t *testing.T, bodies []workflowBody) int {
+	t.Helper()
+
+	total := 0
+
+	for _, b := range bodies {
+		total += b.weight()
+
+		if b.weight() > maxWeight || len(b.takes) > maxTakes {
+			t.Errorf("%s: workflow %s weighs %d (max %d) and takes %d channels (max %d)", b.file, b.name, b.weight(), maxWeight, len(b.takes), maxTakes)
+		}
+	}
+
+	return total
+}
+
+// TestEmitBoundsPlan (#509): PLAN writes the forks of every entry-fed root
+// as one record and their counts as another, so neither PLAN's outputs nor
+// the entry workflow's wiring of them grows with the roots: a pipeline of
+// over 500 entry-fed roots, of forks and of counts, has the PLAN process
+// and the PLAN wiring of one of a few, and each of its workflows stays
+// within the JVM's limits.
+func TestEmitBoundsPlan(t *testing.T) {
+	t.Parallel()
+
+	few, many := wide.Roots(1, 1, 1), wide.Roots(8, 600, 3)
+
+	fewDir, small := emitWide(t, few)
+	dir, large := emitWide(t, many)
+
+	if got := entryFedRoots(t, dir); got != many.Roots || got < 500 {
+		t.Fatalf("the pipeline has %d entry-fed roots, want %d, at least 500", got, many.Roots)
+	}
+
+	if d := cmp.Diff(planOf(small["main.nf"], fewDir), planOf(large["main.nf"], dir)); d != "" {
+		t.Errorf("PLAN and its wiring grow with the entry-fed roots (-%d roots +%d roots):\n%s", few.Roots, many.Roots, d)
+	}
+
+	bodies := workflowBodies(large)
+	checkLimits(t, bodies)
+	checkWiring(t, bodies)
+}
+
+// entryFedRoots counts the fork roots the entry values feed in the
+// pipeline.mro in dir.
+func entryFedRoots(t *testing.T, dir string) int {
+	t.Helper()
+
+	src, err := cg.ReadSource(filepath.Join(dir, "pipeline.mro"), []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := newProject(src, Options{MroPaths: []string{dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := 0
+
+	for _, r := range p.topo.Roots {
+		if r.Producer == "" {
+			n++
+		}
+	}
+
+	return n
+}
+
+// planOf is main.nf's PLAN process and the statements of its entry
+// workflow that read PLAN's records, with the pipeline's dir, which they
+// name, left out.
+func planOf(main, dir string) []string {
+	main = strings.ReplaceAll(main, dir, "")
+	start := strings.Index(main, "process PLAN {")
+	end := start + strings.Index(main[start:], "\n}\n")
+	out := strings.Split(main[start:end], "\n")
+
+	for _, b := range parseWorkflows("main.nf", main) {
+		for _, l := range b.main {
+			if strings.Contains(l, "PLAN.out.") {
+				out = append(out, l)
+			}
+		}
+	}
+
+	return out
 }
 
 // checkWiring checks that each workflow defines every channel of the

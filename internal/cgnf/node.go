@@ -42,9 +42,18 @@ func forksOf(i int) string { return "o" + strconv.Itoa(i) + "_forks" }
 func gatesOf(i int) string { return "o" + strconv.Itoa(i) + "_gates" }
 func doneOf(i int) string  { return "d" + strconv.Itoa(i) }
 
-// The channels of PLAN's records for an entry-fed root.
-func entryForksOf(j int) string  { return "f" + strconv.Itoa(j) }
-func entryCountsOf(j int) string { return "n" + strconv.Itoa(j) }
+// The channels of PLAN's records of every entry-fed root, each a map by
+// root.
+const (
+	entryForks  = "entry_forks"
+	entryCounts = "entry_counts"
+)
+
+// entryRoot is the channel of root's own items of records, one of PLAN's
+// records of every entry-fed root.
+func entryRoot(w *wiring, records, root string) string {
+	return fmt.Sprintf("ENTRY_ROOT(%s, %s)", w.use(records), gstr(root))
+}
 
 // node wires node i: its instances, enumerated root by root from the fork
 // elements and records its roots' feeders write, each held until its
@@ -177,7 +186,7 @@ func (p *project) forkOn(w *wiring, inst string, n cg.TopoNode, root string, zr 
 
 	var src string
 	if entryFed {
-		src = w.use(entryForksOf(slices.Index(p.entry, root)))
+		src = entryRoot(w, entryForks, root)
 	} else {
 		src = p.elements(w, r)
 	}
@@ -285,7 +294,7 @@ func (p *project) forkCounts(w *wiring, n, up cg.TopoNode, extra []string) (stri
 	}
 
 	if r.Producer == "" {
-		return w.use(entryCountsOf(slices.Index(p.entry, r.Fqid))), true
+		return entryRoot(w, entryCounts, r.Fqid), true
 	}
 
 	prod := p.index[r.Producer]

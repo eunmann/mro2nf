@@ -11,7 +11,7 @@ import (
 
 // wiringWorkflows are the stage module's node wiring sub-workflows, which
 // every workflow of the project includes.
-const wiringWorkflows = "FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; GATHER_SIZED ; COUNTS ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; OR_SKIPPED ; PUBLISHED"
+const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; GATHER_SIZED ; COUNTS ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; OR_SKIPPED ; PUBLISHED"
 
 // subworkflowDir holds a module per sub-workflow main.nf calls.
 const subworkflowDir = "subworkflows"
@@ -46,7 +46,7 @@ func (p *project) workflows() (map[string]string, error) {
 	b.WriteString("include { shq ; code ; ordered ; on ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; ENTRY_COUNTS ; " + wiringWorkflows + " } from './stage.nf'\n")
 	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
-	p.planProcess(&b)
+	b.WriteString(planProcess)
 	b.WriteString("workflow {\n")
 	writeLines(&b, plan.lines)
 	writeUnits(&b, root, nodes)
@@ -170,9 +170,10 @@ func ilist(xs []int) string {
 // its digest, its off flag, its statically disabled fork keys, the cpus and
 // memory its first task is scheduled with and its own overrides; entry
 // maps each node and fork of its entry-fed roots to the entry files staged
-// there, and each of those to its file(), which globs no name; f<j> are the
-// forks of entry-fed root j and n<j> their counts under each fork of its
-// outer roots.
+// there, and each of those to its file(), which globs no name; entry_forks
+// maps each entry-fed root to its forks and entry_counts to their counts
+// under each fork of its outer roots, so the wiring is the same few lines
+// however many roots there are.
 func (p *project) planWiring(ws []*wiring) *wiring {
 	used := map[string]bool{}
 
@@ -192,19 +193,11 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 	for _, d := range []struct{ name, expr string }{
 		{"nodes", "NODES(PLAN.out.nodes)"},
 		{"entry", "ENTRY(PLAN.out.files, PLAN.out.leaves)"},
+		{entryForks, "ENTRY_FORKS(PLAN.out.roots)"},
+		{entryCounts, "ENTRY_COUNTS(PLAN.out.counts)"},
 	} {
 		if used[d.name] {
 			w.linef("%s = %s", w.def(d.name), d.expr)
-		}
-	}
-
-	for j := range p.entry {
-		if f := entryForksOf(j); used[f] {
-			w.linef("%s = ENTRY_FORKS(PLAN.out.r%d)", w.def(f), j)
-		}
-
-		if n := entryCountsOf(j); used[n] {
-			w.linef("%s = ENTRY_COUNTS(PLAN.out.n%d)", w.def(n), j)
 		}
 	}
 

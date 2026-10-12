@@ -13,16 +13,9 @@ import (
 // task's path: the run's call, which every task compiles over the entry's
 // declarations where the run finds its code, each node's digest and its
 // resources under the run's mrp --overrides file, the entry files each
-// instance stages, and per entry-fed root, its forks and their counts.
-func (p *project) planProcess(b *strings.Builder) {
-	var outs strings.Builder
-
-	for j, root := range p.entry {
-		fmt.Fprintf(&outs, "    eval(%s), emit: r%d\n", gstr("cat "+shellQuote("roots/"+root)), j)
-		fmt.Fprintf(&outs, "    eval(%s), emit: n%d\n", gstr("cat "+shellQuote("counts/"+root)), j)
-	}
-
-	fmt.Fprintf(b, `process PLAN {
+// instance stages, and the forks of every entry-fed root and their counts,
+// each one record, so PLAN's outputs do not grow with the roots.
+const planProcess = `process PLAN {
     input:
     val values
     val meta
@@ -34,7 +27,9 @@ func (p *project) planProcess(b *strings.Builder) {
     eval('cat nodes'), emit: nodes
     eval('cat leaves'), emit: leaves
     eval('cat files'), emit: files
-%s
+    eval('cat roots'), emit: roots
+    eval('cat counts'), emit: counts
+
     script:
     """
     cat > values.json <<'MRO2NF_VALUES'
@@ -44,8 +39,7 @@ func (p *project) planProcess(b *strings.Builder) {
     """
 }
 
-`, outs.String())
-}
+`
 
 // values is the workflow expression of the run's entry values as JSON:
 // each entry input's param, null when unset, which keeps the transpiled
@@ -104,9 +98,4 @@ func (p *project) outs() *wiring {
 	w.linef("OUTS(%s, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/_assets/types.json\"), file(\"${projectDir}/%s\"))", w.use("shared"), entry, mroAssets)
 
 	return w
-}
-
-// shellQuote is s single-quoted for the shell.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
