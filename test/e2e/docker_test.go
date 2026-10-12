@@ -66,8 +66,8 @@ func rootlessDocker() bool {
 // docker profile: none on rootful Docker, where the profile's own user
 // mapping is under test. On ROOTLESS Docker the container's root already
 // maps to the host user, and the mapping maps to an unprivileged subuid that
-// cannot write the bind-mounted work dir, so the run clears it, as README
-// tells a rootless user to.
+// cannot write the bind-mounted work dir, so the run clears it, as
+// docs/RUNNING.md tells a rootless user to.
 func dockerProfileConfig() string {
 	if rootlessDocker() {
 		return "process.containerOptions = ''\n"
