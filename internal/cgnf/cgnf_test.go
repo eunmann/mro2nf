@@ -169,7 +169,7 @@ func TestEmitNamesNoHostTools(t *testing.T) {
 }
 
 // TestEmitConfinesAtLaunch: a stage task's outputs are confined to its
-// work dir (mre run -confine) only when the run sets params.mro2nf_confine.
+// work dir (mre stage -confine) only when the run sets params.mro2nf_confine.
 func TestEmitConfinesAtLaunch(t *testing.T) {
 	cfg := readTree(t, emitFixture(t, "file_min"))["nextflow.config"]
 
@@ -304,6 +304,24 @@ func TestEmitWritesTheCallToAFile(t *testing.T) {
 		if at := strings.Index(script, "${callFile(meta)}"); at < 0 || at != strings.Index(script, "${") {
 			t.Errorf("%s does not write the call before it runs mre:\n%s", proc, script)
 		}
+	}
+}
+
+// TestEmitRunsOneMreCallPerTask: each stage process runs its phase in one
+// mre stage call, and the stage module runs mre only there and in OUTS.
+func TestEmitRunsOneMreCallPerTask(t *testing.T) {
+	for proc, phase := range map[string]string{"STAGE": "main", "STAGE_SPLIT": "split", "STAGE_MAIN": "main", "STAGE_JOIN": "join"} {
+		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
+		_, script, _ := strings.Cut(body, "script:\n")
+		script, _, _ = strings.Cut(script, "\n}\n")
+
+		if strings.Count(script, "${mreStage(") != 1 || !strings.Contains(script, "${mreStage(meta, '"+phase+"', ") {
+			t.Errorf("%s does not run its %s phase in one mre stage call:\n%s", proc, phase, script)
+		}
+	}
+
+	if n := strings.Count(stageModule, "${shq(params.mro2nf_mre)} "); n != 2 {
+		t.Errorf("stage.nf runs mre at %d places, want mreStage's and OUTS's", n)
 	}
 }
 

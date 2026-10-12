@@ -243,7 +243,7 @@ func (f *planFlags) writeRoots(roots map[string]cg.PlanRoot) error {
 // overrides: the cpus and memory in GB its first task, its split or its
 // one main, is scheduled with, and the overrides file that gives its jobs
 // what the run's gives them (Runtime.Override), which every task of the
-// node hands mre run, and whose split writes its chunks' and join's into
+// node hands mre stage, and whose split writes its chunks' and join's into
 // the resources table they are scheduled by.
 func nodeResources(rt job.Runtime, n cg.PlanNode) (string, error) {
 	st := job.Stage{Fqid: n.Fqid, Using: job.Using(n.Stage), Split: n.Stage.Split}

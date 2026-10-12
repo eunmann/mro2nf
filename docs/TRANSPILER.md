@@ -48,10 +48,10 @@ This one decision shapes everything else:
    ┌──────────────────────────┐           ┌─────────────────────────────────────┐
    │  pipeline.mro            │           │  PLAN   mre plan: compile the run's │
    │      │  compile (Martian) │  emits    │         invocation, fix its forks   │
-   │      ▼                    │  ──────►  │  N0_X   mre args → mre run → post   │
+   │      ▼                    │  ──────►  │  N0_X   mre stage: args, job, post  │
    │  witness call graph      │           │  N1_Y   … one process per stage node│
    │      │  topology          │           │  OUTS   mre outs: mrp's PostProcess │
-   │      ▼                    │           │  each mre run drives the real stage │
+   │      ▼                    │           │  each mre stage runs the real stage │
    │  main.nf + stage.nf      │           │  through mrjob and the adapter      │
    └──────────────────────────┘           └─────────────────────────────────────┘
 ```
@@ -81,7 +81,7 @@ Source layout:
 
 ```
 cmd/mro2nf/      → transpiler CLI: .mro -> Nextflow project
-cmd/mre/         → runtime shim: plan | args | run | post | outs
+cmd/mre/         → runtime shim: plan | stage | outs
 internal/
   cg/            → Martian's compiled call graph: witness, topology, plan,
                    the _args resolver, fork elements, gates, pipeline outs
@@ -163,7 +163,13 @@ _assets/types.json    ← the type manifest the OUTS task lays the outs out with
 The workflow that wires a node includes them once for it under its own alias
 (`include { STAGE as N3_DBL }`, a split stage as `N1_SUM_SQUARES_SP`, `_MN`
 and `_JN`), so a `withName:` selector names the node. Every stage task runs
-`mre args`, then its job through `mre run`, then `mre post`. `stage.nf` also
+one `mre stage` call (§6), which compiles the call graph once and runs the
+phase's job as `mrp` runs it, building the instance's args bundle before it
+in a split and a non-split stage's main, and posting its outs after it in a
+join and a non-split stage's main. Each process declares only the outputs
+its consumers stage; the args and outs bundles between steps stay
+undeclared files of its work dir, except the split's args bundle, which its
+chunks and join stage. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_COUNTS`, `ENTRY_ROOT`) and that take a node's
 instances through each step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
@@ -252,7 +258,7 @@ fails if the call graph has a node, a fork root or a read the witness lacks
 (`Topology.Covers`); a node the invocation disables outright counts only by
 its presence. Its records reach the driver as `eval` values: the run's call;
 per node a digest of its resolved spec (stage, bindings, disable bindings and
-fork roots in Martian's JSON form) and of what its `mre post` writes for its
+fork roots in Martian's JSON form) and of what its post step writes for its
 readers (the splits of the roots it feeds and the outputs their fork elements
 zip, its partners' splits, and the disable bindings whose value it posts with
 their roots), whether the invocation disables it, the
@@ -279,7 +285,7 @@ by (`TestResumeKeysOnANodesOverrides`).
 
 **Code.** A stage task compiles the run's call over the entry `.mro` where the
 run finds its code: its includes and its stages' code resolve beside it, as
-under `mrp`. `mre args` fails the task when the node compiles to another spec
+under `mrp`. `mre stage` fails the task when the node compiles to another spec
 than the digest PLAN planned (`cg.ErrSpecDrift`): a `.mro` edited since the
 transpile, or an image built from other sources, fails loudly rather than run.
 
@@ -365,8 +371,22 @@ type manifest from the invocation's own declarations.
   own, `{"<fqid>": {...}}`: of each phase the node runs, each resource
   Martian's `ApplyResourceOverrides` sets for it, found at the key nearest
   the node.
-- **`mre args -node <fqid> -digest <d>`** builds one stage instance's args
-  bundle and prints `enabled` or `disabled`, once the node compiles to the spec
+- **`mre stage -phase split|main|join -node <fqid>`** is the one `mre` call
+  of a stage task. It compiles the call graph once and runs, against it, the
+  steps below that the phase has: a split, or a non-split stage's main,
+  first builds the instance's args bundle (`-args`), its file leaves always
+  linked for the main, which no other task stages, and always copied for the
+  split, whose chunks and join stage it; then every phase runs its job; then
+  a join, or a non-split stage's main, posts the outs bundle its job wrote
+  (`-o`). A split stage's main only runs its chunk's job against the args
+  bundle the split built. An instance its args resolve disabled, where its
+  gates held it enabled, fails the task with exit 1 before any job runs, and
+  it posts nothing. A failed job exits as the job step below says, and no
+  post follows it; a failed args or post step exits 1. The bundles are
+  written to disk between steps and read back, so `_args` names the staged
+  paths a step reads them at.
+- **The args step** (`-node <fqid> -digest <d>`) builds one stage instance's
+  args bundle, once the node compiles to the spec
   digest PLAN planned. The instance's fork comes from the fork elements it
   staged, or the fork records it got as values (`-fork`, base64 of a
   `fork.json`), and its values from its parents' stamped outs bundles. A
@@ -378,8 +398,8 @@ type manifest from the invocation's own declarations.
   shorter source or from a null one, and drop a longer one's extra elements.
   The missing element is logged, as at `mrp`'s default enforcement level;
   `mrp --strict` is not supported.
-- **`mre run -phase split|main|join`** runs one phase of the instance that
-  `-args` stamps as `mrp` runs its job (`internal/job`). py and comp stages run
+- **The job step** runs the task's phase of the instance that `-args` stamps
+  as `mrp` runs its job (`internal/job`). py and comp stages run
   under `mrjob`, built from the pinned module (`make build`), with `mrp`'s argv
   (`core/node.go` `runJob`):
   `mrjob <adapters>/python/martian_shell.py <code> <phase> <meta>
@@ -411,10 +431,10 @@ type manifest from the invocation's own declarations.
   (`TestMrpDiff`) uses it to group stage invocations without depending on the
   Nextflow task graph, and the failure-parity leg (`TestMrpDiffFailureParity`)
   to name the stage a failed task ran.
-- **`mre post`** runs after the stage. It stamps the outs bundle with the
-  instance (`instance.json`). For a disabled instance it first writes mrp's
-  disabled outs, with every output null. It checks enabled outs with Martian's
-  `LazyArgumentMap.ValidateOutputs`, as mrp's `Fork.verifyOutput` does. Then it
+- **The post step** runs after the stage's last job. It stamps the outs
+  bundle with the instance (`instance.json`). It checks the outs with
+  Martian's `LazyArgumentMap.ValidateOutputs`, as mrp's `Fork.verifyOutput`
+  does. Then it
   writes one dir per fork of every root this stage feeds:
   `forks/<root fqid>/<ordinal>/`. The ordinal is zero-padded, in mrp's fork
   order (array index, or map keys in byte order). Each dir holds that fork's
@@ -431,9 +451,9 @@ type manifest from the invocation's own declarations.
   reads null where the output is null and a missing element, logged, at any
   index it lacks, as `mrp` reads it; a zip of maps at run time need not share
   keys (`zip_runtime_map`). An instance therefore stages only its own elements,
-  and no key ever needs escaping. `mre post -entry-forks` writes the forks the call graph already
-  fixes (literal and entry-sourced sources) the same way, as fork records
-  without values. A root whose fork set varies with an outer map call (its
+  and no key ever needs escaping. `mre plan` writes the forks the call graph
+  already fixes (literal and entry-sourced sources) the same way, as fork
+  records without values, which a task gets as values (`-fork`). A root whose fork set varies with an outer map call (its
   source, of unknown length, is forked on that call) gets its forks under each
   fork of that call. The posting task enumerates an outer call its own fork does
   not fix from what it staged, and prefixes the name with the ordinal of each
@@ -476,9 +496,11 @@ The resolver mirrors only what Martian does not export: per-instance resolution
 specialization, projection, narrowing and validation it calls Martian's exported
 functions (`ResolvedBinding.BindingPath`, `LazyArgumentMap.Path`, each type's
 `FilterJson`, and the validators). `TestMrpCallGraph` (e2e) replays every
-mrp-diff fixture's real mrp pipestance through these subcommands, running every
-job through `mre run`. It requires the same `_args` as mrp's, after both are
-re-encoded and file leaves are reduced to name and content digest. Every job
+mrp-diff fixture's real mrp pipestance through these subcommands, running
+every task through `mre stage` as a run's tasks do. It requires the same
+`_args` as mrp's, after both are re-encoded and file leaves are reduced to
+name and content digest, and an instance `mre stage` refuses as disabled
+exactly where mrp disabled the fork. Every job
 mrp ran must run, and no other, with the same `_args`, `_outs` and `_jobinfo`
 (its keys, and every value that does not vary per run). The published tree and
 pipeline outs must match. Its drift guard requires the same `_args` and fork
@@ -524,8 +546,8 @@ Both prefixes resolve identically on read-back. The rules:
   This is `shim.MarkFiles`, which uses the type manifest to find exactly which
   leaves are files (recursing into structs, arrays and maps).
 - **Linked bundles** (on write): the args bundle of a non-split stage is read
-  only by its own task, so `mre args -link` (`shim.WriteLinkedBundle`) links
-  each leaf instead of copying it: a leaf of a staged bundle by its ordinal
+  only by its own task, so the task's `mre stage` writes it linked
+  (`shim.WriteLinkedBundle`), linking each leaf instead of copying it: a leaf of a staged bundle by its ordinal
   dir, whose origin record comes with it, any other file by itself beside its
   origin record. A file every fork of a map call reads, such as a broadcast
   upstream output or entry file, exists once, its producer's, however wide the
@@ -572,7 +594,7 @@ inside what a staged input links to, i.e. an input's real path, which a stage
 that resolves its args' paths returns (hard-linked, as the input it resolves
 from), or any other host path outside the task:
 
-- Under `--mro2nf_confine true` (`mre run -confine`), such a path cannot be
+- Under `--mro2nf_confine true` (`mre stage -confine`), such a path cannot be
   valid in an isolated container downstream, and copying it would upload host
   data, so the task fails, naming the output.
 - Otherwise, where `mrp` publishes a symlink and pipelines legitimately return
@@ -622,7 +644,7 @@ entry files stages each fork's own element. The pipeline outs' own reads,
 keyed by the pipeline's fqid, are staged into OUTS, whose post-processing
 publishes such a file only where it finds it, as `mrp`'s does. The driver
 hands each to `file(x, glob: false)`, so the head node never globs a name, and
-a task stages its list as `entry/<i>/<name>`; `mre args -leaves` and `mre outs
+a task stages its list as `entry/<i>/<name>`; `mre stage -leaves` and `mre outs
 -leaves` map each value to the path it reads it at. The stage gets the
 value as a leaf of its args bundle (§7), `<task>/args/f/L<nnnn>/<name>`: the
 same file name and content, at another path than the value's own, which
