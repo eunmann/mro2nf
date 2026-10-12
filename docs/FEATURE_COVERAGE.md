@@ -95,7 +95,7 @@ too.
 
 | Feature | Status | Test |
 |---|---|---|
-| split / main / join | ✅ one task per chunk, as mrp runs one job per chunk | e2e `split_test`, `kitchen_sink`; unit `TestRunPhasesOfASplitStage` |
+| split / main / join | ✅ one task per chunk, as mrp runs one job per chunk | e2e `split_test`, `kitchen_sink`; unit `TestStageTasks` |
 | ordered chunk-outs aggregation in join | ✅ by chunk name, never completion order | e2e `jitter_wide`; unit `TestJoinWritesChunkFiles` |
 | `py` adapter | ✅ through `mrjob`, as mrp runs it | e2e (all py); unit `TestArgvIsMrps` |
 | `exec` adapter | ✅ | e2e `exec_min`, `src_args` |
@@ -108,8 +108,8 @@ too.
 | `martian.alarm` | ✅ each job writes every `_alarm` line to its task's stderr, where mrp prints `Alerts for <stage>:` as the stage completes. No run-level `Alerts:` summary on the Nextflow console | unit `TestAlarmsReachStderr` |
 | `martian.get_memory_allocation` / `get_threads_allocation` (read `_jobinfo`) | ✅ | e2e `api_smoke` |
 | directory-typed (`out path`) output published as a tree | ✅ | e2e `dir_out`, `dir_hidden` |
-| stage output validation (mrp `verifyOutput`) | ✅ `mre post` checks a stage's final outs with Martian's `ValidateOutputs` and fails the task before any consumer binds them | e2e `TestInvalidOutputFailsLikeMrp`, `TestMrpDiffFailureParity` (`missing_struct_key`, `bad_out_type`); unit `TestPostRejectsInvalidOuts` |
-| ASSERT vs retryable-error classification | ✅ `mre run` exits 42 for an `_assert`, 75 for a failure a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` matches, and 1 for any other; the config retries only 75 and a task's signal exits | unit `TestOutcomes`, `TestExitCode`; e2e `TestAssertTerminatesWithoutRetry`, `TestMrpDiffFailureParity` (`assert_min`, `assert_split`, `assert_join`, `stage_raise`) |
+| stage output validation (mrp `verifyOutput`) | ✅ the post step of `mre stage` checks a stage's final outs with Martian's `ValidateOutputs` and fails the task before any consumer binds them | e2e `TestInvalidOutputFailsLikeMrp`, `TestMrpDiffFailureParity` (`missing_struct_key`, `bad_out_type`); unit `TestPostRejectsInvalidOuts` |
+| ASSERT vs retryable-error classification | ✅ `mre stage` exits 42 when its job writes an `_assert`, 75 for a failure a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` matches, and 1 for any other; the config retries only 75 and a task's signal exits | unit `TestOutcomes`, `TestExitCode`; e2e `TestAssertTerminatesWithoutRetry`, `TestMrpDiffFailureParity` (`assert_min`, `assert_split`, `assert_join`, `stage_raise`) |
 | OOM escalation | ✅ none, as in `mrp` without `--auto-adjust-memory`, which has no `mro2nf` counterpart: a stage `--mro2nf_monitor true` kills over its request fails the run, and a retried task, such as one the executor killed by a signal, requests the memory and cpus of its first attempt, Martian's resolution of its job's request (#506); the stage sees that request in `_jobinfo` and `__mem_gb`. A `-c` config may set `memory = { … * task.attempt }` to escalate (`RUNNING.md`, Retries) | unit `TestEmitRetriesWhatMrpRetries`, `TestOutcomes`; e2e `TestRetryRequestsTheSameResources`, `TestMonitorMemoryKillFailsLikeMrp` (`flaky_retry`) |
 | thread-limit env vars (mrp's `thread_envs`) | ✅ every job runs with mrp's thread env vars set to its threads rounded up, over any inherited value (`internal/job` `threadEnvs`) | unit `TestThreadEnvs` |
 | `--monitor` memory enforcement | ✅ with `nextflow run main.nf --mro2nf_monitor true`: `_jobinfo`'s `monitor_flag`, which `mrjob` enforces as under mrp | unit `TestMonitorFlag` |
@@ -131,7 +131,7 @@ too.
 | executor / jobmode (local + slurm/sge/lsf/pbs) | ✅ config profiles; the local one clamps a request to the host | e2e `TestLocalClampRunsOversizedRequest` |
 | a failure is retried only when `mrp` retries it | ✅ `mre` exits 75 for a job failure a line of whose `_errors` matches a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` (a signal, ENOMEM, a scheduler failure); the config retries only exit 75 and a task's signal exits (137, 143), `maxRetries 2` as `default_retries`. An ASSERT (42), a stage exception or a failed `mre` step ends the run on its first attempt | unit `TestOutcomes`, `TestExitCode`, `TestEmitRetriesWhatMrpRetries`, `TestRetryPatternsMatchModule`; e2e `TestAssertTerminatesWithoutRetry`, `TestMrpDiffFailureParity`, `TestMonitorMemoryKillFailsLikeMrp` |
 | isolated containers, AWS Batch, HealthOmics | ✅ profiles of one project (`docker`, `awsbatch`, `healthomics`): every task stages what it reads, the run's call reaches it as a value, every task runs in the one image `--mro2nf_image` names, which the user builds FROM the release runtime image with the pipeline's code, a launch without it fails before PLAN, and the HealthOmics package pins it by digest. No CI job runs on AWS: `.github/workflows/cdk-validation.yml` only synthesizes the example infrastructure in `deploy/awsbatch-cdk` | e2e `TestDockerIsolation`, `TestDockerEntryOverrides`, `TestGeneratedAWSBatchProfile`, `TestGeneratedProfilesRequireImage`, `TestGeneratedHealthOmicsPackage`; unit `TestEmitTargetsAsProfiles`, `TestEmitHealthOmicsTemplate` |
-| `mrp --overrides` (per-stage resource retune at launch) | ✅ `--mro2nf_overrides <file>`: PLAN reads it with Martian's `ReadOverrides`, so an unknown key fails the run at its start, and each node's split, chunk and join resources resolve through Martian's `ApplyResourceOverrides`, nearest key first, into the task's `cpus`/`memory` and the job's `_jobinfo` and `_args`; each task keys `-resume` on its own node's overrides alone. `force_volatile` and `*.profile` change no output and are read without effect. See `RUNNING.md` | e2e `overrides_resources` (mrp ABI diff), `TestMrpDiffFailureParity` (`overrides_unknown`), `TestResumeKeysOnANodesOverrides`; unit `TestResourcesUnderOverrides`, `TestOverrideGivesTheNodeItsResources`, `TestPlanResolvesOverrides`, `TestRunUnderOverrides` |
+| `mrp --overrides` (per-stage resource retune at launch) | ✅ `--mro2nf_overrides <file>`: PLAN reads it with Martian's `ReadOverrides`, so an unknown key fails the run at its start, and each node's split, chunk and join resources resolve through Martian's `ApplyResourceOverrides`, nearest key first, into the task's `cpus`/`memory` and the job's `_jobinfo` and `_args`; each task keys `-resume` on its own node's overrides alone. `force_volatile` and `*.profile` change no output and are read without effect. See `RUNNING.md` | e2e `overrides_resources` (mrp ABI diff), `TestMrpDiffFailureParity` (`overrides_unknown`), `TestResumeKeysOnANodesOverrides`; unit `TestResourcesUnderOverrides`, `TestOverrideGivesTheNodeItsResources`, `TestPlanResolvesOverrides`, `TestStageUnderOverrides` |
 | `--maxjobs` / `--jobinterval` / `--localcores` / `--localmem` (throttling) | ✅ in a `-c` config: `executor.queueSize`; `executor.submitRateLimit` at whole-second intervals (`'<n>/1s'`), as Nextflow rejects a shorter one; `executor.cpus`/`memory` together with `process.resourceLimits`, which clamps a larger request as `mrp` clamps it, where the pool alone fails it. Mapping in `RUNNING.md` | `TestLocalClampRunsOversizedRequest` |
 | `--profile` (stage profiling) | 🚫 the task trace the project enables (`realtime`, `%cpu`, `peak_rss`, `peak_vmem`, `rchar`, `wchar`) and `-with-report` | — |
 | `--inspect` | 🚫 no analog; `nextflow log` lists past runs and their tasks | — |
@@ -184,9 +184,10 @@ fixture.
   only the per-instance resolution, fork expansion and disable test Martian
   does not export (`docs/TRANSPILER.md` §6).
 - Former `mrp`-runtime-only items:
-  - **content-based retry (ASSERT vs retryable)** — `mre run` exits 42 for an
-    `_assert`, 75 for a failure `mrp`'s `retry_on` patterns name transient,
-    and 1 otherwise; the config retries only 75 and a task's signal exits, as
+  - **content-based retry (ASSERT vs retryable)** — `mre stage` exits 42 when
+    its job writes an `_assert`, 75 for a failure `mrp`'s `retry_on` patterns
+    name transient, and 1 otherwise; the config retries only 75 and a task's
+    signal exits, as
     `mrp` retries only transient failures (#299).
   - **`--monitor` memory enforcement** — `--mro2nf_monitor true` sets `_jobinfo`'s
     `monitor_flag`, which `mrjob` enforces as under `mrp`.

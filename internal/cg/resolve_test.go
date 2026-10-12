@@ -226,9 +226,7 @@ func TestWholeCallRefs(t *testing.T) {
 }
 
 // TestRuntimeDisable: GATE is disabled by SRC.flag = true, so it runs no
-// job, and its post writes mrp's disabled outs, every output null; USE
-// still binds SRC.y (chain_gate, CH/GATE/fork0/_disabled and _outs,
-// CH/USE).
+// job; USE still binds SRC.y (chain_gate, CH/GATE/fork0/_disabled, CH/USE).
 func TestRuntimeDisable(t *testing.T) {
 	f := loadFixture(t, "chain_gate")
 
@@ -238,17 +236,6 @@ func TestRuntimeDisable(t *testing.T) {
 	if !gate.Disabled || got != "" {
 		t.Errorf("GATE disabled=%v args=%q, mrp disabled it", gate.Disabled, got)
 	}
-
-	args := filepath.Join(f.dir, strconv.Itoa(f.seq), "args")
-	outs := f.next("outs")
-	f.post(args, outs)
-
-	raw, err := shim.ReadBundle(outs)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	wantArgs(t, "CH.GATE _outs", string(raw), `{"w":null}`)
 
 	_, got = f.args("CH.USE", src)
 	wantArgs(t, "CH.USE", got, `{"k":3,"y":5}`)

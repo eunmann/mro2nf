@@ -11,7 +11,7 @@ wrapped with `%w`, the standard `testing` package and `go-cmp` only, and
 ```
 cmd/mro2nf/    transpiler CLI: .mro -> Nextflow project
 cmd/mre/       runtime shim the generated tasks call:
-               plan | args | run | post | outs
+               plan | stage | outs
 internal/
   cg/          Martian's compiled call graph: witness, topology, plan, resolver
   cgnf/        call graph -> Nextflow project (main.nf wiring, stage.nf module)

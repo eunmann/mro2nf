@@ -450,7 +450,7 @@ func TestCollectNextflowInvocations(t *testing.T) {
 	task("ok1", "0", phaseMain, "SUM")
 	task("ok2", "0\n", phaseJoin, "SUM")
 	task("failed", "1", phaseMain, "SUM")
-	// `mre run` names a main job's metadata dir as mrp names the chunk.
+	// `mre stage` names a main job's metadata dir as mrp names the chunk.
 	task("chunk", "0", "chnk03", "SUM")
 
 	invs, err := collectNextflowInvocations(proj, abiRules{})

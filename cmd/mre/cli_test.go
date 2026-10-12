@@ -70,6 +70,9 @@ func TestRunDispatch(t *testing.T) {
 		{name: "unknown subcommand", args: []string{"frobnicate"}, want: errUnknownCommand},
 		{name: "deleted bind", args: []string{"bind"}, want: errUnknownCommand},
 		{name: "deleted split", args: []string{"split"}, want: errUnknownCommand},
+		{name: "deleted args", args: []string{"args"}, want: errUnknownCommand},
+		{name: "deleted run", args: []string{"run"}, want: errUnknownCommand},
+		{name: "deleted post", args: []string{"post"}, want: errUnknownCommand},
 		{name: "version", args: []string{"version"}, want: nil},
 	}
 

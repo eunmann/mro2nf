@@ -181,9 +181,9 @@ func TestPlanNestedEntryForks(t *testing.T) {
 	}
 }
 
-// nestedArgs runs mre args for each planned DBL fork of map_pipe_nested,
-// passing the INNER fork its key names and its own record as the driver
-// does, and returns each fork's _args.
+// nestedArgs runs the args step for each planned DBL fork of
+// map_pipe_nested, passing the INNER fork its key names and its own record
+// as the driver does, and returns each fork's _args.
 func nestedArgs(t *testing.T, work string, lines []string) []string {
 	t.Helper()
 
@@ -195,6 +195,7 @@ func nestedArgs(t *testing.T, work string, lines []string) []string {
 	}
 
 	fx := fixtureDir(t, "map_pipe_nested")
+	gf := graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: filepath.Join(work, "call"), mropath: fx}
 	out := make([]string, len(lines))
 
 	for i, line := range lines {
@@ -202,16 +203,9 @@ func nestedArgs(t *testing.T, work string, lines []string) []string {
 		outer, _, _ := strings.Cut(f[0], ".")
 		dir := filepath.Join(work, "args", strconv.Itoa(i))
 
-		var err error
-
-		state := captureStdout(t, func() {
-			err = run(t.Context(), []string{
-				"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", filepath.Join(work, "call"), "-mropath", fx,
-				"-node", "OUTER.INNER.DBL", "-fork", inner[outer], "-fork", f[1], "-o", dir,
-			})
-		})
-		if err != nil || state != "enabled\n" {
-			t.Fatalf("args of DBL fork %s: %q %v", f[0], state, err)
+		inst, err := argsStep(gf, argsFlags{node: "OUTER.INNER.DBL", forks: repeatedFlag{inner[outer], f[1]}}, dir)
+		if err != nil || inst.Disabled {
+			t.Fatalf("args of DBL fork %s: %+v %v", f[0], inst, err)
 		}
 
 		out[i] = compactBundle(t, dir)
@@ -260,10 +254,7 @@ func TestArgsReadsAWideCallFromItsFile(t *testing.T) {
 	call := writeTestFile(t, filepath.Join(work, "wide.b64"), base64.StdEncoding.EncodeToString([]byte(wide))+"\n")
 	fx, args := fixtureDir(t, "chain_gate"), filepath.Join(work, "args")
 
-	captureStdout(t, func() {
-		err = run(t.Context(), []string{"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", call, "-mropath", fx, "-node", "CH.SRC", "-o", args})
-	})
-	if err != nil {
+	if _, err := argsStep(graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: call, mropath: fx}, argsFlags{node: "CH.SRC"}, args); err != nil {
 		t.Fatal(err)
 	}
 
@@ -284,20 +275,18 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 	}
 
 	fx := fixtureDir(t, "split_gate_entry")
-	mro, call := filepath.Join(fx, "pipeline.mro"), filepath.Join(work, "call")
+	mro := filepath.Join(fx, "pipeline.mro")
+	gf := graphFlags{entry: mro, call: filepath.Join(work, "call"), mropath: fx}
 	src, outs, gates := "SPLIT_GATE_ENTRY.SRC", filepath.Join(work, "src", "outs"), filepath.Join(work, "src", "gates")
 	args := filepath.Join(work, "src", "args")
 
-	captureStdout(t, func() {
-		err = run(t.Context(), []string{"args", "-entry", mro, "-call", call, "-mropath", fx, "-node", src, "-o", args})
-	})
-	if err != nil {
+	if _, err := argsStep(gf, argsFlags{node: src}, args); err != nil {
 		t.Fatal(err)
 	}
 
 	writeTestBundle(t, outs, map[string]any{"skips": []any{true, true, false}, "flags": map[string]any{"a": false, "b": true, "c": true}})
 
-	if err := run(t.Context(), []string{"post", "-entry", mro, "-call", call, "-mropath", fx, "-args", args, "-outs", outs, "-forks", filepath.Join(work, "src", "forks"), "-gates", gates}); err != nil {
+	if err := postStep(gf, postFlags{forks: filepath.Join(work, "src", "forks"), gates: gates}, args, outs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -485,8 +474,8 @@ func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 }
 
 // TestArgsReadsStagedEntryFiles: the plan lists the run's entry file and
-// the instance that reads it, and mre args reads the copy the task staged,
-// not the value's path, which an isolated task cannot see.
+// the instance that reads it, and the args step reads the copy the task
+// staged, not the value's path, which an isolated task cannot see.
 func TestArgsReadsStagedEntryFiles(t *testing.T) {
 	value := filepath.Join(t.TempDir(), "reads.txt")
 
@@ -513,13 +502,8 @@ func TestArgsReadsStagedEntryFiles(t *testing.T) {
 
 	writeTestFile(t, filepath.Join("entry", "1", "reads.txt"), "7\n")
 
-	captureStdout(t, func() {
-		err = run(t.Context(), []string{
-			"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", filepath.Join(work, "call"), "-mropath", fx,
-			"-node", "EP.COUNT", "-leaves", "0", "-o", "args",
-		})
-	})
-	if err != nil {
+	gf := graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: filepath.Join(work, "call"), mropath: fx}
+	if _, err := argsStep(gf, argsFlags{node: "EP.COUNT", leaves: "0"}, "args"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -531,7 +515,7 @@ func TestArgsReadsStagedEntryFiles(t *testing.T) {
 // TestArgsRefusesCodeThePlanDidNotPlan: a task compiles the code where the
 // run finds it, so a .mro edited since the plan, or an image built from
 // other sources, compiles the node to another spec than PLAN's digest
-// names, and mre args fails rather than running it.
+// names, and the args step fails rather than running it.
 func TestArgsRefusesCodeThePlanDidNotPlan(t *testing.T) {
 	dir := t.TempDir()
 	mro := filepath.Join(dir, "pipeline.mro")
@@ -551,14 +535,7 @@ func TestArgsRefusesCodeThePlanDidNotPlan(t *testing.T) {
 	}
 
 	args := func() error {
-		var err error
-
-		captureStdout(t, func() {
-			err = run(t.Context(), []string{
-				"args", "-entry", mro, "-call", filepath.Join(work, "call"), "-mropath", dir,
-				"-node", "CH.SRC", "-digest", digest, "-o", filepath.Join(t.TempDir(), "args"),
-			})
-		})
+		_, err := argsStep(graphFlags{entry: mro, call: filepath.Join(work, "call"), mropath: dir}, argsFlags{node: "CH.SRC", digest: digest}, filepath.Join(t.TempDir(), "args"))
 
 		return err
 	}

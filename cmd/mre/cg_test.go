@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
@@ -44,8 +45,8 @@ func captureStdout(t *testing.T, fn func()) string {
 func runCG(t *testing.T, args ...string) string {
 	t.Helper()
 
-	dir := filepath.Join("..", "..", "testdata", "struct_proj")
-	argv := append([]string{args[0], "-entry", filepath.Join(dir, "pipeline.mro"), "-mropath", dir}, args[1:]...)
+	gf := structProj()
+	argv := append([]string{args[0], "-entry", gf.entry, "-mropath", gf.mropath}, args[1:]...)
 
 	var err error
 
@@ -68,30 +69,73 @@ func compactBundle(t *testing.T, dir string) string {
 	return string(raw)
 }
 
-// TestCallGraphSubcommands drives struct_proj through post -entry-forks,
-// args, post and outs as a run's tasks would, each stage's outs standing in
-// for the stage, and requires the _args and pipeline outs of a real mrp run
-// of struct_proj: PP/MAKE/fork<i> gets n = i+1, PP/SUMX gets xs = [1,2,3],
-// and PP/fork0/_outs is {"total":6}.
-func TestCallGraphSubcommands(t *testing.T) {
-	work := t.TempDir()
+// structProj locates testdata/struct_proj's invocation.
+func structProj() graphFlags {
+	dir := filepath.Join("..", "..", "testdata", "struct_proj")
+
+	return graphFlags{entry: filepath.Join(dir, "pipeline.mro"), mropath: dir}
+}
+
+// entryForks writes the fork elements of the entry-fed roots of the
+// invocation gf locates into dir, as mre plan writes them.
+func entryForks(t *testing.T, gf graphFlags, dir string) {
+	t.Helper()
+
+	g, _, err := gf.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := g.PostEntry(dir); err != nil {
+		t.Fatalf("entry forks: %v", err)
+	}
+}
+
+// argsStep runs mre stage's args step against the invocation gf locates,
+// writing the args bundle of the instance a names into out.
+func argsStep(gf graphFlags, a argsFlags, out string) (cg.Instance, error) {
+	g, man, err := gf.load()
+	if err != nil {
+		return cg.Instance{}, err
+	}
+
+	return a.write(g, man, out, false)
+}
+
+// postStep runs mre stage's post step against the invocation gf locates,
+// posting the outs bundle outs of the instance the args bundle args stamps.
+func postStep(gf graphFlags, p postFlags, args, outs string) error {
+	g, man, err := gf.load()
+	if err != nil {
+		return err
+	}
+
+	return p.post(g, man, args, outs)
+}
+
+// TestCallGraphSteps drives struct_proj through its entry forks, mre
+// stage's args and post steps and mre outs as a run's tasks would, each
+// stage's outs standing in for the stage, and requires the _args and
+// pipeline outs of a real mrp run of struct_proj: PP/MAKE/fork<i> gets
+// n = i+1, PP/SUMX gets xs = [1,2,3], and PP/fork0/_outs is {"total":6}.
+func TestCallGraphSteps(t *testing.T) {
+	work, gf := t.TempDir(), structProj()
 	forks := filepath.Join(work, "entry")
 
-	runCG(t, "post", "-entry-forks", "-forks", forks)
+	entryForks(t, gf, forks)
 
 	elems, err := filepath.Glob(filepath.Join(forks, "PP.MAKE", "*"))
 	if err != nil || len(elems) != 3 {
 		t.Fatalf("entry forks of MAKE: %v %v", elems, err)
 	}
 
-	sumx := make([]string, 0, 5+2*len(elems))
-	sumx = append(sumx, "args", "-node", "PP.SUMX", "-o", filepath.Join(work, "sumx", "args"))
+	sumx := argsFlags{node: "PP.SUMX"}
 
 	for i, el := range elems {
 		args, outs := filepath.Join(work, strconv.Itoa(i), "args"), filepath.Join(work, strconv.Itoa(i), "outs")
 
-		if state := runCG(t, "args", "-node", "PP.MAKE", "-in", el, "-o", args); state != "enabled\n" {
-			t.Errorf("MAKE fork %d state %q", i, state)
+		if inst, err := argsStep(gf, argsFlags{node: "PP.MAKE", in: repeatedFlag{el}}, args); err != nil || inst.Disabled {
+			t.Fatalf("MAKE fork %d: %+v, %v", i, inst, err)
 		}
 
 		if d := cmp.Diff(`{"n":`+strconv.Itoa(i+1)+`}`, compactBundle(t, args)); d != "" {
@@ -100,12 +144,17 @@ func TestCallGraphSubcommands(t *testing.T) {
 
 		n := float64(i + 1)
 		writeTestBundle(t, outs, map[string]any{"p": map[string]any{"x": n, "y": 10 * n}})
-		runCG(t, "post", "-args", args, "-outs", outs, "-forks", filepath.Join(work, strconv.Itoa(i), "forks"))
 
-		sumx = append(sumx, "-in", outs)
+		if err := postStep(gf, postFlags{forks: filepath.Join(work, strconv.Itoa(i), "forks")}, args, outs); err != nil {
+			t.Fatal(err)
+		}
+
+		sumx.in = append(sumx.in, outs)
 	}
 
-	runCG(t, sumx...)
+	if _, err := argsStep(gf, sumx, filepath.Join(work, "sumx", "args")); err != nil {
+		t.Fatal(err)
+	}
 
 	if d := cmp.Diff(`{"xs":[1,2,3]}`, compactBundle(t, filepath.Join(work, "sumx", "args"))); d != "" {
 		t.Errorf("SUMX _args (-mrp +mre):\n%s", d)
@@ -113,7 +162,11 @@ func TestCallGraphSubcommands(t *testing.T) {
 
 	outs := filepath.Join(work, "sumx", "outs")
 	writeTestBundle(t, outs, map[string]any{"total": 6})
-	runCG(t, "post", "-args", filepath.Join(work, "sumx", "args"), "-outs", outs)
+
+	if err := postStep(gf, postFlags{forks: filepath.Join(work, "sumx", "forks")}, filepath.Join(work, "sumx", "args"), outs); err != nil {
+		t.Fatal(err)
+	}
+
 	pipeline := filepath.Join(work, "pipeline_outs.json")
 	runCG(t, "outs", "-in", outs, "-work", filepath.Join(work, "ps"), "-o", filepath.Join(work, "results"), "-json", pipeline)
 
@@ -159,14 +212,14 @@ func TestReadLocations(t *testing.T) {
 	}
 }
 
-// TestArgsForkRecord: an entry fork passed to mre args as a value, the
-// base64 of its fork record, gives the instance the _args staging the fork
-// element does (struct_proj: PP/MAKE/fork<i> gets n = i+1).
+// TestArgsForkRecord: an entry fork passed to the args step as a value,
+// the base64 of its fork record, gives the instance the _args staging the
+// fork element does (struct_proj: PP/MAKE/fork<i> gets n = i+1).
 func TestArgsForkRecord(t *testing.T) {
-	work := t.TempDir()
+	work, gf := t.TempDir(), structProj()
 	forks := filepath.Join(work, "entry")
 
-	runCG(t, "post", "-entry-forks", "-forks", forks)
+	entryForks(t, gf, forks)
 
 	elems, err := filepath.Glob(filepath.Join(forks, "PP.MAKE", "*"))
 	if err != nil || len(elems) != 3 {
@@ -180,7 +233,9 @@ func TestArgsForkRecord(t *testing.T) {
 		}
 
 		args := filepath.Join(work, strconv.Itoa(i))
-		runCG(t, "args", "-node", "PP.MAKE", "-fork", base64.StdEncoding.EncodeToString(rec), "-o", args)
+		if _, err := argsStep(gf, argsFlags{node: "PP.MAKE", forks: repeatedFlag{base64.StdEncoding.EncodeToString(rec)}}, args); err != nil {
+			t.Fatal(err)
+		}
 
 		if d := cmp.Diff(`{"n":`+strconv.Itoa(i+1)+`}`, compactBundle(t, args)); d != "" {
 			t.Errorf("MAKE fork %d _args (-mrp +mre):\n%s", i, d)
@@ -191,7 +246,7 @@ func TestArgsForkRecord(t *testing.T) {
 // TestCallGraphNeedsEntry: the call-graph subcommands and plan refuse to
 // run without the entry they resolve against.
 func TestCallGraphNeedsEntry(t *testing.T) {
-	for _, sub := range []string{"args", "post", "outs", "run", "plan"} {
+	for _, sub := range []string{"outs", "stage", "plan"} {
 		if err := run(t.Context(), []string{sub}); !errors.Is(err, errNoEntry) {
 			t.Errorf("mre %s without -entry: %v, want errNoEntry", sub, err)
 		}
