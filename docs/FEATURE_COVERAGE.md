@@ -110,7 +110,7 @@ too.
 | stage output validation (mrp `verifyOutput`) | ✅ `mre post` checks a stage's final outs with Martian's `ValidateOutputs` and fails the task before any consumer binds them | e2e `TestInvalidOutputFailsLikeMrp`, `TestMrpDiffFailureParity` (`missing_struct_key`, `bad_out_type`); unit `TestPostRejectsInvalidOuts` |
 | ASSERT vs retryable-error classification | ✅ `mre run` exits 42 for an `_assert` (terminate) vs 1 for any other failure; the config's `errorStrategy` routes accordingly | unit `TestOutcomes`; e2e `TestAssertTerminatesWithoutRetry`, `TestMrpDiffFailureParity` (`assert_min`, `assert_split`, `assert_join`, `stage_raise`) |
 | auto-adjust-memory / OOM escalation | ✅ a retried task's memory is the stage's times the attempt; the stage keeps seeing its request | e2e `TestOrdinaryFailureRetriesWithEscalatedMemory` |
-| thread-limit env vars (mrp's `thread_envs`) | ✅ every job runs with mrp's thread env vars set to its threads (`internal/job` `threadEnvs`; no test asserts the values) | — |
+| thread-limit env vars (mrp's `thread_envs`) | ✅ every job runs with mrp's thread env vars set to its threads rounded up, over any inherited value (`internal/job` `threadEnvs`) | unit `TestThreadEnvs` |
 | `--monitor` memory enforcement | ✅ with `mro2nf -monitor`: `_jobinfo`'s `monitor_flag`, which `mrjob` enforces as under mrp | unit `TestMonitorFlag` |
 
 ## Outputs / storage — storage-management

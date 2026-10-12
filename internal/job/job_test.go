@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/cg"
@@ -176,6 +177,50 @@ func TestMonitorFlag(t *testing.T) {
 
 	if got := r.jobInfo(j).Monitor; got != "monitor" {
 		t.Errorf("monitor_flag %q, mrp writes monitor under --monitor", got)
+	}
+}
+
+// TestThreadEnvs: a job runs with each of mrp's thread_envs
+// (jobmanagers/config.json) set to its threads rounded up, over the value
+// it inherits, and TMPDIR its tmp dir (core/jobmanager_local.go Enqueue).
+func TestThreadEnvs(t *testing.T) {
+	t.Setenv("OMP_NUM_THREADS", "64")
+
+	s, inv := stage(t, "file_min", "FP.WRITE", `env > "$meta/env"; touch "$meta/_complete"`)
+	s.Using = &core.JobResources{Threads: 2.5}
+	r := runtime(t, inv)
+
+	if _, err := r.Main(context.Background(), Instance{Stage: s, ForkID: "fork0"}, core.LazyArgumentMap{}, Unsplit()); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := filepath.Join(r.Work, "chnk0")
+
+	raw, err := os.ReadFile(filepath.Join(meta, "env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]string{}
+
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if k, v, ok := strings.Cut(line, "="); ok {
+			got[k] = v
+		}
+	}
+
+	want := map[string]string{"TMPDIR": filepath.Join(meta, "tmp")}
+	for _, k := range []string{
+		"GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS", "NUMEXPR_NUM_THREADS", "OMP_NUM_THREADS",
+		"OMP_THREAD_LIMIT", "POLARS_MAX_THREADS", "ROOT_MAX_THREADS", "TF_NUM_THREADS",
+	} {
+		want[k] = "3"
+	}
+
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q in the job's environment, mrp sets %q", k, got[k], v)
+		}
 	}
 }
 
