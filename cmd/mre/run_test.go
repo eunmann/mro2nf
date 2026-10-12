@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/ir"
@@ -183,18 +184,33 @@ func TestChunksDirRefusesMissingChunks(t *testing.T) {
 }
 
 // TestRunStampsStage: a job's metadata dir names its stage before the job
-// runs, where the mrp ABI differential and failure attribution read it.
+// runs, where the mrp ABI differential and failure attribution read it. The
+// stamp creates the dir, so it gives the dir the job's mode: the job's own
+// MkdirAll leaves an existing dir's mode as it is.
 func TestRunStampsStage(t *testing.T) {
+	umask := syscall.Umask(0o022)
+	t.Cleanup(func() { syscall.Umask(umask) })
+
 	f := runFlags{rt: job.Runtime{Work: t.TempDir()}}
 	in := job.Instance{Stage: job.Stage{Callable: "SUM_SQUARES"}}
+	meta := filepath.Join(f.rt.Work, job.ChunkName(0, 1))
 
 	if err := f.stamp(in, job.ChunkName(0, 1)); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := os.ReadFile(filepath.Join(f.rt.Work, job.ChunkName(0, 1), "_mre_stage"))
+	got, err := os.ReadFile(filepath.Join(meta, "_mre_stage"))
 	if err != nil || string(got) != "SUM_SQUARES" {
 		t.Errorf("stage stamp %q (%v), want SUM_SQUARES", got, err)
+	}
+
+	fi, err := os.Stat(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fi.Mode().Perm() != job.DirPerm {
+		t.Errorf("metadata dir mode %v, want %v", fi.Mode().Perm(), os.FileMode(job.DirPerm))
 	}
 }
 
