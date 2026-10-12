@@ -101,12 +101,12 @@ func run(args []string) error {
 
 	log := logging.New()
 
-	prog, err := loadProgram(src, *f.mroPath)
+	opts, err := f.options(src, fromConfig)
 	if err != nil {
 		return err
 	}
 
-	opts, err := f.options(fs, fromConfig)
+	prog, err := loadProgram(src, opts.MROPath)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ type transpileFlags struct {
 func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 	return transpileFlags{
 		outDir:             fs.String("o", "out", "output directory for the generated Nextflow project"),
-		mroPath:            fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)"),
+		mroPath:            fs.String("mropath", "", mroPathUsage),
 		mre:                fs.String("mre", "mre", "path to the mre shim binary"),
 		shell:              fs.String("shell", "", "path to martian_shell.py"),
 		mrjob:              fs.String("mrjob", "", "path to mrjob (for comp stages)"),
@@ -172,22 +172,15 @@ func (f transpileFlags) configPtrs() cliPtrs {
 // options builds the single emit.Options both Diagnose and Emit consume — a new
 // flag added here reaches both, so they cannot diverge. emitProgram fills in
 // the source-derived fields (absolute tool paths, MROFile/MRODir, StageCode).
-// Only a -mropath given on fs bounds the copied files: the implicit "." would
-// trust the whole working directory, often $HOME. fromConfig names the flags a
-// config file set (applyConfig); the tools among them are not trusted.
-func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (emit.Options, error) {
+// The @include search path of the pipeline src also bounds the copied files:
+// the user named it (-mropath or $MROPATH), or it is the .mro's directory,
+// which bounds them anyway. fromConfig names the flags a config file set
+// (applyConfig); the tools among them are not trusted.
+func (f transpileFlags) options(src string, fromConfig map[string]bool) (emit.Options, error) {
 	target, err := emit.ParseTarget(*f.target)
 	if err != nil {
 		return emit.Options{}, fmt.Errorf("invalid -target: %w", err)
 	}
-
-	var roots []string
-
-	fs.Visit(func(fl *flag.Flag) {
-		if fl.Name == "mropath" {
-			roots = filepath.SplitList(*f.mroPath)
-		}
-	})
 
 	tools := map[string]bool{}
 
@@ -202,7 +195,7 @@ func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (e
 		Container: *f.container, Monitor: *f.monitor, Target: target,
 		Native:          *f.native,
 		InlinePipelines: *f.inlinePipelines, ConfineOutputs: *f.confineOutputs,
-		MROPath: roots, AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
+		MROPath: searchPath(*f.mroPath, src), AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
 		Version: buildVersion(),
 	}, nil
 }
@@ -218,7 +211,7 @@ func runOverrides(args []string) error {
 	fs := flag.NewFlagSet("overrides", flag.ContinueOnError)
 	mroFlag := fs.String("mro", "", "pipeline .mro: expands pipeline-scoped keys to their stages, validates stage names, "+
 		"and pins per-call selectors to literal pipeline names (avoids over-matching call names containing '__')")
-	mroPath := fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)")
+	mroPath := fs.String("mropath", "", mroPathUsage)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -254,14 +247,31 @@ func runOverrides(args []string) error {
 	return nil
 }
 
+const mroPathUsage = "search path for @include (os.PathListSeparator-separated; default $MROPATH, else the .mro's directory, as mrp)"
+
+// searchPath is the @include search path for the pipeline at src: given, else
+// $MROPATH, else src's directory — mrp's rule (martian cmd/mrp/configure.go,
+// "Compute MRO path").
+func searchPath(given, src string) []string {
+	if given != "" {
+		return filepath.SplitList(given)
+	}
+
+	if env := os.Getenv("MROPATH"); env != "" {
+		return filepath.SplitList(env)
+	}
+
+	return []string{filepath.Dir(src)}
+}
+
 // loadProgram parses and lowers the pipeline at src into the transpiler IR.
-func loadProgram(src, mroPath string) (*ir.Program, error) {
-	ast, err := frontend.Parse(src, filepath.SplitList(mroPath), false)
+func loadProgram(src string, mroPaths []string) (*ir.Program, error) {
+	ast, err := frontend.Parse(src, mroPaths, false)
 	if err != nil {
 		return nil, fmt.Errorf("transpile %s: %w", src, err)
 	}
 
-	prog, err := frontend.Lower(ast, filepath.SplitList(mroPath))
+	prog, err := frontend.Lower(ast, mroPaths)
 	if err != nil {
 		return nil, fmt.Errorf("transpile %s: %w", src, err)
 	}
@@ -280,12 +290,14 @@ func loadOverrideProgram(mro, mroPath string) (*ir.Program, error) {
 		return nil, nil
 	}
 
-	ast, err := frontend.Parse(mro, filepath.SplitList(mroPath), false)
+	mroPaths := searchPath(mroPath, mro)
+
+	ast, err := frontend.Parse(mro, mroPaths, false)
 	if err != nil {
 		return nil, fmt.Errorf("parse pipeline %s: %w", mro, err)
 	}
 
-	prog, err := frontend.Lower(ast, filepath.SplitList(mroPath))
+	prog, err := frontend.Lower(ast, mroPaths)
 	if err != nil {
 		return nil, fmt.Errorf("lower pipeline %s: %w", mro, err)
 	}

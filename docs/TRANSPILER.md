@@ -119,7 +119,8 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
 - Flags: `-o <dir>` (output project), `-mre`/`-shell`/`-mrjob` (paths to the
   runtime shim, the Martian Python adapter, and the optional compiled-stage
   wrapper, all baked into the generated scripts), `-mropath` (search path for
-  `@include`), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
+  `@include` and stage `src`; default `$MROPATH` when set, else the `.mro`'s
+  directory, as `mrp`'s `cmd/mrp/configure.go` computes it), `-target` (`local` | `awsbatch` | `healthomics`), `-container`
   (image URI for cloud targets), `-monitor` (per-stage memory enforcement),
   the opt-in emission mode `-native` (§4.8), `-allow-external-files` (§8,
   §10), `-config` (a `.mro2nf.yml` of per-project flag defaults; keys mirror the flags, an
@@ -135,7 +136,7 @@ The `mro2nf` CLI (`cmd/mro2nf/main.go`) ties this together:
   stays a PATH command; `-shell` is the interpreter's script argument, so even
   a bare name is a file in the working directory — records the
   `.mro`'s directory as `MRODir` (used to resolve relative file defaults — see
-  §8) and the `-mropath` roots as `MROPath`, and calls `emit.Emit(prog, opts)`.
+  §8) and the search path's roots as `MROPath`, and calls `emit.Emit(prog, opts)`.
 
 The IR (`internal/ir/ir.go`) is the contract between front end and emitter. Its
 core types:
@@ -687,9 +688,9 @@ the bundle is self-contained), and stages each file default into
 `entry_args/f/`.
 
 A file default is staged only when it resolves, after following symlinks,
-inside the `.mro`'s directory or a `-mropath` root given on the command line
-(the implicit default `.` is an `@include` search path only, not a root, so
-transpiling from `$HOME` does not admit everything under it), and so does
+inside the `.mro`'s directory or a root of the `-mropath` (or `$MROPATH`) the
+user named — never the working directory, so transpiling from `$HOME` does not
+admit everything under it — and so does
 every symlink staging would follow inside a directory default. Anything else
 fails the transpile naming the input and the path, so a shared `.mro` whose
 default points at `~/.ssh` cannot bake it into the project,

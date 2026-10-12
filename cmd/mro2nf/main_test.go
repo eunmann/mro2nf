@@ -240,7 +240,7 @@ func TestApplyConfigNativeReachesOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opts, err := f.options(fs, applied)
+	opts, err := f.options(mro, applied)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestBuildVersionReachesOptions(t *testing.T) {
 			fs := flag.NewFlagSet("t", flag.ContinueOnError)
 			f := defineTranspileFlags(fs)
 
-			opts, err := f.options(fs, nil)
+			opts, err := f.options("p.mro", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -306,22 +306,29 @@ func TestChooseVersion(t *testing.T) {
 	}
 }
 
-// TestSourceRootFlagsReachOptions checks an explicit -mropath reaches Emit
-// split into the roots that bound copied files while the implicit "." adds
-// none, and that copying an external file takes the explicit
-// -allow-external-files.
+// TestSourceRootFlagsReachOptions checks the search path reaches Emit split
+// into the roots that bound copied files — -mropath, else $MROPATH, else the
+// .mro's directory, as mrp — and that copying an external file takes the
+// explicit -allow-external-files.
 func TestSourceRootFlagsReachOptions(t *testing.T) {
+	list := func(dirs ...string) string { return strings.Join(dirs, string(os.PathListSeparator)) }
+
 	for _, tc := range []struct {
 		name      string
+		env       string
 		args      []string
 		wantPath  []string
 		wantAllow bool
 	}{
-		{"default", []string{"p.mro"}, nil, false},
-		{"explicit_cwd", []string{"-mropath", ".", "p.mro"}, []string{"."}, false},
-		{"opt_in", []string{"-mropath", "a" + string(os.PathListSeparator) + "b", "-allow-external-files", "p.mro"}, []string{"a", "b"}, true},
+		{"default", "", []string{"proj/p.mro"}, []string{"proj"}, false},
+		{"env", list("m1", "m2"), []string{"proj/p.mro"}, []string{"m1", "m2"}, false},
+		{"flag_beats_env", "m1", []string{"-mropath", "a", "proj/p.mro"}, []string{"a"}, false},
+		{"explicit_cwd", "", []string{"-mropath", ".", "proj/p.mro"}, []string{"."}, false},
+		{"opt_in", "", []string{"-mropath", list("a", "b"), "-allow-external-files", "p.mro"}, []string{"a", "b"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MROPATH", tc.env)
+
 			fs := flag.NewFlagSet("t", flag.ContinueOnError)
 			f := defineTranspileFlags(fs)
 
@@ -329,7 +336,7 @@ func TestSourceRootFlagsReachOptions(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			opts, err := f.options(fs, nil)
+			opts, err := f.options(fs.Arg(0), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -454,17 +461,18 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 }
 
-// TestRunDefaultMROPathIsNotARoot checks the implicit -mropath of the working
-// directory does not admit an entry default under it: transpiling a shared
-// .mro from $HOME must not stage a file elsewhere in $HOME. An explicit
-// -mropath still does.
-func TestRunDefaultMROPathIsNotARoot(t *testing.T) {
+// TestRunWorkingDirIsNotARoot checks the working directory does not admit an
+// entry default under it: transpiling a shared .mro from $HOME must not stage
+// a file elsewhere in $HOME. A search path the user names, by -mropath or
+// $MROPATH, does.
+func TestRunWorkingDirIsNotARoot(t *testing.T) {
 	home := t.TempDir()
 	secret := filepath.Join(home, "secret.txt")
 	writeTestFile(t, secret, "SECRET")
 
 	mro := writeSharedPipeline(t, filepath.Join(home, "shared"), secret)
 	t.Chdir(home)
+	t.Setenv("MROPATH", "")
 
 	if err := run([]string{"-o", t.TempDir(), mro}); !errors.Is(err, emit.ErrExternalFile) {
 		t.Errorf("run from the default's parent: want ErrExternalFile, got %v", err)
@@ -472,6 +480,80 @@ func TestRunDefaultMROPathIsNotARoot(t *testing.T) {
 
 	if err := run([]string{"-o", t.TempDir(), "-mropath", ".", mro}); err != nil {
 		t.Errorf("run with an explicit -mropath holding the default: %v", err)
+	}
+
+	t.Setenv("MROPATH", home)
+
+	if err := run([]string{"-o", t.TempDir(), mro}); err != nil {
+		t.Errorf("run with $MROPATH holding the default: %v", err)
+	}
+}
+
+const includingMRO = `@include "lib.mro"
+
+pipeline EP(
+    in  path reads,
+    out int  total,
+)
+{
+    call COUNT(
+        reads = self.reads,
+    )
+
+    return (
+        total = COUNT.total,
+    )
+}
+
+call EP(
+    reads = "input.txt",
+)
+`
+
+const libMRO = `stage COUNT(
+    in  path reads,
+    out int  total,
+    src py   "stages/count",
+)
+`
+
+// TestRunDefaultSearchPath checks both subcommands search @include as mrp
+// does when -mropath is not given: $MROPATH when set, else the .mro's
+// directory — never the working directory, whose unrelated lib.mro would make
+// the include ambiguous or resolve it to the wrong stages.
+func TestRunDefaultSearchPath(t *testing.T) {
+	cwd := t.TempDir()
+	writeTestFile(t, filepath.Join(cwd, "lib.mro"), "stage OTHER(\n    src py \"stages/other\",\n)\n")
+	t.Chdir(cwd)
+
+	overridesJSON := filepath.Join(t.TempDir(), "overrides.json")
+	writeTestFile(t, overridesJSON, "{}")
+
+	beside := t.TempDir()
+	writeTestFile(t, filepath.Join(beside, "lib.mro"), libMRO)
+
+	libDir := t.TempDir()
+	writeTestFile(t, filepath.Join(libDir, "lib.mro"), libMRO)
+
+	for _, tc := range []struct{ name, env, dir string }{
+		{"mro_dir", "", beside},
+		{"env", libDir, t.TempDir()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MROPATH", tc.env)
+
+			writeTestFile(t, filepath.Join(tc.dir, "input.txt"), "reads")
+			mro := filepath.Join(tc.dir, "pipeline.mro")
+			writeTestFile(t, mro, includingMRO)
+
+			if err := run([]string{"-o", t.TempDir(), mro}); err != nil {
+				t.Errorf("transpile: %v", err)
+			}
+
+			if err := runOverrides([]string{"-mro", mro, overridesJSON}); err != nil {
+				t.Errorf("overrides: %v", err)
+			}
+		})
 	}
 }
 
@@ -552,7 +634,7 @@ func TestReportDiagnostics(t *testing.T) {
 		t.Run(tc.fixture, func(t *testing.T) {
 			mro := filepath.Join("..", "..", "testdata", tc.fixture, "pipeline.mro")
 
-			prog, err := loadProgram(mro, filepath.Dir(mro))
+			prog, err := loadProgram(mro, []string{filepath.Dir(mro)})
 			if err != nil {
 				t.Fatal(err)
 			}
