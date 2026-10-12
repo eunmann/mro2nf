@@ -1,12 +1,14 @@
 package cg
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -129,6 +131,47 @@ func TestAgreeIndexMatchesScan(t *testing.T) {
 	}
 }
 
+// TestPlanEntryLinear: planning a nested map call's entry forks costs about
+// the same per fork at two outer widths 8-fold apart. Planning that scans
+// the forks of a root under each fork of its outer roots costs 5x more per
+// fork at the wider; the bound leaves room for timing noise, and each
+// width's time is the fastest of interleaved runs.
+func TestPlanEntryLinear(t *testing.T) {
+	widths := []int{512, 4096}
+	owns := make([]map[string][]Element, len(widths))
+	roots := make([][]TopoRoot, len(widths))
+	best := make([]float64, len(widths))
+
+	for i, n := range widths {
+		g, wt := nestedPlan(t, n)
+		owns[i], roots[i], best[i] = nestedOwn(t, g, wt), wt.Roots, math.Inf(1)
+	}
+
+	for range 5 {
+		for i := range widths {
+			start := time.Now()
+			if _, _, err := planEntry(roots[i], owns[i]); err != nil {
+				t.Fatal(err)
+			}
+
+			best[i] = min(best[i], float64(time.Since(start).Nanoseconds())/float64(forkCount(owns[i])))
+		}
+	}
+
+	if best[1] > 2.5*best[0] {
+		t.Errorf("plan: %.0f ns/fork at %d outer forks, %.0f at %d, want about the same", best[0], widths[0], best[1], widths[1])
+	}
+}
+
+func forkCount(own map[string][]Element) int {
+	n := 0
+	for _, els := range own {
+		n += len(els)
+	}
+
+	return n
+}
+
 func ordsMatch(a, b map[string]int) bool {
 	for k, v := range a {
 		if w, ok := b[k]; ok && w != v {
@@ -154,12 +197,7 @@ func BenchmarkPlanEntry(b *testing.B) {
 				}
 			}
 
-			forks := 0
-			for _, els := range own {
-				forks += len(els)
-			}
-
-			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*forks), "ns/fork")
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*forkCount(own)), "ns/fork")
 		})
 	}
 }
