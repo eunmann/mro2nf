@@ -128,3 +128,142 @@ func TestMergeAcrossOuterForksFails(t *testing.T) {
 		})
 	}
 }
+
+// acrossStages are merge_across_outer's stages, MK also returning its xs as
+// a map.
+const acrossStages = `
+stage MK(
+    in  int      n,
+    out int[]    xs,
+    out map<int> km,
+    src py       "stages/mk",
+)
+
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+`
+
+// TestMergeAcrossOuterForksRefused: a merge across an outer map call's forks
+// that mro2nf does not list as mrp does fails the outs, not gathering only
+// the element's own forks: a merge of a map call, a merge across two outer
+// map calls of several forks each, and a merged value other than a
+// reference at an empty fork.
+func TestMergeAcrossOuterForksRefused(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		in   func(*fixture) []string
+	}{
+		{"map_call", acrossStages + `
+pipeline SUB(in int n, out map<int> ys,)
+{
+    call MK(n = self.n,)
+    map call SQ(x = split MK.km,)
+    return (ys = SQ.y,)
+}
+`, mapCallOuts},
+		{"two_outer_calls", acrossStages + `
+pipeline SUB2(in int n, out int[] ys,)
+{
+    call MK(n = self.n,)
+    map call SQ(x = split MK.xs,)
+    return (ys = SQ.y,)
+}
+
+pipeline SUB(in int n, out SUB2[] s2,)
+{
+    map call SUB2(n = split [self.n, self.n],)
+    return (s2 = SUB2,)
+}
+`, twoOuterOuts},
+		{"struct_at_empty_fork", acrossStages + `
+pipeline P(in int x, out int y, out int k,)
+{
+    call SQ(x = self.x,)
+    return (y = SQ.y, k = 5,)
+}
+
+pipeline SUB(in int n, out P[] ps,)
+{
+    call MK(n = self.n,)
+    map call P(x = split MK.xs,)
+    return (ps = P,)
+}
+`, structOuts},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := loadSource(t, tc.src+`
+pipeline TOP(out SUB[] subs,)
+{
+    map call SUB(n = split [2, 2],)
+    return (subs = SUB,)
+}
+
+call TOP()
+`)
+
+			err := f.g.WriteOuts(OutsSpec{In: tc.in(f), Out: f.next("pipeline")})
+			if !errors.Is(err, errMergeAcrossForks) {
+				t.Fatalf("pipeline outs: %v, want %v", err, errMergeAcrossForks)
+			}
+		})
+	}
+}
+
+// mapCallOuts stages the outs of map_call's stages: at each outer fork, MK
+// returns km {a, b} and SQ a y at each key.
+func mapCallOuts(f *fixture) []string {
+	in := make([]string, 0, 6)
+
+	for s := range 2 {
+		sub := f.part("TOP.SUB", ArrayIndex(s))
+
+		for _, k := range []string{"a", "b"} {
+			in = append(in, f.outs("TOP.SUB.SQ", Fork{sub, f.part("TOP.SUB.SQ", MapKey(k))}, `{"y":1}`))
+		}
+
+		in = append(in, f.outs("TOP.SUB.MK", Fork{sub}, `{"xs":[],"km":{"a":1,"b":2}}`))
+	}
+
+	return in
+}
+
+// twoOuterOuts stages the outs of two_outer_calls' stages: two SQ forks
+// under each of SUB2's two forks under each of SUB's two.
+func twoOuterOuts(f *fixture) []string {
+	in := make([]string, 0, 12)
+
+	for s := range 2 {
+		sub := f.part("TOP.SUB", ArrayIndex(s))
+
+		for s2 := range 2 {
+			sub2 := f.part("TOP.SUB.SUB2", ArrayIndex(s2))
+
+			for q := range 2 {
+				in = append(in, f.outs("TOP.SUB.SUB2.SQ", Fork{sub, sub2, f.part("TOP.SUB.SUB2.SQ", ArrayIndex(q))}, `{"y":1}`))
+			}
+
+			in = append(in, f.outs("TOP.SUB.SUB2.MK", Fork{sub, sub2}, `{"xs":[1,2],"km":{}}`))
+		}
+	}
+
+	return in
+}
+
+// structOuts stages the outs of struct_at_empty_fork's stages: P has two
+// forks under SUB's first fork and none under its second.
+func structOuts(f *fixture) []string {
+	first := f.part("TOP.SUB", ArrayIndex(0))
+
+	return []string{
+		f.outs("TOP.SUB.P.SQ", Fork{first, f.part("TOP.SUB.P", ArrayIndex(0))}, `{"y":1}`),
+		f.outs("TOP.SUB.P.SQ", Fork{first, f.part("TOP.SUB.P", ArrayIndex(1))}, `{"y":4}`),
+		f.outs("TOP.SUB.MK", Fork{first}, `{"xs":[1,2],"km":{}}`),
+		f.outs("TOP.SUB.MK", Fork{f.part("TOP.SUB", ArrayIndex(1))}, `{"xs":[],"km":{}}`),
+	}
+}

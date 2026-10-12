@@ -201,10 +201,6 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 		return out, nil
 	}
 
-	if len(parts.list) == 1 && parts.list[0] == nil {
-		return marshalerArray{}, nil
-	}
-
 	out := make(marshalerArray, len(parts.list))
 
 	for i, ix := range parts.list {
