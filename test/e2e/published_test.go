@@ -114,12 +114,12 @@ func loadPublished(allow divergence.Allowlist, fixture, ps, results string) (pub
 // loadOutsJSON decodes the outs JSON of the mrp pipestance ps and mro2nf's
 // results/pipeline_outs.json.
 func loadOutsJSON(allow divergence.Allowlist, fixture, ps, results string) (any, any, error) {
-	mrp, err := mrpOutsJSON(allow, fixture, ps)
+	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nfOutsRewrite(allow, fixture))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	nf, err := decodeOutsFile(filepath.Join(results, "pipeline_outs.json"), nfOutsRewrite(allow, fixture))
+	mrp, err := mrpOutsJSON(allow, fixture, ps, nf)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -154,8 +154,10 @@ func nfOutsRewrite(allow divergence.Allowlist, fixture string) func(string) stri
 }
 
 // mrpOutsJSON decodes the outs JSON the mrp pipestance ps of fixture writes
-// to its top pipeline's fork0 metadata (<pipestance>/<PIPELINE>/fork0/_outs).
-func mrpOutsJSON(allow divergence.Allowlist, fixture, ps string) (any, error) {
+// to its top pipeline's fork0 metadata (<pipestance>/<PIPELINE>/fork0/_outs),
+// each string rewritten against its counterpart in nf, the decoded
+// pipeline_outs.json it is compared with, or nil for none.
+func mrpOutsJSON(allow divergence.Allowlist, fixture, ps string, nf any) (any, error) {
 	// Glob results come back sorted, so [0] is deterministic.
 	matches, err := filepath.Glob(filepath.Join(ps, "*", "fork0", "_outs"))
 	if err != nil {
@@ -171,7 +173,12 @@ func mrpOutsJSON(allow divergence.Allowlist, fixture, ps string) (any, error) {
 		return nil, err
 	}
 
-	return decodeOutsFile(matches[0], rewrite)
+	v, err := decodeOutsFile(matches[0], nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return pairJSONStrings(v, nf, rewrite), nil
 }
 
 // normalizeOutsFile reads an outs JSON file into its compact form, its key
@@ -207,14 +214,16 @@ func decodeOutsFile(path string, rewrite func(string) string) (any, error) {
 	return v, nil
 }
 
-// mrpOutsRewrite returns the rewrite of mrp's outs JSON strings the
-// allowlist excuses: the target path mrp names for a symlink it published
-// becomes the link's own path, a path in the pipestance outside its outs dir,
-// where mrp names a file it left unpublished, becomes the placeholder, and
-// the outs dir prefix is stripped from a path, since mro2nf names published
-// files relative to results/.
-func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(string) string, error) {
-	links := map[string]string{}
+// mrpOutsRewrite returns the rewrite of an mrp outs JSON string, given its
+// counterpart in pipeline_outs.json, that the allowlist excuses: the target
+// path mrp names for a symlink it published becomes the link's own path, then
+// mrpPathRewrite applies. mrp names a target once for each output that
+// reaches it and links each output's own path to it, and the pipestance does
+// not record which link is whose, so a target with several links becomes the
+// one its counterpart names, each link for one reference only; a reference
+// left without one keeps the target.
+func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(string, any) string, error) {
+	links := map[string][]string{}
 
 	if allow.Excuses(divergence.RuleMrpPublishedSymlinks, fixture) {
 		var err error
@@ -225,6 +234,33 @@ func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(stri
 		}
 	}
 
+	rewrite := mrpPathRewrite(allow, fixture, outs)
+	claimed := map[string]bool{}
+
+	return func(s string, nf any) string {
+		paths := links[s]
+		if len(paths) == 1 {
+			return rewrite(paths[0])
+		}
+
+		for _, p := range paths {
+			if !claimed[p] && rewrite(p) == nf {
+				claimed[p] = true
+
+				return rewrite(p)
+			}
+		}
+
+		return rewrite(s)
+	}, nil
+}
+
+// mrpPathRewrite returns the rewrite of a path in mrp's outs JSON the
+// allowlist excuses: a path in the pipestance outside its outs dir, where mrp
+// names a file it left unpublished, becomes the placeholder, and the outs dir
+// prefix is stripped from a path, since mro2nf names published files relative
+// to results/.
+func mrpPathRewrite(allow divergence.Allowlist, fixture, outs string) func(string) string {
 	inOuts := strings.TrimSuffix(outs, "/") + "/"
 
 	prefix := ""
@@ -238,10 +274,6 @@ func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(stri
 	}
 
 	return func(s string) string {
-		if link, ok := links[s]; ok {
-			s = link
-		}
-
 		if inPs != "" && strings.HasPrefix(s, inPs) && !strings.HasPrefix(s, inOuts) {
 			return unpublishedPath
 		}
@@ -251,20 +283,21 @@ func mrpOutsRewrite(allow divergence.Allowlist, fixture, outs string) (func(stri
 		}
 
 		return s
-	}, nil
+	}
 }
 
-// mrpPublishedLinks maps the path mrp's outs JSON names for each symlink it
-// published under outs to the symlink's path. mrp names the link's target,
-// except for a stage's relative symlink that leads through further links:
-// there outs/ links to the last intermediate link and mrp names that link's
-// target (martian/core/post_process.go copyOutSymlink, moveOutFile). So both
-// the target and, when it is a link, its target map to the symlink. A target
+// mrpPublishedLinks maps each path mrp's outs JSON names for a symlink it
+// published under outs to the sorted paths of the symlinks it names that path
+// for. mrp names the link's target, except for a stage's relative symlink
+// that leads through further links: there outs/ links to the last
+// intermediate link and mrp names that link's target
+// (martian/core/post_process.go copyOutSymlink, moveOutFile). So both the
+// target and, when it is a link, its target map to the symlink. A target
 // under outs is the file mrp moved there for the first output that reached it,
 // and the path mro2nf names for every output that reaches it too, so it is
 // kept.
-func mrpPublishedLinks(outs string) (map[string]string, error) {
-	links := map[string]string{}
+func mrpPublishedLinks(outs string) (map[string][]string, error) {
+	links := map[string][]string{}
 	inOuts := strings.TrimSuffix(outs, "/") + "/"
 
 	err := filepath.WalkDir(outs, func(p string, d fs.DirEntry, err error) error {
@@ -277,10 +310,10 @@ func mrpPublishedLinks(outs string) (map[string]string, error) {
 			return err
 		}
 
-		links[target] = p
+		links[target] = append(links[target], p)
 
 		if next, err := readLinkAbs(target); err == nil && !strings.HasPrefix(next, inOuts) {
-			links[next] = p
+			links[next] = append(links[next], p)
 		}
 
 		return nil

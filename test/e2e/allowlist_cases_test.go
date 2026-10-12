@@ -16,9 +16,10 @@ import (
 )
 
 // publishedPair lays out, as an mrp pipestance and an mro2nf results dir,
-// what the two runtimes published for a pipeline with a plain file output, a
-// file output the stage wrote as a symlink to a host file (as symlink_escape
-// does), a file output the stage wrote as a relative symlink to a link to a
+// what the two runtimes published for a pipeline with a plain file output, two
+// file outputs bound to one stage file the stage wrote as a symlink to a host
+// file (as symlink_escape does), which mrp publishes as two links to the host
+// file, a file output the stage wrote as a relative symlink to a link to a
 // host file, two file outputs bound to one stage file, which mrp publishes
 // once and links to from the second, a 2-D file array both leave unpublished
 // and name where their tasks wrote each file, and a struct output whose
@@ -34,7 +35,7 @@ func publishedPair(t *testing.T) (string, string) {
 	writeABITestFile(t, filepath.Join(outs, "note.txt"), "21.0")
 	shared := writeABITestFile(t, filepath.Join(outs, "shared.txt"), "shared")
 
-	for _, link := range [][2]string{{host, "linked.txt"}, {"shared.txt", "again.txt"}} {
+	for _, link := range [][2]string{{host, "linked.txt"}, {host, "relinked.txt"}, {"shared.txt", "again.txt"}} {
 		if err := os.Symlink(link[0], filepath.Join(outs, link[1])); err != nil {
 			t.Fatal(err)
 		}
@@ -43,7 +44,8 @@ func publishedPair(t *testing.T) (string, string) {
 	chained := mrpChainedOutput(t, ps)
 
 	mrpOuts, err := json.Marshal(map[string]any{
-		"again": shared, "chained": chained, "grid": pairMrpGrid(ps), "linked": host, "note": filepath.Join(outs, "note.txt"), "shared": shared,
+		"again": shared, "chained": chained, "grid": pairMrpGrid(ps), "linked": host, "note": filepath.Join(outs, "note.txt"),
+		"relinked": host, "shared": shared,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +56,7 @@ func publishedPair(t *testing.T) (string, string) {
 
 	writeABITestFile(t, filepath.Join(results, "note.txt"), "21.0")
 	writeABITestFile(t, filepath.Join(results, "linked.txt"), "print('linked')\n")
+	writeABITestFile(t, filepath.Join(results, "relinked.txt"), "print('linked')\n")
 	writeABITestFile(t, filepath.Join(results, "chained.txt"), "chained\n")
 	writeABITestFile(t, filepath.Join(results, "shared.txt"), "shared")
 	writeABITestFile(t, filepath.Join(results, "again.txt"), "shared")
@@ -100,7 +103,40 @@ func pairMrpRelativeJSON(t *testing.T, ps string) string {
 // pairOuts is an outs JSON of publishedPair with the given grid and stats.
 func pairOuts(grid, stats string) string {
 	return `{"again": "shared.txt", "chained": "chained.txt", "grid": ` + grid +
-		`, "linked": "linked.txt", "note": "note.txt", "shared": "shared.txt", "stats": ` + stats + `}`
+		`, "linked": "linked.txt", "note": "note.txt", "relinked": "relinked.txt", "shared": "shared.txt", "stats": ` + stats + `}`
+}
+
+// pairOutsOneLink is the pipeline_outs.json of publishedPair with both
+// outputs that reach the host file naming link, one of mrp's two links to it.
+func pairOutsOneLink(link string) string {
+	both := `"linked": "` + link + `", "note": "note.txt", "relinked": "` + link + `"`
+
+	return strings.Replace(pairOutsJSON(pairStats), `"linked": "linked.txt", "note": "note.txt", "relinked": "relinked.txt"`, both, 1)
+}
+
+// TestHostFileLinkedFromTwoOutputsMapsEachLink runs the published-output
+// comparison on publishedPair, whose two outputs reach one host file that mrp
+// links to from two paths in outs/ and names by its own path in both: the
+// outs JSON matches where each output names a different link, and differs
+// where both name the same one.
+func TestHostFileLinkedFromTwoOutputsMapsEachLink(t *testing.T) {
+	allow := mustAllowlist(t)
+
+	for _, link := range []string{"linked.txt", "relinked.txt"} {
+		t.Run(link, func(t *testing.T) {
+			ps, results := publishedPair(t)
+			writeABITestFile(t, filepath.Join(results, "pipeline_outs.json"), pairOutsOneLink(link))
+
+			reports, err := diffPublished(allow, pairFixture, ps, results)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := strings.Join(reports, "\n"); len(reports) != 1 || !strings.Contains(got, "_outs json mismatch") {
+				t.Errorf("reports %q, want one _outs json mismatch", got)
+			}
+		})
+	}
 }
 
 // pairFixture is the fixture publishedPair stands in for.
@@ -206,7 +242,8 @@ func TestScopedRuleEntryFailsWhereItExcusesNothing(t *testing.T) {
 // TestNormcmpAppliesTheAllowlist runs normcmp.py, the AWS lanes' outs JSON
 // comparator, on the outs JSON of publishedPair: it matches under the
 // checked-in allowlist, fails without any of its entries, and fails on a key
-// order or number token change the allowlist does not excuse.
+// order or number token change the allowlist does not excuse, or where both
+// outputs that reach the host file name one of its links.
 func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 	requireTools(t, "python3")
 
@@ -218,6 +255,8 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 		pairOutsJSON(`{"count": 4, "mean": 2.5, "total": 10.0}`))
 	intJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_int.json"),
 		pairOutsJSON(`{"count": 4, "total": 10, "mean": 2.5}`))
+	linkedJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_linked.json"), pairOutsOneLink("linked.txt"))
+	relinkedJSON := writeABITestFile(t, filepath.Join(t.TempDir(), "nf_relinked.json"), pairOutsOneLink("relinked.txt"))
 
 	checkedIn := filepath.Join(root, "test", "e2e", allowlistFile)
 
@@ -228,6 +267,8 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 		{"checked_in", pairFixture, nfJSON, checkedIn, true},
 		{"key_order", pairFixture, sortedJSON, checkedIn, false},
 		{"number_token", pairFixture, intJSON, checkedIn, false},
+		{"host_file_one_link_first", pairFixture, linkedJSON, checkedIn, false},
+		{"host_file_one_link_last", pairFixture, relinkedJSON, checkedIn, false},
 		{"without_relative_paths", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "outs-json-relative-paths"), false},
 		{"without_published_symlinks", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "published-symlinks-copied"), false},
 		{"without_unpublished_paths", pairFixture, nfJSON, allowlistWithout(t, checkedIn, "unpublished-file-paths"), false},

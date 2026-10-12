@@ -1062,7 +1062,7 @@ func writeGenFixture(t *testing.T, env genEnv, p *gen.Program, v genVerdict) (st
 func recordGenGolden(allow divergence.Allowlist, tmp, dir string) error {
 	ps, fixture := filepath.Join(tmp, "mrp"), filepath.Base(dir)
 
-	outs, err := mrpOutsJSON(allow, fixture, ps)
+	outs, err := mrpOutsJSON(allow, fixture, ps, nil)
 	if err != nil {
 		return err
 	}
