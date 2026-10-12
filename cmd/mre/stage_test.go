@@ -9,19 +9,22 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/google/go-cmp/cmp"
 )
 
-// stageMRO has a task of every shape: SQ's split triad, ADD reading its
-// total, CP reading an entry file, EACH forked over an entry value, OFF
-// disabled, and FAIL failing as its how says.
+// stageMRO has a task of every shape: SQ's split triad, which also reads
+// an entry file, ADD reading its total, CP reading an entry file, EACH
+// forked over an entry value, OFF disabled, and FAIL failing as its how
+// says.
 const stageMRO = `filetype txt;
 
 stage SQ(
     in  int[] xs,
+    in  txt   reads,
     out int   total,
     src exec  "sq.sh",
 ) split (
@@ -54,11 +57,13 @@ pipeline P(
 )
 {
     call SQ(
-        xs = self.xs,
+        xs    = self.xs,
+        reads = self.reads,
     )
 
     call SQ as OFF(
-        xs = self.xs,
+        xs    = self.xs,
+        reads = self.reads,
     ) using (
         disabled = self.off,
     )
@@ -185,14 +190,18 @@ func unsplitTask(name, node, dir string, in ...string) stageTask {
 	}
 }
 
-// splitTasks are a split stage's triad: its split, a main per chunk, each
-// writing its outs into the join's chunkouts, and its join.
-func splitTasks(node string) []stageTask {
+// splitTasks are a split stage's triad: its split, which builds the args
+// bundle, copied, with the args step's own flags given as in, a main per
+// chunk, each writing its outs into the join's chunkouts, and its join.
+func splitTasks(node string, in ...string) []stageTask {
 	split := []string{"-args", "sp/args", "-o", "sp/chunks", "-work", "sp"}
 	tasks := []stageTask{{
-		name:  "split",
-		steps: [][]string{{"args", "-node", node, "-o", "sp/args"}, slices.Concat([]string{"run", "-phase", "split"}, split)},
-		stage: slices.Concat([]string{"stage", "-phase", "split", "-node", node}, split),
+		name: "split",
+		steps: [][]string{
+			slices.Concat([]string{"args", "-node", node, "-o", "sp/args"}, in),
+			slices.Concat([]string{"run", "-phase", "split"}, split),
+		},
+		stage: slices.Concat([]string{"stage", "-phase", "split", "-node", node}, in, split),
 	}}
 
 	for _, c := range []string{"chnk0", "chnk1"} {
@@ -221,7 +230,7 @@ func splitTasks(node string) []stageTask {
 func stageTasks(t *testing.T, records []string) []stageTask {
 	t.Helper()
 
-	tasks := append(splitTasks("P.SQ"), unsplitTask("non-split", "P.ADD", "add", "-in", "jn/outs/total"), unsplitTask("entry file", "P.CP", "cp", "-leaves", "0"))
+	tasks := append(splitTasks("P.SQ", "-leaves", "0"), unsplitTask("non-split", "P.ADD", "add", "-in", "jn/outs/total"), unsplitTask("entry file", "P.CP", "cp", "-leaves", "0"))
 	for i, rec := range records {
 		tasks = append(tasks, unsplitTask("fork "+strconv.Itoa(i), "P.EACH", "each"+strconv.Itoa(i), "-fork", rec))
 	}
@@ -344,9 +353,37 @@ func TestStageMatchesArgsRunPost(t *testing.T) {
 		t.Errorf("task trees differ (-args/run/post +stage):\n%s", d)
 	}
 
+	if got := argsLeaf(t, trees[1], "sp"); got != "7\n" {
+		t.Errorf("the split's args holds reads as %q, want a copy, as the chunks and join stage it", got)
+	}
+
+	if got := argsLeaf(t, trees[1], "cp"); !strings.HasPrefix(got, "-> ") {
+		t.Errorf("the non-split main's args holds reads as %q, want a link", got)
+	}
+
 	if got := compactBundle(t, filepath.Join(work, "add", "outs", "y")); got != `{"y":14}` {
 		t.Errorf("ADD's y %s, want SQ's total 13 plus 1", got)
 	}
+}
+
+// argsLeaf is the snapshot entry of the reads file leaf in the args bundle
+// of the task in dir.
+func argsLeaf(t *testing.T, tree map[string]string, dir string) string {
+	t.Helper()
+
+	var leaves []string
+
+	for rel, v := range tree {
+		if strings.HasPrefix(rel, dir+"/args/") && filepath.Base(rel) == "reads.txt" {
+			leaves = append(leaves, v)
+		}
+	}
+
+	if len(leaves) != 1 {
+		t.Fatalf("%s/args holds %d reads.txt leaves, want 1", dir, len(leaves))
+	}
+
+	return leaves[0]
 }
 
 func runStageTask(t *testing.T, mro string, task stageTask, oneCall bool) {
