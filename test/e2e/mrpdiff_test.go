@@ -616,6 +616,9 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// #301: an overrides key mrp's reader does not know fails the run before
 	// any stage runs.
 	{name: "overrides_unknown", mrp: runOutcome{Failed: true}, overrides: "overrides.json"},
+	// #496: outs reaching a directory and a file inside it. mrp succeeds and
+	// leaves a dangling link; mro2nf fails the delivery.
+	{name: "dir_and_inner_file", mrp: runOutcome{}, divergence: "dir-and-inner-file"},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
