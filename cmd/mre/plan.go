@@ -35,8 +35,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk, as mrp requires it: letters, digits, '-' and '_'")
 	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the call as mrp's invocation generator builds it")
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys cpus mem-gb overrides")
-	fs.StringVar(&f.roots, "roots", "roots", "dir to write one file per entry-fed fork root into, a line per fork: key record index-token")
-	fs.StringVar(&f.counts, "counts", "counts", "dir to write one file per entry-fed fork root into, a line per fork of its outer roots: count key")
+	fs.StringVar(&f.roots, "roots", "roots", "file to write one line per fork of every entry-fed fork root into: root key record index-token")
+	fs.StringVar(&f.counts, "counts", "counts", "file to write one line per fork of the outer roots of every entry-fed fork root into: root count key")
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
 	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
@@ -213,27 +213,30 @@ func (f *planFlags) write(p cg.Plan, rt job.Runtime) error {
 		return err
 	}
 
-	for root, pr := range p.Roots {
-		var forks, counts strings.Builder
+	return f.writeRoots(p.Roots)
+}
 
-		for _, pf := range pr.Forks {
-			fmt.Fprintf(&forks, "%s %s %s\n", cg.DottedKey(pf.Key), pf.Record, pf.Token)
+// writeRoots writes the forks of every entry-fed root, and their counts,
+// each as one record whatever the number of roots, so PLAN's outputs and
+// the driver's wiring of them stay fixed; each line leads with its root.
+func (f *planFlags) writeRoots(roots map[string]cg.PlanRoot) error {
+	var forks, counts strings.Builder
+
+	for _, root := range slices.Sorted(maps.Keys(roots)) {
+		for _, pf := range roots[root].Forks {
+			fmt.Fprintf(&forks, "%s %s %s %s\n", root, cg.DottedKey(pf.Key), pf.Record, pf.Token)
 		}
 
-		for _, pc := range pr.Counts {
-			fmt.Fprintf(&counts, "%d %s\n", pc.N, cg.DottedKey(pc.Key))
-		}
-
-		if err := writeText(filepath.Join(f.roots, root), forks.String()); err != nil {
-			return err
-		}
-
-		if err := writeText(filepath.Join(f.counts, root), counts.String()); err != nil {
-			return err
+		for _, pc := range roots[root].Counts {
+			fmt.Fprintf(&counts, "%s %d %s\n", root, pc.N, cg.DottedKey(pc.Key))
 		}
 	}
 
-	return nil
+	if err := writeText(f.roots, forks.String()); err != nil {
+		return err
+	}
+
+	return writeText(f.counts, counts.String())
 }
 
 // nodeResources is node n's record of its resources under the run's

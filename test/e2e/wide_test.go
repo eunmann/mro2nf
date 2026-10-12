@@ -22,6 +22,45 @@ func TestWidePipelineRuns(t *testing.T) {
 	runWide(t, wide.New(32, 150, 0))
 }
 
+// TestEntryRootsMatchMrp (#509): a pipeline of 300 entry-fed fork roots
+// runs to mrp's outputs and stage _args: PLAN's one record of every root's
+// forks, and one of their counts, reach each root's instances and sized
+// gathers as a record per root did. Most roots are disabled, so they fork
+// but run no task under either runner. PLAN declared two outputs per root
+// and outgrew the JVM's limit on a method past about 1,100 roots, whose
+// pipeline's 1,100 processes take the driver minutes to create;
+// TestEmitBoundsPlan pins PLAN's outputs and wiring at 600.
+func TestEntryRootsMatchMrp(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	bin := martianBin(t)
+
+	shardSkip(t)
+
+	p := wide.Roots(8, 280, 6)
+	if p.Roots < 300 {
+		t.Fatalf("the pipeline has %d entry-fed roots, want at least 300", p.Roots)
+	}
+
+	dir := t.TempDir()
+	if err := p.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	tmp := t.TempDir()
+	runMrpAt(t, bin, dir, "pipeline.mro", tmp)
+
+	proj := transpileDir(t, dir)
+	if err := runNextflow(t, proj); err != nil {
+		t.Fatalf("nextflow run: %v", err)
+	}
+
+	compareMrpToNextflow(t, "entry_roots", tmp, proj)
+	compareStageABI(t, "entry_roots", tmp, proj)
+}
+
 // runWide writes p, transpiles and runs it under Nextflow, and checks the
 // pipeline outs its stages compute.
 func runWide(t *testing.T, p wide.Pipeline) {
