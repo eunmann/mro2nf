@@ -130,13 +130,15 @@ process STAGE_SPLIT {
 }
 
 process STAGE_MAIN {
-    tag "${meta.node} ${key.join('.')} ${chunk.name}"
+    tag "${meta.node} ${key.join('.')} ${name}"
     cpus { meta.cpus }
     memory { mem(meta, task.attempt) }
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
+    // The chunk is staged below chunk/: the job's metadata dir is named as
+    // the chunk, and must not write through the link into the split's.
     input:
-    tuple val(meta), val(key), path('args'), path(chunk)
+    tuple val(meta), val(key), path('args'), val(name), path(chunk, stageAs: 'chunk/*')
 
     output:
     tuple val(meta), val(key), path('chunkout/*', type: 'dir'), emit: chunk
@@ -144,7 +146,7 @@ process STAGE_MAIN {
     script:
     """
     ${linkPlan(meta)}
-    ${job(meta, 'main', "-args args -chunk ${shq(chunk.name)} -o ${shq('chunkout/' + chunk.name)}")}
+    ${job(meta, 'main', "-args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
 }
 

@@ -148,6 +148,16 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 }
 
+// TestEmitStagesChunkApart: a chunk's main stages the split's chunk dir
+// below chunk/, apart from the job's metadata dir of the chunk's name, so
+// the job writes nothing into the split's outputs, which would change their
+// -resume key (split_test).
+func TestEmitStagesChunkApart(t *testing.T) {
+	if !strings.Contains(stageModule, "tuple val(meta), val(key), path('args'), val(name), path(chunk, stageAs: 'chunk/*')") {
+		t.Error("STAGE_MAIN does not stage its chunk below chunk/")
+	}
+}
+
 // TestEmitSizesChunksAndJoin: each chunk's main and the join are scheduled
 // with the resources the split returned for them, mrp's per-chunk and join
 // reservations (join_resources: the join requests 2 threads and 3 GB).
@@ -155,7 +165,7 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	main := readTree(t, emitFixture(t, "join_resources"))["main.nf"]
 
 	for _, want := range []string{
-		"cs.collect { c -> [sized(m, jsonOf(c.resolve('chunk.json')).resources) + [chunks: cs.size()], k, a, c] }",
+		"cs.collect { c -> [sized(m, jsonOf(c.resolve('chunk.json')).resources) + [chunks: cs.size()], k, a, c.name, c] }",
 		"s0.map { m, k, a, cs, j -> [k, sized(m, jsonOf(j)), a, cs, j] }",
 	} {
 		if !strings.Contains(main, want) {
