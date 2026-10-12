@@ -110,6 +110,52 @@ func TestResumeKeysOnlyOnATasksOwnTypes(t *testing.T) {
 	}
 }
 
+// TestResumeKeysOnANodesOverrides (#301): a -resume re-run under an edited
+// overrides file re-runs PLAN, which reads it, the tasks of the one node
+// whose resources it changes, and OUTS, which reads that node's outs, and
+// keeps every other task cached: each task keys on its own node's overrides
+// alone.
+func TestResumeKeysOnANodesOverrides(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	fixture := filepath.Join(root, "testdata", "overrides_resources")
+	proj := transpile(t, "overrides_resources")
+
+	if err := runNextflow(t, proj, "--mro2nf_overrides", filepath.Join(fixture, "overrides.json")); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	over, err := os.ReadFile(filepath.Join(fixture, "overrides.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	edited := filepath.Join(t.TempDir(), "overrides.json")
+	writeFileT(t, edited, strings.Replace(string(over), `"chunk.mem_gb": 2.25`, `"chunk.mem_gb": 2`, 1))
+
+	if err := runNextflow(t, proj, "-resume", "-with-trace", "edited.txt", "--mro2nf_overrides", edited); err != nil {
+		t.Fatalf("-resume under the edited overrides: %v", err)
+	}
+
+	rows := readTrace(t, filepath.Join(proj, "edited.txt"))
+	for _, row := range rows {
+		rerun := row.Name == "PLAN" || row.Name == "OUTS" || strings.HasSuffix(row.Name, "(OVR.OTHER)")
+		if (row.Status == "CACHED") == rerun {
+			t.Errorf("task %s: status %s, want cached=%v", row.Name, row.Status, !rerun)
+		}
+	}
+
+	var outs map[string]any
+
+	readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
+
+	if got, want := outs["other_res"], "threads=2 mem=2 args=2/2/5"; got != want {
+		t.Errorf("OTHER's resources after the edit %v, want %s", got, want)
+	}
+}
+
 // readersMRO maps PAIR over the forks of A.xs, beside a second SRC, B, that
 // nothing reads. Each readersEdits case changes only how PAIR reads A or B.
 const readersMRO = `stage SRC(

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -144,6 +145,77 @@ func TestRunPhasesOfASplitStage(t *testing.T) {
 	if _, err := runSQ(t, dir, "run", "-phase", "join", "-args", args, "-chunks", chunks, "-chunkouts", t.TempDir(),
 		"-o", filepath.Join(work, "outs2"), "-work", filepath.Join(work, "join2")); !errors.Is(err, errNoChunk) {
 		t.Errorf("join without chunk outs: %v, want errNoChunk", err)
+	}
+}
+
+// allocation is the resources a job's _jobinfo or _args record.
+type allocation struct {
+	Threads    float64 `json:"threads"`
+	MemGB      float64 `json:"memGB"`
+	VMemGB     float64 `json:"vmemGB"`
+	ArgThreads float64 `json:"__threads"`
+	ArgMemGB   float64 `json:"__mem_gb"`
+	ArgVMemGB  float64 `json:"__vmem_gb"`
+}
+
+func readAllocation(t *testing.T, path string) allocation {
+	t.Helper()
+
+	var a allocation
+	if err := json.Unmarshal([]byte(readText(t, path)), &a); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+
+	return a
+}
+
+// TestRunUnderOverrides: under -overrides, each job of a split stage gets
+// its phase's overridden resources in its _jobinfo, a chunk's in its _args
+// too, and the split schedules its chunks and join by them; an overrides
+// key mrp does not know fails the job before any stage code runs.
+func TestRunUnderOverrides(t *testing.T) {
+	dir, work := writeSQ(t), t.TempDir()
+	args, chunks := filepath.Join(work, "args"), filepath.Join(work, "chunks")
+	over := writeTestFile(t, filepath.Join(work, "overrides.json"),
+		`{"P": {"chunk.mem_gb": 2}, "P.SQ": {"split.threads": 2, "chunk.mem_gb": 3, "join.vmem_gb": 9}}`)
+
+	if _, err := runSQ(t, dir, "args", "-node", "P.SQ", "-o", args); err != nil {
+		t.Fatalf("mre args: %v", err)
+	}
+
+	phases := []struct {
+		phase, meta string
+		argv        []string
+		want        allocation
+	}{
+		{"split", "split", []string{"-o", chunks}, allocation{Threads: 2, MemGB: 1, VMemGB: 4}},
+		{"main", "chnk0", []string{"-chunk", filepath.Join(chunks, "chnk0"), "-o", filepath.Join(work, "chunkouts", "chnk0")}, allocation{Threads: 1, MemGB: 3, VMemGB: 6}},
+		{"main", "chnk1", []string{"-chunk", filepath.Join(chunks, "chnk1"), "-o", filepath.Join(work, "chunkouts", "chnk1")}, allocation{Threads: 1, MemGB: 3, VMemGB: 6}},
+		{"join", "join", []string{"-chunks", chunks, "-chunkouts", filepath.Join(work, "chunkouts"), "-o", filepath.Join(work, "outs")}, allocation{Threads: 1, MemGB: 1, VMemGB: 9}},
+	}
+
+	for _, p := range phases {
+		jw := filepath.Join(work, p.meta+"-work")
+		if _, err := runSQ(t, dir, append([]string{"run", "-phase", p.phase, "-args", args, "-overrides", over, "-work", jw}, p.argv...)...); err != nil {
+			t.Fatalf("%s: %v", p.meta, err)
+		}
+
+		if got := readAllocation(t, filepath.Join(jw, p.meta, "_jobinfo")); got != p.want {
+			t.Errorf("%s _jobinfo resources %+v, want %+v", p.meta, got, p.want)
+		}
+	}
+
+	if got, want := readText(t, filepath.Join(chunks, resourcesTable)), "chnk0\t1\t3\t\nchnk1\t1\t3\t\njoin\t1\t1\t\n"; got != want {
+		t.Errorf("resources table %q, want %q", got, want)
+	}
+
+	if got := readAllocation(t, filepath.Join(work, "chnk0-work", "chnk0", "_args")); got != (allocation{ArgThreads: 1, ArgMemGB: 3, ArgVMemGB: 6}) {
+		t.Errorf("chunk _args resources %+v, want 1 thread, 3 GB, 6 GB vmem", got)
+	}
+
+	bad := writeTestFile(t, filepath.Join(work, "bad.json"), `{"P.SQ": {"threads": 2}}`)
+	if _, err := runSQ(t, dir, "run", "-phase", "split", "-args", args, "-overrides", bad, "-o", t.TempDir(), "-work", t.TempDir()); err == nil || !strings.Contains(err.Error(), `unknown field "threads"`) {
+		t.Errorf("run under an unknown key: %v, want it refused", err)
 	}
 }
 

@@ -94,11 +94,11 @@ func runMrp(t *testing.T, bin, fixture, tmp string) {
 }
 
 // runMrpAt is runMrp for the entry .mro of a fixture at an arbitrary dir (e.g.
-// a bench/ width variant).
-func runMrpAt(t *testing.T, bin, dir, mro, tmp string) {
+// a bench/ width variant), with extra flags.
+func runMrpAt(t *testing.T, bin, dir, mro, tmp string, extra ...string) {
 	t.Helper()
 
-	if out, err := execMrp(t.Context(), bin, dir, mro, tmp); err != nil {
+	if out, err := execMrp(t.Context(), bin, dir, mro, tmp, extra...); err != nil {
 		t.Fatalf("mrp %s: %v\n%s", filepath.Join(dir, mro), err, tail(out, 12))
 	}
 }
@@ -110,19 +110,21 @@ var errMrpUnfinished = errors.New("mrp did not finish")
 // also writes to <tmp>/mrp.log, and its error. When ctx ends first, mrp is
 // sent SIGTERM, on which it stops its jobs, and the error wraps
 // errMrpUnfinished.
-func execMrp(ctx context.Context, bin, dir, mro, tmp string) ([]byte, error) {
+func execMrp(ctx context.Context, bin, dir, mro, tmp string, extra ...string) ([]byte, error) {
 	// disable keeps intermediate stage files, which the stage-ABI diff hashes
 	// through the paths in each invocation's _args/_outs; mrp's default rolling
 	// VDR deletes them once their consumers finish.
-	return execMrpVDR(ctx, bin, dir, mro, tmp, "disable")
+	return execMrpVDR(ctx, bin, dir, mro, tmp, "disable", extra...)
 }
 
 // execMrpVDR is execMrp under the given --vdrmode.
-func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string) ([]byte, error) {
+func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string, extra ...string) ([]byte, error) {
 	// Preflight stages run (no --nopreflight) because mro2nf runs them, so their
 	// invocations pair up.
-	cmd := exec.CommandContext(ctx, filepath.Join(bin, "mrp"), filepath.Join(dir, mro), "mrp",
-		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode="+vdrMode)
+	cmd := exec.CommandContext(ctx, filepath.Join(bin, "mrp"), slices.Concat([]string{
+		filepath.Join(dir, mro), "mrp",
+		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode=" + vdrMode,
+	}, extra)...)
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "MROPATH="+dir)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
@@ -270,11 +272,13 @@ func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit fu
 // repo-relative dir (bench/<shape>); a testdata/ fixture leaves it empty and
 // runs its pipeline.mro. cloud adds a leg run under cloudConfig, each task in
 // its own scratch dir with its inputs copied in, as on an object-store work
-// dir.
+// dir. overrides names an mrp --overrides file in the fixture's dir, which
+// both runs are launched with.
 type mrpDiffCase struct {
-	name  string
-	mro   string
-	cloud bool
+	name      string
+	mro       string
+	cloud     bool
+	overrides string
 }
 
 // source returns the dir and entry .mro the case runs.
@@ -284,6 +288,25 @@ func (tc mrpDiffCase) source() (string, string) {
 	}
 
 	return filepath.Join(root, "testdata", tc.name), "pipeline.mro"
+}
+
+// flags are the case's launch flags of mrp and of Nextflow.
+func (tc mrpDiffCase) flags() ([]string, []string) {
+	dir, _ := tc.source()
+
+	return overridesFlags(dir, tc.overrides)
+}
+
+// overridesFlags are the flags that launch mrp, and a transpiled project,
+// with the overrides file named file in dir, or none.
+func overridesFlags(dir, file string) ([]string, []string) {
+	if file == "" {
+		return nil, nil
+	}
+
+	path := filepath.Join(dir, file)
+
+	return []string{"--overrides=" + path}, []string{"--mro2nf_overrides", path}
 }
 
 // mrpDiffCases are the fixtures run under both mrp and Nextflow; every other
@@ -540,6 +563,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// inner fork across the outer forks, an empty one as null.
 	{name: "merge_across_outer"},
 	{name: "merge_across_empty"},
+	// #301: mrp's --overrides file at launch resizes each job as mrp does, by
+	// keys scoped to a stage, a sub-pipeline, the top-level pipeline, an
+	// aliased call and a map call, over a split's chunk and join requests.
+	{name: "overrides_resources", overrides: "overrides.json"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -586,6 +613,9 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// whose elements differ in length, or over a stage output.
 	{name: "map_pipe_nested", mrp: failedIn(failError, "")},
 	{name: "merge_across_short", mrp: failedIn(failError, "")},
+	// #301: an overrides key mrp's reader does not know fails the run before
+	// any stage runs.
+	{name: "overrides_unknown", mrp: runOutcome{Failed: true}, overrides: "overrides.json"},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -617,7 +647,8 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 
 	tmp := t.TempDir()
 	dir, mro := tc.source()
-	runMrpAt(t, bin, dir, mro, tmp)
+	mrpFlags, nfFlags := tc.flags()
+	runMrpAt(t, bin, dir, mro, tmp, mrpFlags...)
 
 	compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp))
 
@@ -630,7 +661,7 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 			proj := transpileMRO(t, dir, mro)
 			writeCloudConfig(t, proj)
 
-			if err := runNextflow(t, proj, "-c", "cloud.config"); err != nil {
+			if err := runNextflow(t, proj, append([]string{"-c", "cloud.config"}, nfFlags...)...); err != nil {
 				t.Fatalf("nextflow: %v", err)
 			}
 
@@ -647,8 +678,9 @@ func diffNextflow(t *testing.T, tc mrpDiffCase, tmp string) string {
 
 	dir, mro := tc.source()
 	proj := transpileMRO(t, dir, mro)
+	_, nfFlags := tc.flags()
 
-	if err := runNextflow(t, proj); err != nil {
+	if err := runNextflow(t, proj, nfFlags...); err != nil {
 		t.Fatalf("nextflow: %v", err)
 	}
 
@@ -715,8 +747,9 @@ func TestMrpDiffFailureParity(t *testing.T) {
 			}
 
 			tmp := t.TempDir()
-			mrp := mrpRunOutcome(t, bin, tc.name, tmp)
-			nf, attempts, nfLog := nfRunOutcome(t, tc.name)
+			mrpFlags, nfFlags := overridesFlags(filepath.Join(root, "testdata", tc.name), tc.overrides)
+			mrp := mrpRunOutcome(t, bin, tc.name, tmp, mrpFlags...)
+			nf, attempts, nfLog := nfRunOutcome(t, tc.name, nfFlags...)
 
 			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts)...)
 			for _, r := range reports {
@@ -730,13 +763,13 @@ func TestMrpDiffFailureParity(t *testing.T) {
 	}
 }
 
-// mrpRunOutcome runs a fixture under mrp in tmp and classifies the run. Only
-// mrp's non-zero exit counts as a failed run; mrp failing to start fails the
-// test.
-func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
+// mrpRunOutcome runs a fixture under mrp in tmp, with extra flags, and
+// classifies the run. Only mrp's non-zero exit counts as a failed run; mrp
+// failing to start fails the test.
+func mrpRunOutcome(t *testing.T, bin, fixture, tmp string, extra ...string) runOutcome {
 	t.Helper()
 
-	o, err := mrpOutcome(t.Context(), bin, filepath.Join(root, "testdata", fixture), tmp)
+	o, err := mrpOutcome(t.Context(), bin, filepath.Join(root, "testdata", fixture), tmp, extra...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -748,13 +781,14 @@ func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
 // attempt (nextflowRunOutcome), and the log that explains it. A
 // transpileRefused fixture must fail to transpile, the counterpart of mrp
 // refusing it before it makes a pipestance, so its outcome is a failure
-// blaming no stage, with no attempts. Any other fixture is transpiled and run.
-func nfRunOutcome(t *testing.T, fixture string) (runOutcome, []string, string) {
+// blaming no stage, with no attempts. Any other fixture is transpiled and
+// run, with extra launch flags.
+func nfRunOutcome(t *testing.T, fixture string, extra ...string) (runOutcome, []string, string) {
 	t.Helper()
 
 	if _, refused := transpileRefused[fixture]; !refused {
 		proj := transpile(t, fixture)
-		o, attempts := nextflowRunOutcome(t, proj)
+		o, attempts := nextflowRunOutcome(t, proj, extra...)
 
 		return o, attempts, tailFile(filepath.Join(proj, "run.log"))
 	}
@@ -769,9 +803,10 @@ func nfRunOutcome(t *testing.T, fixture string) (runOutcome, []string, string) {
 	return failedWith(nil), nil, err.Error()
 }
 
-// mrpOutcome runs dir's pipeline.mro under mrp in tmp and classifies the run.
-func mrpOutcome(ctx context.Context, bin, dir, tmp string) (runOutcome, error) {
-	_, err := execMrp(ctx, bin, dir, "pipeline.mro", tmp)
+// mrpOutcome runs dir's pipeline.mro under mrp in tmp, with extra flags, and
+// classifies the run.
+func mrpOutcome(ctx context.Context, bin, dir, tmp string, extra ...string) (runOutcome, error) {
+	_, err := execMrp(ctx, bin, dir, "pipeline.mro", tmp, extra...)
 	if err == nil {
 		return runOutcome{}, nil
 	}
@@ -824,7 +859,10 @@ func nextflowOutcome(proj string, runErr error) (runOutcome, []string, error) {
 	var failed []failedAttempt
 
 	for _, r := range rows {
-		if r.Status == "FAILED" {
+		// PLAN starts the run as mrp starts one, compiling the invocation and
+		// reading the overrides file, so its failure is mrp's refusal to make
+		// a pipestance, which blames no stage (mrpFailedOutcome).
+		if r.Status == "FAILED" && r.Name != "PLAN" {
 			failed = append(failed, failedAttempt{Hash: r.Hash, Exit: r.Exit})
 		}
 	}

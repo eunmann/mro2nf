@@ -67,9 +67,10 @@ func TestChunksDirRoundTrip(t *testing.T) {
 // TestWriteResources: the resources table holds, per chunk and for the join,
 // the cpus, memory and special its job's _jobinfo records: a def's request
 // over the stage's, a fractional or negative count at its rounded-up
-// magnitude (#405, #315). A special holding a line break has no row.
+// magnitude (#405, #315), and under the run's overrides, theirs over both.
+// A special holding a line break has no row.
 func TestWriteResources(t *testing.T) {
-	using := &core.JobResources{Threads: 2, MemGB: 4, Special: "gpu:2"}
+	st := job.Stage{Fqid: "P.S", Split: true, Using: &core.JobResources{Threads: 2, MemGB: 4, Special: "gpu:2"}}
 	defs := &core.StageDefs{
 		ChunkDefs: []*core.ChunkDef{
 			{},
@@ -79,23 +80,34 @@ func TestWriteResources(t *testing.T) {
 		JoinDef: &core.JobResources{MemGB: 3},
 	}
 
-	path := filepath.Join(t.TempDir(), resourcesTable)
-	if err := writeResources(path, using, defs); err != nil {
-		t.Fatal(err)
-	}
+	over := filepath.Join(t.TempDir(), "overrides.json")
+	writeTestFile(t, over, `{"P": {"chunk.threads": 1.5, "join.mem_gb": 2}, "P.S": {"split.threads": 8}}`)
 
-	got, err := os.ReadFile(path)
+	overrides, err := core.ReadOverrides(over)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	want := "chnk0\t2\t4\tgpu:2\nchnk1\t4\t4\tgpu\nchnk2\t6\t0.5\tgpu:2\njoin\t2\t3\tgpu:2\n"
-	if d := cmp.Diff(want, string(got)); d != "" {
-		t.Errorf("resources table (-want +got):\n%s", d)
+	for _, tc := range []struct {
+		name string
+		rt   job.Runtime
+		want string
+	}{
+		{"requests", job.Runtime{PSID: "ps"}, "chnk0\t2\t4\tgpu:2\nchnk1\t4\t4\tgpu\nchnk2\t6\t0.5\tgpu:2\njoin\t2\t3\tgpu:2\n"},
+		{"overridden", job.Runtime{PSID: "ps", Overrides: overrides}, "chnk0\t2\t4\tgpu:2\nchnk1\t2\t4\tgpu\nchnk2\t2\t0.5\tgpu:2\njoin\t2\t2\tgpu:2\n"},
+	} {
+		path := filepath.Join(t.TempDir(), resourcesTable)
+		if err := writeResources(path, tc.rt, st, defs); err != nil {
+			t.Fatal(err)
+		}
+
+		if d := cmp.Diff(tc.want, readText(t, path)); d != "" {
+			t.Errorf("%s: resources table (-want +got):\n%s", tc.name, d)
+		}
 	}
 
 	defs.JoinDef.Special = "a\nb"
-	if err := writeResources(path, using, defs); !errors.Is(err, errSpecialLine) {
+	if err := writeResources(filepath.Join(t.TempDir(), resourcesTable), job.Runtime{}, st, defs); !errors.Is(err, errSpecialLine) {
 		t.Errorf("writeResources = %v, want %v", err, errSpecialLine)
 	}
 }

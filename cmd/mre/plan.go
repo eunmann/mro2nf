@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 )
@@ -21,6 +22,7 @@ import (
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
 	entry, values, mropath, call, nodes, roots, counts, leaves, files, work string
+	overrides, psid                                                         string
 	hostInputs, remoteInputs                                                bool
 }
 
@@ -28,8 +30,10 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.entry, "entry", "", "the transpiled entry .mro")
 	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null keeps the transpiled one")
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
+	fs.StringVar(&f.overrides, "overrides", "", "the run's mrp --overrides file")
+	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk")
 	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the call as mrp's invocation generator builds it")
-	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys")
+	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys cpus mem-gb overrides")
 	fs.StringVar(&f.roots, "roots", "roots", "dir to write one file per entry-fed fork root into, a line per fork: key record index-token")
 	fs.StringVar(&f.counts, "counts", "counts", "dir to write one file per entry-fed fork root into, a line per fork of its outer roots: count key")
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
@@ -61,6 +65,11 @@ func runPlan(_ context.Context, argv []string) error {
 		return errNoEntry
 	}
 
+	over, err := readOverrides(f.overrides)
+	if err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+
 	paths := filepath.SplitList(f.mropath)
 
 	src, err := cg.ReadSource(f.entry, paths)
@@ -88,7 +97,7 @@ func runPlan(_ context.Context, argv []string) error {
 		return err
 	}
 
-	return f.write(p)
+	return f.write(p, job.Runtime{PSID: f.psid, Overrides: over})
 }
 
 // writeEntryFiles writes the run's entry file values, each by its index,
@@ -170,7 +179,7 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 	return &inv, nil
 }
 
-func (f *planFlags) write(p cg.Plan) error {
+func (f *planFlags) write(p cg.Plan, rt job.Runtime) error {
 	if err := writeText(f.call, base64.StdEncoding.EncodeToString([]byte(p.Call))); err != nil {
 		return err
 	}
@@ -187,7 +196,12 @@ func (f *planFlags) write(p cg.Plan) error {
 			at = strings.Join(n.OffAt, ",")
 		}
 
-		fmt.Fprintf(&nodes, "%s %s %s %s\n", n.Fqid, orDash(n.Digest), off, at)
+		res, err := nodeResources(rt, n)
+		if err != nil {
+			return err
+		}
+
+		fmt.Fprintf(&nodes, "%s %s %s %s %s\n", n.Fqid, orDash(n.Digest), off, at, res)
 	}
 
 	if err := writeText(f.nodes, nodes.String()); err != nil {
@@ -215,6 +229,24 @@ func (f *planFlags) write(p cg.Plan) error {
 	}
 
 	return nil
+}
+
+// nodeResources is node n's record of its resources under the run's
+// overrides: the cpus and memory in GB its first task, its split or its
+// one main, is scheduled with, and the overrides file that gives its jobs
+// what the run's gives them (Runtime.Override), which every task of the
+// node hands mre run, and whose split writes its chunks' and join's into
+// the resources table they are scheduled by.
+func nodeResources(rt job.Runtime, n cg.PlanNode) (string, error) {
+	st := job.Stage{Fqid: n.Fqid, Using: job.Using(n.Stage), Split: n.Stage.Split}
+	res := rt.Resources(st, st.Phases()[0], nil)
+
+	over, err := rt.Override(st)
+	if err != nil {
+		return "", fmt.Errorf("plan: %w", err)
+	}
+
+	return fmt.Sprintf("%d %s %s", job.CPUs(res), strconv.FormatFloat(res.MemGB, 'f', -1, 64), orDash(string(over))), nil
 }
 
 func orDash(s string) string {

@@ -188,7 +188,7 @@ records mre wrote; it parses no stage-controlled JSON.
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
   values a run stages (§8), and `mro2nf_image` the one image the container
   profiles run every task in, which they require (`mro2nf_require_image`,
-  §9).
+  §9). `mro2nf_overrides` is the run's `mrp --overrides` file (§9).
 - One `params.<name> = null` per entry input (§8).
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
   the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
@@ -222,21 +222,25 @@ per node a digest of its resolved spec (stage, bindings, disable bindings and
 fork roots in Martian's JSON form) and of what its `mre post` writes for its
 readers (the splits of the roots it feeds and the outputs their fork elements
 zip, its partners' splits, and the disable bindings whose value it posts with
-their roots), whether the invocation disables it, and the
-fork keys a static per-fork binding disables; per entry-fed root its forks,
+their roots), whether the invocation disables it, the
+fork keys a static per-fork binding disables, and its resources under the
+run's overrides file (§9); per entry-fed root its forks,
 keyed by the witness's outer roots, each with its fork record and its index
 token.
 
 **Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
-copy and its meta. A task's `-resume` key holds its own node's digest (in
-`meta`), the run's call, the mro2nf build, and its fork records and staged
-dirs. No task stages a file of PLAN's: the call and the digests reach it as
+copy, the overrides file and its meta. A task's `-resume` key holds its own
+node's digest and resources (in `meta`), the run's call, the mro2nf build,
+and its fork records and staged dirs. No task stages a file of PLAN's: the call and the digests reach it as
 values, which Nextflow keys on by content, so a re-transpile whose `.mro` edit
 leaves a node's spec and the call as they were re-runs PLAN but keeps the node
 cached (`TestResumeKeysOnlyOnATasksOwnTypes`). An edit of how a consumer
 splits or gates on a node's outs changes what the node's post writes, so it
 re-runs the node too (`TestResumeKeysOnTheReadersAPostWritesFor`). A changed
-entry value changes the call, and so re-runs every task.
+entry value changes the call, and so re-runs every task. An edited overrides
+file re-runs the tasks of each node whose resources it changes, a split
+stage's split too, which writes the table its chunks and join are scheduled
+by (`TestResumeKeysOnANodesOverrides`).
 
 **Code.** A stage task compiles the run's call over the entry `.mro` where the
 run finds its code: its includes and its stages' code resolve beside it, as
@@ -321,7 +325,13 @@ type manifest from the invocation's own declarations.
   the witness, vets the entry file values a task stages (§8), and writes the
   call every task compiles, one record per witness node, the entry files of
   each node's instances and of the pipeline outs, and the forks of each
-  entry-fed fork root.
+  entry-fed fork root. With `-overrides`, it reads the run's `mrp
+  --overrides` file with Martian's `ReadOverrides`, which fails on a key it
+  does not know, and each node's record carries the cpus and memory of its
+  first job (its split, or its one main) and an overrides file of the node's
+  own, `{"<fqid>": {...}}`: of each phase the node runs, each resource
+  Martian's `ApplyResourceOverrides` sets for it, found at the key nearest
+  the node.
 - **`mre args -node <fqid> -digest <d>`** builds one stage instance's args
   bundle and prints `enabled` or `disabled`, once the node compiles to the spec
   digest PLAN planned. The instance's fork comes from the fork elements it
@@ -359,8 +369,9 @@ type manifest from the invocation's own declarations.
   chunk, named as `mrp` names it (`chnkN`), with its args bundle and
   `chunk.json`, plus `join.json` and `resources.tsv`: per chunk, then the join,
   its name, cpus, memory and special, as its job's `_jobinfo` records them
-  (`job.Resources`, Martian's resolution of the stage's `using` under the def
-  the split returned). A main or join writes its outs bundle. The
+  (`Runtime.Resources`, Martian's resolution of the stage's `using` under the
+  def the split returned and then the `-overrides` file, the node's own that
+  PLAN wrote). A main or join writes its outs bundle. The
   files a job names in either are confined to the work dir (§7), strict under
   `-confine`. Beside the job's metadata mre writes `_mre_stage`, the name of
   the stage the job ran. The adapter never reads it; the `mrp` ABI differential
@@ -650,6 +661,14 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   1, rounded up) and `memory` (1 GB when unset); a chunk and a join take the
   resources the split returned for them (§5). `_jobinfo` reports the request
   as `mrp` resolves it, unrounded.
+- `--mro2nf_overrides <file>` is `mrp --overrides`: PLAN reads it (§6), and
+  every job's threads, memory and vmem resolve under it as `mrp`'s
+  (`core.ApplyResourceOverrides`), over `using` and the split's request,
+  into its task's `cpus` and `memory`, `_jobinfo` and `_args`. The driver
+  parses none of it: each task gets its node's resources and own overrides
+  file as values of PLAN's record, and a chunk and the join take theirs from
+  the split's `resources.tsv`. `force_volatile` and `*.profile` change no
+  output and have no effect (`RUNTIME_TUNING.md`).
 - On the `standard` profile, `process.resourceLimits` clamps a request to the
   host's cpus and memory, so an oversized one runs rather than fails; a `-c`
   config setting `process.resourceLimits` overrides the clamp.

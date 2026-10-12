@@ -1,10 +1,11 @@
 // The stage processes every call-graph node runs through, each node
 // including them under its own alias, so a withName: selector names the
 // node. meta carries the node's identity, the cache key of its spec
-// (digest), the run's call (call), and the resources it is scheduled with;
-// its GPU request is the config's, which reads meta.special per task where
-// a Nextflow 24.04 process directive cannot. Each phase runs `mre args`,
-// then the phase's jobs through `mre run` as mrp runs them, then `mre post`.
+// (digest), the run's call (call), the resources it is scheduled with, and
+// its own overrides file (overrides), which PLAN resolved; its GPU request
+// is the config's, which reads meta.special per task where a Nextflow 24.04
+// process directive cannot. Each phase runs `mre args`, then the phase's
+// jobs through `mre run` as mrp runs them, then `mre post`.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -87,6 +88,9 @@ def job(Map meta, phase, rest) {
     }
     if (on(params.mro2nf_confine)) {
         cmd += ' -confine'
+    }
+    if (meta.overrides) {
+        cmd = "printf '%s\\n' ${shq(meta.overrides)} > overrides.json\n${cmd} -overrides overrides.json"
     }
     return cmd + ' ' + rest
 }

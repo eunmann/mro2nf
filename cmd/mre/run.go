@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -49,9 +48,9 @@ var (
 
 // runFlags are `mre run`'s inputs beside the call graph's.
 type runFlags struct {
-	phase, args, out, chunk, chunks, chunkOuts string
-	confine                                    bool
-	rt                                         job.Runtime
+	phase, args, out, chunk, chunks, chunkOuts, overrides string
+	confine                                               bool
+	rt                                                    job.Runtime
 }
 
 // runJob runs one phase of the stage instance whose args bundle -args
@@ -75,10 +74,18 @@ func runJob(ctx context.Context, argv []string) error {
 	fs.StringVar(&f.rt.PSID, "psid", "", "the pipestance id job names carry")
 	fs.StringVar(&f.rt.Work, "work", ".", "the dir to hold the job's metadata and journal")
 	fs.BoolVar(&f.confine, "confine", false, "fail on a stage output that resolves outside the task work dir (isolated container targets) instead of copying it")
+	fs.StringVar(&f.overrides, "overrides", "", "an mrp --overrides file over the job's resources (mre plan writes each node's own)")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
+
+	over, err := readOverrides(f.overrides)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+
+	f.rt.Overrides = over
 
 	g, man, err := gf.load()
 	if err != nil {
@@ -165,34 +172,50 @@ func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArg
 		return err
 	}
 
-	return writeResources(filepath.Join(f.out, resourcesTable), in.Stage.Using, defs)
+	return writeResources(filepath.Join(f.out, resourcesTable), f.rt, in.Stage, defs)
+}
+
+// readOverrides reads the mrp --overrides file at path, if any, with
+// Martian's own reader, which refuses a key it does not know
+// (core/override.go:96); none, nil, without one.
+func readOverrides(path string) (*core.PipestanceOverrides, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	over, err := core.ReadOverrides(path)
+	if err != nil {
+		return nil, fmt.Errorf("read overrides %s: %w", path, err)
+	}
+
+	return over, nil
 }
 
 // writeResources writes the table a split's chunks and join are scheduled
 // by: per chunk, then the join, its name, cpus, memory in GB and special,
-// tab-separated, as each job's _jobinfo records them (job.Resources), so
-// the driver reads them without parsing the chunk records.
-func writeResources(path string, using *core.JobResources, defs *core.StageDefs) error {
+// tab-separated, as each job's _jobinfo records them (Runtime.Resources),
+// so the driver reads them without parsing the chunk records.
+func writeResources(path string, rt job.Runtime, st job.Stage, defs *core.StageDefs) error {
 	var b strings.Builder
 
-	row := func(name string, def *core.JobResources) error {
-		res := job.Resources(using, def)
+	row := func(name, phase string, def *core.JobResources) error {
+		res := rt.Resources(st, phase, def)
 		if strings.ContainsAny(res.Special, "\n\r") {
 			return fmt.Errorf("resources of %s: %w: %q", name, errSpecialLine, res.Special)
 		}
 
-		fmt.Fprintf(&b, "%s\t%d\t%s\t%s\n", name, int(math.Max(1, math.Ceil(res.Threads))), strconv.FormatFloat(res.MemGB, 'f', -1, 64), res.Special)
+		fmt.Fprintf(&b, "%s\t%d\t%s\t%s\n", name, job.CPUs(res), strconv.FormatFloat(res.MemGB, 'f', -1, 64), res.Special)
 
 		return nil
 	}
 
 	for i, d := range defs.ChunkDefs {
-		if err := row(job.ChunkName(i, len(defs.ChunkDefs)), d.Resources); err != nil {
+		if err := row(job.ChunkName(i, len(defs.ChunkDefs)), job.PhaseMain, d.Resources); err != nil {
 			return err
 		}
 	}
 
-	if err := row(joinRow, defs.JoinDef); err != nil {
+	if err := row(joinRow, job.PhaseJoin, defs.JoinDef); err != nil {
 		return err
 	}
 

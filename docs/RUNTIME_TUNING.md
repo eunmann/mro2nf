@@ -6,12 +6,36 @@ not in the `.mro`. This maps the mrp flags to their Nextflow equivalents.
 
 ## Per-stage resource overrides (`mrp --overrides`)
 
-mrp's `--overrides` file is not accepted at launch yet: #301 applies it in the
-run's PLAN task with Martian's own `ApplyResourceOverrides`, so each stage
-instance is sized, and sees in `_jobinfo`, what mrp gives it.
+Pass mrp's `--overrides` file at launch:
 
-Until then, a `withName:` selector in a `-c` overlay sizes one stage's tasks.
-Each stage node is its own process alias, `N<i>_<CALL>` (the node's index in
+```bash
+nextflow run main.nf --mro2nf_overrides overrides.json
+```
+
+The run's PLAN task reads it with Martian's own reader, so a key mrp does not
+know (a phaseless `mem_gb`, say) fails the run before any stage starts, as mrp
+refuses to start. Each job's resources then resolve through Martian's own
+`ApplyResourceOverrides`: for each of `split`, `chunk` (a stage's main, split
+or not) and `join`, the `threads`, `mem_gb` and `vmem_gb` of the key nearest
+the job's node, the node's own fully qualified name (`PIPE.SUB.STAGE`) or a
+pipeline or call above it, over the stage's `using()` and over the chunk or
+join request its split returned. As in mrp, the empty key `""` applies to no
+node. Each task is scheduled with those `cpus` (rounded up) and `memory`, and
+its stage sees them in `_jobinfo` and `__threads`/`__mem_gb`/`__vmem_gb`.
+
+The other keys mrp accepts change no output, and mro2nf reads them without
+acting on them: `force_volatile` sets which intermediate files mrp's volatile
+data removal deletes, and mro2nf deletes none; `*.profile` selects mrp's stage
+profiling, for which the task trace stands in (below).
+
+Under `-resume`, an edited overrides file re-runs PLAN, every task of each
+node whose resolved resources it changes, a split stage's split included, as
+the split writes the table its chunks and join are scheduled by, and the tasks
+downstream of those, whose inputs are then new files; every other task stays
+cached.
+
+A `withName:` selector in a `-c` overlay also sizes one stage's tasks. Each
+stage node is its own process alias, `N<i>_<CALL>` (the node's index in
 `main.nf` and its call name), and a split stage's phases are `N<i>_<CALL>_SP`,
 `_MN` and `_JN`; `main.nf` lists every alias in its `include` lines:
 

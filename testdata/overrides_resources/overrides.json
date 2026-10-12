@@ -1,0 +1,34 @@
+{
+    "": {
+        "chunk.threads": 2,
+        "force_volatile": true
+    },
+    "OVR": {
+        "chunk.mem_gb": 1.5,
+        "force_volatile": false
+    },
+    "OVR.INNER": {
+        "chunk.threads": 1.25,
+        "join.threads": 1.5,
+        "split.mem_gb": 2.5,
+        "split.vmem_gb": 6
+    },
+    "OVR.INNER.SQUARES": {
+        "chunk.mem_gb": 3,
+        "join.vmem_gb": 7
+    },
+    "OVR.INNER.PREP": {
+        "chunk.threads": 0.5
+    },
+    "OVR.OTHER": {
+        "chunk.threads": 2,
+        "chunk.mem_gb": 2.25,
+        "chunk.vmem_gb": 5
+    },
+    "OVR.EACH": {
+        "chunk.mem_gb": 0.75
+    },
+    "OVR.NOSUCH": {
+        "chunk.threads": 2
+    }
+}

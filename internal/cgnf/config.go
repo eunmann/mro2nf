@@ -58,6 +58,10 @@ params.mro2nf_allow_remote_inputs = false
 params.mro2nf_image = null
 params.mro2nf_require_image = false
 
+// mrp's --overrides file, over each stage's resources; PLAN reads it as
+// mrp does.
+params.mro2nf_overrides = null
+
 `)
 
 	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
