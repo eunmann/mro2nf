@@ -131,16 +131,38 @@ func EncodeElement(el Element) (string, error) {
 // witness's outer roots, and their count under each fork of those: a root
 // the invocation gives a fork set of known length repeats it under every
 // fork of the outer roots the witness's varies with.
-func (g *Graph) entryForks(wt Topology, scratch string) (map[string]PlanRoot, map[string][]entryFork, error) {
+func (g *Graph) entryForks(wt Topology, scratch string) (map[string]PlanRoot, *plannedForks, error) {
 	dir := filepath.Join(scratch, "entry")
 	if err := g.PostEntry(dir); err != nil {
 		return nil, nil, err
 	}
 
-	roots := slices.Clone(wt.Roots)
+	own := map[string][]Element{}
+
+	for _, r := range wt.Roots {
+		if r.Producer != "" {
+			continue
+		}
+
+		els, err := g.readElements(filepath.Join(dir, r.Fqid))
+		if err != nil {
+			return nil, nil, err
+		}
+
+		own[r.Fqid] = els
+	}
+
+	return planEntry(wt.Roots, own)
+}
+
+// planEntry plans the forks own holds of each entry-fed root, outer roots
+// first. A root's forks under each fork of its outer roots are looked up,
+// not scanned for, so planning is linear in the forks however they nest.
+func planEntry(wtRoots []TopoRoot, own map[string][]Element) (map[string]PlanRoot, *plannedForks, error) {
+	roots := slices.Clone(wtRoots)
 	sort.SliceStable(roots, func(i, j int) bool { return len(roots[i].Outer) < len(roots[j].Outer) })
 
-	planned := map[string][]entryFork{}
+	planned := &plannedForks{by: map[string][]entryFork{}, idx: map[string]*agreeIndex{}}
 	out := map[string]PlanRoot{}
 
 	for _, r := range roots {
@@ -148,43 +170,76 @@ func (g *Graph) entryForks(wt Topology, scratch string) (map[string]PlanRoot, ma
 			continue
 		}
 
-		own, err := g.readElements(filepath.Join(dir, r.Fqid))
+		pr, err := planned.plan(r, own[r.Fqid])
 		if err != nil {
 			return nil, nil, err
-		}
-
-		pr := PlanRoot{Forks: []PlanFork{}, Counts: []PlanCount{}}
-
-		for _, c := range assignments(r.Outer, planned) {
-			n := 0
-
-			for _, el := range own {
-				if !agrees(el.Fork, c.fork) {
-					continue
-				}
-
-				rec, err := EncodeElement(el)
-				if err != nil {
-					return nil, nil, err
-				}
-
-				ef := entryFork{el: el, ords: c.with(r.Fqid, n)}
-				planned[r.Fqid] = append(planned[r.Fqid], ef)
-				pr.Forks = append(pr.Forks, PlanFork{
-					Key:    ef.key(append(slices.Clone(r.Outer), r.Fqid)),
-					Record: rec,
-					Token:  IndexToken(el.Fork[len(el.Fork)-1].Index),
-				})
-				n++
-			}
-
-			pr.Counts = append(pr.Counts, PlanCount{Key: entryFork{ords: c.ords}.key(r.Outer), N: n})
 		}
 
 		out[r.Fqid] = pr
 	}
 
 	return out, planned, nil
+}
+
+// plannedForks are the planned forks of each entry-fed root, and an index
+// of each root's, built when a root its outer roots include is planned,
+// once its own forks are all planned.
+type plannedForks struct {
+	by  map[string][]entryFork
+	idx map[string]*agreeIndex
+}
+
+// plan plans root r's forks own, under each fork of its outer roots.
+func (p *plannedForks) plan(r TopoRoot, own []Element) (PlanRoot, error) {
+	items := make([]agreeItem, len(own))
+	for i, el := range own {
+		items[i] = agreeItem{fork: el.Fork}
+	}
+
+	byFork := newAgreeIndex(items)
+	pr := PlanRoot{Forks: []PlanFork{}, Counts: []PlanCount{}}
+
+	for _, c := range assignments(r.Outer, p) {
+		under := byFork.agreeing(nil, c.fork)
+
+		for n, i := range under {
+			el := own[i]
+
+			rec, err := EncodeElement(el)
+			if err != nil {
+				return PlanRoot{}, err
+			}
+
+			ef := entryFork{el: el, ords: c.with(r.Fqid, n)}
+			p.by[r.Fqid] = append(p.by[r.Fqid], ef)
+			pr.Forks = append(pr.Forks, PlanFork{
+				Key:    ef.key(append(slices.Clone(r.Outer), r.Fqid)),
+				Record: rec,
+				Token:  IndexToken(el.Fork[len(el.Fork)-1].Index),
+			})
+		}
+
+		pr.Counts = append(pr.Counts, PlanCount{Key: entryFork{ords: c.ords}.key(r.Outer), N: len(under)})
+	}
+
+	return pr, nil
+}
+
+// index is the index of root's planned forks.
+func (p *plannedForks) index(root string) *agreeIndex {
+	if x, ok := p.idx[root]; ok {
+		return x
+	}
+
+	items := make([]agreeItem, len(p.by[root]))
+	for i, f := range p.by[root] {
+		items[i] = agreeItem{ords: f.ords, fork: f.el.Fork}
+	}
+
+	x := newAgreeIndex(items)
+	p.idx[root] = x
+
+	return x
 }
 
 // entryFork is one planned fork of an entry-fed root: its element, and the
@@ -222,17 +277,18 @@ func (a assignment) with(root string, ord int) map[string]int {
 // assignments enumerates the forks of roots, in order, from the forks
 // planned for each: a fork of a root joins those of the roots before it
 // whose ordinals and parts it agrees with.
-func assignments(roots []string, planned map[string][]entryFork) []assignment {
+func assignments(roots []string, planned *plannedForks) []assignment {
 	out := []assignment{{ords: map[string]int{}}}
 
 	for _, root := range roots {
+		x := planned.index(root)
+
 		var next []assignment
 
 		for _, a := range out {
-			for _, f := range planned[root] {
-				if ordsAgree(f.ords, a.ords) && agrees(f.el.Fork, a.fork) {
-					next = append(next, assignment{ords: mergeOrds(a.ords, f.ords), fork: mergeForks(a.fork, f.el.Fork)})
-				}
+			for _, i := range x.agreeing(a.ords, a.fork) {
+				f := planned.by[root][i]
+				next = append(next, assignment{ords: mergeOrds(a.ords, f.ords), fork: mergeForks(a.fork, f.el.Fork)})
 			}
 		}
 
@@ -240,16 +296,6 @@ func assignments(roots []string, planned map[string][]entryFork) []assignment {
 	}
 
 	return out
-}
-
-func ordsAgree(a, b map[string]int) bool {
-	for k, v := range a {
-		if w, ok := b[k]; ok && w != v {
-			return false
-		}
-	}
-
-	return true
 }
 
 func mergeOrds(a, b map[string]int) map[string]int {
@@ -300,7 +346,7 @@ func mergeForks(a, b Fork) Fork {
 }
 
 // planNode is the plan of the witness node n in the invocation's graph.
-func (g *Graph) planNode(n TopoNode, wt Topology, planned map[string][]entryFork) (PlanNode, error) {
+func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks) (PlanNode, error) {
 	st, ok := g.stages[n.Fqid]
 	if !ok {
 		return PlanNode{Fqid: n.Fqid, Off: true}, nil
@@ -331,7 +377,7 @@ func (g *Graph) planNode(n TopoNode, wt Topology, planned map[string][]entryFork
 
 // staticOff are the fork keys of the instances of st a disable binding that
 // reads no stage disables, which every entry-fed root of st enumerates.
-func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, wt Topology, planned map[string][]entryFork) ([]string, error) {
+func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, wt Topology, planned *plannedForks) ([]string, error) {
 	var static []syntax.Exp
 
 	for _, d := range st.Disabled() {
