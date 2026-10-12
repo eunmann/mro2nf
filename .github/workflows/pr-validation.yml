@@ -314,7 +314,9 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Setup and make test-e2e-docker's 30-minute go-test timeout, with headroom,
+    # so a stuck test fails with go test's panic rather than a runner kill.
+    timeout-minutes: 40
     env:
       E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
     steps:
