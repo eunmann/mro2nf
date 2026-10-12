@@ -140,10 +140,15 @@ func (p *project) addTargetFiles(files map[string]string) error {
 		return err
 	}
 
+	recipe, err := p.dockerfile(roots, commands)
+	if err != nil {
+		return err
+	}
+
 	maps.Copy(files, map[string]string{
 		"conf/container.config":   containerConfig(),
 		"conf/healthomics.config": healthomicsConfig,
-		"Dockerfile":              p.dockerfile(roots, commands),
+		"Dockerfile":              recipe,
 		".dockerignore":           dockerignore,
 		"build.sh":                buildScript(roots, p.releaseRuntime()),
 		"package.sh":              packageScript,

@@ -104,7 +104,7 @@ func within(p, root string) bool {
 // image, the one definition of /opt/mro2nf, and the pipeline's code, each
 // root a named build context (build.sh), so no code is copied into the
 // project. BASE layers the runtime onto a toolkit image instead.
-func (p *project) dockerfile(roots []codeRoot, commands []string) string {
+func (p *project) dockerfile(roots []codeRoot, commands []string) (string, error) {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, `# This project's stage image: mro2nf's runtime image (mre, mrjob and
@@ -123,7 +123,11 @@ COPY --from=runtime %[1]s %[1]s
 `, imageRoot, imageCode, orEmpty("=", p.releaseRuntime()))
 
 	for i, r := range roots {
-		dest, _ := json.Marshal(r.image)
+		dest, err := json.Marshal(r.image)
+		if err != nil {
+			return "", fmt.Errorf("stage image: code root %s: %w", r.host, err)
+		}
+
 		fmt.Fprintf(&b, "COPY --from=code%d [\".\", %s]\n", i, dest)
 	}
 
@@ -131,7 +135,7 @@ COPY --from=runtime %[1]s %[1]s
 		b.WriteString("# The image's PATH must provide these stage srcs, which name no file of\n# the code: " + strings.Join(commands, ", ") + "\n")
 	}
 
-	return b.String()
+	return b.String(), nil
 }
 
 // orEmpty is prefix+s, or "" for an empty s.
