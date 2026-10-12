@@ -11,7 +11,7 @@ import (
 
 // streamMro maps SAMPLE over two samples. Each merges its own inner map's
 // WORK forks in TOTAL; the slow sample's WORK runs well past the fast
-// sample's whole chain.
+// sample's whole chain, which took ~20s on a loaded CI runner.
 const streamMro = `stage MKLIST(
     in  string id,
     out int[]  xs,
@@ -92,7 +92,7 @@ func TestForkedGatherStreams(t *testing.T) {
 		"mklist": "def main(args, outs):\n    outs.xs = [1, 2]\n",
 		"work": "import time\n\n\ndef main(args, outs):\n" +
 			"    if args.id == 'slow':\n" +
-			"        time.sleep(20)\n" +
+			"        time.sleep(90)\n" +
 			"    outs.y = args.x\n",
 		"total": "def main(args, outs):\n    outs.s = sum(args.ys)\n",
 	}
