@@ -1,5 +1,5 @@
 // Package cgnf emits a Nextflow project from Martian's compiled call graph
-// (emitter v2, #463): one process per stage node of the witness invocation's
+// (#463): one process per stage node of the witness invocation's
 // call graph, each an alias of the one hand-written stage module, wired by
 // the data the nodes exchange. A run-start PLAN task compiles the run's real
 // invocation as mrp does and hands every node its spec digest, its static

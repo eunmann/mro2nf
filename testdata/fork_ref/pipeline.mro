@@ -1,7 +1,6 @@
 # A map call whose broadcast binding references an UPSTREAM call output
-# (factor = MKFAC.factor) while splitting a pipeline input. Under -native this
-# is scatter-eligible in a value-channel pipeargs context: the upstream bundle
-# is a value channel re-read by every fork instance (#76).
+# (factor = MKFAC.factor) while splitting a pipeline input: every fork
+# instance reads the one upstream output (#76).
 stage MKFAC(
     in  float base,
     out float factor,

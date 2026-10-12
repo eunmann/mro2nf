@@ -1,10 +1,6 @@
 # A map call whose SPLIT source is an UPSTREAM stage output (value = split
-# GEN.values), not a pipeline input. Under -native the driver slices GEN's
-# value-channel bundle once (Mro2nf.forkElements over ch_GEN) into per-fork
-# elements — value-only, so the O(1) element path (#99) — and each fork also
-# stages GEN's output as a broadcast input for the index-0 keys resolve. No
-# FORK task. Value context: GEN.values is a value channel re-readable by every
-# fork instance.
+# GEN.values), not a pipeline input: GEN's post writes one fork element per
+# value, and each fork instance stages only its own (#99).
 stage GEN(
     in  int     n,
     out float[] values,

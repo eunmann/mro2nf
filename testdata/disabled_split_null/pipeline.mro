@@ -6,8 +6,8 @@
 # disabled stage inside every fork of a map call over a sub-pipeline, the
 # prune cascading to a split of the pruned call or of its whole ref (W_ON,
 # and WS_ON through a sub-pipeline input), and the null crossing a
-# sub-pipeline boundary as an input (EACH) and as a return (PASS), which the
-# noinline leg keeps. KEYED is the map-typed form: a split of a projection
+# sub-pipeline boundary as an input (EACH) and as a return (PASS). KEYED is
+# the map-typed form: a split of a projection
 # through a disabled call's typed map is null, and {} when the call ran.
 # LITSUB is seed 61's shape: a literal gate bound at the call site disables a
 # stage whose struct field the sub-pipeline splits.

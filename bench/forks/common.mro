@@ -3,8 +3,8 @@ filetype txt;
 # Benchmark: a map call fanned out over an N-element array, with an upstream
 # file broadcast to every fork instance. Run at two widths (pipeline_w4.mro,
 # pipeline_w16.mro) to mechanize the CLAUDE.md overhead rule: the number of
-# plumbing tasks (BIND/FORK/MERGE/DISABLE/entry/publish) must be IDENTICAL at
-# both widths — orchestration cost may not scale with fork width N. Only the
+# plumbing tasks (PLAN and OUTS) must be IDENTICAL at both widths —
+# orchestration cost may not scale with fork width N. Only the
 # FUSE stage tasks themselves (one per fork, matching mrp's own jobs 1:1) and
 # the intrinsic per-fork staging of the consumed payload may grow with N.
 

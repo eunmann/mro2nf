@@ -1,8 +1,5 @@
-# A single pipeline with a TRANSFORM return (combining two calls) where one
-# returned output is a FILE — so under -native the return BIND folds into LAYOUT
-# and exercises its file-leaf path (mv args/f f + the leaves output feeding
-# PUBLISH_LEAF). Verifies #76's native LAYOUT publishes real file outputs
-# byte-identically.
+# A single pipeline whose return combines two calls and one of whose returned
+# outputs is a FILE: the published file must match mrp's byte for byte (#76).
 filetype txt;
 
 stage MAKE_NOTE(

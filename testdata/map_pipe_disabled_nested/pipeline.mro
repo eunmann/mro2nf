@@ -1,7 +1,7 @@
 # Disabled nested map: OUTER maps INNER; INNER itself maps DBL with a per-fork
 # `disabled` modifier. When an outer fork's skip flag is true, that fork's whole
-# inner map yields null; otherwise every inner fork runs. Exercises the keyed
-# (nested) disable gate.
+# inner map yields null; otherwise every inner fork runs. Exercises a disable
+# gate nested under a map call.
 stage DBL(
     in  int x,
     out int y,

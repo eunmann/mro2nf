@@ -1,5 +1,5 @@
 # Scalar entry inputs overridden on the Nextflow command line. Nextflow passes
-# every --param as a String, so `mre entryargs` must parse `--n 5 --f 2.5
+# every --param as a String, so `mre plan` must parse `--n 5 --f 2.5
 # --g 1e6 --b false` into the declared int/float/bool before the stage sees
 # them; the stage reports each value's Python repr and type, and `gated` shows
 # whether `b` reads as truthy. expected/override_outs.json is mrp run with the

@@ -1,10 +1,8 @@
-# A native-scatter map fork whose keys stress the driver-vs-Go sort agreement.
-# Mixed case, digits, and — critically — an astral code point (U+1F389) with a
-# private-use BMP char order DIFFERENTLY under Java's natural String order
-# (UTF-16 code units) vs Go's sort.Strings (UTF-8 bytes). forkElements must
-# order elements by the same byte order the forkmeta sidecar uses
-# (Mro2nf.compareUtf8 matches bind.go sortedKeys), or the merged map pairs
-# values with the wrong keys (#99).
+# A map fork whose keys stress the fork order. Mixed case, digits, and —
+# critically — an astral code point (U+1F389) with a private-use BMP char
+# order DIFFERENTLY under Java's natural String order (UTF-16 code units) vs
+# Go's sort.Strings (UTF-8 bytes). The forks must follow mrp's byte order, or
+# the merged map pairs values with the wrong keys (#99).
 stage DBL(
     in  int v,
     out int w,

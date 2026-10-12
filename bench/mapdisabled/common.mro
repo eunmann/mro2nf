@@ -3,8 +3,7 @@ filetype txt;
 # Benchmark: a map call over a sub-pipeline whose body holds a DISABLED call.
 # Each fork runs MKFILE; USE is disabled in every fork, so mrp runs N jobs.
 # Run at two widths (pipeline_w4.mro, pipeline_w8.mro): the plumbing task count
-# must not grow with N; until #255 lands the per-fork keyed disable gate and
-# bind do, which the baseline records as known scaling.
+# must not grow with N.
 
 stage MKFILE(
     in  int x,

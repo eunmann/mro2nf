@@ -1,7 +1,6 @@
-# Native disable-gating regression (#59): a MAP call disabled on an UPSTREAM
-# output ref (FLAG.on), not self.<field>. The gate reads FLAG's output channel
-# natively (Mro2nf.disabledField) with no DISABLE task. When on=true the whole
-# mapped call yields null.
+# Disable-gating regression (#59): a MAP call disabled on an UPSTREAM output
+# ref (FLAG.on), not self.<field>, decided on the driver from FLAG's posted
+# gates. When on=true the whole mapped call yields null.
 stage FLAG(
     out bool on,
     src py    "stages/flag",

@@ -2,7 +2,7 @@
 # through to both outputs. mrp decodes a runtime null gate into a Go bool, which
 # leaves it false, so every gated call runs. Covered: a gate on an upstream
 # output, on a field of an upstream struct output, on a sub-pipeline input bound
-# to that output, and on both inside a map call over a sub-pipeline (the keyed
+# to that output, and on both inside a map call over a sub-pipeline (per-fork
 # gates). A statically null gate is mrp's BindingError instead.
 struct Cfg(
     bool flag,

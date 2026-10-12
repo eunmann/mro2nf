@@ -1,6 +1,6 @@
 # Composition: a map call over a sub-pipeline whose body contains a SPLIT stage.
-# Exercises keyed-pipeline -> keyed-split nesting (fork identity threaded through
-# both layers).
+# Exercises a split under a map call (fork identity threaded through both
+# layers).
 stage SUMSQ(
     in  float[] values,
     out float   total,
