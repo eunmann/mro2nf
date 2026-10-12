@@ -56,7 +56,10 @@ A container profile runs every task in the one image `--mro2nf_image` names
 (README, "Container image"). So GPU support needs no per-stage container:
 build that **one** image on a CUDA-capable base when the pipeline has any GPU
 stage, with mro2nf's runtime copied from its image (`mre` and `mrjob` are
-static) and the pipeline's code at the paths it was transpiled from.
+static) onto the `PATH`, where every task finds `mre`, which runs the `mrjob`
+beside it, and the pipeline's code at the paths it was transpiled from. It
+copies the runtime rather than building `FROM` the runtime image, whose base
+is `python:3.12-slim`, not CUDA.
 
 ```dockerfile
 FROM ghcr.io/eunmann/mro2nf-runtime:<version> AS mro2nf
@@ -66,6 +69,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends procps python3 awscli \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=mro2nf /opt/mro2nf /opt/mro2nf
+ENV PATH="/opt/mro2nf:${PATH}"
 COPY my-pipeline/ /opt/pipeline/
 ```
 
