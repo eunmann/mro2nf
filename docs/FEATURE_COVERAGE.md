@@ -135,7 +135,7 @@ too.
 | `--maxjobs` / `--jobinterval` / `--localcores` / `--localmem` (throttling) | ✅ in a `-c` config: `executor.queueSize`; `executor.submitRateLimit` at whole-second intervals (`'<n>/1s'`), as Nextflow rejects a shorter one; `executor.cpus`/`memory` together with `process.resourceLimits`, which clamps a larger request as `mrp` clamps it, where the pool alone fails it. Mapping in `RUNNING.md` | `TestLocalClampRunsOversizedRequest` |
 | `--profile` (stage profiling) | 🚫 the task trace the project enables (`realtime`, `%cpu`, `peak_rss`, `peak_vmem`, `rchar`, `wchar`) and `-with-report` | — |
 | `--inspect` | 🚫 no analog; `nextflow log` lists past runs and their tasks | — |
-| `--onfinish` (hook) | ✅ a `workflow.onComplete` handler in a `-c` config, which can pass the hook `mrp`'s outcome (`complete`/`failed`) and pipestance id; there is no pipestance path or error file to pass (`RUNNING.md`) | — |
+| `--onfinish` (hook) | 🚫 a `workflow.onComplete` handler in a `-c` config, which can pass the hook `mrp`'s outcome (`complete`/`failed`) and pipestance id; there is no pipestance path or error file to pass (`RUNNING.md`) | — |
 | web UI / HTTP API / mrstat | 🚫 use `nextflow log`/`-with-report` instead | — |
 | `mro check` / `mro graph` | 🚫 not run by mro2nf or its tests; a transpile fails on a pipeline Martian's compiler or call-graph builder refuses. `mro graph` ≈ `nextflow run -with-dag` | — |
 
