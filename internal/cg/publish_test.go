@@ -262,6 +262,46 @@ func TestWriteOutsNeedsLocations(t *testing.T) {
 	}
 }
 
+// TestPublishedNamesFailLoudly: a post-processed outs path the published outs
+// cannot name as mrp does fails the pipeline outs rather than reach
+// pipeline_outs.json: a reconstructed pipestance path no file was placed at,
+// and a name in outs/ or a link there that reaches no file.
+func TestPublishedNamesFailLoudly(t *testing.T) {
+	p, err := newPipestance(OutsSpec{Work: t.TempDir()}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(p.outs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	dangling := filepath.Join(p.outs, "dangling.txt")
+	if err := os.Symlink(filepath.Join(p.linked, "1", "gone.txt"), dangling); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]struct {
+		path string
+		want error
+	}{
+		"an unplaced pipestance path": {filepath.Join(p.dir, "files", "3", "x.txt"), errStrayPath},
+		"an unplaced linked path":     {filepath.Join(p.linked, "3", "x.txt"), errStrayPath},
+		"a missing name in outs":      {filepath.Join(p.outs, "missing.txt"), errUnpublished},
+		"a dangling link in outs":     {dangling, errUnpublished},
+	}
+
+	for name, tc := range cases {
+		if got, err := p.name(tc.path); !errors.Is(err, tc.want) {
+			t.Errorf("name of %s = %q, %v, want %v", name, got, err, tc.want)
+		}
+	}
+
+	if err := p.materialize(filepath.Join(t.TempDir(), "results")); !errors.Is(err, errUnpublished) {
+		t.Errorf("materialize outs/ holding a dangling link: %v, want %v", err, errUnpublished)
+	}
+}
+
 // publishedFiles maps each file below dir to its content, failing on any
 // entry that is not a regular file or a dir.
 func publishedFiles(t *testing.T, dir string) map[string]string {
