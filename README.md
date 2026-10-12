@@ -219,12 +219,12 @@ escalated memory; an ASSERT or a stage exception ends the run); and `-monitor`.
 Resources track mrp, so a transpiled run schedules and finishes comparably.
 Per-chunk `cpus` and `memory`, the split-returned `join` override, and the
 `special` scheduler key all reach the executor, and every job reports the
-allocation mrp would give it. The reserved `special = "gpu"` / `"gpu:N"`
-requests N GPUs via the `accelerator` directive on the compute phase — see
-[`docs/GPU.md`](docs/GPU.md). A few things diverge in timing or mechanism but
-never in output: there is no mid-run VDR deletion (work dirs are retained), and
-the published `outs/` tree is copied into place (mrp moves + symlinks) — the
-tree's layout and contents match mrp's.
+allocation mrp would give it. The reserved `special = "gpu"` / `"gpu:N"` also
+requests N GPUs via the `accelerator` directive, for every job whose special it
+is — see [`docs/GPU.md`](docs/GPU.md). A few things diverge in timing or
+mechanism but never in output: there is no mid-run VDR deletion (work dirs are
+retained), and the published `outs/` tree is copied into place (mrp moves +
+symlinks) — the tree's layout and contents match mrp's.
 
 ## Development
 

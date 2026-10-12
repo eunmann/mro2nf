@@ -2,9 +2,10 @@
 // including them under its own alias, so a withName: selector names the
 // node. meta carries the node's identity, the cache key of its spec
 // (digest), where its run's invocation lives (plan), and the resources it
-// is scheduled with; a GPU request is the config's, per alias, as Nextflow
-// 24.04 takes no dynamic accelerator. Each phase runs `mre args`, then the
-// phase's jobs through `mre run` as mrp runs them, then `mre post`.
+// is scheduled with; its GPU request is the config's, which reads
+// meta.special per task where a Nextflow 24.04 process directive cannot.
+// Each phase runs `mre args`, then the phase's jobs through `mre run` as mrp
+// runs them, then `mre post`.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {

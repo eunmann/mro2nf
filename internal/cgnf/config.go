@@ -48,11 +48,16 @@ params.job_resources = [:]
 process {
     errorStrategy = { task.exitStatus in [%d, 137, 143] ? 'retry' : 'terminate' }
     maxRetries = %d
-`, job.TransientExitCode, job.TransientExitCode, job.DefaultRetries)
 
-	p.gpuSelectors(&b)
+    // A job's special "gpu" or "gpu:N", as mrp resolves it (the stage's, or
+    // the one its split returned for a chunk or the join), requests 1 or N
+    // GPUs, beside the clusterOptions params.job_resources maps it to. A
+    // process directive cannot read a task's inputs on Nextflow 24.04; a
+    // config closure can.
+    accelerator = { def s = meta.special ?: ''; def n = s == 'gpu' ? 1 : (s.startsWith('gpu:') && s.substring(4).isInteger() ? s.substring(4) as int : 0); n > 0 ? [request: n] : null }
+}`, job.TransientExitCode, job.TransientExitCode, job.DefaultRetries)
 
-	b.WriteString(`}
+	b.WriteString(`
 
 trace {
     enabled = true
@@ -73,23 +78,4 @@ profiles {
 `)
 
 	return b.String()
-}
-
-// gpuSelectors requests the GPUs `special = "gpu[:N]"` asks for on the
-// process alias that runs the stage's code: a split stage's chunks do the
-// GPU work, its split and join none.
-func (p *project) gpuSelectors(b *strings.Builder) {
-	for i, n := range p.topo.Nodes {
-		s, err := p.stage(n.Fqid)
-		if err != nil || s.Resources == nil || gpus(s.Resources.Special) == 0 {
-			continue
-		}
-
-		proc := alias(i, n.Fqid)
-		if n.Split {
-			proc += "_MN"
-		}
-
-		fmt.Fprintf(b, "    withName: %s {\n        accelerator = %d\n    }\n", gstr(proc), gpus(s.Resources.Special))
-	}
 }

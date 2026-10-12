@@ -139,21 +139,6 @@ func (p *project) nodeMeta(n cg.TopoNode) (string, error) {
 	), nil
 }
 
-// gpus is the GPU count `special = "gpu[:N]"` requests, else 0.
-func gpus(special string) int {
-	if special == "gpu" {
-		return 1
-	}
-
-	if rest, ok := strings.CutPrefix(special, "gpu:"); ok {
-		if n, err := strconv.Atoi(rest); err == nil && n > 0 {
-			return n
-		}
-	}
-
-	return 0
-}
-
 // awaited reports whether a node waits for preflight fqid, which then
 // signals, as d<i>, once every instance of it is done: its tasks have all
 // completed, and a disabled instance runs none.

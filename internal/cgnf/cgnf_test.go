@@ -112,19 +112,22 @@ func TestEmitAliases(t *testing.T) {
 	}
 }
 
-// TestEmitGPUSelectors: `special = "gpu[:N]"` requests N GPUs on the alias
-// that runs the stage's code, a split stage's chunks (gpu_stage: INFER one,
-// TRAIN two per chunk).
-func TestEmitGPUSelectors(t *testing.T) {
-	cfg := readTree(t, emitFixture(t, "gpu_stage"))["nextflow.config"]
+// TestEmitGPURequest: every task's GPU request follows the special it is
+// scheduled with, as its clusterOptions do, in one config rule and no
+// per-alias one (TestGPURequestFollowsSpecial runs it).
+func TestEmitGPURequest(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "gpu_stage"))
 
-	for _, want := range []string{
-		"withName: 'N0_INFER' {\n        accelerator = 1\n    }",
-		"withName: 'N1_TRAIN_MN' {\n        accelerator = 2\n    }",
-	} {
-		if !strings.Contains(cfg, want) {
-			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
-		}
+	if !strings.Contains(tree["nextflow.config"], "    accelerator = { def s = meta.special ?: ''; ") {
+		t.Errorf("nextflow.config lacks the accelerator rule:\n%s", tree["nextflow.config"])
+	}
+
+	if strings.Contains(tree["nextflow.config"], "withName:") {
+		t.Errorf("nextflow.config names a process:\n%s", tree["nextflow.config"])
+	}
+
+	if n := strings.Count(stageModule, "clusterOptions { params.job_resources[meta.special] ?: '' }"); n != 4 {
+		t.Errorf("%d of the 4 stage processes look their special up in job_resources", n)
 	}
 }
 

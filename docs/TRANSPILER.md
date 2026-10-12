@@ -162,7 +162,7 @@ one forked on a map call another stage feeds — is refused at transpile time.
 ```
 main.nf               ← PLAN, one process call per stage node, then OUTS: wiring only
 stage.nf              ← the one hand-written stage module every node includes
-nextflow.config       ← params, retry policy, GPU selectors, trace, executor profiles
+nextflow.config       ← params, retry policy, GPU requests, trace, executor profiles
 _assets/source.json   ← the entry file's declarations, call and invocation data
 _assets/types.json    ← the type manifest the OUTS task lays the outs out with
 ```
@@ -192,8 +192,10 @@ records mre wrote; it parses no stage-controlled JSON.
   stage's memory times the attempt, except under `-monitor`, where `mrjob`
   kills the stage at its own request as `mrp` does and `mrp` does not retry
   that kill.
-- A `withName:` `accelerator` for each node whose stage asks for
-  `special = "gpu"` or `"gpu:N"` (see [`GPU.md`](GPU.md)).
+- One `accelerator` rule, evaluated per task, that requests N GPUs for a job
+  whose special, as `mrp` resolves it, is `"gpu"` or `"gpu:N"`: the stage's own,
+  or for a chunk or the join the `__special` the split returned for it (see
+  [`GPU.md`](GPU.md)).
 - Task tracing, and the executor profiles: `standard` (local, clamped to the
   host's cpus and memory with `process.resourceLimits`), `slurm`, `sge`,
   `lsf` and `pbs`.
@@ -507,9 +509,9 @@ Isolated-container and cloud targets are tracked by #489.
 - On the `standard` profile, `process.resourceLimits` clamps a request to the
   host's cpus and memory, so an oversized one runs rather than fails; a `-c`
   config setting `process.resourceLimits` overrides the clamp.
-- `special` selects `params.job_resources[special]` as the task's
-  `clusterOptions`; `special = "gpu"` / `"gpu:N"` requests N GPUs on the node's
-  compute phase instead.
+- A job's special, the stage's or the `__special` its split returned, selects
+  `params.job_resources[special]` as the task's `clusterOptions`;
+  `special = "gpu"` / `"gpu:N"` also requests N GPUs for that job.
 - A `-c` config with `withName:` selectors on the node aliases retunes one
   stage at launch.
 
