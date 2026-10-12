@@ -112,7 +112,7 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 
 	mro := filepath.Join(dir, entry)
 
-	g, err := cg.Load(mro, mro, []string{dir})
+	g, err := cg.Load(mro, "", []string{dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func writeManifest(t *testing.T, mro, dir, path string) {
 }
 
 func (rp *cgReplay) run() {
-	rp.mre("post", "-entry", "-forks", rp.entry)
+	rp.mre("post", "-entry-forks", "-forks", rp.entry)
 
 	ran, off := 0, 0
 
@@ -733,7 +733,7 @@ func refIDsOf(e syntax.Exp) []string {
 func (rp *cgReplay) mre(argv ...string) string {
 	rp.t.Helper()
 
-	return rp.run1(filepath.Join(root, "mre"), append([]string{argv[0], "-mro", rp.mro, "-mropath", rp.dir, "-types", rp.types}, argv[1:]...)...)
+	return rp.run1(filepath.Join(root, "mre"), append([]string{argv[0], "-entry", rp.mro, "-mropath", rp.dir, "-types", rp.types}, argv[1:]...)...)
 }
 
 // run1 runs one command from mrp's working dir and returns its stdout.

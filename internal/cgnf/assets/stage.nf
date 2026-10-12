@@ -1,11 +1,10 @@
 // The stage processes every call-graph node runs through, each node
 // including them under its own alias, so a withName: selector names the
 // node. meta carries the node's identity, the cache key of its spec
-// (digest), where its run's invocation lives (plan), and the resources it
-// is scheduled with; its GPU request is the config's, which reads
-// meta.special per task where a Nextflow 24.04 process directive cannot.
-// Each phase runs `mre args`, then the phase's jobs through `mre run` as mrp
-// runs them, then `mre post`.
+// (digest), the run's call (call), and the resources it is scheduled with;
+// its GPU request is the config's, which reads meta.special per task where
+// a Nextflow 24.04 process directive cannot. Each phase runs `mre args`,
+// then the phase's jobs through `mre run` as mrp runs them, then `mre post`.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -25,26 +24,33 @@ def keyOrder(List a, List b) {
     return c ?: a.size() <=> b.size()
 }
 
+// code names the entry .mro and the include path of the run's invocation
+// below root: the code where the run finds it, or the project's copy of
+// its .mro files a task staged. Martian resolves the entry's includes and
+// stage code beside it, and the _jobinfo invocation records its include.
+def code(Map meta, String root) {
+    return "-entry ${shq(root + meta.entry)} -mropath ${shq(meta.mropath.tokenize(':').collect { p -> root + p }.join(':'))}"
+}
+
 // graph names the invocation an mre call-graph subcommand compiles: the
-// run's plan, compiled as the entry file, so Martian resolves the entry's
-// includes and stage code beside it and the _jobinfo invocation records
-// mrp's include.
-def graph(Map meta) {
-    return "-mro ${shq(meta.plan + '/' + meta.mro)} -as ${shq(meta.entry)} -mropath ${shq(meta.mropath)}"
+// run's call, base64 and so unquoted, over the entry's declarations.
+def graph(Map meta, String root) {
+    return "${code(meta, root)} -call ${meta.call}"
 }
 
 // args builds the instance's args bundle from what it staged and its entry
 // fork records, which are base64 and need no quoting. The driver ran the
-// instance because its gates hold it enabled; mre args must agree.
+// instance because its gates hold it enabled; mre args must agree, and the
+// node must compile to the spec PLAN planned.
 def args(Map meta, List forks) {
-    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta)} -node ${shq(meta.node)} -in in -o args"
+    def cmd = "mkdir -p in\nstate=\$(${shq(params.mro2nf_mre)} args ${graph(meta, '')} -node ${shq(meta.node)} -digest ${meta.digest} -in in -o args"
     forks.each { f -> cmd += " -fork ${f}" }
     return cmd + ")\n[ \"\$state\" = enabled ] || { echo ${shq('mre args: ' + meta.node + ' is not enabled where its gates said enabled')} >&2; exit 1; }"
 }
 
 // rest may be a GString, which Nextflow 24.04 does not pass for a String.
 def job(Map meta, phase, rest) {
-    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta)} -adapters ${shq(params.mro2nf_adapters)} -mrjob ${shq(params.mro2nf_mrjob)} -psid ${shq(params.mro2nf_psid)} -work ."
+    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -adapters ${shq(params.mro2nf_adapters)} -mrjob ${shq(params.mro2nf_mrjob)} -psid ${shq(params.mro2nf_psid)} -work ."
     if (params.mro2nf_monitor) {
         cmd += ' -monitor'
     }
@@ -55,7 +61,7 @@ def job(Map meta, phase, rest) {
 }
 
 def post(Map meta) {
-    return "${shq(params.mro2nf_mre)} post ${graph(meta)} -args args -outs stage_outs -fields outs -forks forks -gates gates"
+    return "${shq(params.mro2nf_mre)} post ${graph(meta, '')} -args args -outs stage_outs -fields outs -forks forks -gates gates"
 }
 
 // resources reads the table a split writes (mre run -phase split): per
@@ -188,6 +194,6 @@ process OUTS {
     """
     mkdir -p in
     ${locations(ups, locs)}
-    ${shq(params.mro2nf_mre)} outs ${graph(meta)} -types types.json -in in -locations locations -o results -json pipeline_outs.json
+    ${shq(params.mro2nf_mre)} outs ${graph(meta, '')} -types types.json -in in -locations locations -o results -json pipeline_outs.json
     """
 }

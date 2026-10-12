@@ -25,7 +25,7 @@ func (g *gen) linef(format string, args ...any) {
 func (p *project) mainNF() (string, error) {
 	g := &gen{}
 
-	g.incs.WriteString("include { shq ; ordered ; resources ; OUTS } from './stage.nf'\n")
+	g.incs.WriteString("include { shq ; code ; ordered ; resources ; OUTS } from './stage.nf'\n")
 	p.planProcess(g)
 	p.planWiring(g)
 
@@ -84,8 +84,8 @@ func pick(v string, idx []int) string {
 // forks of entry-fed root j, each [outer key, own ordinal, record, index
 // token].
 func (p *project) planWiring(g *gen) {
-	g.linef("plan = \"${workflow.workDir}/mro2nf-plan/${workflow.sessionId}\".toString()")
-	g.linef("PLAN(%s, %s, file(\"${projectDir}/_assets/source.json\"))", p.values(), p.graphMeta("plan"))
+	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"))", p.values(), p.graphMeta(), mroAssets)
+	g.linef("call = PLAN.out.call")
 	g.linef("nodes = PLAN.out.nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }")
 
 	for j := range p.entry {
@@ -93,14 +93,12 @@ func (p *project) planWiring(g *gen) {
 	}
 }
 
-// graphMeta is the meta map naming the run's invocation, with extra
-// entries.
-func (p *project) graphMeta(plan string, extra ...string) string {
+// graphMeta is the meta map naming the entry .mro and the include path the
+// run's invocation compiles with, with extra entries.
+func (p *project) graphMeta(extra ...string) string {
 	entries := append([]string{
-		"mro: " + gstr(p.src.Name),
 		"entry: " + gstr(p.src.Path()),
 		"mropath: " + gstr(strings.Join(p.opts.MroPaths, ":")),
-		"plan: " + plan,
 		"build: " + gstr(p.opts.Version),
 	}, extra...)
 
@@ -130,7 +128,8 @@ func (p *project) nodeMeta(n cg.TopoNode) (string, error) {
 		mem = 1
 	}
 
-	return p.graphMeta("plan",
+	return p.graphMeta(
+		"call: c",
 		"node: "+gstr(n.Fqid),
 		"cpus: "+strconv.Itoa(cpus),
 		"mem_gb: "+strconv.FormatFloat(mem, 'f', -1, 64),

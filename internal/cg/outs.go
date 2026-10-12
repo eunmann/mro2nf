@@ -21,8 +21,6 @@ type OutsSpec struct {
 	Locations map[string]string
 	// Manifest locates the file leaves of the outs.
 	Manifest types.Manifest
-	// Source is the invocation .mro the pipestance is reattached with.
-	Source string
 	// Work is the dir the pipestance is reconstructed in.
 	Work string
 	// Results receives the published tree, and OutsJSON the outs JSON that
@@ -61,7 +59,7 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 		return err
 	}
 
-	if err := g.postProcess(ctx, ps.dir, spec.Source); err != nil {
+	if err := g.postProcess(ctx, ps.dir); err != nil {
 		return err
 	}
 
@@ -102,15 +100,15 @@ func (g *Graph) pipelineOuts(s *stagedStore) (json.Marshaler, error) {
 }
 
 // postProcess runs Martian's PostProcess on the pipestance at ps, attached
-// read-only from the invocation at source. Attaching needs no job manager,
-// so the runtime is built without the one NewRuntime reads from Martian's
-// install.
-func (g *Graph) postProcess(ctx context.Context, ps, source string) error {
+// read-only from the invocation the graph compiled. Attaching needs no job
+// manager, so the runtime is built without the one NewRuntime reads from
+// Martian's install.
+func (g *Graph) postProcess(ctx context.Context, ps string) error {
 	opts := core.DefaultRuntimeOptions()
 	opts.VdrMode = core.VdrDisable
 	rt := &core.Runtime{Config: &opts}
 
-	pipe, err := rt.ReattachToPipestance(filepath.Base(ps), ps, "", source, g.mroPaths, "", nil, false, true, ctx)
+	pipe, err := rt.ReattachToPipestance(filepath.Base(ps), ps, g.src, g.name, g.mroPaths, "", nil, false, true, ctx)
 	if err != nil {
 		return fmt.Errorf("post-process: attach %s: %w", ps, err)
 	}

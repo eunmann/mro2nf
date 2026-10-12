@@ -7,11 +7,12 @@ import (
 	"strings"
 )
 
-// planProcess declares PLAN, the run's one start task. It never caches: it
-// rewrites the invocation at the session's plan path, which tasks read by
-// that constant path instead of staging it, so a task's cache key holds
-// its own node's digest and not the whole invocation. Its records reach
-// the driver as values: per entry-fed root, its forks and their counts.
+// planProcess declares PLAN, the run's one start task, which compiles the
+// project's copy of the entry's .mro files. Its records reach the driver as
+// values, so a task's cache key holds what PLAN fixed for it, not the
+// task's path: the run's call, which every task compiles over the entry's
+// declarations where the run finds its code, each node's digest, and per
+// entry-fed root, its forks and their counts.
 func (p *project) planProcess(g *gen) {
 	var outs strings.Builder
 
@@ -21,14 +22,13 @@ func (p *project) planProcess(g *gen) {
 	}
 
 	fmt.Fprintf(&g.procs, `process PLAN {
-    cache false
-
     input:
     val values
     val meta
-    path 'source.json'
+    path 'mro'
 
     output:
+    eval('cat call'), emit: call
     eval('cat nodes'), emit: nodes
 %s
     script:
@@ -36,7 +36,7 @@ func (p *project) planProcess(g *gen) {
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(params.mro2nf_mre)} plan -source source.json -values values.json -mropath ${shq(meta.mropath)} -o ${shq(meta.plan)} -nodes nodes -roots roots -counts counts
+    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json -call call -nodes nodes -roots roots -counts counts
     """
 }
 
@@ -81,8 +81,7 @@ func (p *project) outs(g *gen) {
 	}
 
 	g.linef("outs_in = %s", ups)
-	// The meta waits on PLAN, which writes the invocation OUTS compiles.
-	g.linef("OUTS(nodes.map { _ns -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(\"${projectDir}/_assets/types.json\"))", p.graphMeta("plan"))
+	g.linef("OUTS(call.map { c -> %s }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(\"${projectDir}/_assets/types.json\"))", p.graphMeta("call: c"))
 }
 
 // shellQuote is s single-quoted for the shell.

@@ -48,7 +48,7 @@ type elemDir struct {
 func newStandIn(t *testing.T, mro string) *standIn {
 	t.Helper()
 
-	g, err := Load(mro, mro, []string{filepath.Dir(mro)})
+	g, err := Load(mro, "", []string{filepath.Dir(mro)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestStandInRunOfEveryFixture(t *testing.T) {
 			}
 
 			out := OutsSpec{
-				In: []string{s.staged(s.read(topo.Outs))}, Manifest: s.man, Source: mro,
+				In: []string{s.staged(s.read(topo.Outs))}, Manifest: s.man,
 				Work: s.next("work"), Results: s.next("results"), OutsJSON: s.next("pipeline_outs.json"),
 			}
 			if err := s.g.WriteOuts(t.Context(), out); err != nil {

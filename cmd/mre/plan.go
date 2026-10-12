@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,24 +19,24 @@ import (
 
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
-	source, values, mropath, out, nodes, roots, counts, work string
+	entry, values, mropath, call, nodes, roots, counts, work string
 }
 
 // runPlan starts a run: it rebuilds the invocation from the transpiled
-// source and the run's entry values as mrp builds an invocation from its
+// entry and the run's entry values as mrp builds an invocation from its
 // JSON form, compiles it as mrp does, so mrp's refusals fail the run before
 // any stage starts, and checks its call graph is within the witness's. It
-// writes the invocation every task compiles, each witness node's spec
-// digest and disabled instances, and the forks of each entry-fed root.
+// writes the call every task compiles, each witness node's spec digest and
+// disabled instances, and the forks of each entry-fed root.
 func runPlan(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 
 	var f planFlags
 
-	fs.StringVar(&f.source, "source", "", "the transpiled entry source (source.json)")
+	fs.StringVar(&f.entry, "entry", "", "the transpiled entry .mro")
 	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null keeps the transpiled one")
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
-	fs.StringVar(&f.out, "o", "plan", "dir to write the invocation .mro into")
+	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the call as mrp's invocation generator builds it")
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys")
 	fs.StringVar(&f.roots, "roots", "roots", "dir to write one file per entry-fed fork root into, a line per fork: key record index-token")
 	fs.StringVar(&f.counts, "counts", "counts", "dir to write one file per entry-fed fork root into, a line per fork of its outer roots: count key")
@@ -45,12 +46,16 @@ func runPlan(_ context.Context, argv []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	var src cg.Source
-	if err := readRecordFile(f.source, &src); err != nil {
-		return err
+	if f.entry == "" {
+		return errNoEntry
 	}
 
 	paths := filepath.SplitList(f.mropath)
+
+	src, err := cg.ReadSource(f.entry, paths)
+	if err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
 
 	inv, err := overlayInvocation(src, f.values, paths)
 	if err != nil {
@@ -62,7 +67,7 @@ func runPlan(_ context.Context, argv []string) error {
 		return fmt.Errorf("plan: %w", err)
 	}
 
-	return f.write(src.Name, p)
+	return f.write(p)
 }
 
 // overlayInvocation is the source's invocation with the run's entry values
@@ -116,18 +121,9 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 	return &inv, nil
 }
 
-func (f *planFlags) write(name string, p cg.Plan) error {
-	if err := os.MkdirAll(f.out, recordDirPerm); err != nil {
-		return fmt.Errorf("create %s: %w", f.out, err)
-	}
-
-	tmp := filepath.Join(f.out, "."+name+".tmp")
-	if err := os.WriteFile(tmp, []byte(p.Source), filePerm); err != nil {
-		return fmt.Errorf("write invocation: %w", err)
-	}
-
-	if err := os.Rename(tmp, filepath.Join(f.out, name)); err != nil {
-		return fmt.Errorf("write invocation: %w", err)
+func (f *planFlags) write(p cg.Plan) error {
+	if err := writeText(f.call, base64.StdEncoding.EncodeToString([]byte(p.Call))); err != nil {
+		return err
 	}
 
 	var nodes strings.Builder

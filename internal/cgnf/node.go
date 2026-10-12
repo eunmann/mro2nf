@@ -31,7 +31,7 @@ func (p *project) node(g *gen, i int, n cg.TopoNode) error {
 	}
 
 	proc := alias(i, n.Fqid)
-	in := fmt.Sprintf("u%d.map { k, fs, es, d, us -> [%s, k, fs, es + us] }", i, meta)
+	in := fmt.Sprintf("u%d.combine(call).map { k, fs, es, d, us, c -> [%s, k, fs, es + us] }", i, meta)
 
 	if n.Split {
 		p.splitTriad(g, i, proc, in)

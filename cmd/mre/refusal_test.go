@@ -15,21 +15,22 @@ func TestSubcommandsRefuseBadInputs(t *testing.T) {
 
 	cases := map[string][]string{
 		"args flag":        {"args", "-bogus"},
-		"args mro":         {"args", "-mro", absent},
-		"args types":       {"args", "-mro", mro, "-types", absent},
-		"args fork record": {"args", "-mro", mro, "-node", "PP.MAKE", "-fork", "not base64!"},
-		"args node":        {"args", "-mro", mro, "-node", "PP.NONE", "-o", filepath.Join(t.TempDir(), "args")},
+		"args entry":       {"args", "-entry", absent},
+		"args call":        {"args", "-entry", mro, "-call", "not base64!"},
+		"args types":       {"args", "-entry", mro, "-types", absent},
+		"args fork record": {"args", "-entry", mro, "-node", "PP.MAKE", "-fork", "not base64!"},
+		"args node":        {"args", "-entry", mro, "-node", "PP.NONE", "-o", filepath.Join(t.TempDir(), "args")},
 		"post flag":        {"post", "-bogus"},
-		"post mro":         {"post", "-mro", absent},
-		"post args":        {"post", "-mro", mro, "-args", absent, "-outs", absent},
+		"post entry":       {"post", "-entry", absent},
+		"post args":        {"post", "-entry", mro, "-args", absent, "-outs", absent},
 		"outs flag":        {"outs", "-bogus"},
-		"outs mro":         {"outs", "-mro", absent},
-		"outs staged":      {"outs", "-mro", mro, "-in", absent},
+		"outs entry":       {"outs", "-entry", absent},
+		"outs staged":      {"outs", "-entry", mro, "-in", absent},
 		"run flag":         {"run", "-bogus"},
-		"run mro":          {"run", "-mro", absent, "-phase", "main"},
-		"run args":         {"run", "-mro", mro, "-phase", "main", "-args", absent},
+		"run entry":        {"run", "-entry", absent, "-phase", "main"},
+		"run args":         {"run", "-entry", mro, "-phase", "main", "-args", absent},
 		"plan flag":        {"plan", "-bogus"},
-		"plan source":      {"plan", "-source", absent},
+		"plan entry":       {"plan", "-entry", absent},
 	}
 
 	for name, argv := range cases {

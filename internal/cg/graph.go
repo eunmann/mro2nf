@@ -27,30 +27,42 @@ var (
 
 // Graph is a compiled invocation's call graph, indexed by stage and by fork
 // root. A fork root can be a pipeline's map call, which is no stage node.
+// src is the invocation source it compiled from, as the file at name.
 type Graph struct {
-	ast      *syntax.Ast
-	mroPaths []string
-	root     *syntax.CallGraphPipeline
-	types    *syntax.TypeLookup
-	stages   map[string]*syntax.CallGraphStage
-	roots    map[string]*syntax.CallGraphStage
-	outer    map[string]syntax.ForkRootList
+	src, name string
+	ast       *syntax.Ast
+	mroPaths  []string
+	root      *syntax.CallGraphPipeline
+	types     *syntax.TypeLookup
+	stages    map[string]*syntax.CallGraphStage
+	roots     map[string]*syntax.CallGraphStage
+	outer     map[string]syntax.ForkRootList
 }
 
-// Load compiles the invocation read from mro as the file at entry, as mrp
-// compiles the invocation it reads under the path it was given
-// (cmd/mrp/main.go: ReadFile(invocationPath), then core/runtime.go
-// instantiatePipeline: ParseSourceBytes, then MakePipelineCallGraph).
-// Martian resolves entry's includes and its stages' code beside entry, so
-// a run compiling the plan its PLAN wrote passes the transpiled entry file.
-func Load(mro, entry string, mroPaths []string) (*Graph, error) {
+// Load compiles the entry .mro at entry as mrp compiles the invocation it
+// reads under the path it was given (cmd/mrp/main.go:
+// ReadFile(invocationPath), then core/runtime.go instantiatePipeline:
+// ParseSourceBytes, then MakePipelineCallGraph), with call, when set, in
+// place of the entry's own call: the run's call PLAN rebuilt
+// (Source.RebuildCall) over the entry's declarations is the invocation
+// PLAN compiled.
+func Load(entry, call string, mroPaths []string) (*Graph, error) {
 	if len(mroPaths) == 0 {
 		mroPaths = []string{filepath.Dir(entry)}
 	}
 
-	raw, err := os.ReadFile(mro)
+	raw, err := os.ReadFile(entry)
 	if err != nil {
 		return nil, fmt.Errorf("read invocation: %w", err)
+	}
+
+	if call != "" {
+		decls, _, err := splitEntry(raw, entry)
+		if err != nil {
+			return nil, err
+		}
+
+		raw = []byte(withCall(decls, call))
 	}
 
 	return Compile(raw, entry, mroPaths)
@@ -67,7 +79,14 @@ func Compile(src []byte, name string, mroPaths []string) (*Graph, error) {
 		return nil, fmt.Errorf("compile %s: %w", name, err)
 	}
 
-	return graphOf(ast, name, mroPaths)
+	g, err := graphOf(ast, name, mroPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	g.src, g.name = string(src), name
+
+	return g, nil
 }
 
 func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {

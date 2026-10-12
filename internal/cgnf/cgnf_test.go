@@ -16,11 +16,7 @@ import (
 func emitFixture(t *testing.T, name string) string {
 	t.Helper()
 
-	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", name))
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	dir := fixturePath(t, name)
 	out := t.TempDir()
 	opts := Options{OutDir: out, Mre: "/opt/mre", Mrjob: "/opt/mrjob", Adapters: "/opt/adapters", MroPaths: []string{dir}, Version: "test"}
 
@@ -59,8 +55,8 @@ func readTree(t *testing.T, dir string) map[string]string {
 }
 
 // TestEmitProject: a project is main.nf wiring, the one stage module, the
-// config and the transpiled source; it does not depend on where it is
-// emitted.
+// config, the type manifest and a copy of the entry's .mro files; it does
+// not depend on where it is emitted.
 func TestEmitProject(t *testing.T) {
 	a, b := readTree(t, emitFixture(t, "split_test")), readTree(t, emitFixture(t, "split_test"))
 
@@ -68,7 +64,8 @@ func TestEmitProject(t *testing.T) {
 		t.Errorf("two emissions differ:\n%s", d)
 	}
 
-	want := []string{"_assets/source.json", "_assets/types.json", "main.nf", "nextflow.config", "stage.nf"}
+	entry := filepath.Join(fixturePath(t, "split_test"), "pipeline.mro")
+	want := []string{filepath.Join("_assets/mro", entry), "_assets/types.json", "main.nf", "nextflow.config", "stage.nf"}
 
 	if d := cmp.Diff(want, slices.Sorted(maps.Keys(a))); d != "" {
 		t.Errorf("project files (-want +got):\n%s", d)
@@ -77,6 +74,62 @@ func TestEmitProject(t *testing.T) {
 	if a["stage.nf"] != stageModule {
 		t.Error("stage.nf is not the stage module")
 	}
+}
+
+// TestEmitCopiesTheMroFiles: the project holds every .mro file the entry
+// compiles from, its includes too, unchanged at its absolute path below
+// _assets/mro, and none of the stage code beside them; PLAN stages the copy
+// and caches on it, so a re-run of an unchanged project starts from
+// PLAN's cached records.
+func TestEmitCopiesTheMroFiles(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "include_test"))
+	dir := fixturePath(t, "include_test")
+
+	var got []string
+
+	for name := range tree {
+		if rest, ok := strings.CutPrefix(name, "_assets/mro/"); ok {
+			got = append(got, "/"+rest)
+		}
+	}
+
+	want := []string{filepath.Join(dir, "pipeline.mro"), filepath.Join(dir, "stages.mro")}
+	if d := cmp.Diff(want, slices.Sorted(slices.Values(got))); d != "" {
+		t.Fatalf("copied .mro files (-want +got):\n%s", d)
+	}
+
+	for _, path := range want {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if tree[filepath.Join("_assets/mro", path)] != string(raw) {
+			t.Errorf("the copy of %s differs from it", path)
+		}
+	}
+
+	main := tree["main.nf"]
+	for _, want := range []string{"    path 'mro'\n", "file(\"${projectDir}/_assets/mro\")", "${code(meta, 'mro')}"} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if strings.Contains(main, "cache false") {
+		t.Errorf("PLAN does not cache:\n%s", main)
+	}
+}
+
+func fixturePath(t *testing.T, name string) string {
+	t.Helper()
+
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
 }
 
 // TestEmitAliases: every stage node of the witness's call graph is one
@@ -157,7 +210,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
-	if !strings.Contains(main, "OUTS(nodes.map { _ns -> [mro: 'pipeline.mro'") || !strings.Contains(main, "outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(") {
+	if !strings.Contains(main, "OUTS(call.map { c -> [entry: ") || !strings.Contains(main, "outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, file(") {
 		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
 	}
 

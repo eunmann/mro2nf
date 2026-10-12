@@ -2,14 +2,13 @@
 // (#463): one process per stage node of the witness invocation's
 // call graph, each an alias of the one hand-written stage module, wired by
 // the data the nodes exchange. A run-start PLAN task compiles the run's real
-// invocation as mrp does and hands every node its spec digest, its static
-// gates and the forks its entry-fed roots take.
+// invocation as mrp does and hands every node the run's call, its spec
+// digest, its static gates and the forks its entry-fed roots take.
 package cgnf
 
 import (
 	// The stage module ships inside the binary that emits it.
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -91,28 +90,50 @@ func Emit(entry string, opts Options) error {
 		return fmt.Errorf("emit types: %w", err)
 	}
 
-	source, err := json.MarshalIndent(src, "", "  ")
-	if err != nil {
-		return fmt.Errorf("emit source: %w", err)
-	}
-
 	main, err := p.mainNF()
 	if err != nil {
 		return err
 	}
 
 	files := map[string]string{
-		"main.nf":             main,
-		"stage.nf":            stageModule,
-		"nextflow.config":     p.config(),
-		"_assets/source.json": string(source) + "\n",
-		"_assets/types.json":  types.Subset(slices.Sorted(maps.Keys(man.Callables))...),
+		"main.nf":            main,
+		"stage.nf":           stageModule,
+		"nextflow.config":    p.config(),
+		"_assets/types.json": types.Subset(slices.Sorted(maps.Keys(man.Callables))...),
+	}
+
+	if err := addMroFiles(files, src.Files); err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(filepath.Join(opts.OutDir, mroAssets)); err != nil {
+		return fmt.Errorf("emit: %w", err)
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		if err := writeFile(filepath.Join(opts.OutDir, name), files[name]); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// mroAssets is the project's copy of the .mro files the entry compiles
+// from, each at its absolute path below it, so their includes resolve as
+// they do where the run finds its code. PLAN and OUTS compile it.
+const mroAssets = "_assets/mro"
+
+// addMroFiles adds each .mro file at its absolute path in paths to files,
+// below mroAssets.
+func addMroFiles(files map[string]string, paths []string) error {
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("emit: %w", err)
+		}
+
+		files[filepath.Join(mroAssets, path)] = string(raw)
 	}
 
 	return nil

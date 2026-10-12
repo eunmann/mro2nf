@@ -54,7 +54,7 @@ func nestedPlan(tb testing.TB, n int) (*Graph, Topology) {
 		tb.Fatal(err)
 	}
 
-	g, err := Load(mro, mro, nil)
+	g, err := Load(mro, "", nil)
 	if err != nil {
 		tb.Fatal(err)
 	}

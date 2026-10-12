@@ -72,7 +72,7 @@ cg.Graph.Topology → per node its fork roots, reads and gates
    │
 cgnf.Emit         → a Nextflow project on disk:
    │                  main.nf, stage.nf, nextflow.config,
-   │                  _assets/source.json, _assets/types.json
+   │                  _assets/mro/, _assets/types.json
    ▼
 nextflow run main.nf …  →  PLAN, a task per stage instance, then OUTS
 ```
@@ -163,7 +163,8 @@ one forked on a map call another stage feeds — is refused at transpile time.
 main.nf               ← PLAN, one process call per stage node, then OUTS: wiring only
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← params, retry policy, GPU requests, trace, executor profiles
-_assets/source.json   ← the entry file's declarations, call and invocation data
+_assets/mro/          ← a copy of every .mro file the entry compiles from, each
+                        at its absolute path below it; PLAN compiles it
 _assets/types.json    ← the type manifest the OUTS task lays the outs out with
 ```
 
@@ -204,26 +205,35 @@ records mre wrote; it parses no stage-controlled JSON.
 
 ## 5. Run time
 
-**PLAN.** One task starts every run. `mre plan` overlays the run's entry params
-on the transpiled invocation data (a string param of a scalar input parsed as
-its type, §8), rebuilds the call as `mrp`'s invocation generator does
-(`core.BuildCallAst`), and compiles it, so `mrp`'s refusals fail the run before
-any stage starts. It fails if the call graph has a node, a fork root or a read
-the witness lacks (`Topology.Covers`); a node the invocation disables outright
-counts only by its presence. Its records reach the driver as `eval` values:
+**PLAN.** One task starts every run. It stages the project's copy of the
+entry's `.mro` files (`_assets/mro/`) and compiles that. `mre plan` overlays
+the run's entry params on the entry's invocation data (a string param of a
+scalar input parsed as its type, §8), rebuilds the call as `mrp`'s invocation
+generator does (`core.BuildCallAst`), and compiles it over the entry's
+declarations, so `mrp`'s refusals fail the run before any stage starts. It
+fails if the call graph has a node, a fork root or a read the witness lacks
+(`Topology.Covers`); a node the invocation disables outright counts only by
+its presence. Its records reach the driver as `eval` values: the run's call;
 per node a digest of its resolved spec (stage, bindings, disable bindings and
 fork roots in Martian's JSON form), whether the invocation disables it, and the
 fork keys a static per-fork binding disables; per entry-fed root its forks,
 keyed by the witness's outer roots, each with its fork record and its index
 token.
 
-**Cache identity.** A task's `-resume` key holds its own node's digest (in
-`meta`), the mro2nf build, and its fork records and staged dirs, not the
-invocation. PLAN runs uncached and writes the invocation to a path constant per
-session, `<workDir>/mro2nf-plan/<sessionId>/<entry .mro>`, which each task
-reads by that path (`-mro`) and compiles as the entry file (`-as`) instead of
-staging it. Entry forks reach tasks as values,
-so no task stages a file of PLAN's.
+**Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
+copy and its meta. A task's `-resume` key holds its own node's digest (in
+`meta`), the run's call, the mro2nf build, and its fork records and staged
+dirs. No task stages a file of PLAN's: the call and the digests reach it as
+values, which Nextflow keys on by content, so a re-transpile whose `.mro` edit
+leaves a node's spec and the call as they were re-runs PLAN but keeps the node
+cached (`TestResumeKeysOnlyOnATasksOwnTypes`). A changed entry value changes
+the call, and so re-runs every task.
+
+**Code.** A stage task compiles the run's call over the entry `.mro` where the
+run finds its code: its includes and its stages' code resolve beside it, as
+under `mrp`. `mre args` fails the task when the node compiles to another spec
+than the digest PLAN planned (`cg.ErrSpecDrift`): a `.mro` edited since the
+transpile, or an image built from other sources, fails loudly rather than run.
 
 **Instances.** An instance's key is the ordinal of its fork of each of its
 roots. The driver enumerates a node's instances root by root: an entry-fed
@@ -284,18 +294,21 @@ so the plumbing task count does not grow with fork width or chunk count
 
 ## 6. The runtime shim `mre`
 
-Each subcommand that works on the call graph takes the invocation `.mro`
-(`-mro`, `-mropath`), compiles it as `mrp` does (`ParseSourceBytes`, then
-`MakePipelineCallGraph`) as the entry file `-as` names, and reads only the items its task staged (`-in`, an
-item or a dir of items). Without `-types`, each builds the type manifest from
-the invocation's own declarations.
+Each subcommand that works on the call graph takes the entry `.mro`
+(`-entry`, `-mropath`) and the run's call (`-call`, base64 of the call PLAN
+rebuilt; the entry's own call without it), compiles the call over the entry's
+declarations as `mrp` compiles an invocation (`ParseSourceBytes`, then
+`MakePipelineCallGraph`) as the entry file, and reads only the items its task
+staged (`-in`, an item or a dir of items). Without `-types`, each builds the
+type manifest from the invocation's own declarations.
 
 - **`mre plan`** starts a run (§5). It rebuilds the run's invocation from the
-  transpiled source and the run's entry values, compiles it, checks it against
-  the witness, and writes the invocation every task compiles, one record per
-  witness node and the forks of each entry-fed fork root.
-- **`mre args -node <fqid>`** builds one stage instance's args bundle and prints
-  `enabled` or `disabled`. The instance's fork comes from the fork elements it
+  transpiled entry and the run's entry values, compiles it, checks it against
+  the witness, and writes the call every task compiles, one record per witness
+  node and the forks of each entry-fed fork root.
+- **`mre args -node <fqid> -digest <d>`** builds one stage instance's args
+  bundle and prints `enabled` or `disabled`, once the node compiles to the spec
+  digest PLAN planned. The instance's fork comes from the fork elements it
   staged, or the fork records it got as values (`-fork`, base64 of a
   `fork.json`), and its values from its parents' stamped outs bundles. A
   disabled instance gets only its stamp, `instance.json`, which records the fork
@@ -353,7 +366,7 @@ the invocation's own declarations.
   reads null where the output is null and a missing element, logged, at any
   index it lacks, as `mrp` reads it; a zip of maps at run time need not share
   keys (`zip_runtime_map`). An instance therefore stages only its own elements,
-  and no key ever needs escaping. `mre post -entry` writes the forks the call graph already
+  and no key ever needs escaping. `mre post -entry-forks` writes the forks the call graph already
   fixes (literal and entry-sourced sources) the same way, as fork records
   without values. A root whose fork set varies with an outer map call (its
   source, of unknown length, is forked on that call) gets its forks under each
@@ -496,7 +509,7 @@ task:
 ## 8. Pipeline inputs: run parameters
 
 The top-level `call EP(reads = …, scale = …)` provides the pipeline's default
-inputs, which the transpiled invocation data in `_assets/source.json` carries.
+inputs, which the project's copy of the entry `.mro` (`_assets/mro/`) carries.
 You can override inputs **at launch** without re-transpiling:
 
 - Every entry input is a nullable Nextflow parameter, `params.<name>`; null

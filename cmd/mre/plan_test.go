@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,9 +15,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// writeSource writes the transpiled source of fixture's pipeline.mro into
-// dir and returns its path and the fixture's dir.
-func writeSource(t *testing.T, fixture, dir string) (string, string) {
+// fixtureDir is testdata/fixture, absolute.
+func fixtureDir(t *testing.T, fixture string) string {
 	t.Helper()
 
 	fx, err := filepath.Abs(filepath.Join("..", "..", "testdata", fixture))
@@ -25,22 +24,7 @@ func writeSource(t *testing.T, fixture, dir string) (string, string) {
 		t.Fatal(err)
 	}
 
-	src, err := cg.ReadSource(filepath.Join(fx, "pipeline.mro"), []string{fx})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	raw, err := json.Marshal(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	path := filepath.Join(dir, "source.json")
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	return path, fx
+	return fx
 }
 
 // plan runs mre plan on fixture with the entry values values, and returns
@@ -48,8 +32,15 @@ func writeSource(t *testing.T, fixture, dir string) (string, string) {
 func plan(t *testing.T, fixture, values string) (string, error) {
 	t.Helper()
 
+	return planEntry(t, fixtureDir(t, fixture), values)
+}
+
+// planEntry runs mre plan on the pipeline.mro in dir with the entry values
+// values, and returns the plan dir.
+func planEntry(t *testing.T, dir, values string) (string, error) {
+	t.Helper()
+
 	work := t.TempDir()
-	source, fx := writeSource(t, fixture, work)
 
 	vf := filepath.Join(work, "values.json")
 	if err := os.WriteFile(vf, []byte(values), 0o644); err != nil {
@@ -57,12 +48,24 @@ func plan(t *testing.T, fixture, values string) (string, error) {
 	}
 
 	err := run(t.Context(), []string{
-		"plan", "-source", source, "-values", vf, "-mropath", fx, "-work", work,
-		"-o", filepath.Join(work, "plan"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
+		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work,
+		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
 		"-counts", filepath.Join(work, "counts"),
 	})
 
 	return work, err
+}
+
+// planCall is the run's call the plan in work wrote, decoded.
+func planCall(t *testing.T, work string) string {
+	t.Helper()
+
+	call, err := base64.StdEncoding.DecodeString(readText(t, filepath.Join(work, "call")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(call)
 }
 
 func readText(t *testing.T, path string) string {
@@ -123,8 +126,8 @@ func TestPlanNestedEntryForks(t *testing.T) {
 			t.Errorf("sets %s: DBL's _args (-mrp +mre):\n%s", tc.sets, d)
 		}
 
-		if inv := readText(t, filepath.Join(work, "plan", "pipeline.mro")); !strings.Contains(inv, "call OUTER(") || !strings.Contains(inv, "4") {
-			t.Errorf("sets %s: the invocation does not carry the launch values:\n%s", tc.sets, inv)
+		if call := planCall(t, work); !strings.HasPrefix(call, "call OUTER(") || !strings.Contains(call, "4") {
+			t.Errorf("sets %s: the call does not carry the launch values:\n%s", tc.sets, call)
 		}
 
 		if nodes := readText(t, filepath.Join(work, "nodes")); !strings.HasPrefix(nodes, "OUTER.INNER.DBL ") || strings.Count(nodes, "\n") != 1 {
@@ -146,7 +149,7 @@ func nestedArgs(t *testing.T, work string, lines []string) []string {
 		inner[f[0]] = f[1]
 	}
 
-	fx := filepath.Join("..", "..", "testdata", "map_pipe_nested")
+	fx := fixtureDir(t, "map_pipe_nested")
 	out := make([]string, len(lines))
 
 	for i, line := range lines {
@@ -158,7 +161,7 @@ func nestedArgs(t *testing.T, work string, lines []string) []string {
 
 		state := captureStdout(t, func() {
 			err = run(t.Context(), []string{
-				"args", "-mro", filepath.Join(work, "plan", "pipeline.mro"), "-mropath", fx,
+				"args", "-entry", filepath.Join(fx, "pipeline.mro"), "-call", readText(t, filepath.Join(work, "call")), "-mropath", fx,
 				"-node", "OUTER.INNER.DBL", "-fork", inner[outer], "-fork", f[1], "-o", dir,
 			})
 		})
@@ -210,13 +213,13 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fx := filepath.Join("..", "..", "testdata", "split_gate_entry")
-	mro := filepath.Join(work, "plan", "pipeline.mro")
+	fx := fixtureDir(t, "split_gate_entry")
+	mro, call := filepath.Join(fx, "pipeline.mro"), readText(t, filepath.Join(work, "call"))
 	src, outs, gates := "SPLIT_GATE_ENTRY.SRC", filepath.Join(work, "src", "outs"), filepath.Join(work, "src", "gates")
 	args := filepath.Join(work, "src", "args")
 
 	captureStdout(t, func() {
-		err = run(t.Context(), []string{"args", "-mro", mro, "-mropath", fx, "-node", src, "-o", args})
+		err = run(t.Context(), []string{"args", "-entry", mro, "-call", call, "-mropath", fx, "-node", src, "-o", args})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -224,13 +227,13 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 
 	writeTestBundle(t, outs, map[string]any{"skips": []any{true, true, false}, "flags": map[string]any{"a": false, "b": true, "c": true}})
 
-	if err := run(t.Context(), []string{"post", "-mro", mro, "-mropath", fx, "-args", args, "-outs", outs, "-forks", filepath.Join(work, "src", "forks"), "-gates", gates}); err != nil {
+	if err := run(t.Context(), []string{"post", "-entry", mro, "-call", call, "-mropath", fx, "-args", args, "-outs", outs, "-forks", filepath.Join(work, "src", "forks"), "-gates", gates}); err != nil {
 		t.Fatal(err)
 	}
 
 	posted := strings.Fields(readText(t, gates))
 
-	g, err := cg.Load(mro, mro, []string{fx})
+	g, err := cg.Load(mro, planCall(t, work), []string{fx})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,10 +273,10 @@ func TestPlanTypesStringParams(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	inv := readText(t, filepath.Join(work, "plan", "pipeline.mro"))
+	call := planCall(t, work)
 	for _, want := range []string{"n = 5,", "f = 2.5,", "g = 1e+06,", "b = false,"} {
-		if !strings.Contains(inv, want) {
-			t.Errorf("the invocation lacks %q:\n%s", want, inv)
+		if !strings.Contains(call, want) {
+			t.Errorf("the call lacks %q:\n%s", want, call)
 		}
 	}
 
@@ -323,10 +326,10 @@ call P(
 )
 `
 
-// TestRunFindsStageCodeBesideEntry: a task compiles its run's plan as the
-// entry file, so the code of a stage the entry declares is the one beside
-// the entry, as mrp finds it (syntax SrcParam.FindPath), even when a search
-// root holds code at the same path and the task runs in another dir.
+// TestRunFindsStageCodeBesideEntry: a task compiles the run's call over
+// the entry file, so the code of a stage the entry declares is the one
+// beside the entry, as mrp finds it (syntax SrcParam.FindPath), even when a
+// search root holds code at the same path and the task runs in another dir.
 func TestRunFindsStageCodeBesideEntry(t *testing.T) {
 	proj, shared, work := t.TempDir(), t.TempDir(), t.TempDir()
 
@@ -339,28 +342,16 @@ func TestRunFindsStageCodeBesideEntry(t *testing.T) {
 	}
 
 	entry := writeTestFile(t, filepath.Join(proj, "pipeline.mro"), besideEntryMRO)
-
-	src, err := cg.ReadSource(entry, []string{shared})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	raw, err := json.Marshal(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	source := writeTestFile(t, filepath.Join(work, "source.json"), string(raw))
 	t.Chdir(t.TempDir())
 
 	if err := run(t.Context(), []string{
-		"plan", "-source", source, "-mropath", shared, "-work", work,
-		"-o", filepath.Join(work, "plan"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
+		"plan", "-entry", entry, "-mropath", shared, "-work", work,
+		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	g, _, err := (&graphFlags{mro: filepath.Join(work, "plan", src.Name), as: src.Path(), mropath: shared}).load()
+	g, _, err := (&graphFlags{entry: entry, call: readText(t, filepath.Join(work, "call")), mropath: shared}).load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,5 +368,51 @@ func TestRunFindsStageCodeBesideEntry(t *testing.T) {
 
 	if want := filepath.Join(proj, "stages", "foo"); stage.Code.Cmd != want {
 		t.Errorf("stage code = %s, want %s beside the entry", stage.Code.Cmd, want)
+	}
+}
+
+// TestArgsRefusesCodeThePlanDidNotPlan: a task compiles the code where the
+// run finds it, so a .mro edited since the plan, or an image built from
+// other sources, compiles the node to another spec than PLAN's digest
+// names, and mre args fails rather than running it.
+func TestArgsRefusesCodeThePlanDidNotPlan(t *testing.T) {
+	dir := t.TempDir()
+	mro := filepath.Join(dir, "pipeline.mro")
+	writeTestFile(t, mro, readText(t, filepath.Join(fixtureDir(t, "chain_gate"), "pipeline.mro")))
+
+	work, err := planEntry(t, dir, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var digest string
+
+	for line := range strings.SplitSeq(readText(t, filepath.Join(work, "nodes")), "\n") {
+		if f := strings.Fields(line); len(f) > 1 && f[0] == "CH.SRC" {
+			digest = f[1]
+		}
+	}
+
+	args := func() error {
+		var err error
+
+		captureStdout(t, func() {
+			err = run(t.Context(), []string{
+				"args", "-entry", mro, "-call", readText(t, filepath.Join(work, "call")), "-mropath", dir,
+				"-node", "CH.SRC", "-digest", digest, "-o", filepath.Join(t.TempDir(), "args"),
+			})
+		})
+
+		return err
+	}
+
+	if err := args(); err != nil {
+		t.Fatalf("args of the planned code: %v", err)
+	}
+
+	writeTestFile(t, mro, strings.Replace(readText(t, mro), `"stages/src"`, `"stages/other"`, 1))
+
+	if err := args(); !errors.Is(err, cg.ErrSpecDrift) {
+		t.Errorf("args of the edited code: %v, want the spec drift error", err)
 	}
 }

@@ -17,6 +17,11 @@ var (
 	errAmbiguous  = errors.New("staged fork elements disagree on")
 )
 
+// ErrSpecDrift reports a task whose code is not the code its run was
+// planned from: an image built from other sources, or a .mro edited since
+// the project was transpiled.
+var ErrSpecDrift = errors.New("the node compiles to another spec than the run's plan holds; re-transpile the pipeline, and rebuild its image, from the same sources")
+
 // ArgsSpec is one stage instance whose _args a task builds.
 type ArgsSpec struct {
 	// Node is the stage's fqid.
@@ -36,6 +41,9 @@ type ArgsSpec struct {
 	// resolved to null, which mrp logs before it runs the fork. Nil discards
 	// it.
 	Log io.Writer
+	// Digest, when set, is the node's spec digest in the run's plan
+	// (PlanNode.Digest), which the node must compile to.
+	Digest string
 }
 
 // WriteArgs resolves the instance's disabled state and, when it runs, its
@@ -43,6 +51,10 @@ type ArgsSpec struct {
 func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 	st, err := g.Stage(spec.Node)
 	if err != nil {
+		return Instance{}, err
+	}
+
+	if err := checkDigest(st, spec.Digest); err != nil {
 		return Instance{}, err
 	}
 
@@ -79,6 +91,24 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 	}
 
 	return in, writeInstance(spec.Out, in)
+}
+
+// checkDigest fails unless st compiles to the spec digest want, when set.
+func checkDigest(st *syntax.CallGraphStage, want string) error {
+	if want == "" {
+		return nil
+	}
+
+	got, err := specDigest(st)
+	if err != nil {
+		return err
+	}
+
+	if got != want {
+		return fmt.Errorf("%s: %w", st.Fqid, ErrSpecDrift)
+	}
+
+	return nil
 }
 
 // reportUnresolved logs the inputs of in that read a missing element, as

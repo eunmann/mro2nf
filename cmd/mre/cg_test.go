@@ -45,7 +45,7 @@ func runCG(t *testing.T, args ...string) string {
 	t.Helper()
 
 	dir := filepath.Join("..", "..", "testdata", "struct_proj")
-	argv := append([]string{args[0], "-mro", filepath.Join(dir, "pipeline.mro"), "-mropath", dir}, args[1:]...)
+	argv := append([]string{args[0], "-entry", filepath.Join(dir, "pipeline.mro"), "-mropath", dir}, args[1:]...)
 
 	var err error
 
@@ -68,16 +68,16 @@ func compactBundle(t *testing.T, dir string) string {
 	return string(raw)
 }
 
-// TestCallGraphSubcommands drives struct_proj through post -entry, args,
-// post and outs as a run's tasks would, each stage's outs standing in for
-// the stage, and requires the _args and pipeline outs of a real mrp run of
-// struct_proj: PP/MAKE/fork<i> gets n = i+1, PP/SUMX gets xs = [1,2,3], and
-// PP/fork0/_outs is {"total":6}.
+// TestCallGraphSubcommands drives struct_proj through post -entry-forks,
+// args, post and outs as a run's tasks would, each stage's outs standing in
+// for the stage, and requires the _args and pipeline outs of a real mrp run
+// of struct_proj: PP/MAKE/fork<i> gets n = i+1, PP/SUMX gets xs = [1,2,3],
+// and PP/fork0/_outs is {"total":6}.
 func TestCallGraphSubcommands(t *testing.T) {
 	work := t.TempDir()
 	forks := filepath.Join(work, "entry")
 
-	runCG(t, "post", "-entry", "-forks", forks)
+	runCG(t, "post", "-entry-forks", "-forks", forks)
 
 	elems, err := filepath.Glob(filepath.Join(forks, "PP.MAKE", "*"))
 	if err != nil || len(elems) != 3 {
@@ -166,7 +166,7 @@ func TestArgsForkRecord(t *testing.T) {
 	work := t.TempDir()
 	forks := filepath.Join(work, "entry")
 
-	runCG(t, "post", "-entry", "-forks", forks)
+	runCG(t, "post", "-entry-forks", "-forks", forks)
 
 	elems, err := filepath.Glob(filepath.Join(forks, "PP.MAKE", "*"))
 	if err != nil || len(elems) != 3 {
@@ -188,12 +188,12 @@ func TestArgsForkRecord(t *testing.T) {
 	}
 }
 
-// TestCallGraphNeedsMRO: the call-graph subcommands refuse to run without
-// the invocation they resolve against.
-func TestCallGraphNeedsMRO(t *testing.T) {
-	for _, sub := range []string{"args", "post", "outs"} {
-		if err := run(t.Context(), []string{sub}); !errors.Is(err, errNoMRO) {
-			t.Errorf("mre %s without -mro: %v, want errNoMRO", sub, err)
+// TestCallGraphNeedsEntry: the call-graph subcommands and plan refuse to
+// run without the entry they resolve against.
+func TestCallGraphNeedsEntry(t *testing.T) {
+	for _, sub := range []string{"args", "post", "outs", "run", "plan"} {
+		if err := run(t.Context(), []string{sub}); !errors.Is(err, errNoEntry) {
+			t.Errorf("mre %s without -entry: %v, want errNoEntry", sub, err)
 		}
 	}
 }

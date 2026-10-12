@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,27 +14,27 @@ import (
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-var errNoMRO = errors.New("-mro is required")
+var errNoEntry = errors.New("-entry is required")
 
 // graphFlags locate the invocation a call-graph subcommand resolves against
 // and the type manifest its bundles are written with.
 type graphFlags struct {
-	mro, as, mropath, types string
+	entry, call, mropath, types string
 }
 
 func addGraph(fs *flag.FlagSet) *graphFlags {
 	g := &graphFlags{}
-	fs.StringVar(&g.mro, "mro", "", "the invocation .mro, compiled as mrp compiles it")
-	fs.StringVar(&g.as, "as", "", "the entry .mro the invocation compiles as, beside which Martian resolves its includes and stage code (default: -mro)")
-	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the -as file's dir)")
+	fs.StringVar(&g.entry, "entry", "", "the entry .mro, compiled as mrp compiles it; Martian resolves its includes and stage code beside it")
+	fs.StringVar(&g.call, "call", "", "the run's call, base64 of the call mre plan rebuilt, in place of the entry's own (default: the entry's call)")
+	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the -entry file's dir)")
 	fs.StringVar(&g.types, "types", "", "type manifest (types.json) path (default: built from the invocation's declarations)")
 
 	return g
 }
 
 func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
-	if g.mro == "" {
-		return nil, types.Manifest{}, errNoMRO
+	if g.entry == "" {
+		return nil, types.Manifest{}, errNoEntry
 	}
 
 	var paths []string
@@ -41,12 +42,12 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 		paths = filepath.SplitList(g.mropath)
 	}
 
-	entry := g.as
-	if entry == "" {
-		entry = g.mro
+	call, err := base64.StdEncoding.DecodeString(g.call)
+	if err != nil {
+		return nil, types.Manifest{}, fmt.Errorf("decode -call: %w", err)
 	}
 
-	graph, err := cg.Load(g.mro, entry, paths)
+	graph, err := cg.Load(g.entry, string(call), paths)
 	if err != nil {
 		return nil, types.Manifest{}, fmt.Errorf("load call graph: %w", err)
 	}
@@ -70,6 +71,7 @@ func runArgs(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("args", flag.ContinueOnError)
 	gf := addGraph(fs)
 	node := fs.String("node", "", "stage fqid")
+	digest := fs.String("digest", "", "the node's spec digest in the run's plan, which it must compile to")
 	out := fs.String("o", "args", "args bundle dir to write")
 
 	var in, forkRecs repeatedFlag
@@ -93,7 +95,7 @@ func runArgs(_ context.Context, argv []string) error {
 		}
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr})
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr, Digest: *digest})
 	if err != nil {
 		return fmt.Errorf("args: %w", err)
 	}
@@ -111,14 +113,15 @@ func runArgs(_ context.Context, argv []string) error {
 }
 
 // runPost stamps a finished instance's outs and writes the fork elements of
-// every root it feeds; -entry writes those of the roots no stage feeds.
+// every root it feeds; -entry-forks writes those of the roots no stage
+// feeds.
 func runPost(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("post", flag.ContinueOnError)
 	gf := addGraph(fs)
 	args := fs.String("args", "args", "the instance's args bundle dir")
 	outs := fs.String("outs", "outs", "the stage's outs bundle dir")
 	forks := fs.String("forks", "forks", "dir to write <root>/<ordinal>/ fork elements into")
-	entry := fs.Bool("entry", false, "write the forks the invocation's entry values fix, not a stage's")
+	entry := fs.Bool("entry-forks", false, "write the forks the invocation's entry values fix, not a stage's")
 	fields := fs.String("fields", "", "dir to write one stamped bundle per output into, named by it")
 	gates := fs.String("gates", "", "file to write the instances the instance disables into, space-separated gate tokens (<node>@<roots>@<ordinals>)")
 
@@ -176,7 +179,7 @@ func runOuts(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	spec := cg.OutsSpec{In: in, Locations: locs, Manifest: man, Source: gf.mro, Work: *work, Results: *out, OutsJSON: *outsJSON}
+	spec := cg.OutsSpec{In: in, Locations: locs, Manifest: man, Work: *work, Results: *out, OutsJSON: *outsJSON}
 	if err := g.WriteOuts(ctx, spec); err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}

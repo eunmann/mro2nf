@@ -18,14 +18,15 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// Plan is what a run's start fixes once its invocation is known: the
-// invocation source every task compiles, and per stage node of the
-// witness, the node's spec digest and the instances the invocation itself
-// disables, and the forks of every fork root the entry values feed.
+// Plan is what a run's start fixes once its invocation is known: the call
+// every task compiles over the entry's declarations (Load), and per stage
+// node of the witness, the node's spec digest and the instances the
+// invocation itself disables, and the forks of every fork root the entry
+// values feed.
 type Plan struct {
-	Source string
-	Nodes  []PlanNode
-	Roots  map[string]PlanRoot
+	Call  string
+	Nodes []PlanNode
+	Roots map[string]PlanRoot
 }
 
 // PlanRoot is an entry-fed root's forks, and their count under each fork
@@ -77,12 +78,12 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 		return Plan{}, err
 	}
 
-	text, err := src.Rebuild(inv, mroPaths)
+	call, err := src.RebuildCall(inv, mroPaths)
 	if err != nil {
 		return Plan{}, err
 	}
 
-	g, err := Compile([]byte(text), src.Path(), mroPaths)
+	g, err := Compile([]byte(src.with(call)), src.Path(), mroPaths)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -96,7 +97,7 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 		return Plan{}, err
 	}
 
-	p := Plan{Source: text}
+	p := Plan{Call: call}
 
 	roots, planned, err := g.entryForks(wt, scratch)
 	if err != nil {

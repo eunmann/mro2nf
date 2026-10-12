@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,8 +9,8 @@ import (
 
 // TestPlanEveryFixture: mre plan starts a run of every fixture's transpiled
 // invocation, writing one nodes line per witness node, and refuses the
-// fixtures mrp refuses to instantiate (#387); mre post -entry then writes
-// the fork elements of every entry-fed root.
+// fixtures mrp refuses to instantiate (#387); mre post -entry-forks then
+// writes the fork elements of every entry-fed root of the run's call.
 func TestPlanEveryFixture(t *testing.T) {
 	refused := []string{"rt_gate_split_reject", "rt_gate_split_reject_pass", "rt_gate_split_reject_sub"}
 
@@ -40,14 +39,10 @@ func TestPlanEveryFixture(t *testing.T) {
 			}
 
 			dir := filepath.Dir(mro)
-			argv := []string{"post", "-mro", mro, "-mropath", dir, "-entry", "-forks", filepath.Join(work, "entry")}
+			argv := []string{"post", "-entry", mro, "-call", readText(t, filepath.Join(work, "call")), "-mropath", dir, "-entry-forks", "-forks", filepath.Join(work, "entry")}
 
 			if err := run(t.Context(), argv); err != nil {
-				t.Fatalf("post -entry: %v", err)
-			}
-
-			if _, err := os.Stat(filepath.Join(work, "plan", "pipeline.mro")); err != nil {
-				t.Errorf("no invocation: %v", err)
+				t.Fatalf("post -entry-forks: %v", err)
 			}
 		})
 	}
