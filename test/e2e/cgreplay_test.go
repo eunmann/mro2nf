@@ -27,15 +27,17 @@ import (
 )
 
 // TestMrpCallGraph runs each mrp-diff fixture under real mrp and replays its
-// pipestance through the call-graph data plane: in DAG order, `mre args`
-// builds every stage instance's args bundle from only what that instance
-// stages (its fork elements and its parents' stamped outs), `mre run` runs
-// each of its phases through mrjob as a stage task does, and `mre post`
+// pipestance through the call-graph data plane: in DAG order, every stage
+// instance runs its tasks through `mre stage` as a run's tasks do, from only
+// what the instance stages (its fork elements and its parents' stamped
+// outs): the task that runs its first job builds its args bundle, each task
+// runs its phase's job through mrjob, and the task that runs its last job
 // stamps its outs and writes the fork elements downstream instances fan out
 // over; `mre outs` then resolves the pipeline outs. It requires:
 //   - every instance's _args equal to mrp's after both are re-encoded and
 //     file leaves are reduced to name and content digest, and its disabled
-//     state to match mrp's _disabled marker;
+//     state, which `mre stage` reports by refusing the instance before any
+//     job runs, to match mrp's _disabled marker;
 //   - every job mrp ran, and only those, run with the same _args and _outs,
 //     a file under the job's own files dir named relative to it, and the
 //     same _jobinfo: the keys, and the values of jobInfoStable;
@@ -83,7 +85,7 @@ type cgReplay struct {
 	ps      string
 	types   string
 	entry   string
-	// adapters is mrp's adapters dir, which `mre run` runs py stages with.
+	// adapters is mrp's adapters dir, which `mre stage` runs py stages with.
 	adapters string
 	// overrides is the mrp --overrides file mrp ran with, which every job
 	// runs with too.
@@ -97,7 +99,7 @@ type cgReplay struct {
 	jobs      int
 }
 
-// postedInstance is one stage instance after `mre post`.
+// postedInstance is one stage instance its last task posted.
 type postedInstance struct {
 	fork  cg.Fork
 	outs  string
@@ -116,6 +118,29 @@ type replayInstance struct {
 	elems []string
 	fork  cg.Fork
 }
+
+// replayTasks are the files an instance's tasks share below its dir work:
+// the args bundle the first task builds, the split's chunks dir, each
+// chunk's outs bundle, and the outs bundle and fork elements the last task
+// posts.
+type replayTasks struct {
+	work, args, chunks, chunkOuts, outs, forks string
+}
+
+func newReplayTasks(work string) replayTasks {
+	return replayTasks{
+		work:      work,
+		args:      filepath.Join(work, "args"),
+		chunks:    filepath.Join(work, "chunks"),
+		chunkOuts: filepath.Join(work, "chunkouts"),
+		outs:      filepath.Join(work, "outs"),
+		forks:     filepath.Join(work, "forks"),
+	}
+}
+
+// notEnabled is the message of the error `mre stage` exits 1 with when the
+// instance its args step resolves is disabled.
+const notEnabled = "not enabled where its gates said enabled"
 
 func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgReplay {
 	t.Helper()
@@ -174,7 +199,9 @@ func writeManifest(t *testing.T, mro, dir, path string) {
 }
 
 func (rp *cgReplay) run() {
-	rp.mre("post", "-entry-forks", "-forks", rp.entry)
+	if err := rp.g.PostEntry(rp.entry); err != nil {
+		rp.t.Fatal(err)
+	}
 
 	ran, off := 0, 0
 
@@ -190,7 +217,7 @@ func (rp *cgReplay) run() {
 
 	rp.checkCore()
 	rp.checkPipelineOuts()
-	rp.t.Logf("call graph replay: %d instance _args equal mrp's, %d instances disabled, %d jobs run through mre run", ran, off, rp.jobs)
+	rp.t.Logf("call graph replay: %d instance _args equal mrp's, %d instances disabled, %d jobs run through mre stage", ran, off, rp.jobs)
 }
 
 // stageOrder lists the stage nodes so each follows the stages it reads and
@@ -340,52 +367,66 @@ func forkAgrees(a, b cg.Fork) bool {
 	return true
 }
 
-// replay runs one instance's args and post, checks its _args against mrp's,
-// and reports whether it is disabled.
+// replay runs one instance's tasks, checks its _args and jobs against
+// mrp's, and reports whether it is disabled, which its first task reports
+// by refusing it before its job runs: as the driver runs no task of a
+// disabled instance, it posts nothing.
 func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.seq++
-	work := rp.taskDir(fmt.Sprintf("instance %04d", rp.seq))
-	args, outs := filepath.Join(work, "args"), filepath.Join(work, "outs")
+	tasks := newReplayTasks(rp.taskDir(fmt.Sprintf("instance %04d", rp.seq)))
+	name, disabled := rp.firstTask(st, tasks, slices.Concat(in.elems, rp.upstreamOuts(st, in.fork)))
 
-	staged := append(slices.Clone(in.elems), rp.upstreamOuts(st, in.fork)...)
-
-	argv := make([]string, 0, 5+2*len(staged))
-	argv = append(argv, "args", "-node", st.Fqid, "-o", args)
-
-	for _, d := range staged {
-		argv = append(argv, "-in", d)
-	}
-
-	state := strings.TrimSpace(rp.mre(argv...))
-
-	inst, err := rp.g.ReadInstance(args)
+	inst, err := rp.g.ReadInstance(tasks.args)
 	if err != nil {
 		rp.t.Fatal(err)
 	}
 
 	if !forkAgrees(inst.Fork, in.fork) || len(inst.Fork) != len(in.fork) {
-		rp.t.Errorf("%s: mre args chose fork %s, staged %s", st.Fqid, inst.Fork, in.fork)
+		rp.t.Errorf("%s: mre stage chose fork %s, staged %s", st.Fqid, inst.Fork, in.fork)
 	}
 
 	rel := filepath.Join(strings.ReplaceAll(st.Fqid, ".", string(filepath.Separator)), inst.ForkID())
-	mrpArgs, mrpErr := os.ReadFile(filepath.Join(rp.ps, rel, "split", argsFile))
 
-	if disabled := state == "disabled"; disabled != rp.mrpDisabled(rel) {
-		rp.t.Errorf("%s: mre args says %s, mrp's run disagrees", rel, state)
+	if disabled != rp.mrpDisabled(rel) || disabled != inst.Disabled {
+		rp.t.Errorf("%s: mre stage refused it as disabled: %t, its args stamp disabled: %t, mrp's run disabled: %t",
+			rel, disabled, inst.Disabled, rp.mrpDisabled(rel))
 	}
 
-	if state == "disabled" {
+	if disabled {
+		if _, err := os.Lstat(filepath.Join(rp.jobDir(tasks, name), name)); !errors.Is(err, os.ErrNotExist) {
+			rp.t.Errorf("%s: a disabled instance has a job dir: %v", rel, err)
+		}
+
 		rp.ours[rel] = replayedFork{disabled: true}
-	} else {
-		got := rp.checkArgs(rel, args, mrpArgs, mrpErr)
-		rp.ours[rel] = replayedFork{args: got}
-		rp.runStage(st, rel, args, outs, work)
+
+		return true
 	}
 
-	rp.mre("post", "-args", args, "-outs", outs, "-forks", filepath.Join(work, "forks"))
-	rp.posted[st.Fqid] = append(rp.posted[st.Fqid], postedInstance{fork: inst.Fork, outs: outs, forks: filepath.Join(work, "forks")})
+	mrpArgs, mrpErr := os.ReadFile(filepath.Join(rp.ps, rel, "split", argsFile))
+	rp.ours[rel] = replayedFork{args: rp.checkArgs(rel, tasks.args, mrpArgs, mrpErr)}
+	rp.runStage(st, rel, tasks)
+	rp.posted[st.Fqid] = append(rp.posted[st.Fqid], postedInstance{fork: inst.Fork, outs: tasks.outs, forks: tasks.forks})
 
-	return state == "disabled"
+	return false
+}
+
+// firstTask runs the instance's first task, which builds its args bundle
+// from the items it stages, and reports its job's metadata dir name and
+// whether mre stage refused the instance as disabled: a split, or a
+// non-split stage's main, which posts its outs too.
+func (rp *cgReplay) firstTask(st *syntax.CallGraphStage, tasks replayTasks, staged []string) (string, bool) {
+	argv := []string{"-node", st.Fqid, "-args", tasks.args}
+	for _, d := range staged {
+		argv = append(argv, "-in", d)
+	}
+
+	if s, ok := st.Callable().(*syntax.Stage); ok && s.Split {
+		return job.PhaseSplit, rp.stage(job.PhaseSplit, rp.jobDir(tasks, job.PhaseSplit), append(argv, "-o", tasks.chunks)...)
+	}
+
+	name := job.ChunkName(0, 1)
+
+	return name, rp.stage(job.PhaseMain, rp.jobDir(tasks, name), append(argv, "-o", tasks.outs, "-forks", tasks.forks)...)
 }
 
 func (rp *cgReplay) checkArgs(rel, args string, want []byte, wantErr error) json.RawMessage {
@@ -395,21 +436,21 @@ func (rp *cgReplay) checkArgs(rel, args string, want []byte, wantErr error) json
 	}
 
 	if wantErr != nil {
-		rp.t.Errorf("%s: mre runs a fork mrp has no _args for: %v", rel, wantErr)
+		rp.t.Errorf("%s: mre stage runs a fork mrp has no _args for: %v", rel, wantErr)
 
 		return got
 	}
 
 	// mrp leaves a fork's split/_args empty when a split reads a key its
 	// map lacks (zip_runtime_map BY_AX/fork_x); the job's own _args, which
-	// runJob compares, carry the bindings, and the drift guard compares
+	// checkJob compares, carry the bindings, and the drift guard compares
 	// them with mrp's resolver.
 	if len(bytes.TrimSpace(want)) == 0 {
 		return got
 	}
 
 	if g, w := normJSON(rp.t, got, leafNamed), normJSON(rp.t, want, leafNamed); g != w {
-		rp.t.Errorf("%s: _args differ from mrp's\nmrp:\n%s\nmre args:\n%s", rel, w, g)
+		rp.t.Errorf("%s: _args differ from mrp's\nmrp:\n%s\nmre stage:\n%s", rel, w, g)
 	}
 
 	return got
@@ -476,6 +517,13 @@ func refsOutsideSplits(e syntax.Exp, elemOnly map[*syntax.CallStm]string, read m
 		if x.ForkNode != nil {
 			read[x.ForkNode.Id] = true
 		}
+
+		// A disabled instance posts no outs, so a merge over a root whose
+		// forks a stage fixes counts them from the root's source, as the
+		// run's tasks do (cg.Topology).
+		if sp := x.Call.Split(); sp != nil && !sp.Source.KnownLength() {
+			refsOutsideSplits(sp.Value, nil, read)
+		}
 	case *syntax.DisabledExp:
 		refsOutsideSplits(x.Disabled, elemOnly, read)
 		refsOutsideSplits(x.Value, elemOnly, read)
@@ -490,12 +538,12 @@ var jobInfoStable = []string{
 	"stackvars_flag", "monitor_flag", "invocation", "version",
 }
 
-// runStage runs the instance's jobs with `mre run`, each in its own work
-// dir as each runs in its own task, into the outs bundle outs, and checks
-// them against the jobs mrp ran for the fork at rel: a stage that does not
-// split runs one chunk, and a split stage its split, every chunk the split
-// returns, and its join.
-func (rp *cgReplay) runStage(st *syntax.CallGraphStage, rel, args, outs, work string) {
+// runStage checks the job the instance's first task ran against the job mrp
+// ran for the fork at rel, and runs and checks the rest: a stage that does
+// not split runs one chunk, whose task posts its outs, and a split stage its
+// split, a task per chunk the split returns, and its join, whose task posts
+// them.
+func (rp *cgReplay) runStage(st *syntax.CallGraphStage, rel string, tasks replayTasks) {
 	if s, ok := st.Callable().(*syntax.Stage); !ok || !s.Split {
 		for _, phase := range []string{job.PhaseSplit, job.PhaseJoin} {
 			if regularFileExists(filepath.Join(rp.ps, rel, phase, "_jobinfo")) {
@@ -503,24 +551,26 @@ func (rp *cgReplay) runStage(st *syntax.CallGraphStage, rel, args, outs, work st
 			}
 		}
 
-		rp.runJob(rel, job.ChunkName(0, 1), work, job.PhaseMain, "-args", args, "-o", outs)
+		rp.checkJob(rel, job.ChunkName(0, 1), tasks)
 
 		return
 	}
 
-	chunks, chunkOuts := filepath.Join(work, "chunks"), filepath.Join(work, "chunkouts")
-	rp.runJob(rel, job.PhaseSplit, work, job.PhaseSplit, "-args", args, "-o", chunks)
+	rp.checkJob(rel, job.PhaseSplit, tasks)
 
-	ours, theirs := rp.chunkNames(chunks), rp.chunkNames(filepath.Join(rp.ps, rel))
+	ours, theirs := rp.chunkNames(tasks.chunks), rp.chunkNames(filepath.Join(rp.ps, rel))
 	if !slices.Equal(ours, theirs) {
 		rp.t.Errorf("%s: the split returned chunks %v, mrp's %v", rel, ours, theirs)
 	}
 
+	node := []string{"-node", st.Fqid, "-args", tasks.args}
+
 	for _, c := range ours {
-		rp.runJob(rel, c, work, job.PhaseMain, "-args", args, "-chunk", filepath.Join(chunks, c), "-o", filepath.Join(chunkOuts, c))
+		rp.runTask(rel, c, job.PhaseMain, tasks, slices.Concat(node, []string{"-chunk", filepath.Join(tasks.chunks, c), "-o", filepath.Join(tasks.chunkOuts, c)})...)
 	}
 
-	rp.runJob(rel, job.PhaseJoin, work, job.PhaseJoin, "-args", args, "-chunks", chunks, "-chunkouts", chunkOuts, "-o", outs)
+	rp.runTask(rel, job.PhaseJoin, job.PhaseJoin, tasks,
+		slices.Concat(node, []string{"-chunks", tasks.chunks, "-chunkouts", tasks.chunkOuts, "-o", tasks.outs, "-forks", tasks.forks})...)
 }
 
 func (rp *cgReplay) chunkNames(dir string) []string {
@@ -551,22 +601,55 @@ func (rp *cgReplay) taskDir(id string) string {
 	return filepath.Join(rp.tmp, "work", hash[:2], hash[2:32])
 }
 
-// runJob runs one `mre run` job, whose metadata dir is name, in its own
-// work dir, and checks its metadata against mrp's job of that name at rel.
-func (rp *cgReplay) runJob(rel, name, work, phase string, argv ...string) {
-	rp.jobs++
-	jw := rp.taskDir(work + "\x00" + name)
+// jobDir is the work dir of the instance's task whose job's metadata dir is
+// name, its own as each task's is.
+func (rp *cgReplay) jobDir(tasks replayTasks, name string) string {
+	return rp.taskDir(tasks.work + "\x00" + name)
+}
 
+// stage runs one `mre stage` task of phase in the work dir jw and reports
+// whether mre refused its instance as disabled: it exits 1 with the
+// message of its not-enabled error. Any other failure fails the test.
+func (rp *cgReplay) stage(phase, jw string, argv ...string) bool {
+	rp.t.Helper()
+
+	base := []string{"stage", "-phase", phase, "-psid", "mrp", "-adapters", rp.adapters, "-mrjob", filepath.Join(root, "mrjob"), "-work", jw}
 	if rp.overrides != "" {
-		argv = append([]string{"-overrides", rp.overrides}, argv...)
+		base = append(base, "-overrides", rp.overrides)
 	}
 
-	rp.mre(append([]string{
-		"run", "-phase", phase, "-psid", "mrp", "-adapters", rp.adapters,
-		"-mrjob", filepath.Join(root, "mrjob"), "-work", jw,
-	}, argv...)...)
+	stderr, err := rp.mre(slices.Concat(base, argv)...)
 
-	ours, theirs := filepath.Join(jw, name), filepath.Join(rp.ps, rel, name)
+	var exit *exec.ExitError
+
+	switch {
+	case err == nil:
+		return false
+	case errors.As(err, &exit) && exit.ExitCode() == 1 && strings.Contains(stderr, notEnabled):
+		return true
+	default:
+		rp.t.Fatalf("%v\n%s", err, stderr)
+
+		return false
+	}
+}
+
+// runTask runs one task of an instance that its first task found enabled,
+// whose job's metadata dir is name, and checks the job.
+func (rp *cgReplay) runTask(rel, name, phase string, tasks replayTasks, argv ...string) {
+	if rp.stage(phase, rp.jobDir(tasks, name), argv...) {
+		rp.t.Fatalf("%s: mre stage refused its %s as disabled", rel, name)
+	}
+
+	rp.checkJob(rel, name, tasks)
+}
+
+// checkJob checks the metadata of the instance's job name, which its task
+// ran, against mrp's job of that name at rel.
+func (rp *cgReplay) checkJob(rel, name string, tasks replayTasks) {
+	rp.jobs++
+
+	ours, theirs := filepath.Join(rp.jobDir(tasks, name), name), filepath.Join(rp.ps, rel, name)
 	for _, f := range []string{argsFile, outsFile} {
 		rp.checkJobFile(rel+"/"+name, f, ours, theirs)
 	}
@@ -585,13 +668,13 @@ func (rp *cgReplay) checkJobFile(job, f, ours, theirs string) {
 	case oerr != nil && merr != nil:
 		return
 	case oerr != nil || merr != nil:
-		rp.t.Errorf("%s: %s: mre run %v, mrp %v", job, f, oerr, merr)
+		rp.t.Errorf("%s: %s: mre stage %v, mrp %v", job, f, oerr, merr)
 
 		return
 	}
 
 	if g, w := rp.normJob(o, ours), rp.normJob(m, theirs); g != w {
-		rp.t.Errorf("%s: %s differs from mrp's (-mrp +mre run):\n%s", job, f, cmp.Diff(w, g))
+		rp.t.Errorf("%s: %s differs from mrp's (-mrp +mre stage):\n%s", job, f, cmp.Diff(w, g))
 	}
 }
 
@@ -618,12 +701,12 @@ func (rp *cgReplay) checkJobInfo(job, ours, theirs string) {
 	o, m := rp.readJobInfo(ours), rp.readJobInfo(theirs)
 
 	if g, w := sortedKeys(o), sortedKeys(m); !slices.Equal(g, w) {
-		rp.t.Errorf("%s: _jobinfo keys differ from mrp's (-mrp +mre run):\n%s", job, cmp.Diff(w, g))
+		rp.t.Errorf("%s: _jobinfo keys differ from mrp's (-mrp +mre stage):\n%s", job, cmp.Diff(w, g))
 	}
 
 	for _, k := range jobInfoStable {
 		if g, w := normJSON(rp.t, orNull(o[k]), leafNamed), normJSON(rp.t, orNull(m[k]), leafNamed); g != w {
-			rp.t.Errorf("%s: _jobinfo %s differs from mrp's (-mrp +mre run):\n%s", job, k, cmp.Diff(w, g))
+			rp.t.Errorf("%s: _jobinfo %s differs from mrp's (-mrp +mre stage):\n%s", job, k, cmp.Diff(w, g))
 		}
 	}
 }
@@ -679,7 +762,7 @@ func (rp *cgReplay) checkCore() {
 			rp.t.Errorf("drift guard: %s: mrp's resolver is still waiting on its inputs", rel)
 		default:
 			if g, w := normJSON(rp.t, o.args, leafNamed), normJSON(rp.t, c.args, leafNamed); g != w {
-				rp.t.Errorf("drift guard: %s: _args differ from mrp's resolver\nmrp resolver:\n%s\nmre args:\n%s", rel, w, g)
+				rp.t.Errorf("drift guard: %s: _args differ from mrp's resolver\nmrp resolver:\n%s\nmre stage:\n%s", rel, w, g)
 			}
 		}
 	}
@@ -695,22 +778,26 @@ func (rp *cgReplay) checkCore() {
 }
 
 // checkPipelineOuts publishes the pipeline outs with `mre outs` from the
-// posted outs of the stages they read, each located where it was posted,
-// and requires the tree and outs JSON mrp published, as TestMrpDiff compares
-// them, with the outs JSON at the root of the tree as OUTS publishes it.
+// posted outs of the stages the OUTS task stages, those the topology's outs
+// read, each located where it was posted, and requires the tree and outs
+// JSON mrp published, as TestMrpDiff compares them, with the outs JSON at
+// the root of the tree as OUTS publishes it.
 func (rp *cgReplay) checkPipelineOuts() {
 	results := filepath.Join(rp.tmp, "cg", "results")
 	locations := filepath.Join(rp.tmp, "cg", "locations")
 	argv := []string{"outs", "-locations", locations, "-work", filepath.Join(rp.tmp, "cg", "pipestance"), "-o", results, "-json", filepath.Join(results, "pipeline_outs.json")}
 
+	topo, err := rp.g.Topology()
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
 	var lines strings.Builder
 
-	if ro := rp.call.ResolvedOutputs(); ro != nil && ro.Exp != nil {
-		for _, id := range refIDsOf(ro.Exp) {
-			for _, pi := range rp.posted[id] {
-				argv = append(argv, "-in", pi.outs)
-				lines.WriteString(pi.outs + "\t" + pi.outs + "\n")
-			}
+	for _, r := range topo.Outs {
+		for _, pi := range rp.posted[r.Node] {
+			argv = append(argv, "-in", pi.outs)
+			lines.WriteString(pi.outs + "\t" + pi.outs + "\n")
 		}
 	}
 
@@ -722,7 +809,9 @@ func (rp *cgReplay) checkPipelineOuts() {
 		rp.t.Fatal(err)
 	}
 
-	rp.mre(argv...)
+	if stderr, err := rp.mre(argv...); err != nil {
+		rp.t.Fatalf("%v\n%s", err, stderr)
+	}
 
 	reports, err := diffPublished(mustAllowlist(rp.t), rp.fixture, rp.ps, results)
 	if err != nil {
@@ -734,42 +823,19 @@ func (rp *cgReplay) checkPipelineOuts() {
 	}
 }
 
-func refIDsOf(e syntax.Exp) []string {
-	set := map[string]bool{}
-	for _, r := range e.FindRefs() {
-		set[r.Id] = true
-	}
-
-	return sortedKeys(set)
-}
-
 // mre runs one call-graph subcommand against the fixture's invocation, from
-// mrp's working dir, and returns its stdout.
-func (rp *cgReplay) mre(argv ...string) string {
-	rp.t.Helper()
-
-	return rp.run1(filepath.Join(root, "mre"), append([]string{argv[0], "-entry", rp.mro, "-mropath", rp.dir, "-types", rp.types}, argv[1:]...)...)
-}
-
-// run1 runs one command from mrp's working dir and returns its stdout.
-func (rp *cgReplay) run1(bin string, argv ...string) string {
-	rp.t.Helper()
-
-	cmd := exec.Command(bin, argv...)
+// mrp's working dir, and returns its stderr.
+func (rp *cgReplay) mre(argv ...string) (string, error) {
+	cmd := exec.Command(filepath.Join(root, "mre"), slices.Concat([]string{argv[0], "-entry", rp.mro, "-mropath", rp.dir, "-types", rp.types}, argv[1:])...)
 	cmd.Dir = rp.tmp
 
-	var stdout, stderr bytes.Buffer
+	var stderr bytes.Buffer
 
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			rp.t.Fatalf("%s %s: %v\n%s", filepath.Base(bin), strings.Join(argv, " "), err, stderr.String())
-		}
-
-		rp.t.Fatal(err)
+		return stderr.String(), fmt.Errorf("mre %s: %w", strings.Join(argv, " "), err)
 	}
 
-	return stdout.String()
+	return stderr.String(), nil
 }
