@@ -25,6 +25,9 @@ mro2nf [-o <dir>] [-mropath <path>] <pipeline.mro>
 The project refers to the entry `.mro`, its includes and its stages' code by
 their absolute paths at transpile time. Every profile runs the code from those
 paths, so don't move them; a container image holds the code at the same paths.
+That includes the entry `.mro` itself: an invocation written outside the code
+tree, such as the `__<id>.mro` that `cellranger count --dry` writes, goes into
+the image at its own path too.
 
 The project holds:
 
@@ -265,7 +268,9 @@ aws omics start-run --workflow-id "$WF" --role-arn <role ARN> \
 
 `parameter-template.json` declares each pipeline input and
 `mro2nf_overrides` (an `s3://` URI), all optional. A run can set nothing else,
-so it cannot change the image or the inputs it may stage. Outputs are
+so it cannot change the image or the inputs it may stage. A directory input is
+an `s3://` prefix ending in `/` (`s3://<bucket>/fastqs/`): `start-run` checks
+each URI and refuses a prefix without the slash with `S3 object not found`. Outputs are
 published to `/mnt/workflow/pubdir`, which HealthOmics exports to the run's
 output URI.
 
