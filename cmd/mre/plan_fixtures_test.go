@@ -9,8 +9,9 @@ import (
 
 // TestPlanEveryFixture: mre plan starts a run of every fixture's transpiled
 // invocation, writing one nodes line per witness node, and refuses the
-// fixtures mrp refuses to instantiate (#387); a task then compiles the
-// run's call it wrote, and writes the fork elements of every entry-fed root.
+// fixtures mrp refuses to instantiate (#387); the test then recompiles the
+// call file it wrote and writes every entry-fed root's fork elements from it,
+// as PLAN does.
 func TestPlanEveryFixture(t *testing.T) {
 	refused := []string{"rt_gate_split_reject", "rt_gate_split_reject_pass", "rt_gate_split_reject_sub"}
 

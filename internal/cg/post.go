@@ -44,10 +44,9 @@ type PostSpec struct {
 }
 
 // Post stamps the instance's outs with its node and fork, checks them as mrp
-// does, and writes
-// one fork element dir per fork of every root this stage feeds and one
-// partner element dir per element of each output a partner reads, then the
-// outs field by field and the gates they set, when asked.
+// does, and writes one fork element dir per fork of every root this stage
+// feeds and one partner element dir per element of each output a partner
+// reads, then the outs field by field and the gates they set, when asked.
 func (g *Graph) Post(spec PostSpec) error {
 	in, s, err := g.post(spec)
 	if err != nil {
