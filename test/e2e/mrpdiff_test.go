@@ -623,6 +623,10 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// while it makes the pipestance, before any stage runs; mro2nf fails its
 	// OUTS task.
 	{name: "nested_empty_forks", mrp: runOutcome{Failed: true}, divergence: "nested-empty-forks"},
+	// #520: a stage opening a companion file beside its entry file input.
+	// mrp passes the invocation's path and finds it; mro2nf stages only the
+	// named file, so the stage fails.
+	{name: "entry_file_sibling", mrp: runOutcome{}, divergence: "input-file-siblings"},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
