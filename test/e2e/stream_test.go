@@ -10,8 +10,8 @@ import (
 )
 
 // streamMro maps SAMPLE over two samples. Each merges its own inner map's
-// WORK forks in TOTAL; the slow sample's WORK waits for the fast sample's
-// TOTAL to have run, and fails if it does not within the timeout.
+// WORK forks in TOTAL; the slow sample's WORK runs well past the fast
+// sample's whole chain.
 const streamMro = `stage MKLIST(
     in  string id,
     out int[]  xs,
@@ -21,7 +21,6 @@ const streamMro = `stage MKLIST(
 stage WORK(
     in  string id,
     in  int    x,
-    in  string sync,
     out int    y,
     src py     "stages/work",
 )
@@ -29,14 +28,12 @@ stage WORK(
 stage TOTAL(
     in  string id,
     in  int[]  ys,
-    in  string sync,
     out int    s,
     src py     "stages/total",
 )
 
 pipeline SAMPLE(
     in  string id,
-    in  string sync,
     out int    s,
 )
 {
@@ -45,15 +42,13 @@ pipeline SAMPLE(
     )
 
     map call WORK(
-        id   = self.id,
-        x    = split MKLIST.xs,
-        sync = self.sync,
+        id = self.id,
+        x  = split MKLIST.xs,
     )
 
     call TOTAL(
-        id   = self.id,
-        ys   = WORK.y,
-        sync = self.sync,
+        id = self.id,
+        ys = WORK.y,
     )
 
     return (
@@ -63,13 +58,11 @@ pipeline SAMPLE(
 
 pipeline STREAM(
     in  string[] ids,
-    in  string   sync,
     out int[]    ss,
 )
 {
     map call SAMPLE(
-        id   = split self.ids,
-        sync = self.sync,
+        id = split self.ids,
     )
 
     return (
@@ -78,37 +71,30 @@ pipeline STREAM(
 }
 
 call STREAM(
-    ids  = ["fast", "slow"],
-    sync = "SYNC",
+    ids = ["fast", "slow"],
 )
 `
 
 // TestForkedGatherStreams: a forked call's gather of its own share of an
 // inner map call starts once that share is done, not once every fork's is
-// (#259): the slow sample's WORK finishes only after the fast sample's
-// TOTAL has run, which a gather waiting for every WORK would never let
-// happen. mrp holds a node until every fork of each node it reads is done
-// (core/node.go:646 getState), so the program deadlocks under mrp and is
-// no mrp fixture.
+// (#259). The trace shows it: the fast sample's TOTAL is submitted before
+// the slow sample's WORK completes, which a gather waiting for every WORK
+// can never do. The assertion reads only the driver's submit times, so the
+// number of tasks the host runs at once doesn't change it. mrp holds a
+// node until every fork of each node it reads is done (core/node.go:646
+// getState), so this is no mrp fixture.
 func TestForkedGatherStreams(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
-	dir, sync := t.TempDir(), t.TempDir()
+	dir := t.TempDir()
+
 	stages := map[string]string{
 		"mklist": "def main(args, outs):\n    outs.xs = [1, 2]\n",
-		"work": "import os\nimport time\n\n\ndef main(args, outs):\n" +
+		"work": "import time\n\n\ndef main(args, outs):\n" +
 			"    if args.id == 'slow':\n" +
-			"        done = os.path.join(args.sync, 'fast.done')\n" +
-			"        for _ in range(600):\n" +
-			"            if os.path.exists(done):\n" +
-			"                break\n" +
-			"            time.sleep(0.1)\n" +
-			"        else:\n" +
-			"            raise RuntimeError('the fast sample did not finish first')\n" +
+			"        time.sleep(20)\n" +
 			"    outs.y = args.x\n",
-		"total": "import os\n\n\ndef main(args, outs):\n" +
-			"    open(os.path.join(args.sync, args.id + '.done'), 'w').close()\n" +
-			"    outs.s = sum(args.ys)\n",
+		"total": "def main(args, outs):\n    outs.s = sum(args.ys)\n",
 	}
 
 	for name, code := range stages {
@@ -121,13 +107,28 @@ func TestForkedGatherStreams(t *testing.T) {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "pipeline.mro"), []byte(strings.Replace(streamMro, "SYNC", sync, 1)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "pipeline.mro"), []byte(streamMro), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	proj := transpileMRO(t, dir, "pipeline.mro")
-	if err := runNextflow(t, proj); err != nil {
-		t.Fatalf("the slow sample's WORK waited for the fast sample's TOTAL, which waited for it: %v", err)
+
+	// The slow WORKs hold their slots while they sleep, so the fast sample
+	// needs slots beyond them; the local executor's defaults are the host's
+	// cores, which on a CI runner the slow WORKs could fill.
+	cfg := filepath.Join(proj, "stream.config")
+	if err := os.WriteFile(cfg, []byte("executor.cpus = 8\nexecutor.queueSize = 8\n"+
+		"trace.fields = 'task_id,hash,name,status,exit,submit,complete'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runNextflow(t, proj, "-c", cfg, "-with-trace", "stream-trace.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	fastTotal, slowWork := streamTimes(t, filepath.Join(proj, "stream-trace.txt"))
+	if fastTotal == "" || slowWork == "" || fastTotal >= slowWork {
+		t.Errorf("the fast sample's TOTAL was submitted at %q, not before the slow sample's WORK completed at %q", fastTotal, slowWork)
 	}
 
 	var outs struct {
@@ -139,4 +140,23 @@ func TestForkedGatherStreams(t *testing.T) {
 	if len(outs.SS) != 2 || outs.SS[0] != 3 || outs.SS[1] != 3 {
 		t.Errorf("ss = %v, want [3 3]", outs.SS)
 	}
+}
+
+// streamTimes returns when the fast sample's TOTAL was submitted and when
+// the slow sample's last WORK completed, as the trace's sortable timestamps.
+func streamTimes(t *testing.T, trace string) (string, string) {
+	t.Helper()
+
+	fastTotal, slowWork := "", ""
+
+	for _, r := range readTraceColumns(t, trace, "name", "submit", "complete") {
+		switch {
+		case strings.Contains(r[0], "TOTAL 0"):
+			fastTotal = r[1]
+		case strings.Contains(r[0], "WORK 1.") && r[2] > slowWork:
+			slowWork = r[2]
+		}
+	}
+
+	return fastTotal, slowWork
 }
