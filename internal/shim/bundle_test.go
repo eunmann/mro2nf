@@ -256,6 +256,72 @@ func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
 	}
 }
 
+// TestLeafOriginInheritsEnclosingLeaf checks a stage output naming a file
+// inside a staged directory leaf is the file mrp sees there: below a
+// directory the run was given it is a host file mrp links, and below another
+// stage's directory output it is that stage's file, one identity in every
+// task that returns it.
+func TestLeafOriginInheritsEnclosingLeaf(t *testing.T) {
+	dir := t.TempDir()
+	params := []ir.Param{{Name: "d", BaseType: "path", IsFile: true}}
+
+	host := filepath.Dir(writeSelfNamed(t, filepath.Join(dir, "host", "ref", "fasta", "genome.fa")))
+	given := filepath.Join(dir, "given")
+
+	if err := shim.WriteBundle(given, map[string]any{"d": filepath.Dir(host)}, params, fileTable(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	producer := filepath.Join(dir, "producer")
+	own := filepath.Dir(writeSelfNamed(t, filepath.Join(producer, "main", "files", "out", "sub", "x.txt")))
+	produced := writeStageOuts(t, producer, map[string]any{"d": filepath.Dir(own)}, params)
+
+	cases := map[string]struct {
+		bundle, rel string
+		want        shim.Origin
+	}{
+		"inside a given dir":    {given, "fasta/genome.fa", shim.Origin{Path: filepath.Join(host, "genome.fa"), Linked: true}},
+		"inside a stage's dir":  {produced, "sub/x.txt", shim.Origin{Path: filepath.Join(own, "x.txt")}},
+		"a given dir itself":    {given, "", shim.Origin{Path: filepath.Dir(host), Linked: true}},
+		"a stage's dir itself":  {produced, "", shim.Origin{Path: filepath.Dir(own)}},
+		"inside a given subdir": {given, "fasta", shim.Origin{Path: host, Linked: true}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			work := filepath.Join(t.TempDir(), "work")
+			staged, _ := readPayload(t, stageBundle(t, tc.bundle, filepath.Join(work, "args")))["d"].(string)
+			outs := writeStageOuts(t, work, map[string]any{"d": filepath.Join(staged, tc.rel)}, params)
+
+			if d := cmp.Diff(map[string]shim.Origin{"d": tc.want}, leafOrigins(t, outs)); d != "" {
+				t.Errorf("origin (-want +got):\n%s", d)
+			}
+		})
+	}
+}
+
+// writeStageOuts writes payload as the outs bundle of a main phase run in
+// the task work dir work, and returns the bundle dir.
+func writeStageOuts(t *testing.T, work string, payload map[string]any, params []ir.Param) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Join(work, "main"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := shim.ConfineStage(work, "main", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outs := filepath.Join(work, "outs")
+	if err := shim.WriteBundle(outs, payload, params, fileTable(), conf); err != nil {
+		t.Fatal(err)
+	}
+
+	return outs
+}
+
 // leafOrigins maps each file leaf of the bundle at dir to its origin.
 func leafOrigins(t *testing.T, dir string) map[string]shim.Origin {
 	t.Helper()

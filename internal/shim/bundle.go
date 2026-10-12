@@ -441,10 +441,11 @@ func (m leafMarker) mark(leaf string) (string, error) {
 	return m.marks[origin.Path], nil
 }
 
-// origin is the origin recorded beside the leaf at src, whose absolute path
-// is abs, or the one this write establishes for a leaf no bundle recorded.
+// origin is the origin of the leaf at src, whose absolute path is abs, that
+// the bundle leaf holding it recorded, or the one this write establishes for
+// a leaf no bundle recorded.
 func (m leafMarker) origin(src, abs string) (Origin, error) {
-	o, ok, err := ReadOrigin(abs)
+	o, ok, err := enclosingOrigin(abs)
 	if err != nil || ok {
 		return o, err
 	}
@@ -452,6 +453,32 @@ func (m leafMarker) origin(src, abs string) (Origin, error) {
 	linked, err := m.linked(src)
 
 	return Origin{Path: abs, Linked: linked}, err
+}
+
+// enclosingOrigin returns the origin of the path abs from the nearest bundle
+// leaf that is or holds it: a file inside a staged directory leaf is, to mrp,
+// that file inside the directory its producer wrote or the run was given, and
+// mrp publishes it as it does that directory.
+func enclosingOrigin(abs string) (Origin, bool, error) {
+	for leaf := abs; leaf != filepath.Dir(leaf); leaf = filepath.Dir(leaf) {
+		if _, _, ok := LeafBundle(leaf); !ok {
+			continue
+		}
+
+		o, ok, err := ReadOrigin(leaf)
+		if err != nil || !ok {
+			return Origin{}, false, err
+		}
+
+		rel, err := filepath.Rel(leaf, abs)
+		if err != nil {
+			return Origin{}, false, fmt.Errorf("resolve %s in leaf %s: %w", abs, leaf, err)
+		}
+
+		return Origin{Path: filepath.Join(o.Path, rel), Linked: o.Linked}, true, nil
+	}
+
+	return Origin{}, false, nil
 }
 
 // linked reports whether mrp links the leaf src, which no bundle recorded:

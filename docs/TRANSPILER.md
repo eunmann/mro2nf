@@ -450,7 +450,9 @@ Both prefixes resolve identically on read-back. The rules:
   however many input bundles it arrived through. Its identity is its origin, the
   absolute path it was first staged from, where its task wrote it, written to
   `.mre-origin` beside the leaf; a leaf of a staged bundle, such as the input a
-  pass-through stage returns, keeps the origin recorded beside it. The record
+  pass-through stage returns, keeps the origin recorded beside it, and a path
+  inside a staged directory leaf takes that leaf's origin joined with the path
+  below it, so a file inside a directory the run was given stays linked. The record
   also says how `mrp` publishes the file (`linked:` before the path): a stage
   output that was a symlink, or a file from outside every task (a host file,
   or one the run was given), is linked into `outs/` at each output that
