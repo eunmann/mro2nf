@@ -87,6 +87,37 @@ func TestUsageShowsDefaults(t *testing.T) {
 	}
 }
 
+// TestRunRefusesBadInvocations checks a transpile fails, emitting no
+// project, on an undefined flag, a missing .mro or one too many, an
+// explicit -config that does not exist and a .mro that does not exist, and
+// that -version transpiles nothing.
+func TestRunRefusesBadInvocations(t *testing.T) {
+	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
+	out := filepath.Join(t.TempDir(), "proj")
+
+	for name, args := range map[string][]string{
+		"flag":    {"-bogus", mro},
+		"no mro":  {"-o", out},
+		"two mro": {"-o", out, mro, mro},
+		"config":  {"-o", out, "-shell", testShell, "-config", filepath.Join(t.TempDir(), "absent.yml"), mro},
+		"mro":     {"-o", out, "-shell", testShell, filepath.Join(t.TempDir(), "absent.mro")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := run(args); err == nil {
+				t.Errorf("run(%v) succeeded", args)
+			}
+		})
+	}
+
+	if err := run([]string{"-version", "-o", out, mro}); err != nil {
+		t.Errorf("-version: %v", err)
+	}
+
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused transpile left %s (stat: %v)", out, err)
+	}
+}
+
 // TestRunRequiresShell checks a transpile without -shell, which names
 // Martian's adapters dir, fails and emits no project.
 func TestRunRequiresShell(t *testing.T) {
