@@ -283,8 +283,10 @@ dependency is pinned to a published commit, so
 CI needs only a single checkout; to hack on the Martian parser locally, add a
 `go.work` pointing at a fork checkout (gitignored). Tagging `v*` triggers
 `release.yml`. It requires the tagged commit to be a PR's merge whose tree matches
-that PR's head, and that head to have a green PR Validation run. It then cross-compiles the `mro2nf` and `mre` binaries and publishes them in a
-GitHub release with a `SHA256SUMS` file, `LICENSE` and `THIRD_PARTY_NOTICES`. It also pushes the runtime image. A
+that PR's head, and that head to have a green PR Validation run. It then cross-compiles the `mro2nf`, `mre` and `mrjob` binaries and publishes them in a
+GitHub release with a `SHA256SUMS` file, `LICENSE` and `THIRD_PARTY_NOTICES`;
+install `mre` and `mrjob` under those names in one directory on `PATH`, as
+`mre` runs the `mrjob` beside it. It also pushes the runtime image. A
 pre-release tag (`v1.2.0-rc1`) never becomes the latest release or the image's
 `latest` tag. In a public repository the binaries and the image carry build
 provenance; check a download with `sha256sum -c SHA256SUMS --ignore-missing` and
