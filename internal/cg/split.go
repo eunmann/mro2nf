@@ -181,7 +181,7 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 		return nil, nil
 	}
 
-	idx, err := r.indices(e.Call, fork)
+	idx, err := r.indices(e.Call, r.mergeOuter(e, fork))
 	if err != nil {
 		return nil, fmt.Errorf("merge of %s: %w", e.Call.Fqid, err)
 	}
@@ -213,6 +213,32 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 	}
 
 	return out, nil
+}
+
+// mergeOuter is fork with the index of each outer root of the merged call
+// that fork lacks and the merged value's references fix: a merge Martian
+// expanded per fork of an outer map call of known length is one element
+// per outer fork, whose references carry that fork's index (gen-diff seed
+// 5), as mrp's merge matches the call's forks to them (core/resolve.go:328
+// getParts).
+func (r *resolver) mergeOuter(e *syntax.MergeExp, fork Fork) Fork {
+	out := fork
+
+	for _, o := range r.g.outerRoots(e.Call) {
+		if _, ok := out.rootPart(o); ok {
+			continue
+		}
+
+		for _, ref := range e.Value.FindRefs() {
+			if ix, ok := ref.Forks[o.Call()]; ok && ix != nil && ix.IndexSource() == nil {
+				out = out.with(Part{Root: o, Index: concrete(ix)})
+
+				break
+			}
+		}
+	}
+
+	return out
 }
 
 // mergeElemType is the type of one merged value (core/resolve.go:294-322).

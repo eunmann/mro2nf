@@ -289,6 +289,86 @@ func TestEmptyForksPrune(t *testing.T) {
 	wantArgs(t, "REF outs", string(raw), `{"ea":[],"em":{},"na":[],"nm":{}}`)
 }
 
+// knownOuterMro returns a map call over a sub-pipeline, split over a
+// literal of known length, whole: Martian expands it into one element per
+// fork, whose merge of the inner map call carries the fork's index.
+const knownOuterMro = `
+stage MK(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/mk",
+)
+
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+pipeline SUB(
+    in  int   n,
+    out int[] ys,
+)
+{
+    call MK(
+        n = self.n,
+    )
+
+    map call SQ(
+        x = split MK.xs,
+    )
+
+    return (
+        ys = SQ.y,
+    )
+}
+
+pipeline TOP(
+    out SUB[] subs,
+)
+{
+    map call SUB(
+        n = split [2, 1],
+    )
+
+    return (
+        subs = SUB,
+    )
+}
+
+call TOP()
+`
+
+// TestMergeUnderKnownOuterFork: each outer fork's element of the expanded
+// pipeline out gathers only that fork's inner forks (gen-diff seed 5, where
+// the merge read the inner root's source at no outer fork and failed).
+func TestMergeUnderKnownOuterFork(t *testing.T) {
+	f := loadSource(t, knownOuterMro)
+
+	sub := func(i int) Part { return f.part("TOP.SUB", ArrayIndex(i)) }
+	sq := func(i int) Part { return f.part("TOP.SUB.SQ", ArrayIndex(i)) }
+
+	in := []string{
+		f.outs("TOP.SUB.MK", Fork{sub(0)}, `{"xs":[1,2]}`),
+		f.outs("TOP.SUB.MK", Fork{sub(1)}, `{"xs":[3]}`),
+		f.outs("TOP.SUB.SQ", Fork{sub(0), sq(0)}, `{"y":1}`),
+		f.outs("TOP.SUB.SQ", Fork{sub(0), sq(1)}, `{"y":4}`),
+		f.outs("TOP.SUB.SQ", Fork{sub(1), sq(0)}, `{"y":9}`),
+	}
+
+	out := f.next("pipeline")
+	if err := f.g.WriteOuts(OutsSpec{In: in, Out: out}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := shim.ReadBundle(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantArgs(t, "TOP outs", string(raw), `{"subs":[{"ys":[1,4]},{"ys":[9]}]}`)
+}
+
 // TestKeyOrder: every way a struct value is built reaches CONS in mrp's
 // key order: a projected or whole value keeps its producer's order, a value
 // FilterJson narrows is rebuilt in declared order, and an object built
