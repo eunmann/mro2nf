@@ -527,6 +527,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// #488: a map call zipping maps of different stages forks over its
 	// first split's keys, and another map lacking a key reads null there.
 	{name: "zip_runtime_map"},
+	// A merge Martian expanded per fork of an outer map call gathers every
+	// inner fork across the outer forks, an empty one as null.
+	{name: "merge_across_outer"},
+	{name: "merge_across_empty"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -568,8 +572,11 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "entry_dir", mrp: failedIn(failError, "COUNTDIR")},
 	{name: "entry_file_empty", mrp: failedIn(failError, "SUMMARIZE")},
 	{name: "split_from_file", mrp: failedIn(failError, "SQUARELINES")},
-	// The merge of a nested map call over a sub-pipeline matches no fork.
+	// A merge Martian expanded per fork of an outer map call reads an inner
+	// fork its element's outer fork lacks: an inner split over a literal
+	// whose elements differ in length, or over a stage output.
 	{name: "map_pipe_nested", mrp: failedIn(failError, "")},
+	{name: "merge_across_short", mrp: failedIn(failError, "")},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow

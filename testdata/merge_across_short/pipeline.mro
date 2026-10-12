@@ -1,0 +1,50 @@
+# Failure-path fixture: merge_across_outer with outer forks of different
+# inner widths. mrp lists every inner part across both outer forks, so the
+# element of the outer fork with one SQ fork reads SQ's second fork, which
+# it lacks, and the run fails resolving TOP's outs: "could not match
+# reference to a specific fork of ID.<psid>.TOP.SUB.SQ" (core/resolve.go
+# matchFork).
+stage MK(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/mk",
+)
+
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+pipeline SUB(
+    in  int   n,
+    out int[] ys,
+)
+{
+    call MK(
+        n = self.n,
+    )
+
+    map call SQ(
+        x = split MK.xs,
+    )
+
+    return (
+        ys = SQ.y,
+    )
+}
+
+pipeline TOP(
+    out SUB[] subs,
+)
+{
+    map call SUB(
+        n = split [2, 1],
+    )
+
+    return (
+        subs = SUB,
+    )
+}
+
+call TOP()

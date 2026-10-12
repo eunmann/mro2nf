@@ -88,7 +88,7 @@ too.
 | empty-split fork inside a map call (0 chunks → 0/null, no fork dropped) | ✅ | e2e `map_split` (includes an empty fork) |
 | `disabled` on a map call | ✅ decided per fork | e2e `disabled_map`, `disabled_map_ref`, `disabled_map_nullforks` |
 | map call over a pipeline with an internal **disabled** call | ✅ | e2e `map_pipe_disabled` |
-| **nested** map call (a map over a pipeline that itself maps) | ✅ a root whose forks vary with an outer map call gets its forks under each fork of that call | e2e `fork_indep_call`, `bench/mapnested`; unit `TestNestedEntryForkNames`, `TestNestedForkUnderRuntimeOuter`, `TestPlanNestedEntryForks`. `map_pipe_nested`, whose merge `mrp` refuses, fails as under `mrp` (`TestMrpDiffFailureParity`) |
+| **nested** map call (a map over a pipeline that itself maps) | ✅ a root whose forks vary with an outer map call gets its forks under each fork of that call. A merge Martian expands per fork of an outer map call of known length gathers, as `mrp` does, every inner fork across the outer forks, each read at the element's own outer fork: an empty one reads null, and one the element's fork lacks fails the run (`map_pipe_nested`, `merge_across_short`) | e2e `fork_indep_call`, `bench/mapnested`, `TestMrpDiff/merge_across_outer`, `TestMrpDiff/merge_across_empty`, `TestMrpDiffFailureParity`; unit `TestNestedEntryForkNames`, `TestNestedForkUnderRuntimeOuter`, `TestPlanNestedEntryForks`, `TestMergeAcrossOuterForks`, `TestMergeAcrossOuterForksFails` |
 | **disabled** nested map call | ✅ | e2e `map_pipe_disabled_nested` |
 
 ## Stages / adapters / resources

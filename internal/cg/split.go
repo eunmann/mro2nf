@@ -181,15 +181,15 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 		return nil, nil
 	}
 
-	idx, err := r.indices(e.Call, r.mergeOuter(e, fork))
+	parts, err := r.mergeParts(e, fork)
 	if err != nil {
 		return nil, fmt.Errorf("merge of %s: %w", e.Call.Fqid, err)
 	}
 
 	if e.CallMode() == syntax.ModeMapCall {
-		out := make(core.MarshalerMap, len(idx))
+		out := make(core.MarshalerMap, len(parts.list))
 
-		for _, ix := range idx {
+		for _, ix := range parts.list {
 			v, err := r.resolve(e.Value, innerT, fork.with(Part{Root: e.Call, Index: ix}))
 			if err != nil {
 				return nil, fmt.Errorf("merge of %s key %q: %w", e.Call.Fqid, ix.MapKey(), err)
@@ -201,10 +201,14 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 		return out, nil
 	}
 
-	out := make(marshalerArray, len(idx))
+	if len(parts.list) == 1 && parts.list[0] == nil {
+		return marshalerArray{}, nil
+	}
 
-	for i, ix := range idx {
-		v, err := r.resolve(e.Value, innerT, fork.with(Part{Root: e.Call, Index: ix}))
+	out := make(marshalerArray, len(parts.list))
+
+	for i, ix := range parts.list {
+		v, err := r.mergeElement(e, innerT, fork, parts, ix)
 		if err != nil {
 			return nil, fmt.Errorf("merge of %s index %d: %w", e.Call.Fqid, i, err)
 		}
@@ -213,32 +217,6 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 	}
 
 	return out, nil
-}
-
-// mergeOuter is fork with the index of each outer root of the merged call
-// that fork lacks and the merged value's references fix: a merge Martian
-// expanded per fork of an outer map call of known length is one element
-// per outer fork, whose references carry that fork's index (gen-diff seed
-// 5), as mrp's merge matches the call's forks to them (core/resolve.go:328
-// getParts).
-func (r *resolver) mergeOuter(e *syntax.MergeExp, fork Fork) Fork {
-	out := fork
-
-	for _, o := range r.g.outerRoots(e.Call) {
-		if _, ok := out.rootPart(o); ok {
-			continue
-		}
-
-		for _, ref := range e.Value.FindRefs() {
-			if ix, ok := ref.Forks[o.Call()]; ok && ix != nil && ix.IndexSource() == nil {
-				out = out.with(Part{Root: o, Index: concrete(ix)})
-
-				break
-			}
-		}
-	}
-
-	return out
 }
 
 // mergeElemType is the type of one merged value (core/resolve.go:294-322).

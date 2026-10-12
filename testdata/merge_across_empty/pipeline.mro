@@ -1,0 +1,49 @@
+# merge_across_outer with an outer fork whose inner map call has no fork
+# (MK returns no xs for n = 0). mrp lists that outer fork's empty fork among
+# the parts each element merges and reads it as null, and reads every part
+# as null in the element whose own inner forks are empty: ys is
+# [1, null, 4] and [null, null, null] under mrp.
+stage MK(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/mk",
+)
+
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+pipeline SUB(
+    in  int   n,
+    out int[] ys,
+)
+{
+    call MK(
+        n = self.n,
+    )
+
+    map call SQ(
+        x = split MK.xs,
+    )
+
+    return (
+        ys = SQ.y,
+    )
+}
+
+pipeline TOP(
+    out SUB[] subs,
+)
+{
+    map call SUB(
+        n = split [2, 0],
+    )
+
+    return (
+        subs = SUB,
+    )
+}
+
+call TOP()
