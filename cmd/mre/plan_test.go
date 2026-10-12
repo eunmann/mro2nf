@@ -376,7 +376,7 @@ func TestRunFindsStageCodeBesideEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	g, _, err := (&graphFlags{entry: entry, call: readText(t, filepath.Join(work, "call")), mropath: shared}).load()
+	g, _, err := (&graphFlags{entry: entry, call: filepath.Join(work, "call"), mropath: shared}).load()
 	if err != nil {
 		t.Fatal(err)
 	}
