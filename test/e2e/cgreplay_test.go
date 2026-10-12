@@ -112,7 +112,7 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 
 	mro := filepath.Join(dir, entry)
 
-	g, err := cg.Load(mro, []string{dir})
+	g, err := cg.Load(mro, mro, []string{dir})
 	if err != nil {
 		t.Fatal(err)
 	}

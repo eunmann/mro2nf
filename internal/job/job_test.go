@@ -25,9 +25,9 @@ import (
 func stage(t *testing.T, fixture, node, body string) (Stage, *core.InvocationData) {
 	t.Helper()
 
-	dir := filepath.Join("..", "..", "testdata", fixture)
+	mro := filepath.Join("..", "..", "testdata", fixture, "pipeline.mro")
 
-	g, err := cg.Load(filepath.Join(dir, "pipeline.mro"), nil)
+	g, err := cg.Load(mro, mro, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

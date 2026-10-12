@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 
@@ -36,20 +37,23 @@ type Graph struct {
 	outer    map[string]syntax.ForkRootList
 }
 
-// Load compiles the invocation at mro, as mrp does before it creates a
-// pipestance (core/runtime.go instantiatePipeline: Compile, then
-// MakePipelineCallGraph).
-func Load(mro string, mroPaths []string) (*Graph, error) {
+// Load compiles the invocation read from mro as the file at entry, as mrp
+// compiles the invocation it reads under the path it was given
+// (cmd/mrp/main.go: ReadFile(invocationPath), then core/runtime.go
+// instantiatePipeline: ParseSourceBytes, then MakePipelineCallGraph).
+// Martian resolves entry's includes and its stages' code beside entry, so
+// a run compiling the plan its PLAN wrote passes the transpiled entry file.
+func Load(mro, entry string, mroPaths []string) (*Graph, error) {
 	if len(mroPaths) == 0 {
-		mroPaths = []string{filepath.Dir(mro)}
+		mroPaths = []string{filepath.Dir(entry)}
 	}
 
-	_, _, ast, err := syntax.Compile(mro, mroPaths, false)
+	raw, err := os.ReadFile(mro)
 	if err != nil {
-		return nil, fmt.Errorf("compile %s: %w", mro, err)
+		return nil, fmt.Errorf("read invocation: %w", err)
 	}
 
-	return graphOf(ast, mro, mroPaths)
+	return Compile(raw, entry, mroPaths)
 }
 
 // Compile compiles the invocation source src as Load compiles a file named

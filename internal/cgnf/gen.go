@@ -97,6 +97,7 @@ func (p *project) planWiring(g *gen) {
 func (p *project) graphMeta(plan string, extra ...string) string {
 	entries := append([]string{
 		"mro: " + gstr(p.src.Name),
+		"entry: " + gstr(p.src.Path()),
 		"mropath: " + gstr(strings.Join(p.opts.MroPaths, ":")),
 		"plan: " + plan,
 		"build: " + gstr(p.opts.Version),

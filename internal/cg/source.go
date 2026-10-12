@@ -26,19 +26,18 @@ const witnessWidth = 2
 // Source is an entry .mro split as a run rebuilds its invocation: the entry
 // file's declarations and includes without its call, the call, and the
 // invocation data of the call (core.InvocationData, mrp's JSON form of an
-// invocation, as `mrg --reverse` writes it). Name is the entry file's name,
-// which the rebuilt invocation keeps so _jobinfo records the include mrp
-// records.
+// invocation, as `mrg --reverse` writes it). Name and Dir are the entry
+// file's name and absolute dir: every compile of the source, and of an
+// invocation rebuilt from it, is a compile of the file at Path, as mrp
+// compiles the invocation under the path it was given, so Martian resolves
+// the entry's includes and its stages' code beside the entry before the
+// search path, and _jobinfo records the include mrp records.
 type Source struct {
 	Name       string               `json:"name"`
+	Dir        string               `json:"dir"`
 	Decls      string               `json:"decls"`
 	Call       string               `json:"call"`
 	Invocation *core.InvocationData `json:"invocation"`
-	// dir is the entry file's dir for a source ReadSource read. Martian
-	// resolves a file's includes beside it first, so the declarations must
-	// compile there and not in the working directory. A decoded source has
-	// none: a run links it under Name in its task's dir.
-	dir string
 }
 
 // ReadSource reads the entry .mro at path, compiling its invocation as mrp
@@ -78,7 +77,12 @@ func ReadSource(path string, mroPaths []string) (Source, error) {
 		return Source{}, err
 	}
 
-	return Source{Name: filepath.Base(path), Decls: file.Format(), Call: call, Invocation: inv, dir: filepath.Dir(path)}, nil
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return Source{}, fmt.Errorf("resolve %s: %w", path, err)
+	}
+
+	return Source{Name: filepath.Base(abs), Dir: filepath.Dir(abs), Decls: file.Format(), Call: call, Invocation: inv}, nil
 }
 
 // Rebuild is the invocation source of inv over the declarations: the call
@@ -107,7 +111,7 @@ func (s Source) Rebuild(inv *core.InvocationData, mroPaths []string) (string, er
 func (s Source) Manifest(mroPaths []string) (types.Manifest, error) {
 	var p syntax.Parser
 
-	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.file(), mroPaths, false)
+	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.Path(), mroPaths, false)
 	if err != nil {
 		return types.Manifest{}, fmt.Errorf("compile %s: %w", s.Name, err)
 	}
@@ -173,9 +177,9 @@ func (s Source) with(call string) string {
 	return strings.TrimRight(s.Decls, "\n") + "\n\n" + call
 }
 
-// file is the path the declarations compile under.
-func (s Source) file() string {
-	return filepath.Join(s.dir, s.Name)
+// Path is the entry file's path, which the source compiles as.
+func (s Source) Path() string {
+	return filepath.Join(s.Dir, s.Name)
 }
 
 // callable compiles the entry file and returns the callable id and the
@@ -183,7 +187,7 @@ func (s Source) file() string {
 func (s Source) callable(id string, mroPaths []string) (syntax.Callable, *syntax.TypeLookup, error) {
 	var p syntax.Parser
 
-	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.file(), mroPaths, false)
+	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.Path(), mroPaths, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("compile the declarations of %s: %w", s.Name, err)
 	}
@@ -205,7 +209,7 @@ func (s Source) compileArgs(args core.LazyArgumentMap, mroPaths []string) (*Grap
 		return nil, fmt.Errorf("witness of %s: %w", s.Name, err)
 	}
 
-	return Compile([]byte(src), s.file(), mroPaths)
+	return Compile([]byte(src), s.Path(), mroPaths)
 }
 
 // witnessValue is the witness value of type t whose collections hold n

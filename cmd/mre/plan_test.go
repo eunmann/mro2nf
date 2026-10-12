@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/cg"
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -221,7 +222,7 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 
 	posted := strings.Fields(readText(t, gates))
 
-	g, err := cg.Load(mro, []string{fx})
+	g, err := cg.Load(mro, mro, []string{fx})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,5 +262,87 @@ func TestPlanRefusesAsMrp(t *testing.T) {
 
 	if _, err := plan(t, "empty_fork_gated", `{"none":[1]}`); err == nil {
 		t.Error("plan of a runtime-gated split of a non-empty literal succeeded; mrp refuses it")
+	}
+}
+
+const besideEntryMRO = `stage FOO(
+    in  int n,
+    out int m,
+    src py  "stages/foo",
+)
+
+pipeline P(
+    in  int n,
+    out int m,
+)
+{
+    call FOO(
+        n = self.n,
+    )
+
+    return (
+        m = FOO.m,
+    )
+}
+
+call P(
+    n = 1,
+)
+`
+
+// TestRunFindsStageCodeBesideEntry: a task compiles its run's plan as the
+// entry file, so the code of a stage the entry declares is the one beside
+// the entry, as mrp finds it (syntax SrcParam.FindPath), even when a search
+// root holds code at the same path and the task runs in another dir.
+func TestRunFindsStageCodeBesideEntry(t *testing.T) {
+	proj, shared, work := t.TempDir(), t.TempDir(), t.TempDir()
+
+	for _, d := range []string{proj, shared} {
+		if err := os.MkdirAll(filepath.Join(d, "stages", "foo"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		writeTestFile(t, filepath.Join(d, "stages", "foo", "__init__.py"), "")
+	}
+
+	entry := writeTestFile(t, filepath.Join(proj, "pipeline.mro"), besideEntryMRO)
+
+	src, err := cg.ReadSource(entry, []string{shared})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := writeTestFile(t, filepath.Join(work, "source.json"), string(raw))
+	t.Chdir(t.TempDir())
+
+	if err := run(t.Context(), []string{
+		"plan", "-source", source, "-mropath", shared, "-work", work,
+		"-o", filepath.Join(work, "plan"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	g, _, err := (&graphFlags{mro: filepath.Join(work, "plan", src.Name), as: src.Path(), mropath: shared}).load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := g.Stage("P.FOO")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stage, err := job.NewStage(st, g.MroPaths())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := filepath.Join(proj, "stages", "foo"); stage.Code.Cmd != want {
+		t.Errorf("stage code = %s, want %s beside the entry", stage.Code.Cmd, want)
 	}
 }

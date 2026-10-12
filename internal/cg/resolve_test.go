@@ -32,7 +32,9 @@ func loadFixture(t *testing.T, name string) *fixture {
 
 	dir := filepath.Join("..", "..", "testdata", name)
 
-	g, err := Load(filepath.Join(dir, "pipeline.mro"), nil)
+	mro := filepath.Join(dir, "pipeline.mro")
+
+	g, err := Load(mro, mro, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

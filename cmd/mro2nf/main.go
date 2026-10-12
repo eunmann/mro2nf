@@ -128,8 +128,7 @@ func (f transpileFlags) configPtrs() cliPtrs {
 // options builds the cgnf.Options of a transpile of src: the tools made
 // absolute (resolveTools), mrjob defaulting to the one beside mre, Martian's
 // adapters dir the one holding -shell's python/, and the include paths the
-// search path's roots then src's dir, where Martian resolves the entry's own
-// includes and stage code.
+// search path's roots.
 func (f transpileFlags) options(src string) (cgnf.Options, error) {
 	mre, shell, mrjob := *f.mre, *f.shell, *f.mrjob
 
@@ -145,7 +144,7 @@ func (f transpileFlags) options(src string) (cgnf.Options, error) {
 		mrjob = filepath.Join(filepath.Dir(mre), "mrjob")
 	}
 
-	paths, err := mroPaths(src, searchPath(*f.mroPath, src))
+	paths, err := mroPaths(searchPath(*f.mroPath, src))
 	if err != nil {
 		return cgnf.Options{}, err
 	}
@@ -179,12 +178,14 @@ func searchPath(given, src string) []string {
 	return []string{filepath.Dir(src)}
 }
 
-// mroPaths are the search path's roots, absolute, then the entry file's dir,
-// each once.
-func mroPaths(src string, search []string) ([]string, error) {
+// mroPaths are the search path's roots, absolute, each once. The entry
+// file's dir is no root unless the search path names it: Martian searches
+// it only for the entry's own includes and stage code, as it compiles the
+// entry there.
+func mroPaths(search []string) ([]string, error) {
 	var out []string
 
-	for _, p := range append(slices.Clone(search), filepath.Dir(src)) {
+	for _, p := range search {
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			return nil, fmt.Errorf("resolve -mropath %s: %w", p, err)

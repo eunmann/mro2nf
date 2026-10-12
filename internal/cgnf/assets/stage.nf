@@ -25,14 +25,11 @@ def keyOrder(List a, List b) {
 }
 
 // graph names the invocation an mre call-graph subcommand compiles: the
-// run's plan, linked into the task under the entry file's name so the
-// _jobinfo invocation records mrp's include.
+// run's plan, compiled as the entry file, so Martian resolves the entry's
+// includes and stage code beside it and the _jobinfo invocation records
+// mrp's include.
 def graph(Map meta) {
-    return "-mro ${shq(meta.mro)} -mropath ${shq(meta.mropath)}"
-}
-
-def linkPlan(Map meta) {
-    return "ln -s ${shq(meta.plan + '/' + meta.mro)} ${shq(meta.mro)}"
+    return "-mro ${shq(meta.plan + '/' + meta.mro)} -as ${shq(meta.entry)} -mropath ${shq(meta.mropath)}"
 }
 
 // args builds the instance's args bundle from what it staged and its entry
@@ -102,7 +99,6 @@ process STAGE {
 
     script:
     """
-    ${linkPlan(meta)}
     ${args(meta, forks)}
     ${job(meta, 'main', '-args args -o stage_outs')}
     ${post(meta)}
@@ -123,7 +119,6 @@ process STAGE_SPLIT {
 
     script:
     """
-    ${linkPlan(meta)}
     ${args(meta, forks)}
     ${job(meta, 'split', '-args args -o chunks')}
     """
@@ -145,7 +140,6 @@ process STAGE_MAIN {
 
     script:
     """
-    ${linkPlan(meta)}
     ${job(meta, 'main', "-args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
 }
@@ -166,7 +160,6 @@ process STAGE_JOIN {
 
     script:
     """
-    ${linkPlan(meta)}
     ${job(meta, 'join', '-args args -chunks chunks -chunkouts chunkouts -o stage_outs')}
     ${post(meta)}
     """
@@ -190,7 +183,6 @@ process OUTS {
 
     script:
     """
-    ${linkPlan(meta)}
     mkdir -p in
     ${shq(params.mro2nf_mre)} outs ${graph(meta)} -types types.json -in in -o final
     ${shq(params.mro2nf_mre)} publish-layout -sidecar final/data.json -dir . -types types.json -callable ${shq(meta.call)} -role out -leaves final/f -outs outs

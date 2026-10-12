@@ -66,7 +66,7 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 		return Plan{}, err
 	}
 
-	g, err := Compile([]byte(text), src.Name, mroPaths)
+	g, err := Compile([]byte(text), src.Path(), mroPaths)
 	if err != nil {
 		return Plan{}, err
 	}

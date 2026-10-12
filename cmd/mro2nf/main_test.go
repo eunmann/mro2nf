@@ -446,7 +446,8 @@ func TestChooseVersion(t *testing.T) {
 
 // TestSearchPathReachesOptions checks the include paths the project compiles
 // with: -mropath, else $MROPATH, else the .mro's directory, as mrp, each
-// made absolute, then the .mro's directory, each once.
+// made absolute, each once, and never the .mro's directory the search path
+// does not name.
 func TestSearchPathReachesOptions(t *testing.T) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -470,8 +471,8 @@ func TestSearchPathReachesOptions(t *testing.T) {
 		want []string
 	}{
 		{"default", "", []string{"proj/p.mro"}, abs("proj")},
-		{"env", list("m1", "m2"), []string{"proj/p.mro"}, abs("m1", "m2", "proj")},
-		{"flag_beats_env", "m1", []string{"-mropath", "a", "proj/p.mro"}, abs("a", "proj")},
+		{"env", list("m1", "m2", "m1"), []string{"proj/p.mro"}, abs("m1", "m2")},
+		{"flag_beats_env", "m1", []string{"-mropath", "a", "proj/p.mro"}, abs("a")},
 		{"explicit_cwd", "", []string{"-mropath", ".", "p.mro"}, []string{cwd}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

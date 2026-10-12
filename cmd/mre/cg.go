@@ -17,13 +17,14 @@ var errNoMRO = errors.New("-mro is required")
 // graphFlags locate the invocation a call-graph subcommand resolves against
 // and the type manifest its bundles are written with.
 type graphFlags struct {
-	mro, mropath, types string
+	mro, as, mropath, types string
 }
 
 func addGraph(fs *flag.FlagSet) *graphFlags {
 	g := &graphFlags{}
 	fs.StringVar(&g.mro, "mro", "", "the invocation .mro, compiled as mrp compiles it")
-	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the .mro's dir)")
+	fs.StringVar(&g.as, "as", "", "the entry .mro the invocation compiles as, beside which Martian resolves its includes and stage code (default: -mro)")
+	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the -as file's dir)")
 	fs.StringVar(&g.types, "types", "", "type manifest (types.json) path (default: built from the invocation's declarations)")
 
 	return g
@@ -39,7 +40,12 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 		paths = filepath.SplitList(g.mropath)
 	}
 
-	graph, err := cg.Load(g.mro, paths)
+	entry := g.as
+	if entry == "" {
+		entry = g.mro
+	}
+
+	graph, err := cg.Load(g.mro, entry, paths)
 	if err != nil {
 		return nil, types.Manifest{}, fmt.Errorf("load call graph: %w", err)
 	}

@@ -112,8 +112,10 @@ with `mrp`'s message, and no project is written.
 - `-o <dir>`: the output project.
 - `-mropath <path>`: the search path for `@include` and stage `src`; default
   `$MROPATH` when set, else the `.mro`'s directory, as `mrp`'s
-  `cmd/mrp/configure.go` computes it. The entry's own directory is always
-  searched after it, and never the working directory.
+  `cmd/mrp/configure.go` computes it, and never the working directory. As in
+  `mrp`, the entry's own directory is searched first for the entry's includes
+  and its stages' code only: every compile of the run's invocation, in the
+  transpiler and in each task, compiles it as the entry file.
 - `-mre`, `-shell`, `-mrjob`: the tools every task runs, baked into
   `nextflow.config`. `-shell` names Martian's python adapter
   (`<adapters>/python/martian_shell.py`), and the project takes Martian's
@@ -256,8 +258,8 @@ so the plumbing task count does not grow with fork width or chunk count
 ## 6. The runtime shim `mre`
 
 Each subcommand that works on the call graph takes the invocation `.mro`
-(`-mro`, `-mropath`), compiles it as `mrp` does (`syntax.Compile`, then
-`MakePipelineCallGraph`), and reads only the items its task staged (`-in`, an
+(`-mro`, `-mropath`), compiles it as `mrp` does (`ParseSourceBytes`, then
+`MakePipelineCallGraph`) as the entry file `-as` names, and reads only the items its task staged (`-in`, an
 item or a dir of items). Without `-types`, each builds the type manifest from
 the invocation's own declarations.
 

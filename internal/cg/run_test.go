@@ -40,7 +40,7 @@ type elemDir struct {
 func newStandIn(t *testing.T, mro string) *standIn {
 	t.Helper()
 
-	g, err := Load(mro, []string{filepath.Dir(mro)})
+	g, err := Load(mro, mro, []string{filepath.Dir(mro)})
 	if err != nil {
 		t.Fatal(err)
 	}
