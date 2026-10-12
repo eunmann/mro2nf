@@ -35,6 +35,10 @@ type benchLane struct {
 	// knownScaling is the open issue whose plumbing makes this lane's
 	// plumbing grow with width; 0 when the lane must be width-flat.
 	knownScaling int
+	// flatStaging holds the most bytes one stage task stages to the same
+	// at every width (bench_report.py check_staging): each fork stages its
+	// own share, never one that grows with the fork width.
+	flatStaging bool
 }
 
 // benchLanes returns each fixture invocation once. Every fixture but chain
@@ -59,6 +63,9 @@ func benchLanes() []benchLane {
 		// W samples x W lanes leaves, one CELL job each.
 		{key: "mapnested_w2", dir: "mapnested", mro: "pipeline_w2.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 2 * 2, mrpJobs: 2 * 2},
 		{key: "mapnested_w4", dir: "mapnested", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 4 * 4, mrpJobs: 4 * 4},
+		// MKVALS and MKFILES, then one USE per fork zipping their outputs.
+		{key: "zip_w4", dir: "zip", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIP_PROBE", producers: 1, mrpJobs: 2 + 4, flatStaging: true},
+		{key: "zip_w16", dir: "zip", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIP_PROBE", producers: 1, mrpJobs: 2 + 16, flatStaging: true},
 	}
 }
 
@@ -181,12 +188,19 @@ func runLane(t *testing.T, l benchLane, r laneRun) ([]byte, string) {
 
 	var out, errBuf bytes.Buffer
 
-	cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+	metricArgs := []string{
+		filepath.Join(root, "test", "e2e", "bench_metrics.py"),
 		"--name", l.key, "--trace", filepath.Join(proj, "trace.txt"), "--workdir", scanRoot,
 		"--probe", l.probe, "--producers", strconv.Itoa(l.producers),
 		"--stages", stages, "--dag", filepath.Join(proj, "dag.mmd"),
 		"--mrp-jobs", strconv.Itoa(l.mrpJobs), "--known-scaling", strconv.Itoa(l.knownScaling),
-		"--gc-logs", r.gcLogs, "--wall-seconds", strconv.FormatFloat(wall.Seconds(), 'f', 1, 64))
+		"--gc-logs", r.gcLogs, "--wall-seconds", strconv.FormatFloat(wall.Seconds(), 'f', 1, 64),
+	}
+	if l.flatStaging {
+		metricArgs = append(metricArgs, "--flat-staging")
+	}
+
+	cmd := exec.Command("python3", metricArgs...)
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 

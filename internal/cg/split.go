@@ -55,14 +55,24 @@ func (r *resolver) resolveSplit(e *syntax.SplitExp, t syntax.Type, fork Fork) (j
 
 // stagedElement serves a split from the fork element the root's producer
 // wrote (Post), so an instance never reads the whole collection. It applies
-// when the split reads the root's own source, or another output of its
-// producer (zipSources), and filters the element to t as Path filters each
-// element of the collection to t's array or map (syntax
+// when the split reads the root's own source, another output of its
+// producer (zipSources), or an output of another stage, whose partner
+// element is staged (partner), and filters the element to t as Path
+// filters each element of the collection to t's array or map (syntax
 // ArrayType.FilterJson and TypedMapType.FilterJson filter element-wise).
 func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p Part) (json.Marshaler, bool, error) {
 	ref, ok := e.Value.(*syntax.RefExp)
 	if !ok {
 		return nil, false, nil
+	}
+
+	if prod, fed := r.g.Producer(p.Root); !fed || prod != ref.Id {
+		raw, ok, err := r.st.partner(p.Root, ref, p.Index)
+		if err != nil || !ok || raw == nil {
+			return nil, ok, err
+		}
+
+		return r.filterElement(raw, t, p)
 	}
 
 	outer, ok := fork.restrict(r.g.outerRoots(p.Root))
@@ -78,10 +88,6 @@ func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p
 	member := elementField
 
 	if sref, ok := src.Value.(*syntax.RefExp); !ok || !sameRef(ref, sref) {
-		if prod, ok := r.g.Producer(p.Root); !ok || prod != ref.Id {
-			return nil, false, nil
-		}
-
 		member = zipMember(ref.OutputId)
 	}
 
@@ -90,6 +96,11 @@ func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p
 		return nil, ok, err
 	}
 
+	return r.filterElement(raw, t, p)
+}
+
+// filterElement filters a staged element of p's root to t.
+func (r *resolver) filterElement(raw json.RawMessage, t syntax.Type, p Part) (json.Marshaler, bool, error) {
 	v, fatal, err := t.FilterJson(raw, r.g.types)
 	if err != nil && fatal {
 		return nil, false, fmt.Errorf("filter fork element of %s to %s: %w", p.Root.Fqid, t, err)

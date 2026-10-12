@@ -208,7 +208,8 @@ counts only by its presence. Its records reach the driver as `eval` values:
 per node a digest of its resolved spec (stage, bindings, disable bindings and
 fork roots in Martian's JSON form), whether the invocation disables it, and the
 fork keys a static per-fork binding disables; per entry-fed root its forks,
-keyed by the witness's outer roots, each with its fork record.
+keyed by the witness's outer roots, each with its fork record and its index
+token.
 
 **Cache identity.** A task's `-resume` key holds its own node's digest (in
 `meta`), the mro2nf build, and its fork records and staged dirs, not the
@@ -221,7 +222,10 @@ so no task stages a file of PLAN's.
 roots. The driver enumerates a node's instances root by root: an entry-fed
 root's forks come from PLAN, a stage-fed root's from its producer's
 `forks/<root>/<ordinal>/` output, and each instance joins the forks agreeing on
-the outer roots.
+the outer roots. An instance zipping another stage's output over a root joins
+that stage's partner dir at its own fork's token, or the absent record, so each
+fork stages one element of it whatever the fork width (the `zip` bench lanes
+gate the bytes one task stages flat in N).
 
 **Gates.** A node's gates are decided on the driver: PLAN's record and each
 gating stage's posted `gates` (an `eval` output), joined on the roots they
@@ -313,8 +317,15 @@ the invocation's own declarations.
   reads (a map call zipping two outputs, a disable binding splitting one), plus
   `fork.json`, which records the real fork (keys as JSON strings), its position,
   and the zipped outputs too short to have an element there, which read null as
-  in `mrp`. An instance therefore stages only its own elements, and no key ever
-  needs escaping. `mre post -entry` writes the forks the call graph already
+  in `mrp`. A map key's fork dir also carries the key's token, the hex SHA-256
+  of the key, after an `@` (an array fork's token is its index). For each
+  output of this stage that a map call it does not fork zips (a split over
+  another stage's or a literal's root), it writes one partner dir per element,
+  `forks/<root>@<node>.<output>/<token>/`, and an absent record, `none`, which
+  reads null where the output is null and a missing element, logged, at any
+  index it lacks, as `mrp` reads it; a zip of maps at run time need not share
+  keys (`zip_runtime_map`). An instance therefore stages only its own elements,
+  and no key ever needs escaping. `mre post -entry` writes the forks the call graph already
   fixes (literal and entry-sourced sources) the same way, as fork records
   without values. A root whose fork set varies with an outer map call (its
   source, of unknown length, is forked on that call) gets its forks under each

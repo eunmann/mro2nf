@@ -508,10 +508,14 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "bench/mapsplit", mro: "pipeline_w4.mro"},
 	{name: "bench/mapdisabled", mro: "pipeline_w4.mro"},
 	{name: "bench/mapnested", mro: "pipeline_w2.mro"},
+	{name: "bench/zip", mro: "pipeline_w4.mro"},
 	// #464: a map call zipping splits forks over its master source, and the
 	// other sources read null past their end.
 	{name: "zip_runtime"},
 	{name: "zip_literal"},
+	// #488: a map call zipping maps of different stages forks over its
+	// first split's keys, and another map lacking a key reads null there.
+	{name: "zip_runtime_map"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not

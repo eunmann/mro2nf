@@ -17,16 +17,24 @@ import (
 // it, in dependency order, every enabled instance's outs a type-correct
 // stand-in for the stage's. Each instance gets the records of its
 // entry-fed roots' forks as values, and stages, linked below one dir as a
-// task stages them, the element dirs of its stage-fed roots' forks and the
-// posted output bundles it reads of every instance of each node it reads.
+// task stages them, the element dirs of its stage-fed roots' forks, the
+// partner element at its index of each output it zips, and the posted
+// output bundles it reads of every instance of each node it reads.
 type standIn struct {
-	t      *testing.T
-	g      *Graph
-	man    types.Manifest
-	dir    string
-	seq    int
-	fields map[string][]string
-	elems  map[string][]elemDir
+	t        *testing.T
+	g        *Graph
+	man      types.Manifest
+	dir      string
+	seq      int
+	fields   map[string][]string
+	elems    map[string][]elemDir
+	partners map[string][]postedPartner
+}
+
+// postedPartner is one instance's dir of partner elements and its fork.
+type postedPartner struct {
+	dir  string
+	fork Fork
 }
 
 // elemDir is a fork element dir, the fork it records, and whether the
@@ -45,7 +53,10 @@ func newStandIn(t *testing.T, mro string) *standIn {
 		t.Fatal(err)
 	}
 
-	return &standIn{t: t, g: g, man: g.Manifest(), dir: t.TempDir(), fields: map[string][]string{}, elems: map[string][]elemDir{}}
+	return &standIn{
+		t: t, g: g, man: g.Manifest(), dir: t.TempDir(),
+		fields: map[string][]string{}, elems: map[string][]elemDir{}, partners: map[string][]postedPartner{},
+	}
 }
 
 func (s *standIn) next(name string) string {
@@ -54,8 +65,9 @@ func (s *standIn) next(name string) string {
 	return filepath.Join(s.dir, strconv.Itoa(s.seq), name)
 }
 
-// collect indexes the fork elements under forks, <root>/<ordinal>/ dirs.
-func (s *standIn) collect(forks string, entry bool) {
+// collect indexes the fork elements under forks, <root>/<ordinal>/ dirs,
+// and the partner dirs beside them, posted by the instance at fork.
+func (s *standIn) collect(forks string, entry bool, fork Fork) {
 	s.t.Helper()
 
 	dirs, err := filepath.Glob(filepath.Join(forks, "*", "*"))
@@ -64,6 +76,14 @@ func (s *standIn) collect(forks string, entry bool) {
 	}
 
 	for _, d := range dirs {
+		if name := filepath.Base(filepath.Dir(d)); strings.Contains(name, "@") {
+			if filepath.Base(d) == AbsentName {
+				s.partners[name] = append(s.partners[name], postedPartner{dir: filepath.Dir(d), fork: fork})
+			}
+
+			continue
+		}
+
 		el, err := s.g.ReadElement(d)
 		if err != nil {
 			s.t.Fatal(err)
@@ -149,6 +169,15 @@ func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 
 	var recs []Element
 
+	fork := make(Fork, 0, len(elems))
+	for _, e := range elems {
+		fork = append(fork, e.el.Fork[len(e.el.Fork)-1])
+	}
+
+	for _, z := range n.Zips {
+		items = append(items, s.partner(z, fork)...)
+	}
+
 	for _, e := range elems {
 		if !e.entry {
 			items = append(items, e.dir)
@@ -177,6 +206,32 @@ func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 	}
 
 	return in, args
+}
+
+// partner is what the driver stages of z for the instance at fork: the
+// partner element at its fork's index token, posted by the instance of
+// z.Node agreeing with it, or that instance's absent record; nothing when
+// no enabled instance posted one.
+func (s *standIn) partner(z Zip, fork Fork) []string {
+	own := slices.IndexFunc(fork, func(p Part) bool { return p.Root.Fqid == z.Root })
+	if own < 0 {
+		s.t.Fatalf("an instance zipping %s has no fork of it", z.Root)
+	}
+
+	for _, p := range s.partners[PartnerDir(z.Root, z.Node, z.Output)] {
+		if !agrees(p.fork, fork) {
+			continue
+		}
+
+		at := filepath.Join(p.dir, IndexToken(fork[own].Index))
+		if _, err := os.Stat(at); err != nil {
+			at = filepath.Join(p.dir, AbsentName)
+		}
+
+		return []string{at}
+	}
+
+	return nil
 }
 
 // standInOuts are type-correct outs for every output of node's stage.
@@ -236,7 +291,7 @@ func (s *standIn) node(n TopoNode) int {
 		}
 
 		s.fields[n.Fqid] = append(s.fields[n.Fqid], fields...)
-		s.collect(spec.Forks, false)
+		s.collect(spec.Forks, false, in.Fork)
 		ran++
 	}
 
@@ -275,7 +330,7 @@ func TestStandInRunOfEveryFixture(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			s.collect(entry, true)
+			s.collect(entry, true, nil)
 
 			for _, n := range topo.Nodes {
 				ran += s.node(n)

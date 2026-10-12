@@ -25,6 +25,8 @@ type stagedStore struct {
 	forks       map[string][]Fork
 	elements    map[string]string
 	missing     map[string][]string
+	partners    map[string]string
+	absent      map[string]*bool
 	stagedElems []Element
 	cache       map[string]core.LazyArgumentMap
 }
@@ -41,6 +43,8 @@ func (g *Graph) stage(dirs []string, recs ...Element) (*stagedStore, error) {
 		forks:    map[string][]Fork{},
 		elements: map[string]string{},
 		missing:  map[string][]string{},
+		partners: map[string]string{},
+		absent:   map[string]*bool{},
 		cache:    map[string]core.LazyArgumentMap{},
 	}
 
@@ -97,6 +101,8 @@ func (s *stagedStore) add(dir string) error {
 		}
 
 		s.addElement(el, dir)
+	case partnerFile:
+		return s.addPartner(dir)
 	default:
 		return fmt.Errorf("staged %s: %w", dir, errNotItem)
 	}

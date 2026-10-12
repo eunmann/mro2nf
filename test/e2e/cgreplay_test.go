@@ -390,6 +390,14 @@ func (rp *cgReplay) checkArgs(rel, args string, want []byte, wantErr error) json
 		return got
 	}
 
+	// mrp leaves a fork's split/_args empty when a split reads a key its
+	// map lacks (zip_runtime_map BY_AX/fork_x); the job's own _args, which
+	// runJob compares, carry the bindings, and the drift guard compares
+	// them with mrp's resolver.
+	if len(bytes.TrimSpace(want)) == 0 {
+		return got
+	}
+
 	if g, w := normJSON(rp.t, got, leafNamed), normJSON(rp.t, want, leafNamed); g != w {
 		rp.t.Errorf("%s: _args differ from mrp's\nmrp:\n%s\nmre args:\n%s", rel, w, g)
 	}

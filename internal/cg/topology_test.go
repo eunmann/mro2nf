@@ -254,3 +254,35 @@ call P()
 	_, got = f.args("P.PAIR", elems[2])
 	wantArgs(t, "P.PAIR fork2", got, `{"skip":null,"x":3}`)
 }
+
+// TestTopologyZipPartners: a map call zipping outputs of different stages
+// its master's fork element and the other stage's partner element
+// at the same index, never the other stage's whole output, so a fork
+// stages O(1) bytes of it, not O(N) (zip_runtime: LONG forks over TWO.xs
+// and zips THREE.xs).
+func TestTopologyZipPartners(t *testing.T) {
+	f := loadFixture(t, "zip_runtime")
+
+	topo, err := f.g.Topology()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string][]Zip{
+		"ZIP_RUNTIME.LONG":        {{Root: "ZIP_RUNTIME.LONG", Node: "ZIP_RUNTIME.THREE", Output: "xs"}},
+		"ZIP_RUNTIME.SHORT":       {{Root: "ZIP_RUNTIME.SHORT", Node: "ZIP_RUNTIME.TWO", Output: "xs"}},
+		"ZIP_RUNTIME.ORDER":       {{Root: "ZIP_RUNTIME.ORDER", Node: "ZIP_RUNTIME.THREE", Output: "xs"}},
+		"ZIP_RUNTIME.NULL_MASTER": {{Root: "ZIP_RUNTIME.NULL_MASTER", Node: "ZIP_RUNTIME.TWO", Output: "xs"}},
+		"ZIP_RUNTIME.NULL_OTHER":  {{Root: "ZIP_RUNTIME.NULL_OTHER", Node: "ZIP_RUNTIME.NONE", Output: "xs"}},
+	}
+
+	for _, n := range topo.Nodes {
+		if len(n.Reads) != 0 {
+			t.Errorf("%s reads %v, want only its fork and partner elements", n.Fqid, n.Reads)
+		}
+
+		if d := cmp.Diff(want[n.Fqid], n.Zips); d != "" {
+			t.Errorf("%s zips (-want +got):\n%s", n.Fqid, d)
+		}
+	}
+}

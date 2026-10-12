@@ -1,0 +1,52 @@
+filetype txt;
+
+# Benchmark: a map call zipping splits over the outputs of two different
+# stages, MKVALS's values (its master source) and MKFILES's files. Run at
+# two widths (pipeline_w4.mro, pipeline_w16.mro): plumbing tasks must be
+# identical at both, and so must the bytes each USE task stages, one value
+# and one file, never all N of MKFILES's files (#488).
+
+stage MKVALS(
+    in  int   n,
+    out int[] vs,
+    src py    "stages/mkvals",
+)
+
+stage MKFILES(
+    in  int   n,
+    in  int   kb,
+    out txt[] fs,
+    src py    "stages/mkfiles",
+)
+
+stage USE(
+    in  int v,
+    in  txt f,
+    out int w,
+    src py  "stages/use",
+)
+
+pipeline ZIPFAN(
+    in  int   n,
+    in  int   kb,
+    out int[] ws,
+)
+{
+    call MKVALS(
+        n = self.n,
+    )
+
+    call MKFILES(
+        n  = self.n,
+        kb = self.kb,
+    )
+
+    map call USE(
+        v = split MKVALS.vs,
+        f = split MKFILES.fs,
+    )
+
+    return (
+        ws = USE.w,
+    )
+}

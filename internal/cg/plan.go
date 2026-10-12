@@ -40,11 +40,12 @@ type PlanNode struct {
 }
 
 // PlanFork is one fork of an entry-fed root: its fork key, the ordinals of
-// the witness's outer roots then its own, and its fork record as a value
-// (EncodeElement).
+// the witness's outer roots then its own, its fork record as a value
+// (EncodeElement), and its index's IndexToken.
 type PlanFork struct {
 	Key    []int
 	Record string
+	Token  string
 }
 
 // MakePlan compiles inv over the source as mrp compiles an invocation, and
@@ -154,7 +155,11 @@ func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, 
 
 				ef := entryFork{el: el, ords: c.with(r.Fqid, n)}
 				planned[r.Fqid] = append(planned[r.Fqid], ef)
-				out[r.Fqid] = append(out[r.Fqid], PlanFork{Key: ef.key(append(slices.Clone(r.Outer), r.Fqid)), Record: rec})
+				out[r.Fqid] = append(out[r.Fqid], PlanFork{
+					Key:    ef.key(append(slices.Clone(r.Outer), r.Fqid)),
+					Record: rec,
+					Token:  IndexToken(el.Fork[len(el.Fork)-1].Index),
+				})
 				n++
 			}
 		}

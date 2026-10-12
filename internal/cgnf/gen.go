@@ -81,14 +81,15 @@ func pick(v string, idx []int) string {
 
 // planWiring parses PLAN's records: nodes maps each witness node to its
 // digest, its off flag and its statically disabled fork keys; f<j> are the
-// forks of entry-fed root j, each [outer key, own ordinal, record].
+// forks of entry-fed root j, each [outer key, own ordinal, record, index
+// token].
 func (p *project) planWiring(g *gen) {
 	g.linef("plan = \"${workflow.workDir}/mro2nf-plan/${workflow.sessionId}\".toString()")
 	g.linef("PLAN(%s, %s, file(\"${projectDir}/_assets/source.json\"))", p.values(), p.graphMeta("plan"))
 	g.linef("nodes = PLAN.out.nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }")
 
 	for j := range p.entry {
-		g.linef("f%d = PLAN.out.r%d.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); def k = f[0].tokenize('.').collect { t -> t as int }; [k.take(k.size() - 1), k[-1], f[1]] } }", j, j)
+		g.linef("f%d = PLAN.out.r%d.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); def k = f[0].tokenize('.').collect { t -> t as int }; [k.take(k.size() - 1), k[-1], f[1], f[2]] } }", j, j)
 	}
 }
 
@@ -154,7 +155,7 @@ func gpus(special string) int {
 }
 
 // consumed reports which of node fqid's outputs a later node or the
-// pipeline outs read: its outs, its fork elements, its gates.
+// pipeline outs read: its outs, its fork and partner elements, its gates.
 func (p *project) consumed(fqid string) (bool, bool, bool) {
 	outs := slices.ContainsFunc(p.topo.Outs, func(r cg.Read) bool { return r.Node == fqid })
 	gates := false
@@ -165,6 +166,10 @@ func (p *project) consumed(fqid string) (bool, bool, bool) {
 	}
 
 	forks := slices.ContainsFunc(p.topo.Roots, func(r cg.TopoRoot) bool { return r.Producer == fqid })
+
+	for _, n := range p.topo.Nodes {
+		forks = forks || slices.ContainsFunc(n.Zips, func(z cg.Zip) bool { return z.Node == fqid })
+	}
 
 	return outs, forks, gates
 }

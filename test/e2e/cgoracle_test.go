@@ -110,11 +110,16 @@ func bindingArgs(t *testing.T, bs []core.BindingInfo) json.RawMessage {
 	m := make(core.MarshalerMap, len(bs))
 
 	for _, b := range bs {
-		if v, ok := b.Value.(json.Marshaler); ok {
-			m[b.Id] = v
-		} else {
-			m[b.Id] = nil
+		v, ok := b.Value.(json.Marshaler)
+
+		// A split over a key its map lacks resolves to an empty raw value
+		// (core/resolve.go getMapElement), which mrp's job _args record as
+		// null.
+		if raw, isRaw := v.(json.RawMessage); !ok || (isRaw && len(raw) == 0) {
+			v = nil
 		}
+
+		m[b.Id] = v
 	}
 
 	raw, err := json.Marshal(m)

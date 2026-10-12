@@ -23,6 +23,21 @@ type reportLane struct {
 	Multiplier    int    `json:"multiplier"`
 	WcharBytes    int    `json:"wchar_bytes"`
 	KnownScaling  int    `json:"known_scaling,omitempty"`
+	FlatStaging   bool   `json:"flat_staging,omitempty"`
+	// StagedMax is the most bytes one task of each stage process staged.
+	StagedMax map[string]int `json:"stage_staged_bytes_max,omitempty"`
+}
+
+// stagingPair is widthPair(2, 2, 0) with flat_staging set, its widest
+// stage task staging s4 and s8 bytes.
+func stagingPair(s4, s8 int) []reportLane {
+	lanes := widthPair(2, 2, 0)
+	for i, s := range []int{s4, s8} {
+		lanes[i].FlatStaging = true
+		lanes[i].StagedMax = map[string]int{"N0_SRC": 0, "N1_USE": s}
+	}
+
+	return lanes
 }
 
 // widthPair is one fixture's lanes at widths 4 and 8, with the given plumbing
@@ -36,8 +51,8 @@ func widthPair(p4, p8, known int) []reportLane {
 
 // TestBenchReportGates drives bench_report.py on synthetic metrics: the
 // width-flatness gate, its known_scaling exemption (which may not get worse
-// and must be dropped once flat), and the stage-tasks-equal-mrp-jobs gate,
-// gating and under BENCH_UPDATE=1.
+// and must be dropped once flat), the flat per-task staging gate, and the
+// stage-tasks-equal-mrp-jobs gate, gating and under BENCH_UPDATE=1.
 func TestBenchReportGates(t *testing.T) {
 	requireTools(t, "python3")
 
@@ -57,6 +72,8 @@ func TestBenchReportGates(t *testing.T) {
 		{"known scaling now flat fails", false, widthPair(2, 2, 255), widthPair(2, 3, 255), "now width-flat"},
 		{"known scaling worse fails", false, widthPair(2, 4, 255), widthPair(2, 3, 255), "REGRESSION[x_w8]: plumbing_tasks"},
 		{"stage tasks off mrp fails", false, offMrp, offMrp, "MRP-JOBS[x_w8]"},
+		{"flat staging passes", false, stagingPair(65600, 65610), stagingPair(65600, 65610), ""},
+		{"staging grown with width fails", false, stagingPair(4*65600, 8*65600), stagingPair(4*65600, 8*65600), "STAGING[x]"},
 		{"update records known scaling", true, widthPair(2, 3, 255), widthPair(2, 3, 255), ""},
 		{"update refuses worse known scaling", true, widthPair(2, 4, 255), widthPair(2, 3, 255), "may not get worse"},
 		{"update refuses stage tasks off mrp", true, offMrp, offMrp, "MRP-JOBS[x_w8]"},

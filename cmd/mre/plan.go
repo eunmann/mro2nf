@@ -37,7 +37,7 @@ func runPlan(_ context.Context, argv []string) error {
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
 	fs.StringVar(&f.out, "o", "plan", "dir to write the invocation .mro into")
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys")
-	fs.StringVar(&f.roots, "roots", "roots", "dir to write one file per entry-fed fork root into, a line per fork: key record")
+	fs.StringVar(&f.roots, "roots", "roots", "dir to write one file per entry-fed fork root into, a line per fork: key record index-token")
 	fs.StringVar(&f.work, "work", ".", "scratch dir")
 
 	if err := fs.Parse(argv); err != nil {
@@ -152,7 +152,7 @@ func (f *planFlags) write(name string, p cg.Plan) error {
 		var b strings.Builder
 
 		for _, pf := range forks {
-			fmt.Fprintf(&b, "%s %s\n", cg.DottedKey(pf.Key), pf.Record)
+			fmt.Fprintf(&b, "%s %s %s\n", cg.DottedKey(pf.Key), pf.Record, pf.Token)
 		}
 
 		if err := writeText(filepath.Join(f.roots, root), b.String()); err != nil {

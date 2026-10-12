@@ -48,8 +48,8 @@ func TestForkElementKeys(t *testing.T) {
 	}
 
 	for i, want := range mrp {
-		if name := filepath.Base(elems[i]); name != ordinal(i, len(mrp)) {
-			t.Errorf("fork %d is named %q, want %q", i, name, ordinal(i, len(mrp)))
+		if name, want := filepath.Base(elems[i]), ordinal(i, len(mrp))+"@"+IndexToken(MapKey(want.key)); name != want {
+			t.Errorf("fork %d is named %q, want %q", i, name, want)
 		}
 
 		el, err := f.g.ReadElement(elems[i])

@@ -28,15 +28,26 @@ type Topology struct {
 // TopoNode is one stage node. Gates are the stages whose outs one of its
 // disable bindings reads; a binding that reads none is the invocation's.
 // Off marks a node the invocation disables outright, which runs nothing at
-// any fork and whose outs every consumer already reads as null.
+// any fork and whose outs every consumer already reads as null. Zips are
+// the outputs of other stages it splits over one of its roots whose forks
+// they do not fix, each staged as the one partner element at its index.
 type TopoNode struct {
 	Fqid  string   `json:"fqid"`
 	Stage string   `json:"stage"`
 	Split bool     `json:"split"`
 	Roots []string `json:"roots"`
 	Reads []Read   `json:"reads"`
+	Zips  []Zip    `json:"zips"`
 	Gates []Gate   `json:"gates"`
 	Off   bool     `json:"off"`
+}
+
+// Zip is a node's split over its root Root of node Node's output Output,
+// which Node's post writes element by element (partner).
+type Zip struct {
+	Root   string `json:"root"`
+	Node   string `json:"node"`
+	Output string `json:"output"`
 }
 
 // Gate is a stage whose outs a disable binding of a node reads, and the
@@ -61,13 +72,14 @@ type Read struct {
 	Fields []string `json:"fields"`
 }
 
-// TopoRoot is one fork root: the outer roots its fork set varies with, and
-// the stage whose outs fix its forks, or "" when the invocation's entry
-// values do.
+// TopoRoot is one fork root: the outer roots its fork set varies with, the
+// stage whose outs fix its forks, or "" when the invocation's entry values
+// do, and whether its forks are a map's keys, not an array's positions.
 type TopoRoot struct {
 	Fqid     string   `json:"fqid"`
 	Outer    []string `json:"outer"`
 	Producer string   `json:"producer"`
+	Keyed    bool     `json:"keyed"`
 }
 
 // Topology computes g's topology, failing on a shape whose data the
@@ -102,7 +114,7 @@ func (g *Graph) Topology() (Topology, error) {
 	t.Nodes = dependencyOrder(byID, t.Roots)
 
 	if ro := g.root.ResolvedOutputs(); ro != nil && ro.Exp != nil {
-		t.Outs = reads(nil, ro.Exp)
+		t.Outs = reads(ro.Exp)
 	}
 
 	return t, nil
@@ -113,7 +125,8 @@ func (g *Graph) topoRoot(root *syntax.CallGraphStage) (TopoRoot, error) {
 		return TopoRoot{}, fmt.Errorf("%w: the forks of %s are fixed by the outs of %s", errShapeUnsupported, root.Fqid, strings.Join(refIDs(root.Split().Value), " and "))
 	}
 
-	r := TopoRoot{Fqid: root.Fqid, Outer: fqids(g.outerRoots(root))}
+	sp := root.Split()
+	r := TopoRoot{Fqid: root.Fqid, Outer: fqids(g.outerRoots(root)), Keyed: sp != nil && sp.Source.CallMode() == syntax.ModeMapCall}
 	r.Producer, _ = g.Producer(root)
 
 	return r, nil
@@ -135,21 +148,7 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 		}
 	}
 
-	elementOnly := map[*syntax.CallStm]string{}
-
-	for _, r := range st.ForkRoots() {
-		if p, ok := g.Producer(r); ok {
-			elementOnly[r.Call()] = p
-		}
-	}
-
-	exps := make([]syntax.Exp, 0, len(st.ResolvedInputs())+len(st.Disabled()))
-	for _, k := range slices.Sorted(maps.Keys(st.ResolvedInputs())) {
-		exps = append(exps, st.ResolvedInputs()[k].Exp)
-	}
-
-	exps = append(exps, st.Disabled()...)
-	n.Reads = reads(elementOnly, exps...)
+	n.Reads, n.Zips = g.nodeReads(st)
 
 	gates, err := g.gates(st)
 	if err != nil {
@@ -164,6 +163,51 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	})
 
 	return n, nil
+}
+
+// nodeReads are the stage outs st's bindings read, less the splits a
+// staged element serves: of an output of the stage that feeds the split's
+// root (the root's fork element), and, in an input binding, of another
+// stage's output (its partner element, one of the zips). The gating stage
+// posts a disable binding's value, so no partner element serves its split.
+func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
+	elementOnly := map[*syntax.CallStm]string{}
+
+	for _, r := range st.ForkRoots() {
+		if p, ok := g.Producer(r); ok {
+			elementOnly[r.Call()] = p
+		}
+	}
+
+	element := func(x *syntax.SplitExp) bool { return elementServed(x, elementOnly) }
+	input := func(x *syntax.SplitExp) bool {
+		_, partnered := g.partnerOf(st, x)
+
+		return partnered || element(x)
+	}
+
+	fields := map[string]map[string]bool{}
+	zips := map[Zip]bool{}
+
+	for _, k := range slices.Sorted(maps.Keys(st.ResolvedInputs())) {
+		e := st.ResolvedInputs()[k].Exp
+		collectReads(e, input, fields)
+		walkSplits(e, func(x *syntax.SplitExp) {
+			if p, ok := g.partnerOf(st, x); ok {
+				zips[Zip{Root: p.root.Fqid, Node: p.ref.Id, Output: p.ref.OutputId}] = true
+			}
+		})
+	}
+
+	for _, d := range st.Disabled() {
+		collectReads(d, element, fields)
+	}
+
+	return readList(fields), slices.SortedFunc(maps.Keys(zips), compareZips)
+}
+
+func compareZips(a, b Zip) int {
+	return strings.Compare(PartnerDir(a.Root, a.Node, a.Output), PartnerDir(b.Root, b.Node, b.Output))
 }
 
 // gates are the stages whose outs one of st's disable bindings reads, each
@@ -248,15 +292,19 @@ func (g *Graph) gateRoots(st *syntax.CallGraphStage, d syntax.Exp, up *syntax.Ca
 	return out, nil
 }
 
-// reads are the stage outs exps read, less a split of an output of the stage
-// that feeds its root, which the root's fork element serves (stagedElement).
-func reads(elementOnly map[*syntax.CallStm]string, exps ...syntax.Exp) []Read {
+// reads are the stage outs exps read.
+func reads(exps ...syntax.Exp) []Read {
 	fields := map[string]map[string]bool{}
 
 	for _, e := range exps {
-		collectReads(e, elementOnly, fields)
+		collectReads(e, nil, fields)
 	}
 
+	return readList(fields)
+}
+
+// readList lists the reads fields records, by node.
+func readList(fields map[string]map[string]bool) []Read {
 	out := make([]Read, 0, len(fields))
 
 	for _, node := range slices.Sorted(maps.Keys(fields)) {
@@ -271,24 +319,26 @@ func reads(elementOnly map[*syntax.CallStm]string, exps ...syntax.Exp) []Read {
 	return out
 }
 
-func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]string, fields map[string]map[string]bool) {
+// collectReads adds to fields the stage outs e reads, less the splits
+// served reports, which a staged element serves.
+func collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, fields map[string]map[string]bool) {
 	switch x := e.(type) {
 	case *syntax.SplitExp:
-		if !elementServed(x, elementOnly) {
-			collectReads(x.Value, elementOnly, fields)
+		if served == nil || !served(x) {
+			collectReads(x.Value, served, fields)
 		}
 	case *syntax.RefExp:
 		addRead(fields, x)
 	case *syntax.ArrayExp:
 		for _, v := range x.Value {
-			collectReads(v, elementOnly, fields)
+			collectReads(v, served, fields)
 		}
 	case *syntax.MapExp:
 		for _, v := range x.Value {
-			collectReads(v, elementOnly, fields)
+			collectReads(v, served, fields)
 		}
 	case *syntax.MergeExp:
-		collectReads(x.Value, elementOnly, fields)
+		collectReads(x.Value, served, fields)
 
 		if x.ForkNode != nil {
 			addRead(fields, x.ForkNode)
@@ -301,8 +351,8 @@ func collectReads(e syntax.Exp, elementOnly map[*syntax.CallStm]string, fields m
 			collectReads(sp.Value, nil, fields)
 		}
 	case *syntax.DisabledExp:
-		collectReads(x.Disabled, elementOnly, fields)
-		collectReads(x.Value, elementOnly, fields)
+		collectReads(x.Disabled, served, fields)
+		collectReads(x.Value, served, fields)
 	}
 }
 
@@ -384,6 +434,8 @@ func (t Topology) coverNodes(rs []TopoNode) ([]error, map[string]bool) {
 			errs = append(errs, fmt.Errorf("%w: %s is stage %s forked on %v, not %s forked on %v", errUncovered, rn.Fqid, rn.Stage, rn.Roots, n.Stage, n.Roots))
 		case !readsCovered(n.Reads, rn.Reads) || !gatesCovered(n.Gates, rn.Gates):
 			errs = append(errs, fmt.Errorf("%w: %s reads %v and is gated by %v, beyond %v and %v", errUncovered, rn.Fqid, rn.Reads, rn.Gates, n.Reads, n.Gates))
+		case !subset(n.Zips, rn.Zips):
+			errs = append(errs, fmt.Errorf("%w: %s zips %v, beyond %v", errUncovered, rn.Fqid, rn.Zips, n.Zips))
 		}
 
 		for _, root := range rn.Roots {
@@ -415,7 +467,7 @@ func gatesCovered(have, want []Gate) bool {
 	return true
 }
 
-func subset(have, want []string) bool {
+func subset[T comparable](have, want []T) bool {
 	for _, w := range want {
 		if !slices.Contains(have, w) {
 			return false
@@ -426,7 +478,8 @@ func subset(have, want []string) bool {
 }
 
 // dependencyOrder lists the nodes so each follows what it reads, the
-// producers of its fork roots and its gates, visiting in fqid order.
+// producers of its fork roots, its gates and the stages it zips, visiting
+// in fqid order.
 func dependencyOrder(nodes map[string]TopoNode, roots []TopoRoot) []TopoNode {
 	producer := map[string]string{}
 	for _, r := range roots {
@@ -456,6 +509,10 @@ func dependencyOrder(nodes map[string]TopoNode, roots []TopoRoot) []TopoNode {
 
 		for _, gate := range n.Gates {
 			visit(gate.Node)
+		}
+
+		for _, z := range n.Zips {
+			visit(z.Node)
 		}
 
 		out = append(out, n)

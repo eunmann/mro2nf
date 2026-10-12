@@ -190,3 +190,29 @@ func TestEmitRefusesReservedParam(t *testing.T) {
 		t.Errorf("Emit = %v, want errReservedParam", err)
 	}
 }
+
+// TestEmitZipsByToken: an instance zipping another stage's output stages
+// that stage's partner element at its own fork's index token, or the
+// absent record, never the whole output (zip_runtime: LONG zips THREE.xs;
+// zip_runtime_map: BY_AX zips ABC.m by key token).
+func TestEmitZipsByToken(t *testing.T) {
+	for _, c := range []struct{ fixture, root, partner, token string }{
+		{"zip_runtime", "ZIP_RUNTIME.LONG", "ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs", "t[-1].toString()"},
+		{"zip_runtime_map", "ZIP_RUNTIME_MAP.BY_AX", "ZIP_RUNTIME_MAP.BY_AX@ZIP_RUNTIME_MAP.ABC.m", "e.name.tokenize('@')[1]"},
+	} {
+		main := readTree(t, emitFixture(t, c.fixture))["main.nf"]
+
+		for _, want := range []string{
+			"e.parent.name == '" + c.root + "' }.collect { e -> def t = e.name.tokenize('@')[0].tokenize('.').collect { x -> x as int }; [[], t[-1], e, " + c.token + "] }",
+			"ds.findAll { e -> e.parent.name == '" + c.partner + "' }.collectEntries { e -> [(e.name): e] }] }, by: 0).map { _q, k, fs, es, tk, m -> [k, fs, es + ([m[tk[0]] ?: m['none']] - [null]), tk] }",
+		} {
+			if !strings.Contains(main, want) {
+				t.Errorf("%s's main.nf lacks %q:\n%s", c.fixture, want, main)
+			}
+		}
+
+		if strings.Contains(main, "us -> [k, fs, es, d, us + ds]") {
+			t.Errorf("%s: an instance stages a whole output:\n%s", c.fixture, main)
+		}
+	}
+}

@@ -23,6 +23,8 @@ The staging probe reads every task work dir (see probe_task_dirs):
                  downloads
   stage_staged_bytes_max -- per stage process, the most bytes staged into
                  one of its tasks
+  flat_staging -- set by --flat-staging: bench_report.py holds the largest
+                 stage_staged_bytes_max to the same at every width
   uploaded_bytes / plumbing_uploaded_bytes -- bytes of the files all tasks /
                  plumbing tasks wrote into their work dirs, every hard link
                  counted: an upper bound on what an object-store backend
@@ -319,6 +321,11 @@ def parse_args():
         default=0,
         help="open issue whose plumbing grows with this lane's width (0: none)",
     )
+    p.add_argument(
+        "--flat-staging",
+        action="store_true",
+        help="the most bytes one stage task stages must not grow with this lane's width",
+    )
     p.add_argument("--gc-logs", default="", help="dir of the driver JVM's -Xlog:gc files")
     p.add_argument("--wall-seconds", type=float, default=0, help="the run's wall time")
     return p.parse_args()
@@ -359,6 +366,8 @@ def main():
         m["wall_seconds"] = round(a.wall_seconds, 1)
     if a.known_scaling:
         m["known_scaling"] = a.known_scaling
+    if a.flat_staging:
+        m["flat_staging"] = True
     print(json.dumps(m))
 
 

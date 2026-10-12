@@ -43,6 +43,11 @@ type store interface {
 	// no element is staged or it carries no such member, and errNoElement
 	// for a member the element records as missing.
 	element(root *syntax.CallGraphStage, f Fork, member string) (json.RawMessage, bool, error)
+	// partner returns the staged partner element of ref's output at index
+	// ix of root (partner): its value, nil for a null output, or
+	// errNoElement for an index it has no element at. It is false when no
+	// partner element of the output is staged.
+	partner(root *syntax.CallGraphStage, ref *syntax.RefExp, ix syntax.CollectionIndex) (json.RawMessage, bool, error)
 }
 
 // resolver evaluates call-graph expressions at a fork as core TopNode.resolve

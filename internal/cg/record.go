@@ -10,17 +10,19 @@ import (
 )
 
 // The records only mre reads: an instance stamp beside an args or outs
-// bundle's data.json, and the fork record of a fork element dir.
+// bundle's data.json, the fork record of a fork element dir, and the record
+// of a partner element dir (partnerJSON).
 const (
 	instanceFile = "instance.json"
 	elementFile  = "fork.json"
+	partnerFile  = "partner.json"
 
 	filePerm = 0o644
 	dirPerm  = 0o755
 )
 
 var (
-	errNotItem = errors.New("neither an instance bundle nor a fork element")
+	errNotItem = errors.New("not an instance bundle, a fork element or a partner element")
 	errLens    = errors.New("fork counts do not match the fork's parts")
 )
 
@@ -187,10 +189,10 @@ func writeRecord(path string, v any) error {
 	return nil
 }
 
-// itemKind reports which record dir holds: instanceFile, elementFile, or ""
-// for neither.
+// itemKind reports which record dir holds: instanceFile, elementFile,
+// partnerFile, or "" for none.
 func itemKind(dir string) string {
-	for _, name := range []string{instanceFile, elementFile} {
+	for _, name := range []string{instanceFile, elementFile, partnerFile} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			return name
 		}

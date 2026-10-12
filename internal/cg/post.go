@@ -48,7 +48,8 @@ type PostSpec struct {
 
 // Post stamps the instance's outs with its node and fork, writing a disabled
 // instance's outs as mrp does, checks enabled outs as mrp does, and writes
-// one fork element dir per fork of every root this stage feeds, then the
+// one fork element dir per fork of every root this stage feeds and one
+// partner element dir per element of each output a partner reads, then the
 // outs field by field and the gates they set, when asked.
 func (g *Graph) Post(spec PostSpec) error {
 	in, s, err := g.post(spec)
@@ -102,20 +103,29 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 	}
 
 	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: spec.Manifest.Table(), values: true}
+	if err := w.posted(in); err != nil {
+		return Instance{}, nil, err
+	}
 
-	for _, root := range g.sortedRoots() {
+	return in, s, nil
+}
+
+// posted writes the forks of every root the posting instance's stage feeds,
+// and its partner elements.
+func (w forkWriter) posted(in Instance) error {
+	for _, root := range w.r.g.sortedRoots() {
 		if runtimeMultiSource(root) && slices.Contains(refIDs(root.Split().Value), in.Node) {
-			return Instance{}, nil, fmt.Errorf("%w: %s", errMultiSource, root.Fqid)
+			return fmt.Errorf("%w: %s", errMultiSource, root.Fqid)
 		}
 
-		if p, ok := g.Producer(root); ok && p == in.Node {
+		if p, ok := w.r.g.Producer(root); ok && p == in.Node {
 			if err := w.root(root, counted{fork: in.Fork, lens: in.Lens}); err != nil {
-				return Instance{}, nil, err
+				return err
 			}
 		}
 	}
 
-	return in, s, nil
+	return w.writePartners(in.Node, in.Fork)
 }
 
 // PostEntry writes the fork records of every root no stage feeds, as the
@@ -282,7 +292,7 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 	}
 
 	for i, ix := range idx {
-		ed := filepath.Join(dir, strings.Join(append(slices.Clip(names), ordinal(i, len(idx))), "."))
+		ed := filepath.Join(dir, elementName(names, i, len(idx), ix))
 		at := outerAt.with(Part{Root: root, Index: ix}, len(idx))
 		rec := Element{Fork: at.fork, Lens: at.lens, Position: i}
 
@@ -334,6 +344,18 @@ func (w forkWriter) source(root *syntax.CallGraphStage, outer Fork) (json.Marsha
 	idx, err := indicesOf(raw, root.Split().Source.CallMode())
 
 	return v, idx, err
+}
+
+// elementName names fork i of n at ix under the outer ordinals names. A map
+// key's fork also carries its IndexToken after an @, which the driver
+// matches a partner element by (partner); an array fork's is its ordinal.
+func elementName(names []string, i, n int, ix syntax.CollectionIndex) string {
+	name := strings.Join(append(slices.Clip(names), ordinal(i, n)), ".")
+	if ix.Mode() == syntax.ModeMapCall {
+		name += "@" + IndexToken(ix)
+	}
+
+	return name
 }
 
 func ordinal(i, n int) string {

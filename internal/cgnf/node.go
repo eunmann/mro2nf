@@ -16,10 +16,24 @@ import (
 // outputs, a disabled instance standing in with none.
 func (p *project) node(g *gen, i int, n cg.TopoNode) error {
 	g.linef("// %s", n.Fqid)
-	g.linef("i%d = channel.of([[], [], []])", i)
+
+	zr := zipRoots(n)
+	if len(n.Zips) == 0 {
+		g.linef("i%d = channel.of([[], [], []])", i)
+	} else {
+		g.linef("i%d = channel.of([[], [], [], []])", i)
+	}
 
 	for _, root := range n.Roots {
-		p.forkOn(g, i, n, root)
+		p.forkOn(g, i, n, root, zr)
+	}
+
+	for _, z := range n.Zips {
+		p.zip(g, i, z, n, zr)
+	}
+
+	if len(n.Zips) > 0 {
+		g.linef("i%d = i%d.map { k, fs, es, _tk -> [k, fs, es] }", i, i)
 	}
 
 	p.gate(g, i, n)
@@ -58,11 +72,26 @@ func (p *project) node(g *gen, i int, n cg.TopoNode) error {
 	return nil
 }
 
+// zipRoots are node n's roots, in its order, that one of its zips splits
+// over: an instance carries the index token of its fork of each.
+func zipRoots(n cg.TopoNode) []string {
+	var out []string
+
+	for _, r := range n.Roots {
+		if slices.ContainsFunc(n.Zips, func(z cg.Zip) bool { return z.Root == r }) {
+			out = append(out, r)
+		}
+	}
+
+	return out
+}
+
 // forkOn extends node i's instances by one of its roots: each instance
 // joins every fork of root under the instance's parts for root's outer
 // roots. An entry-fed root's forks are PLAN's records, passed as values; a
-// stage-fed root's are the element dirs its producer posted.
-func (p *project) forkOn(g *gen, i int, n cg.TopoNode, root string) {
+// stage-fed root's are the element dirs its producer posted. A node with
+// zips carries the index token of its fork of each root in zr.
+func (p *project) forkOn(g *gen, i int, n cg.TopoNode, root string, zr []string) {
 	r := p.roots[root]
 
 	outer := make([]int, len(r.Outer))
@@ -70,19 +99,48 @@ func (p *project) forkOn(g *gen, i int, n cg.TopoNode, root string) {
 		outer[o] = slices.Index(n.Roots, ro)
 	}
 
-	src, add := "f"+strconv.Itoa(slices.Index(p.entry, root)), "[k + [own], fs + [x], es]"
+	src, add := "f"+strconv.Itoa(slices.Index(p.entry, root)), "k + [own], fs + [x], es"
 	if r.Producer != "" {
-		src, add = p.elements(r), "[k + [own], fs, es + [x]]"
+		src, add = p.elements(r), "k + [own], fs, es + [x]"
 	}
 
-	g.linef("i%d = i%d.map { k, fs, es -> [%s, k, fs, es] }.combine(%s, by: 0).map { _o, k, fs, es, own, x -> %s }",
-		i, i, pick("k", outer), src, add)
+	tup, zipped := "k, fs, es", false
+	if len(n.Zips) > 0 {
+		zipped = slices.Contains(zr, root)
+		tup = "k, fs, es, tk"
+		add += ", tk"
+
+		if zipped {
+			add += " + [t]"
+		}
+	}
+
+	g.linef("i%d = i%d.map { %s -> [%s, %s] }.combine(%s, by: 0).map { _o, %s, own, x, %s -> [%s] }",
+		i, i, tup, pick("k", outer), tup, src, tup, param("t", zipped), add)
+}
+
+// zip adds to each instance of node i, whose fork of root z.Root has the
+// index token tk[j], z.Node's partner element at that token, posted by the
+// instance of z.Node agreeing with it on z.Node's roots, or, where it has
+// none, its absent record, which reads null or a missing element as mrp
+// reads the output's element there.
+func (p *project) zip(g *gen, i int, z cg.Zip, n cg.TopoNode, zr []string) {
+	q := p.topo.Nodes[p.index[z.Node]]
+
+	at := make([]int, len(q.Roots))
+	for x, r := range q.Roots {
+		at[x] = slices.Index(n.Roots, r)
+	}
+
+	g.linef("i%d = i%d.map { k, fs, es, tk -> [%s, k, fs, es, tk] }.combine(o%d_forks.map { kq, ds -> [kq, ds.findAll { e -> e.parent.name == %s }.collectEntries { e -> [(e.name): e] }] }, by: 0).map { _q, k, fs, es, tk, m -> [k, fs, es + ([m[tk[%d]] ?: m[%s]] - [null]), tk] }",
+		i, i, pick("k", at), p.index[z.Node], gstr(cg.PartnerDir(z.Root, z.Node, z.Output)), slices.Index(zr, z.Root), gstr(cg.AbsentName))
 }
 
 // elements is the channel of root's fork element dirs its producer posted,
-// each [outer key, own ordinal, dir]: an outer root the producer is forked
-// on takes the producer's ordinal for it, any other the ordinal the dir's
-// name carries before its own.
+// each [outer key, own ordinal, dir, index token]: an outer root the
+// producer is forked on takes the producer's ordinal for it, any other the
+// ordinal the dir's name carries before its own. A map key's token follows
+// the ordinals after an @; an array fork's is its ordinal.
 func (p *project) elements(r cg.TopoRoot) string {
 	prod := p.topo.Nodes[p.index[r.Producer]]
 
@@ -101,8 +159,13 @@ func (p *project) elements(r cg.TopoRoot) string {
 		named++
 	}
 
-	return fmt.Sprintf("o%d_forks.flatMap { %s, ds -> ds.findAll { e -> e.parent.name == %s }.collect { e -> def t = e.name.tokenize('.').collect { x -> x as int }; [[%s], t[-1], e] } }",
-		p.index[r.Producer], param("kp", usesKey), gstr(r.Fqid), strings.Join(keys, ", "))
+	ix := "t[-1].toString()"
+	if r.Keyed {
+		ix = "e.name.tokenize('@')[1]"
+	}
+
+	return fmt.Sprintf("o%d_forks.flatMap { %s, ds -> ds.findAll { e -> e.parent.name == %s }.collect { e -> def t = e.name.tokenize('@')[0].tokenize('.').collect { x -> x as int }; [[%s], t[-1], e, %s] } }",
+		p.index[r.Producer], param("kp", usesKey), gstr(r.Fqid), strings.Join(keys, ", "), ix)
 }
 
 // gate decides each instance of node i enabled or disabled, b<i>.run or
