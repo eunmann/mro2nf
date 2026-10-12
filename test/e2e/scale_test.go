@@ -325,22 +325,17 @@ func writeScaleInvocation(t *testing.T, dir string, s scaleShape, width int) str
 	return name
 }
 
-// joinSuffixes are the stageProcessNames suffixes of a split's join phase.
-var joinSuffixes = []string{"_JOIN", "_JOIN_K", "_JN"}
-
-// joinProcesses returns the join-phase process names of the program of
-// dir/mro.
+// joinProcesses returns the join-phase process names, the STAGE_JOIN
+// aliases, of the project transpiled from dir/mro.
 func joinProcesses(t *testing.T, dir, mro string) []string {
 	t.Helper()
 
-	prog, err := lowerMRO(dir, mro)
+	names, err := stageAliases(transpileMRO(t, dir, mro))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return slices.DeleteFunc(stageProcessNames(prog), func(name string) bool {
-		return !slices.ContainsFunc(joinSuffixes, func(s string) bool { return strings.HasSuffix(name, s) })
-	})
+	return slices.DeleteFunc(names, func(name string) bool { return !strings.HasSuffix(name, "_JN") })
 }
 
 // seq is the MRO int array body 1, 2, ..., n.

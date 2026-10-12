@@ -146,17 +146,12 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 func writeManifest(t *testing.T, mro, dir, path string) {
 	t.Helper()
 
-	ast, err := frontend.Parse(mro, []string{dir}, false)
+	_, _, ast, err := syntax.Compile(mro, []string{dir}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	prog, err := frontend.Lower(ast, []string{dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	man := types.BuildManifest(prog)
+	man := types.BuildManifest(frontend.Lower(ast))
 
 	enc, err := man.Encode()
 	if err != nil {

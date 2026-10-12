@@ -1,3 +1,7 @@
+// Package shim reads and writes the bundle directories the generated tasks
+// exchange (a JSON payload beside the files its leaves name, with the
+// @mre: markers that locate them) and confines a stage's outputs to its work
+// dir.
 package shim
 
 import (
@@ -14,6 +18,11 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
+)
+
+const (
+	filePerm = 0o644
+	dirPerm  = 0o755
 )
 
 // errDestExists is returned by CopyTree when the destination already exists, to
@@ -314,17 +323,6 @@ func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *typ
 	return writePayload(dir, marked)
 }
 
-// WriteNullBundle writes a bundle whose whole payload is JSON null: the output
-// of a skipped (disabled) call, which Martian resolves to null for a whole-call
-// ref and for every projection into it alike.
-func WriteNullBundle(dir string) error {
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
-		return fmt.Errorf("create bundle %s: %w", dir, err)
-	}
-
-	return writeRaw(filepath.Join(dir, bundleData), []byte("null"))
-}
-
 // writePayload writes a decoded payload as dir/data.json.
 func writePayload(dir string, payload map[string]any) error {
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
@@ -339,27 +337,12 @@ func writePayload(dir string, payload map[string]any) error {
 	return writeRaw(filepath.Join(dir, bundleData), data)
 }
 
-// WriteChunkBundle writes a chunk definition as a bundle: the chunk's args have
-// their file leaves (located via chunkIn) staged into the bundle, while the
-// resource overrides are preserved verbatim for the scheduler to read. conf
-// confines the split's files as WriteBundle's does.
-func WriteChunkBundle(dir string, def ChunkDef, chunkIn []ir.Param, tbl *types.Table, conf *Confinement) error {
-	argsMap := make(map[string]any, len(def.Args))
-	for k, v := range def.Args {
-		dv, err := decodeJSON(v)
-		if err != nil {
-			return fmt.Errorf("decode chunk arg %s: %w", k, err)
-		}
-
-		argsMap[k] = dv
+func writeRaw(path string, data []byte) error {
+	if err := os.WriteFile(path, data, filePerm); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 
-	marked, err := MarkFiles(dir, argsMap, chunkIn, tbl, conf)
-	if err != nil {
-		return err
-	}
-
-	return writePayload(dir, map[string]any{"args": marked, "resources": def.Resources})
+	return nil
 }
 
 // MarkFiles copies every file leaf in payload (located via params/tbl) into

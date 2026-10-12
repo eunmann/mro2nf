@@ -14,6 +14,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // TestForkElementKeys: GEN's post writes one fork element per map key, the
@@ -169,17 +170,12 @@ func fixtureManifest(t *testing.T, name string) types.Manifest {
 
 	dir := filepath.Join("..", "..", "testdata", name)
 
-	ast, err := frontend.Parse(filepath.Join(dir, "pipeline.mro"), []string{dir}, false)
+	_, _, ast, err := syntax.Compile(filepath.Join(dir, "pipeline.mro"), []string{dir}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	prog, err := frontend.Lower(ast, []string{dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return types.BuildManifest(prog)
+	return types.BuildManifest(frontend.Lower(ast))
 }
 
 // leafNames lists the files staged below a bundle's files dir.

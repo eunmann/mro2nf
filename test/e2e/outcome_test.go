@@ -8,7 +8,7 @@ package e2e
 // whether it was an ASSERT or an error. mrp marks an ASSERT with _assert and
 // any other failure with _errors, in the phase dir when stage code failed and in
 // the fork dir when mrp's own checks did. mro2nf marks an ASSERT with exit 42
-// (shim.AssertExitCode) and any other failure with another exit, and mre names
+// (job.AssertExitCode) and any other failure with another exit, and mre names
 // the stage in the task's _mre_stage. Leaving the rest out excuses real
 // differences, so each is an allowlist rule the comparison applies only while
 // its entry exists (divergences.json). Message text differs by design: mre
@@ -31,7 +31,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/test/divergence"
 )
 
@@ -217,7 +217,7 @@ func nextflowFailedOutcome(work string, failed []failedAttempt) (runOutcome, err
 		}
 
 		kind := failError
-		if a.Exit == shim.AssertExitCode {
+		if a.Exit == job.AssertExitCode {
 			kind = failAssert
 		}
 

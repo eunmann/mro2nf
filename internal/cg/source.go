@@ -112,12 +112,7 @@ func (s Source) Manifest(mroPaths []string) (types.Manifest, error) {
 		return types.Manifest{}, fmt.Errorf("compile %s: %w", s.Name, err)
 	}
 
-	prog, err := frontend.Lower(ast, mroPaths)
-	if err != nil {
-		return types.Manifest{}, fmt.Errorf("type manifest of %s: %w", s.Name, err)
-	}
-
-	return types.BuildManifest(prog), nil
+	return types.BuildManifest(frontend.Lower(ast)), nil
 }
 
 // Witness compiles the witness invocation of the source's call, whose call

@@ -25,6 +25,10 @@ const (
 	PhaseJoin  = "join"
 )
 
+// AssertExitCode is the exit code mre gives an ASSERT-class failure: the
+// generated config terminates on it rather than retry.
+const AssertExitCode = 42
+
 var (
 	// ErrAssert is a stage assertion (an _assert file), which mrp never
 	// retries (core/node.go:848 isErrorTransient).

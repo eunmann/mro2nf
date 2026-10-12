@@ -100,9 +100,9 @@
       "kind": "mechanism",
       "feature": "a mapped or disabled `(preflight)`",
       "summary": "A mapped or disabled preflight runs in DAG order, where mrp makes every other call in its pipeline wait for it, so a failing preflight stops that pipeline before they start.",
-      "justification": "A preflight has no outputs (mrp rejects one with `PreflightOutputError`), so the order changes no output: `preflight_ungated`'s outputs and stage invocations match mrp's. On a failing preflight, mrp has started no other call of its pipeline, while mro2nf may have. mro2nf warns at transpile time.",
+      "justification": "A preflight has no outputs (mrp rejects one with `PreflightOutputError`), so the order changes no output: `preflight_ungated`'s outputs and stage invocations match mrp's. On a failing preflight, mrp has started no other call of its pipeline, while mro2nf may have.",
       "issue": 314,
-      "evidence": ["TestMrpDiff/preflight_ungated", "TestWarningsPreflightUngateable"]
+      "evidence": ["TestMrpDiff/preflight_ungated"]
     }
   ]
 }

@@ -45,12 +45,7 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 	}
 
 	if g.types == "" {
-		man, err := graph.Manifest()
-		if err != nil {
-			return nil, types.Manifest{}, fmt.Errorf("load call graph: %w", err)
-		}
-
-		return graph, man, nil
+		return graph, graph.Manifest(), nil
 	}
 
 	man, err := types.LoadManifest(g.types)

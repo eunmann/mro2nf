@@ -18,10 +18,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/eunmann/mro2nf/internal/emit"
-	"github.com/eunmann/mro2nf/internal/frontend"
-	"github.com/eunmann/mro2nf/internal/ir"
 )
 
 // benchLane is one benchmark run: a fixture invocation (dir + entry .mro)
@@ -216,7 +212,7 @@ func runLane(t *testing.T, l benchLane, r laneRun) ([]byte, string) {
 
 	wall := time.Since(start)
 
-	stages, err := writeStageProcesses(r.dir, l.mro, proj, t.TempDir())
+	stages, err := writeStageProcesses(proj, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,27 +263,14 @@ func transpileLane(t *testing.T, l benchLane, r laneRun) string {
 }
 
 // writeStageProcesses writes, as a JSON array under tmp, every process name
-// the emitter can give a task that runs a stage's own code in the program of
-// dir/mro, and returns the file's path. stageProcessNames builds them from
-// the same inventory as the override selectors; under the call-graph
-// emitter they are the stage module's aliases proj's main.nf includes.
-// bench_metrics.py counts every other task as plumbing, so a new helper
-// process is plumbing without being listed.
-func writeStageProcesses(dir, mro, proj, tmp string) (string, error) {
-	var names []string
-
-	if v2Emitter() {
-		var err error
-		if names, err = stageAliases(proj); err != nil {
-			return "", err
-		}
-	} else {
-		prog, err := lowerMRO(dir, mro)
-		if err != nil {
-			return "", err
-		}
-
-		names = stageProcessNames(prog)
+// that runs a stage's own code in proj, the stage module's aliases its
+// main.nf includes, and returns the file's path. bench_metrics.py counts
+// every other task as plumbing, so a new helper process is plumbing without
+// being listed.
+func writeStageProcesses(proj, tmp string) (string, error) {
+	names, err := stageAliases(proj)
+	if err != nil {
+		return "", err
 	}
 
 	data, err := json.Marshal(names)
@@ -323,57 +306,6 @@ func stageAliases(proj string) ([]string, error) {
 	slices.Sort(names)
 
 	return names, nil
-}
-
-// lowerMRO parses and lowers the program of dir/mro.
-func lowerMRO(dir, mro string) (*ir.Program, error) {
-	mroPath := []string{dir}
-
-	ast, err := frontend.Parse(filepath.Join(dir, mro), mroPath, false)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", mro, err)
-	}
-
-	prog, err := frontend.Lower(ast, mroPath)
-	if err != nil {
-		return nil, fmt.Errorf("lower %s: %w", mro, err)
-	}
-
-	return prog, nil
-}
-
-// stageProcessNames returns, sorted, every process name the emitter can give a
-// task that runs a stage's own code: per stage the plain family, per pipeline
-// call the fused family and the keyed element scatter. Built from the exported
-// suffix inventory and emit.Qualify, it is the list writeStageProcesses counts as stage tasks;
-// internal/emit's TestStageProcessNames pins the same loop against the
-// processes the emitter actually generates.
-func stageProcessNames(prog *ir.Program) []string {
-	var names []string
-
-	for stage := range prog.Stages {
-		for _, s := range emit.PlainStageSuffixes() {
-			names = append(names, stage+s)
-		}
-	}
-
-	for _, p := range prog.Pipelines {
-		for _, c := range p.Calls {
-			q := emit.Qualify(p.Name, c.Name)
-
-			for _, s := range emit.FusedCallSuffixes() {
-				names = append(names, "STAGE_"+q+s)
-			}
-
-			for _, s := range emit.ScatterCallSuffixes() {
-				names = append(names, "FORK_"+q+s)
-			}
-		}
-	}
-
-	slices.Sort(names)
-
-	return names
 }
 
 // TestMrpDiffBenchJobs runs every bench invocation under real mrp and

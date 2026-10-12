@@ -119,13 +119,8 @@ func (g *Graph) Invocation() (*core.InvocationData, error) {
 
 // Manifest is the type manifest of the invocation's declarations, the one
 // the transpiler builds from the same source (types.BuildManifest).
-func (g *Graph) Manifest() (types.Manifest, error) {
-	prog, err := frontend.Lower(g.ast, g.mroPaths)
-	if err != nil {
-		return types.Manifest{}, fmt.Errorf("type manifest: %w", err)
-	}
-
-	return types.BuildManifest(prog), nil
+func (g *Graph) Manifest() types.Manifest {
+	return types.BuildManifest(frontend.Lower(g.ast))
 }
 
 // MroPaths are the include paths the invocation compiled with, mrp's

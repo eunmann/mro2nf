@@ -25,6 +25,12 @@ const (
 	chunkRecord   = "chunk.json"
 	joinRecord    = "join.json"
 	recordDirPerm = 0o750
+	// stageNameFile names the stage a job ran, in a file of mre's own beside
+	// the job's metadata. _jobinfo's "name" carries only the top-level call,
+	// and the Nextflow task graph is not a stable identity, so the mrp ABI
+	// differential reads this to group invocations by stage. The adapter
+	// never reads it, so it adds nothing to the _args/_jobinfo/_outs ABI.
+	stageNameFile = "_mre_stage"
 )
 
 var (
@@ -149,11 +155,15 @@ func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArg
 	return writeChunksDir(f.out, defs, man, callable(in), conf)
 }
 
-// stamp names the instance's stage in the job's metadata dir sub before the
-// job runs, as mre's own phases do (shim.StampStage), so a failed job is
-// attributed too.
+// stamp names the instance's stage in stageNameFile in the job's metadata
+// dir sub before the job runs, so a failed job is attributed too.
 func (f *runFlags) stamp(in job.Instance, sub string) error {
-	if err := shim.StampStage(filepath.Join(f.rt.Work, sub), in.Stage.Callable); err != nil {
+	meta := filepath.Join(f.rt.Work, sub)
+	if err := os.MkdirAll(meta, recordDirPerm); err != nil {
+		return fmt.Errorf("stamp %s: %w", sub, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(meta, stageNameFile), []byte(in.Stage.Callable), filePerm); err != nil {
 		return fmt.Errorf("stamp %s: %w", sub, err)
 	}
 
