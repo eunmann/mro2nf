@@ -177,4 +177,14 @@ includeConfig 'container.config'
 
 params.mro2nf_host_inputs = false
 params.outdir = '/mnt/workflow/pubdir'
+
+// HealthOmics gives a task whole GiB, rounding a fractional request down, and
+// refuses one under 1 GiB; rounding up keeps every task at or above mrp's
+// request. The stage still sees mrp's value in _jobinfo. Only a selector
+// outranks the stage modules' own memory directive.
+process {
+    withName: '.*' {
+        memory = { meta.mem_gb == null ? null : "${Math.max(1L, Math.ceil(meta.mem_gb as double) as long)} GB" }
+    }
+}
 `

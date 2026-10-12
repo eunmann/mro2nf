@@ -74,6 +74,26 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 	}
 }
 
+// TestEmitHealthOmicsRoundsMemoryUp: HealthOmics gives a task whole GiB,
+// rounding down and refusing 0, so only its profile asks for mrp's request
+// rounded up to a whole GiB, at least 1, through a selector that outranks the
+// stage modules' memory directive. AWS Batch and the grid take it exactly.
+func TestEmitHealthOmicsRoundsMemoryUp(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "diamond_min"))
+
+	rule := `withName: '.*' {
+        memory = { meta.mem_gb == null ? null : "${Math.max(1L, Math.ceil(meta.mem_gb as double) as long)} GB" }`
+	if !strings.Contains(tree["conf/healthomics.config"], rule) {
+		t.Errorf("conf/healthomics.config lacks the round-up rule %q:\n%s", rule, tree["conf/healthomics.config"])
+	}
+
+	for _, f := range []string{"nextflow.config", "conf/container.config"} {
+		if strings.Contains(tree[f], "Math.ceil") {
+			t.Errorf("%s rounds memory up, which reaches profiles other than healthomics:\n%s", f, tree[f])
+		}
+	}
+}
+
 // TestEmitHealthOmicsTemplate: the HealthOmics parameter template declares
 // every entry input and the run's mrp --overrides file, optional, and none
 // of the project's other params, which a run then cannot set: the image

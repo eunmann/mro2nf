@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -576,7 +577,7 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(string(out), "withName") {
+	if regexp.MustCompile(`withName[^\n]*container`).Match(out) {
 		t.Errorf("the package's config gives a task an image of its own:\n%s", out)
 	}
 }
