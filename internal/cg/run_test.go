@@ -3,6 +3,7 @@ package cg
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -298,49 +299,88 @@ func (s *standIn) node(n TopoNode) int {
 	return ran
 }
 
+// stages runs every instance of every node, returning the spec of the
+// pipeline outs task and how many instances ran enabled.
+func (s *standIn) stages() (OutsSpec, int) {
+	s.t.Helper()
+
+	topo, err := s.g.Topology()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+
+	entry := s.next("entry")
+	if err := s.g.PostEntry(entry); err != nil {
+		s.t.Fatal(err)
+	}
+
+	s.collect(entry, true, nil)
+
+	ran := 0
+	for _, n := range topo.Nodes {
+		ran += s.node(n)
+	}
+
+	return OutsSpec{
+		In: []string{s.staged(s.read(topo.Outs))}, Manifest: s.man,
+		Work: s.next("work"), Results: s.next("results"), OutsJSON: s.next("pipeline_outs.json"),
+	}, ran
+}
+
+// requirePanic fails t unless f panics with a value whose text contains want.
+func requirePanic(t *testing.T, want string, f func()) {
+	t.Helper()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("no panic, want one containing %q", want)
+		}
+
+		if got := fmt.Sprint(r); !strings.Contains(got, want) {
+			t.Fatalf("panic %q, want one containing %q", got, want)
+		}
+	}()
+
+	f()
+}
+
 // TestStandInRunOfEveryFixture runs every fixture's call graph end to end
 // on stand-in outs: every instance's _args resolve from what its task
 // stages, every enabled one posts its outs and fork elements, and the
-// pipeline outs resolve from the outs they read and publish.
+// pipeline outs resolve from the outs they read and publish, or panic as
+// Martian's pipestance does under mrp.
 func TestStandInRunOfEveryFixture(t *testing.T) {
 	skipped := map[string]string{
 		"rt_gate_split_reject":      "mrp refuses to instantiate it (#387)",
 		"rt_gate_split_reject_pass": "mrp refuses to instantiate it (#387)",
 		"rt_gate_split_reject_sub":  "mrp refuses to instantiate it (#387)",
 		"map_pipe_nested":           "mrp fails it: OUTER.INNER.DBL's merge matches no fork",
-		"nested_empty_forks":        "mrp panics making its pipestance, and WriteOuts, attaching it, panics the same way (#522)",
 		"split_gate_entry":          "it zips entry collections with SRC's outs, whose keys and lengths no stand-in knows",
+	}
+	panics := map[string]string{
+		"nested_empty_forks": "index out of range",
 	}
 	ran := 0
 
 	for _, mro := range entryFiles(t) {
-		if _, skip := skipped[filepath.Base(filepath.Dir(mro))]; skip {
+		fixture := filepath.Base(filepath.Dir(mro))
+		if _, skip := skipped[fixture]; skip {
 			continue
 		}
 
-		t.Run(filepath.Base(filepath.Dir(mro))+"/"+filepath.Base(mro), func(t *testing.T) {
+		t.Run(fixture+"/"+filepath.Base(mro), func(t *testing.T) {
 			s := newStandIn(t, mro)
 
-			topo, err := s.g.Topology()
-			if err != nil {
-				t.Fatal(err)
+			out, n := s.stages()
+			ran += n
+
+			if want, ok := panics[fixture]; ok {
+				requirePanic(t, want, func() { _ = s.g.WriteOuts(t.Context(), out) })
+
+				return
 			}
 
-			entry := s.next("entry")
-			if err := s.g.PostEntry(entry); err != nil {
-				t.Fatal(err)
-			}
-
-			s.collect(entry, true, nil)
-
-			for _, n := range topo.Nodes {
-				ran += s.node(n)
-			}
-
-			out := OutsSpec{
-				In: []string{s.staged(s.read(topo.Outs))}, Manifest: s.man,
-				Work: s.next("work"), Results: s.next("results"), OutsJSON: s.next("pipeline_outs.json"),
-			}
 			if err := s.g.WriteOuts(t.Context(), out); err != nil {
 				t.Fatalf("pipeline outs: %v", err)
 			}

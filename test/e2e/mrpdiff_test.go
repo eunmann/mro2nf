@@ -620,7 +620,8 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// leaves a dangling link; mro2nf fails the delivery.
 	{name: "dir_and_inner_file", mrp: runOutcome{}, divergence: "dir-and-inner-file"},
 	// #522: a nested map call whose inner forks are all empty. mrp panics
-	// before it makes the pipestance; mro2nf fails its OUTS task.
+	// while it makes the pipestance, before any stage runs; mro2nf fails its
+	// OUTS task.
 	{name: "nested_empty_forks", mrp: runOutcome{Failed: true}, divergence: "nested-empty-forks"},
 }
 
