@@ -170,8 +170,9 @@ type binary struct {
 // imageBuild is a `go build -o /out/<name> <package>` of the runtime image.
 var imageBuild = regexp.MustCompile(`-o /out/(\S+) (\S+)`)
 
-// binaries returns the shipped binaries: each command under cmd/, a release
-// binary, and each third-party command the runtime image builds (mrjob).
+// binaries returns the shipped binaries, each a release binary: each
+// command under cmd/, and each third-party command the runtime image builds
+// (mrjob).
 func binaries(root string) ([]binary, error) {
 	entries, err := os.ReadDir(filepath.Join(root, cmdDir))
 	if err != nil {
@@ -363,7 +364,7 @@ func Collect(ctx context.Context, root string) ([]Notice, error) {
 const header = `Third-party notices
 
 mro2nf is under the MIT license in LICENSE. Its release binaries (mro2nf,
-mre) and its runtime image (mre, mrjob and Martian's adapters at
+mre, mrjob) and its runtime image (mre, mrjob and Martian's adapters at
 /opt/mro2nf), which a pipeline's own image builds FROM, also contain
 the third-party code below, each under the license reproduced with its
 entry. "Shipped in" names the binaries that statically link the code and the

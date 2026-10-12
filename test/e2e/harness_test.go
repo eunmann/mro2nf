@@ -259,21 +259,36 @@ func repoTools() toolchain {
 // into proj. It returns the failure (with the tool output) instead of failing
 // the test, so batch callers can attribute a broken combo without aborting the
 // rest. The binaries must exist: buildBinaries builds repoTools. Every stage
-// runs under the real mrjob, as mrp runs py and comp stages.
+// runs under the real mrjob beside tools' mre, as mrp runs py and comp
+// stages.
 func transpileInto(tools toolchain, dir, mro, proj string, extra ...string) error {
-	args := slices.Concat([]string{
-		"-o", proj,
-		"-mre", tools.mre,
-		"-mrjob", filepath.Join(root, "mrjob"),
-		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
-		"-mropath", dir,
-	}, extra, []string{filepath.Join(dir, mro)})
+	args := slices.Concat([]string{"-o", proj, "-mropath", dir}, extra, []string{filepath.Join(dir, mro)})
 
 	cmd := exec.Command(tools.mro2nf, args...)
 	cmd.Dir = root
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("mro2nf: %w\n%s", err, out)
+	}
+
+	if tools.mre != repoTools().mre {
+		projectMre.Store(proj, tools.mre)
+	}
+
+	return nil
+}
+
+// projectMre maps each project transpileInto emitted for another mre than
+// the repo's, which every run finds on PATH, to that mre, which its runs
+// name with the project's mro2nf_mre param.
+var projectMre sync.Map
+
+// launchArgs are the args every run of proj gets: the mre it runs, when
+// not the repo's.
+func launchArgs(proj string) []string {
+	v, _ := projectMre.Load(proj)
+	if mre, ok := v.(string); ok {
+		return []string{"--mro2nf_mre", mre}
 	}
 
 	return nil
@@ -380,7 +395,7 @@ func execNextflowJVM(t *testing.T, proj, jvm string, args []string) error {
 	t.Helper()
 	shardSkip(t)
 
-	cmd := exec.Command("nextflow", append([]string{"run", "main.nf"}, args...)...)
+	cmd := exec.Command("nextflow", slices.Concat([]string{"run", "main.nf"}, args, launchArgs(proj))...)
 	cmd.Dir = proj
 	// Every run pays a fresh JVM, so startup dominates suite time: skip the
 	// remote version/plugin check (no fixture declares plugins), drop ANSI
@@ -394,7 +409,10 @@ func execNextflowJVM(t *testing.T, proj, jvm string, args []string) error {
 	// typed CLI overrides on the v1 parser (TRANSPILER.md §8): without it the
 	// floor engine turns `--b True` into a boolean before mre sees it. The v2
 	// parser, the default from 26.04, already passes CLI values as strings.
+	// The tasks find the repo's mre on PATH, as a project's tasks do by
+	// default.
 	env := append(os.Environ(),
+		"PATH="+root+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"NXF_ANSI_LOG=false",
 		"NXF_DISABLE_PARAMS_TYPE_DETECTION=true",
 		"NXF_OPTS="+strings.TrimSpace(os.Getenv("NXF_OPTS")+" -XX:TieredStopAtLevel=1 -Xms64m -Xmx512m "+jvm),

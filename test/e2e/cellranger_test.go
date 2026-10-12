@@ -120,18 +120,22 @@ func TestCellRangerDifferential(t *testing.T) {
 		t.Fatalf("mrp golden did not publish %s", goldenMetrics)
 	}
 
-	// 3. Transpile the SAME .mro (pure Go; no CellRanger env needed). Point
-	//    -mrjob/-shell at the bundle's own Martian runtime.
+	// 3. Transpile the SAME .mro (pure Go; no CellRanger env needed).
 	proj := filepath.Join(tmp, "nf")
 	transpileCellRanger(t, home, mro, proj)
 
-	// 4. Run the generated Nextflow with the bundle env sourced. The emitted
-	//    local profile clamps each task's request to the host (#207), so an
-	//    oversized reservation (the 30 GB cloupe join) runs instead of failing.
+	// 4. Run the generated Nextflow with the bundle env sourced, its stages
+	//    under the bundle's own Martian runtime. The emitted local profile
+	//    clamps each task's request to the host (#207), so an oversized
+	//    reservation (the 30 GB cloupe join) runs instead of failing.
+	martian := filepath.Join(home, "external", "martian")
 	crBash(t, home, proj, "nextflow run",
 		"NXF_ANSI_LOG=false NXF_OFFLINE=true NXF_OPTS='-Xms256m -Xmx2g' "+
 			"nextflow -q run main.nf -profile standard -with-trace trace.txt "+
-			"-work-dir "+shellQuote(filepath.Join(tmp, "nfwork")))
+			"-work-dir "+shellQuote(filepath.Join(tmp, "nfwork"))+
+			" --mro2nf_mre "+shellQuote(filepath.Join(root, "mre"))+
+			" --mro2nf_mrjob "+shellQuote(filepath.Join(martian, "bin", "mrjob"))+
+			" --mro2nf_adapters "+shellQuote(filepath.Join(martian, "adapters")))
 
 	nfOuts := filepath.Join(proj, "results")
 
@@ -159,18 +163,11 @@ func TestCellRangerDifferential(t *testing.T) {
 	reportTaskShape(t, filepath.Join(proj, "trace.txt"))
 }
 
-// transpileCellRanger runs the built mro2nf on a bundle .mro into proj, wiring the
-// bundle's Martian runtime for the comp/py stages.
+// transpileCellRanger runs the built mro2nf on a bundle .mro into proj.
 func transpileCellRanger(t *testing.T, home, mro, proj string) {
 	t.Helper()
 
-	cmd := exec.Command(filepath.Join(root, "mro2nf"),
-		"-mropath", filepath.Join(home, "mro"),
-		"-mre", filepath.Join(root, "mre"),
-		"-mrjob", filepath.Join(home, "external", "martian", "bin", "mrjob"),
-		"-shell", filepath.Join(home, "external", "martian", "adapters", "python", "martian_shell.py"),
-		"-o", proj, mro,
-	)
+	cmd := exec.Command(filepath.Join(root, "mro2nf"), "-mropath", filepath.Join(home, "mro"), "-o", proj, mro)
 	cmd.Dir = root
 
 	if out, err := cmd.CombinedOutput(); err != nil {

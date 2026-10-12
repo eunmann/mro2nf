@@ -62,13 +62,26 @@ def args(Map meta, List forks, List leaves) {
     return cmd + ")\n[ \"\$state\" = enabled ] || { echo ${shq('mre args: ' + meta.node + ' is not enabled where its gates said enabled')} >&2; exit 1; }"
 }
 
+// on reads a boolean param, which a launch's --<name> false sets to the
+// string 'false' under the v2 syntax parser or
+// NXF_DISABLE_PARAMS_TYPE_DETECTION, a value Groovy takes as true.
+def on(v) {
+    return v.toString() == 'true'
+}
+
 // rest may be a GString, which Nextflow 24.04 does not pass for a String.
 def job(Map meta, phase, rest) {
-    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -adapters ${shq(params.mro2nf_adapters)} -mrjob ${shq(params.mro2nf_mrjob)} -psid ${shq(params.mro2nf_psid)} -work ."
-    if (params.mro2nf_monitor) {
+    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -psid ${shq(params.mro2nf_psid)} -work ."
+    if (params.mro2nf_adapters) {
+        cmd += " -adapters ${shq(params.mro2nf_adapters)}"
+    }
+    if (params.mro2nf_mrjob) {
+        cmd += " -mrjob ${shq(params.mro2nf_mrjob)}"
+    }
+    if (on(params.mro2nf_monitor)) {
         cmd += ' -monitor'
     }
-    if (params.mro2nf_confine) {
+    if (on(params.mro2nf_confine)) {
         cmd += ' -confine'
     }
     return cmd + ' ' + rest
@@ -88,12 +101,13 @@ def resources(String table) {
     }
 }
 
-// mem is the memory a task is scheduled with. Under -monitor mrjob kills a
-// stage at its own request, as mrp does, so a retry gets the same memory;
+// mem is the memory a task is scheduled with. Under params.mro2nf_monitor
+// mrjob kills a stage at its own request, as mrp does, so a retry gets the
+// same memory;
 // otherwise a retry, after a signal such as the executor's out-of-memory
 // kill, gets more. The stage sees its request either way (_jobinfo).
 def mem(Map meta, int attempt) {
-    return "${params.mro2nf_monitor ? meta.mem_gb : meta.mem_gb * attempt} GB"
+    return "${on(params.mro2nf_monitor) ? meta.mem_gb : meta.mem_gb * attempt} GB"
 }
 
 process STAGE {

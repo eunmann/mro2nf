@@ -69,8 +69,8 @@ func runJob(ctx context.Context, argv []string) error {
 	fs.StringVar(&f.chunk, "chunk", "", "main of a split stage: the chunk's dir in the split's chunks dir")
 	fs.StringVar(&f.chunks, "chunks", "", "join: the split's chunks dir")
 	fs.StringVar(&f.chunkOuts, "chunkouts", "", "join: the dir holding each chunk's outs bundle, named as its chunk")
-	fs.StringVar(&f.rt.Adapters, "adapters", "", "Martian's adapters dir")
-	fs.StringVar(&f.rt.Mrjob, "mrjob", "", "the mrjob binary py and comp stages run under")
+	fs.StringVar(&f.rt.Adapters, "adapters", "", "Martian's adapters dir (default: the adapters mre embeds)")
+	fs.StringVar(&f.rt.Mrjob, "mrjob", "", "the mrjob binary py and comp stages run under (default: the mrjob beside mre)")
 	fs.BoolVar(&f.rt.Monitor, "monitor", false, "mrp --monitor: mrjob enforces the job's memory and thread limits")
 	fs.StringVar(&f.rt.PSID, "psid", "", "the pipestance id job names carry")
 	fs.StringVar(&f.rt.Work, "work", ".", "the dir to hold the job's metadata and journal")
@@ -87,6 +87,10 @@ func runJob(ctx context.Context, argv []string) error {
 
 	in, args, err := f.instance(g)
 	if err != nil {
+		return err
+	}
+
+	if err := f.tools(in.Stage.Code); err != nil {
 		return err
 	}
 

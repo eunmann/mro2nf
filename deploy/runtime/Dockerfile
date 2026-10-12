@@ -1,7 +1,7 @@
-# Runtime image for transpiled mro2nf pipelines, and the one definition of
-# /opt/mro2nf: the `mre` shim, the `mrjob` py and comp stages run under, and the
-# Martian adapters, at the paths the generated project's container profiles
-# name, with their LICENSE and THIRD_PARTY_NOTICES. A pipeline's image builds
+# Runtime image for transpiled mro2nf pipelines, at /opt/mro2nf on PATH, where
+# the generated project's tasks find mre: the `mre` shim, the `mrjob` beside it
+# that py and comp stages run under, and a copy of the Martian adapters mre
+# embeds, with their LICENSE and THIRD_PARTY_NOTICES. A pipeline's image builds
 # FROM it and adds the pipeline's code (README: Container image).
 #
 # Use the tag matching the mro2nf version that generated your project so the mre
@@ -39,3 +39,4 @@ COPY --from=build /out/mre /out/mrjob /opt/mro2nf/
 COPY vendor-martian/python /opt/mro2nf/adapters/python
 COPY LICENSE THIRD_PARTY_NOTICES /opt/mro2nf/
 RUN chmod +x /opt/mro2nf/mre /opt/mro2nf/mrjob
+ENV PATH="/opt/mro2nf:${PATH}"

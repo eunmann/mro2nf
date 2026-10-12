@@ -63,7 +63,7 @@ func TestEmitEveryFixture(t *testing.T) {
 			}
 
 			out := filepath.Join(t.TempDir(), "proj")
-			opts := Options{OutDir: out, Mre: "/opt/mre", Mrjob: "/opt/mrjob", Adapters: "/opt/adapters", MroPaths: []string{abs}, Version: "test"}
+			opts := Options{OutDir: out, MroPaths: []string{abs}, Version: "test"}
 			err = Emit(filepath.Join(abs, "pipeline.mro"), opts)
 
 			if slices.Contains(mrpRefused, name) {

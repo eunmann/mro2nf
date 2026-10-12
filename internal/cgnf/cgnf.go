@@ -40,20 +40,12 @@ func reserved(param string) bool {
 	return param == "outdir" || param == "job_resources" || strings.HasPrefix(param, "mro2nf_")
 }
 
-// Options are the paths and knobs a generated project bakes in.
+// Options are where a project is emitted and what it bakes in.
 type Options struct {
 	// OutDir receives the project.
 	OutDir string
-	// Mre, Mrjob and Adapters are the absolute paths of the mre binary, the
-	// mrjob py and comp stages run under, and Martian's adapters dir.
-	Mre, Mrjob, Adapters string
 	// MroPaths are the absolute include paths the invocation compiles with.
 	MroPaths []string
-	// Monitor is mrp's --monitor.
-	Monitor bool
-	// Confine fails a stage task whose output resolves outside its work
-	// dir instead of copying it in (mre run -confine).
-	Confine bool
 	// Version names the build in every task's cache key.
 	Version string
 }
@@ -136,7 +128,7 @@ func (p *project) addTargetFiles(files map[string]string) error {
 	}
 
 	maps.Copy(files, map[string]string{
-		"conf/container.config":   containerConfig(),
+		"conf/container.config":   containerConfig,
 		"conf/healthomics.config": healthomicsConfig,
 		"package.sh":              packageScript,
 		"parameter-template.json": tmpl,

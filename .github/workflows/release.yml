@@ -82,8 +82,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # Static and path-free, as the Makefile's build target explains.
-      - name: Build mro2nf + mre
+      # Static and path-free, as the Makefile's build target explains. mrjob
+      # is the pinned Martian module's, as `make build` builds it; mre runs
+      # the mrjob beside it.
+      - name: Build mro2nf + mre + mrjob
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -93,10 +95,11 @@ jobs:
             out="${bin}-${{ matrix.goos }}-${{ matrix.goarch }}"
             go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "$out" "./cmd/${bin}"
           done
+          go build -trimpath -o "mrjob-${{ matrix.goos }}-${{ matrix.goarch }}" github.com/martian-lang/martian/cmd/mrjob
       - name: Check the linux binaries are static
         if: matrix.goos == 'linux'
         run: |
-          for bin in mro2nf mre; do
+          for bin in mro2nf mre mrjob; do
             f="${bin}-linux-${{ matrix.goarch }}"
             file "$f" | grep -q 'statically linked' || { file "$f"; echo "::error::$f is not statically linked"; exit 1; }
           done
@@ -106,6 +109,7 @@ jobs:
           path: |
             mro2nf-${{ matrix.goos }}-${{ matrix.goarch }}
             mre-${{ matrix.goos }}-${{ matrix.goarch }}
+            mrjob-${{ matrix.goos }}-${{ matrix.goarch }}
           if-no-files-found: error
 
   # A single job publishes the release: the 4 build legs racing to create the
@@ -134,7 +138,7 @@ jobs:
           pattern: binaries-*
           merge-multiple: true
       - name: Write SHA256SUMS
-        run: LC_ALL=C sha256sum mro2nf-* mre-* > SHA256SUMS && cat SHA256SUMS
+        run: LC_ALL=C sha256sum mro2nf-* mre-* mrjob-* > SHA256SUMS && cat SHA256SUMS
       # GitHub offers no attestations to private repositories owned by a user
       # account, so the step would fail every release there.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -148,6 +152,7 @@ jobs:
           files: |
             mro2nf-*
             mre-*
+            mrjob-*
             SHA256SUMS
             LICENSE
             THIRD_PARTY_NOTICES

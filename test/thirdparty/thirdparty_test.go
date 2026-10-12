@@ -167,6 +167,46 @@ func TestShippedArtifactsCarryNotices(t *testing.T) {
 	}
 }
 
+// TestReleaseShipsEveryBinary keeps each shipped binary, mrjob included, in
+// the release: built per target, attached and in SHA256SUMS, so a
+// downloaded mre finds its mrjob beside it.
+func TestReleaseShipsEveryBinary(t *testing.T) {
+	bins, err := binaries(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(repoRoot, releaseYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	release := string(raw)
+
+	var sums string
+
+	for line := range strings.Lines(release) {
+		if strings.Contains(line, "sha256sum ") {
+			sums = line
+		}
+	}
+
+	for _, name := range names(bins) {
+		for _, want := range []string{
+			"\n            " + name + "-${{ matrix.goos }}-${{ matrix.goarch }}\n",
+			"\n            " + name + "-*\n",
+		} {
+			if !strings.Contains(release, want) {
+				t.Errorf("%s lacks %q", releaseYAML, strings.TrimSpace(want))
+			}
+		}
+
+		if !strings.Contains(sums, " "+name+"-* ") {
+			t.Errorf("%s does not checksum %s: %q", releaseYAML, name, strings.TrimSpace(sums))
+		}
+	}
+}
+
 func TestSPDX(t *testing.T) {
 	cases := []struct {
 		name, text, want string

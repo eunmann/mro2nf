@@ -18,7 +18,7 @@ func emitFixture(t *testing.T, name string) string {
 
 	dir := fixturePath(t, name)
 	out := t.TempDir()
-	opts := Options{OutDir: out, Mre: "/opt/mre", Mrjob: "/opt/mrjob", Adapters: "/opt/adapters", MroPaths: []string{dir}, Version: "v1.2.3"}
+	opts := Options{OutDir: out, MroPaths: []string{dir}, Version: "v1.2.3"}
 
 	if err := Emit(filepath.Join(dir, "pipeline.mro"), opts); err != nil {
 		t.Fatal(err)
@@ -144,6 +144,42 @@ func fixturePath(t *testing.T, name string) string {
 	}
 
 	return dir
+}
+
+// TestEmitNamesNoHostTools: every task runs the mre on PATH, and mre the
+// mrjob beside it and the adapters it embeds, unless the run names its own,
+// so a project names no tool path of the host that emitted it.
+func TestEmitNamesNoHostTools(t *testing.T) {
+	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
+
+	for _, want := range []string{"params.mro2nf_mre = 'mre'\n", "params.mro2nf_mrjob = null\n", "params.mro2nf_adapters = null\n"} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+		}
+	}
+
+	for _, want := range []string{
+		"if (params.mro2nf_adapters) {\n        cmd += \" -adapters ${shq(params.mro2nf_adapters)}\"",
+		"if (params.mro2nf_mrjob) {\n        cmd += \" -mrjob ${shq(params.mro2nf_mrjob)}\"",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+}
+
+// TestEmitConfinesAtLaunch: a stage task's outputs are confined to its
+// work dir (mre run -confine) only when the run sets params.mro2nf_confine.
+func TestEmitConfinesAtLaunch(t *testing.T) {
+	cfg := readTree(t, emitFixture(t, "file_min"))["nextflow.config"]
+
+	if !strings.Contains(cfg, "params.mro2nf_confine = false\n") {
+		t.Errorf("nextflow.config does not leave confinement off:\n%s", cfg)
+	}
+
+	if !strings.Contains(stageModule, "if (on(params.mro2nf_confine)) {\n        cmd += ' -confine'") {
+		t.Error("stage.nf does not confine on params.mro2nf_confine")
+	}
 }
 
 // TestEmitAliases: every stage node of the witness's call graph is one
@@ -283,22 +319,24 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 
 // TestEmitRetriesWhatMrpRetries: a task is retried, as many times as mrp
 // retries a job, only on mre's transient exit or a signal's, never on a
-// stage exception, an ASSERT or a failed mre step; and under -monitor a
-// retry keeps the stage's own memory, at which mrjob kills it as mrp does.
+// stage exception, an ASSERT or a failed mre step; and under monitor, a
+// launch param off by default, a retry keeps the stage's own memory, at
+// which mrjob kills it as mrp does.
 func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
 
 	for _, want := range []string{
 		"errorStrategy = { task.exitStatus in [75, 137, 143] ? 'retry' : 'terminate' }",
 		"maxRetries = 2",
+		"params.mro2nf_monitor = false\n",
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
 		}
 	}
 
-	if !strings.Contains(stageModule, `"${params.mro2nf_monitor ? meta.mem_gb : meta.mem_gb * attempt} GB"`) {
-		t.Error("stage.nf escalates a retry's memory under -monitor")
+	if !strings.Contains(stageModule, `"${on(params.mro2nf_monitor) ? meta.mem_gb : meta.mem_gb * attempt} GB"`) {
+		t.Error("stage.nf escalates a retry's memory under monitor")
 	}
 }
 

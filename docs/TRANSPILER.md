@@ -91,7 +91,6 @@ internal/
   ir/            → typed parameters of the program's callables and structs
   types/         → type-directed file-leaf walk + type manifest
   shim/          → bundle I/O, markers, output confinement
-  config/        → .mro2nf.yml project defaults for the transpiler flags
   logging/       → log/slog setup (stderr)
 ```
 
@@ -116,21 +115,9 @@ with `mrp`'s message, and no project is written.
   `mrp`, the entry's own directory is searched first for the entry's includes
   and its stages' code only: every compile of the run's invocation, in the
   transpiler and in each task, compiles it as the entry file.
-- `-mre`, `-shell`, `-mrjob`: the tools every task runs, baked into
-  `nextflow.config`. `-shell` names Martian's python adapter
-  (`<adapters>/python/martian_shell.py`), and the project takes Martian's
-  adapters dir from it; it is required. `-mrjob` defaults to the `mrjob` beside
-  `-mre`. A relative path is made absolute, against the working directory for a
-  flag and against the config file's directory for a `.mro2nf.yml` key. A bare
-  `-mre` or `-mrjob` name stays a `PATH` command.
-- `-monitor`: mrp's `--monitor`; `mrjob` enforces each job's memory and thread
-  limits.
-- `-confine-outputs`: fail a stage task whose output resolves outside its work
-  dir instead of copying it in (§7) on the local and grid profiles too; the
-  container profiles always confine.
-- `-config <path>`: a `.mro2nf.yml` of per-project defaults (`mre`, `shell`,
-  `mrjob`, `monitor`); an explicit flag always wins.
 - `-version`.
+
+Everything else is a launch param of the project (§4).
 
 **The witness.** A transpile cannot know a run's invocation, so it compiles a
 *witness* one (`cg.Source.Witness`): every entry input a value of its type with
@@ -186,16 +173,28 @@ records mre wrote; it parses no stage-controlled JSON.
   `clusterOptions` of a grid executor.
 - `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
   `mro2nf_monitor` and `mro2nf_confine`: the tools and knobs the stage module
-  reads; `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs`, the entry
-  file values a run stages (§8); and `mro2nf_image`, the one image the
-  container profiles run every task in, which they require
-  (`mro2nf_require_image`, §9).
+  reads. Every task runs the `mre` on `PATH`; `mre` runs the `mrjob` beside
+  its own binary, as `mrp` runs the `mrjob` beside its own, and the adapters
+  it embeds (§6). A run names other tools with `--mro2nf_mre`,
+  `--mro2nf_mrjob` and `--mro2nf_adapters`, such as a pipeline bundle's own
+  Martian runtime, so the project names no host path of the tools.
+  `--mro2nf_monitor true` is `mrp`'s `--monitor`: `mrjob` enforces each job's
+  memory and thread limits. `--mro2nf_confine true` fails a stage task whose
+  output resolves outside its work dir instead of copying it in (§7) on the
+  local and grid profiles too; the container profiles always confine. A
+  boolean param is on only when it is `true` or the string `'true'`, as a
+  launch's `--<name> <value>` sets it under the v2 parser or
+  `NXF_DISABLE_PARAMS_TYPE_DETECTION` (§8).
+  `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
+  values a run stages (§8), and `mro2nf_image` the one image the container
+  profiles run every task in, which they require (`mro2nf_require_image`,
+  §9).
 - One `params.<name> = null` per entry input (§8).
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
   the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
   such as the executor's out-of-memory kill. An ASSERT (42), a stage exception
   or a failed `mre` step ends the run on its first attempt. A retry gets the
-  stage's memory times the attempt, except under `-monitor`, where `mrjob`
+  stage's memory times the attempt, except under monitor, where `mrjob`
   kills the stage at its own request as `mrp` does and `mrp` does not retry
   that kill.
 - One `accelerator` rule, evaluated per task, that requests N GPUs for a job
@@ -338,11 +337,16 @@ type manifest from the invocation's own declarations.
   `mrp --strict` is not supported.
 - **`mre run -phase split|main|join`** runs one phase of the instance that
   `-args` stamps as `mrp` runs its job (`internal/job`). py and comp stages run
-  under `mrjob`, built from the pinned module (`make build`), with `mrp`'s argv:
+  under `mrjob`, built from the pinned module (`make build`), with `mrp`'s argv
+  (`core/node.go` `runJob`):
   `mrjob <adapters>/python/martian_shell.py <code> <phase> <meta>
-  <meta>/files <journal>`. Exec stages run directly. Before the job, mre writes
-  what `mrp` writes, through Martian's own types and metadata writer: `_args`
-  (the chunk or join def's resolved resources over the bindings), `_jobinfo`,
+  <meta>/files <journal>`. Exec stages run directly. `-mrjob` defaults to the
+  `mrjob` beside mre's binary, and `-adapters` to Martian's adapters mre
+  embeds (`vendor-martian/python`, the pinned module's `adapters/python`),
+  which a py stage's job writes below its work dir, as `_mre_adapters`.
+  Before the job, mre writes what `mrp` writes, through Martian's own types and
+  metadata writer: `_args` (the chunk or join def's resolved resources over the
+  bindings), `_jobinfo`,
   the pre-populated `_outs`, `_chunk_defs` and `_chunk_outs` for a join, and the
   files, tmp and journal dirs. `_jobinfo` carries `mrp`'s name,
   `ID.<psid>.<fqid>.<fork id>[.chnkN]`, the top-level call's invocation, the
@@ -514,9 +518,9 @@ the bundle), a path in the work dir outside the stage's phase dir, i.e. a staged
 input (followed wherever it points, hard-linked), or a host path outside the
 task:
 
-- Under `-confine-outputs` (`mre run -confine`), such a path cannot be valid in
-  an isolated container downstream, and copying it would upload host data, so
-  the task fails, naming the output.
+- Under `--mro2nf_confine true` (`mre run -confine`), such a path cannot be
+  valid in an isolated container downstream, and copying it would upload host
+  data, so the task fails, naming the output.
 - Otherwise, where `mrp` publishes a symlink and pipelines legitimately return
   paths into host reference dirs, the target is staged as a byte copy, never a
   hard link, so no later write through the bundle can alias the host file.
@@ -596,24 +600,22 @@ neither param, so a HealthOmics run cannot set them.
 ## 9. Targets, executors and resources
 
 **Targets are profiles of one project** (`nextflow run -profile <name>`): the
-`.nf` files are the same everywhere, and a profile sets only where the tools
-are, which executor runs the tasks and in which image.
+`.nf` files are the same everywhere, and a profile sets only which executor
+runs the tasks and in which image; every task finds `mre` on `PATH`.
 
 - Every profile finds the code where the project was transpiled from: a
   stage task compiles the entry `.mro`, its includes and its stages' code at
   their absolute transpile-time paths; PLAN and OUTS compile the project's
   `.mro` copy (§4) and need no code.
 - `standard` (the local executor) and the grid profiles (`slurm`, `sge`,
-  `lsf`, `pbs`) run on the host's tools (`params.mro2nf_mre`, `_mrjob`,
-  `_adapters`, the transpile's `-mre`, `-mrjob`, `-shell`) and code, on a
-  shared filesystem.
+  `lsf`, `pbs`) run on the host's `mre` and code, on a shared filesystem.
 - The container profiles, `docker`, `awsbatch` and `healthomics`, include
-  `conf/container.config`: the tools at `/opt/mro2nf`, outputs confined to the
-  task (§7), and every task, PLAN and OUTS included, in the one image
+  `conf/container.config`: outputs confined to the task (§7), and every
+  task, PLAN and OUTS included, in the one image
   `params.mro2nf_image`. They set `params.mro2nf_require_image`, so a launch
   without an image fails before PLAN.
-- **The image.** `deploy/runtime/Dockerfile` is the one definition of
-  `/opt/mro2nf` (`mre`, `mrjob`, Martian's adapters), published as
+- **The image.** `deploy/runtime/Dockerfile` puts `mre` and the `mrjob`
+  beside it on the image's `PATH` at `/opt/mro2nf`, published as
   `ghcr.io/eunmann/mro2nf-runtime:<version>` by each release (its `v*` tag).
   The user's image builds `FROM` it and adds the pipeline's code at the paths
   the project was transpiled from (README, "Container image"); a stage `src`

@@ -7,8 +7,9 @@ import (
 )
 
 // TestEmitTargetsAsProfiles: one project runs on every target, chosen at
-// launch with -profile (#309): the local and grid profiles find the tools
-// on the host, the container profiles in the image, and every task of a
+// launch with -profile (#309): every profile finds mre on PATH, the host's
+// for the local and grid profiles and the image's for the container
+// profiles, which name no tool path of their own, and every task of a
 // container profile, PLAN and OUTS included, runs in the one image
 // params.mro2nf_image names; a container profile without it fails at once.
 // A stage task finds the code at the paths the project was transpiled from,
@@ -18,7 +19,7 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 	cfg, ctr, ho := tree["nextflow.config"], tree["conf/container.config"], tree["conf/healthomics.config"]
 
 	for _, want := range []string{
-		"params.mro2nf_mre = '/opt/mre'\n",
+		"params.mro2nf_mre = 'mre'\n",
 		"params.mro2nf_image = null\nparams.mro2nf_require_image = false\n",
 		"    docker {\n        process.executor = 'local'\n",
 		"        docker.enabled = true\n        includeConfig 'conf/container.config'\n",
@@ -35,9 +36,6 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"params.mro2nf_mre = '/opt/mro2nf/mre'\n",
-		"params.mro2nf_mrjob = '/opt/mro2nf/mrjob'\n",
-		"params.mro2nf_adapters = '/opt/mro2nf/adapters'\n",
 		"params.mro2nf_confine = true\n",
 		"params.mro2nf_require_image = true\n",
 		"process.container = params.mro2nf_image\n",
@@ -51,6 +49,12 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 		t.Errorf("conf/container.config gives a task an image of its own:\n%s", ctr)
 	}
 
+	for _, tool := range []string{"params.mro2nf_mre", "params.mro2nf_mrjob", "params.mro2nf_adapters"} {
+		if strings.Contains(ctr, tool) {
+			t.Errorf("conf/container.config names %s, where the image's PATH holds mre:\n%s", tool, ctr)
+		}
+	}
+
 	for _, want := range []string{"includeConfig 'container.config'\n", "params.mro2nf_host_inputs = false\n", "params.outdir = '/mnt/workflow/pubdir'\n"} {
 		if !strings.Contains(ho, want) {
 			t.Errorf("conf/healthomics.config lacks %q:\n%s", want, ho)
@@ -58,7 +62,7 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 	}
 
 	main := tree["main.nf"]
-	if !strings.Contains(main, "if (params.mro2nf_require_image && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
+	if !strings.Contains(main, "if (on(params.mro2nf_require_image) && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
 		t.Errorf("main.nf does not refuse a container profile without an image before PLAN:\n%s", main)
 	}
 

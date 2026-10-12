@@ -4,13 +4,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
 // sqMRO splits SQ over xs, one chunk per element; OFF is the same stage
-// disabled.
+// disabled, and ONE a py stage with no split.
 const sqMRO = `stage SQ(
     in  int[] xs,
     out int   total,
@@ -18,6 +20,12 @@ const sqMRO = `stage SQ(
 ) split (
     in  int   x,
     out int   sq,
+)
+
+stage ONE(
+    in  int   x,
+    out int   y,
+    src py    "one",
 )
 
 pipeline P(
@@ -34,6 +42,10 @@ pipeline P(
         xs = self.xs,
     ) using (
         disabled = self.off,
+    )
+
+    call ONE(
+        x = 1,
     )
 
     return (
@@ -81,6 +93,10 @@ func writeSQ(t *testing.T) string {
 	}
 
 	if err := os.WriteFile(filepath.Join(dir, "sq.sh"), []byte(sqScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Mkdir(filepath.Join(dir, "one"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,15 +148,21 @@ func TestRunPhasesOfASplitStage(t *testing.T) {
 }
 
 // TestRunRefusals: mre run refuses a disabled instance, a phase the stage
-// has no job for, and an unknown phase, before it runs any stage code.
+// has no job for, an unknown phase, and a py job whose work dir cannot hold
+// the adapters mre embeds, before it runs any stage code.
 func TestRunRefusals(t *testing.T) {
 	dir, work := writeSQ(t), t.TempDir()
-	args, off := filepath.Join(work, "args"), filepath.Join(work, "off")
+	args, off, one := filepath.Join(work, "args"), filepath.Join(work, "off"), filepath.Join(work, "one")
 
-	for node, dst := range map[string]string{"P.SQ": args, "P.OFF": off} {
+	for node, dst := range map[string]string{"P.SQ": args, "P.OFF": off, "P.ONE": one} {
 		if _, err := runSQ(t, dir, "args", "-node", node, "-o", dst); err != nil {
 			t.Fatalf("mre args %s: %v", node, err)
 		}
+	}
+
+	file := filepath.Join(work, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	for _, tc := range []struct {
@@ -150,10 +172,16 @@ func TestRunRefusals(t *testing.T) {
 	}{
 		{"disabled", []string{"-phase", "main", "-args", off}, errDisabledJob},
 		{"phase", []string{"-phase", "chunk", "-args", args}, errPhase},
+		{"split", []string{"-phase", "split", "-args", one, "-mrjob", "/opt/mrjob"}, errNotSplit},
+		{"join", []string{"-phase", "join", "-args", one, "-mrjob", "/opt/mrjob"}, errNotSplit},
 	} {
 		argv := append([]string{"run", "-o", filepath.Join(work, tc.name), "-work", filepath.Join(work, tc.name+"-work")}, tc.argv...)
 		if _, err := runSQ(t, dir, argv...); !errors.Is(err, tc.want) {
 			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
 		}
+	}
+
+	if _, err := runSQ(t, dir, "run", "-phase", "main", "-args", one, "-o", filepath.Join(work, "adapters"), "-work", file); !errors.Is(err, syscall.ENOTDIR) || !strings.Contains(err.Error(), "extract adapters") {
+		t.Errorf("py main over a file work dir: %v, want the adapters' extraction's ENOTDIR", err)
 	}
 }

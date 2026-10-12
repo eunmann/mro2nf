@@ -9,10 +9,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/job"
 )
 
-// imageRoot is where mro2nf's runtime image (deploy/runtime/Dockerfile)
-// holds mre, mrjob and Martian's adapters.
-const imageRoot = "/opt/mro2nf"
-
 // config renders nextflow.config: the engine floor, the tools, code and
 // knobs the stage module reads, one param per entry input, the retry
 // policy and the profiles a run is launched with.
@@ -29,16 +25,25 @@ params.outdir = 'results'
 // a stage's special key to the clusterOptions of a grid executor.
 params.job_resources = [:]
 
-// The tools every task runs: the host's for the local and grid profiles,
-// the image's for the container profiles (conf/container.config).
+// The mre every task runs, a PATH command by default: the host's on the
+// local and grid profiles, the image's on the container profiles. mre runs
+// py and comp stages under the mrjob beside it and py stages with the
+// Martian adapters it embeds; set these to run another Martian runtime's,
+// such as a pipeline bundle's own.
+params.mro2nf_mre = 'mre'
+params.mro2nf_mrjob = null
+params.mro2nf_adapters = null
+
+// mrp's --monitor: mrjob enforces each job's memory and thread limits.
+params.mro2nf_monitor = false
+
+// Fail a stage task whose output resolves outside its work dir instead of
+// copying it in, for a run under an isolating executor such as docker.
+params.mro2nf_confine = false
+
 `)
 
-	fmt.Fprintf(&b, "params.mro2nf_mre = %s\n", gstr(p.opts.Mre))
-	fmt.Fprintf(&b, "params.mro2nf_mrjob = %s\n", gstr(p.opts.Mrjob))
-	fmt.Fprintf(&b, "params.mro2nf_adapters = %s\n", gstr(p.opts.Adapters))
-	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n", gstr(p.src.Invocation.Call))
-	fmt.Fprintf(&b, "params.mro2nf_monitor = %t\n", p.opts.Monitor)
-	fmt.Fprintf(&b, "params.mro2nf_confine = %t\n\n", p.opts.Confine)
+	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n\n", gstr(p.src.Invocation.Call))
 
 	b.WriteString(`// The entry file values a run stages: a head-node path where the profile
 // sees the head node's files, an s3:// URI always, and a URI of any other
@@ -145,21 +150,15 @@ profiles {
 }
 `
 
-// containerConfig is conf/container.config, the container profiles' tools,
-// where the runtime image puts them, and the one image every task runs in.
-// Outputs are confined to the task, as no other task could see a path
-// outside it.
-func containerConfig() string {
-	return fmt.Sprintf(`// The container profiles' tools and image (nextflow.config).
-params.mro2nf_mre = '%[1]s/mre'
-params.mro2nf_mrjob = '%[1]s/mrjob'
-params.mro2nf_adapters = '%[1]s/adapters'
+// containerConfig is conf/container.config, the one image every task of
+// the container profiles runs in, whose PATH holds mre. Outputs are
+// confined to the task, as no other task could see a path outside it.
+const containerConfig = `// The container profiles' image (nextflow.config).
 params.mro2nf_confine = true
 params.mro2nf_require_image = true
 
 process.container = params.mro2nf_image
-`, imageRoot)
-}
+`
 
 // healthomicsConfig is conf/healthomics.config: HealthOmics runs every
 // task in a private-ECR container with no head-node files, manages the
