@@ -241,6 +241,30 @@ func TestEmitZipsByToken(t *testing.T) {
 	}
 }
 
+// TestEmitSizesForkedGathers: a forked call's gather of its share of an
+// inner map call is a groupKey of that share's fork count, from PLAN's
+// counts for an entry-fed root (BY_ENTRY) or the producer's posted forks
+// (BY_STAGE, by MKLIST), with an empty gather for a share with no fork;
+// TestForkedGatherStreams runs one (map_nested_gather).
+func TestEmitSizesForkedGathers(t *testing.T) {
+	main := readTree(t, emitFixture(t, "map_nested_gather"))["main.nf"]
+
+	for _, want := range []string{
+		".combine(PLAN.out.n1.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); [f.size() > 1 ? f[1].tokenize('.').collect { t -> t as int } : [], f[0] as int] } }, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }",
+		".combine(o2_forks.map { kp, ds -> [[kp[0]], ds.count { e -> e.parent.name == 'MNG.BY_STAGE.SQ' }] }, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }",
+		".filter { v -> v[2] == 0 }.map { v -> [v[1], []] })",
+		`eval('cat \'counts/MNG.BY_ENTRY.SQ\''), emit: n1`,
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if strings.Contains(main, ".unique().mix(") {
+		t.Errorf("a forked gather waits for all of its upstream:\n%s", main)
+	}
+}
+
 // TestEmitWaitsForPreflights: a preflight signals once every instance of it
 // is done, and each instance of a node it gates waits for that signal
 // (modifiers_min: CHECK gates INNER's DOUBLE and TRIPLE).

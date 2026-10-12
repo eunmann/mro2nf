@@ -18,7 +18,7 @@ import (
 
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
-	source, values, mropath, out, nodes, roots, work string
+	source, values, mropath, out, nodes, roots, counts, work string
 }
 
 // runPlan starts a run: it rebuilds the invocation from the transpiled
@@ -38,6 +38,7 @@ func runPlan(_ context.Context, argv []string) error {
 	fs.StringVar(&f.out, "o", "plan", "dir to write the invocation .mro into")
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys")
 	fs.StringVar(&f.roots, "roots", "roots", "dir to write one file per entry-fed fork root into, a line per fork: key record index-token")
+	fs.StringVar(&f.counts, "counts", "counts", "dir to write one file per entry-fed fork root into, a line per fork of its outer roots: count key")
 	fs.StringVar(&f.work, "work", ".", "scratch dir")
 
 	if err := fs.Parse(argv); err != nil {
@@ -148,14 +149,22 @@ func (f *planFlags) write(name string, p cg.Plan) error {
 		return err
 	}
 
-	for root, forks := range p.Roots {
-		var b strings.Builder
+	for root, pr := range p.Roots {
+		var forks, counts strings.Builder
 
-		for _, pf := range forks {
-			fmt.Fprintf(&b, "%s %s %s\n", cg.DottedKey(pf.Key), pf.Record, pf.Token)
+		for _, pf := range pr.Forks {
+			fmt.Fprintf(&forks, "%s %s %s\n", cg.DottedKey(pf.Key), pf.Record, pf.Token)
 		}
 
-		if err := writeText(filepath.Join(f.roots, root), b.String()); err != nil {
+		for _, pc := range pr.Counts {
+			fmt.Fprintf(&counts, "%d %s\n", pc.N, cg.DottedKey(pc.Key))
+		}
+
+		if err := writeText(filepath.Join(f.roots, root), forks.String()); err != nil {
+			return err
+		}
+
+		if err := writeText(filepath.Join(f.counts, root), counts.String()); err != nil {
 			return err
 		}
 	}

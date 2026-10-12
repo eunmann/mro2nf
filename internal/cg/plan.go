@@ -25,7 +25,22 @@ import (
 type Plan struct {
 	Source string
 	Nodes  []PlanNode
-	Roots  map[string][]PlanFork
+	Roots  map[string]PlanRoot
+}
+
+// PlanRoot is an entry-fed root's forks, and their count under each fork
+// of the witness's outer roots, none left out, so a gather over the root
+// knows its size, also when it is empty.
+type PlanRoot struct {
+	Forks  []PlanFork
+	Counts []PlanCount
+}
+
+// PlanCount is the fork count of a root under one fork of its outer roots,
+// keyed by their ordinals.
+type PlanCount struct {
+	Key []int
+	N   int
 }
 
 // PlanNode is one witness node at run start. Digest identifies the node's
@@ -113,10 +128,10 @@ func EncodeElement(el Element) (string, error) {
 }
 
 // entryForks are the forks of the witness's entry-fed roots, keyed by the
-// witness's outer roots: a root the invocation gives a fork set of known
-// length repeats it under every fork of the outer roots the witness's
-// varies with.
-func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, map[string][]entryFork, error) {
+// witness's outer roots, and their count under each fork of those: a root
+// the invocation gives a fork set of known length repeats it under every
+// fork of the outer roots the witness's varies with.
+func (g *Graph) entryForks(wt Topology, scratch string) (map[string]PlanRoot, map[string][]entryFork, error) {
 	dir := filepath.Join(scratch, "entry")
 	if err := g.PostEntry(dir); err != nil {
 		return nil, nil, err
@@ -126,7 +141,7 @@ func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, 
 	sort.SliceStable(roots, func(i, j int) bool { return len(roots[i].Outer) < len(roots[j].Outer) })
 
 	planned := map[string][]entryFork{}
-	out := map[string][]PlanFork{}
+	out := map[string]PlanRoot{}
 
 	for _, r := range roots {
 		if r.Producer != "" {
@@ -138,7 +153,7 @@ func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, 
 			return nil, nil, err
 		}
 
-		out[r.Fqid] = []PlanFork{}
+		pr := PlanRoot{Forks: []PlanFork{}, Counts: []PlanCount{}}
 
 		for _, c := range assignments(r.Outer, planned) {
 			n := 0
@@ -155,14 +170,18 @@ func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, 
 
 				ef := entryFork{el: el, ords: c.with(r.Fqid, n)}
 				planned[r.Fqid] = append(planned[r.Fqid], ef)
-				out[r.Fqid] = append(out[r.Fqid], PlanFork{
+				pr.Forks = append(pr.Forks, PlanFork{
 					Key:    ef.key(append(slices.Clone(r.Outer), r.Fqid)),
 					Record: rec,
 					Token:  IndexToken(el.Fork[len(el.Fork)-1].Index),
 				})
 				n++
 			}
+
+			pr.Counts = append(pr.Counts, PlanCount{Key: entryFork{ords: c.ords}.key(r.Outer), N: n})
 		}
+
+		out[r.Fqid] = pr
 	}
 
 	return out, planned, nil

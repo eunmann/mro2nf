@@ -216,21 +216,20 @@ func (p *project) gate(g *gen, i int, n cg.TopoNode) {
 // read adds to each enabled instance of node i the outs bundles it reads of
 // node r.Node: the instance agreeing on every root they share, or, when
 // the upstream is forked on roots node i is not, every such instance, a
-// gather seeded so an empty one still yields its consumer and ordered by
-// the upstream's key, not by completion.
+// gather ordered by the upstream's key, not by completion.
 func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
 	u := p.index[r.Node]
 	up := p.topo.Nodes[u]
 
 	var mine, theirs []int
 
-	gather := false
+	var extra []string
 
 	for x, root := range up.Roots {
 		if at := slices.Index(n.Roots, root); at >= 0 {
 			mine, theirs = append(mine, at), append(theirs, x)
 		} else {
-			gather = true
+			extra = append(extra, root)
 		}
 	}
 
@@ -241,7 +240,11 @@ func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
 
 	src := fmt.Sprintf("o%d_outs.map { %s, ds -> [%s, %s] }", u, param("ku", len(theirs) > 0), pick("ku", theirs), sel)
 
-	if gather {
+	switch cnt, sized := p.forkCounts(n, up, extra); {
+	case sized:
+		p.sizedGather(g, i, n, up, sel, cnt)
+		src = fmt.Sprintf("h%d_%d", i, u)
+	case len(extra) > 0:
 		g.linef("h%d_%d = b%d.run.map { %s -> [%s, null] }.unique().mix(o%d_outs.map { ku, ds -> [%s, %s.collect { e -> [ku, e] }] }).groupTuple().map { c, dss -> [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })] }",
 			i, u, i, param("v", len(mine) > 0), pick("v[0]", mine), u, pick("ku", theirs), sel)
 		src = fmt.Sprintf("h%d_%d", i, u)
@@ -249,6 +252,69 @@ func (p *project) read(g *gen, i int, n cg.TopoNode, r cg.Read) {
 
 	g.linef("u%d = u%d.map { k, fs, es, d, us -> [%s, k, fs, es, d, us] }.combine(%s, by: 0).map { _c, k, fs, es, d, us, ds -> [k, fs, es, d, us + ds] }",
 		i, i, pick("k", mine), src)
+}
+
+// forkCounts is the channel of the fork counts of root extra[0] under each
+// fork of its outer roots, [outer key, count], none left out, for a gather
+// over it by a node i that is forked, each of whose instances then starts
+// once its own share of the gather is in, not the whole of it. It is false
+// for another gather: over several roots, or over one whose outer roots i
+// does not share or whose producer's post enumerates them itself, whose
+// counts no one item carries; such a gather waits for all of its upstream,
+// as one consumed by an unforked node does by nature.
+func (p *project) forkCounts(n, up cg.TopoNode, extra []string) (string, bool) {
+	if len(extra) != 1 || len(n.Roots) == 0 || len(up.Roots) == 1 {
+		return "", false
+	}
+
+	r := p.roots[extra[0]]
+	for _, o := range r.Outer {
+		if !slices.Contains(n.Roots, o) {
+			return "", false
+		}
+	}
+
+	if r.Producer == "" {
+		return fmt.Sprintf("PLAN.out.n%d.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); [f.size() > 1 ? f[1].tokenize('.').collect { t -> t as int } : [], f[0] as int] } }",
+			slices.Index(p.entry, r.Fqid)), true
+	}
+
+	prod := p.topo.Nodes[p.index[r.Producer]]
+
+	at := make([]int, len(r.Outer))
+	for x, o := range r.Outer {
+		if at[x] = slices.Index(prod.Roots, o); at[x] < 0 {
+			return "", false
+		}
+	}
+
+	return fmt.Sprintf("o%d_forks.map { %s, ds -> [%s, ds.count { e -> e.parent.name == %s }] }",
+		p.index[r.Producer], param("kp", len(at) > 0), pick("kp", at), gstr(r.Fqid)), true
+}
+
+// sizedGather gathers, for each instance of node i, the outs of every
+// instance of up under it, by groupKey with their count, which cnt gives
+// for the outer fork of the gathered root the instance's key fixes; an
+// instance under which the root has no fork gets an empty gather at once.
+func (p *project) sizedGather(g *gen, i int, n, up cg.TopoNode, sel, cnt string) {
+	extra := slices.IndexFunc(up.Roots, func(r string) bool { return !slices.Contains(n.Roots, r) })
+	outer := p.roots[up.Roots[extra]].Outer
+
+	var mine, theirs, outerMine, outerTheirs []int
+
+	for x, root := range up.Roots {
+		if at := slices.Index(n.Roots, root); at >= 0 {
+			mine, theirs = append(mine, at), append(theirs, x)
+		}
+
+		if slices.Contains(outer, root) {
+			outerMine, outerTheirs = append(outerMine, slices.Index(n.Roots, root)), append(outerTheirs, x)
+		}
+	}
+
+	u := p.index[up.Fqid]
+	g.linef("h%d_%d = o%d_outs.map { ku, ds -> [%s, %s, %s.collect { e -> [ku, e] }] }.combine(%s, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }.groupTuple().map { gk, dss -> [gk.getGroupTarget(), ordered(dss.collectMany { x -> x })] }.mix(b%d.run.map { v -> [%s, %s] }.unique().combine(%s, by: 0).filter { v -> v[2] == 0 }.map { v -> [v[1], []] })",
+		i, u, u, pick("ku", outerTheirs), pick("ku", theirs), sel, cnt, i, pick("v[0]", outerMine), pick("v[0]", mine), cnt)
 }
 
 // splitTriad runs a split node: its split, a main per chunk the split

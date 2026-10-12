@@ -11,12 +11,13 @@ import (
 // rewrites the invocation at the session's plan path, which tasks read by
 // that constant path instead of staging it, so a task's cache key holds
 // its own node's digest and not the whole invocation. Its records reach
-// the driver as values: one eval per entry-fed root.
+// the driver as values: per entry-fed root, its forks and their counts.
 func (p *project) planProcess(g *gen) {
 	var outs strings.Builder
 
 	for j, root := range p.entry {
 		fmt.Fprintf(&outs, "    eval(%s), emit: r%d\n", gstr("cat "+shellQuote("roots/"+root)), j)
+		fmt.Fprintf(&outs, "    eval(%s), emit: n%d\n", gstr("cat "+shellQuote("counts/"+root)), j)
 	}
 
 	fmt.Fprintf(&g.procs, `process PLAN {
@@ -35,7 +36,7 @@ func (p *project) planProcess(g *gen) {
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(params.mro2nf_mre)} plan -source source.json -values values.json -mropath ${shq(meta.mropath)} -o ${shq(meta.plan)} -nodes nodes -roots roots
+    ${shq(params.mro2nf_mre)} plan -source source.json -values values.json -mropath ${shq(meta.mropath)} -o ${shq(meta.plan)} -nodes nodes -roots roots -counts counts
     """
 }
 

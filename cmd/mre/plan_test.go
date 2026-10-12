@@ -59,6 +59,7 @@ func plan(t *testing.T, fixture, values string) (string, error) {
 	err := run(t.Context(), []string{
 		"plan", "-source", source, "-values", vf, "-mropath", fx, "-work", work,
 		"-o", filepath.Join(work, "plan"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
+		"-counts", filepath.Join(work, "counts"),
 	})
 
 	return work, err
@@ -80,14 +81,17 @@ func readText(t *testing.T, path string) string {
 // call's forks by the outer fork and its own, as mrp forks OUTER/INNER/DBL:
 // three under the first set and one under the second, and two under each
 // when every set has two, a fork set of known length the witness's varies
-// with the outer fork. Each DBL fork's records give it mrp's _args.
+// with the outer fork. Each DBL fork's records give it mrp's _args, and
+// the plan counts DBL's forks under each outer fork, for a gather over
+// them to know its size.
 func TestPlanNestedEntryForks(t *testing.T) {
 	cases := []struct {
-		sets string
-		want []string
+		sets   string
+		want   []string
+		counts string
 	}{
-		{`[[1,2,3],[4]]`, []string{"0.0", "0.1", "0.2", "1.0"}},
-		{`[[1,2],[3,4]]`, []string{"0.0", "0.1", "1.0", "1.1"}},
+		{`[[1,2,3],[4]]`, []string{"0.0", "0.1", "0.2", "1.0"}, "3 0\n1 1\n"},
+		{`[[1,2],[3,4]]`, []string{"0.0", "0.1", "1.0", "1.1"}, "2 0\n2 1\n"},
 	}
 
 	wantArgs := []string{`{"x":1}`, `{"x":2}`, `{"x":3}`, `{"x":4}`}
@@ -109,6 +113,10 @@ func TestPlanNestedEntryForks(t *testing.T) {
 
 		if d := cmp.Diff(tc.want, keys); d != "" {
 			t.Errorf("sets %s: DBL's fork keys (-mrp +plan):\n%s", tc.sets, d)
+		}
+
+		if d := cmp.Diff(tc.counts, readText(t, filepath.Join(work, "counts", "OUTER.INNER.DBL"))); d != "" {
+			t.Errorf("sets %s: DBL's fork counts (-want +plan):\n%s", tc.sets, d)
 		}
 
 		if d := cmp.Diff(wantArgs, nestedArgs(t, work, lines)); d != "" {

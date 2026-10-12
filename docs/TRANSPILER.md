@@ -247,7 +247,13 @@ consumer.
 
 **Reads.** An enabled instance stages, of each node it reads, only the outputs
 it reads (`outs/<output>/`): from the instance that shares its roots, or, a
-gather, from every such instance under a seeded `groupTuple`.
+gather, from every such instance under it. A forked instance's gather over one
+inner map call is a `groupKey` of its share's fork count, which PLAN writes for
+an entry-fed root and the producer's posted forks give for a stage-fed one, an
+empty share gathering at once, so each instance starts when its own share is
+done (`mrp` itself waits for every fork of a node it reads;
+`TestForkedGatherStreams`). Any other gather is a seeded `groupTuple` over all
+of its upstream, which an unforked consumer needs anyway.
 
 **Split stages.** A split's chunk outs are gathered by `groupKey` over the
 chunk count. Each chunk's main and the join are scheduled with the
