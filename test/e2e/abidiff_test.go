@@ -25,9 +25,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 const (
@@ -370,9 +370,10 @@ var (
 	// chunkDir names a chunk's metadata dir, mrp's and `mre run`'s main
 	// phase alike.
 	chunkDir = regexp.MustCompile(`^chnk[0-9]+$`)
-	// mrpInvocationCall reads the stage from a fork's _invocation, which mrp
-	// writes as `call <STAGE>(` or `call <STAGE> as <ALIAS>(`.
-	mrpInvocationCall = regexp.MustCompile(`(?m)^call\s+(\w+)(?:\s+as\s+\w+)?\s*\(`)
+	// mrpInvocationCall reads the callable from a fork's _invocation, which
+	// mrp writes as `call <STAGE>(` or `call <STAGE> as <ALIAS>(`, and a
+	// mapped pipeline's fork as `map call <PIPELINE>(`.
+	mrpInvocationCall = regexp.MustCompile(`(?m)^(?:map\s+)?call\s+(\w+)(?:\s+as\s+\w+)?\s*\(`)
 )
 
 // collectMrpInvocations walks an mrp pipestance for every phase that ran. A
@@ -446,9 +447,25 @@ func mrpStageName(fork string) (string, error) {
 }
 
 // mrpGraphStage is the stage of fork's node in the call graph of the
-// pipestance's source, _mrosource in the nearest dir above fork that has
-// one; the node's fqid is its dir below that one.
+// pipestance's source (mrpForkNode).
 func mrpGraphStage(fork string) (string, error) {
+	stage, ok, err := mrpForkNode(fork)
+
+	switch {
+	case err != nil:
+		return "", err
+	case !ok:
+		return "", fmt.Errorf("%w: %s is a fork of no stage", errABIMeta, fork)
+	default:
+		return stage, nil
+	}
+}
+
+// mrpForkNode looks fork's node up in the call graph of the pipestance's
+// source, _mrosource in the nearest dir above fork that has one, the
+// node's fqid being its dir below that one: the stage it runs, and false
+// for a pipeline's fork.
+func mrpForkNode(fork string) (string, bool, error) {
 	node := filepath.Dir(fork)
 
 	for ps := filepath.Dir(node); ps != filepath.Dir(ps); ps = filepath.Dir(ps) {
@@ -458,28 +475,37 @@ func mrpGraphStage(fork string) (string, error) {
 		}
 
 		if err != nil {
-			return "", fmt.Errorf("read pipestance source: %w", err)
+			return "", false, fmt.Errorf("read pipestance source: %w", err)
 		}
 
-		g, err := cg.Compile(src, "_mrosource", []string{ps})
+		var p syntax.Parser
+
+		_, _, ast, err := p.ParseSourceBytes(src, "_mrosource", []string{ps}, false)
 		if err != nil {
-			return "", fmt.Errorf("%w: %s: %w", errABIMeta, ps, err)
+			return "", false, fmt.Errorf("%w: %s: %w", errABIMeta, ps, err)
+		}
+
+		graph, err := ast.MakePipelineCallGraph("", ast.Call)
+		if err != nil {
+			return "", false, fmt.Errorf("%w: %s: %w", errABIMeta, ps, err)
 		}
 
 		rel, err := filepath.Rel(ps, node)
 		if err != nil {
-			return "", fmt.Errorf("%w: %w", errABIMeta, err)
+			return "", false, fmt.Errorf("%w: %w", errABIMeta, err)
 		}
 
-		st, err := g.Stage(strings.ReplaceAll(rel, string(filepath.Separator), "."))
-		if err != nil {
-			return "", fmt.Errorf("%w: %s: %w", errABIMeta, fork, err)
+		switch n := graph.NodeClosure()[strings.ReplaceAll(rel, string(filepath.Separator), ".")].(type) {
+		case *syntax.CallGraphStage:
+			return n.Call().DecId, true, nil
+		case *syntax.CallGraphPipeline:
+			return n.Call().DecId, false, nil
+		default:
+			return "", false, fmt.Errorf("%w: %s is no node of %s/_mrosource", errABIMeta, node, ps)
 		}
-
-		return st.Call().DecId, nil
 	}
 
-	return "", fmt.Errorf("%w: no call in %s/_invocation and no pipestance source above it", errABIMeta, fork)
+	return "", false, fmt.Errorf("%w: no pipestance source above %s", errABIMeta, fork)
 }
 
 // collectNextflowInvocations reads every phase mre ran in a Nextflow work dir

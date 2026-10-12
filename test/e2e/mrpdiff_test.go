@@ -576,6 +576,40 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "rt_gate_split_reject_pass", mrp: runOutcome{Failed: true}},
 }
 
+// v2OutcomeCases are fixtures mrp fails on that the old emitter runs to a
+// committed golden (mrpUnrunnable says why mrp cannot run them). The
+// call-graph emitter fails each as mrp does, so under E2E_EMITTER=v2 they
+// are outcome cases and no golden cases: a relative entry path names
+// nothing from the stage's job dir, and a merge of a nested map call over a
+// sub-pipeline matches no fork. Step D folds them into mrpOutcomeCases with
+// the old emitter's goldens (#470).
+var v2OutcomeCases = []mrpOutcomeCase{
+	{name: "entry_file", mrp: failedIn(failError, "COUNT")},
+	{name: "entry_filearr", mrp: failedIn(failError, "COUNTARR")},
+	{name: "entry_struct_file", mrp: failedIn(failError, "READCFG")},
+	{name: "entry_mapfile", mrp: failedIn(failError, "COUNTMAP")},
+	{name: "entry_dir", mrp: failedIn(failError, "COUNTDIR")},
+	{name: "entry_file_empty", mrp: failedIn(failError, "SUMMARIZE")},
+	{name: "split_from_file", mrp: failedIn(failError, "SQUARELINES")},
+	{name: "map_pipe_nested", mrp: failedIn(failError, "")},
+}
+
+// outcomeCases are the cases TestMrpDiffFailureParity compares for the
+// emitter under test.
+func outcomeCases() []mrpOutcomeCase {
+	if v2Emitter() {
+		return slices.Concat(mrpOutcomeCases, v2OutcomeCases)
+	}
+
+	return mrpOutcomeCases
+}
+
+// v2OutcomeCase reports a fixture that is an outcome case, not a golden
+// one, under the emitter under test.
+func v2OutcomeCase(fixture string) bool {
+	return v2Emitter() && slices.ContainsFunc(v2OutcomeCases, func(c mrpOutcomeCase) bool { return c.name == fixture })
+}
+
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
 // and requires the published file tree, the _outs JSON and every stage
 // invocation's _args, _outs and _jobinfo allocation to match.
@@ -713,7 +747,7 @@ func TestMrpDiffFailureParity(t *testing.T) {
 	bin := martianBin(t)
 	allow := mustAllowlist(t)
 
-	for _, tc := range mrpOutcomeCases {
+	for _, tc := range outcomeCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			shardSkip(t)

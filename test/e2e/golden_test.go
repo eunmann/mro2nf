@@ -249,6 +249,10 @@ func TestGolden(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			if v2OutcomeCase(tc.name) {
+				t.Skip("mrp fails this invocation and so does -emitter=v2: TestMrpDiffFailureParity compares the outcome")
+			}
+
 			fixtureDir := filepath.Join(root, "testdata", tc.fixture)
 			proj := transpile(t, tc.fixture)
 

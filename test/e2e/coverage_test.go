@@ -203,13 +203,14 @@ func unappliedAllowlistEntries(allow divergence.Allowlist, named map[string][]st
 
 // unappliedRuleFixtures reports each fixture an issue-tracked rule entry
 // names that is not in the case table whose comparison applies the rule:
-// mrpOutcomeCases for an outcome rule, mrpDiffCases for the rest.
+// mrpOutcomeCases or, compared under -emitter=v2 only, v2OutcomeCases for
+// an outcome rule, mrpDiffCases for the rest.
 func unappliedRuleFixtures(e divergence.Entry, diffed map[string]bool) []string {
 	table, cases := "mrpDiffCases", diffed
 
 	if e.Kind == divergence.KindOutcome {
 		table, cases = "mrpOutcomeCases", map[string]bool{}
-		for _, tc := range mrpOutcomeCases {
+		for _, tc := range slices.Concat(mrpOutcomeCases, v2OutcomeCases) {
 			cases[tc.name] = true
 		}
 	}
