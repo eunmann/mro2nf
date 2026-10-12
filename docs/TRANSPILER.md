@@ -256,9 +256,9 @@ done (`mrp` itself waits for every fork of a node it reads;
 of its upstream, which an unforked consumer needs anyway.
 
 **Split stages.** A split's chunk outs are gathered by `groupKey` over the
-chunk count. Each chunk's main and the join are scheduled with the
-`__threads`, `__mem_gb` and `__special` the split returned for them, read on
-the driver from the chunk's `chunk.json` and the split's `join.json`.
+chunk count. Each chunk's main and the join are scheduled with the cpus, memory
+and special their jobs get, the split's `resources.tsv`, an `eval` value the
+driver splits into rows without parsing a record.
 
 **OUTS.** The last task resolves the pipeline outs with `mre outs` and lays them
 out with `mre publish-layout` as `mrp` publishes them: the `outs/` tree, named
@@ -318,7 +318,10 @@ the invocation's own declarations.
   the error matches a `retry_on` pattern of `mrp`'s `jobmanagers/retry.json` (a
   signal, ENOMEM, a scheduler failure). A split writes `-o` as one dir per
   chunk, named as `mrp` names it (`chnkN`), with its args bundle and
-  `chunk.json`, plus `join.json`. A main or join writes its outs bundle. The
+  `chunk.json`, plus `join.json` and `resources.tsv`: per chunk, then the join,
+  its name, cpus, memory and special, as its job's `_jobinfo` records them
+  (`job.Resources`, Martian's resolution of the stage's `using` under the def
+  the split returned). A main or join writes its outs bundle. The
   files a job names in either are confined to the work dir (§7), strict under
   `-confine`. Beside the job's metadata mre writes `_mre_stage`, the name of
   the stage the job ran. The adapter never reads it; the `mrp` ABI differential

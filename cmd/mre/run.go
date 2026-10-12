@@ -6,9 +6,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
@@ -22,9 +24,11 @@ import (
 // The records of a split's chunks dir: each chunk's position and resources
 // beside its args bundle, and the join's resources at the top.
 const (
-	chunkRecord   = "chunk.json"
-	joinRecord    = "join.json"
-	recordDirPerm = 0o750
+	chunkRecord    = "chunk.json"
+	joinRecord     = "join.json"
+	resourcesTable = "resources.tsv"
+	joinRow        = "join"
+	recordDirPerm  = 0o750
 	// stageNameFile names the stage a job ran, in a file of mre's own beside
 	// the job's metadata. _jobinfo's "name" carries only the top-level call,
 	// and the Nextflow task graph is not a stable identity, so the mrp ABI
@@ -40,6 +44,7 @@ var (
 	errNoChunk     = errors.New("no outs bundle for chunk")
 	errChunkCount  = errors.New("chunks dir holds fewer chunks than the split returned")
 	errNotChunkDir = errors.New("not a dir")
+	errSpecialLine = errors.New("a special holding a line break has no resources table row")
 )
 
 // runFlags are `mre run`'s inputs beside the call graph's.
@@ -152,7 +157,46 @@ func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArg
 		return err
 	}
 
-	return writeChunksDir(f.out, defs, man, callable(in), conf)
+	if err := writeChunksDir(f.out, defs, man, callable(in), conf); err != nil {
+		return err
+	}
+
+	return writeResources(filepath.Join(f.out, resourcesTable), in.Stage.Using, defs)
+}
+
+// writeResources writes the table a split's chunks and join are scheduled
+// by: per chunk, then the join, its name, cpus, memory in GB and special,
+// tab-separated, as each job's _jobinfo records them (job.Resources), so
+// the driver reads them without parsing the chunk records.
+func writeResources(path string, using *core.JobResources, defs *core.StageDefs) error {
+	var b strings.Builder
+
+	row := func(name string, def *core.JobResources) error {
+		res := job.Resources(using, def)
+		if strings.ContainsAny(res.Special, "\n\r") {
+			return fmt.Errorf("resources of %s: %w: %q", name, errSpecialLine, res.Special)
+		}
+
+		fmt.Fprintf(&b, "%s\t%d\t%s\t%s\n", name, int(math.Max(1, math.Ceil(res.Threads))), strconv.FormatFloat(res.MemGB, 'f', -1, 64), res.Special)
+
+		return nil
+	}
+
+	for i, d := range defs.ChunkDefs {
+		if err := row(job.ChunkName(i, len(defs.ChunkDefs)), d.Resources); err != nil {
+			return err
+		}
+	}
+
+	if err := row(joinRow, defs.JoinDef); err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(path, []byte(b.String()), filePerm); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+
+	return nil
 }
 
 // stamp names the instance's stage in stageNameFile in the job's metadata

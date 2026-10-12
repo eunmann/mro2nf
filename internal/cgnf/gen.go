@@ -25,7 +25,7 @@ func (g *gen) linef(format string, args ...any) {
 func (p *project) mainNF() (string, error) {
 	g := &gen{}
 
-	g.incs.WriteString("include { shq ; ordered ; jsonOf ; sized ; OUTS } from './stage.nf'\n")
+	g.incs.WriteString("include { shq ; ordered ; resources ; OUTS } from './stage.nf'\n")
 	p.planProcess(g)
 	p.planWiring(g)
 

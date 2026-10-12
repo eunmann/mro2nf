@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -64,6 +65,42 @@ func TestChunksDirRoundTrip(t *testing.T) {
 
 // TestChunksDirStagedAsLinks: a join task stages the split's chunk dirs as
 // links, as Nextflow stages a path input, and reads every chunk through them.
+// TestWriteResources: the resources table holds, per chunk and for the join,
+// the cpus, memory and special its job's _jobinfo records: a def's request
+// over the stage's, a fractional or negative count at its rounded-up
+// magnitude (#405, #315). A special holding a line break has no row.
+func TestWriteResources(t *testing.T) {
+	using := &core.JobResources{Threads: 2, MemGB: 4, Special: "gpu:2"}
+	defs := &core.StageDefs{
+		ChunkDefs: []*core.ChunkDef{
+			{},
+			{Resources: &core.JobResources{Threads: 3.5, Special: "gpu"}},
+			{Resources: &core.JobResources{Threads: -6, MemGB: 0.5}},
+		},
+		JoinDef: &core.JobResources{MemGB: 3},
+	}
+
+	path := filepath.Join(t.TempDir(), resourcesTable)
+	if err := writeResources(path, using, defs); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "chnk0\t2\t4\tgpu:2\nchnk1\t4\t4\tgpu\nchnk2\t6\t0.5\tgpu:2\njoin\t2\t3\tgpu:2\n"
+	if d := cmp.Diff(want, string(got)); d != "" {
+		t.Errorf("resources table (-want +got):\n%s", d)
+	}
+
+	defs.JoinDef.Special = "a\nb"
+	if err := writeResources(path, using, defs); !errors.Is(err, errSpecialLine) {
+		t.Errorf("writeResources = %v, want %v", err, errSpecialLine)
+	}
+}
+
 func TestChunksDirStagedAsLinks(t *testing.T) {
 	defs := &core.StageDefs{JoinDef: &core.JobResources{}}
 	for i := range 2 {

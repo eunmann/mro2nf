@@ -162,14 +162,15 @@ func TestEmitStagesChunkApart(t *testing.T) {
 }
 
 // TestEmitSizesChunksAndJoin: each chunk's main and the join are scheduled
-// with the resources the split returned for them, mrp's per-chunk and join
-// reservations (join_resources: the join requests 2 threads and 3 GB).
+// with the resources their jobs get, the split's resources table, a value
+// the driver parses no record for (join_resources: the join requests 2
+// threads and 3 GB; TestWriteResources writes the table).
 func TestEmitSizesChunksAndJoin(t *testing.T) {
 	main := readTree(t, emitFixture(t, "join_resources"))["main.nf"]
 
 	for _, want := range []string{
-		"cs.collect { c -> [sized(m, jsonOf(c.resolve('chunk.json')).resources) + [chunks: cs.size()], k, a, c.name, c] }",
-		"s0.map { m, k, a, cs, j -> [k, sized(m, jsonOf(j)), a, cs, j] }",
+		"def r = resources(res); cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, a, c.name, c] }",
+		"s0.map { m, k, a, cs, j, res -> [k, m + resources(res).join, a, cs, j] }",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("join_resources's main.nf lacks %q:\n%s", want, main)

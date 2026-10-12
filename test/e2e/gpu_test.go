@@ -13,14 +13,15 @@ import (
 // TestGPURequestFollowsSpecial runs the generated config's accelerator rule
 // on the meta the stage module schedules each task with (#315): a stage's
 // own `special = "gpu[:N]"` requests N GPUs, as does a chunk's or join's
-// `__special` the split returned (sized), which replaces the stage's; any
-// other special requests none.
+// special in the split's resources table (TestWriteResources writes the
+// split's __special there, over the stage's); any other special requests
+// none.
 func TestGPURequestFollowsSpecial(t *testing.T) {
 	requireTools(t, "nextflow", "java")
 
 	proj := transpile(t, "gpu_stage")
 
-	probe := `include { sized } from './stage.nf'
+	probe := `include { resources } from './stage.nf'
 
 process GPU_PROBE {
     input:
@@ -36,13 +37,14 @@ process GPU_PROBE {
 workflow {
     def gpu2 = [name: 'stage', cpus: 1, mem_gb: 1, special: 'gpu:2']
     def none = [name: 'none', cpus: 1, mem_gb: 1, special: '']
+    def r = resources("chnk0\t2\t1\tgpu:2\nchnk1\t1\t1\tgpu\nchnk2\t1\t1\thighmem\njoin\t1\t3\tgpu:3\n")
     GPU_PROBE(channel.of(
         gpu2,
         none,
-        sized(gpu2 + [name: 'chunk_keeps'], [__threads: 2]),
-        sized(none + [name: 'chunk'], [__special: 'gpu']),
-        sized(none + [name: 'join'], [__special: 'gpu:3']),
-        sized(gpu2 + [name: 'other'], [__special: 'highmem']),
+        none + r.chnk0 + [name: 'chunk_keeps'],
+        none + r.chnk1 + [name: 'chunk'],
+        gpu2 + r.chnk2 + [name: 'other'],
+        none + r.join + [name: 'join'],
         none + [name: 'zero', special: 'gpu:0'],
     )).view()
 }

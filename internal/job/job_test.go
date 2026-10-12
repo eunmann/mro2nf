@@ -355,8 +355,8 @@ func TestReqs(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		if got := reqs(tc.using, tc.def); got != tc.want {
-			t.Errorf("%s: reqs = %+v, want %+v", tc.name, got, tc.want)
+		if got := Resources(tc.using, tc.def); got != tc.want {
+			t.Errorf("%s: Resources = %+v, want %+v", tc.name, got, tc.want)
 		}
 	}
 }
