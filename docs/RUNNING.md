@@ -360,8 +360,8 @@ run publishes nothing to `results/`.
 | 137, 143 | the executor killed the task with a signal | up to twice |
 | 1 | a stage exception, or a failed `mre` step | no |
 
-A retried attempt that failed still counts in the final summary's `failed=`,
-even when the run succeeds.
+A retried attempt that failed still counts as a failed task in the run's
+summary, even when the run succeeds.
 
 In the task's work directory:
 

@@ -48,9 +48,9 @@ nextflow run main.nf -params-file inputs.json
 cat results/pipeline_outs.json
 ```
 
-The run ends with `[SUCCESS] completed=8 failed=0 cached=0`: one PLAN task,
-the `SUM_SQUARES` split, its three chunks and its join, `REPORT`, and the
-OUTS task that publishes the results. The output is:
+The run succeeds with 8 tasks: one PLAN task, the `SUM_SQUARES` split, its
+three chunks and its join, `REPORT`, and the OUTS task that publishes the
+results. The output is:
 
 ```json
 {
@@ -84,8 +84,8 @@ A failed run publishes nothing to `results/`.
 nextflow run main.nf -params-file inputs.json -resume
 ```
 
-A rerun with nothing changed takes every task from the cache
-(`completed=0 failed=0 cached=8`). A changed entry parameter re-runs every
+A rerun with nothing changed takes all 8 tasks from the cache and runs none.
+A changed entry parameter re-runs every
 task. Nextflow does not see edits to stage code, so after you change stage
 code, run without `-resume`.
 
