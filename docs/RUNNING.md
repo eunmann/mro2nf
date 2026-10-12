@@ -267,6 +267,10 @@ it, is `gpu` or `gpu:N`. For a chunk or the join of a split stage, that is the
 stage's own `special`. `special` also selects `params.job_resources[special]`
 as the task's `clusterOptions`.
 
+One rule in the generated `nextflow.config` sets `accelerator` per task. A
+process `accelerator` directive that reads the task's inputs fails on Nextflow
+25.10 and works on 26.04, so the request stays a config closure.
+
 Executors read `accelerator` differently:
 
 - On AWS Batch, Nextflow turns it into a GPU resource requirement on the job.

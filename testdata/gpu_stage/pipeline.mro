@@ -2,7 +2,7 @@
 # `accelerator N` on every job whose special it is, which the AWS Batch /
 # HealthOmics executors turn into a GPU resourceRequirement. INFER is a
 # non-split stage (one GPU); TRAIN is a split stage requesting two GPUs. See
-# docs/GPU.md.
+# docs/RUNNING.md, "GPU stages".
 
 stage INFER(
     in  float x,
