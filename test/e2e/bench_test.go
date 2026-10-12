@@ -77,9 +77,10 @@ func benchLanes() []benchLane {
 // (epic #18 / #17, overhead rule #119): each bench lane runs under Nextflow
 // with tracing, bench_metrics.py measures the probe-file staging count and
 // the task/plumbing shape, and bench_report.py gates refs, plumbing_tasks,
-// and tasks against bench/baseline.json — plus the width-scaling invariant
-// that plumbing_tasks is identical across a fixture's widths, and that each
-// lane's stage tasks equal mrp's job count (BENCH_UPDATE=1 records a new
+// and tasks against bench/baseline.json — plus the width-scaling invariants
+// that plumbing_tasks, and restaged_bytes per producer, are identical across
+// a fixture's widths, and that each lane's stage tasks equal mrp's job
+// count (BENCH_UPDATE=1 records a new
 // baseline; BENCH_PROFILE/BENCH_WORKDIR select another backend).
 func TestBench(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")

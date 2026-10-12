@@ -58,6 +58,60 @@ func TestBenchMetricsStagedBytes(t *testing.T) {
 	}
 }
 
+// TestBenchMetricsRestagedBytes pins the restaged-bytes probe: a file a task
+// wrote counts when it is a hard link to, or a byte copy of, a file it
+// staged, and not when it links to one or only shares its size.
+func TestBenchMetricsRestagedBytes(t *testing.T) {
+	requireTools(t, "python3")
+
+	dir := t.TempDir()
+	payload := writeBenchFile(t, filepath.Join(dir, "up", "f", "payload.txt"), "payload!")
+	src := filepath.Dir(filepath.Dir(payload))
+
+	task := filepath.Join(dir, "work", "aa", "use")
+	writeBenchTask(t, dir, "aa/use", "WF:ST (1)", "    rm -f in\n    ln -s "+src+" in\n")
+
+	if err := os.Symlink(src, filepath.Join(task, "in")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(task, "args"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Link(payload, filepath.Join(task, "args", "payload.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	writeBenchFile(t, filepath.Join(task, "copy.txt"), "payload!")
+	writeBenchFile(t, filepath.Join(task, "other.txt"), "another!")
+
+	if err := os.Symlink(payload, filepath.Join(task, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\n")
+	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+
+	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
+		"--producers", "1", "--stages", stages, "--mrp-jobs", "1").Output()
+	if err != nil {
+		t.Fatalf("bench_metrics: %v", err)
+	}
+
+	var got struct {
+		Restaged int `json:"restaged_bytes"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("bench_metrics output %q: %v", out, err)
+	}
+
+	if want := 2 * len("payload!"); got.Restaged != want {
+		t.Errorf("restaged_bytes = %d, want %d: the hard link and the byte copy", got.Restaged, want)
+	}
+}
+
 // writeBenchTask writes a task dir under dir/work whose .command.run names
 // the task and holds nxfStage as the body of nxf_stage.
 func writeBenchTask(t *testing.T, dir, hash, name, nxfStage string) {

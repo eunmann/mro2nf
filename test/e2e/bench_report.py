@@ -20,6 +20,9 @@ then applies three independent gates:
     A group whose lanes carry `flat_staging` must also stage, into its
     largest stage task, the same bytes at every width (within STAGING_SLACK):
     a fork stages its own share of the data, never all N forks' shares.
+    Every group must write, per producer, the same `restaged_bytes` at every
+    width (within STAGING_SLACK): a file every fork reads is referenced where
+    it was staged, never copied into each fork (#498).
   * mrp-jobs gate -- every lane's `stage_tasks` must equal `mrp_jobs`, the
     jobs real mrp runs for the same invocation: one Nextflow task per Martian
     job, so stage work is neither duplicated nor hidden in plumbing.
@@ -81,7 +84,7 @@ def fmt(m):
         f"tasks={m['tasks']:>3} (stage={m.get('stage_tasks', 0):>2} "
         f"plumb={m.get('plumbing_tasks', 0):>2} mrp={m.get('mrp_jobs', '-'):>2})  "
         f"procs={m['processes']:>2}  refs={m['refs']:>3}  mult={m['multiplier']:<6}  "
-        f"wchar={m['wchar_bytes']:>9}"
+        f"wchar={m['wchar_bytes']:>9}  restaged={m.get('restaged_bytes', '-'):>8}"
     )
 
 
@@ -126,7 +129,24 @@ def check_scaling(cur):
         lanes = {n: cur[n] for n in groups[g]}
         rc = check_group(g, lanes) or rc
         rc = check_staging(g, lanes) or rc
+        rc = check_restaged(g, lanes) or rc
     return rc
+
+
+def check_restaged(g, lanes):
+    """Gate a group's restaged bytes per producer (rc 1 on failure).
+
+    Normalized per fork they would read flat even when every fork copies a
+    broadcast file; per producer, the unit of the data, they grow with width.
+    """
+    per = {n: m.get("restaged_bytes", 0) / m["producers"] for n, m in lanes.items()}
+    if max(per.values()) > min(per.values()) * STAGING_SLACK:
+        print(
+            f"RESTAGED[{g}]: bytes tasks write that copy a file they staged, per "
+            f"producer, must not grow with width (slack {STAGING_SLACK}), got {per}"
+        )
+        return 1
+    return 0
 
 
 def check_staging(g, lanes):
@@ -276,6 +296,7 @@ def main():
         print(
             "OK: no regression vs baseline (refs/plumbing_tasks/tasks); "
             "plumbing is width-flat outside known-scaling groups; "
+            "restaged bytes per producer are width-flat; "
             "stage tasks equal mrp jobs"
         )
     return rc

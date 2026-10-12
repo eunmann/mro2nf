@@ -29,6 +29,11 @@ The staging probe reads every task work dir (see probe_task_dirs):
                  plumbing tasks wrote into their work dirs, every hard link
                  counted: an upper bound on what an object-store backend
                  uploads, which is the declared outputs
+  restaged_bytes -- bytes of the files tasks wrote that are a hard link to,
+                 or a byte copy of, a file they staged: data written again
+                 rather than referenced. bench_report.py holds it per
+                 producer to the same at every width, so a file every fork
+                 reads is never copied into each (#498)
   probe_writes -- files in task work dirs that are a copy of the probe file
                  (the ideal is producers: each producer writes it once)
   max_argv_bytes / max_arg_bytes -- the largest mre command line, and the
@@ -48,6 +53,7 @@ lands; a regression that reintroduces per-hop re-transfer pushes it back up.
 """
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -206,13 +212,48 @@ def read_command_run(d):
     return name.split(" (")[0].split(":")[-1], sources
 
 
+def tree_files(path):
+    """Yield the file at path, or every file under it, links followed."""
+    if not os.path.isdir(path):
+        yield path
+        return
+    for parent, _, files in os.walk(path, followlinks=True):
+        for f in files:
+            yield os.path.join(parent, f)
+
+
 def tree_bytes(path):
     """Bytes of the file at path, or of every file under it, links followed."""
-    if not os.path.isdir(path):
-        return os.stat(path).st_size
+    return sum(os.stat(p).st_size for p in tree_files(path))
+
+
+def digest(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.digest()
+
+
+def restaged_bytes(written, sources):
+    """Bytes of the written (path, size) files that are a hard link to, or a
+    byte copy of, a file the task staged from sources.
+
+    Only staged files of a size some written file has are hashed, so a task
+    that copies nothing reads little.
+    """
+    ids, by_size = set(), {}
+    for p in (p for s in sources for p in tree_files(s)):
+        st = os.stat(p)
+        ids.add((st.st_dev, st.st_ino))
+        by_size.setdefault(st.st_size, []).append(p)
+    sizes = {size for _, size in written if size in by_size}
+    copies = {(size, digest(p)) for size in sizes for p in by_size[size]}
     total = 0
-    for parent, _, files in os.walk(path, followlinks=True):
-        total += sum(os.stat(os.path.join(parent, f)).st_size for f in files)
+    for path, size in written:
+        st = os.stat(path)
+        if (st.st_dev, st.st_ino) in ids or (size in sizes and (size, digest(path)) in copies):
+            total += size
     return total
 
 
@@ -260,6 +301,7 @@ def probe_task_dirs(workdir, probe, stages):
             "stage_staged_bytes",
             "uploaded_bytes",
             "plumbing_uploaded_bytes",
+            "restaged_bytes",
             "probe_writes",
             "max_argv_bytes",
             "max_arg_bytes",
@@ -271,10 +313,10 @@ def probe_task_dirs(workdir, probe, stages):
     for d in task_dirs(workdir):
         name, sources = read_command_run(d)
         staged = sum(tree_bytes(s) for s in sources)
-        uploaded = 0
-        for path, size in written_files(d):
-            uploaded += size
-            m["probe_writes"] += is_probe_copy(path, marker)
+        written = list(written_files(d))
+        uploaded = sum(size for _, size in written)
+        m["probe_writes"] += sum(is_probe_copy(path, marker) for path, _ in written)
+        m["restaged_bytes"] += restaged_bytes(written, sources)
         m["staged_bytes"] += staged
         m["uploaded_bytes"] += uploaded
         if name in stages:
