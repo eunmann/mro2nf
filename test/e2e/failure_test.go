@@ -60,6 +60,29 @@ func TestAssertTerminatesWithoutRetry(t *testing.T) {
 	}
 }
 
+// TestPreflightFailsBeforeItsPipeline: a failed preflight fails the run
+// before any other call of its pipeline starts, mapped or not, as mrp makes
+// the preflight a prenode of each (core/pipestance.go NewPipestance); mrp's
+// run of preflight_fail runs CHECK alone (#314).
+func TestPreflightFailsBeforeItsPipeline(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	proj := transpile(t, "preflight_fail")
+
+	if err := runNextflowAllowingFailedAttempts(t, proj, "-with-trace", "trace.txt"); err == nil {
+		t.Fatal("run succeeded; the failed preflight must fail it")
+	}
+
+	rows := readTrace(t, filepath.Join(proj, "trace.txt"))
+	if ran := append(attempts(rows, "WORK"), attempts(rows, "EACH")...); len(ran) != 0 {
+		t.Errorf("%d tasks of the preflight's pipeline ran: %+v", len(ran), ran)
+	}
+
+	if check := attempts(rows, "CHECK"); len(check) != 1 || check[0].Exit != 42 {
+		t.Errorf("CHECK attempts %+v, want one exiting 42", check)
+	}
+}
+
 // TestStageOutputLinkOutsideWorkFails guards #332 on isolated container
 // targets (-confine-outputs, implied by awsbatch/healthomics): a stage whose
 // file output is a symlink to a file outside its task work dir must fail the

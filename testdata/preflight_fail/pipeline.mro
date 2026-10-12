@@ -1,0 +1,46 @@
+# Failure-path fixture: a preflight that asserts fails the run before any
+# other call in its pipeline starts, as mrp makes the preflight a prenode
+# of each of them (core/pipestance.go NewPipestance). WORK and the mapped
+# EACH would fail too if they ran; mrp's run blames CHECK alone.
+stage CHECK(
+    in  int x,
+    src py  "stages/check",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline PF(
+    in  int   x,
+    in  int[] xs,
+    out int   y,
+    out int[] ys,
+)
+{
+    call CHECK(
+        x = self.x,
+    ) using (
+        preflight = true,
+    )
+
+    call WORK(
+        x = self.x,
+    )
+
+    map call WORK as EACH(
+        x = split self.xs,
+    )
+
+    return (
+        y  = WORK.y,
+        ys = EACH.y,
+    )
+}
+
+call PF(
+    x  = -1,
+    xs = [1, 2],
+)

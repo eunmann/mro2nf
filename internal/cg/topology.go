@@ -31,15 +31,18 @@ type Topology struct {
 // any fork and whose outs every consumer already reads as null. Zips are
 // the outputs of other stages it splits over one of its roots whose forks
 // they do not fix, each staged as the one partner element at its index.
+// Preflights are the preflight stages every instance of it waits for, each
+// at every fork.
 type TopoNode struct {
-	Fqid  string   `json:"fqid"`
-	Stage string   `json:"stage"`
-	Split bool     `json:"split"`
-	Roots []string `json:"roots"`
-	Reads []Read   `json:"reads"`
-	Zips  []Zip    `json:"zips"`
-	Gates []Gate   `json:"gates"`
-	Off   bool     `json:"off"`
+	Fqid       string   `json:"fqid"`
+	Stage      string   `json:"stage"`
+	Split      bool     `json:"split"`
+	Roots      []string `json:"roots"`
+	Reads      []Read   `json:"reads"`
+	Zips       []Zip    `json:"zips"`
+	Gates      []Gate   `json:"gates"`
+	Preflights []string `json:"preflights"`
+	Off        bool     `json:"off"`
 }
 
 // Zip is a node's split over its root Root of node Node's output Output,
@@ -149,6 +152,7 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	}
 
 	n.Reads, n.Zips = g.nodeReads(st)
+	n.Preflights = g.preflights(st)
 
 	gates, err := g.gates(st)
 	if err != nil {
@@ -204,6 +208,38 @@ func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 	}
 
 	return readList(fields), slices.SortedFunc(maps.Keys(zips), compareZips)
+}
+
+// preflights are the preflight stages st waits for, as mrp makes each
+// preflight stage of a pipeline a prenode of every other call of that
+// pipeline, and through a sub-pipeline call of every call within it, its
+// preflights too (core/pipestance.go:238 NewPipestance, core/node.go:521
+// setPrenode); a node runs once every fork of its prenodes is complete or
+// disabled (core/node.go:646 getState).
+func (g *Graph) preflights(st *syntax.CallGraphStage) []string {
+	var out []string
+
+	for _, fqid := range slices.Sorted(maps.Keys(g.stages)) {
+		p := g.stages[fqid]
+		if p == st || !p.Call().Modifiers.Preflight {
+			continue
+		}
+
+		home := p.GetParent()
+		if st.Call().Modifiers.Preflight && st.GetParent() == home {
+			continue
+		}
+
+		for x := st.GetParent(); x != nil; x = x.GetParent() {
+			if x == home {
+				out = append(out, fqid)
+
+				break
+			}
+		}
+	}
+
+	return out
 }
 
 func compareZips(a, b Zip) int {
@@ -434,8 +470,8 @@ func (t Topology) coverNodes(rs []TopoNode) ([]error, map[string]bool) {
 			errs = append(errs, fmt.Errorf("%w: %s is stage %s forked on %v, not %s forked on %v", errUncovered, rn.Fqid, rn.Stage, rn.Roots, n.Stage, n.Roots))
 		case !readsCovered(n.Reads, rn.Reads) || !gatesCovered(n.Gates, rn.Gates):
 			errs = append(errs, fmt.Errorf("%w: %s reads %v and is gated by %v, beyond %v and %v", errUncovered, rn.Fqid, rn.Reads, rn.Gates, n.Reads, n.Gates))
-		case !subset(n.Zips, rn.Zips):
-			errs = append(errs, fmt.Errorf("%w: %s zips %v, beyond %v", errUncovered, rn.Fqid, rn.Zips, n.Zips))
+		case !subset(n.Zips, rn.Zips) || !subset(n.Preflights, rn.Preflights):
+			errs = append(errs, fmt.Errorf("%w: %s zips %v and waits for %v, beyond %v and %v", errUncovered, rn.Fqid, rn.Zips, rn.Preflights, n.Zips, n.Preflights))
 		}
 
 		for _, root := range rn.Roots {
@@ -478,8 +514,8 @@ func subset[T comparable](have, want []T) bool {
 }
 
 // dependencyOrder lists the nodes so each follows what it reads, the
-// producers of its fork roots, its gates and the stages it zips, visiting
-// in fqid order.
+// producers of its fork roots, its gates, the stages it zips and its
+// preflights, visiting in fqid order.
 func dependencyOrder(nodes map[string]TopoNode, roots []TopoRoot) []TopoNode {
 	producer := map[string]string{}
 	for _, r := range roots {
@@ -513,6 +549,10 @@ func dependencyOrder(nodes map[string]TopoNode, roots []TopoRoot) []TopoNode {
 
 		for _, z := range n.Zips {
 			visit(z.Node)
+		}
+
+		for _, pf := range n.Preflights {
+			visit(pf)
 		}
 
 		out = append(out, n)

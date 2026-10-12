@@ -154,6 +154,13 @@ func gpus(special string) int {
 	return 0
 }
 
+// awaited reports whether a node waits for preflight fqid, which then
+// signals, as d<i>, once every instance of it is done: its tasks have all
+// completed, and a disabled instance runs none.
+func (p *project) awaited(fqid string) bool {
+	return slices.ContainsFunc(p.topo.Nodes, func(n cg.TopoNode) bool { return slices.Contains(n.Preflights, fqid) })
+}
+
 // consumed reports which of node fqid's outputs a later node or the
 // pipeline outs read: its outs, its fork and partner elements, its gates.
 func (p *project) consumed(fqid string) (bool, bool, bool) {

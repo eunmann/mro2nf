@@ -84,15 +84,6 @@
       "summary": "mro2nf resumes through Nextflow's `-resume`, which reuses each task whose script and inputs hash the same, where mrp restarts a pipestance from the stages it recorded as complete.",
       "justification": "A cache hit replays the task's recorded outputs: an unchanged rerun re-executes no task and leaves the published tree and `pipeline_outs.json` unchanged, and a fresh run matches mrp. Every script names the mro2nf build, so a project re-transpiled by another build re-runs every task. A rerun after a failure is not compared with mrp's restart.",
       "evidence": ["TestResumeCachesEverything", "TestFreshRunsAreIdentical", "TestResumeKeysOnTheBuild", "TestMrpDiff"]
-    },
-    {
-      "id": "preflight-dag-order",
-      "kind": "mechanism",
-      "feature": "`(preflight)`",
-      "summary": "A preflight runs in DAG order, where mrp makes every other call in its pipeline wait for it, so a failing preflight stops that pipeline before they start.",
-      "justification": "A preflight has no outputs (mrp rejects one with `PreflightOutputError`), so the order changes no output: `preflight_ungated`'s outputs and stage invocations match mrp's. On a failing preflight, mrp has started no other call of its pipeline, while mro2nf may have.",
-      "issue": 314,
-      "evidence": ["TestMrpDiff/preflight_ungated"]
     }
   ]
 }

@@ -286,3 +286,41 @@ func TestTopologyZipPartners(t *testing.T) {
 		}
 	}
 }
+
+// TestTopologyPreflights: each preflight of a pipeline gates every other
+// call in it, and through a sub-pipeline every call within, the
+// sub-pipeline's preflight too, but not the pipeline's other preflights; a
+// mapped or disabled preflight gates as a plain one (mrp's run of
+// preflight_order: TOP_CHECK, EMIT, SUB.CHECK, SUB.WORK).
+func TestTopologyPreflights(t *testing.T) {
+	for _, c := range []struct {
+		fixture string
+		want    map[string][]string
+	}{
+		{"preflight_order", map[string][]string{
+			"TOP.TOP_CHECK": nil,
+			"TOP.EMIT":      {"TOP.TOP_CHECK"},
+			"TOP.SUB.CHECK": {"TOP.TOP_CHECK"},
+			"TOP.SUB.WORK":  {"TOP.SUB.CHECK", "TOP.TOP_CHECK"},
+		}},
+		{"preflight_ungated", map[string][]string{
+			"PU.CHECK_EACH":  nil,
+			"PU.CHECK_FIRST": nil,
+			"PU.DOUBLE":      {"PU.CHECK_EACH", "PU.CHECK_FIRST"},
+		}},
+	} {
+		topo, err := loadFixture(t, c.fixture).g.Topology()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		got := map[string][]string{}
+		for _, n := range topo.Nodes {
+			got[n.Fqid] = n.Preflights
+		}
+
+		if d := cmp.Diff(c.want, got); d != "" {
+			t.Errorf("%s preflights (-want +got):\n%s", c.fixture, d)
+		}
+	}
+}

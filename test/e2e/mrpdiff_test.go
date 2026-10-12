@@ -489,6 +489,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "nested_path_unpublished"},
 	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
 	{name: "preflight_ungated"},
+	// #314: a sub-pipeline's preflight, fed by a parent call, waits for its
+	// parent's preflight and gates its sibling.
+	{name: "preflight_order"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
 	{name: "vdr_volatile"},
 	// A disable gate split per fork of a map call over a sub-pipeline: each
@@ -535,6 +538,8 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// the bad value: a missing struct key (#274), a float in an `out int`
 	// (#338).
 	{name: "missing_struct_key", mrp: failedIn(failError, "UP")},
+	// #314: a failing preflight runs alone; its siblings would fail too.
+	{name: "preflight_fail", mrp: failedIn(failAssert, "CHECK")},
 	{name: "bad_out_type", mrp: failedIn(failError, "BAD")},
 	// A split returning a chunk resource key of the wrong JSON type fails the
 	// split (#275): a number __special, a string __mem_gb or __threads.

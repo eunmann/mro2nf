@@ -231,6 +231,12 @@ that stage's partner dir at its own fork's token, or the absent record, so each
 fork stages one element of it whatever the fork width (the `zip` bench lanes
 gate the bytes one task stages flat in N).
 
+**Preflights.** As in `mrp`, each instance waits until every instance of each
+preflight it is gated by is done: a pipeline's preflights gate every other call
+in it, and through a sub-pipeline call every call within, its preflights too
+(`preflight_order`). A disabled preflight instance counts as done, and a failing
+one ends the run before the calls it gates start (`preflight_fail`).
+
 **Gates.** A node's gates are decided on the driver: PLAN's record and each
 gating stage's posted `gates` (an `eval` output), joined on the roots they
 share. A disabled instance runs no task and stands in with no outs and no
@@ -544,8 +550,8 @@ the differential applies and which generates the
 [divergence table of `FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md#divergences-from-mrp).
 Some change only how the outputs are reached: `local`, `volatile` and `retain`
 are no-ops (no VDR / mid-run work-dir reclamation), the published `outs/` tree
-is copied into place rather than moved and symlinked, `-resume` is Nextflow's
-content-addressed cache, and a `preflight` runs in plain DAG order. Others are
+is copied into place rather than moved and symlinked, and `-resume` is
+Nextflow's content-addressed cache. Others are
 real output or outcome differences, each with its tracking issue or the reason
 it is kept. A construct the call graph cannot carry fails the transpile, and
 an invocation the witness does not cover fails PLAN (§5) before any stage

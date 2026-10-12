@@ -237,3 +237,24 @@ func TestEmitZipsByToken(t *testing.T) {
 		}
 	}
 }
+
+// TestEmitWaitsForPreflights: a preflight signals once every instance of it
+// is done, and each instance of a node it gates waits for that signal
+// (modifiers_min: CHECK gates INNER's DOUBLE and TRIPLE).
+func TestEmitWaitsForPreflights(t *testing.T) {
+	main := readTree(t, emitFixture(t, "modifiers_min"))["main.nf"]
+
+	for _, want := range []string{
+		"d0 = N0_CHECK.out.outs.toList().map { _xs -> true }",
+		"i1 = i1.combine(d0).map { k, fs, es, _d -> [k, fs, es] }",
+		"i2 = i2.combine(d0).map { k, fs, es, _d -> [k, fs, es] }",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("modifiers_min's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if strings.Contains(main, "i0 = i0.combine(d") {
+		t.Errorf("the preflight waits for itself:\n%s", main)
+	}
+}

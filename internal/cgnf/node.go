@@ -10,32 +10,14 @@ import (
 )
 
 // node renders node i: its instances, enumerated root by root from the fork
-// elements and records its roots' feeders write; its gates, which the
-// driver evaluates so a disabled instance runs no task; the outs its
-// enabled instances stage, field by field; its process call; and its
-// outputs, a disabled instance standing in with none.
+// elements and records its roots' feeders write, each held until its
+// preflights are done; its gates, which the driver evaluates so a disabled
+// instance runs no task; the outs its enabled instances stage, field by
+// field; its process call; and its outputs, a disabled instance standing in
+// with none.
 func (p *project) node(g *gen, i int, n cg.TopoNode) error {
 	g.linef("// %s", n.Fqid)
-
-	zr := zipRoots(n)
-	if len(n.Zips) == 0 {
-		g.linef("i%d = channel.of([[], [], []])", i)
-	} else {
-		g.linef("i%d = channel.of([[], [], [], []])", i)
-	}
-
-	for _, root := range n.Roots {
-		p.forkOn(g, i, n, root, zr)
-	}
-
-	for _, z := range n.Zips {
-		p.zip(g, i, z, n, zr)
-	}
-
-	if len(n.Zips) > 0 {
-		g.linef("i%d = i%d.map { k, fs, es, _tk -> [k, fs, es] }", i, i)
-	}
-
+	p.instances(g, i, n)
 	p.gate(g, i, n)
 	g.linef("u%d = b%d.run.map { k, fs, es, d, _off -> [k, fs, es, d, []] }", i, i)
 
@@ -59,6 +41,10 @@ func (p *project) node(g *gen, i int, n cg.TopoNode) error {
 		g.linef("%s(%s)", proc, in)
 	}
 
+	if p.awaited(n.Fqid) {
+		g.linef("d%d = %s.out.outs.toList().map { _xs -> true }", i, proc)
+	}
+
 	outs, forks, gates := p.consumed(n.Fqid)
 	for _, o := range []struct {
 		used       bool
@@ -70,6 +56,33 @@ func (p *project) node(g *gen, i int, n cg.TopoNode) error {
 	}
 
 	return nil
+}
+
+// instances enumerates node i's instances, i<i>: root by root, each with
+// the partner elements it zips, held until its preflights are done.
+func (p *project) instances(g *gen, i int, n cg.TopoNode) {
+	zr := zipRoots(n)
+	if len(n.Zips) == 0 {
+		g.linef("i%d = channel.of([[], [], []])", i)
+	} else {
+		g.linef("i%d = channel.of([[], [], [], []])", i)
+	}
+
+	for _, root := range n.Roots {
+		p.forkOn(g, i, n, root, zr)
+	}
+
+	for _, z := range n.Zips {
+		p.zip(g, i, z, n, zr)
+	}
+
+	if len(n.Zips) > 0 {
+		g.linef("i%d = i%d.map { k, fs, es, _tk -> [k, fs, es] }", i, i)
+	}
+
+	for _, pf := range n.Preflights {
+		g.linef("i%d = i%d.combine(d%d).map { k, fs, es, _d -> [k, fs, es] }", i, i, p.index[pf])
+	}
 }
 
 // zipRoots are node n's roots, in its order, that one of its zips splits
