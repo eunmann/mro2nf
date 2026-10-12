@@ -205,6 +205,92 @@ func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
 	}
 }
 
+// TestLeafOriginRecordsHowMrpPublishesIt guards #485: a stage output that is
+// a symlink, a host file outside the task and a file the run was given are
+// linked into outs/ by mrp at every output that reaches them, a stage's own
+// file is moved there once, and a bundle that forwards a leaf keeps how.
+func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
+	dir := t.TempDir()
+	work := filepath.Join(dir, "work")
+	files := filepath.Join(work, "main", "files")
+	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
+	own := writeSelfNamed(t, filepath.Join(files, "own.txt"))
+	link := filepath.Join(files, "link.txt")
+
+	if err := os.Symlink(host, link); err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := shim.ConfineStage(work, "main", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	params := []ir.Param{{Name: "own", BaseType: "txt", IsFile: true}, {Name: "link", BaseType: "txt", IsFile: true}, {Name: "host", BaseType: "txt", IsFile: true}}
+	outs := filepath.Join(work, "outs")
+
+	if err := shim.WriteBundle(outs, map[string]any{"own": own, "link": link, "host": host}, params, fileTable(), conf); err != nil {
+		t.Fatal(err)
+	}
+
+	given := filepath.Join(dir, "given")
+	if err := shim.WriteBundle(given, map[string]any{"own": host}, params[:1], fileTable(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	forwarded := filepath.Join(dir, "forwarded")
+	if err := shim.WriteBundle(forwarded, readPayload(t, stageBundle(t, outs, filepath.Join(dir, "in"))), params, fileTable(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]shim.Origin{"own": {Path: own}, "link": {Path: link, Linked: true}, "host": {Path: host, Linked: true}}
+
+	for _, bundle := range []string{outs, forwarded} {
+		if d := cmp.Diff(want, leafOrigins(t, bundle)); d != "" {
+			t.Errorf("origins in %s (-want +got):\n%s", bundle, d)
+		}
+	}
+
+	if d := cmp.Diff(map[string]shim.Origin{"own": {Path: host, Linked: true}}, leafOrigins(t, given)); d != "" {
+		t.Errorf("origin of a file the run was given (-want +got):\n%s", d)
+	}
+}
+
+// leafOrigins maps each file leaf of the bundle at dir to its origin.
+func leafOrigins(t *testing.T, dir string) map[string]shim.Origin {
+	t.Helper()
+
+	out := map[string]shim.Origin{}
+
+	for name, v := range readPayload(t, dir) {
+		leaf, _ := v.(string)
+
+		o, ok, err := shim.ReadOrigin(leaf)
+		if err != nil || !ok {
+			t.Fatalf("origin of %s in %s: %v (recorded %v)", name, dir, err, ok)
+		}
+
+		out[name] = o
+	}
+
+	return out
+}
+
+// writeSelfNamed writes a file at path holding its path, and returns path.
+func writeSelfNamed(t *testing.T, path string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(path, []byte(path), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
 // TestMarkFilesRefusesOriginFileName checks a leaf named like the origin file
 // it would share its ordinal dir with fails the write rather than overwrite
 // either.

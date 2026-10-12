@@ -431,7 +431,12 @@ Both prefixes resolve identically on read-back. The rules:
   however many input bundles it arrived through. Its identity is its origin, the
   absolute path it was first staged from, where its task wrote it, written to
   `.mre-origin` beside the leaf; a leaf of a staged bundle, such as the input a
-  pass-through stage returns, keeps the origin recorded beside it. A leaf named
+  pass-through stage returns, keeps the origin recorded beside it. The record
+  also says how `mrp` publishes the file (`linked:` before the path): a stage
+  output that was a symlink, or a file from outside every task (a host file,
+  or one the run was given), is linked into `outs/` at each output that
+  reaches it, where a stage's own file is moved to the first and the others
+  link to it (`post_process.go` `moveOutFile`, `copyOutSymlink`). A leaf named
   `.mre-origin` fails the write. `mre publish-layout` names a file it leaves
   unpublished by its origin (#432).
 - **Escaping** (on write): every other string that begins with the reserved
