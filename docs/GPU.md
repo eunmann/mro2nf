@@ -28,10 +28,15 @@ go in the .mro" below).
 ## What the transpiler emits
 
 For a GPU stage, `mro2nf` emits an `accelerator N` directive on the **compute
-phase only**:
+phase only**, as a `withName:` selector in `nextflow.config`:
 
-- a non-split stage → its single process,
-- a split stage → its `MAIN` phase (not `SPLIT` or `JOIN`, which do no GPU work).
+- a non-split stage → its node's process,
+- a split stage → its main phase, `N<i>_<CALL>_MN` (not the split or join,
+  which do no GPU work).
+
+The project runs on a local or shared filesystem; the container and AWS
+setups below are what the isolated-container and cloud targets need, which
+#489 tracks.
 
 On the AWS Batch and HealthOmics executors, Nextflow turns `accelerator N` into a
 GPU `resourceRequirement` on the job. That requirement is the routing signal the

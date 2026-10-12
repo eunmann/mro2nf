@@ -83,13 +83,11 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
 # 1. Golden baseline
 cellranger testrun --id=golden --localcores=8 --localmem=16 --disable-ui
 
-# 2. Transpile (point -mrjob/-shell at the bundle's Martian runtime;
-#    the .mro's defaults are the bundle's test data, outside $CR/mro, so
-#    baking them into the project takes -allow-external-files)
-mro2nf -allow-external-files -mropath $CR/mro -mre ./mre \
+# 2. Transpile (point -mrjob/-shell at the bundle's Martian runtime)
+mro2nf -mropath $CR/mro -mre ./mre \
        -mrjob $CR/external/martian/bin/mrjob \
        -shell $CR/external/martian/adapters/python/martian_shell.py \
-       -o out __<id>.mro           # add -native to compare
+       -o out __<id>.mro
 
 # 3. Run (source the bundle env so cr_* + the bundled python3 are on PATH)
 source $CR/sourceme.bash

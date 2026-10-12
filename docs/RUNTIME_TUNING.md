@@ -6,76 +6,24 @@ not in the `.mro`. This maps the mrp flags to their Nextflow equivalents.
 
 ## Per-stage resource overrides (`mrp --overrides`)
 
-mrp's `--overrides` retunes a stage's resources at launch without editing the
-`.mro`. The Nextflow analog is a `process` / `withName:` config overlay applied
-with `-c`. `mro2nf` converts an existing overrides file for you:
+mrp's `--overrides` file is not accepted at launch yet: #301 applies it in the
+run's PLAN task with Martian's own `ApplyResourceOverrides`, so each stage
+instance is sized, and sees in `_jobinfo`, what mrp gives it.
 
-```bash
-mro2nf overrides overrides.json > overrides.config
-nextflow run main.nf -c overrides.config
+Until then, a `withName:` selector in a `-c` overlay sizes one stage's tasks.
+Each stage node is its own process alias, `N<i>_<CALL>` (the node's index in
+`main.nf` and its call name), and a split stage's phases are `N<i>_<CALL>_SP`,
+`_MN` and `_JN`; `main.nf` lists every alias in its `include` lines:
 
-# Pass the pipeline to expand pipeline-scoped keys and validate stage names:
-mro2nf overrides -mro pipeline.mro -mropath . overrides.json > overrides.config
+```groovy
+process {
+    withName: 'N3_ALIGN_MN' { memory = '8 GB'; cpus = 4 }
+}
 ```
 
-It maps each override field to the generated process names:
-
-| mrp override field | Nextflow directive | applies to |
-|---|---|---|
-| `mem_gb` | `memory` | every phase of the stage |
-| `threads` | `cpus` | every phase of the stage |
-| `split.mem_gb` / `split.threads` | `memory` / `cpus` | the split phase |
-| `chunk.mem_gb` / `chunk.threads` | `memory` / `cpus` | the main phase |
-| `join.mem_gb` / `join.threads` | `memory` / `cpus` | the join phase |
-| `""` (the empty key) | `memory` / `cpus` | all stages (global `process {}`) |
-
-A memory or threads override also sets `ext.mem_gb` / `ext.threads` (the
-unrounded value; `cpus` is rounded up to a whole CPU) beside the directive in
-its `withName:` selector. The stage command reads it, so the stage sees the
-override in `__mem_gb`/`__threads` and `_jobinfo`, as mrp writes it, and it beats a chunk's own or a
-split-returned join request, as in mrp's `getJobReqs`. The global `""` default sets no `ext` value: a stage process's own
-`memory` directive takes precedence over a global default, so the stage keeps
-its `.mro` value.
-
-The override key's **last segment** is taken as the stage/call name. Every key
-other than `""` must be a dot-separated path of Martian identifiers (the
-`PIPE.STAGE` names mrp itself writes); any other key fails the conversion with an
-error naming it, because key segments become part of the generated config. Fields with
-no faithful Nextflow directive are reported and skipped: `vmem_gb` (Nextflow has
-no virtual-memory directive — use `mro2nf -monitor`, which reads `vmem_gb` from
-the `.mro`), `force_volatile` (VDR is not modeled), and `profile` (use the
-trace/report options below).
-
-**Pipeline-scoped keys.** mrp matches a key as a path prefix, so a key that names
-a *sub-pipeline* applies to every stage beneath it. Pass `-mro <pipeline.mro>` and
-`mro2nf overrides` parses the pipeline and **expands** such a key into one
-selector per stage under that sub-pipeline; when a stage-specific key and a
-pipeline-scoped key both touch the same stage/phase/field, the deeper (more
-specific) key wins, matching mrp's nearest-ancestor rule. With `-mro`, a key that
-names neither a stage nor a sub-pipeline is **reported and skipped** rather than
-silently emitting a selector that matches no process. Without `-mro` the tool
-can't tell a sub-pipeline name from a stage name, so a pipeline-scoped key emits a
-dead selector — pass `-mro`, or scope overrides to individual stages. (Because the
-generated process names are stage/call-named, not fully path-qualified, expansion
-targets stage *names*: an override reaches every instance of a stage, not one
-call site.)
-
-Each generated selector covers every naming family the emitter produces:
-
-- the plain stage processes — `STAGE` (non-split), `STAGE_SPLIT` /
-  `STAGE_MAIN` / `STAGE_JOIN` (split), and their `_K` keyed-fork variants plus
-  `STAGE_MAP`;
-- the fused per-call processes from the BIND fold —
-  `STAGE_<n>_<pipeline>__<call>` and its `_SP` / `_MN` / `_JN` phase aliases.
-  These embed the **call** name, which is also what an mrp override key's last
-  segment names, so aliased calls (`call STAGE as X`, keyed `X`) match too.
-
-To hand-write an overlay, use the same shapes and set the `ext` value beside
-each directive, e.g.
-`withName: '(STAGE_[0-9]+_.+__)?ALIGN.*' { memory = '8 GB'; ext.mem_gb = 8; cpus = 4; ext.threads = 4 }`.
-A plain `memory` / `cpus` overlay only sizes the task: the stage still sees its
-`.mro` request in `__mem_gb`/`__threads` and `_jobinfo`, and `-monitor` still
-enforces that request on the first attempt.
+Such an overlay only sizes the task: the stage still sees its `.mro` request in
+`__mem_gb`/`__threads` and `_jobinfo`, and `-monitor` still enforces that
+request.
 
 ## Scheduler throttling
 

@@ -16,8 +16,9 @@
 # the go.mod toolchain: the image sets GOTOOLCHAIN=local, so it never switches.
 #
 # Base images are pinned by digest, so a moved tag cannot change the image;
-# Dependabot (docker) bumps tag and digest together. internal/emit's generated
-# Dockerfile uses the same final-stage base (TestGeneratedBaseMatchesRuntime).
+# Dependabot (docker) bumps tag and digest together. The docker isolation
+# suite runs on the same final-stage base (test/e2e/docker_test.go
+# runtimeBase).
 FROM --platform=$BUILDPLATFORM golang:1.26.9@sha256:d7722066f0b60ceccb6c0643cbed1f5f9e15506ac237146c95333504d7805d89 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
