@@ -340,8 +340,8 @@ func TestWriteOutsHoldsOneTree(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"inside the published directory output d is also published separately",
 		"outs/d/sub/x.txt is a link that reaches nothing",
+		"the pipeline outs also publish it separately",
 		"mrp leaves this dangling link and succeeds",
 	} {
 		if !strings.Contains(err.Error(), want) {

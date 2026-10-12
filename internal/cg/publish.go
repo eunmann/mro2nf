@@ -410,19 +410,19 @@ func (p *pipestance) materialize(results string) error {
 
 // danglingLink is the error for the link at rel in outs/ that reaches nothing.
 // A link below a published directory is the one PostProcess leaves where it
-// moved out a file that the pipeline outs publish separately from the
+// moved out an entry that the pipeline outs publish separately from the
 // directory. The copy of a stage's directory drops its own dangling links, so
-// no other link can lie there.
+// no other link can lie there. The message names only the link: the
+// directory may sit inside a map, struct or array output at any depth.
 func danglingLink(rel string, err error) error {
-	dir, _, nested := strings.Cut(rel, "/")
-	if !nested {
+	if !strings.Contains(rel, "/") {
 		return fmt.Errorf("%w: %w", errUnpublished, err)
 	}
 
-	return fmt.Errorf("%w: a file inside the published directory output %s is also published separately, "+
-		"so outs/%s is a link that reaches nothing; mrp leaves this dangling link and succeeds, "+
-		"but a results dir, possibly an object store, cannot hold it (publish the directory or the file inside it, not both): %w",
-		errUnpublished, dir, rel, err)
+	return fmt.Errorf("%w: outs/%s is a link that reaches nothing, left where an entry of a published directory "+
+		"was moved out because the pipeline outs also publish it separately; mrp leaves this dangling link and succeeds, "+
+		"but a results dir, possibly an object store, cannot hold it (publish the directory or the entry inside it, not both): %w",
+		errUnpublished, rel, err)
 }
 
 // within reports whether path lies below dir.
