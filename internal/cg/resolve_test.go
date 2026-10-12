@@ -96,7 +96,7 @@ func (f *fixture) outs(node string, fork Fork, outs string) string {
 	}
 
 	dir := f.next("outs")
-	if err := writeValue(dir, json.RawMessage(outs), types.Manifest{}, st.Call().DecId, types.RoleOut, nil); err != nil {
+	if err := writeOuts(dir, json.RawMessage(outs), types.Manifest{}, st.Call().DecId); err != nil {
 		f.t.Fatal(err)
 	}
 
@@ -106,6 +106,17 @@ func (f *fixture) outs(node string, fork Fork, outs string) string {
 	}
 
 	return dir
+}
+
+// writeOuts writes v, callable's outs, as an outs bundle that carries its
+// files, as a task posts them.
+func writeOuts(dir string, v json.Marshaler, man types.Manifest, callable string) error {
+	payload, params, err := bundlePayload(v, man, callable, types.RoleOut, nil)
+	if err != nil {
+		return err
+	}
+
+	return shim.WriteBundle(dir, payload, params, man.Table(), nil)
 }
 
 // args runs WriteArgs for node over the staged items, returning the

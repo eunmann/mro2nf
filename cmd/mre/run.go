@@ -37,7 +37,6 @@ const (
 )
 
 var (
-	errDisabledJob = errors.New("a disabled instance runs no job")
 	errPhase       = errors.New("-phase must be split, main or join")
 	errNotSplit    = errors.New("the stage does not split")
 	errNoChunk     = errors.New("no outs bundle for chunk")
@@ -107,10 +106,6 @@ func (f *runFlags) instance(g *cg.Graph) (job.Instance, core.LazyArgumentMap, er
 	stamp, err := g.ReadInstance(f.args)
 	if err != nil {
 		return job.Instance{}, nil, fmt.Errorf("run: %w", err)
-	}
-
-	if stamp.Disabled {
-		return job.Instance{}, nil, fmt.Errorf("run %s: %w", stamp.Node, errDisabledJob)
 	}
 
 	st, err := g.Stage(stamp.Node)

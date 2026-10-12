@@ -6,8 +6,12 @@
 // overrides file (overrides), which PLAN resolved; its GPU request is the
 // config's, which reads meta.special per task where a Nextflow 25.10
 // process accelerator directive cannot. Each task runs one `mre stage`
-// call: its phase's job as mrp runs it, with the args before it and the
-// post after it that the phase has.
+// call: the instance's args, which it builds from the inputs it staged,
+// its phase's job as mrp runs it, and the post after it that the phase
+// has. A split's chunks and join stage the split's inputs and build its
+// args again, so no task outputs args: each links the files they name
+// where Nextflow staged them, which an object-store work dir would
+// otherwise receive as one copy per fork.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -141,7 +145,7 @@ process STAGE_SPLIT {
     tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
 
     output:
-    tuple val(meta), val(key), path('args', type: 'dir'), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), eval('cat chunks/resources.tsv'), emit: split
+    tuple val(meta), val(key), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), eval('cat chunks/resources.tsv'), emit: split
 
     script:
     """
@@ -160,7 +164,7 @@ process STAGE_MAIN {
     // The chunk is staged below chunk/: the job's metadata dir is named as
     // the chunk, and must not write through the link into the split's.
     input:
-    tuple val(meta), val(key), path('args'), val(name), path(chunk, stageAs: 'chunk/*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), val(name), path(chunk, stageAs: 'chunk/*')
 
     output:
     tuple val(meta), val(key), path('chunkout/*', type: 'dir'), emit: chunk
@@ -168,7 +172,8 @@ process STAGE_MAIN {
     script:
     """
     ${callFile(meta)}
-    ${mreStage(meta, 'main', "-args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
+    mkdir -p in
+    ${mreStage(meta, 'main', "${args(meta, forks, leaves)} -args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
 }
 
@@ -179,7 +184,7 @@ process STAGE_JOIN {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), path('args'), path(chunks, stageAs: 'chunks/*', arity: '0..*'), path('chunks/join.json'), path(couts, stageAs: 'chunkouts/*', arity: '0..*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(chunks, stageAs: 'chunks/*', arity: '0..*'), path('chunks/join.json'), path(couts, stageAs: 'chunkouts/*', arity: '0..*')
 
     output:
     tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), emit: outs
@@ -189,7 +194,8 @@ process STAGE_JOIN {
     script:
     """
     ${callFile(meta)}
-    ${mreStage(meta, 'join', "-args args -chunks chunks -chunkouts chunkouts -o stage_outs ${postFlags()}")}
+    mkdir -p in
+    ${mreStage(meta, 'join', "${args(meta, forks, leaves)} -args args -chunks chunks -chunkouts chunkouts -o stage_outs ${postFlags()}")}
     """
 }
 
@@ -614,16 +620,25 @@ workflow INPUT_ENTRY {
     out
 }
 
+// staged is an instance the split process takes, by its key, with what the
+// task stages to build its args: [key, fork records, staged items, entry
+// indices, entry files].
+def staged(List v) {
+    return v.drop(1)
+}
+
 // CHUNKS is a main per chunk a split returned, each scheduled with the
-// resources its job gets, from the split's resources table.
+// resources its job gets, from the split's resources table, and staging
+// the split's inputs, input.
 workflow CHUNKS {
     take:
     split
+    input
 
     main:
-    out = split.flatMap { m, k, a, cs, _j, res ->
+    out = split.map { m, k, cs, _j, res -> [k, m, cs, res] }.join(input.map { v -> staged(v) }).flatMap { k, m, cs, res, fs, us, ids, ef ->
         def r = resources(res)
-        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, a, c.name, c] }
+        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, us, ids, ef, c.name, c] }
     }
 
     emit:
@@ -631,16 +646,18 @@ workflow CHUNKS {
 }
 
 // JOIN is a split's join over every chunk's outs once all are in, by chunk
-// name, not by completion, scheduled with the resources the split gave it.
+// name, not by completion, scheduled with the resources the split gave it,
+// and staging the split's inputs, input.
 workflow JOIN {
     take:
     split
     chunk
+    input
 
     main:
     outs = chunk.map { m, k, o -> [groupKey(k, m.chunks), o] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }
-    none = split.filter { v -> v[3].isEmpty() }.map { v -> [v[1], []] }
-    out = split.map { m, k, a, cs, j, res -> [k, m + resources(res).join, a, cs, j] }.join(outs.mix(none)).map { k, m, a, cs, j, os -> [m, k, a, cs, j, os] }
+    none = split.filter { v -> v[2].isEmpty() }.map { v -> [v[1], []] }
+    out = split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, fs, us, ids, ef, os -> [m, k, fs, us, ids, ef, cs, j, os] }
 
     emit:
     out

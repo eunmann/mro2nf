@@ -102,7 +102,7 @@ logs or a wrapping proxy and is out of scope here (see below).
 
 ## Fixtures and lanes
 
-Eight fixtures live under `bench/`, exercising the costly patterns the overhead
+Nine fixtures live under `bench/`, exercising the costly patterns the overhead
 rule targets:
 
 - **`chain`** — one file (`MAKEBIG`) carried through a deep chain of pass-through
@@ -113,8 +113,8 @@ rule targets:
   identical at both, so any per-fork bookkeeping task a change reintroduces
   fails the gate.
 - **`split`** — a split stage whose large stage-level file arg (`payload`,
-  written by a producer stage, `MKPAY`) reaches every chunk's main in the
-  split's args bundle, even though `main` never reads it: O(N) stagings over
+  written by a producer stage, `MKPAY`) reaches every chunk's main, which
+  stages the split's inputs, even though `main` never reads it: O(N) stagings over
   an N-way split, intrinsic as a chunk's `main` receives every stage arg, as
   under `mrp`. Run at two chunk counts (`pipeline_c4.mro`, `pipeline_c16.mro`) with
   the same width-flat plumbing requirement.
@@ -134,6 +134,11 @@ rule targets:
   so the split reads `MKFILES.fs unless GATE.off` (#494), under the same
   flat-staging gate. Both lanes hold the gate enabled (`skip = false`); the
   disabled branch is covered only by the unit `TestZipGatedPartner`.
+- **`splitbroadcast`** — one file (`MKREF`'s `ref`) broadcast into a map
+  call over a split stage, whose every chunk and join reads it
+  (`pipeline_w4.mro`, `pipeline_w8.mro` samples): no task may copy it into
+  a fork's args, so its `restaged_bytes` per producer stay flat (#507),
+  under the flat-staging gate.
 
 Every fixture invocation runs as one lane, keyed by its invocation (`chain`,
 `forks_w4`, `split_c16`, …). Every lane's plumbing is the run's PLAN and OUTS
@@ -191,10 +196,10 @@ checks:
   until the marker is dropped, so fixing the issue turns the lane into an
   ordinary flat-gated one. Every group must also write the same
   `restaged_bytes` per producer at every width (within 5%): a file every fork
-  of a non-split stage reads is referenced where it was staged, not copied
-  into each fork (#498). Per fork such a copy would read flat; per producer,
-  the unit of the data, it grows with the width. A split stage's `args` still
-  carries one copy per fork, which no lane covers yet (#507).
+  reads is referenced where it was staged, not copied into each fork, by a
+  non-split stage (#498) or by a split stage's split, chunks or join (#507).
+  Per fork such a copy would read flat; per producer, the unit of the data,
+  it grows with the width.
 - **mrp-jobs gate** — every lane's `stage_tasks` must equal `mrp_jobs`: one
   stage task per Martian job, so stage work is neither duplicated nor hidden
   in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make

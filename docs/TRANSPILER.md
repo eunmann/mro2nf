@@ -165,11 +165,11 @@ The workflow that wires a node includes them once for it under its own alias
 and `_JN`), so a `withName:` selector names the node. Every stage task runs
 one `mre stage` call (§6), which compiles the call graph once and runs the
 phase's job as `mrp` runs it, building the instance's args bundle before it
-in a split and a non-split stage's main, and posting its outs after it in a
-join and a non-split stage's main. Each process declares only the outputs
-its consumers stage; the args and outs bundles between steps stay
-undeclared files of its work dir, except the split's args bundle, which its
-chunks and join stage. `stage.nf` also
+in every task, and posting its outs after it in a join and a non-split
+stage's main. A split's chunk mains and join stage the split's inputs, the
+same instance tuple, and build its args again. Each process declares only
+the outputs its consumers stage; the args and outs bundles between steps
+stay undeclared files of its work dir. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_COUNTS`, `ENTRY_ROOT`) and that take a node's
 instances through each step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
@@ -373,13 +373,12 @@ type manifest from the invocation's own declarations.
   the node.
 - **`mre stage -phase split|main|join -node <fqid>`** is the one `mre` call
   of a stage task. It compiles the call graph once and runs, against it, the
-  steps below that the phase has: a split, or a non-split stage's main,
-  first builds the instance's args bundle (`-args`), its file leaves always
-  linked for the main, which no other task stages, and always copied for the
-  split, whose chunks and join stage it; then every phase runs its job; then
-  a join, or a non-split stage's main, posts the outs bundle its job wrote
-  (`-o`). A split stage's main only runs its chunk's job against the args
-  bundle the split built. An instance its args resolve disabled, where its
+  steps below that the phase has: every phase first builds the instance's
+  args bundle (`-args`) from what its task staged, its file leaves linked,
+  as no other task stages it; then runs its job; then a join, or a
+  non-split stage's main, posts the outs bundle its job wrote (`-o`). A
+  split's chunk mains and join stage the split's inputs and build the same
+  args bundle the split did. An instance its args resolve disabled, where its
   gates held it enabled, fails the task with exit 1 before any job runs, and
   it posts nothing. A failed job exits as the job step below says, and no
   post follows it; a failed args or post step exits 1. The bundles are
@@ -545,14 +544,15 @@ Both prefixes resolve identically on read-back. The rules:
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
   This is `shim.MarkFiles`, which uses the type manifest to find exactly which
   leaves are files (recursing into structs, arrays and maps).
-- **Linked bundles** (on write): the args bundle of a non-split stage is read
-  only by its own task, so the task's `mre stage` writes it linked
+- **Linked bundles** (on write): an args bundle is read only by its own
+  task, so the task's `mre stage` writes it linked
   (`shim.WriteLinkedBundle`), linking each leaf instead of copying it: a leaf of a staged bundle by its ordinal
   dir, whose origin record comes with it, any other file by itself beside its
   origin record. A file every fork of a map call reads, such as a broadcast
   upstream output or entry file, exists once, its producer's, however wide the
-  fork of a non-split stage (#498). A split stage's args travels to its chunks
-  and join, so it still carries its files, one copy per fork (#507).
+  fork (#498). A split's chunks and join build their own args bundle from the
+  split's inputs, which Nextflow stages into them, so no task outputs an args
+  bundle and none carries a copy of the files it names (#507).
 - **Origins** (on write): a file is one to `mrp` wherever it is referenced, so a
   bundle copies it once and gives every position that reaches it one marker,
   however many input bundles it arrived through. Its identity is its origin, the

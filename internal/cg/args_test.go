@@ -10,13 +10,12 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
 )
 
 // TestArgsLinkOneCopy pins one copy of a broadcast file (#498): every FUSE
-// fork of bench/forks reads MKPAY's payload, and an args bundle written
-// with Link holds no file of its own but its records. Each fork reads the
+// fork of bench/forks reads MKPAY's payload, and an args bundle holds no
+// file of its own but its records. Each fork reads the
 // payload, with the origin the producer recorded, through a link to the
 // leaf it staged, so the payload's link count stays the producer's.
 func TestArgsLinkOneCopy(t *testing.T) {
@@ -36,7 +35,7 @@ func TestArgsLinkOneCopy(t *testing.T) {
 	}
 
 	mkpay := f.next("outs")
-	if err := writeValue(mkpay, json.RawMessage(`{"f":`+strconv.Quote(src)+`}`), man, "MKPAY", types.RoleOut, nil); err != nil {
+	if err := writeOuts(mkpay, json.RawMessage(`{"f":`+strconv.Quote(src)+`}`), man, "MKPAY"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -59,7 +58,7 @@ func TestArgsLinkOneCopy(t *testing.T) {
 
 	for i, el := range elems {
 		args := f.next("args")
-		if _, err := g.WriteArgs(ArgsSpec{Node: "FANOUT.FUSE", In: []string{mkpay, el}, Manifest: man, Out: args, Link: true}); err != nil {
+		if _, err := g.WriteArgs(ArgsSpec{Node: "FANOUT.FUSE", In: []string{mkpay, el}, Manifest: man, Out: args}); err != nil {
 			t.Fatal(err)
 		}
 

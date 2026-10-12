@@ -129,7 +129,7 @@ func readAllocation(t *testing.T, path string) allocation {
 // key mrp does not know fails the job before any stage code runs.
 func TestStageUnderOverrides(t *testing.T) {
 	dir, work := writeSQ(t), t.TempDir()
-	args, chunks := filepath.Join(work, "args"), filepath.Join(work, "chunks")
+	chunks := filepath.Join(work, "chunks")
 	over := writeTestFile(t, filepath.Join(work, "overrides.json"),
 		`{"P": {"chunk.mem_gb": 2}, "P.SQ": {"split.threads": 2, "chunk.mem_gb": 3, "join.vmem_gb": 9}}`)
 
@@ -148,7 +148,7 @@ func TestStageUnderOverrides(t *testing.T) {
 
 	for _, p := range phases {
 		jw := filepath.Join(work, p.meta+"-work")
-		if _, err := runSQ(t, dir, append([]string{"stage", "-phase", p.phase, "-node", "P.SQ", "-args", args, "-overrides", over, "-work", jw}, p.argv...)...); err != nil {
+		if _, err := runSQ(t, dir, append([]string{"stage", "-phase", p.phase, "-node", "P.SQ", "-args", filepath.Join(jw, "args"), "-overrides", over, "-work", jw}, p.argv...)...); err != nil {
 			t.Fatalf("%s: %v", p.meta, err)
 		}
 
@@ -172,14 +172,12 @@ func TestStageUnderOverrides(t *testing.T) {
 }
 
 // TestStageJobRefusals: mre stage refuses, before it runs any stage code,
-// an instance its args resolve disabled, and a later phase's job of one,
-// which the args bundle's stamp records disabled; a phase the stage has no
-// job for; an unknown phase; and a py job whose work dir cannot hold the
-// adapters mre embeds. Each case's task reads the args bundle the cases
-// before it built.
+// an instance its args resolve disabled, in every phase; a phase the stage
+// has no job for; an unknown phase; and a py job whose work dir cannot
+// hold the adapters mre embeds. Each case's task builds its own args
+// bundle.
 func TestStageJobRefusals(t *testing.T) {
 	dir, work := writeSQ(t), t.TempDir()
-	off, one := filepath.Join(work, "off"), filepath.Join(work, "one")
 
 	file := filepath.Join(work, "file")
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
@@ -191,13 +189,15 @@ func TestStageJobRefusals(t *testing.T) {
 		argv []string
 		want error
 	}{
-		{"disabled", []string{"-phase", "split", "-node", "P.OFF", "-args", off}, errNotEnabled},
-		{"disabled join", []string{"-phase", "join", "-node", "P.OFF", "-args", off}, errDisabledJob},
-		{"phase", []string{"-phase", "chunk", "-node", "P.SQ", "-args", filepath.Join(work, "args")}, errPhase},
-		{"split", []string{"-phase", "split", "-node", "P.ONE", "-args", one, "-mrjob", "/opt/mrjob"}, errNotSplit},
-		{"join", []string{"-phase", "join", "-node", "P.ONE", "-args", one, "-mrjob", "/opt/mrjob"}, errNotSplit},
+		{"disabled", []string{"-phase", "split", "-node", "P.OFF"}, errNotEnabled},
+		{"disabled main", []string{"-phase", "main", "-node", "P.OFF"}, errNotEnabled},
+		{"disabled join", []string{"-phase", "join", "-node", "P.OFF"}, errNotEnabled},
+		{"phase", []string{"-phase", "chunk", "-node", "P.SQ"}, errPhase},
+		{"split", []string{"-phase", "split", "-node", "P.ONE", "-mrjob", "/opt/mrjob"}, errNotSplit},
+		{"join", []string{"-phase", "join", "-node", "P.ONE", "-mrjob", "/opt/mrjob"}, errNotSplit},
 	} {
-		argv := append([]string{"stage", "-o", filepath.Join(work, tc.name), "-work", filepath.Join(work, tc.name+"-work")}, tc.argv...)
+		w := filepath.Join(work, tc.name+"-work")
+		argv := append([]string{"stage", "-args", filepath.Join(w, "args"), "-o", filepath.Join(work, tc.name), "-work", w}, tc.argv...)
 		if _, err := runSQ(t, dir, argv...); !errors.Is(err, tc.want) {
 			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
 		}

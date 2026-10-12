@@ -99,7 +99,7 @@ func argsStep(gf graphFlags, a argsFlags, out string) (cg.Instance, error) {
 		return cg.Instance{}, err
 	}
 
-	return a.write(g, man, out, false)
+	return a.write(g, man, out)
 }
 
 // postStep runs mre stage's post step against the invocation gf locates,

@@ -70,6 +70,10 @@ func benchLanes() []benchLane {
 		// MKVALS's values with MKFILES's files through the gate (#494).
 		{key: "zipgated_w4", dir: "zipgated", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 1, mrpJobs: 3 + 4, flatStaging: true},
 		{key: "zipgated_w16", dir: "zipgated", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 1, mrpJobs: 3 + 16, flatStaging: true},
+		// MKREF, then per sample ALIGN's split, 2 chunks and join, whose
+		// chunks and join read MKREF's ref.
+		{key: "splitbroadcast_w4", dir: "splitbroadcast", mro: "pipeline_w4.mro", probe: "MRE_BENCH_SPLITBROADCAST_PROBE", producers: 1, mrpJobs: 1 + 4*4, flatStaging: true},
+		{key: "splitbroadcast_w8", dir: "splitbroadcast", mro: "pipeline_w8.mro", probe: "MRE_BENCH_SPLITBROADCAST_PROBE", producers: 1, mrpJobs: 1 + 8*4, flatStaging: true},
 	}
 }
 

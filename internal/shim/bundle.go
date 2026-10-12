@@ -308,7 +308,7 @@ func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *typ
 }
 
 // WriteLinkedBundle writes payload into dir as a bundle that no other task
-// stages, such as a non-split stage's args: each file leaf is a symlink to
+// stages, such as a stage task's args: each file leaf is a symlink to
 // the file payload names, which the task staged, not a copy of it. A leaf of
 // a staged bundle is linked by its ordinal dir, so its recorded origin comes
 // with it. A bundle another task stages must carry its files: WriteBundle.

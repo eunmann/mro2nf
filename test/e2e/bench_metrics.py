@@ -33,8 +33,8 @@ The staging probe reads every task work dir (see probe_task_dirs):
                  or a byte copy of, a file they staged: data written again
                  rather than referenced. bench_report.py holds it per
                  producer to the same at every width, so a file every fork
-                 of a non-split stage reads is not copied into each (#498);
-                 a split stage's args still copies one per fork (#507)
+                 reads is not copied into each, by a non-split stage (#498)
+                 or a split stage's tasks (#507)
   probe_writes -- files in task work dirs that are a copy of the probe file
                  (the ideal is producers: each producer writes it once)
   max_argv_bytes / max_arg_bytes -- the largest mre command line, and the

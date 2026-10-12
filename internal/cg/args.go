@@ -36,7 +36,10 @@ type ArgsSpec struct {
 	Forks []Element
 	// Manifest locates the file leaves the args bundle stages.
 	Manifest types.Manifest
-	// Out is the args bundle dir. A disabled instance gets only its stamp.
+	// Out is the args bundle dir, which only its own task reads: its file
+	// leaves link to the files the task staged (shim.WriteLinkedBundle), so
+	// a file every fork of a map call reads exists once, its producer's. A
+	// disabled instance gets only its stamp.
 	Out string
 	// Log receives the error of each input that read a missing element and
 	// resolved to null, which mrp logs before it runs the fork. Nil discards
@@ -48,12 +51,6 @@ type ArgsSpec struct {
 	// EntryFiles maps each entry file value the task staged to the path it
 	// reads it at (StagedEntryFiles).
 	EntryFiles map[string]string
-	// Link is set when no other task stages the args bundle: its file
-	// leaves link to the files the task staged (shim.WriteLinkedBundle), so
-	// a file every fork of a map call over a non-split stage reads exists
-	// once, its producer's. A split stage's args travels to its chunks and
-	// join, so it still carries its files, one copy per fork (#507).
-	Link bool
 }
 
 // WriteArgs resolves the instance's disabled state and, when it runs, its
@@ -177,13 +174,8 @@ func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, []int, error
 	return fork, lens, nil
 }
 
-// writeArgs writes the instance's resolved args as its args bundle, linked
-// when spec.Link is set.
+// writeArgs writes the instance's resolved args as its linked args bundle.
 func writeArgs(spec ArgsSpec, args json.Marshaler, callable string) error {
-	if !spec.Link {
-		return writeValue(spec.Out, args, spec.Manifest, callable, types.RoleIn, spec.EntryFiles)
-	}
-
 	payload, params, err := bundlePayload(args, spec.Manifest, callable, types.RoleIn, spec.EntryFiles)
 	if err != nil {
 		return err
@@ -191,21 +183,6 @@ func writeArgs(spec ArgsSpec, args json.Marshaler, callable string) error {
 
 	if err := shim.WriteLinkedBundle(spec.Out, payload, params, spec.Manifest.Table()); err != nil {
 		return fmt.Errorf("write %s bundle %s: %w", types.RoleIn, spec.Out, err)
-	}
-
-	return nil
-}
-
-// writeValue writes a resolved object as a bundle of callable's role params
-// (bundlePayload).
-func writeValue(dir string, v json.Marshaler, man types.Manifest, callable, role string, staged map[string]string) error {
-	payload, params, err := bundlePayload(v, man, callable, role, staged)
-	if err != nil {
-		return err
-	}
-
-	if err := shim.WriteBundle(dir, payload, params, man.Table(), nil); err != nil {
-		return fmt.Errorf("write %s bundle %s: %w", role, dir, err)
 	}
 
 	return nil

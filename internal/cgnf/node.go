@@ -81,7 +81,7 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	in := p.input(w, n, run, meta)
 
 	if n.Split {
-		splitTriad(w, proc, in)
+		splitTriad(w, i, proc, in)
 		proc += "_JN"
 	} else {
 		w.incs = append(w.incs, "STAGE as "+proc)
@@ -330,11 +330,13 @@ func (p *project) sizedGather(n, up cg.TopoNode, run, outs, counts, fields strin
 	return fmt.Sprintf("GATHER_SIZED(%s, %s, %s, %s, %s, %s, %s, %s)", run, outs, counts, ilist(mine), ilist(theirs), ilist(outerMine), ilist(outerTheirs), fields)
 }
 
-// splitTriad runs a split node: its split, a main per chunk the split
-// returned, and its join over every chunk's outs.
-func splitTriad(w *wiring, proc, in string) {
+// splitTriad runs split node i's instances, in: its split, a main per
+// chunk the split returned, and its join over every chunk's outs, each
+// task staging the instance's inputs.
+func splitTriad(w *wiring, i int, proc, in string) {
 	w.incs = append(w.incs, fmt.Sprintf("STAGE_SPLIT as %[1]s_SP ; STAGE_MAIN as %[1]s_MN ; STAGE_JOIN as %[1]s_JN", proc))
-	w.linef("%s_SP(%s)", proc, in)
-	w.linef("%[1]s_MN(CHUNKS(%[1]s_SP.out.split))", proc)
-	w.linef("%[1]s_JN(JOIN(%[1]s_SP.out.split, %[1]s_MN.out.chunk))", proc)
+	w.linef("s%d = %s", i, in)
+	w.linef("%s_SP(s%d)", proc, i)
+	w.linef("%[1]s_MN(CHUNKS(%[1]s_SP.out.split, s%[2]d))", proc, i)
+	w.linef("%[1]s_JN(JOIN(%[1]s_SP.out.split, %[1]s_MN.out.chunk, s%[2]d))", proc, i)
 }
