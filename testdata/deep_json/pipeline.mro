@@ -1,0 +1,38 @@
+# #337: a stage output nested about 9,000 levels deep, which mrp accepts (Go's
+# JSON decoder takes 10,000) and a recursive JSON parser on the driver would
+# overflow its stack on. MAKE returns a list nested `depth` levels inside a
+# map; MEASURE reads it back and returns its depth. No task's record the
+# driver reads holds a stage's value, so the run completes as under mrp.
+stage MAKE(
+    in  int depth,
+    out map deep,
+    src py  "stages/make",
+)
+
+stage MEASURE(
+    in  map deep,
+    out int depth,
+    src py  "stages/measure",
+)
+
+pipeline DEEP(
+    in  int depth,
+    out int depth,
+)
+{
+    call MAKE(
+        depth = self.depth,
+    )
+
+    call MEASURE(
+        deep = MAKE.deep,
+    )
+
+    return (
+        depth = MEASURE.depth,
+    )
+}
+
+call DEEP(
+    depth = 9000,
+)

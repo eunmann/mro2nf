@@ -210,6 +210,9 @@ var goldenCases = []goldenCase{
 	// #284: stages see the basename mrp passes for a file from an upstream
 	// stage, an entry input, a fork, a split's chunk def and a join's chunk outs.
 	{"basename_echo", "basename_echo", "expected/outs.json"},
+	// #337: a stage output nested 9,000 levels deep crosses tasks the driver
+	// never parses.
+	{"deep_json", "deep_json", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile

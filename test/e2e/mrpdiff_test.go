@@ -497,6 +497,8 @@ var mrpDiffCases = []mrpDiffCase{
 	// The same gate under map calls the entry forks, an array and a map with
 	// unsorted keys: the producer's outs give each fork its gate value.
 	{name: "split_gate_entry"},
+	// #337: a stage output nested 9,000 levels deep.
+	{name: "deep_json"},
 	// #472: every bench lane's invocation at its narrower width, so a
 	// divergence on a bench shape fails here and not only the bench's
 	// task-count gates.
