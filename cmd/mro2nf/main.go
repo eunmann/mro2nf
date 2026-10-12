@@ -101,26 +101,26 @@ func run(args []string) error {
 
 	log := logging.New()
 
+	opts, err := f.options(src, fromConfig)
+	if err != nil {
+		return err
+	}
+
 	switch *f.emitter {
 	case "":
 	case emitterV2:
-		if err := emitV2(src, f); err != nil {
+		if err := emitV2(src, f, opts); err != nil {
 			return fmt.Errorf("transpile %s: %w", src, err)
 		}
 
-		log.Info("emitted Nextflow project", "source", src, "emitter", emitterV2, "out", *f.outDir)
+		log.Info("emitted Nextflow project", "source", src, "emitter", emitterV2, "out", opts.OutDir)
 
 		return nil
 	default:
 		return fmt.Errorf("%w %q", errBadEmitter, *f.emitter)
 	}
 
-	prog, err := loadProgram(src, *f.mroPath)
-	if err != nil {
-		return err
-	}
-
-	opts, err := f.options(fs, fromConfig)
+	prog, err := loadProgram(src, opts.MROPath)
 	if err != nil {
 		return err
 	}
@@ -160,7 +160,7 @@ type transpileFlags struct {
 func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 	return transpileFlags{
 		outDir:             fs.String("o", "out", "output directory for the generated Nextflow project"),
-		mroPath:            fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)"),
+		mroPath:            fs.String("mropath", "", mroPathUsage),
 		mre:                fs.String("mre", "mre", "path to the mre shim binary"),
 		shell:              fs.String("shell", "", "path to martian_shell.py"),
 		mrjob:              fs.String("mrjob", "", "path to mrjob (for comp stages)"),
@@ -188,22 +188,15 @@ func (f transpileFlags) configPtrs() cliPtrs {
 // options builds the single emit.Options both Diagnose and Emit consume — a new
 // flag added here reaches both, so they cannot diverge. emitProgram fills in
 // the source-derived fields (absolute tool paths, MROFile/MRODir, StageCode).
-// Only a -mropath given on fs bounds the copied files: the implicit "." would
-// trust the whole working directory, often $HOME. fromConfig names the flags a
-// config file set (applyConfig); the tools among them are not trusted.
-func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (emit.Options, error) {
+// The @include search path of the pipeline src also bounds the copied files:
+// the user named it (-mropath or $MROPATH), or it is the .mro's directory,
+// which bounds them anyway. fromConfig names the flags a config file set
+// (applyConfig); the tools among them are not trusted.
+func (f transpileFlags) options(src string, fromConfig map[string]bool) (emit.Options, error) {
 	target, err := emit.ParseTarget(*f.target)
 	if err != nil {
 		return emit.Options{}, fmt.Errorf("invalid -target: %w", err)
 	}
-
-	var roots []string
-
-	fs.Visit(func(fl *flag.Flag) {
-		if fl.Name == "mropath" {
-			roots = filepath.SplitList(*f.mroPath)
-		}
-	})
 
 	tools := map[string]bool{}
 
@@ -218,7 +211,7 @@ func (f transpileFlags) options(fs *flag.FlagSet, fromConfig map[string]bool) (e
 		Container: *f.container, Monitor: *f.monitor, Target: target,
 		Native:          *f.native,
 		InlinePipelines: *f.inlinePipelines, ConfineOutputs: *f.confineOutputs,
-		MROPath: roots, AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
+		MROPath: searchPath(*f.mroPath, src), AllowExternalFiles: *f.allowExternalFiles, ConfigTools: tools,
 		Version: buildVersion(),
 	}, nil
 }
@@ -234,7 +227,7 @@ func runOverrides(args []string) error {
 	fs := flag.NewFlagSet("overrides", flag.ContinueOnError)
 	mroFlag := fs.String("mro", "", "pipeline .mro: expands pipeline-scoped keys to their stages, validates stage names, "+
 		"and pins per-call selectors to literal pipeline names (avoids over-matching call names containing '__')")
-	mroPath := fs.String("mropath", ".", "search path for @include (os.PathListSeparator-separated)")
+	mroPath := fs.String("mropath", "", mroPathUsage)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -270,14 +263,31 @@ func runOverrides(args []string) error {
 	return nil
 }
 
+const mroPathUsage = "search path for @include (os.PathListSeparator-separated; default $MROPATH, else the .mro's directory, as mrp)"
+
+// searchPath is the @include search path for the pipeline at src: given, else
+// $MROPATH, else src's directory — mrp's rule (martian cmd/mrp/configure.go,
+// "Compute MRO path").
+func searchPath(given, src string) []string {
+	if given != "" {
+		return filepath.SplitList(given)
+	}
+
+	if env := os.Getenv("MROPATH"); env != "" {
+		return filepath.SplitList(env)
+	}
+
+	return []string{filepath.Dir(src)}
+}
+
 // loadProgram parses and lowers the pipeline at src into the transpiler IR.
-func loadProgram(src, mroPath string) (*ir.Program, error) {
-	ast, err := frontend.Parse(src, filepath.SplitList(mroPath), false)
+func loadProgram(src string, mroPaths []string) (*ir.Program, error) {
+	ast, err := frontend.Parse(src, mroPaths, false)
 	if err != nil {
 		return nil, fmt.Errorf("transpile %s: %w", src, err)
 	}
 
-	prog, err := frontend.Lower(ast, filepath.SplitList(mroPath))
+	prog, err := frontend.Lower(ast, mroPaths)
 	if err != nil {
 		return nil, fmt.Errorf("transpile %s: %w", src, err)
 	}
@@ -296,12 +306,14 @@ func loadOverrideProgram(mro, mroPath string) (*ir.Program, error) {
 		return nil, nil
 	}
 
-	ast, err := frontend.Parse(mro, filepath.SplitList(mroPath), false)
+	mroPaths := searchPath(mroPath, mro)
+
+	ast, err := frontend.Parse(mro, mroPaths, false)
 	if err != nil {
 		return nil, fmt.Errorf("parse pipeline %s: %w", mro, err)
 	}
 
-	prog, err := frontend.Lower(ast, filepath.SplitList(mroPath))
+	prog, err := frontend.Lower(ast, mroPaths)
 	if err != nil {
 		return nil, fmt.Errorf("lower pipeline %s: %w", mro, err)
 	}
@@ -367,21 +379,22 @@ type cliPtrs struct {
 // -config path must exist — a typo there must not silently drop the defaults —
 // while the implicit alongside-the-.mro probe tolerates a missing file. An
 // empty -config value is indistinguishable from an unset flag, so it takes the
-// implicit probe. It returns the names of the flags the config set.
-func applyConfig(fs *flag.FlagSet, explicit, mroPath string, p cliPtrs) (map[string]bool, error) {
-	var (
-		cfg *config.Config
-		err error
-	)
-
-	if explicit != "" {
-		cfg, err = config.LoadRequired(explicit)
-	} else {
-		cfg, err = config.Load(filepath.Join(filepath.Dir(mroPath), config.FileName))
+// implicit probe. A relative tool path in the file is relative to the file's
+// directory, so a checked-in config names the same tools from any working
+// directory. It returns the names of the flags the config set.
+func applyConfig(fs *flag.FlagSet, explicit, mroFile string, p cliPtrs) (map[string]bool, error) {
+	path, load := explicit, config.LoadRequired
+	if path == "" {
+		path, load = filepath.Join(filepath.Dir(mroFile), config.FileName), config.Load
 	}
 
+	cfg, err := load(path)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
+	}
+
+	if err := resolveTools(cfg.Mre, cfg.Shell, cfg.Mrjob, filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 
 	set := map[string]bool{}
@@ -454,9 +467,10 @@ func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 		return err
 	}
 
-	opts.Mre = absOrSelf(opts.Mre)
-	opts.Shell = absOrSelf(opts.Shell)
-	opts.Mrjob = absOrSelf(opts.Mrjob)
+	if err := resolveToolPaths(&opts); err != nil {
+		return err
+	}
+
 	opts.MROFile = filepath.Base(src)
 	opts.MRODir = mroDir
 	opts.StageCode = code
@@ -468,18 +482,66 @@ func emitProgram(prog *ir.Program, src string, opts emit.Options) error {
 	return nil
 }
 
-// absOrSelf resolves a tool flag the way exec.LookPath dispatches: a bare
-// command name (no path separator) is left as-is for PATH lookup at task run
-// time, while any path containing a separator is absolutized so the generated
-// project does not depend on Nextflow's per-task working directory.
-func absOrSelf(p string) string {
+// resolveToolPaths makes the -mre, -shell and -mrjob paths baked into the
+// project absolute, so it does not depend on Nextflow's per-task working
+// directory. -mre and -mrjob are exec'd, so a bare name stays a PATH command;
+// -shell is the interpreter's script argument, which mre runs from the task's
+// files dir, so even a bare name is a file.
+func resolveToolPaths(opts *emit.Options) error {
+	return resolveTools(&opts.Mre, &opts.Shell, &opts.Mrjob, "")
+}
+
+// resolveTools resolves the mre, shell and mrjob paths in place against base
+// (see filePath) by the rules resolveToolPaths states.
+func resolveTools(mre, shell, mrjob *string, base string) error {
+	for _, tool := range []struct {
+		name    string
+		path    *string
+		resolve func(p, base string) (string, error)
+	}{
+		{"mre", mre, commandPath}, {"shell", shell, filePath}, {"mrjob", mrjob, commandPath},
+	} {
+		if tool.path == nil {
+			continue
+		}
+
+		resolved, err := tool.resolve(*tool.path, base)
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", tool.name, err)
+		}
+
+		*tool.path = resolved
+	}
+
+	return nil
+}
+
+// commandPath resolves an exec'd tool the way exec.LookPath dispatches: a
+// bare name (no path separator) stays a PATH command, any other path is made
+// absolute (see filePath).
+func commandPath(p, base string) (string, error) {
 	if !strings.ContainsRune(p, filepath.Separator) {
-		return p
+		return p, nil
 	}
 
-	if abs, err := filepath.Abs(p); err == nil {
-		return abs
+	return filePath(p, base)
+}
+
+// filePath makes a non-empty p absolute, a relative p taken relative to base,
+// itself relative to the working directory.
+func filePath(p, base string) (string, error) {
+	if p == "" {
+		return "", nil
 	}
 
-	return p
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
+	}
+
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", fmt.Errorf("absolute path of %s: %w", p, err)
+	}
+
+	return abs, nil
 }

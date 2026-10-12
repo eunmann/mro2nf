@@ -80,6 +80,49 @@ func TestEmitterV2(t *testing.T) {
 	}
 }
 
+// TestEmitterV2ResolvesToolsAsTheOldEmitter: v2 takes its adapters from
+// -shell made absolute against the cwd, and from a .mro2nf.yml shell against
+// the config file's dir, as the transpile options resolve them (#266).
+func TestEmitterV2ResolvesToolsAsTheOldEmitter(t *testing.T) {
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "file_min"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, cfgDir := t.TempDir(), t.TempDir()
+	cfg := filepath.Join(cfgDir, ".mro2nf.yml")
+
+	if err := os.WriteFile(cfg, []byte("shell: tools/adapters/python/martian_shell.py\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(cwd)
+
+	for name, tc := range map[string]struct {
+		flags []string
+		want  string
+	}{
+		"flag":   {[]string{"-shell", "adapters/python/martian_shell.py"}, filepath.Join(cwd, "adapters")},
+		"config": {[]string{"-config", cfg}, filepath.Join(cfgDir, "tools", "adapters")},
+	} {
+		out := filepath.Join(t.TempDir(), "proj")
+		args := append([]string{"-emitter=v2", "-o", out, "-mre", "/opt/bin/mre", "-mropath", dir}, tc.flags...)
+
+		if err := run(append(args, filepath.Join(dir, "pipeline.mro"))); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		got, err := os.ReadFile(filepath.Join(out, "nextflow.config"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if want := "params.mro2nf_adapters = '" + tc.want + "'"; !strings.Contains(string(got), want) {
+			t.Errorf("%s: nextflow.config lacks %q:\n%s", name, want, got)
+		}
+	}
+}
+
 // TestEmitterV2Refuses: the call-graph emitter refuses an unknown emitter,
 // the old emitter's modes and a missing adapter, and a pipeline mrp refuses
 // before any stage runs (#387), emitting no project.

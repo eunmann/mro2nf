@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/eunmann/mro2nf/internal/cgnf"
+	"github.com/eunmann/mro2nf/internal/emit"
 )
 
 // emitterV2 selects the call-graph emitter (internal/cgnf) while the
@@ -47,53 +48,55 @@ func hiddenEmitterFlag(fs *flag.FlagSet) *string {
 	return v
 }
 
-// emitV2 transpiles src with the call-graph emitter, refusing the old
-// emitter's modes and file-copying.
-func emitV2(src string, f transpileFlags) error {
-	if *f.native || *f.container != "" || *f.target != "local" || *f.allowExternalFiles || !*f.inlinePipelines {
+// emitV2 transpiles src with the call-graph emitter from the transpile
+// options, refusing the old emitter's modes and file-copying.
+func emitV2(src string, f transpileFlags, opts emit.Options) error {
+	if opts.Native || opts.Container != "" || *f.target != "local" || opts.AllowExternalFiles || !opts.InlinePipelines {
 		return fmt.Errorf("-native, -container, -target, -allow-external-files and -inline-pipelines=false: %w", errV2Flag)
 	}
 
-	if *f.shell == "" {
+	if opts.Shell == "" {
 		return errV2NoShell
 	}
 
-	mre := absOrSelf(*f.mre)
-
-	mrjob := absOrSelf(*f.mrjob)
-	if mrjob == "" {
-		mrjob = filepath.Join(filepath.Dir(mre), "mrjob")
+	if err := resolveToolPaths(&opts); err != nil {
+		return err
 	}
 
-	paths, err := v2MroPaths(src, *f.mroPath)
+	mrjob := opts.Mrjob
+	if mrjob == "" {
+		mrjob = filepath.Join(filepath.Dir(opts.Mre), "mrjob")
+	}
+
+	paths, err := v2MroPaths(src, opts.MROPath)
 	if err != nil {
 		return err
 	}
 
-	opts := cgnf.Options{
-		OutDir:   *f.outDir,
-		Mre:      mre,
+	cg := cgnf.Options{
+		OutDir:   opts.OutDir,
+		Mre:      opts.Mre,
 		Mrjob:    mrjob,
-		Adapters: filepath.Dir(filepath.Dir(absOrSelf(*f.shell))),
+		Adapters: filepath.Dir(filepath.Dir(opts.Shell)),
 		MroPaths: paths,
-		Monitor:  *f.monitor,
-		Confine:  *f.confineOutputs,
-		Version:  buildVersion(),
+		Monitor:  opts.Monitor,
+		Confine:  opts.ConfineOutputs,
+		Version:  opts.Version,
 	}
 
-	if err := cgnf.Emit(src, opts); err != nil {
+	if err := cgnf.Emit(src, cg); err != nil {
 		return fmt.Errorf("emit: %w", err)
 	}
 
 	return nil
 }
 
-// v2MroPaths are the -mropath roots, absolute, then the entry file's dir,
-// where Martian resolves the entry's own includes and stage code.
-func v2MroPaths(src, mroPath string) ([]string, error) {
+// v2MroPaths are the search path's roots, absolute, then the entry file's
+// dir, where Martian resolves the entry's own includes and stage code.
+func v2MroPaths(src string, mroPath []string) ([]string, error) {
 	var out []string
 
-	for _, p := range append(filepath.SplitList(mroPath), filepath.Dir(src)) {
+	for _, p := range append(slices.Clone(mroPath), filepath.Dir(src)) {
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			return nil, fmt.Errorf("resolve -mropath %s: %w", p, err)
