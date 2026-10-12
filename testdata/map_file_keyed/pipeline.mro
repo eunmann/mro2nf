@@ -1,5 +1,5 @@
 # A map call over a map<int> whose callee emits a FILE -> keyed map<txt> result.
-# Exercises the map-fork file path: walkMap file leaves + MERGE (MapDim+1) + publish.
+# Exercises the map-fork file path: file leaves under map keys, gathered and published.
 filetype txt;
 
 stage WRITEF(

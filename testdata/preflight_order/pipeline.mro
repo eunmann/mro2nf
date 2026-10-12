@@ -1,0 +1,72 @@
+# Preflight ordering: mrp makes each preflight stage of a pipeline a
+# prenode of every other call in it, and through a sub-pipeline call of
+# every call within it, the sub-pipeline's own preflights too
+# (core/pipestance.go NewPipestance, core/node.go setPrenode). SUB's
+# preflight reads its input, which the parent binds to EMIT's output, so it
+# runs after EMIT and before WORK; TOP's preflight runs before all of them.
+stage CHECK(
+    in  int x,
+    src py  "stages/check",
+)
+
+stage EMIT(
+    in  int x,
+    out int y,
+    src py  "stages/emit",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline SUB(
+    in  int x,
+    out int y,
+)
+{
+    call CHECK(
+        x = self.x,
+    ) using (
+        preflight = true,
+    )
+
+    call WORK(
+        x = self.x,
+    )
+
+    return (
+        y = WORK.y,
+    )
+}
+
+pipeline TOP(
+    in  int x,
+    out int y,
+    out int z,
+)
+{
+    call CHECK as TOP_CHECK(
+        x = self.x,
+    ) using (
+        preflight = true,
+    )
+
+    call EMIT(
+        x = self.x,
+    )
+
+    call SUB(
+        x = EMIT.y,
+    )
+
+    return (
+        y = SUB.y,
+        z = EMIT.y,
+    )
+}
+
+call TOP(
+    x = 3,
+)

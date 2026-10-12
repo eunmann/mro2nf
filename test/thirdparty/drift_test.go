@@ -2,6 +2,7 @@ package thirdparty
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -98,6 +100,37 @@ func TestVendoredMartianMatchesModule(t *testing.T) {
 
 	if len(drift) > 0 {
 		t.Errorf("%s/ drifted from %s; copy the pinned files in:\n%s", vendorMartian, dir, strings.Join(drift, "\n"))
+	}
+}
+
+// TestRetryPatternsMatchModule: mre classifies as transient exactly the job
+// failures mrp's jobmanagers/retry.json, at the Martian commit go.mod pins,
+// retries, as many times.
+func TestRetryPatternsMatchModule(t *testing.T) {
+	dir, err := ModuleDir(t.Context(), repoRoot, Vendored()[vendorMartian])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "jobmanagers", "retry.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var retry struct {
+		RetryOn        []string `json:"retry_on"`
+		DefaultRetries int      `json:"default_retries"`
+	}
+	if err := json.Unmarshal(raw, &retry); err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(retry.RetryOn, job.RetryOn()); diff != "" {
+		t.Errorf("job.RetryOn drifted from %s (-module +mre):\n%s", dir, diff)
+	}
+
+	if retry.DefaultRetries != job.DefaultRetries {
+		t.Errorf("job.DefaultRetries = %d, retry.json's default_retries is %d", job.DefaultRetries, retry.DefaultRetries)
 	}
 }
 

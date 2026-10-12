@@ -4,18 +4,10 @@ package e2e
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
 )
 
 type goldenCase struct {
@@ -51,11 +43,8 @@ var goldenCases = []goldenCase{
 	{"map_split", "map_split", "expected/outs.json"},
 	{"map_pipe", "map_pipe", "expected/outs.json"},
 	{"map_file", "map_file", "expected/outs.json"},
-	// #99: a file-bearing LEAF scatter (split element is a file) — keeps the
-	// FORK resolve (O(total)) under -native but folds its MERGE; TestNativeMode
-	// reruns it with -native.
+	// #99: a file-bearing LEAF scatter (split element is a file).
 	{"map_file_split", "map_file_split", "expected/outs.json"},
-	{"map_pipe_nested", "map_pipe_nested", "expected/outs.json"},
 	{"map_pipe_disabled_nested", "map_pipe_disabled_nested", "expected/outs.json"},
 	{"map_pipe_disabled", "map_pipe_disabled", "expected/outs.json"},
 	{"map_pipe_split", "map_pipe_split", "expected/outs.json"},
@@ -98,21 +87,17 @@ var goldenCases = []goldenCase{
 	// the outputs depend on both args, so dropping -srcarg fails loudly. The
 	// golden is a real mrp run (the stub speaks the journal protocol).
 	{"src_args", "src_args", "expected/outs.json"},
-	{"entry_file", "entry_file", "expected/ep_outs.json"},
+	// File-bearing entry inputs overridden at launch with absolute paths: the
+	// default invocations' relative paths are outcome cases, as mrp opens
+	// them from the stage's job dir.
 	{"entry_file_override", "entry_file", "expected/ep_override_outs.json"},
-	{"entry_filearr", "entry_filearr", "expected/epa_outs.json"},
 	{"entry_filearr_override", "entry_filearr", "expected/epa_override_outs.json"},
-	{"entry_struct_file", "entry_struct_file", "expected/eps_outs.json"},
 	{"entry_struct_file_override", "entry_struct_file", "expected/eps_override_outs.json"},
-	{"entry_mapfile", "entry_mapfile", "expected/epm_outs.json"},
 	{"entry_mapfile_override", "entry_mapfile", "expected/epm_override_outs.json"},
-	{"entry_dir", "entry_dir", "expected/epd_outs.json"},
 	{"entry_dir_override", "entry_dir", "expected/epd_override_outs.json"},
 	// #261: file-bearing entry inputs overridden with values that hold no file
 	// (an empty file[] and map<file>, a struct with a null file field).
-	{"entry_file_empty", "entry_file_empty", "expected/outs.json"},
 	{"entry_file_empty_override", "entry_file_empty", "expected/override_outs.json"},
-	{"split_from_file", "split_from_file", "expected/sp_outs.json"},
 	{"split_from_file_override", "split_from_file", "expected/sp_override_outs.json"},
 	{"cli_typed", "cli_typed", "expected/outs.json"},
 	{"special_resource", "special_resource", "expected/outs.json"},
@@ -153,31 +138,26 @@ var goldenCases = []goldenCase{
 	{"map_null_map", "map_null_map", "expected/outs.json"},
 	{"map_key_sort", "map_key_sort", "expected/outs.json"},
 	{"map_file_array", "map_file_array", "expected/outs.json"},
-	// mrp-anchored goldens for the native-suite fixtures, so the -native runs
-	// compare against mrp truth in ONE run instead of a second default run per
-	// fixture (TestGolden here proves default==golden; native==golden follows).
+	// A map call broadcasting an upstream call's output beside its split, and
+	// one whose sole consumer is a mid-pipeline stage.
 	{"fork_ref", "fork_ref", "expected/outs.json"},
 	{"fork_mid", "fork_mid", "expected/outs.json"},
 	// #99 empty-fork fidelity: an invocation-known split source that resolves
-	// EMPTY merges to null (bind.Merge emptyNull, matching mrp's static
-	// resolver pruning a zero-fork call — empty_fork_min regenerated from
-	// current mrp: null, not []); runtime_empty_forks pins the RUNTIME side
-	// (typed empty for an upstream empty/null collection) plus the zero-fork
-	// sentinel. The rule is shape-based, not value-based, so the _override
-	// case proves a launch-time entry override to a NON-empty collection still
-	// runs the forks — the hazard that bars baking the empty statically.
+	// EMPTY merges to null (mrp's static resolver prunes a zero-fork call:
+	// null, not []); runtime_empty_forks pins the RUNTIME side (typed empty
+	// for an upstream empty/null collection) plus the zero-fork sentinel. The
+	// _override case proves a launch-time entry override to a NON-empty
+	// collection still runs the forks.
 	{"empty_map_fork", "empty_map_fork", "expected/outs.json"},
 	{"empty_fork_min_override", "empty_fork_min", "expected/override_outs.json"},
 	{"runtime_empty_forks", "runtime_empty_forks", "expected/outs.json"},
-	// #127 value-chain empty-fork fidelity — the three divergence classes the
-	// old entrySplit comment admitted, closed by knownInvocation propagation:
-	// a sub-pipeline split chaining to an entry value through the parent
-	// call's bindings, an in-pipeline cascade `map call SECOND(split
-	// FIRST.scaled)` over an invocation-known-empty FIRST, and a MIXED split
-	// (entry ref zipped with an upstream ref, entry side empty). mrp prunes
-	// all three to null; the _override cases prove the marking stays a
-	// runtime shape rule (launch-override the entry side non-empty and the
-	// forks run).
+	// #127 value-chain empty-fork fidelity: a sub-pipeline split chaining to
+	// an entry value through the parent call's bindings, an in-pipeline
+	// cascade `map call SECOND(split FIRST.scaled)` over an
+	// invocation-known-empty FIRST, and a MIXED split (entry ref zipped with an
+	// upstream ref, entry side empty). mrp prunes all three to null; the
+	// _override cases launch-override the entry side non-empty and the forks
+	// run.
 	{"empty_fork_sub", "empty_fork_sub", "expected/outs.json"},
 	{"empty_fork_sub_override", "empty_fork_sub", "expected/override_outs.json"},
 	{"empty_fork_cascade", "empty_fork_cascade", "expected/outs.json"},
@@ -205,11 +185,9 @@ var goldenCases = []goldenCase{
 	{"fork_disabled_sub", "fork_disabled_sub", "expected/outs.json"},
 	{"fork_disabled_skip", "fork_disabled_skip", "expected/outs.json"},
 	{"fork_fanout", "fork_fanout", "expected/outs.json"},
-	// Regression for #59: an unreachable pipeline containing a map call — its
-	// keyed-variant include must resolve (verified by the nextflow-lint gate).
+	// #59: a declared but never-called pipeline containing a map call.
 	{"dead_map_pipe", "dead_map_pipe", "expected/outs.json"},
-	// Regression for #59 Lever 2: a map call disabled on an UPSTREAM output ref
-	// (FLAG.on), gated natively from the upstream channel (no DISABLE task).
+	// #59: a map call disabled on an UPSTREAM output ref (FLAG.on).
 	{"disabled_map_ref", "disabled_map_ref", "expected/outs.json"},
 	// Linear chains of two and three leaf stages, one task per stage.
 	{"chain", "chain", "expected/outs.json"},
@@ -223,7 +201,7 @@ var goldenCases = []goldenCase{
 	// _basic_sc_rna_counter shape — preflight, split, a disable fan-out gating
 	// aliased calls, a mapped per-sample stage, and nested sub-pipelines.
 	{"cellranger_shaped", "cellranger_shaped", "expected/count_outs.json"},
-	// #76: a transform return with a file output — the native LAYOUT file-leaf path.
+	// #76: a return combining two calls, one of whose outputs is a file.
 	{"native_file_return", "native_file_return", "expected/nf_outs.json"},
 	// #328: marker-shaped string values (entry input, untyped map, call-site
 	// literal, stage output, a file out naming no file) reach every stage and
@@ -232,6 +210,9 @@ var goldenCases = []goldenCase{
 	// #284: stages see the basename mrp passes for a file from an upstream
 	// stage, an entry input, a fork, a split's chunk def and a join's chunk outs.
 	{"basename_echo", "basename_echo", "expected/outs.json"},
+	// #337: a stage output nested 9,000 levels deep crosses tasks the driver
+	// never parses.
+	{"deep_json", "deep_json", "expected/outs.json"},
 }
 
 // TestGolden is the end-to-end differential suite (port of run.sh): transpile
@@ -293,7 +274,7 @@ func renderOverrideParams(t *testing.T, fixtureDir, proj string) {
 // command line reach the stage typed as declared. Nextflow passes every --param
 // as a String, and the stage reports each value's Python repr and type, so the
 // CLI run matches the -params-file run and the mrp golden (the override values
-// as invocation literals) only if entryargs parsed `--b false` into the boolean
+// as invocation literals) only if mre plan typed `--b false` as the boolean
 // false rather than the truthy string "false". A value that is not a literal of
 // its declared type must fail the run, naming the input.
 func TestCLITypedOverrides(t *testing.T) {
@@ -350,16 +331,12 @@ func TestCLITypedOverrides(t *testing.T) {
 	})
 }
 
-// TestEntryFileAdversarialName pins the EMITTER side of the -fileflat JSON
-// seam: BUILD_ENTRY_ARGS renders the staged-path map with
-// groovy.json.JsonOutput.toJson inside a quoted heredoc, and that encoding —
-// not just mre's decoder, which TestReadFlatFile covers — must keep a legal
-// filename containing every separator the old flat encoding used (`,`, `;`,
-// `=`) intact. The adversarial copy of entry_file's override input is created
-// at runtime (committing such a basename would be fragile across tooling); the
-// stage sums the file's numbers, so the run reproduces the override golden
-// (total = 200) only if the path survived the emit -> entryargs seam — the old
-// encoding mis-split it at `;` and `,`.
+// TestEntryFileAdversarialName checks a launch-time entry file override whose
+// legal name holds `,`, `;` and `=` reaches the stage intact, through the
+// params file, the driver and mre plan. The adversarial copy of entry_file's
+// override input is created at runtime (committing such a basename would be
+// fragile across tooling); the stage sums the file's numbers, so the run
+// reproduces the override golden (total = 200) only if the path survived.
 func TestEntryFileAdversarialName(t *testing.T) {
 	requireTools(t, "nextflow", "java")
 
@@ -394,148 +371,6 @@ func TestEntryFileAdversarialName(t *testing.T) {
 		filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
 }
 
-// TestEntryFileGlobCharName checks an entry file override whose name holds a
-// character bash would expand fails the run before staging, naming the input
-// and the character (#276). Nextflow 26.04's stage-in script leaves the source
-// path unquoted, so `s[1].txt` beside `s1.txt` would otherwise stage s1.txt
-// silently, and a brace would be expanded; the emitter cannot quote it.
-func TestEntryFileGlobCharName(t *testing.T) {
-	t.Parallel()
-
-	requireTools(t, "nextflow", "java")
-
-	cases := []struct {
-		name, fixture string
-		params        func(t *testing.T, dir string) any
-		want          string
-	}{
-		{"glob_beside_match", "entry_file", func(t *testing.T, dir string) any {
-			t.Helper()
-			writeFileT(t, filepath.Join(dir, "s[1].txt"), "10\n")
-			writeFileT(t, filepath.Join(dir, "s1.txt"), "999\n")
-
-			return map[string]string{"reads": filepath.Join(dir, "s[1].txt")}
-		}, "entry input 'reads': the path contains '['"},
-		{"brace_in_array", "entry_filearr", func(_ *testing.T, dir string) any {
-			return map[string][]string{"reads": {filepath.Join(dir, "a.txt"), filepath.Join(dir, "t{a,b}.txt")}}
-		}, "entry input 'reads': the path contains '{'"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			proj := transpile(t, tc.fixture)
-			dir := t.TempDir()
-
-			params, err := json.Marshal(tc.params(t, dir))
-			if err != nil {
-				t.Fatalf("marshal params: %v", err)
-			}
-
-			writeFileT(t, filepath.Join(proj, "params.json"), string(params))
-
-			if err := runNextflowAllowingFailedAttempts(t, proj, "-params-file", "params.json"); err == nil {
-				t.Fatal("an override naming a file Nextflow would mis-stage must fail the run")
-			}
-
-			runLog, err := os.ReadFile(filepath.Join(proj, "run.log"))
-			if err != nil {
-				t.Fatalf("read run.log: %v", err)
-			}
-
-			for _, want := range []string{tc.want, "Nextflow staging limitation, see docs/TRANSPILER.md section 8"} {
-				if !strings.Contains(string(runLog), want) {
-					t.Errorf("run log does not report %q:\n%s", want, runLog)
-				}
-			}
-
-			if strings.Contains(string(runLog), "BUILD_ENTRY_ARGS") {
-				t.Errorf("BUILD_ENTRY_ARGS ran; the override must be rejected before staging:\n%s", runLog)
-			}
-		})
-	}
-}
-
-// TestEntryFileRemoteURL checks an http:// file override is refused on the head
-// node before anything is fetched (#330): file() would otherwise GET any URL,
-// the cloud metadata endpoint included. With the mro2nf_allow_remote_inputs
-// opt-in the same override is fetched and staged.
-func TestEntryFileRemoteURL(t *testing.T) {
-	t.Parallel()
-
-	requireTools(t, "nextflow", "java")
-
-	fixtureDir := filepath.Join(root, "testdata", "entry_file")
-
-	content, err := os.ReadFile(filepath.Join(fixtureDir, "input", "override.txt"))
-	if err != nil {
-		t.Fatalf("read override input: %v", err)
-	}
-
-	t.Run("rejected", func(t *testing.T) {
-		t.Parallel()
-
-		proj, hits := remoteReadsProject(t, content)
-
-		if err := runNextflowAllowingFailedAttempts(t, proj, "-params-file", "params.json"); err == nil {
-			t.Fatal("an http:// file override must fail the run")
-		}
-
-		runLog, err := os.ReadFile(filepath.Join(proj, "run.log"))
-		if err != nil {
-			t.Fatalf("read run.log: %v", err)
-		}
-
-		if want := "entry input 'reads': scheme 'http' is not allowed on target 'local'"; !strings.Contains(string(runLog), want) {
-			t.Errorf("run log does not report %q:\n%s", want, runLog)
-		}
-
-		if n := hits.Load(); n != 0 {
-			t.Errorf("the rejected URL was fetched %d time(s)", n)
-		}
-	})
-
-	t.Run("opted_in", func(t *testing.T) {
-		t.Parallel()
-
-		proj, hits := remoteReadsProject(t, content)
-
-		if err := runNextflow(t, proj, "-params-file", "params.json", "--mro2nf_allow_remote_inputs", "true"); err != nil {
-			t.Fatal(err)
-		}
-
-		goldenJSON(t, "entry_file",
-			filepath.Join(proj, "results", "pipeline_outs.json"),
-			filepath.Join(fixtureDir, "expected", "ep_override_outs.json"))
-
-		if hits.Load() == 0 {
-			t.Error("the opted-in URL was never fetched")
-		}
-	})
-}
-
-// remoteReadsProject transpiles entry_file with a params.json overriding reads
-// with the URL of a local http server that serves body, and returns the
-// project dir and the server's request count.
-func remoteReadsProject(t *testing.T, body []byte) (string, *atomic.Int32) {
-	t.Helper()
-
-	var hits atomic.Int32
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-
-		_, _ = w.Write(body)
-	}))
-	t.Cleanup(srv.Close)
-
-	proj := transpile(t, "entry_file")
-	writeFileT(t, filepath.Join(proj, "params.json"), `{"reads": "`+srv.URL+`/reads.txt"}`)
-
-	return proj, &hits
-}
-
 // assertFileContent asserts a published text file's content, ignoring a
 // trailing newline (matching the shell harness's `$(cat ...)` comparison).
 func assertFileContent(t *testing.T, path, want string) {
@@ -548,498 +383,5 @@ func assertFileContent(t *testing.T, path, want string) {
 
 	if got := strings.TrimRight(string(raw), "\n"); got != want {
 		t.Errorf("%s content = %q, want %q", path, got, want)
-	}
-}
-
-// TestNativeMode guards the -native shapes that do NOT fully collapse: each
-// case pins the EXACT surviving data-plane inventory — every process name in
-// the planeCategories (BIND/FORK/MERGE/DISABLE/BUILD_ENTRY_ARGS), compared as
-// a full set — so presence, keyed variant (FORK_x vs FORK_x_K vs FORK_x_KS),
-// and cardinality are all enforced; a new or vanished task fails loudly. #76
-// M1 step 1 (no BUILD_ENTRY_ARGS task — entry args are baked at transpile
-// time) is enforced by that category never appearing in any plane list.
-// plan.go kind routing: a kindMapped call keeps ONE FORK resolve, folding its
-// MERGE into a sole consumer; a disabled mapped call keeps its MERGE as the
-// skip-branch mix point; a keyed sub-pipeline body keeps its inner data plane
-// as keyed (_K) or #110 driver-scatter (_KS) variants. Every run must match
-// the committed mrp golden: TestGolden proves default==golden for these
-// fixtures, so native==golden covers native==default transitively in half the
-// runs. File- and directory-typed entries are covered by TestNativeFileEntry;
-// the fully-collapsed fixtures live in TestNativeComplete.
-func TestNativeMode(t *testing.T) {
-	t.Parallel()
-
-	requireTools(t, "nextflow", "java", "python3")
-
-	cases := []struct {
-		fixture, golden string
-		plane           []string // exact surviving data-plane process names
-	}{
-		{"chain3", "expected/outs.json", nil},
-		// cellranger_shaped's PER_SAMPLE map call is not element-scatterable, so
-		// exactly ONE FORK resolve remains (the gather folds into the sole
-		// consumer); two fan-in calls keep plain BIND tasks.
-		{"cellranger_shaped", "expected/count_outs.json", []string{
-			"BIND_13_BASIC_COUNTER__POST_MATRIX",
-			"BIND_5_COUNT__BASIC_COUNTER",
-			"FORK_11_POST_MATRIX__PER_SAMPLE",
-		}},
-		// #99 kindMapped shapes under -native: a file-bearing leaf scatter, a
-		// multi-split leaf, and a split-stage callee (#106) each keep exactly ONE
-		// FORK resolve and fold their MERGE. All must match the mrp golden.
-		{"map_file_split", "expected/outs.json", []string{"FORK_3_FBS__PROC"}},
-		{"multisplit", "expected/outs.json", []string{"FORK_2_MS__PAIR"}},
-		{"map_split", "expected/outs.json", []string{"FORK_2_MS__SUMSQ"}},
-		// #121 map-over-sub-pipeline family (the keyed layer #107/#110 landed
-		// on). A sub-pipeline callee is kindMapped — ONE outer FORK resolve,
-		// MERGE folded into the sole consumer; leaf calls inside the keyed body
-		// fuse (#107), so map_pipe keeps nothing else.
-		{"map_pipe", "expected/outs.json", []string{"FORK_5_OUTER__INNER"}},
-		// map_pipe_nested's value-only inner map rides the #110 driver scatter:
-		// a single FORK_..._KS (no per-outer-fork FORK_K resolve) feeding ONE
-		// keyed MERGE_K gather; INNER's merged return keeps its BIND in both the
-		// plain and keyed module bodies.
-		{"map_pipe_nested", "expected/outs.json", []string{
-			"BIND_5_INNER__return",
-			"BIND_5_INNER__return_K",
-			"FORK_5_INNER__DBL_KS",
-			"FORK_5_OUTER__INNER",
-			"MERGE_5_INNER__DBL_K",
-		}},
-		// A split-stage call inside the keyed body keeps only its keyed BIND —
-		// the callee runs the keyed split triad, no inner FORK or MERGE.
-		{"map_pipe_split", "expected/outs.json", []string{
-			"BIND_5_INNER__SUMSQ_K",
-			"FORK_5_OUTER__INNER",
-		}},
-		// map_pipe_disabled's disable sits on the INNER keyed leaf call DBL
-		// (`disabled = self.skip` inside INNER's body), NOT on the outer mapped
-		// sub-pipeline call — so the outer MERGE still folds and the gate
-		// survives as DBL's keyed DISABLE task plus its keyed BIND.
-		{"map_pipe_disabled", "expected/outs.json", []string{
-			"BIND_5_INNER__DBL_K",
-			"BIND_5_INNER__return",
-			"BIND_5_INNER__return_K",
-			"DISABLE_5_INNER__DBL_K",
-			"FORK_5_OUTER__INNER",
-		}},
-		// map_pipe_disabled_nested's DISABLED inner map is never scatterable
-		// (keyedScatterable rejects c.Disabled), so the keyed body keeps the
-		// per-outer-fork FORK_K resolve and its MERGE_K skip-branch mix point —
-		// and the plain INNER body (emitted alongside, though only the keyed
-		// one is invoked) keeps the plain FORK/MERGE pair for the same reason.
-		{"map_pipe_disabled_nested", "expected/outs.json", []string{
-			"BIND_5_INNER__return",
-			"BIND_5_INNER__return_K",
-			"FORK_5_INNER__DBL",
-			"FORK_5_INNER__DBL_K",
-			"FORK_5_OUTER__INNER",
-			"MERGE_5_INNER__DBL",
-			"MERGE_5_INNER__DBL_K",
-		}},
-		// A DISABLED plain-context map call is never scatterable
-		// (nativeScatterable rejects c.Disabled) — kindMapped keeps its ONE
-		// FORK, and the foldMerge pass skips disabled calls, so the ONE MERGE
-		// remains as the skip-branch mix point.
-		{"disabled_map", "expected/outs.json", []string{
-			"FORK_1_Q__DBL",
-			"MERGE_1_Q__DBL",
-		}},
-		{"disabled_map_ref", "expected/outs.json", []string{
-			"FORK_1_P__DBL",
-			"MERGE_1_P__DBL",
-		}},
-		// dead_map_pipe's map call sits in an UNREACHABLE pipeline (#59): the
-		// live path collapses fully; the dead module keeps only its return BIND.
-		// That full collapse is coupled to the dead map being value-only
-		// scatterable (kindNativeScatter): keyedReachable roots EVERY declared
-		// pipeline, so a file-bearing, multi-split, split-stage, or
-		// sub-pipeline dead map would stay kindMapped and emit the callee's
-		// keyed variants despite never running. kitchen_sink's fan-in calls
-		// keep plain BIND tasks but no fork machinery. Neither is BIND-free, so
-		// they cannot join TestNativeComplete.
-		{"dead_map_pipe", "expected/outs.json", []string{"BIND_4_DEAD__return"}},
-		{"kitchen_sink", "expected/main_outs.json", []string{
-			"BIND_4_MAIN__SCALE_ALL",
-			"BIND_4_MAIN__SCALE_ALL2",
-			"BIND_9_SCALE_ALL__return",
-		}},
-		// #127 value-chain emptyNull under -native: a sub-pipeline split fed an
-		// entry value through the parent's bindings scatters in-workflow inside
-		// the sub-pipeline (boundary BIND + its return BIND remain), and a
-		// MIXED entry+upstream zip is multi-split, so it keeps its ONE FORK
-		// resolve. Both must merge the zero-fork run to null, matching mrp's
-		// static prune.
-		{"empty_fork_sub", "expected/outs.json", []string{
-			"BIND_3_EFS__SUB",
-			"BIND_3_SUB__return",
-		}},
-		{"empty_fork_mixed", "expected/outs.json", []string{"FORK_3_EFM__PAIR"}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.fixture, func(t *testing.T) {
-			t.Parallel()
-
-			// -inline-pipelines=false isolates the -native data-plane machinery
-			// (keyed scatter, fork resolve, emptyNull, #59/#127) that these cases
-			// pin: default-on inlining (#221) flattens sub-pipeline boundaries into
-			// the parent, which would dissolve the very boundary BIND/FORK/return
-			// processes asserted here (kitchen_sink/empty_fork_sub collapse to
-			// nothing). The inline+native COMPOSITION is byte-identity-tested
-			// against mrp by the TestMrpDiff native legs, so nothing is lost.
-			proj := transpile(t, tc.fixture, "-native", "-inline-pipelines=false")
-			assertPlaneProcesses(t, proj, tc.plane)
-
-			if err := runNextflow(t, proj); err != nil {
-				t.Fatal(err)
-			}
-
-			goldenJSON(t, tc.fixture,
-				filepath.Join(proj, "results", "pipeline_outs.json"),
-				filepath.Join(root, "testdata", tc.fixture, tc.golden))
-		})
-	}
-}
-
-// TestNativeFileEntry verifies -native supports file- AND directory-typed entry
-// inputs (#99): the entry args (including their file/dir leaves) are baked at
-// transpile time and staged into the workflow, so each fixture's -native run
-// reproduces its mrp golden (the baked default invocation).
-func TestNativeFileEntry(t *testing.T) {
-	t.Parallel()
-
-	requireTools(t, "nextflow", "java", "python3")
-
-	cases := []struct {
-		fixture, golden string
-	}{
-		{fixture: "entry_file", golden: "expected/ep_outs.json"},
-		{fixture: "entry_filearr", golden: "expected/epa_outs.json"},
-		{fixture: "entry_struct_file", golden: "expected/eps_outs.json"},
-		{fixture: "entry_mapfile", golden: "expected/epm_outs.json"},
-		{fixture: "entry_dir", golden: "expected/epd_outs.json"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.fixture, func(t *testing.T) {
-			t.Parallel()
-
-			proj := transpile(t, tc.fixture, "-native")
-			if err := runNextflow(t, proj); err != nil {
-				t.Fatal(err)
-			}
-
-			goldenJSON(t, tc.fixture,
-				filepath.Join(proj, "results", "pipeline_outs.json"),
-				filepath.Join(root, "testdata", tc.fixture, tc.golden))
-		})
-	}
-}
-
-// TestNativeRejectsOverride guards the #103 override guard: -native bakes entry
-// args at transpile time, so a launch-time param naming a baked input must be a
-// loud error, not a silently-ignored override (which would diverge from mrp).
-func TestNativeRejectsOverride(t *testing.T) {
-	requireTools(t, "nextflow", "java")
-
-	proj := transpile(t, "entry_file", "-native")
-	if err := runNextflowAllowingFailedAttempts(t, proj, "--reads", "/tmp/whatever.txt"); err == nil {
-		t.Error("-native must reject a launch-time override of a baked entry arg")
-	}
-}
-
-// TestNativeContainerEmits verifies -native transpiles cleanly for a container
-// target (#99): the image bakes mre and the adapters, and the generated scripts
-// exec those in-image paths (no mounted project dir).
-// TestGeneratedAWSBatchImageNative runs the built image end to end; here we
-// assert the transpile succeeds and wires the baked paths.
-func TestNativeContainerEmits(t *testing.T) {
-	buildBinaries(t)
-
-	proj := t.TempDir()
-	dir := filepath.Join(root, "testdata", "diamond_min")
-	cmd := exec.Command(filepath.Join(root, "mro2nf"),
-		"-native", "-target", "awsbatch", "-container", "example/img:1",
-		"-o", proj, "-mre", filepath.Join(root, "mre"),
-		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
-		"-mropath", dir, filepath.Join(dir, "pipeline.mro"))
-	cmd.Dir = root
-
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("-native container transpile must succeed; got:\n%s", out)
-	}
-
-	dockerfile, err := os.ReadFile(filepath.Join(proj, "Dockerfile"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(dockerfile), "COPY runtime/mre /opt/mro2nf/mre") {
-		t.Error("container Dockerfile must bake mre")
-	}
-
-	main, err := os.ReadFile(filepath.Join(proj, "modules", "pipe_D.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(main), "'/opt/mro2nf/mre' main -shell '/opt/mro2nf/adapters/martian_shell.py'") {
-		t.Error("container -native scripts must exec the baked mre and adapter")
-	}
-}
-
-// planeCategories are the data-plane process-name prefixes -native aims to
-// collapse: TestNativeMode pins the exact survivors per fixture and
-// assertNativeComplete requires none at all.
-var planeCategories = []string{"BIND", "FORK", "MERGE", "DISABLE", "BUILD_ENTRY_ARGS"}
-
-// processDecl matches a Nextflow process declaration and captures its name.
-var processDecl = regexp.MustCompile(`(?m)^process +(\w+)`)
-
-// planeProcesses returns the sorted names of every process declared in the
-// generated project (modules + main.nf) whose name starts with one of the
-// planeCategories prefixes.
-func planeProcesses(t *testing.T, proj string) []string {
-	t.Helper()
-
-	mods, err := filepath.Glob(filepath.Join(proj, "modules", "*.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var procs []string
-
-	for _, f := range append(mods, filepath.Join(proj, "main.nf")) {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		for _, m := range processDecl.FindAllStringSubmatch(string(data), -1) {
-			if slices.ContainsFunc(planeCategories, func(cat string) bool {
-				return strings.HasPrefix(m[1], cat)
-			}) {
-				procs = append(procs, m[1])
-			}
-		}
-	}
-
-	slices.Sort(procs)
-
-	return procs
-}
-
-// assertPlaneProcesses fails unless the generated data-plane inventory equals
-// want exactly — enforcing presence, keyed variant (FORK_x vs FORK_x_K vs
-// FORK_x_KS), and cardinality, not mere substring occurrence.
-func assertPlaneProcesses(t *testing.T, proj string, want []string) {
-	t.Helper()
-
-	sorted := slices.Sorted(slices.Values(want))
-
-	if diff := cmp.Diff(sorted, planeProcesses(t, proj)); diff != "" {
-		t.Errorf("data-plane processes mismatch (-want +got):\n%s", diff)
-	}
-}
-
-// assertNoProcesses fails if any process in the project's generated Nextflow
-// (modules + main.nf) matches one of the given `process <CAT>` prefixes.
-func assertNoProcesses(t *testing.T, proj string, cats ...string) {
-	t.Helper()
-
-	mods, err := filepath.Glob(filepath.Join(proj, "modules", "*.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, f := range append(mods, filepath.Join(proj, "main.nf")) {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		for _, cat := range cats {
-			if strings.Contains(string(data), "process "+cat) {
-				t.Errorf("%s: -native must not emit a %q task", filepath.Base(f), cat)
-			}
-		}
-	}
-}
-
-// assertNativeComplete fails if any BIND/FORK/MERGE/DISABLE/BUILD_ENTRY_ARGS
-// process is emitted — the #76 acceptance that those data-plane task categories
-// vanish under -native. (#76 also names STRUCTIFY, but no STRUCTIFY process
-// exists anywhere in the emitter — struct outputs flow through ordinary
-// bundles — so there is nothing to assert against.)
-func assertNativeComplete(t *testing.T, proj string) {
-	t.Helper()
-	assertNoProcesses(t, proj, planeCategories...)
-}
-
-// TestNativeScatter guards the #76 native-map shapes that are NOT fully
-// task-free but must still scatter with no FORK task, byte-identical to the
-// default run. Each case states its MERGE contract: fork_disabled_sub (scatter
-// behind a disabled sub-pipeline's QUEUE pipeargs, every fork must run; its
-// merge folds, so no MERGE — the enclosing TOP keeps BIND tasks),
-// fork_disabled_skip (the same shape with skip=true baked: zero instances run
-// and the folded consumer must stay DORMANT, yielding the null result), and
-// fork_fanout (two consumers, so the MERGE task must REMAIN rather than fold).
-// The fully-collapsed fixtures live in TestNativeComplete.
-func TestNativeScatter(t *testing.T) {
-	t.Parallel()
-
-	requireTools(t, "nextflow", "java", "python3")
-
-	cases := []struct {
-		fixture   string
-		wantMerge bool
-	}{
-		{"fork_disabled_sub", false},
-		{"fork_disabled_skip", false},
-		{"fork_fanout", true},
-		// #127 cascade under -native: SECOND scatters over FIRST.scaled with
-		// emptyNull set by the knownInvocation cascade — the zero-width
-		// upstream scatter runs its keys-only sentinel and merges to null.
-		// FIRST keeps its MERGE (two consumers: SECOND's split + the return).
-		{"empty_fork_cascade", true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.fixture, func(t *testing.T) {
-			t.Parallel()
-
-			native := transpile(t, tc.fixture, "-native")
-			assertNoProcesses(t, native, "FORK")
-
-			if tc.wantMerge {
-				assertHasProcess(t, native, "MERGE")
-			} else {
-				assertNoProcesses(t, native, "MERGE")
-			}
-
-			if err := runNextflow(t, native); err != nil {
-				t.Fatal(err)
-			}
-
-			// Compared against the committed mrp golden, not a fresh default run:
-			// TestGolden already proves default==golden for these fixtures, so
-			// native==golden covers native==default transitively in half the runs
-			// — and anchors native to mrp truth rather than to whatever the
-			// default path happens to produce.
-			goldenJSON(t, tc.fixture,
-				filepath.Join(native, "results", "pipeline_outs.json"),
-				filepath.Join(root, "testdata", tc.fixture, "expected", "outs.json"))
-		})
-	}
-}
-
-// assertHasProcess fails unless some generated file declares a process with
-// the given prefix — guarding that a deliberately-kept task really remains.
-func assertHasProcess(t *testing.T, proj string, cat string) {
-	t.Helper()
-
-	mods, err := filepath.Glob(filepath.Join(proj, "modules", "*.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, f := range append(mods, filepath.Join(proj, "main.nf")) {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if strings.Contains(string(data), "process "+cat) {
-			return
-		}
-	}
-
-	t.Errorf("expected a %q process in the generated project", cat)
-}
-
-// TestNativeComplete guards #76 for the subset that -native fully collapses:
-// no data-plane task categories remain, and the output is byte-identical to
-// the default (bundle-mode) run. file_min exercises a file output through the
-// native LAYOUT's inline return bind. native_file_return has a TRANSFORM return
-// with a file output, so it exercises the native LAYOUT's file-leaf path (the
-// inline bind's args/f -> leaves -> PUBLISH_LEAF); file_min/chain/struct_min
-// are forward returns (default LAYOUT) that only drop BUILD_ENTRY_ARGS. The
-// map-call fixtures collapse the whole fork machinery: the scatter kills FORK
-// and the sole-consumer merge fold kills MERGE — fork_min (array), map_fork
-// (typed map), and fork_ref (an upstream broadcast ref re-read per instance).
-// empty_fork_min/empty_map_fork are INVOCATION-known empty forks: the scatter
-// still runs its keys-only sentinel, and the zero-fork merge emits null
-// (bind.Merge emptyNull — matching mrp's static resolver, while keeping entry
-// inputs launch-overridable). fork_upstream and map_null_map scatter over an
-// UPSTREAM split source (#99): the driver slices the producer's value-channel
-// bundle into per-fork elements (Mro2nf.forkElements); map_null_map and
-// runtime_empty_forks exercise the RUNTIME zero-fork keys-only sentinel on
-// that path (typed-empty results across null/empty x array/map).
-func TestNativeComplete(t *testing.T) {
-	t.Parallel()
-
-	requireTools(t, "nextflow", "java", "python3")
-
-	// Each case compares its single -native run against the committed mrp
-	// golden: TestGolden proves default==golden, so native==golden covers
-	// native==default transitively — and anchors native to mrp truth. The
-	// published results/ tree must equal mrp's recorded one (assertGoldenTree),
-	// so a native LAYOUT bug publishing a file to the wrong place, a stray
-	// extra file, or the wrong bytes fails (#120).
-	cases := []struct {
-		fixture, golden string
-	}{
-		{fixture: "diamond_min", golden: "expected/outs.json"},
-		{fixture: "disabled_entry_skip", golden: "expected/outs.json"},
-		{fixture: "native_file_return", golden: "expected/nf_outs.json"},
-		{fixture: "dir_hidden", golden: "expected/outs.json"},
-		{fixture: "file_min", golden: "expected/outs.json"},
-		{fixture: "chain", golden: "expected/outs.json"},
-		{fixture: "struct_min", golden: "expected/stats_pipe_outs.json"},
-		{fixture: "fork_min", golden: "expected/scale_all_outs.json"},
-		{fixture: "map_fork", golden: "expected/outs.json"},
-		{fixture: "empty_fork_min", golden: "expected/outs.json"},
-		{fixture: "empty_map_fork", golden: "expected/outs.json"},
-		{fixture: "fork_ref", golden: "expected/outs.json"},
-		{fixture: "fork_mid", golden: "expected/outs.json"},
-		{fixture: "fork_upstream", golden: "expected/outs.json"},
-		{fixture: "map_fork_upstream", golden: "expected/outs.json"},
-		{fixture: "map_null_map", golden: "expected/outs.json"},
-		{fixture: "map_key_sort", golden: "expected/outs.json"},
-		{fixture: "runtime_empty_forks", golden: "expected/outs.json"},
-		// #121: value-only leaf scatters whose outputs (not split elements)
-		// carry files — file arrays, keyed typed maps, struct projections, and
-		// multi-dimensional forks all ride the O(1) element path with the merge
-		// folded into the sole consumer.
-		{fixture: "map_file", golden: "expected/outs.json"},
-		{fixture: "map_file_keyed", golden: "expected/outs.json"},
-		{fixture: "map_file_array", golden: "expected/outs.json"},
-		{fixture: "map_struct_proj", golden: "expected/outs.json"},
-		{fixture: "multidim", golden: "expected/outs.json"},
-		// #121: non-map shapes where every call fuses (wildcard bindings,
-		// aliased calls, exec/comp adapters, a compiled split stage) — -native
-		// must leave no data-plane task at all. mixed_adapters and comp_split
-		// ship an mrjob.sh, which transpile() passes via -mrjob automatically.
-		{fixture: "wildcard", golden: "expected/outs.json"},
-		{fixture: "alias_min", golden: "expected/p_outs.json"},
-		{fixture: "mixed_adapters", golden: "expected/outs.json"},
-		{fixture: "comp_split", golden: "expected/outs.json"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.fixture, func(t *testing.T) {
-			t.Parallel()
-
-			native := transpile(t, tc.fixture, "-native")
-			assertNativeComplete(t, native)
-
-			if err := runNextflow(t, native); err != nil {
-				t.Fatal(err)
-			}
-
-			goldenJSON(t, tc.fixture,
-				filepath.Join(native, "results", "pipeline_outs.json"),
-				filepath.Join(root, "testdata", tc.fixture, tc.golden))
-			assertGoldenTree(t, tc.fixture, tc.fixture, native)
-		})
 	}
 }

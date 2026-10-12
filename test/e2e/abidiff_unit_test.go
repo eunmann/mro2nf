@@ -420,6 +420,20 @@ func TestMrpStageName(t *testing.T) {
 	}
 }
 
+// TestMrpStageNameEmptyInvocation: a fork whose _invocation mrp left empty
+// (zip_runtime's NULL_OTHER past its shorter source) is named from the
+// pipestance source's call graph.
+func TestMrpStageNameEmptyInvocation(t *testing.T) {
+	ps := t.TempDir()
+	writeABITestFile(t, filepath.Join(ps, "_mrosource"), "stage PAIR(\n    in  int a,\n    out int b,\n    src py \"p\",\n)\n\n"+
+		"pipeline Z(\n    out int b,\n)\n{\n    call PAIR as NULL_OTHER(\n        a = 1,\n    )\n\n    return (\n        b = NULL_OTHER.b,\n    )\n}\n\ncall Z()\n")
+	writeABITestFile(t, filepath.Join(ps, "Z", "NULL_OTHER", "fork0", "_invocation"), "")
+
+	if got, err := mrpStageName(filepath.Join(ps, "Z", "NULL_OTHER", "fork0")); err != nil || got != "PAIR" {
+		t.Errorf("mrpStageName = %q, %v, want PAIR", got, err)
+	}
+}
+
 // TestCollectNextflowInvocations reads mre's per-task metadata dirs, counting
 // only tasks that exited 0.
 func TestCollectNextflowInvocations(t *testing.T) {
@@ -436,13 +450,15 @@ func TestCollectNextflowInvocations(t *testing.T) {
 	task("ok1", "0", phaseMain, "SUM")
 	task("ok2", "0\n", phaseJoin, "SUM")
 	task("failed", "1", phaseMain, "SUM")
+	// `mre run` names a main job's metadata dir as mrp names the chunk.
+	task("chunk", "0", "chnk03", "SUM")
 
 	invs, err := collectNextflowInvocations(proj, abiRules{})
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
 
-	want := []abiGroupCount{{"SUM join", 1}, {"SUM main", 1}}
+	want := []abiGroupCount{{"SUM join", 1}, {"SUM main", 2}}
 	if diff := cmp.Diff(want, groupCounts(invs)); diff != "" {
 		t.Errorf("invocation groups (-want +got):\n%s", diff)
 	}

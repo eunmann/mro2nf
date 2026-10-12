@@ -1,5 +1,14 @@
 # Martian runtime-contract conformance audit
 
+> **Historical (2026-10-11).** This audit describes the pre-call-graph emitter.
+> The files it cites in `internal/emit` and `internal/shim` (`shim.go`,
+> `monitor.go`) are deleted, and so are the `-native` leg and mre's own RSS-kill
+> monitor: `-monitor` now only sets `_jobinfo`'s `monitor_flag`, which `mrjob`
+> enforces as under `mrp`. Stage instances now resolve on Martian's call graph
+> (`internal/cg`), jobs run through `mrjob` (`internal/job`), and the `mre`
+> subcommands are in `cmd/mre`; `TRANSPILER.md` and `FEATURE_COVERAGE.md`
+> describe the current behaviour.
+
 A systematic audit of whether mro2nf reproduces Martian/MRP's runtime contract,
 covering seven surface areas. Each area was cross-checked against the Martian
 source (`github.com/martian-lang/martian@4a558e7`) and the mro2nf implementation,

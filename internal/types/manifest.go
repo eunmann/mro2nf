@@ -187,13 +187,13 @@ func (m Manifest) Table() *Table {
 	return NewTable(m.Structs)
 }
 
-// Param roles select which of a callable's parameter sets a producer walks when
-// building an output bundle.
+// Param roles select which of a callable's parameter sets a bundle's values
+// are walked with.
 const (
-	RoleIn      = "in"      // a callee's input params (bind/forkbind)
-	RoleOut     = "out"     // a callable's output params (join/merge/return/publish)
-	RoleMainOut = "mainout" // a split stage's per-chunk main outputs (out + chunkOut)
-	RoleChunkIn = "chunkin" // a split stage's per-chunk input params
+	RoleIn      = "in"      // a callable's input params (mre args, plan)
+	RoleOut     = "out"     // a callable's output params (mre run, post, outs, publish-layout)
+	RoleMainOut = "mainout" // a split stage's per-chunk main outputs, out + chunkOut (mre run)
+	RoleChunkIn = "chunkin" // a split stage's per-chunk input params (mre run)
 )
 
 var (

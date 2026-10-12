@@ -2,6 +2,9 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
 BINS := mro2nf mre
+# The call-graph data plane runs py and comp stages through mrjob, built from
+# the Martian module go.mod pins (its `tool` directive).
+MRJOB_PKG := github.com/martian-lang/martian/cmd/mrjob
 PREFIX ?= $(HOME)/.local
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -12,7 +15,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.47.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences notices cloc install clean help
+.PHONY: all build test cover test-e2e test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences notices cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
@@ -27,8 +30,9 @@ help: ## Show this help
 # runtime images; -trimpath keeps the builder's paths out of the binaries.
 # release.yml, deploy/runtime/Dockerfile and the e2e harness build the same way
 # (TestBuildRecipesStaticAndTrimmed, TestBinariesStaticAndPathFree).
-build: ## Build mro2nf and mre
+build: ## Build mro2nf, mre and mrjob
 	@for b in $(BINS); do CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $$b ./cmd/$$b; done
+	@CGO_ENABLED=0 go build -trimpath -o mrjob $(MRJOB_PKG)
 
 test: ## Run unit tests
 	go test ./... 2>&1 | tee artifacts/test.log
@@ -47,9 +51,9 @@ cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
 
 # The e2e suites live in the test/e2e Go package (build tag e2e). -count=1 is
 # load-bearing: the test cache would otherwise return a cached ok without
-# running Nextflow. Partitioned by -run/-skip so CI can parallelize the docker
-# job. test-e2e includes the mrp differential, which needs a Martian build at
-# MARTIAN_BIN: it skips without one, and fails under E2E_REQUIRE=1 (CI).
+# running Nextflow. test-e2e includes the mrp differential, which needs a
+# Martian build at MARTIAN_BIN: it skips without one, and fails under
+# E2E_REQUIRE=1 (CI).
 # Each parallel case is an idle-heavy `nextflow run` (JVM startup + tiny
 # tasks), so oversubscribing cores is a win; the harness caps every JVM at
 # -Xmx512m, bounding 10 concurrent runs to ~5 GB.
@@ -57,18 +61,15 @@ E2E_PARALLEL ?= 10
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
 test-e2e: build ## Run the e2e suite (golden table, mrp differential, cloud-sim, failure paths, knobs)
-	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger|^TestScale'
-
-test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
-	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
+	$(GO_E2E) -timeout 30m -skip '^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger|^TestScale'
 
 test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
 	$(GO_E2E) -timeout 30m -run '^TestMrpDiff'
 
 # The long generative differential (#350). test-e2e runs TestGenDiff on the
 # checked-in smoke seeds; this runs GEN_COUNT seeds from GEN_SEEDS (a number,
-# "random", or a comma list), within GEN_TIMEOUT. The other GEN_* knobs (legs,
-# prebuilt binaries, artifact dir, shrink and time budgets) are documented in
+# "random", or a comma list), within GEN_TIMEOUT. The other GEN_* knobs
+# (prebuilt binaries, artifact dir, shrink and time budgets) are documented in
 # test/e2e/gendiff_test.go.
 GEN_SEEDS ?= random
 GEN_COUNT ?= 200
@@ -130,7 +131,7 @@ cloc: ## Count lines of code (respects .gitignore; excludes vendored deps)
 
 install: build ## Install binaries into PREFIX/bin
 	install -d $(PREFIX)/bin
-	@for b in $(BINS); do install -m 0755 $$b $(PREFIX)/bin/$$b; done
+	@for b in $(BINS) mrjob; do install -m 0755 $$b $(PREFIX)/bin/$$b; done
 
 clean: ## Remove built binaries
-	rm -f $(BINS)
+	rm -f $(BINS) mrjob

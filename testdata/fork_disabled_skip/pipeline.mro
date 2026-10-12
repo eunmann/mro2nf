@@ -1,7 +1,6 @@
 # fork_disabled_sub's skip=true twin: the sub-pipeline is SKIPPED at runtime,
-# so the scatter runs no instances, the folded consumer (SUB's return bind)
-# must stay dormant — its keys channel never emits — and TOP yields the null
-# result, exactly as the default FORK path does (#76 dormancy parity).
+# so the map call runs no instances and TOP yields the null result, as under
+# mrp.
 stage SCALE(
     in  float value,
     in  float factor,

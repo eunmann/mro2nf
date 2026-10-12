@@ -1,5 +1,13 @@
 # Live AWS test report
 
+> **Historical (2026-10-11).** This report records runs of the pre-call-graph
+> emitter's `-target awsbatch` and `-target healthomics` projects. The
+> call-graph emitter has no `-target` or `-container` flag, and the runbooks
+> named below (`aws_run.sh`, `aws_healthomics.sh`) were deleted with those
+> targets; only `scripts/aws/normcmp.py` remains. Isolated-container and cloud
+> targets return under #489. Every flag, file and make target the report names
+> is the old emitter's.
+
 Tracks what was actually run on real AWS infrastructure (not just local/Docker)
 and verified against `mrp` golden outputs. Updated as runs complete.
 
@@ -369,7 +377,7 @@ deployed is cheap if more live runs are planned.
 
 ## HealthOmics resource teardown
 
-`test/e2e/aws_healthomics.sh` cleans up after itself: on exit it deletes every
+`test/e2e/aws_healthomics.sh` (since deleted) cleaned up after itself: on exit it deleted every
 workflow it registered and every run that verified OK. Failed or unverified
 runs (and any workflow whose deletion conflicts with a live run) are kept for
 debugging and listed in the harness output; `KEEP_RESOURCES=1` keeps

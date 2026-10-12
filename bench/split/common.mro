@@ -1,15 +1,23 @@
 filetype txt;
 
-# Benchmark: a split stage whose stage-level file arg (`payload`) is a large input
-# handed to every chunk. The current emitter wires `chunks.combine(args)`, so each
-# of the N chunk tasks stages the full stage args (including `payload`) even though
-# `main` never reads it — O(N) redundant staging of one file. #15's target is to
-# stage a stage-level file only into the chunks that actually consume it; here that
-# is zero chunks, so payload should reach only the split/join, not the N mains.
+# Benchmark: a split stage whose stage-level file arg (`payload`) is a large file
+# a producer stage writes, handed to every chunk. Each of the N chunk tasks
+# stages the split's args bundle (including `payload`) even though `main` never
+# reads it — O(N) redundant
+# staging of one file. #15's target is to stage a stage-level file only into the
+# chunks that actually consume it; here that is zero chunks, so payload should
+# reach only the split/join, not the N mains. A producer writes it, as an entry
+# input given by a relative path names nothing from mrp's job dir.
 #
 # Run at two chunk counts (pipeline_c4.mro, pipeline_c16.mro) to mechanize the
 # CLAUDE.md overhead rule: the plumbing task count must be IDENTICAL at both —
 # only the split triad's own chunk tasks may grow with N.
+
+stage MKPAY(
+    in  int kb,
+    out txt f,
+    src py  "stages/mkpay",
+)
 
 stage WSPLIT(
     in  int  nchunks,
@@ -22,14 +30,18 @@ stage WSPLIT(
 )
 
 pipeline WIDE(
-    in  int  nchunks,
-    in  txt  payload,
-    out int  total,
+    in  int nchunks,
+    in  int kb,
+    out int total,
 )
 {
+    call MKPAY(
+        kb = self.kb,
+    )
+
     call WSPLIT(
         nchunks = self.nchunks,
-        payload = self.payload,
+        payload = MKPAY.f,
     )
 
     return (

@@ -21,7 +21,7 @@ The linter catches formatting, function length, magic numbers, doc comments, and
 [ ] Comments you passed while editing — old ones included — are deleted, not reworded
 [ ] Nothing needed a comment to be followed; where it did, the code was renamed or split instead
 [ ] No TODOs (unless explicitly approved)
-[ ] Both sides of every seam the change crosses agree: emitter ↔ mre flags and bindspecs, Go walk ↔ lib/Mro2nf.groovy ordering
+[ ] Both sides of every seam the change crosses agree: internal/cgnf ↔ mre flags and records, internal/cg records ↔ assets/stage.nf Groovy helper ordering
 [ ] Generated Nextflow interpolates nothing unescaped: every baked string goes through the quoting helpers
 [ ] Nothing new scales with fork width or chunk count: no per-fork task, no per-instance copy of a whole collection
 ```

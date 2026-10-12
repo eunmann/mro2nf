@@ -1,7 +1,6 @@
-# A scatterable map call whose SOLE consumer is a MID-PIPELINE fused leaf
-# stage (not the return): the merge folds into SUMALL's task — souts/keys are
-# staged there and `mre merge` runs before its bind (#76). The return forwards
-# SUMALL verbatim, so the whole project is native-complete.
+# A map call whose SOLE consumer is a MID-PIPELINE stage (not the return):
+# SUMALL gathers every fork's outs (#76). The return forwards SUMALL
+# verbatim.
 stage SCALE(
     in  float value,
     in  float factor,

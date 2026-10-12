@@ -1,5 +1,5 @@
-// Package types implements the type-directed file-leaf walk shared by the
-// emitter and the runtime shim. Given a parameter's declared type and a decoded
+// Package types implements the type-directed file-leaf walk mre runs at every
+// task boundary. Given a parameter's declared type and a decoded
 // JSON value, it locates every file-bearing leaf — including files nested inside
 // arrays, typed maps, and (arbitrarily deep) structs — and applies a transform
 // so the shim can rewrite paths on each task boundary without guessing which
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -93,15 +92,6 @@ func (t *Table) Apply(params []ir.Param, vals map[string]any, fn Transform) (map
 	return objectMap(out), nil
 }
 
-// CoerceScalars walks vals against params and coerces each int-typed leaf whose
-// value is a whole-number float to an integer (e.g. the literal 5.0 bound to an
-// int param), matching Martian's int-from-float-literal coercion. This is needed
-// because numbers are decoded with json.UseNumber to preserve float fidelity
-// (42.0 stays a float), which would otherwise hand a stage 5.0 for an int param.
-func (t *Table) CoerceScalars(params []ir.Param, vals map[string]any) map[string]any {
-	return t.mapNumbers(params, vals, coerceNumber)
-}
-
 // FormatFloats re-encodes each float leaf of vals (a float-typed leaf, or a
 // float-literal number inside an untyped map) the way mrp encodes a float
 // literal in a stage's _args (Martian's FloatExp uses AppendFloat 'g', -1):
@@ -110,28 +100,6 @@ func (t *Table) CoerceScalars(params []ir.Param, vals map[string]any) map[string
 // their text, as mrp passes them through unchanged.
 func (t *Table) FormatFloats(params []ir.Param, vals map[string]any) map[string]any {
 	return t.mapNumbers(params, vals, formatFloat)
-}
-
-// NarrowValue returns v with every struct-typed value filtered to exactly its
-// declared fields, as mrp's StructType.FilterJson filters a value it resolves
-// from a producer's outputs to the receiving type (core/resolve.go Path): extra
-// fields are dropped and a missing field is null, recursively through nested
-// structs, arrays, and typed maps. A struct Object that needs no filtering
-// keeps its key order, and one that does takes its declared field order, as
-// FilterJson returns its input unchanged or rewrites it member by member.
-// Values of any other shape pass through. v is not mutated.
-func (t *Table) NarrowValue(v any, p ir.Param) any {
-	nv, _ := t.narrow(v, p.BaseType, p.ArrayDim, p.MapDim)
-
-	return nv
-}
-
-// Fields returns the declared fields of struct type name, and whether name is a
-// struct type.
-func (t *Table) Fields(name string) ([]ir.Param, bool) {
-	fields, ok := t.structs[name]
-
-	return fields, ok
 }
 
 // applyObject is Apply over an Object, walking its members in params order.
@@ -270,122 +238,6 @@ func formatFloat(n json.Number, base string) any {
 	}
 
 	return json.Number(strconv.FormatFloat(f, 'g', -1, 64))
-}
-
-// coerceNumber converts a whole-number JSON value to an integer for an int param.
-func coerceNumber(n json.Number, base string) any {
-	if base != typeInt {
-		return n
-	}
-
-	if i, err := n.Int64(); err == nil {
-		return i
-	}
-
-	// A whole-number float in int64 range coerces to an integer; out-of-range
-	// values (e.g. 1e20) are left as the original number rather than overflowing
-	// into a garbage int. The upper bound is strict: float64(math.MaxInt64)
-	// rounds up to 2^63, so `<= MaxInt64` would admit exactly 2^63, which
-	// int64() then wraps to MinInt64; `< MaxInt64` rejects it. MinInt64 (-2^63)
-	// is exactly representable, so the lower bound stays inclusive.
-	if f, err := n.Float64(); err == nil && f == math.Trunc(f) &&
-		f >= math.MinInt64 && f < math.MaxInt64 {
-		return int64(f)
-	}
-
-	return n
-}
-
-// narrow filters one value against its type and reports whether filtering
-// changed it; it descends shapes the way coerce does (a typed map is one level
-// carrying mapDim-1 inner array dims).
-func (t *Table) narrow(v any, base string, arrayDim, mapDim int) (any, bool) {
-	switch tv := v.(type) {
-	case []any:
-		if arrayDim <= 0 {
-			return v, false
-		}
-
-		out := make([]any, len(tv))
-		changed := false
-
-		for i, e := range tv {
-			var c bool
-
-			out[i], c = t.narrow(e, base, arrayDim-1, mapDim)
-			changed = changed || c
-		}
-
-		return out, changed
-	case map[string]any:
-		nv, changed := t.narrowObject(sortedObject(tv), base, arrayDim, mapDim)
-
-		return asMap(nv), changed
-	case Object:
-		return t.narrowObject(tv, base, arrayDim, mapDim)
-	case json.Number:
-		return narrowNumber(tv, base, arrayDim, mapDim)
-	default:
-		return v, false
-	}
-}
-
-// narrowNumber filters an int leaf as BuiltinType.FilterJson does: a
-// whole-number float such as 4.0 or 1e2 is re-encoded as an integer, which
-// counts as a change, so the enclosing struct is rebuilt in declared order.
-func narrowNumber(n json.Number, base string, arrayDim, mapDim int) (any, bool) {
-	if base != typeInt || arrayDim > 0 || mapDim > 0 {
-		return n, false
-	}
-
-	if _, err := n.Int64(); err == nil {
-		return n, false
-	}
-
-	c := coerceNumber(n, base)
-	_, same := c.(json.Number)
-
-	return c, !same
-}
-
-// narrowObject narrows a typed map's values in place, or filters a struct as
-// StructType.FilterJson does: unchanged when it has exactly its declared
-// fields and none of them changes, otherwise rebuilt in declared order.
-func (t *Table) narrowObject(o Object, base string, arrayDim, mapDim int) (any, bool) {
-	if mapDim > 0 {
-		out := slices.Clone(o)
-		changed := false
-
-		for i, m := range o {
-			var c bool
-
-			out[i].Value, c = t.narrow(m.Value, base, arrayDim+mapDim-1, 0)
-			changed = changed || c
-		}
-
-		return out, changed
-	}
-
-	fields, ok := t.structs[base]
-	if !ok || arrayDim > 0 {
-		return o, false
-	}
-
-	out := make(Object, len(fields))
-	changed := len(o) != len(fields)
-
-	for i, f := range fields {
-		v, ok := o.Get(f.Name)
-		nv, c := t.narrow(v, f.BaseType, f.ArrayDim, f.MapDim)
-		changed = changed || !ok || c
-		out[i] = Member{Key: f.Name, Value: nv}
-	}
-
-	if !changed {
-		return o, false
-	}
-
-	return out, true
 }
 
 // walk descends one value. It dispatches on the value's actual JSON shape

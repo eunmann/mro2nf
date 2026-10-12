@@ -13,6 +13,14 @@ tiny dataset) two ways on one machine and comparing them:
 CellRanger is **not** committed to this repo. The run reads a locally-downloaded
 bundle; the harness is skip-if-absent.
 
+> **Historical results.** The headline, the bugs table and the baselines below
+> were measured with the pre-call-graph emitter and its two emissions (default
+> and `-native`), whose `BIND`/`FORK`/`MERGE`/`DISABLE`/`PUBLISH`/`LAYOUT`/
+> `BUILD_ENTRY_ARGS` plumbing no longer exists. The call-graph emitter has one
+> emission and two plumbing tasks, `PLAN` and `OUTS`; its task counts on this
+> pipeline have not been measured. The [reproduction recipe](#reproducing) and
+> the [opt-in harness](#repeatable-baseline-opt-in-test-harness) are current.
+
 ## Headline result
 
 The full `count` pipeline runs to completion under the generated Nextflow and its
@@ -33,7 +41,7 @@ synthetic fixtures never did.
 | 2 | The transport leaf-flatten renamed every file leaf to `f/L%04d`, dropping the extension. Martian typed-file readers reconstruct a path from the filetype (`bincode` → `with_extension`), so they looked for `f/L0002.bincode` beside a bare `f/L0002` and failed. `FILTER_BARCODES` join. | Preserve the source extension in the leaf name (`f/L0002.bincode`) in the Go shim. Since #284 each leaf keeps its whole basename in an ordinal dir (`f/L0002/<basename>`). |
 | 4 | A stage RESERVES production-sized memory (the cloupe join asks for 30 GB). On a smaller machine Nextflow's local executor **fails** a task whose request exceeds the machine (`Process requirement exceeds available memory`), aborting a run that `mrp` completes fine (`mrp` clamps a job to its `--localmem` pool and runs it). | Emit `process.resourceLimits` in the local profile, clamping each task's request to the detected host resources. The generated pipeline now runs wherever `mrp` runs. |
 
-## Baselines: default vs `-native`
+## Baselines: default vs `-native` (pre-call-graph emitter)
 
 One machine: 32 cores / 31 GB. Martian: `--localcores=8 --localmem=16`. Both
 Nextflow emissions are run with an aggressive local
@@ -83,13 +91,11 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
 # 1. Golden baseline
 cellranger testrun --id=golden --localcores=8 --localmem=16 --disable-ui
 
-# 2. Transpile (point -mrjob/-shell at the bundle's Martian runtime;
-#    the .mro's defaults are the bundle's test data, outside $CR/mro, so
-#    baking them into the project takes -allow-external-files)
-mro2nf -allow-external-files -mropath $CR/mro -mre ./mre \
+# 2. Transpile (point -mrjob/-shell at the bundle's Martian runtime)
+mro2nf -mropath $CR/mro -mre ./mre \
        -mrjob $CR/external/martian/bin/mrjob \
        -shell $CR/external/martian/adapters/python/martian_shell.py \
-       -o out __<id>.mro           # add -native to compare
+       -o out __<id>.mro
 
 # 3. Run (source the bundle env so cr_* + the bundled python3 are on PATH)
 source $CR/sourceme.bash

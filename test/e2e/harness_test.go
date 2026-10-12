@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,6 +123,13 @@ func TestMain(m *testing.M) {
 		mustSetenv("NXF_OPTS", "-Xms256m -Xmx1g -XX:+UseSerialGC")
 	}
 
+	// Martian's runtime, which the call-graph drift guard runs in-process,
+	// finds jobmanagers/ beside MARTIAN_BASE; the test binary's own dir has
+	// none.
+	if bin, err := lookupMartianBin(); err == nil && os.Getenv("MARTIAN_BASE") == "" {
+		mustSetenv("MARTIAN_BASE", bin)
+	}
+
 	os.Exit(m.Run())
 }
 
@@ -164,15 +172,23 @@ func missingPrereqf(tb testing.TB, format string, args ...any) {
 
 var buildOnce sync.Once
 
-// buildBinaries builds ./mro2nf and ./mre at the repo root exactly once per
-// test process, static and path-free like `make build`, so the suites run
-// (and the docker images bake) the binary a user builds.
+// builtBinaries are the binaries `make build` writes at the repo root, each
+// with its package: mrjob is the pinned Martian module's.
+var builtBinaries = map[string]string{
+	"mro2nf": "./cmd/mro2nf",
+	"mre":    "./cmd/mre",
+	"mrjob":  "github.com/martian-lang/martian/cmd/mrjob",
+}
+
+// buildBinaries builds builtBinaries at the repo root exactly once per test
+// process, static and path-free like `make build`, so the suites run (and the
+// docker images bake) the binary a user builds.
 func buildBinaries(t *testing.T) {
 	t.Helper()
 
 	buildOnce.Do(func() {
-		for _, bin := range []string{"mro2nf", "mre"} {
-			cmd := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(root, bin), "./cmd/"+bin)
+		for _, bin := range slices.Sorted(maps.Keys(builtBinaries)) {
+			cmd := exec.Command("go", "build", "-trimpath", "-o", filepath.Join(root, bin), builtBinaries[bin])
 			cmd.Dir = root
 			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 
@@ -184,8 +200,8 @@ func buildBinaries(t *testing.T) {
 }
 
 // transpile runs mro2nf on a testdata fixture into a fresh temp project dir,
-// adding -mrjob automatically when the fixture ships one. extra flags are
-// appended before the .mro argument.
+// whose stages run under the pinned Martian mrjob buildBinaries builds.
+// extra flags are appended before the .mro argument.
 func transpile(t *testing.T, fixture string, extra ...string) string {
 	t.Helper()
 
@@ -215,8 +231,8 @@ func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
 	return proj
 }
 
-// transpileRefused are the fixtures mro2nf must refuse to transpile under
-// every flag set, each with the reason: mrp refuses them before any stage runs,
+// transpileRefused are the fixtures mro2nf must refuse to transpile, each
+// with the reason: mrp refuses them before any stage runs,
 // so no project may exist to run. Each is an mrpOutcomeCases entry, and
 // TestNextflowLint requires the refusal in place of a lint verdict.
 var transpileRefused = map[string]string{
@@ -242,21 +258,16 @@ func repoTools() toolchain {
 // transpileInto runs tools' mro2nf for the fixture mro under dir, emitting
 // into proj. It returns the failure (with the tool output) instead of failing
 // the test, so batch callers can attribute a broken combo without aborting the
-// rest. The binaries must exist: buildBinaries builds repoTools.
+// rest. The binaries must exist: buildBinaries builds repoTools. Every stage
+// runs under the real mrjob, as mrp runs py and comp stages.
 func transpileInto(tools toolchain, dir, mro, proj string, extra ...string) error {
-	args := []string{
+	args := slices.Concat([]string{
 		"-o", proj,
 		"-mre", tools.mre,
+		"-mrjob", filepath.Join(root, "mrjob"),
 		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
 		"-mropath", dir,
-	}
-
-	if mrjob := filepath.Join(dir, "mrjob.sh"); fileExists(mrjob) {
-		args = append(args, "-mrjob", mrjob)
-	}
-
-	args = append(args, extra...)
-	args = append(args, filepath.Join(dir, mro))
+	}, extra, []string{filepath.Join(dir, mro)})
 
 	cmd := exec.Command(tools.mro2nf, args...)
 	cmd.Dir = root
@@ -426,6 +437,14 @@ func tail(b []byte, n int) string {
 	}
 
 	return "    " + strings.Join(lines, "\n    ")
+}
+
+func writeFileT(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
 }
 
 // goldenJSON asserts the JSON document at gotPath, a pipeline_outs.json of

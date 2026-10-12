@@ -20,15 +20,15 @@ import (
 	"github.com/eunmann/mro2nf/internal/types"
 )
 
-// runPublishLayout computes the outs/ layout from the final output sidecar ALONE
-// (no file leaves staged, so no single-node funnel — #12): it walks the raw
-// marker-bearing sidecar and writes layout.json (leaf path below the bundle's
-// files dir -> outs/ rel path) plus the pipeline_outs.json value tree.
+// runPublishLayout computes the outs/ layout from the final output sidecar
+// alone: it walks the raw marker-bearing sidecar for each leaf's outs/ rel
+// path, writes the pipeline_outs.json value tree and manifest.json.gz, and
+// links the staged leaves into the outs/ tree.
 func runPublishLayout(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("publish-layout", flag.ContinueOnError)
 	prod := addProducer(fs, types.RoleOut)
 	sidecar := fs.String("sidecar", "", "raw output sidecar (data.json, markers intact)")
-	dir := fs.String("dir", ".", "directory to write layout.json and pipeline_outs.json")
+	dir := fs.String("dir", ".", "directory to write pipeline_outs.json and manifest.json.gz")
 	leavesDir := fs.String("leaves", "", "dir of staged leaf files (head-node publish); empty leaves publishing off")
 	outsDir := fs.String("outs", "", "dir to materialise the outs/ tree into for head-node publishDir")
 
@@ -68,10 +68,9 @@ func runPublishLayout(_ context.Context, argv []string) error {
 		return err
 	}
 
-	// Head-node publish (POSIX targets): materialise the outs/ tree from the
-	// staged leaves so a single publishDir directive on LAYOUT copies it into the
-	// results tree — no per-leaf PUBLISH_LEAF task. Off (both flags empty) on
-	// object-store backends, which keep the parallel fan-out.
+	// OUTS materialises the outs/ tree in its own task, which its publishDir
+	// copies into the results tree; without -outs only the layout files are
+	// written.
 	if *outsDir != "" {
 		return materializeOuts(*leavesDir, filepath.Join(*dir, *outsDir), pub.layout)
 	}
@@ -80,12 +79,8 @@ func runPublishLayout(_ context.Context, argv []string) error {
 }
 
 // writeLayout writes into dir what pub computed for the outputs of pipeline:
-// layout.json, manifest.json.gz and the published outs as pipeline_outs.json.
+// manifest.json.gz and the published outs as pipeline_outs.json.
 func writeLayout(dir, pipeline string, pub *publisher, published map[string]any) error {
-	if err := writeJSON(filepath.Join(dir, "layout.json"), pub.layout); err != nil {
-		return err
-	}
-
 	if err := writeManifest(filepath.Join(dir, "manifest.json.gz"), pipeline, pub.manifest); err != nil {
 		return err
 	}
@@ -230,8 +225,8 @@ func unescape(name string, value any) (any, error) {
 }
 
 // publisher computes a pipeline's mrp-style outs/ layout from the raw sidecar
-// markers WITHOUT copying files, so a distributed fan-out can publish each leaf
-// into place (no single-node funnel — #12).
+// markers without copying files; materializeOuts then links the staged leaves
+// into that layout.
 type publisher struct {
 	structs map[string]*ir.StructType
 	tbl     *types.Table

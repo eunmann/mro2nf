@@ -8,9 +8,7 @@ package e2e
 // contents — the (path-normalized) _outs JSON, and every stage invocation's
 // _args, _outs and _jobinfo allocation (abidiff_test.go). This validates mre's
 // publish layout and the whole transpile+runtime path against Martian itself,
-// not a hand-written golden. Anchor fixtures additionally run a -native
-// Nextflow leg against the same mrp pipestance (#120), so the native emit path
-// faces live mrp, not only committed goldens.
+// not a hand-written golden.
 //
 // Requires a Martian build: set MARTIAN_BIN (default ~/workdir/martian/bin).
 // Without one it skips locally and fails under E2E_REQUIRE=1, where CI builds
@@ -27,7 +25,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -267,23 +264,14 @@ func walkPublishedRel(path, rel string, linked bool, rootMeta []string, visit fu
 }
 
 // mrpDiffCase is one fixture of the differential, run from its pipeline.mro
-// invocation, plus the extra Nextflow legs it runs against the same mrp
-// pipestance.
+// invocation.
 //
 // mro names the entry invocation of a bench/ fixture, whose name is then its
 // repo-relative dir (bench/<shape>); a testdata/ fixture leaves it empty and
-// runs its pipeline.mro. native adds a -native transpile+Nextflow leg (#120):
-// without it, -native correctness would rest entirely on committed goldens and
-// a Martian behavior change at a pin bump — or a native-only divergence the
-// golden JSON does not capture — would be invisible until goldens were
-// regenerated. realMrjob runs the Nextflow side's comp stages through
-// $MARTIAN_BIN/mrjob, the binary mrp itself runs them with.
+// runs its pipeline.mro.
 type mrpDiffCase struct {
-	name      string
-	mro       string
-	realMrjob bool
-	native    bool
-	inline    bool
+	name string
+	mro  string
 }
 
 // source returns the dir and entry .mro the case runs.
@@ -301,19 +289,18 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "file_min"},
 	// #243: fractional mem_gb (and split-returned chunk/join mem) reaches the
 	// stage as mrp resolves it, not Nextflow's truncated GB.
-	{name: "frac_mem", native: true},
+	{name: "frac_mem"},
 	// #370: fractional threads reach the stage as mrp resolves them, not
 	// Nextflow's integer cpus.
-	{name: "frac_threads", native: true},
+	{name: "frac_threads"},
 	{name: "dir_out"},
-	// #242: dotfiles and an empty subdirectory inside directory outputs,
-	// through both LAYOUT variants (the transform return folds under -native).
-	{name: "dir_hidden", native: true},
+	// #242: dotfiles and an empty subdirectory inside directory outputs.
+	{name: "dir_hidden"},
 	// #328: string values shaped like @mre: markers reach the stage and the
 	// published outs exactly as mrp gives them.
-	{name: "marker_strings", native: true},
+	{name: "marker_strings"},
 	// #284: every file a stage receives keeps the basename mrp passes it.
-	{name: "basename_echo", native: true},
+	{name: "basename_echo"},
 	{name: "map_file"},
 	{name: "map_file_keyed"},
 	{name: "map_split_file"},
@@ -321,129 +308,112 @@ var mrpDiffCases = []mrpDiffCase{
 	// order, not completion order.
 	{name: "jitter_wide"},
 	// #217: a split phase creates a custom-filetype file and returns it as a
-	// per-chunk arg the JOIN reads. Verifies output parity; the object-store
-	// staging path itself is guarded by the AWS e2e lane and
-	// the cmd/mre readChunkData unit test (local/docker-iso share a fs).
-	{name: "split_chunk_file", native: true},
+	// per-chunk arg the JOIN reads.
+	{name: "split_chunk_file"},
 	// Coverage matrix: file leaves at the split/join chunk boundary — the
 	// region #217 lived in. Nested struct chunk-def, array-of-files chunk-out,
-	// and a directory chunk-out. Object-store staging verified on the AWS lane.
-	{name: "split_struct_chunk", native: true},
+	// and a directory chunk-out.
+	{name: "split_struct_chunk"},
 	// #245: split-returned chunk args reach main as written (5.0 stays a
 	// float for an int chunk input).
-	{name: "chunk_float_int", native: true},
-	{name: "chunk_out_filearr", native: true},
-	{name: "chunk_out_dir", native: true},
+	{name: "chunk_float_int"},
+	{name: "chunk_out_filearr"},
+	{name: "chunk_out_dir"},
 	// Matrix completeness: the builtin `file` type (corpus only used custom
 	// filetypes), and a file forwarded from a stage input into a split
-	// chunk-arg (position 4). Same IsFile / chunk-def staging code paths the
-	// AWS lane already proved on split_chunk_file / split_struct_chunk.
-	{name: "file_builtin_min", native: true},
-	{name: "split_forward_file", native: true},
+	// chunk-arg (position 4).
+	{name: "file_builtin_min"},
+	{name: "split_forward_file"},
 	{name: "struct_of_file"},
 	{name: "struct_file_array"},
 	// #173: a pipeline output typed as a callable's output struct (MAKEB),
 	// bound whole, with a file leaf — the type walk needs the callable-derived
 	// struct (addCallableStructs) to descend `made` to its `report` file.
-	{name: "callable_struct_file", native: true},
+	{name: "callable_struct_file"},
 	// #240: whole refs to array- and map-forked calls bind one struct per
 	// fork (Martian's resolveMerge), file leaves published per fork.
-	{name: "map_wholeref", native: true},
+	{name: "map_wholeref"},
 	// #172: array<map<Point>>.x projection — a map call over an array source
 	// makes MAKEM.m an array<map<Point>>; projecting .x yields array<map<int>>.
-	{name: "arr_map_proj", native: true},
+	{name: "arr_map_proj"},
 	{name: "diamond_min"},
 	{name: "cli_typed"},
 	{name: "fork_min"},
 	{name: "struct_min"},
-	// #239: struct narrowing on every bind path; the noinline leg keeps the
-	// NARROW sub's return a would-be forward, the native legs fold binds.
-	{name: "struct_narrow", native: true, inline: true},
+	// #239: struct narrowing on every bind path.
+	{name: "struct_narrow"},
 	// #366: every way a struct value is built reaches a stage and the outs
-	// JSON in mrp's key order, through plain and native-scattered forks.
-	{name: "struct_key_order", native: true},
-	{name: "kitchen_sink", inline: true},
-	{name: "file_tree", inline: true},
+	// JSON in mrp's key order, through plain and forked calls.
+	{name: "struct_key_order"},
+	{name: "kitchen_sink"},
+	{name: "file_tree"},
 	{name: "map_null_map"},
 	// #99: map-fork key ordering (mixed case/digit + astral + CJK-compat
-	// keys) — the driver's UTF-8 byte sort must agree with mrp's key order.
-	{name: "map_key_sort", native: true},
-	// #99: upstream map-fork element path (producer bundle sliced, real keys).
+	// keys) must agree with mrp's key order.
+	{name: "map_key_sort"},
+	// #99: an upstream map fork with real keys.
 	{name: "map_fork_upstream"},
 	// #99 empty-fork fidelity, both sides of the static/runtime split:
 	// an invocation-known empty split source merges to null (mrp's static
 	// resolver prunes the zero-fork call); an upstream empty/null
 	// collection merges to the typed empty at runtime.
-	{name: "empty_fork_min", native: true},
+	{name: "empty_fork_min"},
 	{name: "empty_map_fork"},
-	{name: "runtime_empty_forks", native: true},
+	{name: "runtime_empty_forks"},
 	// #127 value-chain empty-fork classes: mrp's static resolver prunes
 	// each to null (sub-pipeline chain to an entry value, in-pipeline
-	// cascade through a mapped call, mixed entry+upstream zip) — the
-	// live differential machine-checks the knownInvocation cascade.
-	{name: "empty_fork_sub", native: true, inline: true},
-	{name: "empty_fork_cascade", native: true},
-	{name: "empty_fork_mixed", native: true},
-	// #241: SUB at two call sites (invocation-known empty vs runtime empty),
-	// disable-gated so every leg keeps both SUB boundaries.
-	{name: "empty_fork_two_sites", native: true, inline: true},
+	// cascade through a mapped call, mixed entry+upstream zip).
+	{name: "empty_fork_sub"},
+	{name: "empty_fork_cascade"},
+	{name: "empty_fork_mixed"},
+	// #241: SUB at two call sites (invocation-known empty vs runtime empty).
+	{name: "empty_fork_two_sites"},
 	// #383: splits over disable-gated producers of invocation-known sources,
 	// under literal and runtime gates; mrp prunes each to null.
-	{name: "empty_fork_gated", native: true, inline: true},
-	{name: "empty_fork_gated_sub", native: true, inline: true},
+	{name: "empty_fork_gated"},
+	{name: "empty_fork_gated_sub"},
 	// #435: splits of a mapped call's whole ref over an invocation-known null
 	// and empty, into a stage and into a sub-pipeline.
-	{name: "empty_fork_wholeref", native: true, inline: true},
+	{name: "empty_fork_wholeref"},
 	// #436: splits of a disabled stage, sub-pipeline, map call and per-fork
 	// stage, gated by entry values.
-	{name: "disabled_split_null", native: true, inline: true},
+	{name: "disabled_split_null"},
 	// #434: runtime-gated map calls over a sub-pipeline (array, map, empty and
 	// null sources, in a keyed layer, into a split stage) against an
 	// entry-gated one and a gated map call over a stage.
-	{name: "disabled_map_nullforks", native: true, inline: true},
+	{name: "disabled_map_nullforks"},
 	// #433: a typed-map literal bound to a sub-pipeline input and split
-	// through a field projection keeps its boundary under inlining.
-	{name: "map_literal_proj", native: true, inline: true},
+	// through a field projection.
+	{name: "map_literal_proj"},
 	// #433: a map call's fork-independent calls run as often as mrp runs them,
 	// across literal, entry, empty, runtime-empty, gated, nested, plain-sub
 	// and keyed map calls.
-	{name: "fork_indep_call", native: true, inline: true},
-	// The native-suite golden anchors: their committed expected/outs.json
-	// files claim mrp provenance, so the live differential machine-checks
-	// that claim — otherwise TestGolden + the native suites would prove
-	// only self-consistency. Their native legs face the -native transpile
-	// itself against live mrp, not just the golden snapshot.
-	{name: "fork_ref", native: true},
-	{name: "fork_mid", native: true},
-	// The inline legs here keep the disabled SUB a boundary (its internal call
-	// is a MAP call, which the profitability guard excludes), so they gate that
-	// -inline-pipelines leaves a non-flat disabled sub byte-identical.
-	{name: "fork_disabled_sub", native: true, inline: true},
-	{name: "fork_disabled_skip", native: true, inline: true},
-	// #221 disabled-plain sub-pipeline inlining: `call SUB using (disabled=X)`
-	// where SUB is a FLAT plain sub-pipeline (one undisabled leaf stage reading
-	// only pipeargs) splices its internal stage into the parent gated by X — the
-	// profitability guard's win case. _sub runs (skip=false → scaled=15), _skip
-	// nulls (skip=true → scaled=null), so the inline leg proves both the run and
-	// the disabled-null branch stay byte-identical to mrp.
-	{name: "disabled_plain_sub", inline: true},
-	{name: "disabled_plain_skip", inline: true},
-	// #339: a whole ref to a disabled stage and to a disabled (flat,
-	// otherwise inlinable) sub-pipeline is null in the consumer's _args; the
-	// noinline leg covers the boundary path, the default leg the inliner.
-	{name: "disabled_wholeref", native: true, inline: true},
+	{name: "fork_indep_call"},
+	// The committed expected/outs.json files of these claim mrp provenance,
+	// so the live differential machine-checks that claim.
+	{name: "fork_ref"},
+	{name: "fork_mid"},
+	{name: "fork_disabled_sub"},
+	{name: "fork_disabled_skip"},
+	// #221: `call SUB using (disabled=X)` over a sub-pipeline of one leaf
+	// stage: _sub runs (skip=false → scaled=15), _skip nulls (skip=true →
+	// scaled=null).
+	{name: "disabled_plain_sub"},
+	{name: "disabled_plain_skip"},
+	// #339: a whole ref to a disabled stage and to a disabled sub-pipeline is
+	// null in the consumer's _args.
+	{name: "disabled_wholeref"},
 	// #253: disable gates that are null at run time leave their calls
 	// enabled on every gate path: upstream output and struct field, a
-	// sub-pipeline input (inlined, and a boundary on the noinline leg), and
-	// the keyed gates of a map call over a sub-pipeline.
-	{name: "null_gate", native: true, inline: true},
-	{name: "fork_fanout", native: true},
-	{name: "map_file_array", native: true},
-	// #99: file-bearing leaf scatter — the FORK-resolve + folded-merge path.
+	// sub-pipeline input, and the gates of a map call over a sub-pipeline.
+	{name: "null_gate"},
+	{name: "fork_fanout"},
+	{name: "map_file_array"},
+	// #99: a file-bearing leaf scatter.
 	{name: "map_file_split"},
 	// #90: CellRanger-shaped DAG (preflight, split, disable fan-out, aliasing,
 	// map, nested pipelines) — all py stages, so it joins the mrp differential.
-	{name: "cellranger_shaped", native: true, inline: true},
+	{name: "cellranger_shaped"},
 	// #113: stage src arguments (`src exec "code.py 3 hello"`) must reach
 	// the stage under both runners. Unlike exec_min's stub, this one writes
 	// journal entries (martian_shell.py update_journal), so real mrp
@@ -452,10 +422,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #238: float literals >= 1e6 (entry and call-site) reach the stage as
 	// floats; the outputs are type+repr strings, since the _outs JSON diff
 	// alone would equate 1e+06 with 1000000.
-	{name: "literals_big", native: true},
-	// A comp stage split/main/join: mrp runs it through its own mrjob, so the
-	// Nextflow side does too rather than through the fixture's mrjob.sh stub.
-	{name: "comp_split", realMrjob: true},
+	{name: "literals_big"},
+	// A comp stage split/main/join, which both runners run through mrjob.
+	{name: "comp_split"},
 	// The remaining runnable fixtures: each golden-suite shape faces live mrp,
 	// not only its committed golden.
 	{name: "alias_min"},
@@ -493,7 +462,7 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "nested_struct"},
 	{name: "null_in"},
 	{name: "returnonly"},
-	{name: "special_resource", native: true},
+	{name: "special_resource"},
 	{name: "split_test"},
 	{name: "stage_entry"},
 	{name: "struct_input"},
@@ -503,7 +472,7 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "wildcard"},
 	// The stage holds 0.75 GB against its 0.5 GB request. Without -monitor
 	// neither runner enforces that, so both succeed;
-	// TestOrdinaryFailureRetriesWithEscalatedMemory covers the -monitor kill.
+	// TestMonitorMemoryKillFailsLikeMrp covers the -monitor kill.
 	{name: "flaky_retry"},
 	// #324: a split returning no chunks still runs the join.
 	{name: "split_no_chunks"},
@@ -513,24 +482,55 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "symlink_escape"},
 	// #431: a file reached from several outputs, through a pass-through stage
 	// and a sub-pipeline boundary too, is named by the first path mrp
-	// published it at, through both LAYOUT variants and uninlined.
-	{name: "shared_out_file", native: true, inline: true},
+	// published it at.
+	{name: "shared_out_file"},
 	// #432: files below a 2-D array, reached through a struct projection and
 	// a whole sub-pipeline ref, stay unpublished, as mrp leaves them.
-	{name: "nested_path_unpublished", native: true},
+	{name: "nested_path_unpublished"},
 	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
 	{name: "preflight_ungated"},
+	// #314: a sub-pipeline's preflight, fed by a parent call, waits for its
+	// parent's preflight and gates its sibling.
+	{name: "preflight_order"},
+	// #259: a forked call gathers its own share of an inner map call, from a
+	// stage's or the entry's source, also an empty one.
+	{name: "map_nested_gather"},
+	// #342: the modifiers mrp accepts on a top-level call.
+	{name: "toplevel_stage_modifiers"},
+	// #448: inside a map call over a sub-pipeline, a call reading only an
+	// inner map call's fork runs once per inner fork.
+	{name: "inner_only_fork"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
 	{name: "vdr_volatile"},
-	// #472: every bench lane's invocation at its narrower width, in both
-	// TestBench modes, so a divergence on a bench shape fails here and not
-	// only the bench's task-count gates.
-	{name: "bench/chain", mro: "pipeline.mro", native: true},
-	{name: "bench/forks", mro: "pipeline_w4.mro", native: true},
-	{name: "bench/split", mro: "pipeline_c4.mro", native: true},
-	{name: "bench/mapsplit", mro: "pipeline_w4.mro", native: true},
-	{name: "bench/mapdisabled", mro: "pipeline_w4.mro", native: true},
-	{name: "bench/mapnested", mro: "pipeline_w2.mro", native: true},
+	// A disable gate split per fork of a map call over a sub-pipeline: each
+	// fork of the gated stage has its own gate value from the one producer.
+	{name: "split_gate"},
+	// The same gate under map calls the entry forks, an array and a map with
+	// unsorted keys: the producer's outs give each fork its gate value.
+	{name: "split_gate_entry"},
+	// #337: a stage output nested 9,000 levels deep.
+	{name: "deep_json"},
+	// #472: every bench lane's invocation at its narrower width, so a
+	// divergence on a bench shape fails here and not only the bench's
+	// task-count gates.
+	{name: "bench/chain", mro: "pipeline.mro"},
+	{name: "bench/forks", mro: "pipeline_w4.mro"},
+	{name: "bench/split", mro: "pipeline_c4.mro"},
+	{name: "bench/mapsplit", mro: "pipeline_w4.mro"},
+	{name: "bench/mapdisabled", mro: "pipeline_w4.mro"},
+	{name: "bench/mapnested", mro: "pipeline_w2.mro"},
+	{name: "bench/zip", mro: "pipeline_w4.mro"},
+	// #464: a map call zipping splits forks over its master source, and the
+	// other sources read null past their end.
+	{name: "zip_runtime"},
+	{name: "zip_literal"},
+	// #488: a map call zipping maps of different stages forks over its
+	// first split's keys, and another map lacking a key reads null there.
+	{name: "zip_runtime_map"},
+	// A merge Martian expanded per fork of an outer map call gathers every
+	// inner fork across the outer forks, an empty one as null.
+	{name: "merge_across_outer"},
+	{name: "merge_across_empty"},
 }
 
 // mrpOutcomeCases are the fixtures whose run outcome (outcome_test.go), not
@@ -550,6 +550,8 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// the bad value: a missing struct key (#274), a float in an `out int`
 	// (#338).
 	{name: "missing_struct_key", mrp: failedIn(failError, "UP")},
+	// #314: a failing preflight runs alone; its siblings would fail too.
+	{name: "preflight_fail", mrp: failedIn(failAssert, "CHECK")},
 	{name: "bad_out_type", mrp: failedIn(failError, "BAD")},
 	// A split returning a chunk resource key of the wrong JSON type fails the
 	// split (#275): a number __special, a string __mem_gb or __threads.
@@ -561,6 +563,20 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "rt_gate_split_reject", mrp: runOutcome{Failed: true}},
 	{name: "rt_gate_split_reject_sub", mrp: runOutcome{Failed: true}},
 	{name: "rt_gate_split_reject_pass", mrp: runOutcome{Failed: true}},
+	// A relative entry path is passed through verbatim, so the stage opens
+	// it from its own job dir, where it names nothing.
+	{name: "entry_file", mrp: failedIn(failError, "COUNT")},
+	{name: "entry_filearr", mrp: failedIn(failError, "COUNTARR")},
+	{name: "entry_struct_file", mrp: failedIn(failError, "READCFG")},
+	{name: "entry_mapfile", mrp: failedIn(failError, "COUNTMAP")},
+	{name: "entry_dir", mrp: failedIn(failError, "COUNTDIR")},
+	{name: "entry_file_empty", mrp: failedIn(failError, "SUMMARIZE")},
+	{name: "split_from_file", mrp: failedIn(failError, "SQUARELINES")},
+	// A merge Martian expanded per fork of an outer map call reads an inner
+	// fork its element's outer fork lacks: an inner split over a literal
+	// whose elements differ in length, or over a stage output.
+	{name: "map_pipe_nested", mrp: failedIn(failError, "")},
+	{name: "merge_across_short", mrp: failedIn(failError, "")},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -577,16 +593,16 @@ func TestMrpDiff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			// Gate before runMrp so one shard runs the fixture's mrp and all its
-			// legs (shardSkip's ancestor claim).
+			// Gate before runMrp so one shard runs the fixture's mrp and its
+			// Nextflow run (shardSkip's ancestor claim).
 			shardSkip(t)
 			runMrpDiffCase(t, bin, tc)
 		})
 	}
 }
 
-// runMrpDiffCase runs one fixture under mrp once and diffs every requested
-// Nextflow leg against that pipestance.
+// runMrpDiffCase runs one fixture under mrp and under Nextflow and diffs the
+// two.
 func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	t.Helper()
 
@@ -594,49 +610,17 @@ func runMrpDiffCase(t *testing.T, bin string, tc mrpDiffCase) {
 	dir, mro := tc.source()
 	runMrpAt(t, bin, dir, mro, tmp)
 
-	// Extra transpile flags land AFTER the fixture's auto-added -mrjob;
-	// mro2nf's stdlib flag parsing keeps the LAST occurrence, so the real mrjob
-	// overrides the fixture stub.
-	var extra []string
-
-	if tc.realMrjob {
-		mrjob := filepath.Join(bin, "mrjob")
-		if !fileExists(mrjob) {
-			missingPrereqf(t, "mrjob not found at %s", mrjob)
-		}
-
-		extra = append(extra, "-mrjob", mrjob)
-	}
-
-	compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, extra))
-
-	if tc.native {
-		t.Run("native", func(t *testing.T) {
-			t.Parallel()
-			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, append(slices.Clone(extra), "-native")))
-		})
-	}
-
-	// #221: inlining sub-pipeline boundaries is ON by default (the default leg
-	// already exercises it). This leg gates the OPT-OUT: the per-boundary-task
-	// path (-inline-pipelines=false) must ALSO stay byte-identical to the same
-	// mrp pipestance.
-	if tc.inline {
-		t.Run("noinline", func(t *testing.T) {
-			t.Parallel()
-			compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp, append(slices.Clone(extra), "-inline-pipelines=false")))
-		})
-	}
+	compareStageABI(t, tc.name, tmp, diffNextflow(t, tc, tmp))
 }
 
-// diffNextflow transpiles a case's fixture with the given flags, runs the
-// generated project under Nextflow, diffs its published tree + _outs JSON
-// against the mrp pipestance at <tmp>/mrp, and returns the project dir.
-func diffNextflow(t *testing.T, tc mrpDiffCase, tmp string, flags []string) string {
+// diffNextflow transpiles a case's fixture, runs the generated project under
+// Nextflow, diffs its published tree + _outs JSON against the mrp pipestance
+// at <tmp>/mrp, and returns the project dir.
+func diffNextflow(t *testing.T, tc mrpDiffCase, tmp string) string {
 	t.Helper()
 
 	dir, mro := tc.source()
-	proj := transpileMRO(t, dir, mro, flags...)
+	proj := transpileMRO(t, dir, mro)
 
 	if err := runNextflow(t, proj); err != nil {
 		t.Fatalf("nextflow: %v", err)
@@ -736,10 +720,9 @@ func mrpRunOutcome(t *testing.T, bin, fixture, tmp string) runOutcome {
 
 // nfRunOutcome is the mro2nf outcome of a fixture, the task name of every
 // attempt (nextflowRunOutcome), and the log that explains it. A
-// transpileRefused fixture must fail to transpile in every mode, the
-// counterpart of mrp refusing it before it makes a pipestance, so its outcome
-// is a failure blaming no stage, with no attempts. Any other fixture is
-// transpiled and run.
+// transpileRefused fixture must fail to transpile, the counterpart of mrp
+// refusing it before it makes a pipestance, so its outcome is a failure
+// blaming no stage, with no attempts. Any other fixture is transpiled and run.
 func nfRunOutcome(t *testing.T, fixture string) (runOutcome, []string, string) {
 	t.Helper()
 
@@ -752,18 +735,12 @@ func nfRunOutcome(t *testing.T, fixture string) (runOutcome, []string, string) {
 
 	buildBinaries(t)
 
-	var logs []string
-
-	for _, flags := range [][]string{nil, {"-native"}, {"-inline-pipelines=false"}} {
-		err := transpileInto(repoTools(), filepath.Join(root, "testdata", fixture), "pipeline.mro", t.TempDir(), flags...)
-		if err == nil {
-			t.Fatalf("mro2nf transpiles %s under %v; mrp refuses it before any stage runs", fixture, flags)
-		}
-
-		logs = append(logs, fmt.Sprintf("%v: %v", flags, err))
+	err := transpileInto(repoTools(), filepath.Join(root, "testdata", fixture), "pipeline.mro", t.TempDir())
+	if err == nil {
+		t.Fatalf("mro2nf transpiles %s; mrp refuses it before any stage runs", fixture)
 	}
 
-	return failedWith(nil), nil, strings.Join(logs, "\n")
+	return failedWith(nil), nil, err.Error()
 }
 
 // mrpOutcome runs dir's pipeline.mro under mrp in tmp and classifies the run.

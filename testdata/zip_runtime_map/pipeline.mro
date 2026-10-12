@@ -1,0 +1,56 @@
+# Map calls that zip splits over the map outputs of different stages, whose
+# key sets differ. mrp forks such a call over the keys of its first split,
+# resolves every other split at the same key, and reads null for a key the
+# other map lacks (core/fork.go expandForkFromObj; core/resolve.go
+# getMapElement). Keys that no file name can hold exercise the fork
+# element's key token.
+stage EMIT(
+    in  map<int> vals,
+    out map<int> m,
+    src py       "stages/emit",
+)
+
+stage PAIR(
+    in  int    a,
+    in  int    b,
+    out string s,
+    src py     "stages/pair",
+)
+
+pipeline ZIP_RUNTIME_MAP(
+    out map<string> by_abc,
+    out map<string> by_ax,
+)
+{
+    call EMIT as ABC(
+        vals = {
+            "a":   1,
+            "b/c": 2,
+            "d e": 3,
+        },
+    )
+
+    call EMIT as AX(
+        vals = {
+            "a": 10,
+            "x": 20,
+        },
+    )
+
+    map call PAIR as BY_ABC(
+        a = split ABC.m,
+        b = split AX.m,
+    )
+
+    map call PAIR as BY_AX(
+        a = split AX.m,
+        b = split ABC.m,
+    )
+
+    return (
+        by_abc = BY_ABC.s,
+        by_ax  = BY_AX.s,
+    )
+}
+
+call ZIP_RUNTIME_MAP()

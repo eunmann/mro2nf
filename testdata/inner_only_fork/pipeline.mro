@@ -1,0 +1,59 @@
+# A map call over a sub-pipeline (OUTER, over ys) whose inner map call
+# (WORK, over xs) splits a value every outer fork shares. mrp forks a stage
+# only over the map calls its inputs read (syntax/resolve_stage.go
+# findSplitCalls), so WORK, reading the inner fork alone, runs once per
+# inner fork (two jobs), not once per outer and inner pair (six), and TAG,
+# reading the outer fork alone, once per outer fork (#448).
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+stage TAG(
+    in  int y,
+    out int z,
+    src py  "stages/tag",
+)
+
+pipeline SUB(
+    in  int[] xs,
+    in  int   y,
+    out int[] ws,
+    out int   t,
+)
+{
+    map call WORK(
+        x = split self.xs,
+    )
+
+    call TAG(
+        y = self.y,
+    )
+
+    return (
+        ws = WORK.y,
+        t  = TAG.z,
+    )
+}
+
+pipeline IOF(
+    in  int[] xs,
+    in  int[] ys,
+    out SUB[] outer,
+)
+{
+    map call SUB as OUTER(
+        xs = self.xs,
+        y  = split self.ys,
+    )
+
+    return (
+        outer = OUTER,
+    )
+}
+
+call IOF(
+    xs = [1, 2],
+    ys = [10, 20, 30],
+)

@@ -127,10 +127,10 @@ func TestParseRejectsInvalid(t *testing.T) {
 		"evidence not a test":   `{"divergences": [{"id": "a", "kind": "mechanism", "feature": "f", "summary": "s", "justification": "j", "evidence": ["kitchen_sink"]}]}`,
 		"mechanism matcher":     `{"divergences": [{"id": "a", "kind": "mechanism", ` + ok + `, "outcome": {"failed": true}}]}`,
 		"no matcher":            `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `}]}`,
-		"two matchers":          `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": true}, "comparator": {"rule": "collapse-retried-attempts"}}]}`,
+		"two matchers":          `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "outcome": {"failed": true}, "comparator": {"rule": "compare-failure-stage-and-kind"}}]}`,
 		"matcher of other kind": `{"divergences": [{"id": "a", "kind": "outcome", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_args", "rule": "ignore-key", "key": "k"}}]}`,
 		"unknown rule":          `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "sort"}}]}`,
-		"rule of other kind":    `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "collapse-retried-attempts"}}]}`,
+		"rule of other kind":    `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "comparator": {"rule": "compare-failure-stage-and-kind"}}]}`,
 		"rule matched twice":    `{"divergences": [{"id": "a", "kind": "published-tree", ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix"}}, {"id": "b", "kind": "published-tree", ` + ok + `, "comparator": {"rule": "outs-json-strip-outs-prefix"}}]}`,
 		"abi no fixture":        `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": [], "file": "_args", "rule": "ignore-key", "key": "k"}}]}`,
 		"abi bad file":          `{"divergences": [{"id": "a", "kind": "abi", ` + ok + `, "abi": {"fixtures": ["f"], "file": "_stdout", "rule": "ignore-key", "key": "k"}}]}`,
@@ -189,7 +189,7 @@ func TestAllowlistRuleScope(t *testing.T) {
 		{allow, RuleOutsRelativePaths, "other", false},
 		{allow.Without("paths"), RuleOutsRelativePaths, "fx", false},
 		{allow, RuleFailureStageAndKind, "any", true},
-		{allow, RuleRetriedAttempts, "fx", false},
+		{allow, RuleUnpublishedPaths, "fx", false},
 	}
 
 	for _, c := range excuses {

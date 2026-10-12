@@ -2,8 +2,7 @@
 # differ in kind. mrp's static resolver prunes S1's zero-fork map call (an
 # invocation-known empty, chained from the entry) to NULL, while S2's
 # runtime-empty collection (a GEN output) merges to the typed empty [].
-# The disable gates keep both SUB boundaries under -inline-pipelines, so the
-# empty-fork rule must be decided per call site, not once for SUB.
+# The empty-fork rule must be decided per call site, not once for SUB.
 stage GEN(
     out int[] arr_empty,
     src py    "stages/gen",

@@ -27,11 +27,18 @@ go in the .mro" below).
 
 ## What the transpiler emits
 
-For a GPU stage, `mro2nf` emits an `accelerator N` directive on the **compute
-phase only**:
+Each task requests `accelerator N` when the special of its job, as `mrp`
+resolves it, is `gpu[:N]`: the stage's own `special`, or for a chunk or the
+join of a split stage the `__special` the split returned for it, which
+replaces the stage's. A split stage's split job carries the stage's own
+special, as in `mrp`; a split that does no GPU work can leave `special` off
+the stage and return `__special = "gpu"` for its chunks. One rule in the
+generated `nextflow.config` evaluates this per task (a process directive cannot
+read a task's inputs on Nextflow 24.04).
 
-- a non-split stage → its single process,
-- a split stage → its `MAIN` phase (not `SPLIT` or `JOIN`, which do no GPU work).
+The project runs on a local or shared filesystem; the container and AWS
+setups below are what the isolated-container and cloud targets need, which
+#489 tracks.
 
 On the AWS Batch and HealthOmics executors, Nextflow turns `accelerator N` into a
 GPU `resourceRequirement` on the job. That requirement is the routing signal the
@@ -115,9 +122,10 @@ Everything else (packaging, `parameter-template.json`) is unchanged.
 The same `special = "gpu"` works elsewhere via the `accelerator` directive, which
 each executor interprets: Kubernetes and Google Batch consume it directly; the
 local executor treats it as a no-op hint (handy for a CPU dry run). For HPC grid
-schedulers (SLURM/SGE/LSF), GPU requests usually go through `clusterOptions`
-(`--gres=gpu:N`) rather than `accelerator`; if you target a grid GPU partition,
-add that via a `-c` config overlay for now.
+schedulers (SLURM/SGE/LSF), GPU requests usually go through `clusterOptions`;
+every task also looks its special up in `params.job_resources`, the
+`MRO_JOBRESOURCES` analog, so `params.job_resources = [gpu: '--gres=gpu:1']` in
+a `-c` config routes a `special = "gpu"` job to a GPU partition.
 
 ## What does not go in the .mro
 

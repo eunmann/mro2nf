@@ -276,7 +276,7 @@ func TestNormcmpAppliesTheAllowlist(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command("python3", filepath.Join(root, "test", "e2e", "normcmp.py"), mrpJSON, mrpOuts, tc.nf, tc.fixture, tc.allowlist)
+			cmd := exec.Command("python3", filepath.Join(root, "scripts", "aws", "normcmp.py"), mrpJSON, mrpOuts, tc.nf, tc.fixture, tc.allowlist)
 			out, err := cmd.CombinedOutput()
 
 			var exit *exec.ExitError

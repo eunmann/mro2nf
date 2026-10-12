@@ -21,7 +21,6 @@ package e2e
 //	GEN_SEEDS          unset: the checked-in genSmokeSeeds. Else a start seed,
 //	                   "random" (a start drawn and logged), or a comma list.
 //	GEN_COUNT          seeds from the start (default 20).
-//	GEN_LEGS           comma list of genLegs names (default genDefaultLegs).
 //	GEN_MRO2NF_BIN,    prebuilt binaries to test instead of the repo build,
 //	GEN_MRE_BIN        e.g. an older commit's.
 //	GEN_ARTIFACTS      where shrunk fixtures go (default artifacts/gen-diff).
@@ -71,21 +70,11 @@ import (
 // least once, mrp runs each of them, and mro2nf matches mrp on every leg.
 var genSmokeSeeds = []uint64{1, 2, 3, 4, 6, 8, 9, 10, 11, 12, 13, 14, 15, 22, 43, 108, 154, 192, 193, 246}
 
-// genDefaultLegs run every program under each transpile mode: what a sub
-// pipeline does at a call site differs between inlined and kept boundaries.
-const genDefaultLegs = "default,noinline,native"
-
-// genLegs are the transpile modes a program can run under, as TestMrpDiff's
-// legs.
-var genLegs = map[string]genLeg{
-	"default":  {name: "default"},
-	"noinline": {name: "noinline", flags: []string{"-inline-pipelines=false"}},
-	"native":   {name: "native", flags: []string{"-native"}},
-}
+// genLegs are the transpiles every program runs under.
+var genLegs = []genLeg{{name: "default"}}
 
 type genLeg struct {
-	name  string
-	flags []string
+	name string
 }
 
 // genEnv is how TestGenDiff runs: the oracle, the binaries under test, the
@@ -237,7 +226,7 @@ func TestGenBudgetSpent(t *testing.T) {
 // one whole line of the file even when many diverge at once.
 func TestGenFindingsRecordDivergences(t *testing.T) {
 	env := genEnv{findings: filepath.Join(t.TempDir(), "gen-diff", "divergences.jsonl")}
-	v := genVerdict{findings: []genFinding{{leg: "default", key: "outs:r0"}, {leg: "native", key: "abi:ST0 main"}}}
+	v := genVerdict{findings: []genFinding{{leg: "default", key: "outs:r0"}, {leg: "default", key: "abi:ST0 main"}}}
 
 	if !t.Run("divergence", func(t *testing.T) { env.divergenceReporter(t)("seed %d diverges", 7) }) {
 		t.Error("a divergence failed the test under GEN_FINDINGS")
@@ -272,7 +261,7 @@ func TestGenFindingsRecordDivergences(t *testing.T) {
 		got[d.Seed] = d
 	}
 
-	want := genDivergence{Seed: 3, Findings: []string{"default outs:r0", "native abi:ST0 main"}, Fixture: "gen_0123456789ab"}
+	want := genDivergence{Seed: 3, Findings: []string{"default outs:r0", "default abi:ST0 main"}, Fixture: "gen_0123456789ab"}
 	if diff := cmp.Diff(want, got[3]); len(got) != seeds || diff != "" {
 		t.Errorf("%d seeds recorded, want %d; seed 3 (-want +got):\n%s", len(got), seeds, diff)
 	}
@@ -471,14 +460,7 @@ func loadGenEnv(t *testing.T) genEnv {
 		}
 	}
 
-	for name := range strings.SplitSeq(envOr("GEN_LEGS", genDefaultLegs), ",") {
-		leg, ok := genLegs[name]
-		if !ok {
-			t.Fatalf("GEN_LEGS: unknown leg %q (have %v)", name, slices.Sorted(maps.Keys(genLegs)))
-		}
-
-		env.legs = append(env.legs, leg)
-	}
+	env.legs = genLegs
 
 	return env
 }
@@ -654,7 +636,7 @@ func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
 	errs := make([]error, len(env.legs))
 
 	for i, leg := range env.legs {
-		err := transpileInto(env.tools, dir, "pipeline.mro", genLegProj(work, leg), leg.flags...)
+		err := transpileInto(env.tools, dir, "pipeline.mro", genLegProj(work, leg))
 		if err != nil && strings.Contains(err.Error(), "unsupported construct") {
 			return nil, fmt.Sprintf("mro2nf rejects it as unsupported (%s leg): %v", leg.name, err)
 		}

@@ -1,0 +1,92 @@
+# Gathers by a forked call: per sample (an outer map call), TOTAL merges an
+# inner map call's forks, whose source a stage of the same sample emits
+# (BY_STAGE) or the entry gives (BY_ENTRY). A sample with no inner fork
+# still runs TOTAL, over an empty array. mro2nf starts each sample's TOTAL
+# once that sample's inner forks are done (#259).
+stage MKLIST(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/mklist",
+)
+
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+stage TOTAL(
+    in  int[] ys,
+    out int   s,
+    src py    "stages/total",
+)
+
+pipeline FROM_STAGE(
+    in  int n,
+    out int s,
+)
+{
+    call MKLIST(
+        n = self.n,
+    )
+
+    map call SQ(
+        x = split MKLIST.xs,
+    )
+
+    call TOTAL(
+        ys = SQ.y,
+    )
+
+    return (
+        s = TOTAL.s,
+    )
+}
+
+pipeline FROM_ENTRY(
+    in  int[] xs,
+    out int   s,
+)
+{
+    map call SQ(
+        x = split self.xs,
+    )
+
+    call TOTAL(
+        ys = SQ.y,
+    )
+
+    return (
+        s = TOTAL.s,
+    )
+}
+
+pipeline MNG(
+    in  int[]   ns,
+    in  int[][] xss,
+    out int[]   by_stage,
+    out int[]   by_entry,
+)
+{
+    map call FROM_STAGE as BY_STAGE(
+        n = split self.ns,
+    )
+
+    map call FROM_ENTRY as BY_ENTRY(
+        xs = split self.xss,
+    )
+
+    return (
+        by_stage = BY_STAGE.s,
+        by_entry = BY_ENTRY.s,
+    )
+}
+
+call MNG(
+    ns  = [3, 0, 2],
+    xss = [
+        [1, 2],
+        [],
+        [3, 4, 5],
+    ],
+)

@@ -1,8 +1,6 @@
-# Regression fixture for #59 keyed-variant pruning: DEAD is a declared-but-never-
-# called pipeline that contains a `map call`. Its module still emits an include of
-# the callee's keyed variant (wf_GEN_map), so that variant must be emitted even
-# though the entry (MAIN) reaches GEN only through a PLAIN call. `nextflow lint`
-# (which parses every module) is the gate: a pruned wf_GEN_map dangles here.
+# Regression fixture for #59: DEAD is a declared-but-never-called pipeline that
+# contains a `map call`, while the entry (MAIN) reaches GEN only through a
+# PLAIN call. The project runs MAIN's nodes alone and lints clean.
 filetype txt;
 
 stage GEN(

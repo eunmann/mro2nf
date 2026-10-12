@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -37,10 +35,10 @@ type scaleShape struct {
 }
 
 // scaleShapes are the scale tier's shapes, keyed by bench fixture dir. Each
-// default wide width runs about 10,000 tasks per mode, 20,000 per shape: the
-// nightly runner ran the 1,000-fork forks shape, 2,020 tasks over both modes
-// at once, in 315 s (6.4 tasks/s), and a 4,000-fork run's submit rate held
-// steady, so 20,000 tasks take about 52 minutes of scaleShapeTimeout.
+// default wide width runs about 10,000 tasks per shape: the nightly runner
+// ran 2,020 tasks of the 1,000-fork forks shape in 315 s (6.4 tasks/s), and a
+// 4,000-fork run's submit rate held steady, so 10,000 tasks take about 26
+// minutes of scaleShapeTimeout.
 var scaleShapes = map[string]scaleShape{
 	"forks": {
 		name: "forks", probe: "MRE_BENCH_FORKS_PROBE", narrow: 4, wide: 10000,
@@ -52,9 +50,9 @@ var scaleShapes = map[string]scaleShape{
 	"split": {
 		name: "split", probe: "MRE_BENCH_SPLIT_PROBE", narrow: 4, wide: 10000, chunked: true,
 		call: func(w int) string {
-			return fmt.Sprintf("WIDE(\n    nchunks = %d,\n    payload = \"input/payload.txt\",\n)", w)
+			return fmt.Sprintf("WIDE(\n    nchunks = %d,\n    kb      = 512,\n)", w)
 		},
-		jobs:  func(w int) int { return w + 2 },
+		jobs:  func(w int) int { return w + 3 },
 		prods: func(int) int { return 1 },
 		check: checkSplitJoin,
 	},
@@ -83,34 +81,11 @@ var scaleShapes = map[string]scaleShape{
 	},
 }
 
-// The open issues behind the known failures, beside issuePerForkPlumbing.
-const (
-	// A task stages the whole pipeline-args bundle, whatever it binds.
-	issueOverStaging = 285
-	// The default FORK writes each broadcast file into every fork bundle.
-	issueBroadcastCopies = 325
-	// An element-scatter instance stages the whole collection it scatters.
-	issueScatterStaging = 326
-)
-
 // scaleKnown are the gates open issues fail at the default widths, each
 // removed once its issue is fixed: scale.Judge fails a known failure whose
 // gate passes. A byte gate's growth is linear in the width, so a SCALE_WIDTH
 // small enough to keep it within the slack reports its entry stale.
-var scaleKnown = []scale.Known{
-	{Shape: "forks", Mode: "default", Gate: scale.GateProbeWrites, Issue: issueBroadcastCopies},
-	{Shape: "forks", Mode: "default", Gate: scale.GateStagedBytes, Process: "STAGE_6_FANOUT__MKPAY", Issue: issueOverStaging},
-	{Shape: "forks", Mode: "native", Gate: scale.GateStagedBytes, Process: "STAGE_6_FANOUT__MKPAY", Issue: issueOverStaging},
-	{Shape: "forks", Mode: "native", Gate: scale.GateStagedBytes, Process: "STAGE_6_FANOUT__FUSE", Issue: issueScatterStaging},
-	{Shape: "mapsplit", Mode: "default", Gate: scale.GatePlumbingTasks, Issue: issuePerForkPlumbing},
-	{Shape: "mapsplit", Mode: "native", Gate: scale.GatePlumbingTasks, Issue: issuePerForkPlumbing},
-	{Shape: "mapnested", Mode: "default", Gate: scale.GatePlumbingTasks, Issue: issuePerForkPlumbing},
-	{Shape: "mapnested", Mode: "native", Gate: scale.GatePlumbingTasks, Issue: issuePerForkPlumbing},
-	{Shape: "mapnested", Mode: "default", Gate: scale.GateStagedBytes, Process: "FORK_5_INNER__CELL_KS", Issue: issueScatterStaging},
-	{Shape: "mapnested", Mode: "native", Gate: scale.GateStagedBytes, Process: "FORK_5_INNER__CELL_KS", Issue: issueScatterStaging},
-	{Shape: "mapdisabled", Mode: "default", Gate: scale.GatePlumbingTasks, Issue: issuePerForkPlumbing},
-	{Shape: "mapdisabled", Mode: "native", Gate: scale.GatePlumbingTasks, Issue: issuePerForkPlumbing},
-}
+var scaleKnown []scale.Known
 
 // scaleLimits are the slack and budgets of the scale gates.
 var scaleLimits = scale.Limits{
@@ -154,9 +129,8 @@ func TestScaleMapSplit(t *testing.T)    { runScaleShape(t, scaleShapes["mapsplit
 func TestScaleMapNested(t *testing.T)   { runScaleShape(t, scaleShapes["mapnested"]) }
 func TestScaleMapDisabled(t *testing.T) { runScaleShape(t, scaleShapes["mapdisabled"]) }
 
-// runScaleShape runs s at its narrow and wide widths in default and -native
-// mode, archives the metrics under SCALE_ARTIFACTS, and judges the gates
-// against scaleKnown.
+// runScaleShape runs s at its narrow and wide widths, archives the metrics
+// under SCALE_ARTIFACTS, and judges the gates against scaleKnown.
 func runScaleShape(t *testing.T, s scaleShape) {
 	t.Helper()
 
@@ -181,59 +155,45 @@ func runScaleShape(t *testing.T, s scaleShape) {
 	}
 
 	var (
-		mu    sync.Mutex
-		runs  []scale.Run
-		lines bytes.Buffer
+		run   scale.Run
+		lines []byte
 	)
 
 	ok := t.Run("lanes", func(t *testing.T) {
-		for _, mode := range []string{"default", "native"} {
-			t.Run(mode, func(t *testing.T) {
-				t.Parallel()
-
-				r, out := runScaleMode(t, s, scaleMode{dir: dir, mre: mre, mros: mros, mode: mode}, width)
-				r.Gathers = gathers
-
-				mu.Lock()
-				defer mu.Unlock()
-
-				runs = append(runs, r)
-				lines.Write(out)
-			})
-		}
+		run, lines = runScaleWidths(t, s, scaleInvocations{dir: dir, mre: mre, mros: mros}, width)
+		run.Gathers = gathers
 	})
 
-	writeScaleArtifact(t, s.name+".jsonl", lines.Bytes())
+	writeScaleArtifact(t, s.name+".jsonl", lines)
 
 	if !ok {
 		t.Fatal("a scale lane did not complete; skipping the gates")
 	}
 
-	judgeScale(t, s.name, runs)
+	judgeScale(t, run)
 }
 
-// scaleMode is where runScaleMode finds a shape's invocations, by width,
-// the mre they call, and the transpile mode.
-type scaleMode struct {
+// scaleInvocations is where runScaleWidths finds a shape's invocations, by
+// width, and the mre they call.
+type scaleInvocations struct {
 	dir  string
 	mre  string
 	mros map[int]string
-	mode string
 }
 
-// runScaleMode runs s in m's mode at both widths and checks the wide run's
-// gather, returning the Run and both metrics lines.
-func runScaleMode(t *testing.T, s scaleShape, m scaleMode, width int) (scale.Run, []byte) {
+// runScaleWidths runs s at both widths and checks the wide run's gather,
+// returning the Run and both metrics lines.
+func runScaleWidths(t *testing.T, s scaleShape, m scaleInvocations, width int) (scale.Run, []byte) {
 	t.Helper()
 
-	r := scale.Run{Shape: s.name, Mode: m.mode}
+	r := scale.Run{Shape: s.name}
 
 	var out []byte
 
 	for _, w := range []int{s.narrow, width} {
 		l := benchLane{
-			key: fmt.Sprintf("%s_w%d_%s", s.name, w, m.mode), dir: s.name, mro: m.mros[w],
-			probe: s.probe, producers: s.prods(w), mrpJobs: s.jobs(w), native: m.mode == "native",
+			key: fmt.Sprintf("%s_w%d", s.name, w), dir: s.name, mro: m.mros[w],
+			probe: s.probe, producers: s.prods(w), mrpJobs: s.jobs(w),
 		}
 
 		gc := t.TempDir()
@@ -258,25 +218,16 @@ func runScaleMode(t *testing.T, s scaleShape, m scaleMode, width int) (scale.Run
 	return r, out
 }
 
-// judgeScale applies the gates to runs, fails on every unrecorded failure
-// and stale known failure, and archives the verdict.
-func judgeScale(t *testing.T, shape string, runs []scale.Run) {
+// judgeScale applies the gates to r, fails on every unrecorded failure and
+// stale known failure, and archives the verdict.
+func judgeScale(t *testing.T, r scale.Run) {
 	t.Helper()
 
-	slices.SortFunc(runs, func(a, b scale.Run) int { return strings.Compare(a.Mode, b.Mode) })
-
-	results := make([]scale.Result, 0, len(runs))
-	for _, r := range runs {
-		results = append(results, scale.Evaluate(r, scaleLimits)...)
-	}
-
-	v := scale.Judge(shape, results, scaleKnown)
+	v := scale.Judge(r.Shape, scale.Evaluate(r, scaleLimits), scaleKnown)
 
 	var report strings.Builder
 
-	for _, r := range runs {
-		fmt.Fprintf(&report, "%s\n%s\n", r.Narrow.Summary(), r.Wide.Summary())
-	}
+	fmt.Fprintf(&report, "%s\n%s\n", r.Narrow.Summary(), r.Wide.Summary())
 
 	for _, n := range v.Notes {
 		t.Log(n)
@@ -288,7 +239,7 @@ func judgeScale(t *testing.T, shape string, runs []scale.Run) {
 		fmt.Fprintf(&report, "FAIL %s\n", f)
 	}
 
-	writeScaleArtifact(t, shape+".txt", []byte(report.String()))
+	writeScaleArtifact(t, r.Shape+".txt", []byte(report.String()))
 }
 
 // scaleWidth reads SCALE_WIDTH, the wide width of every shape the run
@@ -325,22 +276,17 @@ func writeScaleInvocation(t *testing.T, dir string, s scaleShape, width int) str
 	return name
 }
 
-// joinSuffixes are the stageProcessNames suffixes of a split's join phase.
-var joinSuffixes = []string{"_JOIN", "_JOIN_K", "_JN"}
-
-// joinProcesses returns the join-phase process names of the program of
-// dir/mro.
+// joinProcesses returns the join-phase process names, the STAGE_JOIN
+// aliases, of the project transpiled from dir/mro.
 func joinProcesses(t *testing.T, dir, mro string) []string {
 	t.Helper()
 
-	prog, err := lowerMRO(dir, mro)
+	names, err := stageAliases(transpileMRO(t, dir, mro))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return slices.DeleteFunc(stageProcessNames(prog), func(name string) bool {
-		return !slices.ContainsFunc(joinSuffixes, func(s string) bool { return strings.HasSuffix(name, s) })
-	})
+	return slices.DeleteFunc(names, func(name string) bool { return !strings.HasSuffix(name, "_JN") })
 }
 
 // seq is the MRO int array body 1, 2, ..., n.

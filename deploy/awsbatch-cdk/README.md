@@ -59,6 +59,9 @@ Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleAr
 
 ## Run on AWS Batch + S3
 
+These runs take the cloud targets, which mro2nf does not emit until #489:
+the steps below are the shape those targets run in.
+
 ```bash
 # 1. transpile for awsbatch (bakes /opt/mro2nf paths + Dockerfile + runtime/ context)
 ./mro2nf -o out -target awsbatch -container <EcrRepoUri>:latest \

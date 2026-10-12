@@ -1,5 +1,5 @@
 // Package scale judges the nightly scale tier (make test-scale). Each bench
-// shape runs at a narrow and a wide width in each transpile mode, and its
+// shape runs at a narrow and a wide width, and its
 // orchestration overhead must not grow with the width (the CLAUDE.md overhead
 // rule). A gate that an open issue still fails is a known failure keyed to
 // that issue. Once the gate passes, the known failure fails the tier until it
@@ -45,10 +45,9 @@ const mibShift = 20
 
 func mib(b int64) int64 { return b >> mibShift }
 
-// Run is one shape in one transpile mode, measured at both widths.
+// Run is one shape, measured at both widths.
 type Run struct {
 	Shape  string
-	Mode   string
 	Narrow Metrics
 	Wide   Metrics
 	// Gathers are the stage processes that read one input per fork or chunk
@@ -95,14 +94,13 @@ type Limits struct {
 // GateStagedBytes; Failure is "" when it passes.
 type Result struct {
 	Shape   string
-	Mode    string
 	Gate    Gate
 	Process string
 	Failure string
 }
 
 func (r Result) id() string {
-	id := fmt.Sprintf("%s/%s %s", r.Shape, r.Mode, r.Gate)
+	id := fmt.Sprintf("%s %s", r.Shape, r.Gate)
 	if r.Process != "" {
 		id += " " + r.Process
 	}
@@ -125,7 +123,7 @@ func Evaluate(r Run, lim Limits) []Result {
 	out := slices.Concat(fixed, stagedBytes(r, lim.StagedSlackBytes))
 
 	for i := range out {
-		out[i].Shape, out[i].Mode = r.Shape, r.Mode
+		out[i].Shape = r.Shape
 	}
 
 	return out
@@ -211,18 +209,17 @@ func heap(got, budget int64) string {
 	}
 }
 
-// Known is a gate an open issue makes fail for one shape and mode, and for
-// one stage process of GateStagedBytes.
+// Known is a gate an open issue makes fail for one shape, and for one stage
+// process of GateStagedBytes.
 type Known struct {
 	Shape   string
-	Mode    string
 	Gate    Gate
 	Process string
 	Issue   int
 }
 
 func (k Known) matches(r Result) bool {
-	return k.Shape == r.Shape && k.Mode == r.Mode && k.Gate == r.Gate && k.Process == r.Process
+	return k.Shape == r.Shape && k.Gate == r.Gate && k.Process == r.Process
 }
 
 // Verdict is the tier's judgment of a shape's results: Failures fail it,
@@ -253,7 +250,7 @@ func Judge(shape string, results []Result, known []Known) Verdict {
 
 	for _, k := range known {
 		if k.Shape == shape && !slices.ContainsFunc(results, k.matches) {
-			r := Result{Shape: k.Shape, Mode: k.Mode, Gate: k.Gate, Process: k.Process}
+			r := Result{Shape: k.Shape, Gate: k.Gate, Process: k.Process}
 			v.Failures = append(v.Failures, fmt.Sprintf("%s: known failure #%d matches no result of the tier", r.id(), k.Issue))
 		}
 	}

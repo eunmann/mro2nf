@@ -1,7 +1,6 @@
 # preflight_ungated: a mapped preflight and a disabled preflight. mrp makes
-# every other call in their pipeline wait for them; mro2nf gates only a plain
-# preflight and runs these in DAG order (#314). The mrp differential shows the
-# outputs and every stage invocation still match.
+# every other call in their pipeline wait for every fork of each, a disabled
+# one counting as done, and so does mro2nf (#314).
 stage CHECK(
     in  int x,
     src py  "stages/check",

@@ -160,14 +160,11 @@ func TestCellRangerDifferential(t *testing.T) {
 }
 
 // transpileCellRanger runs the built mro2nf on a bundle .mro into proj, wiring the
-// bundle's Martian runtime for the comp/py stages. The dry-run .mro's entry
-// defaults are the bundle's test inputs, outside its dir and the mropath, so
-// baking them takes -allow-external-files.
+// bundle's Martian runtime for the comp/py stages.
 func transpileCellRanger(t *testing.T, home, mro, proj string) {
 	t.Helper()
 
 	cmd := exec.Command(filepath.Join(root, "mro2nf"),
-		"-allow-external-files",
 		"-mropath", filepath.Join(home, "mro"),
 		"-mre", filepath.Join(root, "mre"),
 		"-mrjob", filepath.Join(home, "external", "martian", "bin", "mrjob"),
@@ -201,8 +198,9 @@ func assertBytesEqual(t *testing.T, want, got, label string) {
 	}
 }
 
-// plumbingProc matches a data-plane (non-stage) process base name in a trace.
-var plumbingProc = regexp.MustCompile(`^(BIND|FORK|MERGE|DISABLE)_|^(PUBLISH|PUBLISH_LEAF|LAYOUT|BUILD_ENTRY_ARGS)$`)
+// plumbingProc matches a non-stage process base name in a trace: the run's
+// PLAN and its OUTS layout.
+var plumbingProc = regexp.MustCompile(`^(PLAN|OUTS)$`)
 
 // reportTaskShape logs the Nextflow run's total / stage / plumbing task counts
 // from its -with-trace file — the baseline a future optimizer change is measured

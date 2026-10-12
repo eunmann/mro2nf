@@ -37,16 +37,6 @@
       "comparator": {"rule": "placeholder-unpublished-paths"}
     },
     {
-      "id": "retried-stage-errors",
-      "kind": "outcome",
-      "feature": "`--autoretry` / retrying a failed stage",
-      "summary": "mro2nf retries every stage failure except an ASSERT up to twice (`errorStrategy` retry, `maxRetries 2`), where mrp retries only failures matching its `retry_on` patterns (signals, ENOMEM, scheduler errors) and never an ordinary stage exception.",
-      "justification": "A stage that fails and then succeeds on retry completes under mro2nf and fails under mrp (mrp's `jobmanagers/retry.json`; `internal/emit/emit.go` `errorStrategy`). The outcome comparison counts a retried stage task's failures once on the failure fixtures whose error-failing stage Nextflow retries, and fails on any of them where no task is retried.",
-      "issue": 299,
-      "evidence": ["TestMrpDiffFailureParity/stage_raise", "TestOutcomeRulesNeedTheirEntries"],
-      "comparator": {"rule": "collapse-retried-attempts", "fixtures": ["bad_out_type", "missing_struct_key", "split_bad_mem", "split_bad_special", "split_bad_threads", "stage_raise"]}
-    },
-    {
       "id": "failure-report-details",
       "kind": "outcome",
       "feature": "failure messages and where a failure is recorded",
@@ -54,15 +44,6 @@
       "justification": "The failure contract is whether the run fails, which stages it blames and whether each failure is an ASSERT or an error, so the outcome comparison reads only those.",
       "evidence": ["TestMrpDiffFailureParity", "TestOutcomeRulesNeedTheirEntries"],
       "comparator": {"rule": "compare-failure-stage-and-kind"}
-    },
-    {
-      "id": "relative-entry-paths-resolved",
-      "kind": "abi",
-      "feature": "a relative file path in the invocation",
-      "summary": "mro2nf resolves a relative path the invocation gives a file input against the `.mro`'s directory and stages that file, so the stage sees the file; mrp passes the relative string to the stage verbatim.",
-      "justification": "A stage resolves mrp's relative string from its own job dir, where it names nothing, so under mrp a stage that opens it fails (the `entry_*` fixtures `mrpUnrunnable` lists); mro2nf's entry bundle carries the file itself (`internal/emit/emit.go` `resolveEntryArgs`). `bench/split`'s stages never open `payload`, so mrp completes it, and `payload` is the only difference.",
-      "evidence": ["TestMrpDiff/bench/split"],
-      "abi": {"fixtures": ["bench/split"], "file": "_args", "rule": "ignore-key", "key": "payload"}
     },
     {
       "id": "local-modifier-ignored",
@@ -103,15 +84,6 @@
       "summary": "mro2nf resumes through Nextflow's `-resume`, which reuses each task whose script and inputs hash the same, where mrp restarts a pipestance from the stages it recorded as complete.",
       "justification": "A cache hit replays the task's recorded outputs: an unchanged rerun re-executes no task and leaves the published tree and `pipeline_outs.json` unchanged, and a fresh run matches mrp. Every script names the mro2nf build, so a project re-transpiled by another build re-runs every task. A rerun after a failure is not compared with mrp's restart.",
       "evidence": ["TestResumeCachesEverything", "TestFreshRunsAreIdentical", "TestResumeKeysOnTheBuild", "TestMrpDiff"]
-    },
-    {
-      "id": "preflight-dag-order",
-      "kind": "mechanism",
-      "feature": "a mapped or disabled `(preflight)`",
-      "summary": "A mapped or disabled preflight runs in DAG order, where mrp makes every other call in its pipeline wait for it, so a failing preflight stops that pipeline before they start.",
-      "justification": "A preflight has no outputs (mrp rejects one with `PreflightOutputError`), so the order changes no output: `preflight_ungated`'s outputs and stage invocations match mrp's. On a failing preflight, mrp has started no other call of its pipeline, while mro2nf may have. mro2nf warns at transpile time.",
-      "issue": 314,
-      "evidence": ["TestMrpDiff/preflight_ungated", "TestWarningsPreflightUngateable"]
     }
   ]
 }

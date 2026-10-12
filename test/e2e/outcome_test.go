@@ -8,15 +8,16 @@ package e2e
 // whether it was an ASSERT or an error. mrp marks an ASSERT with _assert and
 // any other failure with _errors, in the phase dir when stage code failed and in
 // the fork dir when mrp's own checks did. mro2nf marks an ASSERT with exit 42
-// (shim.AssertExitCode) and any other failure with another exit, and mre names
+// (job.AssertExitCode) and any other failure with another exit, and mre names
 // the stage in the task's _mre_stage. Leaving the rest out excuses real
 // differences, so each is an allowlist rule the comparison applies only while
 // its entry exists (divergences.json). Message text differs by design: mre
 // words its errors itself and Nextflow adds context. The phase is not reliable
 // either, because mrp records an output-validation failure at the fork while
 // mre records it in the task that ran the phase, and neither is the chunk
-// index (RuleFailureStageAndKind). mro2nf retries an error and mrp does not,
-// so a retried stage task's failures count once (RuleRetriedAttempts).
+// index (RuleFailureStageAndKind). mro2nf, like mrp, retries only a
+// transient failure (jobmanagers/retry.json), which no failure fixture has,
+// so any task attempted twice fails the comparison.
 //
 // This file carries no build tag so its unit tests run under `make test`;
 // mrpdiff_test.go drives it against live runs.
@@ -31,7 +32,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/test/divergence"
 )
 
@@ -115,6 +116,22 @@ func mrpFailedOutsideStages(err error) bool {
 	return errors.Is(err, errNoStageInvocation) || errors.Is(err, errABIMeta)
 }
 
+// mrpFailedStage is the stage a failure file in fork blames: the fork's
+// stage, or "" for a pipeline's fork, which fails resolving its bindings
+// and runs no stage code.
+func mrpFailedStage(fork string) (string, error) {
+	name, err := mrpStageName(fork)
+	if err != nil {
+		return "", err
+	}
+
+	if _, isStage, err := mrpForkNode(fork); err != nil || !isStage {
+		return "", err
+	}
+
+	return name, nil
+}
+
 // mrpFailedOutcome classifies a pipestance mrp exited non-zero on, from the
 // _assert and _errors files it left. A missing pipestance (a compile error) is
 // a failure blaming no stage.
@@ -144,7 +161,7 @@ func mrpFailedOutcome(ps string) (runOutcome, error) {
 			fork = filepath.Dir(fork)
 		}
 
-		stage, err := mrpStageName(fork)
+		stage, err := mrpFailedStage(fork)
 		if err != nil {
 			return err
 		}
@@ -201,7 +218,7 @@ func nextflowFailedOutcome(work string, failed []failedAttempt) (runOutcome, err
 		}
 
 		kind := failError
-		if a.Exit == shim.AssertExitCode {
+		if a.Exit == job.AssertExitCode {
 			kind = failAssert
 		}
 
@@ -332,9 +349,10 @@ func (c mrpOutcomeCase) check(d *outcomeDivergence, mrp, nf runOutcome) []string
 }
 
 // outcomeRuleReports reports each outcome comparator rule fixture's run needs
-// that allow has no entry for, and each issue-tracked rule entry scoped to
-// fixture that the run does not need. attempts names the task of every attempt
-// in the Nextflow run's trace; a name seen twice is a retried task.
+// that allow has no entry for, each issue-tracked rule entry scoped to
+// fixture that the run does not need, and a retried task. attempts names the
+// task of every attempt in the Nextflow run's trace; a name seen twice is a
+// retried task.
 func outcomeRuleReports(allow divergence.Allowlist, fixture string, attempts []string) []string {
 	bad := outcomeRuleReportsUnder(allow, fixture, attempts)
 
@@ -355,9 +373,9 @@ func outcomeRuleReportsUnder(allow divergence.Allowlist, fixture string, attempt
 			"and no allowlist entry excuses leaving out its message, phase and chunk")
 	}
 
-	if retried := retriedTasks(attempts); len(retried) > 0 && !allow.Excuses(divergence.RuleRetriedAttempts, fixture) {
-		bad = append(bad, fmt.Sprintf("mro2nf attempted %s more than once, where mrp does not retry a stage error, "+
-			"and no allowlist entry excuses it", strings.Join(retried, ", ")))
+	if retried := retriedTasks(attempts); len(retried) > 0 {
+		bad = append(bad, fmt.Sprintf("mro2nf attempted %s more than once, where mrp retries only a transient failure, "+
+			"which no failure fixture has", strings.Join(retried, ", ")))
 	}
 
 	return bad

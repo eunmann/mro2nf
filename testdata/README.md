@@ -19,8 +19,8 @@ run must reproduce. A golden has two parts:
 
 ## What the suites check
 
-- **`TestGolden`** and **`TestDockerIsolation`** transpile the fixture, run it
-  under Nextflow (the latter under container isolation), and require:
+- **`TestGolden`** transpiles the fixture, runs it under Nextflow, and
+  requires:
   - `results/pipeline_outs.json` to equal the outputs JSON, number tokens and
     object key order included; and
   - `results/`, minus `pipeline_outs.json` and `manifest.json.gz` at its root
@@ -36,8 +36,7 @@ run must reproduce. A golden has two parts:
   transpiled Nextflow project on the same invocation and diffs the published
   trees (same comparison as above), the normalized `_outs` and every stage
   phase's `_args`/`_outs` for each fixture in its `mrpDiffCases`, so each
-  outputs JSON is machine-checked against mrp, and, where a `native` leg is
-  set, the `-native` emit path too.
+  outputs JSON is machine-checked against mrp.
 - **`TestMrpDiffFailureParity`** runs the fixtures mrp fails on by design
   (`mrpOutcomeCases`) under both runners and requires that mro2nf fails exactly
   when mrp does, blaming the same stages with the same kind of failure (an

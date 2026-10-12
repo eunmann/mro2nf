@@ -4,17 +4,17 @@ package e2e
 
 // Static Nextflow lint gate (#48): transpile every fixture and run
 // `nextflow lint` over the generated project. `nextflow lint` (>= 25.04) drives
-// the formal language-server parser, so a Groovy syntax error in a rarely-run
-// emission branch — a keyed variant, a disable gate, a fused split — becomes an
-// immediate, precise CI failure with file/line, independent of containers, AWS,
-// or which paths the golden fixtures happen to execute. It fails only on ERRORS
-// (a real syntax bug); style warnings on the generated code exit 0.
+// the formal language-server parser, so a Groovy syntax error in rarely-run
+// wiring — a split triad, a gate, a fork's gather — becomes an immediate,
+// precise CI failure with file/line, independent of containers, AWS, or which
+// paths the golden fixtures happen to execute. It fails on every error and
+// every warning: the generated projects lint warning-free (#343).
 //
-// The matrix is fixtures × lintConfigs, but a per-combo `nextflow lint` pays a
-// ~2s JVM boot that dwarfs the linting itself. So one `nextflow lint` invocation lints many project dirs with per-file JSON
-// diagnostics, and the emissions share a handful of JVMs instead of one each.
-// Every emission ships the identical static lib/ (asserted below), so a single
-// -project-dir serves the batch.
+// A per-project `nextflow lint` pays a ~2s JVM boot that dwarfs the linting
+// itself. So one `nextflow lint` invocation lints many project dirs with
+// per-file JSON diagnostics, and the emissions share a handful of JVMs instead
+// of one each. No emission holds anything `nextflow lint` resolves from its
+// -project-dir (asserted below), so a single -project-dir serves the batch.
 //
 // EVERY chunk carries its own injected-syntax-error guard project that MUST
 // report exactly its injected error, proving per invocation that the whole
@@ -38,20 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
 )
-
-// lintConfigs is the emission-branch dimension (#122): -native routes the
-// emitter down generator branches (native scatter/merge) the default emission
-// never reaches, so each fixture is linted under both.
-var lintConfigs = []struct {
-	name  string
-	flags []string
-}{
-	{"default", nil},
-	{"native", []string{"-native"}},
-}
 
 // minNextflowMajor/Minor is the first release with `nextflow lint`.
 const (
@@ -67,14 +54,10 @@ const (
 // lintBatchSize-1.
 const lintBatchSize = 150
 
-// TestNextflowLint lints the generated project for every testdata fixture
-// under every lintConfigs flag set. It enumerates the fixtures (rather than a
-// hand-kept list) so any new fixture is linted automatically and the branch
-// space is covered by construction. ANY transpile failure is a test failure,
-// except for a transpileRefused fixture, which must fail to transpile under
-// every flag set. If a future flag introduces a genuine SevError refusal, add
-// an explicit expected-refusal allowlist entry for that exact combo THEN —
-// loud by default, never classified by error-message substring.
+// TestNextflowLint lints the generated project for every testdata fixture. It
+// enumerates the fixtures (rather than a hand-kept list) so any new fixture is
+// linted automatically. ANY transpile failure is a test failure, except for a
+// transpileRefused fixture, which must fail to transpile.
 func TestNextflowLint(t *testing.T) {
 	t.Parallel()
 
@@ -83,124 +66,116 @@ func TestNextflowLint(t *testing.T) {
 	buildBinaries(t)
 
 	parent := t.TempDir()
-	combos := transpileLintCombos(t, parent)
-	projects := transpiledProjects(combos)
+	emissions := transpileLintFixtures(t, parent)
+	projects := transpiledProjects(emissions)
 
 	var errsByProj map[string][]string
 
-	if len(projects) > 0 { // every combo failing to transpile still reports below
-		t.Logf("linting %d emissions for %d fixture/config combos", len(projects), len(combos))
+	if len(projects) > 0 { // every fixture failing to transpile still reports below
+		t.Logf("linting %d emissions of %d fixtures", len(projects), len(emissions))
 
-		assertPathIndependent(t, combos)
-		assertUniformLib(t, parent, projects)
+		assertPathIndependent(t, emissions)
+		assertNoProjectDirContext(t, parent, projects)
 
 		errsByProj = batchLint(t, parent, projects)
 	}
 
-	for _, c := range combos {
-		t.Run(c.fixture+"/"+c.config, func(t *testing.T) {
+	for _, e := range emissions {
+		t.Run(e.fixture, func(t *testing.T) {
 			t.Parallel() // verdicts are precomputed; subtests only read
 
-			if reason, refused := transpileRefused[c.fixture]; refused {
-				if c.transpileErr == nil {
-					t.Errorf("transpile %s under %v succeeded; it must be refused: %s", c.fixture, c.flags, reason)
+			if reason, refused := transpileRefused[e.fixture]; refused {
+				if e.transpileErr == nil {
+					t.Errorf("transpile %s succeeded; it must be refused: %s", e.fixture, reason)
 				}
 
 				return
 			}
 
-			if c.transpileErr != nil {
-				t.Fatalf("transpile %s under %v: %v", c.fixture, c.flags, c.transpileErr)
+			if e.transpileErr != nil {
+				t.Fatalf("transpile %s: %v", e.fixture, e.transpileErr)
 			}
 
-			if errs := errsByProj[c.dir]; len(errs) > 0 {
-				t.Errorf("nextflow lint reported errors for %s under %v:\n%s",
-					c.fixture, c.flags, strings.Join(errs, "\n"))
+			if errs := errsByProj[e.fixture]; len(errs) > 0 {
+				t.Errorf("nextflow lint reported diagnostics for %s:\n%s", e.fixture, strings.Join(errs, "\n"))
 			}
 		})
 	}
 }
 
-// lintCombo is one (fixture, flag config) cell of the lint matrix, transpiled
-// into <parent>/<dir>.
-type lintCombo struct {
-	fixture, config string
-	flags           []string
-	dir             string // project dir name under parent; the attribution key
-	transpileErr    error
-	digest          string // emission content digest; empty on transpile failure
+// lintEmission is one fixture's project, transpiled into <parent>/<fixture>,
+// the dir name the diagnostics attribute to.
+type lintEmission struct {
+	fixture      string
+	transpileErr error
+	digest       string // emission content digest; empty on transpile failure
 }
 
-// transpileLintCombos transpiles every fixture under every lintConfigs flag
-// set into a named directory under parent and digests each emission.
-// Transpile failures are recorded, not fatal, so one broken combo doesn't
-// hide the verdicts for the rest.
-func transpileLintCombos(t *testing.T, parent string) []*lintCombo {
+// transpileLintFixtures transpiles every fixture into a directory of its
+// name under parent and digests each emission. Transpile failures are
+// recorded, not fatal, so one broken fixture doesn't hide the verdicts for
+// the rest.
+func transpileLintFixtures(t *testing.T, parent string) []*lintEmission {
 	t.Helper()
 
 	fixtures := lintFixtures(t)
-	combos := make([]*lintCombo, 0, len(fixtures)*len(lintConfigs))
+	emissions := make([]*lintEmission, 0, len(fixtures))
 
 	for _, fx := range fixtures {
-		for _, cfg := range lintConfigs {
-			c := &lintCombo{
-				fixture: fx, config: cfg.name, flags: cfg.flags,
-				dir: fx + "__" + cfg.name,
-			}
-			combos = append(combos, c)
+		e := &lintEmission{fixture: fx}
+		emissions = append(emissions, e)
 
-			proj := filepath.Join(parent, c.dir)
-			if err := transpileInto(repoTools(), filepath.Join(root, "testdata", fx), "pipeline.mro", proj, cfg.flags...); err != nil {
-				c.transpileErr = err
+		proj := filepath.Join(parent, fx)
+		if err := transpileInto(repoTools(), filepath.Join(root, "testdata", fx), "pipeline.mro", proj); err != nil {
+			e.transpileErr = err
 
-				continue
-			}
-
-			c.digest = treeDigest(t, proj)
+			continue
 		}
+
+		e.digest = treeDigest(t, proj)
 	}
 
-	return combos
+	return emissions
 }
 
-// transpiledProjects returns the project dirs of the combos that transpiled,
-// in matrix (deterministic) order.
-func transpiledProjects(combos []*lintCombo) []string {
+// transpiledProjects returns the project dirs of the fixtures that
+// transpiled, in fixture (deterministic) order.
+func transpiledProjects(emissions []*lintEmission) []string {
 	var dirs []string
 
-	for _, c := range combos {
-		if c.transpileErr == nil {
-			dirs = append(dirs, c.dir)
+	for _, e := range emissions {
+		if e.transpileErr == nil {
+			dirs = append(dirs, e.fixture)
 		}
 	}
 
 	return dirs
 }
 
-// assertPathIndependent re-transpiles every combo into a directory of another
-// name and requires a byte-identical emission: an absolute output path, a
-// timestamp or an unstable map order in the emitter's output would change
-// every task's inputs between transpiles of the same pipeline.
-func assertPathIndependent(t *testing.T, combos []*lintCombo) {
+// assertPathIndependent re-transpiles every fixture into a directory of
+// another name and requires a byte-identical emission: an absolute output
+// path, a timestamp or an unstable map order in the emitter's output would
+// change every task's inputs between transpiles of the same pipeline.
+func assertPathIndependent(t *testing.T, emissions []*lintEmission) {
 	t.Helper()
 
 	again := t.TempDir()
 
-	for _, c := range combos {
-		if c.transpileErr != nil {
+	for _, e := range emissions {
+		if e.transpileErr != nil {
 			continue
 		}
 
-		proj := filepath.Join(again, c.dir+"__again")
-		if err := transpileInto(repoTools(), filepath.Join(root, "testdata", c.fixture), "pipeline.mro", proj, c.flags...); err != nil {
-			t.Errorf("re-transpile %s under %v: %v", c.fixture, c.flags, err)
+		proj := filepath.Join(again, e.fixture+"__again")
+		if err := transpileInto(repoTools(), filepath.Join(root, "testdata", e.fixture), "pipeline.mro", proj); err != nil {
+			t.Errorf("re-transpile %s: %v", e.fixture, err)
 
 			continue
 		}
 
-		if got := treeDigest(t, proj); got != c.digest {
-			t.Errorf("%s under %v: the emission into %s differs from the one into %s; it depends on its output path or is not deterministic",
-				c.fixture, c.flags, proj, c.dir)
+		if got := treeDigest(t, proj); got != e.digest {
+			t.Errorf("%s: the emission into %s differs from the one into %s; it depends on its output path or is not deterministic",
+				e.fixture, proj, e.fixture)
 		}
 	}
 }
@@ -227,37 +202,19 @@ func treeDigest(t *testing.T, dir string) string {
 }
 
 // lintEmissionAllowList is every top-level entry a real emission produces
-// today, derived by sweeping all fixtures under all lintConfigs. It backs the
-// shared-context tripwire in assertUniformLib.
-var lintEmissionAllowList = []string{
-	"_assets", "entry_args", "entry_resolved", "lib",
-	"main.nf", "modules", "nextflow.config", "nulls",
-}
+// today. It backs the shared-context tripwire in assertNoProjectDirContext:
+// main.nf includes stage.nf by its path beside it, and nothing here is
+// resolved from -project-dir.
+var lintEmissionAllowList = []string{"_assets", "main.nf", "nextflow.config", "stage.nf"}
 
-// assertUniformLib proves every emission ships a byte-identical lib/
-// tree. Batch linting resolves the driver-classpath classes (lib/*.groovy)
-// from a single -project-dir, so if a flag ever made lib/ config-dependent,
-// batching would silently lint some projects against the wrong helper
-// classes — fail loudly instead of degrading coverage.
-//
-// It also trips on any OTHER project-dir-anchored lint context: the batch
-// premise is that lib/ is the ONLY thing `nextflow lint` resolves from
-// -project-dir, so an emission growing a bin/ dir — or any top-level entry
-// outside the known emission shape — must be reviewed for whether it affects
-// lint resolution (and this allow-list extended) before the batch verdicts
-// can be trusted again.
-func assertUniformLib(t *testing.T, parent string, projects []string) {
+// assertNoProjectDirContext trips on any project-dir-anchored lint context,
+// a lib/ or bin/ dir included: batch linting resolves such context from a
+// single -project-dir, so an emission growing any top-level entry outside
+// the known emission shape must be reviewed for whether it affects lint
+// resolution (and this allow-list extended) before the batch verdicts can be
+// trusted again.
+func assertNoProjectDirContext(t *testing.T, parent string, projects []string) {
 	t.Helper()
-
-	want := hashTree(t, filepath.Join(parent, projects[0], "lib"))
-
-	for _, proj := range projects[1:] {
-		got := hashTree(t, filepath.Join(parent, proj, "lib"))
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Fatalf("lib/ differs between %s and %s; batch lint assumes one shared -project-dir classpath (-%s +%s):\n%s",
-				projects[0], proj, projects[0], proj, diff)
-		}
-	}
 
 	for _, proj := range projects {
 		entries, err := os.ReadDir(filepath.Join(parent, proj))
@@ -267,7 +224,7 @@ func assertUniformLib(t *testing.T, parent string, projects []string) {
 
 		for _, e := range entries {
 			if !slices.Contains(lintEmissionAllowList, e.Name()) {
-				t.Errorf("emission %s has unexpected top-level entry %q; batch lint assumes lib/ is the only project-dir-anchored lint context — review whether nextflow lint resolves it from -project-dir before extending lintEmissionAllowList",
+				t.Errorf("emission %s has unexpected top-level entry %q; batch lint assumes no project-dir-anchored lint context — review whether nextflow lint resolves it from -project-dir before extending lintEmissionAllowList",
 					proj, e.Name())
 			}
 		}
@@ -277,8 +234,9 @@ func assertUniformLib(t *testing.T, parent string, projects []string) {
 // injectLintGuard copies a clean emission and appends a Groovy syntax error
 // to its main.nf. The chunk it rides MUST report an error for it, proving on
 // every run that the whole lint path — batch invocation, JSON parsing,
-// per-project attribution — can actually surface a broken emission. The
-// `__`-free name cannot collide with a <fixture>__<config> project dir.
+// per-project attribution — can actually surface a broken emission. A
+// fixture's name holds no '-', so the guard's cannot collide with a
+// project dir.
 func injectLintGuard(t *testing.T, parent, rep string, n int) string {
 	t.Helper()
 
@@ -313,9 +271,9 @@ type lintDiag struct {
 
 // batchLint lints the given emission directories (relative to parent) in a
 // few `nextflow lint` invocations instead of one JVM per project — ~95% of a
-// single-project lint is JVM boot. Every project ships the identical lib/
-// (assertUniformLib), so the chunk's first project serves as -project-dir for
-// classpath resolution, and the JSON diagnostics carry project-relative paths
+// single-project lint is JVM boot. No project holds project-dir context
+// (assertNoProjectDirContext), so the chunk's first project serves as
+// -project-dir, and the JSON diagnostics carry project-relative paths
 // that attribute each error back to its emission. EVERY chunk carries its own
 // guard project (guard slots are reserved out of lintBatchSize), so a chunk
 // whose invocation, JSON parse, or attribution silently broke cannot pass
@@ -337,7 +295,7 @@ func batchLint(t *testing.T, parent string, projects []string) map[string][]stri
 		lintChunk(t, parent, slices.Concat(chunk, []string{guard}), errsByProj)
 
 		assertGuardTeeth(t, guard, errsByProj[guard])
-		delete(errsByProj, guard) // consumed; no combo maps to a guard
+		delete(errsByProj, guard) // consumed; no fixture maps to a guard
 	}
 
 	return errsByProj
@@ -360,7 +318,8 @@ func lintChunk(t *testing.T, parent string, chunk []string, errsByProj map[strin
 	out, runErr := cmd.Output()
 
 	var report struct {
-		Errors []lintDiag `json:"errors"`
+		Errors   []lintDiag `json:"errors"`
+		Warnings []lintDiag `json:"warnings"`
 	}
 	if err := json.Unmarshal(out, &report); err != nil {
 		t.Fatalf("nextflow lint batch produced no JSON (%v; run: %v):\nstdout:\n%s\nstderr:\n%s",
@@ -371,7 +330,14 @@ func lintChunk(t *testing.T, parent string, chunk []string, errsByProj map[strin
 		t.Fatalf("nextflow lint batch failed without diagnostics: %v\nstderr:\n%s", runErr, stderr.Bytes())
 	}
 
-	for _, d := range report.Errors {
+	diags := report.Errors
+
+	for _, w := range report.Warnings {
+		w.Message = "warning: " + w.Message
+		diags = append(diags, w)
+	}
+
+	for _, d := range diags {
 		proj, rest, ok := attributeLintDiag(chunk, d.Filename)
 		if !ok {
 			// Never Fatalf: one oddly-reported path must not vaporize the
@@ -438,19 +404,19 @@ func assertGuardTeeth(t *testing.T, guard string, errs []string) {
 func TestNextflowLintAttribution(t *testing.T) {
 	t.Parallel()
 
-	chunk := []string{"fx__default", "fx__native", "zz-lint-guard-0"}
+	chunk := []string{"fx", "fx_split", "zz-lint-guard-0"}
 
 	cases := []struct {
 		name, filename     string
 		wantProj, wantRest string
 		wantOK             bool
 	}{
-		{"as-passed prefix", "fx__native/main.nf", "fx__native", "main.nf", true},
-		{"nested file", "fx__default/modules/stage_X.nf", "fx__default", "modules/stage_X.nf", true},
-		{"dot-prefixed", "./fx__default/main.nf", "fx__default", "main.nf", true},
+		{"as-passed prefix", "fx_split/main.nf", "fx_split", "main.nf", true},
+		{"nested file", "fx/_assets/stage.nf", "fx", "_assets/stage.nf", true},
+		{"dot-prefixed", "./fx/main.nf", "fx", "main.nf", true},
 		{"absolute path", "/tmp/x/parent/zz-lint-guard-0/main.nf", "zz-lint-guard-0", "main.nf", true},
 		{"bare basename", "main.nf", "", "", false},
-		{"unknown project", "other__cfg/main.nf", "", "", false},
+		{"unknown project", "other/main.nf", "", "", false},
 		{"empty", "", "", "", false},
 	}
 

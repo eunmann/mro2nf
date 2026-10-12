@@ -25,22 +25,14 @@ var (
 // Config is the set of flag defaults a .mro2nf.yml may set. A nil field means the
 // file did not set that key, so the CLI leaves the flag's own default in place.
 //
-// Native changes launch-time behavior, not just the emitted orchestration:
-// -native bakes entry args at transpile time, so the project rejects
-// launch-time entry-arg overrides — a project that defaults `native: true`
-// opts every transpile into that contract.
-//
 // Overriding a config `true` back off for one run needs the equals form:
-// `-native=false` (Go's flag package reads a space-separated `-native false`
-// as bare -native plus a positional arg).
+// `-monitor=false` (Go's flag package reads a space-separated `-monitor false`
+// as bare -monitor plus a positional arg).
 type Config struct {
-	Target    *string
-	Container *string
-	Mre       *string
-	Shell     *string
-	Mrjob     *string
-	Monitor   *bool
-	Native    *bool
+	Mre     *string
+	Shell   *string
+	Mrjob   *string
+	Monitor *bool
 }
 
 // Load reads and parses the config at path. A missing file is not an error — it
@@ -103,10 +95,6 @@ func parseLine(cfg *Config, raw string) error {
 // assign sets the field for key, parsing bools where the flag is a bool.
 func assign(cfg *Config, key, val string) error {
 	switch key {
-	case "target":
-		cfg.Target = &val
-	case "container":
-		cfg.Container = &val
 	case "mre":
 		cfg.Mre = &val
 	case "shell":
@@ -115,8 +103,6 @@ func assign(cfg *Config, key, val string) error {
 		cfg.Mrjob = &val
 	case "monitor":
 		return assignBool(&cfg.Monitor, key, val)
-	case "native":
-		return assignBool(&cfg.Native, key, val)
 	default:
 		return fmt.Errorf("%w %q", errUnknownKey, key)
 	}

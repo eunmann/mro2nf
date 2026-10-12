@@ -1,8 +1,7 @@
 # A DISABLED-plain sub-pipeline call: `call SUB(...) using (disabled = self.skip)`
 # where SUB is a plain (unmapped) sub-pipeline holding a single undisabled stage
-# call and a call-output-ref return. -inline-pipelines splices SUB's SCALE into
-# TOP gated by self.skip, so the boundary BIND disappears while outputs stay
-# byte-identical: skip=false here, so the sub runs and TOP yields scaled=15.
+# call and a call-output-ref return. skip=false here, so the sub runs and TOP
+# yields scaled=15.
 stage SCALE(
     in  float value,
     in  float factor,

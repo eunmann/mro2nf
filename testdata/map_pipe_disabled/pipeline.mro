@@ -1,5 +1,5 @@
 # A map call over a sub-pipeline whose body contains a DISABLED call: each fork
-# runs INNER, and INNER's DBL is gated per fork by the keyed disable branch.
+# runs INNER, and INNER's DBL is gated per fork.
 stage DBL(
     in  int x,
     out int y,

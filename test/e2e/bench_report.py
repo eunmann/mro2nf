@@ -9,7 +9,7 @@ then applies three independent gates:
     reintroduced per-hop re-transfer, reintroduced data-plane bookkeeping, or
     extra task executions. Equal is fine; the target is monotone improvement.
   * scaling gate -- lanes that run one fixture at two widths (`<base>_wN` /
-    `<base>_cN`, optionally `_native`) must report an IDENTICAL plumbing task
+    `<base>_cN`) must report an IDENTICAL plumbing task
     count at every width: constant orchestration overhead is acceptable,
     overhead that scales with fork width or chunk count is a bug (the CLAUDE.md
     overhead rule). This gate compares the current run against itself, so it
@@ -17,6 +17,9 @@ then applies three independent gates:
     (the open issue behind its per-fork plumbing) may differ by width — the
     baseline gate still holds each width at or below its recorded count — but
     fails once it is flat, so the marker is removed when the issue is fixed.
+    A group whose lanes carry `flat_staging` must also stage, into its
+    largest stage task, the same bytes at every width (within STAGING_SLACK):
+    a fork stages its own share of the data, never all N forks' shares.
   * mrp-jobs gate -- every lane's `stage_tasks` must equal `mrp_jobs`, the
     jobs real mrp runs for the same invocation: one Nextflow task per Martian
     job, so stage work is neither duplicated nor hidden in plumbing.
@@ -38,15 +41,19 @@ import sys
 GATED = ("refs", "plumbing_tasks", "tasks")
 
 # A lane name of one fixture run at a given width: <base>_w<N> (fork width) or
-# <base>_c<N> (chunk count), with an optional _native suffix. All widths of one
-# (base, mode) pair form a scaling group.
-_WIDTH = re.compile(r"^(?P<base>.+)_[wc]\d+(?P<native>_native)?$")
+# <base>_c<N> (chunk count). All widths of one base form a scaling group.
+_WIDTH = re.compile(r"^(?P<base>.+)_[wc]\d+$")
 
 # Lanes that intentionally run at a single width and therefore carry no
 # scaling group. Every lane must either match _WIDTH or be listed here:
 # anything else is a naming mistake that would silently escape the scaling
 # gate, so check_scaling fails it loudly instead.
-SINGLE_WIDTH_LANES = frozenset({"chain", "chain_native"})
+SINGLE_WIDTH_LANES = frozenset({"chain"})
+
+# A fork element's records grow with the digits of its index and fork count,
+# so a width-flat task's staged bytes still differ by a few bytes; a share
+# that grows with width grows by the width ratio.
+STAGING_SLACK = 1.05
 
 
 def load_jsonl(path):
@@ -82,14 +89,14 @@ def scaling_group(name):
     m = _WIDTH.match(name)
     if not m:
         return None
-    return m.group("base") + (m.group("native") or "")
+    return m.group("base")
 
 
 def check_scaling(cur):
     """Fail (rc 1) if any width group's plumbing task count varies with width.
 
     Also fails on the two ways a lane could silently escape this gate: a lane
-    name that neither parses as <base>_[wc]<N>[_native] nor is an allow-listed
+    name that neither parses as <base>_[wc]<N> nor is an allow-listed
     single-width lane (a typo'd lane would otherwise skip the check), and a
     width group left with fewer than two widths (one width proves nothing
     about flatness).
@@ -103,7 +110,7 @@ def check_scaling(cur):
         elif name not in SINGLE_WIDTH_LANES:
             print(
                 f"SCALING[{name}]: unrecognized bench lane naming — neither "
-                f"<base>_[wc]<N>[_native] nor an allow-listed single-width lane "
+                f"<base>_[wc]<N> nor an allow-listed single-width lane "
                 f"({', '.join(sorted(SINGLE_WIDTH_LANES))}); a mis-named lane "
                 f"would silently skip the width-flatness gate"
             )
@@ -116,8 +123,28 @@ def check_scaling(cur):
             )
             rc = 1
             continue
-        rc = check_group(g, {n: cur[n] for n in groups[g]}) or rc
+        lanes = {n: cur[n] for n in groups[g]}
+        rc = check_group(g, lanes) or rc
+        rc = check_staging(g, lanes) or rc
     return rc
+
+
+def check_staging(g, lanes):
+    """Gate a flat_staging group's largest per-task staging (rc 1 on failure)."""
+    flagged = {bool(m.get("flat_staging")) for m in lanes.values()}
+    if len(flagged) > 1:
+        print(f"STAGING[{g}]: widths disagree on flat_staging")
+        return 1
+    if not flagged.pop():
+        return 0
+    peaks = {n: max(m.get("stage_staged_bytes_max", {}).values(), default=0) for n, m in lanes.items()}
+    if max(peaks.values()) > min(peaks.values()) * STAGING_SLACK:
+        print(
+            f"STAGING[{g}]: the most bytes one stage task stages must not grow "
+            f"with width (slack {STAGING_SLACK}), got {peaks}"
+        )
+        return 1
+    return 0
 
 
 def check_group(g, lanes):

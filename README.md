@@ -4,66 +4,67 @@ Turn [Martian](https://martian-lang.org) (`.mro`) pipelines into runnable
 [Nextflow](https://www.nextflow.io) projects, without rewriting your stage code.
 
 The transpiler translates only the orchestration: the DAG, splits, map-call
-forks, bindings, and resource requests. It does not touch your stage code. Each
-generated Nextflow process runs your original Martian stage code through the real
-Martian adapter, driven by a small shim called `mre`. You leave the `mrp`
-orchestrator behind and gain Nextflow's executors (local, SLURM, SGE, LSF, PBS,
-AWS Batch, Kubernetes) and its object-store data plane. The stage code runs
-unchanged and never knows it moved.
+forks, bindings, and resource requests. It does not touch your stage code. The
+generated project runs one Nextflow process per stage node of Martian's own
+compiled call graph, and each task runs your original Martian stage code through
+`mrjob` and the real Martian adapter, started by a small shim called `mre` as
+`mrp` starts it. You leave the `mrp` orchestrator behind and gain Nextflow's
+executors (local, SLURM, SGE, LSF, PBS) and its `-resume` cache. The stage code
+runs unchanged and never knows it moved.
 
 ```
 .mro + stage code ──mro2nf──▶ Nextflow project ──nextflow run──▶ results/
-                            (main.nf, modules/,                (== mrp outputs)
+                            (main.nf, stage.nf,                (== mrp outputs)
                              nextflow.config, _assets/)
-                                    │ each process:
+                                    │ each stage task:
                                     ▼
-                            mre <phase> → martian_shell.py → your stage code
+                    mre args → mre run → mrjob → martian_shell.py → your stage code
 ```
 
-For a full end-to-end walkthrough of how the transpilation works — front end,
-IR, the generated Nextflow, the bundle data plane, the `mre` shim, and the cloud
-targets — see **[`docs/TRANSPILER.md`](docs/TRANSPILER.md)**.
+For a full end-to-end walkthrough of how the transpilation works — the witness
+call graph, the generated Nextflow, the `mre` shim, and the bundles tasks
+exchange — see **[`docs/TRANSPILER.md`](docs/TRANSPILER.md)**.
 
 ## Why it works
 
 - Martian is filesystem-mediated. A stage phase runs as `<adapter> <split|main|join>
   <metadata> <files> <journal>`: it reads `_args` and `_jobinfo` and writes
-  `_outs` and `_stage_defs`. The shim reproduces exactly what `mrp` and `mrjob` do
-  for one phase.
-- Martian's topology is static (only chunk counts are decided at runtime), so it
-  maps cleanly onto Nextflow's model of a static DAG with runtime cardinality.
-- Every stage has the same shape: split into chunks, run each chunk, join. A
-  non-split stage is just the one-chunk case.
-- The Martian parser and resolver are a public Go package, so we import them
-  instead of reimplementing the grammar.
+  `_outs` and `_stage_defs`. `mre run` writes exactly what `mrp` writes for one
+  job and runs it through the same `mrjob`.
+- Martian's topology is static (only chunk counts and data-dependent forks are
+  decided at runtime), so it maps cleanly onto Nextflow's model of a static DAG
+  with runtime cardinality.
+- The Martian compiler, call graph and resolver are a public Go package, so mre
+  imports them instead of reimplementing the grammar or the binding rules.
 
 ## Layout
 
 ```
-cmd/mro2nf/      transpiler CLI: .mro -> Nextflow project (+ `overrides` subcommand)
-cmd/mre/       runtime shim: runs stage phases (split|main|join) against the
-               Martian adapter, plus the data-plane subcommands the generated
-               processes call (bind, forkbind, merge, gate, publish-layout, entryargs)
+cmd/mro2nf/    transpiler CLI: .mro -> Nextflow project
+cmd/mre/       runtime shim the generated tasks call:
+               plan | args | run | post | outs | publish-layout
 internal/
-  frontend/    parse .mro via github.com/martian-lang/martian/syntax -> IR
-  ir/          normalized transpiler IR
-  emit/        IR -> Nextflow (main.nf, modules, nextflow.config)
-  types/       type-directed file-leaf walk + scalar coercion + manifest
-  shim/        _args/_jobinfo/_outs I/O, bundle data plane, adapter launch
-  bind/        resolve call bindings into _args (refs, projections, fan-in)
-  overrides/   mrp --overrides file -> Nextflow -c config
+  cg/          Martian's compiled call graph: witness, topology, plan, resolver
+  cgnf/        call graph -> Nextflow project (main.nf wiring, stage.nf module)
+  job/         one stage job through mrjob, as mrp runs it
+  frontend/    lower a Martian AST to the typed parameters of the type manifest
+  ir/          typed parameters of callables and structs
+  types/       type-directed file-leaf walk + type manifest
+  shim/        bundle I/O, markers, output confinement
   config/      .mro2nf.yml project defaults for the transpiler flags
-  logging/     slog setup       apperror/  typed errors
+  logging/     slog setup
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters (Martian's LICENSE beside)
 THIRD_PARTY_NOTICES      licenses of the code the binaries link and the images vendor
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
-test/e2e/      Go e2e suites (golden diff vs mrp, docker isolation) + AWS runbooks
+test/e2e/      Go e2e suites (golden diff vs mrp, mrp differential)
+test/gen/      generator of random well-typed programs for the generative differential
 test/thirdparty/   THIRD_PARTY_NOTICES generator, vendored-license and vendor-martian drift checks
-deploy/awsbatch-cdk/   minimal AWS CDK: S3 + ECR + Batch + HealthOmics role
-docs/           TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
-                (support matrix), GPU.md, RUNTIME_TUNING.md (mrp knobs ->
-                Nextflow), LIVE_AWS_TEST.md (validation)
-.github/workflows/   PR validation + release CI
+scripts/aws/   normcmp.py, the path-normalized outs comparison of the live AWS runs
+deploy/        the release runtime image; a minimal AWS CDK (S3 + ECR + Batch + HealthOmics role)
+docs/          TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
+               (support matrix), GPU.md, RUNTIME_TUNING.md (mrp knobs ->
+               Nextflow), BENCHMARKS.md
+.github/workflows/   PR validation, nightly and release CI
 ```
 
 ## Quickstart
@@ -74,7 +75,7 @@ Nextflow 26.04 supports up to Java 26, the 24.04 floor up to 21),
 Python 3.
 
 ```bash
-make build                      # builds ./mro2nf and ./mre
+make build                      # builds ./mro2nf, ./mre and ./mrjob (the pinned Martian's)
 
 ./mro2nf -o out \
     -mre "$PWD/mre" \
@@ -90,76 +91,20 @@ cd out && nextflow run main.nf  # results land in out/results/
 | Flag | Meaning |
 |---|---|
 | `-o <dir>` | output directory for the Nextflow project (default `out`) |
-| `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp` |
+| `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp`; as in `mrp`, the `.mro`'s own directory is searched first, for its own includes and its stages' code only, and the working directory never |
 | `-mre <path>` | path to the `mre` shim binary as it will appear **at run time** (a bare name is looked up on `PATH`) |
-| `-shell <path>` | path to `martian_shell.py` at run time (a relative path, even a bare name, resolves against the working directory: it is a script argument, not a command) |
-| `-mrjob <path>` | path to `mrjob` (only needed for `comp` stages; a bare name is looked up on `PATH`) |
-| `-container <image>` | set `process.container` for container backends (AWS Batch, HealthOmics) |
-| `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
-| `-monitor` | enforce mrp `--monitor`'s memory limits per stage: an RSS kill at `mem_gb` (the process-group monitor, mrp's primary kill) plus a `prlimit` virtual-memory cap at `vmem_gb` |
-| `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
-| `-allow-external-files` | copy an entry file default, or (container targets) a stage `src`, that resolves outside the `.mro`'s directory and the `-mropath` (or `$MROPATH`) roots — the working directory is not one — into the project or image. Without it the transpile refuses such a file, so a shared `.mro` cannot ship host data such as `~/.aws` in `entry_args/`, the image, or `workflow.zip` |
+| `-shell <path>` | **required**: path to `martian_shell.py` in Martian's adapters dir (`<adapters>/python/martian_shell.py`), which the tasks run the adapter from (a relative path, even a bare name, resolves against the working directory) |
+| `-mrjob <path>` | path to `mrjob`, which runs the py and comp stages (default: the `mrjob` beside `-mre`; a bare name is looked up on `PATH`) |
+| `-monitor` | mrp's `--monitor`: `mrjob` enforces each job's memory and thread limits |
+| `-confine-outputs` | fail a stage task whose output resolves outside its work dir instead of copying it in, for a project run under an isolating executor such as docker |
 | `-config <path>` | path to a [`.mro2nf.yml`](#mro2nfyml-project-defaults) of per-project flag defaults (default: probed alongside the `.mro`) |
 | `-version` | print the mro2nf version and exit |
 
-`mro2nf overrides <file>` converts an mrp `--overrides` JSON into an equivalent
-Nextflow `-c` config overlay (per-stage `memory`/`cpus` retuning at launch) —
-see [`docs/RUNTIME_TUNING.md`](docs/RUNTIME_TUNING.md).
-
-For `-target local` the `-mre`/`-shell`/`-mrjob`/stage paths are baked into the
-generated scripts, so set them to the paths that will exist **where the pipeline
-runs** (the local repo, or shared-filesystem cluster paths).
-
-For `-target awsbatch` and `-target healthomics` (container backends) `mro2nf`
-ignores those host paths. It bakes fixed in-container paths under `/opt/mro2nf/`,
-copies the `mre` shim, the Martian adapters, and your stage code into a
-self-contained `runtime/` build context, and writes a `Dockerfile` so
-`docker build` produces the runtime image, plus a `.dockerignore` that sends
-only `runtime/` to the daemon. See
-[`docs/TRANSPILER.md` §10](docs/TRANSPILER.md#10-targets-local-aws-batch--s3-aws-healthomics)
-for exactly what is vendored and what is refused.
-
-These backends have no shared filesystem, so each task stages in only the files
-it needs as individual `path` inputs (never via `${projectDir}`): its own
-`spec.json` for a bind, while every task's script writes its own type
-manifest. File-bearing entry inputs (a
-FASTQ, say) are staged the same way, at any shape: a file or directory, a
-`file[]`, a `map<file>`, or a struct with file fields. So a run parameter that
-points at an `s3://` path or prefix is localized into the task by Nextflow.
-
-### Native mode (`-native`)
-
-By default every piece of orchestration between stage tasks — binding, forking,
-merging, entry-arg resolution — runs as its own small task. `-native` collapses
-that data plane into driver-side channel wiring while leaving the stage tasks
-(and the Martian adapter ABI they speak) untouched:
-
-- **Entry args are baked at transpile time** (`entry_resolved/` in the project;
-  no `BUILD_ENTRY_ARGS` task). Supplying an entry parameter at launch is a
-  **loud error** — re-transpile to change an input.
-- **Plain calls fuse** their bind into the stage's own task; simple disable
-  gates are branched on the driver instead of a `DISABLE` task.
-- **Eligible map calls scatter in-workflow with no FORK task**: the driver
-  slices the fork collection once and hands each fused instance only its own
-  element (O(1) per fork, not O(N) re-parses).
-- **Sole-consumer MERGE gathers fold** into the consumer's task.
-
-Shapes that can't fully collapse keep a bounded remainder — e.g. a
-file-bearing, multi-split, or projected fork keeps **one** FORK resolve task
-(O(total data), never per-instance), a disabled map call keeps its FORK and its
-MERGE (the merge is the skip-branch mix point), and a map over a split stage or
-sub-pipeline runs its fork-keyed layer. **Every non-collapsed shape prints an Info diagnostic at
-transpile time** naming exactly which tasks remain and why, so a partial
-collapse is never silent (see `internal/emit/diagnostics.go`).
-
-`-native` is held to the same bar as the default emission: the native e2e
-suites diff their outputs against the committed real-`mrp` goldens, the live
-`mrp` differential runs `-native` legs, every fixture is statically linted
-under `-native`, and the benchmark gate's `-native`
-lanes machine-check that the element scatter's orchestration stays flat across
-fork widths. The suites also pin the exact set of surviving data-plane
-processes per pipeline shape (see
-[`docs/FEATURE_COVERAGE.md`](docs/FEATURE_COVERAGE.md)).
+The tool paths are baked into `nextflow.config`, so set them to the paths that
+will exist **where the pipeline runs** (the local repo, or shared-filesystem
+cluster paths). The project runs on a local or shared filesystem;
+isolated-container and cloud targets are tracked by #489, and a launch-time
+mrp `--overrides` file by #301.
 
 ### `.mro2nf.yml` project defaults
 
@@ -169,34 +114,45 @@ team doesn't have to repeat them on every invocation:
 
 ```yaml
 # keys mirror the CLI flags
-target: awsbatch
-container: 123456789.dkr.ecr.us-east-1.amazonaws.com/pipe:1
-native: true
+shell: tools/martian/adapters/python/martian_shell.py
+mrjob: tools/martian/bin/mrjob
+monitor: true
 ```
 
-Supported keys: `target`, `container`, `mre`, `shell`, `mrjob`, `monitor`,
-`native`. A relative `mre`, `shell` or `mrjob` path resolves against the config
-file's directory, not the working directory, so a checked-in
-`shell: tools/martian_shell.py` names the same file wherever you run
-`mro2nf`; a bare `mre` or `mrjob` name stays a `PATH` command, as for the
-flags. A container
-target bakes an `mre`, `shell` or `mrjob` path set here into the image only
-when it resolves inside the `.mro`'s directory or a `-mropath` root, since a
-config file shipped with a shared `.mro` is not trusted; pass the flag to use a
-tool from elsewhere. Precedence is
-**builtin default < config file < explicit flag**. To override a config `true`
-back off for one run, use the equals form — `-native=false` — because Go's flag
-parsing reads a space-separated `-native false` as a bare `-native` plus a
-positional argument. Unknown keys and malformed values are errors, so typos are
-loud.
+Supported keys: `mre`, `shell`, `mrjob`, `monitor`. A relative `mre`, `shell`
+or `mrjob` path resolves against the config file's directory, not the working
+directory, so a checked-in `shell: tools/martian_shell.py` names the same file
+wherever you run `mro2nf`; a bare `mre` or `mrjob` name stays a `PATH` command,
+as for the flags. Precedence is **builtin default < config file < explicit
+flag**. To override a config `true` back off for one run, use the equals form —
+`-monitor=false` — because Go's flag parsing reads a space-separated
+`-monitor false` as a bare `-monitor` plus a positional argument. Unknown keys
+and malformed values are errors, so typos are loud.
+
+### Run parameters
+
+Entry-pipeline inputs are exposed as run parameters: each becomes `params.<name>`
+(null keeps the transpiled `.mro`'s value), so you can override them at launch
+with a Nextflow `-params-file` or on the command line — no re-transpile. The
+run's PLAN task recompiles the invocation with them, so a launch value changes
+forks, gates and pruned calls as an `.mro` literal would under `mrp`:
+
+```bash
+nextflow run main.nf -params-file inputs.json        # e.g. {"values": [5, 6, 7]}
+nextflow run main.nf --n 5 --scale 2.5 --skip false  # scalars, parsed as declared
+```
+
+A file-typed input is a path the stages open as given, as under `mrp`: give it
+as an absolute path every task can see. See `docs/TRANSPILER.md` §8.
 
 ## Testing
 
 ```bash
-make test          # unit tests (in-process, sub-second)
+make test          # unit tests (in-process)
 make cover         # unit-test coverage gate (fails below COVER_MIN%)
-make test-e2e      # golden table + cloud-sim + failure paths + launch knobs
-make test-e2e-docker  # the same pipelines under docker (container isolation)
+make test-e2e      # golden table + mrp differential + failure parity + knobs
+make lint-nf       # nextflow lint of every fixture's project
+make bench         # orchestration overhead at two widths per shape
 make gen-diff      # generated programs vs real mrp (GEN_SEEDS=<start>|random GEN_COUNT=<n>)
 make lint-check    # golangci-lint (no auto-fix)
 ```
@@ -205,27 +161,22 @@ The e2e suites are Go tests in `test/e2e` (build tag `e2e`, always run with
 `-count=1` so the test cache can't return a stale ok). `make test-e2e` runs
 each fixture's transpiled pipeline under Nextflow in a bounded parallel pool
 (`E2E_PARALLEL=<n>`, default 10) and diffs the result against the committed
-real-`mrp` golden; it also covers copy-staging (the object-store data plane),
-the retry/ASSERT failure contract, `-resume` cache stability, and
-`mro2nf overrides` overlay application. `make test-e2e-docker` runs pipelines
-under the Nextflow **docker** executor — tasks in containers that mount only
-their work dir — reproducing the AWS Batch / HealthOmics no-shared-filesystem
-model, and additionally builds + runs the *generated* `-target awsbatch`
-Dockerfile and validates the HealthOmics package. The live AWS runbooks
-(`test/e2e/aws_*.sh`) and the informational mrp oracle (`mapcall_matrix.sh`)
-remain shell.
+real-`mrp` golden; it also runs each fixture under a live `mrp` and diffs the
+published tree and every stage's `_args`, `_outs` and `_jobinfo`, and covers
+the retry/ASSERT failure contract and `-resume` cache stability.
 
 ### How it's validated
 
 Every transpiled pipeline is diffed against the output of the **real `mrp`**
 orchestrator, so "correct" means byte-identical to Martian:
 
-- **Unit** (`make test`): in-process tests of the IR, binder, type walk, shim
-  ABI, and the generated Nextflow text.
+- **Unit** (`make test`): the call graph, resolver, topology, plan, posted fork
+  elements and gates, the type walk and bundles, the generated project, and a
+  stand-in run of every fixture's call graph through the `mre` subcommands.
 - **Local e2e** (`make test-e2e`): the golden fixture table — `.mro` fixtures
-  transpiled, run under Nextflow, diffed vs committed `mrp` goldens — covering
-  every supported feature, including file-typed entry inputs (scalar, `file[]`,
-  `map<file>`, struct-with-file) supplied at launch via `-params-file`.
+  transpiled, run under Nextflow, diffed vs committed `mrp` goldens — and the
+  live `mrp` differential, which also compares the outcome of every fixture
+  `mrp` fails, covering every supported feature.
 - **Generative differential** (`TestGenDiff`; `make gen-diff` for long runs):
   random well-typed programs from `test/gen` — structs, typed maps, nested
   arrays, files, split stages, sub-pipelines, map calls of every kind, disable
@@ -234,109 +185,21 @@ orchestrator, so "correct" means byte-identical to Martian:
   failure-parity checks as the fixtures. A divergence is shrunk to a minimal
   fixture with its `mrp` golden. `make test-e2e` runs a fixed smoke set of
   seeds.
-- **Container isolation** (`make test-e2e-docker`): a representative fixture
-  slice — including the exec/comp adapters and the null-bundle / zero-chunk
-  shapes — and the file-typed entry-input overrides under the docker executor
-  (no shared filesystem), the model AWS uses, plus a build-and-run of the
-  *generated* `-target awsbatch` Dockerfile and HealthOmics package validation.
-  Includes an entry-file override whose input lives outside the image, so it
-  can only arrive via Nextflow staging (the AWS Batch / HealthOmics
-  S3-localization path), and a same-basename `file[]` override that proves the
-  per-leaf staging never collides.
-- **Live AWS**: the fixture set has been run end-to-end on real **AWS Batch + S3**
-  and **AWS HealthOmics**, all byte-identical to `mrp` — exercising all three
-  adapters (`py`/`exec`/`comp`), file inputs/outputs through the object store,
-  directory outputs, retry/ASSERT handling, and stage logs. The most recent round
-  (round 5, after the data-plane epic) re-validated 13 fixtures in parallel on
-  Batch and 4 on HealthOmics, with the emitted `manifest.json.gz` verified
-  set-equal to the published S3 outputs on both backends.
-  See [`docs/LIVE_AWS_TEST.md`](docs/LIVE_AWS_TEST.md) and
-  [`deploy/awsbatch-cdk/`](deploy/awsbatch-cdk/) (the CDK that provisions it).
+- **Overhead** (`make bench`, nightly `make test-scale`): the plumbing task
+  count must not change with fork width or chunk count, and the stage tasks
+  must equal `mrp`'s job count.
 
 ## Running on a cluster
 
-`nextflow.config` (local target) ships grid executor profiles; select one with
-`-profile`:
+`nextflow.config` ships grid executor profiles; select one with `-profile`:
 
 ```bash
 nextflow run main.nf -profile slurm          # or sge / lsf / pbs
 ```
 
-A local project's scripts name the host's `mre` and stage code, so it has no
-cloud profile; for AWS Batch, transpile with `-target awsbatch` (below).
-
-The object-store data plane is what makes file flow work without a shared
-filesystem. Every payload between processes travels as a typed JSON sidecar
-plus the files it references as individual `path` items; Nextflow stages those
-real files across task boundaries (S3, GCS, and so on) instead of passing bare
-absolute paths.
-
-## Running on AWS Batch + S3 or HealthOmics
-
-Transpile with the matching target — `mro2nf` bakes in-container paths and emits a
-ready-to-build `Dockerfile` + `runtime/` context:
-
-```bash
-./mro2nf -o out -target awsbatch -container <ecr-uri> \
-    -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
-    -mropath path/to/pipeline_dir path/to/pipeline.mro
-
-cd out
-docker build --platform linux/amd64 -t <ecr-uri> .   # build the runtime image
-docker push <ecr-uri>
-nextflow run main.nf --aws_queue <q> --aws_region <r> \
-    --container <ecr-uri> -work-dir s3://<bucket>/work
-```
-
-The emitted `Dockerfile` is self-contained (it vendors `mre` + the adapters). If
-you'd rather not vendor them, base your image on the published runtime image
-instead — it ships `mre`, the Martian adapters and their notices at `/opt/mro2nf`, multi-arch:
-
-```dockerfile
-FROM ghcr.io/eunmann/mro2nf-runtime:<version>   # match your mro2nf version
-COPY runtime/stages /opt/mro2nf/stages          # your stage code
-# comp-adapter stages also need an mrjob at /opt/mro2nf/mrjob
-```
-
-Use the tag matching the `mro2nf` version that produced the project, so the `mre`
-ABI matches the generated scripts. The image is published on each release (see
-`deploy/runtime/Dockerfile` and the `release.yml` `image` job).
-
-- **`-target awsbatch`** wires the Batch executor with classic aws-CLI S3 staging
-  (the image includes the aws CLI; or set `--aws_cli_path` for a custom AMI).
-- **`-target healthomics`** additionally emits `parameter-template.json` and
-  `package.sh` (builds the upload `.zip` from only the files the workflow reads,
-  never logs, params files or `.env` left in the project), publishes to `/mnt/workflow/pubdir`,
-  sets no executor (execution is managed), and pins a supported Nextflow version.
-  The image must be a **private ECR** URI in the run's region; tasks have no
-  internet, so everything is baked into the image. Register with
-  `aws omics create-workflow --engine NEXTFLOW --main main.nf --definition-zip
-  fileb://workflow.zip --parameter-template file://parameter-template.json`.
-
-Entry-pipeline inputs are exposed as run parameters: each becomes `params.<name>`
-(defaulting to the `.mro`'s baked value), so you can override them at launch with
-a Nextflow `-params-file` or AWS HealthOmics run parameters — no re-transpile:
-
-```bash
-nextflow run main.nf -params-file inputs.json     # e.g. {"values": [5, 6, 7]}
-nextflow run main.nf --n 5 --scale 2.5 --skip false  # scalars, parsed as declared
-```
-
-A file-typed input accepts an `s3://` URI on every target, and a local path only
-on `-target local`. Any other value (an `http(s)://` or `ftp://` URL, a
-local path on a cloud target) fails the run before the head node fetches or
-reads it. `--mro2nf_allow_remote_inputs true` admits other URL schemes for
-trusted callers; see `docs/TRANSPILER.md` §8.
-
-A minimal **AWS CDK** app in `deploy/awsbatch-cdk/` provisions exactly the infra
-needed to test live (S3 bucket, ECR repo, Batch compute env + queue, and a
-HealthOmics service role) — see its README for `cdk deploy` + run steps.
-
-> Provide a static, path-free **linux/amd64** `mre` (build with
-> `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o mre ./cmd/mre`). Cloud
-> file flow is validated locally via the copy-staging suite (`TestCloudSim*`) and
-> the docker-isolation suite (`make test-e2e-docker`); a live Batch/S3 or HealthOmics run
-> additionally needs the AWS infrastructure (`deploy/awsbatch-cdk/`).
+The default `standard` profile runs locally, clamping each task's request to
+the host's cpus and memory. A stage's `special` key selects
+`params.job_resources[special]` as the task's `clusterOptions`.
 
 ## Feature coverage & limitations
 
@@ -346,29 +209,22 @@ page-by-page read of all seven martian-lang.org docs, cross-checked against the
 and the test that exercises it.
 
 Supported: stages, pipelines, and calls; split/main/join; map calls over arrays,
-maps, split stages, and sub-pipelines; structs and typed maps (including
-`map<S>.field` projection); file, array, map, and struct-of-file outputs; the
-`py`, `exec`, and `comp` adapters; call modifiers; dynamic per-chunk resources;
-and the object-store data plane.
-
-Every map-call combination works, including disabled map calls, maps over
-pipelines that contain disabled calls, disabled nested maps, and nested maps
-(handled by 2-D fork keying). The shim handles content-based retry (ASSERT
-terminates, everything else retries) and `-monitor` memory enforcement (RSS
-kill + vmem cap).
+maps, split stages, and sub-pipelines, nested and zipped; disabled calls and
+map calls, decided per fork; structs and typed maps (including `map<S>.field`
+projection); file, array, map, and struct-of-file outputs; the `py`, `exec`,
+and `comp` adapters; dynamic per-chunk resources; content-based retry (only
+the failures mrp retries, a signal, ENOMEM or a scheduler failure, retry, with
+escalated memory; an ASSERT or a stage exception ends the run); and `-monitor`.
 
 Resources track mrp, so a transpiled run schedules and finishes comparably.
 Per-chunk `cpus` and `memory`, the split-returned `join` override, and the
-`special` scheduler key all reach the executor, and every phase reports the
-allocation it resolved. (The `special` key maps to `clusterOptions` through a
-`params.job_resources` map, the `MRO_JOBRESOURCES` analog.) The reserved
-`special = "gpu"` / `"gpu:N"` instead requests N GPUs via the `accelerator`
-directive on the compute phase — see [`docs/GPU.md`](docs/GPU.md) for the AWS
-Batch / HealthOmics setup. A few things diverge
-in timing or mechanism but never in output: there is no mid-run VDR deletion
-(work dirs are retained), nested maps stage whole bundle dirs on a real
-object-store work dir, and the published `outs/` tree is copied into place
-(mrp moves + symlinks) — the tree's layout and contents match mrp's.
+`special` scheduler key all reach the executor, and every job reports the
+allocation mrp would give it. The reserved `special = "gpu"` / `"gpu:N"` also
+requests N GPUs via the `accelerator` directive, for every job whose special it
+is — see [`docs/GPU.md`](docs/GPU.md). A few things diverge in timing or
+mechanism but never in output: there is no mid-run VDR deletion (work dirs are
+retained), and the published `outs/` tree is copied into place (mrp moves +
+symlinks) — the tree's layout and contents match mrp's.
 
 ## Development
 
@@ -402,8 +258,8 @@ provenance; check a download with `sha256sum -c SHA256SUMS --ignore-missing` and
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). The binaries, the runtime image and the
-generated container build contexts also carry third-party code, listed with
-its licenses in [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) (`make notices`
-regenerates it). The vendored Martian adapters keep Martian's license in
+MIT — see [`LICENSE`](LICENSE). The binaries and the runtime image also carry
+third-party code, listed with its licenses in
+[`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) (`make notices` regenerates it). The
+vendored Martian adapters keep Martian's license in
 [`vendor-martian/LICENSE`](vendor-martian/LICENSE).

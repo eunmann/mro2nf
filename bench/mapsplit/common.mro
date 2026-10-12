@@ -4,8 +4,7 @@ filetype txt;
 # whose body is a split stage that writes one file per sample. mrp runs
 # N * (split + 2 chunks + join) jobs. Run at two widths (pipeline_w4.mro,
 # pipeline_w8.mro): the plumbing task count must not grow with the sample
-# count; until #255 lands it grows by the per-fork keyed BIND, which the
-# baseline records as known scaling.
+# count.
 
 stage ALIGN(
     in  int sample,

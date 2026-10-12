@@ -14,10 +14,9 @@ import (
 // is fully cached, but once the project is re-transpiled by another mro2nf
 // build, no task is: Nextflow keys a task on its script text and inputs, not
 // on the mre binary, so a task cached by an older build would otherwise hand
-// on outputs shaped by that build's mre (a FORK sidecar without the field the
-// new merge reads). The fixtures cover the FORK/MERGE fan-out and the split
-// triad. A -native re-transpile is left out: it re-bakes entry_resolved/ with
-// a fresh mtime, which re-runs every task whatever the build.
+// on outputs shaped by that build's mre (fork element dirs without a record
+// the new mre args reads). The fixtures cover a map call's forks and the
+// split triad.
 func TestResumeKeysOnTheBuild(t *testing.T) {
 	t.Parallel()
 
@@ -57,9 +56,8 @@ func TestResumeKeysOnTheBuild(t *testing.T) {
 
 // TestResumeKeysOnlyOnATasksOwnTypes (#286): after one stage's signature
 // changes, a -resume re-run of the re-transpiled project re-runs that stage
-// but keeps the unrelated stage and the entry task cached. Every task used to
-// stage the one shared types.json, so any type edit re-ran the whole
-// pipeline.
+// but keeps the unrelated stage cached. Every task used to stage the one
+// shared types.json, so any type edit re-ran the whole pipeline.
 func TestResumeKeysOnlyOnATasksOwnTypes(t *testing.T) {
 	t.Parallel()
 
@@ -94,7 +92,7 @@ func TestResumeKeysOnlyOnATasksOwnTypes(t *testing.T) {
 		status[row.Name] = row.Status
 	}
 
-	for name, want := range map[string]bool{"BUILD_ENTRY_ARGS": true, "D:STAGE_1_D__GEN": true, "D:STAGE_1_D__ADD": false} {
+	for name, want := range map[string]bool{"N0_GEN (D.GEN)": true, "N1_ADD (D.ADD)": false} {
 		got, ok := status[name]
 		if !ok {
 			t.Errorf("task %s missing from the trace %v", name, status)

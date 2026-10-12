@@ -1,0 +1,18 @@
+# The modifiers mrp accepts on a top-level call: local and volatile, on a
+# stage call. A top-level pipeline call takes none ("Pipeline 'P' cannot be
+# called with 'local' tag"), a top-level call cannot be preflight, and
+# volatile takes only true or false; mro2nf compiles the entry file with
+# mrp's compiler, so it refuses those as mrp does (#342). Neither accepted
+# modifier changes what the stage gets or publishes.
+stage EMIT(
+    in  int x,
+    out int y,
+    src py  "stages/emit",
+)
+
+call EMIT(
+    x = 1,
+) using (
+    local    = true,
+    volatile = true,
+)

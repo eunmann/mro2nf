@@ -2,7 +2,6 @@ package types_test
 
 import (
 	"encoding/json"
-	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -241,126 +240,6 @@ func TestApplyMapDeterministic(t *testing.T) {
 		if diff := cmp.Diff([]string{"af", "mf", "zf"}, *seen); diff != "" {
 			t.Errorf("visit order not sorted/stable (-want +got):\n%s", diff)
 		}
-	}
-}
-
-// TestCoerceScalars checks whole-number floats bound to int params become
-// integers, while float params and non-whole values are left intact.
-func TestCoerceScalars(t *testing.T) {
-	tbl := newTable()
-	params := []ir.Param{
-		{Name: "i", BaseType: "int"},
-		{Name: "f", BaseType: "float"},
-		{Name: "is", BaseType: "int", ArrayDim: 1},
-	}
-	vals := map[string]any{
-		"i":  json.Number("5.0"),
-		"f":  json.Number("42.0"),
-		"is": []any{json.Number("1.0"), json.Number("2")},
-	}
-
-	got := tbl.CoerceScalars(params, vals)
-
-	if got["i"] != int64(5) {
-		t.Errorf("int leaf 5.0 -> %v (%T), want int64 5", got["i"], got["i"])
-	}
-
-	// An out-of-int64-range whole float is left as-is, not overflowed.
-	big := tbl.CoerceScalars([]ir.Param{{Name: "b", BaseType: "int"}},
-		map[string]any{"b": json.Number("1e20")})
-	if big["b"] != json.Number("1e20") {
-		t.Errorf("out-of-range int leaf -> %v, want unchanged 1e20", big["b"])
-	}
-
-	// Boundary: 2^63 == float64(math.MaxInt64) (which rounds up); int64(2^63)
-	// wraps to MinInt64, so it must be left as the original number, not coerced.
-	boundary := tbl.CoerceScalars([]ir.Param{{Name: "b", BaseType: "int"}},
-		map[string]any{"b": json.Number("9223372036854775808")})
-	if boundary["b"] != json.Number("9223372036854775808") {
-		t.Errorf("2^63 int leaf -> %v (%T), want unchanged (would overflow to MinInt64)",
-			boundary["b"], boundary["b"])
-	}
-
-	// MinInt64 (-2^63) is exactly representable and must coerce, not be dropped.
-	minv := tbl.CoerceScalars([]ir.Param{{Name: "b", BaseType: "int"}},
-		map[string]any{"b": json.Number("-9223372036854775808.0")})
-	if minv["b"] != int64(math.MinInt64) {
-		t.Errorf("-2^63 int leaf -> %v (%T), want int64 MinInt64", minv["b"], minv["b"])
-	}
-
-	if got["f"] != json.Number("42.0") {
-		t.Errorf("float leaf 42.0 -> %v, want unchanged 42.0", got["f"])
-	}
-
-	arr, ok := got["is"].([]any)
-	if !ok || arr[0] != int64(1) || arr[1] != int64(2) {
-		t.Errorf("int[] -> %v, want [1 2] as int64", got["is"])
-	}
-}
-
-// TestCoerceMapOfIntArray guards the MapDim model for coercion: map<int[]> lowers
-// to {MapDim:2, ArrayDim:0}, so the whole-number floats inside its inner arrays
-// must still coerce to int — the old nested-map-level model skipped them.
-func TestCoerceMapOfIntArray(t *testing.T) {
-	tbl := newTable()
-	params := []ir.Param{{Name: "m", BaseType: "int", MapDim: 2}}
-	vals := map[string]any{"m": map[string]any{"k": []any{json.Number("5.0"), json.Number("6")}}}
-
-	got := tbl.CoerceScalars(params, vals)
-
-	inner, ok := got["m"].(map[string]any)["k"].([]any)
-	if !ok || inner[0] != int64(5) || inner[1] != int64(6) {
-		t.Errorf("map<int[]> -> %v, want {k:[5 6]} as int64", got["m"])
-	}
-}
-
-// TestNarrow pins mrp's FilterJson narrowing of a bound struct value to its
-// declared type (#239): extra fields are dropped (a file leaf among them never
-// reaches the walk), a missing field becomes null, and the rule recurses through
-// nested structs, arrays, and typed maps. Non-struct values and nulls pass
-// through, and the input is not mutated.
-func TestNarrow(t *testing.T) {
-	tbl := newTable()
-	params := []ir.Param{
-		{Name: "c", BaseType: "Cfg"},
-		{Name: "o", BaseType: "Outer"},
-		{Name: "cs", BaseType: "Cfg", ArrayDim: 1},
-		{Name: "cm", BaseType: "Cfg", MapDim: 1},
-		{Name: "nil", BaseType: "Cfg"},
-		{Name: "n", BaseType: "int"},
-	}
-	wide := func() map[string]any {
-		return map[string]any{"ref": "a.txt", "n": json.Number("1"), "stray": "stray.txt"}
-	}
-	vals := map[string]any{
-		"c":   wide(),
-		"o":   map[string]any{"inner": map[string]any{"n": json.Number("2"), "x": true}, "y": 3},
-		"cs":  []any{wide(), nil},
-		"cm":  map[string]any{"k": wide()},
-		"nil": nil,
-		"n":   json.Number("4"),
-	}
-
-	got := make(map[string]any, len(params))
-	for _, p := range params {
-		got[p.Name] = tbl.NarrowValue(vals[p.Name], p)
-	}
-
-	narrow := map[string]any{"ref": "a.txt", "n": json.Number("1")}
-	want := map[string]any{
-		"c":   narrow,
-		"o":   map[string]any{"inner": map[string]any{"ref": nil, "n": json.Number("2")}, "log": nil},
-		"cs":  []any{narrow, nil},
-		"cm":  map[string]any{"k": narrow},
-		"nil": nil,
-		"n":   json.Number("4"),
-	}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("NarrowValue mismatch (-want +got):\n%s", diff)
-	}
-
-	if _, ok := vals["c"].(map[string]any)["stray"]; !ok {
-		t.Error("NarrowValue mutated its input")
 	}
 }
 

@@ -76,10 +76,9 @@ func TestGenDiffPublishedAppliesEveryRule(t *testing.T) {
 }
 
 // TestGenDiffOutcomeAppliesEveryRule runs TestGenDiff's outcome comparison
-// on a failed run of a program named like a fixture the retry entry is scoped
-// to. The issue-tracked retry rule excuses a retried stage error, a run with
-// no retry does not fail the program as excusing nothing, which it does for
-// the named fixture, and an outcome no rule excuses is still a finding.
+// on a failed run of a program named like a failure fixture. The stage and
+// kind rule excuses the messages, a stage error mrp does not retry and
+// mro2nf retried is a finding, and so is an outcome no rule excuses.
 func TestGenDiffOutcomeAppliesEveryRule(t *testing.T) {
 	const program = "stage_raise"
 
@@ -92,9 +91,9 @@ func TestGenDiffOutcomeAppliesEveryRule(t *testing.T) {
 		mrp         runOutcome
 		want        string
 	}{
-		{"retried", retried, failedIn(failError, "RAISE"), ""},
+		{"retried", retried, failedIn(failError, "RAISE"), "outcome-rules"},
 		{"not_retried", "1b/0000aa\tP:RAISE (1)\tFAILED\t1\n", failedIn(failError, "RAISE"), ""},
-		{"other_outcome", retried, failedIn(failAssert, "RAISE"), "outcome"},
+		{"other_outcome", "1b/0000aa\tP:RAISE (1)\tFAILED\t1\n", failedIn(failAssert, "RAISE"), "outcome"},
 	}
 
 	for _, c := range cases {
@@ -104,7 +103,7 @@ func TestGenDiffOutcomeAppliesEveryRule(t *testing.T) {
 			writeABITestFile(t, filepath.Join(proj, "work", "1b", "0000aa11", "main", mreStageFile), "RAISE")
 			writeABITestFile(t, filepath.Join(proj, "work", "1c", "0000aa22", "main", mreStageFile), "RAISE")
 
-			v, err := outcomeLegVerdict(env, genLegs["default"], program, proj, c.mrp, runErr)
+			v, err := outcomeLegVerdict(env, genLegs[0], program, proj, c.mrp, runErr)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -113,10 +112,6 @@ func TestGenDiffOutcomeAppliesEveryRule(t *testing.T) {
 				t.Errorf("findings %v, want keys %q", v.findings, c.want)
 			}
 		})
-	}
-
-	if got := outcomeRuleReports(mustAllowlist(t), program, []string{"P:RAISE (1)"}); len(got) != 1 || !strings.Contains(got[0], "excuses nothing") {
-		t.Errorf("the fixture comparison reports %q, want the retry entry excusing nothing", got)
 	}
 }
 

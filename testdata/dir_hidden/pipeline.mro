@@ -1,7 +1,6 @@
 # Directory outputs holding dotfiles (top-level and in a subdirectory that has
 # nothing else) and an empty subdirectory, as a zarr store does (#242): the
-# published tree must keep all three. Two calls make the return a transform, so
-# -native publishes through the inline-bind LAYOUT as well as the default one.
+# published tree must keep all three. The return combines two calls.
 stage MKHIDDEN(
     in  string tag,
     out path   d,

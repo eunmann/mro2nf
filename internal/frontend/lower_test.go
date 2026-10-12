@@ -1,38 +1,30 @@
 package frontend_test
 
 import (
-	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
-	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 const splitTestMRO = "../../testdata/split_test/pipeline.mro"
 
-func loadProgram(t *testing.T) *ir.Program {
+// lower compiles the MRO file at path as mrp does, resolving @include
+// against mroPaths, and lowers it.
+func lower(t *testing.T, path string, mroPaths []string) *ir.Program {
 	t.Helper()
 
-	ast, err := frontend.Parse(splitTestMRO, []string{"../../testdata/split_test"}, false)
+	_, _, ast, err := syntax.Compile(path, mroPaths, false)
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		t.Fatalf("compile %s: %v", path, err)
 	}
 
-	prog, err := frontend.Lower(ast, nil)
-	if err != nil {
-		t.Fatalf("lower: %v", err)
-	}
-
-	return prog
+	return frontend.Lower(ast)
 }
 
 func TestLowerStages(t *testing.T) {
-	prog := loadProgram(t)
+	prog := lower(t, splitTestMRO, []string{"../../testdata/split_test"})
 
 	if len(prog.Stages) != 2 {
 		t.Fatalf("stages = %d, want 2", len(prog.Stages))
@@ -43,217 +35,29 @@ func TestLowerStages(t *testing.T) {
 		t.Fatal("missing stage SUM_SQUARES")
 	}
 
-	t.Run("split flags and adapter", func(t *testing.T) {
-		if !ss.Split {
-			t.Error("SUM_SQUARES should be a split stage")
-		}
-		if ss.Lang != ir.LangPy {
-			t.Errorf("lang = %q, want py", ss.Lang)
-		}
-		if ss.SrcPath == "" {
-			t.Error("src path should be resolved")
-		}
-	})
-
-	t.Run("typed params", func(t *testing.T) {
-		if got := paramType(ss.In, "values"); got != "float[]" {
-			t.Errorf("in values type = %q, want float[]", got)
-		}
-		if got := paramType(ss.Out, "sum"); got != "float" {
-			t.Errorf("out sum type = %q, want float", got)
-		}
-		if got := paramType(ss.ChunkIn, "value"); got != "float" {
-			t.Errorf("chunk-in value type = %q, want float", got)
-		}
-		if got := paramType(ss.ChunkOut, "square"); got != "float" {
-			t.Errorf("chunk-out square type = %q, want float", got)
-		}
-	})
-
-	t.Run("resources", func(t *testing.T) {
-		if ss.Resources.MemGB != 2 {
-			t.Errorf("SUM_SQUARES mem_gb = %v, want 2", ss.Resources.MemGB)
-		}
-		rep := prog.Stages["REPORT"]
-		if rep == nil {
-			t.Fatal("missing stage REPORT")
-		}
-		if rep.Split {
-			t.Error("REPORT should not be a split stage")
-		}
-		if rep.Resources.Threads != 0.5 {
-			t.Errorf("REPORT threads = %v, want 0.5", rep.Resources.Threads)
-		}
-	})
-}
-
-func TestLowerPipelineWiring(t *testing.T) {
-	prog := loadProgram(t)
-
-	pl := prog.Pipelines["SUM_SQUARE_PIPELINE"]
-	if pl == nil {
-		t.Fatal("missing pipeline SUM_SQUARE_PIPELINE")
-	}
-	if len(pl.Calls) != 2 {
-		t.Fatalf("calls = %d, want 2", len(pl.Calls))
+	if got := paramType(ss.In, "values"); got != "float[]" {
+		t.Errorf("in values type = %q, want float[]", got)
 	}
 
-	report := findCall(pl.Calls, "REPORT")
-	if report == nil {
-		t.Fatal("missing REPORT call")
+	if got := paramType(ss.Out, "sum"); got != "float" {
+		t.Errorf("out sum type = %q, want float", got)
 	}
 
-	sum := findBinding(report.Bindings, "sum")
-	if sum == nil || sum.Value.Ref == nil {
-		t.Fatal("REPORT.sum should be a reference binding")
+	if got := paramType(ss.ChunkIn, "value"); got != "float" {
+		t.Errorf("chunk-in value type = %q, want float", got)
 	}
 
-	want := &ir.Ref{Kind: "call", ID: "SUM_SQUARES", Output: "sum"}
-	if diff := cmp.Diff(want, sum.Value.Ref); diff != "" {
-		t.Errorf("REPORT.sum ref mismatch (-want +got):\n%s", diff)
+	if got := paramType(ss.ChunkOut, "square"); got != "float" {
+		t.Errorf("chunk-out square type = %q, want float", got)
 	}
 
-	ret := findBinding(pl.Returns, "sum")
-	if ret == nil || ret.Value.Ref == nil || ret.Value.Ref.ID != "SUM_SQUARES" || ret.Value.Ref.Output != "sum" {
-		t.Errorf("return sum should reference SUM_SQUARES.sum, got %+v", ret)
-	}
-}
-
-func TestLowerEntry(t *testing.T) {
-	prog := loadProgram(t)
-
-	if prog.Entry == nil {
-		t.Fatal("missing entry call")
-	}
-	if prog.Entry.Callable != "SUM_SQUARE_PIPELINE" {
-		t.Errorf("entry callable = %q, want SUM_SQUARE_PIPELINE", prog.Entry.Callable)
-	}
-
-	values := findBinding(prog.Entry.Bindings, "values")
-	if values == nil || values.Value.Array == nil {
-		t.Fatal("entry values should be an array binding")
-	}
-
-	got := make([]int, 0, len(values.Value.Array))
-	for _, el := range values.Value.Array {
-		var n int
-		if err := json.Unmarshal(el.Literal, &n); err != nil {
-			t.Fatalf("unmarshal element: %v", err)
-		}
-		got = append(got, n)
-	}
-
-	if diff := cmp.Diff([]int{1, 2, 3}, got); diff != "" {
-		t.Errorf("entry values mismatch (-want +got):\n%s", diff)
-	}
-}
-
-// literalsMRO binds one entry input per literal shape whose Go json.Marshal
-// encoding differs from (or must stay equal to) Martian's own JSON encoder.
-const literalsMRO = `stage ECHO(
-    in  float  million,
-    in  float  fraction_free,
-    in  float  huge,
-    in  float  small_exp,
-    in  float  neg_zero,
-    in  float  tiny,
-    in  int    big_int,
-    in  string html,
-    in  bool   flag,
-    in  float  none,
-    src py     "stages/echo",
-)
-
-call ECHO(
-    million       = 1e6,
-    fraction_free = 2500000.0,
-    huge          = 1e20,
-    small_exp     = 1.5e3,
-    neg_zero      = -0.0,
-    tiny          = 1e-7,
-    big_int       = 9223372036854775807,
-    html          = "<a&b>",
-    flag          = true,
-    none          = null,
-)
-`
-
-// TestLowerLiteralBytes pins each literal leaf to the bytes mrp writes into a
-// stage's _args (Martian's syntax JSON encoder), so a whole-number float >= 1e6
-// stays a float for a Python stage instead of collapsing to an int.
-func TestLowerLiteralBytes(t *testing.T) {
-	dir := t.TempDir()
-	mro := filepath.Join(dir, "pipeline.mro")
-
-	if err := os.WriteFile(mro, []byte(literalsMRO), 0o600); err != nil {
-		t.Fatalf("write mro: %v", err)
-	}
-
-	ast, err := frontend.Parse(mro, []string{dir}, false)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	prog, err := frontend.Lower(ast, nil)
-	if err != nil {
-		t.Fatalf("lower: %v", err)
-	}
-
-	want := map[string]string{
-		"million":       "1e+06",
-		"fraction_free": "2.5e+06",
-		"huge":          "1e+20",
-		"small_exp":     "1500",
-		"neg_zero":      "-0",
-		"tiny":          "1e-07",
-		"big_int":       "9223372036854775807",
-		"html":          `"<a&b>"`,
-		"flag":          "true",
-		"none":          "null",
-	}
-
-	got := make(map[string]string, len(prog.Entry.Bindings))
-	for _, b := range prog.Entry.Bindings {
-		got[b.Param] = string(b.Value.Literal)
-	}
-
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("entry literal bytes mismatch (-want +got):\n%s", diff)
-	}
-}
-
-// TestLowerRejectsTopLevelMapCall pins the loud failure for a top-level map
-// call: mrp forks the entry per collection element, which the transpiler has
-// no lowering for, so Lower must return a typed UnsupportedError instead of
-// silently emitting a project that runs the entry once (issue #111).
-func TestLowerRejectsTopLevelMapCall(t *testing.T) {
-	ast, err := frontend.Parse("../../testdata/corpus/map_call_entry.mro", []string{"../../testdata/corpus"}, false)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	_, err = frontend.Lower(ast, nil)
-
-	var ue *apperror.UnsupportedError
-	if !errors.As(err, &ue) {
-		t.Fatalf("Lower = %v, want *apperror.UnsupportedError", err)
-	}
-
-	if ue.Construct != "top-level map call" {
-		t.Errorf("Construct = %q, want %q", ue.Construct, "top-level map call")
+	if p := prog.Pipelines["SUM_SQUARE_PIPELINE"]; p == nil || paramType(p.Out, "sum") != "float" {
+		t.Errorf("pipeline SUM_SQUARE_PIPELINE = %+v, want its float out sum", p)
 	}
 }
 
 func TestLowerStructs(t *testing.T) {
-	ast, err := frontend.Parse("../../testdata/nested_struct/pipeline.mro", []string{"../../testdata/nested_struct"}, false)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	prog, err := frontend.Lower(ast, nil)
-	if err != nil {
-		t.Fatalf("lower: %v", err)
-	}
+	prog := lower(t, "../../testdata/nested_struct/pipeline.mro", []string{"../../testdata/nested_struct"})
 
 	outer := prog.Structs["Outer"]
 	if outer == nil {
@@ -279,7 +83,7 @@ func TestLowerStructs(t *testing.T) {
 }
 
 func TestLowerParamDims(t *testing.T) {
-	prog := loadProgram(t)
+	prog := lower(t, splitTestMRO, []string{"../../testdata/split_test"})
 
 	values := findParam(prog.Stages["SUM_SQUARES"].In, "values")
 	if values == nil {
@@ -310,24 +114,4 @@ func paramType(params []ir.Param, name string) string {
 	}
 
 	return ""
-}
-
-func findCall(calls []ir.Call, name string) *ir.Call {
-	for i := range calls {
-		if calls[i].Name == name {
-			return &calls[i]
-		}
-	}
-
-	return nil
-}
-
-func findBinding(bindings []ir.Binding, param string) *ir.Binding {
-	for i := range bindings {
-		if bindings[i].Param == param {
-			return &bindings[i]
-		}
-	}
-
-	return nil
 }

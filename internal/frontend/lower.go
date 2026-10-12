@@ -1,20 +1,17 @@
+// Package frontend lowers a Martian AST, compiled by Martian's own syntax
+// package, into the typed parameters the type manifest is built from.
 package frontend
 
 import (
-	"encoding/json"
-	"fmt"
-	"path/filepath"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// Lower converts a type-checked Martian AST into the transpiler IR. mroPaths is
-// the -mropath search list, used to resolve stage src paths exactly as Martian
-// does (declaring-file dir, then the search paths).
-func Lower(ast *syntax.Ast, mroPaths []string) (*ir.Program, error) {
+// Lower returns the parameters of every stage, pipeline and struct a
+// compiled Martian AST declares.
+func Lower(ast *syntax.Ast) *ir.Program {
 	prog := &ir.Program{
 		Stages:    make(map[string]*ir.Stage, len(ast.Stages)),
 		Pipelines: make(map[string]*ir.Pipeline, len(ast.Pipelines)),
@@ -22,344 +19,26 @@ func Lower(ast *syntax.Ast, mroPaths []string) (*ir.Program, error) {
 	}
 
 	for _, s := range ast.Stages {
-		prog.Stages[s.Id] = lowerStage(s, mroPaths)
+		prog.Stages[s.Id] = &ir.Stage{
+			Name:     s.Id,
+			In:       lowerInParams(s.InParams),
+			Out:      lowerOutParams(s.OutParams),
+			ChunkIn:  lowerInParams(s.ChunkIns),
+			ChunkOut: lowerOutParams(s.ChunkOuts),
+		}
 	}
 
 	for _, p := range ast.Pipelines {
-		lp, err := lowerPipeline(p)
-		if err != nil {
-			return nil, err
+		prog.Pipelines[p.Id] = &ir.Pipeline{
+			Name: p.Id,
+			In:   lowerInParams(p.InParams),
+			Out:  lowerOutParams(p.OutParams),
 		}
-
-		prog.Pipelines[p.Id] = lp
 	}
 
 	addCallableStructs(prog)
 
-	if ast.Call != nil {
-		entry, err := lowerEntry(ast.Call)
-		if err != nil {
-			return nil, err
-		}
-
-		prog.Entry = entry
-	}
-
-	return prog, nil
-}
-
-// resolveSrcPath resolves a stage's src path the way Martian does — via
-// SrcParam.FindPath: an absolute path, else the directory of the FILE THAT
-// DECLARES the stage (not the entry .mro's dir — an @included stage's src is
-// relative to the included file), else the -mropath search paths. When the stage
-// code is absent at transpile time (mro2nf parses with checkSrc=false, so it may
-// run without the code present) FindPath cannot locate it; fall back to Martian's
-// primary rule — the declaring file's directory — so the baked path is correct
-// once the code is in place. The result may be relative; the emitter absolutizes
-// it against the process cwd, exactly as Martian's relative paths resolve.
-func resolveSrcPath(src *syntax.SrcParam, mroPaths []string) string {
-	if resolved, err := src.FindPath(mroPaths); err == nil {
-		return resolved
-	}
-
-	if filepath.IsAbs(src.Path) || src.Node.Loc.File == nil {
-		return src.Path
-	}
-
-	// A comp/exec stage whose src is a bare command name (no path separator) is
-	// exec'd by name and resolved on PATH at run time — Martian's FindPath returns
-	// it unqualified for exactly this case (e.g. CellRanger's `cr_lib` in lib/bin).
-	// Dir-joining it would turn a PATH lookup into a nonexistent filesystem path,
-	// so keep it verbatim. A py stage's src is an interpreter-file argument (not
-	// PATH-resolved), and a path with a separator is a real relative reference —
-	// both keep the declaring-dir fallback below.
-	if isBareCommand(src.Type, src.Path) {
-		return src.Path
-	}
-
-	return filepath.Join(filepath.Dir(src.Node.Loc.File.FullPath), src.Path)
-}
-
-// isBareCommand reports whether a stage src is a comp/exec command resolved on
-// PATH at exec time: a compiled or exec stage whose path is a bare name with no
-// separator. Such a name must never be qualified into a filesystem path.
-func isBareCommand(t syntax.StageCodeType, path string) bool {
-	if t != syntax.CompiledStage && t != syntax.ExecStage {
-		return false
-	}
-
-	return path != "" && !strings.ContainsRune(path, filepath.Separator)
-}
-
-func lowerStage(s *syntax.Stage, mroPaths []string) *ir.Stage {
-	st := &ir.Stage{
-		Name:     s.Id,
-		In:       lowerInParams(s.InParams),
-		Out:      lowerOutParams(s.OutParams),
-		Split:    s.Split,
-		ChunkIn:  lowerInParams(s.ChunkIns),
-		ChunkOut: lowerOutParams(s.ChunkOuts),
-	}
-
-	if s.Src != nil {
-		st.Lang = ir.Lang(s.Src.Lang)
-		st.SrcPath = resolveSrcPath(s.Src, mroPaths)
-		st.SrcArgs = s.Src.Args
-	}
-
-	if r := s.Resources; r != nil {
-		st.Resources = ir.Resources{
-			MemGB:   float64(r.MemGB),
-			VMemGB:  float64(r.VMemGB),
-			Threads: float64(r.Threads),
-			Special: r.Special,
-		}
-	}
-
-	return st
-}
-
-func lowerPipeline(p *syntax.Pipeline) (*ir.Pipeline, error) {
-	lp := &ir.Pipeline{
-		Name: p.Id,
-		In:   lowerInParams(p.InParams),
-		Out:  lowerOutParams(p.OutParams),
-	}
-
-	for _, c := range p.Calls {
-		lc, err := lowerCall(c)
-		if err != nil {
-			return nil, fmt.Errorf("pipeline %s: %w", p.Id, err)
-		}
-
-		lp.Calls = append(lp.Calls, lc)
-	}
-
-	if p.Ret != nil {
-		ret, err := lowerBindings(p.Ret.Bindings)
-		if err != nil {
-			return nil, fmt.Errorf("pipeline %s return: %w", p.Id, err)
-		}
-
-		lp.Returns = ret
-	}
-
-	return lp, nil
-}
-
-func lowerCall(c *syntax.CallStm) (ir.Call, error) {
-	lc := ir.Call{Name: c.Id, Callable: c.DecId, Mapped: c.Mapping != nil}
-
-	if c.Mapping != nil {
-		mode, err := mapMode(c.Mapping.CallMode())
-		if err != nil {
-			return lc, fmt.Errorf("call %s: %w", c.Id, err)
-		}
-
-		lc.MapMode = mode
-	}
-
-	if m := c.Modifiers; m != nil {
-		lc.Local = m.Local
-		lc.Preflight = m.Preflight
-		lc.Volatile = m.Volatile
-
-		disabled, err := disabledRef(m)
-		if err != nil {
-			return lc, fmt.Errorf("call %s: %w", c.Id, err)
-		}
-
-		lc.Disabled = disabled
-	}
-
-	b, err := lowerBindings(c.Bindings)
-	if err != nil {
-		return lc, fmt.Errorf("call %s: %w", c.Id, err)
-	}
-
-	lc.Bindings = b
-
-	return lc, nil
-}
-
-// mapMode maps Martian's static fork-source kind onto the IR vocabulary. Any
-// other mode (single, null, or a future addition) has no lowering, so it fails
-// loudly instead of leaking an unvetted mode string into the emitter.
-func mapMode(m syntax.CallMode) (string, error) {
-	switch m {
-	case syntax.ModeArrayCall:
-		return ir.MapModeArray, nil
-	case syntax.ModeMapCall:
-		return ir.MapModeMap, nil
-	case syntax.ModeUnknownMapCall:
-		return ir.MapModeUnknown, nil
-	default:
-		return "", &apperror.UnsupportedError{
-			Construct: "map call mode",
-			Detail:    fmt.Sprintf("mode %q cannot be lowered", m),
-		}
-	}
-}
-
-func lowerEntry(c *syntax.CallStm) (*ir.EntryCall, error) {
-	// mrp forks a top-level `map call` per collection element; the transpiler
-	// has no entry-fork lowering, so fail loudly rather than emit a project
-	// that silently runs the entry once with the whole collection.
-	if c.Mapping != nil {
-		return nil, fmt.Errorf("entry call %s: %w", c.DecId, &apperror.UnsupportedError{
-			Construct: "top-level map call",
-			Detail:    "the entry forks over a collection",
-		})
-	}
-
-	b, err := lowerBindings(c.Bindings)
-	if err != nil {
-		return nil, fmt.Errorf("entry call %s: %w", c.DecId, err)
-	}
-
-	return &ir.EntryCall{Callable: c.DecId, Bindings: b}, nil
-}
-
-func lowerBindings(bs *syntax.BindStms) ([]ir.Binding, error) {
-	if bs == nil {
-		return nil, nil
-	}
-
-	out := make([]ir.Binding, 0, len(bs.List))
-
-	for _, b := range bs.List {
-		lb, err := lowerBinding(b)
-		if err != nil {
-			return nil, err
-		}
-
-		out = append(out, lb)
-	}
-
-	return out, nil
-}
-
-func lowerBinding(bs *syntax.BindStm) (ir.Binding, error) {
-	b := ir.Binding{Param: bs.Id}
-
-	exp := bs.Exp
-	if se, ok := exp.(*syntax.SplitExp); ok {
-		b.Split = true
-		exp = se.Value
-	}
-
-	v, err := lowerExp(exp)
-	if err != nil {
-		return b, fmt.Errorf("binding %q: %w", bs.Id, err)
-	}
-
-	b.Value = v
-
-	return b, nil
-}
-
-func refFrom(r *syntax.RefExp) *ir.Ref {
-	return &ir.Ref{Kind: string(r.Kind), ID: r.Id, Output: r.OutputId}
-}
-
-// disabledRef extracts the `disabled = <ref>` call modifier, if present. Any
-// other expression shape is unsupported and fails loudly: silently dropping it
-// would lower the call as "always enabled", inverting e.g. `disabled = true`.
-func disabledRef(m *syntax.Modifiers) (*ir.Ref, error) {
-	if m.Bindings == nil {
-		return nil, nil
-	}
-
-	d, ok := m.Bindings.Table["disabled"]
-	if !ok {
-		return nil, nil
-	}
-
-	r, ok := d.Exp.(*syntax.RefExp)
-	if !ok {
-		return nil, &apperror.UnsupportedError{
-			Construct: "disabled modifier",
-			Detail:    fmt.Sprintf("%T expression (only a reference is supported)", d.Exp),
-		}
-	}
-
-	return refFrom(r), nil
-}
-
-// lowerExp lowers a value expression into an ir.Value tree, preserving any
-// references nested inside array/map literals (e.g. a fan-in `[A.out, B.out]`).
-// Recursion depth is bounded by the finite parsed MRO AST.
-func lowerExp(e syntax.Exp) (ir.Value, error) {
-	switch v := e.(type) {
-	case *syntax.RefExp:
-		return ir.Value{Ref: refFrom(v)}, nil
-	case *syntax.ArrayExp:
-		arr := make([]ir.Value, 0, len(v.Value))
-
-		for _, el := range v.Value {
-			lv, err := lowerExp(el)
-			if err != nil {
-				return ir.Value{}, err
-			}
-
-			arr = append(arr, lv)
-		}
-
-		return ir.Value{Array: arr}, nil
-	case *syntax.MapExp:
-		obj := make(map[string]ir.Value, len(v.Value))
-
-		for k, el := range v.Value {
-			lv, err := lowerExp(el)
-			if err != nil {
-				return ir.Value{}, err
-			}
-
-			obj[k] = lv
-		}
-
-		return ir.Value{Object: obj}, nil
-	default:
-		raw, err := litLeaf(e)
-		if err != nil {
-			return ir.Value{}, err
-		}
-
-		return ir.Value{Literal: raw}, nil
-	}
-}
-
-// litLeaf encodes a scalar literal leaf (int/float/string/bool/null) with the
-// AST node's own Martian JSON encoder, which is what mrp writes into _args. Go's
-// json.Marshal disagrees on the number text (1e6 -> 1000000, which a Python
-// stage decodes as int, not float).
-func litLeaf(e syntax.Exp) (json.RawMessage, error) {
-	var m json.Marshaler
-
-	switch x := e.(type) {
-	case *syntax.IntExp:
-		m = x
-	case *syntax.FloatExp:
-		m = x
-	case *syntax.StringExp:
-		m = x
-	case *syntax.BoolExp:
-		m = x
-	case *syntax.NullExp:
-		m = x
-	default:
-		return nil, &apperror.UnsupportedError{
-			Construct: "expression",
-			Detail:    fmt.Sprintf("%T cannot be lowered", e),
-		}
-	}
-
-	raw, err := m.MarshalJSON()
-	if err != nil {
-		return nil, fmt.Errorf("marshal literal: %w", err)
-	}
-
-	return raw, nil
+	return prog
 }
 
 func lowerInParams(p *syntax.InParams) []ir.Param {

@@ -1,5 +1,5 @@
-# A map call whose callee emits a FILE output. The per-fork files must travel
-# through the MERGE bundle so they survive object-store / copy staging.
+# A map call whose callee emits a FILE output. The per-fork files must reach the
+# gathered output so they survive object-store / copy staging.
 filetype txt;
 
 stage WRITEF(

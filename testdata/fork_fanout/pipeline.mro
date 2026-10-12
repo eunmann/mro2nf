@@ -1,6 +1,5 @@
-# A scatterable map call with TWO consumers (a downstream stage and the
-# return): the merge cannot fold — duplicating it would stage the fork outs
-# into both — so the MERGE task must remain even under -native (#76).
+# A map call with TWO consumers (a downstream stage and the return), each of
+# which gathers every fork's outs (#76).
 stage SCALE(
     in  float value,
     in  float factor,

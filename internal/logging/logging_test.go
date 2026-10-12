@@ -115,7 +115,7 @@ func TestNewLoggerLevel(t *testing.T) {
 // or piped stderr must carry no ANSI escape codes.
 func TestNewLoggerNoEscapesWhenNotTerminal(t *testing.T) {
 	f := tempFile(t)
-	newLogger(f, env(nil)).Warn("flag conflict", "flag", "-native")
+	newLogger(f, env(nil)).Warn("flag conflict", "flag", "-monitor")
 
 	got, err := os.ReadFile(f.Name())
 	if err != nil {
@@ -126,7 +126,7 @@ func TestNewLoggerNoEscapesWhenNotTerminal(t *testing.T) {
 		t.Errorf("non-terminal output carries ANSI escapes: %q", got)
 	}
 
-	if !bytes.Contains(got, []byte("WRN flag conflict flag=-native\n")) {
+	if !bytes.Contains(got, []byte("WRN flag conflict flag=-monitor\n")) {
 		t.Errorf("log line = %q, want the WRN record", got)
 	}
 }

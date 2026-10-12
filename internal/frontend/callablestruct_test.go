@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 )
@@ -39,17 +38,7 @@ func lowerMakeTop(t *testing.T) *ir.Program {
 		t.Fatal(err)
 	}
 
-	ast, err := frontend.Parse(path, []string{dir}, false)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-
-	prog, err := frontend.Lower(ast, nil)
-	if err != nil {
-		t.Fatalf("lower: %v", err)
-	}
-
-	return prog
+	return lower(t, path, []string{dir})
 }
 
 func madeParam(t *testing.T, prog *ir.Program) ir.Param {

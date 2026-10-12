@@ -22,7 +22,7 @@ Before branching, challenge whether this is the right scope — a single branch 
 
 ## Implementation
 
-1. **Sprawl first.** Read the related features, consumers, and call paths the change touches. For non-trivial work, apply the `repo-research` skill. A transpiler change usually spans layers — check whether the frontend/IR, emitter, shim, and bindspec sides all agree before editing one of them.
+1. **Sprawl first.** Read the related features, consumers, and call paths the change touches. For non-trivial work, apply the `repo-research` skill. A transpiler change usually spans layers — check whether the frontend/IR, call graph, emitter, job runner, shim and `mre` sides all agree before editing one of them.
 2. **Implement directly.** Write code and its tests together. Use the `tdd` skill only for bug fixes, where the failing test proves the bug.
 3. **Refactor where warranted.** If existing code near the change should be restructured for clarity or correctness, do it — in its own commit. No hacks, no workarounds, no compatibility shims (pre-production).
 4. **Edit discipline.** Edit/Write tools for all source edits. Complete the full edit set before any lint or test run.
@@ -37,7 +37,7 @@ Before branching, challenge whether this is the right scope — a single branch 
 Every commit in the repo, whoever makes it, uses [Conventional Commits](https://www.conventionalcommits.org), plus a `Task:` label saying which job produced it. PR titles use the same `type(scope): summary` header, because a squash merge makes the PR title the commit on `main`.
 
 ```
-fix(bind): narrow a struct value to the receiving struct's fields
+fix(cg): narrow a struct value to the receiving struct's fields
 
 Why the change was needed and what it does, in a few lines.
 
@@ -45,9 +45,9 @@ Task: impl #239
 Co-Authored-By: ...
 ```
 
-- **Header:** `type(scope): summary`, at most 72 characters. The summary is imperative, lowercase and has no trailing period. It describes behaviour, not files: `fix(emit): zero-chunk split no longer starves its join`, not `update generate.go`.
+- **Header:** `type(scope): summary`, at most 72 characters. The summary is imperative, lowercase and has no trailing period. It describes behaviour, not files: `fix(cgnf): zero-chunk split no longer starves its join`, not `update generate.go`.
 - **Type:** `feat` new behaviour · `fix` bug fix · `refactor` no behaviour change · `perf` · `test` tests only · `docs` · `build` Makefile, deps, generators · `ci` · `chore` everything else.
-- **Scope:** the area touched, as one short word: a package or layer (`frontend`, `bind`, `shim`, `emit`, `mre`, `overrides`, `runner`, `config`, `e2e`, `bench`, `deploy`). Omit the scope when the change spans many areas.
+- **Scope:** the area touched, as one short word: a package or layer (`frontend`, `cg`, `cgnf`, `job`, `shim`, `mre`, `config`, `e2e`, `bench`, `deploy`). Omit the scope when the change spans many areas.
 - **Body:** optional. Keep it to the why and anything a reviewer can't see in the diff.
 - **`Task:` label** (a footer, before any trailers the session adds):
   - `impl #<issue>`: implementing an issue. Use `impl #238 #246` when one commit serves several.
@@ -63,7 +63,7 @@ Locally, run only the fast checks; PR Validation is the full gate.
 2. `make test`, all green.
 3. Targeted e2e for what the change touches: `go test -tags e2e -count=1 -run '<the touched fixtures and suites>' ./test/e2e/`. Keep each run under about 4 minutes, because an agent's prompt cache expires after 5 idle minutes.
 
-Do not run the full `make test-e2e`, `make test-e2e-docker`, `make lint-nf`, `make bench` or `make cover` locally before a PR. PR Validation runs all of them, plus `-race`, govulncheck and deadcode, on GitHub's runners. When a run fails, read only the failing job's log tail (`gh run view <id> --log-failed | tail -n 100`) and fix that.
+Do not run the full `make test-e2e`, `make lint-nf`, `make bench` or `make cover` locally before a PR. PR Validation runs all of them, plus `-race`, govulncheck and deadcode, on GitHub's runners. When a run fails, read only the failing job's log tail (`gh run view <id> --log-failed | tail -n 100`) and fix that.
 
 ## Review
 

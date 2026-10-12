@@ -1,0 +1,70 @@
+# A disable gate that is split per fork of a map call over a sub-pipeline:
+# the map call splits SRC's outs, and the sub-pipeline's gate reads its own
+# split element (INNER zips a bool array, ITEM a struct field), so each fork
+# of the gated WORK has its own gate value although SRC runs once. mrp
+# disables WORK at the forks whose value is true. The sub-pipelines publish
+# nothing: mrp refuses to resolve an output of such a gated call
+# ("invalid type core.marshallerArray for disabled binding").
+struct Item(
+    int  x,
+    bool skip,
+)
+
+stage SRC(
+    out int[]  xs,
+    out bool[] skips,
+    out Item[] entries,
+    src py     "stages/src",
+)
+
+stage WORK(
+    in  int x,
+    out int y,
+    src py  "stages/work",
+)
+
+pipeline INNER(
+    in  int  x,
+    in  bool skip,
+)
+{
+    call WORK(
+        x = self.x,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return ()
+}
+
+pipeline ITEM(
+    in  Item item,
+)
+{
+    call WORK(
+        x = self.item.x,
+    ) using (
+        disabled = self.item.skip,
+    )
+
+    return ()
+}
+
+pipeline SPLIT_GATE(
+)
+{
+    call SRC()
+
+    map call INNER(
+        x    = split SRC.xs,
+        skip = split SRC.skips,
+    )
+
+    map call ITEM(
+        item = split SRC.entries,
+    )
+
+    return ()
+}
+
+call SPLIT_GATE()

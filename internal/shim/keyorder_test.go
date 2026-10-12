@@ -97,23 +97,6 @@ func TestWriteBundleKeepsKeyOrder(t *testing.T) {
 	}
 }
 
-// TestWriteChunkBundleKeepsKeyOrder checks a split's chunk args reach the
-// chunk bundle in the order the split wrote them, as mrp's ChunkDef keeps
-// each arg's bytes.
-func TestWriteChunkBundleKeepsKeyOrder(t *testing.T) {
-	dir := t.TempDir()
-	def := shim.ChunkDef{Args: map[string]json.RawMessage{"c": json.RawMessage(`{"z":1,"a":[{"y":1,"x":2}]}`)}}
-
-	if err := shim.WriteChunkBundle(dir, def, nil, types.NewTable(nil), nil); err != nil {
-		t.Fatalf("WriteChunkBundle: %v", err)
-	}
-
-	want := `{"args":{"c":{"z":1,"a":[{"y":1,"x":2}]}},"resources":{"threads":0,"mem_gb":0,"vmem_gb":0}}`
-	if got := readData(t, dir); got != want {
-		t.Errorf("data.json = %s, want %s", got, want)
-	}
-}
-
 // TestUnescapeValueKeepsKeyOrder checks unescaping raw payload, as the
 // pre-sliced fork element and the published outs are, keeps its key order.
 func TestUnescapeValueKeepsKeyOrder(t *testing.T) {

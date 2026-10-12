@@ -1,0 +1,51 @@
+# A whole map call over a sub-pipeline, split over a literal of known
+# length, whose inner map call splits a stage output. Martian expands TOP's
+# SUB into one element per outer fork, each merging SQ, and mrp lists for
+# each the inner part of every SQ fork across both outer forks, in its fork
+# order: each outer fork's first fork, then each one's others
+# (core/resolve.go getParts, core/node.go expandForks). Each element's ys is
+# [1, 1, 4, 9, 4, 9] under mrp, a value per listed fork.
+stage MK(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/mk",
+)
+
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+pipeline SUB(
+    in  int   n,
+    out int[] ys,
+)
+{
+    call MK(
+        n = self.n,
+    )
+
+    map call SQ(
+        x = split MK.xs,
+    )
+
+    return (
+        ys = SQ.y,
+    )
+}
+
+pipeline TOP(
+    out SUB[] subs,
+)
+{
+    map call SUB(
+        n = split [3, 3],
+    )
+
+    return (
+        subs = SUB,
+    )
+}
+
+call TOP()

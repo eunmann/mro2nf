@@ -1,0 +1,73 @@
+# Map calls that zip splits over the outputs of different stages. mrp forks
+# such a call over its first split (in source order), resolves every other
+# split at the same index, and reads null past the end of a shorter source or
+# from a null one (core/fork.go expandForkPartFromSource; core/stage.go
+# getBindings logs the out-of-range element and runs the fork).
+stage EMIT(
+    in  int[] vals,
+    out int[] xs,
+    src py    "stages/emit",
+)
+
+stage PAIR(
+    in  int    a,
+    in  int    b,
+    out string s,
+    src py     "stages/pair",
+)
+
+pipeline ZIP_RUNTIME(
+    out string[] short,
+    out string[] long,
+    out string[] order,
+    out string[] null_master,
+    out string[] null_other,
+)
+{
+    call EMIT as THREE(
+        vals = [1, 2, 3],
+    )
+
+    call EMIT as TWO(
+        vals = [10, 20],
+    )
+
+    call EMIT as NONE(
+        vals = null,
+    )
+
+    map call PAIR as SHORT(
+        a = split THREE.xs,
+        b = split TWO.xs,
+    )
+
+    map call PAIR as LONG(
+        a = split TWO.xs,
+        b = split THREE.xs,
+    )
+
+    map call PAIR as ORDER(
+        b = split TWO.xs,
+        a = split THREE.xs,
+    )
+
+    map call PAIR as NULL_MASTER(
+        a = split NONE.xs,
+        b = split TWO.xs,
+    )
+
+    map call PAIR as NULL_OTHER(
+        a = split TWO.xs,
+        b = split NONE.xs,
+    )
+
+    return (
+        short       = SHORT.s,
+        long        = LONG.s,
+        order       = ORDER.s,
+        null_master = NULL_MASTER.s,
+        null_other  = NULL_OTHER.s,
+    )
+}
+
+call ZIP_RUNTIME()

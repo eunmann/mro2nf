@@ -18,6 +18,7 @@ import (
 // the fork dir (mrp's own checks), and that _assert and _errors keep apart.
 func TestMrpFailedOutcome(t *testing.T) {
 	ps := t.TempDir()
+	writeMrpSource(t, ps, "BOOM", "UP")
 	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM(\n    x = 1,\n)\n")
 	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk0-u1c28cb18e6", "_assert"), "boom")
 	writeABITestFile(t, filepath.Join(ps, "P", "UP", "fork0", "_invocation"), "call UP as UPPER()\n")
@@ -44,6 +45,7 @@ func TestMrpFailedOutcome(t *testing.T) {
 // another stage's failure is not blamed: only the stage that failed is.
 func TestMrpFailedOutcomeKilledJob(t *testing.T) {
 	ps := t.TempDir()
+	writeMrpSource(t, ps, "BOOM", "SLOW", "EARLY", "STAMPED")
 	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM()\n")
 	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk0-u1", "_errors"), "Traceback ...\nRuntimeError: boom")
 	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk1-u1", "_errors"), "Caught signal terminated")
@@ -60,6 +62,43 @@ func TestMrpFailedOutcomeKilledJob(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(failedIn(failError, "BOOM"), got); diff != "" {
+		t.Errorf("outcome (-want +got):\n%s", diff)
+	}
+}
+
+// writeMrpSource writes the pipestance source mrp keeps at ps/_mrosource:
+// pipeline P calling each of stages.
+func writeMrpSource(t *testing.T, ps string, stages ...string) {
+	t.Helper()
+
+	var decls, calls strings.Builder
+
+	for _, s := range stages {
+		fmt.Fprintf(&decls, "stage %s(\n    src py \"stages/%s\",\n)\n\n", s, strings.ToLower(s))
+		fmt.Fprintf(&calls, "    call %s()\n\n", s)
+	}
+
+	writeABITestFile(t, filepath.Join(ps, "_mrosource"), decls.String()+"pipeline P()\n{\n"+calls.String()+"    return ()\n}\n\ncall P()\n")
+}
+
+// TestMrpFailedOutcomePipelineFork checks a failure mrp records in a mapped
+// pipeline's fork, resolving its bindings, blames no stage
+// (map_pipe_nested: OUTER/INNER/fork0/_errors, `map call INNER(` in its
+// _invocation).
+func TestMrpFailedOutcomePipelineFork(t *testing.T) {
+	ps := t.TempDir()
+	writeABITestFile(t, filepath.Join(ps, "_mrosource"), "stage WORK(\n    in  int x,\n    src py \"stages/work\",\n)\n\n"+
+		"pipeline INNER(\n    in  int x,\n)\n{\n    call WORK(\n        x = self.x,\n    )\n\n    return ()\n}\n\n"+
+		"pipeline P()\n{\n    map call INNER(\n        x = split [1, 2],\n    )\n\n    return ()\n}\n\ncall P()\n")
+	writeABITestFile(t, filepath.Join(ps, "P", "INNER", "fork0", "_invocation"), "@include \"pipeline.mro\"\n\nmap call INNER(\n    x = split [1, 2],\n)\n")
+	writeABITestFile(t, filepath.Join(ps, "P", "INNER", "fork0", "_errors"), "could not match reference to a specific fork")
+
+	got, err := mrpFailedOutcome(ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(failedIn(failError, ""), got); diff != "" {
 		t.Errorf("outcome (-want +got):\n%s", diff)
 	}
 }
@@ -197,41 +236,34 @@ func TestMrpOutcomeCaseValidate(t *testing.T) {
 }
 
 // TestOutcomeRulesNeedTheirEntries feeds the outcome comparator rules the
-// attempts of a real stage_raise run, where Nextflow tried RAISE three times:
-// the checked-in allowlist excuses the retries and the stage-and-kind
-// comparison, and removing either entry fails the case. The retry entry is
-// scoped: outside its fixtures the retries fail the case, and on stage_raise a
-// run with no retried task fails it as an entry that excuses nothing.
+// attempts of a stage_raise run: the checked-in allowlist excuses the
+// stage-and-kind comparison, and removing its entry fails the case. RAISE is
+// a stage exception, which mrp does not retry, so a run that attempted it
+// twice fails the case, whatever the allowlist.
 func TestOutcomeRulesNeedTheirEntries(t *testing.T) {
-	attempts := []string{"BUILD_ENTRY_ARGS", "SR:STAGE_2_SR__RAISE", "SR:STAGE_2_SR__RAISE", "SR:STAGE_2_SR__RAISE"}
+	once := []string{"PLAN", "N0_RAISE (SR.RAISE)"}
+	retried := []string{"PLAN", "N0_RAISE (SR.RAISE)", "N0_RAISE (SR.RAISE)"}
 	allow := mustAllowlist(t)
 
-	if got := outcomeRuleReports(allow, "stage_raise", attempts); len(got) != 0 {
+	if got := outcomeRuleReports(allow, "stage_raise", once); len(got) != 0 {
 		t.Errorf("the checked-in allowlist leaves reports: %q", got)
 	}
 
 	cases := []struct {
 		name     string
 		allow    divergence.Allowlist
-		fixture  string
 		attempts []string
 		want     string
 	}{
-		{"retry_entry_removed", allow.Without("retried-stage-errors"), "stage_raise", attempts, "attempted SR:STAGE_2_SR__RAISE more than once"},
-		{"stage_entry_removed", allow.Without("failure-report-details"), "stage_raise", attempts, "reads only each failure's stage and kind"},
-		{"retry_out_of_scope", allow, "assert_min", attempts, "attempted SR:STAGE_2_SR__RAISE more than once"},
-		{"retry_excuses_nothing", allow, "stage_raise", attempts[:2], "retried-stage-errors excuses nothing in stage_raise"},
+		{"stage_entry_removed", allow.Without("failure-report-details"), once, "reads only each failure's stage and kind"},
+		{"retried", allow, retried, "attempted N0_RAISE (SR.RAISE) more than once"},
 	}
 
 	for _, c := range cases {
-		got := outcomeRuleReports(c.allow, c.fixture, c.attempts)
+		got := outcomeRuleReports(c.allow, "stage_raise", c.attempts)
 		if len(got) != 1 || !strings.Contains(got[0], c.want) {
 			t.Errorf("%s: reports %q, want one containing %q", c.name, got, c.want)
 		}
-	}
-
-	if got := outcomeRuleReports(allow, "assert_min", attempts[:2]); len(got) != 0 {
-		t.Errorf("a run outside the retry entry's scope with no retried task needs nothing, got %q", got)
 	}
 }
 

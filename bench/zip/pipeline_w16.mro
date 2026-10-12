@@ -1,0 +1,6 @@
+@include "common.mro"
+
+call ZIPFAN(
+    n  = 16,
+    kb = 64,
+)

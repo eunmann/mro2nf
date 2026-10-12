@@ -46,7 +46,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ================================================================================
 github.com/martian-lang/martian
 License: MIT
-Shipped in: mro2nf, vendor-martian/
+Shipped in: mre, mro2nf, vendor-martian/
 Notice: LICENSE in the github.com/martian-lang/martian module source; vendor-martian/LICENSE
 --------------------------------------------------------------------------------
 
@@ -76,7 +76,7 @@ THE SOFTWARE.
 ================================================================================
 golang.org/x/sys
 License: BSD-3-Clause
-Shipped in: mro2nf
+Shipped in: mre, mro2nf
 Notice: LICENSE in the golang.org/x/sys module source
 --------------------------------------------------------------------------------
 

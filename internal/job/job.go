@@ -1,0 +1,155 @@
+// Package job runs one phase of a stage instance as mrp runs a job: it
+// writes the metadata mrp writes before the job starts (core/stage.go), runs
+// the stage code with mrp's argv, through mrjob for py and comp stages
+// (core/node.go:1093 runJob), and reads the job's outcome from the metadata
+// files it left, as mrp's state machine does (core/metadata.go:465).
+package job
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/syntax"
+	"github.com/martian-lang/martian/martian/util"
+)
+
+// The phases of a stage job, mrp's shell names (core/stage.go:1637-1646).
+const (
+	PhaseSplit = "split"
+	PhaseMain  = "main"
+	PhaseJoin  = "join"
+)
+
+// AssertExitCode is the exit code mre gives an ASSERT-class failure: the
+// generated config terminates on it rather than retry.
+const AssertExitCode = 42
+
+var (
+	// ErrAssert is a stage assertion (an _assert file), which mrp never
+	// retries (core/node.go:848 isErrorTransient).
+	ErrAssert = errors.New("stage assertion failed")
+
+	errFailed     = errors.New("stage failed")
+	errIncomplete = errors.New("job exited without completing")
+	errNotStage   = errors.New("not a stage")
+	errChunks     = errors.New("chunk outs do not match the chunks")
+)
+
+// journalSafe encodes a fork id for a job name, as core's encodeJournalName
+// does (core/stage.go:436).
+func journalSafe(forkID string) string {
+	return strings.NewReplacer(".", "%2E", "/", "%2F").Replace(forkID)
+}
+
+// Runtime is what every job of one run shares.
+type Runtime struct {
+	// Adapters is Martian's adapters dir, holding python/martian_shell.py.
+	Adapters string
+	// Mrjob is the mrjob binary py and comp stages run under.
+	Mrjob string
+	// Monitor is mrp's --monitor, which mrjob enforces from _jobinfo.
+	Monitor bool
+	// PSID is the run's pipestance id, which names every job.
+	PSID string
+	// Invocation and Version are recorded in every job's _jobinfo.
+	Invocation *core.InvocationData
+	Version    core.VersionInfo
+	// Work is the dir that holds the jobs' metadata dirs and journal.
+	Work string
+}
+
+// Versions is the version record mrp writes to every _jobinfo
+// (core/pipestance.go:995 NewTopNode): the Martian runtime's embedded
+// version and the pipelines' version found on mroPaths
+// (cmd/mrp/configure.go:252 GetMroVersion).
+func Versions(mroPaths []string) core.VersionInfo {
+	pipelines, _ := util.GetMroVersion(mroPaths)
+
+	return core.VersionInfo{Martian: util.GetVersion(), Pipelines: pipelines}
+}
+
+// Stage is a stage node as mrp's node runs it. Callable is the stage's
+// declared name.
+type Stage struct {
+	Fqid      string
+	Callable  string
+	Code      Code
+	Using     *core.JobResources
+	Split     bool
+	Outs      *syntax.OutParams
+	ChunkOuts *syntax.OutParams
+}
+
+// Code is a stage's code: its type, the resolved command, and its src
+// arguments.
+type Code struct {
+	Type syntax.StageCodeType
+	Cmd  string
+	Args []string
+}
+
+// NewStage is st as core.NewStagestance sets up a node
+// (core/pipestance.go:35): its code found next to its .mro file, on
+// mroPaths or on PATH (core/runtime.go:366), and its using() resources.
+func NewStage(st *syntax.CallGraphStage, mroPaths []string) (Stage, error) {
+	s, ok := st.Callable().(*syntax.Stage)
+	if !ok {
+		return Stage{}, fmt.Errorf("%w: %s", errNotStage, st.Fqid)
+	}
+
+	cmd, err := s.Src.FindPath(append(slices.Clone(mroPaths), filepath.SplitList(os.Getenv("PATH"))...))
+	if err != nil {
+		return Stage{}, fmt.Errorf("stage code of %s: %w", st.Fqid, err)
+	}
+
+	out := Stage{
+		Fqid:      st.Fqid,
+		Callable:  st.Call().DecId,
+		Code:      Code{Type: s.Src.Type, Cmd: cmd, Args: s.Src.Args},
+		Split:     s.Split,
+		Outs:      s.OutParams,
+		ChunkOuts: s.ChunkOuts,
+	}
+
+	if r := s.Resources; r != nil {
+		out.Using = &core.JobResources{
+			Threads: float64(r.Threads), MemGB: float64(r.MemGB), VMemGB: float64(r.VMemGB), Special: r.Special,
+		}
+	}
+
+	return out, nil
+}
+
+// Instance is one stage instance: its stage and mrp's id of its fork.
+type Instance struct {
+	Stage  Stage
+	ForkID string
+}
+
+// Chunk is one chunk of an instance's main phase: its position among the
+// split's chunks and its def.
+type Chunk struct {
+	Index, Count int
+	Def          *core.ChunkDef
+}
+
+// Unsplit is the one chunk of a stage that does not split: an empty def
+// (core/stage.go:419 NewFork).
+func Unsplit() Chunk { return Chunk{Count: 1, Def: new(core.ChunkDef)} }
+
+// ChunkName is chunk i of n's name, its metadata dir and the last part of
+// its job name (core/stage.go:98 NewChunk).
+func ChunkName(i, n int) string { return fmt.Sprintf("chnk%0*d", util.WidthForInt(n), i) }
+
+// top is the run's top node name (core/runtime.go:360).
+func (r Runtime) top() string { return "ID." + r.PSID }
+
+// forkName is the instance's fork's job name (core/stage.go:438 updateId).
+func (r Runtime) forkName(in Instance) string {
+	return r.top() + "." + in.Stage.Fqid + "." + journalSafe(in.ForkID)
+}
