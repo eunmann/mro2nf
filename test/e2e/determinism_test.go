@@ -95,6 +95,12 @@ func assertAllCached(t *testing.T, rows []traceRow) {
 	ran := 0
 
 	for _, row := range rows {
+		// The call-graph project's PLAN never caches: it rewrites the run's
+		// invocation, which every other task reads by a constant path.
+		if v2Emitter() && row.Name == "PLAN" {
+			continue
+		}
+
 		if row.Status != "CACHED" {
 			ran++
 
