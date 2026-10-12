@@ -31,7 +31,7 @@ var (
 
 // stageUnsafe are the characters Nextflow's task stage-in script writes
 // unescaped into its `ln -s <source> <name>` lines that bash still expands
-// there (Nextflow 24.04 and 26.04): a glob can match a different file and
+// there (Nextflow 25.10 and 26.04): a glob can match a different file and
 // stage it silently, a brace or `$` rewrites the path.
 const stageUnsafe = "*?[]{}$"
 

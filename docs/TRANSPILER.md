@@ -628,7 +628,7 @@ relative path names nothing from the stage's job dir under either runtime and
 reaches the stage as given. A file default is staged from where it is at run
 time; it is never copied into the project.
 
-**Names Nextflow cannot stage.** Nextflow's stage-in script, on 24.04 and
+**Names Nextflow cannot stage.** Nextflow's stage-in script, on 25.10 and
 26.04, writes each staged file as `ln -s <source> <name>`, leaving `*`, `?`,
 `[`, `]`, `{`, `}`, `$` and control characters such as a tab for bash to
 expand: `s[1].txt` beside `s1.txt` stages `s1.txt` silently. So PLAN refuses a
