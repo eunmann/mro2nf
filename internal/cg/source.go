@@ -172,14 +172,14 @@ func (s Source) Witness(mroPaths []string) (*Graph, error) {
 	return s.compileArgs(args, mroPaths)
 }
 
-// with is the source with call after the declarations.
-func (s Source) with(call string) string {
-	return strings.TrimRight(s.Decls, "\n") + "\n\n" + call
-}
-
 // Path is the entry file's path, which the source compiles as.
 func (s Source) Path() string {
 	return filepath.Join(s.Dir, s.Name)
+}
+
+// with is the source with call after the declarations.
+func (s Source) with(call string) string {
+	return strings.TrimRight(s.Decls, "\n") + "\n\n" + call
 }
 
 // callable compiles the entry file and returns the callable id and the
