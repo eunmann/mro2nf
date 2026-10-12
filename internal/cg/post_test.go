@@ -129,7 +129,7 @@ func stageFileOuts(t *testing.T, f *fixture, man types.Manifest, n int) string {
 	}
 
 	gen := f.next("outs")
-	if err := writeValue(gen, json.RawMessage(raw), man, "GEN", types.RoleOut, nil); err != nil {
+	if err := writeOuts(gen, json.RawMessage(raw), man, "GEN"); err != nil {
 		t.Fatal(err)
 	}
 

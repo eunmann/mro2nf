@@ -113,8 +113,8 @@ rule targets:
   identical at both, so any per-fork bookkeeping task a change reintroduces
   fails the gate.
 - **`split`** — a split stage whose large stage-level file arg (`payload`,
-  written by a producer stage, `MKPAY`) reaches every chunk's main in the
-  split's args bundle, even though `main` never reads it: O(N) stagings over
+  written by a producer stage, `MKPAY`) reaches every chunk's main, which
+  stages the split's inputs, even though `main` never reads it: O(N) stagings over
   an N-way split, intrinsic as a chunk's `main` receives every stage arg, as
   under `mrp`. Run at two chunk counts (`pipeline_c4.mro`, `pipeline_c16.mro`) with
   the same width-flat plumbing requirement.
@@ -191,10 +191,10 @@ checks:
   until the marker is dropped, so fixing the issue turns the lane into an
   ordinary flat-gated one. Every group must also write the same
   `restaged_bytes` per producer at every width (within 5%): a file every fork
-  of a non-split stage reads is referenced where it was staged, not copied
-  into each fork (#498). Per fork such a copy would read flat; per producer,
-  the unit of the data, it grows with the width. A split stage's `args` still
-  carries one copy per fork, which no lane covers yet (#507).
+  reads is referenced where it was staged, not copied into each fork, by a
+  non-split stage (#498) or by a split stage's split, chunks or join (#507).
+  Per fork such a copy would read flat; per producer, the unit of the data,
+  it grows with the width.
 - **mrp-jobs gate** — every lane's `stage_tasks` must equal `mrp_jobs`: one
   stage task per Martian job, so stage work is neither duplicated nor hidden
   in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make

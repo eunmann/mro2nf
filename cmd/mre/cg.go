@@ -101,9 +101,8 @@ func (a *argsFlags) register(fs *flag.FlagSet) {
 }
 
 // write writes the instance's args bundle into out from its staged upstream
-// outs and fork elements, its file leaves linked to the staged files when
-// link is set.
-func (a *argsFlags) write(g *cg.Graph, man types.Manifest, out string, link bool) (cg.Instance, error) {
+// outs and fork elements, its file leaves linked to the staged files.
+func (a *argsFlags) write(g *cg.Graph, man types.Manifest, out string) (cg.Instance, error) {
 	forks := make([]cg.Element, len(a.forks))
 	for i, rec := range a.forks {
 		el, err := g.DecodeElement(rec)
@@ -119,7 +118,7 @@ func (a *argsFlags) write(g *cg.Graph, man types.Manifest, out string, link bool
 		return cg.Instance{}, fmt.Errorf("args: %w", err)
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Forks: forks, Manifest: man, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Link: link})
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Forks: forks, Manifest: man, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files})
 	if err != nil {
 		return cg.Instance{}, fmt.Errorf("args: %w", err)
 	}

@@ -122,9 +122,11 @@ type replayInstance struct {
 // replayTasks are the files an instance's tasks share below its dir work:
 // the args bundle the first task builds, the split's chunks dir, each
 // chunk's outs bundle, and the outs bundle and fork elements the last task
-// posts.
+// posts; and in, the args step's flags naming the items every task of the
+// instance stages to build its own args bundle.
 type replayTasks struct {
 	work, args, chunks, chunkOuts, outs, forks string
+	in                                         []string
 }
 
 func newReplayTasks(work string) replayTasks {
@@ -374,7 +376,11 @@ func forkAgrees(a, b cg.Fork) bool {
 func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.seq++
 	tasks := newReplayTasks(rp.taskDir(fmt.Sprintf("instance %04d", rp.seq)))
-	name, disabled := rp.firstTask(st, tasks, slices.Concat(in.elems, rp.upstreamOuts(st, in.fork)))
+	for _, d := range slices.Concat(in.elems, rp.upstreamOuts(st, in.fork)) {
+		tasks.in = append(tasks.in, "-in", d)
+	}
+
+	name, disabled := rp.firstTask(st, tasks)
 
 	inst, err := rp.g.ReadInstance(tasks.args)
 	if err != nil {
@@ -414,11 +420,8 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 // from the items it stages, and reports its job's metadata dir name and
 // whether mre stage refused the instance as disabled: a split, or a
 // non-split stage's main, which posts its outs too.
-func (rp *cgReplay) firstTask(st *syntax.CallGraphStage, tasks replayTasks, staged []string) (string, bool) {
-	argv := []string{"-node", st.Fqid, "-args", tasks.args}
-	for _, d := range staged {
-		argv = append(argv, "-in", d)
-	}
+func (rp *cgReplay) firstTask(st *syntax.CallGraphStage, tasks replayTasks) (string, bool) {
+	argv := slices.Concat([]string{"-node", st.Fqid, "-args", tasks.args}, tasks.in)
 
 	if s, ok := st.Callable().(*syntax.Stage); ok && s.Split {
 		return job.PhaseSplit, rp.stage(job.PhaseSplit, rp.jobDir(tasks, job.PhaseSplit), append(argv, "-o", tasks.chunks)...)
@@ -563,14 +566,18 @@ func (rp *cgReplay) runStage(st *syntax.CallGraphStage, rel string, tasks replay
 		rp.t.Errorf("%s: the split returned chunks %v, mrp's %v", rel, ours, theirs)
 	}
 
-	node := []string{"-node", st.Fqid, "-args", tasks.args}
+	// Each task builds its own args bundle in its work dir from the items
+	// the split staged.
+	node := func(name string) []string {
+		return slices.Concat([]string{"-node", st.Fqid, "-args", filepath.Join(rp.jobDir(tasks, name), "args")}, tasks.in)
+	}
 
 	for _, c := range ours {
-		rp.runTask(rel, c, job.PhaseMain, tasks, slices.Concat(node, []string{"-chunk", filepath.Join(tasks.chunks, c), "-o", filepath.Join(tasks.chunkOuts, c)})...)
+		rp.runTask(rel, c, job.PhaseMain, tasks, slices.Concat(node(c), []string{"-chunk", filepath.Join(tasks.chunks, c), "-o", filepath.Join(tasks.chunkOuts, c)})...)
 	}
 
 	rp.runTask(rel, job.PhaseJoin, job.PhaseJoin, tasks,
-		slices.Concat(node, []string{"-chunks", tasks.chunks, "-chunkouts", tasks.chunkOuts, "-o", tasks.outs, "-forks", tasks.forks})...)
+		slices.Concat(node(job.PhaseJoin), []string{"-chunks", tasks.chunks, "-chunkouts", tasks.chunkOuts, "-o", tasks.outs, "-forks", tasks.forks})...)
 }
 
 func (rp *cgReplay) chunkNames(dir string) []string {

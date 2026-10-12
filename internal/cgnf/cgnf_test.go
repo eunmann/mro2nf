@@ -251,7 +251,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 	gather := readTree(t, emitFixture(t, "fork_mid"))["main.nf"]
 
 	for _, c := range []struct{ fixture, main, want string }{
-		{"split_test", split, "N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk))"},
+		{"split_test", split, "N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0))"},
 		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']), [])"},
 		{"split_test", split, "    outs_pub = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum']))\n    outs_in = outs_pub.toList().map { xs -> ordered(xs) }"},
 	} {
@@ -330,8 +330,46 @@ func TestEmitRunsOneMreCallPerTask(t *testing.T) {
 // the job writes nothing into the split's outputs, which would change their
 // -resume key (split_test).
 func TestEmitStagesChunkApart(t *testing.T) {
-	if !strings.Contains(stageModule, "tuple val(meta), val(key), path('args'), val(name), path(chunk, stageAs: 'chunk/*')") {
+	if !strings.Contains(stageModule, ", val(name), path(chunk, stageAs: 'chunk/*')\n") {
 		t.Error("STAGE_MAIN does not stage its chunk below chunk/")
+	}
+}
+
+// TestEmitSplitTasksBuildTheirArgs: a split's chunk mains and join stage
+// the split's inputs, as STAGE does, and build the instance's args from
+// them, so no task outputs args and none carries a copy of a file they
+// name per fork (#507; split_test wires one instance channel into all
+// three).
+func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
+	inputs := "tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')"
+
+	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN"} {
+		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
+		body, _, _ = strings.Cut(body, "\n}\n")
+		_, output, _ := strings.Cut(body, "output:\n")
+
+		for _, want := range []string{inputs, "mkdir -p in\n", "${args(meta, forks, leaves)} -args args "} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %q:\n%s", proc, want, body)
+			}
+		}
+
+		if strings.Contains(output, "'args'") {
+			t.Errorf("%s outputs its args:\n%s", proc, output)
+		}
+	}
+
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, want := range []string{
+		"s0 = INPUT(b0.run, shared, ",
+		"N0_SUM_SQUARES_SP(s0)",
+		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
+		"N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0))",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("split_test's main.nf lacks %q:\n%s", want, main)
+		}
 	}
 }
 
@@ -343,8 +381,8 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	main := readTree(t, emitFixture(t, "join_resources"))["main.nf"]
 
 	for _, want := range []string{
-		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split))",
-		"N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk))",
+		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
+		"N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0))",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("join_resources's main.nf lacks %q:\n%s", want, main)
@@ -352,8 +390,8 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, a, c.name, c] }",
-		"split.map { m, k, a, cs, j, res -> [k, m + resources(res).join, a, cs, j] }",
+		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, us, ids, ef, c.name, c] }",
+		"split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/job"
+	"github.com/google/go-cmp/cmp"
 )
 
 // stageMRO has a task of every shape: SQ's split triad, which also reads
@@ -172,24 +173,21 @@ func unsplitTask(node, dir string, in ...string) []string {
 		[]string{"-args", dir + "/args", "-o", dir + "/stage_outs", "-work", dir}, posted(dir))
 }
 
-// splitTasks are the mre stage calls of a split stage's triad: its split,
-// which builds the args bundle with the args step's own flags given as in,
-// a main per chunk, each writing its outs into the join's chunkouts, and
-// its join.
+// splitTasks are the mre stage calls of a split stage's triad, each of
+// which builds the args bundle in its own dir with the args step's own
+// flags given as in: its split, a main per chunk, each writing its outs
+// into the join's chunkouts, and its join.
 func splitTasks(node string, in ...string) [][]string {
 	tasks := [][]string{slices.Concat([]string{"stage", "-phase", "split", "-node", node}, in,
 		[]string{"-args", "sp/args", "-o", "sp/chunks", "-work", "sp"})}
 
 	for _, c := range []string{"chnk0", "chnk1"} {
-		tasks = append(tasks, []string{
-			"stage", "-phase", "main", "-node", node, "-args", "sp/args", "-chunk", "sp/chunks/" + c, "-o", "jn/chunkouts/" + c, "-work", c,
-		})
+		tasks = append(tasks, slices.Concat([]string{"stage", "-phase", "main", "-node", node}, in,
+			[]string{"-args", c + "/args", "-chunk", "sp/chunks/" + c, "-o", "jn/chunkouts/" + c, "-work", c}))
 	}
 
-	return append(tasks, slices.Concat([]string{
-		"stage", "-phase", "join", "-node", node, "-args", "sp/args", "-chunks", "sp/chunks", "-chunkouts", "jn/chunkouts",
-		"-o", "jn/stage_outs", "-work", "jn",
-	}, posted("jn")))
+	return append(tasks, slices.Concat([]string{"stage", "-phase", "join", "-node", node}, in,
+		[]string{"-args", "jn/args", "-chunks", "sp/chunks", "-chunkouts", "jn/chunkouts", "-o", "jn/stage_outs", "-work", "jn"}, posted("jn")))
 }
 
 // stageTasks are a run of stageMRO's enabled tasks, in dependency order,
@@ -276,12 +274,11 @@ func snapshot(t *testing.T, dir string) map[string]string {
 
 // TestStageTasks: each task of a run of stageMRO, one mre stage call,
 // writes what its consumers stage, for every task shape: SQ's split triad,
-// its split's args bundle holding a copy of the entry file its chunks and
-// join stage, each chunk's outs and the total the join posts; ADD, a
-// non-split stage, reading that total; CP, reading the entry file through
-// its args bundle's link; and each fork of the map call EACH, given its
-// fork record as a value. Each task runs its job in its own work dir, and
-// a join missing a chunk's outs runs none.
+// each chunk's outs and the total the join posts; ADD, a non-split stage,
+// reading that total; CP, reading the entry file through its args bundle's
+// link; and each fork of the map call EACH, given its fork record as a
+// value. Each task runs its job in its own work dir, and a join missing a
+// chunk's outs runs none.
 func TestStageTasks(t *testing.T) {
 	mro, work := writeStagePipeline(t), t.TempDir()
 
@@ -311,22 +308,40 @@ func TestStageTasks(t *testing.T) {
 
 	tree := snapshot(t, work)
 
-	if got := treeLeaf(t, tree, "sp/args/", "reads.txt"); got != "7\n" {
-		t.Errorf("the split's args holds reads as %q, want a copy, as the chunks and join stage it", got)
-	}
-
-	if got := treeLeaf(t, tree, "cp/args/", "reads.txt"); !strings.HasPrefix(got, "-> ") {
-		t.Errorf("the non-split main's args holds reads as %q, want a link", got)
-	}
-
 	if got := treeLeaf(t, tree, "cp/outs/copy/", "copy.txt"); got != "7\n" {
 		t.Errorf("CP's copy holds %q, want the entry file's 7", got)
 	}
 
-	_, err := mreIn(t, mro, "stage", "-phase", "join", "-node", "P.SQ", "-args", "sp/args", "-chunks", "sp/chunks",
+	wantLinkedArgs(t, tree)
+
+	_, err := mreIn(t, mro, "stage", "-phase", "join", "-node", "P.SQ", "-leaves", "0", "-args", "jn2/args", "-chunks", "sp/chunks",
 		"-chunkouts", t.TempDir(), "-o", "jn2/stage_outs", "-work", "jn2")
 	if !errors.Is(err, errNoChunk) {
 		t.Errorf("join without chunk outs: %v, want errNoChunk", err)
+	}
+}
+
+// wantLinkedArgs requires every task of TestStageTasks that read the entry
+// file to link it in its args bundle, so no task writes a copy of it (#507),
+// and every task of SQ's triad to build the split's args payload.
+func wantLinkedArgs(t *testing.T, tree map[string]string) {
+	t.Helper()
+
+	for _, task := range []string{"sp", "chnk0", "chnk1", "jn", "cp"} {
+		if got := treeLeaf(t, tree, task+"/args/", "reads.txt"); !strings.HasPrefix(got, "-> ") {
+			t.Errorf("%s's args holds reads as %q, want a link", task, got)
+		}
+	}
+
+	split := tree["sp/args/data.json"]
+	if split == "" {
+		t.Fatal("the split wrote no args payload")
+	}
+
+	for _, task := range []string{"chnk0", "chnk1", "jn"} {
+		if d := cmp.Diff(split, tree[task+"/args/data.json"]); d != "" {
+			t.Errorf("%s's args payload is not the split's (-split +%s):\n%s", task, task, d)
+		}
 	}
 }
 

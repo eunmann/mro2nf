@@ -28,8 +28,8 @@ type stageFlags struct {
 }
 
 // runStage runs one stage task against a single load of the call graph:
-// the task's args step, then its phase's job, then its post step, each
-// where the phase has one (stageSteps).
+// the args step, then its phase's job, then its post step where the phase
+// has one (posts).
 func runStage(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("stage", flag.ContinueOnError)
 	gf := addGraph(fs)
@@ -53,60 +53,49 @@ func runStage(ctx context.Context, argv []string) error {
 }
 
 func (s *stageFlags) stage(ctx context.Context, g *cg.Graph, man types.Manifest) error {
-	steps, err := stageSteps(g, s.run.phase, s.args.node)
+	post, err := posts(g, s.run.phase, s.args.node)
 	if err != nil {
 		return err
 	}
 
-	if steps.args {
-		inst, err := s.args.write(g, man, s.run.args, s.run.phase == job.PhaseMain)
-		if err != nil {
-			return err
-		}
+	inst, err := s.args.write(g, man, s.run.args)
+	if err != nil {
+		return err
+	}
 
-		if inst.Disabled {
-			return fmt.Errorf("args: %s is %w", inst.Node, errNotEnabled)
-		}
+	if inst.Disabled {
+		return fmt.Errorf("args: %s is %w", inst.Node, errNotEnabled)
 	}
 
 	if err := s.run.run(ctx, g, man); err != nil {
 		return err
 	}
 
-	if !steps.post {
+	if !post {
 		return nil
 	}
 
 	return s.post.post(g, man, s.run.args, s.run.out)
 }
 
-// taskSteps are the steps a stage task runs around its job.
-type taskSteps struct {
-	args, post bool
-}
-
-// stageSteps are the steps a task of node's phase runs. The task that runs
-// the instance's first job builds its args bundle: a split, or a non-split
-// stage's main, whose bundle no other task stages, so it links its files.
-// The task that runs its last job posts its outs: a join, or a non-split
-// stage's main.
-func stageSteps(g *cg.Graph, phase, node string) (taskSteps, error) {
+// posts reports whether a task of node's phase runs the instance's last
+// job, so posts its outs: a join, or a non-split stage's main.
+func posts(g *cg.Graph, phase, node string) (bool, error) {
 	switch phase {
 	case job.PhaseSplit:
-		return taskSteps{args: true}, nil
+		return false, nil
 	case job.PhaseJoin:
-		return taskSteps{post: true}, nil
+		return true, nil
 	case job.PhaseMain:
 		st, err := g.Stage(node)
 		if err != nil {
-			return taskSteps{}, fmt.Errorf("stage: %w", err)
+			return false, fmt.Errorf("stage: %w", err)
 		}
 
 		s, ok := st.Callable().(*syntax.Stage)
-		split := ok && s.Split
 
-		return taskSteps{args: !split, post: !split}, nil
+		return !ok || !s.Split, nil
 	default:
-		return taskSteps{}, fmt.Errorf("%w: %q", errPhase, phase)
+		return false, fmt.Errorf("%w: %q", errPhase, phase)
 	}
 }
