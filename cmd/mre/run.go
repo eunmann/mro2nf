@@ -159,7 +159,7 @@ func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArg
 // dir sub before the job runs, so a failed job is attributed too.
 func (f *runFlags) stamp(in job.Instance, sub string) error {
 	meta := filepath.Join(f.rt.Work, sub)
-	if err := os.MkdirAll(meta, recordDirPerm); err != nil {
+	if err := os.MkdirAll(meta, job.DirPerm); err != nil {
 		return fmt.Errorf("stamp %s: %w", sub, err)
 	}
 
