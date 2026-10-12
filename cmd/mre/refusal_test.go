@@ -30,6 +30,9 @@ func TestSubcommandsRefuseBadInputs(t *testing.T) {
 		"run flag":         {"run", "-bogus"},
 		"run entry":        {"run", "-entry", absent, "-phase", "main"},
 		"run args":         {"run", "-entry", mro, "-phase", "main", "-args", absent},
+		"stage flag":       {"stage", "-bogus"},
+		"stage entry":      {"stage", "-entry", absent, "-phase", "main"},
+		"stage args":       {"stage", "-entry", mro, "-phase", "join", "-node", "PP.SUMX", "-args", absent},
 		"plan flag":        {"plan", "-bogus"},
 		"plan entry":       {"plan", "-entry", absent},
 	}

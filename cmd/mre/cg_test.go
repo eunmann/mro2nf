@@ -191,7 +191,7 @@ func TestArgsForkRecord(t *testing.T) {
 // TestCallGraphNeedsEntry: the call-graph subcommands and plan refuse to
 // run without the entry they resolve against.
 func TestCallGraphNeedsEntry(t *testing.T) {
-	for _, sub := range []string{"args", "post", "outs", "run", "plan"} {
+	for _, sub := range []string{"args", "post", "outs", "run", "stage", "plan"} {
 		if err := run(t.Context(), []string{sub}); !errors.Is(err, errNoEntry) {
 			t.Errorf("mre %s without -entry: %v, want errNoEntry", sub, err)
 		}

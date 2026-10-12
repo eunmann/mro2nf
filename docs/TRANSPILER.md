@@ -365,6 +365,19 @@ type manifest from the invocation's own declarations.
   own, `{"<fqid>": {...}}`: of each phase the node runs, each resource
   Martian's `ApplyResourceOverrides` sets for it, found at the key nearest
   the node.
+- **`mre stage -phase split|main|join -node <fqid>`** is the one `mre` call
+  of a stage task. It compiles the call graph once and runs, against it, the
+  steps of `mre args`, `mre run` and `mre post` below that the phase has,
+  with their flags: a split, or a non-split stage's main, first builds the
+  instance's args bundle (`-args`), linking its files for the main
+  (`-link`); then every phase runs its job; then a join, or a non-split
+  stage's main, posts the outs bundle its job wrote (`-o`). A split stage's
+  main only runs its chunk's job against the args bundle the split built. An
+  instance its args resolve disabled, where its gates held it enabled, fails
+  the task before any job runs. A failed job exits as under `mre run`, and no
+  post follows it; a failed args or post step exits 1. The bundles are
+  written to disk between steps and read back, so `_args` names the staged
+  paths a step reads them at.
 - **`mre args -node <fqid> -digest <d>`** builds one stage instance's args
   bundle and prints `enabled` or `disabled`, once the node compiles to the spec
   digest PLAN planned. The instance's fork comes from the fork elements it
