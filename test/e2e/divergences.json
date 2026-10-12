@@ -105,6 +105,14 @@
       "evidence": ["TestMrpDiff/file_min", "TestMrpDiff/dir_out", "TestMrpDiff/map_file"]
     },
     {
+      "id": "staged-input-paths",
+      "kind": "mechanism",
+      "feature": "file and directory paths in a stage's `_args`",
+      "summary": "mro2nf's `_args` names each file or directory a stage receives by its copy staged in the task's work dir, `args/f/L0000/<name>` and on, with the basename and content mrp gives it. mrp's `_args` names an entry input by the path in the invocation or launch value, and a stage output by its path in the producer's job dir in the pipestance.",
+      "justification": "A task on any executor reads only what Nextflow stages into its work dir, and the paths mrp names are on the launch host or in a pipestance that does not exist under Nextflow. A stage reading its inputs by the paths it is given reads the same bytes under the same names, which the stage-ABI comparison checks: it compares each existing path by its content and basename, not its directory. A stage that opens files beside an input, which only the input's directory holds, is the outcome divergence `entry-file-siblings`.",
+      "evidence": ["TestMrpDiff/basename_echo", "TestMrpDiff/file_min", "TestABINormalizeSameContentAcrossHosts", "TestMrpDiffFailureParity/entry_file_sibling"]
+    },
+    {
       "id": "resume-content-cache",
       "kind": "mechanism",
       "feature": "`-resume` ≈ restart-without-rerun",
