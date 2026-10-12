@@ -89,6 +89,9 @@ func (p *project) planWiring(g *gen) {
 	g.linef("if (params.mro2nf_code && !params.mro2nf_image) {")
 	g.linef("  error 'a container profile runs every stage task in params.mro2nf_image: build it with ./build.sh <tag>, then pass --mro2nf_image <tag>'")
 	g.linef("}")
+	g.linef("if (params.mro2nf_code && !params.mro2nf_runtime_image) {")
+	g.linef("  error 'a container profile runs PLAN and OUTS in params.mro2nf_runtime_image, which no release published for this transpiler build: build it with docker build -f deploy/runtime/Dockerfile -t <image> . in an mro2nf checkout, then pass --mro2nf_runtime_image <image>'")
+	g.linef("}")
 	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"))", p.values(), p.graphMeta(), mroAssets)
 	g.linef("call = PLAN.out.call")
 

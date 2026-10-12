@@ -18,7 +18,7 @@ func emitFixture(t *testing.T, name string) string {
 
 	dir := fixturePath(t, name)
 	out := t.TempDir()
-	opts := Options{OutDir: out, Mre: "/opt/mre", Mrjob: "/opt/mrjob", Adapters: "/opt/adapters", MroPaths: []string{dir}, Version: "test"}
+	opts := Options{OutDir: out, Mre: "/opt/mre", Mrjob: "/opt/mrjob", Adapters: "/opt/adapters", MroPaths: []string{dir}, Version: "v1.2.3"}
 
 	if err := Emit(filepath.Join(dir, "pipeline.mro"), opts); err != nil {
 		t.Fatal(err)

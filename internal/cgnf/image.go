@@ -111,15 +111,16 @@ func (p *project) dockerfile(roots []codeRoot, commands []string) string {
 # Martian's adapters below %[1]s) and the pipeline's code, each root at its
 # host path below %[2]s, where the container profiles find it, and the code
 # of a stage whose src is absolute at that path itself. Build it with
-# ./build.sh <tag>. RUNTIME names another runtime image; BASE layers the
-# runtime onto a toolkit image, which must provide bash, ps and, for py
-# stages, python3.
-ARG RUNTIME=%[3]s:%[4]s
+# ./build.sh <tag>. RUNTIME names the runtime image, by default the release's
+# that transpiled the project, and must be passed for a transpiler build no
+# release published; BASE layers the runtime onto a toolkit image, which
+# must provide bash, ps and, for py stages, python3.
+ARG RUNTIME%[3]s
 ARG BASE=${RUNTIME}
 FROM ${RUNTIME} AS runtime
 FROM ${BASE}
 COPY --from=runtime %[1]s %[1]s
-`, imageRoot, imageCode, runtimeImage, p.opts.Version)
+`, imageRoot, imageCode, orEmpty("=", p.releaseRuntime()))
 
 	for i, r := range roots {
 		dest, _ := json.Marshal(r.image)
@@ -133,9 +134,30 @@ COPY --from=runtime %[1]s %[1]s
 	return b.String()
 }
 
+// orEmpty is prefix+s, or "" for an empty s.
+func orEmpty(prefix, s string) string {
+	if s == "" {
+		return ""
+	}
+
+	return prefix + s
+}
+
+// unpublishedRuntime is build.sh's refusal, for a transpiler build no
+// release published the runtime image of, to build without one named.
+const unpublishedRuntime = `case " $* " in
+    *" RUNTIME="* | *"=RUNTIME="*) ;;
+    *)
+        echo "build.sh: no release published this transpiler build's runtime image: build it with docker build -f deploy/runtime/Dockerfile -t <image> . in an mro2nf checkout, then pass --build-arg RUNTIME=<image>" >&2
+        exit 2
+        ;;
+esac
+`
+
 // buildScript is build.sh, which builds the stage image with each code
-// root as its named build context.
-func buildScript(roots []codeRoot) string {
+// root as its named build context, FROM the runtime image runtime, or one
+// the caller names.
+func buildScript(roots []codeRoot, runtime string) string {
 	var b strings.Builder
 
 	b.WriteString(`#!/usr/bin/env bash
@@ -150,7 +172,13 @@ if [ $# -lt 1 ]; then
 fi
 tag=$1
 shift
-exec docker build`)
+`)
+
+	if runtime == "" {
+		b.WriteString(unpublishedRuntime)
+	}
+
+	b.WriteString("exec docker build")
 
 	for i, r := range roots {
 		fmt.Fprintf(&b, " \\\n    --build-context code%d=%s", i, shellQuote(r.host))

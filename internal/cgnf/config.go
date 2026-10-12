@@ -3,6 +3,7 @@ package cgnf
 import (
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -12,6 +13,37 @@ import (
 // runtimeImage is the repository of mro2nf's release runtime image
 // (deploy/runtime/Dockerfile), tagged with the release version.
 const runtimeImage = "ghcr.io/eunmann/mro2nf-runtime"
+
+// releaseVersion matches a version a release publishes the runtime image
+// under (release.yml: the v* tag): v<major>.<minor>.<patch>, with at most a
+// pre-release such as -rc1. A git describe past a tag (-6-gb025b83), a Go
+// pseudo-version, a dirty tree or dev names no published image.
+var releaseVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$`)
+
+// runtimeParam sets params.mro2nf_runtime_image to the release's runtime
+// image, or, for a build no release published, to null, which a container
+// profile refuses at launch.
+func (p *project) runtimeParam() string {
+	if rt := p.releaseRuntime(); rt != "" {
+		return "params.mro2nf_runtime_image = " + gstr(rt) + "\n\n"
+	}
+
+	return "// No release published this build's runtime image: build it with\n" +
+		"// docker build -f deploy/runtime/Dockerfile -t <image> . in an mro2nf\n" +
+		"// checkout and pass --mro2nf_runtime_image <image>.\n" +
+		"params.mro2nf_runtime_image = null\n\n"
+}
+
+// releaseRuntime is the runtime image of the release that transpiled the
+// project, or "" for a build no release published.
+func (p *project) releaseRuntime() string {
+	v := p.opts.Version
+	if !releaseVersion.MatchString(v) || strings.HasSuffix(v, "-dirty") {
+		return ""
+	}
+
+	return runtimeImage + ":" + v
+}
 
 // In-image paths of the runtime image and the stage image built from it.
 const (
@@ -60,7 +92,7 @@ params.mro2nf_allow_remote_inputs = false
 params.mro2nf_image = null
 `)
 
-	fmt.Fprintf(&b, "params.mro2nf_runtime_image = %s\n\n", gstr(runtimeImage+":"+p.opts.Version))
+	b.WriteString(p.runtimeParam())
 	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
 
 	for _, id := range slices.Sorted(maps.Keys(p.src.Invocation.Args)) {

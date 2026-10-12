@@ -145,7 +145,7 @@ func (p *project) addTargetFiles(files map[string]string) error {
 		"conf/healthomics.config": healthomicsConfig,
 		"Dockerfile":              p.dockerfile(roots, commands),
 		".dockerignore":           dockerignore,
-		"build.sh":                buildScript(roots),
+		"build.sh":                buildScript(roots, p.releaseRuntime()),
 		"package.sh":              packageScript,
 		"parameter-template.json": tmpl,
 	})

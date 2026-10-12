@@ -3,6 +3,7 @@ package cgnf
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 		"params.mro2nf_mre = '/opt/mre'\n",
 		"params.mro2nf_code = ''\n",
 		"params.mro2nf_image = null\n",
-		"params.mro2nf_runtime_image = 'ghcr.io/eunmann/mro2nf-runtime:test'\n",
+		"params.mro2nf_runtime_image = 'ghcr.io/eunmann/mro2nf-runtime:v1.2.3'\n",
 		"    docker {\n        process.executor = 'local'\n",
 		"        docker.enabled = true\n        includeConfig 'conf/container.config'\n",
 		"    awsbatch {\n        process.executor = 'awsbatch'\n        includeConfig 'conf/container.config'\n        params.mro2nf_host_inputs = false\n",
@@ -81,7 +82,7 @@ func TestEmitStageImageRecipe(t *testing.T) {
 	dir := fixturePath(t, "include_test")
 
 	for _, want := range []string{
-		"ARG RUNTIME=ghcr.io/eunmann/mro2nf-runtime:test\nARG BASE=${RUNTIME}\nFROM ${RUNTIME} AS runtime\nFROM ${BASE}\nCOPY --from=runtime /opt/mro2nf /opt/mro2nf\n",
+		"ARG RUNTIME=ghcr.io/eunmann/mro2nf-runtime:v1.2.3\nARG BASE=${RUNTIME}\nFROM ${RUNTIME} AS runtime\nFROM ${BASE}\nCOPY --from=runtime /opt/mro2nf /opt/mro2nf\n",
 		"COPY --from=code0 [\".\", \"/opt/mro2nf/code" + dir + "\"]\n",
 	} {
 		if !strings.Contains(tree["Dockerfile"], want) {
@@ -93,8 +94,8 @@ func TestEmitStageImageRecipe(t *testing.T) {
 		t.Errorf("Dockerfile copies a root below another:\n%s", tree["Dockerfile"])
 	}
 
-	if want := "--build-context code0='" + dir + "'"; !strings.Contains(tree["build.sh"], want) {
-		t.Errorf("build.sh lacks %q:\n%s", want, tree["build.sh"])
+	if want := "--build-context code0='" + dir + "'"; !strings.Contains(tree["build.sh"], want) || strings.Contains(tree["build.sh"], "RUNTIME=\"*") {
+		t.Errorf("build.sh lacks %q, or needs a runtime image named:\n%s", want, tree["build.sh"])
 	}
 
 	if tree[".dockerignore"] != "*\n" {
@@ -104,6 +105,78 @@ func TestEmitStageImageRecipe(t *testing.T) {
 	info, err := os.Stat(filepath.Join(emitFixture(t, "include_test"), "build.sh"))
 	if err != nil || info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("build.sh is not executable: %v %v", info, err)
+	}
+}
+
+// TestReleaseRuntime: only a version a release publishes the runtime image
+// under names it (release.yml: the v* tag); a git describe past a tag, a
+// Go pseudo-version, a dirty tree and dev name none.
+func TestReleaseRuntime(t *testing.T) {
+	for v, want := range map[string]string{
+		"v1.2.3":                             runtimeImage + ":v1.2.3",
+		"v1.2.0-rc1":                         runtimeImage + ":v1.2.0-rc1",
+		"v0.4.0-6-gb025b83":                  "",
+		"v0.4.0-6-gb025b83-dirty":            "",
+		"v0.4.0-dirty":                       "",
+		"b025b83":                            "",
+		"dev":                                "",
+		"v0.0.0-20260101000000-abcdef123456": "",
+		"v0.5.1-0.20260101000000-abcdef123456+dirty": "",
+	} {
+		if got := (&project{opts: Options{Version: v}}).releaseRuntime(); got != want {
+			t.Errorf("runtime image of build %s = %q, want %q", v, got, want)
+		}
+	}
+}
+
+// TestEmitUnreleasedRuntime: a transpiler build no release published the
+// runtime image of names none: the container profiles refuse to launch
+// and build.sh to build until one is named, each saying how to build it.
+func TestEmitUnreleasedRuntime(t *testing.T) {
+	dir := fixturePath(t, "diamond_min")
+	out := t.TempDir()
+
+	if err := Emit(filepath.Join(dir, "pipeline.mro"), Options{OutDir: out, MroPaths: []string{dir}, Version: "v0.4.0-6-gb025b83-dirty"}); err != nil {
+		t.Fatal(err)
+	}
+
+	tree := readTree(t, out)
+	for _, c := range []struct{ file, want string }{
+		{"nextflow.config", "params.mro2nf_runtime_image = null\n"},
+		{"main.nf", "if (params.mro2nf_code && !params.mro2nf_runtime_image) {"},
+		{"main.nf", "error 'a container profile runs PLAN and OUTS in params.mro2nf_runtime_image, which no release published for this transpiler build: build it with docker build -f deploy/runtime/Dockerfile"},
+		{"Dockerfile", "ARG RUNTIME\nARG BASE=${RUNTIME}\n"},
+		{"build.sh", "case \" $* \" in\n    *\" RUNTIME=\"* | *\"=RUNTIME=\"*) ;;\n"},
+	} {
+		if !strings.Contains(tree[c.file], c.want) {
+			t.Errorf("%s lacks %q:\n%s", c.file, c.want, tree[c.file])
+		}
+	}
+
+	if strings.Index(tree["main.nf"], "!params.mro2nf_runtime_image") > strings.Index(tree["main.nf"], "PLAN(") {
+		t.Error("main.nf refuses a missing runtime image only after PLAN")
+	}
+
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, c := range []struct {
+		args []string
+		ok   bool
+	}{
+		{[]string{"tag"}, false},
+		{[]string{"tag", "-q"}, false},
+		{[]string{"tag", "--build-arg", "RUNTIME=rt"}, true},
+		{[]string{"tag", "--build-arg=RUNTIME=rt"}, true},
+	} {
+		cmd := exec.Command("bash", append([]string{filepath.Join(out, "build.sh")}, c.args...)...)
+		if msg, err := cmd.CombinedOutput(); (err == nil) != c.ok {
+			t.Errorf("build.sh %v: %v %s, want ok %t", c.args, err, msg, c.ok)
+		}
 	}
 }
 

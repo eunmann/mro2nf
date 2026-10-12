@@ -113,8 +113,8 @@ chooses it:
 | Profile | Runs on | Needs |
 |---|---|---|
 | `standard` (default), `slurm`, `sge`, `lsf`, `pbs` | the host's tools and code, a shared filesystem | — |
-| `docker` | local docker, each task in its own container | `--mro2nf_image <tag>` from `./build.sh <tag>` |
-| `awsbatch` | AWS Batch over an S3 work dir | the stage image in ECR (`--mro2nf_image`), `-work-dir s3://…`, `process.queue` and `aws.region` in a `-c` config |
+| `docker` | local docker, each task in its own container | `--mro2nf_image <tag>` from `./build.sh <tag>`; `--mro2nf_runtime_image` unless a release transpiled it |
+| `awsbatch` | AWS Batch over an S3 work dir | the stage image in ECR (`--mro2nf_image`), `-work-dir s3://…`, `process.queue` and `aws.region` in a `-c` config; `--mro2nf_runtime_image` unless a release transpiled it |
 | `healthomics` | AWS HealthOmics | `./package.sh <stage image>@sha256:… <runtime image>@sha256:…`, which makes it the workflow's own config |
 
 The container profiles run every stage task in the **stage image**, which
@@ -129,6 +129,19 @@ alone, run in the runtime image itself (`--mro2nf_runtime_image`). Entry file
 values are staged into the tasks that read them (`s3://` URIs on every
 profile); see `docs/TRANSPILER.md` §8 and §9, and `docs/LIVE_AWS_TEST.md` for
 the AWS runs.
+
+A release publishes the runtime image under its own tag, so a project
+transpiled by a release binary names it by default. A transpiler built from a
+clone (`make build`, any commit but a release tag) has no published runtime
+image, and the project names none: build one from the same checkout and pass
+it to both the stage build and the run, or `build.sh` and the container
+profiles refuse to start.
+
+```bash
+docker build -f deploy/runtime/Dockerfile -t mro2nf-runtime:local .
+./build.sh my-pipeline --build-arg RUNTIME=mro2nf-runtime:local
+nextflow run main.nf -profile docker --mro2nf_image my-pipeline --mro2nf_runtime_image mro2nf-runtime:local
+```
 
 ### `.mro2nf.yml` project defaults
 

@@ -610,8 +610,14 @@ and code are, which executor runs the tasks and in which images.
   the stage image. A container profile without a stage image fails at once.
 - **One image recipe.** `deploy/runtime/Dockerfile` is the one definition of
   `/opt/mro2nf` (`mre`, `mrjob`, Martian's adapters), published as
-  `ghcr.io/eunmann/mro2nf-runtime:<version>`; `params.mro2nf_runtime_image`
-  defaults to the tag of the build that transpiled the project. The project's
+  `ghcr.io/eunmann/mro2nf-runtime:<version>` by each release (its `v*` tag);
+  `params.mro2nf_runtime_image` and the `Dockerfile`'s `RUNTIME` default to
+  the tag of the release that transpiled the project. A transpiler built from
+  any other commit has no published runtime image, so the project names none,
+  and `build.sh` and the container profiles refuse to start until one is
+  named: build it from the same checkout (`docker build -f
+  deploy/runtime/Dockerfile -t <image> .`) and pass it as `--build-arg
+  RUNTIME=<image>` and `--mro2nf_runtime_image <image>`. The project's
   `Dockerfile` builds the stage image `FROM` it and copies each code root (the
   entry's dir, the search path's roots, every `.mro` file's dir and every
   stage's code Martian finds as a file) from a named build context
