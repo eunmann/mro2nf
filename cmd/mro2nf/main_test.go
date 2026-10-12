@@ -1,69 +1,202 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
-	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/apperror"
 	"github.com/eunmann/mro2nf/internal/config"
-	"github.com/eunmann/mro2nf/internal/emit"
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/google/go-cmp/cmp"
 )
+
+const testShell = "/opt/adapters/python/martian_shell.py"
+
+// runFixture runs mro2nf on a testdata fixture into a fresh dir and returns
+// the project dir and the error.
+func runFixture(t *testing.T, fixture string, flags ...string) (string, error) {
+	t.Helper()
+
+	out := filepath.Join(t.TempDir(), "proj")
+	dir := filepath.Join("..", "..", "testdata", fixture)
+	args := append([]string{"-o", out, "-mre", "/opt/bin/mre", "-shell", testShell, "-mropath", dir}, flags...)
+
+	return out, run(append(args, filepath.Join(dir, "pipeline.mro")))
+}
+
+func readConfig(t *testing.T, proj string) string {
+	t.Helper()
+
+	cfg, err := os.ReadFile(filepath.Join(proj, "nextflow.config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(cfg)
+}
+
+// TestRunEmitsCallGraphProject checks a transpile emits the call-graph
+// project, its mrjob the one built beside mre and its adapters the shell's,
+// confined under -confine-outputs.
+func TestRunEmitsCallGraphProject(t *testing.T) {
+	out, err := runFixture(t, "file_min")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := readConfig(t, out)
+	for _, want := range []string{"params.mro2nf_mrjob = '/opt/bin/mrjob'", "params.mro2nf_adapters = '/opt/adapters'", "params.mro2nf_confine = false", "params.x = null"} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(out, "stage.nf")); err != nil {
+		t.Errorf("no stage module: %v", err)
+	}
+
+	confined, err := runFixture(t, "file_min", "-confine-outputs")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg := readConfig(t, confined); !strings.Contains(cfg, "params.mro2nf_confine = true") {
+		t.Errorf("-confine-outputs does not confine the stage tasks:\n%s", cfg)
+	}
+}
+
+// TestUsageShowsDefaults checks the usage text lists each flag with its
+// default.
+func TestUsageShowsDefaults(t *testing.T) {
+	fs := flag.NewFlagSet("mro2nf", flag.ContinueOnError)
+
+	var usage bytes.Buffer
+
+	fs.SetOutput(&usage)
+	defineTranspileFlags(fs)
+	fs.PrintDefaults()
+
+	for _, want := range []string{"-mropath", "-confine-outputs", `(default "mre")`, `(default "out")`} {
+		if !strings.Contains(usage.String(), want) {
+			t.Errorf("usage lacks %s:\n%s", want, usage.String())
+		}
+	}
+}
+
+// TestRunRequiresShell checks a transpile without -shell, which names
+// Martian's adapters dir, fails and emits no project.
+func TestRunRequiresShell(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "proj")
+	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
+
+	if err := run([]string{"-o", out, mro}); !errors.Is(err, errNoShell) {
+		t.Errorf("no -shell: %v, want errNoShell", err)
+	}
+
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused transpile left %s (stat: %v)", out, err)
+	}
+}
+
+// TestRunResolvesAdapters checks the adapters dir comes from -shell made
+// absolute against the cwd, and from a .mro2nf.yml shell against the config
+// file's dir (#266).
+func TestRunResolvesAdapters(t *testing.T) {
+	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "file_min"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cwd, cfgDir := t.TempDir(), t.TempDir()
+	cfg := filepath.Join(cfgDir, config.FileName)
+	writeTestFile(t, cfg, "shell: tools/adapters/python/martian_shell.py\n")
+
+	t.Chdir(cwd)
+
+	for name, tc := range map[string]struct {
+		flags []string
+		want  string
+	}{
+		"flag":   {[]string{"-shell", "adapters/python/martian_shell.py"}, filepath.Join(cwd, "adapters")},
+		"config": {[]string{"-config", cfg}, filepath.Join(cfgDir, "tools", "adapters")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "proj")
+			args := append([]string{"-o", out, "-mre", "/opt/bin/mre", "-mropath", dir}, tc.flags...)
+
+			if err := run(append(args, filepath.Join(dir, "pipeline.mro"))); err != nil {
+				t.Fatal(err)
+			}
+
+			if want := "params.mro2nf_adapters = '" + tc.want + "'"; !strings.Contains(readConfig(t, out), want) {
+				t.Errorf("nextflow.config lacks %q:\n%s", want, readConfig(t, out))
+			}
+		})
+	}
+}
 
 // TestApplyConfigPrecedence checks the .mro2nf.yml precedence: a config key sets
 // a flag the user did not pass, but an explicit flag always wins.
 func TestApplyConfigPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	mro := filepath.Join(dir, "pipeline.mro")
+	writeTestFile(t, filepath.Join(dir, config.FileName), "mre: /cfg/mre\nmonitor: true\n")
 
-	if err := os.WriteFile(filepath.Join(dir, config.FileName),
-		[]byte("target: awsbatch\nmonitor: true\nnative: true\n"), 0o644); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		wantMre     string
+		wantMonitor bool
+	}{
+		{"unset_flags_take_config", []string{mro}, "/cfg/mre", true},
+		// -monitor=false must beat the config's monitor: true.
+		{"explicit_flags_win", []string{"-mre", "/flag/mre", "-monitor=false", mro}, "/flag/mre", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			f := defineTranspileFlags(fs)
+
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := applyConfig(fs, "", mro, f.configPtrs()); err != nil {
+				t.Fatal(err)
+			}
+
+			if *f.mre != tc.wantMre || *f.monitor != tc.wantMonitor {
+				t.Errorf("mre=%q monitor=%v, want mre=%q monitor=%v", *f.mre, *f.monitor, tc.wantMre, tc.wantMonitor)
+			}
+		})
 	}
+}
 
-	// Unset flags take the config value.
+// TestApplyConfigMonitorReachesOptions checks a monitor value sourced purely
+// from the config reaches the emitted options.
+func TestApplyConfigMonitorReachesOptions(t *testing.T) {
+	dir := t.TempDir()
+	mro := filepath.Join(dir, "pipeline.mro")
+	writeTestFile(t, filepath.Join(dir, config.FileName), "monitor: true\nshell: "+testShell+"\n")
+
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
-	target := fs.String("target", "local", "")
-	monitor := fs.Bool("monitor", false, "")
-	native := fs.Bool("native", false, "")
+	f := defineTranspileFlags(fs)
 	_ = fs.Parse([]string{mro})
 
-	ptrs := cliPtrs{target: target, monitor: monitor, native: native}
-	if _, err := applyConfig(fs, "", mro, ptrs); err != nil {
+	if err := applyConfig(fs, "", mro, f.configPtrs()); err != nil {
 		t.Fatal(err)
 	}
-	if *target != "awsbatch" || !*monitor || !*native {
-		t.Errorf("config should set unset flags: target=%q monitor=%v native=%v", *target, *monitor, *native)
-	}
 
-	// An explicitly-passed flag overrides the config — including a bool passed
-	// as its default value (-native=false must beat the config's native: true).
-	fs2 := flag.NewFlagSet("t", flag.ContinueOnError)
-	target2 := fs2.String("target", "local", "")
-	monitor2 := fs2.Bool("monitor", false, "")
-	native2 := fs2.Bool("native", false, "")
-	_ = fs2.Parse([]string{"-target", "healthomics", "-native=false", mro})
-
-	ptrs2 := cliPtrs{target: target2, monitor: monitor2, native: native2}
-	if _, err := applyConfig(fs2, "", mro, ptrs2); err != nil {
+	opts, err := f.options(mro)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if *target2 != "healthomics" {
-		t.Errorf("explicit -target should win over config, got %q", *target2)
-	}
-	if !*monitor2 {
-		t.Errorf("unset monitor should still take config value, got %v", *monitor2)
-	}
-	if *native2 {
-		t.Errorf("explicit -native=false should win over config, got native=%v", *native2)
+
+	if !opts.Monitor {
+		t.Errorf("config-sourced monitor must reach options(): Monitor=%v", opts.Monitor)
 	}
 }
 
@@ -111,30 +244,35 @@ func TestToolPaths(t *testing.T) {
 	}
 }
 
-// TestRunBakesBareShellAbsolute checks a bare -shell is baked as the file in
-// the working directory: mre runs the adapter from the task's files dir, so
-// a bare name there names no file.
-func TestRunBakesBareShellAbsolute(t *testing.T) {
-	mro := writeSharedPipeline(t, t.TempDir(), "input.txt")
-	t.Chdir(t.TempDir())
+// TestOptionsMrjob checks mrjob defaults to the one beside mre, a PATH
+// command beside a bare mre, and that an explicit -mrjob wins.
+func TestOptionsMrjob(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"beside_mre", []string{"-mre", "/opt/bin/mre"}, "/opt/bin/mrjob"},
+		{"bare_mre", nil, "mrjob"},
+		{"explicit", []string{"-mre", "/opt/bin/mre", "-mrjob", "/usr/bin/mrjob"}, "/usr/bin/mrjob"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			f := defineTranspileFlags(fs)
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
+			if err := fs.Parse(append(tc.args, "-shell", testShell, "p.mro")); err != nil {
+				t.Fatal(err)
+			}
 
-	out := t.TempDir()
-	if err := run([]string{"-o", out, "-shell", "martian_shell.py", mro}); err != nil {
-		t.Fatal(err)
-	}
+			opts, err := f.options("p.mro")
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	body, err := os.ReadFile(filepath.Join(out, "modules", "pipe_EP.nf"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if want := "-shell '" + filepath.Join(cwd, "martian_shell.py") + "'"; !strings.Contains(string(body), want) {
-		t.Errorf("generated module does not bake %s:\n%s", want, body)
+			if opts.Mrjob != tc.want {
+				t.Errorf("Mrjob = %q, want %q", opts.Mrjob, tc.want)
+			}
+		})
 	}
 }
 
@@ -179,7 +317,7 @@ func TestApplyConfigToolsRelativeToConfigFile(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if _, err := applyConfig(fs, *f.configPath, fs.Arg(0), f.configPtrs()); err != nil {
+			if err := applyConfig(fs, *f.configPath, fs.Arg(0), f.configPtrs()); err != nil {
 				t.Fatal(err)
 			}
 
@@ -198,12 +336,12 @@ func TestApplyConfigExplicitMissingIsError(t *testing.T) {
 	mro := filepath.Join(dir, "pipeline.mro")
 
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
-	target := fs.String("target", "local", "")
+	f := defineTranspileFlags(fs)
 	_ = fs.Parse([]string{mro})
 
 	typo := filepath.Join(dir, "typo.yml")
 
-	switch _, err := applyConfig(fs, typo, mro, cliPtrs{target: target}); {
+	switch err := applyConfig(fs, typo, mro, f.configPtrs()); {
 	case err == nil:
 		t.Errorf("explicit -config %s is missing: want an error, got nil", typo)
 	case !errors.Is(err, os.ErrNotExist):
@@ -212,47 +350,15 @@ func TestApplyConfigExplicitMissingIsError(t *testing.T) {
 		t.Errorf("error should name the missing path %s, got %v", typo, err)
 	}
 
-	// No explicit path: a missing probe file is still fine.
-	if _, err := applyConfig(fs, "", mro, cliPtrs{target: target}); err != nil {
+	if err := applyConfig(fs, "", mro, f.configPtrs()); err != nil {
 		t.Errorf("implicit probe with no config file: want no error, got %v", err)
 	}
 }
 
-// TestApplyConfigNativeReachesOptions pins the structural parity: a native
-// value sourced purely from the config (never passed as a flag) must reach
-// the single options() value both Diagnose and Emit consume — a reintroduced
-// pre-config snapshot would silently split them.
-func TestApplyConfigNativeReachesOptions(t *testing.T) {
-	dir := t.TempDir()
-	mro := filepath.Join(dir, "pipeline.mro")
-
-	if err := os.WriteFile(filepath.Join(dir, config.FileName),
-		[]byte("native: true\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	fs := flag.NewFlagSet("t", flag.ContinueOnError)
-	f := defineTranspileFlags(fs)
-	_ = fs.Parse([]string{mro})
-
-	applied, err := applyConfig(fs, "", mro, f.configPtrs())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	opts, err := f.options(mro, applied)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !opts.Native {
-		t.Errorf("config-sourced native must reach options(): Native=%v", opts.Native)
-	}
-}
-
-// TestBuildVersionReachesOptions checks the -ldflags version reaches Emit,
-// whose every process script names it as the task's -resume cache key (#449).
-// A test binary has no stamped module version, so an unstamped build is dev.
+// TestBuildVersionReachesOptions checks the -ldflags version reaches the
+// emitted options, whose every task names it in its -resume cache key
+// (#449). A test binary has no stamped module version, so an unstamped build
+// is dev.
 func TestBuildVersionReachesOptions(t *testing.T) {
 	for _, stamp := range []string{"v1.2.3-4-gabcdef0-dirty", "dev"} {
 		t.Run(stamp, func(t *testing.T) {
@@ -263,8 +369,9 @@ func TestBuildVersionReachesOptions(t *testing.T) {
 
 			fs := flag.NewFlagSet("t", flag.ContinueOnError)
 			f := defineTranspileFlags(fs)
+			_ = fs.Parse([]string{"-shell", testShell})
 
-			opts, err := f.options("p.mro", nil)
+			opts, err := f.options("p.mro")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -306,25 +413,35 @@ func TestChooseVersion(t *testing.T) {
 	}
 }
 
-// TestSourceRootFlagsReachOptions checks the search path reaches Emit split
-// into the roots that bound copied files — -mropath, else $MROPATH, else the
-// .mro's directory, as mrp — and that copying an external file takes the
-// explicit -allow-external-files.
-func TestSourceRootFlagsReachOptions(t *testing.T) {
+// TestSearchPathReachesOptions checks the include paths the project compiles
+// with: -mropath, else $MROPATH, else the .mro's directory, as mrp, each
+// made absolute, then the .mro's directory, each once.
+func TestSearchPathReachesOptions(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	abs := func(dirs ...string) []string {
+		out := make([]string, len(dirs))
+		for i, d := range dirs {
+			out[i] = filepath.Join(cwd, d)
+		}
+
+		return out
+	}
 	list := func(dirs ...string) string { return strings.Join(dirs, string(os.PathListSeparator)) }
 
 	for _, tc := range []struct {
-		name      string
-		env       string
-		args      []string
-		wantPath  []string
-		wantAllow bool
+		name string
+		env  string
+		args []string
+		want []string
 	}{
-		{"default", "", []string{"proj/p.mro"}, []string{"proj"}, false},
-		{"env", list("m1", "m2"), []string{"proj/p.mro"}, []string{"m1", "m2"}, false},
-		{"flag_beats_env", "m1", []string{"-mropath", "a", "proj/p.mro"}, []string{"a"}, false},
-		{"explicit_cwd", "", []string{"-mropath", ".", "proj/p.mro"}, []string{"."}, false},
-		{"opt_in", "", []string{"-mropath", list("a", "b"), "-allow-external-files", "p.mro"}, []string{"a", "b"}, true},
+		{"default", "", []string{"proj/p.mro"}, abs("proj")},
+		{"env", list("m1", "m2"), []string{"proj/p.mro"}, abs("m1", "m2", "proj")},
+		{"flag_beats_env", "m1", []string{"-mropath", "a", "proj/p.mro"}, abs("a", "proj")},
+		{"explicit_cwd", "", []string{"-mropath", ".", "p.mro"}, []string{cwd}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("MROPATH", tc.env)
@@ -332,160 +449,19 @@ func TestSourceRootFlagsReachOptions(t *testing.T) {
 			fs := flag.NewFlagSet("t", flag.ContinueOnError)
 			f := defineTranspileFlags(fs)
 
-			if err := fs.Parse(tc.args); err != nil {
+			if err := fs.Parse(append([]string{"-shell", testShell}, tc.args...)); err != nil {
 				t.Fatal(err)
 			}
 
-			opts, err := f.options(fs.Arg(0), nil)
+			opts, err := f.options(fs.Arg(0))
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			if diff := cmp.Diff(tc.wantPath, opts.MROPath); diff != "" {
-				t.Errorf("MROPath (-want +got):\n%s", diff)
-			}
-
-			if opts.AllowExternalFiles != tc.wantAllow {
-				t.Errorf("AllowExternalFiles = %v, want %v", opts.AllowExternalFiles, tc.wantAllow)
+			if diff := cmp.Diff(tc.want, opts.MroPaths); diff != "" {
+				t.Errorf("MroPaths (-want +got):\n%s", diff)
 			}
 		})
-	}
-}
-
-// TestStageCodePathsAbsolutizesNoRejoin guards the #178 review: a relative,
-// already-declaring-dir-resolved SrcPath must be absolutized against the cwd, not
-// re-joined against the entry .mro's dir (which would double-prefix an @included
-// stage's path). The helper takes no entry dir, so a revert to a mroDir-join
-// would not even compile against this test.
-func TestStageCodePathsAbsolutizesNoRejoin(t *testing.T) {
-	prog := &ir.Program{
-		Stages: map[string]*ir.Stage{
-			"S": {Name: "S", SrcPath: "proj/sub/code.py"}, // relative, declaring-dir-resolved
-			"A": {Name: "A", SrcPath: "/abs/code.py"},     // absolute passes through
-		},
-	}
-
-	code, err := stageCodePaths(prog)
-	if err != nil {
-		t.Fatalf("stageCodePaths: %v", err)
-	}
-
-	cwd, _ := os.Getwd()
-	if want := filepath.Join(cwd, "proj", "sub", "code.py"); code["S"] != want {
-		t.Errorf("S = %q, want %q (cwd-absolutized, not entry-dir-joined)", code["S"], want)
-	}
-	if code["A"] != "/abs/code.py" {
-		t.Errorf("A = %q, want the absolute path unchanged", code["A"])
-	}
-}
-
-// TestStageCodePathsKeepsBareCommand guards that a comp/exec stage whose src is a
-// bare command name (no path separator, resolved on PATH at exec time — e.g.
-// CellRanger's `cr_lib`) passes through verbatim rather than being cwd-absolutized
-// into a broken filesystem path. Py stages and any path with a separator are still
-// absolutized.
-func TestStageCodePathsKeepsBareCommand(t *testing.T) {
-	prog := &ir.Program{
-		Stages: map[string]*ir.Stage{
-			"C": {Name: "C", Lang: ir.LangComp, SrcPath: "cr_lib"}, // bare command → PATH
-			"E": {Name: "E", Lang: ir.LangExec, SrcPath: "mytool"}, // bare command → PATH
-			"P": {Name: "P", Lang: ir.LangPy, SrcPath: "code.py"},  // py leaf → absolutized
-		},
-	}
-
-	code, err := stageCodePaths(prog)
-	if err != nil {
-		t.Fatalf("stageCodePaths: %v", err)
-	}
-
-	if code["C"] != "cr_lib" {
-		t.Errorf("C = %q, want %q (bare command kept verbatim for PATH resolution)", code["C"], "cr_lib")
-	}
-	if code["E"] != "mytool" {
-		t.Errorf("E = %q, want %q (bare command kept verbatim for PATH resolution)", code["E"], "mytool")
-	}
-	cwd, _ := os.Getwd()
-	if want := filepath.Join(cwd, "code.py"); code["P"] != want {
-		t.Errorf("P = %q, want %q (py leaf still cwd-absolutized)", code["P"], want)
-	}
-}
-
-const sharedMRO = `stage COUNT(
-    in  path reads,
-    out int  total,
-    src py   "stages/count",
-)
-
-pipeline EP(
-    in  path reads,
-    out int  total,
-)
-{
-    call COUNT(
-        reads = self.reads,
-    )
-
-    return (
-        total = COUNT.total,
-    )
-}
-
-call EP(
-    reads = %q,
-)
-`
-
-// writeSharedPipeline writes a pipeline .mro with its stage code into dir, as
-// a shared repository ships it, with def as the reads default.
-func writeSharedPipeline(t *testing.T, dir, def string) string {
-	t.Helper()
-
-	writeTestFile(t, filepath.Join(dir, "stages", "count", "__init__.py"), "")
-	writeTestFile(t, filepath.Join(dir, "input.txt"), "reads")
-
-	mro := filepath.Join(dir, "pipeline.mro")
-	writeTestFile(t, mro, fmt.Sprintf(sharedMRO, def))
-
-	return mro
-}
-
-func writeTestFile(t *testing.T, path, content string) {
-	t.Helper()
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestRunWorkingDirIsNotARoot checks the working directory does not admit an
-// entry default under it: transpiling a shared .mro from $HOME must not stage
-// a file elsewhere in $HOME. A search path the user names, by -mropath or
-// $MROPATH, does.
-func TestRunWorkingDirIsNotARoot(t *testing.T) {
-	home := t.TempDir()
-	secret := filepath.Join(home, "secret.txt")
-	writeTestFile(t, secret, "SECRET")
-
-	mro := writeSharedPipeline(t, filepath.Join(home, "shared"), secret)
-	t.Chdir(home)
-	t.Setenv("MROPATH", "")
-
-	if err := run([]string{"-o", t.TempDir(), mro}); !errors.Is(err, emit.ErrExternalFile) {
-		t.Errorf("run from the default's parent: want ErrExternalFile, got %v", err)
-	}
-
-	if err := run([]string{"-o", t.TempDir(), "-mropath", ".", mro}); err != nil {
-		t.Errorf("run with an explicit -mropath holding the default: %v", err)
-	}
-
-	t.Setenv("MROPATH", home)
-
-	if err := run([]string{"-o", t.TempDir(), mro}); err != nil {
-		t.Errorf("run with $MROPATH holding the default: %v", err)
 	}
 }
 
@@ -517,23 +493,34 @@ const libMRO = `stage COUNT(
 )
 `
 
-// TestRunDefaultSearchPath checks both subcommands search @include as mrp
-// does when -mropath is not given: $MROPATH when set, else the .mro's
-// directory — never the working directory, whose unrelated lib.mro would make
-// the include ambiguous or resolve it to the wrong stages.
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRunDefaultSearchPath checks @include is searched as mrp searches it
+// when -mropath is not given: $MROPATH when set, else the .mro's directory —
+// never the working directory, whose unrelated lib.mro would make the
+// include ambiguous or resolve it to the wrong stages.
 func TestRunDefaultSearchPath(t *testing.T) {
 	cwd := t.TempDir()
 	writeTestFile(t, filepath.Join(cwd, "lib.mro"), "stage OTHER(\n    src py \"stages/other\",\n)\n")
 	t.Chdir(cwd)
 
-	overridesJSON := filepath.Join(t.TempDir(), "overrides.json")
-	writeTestFile(t, overridesJSON, "{}")
-
 	beside := t.TempDir()
 	writeTestFile(t, filepath.Join(beside, "lib.mro"), libMRO)
+	writeTestFile(t, filepath.Join(beside, "stages", "count", "__init__.py"), "")
 
 	libDir := t.TempDir()
 	writeTestFile(t, filepath.Join(libDir, "lib.mro"), libMRO)
+	writeTestFile(t, filepath.Join(libDir, "stages", "count", "__init__.py"), "")
 
 	for _, tc := range []struct{ name, env, dir string }{
 		{"mro_dir", "", beside},
@@ -546,20 +533,16 @@ func TestRunDefaultSearchPath(t *testing.T) {
 			mro := filepath.Join(tc.dir, "pipeline.mro")
 			writeTestFile(t, mro, includingMRO)
 
-			if err := run([]string{"-o", t.TempDir(), mro}); err != nil {
+			if err := run([]string{"-o", t.TempDir(), "-shell", testShell, mro}); err != nil {
 				t.Errorf("transpile: %v", err)
-			}
-
-			if err := runOverrides([]string{"-mro", mro, overridesJSON}); err != nil {
-				t.Errorf("overrides: %v", err)
 			}
 		})
 	}
 }
 
 // TestRunRefusesPipelineMrpCannotInstantiate checks each pipeline mrp refuses
-// before any stage runs (#387) fails the transpile in every emission mode,
-// naming the call and binding as mrp does, and emits no project.
+// before any stage runs (#387) fails the transpile, naming the call and
+// binding as mrp does, and emits no project.
 func TestRunRefusesPipelineMrpCannotInstantiate(t *testing.T) {
 	refused := map[string]string{
 		"rt_gate_split_reject":      "RTG.B input value:",
@@ -567,121 +550,36 @@ func TestRunRefusesPipelineMrpCannotInstantiate(t *testing.T) {
 		"rt_gate_split_reject_pass": "RTGP.B input value:",
 	}
 
-	modes := map[string][]string{
-		"default":   nil,
-		"native":    {"-native"},
-		"no-inline": {"-inline-pipelines=false"},
-	}
-
 	for fixture, binding := range refused {
-		for mode, flags := range modes {
-			t.Run(fixture+"/"+mode, func(t *testing.T) {
-				out := filepath.Join(t.TempDir(), "proj")
-				mro := filepath.Join("..", "..", "testdata", fixture, "pipeline.mro")
+		t.Run(fixture, func(t *testing.T) {
+			out, err := runFixture(t, fixture)
+			if err == nil || !strings.Contains(err.Error(), binding) {
+				t.Fatalf("run: %v, want mrp's refusal naming %q", err, binding)
+			}
 
-				err := run(append(append([]string{"-o", out}, flags...), mro))
-				if !errors.Is(err, apperror.ErrParse) {
-					t.Fatalf("run: want ErrParse, got %v", err)
-				}
-
-				for _, want := range []string{binding, "unexpected array"} {
-					if !strings.Contains(err.Error(), want) {
-						t.Errorf("error %q does not contain %q", err, want)
-					}
-				}
-
-				if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
-					t.Errorf("a refused transpile left %s (stat: %v)", out, err)
-				}
-			})
-		}
+			if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("a refused transpile left %s (stat: %v)", out, err)
+			}
+		})
 	}
 }
 
-// TestRunRejectsDeletedFlags checks a deleted emission-mode flag is an unknown
-// flag, so a stale invocation fails instead of emitting a different project.
+// TestRunRejectsDeletedFlags checks a deleted flag is an unknown flag, so a
+// stale invocation fails instead of emitting a different project.
 func TestRunRejectsDeletedFlags(t *testing.T) {
 	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
 
-	for _, name := range []string{"fold-disables", "fuse-chains", "native-runner"} {
+	for _, name := range []string{
+		"emitter=v2", "native", "inline-pipelines=false", "target=awsbatch", "container=img",
+		"allow-external-files", "fold-disables", "fuse-chains", "native-runner",
+	} {
 		t.Run(name, func(t *testing.T) {
-			err := run([]string{"-o", t.TempDir(), "-" + name, mro})
-			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+name) {
+			flagName, _, _ := strings.Cut(name, "=")
+
+			err := run([]string{"-o", t.TempDir(), "-shell", testShell, "-" + name, mro})
+			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+flagName) {
 				t.Errorf("run with -%s: want an undefined-flag error, got %v", name, err)
 			}
 		})
-	}
-}
-
-// TestReportDiagnostics checks each diagnostic is logged at its severity and
-// that warnings and notes let the transpile proceed: kitchen_sink's local and
-// volatile calls are documented divergences (WARN), and under -native
-// map_split's map call over a split stage keeps its FORK task (INFO).
-func TestReportDiagnostics(t *testing.T) {
-	cases := []struct {
-		fixture string
-		opts    emit.Options
-		want    []string
-	}{
-		{"kitchen_sink", emit.Options{}, []string{
-			"level=WARN msg=\"call MAIN.SUM_SQUARES: `local` modifier ignored",
-			"level=WARN msg=\"call MAIN.SUM_SQUARES: `volatile` ignored",
-		}},
-		{"map_split", emit.Options{Native: true}, []string{"level=INFO msg=\"-native: map call "}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.fixture, func(t *testing.T) {
-			mro := filepath.Join("..", "..", "testdata", tc.fixture, "pipeline.mro")
-
-			prog, err := loadProgram(mro, []string{filepath.Dir(mro)})
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var buf strings.Builder
-
-			log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-			if err := reportDiagnostics(log, prog, tc.opts); err != nil {
-				t.Fatalf("reportDiagnostics: %v", err)
-			}
-
-			for _, want := range tc.want {
-				if !strings.Contains(buf.String(), want) {
-					t.Errorf("diagnostics log lacks %q:\n%s", want, buf.String())
-				}
-			}
-
-			if strings.Contains(buf.String(), "level=ERROR") {
-				t.Errorf("no diagnostic of %s is fatal, but one logged an error:\n%s", tc.fixture, buf.String())
-			}
-		})
-	}
-}
-
-// TestRunRefusesConfigToolOutsideRoots checks a .mro2nf.yml shipped beside a
-// shared .mro cannot have a container target bake a host file as a tool,
-// while the same path passed as a flag is the user's choice and is baked.
-func TestRunRefusesConfigToolOutsideRoots(t *testing.T) {
-	secret := filepath.Join(t.TempDir(), "credentials")
-	writeTestFile(t, secret, "SECRET")
-
-	mre := filepath.Join(t.TempDir(), "mre")
-	writeTestFile(t, mre, "#!/bin/sh\n")
-
-	shared := t.TempDir()
-	mro := writeSharedPipeline(t, shared, "input.txt")
-	writeTestFile(t, filepath.Join(shared, config.FileName), "mrjob: "+secret+"\n")
-
-	base := []string{"-target", "awsbatch", "-container", "img", "-mre", mre}
-
-	err := run(append(append([]string{"-o", t.TempDir()}, base...), mro))
-	if !errors.Is(err, emit.ErrExternalFile) {
-		t.Errorf("config-set -mrjob outside the roots: want ErrExternalFile, got %v", err)
-	}
-
-	if err := run(append(append([]string{"-o", t.TempDir(), "-mrjob", secret}, base...), mro)); err != nil {
-		t.Errorf("explicit -mrjob: %v", err)
 	}
 }

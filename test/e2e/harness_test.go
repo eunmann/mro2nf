@@ -268,24 +268,16 @@ func repoTools() toolchain {
 // transpileInto runs tools' mro2nf for the fixture mro under dir, emitting
 // into proj. It returns the failure (with the tool output) instead of failing
 // the test, so batch callers can attribute a broken combo without aborting the
-// rest. The binaries must exist: buildBinaries builds repoTools.
+// rest. The binaries must exist: buildBinaries builds repoTools. Every stage
+// runs under the real mrjob, as mrp runs py and comp stages.
 func transpileInto(tools toolchain, dir, mro, proj string, extra ...string) error {
-	args := []string{
+	args := slices.Concat([]string{
 		"-o", proj,
 		"-mre", tools.mre,
+		"-mrjob", filepath.Join(root, "mrjob"),
 		"-shell", filepath.Join(root, "vendor-martian", "python", "martian_shell.py"),
 		"-mropath", dir,
-	}
-
-	switch mrjob := filepath.Join(dir, "mrjob.sh"); {
-	case v2Emitter():
-		args = append(args, "-emitter=v2", "-mrjob", filepath.Join(root, "mrjob"))
-	case fileExists(mrjob):
-		args = append(args, "-mrjob", mrjob)
-	}
-
-	args = append(args, extra...)
-	args = append(args, filepath.Join(dir, mro))
+	}, extra, []string{filepath.Join(dir, mro)})
 
 	cmd := exec.Command(tools.mro2nf, args...)
 	cmd.Dir = root
