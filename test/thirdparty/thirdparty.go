@@ -22,10 +22,11 @@ import (
 const NoticesFile = "THIRD_PARTY_NOTICES"
 
 const (
-	stdlibName  = "Go standard library and runtime"
-	releaseYAML = ".github/workflows/release.yml"
-	cmdDir      = "cmd"
-	licenseName = "LICENSE"
+	stdlibName        = "Go standard library and runtime"
+	releaseYAML       = ".github/workflows/release.yml"
+	runtimeDockerfile = "deploy/runtime/Dockerfile"
+	cmdDir            = "cmd"
+	licenseName       = "LICENSE"
 )
 
 // Vendored maps each vendored directory at the repo root to the module whose
@@ -57,6 +58,8 @@ func spdx(text string) (string, error) {
 		return "BSD-3-Clause", nil
 	case strings.Contains(text, "Redistribution and use in source and binary forms"):
 		return "BSD-2-Clause", nil
+	case strings.Contains(text, "Apache License") && strings.Contains(text, "Version 2.0, January 2004"):
+		return "Apache-2.0", nil
 	default:
 		return "", errUnknownLicense
 	}
@@ -159,33 +162,63 @@ func releaseTargets(root string) ([][]string, error) {
 	return targets, nil
 }
 
-// binaries returns the commands under cmd/, each a release binary.
-func binaries(root string) ([]string, error) {
+// binary is a shipped binary and the package it is built from.
+type binary struct {
+	name, pkg string
+}
+
+// imageBuild is a `go build -o /out/<name> <package>` of the runtime image.
+var imageBuild = regexp.MustCompile(`-o /out/(\S+) (\S+)`)
+
+// binaries returns the shipped binaries: each command under cmd/, a release
+// binary, and each third-party command the runtime image builds (mrjob).
+func binaries(root string) ([]binary, error) {
 	entries, err := os.ReadDir(filepath.Join(root, cmdDir))
 	if err != nil {
 		return nil, fmt.Errorf("list binaries: %w", err)
 	}
 
-	var bins []string
+	var bins []binary
 
 	for _, e := range entries {
 		if e.IsDir() {
-			bins = append(bins, e.Name())
+			bins = append(bins, binary{name: e.Name(), pkg: "./" + cmdDir + "/" + e.Name()})
+		}
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, runtimeDockerfile))
+	if err != nil {
+		return nil, fmt.Errorf("read runtime image recipe: %w", err)
+	}
+
+	for _, m := range imageBuild.FindAllStringSubmatch(string(raw), -1) {
+		if !strings.HasPrefix(m[2], "./") {
+			bins = append(bins, binary{name: m[1], pkg: m[2]})
 		}
 	}
 
 	return bins, nil
 }
 
-// linkedModule is a third-party module linked into some release binaries.
+// names are the binaries' names.
+func names(bins []binary) []string {
+	out := make([]string, len(bins))
+	for i, b := range bins {
+		out[i] = b.name
+	}
+
+	return out
+}
+
+// linkedModule is a third-party module linked into some shipped binaries.
 type linkedModule struct {
 	dir  string
 	bins []string
 }
 
 // linkedModules returns the third-party modules that provide a package of
-// some release binary for some release target, keyed by module path.
-func linkedModules(ctx context.Context, root string, bins []string) (map[string]*linkedModule, error) {
+// some shipped binary for some release target, keyed by module path.
+func linkedModules(ctx context.Context, root string, bins []binary) (map[string]*linkedModule, error) {
 	targets, err := releaseTargets(root)
 	if err != nil {
 		return nil, err
@@ -197,12 +230,12 @@ func linkedModules(ctx context.Context, root string, bins []string) (map[string]
 
 	for _, bin := range bins {
 		for _, env := range targets {
-			out, err := goCmd(ctx, root, env, "list", "-deps", "-f", format, "./"+cmdDir+"/"+bin)
+			out, err := goCmd(ctx, root, env, "list", "-deps", "-f", format, bin.pkg)
 			if err != nil {
 				return nil, err
 			}
 
-			addLinked(mods, bin, out)
+			addLinked(mods, bin.name, out)
 		}
 	}
 
@@ -306,7 +339,7 @@ func Collect(ctx context.Context, root string) ([]Notice, error) {
 		}
 	}
 
-	std, err := stdlibNotice(ctx, root, bins)
+	std, err := stdlibNotice(ctx, root, names(bins))
 	if err != nil {
 		return nil, err
 	}
@@ -330,10 +363,11 @@ func Collect(ctx context.Context, root string) ([]Notice, error) {
 const header = `Third-party notices
 
 mro2nf is under the MIT license in LICENSE. Its release binaries (mro2nf,
-mre), its runtime image and the container build contexts it generates (both
-at /opt/mro2nf) also contain the third-party code below, each under the
-license reproduced with its entry. "Shipped in" names the binaries that
-statically link the code and the vendored directories that copy it.
+mre) and its runtime image (mre, mrjob and Martian's adapters at
+/opt/mro2nf), which the stage images it generates build FROM, also contain
+the third-party code below, each under the license reproduced with its
+entry. "Shipped in" names the binaries that statically link the code and the
+vendored directories that copy it.
 
 Generated from the module graph; regenerate with: make notices
 `

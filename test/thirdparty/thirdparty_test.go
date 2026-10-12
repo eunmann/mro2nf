@@ -33,8 +33,9 @@ func TestNoticesAreCurrent(t *testing.T) {
 }
 
 // TestNoticesCoverShippedCode checks what Collect derives: the Go standard
-// library, the parser mro2nf links, each vendored module, and no module only
-// the tests import (go-cmp).
+// library, the parser mro2nf links, the modules the runtime image's mrjob
+// links, each vendored module, and no module only the tests import
+// (go-cmp).
 func TestNoticesCoverShippedCode(t *testing.T) {
 	notices, err := Collect(t.Context(), repoRoot)
 	if err != nil {
@@ -48,6 +49,12 @@ func TestNoticesCoverShippedCode(t *testing.T) {
 
 	if !slices.Contains(shipped["github.com/martian-lang/martian"], "mro2nf") {
 		t.Errorf("Martian ships in %v, want mro2nf among them", shipped["github.com/martian-lang/martian"])
+	}
+
+	for _, mod := range []string{"github.com/martian-lang/martian", "github.com/google/shlex"} {
+		if !slices.Contains(shipped[mod], "mrjob") {
+			t.Errorf("%s ships in %v, want the runtime image's mrjob among them", mod, shipped[mod])
+		}
 	}
 
 	if _, ok := shipped[stdlibName]; !ok {
@@ -172,7 +179,8 @@ func TestSPDX(t *testing.T) {
 			want: "BSD-3-Clause",
 		},
 		{name: "bsd2", text: "Redistribution and use in source and binary forms, with or without", want: "BSD-2-Clause"},
-		{name: "apache", text: "Apache License\nVersion 2.0, January 2004", err: errUnknownLicense},
+		{name: "apache", text: "Apache License\n                           Version 2.0, January 2004", want: "Apache-2.0"},
+		{name: "gpl", text: "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007", err: errUnknownLicense},
 	}
 
 	for _, c := range cases {
