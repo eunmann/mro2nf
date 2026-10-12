@@ -27,7 +27,7 @@ var nonE2EFixtures = map[string]string{}
 
 // TestEveryFixtureIsExercised fails when a testdata fixture (a directory with a
 // pipeline.mro) is named by no e2e test and is not on the nonE2EFixtures
-// allowlist. It is the guard the README's "every fixture" claim lacked: a new
+// allowlist. It backs CONTRIBUTING.md's "every fixture" claims: a new
 // fixture that nobody wired into a suite (like entry_dir was) is caught here
 // rather than shipping as silent dead weight. It also fails on a STALE allowlist
 // entry, so the exemptions can't outlive their fixtures.
