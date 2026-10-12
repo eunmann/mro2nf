@@ -3,8 +3,10 @@ package shim
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 // errOutsideWork is returned when a strict confinement meets a stage output
@@ -24,8 +26,10 @@ var errLinkHops = errors.New("too many levels of symbolic links")
 // task work dir holds what Nextflow staged there as inputs and what mre wrote.
 // An output leaf, and each symlink it passes through, either stays inside the
 // work dir (the stage's own file, hard-linked into the bundle), reaches a path
-// in it outside the phase dir (a staged input, followed wherever it points), or
-// lands outside the task (a host file the stage was never given).
+// in it outside the phase dir (a staged input, followed wherever it points),
+// lands outside the task inside what a staged input links to (the input's real
+// path, which a stage that resolves its args' paths returns), or lands outside
+// the task elsewhere (a host file the stage was never given).
 //
 // What happens to a host file depends on the target. On an isolated container
 // target (strict) its path cannot be valid downstream and copying it would
@@ -36,6 +40,10 @@ var errLinkHops = errors.New("too many levels of symbolic links")
 type Confinement struct {
 	work, phase []string
 	strict      bool
+	// inputs are the real paths outside the work dir that its links outside
+	// the phase dir resolve to, read the first time a leaf lands outside it.
+	inputs     []string
+	inputsRead bool
 }
 
 // leafKind classifies where a stage output leaf resolves.
@@ -47,6 +55,9 @@ const (
 	leafOwn leafKind = iota
 	// leafStaged reaches a Nextflow-staged input; its tree is copied as is.
 	leafStaged
+	// leafInput lands outside the task work dir, inside what a staged input
+	// links to; its tree is copied as a staged input's is.
+	leafInput
 	// leafOutside lands outside the task work dir; a non-strict confinement
 	// copies its tree byte for byte.
 	leafOutside
@@ -185,9 +196,63 @@ func (c *Confinement) classify(src, p string) (leafKind, error) {
 		return leafOwn, nil
 	}
 
+	inputs, err := c.stagedInputs()
+	if err != nil {
+		return leafOwn, err
+	}
+
+	if withinAny(p, inputs) {
+		return leafInput, nil
+	}
+
 	if c.strict {
 		return leafOwn, fmt.Errorf("%w: %s resolves to %s", errOutsideWork, src, p)
 	}
 
 	return leafOutside, nil
+}
+
+// stagedInputs returns the real paths outside the work dir that the links in
+// it outside the phase dir resolve to: what Nextflow staged, the args'
+// links to it, and nothing the stage wrote. A dangling link stages nothing.
+func (c *Confinement) stagedInputs() ([]string, error) {
+	if c.inputsRead {
+		return c.inputs, nil
+	}
+
+	err := filepath.WalkDir(c.work[0], func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if slices.Contains(c.phase, p) {
+			return filepath.SkipDir
+		}
+
+		if d.Type()&fs.ModeSymlink == 0 {
+			return nil
+		}
+
+		target, err := filepath.EvalSymlinks(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+
+		if err != nil {
+			return fmt.Errorf("resolve %s: %w", p, err)
+		}
+
+		if !withinAny(target, c.work) {
+			c.inputs = append(c.inputs, target)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read staged inputs of %s: %w", c.work[0], err)
+	}
+
+	c.inputsRead = true
+
+	return c.inputs, nil
 }

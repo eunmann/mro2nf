@@ -157,6 +157,7 @@ reporting with a direct probe-file measurement:
 | `multiplier` | `refs / producers` | **per-file transfer multiplier (ideal = 1)** |
 | `staged_bytes` / `stage_staged_bytes` / `stage_staged_bytes_max` | `nxf_stage` in each `.command.run` | bytes of the inputs staged into all tasks / stage tasks / the largest task of each stage process |
 | `uploaded_bytes` / `plumbing_uploaded_bytes` | task work dirs | bytes of the files all tasks / plumbing tasks wrote, every hard link counted |
+| `restaged_bytes` | task work dirs and `nxf_stage` | bytes of the files tasks wrote that are a hard link to, or a byte copy of, a file they staged |
 | `probe_writes` | task work dirs | files that are a copy of the probe file (ideal = `producers`) |
 | `max_argv_bytes` / `max_arg_bytes` | the scale tier's `mre` wrapper | the longest `mre` command line, and its longest argument |
 | `driver_heap_bytes` / `wall_seconds` | the scale tier's GC log and clock | the driver heap after a GC, and the run's wall time |
@@ -188,7 +189,12 @@ checks:
   baseline gate holds each width at its recorded count, and `BENCH_UPDATE=1`
   refuses to record a higher one. Once the group is width-flat the gate fails
   until the marker is dropped, so fixing the issue turns the lane into an
-  ordinary flat-gated one.
+  ordinary flat-gated one. Every group must also write the same
+  `restaged_bytes` per producer at every width (within 5%): a file every fork
+  of a non-split stage reads is referenced where it was staged, not copied
+  into each fork (#498). Per fork such a copy would read flat; per producer,
+  the unit of the data, it grows with the width. A split stage's `args` still
+  carries one copy per fork, which no lane covers yet (#507).
 - **mrp-jobs gate** — every lane's `stage_tasks` must equal `mrp_jobs`: one
   stage task per Martian job, so stage work is neither duplicated nor hidden
   in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make

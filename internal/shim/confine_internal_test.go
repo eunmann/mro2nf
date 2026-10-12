@@ -209,9 +209,10 @@ func TestConfineLocalCopiesOutOfTreeTargets(t *testing.T) {
 
 // TestConfineAdmitsOwnAndStagedFiles checks the paths a stage legitimately
 // outputs stage the same under either mode, hard-linked: its own files and
-// dirs, and a Nextflow-staged input (named directly or through the stage's own
-// symlink, absolute or relative), which is dereferenced to the other task's
-// file it points at. A dangling link in an output dir is still skipped.
+// dirs, and a Nextflow-staged input (named directly, through the stage's own
+// symlink, absolute or relative, or by the real path it resolves to outside
+// the task), which is dereferenced to the other task's file it points at. A
+// dangling link in an output dir is still skipped.
 func TestConfineAdmitsOwnAndStagedFiles(t *testing.T) {
 	e := newConfineEnv(t)
 
@@ -224,6 +225,12 @@ func TestConfineAdmitsOwnAndStagedFiles(t *testing.T) {
 	symlink(t, filepath.Join(ownDir, "dangling"), filepath.Join(e.files, "gone"))
 	symlink(t, filepath.Join(e.files, "abs_fwd"), e.stagedFile)
 	symlink(t, filepath.Join(e.files, "rel_fwd"), filepath.Join("..", "..", "args", "f", "L0000", "real.txt"))
+	symlink(t, filepath.Join(e.files, "real_fwd"), e.upstream)
+
+	upDir, err := filepath.EvalSymlinks(e.stagedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name, value, rel, src string
@@ -234,6 +241,9 @@ func TestConfineAdmitsOwnAndStagedFiles(t *testing.T) {
 		{"absolute link to a staged input", filepath.Join(e.files, "abs_fwd"), "", e.upstream},
 		{"relative link to a staged input", filepath.Join(e.files, "rel_fwd"), "", e.upstream},
 		{"staged input dir", e.stagedDir, "y.txt", filepath.Join(e.stagedDir, "y.txt")},
+		{"real path of a staged input", e.upstream, "", e.upstream},
+		{"link to the real path of a staged input", filepath.Join(e.files, "real_fwd"), "", e.upstream},
+		{"real path in a staged input dir", filepath.Join(upDir, "y.txt"), "", filepath.Join(upDir, "y.txt")},
 	}
 
 	for _, strict := range []bool{true, false} {

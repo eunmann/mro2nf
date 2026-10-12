@@ -479,6 +479,14 @@ Both prefixes resolve identically on read-back. The rules:
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
   This is `shim.MarkFiles`, which uses the type manifest to find exactly which
   leaves are files (recursing into structs, arrays and maps).
+- **Linked bundles** (on write): the args bundle of a non-split stage is read
+  only by its own task, so `mre args -link` (`shim.WriteLinkedBundle`) links
+  each leaf instead of copying it: a leaf of a staged bundle by its ordinal
+  dir, whose origin record comes with it, any other file by itself beside its
+  origin record. A file every fork of a map call reads, such as a broadcast
+  upstream output or entry file, exists once, its producer's, however wide the
+  fork of a non-split stage (#498). A split stage's args travels to its chunks
+  and join, so it still carries its files, one copy per fork (#507).
 - **Origins** (on write): a file is one to `mrp` wherever it is referenced, so a
   bundle copies it once and gives every position that reaches it one marker,
   however many input bundles it arrived through. Its identity is its origin, the
@@ -515,8 +523,10 @@ task (`shim.CopyTree`). For a stage's own outputs the dereference is confined
 (`shim.Confinement`). An output, and every symlink it passes through, is
 classified as the stage's own file inside the task work dir (hard-linked into
 the bundle), a path in the work dir outside the stage's phase dir, i.e. a staged
-input (followed wherever it points, hard-linked), or a host path outside the
-task:
+input (followed wherever it points, hard-linked), a path outside the task
+inside what a staged input links to, i.e. an input's real path, which a stage
+that resolves its args' paths returns (hard-linked, as the input it resolves
+from), or any other host path outside the task:
 
 - Under `--mro2nf_confine true` (`mre run -confine`), such a path cannot be
   valid in an isolated container downstream, and copying it would upload host

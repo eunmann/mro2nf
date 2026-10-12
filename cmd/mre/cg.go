@@ -96,6 +96,7 @@ func runArgs(_ context.Context, argv []string) error {
 	digest := fs.String("digest", "", "the node's spec digest in the run's plan, which it must compile to")
 	out := fs.String("o", "args", "args bundle dir to write")
 	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
+	link := fs.Bool("link", false, "no other task stages the bundle: link its file leaves to the staged files instead of copying them")
 
 	var in, forkRecs repeatedFlag
 
@@ -123,7 +124,7 @@ func runArgs(_ context.Context, argv []string) error {
 		return fmt.Errorf("args: %w", err)
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr, Digest: *digest, EntryFiles: files})
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: *node, In: in, Forks: forks, Manifest: man, Out: *out, Log: os.Stderr, Digest: *digest, EntryFiles: files, Link: *link})
 	if err != nil {
 		return fmt.Errorf("args: %w", err)
 	}
