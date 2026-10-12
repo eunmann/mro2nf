@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/eunmann/mro2nf/test/scale"
+	"github.com/eunmann/mro2nf/test/wide"
 )
 
 // scaleShape is one bench fixture the scale tier runs at a narrow and a wide
@@ -128,6 +129,17 @@ func TestScaleSplit(t *testing.T)       { runScaleShape(t, scaleShapes["split"])
 func TestScaleMapSplit(t *testing.T)    { runScaleShape(t, scaleShapes["mapsplit"]) }
 func TestScaleMapNested(t *testing.T)   { runScaleShape(t, scaleShapes["mapnested"]) }
 func TestScaleMapDisabled(t *testing.T) { runScaleShape(t, scaleShapes["mapdisabled"]) }
+
+// TestScaleWideFanin (#503) runs TestWidePipelineRuns' pipeline plus FANIN,
+// whose 210 inputs pass maxTakes (internal/cgnf/scope.go), so its calls are
+// wired in its caller instead of a workflow of its own. Its 442 extra stage
+// tasks outlast a PR's e2e shard; TestEmitBoundsEveryWorkflow pins the
+// fallback's wiring on every PR.
+func TestScaleWideFanin(t *testing.T) {
+	t.Parallel()
+
+	runWide(t, wide.New(32, 150, 210))
+}
 
 // runScaleShape runs s at its narrow and wide widths, archives the metrics
 // under SCALE_ARTIFACTS, and judges the gates against scaleKnown.

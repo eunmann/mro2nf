@@ -9,34 +9,132 @@ import (
 	"github.com/eunmann/mro2nf/internal/cg"
 )
 
-// gen accumulates main.nf: the module includes, the processes main.nf
-// declares itself, and the workflow body.
-type gen struct {
-	incs, procs, wf strings.Builder
-}
+// wiringWorkflows are the stage module's node wiring sub-workflows, which
+// every workflow of the project includes.
+const wiringWorkflows = "FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; GATHER_SIZED ; COUNTS ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; OR_SKIPPED ; PUBLISHED"
 
-func (g *gen) linef(format string, args ...any) {
-	fmt.Fprintf(&g.wf, "  "+format+"\n", args...)
-}
+// subworkflowDir holds a module per sub-workflow main.nf calls.
+const subworkflowDir = "subworkflows"
 
-// mainNF renders main.nf: PLAN, every node's instances, gates, staged
-// inputs and outputs in dependency order, then OUTS.
-func (p *project) mainNF() (string, error) {
-	g := &gen{}
-
-	g.incs.WriteString("include { shq ; code ; ordered ; resources ; on ; OUTS } from './stage.nf'\n")
-	p.planProcess(g)
-	p.planWiring(g)
+// workflows renders main.nf, which runs PLAN, the root pipeline's calls and
+// OUTS, and a module per sub-workflow below subworkflowDir.
+func (p *project) workflows() (map[string]string, error) {
+	nodes := make([]*wiring, len(p.topo.Nodes))
 
 	for i, n := range p.topo.Nodes {
-		if err := p.node(g, i, n); err != nil {
-			return "", err
+		w, err := p.node(i, n)
+		if err != nil {
+			return nil, err
 		}
+
+		nodes[i] = w
 	}
 
-	p.outs(g)
+	outs := p.outs()
+	plan := p.planWiring(append(slices.Clone(nodes), outs))
 
-	return g.incs.String() + "\n" + g.procs.String() + "workflow {\n" + g.wf.String() + "}\n", nil
+	root, err := p.scopes(nodes, plan, outs)
+	if err != nil {
+		return nil, err
+	}
+
+	files := map[string]string{}
+	addModules(files, root, nodes)
+
+	var b strings.Builder
+
+	b.WriteString("include { shq ; code ; ordered ; on ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; ENTRY_COUNTS ; " + wiringWorkflows + " } from './stage.nf'\n")
+	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
+	b.WriteString("\n")
+	p.planProcess(&b)
+	b.WriteString("workflow {\n")
+	writeLines(&b, plan.lines)
+	writeUnits(&b, root, nodes)
+	writeLines(&b, outs.lines)
+	b.WriteString("}\n")
+
+	files["main.nf"] = b.String()
+
+	return files, nil
+}
+
+// addModules adds to files the module of every sub-workflow below s.
+func addModules(files map[string]string, s *scope, nodes []*wiring) {
+	for _, u := range s.units {
+		if u.sub == nil {
+			continue
+		}
+
+		addModules(files, u.sub, nodes)
+
+		var b strings.Builder
+
+		b.WriteString("include { " + wiringWorkflows + " } from '../stage.nf'\n")
+		writeIncludes(&b, u.sub, nodes, "../stage.nf", "./")
+		fmt.Fprintf(&b, "\n// %s\nworkflow %s {\n", u.sub.label(), u.sub.name)
+
+		if len(u.sub.takes) > 0 {
+			b.WriteString("    take:\n")
+			writeLines(&b, u.sub.takes)
+			b.WriteString("\n")
+		}
+
+		b.WriteString("    main:\n")
+		writeUnits(&b, u.sub, nodes)
+
+		emits := u.sub.emits
+		if len(u.sub.published) > 0 {
+			emits = append(slices.Clone(emits), publishedChannel)
+		}
+
+		if len(emits) > 0 {
+			b.WriteString("\n    emit:\n")
+			writeLines(&b, emits)
+		}
+
+		b.WriteString("}\n")
+
+		files[subworkflowDir+"/"+u.sub.name+".nf"] = b.String()
+	}
+}
+
+// writeIncludes writes the includes of the processes and sub-workflows s's
+// own units call.
+func writeIncludes(b *strings.Builder, s *scope, nodes []*wiring, stage, subs string) {
+	for _, u := range s.units {
+		if u.sub != nil {
+			fmt.Fprintf(b, "include { %s } from '%s%s.nf'\n", u.sub.name, subs, u.sub.name)
+
+			continue
+		}
+
+		for _, inc := range nodes[u.node].incs {
+			fmt.Fprintf(b, "include { %s } from '%s'\n", inc, stage)
+		}
+	}
+}
+
+// writeUnits writes the statements of s's units, a node's wiring or a
+// sub-workflow's call and the channels it emits, and s's published
+// statement.
+func writeUnits(b *strings.Builder, s *scope, nodes []*wiring) {
+	for _, u := range s.units {
+		if u.sub == nil {
+			writeLines(b, nodes[u.node].lines)
+
+			continue
+		}
+
+		writeLines(b, u.sub.call())
+	}
+
+	writeLines(b, s.published)
+}
+
+func writeLines(b *strings.Builder, lines []string) {
+	for _, l := range lines {
+		b.WriteString("    " + l + "\n")
+	}
 }
 
 // alias is node i's process alias.
@@ -58,51 +156,59 @@ func glist(ss []string) string {
 	return "[" + strings.Join(q, ", ") + "]"
 }
 
-// param names a closure parameter, underscored when unused so the closure
-// lints clean.
-func param(name string, used bool) string {
-	if used {
-		return name
+func ilist(xs []int) string {
+	q := make([]string, len(xs))
+	for i, x := range xs {
+		q[i] = strconv.Itoa(x)
 	}
 
-	return "_" + name
+	return "[" + strings.Join(q, ", ") + "]"
 }
 
-// pick lists v[i] for each i.
-func pick(v string, idx []int) string {
-	parts := make([]string, len(idx))
-	for j, i := range idx {
-		parts[j] = v + "[" + strconv.Itoa(i) + "]"
-	}
-
-	return "[" + strings.Join(parts, ", ") + "]"
-}
-
-// planWiring parses PLAN's records: nodes maps each witness node to its
-// digest, its off flag, its statically disabled fork keys, the cpus and
-// memory its first task is scheduled with and its own overrides; entry maps
-// each node and fork of its entry-fed roots to the entry files staged
+// planWiring parses PLAN's records the wirings read: shared is the meta
+// every task shares, with the run's call; nodes maps each witness node to
+// its digest, its off flag, its statically disabled fork keys, the cpus and
+// memory its first task is scheduled with and its own overrides; entry
+// maps each node and fork of its entry-fed roots to the entry files staged
 // there, and each of those to its file(), which globs no name; f<j> are the
-// forks of entry-fed root j, each [outer key, own ordinal, record, index
-// token].
-func (p *project) planWiring(g *gen) {
-	g.linef("if (on(params.mro2nf_require_image) && !params.mro2nf_image) {")
-	g.linef("  error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
-	g.linef("}")
-	g.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(), mroAssets)
-	g.linef("call = PLAN.out.call")
+// forks of entry-fed root j and n<j> their counts under each fork of its
+// outer roots.
+func (p *project) planWiring(ws []*wiring) *wiring {
+	used := map[string]bool{}
 
-	if len(p.topo.Nodes) > 0 {
-		g.linef("nodes = PLAN.out.nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }")
+	for _, w := range ws {
+		for _, u := range w.uses {
+			used[u] = true
+		}
 	}
 
-	if len(p.readers) > 0 {
-		g.linef("entry = PLAN.out.files.combine(PLAN.out.leaves).map { fl, ll -> [files: fl.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0] + ' ' + f[1]): f[2].tokenize(',')] }, leaves: ll.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)] }] }")
+	w := &wiring{}
+	w.linef("if (on(params.mro2nf_require_image) && !params.mro2nf_image) {")
+	w.linef("    error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
+	w.linef("}")
+	w.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(), mroAssets)
+	w.linef("%s = PLAN.out.call.map { c -> %s }", w.def("shared"), p.graphMeta("call: c"))
+
+	for _, d := range []struct{ name, expr string }{
+		{"nodes", "NODES(PLAN.out.nodes)"},
+		{"entry", "ENTRY(PLAN.out.files, PLAN.out.leaves)"},
+	} {
+		if used[d.name] {
+			w.linef("%s = %s", w.def(d.name), d.expr)
+		}
 	}
 
 	for j := range p.entry {
-		g.linef("f%d = PLAN.out.r%d.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); def k = f[0].tokenize('.').collect { t -> t as int }; [k.take(k.size() - 1), k[-1], f[1], f[2]] } }", j, j)
+		if f := entryForksOf(j); used[f] {
+			w.linef("%s = ENTRY_FORKS(PLAN.out.r%d)", w.def(f), j)
+		}
+
+		if n := entryCountsOf(j); used[n] {
+			w.linef("%s = ENTRY_COUNTS(PLAN.out.n%d)", w.def(n), j)
+		}
 	}
+
+	return w
 }
 
 // graphMeta is the meta map naming the entry .mro and the include path the
@@ -117,10 +223,9 @@ func (p *project) graphMeta(extra ...string) string {
 	return "[" + strings.Join(entries, ", ") + "]"
 }
 
-// nodeMeta is node n's meta: its identity, its PLAN record d, and the
-// resources it is scheduled with, which PLAN resolved under the run's
-// overrides, and the overrides file of its own that its jobs resolve
-// theirs under, empty when none applies.
+// nodeMeta is node n's own meta: its identity and the special resource
+// it is scheduled with; PLAN's record of the node gives its cpus, memory
+// and overrides (planned).
 func (p *project) nodeMeta(n cg.TopoNode) (string, error) {
 	s, err := p.stage(n.Fqid)
 	if err != nil {
@@ -132,20 +237,11 @@ func (p *project) nodeMeta(n cg.TopoNode) (string, error) {
 		special = r.Special
 	}
 
-	return p.graphMeta(
-		"call: c",
-		"node: "+gstr(n.Fqid),
-		"cpus: d[3] as int",
-		"mem_gb: d[4] as double",
-		"overrides: (d[5] == '-' ? '' : d[5])",
-		"special: "+gstr(special),
-		"digest: d[0]",
-	), nil
+	return "[node: " + gstr(n.Fqid) + ", special: " + gstr(special) + "]", nil
 }
 
 // awaited reports whether a node waits for preflight fqid, which then
-// signals, as d<i>, once every instance of it is done: its tasks have all
-// completed, and a disabled instance runs none.
+// signals, as d<i>, once every instance of it is done.
 func (p *project) awaited(fqid string) bool {
 	return slices.ContainsFunc(p.topo.Nodes, func(n cg.TopoNode) bool { return slices.Contains(n.Preflights, fqid) })
 }

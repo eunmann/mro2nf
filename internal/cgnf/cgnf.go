@@ -85,17 +85,16 @@ func Emit(entry string, opts Options) error {
 		return fmt.Errorf("emit types: %w", err)
 	}
 
-	main, err := p.mainNF()
+	files, err := p.workflows()
 	if err != nil {
 		return err
 	}
 
-	files := map[string]string{
-		"main.nf":            main,
+	maps.Copy(files, map[string]string{
 		"stage.nf":           stageModule,
 		"nextflow.config":    p.config(),
 		"_assets/types.json": types.Subset(slices.Sorted(maps.Keys(man.Callables))...),
-	}
+	})
 
 	if err := addMroFiles(files, src.Files); err != nil {
 		return err
@@ -105,8 +104,10 @@ func Emit(entry string, opts Options) error {
 		return err
 	}
 
-	if err := os.RemoveAll(filepath.Join(opts.OutDir, mroAssets)); err != nil {
-		return fmt.Errorf("emit: %w", err)
+	for _, dir := range []string{mroAssets, subworkflowDir} {
+		if err := os.RemoveAll(filepath.Join(opts.OutDir, dir)); err != nil {
+			return fmt.Errorf("emit: %w", err)
+		}
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(files)) {

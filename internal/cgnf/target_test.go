@@ -94,6 +94,7 @@ func TestEmitHealthOmicsTemplate(t *testing.T) {
 		"includeConfig 'conf/healthomics.config'",
 		"@sha256:[0-9a-f]{64}$",
 		"cp -R main.nf stage.nf nextflow.config conf _assets parameter-template.json",
+		"if [ -d subworkflows ]; then\n    cp -R subworkflows",
 	} {
 		if !strings.Contains(tree["package.sh"], want) {
 			t.Errorf("package.sh lacks %q:\n%s", want, tree["package.sh"])

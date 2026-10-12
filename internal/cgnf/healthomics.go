@@ -68,6 +68,9 @@ fi
 pkg=$(mktemp -d)
 trap 'rm -rf "$pkg"' EXIT
 cp -R main.nf stage.nf nextflow.config conf _assets parameter-template.json "$pkg"/
+if [ -d subworkflows ]; then
+    cp -R subworkflows "$pkg"/
+fi
 cat >> "$pkg/nextflow.config" <<EOF
 
 // package.sh: the image the workflow pins, and its healthomics profile,

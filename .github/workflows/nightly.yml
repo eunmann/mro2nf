@@ -206,7 +206,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shape: [Forks, Split, MapSplit, MapNested, MapDisabled]
+        shape: [Forks, Split, MapSplit, MapNested, MapDisabled, WideFanin]
     env:
       E2E_REQUIRE: "1"
     steps:
