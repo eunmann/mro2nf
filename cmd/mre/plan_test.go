@@ -79,6 +79,51 @@ func readText(t *testing.T, path string) string {
 	return string(raw)
 }
 
+// rootLines are root's lines of the plan's record of every entry-fed root
+// at path, less the root each leads with.
+func rootLines(t *testing.T, path, root string) []string {
+	t.Helper()
+
+	var out []string
+
+	for line := range strings.SplitSeq(readText(t, path), "\n") {
+		if rest, ok := strings.CutPrefix(line, root+" "); ok {
+			out = append(out, rest)
+		}
+	}
+
+	return out
+}
+
+// TestPlanWritesEveryRootInOneRecord (#509): the forks of every entry-fed
+// root are one record, and so are their counts, each line led by its root,
+// the roots in order, so PLAN's outputs are the same few however many
+// roots a pipeline has (map_nested_gather: BY_STAGE and BY_ENTRY over the
+// entry, BY_ENTRY.SQ within each BY_ENTRY fork; BY_STAGE.SQ is stage-fed).
+func TestPlanWritesEveryRootInOneRecord(t *testing.T) {
+	work, err := plan(t, "map_nested_gather", `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var roots []string
+
+	for line := range strings.SplitSeq(strings.TrimSuffix(readText(t, filepath.Join(work, "roots")), "\n"), "\n") {
+		if root := strings.Fields(line)[0]; !slices.Contains(roots, root) {
+			roots = append(roots, root)
+		}
+	}
+
+	if d := cmp.Diff([]string{"MNG.BY_ENTRY", "MNG.BY_ENTRY.SQ", "MNG.BY_STAGE"}, roots); d != "" {
+		t.Errorf("roots of the forks record, in order (-want +plan):\n%s", d)
+	}
+
+	want := "MNG.BY_ENTRY 3 \nMNG.BY_ENTRY.SQ 2 0\nMNG.BY_ENTRY.SQ 0 1\nMNG.BY_ENTRY.SQ 3 2\nMNG.BY_STAGE 3 \n"
+	if d := cmp.Diff(want, readText(t, filepath.Join(work, "counts"))); d != "" {
+		t.Errorf("counts record (-want +plan):\n%s", d)
+	}
+}
+
 // TestPlanNestedEntryForks: a run of map_pipe_nested with its sets widened
 // at launch, which the witness transpile does not fix, keys the inner map
 // call's forks by the outer fork and its own, as mrp forks OUTER/INNER/DBL:
@@ -91,10 +136,10 @@ func TestPlanNestedEntryForks(t *testing.T) {
 	cases := []struct {
 		sets   string
 		want   []string
-		counts string
+		counts []string
 	}{
-		{`[[1,2,3],[4]]`, []string{"0.0", "0.1", "0.2", "1.0"}, "3 0\n1 1\n"},
-		{`[[1,2],[3,4]]`, []string{"0.0", "0.1", "1.0", "1.1"}, "2 0\n2 1\n"},
+		{`[[1,2,3],[4]]`, []string{"0.0", "0.1", "0.2", "1.0"}, []string{"3 0", "1 1"}},
+		{`[[1,2],[3,4]]`, []string{"0.0", "0.1", "1.0", "1.1"}, []string{"2 0", "2 1"}},
 	}
 
 	wantArgs := []string{`{"x":1}`, `{"x":2}`, `{"x":3}`, `{"x":4}`}
@@ -107,7 +152,7 @@ func TestPlanNestedEntryForks(t *testing.T) {
 			continue
 		}
 
-		lines := strings.Split(strings.TrimSpace(readText(t, filepath.Join(work, "roots", "OUTER.INNER.DBL"))), "\n")
+		lines := rootLines(t, filepath.Join(work, "roots"), "OUTER.INNER.DBL")
 		keys := make([]string, len(lines))
 
 		for i, line := range lines {
@@ -118,7 +163,7 @@ func TestPlanNestedEntryForks(t *testing.T) {
 			t.Errorf("sets %s: DBL's fork keys (-mrp +plan):\n%s", tc.sets, d)
 		}
 
-		if d := cmp.Diff(tc.counts, readText(t, filepath.Join(work, "counts", "OUTER.INNER.DBL"))); d != "" {
+		if d := cmp.Diff(tc.counts, rootLines(t, filepath.Join(work, "counts"), "OUTER.INNER.DBL")); d != "" {
 			t.Errorf("sets %s: DBL's fork counts (-want +plan):\n%s", tc.sets, d)
 		}
 
@@ -144,7 +189,7 @@ func nestedArgs(t *testing.T, work string, lines []string) []string {
 
 	inner := map[string]string{}
 
-	for line := range strings.SplitSeq(strings.TrimSpace(readText(t, filepath.Join(work, "roots", "OUTER.INNER"))), "\n") {
+	for _, line := range rootLines(t, filepath.Join(work, "roots"), "OUTER.INNER") {
 		f := strings.Fields(line)
 		inner[f[0]] = f[1]
 	}
@@ -270,7 +315,7 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 		gate := cg.Gate{Node: src, Roots: []string{root}}
 		got := map[string]bool{}
 
-		for line := range strings.SplitSeq(strings.TrimSpace(readText(t, filepath.Join(work, "roots", root))), "\n") {
+		for _, line := range rootLines(t, filepath.Join(work, "roots"), root) {
 			f := strings.Fields(line)
 
 			el, err := g.DecodeElement(f[1])

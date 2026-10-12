@@ -165,8 +165,8 @@ The workflow that wires a node includes them once for it under its own alias
 and `_JN`), so a `withName:` selector names the node. Every stage task runs
 `mre args`, then its job through `mre run`, then `mre post`. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
-`ENTRY_FORKS`, `ENTRY_COUNTS`) and that take a node's instances through each
-step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
+`ENTRY_FORKS`, `ENTRY_COUNTS`, `ENTRY_ROOT`) and that take a node's
+instances through each step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
 `INPUT`, `CHUNKS`, `JOIN`, …), each given the node's static data, so a
 node's wiring is a few lines and one per root, read, gate or preflight of
 it. The driver runs only those and a few Groovy helpers (`ordered`,
@@ -188,8 +188,12 @@ calls of one pipeline depend on each other acyclically. A pipeline whose calls
 weigh more than one workflow holds (`maxWeight`), such as one of hundreds of
 stage calls, is wired in runs of them, each a workflow of its own; a
 sub-pipeline whose call would take more than `maxTakes` channels is wired in
-its caller's workflow. So no workflow grows with the pipeline
-(`TestEmitBoundsEveryWorkflow`, `TestWidePipelineRuns`). A process's trace
+its caller's workflow. PLAN declares the same outputs, and the entry workflow
+the same few statements of them, however many entry-fed roots a pipeline
+has, as PLAN writes all their forks as one record and all their counts as
+another (§5). So no workflow grows with the pipeline
+(`TestEmitBoundsEveryWorkflow`, `TestEmitBoundsPlan`, `TestWidePipelineRuns`,
+`TestEntryRootsMatchMrp`). A process's trace
 name carries its workflow path (`W1_SC_MULTI_CORE:N5_X`); a `withName:`
 selector of its alias alone still names it.
 
@@ -253,9 +257,11 @@ readers (the splits of the roots it feeds and the outputs their fork elements
 zip, its partners' splits, and the disable bindings whose value it posts with
 their roots), whether the invocation disables it, the
 fork keys a static per-fork binding disables, and its resources under the
-run's overrides file (§9); per entry-fed root its forks,
-keyed by the witness's outer roots, each with its fork record and its index
-token.
+run's overrides file (§9); and in one record the forks of every entry-fed
+root, keyed by the witness's outer roots, each with its fork record and its
+index token, and in another their counts under each fork of those outer
+roots. Each line of the two leads with its root, and a node's wiring takes
+its root's own lines from them (`ENTRY_ROOT`, a lookup by root).
 
 **Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
 copy, the overrides file and its meta. A task's `-resume` key holds its own
@@ -350,9 +356,10 @@ type manifest from the invocation's own declarations.
   transpiled entry and the run's entry values, compiles it, checks it against
   the witness, vets the entry file values a task stages (§8), and writes the
   call every task compiles, one record per witness node, the entry files of
-  each node's instances and of the pipeline outs, and the forks of each
-  entry-fed fork root. With `-overrides`, it reads the run's `mrp
-  --overrides` file with Martian's `ReadOverrides`, which fails on a key it
+  each node's instances and of the pipeline outs, and the forks of every
+  entry-fed fork root and their counts, a record each. With `-overrides`, it
+  reads the run's `mrp --overrides` file with Martian's `ReadOverrides`,
+  which fails on a key it
   does not know, and each node's record carries the cpus and memory of its
   first job (its split, or its one main) and an overrides file of the node's
   own, `{"<fqid>": {...}}`: of each phase the node runs, each resource

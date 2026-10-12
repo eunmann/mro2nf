@@ -16,10 +16,12 @@ import (
 )
 
 // Pipeline is a synthetic pipeline: its .mro and stage code by path, its
-// stage calls, and the values of its outputs, all and, with a FANIN, rs.
+// stage calls, its entry-fed fork roots, and WIDE's values of its outputs,
+// all and, with a FANIN, rs.
 type Pipeline struct {
 	Files  map[string]string
 	Stages int
+	Roots  int
 	All    int
 	Rs     []int
 }
@@ -77,7 +79,7 @@ func New(blocks, tree, fanin int) Pipeline {
 		all += blockTotal(i)
 	}
 
-	p := Pipeline{Stages: 2 + tree + blocks*blockStages}
+	p := Pipeline{Stages: 2 + tree + blocks*blockStages, Roots: blocks}
 	outs := "        all = ALL.y,\n"
 
 	if fanin > 0 {

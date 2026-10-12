@@ -59,7 +59,6 @@ type project struct {
 	topo    cg.Topology
 	index   map[string]int
 	roots   map[string]cg.TopoRoot
-	entry   []string
 	readers map[string]bool
 }
 
@@ -198,9 +197,6 @@ func newProject(src cg.Source, opts Options) (*project, error) {
 
 	for _, r := range topo.Roots {
 		p.roots[r.Fqid] = r
-		if r.Producer == "" {
-			p.entry = append(p.entry, r.Fqid)
-		}
 	}
 
 	return p, nil

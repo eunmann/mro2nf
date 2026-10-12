@@ -264,17 +264,18 @@ workflow ENTRY {
     out
 }
 
-// ENTRY_FORKS is the forks of an entry-fed root, as FORK takes them.
+// ENTRY_FORKS maps each entry-fed root to its forks, as FORK takes them.
 workflow ENTRY_FORKS {
     take:
     roots
 
     main:
-    out = roots.flatMap { s ->
-        s.readLines().collect { l ->
-            def f = l.tokenize(' ')
-            def k = f[0].tokenize('.').collect { t -> t as int }
-            [k.take(k.size() - 1), k[-1], f[1], f[2]]
+    out = roots.map { s ->
+        s.readLines().collect { l -> l.tokenize(' ') }.groupBy { f -> f[0] }.collectEntries { r, fs ->
+            [(r): fs.collect { f ->
+                def k = f[1].tokenize('.').collect { t -> t as int }
+                [k.take(k.size() - 1), k[-1], f[2], f[3]]
+            }]
         }
     }
 
@@ -282,14 +283,32 @@ workflow ENTRY_FORKS {
     out
 }
 
-// ENTRY_COUNTS is the fork count of an entry-fed root under each fork of
-// its outer roots, [outer key, count].
+// ENTRY_COUNTS maps each entry-fed root to its fork count under each fork
+// of its outer roots, [outer key, count].
 workflow ENTRY_COUNTS {
     take:
     counts
 
     main:
-    out = counts.flatMap { s -> s.readLines().collect { l -> def f = l.tokenize(' '); [f.size() > 1 ? f[1].tokenize('.').collect { t -> t as int } : [], f[0] as int] } }
+    out = counts.map { s ->
+        s.readLines().collect { l -> l.tokenize(' ') }.groupBy { f -> f[0] }.collectEntries { r, fs ->
+            [(r): fs.collect { f -> [f.size() > 2 ? f[2].tokenize('.').collect { t -> t as int } : [], f[1] as int] }]
+        }
+    }
+
+    emit:
+    out
+}
+
+// ENTRY_ROOT is one entry-fed root's items of ENTRY_FORKS or ENTRY_COUNTS,
+// a lookup, so splitting the one record among the roots is linear in it.
+workflow ENTRY_ROOT {
+    take:
+    records
+    root
+
+    main:
+    out = records.flatMap { m -> m[root] ?: [] }
 
     emit:
     out
