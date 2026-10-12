@@ -39,7 +39,8 @@ func driftedFiles(vendorDir, moduleDir string, sources map[string]string) ([]str
 			return filepath.SkipDir
 		}
 
-		if d.IsDir() {
+		// The Go package that embeds the copies is mro2nf's own.
+		if d.IsDir() || filepath.Ext(d.Name()) == ".go" {
 			return nil
 		}
 
@@ -139,6 +140,7 @@ func TestDriftedFiles(t *testing.T) {
 
 	for path, content := range map[string]string{
 		filepath.Join(vendor, "LICENSE"):                          "license",
+		filepath.Join(vendor, "adapters.go"):                      "package vendormartian",
 		filepath.Join(vendor, "python", "same.py"):                "same",
 		filepath.Join(vendor, "python", "changed.py"):             "vendored",
 		filepath.Join(vendor, "python", "gone.py"):                "gone",

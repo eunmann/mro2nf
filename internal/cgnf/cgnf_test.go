@@ -18,7 +18,7 @@ func emitFixture(t *testing.T, name string) string {
 
 	dir := fixturePath(t, name)
 	out := t.TempDir()
-	opts := Options{OutDir: out, Mre: "/opt/mre", Mrjob: "/opt/mrjob", Adapters: "/opt/adapters", MroPaths: []string{dir}, Version: "v1.2.3"}
+	opts := Options{OutDir: out, MroPaths: []string{dir}, Version: "v1.2.3"}
 
 	if err := Emit(filepath.Join(dir, "pipeline.mro"), opts); err != nil {
 		t.Fatal(err)
@@ -144,6 +144,28 @@ func fixturePath(t *testing.T, name string) string {
 	}
 
 	return dir
+}
+
+// TestEmitNamesNoHostTools: every task runs the mre on PATH, and mre the
+// mrjob beside it and the adapters it embeds, unless the run names its own,
+// so a project names no tool path of the host that emitted it.
+func TestEmitNamesNoHostTools(t *testing.T) {
+	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
+
+	for _, want := range []string{"params.mro2nf_mre = 'mre'\n", "params.mro2nf_mrjob = null\n", "params.mro2nf_adapters = null\n"} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+		}
+	}
+
+	for _, want := range []string{
+		"if (params.mro2nf_adapters) {\n        cmd += \" -adapters ${shq(params.mro2nf_adapters)}\"",
+		"if (params.mro2nf_mrjob) {\n        cmd += \" -mrjob ${shq(params.mro2nf_mrjob)}\"",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
 }
 
 // TestEmitAliases: every stage node of the witness's call graph is one

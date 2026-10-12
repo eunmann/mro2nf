@@ -24,26 +24,14 @@ func write(t *testing.T, body string) string {
 func TestLoad(t *testing.T) {
 	cfg, err := config.Load(write(t, `
 # a project's transpiler defaults
-shell: "/opt/martian/adapters/python/martian_shell.py"   # inline comment kept out of the value
-mrjob: '/opt/martian/bin/mrjob'
-monitor: false
+monitor: "false"   # inline comment kept out of the value
 `))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.Shell == nil || *cfg.Shell != "/opt/martian/adapters/python/martian_shell.py" {
-		t.Errorf("Shell = %v, want the path (quotes + inline comment stripped)", cfg.Shell)
-	}
-	if cfg.Mrjob == nil || *cfg.Mrjob != "/opt/martian/bin/mrjob" {
-		t.Errorf("Mrjob = %v, want the path (single quotes stripped)", cfg.Mrjob)
-	}
 	if cfg.Monitor == nil || *cfg.Monitor {
-		t.Errorf("Monitor = %v, want false", cfg.Monitor)
-	}
-	// An unset key stays nil so the CLI keeps the flag default.
-	if cfg.Mre != nil {
-		t.Errorf("Mre = %v, want nil (unset)", cfg.Mre)
+		t.Errorf("Monitor = %v, want false (quotes + inline comment stripped)", cfg.Monitor)
 	}
 }
 
@@ -75,6 +63,9 @@ func TestLoadRejectsBadInput(t *testing.T) {
 		"deleted target key":    "target: awsbatch\n",
 		"deleted container key": "container: img\n",
 		"deleted fold key":      "fold-disables: true\n",
+		"deleted mre key":       "mre: /opt/mre\n",
+		"deleted shell key":     "shell: martian_shell.py\n",
+		"deleted mrjob key":     "mrjob: /opt/mrjob\n",
 	}
 
 	for name, body := range cases {

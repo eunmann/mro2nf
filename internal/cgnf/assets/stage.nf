@@ -64,7 +64,13 @@ def args(Map meta, List forks, List leaves) {
 
 // rest may be a GString, which Nextflow 24.04 does not pass for a String.
 def job(Map meta, phase, rest) {
-    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -adapters ${shq(params.mro2nf_adapters)} -mrjob ${shq(params.mro2nf_mrjob)} -psid ${shq(params.mro2nf_psid)} -work ."
+    def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -psid ${shq(params.mro2nf_psid)} -work ."
+    if (params.mro2nf_adapters) {
+        cmd += " -adapters ${shq(params.mro2nf_adapters)}"
+    }
+    if (params.mro2nf_mrjob) {
+        cmd += " -mrjob ${shq(params.mro2nf_mrjob)}"
+    }
     if (params.mro2nf_monitor) {
         cmd += ' -monitor'
     }

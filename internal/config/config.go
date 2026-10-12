@@ -29,9 +29,6 @@ var (
 // `-monitor=false` (Go's flag package reads a space-separated `-monitor false`
 // as bare -monitor plus a positional arg).
 type Config struct {
-	Mre     *string
-	Shell   *string
-	Mrjob   *string
 	Monitor *bool
 }
 
@@ -94,20 +91,11 @@ func parseLine(cfg *Config, raw string) error {
 
 // assign sets the field for key, parsing bools where the flag is a bool.
 func assign(cfg *Config, key, val string) error {
-	switch key {
-	case "mre":
-		cfg.Mre = &val
-	case "shell":
-		cfg.Shell = &val
-	case "mrjob":
-		cfg.Mrjob = &val
-	case "monitor":
-		return assignBool(&cfg.Monitor, key, val)
-	default:
+	if key != "monitor" {
 		return fmt.Errorf("%w %q", errUnknownKey, key)
 	}
 
-	return nil
+	return assignBool(&cfg.Monitor, key, val)
 }
 
 func assignBool(dst **bool, key, val string) error {

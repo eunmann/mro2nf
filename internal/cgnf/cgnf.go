@@ -44,9 +44,6 @@ func reserved(param string) bool {
 type Options struct {
 	// OutDir receives the project.
 	OutDir string
-	// Mre, Mrjob and Adapters are the absolute paths of the mre binary, the
-	// mrjob py and comp stages run under, and Martian's adapters dir.
-	Mre, Mrjob, Adapters string
 	// MroPaths are the absolute include paths the invocation compiles with.
 	MroPaths []string
 	// Monitor is mrp's --monitor.
@@ -136,7 +133,7 @@ func (p *project) addTargetFiles(files map[string]string) error {
 	}
 
 	maps.Copy(files, map[string]string{
-		"conf/container.config":   containerConfig(),
+		"conf/container.config":   containerConfig,
 		"conf/healthomics.config": healthomicsConfig,
 		"package.sh":              packageScript,
 		"parameter-template.json": tmpl,

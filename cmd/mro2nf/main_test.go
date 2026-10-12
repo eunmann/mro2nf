@@ -14,8 +14,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-const testShell = "/opt/adapters/python/martian_shell.py"
-
 // runFixture runs mro2nf on a testdata fixture into a fresh dir and returns
 // the project dir and the error.
 func runFixture(t *testing.T, fixture string, flags ...string) (string, error) {
@@ -23,7 +21,7 @@ func runFixture(t *testing.T, fixture string, flags ...string) (string, error) {
 
 	out := filepath.Join(t.TempDir(), "proj")
 	dir := filepath.Join("..", "..", "testdata", fixture)
-	args := append([]string{"-o", out, "-mre", "/opt/bin/mre", "-shell", testShell, "-mropath", dir}, flags...)
+	args := append([]string{"-o", out, "-mropath", dir}, flags...)
 
 	return out, run(append(args, filepath.Join(dir, "pipeline.mro")))
 }
@@ -39,9 +37,9 @@ func readConfig(t *testing.T, proj string) string {
 	return string(cfg)
 }
 
-// TestRunEmitsCallGraphProject checks a transpile emits the call-graph
-// project, its mrjob the one built beside mre and its adapters the shell's,
-// confined under -confine-outputs.
+// TestRunEmitsCallGraphProject checks a transpile of a py pipeline that
+// names no tools emits the call-graph project, whose tasks run the mre on
+// PATH with its own mrjob and adapters, confined under -confine-outputs.
 func TestRunEmitsCallGraphProject(t *testing.T) {
 	out, err := runFixture(t, "file_min")
 	if err != nil {
@@ -49,7 +47,7 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 	}
 
 	cfg := readConfig(t, out)
-	for _, want := range []string{"params.mro2nf_mrjob = '/opt/bin/mrjob'", "params.mro2nf_adapters = '/opt/adapters'", "params.mro2nf_confine = false", "params.x = null"} {
+	for _, want := range []string{"params.mro2nf_mre = 'mre'", "params.mro2nf_mrjob = null", "params.mro2nf_adapters = null", "params.mro2nf_confine = false", "params.x = null"} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
 		}
@@ -80,7 +78,7 @@ func TestUsageShowsDefaults(t *testing.T) {
 	defineTranspileFlags(fs)
 	fs.PrintDefaults()
 
-	for _, want := range []string{"-mropath", "-confine-outputs", `(default "mre")`, `(default "out")`} {
+	for _, want := range []string{"-mropath", "-confine-outputs", `(default "out")`} {
 		if !strings.Contains(usage.String(), want) {
 			t.Errorf("usage lacks %s:\n%s", want, usage.String())
 		}
@@ -99,8 +97,8 @@ func TestRunRefusesBadInvocations(t *testing.T) {
 		"flag":    {"-bogus", mro},
 		"no mro":  {"-o", out},
 		"two mro": {"-o", out, mro, mro},
-		"config":  {"-o", out, "-shell", testShell, "-config", filepath.Join(t.TempDir(), "absent.yml"), mro},
-		"mro":     {"-o", out, "-shell", testShell, filepath.Join(t.TempDir(), "absent.mro")},
+		"config":  {"-o", out, "-config", filepath.Join(t.TempDir(), "absent.yml"), mro},
+		"mro":     {"-o", out, filepath.Join(t.TempDir(), "absent.mro")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := run(args); err == nil {
@@ -118,74 +116,21 @@ func TestRunRefusesBadInvocations(t *testing.T) {
 	}
 }
 
-// TestRunRequiresShell checks a transpile without -shell, which names
-// Martian's adapters dir, fails and emits no project.
-func TestRunRequiresShell(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "proj")
-	mro := filepath.Join("..", "..", "testdata", "file_min", "pipeline.mro")
-
-	if err := run([]string{"-o", out, mro}); !errors.Is(err, errNoShell) {
-		t.Errorf("no -shell: %v, want errNoShell", err)
-	}
-
-	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a refused transpile left %s (stat: %v)", out, err)
-	}
-}
-
-// TestRunResolvesAdapters checks the adapters dir comes from -shell made
-// absolute against the cwd, and from a .mro2nf.yml shell against the config
-// file's dir (#266).
-func TestRunResolvesAdapters(t *testing.T) {
-	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", "file_min"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cwd, cfgDir := t.TempDir(), t.TempDir()
-	cfg := filepath.Join(cfgDir, config.FileName)
-	writeTestFile(t, cfg, "shell: tools/adapters/python/martian_shell.py\n")
-
-	t.Chdir(cwd)
-
-	for name, tc := range map[string]struct {
-		flags []string
-		want  string
-	}{
-		"flag":   {[]string{"-shell", "adapters/python/martian_shell.py"}, filepath.Join(cwd, "adapters")},
-		"config": {[]string{"-config", cfg}, filepath.Join(cfgDir, "tools", "adapters")},
-	} {
-		t.Run(name, func(t *testing.T) {
-			out := filepath.Join(t.TempDir(), "proj")
-			args := append([]string{"-o", out, "-mre", "/opt/bin/mre", "-mropath", dir}, tc.flags...)
-
-			if err := run(append(args, filepath.Join(dir, "pipeline.mro"))); err != nil {
-				t.Fatal(err)
-			}
-
-			if want := "params.mro2nf_adapters = '" + tc.want + "'"; !strings.Contains(readConfig(t, out), want) {
-				t.Errorf("nextflow.config lacks %q:\n%s", want, readConfig(t, out))
-			}
-		})
-	}
-}
-
 // TestApplyConfigPrecedence checks the .mro2nf.yml precedence: a config key sets
 // a flag the user did not pass, but an explicit flag always wins.
 func TestApplyConfigPrecedence(t *testing.T) {
 	dir := t.TempDir()
 	mro := filepath.Join(dir, "pipeline.mro")
-	writeTestFile(t, filepath.Join(dir, config.FileName), "mre: /cfg/mre\nmonitor: true\n")
+	writeTestFile(t, filepath.Join(dir, config.FileName), "monitor: true\n")
 
 	for _, tc := range []struct {
 		name        string
 		args        []string
-		wantMre     string
 		wantMonitor bool
 	}{
-		{"unset_flags_take_config", []string{mro}, "/cfg/mre", true},
+		{"unset_flags_take_config", []string{mro}, true},
 		// -monitor=false must beat the config's monitor: true.
-		{"explicit_flags_win", []string{"-mre", "/flag/mre", "-monitor=false", mro}, "/flag/mre", false},
+		{"explicit_flags_win", []string{"-monitor=false", mro}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := flag.NewFlagSet("t", flag.ContinueOnError)
@@ -199,8 +144,8 @@ func TestApplyConfigPrecedence(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if *f.mre != tc.wantMre || *f.monitor != tc.wantMonitor {
-				t.Errorf("mre=%q monitor=%v, want mre=%q monitor=%v", *f.mre, *f.monitor, tc.wantMre, tc.wantMonitor)
+			if *f.monitor != tc.wantMonitor {
+				t.Errorf("monitor=%v, want %v", *f.monitor, tc.wantMonitor)
 			}
 		})
 	}
@@ -211,7 +156,7 @@ func TestApplyConfigPrecedence(t *testing.T) {
 func TestApplyConfigMonitorReachesOptions(t *testing.T) {
 	dir := t.TempDir()
 	mro := filepath.Join(dir, "pipeline.mro")
-	writeTestFile(t, filepath.Join(dir, config.FileName), "monitor: true\nshell: "+testShell+"\n")
+	writeTestFile(t, filepath.Join(dir, config.FileName), "monitor: true\n")
 
 	fs := flag.NewFlagSet("t", flag.ContinueOnError)
 	f := defineTranspileFlags(fs)
@@ -228,134 +173,6 @@ func TestApplyConfigMonitorReachesOptions(t *testing.T) {
 
 	if !opts.Monitor {
 		t.Errorf("config-sourced monitor must reach options(): Monitor=%v", opts.Monitor)
-	}
-}
-
-// TestToolPaths pins the tool-path rules: an exec'd tool's bare name (any
-// name, not just "mre") stays a PATH command, while every other tool path —
-// and a file argument even when bare — is made absolute, relative to base.
-func TestToolPaths(t *testing.T) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	cases := []struct {
-		name     string
-		resolve  func(p, base string) (string, error)
-		in, base string
-		want     string
-	}{
-		{"command/empty", commandPath, "", "", ""},
-		{"command/bare_mre", commandPath, "mre", "", "mre"},
-		{"command/any_bare_name", commandPath, "mrjob", "/cfg", "mrjob"},
-		{"command/relative", commandPath, "bin/mre", "", filepath.Join(cwd, "bin", "mre")},
-		{"command/dot_relative", commandPath, "./mre", "", filepath.Join(cwd, "mre")},
-		{"command/relative_to_base", commandPath, "bin/mre", "/cfg", "/cfg/bin/mre"},
-		{"command/relative_base", commandPath, "bin/mre", "cfg", filepath.Join(cwd, "cfg", "bin", "mre")},
-		{"command/absolute", commandPath, "/usr/bin/mre", "/cfg", "/usr/bin/mre"},
-		{"file/empty", filePath, "", "/cfg", ""},
-		{"file/bare", filePath, "martian_shell.py", "", filepath.Join(cwd, "martian_shell.py")},
-		{"file/bare_relative_to_base", filePath, "martian_shell.py", "/cfg", "/cfg/martian_shell.py"},
-		{"file/relative", filePath, "py/martian_shell.py", "", filepath.Join(cwd, "py", "martian_shell.py")},
-		{"file/absolute", filePath, "/opt/martian_shell.py", "/cfg", "/opt/martian_shell.py"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := tc.resolve(tc.in, tc.base)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if got != tc.want {
-				t.Errorf("resolve(%q, %q) = %q, want %q", tc.in, tc.base, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestOptionsMrjob checks mrjob defaults to the one beside mre, a PATH
-// command beside a bare mre, and that an explicit -mrjob wins.
-func TestOptionsMrjob(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		args []string
-		want string
-	}{
-		{"beside_mre", []string{"-mre", "/opt/bin/mre"}, "/opt/bin/mrjob"},
-		{"bare_mre", nil, "mrjob"},
-		{"explicit", []string{"-mre", "/opt/bin/mre", "-mrjob", "/usr/bin/mrjob"}, "/usr/bin/mrjob"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fs := flag.NewFlagSet("t", flag.ContinueOnError)
-			f := defineTranspileFlags(fs)
-
-			if err := fs.Parse(append(tc.args, "-shell", testShell, "p.mro")); err != nil {
-				t.Fatal(err)
-			}
-
-			opts, err := f.options("p.mro")
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if opts.Mrjob != tc.want {
-				t.Errorf("Mrjob = %q, want %q", opts.Mrjob, tc.want)
-			}
-		})
-	}
-}
-
-// TestApplyConfigToolsRelativeToConfigFile checks a relative mre, shell or
-// mrjob in a .mro2nf.yml resolves against the file's directory, not the
-// working directory, under the CLI's rules (a bare mre or mrjob stays a PATH
-// command, a bare shell is a file), and that an explicit flag is left for the
-// working directory.
-func TestApplyConfigToolsRelativeToConfigFile(t *testing.T) {
-	t.Chdir(t.TempDir())
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	writeTestFile(t, filepath.Join("proj", config.FileName), "mre: mre\nshell: martian_shell.py\nmrjob: tools/mrjob\n")
-	writeTestFile(t, filepath.Join("conf", "x.yml"), "mre: bin/mre\nshell: ../py/martian_shell.py\n")
-
-	mro := filepath.Join("proj", "pipeline.mro")
-
-	for _, tc := range []struct {
-		name string
-		args []string
-		want [3]string
-	}{
-		{"alongside_mro", []string{mro}, [3]string{
-			"mre", filepath.Join(cwd, "proj", "martian_shell.py"), filepath.Join(cwd, "proj", "tools", "mrjob"),
-		}},
-		{"explicit_config", []string{"-config", filepath.Join("conf", "x.yml"), mro}, [3]string{
-			filepath.Join(cwd, "conf", "bin", "mre"), filepath.Join(cwd, "py", "martian_shell.py"), "",
-		}},
-		{"explicit_flag_wins", []string{"-shell", "s.py", mro}, [3]string{
-			"mre", "s.py", filepath.Join(cwd, "proj", "tools", "mrjob"),
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fs := flag.NewFlagSet("t", flag.ContinueOnError)
-			f := defineTranspileFlags(fs)
-
-			if err := fs.Parse(tc.args); err != nil {
-				t.Fatal(err)
-			}
-
-			if err := applyConfig(fs, *f.configPath, fs.Arg(0), f.configPtrs()); err != nil {
-				t.Fatal(err)
-			}
-
-			if diff := cmp.Diff(tc.want, [3]string{*f.mre, *f.shell, *f.mrjob}); diff != "" {
-				t.Errorf("mre, shell, mrjob (-want +got):\n%s", diff)
-			}
-		})
 	}
 }
 
@@ -400,7 +217,7 @@ func TestBuildVersionReachesOptions(t *testing.T) {
 
 			fs := flag.NewFlagSet("t", flag.ContinueOnError)
 			f := defineTranspileFlags(fs)
-			_ = fs.Parse([]string{"-shell", testShell})
+			_ = fs.Parse(nil)
 
 			opts, err := f.options("p.mro")
 			if err != nil {
@@ -481,7 +298,7 @@ func TestSearchPathReachesOptions(t *testing.T) {
 			fs := flag.NewFlagSet("t", flag.ContinueOnError)
 			f := defineTranspileFlags(fs)
 
-			if err := fs.Parse(append([]string{"-shell", testShell}, tc.args...)); err != nil {
+			if err := fs.Parse(tc.args); err != nil {
 				t.Fatal(err)
 			}
 
@@ -565,7 +382,7 @@ func TestRunDefaultSearchPath(t *testing.T) {
 			mro := filepath.Join(tc.dir, "pipeline.mro")
 			writeTestFile(t, mro, includingMRO)
 
-			if err := run([]string{"-o", t.TempDir(), "-shell", testShell, mro}); err != nil {
+			if err := run([]string{"-o", t.TempDir(), mro}); err != nil {
 				t.Errorf("transpile: %v", err)
 			}
 		})
@@ -604,11 +421,12 @@ func TestRunRejectsDeletedFlags(t *testing.T) {
 	for _, name := range []string{
 		"emitter=v2", "native", "inline-pipelines=false", "target=awsbatch", "container=img",
 		"allow-external-files", "fold-disables", "fuse-chains", "native-runner",
+		"mre=/opt/mre", "shell=martian_shell.py", "mrjob=/opt/mrjob",
 	} {
 		t.Run(name, func(t *testing.T) {
 			flagName, _, _ := strings.Cut(name, "=")
 
-			err := run([]string{"-o", t.TempDir(), "-shell", testShell, "-" + name, mro})
+			err := run([]string{"-o", t.TempDir(), "-" + name, mro})
 			if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+flagName) {
 				t.Errorf("run with -%s: want an undefined-flag error, got %v", name, err)
 			}

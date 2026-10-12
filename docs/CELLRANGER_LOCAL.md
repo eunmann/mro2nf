@@ -91,15 +91,15 @@ because the test data is tiny; the per-task `resourceLimits` clamp still applies
 # 1. Golden baseline
 cellranger testrun --id=golden --localcores=8 --localmem=16 --disable-ui
 
-# 2. Transpile (point -mrjob/-shell at the bundle's Martian runtime)
-mro2nf -mropath $CR/mro -mre ./mre \
-       -mrjob $CR/external/martian/bin/mrjob \
-       -shell $CR/external/martian/adapters/python/martian_shell.py \
-       -o out __<id>.mro
+# 2. Transpile
+mro2nf -mropath $CR/mro -o out __<id>.mro
 
-# 3. Run (source the bundle env so cr_* + the bundled python3 are on PATH)
+# 3. Run (source the bundle env so cr_* + the bundled python3 are on PATH),
+#    the stages under the bundle's own Martian runtime and mre on PATH
 source $CR/sourceme.bash
-cd out && nextflow run main.nf -profile standard   # add -c oversubscribe.config for aggressive scheduling
+cd out && nextflow run main.nf -profile standard \
+    --mro2nf_mrjob $CR/external/martian/bin/mrjob \
+    --mro2nf_adapters $CR/external/martian/adapters   # add -c oversubscribe.config for aggressive scheduling
 ```
 
 Then diff `out/results/metrics_summary.csv` against the golden

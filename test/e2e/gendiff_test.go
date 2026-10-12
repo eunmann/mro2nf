@@ -22,7 +22,7 @@ package e2e
 //	                   "random" (a start drawn and logged), or a comma list.
 //	GEN_COUNT          seeds from the start (default 20).
 //	GEN_MRO2NF_BIN,    prebuilt binaries to test instead of the repo build,
-//	GEN_MRE_BIN        e.g. an older commit's.
+//	GEN_MRE_BIN        e.g. an older commit's; mre runs the mrjob beside it.
 //	GEN_ARTIFACTS      where shrunk fixtures go (default artifacts/gen-diff).
 //	GEN_SHRINK_EVALS   shrink budget in program runs (default 150, or 0 for
 //	                   the smoke seeds; 0 skips).

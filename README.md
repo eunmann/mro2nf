@@ -53,7 +53,7 @@ internal/
   shim/        bundle I/O, markers, output confinement
   config/      .mro2nf.yml project defaults for the transpiler flags
   logging/     slog setup
-vendor-martian/python/   pinned martian_shell.py + martian.py adapters (Martian's LICENSE beside)
+vendor-martian/python/   pinned martian_shell.py + martian.py adapters, which mre embeds (Martian's LICENSE beside)
 THIRD_PARTY_NOTICES      licenses of the code the binaries link and the images vendor
 testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
 test/e2e/      Go e2e suites (golden diff vs mrp, mrp differential)
@@ -75,13 +75,9 @@ Nextflow 26.04 supports up to Java 26, the 24.04 floor up to 21),
 Python 3.
 
 ```bash
-make build                      # builds ./mro2nf, ./mre and ./mrjob (the pinned Martian's)
+make install                    # mro2nf, mre and mrjob (the pinned Martian's) into ~/.local/bin
 
-./mro2nf -o out \
-    -mre "$PWD/mre" \
-    -shell "$PWD/vendor-martian/python/martian_shell.py" \
-    -mropath path/to/pipeline_dir \
-    path/to/pipeline.mro
+mro2nf -o out path/to/pipeline.mro
 
 cd out && nextflow run main.nf  # results land in out/results/
 ```
@@ -92,18 +88,18 @@ cd out && nextflow run main.nf  # results land in out/results/
 |---|---|
 | `-o <dir>` | output directory for the Nextflow project (default `out`) |
 | `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp`; as in `mrp`, the `.mro`'s own directory is searched first, for its own includes and its stages' code only, and the working directory never |
-| `-mre <path>` | path to the `mre` shim binary as it will appear **at run time** (a bare name is looked up on `PATH`) |
-| `-shell <path>` | **required**: path to `martian_shell.py` in Martian's adapters dir (`<adapters>/python/martian_shell.py`), which the tasks run the adapter from (a relative path, even a bare name, resolves against the working directory) |
-| `-mrjob <path>` | path to `mrjob`, which runs the py and comp stages (default: the `mrjob` beside `-mre`; a bare name is looked up on `PATH`) |
 | `-monitor` | mrp's `--monitor`: `mrjob` enforces each job's memory and thread limits |
 | `-confine-outputs` | fail a stage task whose output resolves outside its work dir instead of copying it in, for a project run under an isolating executor such as docker |
 | `-config <path>` | path to a [`.mro2nf.yml`](#mro2nfyml-project-defaults) of per-project flag defaults (default: probed alongside the `.mro`) |
 | `-version` | print the mro2nf version and exit |
 
-The tool paths are baked into `nextflow.config` for the local and grid
-profiles, so set them to the paths that exist **where those runs happen** (the
-local repo, or shared-filesystem cluster paths). A launch-time mrp
-`--overrides` file is tracked by #301.
+The tasks run the `mre` on `PATH` where the pipeline runs (`make install` on
+the host, the runtime image in a container), which runs py and comp stages
+under the `mrjob` beside it and py stages with the Martian adapters it embeds.
+A run names others with `--mro2nf_mre <path>`, `--mro2nf_mrjob <path>` and
+`--mro2nf_adapters <dir>` (Martian's adapters dir, holding
+`python/martian_shell.py`), such as a pipeline bundle's own Martian runtime. A
+launch-time mrp `--overrides` file is tracked by #301.
 
 ### Targets: one project, chosen with `-profile`
 
@@ -112,7 +108,7 @@ chooses it:
 
 | Profile | Runs on | Needs |
 |---|---|---|
-| `standard` (default), `slurm`, `sge`, `lsf`, `pbs` | the host's tools and code, a shared filesystem | — |
+| `standard` (default), `slurm`, `sge`, `lsf`, `pbs` | the host's `mre` and code, a shared filesystem | — |
 | `docker` | local docker, each task in its own container | `--mro2nf_image <image>` |
 | `awsbatch` | AWS Batch over an S3 work dir | `--mro2nf_image <image in ECR>`, `-work-dir s3://…`, `process.queue` and `aws.region` in a `-c` config |
 | `healthomics` | AWS HealthOmics | `./package.sh <image>@sha256:…`, which makes it the workflow's own config |
@@ -125,8 +121,8 @@ URIs on every profile); see `docs/TRANSPILER.md` §8 and §9, and
 ### Container image
 
 The container profiles run every task, PLAN, the stages and OUTS, in one
-image: `--mro2nf_image`. Build it `FROM` mro2nf's runtime image, which holds
-`mre`, `mrjob` and Martian's adapters below `/opt/mro2nf`
+image: `--mro2nf_image`. Build it `FROM` mro2nf's runtime image, which puts
+`mre` and the `mrjob` beside it on its `PATH` at `/opt/mro2nf`
 (`deploy/runtime/Dockerfile`), and add your pipeline's code:
 
 ```dockerfile
@@ -144,16 +140,15 @@ image's `PATH`.
 A stage task finds the entry `.mro`, its includes and its stages' code at the
 absolute paths the project was transpiled from, so transpile the pipeline
 where it sits at the path the image holds it: with the tree at
-`/opt/pipeline` on the transpiling host too, point the entry and `-mropath`
-there, and every relative stage `src` resolves below it. Equivalently, keep
+`/opt/pipeline` on the transpiling host too, transpile the entry there, and
+every relative stage `src` resolves below it. Equivalently, keep
 the tree where it is and `COPY` it to that same path in the image (`COPY
 my-pipeline/ /home/me/my-pipeline/`), as the docker e2e suite does.
 
 ```bash
 docker build -t my/image:tag .
-mro2nf -o proj -mre "$PWD/mre" -shell "$PWD/vendor-martian/python/martian_shell.py" \
-    -mropath /opt/pipeline/mro /opt/pipeline/mro/pipeline.mro
-cd proj
+mro2nf -o out /opt/pipeline/mro/pipeline.mro
+cd out
 nextflow run main.nf -profile docker --mro2nf_image my/image:tag
 
 # AWS Batch: push the image to ECR; batch.config sets process.queue and aws.region
@@ -175,16 +170,10 @@ team doesn't have to repeat them on every invocation:
 
 ```yaml
 # keys mirror the CLI flags
-shell: tools/martian/adapters/python/martian_shell.py
-mrjob: tools/martian/bin/mrjob
 monitor: true
 ```
 
-Supported keys: `mre`, `shell`, `mrjob`, `monitor`. A relative `mre`, `shell`
-or `mrjob` path resolves against the config file's directory, not the working
-directory, so a checked-in `shell: tools/martian_shell.py` names the same file
-wherever you run `mro2nf`; a bare `mre` or `mrjob` name stays a `PATH` command,
-as for the flags. Precedence is **builtin default < config file < explicit
+Supported keys: `monitor`. Precedence is **builtin default < config file < explicit
 flag**. To override a config `true` back off for one run, use the equals form —
 `-monitor=false` — because Go's flag parsing reads a space-separated
 `-monitor false` as a bare `-monitor` plus a positional argument. Unknown keys

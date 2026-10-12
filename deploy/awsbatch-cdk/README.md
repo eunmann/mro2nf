@@ -70,8 +70,7 @@ transpiled from (the README's "Container image").
 
 ```bash
 # 1. transpile (the same project serves Batch and HealthOmics)
-./mro2nf -o out -mre ./mre -shell ./vendor-martian/python/martian_shell.py \
-    -mropath testdata/split_test testdata/split_test/pipeline.mro
+./mro2nf -o out testdata/split_test/pipeline.mro
 
 # 2. build + push the runtime image, then the pipeline's image FROM it with
 #    the fixture at the path step 1 transpiled it from (linux/amd64 compute)
