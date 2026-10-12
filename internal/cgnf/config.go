@@ -17,7 +17,7 @@ func (p *project) config() string {
 
 	b.WriteString(`// The path 'arity' option, eval outputs and the local profile's
 // process.resourceLimits clamp need Nextflow 24.04.
-manifest.nextflowVersion = '!>=24.04.0'
+manifest.nextflowVersion = '!>=25.10.0'
 
 params.outdir = 'results'
 

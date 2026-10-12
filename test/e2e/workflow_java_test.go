@@ -12,17 +12,17 @@ const (
 	javaPin      = "${{ env.JAVA_VERSION }}"
 	floorJavaPin = "${{ matrix.nextflow == 'latest-stable' && env.JAVA_VERSION || env.FLOOR_JAVA_VERSION }}"
 
-	// floorJavaMax is the newest Java the Nextflow 24.04.0 launcher starts on:
-	// its version check rejects anything else with "Java 8 or later (up to 21)".
-	floorJavaMax = 21
+	// floorJavaMax is the newest Java Nextflow 25.10.0 supports (its
+	// docs/install.md: "Java 17 (or later, up to 25)").
+	floorJavaMax = 25
 	// nextflowJavaMin is the oldest Java Nextflow 26.04 supports.
 	nextflowJavaMin = 17
 )
 
 // TestWorkflowJavaVersions holds every setup-java step to its workflow's one
 // JAVA_VERSION (#237), so the copies cannot drift, and every job whose matrix
-// includes the Nextflow floor to FLOOR_JAVA_VERSION on that lane: the floor
-// engine does not start on the LTS the other lanes run.
+// includes the Nextflow floor to FLOOR_JAVA_VERSION on that lane, the oldest
+// Java the floor supports, so the nightly spans the supported range.
 func TestWorkflowJavaVersions(t *testing.T) {
 	for _, file := range []string{gateWorkflow, nightlyWorkflow} {
 		doc := readWorkflow(t, file)
