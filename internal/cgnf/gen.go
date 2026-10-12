@@ -120,7 +120,7 @@ func (p *project) graphMeta(extra ...string) string {
 // nodeMeta is node n's meta: its identity, its PLAN record d, and the
 // resources it is scheduled with, which PLAN resolved under the run's
 // overrides, and the overrides file of its own that its jobs resolve
-// theirs under, or ”.
+// theirs under, empty when none applies.
 func (p *project) nodeMeta(n cg.TopoNode) (string, error) {
 	s, err := p.stage(n.Fqid)
 	if err != nil {
