@@ -263,20 +263,29 @@ func writeStageProcesses(proj, tmp string) (string, error) {
 }
 
 // stageInclude matches one alias of the stage module a call-graph project's
-// main.nf includes: `STAGE as N0_X`, `STAGE_SPLIT as N1_Y_SP`, ...
+// main.nf or sub-workflow module includes: `STAGE as N0_X`, `STAGE_SPLIT as
+// N1_Y_SP`, ...
 var stageInclude = regexp.MustCompile(`\bSTAGE(?:_SPLIT|_MAIN|_JOIN)? as (\w+)`)
 
 // stageAliases are the process aliases of the stage module in proj's
-// main.nf, sorted.
+// main.nf and sub-workflow modules, sorted.
 func stageAliases(proj string) ([]string, error) {
-	raw, err := os.ReadFile(filepath.Join(proj, "main.nf"))
+	modules, err := filepath.Glob(filepath.Join(proj, "subworkflows", "*.nf"))
 	if err != nil {
-		return nil, fmt.Errorf("read main.nf: %w", err)
+		return nil, fmt.Errorf("list sub-workflow modules: %w", err)
 	}
 
 	var names []string
-	for _, m := range stageInclude.FindAllStringSubmatch(string(raw), -1) {
-		names = append(names, m[1])
+
+	for _, path := range append([]string{filepath.Join(proj, "main.nf")}, modules...) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+
+		for _, m := range stageInclude.FindAllStringSubmatch(string(raw), -1) {
+			names = append(names, m[1])
+		}
 	}
 
 	slices.Sort(names)

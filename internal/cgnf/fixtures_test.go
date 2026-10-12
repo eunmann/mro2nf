@@ -78,19 +78,16 @@ func TestEmitEveryFixture(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			main, err := os.ReadFile(filepath.Join(out, "main.nf"))
-			if err != nil {
-				t.Fatal(err)
-			}
-
+			tree := readTree(t, out)
 			for _, want := range []string{"PLAN(", "OUTS("} {
-				if !strings.Contains(string(main), want) {
+				if !strings.Contains(tree["main.nf"], want) {
 					t.Errorf("main.nf lacks %q", want)
 				}
 			}
 
-			if nodes, incs := strings.Count(string(main), "\n    // "), strings.Count(string(main), "include { STAGE"); nodes != incs {
-				t.Errorf("main.nf wires %d nodes but includes the stage module %d times", nodes, incs)
+			wiring := wiringNF(tree)
+			if nodes, incs := strings.Count(wiring, "\n    // "), strings.Count(wiring, "include { STAGE"); nodes != incs {
+				t.Errorf("the project wires %d nodes but includes the stage module %d times", nodes, incs)
 			}
 		})
 	}

@@ -147,7 +147,7 @@ reporting with a direct probe-file measurement:
 | metric       | source | meaning |
 |--------------|--------|---------|
 | `tasks`      | `-with-trace` rows | task executions |
-| `plumbing_tasks` / `stage_tasks` | trace, split by process name | stage tasks are those of a stage-phase process — an alias of the stage module the project's `main.nf` includes; every other task is plumbing |
+| `plumbing_tasks` / `stage_tasks` | trace, split by process name | stage tasks are those of a stage-phase process — an alias of the stage module the project's `main.nf` or a sub-workflow module includes; every other task is plumbing |
 | `mrp_jobs`   | lane table, checked against real mrp | jobs mrp runs for the same invocation (`TestMrpDiffBenchJobs` counts its `_jobinfo` files) |
 | `processes`  | trace `name` (chunk tags collapsed) | distinct processes |
 | `plumbing_processes` / `stage_processes` / `plumbing` | same split | distinct plumbing vs. stage processes, and the plumbing names seen |

@@ -517,7 +517,7 @@ func TestEmitZipsByToken(t *testing.T) {
 // (BY_STAGE, by MKLIST), with an empty gather for a share with no fork.
 // TestMrpDiff/map_nested_gather runs the fixture against mrp.
 func TestEmitSizesForkedGathers(t *testing.T) {
-	main := readTree(t, emitFixture(t, "map_nested_gather"))["main.nf"]
+	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
 
 	for _, want := range []string{
 		"n1 = ENTRY_COUNTS(PLAN.out.n1)",
@@ -546,11 +546,24 @@ func TestEmitSizesForkedGathers(t *testing.T) {
 	}
 }
 
+// wiringNF is a project's main.nf and the modules of its sub-workflows.
+func wiringNF(tree map[string]string) string {
+	var b strings.Builder
+
+	for _, name := range slices.Sorted(maps.Keys(tree)) {
+		if name == "main.nf" || strings.HasPrefix(name, subworkflowDir+"/") {
+			b.WriteString(tree[name])
+		}
+	}
+
+	return b.String()
+}
+
 // TestEmitWaitsForPreflights: a preflight signals once every instance of it
 // is done, and each instance of a node it gates waits for that signal
 // (modifiers_min: CHECK gates INNER's DOUBLE and TRIPLE).
 func TestEmitWaitsForPreflights(t *testing.T) {
-	main := readTree(t, emitFixture(t, "modifiers_min"))["main.nf"]
+	main := wiringNF(readTree(t, emitFixture(t, "modifiers_min")))
 
 	for _, want := range []string{
 		"d0 = DONE(N0_CHECK.out.outs)",

@@ -203,11 +203,13 @@ func treeDigest(t *testing.T, dir string) string {
 
 // lintEmissionAllowList is every top-level entry a real emission produces
 // today. It backs the shared-context tripwire in assertNoProjectDirContext:
-// main.nf includes stage.nf by its path beside it, nextflow.config includes
-// conf/'s profile configs by theirs, the HealthOmics package files are no
-// Nextflow source, and nothing here is resolved from -project-dir.
+// main.nf includes stage.nf by its path beside it, and the modules of
+// subworkflows/ by theirs, each including stage.nf and the others by
+// theirs, nextflow.config includes conf/'s profile configs by theirs, the
+// HealthOmics package files are no Nextflow source, and nothing here is
+// resolved from -project-dir.
 var lintEmissionAllowList = []string{
-	"_assets", "conf", "main.nf", "nextflow.config", "package.sh", "parameter-template.json", "stage.nf",
+	"_assets", "conf", "main.nf", "nextflow.config", "package.sh", "parameter-template.json", "stage.nf", "subworkflows",
 }
 
 // assertNoProjectDirContext trips on any project-dir-anchored lint context,

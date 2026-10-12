@@ -84,7 +84,12 @@ func (p *project) outs() *wiring {
 
 	ups := "channel.value([])"
 	if len(srcs) > 0 {
-		ups = "channel.empty().mix(" + strings.Join(srcs, ", ") + ").toList().map { xs -> ordered(xs) }"
+		var mixes []string
+		for group := range slices.Chunk(srcs, maxTakes) {
+			mixes = append(mixes, ".mix("+strings.Join(group, ", ")+")")
+		}
+
+		ups = "channel.empty()" + strings.Join(mixes, "") + ".toList().map { xs -> ordered(xs) }"
 	}
 
 	entry := "channel.value([[], []])"

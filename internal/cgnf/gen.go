@@ -9,18 +9,22 @@ import (
 	"github.com/eunmann/mro2nf/internal/cg"
 )
 
-// wiringWorkflows are the stage module's node wiring sub-workflows.
+// wiringWorkflows are the stage module's node wiring sub-workflows, which
+// every workflow of the project includes.
 const wiringWorkflows = "FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; GATHER_SIZED ; COUNTS ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; OR_SKIPPED"
 
-// mainNF renders main.nf: PLAN, every node's wiring in dependency order,
-// then OUTS.
-func (p *project) mainNF() (string, error) {
+// subworkflowDir holds a module per sub-workflow main.nf calls.
+const subworkflowDir = "subworkflows"
+
+// workflows renders main.nf, which runs PLAN, the root pipeline's calls and
+// OUTS, and a module per sub-workflow below subworkflowDir.
+func (p *project) workflows() (map[string]string, error) {
 	nodes := make([]*wiring, len(p.topo.Nodes))
 
 	for i, n := range p.topo.Nodes {
 		w, err := p.node(i, n)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 
 		nodes[i] = w
@@ -29,29 +33,94 @@ func (p *project) mainNF() (string, error) {
 	outs := p.outs()
 	plan := p.planWiring(append(slices.Clone(nodes), outs))
 
+	root, err := p.scopes(nodes, plan, outs)
+	if err != nil {
+		return nil, err
+	}
+
+	files := map[string]string{}
+	addModules(files, root, nodes)
+
 	var b strings.Builder
 
 	b.WriteString("include { shq ; code ; ordered ; resources ; on ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; ENTRY_COUNTS ; PUBLISHED ; " + wiringWorkflows + " } from './stage.nf'\n")
-
-	for _, w := range nodes {
-		for _, inc := range w.incs {
-			fmt.Fprintf(&b, "include { %s } from './stage.nf'\n", inc)
-		}
-	}
-
+	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
 	p.planProcess(&b)
 	b.WriteString("workflow {\n")
 	writeLines(&b, plan.lines)
-
-	for _, w := range nodes {
-		writeLines(&b, w.lines)
-	}
-
+	writeUnits(&b, root, nodes)
 	writeLines(&b, outs.lines)
 	b.WriteString("}\n")
 
-	return b.String(), nil
+	files["main.nf"] = b.String()
+
+	return files, nil
+}
+
+// addModules adds to files the module of every sub-workflow below s.
+func addModules(files map[string]string, s *scope, nodes []*wiring) {
+	for _, u := range s.units {
+		if u.sub == nil {
+			continue
+		}
+
+		addModules(files, u.sub, nodes)
+
+		var b strings.Builder
+
+		b.WriteString("include { " + wiringWorkflows + " } from '../stage.nf'\n")
+		writeIncludes(&b, u.sub, nodes, "../stage.nf", "./")
+		fmt.Fprintf(&b, "\n// %s\nworkflow %s {\n", u.sub.label(), u.sub.name)
+
+		if len(u.sub.takes) > 0 {
+			b.WriteString("    take:\n")
+			writeLines(&b, u.sub.takes)
+			b.WriteString("\n")
+		}
+
+		b.WriteString("    main:\n")
+		writeUnits(&b, u.sub, nodes)
+
+		if len(u.sub.emits) > 0 {
+			b.WriteString("\n    emit:\n")
+			writeLines(&b, u.sub.emits)
+		}
+
+		b.WriteString("}\n")
+
+		files[subworkflowDir+"/"+u.sub.name+".nf"] = b.String()
+	}
+}
+
+// writeIncludes writes the includes of the processes and sub-workflows s's
+// own units call.
+func writeIncludes(b *strings.Builder, s *scope, nodes []*wiring, stage, subs string) {
+	for _, u := range s.units {
+		if u.sub != nil {
+			fmt.Fprintf(b, "include { %s } from '%s%s.nf'\n", u.sub.name, subs, u.sub.name)
+
+			continue
+		}
+
+		for _, inc := range nodes[u.node].incs {
+			fmt.Fprintf(b, "include { %s } from '%s'\n", inc, stage)
+		}
+	}
+}
+
+// writeUnits writes the statements of s's units: a node's wiring, or a
+// sub-workflow's call and the channels it emits.
+func writeUnits(b *strings.Builder, s *scope, nodes []*wiring) {
+	for _, u := range s.units {
+		if u.sub == nil {
+			writeLines(b, nodes[u.node].lines)
+
+			continue
+		}
+
+		writeLines(b, u.sub.call())
+	}
 }
 
 func writeLines(b *strings.Builder, lines []string) {

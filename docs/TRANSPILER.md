@@ -71,7 +71,7 @@ cg.Source.Witness → the call graph of a witness invocation that holds every
 cg.Graph.Topology → per node its fork roots, reads and gates
    │
 cgnf.Emit         → a Nextflow project on disk:
-   │                  main.nf, stage.nf, nextflow.config,
+   │                  main.nf, subworkflows/, stage.nf, nextflow.config,
    │                  _assets/mro/, _assets/types.json
    ▼
 nextflow run main.nf …  →  PLAN, a task per stage instance, then OUTS
@@ -147,7 +147,8 @@ one forked on a map call another stage feeds — is refused at transpile time.
 ## 4. The generated project
 
 ```
-main.nf               ← PLAN, one process call per stage node, then OUTS: wiring only
+main.nf               ← PLAN, the root pipeline's stage and sub-pipeline calls, then OUTS
+subworkflows/         ← a workflow per sub-pipeline (W<j>_<CALL>.nf): its calls
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
 conf/                 ← the container profiles' and the HealthOmics profile's configs
@@ -159,7 +160,7 @@ _assets/types.json    ← the type manifest the OUTS task lays the outs out with
 
 **`stage.nf`** declares `STAGE` (a non-split stage) and `STAGE_SPLIT`,
 `STAGE_MAIN` and `STAGE_JOIN` (a split stage's three phases), plus `OUTS`.
-`main.nf` includes them once per node under its own alias
+The workflow that wires a node includes them once for it under its own alias
 (`include { STAGE as N3_DBL }`, a split stage as `N1_SUM_SQUARES_SP`, `_MN`
 and `_JN`), so a `withName:` selector names the node. Every stage task runs
 `mre args`, then its job through `mre run`, then `mre post`. `stage.nf` also
@@ -171,6 +172,21 @@ node's wiring is a few lines and one per root, read, gate or preflight of
 it. The driver runs only those and a few Groovy helpers (`ordered`,
 `resources`), which read only records mre wrote; it parses no
 stage-controlled JSON.
+
+**Workflows.** The JVM compiles each workflow's statements into one method,
+which may not pass 64 KiB of bytecode, and a call into one of at most 255
+arguments. The project mirrors the `.mro`: the root pipeline's calls are
+wired in `main.nf`'s entry workflow, and each sub-pipeline call is a workflow
+of its own, which takes the channels its nodes read from outside it and emits
+those read outside it. Its calls are wired in dependency order, as Martian's
+calls of one pipeline depend on each other acyclically. A pipeline whose calls
+weigh more than one workflow holds (`maxWeight`), such as one of hundreds of
+stage calls, is wired in runs of them, each a workflow of its own; a
+sub-pipeline whose call would take more than `maxTakes` channels is wired in
+its caller's workflow. So no workflow grows with the pipeline
+(`TestEmitBoundsEveryWorkflow`, `TestWidePipelineRuns`). A process's trace
+name carries its workflow path (`W1_SC_MULTI_CORE:N5_X`); a `withName:`
+selector of its alias alone still names it.
 
 **`nextflow.config`** holds:
 

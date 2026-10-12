@@ -38,9 +38,11 @@ downstream of those, whose inputs are then new files; every other task stays
 cached.
 
 A `withName:` selector in a `-c` overlay also sizes one stage's tasks. Each
-stage node is its own process alias, `N<i>_<CALL>` (the node's index in
-`main.nf` and its call name), and a split stage's phases are `N<i>_<CALL>_SP`,
-`_MN` and `_JN`; `main.nf` lists every alias in its `include` lines:
+stage node is its own process alias, `N<i>_<CALL>` (the node's index in the
+project and its call name), and a split stage's phases are `N<i>_<CALL>_SP`,
+`_MN` and `_JN`; `main.nf` and the modules of `subworkflows/` list every alias
+in their `include` lines. A selector of the alias alone names it in whichever
+sub-workflow wires it:
 
 ```groovy
 process {
