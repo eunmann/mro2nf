@@ -19,48 +19,42 @@ func TestFreshRunsAreIdentical(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java", "python3")
+	// Claim the shard here so both fresh runs and the resume run beside each
+	// other (shardSkip's ancestor claim).
+	shardSkip(t)
 
-	for _, name := range []string{"default"} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			// Claim the shard here so both fresh runs and the resume run beside
-			// each other (shardSkip's ancestor claim).
-			shardSkip(t)
+	projs := []string{transpile(t, "jitter_wide"), transpile(t, "jitter_wide")}
 
-			projs := []string{transpile(t, "jitter_wide"), transpile(t, "jitter_wide")}
+	t.Run("fresh", func(t *testing.T) {
+		for i, proj := range projs {
+			t.Run(strconv.Itoa(i+1), func(t *testing.T) {
+				t.Parallel()
 
-			t.Run("fresh", func(t *testing.T) {
-				for i, proj := range projs {
-					t.Run(strconv.Itoa(i+1), func(t *testing.T) {
-						t.Parallel()
-
-						if err := runNextflow(t, proj); err != nil {
-							t.Fatal(err)
-						}
-					})
+				if err := runNextflow(t, proj); err != nil {
+					t.Fatal(err)
 				}
 			})
+		}
+	})
 
-			if t.Failed() {
-				return
-			}
+	if t.Failed() {
+		return
+	}
 
-			first := publishedOutputs(t, projs[0])
+	first := publishedOutputs(t, projs[0])
 
-			if diff := cmp.Diff(first, publishedOutputs(t, projs[1])); diff != "" {
-				t.Errorf("two fresh runs published different outputs (-run1 +run2):\n%s", diff)
-			}
+	if diff := cmp.Diff(first, publishedOutputs(t, projs[1])); diff != "" {
+		t.Errorf("two fresh runs published different outputs (-run1 +run2):\n%s", diff)
+	}
 
-			if err := runNextflow(t, projs[0], "-resume", "-with-trace", "resume.txt"); err != nil {
-				t.Fatalf("-resume rerun: %v", err)
-			}
+	if err := runNextflow(t, projs[0], "-resume", "-with-trace", "resume.txt"); err != nil {
+		t.Fatalf("-resume rerun: %v", err)
+	}
 
-			assertAllCached(t, readTrace(t, filepath.Join(projs[0], "resume.txt")))
+	assertAllCached(t, readTrace(t, filepath.Join(projs[0], "resume.txt")))
 
-			if diff := cmp.Diff(first, publishedOutputs(t, projs[0])); diff != "" {
-				t.Errorf("-resume changed the published outputs (-before +after):\n%s", diff)
-			}
-		})
+	if diff := cmp.Diff(first, publishedOutputs(t, projs[0])); diff != "" {
+		t.Errorf("-resume changed the published outputs (-before +after):\n%s", diff)
 	}
 }
 

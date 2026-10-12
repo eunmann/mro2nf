@@ -200,8 +200,8 @@ func buildBinaries(t *testing.T) {
 }
 
 // transpile runs mro2nf on a testdata fixture into a fresh temp project dir,
-// adding -mrjob automatically when the fixture ships one. extra flags are
-// appended before the .mro argument.
+// whose stages run under the pinned Martian mrjob buildBinaries builds.
+// extra flags are appended before the .mro argument.
 func transpile(t *testing.T, fixture string, extra ...string) string {
 	t.Helper()
 

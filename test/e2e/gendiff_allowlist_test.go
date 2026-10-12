@@ -104,7 +104,7 @@ func TestGenDiffOutcomeAppliesEveryRule(t *testing.T) {
 			writeABITestFile(t, filepath.Join(proj, "work", "1b", "0000aa11", "main", mreStageFile), "RAISE")
 			writeABITestFile(t, filepath.Join(proj, "work", "1c", "0000aa22", "main", mreStageFile), "RAISE")
 
-			v, err := outcomeLegVerdict(env, genLegs["default"], program, proj, c.mrp, runErr)
+			v, err := outcomeLegVerdict(env, genLegs[0], program, proj, c.mrp, runErr)
 			if err != nil {
 				t.Fatal(err)
 			}

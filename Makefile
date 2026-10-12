@@ -68,8 +68,8 @@ test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; 
 
 # The long generative differential (#350). test-e2e runs TestGenDiff on the
 # checked-in smoke seeds; this runs GEN_COUNT seeds from GEN_SEEDS (a number,
-# "random", or a comma list), within GEN_TIMEOUT. The other GEN_* knobs (legs,
-# prebuilt binaries, artifact dir, shrink and time budgets) are documented in
+# "random", or a comma list), within GEN_TIMEOUT. The other GEN_* knobs
+# (prebuilt binaries, artifact dir, shrink and time budgets) are documented in
 # test/e2e/gendiff_test.go.
 GEN_SEEDS ?= random
 GEN_COUNT ?= 200
