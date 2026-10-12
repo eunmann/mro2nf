@@ -57,7 +57,7 @@ func TestLocalClampRunsOversizedRequest(t *testing.T) {
 	proj := transpile(t, "diamond_min")
 
 	overlay := filepath.Join(proj, "oversized.config")
-	body := "process { withName: 'STAGE_1_D__GEN' { cpus = 4096; memory = '100000 GB' } }\n" +
+	body := "process { withName: 'N0_GEN' { cpus = 4096; memory = '100000 GB' } }\n" +
 		"trace.fields = 'task_id,hash,name,status,exit,cpus,memory'\n"
 
 	if err := os.WriteFile(overlay, []byte(body), 0o644); err != nil {
@@ -76,8 +76,8 @@ func TestLocalClampRunsOversizedRequest(t *testing.T) {
 	}
 
 	want := map[string][2]string{
-		"D:STAGE_1_D__GEN": {wantCpus, wantMem},
-		"D:STAGE_1_D__ADD": {"1", "1 GB"},
+		"N0_GEN (D.GEN)": {wantCpus, wantMem},
+		"N1_ADD (D.ADD)": {"1", "1 GB"},
 	}
 
 	stages := map[string][2]string{}

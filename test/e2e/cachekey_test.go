@@ -56,9 +56,8 @@ func TestResumeKeysOnTheBuild(t *testing.T) {
 
 // TestResumeKeysOnlyOnATasksOwnTypes (#286): after one stage's signature
 // changes, a -resume re-run of the re-transpiled project re-runs that stage
-// but keeps the unrelated stage and the entry task cached. Every task used to
-// stage the one shared types.json, so any type edit re-ran the whole
-// pipeline.
+// but keeps the unrelated stage cached. Every task used to stage the one
+// shared types.json, so any type edit re-ran the whole pipeline.
 func TestResumeKeysOnlyOnATasksOwnTypes(t *testing.T) {
 	t.Parallel()
 
@@ -93,7 +92,7 @@ func TestResumeKeysOnlyOnATasksOwnTypes(t *testing.T) {
 		status[row.Name] = row.Status
 	}
 
-	for name, want := range map[string]bool{"BUILD_ENTRY_ARGS": true, "D:STAGE_1_D__GEN": true, "D:STAGE_1_D__ADD": false} {
+	for name, want := range map[string]bool{"N0_GEN (D.GEN)": true, "N1_ADD (D.ADD)": false} {
 		got, ok := status[name]
 		if !ok {
 			t.Errorf("task %s missing from the trace %v", name, status)
