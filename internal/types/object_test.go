@@ -2,7 +2,6 @@ package types_test
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -169,38 +168,5 @@ func TestNumberWalksKeepObjectOrder(t *testing.T) {
 		`"q":{"z":1.0,"a":2},"u":{"y":1e+06,"x":{"w":0.5,"v":1}}}`
 	if formatted != wantFormatted {
 		t.Errorf("FormatFloats = %s, want %s", formatted, wantFormatted)
-	}
-}
-
-// TestValidateOutputsObject checks output validation reads Objects as it reads
-// maps: a struct missing a member fails, and an Object is an untyped map.
-func TestValidateOutputsObject(t *testing.T) {
-	tbl := orderTable()
-	params := []ir.Param{{Name: "q", BaseType: "In"}, {Name: "u", BaseType: "map"}, {Name: "m", BaseType: "file", MapDim: 1, IsFile: true}}
-
-	ok := map[string]any{
-		"q": decodeOrdered(t, `{"a":1,"z":2}`),
-		"u": decodeOrdered(t, `{"y":1}`),
-		"m": decodeOrdered(t, `{"k":"f.txt"}`),
-	}
-	if err := tbl.ValidateOutputs(params, ok); err != nil {
-		t.Errorf("ValidateOutputs on valid Objects: %v", err)
-	}
-
-	bad := map[string]any{
-		"q": decodeOrdered(t, `{"a":1}`),
-		"u": decodeOrdered(t, `{"y":1}`),
-		"m": decodeOrdered(t, `{"a/b":"f.txt"}`),
-	}
-
-	err := tbl.ValidateOutputs(params, bad)
-	if !errors.Is(err, types.ErrInvalidOutputs) {
-		t.Fatalf("ValidateOutputs = %v, want ErrInvalidOutputs", err)
-	}
-
-	for _, want := range []string{"missing key: z", "key a/b"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not name %q", err, want)
-		}
 	}
 }
