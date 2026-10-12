@@ -160,7 +160,7 @@ func (p *project) consumed(fqid string) (bool, bool, bool) {
 
 	for _, n := range p.topo.Nodes {
 		outs = outs || slices.ContainsFunc(n.Reads, func(r cg.Read) bool { return r.Node == fqid })
-		gates = gates || slices.Contains(n.Gates, fqid)
+		gates = gates || slices.ContainsFunc(n.Gates, func(g cg.Gate) bool { return g.Node == fqid })
 	}
 
 	forks := slices.ContainsFunc(p.topo.Roots, func(r cg.TopoRoot) bool { return r.Producer == fqid })

@@ -601,9 +601,11 @@ them.
   by its own forks alone, whatever outer calls its stages are also forked on.
   With `-fields`, it also writes the outs as one stamped bundle per output,
   `<dir>/<output>/`, so a consumer stages only the outputs it reads. With
-  `-gates`, it writes the nodes the instance's outs disable at its fork: those
-  with a disable binding that reads this stage alone and resolves true, as
-  `mrp`'s `Fork.disabled` reads it (a null reads false).
+  `-gates`, it writes the instances the instance's outs disable: of each node
+  with a disable binding that reads this stage alone, every fork it resolves
+  true at, as `mrp`'s `Fork.disabled` reads it (a null reads false), named
+  `<node>@<roots>@<ordinals>` by the node's ordinals of the roots, beyond
+  this stage's, the binding is forked on.
 - **`mre outs`** resolves the pipeline outs into the bundle `publish-layout`
   reads, checking them with `MarshalerMap.ValidatePipelineOutputs`.
 
@@ -640,11 +642,13 @@ invocation's only while `mrp` still accepts the call. `cg.Topology` reduces
 the graph to what tasks exchange: per node its fork roots, the outputs it
 reads of other nodes, and the nodes whose outs gate it; per fork root what
 feeds its forks (the entry, or one stage) and the outer roots its forks vary
-with. A gating stage posts one gate value per fork of its own, so a disable
-binding forked on a map call that stage is not (a split of its outs, as in
-`map call X(item = split SRC.items)` under `disabled = self.item.skip`) is
-refused at transpile time. `TestWitnessCoversLiteral` checks every fixture's literal invocation is
-within its witness's.
+with. A disable binding forked on a map call its gating stage feeds (a
+split of its outs, as in `map call X(item = split SRC.items)` under
+`disabled = self.item.skip`) has a value per fork of that call; the gating
+stage's post resolves it at each and posts the forks it disables
+(`split_gate`). A binding forked on a map call another stage feeds is
+refused at transpile time. `TestWitnessCoversLiteral` checks every
+fixture's literal invocation is within its witness's.
 
 **The project.** `main.nf` is wiring only: it includes the one hand-written
 stage module, `stage.nf`, once per node (`include { STAGE as N3_DBL }`, a

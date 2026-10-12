@@ -35,8 +35,23 @@ type TopoNode struct {
 	Split bool     `json:"split"`
 	Roots []string `json:"roots"`
 	Reads []Read   `json:"reads"`
-	Gates []string `json:"gates"`
+	Gates []Gate   `json:"gates"`
 	Off   bool     `json:"off"`
+}
+
+// Gate is a stage whose outs a disable binding of a node reads, and the
+// node's roots, beyond the stage's own, the binding is forked on: a split
+// of the stage's outs over a map call the stage feeds. The stage's post
+// posts the binding's value at each of their forks (GateToken).
+type Gate struct {
+	Node  string   `json:"node"`
+	Roots []string `json:"roots"`
+}
+
+// GateToken names, in a gating stage's posted gates, the instances of node
+// whose binding of gate holds at the ordinals key of gate's roots.
+func GateToken(node string, gate Gate, key string) string {
+	return node + "@" + strings.Join(gate.Roots, ",") + "@" + key
 }
 
 // Read is the outs of one stage node a task stages: the named outputs, or
@@ -57,9 +72,10 @@ type TopoRoot struct {
 
 // Topology computes g's topology, failing on a shape whose data the
 // stage tasks cannot exchange: a fork root whose forks several stages fix,
-// a disable binding that reads several stages, a stage forked on roots the
-// gated node is not, or is forked on a map call that stage is not, or a
-// fork root's outer root that a node forked on it is not forked on first.
+// a disable binding that reads several stages, or a stage forked on roots
+// the gated node is not, or is forked on a root whose forks that stage
+// cannot enumerate (gateRoots), or a fork root's outer root that a node
+// forked on it is not forked on first.
 func (g *Graph) Topology() (Topology, error) {
 	t := Topology{}
 
@@ -154,9 +170,10 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	return n, nil
 }
 
-// gates are the stages whose outs one of st's disable bindings reads.
-func (g *Graph) gates(st *syntax.CallGraphStage) ([]string, error) {
-	var out []string
+// gates are the stages whose outs one of st's disable bindings reads, each
+// with the roots the binding is forked on beyond the stage's.
+func (g *Graph) gates(st *syntax.CallGraphStage) ([]Gate, error) {
+	var out []Gate
 
 	for _, d := range st.Disabled() {
 		refs := refIDs(d)
@@ -179,34 +196,60 @@ func (g *Graph) gates(st *syntax.CallGraphStage) ([]string, error) {
 			}
 		}
 
-		if c := forkedBeyond(d, up.ForkRoots()); c != nil {
-			return nil, fmt.Errorf("%w: a disable binding of %s is forked on %s, whose forks %s's one gate value per fork cannot tell apart", errShapeUnsupported, st.Fqid, c.Id, up.Fqid)
+		extra, err := g.gateRoots(st, d, up)
+		if err != nil {
+			return nil, err
 		}
 
-		if !slices.Contains(out, up.Fqid) {
-			out = append(out, up.Fqid)
+		gate := Gate{Node: up.Fqid, Roots: fqids(extra)}
+		if !slices.ContainsFunc(out, gate.equal) {
+			out = append(out, gate)
 		}
 	}
 
-	slices.Sort(out)
+	slices.SortFunc(out, func(a, b Gate) int {
+		return strings.Compare(a.Node+"\x00"+strings.Join(a.Roots, ","), b.Node+"\x00"+strings.Join(b.Roots, ","))
+	})
 
 	return out, nil
 }
 
-// forkedBeyond returns a map call d is forked on that none of roots is, nil
-// when there is none: d then resolves at a fork of roots alone, as the
-// producer's post resolves it (writeGates).
-func forkedBeyond(d syntax.Exp, roots syntax.ForkRootList) *syntax.CallStm {
+func (gate Gate) equal(o Gate) bool {
+	return gate.Node == o.Node && slices.Equal(gate.Roots, o.Roots)
+}
+
+// gateRoots are the roots of st, in its order, that d, a disable binding
+// of st reading up, is forked on and up is not. up's post enumerates their
+// forks, so each must be fed by up or fixed by the entry, and vary with no
+// root up's fork and the roots before it do not fix.
+func (g *Graph) gateRoots(st *syntax.CallGraphStage, d syntax.Exp, up *syntax.CallGraphStage) ([]*syntax.CallGraphStage, error) {
 	calls := map[*syntax.CallStm]bool{}
 	splitCalls(d, calls)
 
-	for _, c := range slices.SortedFunc(maps.Keys(calls), func(a, b *syntax.CallStm) int { return strings.Compare(a.Id, b.Id) }) {
-		if !slices.ContainsFunc(roots, func(r *syntax.CallGraphStage) bool { return r.Call() == c }) {
-			return c
+	known := slices.Clone(up.ForkRoots())
+
+	var out []*syntax.CallGraphStage
+
+	for _, r := range st.ForkRoots() {
+		if !calls[r.Call()] || slices.Contains(known, r) {
+			continue
 		}
+
+		if p, ok := g.Producer(r); ok && p != up.Fqid {
+			return nil, fmt.Errorf("%w: a disable binding of %s reads %s and is forked on %s, whose forks %s fixes", errShapeUnsupported, st.Fqid, up.Fqid, r.Fqid, p)
+		}
+
+		for _, o := range g.outerRoots(r) {
+			if !slices.Contains(known, o) {
+				return nil, fmt.Errorf("%w: a disable binding of %s is forked on %s, whose forks vary with %s, which %s is not forked on", errShapeUnsupported, st.Fqid, r.Fqid, o.Fqid, up.Fqid)
+			}
+		}
+
+		known = append(known, r)
+		out = append(out, r)
 	}
 
-	return nil
+	return out, nil
 }
 
 // reads are the stage outs exps read, less a split of a root's own source,
@@ -344,7 +387,7 @@ func (t Topology) coverNodes(rs []TopoNode) ([]error, map[string]bool) {
 		case rn.Off:
 		case n.Stage != rn.Stage || n.Split != rn.Split || !slices.Equal(n.Roots, rn.Roots):
 			errs = append(errs, fmt.Errorf("%w: %s is stage %s forked on %v, not %s forked on %v", errUncovered, rn.Fqid, rn.Stage, rn.Roots, n.Stage, n.Roots))
-		case !readsCovered(n.Reads, rn.Reads) || !subset(n.Gates, rn.Gates):
+		case !readsCovered(n.Reads, rn.Reads) || !gatesCovered(n.Gates, rn.Gates):
 			errs = append(errs, fmt.Errorf("%w: %s reads %v and is gated by %v, beyond %v and %v", errUncovered, rn.Fqid, rn.Reads, rn.Gates, n.Reads, n.Gates))
 		}
 
@@ -360,6 +403,16 @@ func readsCovered(have, want []Read) bool {
 	for _, w := range want {
 		i := slices.IndexFunc(have, func(h Read) bool { return h.Node == w.Node })
 		if i < 0 || (have[i].Fields != nil && (w.Fields == nil || !subset(have[i].Fields, w.Fields))) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func gatesCovered(have, want []Gate) bool {
+	for _, w := range want {
+		if !slices.ContainsFunc(have, w.equal) {
 			return false
 		}
 	}
@@ -407,7 +460,7 @@ func dependencyOrder(nodes map[string]TopoNode, roots []TopoRoot) []TopoNode {
 		}
 
 		for _, gate := range n.Gates {
-			visit(gate)
+			visit(gate.Node)
 		}
 
 		out = append(out, n)

@@ -63,12 +63,11 @@ pipeline ITEM(
 }
 `
 
-// TestTopologyRefusesForkedGate: a disable binding that splits its
-// producer's outs over a map call the producer is not forked on resolves to
-// one value per fork of the gated node, which the producer's one gate value
-// cannot carry, so the shape is refused rather than run with every fork
-// enabled.
-func TestTopologyRefusesForkedGate(t *testing.T) {
+// TestTopologyForkedGate: a disable binding that splits its producer's outs
+// over a map call the producer feeds resolves to one value per fork of the
+// gated node, so the gate carries the map call's root, over whose forks the
+// producer's post posts the binding's value.
+func TestTopologyForkedGate(t *testing.T) {
 	for name, call := range map[string]string{
 		"zip": `
 pipeline P(
@@ -113,9 +112,63 @@ call P()
 			t.Fatalf("%s: %v", name, err)
 		}
 
-		if _, err := g.Topology(); !errors.Is(err, errShapeUnsupported) {
-			t.Errorf("%s: Topology = %v, want errShapeUnsupported", name, err)
+		topo, err := g.Topology()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
+
+		root := map[string]string{"zip": "P.INNER", "struct": "P.ITEM"}[name]
+
+		i := slices.IndexFunc(topo.Nodes, func(n TopoNode) bool { return n.Fqid == root+".WORK" })
+		if i < 0 {
+			t.Fatalf("%s: no %s.WORK node", name, root)
+		}
+
+		if d := cmp.Diff([]Gate{{Node: "P.SRC", Roots: []string{root}}}, topo.Nodes[i].Gates); d != "" {
+			t.Errorf("%s: WORK's gates (-want +got):\n%s", name, d)
+		}
+	}
+}
+
+// TestTopologyRefusesForeignForkedGate: a disable binding forked on a map
+// call whose forks another stage fixes resolves at forks its producer's
+// post cannot enumerate, so the shape is refused rather than run with every
+// fork enabled.
+func TestTopologyRefusesForeignForkedGate(t *testing.T) {
+	src := gateDecls + `
+stage OTHER(
+    out int[] xs,
+    src py    "stages/other",
+)
+
+pipeline P(
+    out int[] ys,
+)
+{
+    call SRC()
+
+    call OTHER()
+
+    map call INNER(
+        x    = split OTHER.xs,
+        skip = split SRC.skips,
+    )
+
+    return (
+        ys = INNER.y,
+    )
+}
+
+call P()
+`
+
+	g, err := Compile([]byte(src), "pipeline.mro", []string{t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := g.Topology(); !errors.Is(err, errShapeUnsupported) {
+		t.Errorf("Topology = %v, want errShapeUnsupported", err)
 	}
 }
 

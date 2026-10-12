@@ -526,6 +526,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "preflight_ungated"},
 	// TestMrpDiffVDR also runs it under mrp's volatile data removal.
 	{name: "vdr_volatile"},
+	// A disable gate split per fork of a map call over a sub-pipeline: each
+	// fork of the gated stage has its own gate value from the one producer.
+	{name: "split_gate"},
 	// #472: every bench lane's invocation at its narrower width, in both
 	// TestBench modes, so a divergence on a bench shape fails here and not
 	// only the bench's task-count gates.

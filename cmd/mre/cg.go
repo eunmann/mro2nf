@@ -118,7 +118,7 @@ func runPost(_ context.Context, argv []string) error {
 	forks := fs.String("forks", "forks", "dir to write <root>/<ordinal>/ fork elements into")
 	entry := fs.Bool("entry", false, "write the forks the invocation's entry values fix, not a stage's")
 	fields := fs.String("fields", "", "dir to write one stamped bundle per output into, named by it")
-	gates := fs.String("gates", "", "file to write the nodes the instance disables into, space-separated")
+	gates := fs.String("gates", "", "file to write the instances the instance disables into, space-separated gate tokens (<node>@<roots>@<ordinals>)")
 
 	var in repeatedFlag
 

@@ -107,22 +107,28 @@ func (p *project) elements(r cg.TopoRoot) string {
 
 // gate decides each instance of node i enabled or disabled, b<i>.run or
 // b<i>.skip, from PLAN's record of the node and the gate values each stage
-// whose outs gate it posted at the fork they share.
+// whose outs gate it posted at the fork they share, keyed by the
+// instance's ordinals of the gate's own roots.
 func (p *project) gate(g *gen, i int, n cg.TopoNode) {
 	fq := gstr(n.Fqid)
 	g.linef("g%d = i%d.combine(nodes).map { k, fs, es, ns -> [k, fs, es, ns[%s][0], ns[%s][1] == '1' || ns[%s][2].tokenize(',').contains(k.join('.'))] }",
 		i, i, fq, fq, fq)
 
 	for _, gp := range n.Gates {
-		prod := p.topo.Nodes[p.index[gp]]
+		prod := p.topo.Nodes[p.index[gp.Node]]
 
 		at := make([]int, len(prod.Roots))
 		for x, r := range prod.Roots {
 			at[x] = slices.Index(n.Roots, r)
 		}
 
-		g.linef("g%d = g%d.map { k, fs, es, d, off -> [%s, k, fs, es, d, off] }.combine(o%d_gates.map { kp, gs -> [kp, gs.tokenize(' ').contains(%s)] }, by: 0).map { _c, k, fs, es, d, off, by -> [k, fs, es, d, off || by] }",
-			i, i, pick("k", at), p.index[gp], fq)
+		ext := make([]int, len(gp.Roots))
+		for x, r := range gp.Roots {
+			ext[x] = slices.Index(n.Roots, r)
+		}
+
+		g.linef("g%d = g%d.map { k, fs, es, d, off -> [%s, k, fs, es, d, off] }.combine(o%d_gates.map { kp, gs -> [kp, gs.tokenize(' ')] }, by: 0).map { _c, k, fs, es, d, off, gs -> [k, fs, es, d, off || gs.contains(%s + %s.join('.'))] }",
+			i, i, pick("k", at), p.index[gp.Node], gstr(cg.GateToken(n.Fqid, gp, "")), pick("k", ext))
 	}
 
 	g.linef("b%d = g%d.branch { v ->", i, i)

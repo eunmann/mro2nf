@@ -58,18 +58,25 @@ func TestPostFields(t *testing.T) {
 	wantArgs(t, "CH.USE", got, `{"k":3,"y":4}`)
 }
 
-// TestPostGates: a producer's post names the nodes its outs disable: GATE
-// when SRC.flag is true (mrp writes CH/GATE/fork0/_disabled), none when it
-// is false, and none for a null gate, which mrp reads as false
-// (null_gate: every gated call runs).
+// TestPostGates: a producer's post names the instances its outs disable:
+// GATE when SRC.flag is true (mrp writes CH/GATE/fork0/_disabled), none
+// when it is false, and none for a null gate, which mrp reads as false
+// (null_gate: every gated call runs). A gate split per fork of a map call
+// the producer feeds names each fork it disables by its ordinal
+// (split_gate: mrp disables INNER/WORK/fork1, ITEM/WORK/fork0 and fork2).
 func TestPostGates(t *testing.T) {
 	cases := []struct {
 		fixture, node, outs, want string
 	}{
-		{"chain_gate", "CH.SRC", `{"y":4,"flag":true}`, "CH.GATE"},
+		{"chain_gate", "CH.SRC", `{"y":4,"flag":true}`, "CH.GATE@@"},
 		{"chain_gate", "CH.SRC", `{"y":4,"flag":false}`, ""},
-		{"null_gate", "NULL_GATE.FLAG", `{"on":true,"cfg":{"flag":false,"k":1}}`, "NULL_GATE.DIRECT NULL_GATE.MAPPED.WORK NULL_GATE.SUB.WORK"},
-		{"null_gate", "NULL_GATE.FLAG", `{"on":null,"cfg":{"flag":true,"k":1}}`, "NULL_GATE.FIELD"},
+		{"null_gate", "NULL_GATE.FLAG", `{"on":true,"cfg":{"flag":false,"k":1}}`, "NULL_GATE.DIRECT@@ NULL_GATE.MAPPED.WORK@@ NULL_GATE.SUB.WORK@@"},
+		{"null_gate", "NULL_GATE.FLAG", `{"on":null,"cfg":{"flag":true,"k":1}}`, "NULL_GATE.FIELD@@"},
+		{
+			"split_gate", "SPLIT_GATE.SRC",
+			`{"xs":[1,2,3],"skips":[false,true,false],"entries":[{"x":1,"skip":true},{"x":2,"skip":false},{"x":3,"skip":true}]}`,
+			"SPLIT_GATE.INNER.WORK@SPLIT_GATE.INNER@1 SPLIT_GATE.ITEM.WORK@SPLIT_GATE.ITEM@0 SPLIT_GATE.ITEM.WORK@SPLIT_GATE.ITEM@2",
+		},
 	}
 
 	for _, tc := range cases {
