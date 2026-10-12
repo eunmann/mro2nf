@@ -61,10 +61,10 @@ E2E_PARALLEL ?= 10
 GO_E2E := go test -tags e2e -count=1 -parallel $(E2E_PARALLEL) -v ./test/e2e/
 
 test-e2e: build ## Run the e2e suite (golden table, mrp differential, cloud-sim, failure paths, knobs)
-	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestGenerated|^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger|^TestScale'
+	$(GO_E2E) -timeout 30m -skip '^TestDocker|^TestRecordGoldens|^TestBench|^TestNextflowLint|^TestCellRanger|^TestScale'
 
 test-e2e-docker: build ## Run pipelines under the Nextflow docker executor (cloud isolation)
-	$(GO_E2E) -timeout 30m -run '^TestDocker|^TestGenerated'
+	$(GO_E2E) -timeout 30m -run '^TestDocker'
 
 test-mrp-diff: build ## Differential test vs real Martian mrp (set MARTIAN_BIN; default ~/workdir/martian/bin)
 	$(GO_E2E) -timeout 30m -run '^TestMrpDiff'

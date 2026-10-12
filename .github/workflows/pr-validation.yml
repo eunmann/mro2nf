@@ -239,11 +239,10 @@ jobs:
           }
 
   # Static-parse every generated project with the formal language-server parser
-  # (#48): a Groovy syntax error in a rarely-run emission branch fails here with
+  # (#48): a Groovy syntax error or warning in rarely-run wiring fails here with
   # file/line, before the slower golden runs can miss it. setup-nextflow installs
-  # latest (>= 25.04), which the target asserts. Sweeps every fixture under
-  # 8 flag configs (#122), ~25 CPU-min of `nextflow lint` spread across
-  # E2E_PARALLEL workers; budgeted with headroom over observed wall time.
+  # latest (>= 25.04), which the target asserts. Lints every fixture's project
+  # once (#295); budgeted with headroom over observed wall time.
   lint-nf:
     name: Lint generated Nextflow
     needs: changes
