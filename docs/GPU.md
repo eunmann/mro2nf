@@ -33,8 +33,8 @@ join of a split stage the `__special` the split returned for it, which
 replaces the stage's. A split stage's split job carries the stage's own
 special, as in `mrp`; a split that does no GPU work can leave `special` off
 the stage and return `__special = "gpu"` for its chunks. One rule in the
-generated `nextflow.config` evaluates this per task (a process directive cannot
-read a task's inputs on Nextflow 24.04).
+generated `nextflow.config` evaluates this per task (a process `accelerator`
+directive cannot read a task's inputs on Nextflow 25.10).
 
 The `awsbatch` and `healthomics` profiles (`TRANSPILER.md` §9) run the setups
 below. A GPU stage needs a CUDA image (below).

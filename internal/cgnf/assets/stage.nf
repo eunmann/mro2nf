@@ -4,8 +4,8 @@
 // carries the node's identity, the cache key of its spec (digest), the
 // run's call (call), the resources it is scheduled with, and its own
 // overrides file (overrides), which PLAN resolved; its GPU request is the
-// config's, which reads meta.special per task where a Nextflow 24.04
-// process directive cannot. Each phase runs `mre args`, then the phase's
+// config's, which reads meta.special per task where a Nextflow 25.10
+// process accelerator directive cannot. Each phase runs `mre args`, then the phase's
 // jobs through `mre run` as mrp runs them, then `mre post`.
 
 // shq quotes s for the shell: every value a script names goes through it.
@@ -75,7 +75,6 @@ def on(v) {
     return v.toString() == 'true'
 }
 
-// rest may be a GString, which Nextflow 24.04 does not pass for a String.
 def job(Map meta, phase, rest) {
     def cmd = "${shq(params.mro2nf_mre)} run -phase ${phase} ${graph(meta, '')} -psid ${shq(params.mro2nf_psid)} -work ."
     if (params.mro2nf_adapters) {
@@ -207,10 +206,7 @@ def locations(ups, List locs) {
 
 // OUTS resolves the pipeline outs from the stage outs and the entry files
 // they read and publishes them with mrp's own post-processing. It runs no
-// stage, so it compiles the project's copy of the .mro files it stages. The
-// workflow output block would publish the tree as data, but Nextflow 24.04
-// accepts it only under the nextflow.preview.output flag and in a syntax
-// 26.04 rejects (#356).
+// stage, so it compiles the project's copy of the .mro files it stages.
 process OUTS {
     publishDir params.outdir, mode: 'copy', saveAs: { f -> f.startsWith('results/') ? f.substring(8) : f }
 

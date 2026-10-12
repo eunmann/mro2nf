@@ -320,10 +320,7 @@ driver splits into rows without parsing a record.
 each bundle's location as a value (`toUriString()`, a path or an `s3://` URI),
 and publishes them with `mre outs` through `mrp`'s own post-processing: the
 `outs/` tree and `pipeline_outs.json`, which `publishDir` copies into
-`params.outdir`. The workflow `output {}` block would declare that tree as
-data, but Nextflow 24.04, the engine floor, accepts it only under the
-`nextflow.preview.output` flag, in a `publish:` syntax (`ch >> 'name'`) that
-26.04 rejects, and 26.04's syntax does not compile on 24.04 (#356).
+`params.outdir`.
 
 **Order.** Each staged list is staged in an order the run fixes, a gather's and
 OUTS's by instance key and a join's by chunk name, since list order is part of
