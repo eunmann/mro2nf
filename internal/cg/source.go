@@ -1,6 +1,7 @@
 package cg
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,7 +57,7 @@ func ReadSource(path string, mroPaths []string) (Source, error) {
 		return Source{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	call := (&syntax.Ast{Call: file.Call}).Format()
+	call := keepNegativeZero((&syntax.Ast{Call: file.Call}).Format())
 	file.Call = nil
 
 	_, _, ast, err := syntax.Compile(path, mroPaths, false)
@@ -82,21 +83,26 @@ func ReadSource(path string, mroPaths []string) (Source, error) {
 		return Source{}, fmt.Errorf("resolve %s: %w", path, err)
 	}
 
-	return Source{Name: filepath.Base(abs), Dir: filepath.Dir(abs), Decls: file.Format(), Call: call, Invocation: inv}, nil
+	return Source{Name: filepath.Base(abs), Dir: filepath.Dir(abs), Decls: keepNegativeZero(file.Format()), Call: call, Invocation: inv}, nil
 }
 
 // Rebuild is the invocation source of inv over the declarations: the call
 // mrp's invocation generator builds from invocation data (core.BuildCallAst,
-// as `mrg` runs it), after them.
+// as `mrg` runs it), after them. An argument inv keeps from the source's own
+// invocation keeps its float -0.0 (keepNegativeZero).
 func (s Source) Rebuild(inv *core.InvocationData, mroPaths []string) (string, error) {
 	callable, lookup, err := s.callable(inv.Call, mroPaths)
 	if err != nil {
 		return "", err
 	}
 
-	args := inv.Args
-	if args == nil {
-		args = core.LazyArgumentMap{}
+	args := make(core.LazyArgumentMap, len(inv.Args))
+	for k, v := range inv.Args {
+		if own, ok := s.Invocation.Args[k]; ok && bytes.Equal(own, v) {
+			v = json.RawMessage(keepNegativeZero(string(v)))
+		}
+
+		args[k] = v
 	}
 
 	ast, err := core.BuildCallAst(inv.Call, args.ToMarshalerMap(), inv.SplitArgs, callable, lookup, mroPaths)
@@ -104,7 +110,7 @@ func (s Source) Rebuild(inv *core.InvocationData, mroPaths []string) (string, er
 		return "", fmt.Errorf("build call of %s: %w", inv.Call, err)
 	}
 
-	return s.with((&syntax.Ast{Call: ast.Call}).Format()), nil
+	return s.with(keepNegativeZero((&syntax.Ast{Call: ast.Call}).Format())), nil
 }
 
 // Manifest is the type manifest of the source's declarations.
