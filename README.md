@@ -90,15 +90,15 @@ cd out && nextflow run main.nf  # results land in out/results/
 | Flag | Meaning |
 |---|---|
 | `-o <dir>` | output directory for the Nextflow project (default `out`) |
-| `-mropath <path>` | `@include` search path (`:`-separated) |
-| `-mre <path>` | path to the `mre` shim binary as it will appear **at run time** |
-| `-shell <path>` | path to `martian_shell.py` at run time |
-| `-mrjob <path>` | path to `mrjob` (only needed for `comp` stages) |
+| `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp` |
+| `-mre <path>` | path to the `mre` shim binary as it will appear **at run time** (a bare name is looked up on `PATH`) |
+| `-shell <path>` | path to `martian_shell.py` at run time (a relative path, even a bare name, resolves against the working directory: it is a script argument, not a command) |
+| `-mrjob <path>` | path to `mrjob` (only needed for `comp` stages; a bare name is looked up on `PATH`) |
 | `-container <image>` | set `process.container` for container backends (AWS Batch, HealthOmics) |
 | `-target <backend>` | shape the project for `local` (default), `awsbatch`, or `healthomics` |
 | `-monitor` | enforce mrp `--monitor`'s memory limits per stage: an RSS kill at `mem_gb` (the process-group monitor, mrp's primary kill) plus a `prlimit` virtual-memory cap at `vmem_gb` |
 | `-native` | channel-native orchestration: collapse the data-plane tasks into driver channel wiring (see [Native mode](#native-mode--native)). **Trade-off:** entry inputs are baked at transpile time — supplying one at launch is a loud error; re-transpile to change them |
-| `-allow-external-files` | copy an entry file default, or (container targets) a stage `src`, that resolves outside the `.mro`'s directory and the explicitly given `-mropath` roots (the implicit `.` is not one) into the project or image. Without it the transpile refuses such a file, so a shared `.mro` cannot ship host data such as `~/.aws` in `entry_args/`, the image, or `workflow.zip` |
+| `-allow-external-files` | copy an entry file default, or (container targets) a stage `src`, that resolves outside the `.mro`'s directory and the `-mropath` (or `$MROPATH`) roots — the working directory is not one — into the project or image. Without it the transpile refuses such a file, so a shared `.mro` cannot ship host data such as `~/.aws` in `entry_args/`, the image, or `workflow.zip` |
 | `-config <path>` | path to a [`.mro2nf.yml`](#mro2nfyml-project-defaults) of per-project flag defaults (default: probed alongside the `.mro`) |
 | `-version` | print the mro2nf version and exit |
 
@@ -175,7 +175,11 @@ native: true
 ```
 
 Supported keys: `target`, `container`, `mre`, `shell`, `mrjob`, `monitor`,
-`native`. A container
+`native`. A relative `mre`, `shell` or `mrjob` path resolves against the config
+file's directory, not the working directory, so a checked-in
+`shell: tools/martian_shell.py` names the same file wherever you run
+`mro2nf`; a bare `mre` or `mrjob` name stays a `PATH` command, as for the
+flags. A container
 target bakes an `mre`, `shell` or `mrjob` path set here into the image only
 when it resolves inside the `.mro`'s directory or a `-mropath` root, since a
 config file shipped with a shared `.mro` is not trusted; pass the flag to use a

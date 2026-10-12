@@ -74,7 +74,8 @@ type Options struct {
 	// entry input default is resolved against it so the baked entry_args bundle is
 	// self-contained regardless of the transpile working directory.
 	MRODir string
-	// MROPath is the -mropath search roots. With MRODir they bound the host files
+	// MROPath is the @include search path (-mropath, else $MROPATH, else the
+	// .mro's directory). With MRODir its entries bound the host files
 	// the transpile copies: an entry file default, and on a container target a
 	// stage src, must resolve inside one of them.
 	MROPath []string
