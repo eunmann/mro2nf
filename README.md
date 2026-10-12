@@ -87,7 +87,6 @@ cd out && nextflow run main.nf  # results land in out/results/
 |---|---|
 | `-o <dir>` | output directory for the Nextflow project (default `out`) |
 | `-mropath <path>` | `@include` search path (`:`-separated); default `$MROPATH` when set, else the `.mro`'s directory, as `mrp`; as in `mrp`, the `.mro`'s own directory is searched first, for its own includes and its stages' code only, and the working directory never |
-| `-confine-outputs` | fail a stage task whose output resolves outside its work dir instead of copying it in, for a project run under an isolating executor such as docker |
 | `-version` | print the mro2nf version and exit |
 
 The tasks run the `mre` on `PATH` where the pipeline runs (`make install` on
@@ -97,8 +96,10 @@ A run names others with `--mro2nf_mre <path>`, `--mro2nf_mrjob <path>` and
 `--mro2nf_adapters <dir>` (Martian's adapters dir, holding
 `python/martian_shell.py`), such as a pipeline bundle's own Martian runtime.
 `--mro2nf_monitor true` is mrp's `--monitor`: `mrjob` enforces each job's
-memory and thread limits. A launch-time mrp `--overrides` file is tracked by
-#301.
+memory and thread limits. `--mro2nf_confine true` fails a stage task whose
+output resolves outside its work dir instead of copying it in, which the
+container profiles always do. A launch-time mrp `--overrides` file is tracked
+by #301.
 
 ### Targets: one project, chosen with `-profile`
 

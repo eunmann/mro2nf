@@ -40,15 +40,12 @@ func reserved(param string) bool {
 	return param == "outdir" || param == "job_resources" || strings.HasPrefix(param, "mro2nf_")
 }
 
-// Options are the paths and knobs a generated project bakes in.
+// Options are where a project is emitted and what it bakes in.
 type Options struct {
 	// OutDir receives the project.
 	OutDir string
 	// MroPaths are the absolute include paths the invocation compiles with.
 	MroPaths []string
-	// Confine fails a stage task whose output resolves outside its work
-	// dir instead of copying it in (mre run -confine).
-	Confine bool
 	// Version names the build in every task's cache key.
 	Version string
 }

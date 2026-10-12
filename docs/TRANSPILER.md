@@ -115,10 +115,9 @@ with `mrp`'s message, and no project is written.
   `mrp`, the entry's own directory is searched first for the entry's includes
   and its stages' code only: every compile of the run's invocation, in the
   transpiler and in each task, compiles it as the entry file.
-- `-confine-outputs`: fail a stage task whose output resolves outside its work
-  dir instead of copying it in (§7) on the local and grid profiles too; the
-  container profiles always confine.
 - `-version`.
+
+Everything else is a launch param of the project (§4).
 
 **The witness.** A transpile cannot know a run's invocation, so it compiles a
 *witness* one (`cg.Source.Witness`): every entry input a value of its type with
@@ -180,9 +179,12 @@ records mre wrote; it parses no stage-controlled JSON.
   `--mro2nf_mrjob` and `--mro2nf_adapters`, such as a pipeline bundle's own
   Martian runtime, so the project names no host path of the tools.
   `--mro2nf_monitor true` is `mrp`'s `--monitor`: `mrjob` enforces each job's
-  memory and thread limits. A boolean param is on only when it is `true` or
-  the string `'true'`, as a launch's `--<name> <value>` sets it under the v2
-  parser or `NXF_DISABLE_PARAMS_TYPE_DETECTION` (§8).
+  memory and thread limits. `--mro2nf_confine true` fails a stage task whose
+  output resolves outside its work dir instead of copying it in (§7) on the
+  local and grid profiles too; the container profiles always confine. A
+  boolean param is on only when it is `true` or the string `'true'`, as a
+  launch's `--<name> <value>` sets it under the v2 parser or
+  `NXF_DISABLE_PARAMS_TYPE_DETECTION` (§8).
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
   values a run stages (§8), and `mro2nf_image` the one image the container
   profiles run every task in, which they require (`mro2nf_require_image`,
@@ -516,9 +518,9 @@ the bundle), a path in the work dir outside the stage's phase dir, i.e. a staged
 input (followed wherever it points, hard-linked), or a host path outside the
 task:
 
-- Under `-confine-outputs` (`mre run -confine`), such a path cannot be valid in
-  an isolated container downstream, and copying it would upload host data, so
-  the task fails, naming the output.
+- Under `--mro2nf_confine true` (`mre run -confine`), such a path cannot be
+  valid in an isolated container downstream, and copying it would upload host
+  data, so the task fails, naming the output.
 - Otherwise, where `mrp` publishes a symlink and pipelines legitimately return
   paths into host reference dirs, the target is staged as a byte copy, never a
   hard link, so no later write through the bundle can alias the host file.

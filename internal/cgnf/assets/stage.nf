@@ -81,7 +81,7 @@ def job(Map meta, phase, rest) {
     if (on(params.mro2nf_monitor)) {
         cmd += ' -monitor'
     }
-    if (params.mro2nf_confine) {
+    if (on(params.mro2nf_confine)) {
         cmd += ' -confine'
     }
     return cmd + ' ' + rest

@@ -168,6 +168,20 @@ func TestEmitNamesNoHostTools(t *testing.T) {
 	}
 }
 
+// TestEmitConfinesAtLaunch: a stage task's outputs are confined to its
+// work dir (mre run -confine) only when the run sets params.mro2nf_confine.
+func TestEmitConfinesAtLaunch(t *testing.T) {
+	cfg := readTree(t, emitFixture(t, "file_min"))["nextflow.config"]
+
+	if !strings.Contains(cfg, "params.mro2nf_confine = false\n") {
+		t.Errorf("nextflow.config does not leave confinement off:\n%s", cfg)
+	}
+
+	if !strings.Contains(stageModule, "if (on(params.mro2nf_confine)) {\n        cmd += ' -confine'") {
+		t.Error("stage.nf does not confine on params.mro2nf_confine")
+	}
+}
+
 // TestEmitAliases: every stage node of the witness's call graph is one
 // alias of the stage module, a split stage the split, main and join
 // processes, and every entry-fed fork root is one PLAN output

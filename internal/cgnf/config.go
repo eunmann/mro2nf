@@ -37,10 +37,13 @@ params.mro2nf_adapters = null
 // mrp's --monitor: mrjob enforces each job's memory and thread limits.
 params.mro2nf_monitor = false
 
+// Fail a stage task whose output resolves outside its work dir instead of
+// copying it in, for a run under an isolating executor such as docker.
+params.mro2nf_confine = false
+
 `)
 
-	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n", gstr(p.src.Invocation.Call))
-	fmt.Fprintf(&b, "params.mro2nf_confine = %t\n\n", p.opts.Confine)
+	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n\n", gstr(p.src.Invocation.Call))
 
 	b.WriteString(`// The entry file values a run stages: a head-node path where the profile
 // sees the head node's files, an s3:// URI always, and a URI of any other

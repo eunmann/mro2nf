@@ -91,18 +91,17 @@ func run(args []string) error {
 // parsed values from a single place and cgnf.Options is derived rather than
 // hand-copied.
 type transpileFlags struct {
-	outDir, mroPath             *string
-	confineOutputs, showVersion *bool
+	outDir, mroPath *string
+	showVersion     *bool
 }
 
 // defineTranspileFlags registers the transpile flags on fs and returns their
 // value pointers.
 func defineTranspileFlags(fs *flag.FlagSet) transpileFlags {
 	return transpileFlags{
-		outDir:         fs.String("o", "out", "output directory for the generated Nextflow project"),
-		mroPath:        fs.String("mropath", "", mroPathUsage),
-		confineOutputs: fs.Bool("confine-outputs", false, "fail a stage task whose output resolves outside its work dir instead of copying it in (set it for a project run under an isolating executor such as docker)"),
-		showVersion:    fs.Bool("version", false, "print version and exit"),
+		outDir:      fs.String("o", "out", "output directory for the generated Nextflow project"),
+		mroPath:     fs.String("mropath", "", mroPathUsage),
+		showVersion: fs.Bool("version", false, "print version and exit"),
 	}
 }
 
@@ -117,7 +116,6 @@ func (f transpileFlags) options(src string) (cgnf.Options, error) {
 	return cgnf.Options{
 		OutDir:   *f.outDir,
 		MroPaths: paths,
-		Confine:  *f.confineOutputs,
 		Version:  buildVersion(),
 	}, nil
 }

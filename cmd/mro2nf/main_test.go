@@ -38,7 +38,7 @@ func readConfig(t *testing.T, proj string) string {
 
 // TestRunEmitsCallGraphProject checks a transpile of a py pipeline that
 // names no tools emits the call-graph project, whose tasks run the mre on
-// PATH with its own mrjob and adapters, confined under -confine-outputs.
+// PATH with its own mrjob and adapters, unconfined unless the run says so.
 func TestRunEmitsCallGraphProject(t *testing.T) {
 	out, err := runFixture(t, "file_min")
 	if err != nil {
@@ -55,19 +55,10 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(out, "stage.nf")); err != nil {
 		t.Errorf("no stage module: %v", err)
 	}
-
-	confined, err := runFixture(t, "file_min", "-confine-outputs")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if cfg := readConfig(t, confined); !strings.Contains(cfg, "params.mro2nf_confine = true") {
-		t.Errorf("-confine-outputs does not confine the stage tasks:\n%s", cfg)
-	}
 }
 
-// TestUsageShowsDefaults checks the usage text lists each flag with its
-// default.
+// TestUsageShowsDefaults checks the transpile takes only -o, -mropath and
+// -version, and the usage text lists each with its default.
 func TestUsageShowsDefaults(t *testing.T) {
 	fs := flag.NewFlagSet("mro2nf", flag.ContinueOnError)
 
@@ -77,7 +68,15 @@ func TestUsageShowsDefaults(t *testing.T) {
 	defineTranspileFlags(fs)
 	fs.PrintDefaults()
 
-	for _, want := range []string{"-mropath", "-confine-outputs", `(default "out")`} {
+	var names []string
+
+	fs.VisitAll(func(f *flag.Flag) { names = append(names, f.Name) })
+
+	if diff := cmp.Diff([]string{"mropath", "o", "version"}, names); diff != "" {
+		t.Errorf("flags (-want +got):\n%s", diff)
+	}
+
+	for _, want := range []string{"-mropath", `(default "out")`, "-version"} {
 		if !strings.Contains(usage.String(), want) {
 			t.Errorf("usage lacks %s:\n%s", want, usage.String())
 		}
@@ -353,7 +352,7 @@ func TestRunRejectsDeletedFlags(t *testing.T) {
 	for _, name := range []string{
 		"emitter=v2", "native", "inline-pipelines=false", "target=awsbatch", "container=img",
 		"allow-external-files", "fold-disables", "fuse-chains", "native-runner",
-		"mre=/opt/mre", "shell=martian_shell.py", "mrjob=/opt/mrjob", "config=.mro2nf.yml", "monitor",
+		"mre=/opt/mre", "shell=martian_shell.py", "mrjob=/opt/mrjob", "config=.mro2nf.yml", "monitor", "confine-outputs",
 	} {
 		t.Run(name, func(t *testing.T) {
 			flagName, _, _ := strings.Cut(name, "=")

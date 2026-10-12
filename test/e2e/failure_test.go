@@ -84,18 +84,18 @@ func TestPreflightFailsBeforeItsPipeline(t *testing.T) {
 }
 
 // TestStageOutputLinkOutsideWorkFails guards #332 on isolated container
-// targets (-confine-outputs, implied by awsbatch/healthomics): a stage whose
-// file output is a symlink to a file outside its task work dir must fail the
-// run, naming the output and the target, rather than staging the target into
-// its bundle and uploading it.
+// targets (--mro2nf_confine true): a stage whose file output is a symlink to
+// a file outside its task work dir must fail the run, naming the output and
+// the target, rather than staging the target into its bundle and uploading
+// it.
 func TestStageOutputLinkOutsideWorkFails(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java", "python3")
 
-	proj := transpile(t, "symlink_escape", "-confine-outputs")
+	proj := transpile(t, "symlink_escape")
 
-	if err := runNextflowAllowingFailedAttempts(t, proj); err == nil {
+	if err := runNextflowAllowingFailedAttempts(t, proj, "--mro2nf_confine", "true"); err == nil {
 		t.Fatal("run succeeded; an output linked outside the work dir must fail it")
 	}
 
