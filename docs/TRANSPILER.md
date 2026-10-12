@@ -528,7 +528,8 @@ the differential applies and which generates the
 Some change only how the outputs are reached: `local`, `volatile` and `retain`
 are no-ops (no VDR / mid-run work-dir reclamation), the published `outs/` tree
 is copied into place rather than moved and symlinked, `-resume` is Nextflow's
-content-addressed cache, and a mapped or disabled `preflight` runs in plain DAG
-order. Others are real output or outcome differences, each with its tracking
-issue or the reason it is kept. A construct the call graph cannot carry fails
-the transpile, never a run.
+content-addressed cache, and a `preflight` runs in plain DAG order. Others are
+real output or outcome differences, each with its tracking issue or the reason
+it is kept. A construct the call graph cannot carry fails the transpile, and
+an invocation the witness does not cover fails PLAN (§5) before any stage
+starts.
