@@ -127,44 +127,6 @@ func (a *argsFlags) write(g *cg.Graph, man types.Manifest, out string, link bool
 	return inst, nil
 }
 
-// runArgs writes one stage instance's args bundle and prints the instance's
-// state, enabled or disabled, on stdout.
-func runArgs(_ context.Context, argv []string) error {
-	fs := flag.NewFlagSet("args", flag.ContinueOnError)
-	gf := addGraph(fs)
-
-	var a argsFlags
-
-	a.register(fs)
-	out := fs.String("o", "args", "args bundle dir to write")
-	link := fs.Bool("link", false, "no other task stages the bundle: link its file leaves to the staged files instead of copying them")
-
-	if err := fs.Parse(argv); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	g, man, err := gf.load()
-	if err != nil {
-		return err
-	}
-
-	inst, err := a.write(g, man, *out, *link)
-	if err != nil {
-		return err
-	}
-
-	state := "enabled"
-	if inst.Disabled {
-		state = "disabled"
-	}
-
-	if _, err := fmt.Fprintln(os.Stdout, state); err != nil {
-		return fmt.Errorf("write state: %w", err)
-	}
-
-	return nil
-}
-
 // stagedEntryFiles maps the entry file values -leaves lists, which the
 // task staged below entry/, to the paths it reads them at.
 func stagedEntryFiles(g *cg.Graph, man types.Manifest, leaves string) (map[string]string, error) {
@@ -203,48 +165,9 @@ func (p *postFlags) register(fs *flag.FlagSet) {
 }
 
 // post stamps the outs bundle outs of the instance the args bundle args
-// stamps and writes the fork elements of every root it feeds; in are the
-// staged items a fork source also reads.
-func (p *postFlags) post(g *cg.Graph, man types.Manifest, args, outs string, in []string) error {
-	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, In: in, Manifest: man, Forks: p.forks, Fields: p.fields, Gates: p.gates}); err != nil {
-		return fmt.Errorf("post: %w", err)
-	}
-
-	return nil
-}
-
-// runPost stamps a finished instance's outs and writes the fork elements of
-// every root it feeds; -entry-forks writes those of the roots no stage
-// feeds.
-func runPost(_ context.Context, argv []string) error {
-	fs := flag.NewFlagSet("post", flag.ContinueOnError)
-	gf := addGraph(fs)
-
-	var p postFlags
-
-	p.register(fs)
-	args := fs.String("args", "args", "the instance's args bundle dir")
-	outs := fs.String("outs", "outs", "the stage's outs bundle dir")
-	entry := fs.Bool("entry-forks", false, "write the forks the invocation's entry values fix, not a stage's")
-
-	var in repeatedFlag
-
-	fs.Var(&in, "in", "staged item a fork source also reads (repeatable)")
-
-	if err := fs.Parse(argv); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	g, man, err := gf.load()
-	if err != nil {
-		return err
-	}
-
-	if !*entry {
-		return p.post(g, man, *args, *outs, in)
-	}
-
-	if err := g.PostEntry(p.forks); err != nil {
+// stamps and writes the fork elements of every root it feeds.
+func (p *postFlags) post(g *cg.Graph, man types.Manifest, args, outs string) error {
+	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, Manifest: man, Forks: p.forks, Fields: p.fields, Gates: p.gates}); err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
 

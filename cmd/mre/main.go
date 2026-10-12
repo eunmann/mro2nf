@@ -1,11 +1,9 @@
 // Command mre is the Martian runtime executor the generated Nextflow tasks
-// call: PLAN compiles the run's call graph (plan), a stage task runs the
-// steps its phase has in one call (stage), and the OUTS task resolves and
-// publishes the pipeline outs (outs). No generated task calls args, run or
-// post, each one of stage's steps: building a stage instance's _args,
-// running one phase of the stage as mrp runs its job, and stamping and
-// splitting its outs. They remain for the call-graph replay against mrp
-// and the tests that pin stage to them, and for running a step by hand.
+// call: PLAN compiles the run's call graph (plan), a stage task runs its
+// phase in one call (stage), which builds the stage instance's _args, runs
+// the phase's job as mrp runs it, and stamps and splits its outs, each
+// where the phase has it, and the OUTS task resolves and publishes the
+// pipeline outs (outs).
 package main
 
 import (
@@ -22,7 +20,7 @@ import (
 var version = "dev"
 
 var (
-	errUsage          = errors.New("usage: mre <plan|stage|args|run|post|outs|version> [flags]")
+	errUsage          = errors.New("usage: mre <plan|stage|outs|version> [flags]")
 	errUnknownCommand = errors.New("unknown subcommand")
 )
 
@@ -70,11 +68,8 @@ func run(ctx context.Context, args []string) error {
 func subcommands() map[string]func(context.Context, []string) error {
 	return map[string]func(context.Context, []string) error{
 		"plan":  runPlan,
-		"args":  runArgs,
-		"post":  runPost,
-		"outs":  runOuts,
-		"run":   runJob,
 		"stage": runStage,
+		"outs":  runOuts,
 	}
 }
 

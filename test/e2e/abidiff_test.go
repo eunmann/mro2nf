@@ -367,7 +367,7 @@ var (
 	// mrpPhaseDir matches mrp's phase dirs, which carry a -u<uuid> suffix behind a
 	// plain-named symlink on current mrp and none on older pipestances.
 	mrpPhaseDir = regexp.MustCompile(`^(split|join|chnk[0-9]+)(-u[0-9a-f]+)?$`)
-	// chunkDir names a chunk's metadata dir, mrp's and `mre run`'s main
+	// chunkDir names a chunk's metadata dir, mrp's and `mre stage`'s main
 	// phase alike.
 	chunkDir = regexp.MustCompile(`^chnk[0-9]+$`)
 	// mrpInvocationCall reads the callable from a fork's _invocation, which

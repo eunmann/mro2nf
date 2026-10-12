@@ -13,10 +13,12 @@ import (
 )
 
 // errNotEnabled reports an instance its args resolve disabled, which the
-// driver ran because its gates held it enabled.
+// driver ran because its gates held it enabled. The mrp call-graph replay
+// (TestMrpCallGraph) tells a disabled instance from a failed task by its
+// message.
 var errNotEnabled = errors.New("not enabled where its gates said enabled")
 
-// stageFlags are mre stage's: the args, run and post steps' flags, sharing
+// stageFlags are mre stage's: the args, job and post steps' flags, sharing
 // the args bundle dir (-args) and the outs bundle a job writes and its post
 // stamps (-o).
 type stageFlags struct {
@@ -75,7 +77,7 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph, man types.Manifest)
 		return nil
 	}
 
-	return s.post.post(g, man, s.run.args, s.run.out, nil)
+	return s.post.post(g, man, s.run.args, s.run.out)
 }
 
 // taskSteps are the steps a stage task runs around its job.

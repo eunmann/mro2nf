@@ -110,7 +110,7 @@ func postStep(gf graphFlags, p postFlags, args, outs string) error {
 		return err
 	}
 
-	return p.post(g, man, args, outs, nil)
+	return p.post(g, man, args, outs)
 }
 
 // TestCallGraphSteps drives struct_proj through its entry forks, mre
@@ -246,7 +246,7 @@ func TestArgsForkRecord(t *testing.T) {
 // TestCallGraphNeedsEntry: the call-graph subcommands and plan refuse to
 // run without the entry they resolve against.
 func TestCallGraphNeedsEntry(t *testing.T) {
-	for _, sub := range []string{"args", "post", "outs", "run", "stage", "plan"} {
+	for _, sub := range []string{"outs", "stage", "plan"} {
 		if err := run(t.Context(), []string{sub}); !errors.Is(err, errNoEntry) {
 			t.Errorf("mre %s without -entry: %v, want errNoEntry", sub, err)
 		}

@@ -46,7 +46,7 @@ var (
 	errSpecialLine = errors.New("a special holding a line break has no resources table row")
 )
 
-// runFlags are `mre run`'s inputs beside the call graph's.
+// runFlags are the inputs of mre stage's job step beside the call graph's.
 type runFlags struct {
 	phase, args, out, chunk, chunks, chunkOuts, overrides string
 	confine                                               bool
@@ -69,29 +69,9 @@ func (f *runFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.overrides, "overrides", "", "an mrp --overrides file over the job's resources (mre plan writes each node's own)")
 }
 
-// runJob runs one phase of the stage instance whose args bundle -args
-// holds, as mrp runs its job: split writes the chunks dir, main and join
-// write the outs bundle.
-func runJob(ctx context.Context, argv []string) error {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	gf := addGraph(fs)
-
-	var f runFlags
-
-	f.register(fs)
-
-	if err := fs.Parse(argv); err != nil {
-		return fmt.Errorf("parse flags: %w", err)
-	}
-
-	g, man, err := gf.load()
-	if err != nil {
-		return err
-	}
-
-	return f.run(ctx, g, man)
-}
-
+// run runs one phase of the stage instance whose args bundle -args holds,
+// as mrp runs its job: split writes the chunks dir, main and join write the
+// outs bundle.
 func (f *runFlags) run(ctx context.Context, g *cg.Graph, man types.Manifest) error {
 	over, err := readOverrides(f.overrides)
 	if err != nil {

@@ -32,8 +32,6 @@ type PostSpec struct {
 	Args string
 	// Outs is the stage's outs bundle; a disabled instance's is written here.
 	Outs string
-	// In are staged items a fork source of this stage also reads.
-	In []string
 	// Manifest locates the file leaves of the outs and fork elements.
 	Manifest types.Manifest
 	// Forks is the dir that receives <root>/<ordinal>/ fork elements.
@@ -91,7 +89,7 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 		return Instance{}, nil, err
 	}
 
-	s, err := g.stage(append(slices.Clone(spec.In), spec.Outs))
+	s, err := g.stage([]string{spec.Outs})
 	if err != nil {
 		return Instance{}, nil, err
 	}

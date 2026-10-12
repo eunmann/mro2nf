@@ -190,10 +190,10 @@ func (m Manifest) Table() *Table {
 // Param roles select which of a callable's parameter sets a bundle's values
 // are walked with.
 const (
-	RoleIn      = "in"      // a callable's input params (mre args, plan)
-	RoleOut     = "out"     // a callable's output params (mre run, post, outs)
-	RoleMainOut = "mainout" // a split stage's per-chunk main outputs, out + chunkOut (mre run)
-	RoleChunkIn = "chunkin" // a split stage's per-chunk input params (mre run)
+	RoleIn      = "in"      // a callable's input params (mre stage's args, plan)
+	RoleOut     = "out"     // a callable's output params (mre stage's job and post, outs)
+	RoleMainOut = "mainout" // a split stage's per-chunk main outputs, out + chunkOut (mre stage's job)
+	RoleChunkIn = "chunkin" // a split stage's per-chunk input params (mre stage's job)
 )
 
 var (
