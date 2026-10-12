@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -171,6 +172,46 @@ func writeJSONScalar(b *strings.Builder, v any) error {
 	b.WriteString(strings.TrimSuffix(buf.String(), "\n"))
 
 	return nil
+}
+
+// pairJSONStrings replaces every string value in v (not object keys) with f's
+// result for it and its counterpart in other: the value at the same object
+// key or array index, nil where other has none.
+func pairJSONStrings(v, other any, f func(s string, other any) string) any {
+	switch x := v.(type) {
+	case string:
+		return f(x, other)
+	case jsonObject:
+		o, _ := other.(jsonObject)
+
+		for i := range x {
+			var counterpart any
+
+			if j := slices.IndexFunc(o, func(m jsonMember) bool { return m.Key == x[i].Key }); j >= 0 {
+				counterpart = o[j].Value
+			}
+
+			x[i].Value = pairJSONStrings(x[i].Value, counterpart, f)
+		}
+
+		return x
+	case []any:
+		o, _ := other.([]any)
+
+		for i := range x {
+			var counterpart any
+
+			if i < len(o) {
+				counterpart = o[i]
+			}
+
+			x[i] = pairJSONStrings(x[i], counterpart, f)
+		}
+
+		return x
+	default:
+		return v
+	}
 }
 
 // mapJSONStrings replaces every string value in v (not object keys) with
