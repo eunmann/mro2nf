@@ -59,7 +59,7 @@ testdata/      .mro fixtures with expected mrp outputs (e2e goldens)
 test/e2e/      Go e2e suites (golden diff vs mrp, mrp differential)
 test/gen/      generator of random well-typed programs for the generative differential
 test/thirdparty/   THIRD_PARTY_NOTICES generator, vendored-license and vendor-martian drift checks
-scripts/aws/   live AWS Batch and HealthOmics runbooks
+scripts/aws/   normcmp.py, the path-normalized outs comparison of the live AWS runs
 deploy/        the release runtime image; a minimal AWS CDK (S3 + ECR + Batch + HealthOmics role)
 docs/          TRANSPILER.md (how it works, end to end), FEATURE_COVERAGE.md
                (support matrix), GPU.md, RUNTIME_TUNING.md (mrp knobs ->
