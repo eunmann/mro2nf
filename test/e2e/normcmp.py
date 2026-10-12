@@ -77,12 +77,11 @@ def published_links(outs):
     """Map each path mrp's _outs names for a symlink under outs to the links.
 
     The links of a path are sorted. mrp names the link's target, except for a
-    stage's relative symlink that
-    leads through further links: there outs/ links to the last intermediate
-    link and mrp names that link's target (martian/core/post_process.go
-    copyOutSymlink). A target under outs is the file mrp moved there for the
-    first output that reached it, which mro2nf names too, so it is kept.
-    Mirrors mrpPublishedLinks in published_test.go.
+    stage's relative symlink that leads through further links: there outs/
+    links to the last intermediate link and mrp names that link's target
+    (martian/core/post_process.go copyOutSymlink). A target under outs is the
+    file mrp moved there for the first output that reached it, which mro2nf
+    names too, so it is kept. Mirrors mrpPublishedLinks in published_test.go.
     """
     links = {}
     in_outs = outs.rstrip("/") + "/"
