@@ -20,8 +20,9 @@ import (
 const minOrdinalWidth = 4
 
 var (
-	errInvalidOuts = errors.New("invalid stage outs")
-	errMultiSource = errors.New("fork root reads several stages")
+	errInvalidOuts  = errors.New("invalid stage outs")
+	errMultiSource  = errors.New("fork root reads several stages")
+	errFieldsValues = errors.New("a post writes its outs field by field into a Fields dir and a Values file, both or neither")
 )
 
 // PostSpec is one finished stage instance a task posts.
@@ -33,8 +34,10 @@ type PostSpec struct {
 	// Forks is the dir that receives <root>/<ordinal>/ fork elements.
 	Forks string
 	// Fields, when set, is the dir that receives one stamped bundle per
-	// output, named by it, so a consumer stages only the outputs it reads.
-	Fields string
+	// output, named by it, so a consumer stages only the outputs it reads,
+	// but for the outputs carried as values, whose records Values, set with
+	// it, receives, space-separated (valueRecord).
+	Fields, Values string
 	// Gates, when set, is the file that receives the nodes this instance's
 	// outs disable at its fork (Gates).
 	Gates string
@@ -48,6 +51,10 @@ type PostSpec struct {
 // feeds and one partner element dir per element of each output a partner
 // reads, then the outs field by field and the gates they set, when asked.
 func (g *Graph) Post(spec PostSpec) error {
+	if (spec.Fields == "") != (spec.Values == "") {
+		return errFieldsValues
+	}
+
 	in, s, err := g.post(spec)
 	if err != nil {
 		return err
@@ -81,7 +88,7 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 		return Instance{}, nil, err
 	}
 
-	s, err := g.stage([]string{spec.Outs})
+	s, err := g.stage([]string{spec.Outs}, nil)
 	if err != nil {
 		return Instance{}, nil, err
 	}

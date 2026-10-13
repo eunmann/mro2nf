@@ -18,13 +18,15 @@ import (
 // entry-fed roots' forks as values, and stages, linked below one dir as a
 // task stages them, the element dirs of its stage-fed roots' forks, the
 // partner element at its index of each output it zips, and the posted
-// output bundles it reads of every instance of each node it reads.
+// output bundles it reads of every instance of each node it reads, with
+// the posted value records of those outputs as values.
 type standIn struct {
 	t        *testing.T
 	g        *Graph
 	dir      string
 	seq      int
 	fields   map[string][]string
+	values   map[string][]string
 	elems    map[string][]elemDir
 	partners map[string][]postedPartner
 }
@@ -53,7 +55,7 @@ func newStandIn(t *testing.T, mro string) *standIn {
 
 	return &standIn{
 		t: t, g: g, dir: t.TempDir(),
-		fields: map[string][]string{}, elems: map[string][]elemDir{}, partners: map[string][]postedPartner{},
+		fields: map[string][]string{}, values: map[string][]string{}, elems: map[string][]elemDir{}, partners: map[string][]postedPartner{},
 	}
 }
 
@@ -92,20 +94,26 @@ func (s *standIn) collect(forks string, entry bool, fork Fork) {
 	}
 }
 
-// read is the posted output bundles of every instance of each node reads
-// names: the named outputs, or all of them.
-func (s *standIn) read(reads []Read) []string {
-	var out []string
+// read is the posted output bundles and value records of every instance of
+// each node reads names: the named outputs, or all of them.
+func (s *standIn) read(reads []Read) ([]string, []string) {
+	var dirs, values []string
 
 	for _, r := range reads {
 		for _, d := range s.fields[r.Node] {
 			if r.Fields == nil || slices.Contains(r.Fields, filepath.Base(d)) {
-				out = append(out, d)
+				dirs = append(dirs, d)
+			}
+		}
+
+		for _, v := range s.values[r.Node] {
+			if field, _, _ := strings.Cut(v, ":"); r.Fields == nil || slices.Contains(r.Fields, field) {
+				values = append(values, v)
 			}
 		}
 	}
 
-	return out
+	return dirs, values
 }
 
 // staged links items below one dir, as a task stages them, and returns it.
@@ -164,7 +172,7 @@ func (s *standIn) instances(n TopoNode) [][]elemDir {
 func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 	s.t.Helper()
 
-	items := s.read(n.Reads)
+	items, values := s.read(n.Reads)
 
 	var recs []Element
 
@@ -199,7 +207,7 @@ func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 
 	args := s.next("args")
 
-	in, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(items)}, Forks: recs, Out: args})
+	in, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(items)}, Values: values, Forks: recs, Out: args})
 	if err != nil {
 		s.t.Fatalf("args of %s: %v", n.Fqid, err)
 	}
@@ -275,11 +283,7 @@ func (s *standIn) node(n TopoNode) int {
 			s.t.Fatal(err)
 		}
 
-		spec := PostSpec{Args: args, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Gates: s.next("gates")}
-		if err := os.MkdirAll(filepath.Dir(spec.Gates), dirPerm); err != nil {
-			s.t.Fatal(err)
-		}
-
+		spec := PostSpec{Args: args, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Values: s.next("values"), Gates: s.next("gates")}
 		if err := s.g.Post(spec); err != nil {
 			s.t.Fatalf("post %s: %v", n.Fqid, err)
 		}
@@ -289,7 +293,13 @@ func (s *standIn) node(n TopoNode) int {
 			s.t.Fatal(err)
 		}
 
+		values, err := os.ReadFile(spec.Values)
+		if err != nil {
+			s.t.Fatal(err)
+		}
+
 		s.fields[n.Fqid] = append(s.fields[n.Fqid], fields...)
+		s.values[n.Fqid] = append(s.values[n.Fqid], strings.Fields(string(values))...)
 		s.collect(spec.Forks, false, in.Fork)
 		ran++
 	}
@@ -319,8 +329,10 @@ func (s *standIn) stages() (OutsSpec, int) {
 		ran += s.node(n)
 	}
 
+	dirs, values := s.read(topo.Outs)
+
 	return OutsSpec{
-		In:   []string{s.staged(s.read(topo.Outs))},
+		In: []string{s.staged(dirs)}, Values: values,
 		Work: s.next("work"), Results: s.next("results"), OutsJSON: s.next("pipeline_outs.json"),
 	}, ran
 }

@@ -45,7 +45,7 @@ func linesWeight(lines []string) int {
 // scope is one workflow: the entry workflow, or a run of nodes' wirings or
 // of runs. It takes the channels its nodes read and do not define, and
 // emits those it defines that a node outside it reads. Its published
-// statement mixes the outs bundles its units publish for OUTS into one
+// statement mixes the outs items its units publish for OUTS into one
 // channel, which it emits too, so no workflow mixes more sources than it
 // has units.
 type scope struct {
@@ -80,7 +80,7 @@ func (s *scope) call() []string {
 }
 
 // layout places the nodes' wirings in workflows: the nodes reading each
-// channel, the order each is defined in, and the source of the outs bundles
+// channel, the order each is defined in, and the source of the outs items
 // each node the pipeline outs read publishes.
 type layout struct {
 	nodes []*wiring
@@ -157,7 +157,7 @@ func (l *layout) measure(units []*unit) (int, int) {
 	return w + portCost*ports, len(takes)
 }
 
-// published is the statement that mixes the outs bundles units publish,
+// published is the statement that mixes the outs items units publish,
 // maxTakes sources at a time: a node's, if the pipeline outs read it, and
 // a sub-workflow's published channel, if it has one. Its weight does not
 // depend on the sub-workflows' names, which a scope is given only once

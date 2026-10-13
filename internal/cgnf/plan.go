@@ -66,7 +66,7 @@ func (p *project) values() string {
 }
 
 // publications maps each node the pipeline outs read to the source of the
-// outs bundles it publishes for OUTS, which the workflow wiring it mixes.
+// outs items it publishes for OUTS, which the workflow wiring it mixes.
 func (p *project) publications() map[int]string {
 	pubs := make(map[int]string, len(p.topo.Outs))
 
@@ -83,10 +83,11 @@ func (p *project) publications() map[int]string {
 	return pubs
 }
 
-// outs runs OUTS over every outs bundle the pipeline outs read, which the
+// outs runs OUTS over every outs item the pipeline outs read, which the
 // entry workflow's published channel mixes, ordered by node and instance
-// key, not by completion, and the entry files they read, which PLAN lists
-// by the pipeline's fqid.
+// key, not by completion: the bundles it stages, with where each producing
+// task keeps them, and the value records it gets as a value; and the entry
+// files they read, which PLAN lists by the pipeline's fqid.
 func (p *project) outs() *wiring {
 	w := &wiring{}
 
@@ -102,7 +103,9 @@ func (p *project) outs() *wiring {
 
 	w.linef("outs_in = %s", ups)
 	shared := w.use("shared")
-	w.linef("OUTS(%s, %s.map { c -> c.call }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/%s\"))", shared, shared, entry, mroAssets)
+	w.linef("outs_files = outs_in.map { xs -> bundlesOf(xs) }")
+	w.linef("OUTS(%s, %s.map { c -> c.call }, outs_files, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, outs_in.map { xs -> recordsOf(xs) }, %s, file(\"${projectDir}/%s\"))",
+		shared, shared, entry, mroAssets)
 
 	return w
 }

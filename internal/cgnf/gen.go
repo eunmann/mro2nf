@@ -11,7 +11,7 @@ import (
 
 // wiringWorkflows are the stage module's node wiring sub-workflows, which
 // every workflow of the project includes.
-const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATES ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; OR_SKIPPED ; PUBLISHED"
+const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATES ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; POSTED ; OR_SKIPPED ; PUBLISHED"
 
 // subworkflowDir holds a module per sub-workflow main.nf calls.
 const subworkflowDir = "subworkflows"
@@ -39,7 +39,7 @@ func (p *project) workflows() (map[string]string, error) {
 
 	var b strings.Builder
 
-	b.WriteString("include { shq ; code ; ordered ; on ; pool ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
+	b.WriteString("include { shq ; code ; ordered ; bundlesOf ; recordsOf ; on ; pool ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
 	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
 	b.WriteString(planProcess)

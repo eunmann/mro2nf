@@ -341,6 +341,37 @@ func TestWalkShapeMismatchPassthrough(t *testing.T) {
 	}
 }
 
+// TestHasFiles: a type holds a file leaf when Apply could walk to one: a
+// file, a path, a filetype, or an array, typed map or struct of one, at any
+// depth; never a scalar, an untyped map, or a struct of neither.
+func TestHasFiles(t *testing.T) {
+	tbl := newTable(t)
+
+	got := map[string]bool{}
+
+	for _, p := range fields(t, "a int", "b string", "c map", "d bool", "e float[]", "f map<int>", "g Notes", "h Num[]",
+		"i file", "j path", "k txt", "l txt[][]", "m map<bam>", "n Cfg", "o Outer[]", "p map<Cfg[]>") {
+		has, err := tbl.HasFiles(p.Tname)
+		if err != nil {
+			t.Fatalf("%s: %v", p.Id, err)
+		}
+
+		got[p.Id] = has
+	}
+
+	want := map[string]bool{
+		"a": false, "b": false, "c": false, "d": false, "e": false, "f": false, "g": false, "h": false,
+		"i": true, "j": true, "k": true, "l": true, "m": true, "n": true, "o": true, "p": true,
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("HasFiles (-want +got):\n%s", diff)
+	}
+
+	if _, err := tbl.HasFiles(fields(t, "x nosuch")[0].Tname); !errors.Is(err, types.ErrUnknownType) {
+		t.Errorf("HasFiles of an unknown type = %v, want %v", err, types.ErrUnknownType)
+	}
+}
+
 // TestUnknownType checks a param whose type the type table lacks fails the
 // walk loudly instead of passing its file leaves through unstaged.
 func TestUnknownType(t *testing.T) {

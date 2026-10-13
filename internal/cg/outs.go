@@ -13,8 +13,9 @@ import (
 
 // OutsSpec is the pipeline outs a task publishes.
 type OutsSpec struct {
-	// In are the staged outs of the stages the pipeline outs read.
-	In []string
+	// In are the staged outs of the stages the pipeline outs read, and
+	// Values those it got as value records (Post's Values).
+	In, Values []string
 	// Locations maps each staged outs bundle, by its absolute path, to where
 	// its producing task's work dir keeps it: the name of a file the
 	// pipeline outs leave unpublished.
@@ -35,7 +36,7 @@ type OutsSpec struct {
 // pipestance reconstructed from them. Then it writes the published tree and
 // the outs JSON naming it.
 func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
-	s, err := g.stage(spec.In)
+	s, err := g.stage(spec.In, spec.Values)
 	if err != nil {
 		return err
 	}

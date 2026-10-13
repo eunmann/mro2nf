@@ -288,7 +288,8 @@ place, and the run's work dir, which no entry value read in place may hold
 as which s3:// inputs it reads in place depends on the buckets its instance
 mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
 node's digest and resources (in `meta`), the run's call file, the mro2nf
-build, and its fork records and staged dirs. No task stages a file of PLAN's:
+build, and its fork records, outs value records and staged dirs. No task
+stages a file of PLAN's:
 the digests reach it as values, which Nextflow keys on by content, and the
 call as `call.b64`, a file the driver writes from PLAN's value once per run
 (`collectFile`), in a dir named by the call and the run's session, which a
@@ -351,9 +352,18 @@ its node's N forks. A disabled instance runs no task and stands in with no
 outs and no forks; Martian's call graph already reads its outputs as null in
 every consumer.
 
-**Reads.** An enabled instance stages, of each node it reads, only the outputs
-it reads (`outs/<output>/`): from the instance that shares its roots, or, a
-gather, from every such instance under it. A gather is a seeded `groupTuple`
+**Reads.** An enabled instance gets, of each node it reads, only the outputs
+it reads: from the instance that shares its roots, or, a gather, from every
+such instance under it. An output of a type that holds no file leaf, whose
+JSON is at most 4 KiB (`cg.MaxValueBytes`), reaches it as a value: a record
+its producer posted (`-field-values`), an `eval` output, that the driver
+carries in its channels and the task writes into a file for `mre stage
+-values`, so the record is part of the task's `-resume` key. Any other
+output it stages as a bundle (`outs/<output>/`). A staged bundle costs each
+reader on an object store a listing and a copy whatever its size (on the
+CellRanger Batch run, 287 of 896 downloads were such outputs); a value costs
+the driver its bytes per instance until its readers are done, which the
+bound keeps from growing with an output's size. A gather is a seeded `groupTuple`
 over all of its upstream, so an instance under which there is none gathers
 none, and a forked instance waits for every fork of the node it reads, as `mrp`
 waits for every fork of a node before a node reading it runs
@@ -366,13 +376,14 @@ reads into rows without parsing a record, not an `eval` value, whose
 collection is quadratic in its lines.
 
 **OUTS.** The last task stages every outs bundle the pipeline outs read, gets
-each bundle's location as a value (`toUriString()`, a path or an `s3://` URI),
-and publishes them with `mre outs` through `mrp`'s own post-processing: the
+each bundle's location as a value (`toUriString()`, a path or an `s3://` URI)
+and the outputs they read that reach it as values, and publishes them with `mre outs` through `mrp`'s own post-processing: the
 `outs/` tree and `pipeline_outs.json`, which `publishDir` copies into
 `params.outdir`.
 
-**Order.** Each staged list is staged in an order the run fixes, a gather's and
-OUTS's by instance key and a join's by chunk name, since list order is part of
+**Order.** Each staged list, and each list of value records, is in an order
+the run fixes, a gather's and OUTS's by instance key, then output, and a
+join's by chunk name, since list order is part of
 a task's `-resume` key and arrival order is completion order.
 
 **Overhead.** The tasks are PLAN, one per stage job `mrp` runs (each split,
@@ -493,9 +504,13 @@ every filetype and struct, and the struct of each callable's outputs.
   fork of that call. The posting task enumerates an outer call its own fork does
   not fix from what it staged, and prefixes the name with the ordinal of each
   such call, joined by dots. A root of known length is keyed by its own forks
-  alone, whatever outer calls its stages are also forked on. With `-fields`, it
-  also writes the outs as one stamped bundle per output, `<dir>/<output>/`, so a
-  consumer stages only the outputs it reads. With `-gates`, it writes the
+  alone, whatever outer calls its stages are also forked on. With `-fields` and
+  `-field-values`, it also writes the outs output by output, so a consumer
+  gets only the outputs it reads: one of a type with no file leaf and at most
+  `cg.MaxValueBytes` of JSON as a record in the `-field-values` file,
+  `<output>:` and base64 of the instance's stamp and the output's JSON, and
+  any other as one stamped bundle, `<dir>/<output>/`. A consumer's `-values`
+  file holds the records it got; `mre outs` takes one too. With `-gates`, it writes the
   instances the instance's outs disable: of each node with a disable binding
   that reads this stage alone, every fork it resolves true at, as `mrp`'s
   `Fork.disabled` reads it (a null reads false), named

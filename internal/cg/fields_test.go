@@ -2,65 +2,180 @@ package cg
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// postFields posts the instance outs stand for with Fields and Gates set, and
-// returns the fields dir and the gates the post wrote.
-func (f *fixture) postFields(outs string) (string, string) {
-	f.t.Helper()
-
-	fields, gates := f.next("fields"), f.next("gates")
-	if err := f.g.Post(PostSpec{Args: outs, Outs: outs, Forks: f.next("forks"), Fields: fields, Gates: gates}); err != nil {
-		f.t.Fatal(err)
-	}
-
-	raw, err := os.ReadFile(gates)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-
-	return fields, string(raw)
+// posted is what a post wrote for its readers output by output: its
+// fields dir, its value records by output, and the gates it set.
+type posted struct {
+	fields string
+	values map[string]string
+	gates  string
 }
 
-// TestPostFields: SRC's post writes one stamped bundle per output, and USE,
-// staging only the y bundle, gets the _args mrp gave chain_gate's USE
-// (CH/USE/fork0/split/_args: {"k":3,"y":4}).
+// postFields posts the instance outs stand for with Fields, Values and
+// Gates set, and returns what it wrote.
+func (f *fixture) postFields(outs string) posted {
+	f.t.Helper()
+
+	fields, values, gates := f.next("fields"), f.next("values"), f.next("gates")
+	if err := f.g.Post(PostSpec{Args: outs, Outs: outs, Forks: f.next("forks"), Fields: fields, Values: values, Gates: gates}); err != nil {
+		f.t.Fatal(err)
+	}
+
+	recs := map[string]string{}
+
+	for rec := range strings.FieldsSeq(readFile(f.t, values)) {
+		field, _, _ := strings.Cut(rec, ":")
+		recs[field] = rec
+	}
+
+	return posted{fields: fields, values: recs, gates: readFile(f.t, gates)}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(raw)
+}
+
+// bundles are the names of the output bundles under a post's fields dir.
+func bundles(t *testing.T, fields string) []string {
+	t.Helper()
+
+	dirs, err := filepath.Glob(filepath.Join(fields, "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := make([]string, len(dirs))
+	for i, d := range dirs {
+		out[i] = filepath.Base(d)
+	}
+
+	return out
+}
+
+// TestPostFields (#536): SRC's post carries its int and bool outputs, which
+// hold no file, as value records stamped with its instance, not as bundles,
+// and USE, given only the y record, gets the _args mrp gave chain_gate's
+// USE (CH/USE/fork0/split/_args: {"k":3,"y":4}).
 func TestPostFields(t *testing.T) {
 	f := loadFixture(t, "chain_gate")
 
-	src := f.outs("CH.SRC", nil, `{"y":4,"flag":false}`)
-	fields, _ := f.postFields(src)
+	p := f.postFields(f.outs("CH.SRC", nil, `{"y":4,"flag":false}`))
 
-	for field, want := range map[string]string{"y": `{"y":4}`, "flag": `{"flag":false}`} {
-		dir := filepath.Join(fields, field)
+	if got := bundles(t, p.fields); len(got) != 0 {
+		t.Errorf("SRC's post wrote bundles %v, want none", got)
+	}
 
-		raw, err := shim.ReadBundle(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if d := cmp.Diff(want, string(raw)); d != "" {
-			t.Errorf("SRC's %s bundle (-want +got):\n%s", field, d)
-		}
-
-		if in, err := f.g.ReadInstance(dir); err != nil || in.Node != "CH.SRC" {
-			t.Errorf("SRC's %s bundle is stamped %+v (%v), want CH.SRC", field, in, err)
+	for field, want := range map[string]string{"y": `4`, "flag": `false`} {
+		in, name, raw, err := f.g.readValue(p.values[field])
+		if err != nil || in.Node != "CH.SRC" || name != field || string(raw) != want {
+			t.Errorf("SRC's %s record is %s of %+v = %s (%v), want %s of CH.SRC", field, name, in, raw, err, want)
 		}
 	}
 
-	_, got := f.args("CH.USE", filepath.Join(fields, "y"))
+	_, got := f.writeArgs(ArgsSpec{Node: "CH.USE", Values: []string{p.values["y"]}})
 	wantArgs(t, "CH.USE", got, `{"k":3,"y":4}`)
+}
+
+// TestPostFieldsNeedsValues: a post writing its outs field by field needs
+// both the fields dir and the values file, as an output it carries as a
+// value would otherwise reach no reader.
+func TestPostFieldsNeedsValues(t *testing.T) {
+	f := loadFixture(t, "chain_gate")
+	src := f.outs("CH.SRC", nil, `{"y":4,"flag":false}`)
+
+	for _, spec := range []PostSpec{{Fields: f.next("fields")}, {Values: f.next("values")}} {
+		spec.Args, spec.Outs, spec.Forks = src, src, f.next("forks")
+		if err := f.g.Post(spec); !errors.Is(err, errFieldsValues) {
+			t.Errorf("post with fields %q and values %q: %v, want %v", spec.Fields, spec.Values, err, errFieldsValues)
+		}
+	}
+}
+
+// echoOuts are outs of marker_strings' ECHO whose values hold no file:
+// strings shaped as bundle markers, floats in the forms mrp keeps as
+// written, a null, HTML characters JSON escapes and members out of key
+// order; and made, a file.
+const echoOuts = `{"s":"@mre:file:f/L0000/made.txt","arr":["@mre:dir:x","@mre:str:y"],` +
+	`"m":{"z":1.0,"a":"<&>","n":null,"e":1E6,"neg":-0.0,"u":"é "},"lit":%s,"made":%q,"fake":"@mre:file:f/L0001/fake.txt"}`
+
+// TestPostFieldsKeepsValues (#536): a reader gets each output ECHO posts as
+// a value record with the very JSON it reads from ECHO's whole outs bundle,
+// and each file output, and one whose JSON passes MaxValueBytes, as a
+// bundle; a value of MaxValueBytes exactly is a record.
+func TestPostFieldsKeepsValues(t *testing.T) {
+	f := loadFixture(t, "marker_strings")
+
+	made := filepath.Join(t.TempDir(), "made.txt")
+	if err := os.WriteFile(made, []byte("made"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for lit, want := range map[int][]string{MaxValueBytes - 2: {"fake", "made"}, MaxValueBytes - 1: {"fake", "lit", "made"}} {
+		outs := f.outs("MARKERS.ECHO", nil, fmt.Sprintf(echoOuts, strconv.Quote(strings.Repeat("x", lit)), made))
+		p := f.postFields(outs)
+
+		if got := bundles(t, p.fields); !cmp.Equal(got, want) {
+			t.Errorf("a %d-byte lit: ECHO's post wrote bundles %v, want %v", lit+2, got, want)
+		}
+
+		whole := f.storedOuts(t, "MARKERS.ECHO", []string{outs}, nil)
+
+		recs := slices.Collect(maps.Values(p.values))
+
+		for field, raw := range f.storedOuts(t, "MARKERS.ECHO", nil, recs) {
+			if d := cmp.Diff(string(whole[field]), string(raw)); d != "" {
+				t.Errorf("ECHO's %s as a value record (-bundle +record):\n%s", field, d)
+			}
+		}
+
+		if len(recs)+len(want) != 6 {
+			t.Errorf("a %d-byte lit: ECHO posted %d records and %d bundles, want its 6 outputs", lit+2, len(recs), len(want))
+		}
+	}
+}
+
+// storedOuts are node's outs at the unforked instance as a task reads them
+// from the staged items in and the value records values.
+func (f *fixture) storedOuts(t *testing.T, node string, in, values []string) core.LazyArgumentMap {
+	t.Helper()
+
+	s, err := f.g.stage(in, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := f.g.Stage(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outs, err := s.outs(st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return outs
 }
 
 // TestPostGates: a producer's post names the instances its outs disable:
@@ -96,7 +211,7 @@ func TestPostGates(t *testing.T) {
 	for _, tc := range cases {
 		f := loadFixture(t, tc.fixture)
 
-		if _, got := f.postFields(f.outs(tc.node, nil, tc.outs)); got != tc.want {
+		if got := f.postFields(f.outs(tc.node, nil, tc.outs)).gates; got != tc.want {
 			t.Errorf("%s outs %s: gates %q, want %q", tc.node, tc.outs, got, tc.want)
 		}
 	}
@@ -124,7 +239,7 @@ func TestPostGatesReadOnce(t *testing.T) {
 	for _, n := range []int{4, 64} {
 		outs := forkDisabledFlags(t, n)
 
-		s, err := outs.g.stage([]string{outs.dir})
+		s, err := outs.g.stage([]string{outs.dir}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

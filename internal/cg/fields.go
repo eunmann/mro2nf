@@ -13,9 +13,11 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// writeFields writes the posted instance's outs as one stamped bundle per
-// declared output under the spec's Fields dir, <output>/, each holding that
-// output's value and only its files.
+// writeFields writes the posted instance's outs output by output: one that
+// holds no file and is small (valueRecord) as a record in the spec's Values
+// file, which the driver carries as a value, and any other as a stamped
+// bundle under the spec's Fields dir, <output>/, holding that output's
+// value and only its files.
 func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 	st, err := g.Stage(in.Node)
 	if err != nil {
@@ -32,6 +34,8 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 		return fmt.Errorf("out params of %s: %w", st.Fqid, err)
 	}
 
+	var values []string
+
 	for _, p := range params {
 		var v any
 
@@ -39,6 +43,17 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 			if v, err = types.DecodeJSON(raw); err != nil {
 				return fmt.Errorf("decode %s output %s: %w", st.Fqid, p.Id, err)
 			}
+		}
+
+		rec, isValue, err := g.valueRecord(in, p, v)
+		if err != nil {
+			return fmt.Errorf("%s output %s: %w", st.Fqid, p.Id, err)
+		}
+
+		if isValue {
+			values = append(values, rec)
+
+			continue
 		}
 
 		fd := filepath.Join(spec.Fields, p.Id)
@@ -51,7 +66,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 		}
 	}
 
-	return nil
+	return writeFile(spec.Values, strings.Join(values, " "))
 }
 
 // writeGates writes to path the instances the posted instance disables, as
@@ -81,12 +96,17 @@ func (g *Graph) writeGates(in Instance, s store, path string) error {
 		off = append(off, tokens...)
 	}
 
+	return writeFile(path, strings.Join(off, " "))
+}
+
+// writeFile writes text to path, creating its dir.
+func writeFile(path, text string) error {
 	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
 
-	if err := os.WriteFile(path, []byte(strings.Join(off, " ")), filePerm); err != nil {
-		return fmt.Errorf("write gates %s: %w", path, err)
+	if err := os.WriteFile(path, []byte(text), filePerm); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
 	}
 
 	return nil

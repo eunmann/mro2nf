@@ -124,9 +124,17 @@ func writeOuts(dir string, v json.Marshaler, g *Graph, callable string) error {
 func (f *fixture) args(node string, in ...string) (Instance, string) {
 	f.t.Helper()
 
-	out := f.next("args")
+	return f.writeArgs(ArgsSpec{Node: node, In: in})
+}
 
-	inst, err := f.g.WriteArgs(ArgsSpec{Node: node, In: in, Out: out})
+// writeArgs is args for the instance spec stages, written to a new dir.
+func (f *fixture) writeArgs(spec ArgsSpec) (Instance, string) {
+	f.t.Helper()
+
+	node, out := spec.Node, f.next("args")
+	spec.Out = out
+
+	inst, err := f.g.WriteArgs(spec)
 	if err != nil {
 		f.t.Fatal(err)
 	}

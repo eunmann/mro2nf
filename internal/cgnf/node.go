@@ -95,13 +95,12 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	}
 
 	outs, forks, gates := p.consumed(n.Fqid)
-	for _, o := range []struct {
-		used      bool
-		name, out string
-	}{{outs, outsOf(i), "outs"}, {forks, forksOf(i), "forks"}} {
-		if o.used {
-			w.linef("%s = OR_SKIPPED(%s.out.%s, b%d.skip)", w.def(o.name), proc, o.out, i)
-		}
+	if outs {
+		w.linef("%s = POSTED(%s.out.outs, b%d.skip)", w.def(outsOf(i)), proc, i)
+	}
+
+	if forks {
+		w.linef("%s = OR_SKIPPED(%s.out.forks, b%d.skip)", w.def(forksOf(i)), proc, i)
 	}
 
 	if gates {
@@ -282,7 +281,7 @@ func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta string) {
 	w.linef("b%d = ENABLED(%s)", i, gated)
 }
 
-// read is the channel of the outs bundles each enabled instance of node i
+// read is the channel of the outs items each enabled instance of node i
 // reads of node r.Node, keyed by the roots they share, with those roots'
 // positions in node i's key: from the instance agreeing on every root they
 // share, or, when the upstream is forked on roots node i is not, every

@@ -17,11 +17,13 @@ import (
 const elementField = "value"
 
 // stagedStore serves the instance outs bundles and fork elements one task
-// staged, each identified by its own record. An instance's outs may come as
-// one bundle or as one bundle per field (Post's Fields), which merge.
+// staged and the outs value records it got, each identified by its own
+// record. An instance's outs may come as one bundle, or field by field
+// (Post's Fields and Values) as bundles and value records, which merge.
 type stagedStore struct {
 	g           *Graph
 	outsDirs    map[string][]string
+	outsValues  map[string]core.LazyArgumentMap
 	forks       map[string][]Fork
 	elements    map[string]string
 	partners    map[string]string
@@ -32,18 +34,19 @@ type stagedStore struct {
 
 func stagedKey(fqid string, f Fork) string { return fqid + "\x00" + f.key() }
 
-// stage indexes the staged items under dirs and the fork records recs. Each
-// dir is an item (an instance bundle or a fork element) or holds items as
-// its subdirectories.
-func (g *Graph) stage(dirs []string, recs ...Element) (*stagedStore, error) {
+// stage indexes the staged items under dirs, the outs value records values
+// and the fork records recs. Each dir is an item (an instance bundle or a
+// fork element) or holds items as its subdirectories.
+func (g *Graph) stage(dirs, values []string, recs ...Element) (*stagedStore, error) {
 	s := &stagedStore{
-		g:        g,
-		outsDirs: map[string][]string{},
-		forks:    map[string][]Fork{},
-		elements: map[string]string{},
-		partners: map[string]string{},
-		absent:   map[string]*bool{},
-		cache:    map[string]core.LazyArgumentMap{},
+		g:          g,
+		outsDirs:   map[string][]string{},
+		outsValues: map[string]core.LazyArgumentMap{},
+		forks:      map[string][]Fork{},
+		elements:   map[string]string{},
+		partners:   map[string]string{},
+		absent:     map[string]*bool{},
+		cache:      map[string]core.LazyArgumentMap{},
 	}
 
 	for _, el := range recs {
@@ -56,7 +59,43 @@ func (g *Graph) stage(dirs []string, recs ...Element) (*stagedStore, error) {
 		}
 	}
 
+	for _, v := range values {
+		if err := s.addValue(v); err != nil {
+			return nil, err
+		}
+	}
+
 	return s, nil
+}
+
+// addValue indexes an outs value record.
+func (s *stagedStore) addValue(text string) error {
+	in, field, raw, err := s.g.readValue(text)
+	if err != nil {
+		return err
+	}
+
+	k := s.addInstance(in)
+	if s.outsValues[k] == nil {
+		s.outsValues[k] = core.LazyArgumentMap{}
+	}
+
+	s.outsValues[k][field] = raw
+
+	return nil
+}
+
+// addInstance records the instance whose outs the task staged a part of,
+// and returns its key.
+func (s *stagedStore) addInstance(in Instance) string {
+	k := stagedKey(in.Node, in.Fork)
+
+	_, dirs := s.outsDirs[k]
+	if _, values := s.outsValues[k]; !dirs && !values {
+		s.forks[in.Node] = append(s.forks[in.Node], in.Fork)
+	}
+
+	return k
 }
 
 func (s *stagedStore) addTree(dir string) error {
@@ -86,11 +125,7 @@ func (s *stagedStore) add(dir string) error {
 			return err
 		}
 
-		k := stagedKey(in.Node, in.Fork)
-		if _, seen := s.outsDirs[k]; !seen {
-			s.forks[in.Node] = append(s.forks[in.Node], in.Fork)
-		}
-
+		k := s.addInstance(in)
 		s.outsDirs[k] = append(s.outsDirs[k], dir)
 	case elementFile:
 		el, err := s.g.ReadElement(dir)
@@ -126,15 +161,19 @@ func (s *stagedStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgument
 	}
 
 	dirs, ok := s.outsDirs[k]
+	values, valued := s.outsValues[k]
 
 	switch {
-	case !ok && !hasOutputs(st):
+	case !ok && !valued && !hasOutputs(st):
 		return core.LazyArgumentMap{}, nil
-	case !ok:
+	case !ok && !valued:
 		return nil, fmt.Errorf("outs of %s at fork %s: %w", st.Fqid, f, ErrNotStaged)
 	}
 
-	m := core.LazyArgumentMap{}
+	m := maps.Clone(values)
+	if m == nil {
+		m = core.LazyArgumentMap{}
+	}
 
 	for _, dir := range dirs {
 		raw, err := shim.ReadBundle(dir)

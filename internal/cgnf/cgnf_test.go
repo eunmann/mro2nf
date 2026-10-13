@@ -271,17 +271,56 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 }
 
+// TestEmitCarriesValueOutputs (#536): a posting task emits, beside its outs
+// bundles, the value records of its outputs that hold no file, which the
+// driver carries as one list of outs items per instance, selects and orders
+// by output like the bundles, and splits apart from them for each task: it
+// stages the bundles and writes the records into a file for mre.
+func TestEmitCarriesValueOutputs(t *testing.T) {
+	main := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
+
+	for _, want := range []string{
+		"o0_outs = POSTED(N0_GEN.out.outs, b0.skip)",
+		"outs_files = outs_in.map { xs -> bundlesOf(xs) }",
+		", outs_in.map { xs -> recordsOf(xs) }, ",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("diamond_min's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	for _, want := range []string{
+		"tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), emit: outs",
+		"'-fields outs -field-values outs_values -forks forks -gates gates'",
+		"outs.map { k, ds, vs -> [k, ds + vs.tokenize(' ')] }",
+		"ds.findAll { e -> itemName(e) in fields }",
+		"keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1])",
+		"return e instanceof Path ? e.name : e.substring(0, e.indexOf(':'))",
+		"cmd += ' -values values'",
+		"cat > values <<'MRO2NF_VALUES'",
+		"-in in${values ? ' -values values' : ''}",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+
+	if n := strings.Count(stageModule, "eval('cat outs_values'), emit: outs"); n != 2 {
+		t.Errorf("%d processes emit value records, want STAGE's and STAGE_JOIN's", n)
+	}
+}
+
 // TestEmitLocatesOutsInputs: OUTS gets, beside each outs bundle it stages,
 // where its producing task's work dir keeps it, which names a file the
 // pipeline outs leave unpublished (#457), and passes both to mre outs.
 func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
-	if !strings.Contains(main, ", outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
+	if !strings.Contains(main, ", outs_files, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, ") {
 		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
 	}
 
-	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", "-in in -locations locations"} {
+	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", " -locations locations"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}
@@ -299,7 +338,7 @@ func TestEmitStagesTheCallFile(t *testing.T) {
 	for _, want := range []string{
 		"shared = PLAN.out.call.collectFile(name: 'call.b64').map { c -> [entry: ",
 		", call: c] }.first()",
-		"OUTS(shared, shared.map { c -> c.call }, outs_in, ",
+		"OUTS(shared, shared.map { c -> c.call }, outs_files, ",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf lacks %q:\n%s", want, main)
@@ -327,10 +366,10 @@ func TestEmitStagesTheCallFile(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"[d, k, fs, es + us, [], [], d.call]",
-		"[d, k, fs, es + us, ids, ids.collect { x -> ef.leaves[x] }, d.call]",
+		"[d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], d.call]",
+		"[d, k, fs, recordsOf(us), es + bundlesOf(us), ids, ids.collect { x -> ef.leaves[x] }, d.call]",
 		"c.name, c, m.call] }",
-		"[m, k, fs, us, ids, ef, cs, j, os, m.call]",
+		"[m, k, fs, vs, us, ids, ef, cs, j, os, m.call]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -372,14 +411,14 @@ func TestEmitStagesChunkApart(t *testing.T) {
 // name per fork (#507; split_test wires one instance channel into all
 // three).
 func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
-	inputs := "tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')"
+	inputs := "tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')"
 
 	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN"} {
 		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
 		body, _, _ = strings.Cut(body, "\n}\n")
 		_, output, _ := strings.Cut(body, "output:\n")
 
-		for _, want := range []string{inputs, "mkdir -p in\n", "${args(meta, forks, leaves)} -args args "} {
+		for _, want := range []string{inputs, "${valuesFile(values)}\n    mkdir -p in\n", "${args(meta, forks, values, leaves)} -args args "} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s lacks %q:\n%s", proc, want, body)
 			}
@@ -421,7 +460,7 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, us, ids, ef, c.name, c, m.call] }",
+		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, ids, ef, c.name, c, m.call] }",
 		"split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }",
 	} {
 		if !strings.Contains(stageModule, want) {
@@ -557,7 +596,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 		"-leaves ${shq(leaves.join(','))}",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
 		"def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
-		"[d, k, fs, es + us, [], [], d.call]",
+		"[d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], d.call]",
 	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)
@@ -586,18 +625,18 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 	main := readTree(t, out)["main.nf"]
 	for _, want := range []string{
 		"entry = ENTRY(PLAN.out.files, PLAN.out.leaves)",
-		"outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, entry.map { ef -> def ids = ef.files['ECHO -'] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }, file(",
+		"outs_in.map { xs -> recordsOf(xs) }, entry.map { ef -> def ids = ef.files['ECHO -'] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }, file(",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("ECHO's main.nf lacks %q:\n%s", want, main)
 		}
 	}
 
-	if plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]; !strings.Contains(plain, "outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
+	if plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]; !strings.Contains(plain, "outs_in.map { xs -> recordsOf(xs) }, channel.value([[], []]), file(") {
 		t.Errorf("diamond_min's outs read no entry file, yet OUTS stages some:\n%s", plain)
 	}
 
-	for _, want := range []string{"    val locs\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results"} {
+	for _, want := range []string{"    val values\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}

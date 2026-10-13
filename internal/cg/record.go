@@ -71,26 +71,38 @@ func (g *Graph) ReadInstance(dir string) (Instance, error) {
 		return Instance{}, err
 	}
 
-	if _, err := g.Stage(rec.Node); err != nil {
-		return Instance{}, fmt.Errorf("instance stamp in %s: %w", dir, err)
-	}
-
-	f, err := g.decodeFork(rec.Fork)
+	in, err := g.instance(rec)
 	if err != nil {
 		return Instance{}, fmt.Errorf("instance stamp in %s: %w", dir, err)
 	}
 
+	return in, nil
+}
+
+// instance is the instance rec stamps.
+func (g *Graph) instance(rec instanceJSON) (Instance, error) {
+	if _, err := g.Stage(rec.Node); err != nil {
+		return Instance{}, err
+	}
+
+	f, err := g.decodeFork(rec.Fork)
+	if err != nil {
+		return Instance{}, err
+	}
+
 	if len(rec.Lens) != len(f) {
-		return Instance{}, fmt.Errorf("instance stamp in %s: %w: %d counts, %d parts", dir, errLens, len(rec.Lens), len(f))
+		return Instance{}, fmt.Errorf("%w: %d counts, %d parts", errLens, len(rec.Lens), len(f))
 	}
 
 	return Instance{Node: rec.Node, Fork: f, Lens: rec.Lens, Disabled: rec.Disabled}, nil
 }
 
+func (in Instance) encode() instanceJSON {
+	return instanceJSON{Node: in.Node, Fork: in.Fork.encode(), Lens: orEmpty(in.Lens), Disabled: in.Disabled}
+}
+
 func writeInstance(dir string, in Instance) error {
-	return writeRecord(filepath.Join(dir, instanceFile), instanceJSON{
-		Node: in.Node, Fork: in.Fork.encode(), Lens: orEmpty(in.Lens), Disabled: in.Disabled,
-	})
+	return writeRecord(filepath.Join(dir, instanceFile), in.encode())
 }
 
 // taskJSON is where a posted outs bundle was written: the dir of the task
