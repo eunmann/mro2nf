@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -28,7 +27,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 		return err
 	}
 
-	params, err := spec.Manifest.Params(st.Call().DecId, types.RoleOut)
+	params, err := g.Params(st.Call().DecId, types.RoleOut)
 	if err != nil {
 		return fmt.Errorf("out params of %s: %w", st.Fqid, err)
 	}
@@ -36,15 +35,15 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 	for _, p := range params {
 		var v any
 
-		if raw, ok := outs[p.Name]; ok {
+		if raw, ok := outs[p.Id]; ok {
 			if v, err = types.DecodeJSON(raw); err != nil {
-				return fmt.Errorf("decode %s output %s: %w", st.Fqid, p.Name, err)
+				return fmt.Errorf("decode %s output %s: %w", st.Fqid, p.Id, err)
 			}
 		}
 
-		fd := filepath.Join(spec.Fields, p.Name)
-		if err := shim.WriteBundle(fd, map[string]any{p.Name: v}, []ir.Param{p}, spec.Manifest.Table(), shim.Opts{Mount: spec.Mount}); err != nil {
-			return fmt.Errorf("write %s output %s: %w", st.Fqid, p.Name, err)
+		fd := filepath.Join(spec.Fields, p.Id)
+		if err := shim.WriteBundle(fd, map[string]any{p.Id: v}, []*syntax.StructMember{p}, g.Table(), shim.Opts{Mount: spec.Mount}); err != nil {
+			return fmt.Errorf("write %s output %s: %w", st.Fqid, p.Id, err)
 		}
 
 		if err := stampPosted(fd, in); err != nil {

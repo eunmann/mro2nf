@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 var (
@@ -36,53 +36,73 @@ const paramsFileHint = "pass the value as typed JSON in a -params-file"
 // (v2) parser passes every command-line --param as a String, so without this
 // `--b false` would reach the stage as the truthy string "false"; and a
 // -params-file 2.0 would reach it as 2.0 where mrp, given `f = 2.0`, passes 2.
-func typeOverrides(over map[string]any, params []ir.Param, tbl *types.Table) error {
+func typeOverrides(over map[string]any, params []*syntax.StructMember, tbl *types.Table) error {
 	for _, p := range params {
-		s, ok := over[p.Name].(string)
+		s, ok := over[p.Id].(string)
 		if !ok {
 			continue
 		}
 
-		v, err := parseOverride(s, p, tbl)
+		t, err := tbl.Type(p.Tname)
 		if err != nil {
-			return fmt.Errorf("entry input %q declared %s, got %q: %w", p.Name, p.Type, s, err)
+			return fmt.Errorf("entry input %q: %w", p.Id, err)
 		}
 
-		over[p.Name] = v
+		v, err := parseOverride(s, t)
+		if err != nil {
+			return fmt.Errorf("entry input %q declared %s, got %q: %w", p.Id, p.Tname.String(), s, err)
+		}
+
+		over[p.Id] = v
 	}
 
-	maps.Copy(over, tbl.FormatFloats(params, over))
+	formatted, err := tbl.FormatFloats(params, over)
+	if err != nil {
+		return fmt.Errorf("entry values: %w", err)
+	}
+
+	maps.Copy(over, formatted)
 
 	return nil
 }
 
-// parseOverride returns s as the value of p's declared type. A string, file,
-// path or user filetype input keeps s; an array, map or struct input cannot be
+// parseOverride returns s as the value of type t. A string, file, path or
+// user filetype input keeps s; an array, map or struct input cannot be
 // spelled as a string, since parsing it as JSON would silently reinterpret a
 // value the user may have meant literally.
-func parseOverride(s string, p ir.Param, tbl *types.Table) (any, error) {
-	if p.ArrayDim > 0 || p.MapDim > 0 || p.BaseType == "map" || tbl.IsStruct(p.BaseType) {
+func parseOverride(s string, t syntax.Type) (any, error) {
+	switch tt := t.(type) {
+	case *syntax.UserType:
+		return s, nil
+	case *syntax.BuiltinType:
+		return parseBuiltin(s, tt.Id)
+	default:
 		return nil, fmt.Errorf("%w; %s", errOverrideShape, paramsFileHint)
 	}
+}
 
+// parseBuiltin returns s as the value of the builtin type id.
+func parseBuiltin(s, id string) (any, error) {
 	var (
 		v  any
 		ok bool
 	)
 
-	switch p.BaseType {
-	case "int":
+	switch id {
+	case syntax.KindMap:
+		return nil, fmt.Errorf("%w; %s", errOverrideShape, paramsFileHint)
+	case syntax.KindInt:
 		v, ok = parseIntLiteral(s)
-	case "float":
+	case syntax.KindFloat:
 		v, ok = parseFloatLiteral(s)
-	case "bool":
+	case syntax.KindBool:
 		v, ok = s == "true", s == "true" || s == "false"
 	default:
 		return s, nil
 	}
 
 	if !ok {
-		return nil, fmt.Errorf("%w; pass a valid %s literal, or %s", errOverrideParse, p.BaseType, paramsFileHint)
+		return nil, fmt.Errorf("%w; pass a valid %s literal, or %s", errOverrideParse, id, paramsFileHint)
 	}
 
 	return v, nil

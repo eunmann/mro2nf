@@ -6,8 +6,8 @@ import (
 )
 
 // TestSubcommandsRefuseBadInputs: every subcommand fails, before it writes
-// anything, on a flag it does not define, an invocation or type manifest
-// that does not exist, and a stage bundle or record it cannot read.
+// anything, on a flag it does not define, an invocation that does not exist,
+// and a stage bundle or record it cannot read.
 func TestSubcommandsRefuseBadInputs(t *testing.T) {
 	dir := filepath.Join("..", "..", "testdata", "struct_proj")
 	mro := filepath.Join(dir, "pipeline.mro")
@@ -25,7 +25,6 @@ func TestSubcommandsRefuseBadInputs(t *testing.T) {
 		"stage entry":       {"stage", "-entry", absent, "-phase", "main"},
 		"stage call":        stage("-call", writeTestFile(t, filepath.Join(t.TempDir(), "call"), "not base64!"), "-phase", "main", "-node", "PP.SUMX"),
 		"stage call file":   stage("-call", absent, "-phase", "main", "-node", "PP.SUMX"),
-		"stage types":       stage("-types", absent, "-phase", "main", "-node", "PP.SUMX"),
 		"stage fork record": stage("-phase", "main", "-node", "PP.MAKE", "-fork", "not base64!"),
 		"stage node":        stage("-phase", "split", "-node", "PP.NONE"),
 		"stage args":        {"stage", "-entry", mro, "-phase", "join", "-node", "PP.SUMX", "-args", absent},

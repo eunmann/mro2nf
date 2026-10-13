@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -141,16 +140,20 @@ func (s Source) RebuildCall(inv *core.InvocationData, mroPaths []string) (string
 	return keepNegativeZero((&syntax.Ast{Call: ast.Call}).Format()), nil
 }
 
-// Manifest is the type manifest of the source's declarations.
-func (s Source) Manifest(mroPaths []string) (types.Manifest, error) {
-	var p syntax.Parser
-
-	_, _, ast, err := p.ParseSourceBytes([]byte(s.with(s.Call)), s.Path(), mroPaths, false)
+// InParams are the input params of the source's callable id and the walk
+// over the types they are declared with.
+func (s Source) InParams(id string, mroPaths []string) ([]*syntax.StructMember, *types.Table, error) {
+	c, lookup, err := s.callable(id, mroPaths)
 	if err != nil {
-		return types.Manifest{}, fmt.Errorf("compile %s: %w", s.Name, err)
+		return nil, nil, err
 	}
 
-	return types.BuildManifest(frontend.Lower(ast)), nil
+	ps, err := types.Params(c, types.RoleIn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("params of %s: %w", id, err)
+	}
+
+	return ps, types.NewTable(lookup), nil
 }
 
 // Witness compiles the witness invocation of the source's call, whose call

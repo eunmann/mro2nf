@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -31,8 +30,6 @@ type PostSpec struct {
 	Args string
 	// Outs is the stage's outs bundle.
 	Outs string
-	// Manifest locates the file leaves of the outs and fork elements.
-	Manifest types.Manifest
 	// Forks is the dir that receives <root>/<ordinal>/ fork elements.
 	Forks string
 	// Fields, when set, is the dir that receives one stamped bundle per
@@ -93,7 +90,7 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 		return Instance{}, nil, err
 	}
 
-	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: spec.Manifest.Table(), mount: spec.Mount, values: true}
+	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), mount: spec.Mount, values: true}
 	if err := w.posted(in); err != nil {
 		return Instance{}, nil, err
 	}
@@ -342,31 +339,21 @@ func ordinal(i, n int) string {
 
 // collectionParam is the param named name a fork element member of root is
 // walked by for its file leaves: the element type of split's collection.
-func collectionParam(name string, split *syntax.SplitExp, root *syntax.CallGraphStage) (ir.Param, error) {
+func collectionParam(name string, split *syntax.SplitExp, root *syntax.CallGraphStage) (*syntax.StructMember, error) {
 	var t syntax.Type
 	if ct := split.Type; ct != nil {
 		t = ct.ElementType()
 	}
 
 	if t == nil {
-		return ir.Param{}, fmt.Errorf("%w: split of %s has no collection type", errShape, root.Fqid)
+		return nil, fmt.Errorf("%w: split of %s has no collection type", errShape, root.Fqid)
 	}
 
-	id := t.TypeId()
-	fk := t.IsFile()
-
-	return ir.Param{
-		Name:     name,
-		Type:     t.String(),
-		BaseType: id.Tname,
-		ArrayDim: int(id.ArrayDim),
-		MapDim:   int(id.MapDim),
-		IsFile:   fk == syntax.KindIsFile || fk == syntax.KindIsDirectory,
-	}, nil
+	return &syntax.StructMember{Id: name, Tname: t.TypeId()}, nil
 }
 
 // writeElementValue writes a fork element's members as a bundle of params.
-func writeElementValue(dir string, members map[string]json.Marshaler, params []ir.Param, tbl *types.Table, mount shim.Mount) error {
+func writeElementValue(dir string, members map[string]json.Marshaler, params []*syntax.StructMember, tbl *types.Table, mount shim.Mount) error {
 	payload := make(map[string]any, len(members))
 
 	for name, el := range members {

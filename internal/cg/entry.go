@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -53,8 +52,8 @@ type EntryLeaf struct {
 // file leaf of the call's arguments naming an absolute path or a URI. A
 // relative path names nothing from a stage's job dir under mrp either, and
 // reaches the stage as given.
-func (g *Graph) EntryLeaves(man types.Manifest) ([]EntryLeaf, error) {
-	all, err := g.entryFileValues(man)
+func (g *Graph) EntryLeaves() ([]EntryLeaf, error) {
+	all, err := g.entryFileValues()
 	if err != nil {
 		return nil, err
 	}
@@ -72,43 +71,43 @@ func (g *Graph) EntryLeaves(man types.Manifest) ([]EntryLeaf, error) {
 
 // entryFileValues are every file value of the call's arguments, each once,
 // in type-walk order.
-func (g *Graph) entryFileValues(man types.Manifest) ([]EntryLeaf, error) {
+func (g *Graph) entryFileValues() ([]EntryLeaf, error) {
 	inv, err := g.Invocation()
 	if err != nil {
 		return nil, err
 	}
 
-	params, err := man.Params(inv.Call, types.RoleIn)
+	params, err := g.Params(inv.Call, types.RoleIn)
 	if err != nil {
 		return nil, fmt.Errorf("entry params: %w", err)
 	}
 
-	tbl := man.Table()
+	tbl := g.Table()
 	seen := map[string]bool{}
 
 	var out []EntryLeaf
 
 	for _, p := range params {
-		raw, ok := inv.Args[p.Name]
+		raw, ok := inv.Args[p.Id]
 		if !ok {
 			continue
 		}
 
 		v, err := types.DecodeJSON(raw)
 		if err != nil {
-			return nil, fmt.Errorf("decode entry input %s: %w", p.Name, err)
+			return nil, fmt.Errorf("decode entry input %s: %w", p.Id, err)
 		}
 
-		_, err = tbl.Apply([]ir.Param{p}, map[string]any{p.Name: v}, func(s string) (string, error) {
+		_, err = tbl.Apply([]*syntax.StructMember{p}, map[string]any{p.Id: v}, func(s string) (string, error) {
 			if !seen[s] {
 				seen[s] = true
-				out = append(out, EntryLeaf{Input: p.Name, Value: s})
+				out = append(out, EntryLeaf{Input: p.Id, Value: s})
 			}
 
 			return s, nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("entry input %s: %w", p.Name, err)
+			return nil, fmt.Errorf("entry input %s: %w", p.Id, err)
 		}
 	}
 
@@ -118,8 +117,8 @@ func (g *Graph) entryFileValues(man types.Manifest) ([]EntryLeaf, error) {
 // EntryFileReaders are the stage nodes a binding of which reads a file
 // value of the call's arguments, and the pipeline, by its Fqid, when its
 // outs do.
-func (g *Graph) EntryFileReaders(man types.Manifest) (map[string]bool, error) {
-	all, err := g.entryFileValues(man)
+func (g *Graph) EntryFileReaders() (map[string]bool, error) {
+	all, err := g.entryFileValues()
 	if err != nil {
 		return nil, err
 	}
@@ -315,12 +314,12 @@ func walkStrings(v any, visit func(string)) {
 // the one item Nextflow staged in dir/<i+1>/. Nextflow links a file it can
 // reach in place, so a link's target is the value's own path, which mrp
 // would pass the stage; a file it fetched is read where it was staged.
-func (g *Graph) StagedEntryFiles(man types.Manifest, dir string, ids []int) (map[string]string, error) {
+func (g *Graph) StagedEntryFiles(dir string, ids []int) (map[string]string, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 
-	leaves, err := g.EntryLeaves(man)
+	leaves, err := g.EntryLeaves()
 	if err != nil {
 		return nil, err
 	}

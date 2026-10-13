@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 var (
@@ -31,7 +31,7 @@ var (
 type pipestance struct {
 	dir, outs, linked string
 	tbl               *types.Table
-	params            []ir.Param
+	params            []*syntax.StructMember
 	// locations maps each staged outs bundle to where its producing task's
 	// work dir keeps it, and tasks the dir each such task ran in to its work
 	// dir.
@@ -51,7 +51,7 @@ type pipestance struct {
 	n     int
 }
 
-func newPipestance(spec OutsSpec, items []string, tbl *types.Table, params []ir.Param) (*pipestance, error) {
+func newPipestance(spec OutsSpec, items []string, tbl *types.Table, params []*syntax.StructMember) (*pipestance, error) {
 	work, err := filepath.Abs(spec.Work)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline outs: %w", err)

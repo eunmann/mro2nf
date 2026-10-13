@@ -151,7 +151,7 @@ func TestEntryFileReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := w.EntryFileReaders(w.Manifest())
+	got, err := w.EntryFileReaders()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +225,7 @@ func TestStagedEntryFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := g.StagedEntryFiles(g.Manifest(), "entry", []int{2, 1})
+	got, err := g.StagedEntryFiles("entry", []int{2, 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,11 +235,11 @@ func TestStagedEntryFiles(t *testing.T) {
 		t.Errorf("staged entry files (-want +got):\n%s", d)
 	}
 
-	if _, err := g.StagedEntryFiles(g.Manifest(), "entry", []int{0, 1, 2}); !errors.Is(err, errStagedEntry) {
+	if _, err := g.StagedEntryFiles("entry", []int{0, 1, 2}); !errors.Is(err, errStagedEntry) {
 		t.Errorf("an empty staged dir: %v, want errStagedEntry", err)
 	}
 
-	if _, err := g.StagedEntryFiles(g.Manifest(), "entry", []int{7}); !errors.Is(err, errStagedEntry) {
+	if _, err := g.StagedEntryFiles("entry", []int{7}); !errors.Is(err, errStagedEntry) {
 		t.Errorf("an index past the run's values: %v, want errStagedEntry", err)
 	}
 }
@@ -285,7 +285,7 @@ func TestOutsPublishStagedEntryFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if readers, err := g.EntryFileReaders(g.Manifest()); err != nil || !readers["ECHO"] {
+	if readers, err := g.EntryFileReaders(); err != nil || !readers["ECHO"] {
 		t.Errorf("entry file readers %v (%v), want the pipeline ECHO among them", readers, err)
 	}
 
@@ -299,12 +299,12 @@ func TestOutsPublishStagedEntryFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, err := g.StagedEntryFiles(g.Manifest(), "entry", []int{0})
+	files, err := g.StagedEntryFiles("entry", []int{0})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	spec := OutsSpec{EntryFiles: files, Manifest: g.Manifest(), Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
+	spec := OutsSpec{EntryFiles: files, Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
 	if err := g.WriteOuts(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}

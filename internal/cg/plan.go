@@ -110,7 +110,7 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 
 	p := Plan{Call: call}
 
-	if p.Leaves, err = g.EntryLeaves(g.Manifest()); err != nil {
+	if p.Leaves, err = g.EntryLeaves(); err != nil {
 		return Plan{}, err
 	}
 

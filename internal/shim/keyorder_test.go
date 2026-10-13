@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 func compactJSON(t *testing.T, raw []byte) string {
@@ -77,17 +77,14 @@ func TestWriteBundleKeepsKeyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tbl := types.NewTable(map[string]*ir.StructType{
-		"Cfg": {Name: "Cfg", Fields: []ir.Param{
-			{Name: "z", BaseType: "int"},
-			{Name: "ref", BaseType: "file", IsFile: true},
-			{Name: "a", BaseType: "map"},
-		}},
-	})
-	params := []ir.Param{{Name: "cfg", BaseType: "Cfg", IsFile: true}}
+	_, _, ast, err := syntax.ParseSourceBytes([]byte("struct Cfg(\n    int  z,\n    file ref,\n    map  a,\n)\n"), "keyorder.mro", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	out := filepath.Join(dir, "out")
 
-	if err := shim.WriteBundle(out, map[string]any{"cfg": cfg, "b": 1}, params, tbl, shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(out, map[string]any{"cfg": cfg, "b": 1}, fields(t, "cfg Cfg"), types.NewTable(&ast.TypeTable), shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 

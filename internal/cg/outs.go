@@ -22,8 +22,6 @@ type OutsSpec struct {
 	// EntryFiles maps each entry file value the task staged to the path it
 	// reads it at (StagedEntryFiles).
 	EntryFiles map[string]string
-	// Manifest locates the file leaves of the outs.
-	Manifest types.Manifest
 	// Work is the dir the pipestance is reconstructed in.
 	Work string
 	// Results receives the published tree, and OutsJSON the outs JSON that
@@ -47,12 +45,12 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 		return err
 	}
 
-	params, err := spec.Manifest.Params(g.root.Call().DecId, types.RoleOut)
+	params, err := g.Params(g.root.Call().DecId, types.RoleOut)
 	if err != nil {
-		return fmt.Errorf("pipeline outs: params of %s: %w", g.root.Call().DecId, err)
+		return fmt.Errorf("pipeline outs: %w", err)
 	}
 
-	ps, err := newPipestance(spec, s.outsItems(), spec.Manifest.Table(), params)
+	ps, err := newPipestance(spec, s.outsItems(), g.Table(), params)
 	if err != nil {
 		return err
 	}

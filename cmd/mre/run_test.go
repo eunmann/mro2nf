@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // TestChunksDirRoundTrip: the chunks dir a split's job writes reads back as
@@ -28,7 +28,7 @@ func TestChunksDirRoundTrip(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(dir, defs, types.Manifest{}, "S", shim.Opts{}); err != nil {
+	if err := writeChunksDir(dir, defs, nil, types.NewTable(syntax.NewTypeLookup()), shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,7 +124,7 @@ func TestChunksDirStagedAsLinks(t *testing.T) {
 	}
 
 	split := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(split, defs, types.Manifest{}, "S", shim.Opts{}); err != nil {
+	if err := writeChunksDir(split, defs, nil, types.NewTable(syntax.NewTypeLookup()), shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,7 +159,7 @@ func TestChunksDirRefusesMissingChunks(t *testing.T) {
 	}
 
 	split := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(split, defs, types.Manifest{}, "S", shim.Opts{}); err != nil {
+	if err := writeChunksDir(split, defs, nil, types.NewTable(syntax.NewTypeLookup()), shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,8 +247,7 @@ func TestRunBundlesConfineStageOutputs(t *testing.T) {
 		}
 	}
 
-	file := []ir.Param{{Name: "f", BaseType: "txt", IsFile: true}}
-	man := types.Manifest{Callables: map[string]types.Callable{"S": {Out: file, ChunkIn: file}}}
+	tbl, file := compileTypes(t, "filetype txt;\n"), fields(t, "f txt")
 	outs := json.RawMessage(`{"f":"` + host + `"}`)
 	defs := &core.StageDefs{ChunkDefs: []*core.ChunkDef{{Args: core.LazyArgumentMap{"f": json.RawMessage(`"` + host + `"`)}}}}
 
@@ -267,8 +266,8 @@ func TestRunBundlesConfineStageOutputs(t *testing.T) {
 
 		outsDir, chunksDir := filepath.Join(root, "outs", strconv.FormatBool(strict)), filepath.Join(root, "chunks", strconv.FormatBool(strict))
 		errs := []error{
-			writeOutsBundle(outsDir, outs, man, "S", types.RoleOut, mainOpts),
-			writeChunksDir(chunksDir, defs, man, "S", splitOpts),
+			writeOutsBundle(outsDir, outs, file, tbl, mainOpts),
+			writeChunksDir(chunksDir, defs, file, tbl, splitOpts),
 		}
 
 		for i, dir := range []string{outsDir, filepath.Join(chunksDir, job.ChunkName(0, 1))} {

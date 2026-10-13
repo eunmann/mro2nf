@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // confineEnv lays out a task work dir the way a stage phase sees it: the
@@ -100,9 +100,9 @@ func (e confineEnv) markOut(t *testing.T, value string, strict bool) (string, er
 	}
 
 	bundle := t.TempDir()
-	params := []ir.Param{{Name: "out", BaseType: "txt", IsFile: true}}
+	params := []*syntax.StructMember{{Id: "out", Tname: syntax.TypeId{Tname: syntax.KindFile}}}
 
-	marked, err := MarkFiles(bundle, map[string]any{"out": value}, params, types.NewTable(nil), Opts{Confine: conf})
+	marked, err := MarkFiles(bundle, map[string]any{"out": value}, params, types.NewTable(syntax.NewTypeLookup()), Opts{Confine: conf})
 	if err != nil {
 		return "", err
 	}

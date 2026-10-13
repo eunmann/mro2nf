@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/eunmann/mro2nf/internal/types"
 )
 
 // standIn runs a fixture's literal invocation as the generated main.nf runs
@@ -24,7 +22,6 @@ import (
 type standIn struct {
 	t        *testing.T
 	g        *Graph
-	man      types.Manifest
 	dir      string
 	seq      int
 	fields   map[string][]string
@@ -55,7 +52,7 @@ func newStandIn(t *testing.T, mro string) *standIn {
 	}
 
 	return &standIn{
-		t: t, g: g, man: g.Manifest(), dir: t.TempDir(),
+		t: t, g: g, dir: t.TempDir(),
 		fields: map[string][]string{}, elems: map[string][]elemDir{}, partners: map[string][]postedPartner{},
 	}
 }
@@ -202,7 +199,7 @@ func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 
 	args := s.next("args")
 
-	in, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(items)}, Forks: recs, Manifest: s.man, Out: args})
+	in, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(items)}, Forks: recs, Out: args})
 	if err != nil {
 		s.t.Fatalf("args of %s: %v", n.Fqid, err)
 	}
@@ -274,11 +271,11 @@ func (s *standIn) node(n TopoNode) int {
 		}
 
 		outs := s.next("outs")
-		if err := writeOuts(outs, s.standInOuts(n.Fqid), s.man, st.Call().DecId); err != nil {
+		if err := writeOuts(outs, s.standInOuts(n.Fqid), s.g, st.Call().DecId); err != nil {
 			s.t.Fatal(err)
 		}
 
-		spec := PostSpec{Args: args, Outs: outs, Manifest: s.man, Forks: s.next("forks"), Fields: s.next("fields"), Gates: s.next("gates")}
+		spec := PostSpec{Args: args, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Gates: s.next("gates")}
 		if err := os.MkdirAll(filepath.Dir(spec.Gates), dirPerm); err != nil {
 			s.t.Fatal(err)
 		}
@@ -323,7 +320,7 @@ func (s *standIn) stages() (OutsSpec, int) {
 	}
 
 	return OutsSpec{
-		In: []string{s.staged(s.read(topo.Outs))}, Manifest: s.man,
+		In:   []string{s.staged(s.read(topo.Outs))},
 		Work: s.next("work"), Results: s.next("results"), OutsJSON: s.next("pipeline_outs.json"),
 	}, ran
 }

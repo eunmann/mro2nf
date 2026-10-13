@@ -55,8 +55,8 @@ func readTree(t *testing.T, dir string) map[string]string {
 }
 
 // TestEmitProject: a project is main.nf wiring, the one stage module, the
-// config and its container profiles' configs, the type manifest, a copy of
-// the entry's .mro files, and the HealthOmics package script, executable,
+// config and its container profiles' configs, a copy of the entry's .mro
+// files, and the HealthOmics package script, executable,
 // and parameter template; it does not depend on where it is emitted, and
 // holds no other file of the pipeline's, an entry file's default included
 // (entry_file: input/default.txt).
@@ -70,7 +70,7 @@ func TestEmitProject(t *testing.T) {
 
 	entry := filepath.Join(fixturePath(t, "entry_file"), "pipeline.mro")
 	want := []string{
-		filepath.Join("_assets/mro", entry), "_assets/types.json", "conf/container.config", "conf/healthomics.config",
+		filepath.Join("_assets/mro", entry), "conf/container.config", "conf/healthomics.config",
 		"main.nf", "nextflow.config", "package.sh", "parameter-template.json", "stage.nf",
 	}
 
