@@ -1,7 +1,6 @@
-# A top-level `map call` forks the entry pipeline per collection element.
-# `mro check` accepts this, but the transpiler has no entry-fork lowering, so
-# it must fail loudly instead of running the entry once with the whole
-# collection.
+# A top-level `map call` forks the entry pipeline per collection element,
+# and its outs are the pipeline's outs per fork. testdata/map_call_entry runs
+# this shape under both runners.
 
 stage DOUBLE(
     in  int x,

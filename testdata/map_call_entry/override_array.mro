@@ -1,0 +1,8 @@
+@include "doubler.mro"
+
+map call DOUBLER(
+    x = split [
+        4,
+        5,
+    ],
+)

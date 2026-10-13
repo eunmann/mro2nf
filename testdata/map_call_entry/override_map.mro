@@ -1,0 +1,8 @@
+@include "doubler.mro"
+
+map call DOUBLER(
+    x = split {
+        "r": 7,
+        "q": 8,
+    },
+)

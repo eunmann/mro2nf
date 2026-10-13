@@ -696,7 +696,10 @@ every filetype and struct, and the struct of each callable's outputs.
   post-processing (`Pipestance.PostProcess`), so the published tree and the
   outs JSON follow `mrp`'s rules by construction. It reconstructs a pipestance
   (`-work`): the top fork's `_outs` holds the resolved outs, each file leaf
-  placed by its origin (§7). A stage's own file is one path in the pipestance
+  placed by its origin (§7). A top-level `map call`'s outs are an array or a
+  map of its pipeline's outs, one per fork, whose files PostProcess publishes
+  under `outs/<fork key>/`, so each fork's are placed and named as a
+  pipeline's are. A stage's own file is one path in the pipestance
   however many outputs reach it, which PostProcess moves into `outs/` at the
   first and links the others to; a linked file is a path outside the
   pipestance per output that reaches it, which PostProcess links into `outs/`

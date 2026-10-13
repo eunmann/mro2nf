@@ -30,8 +30,7 @@ var (
 // reaches it, which PostProcess links into outs/ there.
 type pipestance struct {
 	dir, outs, linked string
-	tbl               *types.Table
-	params            []*syntax.StructMember
+	shape             forkShape
 	// locations maps each staged outs bundle, and each bundle holding a
 	// leaf staged by reference, to where its producing task's work dir
 	// keeps it, and tasks the dir each task posting an outs bundle ran in
@@ -52,7 +51,61 @@ type pipestance struct {
 	n     int
 }
 
-func newPipestance(spec OutsSpec, items []string, tbl *types.Table, params []*syntax.StructMember) (*pipestance, error) {
+// forkShape is the shape of the top-level call's outs: params are its
+// pipeline's outs, tbl the walk over their types, and typ the type of the
+// call's outs, an array or a map of the pipeline's, one per fork, for a
+// top-level map call.
+type forkShape struct {
+	tbl    *types.Table
+	params []*syntax.StructMember
+	typ    syntax.Type
+}
+
+// each maps the file leaves of each fork's outs in v, the top-level call's
+// outs, by fn, as Martian's PostProcess reads the forks' outs
+// (core/post_process.go postProcess): each element of a map call's array
+// or map, else v.
+func (s forkShape) each(v any, fn types.Transform) (any, error) {
+	apply := func(outs any) (any, error) {
+		mapped, err := s.tbl.Apply(s.params, members(outs), fn)
+		if err != nil {
+			return nil, fmt.Errorf("file leaves: %w", err)
+		}
+
+		return mapped, nil
+	}
+
+	switch s.typ.(type) {
+	case *syntax.ArrayType:
+		forks, _ := v.([]any)
+		out := make([]any, len(forks))
+
+		for i, f := range forks {
+			var err error
+			if out[i], err = apply(f); err != nil {
+				return nil, fmt.Errorf("fork %d: %w", i, err)
+			}
+		}
+
+		return out, nil
+	case *syntax.TypedMapType:
+		forks, _ := types.AsObject(v)
+		out := make(map[string]any, len(forks))
+
+		for _, f := range forks {
+			var err error
+			if out[f.Key], err = apply(f.Value); err != nil {
+				return nil, fmt.Errorf("fork %q: %w", f.Key, err)
+			}
+		}
+
+		return out, nil
+	default:
+		return apply(v)
+	}
+}
+
+func newPipestance(spec OutsSpec, items []string, shape forkShape) (*pipestance, error) {
 	work, err := filepath.Abs(spec.Work)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline outs: %w", err)
@@ -61,7 +114,7 @@ func newPipestance(spec OutsSpec, items []string, tbl *types.Table, params []*sy
 	// Martian tells a path outside the pipestance by a substring test
 	// (post_process.go moveOutFile), which no sibling of it under work meets.
 	p := &pipestance{
-		dir: filepath.Join(work, "pipestance"), linked: filepath.Join(work, "linked"), tbl: tbl, params: params,
+		dir: filepath.Join(work, "pipestance"), linked: filepath.Join(work, "linked"), shape: shape,
 		locations: spec.Locations, tasks: map[string]string{},
 		origins: map[string]string{}, placed: map[string]string{}, names: map[string]string{}, links: map[string]string{},
 		entry: spec.EntryFiles,
@@ -110,20 +163,20 @@ func (p *pipestance) reconstruct(v json.Marshaler, path string) error {
 		return err
 	}
 
-	payload, err := decodePayload(raw)
+	payload, err := types.DecodeJSON(raw)
 	if err != nil {
-		return err
+		return fmt.Errorf("decode outs: %w", err)
 	}
 
-	if payload, err = p.tbl.Apply(p.params, payload, p.staged); err != nil {
+	if payload, err = p.shape.each(payload, p.staged); err != nil {
 		return fmt.Errorf("pipeline outs: %w", err)
 	}
 
-	if _, err := p.tbl.Apply(p.params, payload, p.survey); err != nil {
+	if _, err := p.shape.each(payload, p.survey); err != nil {
 		return fmt.Errorf("pipeline outs: %w", err)
 	}
 
-	placed, err := p.tbl.Apply(p.params, payload, p.place)
+	placed, err := p.shape.each(payload, p.place)
 	if err != nil {
 		return fmt.Errorf("pipeline outs: %w", err)
 	}
@@ -278,7 +331,7 @@ func (p *pipestance) identify(leaf string) (leafOrigin, error) {
 // the published outs JSON does: a published file by its path in the
 // published tree, a Linked one by the path of its link there, and one left
 // unpublished where its producer keeps it.
-func (p *pipestance) published(path string) (map[string]any, error) {
+func (p *pipestance) published(path string) (any, error) {
 	if err := p.indexLinks(); err != nil {
 		return nil, err
 	}
@@ -288,12 +341,12 @@ func (p *pipestance) published(path string) (map[string]any, error) {
 		return nil, fmt.Errorf("post-processed outs: %w", err)
 	}
 
-	payload, err := decodePayload(raw)
+	payload, err := types.DecodeJSON(raw)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode outs: %w", err)
 	}
 
-	outs, err := p.tbl.Apply(p.params, payload, p.name)
+	outs, err := p.shape.each(payload, p.name)
 	if err != nil {
 		return nil, fmt.Errorf("post-processed outs: %w", err)
 	}
@@ -437,15 +490,21 @@ func decodePayload(raw []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("decode outs: %w", err)
 	}
 
-	payload := map[string]any{}
+	return members(v), nil
+}
+
+// members is the decoded JSON object v as a map of its members, which is
+// empty for any other value.
+func members(v any) map[string]any {
+	out := map[string]any{}
 
 	if obj, ok := types.AsObject(v); ok {
 		for _, m := range obj {
-			payload[m.Key] = m.Value
+			out[m.Key] = m.Value
 		}
 	}
 
-	return payload, nil
+	return out
 }
 
 // writeJSONFile writes v as mrp writes an outs JSON.

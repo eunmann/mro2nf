@@ -604,6 +604,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// inner fork across the outer forks, an empty one as null.
 	{name: "merge_across_outer"},
 	{name: "merge_across_empty"},
+	// #565: a top-level map call's outs are its pipeline's per fork, each
+	// fork's files published under outs/<fork key>/.
+	// TestMrpDiffSplitEntryOverride launches it with other split values.
+	{name: "map_call_entry"},
 	// #301: mrp's --overrides file at launch resizes each job as mrp does, by
 	// keys scoped to a stage, a sub-pipeline, the top-level pipeline, an
 	// aliased call and a map call, over a split's chunk and join requests.
@@ -690,6 +694,45 @@ func TestMrpDiff(t *testing.T) {
 			// Nextflow run (shardSkip's ancestor claim).
 			shardSkip(t)
 			runMrpDiffCase(t, bin, tc)
+		})
+	}
+}
+
+// TestMrpDiffSplitEntryOverride (#565): map_call_entry launched with its
+// split input x in Martian's invocation form, {"split": v}, forks by v, an
+// array of another length than the .mro's and a map, and matches mrp
+// running the invocation whose literal is v.
+func TestMrpDiffSplitEntryOverride(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	bin := martianBin(t)
+
+	const fixture = "map_call_entry"
+
+	dir := filepath.Join(root, "testdata", fixture)
+
+	for _, tc := range []struct{ name, params, mro string }{
+		{name: "array", params: `{"x": {"split": [4, 5]}}`, mro: "override_array.mro"},
+		{name: "map", params: `{"x": {"split": {"r": 7, "q": 8}}}`, mro: "override_map.mro"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			shardSkip(t)
+
+			tmp := t.TempDir()
+			runMrpAt(t, bin, dir, tc.mro, tmp)
+
+			proj := transpileMRO(t, dir, "pipeline.mro")
+			writeFileT(t, filepath.Join(proj, "params.json"), tc.params)
+
+			if err := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-params-file", "params.json")...); err != nil {
+				t.Fatalf("nextflow: %v", err)
+			}
+
+			compareMrpToNextflow(t, fixture, tmp, proj)
+			compareStageABI(t, fixture, tmp, proj)
 		})
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
 )
 
@@ -363,6 +364,44 @@ func requirePanic(t *testing.T, want string, f func()) {
 	}()
 
 	f()
+}
+
+// TestWriteOutsOfATopLevelMapCall (#565): a top-level map call's outs are
+// its pipeline's outs per fork, an array of them over an array split and a
+// map of them over a map split, as mrp's PostProcess reads and writes them
+// (core/post_process.go postProcess). The stand-in names a note file no
+// stage wrote, which PostProcess nulls.
+func TestWriteOutsOfATopLevelMapCall(t *testing.T) {
+	dir := filepath.Join("..", "..", "testdata", "map_call_entry")
+	fork := map[string]any{"note": nil, "y": 0.0}
+	cases := map[string]any{
+		"pipeline.mro":     []any{fork, fork, fork},
+		"override_map.mro": map[string]any{"q": fork, "r": fork},
+	}
+
+	for mro, want := range cases {
+		s := newStandIn(t, filepath.Join(dir, mro))
+
+		out, _ := s.stages()
+		if err := s.g.WriteOuts(t.Context(), out); err != nil {
+			t.Fatalf("%s: pipeline outs: %v", mro, err)
+		}
+
+		var got any
+
+		raw, err := os.ReadFile(out.OutsJSON)
+		if err == nil {
+			err = json.Unmarshal(raw, &got)
+		}
+
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if d := cmp.Diff(want, got); d != "" {
+			t.Errorf("%s: pipeline_outs.json (-mrp +got):\n%s", mro, d)
+		}
+	}
 }
 
 // TestStandInRunOfEveryFixture runs every fixture's call graph end to end
