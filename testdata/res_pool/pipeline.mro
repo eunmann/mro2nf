@@ -1,0 +1,121 @@
+# Adaptive (negative) and oversized requests (#545): each stage reports the
+# resources it was given through _jobinfo (martian.get_threads_allocation(),
+# get_memory_allocation()), its _args (__threads, __mem_gb, __vmem_gb) and
+# OMP_NUM_THREADS. mrp's local job manager grants an adaptive thread request
+# the whole pool and caps every request at the pool; an adaptive memory
+# request at least the pool's size gets the pool whatever memory is free, so
+# the outputs do not depend on the host. The differential runs mrp with
+# --localcores=2 --localmem=4, and Nextflow with the same process.resourceLimits.
+stage ADAPT(
+    in  int    x,
+    out float  t,
+    out float  m,
+    out float  at,
+    out float  am,
+    out float  avm,
+    out string omp,
+    src py     "stages/res",
+) using (
+    threads = -1,
+    mem_gb  = -6,
+)
+
+stage BIG(
+    in  int    x,
+    out float  t,
+    out float  m,
+    out float  at,
+    out float  am,
+    out float  avm,
+    out string omp,
+    src py     "stages/res",
+) using (
+    threads = 64,
+    mem_gb  = 200,
+)
+
+stage CHUNKED(
+    in  int      x,
+    out float[]  ct,
+    out float[]  cm,
+    out float[]  cavm,
+    out string[] comp,
+    out float    jt,
+    out float    jm,
+    out float    javm,
+    out string   jomp,
+    src py       "stages/chunked",
+) split using (
+    in  int      i,
+    out float    t,
+    out float    m,
+    out float    avm,
+    out string   omp,
+) using (
+    threads = 3,
+    mem_gb  = 5,
+)
+
+pipeline RES_POOL(
+    in  int      x,
+    out float    adapt_t,
+    out float    adapt_m,
+    out float    adapt_at,
+    out float    adapt_am,
+    out float    adapt_avm,
+    out string   adapt_omp,
+    out float    big_t,
+    out float    big_m,
+    out float    big_at,
+    out float    big_am,
+    out float    big_avm,
+    out string   big_omp,
+    out float[]  chunk_t,
+    out float[]  chunk_m,
+    out float[]  chunk_avm,
+    out string[] chunk_omp,
+    out float    join_t,
+    out float    join_m,
+    out float    join_avm,
+    out string   join_omp,
+)
+{
+    call ADAPT(
+        x = self.x,
+    )
+
+    call BIG(
+        x = self.x,
+    )
+
+    call CHUNKED(
+        x = self.x,
+    )
+
+    return (
+        adapt_t   = ADAPT.t,
+        adapt_m   = ADAPT.m,
+        adapt_at  = ADAPT.at,
+        adapt_am  = ADAPT.am,
+        adapt_avm = ADAPT.avm,
+        adapt_omp = ADAPT.omp,
+        big_t     = BIG.t,
+        big_m     = BIG.m,
+        big_at    = BIG.at,
+        big_am    = BIG.am,
+        big_avm   = BIG.avm,
+        big_omp   = BIG.omp,
+        chunk_t   = CHUNKED.ct,
+        chunk_m   = CHUNKED.cm,
+        chunk_avm = CHUNKED.cavm,
+        chunk_omp = CHUNKED.comp,
+        join_t    = CHUNKED.jt,
+        join_m    = CHUNKED.jm,
+        join_avm  = CHUNKED.javm,
+        join_omp  = CHUNKED.jomp,
+    )
+}
+
+call RES_POOL(
+    x = 1,
+)

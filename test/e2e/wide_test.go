@@ -53,7 +53,7 @@ func TestEntryRootsMatchMrp(t *testing.T) {
 	runMrpAt(t, bin, dir, "pipeline.mro", tmp)
 
 	proj := transpileDir(t, dir)
-	if err := runNextflow(t, proj); err != nil {
+	if err := runNextflow(t, proj, mrpPoolArgs(t, proj)...); err != nil {
 		t.Fatalf("nextflow run: %v", err)
 	}
 

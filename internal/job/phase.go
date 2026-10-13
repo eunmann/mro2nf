@@ -5,23 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"math"
 	"path"
 	"strings"
 
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
-)
-
-// The defaults of jobmanagers/config.json's settings: an unset thread or
-// memory request gets one thread and 1 GB, and an unset vmem request the
-// memory plus 3 GB.
-const (
-	threadsPerJob = 1
-	memGBPerJob   = 1
-	extraVMemGB   = 3
-	centiPerCore  = 100
-	mbPerGB       = 1024
 )
 
 // Split runs the instance's split job (core/stage.go:1057 Fork.doSplit): its
@@ -185,71 +173,4 @@ func outArgs(params *syntax.OutParams, files string) map[string]any {
 	}
 
 	return out
-}
-
-// Resources resolves the resources of st's job in phase as core's
-// getJobReqs does (core/stage.go:1494): the stage's using() with the def's
-// non-zero fields over it, then the run's overrides of the node's phase
-// (core/override.go:159 ApplyResourceOverrides), resolved as the local job
-// manager resolves a request (core/jobmanager_local.go:375 GetSystemReqs).
-// A Nextflow task is sized to its request, so no host cap applies, and an
-// adaptive negative request, which mrp's local manager grants the host's
-// free capacity, resolves to its magnitude.
-func (r Runtime) Resources(st Stage, phase string, def *core.JobResources) core.JobResources {
-	res := request(st.Using, def)
-	r.Overrides.ApplyResourceOverrides(r.fqname(st.Fqid), stageType(phase), &res)
-
-	return granted(res)
-}
-
-// request is using with def's non-zero fields over it.
-func request(using, def *core.JobResources) core.JobResources {
-	var res core.JobResources
-	if using != nil {
-		res = *using
-	}
-
-	if def != nil {
-		res.Threads = coalesce(def.Threads, res.Threads)
-		res.MemGB = coalesce(def.MemGB, res.MemGB)
-		res.VMemGB = coalesce(def.VMemGB, res.VMemGB)
-
-		if def.Special != "" {
-			res.Special = def.Special
-		}
-	}
-
-	return res
-}
-
-// granted is res as the local job manager grants it, with no host cap.
-func granted(res core.JobResources) core.JobResources {
-	centi := math.Ceil(math.Abs(res.Threads) * centiPerCore)
-	if centi == 0 {
-		centi = threadsPerJob * centiPerCore
-	}
-
-	memMB := math.Ceil(math.Abs(res.MemGB) * mbPerGB)
-	if memMB == 0 {
-		memMB = memGBPerJob * mbPerGB
-	}
-
-	vmemMB := math.Ceil(math.Abs(res.VMemGB) * mbPerGB)
-	if vmemMB == 0 {
-		vmemMB = memMB + extraVMemGB*mbPerGB
-	}
-
-	res.Threads = centi / centiPerCore
-	res.MemGB = memMB / mbPerGB
-	res.VMemGB = max(vmemMB, memMB) / mbPerGB
-
-	return res
-}
-
-func coalesce(a, b float64) float64 {
-	if a != 0 {
-		return a
-	}
-
-	return b
 }

@@ -68,8 +68,9 @@ func TestChunksDirRoundTrip(t *testing.T) {
 // TestWriteResources: the resources table holds, per chunk and for the join,
 // the cpus, memory and special its job's _jobinfo records: a def's request
 // over the stage's, a fractional or negative count at its rounded-up
-// magnitude (#405, #315), and under the run's overrides, theirs over both.
-// A special holding a line break has no row.
+// magnitude (#405, #315), from a local pool at most the pool (#545), and
+// under the run's overrides, theirs over both. A special holding a line
+// break has no row.
 func TestWriteResources(t *testing.T) {
 	st := job.Stage{Fqid: "P.S", Split: true, Using: &core.JobResources{Threads: 2, MemGB: 4, Special: "gpu:2"}}
 	defs := &core.StageDefs{
@@ -95,6 +96,7 @@ func TestWriteResources(t *testing.T) {
 		want string
 	}{
 		{"requests", job.Runtime{PSID: "ps"}, "chnk0\t2\t4\tgpu:2\nchnk1\t4\t4\tgpu\nchnk2\t6\t0.5\tgpu:2\njoin\t2\t3\tgpu:2\n"},
+		{"pooled", job.Runtime{PSID: "ps", Local: job.Pool{Cores: 2, MemGB: 3}}, "chnk0\t2\t3\tgpu:2\nchnk1\t2\t3\tgpu\nchnk2\t2\t0.5\tgpu:2\njoin\t2\t3\tgpu:2\n"},
 		{"overridden", job.Runtime{PSID: "ps", Overrides: overrides}, "chnk0\t2\t4\tgpu:2\nchnk1\t2\t4\tgpu\nchnk2\t2\t0.5\tgpu:2\njoin\t2\t2\tgpu:2\n"},
 	} {
 		path := filepath.Join(t.TempDir(), resourcesTable)

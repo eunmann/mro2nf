@@ -26,6 +26,7 @@ type planFlags struct {
 	entry, values, mropath, call, nodes, roots, counts, leaves, files, work string
 	overrides, psid, s3Mount                                                string
 	hostInputs, remoteInputs                                                bool
+	local                                                                   job.Pool
 }
 
 func (f *planFlags) define(fs *flag.FlagSet) {
@@ -44,6 +45,7 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.BoolVar(&f.remoteInputs, "remote-inputs", false, "an entry file value may name a URI of any scheme, not only s3")
 	fs.StringVar(&f.s3Mount, "s3-mount", "", "the root every task may mount input buckets under, read-only: an s3://<bucket>/<key> entry file value whose bucket is a directory there is <root>/<bucket>/<key>, which no task stages; any other is staged")
 	fs.StringVar(&f.work, "work", ".", "scratch dir")
+	definePool(fs, &f.local)
 }
 
 // runPlan starts a run: it rebuilds the invocation from the transpiled
@@ -72,6 +74,10 @@ func runPlan(_ context.Context, argv []string) error {
 
 	if err := util.ValidateID(f.psid); err != nil {
 		return fmt.Errorf("plan: psid: %w", err)
+	}
+
+	if err := f.local.Check(); err != nil {
+		return fmt.Errorf("plan: %w", err)
 	}
 
 	over, err := readOverrides(f.overrides)
@@ -113,7 +119,7 @@ func runPlan(_ context.Context, argv []string) error {
 		return err
 	}
 
-	return f.write(p, job.Runtime{PSID: f.psid, Overrides: over})
+	return f.write(p, job.Runtime{PSID: f.psid, Overrides: over, Local: f.local})
 }
 
 // vetLeaves refuses an entry file value the run may not read: a mounted one

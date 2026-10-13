@@ -50,6 +50,12 @@ params.mro2nf_confine = false
 params.mro2nf_host_inputs = true
 params.mro2nf_allow_remote_inputs = false
 
+// Each job's resources are granted as mrp's local job manager grants them,
+// from the pool process.resourceLimits sets, its --localcores and
+// --localmem, on the profiles that run every task on one host; elsewhere as
+// mrp's cluster job managers grant them.
+params.mro2nf_local_jobs = false
+
 // The root under which every task's host mounts the input buckets read-only,
 // <root>/<bucket>, which the awsbatch profile sets: a stage receives an
 // s3:// entry input as its path there, as mrp passes the path it was given,
@@ -114,12 +120,15 @@ trace {
 // with -profile. It comes last: a profile's settings override the ones
 // above it.
 const profilesConfig = `
-// The local executors clamp a request to the host's cpus and memory;
-// override the clamp with a -c config setting process.resourceLimits.
+// The local profiles grant each job from a pool of the host's cpus and 90%
+// of its memory, mrp's default --localcores and --localmem
+// (core/jobmanager_local.go setMaxCores, setMaxMem), and clamp each task to
+// it; a -c config setting process.resourceLimits sets another pool.
 profiles {
     standard {
         process.executor = 'local'
-        process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]
+        process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() * 0.9 ]
+        params.mro2nf_local_jobs = true
     }
     slurm    { process.executor = 'slurm' }
     sge      { process.executor = 'sge' }
@@ -133,7 +142,8 @@ profiles {
     // docker.runOptions, so a -c docker.runOptions adds to the mapping.
     docker {
         process.executor = 'local'
-        process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() ]
+        process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() * 0.9 ]
+        params.mro2nf_local_jobs = true
         docker.enabled = true
         process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'
         includeConfig 'conf/container.config'
