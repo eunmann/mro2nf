@@ -10,8 +10,9 @@ Martian stage code through the Martian adapter ABI via the `mre` shim. See
 Faithfulness means exactly two contracts, nothing more:
 
 1. **The Martian stage ABI**: each stage task receives `_args` and produces
-   `_outs` in the byte shape the Martian adapter expects (`shim.WriteBundle`,
-   `@mre:` markers). Never perturb this.
+   `_outs` in the byte shape the Martian adapter expects (`internal/job`
+   writes them as mrp does; `shim.WriteItem` and its `@mre:` markers carry
+   values between tasks). Never perturb this.
 2. **Pipeline outputs**: a transpiled pipeline produces the **exact same
    outputs every run** as `mrp` (the golden + mrp-differential suites), and
    runs reliably and safely (deterministic ordering, `-resume`-stable,

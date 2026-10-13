@@ -15,11 +15,41 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// TestMarkFilesKeepsBasename guards #284: a stage reads sample names and
+// writeBundle writes payload as a bundle at dir as a task that staged
+// nothing writes it (shim.WriteItem), copying every file leaf.
+func writeBundle(t *testing.T, dir string, payload map[string]any, params []*syntax.StructMember, opts shim.Opts) {
+	t.Helper()
+
+	if _, err := shim.WriteItem(dir, payload, params, fileTable(t), opts, shim.Staged{}); err != nil {
+		t.Fatalf("WriteItem %s: %v", dir, err)
+	}
+}
+
+// writeMarked writes payload as writeBundle does and returns the payload the
+// bundle stores, each file leaf as its marker.
+func writeMarked(t *testing.T, dir string, payload map[string]any, params []*syntax.StructMember) map[string]any {
+	t.Helper()
+
+	writeBundle(t, dir, payload, params, shim.Opts{})
+
+	raw, err := os.ReadFile(filepath.Join(dir, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stored map[string]any
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+
+	return stored
+}
+
+// TestWriteItemKeepsBasename guards #284: a stage reads sample names and
 // extensions from its inputs' basenames, so each leaf keeps the basename mrp
 // would pass, under its own ordinal dir so leaves sharing a basename never
 // collide. A second bundle written from the first's resolved paths keeps it too.
-func TestMarkFilesKeepsBasename(t *testing.T) {
+func TestWriteItemKeepsBasename(t *testing.T) {
 	dir := t.TempDir()
 
 	samples := []string{"sampleA", "sampleB"}
@@ -40,25 +70,10 @@ func TestMarkFilesKeepsBasename(t *testing.T) {
 
 	params := fields(t, "fs fastq.gz[]")
 	first := filepath.Join(dir, "first")
-	if err := shim.WriteBundle(first, map[string]any{"fs": srcs}, params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatalf("WriteBundle: %v", err)
-	}
-
-	resolved, err := shim.ReadBundle(first)
-	if err != nil {
-		t.Fatalf("ReadBundle: %v", err)
-	}
-
-	var mid map[string]any
-	if err := json.Unmarshal(resolved, &mid); err != nil {
-		t.Fatal(err)
-	}
+	writeBundle(t, first, map[string]any{"fs": srcs}, params, shim.Opts{})
 
 	second := filepath.Join(dir, "second")
-	marked, err := shim.MarkFiles(second, mid, params, fileTable(t), shim.Opts{})
-	if err != nil {
-		t.Fatalf("MarkFiles: %v", err)
-	}
+	marked := writeMarked(t, second, readPayload(t, first), params)
 
 	want := map[string]any{"fs": []any{"@mre:file:f/L0000/reads.fastq.gz", "@mre:file:f/L0001/reads.fastq.gz"}}
 	if diff := cmp.Diff(want, marked); diff != "" {
@@ -73,11 +88,11 @@ func TestMarkFilesKeepsBasename(t *testing.T) {
 	}
 }
 
-// TestMarkFilesSharedPathOneLeaf guards #431: a path the payload names at
+// TestWriteItemSharedPathOneLeaf guards #431: a path the payload names at
 // several positions, under any spelling, is one file to mrp, so it is copied
 // once and each position gets its marker, while a distinct file with the same
 // basename keeps its own leaf.
-func TestMarkFilesSharedPathOneLeaf(t *testing.T) {
+func TestWriteItemSharedPathOneLeaf(t *testing.T) {
 	dir := t.TempDir()
 	shared := filepath.Join(dir, "a", "x.txt")
 	other := filepath.Join(dir, "b", "x.txt")
@@ -99,11 +114,7 @@ func TestMarkFilesSharedPathOneLeaf(t *testing.T) {
 	}
 
 	bundle := filepath.Join(dir, "bundle")
-
-	marked, err := shim.MarkFiles(bundle, payload, params, fileTable(t), shim.Opts{})
-	if err != nil {
-		t.Fatalf("MarkFiles: %v", err)
-	}
+	marked := writeMarked(t, bundle, payload, params)
 
 	want := map[string]any{
 		"fs":  []any{"@mre:file:f/L0000/x.txt", "@mre:file:f/L0001/x.txt", "@mre:file:f/L0000/x.txt"},
@@ -123,12 +134,12 @@ func TestMarkFilesSharedPathOneLeaf(t *testing.T) {
 	}
 }
 
-// TestMarkFilesSameFileAcrossBundlesOneLeaf guards #431 across bundles: a
+// TestWriteItemSameFileAcrossBundlesOneLeaf guards #431 across bundles: a
 // file a pass-through stage returns reaches the pipeline outputs through its
 // producer's bundle and the pass-through's, each staged as Nextflow links it.
 // mrp sees one path, so the outputs' bundle copies it once, while another
 // producer's file of the same basename keeps its own leaf.
-func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
+func TestWriteItemSameFileAcrossBundlesOneLeaf(t *testing.T) {
 	dir := t.TempDir()
 	params := fields(t, "f txt")
 
@@ -137,10 +148,7 @@ func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
 
 	passIn := stageBundle(t, make1, filepath.Join(dir, "pass", "in"))
 	pass := filepath.Join(dir, "pass", "outs")
-
-	if err := shim.WriteBundle(pass, readPayload(t, passIn), params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatalf("WriteBundle pass-through: %v", err)
-	}
+	writeBundle(t, pass, readPayload(t, passIn), params, shim.Opts{})
 
 	outs := fields(t, "a txt", "b txt", "c txt")
 	payload := map[string]any{"a": nil, "b": nil, "c": nil}
@@ -150,11 +158,7 @@ func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
 	}
 
 	bundle := filepath.Join(dir, "return", "args")
-
-	marked, err := shim.MarkFiles(bundle, payload, outs, fileTable(t), shim.Opts{})
-	if err != nil {
-		t.Fatalf("MarkFiles: %v", err)
-	}
+	marked := writeMarked(t, bundle, payload, outs)
 
 	want := map[string]any{"a": "@mre:file:f/L0000/a.txt", "b": "@mre:file:f/L0000/a.txt", "c": "@mre:file:f/L0001/a.txt"}
 	if diff := cmp.Diff(want, marked); diff != "" {
@@ -179,10 +183,7 @@ func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
 
 	make1 := writeFileBundle(t, filepath.Join(dir, "make", "outs"), params, written)
 	pass := filepath.Join(dir, "pass", "outs")
-
-	if err := shim.WriteBundle(pass, readPayload(t, stageBundle(t, make1, filepath.Join(dir, "pass", "in"))), params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatalf("WriteBundle pass-through: %v", err)
-	}
+	writeBundle(t, pass, readPayload(t, stageBundle(t, make1, filepath.Join(dir, "pass", "in"))), params, shim.Opts{})
 
 	staged := stageBundle(t, pass, filepath.Join(dir, "layout", "in"))
 
@@ -216,20 +217,13 @@ func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
 
 	params := fields(t, "own txt", "link txt", "host txt")
 	outs := filepath.Join(work, "outs")
-
-	if err := shim.WriteBundle(outs, map[string]any{"own": own, "link": link, "host": host}, params, fileTable(t), shim.Opts{Confine: conf}); err != nil {
-		t.Fatal(err)
-	}
+	writeBundle(t, outs, map[string]any{"own": own, "link": link, "host": host}, params, shim.Opts{Confine: conf})
 
 	given := filepath.Join(dir, "given")
-	if err := shim.WriteBundle(given, map[string]any{"own": host}, params[:1], fileTable(t), shim.Opts{}); err != nil {
-		t.Fatal(err)
-	}
+	writeBundle(t, given, map[string]any{"own": host}, params[:1], shim.Opts{})
 
 	forwarded := filepath.Join(dir, "forwarded")
-	if err := shim.WriteBundle(forwarded, readPayload(t, stageBundle(t, outs, filepath.Join(dir, "in"))), params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatal(err)
-	}
+	writeBundle(t, forwarded, readPayload(t, stageBundle(t, outs, filepath.Join(dir, "in"))), params, shim.Opts{})
 
 	want := map[string]shim.Origin{"own": {Path: own}, "link": {Path: link, Linked: true}, "host": {Path: host, Linked: true}}
 
@@ -255,10 +249,7 @@ func TestLeafOriginInheritsEnclosingLeaf(t *testing.T) {
 
 	host := filepath.Dir(writeSelfNamed(t, filepath.Join(dir, "host", "ref", "fasta", "genome.fa")))
 	given := filepath.Join(dir, "given")
-
-	if err := shim.WriteBundle(given, map[string]any{"d": filepath.Dir(host)}, params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatal(err)
-	}
+	writeBundle(t, given, map[string]any{"d": filepath.Dir(host)}, params, shim.Opts{})
 
 	producer := filepath.Join(dir, "producer")
 	own := filepath.Dir(writeSelfNamed(t, filepath.Join(producer, "main", "files", "out", "sub", "x.txt")))
@@ -303,9 +294,7 @@ func writeStageOuts(t *testing.T, work string, payload map[string]any, params []
 	}
 
 	outs := filepath.Join(work, "outs")
-	if err := shim.WriteBundle(outs, payload, params, fileTable(t), shim.Opts{Confine: conf}); err != nil {
-		t.Fatal(err)
-	}
+	writeBundle(t, outs, payload, params, shim.Opts{Confine: conf})
 
 	return outs
 }
@@ -314,14 +303,21 @@ func writeStageOuts(t *testing.T, work string, payload map[string]any, params []
 func leafOrigins(t *testing.T, dir string) map[string]shim.Origin {
 	t.Helper()
 
+	return payloadOrigins(t, readPayload(t, dir))
+}
+
+// payloadOrigins maps each file leaf of a payload read back to its origin.
+func payloadOrigins(t *testing.T, payload map[string]any) map[string]shim.Origin {
+	t.Helper()
+
 	out := map[string]shim.Origin{}
 
-	for name, v := range readPayload(t, dir) {
+	for name, v := range payload {
 		leaf, _ := v.(string)
 
 		o, ok, err := shim.ReadOrigin(leaf)
 		if err != nil || !ok {
-			t.Fatalf("origin of %s in %s: %v (recorded %v)", name, dir, err, ok)
+			t.Fatalf("origin of %s at %s: %v (recorded %v)", name, leaf, err, ok)
 		}
 
 		out[name] = o
@@ -345,11 +341,30 @@ func writeSelfNamed(t *testing.T, path string) string {
 	return path
 }
 
-// TestWriteLinkedBundle: a linked bundle holds no copy of a file it names
-// (#498). A leaf of a staged bundle is linked by its ordinal dir, origin
-// record and all, and a host file by itself, its origin recorded beside it;
-// both read back as the files, with the origins a copying bundle records.
-func TestWriteLinkedBundle(t *testing.T) {
+// linkLeaves links payload's leaves below dir and returns it read back.
+func linkLeaves(t *testing.T, dir string, payload map[string]any, params []*syntax.StructMember, roots shim.Roots) map[string]any {
+	t.Helper()
+
+	raw, err := shim.LinkLeaves(dir, payload, params, fileTable(t), roots)
+	if err != nil {
+		t.Fatalf("LinkLeaves: %v", err)
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	return out
+}
+
+// TestLinkLeaves: linked leaves hold no copy of a file they name (#498),
+// and no payload file. A leaf of a staged bundle is linked by its ordinal
+// dir, origin record and all, and a host file by itself, its origin
+// recorded beside it; both read back as the files, with the origins a
+// copying bundle records, at their links, as ReadBundle names a bundle's
+// leaves.
+func TestLinkLeaves(t *testing.T) {
 	dir := t.TempDir()
 	one := fields(t, "f file")
 	params := fields(t, "host file", "up file")
@@ -359,14 +374,12 @@ func TestWriteLinkedBundle(t *testing.T) {
 	produced := writeStageOuts(t, filepath.Join(dir, "producer"), map[string]any{"f": own}, one)
 	staged, _ := readPayload(t, stageBundle(t, produced, filepath.Join(dir, "task", "in", "u0")))["f"].(string)
 
-	bundle := filepath.Join(dir, "task", "args")
-	if err := shim.WriteLinkedBundle(bundle, map[string]any{"host": host, "up": staged}, params, fileTable(t), shim.Roots{}); err != nil {
-		t.Fatalf("WriteLinkedBundle: %v", err)
-	}
+	args := filepath.Join(dir, "task", "args")
+	linked := linkLeaves(t, args, map[string]any{"host": host, "up": staged}, params, shim.Roots{})
 
 	var files []string
 
-	err := filepath.WalkDir(bundle, func(_ string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(args, func(_ string, d fs.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() {
 			files = append(files, d.Name())
 		}
@@ -377,27 +390,31 @@ func TestWriteLinkedBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if d := cmp.Diff([]string{"data.json", ".mre-origin"}, files); d != "" {
-		t.Errorf("files the bundle holds (-want +got):\n%s", d)
+	if d := cmp.Diff([]string{".mre-origin"}, files); d != "" {
+		t.Errorf("files the args dir holds (-want +got):\n%s", d)
 	}
 
 	want := map[string]shim.Origin{"host": {Path: host, Linked: true}, "up": {Path: own}}
-	if d := cmp.Diff(want, leafOrigins(t, bundle)); d != "" {
+	if d := cmp.Diff(want, payloadOrigins(t, linked)); d != "" {
 		t.Errorf("origins (-want +got):\n%s", d)
 	}
 
 	for name, src := range map[string]string{"host": host, "up": own} {
-		leaf, _ := readPayload(t, bundle)[name].(string)
+		leaf, _ := linked[name].(string)
 		if got, err := os.ReadFile(leaf); err != nil || string(got) != src {
 			t.Errorf("%s reads %q (%v), want %s's bytes", name, got, err, src)
+		}
+
+		if !strings.HasPrefix(leaf, args+string(filepath.Separator)) {
+			t.Errorf("%s is named %s, want its link below %s", name, leaf, args)
 		}
 	}
 }
 
-// TestWriteLinkedBundleFails: a linked bundle fails loudly where it cannot
-// place a leaf's link, whether the files dir is blocked or a link already
-// holds the leaf's place, for a host file and for a staged bundle's leaf.
-func TestWriteLinkedBundleFails(t *testing.T) {
+// TestLinkLeavesFails: linking fails loudly where it cannot place a leaf's
+// link, whether the files dir is blocked or a link already holds the
+// leaf's place, for a host file and for a staged bundle's leaf.
+func TestLinkLeavesFails(t *testing.T) {
 	dir := t.TempDir()
 	one := fields(t, "f file")
 
@@ -419,17 +436,15 @@ func TestWriteLinkedBundleFails(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if err := shim.WriteLinkedBundle(blocked, payload, one, fileTable(t), shim.Roots{}); err == nil {
-				t.Error("WriteLinkedBundle with the files dir blocked succeeded")
+			if _, err := shim.LinkLeaves(blocked, payload, one, fileTable(t), shim.Roots{}); err == nil {
+				t.Error("LinkLeaves with the files dir blocked succeeded")
 			}
 
 			twice := filepath.Join(t.TempDir(), "args")
-			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), shim.Roots{}); err != nil {
-				t.Fatalf("WriteLinkedBundle: %v", err)
-			}
+			linkLeaves(t, twice, payload, one, shim.Roots{})
 
-			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), shim.Roots{}); err == nil {
-				t.Error("WriteLinkedBundle over a bundle that holds the leaf's link succeeded")
+			if _, err := shim.LinkLeaves(twice, payload, one, fileTable(t), shim.Roots{}); err == nil {
+				t.Error("LinkLeaves over a dir that holds the leaf's link succeeded")
 			}
 		})
 	}
@@ -463,15 +478,9 @@ func TestRealPathOfLinkedArgsStages(t *testing.T) {
 	}
 
 	staged, _ := readPayload(t, filepath.Join(task, "in", "u0"))["f"].(string)
-	args := filepath.Join(task, "args")
-
-	if err := shim.WriteLinkedBundle(args, map[string]any{"host": entry, "up": staged}, params, fileTable(t), shim.Roots{}); err != nil {
-		t.Fatal(err)
-	}
-
 	resolved := map[string]any{}
 
-	for name, v := range readPayload(t, args) {
+	for name, v := range linkLeaves(t, filepath.Join(task, "args"), map[string]any{"host": entry, "up": staged}, params, shim.Roots{}) {
 		leaf, _ := v.(string)
 
 		r, err := filepath.EvalSymlinks(leaf)
@@ -494,8 +503,8 @@ func TestRealPathOfLinkedArgsStages(t *testing.T) {
 		}
 
 		outs := filepath.Join(dir, "outs", strconv.FormatBool(strict))
-		if err := shim.WriteBundle(outs, resolved, params, fileTable(t), shim.Opts{Confine: conf}); err != nil {
-			t.Fatalf("strict %v: WriteBundle of the real paths of linked args: %v", strict, err)
+		if _, err := shim.WriteItem(outs, resolved, params, fileTable(t), shim.Opts{Confine: conf}, shim.Staged{}); err != nil {
+			t.Fatalf("strict %v: WriteItem of the real paths of linked args: %v", strict, err)
 		}
 
 		want := map[string]shim.Origin{"host": {Path: realHost, Linked: true}, "up": {Path: own}}
@@ -526,10 +535,10 @@ func sameInode(t *testing.T, a, b string) bool {
 	return os.SameFile(ai, bi)
 }
 
-// TestMarkFilesRefusesOriginFileName checks a leaf named like the origin file
+// TestWriteItemRefusesOriginFileName checks a leaf named like the origin file
 // it would share its ordinal dir with fails the write rather than overwrite
 // either.
-func TestMarkFilesRefusesOriginFileName(t *testing.T) {
+func TestWriteItemRefusesOriginFileName(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, ".mre-origin")
 
@@ -539,9 +548,9 @@ func TestMarkFilesRefusesOriginFileName(t *testing.T) {
 
 	params := fields(t, "f file")
 
-	_, err := shim.MarkFiles(filepath.Join(dir, "bundle"), map[string]any{"f": src}, params, fileTable(t), shim.Opts{})
+	_, err := shim.WriteItem(filepath.Join(dir, "bundle"), map[string]any{"f": src}, params, fileTable(t), shim.Opts{}, shim.Staged{})
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Errorf("MarkFiles of a leaf named .mre-origin = %v, want a reserved-name error", err)
+		t.Errorf("WriteItem of a leaf named .mre-origin = %v, want a reserved-name error", err)
 	}
 }
 
@@ -558,9 +567,7 @@ func writeFileBundle(t *testing.T, dir string, params []*syntax.StructMember, sr
 		t.Fatal(err)
 	}
 
-	if err := shim.WriteBundle(dir, map[string]any{"f": src}, params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatalf("WriteBundle %s: %v", dir, err)
-	}
+	writeBundle(t, dir, map[string]any{"f": src}, params, shim.Opts{})
 
 	return dir
 }
@@ -596,7 +603,7 @@ func stageBundle(t *testing.T, src, dst string) string {
 func readPayload(t *testing.T, dir string) map[string]any {
 	t.Helper()
 
-	raw, err := shim.ReadBundle(dir)
+	raw, err := shim.Refs{}.ReadBundle(dir)
 	if err != nil {
 		t.Fatalf("ReadBundle %s: %v", dir, err)
 	}
@@ -630,9 +637,7 @@ func TestBundleRoundTrip(t *testing.T) {
 	payload := map[string]any{"f": src, "n": float64(7)}
 
 	bundle := filepath.Join(dir, "bundle")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatalf("WriteBundle: %v", err)
-	}
+	writeBundle(t, bundle, payload, params, shim.Opts{})
 
 	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
 	if err != nil {
@@ -643,15 +648,7 @@ func TestBundleRoundTrip(t *testing.T) {
 		t.Errorf("data.json should contain an ordinal file marker, got: %s", raw)
 	}
 
-	resolved, err := shim.ReadBundle(bundle)
-	if err != nil {
-		t.Fatalf("ReadBundle: %v", err)
-	}
-
-	var got map[string]any
-	if err := json.Unmarshal(resolved, &got); err != nil {
-		t.Fatal(err)
-	}
+	got := readPayload(t, bundle)
 
 	path, ok := got["f"].(string)
 	if !ok || !filepath.IsAbs(path) || filepath.Base(path) != "note.txt" {
@@ -668,11 +665,11 @@ func TestBundleRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMarkFilesDirLeaf guards #43: a directory leaf is staged with DirMarker so
+// TestWriteItemDirLeaf guards #43: a directory leaf is staged with DirMarker so
 // its ground-truth dir-ness (stat at staging time) travels to publish, rather
 // than being inferred from the declared output type. A plain-file leaf keeps
 // FileMarker; both resolve to a real absolute path on read-back.
-func TestMarkFilesDirLeaf(t *testing.T) {
+func TestWriteItemDirLeaf(t *testing.T) {
 	dir := t.TempDir()
 
 	// A directory the payload references, declared with a plain `file` type — the
@@ -688,10 +685,7 @@ func TestMarkFilesDirLeaf(t *testing.T) {
 	params := fields(t, "d file")
 	payload := map[string]any{"d": srcDir}
 
-	marked, err := shim.MarkFiles(dir, payload, params, fileTable(t), shim.Opts{})
-	if err != nil {
-		t.Fatalf("MarkFiles: %v", err)
-	}
+	marked := writeMarked(t, dir, payload, params)
 
 	got, ok := marked["d"].(string)
 	if !ok {
@@ -709,10 +703,10 @@ func TestMarkFilesDirLeaf(t *testing.T) {
 	}
 }
 
-// TestMarkFilesNamesDirSpelledWithSuffix checks a directory leaf spelled with a
+// TestWriteItemNamesDirSpelledWithSuffix checks a directory leaf spelled with a
 // trailing "/" or "/." keeps the directory's own name, so its marker is valid,
 // and that both spellings name one leaf.
-func TestMarkFilesNamesDirSpelledWithSuffix(t *testing.T) {
+func TestWriteItemNamesDirSpelledWithSuffix(t *testing.T) {
 	dir := t.TempDir()
 
 	srcDir := filepath.Join(dir, "outdir")
@@ -723,10 +717,7 @@ func TestMarkFilesNamesDirSpelledWithSuffix(t *testing.T) {
 	params := fields(t, "d path[]")
 	payload := map[string]any{"d": []any{srcDir + "/", srcDir + "/."}}
 
-	marked, err := shim.MarkFiles(filepath.Join(dir, "bundle"), payload, params, fileTable(t), shim.Opts{})
-	if err != nil {
-		t.Fatalf("MarkFiles: %v", err)
-	}
+	marked := writeMarked(t, filepath.Join(dir, "bundle"), payload, params)
 
 	want := map[string]any{"d": []any{"@mre:dir:f/L0000/outdir", "@mre:dir:f/L0000/outdir"}}
 	if diff := cmp.Diff(want, marked); diff != "" {
@@ -791,19 +782,9 @@ func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
 	}
 
 	bundle := filepath.Join(dir, "bundle")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatalf("WriteBundle: %v", err)
-	}
+	writeBundle(t, bundle, payload, params, shim.Opts{})
 
-	resolved, err := shim.ReadBundle(bundle)
-	if err != nil {
-		t.Fatalf("ReadBundle: %v", err)
-	}
-
-	var got map[string]any
-	if err := json.Unmarshal(resolved, &got); err != nil {
-		t.Fatal(err)
-	}
+	got := readPayload(t, bundle)
 
 	abs, err := filepath.Abs(bundle)
 	if err != nil {
@@ -861,7 +842,7 @@ func TestReadBundleRejectsMalformedMarkers(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if _, err := shim.ReadBundle(dir); !errors.Is(err, shim.ErrBadMarker) {
+			if _, err := (shim.Refs{}).ReadBundle(dir); !errors.Is(err, shim.ErrBadMarker) {
 				t.Errorf("ReadBundle(%q) err = %v, want ErrBadMarker", s, err)
 			}
 		})
@@ -895,19 +876,9 @@ func TestBundleNestedStructFile(t *testing.T) {
 	params := fields(t, "c Cfg")
 
 	bundle := filepath.Join(dir, "b")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable(t), shim.Opts{}); err != nil {
-		t.Fatalf("WriteBundle: %v", err)
-	}
+	writeBundle(t, bundle, payload, params, shim.Opts{})
 
-	resolved, err := shim.ReadBundle(bundle)
-	if err != nil {
-		t.Fatalf("ReadBundle: %v", err)
-	}
-
-	var got map[string]any
-	if err := json.Unmarshal(resolved, &got); err != nil {
-		t.Fatal(err)
-	}
+	got := readPayload(t, bundle)
 
 	inner, ok := got["c"].(map[string]any)
 	if !ok {
@@ -936,10 +907,7 @@ func TestBundleMissingFileKeepsPath(t *testing.T) {
 	params := fields(t, "f file", "n int")
 	payload := map[string]any{"f": missing, "n": float64(3)}
 
-	marked, err := shim.MarkFiles(dir, payload, params, fileTable(t), shim.Opts{})
-	if err != nil {
-		t.Fatalf("MarkFiles must not error on an absent declared output: %v", err)
-	}
+	marked := writeMarked(t, dir, payload, params)
 
 	if marked["f"] != missing {
 		t.Errorf("absent output f = %v, want the unchanged path %q", marked["f"], missing)
@@ -951,7 +919,7 @@ func TestBundleMissingFileKeepsPath(t *testing.T) {
 
 // TestReadBundleEmpty returns nil for an absent optional input.
 func TestReadBundleEmpty(t *testing.T) {
-	got, err := shim.ReadBundle("")
+	got, err := shim.Refs{}.ReadBundle("")
 	if err != nil || got != nil {
 		t.Errorf("ReadBundle(\"\") = %v, %v; want nil, nil", got, err)
 	}
@@ -1003,7 +971,7 @@ func TestCopyTreeDerefSymlink(t *testing.T) {
 
 // TestCopyTreeDanglingSymlinkInDir checks that a dangling symlink INSIDE a copied
 // directory is treated as absent (skipped), not aborting the whole bundle — the
-// same tolerance MarkFiles' top-level guard gives a dangling output path.
+// same tolerance WriteItem's top-level guard gives a dangling output path.
 func TestCopyTreeDanglingSymlinkInDir(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1078,7 +1046,7 @@ func TestCopyTreeReadOnlyDir(t *testing.T) {
 // TestReadBundleMissingData checks the failure arm for a bundle directory with no
 // data.json payload.
 func TestReadBundleMissingData(t *testing.T) {
-	if _, err := shim.ReadBundle(t.TempDir()); err == nil {
+	if _, err := (shim.Refs{}).ReadBundle(t.TempDir()); err == nil {
 		t.Fatal("ReadBundle of a dir without data.json must error")
 	}
 }
@@ -1091,16 +1059,16 @@ func TestReadBundleCorruptJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := shim.ReadBundle(dir); err == nil {
+	if _, err := (shim.Refs{}).ReadBundle(dir); err == nil {
 		t.Fatal("ReadBundle of corrupt data.json must error")
 	}
 }
 
-// TestMarkFilesDanglingSymlink checks the documented dangling-symlink-as-absent
+// TestWriteItemDanglingSymlink checks the documented dangling-symlink-as-absent
 // behavior: a declared output that is a symlink to a nonexistent target stats as
-// absent (os.Stat follows the link), so MarkFiles keeps the path unchanged rather
+// absent (os.Stat follows the link), so WriteItem keeps the path unchanged rather
 // than aborting the bundle.
-func TestMarkFilesDanglingSymlink(t *testing.T) {
+func TestWriteItemDanglingSymlink(t *testing.T) {
 	dir := t.TempDir()
 
 	dangling := filepath.Join(dir, "dangling")
@@ -1109,10 +1077,7 @@ func TestMarkFilesDanglingSymlink(t *testing.T) {
 	}
 
 	params := fields(t, "f file")
-	marked, err := shim.MarkFiles(dir, map[string]any{"f": dangling}, params, fileTable(t), shim.Opts{})
-	if err != nil {
-		t.Fatalf("MarkFiles must treat a dangling symlink as absent, not error: %v", err)
-	}
+	marked := writeMarked(t, dir, map[string]any{"f": dangling}, params)
 	if marked["f"] != dangling {
 		t.Errorf("dangling output f = %v, want the unchanged path %q", marked["f"], dangling)
 	}

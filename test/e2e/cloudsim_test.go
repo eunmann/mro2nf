@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -86,6 +88,132 @@ func TestCloudSimMapFileMerge(t *testing.T) {
 	// The txt[] output `fs` publishes as an mrp-style tree: fs/<idx>.txt.
 	assertFileContent(t, filepath.Join(proj, "results", "fs", "0.txt"), "val=1")
 	assertFileContent(t, filepath.Join(proj, "results", "fs", "1.txt"), "val=2")
+}
+
+// TestCloudSimJoinPostsNoStagedFile (#562): under copy-staging, MAKE_SHARDS'
+// join posts outs naming the shard files its chunks wrote, which it staged,
+// and its work dir, what an object store would receive from it, holds no
+// file of its outs but their records: it names each shard by reference.
+// ASSEMBLE stages each shard from the chunk task's work dir that wrote it,
+// and the run publishes the shards it copied.
+func TestCloudSimJoinPostsNoStagedFile(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	proj := transpile(t, "file_tree")
+	writeCloudConfig(t, proj)
+
+	if err := runNextflow(t, proj, "-c", "cloud.config", "-with-trace", "trace.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := taskDirs(t, proj)
+
+	if d := cmp.Diff([]string{"data.json", "instance.json", "task.json"}, filesBelow(t, filepath.Join(dirs["N1_MAKE_SHARDS_JN"][0], "outs"))); d != "" {
+		t.Errorf("the join's posted outs hold (-want +got):\n%s", d)
+	}
+
+	run := commandRun(t, dirs["N2_ASSEMBLE"][0])
+	if n := strings.Count(run, "/chunkout/chnk"); n != 3 || !strings.Contains(run, " refs/3/f/L0000") {
+		t.Errorf("ASSEMBLE stages %d files from the chunks' work dirs, want each shard by reference:\n%s", n, run)
+	}
+
+	for i := range 3 {
+		assertFileContent(t, filepath.Join(proj, "results", "report", "shards", strconv.Itoa(i)+".txt"), "shard-"+strconv.Itoa(i))
+	}
+}
+
+// TestCloudSimSplitEmitsNoStagedFile: under copy-staging, SUM_FWD's split
+// forwards GEN's file, which it staged, into each of its three chunk defs,
+// and its work dir, what an object store would receive from it, holds no
+// copy of it: each chunk def names it by reference. Each chunk and the
+// join stage it once, with GEN's output, which they stage as the split
+// does, and not again by reference, and the run's total reads it through
+// every def.
+func TestCloudSimSplitEmitsNoStagedFile(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	proj := transpile(t, "split_forward_file")
+	writeCloudConfig(t, proj)
+
+	if err := runNextflow(t, proj, "-c", "cloud.config", "-with-trace", "trace.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := taskDirs(t, proj)
+
+	want := []string{"chunk.json", "data.json", "chunk.json", "data.json", "chunk.json", "data.json", "join.json", "resources.tsv"}
+	if d := cmp.Diff(want, filesBelow(t, filepath.Join(dirs["N1_SUM_FWD_SP"][0], "chunks"))); d != "" {
+		t.Errorf("the split's chunks hold (-want +got):\n%s", d)
+	}
+
+	gen := filepath.Join(dirs["N0_GEN"][0], "outs", "data")
+
+	for _, task := range append(slices.Clone(dirs["N1_SUM_FWD_MN"]), dirs["N1_SUM_FWD_JN"]...) {
+		if run := commandRun(t, task); strings.Count(run, gen) != 1 || !strings.Contains(run, gen+" in/u1") || strings.Contains(run, " refs/") {
+			t.Errorf("%s stages GEN's file other than once, with GEN's output %s:\n%s", task, gen, run)
+		}
+	}
+
+	var outs map[string]any
+
+	readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &outs)
+
+	if d := cmp.Diff(map[string]any{"total": json.Number("30")}, outs); d != "" {
+		t.Errorf("pipeline outs (-want +got):\n%s", d)
+	}
+}
+
+// taskDirs are the work dirs of a run's tasks, by their process.
+func taskDirs(t *testing.T, proj string) map[string][]string {
+	t.Helper()
+
+	work := filepath.Join(proj, "work")
+	dirs := map[string][]string{}
+
+	for _, r := range readTrace(t, filepath.Join(proj, "trace.txt")) {
+		found, err := filepath.Glob(filepath.Join(work, filepath.FromSlash(r.Hash)+"*"))
+		if err != nil || len(found) != 1 {
+			t.Fatalf("work dir of %s: %v %v", r.Name, found, err)
+		}
+
+		proc := strings.Fields(r.Name)[0]
+		dirs[proc] = append(dirs[proc], found[0])
+	}
+
+	return dirs
+}
+
+// filesBelow are the names of the files below dir, in walk order.
+func filesBelow(t *testing.T, dir string) []string {
+	t.Helper()
+
+	var names []string
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			names = append(names, filepath.Base(path))
+		}
+
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return names
+}
+
+// commandRun is the script Nextflow ran a task with, which stages its
+// inputs.
+func commandRun(t *testing.T, dir string) string {
+	t.Helper()
+
+	run, err := os.ReadFile(filepath.Join(dir, ".command.run"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(run)
 }
 
 // assertSelfContainedBundles walks the work tree's data.json files and checks

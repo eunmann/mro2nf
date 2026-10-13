@@ -1,6 +1,7 @@
 package shim
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -102,15 +103,21 @@ func (e confineEnv) markOut(t *testing.T, value string, strict bool) (string, er
 	bundle := t.TempDir()
 	params := []*syntax.StructMember{{Id: "out", Tname: syntax.TypeId{Tname: syntax.KindFile}}}
 
-	marked, err := MarkFiles(bundle, map[string]any{"out": value}, params, types.NewTable(syntax.NewTypeLookup()), Opts{Confine: conf})
-	if err != nil {
+	if _, err := WriteItem(bundle, map[string]any{"out": value}, params, types.NewTable(syntax.NewTypeLookup()), Opts{Confine: conf}, Staged{}); err != nil {
 		return "", err
 	}
 
-	s, ok := marked["out"].(string)
-	if !ok {
-		t.Fatalf("marked out = %v, want a string", marked["out"])
+	raw, err := os.ReadFile(filepath.Join(bundle, bundleData))
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	var marked map[string]string
+	if err := json.Unmarshal(raw, &marked); err != nil {
+		t.Fatal(err)
+	}
+
+	s := marked["out"]
 
 	rel, _, ok := CutMarker(s)
 	if !ok {
@@ -165,7 +172,7 @@ func TestConfineStrictRefusesOutOfTreeTargets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := e.markOut(t, tc.value, true)
 			if !errors.Is(err, errOutsideWork) {
-				t.Fatalf("MarkFiles err = %v, want errOutsideWork", err)
+				t.Fatalf("WriteItem err = %v, want errOutsideWork", err)
 			}
 
 			if msg := err.Error(); !strings.Contains(msg, "param out") || !strings.Contains(msg, hostRoot) {
@@ -186,7 +193,7 @@ func TestConfineLocalCopiesOutOfTreeTargets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			leaf, err := e.markOut(t, tc.value, false)
 			if err != nil {
-				t.Fatalf("MarkFiles: %v", err)
+				t.Fatalf("WriteItem: %v", err)
 			}
 
 			staged := filepath.Join(leaf, tc.rel)
@@ -251,7 +258,7 @@ func TestConfineAdmitsOwnAndStagedFiles(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				leaf, err := e.markOut(t, tc.value, strict)
 				if err != nil {
-					t.Fatalf("MarkFiles (strict %v): %v", strict, err)
+					t.Fatalf("WriteItem (strict %v): %v", strict, err)
 				}
 
 				if staged := filepath.Join(leaf, tc.rel); !sameFile(t, staged, tc.src) {

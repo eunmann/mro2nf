@@ -191,12 +191,12 @@ func nestedArgs(t *testing.T, work string, lines []string) []string {
 		outer, _, _ := strings.Cut(f[0], ".")
 		dir := filepath.Join(work, "args", strconv.Itoa(i))
 
-		inst, err := argsStep(gf, argsFlags{node: "OUTER.INNER.DBL", forks: repeatedFlag{inner[outer], f[1]}}, dir)
+		inst, args, err := argsStep(gf, argsFlags{node: "OUTER.INNER.DBL", forks: repeatedFlag{inner[outer], f[1]}}, dir)
 		if err != nil || inst.Disabled {
 			t.Fatalf("args of DBL fork %s: %+v %v", f[0], inst, err)
 		}
 
-		out[i] = compactBundle(t, dir)
+		out[i] = args
 	}
 
 	return out
@@ -242,11 +242,12 @@ func TestArgsReadsAWideCallFromItsFile(t *testing.T) {
 	call := writeTestFile(t, filepath.Join(work, "wide.b64"), base64.StdEncoding.EncodeToString([]byte(wide))+"\n")
 	fx, args := fixtureDir(t, "chain_gate"), filepath.Join(work, "args")
 
-	if _, err := argsStep(graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: call, mropath: fx}, argsFlags{node: "CH.SRC"}, args); err != nil {
+	_, got, err := argsStep(graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: call, mropath: fx}, argsFlags{node: "CH.SRC"}, args)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if got := compactBundle(t, args); !strings.Contains(got, `"x":5`) {
+	if !strings.Contains(got, `"x":5`) {
 		t.Errorf("SRC's args %s, want the call's x = 5", got)
 	}
 }
@@ -265,16 +266,15 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 	fx := fixtureDir(t, "split_gate_entry")
 	mro := filepath.Join(fx, "pipeline.mro")
 	gf := graphFlags{entry: mro, call: filepath.Join(work, "call"), mropath: fx}
-	src, outs, gates := "SPLIT_GATE_ENTRY.SRC", filepath.Join(work, "src", "outs"), filepath.Join(work, "src", "gates")
-	args := filepath.Join(work, "src", "args")
+	src, gates := "SPLIT_GATE_ENTRY.SRC", filepath.Join(work, "src", "gates")
 
-	if _, err := argsStep(gf, argsFlags{node: src}, args); err != nil {
+	inst, _, err := argsStep(gf, argsFlags{node: src}, filepath.Join(work, "src", "args"))
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	writeTestBundle(t, outs, map[string]any{"skips": []any{true, true, false}, "flags": map[string]any{"a": false, "b": true, "c": true}})
-
-	if err := postStep(gf, postFlags{forks: filepath.Join(work, "src", "forks"), forkValues: filepath.Join(work, "src", "fork_values"), gates: gates}, args, outs); err != nil {
+	outs := map[string]any{"skips": []any{true, true, false}, "flags": map[string]any{"a": false, "b": true, "c": true}}
+	if _, err := postStep(gf, inst, outs, filepath.Join(work, "src"), gates); err != nil {
 		t.Fatal(err)
 	}
 
@@ -502,7 +502,7 @@ func TestArgsReadsStagedEntryFiles(t *testing.T) {
 	writeTestFile(t, filepath.Join("entry", "1", "reads.txt"), "7\n")
 
 	gf := graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: filepath.Join(work, "call"), mropath: fx}
-	if _, err := argsStep(gf, argsFlags{node: "EP.COUNT", leaves: "0"}, "args"); err != nil {
+	if _, _, err := argsStep(gf, argsFlags{node: "EP.COUNT", leaves: "0"}, "args"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -534,7 +534,7 @@ func TestArgsRefusesCodeThePlanDidNotPlan(t *testing.T) {
 	}
 
 	args := func() error {
-		_, err := argsStep(graphFlags{entry: mro, call: filepath.Join(work, "call"), mropath: dir}, argsFlags{node: "CH.SRC", digest: digest}, filepath.Join(t.TempDir(), "args"))
+		_, _, err := argsStep(graphFlags{entry: mro, call: filepath.Join(work, "call"), mropath: dir}, argsFlags{node: "CH.SRC", digest: digest}, filepath.Join(t.TempDir(), "args"))
 
 		return err
 	}

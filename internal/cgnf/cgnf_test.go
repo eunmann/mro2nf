@@ -253,7 +253,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 	gather := readTree(t, emitFixture(t, "fork_mid"))["main.nf"]
 
 	for _, c := range []struct{ fixture, main, want string }{
-		{"split_test", split, "N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0))"},
+		{"split_test", split, "j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)\n    N0_SUM_SQUARES_JN(j0)"},
 		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']), [])"},
 		{"split_test", split, "    outs_pub = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum']))\n    outs_in = outs_pub.toList().map { xs -> ordered(xs) }"},
 	} {
@@ -263,7 +263,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }",
+		"groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }",
 		".collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->\n        [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]",
 		"outs.flatMap { k, ds -> selected(ds, fields).collect { e -> [[node] + k, e] } }",
 	} {
@@ -282,7 +282,7 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_outs = POSTED(N0_GEN.out.outs, b0.skip)",
+		"o0_outs = POSTED(N0_GEN.out.outs, b0.skip, r0)",
 		"outs_files = outs_in.map { xs -> bundlesOf(xs) }",
 		", outs_in.map { xs -> recordsOf(xs) }, ",
 	} {
@@ -292,22 +292,22 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), emit: outs",
-		"'-fields outs -field-values outs_values -forks forks -fork-values fork_values -gates gates'",
-		"posted.map { k, ds, vs -> [k, ds + vs.tokenize(' ')] }",
+		"tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs",
+		"'-fields outs -field-values outs_values -field-refs outs_refs -forks forks -fork-values fork_values -fork-refs fork_refs -gates gates'",
+		"posted.join(sources).map { k, ds, vs, rs, src -> [k, referred(ds, rs, src) + vs.tokenize(' ')] }",
 		"ds.findAll { e -> itemName(e) in fields }",
 		"keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1])",
 		"return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')",
 		"cmd += ' -values values'",
 		"cat > values <<'MRO2NF_VALUES'",
-		"-in in${values ? ' -values values' : ''}",
+		"-in in -refs refs${values ? ' -values values' : ''}",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
 		}
 	}
 
-	if n := strings.Count(stageModule, "eval('cat outs_values'), emit: outs"); n != 2 {
+	if n := strings.Count(stageModule, "eval('cat outs_values'), eval('cat outs_refs'), emit: outs"); n != 2 {
 		t.Errorf("%d processes emit value records, want STAGE's and STAGE_JOIN's", n)
 	}
 }
@@ -323,7 +323,7 @@ func TestEmitCarriesValueElements(t *testing.T) {
 	main := readTree(t, emitFixture(t, "zip_runtime"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_forks = POSTED(N0_TWO.out.forks, b0.skip)",
+		"o0_forks = POSTED(N0_TWO.out.forks, b0.skip, r0)",
 		"ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false)",
 		"ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
 	} {
@@ -336,15 +336,15 @@ func TestEmitCarriesValueElements(t *testing.T) {
 		"ds.findAll { e -> itemParent(e) == root }",
 		"def name = itemName(e)",
 		"ds.findAll { e -> itemParent(e) == partner }.collectEntries { e -> [(itemName(e)): e] }",
-		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), [], [], callStaged(d)]",
-		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)]",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
 		}
 	}
 
-	if n := strings.Count(stageModule, "tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), emit: forks"); n != 2 {
+	if n := strings.Count(stageModule, "tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks"); n != 2 {
 		t.Errorf("%d processes emit element value records, want STAGE's and STAGE_JOIN's", n)
 	}
 
@@ -363,7 +363,10 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
 	}
 
-	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", " -locations locations"} {
+	for _, want := range []string{
+		"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs\n    path refs, stageAs: 'refs/?/f/*', arity: '0..*'\n    val refLocs",
+		"${locations(ups, locs, refLocs)}", " -locations locations",
+	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}
@@ -395,10 +398,10 @@ func TestEmitCarriesTheCall(t *testing.T) {
 		"return meta.call instanceof Path ? '' : \"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"",
 		"return meta.call instanceof Path ? [meta.call] : []",
 		"\"${code(meta, root)} -call call.b64\"",
-		"bundlesOf(es + us), [], [], callStaged(d)]",
+		"refsOf(es + us), [], [], callStaged(d)]",
 		"ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
 		"c.name, c, callStaged(m)] }",
-		"[m, k, fs, vs, us, ids, ef, cs, j, os, callStaged(m)]",
+		"ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -455,14 +458,14 @@ func TestEmitStagesChunkApart(t *testing.T) {
 // name per fork (#507; split_test wires one instance channel into all
 // three).
 func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
-	inputs := "tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')"
+	inputs := "tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')"
 
 	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN"} {
 		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
 		body, _, _ = strings.Cut(body, "\n}\n")
 		_, output, _ := strings.Cut(body, "output:\n")
 
-		for _, want := range []string{inputs, "${valuesFile(values)}\n    mkdir -p in\n", "${args(meta, forks, values, leaves)} -args args "} {
+		for _, want := range []string{inputs, "${valuesFile(values)}\n    mkdir -p in refs\n", "${args(meta, forks, values, leaves)} -args args "} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s lacks %q:\n%s", proc, want, body)
 			}
@@ -479,7 +482,8 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 		"s0 = INPUT(b0.run)",
 		"N0_SUM_SQUARES_SP(s0)",
 		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
-		"N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0))",
+		"j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)",
+		"N0_SUM_SQUARES_JN(j0)",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("split_test's main.nf lacks %q:\n%s", want, main)
@@ -496,7 +500,7 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 
 	for _, want := range []string{
 		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
-		"N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0))",
+		"j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("join_resources's main.nf lacks %q:\n%s", want, main)
@@ -504,8 +508,31 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, ids, ef, c.name, c, callStaged(m)] }",
-		"split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }",
+		"def r = resources(res)\n        chunked(us, rs, cs, t).collect { c, crs -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, crs, ids, ef, c.name, c, callStaged(m)] }",
+		"split.map { m, k, cs, j, res, t -> [k, m + resources(res).join, cs, j, t] }",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+}
+
+// TestEmitSplitNamesFilesByReference: a split and each chunk's main name
+// a file their task staged by reference in the chunk defs and the chunk's
+// outs, writing its records to -out-refs, which the driver resolves, as
+// POSTED does, against the paths the task staged its items from: each
+// chunk stages the files its def names, and the join those every chunk's
+// def and outs name, but those in a dir the task stages whole.
+func TestEmitSplitNamesFilesByReference(t *testing.T) {
+	for _, want := range []string{
+		"-args args -o chunks -out-refs chunk_refs\")}",
+		"-o ${shq('chunkout/' + name)} -out-refs chunkout_refs\")}",
+		"path('chunks/resources.tsv'), path('chunk_refs'), emit: split",
+		"tuple val(meta), val(key), path('chunkout/*', type: 'dir'), eval('cat chunkout_refs'), emit: chunk",
+		"return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], unstaged(rs + refsOf([e]), us)] }",
+		"refsOf(referred([o], recs, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))",
+		"return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })",
+		"[m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -514,10 +541,11 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 }
 
 // TestEmitReadsRecordsFromFiles (#549): a record of a line per fork or per
-// chunk, PLAN's and a split's resources table, reaches the driver as a file
-// it reads, not as an eval output, which Nextflow 26.04 joins line by line
-// with string concatenation (TaskEnvCollector.collect), quadratic in the
-// lines.
+// chunk, PLAN's and a split's resources table and references, reaches the
+// driver as a file it reads, not as an eval output, which Nextflow 26.04
+// joins line by line with string concatenation (TaskEnvCollector.collect),
+// quadratic in the lines; a task's reference records, which grow with a
+// join's chunks or a fork root's forks, are an eval output of one line.
 func TestEmitReadsRecordsFromFiles(t *testing.T) {
 	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
 
@@ -527,8 +555,14 @@ func TestEmitReadsRecordsFromFiles(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(stageModule, "path('chunks/resources.tsv'), emit: split") || strings.Contains(stageModule, "eval('cat chunks/resources.tsv')") {
-		t.Error("STAGE_SPLIT does not output its resources table as a file")
+	for _, rec := range []string{"chunks/resources.tsv", "chunk_refs"} {
+		if !strings.Contains(stageModule, "path('"+rec+"')") || strings.Contains(stageModule, "eval('cat "+rec+"')") {
+			t.Errorf("STAGE_SPLIT does not output its %s as a file", rec)
+		}
+	}
+
+	if !strings.Contains(stageModule, "refs.tokenize(' ')") || strings.Contains(stageModule, "refs.tokenize('\\n')") {
+		t.Error("the driver does not read a task's reference records, its eval outputs outs_refs, fork_refs and chunkout_refs, as one line")
 	}
 }
 
@@ -623,7 +657,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 
 	for _, want := range []string{
 		"entry = ENTRY(PLAN.out.files, PLAN.out.leaves)",
-		"N0_COUNTARR(INPUT_ENTRY(b0.run, entry, []))",
+		"n0 = INPUT_ENTRY(b0.run, entry, [])",
 	} {
 		if !strings.Contains(arr, want) {
 			t.Errorf("entry_filearr's main.nf lacks %q:\n%s", want, arr)
@@ -631,7 +665,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 	}
 
 	plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
-	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "N1_ADD(INPUT(u1))") {
+	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "n1 = INPUT(u1)") {
 		t.Errorf("diamond_min reads no entry file, yet stages some:\n%s", plain)
 	}
 
@@ -640,7 +674,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 		"-leaves ${shq(leaves.join(','))}",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
 		"def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
-		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), [], [], callStaged(d)]",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)]",
 	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)

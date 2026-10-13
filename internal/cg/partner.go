@@ -268,7 +268,7 @@ func (s *stagedStore) partner(root *syntax.CallGraphStage, ref *syntax.RefExp, i
 	k := partnerKey(root.Fqid, ref.Id, ref.OutputId)
 
 	if it, ok := s.partners[k+"\x00"+IndexToken(ix)]; ok {
-		raw, held, err := it.read()
+		raw, held, err := it.read(s.refs)
 		if err == nil && !held {
 			err = errNotItem
 		}

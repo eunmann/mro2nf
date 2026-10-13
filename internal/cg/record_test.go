@@ -36,12 +36,12 @@ func TestRecordsRefuseMalformed(t *testing.T) {
 		"neither": `{"node":"MFU.DBL","fork":[{"root":"MFU.DBL"}],"lens":[1]}`,
 		"lens":    `{"node":"MFU.DBL","fork":[{"root":"MFU.DBL","key":"a"}],"lens":[]}`,
 	} {
-		if _, err := f.g.ReadInstance(write(instanceFile, body)); err == nil {
+		if _, err := f.g.readInstance(write(instanceFile, body)); err == nil {
 			t.Errorf("instance stamp %s: read without error", name)
 		}
 	}
 
-	if _, err := f.g.ReadInstance(f.next("empty")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := f.g.readInstance(f.next("empty")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a dir without an instance stamp: %v, want ErrNotExist", err)
 	}
 

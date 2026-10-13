@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/core"
 )
 
 // publishMRO is a pipeline whose outs reach a stage's file directly and
@@ -199,13 +199,14 @@ func (r *publishRun) task(node string, in []string, outs func(args map[string]an
 
 	r.t.Chdir(scratch)
 
-	if _, err := r.g.WriteArgs(ArgsSpec{Node: node, In: in, Out: "args"}); err != nil {
+	inst, linked, err := r.g.WriteArgs(ArgsSpec{Node: node, In: in, Out: "args"})
+	if err != nil {
 		r.t.Fatal(err)
 	}
 
 	var args map[string]any
 
-	raw, err := shim.ReadBundle("args")
+	raw, err := json.Marshal(linked)
 	if err == nil {
 		err = json.Unmarshal(raw, &args)
 	}
@@ -214,7 +215,7 @@ func (r *publishRun) task(node string, in []string, outs func(args map[string]an
 		r.t.Fatal(err)
 	}
 
-	if err := r.post(node, scratch, outs(args, files)); err != nil {
+	if err := r.post(inst, scratch, outs(args, files)); err != nil {
 		r.t.Fatal(err)
 	}
 
@@ -225,27 +226,26 @@ func (r *publishRun) task(node string, in []string, outs func(args map[string]an
 	return work
 }
 
-func (r *publishRun) post(node, scratch string, outs map[string]any) error {
-	st, err := r.g.Stage(node)
-	if err != nil {
-		return err
-	}
-
-	params, err := r.g.Params(st.Call().DecId, types.RoleOut)
-	if err != nil {
-		return err
-	}
-
+func (r *publishRun) post(inst Instance, scratch string, outs map[string]any) error {
 	conf, err := shim.ConfineStage(scratch, "main", false, shim.Roots{})
 	if err != nil {
 		return err
 	}
 
-	if err := shim.WriteBundle("stage_outs", outs, params, r.g.Table(), shim.Opts{Confine: conf}); err != nil {
-		return err
+	m := core.LazyArgumentMap{}
+
+	for k, v := range outs {
+		if m[k], err = json.Marshal(v); err != nil {
+			return err
+		}
 	}
 
-	return r.g.Post(PostSpec{Args: "args", Outs: "stage_outs", Forks: "forks", ForkValues: "fork_values", Fields: "outs", Values: "values"})
+	spec := PostSpec{
+		Instance: inst, Outs: m, Opts: shim.Opts{Confine: conf},
+		Forks: "forks", ForkValues: "fork_values", ForkRefs: "fork_refs", Fields: "outs", Values: "values", FieldRefs: "outs_refs",
+	}
+
+	return r.g.Post(spec)
 }
 
 // writeOuts publishes the pipeline outs from the staged bundles with

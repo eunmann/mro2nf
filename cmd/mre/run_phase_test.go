@@ -138,11 +138,17 @@ func TestStageUnderOverrides(t *testing.T) {
 		argv        []string
 		want        allocation
 	}{
-		{"split", "split", []string{"-o", chunks}, allocation{Threads: 2, MemGB: 1, VMemGB: 4}},
-		{"main", "chnk0", []string{"-chunk", filepath.Join(chunks, "chnk0"), "-o", filepath.Join(work, "chunkouts", "chnk0")}, allocation{Threads: 1, MemGB: 3, VMemGB: 6}},
-		{"main", "chnk1", []string{"-chunk", filepath.Join(chunks, "chnk1"), "-o", filepath.Join(work, "chunkouts", "chnk1")}, allocation{Threads: 1, MemGB: 3, VMemGB: 6}},
+		{"split", "split", []string{"-o", chunks, "-out-refs", filepath.Join(work, "chunk_refs")}, allocation{Threads: 2, MemGB: 1, VMemGB: 4}},
+		{"main", "chnk0", []string{
+			"-chunk", filepath.Join(chunks, "chnk0"), "-o", filepath.Join(work, "chunkouts", "chnk0"), "-out-refs", filepath.Join(work, "chnk0_refs"),
+		}, allocation{Threads: 1, MemGB: 3, VMemGB: 6}},
+		{"main", "chnk1", []string{
+			"-chunk", filepath.Join(chunks, "chnk1"), "-o", filepath.Join(work, "chunkouts", "chnk1"), "-out-refs", filepath.Join(work, "chnk1_refs"),
+		}, allocation{Threads: 1, MemGB: 3, VMemGB: 6}},
 		{"join", "join", []string{
-			"-chunks", chunks, "-chunkouts", filepath.Join(work, "chunkouts"), "-o", filepath.Join(work, "outs"), "-forks", filepath.Join(work, "forks"), "-fork-values", filepath.Join(work, "fork_values"),
+			"-chunks", chunks, "-chunkouts", filepath.Join(work, "chunkouts"), "-fields", filepath.Join(work, "outs"), "-field-values", filepath.Join(work, "outs_values"),
+			"-forks", filepath.Join(work, "forks"), "-fork-values", filepath.Join(work, "fork_values"),
+			"-field-refs", filepath.Join(work, "outs_refs"), "-fork-refs", filepath.Join(work, "fork_refs"),
 		}, allocation{Threads: 1, MemGB: 1, VMemGB: 9}},
 	}
 

@@ -18,11 +18,14 @@ const elementField = "value"
 
 // stagedStore serves the instance outs bundles, fork elements and partner
 // elements one task staged, and those it got as value records, each
-// identified by its own record. An instance's outs may come as one bundle,
-// or field by field (Post's Fields and Values) as bundles and value
-// records, which merge.
+// identified by its own record, their leaves named by reference among the
+// leaves it staged by reference, refs. An instance's outs may come as one
+// bundle, or field by field (Post's Fields and Values) as bundles and value
+// records, which merge, or, for the instance a task posts, whole as its job
+// wrote them (addOuts), their leaves the job's own paths.
 type stagedStore struct {
 	g           *Graph
+	refs        shim.Refs
 	outsDirs    map[string][]string
 	outsValues  map[string]core.LazyArgumentMap
 	forks       map[string][]Fork
@@ -40,10 +43,10 @@ type elementItem struct {
 	value json.RawMessage
 }
 
-// read is the element's value, and false for a dir that holds no bundle:
-// a fork element of a root no stage feeds, whose collection is in the call
-// graph.
-func (it elementItem) read() (json.RawMessage, bool, error) {
+// read is the element's value, its leaves named by reference among refs,
+// and false for a dir that holds no bundle: a fork element of a root no
+// stage feeds, whose collection is in the call graph.
+func (it elementItem) read(refs shim.Refs) (json.RawMessage, bool, error) {
 	if it.value != nil {
 		return it.value, true, nil
 	}
@@ -52,7 +55,7 @@ func (it elementItem) read() (json.RawMessage, bool, error) {
 		return nil, false, nil
 	}
 
-	raw, err := shim.ReadBundle(it.dir)
+	raw, err := refs.ReadBundle(it.dir)
 	if err != nil {
 		return nil, false, fmt.Errorf("element %s: %w", it.dir, err)
 	}
@@ -70,11 +73,13 @@ func (it elementItem) read() (json.RawMessage, bool, error) {
 func stagedKey(fqid string, f Fork) string { return fqid + "\x00" + f.key() }
 
 // stage indexes the staged items under dirs, the value records values and
-// the fork records recs. Each dir is an item (an instance bundle, a fork
-// element or a partner element) or holds items as its subdirectories.
-func (g *Graph) stage(dirs, values []string, recs ...Element) (*stagedStore, error) {
+// the fork records recs, and the leaves staged by reference, refs. Each dir
+// is an item (an instance bundle, a fork element or a partner element) or
+// holds items as its subdirectories.
+func (g *Graph) stage(dirs, values []string, refs shim.Refs, recs ...Element) (*stagedStore, error) {
 	s := &stagedStore{
 		g:          g,
+		refs:       refs,
 		outsDirs:   map[string][]string{},
 		outsValues: map[string]core.LazyArgumentMap{},
 		forks:      map[string][]Fork{},
@@ -101,6 +106,16 @@ func (g *Graph) stage(dirs, values []string, recs ...Element) (*stagedStore, err
 	}
 
 	return s, nil
+}
+
+// addOuts indexes outs as the whole outs of the instance in.
+func (s *stagedStore) addOuts(in Instance, outs core.LazyArgumentMap) {
+	k := s.addInstance(in)
+	s.outsValues[k] = maps.Clone(outs)
+
+	if s.outsValues[k] == nil {
+		s.outsValues[k] = core.LazyArgumentMap{}
+	}
 }
 
 // addInstance records the instance whose outs the task staged a part of,
@@ -138,7 +153,7 @@ func (s *stagedStore) addTree(dir string) error {
 func (s *stagedStore) add(dir string) error {
 	switch itemKind(dir) {
 	case instanceFile:
-		in, err := s.g.ReadInstance(dir)
+		in, err := s.g.readInstance(dir)
 		if err != nil {
 			return err
 		}
@@ -194,7 +209,7 @@ func (s *stagedStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgument
 	}
 
 	for _, dir := range dirs {
-		raw, err := shim.ReadBundle(dir)
+		raw, err := s.refs.ReadBundle(dir)
 		if err != nil {
 			return nil, fmt.Errorf("staged outs of %s: %w", st.Fqid, err)
 		}
@@ -296,7 +311,7 @@ func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork) (json.RawMess
 		return nil, false, nil
 	}
 
-	v, ok, err := it.read()
+	v, ok, err := it.read(s.refs)
 	if err != nil {
 		return nil, false, fmt.Errorf("fork element of %s: %w", root.Fqid, err)
 	}

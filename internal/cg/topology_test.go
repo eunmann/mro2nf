@@ -235,7 +235,7 @@ call P()
 
 	f := &fixture{t: t, g: g, dir: t.TempDir()}
 	outs := f.outs("P.SRC", nil, `{"xs":[1,2,3],"skips":[false,true],"items":null}`)
-	forks := f.post(outs, outs)
+	forks := f.post(outs)
 
 	elems := elementItems(t, forks, "P.PAIR")
 	if len(elems) != 3 {

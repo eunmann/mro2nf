@@ -45,7 +45,7 @@ func TestReadBundleKeepsKeyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	raw, err := shim.ReadBundle(dir)
+	raw, err := shim.Refs{}.ReadBundle(dir)
 	if err != nil {
 		t.Fatalf("ReadBundle: %v", err)
 	}
@@ -61,10 +61,10 @@ func TestReadBundleKeepsKeyOrder(t *testing.T) {
 	}
 }
 
-// TestWriteBundleKeepsKeyOrder checks a value read from one bundle is written
+// TestWriteItemKeepsKeyOrder checks a value read from one bundle is written
 // to the next with its nested objects in the same order, its file leaves
 // staged, and its top level sorted as mrp writes an _args or _outs.
-func TestWriteBundleKeepsKeyOrder(t *testing.T) {
+func TestWriteItemKeepsKeyOrder(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "ref.txt")
 
@@ -84,8 +84,8 @@ func TestWriteBundleKeepsKeyOrder(t *testing.T) {
 
 	out := filepath.Join(dir, "out")
 
-	if err := shim.WriteBundle(out, map[string]any{"cfg": cfg, "b": 1}, fields(t, "cfg Cfg"), types.NewTable(&ast.TypeTable), shim.Opts{}); err != nil {
-		t.Fatalf("WriteBundle: %v", err)
+	if _, err := shim.WriteItem(out, map[string]any{"cfg": cfg, "b": 1}, fields(t, "cfg Cfg"), types.NewTable(&ast.TypeTable), shim.Opts{}, shim.Staged{}); err != nil {
+		t.Fatalf("WriteItem: %v", err)
 	}
 
 	want := `{"b":1,"cfg":{"z":1,"ref":"@mre:file:f/L0000/ref.txt","a":{"y":1,"x":2}}}`

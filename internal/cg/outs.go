@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -16,9 +18,14 @@ type OutsSpec struct {
 	// In are the staged outs of the stages the pipeline outs read, and
 	// Values those it got as value records (Post's Values).
 	In, Values []string
-	// Locations maps each staged outs bundle, by its absolute path, to where
-	// its producing task's work dir keeps it: the name of a file the
-	// pipeline outs leave unpublished.
+	// Refs is the dir of the leaves the task staged by reference, which
+	// the staged outs name by their origin where none of In holds them
+	// (shim.Staged.Leaves).
+	Refs string
+	// Locations maps each staged outs bundle, and each bundle holding a
+	// leaf staged by reference, by its absolute path, to where its
+	// producing task's work dir keeps it: the name of a file the pipeline
+	// outs leave unpublished.
 	Locations map[string]string
 	// EntryFiles maps each entry file value the task staged to the path it
 	// reads it at (StagedEntryFiles).
@@ -36,7 +43,17 @@ type OutsSpec struct {
 // pipestance reconstructed from them. Then it writes the published tree and
 // the outs JSON naming it.
 func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
-	s, err := g.stage(spec.In, spec.Values)
+	staged, err := shim.NewStaged(append(slices.Clone(spec.In), spec.Refs)...)
+	if err != nil {
+		return fmt.Errorf("pipeline outs: %w", err)
+	}
+
+	refs, err := staged.Leaves()
+	if err != nil {
+		return fmt.Errorf("pipeline outs: %w", err)
+	}
+
+	s, err := g.stage(spec.In, spec.Values, refs)
 	if err != nil {
 		return err
 	}

@@ -10,10 +10,11 @@ import (
 	"path/filepath"
 )
 
-// The records only mre reads: an instance stamp beside an args or outs
-// bundle's data.json, the task record beside a posted outs bundle's stamp,
-// the fork record of a fork element dir, and the record of a partner element
-// dir (partnerJSON).
+// The records the package reads back from the items a task staged, which
+// the driver never reads: an instance stamp beside an outs bundle's
+// data.json, the task record beside a posted outs bundle's stamp, the fork
+// record of a fork element dir, and the record of a partner element dir
+// (partnerJSON).
 const (
 	instanceFile = "instance.json"
 	taskFile     = "task.json"
@@ -64,8 +65,8 @@ type elementJSON struct {
 	Position int        `json:"position"`
 }
 
-// ReadInstance reads the instance stamp in dir, an args or outs bundle.
-func (g *Graph) ReadInstance(dir string) (Instance, error) {
+// readInstance reads the instance stamp in dir, an outs bundle.
+func (g *Graph) readInstance(dir string) (Instance, error) {
 	var rec instanceJSON
 	if err := readRecord(filepath.Join(dir, instanceFile), &rec); err != nil {
 		return Instance{}, err

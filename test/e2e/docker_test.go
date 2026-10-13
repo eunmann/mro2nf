@@ -312,14 +312,17 @@ var errNoOwner = errors.New("no owner in the file info")
 // dockerCases are the golden cases TestDockerIsolation runs isolated: every
 // process kind (split, map call, keyed fork, disabled call, a split's join
 // resources, the special scheduler key), each adapter (py, exec, comp), the
-// null-bundle and zero-fork shapes, and file values of every shape an entry
-// input stages.
+// null-bundle and zero-fork shapes, file values of every shape an entry
+// input stages, and files a task names by reference: a join's chunk files
+// (file_tree), a stage's input it passes through (shared_out_file) and a
+// split's input it forwards into its chunk defs (split_forward_file).
 var dockerCases = []string{
 	"split_test", "map_pipe", "map_file_keyed", "disabled_map", "join_resources", "special_resource",
 	"kitchen_sink", "file_chain", "map_split_file", "map_file_split", "struct_file_array", "exec_min",
 	"mixed_adapters", "comp_split", "empty_fork_min", "map_null_map", "disabled_callref",
 	"entry_file_override", "entry_filearr_override", "entry_struct_file_override", "entry_mapfile_override",
 	"entry_dir_override", "entry_file_empty_override", "split_from_file_override",
+	"file_tree", "shared_out_file", "split_forward_file",
 }
 
 // TestDockerIsolation runs each dockerCases golden under full container

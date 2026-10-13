@@ -29,9 +29,10 @@ func mountedTree(t *testing.T) (shim.Roots, string, string) {
 }
 
 // TestMountedLeafStaysItsPath: a file leaf under a root is the same path in
-// every task, as the path mrp passes a stage, so every bundle writer keeps
-// it as the string it is, under a strict confinement too, with nothing of
-// its tree copied or linked into the bundle, and it reads back unchanged.
+// every task, as the path mrp passes a stage, so every bundle writer and
+// the args' linking keep it as the string it is, under a strict confinement
+// too, with nothing of its tree copied or linked, and it reads back
+// unchanged.
 func TestMountedLeafStaysItsPath(t *testing.T) {
 	roots, file, dir := mountedTree(t)
 	params := fields(t, "f file", "d path")
@@ -47,44 +48,55 @@ func TestMountedLeafStaysItsPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	writers := map[string]func(dir string) error{
-		"WriteBundle": func(b string) error {
-			return shim.WriteBundle(b, payload, params, fileTable(t), shim.Opts{Confine: conf, Roots: roots})
+	writers := map[string]func(t *testing.T, dir string) map[string]any{
+		"WriteItem": func(t *testing.T, b string) map[string]any {
+			t.Helper()
+
+			writeBundle(t, b, payload, params, shim.Opts{Confine: conf, Roots: roots})
+
+			wantStored(t, b, payload)
+
+			return readPayload(t, b)
 		},
-		"WriteLinkedBundle": func(b string) error {
-			return shim.WriteLinkedBundle(b, payload, params, fileTable(t), roots)
+		"LinkLeaves": func(t *testing.T, b string) map[string]any {
+			t.Helper()
+
+			return linkLeaves(t, b, payload, params, roots)
 		},
 	}
 
 	for name, write := range writers {
 		t.Run(name, func(t *testing.T) {
 			bundle := filepath.Join(t.TempDir(), "bundle")
-			if err := write(bundle); err != nil {
-				t.Fatal(err)
-			}
+			got := write(t, bundle)
 
 			if _, err := os.Lstat(filepath.Join(bundle, "f")); !os.IsNotExist(err) {
 				t.Errorf("the bundle has a files dir (%v), want none", err)
 			}
 
-			if d := cmp.Diff(payload, readPayload(t, bundle)); d != "" {
+			if d := cmp.Diff(payload, got); d != "" {
 				t.Errorf("payload read back (-want +got):\n%s", d)
 			}
-
-			raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var stored map[string]any
-			if err := json.Unmarshal(raw, &stored); err != nil {
-				t.Fatal(err)
-			}
-
-			if d := cmp.Diff(payload, stored); d != "" {
-				t.Errorf("data.json (-want +got):\n%s", d)
-			}
 		})
+	}
+}
+
+// wantStored requires the bundle at dir to store payload as it is.
+func wantStored(t *testing.T, dir string, payload map[string]any) {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join(dir, "data.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var stored map[string]any
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+
+	if d := cmp.Diff(payload, stored); d != "" {
+		t.Errorf("data.json (-want +got):\n%s", d)
 	}
 }
 
@@ -144,7 +156,7 @@ func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 		}
 
 		bundle := filepath.Join(t.TempDir(), "outs")
-		err = shim.WriteBundle(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Roots: rs})
+		_, err = shim.WriteItem(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Roots: rs}, shim.Staged{})
 
 		if !rs.Holds(file) {
 			if err == nil {

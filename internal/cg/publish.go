@@ -32,9 +32,10 @@ type pipestance struct {
 	dir, outs, linked string
 	tbl               *types.Table
 	params            []*syntax.StructMember
-	// locations maps each staged outs bundle to where its producing task's
-	// work dir keeps it, and tasks the dir each such task ran in to its work
-	// dir.
+	// locations maps each staged outs bundle, and each bundle holding a
+	// leaf staged by reference, to where its producing task's work dir
+	// keeps it, and tasks the dir each task posting an outs bundle ran in
+	// to its work dir.
 	locations, tasks map[string]string
 	// origins maps the origin of each stage file the pipeline outs reach to
 	// a leaf holding it, and placed each origin copied to the pipestance to
@@ -61,14 +62,14 @@ func newPipestance(spec OutsSpec, items []string, tbl *types.Table, params []*sy
 	// (post_process.go moveOutFile), which no sibling of it under work meets.
 	p := &pipestance{
 		dir: filepath.Join(work, "pipestance"), linked: filepath.Join(work, "linked"), tbl: tbl, params: params,
-		locations: map[string]string{}, tasks: map[string]string{},
+		locations: spec.Locations, tasks: map[string]string{},
 		origins: map[string]string{}, placed: map[string]string{}, names: map[string]string{}, links: map[string]string{},
 		entry: spec.EntryFiles,
 	}
 	p.outs = filepath.Join(p.dir, "outs")
 
 	for _, item := range items {
-		if err := p.locate(spec.Locations, item); err != nil {
+		if err := p.locate(item); err != nil {
 			return nil, err
 		}
 	}
@@ -76,20 +77,18 @@ func newPipestance(spec OutsSpec, items []string, tbl *types.Table, params []*sy
 	return p, nil
 }
 
-// locate records where the producing task of the staged outs bundle item
-// keeps it, and the work dir of the dir that task ran in.
-func (p *pipestance) locate(locations map[string]string, item string) error {
+// locate records the work dir of the dir the producing task of the staged
+// outs bundle item ran in.
+func (p *pipestance) locate(item string) error {
 	abs, err := filepath.Abs(item)
 	if err != nil {
 		return fmt.Errorf("pipeline outs: %w", err)
 	}
 
-	loc, ok := locations[abs]
+	loc, ok := p.locations[abs]
 	if !ok {
 		return nil
 	}
-
-	p.locations[abs] = loc
 
 	task, ok, err := readTask(item)
 	if err != nil || !ok {

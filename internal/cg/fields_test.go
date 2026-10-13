@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -25,13 +26,16 @@ type posted struct {
 	gates  string
 }
 
-// postFields posts the instance outs stand for with Fields, Values and
-// Gates set, and returns what it wrote.
+// postFields posts the instance outs stand for with Gates set, and returns
+// what it wrote.
 func (f *fixture) postFields(outs string) posted {
 	f.t.Helper()
 
-	fields, values, gates, forks := f.next("fields"), f.next("values"), f.next("gates"), f.next("forks")
-	if err := f.g.Post(PostSpec{Args: outs, Outs: outs, Forks: forks, ForkValues: forkValues(forks), Fields: fields, Values: values, Gates: gates}); err != nil {
+	spec := postedSpec(f.t, f.g, outs, f.next("forks"))
+	spec.Gates = f.next("gates")
+
+	fields, values, gates := spec.Fields, spec.Values, spec.Gates
+	if err := f.g.Post(spec); err != nil {
 		f.t.Fatal(err)
 	}
 
@@ -97,18 +101,20 @@ func TestPostFields(t *testing.T) {
 	wantArgs(t, "CH.USE", got, `{"k":3,"y":4}`)
 }
 
-// TestPostFieldsNeedsValues: a post writing its outs field by field needs
-// both the fields dir and the values file, as an output it carries as a
-// value would otherwise reach no reader.
+// TestPostFieldsNeedsValues: a post writes its outs field by field, so it
+// needs the fields dir, the values file and the refs file, as an output it
+// carries as a value, or a file a bundle names by reference, would
+// otherwise reach no reader.
 func TestPostFieldsNeedsValues(t *testing.T) {
 	f := loadFixture(t, "chain_gate")
 	src := f.outs("CH.SRC", nil, `{"y":4,"flag":false}`)
 
-	for _, spec := range []PostSpec{{Fields: f.next("fields")}, {Values: f.next("values")}} {
-		spec.Args, spec.Outs, spec.Forks = src, src, f.next("forks")
-		spec.ForkValues = forkValues(spec.Forks)
-		if err := f.g.Post(spec); !errors.Is(err, errFieldsValues) {
-			t.Errorf("post with fields %q and values %q: %v, want %v", spec.Fields, spec.Values, err, errFieldsValues)
+	for _, drop := range []func(*PostSpec){func(s *PostSpec) { s.Fields = "" }, func(s *PostSpec) { s.Values = "" }, func(s *PostSpec) { s.FieldRefs = "" }} {
+		spec := postedSpec(t, f.g, src, f.next("forks"))
+		drop(&spec)
+
+		if err := f.g.Post(spec); !errors.Is(err, errPostDirs) {
+			t.Errorf("post with fields %q, values %q and refs %q: %v, want %v", spec.Fields, spec.Values, spec.FieldRefs, err, errPostDirs)
 		}
 	}
 }
@@ -161,7 +167,7 @@ func TestPostFieldsKeepsValues(t *testing.T) {
 func (f *fixture) storedOuts(t *testing.T, node string, in, values []string) core.LazyArgumentMap {
 	t.Helper()
 
-	s, err := f.g.stage(in, values)
+	s, err := f.g.stage(in, values, shim.Refs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +246,7 @@ func TestPostGatesReadOnce(t *testing.T) {
 	for _, n := range []int{4, 64} {
 		outs := forkDisabledFlags(t, n)
 
-		s, err := outs.g.stage([]string{outs.dir}, nil)
+		s, err := outs.g.stage([]string{outs.dir}, nil, shim.Refs{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -278,9 +284,15 @@ func BenchmarkPostGates(b *testing.B) {
 		b.Run("forks="+strconv.Itoa(n), func(b *testing.B) {
 			outs := forkDisabledFlags(b, n)
 
+			spec := postedSpec(b, outs.g, outs.dir, "forks")
+
 			for b.Loop() {
-				forks := b.TempDir()
-				if err := outs.g.Post(PostSpec{Args: outs.dir, Outs: outs.dir, Forks: forks, ForkValues: filepath.Join(forks, "values"), Gates: filepath.Join(forks, "gates")}); err != nil {
+				dir := b.TempDir()
+				spec.Forks, spec.ForkValues, spec.Gates = filepath.Join(dir, "forks"), filepath.Join(dir, "fork_values"), filepath.Join(dir, "gates")
+				spec.Fields, spec.Values = filepath.Join(dir, "outs"), filepath.Join(dir, "outs_values")
+				spec.FieldRefs, spec.ForkRefs = filepath.Join(dir, "outs_refs"), filepath.Join(dir, "fork_refs")
+
+				if err := outs.g.Post(spec); err != nil {
 					b.Fatal(err)
 				}
 			}

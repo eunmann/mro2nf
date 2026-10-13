@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"slices"
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/job"
@@ -18,9 +19,8 @@ import (
 // message.
 var errNotEnabled = errors.New("not enabled where its gates said enabled")
 
-// stageFlags are mre stage's: the args, job and post steps' flags, sharing
-// the args bundle dir (-args) and the outs bundle a job writes and its post
-// stamps (-o).
+// stageFlags are mre stage's: the args, job and post steps' flags. The
+// steps hand each other the instance, its args and its outs in memory.
 type stageFlags struct {
 	args argsFlags
 	run  runFlags
@@ -62,7 +62,7 @@ func runStage(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	s.args.roots, s.run.roots, s.post.roots = roots, roots, roots
+	s.args.roots, s.run.roots = roots, roots
 
 	return s.stage(ctx, g)
 }
@@ -88,7 +88,15 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return err
 	}
 
-	inst, err := s.args.write(g, s.run.args)
+	if s.run.staged, err = shim.NewStaged(append(slices.Clone(s.args.in), s.args.refs, s.run.chunk, s.run.chunks, s.run.chunkOuts)...); err != nil {
+		return fmt.Errorf("stage: %w", err)
+	}
+
+	if s.run.refs, err = s.run.staged.Leaves(); err != nil {
+		return fmt.Errorf("stage: %w", err)
+	}
+
+	inst, args, err := s.args.write(g, s.run.args, s.run.refs)
 	if err != nil {
 		return err
 	}
@@ -97,15 +105,12 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return fmt.Errorf("args: %s is %w", inst.Node, errNotEnabled)
 	}
 
-	if err := s.run.run(ctx, g); err != nil {
+	done, err := s.run.run(ctx, g, inst, args)
+	if err != nil || !post {
 		return err
 	}
 
-	if !post {
-		return nil
-	}
-
-	return s.post.post(g, s.run.args, s.run.out)
+	return s.post.post(g, inst, done, s.run.staged)
 }
 
 // posts reports whether a task of node's phase runs the instance's last

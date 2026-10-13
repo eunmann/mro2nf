@@ -17,7 +17,8 @@ import (
 // holds no file and is small (valueRecord) as a record in the spec's Values
 // file, which the driver carries as a value, and any other as a stamped
 // bundle under the spec's Fields dir, <output>/, holding that output's
-// value and only its files.
+// value and only its files, but those it names by reference, whose records
+// the spec's FieldRefs file receives.
 func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 	st, err := g.Stage(in.Node)
 	if err != nil {
@@ -34,7 +35,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 		return fmt.Errorf("out params of %s: %w", st.Fqid, err)
 	}
 
-	var values []string
+	var values, refs []string
 
 	for _, p := range params {
 		var v any
@@ -57,13 +58,21 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 		}
 
 		fd := filepath.Join(spec.Fields, p.Id)
-		if err := shim.WriteBundle(fd, map[string]any{p.Id: v}, []*syntax.StructMember{p}, g.Table(), shim.Opts{Roots: spec.Roots}); err != nil {
+
+		named, err := shim.WriteItem(fd, map[string]any{p.Id: v}, []*syntax.StructMember{p}, g.Table(), spec.Opts, spec.Staged)
+		if err != nil {
 			return fmt.Errorf("write %s output %s: %w", st.Fqid, p.Id, err)
 		}
 
 		if err := stampPosted(fd, in); err != nil {
 			return err
 		}
+
+		refs = append(refs, shim.RefRecords(fd, named)...)
+	}
+
+	if err := writeFile(spec.FieldRefs, shim.JoinRefs(refs)); err != nil {
+		return err
 	}
 
 	return writeFile(spec.Values, strings.Join(values, " "))
