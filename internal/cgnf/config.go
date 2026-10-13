@@ -145,7 +145,9 @@ profiles {
     // publishes to S3. The submission and transfer limits keep a wide fan-out
     // from throttling the Batch and S3 APIs and re-run a Spot reclaim. The
     // deploy/awsbatch-cdk instances mount the input buckets at /mnt/s3; a
-    // --mro2nf_s3_mount naming another root binds that root instead.
+    // --mro2nf_s3_mount naming another root binds that root instead. The poll
+    // interval names $awsbatch because the local executor, which polls every
+    // 100 ms, reads an unscoped executor.pollInterval too.
     awsbatch {
         process.executor = 'awsbatch'
         includeConfig 'conf/container.config'
@@ -154,6 +156,7 @@ profiles {
         aws.batch.volumes = "${params.mro2nf_s3_mount}:${params.mro2nf_s3_mount}:ro"
         executor.submitRateLimit = '50/1sec'
         executor.queueSize = 1000
+        executor.$awsbatch.pollInterval = '2 sec'
         aws.batch.maxParallelTransfers = 5
         aws.batch.maxTransferAttempts = 3
         aws.batch.delayBetweenAttempts = '10 sec'
