@@ -239,12 +239,12 @@ func (r *publishRun) post(node, scratch string, outs map[string]any) error {
 		return err
 	}
 
-	conf, err := shim.ConfineStage(scratch, "main", false)
+	conf, err := shim.ConfineStage(scratch, "main", false, "")
 	if err != nil {
 		return err
 	}
 
-	if err := shim.WriteBundle("stage_outs", outs, params, r.man.Table(), conf); err != nil {
+	if err := shim.WriteBundle("stage_outs", outs, params, r.man.Table(), shim.Opts{Confine: conf}); err != nil {
 		return err
 	}
 

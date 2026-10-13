@@ -43,7 +43,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, man types.Manifest, dir
 		}
 
 		fd := filepath.Join(dir, p.Name)
-		if err := shim.WriteBundle(fd, map[string]any{p.Name: v}, []ir.Param{p}, man.Table(), nil); err != nil {
+		if err := shim.WriteBundle(fd, map[string]any{p.Name: v}, []ir.Param{p}, man.Table(), shim.Opts{}); err != nil {
 			return fmt.Errorf("write %s output %s: %w", st.Fqid, p.Name, err)
 		}
 

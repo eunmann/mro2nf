@@ -376,7 +376,7 @@ func writeElementValue(dir string, members map[string]json.Marshaler, params []i
 		}
 	}
 
-	if err := shim.WriteBundle(dir, payload, params, tbl, nil); err != nil {
+	if err := shim.WriteBundle(dir, payload, params, tbl, shim.Opts{}); err != nil {
 		return fmt.Errorf("write fork element %s: %w", dir, err)
 	}
 

@@ -87,7 +87,7 @@ func TestWriteBundleKeepsKeyOrder(t *testing.T) {
 	params := []ir.Param{{Name: "cfg", BaseType: "Cfg", IsFile: true}}
 	out := filepath.Join(dir, "out")
 
-	if err := shim.WriteBundle(out, map[string]any{"cfg": cfg, "b": 1}, params, tbl, nil); err != nil {
+	if err := shim.WriteBundle(out, map[string]any{"cfg": cfg, "b": 1}, params, tbl, shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 

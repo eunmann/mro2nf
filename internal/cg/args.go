@@ -181,7 +181,7 @@ func writeArgs(spec ArgsSpec, args json.Marshaler, callable string) error {
 		return err
 	}
 
-	if err := shim.WriteLinkedBundle(spec.Out, payload, params, spec.Manifest.Table()); err != nil {
+	if err := shim.WriteLinkedBundle(spec.Out, payload, params, spec.Manifest.Table(), ""); err != nil {
 		return fmt.Errorf("write %s bundle %s: %w", types.RoleIn, spec.Out, err)
 	}
 
