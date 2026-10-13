@@ -637,8 +637,7 @@ workflow GATED {
 // ENABLED splits the instances the driver runs, which go on to stage what
 // they read, from those it disables, which run no task and lead with the
 // key the gates left them. An instance it runs leads with its ordinals, at
-// positions at, of the roots its node's first READ joins on, and each READ
-// keys it so for the next, so no read adds a step to key it.
+// positions at, of the roots its node's first READ joins on.
 workflow ENABLED {
     take:
     gated
@@ -661,22 +660,48 @@ def selected(List ds, List fields) {
     return fields == null ? ds : ds.findAll { e -> itemName(e) in fields }
 }
 
-// READ adds to each instance the outs items it reads, fields, of one node,
-// keyed as ups keys them, as the instance leads with its ordinals of the
-// roots they share, and keys it by its ordinals, at positions next, of
-// those the node's next READ joins on. A node's outs are keyed by its
-// whole key, which a reader sharing every root of it holds, so the reader
-// combines them as they come; keying or selecting them per reader would
-// cost Nextflow's DAG edges per read.
+// readItems is the outs items instance v read: those it was last keyed
+// with (REKEY), then, of the outs of each node it read since, after them,
+// the outputs fields gives that read.
+def readItems(List v, List fields) {
+    def dss = v.drop(6)
+    if (dss.size() != fields.size()) {
+        error("an instance read ${dss.size()} nodes since it was keyed, which ${fields.size()} reads name")
+    }
+    return v[5] + [dss, fields].transpose().collectMany { ds, f -> selected(ds, f) }
+}
+
+// READ adds to each instance, which leads with its ordinals of the roots
+// it shares with one node, that node's outs, keyed as ups keys them. A
+// node's outs are keyed by its whole key, which a reader sharing every
+// root of it holds, so the reader combines them as they come, and a run of
+// reads joining on the same roots is a combine each: REKEY keys an
+// instance again only between reads joining on other roots, and it and
+// INPUT pick the outputs each read reads. Each step per read cost
+// CellRanger an edge of Nextflow's DAG per read.
 workflow READ {
     take:
     inst
     ups
+
+    main:
+    out = inst.combine(ups, by: 0)
+
+    emit:
+    out
+}
+
+// REKEY keys each instance by its ordinals, at positions next, of the
+// roots its node's next READ joins on, with the outs items it read so far,
+// of the outputs fields gives each read since it was last keyed.
+workflow REKEY {
+    take:
+    inst
     fields
     next
 
     main:
-    out = inst.combine(ups, by: 0).map { _c, k, fs, es, d, us, ds -> [k[next], k, fs, es, d, us + selected(ds, fields)] }
+    out = inst.map { v -> [v[1][next]] + v.subList(1, 5) + [readItems(v, fields)] }
 
     emit:
     out
@@ -713,16 +738,26 @@ def planned(Map shared, Map meta, List d) {
     return shared + [node: meta.node, cpus: d[3] as int, mem_gb: d[4] as double, overrides: d[5] == '-' ? '' : d[5], special: meta.special, digest: d[0]]
 }
 
-// INPUT is each enabled instance as a stage process takes it, with the
-// meta GATE planned for it, the value records of its elements and of the
-// outs it reads apart from the dirs it stages and the files those name by
-// reference, and the call file it stages, if any; it stages no entry file.
+// inputOf is instance v as a stage process takes it, with the meta GATE
+// planned for it, the value records of its elements and of the outs it
+// read (readItems, of the outputs fields gives each read since it was last
+// keyed) apart from the dirs it stages and the files those name by
+// reference, the entry files it stages and their indices, and the call
+// file it stages, if any.
+def inputOf(List v, List fields, List ids, List entries) {
+    def items = v[3] + readItems(v, fields)
+    return [v[4], v[1], v[2], recordsOf(items), bundlesOf(items), refsOf(items), ids, entries, callStaged(v[4])]
+}
+
+// INPUT is each enabled instance as a stage process takes it, staging no
+// entry file.
 workflow INPUT {
     take:
     inst
+    fields
 
     main:
-    out = inst.map { _c, k, fs, es, d, us -> [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)] }
+    out = inst.map { v -> inputOf(v, fields, [], []) }
 
     emit:
     out
@@ -736,11 +771,14 @@ workflow INPUT_ENTRY {
     inst
     entry
     at
+    fields
 
     main:
-    out = inst.combine(entry).map { _c, k, fs, es, d, us, ef ->
-        def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []
-        [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]
+    out = inst.combine(entry).map { ve ->
+        def v = ve.dropRight(1)
+        def ef = ve[-1]
+        def ids = ef.files[v[4].node + ' ' + (v[1][at].join('.') ?: '-')] ?: []
+        inputOf(v, fields, ids, ids.collect { x -> ef.leaves[x] })
     }
 
     emit:

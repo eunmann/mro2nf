@@ -358,8 +358,8 @@ disables, PLAN's per node (`NODES`) and a gating instance's however many
 nodes it gates (`GATES`), so an instance's gate is a lookup, not a scan of
 its node's N forks. `GATE` keys each instance by its ordinals of the roots
 of the stage its node's first `GATED` joins on, and each `GATED` keys it so
-for the next, as `READ` does (**Reads**), so a gate costs no map to key
-the instance (467 edges of CellRanger's DAG). A disabled instance runs no task and stands in with no
+for the next, so a gate costs no map to key the instance (467 edges of
+CellRanger's DAG). A disabled instance runs no task and stands in with no
 outs and no forks; Martian's call graph already reads its outputs as null in
 every consumer.
 
@@ -367,13 +367,16 @@ every consumer.
 it reads: from the instance that shares its roots, or, a gather, from every
 such instance under it. A node's outs are keyed by its whole key, which an
 instance sharing every root of it holds, so `READ` combines the node's outs
-channel as it comes and picks the outputs read in the same step: a step
-keying or selecting them per read cost CellRanger 1,263 edges of
-Nextflow's DAG, whose launch is quadratic in its edges (**Preflights**).
-An enabled instance leads with its ordinals of the roots its node's first
-read joins on (`ENABLED`), and each `READ` keys it so for the next, so a
-read is a combine and a map, not another map to key the instance (1,306
-more edges). An output of a type that holds no file leaf, whose
+channel as it comes: a step keying or selecting them per read cost
+CellRanger 1,263 edges of Nextflow's DAG, whose launch is quadratic in its
+edges (**Preflights**). An enabled instance leads with its ordinals of the
+roots its node's first read joins on (`ENABLED`), and a read is one
+combine, which adds the node's outs after what the instance read before.
+`REKEY` keys the instance again, with the outputs each read since reads
+(`readItems`), only before a read joining on other roots, and the
+process's `INPUT` picks those of the reads after it, so a run of reads on
+the same roots costs no map per read, where a map per read cost
+CellRanger 2,439 edges more. An output of a type that holds no file leaf, whose
 JSON is at most 4 KiB (`cg.MaxValueBytes`), reaches it as a value: a record
 its producer posted (`-field-values`), an `eval` output, that the driver
 carries in its channels and the task writes into a file for `mre stage

@@ -73,16 +73,16 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		reads[x] = p.read(w, i, n, r)
 	}
 
-	p.gate(w, i, n, p.instances(w, i, n), meta, readKey(reads, 0))
-
-	run := fmt.Sprintf("b%d.run", i)
-	for x, r := range reads {
-		w.linef("u%d = READ(%s, %s, %s, %s)", i, run, r.src, r.fields, readKey(reads, x+1))
-		run = "u" + strconv.Itoa(i)
+	first := "[]"
+	if len(reads) > 0 {
+		first = reads[0].mine
 	}
 
+	p.gate(w, i, n, p.instances(w, i, n), meta, first)
+
+	run, fields := readAll(w, i, reads)
 	proc := alias(i, n.Fqid)
-	in := p.input(w, n, run)
+	in := p.input(w, n, run, fields)
 
 	sources := fmt.Sprintf("SOURCES(n%d)", i)
 	if n.Split {
@@ -125,12 +125,36 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	return w, nil
 }
 
+// readAll wires node i's reads of its enabled instances: a READ each, and
+// a REKEY before each that joins on other roots than the read before it.
+// It returns the channel of the instances with every read, and the fields
+// of the reads since they were last keyed.
+func readAll(w *wiring, i int, reads []readArgs) (string, string) {
+	run := fmt.Sprintf("b%d.run", i)
+
+	since := make([]string, 0, len(reads))
+
+	for x, r := range reads {
+		if x > 0 && r.mine != reads[x-1].mine {
+			run = fmt.Sprintf("REKEY(%s, [%s], %s)", run, strings.Join(since, ", "), r.mine)
+			since = since[:0]
+		}
+
+		w.linef("u%d = READ(%s, %s)", i, run, r.src)
+		run = "u" + strconv.Itoa(i)
+		since = append(since, r.fields)
+	}
+
+	return run, "[" + strings.Join(since, ", ") + "]"
+}
+
 // input is the channel of node i's enabled instances, run, as its process
-// takes them, each with the entry files it reads: those PLAN lists for its
-// fork of the node's entry-fed roots.
-func (p *project) input(w *wiring, n cg.TopoNode, run string) string {
+// takes them, with the outputs fields gives each read since they were last
+// keyed, each with the entry files it reads: those PLAN lists for its fork
+// of the node's entry-fed roots.
+func (p *project) input(w *wiring, n cg.TopoNode, run, fields string) string {
 	if !p.readers[n.Fqid] {
-		return fmt.Sprintf("INPUT(%s)", run)
+		return fmt.Sprintf("INPUT(%s, %s)", run, fields)
 	}
 
 	var at []int
@@ -141,7 +165,7 @@ func (p *project) input(w *wiring, n cg.TopoNode, run string) string {
 		}
 	}
 
-	return fmt.Sprintf("INPUT_ENTRY(%s, %s, %s)", run, w.use("entry"), ilist(at))
+	return fmt.Sprintf("INPUT_ENTRY(%s, %s, %s, %s)", run, w.use("entry"), ilist(at), fields)
 }
 
 // instances is the expression of node i's instances: root by root, each
@@ -304,21 +328,11 @@ func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta, at string) {
 	w.linef("b%d = ENABLED(%s, %s)", i, gated, at)
 }
 
-// readArgs is what READ takes to add to an instance what it reads of one
-// node: the channel it combines, the positions in the reader's key of the
-// roots that channel is keyed by, and the outputs it reads of its items.
+// readArgs is what an instance reads of one node: the channel READ
+// combines, the positions in the reader's key of the roots that channel is
+// keyed by, and the outputs it reads of its items.
 type readArgs struct {
 	src, mine, fields string
-}
-
-// readKey is the positions the x-th of reads joins on, none past the last:
-// the key an instance leads with for it.
-func readKey(reads []readArgs, x int) string {
-	if x < len(reads) {
-		return reads[x].mine
-	}
-
-	return "[]"
 }
 
 // read is what READ takes for each enabled instance of node i to read of
