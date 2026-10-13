@@ -111,7 +111,11 @@ func TestRootsExceptTheTaskDir(t *testing.T) {
 // stage output linking to the input it read in place resolves to an input,
 // which strict confinement admits.
 func TestRootsHoldTheRealPath(t *testing.T) {
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	input := writeSelfNamed(t, filepath.Join(base, "real", "ref", "genome.fa"))
 
 	home := filepath.Join(t.TempDir(), "home")
@@ -147,6 +151,26 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "outs")
 	if err := shim.WriteBundle(bundle, map[string]any{"ref": out}, fields(t, "ref path"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}); err != nil {
 		t.Fatalf("a stage output linking to an input read in place: %v", err)
+	}
+}
+
+// TestNewRootsUnresolvable: a root whose real path cannot be read for a
+// reason other than its absence fails, rather than holding only its given
+// path.
+func TestNewRootsUnresolvable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a dir of mode 000")
+	}
+
+	locked := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	if _, err := shim.NewRoots(filepath.Join(locked, "ref")); err == nil {
+		t.Error("NewRoots under a dir of mode 000: nil error, want the resolve failure")
 	}
 }
 
