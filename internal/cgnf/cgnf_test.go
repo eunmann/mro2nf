@@ -399,6 +399,25 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 }
 
+// TestEmitReadsRecordsFromFiles (#549): a record of a line per fork or per
+// chunk, PLAN's and a split's resources table, reaches the driver as a file
+// it reads, not as an eval output, which Nextflow 26.04 joins line by line
+// with string concatenation (TaskEnvCollector.collect), quadratic in the
+// lines.
+func TestEmitReadsRecordsFromFiles(t *testing.T) {
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, rec := range []string{"nodes", "leaves", "files", "roots"} {
+		if !strings.Contains(main, "path('"+rec+"'), emit: "+rec) || strings.Contains(main, "eval('cat "+rec+"')") {
+			t.Errorf("PLAN does not output its %s record as a file:\n%s", rec, main)
+		}
+	}
+
+	if !strings.Contains(stageModule, "path('chunks/resources.tsv'), emit: split") || strings.Contains(stageModule, "eval('cat chunks/resources.tsv')") {
+		t.Error("STAGE_SPLIT does not output its resources table as a file")
+	}
+}
+
 // TestEmitSizesNodesUnderOverrides: PLAN reads the run's mrp --overrides
 // file, a launch param, and each task is scheduled with the cpus and
 // memory PLAN resolved for its node, whose own overrides file its jobs

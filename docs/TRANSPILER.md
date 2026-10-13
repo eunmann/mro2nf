@@ -266,7 +266,9 @@ generator does (`core.BuildCallAst`), and compiles it over the entry's
 declarations, so `mrp`'s refusals fail the run before any stage starts. It
 fails if the call graph has a node, a fork root or a read the witness lacks
 (`Topology.Covers`); a node the invocation disables outright counts only by
-its presence. Its records reach the driver as `eval` values: the run's call;
+its presence. Its records reach the driver as values: the run's call, an
+`eval` value of one line; and files the driver reads into values, as
+Nextflow joins an `eval` output line by line in time quadratic in its lines:
 per node a digest of its resolved spec (stage, bindings, disable bindings and
 fork roots in Martian's JSON form) and of what its post step writes for its
 readers (the splits of the roots it feeds, its partners' splits, and the
@@ -352,8 +354,9 @@ waits for every fork of a node before a node reading it runs
 
 **Split stages.** A split's chunk outs are gathered by `groupKey` over the
 chunk count. Each chunk's main and the join are scheduled with the cpus, memory
-and special their jobs get, the split's `resources.tsv`, an `eval` value the
-driver splits into rows without parsing a record.
+and special their jobs get, the split's `resources.tsv`, a file the driver
+reads into rows without parsing a record, not an `eval` value, whose
+collection is quadratic in its lines.
 
 **OUTS.** The last task stages every outs bundle the pipeline outs read, gets
 each bundle's location as a value (`toUriString()`, a path or an `s3://` URI),

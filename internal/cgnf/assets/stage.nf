@@ -127,8 +127,10 @@ def postFlags() {
 
 // resources reads the table a split writes (mre stage -phase split): per
 // chunk, by its name, and for the join, the cpus, memory and special its
-// job is scheduled with, those its _jobinfo records.
-def resources(String table) {
+// job is scheduled with, those its _jobinfo records. The table is a file
+// the driver reads, not an eval output, which Nextflow joins line by line
+// in time quadratic in the chunks.
+def resources(Path table) {
     return table.readLines().collectEntries { l ->
         def f = l.split('\t', 4)
         [(f[0]): [cpus: f[1] as int, mem_gb: f[2] as double, special: f[3]]]
@@ -167,7 +169,7 @@ process STAGE_SPLIT {
     tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
 
     output:
-    tuple val(meta), val(key), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), eval('cat chunks/resources.tsv'), emit: split
+    tuple val(meta), val(key), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), path('chunks/resources.tsv'), emit: split
 
     script:
     """

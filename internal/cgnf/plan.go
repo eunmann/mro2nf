@@ -8,16 +8,18 @@ import (
 )
 
 // planProcess declares PLAN, the run's one start task, which compiles the
-// project's copy of the entry's .mro files. Its records reach the driver as
-// values, so a task's cache key holds what PLAN fixed for it, not the
-// task's path: the run's call, which every task compiles over the entry's
-// declarations where the run finds its code, each node's digest and its
-// resources under the run's mrp --overrides file, the entry files each
+// project's copy of the entry's .mro files. The driver reads its records
+// into values, so a task's cache key holds what PLAN fixed for it, not the
+// path of PLAN's file: the run's call, which every task compiles over the
+// entry's declarations where the run finds its code, each node's digest and
+// its resources under the run's mrp --overrides file, the entry files each
 // instance stages, and the forks of every entry-fed root, one record, so
-// PLAN's outputs do not grow with the roots. Under an S3
-// mount, which s3:// inputs PLAN reads in place depends on the buckets its
-// instance mounts, which no input of PLAN holds, so a -resume re-runs it;
-// a task downstream stays cached while PLAN's records are unchanged.
+// PLAN's outputs do not grow with the roots. A multi-line record is a file
+// the driver reads, not an eval output, which Nextflow joins line by line
+// in time quadratic in its lines. Under an S3 mount, which s3:// inputs
+// PLAN reads in place depends on the buckets its instance mounts, which no
+// input of PLAN holds, so a -resume re-runs it; a task downstream stays
+// cached while PLAN's records are unchanged.
 const planProcess = `process PLAN {
     cache !params.mro2nf_s3_mount
 
@@ -29,10 +31,10 @@ const planProcess = `process PLAN {
 
     output:
     eval('cat call'), emit: call
-    eval('cat nodes'), emit: nodes
-    eval('cat leaves'), emit: leaves
-    eval('cat files'), emit: files
-    eval('cat roots'), emit: roots
+    path('nodes'), emit: nodes
+    path('leaves'), emit: leaves
+    path('files'), emit: files
+    path('roots'), emit: roots
 
     script:
     """
