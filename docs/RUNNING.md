@@ -104,7 +104,7 @@ transpile, because the project defines those parameters itself.
 | `--mro2nf_adapters <dir>` | the adapters `mre` embeds | Martian's adapters directory, holding `python/martian_shell.py` |
 | `--mro2nf_psid <id>` | the `call`'s name | the pipestance ID `mrp` takes as its second argument; it names each job in `_jobinfo` |
 | `--mro2nf_allow_remote_inputs true` | `false` | allows file inputs with URI schemes other than `s3://` |
-| `--mro2nf_s3_mount <dir>` | `/mnt/s3` on `awsbatch`, none elsewhere | the directory every task's host mounts the input buckets under, read-only, one directory per bucket; a stage receives an `s3://` input as its path there |
+| `--mro2nf_s3_mount <dir>` | `/mnt/s3` on `awsbatch`, none elsewhere | the directory every task's host may mount input buckets under, read-only, one directory per bucket; a stage receives an `s3://` input of a bucket mounted there as its path there, and any other staged |
 
 `--mro2nf_mre`, `--mro2nf_mrjob` and `--mro2nf_adapters` let the stages run
 under another Martian runtime, such as the one bundled with a pipeline.
@@ -258,30 +258,38 @@ Keep `--outdir` on S3: the default `results` publishes to the launch host.
 The profile limits job submission and S3 transfers so a wide fan-out does not
 throttle the AWS APIs, and retries a task whose Spot instance is reclaimed.
 
-The profile reads `s3://` file inputs in place rather than staging them:
-every Batch instance mounts the input buckets read-only with Mountpoint for
-S3 at `/mnt/s3/<bucket>`, the profile bind-mounts `/mnt/s3` into every
-container, read-only, and a stage receives `s3://<bucket>/<key>` as
-`/mnt/s3/<bucket>/<key>`. That is one path in every task, as `mrp` passes
-every stage the path it was given, so a stage may record it in an output for
-another stage to open, and no task downloads it. A path under `/mnt/s3` given
-directly is read the same way.
+Nextflow stages `s3://` file inputs into each task that reads them, as on
+every profile. Where the compute environment's instances mount an input's
+bucket read-only at `/mnt/s3/<bucket>`, as the example stack's do with
+Mountpoint for S3, the profile reads the input in place instead: it
+bind-mounts `/mnt/s3` into every container, read-only, and a stage receives
+`s3://<bucket>/<key>` as `/mnt/s3/<bucket>/<key>`. That is one path in every
+task, as `mrp` passes every stage the path it was given, so a stage may record
+it in an output for another stage to open, and no task downloads it. A path
+under `/mnt/s3` given directly is read the same way.
 
-- Every input bucket must be mounted on the compute environment's instances:
-  the example stack mounts its work bucket and the buckets its `mountBuckets`
-  context names
-  ([`deploy/awsbatch-cdk/README.md`](../deploy/awsbatch-cdk/README.md)).
-  On a bucket or key the mount does not show, the run fails at its start,
-  naming the input. A compute environment of your own needs the same mounts
-  at the same root, or `--mro2nf_s3_mount` naming its root, which the
-  profile then bind-mounts instead.
+- The mount is an optimization, and a run needs none. The run's first task
+  decides per input: an input whose bucket is a directory at
+  `/mnt/s3/<bucket>` on its instance is read in place, any other is staged.
+  A compute environment without the mounts runs every pipeline whose stages
+  open their inputs by the paths they are given; a stage that records an
+  input's path in an output for another task to open, as Cell Ranger does
+  with its FASTQ directory, needs the input's bucket mounted. The example
+  stack mounts its work bucket and the buckets its `mountBuckets` context
+  names ([`deploy/awsbatch-cdk/README.md`](../deploy/awsbatch-cdk/README.md));
+  `--mro2nf_s3_mount` names another root, which the profile then bind-mounts
+  instead.
+- Every instance of the compute environment must mount the same buckets: the
+  first task's instance decides for every task.
+- On a key no object under a mounted bucket has, the run fails at its start,
+  naming the input.
 - The mount is read-only: a stage that writes into an input's directory
   fails.
 - `-resume` keys a mounted input on its path, not its content: a run over an
   object replaced at the same key reuses the cached tasks. Put new data under
   a new key, or run without `-resume`.
 - Mountpoint cannot show a key with an empty, `.` or `..` path component, so
-  the run refuses such a URI.
+  the run refuses such a URI of a mounted bucket.
 
 ### HealthOmics
 
@@ -492,9 +500,10 @@ In the task's work directory:
 - **`entry input '<name>': scheme '<scheme>' is not allowed`**: pass a path or
   an `s3://` URI, or `--mro2nf_allow_remote_inputs true`.
 - **`entry input '<name>': bucket <bucket> is not mounted at
-  /mnt/s3/<bucket> on this run's instances; add it to the stack's
-  mountBuckets`**: on `awsbatch`, the input's bucket is not mounted. Deploy
-  the stack with the bucket in `mountBuckets`.
+  /mnt/s3/<bucket> on this run's instances; pass the input as an s3:// URI,
+  which the run stages`**: on `awsbatch`, the input is a path under
+  `/mnt/s3` whose bucket is not mounted. Pass its `s3://` URI, or deploy the
+  stack with the bucket in `mountBuckets`.
 - **`entry input '<name>' names no object under the mounted bucket
   <bucket>`**: on `awsbatch`, no object or prefix has the input's key.
 - **`entry override of a non-scalar type cannot be a string`**: pass the

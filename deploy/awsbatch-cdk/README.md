@@ -62,7 +62,9 @@ Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleAr
 
 `mountBuckets` names the buckets holding the pipeline's inputs, comma-separated;
 the work bucket is always mounted, so `-c mountBuckets=...` can be left out when
-the inputs live there. Each Batch instance installs
+the inputs live there. A run reads the inputs of a mounted bucket in place and
+stages the rest, so the mounts spare downloads and are needed only where a
+stage records an input's path for another task to open. Each Batch instance installs
 [Mountpoint for S3](https://github.com/awslabs/mountpoint-s3) at boot, the
 release `MOUNTPOINT_VERSION` in `lib/stack.ts` names, checked against the
 rpm's SHA-256 pinned beside it, and
@@ -112,12 +114,15 @@ nextflow run main.nf -profile awsbatch -c batch.config \
 Keep `--outdir` on S3: the default `results` publishes to the head node's
 working dir, and the work dir expires after 14 days. Pass entry files as
 `s3://` URIs (a `-params-file` or `--<input>`); the `awsbatch` profile refuses
-a head-node path. The profile reads them in place through the mount: a stage
-receives `s3://<bucket>/<key>` as `/mnt/s3/<bucket>/<key>`, the same path in
-every task, as `mrp` passes the path it was given, and no task downloads it.
-Every input bucket must be in the stack's `mountBuckets` (or be the work
-bucket): the run fails at its start, naming the input, on a bucket the
-instances do not mount. The mount is read-only.
+a head-node path. The profile reads an input of a mounted bucket in place
+through the mount: a stage receives `s3://<bucket>/<key>` as
+`/mnt/s3/<bucket>/<key>`, the same path in every task, as `mrp` passes the
+path it was given, and no task downloads it. An input of a bucket the
+instances do not mount, neither the work bucket nor one in `mountBuckets`, is
+staged by Nextflow into each task that reads it, as on every other profile;
+a pipeline whose stage records an input's path in an output for another task
+to open, as Cell Ranger does with its FASTQ directory, needs that input's
+bucket mounted. The mount is read-only.
 
 ## Run on AWS HealthOmics
 

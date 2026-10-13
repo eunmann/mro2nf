@@ -16,8 +16,8 @@ export const S3_MOUNT_ROOT = '/mnt/s3';
 export interface Mro2nfStackProps extends cdk.StackProps {
   /**
    * Input buckets every Batch instance mounts besides the work bucket, which
-   * it always mounts: an s3:// entry input of a bucket not mounted fails the
-   * run at its start.
+   * it always mounts: a run reads an s3:// entry input of a mounted bucket in
+   * place and stages one of any other bucket.
    */
   readonly mountBuckets?: string[];
   /** The local read cache each mounted bucket may fill on an instance, in MiB. */
