@@ -715,7 +715,7 @@ func TestMrpDiffSplitEntryOverride(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			runMrpDiffOverride(t, bin, "map_call_entry", tc.mro, tc.params)
+			runMrpDiffOverride(t, bin, "map_call_entry", tc.mro, "params.json", tc.params)
 		})
 	}
 }
@@ -728,14 +728,38 @@ func TestMrpDiffInt64Override(t *testing.T) {
 
 	requireTools(t, "nextflow", "java", "python3")
 
-	runMrpDiffOverride(t, martianBin(t), "literals_edge", "override_int64.mro",
+	runMrpDiffOverride(t, martianBin(t), "literals_edge", "override_int64.mro", "params.json",
 		`{"neg": -9223372036854775808, "big": 9223372036854775807}`)
 }
 
+// TestMrpDiffFloatOverride: a float input's launch value reaches the stage
+// and the outs byte-exact, as mrp runs the invocation whose literal it is:
+// a whole number beyond 2^53 is Martian's int literal, which a float input
+// takes as written, and a float takes Martian's shortest form (1e+06, -0).
+// -0.0 comes from a YAML params file: Nextflow reads a JSON one's -0.0 as
+// 0.0 before PLAN sees it.
+func TestMrpDiffFloatOverride(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	bin := martianBin(t)
+
+	for _, tc := range []struct{ name, file, params, mro string }{
+		{name: "whole", file: "params.json", params: `{"f": 9007199254740993, "g": 1e6}`, mro: "override_float_whole.mro"},
+		{name: "frac", file: "params.yaml", params: "f: 1.5\ng: -0.0\n", mro: "override_float_frac.mro"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runMrpDiffOverride(t, bin, "cli_typed", tc.mro, tc.file, tc.params)
+		})
+	}
+}
+
 // runMrpDiffOverride runs fixture under Nextflow with the launch values
-// params, and the invocation mro, whose literals are those values, under
-// mrp, and diffs the two.
-func runMrpDiffOverride(t *testing.T, bin, fixture, mro, params string) {
+// params in the params file named file, and the invocation mro, whose
+// literals are those values, under mrp, and diffs the two.
+func runMrpDiffOverride(t *testing.T, bin, fixture, mro, file, params string) {
 	t.Helper()
 	shardSkip(t)
 
@@ -744,9 +768,9 @@ func runMrpDiffOverride(t *testing.T, bin, fixture, mro, params string) {
 	runMrpAt(t, bin, dir, mro, tmp)
 
 	proj := transpileMRO(t, dir, "pipeline.mro")
-	writeFileT(t, filepath.Join(proj, "params.json"), params)
+	writeFileT(t, filepath.Join(proj, file), params)
 
-	if err := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-params-file", "params.json")...); err != nil {
+	if err := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-params-file", file)...); err != nil {
 		t.Fatalf("nextflow: %v", err)
 	}
 

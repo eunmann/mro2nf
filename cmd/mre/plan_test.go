@@ -455,6 +455,8 @@ func TestPlanRefusesOutOfRangeValues(t *testing.T) {
 		{fixtureDir(t, "cli_typed"), `{"n":9223372036854775808}`, "n", "9223372036854775808"},
 		{fixtureDir(t, "cli_typed"), `{"n":-9223372036854775809}`, "n", "-9223372036854775809"},
 		{fixtureDir(t, "cli_typed"), `{"f":1E+400}`, "f", "1E+400"},
+		{fixtureDir(t, "cli_typed"), `{"f":9223372036854775808}`, "f", "9223372036854775808"},
+		{fixtureDir(t, "cli_typed"), `{"f":"9223372036854775808"}`, "f", "9223372036854775808"},
 		{split, `{"x":{"split":[1,9223372036854775808]}}`, "x", "9223372036854775808"},
 	}
 
@@ -482,6 +484,140 @@ func TestPlanRefusesOutOfRangeValues(t *testing.T) {
 			t.Errorf("the call lacks %q:\n%s", want, call)
 		}
 	}
+}
+
+// TestPlanFloatValuesAsMrp: a float input's launch value, a JSON number or
+// a command-line string, compiles to the _args value mrp writes for the
+// same literal (each want from an mrp run of `f = <literal>`): a whole
+// number is Martian's int literal, which a float input keeps exact.
+func TestPlanFloatValuesAsMrp(t *testing.T) {
+	cases := []struct{ value, want string }{
+		{`9007199254740993`, "9007199254740993"},
+		{`"9007199254740993"`, "9007199254740993"},
+		{`-9223372036854775808`, "-9223372036854775808"},
+		{`1e6`, "1e+06"},
+		{`"1e6"`, "1e+06"},
+		{`1.5`, "1.5"},
+		{`2.0`, "2"},
+		{`-0.0`, "-0"},
+		{`"-0.0"`, "-0"},
+		{`1E+21`, "1e+21"},
+	}
+
+	dir := fixtureDir(t, "cli_typed")
+
+	for _, tc := range cases {
+		work, err := plan(t, "cli_typed", `{"f":`+tc.value+`}`)
+		if err != nil {
+			t.Fatalf("plan with f = %s: %v", tc.value, err)
+		}
+
+		if got := planInput(t, dir, work, "CT.REPR", "f"); got != tc.want {
+			t.Errorf("f = %s reaches _args as %s, mrp's is %s", tc.value, got, tc.want)
+		}
+	}
+}
+
+const nestedNumbersMRO = `struct Cfg(
+    int   n,
+    float x,
+)
+
+stage S(
+    in  float[]    fs,
+    in  map        um,
+    in  int        i,
+    in  Cfg        cfg,
+    in  map<float> fm,
+    out int        y,
+    src py         "stages/s",
+)
+
+pipeline P(
+    in  float[]    fs,
+    in  map        um,
+    in  int        i,
+    in  Cfg        cfg,
+    in  map<float> fm,
+    out int        y,
+)
+{
+    call S(
+        fs  = self.fs,
+        um  = self.um,
+        i   = self.i,
+        cfg = self.cfg,
+        fm  = self.fm,
+    )
+
+    return (
+        y = S.y,
+    )
+}
+
+call P(
+    fs  = [],
+    um  = {},
+    i   = 1,
+    cfg = {"n": 1, "x": 1},
+    fm  = {},
+)
+`
+
+// TestPlanNestedNumbersAsMrp: a number at any depth of a launch value, of
+// a float, an int, an untyped map or a struct field, compiles to the _args
+// value mrp writes for the same literal (each want from an mrp run of the
+// call with the launch values as its literals).
+func TestPlanNestedNumbersAsMrp(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), nestedNumbersMRO)
+
+	work, err := planEntry(t, dir, `{"fs":[2.0,0.50,9007199254740993],"um":{"y":1E6,"x":{"w":0.50,"v":1},"big":9007199254740993},`+
+		`"i":2.0,"cfg":{"n":4.0,"x":4.0},"fm":{"k":-0.0}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for id, want := range map[string]string{
+		"fs":  `[2,0.5,9007199254740993]`,
+		"um":  `{"big":9007199254740993,"x":{"v":1,"w":0.5},"y":1e+06}`,
+		"i":   `2`,
+		"cfg": `{"n":4,"x":4}`,
+		"fm":  `{"k":-0}`,
+	} {
+		if got := planInput(t, dir, work, "P.S", id); got != want {
+			t.Errorf("%s reaches _args as %s, mrp's is %s", id, got, want)
+		}
+	}
+}
+
+// planInput is the input id of the stage node as the plan in work compiles
+// it over the declarations of the pipeline.mro in dir, encoded as mrp
+// encodes it in _args.
+func planInput(t *testing.T, dir, work, node, id string) string {
+	t.Helper()
+
+	src, err := cg.ReadSource(filepath.Join(dir, "pipeline.mro"), []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := cg.Compile([]byte(src.Decls+"\n\n"+planCall(t, work)), src.Name, []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := g.Stage(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := st.ResolvedInputs()[id].Exp.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(raw)
 }
 
 const besideEntryMRO = `stage FOO(

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"regexp"
 	"strconv"
 
@@ -34,11 +33,11 @@ var (
 const paramsFileHint = "pass the value as typed JSON in a -params-file"
 
 // typeOverrides replaces each string override of a scalar int, float or bool
-// entry input with the typed value it spells, then re-encodes every float leaf
-// the way mrp encodes a float literal (types.FormatFloats). Nextflow's strict
-// (v2) parser passes every command-line --param as a String, so without this
-// `--b false` would reach the stage as the truthy string "false"; and a
-// -params-file 2.0 would reach it as 2.0 where mrp, given `f = 2.0`, passes 2.
+// entry input with the typed value it spells. Nextflow's strict (v2) parser
+// passes every command-line --param as a String, so without this `--b false`
+// would reach the stage as the truthy string "false". A number keeps its
+// text: the rebuilt call parses it as mrp parses the literal it spells
+// (core.BuildCallAst), so it reaches _args as mrp encodes that literal.
 func typeOverrides(over map[string]any, params []*syntax.StructMember, tbl *types.Table) error {
 	for _, p := range params {
 		s, ok := over[p.Id].(string)
@@ -58,13 +57,6 @@ func typeOverrides(over map[string]any, params []*syntax.StructMember, tbl *type
 
 		over[p.Id] = v
 	}
-
-	formatted, err := tbl.FormatFloats(params, over)
-	if err != nil {
-		return fmt.Errorf("entry values: %w", err)
-	}
-
-	maps.Copy(over, formatted)
 
 	return nil
 }
@@ -161,8 +153,8 @@ func parseIntLiteral(s string) (int64, bool) {
 	return i, err == nil
 }
 
-// parseFloatLiteral checks s is a JSON-number float in float64 range. Its
-// encoding is left to typeOverrides' FormatFloats pass.
+// parseFloatLiteral checks s is a JSON number in float64 range, and keeps
+// its text.
 func parseFloatLiteral(s string) (json.Number, bool) {
 	if !jsonNumber.MatchString(s) {
 		return "", false

@@ -353,6 +353,10 @@ func TestOutOfRangeLaunchValues(t *testing.T) {
 			wants: []string{`entry input "n": number literal out of range: an int must fit int64 and a float float64: 9223372036854775808`},
 		},
 		{
+			name: "yaml_float_int", file: "params.yaml", body: "f: 9223372036854775808\n", args: []string{"-params-file", "params.yaml"},
+			wants: []string{`entry input "f": number literal out of range: an int must fit int64 and a float float64: 9223372036854775808`},
+		},
+		{
 			name: "json_float", file: "params.json", body: `{"f": -1e400}`, args: []string{"-params-file", "params.json"},
 			wants: []string{`entry input "f": number literal out of range: an int must fit int64 and a float float64: -1E+400`},
 		},

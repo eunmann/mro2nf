@@ -1,0 +1,31 @@
+stage REPR(
+    in  int    n,
+    in  float  f,
+    in  float  g,
+    in  bool   b,
+    out string desc,
+    out string gated,
+    src py     "stages/repr",
+)
+
+pipeline CT(
+    in  int    n,
+    in  float  f,
+    in  float  g,
+    in  bool   b,
+    out string desc,
+    out string gated,
+)
+{
+    call REPR(
+        n = self.n,
+        f = self.f,
+        g = self.g,
+        b = self.b,
+    )
+
+    return (
+        desc  = REPR.desc,
+        gated = REPR.gated,
+    )
+}

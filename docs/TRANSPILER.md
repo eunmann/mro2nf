@@ -884,11 +884,12 @@ You can override inputs **at launch** without re-transpiling:
   follow the launch value. `mre plan` refuses any other value naming the
   input (`errSplitShape`), and the compile types `v`'s elements as `mrp`'s
   does.
-- Every float in a supplied value, typed or parsed and at any depth, is
-  re-encoded the way `mrp` encodes a float literal (`'g'`, shortest form). That
-  covers a `float` leaf of any shape and, inside an untyped `map`, any number
-  written with a `.` or an exponent, so `--f 2.0` and a `-params-file`
-  `{"f": 2.0}` both reach the stage as `2`, as `f = 2.0` does under `mrp`.
+- Every number in a supplied value, typed or parsed and at any depth, keeps
+  its text until the rebuilt call parses it (`core.BuildCallAst`), so it
+  reaches the stage as `mrp` encodes the same literal: `--f 2.0` and a
+  `-params-file` `{"f": 2.0}` both reach it as `2`, `1e6` as `1e+06`, `-0.0`
+  as `-0`, and a whole number given to a `float` input, Martian's int
+  literal, exact (`9007199254740993`).
 - `mre plan` parses each supplied value as `core.BuildCallAst` parses an
   invocation argument (`syntax.Parser.ParseValExp`) before it rebuilds the
   call (`cg.CheckValue`), and refuses one holding an int outside int64 or a
