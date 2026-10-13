@@ -273,7 +273,8 @@ directly is read the same way.
   ([`deploy/awsbatch-cdk/README.md`](../deploy/awsbatch-cdk/README.md)).
   On a bucket or key the mount does not show, the run fails at its start,
   naming the input. A compute environment of your own needs the same mounts
-  at the same root, or `--mro2nf_s3_mount` naming its root.
+  at the same root, or `--mro2nf_s3_mount` naming its root, which the
+  profile then bind-mounts instead.
 - The mount is read-only: a stage that writes into an input's directory
   fails.
 - `-resume` keys a mounted input on its path, not its content: a run over an

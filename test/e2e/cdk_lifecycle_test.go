@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -42,7 +41,7 @@ var (
 	// cdkMountRoot matches the example stack's S3_MOUNT_ROOT.
 	cdkMountRoot = regexp.MustCompile(`export const S3_MOUNT_ROOT = '([^']*)';`)
 	// profileMountRoot matches the generated awsbatch profile's mount root.
-	profileMountRoot = regexp.MustCompile(`\n        params\.mro2nf_s3_mount = '([^']*)'\n        aws\.batch\.volumes = '([^']*)'\n`)
+	profileMountRoot = regexp.MustCompile(`\n        params\.mro2nf_s3_mount = '([^']*)'\n        aws\.batch\.volumes = "\$\{params\.mro2nf_s3_mount\}:\$\{params\.mro2nf_s3_mount\}:ro"\n`)
 )
 
 // TestCDKMountsWhereTheProfileReads: the example stack's instances mount the
@@ -78,7 +77,7 @@ func TestCDKMountsWhereTheProfileReads(t *testing.T) {
 		t.Fatalf("the awsbatch profile names no S3 mount:\n%s", cfg)
 	}
 
-	if got, want := []string{string(p[1]), string(p[2])}, []string{stackRoot, stackRoot + ":" + stackRoot + ":ro"}; !slices.Equal(got, want) {
-		t.Errorf("the awsbatch profile's mount root and volume are %q, want %q", got, want)
+	if got := string(p[1]); got != stackRoot {
+		t.Errorf("the awsbatch profile's mount root is %q, want %q", got, stackRoot)
 	}
 }

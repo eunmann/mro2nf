@@ -725,7 +725,7 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
 - `awsbatch` runs on AWS Batch over an S3 work dir (`-work-dir s3://…`); every
   task stages its upstream inputs from S3, so nothing reads a head-node path,
   and a head-node path as an entry file is refused (§8). It reads `s3://`
-  entry files in place under `/mnt/s3` (`params.mro2nf_s3_mount`), which it
+  entry files in place under `/mnt/s3` (`params.mro2nf_s3_mount`), the root it
   bind-mounts read-only into every container (`aws.batch.volumes`); the
   compute environment's instances must mount the input buckets there (§8,
   `deploy/awsbatch-cdk`). Set `process.queue` and `aws.region` in a `-c`

@@ -95,10 +95,11 @@ func TestEmitHealthOmicsRoundsMemoryUp(t *testing.T) {
 }
 
 // TestEmitMountsS3InputsOnAWSBatch: only the awsbatch profile mounts the
-// input buckets, at the /mnt/s3 the example stack's instances mount them
-// under, into every container, read-only, and names that root to PLAN and
-// every stage task, which take it only when the param is set; elsewhere it
-// is null and s3:// inputs are staged.
+// input buckets, by default at the /mnt/s3 the example stack's instances
+// mount them under, into every container, read-only, at the root the param
+// names, and names that root to PLAN and every stage task, which take it
+// only when the param is set; elsewhere it is null and s3:// inputs are
+// staged.
 func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
 	cfg := tree["nextflow.config"]
@@ -114,7 +115,7 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 		t.Fatalf("nextflow.config has no awsbatch profile:\n%s", cfg)
 	}
 
-	for _, want := range []string{"        params.mro2nf_s3_mount = '/mnt/s3'\n", "        aws.batch.volumes = '/mnt/s3:/mnt/s3:ro'"} {
+	for _, want := range []string{"        params.mro2nf_s3_mount = '/mnt/s3'\n", "        aws.batch.volumes = \"${params.mro2nf_s3_mount}:${params.mro2nf_s3_mount}:ro\"\n"} {
 		if !strings.Contains(cfg[start:end], want) {
 			t.Errorf("the awsbatch profile lacks %q:\n%s", want, cfg[start:end])
 		}
