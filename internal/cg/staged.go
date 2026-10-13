@@ -21,7 +21,8 @@ const elementField = "value"
 // identified by its own record, their leaves named by reference among the
 // leaves it staged by reference, refs. An instance's outs may come as one
 // bundle, or field by field (Post's Fields and Values) as bundles and value
-// records, which merge.
+// records, which merge, or, for the instance a task posts, whole as its job
+// wrote them (addOuts), their leaves the job's own paths.
 type stagedStore struct {
 	g           *Graph
 	refs        shim.Refs
@@ -152,7 +153,7 @@ func (s *stagedStore) addTree(dir string) error {
 func (s *stagedStore) add(dir string) error {
 	switch itemKind(dir) {
 	case instanceFile:
-		in, err := s.g.ReadInstance(dir)
+		in, err := s.g.readInstance(dir)
 		if err != nil {
 			return err
 		}

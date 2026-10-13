@@ -196,7 +196,7 @@ func (f *fixture) post(outs string) string {
 func postedSpec(tb testing.TB, g *Graph, outs, forks string) PostSpec {
 	tb.Helper()
 
-	in, err := g.ReadInstance(outs)
+	in, err := g.readInstance(outs)
 	if err != nil {
 		tb.Fatal(err)
 	}
