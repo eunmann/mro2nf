@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -345,6 +346,98 @@ func TestPlanRefusesAsMrp(t *testing.T) {
 
 	if _, err := plan(t, "empty_fork_gated", `{"none":[1]}`); err == nil {
 		t.Error("plan of a runtime-gated split of a non-empty literal succeeded; mrp refuses it")
+	}
+}
+
+// splitEntryMRO is an entry whose top-level map call forks its pipeline per
+// element of its split input x.
+const splitEntryMRO = `stage DOUBLE(
+    in  int x,
+    out int y,
+    src py  "stages/double",
+)
+
+pipeline DOUBLER(
+    in  int x,
+    out int y,
+)
+{
+    call DOUBLE(
+        x = self.x,
+    )
+
+    return (
+        y = DOUBLE.y,
+    )
+}
+
+map call DOUBLER(
+    x = split [
+        1,
+        2,
+        3,
+    ],
+)
+`
+
+// TestPlanForksByTheSplitValue (#565): a launch value of a split entry
+// input in Martian's invocation form, {"split": v}, forks the run by v, an
+// array of another length than the .mro's or a map, as mrp forks the call
+// holding v as its literal. A value in no such form fails the plan, naming
+// the input.
+func TestPlanForksByTheSplitValue(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), splitEntryMRO)
+
+	cases := []struct {
+		values, split string
+		forks         []string
+	}{
+		{`{"x":{"split":[4,5]}}`, "split [\n        4,\n        5,\n    ]", []string{`{"root":"DOUBLER","index":0}`, `{"root":"DOUBLER","index":1}`}},
+		{`{"x":{"split":{"r":7,"q":8}}}`, "split {\n        \"q\": 8,\n        \"r\": 7,\n    }", []string{`{"root":"DOUBLER","key":"q"}`, `{"root":"DOUBLER","key":"r"}`}},
+	}
+
+	for _, tc := range cases {
+		work, err := planEntry(t, dir, tc.values)
+		if err != nil {
+			t.Fatalf("plan with %s: %v", tc.values, err)
+		}
+
+		if call := planCall(t, work); !strings.Contains(call, "x = "+tc.split+",") {
+			t.Errorf("plan with %s: the call lacks x = %s:\n%s", tc.values, tc.split, call)
+		}
+
+		var forks []string
+
+		for _, line := range rootLines(t, filepath.Join(work, "roots"), "DOUBLER") {
+			raw, err := base64.StdEncoding.DecodeString(strings.Fields(line)[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var rec struct {
+				Fork json.RawMessage `json:"fork"`
+			}
+
+			if err := json.Unmarshal(raw, &rec); err != nil {
+				t.Fatal(err)
+			}
+
+			forks = append(forks, strings.Trim(string(rec.Fork), "[]"))
+		}
+
+		if d := cmp.Diff(tc.forks, forks); d != "" {
+			t.Errorf("plan with %s: forks (-mrp +plan):\n%s", tc.values, d)
+		}
+	}
+
+	for _, values := range []string{
+		`{"x":[4,5]}`, `{"x":5}`, `{"x":"5"}`, `{"x":{}}`, `{"x":{"split":5}}`, `{"x":{"split":null}}`, `{"x":{"split":"[4,5]"}}`,
+	} {
+		_, err := planEntry(t, dir, values)
+		if !errors.Is(err, errSplitShape) || !strings.Contains(err.Error(), `entry input "x"`) {
+			t.Errorf("plan with %s: %v, want errSplitShape naming x", values, err)
+		}
 	}
 }
 

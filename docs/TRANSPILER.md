@@ -874,6 +874,13 @@ You can override inputs **at launch** without re-transpiling:
   base-10 int64; a JSON number; exactly `true`/`false`). A value that does not
   parse, or a string for an array, map or struct input, fails the run; set those
   with `-params-file`.
+- An input the top-level `map call` binds with `split` takes Martian's
+  invocation form of a split, `{"split": v}` with `v` an array or a map
+  (`core/runtime.go` `convertToExp`), as `-params-file` takes Martian's
+  invocation data. The rebuilt call splits `v`, so the fork count and keys
+  follow the launch value. `mre plan` refuses any other value naming the
+  input (`errSplitShape`), and the compile types `v`'s elements as `mrp`'s
+  does.
 - Every float in a supplied value, typed or parsed and at any depth, is
   re-encoded the way `mrp` encodes a float literal (`'g'`, shortest form). That
   covers a `float` leaf of any shape and, inside an untyped `map`, any number

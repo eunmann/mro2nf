@@ -19,6 +19,9 @@ var (
 	// errOverrideShape reports a string override for an array, map or struct
 	// input, which a command-line param cannot express.
 	errOverrideShape = errors.New("entry override of a non-scalar type cannot be a string")
+	// errSplitShape reports an override of a split entry input that is not
+	// Martian's invocation form of a split.
+	errSplitShape = errors.New(`entry override of a split input must be {"split": [...]} or {"split": {...}}`)
 
 	// intLiteral is Martian's int literal without its 19-digit cap, which
 	// ParseInt's range check enforces exactly.
@@ -64,6 +67,44 @@ func typeOverrides(over map[string]any, params []*syntax.StructMember, tbl *type
 	maps.Copy(over, formatted)
 
 	return nil
+}
+
+// splitOverrides checks the override of each split entry input is Martian's
+// invocation form of a split (core/runtime.go convertToExp): an object whose
+// split member is an array or a map, which forks the call. The compile types
+// its elements, as mrp's does.
+func splitOverrides(over map[string]any, split []string) error {
+	for _, id := range split {
+		v, ok := over[id]
+		if !ok || v == nil || isSplit(v) {
+			continue
+		}
+
+		got, err := json.Marshal(types.Sorted(v))
+		if err != nil {
+			return fmt.Errorf("encode entry value %s: %w", id, err)
+		}
+
+		return fmt.Errorf("entry input %q, got %s: %w; %s", id, got, errSplitShape, paramsFileHint)
+	}
+
+	return nil
+}
+
+func isSplit(v any) bool {
+	obj, ok := types.AsObject(v)
+	if !ok {
+		return false
+	}
+
+	s, _ := obj.Get("split")
+	if _, arr := s.([]any); arr {
+		return true
+	}
+
+	_, isMap := types.AsObject(s)
+
+	return isMap
 }
 
 // parseOverride returns s as the value of type t. A string, file, path or

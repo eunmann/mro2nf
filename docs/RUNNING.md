@@ -63,6 +63,12 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   (`{"values": [5, 6, 7]}`). On the command line it fails with `entry override
   of a non-scalar type cannot be a string; pass the value as typed JSON in a
   -params-file`.
+- An input the `.mro`'s top-level `map call` binds with `split` takes
+  Martian's invocation form of a split, `{"split": v}`, in a `-params-file`:
+  `{"x": {"split": [4, 5]}}` forks the call once per element, and
+  `{"x": {"split": {"a": 4, "b": 5}}}` once per key, as `mrp` forks a call
+  holding `split [4, 5]` or `split {"a": 4, "b": 5}`. Any other value fails
+  the run at PLAN, naming the input.
 - A file input is an absolute path or an `s3://` URI. Other URI schemes
   (`http://`, `https://`, `ftp://`) are refused unless you pass
   `--mro2nf_allow_remote_inputs true`. The `awsbatch` and `healthomics`
@@ -634,6 +640,10 @@ In the task's work directory:
   <bucket>`**: on `awsbatch`, no object or prefix has the input's key.
 - **`entry override of a non-scalar type cannot be a string`**: pass the
   array, map or struct in a `-params-file`.
+- **`entry override of a split input must be {"split": [...]} or {"split":
+  {...}}`**: the input forks the top-level `map call`; pass its value in
+  Martian's split form in a `-params-file` ([Pipeline
+  inputs](#pipeline-inputs)).
 - **`Process requirement exceeds available memory`** (or `CPUs`): a task
   requests more than the local executor's pool, `executor.cpus` and
   `executor.memory`. Set `process.resourceLimits` no larger, as in the table
