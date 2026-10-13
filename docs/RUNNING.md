@@ -336,7 +336,7 @@ give the file a file type and it is staged everywhere.
 | Profile | the path of a file input | the path of a stage's output | a path in an untyped input |
 |---|---|---|---|
 | `standard`, grid | opens | opens | opens where the tasks see it |
-| `docker` | fails: it is a link to a host path that only its own task mounts | opens: every container mounts the work directory | fails: no container mounts it |
+| `docker` | a head-node input fails: it is a link to a host path that only the tasks staging it mount; an `s3://` or other remote input opens: Nextflow downloads it under the work directory | opens: a task that stages a file from the work directory mounts all of it | fails: no container mounts it |
 | `awsbatch` | opens for an `s3://` input read through the S3 mount; a staged input fails | fails: each task runs in its own scratch directory | fails, unless it is under the S3 mount |
 | `healthomics` | opens: HealthOmics stages the run's inputs once, read-only, for every task | opens: the work directory is on the run's shared storage | fails: no task stages it |
 
@@ -346,8 +346,9 @@ Known pipelines affected:
   where every task sees those paths: `standard`, grid, and `awsbatch` when the
   paths are under the S3 mount.
 - CellRanger `count` writes its FASTQ path into JSON that later stages open.
-  It runs on `standard`, grid and `healthomics`, and on `awsbatch` only with
-  its FASTQ bucket mounted.
+  It runs on `standard`, grid and `healthomics`, on `docker` only with its
+  FASTQs given as an `s3://` URI, and on `awsbatch` only with its FASTQ
+  bucket mounted.
 
 A companion file, such as an index beside a BAM, is a separate case: declare
 it as an input ([Pipeline inputs](#pipeline-inputs)).

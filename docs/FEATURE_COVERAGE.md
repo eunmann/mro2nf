@@ -120,7 +120,7 @@ too.
 |---|---|---|
 | file outputs published to results (mrp `outs/` layout, `GetOutFilename` naming) | ✅ | e2e `file_min`, `TestMrpDiff` (tree diff vs real mrp) |
 | inter-stage file passing | ✅ each task stages the bundles it reads, with their file leaves, as `path` inputs; markers locate the leaves | e2e `file_chain`, `TestCloudSim*`; unit `TestBundleRoundTrip` |
-| a path written into text (JSON or CSV contents, an untyped `map`, a `string`) that a later job opens | 🚫 relies on `mrp`'s shared filesystem; no task stages it, so it opens only where the later task sees that path. Per profile in `RUNNING.md`, Paths written into text | e2e `TestDockerMountedS3Inputs` (a file input's path in JSON) |
+| a path written into text (JSON or CSV contents, an untyped `map`, a `string`) that a later job opens | 🚫 relies on `mrp`'s shared filesystem; no task stages it, so it opens only where the later task sees that path. Per profile in `RUNNING.md`, Paths written into text | e2e `TestDockerMountedS3Inputs` (a file input's path in JSON, under copy-staging as on `awsbatch`) |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ | e2e `map_file`, `map_file_keyed`, `struct_of_file` |
 | a file reached from several outputs | ✅ #431 named by the first path mrp published it at | e2e `shared_out_file` |
 | VDR modes (disable/post/rolling/strict) timing | 🚫 no mid-run deletion | e2e `TestMrpDiffVDR/rolling`, `TestMrpDiffVDR/strict` (published outputs match mrp's under its VDR) |
@@ -210,8 +210,9 @@ fixture.
   file leaves; a path a stage writes into text (a JSON manifest, a CSV, an
   untyped `map`, a `string`) is invisible to the type walk. It opens where the
   later task sees that path: on `standard` and grid always; under `docker`
-  for a stage's output, as every container mounts the work directory, but not
-  for a file input, a link to a host path only its own task mounts; on
+  for a stage's output or a remote input, both under the work directory that
+  a task staging a file from it mounts, but not for a head-node input, a link
+  to a host path only the tasks staging it mount; on
   `awsbatch` only under the S3 mount; on `healthomics` for an input or a
   stage's output on the run's shared storage (`RUNNING.md`, Paths written into
   text).
