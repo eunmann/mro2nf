@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 )
 
@@ -30,12 +29,12 @@ func TestWriteOutsRejectsInvalidOuts(t *testing.T) {
 	f := loadFixture(t, "bad_out_type")
 
 	use := f.outs("BOT.USE", nil, `{"j":1.5}`)
-	if _, err := f.writeOuts(types.Manifest{}, use); err == nil {
+	if _, err := f.writeOuts(use); err == nil {
 		t.Error("pipeline outs j = 1.5 were written")
 	}
 
 	use = f.outs("BOT.USE", nil, `{"j":2}`)
-	if got, err := f.writeOuts(types.Manifest{}, use); err != nil || got != `{"j":2}` {
+	if got, err := f.writeOuts(use); err != nil || got != `{"j":2}` {
 		t.Errorf("pipeline outs j = 2: %s, %v", got, err)
 	}
 

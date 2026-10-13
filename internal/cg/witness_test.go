@@ -148,8 +148,8 @@ func TestSourceIncludesIgnoreWorkingDir(t *testing.T) {
 		t.Errorf("witness: %v", err)
 	}
 
-	if _, err := src.Manifest([]string{dir}); err != nil {
-		t.Errorf("manifest: %v", err)
+	if _, _, err := src.InParams("COUNT", []string{dir}); err != nil {
+		t.Errorf("entry params: %v", err)
 	}
 }
 

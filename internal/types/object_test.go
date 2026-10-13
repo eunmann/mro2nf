@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
 )
@@ -95,29 +94,29 @@ func TestAsObject(t *testing.T) {
 
 // orderTable declares structs whose field order is not alphabetical, so a
 // result in declared order, source order and sorted order all differ.
-func orderTable() *types.Table {
-	return types.NewTable(map[string]*ir.StructType{
-		"In": {Name: "In", Fields: []ir.Param{
-			{Name: "z", BaseType: "int"},
-			{Name: "a", BaseType: "int"},
-		}},
-		"Box": {Name: "Box", Fields: []ir.Param{
-			{Name: "q", BaseType: "In"},
-			{Name: "f", BaseType: "file", IsFile: true},
-			{Name: "b", BaseType: "float"},
-		}},
-	})
+func orderTable(t *testing.T) *types.Table {
+	t.Helper()
+
+	return types.NewTable(&compile(t, `
+struct In(
+    int z,
+    int a,
+)
+
+struct Box(
+    In    q,
+    file  f,
+    float b,
+)
+`).TypeTable)
 }
 
 // TestApplyKeepsObjectOrder checks the file-leaf walk rewrites leaves inside
 // Objects without reordering them, while a typed map's leaves are still
 // visited in sorted key order.
 func TestApplyKeepsObjectOrder(t *testing.T) {
-	tbl := orderTable()
-	params := []ir.Param{
-		{Name: "box", BaseType: "Box", IsFile: true},
-		{Name: "fm", BaseType: "file", MapDim: 1, IsFile: true},
-	}
+	tbl := orderTable(t)
+	params := fields(t, "box Box", "fm map<file>")
 	vals := map[string]any{
 		"box": decodeOrdered(t, `{"b":1.0,"f":"x.txt","q":{"a":1,"z":2},"extra":"e.txt"}`),
 		"fm":  decodeOrdered(t, `{"k2":"two","k1":"one"}`),
@@ -148,13 +147,8 @@ func TestApplyKeepsObjectOrder(t *testing.T) {
 // Objects (a struct, a typed map, an untyped map) without reordering their
 // keys.
 func TestNumberWalksKeepObjectOrder(t *testing.T) {
-	tbl := orderTable()
-	params := []ir.Param{
-		{Name: "q", BaseType: "In"},
-		{Name: "box", BaseType: "Box"},
-		{Name: "m", BaseType: "In", MapDim: 1},
-		{Name: "u", BaseType: "map"},
-	}
+	tbl := orderTable(t)
+	params := fields(t, "q In", "box Box", "m map<In>", "u map")
 	vals := map[string]any{
 		"q":   decodeOrdered(t, `{"z":1.0,"a":2}`),
 		"box": decodeOrdered(t, `{"b":2.0,"q":{"z":3.0,"a":4}}`),
@@ -162,7 +156,12 @@ func TestNumberWalksKeepObjectOrder(t *testing.T) {
 		"u":   decodeOrdered(t, `{"y":1E6,"x":{"w":0.50,"v":1}}`),
 	}
 
-	formatted := encode(t, tbl.FormatFloats(params, vals))
+	out, err := tbl.FormatFloats(params, vals)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	formatted := encode(t, out)
 
 	wantFormatted := `{"box":{"b":2,"q":{"z":3.0,"a":4}},"m":{"k2":{"z":5.0,"a":6},"k1":{"z":7,"a":8.0}},` +
 		`"q":{"z":1.0,"a":2},"u":{"y":1e+06,"x":{"w":0.5,"v":1}}}`

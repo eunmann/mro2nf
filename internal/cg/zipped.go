@@ -7,7 +7,6 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -102,7 +101,7 @@ func walkSplits(e syntax.Exp, visit func(*syntax.SplitExp)) {
 type zipped struct {
 	srcs   []zipSource
 	values []json.Marshaler
-	params []ir.Param
+	params []*syntax.StructMember
 }
 
 // zippedAt resolves each zipped source of root under outer, as resolveRef

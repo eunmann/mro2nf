@@ -1,135 +1,127 @@
 package types_test
 
 import (
-	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// jsonNum builds a json.Number literal (the decode-with-UseNumber shape the
-// walk sees at runtime).
-func jsonNum(t *testing.T, s string) json.Number {
-	t.Helper()
+// member names a param and its type as an .mro spells it.
+type member struct{ Name, Type string }
 
-	return json.Number(s)
-}
-
-// TestManifestParams pins the role -> parameter-set selection every bundle
-// producer relies on; its only callers live in cmd/mre, so a regression here
-// (e.g. RoleMainOut losing the ChunkOut concat) would surface only as missing
-// file staging in a live run.
-func TestManifestParams(t *testing.T) {
-	man := types.Manifest{Callables: map[string]types.Callable{
-		"S": {
-			In:       []ir.Param{{Name: "in1"}},
-			Out:      []ir.Param{{Name: "out1"}},
-			ChunkIn:  []ir.Param{{Name: "cin1"}},
-			ChunkOut: []ir.Param{{Name: "cout1"}},
-		},
-	}}
-
-	names := func(ps []ir.Param) []string {
-		out := make([]string, 0, len(ps))
-		for _, p := range ps {
-			out = append(out, p.Name)
-		}
-
-		return out
+func members(ps []*syntax.StructMember) []member {
+	out := make([]member, len(ps))
+	for i, p := range ps {
+		out[i] = member{p.Id, p.Tname.String()}
 	}
 
+	return out
+}
+
+// TestParams pins the role -> parameter-set selection every bundle producer
+// relies on: a split stage's chunk inputs, and its outputs with its chunk
+// outputs for a chunk's main; a pipeline has no chunk parameters.
+func TestParams(t *testing.T) {
+	ast := compile(t, typesSrc)
+	stage, top := ast.Callables.Table["MAKE"], ast.Callables.Table["TOP"]
+
 	cases := []struct {
-		callable, role string
-		want           []string
+		name string
+		c    syntax.Callable
+		role string
+		want []member
 	}{
-		{"S", types.RoleIn, []string{"in1"}},
-		{"S", types.RoleOut, []string{"out1"}},
-		{"S", types.RoleChunkIn, []string{"cin1"}},
-		{"S", types.RoleMainOut, []string{"out1", "cout1"}},
+		{"stage in", stage, types.RoleIn, []member{{"scale", "float"}}},
+		{"stage out", stage, types.RoleOut, []member{{"data", "file"}, {"count", "int"}}},
+		{"stage chunk in", stage, types.RoleChunkIn, []member{{"part", "int"}}},
+		{"stage main out", stage, types.RoleMainOut, []member{{"data", "file"}, {"count", "int"}, {"piece", "txt"}}},
+		{"pipeline in", top, types.RoleIn, []member{{"k", "float"}}},
+		{"pipeline out", top, types.RoleOut, []member{{"made", "MAKE"}}},
+		{"pipeline chunk in", top, types.RoleChunkIn, []member{}},
+		{"pipeline main out", top, types.RoleMainOut, []member{{"made", "MAKE"}}},
 	}
 
 	for _, tc := range cases {
-		params, err := man.Params(tc.callable, tc.role)
+		ps, err := types.Params(tc.c, tc.role)
 		if err != nil {
-			t.Errorf("Params(%s,%s): unexpected error %v", tc.callable, tc.role, err)
+			t.Errorf("%s: %v", tc.name, err)
 
 			continue
 		}
 
-		if diff := cmp.Diff(tc.want, names(params)); diff != "" {
-			t.Errorf("Params(%s,%s) mismatch (-want +got):\n%s", tc.callable, tc.role, diff)
+		if diff := cmp.Diff(tc.want, members(ps)); diff != "" {
+			t.Errorf("%s mismatch (-want +got):\n%s", tc.name, diff)
 		}
 	}
-}
 
-// TestManifestParamsUnknown checks a configured manifest fails loudly on an
-// unknown callable or role instead of silently yielding no parameters (which
-// would skip path rewrites and surface only as dangling files downstream).
-func TestManifestParamsUnknown(t *testing.T) {
-	man := types.Manifest{Callables: map[string]types.Callable{
-		"S": {In: []ir.Param{{Name: "in1"}}},
-	}}
-
-	if _, err := man.Params("MISSING", types.RoleIn); err == nil {
-		t.Error("Params(MISSING, in): want error, got nil")
-	}
-
-	if _, err := man.Params("S", "bogus-role"); err == nil {
-		t.Error("Params(S, bogus-role): want error, got nil")
+	if _, err := types.Params(stage, "bogus-role"); !errors.Is(err, types.ErrUnknownRole) {
+		t.Errorf("Params(MAKE, bogus-role) = %v, want %v", err, types.ErrUnknownRole)
 	}
 }
 
-// TestManifestParamsUnconfigured checks the zero manifest (the no `-types`
-// path: nothing to rewrite) yields nil params without error for any callable.
-func TestManifestParamsUnconfigured(t *testing.T) {
-	var man types.Manifest
+// TestCorpusParamsResolve is a robustness sweep over rich, real Martian MRO
+// files (structs, typed maps, map calls over arrays and maps, projection,
+// wildcards, duck typing, disabled): every parameter of every callable, in
+// every role, and every struct member resolves in the type table the file
+// compiles to.
+func TestCorpusParamsResolve(t *testing.T) {
+	dir := filepath.Join("..", "..", "testdata", "corpus")
 
-	params, err := man.Params("ANY", types.RoleIn)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("Params on unconfigured manifest: %v", err)
+		t.Fatalf("read corpus dir: %v", err)
 	}
 
-	if params != nil {
-		t.Errorf("Params on unconfigured manifest = %v, want nil", params)
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".mro" {
+			continue
+		}
+
+		t.Run(entry.Name(), func(t *testing.T) {
+			_, _, ast, err := syntax.Compile(filepath.Join(dir, entry.Name()), []string{dir}, false)
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+
+			if len(ast.Callables.List)+len(ast.StructTypes) == 0 {
+				t.Fatal("no callables or structs")
+			}
+
+			tbl := types.NewTable(&ast.TypeTable)
+
+			for _, c := range ast.Callables.List {
+				checkParamsResolve(t, tbl, c)
+			}
+
+			for _, st := range ast.StructTypes {
+				for _, m := range st.Members {
+					if _, err := tbl.Type(m.Tname); err != nil {
+						t.Errorf("struct %s member %s: %v", st.Id, m.Id, err)
+					}
+				}
+			}
+		})
 	}
 }
 
-// TestWalkShapeMismatchPassthrough checks values whose runtime shape disagrees
-// with the declared type pass through untouched instead of erroring — runtime
-// values may legitimately be null or oddly-shaped mid-pipeline.
-func TestWalkShapeMismatchPassthrough(t *testing.T) {
-	tbl := types.NewTable(nil)
+func checkParamsResolve(t *testing.T, tbl *types.Table, c syntax.Callable) {
+	t.Helper()
 
-	calls := 0
-	fn := func(p string) (string, error) {
-		calls++
+	for _, role := range []string{types.RoleIn, types.RoleOut, types.RoleChunkIn, types.RoleMainOut} {
+		ps, err := types.Params(c, role)
+		if err != nil {
+			t.Fatalf("%s %s: %v", c.GetId(), role, err)
+		}
 
-		return p, nil
-	}
-
-	vals := map[string]any{
-		"arrAsScalar": []any{"a"},               // array value, scalar-typed param
-		"numAsFile":   jsonNum(t, "7"),          // number where a file string is declared
-		"mapAsFile":   map[string]any{"k": "v"}, // object for a scalar file (unknown struct)
-	}
-	params := []ir.Param{
-		{Name: "arrAsScalar", BaseType: "txt", IsFile: true},
-		{Name: "numAsFile", BaseType: "txt", IsFile: true},
-		{Name: "mapAsFile", BaseType: "txt", IsFile: true},
-	}
-
-	got, err := tbl.Apply(params, vals, fn)
-	if err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-
-	if calls != 0 {
-		t.Errorf("transform ran %d times on mismatched shapes, want 0", calls)
-	}
-
-	if diff := cmp.Diff(vals, got); diff != "" {
-		t.Errorf("mismatched shapes were rewritten (-want +got):\n%s", diff)
+		for _, p := range ps {
+			if _, err := tbl.Type(p.Tname); err != nil {
+				t.Errorf("%s %s %s: %v", c.GetId(), role, p.Id, err)
+			}
+		}
 	}
 }

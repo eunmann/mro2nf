@@ -10,17 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/syntax"
 )
-
-func fileTable() *types.Table {
-	return types.NewTable(map[string]*ir.StructType{
-		"Cfg": {Name: "Cfg", Fields: []ir.Param{{Name: "ref", BaseType: "file", IsFile: true}}},
-	})
-}
 
 // TestMarkFilesKeepsBasename guards #284: a stage reads sample names and
 // extensions from its inputs' basenames, so each leaf keeps the basename mrp
@@ -45,9 +38,9 @@ func TestMarkFilesKeepsBasename(t *testing.T) {
 		srcs = append(srcs, src)
 	}
 
-	params := []ir.Param{{Name: "fs", BaseType: "fastq.gz", IsFile: true, ArrayDim: 1}}
+	params := fields(t, "fs fastq.gz[]")
 	first := filepath.Join(dir, "first")
-	if err := shim.WriteBundle(first, map[string]any{"fs": srcs}, params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(first, map[string]any{"fs": srcs}, params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -62,7 +55,7 @@ func TestMarkFilesKeepsBasename(t *testing.T) {
 	}
 
 	second := filepath.Join(dir, "second")
-	marked, err := shim.MarkFiles(second, mid, params, fileTable(), shim.Opts{})
+	marked, err := shim.MarkFiles(second, mid, params, fileTable(t), shim.Opts{})
 	if err != nil {
 		t.Fatalf("MarkFiles: %v", err)
 	}
@@ -99,10 +92,7 @@ func TestMarkFilesSharedPathOneLeaf(t *testing.T) {
 		}
 	}
 
-	params := []ir.Param{
-		{Name: "fs", BaseType: "file", IsFile: true, ArrayDim: 1},
-		{Name: "cfg", BaseType: "Cfg", IsFile: true},
-	}
+	params := fields(t, "fs file[]", "cfg Cfg")
 	payload := map[string]any{
 		"fs":  []any{shared, other, filepath.Join(dir, "a", ".", "x.txt")},
 		"cfg": map[string]any{"ref": shared},
@@ -110,7 +100,7 @@ func TestMarkFilesSharedPathOneLeaf(t *testing.T) {
 
 	bundle := filepath.Join(dir, "bundle")
 
-	marked, err := shim.MarkFiles(bundle, payload, params, fileTable(), shim.Opts{})
+	marked, err := shim.MarkFiles(bundle, payload, params, fileTable(t), shim.Opts{})
 	if err != nil {
 		t.Fatalf("MarkFiles: %v", err)
 	}
@@ -140,7 +130,7 @@ func TestMarkFilesSharedPathOneLeaf(t *testing.T) {
 // producer's file of the same basename keeps its own leaf.
 func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
 	dir := t.TempDir()
-	params := []ir.Param{{Name: "f", BaseType: "txt", IsFile: true}}
+	params := fields(t, "f txt")
 
 	make1 := writeFileBundle(t, filepath.Join(dir, "make1"), params, filepath.Join(dir, "m1", "a.txt"))
 	make2 := writeFileBundle(t, filepath.Join(dir, "make2"), params, filepath.Join(dir, "m2", "a.txt"))
@@ -148,15 +138,11 @@ func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
 	passIn := stageBundle(t, make1, filepath.Join(dir, "pass", "in"))
 	pass := filepath.Join(dir, "pass", "outs")
 
-	if err := shim.WriteBundle(pass, readPayload(t, passIn), params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(pass, readPayload(t, passIn), params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle pass-through: %v", err)
 	}
 
-	outs := []ir.Param{
-		{Name: "a", BaseType: "txt", IsFile: true},
-		{Name: "b", BaseType: "txt", IsFile: true},
-		{Name: "c", BaseType: "txt", IsFile: true},
-	}
+	outs := fields(t, "a txt", "b txt", "c txt")
 	payload := map[string]any{"a": nil, "b": nil, "c": nil}
 
 	for name, src := range map[string]string{"a": make1, "b": pass, "c": make2} {
@@ -165,7 +151,7 @@ func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
 
 	bundle := filepath.Join(dir, "return", "args")
 
-	marked, err := shim.MarkFiles(bundle, payload, outs, fileTable(), shim.Opts{})
+	marked, err := shim.MarkFiles(bundle, payload, outs, fileTable(t), shim.Opts{})
 	if err != nil {
 		t.Fatalf("MarkFiles: %v", err)
 	}
@@ -188,13 +174,13 @@ func TestMarkFilesSameFileAcrossBundlesOneLeaf(t *testing.T) {
 // written.
 func TestLeafOriginIsWhereTheTaskWroteIt(t *testing.T) {
 	dir := t.TempDir()
-	params := []ir.Param{{Name: "f", BaseType: "txt", IsFile: true}}
+	params := fields(t, "f txt")
 	written := filepath.Join(dir, "make", "main", "files", "a.txt")
 
 	make1 := writeFileBundle(t, filepath.Join(dir, "make", "outs"), params, written)
 	pass := filepath.Join(dir, "pass", "outs")
 
-	if err := shim.WriteBundle(pass, readPayload(t, stageBundle(t, make1, filepath.Join(dir, "pass", "in"))), params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(pass, readPayload(t, stageBundle(t, make1, filepath.Join(dir, "pass", "in"))), params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle pass-through: %v", err)
 	}
 
@@ -228,20 +214,20 @@ func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := []ir.Param{{Name: "own", BaseType: "txt", IsFile: true}, {Name: "link", BaseType: "txt", IsFile: true}, {Name: "host", BaseType: "txt", IsFile: true}}
+	params := fields(t, "own txt", "link txt", "host txt")
 	outs := filepath.Join(work, "outs")
 
-	if err := shim.WriteBundle(outs, map[string]any{"own": own, "link": link, "host": host}, params, fileTable(), shim.Opts{Confine: conf}); err != nil {
+	if err := shim.WriteBundle(outs, map[string]any{"own": own, "link": link, "host": host}, params, fileTable(t), shim.Opts{Confine: conf}); err != nil {
 		t.Fatal(err)
 	}
 
 	given := filepath.Join(dir, "given")
-	if err := shim.WriteBundle(given, map[string]any{"own": host}, params[:1], fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(given, map[string]any{"own": host}, params[:1], fileTable(t), shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
 	forwarded := filepath.Join(dir, "forwarded")
-	if err := shim.WriteBundle(forwarded, readPayload(t, stageBundle(t, outs, filepath.Join(dir, "in"))), params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(forwarded, readPayload(t, stageBundle(t, outs, filepath.Join(dir, "in"))), params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -265,12 +251,12 @@ func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
 // task that returns it.
 func TestLeafOriginInheritsEnclosingLeaf(t *testing.T) {
 	dir := t.TempDir()
-	params := []ir.Param{{Name: "d", BaseType: "path", IsFile: true}}
+	params := fields(t, "d path")
 
 	host := filepath.Dir(writeSelfNamed(t, filepath.Join(dir, "host", "ref", "fasta", "genome.fa")))
 	given := filepath.Join(dir, "given")
 
-	if err := shim.WriteBundle(given, map[string]any{"d": filepath.Dir(host)}, params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(given, map[string]any{"d": filepath.Dir(host)}, params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -304,7 +290,7 @@ func TestLeafOriginInheritsEnclosingLeaf(t *testing.T) {
 
 // writeStageOuts writes payload as the outs bundle of a main phase run in
 // the task work dir work, and returns the bundle dir.
-func writeStageOuts(t *testing.T, work string, payload map[string]any, params []ir.Param) string {
+func writeStageOuts(t *testing.T, work string, payload map[string]any, params []*syntax.StructMember) string {
 	t.Helper()
 
 	if err := os.MkdirAll(filepath.Join(work, "main"), 0o755); err != nil {
@@ -317,7 +303,7 @@ func writeStageOuts(t *testing.T, work string, payload map[string]any, params []
 	}
 
 	outs := filepath.Join(work, "outs")
-	if err := shim.WriteBundle(outs, payload, params, fileTable(), shim.Opts{Confine: conf}); err != nil {
+	if err := shim.WriteBundle(outs, payload, params, fileTable(t), shim.Opts{Confine: conf}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -365,8 +351,8 @@ func writeSelfNamed(t *testing.T, path string) string {
 // both read back as the files, with the origins a copying bundle records.
 func TestWriteLinkedBundle(t *testing.T) {
 	dir := t.TempDir()
-	one := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
-	params := []ir.Param{{Name: "host", BaseType: "file", IsFile: true}, {Name: "up", BaseType: "file", IsFile: true}}
+	one := fields(t, "f file")
+	params := fields(t, "host file", "up file")
 
 	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
 	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
@@ -374,7 +360,7 @@ func TestWriteLinkedBundle(t *testing.T) {
 	staged, _ := readPayload(t, stageBundle(t, produced, filepath.Join(dir, "task", "in", "u0")))["f"].(string)
 
 	bundle := filepath.Join(dir, "task", "args")
-	if err := shim.WriteLinkedBundle(bundle, map[string]any{"host": host, "up": staged}, params, fileTable(), ""); err != nil {
+	if err := shim.WriteLinkedBundle(bundle, map[string]any{"host": host, "up": staged}, params, fileTable(t), ""); err != nil {
 		t.Fatalf("WriteLinkedBundle: %v", err)
 	}
 
@@ -413,7 +399,7 @@ func TestWriteLinkedBundle(t *testing.T) {
 // holds the leaf's place, for a host file and for a staged bundle's leaf.
 func TestWriteLinkedBundleFails(t *testing.T) {
 	dir := t.TempDir()
-	one := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
+	one := fields(t, "f file")
 
 	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
 	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
@@ -433,16 +419,16 @@ func TestWriteLinkedBundleFails(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if err := shim.WriteLinkedBundle(blocked, payload, one, fileTable(), ""); err == nil {
+			if err := shim.WriteLinkedBundle(blocked, payload, one, fileTable(t), ""); err == nil {
 				t.Error("WriteLinkedBundle with the files dir blocked succeeded")
 			}
 
 			twice := filepath.Join(t.TempDir(), "args")
-			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(), ""); err != nil {
+			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), ""); err != nil {
 				t.Fatalf("WriteLinkedBundle: %v", err)
 			}
 
-			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(), ""); err == nil {
+			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), ""); err == nil {
 				t.Error("WriteLinkedBundle over a bundle that holds the leaf's link succeeded")
 			}
 		})
@@ -456,8 +442,8 @@ func TestWriteLinkedBundleFails(t *testing.T) {
 // stage returns the same file either way.
 func TestRealPathOfLinkedArgsStages(t *testing.T) {
 	dir := t.TempDir()
-	one := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
-	params := []ir.Param{{Name: "host", BaseType: "file", IsFile: true}, {Name: "up", BaseType: "file", IsFile: true}}
+	one := fields(t, "f file")
+	params := fields(t, "host file", "up file")
 
 	host := writeSelfNamed(t, filepath.Join(dir, "host", "ref.txt"))
 	own := writeSelfNamed(t, filepath.Join(dir, "producer", "main", "files", "y.txt"))
@@ -479,7 +465,7 @@ func TestRealPathOfLinkedArgsStages(t *testing.T) {
 	staged, _ := readPayload(t, filepath.Join(task, "in", "u0"))["f"].(string)
 	args := filepath.Join(task, "args")
 
-	if err := shim.WriteLinkedBundle(args, map[string]any{"host": entry, "up": staged}, params, fileTable(), ""); err != nil {
+	if err := shim.WriteLinkedBundle(args, map[string]any{"host": entry, "up": staged}, params, fileTable(t), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -508,7 +494,7 @@ func TestRealPathOfLinkedArgsStages(t *testing.T) {
 		}
 
 		outs := filepath.Join(dir, "outs", strconv.FormatBool(strict))
-		if err := shim.WriteBundle(outs, resolved, params, fileTable(), shim.Opts{Confine: conf}); err != nil {
+		if err := shim.WriteBundle(outs, resolved, params, fileTable(t), shim.Opts{Confine: conf}); err != nil {
 			t.Fatalf("strict %v: WriteBundle of the real paths of linked args: %v", strict, err)
 		}
 
@@ -551,9 +537,9 @@ func TestMarkFilesRefusesOriginFileName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
+	params := fields(t, "f file")
 
-	_, err := shim.MarkFiles(filepath.Join(dir, "bundle"), map[string]any{"f": src}, params, fileTable(), shim.Opts{})
+	_, err := shim.MarkFiles(filepath.Join(dir, "bundle"), map[string]any{"f": src}, params, fileTable(t), shim.Opts{})
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Errorf("MarkFiles of a leaf named .mre-origin = %v, want a reserved-name error", err)
 	}
@@ -561,7 +547,7 @@ func TestMarkFilesRefusesOriginFileName(t *testing.T) {
 
 // writeFileBundle writes a file at src holding its own path and a bundle at
 // dir whose param f names it, and returns dir.
-func writeFileBundle(t *testing.T, dir string, params []ir.Param, src string) string {
+func writeFileBundle(t *testing.T, dir string, params []*syntax.StructMember, src string) string {
 	t.Helper()
 
 	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
@@ -572,7 +558,7 @@ func writeFileBundle(t *testing.T, dir string, params []ir.Param, src string) st
 		t.Fatal(err)
 	}
 
-	if err := shim.WriteBundle(dir, map[string]any{"f": src}, params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(dir, map[string]any{"f": src}, params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle %s: %v", dir, err)
 	}
 
@@ -640,14 +626,11 @@ func TestBundleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := []ir.Param{
-		{Name: "f", BaseType: "file", IsFile: true},
-		{Name: "n", BaseType: "int"},
-	}
+	params := fields(t, "f file", "n int")
 	payload := map[string]any{"f": src, "n": float64(7)}
 
 	bundle := filepath.Join(dir, "bundle")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(bundle, payload, params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -702,10 +685,10 @@ func TestMarkFilesDirLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := []ir.Param{{Name: "d", BaseType: "file", IsFile: true}}
+	params := fields(t, "d file")
 	payload := map[string]any{"d": srcDir}
 
-	marked, err := shim.MarkFiles(dir, payload, params, fileTable(), shim.Opts{})
+	marked, err := shim.MarkFiles(dir, payload, params, fileTable(t), shim.Opts{})
 	if err != nil {
 		t.Fatalf("MarkFiles: %v", err)
 	}
@@ -737,10 +720,10 @@ func TestMarkFilesNamesDirSpelledWithSuffix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := []ir.Param{{Name: "d", BaseType: "path", IsFile: true, ArrayDim: 1}}
+	params := fields(t, "d path[]")
 	payload := map[string]any{"d": []any{srcDir + "/", srcDir + "/."}}
 
-	marked, err := shim.MarkFiles(filepath.Join(dir, "bundle"), payload, params, fileTable(), shim.Opts{})
+	marked, err := shim.MarkFiles(filepath.Join(dir, "bundle"), payload, params, fileTable(t), shim.Opts{})
 	if err != nil {
 		t.Fatalf("MarkFiles: %v", err)
 	}
@@ -789,13 +772,7 @@ func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := []ir.Param{
-		{Name: "made", BaseType: "txt", IsFile: true},
-		{Name: "fake", BaseType: "txt", IsFile: true},
-		{Name: "s", BaseType: "string"},
-		{Name: "arr", BaseType: "string", ArrayDim: 1},
-		{Name: "m", BaseType: "map"},
-	}
+	params := fields(t, "made txt", "fake txt", "s string", "arr string[]", "m map")
 	strs := []any{
 		"@mre:file:f/L0000/made.txt",
 		"@mre:dir:f/L0000/made.txt",
@@ -814,7 +791,7 @@ func TestBundleKeepsMarkerShapedStrings(t *testing.T) {
 	}
 
 	bundle := filepath.Join(dir, "bundle")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(bundle, payload, params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -915,10 +892,10 @@ func TestBundleNestedStructFile(t *testing.T) {
 	}
 
 	payload := map[string]any{"c": map[string]any{"ref": src}}
-	params := []ir.Param{{Name: "c", BaseType: "Cfg"}}
+	params := fields(t, "c Cfg")
 
 	bundle := filepath.Join(dir, "b")
-	if err := shim.WriteBundle(bundle, payload, params, fileTable(), shim.Opts{}); err != nil {
+	if err := shim.WriteBundle(bundle, payload, params, fileTable(t), shim.Opts{}); err != nil {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 
@@ -956,13 +933,10 @@ func TestBundleMissingFileKeepsPath(t *testing.T) {
 	dir := t.TempDir()
 
 	missing := filepath.Join(dir, "never-written.txt")
-	params := []ir.Param{
-		{Name: "f", BaseType: "file", IsFile: true},
-		{Name: "n", BaseType: "int"},
-	}
+	params := fields(t, "f file", "n int")
 	payload := map[string]any{"f": missing, "n": float64(3)}
 
-	marked, err := shim.MarkFiles(dir, payload, params, fileTable(), shim.Opts{})
+	marked, err := shim.MarkFiles(dir, payload, params, fileTable(t), shim.Opts{})
 	if err != nil {
 		t.Fatalf("MarkFiles must not error on an absent declared output: %v", err)
 	}
@@ -1134,8 +1108,8 @@ func TestMarkFilesDanglingSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	params := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}}
-	marked, err := shim.MarkFiles(dir, map[string]any{"f": dangling}, params, fileTable(), shim.Opts{})
+	params := fields(t, "f file")
+	marked, err := shim.MarkFiles(dir, map[string]any{"f": dangling}, params, fileTable(t), shim.Opts{})
 	if err != nil {
 		t.Fatalf("MarkFiles must treat a dangling symlink as absent, not error: %v", err)
 	}

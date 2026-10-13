@@ -70,7 +70,6 @@ call P()
 type publishRun struct {
 	t    *testing.T
 	g    *Graph
-	man  types.Manifest
 	mro  string
 	root string
 	// makeWork is MAKE's work dir, and staged the outs bundles OUTS staged,
@@ -127,8 +126,6 @@ func newRun(t *testing.T, mro string) *publishRun {
 	if r.g, err = Load(r.mro, "", nil); err != nil {
 		t.Fatal(err)
 	}
-
-	r.man = r.g.Manifest()
 
 	return r
 }
@@ -202,7 +199,7 @@ func (r *publishRun) task(node string, in []string, outs func(args map[string]an
 
 	r.t.Chdir(scratch)
 
-	if _, err := r.g.WriteArgs(ArgsSpec{Node: node, In: in, Manifest: r.man, Out: "args"}); err != nil {
+	if _, err := r.g.WriteArgs(ArgsSpec{Node: node, In: in, Out: "args"}); err != nil {
 		r.t.Fatal(err)
 	}
 
@@ -234,7 +231,7 @@ func (r *publishRun) post(node, scratch string, outs map[string]any) error {
 		return err
 	}
 
-	params, err := r.man.Params(st.Call().DecId, types.RoleOut)
+	params, err := r.g.Params(st.Call().DecId, types.RoleOut)
 	if err != nil {
 		return err
 	}
@@ -244,17 +241,17 @@ func (r *publishRun) post(node, scratch string, outs map[string]any) error {
 		return err
 	}
 
-	if err := shim.WriteBundle("stage_outs", outs, params, r.man.Table(), shim.Opts{Confine: conf}); err != nil {
+	if err := shim.WriteBundle("stage_outs", outs, params, r.g.Table(), shim.Opts{Confine: conf}); err != nil {
 		return err
 	}
 
-	return r.g.Post(PostSpec{Args: "args", Outs: "stage_outs", Manifest: r.man, Forks: "forks", Fields: "outs"})
+	return r.g.Post(PostSpec{Args: "args", Outs: "stage_outs", Forks: "forks", Fields: "outs"})
 }
 
 // writeOuts publishes the pipeline outs from the staged bundles with
 // locations, into the working dir.
 func (r *publishRun) writeOuts(locations map[string]string) error {
-	spec := OutsSpec{In: []string{"in"}, Locations: locations, Manifest: r.man, Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
+	spec := OutsSpec{In: []string{"in"}, Locations: locations, Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
 
 	return r.g.WriteOuts(r.t.Context(), spec)
 }

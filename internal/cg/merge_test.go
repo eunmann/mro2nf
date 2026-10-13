@@ -76,7 +76,7 @@ func TestMergeAcrossOuterForks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := tc.load(t)
 
-			raw, err := f.writeOuts(f.g.Manifest(), subOuts(f, tc.widths)...)
+			raw, err := f.writeOuts(subOuts(f, tc.widths)...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,7 +114,7 @@ func TestMergeAcrossOuterForksFails(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := tc.f.writeOuts(tc.f.g.Manifest(), tc.in...)
+			_, err := tc.f.writeOuts(tc.in...)
 			if !errors.Is(err, errMergeUnmatched) {
 				t.Fatalf("pipeline outs: %v, want %v", err, errMergeUnmatched)
 			}
@@ -200,7 +200,7 @@ pipeline TOP(out SUB[] subs,)
 call TOP()
 `)
 
-			_, err := f.writeOuts(f.g.Manifest(), tc.in(f)...)
+			_, err := f.writeOuts(tc.in(f)...)
 			if !errors.Is(err, errMergeAcrossForks) {
 				t.Fatalf("pipeline outs: %v, want %v", err, errMergeAcrossForks)
 			}

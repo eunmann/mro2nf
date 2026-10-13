@@ -178,7 +178,7 @@ func assertTaskLeaves(t *testing.T, mro string, p Plan, want []EntryLeaf) {
 		t.Fatal(err)
 	}
 
-	task, err := g.EntryLeaves(g.Manifest())
+	task, err := g.EntryLeaves()
 	if err != nil {
 		t.Fatal(err)
 	}

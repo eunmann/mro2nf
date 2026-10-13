@@ -40,7 +40,7 @@ The project holds:
 | `nextflow.config` | parameters, the retry policy, the GPU rule, the trace, the profiles |
 | `conf/` | the container and HealthOmics profiles' settings |
 | `package.sh`, `parameter-template.json` | the HealthOmics package |
-| `_assets/` | a copy of the `.mro` files and the type manifest, read by PLAN and OUTS |
+| `_assets/` | a copy of the `.mro` files, read by PLAN and OUTS |
 
 A run writes `work/`, `results/`, `.nextflow/`, `.nextflow.log` and
 `trace-<timestamp>.txt` into the launch directory.

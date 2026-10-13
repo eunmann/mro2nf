@@ -16,8 +16,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 const (
@@ -305,7 +305,7 @@ type Opts struct {
 // WriteBundle writes payload into dir as a bundle: every file leaf located by
 // params/tbl is copied into dir/f/ and replaced with a marker, then the
 // rewritten payload is written to dir/data.json.
-func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, opts Opts) error {
+func WriteBundle(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts Opts) error {
 	marked, err := MarkFiles(dir, payload, params, tbl, opts)
 	if err != nil {
 		return err
@@ -320,7 +320,7 @@ func WriteBundle(dir string, payload map[string]any, params []ir.Param, tbl *typ
 // a staged bundle is linked by its ordinal dir, so its recorded origin comes
 // with it. A leaf under mount stays the path it is. A bundle another task
 // stages must carry its files: WriteBundle.
-func WriteLinkedBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, mount Mount) error {
+func WriteLinkedBundle(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, mount Mount) error {
 	marked, err := markFiles(leafMarker{dir: dir, mount: mount, link: true, marks: map[string]string{}}, payload, params, tbl)
 	if err != nil {
 		return err
@@ -356,11 +356,11 @@ func writeRaw(path string, data []byte) error {
 // rewritten payload. Names are sequenced so distinct files never collide, and
 // leaves of one origin share one copy. Every other string that begins with
 // the reserved prefix is escaped, a file leaf naming no file included.
-func MarkFiles(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, opts Opts) (map[string]any, error) {
+func MarkFiles(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts Opts) (map[string]any, error) {
 	return markFiles(leafMarker{dir: dir, conf: opts.Confine, mount: opts.Mount, marks: map[string]string{}}, payload, params, tbl)
 }
 
-func markFiles(m leafMarker, payload map[string]any, params []ir.Param, tbl *types.Table) (map[string]any, error) {
+func markFiles(m leafMarker, payload map[string]any, params []*syntax.StructMember, tbl *types.Table) (map[string]any, error) {
 	escaped := make(map[string]any, len(payload))
 	for k, v := range payload {
 		ev, err := escapeValue(v)

@@ -9,7 +9,6 @@ import (
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -54,21 +53,21 @@ func runStage(ctx context.Context, argv []string) error {
 
 	s.args.mount, s.run.mount, s.post.mount = mount, mount, mount
 
-	g, man, err := gf.load()
+	g, err := gf.load()
 	if err != nil {
 		return err
 	}
 
-	return s.stage(ctx, g, man)
+	return s.stage(ctx, g)
 }
 
-func (s *stageFlags) stage(ctx context.Context, g *cg.Graph, man types.Manifest) error {
+func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 	post, err := posts(g, s.run.phase, s.args.node)
 	if err != nil {
 		return err
 	}
 
-	inst, err := s.args.write(g, man, s.run.args)
+	inst, err := s.args.write(g, s.run.args)
 	if err != nil {
 		return err
 	}
@@ -77,7 +76,7 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph, man types.Manifest)
 		return fmt.Errorf("args: %s is %w", inst.Node, errNotEnabled)
 	}
 
-	if err := s.run.run(ctx, g, man); err != nil {
+	if err := s.run.run(ctx, g); err != nil {
 		return err
 	}
 
@@ -85,7 +84,7 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph, man types.Manifest)
 		return nil
 	}
 
-	return s.post.post(g, man, s.run.args, s.run.out)
+	return s.post.post(g, s.run.args, s.run.out)
 }
 
 // posts reports whether a task of node's phase runs the instance's last

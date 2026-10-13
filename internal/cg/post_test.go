@@ -10,11 +10,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
-	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // TestForkElementKeys: GEN's post writes one fork element per map key, the
@@ -78,12 +75,11 @@ func TestForkElementLeaves(t *testing.T) {
 	const n = 3
 
 	f := loadFixture(t, "map_file_split")
-	man := fixtureManifest(t, "map_file_split")
 
-	gen := stageFileOuts(t, f, man, n)
+	gen := stageFileOuts(t, f, n)
 
 	forks := f.next("forks")
-	if err := f.g.Post(PostSpec{Args: gen, Outs: gen, Manifest: man, Forks: forks}); err != nil {
+	if err := f.g.Post(PostSpec{Args: gen, Outs: gen, Forks: forks}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -99,7 +95,7 @@ func TestForkElementLeaves(t *testing.T) {
 			t.Errorf("fork %d element leaves (-want +got):\n%s", i, d)
 		}
 
-		path := procInput(t, f, man, dir)
+		path := procInput(t, f, dir)
 		if b, err := os.ReadFile(path); err != nil || filepath.Base(path) != want || len(b) != i+1 {
 			t.Errorf("fork %d reads %s (%d bytes, %v), want %s of %d bytes", i, path, len(b), err, want, i+1)
 		}
@@ -108,7 +104,7 @@ func TestForkElementLeaves(t *testing.T) {
 
 // stageFileOuts stages FBS.GEN's outs as mrp's GEN writes them: n files,
 // g<i>.txt of i+1 bytes.
-func stageFileOuts(t *testing.T, f *fixture, man types.Manifest, n int) string {
+func stageFileOuts(t *testing.T, f *fixture, n int) string {
 	t.Helper()
 
 	src := t.TempDir()
@@ -129,7 +125,7 @@ func stageFileOuts(t *testing.T, f *fixture, man types.Manifest, n int) string {
 	}
 
 	gen := f.next("outs")
-	if err := writeOuts(gen, json.RawMessage(raw), man, "GEN"); err != nil {
+	if err := writeOuts(gen, json.RawMessage(raw), f.g, "GEN"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,11 +138,11 @@ func stageFileOuts(t *testing.T, f *fixture, man types.Manifest, n int) string {
 
 // procInput is the file a PROC instance staging only the fork element at
 // dir is given.
-func procInput(t *testing.T, f *fixture, man types.Manifest, dir string) string {
+func procInput(t *testing.T, f *fixture, dir string) string {
 	t.Helper()
 
 	args := f.next("args")
-	if _, err := f.g.WriteArgs(ArgsSpec{Node: "FBS.PROC", In: []string{dir}, Manifest: man, Out: args}); err != nil {
+	if _, err := f.g.WriteArgs(ArgsSpec{Node: "FBS.PROC", In: []string{dir}, Out: args}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,19 +159,6 @@ func procInput(t *testing.T, f *fixture, man types.Manifest, dir string) string 
 	}
 
 	return a.F
-}
-
-func fixtureManifest(t *testing.T, name string) types.Manifest {
-	t.Helper()
-
-	dir := filepath.Join("..", "..", "testdata", name)
-
-	_, _, ast, err := syntax.Compile(filepath.Join(dir, "pipeline.mro"), []string{dir}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return types.BuildManifest(frontend.Lower(ast))
 }
 
 // leafNames lists the files staged below a bundle's files dir.

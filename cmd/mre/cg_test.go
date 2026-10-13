@@ -81,7 +81,7 @@ func structProj() graphFlags {
 func entryForks(t *testing.T, gf graphFlags, dir string) {
 	t.Helper()
 
-	g, _, err := gf.load()
+	g, err := gf.load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,23 +94,23 @@ func entryForks(t *testing.T, gf graphFlags, dir string) {
 // argsStep runs mre stage's args step against the invocation gf locates,
 // writing the args bundle of the instance a names into out.
 func argsStep(gf graphFlags, a argsFlags, out string) (cg.Instance, error) {
-	g, man, err := gf.load()
+	g, err := gf.load()
 	if err != nil {
 		return cg.Instance{}, err
 	}
 
-	return a.write(g, man, out)
+	return a.write(g, out)
 }
 
 // postStep runs mre stage's post step against the invocation gf locates,
 // posting the outs bundle outs of the instance the args bundle args stamps.
 func postStep(gf graphFlags, p postFlags, args, outs string) error {
-	g, man, err := gf.load()
+	g, err := gf.load()
 	if err != nil {
 		return err
 	}
 
-	return p.post(g, man, args, outs)
+	return p.post(g, args, outs)
 }
 
 // TestCallGraphSteps drives struct_proj through its entry forks, mre

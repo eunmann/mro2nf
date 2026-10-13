@@ -7,7 +7,6 @@ import (
 	"io"
 	"slices"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -34,8 +33,6 @@ type ArgsSpec struct {
 	// Forks are fork records the task got as values rather than staged:
 	// those of the roots the invocation's entry values fix (DecodeElement).
 	Forks []Element
-	// Manifest locates the file leaves the args bundle stages.
-	Manifest types.Manifest
 	// Out is the args bundle dir, which only its own task reads: its file
 	// leaves link to the files the task staged (shim.WriteLinkedBundle), so
 	// a file every fork of a map call reads exists once, its producer's. A
@@ -94,7 +91,7 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
 			return Instance{}, err
 		}
 
-		if err := writeArgs(spec, args, st.Call().DecId); err != nil {
+		if err := g.writeArgs(spec, args, st.Call().DecId); err != nil {
 			return Instance{}, err
 		}
 	}
@@ -177,13 +174,13 @@ func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, []int, error
 }
 
 // writeArgs writes the instance's resolved args as its linked args bundle.
-func writeArgs(spec ArgsSpec, args json.Marshaler, callable string) error {
-	payload, params, err := bundlePayload(args, spec.Manifest, callable, types.RoleIn, spec.EntryFiles)
+func (g *Graph) writeArgs(spec ArgsSpec, args json.Marshaler, callable string) error {
+	payload, params, err := g.bundlePayload(args, callable, types.RoleIn, spec.EntryFiles)
 	if err != nil {
 		return err
 	}
 
-	if err := shim.WriteLinkedBundle(spec.Out, payload, params, spec.Manifest.Table(), spec.Mount); err != nil {
+	if err := shim.WriteLinkedBundle(spec.Out, payload, params, g.Table(), spec.Mount); err != nil {
 		return fmt.Errorf("write %s bundle %s: %w", types.RoleIn, spec.Out, err)
 	}
 
@@ -195,7 +192,7 @@ func writeArgs(spec ArgsSpec, args json.Marshaler, callable string) error {
 // sorted, as a MarshalerMap encodes them, and nested values keep their
 // encoded order and number lexemes. A file leaf staged names the path the
 // bundle stages it from.
-func bundlePayload(v json.Marshaler, man types.Manifest, callable, role string, staged map[string]string) (map[string]any, []ir.Param, error) {
+func (g *Graph) bundlePayload(v json.Marshaler, callable, role string, staged map[string]string) (map[string]any, []*syntax.StructMember, error) {
 	raw, err := marshal(v)
 	if err != nil {
 		return nil, nil, err
@@ -206,13 +203,13 @@ func bundlePayload(v json.Marshaler, man types.Manifest, callable, role string, 
 		return nil, nil, fmt.Errorf("%s %s value: %w", callable, role, err)
 	}
 
-	params, err := man.Params(callable, role)
+	params, err := g.Params(callable, role)
 	if err != nil {
-		return nil, nil, fmt.Errorf("params of %s: %w", callable, err)
+		return nil, nil, err
 	}
 
 	if len(staged) > 0 {
-		payload, err = man.Table().Apply(params, payload, func(leaf string) (string, error) {
+		payload, err = g.Table().Apply(params, payload, func(leaf string) (string, error) {
 			if p, ok := staged[leaf]; ok {
 				return p, nil
 			}

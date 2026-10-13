@@ -45,11 +45,11 @@ func loadFixture(t *testing.T, name string) *fixture {
 
 // writeOuts publishes the pipeline outs from the staged items in and
 // returns the outs JSON, compacted, or the error.
-func (f *fixture) writeOuts(man types.Manifest, in ...string) (string, error) {
+func (f *fixture) writeOuts(in ...string) (string, error) {
 	f.t.Helper()
 
 	outs := f.next("pipeline_outs.json")
-	spec := OutsSpec{In: in, Manifest: man, Work: f.next("work"), Results: f.next("results"), OutsJSON: outs}
+	spec := OutsSpec{In: in, Work: f.next("work"), Results: f.next("results"), OutsJSON: outs}
 
 	if err := f.g.WriteOuts(f.t.Context(), spec); err != nil {
 		return "", err
@@ -96,7 +96,7 @@ func (f *fixture) outs(node string, fork Fork, outs string) string {
 	}
 
 	dir := f.next("outs")
-	if err := writeOuts(dir, json.RawMessage(outs), types.Manifest{}, st.Call().DecId); err != nil {
+	if err := writeOuts(dir, json.RawMessage(outs), f.g, st.Call().DecId); err != nil {
 		f.t.Fatal(err)
 	}
 
@@ -110,13 +110,13 @@ func (f *fixture) outs(node string, fork Fork, outs string) string {
 
 // writeOuts writes v, callable's outs, as an outs bundle that carries its
 // files, as a task posts them.
-func writeOuts(dir string, v json.Marshaler, man types.Manifest, callable string) error {
-	payload, params, err := bundlePayload(v, man, callable, types.RoleOut, nil)
+func writeOuts(dir string, v json.Marshaler, g *Graph, callable string) error {
+	payload, params, err := g.bundlePayload(v, callable, types.RoleOut, nil)
 	if err != nil {
 		return err
 	}
 
-	return shim.WriteBundle(dir, payload, params, man.Table(), shim.Opts{})
+	return shim.WriteBundle(dir, payload, params, g.Table(), shim.Opts{})
 }
 
 // args runs WriteArgs for node over the staged items, returning the
@@ -300,7 +300,7 @@ func TestEmptyForksPrune(t *testing.T) {
 		}
 	}
 
-	raw, err := f.writeOuts(types.Manifest{}, gen)
+	raw, err := f.writeOuts(gen)
 	if err != nil {
 		t.Fatal(err)
 	}
