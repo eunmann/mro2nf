@@ -222,6 +222,7 @@ main.nf               ← PLAN, the nodes or the calls of their runs, then OUTS
 subworkflows/         ← a workflow per run of nodes (W<j>.nf), only in a project too large for one
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
+nextflow_schema.json  ← every param's type, default and description (nf-schema), for launch forms (§8)
 conf/                 ← the container profiles' and the HealthOmics profile's configs
 package.sh, parameter-template.json ← the HealthOmics package (§9)
 _assets/mro/          ← a copy of every .mro file the entry compiles from, each
@@ -887,6 +888,18 @@ You can override inputs **at launch** without re-transpiling:
   unaffected.
 - An entry input named `outdir`, `job_resources` or `mro2nf_*` collides with
   a param the project defines itself and fails the transpile.
+- `mre plan` is the one validator of the launch values. `nextflow_schema.json`
+  (`internal/cgnf/schema.go`) describes every param for launch forms and
+  documentation, each entry input by the JSON Schema of its Martian type
+  (`types.Table.Schema`) with the call's value as its default, and the
+  project's own params from the same model as `nextflow.config` and the
+  HealthOmics `parameter-template.json` (`internal/cgnf/params.go`). No
+  nf-schema plugin validates against it: a plugin is downloaded at launch,
+  which an offline grid or container host cannot do, and HealthOmics installs
+  only the versions it pins. Nextflow's typed `params {}` block is not used:
+  Nextflow 25.10, the floor `manifest.nextflowVersion` declares, parses it
+  only under `NXF_SYNTAX_PARSER=v2`, not its default, and HealthOmics, given
+  that range, runs 25.10 and supports the v2 parser only from 26.04.
 
 **File-typed inputs.** Every file value of the run's entry inputs that is an
 absolute path is read in place by every task on the local and grid profiles

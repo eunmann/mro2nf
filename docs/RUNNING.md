@@ -38,6 +38,7 @@ The project holds:
 | `subworkflows/` | in a pipeline too large for one workflow, one workflow per run of its stage calls |
 | `stage.nf` | the stage processes and the wiring every node uses |
 | `nextflow.config` | parameters, the retry policy, the GPU rule, the trace, the profiles |
+| `nextflow_schema.json` | every parameter's type, default and description, in the nf-schema format, for launch forms and documentation |
 | `conf/` | the container and HealthOmics profiles' settings |
 | `package.sh`, `parameter-template.json` | the HealthOmics package |
 | `_assets/` | a copy of the `.mro` files, read by PLAN and OUTS |
@@ -105,6 +106,38 @@ disabled calls and chunk counts as the same value in the `.mro` would under
 
 An entry input named `outdir`, `job_resources` or `mro2nf_*` fails the
 transpile, because the project defines those parameters itself.
+
+### Parameter schema
+
+`nextflow_schema.json` describes every parameter in the
+[nf-schema](https://nextflow-io.github.io/nf-schema/) format, for a launch
+form such as Seqera Platform's and for documentation. Each pipeline input sits
+at the schema's top level with its `.mro` type and, as its default, its value
+in the `.mro`'s `call`:
+
+| Martian type | Schema |
+|---|---|
+| `int`, `float`, `bool`, `string` | `integer`, `number`, `boolean`, `string` |
+| `file`, a `filetype` | `string`, format `file-path` |
+| `path` | `string`, format `path` (a file or a directory) |
+| `T[]` | `array` of `T` |
+| `map`, `map<T>` | `object`; a `map<T>`'s values are `T` |
+| a `struct` | `object` with a property per member |
+
+The `mro2nf_*` parameters form the `mro2nf options` group, and `outdir` the
+`Output options` group; `job_resources`, a map, sits at the top level, as
+nf-schema's meta-schema admits only scalar types in a group. Those a profile
+sets are marked `hidden`.
+
+The schema validates nothing at launch: the project loads no nf-schema
+plugin, which a run would have to download. The run's PLAN task, its first,
+checks every pipeline input against its declared type on every profile, and
+fails the run before any stage starts, naming the input, its type and the
+value (`entry input "n" declared int, got "x"`). Nextflow's typed `params`
+block would check them at launch instead, but this project's oldest
+supported Nextflow, 25.10, parses it only under the strict syntax parser,
+which is not its default, and HealthOmics runs the project on 25.10 without
+that parser.
 
 ### mro2nf parameters
 
@@ -360,7 +393,9 @@ aws omics start-run --workflow-id "$WF" --role-arn <role ARN> \
 
 `parameter-template.json` declares each pipeline input and
 `mro2nf_overrides` (an `s3://` URI), all optional. A run can set nothing else,
-so it cannot change the image or the inputs it may stage. A directory input is
+so it cannot change the image or the inputs it may stage. `nextflow_schema.json`
+stays out of the zip: HealthOmics would read the parameters it declares from
+it. A directory input is
 an `s3://` prefix ending in `/` (`s3://<bucket>/fastqs/`): `start-run` checks
 each URI and refuses a prefix without the slash with `S3 object not found`. Outputs are
 published to `/mnt/workflow/pubdir`, which HealthOmics exports to the run's
