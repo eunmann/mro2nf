@@ -79,10 +79,9 @@ func (s *scope) call() []string {
 	return lines
 }
 
-// layout places the nodes' wirings in workflows: the channel each defines,
-// by its defining node, the nodes reading each, the order each is defined
-// in, and the source of the outs bundles each node the pipeline outs read
-// publishes.
+// layout places the nodes' wirings in workflows: the nodes reading each
+// channel, the order each is defined in, and the source of the outs bundles
+// each node the pipeline outs read publishes.
 type layout struct {
 	nodes []*wiring
 	users map[string][]int
