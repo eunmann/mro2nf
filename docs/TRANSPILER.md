@@ -1,47 +1,120 @@
 # How the Martian → Nextflow transpiler works
 
 This document explains, end to end, how `mro2nf` turns a Martian
-pipeline (`.mro`) into a runnable Nextflow project — what each piece does, how
-data flows, and why the design is shaped the way it is. It is meant to be read
-top to bottom by someone who knows neither codebase deeply.
+pipeline (`.mro`) into a runnable Nextflow project. §1 is the design record:
+it is normative, and decides where new logic belongs. §2–§10 describe the
+mechanisms that implement it.
 
 If you want the per-feature fidelity table (what is faithful vs. divergent), see
 [`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md).
 
 ---
 
-## 1. The one big idea: translate the orchestration, reuse the stage code
+## 1. Design: the Nextflow / `mre` boundary
 
-A Martian pipeline is two things stacked together:
+**Requirements.** The user's statement of them (2026-10-13):
 
-1. **Orchestration** — the DAG of stages, how they fan out into parallel
-   *chunks* (`split`) and *forks* (mapping a call over an array/map), how outputs
-   of one stage bind to the inputs of the next, and how much CPU/RAM each piece
-   asks for.
-2. **Stage code** — the actual Python/exec/compiled programs that do the work,
-   driven through Martian's *adapter ABI* (the contract Martian uses to hand a
-   stage its inputs and collect its outputs).
+> 1. The generated Nextflow runs and produces the same results as mrp,
+>    including `pipeline_outs.json`.
+> 2. It scales as Martian would.
+> 3. Stage code is unchanged (the shim / stage ABI).
 
-This transpiler translates **only the orchestration** into Nextflow. It does
-**not** rewrite or reimplement your stage code. Every stage job runs the
-**original, unmodified** Martian stage through `mrjob` and the Martian adapter,
-started by a small Go shim called **`mre`** exactly as `mrp` starts it. The
-stage can't tell the difference.
+Everything between stage tasks is an implementation choice: idiomatic
+Nextflow, not a replica of Martian's orchestration. No run may require a
+shared filesystem (EFS, Fusion): a task reads what Nextflow stages into it,
+and an entry input it reads by reference rather than staged lies in a
+read-only namespace every task sees at one path, which no bundle copies (§8:
+head-node paths on the local and grid profiles, the optional S3 mount on
+`awsbatch`). Paths a stage hides in text (JSON, CSV, an
+untyped `map`) are out of scope ([`RUNNING.md`](RUNNING.md#paths-written-into-text)).
 
-This one decision shapes everything else:
+**The two contracts** (CLAUDE.md, North star):
 
-- **Correctness.** Martian itself resolves what a stage receives: `mre`
-  compiles the run's invocation with Martian's own compiler, walks Martian's own
-  call graph, and resolves each stage's `_args` with Martian's own binding and
-  type functions. The stage runs through the real adapter, so its outputs are
-  what `mrp` would produce. The transpiler never re-derives the science.
-- **Two programs.** `mro2nf` is the transpiler; it runs at build time and emits
-  the Nextflow project. `mre` is the runtime shim, which every task calls at
-  execution time.
-- **Nextflow owns the orchestration.** One process per stage node of Martian's
-  call graph, wired by the data the nodes exchange: Nextflow channels carry each
-  instance's fork, its gates and the outputs it reads, and native `path` staging
-  moves the files.
+1. **The stage ABI.** Each stage task receives `_args` and produces `_outs`
+   in the byte shape the Martian adapter expects.
+2. **Pipeline outputs.** A run publishes the same outputs as `mrp`, every
+   run: deterministic order, `-resume`-stable, and a loud failure rather than
+   a silent divergence.
+
+Requirement 2 is CLAUDE.md's overhead rule: the tasks are PLAN, one per job
+`mrp` runs, and OUTS, and the plumbing does not grow with fork width or
+chunk count (`make bench`, `make test-scale`; §5, **Overhead**).
+
+**Ownership.** Nextflow owns orchestration; `mre` owns Martian value
+semantics and the stage ABI. The driver (the Groovy in `stage.nf` and
+`main.nf`) moves the records `mre` wrote, joins them by key and looks values
+up in them; it computes no Martian value and parses no stage-controlled JSON.
+
+| Concern | Owner | Where |
+|---|---|---|
+| Scheduling: a task per `mrp` job, executors, queues | Nextflow | the processes of `stage.nf`; the profiles (§9) |
+| Staging files between tasks | Nextflow `path` inputs; `mre` names each file to stage | `stage.nf`; `-field-refs`, `-fork-refs`, `-out-refs` (§5) |
+| Caching | Nextflow `-resume` | §5, **Cache identity** |
+| Retries | Nextflow `errorStrategy` on the exit `mre` chooses | `nextflow.config`; `internal/job/retry.go` |
+| Resources | Nextflow `cpus`, `memory`, `accelerator`, `clusterOptions`; `mre` resolves the values as `mrp` | §9; `internal/job/resources.go` |
+| Publishing | Nextflow `publishDir` of OUTS; `mre outs` builds the tree | §5, **OUTS** |
+| Targets, launch params | Nextflow profiles and `params` | §4, §8, §9 |
+| Binding, projection, struct narrowing | `mre`, through Martian's functions | `internal/cg/resolve.go` |
+| Types, file leaves | `mre` | `internal/types`, `internal/shim` (§7) |
+| JSON fidelity | `mre`; the driver carries values as opaque records | `internal/types/object.go`, `cg.MaxValueBytes` |
+| Stage ABI: `_args`, `_jobinfo`, `_outs`, the job | `mre`, `mrjob`, Martian's adapters | `internal/job` (§6) |
+| Forks, elements, gates | `mre` posts them; the driver joins by key | `internal/cg/post.go` (§6) |
+| Pipeline outs | `mre outs`, through Martian's `PostProcess` | `internal/cg/outs.go` |
+
+**Why values stay in Go.** Groovy's JSON reader, the one behind
+`-params-file` and `groovy.json.JsonSlurper`, changes values silently.
+Measured on Nextflow 26.04.7, and against a real `mrp` run:
+
+- `{"f": 1e6}` reads as the `BigDecimal` `1E+6`, which `JsonOutput.toJson`
+  writes as `1E+6`. `mrp`, given `f = 1e6`, writes `"f": 1e+06` into the
+  stage's `_args`.
+- `{"n": 9223372036854775808}` (2^63) reads as the `Long`
+  `-9223372036854775808`, and `9223372036854775807 + 1` wraps the same way.
+
+`mre` decodes every value with `json.Number` (`internal/types/object.go:167`),
+which keeps a number's bytes, and resolves it with Martian's own types. The
+driver carries a value only as a base64 record `mre` wrote. The launch params
+are the one place values cross Groovy JSON: PLAN serializes them
+(`internal/cgnf/plan.go:65`), and `mre plan` re-encodes every float in them as
+`mrp` encodes a literal (`cmd/mre/entryvalues.go:39`, §8).
+
+**Martian code reused.** Martian's code comes from the module `go.mod` pins,
+`github.com/martian-lang/martian`. Two parts are copies, each held to the
+module by a test: the adapters (`vendor-martian/python`, byte for byte, by
+`TestVendoredMartianMatchesModule`) and the retry patterns:
+
+| Martian | Used for | Call site |
+|---|---|---|
+| `syntax` `Parser.ParseSourceBytes`, `Ast.MakePipelineCallGraph` | compiling the invocation and its call graph | `internal/cg/graph.go:76`, `:96`; `internal/cg/source.go:232` |
+| `syntax` `ResolvedBinding.BindingPath`, `SplitExp.BindingPath` | specializing a binding or a split to a fork | `internal/cg/resolve.go:190`, `internal/cg/split.go:411` |
+| `syntax` each type's `FilterJson` | narrowing a value to its declared type | `internal/cg/split.go:189` |
+| `core` `BuildDataForAst` | the invocation data | `internal/cg/source.go:69`, `internal/cg/graph.go:134` |
+| `core` `BuildCallAst`, which converts each value with `convertToExp` (`core/runtime.go:941`) | rebuilding the run's call from its params | `internal/cg/source.go:135` |
+| `core` `ReadOverrides` | reading `mrp --overrides` | `cmd/mre/run.go:197` |
+| `core` `PipestanceOverrides.ApplyResourceOverrides` | each job's resources | `internal/job/resources.go:50`, `internal/job/overrides.go:45` |
+| `core` `LazyArgumentMap.Path` | output projection | `internal/cg/resolve.go:223` |
+| `core` `LazyArgumentMap.ValidateOutputs`, `MarshalerMap.ValidatePipelineOutputs` | output checks | `internal/cg/post.go:189`, `internal/cg/outs.go:168` |
+| `core` `Runtime.ReattachToPipestance`, `Pipestance.PostProcess` | the published tree and outs JSON | `internal/cg/outs.go:130`, `:135` |
+| `core` `NewMetadata` | writing a job's metadata | `internal/job/launch.go:83` |
+| `cmd/mrjob` | running py and comp jobs | `go.mod` `tool`; `Makefile` `build`; `internal/job/launch.go:118` |
+| `adapters/python` | the py adapter, embedded in `mre` | `vendor-martian/adapters.go:12`, `cmd/mre/tools.go:42` |
+| `jobmanagers/retry.json` `retry_on` | which failures are retried, copied and held to the module by `TestRetryPatternsMatchModule` | `internal/job/retry.go:24` |
+
+`mre` mirrors only what Martian does not export (§6, end).
+
+**No undocumented divergence.** Every known difference from `mrp` in a
+stage's `_args` or `_outs`, the published tree, `pipeline_outs.json` or a
+run's outcome is an entry of the allowlist
+[`test/e2e/divergences.json`](../test/e2e/divergences.json), with its
+justification and the tests that prove it. The differential excuses a
+difference only through an entry, and
+[`FEATURE_COVERAGE.md`'s divergence table](FEATURE_COVERAGE.md#divergences-from-mrp)
+is generated from it (`make docs-divergences`; `TestFeatureCoverageIsCurrent`
+fails while it is stale). A difference with no entry is a bug.
+
+**Two programs.** `mro2nf` is the transpiler; it runs at build time and
+emits the Nextflow project. `mre` is the runtime shim, which every task calls
+at execution time.
 
 ```
           build time (mro2nf)                       run time (Nextflow + mre)
