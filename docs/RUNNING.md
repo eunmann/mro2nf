@@ -62,25 +62,41 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   (`{"values": [5, 6, 7]}`). On the command line it fails with `entry override
   of a non-scalar type cannot be a string; pass the value as typed JSON in a
   -params-file`.
-- A file input is an absolute path or an `s3://` URI. Each task stages the
-  files it reads. Other URI schemes (`http://`, `https://`, `ftp://`) are
-  refused unless you pass `--mro2nf_allow_remote_inputs true`. The `awsbatch`
-  and `healthomics` profiles refuse head-node paths, so give them `s3://`
-  URIs.
-- A stage receives a file input at a path in its own task directory, with the
-  same file name and content. Under `mrp` it receives the original path. A
-  stage that writes that path into text for another stage to open works only
-  on some profiles ([Paths written into text](#paths-written-into-text)).
-- Only the named file is staged, not the files beside it, whether it is a
-  pipeline input or another stage's output. A stage that opens a companion
-  file next to its input, such as an index beside a BAM, finds it under `mrp`
-  but not under mro2nf. Declare the companion as its own input, and as its
-  own output of the stage that writes it, and have the stage open it from
-  that input, or pass a directory input that holds both files. HealthOmics
+- A file input is an absolute path or an `s3://` URI. Other URI schemes
+  (`http://`, `https://`, `ftp://`) are refused unless you pass
+  `--mro2nf_allow_remote_inputs true`. The `awsbatch` and `healthomics`
+  profiles refuse head-node paths, so give them `s3://` URIs.
+- On the `standard` and grid profiles, whose tasks run on the host's
+  filesystem, every task reads an absolute path in place, and a stage
+  receives that path, as under `mrp`. Nothing is copied or linked into a
+  task's directory. A stage that writes the path into text for another stage
+  to open finds it in every task. A path that is or holds the run's work
+  directory is refused.
+- On the `docker` profile an absolute path is staged, as is a URI input on
+  every profile: each task that reads it stages its own copy, and the stage
+  receives a path in its own task directory, with the same file name and
+  content, where `mrp` would receive the value. A stage that writes that
+  path into text for another stage to open works only on some profiles
+  ([Paths written into text](#paths-written-into-text)). On `awsbatch`, an
+  `s3://` input of a bucket the instances mount is read in place instead
+  ([AWS Batch](#aws-batch)).
+- `-resume` keys an input read in place on its path, as `mrp`'s restart
+  keys a pipestance on its invocation: a run over a file changed at the same
+  path reuses the cached tasks. Give changed data a new path, or run without
+  `-resume`. A staged input is keyed on its path, size and modification
+  time, as Nextflow keys a file; for a directory that is the directory's own
+  size and time, which a change to a file inside it leaves as they were.
+- A task stages only the files an input names, not the files beside them. A
+  stage that opens a companion file next to its input, such as an index
+  beside a BAM, finds it under `mrp` but not under mro2nf when the input is
+  another stage's output or an input the run stages. Declare the companion
+  as its own input, and as its own output of the stage that writes it, and
+  have the stage open it from that input, or pass a directory input that
+  holds both files. HealthOmics
   [requires the same](https://docs.aws.amazon.com/omics/latest/dev/workflows-run-inputs.html)
-  of index files. Neither applies to an input read through the `awsbatch`
-  mount, which a stage receives at its mounted path, beside the rest of its
-  bucket.
+  of index files. An input read in place on `standard` and the grid
+  profiles, or through the `awsbatch` mount, has its directory beside it, as
+  under `mrp`.
 - Nextflow's v1 syntax parser, the default before 26.04 or under
   `NXF_SYNTAX_PARSER=v1`, converts command-line values before the run sees
   them: `--s 007` becomes the number `7`, which fails a `string` input. Set
@@ -353,14 +369,14 @@ output URI.
 ## Paths written into text
 
 mro2nf supports Martian's typed file flow: a `path` or `file` value, and each
-file leaf of a struct, array or map whose type declares it, is staged into
-every task that reads it, on every profile.
+file leaf of a struct, array or map whose type declares it, reaches every
+task that reads it, on every profile, read in place or staged.
 
 A stage that writes a path into text, such as a JSON or CSV file's contents,
 an untyped `map` or a `string`, for a later job to open relies on `mrp`'s
 shared filesystem. No task stages such a path, so it opens only where the
 later task sees the same file at that path. This is out of scope, not a bug:
-give the file a file type and it is staged everywhere.
+give the file a file type and it reaches every task that reads it.
 
 | Profile | the path of a file input | the path of a stage's output | a path in an untyped input |
 |---|---|---|---|
@@ -559,10 +575,16 @@ In the task's work directory:
 - **`entry input '<name>': the path contains '<c>', which Nextflow's task
   stage-in script leaves unquoted`**: Nextflow cannot stage a file whose name
   contains `*`, `?`, `[`, `]`, `{`, `}`, `$` or a control character. Rename
-  the file.
+  the file, or, on the `standard` and grid profiles, which read head-node
+  paths in place, pass it as an absolute path rather than a `file:` URI.
 - **`entry input '<name>': a head-node path is not staged on this profile;
   pass an s3:// URI`**: the `awsbatch` and `healthomics` profiles need file
   inputs on S3.
+- **`entry input '<name>' is or holds the run's work dir <dir>`**: on the
+  `standard` and grid profiles every task reads a head-node input in place,
+  so the input cannot hold the tasks' own directories. Pass a directory that
+  does not hold the work directory, or launch with `-work-dir` outside the
+  input.
 - **`entry input '<name>': scheme '<scheme>' is not allowed`**: pass a path or
   an `s3://` URI, or `--mro2nf_allow_remote_inputs true`.
 - **`entry input '<name>': bucket <bucket> is not mounted at

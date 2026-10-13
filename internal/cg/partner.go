@@ -214,7 +214,7 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 		}
 
 		ed := filepath.Join(dir, IndexToken(ix))
-		if err := writeElementValue(ed, el, param, w.tbl, w.mount); err != nil {
+		if err := writeElementValue(ed, el, param, w.tbl, w.roots); err != nil {
 			return err
 		}
 

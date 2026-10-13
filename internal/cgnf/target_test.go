@@ -142,6 +142,35 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 	}
 }
 
+// TestEmitHostInputsInPlaceOffContainers (#543): the local and grid
+// profiles read a head-node entry input in place, and the container
+// profiles, which all include conf/container.config, stage it; PLAN and
+// every stage task take the one param, and PLAN the run's work dir, which no
+// input read in place may hold.
+func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "entry_file"))
+	cfg, ctr := tree["nextflow.config"], tree["conf/container.config"]
+
+	top, _, _ := strings.Cut(cfg, "profiles {")
+	if strings.Count(cfg, "mro2nf_host_in_place") != 1 || !strings.Contains(top, "params.mro2nf_host_in_place = true\n") {
+		t.Errorf("nextflow.config does not read head-node inputs in place before its profiles alone:\n%s", cfg)
+	}
+
+	if !strings.Contains(ctr, "params.mro2nf_host_in_place = false\n") || strings.Contains(tree["conf/healthomics.config"], "mro2nf_host_in_place") {
+		t.Errorf("conf/container.config does not stage head-node inputs, alone:\n%s", ctr)
+	}
+
+	for _, want := range []string{" -host-in-place=${on(params.mro2nf_host_in_place)} ", " -run-workdir ${shq(workflow.workDir.toUriString())}"} {
+		if !strings.Contains(tree["main.nf"], want) {
+			t.Errorf("PLAN lacks %q:\n%s", want, tree["main.nf"])
+		}
+	}
+
+	if want := "if (on(params.mro2nf_host_in_place)) {\n        cmd += ' -host-in-place'"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
 // TestAWSBatchProfilePollsEveryTwoSeconds: the awsbatch profile checks job
 // status every 2 s rather than Nextflow's 10 s Batch default (#537), scoped
 // to the awsbatch executor so a local executor keeps its 100 ms.

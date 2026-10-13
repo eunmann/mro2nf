@@ -236,7 +236,7 @@ func (r *publishRun) post(node, scratch string, outs map[string]any) error {
 		return err
 	}
 
-	conf, err := shim.ConfineStage(scratch, "main", false, "")
+	conf, err := shim.ConfineStage(scratch, "main", false, shim.Roots{})
 	if err != nil {
 		return err
 	}

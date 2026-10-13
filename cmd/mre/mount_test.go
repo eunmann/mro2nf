@@ -167,35 +167,78 @@ echo "{\"same\":\"$ref\"}" > "$meta/_outs"
 touch "$meta/_complete"
 `
 
-// TestStageKeepsMountedPaths: a run planned under -s3-mount hands its stage
-// the mounted path itself, as mrp hands the path it was given, so a path the
-// stage writes into an output names the same file in every task; and a
-// stage that returns the path, under a strict confinement, posts it as it
-// is, with no copy of the mounted tree in any bundle.
-func TestStageKeepsMountedPaths(t *testing.T) {
+// TestStageKeepsPathsReadInPlace: a run hands its stage the path it reads
+// in place, an s3:// value planned under -s3-mount at its mounted path and a
+// head-node path as it is given, as mrp hands the path it was given, so a
+// path the stage writes into an output names the same file in every task;
+// and a stage that returns the path, under a strict confinement, posts it
+// as it is, with no copy of the tree in any bundle. A head-node path is
+// read in place under -host-in-place, as on the local and grid profiles.
+func TestStageKeepsPathsReadInPlace(t *testing.T) {
 	root := s3Root(t)
-	ref := filepath.Join(root, "bucket", "ref")
+	host := filepath.Join(t.TempDir(), "ref")
+	if err := os.MkdirAll(host, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, filepath.Join(host, "genome.fa"), ">g\n")
+
+	cases := []struct {
+		name, value, ref string
+		planFlags, flags []string
+	}{
+		{"mounted", "s3://bucket/ref", filepath.Join(root, "bucket", "ref"), []string{"-host-inputs=false"}, nil},
+		{"host", host, host, []string{"-host-in-place"}, []string{"-host-in-place"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stageEcho(t, root, tc.value, tc.planFlags, tc.flags)
+
+			for _, record := range []string{"leaves", "files"} {
+				if got := readText(t, filepath.Join("plan", record)); got != "" {
+					t.Errorf("the %s record holds %q, want nothing staged", record, got)
+				}
+			}
+
+			assertEchoed(t, tc.ref)
+		})
+	}
+}
+
+// stageEcho plans echoMountMRO with ref given as value under -s3-mount
+// root and planFlags, into plan/ of a new cwd, and runs its stage task there
+// under a strict confinement and flags.
+func stageEcho(t *testing.T, root, value string, planFlags, flags []string) {
+	t.Helper()
 
 	dir := t.TempDir()
-	mro := writeTestFile(t, filepath.Join(dir, "pipeline.mro"), echoMountMRO)
+	mro := writeTestFile(t, filepath.Join(dir, "pipeline.mro"), strings.Replace(echoMountMRO, "s3://bucket/ref", value, 1))
 
 	if err := os.WriteFile(filepath.Join(dir, "echo.sh"), []byte(echoScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
-	plan := t.TempDir()
-	if _, err := mreIn(t, mro, "plan", "-psid", "mrp", "-host-inputs=false", "-s3-mount", root, "-work", plan,
-		"-call", filepath.Join(plan, "call"), "-nodes", filepath.Join(plan, "nodes"), "-roots", filepath.Join(plan, "roots"),
-		"-leaves", filepath.Join(plan, "leaves"), "-files", filepath.Join(plan, "files")); err != nil {
+	t.Chdir(t.TempDir())
+
+	if _, err := mreIn(t, mro, append([]string{
+		"plan", "-psid", "mrp", "-s3-mount", root, "-work", "plan",
+		"-call", "plan/call", "-nodes", "plan/nodes", "-roots", "plan/roots", "-leaves", "plan/leaves", "-files", "plan/files",
+	},
+		planFlags...)...); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 
-	t.Chdir(t.TempDir())
-
-	if _, err := mreIn(t, mro, append([]string{"stage", "-call", filepath.Join(plan, "call"), "-s3-mount", root, "-confine"},
+	if _, err := mreIn(t, mro, append(append([]string{"stage", "-call", "plan/call", "-s3-mount", root, "-confine"}, flags...),
 		unsplitTask("P.ECHO", ".")[1:]...)...); err != nil {
 		t.Fatalf("stage: %v", err)
 	}
+}
+
+// assertEchoed requires the ECHO task in the cwd to have been handed ref
+// and to have posted it as it is, with no files dir in any bundle.
+func assertEchoed(t *testing.T, ref string) {
+	t.Helper()
 
 	for bundle, want := range map[string]string{
 		"args":       `{"ref":"` + ref + `"}`,

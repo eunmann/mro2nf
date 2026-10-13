@@ -7,10 +7,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/google/go-cmp/cmp"
 )
 
 // mountedFixture records an entry input's path in a JSON output that
@@ -85,6 +87,126 @@ func TestDockerMountedS3Inputs(t *testing.T) {
 		goldenJSON(t, mountedFixture, filepath.Join(proj, "results", "pipeline_outs.json"), golden)
 		assertReadInPlace(t, proj, s3)
 	})
+}
+
+// TestMrpDiffHostEntryPaths (#543): given head-node paths, mounted_paths
+// runs under mrp and on the local profile to the same outputs and stage
+// ABI, and every path below the inputs that a stage's _args names is the
+// same string under both: the entry paths mrp passes, the reference path
+// SETUP_REF returns, and the read files MAKE_SHARD's split chooses.
+func TestMrpDiffHostEntryPaths(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	bin := martianBin(t)
+
+	shardSkip(t)
+
+	dir := filepath.Join(t.TempDir(), mountedFixture)
+	if err := shim.CopyTree(filepath.Join(root, "testdata", mountedFixture), dir); err != nil {
+		t.Fatal(err)
+	}
+
+	input := filepath.Join(dir, "input")
+	mro := filepath.Join(dir, "pipeline.mro")
+
+	src, err := os.ReadFile(mro)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(mro); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFileT(t, mro, strings.ReplaceAll(string(src), `"input/`, `"`+input+`/`))
+
+	tmp := t.TempDir()
+	runMrpAt(t, bin, dir, "pipeline.mro", tmp)
+
+	proj := transpileDir(t, dir)
+	if err := runNextflow(t, proj, mrpPoolArgs(t, proj)...); err != nil {
+		t.Fatalf("nextflow: %v", err)
+	}
+
+	compareMrpToNextflow(t, mountedFixture, tmp, proj)
+	compareStageABI(t, mountedFixture, tmp, proj)
+
+	mrpArgs, err := filepath.Glob(filepath.Join(tmp, "mrp", "MOUNTED_PATHS", "*", "fork0", "*", "_args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nfArgs, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "*", "_args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mrpPaths, nfPaths := pathsUnder(t, input, ran(mrpArgs, "_jobinfo")), pathsUnder(t, input, ran(nfArgs, mreStageFile))
+	if len(mrpPaths) == 0 {
+		t.Fatal("no _args of mrp's names a path below the inputs")
+	}
+
+	if d := cmp.Diff(mrpPaths, nfPaths); d != "" {
+		t.Errorf("the paths below the inputs the stages' _args name (-mrp +mro2nf):\n%s", d)
+	}
+}
+
+// ran are the _args files of args that a phase ran with: those beside a
+// file named stamp, which only a phase that ran writes, each once, not
+// again through mrp's link to its phase dir.
+func ran(args []string, stamp string) []string {
+	var out []string
+
+	for _, a := range args {
+		dir := filepath.Dir(a)
+
+		info, err := os.Lstat(dir)
+		if err == nil && info.Mode()&fs.ModeSymlink == 0 && regularFileExists(filepath.Join(dir, stamp)) {
+			out = append(out, a)
+		}
+	}
+
+	return out
+}
+
+// pathsUnder is every string at or below dir that the JSON files at paths
+// hold, once per occurrence, sorted.
+func pathsUnder(t *testing.T, dir string, paths []string) []string {
+	t.Helper()
+
+	var out []string
+
+	for _, p := range paths {
+		var v any
+
+		readJSON(t, p, &v)
+		walkJSONStrings(v, func(s string) {
+			if s == dir || strings.HasPrefix(s, dir+"/") {
+				out = append(out, s)
+			}
+		})
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+func walkJSONStrings(v any, visit func(string)) {
+	switch x := v.(type) {
+	case string:
+		visit(x)
+	case []any:
+		for _, e := range x {
+			walkJSONStrings(e, visit)
+		}
+	case map[string]any:
+		for _, e := range x {
+			walkJSONStrings(e, visit)
+		}
+	}
 }
 
 // TestResumeRechecksTheS3Mount: PLAN reads an s3:// input in place only

@@ -110,6 +110,9 @@ def mreStage(task, Map meta, phase, rest) {
     if (params.mro2nf_s3_mount) {
         cmd += " -s3-mount ${shq(params.mro2nf_s3_mount)}"
     }
+    if (on(params.mro2nf_host_in_place)) {
+        cmd += ' -host-in-place'
+    }
     if (meta.overrides) {
         cmd = "printf '%s\\n' ${shq(meta.overrides)} > overrides.json\n${cmd} -overrides overrides.json"
     }

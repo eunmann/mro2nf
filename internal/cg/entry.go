@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -37,18 +39,33 @@ const stageUnsafe = "*?[]{}$"
 // fileScheme is the scheme of a head-node path, as Nextflow reads one.
 const fileScheme = "file"
 
-// EntryLeaf is one file value of the run's entry inputs that a task stages:
+// EntryLeaf is one file value of the run's entry inputs that names a file:
 // an absolute path or a URI, and the entry input it is first found in.
-// Mounted is a path under the run's S3 mount, which every task reads in
-// place, so none stages it.
+// InPlace is a value every task reads where it is (ReadInPlace), as mrp
+// passes a stage the path it was given, so none stages it.
 type EntryLeaf struct {
 	Input   string
 	Value   string
-	Mounted bool
+	InPlace bool
 }
 
-// EntryLeaves are the file values of the run's entry inputs that a task
-// stages, each once, in the order the type walk first reaches them: every
+// ReadInPlace is which entry file values every task of a run reads where
+// they are: a path under the S3 mount, and, where Host, any absolute path,
+// as on the profiles whose tasks run on the host's own filesystem. A
+// container profile's task sees only what it stages and mounts, so there
+// Host is false and a head-node path is staged.
+type ReadInPlace struct {
+	Mount shim.Mount
+	Host  bool
+}
+
+// Holds reports whether every task reads value in place.
+func (r ReadInPlace) Holds(value string) bool {
+	return r.Mount.Holds(value) || r.Host && filepath.IsAbs(value)
+}
+
+// EntryLeaves are the file values of the run's entry inputs that name a
+// file, each once, in the order the type walk first reaches them: every
 // file leaf of the call's arguments naming an absolute path or a URI. A
 // relative path names nothing from a stage's job dir under mrp either, and
 // reaches the stage as given.
@@ -67,6 +84,30 @@ func (g *Graph) EntryLeaves() ([]EntryLeaf, error) {
 	}
 
 	return out, nil
+}
+
+// Roots are the read-only roots of the run's tasks: the S3 mount, and each
+// entry file value in reads in place.
+func (g *Graph) Roots(in ReadInPlace) (shim.Roots, error) {
+	leaves, err := g.EntryLeaves()
+	if err != nil {
+		return shim.Roots{}, err
+	}
+
+	paths := []string{string(in.Mount)}
+
+	for _, l := range leaves {
+		if in.Holds(l.Value) {
+			paths = append(paths, l.Value)
+		}
+	}
+
+	roots, err := shim.NewRoots(paths...)
+	if err != nil {
+		return shim.Roots{}, fmt.Errorf("entry roots: %w", err)
+	}
+
+	return roots, nil
 }
 
 // entryFileValues are every file value of the call's arguments, each once,
@@ -179,12 +220,61 @@ func (g *Graph) outsEntryFiles(values map[string]int) ([]int, error) {
 	return slices.Sorted(maps.Keys(found)), nil
 }
 
+// VetHostLeaf refuses a head-node path read in place where the tasks do not
+// see the host's paths, as hostPaths says they do, and one that is or holds
+// the run's work dir, workDir, whose stage outputs every task would then
+// read as an input, the input and the work dir each by its given or its real
+// path. A workDir that is a URI holds no host path. The errors name the
+// input, not the value.
+func VetHostLeaf(l EntryLeaf, hostPaths bool, workDir string) error {
+	if !hostPaths {
+		return fmt.Errorf("%w: entry input '%s': a head-node path is not read on this profile; pass an s3:// URI", ErrEntryFile, l.Input)
+	}
+
+	if !filepath.IsAbs(workDir) {
+		return nil
+	}
+
+	roots, err := shim.NewRoots(l.Value)
+	if err != nil {
+		return fmt.Errorf("%w: entry input '%s' does not resolve: %w", ErrEntryFile, l.Input, unnamed(err))
+	}
+
+	realWork, err := filepath.EvalSymlinks(workDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		realWork = workDir
+	} else if err != nil {
+		return fmt.Errorf("vet entry input '%s': resolve the run's work dir: %w", l.Input, err)
+	}
+
+	if roots.Holds(workDir) || roots.Holds(realWork) {
+		return fmt.Errorf("%w: entry input '%s' is or holds the run's work dir %s, and every task reads a head-node entry input in place; pass a directory that does not hold it, or run with -work-dir outside it",
+			ErrEntryFile, l.Input, workDir)
+	}
+
+	return nil
+}
+
+// unnamed is the cause of the failure err to resolve a value, without the
+// value it names.
+func unnamed(err error) error {
+	if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
+		return pe.Err
+	}
+
+	if cause := errors.Unwrap(err); cause != nil {
+		return cause
+	}
+
+	return err
+}
+
 // VetEntryLeaf refuses an entry file value a run may not stage. file()
 // on the head node fetches any URL Nextflow has a provider for and reads
 // any path the head node sees, and an entry value comes from whoever
 // launches the run: an s3:// URI is always accepted, a head-node path
 // (absolute, or a file: URI) only where hostPaths, and any other scheme only
-// where remote. A path holding a character Nextflow's stage-in script
+// where remote. A value holding a character Nextflow's stage-in script
 // leaves for bash to expand is refused everywhere. The errors name the
 // input, not the value, which may carry a credential.
 func VetEntryLeaf(l EntryLeaf, hostPaths, remote bool) error {

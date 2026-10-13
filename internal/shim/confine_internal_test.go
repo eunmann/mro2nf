@@ -94,7 +94,7 @@ func sameFile(t *testing.T, a, b string) bool {
 func (e confineEnv) markOut(t *testing.T, value string, strict bool) (string, error) {
 	t.Helper()
 
-	conf, err := ConfineStage(e.work, "main", strict, "")
+	conf, err := ConfineStage(e.work, "main", strict, Roots{})
 	if err != nil {
 		t.Fatal(err)
 	}

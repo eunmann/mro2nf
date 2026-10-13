@@ -436,9 +436,12 @@ func planEntryFile(t *testing.T, value string, flags ...string) (string, error) 
 }
 
 // TestPlanRefusesEntryFilesItMayNotStage: an entry file value is vetted
-// before the driver hands it to file(): a glob character fails on every
-// profile, a head-node path where the profile sees no head-node file, and
-// a URI scheme but s3 unless remote inputs are allowed.
+// before the driver hands it to file(): a glob character in a staged value
+// fails on every profile, a head-node path where the profile sees no
+// head-node file, one read in place where it is or holds the run's work
+// dir, and a URI scheme but s3 unless remote inputs are allowed. A
+// head-node path read in place, which no task stages, may hold any
+// character, as under mrp.
 func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 	cases := []struct {
 		value string
@@ -446,8 +449,15 @@ func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 		ok    bool
 	}{
 		{"/data/reads.txt", nil, true},
+		{"/data/reads.txt", []string{"-host-in-place"}, true},
+		{"/data/s[1].txt", []string{"-host-in-place"}, true},
 		{"/data/s[1].txt", []string{"-remote-inputs"}, false},
+		{"file:///data/s[1].txt", []string{"-host-in-place", "-remote-inputs"}, false},
 		{"/data/reads.txt", []string{"-host-inputs=false"}, false},
+		{"/data/reads.txt", []string{"-host-in-place", "-host-inputs=false"}, false},
+		{"/data", []string{"-host-in-place", "-run-workdir", "/data/proj/work"}, false},
+		{"/data", []string{"-run-workdir", "/data/proj/work"}, true},
+		{"/data/reads.txt", []string{"-host-in-place", "-run-workdir", "/data/proj/work"}, true},
 		{"s3://bucket/reads.txt", []string{"-host-inputs=false"}, true},
 		{"http://host/reads.txt", nil, false},
 		{"http://host/reads.txt", []string{"-remote-inputs"}, true},
@@ -461,9 +471,10 @@ func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 	}
 }
 
-// TestArgsReadsStagedEntryFiles: the plan lists the run's entry file and
-// the instance that reads it, and the args step reads the copy the task
-// staged, not the value's path, which an isolated task cannot see.
+// TestArgsReadsStagedEntryFiles: the plan lists the run's entry file, a
+// head-node path a container profile's tasks do not see, and the instance
+// that reads it, and the args step reads the copy the task staged, not the
+// value's path.
 func TestArgsReadsStagedEntryFiles(t *testing.T) {
 	value := filepath.Join(t.TempDir(), "reads.txt")
 

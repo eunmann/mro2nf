@@ -38,9 +38,9 @@ type PostSpec struct {
 	// Gates, when set, is the file that receives the nodes this instance's
 	// outs disable at its fork (Gates).
 	Gates string
-	// Mount is the run's S3 mount, whose paths the elements and fields
-	// name as they are.
-	Mount shim.Mount
+	// Roots are the run's read-only roots, whose paths the elements and
+	// fields name as they are.
+	Roots shim.Roots
 }
 
 // Post stamps the instance's outs with its node and fork, checks them as mrp
@@ -90,7 +90,7 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 		return Instance{}, nil, err
 	}
 
-	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), mount: spec.Mount, values: true}
+	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), roots: spec.Roots, values: true}
 	if err := w.posted(in); err != nil {
 		return Instance{}, nil, err
 	}
@@ -174,12 +174,12 @@ func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fo
 // fork's ordinal, zero-padded so names sort in that order, after the
 // ordinals of any outer parts the producer does not fix, joined by dots.
 // With values, each dir also holds the fork's element of the source
-// collection as a bundle, its file leaves staged but those under mount.
+// collection as a bundle, its file leaves staged but those under roots.
 type forkWriter struct {
 	r      *resolver
 	dir    string
 	tbl    *types.Table
-	mount  shim.Mount
+	roots  shim.Roots
 	values bool
 }
 
@@ -285,7 +285,7 @@ func (w forkWriter) writeValue(ed string, c indexed, ix syntax.CollectionIndex, 
 		return err
 	}
 
-	return writeElementValue(ed, el, param, w.tbl, w.mount)
+	return writeElementValue(ed, el, param, w.tbl, w.roots)
 }
 
 // source is root's collection under outer, as core expands a fork from a
@@ -337,7 +337,7 @@ func (g *Graph) collectionParam(name string, split *syntax.SplitExp, root *synta
 }
 
 // writeElementValue writes an element as a bundle of its one param.
-func writeElementValue(dir string, el json.Marshaler, param *syntax.StructMember, tbl *types.Table, mount shim.Mount) error {
+func writeElementValue(dir string, el json.Marshaler, param *syntax.StructMember, tbl *types.Table, roots shim.Roots) error {
 	raw, err := marshal(el)
 	if err != nil {
 		return err
@@ -348,7 +348,7 @@ func writeElementValue(dir string, el json.Marshaler, param *syntax.StructMember
 		return fmt.Errorf("decode fork element: %w", err)
 	}
 
-	if err := shim.WriteBundle(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, tbl, shim.Opts{Mount: mount}); err != nil {
+	if err := shim.WriteBundle(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, tbl, shim.Opts{Roots: roots}); err != nil {
 		return fmt.Errorf("write fork element %s: %w", dir, err)
 	}
 

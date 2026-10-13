@@ -1,0 +1,35 @@
+filetype txt;
+
+# #520: a stage that opens a companion file beside a file input another stage
+# wrote, as a tool opens an index beside a BAM. mrp passes the path in the
+# producer's job dir, beside every file the producer wrote, so the companion
+# is found; mro2nf stages only the files the producer's outs name, so it is
+# not, and the stage fails (divergences.json, input-file-siblings).
+# Exercised by TestMrpDiffFailureParity.
+stage WRITE_WITH_INDEX(
+    out txt reads,
+    src py  "stages/write_with_index",
+)
+
+stage READ_WITH_INDEX(
+    in  txt reads,
+    out int index_bytes,
+    src py  "stages/read_with_index",
+)
+
+pipeline OFS(
+    out int index_bytes,
+)
+{
+    call WRITE_WITH_INDEX()
+
+    call READ_WITH_INDEX(
+        reads = WRITE_WITH_INDEX.reads,
+    )
+
+    return (
+        index_bytes = READ_WITH_INDEX.index_bytes,
+    )
+}
+
+call OFS()

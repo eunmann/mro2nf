@@ -80,7 +80,7 @@ func readCall(path string) (string, error) {
 type argsFlags struct {
 	node, digest, leaves string
 	in, forks            repeatedFlag
-	mount                shim.Mount
+	roots                shim.Roots
 }
 
 func (a *argsFlags) register(fs *flag.FlagSet) {
@@ -109,7 +109,7 @@ func (a *argsFlags) write(g *cg.Graph, out string) (cg.Instance, error) {
 		return cg.Instance{}, fmt.Errorf("args: %w", err)
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Mount: a.mount})
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Roots: a.roots})
 	if err != nil {
 		return cg.Instance{}, fmt.Errorf("args: %w", err)
 	}
@@ -146,7 +146,7 @@ func stagedEntryFiles(g *cg.Graph, leaves string) (map[string]string, error) {
 // postFlags are where a post step writes what a finished instance feeds.
 type postFlags struct {
 	forks, fields, gates string
-	mount                shim.Mount
+	roots                shim.Roots
 }
 
 func (p *postFlags) register(fs *flag.FlagSet) {
@@ -158,7 +158,7 @@ func (p *postFlags) register(fs *flag.FlagSet) {
 // post stamps the outs bundle outs of the instance the args bundle args
 // stamps and writes the fork elements of every root it feeds.
 func (p *postFlags) post(g *cg.Graph, args, outs string) error {
-	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, Forks: p.forks, Fields: p.fields, Gates: p.gates, Mount: p.mount}); err != nil {
+	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, Forks: p.forks, Fields: p.fields, Gates: p.gates, Roots: p.roots}); err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
 

@@ -24,8 +24,8 @@ import (
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
 	entry, values, mropath, call, nodes, roots, leaves, files, work string
-	overrides, psid, s3Mount                                        string
-	hostInputs, remoteInputs                                        bool
+	overrides, psid, s3Mount, runWork                               string
+	hostInputs, hostInPlace, remoteInputs                           bool
 	local                                                           job.Pool
 }
 
@@ -41,6 +41,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
 	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
+	fs.BoolVar(&f.hostInPlace, "host-in-place", false, "every task reads a head-node path in place, as the tasks run on the host's filesystem; otherwise it is staged")
+	fs.StringVar(&f.runWork, "run-workdir", "", "the run's work dir, which no head-node path read in place may be or hold")
 	fs.BoolVar(&f.remoteInputs, "remote-inputs", false, "an entry file value may name a URI of any scheme, not only s3")
 	fs.StringVar(&f.s3Mount, "s3-mount", "", "the root every task may mount input buckets under, read-only: an s3://<bucket>/<key> entry file value whose bucket is a directory there is <root>/<bucket>/<key>, which no task stages; any other is staged")
 	fs.StringVar(&f.work, "work", ".", "scratch dir")
@@ -51,11 +53,12 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 // entry and the run's entry values as mrp builds an invocation from its
 // JSON form, compiles it as mrp does, so mrp's refusals fail the run before
 // any stage starts, and checks its call graph is within the witness's, and
-// that every entry file value is one the run may stage, or, an s3:// one
-// of a bucket the -s3-mount root shows, one the mount shows at the path the
-// call names it by.
-// It writes the call every task compiles, each witness node's spec digest,
-// disabled instances and entry files, and the forks of each entry-fed root.
+// that every entry file value is one the run may read: a head-node path
+// read in place under -host-in-place, one the -s3-mount root shows, an
+// s3:// one of a bucket that root shows rewritten to its path there, and
+// any other staged. It writes the call every task compiles, each witness
+// node's spec digest, disabled instances and entry files, and the forks of
+// each entry-fed root.
 func runPlan(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 
@@ -105,7 +108,7 @@ func runPlan(_ context.Context, argv []string) error {
 		return fmt.Errorf("plan: %w", err)
 	}
 
-	p, err := cg.MakePlan(src, inv, paths, f.work, mount)
+	p, err := cg.MakePlan(src, inv, paths, f.work, cg.ReadInPlace{Mount: mount, Host: f.hostInPlace})
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
 	}
@@ -121,13 +124,21 @@ func runPlan(_ context.Context, argv []string) error {
 	return f.write(p, job.Runtime{PSID: f.psid, Overrides: over, Local: f.local})
 }
 
-// vetLeaves refuses an entry file value the run may not read: a mounted one
-// the mount does not show, any other one the run may not stage.
+// vetLeaves refuses an entry file value the run may not read: one under
+// the mount the mount does not show, a head-node path where the tasks do
+// not see it or that holds the work dir, and a staged one the run may not
+// stage.
 func (f *planFlags) vetLeaves(leaves []cg.EntryLeaf, mount shim.Mount) error {
 	for _, l := range leaves {
-		vet := cg.VetEntryLeaf(l, f.hostInputs, f.remoteInputs)
-		if l.Mounted {
+		var vet error
+
+		switch {
+		case mount.Holds(l.Value):
 			vet = cg.VetMountedLeaf(l, mount)
+		case l.InPlace:
+			vet = cg.VetHostLeaf(l, f.hostInputs, f.runWork)
+		default:
+			vet = cg.VetEntryLeaf(l, f.hostInputs, f.remoteInputs)
 		}
 
 		if vet != nil {
@@ -145,7 +156,7 @@ func (f *planFlags) writeEntryFiles(p cg.Plan) error {
 	var leaves, files strings.Builder
 
 	for i, l := range p.Leaves {
-		if !l.Mounted {
+		if !l.InPlace {
 			fmt.Fprintf(&leaves, "%d %s\n", i, base64.StdEncoding.EncodeToString([]byte(l.Value)))
 		}
 	}
