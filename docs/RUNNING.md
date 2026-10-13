@@ -127,7 +127,8 @@ in the `.mro`'s `call`:
 The `mro2nf_*` parameters form the `mro2nf options` group, and `outdir` the
 `Output options` group; `job_resources`, a map, sits at the top level, as
 nf-schema's meta-schema admits only scalar types in a group. Those a profile
-sets are marked `hidden`.
+sets are marked `hidden` and given no default, as the profile picks their
+value.
 
 The schema validates nothing at launch: the project loads no nf-schema
 plugin, which a run would have to download. The run's PLAN task, its first,

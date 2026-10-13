@@ -28,7 +28,9 @@ type launchParam struct {
 	// the schema's root.
 	group string
 	desc  string
-	// hidden marks a param a profile sets, not the user.
+	// hidden marks a param a profile sets, not the user, which the schema
+	// gives no default: a launch form writing the default into a params file
+	// would override the profile's value.
 	hidden bool
 	// omics is the param's description in the HealthOmics template, empty
 	// where a HealthOmics run cannot set it.
@@ -122,7 +124,7 @@ func toolParams(psid string) []paramBlock {
 		{
 			comment: `// Fail a stage task whose output resolves outside its work dir instead of
 // copying it in, for a run under an isolating executor such as docker.`,
-			params: []launchParam{boolParam("mro2nf_confine", false, "fail a stage task whose output resolves outside its work directory, instead of copying the file in")},
+			params: []launchParam{profileSet(boolParam("mro2nf_confine", false, "fail a stage task whose output resolves outside its work directory, instead of copying the file in"))},
 		},
 		{params: []launchParam{stringParam("mro2nf_psid", psid, "", "the pipestance ID mrp takes as its second argument; it names each job in _jobinfo")}},
 	}
@@ -158,7 +160,7 @@ func inputParams() []paramBlock {
 // s3:// entry input as its path there, as mrp passes the path it was given,
 // so a path one stage writes out names the same file in every task, and no
 // task downloads it.`,
-			params: []launchParam{stringParam("mro2nf_s3_mount", nil, "directory-path", "the directory every task's host mounts input buckets under, read-only, one directory per bucket")},
+			params: []launchParam{profileSet(stringParam("mro2nf_s3_mount", nil, "directory-path", "the directory every task's host mounts input buckets under, read-only, one directory per bucket"))},
 		},
 		{
 			comment: `// The image every task of a container profile runs in, which those

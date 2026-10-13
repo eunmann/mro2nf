@@ -175,6 +175,54 @@ func TestEmitParamsSchema(t *testing.T) {
 	}
 }
 
+// TestProfileParamsHaveNoDefault: every param a -profile sets, in
+// nextflow.config's profiles or the conf/container.config they include, is
+// hidden and has no default, so a launch form that writes the schema's
+// defaults into a params file cannot override the profile's value.
+func TestProfileParamsHaveNoDefault(t *testing.T) {
+	tree := emitSource(t, typedEntrySrc)
+
+	var doc struct {
+		Defs map[string]struct {
+			Properties map[string]map[string]any `json:"properties"`
+		} `json:"$defs"`
+	}
+
+	if err := json.Unmarshal([]byte(tree["nextflow_schema.json"]), &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	set := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^[ \t]+params\.(\w+) = `).FindAllStringSubmatch(tree["nextflow.config"], -1) {
+		set[m[1]] = true
+	}
+
+	for _, m := range regexp.MustCompile(`(?m)^params\.(\w+) = `).FindAllStringSubmatch(tree["conf/container.config"], -1) {
+		set[m[1]] = true
+	}
+
+	if len(set) == 0 {
+		t.Fatal("no profile sets a param")
+	}
+
+	for id := range set {
+		p := doc.Defs[mro2nfGroup].Properties[id]
+		if p == nil {
+			t.Errorf("profile param %s is not in the %s group", id, mro2nfGroup)
+
+			continue
+		}
+
+		if p["hidden"] != true {
+			t.Errorf("profile param %s is not hidden", id)
+		}
+
+		if def, ok := p["default"]; ok {
+			t.Errorf("profile param %s has default %v", id, def)
+		}
+	}
+}
+
 // TestParamsSchemaValidatesTypes: the schema, a JSON Schema itself, admits
 // the call's own values and refuses a value of another type than its
 // input's.
