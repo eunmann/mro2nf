@@ -16,58 +16,17 @@ func keepNegativeZero(text string) string {
 
 	b.Grow(len(text))
 
-	inString, comment := false, false
+	last := 0
 
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-
-		switch {
-		case comment:
-			comment = c != '\n'
-		case inString:
-			if c == '\\' && i+1 < len(text) {
-				b.WriteByte(c)
-				i++
-				c = text[i]
-			} else {
-				inString = c != '"'
-			}
-		case c == '"':
-			inString = true
-		case c == '#':
-			comment = true
-		case c == '-' && strings.HasPrefix(text[i:], negZero) && !numberByte(prev(text, i)) && !numberByte(next(text, i+len(negZero))):
+	for i := range codeOffsets(text) {
+		if wholeToken(text, i, negZero) {
+			b.WriteString(text[last:i])
 			b.WriteString("-0.0")
-			i++
-
-			continue
+			last = i + len(negZero)
 		}
-
-		b.WriteByte(c)
 	}
+
+	b.WriteString(text[last:])
 
 	return b.String()
-}
-
-// numberByte reports a byte that can continue a number or name, so a -0
-// beside it is part of a longer token.
-func numberByte(c byte) bool {
-	return c == '.' || c == '_' || c == '+' || c == '-' ||
-		(c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-func prev(text string, i int) byte {
-	if i == 0 {
-		return ' '
-	}
-
-	return text[i-1]
-}
-
-func next(text string, i int) byte {
-	if i >= len(text) {
-		return ' '
-	}
-
-	return text[i]
 }
