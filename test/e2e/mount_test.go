@@ -87,6 +87,34 @@ func TestDockerMountedS3Inputs(t *testing.T) {
 	})
 }
 
+// TestResumeRechecksTheS3Mount: PLAN reads an s3:// input in place only
+// when its instance mounts the input's bucket, which no cache key holds, so
+// a -resume re-runs PLAN, which sees the mounts the instances have now, and
+// keeps every other task cached, as PLAN's records are unchanged.
+func TestResumeRechecksTheS3Mount(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	s3 := simulatedS3(t, filepath.Join(root, "testdata", mountedFixture))
+	proj := transpile(t, mountedFixture)
+	writeParams(t, proj, map[string]any{"fastqs": "s3://simbucket/fastqs", "reference_path": "s3://simbucket/ref"})
+
+	if err := runNextflow(t, proj, "--mro2nf_s3_mount", s3, "-params-file", "params.json"); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	if err := runNextflow(t, proj, "--mro2nf_s3_mount", s3, "-params-file", "params.json", "-resume", "-with-trace", "resume.txt"); err != nil {
+		t.Fatalf("-resume rerun: %v", err)
+	}
+
+	for _, row := range readTrace(t, filepath.Join(proj, "resume.txt")) {
+		if rerun := row.Name == "PLAN"; (row.Status == "CACHED") == rerun {
+			t.Errorf("task %s: status %s, want cached=%v", row.Name, row.Status, !rerun)
+		}
+	}
+}
+
 // simulatedS3 lays the fixture's inputs out as Mountpoint for S3 shows
 // bucket simbucket under a mount root, <root>/simbucket/{fastqs,ref}, and
 // returns the root.

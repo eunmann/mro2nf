@@ -42,7 +42,7 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
 	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
 	fs.BoolVar(&f.remoteInputs, "remote-inputs", false, "an entry file value may name a URI of any scheme, not only s3")
-	fs.StringVar(&f.s3Mount, "s3-mount", "", "the root every task mounts the input buckets under, read-only: an s3://<bucket>/<key> entry file value is <root>/<bucket>/<key>, which no task stages")
+	fs.StringVar(&f.s3Mount, "s3-mount", "", "the root every task may mount input buckets under, read-only: an s3://<bucket>/<key> entry file value whose bucket is a directory there is <root>/<bucket>/<key>, which no task stages; any other is staged")
 	fs.StringVar(&f.work, "work", ".", "scratch dir")
 }
 
@@ -51,7 +51,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 // JSON form, compiles it as mrp does, so mrp's refusals fail the run before
 // any stage starts, and checks its call graph is within the witness's, and
 // that every entry file value is one the run may stage, or, an s3:// one
-// under -s3-mount, one the mount shows at the path the call names it by.
+// of a bucket the -s3-mount root shows, one the mount shows at the path the
+// call names it by.
 // It writes the call every task compiles, each witness node's spec digest,
 // disabled instances and entry files, and the forks of each entry-fed root.
 func runPlan(_ context.Context, argv []string) error {
