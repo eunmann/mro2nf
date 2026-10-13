@@ -94,12 +94,16 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 
 	outs, forks, gates := p.consumed(n.Fqid)
 	for _, o := range []struct {
-		used             bool
-		name, out, empty string
-	}{{outs, outsOf(i), "outs", "[]"}, {forks, forksOf(i), "forks", "[]"}, {gates, gatesOf(i), "gates", "''"}} {
+		used      bool
+		name, out string
+	}{{outs, outsOf(i), "outs"}, {forks, forksOf(i), "forks"}} {
 		if o.used {
-			w.linef("%s = OR_SKIPPED(%s.out.%s, b%d.skip, %s)", w.def(o.name), proc, o.out, i, o.empty)
+			w.linef("%s = OR_SKIPPED(%s.out.%s, b%d.skip)", w.def(o.name), proc, o.out, i)
 		}
+	}
+
+	if gates {
+		w.linef("%s = GATES(%s.out.gates, b%d.skip)", w.def(gatesOf(i)), proc, i)
 	}
 
 	return w, nil

@@ -24,7 +24,7 @@ var errPartnerSources = errors.New("splits of one output over one root disagree"
 
 // partner is a split over a fork root of an output of a stage that does
 // not fix the root's forks: a map call zipping the outputs of different
-// stages. The stage's post writes the output's elements one dir per index,
+// stages, or a disable binding splitting one. The stage's post writes the output's elements one dir per index,
 // and an instance stages only the one at its own index (zip_runtime). A
 // stage a runtime gate disables is read through the gate, `split Q.o
 // unless G.f`: an instance reads the gate, and the element only where the
@@ -114,8 +114,8 @@ func (g *Graph) partners(node string) ([]partner, error) {
 	for _, fqid := range slices.Sorted(maps.Keys(g.stages)) {
 		st := g.stages[fqid]
 
-		for _, k := range slices.Sorted(maps.Keys(st.ResolvedInputs())) {
-			walkSplits(st.ResolvedInputs()[k].Exp, func(sp *syntax.SplitExp) {
+		for _, e := range bindings(st) {
+			walkSplits(e, func(sp *syntax.SplitExp) {
 				p, ok := g.partnerOf(st, sp)
 				if !ok || p.ref.Id != node {
 					return

@@ -60,6 +60,12 @@ func benchLanes() []benchLane {
 		// The disabled USE runs no job, so mrp runs only each fork's MKFILE.
 		{key: "mapdisabled_w4", dir: "mapdisabled", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPDISABLED_PROBE", producers: 4, mrpJobs: 4},
 		{key: "mapdisabled_w8", dir: "mapdisabled", mro: "pipeline_w8.mro", probe: "MRE_BENCH_MAPDISABLED_PROBE", producers: 8, mrpJobs: 8},
+		// FLAGS, then in each of STATIC and GATED a MKFILE per fork and a USE
+		// at each fork its skip holds enabled, half of them. Each of GATED's
+		// USE tasks stages only its own element of FLAGS.skips, which its
+		// disable binding reads.
+		{key: "forkdisabled_w4", dir: "forkdisabled", mro: "pipeline_w4.mro", probe: "MRE_BENCH_FORKDISABLED_PROBE", producers: 2 * 4, mrpJobs: 1 + 2*(4+4/2), flatStaging: true},
+		{key: "forkdisabled_w16", dir: "forkdisabled", mro: "pipeline_w16.mro", probe: "MRE_BENCH_FORKDISABLED_PROBE", producers: 2 * 16, mrpJobs: 1 + 2*(16+16/2), flatStaging: true},
 		// W samples x W lanes leaves, one CELL job each.
 		{key: "mapnested_w2", dir: "mapnested", mro: "pipeline_w2.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 2 * 2, mrpJobs: 2 * 2},
 		{key: "mapnested_w4", dir: "mapnested", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPNESTED_PROBE", producers: 4 * 4, mrpJobs: 4 * 4},

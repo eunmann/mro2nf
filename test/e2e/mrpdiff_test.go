@@ -578,6 +578,7 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "bench/split", mro: "pipeline_c4.mro"},
 	{name: "bench/mapsplit", mro: "pipeline_w4.mro"},
 	{name: "bench/mapdisabled", mro: "pipeline_w4.mro"},
+	{name: "bench/forkdisabled", mro: "pipeline_w4.mro"},
 	{name: "bench/mapnested", mro: "pipeline_w2.mro"},
 	{name: "bench/zip", mro: "pipeline_w4.mro"},
 	{name: "bench/zipgated", mro: "pipeline_w4.mro"},
