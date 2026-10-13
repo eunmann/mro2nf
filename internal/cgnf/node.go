@@ -281,17 +281,24 @@ func (p *project) elements(w *wiring, r cg.TopoRoot) string {
 // by the instance's ordinals of the gate's own roots. Each instance carries
 // on as its d the meta of its tasks, planned from the record and the
 // node's own meta. PLAN's records reach it once its preflights are done,
-// so no instance of it is gated before. An enabled instance leads with its
-// ordinals, at positions at, of the roots its first read joins on.
+// so no instance of it is gated before. Each gate step keys an instance by
+// its ordinals of the roots of the stage the next gates on, and an enabled
+// instance leads with its ordinals, at positions at, of the roots its
+// first read joins on.
 func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta, at string) {
-	gated := fmt.Sprintf("GATE(%s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), meta)
+	keys := make([]string, len(n.Gates)+1)
+	for x, gp := range n.Gates {
+		keys[x] = ilist(positions(n.Roots, p.topo.Nodes[p.index[gp.Node]].Roots))
+	}
 
-	for _, gp := range n.Gates {
+	keys[len(n.Gates)] = "[]"
+
+	gated := fmt.Sprintf("GATE(%s, %s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), meta, keys[0])
+
+	for x, gp := range n.Gates {
 		w.linef("g%d = %s", i, gated)
-
-		q := p.index[gp.Node]
-		gated = fmt.Sprintf("GATED(g%d, %s, %s, %s, %s)", i, w.use(gatesOf(q)), ilist(positions(n.Roots, p.topo.Nodes[q].Roots)),
-			ilist(positions(n.Roots, gp.Roots)), gstr(cg.GateToken(n.Fqid, gp, "")))
+		gated = fmt.Sprintf("GATED(g%d, %s, %s, %s, %s)", i, w.use(gatesOf(p.index[gp.Node])), ilist(positions(n.Roots, gp.Roots)),
+			gstr(cg.GateToken(n.Fqid, gp, "")), keys[x+1])
 	}
 
 	w.linef("b%d = ENABLED(%s, %s)", i, gated, at)

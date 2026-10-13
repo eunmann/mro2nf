@@ -578,16 +578,20 @@ workflow AFTER {
 // GATE gives each instance the meta of its node's tasks, planned from its
 // node's PLAN record and its own meta, which it carries on as its d, and
 // whether that record disables it: the whole node, or the instance's fork.
+// It keys each by its ordinals, at positions next, of the roots of the
+// gating stage its node's first GATED joins on, and each GATED keys it so
+// for the next, so no gate adds a step to key it.
 workflow GATE {
     take:
     inst
     nodes
     meta
+    next
 
     main:
     out = inst.combine(nodes).map { k, fs, es, _tk, ns, c ->
         def r = ns[meta.node]
-        [k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]
+        [k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]
     }
 
     emit:
@@ -602,26 +606,28 @@ workflow GATES {
     skip
 
     main:
-    out = gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[0], [].toSet()] })
+    out = gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })
 
     emit:
     out
 }
 
 // GATED disables each instance a gating stage's GATES name, joined on the
-// gating stage's roots, at positions at, by the gate's token and the
-// instance's ordinals of the gate's own roots, at positions ext.
+// gating stage's roots, which the instance leads with its ordinals of, by
+// the gate's token and the instance's ordinals of the gate's own roots, at
+// positions ext, and keys it by its ordinals, at positions next, of the
+// roots its node's next GATED joins on.
 workflow GATED {
     take:
     gated
     gates
-    at
     ext
     token
+    next
 
     main:
-    out = gated.map { k, fs, es, d, off -> [k[at], k, fs, es, d, off] }.combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->
-        [k, fs, es, d, off || gs.contains(token + k[ext].join('.'))]
+    out = gated.combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->
+        [k[next], k, fs, es, d, off || gs.contains(token + k[ext].join('.'))]
     }
 
     emit:
@@ -629,10 +635,10 @@ workflow GATED {
 }
 
 // ENABLED splits the instances the driver runs, which go on to stage what
-// they read, from those it disables, which run no task. An instance it
-// runs leads with its ordinals, at positions at, of the roots its node's
-// first READ joins on, and each READ keys it so for the next, so no read
-// adds a step to key it.
+// they read, from those it disables, which run no task and lead with the
+// key the gates left them. An instance it runs leads with its ordinals, at
+// positions at, of the roots its node's first READ joins on, and each READ
+// keys it so for the next, so no read adds a step to key it.
 workflow ENABLED {
     take:
     gated
@@ -640,12 +646,12 @@ workflow ENABLED {
 
     main:
     b = gated.branch { v ->
-        skip: v[4]
+        skip: v[5]
         run: true
     }
 
     emit:
-    run = b.run.map { k, fs, es, d, _off -> [k[at], k, fs, es, d, []] }
+    run = b.run.map { _c, k, fs, es, d, _off -> [k[at], k, fs, es, d, []] }
     skip = b.skip
 }
 
@@ -861,7 +867,7 @@ workflow POSTED {
     sources
 
     main:
-    all = posted.join(sources).map { k, ds, vs, rs, src -> [k, referred(ds, rs, src) + vs.tokenize(' ')] }.mix(skip.map { v -> [v[0], []] })
+    all = posted.join(sources).map { k, ds, vs, rs, src -> [k, referred(ds, rs, src) + vs.tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
 
     emit:
     all

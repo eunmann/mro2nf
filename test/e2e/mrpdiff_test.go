@@ -465,6 +465,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// enabled on every gate path: upstream output and struct field, a
 	// sub-pipeline input, and the gates of a map call over a sub-pipeline.
 	{name: "null_gate"},
+	// #559: a call gated by an unforked stage and a per-fork one, and
+	// reading stages of its own fork and of none, each step keying its
+	// instances for the next.
+	{name: "gate_chain"},
 	{name: "fork_fanout"},
 	{name: "map_file_array"},
 	// #99: a file-bearing leaf scatter.
