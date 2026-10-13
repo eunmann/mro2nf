@@ -306,6 +306,41 @@ each URI and refuses a prefix without the slash with `S3 object not found`. Outp
 published to `/mnt/workflow/pubdir`, which HealthOmics exports to the run's
 output URI.
 
+## A pipeline shipped as a bundle
+
+A vendor bundle such as CellRanger runs its stages under its own environment
+and writes the call it runs into a generated `.mro`. These steps ran
+CellRanger 10.1.0 `count` on AWS Batch and HealthOmics:
+
+1. Write the invocation without running it: `cellranger count --id=<id>
+   --fastqs=<dir> --transcriptome=<dir> --dry` writes `__<id>.mro` into the
+   working directory. The paths it names only need to exist for the dry run;
+   the real inputs are run parameters.
+2. Transpile it against the bundle's `.mro` tree:
+   `mro2nf -mropath <bundle>/mro -o out __<id>.mro`.
+3. Build the image `FROM` the runtime image. `COPY` the bundle and `__<id>.mro`
+   to the absolute paths they had at transpile time, and set the environment
+   the bundle's `sourceme.bash` sets as `ENV` lines (its `PATH` entries, ahead
+   of `/opt/mro2nf`, `PYTHONPATH`, `MROPATH`, and the rest). `env -i bash -c
+   'source <bundle>/sourceme.bash; env'` prints them.
+4. Pass the inputs as a `-params-file` with the same typed values as the
+   `.mro`'s call, the paths replaced by `s3://` URIs: a struct array such as
+   CellRanger's `sample_def` goes in whole.
+
+```dockerfile
+FROM <runtime image>
+COPY . /opt/cellranger-10.1.0/
+COPY __pbmc.mro /work/pbmc/
+ENV PATH=/opt/cellranger-10.1.0/lib/bin:/opt/cellranger-10.1.0/external/martian/bin:/opt/cellranger-10.1.0/external/anaconda/bin:/opt/cellranger-10.1.0/bin/tenkit:/opt/cellranger-10.1.0/bin:/opt/mro2nf:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    MROPATH=/opt/cellranger-10.1.0/mro \
+    PYTHONPATH=/opt/cellranger-10.1.0/lib/python:/opt/cellranger-10.1.0/external/martian/adapters/python
+```
+
+CellRanger's stages write the FASTQ path they were given into JSON that
+later stages open, so every task must see an input at the same path: the
+`awsbatch` profile's mounted inputs and HealthOmics' shared run filesystem do,
+and copy-staging executors do not.
+
 ## GPU stages
 
 A stage requests GPUs with the reserved `special` resource:
