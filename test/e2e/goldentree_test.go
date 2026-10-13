@@ -44,6 +44,7 @@ var jsonOnlyGoldens = map[string]string{
 	"entry_mapfile_override":      launchOverride,
 	"entry_dir_override":          launchOverride,
 	"split_from_file_override":    launchOverride,
+	"mounted_paths_override":      launchOverride,
 	"empty_fork_min_override":     launchOverride,
 	"empty_fork_sub_override":     launchOverride,
 	"empty_fork_cascade_override": launchOverride,

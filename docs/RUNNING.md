@@ -25,6 +25,9 @@ mro2nf [-o <dir>] [-mropath <path>] <pipeline.mro>
 The project refers to the entry `.mro`, its includes and its stages' code by
 their absolute paths at transpile time. Every profile runs the code from those
 paths, so don't move them; a container image holds the code at the same paths.
+That includes the entry `.mro` itself: an invocation written outside the code
+tree, such as the `__<id>.mro` that `cellranger count --dry` writes, goes into
+the image at its own path too.
 
 The project holds:
 
@@ -64,13 +67,20 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   and `healthomics` profiles refuse head-node paths, so give them `s3://`
   URIs.
 - A stage receives a file input at a path in its own task directory, with the
-  same file name and content. Under `mrp` it receives the original path.
+  same file name and content. Under `mrp` it receives the original path. On
+  an executor that isolates its tasks, a stage that writes that path into an
+  output for another stage to open, rather than passing the file on as a
+  file-typed output, therefore names a path the other task does not have.
+  The `awsbatch` profile avoids this for `s3://` inputs by reading them in
+  place through a mount ([AWS Batch](#aws-batch)).
 - Only the named file is staged, not the files beside it, whether it is a
   pipeline input or another stage's output. A stage that opens a companion
   file next to its input, such as an index beside a BAM, finds it under `mrp`
   but not under mro2nf. Declare the companion as its own input, and as its
   own output of the stage that writes it, and have the stage open it from
-  that input, or pass a directory input that holds both files.
+  that input, or pass a directory input that holds both files. Neither
+  applies to an input read through the `awsbatch` mount, which a stage
+  receives at its mounted path, beside the rest of its bucket.
 - Nextflow's v1 syntax parser, the default before 26.04 or under
   `NXF_SYNTAX_PARSER=v1`, converts command-line values before the run sees
   them: `--s 007` becomes the number `7`, which fails a `string` input. Set
@@ -94,6 +104,7 @@ transpile, because the project defines those parameters itself.
 | `--mro2nf_adapters <dir>` | the adapters `mre` embeds | Martian's adapters directory, holding `python/martian_shell.py` |
 | `--mro2nf_psid <id>` | the `call`'s name | the pipestance ID `mrp` takes as its second argument; it names each job in `_jobinfo` |
 | `--mro2nf_allow_remote_inputs true` | `false` | allows file inputs with URI schemes other than `s3://` |
+| `--mro2nf_s3_mount <dir>` | `/mnt/s3` on `awsbatch`, none elsewhere | the directory every task's host mounts the input buckets under, read-only, one directory per bucket; a stage receives an `s3://` input as its path there |
 
 `--mro2nf_mre`, `--mro2nf_mrjob` and `--mro2nf_adapters` let the stages run
 under another Martian runtime, such as the one bundled with a pipeline.
@@ -247,6 +258,31 @@ Keep `--outdir` on S3: the default `results` publishes to the launch host.
 The profile limits job submission and S3 transfers so a wide fan-out does not
 throttle the AWS APIs, and retries a task whose Spot instance is reclaimed.
 
+The profile reads `s3://` file inputs in place rather than staging them:
+every Batch instance mounts the input buckets read-only with Mountpoint for
+S3 at `/mnt/s3/<bucket>`, the profile bind-mounts `/mnt/s3` into every
+container, read-only, and a stage receives `s3://<bucket>/<key>` as
+`/mnt/s3/<bucket>/<key>`. That is one path in every task, as `mrp` passes
+every stage the path it was given, so a stage may record it in an output for
+another stage to open, and no task downloads it. A path under `/mnt/s3` given
+directly is read the same way.
+
+- Every input bucket must be mounted on the compute environment's instances:
+  the example stack mounts its work bucket and the buckets its `mountBuckets`
+  context names
+  ([`deploy/awsbatch-cdk/README.md`](../deploy/awsbatch-cdk/README.md)).
+  On a bucket or key the mount does not show, the run fails at its start,
+  naming the input. A compute environment of your own needs the same mounts
+  at the same root, or `--mro2nf_s3_mount` naming its root, which the
+  profile then bind-mounts instead.
+- The mount is read-only: a stage that writes into an input's directory
+  fails.
+- `-resume` keys a mounted input on its path, not its content: a run over an
+  object replaced at the same key reuses the cached tasks. Put new data under
+  a new key, or run without `-resume`.
+- Mountpoint cannot show a key with an empty, `.` or `..` path component, so
+  the run refuses such a URI.
+
 ### HealthOmics
 
 HealthOmics takes no `-profile` and no `-c`. `package.sh` makes the
@@ -265,9 +301,46 @@ aws omics start-run --workflow-id "$WF" --role-arn <role ARN> \
 
 `parameter-template.json` declares each pipeline input and
 `mro2nf_overrides` (an `s3://` URI), all optional. A run can set nothing else,
-so it cannot change the image or the inputs it may stage. Outputs are
+so it cannot change the image or the inputs it may stage. A directory input is
+an `s3://` prefix ending in `/` (`s3://<bucket>/fastqs/`): `start-run` checks
+each URI and refuses a prefix without the slash with `S3 object not found`. Outputs are
 published to `/mnt/workflow/pubdir`, which HealthOmics exports to the run's
 output URI.
+
+## A pipeline shipped as a bundle
+
+A vendor bundle such as CellRanger runs its stages under its own environment
+and writes the call it runs into a generated `.mro`. These steps ran
+CellRanger 10.1.0 `count` on AWS Batch and HealthOmics:
+
+1. Write the invocation without running it: `cellranger count --id=<id>
+   --fastqs=<dir> --transcriptome=<dir> --dry` writes `__<id>.mro` into the
+   working directory. The paths it names only need to exist for the dry run;
+   the real inputs are run parameters.
+2. Transpile it against the bundle's `.mro` tree:
+   `mro2nf -mropath <bundle>/mro -o out __<id>.mro`.
+3. Build the image `FROM` the runtime image. `COPY` the bundle and `__<id>.mro`
+   to the absolute paths they had at transpile time, and set the environment
+   the bundle's `sourceme.bash` sets as `ENV` lines (its `PATH` entries, ahead
+   of `/opt/mro2nf`, `PYTHONPATH`, `MROPATH`, and the rest). `env -i bash -c
+   'source <bundle>/sourceme.bash; env'` prints them.
+4. Pass the inputs as a `-params-file` with the same typed values as the
+   `.mro`'s call, the paths replaced by `s3://` URIs: a struct array such as
+   CellRanger's `sample_def` goes in whole.
+
+```dockerfile
+FROM <runtime image>
+COPY . /opt/cellranger-10.1.0/
+COPY __pbmc.mro /work/pbmc/
+ENV PATH=/opt/cellranger-10.1.0/lib/bin:/opt/cellranger-10.1.0/external/martian/bin:/opt/cellranger-10.1.0/external/anaconda/bin:/opt/cellranger-10.1.0/bin/tenkit:/opt/cellranger-10.1.0/bin:/opt/mro2nf:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    MROPATH=/opt/cellranger-10.1.0/mro \
+    PYTHONPATH=/opt/cellranger-10.1.0/lib/python:/opt/cellranger-10.1.0/external/martian/adapters/python
+```
+
+CellRanger's stages write the FASTQ path they were given into JSON that
+later stages open, so every task must see an input at the same path: the
+`awsbatch` profile's mounted inputs and HealthOmics' shared run filesystem do,
+and copy-staging executors do not.
 
 ## GPU stages
 
@@ -418,6 +491,12 @@ In the task's work directory:
   inputs on S3.
 - **`entry input '<name>': scheme '<scheme>' is not allowed`**: pass a path or
   an `s3://` URI, or `--mro2nf_allow_remote_inputs true`.
+- **`entry input '<name>': bucket <bucket> is not mounted at
+  /mnt/s3/<bucket> on this run's instances; add it to the stack's
+  mountBuckets`**: on `awsbatch`, the input's bucket is not mounted. Deploy
+  the stack with the bucket in `mountBuckets`.
+- **`entry input '<name>' names no object under the mounted bucket
+  <bucket>`**: on `awsbatch`, no object or prefix has the input's key.
 - **`entry override of a non-scalar type cannot be a string`**: pass the
   array, map or struct in a `-params-file`.
 - **`Process requirement exceeds available memory`** (or `CPUs`): a task

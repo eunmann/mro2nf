@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -80,12 +81,19 @@ func dockerProfileConfig() string {
 // profile's tasks in local docker as the invoking user, which the docker
 // profile does itself: rootful containers default to root, so task outputs
 // come back root-owned and work-dir cleanup fails with "Permission denied".
-func localDockerConfig() string {
-	if rootlessDocker() {
+// extra are docker run options besides, which the one runOptions setting
+// must hold too.
+func localDockerConfig(extra ...string) string {
+	opts := extra
+	if !rootlessDocker() {
+		opts = append([]string{fmt.Sprintf("-u %d:%d -e HOME=/tmp", os.Getuid(), os.Getgid())}, extra...)
+	}
+
+	if len(opts) == 0 {
 		return ""
 	}
 
-	return fmt.Sprintf("docker.runOptions = '-u %d:%d -e HOME=/tmp'\n", os.Getuid(), os.Getgid())
+	return fmt.Sprintf("docker.runOptions = '%s'\n", strings.Join(opts, " "))
 }
 
 // checkoutImage tags a test image per checkout, so a concurrent run in
@@ -471,16 +479,27 @@ func TestGeneratedAWSBatchProfile(t *testing.T) {
 	proj := transpile(t, "diamond_min")
 	image := pipelineImage(t, filepath.Join(root, "testdata", "diamond_min"), "awsbatch_diamond_min")
 
-	writeFileT(t, filepath.Join(proj, "local.config"), "process.executor = 'local'\ndocker.enabled = true\n"+localDockerConfig())
-
-	err := runNextflow(t, proj, "-profile", "awsbatch", "-c", "local.config",
-		"--mro2nf_image", image, "--outdir", filepath.Join(proj, "results"))
-	if err != nil {
+	if err := runAWSBatchLocally(t, proj, image, nil); err != nil {
 		t.Fatalf("nextflow (awsbatch profile, local docker): %v", err)
 	}
 
 	goldenJSON(t, "diamond_min", filepath.Join(proj, "results", "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "diamond_min", "expected", "outs.json"))
+}
+
+// runAWSBatchLocally runs proj under its awsbatch profile with only the
+// executor swapped for local docker, every container run with the docker
+// options dockerOpts besides the user mapping, in image, publishing to
+// proj/results.
+func runAWSBatchLocally(t *testing.T, proj, image string, dockerOpts []string, args ...string) error {
+	t.Helper()
+
+	writeFileT(t, filepath.Join(proj, "local.config"), "process.executor = 'local'\ndocker.enabled = true\n"+localDockerConfig(dockerOpts...))
+
+	return runNextflow(t, proj, append([]string{
+		"-profile", "awsbatch", "-c", "local.config",
+		"--mro2nf_image", image, "--outdir", filepath.Join(proj, "results"),
+	}, args...)...)
 }
 
 // TestGeneratedProfilesRequireImage: a container profile launched without
@@ -576,7 +595,7 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(string(out), "withName") {
+	if regexp.MustCompile(`withName[^\n]*container`).Match(out) {
 		t.Errorf("the package's config gives a task an image of its own:\n%s", out)
 	}
 }

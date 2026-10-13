@@ -17,7 +17,7 @@ import (
 func writeTestBundle(t *testing.T, dir string, payload map[string]any) {
 	t.Helper()
 
-	if err := shim.WriteBundle(dir, payload, nil, types.NewTable(nil), nil); err != nil {
+	if err := shim.WriteBundle(dir, payload, nil, types.NewTable(nil), shim.Opts{}); err != nil {
 		t.Fatalf("write bundle %s: %v", dir, err)
 	}
 }

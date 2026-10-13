@@ -224,7 +224,9 @@ selector of its alias alone still names it.
   launch's `--<name> <value>` sets it under the v2 parser or
   `NXF_DISABLE_PARAMS_TYPE_DETECTION` (§8).
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
-  values a run stages (§8), and `mro2nf_image` the one image the container
+  values a run stages (§8), `mro2nf_s3_mount` the root under which the
+  `awsbatch` profile reads `s3://` values in place (§8), and `mro2nf_image`
+  the one image the container
   profiles run every task in, which they require (`mro2nf_require_image`,
   §9). `mro2nf_overrides` is the run's `mrp --overrides` file (§9).
 - One `params.<name> = null` per entry input (§8).
@@ -592,7 +594,9 @@ the bundle), a path in the work dir outside the stage's phase dir, i.e. a staged
 input (followed wherever it points, hard-linked), a path outside the task
 inside what a staged input links to, i.e. an input's real path, which a stage
 that resolves its args' paths returns (hard-linked, as the input it resolves
-from), or any other host path outside the task:
+from), a path under the run's S3 mount (§8), which the stage was given (copied
+as a staged input; the mounted path itself, as an output, stays a path), or
+any other host path outside the task:
 
 - Under `--mro2nf_confine true` (`mre stage -confine`), such a path cannot be
   valid in an isolated container downstream, and copying it would upload host
@@ -670,6 +674,25 @@ and docker profiles); any other scheme (`http(s)://`, `ftp://`) only with
 which may carry a credential. The HealthOmics parameter template declares
 neither param, so a HealthOmics run cannot set them.
 
+**Mounted `s3://` values.** A stage that records an input's path in an output
+another task opens, as Cell Ranger does with its FASTQ directory, needs the
+path `mrp` gives it, one path in every task; a staged copy is at a path no
+other isolated task has. Under `params.mro2nf_s3_mount`, a root at which every
+task's host mounts the input buckets read-only (the `awsbatch` profile's
+`/mnt/s3`, which Mountpoint for S3 serves on the example stack's instances),
+PLAN (`mre plan -s3-mount`) rewrites each `s3://<bucket>/<key>` file value of
+the invocation to `<root>/<bucket>/<key>`, a trailing `/` kept, before it
+compiles the call, so every task compiles a call naming the mounted path. A
+value under the root, so written or given directly once cleaned, is mounted:
+PLAN checks that the mount shows its bucket and key and leaves it out of
+`leaves` and `files`, so no task stages it, while it keeps its index among the
+values, which a task recomputes from the call. Every bundle writer of `mre
+stage -s3-mount` keeps a leaf under the root as its path, with no link, copy
+or origin, and a strict confinement admits a stage's own link into it (§7).
+OUTS publishes such a value as a Linked file, as it does a host path. A key
+with an empty, `.` or `..` component, which Mountpoint cannot show, is
+refused. A task's `-resume` key holds the value's path, not its content.
+
 ---
 
 ## 9. Targets, executors and resources
@@ -700,9 +723,13 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   (§5), so a stale image fails loudly.
 - `docker` runs each task in a container that mounts only what it stages.
 - `awsbatch` runs on AWS Batch over an S3 work dir (`-work-dir s3://…`); every
-  task stages its inputs from S3, so nothing reads a head-node path, and a
-  head-node path as an entry file is refused (§8). Set `process.queue` and
-  `aws.region` in a `-c` config; `--outdir s3://…` publishes to S3.
+  task stages its upstream inputs from S3, so nothing reads a head-node path,
+  and a head-node path as an entry file is refused (§8). It reads `s3://`
+  entry files in place under `/mnt/s3` (`params.mro2nf_s3_mount`), the root it
+  bind-mounts read-only into every container (`aws.batch.volumes`); the
+  compute environment's instances must mount the input buckets there (§8,
+  `deploy/awsbatch-cdk`). Set `process.queue` and `aws.region` in a `-c`
+  config; `--outdir s3://…` publishes to S3.
 - `healthomics` (HealthOmics takes no `-profile`): `./package.sh
   <image>@sha256:…` zips the files `main.nf` reads, appends the image and
   `includeConfig 'conf/healthomics.config'` to the zip's `nextflow.config`, so

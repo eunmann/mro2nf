@@ -116,7 +116,7 @@ func writeOuts(dir string, v json.Marshaler, man types.Manifest, callable string
 		return err
 	}
 
-	return shim.WriteBundle(dir, payload, params, man.Table(), nil)
+	return shim.WriteBundle(dir, payload, params, man.Table(), shim.Opts{})
 }
 
 // args runs WriteArgs for node over the staged items, returning the

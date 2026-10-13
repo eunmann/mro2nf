@@ -40,6 +40,9 @@ var errLinkHops = errors.New("too many levels of symbolic links")
 type Confinement struct {
 	work, phase []string
 	strict      bool
+	// mount holds what every task reads in place, an input the stage
+	// received wherever the stage's own symlink to it lies.
+	mount Mount
 	// inputs are the real paths outside the work dir that its links outside
 	// the phase dir resolve to, read the first time a leaf lands outside it.
 	inputs     []string
@@ -65,8 +68,9 @@ const (
 
 // ConfineStage returns the Confinement for the outputs of a stage phase
 // ("split", "main" or "join") run in work. strict refuses an output that
-// resolves outside the task instead of copying it.
-func ConfineStage(work, phase string, strict bool) (*Confinement, error) {
+// resolves outside the task instead of copying it, unless it resolves under
+// mount.
+func ConfineStage(work, phase string, strict bool, mount Mount) (*Confinement, error) {
 	workDirs, err := pathForms(work)
 	if err != nil {
 		return nil, err
@@ -77,7 +81,7 @@ func ConfineStage(work, phase string, strict bool) (*Confinement, error) {
 		return nil, err
 	}
 
-	return &Confinement{work: workDirs, phase: phaseDirs, strict: strict}, nil
+	return &Confinement{work: workDirs, phase: phaseDirs, strict: strict, mount: mount}, nil
 }
 
 // pathForms returns dir's absolute path and, when it differs, its real path, so
@@ -194,6 +198,10 @@ func (c *Confinement) admit(src string) (leafKind, error) {
 func (c *Confinement) classify(src, p string) (leafKind, error) {
 	if withinAny(p, c.work) {
 		return leafOwn, nil
+	}
+
+	if c.mount.Holds(p) {
+		return leafInput, nil
 	}
 
 	inputs, err := c.stagedInputs()

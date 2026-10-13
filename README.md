@@ -105,8 +105,9 @@ commit, build the runtime image from the same checkout:
 docker build -f deploy/runtime/Dockerfile -t mro2nf-runtime:local .
 ```
 
-A task looks for the pipeline's code at the absolute path it was transpiled
-from, so copy the code to that same path in the image. For the first run above,
+A task looks for the pipeline's code, the entry `.mro` included, at the
+absolute path it was transpiled from, so copy the code to that same path in the
+image. For the first run above,
 from the root of the clone:
 
 ```bash

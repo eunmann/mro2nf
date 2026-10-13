@@ -609,6 +609,7 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "entry_dir", mrp: failedIn(failError, "COUNTDIR")},
 	{name: "entry_file_empty", mrp: failedIn(failError, "SUMMARIZE")},
 	{name: "split_from_file", mrp: failedIn(failError, "SQUARELINES")},
+	{name: "mounted_paths", mrp: failedIn(failError, "MAKE_SHARD")},
 	// A merge Martian expanded per fork of an outer map call reads an inner
 	// fork its element's outer fork lacks: an inner split over a literal
 	// whose elements differ in length, or over a stage output.

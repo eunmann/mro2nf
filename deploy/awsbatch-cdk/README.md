@@ -8,7 +8,7 @@ a transpiled Martian→Nextflow pipeline live, for **both** cloud targets:
 | S3 bucket (work dir + outputs) | `awsbatch` + `healthomics` |
 | ECR repo `mro2nf-runtime` (the runtime image and the pipeline images built FROM it) | both |
 | VPC (public subnets, S3 gateway endpoint, no NAT) | `awsbatch` |
-| Batch compute environment + job queue + instance role | `awsbatch` |
+| Batch compute environment + job queue + instance role, its instances mounting the input buckets at `/mnt/s3` | `awsbatch` |
 | HealthOmics service role + ECR pull policy | `healthomics` |
 
 It's an **example**, not a hardened deployment (public subnets, spot instances,
@@ -55,10 +55,23 @@ starved; still $0 idle on spot + `minvCpus: 0`), or leaving data in S3/ECR. Run
 cd deploy/awsbatch-cdk
 npm install
 npx cdk bootstrap          # once per account/region
-npx cdk deploy             # prints the outputs below
+npx cdk deploy -c mountBuckets=<input-bucket>,<reference-bucket>   # prints the outputs below
 ```
 
 Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleArn`.
+
+`mountBuckets` names the buckets holding the pipeline's inputs, comma-separated;
+the work bucket is always mounted, so `-c mountBuckets=...` can be left out when
+the inputs live there. Each Batch instance installs
+[Mountpoint for S3](https://github.com/awslabs/mountpoint-s3) at boot, the
+release `MOUNTPOINT_VERSION` in `lib/stack.ts` names, checked against the
+rpm's SHA-256 pinned beside it, and
+mounts every one of them read-only at `/mnt/s3/<bucket>` (`S3_MOUNT_ROOT` in
+`lib/stack.ts`), caching up to `mountCacheMiB` (100 GiB) of each bucket's reads
+on the instance's root volume; the instance role may read them. The compute
+environment runs Amazon Linux 2023, whose `dnf` installs Mountpoint. Deploy
+again with a new list to change it: the compute environment then launches its
+new instances from the new launch template version.
 
 ## Run on AWS Batch + S3
 
@@ -97,9 +110,14 @@ nextflow run main.nf -profile awsbatch -c batch.config \
 ```
 
 Keep `--outdir` on S3: the default `results` publishes to the head node's
-working dir, and the work dir expires after 14 days. Entry files are staged
-from S3: pass them as `s3://` URIs (a `-params-file` or `--<input>`); the
-`awsbatch` profile refuses a head-node path.
+working dir, and the work dir expires after 14 days. Pass entry files as
+`s3://` URIs (a `-params-file` or `--<input>`); the `awsbatch` profile refuses
+a head-node path. The profile reads them in place through the mount: a stage
+receives `s3://<bucket>/<key>` as `/mnt/s3/<bucket>/<key>`, the same path in
+every task, as `mrp` passes the path it was given, and no task downloads it.
+Every input bucket must be in the stack's `mountBuckets` (or be the work
+bucket): the run fails at its start, naming the input, on a bucket the
+instances do not mount. The mount is read-only.
 
 ## Run on AWS HealthOmics
 

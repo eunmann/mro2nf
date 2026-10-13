@@ -40,9 +40,12 @@ const fileScheme = "file"
 
 // EntryLeaf is one file value of the run's entry inputs that a task stages:
 // an absolute path or a URI, and the entry input it is first found in.
+// Mounted is a path under the run's S3 mount, which every task reads in
+// place, so none stages it.
 type EntryLeaf struct {
-	Input string
-	Value string
+	Input   string
+	Value   string
+	Mounted bool
 }
 
 // EntryLeaves are the file values of the run's entry inputs that a task

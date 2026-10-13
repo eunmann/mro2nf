@@ -11,6 +11,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/job"
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
@@ -27,7 +28,7 @@ func TestChunksDirRoundTrip(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(dir, defs, types.Manifest{}, "S", nil); err != nil {
+	if err := writeChunksDir(dir, defs, types.Manifest{}, "S", shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -121,7 +122,7 @@ func TestChunksDirStagedAsLinks(t *testing.T) {
 	}
 
 	split := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(split, defs, types.Manifest{}, "S", nil); err != nil {
+	if err := writeChunksDir(split, defs, types.Manifest{}, "S", shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -156,7 +157,7 @@ func TestChunksDirRefusesMissingChunks(t *testing.T) {
 	}
 
 	split := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(split, defs, types.Manifest{}, "S", nil); err != nil {
+	if err := writeChunksDir(split, defs, types.Manifest{}, "S", shim.Opts{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -252,20 +253,20 @@ func TestRunBundlesConfineStageOutputs(t *testing.T) {
 	for _, strict := range []bool{false, true} {
 		f := runFlags{confine: strict, rt: job.Runtime{Work: work}}
 
-		mainConf, err := f.confinement(job.ChunkName(0, 1))
+		mainOpts, err := f.bundleOpts(job.ChunkName(0, 1))
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		splitConf, err := f.confinement(job.PhaseSplit)
+		splitOpts, err := f.bundleOpts(job.PhaseSplit)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		outsDir, chunksDir := filepath.Join(root, "outs", strconv.FormatBool(strict)), filepath.Join(root, "chunks", strconv.FormatBool(strict))
 		errs := []error{
-			writeOutsBundle(outsDir, outs, man, "S", types.RoleOut, mainConf),
-			writeChunksDir(chunksDir, defs, man, "S", splitConf),
+			writeOutsBundle(outsDir, outs, man, "S", types.RoleOut, mainOpts),
+			writeChunksDir(chunksDir, defs, man, "S", splitOpts),
 		}
 
 		for i, dir := range []string{outsDir, filepath.Join(chunksDir, job.ChunkName(0, 1))} {

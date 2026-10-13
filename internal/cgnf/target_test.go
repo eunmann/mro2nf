@@ -74,6 +74,72 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 	}
 }
 
+// TestEmitHealthOmicsRoundsMemoryUp: HealthOmics gives a task whole GiB,
+// rounding down and refusing 0, so only its profile asks for mrp's request
+// rounded up to a whole GiB, at least 1, through a selector that outranks the
+// stage modules' memory directive. AWS Batch and the grid take it exactly.
+func TestEmitHealthOmicsRoundsMemoryUp(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "diamond_min"))
+
+	rule := `withName: '.*' {
+        memory = { meta.mem_gb == null ? null : "${Math.max(1L, Math.ceil(meta.mem_gb as double) as long)} GB" }`
+	if !strings.Contains(tree["conf/healthomics.config"], rule) {
+		t.Errorf("conf/healthomics.config lacks the round-up rule %q:\n%s", rule, tree["conf/healthomics.config"])
+	}
+
+	for _, f := range []string{"nextflow.config", "conf/container.config"} {
+		if strings.Contains(tree[f], "Math.ceil") {
+			t.Errorf("%s rounds memory up, which reaches profiles other than healthomics:\n%s", f, tree[f])
+		}
+	}
+}
+
+// TestEmitMountsS3InputsOnAWSBatch: only the awsbatch profile mounts the
+// input buckets, by default at the /mnt/s3 the example stack's instances
+// mount them under, into every container, read-only, at the root the param
+// names, and names that root to PLAN and every stage task, which take it
+// only when the param is set; elsewhere it is null and s3:// inputs are
+// staged.
+func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "entry_file"))
+	cfg := tree["nextflow.config"]
+
+	if !strings.Contains(cfg, "params.mro2nf_s3_mount = null\n") || strings.Index(cfg, "params.mro2nf_s3_mount = null") > strings.Index(cfg, "profiles {") {
+		t.Errorf("nextflow.config does not leave the S3 mount unset before its profiles:\n%s", cfg)
+	}
+
+	start := strings.Index(cfg, "    awsbatch {\n")
+	end := start + strings.Index(cfg[start:], "\n    }\n")
+
+	if start < 0 || end < start {
+		t.Fatalf("nextflow.config has no awsbatch profile:\n%s", cfg)
+	}
+
+	for _, want := range []string{"        params.mro2nf_s3_mount = '/mnt/s3'\n", "        aws.batch.volumes = \"${params.mro2nf_s3_mount}:${params.mro2nf_s3_mount}:ro\"\n"} {
+		if !strings.Contains(cfg[start:end], want) {
+			t.Errorf("the awsbatch profile lacks %q:\n%s", want, cfg[start:end])
+		}
+	}
+
+	if strings.Count(cfg, "aws.batch.volumes") != 1 || strings.Count(cfg, "mro2nf_s3_mount = ") != 2 {
+		t.Errorf("a profile other than awsbatch mounts S3:\n%s", cfg)
+	}
+
+	for _, f := range []string{"conf/container.config", "conf/healthomics.config"} {
+		if strings.Contains(tree[f], "mro2nf_s3_mount") || strings.Contains(tree[f], "aws.batch.volumes") {
+			t.Errorf("%s mounts S3:\n%s", f, tree[f])
+		}
+	}
+
+	if want := "if (params.mro2nf_s3_mount) {\n        cmd += \" -s3-mount ${shq(params.mro2nf_s3_mount)}\""; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+
+	if want := "${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}"; !strings.Contains(tree["main.nf"], want) {
+		t.Errorf("PLAN lacks %q:\n%s", want, tree["main.nf"])
+	}
+}
+
 // TestEmitHealthOmicsTemplate: the HealthOmics parameter template declares
 // every entry input and the run's mrp --overrides file, optional, and none
 // of the project's other params, which a run then cannot set: the image

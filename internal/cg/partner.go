@@ -206,7 +206,7 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 		}
 
 		ed := filepath.Join(dir, IndexToken(ix))
-		if err := writeElementValue(ed, map[string]json.Marshaler{elementField: el}, []ir.Param{param}, w.tbl); err != nil {
+		if err := writeElementValue(ed, map[string]json.Marshaler{elementField: el}, []ir.Param{param}, w.tbl, w.mount); err != nil {
 			return err
 		}
 

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -60,6 +61,32 @@ call FAN(
 func planOf(t *testing.T, mro string) Plan {
 	t.Helper()
 
+	return planUnder(t, mro, "")
+}
+
+// planUnder plans the invocation mro holds with its s3:// entry file values
+// under mount, as mre plan plans a run.
+func planUnder(t *testing.T, mro string, mount shim.Mount) Plan {
+	t.Helper()
+
+	src := sourceOf(t, mro)
+
+	inv, err := MountEntryValues(src, src.Invocation, nil, mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := MakePlan(src, inv, nil, t.TempDir(), mount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return p
+}
+
+func sourceOf(t *testing.T, mro string) Source {
+	t.Helper()
+
 	path := filepath.Join(t.TempDir(), "pipeline.mro")
 	if err := os.WriteFile(path, []byte(mro), 0o644); err != nil {
 		t.Fatal(err)
@@ -70,12 +97,7 @@ func planOf(t *testing.T, mro string) Plan {
 		t.Fatal(err)
 	}
 
-	p, err := MakePlan(src, src.Invocation, nil, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	return p
+	return src
 }
 
 // TestPlanStagesEachForksOwnEntryFiles: the run's entry file values a task

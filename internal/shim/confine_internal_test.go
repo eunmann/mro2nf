@@ -94,7 +94,7 @@ func sameFile(t *testing.T, a, b string) bool {
 func (e confineEnv) markOut(t *testing.T, value string, strict bool) (string, error) {
 	t.Helper()
 
-	conf, err := ConfineStage(e.work, "main", strict)
+	conf, err := ConfineStage(e.work, "main", strict, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func (e confineEnv) markOut(t *testing.T, value string, strict bool) (string, er
 	bundle := t.TempDir()
 	params := []ir.Param{{Name: "out", BaseType: "txt", IsFile: true}}
 
-	marked, err := MarkFiles(bundle, map[string]any{"out": value}, params, types.NewTable(nil), conf)
+	marked, err := MarkFiles(bundle, map[string]any{"out": value}, params, types.NewTable(nil), Opts{Confine: conf})
 	if err != nil {
 		return "", err
 	}

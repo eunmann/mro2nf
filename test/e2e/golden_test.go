@@ -99,6 +99,9 @@ var goldenCases = []goldenCase{
 	// (an empty file[] and map<file>, a struct with a null file field).
 	{"entry_file_empty_override", "entry_file_empty", "expected/override_outs.json"},
 	{"split_from_file_override", "split_from_file", "expected/sp_override_outs.json"},
+	// An entry input's path a stage writes into a JSON output that another
+	// task opens; the golden is mrp's run on the same host paths.
+	{"mounted_paths_override", "mounted_paths", "expected/override_outs.json"},
 	{"cli_typed", "cli_typed", "expected/outs.json"},
 	{"special_resource", "special_resource", "expected/outs.json"},
 	{"null_in", "null_in", "expected/outs.json"},

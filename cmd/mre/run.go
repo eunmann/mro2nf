@@ -49,6 +49,7 @@ var (
 type runFlags struct {
 	phase, args, out, chunk, chunks, chunkOuts, overrides string
 	confine                                               bool
+	mount                                                 shim.Mount
 	rt                                                    job.Runtime
 }
 
@@ -146,12 +147,12 @@ func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArg
 		return fmt.Errorf("split: %w", err)
 	}
 
-	conf, err := f.confinement(job.PhaseSplit)
+	opts, err := f.bundleOpts(job.PhaseSplit)
 	if err != nil {
 		return err
 	}
 
-	if err := writeChunksDir(f.out, defs, man, callable(in), conf); err != nil {
+	if err := writeChunksDir(f.out, defs, man, callable(in), opts); err != nil {
 		return err
 	}
 
@@ -224,15 +225,16 @@ func (f *runFlags) stamp(in job.Instance, sub string) error {
 	return nil
 }
 
-// confinement confines the files a job, whose metadata dir under the work
-// dir is sub, names in what it returns; strict under -confine.
-func (f *runFlags) confinement(sub string) (*shim.Confinement, error) {
-	conf, err := shim.ConfineStage(f.rt.Work, sub, f.confine)
+// bundleOpts are how the bundle of what a job, whose metadata dir under the
+// work dir is sub, returns treats the files it names: confined, strictly
+// under -confine, but for those under the S3 mount.
+func (f *runFlags) bundleOpts(sub string) (shim.Opts, error) {
+	conf, err := shim.ConfineStage(f.rt.Work, sub, f.confine, f.mount)
 	if err != nil {
-		return nil, fmt.Errorf("confine %s outputs: %w", sub, err)
+		return shim.Opts{}, fmt.Errorf("confine %s outputs: %w", sub, err)
 	}
 
-	return conf, nil
+	return shim.Opts{Confine: conf, Mount: f.mount}, nil
 }
 
 func (f *runFlags) main(ctx context.Context, in job.Instance, args core.LazyArgumentMap, man types.Manifest) error {
@@ -256,12 +258,12 @@ func (f *runFlags) main(ctx context.Context, in job.Instance, args core.LazyArgu
 		return fmt.Errorf("main: %w", err)
 	}
 
-	conf, err := f.confinement(job.ChunkName(chunk.Index, chunk.Count))
+	opts, err := f.bundleOpts(job.ChunkName(chunk.Index, chunk.Count))
 	if err != nil {
 		return err
 	}
 
-	return writeOutsBundle(f.out, outs, man, callable(in), role, conf)
+	return writeOutsBundle(f.out, outs, man, callable(in), role, opts)
 }
 
 func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgumentMap, man types.Manifest) error {
@@ -295,12 +297,12 @@ func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgu
 		return fmt.Errorf("join: %w", err)
 	}
 
-	conf, err := f.confinement(job.PhaseJoin)
+	opts, err := f.bundleOpts(job.PhaseJoin)
 	if err != nil {
 		return err
 	}
 
-	return writeOutsBundle(f.out, final, man, callable(in), types.RoleOut, conf)
+	return writeOutsBundle(f.out, final, man, callable(in), types.RoleOut, opts)
 }
 
 // callable is the instance's stage name, its type manifest key.
@@ -332,9 +334,9 @@ type chunkJSON struct {
 
 // writeChunksDir writes each chunk def the split returned as a bundle of
 // its args, the files they name staged, named by mrp's chunk name, and the
-// join's resources beside them. The split chose the files, so conf confines
+// join's resources beside them. The split chose the files, so opts confine
 // them.
-func writeChunksDir(dir string, defs *core.StageDefs, man types.Manifest, callable string, conf *shim.Confinement) error {
+func writeChunksDir(dir string, defs *core.StageDefs, man types.Manifest, callable string, opts shim.Opts) error {
 	params, err := man.Params(callable, types.RoleChunkIn)
 	if err != nil {
 		return fmt.Errorf("chunk params of %s: %w", callable, err)
@@ -342,7 +344,7 @@ func writeChunksDir(dir string, defs *core.StageDefs, man types.Manifest, callab
 
 	for i, d := range defs.ChunkDefs {
 		cd := filepath.Join(dir, job.ChunkName(i, len(defs.ChunkDefs)))
-		if err := writeObjectBundle(cd, d.Args, params, man.Table(), conf); err != nil {
+		if err := writeObjectBundle(cd, d.Args, params, man.Table(), opts); err != nil {
 			return err
 		}
 
@@ -434,9 +436,9 @@ func chunkNames(dir string) ([]string, error) {
 }
 
 // writeOutsBundle writes a job's _outs as a bundle of callable's role
-// params, the files they name staged and confined by conf. The adapter
-// writes a stage with no outputs an _outs of "", which carries no outs.
-func writeOutsBundle(dir string, raw json.RawMessage, man types.Manifest, callable, role string, conf *shim.Confinement) error {
+// params, the files they name staged as opts say. The adapter writes a
+// stage with no outputs an _outs of "", which carries no outs.
+func writeOutsBundle(dir string, raw json.RawMessage, man types.Manifest, callable, role string, opts shim.Opts) error {
 	params, err := man.Params(callable, role)
 	if err != nil {
 		return fmt.Errorf("out params of %s: %w", callable, err)
@@ -455,10 +457,10 @@ func writeOutsBundle(dir string, raw json.RawMessage, man types.Manifest, callab
 		}
 	}
 
-	return writeBundle(dir, payload, params, man.Table(), conf)
+	return writeBundle(dir, payload, params, man.Table(), opts)
 }
 
-func writeObjectBundle(dir string, m core.LazyArgumentMap, params []ir.Param, tbl *types.Table, conf *shim.Confinement) error {
+func writeObjectBundle(dir string, m core.LazyArgumentMap, params []ir.Param, tbl *types.Table, opts shim.Opts) error {
 	payload := make(map[string]any, len(m))
 
 	for k, v := range m {
@@ -470,11 +472,11 @@ func writeObjectBundle(dir string, m core.LazyArgumentMap, params []ir.Param, tb
 		payload[k] = dv
 	}
 
-	return writeBundle(dir, payload, params, tbl, conf)
+	return writeBundle(dir, payload, params, tbl, opts)
 }
 
-func writeBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, conf *shim.Confinement) error {
-	if err := shim.WriteBundle(dir, payload, params, tbl, conf); err != nil {
+func writeBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, opts shim.Opts) error {
+	if err := shim.WriteBundle(dir, payload, params, tbl, opts); err != nil {
 		return fmt.Errorf("write bundle %s: %w", dir, err)
 	}
 
