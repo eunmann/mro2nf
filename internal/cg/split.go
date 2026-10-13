@@ -128,11 +128,10 @@ func (r *resolver) refIndexed(ref *syntax.RefExp, t syntax.Type, fork Fork, mode
 	return c, nil
 }
 
-// stagedElement serves a split from the fork element the root's producer
-// wrote (Post), so an instance never reads the whole collection. It applies
-// when the split reads the root's own source, another output of its
-// producer (zipSources), or an output of another stage, whose partner
-// element is staged (partner), and filters the element to t as Path
+// stagedElement serves a split from an element a stage's post wrote (Post),
+// so an instance never reads the whole collection: the root's fork element
+// when the split reads the root's own source, else the partner element of
+// the output it reads (partner). It filters the element to t as Path
 // filters each element of the collection to t's array or map (syntax
 // ArrayType.FilterJson and TypedMapType.FilterJson filter element-wise).
 func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p Part) (json.Marshaler, bool, error) {
@@ -141,7 +140,7 @@ func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p
 		return nil, false, nil
 	}
 
-	if prod, fed := r.g.Producer(p.Root); !fed || prod != ref.Id {
+	if !r.g.ownSource(p.Root, ref) {
 		return r.partnerElement(ref, gate, t, fork, p)
 	}
 
@@ -155,13 +154,11 @@ func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p
 		return nil, false, err
 	}
 
-	member := elementField
-
 	if sref, ok := src.Value.(*syntax.RefExp); !ok || !sameRef(ref, sref) {
-		member = zipMember(ref.OutputId)
+		return nil, false, nil
 	}
 
-	raw, ok, err := r.st.element(p.Root, outer.with(p), member)
+	raw, ok, err := r.st.element(p.Root, outer.with(p))
 	if err != nil || !ok {
 		return nil, ok, err
 	}

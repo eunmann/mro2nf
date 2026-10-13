@@ -252,33 +252,25 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 		return fmt.Errorf("forks of %s: %w", root.Fqid, err)
 	}
 
-	var z zipped
+	var param *syntax.StructMember
 
 	if w.values && len(idx) > 0 {
-		if z, err = w.zippedAt(root, outer); err != nil {
+		if param, err = w.r.g.collectionParam(elementField, root.Split(), root); err != nil {
 			return err
 		}
-
-		param, err := w.r.g.collectionParam(elementField, root.Split(), root)
-		if err != nil {
-			return err
-		}
-
-		z.params = append(z.params, param)
 	}
 
 	for i, ix := range idx {
 		ed := filepath.Join(dir, elementName(names, i, len(idx), ix))
 		at := outerAt.with(Part{Root: root, Index: ix}, len(idx))
-		rec := Element{Fork: at.fork, Lens: at.lens, Position: i}
 
 		if w.values {
-			if rec.Missing, err = w.writeValues(ed, c, ix, z); err != nil {
+			if err := w.writeValue(ed, c, ix, param); err != nil {
 				return fmt.Errorf("fork %d of %s: %w", i, root.Fqid, err)
 			}
 		}
 
-		if err := writeElement(ed, rec); err != nil {
+		if err := writeElement(ed, Element{Fork: at.fork, Lens: at.lens, Position: i}); err != nil {
 			return err
 		}
 	}
@@ -286,22 +278,14 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 	return nil
 }
 
-// writeValues writes into ed the fork's element of the root's source c and
-// of each zipped source, and returns the zipped sources it has none of.
-func (w forkWriter) writeValues(ed string, c indexed, ix syntax.CollectionIndex, z zipped) ([]string, error) {
+// writeValue writes into ed the fork's element of the root's source c.
+func (w forkWriter) writeValue(ed string, c indexed, ix syntax.CollectionIndex, param *syntax.StructMember) error {
 	el, err := c.at(ix)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	members := map[string]json.Marshaler{elementField: el}
-
-	missing, err := z.at(ix, members)
-	if err != nil {
-		return nil, err
-	}
-
-	return missing, writeElementValue(ed, members, z.params, w.tbl, w.mount)
+	return writeElementValue(ed, el, param, w.tbl, w.mount)
 }
 
 // source is root's collection under outer, as core expands a fork from a
@@ -352,22 +336,19 @@ func (g *Graph) collectionParam(name string, split *syntax.SplitExp, root *synta
 	return &syntax.StructMember{Id: name, Tname: t.TypeId()}, nil
 }
 
-// writeElementValue writes a fork element's members as a bundle of params.
-func writeElementValue(dir string, members map[string]json.Marshaler, params []*syntax.StructMember, tbl *types.Table, mount shim.Mount) error {
-	payload := make(map[string]any, len(members))
-
-	for name, el := range members {
-		raw, err := marshal(el)
-		if err != nil {
-			return err
-		}
-
-		if payload[name], err = types.DecodeJSON(raw); err != nil {
-			return fmt.Errorf("decode fork element: %w", err)
-		}
+// writeElementValue writes an element as a bundle of its one param.
+func writeElementValue(dir string, el json.Marshaler, param *syntax.StructMember, tbl *types.Table, mount shim.Mount) error {
+	raw, err := marshal(el)
+	if err != nil {
+		return err
 	}
 
-	if err := shim.WriteBundle(dir, payload, params, tbl, shim.Opts{Mount: mount}); err != nil {
+	v, err := types.DecodeJSON(raw)
+	if err != nil {
+		return fmt.Errorf("decode fork element: %w", err)
+	}
+
+	if err := shim.WriteBundle(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, tbl, shim.Opts{Mount: mount}); err != nil {
 		return fmt.Errorf("write fork element %s: %w", dir, err)
 	}
 

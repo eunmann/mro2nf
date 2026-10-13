@@ -104,9 +104,9 @@ func TestForkElementLeaves(t *testing.T) {
 
 // TestForkElementLeaves2D (#553): an element of a txt[][] is a txt[], so
 // each fork element of a split over MAKE.rows holds the files of its row,
-// one of a split over the map<txt[]> MAKE.byk those of its key, and one
-// zipping MAKE.cols those of its column too, each staged, not left as a
-// path into MAKE's task.
+// one of a split over the map<txt[]> MAKE.byk those of its key, and each
+// partner element of MAKE.cols, which PAIR zips, those of its column, each
+// staged, not left as a path into MAKE's task.
 func TestForkElementLeaves2D(t *testing.T) {
 	f := loadFixture(t, "map_file_2d")
 
@@ -135,7 +135,7 @@ func TestForkElementLeaves2D(t *testing.T) {
 	for root, want := range map[string][][]string{
 		"MAP_FILE_2D.ROWS": {{"r0_0.txt", "r0_1.txt"}, {"r1_0.txt"}},
 		"MAP_FILE_2D.BYK":  {{"k0_0.txt", "k0_1.txt"}, {"k1_0.txt"}},
-		"MAP_FILE_2D.PAIR": {{"c0_0.txt", "c0_1.txt", "r0_0.txt", "r0_1.txt"}, {"r1_0.txt"}},
+		"MAP_FILE_2D.PAIR": {{"r0_0.txt", "r0_1.txt"}, {"r1_0.txt"}},
 	} {
 		elems := elementDirs(t, forks, root)
 		if len(elems) != len(want) {
@@ -143,14 +143,26 @@ func TestForkElementLeaves2D(t *testing.T) {
 		}
 
 		for i, dir := range elems {
-			got := slices.DeleteFunc(leafNames(t, dir), func(n string) bool { return n == ".mre-origin" })
-			slices.Sort(got)
-
-			if d := cmp.Diff(want[i], got); d != "" {
+			if d := cmp.Diff(want[i], stagedLeaves(t, dir)); d != "" {
 				t.Errorf("%s fork %d element leaves (-want +got):\n%s", root, i, d)
 			}
 		}
 	}
+
+	cols := partnerDirs(t, forks, "MAP_FILE_2D.PAIR", "MAP_FILE_2D.MAKE", "cols")
+	if d := cmp.Diff([]string{"c0_0.txt", "c0_1.txt"}, stagedLeaves(t, cols["0"])); d != "" {
+		t.Errorf("MAKE.cols partner element 0 leaves (-want +got):\n%s", d)
+	}
+}
+
+// stagedLeaves are the names of the files staged in the bundle at dir, sorted.
+func stagedLeaves(t *testing.T, dir string) []string {
+	t.Helper()
+
+	got := slices.DeleteFunc(leafNames(t, dir), func(n string) bool { return n == ".mre-origin" })
+	slices.Sort(got)
+
+	return got
 }
 
 // stageFileOuts stages FBS.GEN's outs as mrp's GEN writes them: n files,

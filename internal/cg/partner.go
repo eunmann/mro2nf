@@ -21,13 +21,14 @@ const AbsentName = "none"
 
 var errPartnerSources = errors.New("splits of one output over one root disagree")
 
-// partner is a split over a fork root of an output of a stage that does
-// not fix the root's forks: a map call zipping the outputs of different
-// stages, or a disable binding splitting one. The stage's post writes the output's elements one dir per index,
-// and an instance stages only the one at its own index (zip_runtime). A
-// stage a runtime gate disables is read through the gate, `split Q.o
-// unless G.f`: an instance reads the gate, and the element only where the
-// gate holds Q enabled (#494).
+// partner is a split over a fork root of a stage output other than the one
+// the root's forks come from: a map call zipping several outputs, of one
+// stage or of several, or a disable binding splitting one. The stage's post
+// writes the output's elements one dir per index, and an instance stages
+// only the one at its own index (zip_runtime). A stage a runtime gate
+// disables is read through the gate, `split Q.o unless G.f`: an instance
+// reads the gate, and the element only where the gate holds Q enabled
+// (#494).
 type partner struct {
 	root  *syntax.CallGraphStage
 	split *syntax.SplitExp
@@ -70,9 +71,9 @@ func IndexToken(ix syntax.CollectionIndex) string {
 }
 
 // partnerOf is the partner sp is in st: a split over one of st's roots of a
-// stage output, of a stage other than the one that fixes the root's forks,
-// and forked on no root st is not. A partner stage forked on such a root
-// gathers there, which no one element serves.
+// stage output other than the root's own source, of a stage forked on no
+// root st is not. A partner stage forked on such a root gathers there,
+// which no one element serves.
 func (g *Graph) partnerOf(st *syntax.CallGraphStage, sp *syntax.SplitExp) (partner, bool) {
 	ref, gate, ok := partnerSource(sp)
 	if !ok || ref.Kind == syntax.KindSelf || gate != nil && gate.Kind == syntax.KindSelf {
@@ -85,7 +86,7 @@ func (g *Graph) partnerOf(st *syntax.CallGraphStage, sp *syntax.SplitExp) (partn
 	}
 
 	root := st.ForkRoots()[i]
-	if prod, fed := g.Producer(root); fed && prod == ref.Id {
+	if g.ownSource(root, ref) {
 		return partner{}, false
 	}
 
@@ -101,6 +102,19 @@ func (g *Graph) partnerOf(st *syntax.CallGraphStage, sp *syntax.SplitExp) (partn
 	}
 
 	return partner{root: root, split: sp, ref: ref}, true
+}
+
+// ownSource reports whether ref reads the stage output root's forks come
+// from, whose element root's fork element carries. A root a literal's
+// known length forks is fed by no stage, whichever split is its Value.
+func (g *Graph) ownSource(root *syntax.CallGraphStage, ref *syntax.RefExp) bool {
+	if prod, fed := g.Producer(root); !fed || prod != ref.Id {
+		return false
+	}
+
+	own, ok := root.Split().Value.(*syntax.RefExp)
+
+	return ok && own.OutputId == ref.OutputId
 }
 
 // partners are the partners of node's outputs over every root, one per
@@ -200,7 +214,7 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 		}
 
 		ed := filepath.Join(dir, IndexToken(ix))
-		if err := writeElementValue(ed, map[string]json.Marshaler{elementField: el}, []*syntax.StructMember{param}, w.tbl, w.mount); err != nil {
+		if err := writeElementValue(ed, el, param, w.tbl, w.mount); err != nil {
 			return err
 		}
 
