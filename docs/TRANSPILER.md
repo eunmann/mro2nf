@@ -72,7 +72,7 @@ cg.Graph.Topology → per node its fork roots, reads and gates
    │
 cgnf.Emit         → a Nextflow project on disk:
    │                  main.nf, subworkflows/, stage.nf, nextflow.config,
-   │                  _assets/mro/, _assets/types.json
+   │                  _assets/mro/
    ▼
 nextflow run main.nf …  →  PLAN, a task per stage instance, then OUTS
 ```
@@ -87,9 +87,7 @@ internal/
                    the _args resolver, fork elements, gates, pipeline outs
   cgnf/          → call graph -> Nextflow project (main.nf wiring, stage.nf)
   job/           → runs one stage job through mrjob as mrp runs it
-  frontend/      → lowers a Martian AST to the typed parameters of the manifest
-  ir/            → typed parameters of the program's callables and structs
-  types/         → type-directed file-leaf walk + type manifest
+  types/         → type-directed file-leaf walk over Martian's compiled types
   shim/          → bundle I/O, markers, output confinement
   logging/       → log/slog setup (stderr)
 ```
@@ -154,8 +152,7 @@ nextflow.config       ← params, retry policy, GPU requests, trace, the target 
 conf/                 ← the container profiles' and the HealthOmics profile's configs
 package.sh, parameter-template.json ← the HealthOmics package (§9)
 _assets/mro/          ← a copy of every .mro file the entry compiles from, each
-                        at its absolute path below it; PLAN compiles it
-_assets/types.json    ← the type manifest the OUTS task lays the outs out with
+                        at its absolute path below it; PLAN and OUTS compile it
 ```
 
 **`stage.nf`** declares `STAGE` (a non-split stage) and `STAGE_SPLIT`,
@@ -368,8 +365,9 @@ run's call would pass the kernel's 128 KiB limit on one argument; the entry's
 own call without it), compiles the call over the entry's
 declarations as `mrp` compiles an invocation (`ParseSourceBytes`, then
 `MakePipelineCallGraph`) as the entry file, and reads only the items its task
-staged (`-in`, an item or a dir of items). Without `-types`, each builds the
-type manifest from the invocation's own declarations.
+staged (`-in`, an item or a dir of items). Each finds a bundle's file leaves
+by the types the invocation compiled to: Martian's type table, which holds
+every filetype and struct, and the struct of each callable's outputs.
 
 - **`mre plan`** starts a run (§5). It rebuilds the run's invocation from the
   transpiled entry and the run's entry values, compiles it, checks it against
@@ -555,8 +553,8 @@ Both prefixes resolve identically on read-back. The rules:
 
 - **On write** (a stage produced an output that is a real file): the file is
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
-  This is `shim.MarkFiles`, which uses the type manifest to find exactly which
-  leaves are files (recursing into structs, arrays and maps).
+  This is `shim.MarkFiles`, which walks the compiled types to find exactly
+  which leaves are files (recursing into structs, arrays and typed maps).
 - **Linked bundles** (on write): an args bundle is read only by its own
   task, so the task's `mre stage` writes it linked
   (`shim.WriteLinkedBundle`), linking each leaf instead of copying it: a leaf of a staged bundle by its ordinal

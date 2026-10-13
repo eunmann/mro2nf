@@ -60,8 +60,8 @@ func TestResumeKeysOnTheBuild(t *testing.T) {
 
 // TestResumeKeysOnlyOnATasksOwnTypes (#286): after one stage's signature
 // changes, a -resume re-run of the re-transpiled project re-runs that stage
-// but keeps the unrelated stage cached. Every task used to stage the one
-// shared types.json, so any type edit re-ran the whole pipeline.
+// but keeps the unrelated stage cached: a task keys on its own node's spec
+// digest, not on the types of the whole pipeline.
 func TestResumeKeysOnlyOnATasksOwnTypes(t *testing.T) {
 	t.Parallel()
 

@@ -644,7 +644,7 @@ func unzipWorkflow(t *testing.T, path string) string {
 	}
 
 	entry := filepath.Join("_assets/mro", root, "testdata", "entry_file", "pipeline.mro")
-	want := []string{entry, "_assets/types.json", "conf/container.config", "conf/healthomics.config", "main.nf", "nextflow.config", "parameter-template.json", "stage.nf"}
+	want := []string{entry, "conf/container.config", "conf/healthomics.config", "main.nf", "nextflow.config", "parameter-template.json", "stage.nf"}
 
 	slices.Sort(names)
 

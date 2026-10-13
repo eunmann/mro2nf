@@ -6,17 +6,16 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
 )
 
 // postFields posts the instance outs stand for with Fields and Gates set, and
 // returns the fields dir and the gates the post wrote.
-func (f *fixture) postFields(outs string, man types.Manifest) (string, string) {
+func (f *fixture) postFields(outs string) (string, string) {
 	f.t.Helper()
 
 	fields, gates := f.next("fields"), f.next("gates")
-	if err := f.g.Post(PostSpec{Args: outs, Outs: outs, Manifest: man, Forks: f.next("forks"), Fields: fields, Gates: gates}); err != nil {
+	if err := f.g.Post(PostSpec{Args: outs, Outs: outs, Forks: f.next("forks"), Fields: fields, Gates: gates}); err != nil {
 		f.t.Fatal(err)
 	}
 
@@ -35,7 +34,7 @@ func TestPostFields(t *testing.T) {
 	f := loadFixture(t, "chain_gate")
 
 	src := f.outs("CH.SRC", nil, `{"y":4,"flag":false}`)
-	fields, _ := f.postFields(src, fixtureManifest(t, "chain_gate"))
+	fields, _ := f.postFields(src)
 
 	for field, want := range map[string]string{"y": `{"y":4}`, "flag": `{"flag":false}`} {
 		dir := filepath.Join(fields, field)
@@ -91,7 +90,7 @@ func TestPostGates(t *testing.T) {
 	for _, tc := range cases {
 		f := loadFixture(t, tc.fixture)
 
-		if _, got := f.postFields(f.outs(tc.node, nil, tc.outs), fixtureManifest(t, tc.fixture)); got != tc.want {
+		if _, got := f.postFields(f.outs(tc.node, nil, tc.outs)); got != tc.want {
 			t.Errorf("%s outs %s: gates %q, want %q", tc.node, tc.outs, got, tc.want)
 		}
 	}

@@ -27,7 +27,6 @@ func TestArgsLinkOneCopy(t *testing.T) {
 	}
 
 	f := &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
-	man := g.Manifest()
 
 	src := filepath.Join(t.TempDir(), "payload.txt")
 	if err := os.WriteFile(src, []byte("MRE_BENCH_FORKS_PROBE\n"), 0o644); err != nil {
@@ -35,7 +34,7 @@ func TestArgsLinkOneCopy(t *testing.T) {
 	}
 
 	mkpay := f.next("outs")
-	if err := writeOuts(mkpay, json.RawMessage(`{"f":`+strconv.Quote(src)+`}`), man, "MKPAY"); err != nil {
+	if err := writeOuts(mkpay, json.RawMessage(`{"f":`+strconv.Quote(src)+`}`), g, "MKPAY"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -58,7 +57,7 @@ func TestArgsLinkOneCopy(t *testing.T) {
 
 	for i, el := range elems {
 		args := f.next("args")
-		if _, err := g.WriteArgs(ArgsSpec{Node: "FANOUT.FUSE", In: []string{mkpay, el}, Manifest: man, Out: args}); err != nil {
+		if _, err := g.WriteArgs(ArgsSpec{Node: "FANOUT.FUSE", In: []string{mkpay, el}, Out: args}); err != nil {
 			t.Fatal(err)
 		}
 

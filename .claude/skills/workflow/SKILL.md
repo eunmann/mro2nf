@@ -22,7 +22,7 @@ Before branching, challenge whether this is the right scope — a single branch 
 
 ## Implementation
 
-1. **Sprawl first.** Read the related features, consumers, and call paths the change touches. For non-trivial work, apply the `repo-research` skill. A transpiler change usually spans layers — check whether the frontend/IR, call graph, emitter, job runner, shim and `mre` sides all agree before editing one of them.
+1. **Sprawl first.** Read the related features, consumers, and call paths the change touches. For non-trivial work, apply the `repo-research` skill. A transpiler change usually spans layers — check whether the type walk, call graph, emitter, job runner, shim and `mre` sides all agree before editing one of them.
 2. **Implement directly.** Write code and its tests together. Use the `tdd` skill only for bug fixes, where the failing test proves the bug.
 3. **Refactor where warranted.** If existing code near the change should be restructured for clarity or correctness, do it — in its own commit. No hacks, no workarounds, no compatibility shims (pre-production).
 4. **Edit discipline.** Edit/Write tools for all source edits. Complete the full edit set before any lint or test run.
@@ -47,7 +47,7 @@ Co-Authored-By: ...
 
 - **Header:** `type(scope): summary`, at most 72 characters. The summary is imperative, lowercase and has no trailing period. It describes behaviour, not files: `fix(cgnf): zero-chunk split no longer starves its join`, not `update generate.go`.
 - **Type:** `feat` new behaviour · `fix` bug fix · `refactor` no behaviour change · `perf` · `test` tests only · `docs` · `build` Makefile, deps, generators · `ci` · `chore` everything else.
-- **Scope:** the area touched, as one short word: a package or layer (`frontend`, `cg`, `cgnf`, `job`, `shim`, `mre`, `config`, `e2e`, `bench`, `deploy`). Omit the scope when the change spans many areas.
+- **Scope:** the area touched, as one short word: a package or layer (`types`, `cg`, `cgnf`, `job`, `shim`, `mre`, `e2e`, `bench`, `deploy`). Omit the scope when the change spans many areas.
 - **Body:** optional. Keep it to the why and anything a reviewer can't see in the diff.
 - **`Task:` label** (a footer, before any trailers the session adds):
   - `impl #<issue>`: implementing an issue. Use `impl #238 #246` when one commit serves several.

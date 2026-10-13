@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -140,10 +139,22 @@ func (g *Graph) Invocation() (*core.InvocationData, error) {
 	return inv, nil
 }
 
-// Manifest is the type manifest of the invocation's declarations, the one
-// the transpiler builds from the same source (types.BuildManifest).
-func (g *Graph) Manifest() types.Manifest {
-	return types.BuildManifest(frontend.Lower(g.ast))
+// Table is the file-leaf walk over the invocation's compiled types.
+func (g *Graph) Table() *types.Table { return types.NewTable(g.types) }
+
+// Params are the callable's parameters of role (types.Params).
+func (g *Graph) Params(callable, role string) ([]*syntax.StructMember, error) {
+	c := g.ast.Callables.Table[callable]
+	if c == nil {
+		return nil, fmt.Errorf("%w: %q", errNoCallable, callable)
+	}
+
+	ps, err := types.Params(c, role)
+	if err != nil {
+		return nil, fmt.Errorf("params of %s: %w", callable, err)
+	}
+
+	return ps, nil
 }
 
 // MroPaths are the include paths the invocation compiled with, mrp's

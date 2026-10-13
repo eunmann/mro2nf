@@ -189,17 +189,12 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 		return nil, fmt.Errorf("decode values: %w", err)
 	}
 
-	man, err := src.Manifest(mroPaths)
+	params, tbl, err := src.InParams(inv.Call, mroPaths)
 	if err != nil {
-		return nil, fmt.Errorf("plan: %w", err)
+		return nil, fmt.Errorf("plan: entry params: %w", err)
 	}
 
-	params, err := man.Params(inv.Call, types.RoleIn)
-	if err != nil {
-		return nil, fmt.Errorf("entry params: %w", err)
-	}
-
-	if err := typeOverrides(over, params, man.Table()); err != nil {
+	if err := typeOverrides(over, params, tbl); err != nil {
 		return nil, err
 	}
 

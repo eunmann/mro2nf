@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
@@ -30,7 +29,7 @@ func mountedTree(t *testing.T) (shim.Mount, string, string) {
 // its tree copied or linked into the bundle, and it reads back unchanged.
 func TestMountedLeafStaysItsPath(t *testing.T) {
 	mount, file, dir := mountedTree(t)
-	params := []ir.Param{{Name: "f", BaseType: "file", IsFile: true}, {Name: "d", BaseType: "path", IsFile: true}}
+	params := fields(t, "f file", "d path")
 	payload := map[string]any{"f": file, "d": dir}
 
 	work := t.TempDir()
@@ -45,10 +44,10 @@ func TestMountedLeafStaysItsPath(t *testing.T) {
 
 	writers := map[string]func(dir string) error{
 		"WriteBundle": func(b string) error {
-			return shim.WriteBundle(b, payload, params, fileTable(), shim.Opts{Confine: conf, Mount: mount})
+			return shim.WriteBundle(b, payload, params, fileTable(t), shim.Opts{Confine: conf, Mount: mount})
 		},
 		"WriteLinkedBundle": func(b string) error {
-			return shim.WriteLinkedBundle(b, payload, params, fileTable(), mount)
+			return shim.WriteLinkedBundle(b, payload, params, fileTable(t), mount)
 		},
 	}
 
@@ -120,7 +119,7 @@ func TestMountHolds(t *testing.T) {
 // refuses a target outside the task.
 func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 	mount, file, _ := mountedTree(t)
-	params := []ir.Param{{Name: "out", BaseType: "file", IsFile: true}}
+	params := fields(t, "out file")
 
 	work := t.TempDir()
 	link := filepath.Join(work, "main", "files", "r1.fastq")
@@ -140,7 +139,7 @@ func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 		}
 
 		bundle := filepath.Join(t.TempDir(), "outs")
-		err = shim.WriteBundle(bundle, map[string]any{"out": link}, params, fileTable(), shim.Opts{Confine: conf, Mount: m})
+		err = shim.WriteBundle(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Mount: m})
 
 		if m == "" {
 			if err == nil {

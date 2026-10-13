@@ -13,11 +13,11 @@ import (
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // The records of a split's chunks dir: each chunk's position and resources
@@ -81,7 +81,7 @@ func definePool(fs *flag.FlagSet, p *job.Pool) {
 // run runs one phase of the stage instance whose args bundle -args holds,
 // as mrp runs its job: split writes the chunks dir, main and join write the
 // outs bundle.
-func (f *runFlags) run(ctx context.Context, g *cg.Graph, man types.Manifest) error {
+func (f *runFlags) run(ctx context.Context, g *cg.Graph) error {
 	if err := f.rt.Local.Check(); err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
@@ -104,11 +104,11 @@ func (f *runFlags) run(ctx context.Context, g *cg.Graph, man types.Manifest) err
 
 	switch f.phase {
 	case job.PhaseSplit:
-		return f.split(ctx, in, args, man)
+		return f.split(ctx, g, in, args)
 	case job.PhaseMain:
-		return f.main(ctx, in, args, man)
+		return f.main(ctx, g, in, args)
 	case job.PhaseJoin:
-		return f.join(ctx, in, args, man)
+		return f.join(ctx, g, in, args)
 	default:
 		return fmt.Errorf("%w: %q", errPhase, f.phase)
 	}
@@ -146,9 +146,14 @@ func (f *runFlags) instance(g *cg.Graph) (job.Instance, core.LazyArgumentMap, er
 	return job.Instance{Stage: stage, ForkID: stamp.ForkID()}, args, nil
 }
 
-func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArgumentMap, man types.Manifest) error {
+func (f *runFlags) split(ctx context.Context, g *cg.Graph, in job.Instance, args core.LazyArgumentMap) error {
 	if !in.Stage.Split {
 		return fmt.Errorf("split of %s: %w", in.Stage.Fqid, errNotSplit)
+	}
+
+	params, err := g.Params(in.Stage.Callable, types.RoleChunkIn)
+	if err != nil {
+		return fmt.Errorf("split: %w", err)
 	}
 
 	if err := f.stamp(in, job.PhaseSplit); err != nil {
@@ -165,7 +170,7 @@ func (f *runFlags) split(ctx context.Context, in job.Instance, args core.LazyArg
 		return err
 	}
 
-	if err := writeChunksDir(f.out, defs, man, callable(in), opts); err != nil {
+	if err := writeChunksDir(f.out, defs, params, g.Table(), opts); err != nil {
 		return err
 	}
 
@@ -250,7 +255,7 @@ func (f *runFlags) bundleOpts(sub string) (shim.Opts, error) {
 	return shim.Opts{Confine: conf, Mount: f.mount}, nil
 }
 
-func (f *runFlags) main(ctx context.Context, in job.Instance, args core.LazyArgumentMap, man types.Manifest) error {
+func (f *runFlags) main(ctx context.Context, g *cg.Graph, in job.Instance, args core.LazyArgumentMap) error {
 	chunk, role := job.Unsplit(), types.RoleOut
 
 	if in.Stage.Split {
@@ -260,6 +265,11 @@ func (f *runFlags) main(ctx context.Context, in job.Instance, args core.LazyArgu
 		}
 
 		chunk, role = c, types.RoleMainOut
+	}
+
+	params, err := g.Params(in.Stage.Callable, role)
+	if err != nil {
+		return fmt.Errorf("main: %w", err)
 	}
 
 	if err := f.stamp(in, job.ChunkName(chunk.Index, chunk.Count)); err != nil {
@@ -276,12 +286,17 @@ func (f *runFlags) main(ctx context.Context, in job.Instance, args core.LazyArgu
 		return err
 	}
 
-	return writeOutsBundle(f.out, outs, man, callable(in), role, opts)
+	return writeOutsBundle(f.out, outs, params, g.Table(), opts)
 }
 
-func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgumentMap, man types.Manifest) error {
+func (f *runFlags) join(ctx context.Context, g *cg.Graph, in job.Instance, args core.LazyArgumentMap) error {
 	if !in.Stage.Split {
 		return fmt.Errorf("join of %s: %w", in.Stage.Fqid, errNotSplit)
+	}
+
+	params, err := g.Params(in.Stage.Callable, types.RoleOut)
+	if err != nil {
+		return fmt.Errorf("join: %w", err)
 	}
 
 	defs, names, err := readChunksDir(f.chunks)
@@ -315,11 +330,8 @@ func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgu
 		return err
 	}
 
-	return writeOutsBundle(f.out, final, man, callable(in), types.RoleOut, opts)
+	return writeOutsBundle(f.out, final, params, g.Table(), opts)
 }
-
-// callable is the instance's stage name, its type manifest key.
-func callable(in job.Instance) string { return in.Stage.Callable }
 
 // readArgsMap reads a bundle's payload object with its file leaves at their
 // staged paths.
@@ -346,18 +358,13 @@ type chunkJSON struct {
 }
 
 // writeChunksDir writes each chunk def the split returned as a bundle of
-// its args, the files they name staged, named by mrp's chunk name, and the
-// join's resources beside them. The split chose the files, so opts confine
-// them.
-func writeChunksDir(dir string, defs *core.StageDefs, man types.Manifest, callable string, opts shim.Opts) error {
-	params, err := man.Params(callable, types.RoleChunkIn)
-	if err != nil {
-		return fmt.Errorf("chunk params of %s: %w", callable, err)
-	}
-
+// its args, the files the chunk params name staged, named by mrp's chunk
+// name, and the join's resources beside them. The split chose the files, so
+// opts confine them.
+func writeChunksDir(dir string, defs *core.StageDefs, params []*syntax.StructMember, tbl *types.Table, opts shim.Opts) error {
 	for i, d := range defs.ChunkDefs {
 		cd := filepath.Join(dir, job.ChunkName(i, len(defs.ChunkDefs)))
-		if err := writeObjectBundle(cd, d.Args, params, man.Table(), opts); err != nil {
+		if err := writeObjectBundle(cd, d.Args, params, tbl, opts); err != nil {
 			return err
 		}
 
@@ -448,15 +455,10 @@ func chunkNames(dir string) ([]string, error) {
 	return names, nil
 }
 
-// writeOutsBundle writes a job's _outs as a bundle of callable's role
-// params, the files they name staged as opts say. The adapter writes a
-// stage with no outputs an _outs of "", which carries no outs.
-func writeOutsBundle(dir string, raw json.RawMessage, man types.Manifest, callable, role string, opts shim.Opts) error {
-	params, err := man.Params(callable, role)
-	if err != nil {
-		return fmt.Errorf("out params of %s: %w", callable, err)
-	}
-
+// writeOutsBundle writes a job's _outs as a bundle of params, the files
+// they name staged as opts say. The adapter writes a stage with no outputs
+// an _outs of "", which carries no outs.
+func writeOutsBundle(dir string, raw json.RawMessage, params []*syntax.StructMember, tbl *types.Table, opts shim.Opts) error {
 	v, err := types.DecodeJSON(raw)
 	if err != nil {
 		return fmt.Errorf("decode _outs: %w", err)
@@ -470,10 +472,10 @@ func writeOutsBundle(dir string, raw json.RawMessage, man types.Manifest, callab
 		}
 	}
 
-	return writeBundle(dir, payload, params, man.Table(), opts)
+	return writeBundle(dir, payload, params, tbl, opts)
 }
 
-func writeObjectBundle(dir string, m core.LazyArgumentMap, params []ir.Param, tbl *types.Table, opts shim.Opts) error {
+func writeObjectBundle(dir string, m core.LazyArgumentMap, params []*syntax.StructMember, tbl *types.Table, opts shim.Opts) error {
 	payload := make(map[string]any, len(m))
 
 	for k, v := range m {
@@ -488,7 +490,7 @@ func writeObjectBundle(dir string, m core.LazyArgumentMap, params []ir.Param, tb
 	return writeBundle(dir, payload, params, tbl, opts)
 }
 
-func writeBundle(dir string, payload map[string]any, params []ir.Param, tbl *types.Table, opts shim.Opts) error {
+func writeBundle(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts shim.Opts) error {
 	if err := shim.WriteBundle(dir, payload, params, tbl, opts); err != nil {
 		return fmt.Errorf("write bundle %s: %w", dir, err)
 	}

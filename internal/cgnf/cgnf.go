@@ -74,25 +74,14 @@ func Emit(entry string, opts Options) error {
 		return err
 	}
 
-	man, err := src.Manifest(opts.MroPaths)
-	if err != nil {
-		return fmt.Errorf("emit: %w", err)
-	}
-
-	types, err := man.Encode()
-	if err != nil {
-		return fmt.Errorf("emit types: %w", err)
-	}
-
 	files, err := p.workflows()
 	if err != nil {
 		return err
 	}
 
 	maps.Copy(files, map[string]string{
-		"stage.nf":           stageModule,
-		"nextflow.config":    p.config(),
-		"_assets/types.json": types.Subset(slices.Sorted(maps.Keys(man.Callables))...),
+		"stage.nf":        stageModule,
+		"nextflow.config": p.config(),
 	})
 
 	if err := addMroFiles(files, src.Files); err != nil {
@@ -184,7 +173,7 @@ func newProject(src cg.Source, opts Options) (*project, error) {
 		}
 	}
 
-	readers, err := g.EntryFileReaders(g.Manifest())
+	readers, err := g.EntryFileReaders()
 	if err != nil {
 		return nil, fmt.Errorf("emit: %w", err)
 	}

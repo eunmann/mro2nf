@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -206,7 +205,7 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 		}
 
 		ed := filepath.Join(dir, IndexToken(ix))
-		if err := writeElementValue(ed, map[string]json.Marshaler{elementField: el}, []ir.Param{param}, w.tbl, w.mount); err != nil {
+		if err := writeElementValue(ed, map[string]json.Marshaler{elementField: el}, []*syntax.StructMember{param}, w.tbl, w.mount); err != nil {
 			return err
 		}
 

@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // s3Prefix begins an s3:// URI, in any case, as Nextflow reads its scheme.
@@ -29,12 +29,7 @@ func MountEntryValues(src Source, inv *core.InvocationData, mroPaths []string, m
 		return inv, nil
 	}
 
-	man, err := src.Manifest(mroPaths)
-	if err != nil {
-		return nil, err
-	}
-
-	params, err := man.Params(inv.Call, types.RoleIn)
+	params, tbl, err := src.InParams(inv.Call, mroPaths)
 	if err != nil {
 		return nil, fmt.Errorf("entry params: %w", err)
 	}
@@ -43,18 +38,18 @@ func MountEntryValues(src Source, inv *core.InvocationData, mroPaths []string, m
 	out.Args = maps.Clone(inv.Args)
 
 	for _, p := range params {
-		raw, ok := inv.Args[p.Name]
+		raw, ok := inv.Args[p.Id]
 		if !ok {
 			continue
 		}
 
-		mounted, changed, err := mountValue(man.Table(), p, raw, mount)
+		mounted, changed, err := mountValue(tbl, p, raw, mount)
 		if err != nil {
 			return nil, err
 		}
 
 		if changed {
-			out.Args[p.Name] = mounted
+			out.Args[p.Id] = mounted
 		}
 	}
 
@@ -63,16 +58,16 @@ func MountEntryValues(src Source, inv *core.InvocationData, mroPaths []string, m
 
 // mountValue is the entry input p's value raw with each s3:// file leaf of
 // a mounted bucket at its mount path, and whether any leaf was one.
-func mountValue(tbl *types.Table, p ir.Param, raw json.RawMessage, mount shim.Mount) (json.RawMessage, bool, error) {
+func mountValue(tbl *types.Table, p *syntax.StructMember, raw json.RawMessage, mount shim.Mount) (json.RawMessage, bool, error) {
 	v, err := types.DecodeJSON(raw)
 	if err != nil {
-		return nil, false, fmt.Errorf("decode entry input %s: %w", p.Name, err)
+		return nil, false, fmt.Errorf("decode entry input %s: %w", p.Id, err)
 	}
 
 	changed := false
 
-	nv, err := tbl.Apply([]ir.Param{p}, map[string]any{p.Name: v}, func(s string) (string, error) {
-		at, ok, err := mountPath(p.Name, s, mount)
+	nv, err := tbl.Apply([]*syntax.StructMember{p}, map[string]any{p.Id: v}, func(s string) (string, error) {
+		at, ok, err := mountPath(p.Id, s, mount)
 		if err != nil {
 			return "", err
 		}
@@ -93,9 +88,9 @@ func mountValue(tbl *types.Table, p ir.Param, raw json.RawMessage, mount shim.Mo
 		return raw, false, nil
 	}
 
-	enc, err := json.Marshal(nv[p.Name])
+	enc, err := json.Marshal(nv[p.Id])
 	if err != nil {
-		return nil, false, fmt.Errorf("encode entry input %s: %w", p.Name, err)
+		return nil, false, fmt.Errorf("encode entry input %s: %w", p.Id, err)
 	}
 
 	return enc, true, nil

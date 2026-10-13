@@ -13,15 +13,14 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 )
 
 var errNoEntry = errors.New("-entry is required")
 
-// graphFlags locate the invocation a call-graph subcommand resolves against
-// and the type manifest its bundles are written with.
+// graphFlags locate the invocation a call-graph subcommand resolves against,
+// whose compiled types its bundles are written with.
 type graphFlags struct {
-	entry, call, mropath, types string
+	entry, call, mropath string
 }
 
 func addGraph(fs *flag.FlagSet) *graphFlags {
@@ -29,14 +28,13 @@ func addGraph(fs *flag.FlagSet) *graphFlags {
 	fs.StringVar(&g.entry, "entry", "", "the entry .mro, compiled as mrp compiles it; Martian resolves its includes and stage code beside it")
 	fs.StringVar(&g.call, "call", "", "file holding the run's call, base64 of the call mre plan rebuilt, in place of the entry's own (default: the entry's call)")
 	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the -entry file's dir)")
-	fs.StringVar(&g.types, "types", "", "type manifest (types.json) path (default: built from the invocation's declarations)")
 
 	return g
 }
 
-func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
+func (g *graphFlags) load() (*cg.Graph, error) {
 	if g.entry == "" {
-		return nil, types.Manifest{}, errNoEntry
+		return nil, errNoEntry
 	}
 
 	var paths []string
@@ -46,24 +44,15 @@ func (g *graphFlags) load() (*cg.Graph, types.Manifest, error) {
 
 	call, err := readCall(g.call)
 	if err != nil {
-		return nil, types.Manifest{}, err
+		return nil, err
 	}
 
 	graph, err := cg.Load(g.entry, call, paths)
 	if err != nil {
-		return nil, types.Manifest{}, fmt.Errorf("load call graph: %w", err)
+		return nil, fmt.Errorf("load call graph: %w", err)
 	}
 
-	if g.types == "" {
-		return graph, graph.Manifest(), nil
-	}
-
-	man, err := types.LoadManifest(g.types)
-	if err != nil {
-		return nil, types.Manifest{}, fmt.Errorf("load type manifest: %w", err)
-	}
-
-	return graph, man, nil
+	return graph, nil
 }
 
 // readCall is the call the file at path holds, base64; "" reads none. A
@@ -104,7 +93,7 @@ func (a *argsFlags) register(fs *flag.FlagSet) {
 
 // write writes the instance's args bundle into out from its staged upstream
 // outs and fork elements, its file leaves linked to the staged files.
-func (a *argsFlags) write(g *cg.Graph, man types.Manifest, out string) (cg.Instance, error) {
+func (a *argsFlags) write(g *cg.Graph, out string) (cg.Instance, error) {
 	forks := make([]cg.Element, len(a.forks))
 	for i, rec := range a.forks {
 		el, err := g.DecodeElement(rec)
@@ -115,12 +104,12 @@ func (a *argsFlags) write(g *cg.Graph, man types.Manifest, out string) (cg.Insta
 		forks[i] = el
 	}
 
-	files, err := stagedEntryFiles(g, man, a.leaves)
+	files, err := stagedEntryFiles(g, a.leaves)
 	if err != nil {
 		return cg.Instance{}, fmt.Errorf("args: %w", err)
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Forks: forks, Manifest: man, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Mount: a.mount})
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Mount: a.mount})
 	if err != nil {
 		return cg.Instance{}, fmt.Errorf("args: %w", err)
 	}
@@ -130,7 +119,7 @@ func (a *argsFlags) write(g *cg.Graph, man types.Manifest, out string) (cg.Insta
 
 // stagedEntryFiles maps the entry file values -leaves lists, which the
 // task staged below entry/, to the paths it reads them at.
-func stagedEntryFiles(g *cg.Graph, man types.Manifest, leaves string) (map[string]string, error) {
+func stagedEntryFiles(g *cg.Graph, leaves string) (map[string]string, error) {
 	if leaves == "" {
 		return nil, nil
 	}
@@ -146,7 +135,7 @@ func stagedEntryFiles(g *cg.Graph, man types.Manifest, leaves string) (map[strin
 		ids = append(ids, id)
 	}
 
-	files, err := g.StagedEntryFiles(man, "entry", ids)
+	files, err := g.StagedEntryFiles("entry", ids)
 	if err != nil {
 		return nil, fmt.Errorf("staged entry files: %w", err)
 	}
@@ -168,8 +157,8 @@ func (p *postFlags) register(fs *flag.FlagSet) {
 
 // post stamps the outs bundle outs of the instance the args bundle args
 // stamps and writes the fork elements of every root it feeds.
-func (p *postFlags) post(g *cg.Graph, man types.Manifest, args, outs string) error {
-	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, Manifest: man, Forks: p.forks, Fields: p.fields, Gates: p.gates, Mount: p.mount}); err != nil {
+func (p *postFlags) post(g *cg.Graph, args, outs string) error {
+	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, Forks: p.forks, Fields: p.fields, Gates: p.gates, Mount: p.mount}); err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
 
@@ -195,7 +184,7 @@ func runOuts(ctx context.Context, argv []string) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	g, man, err := gf.load()
+	g, err := gf.load()
 	if err != nil {
 		return err
 	}
@@ -205,12 +194,12 @@ func runOuts(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	files, err := stagedEntryFiles(g, man, *leaves)
+	files, err := stagedEntryFiles(g, *leaves)
 	if err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}
 
-	spec := cg.OutsSpec{In: in, Locations: locs, EntryFiles: files, Manifest: man, Work: *work, Results: *out, OutsJSON: *outsJSON}
+	spec := cg.OutsSpec{In: in, Locations: locs, EntryFiles: files, Work: *work, Results: *out, OutsJSON: *outsJSON}
 	if err := g.WriteOuts(ctx, spec); err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}

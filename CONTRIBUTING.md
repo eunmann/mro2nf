@@ -16,9 +16,7 @@ internal/
   cg/          Martian's compiled call graph: witness, topology, plan, resolver
   cgnf/        call graph -> Nextflow project (main.nf wiring, stage.nf module)
   job/         one stage job through mrjob, as mrp runs it
-  frontend/    lower a Martian AST to the typed parameters of the type manifest
-  ir/          typed parameters of callables and structs
-  types/       type-directed file-leaf walk + type manifest
+  types/       type-directed file-leaf walk over Martian's compiled types
   shim/        bundle I/O, markers, output confinement
   logging/     slog setup
 vendor-martian/python/   pinned martian_shell.py + martian.py adapters, which mre embeds (Martian's LICENSE beside)

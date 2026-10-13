@@ -238,7 +238,6 @@ process OUTS {
     path ups, stageAs: 'in/u*', arity: '0..*'
     val locs
     tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
-    path 'types.json'
     path 'mro'
 
     output:
@@ -250,7 +249,7 @@ process OUTS {
     mkdir -p in
     ${callFile(meta)}
     ${locations(ups, locs)}
-    ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -types types.json -in in -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
+    ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -in in -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
     """
 }
 

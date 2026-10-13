@@ -1,9 +1,9 @@
 // Package types implements the type-directed file-leaf walk mre runs at every
-// task boundary. Given a parameter's declared type and a decoded
-// JSON value, it locates every file-bearing leaf — including files nested inside
-// arrays, typed maps, and (arbitrarily deep) structs — and applies a transform
-// so the shim can rewrite paths on each task boundary without guessing which
-// strings are paths.
+// task boundary. Given a parameter's type in Martian's compiled type table and
+// a decoded JSON value, it locates every file-bearing leaf — including files
+// nested inside arrays, typed maps, and (arbitrarily deep) structs — and
+// applies a transform so the shim can rewrite paths on each task boundary
+// without guessing which strings are paths.
 package types
 
 import (
@@ -14,39 +14,39 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/eunmann/mro2nf/internal/ir"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// ErrSkipLeaf is returned by a Transform to resolve that file leaf to null and
-// continue the walk instead of aborting it (the leaf analog of
-// filepath.SkipDir). It lets publish drop a declared output file the pipeline
-// never produced, matching Martian's publish-time "absent file -> null".
-var ErrSkipLeaf = errors.New("skip file leaf")
+var (
+	// ErrSkipLeaf is returned by a Transform to resolve that file leaf to null
+	// and continue the walk instead of aborting it (the leaf analog of
+	// filepath.SkipDir). It lets publish drop a declared output file the
+	// pipeline never produced, matching Martian's publish-time "absent file ->
+	// null".
+	ErrSkipLeaf = errors.New("skip file leaf")
+	// ErrUnknownType reports a parameter whose type the type table lacks.
+	ErrUnknownType = errors.New("type not in the type table")
+)
 
-// Table resolves struct type names to their fields so the walk can descend into
-// struct-typed values.
+// Table is the walk over the types of a compiled Martian program: its
+// filetypes, its structs, and the struct Martian registers for each callable's
+// outputs (syntax/compile_types.go CompileTypes).
 type Table struct {
-	structs map[string][]ir.Param
+	lookup *syntax.TypeLookup
 }
 
-// NewTable builds a Table from a program's struct definitions.
-func NewTable(structs map[string]*ir.StructType) *Table {
-	m := make(map[string][]ir.Param, len(structs))
-	for name, st := range structs {
-		m[name] = st.Fields
+// NewTable returns the walk over the types lookup holds.
+func NewTable(lookup *syntax.TypeLookup) *Table {
+	return &Table{lookup: lookup}
+}
+
+// Type returns the type id names.
+func (t *Table) Type(id syntax.TypeId) (syntax.Type, error) {
+	if typ := t.lookup.Get(id); typ != nil {
+		return typ, nil
 	}
 
-	return &Table{structs: m}
-}
-
-// IsStruct reports whether name is a known struct type. The skeleton-outs
-// builder uses it to leave a struct-typed output null (Martian's makeOutArg
-// pre-fills only genuine file leaves, nulling complex/struct outputs), since the
-// IR's IsFile flag is also set for structs that contain file fields.
-func (t *Table) IsStruct(name string) bool {
-	_, ok := t.structs[name]
-
-	return ok
+	return nil, fmt.Errorf("%w: %s", ErrUnknownType, id.String())
 }
 
 // Transform maps a file-leaf path to its replacement. Returning an error aborts
@@ -57,7 +57,7 @@ type Transform func(path string) (string, error)
 // to every file leaf, and returns the rewritten map. Keys without a matching
 // param (and values of non-file type) are passed through untouched, so the
 // result always preserves the full input, and every Object keeps its key order.
-func (t *Table) Apply(params []ir.Param, vals map[string]any, fn Transform) (map[string]any, error) {
+func (t *Table) Apply(params []*syntax.StructMember, vals map[string]any, fn Transform) (map[string]any, error) {
 	out, err := t.applyObject(params, sortedObject(vals), fn)
 	if err != nil {
 		return nil, err
@@ -72,23 +72,33 @@ func (t *Table) Apply(params []ir.Param, vals map[string]any, fn Transform) (map
 // 2.0 becomes 2 and 1E6 becomes 1e+06. It is for values that stand in for
 // .mro literals, such as entry-input overrides; a stage's own outputs keep
 // their text, as mrp passes them through unchanged.
-func (t *Table) FormatFloats(params []ir.Param, vals map[string]any) map[string]any {
-	return t.mapNumbers(params, vals, formatFloat)
+func (t *Table) FormatFloats(params []*syntax.StructMember, vals map[string]any) (map[string]any, error) {
+	out, err := t.mapObjectNumbers(params, sortedObject(vals), formatFloat)
+	if err != nil {
+		return nil, err
+	}
+
+	return objectMap(out), nil
 }
 
 // applyObject is Apply over an Object, walking its members in params order.
-func (t *Table) applyObject(params []ir.Param, o Object, fn Transform) (Object, error) {
+func (t *Table) applyObject(params []*syntax.StructMember, o Object, fn Transform) (Object, error) {
 	out := slices.Clone(o)
 
 	for _, p := range params {
-		i := o.index(p.Name)
+		i := o.index(p.Id)
 		if i < 0 {
 			continue
 		}
 
-		nv, err := t.walk(o[i].Value, p.BaseType, p.ArrayDim, p.MapDim, p.IsFile, fn)
+		typ, err := t.Type(p.Tname)
 		if err != nil {
-			return nil, fmt.Errorf("param %s: %w", p.Name, err)
+			return nil, fmt.Errorf("param %s: %w", p.Id, err)
+		}
+
+		nv, err := t.walk(o[i].Value, typ, fn)
+		if err != nil {
+			return nil, fmt.Errorf("param %s: %w", p.Id, err)
 		}
 
 		out[i].Value = nv
@@ -97,75 +107,192 @@ func (t *Table) applyObject(params []ir.Param, o Object, fn Transform) (Object, 
 	return out, nil
 }
 
-// mapNumbers returns a copy of vals with every number leaf of a declared param
-// replaced by leaf(number, base type).
-func (t *Table) mapNumbers(params []ir.Param, vals map[string]any, leaf numberLeaf) map[string]any {
-	return objectMap(t.mapObjectNumbers(params, sortedObject(vals), leaf))
+// elemType is the type of an element of the array type at: Martian's
+// ArrayType holds its innermost element type and a dimension count.
+func (t *Table) elemType(at *syntax.ArrayType) syntax.Type {
+	return t.lookup.GetArray(at.Elem, at.Dim-1)
 }
 
-// mapObjectNumbers is mapNumbers over an Object, keeping its key order.
-func (t *Table) mapObjectNumbers(params []ir.Param, o Object, leaf numberLeaf) Object {
+// isFileKind reports whether a file kind denotes a file or a directory of
+// files. KindMayContainPaths (a string, an untyped map) is a VDR heuristic,
+// not a file.
+func isFileKind(fk syntax.FileKind) bool {
+	return fk == syntax.KindIsFile || fk == syntax.KindIsDirectory
+}
+
+// walk descends one value along its type. Typed maps are walked in sorted key
+// order so the resulting file-leaf layout (and the markers written into the
+// bundle) do not depend on how a producer ordered its keys, keeping -resume
+// caching stable; every object keeps its own key order. A value whose shape
+// disagrees with its type (e.g. a null, or a json.Number where a file string
+// is declared) passes through untouched, since runtime values may
+// legitimately be null.
+func (t *Table) walk(v any, typ syntax.Type, fn Transform) (any, error) {
+	switch tv := v.(type) {
+	case []any:
+		at, ok := typ.(*syntax.ArrayType)
+		if !ok {
+			return v, nil
+		}
+
+		return t.walkSlice(tv, t.elemType(at), fn)
+	case map[string]any:
+		nv, err := t.walk(sortedObject(tv), typ, fn)
+
+		return asMap(nv), err
+	case Object:
+		switch ot := typ.(type) {
+		case *syntax.TypedMapType:
+			return t.walkMap(tv, ot.Elem, fn)
+		case *syntax.StructType:
+			return t.applyObject(ot.Members, tv, fn)
+		default:
+			return v, nil
+		}
+	case string:
+		return t.walkString(tv, typ, fn)
+	default:
+		return v, nil
+	}
+}
+
+// walkString applies fn to s when typ is a file leaf type. Martian marks a
+// struct that contains file fields as a directory kind, so a string where
+// such a struct is declared is a leaf too.
+func (t *Table) walkString(s string, typ syntax.Type, fn Transform) (any, error) {
+	switch typ.(type) {
+	case *syntax.ArrayType, *syntax.TypedMapType:
+		return s, nil
+	}
+
+	if !isFileKind(typ.IsFile()) {
+		return s, nil
+	}
+
+	nv, err := fn(s)
+	if errors.Is(err, ErrSkipLeaf) {
+		return nil, nil
+	}
+
+	return nv, err
+}
+
+func (t *Table) walkSlice(arr []any, elem syntax.Type, fn Transform) (any, error) {
+	out := make([]any, len(arr))
+
+	for i, e := range arr {
+		nv, err := t.walk(e, elem, fn)
+		if err != nil {
+			return nil, err
+		}
+
+		out[i] = nv
+	}
+
+	return out, nil
+}
+
+func (t *Table) walkMap(m Object, elem syntax.Type, fn Transform) (any, error) {
+	out := slices.Clone(m)
+
+	for _, i := range sortedIndices(m) {
+		nv, err := t.walk(m[i].Value, elem, fn)
+		if err != nil {
+			return nil, err
+		}
+
+		out[i].Value = nv
+	}
+
+	return out, nil
+}
+
+// numberLeaf maps one number leaf given the name of its declared base type.
+type numberLeaf func(n json.Number, base string) any
+
+// mapObjectNumbers returns o with the number leaves of each declared param
+// mapped by leaf, keeping o's key order.
+func (t *Table) mapObjectNumbers(params []*syntax.StructMember, o Object, leaf numberLeaf) (Object, error) {
 	out := slices.Clone(o)
 
 	for _, p := range params {
-		if i := o.index(p.Name); i >= 0 {
-			out[i].Value = t.mapNumber(o[i].Value, p.BaseType, p.ArrayDim, p.MapDim, leaf)
+		i := o.index(p.Id)
+		if i < 0 {
+			continue
+		}
+
+		typ, err := t.Type(p.Tname)
+		if err != nil {
+			return nil, fmt.Errorf("param %s: %w", p.Id, err)
+		}
+
+		if out[i].Value, err = t.mapNumber(o[i].Value, typ, leaf); err != nil {
+			return nil, fmt.Errorf("param %s: %w", p.Id, err)
 		}
 	}
 
-	return out
+	return out, nil
 }
-
-// numberLeaf maps one number leaf given its declared base type.
-type numberLeaf func(n json.Number, base string) any
 
 // mapNumber returns v with its number leaves mapped, never mutating v: nested
 // slices and maps are rebuilt copy-on-write so the caller-owned input survives
-// intact (mapNumbers' copy-on-return contract).
-func (t *Table) mapNumber(v any, base string, arrayDim, mapDim int, leaf numberLeaf) any {
+// intact. A number is mapped by the base type name of the type it is found at.
+func (t *Table) mapNumber(v any, typ syntax.Type, leaf numberLeaf) (any, error) {
 	switch tv := v.(type) {
 	case []any:
-		if arrayDim <= 0 {
-			return v
+		at, ok := typ.(*syntax.ArrayType)
+		if !ok {
+			return v, nil
 		}
 
+		elem := t.elemType(at)
 		out := make([]any, len(tv))
+
 		for i, e := range tv {
-			out[i] = t.mapNumber(e, base, arrayDim-1, mapDim, leaf)
-		}
-
-		return out
-	case map[string]any:
-		return asMap(t.mapNumber(sortedObject(tv), base, arrayDim, mapDim, leaf))
-	case Object:
-		if mapDim > 0 {
-			// One typed-map level carrying mapDim-1 inner array dims (see walkMap).
-			out := slices.Clone(tv)
-			for i, m := range tv {
-				out[i].Value = t.mapNumber(m.Value, base, arrayDim+mapDim-1, 0, leaf)
+			var err error
+			if out[i], err = t.mapNumber(e, elem, leaf); err != nil {
+				return nil, err
 			}
-
-			return out
 		}
 
-		if fields, ok := t.structs[base]; ok {
-			return t.mapObjectNumbers(fields, tv, leaf)
-		}
+		return out, nil
+	case map[string]any:
+		nv, err := t.mapNumber(sortedObject(tv), typ, leaf)
 
-		if base == untypedMap {
-			return mapUntyped(tv, leaf)
-		}
-
-		return v
+		return asMap(nv), err
+	case Object:
+		return t.mapObjectNumber(tv, typ, leaf)
 	case json.Number:
-		return leaf(tv, base)
+		return leaf(tv, typ.TypeId().Tname), nil
 	default:
-		return v
+		return v, nil
 	}
 }
 
-// untypedMap is the base type name of Martian's untyped `map`.
-const untypedMap = "map"
+// mapObjectNumber is mapNumber over an object value.
+func (t *Table) mapObjectNumber(o Object, typ syntax.Type, leaf numberLeaf) (any, error) {
+	switch ot := typ.(type) {
+	case *syntax.TypedMapType:
+		out := slices.Clone(o)
+
+		for i, m := range o {
+			var err error
+			if out[i].Value, err = t.mapNumber(m.Value, ot.Elem, leaf); err != nil {
+				return nil, err
+			}
+		}
+
+		return out, nil
+	case *syntax.StructType:
+		return t.mapObjectNumbers(ot.Members, o, leaf)
+	case *syntax.BuiltinType:
+		if ot.Id == syntax.KindMap {
+			return mapUntyped(o, leaf), nil
+		}
+	}
+
+	return o, nil
+}
 
 // mapUntyped returns v, a value inside an untyped map, with its number leaves
 // mapped at any depth. Martian types such a number by its literal: one written
@@ -190,10 +317,10 @@ func mapUntyped(v any, leaf numberLeaf) any {
 		return out
 	case json.Number:
 		if strings.ContainsAny(string(tv), ".eE") {
-			return leaf(tv, "float")
+			return leaf(tv, syntax.KindFloat)
 		}
 
-		return leaf(tv, untypedMap)
+		return leaf(tv, syntax.KindMap)
 	default:
 		return v
 	}
@@ -202,7 +329,7 @@ func mapUntyped(v any, leaf numberLeaf) any {
 // formatFloat re-encodes a float param's number in Martian's 'g', -1 form. A
 // number outside float64 range is left as written.
 func formatFloat(n json.Number, base string) any {
-	if base != "float" {
+	if base != syntax.KindFloat {
 		return n
 	}
 
@@ -212,92 +339,4 @@ func formatFloat(n json.Number, base string) any {
 	}
 
 	return json.Number(strconv.FormatFloat(f, 'g', -1, 64))
-}
-
-// walk descends one value. It dispatches on the value's actual JSON shape
-// rather than on a fixed dimension order, so both map<T[]> (a map of arrays) and
-// the array-of-typed-map shape resolve correctly even though the IR flattens
-// ArrayDim/MapDim and loses their nesting order. Typed maps are walked in
-// sorted key order so the resulting file-leaf layout (and the markers written
-// into the bundle) do not depend on how a producer ordered its keys, keeping
-// -resume caching stable; every object keeps its own key order. Shape
-// mismatches (e.g. a null, or a json.Number where a file string is expected)
-// pass through untouched, since runtime values may legitimately be null.
-func (t *Table) walk(v any, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
-	switch tv := v.(type) {
-	case nil:
-		return nil, nil
-	case []any:
-		if arrayDim <= 0 {
-			return v, nil
-		}
-
-		return t.walkSlice(tv, base, arrayDim, mapDim, isFile, fn)
-	case map[string]any:
-		nv, err := t.walk(sortedObject(tv), base, arrayDim, mapDim, isFile, fn)
-
-		return asMap(nv), err
-	case Object:
-		if mapDim > 0 {
-			return t.walkMap(tv, base, arrayDim, mapDim, isFile, fn)
-		}
-
-		// A struct value descends regardless of isFile: Martian marks a struct
-		// that contains file fields as a directory kind (isFile true), but the
-		// struct itself is an object to recurse into, not a file leaf. (A real
-		// file leaf is a string, handled below, never an object.)
-		if fields, ok := t.structs[base]; ok {
-			return t.applyObject(fields, tv, fn)
-		}
-
-		return v, nil
-	case string:
-		if isFile && arrayDim == 0 && mapDim == 0 {
-			nv, err := fn(tv)
-			if errors.Is(err, ErrSkipLeaf) {
-				return nil, nil
-			}
-
-			return nv, err
-		}
-
-		return v, nil
-	default:
-		return v, nil
-	}
-}
-
-func (t *Table) walkSlice(arr []any, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
-	out := make([]any, len(arr))
-
-	for i, e := range arr {
-		nv, err := t.walk(e, base, arrayDim-1, mapDim, isFile, fn)
-		if err != nil {
-			return nil, err
-		}
-
-		out[i] = nv
-	}
-
-	return out, nil
-}
-
-func (t *Table) walkMap(m Object, base string, arrayDim, mapDim int, isFile bool, fn Transform) (any, error) {
-	out := slices.Clone(m)
-
-	// A typed map is exactly one map level; Martian folds any inner array
-	// dimensions into MapDim (MapDim = 1 + innerArrayDim), so after descending
-	// this level the element carries mapDim-1 array dims (and never another typed
-	// map — nested typed maps are not representable). Treating mapDim as a count
-	// of nested map levels would leave map<T[]> inner arrays unwalked.
-	for _, i := range sortedIndices(m) {
-		nv, err := t.walk(m[i].Value, base, arrayDim+mapDim-1, 0, isFile, fn)
-		if err != nil {
-			return nil, err
-		}
-
-		out[i].Value = nv
-	}
-
-	return out, nil
 }

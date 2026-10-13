@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,10 +18,8 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/cg"
-	"github.com/eunmann/mro2nf/internal/frontend"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -84,7 +81,6 @@ type cgReplay struct {
 	mro     string
 	tmp     string
 	ps      string
-	types   string
 	entry   string
 	// adapters is mrp's adapters dir, which `mre stage` runs py stages with.
 	adapters string
@@ -168,7 +164,6 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 	rp := &cgReplay{
 		t: t, fixture: fixture, g: g, call: call, dir: dir, mro: mro, tmp: tmp,
 		ps:        filepath.Join(tmp, "mrp"),
-		types:     filepath.Join(tmp, "types.json"),
 		entry:     filepath.Join(tmp, "cg", "entry"),
 		adapters:  adapters,
 		posted:    map[string][]postedInstance{},
@@ -176,29 +171,7 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 		emptyFork: map[string]bool{},
 	}
 
-	writeManifest(t, mro, dir, rp.types)
-
 	return rp
-}
-
-func writeManifest(t *testing.T, mro, dir, path string) {
-	t.Helper()
-
-	_, _, ast, err := syntax.Compile(mro, []string{dir}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	man := types.BuildManifest(frontend.Lower(ast))
-
-	enc, err := man.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(path, []byte(enc.Subset(slices.Sorted(maps.Keys(man.Callables))...)), 0o600); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func (rp *cgReplay) run() {
@@ -837,7 +810,7 @@ func (rp *cgReplay) checkPipelineOuts() {
 // mre runs one call-graph subcommand against the fixture's invocation, from
 // mrp's working dir, and returns its stderr.
 func (rp *cgReplay) mre(argv ...string) (string, error) {
-	cmd := exec.Command(filepath.Join(root, "mre"), slices.Concat([]string{argv[0], "-entry", rp.mro, "-mropath", rp.dir, "-types", rp.types}, argv[1:])...)
+	cmd := exec.Command(filepath.Join(root, "mre"), slices.Concat([]string{argv[0], "-entry", rp.mro, "-mropath", rp.dir}, argv[1:])...)
 	cmd.Dir = rp.tmp
 
 	var stderr bytes.Buffer

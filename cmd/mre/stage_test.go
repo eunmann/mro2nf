@@ -382,7 +382,7 @@ func TestStageRefusesADisabledInstance(t *testing.T) {
 		}
 	}
 
-	g, _, err := (&graphFlags{entry: mro}).load()
+	g, err := (&graphFlags{entry: mro}).load()
 	if err != nil {
 		t.Fatal(err)
 	}

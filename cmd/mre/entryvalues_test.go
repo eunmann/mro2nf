@@ -7,37 +7,69 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/ir"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // overrideParams declares one entry input of each type class typeOverrides
 // distinguishes: the three parsed scalars, the scalars left alone (string, the
-// builtin file and a user filetype), and the non-scalar shapes.
-func overrideParams() (*types.Table, []ir.Param) {
-	tbl := types.NewTable(map[string]*ir.StructType{
-		"Cfg": {Name: "Cfg", Fields: []ir.Param{
-			{Name: "n", Type: "int", BaseType: "int"},
-			{Name: "x", Type: "float", BaseType: "float"},
-		}},
-	})
-	params := []ir.Param{
-		{Name: "n", Type: "int", BaseType: "int"},
-		{Name: "f", Type: "float", BaseType: "float"},
-		{Name: "b", Type: "bool", BaseType: "bool"},
-		{Name: "s", Type: "string", BaseType: "string"},
-		{Name: "reads", Type: "file", BaseType: "file", IsFile: true},
-		{Name: "aln", Type: "bam", BaseType: "bam", IsFile: true},
-		{Name: "xs", Type: "int[]", BaseType: "int", ArrayDim: 1},
-		{Name: "m", Type: "map<int>", BaseType: "int", MapDim: 1},
-		{Name: "fs", Type: "float[]", BaseType: "float", ArrayDim: 1},
-		{Name: "fm", Type: "map<float[]>", BaseType: "float", MapDim: 2},
-		{Name: "um", Type: "map", BaseType: "map"},
-		{Name: "cfg", Type: "Cfg", BaseType: "Cfg"},
-	}
+// builtin file and a user filetype), and the non-scalar shapes, among them
+// the struct Martian makes of a stage's outputs.
+func overrideParams(t *testing.T) (*types.Table, []*syntax.StructMember) {
+	t.Helper()
+
+	tbl := compileTypes(t, `
+filetype bam;
+
+struct Cfg(
+    int   n,
+    float x,
+)
+
+stage MAKE(
+    out float size,
+    src py    "make.py",
+)
+`)
+	params := fields(t, "n int", "f float", "b bool", "s string", "reads file", "aln bam",
+		"xs int[]", "m map<int>", "fs float[]", "fm map<float[]>", "um map", "cfg Cfg", "made MAKE")
 
 	return tbl, params
+}
+
+// compileTypes is the walk over the types the .mro declarations src compile
+// to.
+func compileTypes(t *testing.T, src string) *types.Table {
+	t.Helper()
+
+	_, _, ast, err := syntax.ParseSourceBytes([]byte(src), "types.mro", nil, false)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	return types.NewTable(&ast.TypeTable)
+}
+
+// fields declares each "name type" pair, the type as an .mro spells it, as a
+// param.
+func fields(t *testing.T, decls ...string) []*syntax.StructMember {
+	t.Helper()
+
+	out := make([]*syntax.StructMember, len(decls))
+
+	for i, d := range decls {
+		name, tname, _ := strings.Cut(d, " ")
+
+		var id syntax.TypeId
+		if err := id.UnmarshalText([]byte(tname)); err != nil {
+			t.Fatalf("type of %s: %v", d, err)
+		}
+
+		out[i] = &syntax.StructMember{Id: name, Tname: id}
+	}
+
+	return out
 }
 
 // TestTypeOverrides checks each accepted override: a string for an int, float or
@@ -83,11 +115,12 @@ func TestTypeOverrides(t *testing.T) {
 		{name: "typed_array", key: "xs", in: []any{json.Number("1")}, want: []any{json.Number("1")}},
 		{name: "typed_map", key: "m", in: map[string]any{"k": json.Number("1")}, want: map[string]any{"k": json.Number("1")}},
 		{name: "typed_struct_nested_string", key: "cfg", in: map[string]any{"n": "5"}, want: map[string]any{"n": "5"}},
+		{name: "typed_callable_struct_field", key: "made", in: map[string]any{"size": json.Number("2.0")}, want: map[string]any{"size": json.Number("2")}},
 		{name: "null", key: "n", in: nil, want: nil},
 		{name: "undeclared", key: "ghost", in: "5", want: "5"},
 	}
 
-	tbl, params := overrideParams()
+	tbl, params := overrideParams(t)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,12 +176,13 @@ func TestTypeOverridesErrors(t *testing.T) {
 		{name: "typed_map", key: "m", in: `{"k":1}`, want: errOverrideShape},
 		{name: "untyped_map", key: "um", in: "{}", want: errOverrideShape},
 		{name: "struct", key: "cfg", in: `{"n":5}`, want: errOverrideShape},
+		{name: "callable_struct", key: "made", in: `{"size":1}`, want: errOverrideShape},
 	}
 
-	tbl, params := overrideParams()
+	tbl, params := overrideParams(t)
 	declared := make(map[string]string, len(params))
 	for _, p := range params {
-		declared[p.Name] = p.Type
+		declared[p.Id] = p.Tname.String()
 	}
 
 	for _, tc := range tests {
