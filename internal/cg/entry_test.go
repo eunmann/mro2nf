@@ -244,9 +244,41 @@ func TestVetHostLeafRealPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := VetHostLeaf(EntryLeaf{Input: "reads", Value: link, InPlace: true}, true, filepath.Join(proj, "work"))
+	work := filepath.Join(proj, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := VetHostLeaf(EntryLeaf{Input: "reads", Value: link, InPlace: true}, true, work)
 	if !errors.Is(err, ErrEntryFile) || !strings.Contains(err.Error(), "is or holds the run's work dir") {
 		t.Errorf("vet a link to the dir holding the work dir: %v, want ErrEntryFile", err)
+	}
+
+	err = VetHostLeaf(EntryLeaf{Input: "reads", Value: proj, InPlace: true}, true, filepath.Join(link, "work"))
+	if !errors.Is(err, ErrEntryFile) || !strings.Contains(err.Error(), "is or holds the run's work dir") {
+		t.Errorf("vet the real dir holding a work dir given through a link: %v, want ErrEntryFile", err)
+	}
+}
+
+// TestVetHostLeafUnresolvable: a head-node path that cannot be resolved is
+// refused by an error naming the input, not the value.
+func TestVetHostLeafUnresolvable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a dir of mode 000")
+	}
+
+	locked := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	value := filepath.Join(locked, "secret-sample")
+
+	err := VetHostLeaf(EntryLeaf{Input: "reads", Value: value, InPlace: true}, true, filepath.Join(t.TempDir(), "work"))
+	if !errors.Is(err, ErrEntryFile) || !strings.Contains(err.Error(), "'reads'") || strings.Contains(err.Error(), "secret-sample") {
+		t.Errorf("vet an unresolvable path: %v, want ErrEntryFile naming the input and not the value", err)
 	}
 }
 

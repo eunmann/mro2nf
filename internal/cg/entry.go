@@ -223,8 +223,9 @@ func (g *Graph) outsEntryFiles(values map[string]int) ([]int, error) {
 // VetHostLeaf refuses a head-node path read in place where the tasks do not
 // see the host's paths, as hostPaths says they do, and one that is or holds
 // the run's work dir, workDir, whose stage outputs every task would then
-// read as an input, by its given or its real path. A workDir that is a URI
-// holds no host path. The errors name the input, not the value.
+// read as an input, the input and the work dir each by its given or its real
+// path. A workDir that is a URI holds no host path. The errors name the
+// input, not the value.
 func VetHostLeaf(l EntryLeaf, hostPaths bool, workDir string) error {
 	if !hostPaths {
 		return fmt.Errorf("%w: entry input '%s': a head-node path is not read on this profile; pass an s3:// URI", ErrEntryFile, l.Input)
@@ -239,7 +240,14 @@ func VetHostLeaf(l EntryLeaf, hostPaths bool, workDir string) error {
 		return fmt.Errorf("%w: entry input '%s' does not resolve: %w", ErrEntryFile, l.Input, unnamed(err))
 	}
 
-	if roots.Holds(workDir) {
+	realWork, err := filepath.EvalSymlinks(workDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		realWork = workDir
+	} else if err != nil {
+		return fmt.Errorf("vet entry input '%s': resolve the run's work dir: %w", l.Input, err)
+	}
+
+	if roots.Holds(workDir) || roots.Holds(realWork) {
 		return fmt.Errorf("%w: entry input '%s' is or holds the run's work dir %s, and every task reads a head-node entry input in place; pass a directory that does not hold it, or run with -work-dir outside it",
 			ErrEntryFile, l.Input, workDir)
 	}
