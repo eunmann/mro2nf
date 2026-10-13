@@ -234,8 +234,9 @@ selector of its alias alone still names it.
   granted as `mrp`'s cluster job managers grant it (§9).
 - One `params.<name> = null` per entry input (§8).
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
-  the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
-  such as the executor's out-of-memory kill. An ASSERT (42), a stage exception
+  the failures `mrp` retries (§6), or on an executor kill or timeout (104,
+  130–145, the exits nf-core pipelines retry), such as the executor's
+  out-of-memory kill. An ASSERT (42), a stage exception
   or a failed `mre` step ends the run on its first attempt. A retry requests
   the memory and cpus of the first attempt, as `mrp` retries a job at its
   request: it escalates only under `--auto-adjust-memory`, which `mro2nf`

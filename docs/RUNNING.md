@@ -527,7 +527,7 @@ run publishes nothing to `results/`.
 |---|---|---|
 | 42 | the stage failed an `ASSERT` (`martian.exit`) | no |
 | 75 | a failure `mrp` retries: a signal, `ENOMEM`, a scheduler failure | up to twice |
-| 137, 143 | the executor killed the task with a signal | up to twice |
+| 104, 130–145 | the executor killed the task with a signal or stopped it at a time limit (137 is an out-of-memory kill) | up to twice |
 | 1 | a stage exception, or a failed `mre` step | no |
 
 A retried attempt that failed still counts as a failed task in the run's
