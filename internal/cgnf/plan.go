@@ -104,7 +104,7 @@ func (p *project) outs() *wiring {
 	w.linef("outs_in = %s", ups)
 	shared := w.use("shared")
 	w.linef("outs_files = outs_in.map { xs -> bundlesOf(xs) }")
-	w.linef("OUTS(%s, %s.map { c -> c.call }, outs_files, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, outs_in.map { xs -> recordsOf(xs) }, %s, file(\"${projectDir}/%s\"))",
+	w.linef("OUTS(%s, %s.map { m -> callStaged(m) }, outs_files, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, outs_in.map { xs -> recordsOf(xs) }, %s, file(\"${projectDir}/%s\"))",
 		shared, shared, entry, mroAssets)
 
 	return w

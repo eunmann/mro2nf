@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -327,52 +329,53 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 	}
 }
 
-// TestEmitStagesTheCallFile (#551): every process that runs mre stages the
-// run's call as call.b64, the one file the driver writes from PLAN's value
-// once per run, and its script does not hold the call, which grows with the
-// entry values: with N entry forks every task's script and the -resume key
-// Nextflow hashes from it grew by O(N) bytes.
-func TestEmitStagesTheCallFile(t *testing.T) {
+// TestEmitCarriesTheCall: one rule, CALL's, chooses how every task gets
+// the run's call: inline, a value its script writes into call.b64, when
+// its base64 is at most cg.MaxValueBytes, as on AWS Batch a staged file
+// costs each task a download (~300 ms); or else the one file the driver
+// writes once per run, which each task stages as call.b64, as with N entry
+// forks an inline call grew every task's script, and the -resume key
+// Nextflow hashes from it, by O(N) bytes (#551).
+func TestEmitCarriesTheCall(t *testing.T) {
 	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
 
 	for _, want := range []string{
-		"shared = PLAN.out.call.collectFile(name: 'call.b64').map { c -> [entry: ",
-		", call: c] }.first()",
-		"OUTS(shared, shared.map { c -> c.call }, outs_files, ",
+		"shared = CALL(PLAN.out.call, " + strconv.Itoa(cg.MaxValueBytes) + ").map { c -> [entry: ",
+		"OUTS(shared, shared.map { m -> callStaged(m) }, outs_files, ",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf lacks %q:\n%s", want, main)
 		}
 	}
 
-	if !strings.Contains(stageModule, "\"${code(meta, root)} -call call.b64\"") || strings.Contains(stageModule, "${meta.call}") {
-		t.Error("stage.nf does not hand mre the staged call file")
-	}
-
-	for proc, want := range map[string]string{
-		"STAGE":       ", path('call.b64')\n",
-		"STAGE_SPLIT": ", path('call.b64')\n",
-		"STAGE_MAIN":  ", path('call.b64')\n",
-		"STAGE_JOIN":  ", path('call.b64')\n",
-		"OUTS":        "    path 'call.b64'\n",
-	} {
-		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
-		body, _, _ = strings.Cut(body, "\n}\n")
-		input, _, _ := strings.Cut(body, "output:\n")
-
-		if !strings.Contains(input, want) {
-			t.Errorf("%s does not stage the call file:\n%s", proc, input)
-		}
-	}
-
 	for _, want := range []string{
-		"[d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], d.call]",
-		"[d, k, fs, recordsOf(us), es + bundlesOf(us), ids, ids.collect { x -> ef.leaves[x] }, d.call]",
-		"c.name, c, m.call] }",
-		"[m, k, fs, vs, us, ids, ef, cs, j, os, m.call]",
+		"inline: v.size() <= bound\n        staged: true\n",
+		"out = c.inline.mix(c.staged.collectFile(name: 'call.b64')).first()",
+		"return meta.call instanceof Path ? '' : \"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"",
+		"return meta.call instanceof Path ? [meta.call] : []",
+		"\"${code(meta, root)} -call call.b64\"",
+		"[d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], callStaged(d)]",
+		"[d, k, fs, recordsOf(us), es + bundlesOf(us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
+		"c.name, c, callStaged(m)] }",
+		"[m, k, fs, vs, us, ids, ef, cs, j, os, callStaged(m)]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+
+	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN", "OUTS"} {
+		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
+		body, _, _ = strings.Cut(body, "\n}\n")
+		input, script, _ := strings.Cut(body, "output:\n")
+		_, script, _ = strings.Cut(script, "script:\n")
+
+		if !strings.Contains(input, "path(cf, stageAs: 'call.b64', arity: '0..*')") && !strings.Contains(input, "path cf, stageAs: 'call.b64', arity: '0..*'\n") {
+			t.Errorf("%s does not stage the call file CALL staged:\n%s", proc, input)
+		}
+
+		if at := strings.Index(script, "${callScript(meta)}"); at < 0 || at != strings.Index(script, "${") {
+			t.Errorf("%s does not write an inline call before it runs mre:\n%s", proc, script)
 		}
 	}
 }
@@ -460,7 +463,7 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, ids, ef, c.name, c, m.call] }",
+		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, ids, ef, c.name, c, callStaged(m)] }",
 		"split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }",
 	} {
 		if !strings.Contains(stageModule, want) {
@@ -596,7 +599,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 		"-leaves ${shq(leaves.join(','))}",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
 		"def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
-		"[d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], d.call]",
+		"[d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], callStaged(d)]",
 	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)
