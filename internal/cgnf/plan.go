@@ -101,7 +101,8 @@ func (p *project) outs() *wiring {
 	}
 
 	w.linef("outs_in = %s", ups)
-	w.linef("OUTS(%s, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/%s\"))", w.use("shared"), entry, mroAssets)
+	shared := w.use("shared")
+	w.linef("OUTS(%s, %s.map { c -> c.call }, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/%s\"))", shared, shared, entry, mroAssets)
 
 	return w
 }

@@ -287,9 +287,16 @@ place, and the run's work dir, which no entry value read in place may hold
 (§8). Under an S3 mount it does not cache,
 as which s3:// inputs it reads in place depends on the buckets its instance
 mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
-node's digest and resources (in `meta`), the run's call, the mro2nf build,
-and its fork records and staged dirs. No task stages a file of PLAN's: the call and the digests reach it as
-values, which Nextflow keys on by content, so a re-transpile whose `.mro` edit
+node's digest and resources (in `meta`), the run's call file, the mro2nf
+build, and its fork records and staged dirs. No task stages a file of PLAN's:
+the digests reach it as values, which Nextflow keys on by content, and the
+call as `call.b64`, a file the driver writes from PLAN's value once per run
+(`collectFile`), in a dir named by the call and the run's session, which a
+`-resume` keeps. A task stages it rather than writing the call into its
+script: the call grows with the entry values, so with N entry forks every
+task's script, and the key Nextflow hashes from its inputs, would grow by
+O(N) bytes. A task still reads the whole call, as `mrp` writes the whole
+invocation into every job's `_jobinfo`. So a re-transpile whose `.mro` edit
 leaves a node's spec and the call as they were re-runs PLAN but keeps the node
 cached (`TestResumeKeysOnlyOnATasksOwnTypes`). An edit of how a consumer
 splits or gates on a node's outs changes what the node's post writes, so it
@@ -380,9 +387,9 @@ so the plumbing task count does not grow with fork width or chunk count
 
 Each subcommand that works on the call graph takes the entry `.mro`
 (`-entry`, `-mropath`) and the run's call (`-call`, a file holding base64 of
-the call PLAN rebuilt, which each task writes from its own value, as a wide
-run's call would pass the kernel's 128 KiB limit on one argument; the entry's
-own call without it), compiles the call over the entry's
+the call PLAN rebuilt, which each task stages, as a wide run's call would
+pass the kernel's 128 KiB limit on one argument; the entry's own call without
+it), compiles the call over the entry's
 declarations as `mrp` compiles an invocation (`ParseSourceBytes`, then
 `MakePipelineCallGraph`) as the entry file, and reads only the items its task
 staged (`-in`, an item or a dir of items). Each finds a bundle's file leaves

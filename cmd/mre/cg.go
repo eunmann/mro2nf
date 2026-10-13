@@ -56,7 +56,7 @@ func (g *graphFlags) load() (*cg.Graph, error) {
 }
 
 // readCall is the call the file at path holds, base64; "" reads none. A
-// task writes it from its own value: as an argument, a wide run's call
+// task stages the file the driver wrote: as an argument, a wide run's call
 // would pass the kernel's limit on one argument (MAX_ARG_STRLEN, 128 KiB).
 func readCall(path string) (string, error) {
 	if path == "" {

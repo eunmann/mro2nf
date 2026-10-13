@@ -277,7 +277,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
-	if !strings.Contains(main, "OUTS(shared, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
+	if !strings.Contains(main, ", outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
 		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
 	}
 
@@ -288,21 +288,52 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 	}
 }
 
-// TestEmitWritesTheCallToAFile: every process that runs mre writes the
-// run's call, its value, to the file mre reads it from, before mre runs, as
-// a wide run's call would pass the kernel's 128 KiB limit on one argument.
-func TestEmitWritesTheCallToAFile(t *testing.T) {
-	if !strings.Contains(stageModule, "\"${code(meta, root)} -call call.b64\"") || !strings.Contains(stageModule, "\"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"") {
-		t.Error("stage.nf does not hand mre the call in a file")
+// TestEmitStagesTheCallFile (#551): every process that runs mre stages the
+// run's call as call.b64, the one file the driver writes from PLAN's value
+// once per run, and its script does not hold the call, which grows with the
+// entry values: with N entry forks every task's script and the -resume key
+// Nextflow hashes from it grew by O(N) bytes.
+func TestEmitStagesTheCallFile(t *testing.T) {
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, want := range []string{
+		"shared = PLAN.out.call.collectFile(name: 'call.b64').map { c -> [entry: ",
+		", call: c] }.first()",
+		"OUTS(shared, shared.map { c -> c.call }, outs_in, ",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
 	}
 
-	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN", "OUTS"} {
-		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
-		_, script, _ := strings.Cut(body, "script:\n")
-		script, _, _ = strings.Cut(script, "\n}\n")
+	if !strings.Contains(stageModule, "\"${code(meta, root)} -call call.b64\"") || strings.Contains(stageModule, "${meta.call}") {
+		t.Error("stage.nf does not hand mre the staged call file")
+	}
 
-		if at := strings.Index(script, "${callFile(meta)}"); at < 0 || at != strings.Index(script, "${") {
-			t.Errorf("%s does not write the call before it runs mre:\n%s", proc, script)
+	for proc, want := range map[string]string{
+		"STAGE":       ", path('call.b64')\n",
+		"STAGE_SPLIT": ", path('call.b64')\n",
+		"STAGE_MAIN":  ", path('call.b64')\n",
+		"STAGE_JOIN":  ", path('call.b64')\n",
+		"OUTS":        "    path 'call.b64'\n",
+	} {
+		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
+		body, _, _ = strings.Cut(body, "\n}\n")
+		input, _, _ := strings.Cut(body, "output:\n")
+
+		if !strings.Contains(input, want) {
+			t.Errorf("%s does not stage the call file:\n%s", proc, input)
+		}
+	}
+
+	for _, want := range []string{
+		"[d, k, fs, es + us, [], [], d.call]",
+		"[d, k, fs, es + us, ids, ids.collect { x -> ef.leaves[x] }, d.call]",
+		"c.name, c, m.call] }",
+		"[m, k, fs, us, ids, ef, cs, j, os, m.call]",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
 		}
 	}
 }
@@ -330,7 +361,7 @@ func TestEmitRunsOneMreCallPerTask(t *testing.T) {
 // the job writes nothing into the split's outputs, which would change their
 // -resume key (split_test).
 func TestEmitStagesChunkApart(t *testing.T) {
-	if !strings.Contains(stageModule, ", val(name), path(chunk, stageAs: 'chunk/*')\n") {
+	if !strings.Contains(stageModule, ", val(name), path(chunk, stageAs: 'chunk/*'), ") {
 		t.Error("STAGE_MAIN does not stage its chunk below chunk/")
 	}
 }
@@ -390,7 +421,7 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, us, ids, ef, c.name, c] }",
+		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, us, ids, ef, c.name, c, m.call] }",
 		"split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }",
 	} {
 		if !strings.Contains(stageModule, want) {
@@ -526,7 +557,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 		"-leaves ${shq(leaves.join(','))}",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
 		"def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
-		"[d, k, fs, es + us, [], []]",
+		"[d, k, fs, es + us, [], [], d.call]",
 	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)

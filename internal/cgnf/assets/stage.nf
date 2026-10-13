@@ -2,16 +2,19 @@
 // including them under its own alias, so a withName: selector names the
 // node, and the sub-workflows that wire a node's instances to them. meta
 // carries the node's identity, the cache key of its spec (digest), the
-// run's call (call), the resources it is scheduled with, and its own
-// overrides file (overrides), which PLAN resolved; its GPU request is the
-// config's, which reads meta.special per task where a Nextflow 25.10
-// process accelerator directive cannot. Each task runs one `mre stage`
-// call: the instance's args, which it builds from the inputs it staged,
-// its phase's job as mrp runs it, and the post after it that the phase
-// has. A split's chunks and join stage the split's inputs and build its
-// args again, so no task outputs args: each links the files they name
-// where Nextflow staged them, which an object-store work dir would
-// otherwise receive as one copy per fork.
+// file of the run's call (call), the resources it is scheduled with, and
+// its own overrides file (overrides), which PLAN resolved; its GPU request
+// is the config's, which reads meta.special per task where a Nextflow 25.10
+// process accelerator directive cannot. Each task stages the call file,
+// which the driver wrote once per run, rather than writing the call into
+// its script: the call grows with the entry values, so every task's script
+// and -resume key would. Each task runs one `mre stage` call: the
+// instance's args, which it builds from the inputs it staged, its phase's
+// job as mrp runs it, and the post after it that the phase has. A split's
+// chunks and join stage the split's inputs and build its args again, so no
+// task outputs args: each links the files they name where Nextflow staged
+// them, which an object-store work dir would otherwise receive as one copy
+// per fork.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -42,17 +45,10 @@ def code(Map meta, String root) {
 }
 
 // graph names the invocation an mre call-graph subcommand compiles: the
-// run's call callFile wrote, over the entry's declarations.
+// run's call, which the task stages as call.b64, over the entry's
+// declarations.
 def graph(Map meta, String root) {
     return "${code(meta, root)} -call call.b64"
-}
-
-// callFile writes the run's call, base64, from the task's own value, which
-// stays its -resume key. As an argument, a wide run's call would pass the
-// kernel's limit on one argument (128 KiB). The here-document's lines start
-// their own lines, where the script's indent does not reach.
-def callFile(Map meta) {
-    return "cat > call.b64 <<'MRO2NF_CALL'\n${meta.call}\nMRO2NF_CALL"
 }
 
 // args is what a task builds the instance's args bundle from: what it
@@ -144,7 +140,7 @@ process STAGE {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path('call.b64')
 
     output:
     tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), emit: outs
@@ -153,7 +149,6 @@ process STAGE {
 
     script:
     """
-    ${callFile(meta)}
     mkdir -p in
     ${mreStage(task, meta, 'main', "${args(meta, forks, leaves)} -args args -o stage_outs ${postFlags()}")}
     """
@@ -166,14 +161,13 @@ process STAGE_SPLIT {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path('call.b64')
 
     output:
     tuple val(meta), val(key), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), path('chunks/resources.tsv'), emit: split
 
     script:
     """
-    ${callFile(meta)}
     mkdir -p in
     ${mreStage(task, meta, 'split', "${args(meta, forks, leaves)} -args args -o chunks")}
     """
@@ -188,14 +182,13 @@ process STAGE_MAIN {
     // The chunk is staged below chunk/: the job's metadata dir is named as
     // the chunk, and must not write through the link into the split's.
     input:
-    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), val(name), path(chunk, stageAs: 'chunk/*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), val(name), path(chunk, stageAs: 'chunk/*'), path('call.b64')
 
     output:
     tuple val(meta), val(key), path('chunkout/*', type: 'dir'), emit: chunk
 
     script:
     """
-    ${callFile(meta)}
     mkdir -p in
     ${mreStage(task, meta, 'main', "${args(meta, forks, leaves)} -args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
@@ -208,7 +201,7 @@ process STAGE_JOIN {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(chunks, stageAs: 'chunks/*', arity: '0..*'), path('chunks/join.json'), path(couts, stageAs: 'chunkouts/*', arity: '0..*')
+    tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(chunks, stageAs: 'chunks/*', arity: '0..*'), path('chunks/join.json'), path(couts, stageAs: 'chunkouts/*', arity: '0..*'), path('call.b64')
 
     output:
     tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), emit: outs
@@ -217,7 +210,6 @@ process STAGE_JOIN {
 
     script:
     """
-    ${callFile(meta)}
     mkdir -p in
     ${mreStage(task, meta, 'join', "${args(meta, forks, leaves)} -args args -chunks chunks -chunkouts chunkouts -o stage_outs ${postFlags()}")}
     """
@@ -240,6 +232,7 @@ process OUTS {
 
     input:
     val meta
+    path 'call.b64'
     path ups, stageAs: 'in/u*', arity: '0..*'
     val locs
     tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
@@ -252,7 +245,6 @@ process OUTS {
     script:
     """
     mkdir -p in
-    ${callFile(meta)}
     ${locations(ups, locs)}
     ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -in in -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
     """
@@ -563,22 +555,23 @@ workflow GATHER {
 }
 
 // planned is the meta of a node's tasks: the one every task shares, with
-// the run's call, then the node's identity and resources and its digest.
-// Its PLAN record d gives the cpus and memory its first task is scheduled
-// with and the overrides file of its own its jobs resolve theirs under,
-// both under the run's overrides.
+// the file of the run's call, then the node's identity and resources and
+// its digest. Its PLAN record d gives the cpus and memory its first task is
+// scheduled with and the overrides file of its own its jobs resolve theirs
+// under, both under the run's overrides.
 def planned(Map shared, Map meta, List d) {
     return shared + [node: meta.node, cpus: d[3] as int, mem_gb: d[4] as double, overrides: d[5] == '-' ? '' : d[5], special: meta.special, digest: d[0]]
 }
 
 // INPUT is each enabled instance as a stage process takes it, with the
-// meta GATE planned for it; it stages no entry file.
+// meta GATE planned for it and the call file it names; it stages no entry
+// file.
 workflow INPUT {
     take:
     inst
 
     main:
-    out = inst.map { k, fs, es, d, us -> [d, k, fs, es + us, [], []] }
+    out = inst.map { k, fs, es, d, us -> [d, k, fs, es + us, [], [], d.call] }
 
     emit:
     out
@@ -596,7 +589,7 @@ workflow INPUT_ENTRY {
     main:
     out = inst.combine(entry).map { k, fs, es, d, us, ef ->
         def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []
-        [d, k, fs, es + us, ids, ids.collect { x -> ef.leaves[x] }]
+        [d, k, fs, es + us, ids, ids.collect { x -> ef.leaves[x] }, d.call]
     }
 
     emit:
@@ -607,7 +600,7 @@ workflow INPUT_ENTRY {
 // task stages to build its args: [key, fork records, staged items, entry
 // indices, entry files].
 def staged(List v) {
-    return v.drop(1)
+    return v.subList(1, 6)
 }
 
 // CHUNKS is a main per chunk a split returned, each scheduled with the
@@ -621,7 +614,7 @@ workflow CHUNKS {
     main:
     out = split.map { m, k, cs, _j, res -> [k, m, cs, res] }.join(input.map { v -> staged(v) }).flatMap { k, m, cs, res, fs, us, ids, ef ->
         def r = resources(res)
-        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, us, ids, ef, c.name, c] }
+        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, us, ids, ef, c.name, c, m.call] }
     }
 
     emit:
@@ -640,7 +633,7 @@ workflow JOIN {
     main:
     outs = chunk.map { m, k, o -> [groupKey(k, m.chunks), o] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }
     none = split.filter { v -> v[2].isEmpty() }.map { v -> [v[1], []] }
-    out = split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, fs, us, ids, ef, os -> [m, k, fs, us, ids, ef, cs, j, os] }
+    out = split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, fs, us, ids, ef, os -> [m, k, fs, us, ids, ef, cs, j, os, m.call] }
 
     emit:
     out
