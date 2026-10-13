@@ -63,6 +63,22 @@ type Ref struct {
 	Item, Ordinal string
 }
 
+// RefLines are the lines a task writes of the references in the bundle it
+// wrote at dir, one per leaf: dir named by its last two path components,
+// the item the leaf lies in and its ordinal dir there, tab-separated. The
+// driver resolves each to where its producer wrote it from the paths it
+// staged the task's items from.
+func RefLines(dir string, refs []Ref) []string {
+	item := filepath.Base(filepath.Dir(dir)) + "/" + filepath.Base(dir)
+	out := make([]string, len(refs))
+
+	for i, r := range refs {
+		out[i] = item + "\t" + r.Item + "\t" + r.Ordinal + "\n"
+	}
+
+	return out
+}
+
 // item is the path the task was given the bundle dir at, the absolute path
 // bundle, and false for a bundle it did not stage.
 func (s Staged) item(bundle string) (string, bool) {

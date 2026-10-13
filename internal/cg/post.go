@@ -46,13 +46,13 @@ type PostSpec struct {
 	// Forks is the dir that receives <root>/<ordinal>/ fork elements and
 	// <partner dir>/<index token>/ partner elements, but for those carried
 	// as values, whose records ForkValues receives, space-separated (item).
-	// ForkRefs receives the references of their bundles (refLines).
+	// ForkRefs receives the references of their bundles (shim.RefLines).
 	Forks, ForkValues, ForkRefs string
 	// Fields is the dir that receives one stamped bundle per output, named
 	// by it, so a consumer stages only the outputs it reads, but for the
 	// outputs carried as values, whose records Values receives,
 	// space-separated (valueRecord). FieldRefs receives the references of
-	// the bundles (refLines).
+	// the bundles (shim.RefLines).
 	Fields, Values, FieldRefs string
 	// Gates, when set, is the file that receives the nodes this instance's
 	// outs disable at its fork (Gates).
@@ -120,23 +120,6 @@ func (g *Graph) post(spec PostSpec) (*stagedStore, error) {
 	}
 
 	return s, nil
-}
-
-// refLines are the lines a post writes of the references in the bundle
-// item, <dir>/<name>, one per leaf: the item named by its last two path
-// components, the dir the task was given the item a leaf lies in at, and
-// the leaf's ordinal dir in it, tab-separated. The driver resolves each to
-// where its producer wrote it from the paths it staged the task's items
-// from.
-func refLines(dir, name string, refs []shim.Ref) []string {
-	item := filepath.Base(dir) + "/" + name
-	out := make([]string, len(refs))
-
-	for i, r := range refs {
-		out[i] = item + "\t" + r.Item + "\t" + r.Ordinal + "\n"
-	}
-
-	return out
 }
 
 // posted writes the forks of every root the posting instance's stage feeds,
@@ -217,7 +200,7 @@ func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fo
 // Without values, each is a dir of its fork record. With values, each
 // carries the fork's element of the source collection too, and is written
 // as its readers get it (item), a dir, whose files opts treats, those of
-// staged named by reference in refs (refLines), or one of recs.
+// staged named by reference in refs (shim.RefLines), or one of recs.
 type forkWriter struct {
 	r      *resolver
 	dir    string
@@ -366,7 +349,7 @@ func (w forkWriter) item(sub, name string, el json.Marshaler, param *syntax.Stru
 		return fmt.Errorf("write element %s: %w", dir, err)
 	}
 
-	*w.refs = append(*w.refs, refLines(filepath.Join(w.dir, sub), name, refs)...)
+	*w.refs = append(*w.refs, shim.RefLines(dir, refs)...)
 
 	file, r := rec.elementRecord()
 

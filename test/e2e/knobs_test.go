@@ -22,7 +22,9 @@ import (
 // split triad's join of its chunk outs, a map call's gather of its forks, a
 // split stage under a map call and a map call over a sub-pipeline holding
 // a split; file_tree's join names its chunks' files by reference, which
-// its reader stages from the chunks' work dirs (#562). Their calls are
+// its reader stages from the chunks' work dirs (#562), and
+// split_forward_file's split names its input by reference in each chunk's
+// def, which each chunk and the join stage from GEN's work dir. Their calls are
 // small, so each task writes the call into its
 // script; staged_call's entry label pushes the call's base64 past
 // cg.MaxValueBytes, so each task stages the call.b64 the driver wrote once
@@ -45,6 +47,7 @@ func TestResumeCachesEverything(t *testing.T) {
 		{"map_split", "map_split", nil},
 		{"map_pipe_split", "map_pipe_split", nil},
 		{"file_tree", "file_tree", nil},
+		{"split_forward_file", "split_forward_file", nil},
 		{"staged_call", "struct_input", map[string]any{"s": 10, "l": strings.Repeat("v", cg.MaxValueBytes), "x": 5}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -17,6 +17,11 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
+// untypedWriter writes bundles whose params name no file.
+func untypedWriter() itemWriter {
+	return itemWriter{tbl: types.NewTable(syntax.NewTypeLookup())}
+}
+
 // TestChunksDirRoundTrip: the chunks dir a split's job writes reads back as
 // the split's stage defs, in chunk order under mrp's chunk names, each
 // def's args and resources and the join's resources intact.
@@ -28,11 +33,11 @@ func TestChunksDirRoundTrip(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(dir, defs, nil, types.NewTable(syntax.NewTypeLookup()), shim.Opts{}); err != nil {
+	if _, err := writeChunksDir(dir, defs, nil, untypedWriter()); err != nil {
 		t.Fatal(err)
 	}
 
-	got, names, err := readChunksDir(dir)
+	got, names, err := readChunksDir(dir, shim.Refs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +60,7 @@ func TestChunksDirRoundTrip(t *testing.T) {
 		t.Errorf("stage defs differ after the round trip (-split +read):\n%s", d)
 	}
 
-	c, err := readChunk(filepath.Join(dir, names[3]))
+	c, err := readChunk(filepath.Join(dir, names[3]), shim.Refs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +129,7 @@ func TestChunksDirStagedAsLinks(t *testing.T) {
 	}
 
 	split := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(split, defs, nil, types.NewTable(syntax.NewTypeLookup()), shim.Opts{}); err != nil {
+	if _, err := writeChunksDir(split, defs, nil, untypedWriter()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -139,7 +144,7 @@ func TestChunksDirStagedAsLinks(t *testing.T) {
 		}
 	}
 
-	got, names, err := readChunksDir(staged)
+	got, names, err := readChunksDir(staged, shim.Refs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +164,7 @@ func TestChunksDirRefusesMissingChunks(t *testing.T) {
 	}
 
 	split := filepath.Join(t.TempDir(), "chunks")
-	if err := writeChunksDir(split, defs, nil, types.NewTable(syntax.NewTypeLookup()), shim.Opts{}); err != nil {
+	if _, err := writeChunksDir(split, defs, nil, untypedWriter()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,7 +197,7 @@ func TestChunksDirRefusesMissingChunks(t *testing.T) {
 			}
 		}
 
-		if _, names, err := readChunksDir(staged); err == nil {
+		if _, names, err := readChunksDir(staged, shim.Refs{}); err == nil {
 			t.Errorf("%s: read chunks %v of 3, want an error", name, names)
 		}
 	}
@@ -265,10 +270,9 @@ func TestRunBundlesConfineStageOutputs(t *testing.T) {
 		}
 
 		outsDir, chunksDir := filepath.Join(root, "outs", strconv.FormatBool(strict)), filepath.Join(root, "chunks", strconv.FormatBool(strict))
-		errs := []error{
-			writeOutsBundle(outsDir, outs, file, tbl, mainOpts),
-			writeChunksDir(chunksDir, defs, file, tbl, splitOpts),
-		}
+		_, outsErr := writeOutsBundle(outsDir, outs, file, itemWriter{tbl: tbl, opts: mainOpts})
+		_, chunksErr := writeChunksDir(chunksDir, defs, file, itemWriter{tbl: tbl, opts: splitOpts})
+		errs := []error{outsErr, chunksErr}
 
 		for i, dir := range []string{outsDir, filepath.Join(chunksDir, job.ChunkName(0, 1))} {
 			checkConfinedLeaf(t, dir, host, strict, errs[i])
@@ -293,7 +297,7 @@ func checkConfinedLeaf(t *testing.T, dir, host string, strict bool, err error) {
 		t.Fatal(err)
 	}
 
-	m, err := readArgsMap(dir)
+	m, err := readArgsMap(dir, shim.Refs{})
 	if err != nil {
 		t.Fatal(err)
 	}

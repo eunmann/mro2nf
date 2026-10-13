@@ -90,7 +90,7 @@ func (a *argsFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&a.digest, "digest", "", "the node's spec digest in the run's plan, which it must compile to")
 	fs.StringVar(&a.leaves, "leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 	fs.StringVar(&a.values, "values", "", "file of the upstream outputs and fork and partner elements the task got as values, whitespace-separated records a post wrote (-field-values, -fork-values)")
-	fs.StringVar(&a.refs, "refs", "", "dir of the bundle leaves the task staged by reference, each with its ordinal dir at <n>/f/<ordinal>/, which the staged items name by origin (-field-refs, -fork-refs)")
+	fs.StringVar(&a.refs, "refs", "", "dir of the bundle leaves the task staged by reference, each with its ordinal dir at <n>/f/<ordinal>/, which the staged items name by origin (-field-refs, -fork-refs, -out-refs)")
 	fs.Var(&a.in, "in", "staged item, or dir of staged items: instance outs bundles, fork elements and partner elements (repeatable)")
 	fs.Var(&a.forks, "fork", "a fork record passed as a value, base64 of its JSON (repeatable)")
 }
@@ -113,8 +113,8 @@ func readValues(path string) ([]string, error) {
 
 // write resolves the instance and its args from its staged upstream outs,
 // the outs it got as values and its fork elements, its file leaves linked
-// below out to the staged files.
-func (a *argsFlags) write(g *cg.Graph, out string) (cg.Instance, core.LazyArgumentMap, error) {
+// below out to the staged files, those named by reference among refs.
+func (a *argsFlags) write(g *cg.Graph, out string, refs shim.Refs) (cg.Instance, core.LazyArgumentMap, error) {
 	values, err := readValues(a.values)
 	if err != nil {
 		return cg.Instance{}, nil, fmt.Errorf("args: %w", err)
@@ -135,7 +135,7 @@ func (a *argsFlags) write(g *cg.Graph, out string) (cg.Instance, core.LazyArgume
 		return cg.Instance{}, nil, fmt.Errorf("args: %w", err)
 	}
 
-	spec := cg.ArgsSpec{Node: a.node, In: a.in, Values: values, Refs: a.refs, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Roots: a.roots}
+	spec := cg.ArgsSpec{Node: a.node, In: a.in, Values: values, Refs: refs, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Roots: a.roots}
 
 	inst, args, err := g.WriteArgs(spec)
 	if err != nil {

@@ -102,7 +102,7 @@ func argsStep(gf graphFlags, a argsFlags, out string) (cg.Instance, string, erro
 		return cg.Instance{}, "", err
 	}
 
-	inst, args, err := a.write(g, out)
+	inst, args, err := a.write(g, out, shim.Refs{})
 	if err != nil || inst.Disabled {
 		return inst, "", err
 	}

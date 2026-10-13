@@ -215,11 +215,11 @@ func unsplitTask(node, dir string, in ...string) []string {
 // join's chunkouts, and its join.
 func splitTasks(node string, in ...string) [][]string {
 	tasks := [][]string{slices.Concat([]string{"stage", "-phase", "split", "-node", node}, in,
-		[]string{"-args", "sp/args", "-o", "sp/chunks", "-work", "sp"})}
+		[]string{"-args", "sp/args", "-o", "sp/chunks", "-out-refs", "sp/chunk_refs", "-work", "sp"})}
 
 	for _, c := range []string{"chnk0", "chnk1"} {
 		tasks = append(tasks, slices.Concat([]string{"stage", "-phase", "main", "-node", node}, in,
-			[]string{"-args", c + "/args", "-chunk", "sp/chunks/" + c, "-o", "jn/chunkouts/" + c, "-work", c}))
+			[]string{"-args", c + "/args", "-chunk", "sp/chunks/" + c, "-o", "jn/chunkouts/" + c, "-out-refs", c + "/chunkout_refs", "-work", c}))
 	}
 
 	return append(tasks, slices.Concat([]string{"stage", "-phase", "join", "-node", node}, in,
@@ -502,6 +502,146 @@ func TestStagePostNamesStagedFileByReference(t *testing.T) {
 
 	if _, err := os.Lstat(filepath.Join("pass", "outs", "y", "f")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("PASS posted a files dir (%v), want none", err)
+	}
+}
+
+// fwdMRO forwards MK's file through FWD's split triad: the split into each
+// chunk's def, each chunk into its outs, and the join into its own.
+const fwdMRO = `filetype txt;
+
+stage MK(
+    out txt f,
+    src exec "mk.sh",
+)
+
+stage FWD(
+    in  txt x,
+    out txt y,
+    src exec "fwd.sh",
+) split (
+    in  txt c,
+    out txt z,
+)
+
+pipeline P(
+    out txt y,
+)
+{
+    call MK()
+
+    call FWD(
+        x = MK.f,
+    )
+
+    return (
+        y = FWD.y,
+    )
+}
+
+call P()
+`
+
+// fwdScript is FWD's exec code: two chunks, each given x as c, each
+// returning its c as z, and the join returning a chunk's z as y.
+const fwdScript = `#!/bin/sh
+meta=$2
+args=$(tr -d ' \n' < "$meta/_args")
+case $1 in
+split) x=$(echo "$args" | sed 's/.*"x":"\([^"]*\)".*/\1/'); echo "{\"chunks\":[{\"c\":\"$x\"},{\"c\":\"$x\"}],\"join\":{}}" > "$meta/_stage_defs" ;;
+main) c=$(echo "$args" | sed 's/.*"c":"\([^"]*\)".*/\1/'); echo "{\"z\":\"$c\"}" > "$meta/_outs" ;;
+join) z=$(tr -d ' \n' < "$meta/_chunk_outs" | sed 's/.*"z":"\([^"]*\)".*/\1/'); echo "{\"y\":\"$z\"}" > "$meta/_outs" ;;
+esac
+touch "$meta/_complete"
+`
+
+// linkAll links each of links, a staged path, to its target below work,
+// as Nextflow stages a task's inputs.
+func linkAll(t *testing.T, work string, links map[string]string) {
+	t.Helper()
+
+	for at, target := range links {
+		if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.Symlink(filepath.Join(work, target), at); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestStageSplitNamesStagedFileByReference: FWD's split stages MK's file
+// and forwards it into each chunk's def, and each chunk into its outs: the
+// split and each chunk name it by reference, as the item their task staged
+// it in and its ordinal dir there, and write no copy of it, so its bytes
+// are not emitted once per chunk. Each later task stages the file where MK
+// wrote it, as the driver resolves the references, and the join's post
+// names it by reference too.
+func TestStageSplitNamesStagedFileByReference(t *testing.T) {
+	dir, work := t.TempDir(), t.TempDir()
+	mro := writeTestFile(t, filepath.Join(dir, "pipeline.mro"), fwdMRO)
+
+	for name, src := range map[string]string{"mk.sh": mkScript, "fwd.sh": fwdScript} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Chdir(work)
+
+	if _, err := mreIn(t, mro, unsplitTask("P.MK", "mk")...); err != nil {
+		t.Fatalf("MK: %v", err)
+	}
+
+	mkFile := filepath.Join("mk", "outs", "f", "f", "L0000")
+	linkAll(t, work, map[string]string{"sp/in/u1": "mk/outs/f"})
+	split := []string{"stage", "-phase", "split", "-node", "P.FWD", "-in", "sp/in", "-refs", "sp/refs", "-args", "sp/args", "-o", "sp/chunks", "-out-refs", "sp/chunk_refs", "-work", "sp"}
+
+	if _, err := mreIn(t, mro, split...); err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	wantRefs(t, "sp/chunk_refs", "chunks/chnk0\tsp/in/u1\tf/L0000\nchunks/chnk1\tsp/in/u1\tf/L0000\n", "sp/chunks/chnk0/f", "sp/chunks/chnk1/f")
+
+	for _, c := range []string{"chnk0", "chnk1"} {
+		linkAll(t, work, map[string]string{c + "/in/u1": "mk/outs/f", c + "/refs/1/f/L0000": mkFile, c + "/chunk/" + c: "sp/chunks/" + c})
+
+		if _, err := mreIn(t, mro, "stage", "-phase", "main", "-node", "P.FWD", "-in", c+"/in", "-refs", c+"/refs", "-args", c+"/args",
+			"-chunk", c+"/chunk/"+c, "-o", c+"/chunkout/"+c, "-out-refs", c+"/chunkout_refs", "-work", c); err != nil {
+			t.Fatalf("%s: %v", c, err)
+		}
+
+		wantRefs(t, c+"/chunkout_refs", "chunkout/"+c+"\t"+c+"/refs/1\tf/L0000\n", c+"/chunkout/"+c+"/f")
+	}
+
+	linkAll(t, work, map[string]string{
+		"jn/in/u1": "mk/outs/f", "jn/refs/1/f/L0000": mkFile, "jn/chunks/chnk0": "sp/chunks/chnk0", "jn/chunks/chnk1": "sp/chunks/chnk1",
+		"jn/chunks/join.json": "sp/chunks/join.json", "jn/chunkouts/chnk0": "chnk0/chunkout/chnk0", "jn/chunkouts/chnk1": "chnk1/chunkout/chnk1",
+	})
+
+	if _, err := mreIn(t, mro, slices.Concat([]string{
+		"stage", "-phase", "join", "-node", "P.FWD", "-in", "jn/in", "-refs", "jn/refs", "-args", "jn/args",
+		"-chunks", "jn/chunks", "-chunkouts", "jn/chunkouts", "-work", "jn",
+	}, posted("jn"))...); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+
+	wantRefs(t, "jn/outs_refs", "outs/y\tjn/refs/1\tf/L0000\n", "jn/outs/y/f")
+}
+
+// wantRefs requires the reference lines a task wrote to path to be want,
+// and each of copies, a files dir a bundle would hold a copy in, absent.
+func wantRefs(t *testing.T, path, want string, copies ...string) {
+	t.Helper()
+
+	if d := cmp.Diff(want, readText(t, path)); d != "" {
+		t.Errorf("%s (-want +got):\n%s", path, d)
+	}
+
+	for _, c := range copies {
+		if _, err := os.Lstat(c); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s exists (%v), want the file named by reference", c, err)
+		}
 	}
 }
 

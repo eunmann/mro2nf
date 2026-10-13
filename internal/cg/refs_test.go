@@ -142,7 +142,12 @@ func (r *refRun) task(node string, items []string, stage func(args map[string]st
 
 	refs := r.stage(items)
 
-	inst, args, err := r.g.WriteArgs(ArgsSpec{Node: node, In: []string{"in"}, Refs: "refs", Out: "args"})
+	leaves, err := shim.ReadRefs("refs")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+
+	inst, args, err := r.g.WriteArgs(ArgsSpec{Node: node, In: []string{"in"}, Refs: leaves, Out: "args"})
 	if err != nil {
 		r.t.Fatal(err)
 	}

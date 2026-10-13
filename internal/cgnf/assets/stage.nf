@@ -80,11 +80,11 @@ def sources(List us, List rs, List cs, List os) {
     return m
 }
 
-// referred is the dirs a task posted, each with the ordinal dir of every
-// file it names by reference (mre stage -field-refs, -fork-refs: a line
-// each of the dir's last two path components, the path the task staged
-// the item the file lies in at, and its ordinal dir there), where the
-// task's sources, src, hold it.
+// referred is the dirs a task wrote, each with the ordinal dir of every
+// file it names by reference (mre stage -field-refs, -fork-refs,
+// -out-refs: a line each of the dir's last two path components, the path
+// the task staged the item the file lies in at, and its ordinal dir
+// there), where the task's sources, src, hold it.
 def referred(List ds, String refs, Map src) {
     def by = refs.tokenize('\n').collect { l -> l.split('\t') }.groupBy { f -> f[0] }
     return ds.collect { d ->
@@ -263,14 +263,14 @@ process STAGE_SPLIT {
     tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
-    tuple val(meta), val(key), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), path('chunks/resources.tsv'), emit: split
+    tuple val(meta), val(key), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), path('chunks/resources.tsv'), path('chunk_refs'), emit: split
 
     script:
     """
     ${callScript(meta)}
     ${valuesFile(values)}
     mkdir -p in refs
-    ${mreStage(task, meta, 'split', "${args(meta, forks, values, leaves)} -args args -o chunks")}
+    ${mreStage(task, meta, 'split', "${args(meta, forks, values, leaves)} -args args -o chunks -out-refs chunk_refs")}
     """
 }
 
@@ -286,14 +286,14 @@ process STAGE_MAIN {
     tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), val(name), path(chunk, stageAs: 'chunk/*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
-    tuple val(meta), val(key), path('chunkout/*', type: 'dir'), emit: chunk
+    tuple val(meta), val(key), path('chunkout/*', type: 'dir'), eval('cat chunkout_refs'), emit: chunk
 
     script:
     """
     ${callScript(meta)}
     ${valuesFile(values)}
     mkdir -p in refs
-    ${mreStage(task, meta, 'main', "${args(meta, forks, values, leaves)} -args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
+    ${mreStage(task, meta, 'main', "${args(meta, forks, values, leaves)} -args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)} -out-refs chunkout_refs")}
     """
 }
 
@@ -768,18 +768,39 @@ workflow JOIN_SOURCES {
     out
 }
 
+// chunked is each chunk a split wrote, cs, with the ordinal dirs its task
+// stages by reference: the instance's, rs, and those of the files its def
+// names by reference (mre stage -out-refs, the split's lines in table),
+// where the split task's sources, us and rs, hold them.
+def chunked(List us, List rs, List cs, Path table) {
+    return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], (rs + refsOf([e])).unique()] }
+}
+
+// joinRefs are the ordinal dirs a split's join stages by reference: the
+// instance's, rs, those each chunk of chunked stages, and those of the
+// files each chunk's outs of os, [outs dir, its lines], name by reference
+// (mre stage -out-refs), where that chunk's task's sources hold them.
+def joinRefs(List us, List rs, List chunked, List os) {
+    def by = chunked.collectEntries { c, crs -> [(c.name): [c, crs]] }
+    def outs = os.collectMany { o, lines ->
+        def c = by[o.name]
+        refsOf(referred([o], lines, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))
+    }
+    return (rs + chunked.collectMany { e -> e[1] } + outs).unique()
+}
+
 // CHUNKS is a main per chunk a split returned, each scheduled with the
 // resources its job gets, from the split's resources table, and staging
-// the split's inputs, input.
+// the split's inputs, input, and the files its def names by reference.
 workflow CHUNKS {
     take:
     split
     input
 
     main:
-    out = split.map { m, k, cs, _j, res -> [k, m, cs, res] }.join(input.map { v -> staged(v) }).flatMap { k, m, cs, res, fs, vs, us, rs, ids, ef ->
+    out = split.map { m, k, cs, _j, res, t -> [k, m, cs, res, t] }.join(input.map { v -> staged(v) }).flatMap { k, m, cs, res, t, fs, vs, us, rs, ids, ef ->
         def r = resources(res)
-        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, rs, ids, ef, c.name, c, callStaged(m)] }
+        chunked(us, rs, cs, t).collect { c, crs -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, crs, ids, ef, c.name, c, callStaged(m)] }
     }
 
     emit:
@@ -788,7 +809,8 @@ workflow CHUNKS {
 
 // JOIN is a split's join over every chunk's outs once all are in, by chunk
 // name, not by completion, scheduled with the resources the split gave it,
-// and staging the split's inputs, input.
+// and staging the split's inputs, input, and the files its chunks' defs
+// and outs name by reference.
 workflow JOIN {
     take:
     split
@@ -796,9 +818,11 @@ workflow JOIN {
     input
 
     main:
-    outs = chunk.map { m, k, o -> [groupKey(k, m.chunks), o] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }
+    outs = chunk.map { m, k, o, lines -> [groupKey(k, m.chunks), [o, lines]] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }
     none = split.filter { v -> v[2].isEmpty() }.map { v -> [v[1], []] }
-    out = split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, fs, vs, us, rs, ids, ef, os -> [m, k, fs, vs, us, rs, ids, ef, cs, j, os, callStaged(m)] }
+    out = split.map { m, k, cs, j, res, t -> [k, m + resources(res).join, cs, j, t] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, t, fs, vs, us, rs, ids, ef, os ->
+        [m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]
+    }
 
     emit:
     out

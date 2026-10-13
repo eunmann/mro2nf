@@ -68,7 +68,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 			return err
 		}
 
-		refs = append(refs, refLines(spec.Fields, p.Id, named)...)
+		refs = append(refs, shim.RefLines(fd, named)...)
 	}
 
 	if err := writeFile(spec.FieldRefs, strings.Join(refs, "")); err != nil {

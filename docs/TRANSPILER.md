@@ -377,36 +377,45 @@ none, and a forked instance waits for every fork of the node it reads, as `mrp`
 waits for every fork of a node before a node reading it runs
 (`martian/core/node.go` `getState`; `TestEmitForkedGatherWaitsForItsUpstream`).
 
-**Files by reference.** A posted bundle names a file its task staged, a
-whole leaf of an outs or element bundle, a chunk's outs or a split's chunk
-(a join's outs naming its chunks' files, a stage returning its input), by
-reference rather than as a copy of its own (§7): the post lists, per
-bundle, the item the file lies in by the path the task staged it at
-(`in/u<i>`, `refs/<i>`, `chunks/<name>`, `chunkouts/<name>`) and the file's
-ordinal dir there (`-field-refs`, `-fork-refs`, `eval` outputs). `POSTED`
-joins each posting task's outputs, by instance key, to the paths the driver
-staged its items from (`SOURCES`, `JOIN_SOURCES`; `in/u?` names the i-th
-of the list by its index), and resolves each line to the ordinal dir in
-the producer's work dir, which the item carries beside its dir. A reader,
-OUTS included, stages those ordinal dirs once each as
-`refs/<i>/f/<ordinal>/` (`refsOf`), so Nextflow stages the file from
-where its producer wrote it, a link on a shared filesystem and a download
-on an object store, and the posting task uploads none of it again (on
-CellRanger on Batch the `MAKE_SHARD` join spent 31.8 s re-uploading its
-chunks' shards, #562). A reader's `-resume` key holds the ordinal dirs'
-paths, which a cached producer keeps. Nextflow's own `includeInputs`
-cannot do this: an output it matches is named in the task's own work dir
-and is unstaged from it like any other output (`TaskFileCollector`,
+**Files by reference.** Every bundle a stage task writes for another task
+to stage, a posted outs or element bundle, a split's chunk def or a
+chunk's outs, names a file its task staged, a whole leaf of a staged
+bundle (a join's outs naming its chunks' files, a stage returning its
+input, a split forwarding its input into each chunk's def), by reference
+rather than as a copy of its own (§7): the task lists, per bundle, the
+item the file lies in by the path the task staged it at (`in/u<i>`,
+`refs/<i>`, `chunk/<name>`, `chunks/<name>`, `chunkouts/<name>`) and the
+file's ordinal dir there (`-field-refs`, `-fork-refs`, `-out-refs`).
+`POSTED` joins each posting task's outputs, by instance key, to the paths
+the driver staged its items from (`SOURCES`, `JOIN_SOURCES`; `in/u?` names
+the i-th of the list by its index), and resolves each line to the ordinal
+dir in the producer's work dir, which the item carries beside its dir. A
+split's lines come in a file, `chunk_refs`, beside `resources.tsv`, a
+chunk's as an `eval` output: `CHUNKS` and `JOIN`, which already join the
+split's outputs to the instance's staged items, resolve them against the
+paths the split, and each chunk, staged its items from (`chunked`,
+`joinRefs`), so each chunk stages the files its def names and the join
+those every chunk's def and outs name. A reader, OUTS included, stages
+those ordinal dirs once each as `refs/<i>/f/<ordinal>/` (`refsOf`), so
+Nextflow stages the file from where its producer wrote it, a link on a
+shared filesystem and a download on an object store, and the writing
+task uploads none of it again (on CellRanger on Batch the `MAKE_SHARD`
+join spent 31.8 s re-uploading its chunks' shards, #562; a split
+forwarding its input into M chunk defs uploaded M copies of it). A
+reader's `-resume` key holds the ordinal dirs' paths, which a cached
+producer keeps. Nextflow's own `includeInputs` cannot do this: an output
+it matches is named in the task's own work dir and is unstaged from it
+like any other output (`TaskFileCollector`,
 `AwsBatchFileCopyStrategy.getUnstageOutputFilesScript`), and a posted
 bundle holds its files below a dir of its own. A file inside a staged
-directory leaf, an entry file and a split's chunk defs and chunk outs are
-still copies.
+directory leaf and an entry file are still copies.
 
 **Split stages.** A split's chunk outs are gathered by `groupKey` over the
 chunk count. Each chunk's main and the join are scheduled with the cpus, memory
 and special their jobs get, the split's `resources.tsv`, a file the driver
 reads into rows without parsing a record, not an `eval` value, whose
-collection is quadratic in its lines.
+collection is quadratic in its lines; the split's `chunk_refs` is a file for
+the same reason.
 
 **OUTS.** The last task stages every outs bundle the pipeline outs read and
 the files they name by reference, gets each bundle's location, and each
@@ -511,7 +520,11 @@ every filetype and struct, and the struct of each callable's outputs.
   PLAN wrote). A split stage's main writes its chunk's outs bundle (`-o`),
   which its join stages; a non-split stage's main and a join hand their
   job's outs to the post step. The files a job names in any of them are
-  confined to the work dir (§7), strict under `-confine`. Beside the job's metadata mre writes `_mre_stage`, the name of
+  confined to the work dir (§7), strict under `-confine`, but a split's
+  chunk defs and a chunk's outs name each whole leaf of a bundle the task
+  staged (`-in`, `-refs`, `-chunk`) by reference, which `-out-refs` lists
+  (§5, **Files by reference**), and a chunk and a join read them among the
+  leaves they staged by reference (`-refs`). Beside the job's metadata mre writes `_mre_stage`, the name of
   the stage the job ran. The adapter never reads it; the `mrp` ABI differential
   (`TestMrpDiff`) uses it to group stage invocations without depending on the
   Nextflow task graph, and the failure-parity leg (`TestMrpDiffFailureParity`)
@@ -553,8 +566,8 @@ every filetype and struct, and the struct of each callable's outputs.
   instance's stamp and the output's JSON, and any other as one bundle
   stamped with the instance (`instance.json`), `<-fields>/<output>/`, the
   files it names staged as the job's own, confined (§7), but each whole
-  leaf of a bundle the task staged (`-in`, `-refs`, `-chunks`, `-chunkouts`)
-  named by reference, which `-field-refs`, and for element dirs
+  leaf of a bundle the task staged (`-in`, `-refs`, `-chunk`, `-chunks`,
+  `-chunkouts`) named by reference, which `-field-refs`, and for element dirs
   `-fork-refs`, list (§5, **Files by reference**). A consumer's `-values`
   file holds the records it got, of outputs and elements alike, each naming
   the item it stands in for in its JSON, and its `-refs` dir the files its
@@ -669,20 +682,25 @@ Both prefixes resolve identically on read-back. The rules:
   link to it (`post_process.go` `moveOutFile`, `copyOutSymlink`). A leaf named
   `.mre-origin` fails the write. `mre outs` places each file of the pipeline
   outs in the pipestance it reconstructs by its origin (§6).
-- **References** (on write): a post names a file that is a whole leaf of a
-  bundle its task staged, reached as Nextflow staged it or through the link
-  of the task's args, by reference (`shim.WriteItem`): the marker
-  `@mre:ref:<origin record>` in place of a copy, and the item it lies in and
-  its ordinal dir for the driver (§5). The task detects it by the path it
-  staged the item at, not by a link, so it holds on an object store, where
-  Nextflow stages a copy. Identity is the origin, as for a copy: every
-  position of one origin gets one reference, and a reader resolves it among
-  the ordinal dirs it staged by reference, each beside its origin record
-  (`shim.ReadRefs`), failing on one it did not stage; it then links it into
-  its args, and `mre outs` places it, as it would a copy of the same origin,
-  so `_args`, the published tree and the outs JSON are the same bytes. A
-  path inside a staged directory leaf is still copied, as staging the whole
-  directory to every reader would cost more than the one file.
+- **References** (on write): a post, a split's chunk defs and a chunk's
+  outs name a file that is a whole leaf of a bundle their task staged,
+  reached as Nextflow staged it or through the link of the task's args, by
+  reference (`shim.WriteItem`): the marker `@mre:ref:<origin record>` in
+  place of a copy, and the item it lies in and its ordinal dir for the
+  driver (§5). The task detects it by the path it staged the item at, not
+  by a link, so it holds on an object store, where Nextflow stages a copy.
+  Identity is the origin, as for a copy: every position of one origin gets
+  one reference, and a reader resolves it among the ordinal dirs it staged
+  by reference, each beside its origin record (`shim.ReadRefs`), failing on
+  one it did not stage. A reader of outs and elements then links it into
+  its args, and `mre outs` places it, as it would a copy of the same
+  origin, so `_args`, the published tree and the outs JSON are the same
+  bytes. A chunk and a join read a chunk def's or a chunk's outs'
+  reference where they staged it, `refs/<i>/f/<ordinal>/<basename>`, where
+  a copy lay below `chunk/<name>/` or `chunks/<name>/`: the basename the
+  stage sees, and the file, are the same. A path inside a staged directory
+  leaf is still copied, as staging the whole directory to every reader
+  would cost more than the one file.
 - **Escaping** (on write): every other string that begins with the reserved
   `@mre:` prefix (a string input, a `.mro` literal, a stage's string output, a
   file-typed out naming no file) is stored as `@mre:str:<original>`. A marker in

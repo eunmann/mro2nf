@@ -35,9 +35,9 @@ type ArgsSpec struct {
 	// staged: of outputs, fork elements and partner elements (Post's Values
 	// and ForkValues).
 	Values []string
-	// Refs is the dir of the leaves the task staged by reference, which
-	// the items it staged name by their origin (shim.ReadRefs).
-	Refs string
+	// Refs are the leaves the task staged by reference, which the items it
+	// staged name by their origin (shim.ReadRefs).
+	Refs shim.Refs
 	// Forks are fork records the task got as values rather than staged:
 	// those of the roots the invocation's entry values fix (DecodeElement).
 	Forks []Element
@@ -73,12 +73,7 @@ func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, core.LazyArgumentMap, error)
 		return Instance{}, nil, err
 	}
 
-	refs, err := shim.ReadRefs(spec.Refs)
-	if err != nil {
-		return Instance{}, nil, fmt.Errorf("args of %s: %w", st.Fqid, err)
-	}
-
-	s, err := g.stage(spec.In, spec.Values, refs, spec.Forks...)
+	s, err := g.stage(spec.In, spec.Values, spec.Refs, spec.Forks...)
 	if err != nil {
 		return Instance{}, nil, err
 	}

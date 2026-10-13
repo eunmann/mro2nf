@@ -45,18 +45,23 @@ var (
 	errSpecialLine = errors.New("a special holding a line break has no resources table row")
 )
 
-// runFlags are the inputs of mre stage's job step beside the call graph's.
+// runFlags are the inputs of mre stage's job step beside the call graph's,
+// and the dirs its task staged (staged), whose leaves the bundles it writes
+// name by reference, and the leaves it staged by reference (refs).
 type runFlags struct {
-	phase, args, out, chunk, chunks, chunkOuts, overrides string
-	confine                                               bool
-	roots                                                 shim.Roots
-	rt                                                    job.Runtime
+	phase, args, out, outRefs, chunk, chunks, chunkOuts, overrides string
+	confine                                                        bool
+	roots                                                          shim.Roots
+	rt                                                             job.Runtime
+	staged                                                         shim.Staged
+	refs                                                           shim.Refs
 }
 
 func (f *runFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.phase, "phase", "", "the phase to run: split, main or join")
 	fs.StringVar(&f.args, "args", "args", "the dir to link the files the instance's args name below")
 	fs.StringVar(&f.out, "o", "", "split: the chunks dir to write; main of a split stage: the chunk's outs bundle dir")
+	fs.StringVar(&f.outRefs, "out-refs", "", "split, and main of a split stage: file to write the references of the bundles -o receives into"+refsUsage)
 	fs.StringVar(&f.chunk, "chunk", "", "main of a split stage: the chunk's dir in the split's chunks dir")
 	fs.StringVar(&f.chunks, "chunks", "", "join: the split's chunks dir")
 	fs.StringVar(&f.chunkOuts, "chunkouts", "", "join: the dir holding each chunk's outs bundle, named as its chunk")
@@ -163,16 +168,21 @@ func (f *runFlags) split(ctx context.Context, g *cg.Graph, in job.Instance, args
 		return fmt.Errorf("split: %w", err)
 	}
 
-	opts, err := f.bundleOpts(job.PhaseSplit)
+	w, err := f.writer(g, job.PhaseSplit)
 	if err != nil {
 		return err
 	}
 
-	if err := writeChunksDir(f.out, defs, params, g.Table(), opts); err != nil {
+	refs, err := writeChunksDir(f.out, defs, params, w)
+	if err != nil {
 		return err
 	}
 
-	return writeResources(filepath.Join(f.out, resourcesTable), f.rt, in.Stage, defs)
+	if err := writeResources(filepath.Join(f.out, resourcesTable), f.rt, in.Stage, defs); err != nil {
+		return err
+	}
+
+	return writeRefs(f.outRefs, refs)
 }
 
 // readOverrides reads the mrp --overrides file at path, if any, with
@@ -253,6 +263,49 @@ func (f *runFlags) bundleOpts(sub string) (shim.Opts, error) {
 	return shim.Opts{Confine: conf, Roots: f.roots}, nil
 }
 
+// writer writes the bundles a split stage's job, whose metadata dir under
+// the work dir is sub, returns for a later task of the split to stage: the
+// files they name treated as bundleOpts says, but each whole leaf of a
+// bundle the task staged named by reference.
+func (f *runFlags) writer(g *cg.Graph, sub string) (itemWriter, error) {
+	opts, err := f.bundleOpts(sub)
+	if err != nil {
+		return itemWriter{}, err
+	}
+
+	return itemWriter{tbl: g.Table(), opts: opts, staged: f.staged}, nil
+}
+
+// itemWriter writes payloads as bundles another task stages, walking their
+// file leaves through tbl: those its job wrote treated as opts says, each
+// whole leaf of a bundle in staged named by reference (shim.WriteItem).
+type itemWriter struct {
+	tbl    *types.Table
+	opts   shim.Opts
+	staged shim.Staged
+}
+
+// write writes payload of params as the bundle dir and returns the lines
+// of the references it holds (shim.RefLines).
+func (w itemWriter) write(dir string, payload map[string]any, params []*syntax.StructMember) ([]string, error) {
+	refs, err := shim.WriteItem(dir, payload, params, w.tbl, w.opts, w.staged)
+	if err != nil {
+		return nil, fmt.Errorf("write bundle %s: %w", dir, err)
+	}
+
+	return shim.RefLines(dir, refs), nil
+}
+
+// writeRefs writes the reference lines refs to the file path, which the
+// driver resolves (-out-refs).
+func writeRefs(path string, refs []string) error {
+	if err := os.WriteFile(path, []byte(strings.Join(refs, "")), filePerm); err != nil {
+		return fmt.Errorf("write -out-refs %q: %w", path, err)
+	}
+
+	return nil
+}
+
 // main runs the instance's main job: a split stage's chunk, whose outs it
 // writes as the chunk's outs bundle, which the join stages, or a non-split
 // stage's one chunk, whose outs it returns.
@@ -262,7 +315,7 @@ func (f *runFlags) main(ctx context.Context, g *cg.Graph, in job.Instance, args 
 	var params []*syntax.StructMember
 
 	if in.Stage.Split {
-		c, err := readChunk(f.chunk)
+		c, err := readChunk(f.chunk, f.refs)
 		if err != nil {
 			return finished{}, err
 		}
@@ -284,16 +337,32 @@ func (f *runFlags) main(ctx context.Context, g *cg.Graph, in job.Instance, args 
 		return finished{}, fmt.Errorf("main: %w", err)
 	}
 
+	if in.Stage.Split {
+		return finished{}, f.writeChunkOuts(g, sub, outs, params)
+	}
+
 	opts, err := f.bundleOpts(sub)
 	if err != nil {
 		return finished{}, err
 	}
 
-	if !in.Stage.Split {
-		return finishedOf(outs, opts)
+	return finishedOf(outs, opts)
+}
+
+// writeChunkOuts writes the _outs of the chunk whose job's metadata dir is
+// sub, raw, as its outs bundle, and the references it holds.
+func (f *runFlags) writeChunkOuts(g *cg.Graph, sub string, raw json.RawMessage, params []*syntax.StructMember) error {
+	w, err := f.writer(g, sub)
+	if err != nil {
+		return err
 	}
 
-	return finished{}, writeOutsBundle(f.out, outs, params, g.Table(), opts)
+	refs, err := writeOutsBundle(f.out, raw, params, w)
+	if err != nil {
+		return err
+	}
+
+	return writeRefs(f.outRefs, refs)
 }
 
 func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgumentMap) (finished, error) {
@@ -301,7 +370,7 @@ func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgu
 		return finished{}, fmt.Errorf("join of %s: %w", in.Stage.Fqid, errNotSplit)
 	}
 
-	defs, names, err := readChunksDir(f.chunks)
+	defs, names, err := readChunksDir(f.chunks, f.refs)
 	if err != nil {
 		return finished{}, err
 	}
@@ -313,7 +382,7 @@ func (f *runFlags) join(ctx context.Context, in job.Instance, args core.LazyArgu
 			return finished{}, fmt.Errorf("join of %s: %w %s in %s", in.Stage.Fqid, errNoChunk, name, f.chunkOuts)
 		}
 
-		if outs[i], err = readArgsMap(dir); err != nil {
+		if outs[i], err = readArgsMap(dir, f.refs); err != nil {
 			return finished{}, err
 		}
 	}
@@ -359,9 +428,9 @@ func finishedOf(raw json.RawMessage, opts shim.Opts) (finished, error) {
 }
 
 // readArgsMap reads a bundle's payload object with its file leaves at their
-// staged paths.
-func readArgsMap(dir string) (core.LazyArgumentMap, error) {
-	raw, err := shim.ReadBundle(dir)
+// staged paths, those it names by reference among refs.
+func readArgsMap(dir string, refs shim.Refs) (core.LazyArgumentMap, error) {
+	raw, err := refs.ReadBundle(dir)
 	if err != nil {
 		return nil, fmt.Errorf("read bundle: %w", err)
 	}
@@ -383,32 +452,40 @@ type chunkJSON struct {
 }
 
 // writeChunksDir writes each chunk def the split returned as a bundle of
-// its args, the files the chunk params name staged, named by mrp's chunk
-// name, and the join's resources beside them. The split chose the files, so
-// opts confine them.
-func writeChunksDir(dir string, defs *core.StageDefs, params []*syntax.StructMember, tbl *types.Table, opts shim.Opts) error {
+// its args, the files the chunk params name staged or named by reference as
+// w says, named by mrp's chunk name, and the join's resources beside them,
+// and returns the lines of the references. The split chose the files, so
+// w's opts confine them.
+func writeChunksDir(dir string, defs *core.StageDefs, params []*syntax.StructMember, w itemWriter) ([]string, error) {
+	var refs []string
+
 	for i, d := range defs.ChunkDefs {
 		cd := filepath.Join(dir, job.ChunkName(i, len(defs.ChunkDefs)))
-		if err := writeObjectBundle(cd, d.Args, params, tbl, opts); err != nil {
-			return err
+
+		named, err := writeObjectBundle(cd, d.Args, params, w)
+		if err != nil {
+			return nil, err
 		}
 
 		if err := writeRecordFile(filepath.Join(cd, chunkRecord), chunkJSON{Index: i, Count: len(defs.ChunkDefs), Resources: d.Resources}); err != nil {
-			return err
+			return nil, err
 		}
+
+		refs = append(refs, named...)
 	}
 
-	return writeRecordFile(filepath.Join(dir, joinRecord), defs.JoinDef)
+	return refs, writeRecordFile(filepath.Join(dir, joinRecord), defs.JoinDef)
 }
 
-// readChunk reads a chunk the split wrote.
-func readChunk(dir string) (job.Chunk, error) {
+// readChunk reads a chunk the split wrote, the files it names by reference
+// among refs.
+func readChunk(dir string, refs shim.Refs) (job.Chunk, error) {
 	var rec chunkJSON
 	if err := readRecordFile(filepath.Join(dir, chunkRecord), &rec); err != nil {
 		return job.Chunk{}, err
 	}
 
-	args, err := readArgsMap(dir)
+	args, err := readArgsMap(dir, refs)
 	if err != nil {
 		return job.Chunk{}, err
 	}
@@ -417,9 +494,10 @@ func readChunk(dir string) (job.Chunk, error) {
 }
 
 // readChunksDir reads a split's chunks dir back into its stage defs, in
-// chunk order, and the chunks' names. It fails unless it reads every chunk
-// the split returned, as each chunk's record counts them.
-func readChunksDir(dir string) (*core.StageDefs, []string, error) {
+// chunk order, and the chunks' names, the files they name by reference
+// among refs. It fails unless it reads every chunk the split returned, as
+// each chunk's record counts them.
+func readChunksDir(dir string, refs shim.Refs) (*core.StageDefs, []string, error) {
 	defs := &core.StageDefs{}
 	if err := readRecordFile(filepath.Join(dir, joinRecord), &defs.JoinDef); err != nil {
 		return nil, nil, err
@@ -433,7 +511,7 @@ func readChunksDir(dir string) (*core.StageDefs, []string, error) {
 	defs.ChunkDefs = make([]*core.ChunkDef, len(names))
 
 	for i, name := range names {
-		c, err := readChunk(filepath.Join(dir, name))
+		c, err := readChunk(filepath.Join(dir, name), refs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -481,14 +559,15 @@ func chunkNames(dir string) ([]string, error) {
 }
 
 // writeOutsBundle writes a job's _outs as a bundle of params, the files
-// they name staged as opts say.
-func writeOutsBundle(dir string, raw json.RawMessage, params []*syntax.StructMember, tbl *types.Table, opts shim.Opts) error {
+// they name staged or named by reference as w says, and returns the lines
+// of the references.
+func writeOutsBundle(dir string, raw json.RawMessage, params []*syntax.StructMember, w itemWriter) ([]string, error) {
 	payload, err := outsPayload(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return writeBundle(dir, payload, params, tbl, opts)
+	return w.write(dir, payload, params)
 }
 
 // outsPayload is a job's _outs by output, each value in its encoded key
@@ -511,27 +590,19 @@ func outsPayload(raw json.RawMessage) (map[string]any, error) {
 	return payload, nil
 }
 
-func writeObjectBundle(dir string, m core.LazyArgumentMap, params []*syntax.StructMember, tbl *types.Table, opts shim.Opts) error {
+func writeObjectBundle(dir string, m core.LazyArgumentMap, params []*syntax.StructMember, w itemWriter) ([]string, error) {
 	payload := make(map[string]any, len(m))
 
 	for k, v := range m {
 		dv, err := types.DecodeJSON(v)
 		if err != nil {
-			return fmt.Errorf("decode %s: %w", k, err)
+			return nil, fmt.Errorf("decode %s: %w", k, err)
 		}
 
 		payload[k] = dv
 	}
 
-	return writeBundle(dir, payload, params, tbl, opts)
-}
-
-func writeBundle(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts shim.Opts) error {
-	if err := shim.WriteBundle(dir, payload, params, tbl, opts); err != nil {
-		return fmt.Errorf("write bundle %s: %w", dir, err)
-	}
-
-	return nil
+	return w.write(dir, payload, params)
 }
 
 func writeRecordFile(path string, v any) error {

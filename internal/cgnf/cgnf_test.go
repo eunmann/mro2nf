@@ -263,7 +263,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }",
+		"groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }",
 		".collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->\n        [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]",
 		"outs.flatMap { k, ds -> selected(ds, fields).collect { e -> [[node] + k, e] } }",
 	} {
@@ -401,7 +401,7 @@ func TestEmitCarriesTheCall(t *testing.T) {
 		"refsOf(es + us), [], [], callStaged(d)]",
 		"ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
 		"c.name, c, callStaged(m)] }",
-		"[m, k, fs, vs, us, rs, ids, ef, cs, j, os, callStaged(m)]",
+		"ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -508,8 +508,30 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, rs, ids, ef, c.name, c, callStaged(m)] }",
-		"split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }",
+		"def r = resources(res)\n        chunked(us, rs, cs, t).collect { c, crs -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, crs, ids, ef, c.name, c, callStaged(m)] }",
+		"split.map { m, k, cs, j, res, t -> [k, m + resources(res).join, cs, j, t] }",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+}
+
+// TestEmitSplitNamesFilesByReference: a split and each chunk's main name
+// a file their task staged by reference in the chunk defs and the chunk's
+// outs, writing its lines to -out-refs, which the driver resolves, as
+// POSTED does, against the paths the task staged its items from: each
+// chunk stages the files its def names, and the join those every chunk's
+// def and outs name.
+func TestEmitSplitNamesFilesByReference(t *testing.T) {
+	for _, want := range []string{
+		"-args args -o chunks -out-refs chunk_refs\")}",
+		"-o ${shq('chunkout/' + name)} -out-refs chunkout_refs\")}",
+		"path('chunks/resources.tsv'), path('chunk_refs'), emit: split",
+		"tuple val(meta), val(key), path('chunkout/*', type: 'dir'), eval('cat chunkout_refs'), emit: chunk",
+		"return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], (rs + refsOf([e])).unique()] }",
+		"refsOf(referred([o], lines, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))",
+		"[m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -518,10 +540,10 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 }
 
 // TestEmitReadsRecordsFromFiles (#549): a record of a line per fork or per
-// chunk, PLAN's and a split's resources table, reaches the driver as a file
-// it reads, not as an eval output, which Nextflow 26.04 joins line by line
-// with string concatenation (TaskEnvCollector.collect), quadratic in the
-// lines.
+// chunk, PLAN's and a split's resources table and references, reaches the
+// driver as a file it reads, not as an eval output, which Nextflow 26.04
+// joins line by line with string concatenation (TaskEnvCollector.collect),
+// quadratic in the lines.
 func TestEmitReadsRecordsFromFiles(t *testing.T) {
 	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
 
@@ -531,8 +553,10 @@ func TestEmitReadsRecordsFromFiles(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(stageModule, "path('chunks/resources.tsv'), emit: split") || strings.Contains(stageModule, "eval('cat chunks/resources.tsv')") {
-		t.Error("STAGE_SPLIT does not output its resources table as a file")
+	for _, rec := range []string{"chunks/resources.tsv", "chunk_refs"} {
+		if !strings.Contains(stageModule, "path('"+rec+"')") || strings.Contains(stageModule, "eval('cat "+rec+"')") {
+			t.Errorf("STAGE_SPLIT does not output its %s as a file", rec)
+		}
 	}
 }
 

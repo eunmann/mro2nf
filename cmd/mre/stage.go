@@ -88,7 +88,15 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return err
 	}
 
-	inst, args, err := s.args.write(g, s.run.args)
+	if s.run.refs, err = shim.ReadRefs(s.args.refs); err != nil {
+		return fmt.Errorf("stage: %w", err)
+	}
+
+	if s.run.staged, err = shim.NewStaged(append(slices.Clone(s.args.in), s.args.refs, s.run.chunk, s.run.chunks, s.run.chunkOuts)...); err != nil {
+		return fmt.Errorf("stage: %w", err)
+	}
+
+	inst, args, err := s.args.write(g, s.run.args, s.run.refs)
 	if err != nil {
 		return err
 	}
@@ -102,12 +110,7 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return err
 	}
 
-	staged, err := shim.NewStaged(append(slices.Clone(s.args.in), s.args.refs, s.run.chunks, s.run.chunkOuts)...)
-	if err != nil {
-		return fmt.Errorf("post: %w", err)
-	}
-
-	return s.post.post(g, inst, done, staged)
+	return s.post.post(g, inst, done, s.run.staged)
 }
 
 // posts reports whether a task of node's phase runs the instance's last
