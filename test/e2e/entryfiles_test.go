@@ -11,18 +11,48 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-// TestEntryFileGlobCharName checks an entry file override whose name holds a
-// character bash would expand fails the run at PLAN, before any stage task
-// stages it, naming the input and the character (#276). Nextflow's stage-in
-// script leaves the source path unquoted on 25.10 and 26.04, so `s[1].txt`
-// beside `s1.txt` would otherwise stage s1.txt silently, and a brace would be
-// expanded; file(x, glob: false) keeps only the head node from globbing.
+// TestEntryFileGlobCharName checks an entry file override Nextflow stages,
+// such as a file: URI, whose name holds a character bash would expand fails
+// the run at PLAN, before any stage task stages it, naming the input and the
+// character (#276). Nextflow's stage-in script leaves the source path
+// unquoted on 25.10 and 26.04, so `s[1].txt` beside `s1.txt` would otherwise
+// stage s1.txt silently, and a brace would be expanded; file(x, glob: false)
+// keeps only the head node from globbing. A head-node path, which every task
+// reads in place, no task stages, so it reaches the stage as given, as under
+// mrp (#543): the stage reads s[1].txt, not s1.txt.
 func TestEntryFileGlobCharName(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java")
+
+	t.Run("in_place", func(t *testing.T) {
+		t.Parallel()
+
+		proj, dir := transpile(t, "entry_file"), t.TempDir()
+		writeFileT(t, filepath.Join(dir, "s[1].txt"), "10\n")
+		writeFileT(t, filepath.Join(dir, "s1.txt"), "999\n")
+		writeParams(t, proj, map[string]any{"reads": filepath.Join(dir, "s[1].txt")})
+
+		if err := runNextflow(t, proj, "-params-file", "params.json"); err != nil {
+			t.Fatal(err)
+		}
+
+		var got, want any
+
+		readJSON(t, filepath.Join(proj, "results", "pipeline_outs.json"), &got)
+
+		if err := decodeJSONNumber([]byte(`{"total": 20.0}`), &want); err != nil {
+			t.Fatal(err)
+		}
+
+		if d := cmp.Diff(want, got); d != "" {
+			t.Errorf("pipeline outs (-want +got):\n%s", d)
+		}
+	})
 
 	cases := []struct {
 		name, fixture, stage string
@@ -34,10 +64,10 @@ func TestEntryFileGlobCharName(t *testing.T) {
 			writeFileT(t, filepath.Join(dir, "s[1].txt"), "10\n")
 			writeFileT(t, filepath.Join(dir, "s1.txt"), "999\n")
 
-			return map[string]string{"reads": filepath.Join(dir, "s[1].txt")}
+			return map[string]string{"reads": "file://" + filepath.Join(dir, "s[1].txt")}
 		}, "entry input 'reads': the path contains '['"},
 		{"brace_in_array", "entry_filearr", "N0_COUNTARR", func(_ *testing.T, dir string) any {
-			return map[string][]string{"reads": {filepath.Join(dir, "a.txt"), filepath.Join(dir, "t{a,b}.txt")}}
+			return map[string][]string{"reads": {"file://" + filepath.Join(dir, "a.txt"), "file://" + filepath.Join(dir, "t{a,b}.txt")}}
 		}, "entry input 'reads': the path contains '{'"},
 	}
 

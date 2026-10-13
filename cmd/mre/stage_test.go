@@ -131,14 +131,16 @@ case $(tr -d ' \n' < "$meta/_args" | sed 's/.*"how":\([0-9]*\).*/\1/') in
 esac
 `
 
-// writeStagePipeline writes stageMRO and its stage code to a new dir, the
-// entry file value it reads beside them, and returns the .mro's path.
+// stagedReads is stageMRO's entry file value, which its tasks stage.
+const stagedReads = "s3://bucket/reads.txt"
+
+// writeStagePipeline writes stageMRO, reading stagedReads, and its stage
+// code to a new dir, and returns the .mro's path.
 func writeStagePipeline(t *testing.T) string {
 	t.Helper()
 
 	dir := t.TempDir()
-	reads := writeTestFile(t, filepath.Join(dir, "reads.txt"), "7\n")
-	mro := writeTestFile(t, filepath.Join(dir, "pipeline.mro"), fmt.Sprintf(stageMRO, reads))
+	mro := writeTestFile(t, filepath.Join(dir, "pipeline.mro"), fmt.Sprintf(stageMRO, stagedReads))
 
 	for name, src := range map[string]string{"sq.sh": sqScript, "add.sh": addScript, "cp.sh": cpScript, "fail.sh": failScript} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o700); err != nil {
@@ -212,10 +214,7 @@ func stageWork(t *testing.T, mro, work string) []string {
 	}
 
 	t.Chdir(work)
-
-	if err := os.Symlink(filepath.Join(filepath.Dir(mro), "reads.txt"), filepath.Join("entry", "1", "reads.txt")); err != nil {
-		t.Fatal(err)
-	}
+	writeTestFile(t, filepath.Join("entry", "1", "reads.txt"), "7\n")
 
 	entryForks(t, graphFlags{entry: mro}, "plan")
 

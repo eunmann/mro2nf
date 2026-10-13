@@ -50,7 +50,7 @@ func planEntry(t *testing.T, dir, values string, flags ...string) (string, error
 	err := run(t.Context(), append([]string{
 		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"), "-binds", filepath.Join(work, "binds"),
 	}, flags...))
 
 	return work, err
@@ -429,16 +429,18 @@ func planEntryFile(t *testing.T, value string, flags ...string) (string, error) 
 	err := run(t.Context(), append([]string{
 		"plan", "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"), "-binds", filepath.Join(work, "binds"),
 	}, flags...))
 
 	return work, err
 }
 
 // TestPlanRefusesEntryFilesItMayNotStage: an entry file value is vetted
-// before the driver hands it to file(): a glob character fails on every
-// profile, a head-node path where the profile sees no head-node file, and
-// a URI scheme but s3 unless remote inputs are allowed.
+// before the driver hands it to file(): a glob character in a staged value
+// fails on every profile, a head-node path where the profile sees no
+// head-node file or where it is or holds the run's work dir, and a URI
+// scheme but s3 unless remote inputs are allowed. A head-node path no task
+// stages may hold any character, as under mrp.
 func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 	cases := []struct {
 		value string
@@ -446,8 +448,11 @@ func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 		ok    bool
 	}{
 		{"/data/reads.txt", nil, true},
-		{"/data/s[1].txt", []string{"-remote-inputs"}, false},
+		{"/data/s[1].txt", nil, true},
+		{"file:///data/s[1].txt", []string{"-remote-inputs"}, false},
 		{"/data/reads.txt", []string{"-host-inputs=false"}, false},
+		{"/data", []string{"-run-workdir", "/data/proj/work"}, false},
+		{"/data/reads.txt", []string{"-run-workdir", "/data/proj/work"}, true},
 		{"s3://bucket/reads.txt", []string{"-host-inputs=false"}, true},
 		{"http://host/reads.txt", nil, false},
 		{"http://host/reads.txt", []string{"-remote-inputs"}, true},
@@ -461,13 +466,13 @@ func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 	}
 }
 
-// TestArgsReadsStagedEntryFiles: the plan lists the run's entry file and
-// the instance that reads it, and the args step reads the copy the task
-// staged, not the value's path, which an isolated task cannot see.
+// TestArgsReadsStagedEntryFiles: the plan lists the run's staged entry file
+// and the instance that reads it, and the args step reads the copy the
+// task staged, not the value, which names no path the task has.
 func TestArgsReadsStagedEntryFiles(t *testing.T) {
-	value := filepath.Join(t.TempDir(), "reads.txt")
+	const value = "s3://bucket/reads.txt"
 
-	work, err := planEntryFile(t, value)
+	work, err := planEntryFile(t, value, "-host-inputs=false")
 	if err != nil {
 		t.Fatal(err)
 	}

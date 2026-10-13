@@ -60,10 +60,10 @@ type PlanFork struct {
 
 // MakePlan compiles inv over the source as mrp compiles an invocation, and
 // checks that its call graph is within the witness's, which the project was
-// transpiled from. scratch receives the entry's fork elements. An entry file
-// value under mount is Mounted, and no instance stages it; it keeps its
-// index among the Leaves, which a task recomputes from the call.
-func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch string, mount shim.Mount) (Plan, error) {
+// transpiled from. scratch receives the entry's fork elements. No instance
+// stages an entry file value read in place; it keeps its index among the
+// Leaves, which a task recomputes from the call.
+func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch string) (Plan, error) {
 	w, err := src.Witness(mroPaths)
 	if err != nil {
 		return Plan{}, err
@@ -108,10 +108,9 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 
 	leaves := make(map[string]int, len(p.Leaves))
 
-	for i := range p.Leaves {
-		p.Leaves[i].Mounted = mount.Holds(p.Leaves[i].Value)
-		if !p.Leaves[i].Mounted {
-			leaves[p.Leaves[i].Value] = i
+	for i, l := range p.Leaves {
+		if !l.InPlace {
+			leaves[l.Value] = i
 		}
 	}
 
@@ -133,6 +132,22 @@ func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch s
 	}
 
 	return p, nil
+}
+
+// Binds are the entry file values read in place outside the S3 mount, which
+// the docker profile binds read-only into every task at their own paths, so
+// a path one stage records names the same file in every task: sorted, a
+// value under another bound with it.
+func (p Plan) Binds(mount shim.Mount) []string {
+	var paths []string
+
+	for _, l := range p.Leaves {
+		if l.InPlace && !mount.Holds(l.Value) {
+			paths = append(paths, l.Value)
+		}
+	}
+
+	return shim.NewRoots(paths...).Paths()
 }
 
 // planOuts is the pipeline and the entry files its outs read.

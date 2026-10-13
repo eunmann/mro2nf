@@ -44,9 +44,10 @@ params.mro2nf_confine = false
 
 	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n\n", gstr(p.src.Invocation.Call))
 
-	b.WriteString(`// The entry file values a run stages: a head-node path where the profile
-// sees the head node's files, an s3:// URI always, and a URI of any other
-// scheme only when whoever supplies the run's params is trusted to fetch it.
+	b.WriteString(`// The entry file values a run reads: a head-node path, which every task
+// reads in place, where the profile's tasks see the head node's files, an
+// s3:// URI always, and a URI of any other scheme only when whoever
+// supplies the run's params is trusted to fetch it.
 params.mro2nf_host_inputs = true
 params.mro2nf_allow_remote_inputs = false
 
@@ -139,17 +140,19 @@ profiles {
     lsf      { process.executor = 'lsf' }
     pbs      { process.executor = 'pbs' }
 
-    // Every task in its own container of --mro2nf_image, which mounts only
-    // what the task stages. The container runs as the invoking user so work/
-    // is not root-owned; the task's shell expands $(id), and the image has no
-    // home for that uid, so HOME is /tmp. containerOptions, not
-    // docker.runOptions, so a -c docker.runOptions adds to the mapping.
+    // Every task in its own container of --mro2nf_image, which mounts what
+    // the task stages and, read-only at their own paths, the entry files
+    // every task reads in place (meta.binds). The container runs as the
+    // invoking user so work/ is not root-owned; the task's shell expands
+    // $(id), and the image has no home for that uid, so HOME is /tmp.
+    // containerOptions, not docker.runOptions, so a -c docker.runOptions
+    // adds to them.
     docker {
         process.executor = 'local'
         process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() * 0.9 ]
         params.mro2nf_local_jobs = true
         docker.enabled = true
-        process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'
+        process.containerOptions = { '-u $(id -u):$(id -g) -e HOME=/tmp' + (meta.binds ?: '') }
         includeConfig 'conf/container.config'
     }
 

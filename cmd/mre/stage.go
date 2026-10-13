@@ -40,7 +40,7 @@ func runStage(ctx context.Context, argv []string) error {
 	s.run.register(fs)
 	s.post.register(fs)
 
-	root := fs.String("s3-mount", "", "the root every task mounts the input buckets under, read-only, whose paths the task's bundles name as they are")
+	root := fs.String("s3-mount", "", "the root every task mounts the input buckets under, read-only, whose paths the task's bundles name as they are, as they do the entry file values every task reads in place")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -51,15 +51,34 @@ func runStage(ctx context.Context, argv []string) error {
 		return fmt.Errorf("stage: %w", err)
 	}
 
-	roots := shim.NewRoots(string(mount))
-	s.args.roots, s.run.roots, s.post.roots = roots, roots, roots
-
 	g, err := gf.load()
 	if err != nil {
 		return err
 	}
 
+	roots, err := taskRoots(g, mount, s.run.rt.Work)
+	if err != nil {
+		return err
+	}
+
+	s.args.roots, s.run.roots, s.post.roots = roots, roots, roots
+
 	return s.stage(ctx, g)
+}
+
+// taskRoots are the run's read-only roots as a task in work reads them:
+// none holds the task's own files.
+func taskRoots(g *cg.Graph, mount shim.Mount, work string) (shim.Roots, error) {
+	roots, err := g.Roots(mount)
+	if err != nil {
+		return shim.Roots{}, fmt.Errorf("stage: %w", err)
+	}
+
+	if roots, err = roots.Except(work); err != nil {
+		return shim.Roots{}, fmt.Errorf("stage: %w", err)
+	}
+
+	return roots, nil
 }
 
 func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {

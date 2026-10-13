@@ -142,6 +142,37 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 	}
 }
 
+// TestEmitBindsInPlaceEntryFiles: PLAN hands mre the run's work dir, which
+// no entry input read in place may hold, and emits the paths every task
+// reads in place; the meta every task and OUTS share carries them, once, as
+// the docker options that bind each, quoted for the shell and for docker's
+// --mount fields.
+func TestEmitBindsInPlaceEntryFiles(t *testing.T) {
+	main := readTree(t, emitFixture(t, "entry_file"))["main.nf"]
+
+	for _, want := range []string{
+		"    eval('cat binds'), emit: binds\n",
+		" -run-workdir ${shq(workflow.workDir.toUriString())}",
+		" -binds binds\n",
+		"shared = PLAN.out.call.combine(PLAN.out.binds).map { c, b -> [",
+		", call: c, binds: binds(b)] }.first()\n",
+		"include { shq ; code ; ordered ; on ; pool ; binds ;",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	for _, want := range []string{
+		"def binds(String record) {\n",
+		"' --mount ' + shq('type=bind,' + mountField('source=' + p) + ',' + mountField('target=' + p) + ',readonly')",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+}
+
 // TestAWSBatchProfilePollsEveryTwoSeconds: the awsbatch profile checks job
 // status every 2 s rather than Nextflow's 10 s Batch default (#537), scoped
 // to the awsbatch executor so a local executor keeps its 100 ms.
@@ -202,14 +233,15 @@ func TestEmitHealthOmicsTemplate(t *testing.T) {
 
 // TestDockerProfileRunsAsInvokingUser: the docker profile runs each
 // container as the invoking user with a writable HOME so work/ is not
-// root-owned (#519), through process.containerOptions so a -c
+// root-owned (#519), and binds the entry files every task reads in place,
+// read-only at their own paths, through process.containerOptions so a -c
 // docker.runOptions adds to it; only the docker profile maps the user, as
 // AWS Batch runs the container on its own instance.
 func TestDockerProfileRunsAsInvokingUser(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "diamond_min"))
 	cfg := tree["nextflow.config"]
 
-	const opts = "process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'\n"
+	const opts = "process.containerOptions = { '-u $(id -u):$(id -g) -e HOME=/tmp' + (meta.binds ?: '') }\n"
 
 	docker := cfg[strings.Index(cfg, "    docker {"):strings.Index(cfg, "    awsbatch {")]
 	if !strings.Contains(docker, opts) {

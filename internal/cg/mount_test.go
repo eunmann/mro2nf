@@ -102,8 +102,8 @@ func mountMROAt(root shim.Mount) string {
 // call every task compiles, a directory's trailing / kept, a string that is
 // no file left as it is. A mounted value, a path given under the mount too,
 // keeps its index among the run's entry file values, which a task
-// recomputes from the call, and no instance stages it; the head-node path is
-// staged by its own index.
+// recomputes from the call, and no instance stages it, as no instance
+// stages the head-node path, read in place too.
 func TestPlanMountsS3EntryFiles(t *testing.T) {
 	root := s3Mount(t, "refs", "reads")
 	mro := mountMROAt(root)
@@ -111,13 +111,13 @@ func TestPlanMountsS3EntryFiles(t *testing.T) {
 	at := func(rel string) string { return filepath.Join(string(root), rel) }
 
 	want := []EntryLeaf{
-		{Input: "ref", Value: at("refs/genome") + "/", Mounted: true},
-		{Input: "ref", Value: at("refs/genome/fa.txt"), Mounted: true},
-		{Input: "fs", Value: at("reads/a.txt"), Mounted: true},
-		{Input: "fs", Value: "/data/b.txt"},
-		{Input: "m", Value: at("reads/x.txt"), Mounted: true},
-		{Input: "d", Value: at("reads"), Mounted: true},
-		{Input: "given", Value: at("reads/given.txt"), Mounted: true},
+		{Input: "ref", Value: at("refs/genome") + "/", InPlace: true},
+		{Input: "ref", Value: at("refs/genome/fa.txt"), InPlace: true},
+		{Input: "fs", Value: at("reads/a.txt"), InPlace: true},
+		{Input: "fs", Value: "/data/b.txt", InPlace: true},
+		{Input: "m", Value: at("reads/x.txt"), InPlace: true},
+		{Input: "d", Value: at("reads"), InPlace: true},
+		{Input: "given", Value: at("reads/given.txt"), InPlace: true},
 	}
 	if d := cmp.Diff(want, p.Leaves); d != "" {
 		t.Errorf("entry leaves (-want +plan):\n%s", d)
@@ -127,7 +127,7 @@ func TestPlanMountsS3EntryFiles(t *testing.T) {
 		t.Errorf("the string input note was rewritten:\n%s", p.Call)
 	}
 
-	if d := cmp.Diff([]PlanFiles{{Leaves: []int{3}}}, p.Nodes[0].Files); d != "" {
+	if d := cmp.Diff([]PlanFiles(nil), p.Nodes[0].Files); d != "" {
 		t.Errorf("READ's staged entry files (-want +plan):\n%s", d)
 	}
 
@@ -137,30 +137,69 @@ func TestPlanMountsS3EntryFiles(t *testing.T) {
 // TestPlanStagesS3EntryFilesOfUnmountedBuckets: under a mount showing only
 // the bucket refs, refs's values are mounted while every s3:// value of the
 // bucket reads stays its URI in the call and is staged, by its index among
-// the run's entry file values, which a task recomputes from the call.
+// the run's entry file values, which a task recomputes from the call; the
+// head-node path is read in place.
 func TestPlanStagesS3EntryFilesOfUnmountedBuckets(t *testing.T) {
 	root := s3Mount(t, "refs")
 	mro := mountMROAt(root)
 	p := planUnder(t, mro, root)
 
 	want := []EntryLeaf{
-		{Input: "ref", Value: filepath.Join(string(root), "refs", "genome") + "/", Mounted: true},
-		{Input: "ref", Value: filepath.Join(string(root), "refs", "genome", "fa.txt"), Mounted: true},
+		{Input: "ref", Value: filepath.Join(string(root), "refs", "genome") + "/", InPlace: true},
+		{Input: "ref", Value: filepath.Join(string(root), "refs", "genome", "fa.txt"), InPlace: true},
 		{Input: "fs", Value: "s3://reads/a.txt"},
-		{Input: "fs", Value: "/data/b.txt"},
+		{Input: "fs", Value: "/data/b.txt", InPlace: true},
 		{Input: "m", Value: "s3://reads/x.txt"},
 		{Input: "d", Value: "s3://reads"},
-		{Input: "given", Value: filepath.Join(string(root), "reads", "given.txt"), Mounted: true},
+		{Input: "given", Value: filepath.Join(string(root), "reads", "given.txt"), InPlace: true},
 	}
 	if d := cmp.Diff(want, p.Leaves); d != "" {
 		t.Errorf("entry leaves (-want +plan):\n%s", d)
 	}
 
-	if d := cmp.Diff([]PlanFiles{{Leaves: []int{2, 3, 4, 5}}}, p.Nodes[0].Files); d != "" {
+	if d := cmp.Diff([]PlanFiles{{Leaves: []int{2, 4, 5}}}, p.Nodes[0].Files); d != "" {
 		t.Errorf("READ's staged entry files (-want +plan):\n%s", d)
 	}
 
 	assertTaskLeaves(t, mro, p, want)
+}
+
+// TestRootsAreThePathsReadInPlace: the run's read-only roots, as a task
+// recomputes them from the call, are the S3 mount and every entry file value
+// read in place, and no URI; PLAN's binds are those outside the mount, which
+// the mount's own bind shows, a value under another bound with it.
+func TestRootsAreThePathsReadInPlace(t *testing.T) {
+	root := s3Mount(t, "refs")
+	mro := mountMROAt(root)
+	p := planUnder(t, mro, root)
+
+	if d := cmp.Diff([]string{"/data/b.txt"}, p.Binds(root)); d != "" {
+		t.Errorf("binds (-want +plan):\n%s", d)
+	}
+
+	path := filepath.Join(t.TempDir(), "pipeline.mro")
+	if err := os.WriteFile(path, []byte(mro), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := Load(path, p.Call, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	roots, err := g.Roots(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if d := cmp.Diff([]string{"/data/b.txt", string(root)}, roots.Paths()); d != "" {
+		t.Errorf("a task's roots (-want +task):\n%s", d)
+	}
+
+	nested := planOf(t, strings.Replace(entryFanMRO, `"/ref/genome.txt"`, `"/data"`, 1))
+	if d := cmp.Diff([]string{"/data"}, nested.Binds("")); d != "" {
+		t.Errorf("binds of a value under another (-want +plan):\n%s", d)
+	}
 }
 
 // assertTaskLeaves requires a task that compiles p's call over mro to find
@@ -183,12 +222,7 @@ func assertTaskLeaves(t *testing.T, mro string, p Plan, want []EntryLeaf) {
 		t.Fatal(err)
 	}
 
-	plain := make([]EntryLeaf, len(want))
-	for i, l := range want {
-		plain[i] = EntryLeaf{Input: l.Input, Value: l.Value}
-	}
-
-	if d := cmp.Diff(plain, task); d != "" {
+	if d := cmp.Diff(want, task); d != "" {
 		t.Errorf("a task's entry leaves of the planned call (-plan +task):\n%s", d)
 	}
 }
@@ -260,7 +294,7 @@ func TestVetMountedLeaf(t *testing.T) {
 	}
 
 	for value, want := range cases {
-		err := VetMountedLeaf(EntryLeaf{Input: "reads", Value: value, Mounted: true}, shim.Mount(root))
+		err := VetMountedLeaf(EntryLeaf{Input: "reads", Value: value, InPlace: true}, shim.Mount(root))
 
 		switch {
 		case want == "" && err != nil:

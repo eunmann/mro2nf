@@ -356,6 +356,9 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "marker_strings"},
 	// #284: every file a stage receives keeps the basename mrp passes it.
 	{name: "basename_echo"},
+	// #543: a stage opening a companion file beside its entry file input
+	// finds it, as under mrp: every task reads a head-node path in place.
+	{name: "entry_file_sibling"},
 	{name: "map_file"},
 	{name: "map_file_keyed"},
 	{name: "map_split_file"},
@@ -658,10 +661,11 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// while it makes the pipestance, before any stage runs; mro2nf fails its
 	// OUTS task.
 	{name: "nested_empty_forks", mrp: runOutcome{Failed: true}, divergence: "nested-empty-forks"},
-	// #520: a stage opening a companion file beside its entry file input.
-	// mrp passes the invocation's path and finds it; mro2nf stages only the
-	// named file, so the stage fails.
-	{name: "entry_file_sibling", mrp: runOutcome{}, divergence: "input-file-siblings"},
+	// #520: a stage opening a companion file beside a file input another
+	// stage wrote. mrp passes the path in the producer's job dir and finds
+	// it; mro2nf stages only the files the producer's outs name, so the
+	// stage fails.
+	{name: "output_file_sibling", mrp: runOutcome{}, divergence: "input-file-siblings"},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow

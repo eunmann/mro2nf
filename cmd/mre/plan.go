@@ -23,10 +23,10 @@ import (
 
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
-	entry, values, mropath, call, nodes, roots, leaves, files, work string
-	overrides, psid, s3Mount                                        string
-	hostInputs, remoteInputs                                        bool
-	local                                                           job.Pool
+	entry, values, mropath, call, nodes, roots, leaves, files, binds, work string
+	overrides, psid, s3Mount, runWork                                      string
+	hostInputs, remoteInputs                                               bool
+	local                                                                  job.Pool
 }
 
 func (f *planFlags) define(fs *flag.FlagSet) {
@@ -40,7 +40,9 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.roots, "roots", "roots", "file to write one line per fork of every entry-fed fork root into: root key record index-token")
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
-	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
+	fs.StringVar(&f.binds, "binds", "binds", "file to write one line per path a container task binds read-only, base64: the entry file values read in place outside the S3 mount")
+	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path, which every task reads in place")
+	fs.StringVar(&f.runWork, "run-workdir", "", "the run's work dir, which no entry file value read in place may be or hold")
 	fs.BoolVar(&f.remoteInputs, "remote-inputs", false, "an entry file value may name a URI of any scheme, not only s3")
 	fs.StringVar(&f.s3Mount, "s3-mount", "", "the root every task may mount input buckets under, read-only: an s3://<bucket>/<key> entry file value whose bucket is a directory there is <root>/<bucket>/<key>, which no task stages; any other is staged")
 	fs.StringVar(&f.work, "work", ".", "scratch dir")
@@ -51,11 +53,12 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 // entry and the run's entry values as mrp builds an invocation from its
 // JSON form, compiles it as mrp does, so mrp's refusals fail the run before
 // any stage starts, and checks its call graph is within the witness's, and
-// that every entry file value is one the run may stage, or, an s3:// one
-// of a bucket the -s3-mount root shows, one the mount shows at the path the
-// call names it by.
+// that every entry file value is one the run may read: a path where the
+// tasks see it, one the -s3-mount root shows, an s3:// one of a bucket
+// that root shows rewritten to its path there, and any other staged.
 // It writes the call every task compiles, each witness node's spec digest,
-// disabled instances and entry files, and the forks of each entry-fed root.
+// disabled instances and entry files, the forks of each entry-fed root,
+// and the paths a container task binds.
 func runPlan(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 
@@ -105,7 +108,7 @@ func runPlan(_ context.Context, argv []string) error {
 		return fmt.Errorf("plan: %w", err)
 	}
 
-	p, err := cg.MakePlan(src, inv, paths, f.work, mount)
+	p, err := cg.MakePlan(src, inv, paths, f.work)
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
 	}
@@ -114,20 +117,28 @@ func runPlan(_ context.Context, argv []string) error {
 		return err
 	}
 
-	if err := f.writeEntryFiles(p); err != nil {
+	if err := f.writeEntryFiles(p, mount); err != nil {
 		return err
 	}
 
 	return f.write(p, job.Runtime{PSID: f.psid, Overrides: over, Local: f.local})
 }
 
-// vetLeaves refuses an entry file value the run may not read: a mounted one
-// the mount does not show, any other one the run may not stage.
+// vetLeaves refuses an entry file value the run may not read: one under
+// the mount the mount does not show, a head-node path where the tasks do
+// not see it or that holds the work dir, and a staged one the run may not
+// stage.
 func (f *planFlags) vetLeaves(leaves []cg.EntryLeaf, mount shim.Mount) error {
 	for _, l := range leaves {
-		vet := cg.VetEntryLeaf(l, f.hostInputs, f.remoteInputs)
-		if l.Mounted {
+		var vet error
+
+		switch {
+		case mount.Holds(l.Value):
 			vet = cg.VetMountedLeaf(l, mount)
+		case l.InPlace:
+			vet = cg.VetHostLeaf(l, f.hostInputs, f.runWork)
+		default:
+			vet = cg.VetEntryLeaf(l, f.hostInputs, f.remoteInputs)
 		}
 
 		if vet != nil {
@@ -140,14 +151,19 @@ func (f *planFlags) vetLeaves(leaves []cg.EntryLeaf, mount shim.Mount) error {
 
 // writeEntryFiles writes the run's entry file values a task stages, each by
 // its index, and per node and fork of its entry-fed roots, those its
-// instance there stages, and by the pipeline's fqid, those OUTS stages.
-func (f *planFlags) writeEntryFiles(p cg.Plan) error {
-	var leaves, files strings.Builder
+// instance there stages, and by the pipeline's fqid, those OUTS stages; and
+// the paths a container task binds read-only.
+func (f *planFlags) writeEntryFiles(p cg.Plan, mount shim.Mount) error {
+	var leaves, files, binds strings.Builder
 
 	for i, l := range p.Leaves {
-		if !l.Mounted {
+		if !l.InPlace {
 			fmt.Fprintf(&leaves, "%d %s\n", i, base64.StdEncoding.EncodeToString([]byte(l.Value)))
 		}
+	}
+
+	for _, b := range p.Binds(mount) {
+		fmt.Fprintf(&binds, "%s\n", base64.StdEncoding.EncodeToString([]byte(b)))
 	}
 
 	for _, n := range append(slices.Clone(p.Nodes), p.Outs) {
@@ -162,6 +178,10 @@ func (f *planFlags) writeEntryFiles(p cg.Plan) error {
 	}
 
 	if err := writeText(f.leaves, leaves.String()); err != nil {
+		return err
+	}
+
+	if err := writeText(f.binds, binds.String()); err != nil {
 		return err
 	}
 

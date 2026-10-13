@@ -1,12 +1,12 @@
 filetype txt;
 
-# #520: a stage that opens a companion file beside its entry file input, as a
-# tool opens an index beside a BAM. mrp passes the invocation's path, so the
-# companion is found; mro2nf stages only the named file into the task, so it
-# is not, and the stage fails (divergences.json, input-file-siblings).
-# Exercised by TestMrpDiffFailureParity. The input is /dev/null and the
-# companion /dev/zero: mrp passes an invocation path verbatim, so a relative
-# one would not resolve in its job dir, and /dev holds both on every host.
+# #520, #543: a stage that opens a companion file beside its entry file
+# input, as a tool opens an index beside a BAM. mrp passes the invocation's
+# path, so the companion is found; so does mro2nf, whose tasks read a
+# head-node path in place. Exercised by TestMrpDiff. The input is /dev/null
+# and the companion /dev/zero: mrp passes an invocation path verbatim, so a
+# relative one would not resolve in its job dir, and /dev holds both on every
+# host.
 stage READ_WITH_INDEX(
     in  txt    reads,
     in  string companion,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -76,7 +77,7 @@ func planUnder(t *testing.T, mro string, mount shim.Mount) Plan {
 		t.Fatal(err)
 	}
 
-	p, err := MakePlan(src, inv, nil, t.TempDir(), mount)
+	p, err := MakePlan(src, inv, nil, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,19 +101,19 @@ func sourceOf(t *testing.T, mro string) Source {
 	return src
 }
 
-// TestPlanStagesEachForksOwnEntryFiles: the run's entry file values a task
-// stages are its absolute paths and URIs, each once, in type-walk order,
-// and a relative path reaches the stage as given; each USE fork stages its
-// own element of the mapped array and the broadcast reference, never the
-// other forks' files, and SUM, whose one file value is relative, stages
-// none.
+// TestPlanStagesEachForksOwnEntryFiles: the run's entry file values are its
+// absolute paths, which every task reads in place, and URIs, each once, in
+// type-walk order, and a relative path reaches the stage as given; the USE
+// fork whose element of the mapped array is a URI stages it, the forks
+// whose element and broadcast reference are paths stage nothing, and SUM,
+// whose one file value is relative, stages none.
 func TestPlanStagesEachForksOwnEntryFiles(t *testing.T) {
 	p := planOf(t, entryFanMRO)
 
 	wantLeaves := []EntryLeaf{
-		{Input: "fs", Value: "/data/a.txt"},
+		{Input: "fs", Value: "/data/a.txt", InPlace: true},
 		{Input: "fs", Value: "s3://bucket/b.txt"},
-		{Input: "ref", Value: "/ref/genome.txt"},
+		{Input: "ref", Value: "/ref/genome.txt", InPlace: true},
 	}
 	if d := cmp.Diff(wantLeaves, p.Leaves); d != "" {
 		t.Errorf("entry leaves (-want +plan):\n%s", d)
@@ -124,7 +125,7 @@ func TestPlanStagesEachForksOwnEntryFiles(t *testing.T) {
 	}
 
 	want := map[string][]PlanFiles{
-		"FAN.USE": {{Key: "0", Leaves: []int{0, 2}}, {Key: "1", Leaves: []int{1, 2}}, {Key: "2", Leaves: []int{0, 2}}},
+		"FAN.USE": {{Key: "1", Leaves: []int{1}}},
 		"FAN.SUM": nil,
 	}
 	if d := cmp.Diff(want, files); d != "" {
@@ -161,10 +162,10 @@ func TestEntryFileReaders(t *testing.T) {
 	}
 }
 
-// TestVetEntryLeaf: an s3:// URI is staged on every profile, a head-node
-// path only where the profile sees the head node's files, a URI of any
-// other scheme only when remote inputs are allowed, and a path Nextflow's
-// stage-in script would expand never.
+// TestVetEntryLeaf: of the values a run stages, an s3:// URI is staged on
+// every profile, a file: URI only where the profile sees the head node's
+// files, a URI of any other scheme only when remote inputs are allowed, and
+// a value Nextflow's stage-in script would expand never.
 func TestVetEntryLeaf(t *testing.T) {
 	cases := []struct {
 		value        string
@@ -172,22 +173,52 @@ func TestVetEntryLeaf(t *testing.T) {
 		ok           bool
 	}{
 		{"s3://b/x.txt", false, false, true},
-		{"/data/x.txt", true, false, true},
 		{"file:///data/x.txt", true, false, true},
-		{"/data/x.txt", false, true, false},
+		{"file:///data/x.txt", false, true, false},
 		{"https://h/x.txt", true, false, false},
 		{"https://h/x.txt", true, true, true},
 		{"HTTP://h/x.txt", false, true, true},
-		{"/data/s[1].txt", true, true, false},
+		{"file:///data/s[1].txt", true, true, false},
 		{"s3://b/t{a,b}.txt", true, true, false},
-		{"/data/$HOME.txt", true, true, false},
-		{"/data/a\tb.txt", true, true, false},
+		{"file:///data/$HOME.txt", true, true, false},
+		{"file:///data/a\tb.txt", true, true, false},
 	}
 
 	for _, tc := range cases {
 		err := VetEntryLeaf(EntryLeaf{Input: "reads", Value: tc.value}, tc.host, tc.remote)
 		if (err == nil) != tc.ok || (err != nil && !errors.Is(err, ErrEntryFile)) {
 			t.Errorf("vet %q (host %t, remote %t): %v, want ok %t", tc.value, tc.host, tc.remote, err, tc.ok)
+		}
+	}
+}
+
+// TestVetHostLeaf: a head-node path is read in place only where the
+// profile's tasks see the host's paths, and never when it is or holds the
+// run's work dir, which a URI work dir, as on an object store, is not.
+func TestVetHostLeaf(t *testing.T) {
+	cases := []struct {
+		value, work string
+		host        bool
+		want        string
+	}{
+		{"/data/x.txt", "/proj/work", true, ""},
+		{"/data/x.txt", "/proj/work", false, "a head-node path is not read on this profile"},
+		{"/proj/work/ab/cd/x.txt", "/proj/work", true, ""},
+		{"/proj/work", "/proj/work", true, "is or holds the run's work dir /proj/work"},
+		{"/proj/", "/proj/work", true, "is or holds the run's work dir /proj/work"},
+		{"/projects", "/proj/work", true, ""},
+		{"/", "s3://bucket/work", true, ""},
+		{"/data/s[1].txt", "", true, ""},
+	}
+
+	for _, tc := range cases {
+		err := VetHostLeaf(EntryLeaf{Input: "reads", Value: tc.value, InPlace: true}, tc.host, tc.work)
+
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("vet %s (work %s, host %t): %v", tc.value, tc.work, tc.host, err)
+		case tc.want != "" && (!errors.Is(err, ErrEntryFile) || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "'reads'")):
+			t.Errorf("vet %s (work %s, host %t): %v, want ErrEntryFile naming the input and saying %q", tc.value, tc.work, tc.host, err, tc.want)
 		}
 	}
 }
@@ -259,20 +290,24 @@ pipeline ECHO(
 }
 
 call ECHO(
-    ref = "/absent/mro2nf/ref.txt",
+    ref = "s3://bucket/ref.txt",
 )
 `
 
-// TestOutsPublishStagedEntryFiles: the pipeline outs that return an entry
-// file value read it in OUTS, so OUTS stages it, and post-processing
+// TestOutsPublishStagedEntryFiles: the pipeline outs that return a staged
+// entry file value read it in OUTS, so OUTS stages it, and post-processing
 // publishes it where OUTS staged it, as mrp publishes the file it finds at
 // the value: a link in outs/ the outs JSON names. A container sees only
-// what its task stages.
+// what its task stages, but for a path OUTS reads in place.
 func TestOutsPublishStagedEntryFiles(t *testing.T) {
 	p := planOf(t, echoMRO)
 
 	if d := cmp.Diff(PlanNode{Fqid: "ECHO", Files: []PlanFiles{{Leaves: []int{0}}}}, p.Outs); d != "" {
 		t.Errorf("the pipeline outs' entry files (-want +plan):\n%s", d)
+	}
+
+	if inPlace := planOf(t, strings.Replace(echoMRO, "s3://bucket/ref.txt", "/data/ref.txt", 1)); inPlace.Outs.Files != nil {
+		t.Errorf("OUTS stages a path it reads in place: %+v", inPlace.Outs.Files)
 	}
 
 	path := filepath.Join(t.TempDir(), "pipeline.mro")
