@@ -152,7 +152,7 @@ func (g *Graph) planOuts(leaves map[string]int) (PlanNode, error) {
 
 // EncodeElement is el as a fork record value, DecodeElement's text.
 func EncodeElement(el Element) (string, error) {
-	raw, err := json.Marshal(elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position})
+	raw, err := json.Marshal(el.encode())
 	if err != nil {
 		return "", fmt.Errorf("encode fork record: %w", err)
 	}

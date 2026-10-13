@@ -266,7 +266,9 @@ generator does (`core.BuildCallAst`), and compiles it over the entry's
 declarations, so `mrp`'s refusals fail the run before any stage starts. It
 fails if the call graph has a node, a fork root or a read the witness lacks
 (`Topology.Covers`); a node the invocation disables outright counts only by
-its presence. Its records reach the driver as `eval` values: the run's call;
+its presence. Its records reach the driver as values: the run's call, an
+`eval` value of one line; and files the driver reads into values, as
+Nextflow joins an `eval` output line by line in time quadratic in its lines:
 per node a digest of its resolved spec (stage, bindings, disable bindings and
 fork roots in Martian's JSON form) and of what its post step writes for its
 readers (the splits of the roots it feeds, its partners' splits, and the
@@ -285,9 +287,21 @@ place, and the run's work dir, which no entry value read in place may hold
 (§8). Under an S3 mount it does not cache,
 as which s3:// inputs it reads in place depends on the buckets its instance
 mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
-node's digest and resources (in `meta`), the run's call, the mro2nf build,
-and its fork records and staged dirs. No task stages a file of PLAN's: the call and the digests reach it as
-values, which Nextflow keys on by content, so a re-transpile whose `.mro` edit
+node's digest and resources (in `meta`), the run's call, the mro2nf
+build, and its fork records, value records and staged dirs. No task
+stages a file of PLAN's: the digests reach it as values, which Nextflow
+keys on by content, and so does the call, by one rule (`CALL`): a call
+whose base64 is at most 4 KiB (`cg.MaxValueBytes`, the bound of an output
+carried as a value) is a value each task's script writes into `call.b64`,
+as on AWS Batch a staged file costs each task a download; a larger one is
+a file the driver writes from PLAN's value once per run (`collectFile`),
+in a dir named by the call and the run's session, which a `-resume` keeps,
+and each task stages as `call.b64`. The call grows with the entry values,
+so with N entry forks an inline call would grow every task's script, and
+the key Nextflow hashes from its inputs, by O(N) bytes. A task still reads
+the whole call, as `mrp` writes the whole invocation into every job's
+`_jobinfo`, and keys on it, as `mrp` refuses to resume a changed
+invocation. So a re-transpile whose `.mro` edit
 leaves a node's spec and the call as they were re-runs PLAN but keeps the node
 cached (`TestResumeKeysOnlyOnATasksOwnTypes`). An edit of how a consumer
 splits or gates on a node's outs changes what the node's post writes, so it
@@ -305,12 +319,16 @@ transpile, or an image built from other sources, fails loudly rather than run.
 
 **Instances.** An instance's key is the ordinal of its fork of each of its
 roots. The driver enumerates a node's instances root by root: an entry-fed
-root's forks come from PLAN, a stage-fed root's from its producer's
-`forks/<root>/<ordinal>/` output, and each instance joins the forks agreeing on
-the outer roots. An instance zipping a stage output over a root, other than
-the root's own source, joins that stage's partner dir at its own fork's token,
+root's forks come from PLAN, a stage-fed root's from the elements its
+producer posted, `forks/<root>/<ordinal>/` dirs and their value records, and
+each instance joins the forks agreeing on the outer roots. An element of a
+type that holds no file leaf, whose JSON is at most `cg.MaxValueBytes`,
+reaches the instance as a value record, under the same rule and with the
+same bytes as an output does (**Reads**); any other it stages. An instance
+zipping a stage output over a root, other than
+the root's own source, joins that stage's partner element at its own fork's token,
 whether that stage feeds the root or not, or the absent record, so each
-fork stages one element of it whatever the fork width (the `zip` bench lanes
+fork gets one element of it whatever the fork width (the `zip` bench lanes
 gate the bytes one task stages flat in N). A split of an output of a stage a
 runtime gate disables, `split Q.o unless G.f`, is zipped the same way: the
 instance reads the gate, and `Q`'s element only where the gate holds `Q`
@@ -342,9 +360,18 @@ its node's N forks. A disabled instance runs no task and stands in with no
 outs and no forks; Martian's call graph already reads its outputs as null in
 every consumer.
 
-**Reads.** An enabled instance stages, of each node it reads, only the outputs
-it reads (`outs/<output>/`): from the instance that shares its roots, or, a
-gather, from every such instance under it. A gather is a seeded `groupTuple`
+**Reads.** An enabled instance gets, of each node it reads, only the outputs
+it reads: from the instance that shares its roots, or, a gather, from every
+such instance under it. An output of a type that holds no file leaf, whose
+JSON is at most 4 KiB (`cg.MaxValueBytes`), reaches it as a value: a record
+its producer posted (`-field-values`), an `eval` output, that the driver
+carries in its channels and the task writes into a file for `mre stage
+-values`, so the record is part of the task's `-resume` key. Any other
+output it stages as a bundle (`outs/<output>/`). A staged bundle costs each
+reader on an object store a listing and a copy whatever its size (on the
+CellRanger Batch run, 287 of 896 downloads were such outputs); a value costs
+the driver its bytes per instance until its readers are done, which the
+bound keeps from growing with an output's size. A gather is a seeded `groupTuple`
 over all of its upstream, so an instance under which there is none gathers
 none, and a forked instance waits for every fork of the node it reads, as `mrp`
 waits for every fork of a node before a node reading it runs
@@ -352,17 +379,19 @@ waits for every fork of a node before a node reading it runs
 
 **Split stages.** A split's chunk outs are gathered by `groupKey` over the
 chunk count. Each chunk's main and the join are scheduled with the cpus, memory
-and special their jobs get, the split's `resources.tsv`, an `eval` value the
-driver splits into rows without parsing a record.
+and special their jobs get, the split's `resources.tsv`, a file the driver
+reads into rows without parsing a record, not an `eval` value, whose
+collection is quadratic in its lines.
 
 **OUTS.** The last task stages every outs bundle the pipeline outs read, gets
-each bundle's location as a value (`toUriString()`, a path or an `s3://` URI),
-and publishes them with `mre outs` through `mrp`'s own post-processing: the
+each bundle's location as a value (`toUriString()`, a path or an `s3://` URI)
+and the outputs they read that reach it as values, and publishes them with `mre outs` through `mrp`'s own post-processing: the
 `outs/` tree and `pipeline_outs.json`, which `publishDir` copies into
 `params.outdir`.
 
-**Order.** Each staged list is staged in an order the run fixes, a gather's and
-OUTS's by instance key and a join's by chunk name, since list order is part of
+**Order.** Each staged list, and each list of value records, is in an order
+the run fixes, a gather's and OUTS's by instance key, then output, and a
+join's by chunk name, since list order is part of
 a task's `-resume` key and arrival order is completion order.
 
 **Overhead.** The tasks are PLAN, one per stage job `mrp` runs (each split,
@@ -377,9 +406,9 @@ so the plumbing task count does not grow with fork width or chunk count
 
 Each subcommand that works on the call graph takes the entry `.mro`
 (`-entry`, `-mropath`) and the run's call (`-call`, a file holding base64 of
-the call PLAN rebuilt, which each task writes from its own value, as a wide
-run's call would pass the kernel's 128 KiB limit on one argument; the entry's
-own call without it), compiles the call over the entry's
+the call PLAN rebuilt, which each task writes or stages, as a wide run's
+call would pass the kernel's 128 KiB limit on one argument; the entry's own call without
+it), compiles the call over the entry's
 declarations as `mrp` compiles an invocation (`ParseSourceBytes`, then
 `MakePipelineCallGraph`) as the entry file, and reads only the items its task
 staged (`-in`, an item or a dir of items). Each finds a bundle's file leaves
@@ -415,8 +444,9 @@ every filetype and struct, and the struct of each callable's outputs.
 - **The args step** (`-node <fqid> -digest <d>`) builds one stage instance's
   args bundle, once the node compiles to the spec
   digest PLAN planned. The instance's fork comes from the fork elements it
-  staged, or the fork records it got as values (`-fork`, base64 of a
-  `fork.json`), and its values from its parents' stamped outs bundles. A
+  staged or got as value records (`-values`), or the fork records it got as
+  values (`-fork`, base64 of a `fork.json`), and its values from its
+  parents' stamped outs bundles and value records. A
   disabled instance gets only its stamp, `instance.json`, which records the fork
   and each part's fork count, from which `mrp`'s fork id follows. A map call
   that zips several splits forks over its master source: a split of known
@@ -462,20 +492,25 @@ every filetype and struct, and the struct of each callable's outputs.
   bundle with the instance (`instance.json`). It checks the outs with
   Martian's `LazyArgumentMap.ValidateOutputs`, as mrp's `Fork.verifyOutput`
   does. Then it
-  writes one dir per fork of every root this stage feeds:
+  writes one element per fork of every root this stage feeds:
   `forks/<root fqid>/<ordinal>/`. The ordinal is zero-padded, in mrp's fork
-  order (array index, or map keys in byte order). Each dir holds that fork's
-  element of the source collection as a bundle, with its file leaves staged,
-  plus `fork.json`, which records the real fork (keys as JSON strings) and its
-  position. A map key's fork dir also carries the key's token, the hex SHA-256
-  of the key, after an `@` (an array fork's token is its index). For each
+  order (array index, or map keys in byte order). Each holds that fork's
+  element of the source collection and `fork.json`, which records the real
+  fork (keys as JSON strings) and its position. An element of a type with no
+  file leaf and at most `cg.MaxValueBytes` of JSON is a value record in the
+  `-fork-values` file, named as its dir, `<root fqid>/<ordinal>:` and base64
+  of its fork record and the element's JSON; any other is that dir, the
+  element a bundle with its file leaves staged beside `fork.json`. A map
+  key's fork also carries the key's token, the hex SHA-256 of the key, after
+  an `@` (an array fork's token is its index). For each
   output of this stage that a map call splits other than as its root's source
   (a map call zipping several outputs, of this stage or of others, or a
-  disable binding splitting one), it writes one partner dir per element,
-  `forks/<root>@<node>.<output>/<token>/`, and an absent record, `none`, which
+  disable binding splitting one), it writes one partner element per element,
+  `forks/<root>@<node>.<output>/<token>/`, a dir or a value record by the same
+  rule, and an absent record, `none`, a value record, which
   reads null where the output is null and a missing element, logged, at any
   index it lacks, as `mrp` reads it; a zip of maps at run time need not share
-  keys (`zip_runtime_map`). An instance therefore stages only its own elements,
+  keys (`zip_runtime_map`). An instance therefore gets only its own elements,
   and no key ever needs escaping. `mre plan` writes the forks the call graph
   already fixes (literal and entry-sourced sources) the same way, as fork
   records without values, which a task gets as values (`-fork`). A root whose fork set varies with an outer map call (its
@@ -483,9 +518,14 @@ every filetype and struct, and the struct of each callable's outputs.
   fork of that call. The posting task enumerates an outer call its own fork does
   not fix from what it staged, and prefixes the name with the ordinal of each
   such call, joined by dots. A root of known length is keyed by its own forks
-  alone, whatever outer calls its stages are also forked on. With `-fields`, it
-  also writes the outs as one stamped bundle per output, `<dir>/<output>/`, so a
-  consumer stages only the outputs it reads. With `-gates`, it writes the
+  alone, whatever outer calls its stages are also forked on. With `-fields` and
+  `-field-values`, it also writes the outs output by output, so a consumer
+  gets only the outputs it reads: one of a type with no file leaf and at most
+  `cg.MaxValueBytes` of JSON as a record in the `-field-values` file,
+  `<output>:` and base64 of the instance's stamp and the output's JSON, and
+  any other as one stamped bundle, `<dir>/<output>/`. A consumer's `-values`
+  file holds the records it got, of outputs and elements alike, each naming
+  the item it stands in for in its JSON; `mre outs` takes one too. With `-gates`, it writes the
   instances the instance's outs disable: of each node with a disable binding
   that reads this stage alone, every fork it resolves true at, as `mrp`'s
   `Fork.disabled` reads it (a null reads false), named

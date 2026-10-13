@@ -56,8 +56,9 @@ func (g *graphFlags) load() (*cg.Graph, error) {
 }
 
 // readCall is the call the file at path holds, base64; "" reads none. A
-// task writes it from its own value: as an argument, a wide run's call
-// would pass the kernel's limit on one argument (MAX_ARG_STRLEN, 128 KiB).
+// task writes it from its value or stages the file the driver wrote, by the
+// call's size: as an argument, a wide run's call would pass the kernel's
+// limit on one argument (MAX_ARG_STRLEN, 128 KiB).
 func readCall(path string) (string, error) {
 	if path == "" {
 		return "", nil
@@ -78,22 +79,45 @@ func readCall(path string) (string, error) {
 
 // argsFlags are the stage instance an args step builds the args bundle of.
 type argsFlags struct {
-	node, digest, leaves string
-	in, forks            repeatedFlag
-	roots                shim.Roots
+	node, digest, leaves, values string
+	in, forks                    repeatedFlag
+	roots                        shim.Roots
 }
 
 func (a *argsFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&a.node, "node", "", "stage fqid")
 	fs.StringVar(&a.digest, "digest", "", "the node's spec digest in the run's plan, which it must compile to")
 	fs.StringVar(&a.leaves, "leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
-	fs.Var(&a.in, "in", "staged item, or dir of staged items: instance outs bundles and fork elements (repeatable)")
+	fs.StringVar(&a.values, "values", "", "file of the upstream outputs and fork and partner elements the task got as values, whitespace-separated records a post wrote (-field-values, -fork-values)")
+	fs.Var(&a.in, "in", "staged item, or dir of staged items: instance outs bundles, fork elements and partner elements (repeatable)")
 	fs.Var(&a.forks, "fork", "a fork record passed as a value, base64 of its JSON (repeatable)")
 }
 
+// readValues reads the value records in the file at path; "" reads
+// none. A task writes them into a file, as a gather's could pass the
+// kernel's limit on a command line.
+func readValues(path string) ([]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read -values: %w", err)
+	}
+
+	return strings.Fields(string(raw)), nil
+}
+
 // write writes the instance's args bundle into out from its staged upstream
-// outs and fork elements, its file leaves linked to the staged files.
+// outs, the outs it got as values and its fork elements, its file leaves
+// linked to the staged files.
 func (a *argsFlags) write(g *cg.Graph, out string) (cg.Instance, error) {
+	values, err := readValues(a.values)
+	if err != nil {
+		return cg.Instance{}, fmt.Errorf("args: %w", err)
+	}
+
 	forks := make([]cg.Element, len(a.forks))
 	for i, rec := range a.forks {
 		el, err := g.DecodeElement(rec)
@@ -109,7 +133,7 @@ func (a *argsFlags) write(g *cg.Graph, out string) (cg.Instance, error) {
 		return cg.Instance{}, fmt.Errorf("args: %w", err)
 	}
 
-	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Roots: a.roots})
+	inst, err := g.WriteArgs(cg.ArgsSpec{Node: a.node, In: a.in, Values: values, Forks: forks, Out: out, Log: os.Stderr, Digest: a.digest, EntryFiles: files, Roots: a.roots})
 	if err != nil {
 		return cg.Instance{}, fmt.Errorf("args: %w", err)
 	}
@@ -145,20 +169,22 @@ func stagedEntryFiles(g *cg.Graph, leaves string) (map[string]string, error) {
 
 // postFlags are where a post step writes what a finished instance feeds.
 type postFlags struct {
-	forks, fields, gates string
-	roots                shim.Roots
+	forks, forkValues, fields, values, gates string
+	roots                                    shim.Roots
 }
 
 func (p *postFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(&p.forks, "forks", "forks", "dir to write <root>/<ordinal>/ fork elements into")
-	fs.StringVar(&p.fields, "fields", "", "dir to write one stamped bundle per output into, named by it")
+	fs.StringVar(&p.forks, "forks", "forks", "dir to write <root>/<ordinal>/ fork elements and <root>@<node>.<output>/<index token>/ partner elements into, but for those -fork-values receives")
+	fs.StringVar(&p.forkValues, "fork-values", "fork_values", "file to write the elements with no file leaf and small JSON into: space-separated records, each <dir>/<name>:<base64 of its JSON and record>, named as the dir below -forks it stands in for")
+	fs.StringVar(&p.fields, "fields", "", "dir to write one stamped bundle per output into, named by it, but for those -field-values receives")
+	fs.StringVar(&p.values, "field-values", "", "file to write the outputs with no file leaf and small JSON into, set with -fields: space-separated records, each <output>:<base64 of its JSON and instance>")
 	fs.StringVar(&p.gates, "gates", "", "file to write the instances the instance disables into, space-separated gate tokens (<node>@<roots>@<ordinals>)")
 }
 
 // post stamps the outs bundle outs of the instance the args bundle args
 // stamps and writes the fork elements of every root it feeds.
 func (p *postFlags) post(g *cg.Graph, args, outs string) error {
-	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, Forks: p.forks, Fields: p.fields, Gates: p.gates, Roots: p.roots}); err != nil {
+	if err := g.Post(cg.PostSpec{Args: args, Outs: outs, Forks: p.forks, ForkValues: p.forkValues, Fields: p.fields, Values: p.values, Gates: p.gates, Roots: p.roots}); err != nil {
 		return fmt.Errorf("post: %w", err)
 	}
 
@@ -175,6 +201,7 @@ func runOuts(ctx context.Context, argv []string) error {
 	work := fs.String("work", "pipestance", "dir to reconstruct the pipestance in")
 	locations := fs.String("locations", "", "file of tab-separated lines: a staged outs bundle, and where its producing task's work dir keeps it")
 	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
+	valuesFile := fs.String("values", "", "file of the stage outputs the task got as values, whitespace-separated records a post wrote (-field-values)")
 
 	var in repeatedFlag
 
@@ -189,6 +216,11 @@ func runOuts(ctx context.Context, argv []string) error {
 		return err
 	}
 
+	values, err := readValues(*valuesFile)
+	if err != nil {
+		return fmt.Errorf("outs: %w", err)
+	}
+
 	locs, err := readLocations(*locations)
 	if err != nil {
 		return err
@@ -199,7 +231,7 @@ func runOuts(ctx context.Context, argv []string) error {
 		return fmt.Errorf("outs: %w", err)
 	}
 
-	spec := cg.OutsSpec{In: in, Locations: locs, EntryFiles: files, Work: *work, Results: *out, OutsJSON: *outsJSON}
+	spec := cg.OutsSpec{In: in, Values: values, Locations: locs, EntryFiles: files, Work: *work, Results: *out, OutsJSON: *outsJSON}
 	if err := g.WriteOuts(ctx, spec); err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}

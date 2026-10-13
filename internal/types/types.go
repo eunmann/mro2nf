@@ -49,6 +49,18 @@ func (t *Table) Type(id syntax.TypeId) (syntax.Type, error) {
 	return nil, fmt.Errorf("%w: %s", ErrUnknownType, id.String())
 }
 
+// HasFiles reports whether a value of the type id names can hold a file
+// leaf, the leaves Apply walks: Martian marks a file, a directory of files,
+// and an array, a typed map or a struct that holds one.
+func (t *Table) HasFiles(id syntax.TypeId) (bool, error) {
+	typ, err := t.Type(id)
+	if err != nil {
+		return false, err
+	}
+
+	return isFileKind(typ.IsFile()), nil
+}
+
 // Transform maps a file-leaf path to its replacement. Returning an error aborts
 // the walk, except ErrSkipLeaf, which resolves that one leaf to null and continues.
 type Transform func(path string) (string, error)

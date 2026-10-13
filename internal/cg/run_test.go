@@ -15,30 +15,34 @@ import (
 // standIn runs a fixture's literal invocation as the generated main.nf runs
 // it, in dependency order, every enabled instance's outs a type-correct
 // stand-in for the stage's. Each instance gets the records of its
-// entry-fed roots' forks as values, and stages, linked below one dir as a
-// task stages them, the element dirs of its stage-fed roots' forks, the
-// partner element at its index of each output it zips, and the posted
-// output bundles it reads of every instance of each node it reads.
+// entry-fed roots' forks as values, and the items its stage-fed roots'
+// producers posted: the elements of their forks, the partner element at
+// its index of each output it zips, and the outputs it reads of every
+// instance of each node it reads. It stages the items that are dirs,
+// linked below one dir as a task stages them, and gets the value records
+// as values.
 type standIn struct {
 	t        *testing.T
 	g        *Graph
 	dir      string
 	seq      int
 	fields   map[string][]string
-	elems    map[string][]elemDir
+	values   map[string][]string
+	elems    map[string][]elemItem
 	partners map[string][]postedPartner
 }
 
-// postedPartner is one instance's dir of partner elements and its fork.
+// postedPartner is one instance's partner element items of one output, by
+// name, and its fork.
 type postedPartner struct {
-	dir  string
-	fork Fork
+	items map[string]string
+	fork  Fork
 }
 
-// elemDir is a fork element dir, the fork it records, and whether the
-// entry fixed it, so a task gets it as a record.
-type elemDir struct {
-	dir   string
+// elemItem is a fork element item, the fork it records, and whether the
+// entry fixed it, so a task gets it as a fork record.
+type elemItem struct {
+	item  string
 	el    Element
 	entry bool
 }
@@ -53,7 +57,7 @@ func newStandIn(t *testing.T, mro string) *standIn {
 
 	return &standIn{
 		t: t, g: g, dir: t.TempDir(),
-		fields: map[string][]string{}, elems: map[string][]elemDir{}, partners: map[string][]postedPartner{},
+		fields: map[string][]string{}, values: map[string][]string{}, elems: map[string][]elemItem{}, partners: map[string][]postedPartner{},
 	}
 }
 
@@ -63,49 +67,65 @@ func (s *standIn) next(name string) string {
 	return filepath.Join(s.dir, strconv.Itoa(s.seq), name)
 }
 
-// collect indexes the fork elements under forks, <root>/<ordinal>/ dirs,
-// and the partner dirs beside them, posted by the instance at fork.
+// collect indexes the fork element items the instance at fork posted into
+// forks, <root>/<ordinal>/ dirs and their value records, and the partner
+// element items beside them.
 func (s *standIn) collect(forks string, entry bool, fork Fork) {
 	s.t.Helper()
 
-	dirs, err := filepath.Glob(filepath.Join(forks, "*", "*"))
+	items, err := filepath.Glob(filepath.Join(forks, "*", "*"))
 	if err != nil {
 		s.t.Fatal(err)
 	}
 
-	for _, d := range dirs {
-		if name := filepath.Base(filepath.Dir(d)); strings.Contains(name, "@") {
-			if filepath.Base(d) == AbsentName {
-				s.partners[name] = append(s.partners[name], postedPartner{dir: filepath.Dir(d), fork: fork})
+	if raw, err := os.ReadFile(forkValues(forks)); err == nil {
+		items = append(items, strings.Fields(string(raw))...)
+	}
+
+	partners := map[string]map[string]string{}
+
+	for _, it := range items {
+		path, _, _ := strings.Cut(it, ":")
+		if dir := filepath.Base(filepath.Dir(path)); strings.Contains(dir, "@") {
+			if partners[dir] == nil {
+				partners[dir] = map[string]string{}
 			}
+
+			partners[dir][filepath.Base(path)] = it
 
 			continue
 		}
 
-		el, err := s.g.ReadElement(d)
-		if err != nil {
-			s.t.Fatal(err)
-		}
-
+		el := itemElement(s.t, s.g, it)
 		root := el.Fork[len(el.Fork)-1].Root.Fqid
-		s.elems[root] = append(s.elems[root], elemDir{dir: d, el: el, entry: entry})
+		s.elems[root] = append(s.elems[root], elemItem{item: it, el: el, entry: entry})
+	}
+
+	for dir, byName := range partners {
+		s.partners[dir] = append(s.partners[dir], postedPartner{items: byName, fork: fork})
 	}
 }
 
-// read is the posted output bundles of every instance of each node reads
-// names: the named outputs, or all of them.
-func (s *standIn) read(reads []Read) []string {
-	var out []string
+// read is the posted output bundles and value records of every instance of
+// each node reads names: the named outputs, or all of them.
+func (s *standIn) read(reads []Read) ([]string, []string) {
+	var dirs, values []string
 
 	for _, r := range reads {
 		for _, d := range s.fields[r.Node] {
 			if r.Fields == nil || slices.Contains(r.Fields, filepath.Base(d)) {
-				out = append(out, d)
+				dirs = append(dirs, d)
+			}
+		}
+
+		for _, v := range s.values[r.Node] {
+			if field, _, _ := strings.Cut(v, ":"); r.Fields == nil || slices.Contains(r.Fields, field) {
+				values = append(values, v)
 			}
 		}
 	}
 
-	return out
+	return dirs, values
 }
 
 // staged links items below one dir, as a task stages them, and returns it.
@@ -128,10 +148,10 @@ func (s *standIn) staged(items []string) string {
 
 // instances are the fork elements of each instance of n: one per root, each
 // agreeing with the parts the instance has on the roots before it.
-func (s *standIn) instances(n TopoNode) [][]elemDir {
+func (s *standIn) instances(n TopoNode) [][]elemItem {
 	type partial struct {
 		fork  Fork
-		elems []elemDir
+		elems []elemItem
 	}
 
 	cur := []partial{{}}
@@ -151,7 +171,7 @@ func (s *standIn) instances(n TopoNode) [][]elemDir {
 		cur = next
 	}
 
-	out := make([][]elemDir, len(cur))
+	out := make([][]elemItem, len(cur))
 	for i, p := range cur {
 		out[i] = p.elems
 	}
@@ -161,10 +181,10 @@ func (s *standIn) instances(n TopoNode) [][]elemDir {
 
 // args writes the args of n's instance at elems, as mre stage's args step
 // does.
-func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
+func (s *standIn) args(n TopoNode, elems []elemItem) (Instance, string) {
 	s.t.Helper()
 
-	items := s.read(n.Reads)
+	items, values := s.read(n.Reads)
 
 	var recs []Element
 
@@ -179,12 +199,12 @@ func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 
 	for _, e := range elems {
 		if !e.entry {
-			items = append(items, e.dir)
+			items = append(items, e.item)
 
 			continue
 		}
 
-		raw, err := os.ReadFile(filepath.Join(e.dir, elementFile))
+		raw, err := os.ReadFile(filepath.Join(e.item, elementFile))
 		if err != nil {
 			s.t.Fatal(err)
 		}
@@ -198,8 +218,9 @@ func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 	}
 
 	args := s.next("args")
+	dirs, elemValues := staging(items)
 
-	in, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(items)}, Forks: recs, Out: args})
+	in, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(dirs)}, Values: append(values, elemValues...), Forks: recs, Out: args})
 	if err != nil {
 		s.t.Fatalf("args of %s: %v", n.Fqid, err)
 	}
@@ -207,7 +228,7 @@ func (s *standIn) args(n TopoNode, elems []elemDir) (Instance, string) {
 	return in, args
 }
 
-// partner is what the driver stages of z for the instance at fork: the
+// partner is what the driver gives of z to the instance at fork: the
 // partner element at its fork's index token, posted by the instance of
 // z.Node agreeing with it, or that instance's absent record; nothing when
 // no enabled instance posted one.
@@ -222,9 +243,9 @@ func (s *standIn) partner(z Zip, fork Fork) []string {
 			continue
 		}
 
-		at := filepath.Join(p.dir, IndexToken(fork[own].Index))
-		if _, err := os.Stat(at); err != nil {
-			at = filepath.Join(p.dir, AbsentName)
+		at, ok := p.items[IndexToken(fork[own].Index)]
+		if !ok {
+			at = p.items[AbsentName]
 		}
 
 		return []string{at}
@@ -275,11 +296,8 @@ func (s *standIn) node(n TopoNode) int {
 			s.t.Fatal(err)
 		}
 
-		spec := PostSpec{Args: args, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Gates: s.next("gates")}
-		if err := os.MkdirAll(filepath.Dir(spec.Gates), dirPerm); err != nil {
-			s.t.Fatal(err)
-		}
-
+		spec := PostSpec{Args: args, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Values: s.next("values"), Gates: s.next("gates")}
+		spec.ForkValues = forkValues(spec.Forks)
 		if err := s.g.Post(spec); err != nil {
 			s.t.Fatalf("post %s: %v", n.Fqid, err)
 		}
@@ -289,7 +307,13 @@ func (s *standIn) node(n TopoNode) int {
 			s.t.Fatal(err)
 		}
 
+		values, err := os.ReadFile(spec.Values)
+		if err != nil {
+			s.t.Fatal(err)
+		}
+
 		s.fields[n.Fqid] = append(s.fields[n.Fqid], fields...)
+		s.values[n.Fqid] = append(s.values[n.Fqid], strings.Fields(string(values))...)
 		s.collect(spec.Forks, false, in.Fork)
 		ran++
 	}
@@ -319,8 +343,10 @@ func (s *standIn) stages() (OutsSpec, int) {
 		ran += s.node(n)
 	}
 
+	dirs, values := s.read(topo.Outs)
+
 	return OutsSpec{
-		In:   []string{s.staged(s.read(topo.Outs))},
+		In: []string{s.staged(dirs)}, Values: values,
 		Work: s.next("work"), Results: s.next("results"), OutsJSON: s.next("pipeline_outs.json"),
 	}, ran
 }

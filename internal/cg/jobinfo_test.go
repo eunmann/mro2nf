@@ -74,7 +74,7 @@ func TestForkIDNamesMrpForks(t *testing.T) {
 
 	f := loadFixture(t, "map_fork_upstream")
 	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1,"beta":2,"gamma":3}}`)
-	elems := elementDirs(t, f.post(gen, gen), "MFU.DBL")
+	elems := elementItems(t, f.post(gen, gen), "MFU.DBL")
 
 	if inst, _ := f.args("MFU.DBL", elems[1]); inst.ForkID() != "fork_beta" {
 		t.Errorf("fork id %q, mrp's fork dir is fork_beta", inst.ForkID())
@@ -87,7 +87,7 @@ func TestForkIDNamesMrpForks(t *testing.T) {
 func forkIDs(t *testing.T, f *fixture, node, entry, last string, ups []string) []string {
 	t.Helper()
 
-	elems := elementDirs(t, entry, last)
+	elems := elementItems(t, entry, last)
 	ids := make([]string, 0, len(elems))
 
 	for _, el := range elems {
@@ -99,7 +99,7 @@ func forkIDs(t *testing.T, f *fixture, node, entry, last string, ups []string) [
 		}
 
 		if len(rec.Fork) > 1 {
-			outer := elementDirs(t, entry, rec.Fork[0].Root.Fqid)
+			outer := elementItems(t, entry, rec.Fork[0].Root.Fqid)
 			in = append(in, outer[rec.Fork[0].Index.ArrayIndex()])
 		}
 

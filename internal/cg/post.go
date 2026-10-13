@@ -20,8 +20,10 @@ import (
 const minOrdinalWidth = 4
 
 var (
-	errInvalidOuts = errors.New("invalid stage outs")
-	errMultiSource = errors.New("fork root reads several stages")
+	errInvalidOuts  = errors.New("invalid stage outs")
+	errMultiSource  = errors.New("fork root reads several stages")
+	errFieldsValues = errors.New("a post writes its outs field by field into a Fields dir and a Values file, both or neither")
+	errForkValues   = errors.New("a post writes the elements it feeds into a Forks dir and a ForkValues file, both")
 )
 
 // PostSpec is one finished stage instance a task posts.
@@ -30,11 +32,15 @@ type PostSpec struct {
 	Args string
 	// Outs is the stage's outs bundle.
 	Outs string
-	// Forks is the dir that receives <root>/<ordinal>/ fork elements.
-	Forks string
+	// Forks is the dir that receives <root>/<ordinal>/ fork elements and
+	// <partner dir>/<index token>/ partner elements, but for those carried
+	// as values, whose records ForkValues receives, space-separated (item).
+	Forks, ForkValues string
 	// Fields, when set, is the dir that receives one stamped bundle per
-	// output, named by it, so a consumer stages only the outputs it reads.
-	Fields string
+	// output, named by it, so a consumer stages only the outputs it reads,
+	// but for the outputs carried as values, whose records Values, set with
+	// it, receives, space-separated (valueRecord).
+	Fields, Values string
 	// Gates, when set, is the file that receives the nodes this instance's
 	// outs disable at its fork (Gates).
 	Gates string
@@ -44,10 +50,20 @@ type PostSpec struct {
 }
 
 // Post stamps the instance's outs with its node and fork, checks them as mrp
-// does, and writes one fork element dir per fork of every root this stage
-// feeds and one partner element dir per element of each output a partner
-// reads, then the outs field by field and the gates they set, when asked.
+// does, and writes each fork of every root this stage feeds and each
+// element of every output a partner reads as a dir under Forks or as a
+// value record in ForkValues (item), plus each such output's absent record
+// as a value record, then the outs field by field and the gates they set,
+// when asked.
 func (g *Graph) Post(spec PostSpec) error {
+	if (spec.Fields == "") != (spec.Values == "") {
+		return errFieldsValues
+	}
+
+	if spec.Forks == "" || spec.ForkValues == "" {
+		return errForkValues
+	}
+
 	in, s, err := g.post(spec)
 	if err != nil {
 		return err
@@ -81,7 +97,7 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 		return Instance{}, nil, err
 	}
 
-	s, err := g.stage([]string{spec.Outs})
+	s, err := g.stage([]string{spec.Outs}, nil)
 	if err != nil {
 		return Instance{}, nil, err
 	}
@@ -90,8 +106,14 @@ func (g *Graph) post(spec PostSpec) (Instance, *stagedStore, error) {
 		return Instance{}, nil, err
 	}
 
-	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), roots: spec.Roots, values: true}
+	var recs []string
+
+	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), roots: spec.Roots, values: true, recs: &recs}
 	if err := w.posted(in); err != nil {
+		return Instance{}, nil, err
+	}
+
+	if err := writeFile(spec.ForkValues, strings.Join(recs, " ")); err != nil {
 		return Instance{}, nil, err
 	}
 
@@ -169,18 +191,20 @@ func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fo
 	return nil
 }
 
-// forkWriter writes a root's forks as <dir>/<root>/<name>/, one dir per
-// fork in mrp's order (core/fork.go:1639 expandForkFromObj). The name is the
+// forkWriter writes a root's forks as <dir>/<root>/<name>/, one per fork
+// in mrp's order (core/fork.go:1639 expandForkFromObj). The name is the
 // fork's ordinal, zero-padded so names sort in that order, after the
 // ordinals of any outer parts the producer does not fix, joined by dots.
-// With values, each dir also holds the fork's element of the source
-// collection as a bundle, its file leaves staged but those under roots.
+// Without values, each is a dir of its fork record. With values, each
+// carries the fork's element of the source collection too, and is written
+// as its readers get it (item), a dir or one of recs.
 type forkWriter struct {
 	r      *resolver
 	dir    string
 	tbl    *types.Table
 	roots  shim.Roots
 	values bool
+	recs   *[]string
 }
 
 // counted is a fork and the fork count of each of its parts.
@@ -200,21 +224,21 @@ func (w forkWriter) root(root *syntax.CallGraphStage, fixed counted) error {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 
-	return w.level(root, fixed, counted{}, w.r.g.outerRoots(root), nil, dir)
+	return w.level(root, fixed, counted{}, w.r.g.outerRoots(root), nil)
 }
 
 // level enumerates root's outer parts one root at a time: a part the
 // posting instance's fork fixes, or every index of an outer root, from the
 // call graph and what the task staged.
-func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix counted, rest syntax.ForkRootList, names []string, dir string) error {
+func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix counted, rest syntax.ForkRootList, names []string) error {
 	if len(rest) == 0 {
-		return w.elements(root, prefix, names, dir)
+		return w.elements(root, prefix, names)
 	}
 
 	o := rest[0]
 
 	if i, ok := fixed.fork.rootPos(o); ok {
-		return w.level(root, fixed, prefix.with(Part{Root: o, Index: fixed.fork[i].Index}, fixed.lens[i]), rest[1:], names, dir)
+		return w.level(root, fixed, prefix.with(Part{Root: o, Index: fixed.fork[i].Index}, fixed.lens[i]), rest[1:], names)
 	}
 
 	idx, err := w.r.sourceIndices(o, prefix.fork)
@@ -224,7 +248,7 @@ func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix counted, re
 
 	for i, ix := range idx {
 		next := prefix.with(Part{Root: o, Index: ix}, len(idx))
-		if err := w.level(root, fixed, next, rest[1:], append(slices.Clip(names), ordinal(i, len(idx))), dir); err != nil {
+		if err := w.level(root, fixed, next, rest[1:], append(slices.Clip(names), ordinal(i, len(idx)))); err != nil {
 			return err
 		}
 	}
@@ -232,7 +256,7 @@ func (w forkWriter) level(root *syntax.CallGraphStage, fixed, prefix counted, re
 	return nil
 }
 
-func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names []string, dir string) error {
+func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names []string) error {
 	outer := outerAt.fork
 
 	var (
@@ -261,31 +285,78 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 	}
 
 	for i, ix := range idx {
-		ed := filepath.Join(dir, elementName(names, i, len(idx), ix))
+		name := elementName(names, i, len(idx), ix)
 		at := outerAt.with(Part{Root: root, Index: ix}, len(idx))
+		rec := Element{Fork: at.fork, Lens: at.lens, Position: i}.encode()
 
-		if w.values {
-			if err := w.writeValue(ed, c, ix, param); err != nil {
-				return fmt.Errorf("fork %d of %s: %w", i, root.Fqid, err)
+		if !w.values {
+			if err := writeRecord(filepath.Join(w.dir, root.Fqid, name, elementFile), rec); err != nil {
+				return err
 			}
+
+			continue
 		}
 
-		if err := writeElement(ed, Element{Fork: at.fork, Lens: at.lens, Position: i}); err != nil {
-			return err
+		el, err := c.at(ix)
+		if err != nil {
+			return fmt.Errorf("fork %d of %s: %w", i, root.Fqid, err)
+		}
+
+		if err := w.item(root.Fqid, name, el, param, valueJSON{Fork: &rec}); err != nil {
+			return fmt.Errorf("fork %d of %s: %w", i, root.Fqid, err)
 		}
 	}
 
 	return nil
 }
 
-// writeValue writes into ed the fork's element of the root's source c.
-func (w forkWriter) writeValue(ed string, c indexed, ix syntax.CollectionIndex, param *syntax.StructMember) error {
-	el, err := c.at(ix)
+// item writes el, an element of type param's that rec names, as a reader
+// gets it: a value record named <sub>/<name> when the post carries it as a
+// value (carried), or else the dir <sub>/<name>/ below the writer's, which
+// holds it as a bundle, its file leaves staged but those under roots, and
+// rec's record of it.
+func (w forkWriter) item(sub, name string, el json.Marshaler, param *syntax.StructMember, rec valueJSON) error {
+	raw, err := marshal(el)
 	if err != nil {
 		return err
 	}
 
-	return writeElementValue(ed, el, param, w.tbl, w.roots)
+	v, err := types.DecodeJSON(raw)
+	if err != nil {
+		return fmt.Errorf("decode element: %w", err)
+	}
+
+	val, isValue, err := w.r.g.carried(param.Tname, v)
+	if err != nil {
+		return err
+	}
+
+	if isValue {
+		rec.Value = val
+
+		return w.record(sub+"/"+name, rec)
+	}
+
+	dir := filepath.Join(w.dir, sub, name)
+	if err := shim.WriteBundle(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, w.tbl, shim.Opts{Roots: w.roots}); err != nil {
+		return fmt.Errorf("write element %s: %w", dir, err)
+	}
+
+	file, r := rec.elementRecord()
+
+	return writeRecord(filepath.Join(dir, file), r)
+}
+
+// record adds rec, named name, to the post's value records.
+func (w forkWriter) record(name string, rec valueJSON) error {
+	text, err := encodeValue(name, rec)
+	if err != nil {
+		return err
+	}
+
+	*w.recs = append(*w.recs, text)
+
+	return nil
 }
 
 // source is root's collection under outer, as core expands a fork from a
@@ -334,23 +405,4 @@ func (g *Graph) collectionParam(name string, split *syntax.SplitExp, root *synta
 	}
 
 	return &syntax.StructMember{Id: name, Tname: t.TypeId()}, nil
-}
-
-// writeElementValue writes an element as a bundle of its one param.
-func writeElementValue(dir string, el json.Marshaler, param *syntax.StructMember, tbl *types.Table, roots shim.Roots) error {
-	raw, err := marshal(el)
-	if err != nil {
-		return err
-	}
-
-	v, err := types.DecodeJSON(raw)
-	if err != nil {
-		return fmt.Errorf("decode fork element: %w", err)
-	}
-
-	if err := shim.WriteBundle(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, tbl, shim.Opts{Roots: roots}); err != nil {
-		return fmt.Errorf("write fork element %s: %w", dir, err)
-	}
-
-	return nil
 }

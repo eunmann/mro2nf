@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -271,38 +273,150 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 }
 
+// TestEmitCarriesValueOutputs (#536): a posting task emits, beside its outs
+// bundles, the value records of its outputs that hold no file, which the
+// driver carries as one list of outs items per instance, selects and orders
+// by output like the bundles, and splits apart from them for each task: it
+// stages the bundles and writes the records into a file for mre.
+func TestEmitCarriesValueOutputs(t *testing.T) {
+	main := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
+
+	for _, want := range []string{
+		"o0_outs = POSTED(N0_GEN.out.outs, b0.skip)",
+		"outs_files = outs_in.map { xs -> bundlesOf(xs) }",
+		", outs_in.map { xs -> recordsOf(xs) }, ",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("diamond_min's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	for _, want := range []string{
+		"tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), emit: outs",
+		"'-fields outs -field-values outs_values -forks forks -fork-values fork_values -gates gates'",
+		"posted.map { k, ds, vs -> [k, ds + vs.tokenize(' ')] }",
+		"ds.findAll { e -> itemName(e) in fields }",
+		"keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1])",
+		"return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')",
+		"cmd += ' -values values'",
+		"cat > values <<'MRO2NF_VALUES'",
+		"-in in${values ? ' -values values' : ''}",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+
+	if n := strings.Count(stageModule, "eval('cat outs_values'), emit: outs"); n != 2 {
+		t.Errorf("%d processes emit value records, want STAGE's and STAGE_JOIN's", n)
+	}
+}
+
+// TestEmitCarriesValueElements: a posting task emits, beside its fork and
+// partner element dirs, the value records of the elements that hold no
+// file, which the driver carries as one list of items per instance, picks
+// by root (ELEMENTS) and by partner and index token (ZIP) like the dirs,
+// and splits apart from them for each task, as it does outs items. On
+// cellranger_shaped each of 9 instances otherwise staged a bundle of one
+// integer.
+func TestEmitCarriesValueElements(t *testing.T) {
+	main := readTree(t, emitFixture(t, "zip_runtime"))["main.nf"]
+
+	for _, want := range []string{
+		"o0_forks = POSTED(N0_TWO.out.forks, b0.skip)",
+		"ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false)",
+		"ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("zip_runtime's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	for _, want := range []string{
+		"ds.findAll { e -> itemParent(e) == root }",
+		"def name = itemName(e)",
+		"ds.findAll { e -> itemParent(e) == partner }.collectEntries { e -> [(itemName(e)): e] }",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), [], [], callStaged(d)]",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+
+	if n := strings.Count(stageModule, "tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), emit: forks"); n != 2 {
+		t.Errorf("%d processes emit element value records, want STAGE's and STAGE_JOIN's", n)
+	}
+
+	if strings.Contains(stageModule, "e.parent.name ==") {
+		t.Error("stage.nf picks elements by their dir alone, which misses value records")
+	}
+}
+
 // TestEmitLocatesOutsInputs: OUTS gets, beside each outs bundle it stages,
 // where its producing task's work dir keeps it, which names a file the
 // pipeline outs leave unpublished (#457), and passes both to mre outs.
 func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
-	if !strings.Contains(main, "OUTS(shared, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
+	if !strings.Contains(main, ", outs_files, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, ") {
 		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
 	}
 
-	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", "-in in -locations locations"} {
+	for _, want := range []string{"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs", "${locations(ups, locs)}", " -locations locations"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}
 	}
 }
 
-// TestEmitWritesTheCallToAFile: every process that runs mre writes the
-// run's call, its value, to the file mre reads it from, before mre runs, as
-// a wide run's call would pass the kernel's 128 KiB limit on one argument.
-func TestEmitWritesTheCallToAFile(t *testing.T) {
-	if !strings.Contains(stageModule, "\"${code(meta, root)} -call call.b64\"") || !strings.Contains(stageModule, "\"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"") {
-		t.Error("stage.nf does not hand mre the call in a file")
+// TestEmitCarriesTheCall: one rule, CALL's, chooses how every task gets
+// the run's call: inline, a value its script writes into call.b64, when
+// its base64 is at most cg.MaxValueBytes, as on AWS Batch a staged file
+// costs each task a download (~300 ms); or else the one file the driver
+// writes once per run, which each task stages as call.b64, as with N entry
+// forks an inline call grew every task's script, and the -resume key
+// Nextflow hashes from it, by O(N) bytes (#551).
+func TestEmitCarriesTheCall(t *testing.T) {
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, want := range []string{
+		"shared = CALL(PLAN.out.call, " + strconv.Itoa(cg.MaxValueBytes) + ").map { c -> [entry: ",
+		"OUTS(shared, shared.map { m -> callStaged(m) }, outs_files, ",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	for _, want := range []string{
+		"inline: v.size() <= bound\n        staged: true\n",
+		"out = c.inline.mix(c.staged.collectFile(name: 'call.b64')).first()",
+		"return meta.call instanceof Path ? '' : \"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"",
+		"return meta.call instanceof Path ? [meta.call] : []",
+		"\"${code(meta, root)} -call call.b64\"",
+		"bundlesOf(es + us), [], [], callStaged(d)]",
+		"ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
+		"c.name, c, callStaged(m)] }",
+		"[m, k, fs, vs, us, ids, ef, cs, j, os, callStaged(m)]",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
 	}
 
 	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN", "OUTS"} {
 		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
-		_, script, _ := strings.Cut(body, "script:\n")
-		script, _, _ = strings.Cut(script, "\n}\n")
+		body, _, _ = strings.Cut(body, "\n}\n")
+		input, script, _ := strings.Cut(body, "output:\n")
+		_, script, _ = strings.Cut(script, "script:\n")
 
-		if at := strings.Index(script, "${callFile(meta)}"); at < 0 || at != strings.Index(script, "${") {
-			t.Errorf("%s does not write the call before it runs mre:\n%s", proc, script)
+		if !strings.Contains(input, "path(cf, stageAs: 'call.b64', arity: '0..*')") && !strings.Contains(input, "path cf, stageAs: 'call.b64', arity: '0..*'\n") {
+			t.Errorf("%s does not stage the call file CALL staged:\n%s", proc, input)
+		}
+
+		if at := strings.Index(script, "${callScript(meta)}"); at < 0 || at != strings.Index(script, "${") {
+			t.Errorf("%s does not write an inline call before it runs mre:\n%s", proc, script)
 		}
 	}
 }
@@ -330,7 +444,7 @@ func TestEmitRunsOneMreCallPerTask(t *testing.T) {
 // the job writes nothing into the split's outputs, which would change their
 // -resume key (split_test).
 func TestEmitStagesChunkApart(t *testing.T) {
-	if !strings.Contains(stageModule, ", val(name), path(chunk, stageAs: 'chunk/*')\n") {
+	if !strings.Contains(stageModule, ", val(name), path(chunk, stageAs: 'chunk/*'), ") {
 		t.Error("STAGE_MAIN does not stage its chunk below chunk/")
 	}
 }
@@ -341,14 +455,14 @@ func TestEmitStagesChunkApart(t *testing.T) {
 // name per fork (#507; split_test wires one instance channel into all
 // three).
 func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
-	inputs := "tuple val(meta), val(key), val(forks), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')"
+	inputs := "tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')"
 
 	for _, proc := range []string{"STAGE", "STAGE_SPLIT", "STAGE_MAIN", "STAGE_JOIN"} {
 		_, body, _ := strings.Cut(stageModule, "\nprocess "+proc+" {")
 		body, _, _ = strings.Cut(body, "\n}\n")
 		_, output, _ := strings.Cut(body, "output:\n")
 
-		for _, want := range []string{inputs, "mkdir -p in\n", "${args(meta, forks, leaves)} -args args "} {
+		for _, want := range []string{inputs, "${valuesFile(values)}\n    mkdir -p in\n", "${args(meta, forks, values, leaves)} -args args "} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s lacks %q:\n%s", proc, want, body)
 			}
@@ -390,12 +504,31 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, us, ids, ef, c.name, c] }",
+		"def r = resources(res)\n        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, ids, ef, c.name, c, callStaged(m)] }",
 		"split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
 		}
+	}
+}
+
+// TestEmitReadsRecordsFromFiles (#549): a record of a line per fork or per
+// chunk, PLAN's and a split's resources table, reaches the driver as a file
+// it reads, not as an eval output, which Nextflow 26.04 joins line by line
+// with string concatenation (TaskEnvCollector.collect), quadratic in the
+// lines.
+func TestEmitReadsRecordsFromFiles(t *testing.T) {
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, rec := range []string{"nodes", "leaves", "files", "roots"} {
+		if !strings.Contains(main, "path('"+rec+"'), emit: "+rec) || strings.Contains(main, "eval('cat "+rec+"')") {
+			t.Errorf("PLAN does not output its %s record as a file:\n%s", rec, main)
+		}
+	}
+
+	if !strings.Contains(stageModule, "path('chunks/resources.tsv'), emit: split") || strings.Contains(stageModule, "eval('cat chunks/resources.tsv')") {
+		t.Error("STAGE_SPLIT does not output its resources table as a file")
 	}
 }
 
@@ -507,7 +640,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 		"-leaves ${shq(leaves.join(','))}",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
 		"def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
-		"[d, k, fs, es + us, [], []]",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), [], [], callStaged(d)]",
 	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)
@@ -536,25 +669,25 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 	main := readTree(t, out)["main.nf"]
 	for _, want := range []string{
 		"entry = ENTRY(PLAN.out.files, PLAN.out.leaves)",
-		"outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, entry.map { ef -> def ids = ef.files['ECHO -'] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }, file(",
+		"outs_in.map { xs -> recordsOf(xs) }, entry.map { ef -> def ids = ef.files['ECHO -'] ?: []; [ids, ids.collect { x -> ef.leaves[x] }] }, file(",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("ECHO's main.nf lacks %q:\n%s", want, main)
 		}
 	}
 
-	if plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]; !strings.Contains(plain, "outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, channel.value([[], []]), file(") {
+	if plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]; !strings.Contains(plain, "outs_in.map { xs -> recordsOf(xs) }, channel.value([[], []]), file(") {
 		t.Errorf("diamond_min's outs read no entry file, yet OUTS stages some:\n%s", plain)
 	}
 
-	for _, want := range []string{"    val locs\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results"} {
+	for _, want := range []string{"    val values\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}
 	}
 }
 
-// TestEmitZipsByToken: an instance zipping another stage's output stages
+// TestEmitZipsByToken: an instance zipping another stage's output gets
 // that stage's partner element at its own fork's index token, or the
 // absent record, never the whole output (zip_runtime: LONG zips THREE.xs;
 // zip_runtime_map: BY_AX zips ABC.m by key token).
@@ -577,7 +710,7 @@ func TestEmitZipsByToken(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"keyed ? e.name.tokenize('@')[1] : t[-1].toString()",
+		"keyed ? name.tokenize('@')[1] : t[-1].toString()",
 		"[k, fs, es + ([m[tk[token]] ?: m[absent]] - [null]), tk]",
 	} {
 		if !strings.Contains(stageModule, want) {

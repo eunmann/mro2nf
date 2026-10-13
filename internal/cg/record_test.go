@@ -64,7 +64,7 @@ func TestRecordsRefuseMalformed(t *testing.T) {
 		t.Error("a fork record that is no base64 decoded without error")
 	}
 
-	if err := writeElement(filepath.Join(write("blocker", ""), "blocker", "el"), Element{}); err == nil {
+	if err := writeRecord(filepath.Join(write("blocker", ""), "blocker", "el", elementFile), Element{}.encode()); err == nil {
 		t.Error("a fork record wrote below a file")
 	}
 

@@ -11,7 +11,7 @@ import (
 
 // wiringWorkflows are the stage module's node wiring sub-workflows, which
 // every workflow of the project includes.
-const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATES ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; OR_SKIPPED ; PUBLISHED"
+const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATES ; GATED ; ENABLED ; SELECT ; READ ; GATHER ; INPUT ; INPUT_ENTRY ; CHUNKS ; JOIN ; DONE ; POSTED ; PUBLISHED"
 
 // subworkflowDir holds a module per sub-workflow main.nf calls.
 const subworkflowDir = "subworkflows"
@@ -39,7 +39,7 @@ func (p *project) workflows() (map[string]string, error) {
 
 	var b strings.Builder
 
-	b.WriteString("include { shq ; code ; ordered ; on ; pool ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
+	b.WriteString("include { shq ; code ; ordered ; bundlesOf ; recordsOf ; callStaged ; on ; pool ; OUTS ; CALL ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
 	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
 	b.WriteString(planProcess)
@@ -162,14 +162,15 @@ func ilist(xs []int) string {
 }
 
 // planWiring parses PLAN's records the wirings read: shared is the meta
-// every task shares, with the run's call; nodes maps each witness node to
-// its digest, its off flag, its statically disabled fork keys, the cpus and
-// memory its first task is scheduled with and its own overrides, paired
-// with shared, which a node then reads from no channel of its own; entry
-// maps each node and fork of its entry-fed roots to the entry files staged
-// there, and each of those to its file(), which globs no name; entry_forks
-// maps each entry-fed root to its forks, so the wiring is the same few
-// lines however many roots there are.
+// every task shares, with the run's call, inline when its base64 is at
+// most cg.MaxValueBytes, as an output value is, or else staged (CALL);
+// nodes maps each witness node to its digest, its off flag, its statically
+// disabled fork keys, the cpus and memory its first task is scheduled with
+// and its own overrides, paired with shared, which a node then reads from
+// no channel of its own; entry maps each node and fork of its entry-fed
+// roots to the entry files staged there, and each of those to its file(),
+// which globs no name; entry_forks maps each entry-fed root to its forks,
+// so the wiring is the same few lines however many roots there are.
 func (p *project) planWiring(ws []*wiring) *wiring {
 	used := map[string]bool{}
 
@@ -184,7 +185,7 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 	w.linef("    error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
 	w.linef("}")
 	w.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(), mroAssets)
-	w.linef("%s = PLAN.out.call.map { c -> %s }", w.def("shared"), p.graphMeta("call: c"))
+	w.linef("%s = CALL(PLAN.out.call, %d).map { c -> %s }", w.def("shared"), cg.MaxValueBytes, p.graphMeta("call: c"))
 
 	for _, d := range []struct{ name, expr string }{
 		{"nodes", "NODES(PLAN.out.nodes, shared)"},

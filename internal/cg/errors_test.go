@@ -14,7 +14,8 @@ func TestPostRejectsInvalidOuts(t *testing.T) {
 	f := loadFixture(t, "bad_out_type")
 
 	bad := f.outs("BOT.BAD", nil, `{"i":1.5}`)
-	if err := f.g.Post(PostSpec{Args: bad, Outs: bad, Forks: f.next("forks")}); !errors.Is(err, errInvalidOuts) {
+	forks := f.next("forks")
+	if err := f.g.Post(PostSpec{Args: bad, Outs: bad, Forks: forks, ForkValues: forkValues(forks)}); !errors.Is(err, errInvalidOuts) {
 		t.Errorf("post of BAD's 1.5: %v, want %v", err, errInvalidOuts)
 	}
 
@@ -50,7 +51,7 @@ func TestInstanceForkErrors(t *testing.T) {
 	f := loadFixture(t, "map_fork_upstream")
 
 	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1,"beta":2}}`)
-	elems := elementDirs(t, f.post(gen, gen), "MFU.DBL")
+	elems := elementItems(t, f.post(gen, gen), "MFU.DBL")
 
 	for _, tc := range []struct {
 		name string
@@ -60,7 +61,7 @@ func TestInstanceForkErrors(t *testing.T) {
 		{"no element", []string{gen}, errNoForkPart},
 		{"two elements", append([]string{gen}, elems...), errAmbiguous},
 	} {
-		_, err := f.g.WriteArgs(ArgsSpec{Node: "MFU.DBL", In: tc.in, Out: f.next("args")})
+		_, err := f.g.WriteArgs(withItems(ArgsSpec{Node: "MFU.DBL", Out: f.next("args")}, tc.in...))
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
 		}

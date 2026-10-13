@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -162,9 +163,39 @@ func mreIn(t *testing.T, mro string, argv ...string) (string, error) {
 	return out, err
 }
 
+// postedValues are the outs value records a post wrote to path, each as
+// <output>:<its JSON>, space-separated.
+func postedValues(t *testing.T, path string) string {
+	t.Helper()
+
+	recs := strings.Fields(readText(t, path))
+	out := make([]string, 0, len(recs))
+
+	for _, rec := range recs {
+		field, enc, _ := strings.Cut(rec, ":")
+
+		raw, err := base64.StdEncoding.DecodeString(enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var v struct {
+			Value json.RawMessage `json:"value"`
+		}
+
+		if err := json.Unmarshal(raw, &v); err != nil {
+			t.Fatal(err)
+		}
+
+		out = append(out, field+":"+string(v.Value))
+	}
+
+	return strings.Join(out, " ")
+}
+
 // posted is a task's post flags, writing below dir.
 func posted(dir string) []string {
-	return []string{"-fields", dir + "/outs", "-forks", dir + "/forks", "-gates", dir + "/gates"}
+	return []string{"-fields", dir + "/outs", "-field-values", dir + "/values", "-forks", dir + "/forks", "-fork-values", dir + "/fork_values", "-gates", dir + "/gates"}
 }
 
 // unsplitTask is the mre stage call of a non-split stage's task in dir,
@@ -195,7 +226,7 @@ func splitTasks(node string, in ...string) [][]string {
 // stageTasks are a run of stageMRO's enabled tasks, in dependency order,
 // each fork of EACH given its fork record as a value.
 func stageTasks(records []string) [][]string {
-	tasks := append(splitTasks("P.SQ", "-leaves", "0"), unsplitTask("P.ADD", "add", "-in", "jn/outs/total"), unsplitTask("P.CP", "cp", "-leaves", "0"))
+	tasks := append(splitTasks("P.SQ", "-leaves", "0"), unsplitTask("P.ADD", "add", "-values", "jn/values"), unsplitTask("P.CP", "cp", "-leaves", "0"))
 	for i, rec := range records {
 		tasks = append(tasks, unsplitTask("P.EACH", "each"+strconv.Itoa(i), "-fork", rec))
 	}
@@ -287,12 +318,15 @@ func TestStageTasks(t *testing.T) {
 		}
 	}
 
-	for dir, want := range map[string]string{
-		"jn/chunkouts/chnk0": `{"sq":4}`, "jn/chunkouts/chnk1": `{"sq":9}`, "jn/outs/total": `{"total":13}`,
-		"add/outs/y": `{"y":14}`, "each0/outs/y": `{"y":3}`, "each1/outs/y": `{"y":4}`,
-	} {
+	for dir, want := range map[string]string{"jn/chunkouts/chnk0": `{"sq":4}`, "jn/chunkouts/chnk1": `{"sq":9}`} {
 		if got := compactBundle(t, dir); got != want {
 			t.Errorf("%s holds %s, want %s", dir, got, want)
+		}
+	}
+
+	for values, want := range map[string]string{"jn/values": `total:13`, "add/values": `y:14`, "each0/values": `y:3`, "each1/values": `y:4`} {
+		if got := postedValues(t, values); got != want {
+			t.Errorf("%s holds %s, want %s", values, got, want)
 		}
 	}
 
@@ -407,7 +441,7 @@ func TestStageExitCodes(t *testing.T) {
 			t.Errorf("%s: %v, exit %d, want exit %d", node, err, exitCode(err), want)
 		}
 
-		for _, f := range []string{"stage_outs", "outs", "forks", "gates"} {
+		for _, f := range []string{"stage_outs", "outs", "values", "forks", "gates"} {
 			if _, err := os.Stat(filepath.Join(dir, f)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("%s: a failed job's task wrote %s: %v", node, f, err)
 			}

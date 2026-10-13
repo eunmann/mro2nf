@@ -8,16 +8,18 @@ import (
 )
 
 // planProcess declares PLAN, the run's one start task, which compiles the
-// project's copy of the entry's .mro files. Its records reach the driver as
-// values, so a task's cache key holds what PLAN fixed for it, not the
-// task's path: the run's call, which every task compiles over the entry's
-// declarations where the run finds its code, each node's digest and its
-// resources under the run's mrp --overrides file, the entry files each
+// project's copy of the entry's .mro files. The driver reads its records
+// into values, so a task's cache key holds what PLAN fixed for it, not the
+// path of PLAN's file: the run's call, which every task compiles over the
+// entry's declarations where the run finds its code, each node's digest and
+// its resources under the run's mrp --overrides file, the entry files each
 // instance stages, and the forks of every entry-fed root, one record, so
-// PLAN's outputs do not grow with the roots. Under an S3
-// mount, which s3:// inputs PLAN reads in place depends on the buckets its
-// instance mounts, which no input of PLAN holds, so a -resume re-runs it;
-// a task downstream stays cached while PLAN's records are unchanged.
+// PLAN's outputs do not grow with the roots. A multi-line record is a file
+// the driver reads, not an eval output, which Nextflow joins line by line
+// in time quadratic in its lines. Under an S3 mount, which s3:// inputs
+// PLAN reads in place depends on the buckets its instance mounts, which no
+// input of PLAN holds, so a -resume re-runs it; a task downstream stays
+// cached while PLAN's records are unchanged.
 const planProcess = `process PLAN {
     cache !params.mro2nf_s3_mount
 
@@ -29,10 +31,10 @@ const planProcess = `process PLAN {
 
     output:
     eval('cat call'), emit: call
-    eval('cat nodes'), emit: nodes
-    eval('cat leaves'), emit: leaves
-    eval('cat files'), emit: files
-    eval('cat roots'), emit: roots
+    path('nodes'), emit: nodes
+    path('leaves'), emit: leaves
+    path('files'), emit: files
+    path('roots'), emit: roots
 
     script:
     """
@@ -64,7 +66,7 @@ func (p *project) values() string {
 }
 
 // publications maps each node the pipeline outs read to the source of the
-// outs bundles it publishes for OUTS, which the workflow wiring it mixes.
+// outs items it publishes for OUTS, which the workflow wiring it mixes.
 func (p *project) publications() map[int]string {
 	pubs := make(map[int]string, len(p.topo.Outs))
 
@@ -81,10 +83,11 @@ func (p *project) publications() map[int]string {
 	return pubs
 }
 
-// outs runs OUTS over every outs bundle the pipeline outs read, which the
+// outs runs OUTS over every outs item the pipeline outs read, which the
 // entry workflow's published channel mixes, ordered by node and instance
-// key, not by completion, and the entry files they read, which PLAN lists
-// by the pipeline's fqid.
+// key, not by completion: the bundles it stages, with where each producing
+// task keeps them, and the value records it gets as a value; and the entry
+// files they read, which PLAN lists by the pipeline's fqid.
 func (p *project) outs() *wiring {
 	w := &wiring{}
 
@@ -99,7 +102,10 @@ func (p *project) outs() *wiring {
 	}
 
 	w.linef("outs_in = %s", ups)
-	w.linef("OUTS(%s, outs_in, outs_in.map { ds -> ds.collect { d -> d.toUriString() } }, %s, file(\"${projectDir}/%s\"))", w.use("shared"), entry, mroAssets)
+	shared := w.use("shared")
+	w.linef("outs_files = outs_in.map { xs -> bundlesOf(xs) }")
+	w.linef("OUTS(%s, %s.map { m -> callStaged(m) }, outs_files, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, outs_in.map { xs -> recordsOf(xs) }, %s, file(\"${projectDir}/%s\"))",
+		shared, shared, entry, mroAssets)
 
 	return w
 }
