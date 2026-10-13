@@ -59,9 +59,14 @@ func entryRoot(w *wiring, root string) string {
 // process call; its outputs, a disabled instance standing in with none;
 // and, of a preflight, PLAN's records held until it is done.
 func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
+	meta, err := p.nodeMeta(n)
+	if err != nil {
+		return nil, err
+	}
+
 	w := &wiring{}
 	w.linef("// %s", n.Fqid)
-	p.gate(w, i, n, p.instances(w, i, n))
+	p.gate(w, i, n, p.instances(w, i, n), meta)
 
 	run := fmt.Sprintf("b%d.run", i)
 	for _, r := range n.Reads {
@@ -69,13 +74,8 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		run = "u" + strconv.Itoa(i)
 	}
 
-	meta, err := p.nodeMeta(n)
-	if err != nil {
-		return nil, err
-	}
-
 	proc := alias(i, n.Fqid)
-	in := p.input(w, n, run, meta)
+	in := p.input(w, n, run)
 
 	if n.Split {
 		splitTriad(w, i, proc, in)
@@ -114,9 +114,9 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 // input is the channel of node i's enabled instances, run, as its process
 // takes them, each with the entry files it reads: those PLAN lists for its
 // fork of the node's entry-fed roots.
-func (p *project) input(w *wiring, n cg.TopoNode, run, meta string) string {
+func (p *project) input(w *wiring, n cg.TopoNode, run string) string {
 	if !p.readers[n.Fqid] {
-		return fmt.Sprintf("INPUT(%s, %s, %s)", run, w.use("shared"), meta)
+		return fmt.Sprintf("INPUT(%s)", run)
 	}
 
 	var at []int
@@ -127,7 +127,7 @@ func (p *project) input(w *wiring, n cg.TopoNode, run, meta string) string {
 		}
 	}
 
-	return fmt.Sprintf("INPUT_ENTRY(%s, %s, %s, %s, %s)", run, w.use("shared"), w.use("entry"), meta, ilist(at))
+	return fmt.Sprintf("INPUT_ENTRY(%s, %s, %s)", run, w.use("entry"), ilist(at))
 }
 
 // instances is the expression of node i's instances: root by root, each
@@ -262,13 +262,14 @@ func (p *project) elements(w *wiring, r cg.TopoRoot) string {
 }
 
 // gate decides each of node i's instances, inst, enabled or disabled,
-// b<i>.run or b<i>.skip, from PLAN's record of the node, which each
-// instance carries on as its d, and the gate values each stage whose outs
-// gate it posted at the fork they share, keyed by the instance's ordinals
-// of the gate's own roots. PLAN's records reach it once its preflights are
-// done, so no instance of it is gated before.
-func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst string) {
-	gated := fmt.Sprintf("GATE(%s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), gstr(n.Fqid))
+// b<i>.run or b<i>.skip, from PLAN's record of the node, and the gate
+// values each stage whose outs gate it posted at the fork they share, keyed
+// by the instance's ordinals of the gate's own roots. Each instance carries
+// on as its d the meta of its tasks, planned from the record and the
+// node's own meta. PLAN's records reach it once its preflights are done,
+// so no instance of it is gated before.
+func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta string) {
+	gated := fmt.Sprintf("GATE(%s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), meta)
 
 	for _, gp := range n.Gates {
 		w.linef("g%d = %s", i, gated)

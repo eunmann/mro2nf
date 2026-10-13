@@ -362,7 +362,7 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
 
 	for _, want := range []string{
-		"s0 = INPUT(b0.run, shared, ",
+		"s0 = INPUT(b0.run)",
 		"N0_SUM_SQUARES_SP(s0)",
 		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
 		"N0_SUM_SQUARES_JN(JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0))",
@@ -415,7 +415,7 @@ func TestEmitSizesNodesUnderOverrides(t *testing.T) {
 		},
 		"stage.nf": {
 			"${cmd} -overrides overrides.json",
-			"[k, fs, es, ns[node], ns[node][1] == '1'",
+			"[k, fs, es, planned(c, meta, r), r[1] == '1'",
 			"cpus: d[3] as int, mem_gb: d[4] as double, overrides: d[5] == '-' ? '' : d[5], special: meta.special, digest: d[0]]",
 		},
 	} {
@@ -490,7 +490,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 
 	for _, want := range []string{
 		"entry = ENTRY(PLAN.out.files, PLAN.out.leaves)",
-		"N0_COUNTARR(INPUT_ENTRY(b0.run, shared, entry, [node: 'EPA.COUNTARR', special: ''], []))",
+		"N0_COUNTARR(INPUT_ENTRY(b0.run, entry, []))",
 	} {
 		if !strings.Contains(arr, want) {
 			t.Errorf("entry_filearr's main.nf lacks %q:\n%s", want, arr)
@@ -498,7 +498,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 	}
 
 	plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
-	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "N1_ADD(INPUT(u1, shared, [node: 'D.ADD', ") {
+	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "N1_ADD(INPUT(u1))") {
 		t.Errorf("diamond_min reads no entry file, yet stages some:\n%s", plain)
 	}
 
@@ -506,8 +506,8 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 		"val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')",
 		"-leaves ${shq(leaves.join(','))}",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
-		"def ids = ef.files[meta.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
-		"[planned(c, meta, d), k, fs, es + us, [], []]",
+		"def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
+		"[d, k, fs, es + us, [], []]",
 	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)
@@ -611,7 +611,7 @@ func TestEmitGatesBySet(t *testing.T) {
 
 	for name, want := range map[string]string{
 		"NODES": "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)]",
-		"GATE":  "ns[node][1] == '1' || ns[node][2].contains(k.join('.'))",
+		"GATE":  "r[1] == '1' || r[2].contains(k.join('.'))",
 		"GATES": "gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[0], [].toSet()] })",
 		"GATED": ".combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->",
 	} {
@@ -682,14 +682,14 @@ func TestEmitWaitsForPreflights(t *testing.T) {
 	}
 
 	want := []string{
-		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, 'TOP.TOP_CHECK'))",
+		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, [node: 'TOP.TOP_CHECK', special: '']))",
 		"d0 = DONE(N0_TOP_CHECK.out.outs)",
 		"nodes_after_0 = AFTER(nodes, d0)",
-		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, 'TOP.EMIT'))",
-		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, 'TOP.SUB.CHECK'))",
+		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.EMIT', special: '']))",
+		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.SUB.CHECK', special: '']))",
 		"d2 = DONE(N2_CHECK.out.outs)",
 		"nodes_after_0_2 = AFTER(nodes_after_0, d2)",
-		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, 'TOP.SUB.WORK'))",
+		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, [node: 'TOP.SUB.WORK', special: '']))",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("preflight_order's gates and holds (-want +got):\n%s", diff)

@@ -255,13 +255,16 @@ process OUTS {
 
 // PLAN's records, as the driver reads them. NODES maps each node to its
 // digest, its off flag, the set of its statically disabled fork keys, the
-// cpus and memory its first task is scheduled with and its own overrides.
+// cpus and memory its first task is scheduled with and its own overrides,
+// paired with the meta every task shares, so a node reads both from one
+// channel.
 workflow NODES {
     take:
     nodes
+    shared
 
     main:
-    out = nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)] } }
+    out = nodes.combine(shared).map { s, c -> [s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)] }, c] }
 
     emit:
     out
@@ -421,23 +424,26 @@ workflow AFTER {
     done
 
     main:
-    out = nodes.combine(done).map { ns, _d -> ns }
+    out = nodes.combine(done).map { ns, c, _d -> [ns, c] }
 
     emit:
     out
 }
 
-// GATE gives each instance its node's PLAN record, which it carries on as
-// its d, and whether that record disables it: the whole node, or the
-// instance's fork.
+// GATE gives each instance the meta of its node's tasks, planned from its
+// node's PLAN record and its own meta, which it carries on as its d, and
+// whether that record disables it: the whole node, or the instance's fork.
 workflow GATE {
     take:
     inst
     nodes
-    node
+    meta
 
     main:
-    out = inst.combine(nodes).map { k, fs, es, _tk, ns -> [k, fs, es, ns[node], ns[node][1] == '1' || ns[node][2].contains(k.join('.'))] }
+    out = inst.combine(nodes).map { k, fs, es, _tk, ns, c ->
+        def r = ns[meta.node]
+        [k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]
+    }
 
     emit:
     out
@@ -560,16 +566,14 @@ def planned(Map shared, Map meta, List d) {
     return shared + [node: meta.node, cpus: d[3] as int, mem_gb: d[4] as double, overrides: d[5] == '-' ? '' : d[5], special: meta.special, digest: d[0]]
 }
 
-// INPUT is each enabled instance as a stage process takes it; it stages no
-// entry file.
+// INPUT is each enabled instance as a stage process takes it, with the
+// meta GATE planned for it; it stages no entry file.
 workflow INPUT {
     take:
     inst
-    shared
-    meta
 
     main:
-    out = inst.combine(shared).map { k, fs, es, d, us, c -> [planned(c, meta, d), k, fs, es + us, [], []] }
+    out = inst.map { k, fs, es, d, us -> [d, k, fs, es + us, [], []] }
 
     emit:
     out
@@ -581,15 +585,13 @@ workflow INPUT {
 workflow INPUT_ENTRY {
     take:
     inst
-    shared
     entry
-    meta
     at
 
     main:
-    out = inst.combine(shared).combine(entry).map { k, fs, es, d, us, c, ef ->
-        def ids = ef.files[meta.node + ' ' + (k[at].join('.') ?: '-')] ?: []
-        [planned(c, meta, d), k, fs, es + us, ids, ids.collect { x -> ef.leaves[x] }]
+    out = inst.combine(entry).map { k, fs, es, d, us, ef ->
+        def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []
+        [d, k, fs, es + us, ids, ids.collect { x -> ef.leaves[x] }]
     }
 
     emit:

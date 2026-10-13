@@ -482,7 +482,7 @@ func TestEmitWaitsOncePerPreflight(t *testing.T) {
 	t.Parallel()
 
 	after := regexp.MustCompile(`(?m)^\s*(\w+) = AFTER\(nodes, d\d+\)$`)
-	gate := regexp.MustCompile(`GATE\((?:i\d+|channel\.of\(\[\[\], \[\], \[\], \[\]\]\)), (\w+), '`)
+	gate := regexp.MustCompile(`GATE\((?:i\d+|channel\.of\(\[\[\], \[\], \[\], \[\]\]\)), (\w+), \[node: '`)
 
 	for _, p := range []wide.Pipeline{wide.New(2, 3, 0), wide.New(32, 150, 0)} {
 		_, tree := emitWide(t, p)
@@ -501,5 +501,35 @@ func TestEmitWaitsOncePerPreflight(t *testing.T) {
 		if want := map[string]int{"nodes": 1, held[0][1]: p.Stages - 1}; !cmp.Equal(gates, want) {
 			t.Errorf("%d stage calls: the records the nodes gate on are %v, want %v", p.Stages, gates, want)
 		}
+	}
+}
+
+// TestEmitReadsSharedOnce (#512): the meta every task shares reaches the
+// nodes paired with PLAN's node records, which each node's GATE combines
+// anyway, so no node combines it with its instances, an edge of
+// Nextflow's DAG per node: of the whole project's workflows only the
+// entry workflow's NODES and OUTS read it.
+func TestEmitReadsSharedOnce(t *testing.T) {
+	t.Parallel()
+
+	_, tree := emitWide(t, wide.New(32, 150, 0))
+
+	var got []string
+
+	for _, b := range workflowBodies(tree) {
+		if slices.Contains(b.takes, "shared") {
+			t.Errorf("%s: workflow %s takes shared", b.file, b.name)
+		}
+
+		for _, l := range b.main {
+			if _, rhs := assignment(l); slices.Contains(readNames(rhs), "shared") {
+				head, _, _ := strings.Cut(l, "(")
+				got = append(got, head)
+			}
+		}
+	}
+
+	if want := []string{"nodes = NODES", "OUTS"}; !cmp.Equal(got, want) {
+		t.Errorf("the statements reading shared are %q, want %q", got, want)
 	}
 }
