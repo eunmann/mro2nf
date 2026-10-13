@@ -190,7 +190,7 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 		return err
 	}
 
-	param, err := collectionParam(elementField, p.split, p.root)
+	param, err := w.r.g.collectionParam(elementField, p.split, p.root)
 	if err != nil {
 		return err
 	}

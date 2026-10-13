@@ -547,6 +547,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #341: a fork key holding a newline publishes its file, from a scratch
 	// dir too, which Nextflow unstages a line at a time.
 	{name: "map_key_newline", cloud: true},
+	// #553: a fork's element of a txt[][] or map<txt[]> is a txt[], whose
+	// files reach the forked stage from a scratch dir too.
+	{name: "map_file_2d", cloud: true},
 	// #314: a mapped and a disabled preflight run in DAG order under mro2nf.
 	{name: "preflight_ungated"},
 	// #314: a sub-pipeline's preflight, fed by a parent call, waits for its

@@ -1,0 +1,58 @@
+# #553: map calls over collections of file arrays. Each fork's element is a
+# txt[], whose files the forked stage opens: split over a txt[][] output,
+# over a map<txt[]> output, and zipping two txt[][] outputs of one stage,
+# the shorter of which reads null past its end.
+filetype txt;
+
+stage MAKE(
+    in  int[][]    ns,
+    out txt[][]    rows,
+    out txt[][]    cols,
+    out map<txt[]> byk,
+    src py         "stages/make",
+)
+
+stage READ(
+    in  txt[]  row,
+    out string s,
+    src py     "stages/read",
+)
+
+stage PAIR(
+    in  txt[]  a,
+    in  txt[]  b,
+    out string s,
+    src py     "stages/pair",
+)
+
+pipeline MAP_FILE_2D(
+    out string[]    rows,
+    out map<string> byk,
+    out string[]    paired,
+)
+{
+    call MAKE(
+        ns = [[1, 2], [3]],
+    )
+
+    map call READ as ROWS(
+        row = split MAKE.rows,
+    )
+
+    map call READ as BYK(
+        row = split MAKE.byk,
+    )
+
+    map call PAIR(
+        a = split MAKE.rows,
+        b = split MAKE.cols,
+    )
+
+    return (
+        rows   = ROWS.s,
+        byk    = BYK.s,
+        paired = PAIR.s,
+    )
+}
+
+call MAP_FILE_2D()

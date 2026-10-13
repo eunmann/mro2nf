@@ -258,7 +258,7 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 			return err
 		}
 
-		param, err := collectionParam(elementField, root.Split(), root)
+		param, err := w.r.g.collectionParam(elementField, root.Split(), root)
 		if err != nil {
 			return err
 		}
@@ -339,10 +339,16 @@ func ordinal(i, n int) string {
 
 // collectionParam is the param named name a fork element member of root is
 // walked by for its file leaves: the element type of split's collection.
-func collectionParam(name string, split *syntax.SplitExp, root *syntax.CallGraphStage) (*syntax.StructMember, error) {
+// Martian's ArrayType.ElementType is the innermost type whatever the
+// dimension, so an element of a T[][] is a T[] only one dimension down.
+func (g *Graph) collectionParam(name string, split *syntax.SplitExp, root *syntax.CallGraphStage) (*syntax.StructMember, error) {
 	var t syntax.Type
-	if ct := split.Type; ct != nil {
-		t = ct.ElementType()
+
+	switch ct := split.Type.(type) {
+	case *syntax.ArrayType:
+		t = g.types.GetArray(ct.Elem, ct.Dim-1)
+	case *syntax.TypedMapType:
+		t = ct.Elem
 	}
 
 	if t == nil {

@@ -120,7 +120,7 @@ func (w forkWriter) zippedAt(root *syntax.CallGraphStage, outer Fork) (zipped, e
 			return zipped{}, fmt.Errorf("zipped source of %s: %w", root.Fqid, err)
 		}
 
-		p, err := collectionParam(s.member, s.split, root)
+		p, err := w.r.g.collectionParam(s.member, s.split, root)
 		if err != nil {
 			return zipped{}, err
 		}
