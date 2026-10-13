@@ -38,6 +38,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/eunmann/mro2nf/test/wide"
 )
 
 // minNextflowMajor/Minor is the first release whose `nextflow lint` takes
@@ -101,6 +103,72 @@ func TestNextflowLint(t *testing.T) {
 				t.Errorf("nextflow lint reported diagnostics for %s:\n%s", e.fixture, strings.Join(errs, "\n"))
 			}
 		})
+	}
+}
+
+// TestNextflowLintSubworkflows (#541): no testdata fixture's project is
+// large enough for the modules below subworkflows/, which a project too
+// large for one workflow calls, so TestNextflowLint lints none; this lints
+// a generated pipeline's project that has them. A copy with a syntax error
+// in one module, linted in the same invocation, must report it, so the
+// modules are proven linted, not passed over.
+func TestNextflowLintSubworkflows(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+	requireNextflowLint(t)
+	buildBinaries(t)
+
+	src := t.TempDir()
+	if err := wide.New(8, 40, 0).Write(src); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := t.TempDir()
+
+	const proj, broken = "generated_wide", "generated_wide_broken"
+	if err := transpileInto(repoTools(), src, "pipeline.mro", filepath.Join(parent, proj)); err != nil {
+		t.Fatal(err)
+	}
+
+	modules, err := filepath.Glob(filepath.Join(parent, proj, "subworkflows", "*.nf"))
+	if err != nil || len(modules) == 0 {
+		t.Fatalf("the generated project has no module below subworkflows/ to lint (%v): grow the pipeline past one workflow", err)
+	}
+
+	breakModule(t, filepath.Join(parent, proj), filepath.Join(parent, broken), filepath.Base(modules[0]))
+
+	errs := batchLint(t, parent, []string{proj, broken})
+	if len(errs[proj]) > 0 {
+		t.Errorf("nextflow lint reported diagnostics for the %d-module project:\n%s", len(modules), strings.Join(errs[proj], "\n"))
+	}
+
+	want := "subworkflows/" + filepath.Base(modules[0]) + ":"
+	if !slices.ContainsFunc(errs[broken], func(e string) bool { return strings.HasPrefix(e, want) }) {
+		t.Errorf("nextflow lint reported %q for a syntax error in %s, want an error there", errs[broken], want)
+	}
+}
+
+// breakModule copies the project proj to dst and appends a syntax error to
+// its sub-workflow module.
+func breakModule(t *testing.T, proj, dst, module string) {
+	t.Helper()
+
+	if err := os.CopyFS(dst, os.DirFS(proj)); err != nil {
+		t.Fatalf("copy %s -> %s: %v", proj, dst, err)
+	}
+
+	f, err := os.OpenFile(filepath.Join(dst, "subworkflows", module), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open %s: %v", module, err)
+	}
+
+	if _, err := f.WriteString("\nworkflow BROKEN { if ( }\n"); err != nil {
+		t.Fatalf("inject syntax error: %v", err)
+	}
+
+	if err := f.Close(); err != nil {
+		t.Fatalf("close %s: %v", module, err)
 	}
 }
 

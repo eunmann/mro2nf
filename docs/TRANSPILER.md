@@ -145,8 +145,8 @@ one forked on a map call another stage feeds — is refused at transpile time.
 ## 4. The generated project
 
 ```
-main.nf               ← PLAN, the root pipeline's stage and sub-pipeline calls, then OUTS
-subworkflows/         ← a workflow per sub-pipeline (W<j>_<CALL>.nf): its calls
+main.nf               ← PLAN, the nodes or the calls of their runs, then OUTS
+subworkflows/         ← a workflow per run of nodes (W<j>.nf), only in a project too large for one
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
 conf/                 ← the container profiles' and the HealthOmics profile's configs
@@ -169,35 +169,38 @@ the outputs its consumers stage; the args and outs bundles between steps
 stay undeclared files of its work dir. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_ROOT`) and that take a node's
-instances through each step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
+instances through each step of it (`FORK`, `ZIP`, `GATE`, `ENABLED`, `READ`, `GATHER`,
 `INPUT`, `CHUNKS`, `JOIN`, …), each given the node's static data, so a
-node's wiring is a few lines and one per root, read, gate or preflight of
-it. The driver runs only those and a few Groovy helpers (`ordered`,
+node's wiring is a few lines and one per root, read or gate of it. The driver runs only those and a few Groovy helpers (`ordered`,
 `resources`), which read only records mre wrote; it parses no
 stage-controlled JSON.
 
 **Workflows.** The JVM compiles each workflow's statements into one method,
 which may not pass 64 KiB of bytecode, and a call into one of at most 255
-arguments. The project mirrors the `.mro`: the root pipeline's calls are
-wired in `main.nf`'s entry workflow, and each sub-pipeline call is a workflow
-of its own, which takes the channels its nodes read from outside it and emits
-those read outside it, and `outs_pub`: one channel that mixes the outs
-bundles of its own nodes the pipeline outs read (`PUBLISHED`) with its
-sub-workflows' `outs_pub`. The entry workflow's `outs_pub` is OUTS's input,
-which `ordered` sorts by node and instance key, so where a bundle is mixed
-does not change it, and no workflow mixes more sources than it has calls.
-Its calls are wired in dependency order, as Martian's
-calls of one pipeline depend on each other acyclically. A pipeline whose calls
-weigh more than one workflow holds (`maxWeight`), such as one of hundreds of
-stage calls, is wired in runs of them, each a workflow of its own; a
-sub-pipeline whose call would take more than `maxTakes` channels is wired in
-its caller's workflow. PLAN declares the same outputs, and the entry workflow
-the same few statements of them, however many entry-fed roots a pipeline
-has, as PLAN writes all their forks as one record (§5). So no workflow grows with the pipeline
-(`TestEmitBoundsEveryWorkflow`, `TestEmitBoundsPlan`, `TestWidePipelineRuns`,
-`TestEntryRootsMatchMrp`). A process's trace
-name carries its workflow path (`W1_SC_MULTI_CORE:N5_X`); a `withName:`
-selector of its alias alone still names it.
+arguments. Only that bound shapes the workflows; the `.mro`'s pipeline
+nesting does not. `main.nf`'s entry workflow wires every node, in the
+dependency order of the call graph's nodes, beside PLAN and OUTS. When
+they weigh more than it holds (`maxWeight`), the nodes are cut, in that
+order, into runs, each filled until the next node would make it weigh more
+than `maxWeight` or take more than `maxTakes` channels, and each is a
+workflow `W<j>` of its own (`subworkflows/W<j>.nf`), which the entry
+workflow calls in turn (and, were the calls of the runs themselves too
+heavy for it, runs of those runs). A run takes the channels its nodes read
+from outside it, emits those read outside it, and emits `outs_pub`: one
+channel that mixes the outs bundles of its own nodes the pipeline outs
+read (`PUBLISHED`). The entry workflow's `outs_pub`, which mixes its own
+nodes' bundles with its runs' `outs_pub`, is OUTS's input, which `ordered`
+sorts by node and instance key, so where a bundle is mixed does not change
+it, and no workflow mixes more sources than it has calls. PLAN declares the
+same outputs, and the entry workflow the same few statements of them,
+however many entry-fed roots a pipeline has, as PLAN writes all their forks
+as one record (§5). So no workflow grows
+with the pipeline (`TestEmitBoundsEveryWorkflow`, `TestEmitBoundsPlan`,
+`TestWidePipelineRuns`, `TestEntryRootsMatchMrp`). A process's trace name
+is its alias, `N5_X`, in the entry workflow, and `W1:N5_X` in a run; a
+`withName:` selector of its alias alone names it in either. Nextflow's task
+hash includes that name, so `-resume` finds no cached task of a node that a
+re-transpiled project wires in another workflow than the run did.
 
 **`nextflow.config`** holds:
 
@@ -315,7 +318,14 @@ instance resolves the binding again from its one element (the
 preflight it is gated by is done: a pipeline's preflights gate every other call
 in it, and through a sub-pipeline call every call within, its preflights too
 (`preflight_order`). A disabled preflight instance counts as done, and a failing
-one ends the run before the calls it gates start (`preflight_fail`).
+one ends the run before the calls it gates start (`preflight_fail`). The wait
+is on PLAN's node records, which every instance's gate reads (`GATE`): `AFTER`
+holds them until a preflight is done, once per set of preflights some node
+waits for, each set after the one it extends, and a node gates on the records
+held for its own. Nextflow adds each edge of its DAG in time linear in the
+edges before it, so a wait per node, which cost CellRanger three edges per node
+and preflight, would make the launch quadratic in the nodes; this costs a few
+edges per preflight (`TestEmitWaitsOncePerPreflight`).
 
 **Gates.** A node's gates are decided on the driver: PLAN's record and each
 gating stage's posted `gates` (an `eval` output), joined on the roots they
@@ -817,7 +827,8 @@ completes, have goldens only. The validation tiers:
   `make gen-diff` runs a seed range for the long tier, which the weekly nightly
   tier starts from a random seed and ends after `GEN_BUDGET` minutes.
 - **Static lint** (`make lint-nf`) — every fixture's project under
-  `nextflow lint`, errors and warnings alike.
+  `nextflow lint`, errors and warnings alike, and a generated pipeline's
+  project large enough for `subworkflows/` modules, which no fixture's has.
 - **Overhead** (`make bench`, nightly `make test-scale`) — tasks, staged bytes
   and driver heap at two widths per shape; the plumbing task count must not
   change with the width, and the stage tasks must equal `mrp`'s job count.

@@ -1,8 +1,6 @@
 package cgnf
 
 import (
-	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,8 +17,6 @@ const (
 	maxTakes  = 200
 	portCost  = 3
 )
-
-var errCallCycle = errors.New("calls depend on each other")
 
 // lineWeight is a statement's weight: a call, a list, a map entry and an
 // argument each compile to a few instructions; a comment to none.
@@ -46,14 +42,14 @@ func linesWeight(lines []string) int {
 	return w
 }
 
-// scope is one workflow: a Martian pipeline's calls, or a run of them. It
-// takes the channels its nodes read and do not define, and emits those it
-// defines that a node outside it reads. Its published statement mixes the
-// outs bundles its units publish for OUTS into one channel, which it emits
-// too, so no workflow mixes more sources than it has units.
+// scope is one workflow: the entry workflow, or a run of nodes' wirings or
+// of runs. It takes the channels its nodes read and do not define, and
+// emits those it defines that a node outside it reads. Its published
+// statement mixes the outs bundles its units publish for OUTS into one
+// channel, which it emits too, so no workflow mixes more sources than it
+// has units.
 type scope struct {
-	name, fqid   string
-	part         bool
+	name         string
 	units        []*unit
 	nodes        []int
 	takes, emits []string
@@ -71,15 +67,6 @@ type unit struct {
 	sub  *scope
 }
 
-// label is the pipeline s wires, or wires part of.
-func (s *scope) label() string {
-	if s.part {
-		return "part of " + s.fqid
-	}
-
-	return s.fqid
-}
-
 // call is the statements that call s and name what it emits.
 func (s *scope) call() []string {
 	lines := make([]string, 0, 1+len(s.emits))
@@ -92,181 +79,47 @@ func (s *scope) call() []string {
 	return lines
 }
 
-// layout places the nodes' wirings in workflows: the channel each defines,
-// by its defining node, the nodes reading each, the order each is defined
-// in, and the source of the outs bundles each node the pipeline outs read
-// publishes.
+// layout places the nodes' wirings in workflows: the nodes reading each
+// channel, the order each is defined in, and the source of the outs bundles
+// each node the pipeline outs read publishes.
 type layout struct {
 	nodes []*wiring
-	owner map[string]int
 	users map[string][]int
 	order map[string]int
 	pubs  map[int]string
 	names int
 }
 
-// scopes lays the nodes' wirings out by the pipelines they are called
-// from: the root pipeline's in the entry workflow, beside its plan and
-// outs, and each sub-pipeline's in a workflow of its own, which calls its
-// units in dependency order, as the calls of a Martian pipeline depend on
-// each other acyclically.
-func (p *project) scopes(nodes []*wiring, plan, outs *wiring) (*scope, error) {
-	l := &layout{nodes: nodes, owner: map[string]int{}, users: map[string][]int{}, order: map[string]int{}, pubs: p.publications()}
+// scopes lays the nodes' wirings out in the entry workflow, beside its plan
+// and outs, in the order of the nodes, which is their dependency order;
+// while they weigh more than it holds, runs of them are workflows of their
+// own.
+func (p *project) scopes(nodes []*wiring, plan, outs *wiring) *scope {
+	l := &layout{nodes: nodes, users: map[string][]int{}, order: map[string]int{}, pubs: p.publications()}
 
 	for _, d := range plan.defs {
 		l.order[d] = len(l.order)
 	}
 
+	units := make([]*unit, len(nodes))
+
 	for i, w := range nodes {
 		for _, d := range w.defs {
-			l.owner[d], l.order[d] = i, len(l.order)
+			l.order[d] = len(l.order)
 		}
 
 		for _, u := range w.uses {
 			l.users[u] = append(l.users[u], i)
 		}
+
+		units[i] = &unit{node: i}
 	}
 
-	root := p.pipelineTree()
-	if err := l.place(root, maxWeight-linesWeight(plan.lines)-linesWeight(outs.lines)); err != nil {
-		return nil, err
-	}
-
+	root := &scope{units: l.bound(units, maxWeight-linesWeight(plan.lines)-linesWeight(outs.lines))}
 	l.name(root)
 	l.publish(root)
 
-	return root, nil
-}
-
-// pipelineTree is the scope of the root pipeline: its stage calls and a
-// scope per sub-pipeline it calls, each the same, in node order.
-func (p *project) pipelineTree() *scope {
-	root := &scope{fqid: p.g.Fqid()}
-	byFqid := map[string]*scope{}
-
-	for i, n := range p.topo.Nodes {
-		s := root
-		s.nodes = append(s.nodes, i)
-		parts := strings.Split(n.Fqid, ".")
-
-		for d := 2; d < len(parts); d++ {
-			fqid := strings.Join(parts[:d], ".")
-
-			sub, ok := byFqid[fqid]
-			if !ok {
-				sub = &scope{fqid: fqid}
-				byFqid[fqid] = sub
-				s.units = append(s.units, &unit{sub: sub})
-			}
-
-			s = sub
-			s.nodes = append(s.nodes, i)
-		}
-
-		s.units = append(s.units, &unit{node: i})
-	}
-
 	return root
-}
-
-// place lays s out, every scope below it first: a sub-pipeline whose call
-// would take more than maxTakes channels is wired in s, unit by unit;
-// then s's units are put in dependency order and, while they weigh more
-// than budget, grouped into runs.
-func (l *layout) place(s *scope, budget int) error {
-	var units []*unit
-
-	for _, u := range s.units {
-		if u.sub == nil {
-			units = append(units, u)
-
-			continue
-		}
-
-		if err := l.place(u.sub, maxWeight); err != nil {
-			return err
-		}
-
-		if len(u.sub.takes) > maxTakes {
-			units = append(units, u.sub.units...)
-		} else {
-			units = append(units, u)
-		}
-	}
-
-	s.units = units
-
-	ordered, err := l.ordered(s)
-	if err != nil {
-		return err
-	}
-
-	s.units = l.bound(s, ordered, budget)
-	s.takes, s.emits = l.ports(s.nodes)
-
-	return nil
-}
-
-// ordered is s's units in dependency order, each after every unit whose
-// channels it reads, and otherwise in node order.
-func (l *layout) ordered(s *scope) ([]*unit, error) {
-	at := map[int]int{}
-
-	for x, u := range s.units {
-		for _, i := range unitNodes(u) {
-			at[i] = x
-		}
-	}
-
-	deps := make([]map[int]bool, len(s.units))
-
-	for x, u := range s.units {
-		deps[x] = map[int]bool{}
-
-		for _, i := range unitNodes(u) {
-			for _, c := range l.nodes[i].uses {
-				if o, ok := l.owner[c]; ok {
-					if y, in := at[o]; in && y != x {
-						deps[x][y] = true
-					}
-				}
-			}
-		}
-	}
-
-	out := make([]*unit, 0, len(s.units))
-	done := map[int]bool{}
-
-	for len(out) < len(s.units) {
-		next := -1
-
-		for x := range s.units {
-			if !done[x] && subset(deps[x], done) {
-				next = x
-
-				break
-			}
-		}
-
-		if next < 0 {
-			return nil, fmt.Errorf("emit %s: %w", s.fqid, errCallCycle)
-		}
-
-		done[next] = true
-		out = append(out, s.units[next])
-	}
-
-	return out, nil
-}
-
-func subset(a, b map[int]bool) bool {
-	for x := range a {
-		if !b[x] {
-			return false
-		}
-	}
-
-	return true
 }
 
 func unitNodes(u *unit) []int {
@@ -352,13 +205,13 @@ func (l *layout) publish(s *scope) {
 // bound groups units, while they weigh more than budget, into runs, each
 // a workflow that weighs at most maxWeight and takes at most maxTakes
 // channels. Each round leaves fewer units, until no two fit one run.
-func (l *layout) bound(s *scope, units []*unit, budget int) []*unit {
+func (l *layout) bound(units []*unit, budget int) []*unit {
 	for {
 		if w, _ := l.measure(units); w <= budget {
 			return units
 		}
 
-		runs := l.runs(s, units)
+		runs := l.runs(units)
 		if len(runs) == len(units) {
 			return units
 		}
@@ -369,7 +222,7 @@ func (l *layout) bound(s *scope, units []*unit, budget int) []*unit {
 
 // runs groups units, in order, into runs: a unit joins the run before it
 // while the run fits one workflow.
-func (l *layout) runs(s *scope, units []*unit) []*unit {
+func (l *layout) runs(units []*unit) []*unit {
 	out := make([]*unit, 0, len(units))
 
 	for start := 0; start < len(units); {
@@ -381,7 +234,7 @@ func (l *layout) runs(s *scope, units []*unit) []*unit {
 		if end-start == 1 {
 			out = append(out, units[start])
 		} else {
-			out = append(out, &unit{sub: l.run(s, units[start:end])})
+			out = append(out, &unit{sub: l.run(units[start:end])})
 		}
 
 		start = end
@@ -403,14 +256,12 @@ func runNodes(units []*unit) []int {
 		nodes = append(nodes, unitNodes(u)...)
 	}
 
-	slices.Sort(nodes)
-
 	return nodes
 }
 
-// run is the scope of a run of s's units.
-func (l *layout) run(s *scope, units []*unit) *scope {
-	r := &scope{fqid: s.fqid, part: true, units: slices.Clone(units), nodes: runNodes(units)}
+// run is the scope of a run of units.
+func (l *layout) run(units []*unit) *scope {
+	r := &scope{units: slices.Clone(units), nodes: runNodes(units)}
 	r.takes, r.emits = l.ports(r.nodes)
 
 	return r
@@ -457,15 +308,14 @@ func (l *layout) ports(nodes []int) ([]string, []string) {
 	return takes, emits
 }
 
-// name names every scope below s, in the order main.nf calls them: W<j>
-// and its pipeline's call, as a node's alias names its stage call.
+// name names every scope below s W<j>, in the order main.nf calls them.
 func (l *layout) name(s *scope) {
 	for _, u := range s.units {
 		if u.sub == nil {
 			continue
 		}
 
-		u.sub.name = "W" + strconv.Itoa(l.names) + "_" + u.sub.fqid[strings.LastIndex(u.sub.fqid, ".")+1:]
+		u.sub.name = "W" + strconv.Itoa(l.names)
 		l.names++
 
 		l.name(u.sub)

@@ -16,8 +16,8 @@ const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GAT
 // subworkflowDir holds a module per sub-workflow main.nf calls.
 const subworkflowDir = "subworkflows"
 
-// workflows renders main.nf, which runs PLAN, the root pipeline's calls and
-// OUTS, and a module per sub-workflow below subworkflowDir.
+// workflows renders main.nf, which runs PLAN, the nodes and OUTS, and a
+// module per sub-workflow below subworkflowDir.
 func (p *project) workflows() (map[string]string, error) {
 	nodes := make([]*wiring, len(p.topo.Nodes))
 
@@ -33,11 +33,7 @@ func (p *project) workflows() (map[string]string, error) {
 	outs := p.outs()
 	plan := p.planWiring(append(slices.Clone(nodes), outs))
 
-	root, err := p.scopes(nodes, plan, outs)
-	if err != nil {
-		return nil, err
-	}
-
+	root := p.scopes(nodes, plan, outs)
 	files := map[string]string{}
 	addModules(files, root, nodes)
 
@@ -71,7 +67,7 @@ func addModules(files map[string]string, s *scope, nodes []*wiring) {
 
 		b.WriteString("include { " + wiringWorkflows + " } from '../stage.nf'\n")
 		writeIncludes(&b, u.sub, nodes, "../stage.nf", "./")
-		fmt.Fprintf(&b, "\n// %s\nworkflow %s {\n", u.sub.label(), u.sub.name)
+		fmt.Fprintf(&b, "\nworkflow %s {\n", u.sub.name)
 
 		if len(u.sub.takes) > 0 {
 			b.WriteString("    take:\n")
@@ -168,7 +164,8 @@ func ilist(xs []int) string {
 // planWiring parses PLAN's records the wirings read: shared is the meta
 // every task shares, with the run's call; nodes maps each witness node to
 // its digest, its off flag, its statically disabled fork keys, the cpus and
-// memory its first task is scheduled with and its own overrides; entry
+// memory its first task is scheduled with and its own overrides, paired
+// with shared, which a node then reads from no channel of its own; entry
 // maps each node and fork of its entry-fed roots to the entry files staged
 // there, and each of those to its file(), which globs no name; entry_forks
 // maps each entry-fed root to its forks, so the wiring is the same few
@@ -190,7 +187,7 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 	w.linef("%s = PLAN.out.call.map { c -> %s }", w.def("shared"), p.graphMeta("call: c"))
 
 	for _, d := range []struct{ name, expr string }{
-		{"nodes", "NODES(PLAN.out.nodes)"},
+		{"nodes", "NODES(PLAN.out.nodes, shared)"},
 		{"entry", "ENTRY(PLAN.out.files, PLAN.out.leaves)"},
 		{entryForks, "ENTRY_FORKS(PLAN.out.roots)"},
 	} {
@@ -229,12 +226,6 @@ func (p *project) nodeMeta(n cg.TopoNode) (string, error) {
 	}
 
 	return "[node: " + gstr(n.Fqid) + ", special: " + gstr(special) + "]", nil
-}
-
-// awaited reports whether a node waits for preflight fqid, which then
-// signals, as d<i>, once every instance of it is done.
-func (p *project) awaited(fqid string) bool {
-	return slices.ContainsFunc(p.topo.Nodes, func(n cg.TopoNode) bool { return slices.Contains(n.Preflights, fqid) })
 }
 
 // consumed reports which of node fqid's outputs a later node or the
