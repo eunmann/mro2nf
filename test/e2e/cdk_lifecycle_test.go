@@ -44,6 +44,35 @@ var (
 	profileMountRoot = regexp.MustCompile(`\n        params\.mro2nf_s3_mount = '([^']*)'\n        aws\.batch\.volumes = "\$\{params\.mro2nf_s3_mount\}:\$\{params\.mro2nf_s3_mount\}:ro"\n`)
 )
 
+// TestCDKInstallsPinnedMountpoint: every instance of a deployment installs the
+// same Mountpoint release, and only after its rpm matches the pinned checksum.
+func TestCDKInstallsPinnedMountpoint(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join(root, "deploy", "awsbatch-cdk", "lib", "stack.ts"))
+	if err != nil {
+		t.Fatalf("read stack: %v", err)
+	}
+
+	stack := string(src)
+
+	if strings.Contains(stack, "/latest/") {
+		t.Error("the stack's user data downloads an unpinned latest/ Mountpoint release")
+	}
+
+	pinned := strings.Index(stack, "mountpoint-s3-release/${MOUNTPOINT_VERSION}/")
+	checked := strings.Index(stack, "| sha256sum -c -")
+	installed := strings.Index(stack, "dnf install -y /tmp/mount-s3.rpm")
+
+	if pinned < 0 || checked < 0 || installed < 0 {
+		t.Fatalf("the stack's user data lacks the pinned download (%d), its checksum check (%d) or its install (%d)",
+			pinned, checked, installed)
+	}
+
+	if checked < pinned || installed < checked {
+		t.Errorf("the stack's user data must download, then check, then install Mountpoint; got offsets %d, %d, %d",
+			pinned, checked, installed)
+	}
+}
+
 // TestCDKMountsWhereTheProfileReads: the example stack's instances mount the
 // input buckets read-only, readable by every container user, under the root
 // the generated awsbatch profile hands its stages and bind-mounts into every
