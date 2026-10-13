@@ -98,8 +98,8 @@ func TestEmitHealthOmicsRoundsMemoryUp(t *testing.T) {
 // input buckets, by default at the /mnt/s3 the example stack's instances
 // mount them under, into every container, read-only, at the root the param
 // names, and names that root to PLAN and every stage task, which take it
-// only when the param is set; elsewhere it is null and s3:// inputs are
-// staged.
+// only when the param is set, PLAN then uncached; elsewhere it is null and
+// s3:// inputs are staged.
 func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
 	cfg := tree["nextflow.config"]
@@ -135,8 +135,10 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 		t.Errorf("stage.nf lacks %q", want)
 	}
 
-	if want := "${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}"; !strings.Contains(tree["main.nf"], want) {
-		t.Errorf("PLAN lacks %q:\n%s", want, tree["main.nf"])
+	for _, want := range []string{"process PLAN {\n    cache !params.mro2nf_s3_mount\n", "${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}"} {
+		if !strings.Contains(tree["main.nf"], want) {
+			t.Errorf("PLAN lacks %q:\n%s", want, tree["main.nf"])
+		}
 	}
 }
 

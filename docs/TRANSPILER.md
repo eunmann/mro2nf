@@ -272,7 +272,9 @@ roots. Each line of the two leads with its root, and a node's wiring takes
 its root's own lines from them (`ENTRY_ROOT`, a lookup by root).
 
 **Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
-copy, the overrides file and its meta. A task's `-resume` key holds its own
+copy, the overrides file and its meta. Under an S3 mount it does not cache,
+as which s3:// inputs it reads in place depends on the buckets its instance
+mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
 node's digest and resources (in `meta`), the run's call, the mro2nf build,
 and its fork records and staged dirs. No task stages a file of PLAN's: the call and the digests reach it as
 values, which Nextflow keys on by content, so a re-transpile whose `.mro` edit

@@ -280,7 +280,9 @@ under `/mnt/s3` given directly is read the same way.
   `--mro2nf_s3_mount` names another root, which the profile then bind-mounts
   instead.
 - Every instance of the compute environment must mount the same buckets: the
-  first task's instance decides for every task.
+  first task's instance decides for every task. A `-resume` re-runs that
+  first task, so a run after the mounts change reads the inputs as they now
+  are, and keeps the other tasks cached while its decisions stand.
 - On a key no object under a mounted bucket has, the run fails at its start,
   naming the input.
 - The mount is read-only: a stage that writes into an input's directory
