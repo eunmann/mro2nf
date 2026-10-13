@@ -254,7 +254,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 
 	for _, c := range []struct{ fixture, main, want string }{
 		{"split_test", split, "j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)\n    N0_SUM_SQUARES_JN(j0)"},
-		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']), [])"},
+		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']), [], null)"},
 		{"split_test", split, "    outs_pub = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum']))\n    outs_in = outs_pub.toList().map { xs -> ordered(xs) }"},
 	} {
 		if !strings.Contains(c.main, c.want) {
@@ -804,8 +804,8 @@ func TestEmitForkedGatherWaitsForItsUpstream(t *testing.T) {
 	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
 
 	for _, want := range []string{
-		"u1 = READ(b1.run, GATHER(b1.run, o0_outs, [0], [0], ['y']), [0])",
-		"u4 = READ(u4, GATHER(b4.run, o3_outs, [0], [0], ['y']), [0])",
+		"u1 = READ(b1.run, GATHER(b1.run, o0_outs, [0], [0], ['y']), [0], null)",
+		"u4 = READ(u4, GATHER(b4.run, o3_outs, [0], [0], ['y']), [0], null)",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
@@ -816,6 +816,35 @@ func TestEmitForkedGatherWaitsForItsUpstream(t *testing.T) {
 		if strings.Contains(main, unwanted) {
 			t.Errorf("map_nested_gather's main.nf sizes a gather (%q):\n%s", unwanted, main)
 		}
+	}
+}
+
+// TestEmitReadsOutsAsTheyCome (#559): a node's outs are keyed by its whole
+// key, which a reader sharing every root of it has at its own positions,
+// so the reader combines the node's outs channel as it comes and picks
+// the outputs it reads in the same step; keying or selecting them per
+// read cost CellRanger 1,263 edges of Nextflow's DAG (map_nested_gather:
+// node 4 reads node 2's xs at its fork of their map root, and gathers
+// node 3's y).
+func TestEmitReadsOutsAsTheyCome(t *testing.T) {
+	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
+
+	if want := "u4 = READ(b4.run, o2_outs, [0], ['xs'])"; !strings.Contains(main, want) {
+		t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
+	}
+
+	mains := map[string]string{}
+	for _, w := range parseWorkflows("stage.nf", stageModule) {
+		mains[w.name] = strings.Join(w.main, "\n")
+	}
+
+	want := ".combine(ups, by: 0).map { _c, k, fs, es, d, us, ds -> [k, fs, es, d, us + selected(ds, fields)] }"
+	if !strings.Contains(mains["READ"], want) {
+		t.Errorf("stage.nf's READ lacks %q:\n%s", want, mains["READ"])
+	}
+
+	if _, ok := mains["SELECT"]; ok {
+		t.Errorf("stage.nf keeps SELECT, a step per read:\n%s", mains["SELECT"])
 	}
 }
 

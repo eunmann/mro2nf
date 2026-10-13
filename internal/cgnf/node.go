@@ -290,13 +290,14 @@ func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta string) {
 	w.linef("b%d = ENABLED(%s)", i, gated)
 }
 
-// read is the channel of the outs items each enabled instance of node i
-// reads of node r.Node, keyed by the roots they share, with those roots'
-// positions in node i's key: from the instance agreeing on every root they
-// share, or, when the upstream is forked on roots node i is not, every
-// such instance, a gather ordered by the upstream's key, not by completion,
-// which waits for all of the upstream, as mrp waits for every fork of a
-// node a node reads.
+// read is what READ takes for each enabled instance of node i to read of
+// node r.Node: a channel keyed by the roots they share, those roots'
+// positions in node i's key, and the outputs it reads of the channel's
+// items. The channel is the upstream's outs, keyed by its whole key, when
+// node i shares every root of it, or, when the upstream is forked on roots
+// node i is not, a gather of the outputs it reads of every such instance,
+// ordered by the upstream's key, not by completion, which waits for all of
+// the upstream, as mrp waits for every fork of a node a node reads.
 func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
 	u := p.index[r.Node]
 
@@ -318,13 +319,11 @@ func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
 	}
 
 	outs := w.use(outsOf(u))
-
-	src := fmt.Sprintf("SELECT(%s, %s, %s)", outs, ilist(theirs), fields)
 	if gather {
-		src = fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s)", i, outs, ilist(mine), ilist(theirs), fields)
+		return fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s), %s, null", i, outs, ilist(mine), ilist(theirs), fields, ilist(mine))
 	}
 
-	return src + ", " + ilist(mine)
+	return fmt.Sprintf("%s, %s, %s", outs, ilist(mine), fields)
 }
 
 // splitTriad runs split node i's instances, in: its split, a main per

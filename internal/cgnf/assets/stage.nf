@@ -645,36 +645,27 @@ workflow ENABLED {
     skip = b.skip
 }
 
-// SELECT keys each instance's outs items by its ordinals, at positions
-// theirs, of the roots a reader shares, with the outputs it reads, fields,
-// or all of them where fields is null.
-workflow SELECT {
-    take:
-    outs
-    theirs
-    fields
-
-    main:
-    out = outs.map { ku, ds -> [ku[theirs], selected(ds, fields)] }
-
-    emit:
-    out
-}
-
+// selected is the items of ds of the outputs a reader reads, fields, or
+// all of them where fields is null.
 def selected(List ds, List fields) {
     return fields == null ? ds : ds.findAll { e -> itemName(e) in fields }
 }
 
-// READ adds to each instance the outs it reads of one node, keyed as ups
-// keys them, at its own positions mine of the roots they share.
+// READ adds to each instance the outs items it reads, fields, of one node,
+// keyed as ups keys them, at its own positions mine of the roots they
+// share. A node's outs are keyed by its whole key, which a reader sharing
+// every root of it has at mine, so the reader combines them as they come;
+// keying or selecting them per reader would cost Nextflow's DAG edges per
+// read.
 workflow READ {
     take:
     inst
     ups
     mine
+    fields
 
     main:
-    out = inst.map { k, fs, es, d, us -> [k[mine], k, fs, es, d, us] }.combine(ups, by: 0).map { _c, k, fs, es, d, us, ds -> [k, fs, es, d, us + ds] }
+    out = inst.map { k, fs, es, d, us -> [k[mine], k, fs, es, d, us] }.combine(ups, by: 0).map { _c, k, fs, es, d, us, ds -> [k, fs, es, d, us + selected(ds, fields)] }
 
     emit:
     out

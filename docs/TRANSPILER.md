@@ -362,7 +362,11 @@ every consumer.
 
 **Reads.** An enabled instance gets, of each node it reads, only the outputs
 it reads: from the instance that shares its roots, or, a gather, from every
-such instance under it. An output of a type that holds no file leaf, whose
+such instance under it. A node's outs are keyed by its whole key, which an
+instance sharing every root of it holds, so `READ` combines the node's outs
+channel as it comes and picks the outputs read in the same step: a step
+keying or selecting them per read cost CellRanger 1,263 edges of
+Nextflow's DAG, whose launch is quadratic in its edges (**Preflights**). An output of a type that holds no file leaf, whose
 JSON is at most 4 KiB (`cg.MaxValueBytes`), reaches it as a value: a record
 its producer posted (`-field-values`), an `eval` output, that the driver
 carries in its channels and the task writes into a file for `mre stage
