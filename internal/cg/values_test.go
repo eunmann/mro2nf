@@ -123,7 +123,7 @@ func (f *fixture) bundled(raw json.RawMessage, param *syntax.StructMember) strin
 	}
 
 	dir := f.next("bundle")
-	if err := shim.WriteBundle(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, f.g.Table(), shim.Opts{}); err != nil {
+	if _, err := shim.WriteItem(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, f.g.Table(), shim.Opts{}, shim.Staged{}); err != nil {
 		f.t.Fatal(err)
 	}
 

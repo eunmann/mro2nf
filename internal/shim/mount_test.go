@@ -49,12 +49,10 @@ func TestMountedLeafStaysItsPath(t *testing.T) {
 	}
 
 	writers := map[string]func(t *testing.T, dir string) map[string]any{
-		"WriteBundle": func(t *testing.T, b string) map[string]any {
+		"WriteItem": func(t *testing.T, b string) map[string]any {
 			t.Helper()
 
-			if err := shim.WriteBundle(b, payload, params, fileTable(t), shim.Opts{Confine: conf, Roots: roots}); err != nil {
-				t.Fatal(err)
-			}
+			writeBundle(t, b, payload, params, shim.Opts{Confine: conf, Roots: roots})
 
 			wantStored(t, b, payload)
 
@@ -158,7 +156,7 @@ func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 		}
 
 		bundle := filepath.Join(t.TempDir(), "outs")
-		err = shim.WriteBundle(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Roots: rs})
+		_, err = shim.WriteItem(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Roots: rs}, shim.Staged{})
 
 		if !rs.Holds(file) {
 			if err == nil {

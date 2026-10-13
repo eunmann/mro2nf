@@ -44,9 +44,9 @@ var ErrBadMarker = errors.New("malformed bundle marker")
 // live under the files subdir, named collision-free.
 //
 // Every payload string beginning with reservedPrefix is mre's own: a marker
-// MarkFiles wrote at a file leaf the type walk found, a reference WriteItem
-// wrote there instead (refPrefix), or an escaped value.
-// MarkFiles escapes any other string that begins with the prefix, whatever its
+// WriteItem wrote at a file leaf the type walk found, a reference it wrote
+// there instead (refPrefix), or an escaped value.
+// WriteItem escapes any other string that begins with the prefix, whatever its
 // type, so a user's string can never be read back as a marker; ReadBundle
 // unescapes it, and the stage receives the string mrp would give it.
 const (
@@ -59,7 +59,7 @@ const (
 	// out). Both markers resolve to a path identically; the distinction records
 	// the leaf's ground-truth dir-ness — measured by stat at staging time — so a
 	// downstream consumer (publish's manifest) need not infer it from the declared
-	// output type. See MarkFiles and cmd/mre/publish.go emitFile.
+	// output type. See leafMarker.mark.
 	DirMarker = reservedPrefix + "dir:"
 	// escapePrefix prefixes a payload value that is not a marker but itself
 	// begins with reservedPrefix; the remainder is the original string.
@@ -73,7 +73,7 @@ const (
 // ordinalName is the name of a leaf's ordinal dir under the files subdir.
 const ordinalName = `L[0-9]{4,}`
 
-// markerRel is the only bundle-relative shape MarkFiles writes: the leaf's own
+// markerRel is the only bundle-relative shape WriteItem writes: the leaf's own
 // basename in an ordinal dir directly under the files subdir.
 var markerRel = regexp.MustCompile(`^` + bundleFiles + `/` + ordinalName + `/([^/\x00]+)$`)
 
@@ -92,7 +92,7 @@ var (
 	// errReservedLeaf reports a file leaf named like the origin file it would
 	// share its ordinal dir with.
 	errReservedLeaf = errors.New("file leaf name is reserved")
-	// errBadOrigin reports an origin file that holds no origin MarkFiles writes.
+	// errBadOrigin reports an origin file that holds no origin a writer records.
 	errBadOrigin = errors.New("malformed leaf origin")
 )
 
@@ -116,7 +116,7 @@ func Marker(rel string, isDir bool) string {
 // CutMarker splits a transport marker into (rel, isDir, ok): its bundle-relative
 // path and whether the leaf is a directory. ok is false for a string that is not
 // a well-formed marker (a plain scalar, an escaped value, a raw path for a
-// declared output never written, or a marker whose rel MarkFiles never writes).
+// declared output never written, or a marker whose rel WriteItem never writes).
 func CutMarker(s string) (string, bool, bool) {
 	rel, isDir := strings.CutPrefix(s, DirMarker)
 	if !isDir {
@@ -153,7 +153,7 @@ func CheckReserved(s string) error {
 }
 
 // escapeValue returns a copy of v with every string that begins with the
-// reserved prefix escaped, so no value MarkFiles did not itself mark reads back
+// reserved prefix escaped, so no value WriteItem did not itself mark reads back
 // as a marker.
 func escapeValue(v any) (any, error) {
 	return mapStrings(v, func(s string) (string, error) {
@@ -228,17 +228,12 @@ func IsBundle(dir string) bool {
 }
 
 // ReadBundle loads a bundle directory's payload and rewrites every file marker
-// to an absolute path under the (staged) bundle, so callers see real paths, and
-// restores every escaped value. An empty dir yields nil (an absent optional
-// input). The rewrite needs no types: MarkFiles escapes every reserved string it
-// did not mark, so a marker here is a file leaf the writer's type walk found.
-// A bundle that names a leaf by reference reads through Refs.ReadBundle.
-func ReadBundle(dir string) (json.RawMessage, error) {
-	return Refs{}.ReadBundle(dir)
-}
-
-// ReadBundle is the package's ReadBundle, each leaf the bundle names by
-// reference (WriteItem) resolved to where the task staged it among r.
+// to an absolute path under the (staged) bundle, so callers see real paths,
+// every leaf the bundle names by reference to where the task staged it among
+// r, and restores every escaped value. An empty dir yields nil (an absent
+// optional input). The rewrite needs no types: WriteItem escapes every
+// reserved string it did not mark, so a marker here is a file leaf the
+// writer's type walk found.
 func (r Refs) ReadBundle(dir string) (json.RawMessage, error) {
 	if dir == "" {
 		return nil, nil
@@ -326,18 +321,6 @@ type Opts struct {
 	Roots   Roots
 }
 
-// WriteBundle writes payload into dir as a bundle: every file leaf located by
-// params/tbl is copied into dir/f/ and replaced with a marker, then the
-// rewritten payload is written to dir/data.json.
-func WriteBundle(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts Opts) error {
-	marked, err := MarkFiles(dir, payload, params, tbl, opts)
-	if err != nil {
-		return err
-	}
-
-	return writePayload(dir, marked)
-}
-
 // LinkLeaves links each file leaf of payload below dir, the files dir of
 // values that only their own task reads, such as a stage task's args, and
 // returns payload naming each leaf at its link, as ReadBundle would return
@@ -345,7 +328,7 @@ func WriteBundle(dir string, payload map[string]any, params []*syntax.StructMemb
 // the task staged, not a copy of it: a leaf of a staged bundle by its
 // ordinal dir, so its recorded origin comes with it. A leaf under roots
 // stays the path it is. A bundle another task stages must carry its files:
-// WriteBundle.
+// WriteItem.
 func LinkLeaves(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, roots Roots) (json.RawMessage, error) {
 	marked, err := markFiles(leafMarker{dir: dir, roots: roots, link: true, marks: map[string]string{}}, payload, params, tbl)
 	if err != nil {
@@ -377,15 +360,11 @@ func writeRaw(path string, data []byte) error {
 	return nil
 }
 
-// MarkFiles copies every file leaf in payload (located via params/tbl) into
-// dir/f/, replacing each with a bundle-relative marker, and returns the
-// rewritten payload. Names are sequenced so distinct files never collide, and
-// leaves of one origin share one copy. Every other string that begins with
-// the reserved prefix is escaped, a file leaf naming no file included.
-func MarkFiles(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts Opts) (map[string]any, error) {
-	return markFiles(leafMarker{dir: dir, conf: opts.Confine, roots: opts.Roots, marks: map[string]string{}}, payload, params, tbl)
-}
-
+// markFiles returns payload with every file leaf (located via params/tbl)
+// replaced by the marker m gives it. Ordinal dirs are sequenced so distinct
+// files never collide, and leaves of one origin share one marker. Every
+// other string that begins with the reserved prefix is escaped, a file leaf
+// naming no file included.
 func markFiles(m leafMarker, payload map[string]any, params []*syntax.StructMember, tbl *types.Table) (map[string]any, error) {
 	escaped := make(map[string]any, len(payload))
 	for k, v := range payload {
@@ -754,7 +733,7 @@ func (p copyPolicy) admit(src string) (copyPolicy, error) {
 // not follow them — hard-linking the symlink would leave a dangling link once
 // the bundle is staged into another isolated task (AWS Batch + S3 /
 // HealthOmics), where the original target is absent. A dangling symlink inside
-// a copied directory is treated as absent — the same way MarkFiles' top-level
+// a copied directory is treated as absent — the same way leafMarker.mark's top-level
 // guard does (os.Stat -> IsNotExist -> keep the path) — rather than aborting
 // the whole bundle.
 func resolveSymlink(src string) (string, error) {

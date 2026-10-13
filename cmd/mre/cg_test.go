@@ -63,7 +63,7 @@ func runCG(t *testing.T, args ...string) string {
 func compactBundle(t *testing.T, dir string) string {
 	t.Helper()
 
-	raw, err := shim.ReadBundle(dir)
+	raw, err := shim.Refs{}.ReadBundle(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

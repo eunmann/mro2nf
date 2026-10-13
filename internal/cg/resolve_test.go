@@ -119,7 +119,9 @@ func writeOuts(dir string, v json.Marshaler, g *Graph, callable string) error {
 		return err
 	}
 
-	return shim.WriteBundle(dir, payload, params, g.Table(), shim.Opts{})
+	_, err = shim.WriteItem(dir, payload, params, g.Table(), shim.Opts{}, shim.Staged{})
+
+	return err
 }
 
 // args runs WriteArgs for node over the items, dirs it stages and value
@@ -199,7 +201,7 @@ func postedSpec(tb testing.TB, g *Graph, outs, forks string) PostSpec {
 		tb.Fatal(err)
 	}
 
-	raw, err := shim.ReadBundle(outs)
+	raw, err := shim.Refs{}.ReadBundle(outs)
 	if err != nil {
 		tb.Fatal(err)
 	}

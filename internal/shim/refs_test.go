@@ -148,7 +148,7 @@ func wantReadByReference(t *testing.T, r refTask) {
 		t.Errorf("own reads %q (%v), want the task's own file", b, err)
 	}
 
-	if _, err := shim.ReadBundle(filepath.Join("outs", "x")); err == nil || !strings.Contains(err.Error(), "not staged") {
+	if _, err := (shim.Refs{}).ReadBundle(filepath.Join("outs", "x")); err == nil || !strings.Contains(err.Error(), "not staged") {
 		t.Errorf("a read with nothing staged by reference: %v, want it refused", err)
 	}
 }
@@ -213,7 +213,7 @@ func TestReferenceResolvesToALeafOfAStagedItem(t *testing.T) {
 }
 
 // TestWriteItemCopiesWithNothingStaged: with no staged dir, WriteItem
-// copies every leaf, as WriteBundle does, and returns no reference.
+// copies every leaf, a staged bundle's leaf too, and returns no reference.
 func TestWriteItemCopiesWithNothingStaged(t *testing.T) {
 	r := newRefTask(t, t.TempDir(), os.Symlink)
 

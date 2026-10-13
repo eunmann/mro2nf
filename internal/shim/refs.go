@@ -175,12 +175,14 @@ func readLink(p string) (string, bool, error) {
 	return target, true, nil
 }
 
-// WriteItem writes payload into dir as a bundle, as WriteBundle does, but
-// names each file leaf that is a whole leaf of a bundle the task staged
-// (staged) by reference rather than copying it: a marker of the leaf's
-// origin, which a reader resolves among the leaves it staged
-// (Staged.Leaves), where its readers stage it from the item it lies in. It
-// returns those references, one per origin.
+// WriteItem writes payload into dir as a bundle another task stages: every
+// file leaf located by params/tbl is copied into its ordinal dir below
+// dir/f/ beside its origin record and replaced with a marker, then the
+// rewritten payload is written to dir/data.json. A leaf that is a whole leaf
+// of a bundle the task staged (staged) it names by reference rather than
+// copying it: a marker of the leaf's origin, which a reader resolves among
+// the leaves it staged (Staged.Leaves), where its readers stage it from the
+// item it lies in. It returns those references, one per origin.
 func WriteItem(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts Opts, staged Staged) ([]Ref, error) {
 	refs := []Ref{}
 

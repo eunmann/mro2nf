@@ -83,9 +83,7 @@ func TestRootsExceptTheTaskDir(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "outs")
 	payload := map[string]any{"out": own, "ref": input}
 
-	if err := shim.WriteBundle(bundle, payload, fields(t, "out file", "ref file"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}); err != nil {
-		t.Fatal(err)
-	}
+	writeBundle(t, bundle, payload, fields(t, "out file", "ref file"), shim.Opts{Confine: conf, Roots: roots})
 
 	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
 	if err != nil {
@@ -149,7 +147,7 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 	}
 
 	bundle := filepath.Join(t.TempDir(), "outs")
-	if err := shim.WriteBundle(bundle, map[string]any{"ref": out}, fields(t, "ref path"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}); err != nil {
+	if _, err := shim.WriteItem(bundle, map[string]any{"ref": out}, fields(t, "ref path"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}, shim.Staged{}); err != nil {
 		t.Fatalf("a stage output linking to an input read in place: %v", err)
 	}
 }

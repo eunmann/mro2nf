@@ -646,7 +646,7 @@ chunk's args, a chunk's outs, a fork element. On disk it is a directory:
   fork.json            ← the fork record (fork element dirs)
 ```
 
-The basename is the one the leaf's path had where `MarkFiles` found it: the file
+The basename is the one the leaf's path had where `WriteItem` found it: the file
 a stage wrote (Martian's `<out>.<ext>` default, or any path the stage chose), a
 split's chunk-def file, or the upstream leaf a binding forwarded unchanged. That
 is the path `mrp` passes on, so a stage that reads a sample name or an extension
@@ -664,7 +664,7 @@ Both prefixes resolve identically on read-back. The rules:
 
 - **On write** (a stage produced an output that is a real file): the file is
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
-  This is `shim.MarkFiles`, which walks the compiled types to find exactly
+  This is `shim.WriteItem`, which walks the compiled types to find exactly
   which leaves are files (recursing into structs, arrays and typed maps).
 - **Linked args** (on write): a task's args are read only by its own job,
   so `mre stage` links each of their file leaves below `-args`
@@ -716,13 +716,13 @@ Both prefixes resolve identically on read-back. The rules:
 - **Escaping** (on write): every other string that begins with the reserved
   `@mre:` prefix (a string input, a `.mro` literal, a stage's string output, a
   file-typed out naming no file) is stored as `@mre:str:<original>`. A marker in
-  `data.json` is therefore always one `MarkFiles` wrote at a file leaf the type
+  `data.json` is therefore always one `WriteItem` wrote at a file leaf the type
   walk found, never a user's string.
 - **On read** (a stage is about to consume a bundle): markers are *absolutized*
   back to real paths inside the staged bundle, so the stage opens a real local
   file, and escaped strings get their original value back, so the stage sees
   exactly the string `mrp` would pass it. A marker is accepted only in the shape
-  `MarkFiles` writes (`f/L<nnnn>/<basename>`: exactly one name under the
+  `WriteItem` writes (`f/L<nnnn>/<basename>`: exactly one name under the
   ordinal dir, not `.` or `..`, bundle-local), and a reference only naming an
   absolute origin; any other `@mre:` string fails
   the read. `mre outs` reads the pipeline outs this way, so the published outs
