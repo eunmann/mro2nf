@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -279,7 +280,9 @@ func renderOverrideParams(t *testing.T, fixtureDir, proj string) {
 // CLI run matches the -params-file run and the mrp golden (the override values
 // as invocation literals) only if mre plan typed `--b false` as the boolean
 // false rather than the truthy string "false". A value that is not a literal of
-// its declared type must fail the run, naming the input.
+// its declared type must fail the run at PLAN, before any stage runs, naming
+// the input and its type: mre plan is the launch params' validator, as
+// nextflow_schema.json validates nothing at launch.
 func TestCLITypedOverrides(t *testing.T) {
 	t.Parallel()
 
@@ -313,25 +316,37 @@ func TestCLITypedOverrides(t *testing.T) {
 		})
 	}
 
-	t.Run("invalid_bool", func(t *testing.T) {
-		t.Parallel()
+	for _, bad := range []struct{ param, typ, value string }{
+		{"n", "int", "x"},
+		{"f", "float", "2.5x"},
+		{"b", "bool", "True"},
+	} {
+		t.Run("invalid_"+bad.typ, func(t *testing.T) {
+			t.Parallel()
 
-		proj := transpile(t, fixture)
+			proj := transpile(t, fixture)
 
-		err := runNextflowAllowingFailedAttempts(t, proj, "--b", "True")
-		if err == nil {
-			t.Fatal("--b True must fail the run, not reach the stage as a string")
-		}
+			err := runNextflowAllowingFailedAttempts(t, proj, "--"+bad.param, bad.value, "-with-trace", "trace.txt")
+			if err == nil {
+				t.Fatalf("--%s %s must fail the run, not reach the stage as a string", bad.param, bad.value)
+			}
 
-		runLog, readErr := os.ReadFile(filepath.Join(proj, "run.log"))
-		if readErr != nil {
-			t.Fatalf("read run.log: %v", readErr)
-		}
+			runLog, readErr := os.ReadFile(filepath.Join(proj, "run.log"))
+			if readErr != nil {
+				t.Fatalf("read run.log: %v", readErr)
+			}
 
-		if want := `entry input "b" declared bool, got "True"`; !strings.Contains(string(runLog), want) {
-			t.Errorf("run log does not report %q:\n%s", want, runLog)
-		}
-	})
+			if want := fmt.Sprintf("entry input %q declared %s, got %q", bad.param, bad.typ, bad.value); !strings.Contains(string(runLog), want) {
+				t.Errorf("run log does not report %q:\n%s", want, runLog)
+			}
+
+			for _, r := range readTrace(t, filepath.Join(proj, "trace.txt")) {
+				if r.Name != "PLAN" {
+					t.Errorf("task %s ran after PLAN refused --%s %s", r.Name, bad.param, bad.value)
+				}
+			}
+		})
+	}
 }
 
 // TestEntryFileAdversarialName checks a launch-time entry file override whose
