@@ -217,10 +217,6 @@ func (el Element) encode() elementJSON {
 	return elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position}
 }
 
-func writeElement(dir string, el Element) error {
-	return writeRecord(filepath.Join(dir, elementFile), el.encode())
-}
-
 func readRecord(path string, v any) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {

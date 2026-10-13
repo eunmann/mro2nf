@@ -296,7 +296,7 @@ func TestForkRecordRoundTrip(t *testing.T) {
 		dir := f.next("fork")
 
 		want := Element{Fork: Fork{f.part("MFU.DBL", MapKey(key))}, Lens: []int{4}, Position: 3}
-		if err := writeElement(dir, want); err != nil {
+		if err := writeRecord(filepath.Join(dir, elementFile), want.encode()); err != nil {
 			t.Fatal(err)
 		}
 
