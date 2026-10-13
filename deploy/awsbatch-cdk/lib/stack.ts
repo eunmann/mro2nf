@@ -7,6 +7,45 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as batch from 'aws-cdk-lib/aws-batch';
 
 /**
+ * Where every Batch instance mounts the input buckets read-only, one dir per
+ * bucket: the generated awsbatch profile's params.mro2nf_s3_mount, which
+ * hands a stage an s3://<bucket>/<key> input as <root>/<bucket>/<key>.
+ */
+export const S3_MOUNT_ROOT = '/mnt/s3';
+
+export interface Mro2nfStackProps extends cdk.StackProps {
+  /**
+   * Input buckets every Batch instance mounts besides the work bucket, which
+   * it always mounts: an s3:// entry input of a bucket not mounted fails the
+   * run at its start.
+   */
+  readonly mountBuckets?: string[];
+  /** The local read cache each mounted bucket may fill on an instance, in MiB. */
+  readonly mountCacheMiB?: number;
+}
+
+// An S3 bucket name, which the user data names unquoted.
+const BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+
+/**
+ * The boot script that installs Mountpoint for S3 and mounts each bucket
+ * read-only at S3_MOUNT_ROOT/<bucket>, readable by every container user
+ * (--allow-other), caching what tasks read on the root volume.
+ */
+function mountCommands(buckets: string[], cacheMiB: number): string[] {
+  return [
+    'set -euo pipefail',
+    'case "$(uname -m)" in x86_64) a=x86_64;; aarch64) a=arm64;; *) exit 1;; esac',
+    'curl -fsSL --retry 5 -o /tmp/mount-s3.rpm "https://s3.amazonaws.com/mountpoint-s3-release/latest/$a/mount-s3.rpm"',
+    'dnf install -y /tmp/mount-s3.rpm',
+    ...buckets.flatMap((b) => [
+      `mkdir -p ${S3_MOUNT_ROOT}/${b} /var/cache/mount-s3/${b}`,
+      `mount-s3 --read-only --allow-other --cache /var/cache/mount-s3/${b} --max-cache-size ${cacheMiB} ${b} ${S3_MOUNT_ROOT}/${b}`,
+    ]),
+  ];
+}
+
+/**
  * Minimal infrastructure to run a transpiled Martian->Nextflow pipeline live on
  * AWS, for BOTH supported cloud profiles of the one generated project:
  *
@@ -21,8 +60,15 @@ import * as batch from 'aws-cdk-lib/aws-batch';
  * hardened production deployment.
  */
 export class Mro2nfStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props: Mro2nfStackProps = {}) {
     super(scope, id, props);
+
+    const inputBuckets = props.mountBuckets ?? [];
+    for (const b of inputBuckets) {
+      if (!BUCKET_NAME.test(b)) {
+        throw new Error(`mountBuckets: ${JSON.stringify(b)} is not an S3 bucket name`);
+      }
+    }
 
     // A small VPC with public subnets only (no NAT cost). Batch instances get
     // public IPs to pull from ECR; an S3 gateway endpoint keeps work-dir traffic
@@ -76,14 +122,28 @@ export class Mro2nfStack extends cdk.Stack {
       ],
     });
     bucket.grantReadWrite(instanceRole);
+    for (const b of inputBuckets) {
+      s3.Bucket.fromBucketName(this, `MountBucket-${b}`, b).grantRead(instanceRole);
+    }
 
-    // Every task downloads its S3 inputs, a directory input whole, onto the
-    // instance's root volume, and neither Martian nor Batch on EC2 sizes disk:
-    // Batch picks an instance by vCPU and memory, and the AMI's 30 GiB root
-    // fills once a few tasks on one instance stage a large reference. The
-    // volume is deleted with the instance, so it costs nothing while idle.
+    // Mountpoint for S3 mounts the work bucket and the input buckets on every
+    // instance at boot, so a stage reads an s3:// input in place at one path
+    // in every task, as mrp hands it the path it was given. Batch requires
+    // MIME multipart user data in a launch template.
+    const mountScript = ec2.UserData.forLinux();
+    mountScript.addCommands(...mountCommands([bucket.bucketName, ...inputBuckets], props.mountCacheMiB ?? 102400));
+    const userData = new ec2.MultipartUserData();
+    userData.addUserDataPart(mountScript, ec2.MultipartBody.SHELL_SCRIPT, true);
+
+    // Every task downloads the work-dir files it stages onto the instance's
+    // root volume, where Mountpoint also caches each mounted bucket's reads,
+    // and neither Martian nor Batch on EC2 sizes disk: Batch picks an
+    // instance by vCPU and memory, and the AMI's 30 GiB root fills once a few
+    // tasks on one instance stage large files. The volume is deleted with the
+    // instance, so it costs nothing while idle.
     const launchTemplate = new ec2.LaunchTemplate(this, 'BatchLaunchTemplate', {
       requireImdsv2: true,
+      userData,
       blockDevices: [{
         deviceName: '/dev/xvda',
         volume: ec2.BlockDeviceVolume.ebs(500, { volumeType: ec2.EbsDeviceVolumeType.GP3 }),
@@ -95,6 +155,9 @@ export class Mro2nfStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       instanceRole,
       launchTemplate,
+      // The user data installs Mountpoint with dnf, which Amazon Linux 2023
+      // has and the default ECS AMI, Amazon Linux 2, does not.
+      images: [{ imageType: batch.EcsMachineImageType.ECS_AL2023 }],
       useOptimalInstanceClasses: true,
       // Cost: spot (~70% cheaper) and — critically — minvCpus 0 so Batch runs NO
       // instances while idle (it scales to zero between runs; you pay only for
@@ -106,6 +169,12 @@ export class Mro2nfStack extends cdk.Stack {
       minvCpus: 0,
       maxvCpus: 256,
     });
+
+    // Batch resolves the launch template version only when the compute
+    // environment is created or updated; naming the latest version makes a
+    // user-data change update the compute environment, and so its instances.
+    (computeEnv.node.defaultChild as batch.CfnComputeEnvironment).addPropertyOverride(
+      'ComputeResources.LaunchTemplate.Version', launchTemplate.latestVersionNumber);
 
     const queue = new batch.JobQueue(this, 'JobQueue', {
       computeEnvironments: [{ computeEnvironment: computeEnv, order: 1 }],
