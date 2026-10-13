@@ -5,8 +5,9 @@ authoritative `martian/syntax` grammar) against the transpiler's support and the
 test that exercises it. Test types: **e2e** = transpile + run under Nextflow,
 output diffed against real `mrp` (the Go `test/e2e` suite: the committed golden,
 and the live `mrp` differential `TestMrpDiff`, which also compares every stage's
-`_args`, `_outs` and `_jobinfo`); **unit** = Go test; **corpus** = parse+lower
-robustness sweep.
+`_args`, `_outs` and `_jobinfo`); **unit** = Go test; **corpus** =
+`TestCorpusParamsResolve`, which compiles each `testdata/corpus` file and
+resolves every parameter's type.
 
 Provenance: this matrix was built from a systematic page-by-page audit of all
 seven martian-lang.org docs (writing-pipelines, language-details, writing-stages,
@@ -39,7 +40,7 @@ too.
 | file-typed entry inputs | ✅ an absolute path is read in place by every task on the `standard` and grid profiles, whose tasks run on the host's filesystem: the stage receives the path `mrp` passes, a path one stage records for another to open holds in every task, a stage returning its input's path posts the path with no copy, and a path that is or holds the run's work dir is refused at PLAN. A URI, and on the container profiles an absolute path too, is staged by Nextflow into only the tasks that read it, each fork of a map call over entry files its own element; the stage gets a path linked below its task's args dir, `args/f/L<nnnn>/<name>`, with the value's file name and content (divergence `staged-input-paths`), and a file beside it is not staged (divergence `input-file-siblings`). A relative path names nothing from the stage's job dir under either runtime. `s3://` on every profile, a head-node path where the profile's tasks see the head node's files, other schemes only with `--mro2nf_allow_remote_inputs true`; a staged name Nextflow's stage-in script would expand (`*?[]{}$`) is refused at PLAN (`TRANSPILER.md` §8). On `awsbatch` an `s3://` value of a bucket the compute environment mounts is not staged: every task reads it in place at `/mnt/s3/<bucket>/<key>` through a read-only mount, the path the stage receives; a value of any other bucket is staged. `-resume` keys a value read in place on its path, as `mrp`'s restart keys its invocation | e2e `entry_file`/`entry_filearr`/`entry_struct_file`/`entry_mapfile`/`entry_dir`/`entry_file_empty`/`mounted_paths` (`_override`: absolute paths; the defaults: `TestMrpDiffFailureParity`), `entry_file_sibling`, `TestMrpDiffHostEntryPaths`, `TestDockerEntryOverrides`, `TestEntryFileAdversarialName`, `TestEntryFileGlobCharName`, `TestEntryFileRemoteURL`, `TestDockerMountedS3Inputs`; unit `TestPlanStagesEachForksOwnEntryFiles`, `TestVetEntryLeaf`, `TestVetHostLeaf`, `TestArgsReadsStagedEntryFiles`, `TestPlanMountsS3EntryFiles`, `TestPlanStagesS3EntryFilesOfUnmountedBuckets`, `TestRootsAreThePathsReadInPlace`, `TestStageKeepsPathsReadInPlace`, `TestMountedLeafStaysItsPath`, `TestRootsExceptTheTaskDir`, `TestEmitHostInputsInPlaceOffContainers` |
 | pipeline with **no calls** (return-only) | ✅ | e2e `returnonly` |
 | `@include` (resolved via `-mropath`, default `$MROPATH`, else the `.mro`'s directory, as `mrp`; never the working directory) | ✅ | e2e `include_test`; unit `cmd/mro2nf` `TestRunDefaultSearchPath`, `TestSearchPathReachesOptions`, `internal/cg` `TestSourceIncludesIgnoreWorkingDir` |
-| `@include` diamond / cycle / missing | ✅ (parser-enforced) | via `martian/syntax`; corpus parse |
+| `@include` diamond / cycle / missing | ✅ (parser-enforced) | via `martian/syntax` |
 | `filetype` | ✅ | e2e `file_min`, `kitchen_sink` |
 | `struct` types | ✅ | e2e `struct_min`, `struct_proj`, corpus |
 | named / unnamed (`default`) out params | ✅ | e2e `default_out` |
@@ -47,7 +48,7 @@ too.
 | scalar types int/float/string/bool/path/file/map | ✅ | e2e (various) |
 | typed arrays `T[]`, multi-dim `T[][]` | ✅ | e2e `multidim`, `split_test` |
 | typed maps `map<T>` (output) | ✅ | e2e `typedmap_out` |
-| int→float coercion; float→int rejected | ✅ | `martian/syntax` (corpus parse) |
+| int→float coercion; float→int rejected | ✅ | `martian/syntax` |
 | whole-number float literal → int param (`5.0` → `5`) | ✅ each bound value goes through its type's `FilterJson`, as mrp resolves it; a split-returned chunk arg reaches main and join as the split wrote it | e2e `float_to_int`, `chunk_float_int` |
 | literals: int/float/sci, bool, null, arrays, maps, struct literals, escapes | ✅ | `martian/syntax`; e2e entry args |
 | bindings: `self.x`, `self.x.y`, `STAGE`, `STAGE.out`, `STAGE.out.field`, `STAGE.default` | ✅ Martian's `ResolvedBinding.BindingPath` and `LazyArgumentMap.Path` | e2e `struct_proj`, `default_out` |
@@ -119,7 +120,7 @@ too.
 | Feature | Status | Test |
 |---|---|---|
 | file outputs published to results (mrp `outs/` layout, `GetOutFilename` naming) | ✅ | e2e `file_min`, `TestMrpDiff` (tree diff vs real mrp) |
-| inter-stage file passing | ✅ each task stages the bundles it reads, with their file leaves, as `path` inputs; markers locate the leaves | e2e `file_chain`, `TestCloudSim*`; unit `TestBundleRoundTrip` |
+| inter-stage file passing | ✅ each task stages the bundles it reads, and the files they name by reference where their producer wrote them, as `path` inputs; markers locate the leaves (`TRANSPILER.md` §7) | e2e `file_chain`, `TestCloudSim*`; unit `TestBundleRoundTrip` |
 | a path written into text (JSON or CSV contents, an untyped `map`, a `string`) that a later job opens | 🚫 relies on `mrp`'s shared filesystem; no task stages it, so it opens only where the later task sees that path. Per profile in `RUNNING.md`, Paths written into text | e2e `TestDockerMountedS3Inputs` (a file input's path in JSON, under copy-staging as on `awsbatch`), `TestMrpDiffHostEntryPaths` (a head-node input's path in JSON, on `standard`) |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ | e2e `map_file`, `map_file_keyed`, `struct_of_file` |
 | a file reached from several outputs | ✅ #431 named by the first path mrp published it at | e2e `shared_out_file` |

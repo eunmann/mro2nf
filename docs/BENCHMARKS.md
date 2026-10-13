@@ -36,12 +36,16 @@ and runs both:
 | `TestScaleMapNested` | `mapnested` | 2 × 2 | 100 × 100 | 10,002 |
 | `TestScaleMapDisabled` | `mapdisabled` | 4 forks | 2,500 forks | 2,502 |
 
-`SCALE_WIDTH` replaces the wide width of every selected shape. The default
-widths keep each job under 30 minutes: the nightly runner ran 2,020 tasks of the
-1,000-fork shape in 315 s, and a local 4,000-fork run submitted tasks at a
-steady rate. The selected shapes run one after another,
-so the default `SCALE_TIMEOUT` of 500 minutes gives each of the five 100; the
+`SCALE_WIDTH` replaces the wide width of every selected shape. Each default
+wide width is sized to finish within the 100 minutes one shape runs under
+(`scaleShapeTimeout`). The selected shapes run one after another, so the
+default `SCALE_TIMEOUT` of 500 minutes gives each of the five 100; the
 nightly runs one shape per job with `SCALE_TIMEOUT=100m`.
+
+The default `SCALE_RUN` also selects `TestScaleWideFanin` (#503), which the
+weekly nightly runs as its own job: the generated wide pipeline plus a stage
+whose 210 inputs pass `maxTakes` (`internal/cgnf/scope.go`), the most
+channels one workflow takes, run under Nextflow.
 
 Each run must complete and gather every fork's or chunk's output. On top of the
 `bench_metrics.py` metrics below, the tier reads a staging probe of every task
@@ -182,8 +186,8 @@ every on-disk staging/materialization is locatable.
 
 ## The gates
 
-`make bench` (`test/e2e/bench_report.py`) fails on any of three independent
-checks:
+`make bench` (`test/e2e/bench_report.py`) fails on any of the first three
+independent checks; the fourth is the differential's:
 
 - **Baseline gate** — per lane, `refs`, `plumbing_tasks`, and `tasks` must not
   exceed the committed baseline. A rise is respectively a reintroduced per-hop
@@ -202,7 +206,10 @@ checks:
   baseline gate holds each width at its recorded count, and `BENCH_UPDATE=1`
   refuses to record a higher one. Once the group is width-flat the gate fails
   until the marker is dropped, so fixing the issue turns the lane into an
-  ordinary flat-gated one. Every group must also write the same
+  ordinary flat-gated one. A group whose lanes are marked `flat_staging`
+  must stage into its largest stage task the same bytes at every width
+  (within 5%): a fork stages its own share of the data, never all N forks'
+  shares. Every group must also write the same
   `restaged_bytes` per producer at every width (within 5%): a file every fork
   reads is referenced where it was staged, not copied into each fork, by a
   non-split stage (#498) or by a split stage's split, chunks or join (#507).

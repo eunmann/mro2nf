@@ -171,7 +171,7 @@ internal/
 
 The transpiler does not re-implement the Martian grammar. `cg.ReadSource`
 compiles the entry `.mro` with the upstream
-`github.com/martian-lang/martian/syntax` package and builds its invocation data
+`github.com/martian-lang/martian/martian/syntax` package and builds its invocation data
 (`core.BuildDataForAst`), Martian's JSON form of an invocation. Compiling the
 call graph (`MakePipelineCallGraph`) is the step `mrp` runs before it creates a
 pipestance, so a pipeline `mrp` refuses to start is refused at transpile time
@@ -231,17 +231,18 @@ _assets/mro/          ← a copy of every .mro file the entry compiles from, eac
 **`stage.nf`** declares `STAGE` (a non-split stage) and `STAGE_SPLIT`,
 `STAGE_MAIN` and `STAGE_JOIN` (a split stage's three phases), plus `OUTS`.
 The workflow that wires a node includes them once for it under its own alias
-(`include { STAGE as N3_DBL }`, a split stage as `N1_SUM_SQUARES_SP`, `_MN`
-and `_JN`), so a `withName:` selector names the node. Every stage task runs
+(`testdata/split_test`: `include { STAGE as N1_REPORT }`, and its split
+stage as `N0_SUM_SQUARES_SP`, `_MN` and `_JN`), so a `withName:` selector
+names the node. Every stage task runs
 one `mre stage` call (§6), which compiles the call graph once and runs the
 phase's job as `mrp` runs it, resolving the instance's args before it in
 every task, and posting its outs after it in a join and a non-split stage's
 main. A split's chunk mains and join stage the split's inputs, the same
-instance tuple, and build its args again. Each process declares only the
-outputs its consumers stage, as one output: a posting process emits its
-outs, forks and gates as one tuple (`posted`), since Nextflow's DAG holds
-an edge per declared output whether a node reads it or not (602 of
-CellRanger's edges were outputs no node read). The steps of a call hand
+instance tuple, and build its args again. Each process declares one
+output: a posting process (`STAGE`, `STAGE_JOIN`) emits its outs, forks
+and gates as one tuple (`posted`), since Nextflow's DAG holds an edge per
+declared output whether a node reads it or not (602 of CellRanger's edges
+were outputs no node read). The steps of a call hand
 each other the instance, its args and its outs in memory. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_ROOT`) and that take a node's
@@ -488,7 +489,8 @@ ordinal dir in the producer's work dir, which the item carries beside its
 dir. A task's records come on one line, space-separated, so an `eval`
 output of them, whose records grow with a join's chunks or a fork root's
 forks, is collected in time linear in them. A split's come in a file,
-`chunk_refs`, beside `resources.tsv`, a chunk's as an `eval` output:
+`chunk_refs`, which the driver reads as it does `resources.tsv`, and a
+chunk's as an `eval` output:
 `CHUNKS` and `JOIN`, which read the split's outputs joined to the
 instance's staged items (`SPLITS`), resolve them against the
 paths the split, and each chunk, staged its items from (`chunked`,
@@ -1017,7 +1019,7 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   the project was transpiled from (README, "Container image"); a stage `src`
   that names a command must be on the image's `PATH`. The runtime image
   itself serves where a `-c` config mounts the code at those paths. `mre
-  args` refuses a node the image compiles to another spec than PLAN planned
+  stage` refuses a node the image compiles to another spec than PLAN planned
   (§5), so a stale image fails loudly.
 - `docker` runs each task in a container that mounts only what it stages.
 - `awsbatch` runs on AWS Batch over an S3 work dir (`-work-dir s3://…`); every
@@ -1050,7 +1052,8 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   and its memory as `memory`.
 - `--mro2nf_overrides <file>` is `mrp --overrides`: PLAN reads it (§6), and
   every job's threads, memory and vmem resolve under it as `mrp`'s
-  (`core.ApplyResourceOverrides`), over `using` and the split's request,
+  (`core` `PipestanceOverrides.ApplyResourceOverrides`), over `using` and
+  the split's request,
   into its task's `cpus` and `memory`, `_jobinfo` and `_args`. The driver
   parses none of it: each task gets its node's resources and own overrides
   file as values of PLAN's record, and a chunk and the join take theirs from
