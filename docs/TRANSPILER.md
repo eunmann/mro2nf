@@ -828,7 +828,8 @@ completes, have goldens only. The validation tiers:
   `make gen-diff` runs a seed range for the long tier, which the weekly nightly
   tier starts from a random seed and ends after `GEN_BUDGET` minutes.
 - **Static lint** (`make lint-nf`) — every fixture's project under
-  `nextflow lint`, errors and warnings alike.
+  `nextflow lint`, errors and warnings alike, and a generated pipeline's
+  project large enough for `subworkflows/` modules, which no fixture's has.
 - **Overhead** (`make bench`, nightly `make test-scale`) — tasks, staged bytes
   and driver heap at two widths per shape; the plumbing task count must not
   change with the width, and the stage tasks must equal `mrp`'s job count.
