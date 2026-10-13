@@ -17,7 +17,8 @@ export interface Mro2nfStackProps extends cdk.StackProps {
   /**
    * Input buckets every Batch instance mounts besides the work bucket, which
    * it always mounts: a run reads an s3:// entry input of a mounted bucket in
-   * place and stages one of any other bucket.
+   * place. The instance role may read only these and the work bucket, so a
+   * run staging an input of any other bucket fails to download it.
    */
   readonly mountBuckets?: string[];
   /** The local read cache each mounted bucket may fill on an instance, in MiB. */

@@ -254,7 +254,7 @@ func TestVetMountedLeaf(t *testing.T) {
 		filepath.Join(root, "b", "k.txt"):        "",
 		filepath.Join(root, "b", "ref") + "/":    "",
 		filepath.Join(root, "b", "none.txt"):     "names no object under the mounted bucket b",
-		filepath.Join(root, "other", "k.txt"):    "bucket other is not mounted at " + filepath.Join(root, "other") + " on this run's instances; pass the input as an s3:// URI, which the run stages",
+		filepath.Join(root, "other", "k.txt"):    "bucket other is not mounted at " + filepath.Join(root, "other") + " on this run's instances; mount it there, or pass the input as an s3:// URI, which the tasks stage if their role may read the bucket",
 		root:                                     "names the S3 mount root",
 		filepath.Join(root, "b", "..", "b", "k"): "names no object",
 	}

@@ -274,11 +274,13 @@ under `/mnt/s3` given directly is read the same way.
   A compute environment without the mounts runs every pipeline whose stages
   open their inputs by the paths they are given; a stage that records an
   input's path in an output for another task to open, as Cell Ranger does
-  with its FASTQ directory, needs the input's bucket mounted. The example
+  with its FASTQ directory, needs the input's bucket mounted. A staged
+  input's bucket must be one the instances' IAM role may read. The example
   stack mounts its work bucket and the buckets its `mountBuckets` context
-  names ([`deploy/awsbatch-cdk/README.md`](../deploy/awsbatch-cdk/README.md));
-  `--mro2nf_s3_mount` names another root, which the profile then bind-mounts
-  instead.
+  names ([`deploy/awsbatch-cdk/README.md`](../deploy/awsbatch-cdk/README.md)),
+  and its instances may read only those, so on it every input bucket goes in
+  `mountBuckets`; `--mro2nf_s3_mount` names another root, which the profile
+  then bind-mounts instead.
 - Every instance of the compute environment must mount the same buckets: the
   first task's instance decides for every task. A `-resume` re-runs that
   first task, so a run after the mounts change reads the inputs as they now
@@ -502,10 +504,12 @@ In the task's work directory:
 - **`entry input '<name>': scheme '<scheme>' is not allowed`**: pass a path or
   an `s3://` URI, or `--mro2nf_allow_remote_inputs true`.
 - **`entry input '<name>': bucket <bucket> is not mounted at
-  /mnt/s3/<bucket> on this run's instances; pass the input as an s3:// URI,
-  which the run stages`**: on `awsbatch`, the input is a path under
-  `/mnt/s3` whose bucket is not mounted. Pass its `s3://` URI, or deploy the
-  stack with the bucket in `mountBuckets`.
+  /mnt/s3/<bucket> on this run's instances; mount it there, or pass the
+  input as an s3:// URI, which the tasks stage if their role may read the
+  bucket`**: on `awsbatch`, the input is a path under `/mnt/s3` whose bucket
+  is not mounted. Deploy the stack with the bucket in `mountBuckets`, or pass
+  its `s3://` URI on a compute environment whose instance role may read the
+  bucket: the example stack's may read only the buckets it mounts.
 - **`entry input '<name>' names no object under the mounted bucket
   <bucket>`**: on `awsbatch`, no object or prefix has the input's key.
 - **`entry override of a non-scalar type cannot be a string`**: pass the

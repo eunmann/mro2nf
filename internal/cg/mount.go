@@ -165,7 +165,7 @@ func VetMountedLeaf(l EntryLeaf, mount shim.Mount) error {
 
 	at := filepath.Join(string(mount), bucket)
 	if _, err := os.Stat(at); err != nil {
-		return fmt.Errorf("%w: entry input '%s': bucket %s is not mounted at %s on this run's instances; pass the input as an s3:// URI, which the run stages",
+		return fmt.Errorf("%w: entry input '%s': bucket %s is not mounted at %s on this run's instances; mount it there, or pass the input as an s3:// URI, which the tasks stage if their role may read the bucket",
 			ErrEntryFile, l.Input, bucket, at)
 	}
 

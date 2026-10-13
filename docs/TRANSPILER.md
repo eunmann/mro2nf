@@ -689,7 +689,9 @@ trailing `/` kept, before it compiles the call, so every task compiles a call
 naming the mounted path. Any directory there counts, not only a mount point:
 the e2e suite serves the root as one bind-mounted tree, and the example
 stack's root holds nothing but its mounts. A value of any other bucket stays
-its URI and is staged as on every other profile, so the mount spares
+its URI and is staged as on every other profile, which needs the tasks'
+role to read its bucket (the example stack's reads only the buckets it
+mounts), so the mount spares
 downloads and makes a recorded path hold in every task, and no run requires
 it. A value under the root, so written or given directly once cleaned, is
 mounted: PLAN checks that the mount shows its bucket and key and leaves it out

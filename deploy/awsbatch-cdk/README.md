@@ -62,9 +62,11 @@ Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleAr
 
 `mountBuckets` names the buckets holding the pipeline's inputs, comma-separated;
 the work bucket is always mounted, so `-c mountBuckets=...` can be left out when
-the inputs live there. A run reads the inputs of a mounted bucket in place and
-stages the rest, so the mounts spare downloads and are needed only where a
-stage records an input's path for another task to open. Each Batch instance installs
+the inputs live there. A run reads the inputs of a mounted bucket in place,
+sparing their downloads, and a stage that records an input's path for
+another task to open needs it. The instance role may read only the mounted
+buckets, so every bucket holding an input belongs in `mountBuckets`: a run
+would stage an input of any other bucket and fail to download it. Each Batch instance installs
 [Mountpoint for S3](https://github.com/awslabs/mountpoint-s3) at boot, the
 release `MOUNTPOINT_VERSION` in `lib/stack.ts` names, checked against the
 rpm's SHA-256 pinned beside it, and
@@ -119,10 +121,9 @@ through the mount: a stage receives `s3://<bucket>/<key>` as
 `/mnt/s3/<bucket>/<key>`, the same path in every task, as `mrp` passes the
 path it was given, and no task downloads it. An input of a bucket the
 instances do not mount, neither the work bucket nor one in `mountBuckets`, is
-staged by Nextflow into each task that reads it, as on every other profile;
-a pipeline whose stage records an input's path in an output for another task
-to open, as Cell Ranger does with its FASTQ directory, needs that input's
-bucket mounted. The mount is read-only.
+one this stack's instance role may not read: the run stages it, as on every
+other profile, and its download fails with AccessDenied. Every input bucket
+belongs in `mountBuckets`. The mount is read-only.
 
 ## Run on AWS HealthOmics
 
