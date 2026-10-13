@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -620,7 +621,10 @@ func (rp *cgReplay) jobDir(tasks replayTasks, name string) string {
 func (rp *cgReplay) stage(phase, jw string, argv ...string) bool {
 	rp.t.Helper()
 
-	base := []string{"stage", "-phase", phase, "-psid", "mrp", "-adapters", rp.adapters, "-mrjob", filepath.Join(root, "mrjob"), "-work", jw}
+	base := []string{
+		"stage", "-phase", phase, "-psid", "mrp", "-adapters", rp.adapters, "-mrjob", filepath.Join(root, "mrjob"), "-work", jw,
+		"-local-cores", strconv.Itoa(mrpLocalCores), "-local-mem-gb", strconv.Itoa(mrpLocalMemGB),
+	}
 	if rp.overrides != "" {
 		base = append(base, "-overrides", rp.overrides)
 	}

@@ -76,9 +76,25 @@ def on(v) {
     return v.toString() == 'true'
 }
 
+// pool names the pool mrp's local job manager grants a job from, its
+// --localcores and --localmem, where params.mro2nf_local_jobs holds: the
+// cpus and whole GB of memory process.resourceLimits clamps the task to, so
+// a job granted the whole pool requests no more than its task is given.
+def pool(task) {
+    if (!on(params.mro2nf_local_jobs)) {
+        return ''
+    }
+    def lim = task.resourceLimits ?: [:]
+    if (!lim.cpus || !lim.memory) {
+        error('params.mro2nf_local_jobs grants each job from process.resourceLimits, which sets no cpus or memory')
+    }
+    def mem = lim.memory instanceof nextflow.util.MemoryUnit ? lim.memory : nextflow.util.MemoryUnit.of(lim.memory.toString())
+    return " -local-cores ${lim.cpus as int} -local-mem-gb ${Math.max(1L, mem.toGiga())}"
+}
+
 // mreStage runs the task's phase through mre stage.
-def mreStage(Map meta, phase, rest) {
-    def cmd = "${shq(params.mro2nf_mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(params.mro2nf_psid)} -work ."
+def mreStage(task, Map meta, phase, rest) {
+    def cmd = "${shq(params.mro2nf_mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(params.mro2nf_psid)} -work .${pool(task)}"
     if (params.mro2nf_adapters) {
         cmd += " -adapters ${shq(params.mro2nf_adapters)}"
     }
@@ -134,7 +150,7 @@ process STAGE {
     """
     ${callFile(meta)}
     mkdir -p in
-    ${mreStage(meta, 'main', "${args(meta, forks, leaves)} -args args -o stage_outs ${postFlags()}")}
+    ${mreStage(task, meta, 'main', "${args(meta, forks, leaves)} -args args -o stage_outs ${postFlags()}")}
     """
 }
 
@@ -154,7 +170,7 @@ process STAGE_SPLIT {
     """
     ${callFile(meta)}
     mkdir -p in
-    ${mreStage(meta, 'split', "${args(meta, forks, leaves)} -args args -o chunks")}
+    ${mreStage(task, meta, 'split', "${args(meta, forks, leaves)} -args args -o chunks")}
     """
 }
 
@@ -176,7 +192,7 @@ process STAGE_MAIN {
     """
     ${callFile(meta)}
     mkdir -p in
-    ${mreStage(meta, 'main', "${args(meta, forks, leaves)} -args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
+    ${mreStage(task, meta, 'main', "${args(meta, forks, leaves)} -args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
 }
 
@@ -198,7 +214,7 @@ process STAGE_JOIN {
     """
     ${callFile(meta)}
     mkdir -p in
-    ${mreStage(meta, 'join', "${args(meta, forks, leaves)} -args args -chunks chunks -chunkouts chunkouts -o stage_outs ${postFlags()}")}
+    ${mreStage(task, meta, 'join', "${args(meta, forks, leaves)} -args args -chunks chunks -chunkouts chunkouts -o stage_outs ${postFlags()}")}
     """
 }
 

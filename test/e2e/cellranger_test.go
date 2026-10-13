@@ -16,12 +16,14 @@ package e2e
 //
 //	CELLRANGER_HOME=~/Downloads/cellranger-10.1.0 make test-cellranger
 //
-// Knobs: CELLRANGER_LOCALCORES / CELLRANGER_LOCALMEM size the mrp golden (the
-// Nextflow run clamps to the host via process.resourceLimits). The whole thing
-// runs the pipeline twice, so budget a few minutes.
+// Knobs: CELLRANGER_LOCALCORES / CELLRANGER_LOCALMEM are the pool of both
+// runs: mrp's --localcores and --localmem, and the Nextflow run's
+// process.resourceLimits. The whole thing runs the pipeline twice, so budget
+// a few minutes.
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,13 +127,19 @@ func TestCellRangerDifferential(t *testing.T) {
 	transpileCellRanger(t, home, mro, proj)
 
 	// 4. Run the generated Nextflow with the bundle env sourced, its stages
-	//    under the bundle's own Martian runtime. The emitted local profile
-	//    clamps each task's request to the host (#207), so an oversized
-	//    reservation (the 30 GB cloupe join) runs instead of failing.
+	//    under the bundle's own Martian runtime. The local profile grants
+	//    each job from mrp's pool and clamps its task to it (#207, #545), so
+	//    an oversized reservation (the 30 GB cloupe join) runs instead of
+	//    failing.
+	pool := fmt.Sprintf("process.resourceLimits = [cpus: %s, memory: %s.GB]\n", cores, mem)
+	if err := os.WriteFile(filepath.Join(proj, "pool.config"), []byte(pool), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	martian := filepath.Join(home, "external", "martian")
 	crBash(t, home, proj, "nextflow run",
 		"NXF_ANSI_LOG=false NXF_OFFLINE=true NXF_OPTS='-Xms256m -Xmx2g' "+
-			"nextflow -q run main.nf -profile standard -with-trace trace.txt "+
+			"nextflow -q run main.nf -profile standard -c pool.config -with-trace trace.txt "+
 			"-work-dir "+shellQuote(filepath.Join(tmp, "nfwork"))+
 			" --mro2nf_mre "+shellQuote(filepath.Join(root, "mre"))+
 			" --mro2nf_mrjob "+shellQuote(filepath.Join(martian, "bin", "mrjob"))+

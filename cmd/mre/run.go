@@ -67,12 +67,25 @@ func (f *runFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.rt.Work, "work", ".", "the dir to hold the job's metadata and journal")
 	fs.BoolVar(&f.confine, "confine", false, "fail on a stage output that resolves outside the task work dir (isolated container targets) instead of copying it")
 	fs.StringVar(&f.overrides, "overrides", "", "an mrp --overrides file over the job's resources (mre plan writes each node's own)")
+	definePool(fs, &f.rt.Local)
+}
+
+// definePool defines the flags of the pool mrp's local job manager grants
+// each job from, which without them is granted as mrp's cluster job
+// managers grant it.
+func definePool(fs *flag.FlagSet, p *job.Pool) {
+	fs.IntVar(&p.Cores, "local-cores", 0, "mrp --localcores: grant each job from a local pool of this many cores, as mrp's local job manager does (default: as its cluster job managers do)")
+	fs.IntVar(&p.MemGB, "local-mem-gb", 0, "mrp --localmem: the local pool's memory in GB")
 }
 
 // run runs one phase of the stage instance whose args bundle -args holds,
 // as mrp runs its job: split writes the chunks dir, main and join write the
 // outs bundle.
 func (f *runFlags) run(ctx context.Context, g *cg.Graph, man types.Manifest) error {
+	if err := f.rt.Local.Check(); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+
 	over, err := readOverrides(f.overrides)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)

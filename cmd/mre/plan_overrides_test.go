@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -61,6 +63,44 @@ func TestPlanResolvesOverrides(t *testing.T) {
 		if d := cmp.Diff(tc.want, planResources(t, work)); d != "" {
 			t.Errorf("%s: node resources (-want +got):\n%s", tc.name, d)
 		}
+	}
+}
+
+// TestPlanGrantsFromThePool: mre plan schedules each node's first task with
+// what its job is granted: from a local pool, an adaptive or oversized
+// request at most the pool, as mrp's local job manager grants res_pool's
+// jobs under --localcores=2 --localmem=4; without one, as mrp's cluster job
+// managers grant it, at its magnitude and uncapped. A pool needs both cores
+// and memory.
+func TestPlanGrantsFromThePool(t *testing.T) {
+	fx := fixtureDir(t, "res_pool")
+
+	cases := []struct {
+		name  string
+		flags []string
+		want  map[string]string
+	}{
+		{"local", []string{"-local-cores", "2", "-local-mem-gb", "4"}, map[string]string{
+			"RES_POOL.ADAPT": "2 4 -", "RES_POOL.BIG": "2 4 -", "RES_POOL.CHUNKED": "2 4 -",
+		}},
+		{"cluster", nil, map[string]string{
+			"RES_POOL.ADAPT": "1 6 -", "RES_POOL.BIG": "64 200 -", "RES_POOL.CHUNKED": "3 5 -",
+		}},
+	}
+
+	for _, tc := range cases {
+		work, err := planEntry(t, fx, "{}", tc.flags...)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+
+		if d := cmp.Diff(tc.want, planResources(t, work)); d != "" {
+			t.Errorf("%s: node resources (-want +got):\n%s", tc.name, d)
+		}
+	}
+
+	if _, err := planEntry(t, fx, "{}", "-local-cores", "2"); !errors.Is(err, job.ErrPool) {
+		t.Errorf("plan with cores but no memory: %v, want %v", err, job.ErrPool)
 	}
 }
 

@@ -226,3 +226,49 @@ func TestDockerProfileRunsAsInvokingUser(t *testing.T) {
 		}
 	}
 }
+
+// TestLocalProfilesGrantFromThePool: the profiles that run every task on
+// one host, standard and docker, grant each job from the pool their
+// process.resourceLimits clamp a task to, the host's cpus and 90% of its
+// memory as mrp's local job manager defaults to; every other profile
+// grants it as mrp's cluster job managers do (#545). PLAN and every stage
+// task hand mre the pool of their own task.
+func TestLocalProfilesGrantFromThePool(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "diamond_min"))
+	cfg := tree["nextflow.config"]
+
+	const (
+		limits = "        process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() * 0.9 ]\n" +
+			"        params.mro2nf_local_jobs = true\n"
+		off = "params.mro2nf_local_jobs = false\n"
+	)
+
+	top, profiles, _ := strings.Cut(cfg, "profiles {")
+	for _, name := range []string{"standard", "docker"} {
+		_, body, _ := strings.Cut(profiles, "    "+name+" {")
+		body, _, _ = strings.Cut(body, "\n    }\n")
+		body += "\n"
+
+		if !strings.Contains(body, limits) {
+			t.Errorf("the %s profile lacks %q:\n%s", name, limits, body)
+		}
+	}
+
+	if strings.Count(cfg, "params.mro2nf_local_jobs = true") != 2 || !strings.Contains(top, off) {
+		t.Errorf("nextflow.config grants from a local pool outside the standard and docker profiles:\n%s", cfg)
+	}
+
+	for _, name := range []string{"conf/container.config", "conf/healthomics.config"} {
+		if strings.Contains(tree[name], "mro2nf_local_jobs") {
+			t.Errorf("%s sets the local pool:\n%s", name, tree[name])
+		}
+	}
+
+	if !strings.Contains(tree["main.nf"], "${pool(task)} -call call ") {
+		t.Errorf("PLAN does not hand mre its task's pool:\n%s", tree["main.nf"])
+	}
+
+	if !strings.Contains(stageModule, "-work .${pool(task)}\"") {
+		t.Errorf("mreStage does not hand mre its task's pool:\n%s", stageModule)
+	}
+}

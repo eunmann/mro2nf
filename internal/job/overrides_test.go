@@ -53,7 +53,7 @@ func overrideCases() []overrideCase {
 // phase, over the stage's using() and over the def its split returned, and
 // the empty key sets none.
 func TestResourcesUnderOverrides(t *testing.T) {
-	r := Runtime{PSID: "mrp", Overrides: fixtureOverrides(t)}
+	r := Runtime{PSID: "mrp", Overrides: fixtureOverrides(t), Local: mrpPool()}
 
 	for _, tc := range overrideCases() {
 		if got := r.Resources(tc.st, tc.phase, tc.def); got != tc.want {
@@ -84,7 +84,7 @@ func TestOverrideGivesTheNodeItsResources(t *testing.T) {
 			t.Fatalf("%s: read %s: %v", tc.name, raw, err)
 		}
 
-		if got := (Runtime{PSID: "other", Overrides: own}).Resources(tc.st, tc.phase, tc.def); got != tc.want {
+		if got := (Runtime{PSID: "other", Overrides: own, Local: mrpPool()}).Resources(tc.st, tc.phase, tc.def); got != tc.want {
 			t.Errorf("%s: under its own overrides %s, %s %s resources %+v, want %+v", tc.name, raw, tc.st.Fqid, tc.phase, got, tc.want)
 		}
 	}

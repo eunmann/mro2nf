@@ -76,9 +76,17 @@
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",
-      "summary": "mro2nf ignores `local` and schedules the stage on the configured executor like any other task; in a cluster jobmode mrp runs it through its local job manager on the head node, sized against the head node's capacity.",
+      "summary": "mro2nf ignores `local` and schedules the stage on the configured executor like any other task, whose job is granted its resources as the profile grants every job's; in a cluster jobmode mrp runs it through its local job manager on the head node, granted from a pool of one thread and 1 GB unless `--localcores` and `--localmem` set another (`martian/core/jobmanager_local.go` `setMaxCores`, `setMaxMem`).",
       "justification": "Scheduling only: the stage runs the same code on the same `_args`. Under `--jobmode=local`, which the differential uses, the local job manager is mrp's only one (`martian/core/node.go`, `stage.go`), so `kitchen_sink`'s local SUM_SQUARES matches mrp; cluster jobmodes are not compared with mrp.",
       "evidence": ["TestMrpDiff/kitchen_sink"]
+    },
+    {
+      "id": "adaptive-memory-pool",
+      "kind": "mechanism",
+      "feature": "an adaptive (negative) `mem_gb` request on the local profiles",
+      "summary": "mro2nf grants an adaptive memory request the whole pool, the memory of `process.resourceLimits`, where mrp's local job manager grants the part of the pool the host has free when the job starts, or the request's magnitude where that is larger: the whole pool only while the host has it free. Both cap the grant at the pool, so a request of at least the pool's size is granted the pool by both.",
+      "justification": "mrp's grant reads its memory semaphore's current size, which tracks the host's free memory (`martian/core/jobmanager_local.go` `GetSystemReqs`, `refreshResources`), so mrp grants one request differently run to run. mro2nf sizes the task to the pool, the memory the job is given, and grants that every run. `res_pool` compares requests of at least the pool's size with mrp. The cluster jobmodes grant the request's magnitude under both.",
+      "evidence": ["TestMrpDiff/res_pool", "TestLocalGrant", "TestPlanGrantsFromThePool"]
     },
     {
       "id": "volatile-no-vdr",

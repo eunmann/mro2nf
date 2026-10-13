@@ -90,6 +90,84 @@ func TestLocalClampRunsOversizedRequest(t *testing.T) {
 	}
 }
 
+// TestLocalPoolFloorsMemory pins pool() in stage.nf: a stage job is granted
+// from the whole GB below process.resourceLimits' memory, as mrp's local
+// job manager floors 90% of the host's memory to its pool, whether the
+// config sets the memory as a MemoryUnit or a string.
+func TestLocalPoolFloorsMemory(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	for name, memory := range map[string]string{"unit": "4608.MB", "string": "'4.5 GB'"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, "diamond_min")
+			pool := writeOverlay(t, proj, "process.resourceLimits = [cpus: 2, memory: "+memory+"]\n")
+
+			if err := runNextflow(t, proj, "-c", pool, "-with-trace", "pool-trace.txt"); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, row := range readTraceColumns(t, filepath.Join(proj, "pool-trace.txt"), "name", "workdir") {
+				if row[0] != "N0_GEN (D.GEN)" {
+					continue
+				}
+
+				script, err := os.ReadFile(filepath.Join(row[1], ".command.sh"))
+				if err != nil {
+					t.Fatalf("read GEN's script: %v", err)
+				}
+
+				if !strings.Contains(string(script), " -local-cores 2 -local-mem-gb 4 ") {
+					t.Errorf("GEN's mre stage is not granted from 2 cpus and 4 GB:\n%s", script)
+				}
+
+				return
+			}
+
+			t.Fatal("trace has no N0_GEN task")
+		})
+	}
+}
+
+// TestLocalPoolWithoutLimitsFails: a user's own profile granting jobs as
+// mrp's local job manager does, without process.resourceLimits, has no pool
+// to grant from, so the run fails naming the setting instead of guessing one.
+func TestLocalPoolWithoutLimitsFails(t *testing.T) {
+	requireTools(t, "nextflow", "java", "python3")
+
+	proj := transpile(t, "diamond_min")
+	profile := writeOverlay(t, proj, "profiles { bare { process.executor = 'local' } }\n")
+
+	err := runNextflowAllowingFailedAttempts(t, proj, "-c", profile, "-profile", "bare", "--mro2nf_local_jobs", "true")
+	if err == nil {
+		t.Fatal("run succeeded; local jobs without a pool must fail it")
+	}
+
+	log, err := os.ReadFile(filepath.Join(proj, "run.log"))
+	if err != nil {
+		t.Fatalf("read run.log: %v", err)
+	}
+
+	if !strings.Contains(string(log), "process.resourceLimits, which sets no cpus or memory") {
+		t.Errorf("run.log does not name the missing pool:\n%s", log)
+	}
+}
+
+// writeOverlay writes body as a config in proj and returns its path.
+func writeOverlay(t *testing.T, proj, body string) string {
+	t.Helper()
+
+	path := filepath.Join(proj, "overlay.config")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write overlay: %v", err)
+	}
+
+	return path
+}
+
 // resolvedLimits returns the cpus and memory the project's standard profile
 // resolves process.resourceLimits to on this host, as `nextflow config -flat`
 // and the trace both render them.

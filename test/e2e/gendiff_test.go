@@ -669,7 +669,7 @@ func runGenLeg(t *testing.T, env genEnv, leg genLeg, dir, work string, mrp runOu
 
 	proj := genLegProj(work, leg)
 	fixture := filepath.Base(dir)
-	runErr := runNextflow(t, proj, "-with-trace", "trace.txt")
+	runErr := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-with-trace", "trace.txt")...)
 	recovered := errors.Is(runErr, errFailedAttempt)
 
 	if (runErr != nil && !recovered) || mrp.Failed {

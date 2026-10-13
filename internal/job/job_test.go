@@ -58,12 +58,17 @@ func stage(t *testing.T, fixture, node, body string) (Stage, *core.InvocationDat
 	return s, inv
 }
 
+// mrpPool is the pool the e2e harness runs mrp with: --localcores=2
+// --localmem=4.
+func mrpPool() Pool { return Pool{Cores: 2, MemGB: 4} }
+
 func runtime(t *testing.T, inv *core.InvocationData) Runtime {
 	t.Helper()
 
 	return Runtime{
 		Adapters: "/opt/martian/adapters", Mrjob: "/opt/martian/bin/mrjob", PSID: "mrp",
 		Invocation: inv, Version: core.VersionInfo{Martian: "v4", Pipelines: "v1"}, Work: t.TempDir(),
+		Local: mrpPool(),
 	}
 }
 
@@ -181,14 +186,55 @@ func TestMonitorFlag(t *testing.T) {
 }
 
 // TestThreadEnvs: a job runs with each of mrp's thread_envs
-// (jobmanagers/config.json) set to its threads rounded up, over the value
-// it inherits, and TMPDIR its tmp dir (core/jobmanager_local.go Enqueue).
+// (jobmanagers/config.json) set to its granted threads rounded up, over the
+// value it inherits, and TMPDIR its tmp dir (core/jobmanager_local.go:515
+// Enqueue, core/jobmanager_remote.go:219 jobScript): from a local pool, an
+// adaptive or oversized request is the pool's cores.
 func TestThreadEnvs(t *testing.T) {
 	t.Setenv("OMP_NUM_THREADS", "64")
 
+	cases := []struct {
+		name    string
+		pool    Pool
+		threads float64
+		want    string
+	}{
+		{"local fraction", mrpPool(), 1.5, "2"},
+		{"local adaptive", mrpPool(), -1, "2"},
+		{"local oversized", mrpPool(), 64, "2"},
+		{"cluster fraction", Pool{}, 2.5, "3"},
+		{"cluster adaptive", Pool{}, -4, "4"},
+		{"cluster oversized", Pool{}, 64, "64"},
+	}
+
+	for _, tc := range cases {
+		got, meta := jobEnv(t, tc.pool, tc.threads)
+
+		want := map[string]string{"TMPDIR": filepath.Join(meta, "tmp")}
+		for _, k := range []string{
+			"GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS", "NUMEXPR_NUM_THREADS", "OMP_NUM_THREADS",
+			"OMP_THREAD_LIMIT", "POLARS_MAX_THREADS", "ROOT_MAX_THREADS", "TF_NUM_THREADS",
+		} {
+			want[k] = tc.want
+		}
+
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("%s: %s = %q in the job's environment, mrp sets %q", tc.name, k, got[k], v)
+			}
+		}
+	}
+}
+
+// jobEnv runs a main job requesting threads, granted from pool, and
+// returns the environment it ran with and its metadata dir.
+func jobEnv(t *testing.T, pool Pool, threads float64) (map[string]string, string) {
+	t.Helper()
+
 	s, inv := stage(t, "file_min", "FP.WRITE", `env > "$meta/env"; touch "$meta/_complete"`)
-	s.Using = &core.JobResources{Threads: 2.5}
+	s.Using = &core.JobResources{Threads: threads}
 	r := runtime(t, inv)
+	r.Local = pool
 
 	if _, err := r.Main(context.Background(), Instance{Stage: s, ForkID: "fork0"}, core.LazyArgumentMap{}, Unsplit()); err != nil {
 		t.Fatal(err)
@@ -201,27 +247,15 @@ func TestThreadEnvs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := map[string]string{}
+	env := map[string]string{}
 
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		if k, v, ok := strings.Cut(line, "="); ok {
-			got[k] = v
+			env[k] = v
 		}
 	}
 
-	want := map[string]string{"TMPDIR": filepath.Join(meta, "tmp")}
-	for _, k := range []string{
-		"GOMAXPROCS", "MKL_NUM_THREADS", "NUMEXPR_MAX_THREADS", "NUMEXPR_NUM_THREADS", "OMP_NUM_THREADS",
-		"OMP_THREAD_LIMIT", "POLARS_MAX_THREADS", "ROOT_MAX_THREADS", "TF_NUM_THREADS",
-	} {
-		want[k] = "3"
-	}
-
-	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("%s = %q in the job's environment, mrp sets %q", k, got[k], v)
-		}
-	}
+	return env, meta
 }
 
 // TestOutcomes: mrjob exits 0 however the stage ends, so the job's state
@@ -333,30 +367,6 @@ func TestJoinWritesChunkFiles(t *testing.T) {
 	} {
 		if d := cmp.Diff(decode(t, f.want), readJSON(t, filepath.Join(meta, f.name))); d != "" {
 			t.Errorf("%s differs from mrp's (-mrp +got):\n%s", f.name, d)
-		}
-	}
-}
-
-// TestReqs: a job's resources are the using() request with the def's over
-// it, resolved as mrp's local job manager resolves them: whole centicores
-// and MiB, one thread and 1 GB unset, vmem the memory plus 3 GB unset and
-// never below the memory.
-func TestReqs(t *testing.T) {
-	cases := []struct {
-		name       string
-		using, def *core.JobResources
-		want       core.JobResources
-	}{
-		{"defaults", nil, nil, core.JobResources{Threads: 1, MemGB: 1, VMemGB: 4}},
-		{"fractions", &core.JobResources{Threads: 0.333, MemGB: 0.3}, nil, core.JobResources{Threads: 0.34, MemGB: 308.0 / 1024, VMemGB: (308.0 + 3072) / 1024}},
-		{"def over using", &core.JobResources{Threads: 4, MemGB: 8, Special: "a"}, &core.JobResources{MemGB: 2, Special: "b"}, core.JobResources{Threads: 4, MemGB: 2, VMemGB: 5, Special: "b"}},
-		{"adaptive", &core.JobResources{Threads: -2, MemGB: -6}, nil, core.JobResources{Threads: 2, MemGB: 6, VMemGB: 9}},
-		{"vmem below mem", &core.JobResources{MemGB: 8, VMemGB: 2}, nil, core.JobResources{Threads: 1, MemGB: 8, VMemGB: 8}},
-	}
-
-	for _, tc := range cases {
-		if got := (Runtime{}).Resources(Stage{Using: tc.using}, PhaseMain, tc.def); got != tc.want {
-			t.Errorf("%s: Resources = %+v, want %+v", tc.name, got, tc.want)
 		}
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -117,13 +118,37 @@ func execMrp(ctx context.Context, bin, dir, mro, tmp string, extra ...string) ([
 	return execMrpVDR(ctx, bin, dir, mro, tmp, "disable", extra...)
 }
 
+// The pool mrp's local job manager grants the differential's jobs from, its
+// --localcores and --localmem, which a transpiled project's tasks are
+// clamped to (mrpPoolArgs) so their jobs are granted the same.
+const (
+	mrpLocalCores = 2
+	mrpLocalMemGB = 4
+)
+
+// mrpPoolArgs writes a config into proj that clamps its tasks to mrp's pool,
+// and returns the flags that launch the project with it.
+func mrpPoolArgs(t *testing.T, proj string) []string {
+	t.Helper()
+
+	path := filepath.Join(proj, "mrp-pool.config")
+	body := fmt.Sprintf("process.resourceLimits = [cpus: %d, memory: %d.GB]\n", mrpLocalCores, mrpLocalMemGB)
+
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	return []string{"-c", path}
+}
+
 // execMrpVDR is execMrp under the given --vdrmode.
 func execMrpVDR(ctx context.Context, bin, dir, mro, tmp, vdrMode string, extra ...string) ([]byte, error) {
 	// Preflight stages run (no --nopreflight) because mro2nf runs them, so their
 	// invocations pair up.
 	cmd := exec.CommandContext(ctx, filepath.Join(bin, "mrp"), slices.Concat([]string{
 		filepath.Join(dir, mro), "mrp",
-		"--jobmode=local", "--localcores=2", "--localmem=4", "--disable-ui", "--vdrmode=" + vdrMode,
+		"--jobmode=local", "--localcores=" + strconv.Itoa(mrpLocalCores), "--localmem=" + strconv.Itoa(mrpLocalMemGB),
+		"--disable-ui", "--vdrmode=" + vdrMode,
 	}, extra)...)
 	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "MROPATH="+dir)
@@ -319,6 +344,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// #370: fractional threads reach the stage as mrp resolves them, not
 	// Nextflow's integer cpus.
 	{name: "frac_threads"},
+	// #545: adaptive and oversized requests are granted from the pool, in
+	// _jobinfo, _args and the thread variables, as mrp's local job manager
+	// grants them.
+	{name: "res_pool"},
 	{name: "dir_out"},
 	// #242: dotfiles and an empty subdirectory inside directory outputs.
 	{name: "dir_hidden"},
@@ -694,7 +723,7 @@ func diffNextflow(t *testing.T, tc mrpDiffCase, tmp string) string {
 	proj := transpileMRO(t, dir, mro)
 	_, nfFlags := tc.flags()
 
-	if err := runNextflow(t, proj, nfFlags...); err != nil {
+	if err := runNextflow(t, proj, append(mrpPoolArgs(t, proj), nfFlags...)...); err != nil {
 		t.Fatalf("nextflow: %v", err)
 	}
 

@@ -57,6 +57,9 @@ type Runtime struct {
 	// Overrides is mrp's --overrides, over every job's resources; nil
 	// overrides none.
 	Overrides *core.PipestanceOverrides
+	// Local is the pool mrp's local job manager grants every job from; the
+	// zero Pool grants them as mrp's cluster job managers do.
+	Local Pool
 	// PSID is the run's pipestance id, which names every job.
 	PSID string
 	// Invocation and Version are recorded in every job's _jobinfo.

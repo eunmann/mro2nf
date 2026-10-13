@@ -22,9 +22,10 @@ environment sourced, it:
    8 GB);
 3. transpiles the same `.mro` with `-mropath <bundle>/mro`;
 4. runs the project on the `standard` profile, with the stages under the
-   bundle's own `mrjob` and adapters (`--mro2nf_mrjob`, `--mro2nf_adapters`).
-   The profile clamps each task to the host, so the 30 GB cloupe join runs on
-   a smaller machine, as `mrp` clamps it;
+   bundle's own `mrjob` and adapters (`--mro2nf_mrjob`, `--mro2nf_adapters`),
+   and with `process.resourceLimits` set to the same cores and memory. Each
+   job is granted from that pool and its task clamped to it, so the 30 GB
+   cloupe join runs on a smaller machine, as `mrp` grants it;
 5. requires `metrics_summary.csv` to be byte-identical, and the main outputs
    (`filtered_feature_bc_matrix.h5`, `raw_feature_bc_matrix.h5`,
    `cloupe.cloupe`, `web_summary.html`, `possorted_genome_bam.bam`,

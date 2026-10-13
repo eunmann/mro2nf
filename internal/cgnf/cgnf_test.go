@@ -315,7 +315,7 @@ func TestEmitRunsOneMreCallPerTask(t *testing.T) {
 		_, script, _ := strings.Cut(body, "script:\n")
 		script, _, _ = strings.Cut(script, "\n}\n")
 
-		if strings.Count(script, "${mreStage(") != 1 || !strings.Contains(script, "${mreStage(meta, '"+phase+"', ") {
+		if strings.Count(script, "${mreStage(") != 1 || !strings.Contains(script, "${mreStage(task, meta, '"+phase+"', ") {
 			t.Errorf("%s does not run its %s phase in one mre stage call:\n%s", proc, phase, script)
 		}
 	}
