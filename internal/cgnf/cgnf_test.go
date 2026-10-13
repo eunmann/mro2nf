@@ -253,7 +253,7 @@ func TestEmitOrdersGathers(t *testing.T) {
 	gather := readTree(t, emitFixture(t, "fork_mid"))["main.nf"]
 
 	for _, c := range []struct{ fixture, main, want string }{
-		{"split_test", split, "j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)\n    N0_SUM_SQUARES_JN(j0)"},
+		{"split_test", split, "j0 = JOIN(x0, N0_SUM_SQUARES_MN.out.chunk)\n    N0_SUM_SQUARES_JN(j0)"},
 		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']))\n    n1 = INPUT(u1, [null])"},
 		{"split_test", split, "    outs_pub = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum']))\n    outs_in = outs_pub.toList().map { xs -> ordered(xs) }"},
 	} {
@@ -508,15 +508,22 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 	for _, want := range []string{
 		"s0 = INPUT(b0.run, [])",
 		"N0_SUM_SQUARES_SP(s0)",
-		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
-		"j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)",
-		"N0_SUM_SQUARES_JN(j0)",
+		splitTriad0,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("split_test's main.nf lacks %q:\n%s", want, main)
 		}
 	}
 }
+
+// splitTriad0 is the wiring of node 0's split, its chunks' mains and its
+// join, past the split's call: the chunks and the join read the split's
+// outputs joined to its input once (#559), which cost CellRanger 6 edges
+// of Nextflow's DAG per split stage when each joined them anew.
+const splitTriad0 = "    x0 = SPLITS(N0_SUM_SQUARES_SP.out.split, s0)\n" +
+	"    N0_SUM_SQUARES_MN(CHUNKS(x0))\n" +
+	"    j0 = JOIN(x0, N0_SUM_SQUARES_MN.out.chunk)\n" +
+	"    N0_SUM_SQUARES_JN(j0)\n"
 
 // TestEmitSizesChunksAndJoin: each chunk's main and the join are scheduled
 // with the resources their jobs get, the split's resources table, a value
@@ -525,18 +532,13 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 func TestEmitSizesChunksAndJoin(t *testing.T) {
 	main := readTree(t, emitFixture(t, "join_resources"))["main.nf"]
 
-	for _, want := range []string{
-		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
-		"j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)",
-	} {
-		if !strings.Contains(main, want) {
-			t.Errorf("join_resources's main.nf lacks %q:\n%s", want, main)
-		}
+	if !strings.Contains(main, splitTriad0) {
+		t.Errorf("join_resources's main.nf lacks %q:\n%s", splitTriad0, main)
 	}
 
 	for _, want := range []string{
 		"def r = resources(res)\n        chunked(us, rs, cs, t).collect { c, crs -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, crs, ids, ef, c.name, c, callStaged(m)] }",
-		"split.map { m, k, cs, j, res, t -> [k, m + resources(res).join, cs, j, t] }",
+		"[m + resources(res).join, k, fs, vs, us, joinRefs(",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -559,7 +561,7 @@ func TestEmitSplitNamesFilesByReference(t *testing.T) {
 		"return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], unstaged(rs + refsOf([e]), us)] }",
 		"refsOf(referred([o], recs, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))",
 		"return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })",
-		"[m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
+		"joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)

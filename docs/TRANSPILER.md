@@ -411,8 +411,8 @@ dir. A task's records come on one line, space-separated, so an `eval`
 output of them, whose records grow with a join's chunks or a fork root's
 forks, is collected in time linear in them. A split's come in a file,
 `chunk_refs`, beside `resources.tsv`, a chunk's as an `eval` output:
-`CHUNKS` and `JOIN`, which already join the split's outputs to the
-instance's staged items, resolve them against the
+`CHUNKS` and `JOIN`, which read the split's outputs joined to the
+instance's staged items (`SPLITS`), resolve them against the
 paths the split, and each chunk, staged its items from (`chunked`,
 `joinRefs`), so each chunk stages the files its def names and the join
 those every chunk's def and outs name. A reader, OUTS included, stages
@@ -438,7 +438,10 @@ like any other output (`TaskFileCollector`,
 bundle holds its files below a dir of its own. A file inside a staged
 directory leaf and an entry file are still copies.
 
-**Split stages.** A split's chunk outs are gathered by `groupKey` over the
+**Split stages.** A split's outputs are joined once to the instance its
+task staged, by the key both hold at position 1 (`SPLITS`), and its chunks'
+mains and its join read that join: joining them anew for each, through a
+map of either side, cost CellRanger 6 DAG edges per split stage. A split's chunk outs are gathered by `groupKey` over the
 chunk count. Each chunk's main and the join are scheduled with the cpus, memory
 and special their jobs get, the split's `resources.tsv`, a file the driver
 reads into rows without parsing a record, not an `eval` value, whose

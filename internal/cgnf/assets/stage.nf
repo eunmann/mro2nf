@@ -785,13 +785,6 @@ workflow INPUT_ENTRY {
     out
 }
 
-// staged is an instance the split process takes, by its key, with what the
-// task stages to build its args: [key, fork records, value records, staged
-// items, files staged by reference, entry indices, entry files].
-def staged(List v) {
-    return v.subList(1, 8)
-}
-
 // SOURCES is each instance a non-split stage's process takes, input, by
 // its key, with its sources, which POSTED resolves the files its post
 // names by reference against.
@@ -842,16 +835,32 @@ def joinRefs(List us, List rs, List chunked, List os) {
     return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })
 }
 
-// CHUNKS is a main per chunk a split returned, each scheduled with the
-// resources its job gets, from the split's resources table, and staging
-// the split's inputs, input, and the files its def names by reference.
-workflow CHUNKS {
+// SPLITS joins what each instance's split returned, split, to what its
+// split task staged, input, both by the instance's key at position 1:
+// [key, meta, chunk defs, join def, resources table, chunk refs, then the
+// input past its key], which its chunks and its join each read, so the
+// join is made once for both.
+workflow SPLITS {
     take:
     split
     input
 
     main:
-    out = split.map { m, k, cs, _j, res, t -> [k, m, cs, res, t] }.join(input.map { v -> staged(v) }).flatMap { k, m, cs, res, t, fs, vs, us, rs, ids, ef ->
+    out = split.join(input, by: 1)
+
+    emit:
+    out
+}
+
+// CHUNKS is a main per chunk a split returned, each scheduled with the
+// resources its job gets, from the split's resources table, and staging
+// the split's inputs and the files its def names by reference.
+workflow CHUNKS {
+    take:
+    splits
+
+    main:
+    out = splits.flatMap { k, m, cs, _j, res, t, _d, fs, vs, us, rs, ids, ef, _cf ->
         def r = resources(res)
         chunked(us, rs, cs, t).collect { c, crs -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, crs, ids, ef, c.name, c, callStaged(m)] }
     }
@@ -862,19 +871,18 @@ workflow CHUNKS {
 
 // JOIN is a split's join over every chunk's outs once all are in, by chunk
 // name, not by completion, scheduled with the resources the split gave it,
-// and staging the split's inputs, input, and the files its chunks' defs
-// and outs name by reference.
+// and staging the split's inputs and the files its chunks' defs and outs
+// name by reference.
 workflow JOIN {
     take:
-    split
+    splits
     chunk
-    input
 
     main:
     outs = chunk.map { m, k, o, recs -> [groupKey(k, m.chunks), [o, recs]] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }
-    none = split.filter { v -> v[2].isEmpty() }.map { v -> [v[1], []] }
-    out = split.map { m, k, cs, j, res, t -> [k, m + resources(res).join, cs, j, t] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, t, fs, vs, us, rs, ids, ef, os ->
-        [m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]
+    none = splits.filter { v -> v[2].isEmpty() }.map { v -> [v[0], []] }
+    out = splits.join(outs.mix(none)).map { k, m, cs, j, res, t, _d, fs, vs, us, rs, ids, ef, _cf, os ->
+        [m + resources(res).join, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]
     }
 
     emit:

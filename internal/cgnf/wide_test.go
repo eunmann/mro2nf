@@ -438,8 +438,9 @@ func countMatches(counts map[string]int, re *regexp.Regexp, l string) {
 }
 
 // TestEmitBoundsEachNode: a node's wiring is a constant few lines and one
-// per root, zip, gate and read of it, and one more per phase of a split
-// stage; waiting for its preflights costs it none.
+// per root, zip, gate and read of it, and of a split stage one more per
+// phase and one for its split's outputs joined to its input; waiting for
+// its preflights costs it none.
 func TestEmitBoundsEachNode(t *testing.T) {
 	dir := t.TempDir()
 	if err := wide.New(2, 3, 0).Write(dir); err != nil {
@@ -464,7 +465,7 @@ func TestEmitBoundsEachNode(t *testing.T) {
 
 		edges := len(n.Roots) + len(n.Zips) + len(n.Gates) + len(n.Reads)
 		if n.Split {
-			edges += 2
+			edges += 3
 		}
 
 		if len(w.lines) > 7+edges {

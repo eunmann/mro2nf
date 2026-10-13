@@ -391,12 +391,14 @@ func fieldsArg(fields []string) string {
 
 // splitTriad runs split node i's instances, in: its split, a main per
 // chunk the split returned, and its join over every chunk's outs, j<i>,
-// each task staging the instance's inputs.
+// each task staging the instance's inputs, which the chunks and the join
+// read joined to the split's outputs once, x<i>.
 func splitTriad(w *wiring, i int, proc, in string) {
 	w.incs = append(w.incs, fmt.Sprintf("STAGE_SPLIT as %[1]s_SP ; STAGE_MAIN as %[1]s_MN ; STAGE_JOIN as %[1]s_JN", proc))
 	w.linef("s%d = %s", i, in)
 	w.linef("%s_SP(s%d)", proc, i)
-	w.linef("%[1]s_MN(CHUNKS(%[1]s_SP.out.split, s%[2]d))", proc, i)
-	w.linef("j%[2]d = JOIN(%[1]s_SP.out.split, %[1]s_MN.out.chunk, s%[2]d)", proc, i)
+	w.linef("x%[2]d = SPLITS(%[1]s_SP.out.split, s%[2]d)", proc, i)
+	w.linef("%[1]s_MN(CHUNKS(x%[2]d))", proc, i)
+	w.linef("j%[2]d = JOIN(x%[2]d, %[1]s_MN.out.chunk)", proc, i)
 	w.linef("%[1]s_JN(j%[2]d)", proc, i)
 }
