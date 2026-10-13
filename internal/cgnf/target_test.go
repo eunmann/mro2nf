@@ -140,6 +140,31 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 	}
 }
 
+// TestAWSBatchProfilePollsEveryTwoSeconds: the awsbatch profile checks job
+// status every 2 s rather than Nextflow's 10 s Batch default (#537), scoped
+// to the awsbatch executor so a local executor keeps its 100 ms.
+func TestAWSBatchProfilePollsEveryTwoSeconds(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "diamond_min"))
+	cfg := tree["nextflow.config"]
+
+	const poll = "        executor.$awsbatch.pollInterval = '2 sec'\n"
+
+	awsbatch := cfg[strings.Index(cfg, "    awsbatch {"):strings.Index(cfg, "    healthomics {")]
+	if !strings.Contains(awsbatch, poll) {
+		t.Errorf("the awsbatch profile lacks %q:\n%s", poll, awsbatch)
+	}
+
+	if strings.Count(cfg, "pollInterval =") != 1 {
+		t.Errorf("nextflow.config sets a poll interval outside the awsbatch profile:\n%s", cfg)
+	}
+
+	for _, name := range []string{"conf/container.config", "conf/healthomics.config"} {
+		if strings.Contains(tree[name], "pollInterval =") {
+			t.Errorf("%s sets a poll interval:\n%s", name, tree[name])
+		}
+	}
+}
+
 // TestEmitHealthOmicsTemplate: the HealthOmics parameter template declares
 // every entry input and the run's mrp --overrides file, optional, and none
 // of the project's other params, which a run then cannot set: the image
