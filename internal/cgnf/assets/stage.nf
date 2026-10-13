@@ -239,14 +239,14 @@ process OUTS {
 }
 
 // PLAN's records, as the driver reads them. NODES maps each node to its
-// digest, its off flag, its statically disabled fork keys, the cpus and
-// memory its first task is scheduled with and its own overrides.
+// digest, its off flag, the set of its statically disabled fork keys, the
+// cpus and memory its first task is scheduled with and its own overrides.
 workflow NODES {
     take:
     nodes
 
     main:
-    out = nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): f.drop(1)] } }
+    out = nodes.map { s -> s.readLines().collectEntries { l -> def f = l.tokenize(' '); [(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)] } }
 
     emit:
     out
@@ -438,14 +438,28 @@ workflow GATE {
     node
 
     main:
-    out = inst.combine(nodes).map { k, fs, es, _tk, ns -> [k, fs, es, ns[node], ns[node][1] == '1' || ns[node][2].tokenize(',').contains(k.join('.'))] }
+    out = inst.combine(nodes).map { k, fs, es, _tk, ns -> [k, fs, es, ns[node], ns[node][1] == '1' || ns[node][2].contains(k.join('.'))] }
 
     emit:
     out
 }
 
-// GATED disables each instance a gating stage's posted gates name, joined on
-// the gating stage's roots, at positions at, by the gate's token and the
+// GATES is a gating stage's posted gates, each instance's as a set, built
+// once however many nodes it gates; a disabled instance posts none.
+workflow GATES {
+    take:
+    gates
+    skip
+
+    main:
+    out = gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[0], [].toSet()] })
+
+    emit:
+    out
+}
+
+// GATED disables each instance a gating stage's GATES name, joined on the
+// gating stage's roots, at positions at, by the gate's token and the
 // instance's ordinals of the gate's own roots, at positions ext.
 workflow GATED {
     take:
@@ -456,7 +470,7 @@ workflow GATED {
     token
 
     main:
-    out = gated.map { k, fs, es, d, off -> [k[at], k, fs, es, d, off] }.combine(gates.map { kp, gs -> [kp, gs.tokenize(' ')] }, by: 0).map { _c, k, fs, es, d, off, gs ->
+    out = gated.map { k, fs, es, d, off -> [k[at], k, fs, es, d, off] }.combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->
         [k, fs, es, d, off || gs.contains(token + k[ext].join('.'))]
     }
 
@@ -679,15 +693,15 @@ workflow DONE {
     out
 }
 
-// OR_SKIPPED is a node's output, a disabled instance standing in with none.
+// OR_SKIPPED is a node's outs or fork dirs, a disabled instance standing in
+// with none.
 workflow OR_SKIPPED {
     take:
     out
     skip
-    none
 
     main:
-    all = out.mix(skip.map { v -> [v[0], none] })
+    all = out.mix(skip.map { v -> [v[0], []] })
 
     emit:
     all

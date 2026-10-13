@@ -311,9 +311,12 @@ one ends the run before the calls it gates start (`preflight_fail`).
 
 **Gates.** A node's gates are decided on the driver: PLAN's record and each
 gating stage's posted `gates` (an `eval` output), joined on the roots they
-share. A disabled instance runs no task and stands in with no outs and no
-forks; Martian's call graph already reads its outputs as null in every
-consumer.
+share. Each is parsed once into a set of the fork keys or gate tokens it
+disables, PLAN's per node (`NODES`) and a gating instance's however many
+nodes it gates (`GATES`), so an instance's gate is a lookup, not a scan of
+its node's N forks. A disabled instance runs no task and stands in with no
+outs and no forks; Martian's call graph already reads its outputs as null in
+every consumer.
 
 **Reads.** An enabled instance stages, of each node it reads, only the outputs
 it reads (`outs/<output>/`): from the instance that shares its roots, or, a
