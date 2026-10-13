@@ -314,27 +314,39 @@ func (p *project) elements(w *wiring, r cg.TopoRoot) string {
 // by the instance's ordinals of the gate's own roots. Each instance carries
 // on as its d the meta of its tasks, planned from the record and the
 // node's own meta. PLAN's records reach it once its preflights are done,
-// so no instance of it is gated before. Each gate step keys an instance by
-// its ordinals of the roots of the stage the next gates on, and an enabled
+// so no instance of it is gated before. An instance is keyed by its
+// ordinals of the roots of the stage its first gate joins on, and again,
+// by REGATE, only before a gate joining on other roots; an enabled
 // instance leads with its ordinals, at positions at, of the roots its
 // first read joins on.
 func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta, at string) {
-	keys := make([]string, len(n.Gates)+1)
+	keys := make([]string, len(n.Gates))
 	for x, gp := range n.Gates {
 		keys[x] = ilist(positions(n.Roots, p.topo.Nodes[p.index[gp.Node]].Roots))
 	}
 
-	keys[len(n.Gates)] = "[]"
+	first := "[]"
+	if len(keys) > 0 {
+		first = keys[0]
+	}
 
-	gated := fmt.Sprintf("GATE(%s, %s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), meta, keys[0])
+	gated := fmt.Sprintf("GATE(%s, %s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), meta, first)
+	since := make([]string, 0, len(n.Gates))
 
 	for x, gp := range n.Gates {
 		w.linef("g%d = %s", i, gated)
-		gated = fmt.Sprintf("GATED(g%d, %s, %s, %s, %s)", i, w.use(gatesOf(p.index[gp.Node])), ilist(positions(n.Roots, gp.Roots)),
-			gstr(cg.GateToken(n.Fqid, gp, "")), keys[x+1])
+
+		in := fmt.Sprintf("g%d", i)
+		if x > 0 && keys[x] != keys[x-1] {
+			in = fmt.Sprintf("REGATE(%s, [%s], %s)", in, strings.Join(since, ", "), keys[x])
+			since = since[:0]
+		}
+
+		gated = fmt.Sprintf("GATED(%s, %s)", in, w.use(gatesOf(p.index[gp.Node])))
+		since = append(since, fmt.Sprintf("[%s, %s]", ilist(positions(n.Roots, gp.Roots)), gstr(cg.GateToken(n.Fqid, gp, ""))))
 	}
 
-	w.linef("b%d = ENABLED(%s, %s)", i, gated, at)
+	w.linef("b%d = ENABLED(%s, [%s], %s)", i, gated, strings.Join(since, ", "), at)
 }
 
 // readArgs is what an instance reads of one node: the channel READ

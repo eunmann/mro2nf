@@ -579,8 +579,7 @@ workflow AFTER {
 // node's PLAN record and its own meta, which it carries on as its d, and
 // whether that record disables it: the whole node, or the instance's fork.
 // It keys each by its ordinals, at positions next, of the roots of the
-// gating stage its node's first GATED joins on, and each GATED keys it so
-// for the next, so no gate adds a step to key it.
+// gating stage its node's first GATED joins on.
 workflow GATE {
     take:
     inst
@@ -612,45 +611,72 @@ workflow GATES {
     out
 }
 
-// GATED disables each instance a gating stage's GATES name, joined on the
-// gating stage's roots, which the instance leads with its ordinals of, by
-// the gate's token and the instance's ordinals of the gate's own roots, at
-// positions ext, and keys it by its ordinals, at positions next, of the
-// roots its node's next GATED joins on.
+// disabled is whether instance v is disabled: as it was when it was last
+// keyed, v[5], or by the gates of each gating stage it was joined to since,
+// after it, each gate's of gates, [ext, token], naming it by the token and
+// its ordinals of the gate's own roots, at positions ext.
+def disabled(List v, List gates) {
+    def gss = v.drop(6)
+    if (gss.size() != gates.size()) {
+        error("an instance was joined to ${gss.size()} gating stages since it was keyed, which ${gates.size()} gates name")
+    }
+    return v[5] || [gss, gates].transpose().any { gs, g -> gs.contains(g[1] + v[1][g[0]].join('.')) }
+}
+
+// GATED adds to each instance, which leads with its ordinals of a gating
+// stage's roots, the gates that stage's GATES posted there. A run of gates
+// joining on the same roots is a combine each: REGATE keys an instance
+// again only between gates joining on other roots, and it and ENABLED
+// decide it from the gates of each (disabled). A map per gate cost
+// CellRanger an edge of Nextflow's DAG per gate.
 workflow GATED {
     take:
     gated
     gates
-    ext
-    token
+
+    main:
+    out = gated.combine(gates, by: 0)
+
+    emit:
+    out
+}
+
+// REGATE keys each instance by its ordinals, at positions next, of the
+// roots of the gating stage its node's next GATED joins on, with whether
+// it is disabled so far, by the gates it was joined to since it was last
+// keyed.
+workflow REGATE {
+    take:
+    gated
+    gates
     next
 
     main:
-    out = gated.combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->
-        [k[next], k, fs, es, d, off || gs.contains(token + k[ext].join('.'))]
-    }
+    out = gated.map { v -> [v[1][next]] + v.subList(1, 5) + [disabled(v, gates)] }
 
     emit:
     out
 }
 
 // ENABLED splits the instances the driver runs, which go on to stage what
-// they read, from those it disables, which run no task and lead with the
-// key the gates left them. An instance it runs leads with its ordinals, at
+// they read, from those it disables (disabled, by the gates it was joined
+// to since it was last keyed), which run no task and lead with the key the
+// gates left them. An instance it runs leads with its ordinals, at
 // positions at, of the roots its node's first READ joins on.
 workflow ENABLED {
     take:
     gated
+    gates
     at
 
     main:
     b = gated.branch { v ->
-        skip: v[5]
+        skip: disabled(v, gates)
         run: true
     }
 
     emit:
-    run = b.run.map { _c, k, fs, es, d, _off -> [k[at], k, fs, es, d, []] }
+    run = b.run.map { v -> [v[1][at]] + v.subList(1, 5) + [[]] }
     skip = b.skip
 }
 

@@ -793,31 +793,33 @@ func TestEmitGatesBySet(t *testing.T) {
 
 	for _, want := range []string{
 		"o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
-		"b1 = ENABLED(GATED(g1, o0_gates, [0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@', []), [])",
-		"b2 = ENABLED(GATED(g2, o0_gates, [0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@', []), [])",
+		"b1 = ENABLED(GATED(g1, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@']], [])",
+		"b2 = ENABLED(GATED(g2, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@']], [])",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("split_gate_entry's wiring lacks %q:\n%s", want, main)
 		}
 	}
 
-	mains := map[string]string{}
-	for _, w := range parseWorkflows("stage.nf", stageModule) {
-		mains[w.name] = strings.Join(w.main, "\n")
-	}
+	mains := wiringMains()
 
 	for name, want := range map[string]string{
-		"NODES": "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)]",
-		"GATE":  "r[1] == '1' || r[2].contains(k.join('.'))",
-		"GATES": "posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })",
-		"GATED": ".combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->",
+		"NODES":   "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)]",
+		"GATE":    "r[1] == '1' || r[2].contains(k.join('.'))",
+		"GATES":   "posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })",
+		"ENABLED": "skip: disabled(v, gates)",
+		"REGATE":  "[disabled(v, gates)]",
 	} {
 		if !strings.Contains(mains[name], want) {
 			t.Errorf("stage.nf's %s lacks %q:\n%s", name, want, mains[name])
 		}
 	}
 
-	for _, name := range []string{"GATE", "GATED"} {
+	if want := "return v[5] || [gss, gates].transpose().any { gs, g -> gs.contains(g[1] + v[1][g[0]].join('.')) }"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+
+	for _, name := range []string{"GATE", "GATED", "REGATE", "ENABLED"} {
 		if mains[name] == "" || strings.Contains(mains[name], "tokenize") {
 			t.Errorf("stage.nf's %s parses a record per instance, or is missing:\n%s", name, mains[name])
 		}
@@ -885,18 +887,9 @@ func TestEmitReadsOutsAsTheyCome(t *testing.T) {
 // of their map root, position 0, and at none). TestMrpDiff/gate_chain runs
 // it against mrp.
 func TestEmitKeysReadsWhereTheirRootsChange(t *testing.T) {
-	main := wiringNF(readTree(t, emitFixture(t, "gate_chain")))
-
-	var got []string
-
-	for l := range strings.SplitSeq(main, "\n") {
-		if l = strings.TrimSpace(l); strings.HasPrefix(l, "b4 = ") || strings.HasPrefix(l, "u4 = ") || strings.HasPrefix(l, "n4 = ") {
-			got = append(got, l)
-		}
-	}
+	got := assignments(wiringNF(readTree(t, emitFixture(t, "gate_chain"))), "u4", "n4")
 
 	want := []string{
-		"b4 = ENABLED(GATED(g4, o1_gates, [], 'GATE_CHAIN.INNER.WORK@@', []), [])",
 		"u4 = READ(b4.run, o0_outs)",
 		"u4 = READ(REKEY(u4, [['y']], [0]), o2_outs)",
 		"u4 = READ(u4, o3_outs)",
@@ -910,7 +903,7 @@ func TestEmitKeysReadsWhereTheirRootsChange(t *testing.T) {
 	mains := wiringMains()
 
 	for name, want := range map[string]string{
-		"ENABLED": "run = b.run.map { _c, k, fs, es, d, _off -> [k[at], k, fs, es, d, []] }",
+		"ENABLED": "run = b.run.map { v -> [v[1][at]] + v.subList(1, 5) + [[]] }",
 		"REKEY":   "out = inst.map { v -> [v[1][next]] + v.subList(1, 5) + [readItems(v, fields)] }",
 		"GATHER":  "seeds = run.map { v -> [v[1][mine], null] }.unique()",
 		"INPUT":   "out = inst.map { v -> inputOf(v, fields, [], []) }",
@@ -925,28 +918,22 @@ func TestEmitKeysReadsWhereTheirRootsChange(t *testing.T) {
 	}
 }
 
-// TestEmitKeysEachGateOnce (#559): GATE keys an instance by its ordinals
-// of the roots of the stage its node's first GATED joins on, and each
-// GATED keys it so for the next, so a gate is a combine and a map, not a
-// map more to key the instance, which cost CellRanger 467 edges of
+// TestEmitKeysGatesWhereTheirRootsChange (#559): GATE keys an instance by
+// its ordinals of the roots of the stage its node's first gate joins on,
+// a gate is one combine, which adds the gates that stage posted there, and
+// REGATE keys the instance again, deciding it from the gates since, only
+// before a gate joining on other roots, as ENABLED decides it from the
+// last; a map per gate to key the instance cost CellRanger 831 edges of
 // Nextflow's DAG (gate_chain: WORK is gated per fork of their map root,
 // position 0, by INNER's FLAG, then at no fork by OUTER).
 // TestMrpDiff/gate_chain runs it against mrp.
-func TestEmitKeysEachGateOnce(t *testing.T) {
-	main := wiringNF(readTree(t, emitFixture(t, "gate_chain")))
-
-	var got []string
-
-	for l := range strings.SplitSeq(main, "\n") {
-		if l = strings.TrimSpace(l); strings.HasPrefix(l, "g4 = ") || strings.HasPrefix(l, "b4 = ") {
-			got = append(got, l)
-		}
-	}
+func TestEmitKeysGatesWhereTheirRootsChange(t *testing.T) {
+	got := assignments(wiringNF(readTree(t, emitFixture(t, "gate_chain"))), "g4", "b4")
 
 	want := []string{
 		"g4 = GATE(i4, nodes, [node: 'GATE_CHAIN.INNER.WORK', special: ''], [0])",
-		"g4 = GATED(g4, o3_gates, [], 'GATE_CHAIN.INNER.WORK@@', [])",
-		"b4 = ENABLED(GATED(g4, o1_gates, [], 'GATE_CHAIN.INNER.WORK@@', []), [])",
+		"g4 = GATED(g4, o3_gates)",
+		"b4 = ENABLED(GATED(REGATE(g4, [[[], 'GATE_CHAIN.INNER.WORK@@']], []), o1_gates), [[[], 'GATE_CHAIN.INNER.WORK@@']], [])",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("gate_chain's WORK (-want +got):\n%s", diff)
@@ -956,8 +943,9 @@ func TestEmitKeysEachGateOnce(t *testing.T) {
 
 	for name, want := range map[string]string{
 		"GATE":    "[k[next], k, fs, es, planned(c, meta, r), ",
-		"GATED":   "out = gated.combine(gates, by: 0).map {",
-		"ENABLED": "skip: v[5]",
+		"GATED":   "out = gated.combine(gates, by: 0)\nout",
+		"REGATE":  "out = gated.map { v -> [v[1][next]] + v.subList(1, 5) + [disabled(v, gates)] }",
+		"ENABLED": "skip: disabled(v, gates)",
 		"GATES":   "skip.map { v -> [v[1], [].toSet()] }",
 		"POSTED":  "skip.map { v -> [v[1], []] }",
 	} {
@@ -965,6 +953,21 @@ func TestEmitKeysEachGateOnce(t *testing.T) {
 			t.Errorf("stage.nf's %s lacks %q:\n%s", name, want, mains[name])
 		}
 	}
+}
+
+// assignments are the statements of main, trimmed, that assign one of
+// names, in order.
+func assignments(main string, names ...string) []string {
+	var out []string
+
+	for l := range strings.SplitSeq(main, "\n") {
+		l = strings.TrimSpace(l)
+		if slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(l, n+" = ") }) {
+			out = append(out, l)
+		}
+	}
+
+	return out
 }
 
 // wiringMains is the statements of each workflow of the stage module, its
@@ -1008,14 +1011,14 @@ func TestEmitWaitsForPreflights(t *testing.T) {
 	}
 
 	want := []string{
-		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, [node: 'TOP.TOP_CHECK', special: ''], []), [])",
+		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, [node: 'TOP.TOP_CHECK', special: ''], []), [], [])",
 		"d0 = DONE(N0_TOP_CHECK.out.posted)",
 		"nodes_after_0 = AFTER(nodes, d0)",
-		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.EMIT', special: ''], []), [])",
-		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.SUB.CHECK', special: ''], []), [])",
+		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.EMIT', special: ''], []), [], [])",
+		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.SUB.CHECK', special: ''], []), [], [])",
 		"d2 = DONE(N2_CHECK.out.posted)",
 		"nodes_after_0_2 = AFTER(nodes_after_0, d2)",
-		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, [node: 'TOP.SUB.WORK', special: ''], []), [])",
+		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, [node: 'TOP.SUB.WORK', special: ''], []), [], [])",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("preflight_order's gates and holds (-want +got):\n%s", diff)

@@ -360,9 +360,12 @@ share. Each is parsed once into a set of the fork keys or gate tokens it
 disables, PLAN's per node (`NODES`) and a gating instance's however many
 nodes it gates (`GATES`), so an instance's gate is a lookup, not a scan of
 its node's N forks. `GATE` keys each instance by its ordinals of the roots
-of the stage its node's first `GATED` joins on, and each `GATED` keys it so
-for the next, so a gate costs no map to key the instance (467 edges of
-CellRanger's DAG). A disabled instance runs no task and stands in with no
+of the stage its node's first gate joins on, and a gate is one combine
+(`GATED`), which adds the gates that stage posted there. `REGATE` keys the
+instance again, deciding it from the gates since (`disabled`), only before
+a gate joining on other roots, and `ENABLED` decides it from the last, as
+`REKEY` and `INPUT` do a node's reads (**Reads**): a map per gate to key
+the instance cost CellRanger 831 edges of its DAG. A disabled instance runs no task and stands in with no
 outs and no forks; Martian's call graph already reads its outputs as null in
 every consumer.
 

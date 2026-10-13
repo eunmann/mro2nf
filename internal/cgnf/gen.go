@@ -11,7 +11,7 @@ import (
 
 // wiringWorkflows are the stage module's node wiring sub-workflows, which
 // every workflow of the project includes.
-const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATES ; GATED ; ENABLED ; READ ; REKEY ; GATHER ; INPUT ; INPUT_ENTRY ; SPLITS ; CHUNKS ; JOIN ; SOURCES ; JOIN_SOURCES ; DONE ; POSTED ; PUBLISHED"
+const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GATES ; GATED ; REGATE ; ENABLED ; READ ; REKEY ; GATHER ; INPUT ; INPUT_ENTRY ; SPLITS ; CHUNKS ; JOIN ; SOURCES ; JOIN_SOURCES ; DONE ; POSTED ; PUBLISHED"
 
 // subworkflowDir holds a module per sub-workflow main.nf calls.
 const subworkflowDir = "subworkflows"
