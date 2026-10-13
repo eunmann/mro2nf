@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -324,28 +325,77 @@ func TestCLITypedOverrides(t *testing.T) {
 		t.Run("invalid_"+bad.typ, func(t *testing.T) {
 			t.Parallel()
 
-			proj := transpile(t, fixture)
-
-			err := runNextflowAllowingFailedAttempts(t, proj, "--"+bad.param, bad.value, "-with-trace", "trace.txt")
-			if err == nil {
-				t.Fatalf("--%s %s must fail the run, not reach the stage as a string", bad.param, bad.value)
-			}
-
-			runLog, readErr := os.ReadFile(filepath.Join(proj, "run.log"))
-			if readErr != nil {
-				t.Fatalf("read run.log: %v", readErr)
-			}
-
-			if want := fmt.Sprintf("entry input %q declared %s, got %q", bad.param, bad.typ, bad.value); !strings.Contains(string(runLog), want) {
-				t.Errorf("run log does not report %q:\n%s", want, runLog)
-			}
-
-			for _, r := range readTrace(t, filepath.Join(proj, "trace.txt")) {
-				if r.Name != "PLAN" {
-					t.Errorf("task %s ran after PLAN refused --%s %s", r.Name, bad.param, bad.value)
-				}
-			}
+			assertPlanRefuses(t, transpile(t, fixture), []string{"--" + bad.param, bad.value},
+				fmt.Sprintf("entry input %q declared %s, got %q", bad.param, bad.typ, bad.value))
 		})
+	}
+}
+
+// TestOutOfRangeLaunchValues (#567): a launch value outside Martian's number
+// range fails the run at PLAN naming the input, as mrp's parser refuses the
+// literal. A YAML params file keeps an int beyond int64 exact, and a JSON
+// one a float beyond float64. The command line passes the int as a String
+// under Nextflow's strict syntax parser and as a Double under its v1
+// parser, which the int input refuses.
+func TestOutOfRangeLaunchValues(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	const fixture = "cli_typed"
+
+	for _, tc := range []struct {
+		name, file, body string
+		args, wants      []string
+	}{
+		{
+			name: "yaml_int", file: "params.yaml", body: "n: 9223372036854775808\n", args: []string{"-params-file", "params.yaml"},
+			wants: []string{`entry input "n": number literal out of range: an int must fit int64 and a float float64: 9223372036854775808`},
+		},
+		{
+			name: "json_float", file: "params.json", body: `{"f": -1e400}`, args: []string{"-params-file", "params.json"},
+			wants: []string{`entry input "f": number literal out of range: an int must fit int64 and a float float64: -1E+400`},
+		},
+		{
+			name: "cli_int", args: []string{"--n", "9223372036854775808"},
+			wants: []string{`entry input "n" declared int, got "9223372036854775808"`, "binding parameter n to value 9.223372036854776e+18"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, fixture)
+			if tc.file != "" {
+				writeFileT(t, filepath.Join(proj, tc.file), tc.body)
+			}
+
+			assertPlanRefuses(t, proj, tc.args, tc.wants...)
+		})
+	}
+}
+
+// assertPlanRefuses runs proj with args, which must fail the run at PLAN,
+// before any other task, with a run log holding one of wants.
+func assertPlanRefuses(t *testing.T, proj string, args []string, wants ...string) {
+	t.Helper()
+
+	if err := runNextflowAllowingFailedAttempts(t, proj, append(args, "-with-trace", "trace.txt")...); err == nil {
+		t.Fatalf("the run with %v must fail at PLAN", args)
+	}
+
+	runLog, err := os.ReadFile(filepath.Join(proj, "run.log"))
+	if err != nil {
+		t.Fatalf("read run.log: %v", err)
+	}
+
+	if !slices.ContainsFunc(wants, func(w string) bool { return strings.Contains(string(runLog), w) }) {
+		t.Errorf("run log reports none of %q:\n%s", wants, runLog)
+	}
+
+	for _, r := range readTrace(t, filepath.Join(proj, "trace.txt")) {
+		if r.Name != "PLAN" {
+			t.Errorf("task %s ran after PLAN refused %v", r.Name, args)
+		}
 	}
 }
 

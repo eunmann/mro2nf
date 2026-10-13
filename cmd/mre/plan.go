@@ -226,6 +226,10 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 			return nil, fmt.Errorf("encode entry value %s: %w", k, err)
 		}
 
+		if err := cg.CheckValue(v); err != nil {
+			return nil, fmt.Errorf("entry input %q: %w", k, err)
+		}
+
 		inv.Args[k] = v
 	}
 

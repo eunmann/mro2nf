@@ -82,6 +82,30 @@ func rangePanic(r any) (string, bool) {
 	}
 }
 
+// CheckValue parses raw, a launch value as JSON, as core.BuildCallAst parses
+// each argument of an invocation (syntax.Parser.ParseValExp), refusing a
+// number literal out of range as mrp's parser does.
+func CheckValue(raw []byte) error {
+	lit, err := recoverLiteral(func() error {
+		var p syntax.Parser
+
+		if _, err := p.ParseValExp(raw); err != nil {
+			return fmt.Errorf("parse: %w", err)
+		}
+
+		return nil
+	})
+	if lit == "" {
+		return err
+	}
+
+	if _, tok, ok := literalOffset(string(raw), lit); ok {
+		lit = tok
+	}
+
+	return fmt.Errorf("%w: %s", ErrLiteralRange, lit)
+}
+
 // literalError is the error of the out-of-range literal lit, a parse of the
 // .mro file at path panicked on: its file, line and column.
 func literalError(path string, mroPaths []string, lit string) error {

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -437,6 +438,48 @@ func TestPlanForksByTheSplitValue(t *testing.T) {
 		_, err := planEntry(t, dir, values)
 		if !errors.Is(err, errSplitShape) || !strings.Contains(err.Error(), `entry input "x"`) {
 			t.Errorf("plan with %s: %v, want errSplitShape naming x", values, err)
+		}
+	}
+}
+
+// TestPlanRefusesOutOfRangeValues (#567): a launch value holding an int
+// outside int64 or a float beyond float64, at any depth, fails the plan
+// naming the input and the literal, as mrp's parser refuses the literal
+// (syntax/parsenum.go), where it panicked; int64's ends and float64's
+// largest value pass as written.
+func TestPlanRefusesOutOfRangeValues(t *testing.T) {
+	split := t.TempDir()
+	writeTestFile(t, filepath.Join(split, "pipeline.mro"), splitEntryMRO)
+
+	cases := []struct{ dir, values, input, literal string }{
+		{fixtureDir(t, "cli_typed"), `{"n":9223372036854775808}`, "n", "9223372036854775808"},
+		{fixtureDir(t, "cli_typed"), `{"n":-9223372036854775809}`, "n", "-9223372036854775809"},
+		{fixtureDir(t, "cli_typed"), `{"f":1E+400}`, "f", "1E+400"},
+		{split, `{"x":{"split":[1,9223372036854775808]}}`, "x", "9223372036854775808"},
+	}
+
+	for _, tc := range cases {
+		_, err := planEntry(t, tc.dir, tc.values)
+		if !errors.Is(err, cg.ErrLiteralRange) {
+			t.Errorf("plan with %s: %v, want %v", tc.values, err, cg.ErrLiteralRange)
+
+			continue
+		}
+
+		if want := fmt.Sprintf("entry input %q: %v: %s", tc.input, cg.ErrLiteralRange, tc.literal); !strings.Contains(err.Error(), want) {
+			t.Errorf("plan with %s: %v, want %q", tc.values, err, want)
+		}
+	}
+
+	work, err := plan(t, "cli_typed", `{"n":-9223372036854775808,"f":1.7976931348623157E+308}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call := planCall(t, work)
+	for _, want := range []string{"n = -9223372036854775808,", "f = 1.7976931348623157e+308,"} {
+		if !strings.Contains(call, want) {
+			t.Errorf("the call lacks %q:\n%s", want, call)
 		}
 	}
 }

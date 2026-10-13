@@ -889,6 +889,13 @@ You can override inputs **at launch** without re-transpiling:
   covers a `float` leaf of any shape and, inside an untyped `map`, any number
   written with a `.` or an exponent, so `--f 2.0` and a `-params-file`
   `{"f": 2.0}` both reach the stage as `2`, as `f = 2.0` does under `mrp`.
+- `mre plan` parses each supplied value as `core.BuildCallAst` parses an
+  invocation argument (`syntax.Parser.ParseValExp`) before it rebuilds the
+  call (`cg.CheckValue`), and refuses one holding an int outside int64 or a
+  float beyond float64, naming the input and the literal. Martian's parser
+  panics on such a literal (`syntax/parsenum.go`), as `mrp` does on it in an
+  invocation; the check recovers that panic, as the transpile does for the
+  `.mro`'s own literals (`cg.ReadSource`).
 - The string guarantee holds only under the strict (v2) syntax parser, the
   default from Nextflow 26.04. The v1 parser (the default on earlier releases,
   or `NXF_SYNTAX_PARSER=v1`) converts CLI values before the script sees them:

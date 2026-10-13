@@ -709,32 +709,49 @@ func TestMrpDiffSplitEntryOverride(t *testing.T) {
 
 	bin := martianBin(t)
 
-	const fixture = "map_call_entry"
-
-	dir := filepath.Join(root, "testdata", fixture)
-
 	for _, tc := range []struct{ name, params, mro string }{
 		{name: "array", params: `{"x": {"split": [4, 5]}}`, mro: "override_array.mro"},
 		{name: "map", params: `{"x": {"split": {"r": 7, "q": 8}}}`, mro: "override_map.mro"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			shardSkip(t)
-
-			tmp := t.TempDir()
-			runMrpAt(t, bin, dir, tc.mro, tmp)
-
-			proj := transpileMRO(t, dir, "pipeline.mro")
-			writeFileT(t, filepath.Join(proj, "params.json"), tc.params)
-
-			if err := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-params-file", "params.json")...); err != nil {
-				t.Fatalf("nextflow: %v", err)
-			}
-
-			compareMrpToNextflow(t, fixture, tmp, proj)
-			compareStageABI(t, fixture, tmp, proj)
+			runMrpDiffOverride(t, bin, "map_call_entry", tc.mro, tc.params)
 		})
 	}
+}
+
+// TestMrpDiffInt64Override (#567): literals_edge launched with int64's min
+// and max from a -params-file reaches the stage and the outs byte-exact, as
+// mrp runs the invocation whose literals they are.
+func TestMrpDiffInt64Override(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	runMrpDiffOverride(t, martianBin(t), "literals_edge", "override_int64.mro",
+		`{"neg": -9223372036854775808, "big": 9223372036854775807}`)
+}
+
+// runMrpDiffOverride runs fixture under Nextflow with the launch values
+// params, and the invocation mro, whose literals are those values, under
+// mrp, and diffs the two.
+func runMrpDiffOverride(t *testing.T, bin, fixture, mro, params string) {
+	t.Helper()
+	shardSkip(t)
+
+	dir := filepath.Join(root, "testdata", fixture)
+	tmp := t.TempDir()
+	runMrpAt(t, bin, dir, mro, tmp)
+
+	proj := transpileMRO(t, dir, "pipeline.mro")
+	writeFileT(t, filepath.Join(proj, "params.json"), params)
+
+	if err := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-params-file", "params.json")...); err != nil {
+		t.Fatalf("nextflow: %v", err)
+	}
+
+	compareMrpToNextflow(t, fixture, tmp, proj)
+	compareStageABI(t, fixture, tmp, proj)
 }
 
 // runMrpDiffCase runs one fixture under mrp and under Nextflow and diffs the

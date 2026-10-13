@@ -1,0 +1,7 @@
+@include "echo.mro"
+
+call LE(
+    neg = -9223372036854775808,
+    big = 9223372036854775807,
+    esc = "a\tbéc",
+)
