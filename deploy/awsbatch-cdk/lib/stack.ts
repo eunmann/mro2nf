@@ -28,6 +28,19 @@ export interface Mro2nfStackProps extends cdk.StackProps {
 const BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 
 /**
+ * The Mountpoint for S3 release every instance installs, and the SHA-256 of
+ * its rpm per architecture, taken from rpms whose signatures verified
+ * against the key upstream's INSTALL.md lists (8AEF E705 EBE3 29C0 948C
+ * 75A6 6F1C 3B3A EF4B 030B). Every instance of a deployment then serves the
+ * mount with the same binary.
+ */
+const MOUNTPOINT_VERSION = '1.24.0';
+const MOUNTPOINT_SHA256 = {
+  x86_64: 'fc3587c551dd2af2b502a57abea2eeb7b46ecc2bc0077f1d412827f521e88ebe',
+  arm64: '3636465c56908c7f26182d6f31aaa77e4e145330833863104f4cca0db1788343',
+};
+
+/**
  * The boot script that installs Mountpoint for S3 and mounts each bucket
  * read-only at S3_MOUNT_ROOT/<bucket>, readable by every container user
  * (--allow-other), caching what tasks read on the root volume.
@@ -35,8 +48,9 @@ const BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 function mountCommands(buckets: string[], cacheMiB: number): string[] {
   return [
     'set -euo pipefail',
-    'case "$(uname -m)" in x86_64) a=x86_64;; aarch64) a=arm64;; *) exit 1;; esac',
-    'curl -fsSL --retry 5 -o /tmp/mount-s3.rpm "https://s3.amazonaws.com/mountpoint-s3-release/latest/$a/mount-s3.rpm"',
+    `case "$(uname -m)" in x86_64) a=x86_64 sum=${MOUNTPOINT_SHA256.x86_64};; aarch64) a=arm64 sum=${MOUNTPOINT_SHA256.arm64};; *) exit 1;; esac`,
+    `curl -fsSL --retry 5 -o /tmp/mount-s3.rpm "https://s3.amazonaws.com/mountpoint-s3-release/${MOUNTPOINT_VERSION}/$a/mount-s3-${MOUNTPOINT_VERSION}-$a.rpm"`,
+    'echo "$sum  /tmp/mount-s3.rpm" | sha256sum -c -',
     'dnf install -y /tmp/mount-s3.rpm',
     ...buckets.flatMap((b) => [
       `mkdir -p ${S3_MOUNT_ROOT}/${b} /var/cache/mount-s3/${b}`,

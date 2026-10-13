@@ -63,7 +63,9 @@ Outputs: `Region`, `WorkBucketName`, `EcrRepoUri`, `BatchJobQueue`, `OmicsRoleAr
 `mountBuckets` names the buckets holding the pipeline's inputs, comma-separated;
 the work bucket is always mounted, so `-c mountBuckets=...` can be left out when
 the inputs live there. Each Batch instance installs
-[Mountpoint for S3](https://github.com/awslabs/mountpoint-s3) at boot and
+[Mountpoint for S3](https://github.com/awslabs/mountpoint-s3) at boot, the
+release `MOUNTPOINT_VERSION` in `lib/stack.ts` names, checked against the
+rpm's SHA-256 pinned beside it, and
 mounts every one of them read-only at `/mnt/s3/<bucket>` (`S3_MOUNT_ROOT` in
 `lib/stack.ts`), caching up to `mountCacheMiB` (100 GiB) of each bucket's reads
 on the instance's root volume; the instance role may read them. The compute
