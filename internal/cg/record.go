@@ -56,16 +56,12 @@ type Element struct {
 	Fork     Fork
 	Lens     []int
 	Position int
-	// Missing are the zipped sources (zipSources) the element has no value
-	// of: a shorter source, past whose end a split reads a missing element.
-	Missing []string
 }
 
 type elementJSON struct {
 	Fork     []partJSON `json:"fork"`
 	Lens     []int      `json:"lens"`
 	Position int        `json:"position"`
-	Missing  []string   `json:"missing,omitempty"`
 }
 
 // ReadInstance reads the instance stamp in dir, an args or outs bundle.
@@ -202,11 +198,11 @@ func (g *Graph) element(rec elementJSON) (Element, error) {
 		return Element{}, fmt.Errorf("%w: %d counts, %d parts", errLens, len(rec.Lens), len(f))
 	}
 
-	return Element{Fork: f, Lens: rec.Lens, Position: rec.Position, Missing: rec.Missing}, nil
+	return Element{Fork: f, Lens: rec.Lens, Position: rec.Position}, nil
 }
 
 func writeElement(dir string, el Element) error {
-	return writeRecord(filepath.Join(dir, elementFile), elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position, Missing: el.Missing})
+	return writeRecord(filepath.Join(dir, elementFile), elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position})
 }
 
 func readRecord(path string, v any) error {

@@ -29,8 +29,9 @@ type Topology struct {
 // disable bindings reads; a binding that reads none is the invocation's.
 // Off marks a node the invocation disables outright, which runs nothing at
 // any fork and whose outs every consumer already reads as null. Zips are
-// the outputs of other stages it splits over one of its roots whose forks
-// they do not fix, each staged as the one partner element at its index.
+// the stage outputs it splits over one of its roots other than the one the
+// root's forks come from, each staged as the one partner element at its
+// index.
 // Preflights are the preflight stages every instance of it waits for, each
 // at every fork.
 type TopoNode struct {
@@ -170,24 +171,25 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 }
 
 // nodeReads are the stage outs st's bindings read, less the splits a
-// staged element serves: of an output of the stage that feeds the split's
-// root (the root's fork element), and of another stage's output (its
-// partner element, one of the zips). A disable binding's split is served
-// alike, so an enabled fork the driver let through re-resolves its gate
-// from one element, not the gating stage's whole output.
+// staged element serves: of the output a stage-fed root's forks come from
+// (the root's fork element), and of any other stage output (its partner
+// element, one of the zips). A disable binding's split is served alike, so
+// an enabled fork the driver let through re-resolves its gate from one
+// element, not the gating stage's whole output.
 func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
-	elementOnly := map[*syntax.CallStm]string{}
-
+	roots := map[*syntax.CallStm]*syntax.CallGraphStage{}
 	for _, r := range st.ForkRoots() {
-		if p, ok := g.Producer(r); ok {
-			elementOnly[r.Call()] = p
-		}
+		roots[r.Call()] = r
 	}
 
 	served := func(x *syntax.SplitExp) bool {
-		_, partnered := g.partnerOf(st, x)
+		if _, partnered := g.partnerOf(st, x); partnered {
+			return true
+		}
 
-		return partnered || elementServed(x, elementOnly)
+		ref, ok := x.Value.(*syntax.RefExp)
+
+		return ok && roots[x.Call] != nil && g.ownSource(roots[x.Call], ref)
 	}
 
 	fields := map[string]map[string]bool{}
@@ -215,6 +217,28 @@ func bindings(st *syntax.CallGraphStage) []syntax.Exp {
 	}
 
 	return append(out, st.Disabled()...)
+}
+
+// walkSplits calls visit on every split in e.
+func walkSplits(e syntax.Exp, visit func(*syntax.SplitExp)) {
+	switch x := e.(type) {
+	case *syntax.SplitExp:
+		visit(x)
+		walkSplits(x.Value, visit)
+	case *syntax.ArrayExp:
+		for _, v := range x.Value {
+			walkSplits(v, visit)
+		}
+	case *syntax.MapExp:
+		for _, v := range x.Value {
+			walkSplits(v, visit)
+		}
+	case *syntax.MergeExp:
+		walkSplits(x.Value, visit)
+	case *syntax.DisabledExp:
+		walkSplits(x.Disabled, visit)
+		walkSplits(x.Value, visit)
+	}
 }
 
 // preflights are the preflight stages st waits for, as mrp makes each
@@ -399,14 +423,6 @@ func collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, fields map[s
 		collectReads(x.Disabled, served, fields)
 		collectReads(x.Value, served, fields)
 	}
-}
-
-// elementServed reports a split of an output of the stage that feeds its
-// root, whose element the root's fork element carries (zipSources).
-func elementServed(x *syntax.SplitExp, elementOnly map[*syntax.CallStm]string) bool {
-	ref, ok := x.Value.(*syntax.RefExp)
-
-	return ok && elementOnly[x.Call] != "" && ref.Id == elementOnly[x.Call]
 }
 
 // addRead records the top-level output a reference reads, "" for the whole

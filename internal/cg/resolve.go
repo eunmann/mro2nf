@@ -37,12 +37,10 @@ type store interface {
 	// instances returns root's indices under outer as the staged instances
 	// of the stages forked on root record them, in mrp's order.
 	instances(root *syntax.CallGraphStage, outer Fork) []syntax.CollectionIndex
-	// element returns member of the staged fork element of root at f, the
-	// fork of root's outer roots plus root's own part: elementField for
-	// root's own source, or a zipped source's zipMember. It is false when
-	// no element is staged or it carries no such member, and errNoElement
-	// for a member the element records as missing.
-	element(root *syntax.CallGraphStage, f Fork, member string) (json.RawMessage, bool, error)
+	// element returns the staged fork element of root at f, the fork of
+	// root's outer roots plus root's own part: its element of root's own
+	// source. It is false when no element is staged or it carries no value.
+	element(root *syntax.CallGraphStage, f Fork) (json.RawMessage, bool, error)
 	// partner returns the staged partner element of ref's output at index
 	// ix of root (partner): its value, nil for a null output, or
 	// errNoElement for an index it has no element at. It is false when no
@@ -55,9 +53,10 @@ type store interface {
 // specializes a binding for the fork, LazyArgumentMap.Path projects and
 // type-filters an upstream's outs.
 type resolver struct {
-	g      *Graph
-	st     store
-	across map[string]acrossList
+	g       *Graph
+	st      store
+	across  map[string]acrossList
+	decoded map[indexedKey]indexed
 }
 
 func (r *resolver) boolType() syntax.Type {

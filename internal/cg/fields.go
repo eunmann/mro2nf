@@ -62,7 +62,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 // which this stage feeds or the entry fixes, so this post enumerates them.
 // A binding that does not resolve is left to the node's own task, which
 // fails on it as mrp fails the fork.
-func (g *Graph) writeGates(in Instance, s *stagedStore, path string) error {
+func (g *Graph) writeGates(in Instance, s store, path string) error {
 	r := &resolver{g: g, st: s}
 
 	up, err := g.Stage(in.Node)

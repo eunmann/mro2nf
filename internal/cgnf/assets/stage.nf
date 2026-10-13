@@ -391,7 +391,7 @@ workflow ELEMENTS {
 }
 
 // ZIP adds to each instance, whose fork of the zipped root has the index
-// token tk[token], the partner element of another stage's output there,
+// token tk[token], the partner element of a stage's output there,
 // posted by the instance of that stage agreeing with it on the stage's
 // roots, at positions at, or, where it has none, its absent record, which
 // reads null or a missing element as mrp reads the output's element there.

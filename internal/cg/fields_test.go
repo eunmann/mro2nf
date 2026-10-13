@@ -1,12 +1,18 @@
 package cg
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // postFields posts the instance outs stand for with Fields and Gates set, and
@@ -94,4 +100,123 @@ func TestPostGates(t *testing.T) {
 			t.Errorf("%s outs %s: gates %q, want %q", tc.node, tc.outs, got, tc.want)
 		}
 	}
+}
+
+// readCounter counts the outs reads a resolver makes through it.
+type readCounter struct {
+	store
+
+	reads int
+}
+
+func (c *readCounter) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgumentMap, error) {
+	c.reads++
+
+	return c.store.outs(st, f)
+}
+
+// TestPostGatesReadOnce: FLAGS's post in bench/forkdisabled gates GATED's
+// USE at every skipped fork, and reads FLAGS.skips as often at 64 forks as
+// at 4: once per output and upstream fork, not once per gated fork (#550).
+func TestPostGatesReadOnce(t *testing.T) {
+	reads := map[int]int{}
+
+	for _, n := range []int{4, 64} {
+		outs := forkDisabledFlags(t, n)
+
+		s, err := outs.g.stage([]string{outs.dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		c := &readCounter{store: s}
+		path := filepath.Join(t.TempDir(), "gates")
+
+		if err := outs.g.writeGates(Instance{Node: "FORKDISABLED.FLAGS"}, c, path); err != nil {
+			t.Fatal(err)
+		}
+
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if got := len(strings.Fields(string(raw))); got != n/2 {
+			t.Errorf("forks=%d: %d gates, want %d", n, got, n/2)
+		}
+
+		reads[n] = c.reads
+	}
+
+	if reads[4] != reads[64] {
+		t.Errorf("FLAGS outs reads: %d at 4 forks, %d at 64, want equal", reads[4], reads[64])
+	}
+}
+
+// BenchmarkPostGates posts FLAGS's outs in bench/forkdisabled at two
+// widths, 4-fold apart: its partner elements and the gates of GATED's USE,
+// whose disable binding splits FLAGS.skips. ns/fork stays flat with the
+// width when the post decodes FLAGS.skips once, not once per fork (#550).
+func BenchmarkPostGates(b *testing.B) {
+	for _, n := range []int{2000, 8000} {
+		b.Run("forks="+strconv.Itoa(n), func(b *testing.B) {
+			outs := forkDisabledFlags(b, n)
+
+			for b.Loop() {
+				forks := b.TempDir()
+				if err := outs.g.Post(PostSpec{Args: outs.dir, Outs: outs.dir, Forks: forks, Gates: filepath.Join(forks, "gates")}); err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/fork")
+		})
+	}
+}
+
+// flagsOuts is FLAGS's staged outs bundle and the graph it is posted in.
+type flagsOuts struct {
+	g   *Graph
+	dir string
+}
+
+// forkDisabledFlags compiles bench/forkdisabled at width n and stages
+// FLAGS's outs, every other fork skipped.
+func forkDisabledFlags(tb testing.TB, n int) flagsOuts {
+	tb.Helper()
+
+	xs, skips := make([]int, n), make([]bool, n)
+	for i := range n {
+		xs[i], skips[i] = i, i%2 == 1
+	}
+
+	xsJSON, err := json.Marshal(xs)
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	skipsJSON, err := json.Marshal(skips)
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	src := fmt.Sprintf("@include \"common.mro\"\n\ncall FORKDISABLED(xs = %s, skips = %s,)\n", xsJSON, skipsJSON)
+
+	g, err := Compile([]byte(src), "pipeline.mro", []string{filepath.Join("..", "..", "bench", "forkdisabled")})
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	raw := json.RawMessage(`{"skips":` + string(skipsJSON) + `}`)
+
+	dir := filepath.Join(tb.TempDir(), "outs")
+	if err := writeOuts(dir, raw, g, "FLAGS"); err != nil {
+		tb.Fatal(err)
+	}
+
+	if err := writeInstance(dir, Instance{Node: "FORKDISABLED.FLAGS"}); err != nil {
+		tb.Fatal(err)
+	}
+
+	return flagsOuts{g: g, dir: dir}
 }

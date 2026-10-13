@@ -9,9 +9,9 @@ import (
 )
 
 // postReaders is what a node's post writes for the nodes that read its
-// outs, beyond its own spec: per root its outs fix the forks of, the root,
-// the outer roots whose forks it enumerates and the outputs its fork
-// elements zip; each partner of its outputs; each disable binding whose
+// outs, beyond its own spec: per root its outs fix the forks of, the root
+// and the outer roots whose forks it enumerates; each partner of its
+// outputs; each disable binding whose
 // value it posts, with the roots that binding is forked on beyond the
 // node's. A task's cache key holds it, so a re-transpile that changes it
 // re-runs the node, whose cached post would write for the old readers.
@@ -34,11 +34,9 @@ type rootKey struct {
 type fedRoot struct {
 	Root  rootKey   `json:"root"`
 	Outer []rootKey `json:"outer"`
-	Zips  []rootZip `json:"zips"`
 }
 
-// rootZip is a split over a root an element holds a member of: the member,
-// or the partner dir, the split and its collection type.
+// rootZip is a partner: its dir, its split and the split's collection type.
 type rootZip struct {
 	Name  string           `json:"name"`
 	Root  string           `json:"root"`
@@ -56,17 +54,7 @@ func (g *Graph) postReaders(st *syntax.CallGraphStage) (postReaders, error) {
 	out := postReaders{Roots: []fedRoot{}, Partners: []rootZip{}, Gates: []gateKey{}}
 
 	for _, root := range g.fedBy(st.Fqid) {
-		srcs, err := g.zipSources(root)
-		if err != nil {
-			return postReaders{}, err
-		}
-
-		fr := fedRoot{Root: g.rootKey(root), Outer: g.rootKeys(g.outerRoots(root)), Zips: []rootZip{}}
-		for _, s := range srcs {
-			fr.Zips = append(fr.Zips, newRootZip(s.member, root, s.split))
-		}
-
-		out.Roots = append(out.Roots, fr)
+		out.Roots = append(out.Roots, fedRoot{Root: g.rootKey(root), Outer: g.rootKeys(g.outerRoots(root))})
 	}
 
 	ps, err := g.partners(st.Fqid)
@@ -75,7 +63,7 @@ func (g *Graph) postReaders(st *syntax.CallGraphStage) (postReaders, error) {
 	}
 
 	for _, p := range ps {
-		out.Partners = append(out.Partners, newRootZip(p.dir(), p.root, p.split))
+		out.Partners = append(out.Partners, rootZip{Name: p.dir(), Root: p.root.Fqid, Split: p.split, Type: splitType(p.split)})
 	}
 
 	for gated, d := range g.gatedBy(st.Fqid) {
@@ -103,10 +91,6 @@ func (g *Graph) rootKeys(roots syntax.ForkRootList) []rootKey {
 	}
 
 	return out
-}
-
-func newRootZip(name string, root *syntax.CallGraphStage, sp *syntax.SplitExp) rootZip {
-	return rootZip{Name: name, Root: root.Fqid, Split: sp, Type: splitType(sp)}
 }
 
 func splitType(sp *syntax.SplitExp) string {

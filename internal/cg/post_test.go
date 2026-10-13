@@ -102,6 +102,69 @@ func TestForkElementLeaves(t *testing.T) {
 	}
 }
 
+// TestForkElementLeaves2D (#553): an element of a txt[][] is a txt[], so
+// each fork element of a split over MAKE.rows holds the files of its row,
+// one of a split over the map<txt[]> MAKE.byk those of its key, and each
+// partner element of MAKE.cols, which PAIR zips, those of its column, each
+// staged, not left as a path into MAKE's task.
+func TestForkElementLeaves2D(t *testing.T) {
+	f := loadFixture(t, "map_file_2d")
+
+	src := t.TempDir()
+	file := func(name string) string {
+		p := filepath.Join(src, name)
+		if err := os.WriteFile(p, []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		return p
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		"rows": [][]string{{file("r0_0.txt"), file("r0_1.txt")}, {file("r1_0.txt")}},
+		"cols": [][]string{{file("c0_0.txt"), file("c0_1.txt")}},
+		"byk":  map[string][]string{"k0": {file("k0_0.txt"), file("k0_1.txt")}, "k1": {file("k1_0.txt")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mk := f.outs("MAP_FILE_2D.MAKE", nil, string(raw))
+	forks := f.post(mk, mk)
+
+	for root, want := range map[string][][]string{
+		"MAP_FILE_2D.ROWS": {{"r0_0.txt", "r0_1.txt"}, {"r1_0.txt"}},
+		"MAP_FILE_2D.BYK":  {{"k0_0.txt", "k0_1.txt"}, {"k1_0.txt"}},
+		"MAP_FILE_2D.PAIR": {{"r0_0.txt", "r0_1.txt"}, {"r1_0.txt"}},
+	} {
+		elems := elementDirs(t, forks, root)
+		if len(elems) != len(want) {
+			t.Fatalf("MAKE posted %d forks of %s, mrp ran %d", len(elems), root, len(want))
+		}
+
+		for i, dir := range elems {
+			if d := cmp.Diff(want[i], stagedLeaves(t, dir)); d != "" {
+				t.Errorf("%s fork %d element leaves (-want +got):\n%s", root, i, d)
+			}
+		}
+	}
+
+	cols := partnerDirs(t, forks, "MAP_FILE_2D.PAIR", "MAP_FILE_2D.MAKE", "cols")
+	if d := cmp.Diff([]string{"c0_0.txt", "c0_1.txt"}, stagedLeaves(t, cols["0"])); d != "" {
+		t.Errorf("MAKE.cols partner element 0 leaves (-want +got):\n%s", d)
+	}
+}
+
+// stagedLeaves are the names of the files staged in the bundle at dir, sorted.
+func stagedLeaves(t *testing.T, dir string) []string {
+	t.Helper()
+
+	got := slices.DeleteFunc(leafNames(t, dir), func(n string) bool { return n == ".mre-origin" })
+	slices.Sort(got)
+
+	return got
+}
+
 // stageFileOuts stages FBS.GEN's outs as mrp's GEN writes them: n files,
 // g<i>.txt of i+1 bytes.
 func stageFileOuts(t *testing.T, f *fixture, n int) string {

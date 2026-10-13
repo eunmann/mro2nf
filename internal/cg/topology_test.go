@@ -178,10 +178,11 @@ call P()
 }
 
 // TestTopologyZipOneProducer: a map call zipping two outputs of one stage
-// is forked over the first, and each fork's element carries that fork's
-// element of both, so a fork stages none of the stage's outs: O(1) bytes
-// per fork, not the whole second output. A fork past the end of the
-// shorter output reads null, as mrp reads it.
+// is forked over the first, and zips the second as a partner, as it would
+// another stage's: a fork stages its fork element and the second output's
+// partner element at its index, none of the stage's outs, so O(1) bytes per
+// fork, not the whole second output. A fork past the end of the shorter
+// output stages the absent record and reads null, as mrp reads it.
 func TestTopologyZipOneProducer(t *testing.T) {
 	src := gateDecls + `
 stage PAIR(
@@ -226,18 +227,23 @@ call P()
 	}
 
 	if len(topo.Nodes[i].Reads) != 0 {
-		t.Errorf("P.PAIR reads %v, want only its fork elements", topo.Nodes[i].Reads)
+		t.Errorf("P.PAIR reads %v, want only its fork and partner elements", topo.Nodes[i].Reads)
+	}
+
+	if d := cmp.Diff([]Zip{{Root: "P.PAIR", Node: "P.SRC", Output: "skips"}}, topo.Nodes[i].Zips); d != "" {
+		t.Errorf("P.PAIR zips (-want +got):\n%s", d)
 	}
 
 	f := &fixture{t: t, g: g, dir: t.TempDir()}
 	outs := f.outs("P.SRC", nil, `{"xs":[1,2,3],"skips":[false,true],"items":null}`)
+	forks := f.post(outs, outs)
 
-	elems := elementDirs(t, f.post(outs, outs), "P.PAIR")
+	elems := elementDirs(t, forks, "P.PAIR")
 	if len(elems) != 3 {
 		t.Fatalf("SRC posted %d forks of PAIR, want 3", len(elems))
 	}
 
-	for i, want := range []string{`{"out:skips":false,"value":1}`, `{"out:skips":true,"value":2}`, `{"value":3}`} {
+	for i, want := range []string{`{"value":1}`, `{"value":2}`, `{"value":3}`} {
 		raw, err := shim.ReadBundle(elems[i])
 		if err != nil {
 			t.Fatal(err)
@@ -248,10 +254,12 @@ call P()
 		}
 	}
 
-	_, got := f.args("P.PAIR", elems[1])
+	skips := partnerDirs(t, forks, "P.PAIR", "P.SRC", "skips")
+
+	_, got := f.args("P.PAIR", elems[1], skips["1"])
 	wantArgs(t, "P.PAIR fork1", got, `{"skip":true,"x":2}`)
 
-	_, got = f.args("P.PAIR", elems[2])
+	_, got = f.args("P.PAIR", elems[2], skips[AbsentName])
 	wantArgs(t, "P.PAIR fork2", got, `{"skip":null,"x":3}`)
 }
 
