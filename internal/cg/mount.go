@@ -18,10 +18,12 @@ import (
 const s3Prefix = "s3://"
 
 // MountEntryValues is inv with every s3:// file value of its entry inputs
-// replaced by its path under the mount, <mount>/<bucket>/<key>, a trailing
-// / kept, where every task of the run reads it, as mrp hands each stage the
-// path it was given. An input with no such value keeps its encoding. With no
-// mount, inv is returned as it is.
+// whose bucket is a directory <mount>/<bucket> where PLAN runs replaced by
+// its path there, <mount>/<bucket>/<key>, a trailing / kept, where every
+// task of the run reads it, as mrp hands each stage the path it was given.
+// A value of any other bucket stays the URI it is, which Nextflow stages:
+// the mount spares a download, and no run requires it. An input with no
+// mounted value keeps its encoding. With no mount, inv is returned as it is.
 func MountEntryValues(src Source, inv *core.InvocationData, mroPaths []string, mount shim.Mount) (*core.InvocationData, error) {
 	if mount == "" {
 		return inv, nil
@@ -59,8 +61,8 @@ func MountEntryValues(src Source, inv *core.InvocationData, mroPaths []string, m
 	return &out, nil
 }
 
-// mountValue is the entry input p's value raw with each s3:// file leaf at
-// its mount path, and whether any leaf was one.
+// mountValue is the entry input p's value raw with each s3:// file leaf of
+// a mounted bucket at its mount path, and whether any leaf was one.
 func mountValue(tbl *types.Table, p ir.Param, raw json.RawMessage, mount shim.Mount) (json.RawMessage, bool, error) {
 	v, err := types.DecodeJSON(raw)
 	if err != nil {
@@ -70,13 +72,18 @@ func mountValue(tbl *types.Table, p ir.Param, raw json.RawMessage, mount shim.Mo
 	changed := false
 
 	nv, err := tbl.Apply([]ir.Param{p}, map[string]any{p.Name: v}, func(s string) (string, error) {
-		if m := uriScheme.FindStringSubmatch(s); m == nil || !strings.EqualFold(m[1], "s3") {
+		at, ok, err := mountPath(p.Name, s, mount)
+		if err != nil {
+			return "", err
+		}
+
+		if !ok {
 			return s, nil
 		}
 
 		changed = true
 
-		return mountPath(p.Name, s, mount)
+		return at, nil
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("mount entry values: %w", err)
@@ -94,25 +101,26 @@ func mountValue(tbl *types.Table, p ir.Param, raw json.RawMessage, mount shim.Mo
 	return enc, true, nil
 }
 
-// mountPath is the path of the s3:// URI uri of entry input name under the
-// mount. Mountpoint for S3 shows no object whose key has an empty, . or ..
-// component, so such a URI is refused, as is one naming no bucket. The
-// errors name the input, not the value.
-func mountPath(name, uri string, mount shim.Mount) (string, error) {
+// mountPath is the path under the mount of the file value uri of entry
+// input name, and whether it has one: an s3://<bucket>/<key> URI whose
+// bucket the mount shows. Mountpoint for S3 shows no object whose key has an
+// empty, . or .. component, so such a URI of a mounted bucket is refused.
+// The errors name the input, not the value.
+func mountPath(name, uri string, mount shim.Mount) (string, bool, error) {
 	if len(uri) < len(s3Prefix) || !strings.EqualFold(uri[:len(s3Prefix)], s3Prefix) {
-		return "", fmt.Errorf("%w: entry input '%s': not an s3://<bucket>/<key> URI", ErrEntryFile, name)
+		return "", false, nil
 	}
 
 	rest, dir := strings.CutSuffix(uri[len(s3Prefix):], "/")
 	parts := strings.Split(rest, "/")
 
-	if parts[0] == "" {
-		return "", fmt.Errorf("%w: entry input '%s': the s3:// URI names no bucket", ErrEntryFile, name)
+	if !bucketMounted(parts[0], mount) {
+		return "", false, nil
 	}
 
 	for _, c := range parts[1:] {
 		if c == "" || c == "." || c == ".." {
-			return "", fmt.Errorf("%w: entry input '%s': the s3:// key has an empty, '.' or '..' component, which the S3 mount cannot show", ErrEntryFile, name)
+			return "", false, fmt.Errorf("%w: entry input '%s': the s3:// key has an empty, '.' or '..' component, which the S3 mount cannot show", ErrEntryFile, name)
 		}
 	}
 
@@ -121,12 +129,29 @@ func mountPath(name, uri string, mount shim.Mount) (string, error) {
 		p += "/"
 	}
 
-	return p, nil
+	return p, true, nil
+}
+
+// bucketMounted reports whether the mount shows bucket: <mount>/<bucket> is
+// a directory where PLAN runs, on the compute environment every task runs
+// on. Any directory counts, not only a mount point, as a compute environment
+// may serve the root as one bind-mounted tree. A name that is no single path
+// component is no bucket. Whatever the mount does not show is staged, which
+// every run can do.
+func bucketMounted(bucket string, mount shim.Mount) bool {
+	if mount == "" || bucket == "" || bucket == "." || bucket == ".." {
+		return false
+	}
+
+	fi, err := os.Stat(filepath.Join(string(mount), bucket))
+
+	return err == nil && fi.IsDir()
 }
 
 // VetMountedLeaf fails unless the mounted entry file value l names a file
-// or directory under a bucket the run's mount shows: a bucket the stack does
-// not mount, or a key no object has, would fail a stage later and quietly.
+// or directory under a bucket the run's mount shows: a key no object has,
+// or a path given under the mount of a bucket it does not show, would fail
+// a stage later and quietly.
 func VetMountedLeaf(l EntryLeaf, mount shim.Mount) error {
 	rel, err := filepath.Rel(string(mount), filepath.Clean(l.Value))
 	if err != nil {
@@ -140,7 +165,7 @@ func VetMountedLeaf(l EntryLeaf, mount shim.Mount) error {
 
 	at := filepath.Join(string(mount), bucket)
 	if _, err := os.Stat(at); err != nil {
-		return fmt.Errorf("%w: entry input '%s': bucket %s is not mounted at %s on this run's instances; add it to the stack's mountBuckets",
+		return fmt.Errorf("%w: entry input '%s': bucket %s is not mounted at %s on this run's instances; pass the input as an s3:// URI, which the run stages",
 			ErrEntryFile, l.Input, bucket, at)
 	}
 

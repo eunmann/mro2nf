@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,12 +28,14 @@ func s3Root(t *testing.T) string {
 	return root
 }
 
-// TestPlanMountsS3EntryFiles: under -s3-mount an s3:// entry file value is
-// its path under the mount in the run's call, on a profile that sees no
-// head-node file too, and no task stages it, so the plan lists it among
-// neither the staged values nor any instance's; a path given under the mount
-// is mounted as well. A bucket the mount does not show, a path climbing out
-// of the mount, which is a head-node path, and a relative root fail the plan.
+// TestPlanMountsS3EntryFiles: under -s3-mount an s3:// entry file value of
+// a bucket the mount shows is its path under the mount in the run's call, on
+// a profile that sees no head-node file too, and no task stages it, so the
+// plan lists it among neither the staged values nor any instance's; a path
+// given under the mount is mounted as well. A key no object of a mounted
+// bucket has, a path given under the mount of a bucket it does not show, a
+// path climbing out of the mount, which is a head-node path, and a relative
+// root fail the plan.
 func TestPlanMountsS3EntryFiles(t *testing.T) {
 	root := s3Root(t)
 	reads := filepath.Join(root, "bucket", "reads.txt")
@@ -49,13 +52,12 @@ func TestPlanMountsS3EntryFiles(t *testing.T) {
 			}
 		}
 
-		call, err := base64.StdEncoding.DecodeString(readText(t, filepath.Join(work, "call")))
-		if err != nil || !strings.Contains(string(call), `"`+reads+`"`) {
-			t.Errorf("reads %s: the call names it as %s (%v), want %s", value, call, err, reads)
+		if call := planCall(t, work); !strings.Contains(call, `"`+reads+`"`) {
+			t.Errorf("reads %s: the call names it as %s, want %s", value, call, reads)
 		}
 	}
 
-	for _, value := range []string{"s3://other/reads.txt", "s3://bucket/none.txt", root + "/bucket/../../reads.txt"} {
+	for _, value := range []string{"s3://bucket/none.txt", root + "/other/reads.txt", root + "/bucket/../../reads.txt"} {
 		if _, err := planEntryFile(t, value, "-host-inputs=false", "-s3-mount", root); !errors.Is(err, cg.ErrEntryFile) {
 			t.Errorf("plan with reads %s: %v, want ErrEntryFile", value, err)
 		}
@@ -63,6 +65,71 @@ func TestPlanMountsS3EntryFiles(t *testing.T) {
 
 	if _, err := planEntryFile(t, "s3://bucket/reads.txt", "-s3-mount", "s3"); err == nil {
 		t.Error("plan under a relative mount root succeeded")
+	}
+}
+
+// TestPlanStagesS3EntryFilesOfUnmountedBuckets: under -s3-mount an s3://
+// entry file value of a bucket the mount does not show, on a profile that
+// sees no head-node file, stays its URI in the run's call and is staged, as
+// it is with no mount: the plan vets it as a staged value and lists it by
+// its index among the run's entry file values, beside a mounted value of the
+// same run, which it does not.
+func TestPlanStagesS3EntryFilesOfUnmountedBuckets(t *testing.T) {
+	root := s3Root(t)
+
+	for _, flags := range [][]string{{"-s3-mount", root}, {"-s3-mount", filepath.Join(t.TempDir(), "none")}} {
+		work, err := planEntryFile(t, "s3://other/reads.txt", append([]string{"-host-inputs=false"}, flags...)...)
+		if err != nil {
+			t.Fatalf("plan %v: %v", flags, err)
+		}
+
+		assertStaged(t, work, "EP.COUNT - 0\n", "s3://other/reads.txt")
+	}
+
+	if _, err := planEntryFile(t, "s3://other/r*.txt", "-host-inputs=false", "-s3-mount", root); !errors.Is(err, cg.ErrEntryFile) {
+		t.Errorf("plan with a staged value Nextflow's stage-in would expand: %v, want ErrEntryFile", err)
+	}
+
+	reads := `["s3://other/a.txt", "s3://bucket/reads.txt", "s3://other/b.txt"]`
+
+	work, err := planEntry(t, fixtureDir(t, "entry_filearr"), `{"reads": `+reads+`}`, "-host-inputs=false", "-s3-mount", root)
+	if err != nil {
+		t.Fatalf("plan with reads %s: %v", reads, err)
+	}
+
+	assertStaged(t, work, "EPA.COUNTARR - 0,2\n", "s3://other/a.txt", "", "s3://other/b.txt")
+
+	if call := planCall(t, work); !strings.Contains(call, `"`+filepath.Join(root, "bucket", "reads.txt")+`"`) {
+		t.Errorf("the call names s3://bucket/reads.txt as %s, want its mounted path", call)
+	}
+}
+
+// assertStaged requires the plan in work to stage the entry file values
+// staged, each at its index, "" for one it does not stage, by the instances
+// files lists, each value named by its URI in the run's call.
+func assertStaged(t *testing.T, work, files string, staged ...string) {
+	t.Helper()
+
+	var leaves strings.Builder
+
+	for i, v := range staged {
+		if v == "" {
+			continue
+		}
+
+		fmt.Fprintf(&leaves, "%d %s\n", i, base64.StdEncoding.EncodeToString([]byte(v)))
+
+		if call := planCall(t, work); !strings.Contains(call, `"`+v+`"`) {
+			t.Errorf("the call does not name %s:\n%s", v, call)
+		}
+	}
+
+	if got := readText(t, filepath.Join(work, "leaves")); got != leaves.String() {
+		t.Errorf("the leaves record holds %q, want %q", got, leaves.String())
+	}
+
+	if got := readText(t, filepath.Join(work, "files")); got != files {
+		t.Errorf("the files record holds %q, want %q", got, files)
 	}
 }
 
