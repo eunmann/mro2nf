@@ -202,7 +202,6 @@ func (p *project) entryInputs() ([]launchParam, error) {
 		return nil, fmt.Errorf("emit: entry params: %w", err)
 	}
 
-	call := p.src.Invocation.Call
 	ids := slices.Sorted(maps.Keys(p.src.Invocation.Args))
 	out := make([]launchParam, len(ids))
 
@@ -212,19 +211,65 @@ func (p *project) entryInputs() ([]launchParam, error) {
 			return nil, fmt.Errorf("emit: %w: %s", errUndeclaredInput, id)
 		}
 
-		s, err := tbl.Schema(params[j].Tname)
-		if err != nil {
+		if out[i], err = p.entryInput(params[j], tbl); err != nil {
 			return nil, fmt.Errorf("emit: entry input %s: %w", id, err)
 		}
+	}
 
-		out[i] = launchParam{
-			id: id, schema: s, desc: cmp.Or(params[j].Help, fmt.Sprintf("input %s of pipeline %s", id, call)),
-			omics: fmt.Sprintf("pipeline input %q; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory", id),
-		}
+	return out, nil
+}
 
-		if def := p.src.Invocation.Args[id]; string(def) != null {
-			out[i].def = def
+// entryInput is the run param of the entry input m. One the top-level map
+// call splits takes Martian's invocation form of a split, {"split": v},
+// as mre plan reads it.
+func (p *project) entryInput(m *syntax.StructMember, tbl *types.Table) (launchParam, error) {
+	s, err := tbl.Schema(m.Tname)
+	if err != nil {
+		return launchParam{}, fmt.Errorf("schema: %w", err)
+	}
+
+	lp := launchParam{
+		id: m.Id, schema: s, desc: cmp.Or(m.Help, fmt.Sprintf("input %s of pipeline %s", m.Id, p.src.Invocation.Call)),
+		omics: fmt.Sprintf("pipeline input %q; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory", m.Id),
+	}
+
+	def := p.src.Invocation.Args[m.Id]
+	if string(def) == null {
+		def = nil
+	}
+
+	if slices.Contains(p.src.Invocation.SplitArgs, m.Id) {
+		lp.schema = types.Split(s)
+		lp.omics = fmt.Sprintf(`pipeline input %q, split per fork as {"split": [...]} or {"split": {...}}; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory`, m.Id)
+
+		if def, err = splitValue(def); err != nil {
+			return launchParam{}, err
 		}
+	}
+
+	lp.def = def
+
+	return lp, nil
+}
+
+// splitValue is the invocation data of a split, which carries the split's
+// call and mode beside its value, as the {"split": v} a launch value gives.
+func splitValue(raw json.RawMessage) (json.RawMessage, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	var data struct {
+		Split json.RawMessage `json:"split"`
+	}
+
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, fmt.Errorf("split value: %w", err)
+	}
+
+	out, err := json.Marshal(map[string]json.RawMessage{"split": data.Split})
+	if err != nil {
+		return nil, fmt.Errorf("split value: %w", err)
 	}
 
 	return out, nil

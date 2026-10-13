@@ -26,11 +26,26 @@ const (
 // Schema is the JSON Schema of a value of a Martian type, as nf-schema's
 // nextflow_schema.json declares a param.
 type Schema struct {
-	Type                 string             `json:"type"`
+	Type                 string             `json:"type,omitempty"`
 	Format               string             `json:"format,omitempty"`
 	Items                *Schema            `json:"items,omitempty"`
 	Properties           map[string]*Schema `json:"properties,omitempty"`
 	AdditionalProperties *Schema            `json:"additionalProperties,omitempty"`
+	Required             []string           `json:"required,omitempty"`
+	AnyOf                []*Schema          `json:"anyOf,omitempty"`
+}
+
+// Split is the JSON Schema of Martian's invocation form of a split whose
+// elements are of schema elem (core/runtime.go convertToExp): an object
+// whose split member is an array or a map of them.
+func Split(elem *Schema) *Schema {
+	return &Schema{
+		Type: JSONObject,
+		Properties: map[string]*Schema{
+			"split": {AnyOf: []*Schema{{Type: "array", Items: elem}, {Type: JSONObject, AdditionalProperties: elem}}},
+		},
+		Required: []string{"split"},
+	}
 }
 
 // Schema returns the JSON Schema of a value of the type id names. A file

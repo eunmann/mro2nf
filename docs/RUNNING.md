@@ -129,6 +129,7 @@ in the `.mro`'s `call`:
 | `T[]` | `array` of `T` |
 | `map`, `map<T>` | `object`; a `map<T>`'s values are `T` |
 | a `struct` | `object` with a property per member |
+| `T`, split by the top-level `map call` | `object` with a required `split`: an `array` of `T` or an `object` of `T`, as [Pipeline inputs](#pipeline-inputs) gives it |
 
 The `mro2nf_*` parameters form the `mro2nf options` group, and `outdir` the
 `Output options` group; `job_resources`, a map, sits at the top level, as

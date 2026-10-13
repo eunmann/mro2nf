@@ -898,7 +898,9 @@ You can override inputs **at launch** without re-transpiling:
 - `mre plan` is the one validator of the launch values. `nextflow_schema.json`
   (`internal/cgnf/schema.go`) describes every param for launch forms and
   documentation, each entry input by the JSON Schema of its Martian type
-  (`types.Table.Schema`) with the call's value as its default, and the
+  (`types.Table.Schema`) with the call's value as its default, a split input
+  by Martian's split form of that type (`types.Split`) with the call's split
+  value wrapped as `{"split": v}`, and the
   project's own params from the same model as `nextflow.config` and the
   HealthOmics `parameter-template.json` (`internal/cgnf/params.go`). No
   nf-schema plugin validates against it: a plugin is downloaded at launch,

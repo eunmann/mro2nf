@@ -252,6 +252,107 @@ func TestParamsSchemaValidatesTypes(t *testing.T) {
 	}
 }
 
+// splitEntrySrc is an entry whose top-level map call splits its input x,
+// over the literal split.
+func splitEntrySrc(split string) string {
+	return `stage DOUBLE(
+    in  int x,
+    out int y,
+    src py  "stages/double",
+)
+
+pipeline DOUBLER(
+    in  int x,
+    out int y,
+)
+{
+    call DOUBLE(
+        x = self.x,
+    )
+
+    return (
+        y = DOUBLE.y,
+    )
+}
+
+map call DOUBLER(
+    x = split ` + split + `,
+)
+`
+}
+
+// TestSplitInputSchema (#565): an input the top-level map call splits is
+// declared in Martian's invocation form of a split, {"split": v}, v an
+// array or a map of the input's type, with the .mro's split value so
+// wrapped as its default, and the HealthOmics template names that form.
+// The schema admits the form and refuses a bare value or elements of
+// another type.
+func TestSplitInputSchema(t *testing.T) {
+	integer := map[string]any{"type": "integer"}
+	split := map[string]any{"anyOf": []any{
+		map[string]any{"type": "array", "items": integer},
+		map[string]any{"type": "object", "additionalProperties": integer},
+	}}
+
+	for literal, def := range map[string]any{
+		"[1, 2]":           []any{1.0, 2.0},
+		`{"b": 2, "a": 1}`: map[string]any{"a": 1.0, "b": 2.0},
+	} {
+		tree := emitSource(t, splitEntrySrc(literal))
+
+		var doc struct {
+			Properties map[string]any `json:"properties"`
+		}
+
+		if err := json.Unmarshal([]byte(tree["nextflow_schema.json"]), &doc); err != nil {
+			t.Fatal(err)
+		}
+
+		want := map[string]any{
+			"type": "object", "properties": map[string]any{"split": split}, "required": []any{"split"},
+			"description": "input x of pipeline DOUBLER", "default": map[string]any{"split": def},
+		}
+		if d := cmp.Diff(want, doc.Properties["x"]); d != "" {
+			t.Errorf("split %s: x (-want +got):\n%s", literal, d)
+		}
+
+		if want := `pipeline input \"x\", split per fork as {\"split\": [...]} or {\"split\": {...}}`; !strings.Contains(tree["parameter-template.json"], want) {
+			t.Errorf("split %s: parameter template lacks %s:\n%s", literal, want, tree["parameter-template.json"])
+		}
+
+		checkParamsSchema(t, tree["nextflow_schema.json"])
+		checkSplitValues(t, compileSchema(t, tree["nextflow_schema.json"]))
+	}
+}
+
+// checkSplitValues checks sch admits x in Martian's split form only.
+func checkSplitValues(t *testing.T, sch *jsonschema.Schema) {
+	t.Helper()
+
+	validate := func(params string) error {
+		v, err := jsonschema.UnmarshalJSON(strings.NewReader(params))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return sch.Validate(v)
+	}
+
+	for _, params := range []string{`{"x": {"split": [4, 5]}}`, `{"x": {"split": {"r": 7, "q": 8}}}`} {
+		if err := validate(params); err != nil {
+			t.Errorf("params %s refused: %v", params, err)
+		}
+	}
+
+	for _, params := range []string{
+		`{"x": [4, 5]}`, `{"x": 5}`, `{"x": {}}`, `{"x": {"split": 5}}`, `{"x": {"split": ["a"]}}`, `{"x": {"split": {"a": 1.5}}}`,
+	} {
+		if validate(params) == nil {
+			t.Errorf("params %s admitted", params)
+		}
+	}
+}
+
 // compileSchema compiles a generated nextflow_schema.json as a JSON Schema
 // after checking it against nf-schema's parameter meta-schema, which
 // testdata/nf-schema vendors unchanged from github.com/nextflow-io/nf-schema

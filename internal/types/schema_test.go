@@ -60,6 +60,23 @@ func TestSchema(t *testing.T) {
 	}
 }
 
+// TestSplitSchema: Martian's invocation form of a split is an object whose
+// required split member is an array or a map of the element schema.
+func TestSplitSchema(t *testing.T) {
+	elem := &types.Schema{Type: "string", Format: "file-path"}
+	want := &types.Schema{
+		Type: "object",
+		Properties: map[string]*types.Schema{"split": {AnyOf: []*types.Schema{
+			{Type: "array", Items: elem}, {Type: "object", AdditionalProperties: elem},
+		}}},
+		Required: []string{"split"},
+	}
+
+	if diff := cmp.Diff(want, types.Split(elem)); diff != "" {
+		t.Errorf("split schema (-want +got):\n%s", diff)
+	}
+}
+
 // TestSchemaUnknownType: a type the table lacks has no schema.
 func TestSchemaUnknownType(t *testing.T) {
 	if _, err := newTable(t).Schema(syntax.TypeId{Tname: "Missing"}); !errors.Is(err, types.ErrUnknownType) {
