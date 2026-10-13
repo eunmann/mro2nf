@@ -131,10 +131,9 @@ func TestScaleMapNested(t *testing.T)   { runScaleShape(t, scaleShapes["mapneste
 func TestScaleMapDisabled(t *testing.T) { runScaleShape(t, scaleShapes["mapdisabled"]) }
 
 // TestScaleWideFanin (#503) runs TestWidePipelineRuns' pipeline plus FANIN,
-// whose 210 inputs pass maxTakes (internal/cgnf/scope.go), so its calls are
-// wired in its caller instead of a workflow of its own. Its 442 extra stage
-// tasks outlast a PR's e2e shard; TestEmitBoundsEveryWorkflow pins the
-// fallback's wiring on every PR.
+// whose 210 inputs pass maxTakes (internal/cgnf/scope.go), the most
+// channels one workflow takes. Its 442 extra stage tasks outlast a PR's e2e
+// shard; TestEmitBoundsEveryWorkflow pins its wiring on every PR.
 func TestScaleWideFanin(t *testing.T) {
 	t.Parallel()
 

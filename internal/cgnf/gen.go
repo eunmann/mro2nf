@@ -16,8 +16,8 @@ const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GAT
 // subworkflowDir holds a module per sub-workflow main.nf calls.
 const subworkflowDir = "subworkflows"
 
-// workflows renders main.nf, which runs PLAN, the root pipeline's calls and
-// OUTS, and a module per sub-workflow below subworkflowDir.
+// workflows renders main.nf, which runs PLAN, the nodes and OUTS, and a
+// module per sub-workflow below subworkflowDir.
 func (p *project) workflows() (map[string]string, error) {
 	nodes := make([]*wiring, len(p.topo.Nodes))
 
@@ -33,11 +33,7 @@ func (p *project) workflows() (map[string]string, error) {
 	outs := p.outs()
 	plan := p.planWiring(append(slices.Clone(nodes), outs))
 
-	root, err := p.scopes(nodes, plan, outs)
-	if err != nil {
-		return nil, err
-	}
-
+	root := p.scopes(nodes, plan, outs)
 	files := map[string]string{}
 	addModules(files, root, nodes)
 
@@ -71,7 +67,7 @@ func addModules(files map[string]string, s *scope, nodes []*wiring) {
 
 		b.WriteString("include { " + wiringWorkflows + " } from '../stage.nf'\n")
 		writeIncludes(&b, u.sub, nodes, "../stage.nf", "./")
-		fmt.Fprintf(&b, "\n// %s\nworkflow %s {\n", u.sub.label(), u.sub.name)
+		fmt.Fprintf(&b, "\nworkflow %s {\n", u.sub.name)
 
 		if len(u.sub.takes) > 0 {
 			b.WriteString("    take:\n")

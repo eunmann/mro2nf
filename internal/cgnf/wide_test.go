@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,28 +75,28 @@ func emitWide(t *testing.T, p wide.Pipeline) (string, map[string]string) {
 	return dir, readTree(t, out)
 }
 
-// TestEmitBoundsEveryWorkflow (#503): a pipeline of over 500 stage calls of
-// every shape compiles into workflows none of which outgrows the JVM's
-// limits, whatever the pipeline's size: each Martian pipeline is a workflow
-// of its own, the root's the entry workflow, and one whose calls outweigh a
-// workflow, as WIDE.TREE's 150 do, is wired in runs of them; one whose call
-// would take more than maxTakes channels, as WIDE.FANIN's of 210 stages
-// would, is wired in its caller. Each workflow mixes the outs bundles its
-// own units publish for OUTS, so neither the 210 nor the 1600 nodes WIDE's
-// rs reads outgrow the entry workflow. No workflow weighs more than
-// maxWeight or takes more than maxTakes channels, and each defines every
-// channel before it reads it. A node's own wiring is a few lines and one
-// per edge of it, the same in any pipeline.
+// TestEmitBoundsEveryWorkflow (#503, #541): a pipeline of over 500 stage
+// calls of every shape compiles into workflows none of which outgrows the
+// JVM's limits, whatever the pipeline's size or the shape of its .mro
+// pipelines: the entry workflow calls runs of the nodes in dependency
+// order, each a workflow of its own, filled until the next node would
+// outgrow it, however the .mro nests them, so WIDE.TREE's 150 calls,
+// WIDE.FANIN's 210 inputs and WIDE's 32 small BLOCK calls cost no workflow
+// each. Each workflow mixes the outs bundles its own units publish for
+// OUTS, so neither the 210 nor the 1600 nodes WIDE's rs reads outgrow the
+// entry workflow. No workflow weighs more than maxWeight or takes more than
+// maxTakes channels, and each defines every channel before it reads it. A
+// node's own wiring is a few lines and one per edge of it, the same in any
+// pipeline.
 func TestEmitBoundsEveryWorkflow(t *testing.T) {
 	t.Parallel()
 
 	for _, c := range []struct {
-		name   string
-		p      wide.Pipeline
-		labels []string
+		name string
+		p    wide.Pipeline
 	}{
-		{"calls", wide.New(32, 150, 210), []string{"part of WIDE.TREE", "WIDE.B31", "WIDE.TREE", "part of WIDE.FANIN"}},
-		{"outs", wide.New(2, 3, 1600), []string{"part of WIDE", "WIDE.B1", "part of WIDE.FANIN"}},
+		{"calls", wide.New(32, 150, 210)},
+		{"outs", wide.New(2, 3, 1600)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -104,14 +105,15 @@ func TestEmitBoundsEveryWorkflow(t *testing.T) {
 				t.Fatalf("the wide pipeline has %d stage calls, want at least 500", c.p.Stages)
 			}
 
-			checkBounds(t, c.p, c.labels)
+			checkBounds(t, c.p)
 		})
 	}
 }
 
 // checkBounds checks every workflow of p's project against the JVM's
-// limits, and that the workflows labelled exist.
-func checkBounds(t *testing.T, p wide.Pipeline, labels []string) {
+// limits, and that the entry workflow calls every other, no two in turn of
+// which would fit one.
+func checkBounds(t *testing.T, p wide.Pipeline) {
 	t.Helper()
 
 	_, tree := emitWide(t, p)
@@ -121,22 +123,57 @@ func checkBounds(t *testing.T, p wide.Pipeline, labels []string) {
 		t.Errorf("the wide pipeline weighs %d, too little to need more than a few workflows", total)
 	}
 
-	labelled := func(label string) bool {
-		return slices.ContainsFunc(bodies, func(b workflowBody) bool { return strings.Contains(tree[b.file], "\n// "+label+"\nworkflow ") })
-	}
+	checkFlat(t, bodies)
+	checkWiring(t, bodies)
+	checkPublished(t, bodies, len(p.Rs)+1)
+}
 
-	for _, want := range labels {
-		if !labelled(want) {
-			t.Errorf("no workflow wires %s", want)
+// checkFlat checks that only the entry workflow calls sub-workflows, in
+// the order they are numbered, and that no two it calls in turn weigh as
+// little as half of maxWeight and take as few as half of maxTakes channels:
+// each run of nodes ends only where the next node would outgrow it.
+func checkFlat(t *testing.T, bodies []workflowBody) {
+	t.Helper()
+
+	var called []string
+
+	for _, b := range bodies {
+		for _, l := range b.main {
+			m := subCall.FindStringSubmatch(l)
+			if m == nil {
+				continue
+			}
+
+			if b.name != "{" {
+				t.Errorf("%s: workflow %s calls %s", b.file, b.name, m[1])
+			}
+
+			called = append(called, m[1])
 		}
 	}
 
-	if labelled("WIDE.FANIN") {
-		t.Errorf("WIDE.FANIN, whose call takes over %d channels, has a workflow of its own", maxTakes)
+	if len(called) < 2 {
+		t.Fatalf("the entry workflow calls %d sub-workflows, want several", len(called))
 	}
 
-	checkWiring(t, bodies)
-	checkPublished(t, bodies, len(p.Rs)+1)
+	body := func(name string) workflowBody {
+		return bodies[slices.IndexFunc(bodies, func(b workflowBody) bool { return b.name == name })]
+	}
+
+	for j, name := range called {
+		if want := "W" + strconv.Itoa(j); name != want {
+			t.Errorf("sub-workflow call %d is %s, want %s", j, name, want)
+		}
+
+		if j == 0 {
+			continue
+		}
+
+		a, b := body(called[j-1]), body(name)
+		if a.weight()+b.weight() <= maxWeight/2 && len(a.takes)+len(b.takes) <= maxTakes/2 {
+			t.Errorf("workflows %s and %s weigh %d and %d and take %d and %d channels, so they would fit one", a.name, b.name, a.weight(), b.weight(), len(a.takes), len(b.takes))
+		}
+	}
 }
 
 // workflowBodies lists the workflows of a project's main.nf and its
@@ -306,7 +343,7 @@ func checkBody(t *testing.T, b workflowBody, takes map[string][]string, channels
 
 var (
 	identifier = regexp.MustCompile(`^\w+$`)
-	subCall    = regexp.MustCompile(`^(W\d+_\w+)\((.*)\)$`)
+	subCall    = regexp.MustCompile(`^(W\d+)\((.*)\)$`)
 	quoted     = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 	nameRead   = regexp.MustCompile(`(?:^|[^.\w])(\w+)`)
 )
@@ -337,7 +374,7 @@ func readNames(expr string) []string {
 
 var (
 	publishedNode = regexp.MustCompile(`PUBLISHED\(\w+, (\d+), `)
-	publishedSub  = regexp.MustCompile(`(W\d+_\w+)\.out\.` + publishedChannel)
+	publishedSub  = regexp.MustCompile(`\b(W\d+)\.out\.` + publishedChannel)
 )
 
 // checkPublished checks that the n nodes the pipeline outs read each
