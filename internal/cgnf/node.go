@@ -42,17 +42,13 @@ func forksOf(i int) string { return "o" + strconv.Itoa(i) + "_forks" }
 func gatesOf(i int) string { return "o" + strconv.Itoa(i) + "_gates" }
 func doneOf(i int) string  { return "d" + strconv.Itoa(i) }
 
-// The channels of PLAN's records of every entry-fed root, each a map by
-// root.
-const (
-	entryForks  = "entry_forks"
-	entryCounts = "entry_counts"
-)
+// entryForks is the channel of PLAN's record of the forks of every
+// entry-fed root, a map by root.
+const entryForks = "entry_forks"
 
-// entryRoot is the channel of root's own items of records, one of PLAN's
-// records of every entry-fed root.
-func entryRoot(w *wiring, records, root string) string {
-	return fmt.Sprintf("ENTRY_ROOT(%s, %s)", w.use(records), gstr(root))
+// entryRoot is the channel of root's own forks of entryForks.
+func entryRoot(w *wiring, root string) string {
+	return fmt.Sprintf("ENTRY_ROOT(%s, %s)", w.use(entryForks), gstr(root))
 }
 
 // node wires node i: its instances, enumerated root by root from the fork
@@ -190,7 +186,7 @@ func (p *project) forkOn(w *wiring, inst string, n cg.TopoNode, root string, zr 
 
 	var src string
 	if entryFed {
-		src = entryRoot(w, entryForks, root)
+		src = entryRoot(w, root)
 	} else {
 		src = p.elements(w, r)
 	}
@@ -239,20 +235,21 @@ func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst string) {
 // reads of node r.Node, keyed by the roots they share, with those roots'
 // positions in node i's key: from the instance agreeing on every root they
 // share, or, when the upstream is forked on roots node i is not, every
-// such instance, a gather ordered by the upstream's key, not by completion.
+// such instance, a gather ordered by the upstream's key, not by completion,
+// which waits for all of the upstream, as mrp waits for every fork of a
+// node a node reads.
 func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
 	u := p.index[r.Node]
-	up := p.topo.Nodes[u]
 
 	var mine, theirs []int
 
-	var extra []string
+	gather := false
 
-	for x, root := range up.Roots {
+	for x, root := range p.topo.Nodes[u].Roots {
 		if at := slices.Index(n.Roots, root); at >= 0 {
 			mine, theirs = append(mine, at), append(theirs, x)
 		} else {
-			extra = append(extra, root)
+			gather = true
 		}
 	}
 
@@ -261,77 +258,14 @@ func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
 		fields = glist(r.Fields)
 	}
 
-	outs, run := w.use(outsOf(u)), fmt.Sprintf("b%d.run", i)
+	outs := w.use(outsOf(u))
 
-	var src string
-
-	switch counts, sized := p.forkCounts(w, n, up, extra); {
-	case sized:
-		src = p.sizedGather(n, up, run, outs, counts, fields)
-	case len(extra) > 0:
-		src = fmt.Sprintf("GATHER(%s, %s, %s, %s, %s)", run, outs, ilist(mine), ilist(theirs), fields)
-	default:
-		src = fmt.Sprintf("SELECT(%s, %s, %s)", outs, ilist(theirs), fields)
+	src := fmt.Sprintf("SELECT(%s, %s, %s)", outs, ilist(theirs), fields)
+	if gather {
+		src = fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s)", i, outs, ilist(mine), ilist(theirs), fields)
 	}
 
 	return src + ", " + ilist(mine)
-}
-
-// forkCounts is the channel of the fork counts of root extra[0] under each
-// fork of its outer roots, [outer key, count], none left out, for a gather
-// over it by a node n that is forked, each of whose instances then starts
-// once its own share of the gather is in, not the whole of it. It is false
-// for another gather: over several roots, or over one whose outer roots n
-// does not share or whose producer's post enumerates them itself, whose
-// counts no one item carries; such a gather waits for all of its upstream,
-// as one consumed by an unforked node does by nature.
-func (p *project) forkCounts(w *wiring, n, up cg.TopoNode, extra []string) (string, bool) {
-	if len(extra) != 1 || len(n.Roots) == 0 || len(up.Roots) == 1 {
-		return "", false
-	}
-
-	r := p.roots[extra[0]]
-	for _, o := range r.Outer {
-		if !slices.Contains(n.Roots, o) {
-			return "", false
-		}
-	}
-
-	if r.Producer == "" {
-		return entryRoot(w, entryCounts, r.Fqid), true
-	}
-
-	prod := p.index[r.Producer]
-
-	at := positions(p.topo.Nodes[prod].Roots, r.Outer)
-	if slices.Contains(at, -1) {
-		return "", false
-	}
-
-	return fmt.Sprintf("COUNTS(%s, %s, %s)", w.use(forksOf(prod)), ilist(at), gstr(r.Fqid)), true
-}
-
-// sizedGather gathers, for each enabled instance of node n, run, the outs
-// of every instance of up under it, by groupKey with their count, which
-// counts gives for the outer fork of the gathered root the instance's key
-// fixes.
-func (p *project) sizedGather(n, up cg.TopoNode, run, outs, counts, fields string) string {
-	extra := slices.IndexFunc(up.Roots, func(r string) bool { return !slices.Contains(n.Roots, r) })
-	outer := p.roots[up.Roots[extra]].Outer
-
-	var mine, theirs, outerMine, outerTheirs []int
-
-	for x, root := range up.Roots {
-		if at := slices.Index(n.Roots, root); at >= 0 {
-			mine, theirs = append(mine, at), append(theirs, x)
-		}
-
-		if slices.Contains(outer, root) {
-			outerMine, outerTheirs = append(outerMine, slices.Index(n.Roots, root)), append(outerTheirs, x)
-		}
-	}
-
-	return fmt.Sprintf("GATHER_SIZED(%s, %s, %s, %s, %s, %s, %s, %s)", run, outs, counts, ilist(mine), ilist(theirs), ilist(outerMine), ilist(outerTheirs), fields)
 }
 
 // splitTriad runs split node i's instances, in: its split, a main per

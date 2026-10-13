@@ -1,8 +1,7 @@
 # Gathers by a forked call: per sample (an outer map call), TOTAL merges an
 # inner map call's forks, whose source a stage of the same sample emits
 # (BY_STAGE) or the entry gives (BY_ENTRY). A sample with no inner fork
-# still runs TOTAL, over an empty array. mro2nf starts each sample's TOTAL
-# once that sample's inner forks are done (#259).
+# still runs TOTAL, over an empty array (#259).
 stage MKLIST(
     in  int   n,
     out int[] xs,

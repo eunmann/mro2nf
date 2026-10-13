@@ -168,7 +168,7 @@ same instance tuple, and build its args again. Each process declares only
 the outputs its consumers stage; the args and outs bundles between steps
 stay undeclared files of its work dir. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
-`ENTRY_FORKS`, `ENTRY_COUNTS`, `ENTRY_ROOT`) and that take a node's
+`ENTRY_FORKS`, `ENTRY_ROOT`) and that take a node's
 instances through each step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
 `INPUT`, `CHUNKS`, `JOIN`, …), each given the node's static data, so a
 node's wiring is a few lines and one per root, read, gate or preflight of
@@ -193,8 +193,7 @@ stage calls, is wired in runs of them, each a workflow of its own; a
 sub-pipeline whose call would take more than `maxTakes` channels is wired in
 its caller's workflow. PLAN declares the same outputs, and the entry workflow
 the same few statements of them, however many entry-fed roots a pipeline
-has, as PLAN writes all their forks as one record and all their counts as
-another (§5). So no workflow grows with the pipeline
+has, as PLAN writes all their forks as one record (§5). So no workflow grows with the pipeline
 (`TestEmitBoundsEveryWorkflow`, `TestEmitBoundsPlan`, `TestWidePipelineRuns`,
 `TestEntryRootsMatchMrp`). A process's trace
 name carries its workflow path (`W1_SC_MULTI_CORE:N5_X`); a `withName:`
@@ -232,8 +231,9 @@ selector of its alias alone still names it.
   granted as `mrp`'s cluster job managers grant it (§9).
 - One `params.<name> = null` per entry input (§8).
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
-  the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
-  such as the executor's out-of-memory kill. An ASSERT (42), a stage exception
+  the failures `mrp` retries (§6), or on an executor kill or timeout (104,
+  130–145, the exits nf-core pipelines retry), such as the executor's
+  out-of-memory kill. An ASSERT (42), a stage exception
   or a failed `mre` step ends the run on its first attempt. A retry requests
   the memory and cpus of the first attempt, as `mrp` retries a job at its
   request: it escalates only under `--auto-adjust-memory`, which `mro2nf`
@@ -269,9 +269,8 @@ their roots), whether the invocation disables it, the
 fork keys a static per-fork binding disables, and its resources under the
 run's overrides file (§9); and in one record the forks of every entry-fed
 root, keyed by the witness's outer roots, each with its fork record and its
-index token, and in another their counts under each fork of those outer
-roots. Each line of the two leads with its root, and a node's wiring takes
-its root's own lines from them (`ENTRY_ROOT`, a lookup by root).
+index token. Each line of it leads with its root, and a node's wiring takes
+its root's own lines from it (`ENTRY_ROOT`, a lookup by root).
 
 **Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
 copy, the overrides file and its meta. Under an S3 mount it does not cache,
@@ -328,13 +327,11 @@ every consumer.
 
 **Reads.** An enabled instance stages, of each node it reads, only the outputs
 it reads (`outs/<output>/`): from the instance that shares its roots, or, a
-gather, from every such instance under it. A forked instance's gather over one
-inner map call is a `groupKey` of its share's fork count, which PLAN writes for
-an entry-fed root and the producer's posted forks give for a stage-fed one, an
-empty share gathering at once, so each instance starts when its own share is
-done (`mrp` itself waits for every fork of a node it reads;
-`TestEmitSizesForkedGathers`). Any other gather is a seeded `groupTuple` over all
-of its upstream, which an unforked consumer needs anyway.
+gather, from every such instance under it. A gather is a seeded `groupTuple`
+over all of its upstream, so an instance under which there is none gathers
+none, and a forked instance waits for every fork of the node it reads, as `mrp`
+waits for every fork of a node before a node reading it runs
+(`martian/core/node.go` `getState`; `TestEmitForkedGatherWaitsForItsUpstream`).
 
 **Split stages.** A split's chunk outs are gathered by `groupKey` over the
 chunk count. Each chunk's main and the join are scheduled with the cpus, memory
@@ -377,7 +374,7 @@ every filetype and struct, and the struct of each callable's outputs.
   the witness, vets the entry file values a task stages (§8), and writes the
   call every task compiles, one record per witness node, the entry files of
   each node's instances and of the pipeline outs, and the forks of every
-  entry-fed fork root and their counts, a record each. With `-overrides`, it
+  entry-fed fork root, a record each. With `-overrides`, it
   reads the run's `mrp --overrides` file with Martian's `ReadOverrides`,
   which fails on a key it
   does not know, and each node's record carries the cpus and memory of its

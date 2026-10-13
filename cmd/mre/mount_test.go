@@ -186,7 +186,7 @@ func TestStageKeepsMountedPaths(t *testing.T) {
 	plan := t.TempDir()
 	if _, err := mreIn(t, mro, "plan", "-psid", "mrp", "-host-inputs=false", "-s3-mount", root, "-work", plan,
 		"-call", filepath.Join(plan, "call"), "-nodes", filepath.Join(plan, "nodes"), "-roots", filepath.Join(plan, "roots"),
-		"-counts", filepath.Join(plan, "counts"), "-leaves", filepath.Join(plan, "leaves"), "-files", filepath.Join(plan, "files")); err != nil {
+		"-leaves", filepath.Join(plan, "leaves"), "-files", filepath.Join(plan, "files")); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 

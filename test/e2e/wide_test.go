@@ -24,9 +24,9 @@ func TestWidePipelineRuns(t *testing.T) {
 
 // TestEntryRootsMatchMrp (#509): a pipeline of 300 entry-fed fork roots
 // runs to mrp's outputs and stage _args: PLAN's one record of every root's
-// forks, and one of their counts, reach each root's instances and sized
-// gathers as a record per root did. Most roots are disabled, so they fork
-// but run no task under either runner. PLAN declared two outputs per root
+// forks reaches each root's instances as a record per root did. Most roots
+// are disabled, so they fork but run no task under either runner. PLAN
+// declared two outputs per root
 // and outgrew the JVM's limit on a method past about 1,100 roots, whose
 // pipeline's 1,100 processes take the driver minutes to create;
 // TestEmitBoundsPlan pins PLAN's outputs and wiring at 600.

@@ -50,7 +50,7 @@ func planEntry(t *testing.T, dir, values string, flags ...string) (string, error
 	err := run(t.Context(), append([]string{
 		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-counts", filepath.Join(work, "counts"), "-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
 	}, flags...))
 
 	return work, err
@@ -96,10 +96,10 @@ func rootLines(t *testing.T, path, root string) []string {
 }
 
 // TestPlanWritesEveryRootInOneRecord (#509): the forks of every entry-fed
-// root are one record, and so are their counts, each line led by its root,
-// the roots in order, so PLAN's outputs are the same few however many
-// roots a pipeline has (map_nested_gather: BY_STAGE and BY_ENTRY over the
-// entry, BY_ENTRY.SQ within each BY_ENTRY fork; BY_STAGE.SQ is stage-fed).
+// root are one record, each line led by its root, the roots in order, so
+// PLAN's outputs are the same few however many roots a pipeline has
+// (map_nested_gather: BY_STAGE and BY_ENTRY over the entry, BY_ENTRY.SQ
+// within each BY_ENTRY fork; BY_STAGE.SQ is stage-fed).
 func TestPlanWritesEveryRootInOneRecord(t *testing.T) {
 	work, err := plan(t, "map_nested_gather", `{}`)
 	if err != nil {
@@ -117,11 +117,6 @@ func TestPlanWritesEveryRootInOneRecord(t *testing.T) {
 	if d := cmp.Diff([]string{"MNG.BY_ENTRY", "MNG.BY_ENTRY.SQ", "MNG.BY_STAGE"}, roots); d != "" {
 		t.Errorf("roots of the forks record, in order (-want +plan):\n%s", d)
 	}
-
-	want := "MNG.BY_ENTRY 3 \nMNG.BY_ENTRY.SQ 2 0\nMNG.BY_ENTRY.SQ 0 1\nMNG.BY_ENTRY.SQ 3 2\nMNG.BY_STAGE 3 \n"
-	if d := cmp.Diff(want, readText(t, filepath.Join(work, "counts"))); d != "" {
-		t.Errorf("counts record (-want +plan):\n%s", d)
-	}
 }
 
 // TestPlanNestedEntryForks: a run of map_pipe_nested with its sets widened
@@ -129,17 +124,14 @@ func TestPlanWritesEveryRootInOneRecord(t *testing.T) {
 // call's forks by the outer fork and its own, as mrp forks OUTER/INNER/DBL:
 // three under the first set and one under the second, and two under each
 // when every set has two, a fork set of known length the witness's varies
-// with the outer fork. Each DBL fork's records give it mrp's _args, and
-// the plan counts DBL's forks under each outer fork, for a gather over
-// them to know its size.
+// with the outer fork. Each DBL fork's records give it mrp's _args.
 func TestPlanNestedEntryForks(t *testing.T) {
 	cases := []struct {
-		sets   string
-		want   []string
-		counts []string
+		sets string
+		want []string
 	}{
-		{`[[1,2,3],[4]]`, []string{"0.0", "0.1", "0.2", "1.0"}, []string{"3 0", "1 1"}},
-		{`[[1,2],[3,4]]`, []string{"0.0", "0.1", "1.0", "1.1"}, []string{"2 0", "2 1"}},
+		{`[[1,2,3],[4]]`, []string{"0.0", "0.1", "0.2", "1.0"}},
+		{`[[1,2],[3,4]]`, []string{"0.0", "0.1", "1.0", "1.1"}},
 	}
 
 	wantArgs := []string{`{"x":1}`, `{"x":2}`, `{"x":3}`, `{"x":4}`}
@@ -161,10 +153,6 @@ func TestPlanNestedEntryForks(t *testing.T) {
 
 		if d := cmp.Diff(tc.want, keys); d != "" {
 			t.Errorf("sets %s: DBL's fork keys (-mrp +plan):\n%s", tc.sets, d)
-		}
-
-		if d := cmp.Diff(tc.counts, rootLines(t, filepath.Join(work, "counts"), "OUTER.INNER.DBL")); d != "" {
-			t.Errorf("sets %s: DBL's fork counts (-want +plan):\n%s", tc.sets, d)
 		}
 
 		if d := cmp.Diff(wantArgs, nestedArgs(t, work, lines)); d != "" {
@@ -441,7 +429,7 @@ func planEntryFile(t *testing.T, value string, flags ...string) (string, error) 
 	err := run(t.Context(), append([]string{
 		"plan", "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-counts", filepath.Join(work, "counts"), "-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
 	}, flags...))
 
 	return work, err

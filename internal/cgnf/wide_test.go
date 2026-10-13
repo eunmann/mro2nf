@@ -172,11 +172,10 @@ func checkLimits(t *testing.T, bodies []workflowBody) int {
 }
 
 // TestEmitBoundsPlan (#509): PLAN writes the forks of every entry-fed root
-// as one record and their counts as another, so neither PLAN's outputs nor
-// the entry workflow's wiring of them grows with the roots: a pipeline of
-// over 500 entry-fed roots, of forks and of counts, has the PLAN process
-// and the PLAN wiring of one of a few, and each of its workflows stays
-// within the JVM's limits.
+// as one record, so neither PLAN's outputs nor the entry workflow's wiring
+// of them grows with the roots: a pipeline of over 500 entry-fed roots has
+// the PLAN process and the PLAN wiring of one of a few, and each of its
+// workflows stays within the JVM's limits.
 func TestEmitBoundsPlan(t *testing.T) {
 	t.Parallel()
 

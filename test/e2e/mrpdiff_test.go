@@ -552,7 +552,7 @@ var mrpDiffCases = []mrpDiffCase{
 	// #314: a sub-pipeline's preflight, fed by a parent call, waits for its
 	// parent's preflight and gates its sibling.
 	{name: "preflight_order"},
-	// #259: a forked call gathers its own share of an inner map call, from a
+	// #259: a forked call gathers its share of an inner map call, from a
 	// stage's or the entry's source, also an empty one.
 	{name: "map_nested_gather"},
 	// #342: the modifiers mrp accepts on a top-level call.

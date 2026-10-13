@@ -91,14 +91,15 @@ params.mro2nf_overrides = null
 // processConfig is the retry policy, the GPU rule and the trace.
 func processConfig() string {
 	return fmt.Sprintf(`
-// mrp retries a job only when its error names a signal, ENOMEM or a
-// scheduler failure (jobmanagers/retry.json), for which mre exits %d; a
-// task the executor killed by a signal exits 128 + the signal. Any other
-// failure, a stage exception or ASSERT (42) or a failed mre step, ends the
-// run, as it ends mrp's. A retry requests the same cpus and memory, as mrp
-// retries a job at its request without --auto-adjust-memory.
+// Only a failure that can pass on a second attempt is retried: mre exits %d
+// when a job's error names a transient cause (a signal, ENOMEM, a scheduler
+// failure, mrp's jobmanagers/retry.json), and an executor kill or timeout
+// exits 128 + its signal, or 104, the range nf-core pipelines retry. A stage
+// exception, an ASSERT (42) or a failed mre step fails again, so it ends the
+// run on its first attempt. A retry requests the same cpus and memory, as
+// mrp retries a job at its request without --auto-adjust-memory.
 process {
-    errorStrategy = { task.exitStatus in [%d, 137, 143] ? 'retry' : 'terminate' }
+    errorStrategy = { task.exitStatus in ([%d, 104] + (130..145)) ? 'retry' : 'terminate' }
     maxRetries = %d
 
     // A job's special "gpu" or "gpu:N", as mrp resolves it (the stage's, or

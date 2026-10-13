@@ -196,13 +196,14 @@ The `awsbatch` and grid profiles do not clamp.
 
 ## Retries
 
-A task is retried only when `mrp` would retry the job, and at the same cpus
-and memory:
+A task is retried only for a failure that can pass on a second attempt, and
+at the same cpus and memory:
 
 - `mre` exits 75 when a line of the job's `_errors` matches a `retry_on`
   pattern of `mrp`'s `jobmanagers/retry.json`: a signal, `ENOMEM`, or a
   scheduler failure.
-- A task the executor kills with a signal exits 137 or 143.
+- A task the executor kills with a signal or stops at a time limit exits 104
+  or 130–145, the exits nf-core pipelines retry.
 - These exits are retried up to twice, `mrp`'s `default_retries`. Any other
   failure ends the run on its first attempt: an `ASSERT` (exit 42), a stage
   exception or a failed `mre` step (exit 1).
@@ -527,7 +528,7 @@ run publishes nothing to `results/`.
 |---|---|---|
 | 42 | the stage failed an `ASSERT` (`martian.exit`) | no |
 | 75 | a failure `mrp` retries: a signal, `ENOMEM`, a scheduler failure | up to twice |
-| 137, 143 | the executor killed the task with a signal | up to twice |
+| 104, 130–145 | the executor killed the task with a signal or stopped it at a time limit (137 is an out-of-memory kill) | up to twice |
 | 1 | a stage exception, or a failed `mre` step | no |
 
 A retried attempt that failed still counts as a failed task in the run's
