@@ -13,8 +13,8 @@ import (
 // task's path: the run's call, which every task compiles over the entry's
 // declarations where the run finds its code, each node's digest and its
 // resources under the run's mrp --overrides file, the entry files each
-// instance stages, and the forks of every entry-fed root and their counts,
-// each one record, so PLAN's outputs do not grow with the roots. Under an S3
+// instance stages, and the forks of every entry-fed root, one record, so
+// PLAN's outputs do not grow with the roots. Under an S3
 // mount, which s3:// inputs PLAN reads in place depends on the buckets its
 // instance mounts, which no input of PLAN holds, so a -resume re-runs it;
 // a task downstream stays cached while PLAN's records are unchanged.
@@ -33,14 +33,13 @@ const planProcess = `process PLAN {
     eval('cat leaves'), emit: leaves
     eval('cat files'), emit: files
     eval('cat roots'), emit: roots
-    eval('cat counts'), emit: counts
 
     script:
     """
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)} -host-inputs=${shq(params.mro2nf_host_inputs)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)}${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}${pool(task)} -call call -nodes nodes -roots roots -counts counts -leaves leaves -files files
+    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)} -host-inputs=${shq(params.mro2nf_host_inputs)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)}${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}${pool(task)} -call call -nodes nodes -roots roots -leaves leaves -files files
     """
 }
 

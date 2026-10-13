@@ -23,10 +23,10 @@ import (
 
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
-	entry, values, mropath, call, nodes, roots, counts, leaves, files, work string
-	overrides, psid, s3Mount                                                string
-	hostInputs, remoteInputs                                                bool
-	local                                                                   job.Pool
+	entry, values, mropath, call, nodes, roots, leaves, files, work string
+	overrides, psid, s3Mount                                        string
+	hostInputs, remoteInputs                                        bool
+	local                                                           job.Pool
 }
 
 func (f *planFlags) define(fs *flag.FlagSet) {
@@ -38,7 +38,6 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.call, "call", "call", "file to write the run's call into, base64 of the call as mrp's invocation generator builds it")
 	fs.StringVar(&f.nodes, "nodes", "nodes", "file to write one line per witness node into: fqid digest off disabled-keys cpus mem-gb overrides")
 	fs.StringVar(&f.roots, "roots", "roots", "file to write one line per fork of every entry-fed fork root into: root key record index-token")
-	fs.StringVar(&f.counts, "counts", "counts", "file to write one line per fork of the outer roots of every entry-fed fork root into: root count key")
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
 	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
@@ -252,27 +251,19 @@ func (f *planFlags) write(p cg.Plan, rt job.Runtime) error {
 	return f.writeRoots(p.Roots)
 }
 
-// writeRoots writes the forks of every entry-fed root, and their counts,
-// each as one record whatever the number of roots, so PLAN's outputs and
-// the driver's wiring of them stay fixed; each line leads with its root.
-func (f *planFlags) writeRoots(roots map[string]cg.PlanRoot) error {
-	var forks, counts strings.Builder
+// writeRoots writes the forks of every entry-fed root as one record
+// whatever the number of roots, so PLAN's outputs and the driver's wiring
+// of them stay fixed; each line leads with its root.
+func (f *planFlags) writeRoots(roots map[string][]cg.PlanFork) error {
+	var forks strings.Builder
 
 	for _, root := range slices.Sorted(maps.Keys(roots)) {
-		for _, pf := range roots[root].Forks {
+		for _, pf := range roots[root] {
 			fmt.Fprintf(&forks, "%s %s %s %s\n", root, cg.DottedKey(pf.Key), pf.Record, pf.Token)
 		}
-
-		for _, pc := range roots[root].Counts {
-			fmt.Fprintf(&counts, "%s %d %s\n", root, pc.N, cg.DottedKey(pc.Key))
-		}
 	}
 
-	if err := writeText(f.roots, forks.String()); err != nil {
-		return err
-	}
-
-	return writeText(f.counts, counts.String())
+	return writeText(f.roots, forks.String())
 }
 
 // nodeResources is node n's record of its resources under the run's

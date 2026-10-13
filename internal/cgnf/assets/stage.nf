@@ -306,25 +306,8 @@ workflow ENTRY_FORKS {
     out
 }
 
-// ENTRY_COUNTS maps each entry-fed root to its fork count under each fork
-// of its outer roots, [outer key, count].
-workflow ENTRY_COUNTS {
-    take:
-    counts
-
-    main:
-    out = counts.map { s ->
-        s.readLines().collect { l -> l.tokenize(' ') }.groupBy { f -> f[0] }.collectEntries { r, fs ->
-            [(r): fs.collect { f -> [f.size() > 2 ? f[2].tokenize('.').collect { t -> t as int } : [], f[1] as int] }]
-        }
-    }
-
-    emit:
-    out
-}
-
-// ENTRY_ROOT is one entry-fed root's items of ENTRY_FORKS or ENTRY_COUNTS,
-// a lookup, so splitting the one record among the roots is linear in it.
+// ENTRY_ROOT is one entry-fed root's forks of ENTRY_FORKS, a lookup, so
+// splitting the one record among the roots is linear in it.
 workflow ENTRY_ROOT {
     take:
     records
@@ -563,46 +546,6 @@ workflow GATHER {
     out = seeds.mix(outs.map { ku, ds -> [ku[theirs], selected(ds, fields).collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->
         [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]
     }
-
-    emit:
-    out
-}
-
-// GATHER_SIZED is GATHER over one root whose fork count under each fork of
-// its outer roots counts gives, by groupKey, so each instance starts once
-// its own share is in, not the whole gather; a share with no fork gathers
-// at once. outerMine and outerTheirs are the outer roots' positions in the
-// instance's key and the upstream's.
-workflow GATHER_SIZED {
-    take:
-    run
-    outs
-    counts
-    mine
-    theirs
-    outerMine
-    outerTheirs
-    fields
-
-    main:
-    shares = outs.map { ku, ds -> [ku[outerTheirs], ku[theirs],selected(ds, fields).collect { e -> [ku, e] }] }.combine(counts, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }
-    empty = run.map { v -> [v[0][outerMine], v[0][mine]] }.unique().combine(counts, by: 0).filter { v -> v[2] == 0 }.map { v -> [v[1], []] }
-    out = shares.groupTuple().map { gk, dss -> [gk.getGroupTarget(), ordered(dss.collectMany { x -> x })] }.mix(empty)
-
-    emit:
-    out
-}
-
-// COUNTS is the fork count of a stage-fed root under each fork of its outer
-// roots, at positions at in its producer's key, from the dirs it posted.
-workflow COUNTS {
-    take:
-    forks
-    at
-    root
-
-    main:
-    out = forks.map { kp, ds -> [kp[at], ds.count { e -> e.parent.name == root }] }
 
     emit:
     out

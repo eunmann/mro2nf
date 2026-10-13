@@ -31,22 +31,7 @@ type Plan struct {
 	Leaves []EntryLeaf
 	Nodes  []PlanNode
 	Outs   PlanNode
-	Roots  map[string]PlanRoot
-}
-
-// PlanRoot is an entry-fed root's forks, and their count under each fork
-// of the witness's outer roots, none left out, so a gather over the root
-// knows its size, also when it is empty.
-type PlanRoot struct {
-	Forks  []PlanFork
-	Counts []PlanCount
-}
-
-// PlanCount is the fork count of a root under one fork of its outer roots,
-// keyed by their ordinals.
-type PlanCount struct {
-	Key []int
-	N   int
+	Roots  map[string][]PlanFork
 }
 
 // PlanNode is one witness node at run start. Digest identifies the node's
@@ -177,10 +162,10 @@ func EncodeElement(el Element) (string, error) {
 }
 
 // entryForks are the forks of the witness's entry-fed roots, keyed by the
-// witness's outer roots, and their count under each fork of those: a root
-// the invocation gives a fork set of known length repeats it under every
-// fork of the outer roots the witness's varies with.
-func (g *Graph) entryForks(wt Topology, scratch string) (map[string]PlanRoot, *plannedForks, error) {
+// witness's outer roots: a root the invocation gives a fork set of known
+// length repeats it under every fork of the outer roots the witness's
+// varies with.
+func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, *plannedForks, error) {
 	dir := filepath.Join(scratch, "entry")
 	if err := g.PostEntry(dir); err != nil {
 		return nil, nil, err
@@ -207,12 +192,12 @@ func (g *Graph) entryForks(wt Topology, scratch string) (map[string]PlanRoot, *p
 // planEntry plans the forks own holds of each entry-fed root, outer roots
 // first. A root's forks under each fork of its outer roots are looked up,
 // not scanned for, so planning is linear in the forks however they nest.
-func planEntry(wtRoots []TopoRoot, own map[string][]Element) (map[string]PlanRoot, *plannedForks, error) {
+func planEntry(wtRoots []TopoRoot, own map[string][]Element) (map[string][]PlanFork, *plannedForks, error) {
 	roots := slices.Clone(wtRoots)
 	sort.SliceStable(roots, func(i, j int) bool { return len(roots[i].Outer) < len(roots[j].Outer) })
 
 	planned := &plannedForks{by: map[string][]entryFork{}, idx: map[string]*agreeIndex{}}
-	out := map[string]PlanRoot{}
+	out := map[string][]PlanFork{}
 
 	for _, r := range roots {
 		if r.Producer != "" {
@@ -239,39 +224,35 @@ type plannedForks struct {
 }
 
 // plan plans root r's forks own, under each fork of its outer roots.
-func (p *plannedForks) plan(r TopoRoot, own []Element) (PlanRoot, error) {
+func (p *plannedForks) plan(r TopoRoot, own []Element) ([]PlanFork, error) {
 	items := make([]agreeItem, len(own))
 	for i, el := range own {
 		items[i] = agreeItem{fork: el.Fork}
 	}
 
 	byFork := newAgreeIndex(items)
-	pr := PlanRoot{Forks: []PlanFork{}, Counts: []PlanCount{}}
+	forks := []PlanFork{}
 
 	for _, c := range assignments(r.Outer, p) {
-		under := byFork.agreeing(nil, c.fork)
-
-		for n, i := range under {
+		for n, i := range byFork.agreeing(nil, c.fork) {
 			el := own[i]
 
 			rec, err := EncodeElement(el)
 			if err != nil {
-				return PlanRoot{}, err
+				return nil, err
 			}
 
 			ef := entryFork{el: el, ords: c.with(r.Fqid, n)}
 			p.by[r.Fqid] = append(p.by[r.Fqid], ef)
-			pr.Forks = append(pr.Forks, PlanFork{
+			forks = append(forks, PlanFork{
 				Key:    ef.key(append(slices.Clone(r.Outer), r.Fqid)),
 				Record: rec,
 				Token:  IndexToken(el.Fork[len(el.Fork)-1].Index),
 			})
 		}
-
-		pr.Counts = append(pr.Counts, PlanCount{Key: entryFork{ords: c.ords}.key(r.Outer), N: len(under)})
 	}
 
-	return pr, nil
+	return forks, nil
 }
 
 // index is the index of root's planned forks.

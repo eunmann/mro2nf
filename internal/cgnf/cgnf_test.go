@@ -627,38 +627,27 @@ func TestEmitGatesBySet(t *testing.T) {
 	}
 }
 
-// TestEmitSizesForkedGathers: a forked call's gather of its share of an
-// inner map call is a groupKey of that share's fork count, from PLAN's
-// counts for an entry-fed root (BY_ENTRY) or the producer's posted forks
-// (BY_STAGE, by MKLIST), with an empty gather for a share with no fork.
+// TestEmitForkedGatherWaitsForItsUpstream: a forked call's gather of its
+// share of an inner map call, whose root the entry (BY_ENTRY) or a stage
+// (BY_STAGE, by MKLIST) feeds, is the plain gather over all of its
+// upstream, as mrp waits for every fork of a node a node reads
+// (martian/core/node.go getState), so PLAN writes no fork counts.
 // TestMrpDiff/map_nested_gather runs the fixture against mrp.
-func TestEmitSizesForkedGathers(t *testing.T) {
+func TestEmitForkedGatherWaitsForItsUpstream(t *testing.T) {
 	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
 
 	for _, want := range []string{
-		"entry_counts = ENTRY_COUNTS(PLAN.out.counts)",
-		"u1 = READ(b1.run, GATHER_SIZED(b1.run, o0_outs, ENTRY_ROOT(entry_counts, 'MNG.BY_ENTRY.SQ'), [0], [0], [0], [0], ['y']), [0])",
-		"u4 = READ(u4, GATHER_SIZED(b4.run, o3_outs, COUNTS(o2_forks, [0], 'MNG.BY_STAGE.SQ'), [0], [0], [0], [0], ['y']), [0])",
-		"eval('cat counts'), emit: counts",
+		"u1 = READ(b1.run, GATHER(b1.run, o0_outs, [0], [0], ['y']), [0])",
+		"u4 = READ(u4, GATHER(b4.run, o3_outs, [0], [0], ['y']), [0])",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
 		}
 	}
 
-	if strings.Contains(main, "GATHER(") {
-		t.Errorf("a forked gather waits for all of its upstream:\n%s", main)
-	}
-
-	for _, want := range []string{
-		".combine(counts, by: 0).map { _o, c, xs, m -> [groupKey(c, m), xs] }",
-		".unique().combine(counts, by: 0).filter { v -> v[2] == 0 }.map { v -> [v[1], []] }",
-		"[f.size() > 2 ? f[2].tokenize('.').collect { t -> t as int } : [], f[1] as int]",
-		"out = records.flatMap { m -> m[root] ?: [] }",
-		"forks.map { kp, ds -> [kp[at], ds.count { e -> e.parent.name == root }] }",
-	} {
-		if !strings.Contains(stageModule, want) {
-			t.Errorf("stage.nf lacks %q", want)
+	for _, unwanted := range []string{"counts", "COUNTS", "groupKey"} {
+		if strings.Contains(main, unwanted) {
+			t.Errorf("map_nested_gather's main.nf sizes a gather (%q):\n%s", unwanted, main)
 		}
 	}
 }
