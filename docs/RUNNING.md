@@ -66,16 +66,16 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   (`http://`, `https://`, `ftp://`) are refused unless you pass
   `--mro2nf_allow_remote_inputs true`. The `awsbatch` and `healthomics`
   profiles refuse head-node paths, so give them `s3://` URIs.
-- On the `standard`, grid and `docker` profiles, every task reads an absolute
-  path in place, and a stage receives that path, as under `mrp`. Nothing is
-  copied or linked into a task's directory; the `docker` profile binds each
-  such input into every container, read-only, at its own path (see
-  [Docker](#docker)). A stage that writes the path into text for another
-  stage to open finds it in every task. The input is read-only on `docker`,
-  and a path that is or holds the run's work directory is refused.
-- A URI input is staged: each task that reads it stages its own copy, and the
-  stage receives a path in its own task directory, with the same file name
-  and content, where `mrp` would receive the URI. A stage that writes that
+- On the `standard` and grid profiles, whose tasks run on the host's
+  filesystem, every task reads an absolute path in place, and a stage
+  receives that path, as under `mrp`. Nothing is copied or linked into a
+  task's directory. A stage that writes the path into text for another stage
+  to open finds it in every task. A path that is or holds the run's work
+  directory is refused.
+- On the `docker` profile an absolute path is staged, as is a URI input on
+  every profile: each task that reads it stages its own copy, and the stage
+  receives a path in its own task directory, with the same file name and
+  content, where `mrp` would receive the value. A stage that writes that
   path into text for another stage to open works only on some profiles
   ([Paths written into text](#paths-written-into-text)). On `awsbatch`, an
   `s3://` input of a bucket the instances mount is read in place instead
@@ -86,11 +86,10 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   `-resume`. A staged input is keyed on its path, size and modification
   time, as Nextflow keys a file; for a directory that is the directory's own
   size and time, which a change to a file inside it leaves as they were.
-- A task stages only the files another stage's outputs name, not the files
-  beside them. A stage that opens a companion file next to its input, such
-  as an index beside a BAM, finds it under `mrp` but not under mro2nf when
-  the input is another stage's output, an input the run stages, or, on
-  `docker`, which binds each input alone, any input. Declare the companion
+- A task stages only the files an input names, not the files beside them. A
+  stage that opens a companion file next to its input, such as an index
+  beside a BAM, finds it under `mrp` but not under mro2nf when the input is
+  another stage's output or an input the run stages. Declare the companion
   as its own input, and as its own output of the stage that writes it, and
   have the stage open it from that input, or pass a directory input that
   holds both files. HealthOmics
@@ -270,22 +269,16 @@ nextflow run main.nf -profile docker --mro2nf_image <image>
 ```
 
 The `docker` profile runs each container as the invoking user, with
-`HOME=/tmp`, so the files a run leaves in `work/` are yours to delete, and
-binds every head-node file input into it, read-only, at its own path, so a
-stage opens the path it is given, or one another stage recorded, as under
-`mrp`. It sets
-`process.containerOptions = { '-u $(id -u):$(id -g) -e HOME=/tmp' + (meta.binds ?: '') }`,
-which the task's shell expands; `meta.binds` holds a `--mount` option per
-input, and leaves out an input the launch host does not have, which then
-fails only a stage that opens it. A `docker.runOptions` in a `-c` config adds
-to that; a `process.containerOptions` in a `-c` config replaces it, and with
-it the user mapping and the binds. On rootless Docker, set
-`process.containerOptions = { meta.binds ?: '' }`: the container's root
-already is the invoking user, and `-u` would map to a subuid that cannot
-write `work/`. The image has no passwd entry for that uid, so a stage that
-looks up its user name (`whoami`) fails. The `awsbatch` and `healthomics`
-profiles set no user: their containers run on AWS's own hosts, not under
-your account.
+`HOME=/tmp`, so the files a run leaves in `work/` are yours to delete. It sets
+`process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'`, which the
+task's shell expands. A `docker.runOptions` in a `-c` config adds to that; a
+`process.containerOptions` in a `-c` config replaces it, and with it the user
+mapping. On rootless Docker, set `process.containerOptions = ''`: the
+container's root already is the invoking user, and `-u` would map to a subuid
+that cannot write `work/`. The image has no passwd entry for that uid, so a
+stage that looks up its user name (`whoami`) fails. The `awsbatch` and
+`healthomics` profiles set no user: their containers run on AWS's own hosts,
+not under your account.
 
 ### AWS Batch
 
@@ -388,19 +381,19 @@ give the file a file type and it reaches every task that reads it.
 | Profile | the path of a file input | the path of a stage's output | a path in an untyped input |
 |---|---|---|---|
 | `standard`, grid | opens | opens | opens where the tasks see it |
-| `docker` | opens: every container binds each head-node input read-only at its path, and Nextflow downloads an `s3://` or other remote input under the work directory | opens: a task that stages a file from the work directory mounts all of it | fails, unless it is under a head-node file input, which every container binds |
+| `docker` | a head-node input fails: it is a link to a host path that only the tasks staging it mount; an `s3://` or other remote input opens: Nextflow downloads it under the work directory | opens: a task that stages a file from the work directory mounts all of it | fails: no container mounts it |
 | `awsbatch` | opens for an `s3://` input read through the S3 mount; a staged input fails | fails: each task runs in its own scratch directory | fails, unless it is under the S3 mount |
 | `healthomics` | opens: HealthOmics stages the run's inputs once, read-only, for every task | opens: the work directory is on the run's shared storage | fails: no task stages it |
 
 Known pipelines affected:
 
 - CellRanger `multi` and `aggr` take a CSV that lists input paths. They run
-  where every task sees those paths: `standard`, grid, `docker` when the
-  paths are under a head-node file input, and `awsbatch` when they are under
-  the S3 mount.
+  where every task sees those paths: `standard`, grid, and `awsbatch` when the
+  paths are under the S3 mount.
 - CellRanger `count` writes its FASTQ path into JSON that later stages open.
-  It runs on `standard`, grid, `docker` and `healthomics`, and on `awsbatch`
-  only with its FASTQ bucket mounted.
+  It runs on `standard`, grid and `healthomics`, on `docker` only with its
+  FASTQs given as an `s3://` URI, and on `awsbatch` only with its FASTQ
+  bucket mounted.
 
 A companion file, such as an index beside a BAM, is a separate case: declare
 it as an input ([Pipeline inputs](#pipeline-inputs)).
@@ -582,15 +575,16 @@ In the task's work directory:
 - **`entry input '<name>': the path contains '<c>', which Nextflow's task
   stage-in script leaves unquoted`**: Nextflow cannot stage a file whose name
   contains `*`, `?`, `[`, `]`, `{`, `}`, `$` or a control character. Rename
-  the file, or, on a profile that reads head-node paths in place, pass it as
-  an absolute path rather than a `file:` URI.
-- **`entry input '<name>': a head-node path is not read on this profile;
+  the file, or, on the `standard` and grid profiles, which read head-node
+  paths in place, pass it as an absolute path rather than a `file:` URI.
+- **`entry input '<name>': a head-node path is not staged on this profile;
   pass an s3:// URI`**: the `awsbatch` and `healthomics` profiles need file
   inputs on S3.
-- **`entry input '<name>' is or holds the run's work dir <dir>`**: every task
-  reads a head-node input in place, read-only, so the input cannot hold the
-  tasks' own directories. Pass a directory that does not hold the work
-  directory, or launch with `-work-dir` outside the input.
+- **`entry input '<name>' is or holds the run's work dir <dir>`**: on the
+  `standard` and grid profiles every task reads a head-node input in place,
+  so the input cannot hold the tasks' own directories. Pass a directory that
+  does not hold the work directory, or launch with `-work-dir` outside the
+  input.
 - **`entry input '<name>': scheme '<scheme>' is not allowed`**: pass a path or
   an `s3://` URI, or `--mro2nf_allow_remote_inputs true`.
 - **`entry input '<name>': bucket <bucket> is not mounted at

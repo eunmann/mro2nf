@@ -223,7 +223,10 @@ re-transpiled project wires in another workflow than the run did.
   launch's `--<name> <value>` sets it under the v2 parser or
   `NXF_DISABLE_PARAMS_TYPE_DETECTION` (§8).
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
-  values a run reads (§8), `mro2nf_s3_mount` the root under which the
+  values a run reads (§8), `mro2nf_host_in_place`, which the container
+  profiles turn off (`conf/container.config`), whether every task reads a
+  head-node path in place or Nextflow stages it (§8), `mro2nf_s3_mount` the
+  root under which the
   `awsbatch` profile reads `s3://` values of mounted buckets in place (§8), and `mro2nf_image`
   the one image the container
   profiles run every task in, which they require (`mro2nf_require_image`,
@@ -270,15 +273,16 @@ readers (the splits of the roots it feeds, its partners' splits, and the
 disable bindings whose value it posts with
 their roots), whether the invocation disables it, the
 fork keys a static per-fork binding disables, and its resources under the
-run's overrides file (§9); the entry file values tasks stage and those every
-task reads in place (§8); and in one record the forks of every entry-fed
+run's overrides file (§9); the entry file values tasks stage (§8); and in
+one record the forks of every entry-fed
 root, keyed by the witness's outer roots, each with its fork record and its
 index token. Each line of it leads with its root, and a node's wiring takes
 its root's own lines from it (`ENTRY_ROOT`, a lookup by root).
 
 **Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
-copy, the overrides file and its meta, and the run's work dir, which no
-entry value read in place may hold (§8). Under an S3 mount it does not cache,
+copy, the overrides file and its meta, whether head-node values are read in
+place, and the run's work dir, which no entry value read in place may hold
+(§8). Under an S3 mount it does not cache,
 as which s3:// inputs it reads in place depends on the buckets its instance
 mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
 node's digest and resources (in `meta`), the run's call, the mro2nf build,
@@ -386,8 +390,7 @@ every filetype and struct, and the struct of each callable's outputs.
   transpiled entry and the run's entry values, compiles it, checks it against
   the witness, vets the entry file values the run reads (§8), and writes the
   call every task compiles, one record per witness node, the entry files of
-  each node's instances and of the pipeline outs, the entry files every task
-  reads in place, which the docker profile binds, and the forks of every
+  each node's instances and of the pipeline outs, and the forks of every
   entry-fed fork root, a record each. With `-overrides`, it
   reads the run's `mrp --overrides` file with Martian's `ReadOverrides`,
   which fails on a key it
@@ -663,9 +666,10 @@ You can override inputs **at launch** without re-transpiling:
   a param the project defines itself and fails the transpile.
 
 **File-typed inputs.** Every file value of the run's entry inputs that is an
-absolute path is read in place by every task (`EntryLeaf.InPlace`), and every
-one that is a URI (`s3://`, and others under the opt-in below) is staged by
-Nextflow into the tasks that read it, and only those: PLAN lists the staged
+absolute path is read in place by every task on the local and grid profiles
+(`EntryLeaf.InPlace`, below), and every other one, a URI (`s3://`, and others
+under the opt-in below) or, on a container profile, an absolute path, is
+staged by Nextflow into the tasks that read it, and only those: PLAN lists the staged
 values (`leaves`) and, per node and fork of its entry-fed roots, the ones
 Martian's specialization of its bindings to that fork reads (`files`), so a
 map call over entry files stages each fork's own element. The pipeline outs'
@@ -682,35 +686,38 @@ job dir under either runtime and reaches the stage as given. A file default
 is read or staged from where it is at run time; it is never copied into the
 project.
 
-**Head-node paths read in place.** Every profile that admits a head-node path
-(`params.mro2nf_host_inputs`) runs its tasks where they see the host's paths:
-`standard` and the grid profiles on the host's filesystem, `docker` in
-containers that bind each such path. So a task reads the value where it is,
-and the stage gets the value itself, the path `mrp` passes: PLAN leaves it out
-of `leaves` and `files`, while it keeps its index among the values, which a
-task recomputes from the call. Every task computes the run's read-only roots
-(`shim.Roots`, `Graph.Roots`) from the call it compiles: each value read in
-place, and the S3 mount below. Every bundle writer keeps a leaf under a root
-as the path it is, with no link, copy or origin, so a stage that returns its
-input's path, as Cell Ranger's `SETUP_REFERENCE_INFO` returns
+**Head-node paths read in place.** The `standard` and grid profiles run their
+tasks on the host's filesystem, where every task sees the head node's paths,
+so `params.mro2nf_host_in_place` is true there and PLAN (`mre plan
+-host-in-place`, `cg.ReadInPlace`) marks every absolute value read in place:
+a task reads the value where it is, and the stage gets the value itself, the
+path `mrp` passes. PLAN leaves it out of `leaves` and `files`, while it keeps
+its index among the values, which a task recomputes from the call. Every
+task, told the same by `mre stage -host-in-place`, computes the run's
+read-only roots (`shim.Roots`, `Graph.Roots`) from the call it compiles: each
+value read in place, and the S3 mount below. Every bundle writer keeps a leaf
+under a root as the path it is, with no link, copy or origin, so a stage that
+returns its input's path, as Cell Ranger's `SETUP_REFERENCE_INFO` returns
 `reference_path`, posts the path, and no byte of the input is copied into
 `work/`. A path in the task's own work dir is under no root, so a stage's own
 outputs stay its own even below an input directory; and PLAN, handed the
 run's work dir (`-run-workdir`), refuses a value that is or holds it, which
-every task would otherwise read as an input. PLAN also writes the values read
-in place outside the S3 mount (`Plan.Binds`, the `binds` record), a value
-under another dropped; the driver turns them into one `--mount
-type=bind,…,readonly` option each, for a path the head node has, into the
-meta every task and OUTS share (`binds`), which the `docker` profile's
-`process.containerOptions` closure appends to every container's options. The
-values come from the call, as do the bind options, so a map call over N entry
-files gives every task N binds, as it gives every task the call's N values.
-A task's `-resume` key holds the value's path, as `mrp`'s restart keys a
-pipestance on its invocation, not the file's content: Nextflow keys a staged
-file on its path, size and modification time, and a staged directory on the
-directory's own size and time, which a change to a file inside it leaves as
-they were, so for the directory inputs Martian pipelines take, the path is
-what a staged input was keyed on too.
+every task would otherwise read as an input. A task's `-resume` key holds the
+value's path, as `mrp`'s restart keys a pipestance on its invocation, not the
+file's content: Nextflow keys a staged file on its path, size and
+modification time, and a staged directory on the directory's own size and
+time, which a change to a file inside it leaves as they were, so for the
+directory inputs Martian pipelines take, the path is what a staged input was
+keyed on too.
+
+The container profiles turn the param off (`conf/container.config`), so a
+head-node value there is staged as a URI is: a container sees only what its
+task stages and mounts. Reading it in place on `docker` would bind it into
+every container, as a typed output can carry an input's path to any later
+task (`SETUP_REFERENCE_INFO`'s `reference_path`), so a task's own inputs do
+not bound the paths it opens: a run-wide bind list costs every task one
+mount option per value, quadratic in a map call's width over the run.
+`awsbatch` and `healthomics` refuse a head-node value outright.
 
 **Names Nextflow cannot stage.** Nextflow's stage-in script, on 25.10 and
 26.04, writes each staged file as `ln -s <source> <name>`, leaving `*`, `?`,
@@ -724,10 +731,11 @@ value read in place is never staged, so it may hold any of them, as under
 **Which file values a run may read.** `file()` on the head node fetches any
 URL Nextflow has a provider for and reads any path the head node sees, and a
 run parameter comes from whoever launches the run. So PLAN checks every value
-it lists: an `s3://` URI is staged on every profile; a head-node path is read
-in place, and a `file:` URI staged, only where `params.mro2nf_host_inputs`
-holds (the local, grid and docker profiles); any other scheme (`http(s)://`,
-`ftp://`) only with `--mro2nf_allow_remote_inputs true`. The errors name the
+it lists: an `s3://` URI is staged on every profile; a head-node path, read
+in place or staged, and a `file:` URI, staged, only where
+`params.mro2nf_host_inputs` holds (the local, grid and docker profiles); any
+other scheme (`http(s)://`, `ftp://`) only with
+`--mro2nf_allow_remote_inputs true`. The errors name the
 input, not the value, which may carry a credential. The HealthOmics parameter
 template declares neither param, so a HealthOmics run cannot set them.
 
@@ -776,8 +784,9 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   `lsf`, `pbs`) run on the host's `mre` and code, on a shared filesystem,
   where every task reads a head-node entry file in place (§8).
 - The container profiles, `docker`, `awsbatch` and `healthomics`, include
-  `conf/container.config`: outputs confined to the task (§7), and every
-  task, PLAN and OUTS included, in the one image
+  `conf/container.config`: outputs confined to the task (§7), a head-node
+  entry file staged (§8), and every task, PLAN and OUTS included, in the one
+  image
   `params.mro2nf_image`. They set `params.mro2nf_require_image`, so a launch
   without an image fails before PLAN.
 - **The image.** `deploy/runtime/Dockerfile` puts `mre` and the `mrjob`
@@ -789,9 +798,7 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   itself serves where a `-c` config mounts the code at those paths. `mre
   args` refuses a node the image compiles to another spec than PLAN planned
   (§5), so a stale image fails loudly.
-- `docker` runs each task in a container that mounts what it stages and,
-  read-only at their own paths, the head-node entry files every task reads
-  in place (§8, `meta.binds`).
+- `docker` runs each task in a container that mounts only what it stages.
 - `awsbatch` runs on AWS Batch over an S3 work dir (`-work-dir s3://…`); every
   task stages its upstream inputs from S3, so nothing reads a head-node path,
   and a head-node path as an entry file is refused (§8). It reads an `s3://`
