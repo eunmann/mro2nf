@@ -296,10 +296,10 @@ func decodeJSON(raw json.RawMessage) (any, error) {
 // Opts are how a bundle writer treats the files a payload's leaves name.
 // Confine confines a stage's outputs; it is nil for a payload a stage did not
 // choose (bindings, merges, entry args), whose files the run was given. A
-// leaf under Mount stays the path it is.
+// leaf under Roots stays the path it is.
 type Opts struct {
 	Confine *Confinement
-	Mount   Mount
+	Roots   Roots
 }
 
 // WriteBundle writes payload into dir as a bundle: every file leaf located by
@@ -318,10 +318,10 @@ func WriteBundle(dir string, payload map[string]any, params []*syntax.StructMemb
 // stages, such as a stage task's args: each file leaf is a symlink to
 // the file payload names, which the task staged, not a copy of it. A leaf of
 // a staged bundle is linked by its ordinal dir, so its recorded origin comes
-// with it. A leaf under mount stays the path it is. A bundle another task
+// with it. A leaf under roots stays the path it is. A bundle another task
 // stages must carry its files: WriteBundle.
-func WriteLinkedBundle(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, mount Mount) error {
-	marked, err := markFiles(leafMarker{dir: dir, mount: mount, link: true, marks: map[string]string{}}, payload, params, tbl)
+func WriteLinkedBundle(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, roots Roots) error {
+	marked, err := markFiles(leafMarker{dir: dir, roots: roots, link: true, marks: map[string]string{}}, payload, params, tbl)
 	if err != nil {
 		return err
 	}
@@ -357,7 +357,7 @@ func writeRaw(path string, data []byte) error {
 // leaves of one origin share one copy. Every other string that begins with
 // the reserved prefix is escaped, a file leaf naming no file included.
 func MarkFiles(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts Opts) (map[string]any, error) {
-	return markFiles(leafMarker{dir: dir, conf: opts.Confine, mount: opts.Mount, marks: map[string]string{}}, payload, params, tbl)
+	return markFiles(leafMarker{dir: dir, conf: opts.Confine, roots: opts.Roots, marks: map[string]string{}}, payload, params, tbl)
 }
 
 func markFiles(m leafMarker, payload map[string]any, params []*syntax.StructMember, tbl *types.Table) (map[string]any, error) {
@@ -388,17 +388,17 @@ func markFiles(m leafMarker, payload map[string]any, params []*syntax.StructMemb
 type leafMarker struct {
 	dir   string
 	conf  *Confinement
-	mount Mount
+	roots Roots
 	link  bool
 	marks map[string]string
 }
 
 // mark copies the file leaf to its own ordinal dir and returns its marker, or
-// returns leaf unchanged when it names no file or lies under the mount, where
+// returns leaf unchanged when it names no file or lies under a root, where
 // every task reads it, so neither its tree is walked nor its origin recorded.
 func (m leafMarker) mark(leaf string) (string, error) {
 	src := strings.TrimPrefix(leaf, escapePrefix)
-	if src == "" || m.mount.Holds(src) {
+	if src == "" || m.roots.Holds(src) {
 		return leaf, nil
 	}
 

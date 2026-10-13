@@ -51,7 +51,8 @@ func runStage(ctx context.Context, argv []string) error {
 		return fmt.Errorf("stage: %w", err)
 	}
 
-	s.args.mount, s.run.mount, s.post.mount = mount, mount, mount
+	roots := shim.NewRoots(string(mount))
+	s.args.roots, s.run.roots, s.post.roots = roots, roots, roots
 
 	g, err := gf.load()
 	if err != nil {

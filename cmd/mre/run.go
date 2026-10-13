@@ -49,7 +49,7 @@ var (
 type runFlags struct {
 	phase, args, out, chunk, chunks, chunkOuts, overrides string
 	confine                                               bool
-	mount                                                 shim.Mount
+	roots                                                 shim.Roots
 	rt                                                    job.Runtime
 }
 
@@ -245,14 +245,14 @@ func (f *runFlags) stamp(in job.Instance, sub string) error {
 
 // bundleOpts are how the bundle of what a job, whose metadata dir under the
 // work dir is sub, returns treats the files it names: confined, strictly
-// under -confine, but for those under the S3 mount.
+// under -confine, but for those under the run's read-only roots.
 func (f *runFlags) bundleOpts(sub string) (shim.Opts, error) {
-	conf, err := shim.ConfineStage(f.rt.Work, sub, f.confine, f.mount)
+	conf, err := shim.ConfineStage(f.rt.Work, sub, f.confine, f.roots)
 	if err != nil {
 		return shim.Opts{}, fmt.Errorf("confine %s outputs: %w", sub, err)
 	}
 
-	return shim.Opts{Confine: conf, Mount: f.mount}, nil
+	return shim.Opts{Confine: conf, Roots: f.roots}, nil
 }
 
 func (f *runFlags) main(ctx context.Context, g *cg.Graph, in job.Instance, args core.LazyArgumentMap) error {

@@ -48,8 +48,9 @@ type ArgsSpec struct {
 	// EntryFiles maps each entry file value the task staged to the path it
 	// reads it at (StagedEntryFiles).
 	EntryFiles map[string]string
-	// Mount is the run's S3 mount, whose paths the args name as they are.
-	Mount shim.Mount
+	// Roots are the run's read-only roots, whose paths the args name as they
+	// are.
+	Roots shim.Roots
 }
 
 // WriteArgs resolves the instance's disabled state and, when it runs, its
@@ -180,7 +181,7 @@ func (g *Graph) writeArgs(spec ArgsSpec, args json.Marshaler, callable string) e
 		return err
 	}
 
-	if err := shim.WriteLinkedBundle(spec.Out, payload, params, g.Table(), spec.Mount); err != nil {
+	if err := shim.WriteLinkedBundle(spec.Out, payload, params, g.Table(), spec.Roots); err != nil {
 		return fmt.Errorf("write %s bundle %s: %w", types.RoleIn, spec.Out, err)
 	}
 

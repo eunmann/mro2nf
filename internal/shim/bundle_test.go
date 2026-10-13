@@ -209,7 +209,7 @@ func TestLeafOriginRecordsHowMrpPublishesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	conf, err := shim.ConfineStage(work, "main", false, "")
+	conf, err := shim.ConfineStage(work, "main", false, shim.Roots{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func writeStageOuts(t *testing.T, work string, payload map[string]any, params []
 		t.Fatal(err)
 	}
 
-	conf, err := shim.ConfineStage(work, "main", false, "")
+	conf, err := shim.ConfineStage(work, "main", false, shim.Roots{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestWriteLinkedBundle(t *testing.T) {
 	staged, _ := readPayload(t, stageBundle(t, produced, filepath.Join(dir, "task", "in", "u0")))["f"].(string)
 
 	bundle := filepath.Join(dir, "task", "args")
-	if err := shim.WriteLinkedBundle(bundle, map[string]any{"host": host, "up": staged}, params, fileTable(t), ""); err != nil {
+	if err := shim.WriteLinkedBundle(bundle, map[string]any{"host": host, "up": staged}, params, fileTable(t), shim.Roots{}); err != nil {
 		t.Fatalf("WriteLinkedBundle: %v", err)
 	}
 
@@ -419,16 +419,16 @@ func TestWriteLinkedBundleFails(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if err := shim.WriteLinkedBundle(blocked, payload, one, fileTable(t), ""); err == nil {
+			if err := shim.WriteLinkedBundle(blocked, payload, one, fileTable(t), shim.Roots{}); err == nil {
 				t.Error("WriteLinkedBundle with the files dir blocked succeeded")
 			}
 
 			twice := filepath.Join(t.TempDir(), "args")
-			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), ""); err != nil {
+			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), shim.Roots{}); err != nil {
 				t.Fatalf("WriteLinkedBundle: %v", err)
 			}
 
-			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), ""); err == nil {
+			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), shim.Roots{}); err == nil {
 				t.Error("WriteLinkedBundle over a bundle that holds the leaf's link succeeded")
 			}
 		})
@@ -465,7 +465,7 @@ func TestRealPathOfLinkedArgsStages(t *testing.T) {
 	staged, _ := readPayload(t, filepath.Join(task, "in", "u0"))["f"].(string)
 	args := filepath.Join(task, "args")
 
-	if err := shim.WriteLinkedBundle(args, map[string]any{"host": entry, "up": staged}, params, fileTable(t), ""); err != nil {
+	if err := shim.WriteLinkedBundle(args, map[string]any{"host": entry, "up": staged}, params, fileTable(t), shim.Roots{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -488,7 +488,7 @@ func TestRealPathOfLinkedArgsStages(t *testing.T) {
 	}
 
 	for _, strict := range []bool{true, false} {
-		conf, err := shim.ConfineStage(task, "main", strict, "")
+		conf, err := shim.ConfineStage(task, "main", strict, shim.Roots{})
 		if err != nil {
 			t.Fatal(err)
 		}

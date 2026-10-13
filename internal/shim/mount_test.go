@@ -10,25 +10,25 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// mountedTree lays out a mount root holding bucket b with a file and a
-// directory, and returns the mount and the two leaf paths, the directory's
-// spelled with a trailing slash.
-func mountedTree(t *testing.T) (shim.Mount, string, string) {
+// mountedTree lays out a root holding bucket b with a file and a
+// directory, as the S3 mount shows a bucket, and returns the roots it is and
+// the two leaf paths, the directory's spelled with a trailing slash.
+func mountedTree(t *testing.T) (shim.Roots, string, string) {
 	t.Helper()
 
 	root := filepath.Join(t.TempDir(), "s3")
 	file := writeSelfNamed(t, filepath.Join(root, "b", "reads", "r1.fastq"))
 	writeSelfNamed(t, filepath.Join(root, "b", "ref", "genome.fa"))
 
-	return shim.Mount(root), file, filepath.Join(root, "b", "ref") + "/"
+	return shim.NewRoots(root), file, filepath.Join(root, "b", "ref") + "/"
 }
 
-// TestMountedLeafStaysItsPath: a file leaf under the mount is the same path
-// in every task, as the path mrp passes a stage, so every bundle writer keeps
+// TestMountedLeafStaysItsPath: a file leaf under a root is the same path in
+// every task, as the path mrp passes a stage, so every bundle writer keeps
 // it as the string it is, under a strict confinement too, with nothing of
 // its tree copied or linked into the bundle, and it reads back unchanged.
 func TestMountedLeafStaysItsPath(t *testing.T) {
-	mount, file, dir := mountedTree(t)
+	roots, file, dir := mountedTree(t)
 	params := fields(t, "f file", "d path")
 	payload := map[string]any{"f": file, "d": dir}
 
@@ -37,17 +37,17 @@ func TestMountedLeafStaysItsPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	conf, err := shim.ConfineStage(work, "main", true, mount)
+	conf, err := shim.ConfineStage(work, "main", true, roots)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	writers := map[string]func(dir string) error{
 		"WriteBundle": func(b string) error {
-			return shim.WriteBundle(b, payload, params, fileTable(t), shim.Opts{Confine: conf, Mount: mount})
+			return shim.WriteBundle(b, payload, params, fileTable(t), shim.Opts{Confine: conf, Roots: roots})
 		},
 		"WriteLinkedBundle": func(b string) error {
-			return shim.WriteLinkedBundle(b, payload, params, fileTable(t), mount)
+			return shim.WriteLinkedBundle(b, payload, params, fileTable(t), roots)
 		},
 	}
 
@@ -114,11 +114,11 @@ func TestMountHolds(t *testing.T) {
 }
 
 // TestConfineAdmitsLinkIntoMount: a stage output that is the stage's own
-// symlink into the mount reaches what the stage was given, so a strict
-// confinement stages it, as a staged input's, where without the mount it
-// refuses a target outside the task.
+// symlink under a root reaches what the stage was given, so a strict
+// confinement stages it, as a staged input's, where with no roots it refuses
+// a target outside the task.
 func TestConfineAdmitsLinkIntoMount(t *testing.T) {
-	mount, file, _ := mountedTree(t)
+	roots, file, _ := mountedTree(t)
 	params := fields(t, "out file")
 
 	work := t.TempDir()
@@ -132,25 +132,25 @@ func TestConfineAdmitsLinkIntoMount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, m := range []shim.Mount{mount, ""} {
-		conf, err := shim.ConfineStage(work, "main", true, m)
+	for _, rs := range []shim.Roots{roots, {}} {
+		conf, err := shim.ConfineStage(work, "main", true, rs)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		bundle := filepath.Join(t.TempDir(), "outs")
-		err = shim.WriteBundle(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Mount: m})
+		err = shim.WriteBundle(bundle, map[string]any{"out": link}, params, fileTable(t), shim.Opts{Confine: conf, Roots: rs})
 
-		if m == "" {
+		if !rs.Holds(file) {
 			if err == nil {
-				t.Error("a strict confinement with no mount staged a link outside the task")
+				t.Error("a strict confinement with no roots staged a link outside the task")
 			}
 
 			continue
 		}
 
 		if err != nil {
-			t.Fatalf("strict confinement under the mount: %v", err)
+			t.Fatalf("strict confinement under the roots: %v", err)
 		}
 
 		leaf, _ := readPayload(t, bundle)["out"].(string)
