@@ -425,8 +425,7 @@ directory leaf and an entry file are still copies.
 chunk count. Each chunk's main and the join are scheduled with the cpus, memory
 and special their jobs get, the split's `resources.tsv`, a file the driver
 reads into rows without parsing a record, not an `eval` value, whose
-collection is quadratic in its lines; the split's `chunk_refs` is a file for
-the same reason.
+collection is quadratic in its lines.
 
 **OUTS.** The last task stages every outs bundle the pipeline outs read and
 the files they name by reference, gets each bundle's location, and each
