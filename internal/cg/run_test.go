@@ -358,6 +358,7 @@ func TestStandInRunOfEveryFixture(t *testing.T) {
 		"rt_gate_split_reject_sub":  "mrp refuses to instantiate it (#387)",
 		"map_pipe_nested":           "mrp fails it: OUTER.INNER.DBL's merge matches no fork",
 		"split_gate_entry":          "it zips entry collections with SRC's outs, whose keys and lengths no stand-in knows",
+		"forkdisabled":              "GATED zips the entry's xs with FLAGS's skips, whose length no stand-in knows",
 	}
 	panics := map[string]string{
 		"nested_empty_forks": "index out of range",
