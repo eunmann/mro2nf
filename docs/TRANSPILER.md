@@ -352,7 +352,9 @@ waits for, each set after the one it extends, and a node gates on the records
 held for its own. Nextflow adds each edge of its DAG in time linear in the
 edges before it, so a wait per node, which cost CellRanger three edges per node
 and preflight, would make the launch quadratic in the nodes; this costs a few
-edges per preflight (`TestEmitWaitsOncePerPreflight`).
+edges per preflight (`TestEmitWaitsOncePerPreflight`). `TestLaunchEdges`
+bounds the edges `-preview` builds for a wide pipeline and
+`cellranger_shaped`, so an edge more per data dependency fails it.
 
 **Gates.** A node's gates are decided on the driver: PLAN's record and each
 gating stage's posted `gates` (an `eval` output), joined on the roots they
