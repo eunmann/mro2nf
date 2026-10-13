@@ -229,6 +229,10 @@ selector of its alias alone still names it.
   the one image the container
   profiles run every task in, which they require (`mro2nf_require_image`,
   §9). `mro2nf_overrides` is the run's `mrp --overrides` file (§9).
+  `mro2nf_local_jobs`, which the `standard` and `docker` profiles set, grants
+  each job as `mrp`'s local job manager grants it, from the pool of the cpus
+  and memory `process.resourceLimits` clamps its task to; elsewhere a job is
+  granted as `mrp`'s cluster job managers grant it (§9).
 - One `params.<name> = null` per entry input (§8).
 - The retry policy, `mrp`'s: a task is retried, up to twice, only on exit 75,
   the failures `mrp` retries (§6), or on a signal exit of its own (137, 143),
@@ -242,8 +246,9 @@ selector of its alias alone still names it.
   whose special, as `mrp` resolves it, is `"gpu"` or `"gpu:N"`: the stage's own,
   or for a chunk or the join the `__special` the split returned for it (see
   [`RUNNING.md`](RUNNING.md#gpu-stages)).
-- Task tracing, and the target profiles (§9): `standard` (local, clamped to
-  the host's cpus and memory with `process.resourceLimits`), `slurm`, `sge`,
+- Task tracing, and the target profiles (§9): `standard` (local, each job
+  granted from and each task clamped to the host's cpus and 90% of its memory
+  with `process.resourceLimits`), `slurm`, `sge`,
   `lsf`, `pbs`, `docker`, `awsbatch` and `healthomics`.
 
 ---
@@ -749,10 +754,18 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   it was validated with, and as `parameter-template.json` declares only the
   entry inputs and `mro2nf_overrides`, no run can name another image.
 
-- A stage's `using (threads = …, mem_gb = …)` sets each task's `cpus` (at least
-  1, rounded up) and `memory` (1 GB when unset); a chunk and a join take the
-  resources the split returned for them (§5). `_jobinfo` reports the request
-  as `mrp` resolves it, unrounded.
+- A stage's `using (threads = …, mem_gb = …)` is its jobs' request; a chunk
+  and a join take the resources the split returned for them (§5). Each job is
+  granted its request as `mrp` grants it in the jobmode the profile runs as
+  (`job.Runtime.Resources`): on `standard` and `docker`, `mrp`'s local job
+  manager's grant from a pool of `process.resourceLimits`' cpus and whole GB
+  of memory, which PLAN and every stage task pass `mre` from their own task
+  (`-local-cores`, `-local-mem-gb`), so an adaptive request gets the pool and
+  every request but vmem at most the pool; elsewhere `mrp`'s cluster job
+  managers' grant, a request at its magnitude in whole threads. `_jobinfo`,
+  `__threads`, `__mem_gb`, `__vmem_gb` and the thread variables report the
+  grant, and the task requests its threads rounded up as `cpus` (at least 1)
+  and its memory as `memory`.
 - `--mro2nf_overrides <file>` is `mrp --overrides`: PLAN reads it (§6), and
   every job's threads, memory and vmem resolve under it as `mrp`'s
   (`core.ApplyResourceOverrides`), over `using` and the split's request,
@@ -761,9 +774,11 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   file as values of PLAN's record, and a chunk and the join take theirs from
   the split's `resources.tsv`. `force_volatile` and `*.profile` change no
   output and have no effect ([`RUNNING.md`](RUNNING.md#resources)).
-- On the `standard` profile, `process.resourceLimits` clamps a request to the
-  host's cpus and memory, so an oversized one runs rather than fails; a `-c`
-  config setting `process.resourceLimits` overrides the clamp.
+- On the `standard` and `docker` profiles, `process.resourceLimits` is the
+  host's cpus and 90% of its memory, `mrp`'s default `--localcores` and
+  `--localmem`, and clamps each task, so a `withName:` request larger than the
+  host runs rather than fails; a `-c` config setting
+  `process.resourceLimits` sets another pool.
 - A job's special, the stage's or the `__special` its split returned, selects
   `params.job_resources[special]` as the task's `clusterOptions`;
   `special = "gpu"` / `"gpu:N"` also requests N GPUs for that job.

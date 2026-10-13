@@ -119,14 +119,33 @@ params.job_resources = [highmem: '--partition=highmem']
 
 ## Resources
 
-Each task is sized as `mrp` sizes the job:
+Each job is granted its request as `mrp` grants it in the jobmode the profile
+runs as, and its task is sized to that grant:
 
-- `cpus` is the job's `threads`, rounded up, and at least 1.
-- `memory` is the job's `mem_gb`, or 1 GB when unset.
-- A chunk and the join use the `__threads`, `__mem_gb` and `__special` that
-  the split returned for them.
-- The stage sees `mrp`'s request, unrounded, in `_jobinfo` and in `__threads`,
-  `__mem_gb` and `__vmem_gb`.
+- The `standard` and `docker` profiles run as `mrp`'s local jobmode. Each job
+  is granted its request from a pool: the cpus and whole GB of memory
+  `process.resourceLimits` sets, by default the host's cpus and 90% of its
+  memory, `mrp`'s default `--localcores` and `--localmem`. A negative
+  (adaptive) request is granted the whole pool, and every request is capped
+  at the pool, but `vmem_gb`. Fractions are kept, to the hundredth of a
+  thread and the MiB.
+- The grid profiles (`slurm`, `sge`, `lsf`, `pbs`), `awsbatch` and
+  `healthomics` run as an `mrp` cluster jobmode. A negative request is
+  granted its magnitude, threads are rounded up to whole threads, and no
+  request is capped.
+- Unset, a job gets 1 thread and 1 GB, and `vmem_gb` the memory plus 3 GB.
+- A chunk and the join use the `__threads`, `__mem_gb`, `__vmem_gb` and
+  `__special` that the split returned for them.
+- The stage sees its grant in `_jobinfo`, in `__threads`, `__mem_gb` and
+  `__vmem_gb`, and in `mrp`'s thread variables, such as `OMP_NUM_THREADS`,
+  set to its threads rounded up.
+- The task's `cpus` is the job's threads, rounded up, and its `memory` the
+  job's `mem_gb`.
+
+An adaptive memory request is the one grant that can differ from `mrp`'s:
+`mrp` grants the part of the pool the host has free when the job starts
+(`adaptive-memory-pool` in
+[`FEATURE_COVERAGE.md`](FEATURE_COVERAGE.md#divergences-from-mrp)).
 
 `--mro2nf_overrides` takes the file `mrp --overrides` takes. PLAN reads it with
 Martian's reader, so a key `mrp` does not know fails the run before any stage
@@ -161,10 +180,16 @@ process {
 `-resume` does not re-run a cached task because a `-c` setting changed its
 `cpus` or `memory`.
 
-The `standard` and `docker` profiles clamp each task's request to the host's
-cpus and memory (`process.resourceLimits`), so a request larger than the host
-runs instead of failing, as `mrp` clamps a job to its local pool. The
-`awsbatch` and grid profiles do not clamp.
+The `standard` and `docker` profiles also clamp each task to the pool, so a
+`withName:` selector larger than the host runs instead of failing. To grant
+jobs from another pool, as `mrp --localcores=8 --localmem=32` does, set it in
+a `-c` config:
+
+```groovy
+process.resourceLimits = [cpus: 8, memory: 32.GB]
+```
+
+The `awsbatch` and grid profiles do not clamp.
 
 ## Retries
 
@@ -454,7 +479,7 @@ HealthOmics takes no `-c`.
 |---|---|
 | pipestance name (second argument) | `--mro2nf_psid <id>` |
 | `--jobmode=MODE` | `-profile <name>` |
-| `--localcores=N`, `--localmem=GB` | `-c`: `executor { cpus = N; memory = '<GB> GB' }` together with `process.resourceLimits = [cpus: N, memory: <GB>.GB]`. Without the second line, Nextflow fails a task larger than the pool, where `mrp` clamps it. |
+| `--localcores=N`, `--localmem=GB` | `-c`: `process.resourceLimits = [cpus: N, memory: <GB>.GB]`, the pool each job is granted from (see [Resources](#resources)), and `executor { cpus = N; memory = '<GB> GB' }` to run no more at once. |
 | `--maxjobs=N` | `-c`: `executor.queueSize = N` |
 | `--jobinterval=MS` | `-c`: `executor.submitRateLimit = '<n>/1s'`, with `n` about `1000 / MS`, or `'1/<s>s'` for an interval of `s` whole seconds. Nextflow rejects an interval under one second. |
 | `--overrides=JSON` | `--mro2nf_overrides <file>` |
@@ -548,5 +573,9 @@ In the task's work directory:
 - **`entry override of a non-scalar type cannot be a string`**: pass the
   array, map or struct in a `-params-file`.
 - **`Process requirement exceeds available memory`** (or `CPUs`): a task
-  requests more than the local executor's pool. Set `process.resourceLimits`
-  with `executor.cpus` and `executor.memory`, as in the table above.
+  requests more than the local executor's pool, `executor.cpus` and
+  `executor.memory`. Set `process.resourceLimits` no larger, as in the table
+  above.
+- **`params.mro2nf_local_jobs grants each job from process.resourceLimits,
+  which sets no cpus or memory`**: a `-c` config on the `standard` or
+  `docker` profile removed the pool. Set both `cpus` and `memory`.
