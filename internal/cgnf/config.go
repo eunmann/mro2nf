@@ -120,10 +120,13 @@ trace {
 // with -profile. It comes last: a profile's settings override the ones
 // above it.
 const profilesConfig = `
-// The local profiles grant each job from a pool of the host's cpus and 90%
-// of its memory, mrp's default --localcores and --localmem
-// (core/jobmanager_local.go setMaxCores, setMaxMem), and clamp each task to
-// it; a -c config setting process.resourceLimits sets another pool.
+// The local profiles grant each job from a pool of the cpus and 90% of the
+// memory the JVM sees, and clamp each task to it; a -c config setting
+// process.resourceLimits sets another pool. Without a cgroup cpu quota or
+// memory limit that is mrp's default --localcores and --localmem
+// (core/jobmanager_local.go setMaxCores, setMaxMem); under one the JVM
+// counts the quota's cpus, where mrp counts every cpu in its affinity mask,
+// and mrp may take 96% of the limit.
 profiles {
     standard {
         process.executor = 'local'

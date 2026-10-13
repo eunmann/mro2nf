@@ -76,7 +76,7 @@
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",
-      "summary": "mro2nf ignores `local` and schedules the stage on the configured executor like any other task, whose job is granted its resources as the profile grants every job's; in a cluster jobmode mrp runs it through its local job manager on the head node, granted from a pool of one thread and at most 1 GB unless `--localcores` and `--localmem` set another (`martian/core/jobmanager_local.go` `setMaxCores`, `setMaxMem`).",
+      "summary": "mro2nf ignores `local` and schedules the stage on the configured executor like any other task, whose job is granted its resources as the profile grants every job's; in a cluster jobmode mrp runs it through its local job manager on the head node, granted from a pool of one thread and 1 GB unless `--localcores` and `--localmem` set another (`martian/core/jobmanager_local.go` `setMaxCores`, `setMaxMem`).",
       "justification": "Scheduling only: the stage runs the same code on the same `_args`. Under `--jobmode=local`, which the differential uses, the local job manager is mrp's only one (`martian/core/node.go`, `stage.go`), so `kitchen_sink`'s local SUM_SQUARES matches mrp; cluster jobmodes are not compared with mrp.",
       "evidence": ["TestMrpDiff/kitchen_sink"]
     },

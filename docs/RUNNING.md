@@ -125,7 +125,10 @@ runs as, and its task is sized to that grant:
 - The `standard` and `docker` profiles run as `mrp`'s local jobmode. Each job
   is granted its request from a pool: the cpus and whole GB of memory
   `process.resourceLimits` sets, by default the host's cpus and 90% of its
-  memory, `mrp`'s default `--localcores` and `--localmem`. A negative
+  memory, `mrp`'s default `--localcores` and `--localmem` on a host without
+  a cgroup cpu quota or memory limit. Under one, Nextflow counts the quota's
+  cpus where `mrp` counts every cpu, and `mrp` may take 96% of the limit, so
+  set the pool of the `mrp` run to match (below). A negative
   (adaptive) request is granted the whole pool, and every request is capped
   at the pool, but `vmem_gb`. Fractions are kept, to the hundredth of a
   thread and the MiB.

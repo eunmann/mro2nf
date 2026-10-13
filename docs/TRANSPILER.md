@@ -775,10 +775,12 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   the split's `resources.tsv`. `force_volatile` and `*.profile` change no
   output and have no effect ([`RUNNING.md`](RUNNING.md#resources)).
 - On the `standard` and `docker` profiles, `process.resourceLimits` is the
-  host's cpus and 90% of its memory, `mrp`'s default `--localcores` and
-  `--localmem`, and clamps each task, so a `withName:` request larger than the
-  host runs rather than fails; a `-c` config setting
-  `process.resourceLimits` sets another pool.
+  host's cpus and 90% of its memory, and clamps each task, so a `withName:`
+  request larger than the host runs rather than fails; a `-c` config setting
+  `process.resourceLimits` sets another pool. Without a cgroup cpu quota or
+  memory limit that is `mrp`'s default `--localcores` and `--localmem`;
+  under one, the JVM counts the quota's cpus where `mrp` counts every cpu in
+  its affinity mask (`runtime.NumCPU`), and `mrp` may take 96% of the limit.
 - A job's special, the stage's or the `__special` its split returned, selects
   `params.job_resources[special]` as the task's `clusterOptions`;
   `special = "gpu"` / `"gpu:N"` also requests N GPUs for that job.
