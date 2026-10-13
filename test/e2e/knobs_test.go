@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -19,7 +21,10 @@ import (
 // destroy resumability on long runs. The fixtures pin the gather shapes: a
 // split triad's join of its chunk outs, a map call's gather of its forks, a
 // split stage under a map call and a map call over a sub-pipeline holding
-// a split.
+// a split. Their calls are small, so each task writes the call into its
+// script; staged_call's entry label pushes the call's base64 past
+// cg.MaxValueBytes, so each task stages the call.b64 the driver wrote once
+// (CALL), whose path every task's meta holds.
 // These runtime cases are probabilistic guards: an unsorted gather only
 // re-executes when completion order happens to churn.
 func TestResumeCachesEverything(t *testing.T) {
@@ -27,22 +32,72 @@ func TestResumeCachesEverything(t *testing.T) {
 
 	requireTools(t, "nextflow", "java", "python3")
 
-	for _, fixture := range []string{"diamond_min", "split_test", "map_fork", "fork_min", "map_split", "map_pipe_split"} {
-		t.Run(fixture, func(t *testing.T) {
+	for _, c := range []struct {
+		name, fixture string
+		params        map[string]any
+	}{
+		{"diamond_min", "diamond_min", nil},
+		{"split_test", "split_test", nil},
+		{"map_fork", "map_fork", nil},
+		{"fork_min", "fork_min", nil},
+		{"map_split", "map_split", nil},
+		{"map_pipe_split", "map_pipe_split", nil},
+		{"staged_call", "struct_input", map[string]any{"s": 10, "l": strings.Repeat("v", cg.MaxValueBytes), "x": 5}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			proj := transpile(t, fixture)
+			proj := transpile(t, c.fixture)
 
-			if err := runNextflow(t, proj); err != nil {
+			var args []string
+			if c.params != nil {
+				writeParams(t, proj, c.params)
+				args = []string{"-params-file", "params.json"}
+			}
+
+			if err := runNextflow(t, proj, slices.Concat(args, []string{"-with-trace", "trace1.txt"})...); err != nil {
 				t.Fatalf("first run: %v", err)
 			}
 
-			if err := runNextflow(t, proj, "-resume", "-with-trace", "trace2.txt"); err != nil {
+			assertCallStaged(t, filepath.Join(proj, "trace1.txt"), c.params != nil)
+
+			if err := runNextflow(t, proj, slices.Concat(args, []string{"-resume", "-with-trace", "trace2.txt"})...); err != nil {
 				t.Fatalf("-resume rerun: %v", err)
 			}
 
 			assertAllCached(t, readTrace(t, filepath.Join(proj, "trace2.txt")))
 		})
+	}
+}
+
+// assertCallStaged requires every task of the traced run that reads the
+// run's call to have staged call.b64 when staged, or else written it from
+// its script (callScript).
+func assertCallStaged(t *testing.T, trace string, staged bool) {
+	t.Helper()
+
+	readers := 0
+
+	for _, row := range readTraceColumns(t, trace, "name", "workdir") {
+		script, err := os.ReadFile(filepath.Join(row[1], ".command.sh"))
+		if err != nil {
+			t.Fatalf("read %s's script: %v", row[0], err)
+		}
+
+		if !strings.Contains(string(script), "-call call.b64") {
+			continue
+		}
+
+		readers++
+
+		info, err := os.Lstat(filepath.Join(row[1], "call.b64"))
+		if inline := strings.Contains(string(script), "<<'MRO2NF_CALL'"); inline == staged || err != nil || (info.Mode()&os.ModeSymlink != 0) != staged {
+			t.Errorf("%s: call written by its script %t, call.b64 staged %t (%v), want staged %t", row[0], inline, err == nil && info.Mode()&os.ModeSymlink != 0, err, staged)
+		}
+	}
+
+	if readers == 0 {
+		t.Fatalf("no task in %s reads the run's call", trace)
 	}
 }
 
