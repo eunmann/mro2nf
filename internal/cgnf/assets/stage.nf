@@ -646,9 +646,10 @@ workflow GATHER {
 }
 
 // planned is the meta of a node's tasks: the one every task shares, with
-// the run's call, then the node's identity and resources and its digest. Its PLAN record d gives the cpus and memory its first task is
-// scheduled with and the overrides file of its own its jobs resolve theirs
-// under, both under the run's overrides.
+// the run's call, then the node's identity and resources and its digest.
+// Its PLAN record d gives the cpus and memory its first task is scheduled
+// with and the overrides file of its own its jobs resolve theirs under,
+// both under the run's overrides.
 def planned(Map shared, Map meta, List d) {
     return shared + [node: meta.node, cpus: d[3] as int, mem_gb: d[4] as double, overrides: d[5] == '-' ? '' : d[5], special: meta.special, digest: d[0]]
 }
