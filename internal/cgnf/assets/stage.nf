@@ -489,6 +489,16 @@ workflow PUBLISHED {
 // elements of its stage-fed ones, and the index token of its fork of each
 // root a zip of the node splits over. A list of positions picks those
 // entries of a key (k[at]).
+//
+// From GATE on, an instance is [join key, key, fork records, element items,
+// meta, state, additions...]: the ordinals of the roots its next join is on,
+// then what it was before GATE with its tokens replaced by its tasks' meta,
+// then its state when it was last keyed, then one addition per join since.
+// Through GATED the state is whether it is disabled and each addition a gating
+// stage's gate set (disabled); from ENABLED on, the state is the outs items it
+// has read and each addition a node's outs (readItems). GATE, REGATE, ENABLED
+// and REKEY key it again, keeping v.subList(1, 5) and folding the additions
+// into the state.
 
 // FORK extends each instance by one of its node's roots: it joins every
 // fork of the root under its own ordinals of the root's outer roots, at
@@ -611,10 +621,11 @@ workflow GATES {
     out
 }
 
-// disabled is whether instance v is disabled: as it was when it was last
-// keyed, v[5], or by the gates of each gating stage it was joined to since,
-// after it, each gate's of gates, [ext, token], naming it by the token and
-// its ordinals of the gate's own roots, at positions ext.
+// disabled is whether instance v, in the wiring's layout from GATE on, is
+// disabled: as it was when it was last keyed, its state v[5], or by the gate
+// sets of each gating stage it was joined to since, its additions, each
+// gate's of gates, [ext, token], naming it by the token and its ordinals of
+// the gate's own roots, at positions ext.
 def disabled(List v, List gates) {
     def gss = v.drop(6)
     if (gss.size() != gates.size()) {
@@ -686,9 +697,10 @@ def selected(List ds, List fields) {
     return fields == null ? ds : ds.findAll { e -> itemName(e) in fields }
 }
 
-// readItems is the outs items instance v read: those it was last keyed
-// with (REKEY), then, of the outs of each node it read since, after them,
-// the outputs fields gives that read.
+// readItems is the outs items instance v, in the wiring's layout from GATE
+// on, read: those it was last keyed with, its state v[5], then, of the outs
+// of each node it read since, its additions, the outputs fields gives that
+// read.
 def readItems(List v, List fields) {
     def dss = v.drop(6)
     if (dss.size() != fields.size()) {
