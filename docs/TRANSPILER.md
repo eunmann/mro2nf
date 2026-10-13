@@ -225,7 +225,7 @@ selector of its alias alone still names it.
   `NXF_DISABLE_PARAMS_TYPE_DETECTION` (§8).
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
   values a run stages (§8), `mro2nf_s3_mount` the root under which the
-  `awsbatch` profile reads `s3://` values in place (§8), and `mro2nf_image`
+  `awsbatch` profile reads `s3://` values of mounted buckets in place (§8), and `mro2nf_image`
   the one image the container
   profiles run every task in, which they require (`mro2nf_require_image`,
   §9). `mro2nf_overrides` is the run's `mrp --overrides` file (§9).
@@ -272,7 +272,9 @@ roots. Each line of the two leads with its root, and a node's wiring takes
 its root's own lines from them (`ENTRY_ROOT`, a lookup by root).
 
 **Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
-copy, the overrides file and its meta. A task's `-resume` key holds its own
+copy, the overrides file and its meta. Under an S3 mount it does not cache,
+as which s3:// inputs it reads in place depends on the buckets its instance
+mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
 node's digest and resources (in `meta`), the run's call, the mro2nf build,
 and its fork records and staged dirs. No task stages a file of PLAN's: the call and the digests reach it as
 values, which Nextflow keys on by content, so a re-transpile whose `.mro` edit
@@ -685,18 +687,27 @@ neither param, so a HealthOmics run cannot set them.
 another task opens, as Cell Ranger does with its FASTQ directory, needs the
 path `mrp` gives it, one path in every task; a staged copy is at a path no
 other isolated task has. Under `params.mro2nf_s3_mount`, a root at which every
-task's host mounts the input buckets read-only (the `awsbatch` profile's
+task's host may mount input buckets read-only (the `awsbatch` profile's
 `/mnt/s3`, which Mountpoint for S3 serves on the example stack's instances),
-PLAN (`mre plan -s3-mount`) rewrites each `s3://<bucket>/<key>` file value of
-the invocation to `<root>/<bucket>/<key>`, a trailing `/` kept, before it
-compiles the call, so every task compiles a call naming the mounted path. A
-value under the root, so written or given directly once cleaned, is mounted:
-PLAN checks that the mount shows its bucket and key and leaves it out of
-`leaves` and `files`, so no task stages it, while it keeps its index among the
-values, which a task recomputes from the call. Every bundle writer of `mre
-stage -s3-mount` keeps a leaf under the root as its path, with no link, copy
-or origin, and a strict confinement admits a stage's own link into it (§7).
-OUTS publishes such a value as a Linked file, as it does a host path. A key
+PLAN (`mre plan -s3-mount`), which runs on the same compute environment as
+every task, rewrites each `s3://<bucket>/<key>` file value of the invocation
+whose bucket is a directory `<root>/<bucket>` to `<root>/<bucket>/<key>`, a
+trailing `/` kept, before it compiles the call, so every task compiles a call
+naming the mounted path. Any directory there counts, not only a mount point:
+the e2e suite serves the root as one bind-mounted tree, and the example
+stack's root holds nothing but its mounts. A value of any other bucket stays
+its URI and is staged as on every other profile, which needs the tasks'
+role to read its bucket (the example stack's reads only the buckets it
+mounts), so the mount spares
+downloads and makes a recorded path hold in every task, and no run requires
+it. A value under the root, so written or given directly once cleaned, is
+mounted: PLAN checks that the mount shows its bucket and key and leaves it out
+of `leaves` and `files`, so no task stages it, while it keeps its index among
+the values, which a task recomputes from the call, a mounted and a staged
+value of one run alike. Every bundle writer of `mre stage -s3-mount` keeps a
+leaf under the root as its path, with no link, copy or origin, and a strict
+confinement admits a stage's own link into it (§7). OUTS publishes such a
+value as a Linked file, as it does a host path. A key of a mounted bucket
 with an empty, `.` or `..` component, which Mountpoint cannot show, is
 refused. A task's `-resume` key holds the value's path, not its content.
 
@@ -731,12 +742,12 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
 - `docker` runs each task in a container that mounts only what it stages.
 - `awsbatch` runs on AWS Batch over an S3 work dir (`-work-dir s3://…`); every
   task stages its upstream inputs from S3, so nothing reads a head-node path,
-  and a head-node path as an entry file is refused (§8). It reads `s3://`
-  entry files in place under `/mnt/s3` (`params.mro2nf_s3_mount`), the root it
-  bind-mounts read-only into every container (`aws.batch.volumes`); the
-  compute environment's instances must mount the input buckets there (§8,
-  `deploy/awsbatch-cdk`). Set `process.queue` and `aws.region` in a `-c`
-  config; `--outdir s3://…` publishes to S3.
+  and a head-node path as an entry file is refused (§8). It reads an `s3://`
+  entry file in place under `/mnt/s3` (`params.mro2nf_s3_mount`), the root it
+  bind-mounts read-only into every container (`aws.batch.volumes`), where the
+  compute environment's instances mount the file's bucket (§8,
+  `deploy/awsbatch-cdk`), and stages it otherwise. Set `process.queue` and
+  `aws.region` in a `-c` config; `--outdir s3://…` publishes to S3.
 - `healthomics` (HealthOmics takes no `-profile`): `./package.sh
   <image>@sha256:…` zips the files `main.nf` reads, appends the image and
   `includeConfig 'conf/healthomics.config'` to the zip's `nextflow.config`, so

@@ -14,8 +14,13 @@ import (
 // declarations where the run finds its code, each node's digest and its
 // resources under the run's mrp --overrides file, the entry files each
 // instance stages, and the forks of every entry-fed root and their counts,
-// each one record, so PLAN's outputs do not grow with the roots.
+// each one record, so PLAN's outputs do not grow with the roots. Under an S3
+// mount, which s3:// inputs PLAN reads in place depends on the buckets its
+// instance mounts, which no input of PLAN holds, so a -resume re-runs it;
+// a task downstream stays cached while PLAN's records are unchanged.
 const planProcess = `process PLAN {
+    cache !params.mro2nf_s3_mount
+
     input:
     val values
     val meta
