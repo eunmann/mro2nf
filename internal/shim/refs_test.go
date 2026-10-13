@@ -227,34 +227,72 @@ func TestWriteItemCopiesWithNothingStaged(t *testing.T) {
 	}
 }
 
-// TestLeavesRefuseAnOrdinalOfNoOneRecordedLeaf: a staged leaf is one leaf
-// beside its origin record; an ordinal dir with two, or with no record,
-// fails the index.
-func TestLeavesRefuseAnOrdinalOfNoOneRecordedLeaf(t *testing.T) {
-	for name, files := range map[string][]string{"two leaves": {".mre-origin", "a.txt", "b.txt"}, "no record": {"a.txt"}} {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			ordinal := filepath.Join(dir, "1", "f", "L0000")
+// TestReferenceIgnoresASidecarBesideTheLeaf: a stage that indexes its input
+// in place, as samtools index writes x.bam.bai beside x.bam, writes through
+// its args link into the producer's ordinal dir; a later reader of that
+// producer's output still resolves a reference to the recorded leaf, as
+// mrp's readers still read the file.
+func TestReferenceIgnoresASidecarBesideTheLeaf(t *testing.T) {
+	r := newRefTask(t, t.TempDir(), os.Symlink)
+	writeSelfNamed(t, r.file+".bai")
 
-			for _, f := range files {
-				writeSelfNamed(t, filepath.Join(ordinal, f))
-			}
+	staged, err := shim.NewStaged("in")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-			if f := filepath.Join(ordinal, ".mre-origin"); fileExists(f) {
-				if err := os.WriteFile(f, []byte("/w/a.txt"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
+	if _, err := shim.WriteItem(filepath.Join("outs", "x"), map[string]any{"up": r.file}, fields(t, "up file"), fileTable(t), shim.Opts{}, staged); err != nil {
+		t.Fatal(err)
+	}
 
-			staged, err := shim.NewStaged(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
+	if got, want := readStaged(t, filepath.Join("outs", "x"), "in")["up"], filepath.Join(r.dir, "in", "u1", "f", "L0000", "y.txt"); got != want {
+		t.Errorf("up reads %s, want the recorded leaf %s", got, want)
+	}
+}
 
-			if _, err := staged.Leaves(); err == nil {
-				t.Error("Leaves succeeded")
-			}
-		})
+// TestLeavesRefuseAnUnrecordedOrdinal: an ordinal dir with no origin
+// record fails the index, and a reference to a recorded origin whose leaf
+// is missing fails its read.
+func TestLeavesRefuseAnUnrecordedOrdinal(t *testing.T) {
+	dir := t.TempDir()
+	writeSelfNamed(t, filepath.Join(dir, "1", "f", "L0000", "a.txt"))
+
+	staged, err := shim.NewStaged(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := staged.Leaves(); err == nil {
+		t.Error("Leaves succeeded on an ordinal dir with no origin record")
+	}
+
+	t.Chdir(t.TempDir())
+
+	for path, content := range map[string]string{
+		filepath.Join("refs", "1", "f", "L0000", ".mre-origin"): "/w/a.txt",
+		filepath.Join("outs", "x", "data.json"):                 `{"up": "@mre:ref:/w/a.txt"}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, err := shim.NewStaged("refs")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := s.Leaves()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := refs.ReadBundle(filepath.Join("outs", "x")); err == nil {
+		t.Error("a reference to a recorded origin with no leaf read")
 	}
 }
 
@@ -267,10 +305,4 @@ func TestRefMarkerIsReserved(t *testing.T) {
 			t.Errorf("CheckReserved(%q) = %v, want accepted %t", s, err, ok)
 		}
 	}
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-
-	return err == nil
 }

@@ -20,9 +20,9 @@ var (
 	// errUnstagedRef reports a leaf a bundle names by reference that the
 	// reading task did not stage.
 	errUnstagedRef = errors.New("leaf named by reference is not staged")
-	// errBadRef reports a staged ordinal dir that holds no one leaf beside
-	// its origin record.
-	errBadRef = errors.New("staged ordinal dir is not one recorded leaf")
+	// errUnrecordedOrdinal reports a staged ordinal dir with no origin
+	// record.
+	errUnrecordedOrdinal = errors.New("staged ordinal dir records no origin")
 )
 
 // Staged are the dirs a task staged, each one item, its producer's bundle,
@@ -246,56 +246,30 @@ type Refs struct {
 	leaves map[string]string
 }
 
-// index records the leaf of the ordinal dir at ordinal under its origin,
-// unless a leaf of that origin is recorded.
+// index records the leaf of the absolute ordinal dir at ordinal under its
+// origin, unless a leaf of that origin is recorded. Every writer names a
+// leaf by its origin's basename (leafName), so the leaf is found by the
+// record alone: a file a stage wrote beside its input, such as an index,
+// lands in the ordinal dir its args link to and is no leaf.
 func (r Refs) index(ordinal string) error {
 	if !ordinalDir.MatchString(filepath.Base(ordinal)) {
 		return nil
 	}
 
-	leaf, o, err := stagedLeaf(ordinal)
+	o, recorded, err := readOrdinalOrigin(ordinal)
 	if err != nil {
-		return err
+		return fmt.Errorf("staged leaf %s: %w", ordinal, err)
+	}
+
+	if !recorded {
+		return fmt.Errorf("%w: %s", errUnrecordedOrdinal, ordinal)
 	}
 
 	if _, ok := r.leaves[o.record()]; !ok {
-		r.leaves[o.record()] = leaf
+		r.leaves[o.record()] = filepath.Join(ordinal, filepath.Base(o.Path))
 	}
 
 	return nil
-}
-
-// stagedLeaf is the absolute path of the one leaf in an ordinal dir a task
-// staged, and the origin it records.
-func stagedLeaf(ordinal string) (string, Origin, error) {
-	entries, err := os.ReadDir(ordinal)
-	if err != nil {
-		return "", Origin{}, fmt.Errorf("staged leaf %s: %w", ordinal, err)
-	}
-
-	o, recorded, err := readOrdinalOrigin(ordinal)
-	if err != nil {
-		return "", Origin{}, fmt.Errorf("staged leaf %s: %w", ordinal, err)
-	}
-
-	var names []string
-
-	for _, e := range entries {
-		if e.Name() != originFile {
-			names = append(names, e.Name())
-		}
-	}
-
-	if !recorded || len(names) != 1 {
-		return "", Origin{}, fmt.Errorf("%w: %s holds %v", errBadRef, ordinal, names)
-	}
-
-	leaf, err := filepath.Abs(filepath.Join(ordinal, names[0]))
-	if err != nil {
-		return "", Origin{}, fmt.Errorf("staged leaf %s: %w", ordinal, err)
-	}
-
-	return leaf, o, nil
 }
 
 // leaf is the path of the staged leaf of origin o.
@@ -303,6 +277,10 @@ func (r Refs) leaf(o Origin) (string, error) {
 	at, ok := r.leaves[o.record()]
 	if !ok {
 		return "", fmt.Errorf("%w: %s", errUnstagedRef, o.record())
+	}
+
+	if _, err := os.Lstat(at); err != nil {
+		return "", fmt.Errorf("staged leaf of %s: %w", o.record(), err)
 	}
 
 	return at, nil
