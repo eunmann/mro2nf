@@ -1,8 +1,9 @@
 # Running a transpiled pipeline
 
 This guide covers transpiling a pipeline, launching it, sizing and retrying its
-tasks, the target profiles, GPU stages, `mrp`'s flags, and what to check when a
-run fails. The [README](../README.md) has a first run and a container example.
+tasks, the target profiles and the paths their tasks share, GPU stages, `mrp`'s
+flags, and what to check when a run fails. The [README](../README.md) has a
+first run and a container example.
 
 ## Transpile
 
@@ -67,20 +68,19 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   and `healthomics` profiles refuse head-node paths, so give them `s3://`
   URIs.
 - A stage receives a file input at a path in its own task directory, with the
-  same file name and content. Under `mrp` it receives the original path. On
-  an executor that isolates its tasks, a stage that writes that path into an
-  output for another stage to open, rather than passing the file on as a
-  file-typed output, therefore names a path the other task does not have.
-  The `awsbatch` profile avoids this for `s3://` inputs by reading them in
-  place through a mount ([AWS Batch](#aws-batch)).
+  same file name and content. Under `mrp` it receives the original path. A
+  stage that writes that path into text for another stage to open works only
+  on some profiles ([Paths written into text](#paths-written-into-text)).
 - Only the named file is staged, not the files beside it, whether it is a
   pipeline input or another stage's output. A stage that opens a companion
   file next to its input, such as an index beside a BAM, finds it under `mrp`
   but not under mro2nf. Declare the companion as its own input, and as its
   own output of the stage that writes it, and have the stage open it from
-  that input, or pass a directory input that holds both files. Neither
-  applies to an input read through the `awsbatch` mount, which a stage
-  receives at its mounted path, beside the rest of its bucket.
+  that input, or pass a directory input that holds both files. HealthOmics
+  [requires the same](https://docs.aws.amazon.com/omics/latest/dev/workflows-run-inputs.html)
+  of index files. Neither applies to an input read through the `awsbatch`
+  mount, which a stage receives at its mounted path, beside the rest of its
+  bucket.
 - Nextflow's v1 syntax parser, the default before 26.04 or under
   `NXF_SYNTAX_PARSER=v1`, converts command-line values before the run sees
   them: `--s 007` becomes the number `7`, which fails a `string` input. Set
@@ -321,6 +321,38 @@ each URI and refuses a prefix without the slash with `S3 object not found`. Outp
 published to `/mnt/workflow/pubdir`, which HealthOmics exports to the run's
 output URI.
 
+## Paths written into text
+
+mro2nf supports Martian's typed file flow: a `path` or `file` value, and each
+file leaf of a struct, array or map whose type declares it, is staged into
+every task that reads it, on every profile.
+
+A stage that writes a path into text, such as a JSON or CSV file's contents,
+an untyped `map` or a `string`, for a later job to open relies on `mrp`'s
+shared filesystem. No task stages such a path, so it opens only where the
+later task sees the same file at that path. This is out of scope, not a bug:
+give the file a file type and it is staged everywhere.
+
+| Profile | the path of a file input | the path of a stage's output | a path in an untyped input |
+|---|---|---|---|
+| `standard`, grid | opens | opens | opens where the tasks see it |
+| `docker` | a head-node input fails: it is a link to a host path that only the tasks staging it mount; an `s3://` or other remote input opens: Nextflow downloads it under the work directory | opens: a task that stages a file from the work directory mounts all of it | fails: no container mounts it |
+| `awsbatch` | opens for an `s3://` input read through the S3 mount; a staged input fails | fails: each task runs in its own scratch directory | fails, unless it is under the S3 mount |
+| `healthomics` | opens: HealthOmics stages the run's inputs once, read-only, for every task | opens: the work directory is on the run's shared storage | fails: no task stages it |
+
+Known pipelines affected:
+
+- CellRanger `multi` and `aggr` take a CSV that lists input paths. They run
+  where every task sees those paths: `standard`, grid, and `awsbatch` when the
+  paths are under the S3 mount.
+- CellRanger `count` writes its FASTQ path into JSON that later stages open.
+  It runs on `standard`, grid and `healthomics`, on `docker` only with its
+  FASTQs given as an `s3://` URI, and on `awsbatch` only with its FASTQ
+  bucket mounted.
+
+A companion file, such as an index beside a BAM, is a separate case: declare
+it as an input ([Pipeline inputs](#pipeline-inputs)).
+
 ## A pipeline shipped as a bundle
 
 A vendor bundle such as CellRanger runs its stages under its own environment
@@ -352,9 +384,8 @@ ENV PATH=/opt/cellranger-10.1.0/lib/bin:/opt/cellranger-10.1.0/external/martian/
 ```
 
 CellRanger's stages write the FASTQ path they were given into JSON that
-later stages open, so every task must see an input at the same path: the
-`awsbatch` profile's mounted inputs and HealthOmics' shared run filesystem do,
-and copy-staging executors do not.
+later stages open, so on `awsbatch` the FASTQ bucket must be mounted
+([Paths written into text](#paths-written-into-text)).
 
 ## GPU stages
 
