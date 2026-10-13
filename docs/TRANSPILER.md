@@ -266,8 +266,8 @@ fails if the call graph has a node, a fork root or a read the witness lacks
 its presence. Its records reach the driver as `eval` values: the run's call;
 per node a digest of its resolved spec (stage, bindings, disable bindings and
 fork roots in Martian's JSON form) and of what its post step writes for its
-readers (the splits of the roots it feeds and the outputs their fork elements
-zip, its partners' splits, and the disable bindings whose value it posts with
+readers (the splits of the roots it feeds, its partners' splits, and the
+disable bindings whose value it posts with
 their roots), whether the invocation disables it, the
 fork keys a static per-fork binding disables, and its resources under the
 run's overrides file (§9); and in one record the forks of every entry-fed
@@ -301,8 +301,9 @@ transpile, or an image built from other sources, fails loudly rather than run.
 roots. The driver enumerates a node's instances root by root: an entry-fed
 root's forks come from PLAN, a stage-fed root's from its producer's
 `forks/<root>/<ordinal>/` output, and each instance joins the forks agreeing on
-the outer roots. An instance zipping another stage's output over a root joins
-that stage's partner dir at its own fork's token, or the absent record, so each
+the outer roots. An instance zipping a stage output over a root, other than
+the root's own source, joins that stage's partner dir at its own fork's token,
+whether that stage feeds the root or not, or the absent record, so each
 fork stages one element of it whatever the fork width (the `zip` bench lanes
 gate the bytes one task stages flat in N). A split of an output of a stage a
 runtime gate disables, `split Q.o unless G.f`, is zipped the same way: the
@@ -459,14 +460,12 @@ every filetype and struct, and the struct of each callable's outputs.
   `forks/<root fqid>/<ordinal>/`. The ordinal is zero-padded, in mrp's fork
   order (array index, or map keys in byte order). Each dir holds that fork's
   element of the source collection as a bundle, with its file leaves staged,
-  and its element of every other output of this stage a split over the root
-  reads (a map call zipping two outputs, a disable binding splitting one), plus
-  `fork.json`, which records the real fork (keys as JSON strings), its position,
-  and the zipped outputs too short to have an element there, which read null as
-  in `mrp`. A map key's fork dir also carries the key's token, the hex SHA-256
+  plus `fork.json`, which records the real fork (keys as JSON strings) and its
+  position. A map key's fork dir also carries the key's token, the hex SHA-256
   of the key, after an `@` (an array fork's token is its index). For each
-  output of this stage that a map call it does not fork zips or disables by
-  (a split over another stage's or a literal's root), it writes one partner dir per element,
+  output of this stage that a map call splits other than as its root's source
+  (a map call zipping several outputs, of this stage or of others, or a
+  disable binding splitting one), it writes one partner dir per element,
   `forks/<root>@<node>.<output>/<token>/`, and an absent record, `none`, which
   reads null where the output is null and a missing element, logged, at any
   index it lacks, as `mrp` reads it; a zip of maps at run time need not share

@@ -435,13 +435,15 @@ func (rp *cgReplay) checkArgs(rel, args string, want []byte, wantErr error) json
 
 // upstreamOuts are the posted outs an instance stages: those of each stage
 // its bindings read, at the forks that agree with the instance's, less a
-// producer it reads only through the splits its fork elements serve.
+// producer it reads only through splits of a root's own source, which its
+// fork elements serve. A split of any other output resolves from the outs.
 func (rp *cgReplay) upstreamOuts(st *syntax.CallGraphStage, fork cg.Fork) []string {
 	elemOnly := map[*syntax.CallStm]string{}
 
 	for _, r := range st.ForkRoots() {
-		if p, ok := rp.g.Producer(r); ok {
-			elemOnly[r.Call()] = p
+		own, isRef := r.Split().Value.(*syntax.RefExp)
+		if p, ok := rp.g.Producer(r); ok && isRef {
+			elemOnly[r.Call()] = p + "." + own.OutputId
 		}
 	}
 
@@ -469,11 +471,11 @@ func (rp *cgReplay) upstreamOuts(st *syntax.CallGraphStage, fork cg.Fork) []stri
 }
 
 // refsOutsideSplits collects the stages e reads other than through a split
-// of a root's own producer.
+// of a root's own source, elemOnly's <producer>.<output> by the root's call.
 func refsOutsideSplits(e syntax.Exp, elemOnly map[*syntax.CallStm]string, read map[string]bool) {
 	switch x := e.(type) {
 	case *syntax.SplitExp:
-		if ref, ok := x.Value.(*syntax.RefExp); ok && elemOnly[x.Call] == ref.Id {
+		if ref, ok := x.Value.(*syntax.RefExp); ok && elemOnly[x.Call] == ref.Id+"."+ref.OutputId {
 			return
 		}
 
