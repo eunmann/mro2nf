@@ -236,13 +236,14 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 	outer := outerAt.fork
 
 	var (
-		v   json.Marshaler
+		c   indexed
 		idx []syntax.CollectionIndex
 		err error
 	)
 
 	if w.values {
-		v, idx, err = w.source(root, outer)
+		c, err = w.source(root, outer)
+		idx = c.indices()
 	} else {
 		idx, err = w.r.sourceIndices(root, outer)
 	}
@@ -272,7 +273,7 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 		rec := Element{Fork: at.fork, Lens: at.lens, Position: i}
 
 		if w.values {
-			if rec.Missing, err = w.writeValues(ed, v, ix, z); err != nil {
+			if rec.Missing, err = w.writeValues(ed, c, ix, z); err != nil {
 				return fmt.Errorf("fork %d of %s: %w", i, root.Fqid, err)
 			}
 		}
@@ -285,10 +286,10 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 	return nil
 }
 
-// writeValues writes into ed the fork's element of the root's source v and
+// writeValues writes into ed the fork's element of the root's source c and
 // of each zipped source, and returns the zipped sources it has none of.
-func (w forkWriter) writeValues(ed string, v json.Marshaler, ix syntax.CollectionIndex, z zipped) ([]string, error) {
-	el, err := element(v, ix)
+func (w forkWriter) writeValues(ed string, c indexed, ix syntax.CollectionIndex, z zipped) ([]string, error) {
+	el, err := c.at(ix)
 	if err != nil {
 		return nil, err
 	}
@@ -303,22 +304,15 @@ func (w forkWriter) writeValues(ed string, v json.Marshaler, ix syntax.Collectio
 	return missing, writeElementValue(ed, members, z.params, w.tbl, w.mount)
 }
 
-// source is root's collection under outer and its fork indices, as core
-// expands a fork from a stage's outs (core/fork.go:1576-1790).
-func (w forkWriter) source(root *syntax.CallGraphStage, outer Fork) (json.Marshaler, []syntax.CollectionIndex, error) {
+// source is root's collection under outer, as core expands a fork from a
+// stage's outs (core/fork.go:1576-1790).
+func (w forkWriter) source(root *syntax.CallGraphStage, outer Fork) (indexed, error) {
 	v, err := w.r.sourceValue(root, outer)
 	if err != nil {
-		return nil, nil, err
+		return indexed{}, err
 	}
 
-	raw, err := marshal(v)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	idx, err := indicesOf(raw, root.Split().Source.CallMode())
-
-	return v, idx, err
+	return indexedOf(v, root.Split().Source.CallMode())
 }
 
 // elementName names fork i of n at ix under the outer ordinals names. A map

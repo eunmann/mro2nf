@@ -1,8 +1,11 @@
 package cg
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -94,4 +97,72 @@ func TestPostGates(t *testing.T) {
 			t.Errorf("%s outs %s: gates %q, want %q", tc.node, tc.outs, got, tc.want)
 		}
 	}
+}
+
+// BenchmarkPostGates posts FLAGS's outs in bench/forkdisabled at two
+// widths, 4-fold apart: its partner elements and the gates of GATED's USE,
+// whose disable binding splits FLAGS.skips. ns/fork stays flat with the
+// width when the post decodes FLAGS.skips once, not once per fork (#550).
+func BenchmarkPostGates(b *testing.B) {
+	for _, n := range []int{2000, 8000} {
+		b.Run("forks="+strconv.Itoa(n), func(b *testing.B) {
+			outs := forkDisabledFlags(b, n)
+
+			for b.Loop() {
+				forks := b.TempDir()
+				if err := outs.g.Post(PostSpec{Args: outs.dir, Outs: outs.dir, Forks: forks, Gates: filepath.Join(forks, "gates")}); err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*n), "ns/fork")
+		})
+	}
+}
+
+// flagsOuts is FLAGS's staged outs bundle and the graph it is posted in.
+type flagsOuts struct {
+	g   *Graph
+	dir string
+}
+
+// forkDisabledFlags compiles bench/forkdisabled at width n and stages
+// FLAGS's outs, every other fork skipped.
+func forkDisabledFlags(b *testing.B, n int) flagsOuts {
+	b.Helper()
+
+	xs, skips := make([]int, n), make([]bool, n)
+	for i := range n {
+		xs[i], skips[i] = i, i%2 == 1
+	}
+
+	xsJSON, err := json.Marshal(xs)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	skipsJSON, err := json.Marshal(skips)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	src := fmt.Sprintf("@include \"common.mro\"\n\ncall FORKDISABLED(xs = %s, skips = %s,)\n", xsJSON, skipsJSON)
+
+	g, err := Compile([]byte(src), "pipeline.mro", []string{filepath.Join("..", "..", "bench", "forkdisabled")})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	raw := json.RawMessage(`{"skips":` + string(skipsJSON) + `}`)
+
+	dir := filepath.Join(b.TempDir(), "outs")
+	if err := writeOuts(dir, raw, g, "FLAGS"); err != nil {
+		b.Fatal(err)
+	}
+
+	if err := writeInstance(dir, Instance{Node: "FORKDISABLED.FLAGS"}); err != nil {
+		b.Fatal(err)
+	}
+
+	return flagsOuts{g: g, dir: dir}
 }

@@ -100,7 +100,7 @@ func walkSplits(e syntax.Exp, visit func(*syntax.SplitExp)) {
 // each with the param its elements are written with.
 type zipped struct {
 	srcs   []zipSource
-	values []json.Marshaler
+	values []indexed
 	params []*syntax.StructMember
 }
 
@@ -120,12 +120,17 @@ func (w forkWriter) zippedAt(root *syntax.CallGraphStage, outer Fork) (zipped, e
 			return zipped{}, fmt.Errorf("zipped source of %s: %w", root.Fqid, err)
 		}
 
+		c, err := indexedOf(v, root.Split().Source.CallMode())
+		if err != nil {
+			return zipped{}, fmt.Errorf("zipped source of %s: %w", root.Fqid, err)
+		}
+
 		p, err := w.r.g.collectionParam(s.member, s.split, root)
 		if err != nil {
 			return zipped{}, err
 		}
 
-		z.values, z.params = append(z.values, v), append(z.params, p)
+		z.values, z.params = append(z.values, c), append(z.params, p)
 	}
 
 	return z, nil
@@ -137,7 +142,7 @@ func (z zipped) at(ix syntax.CollectionIndex, payload map[string]json.Marshaler)
 	var missing []string
 
 	for i, s := range z.srcs {
-		el, err := element(z.values[i], ix)
+		el, err := z.values[i].at(ix)
 
 		switch {
 		case errors.Is(err, errNoElement):

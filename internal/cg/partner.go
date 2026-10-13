@@ -180,12 +180,7 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 		return err
 	}
 
-	raw, err := marshal(v)
-	if err != nil {
-		return err
-	}
-
-	idx, err := indicesOf(raw, p.root.Split().Source.CallMode())
+	c, err := indexedOf(v, p.root.Split().Source.CallMode())
 	if err != nil {
 		return err
 	}
@@ -198,8 +193,8 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 	dir := filepath.Join(w.dir, p.dir())
 	rec := partnerJSON{Root: p.root.Fqid, Node: p.ref.Id, Output: p.ref.OutputId}
 
-	for _, ix := range idx {
-		el, err := element(v, ix)
+	for _, ix := range c.indices() {
+		el, err := c.at(ix)
 		if err != nil {
 			return err
 		}
@@ -223,7 +218,7 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 		}
 	}
 
-	rec.Null = isNull(raw)
+	rec.Null = c.null
 
 	return writeRecord(filepath.Join(dir, AbsentName, partnerFile), rec)
 }

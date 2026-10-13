@@ -55,9 +55,10 @@ type store interface {
 // specializes a binding for the fork, LazyArgumentMap.Path projects and
 // type-filters an upstream's outs.
 type resolver struct {
-	g      *Graph
-	st     store
-	across map[string]acrossList
+	g       *Graph
+	st      store
+	across  map[string]acrossList
+	decoded map[indexedKey]indexed
 }
 
 func (r *resolver) boolType() syntax.Type {

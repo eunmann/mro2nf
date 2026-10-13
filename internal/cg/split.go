@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 
 	"github.com/martian-lang/martian/martian/core"
@@ -36,21 +38,94 @@ func (r *resolver) resolveSplit(e *syntax.SplitExp, t syntax.Type, fork Fork) (j
 			}
 		}
 
-		v, err := r.resolve(e.Value, innerT, fork)
-		if err != nil {
-			return v, fmt.Errorf("split %s: %w", e.Source.CallMode().String(), err)
-		}
-
-		if ref, ok := e.Value.(*syntax.RefExp); ok {
-			if _, ok := ref.Forks[e.Call]; ok {
-				return v, nil
-			}
-		}
-
-		return element(v, p.Index)
+		return r.splitElement(e, innerT, fork, p.Index)
 	}
 
 	return nil, fmt.Errorf("%w: split %s outside its fork", errShape, e.GoString())
+}
+
+// splitElement is the element at ix of e's collection, of type innerT, at
+// fork. A ref already forked on the call is that one element.
+func (r *resolver) splitElement(e *syntax.SplitExp, innerT syntax.Type, fork Fork, ix syntax.CollectionIndex) (json.Marshaler, error) {
+	ref, isRef := e.Value.(*syntax.RefExp)
+	if isRef {
+		if _, forked := ref.Forks[e.Call]; !forked {
+			c, err := r.refIndexed(ref, innerT, fork, ix.Mode())
+			if err != nil {
+				return nil, fmt.Errorf("split %s: %w", e.Source.CallMode().String(), err)
+			}
+
+			return c.at(ix)
+		}
+	}
+
+	v, err := r.resolve(e.Value, innerT, fork)
+	if err != nil {
+		return v, fmt.Errorf("split %s: %w", e.Source.CallMode().String(), err)
+	}
+
+	if isRef {
+		return v, nil
+	}
+
+	return element(v, ix)
+}
+
+// indexedKey names a collection read from a stage output: the output,
+// the upstream fork it is read at, the type it is filtered to and the mode
+// it forks by.
+type indexedKey struct {
+	node, output, fork string
+	t                  syntax.TypeId
+	mode               syntax.CallMode
+}
+
+// refIndexed is ref's collection, filtered to t, at fork, as resolve
+// reads it, decoded once per resolver: a post resolving a binding at every
+// fork of a root reads the same output at each.
+func (r *resolver) refIndexed(ref *syntax.RefExp, t syntax.Type, fork Fork, mode syntax.CallMode) (indexed, error) {
+	exp, t, err := r.specialize(ref, t, fork)
+	if err != nil {
+		return indexed{}, err
+	}
+
+	sref, ok := exp.(*syntax.RefExp)
+	if !ok {
+		return indexed{}, fmt.Errorf("%w: %s specializes to %T", errShape, ref.GoString(), exp)
+	}
+
+	up, err := r.g.Stage(sref.Id)
+	if err != nil {
+		return indexed{}, fmt.Errorf("ref %s.%s: %w", sref.Id, sref.OutputId, err)
+	}
+
+	uf, err := fork.project(up.ForkRoots(), sref.Forks)
+	if err != nil {
+		return indexed{}, fmt.Errorf("ref %s.%s: %w", sref.Id, sref.OutputId, err)
+	}
+
+	k := indexedKey{node: sref.Id, output: sref.OutputId, fork: uf.key(), t: t.TypeId(), mode: mode}
+	if c, ok := r.decoded[k]; ok {
+		return c, nil
+	}
+
+	v, err := r.resolveRef(sref, t, fork)
+	if err != nil {
+		return indexed{}, err
+	}
+
+	c, err := indexedOf(v, mode)
+	if err != nil {
+		return indexed{}, err
+	}
+
+	if r.decoded == nil {
+		r.decoded = map[indexedKey]indexed{}
+	}
+
+	r.decoded[k] = c
+
+	return c, nil
 }
 
 // stagedElement serves a split from the fork element the root's producer
@@ -137,43 +212,85 @@ func sameRef(a, b *syntax.RefExp) bool {
 	return true
 }
 
-// element takes the element of a resolved collection at ix (core/resolve.go
-// getElement, getArrayElement, getMapElement): null for a null collection,
-// and null with errNoElement past an array's end or for a key a map lacks.
+// element takes the element of a resolved collection at ix.
 func element(v json.Marshaler, ix syntax.CollectionIndex) (json.Marshaler, error) {
-	raw, err := marshal(v)
+	c, err := indexedOf(v, ix.Mode())
 	if err != nil {
 		return nil, err
 	}
 
-	if isNull(raw) {
-		return nil, nil
+	return c.at(ix)
+}
+
+// indexed is a resolved collection decoded once, so that taking the element
+// of each of its N forks costs O(1), not a decode of the whole: a post or a
+// gate enumerating every fork would otherwise be O(N²).
+type indexed struct {
+	mode syntax.CallMode
+	null bool
+	arr  []json.RawMessage
+	m    map[string]json.RawMessage
+}
+
+// indexedOf decodes v as the collection a split of mode forks over: an
+// array, or a map for a map call.
+func indexedOf(v json.Marshaler, mode syntax.CallMode) (indexed, error) {
+	raw, err := marshal(v)
+	if err != nil {
+		return indexed{}, err
 	}
 
-	if ix.Mode() == syntax.ModeMapCall {
-		var m core.LazyArgumentMap
-		if err := json.Unmarshal(raw, &m); err != nil {
-			return nil, fmt.Errorf("map element %q: %w", ix.MapKey(), err)
-		}
+	c := indexed{mode: mode, null: isNull(raw)}
 
-		el, ok := m[ix.MapKey()]
+	switch {
+	case c.null:
+	case mode == syntax.ModeMapCall:
+		if err := json.Unmarshal(raw, &c.m); err != nil {
+			return indexed{}, fmt.Errorf("decode map collection: %w", err)
+		}
+	default:
+		if err := json.Unmarshal(raw, &c.arr); err != nil {
+			return indexed{}, fmt.Errorf("decode array collection: %w", err)
+		}
+	}
+
+	return c, nil
+}
+
+// indices are the collection's fork indices in mrp's order; null and empty
+// have none (core/fork.go:1639-1790 expandForkFromObj).
+func (c indexed) indices() []syntax.CollectionIndex {
+	switch {
+	case c.null:
+		return nil
+	case c.mode == syntax.ModeMapCall:
+		return mapIndices(slices.Collect(maps.Keys(c.m)))
+	default:
+		return arrayIndices(len(c.arr))
+	}
+}
+
+// at is the element at ix (core/resolve.go getElement, getArrayElement,
+// getMapElement): null in a null collection, and null with errNoElement past
+// an array's end or for a key a map lacks.
+func (c indexed) at(ix syntax.CollectionIndex) (json.Marshaler, error) {
+	switch {
+	case c.null:
+		return nil, nil
+	case ix.Mode() != c.mode:
+		return nil, fmt.Errorf("%w: %s index into a %s collection", errShape, ix.Mode().String(), c.mode.String())
+	case c.mode == syntax.ModeMapCall:
+		el, ok := c.m[ix.MapKey()]
 		if !ok {
 			return nil, fmt.Errorf("%w: map key %q not found", errNoElement, ix.MapKey())
 		}
 
 		return el, nil
+	case ix.ArrayIndex() < 0 || ix.ArrayIndex() >= len(c.arr):
+		return nil, fmt.Errorf("%w: array index %d >= %d", errNoElement, ix.ArrayIndex(), len(c.arr))
+	default:
+		return c.arr[ix.ArrayIndex()], nil
 	}
-
-	var a []json.RawMessage
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("array element %d: %w", ix.ArrayIndex(), err)
-	}
-
-	if ix.ArrayIndex() < 0 || ix.ArrayIndex() >= len(a) {
-		return nil, fmt.Errorf("%w: array index %d >= %d", errNoElement, ix.ArrayIndex(), len(a))
-	}
-
-	return a[ix.ArrayIndex()], nil
 }
 
 // resolveMerge gathers a value over every fork of a map call
@@ -283,12 +400,9 @@ func (r *resolver) sourceIndices(root *syntax.CallGraphStage, outer Fork) ([]syn
 		return nil, fmt.Errorf("indices of %s: %w", root.Fqid, err)
 	}
 
-	raw, err := marshal(v)
-	if err != nil {
-		return nil, err
-	}
+	c, err := indexedOf(v, sp.Source.CallMode())
 
-	return indicesOf(raw, sp.Source.CallMode())
+	return c.indices(), err
 }
 
 // sourceExp specializes root's split for outer, as core Fork.expandForkPart
@@ -346,35 +460,6 @@ func knownIndices(src syntax.MapCallSource) ([]syntax.CollectionIndex, bool) {
 	default:
 		return nil, true
 	}
-}
-
-// indicesOf are the fork indices of a runtime collection; null and empty
-// have none (core/fork.go:1639-1790 expandForkFromObj).
-func indicesOf(raw json.RawMessage, mode syntax.CallMode) ([]syntax.CollectionIndex, error) {
-	if isNull(raw) {
-		return nil, nil
-	}
-
-	if mode == syntax.ModeMapCall {
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &m); err != nil {
-			return nil, fmt.Errorf("fork keys: %w", err)
-		}
-
-		keys := make([]string, 0, len(m))
-		for k := range m {
-			keys = append(keys, k)
-		}
-
-		return mapIndices(keys), nil
-	}
-
-	var a []json.RawMessage
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, fmt.Errorf("fork length: %w", err)
-	}
-
-	return arrayIndices(len(a)), nil
 }
 
 func arrayIndices(n int) []syntax.CollectionIndex {
