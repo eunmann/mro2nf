@@ -1,7 +1,9 @@
 package cg
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -131,6 +133,50 @@ func (f *fixture) bundled(raw json.RawMessage, param *syntax.StructMember) strin
 	}
 
 	return string(got)
+}
+
+// TestDecodeValueRejectsMalformed: a value record that is not a name, a
+// colon and base64 of JSON holding one item's record and, but for an
+// absent partner record, a value, fails as errBadValue rather than reading
+// as a missing item.
+func TestDecodeValueRejectsMalformed(t *testing.T) {
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+	for _, c := range []struct {
+		name, text string
+		bad        bool
+	}{
+		{"no colon", "y" + b64(`{"fork":{"lens":[1]},"value":1}`), true},
+		{"no name", ":" + b64(`{"fork":{"lens":[1]},"value":1}`), true},
+		{"bad base64", "y:!!", true},
+		{"bad json", "y:" + b64(`{"fork":`), true},
+		{"no item", "y:" + b64(`{"value":1}`), true},
+		{"two items", "y:" + b64(`{"instance":{"node":"N"},"fork":{"lens":[1]},"value":1}`), true},
+		{"no value", "y:" + b64(`{"fork":{"lens":[1]}}`), true},
+		{"partner element with no value", "y:" + b64(`{"partner":{"root":"R","node":"N","output":"o","index":0}}`), true},
+		{"fork element", "y:" + b64(`{"fork":{"lens":[1]},"value":1}`), false},
+		{"null output", "y:" + b64(`{"instance":{"node":"N"},"value":null}`), false},
+		{"absent partner record", "y:" + b64(`{"partner":{"root":"R","node":"N","output":"o"}}`), false},
+	} {
+		if _, _, err := decodeValue(c.text); errors.Is(err, errBadValue) != c.bad || (!c.bad && err != nil) {
+			t.Errorf("%s: decode %q: %v, want malformed %t", c.name, c.text, err, c.bad)
+		}
+	}
+}
+
+// TestPostNeedsForkValues: a post writes the elements it feeds into both a
+// Forks dir and a ForkValues file, as an element it carries as a value
+// would otherwise reach no reader.
+func TestPostNeedsForkValues(t *testing.T) {
+	f := loadFixture(t, "map_fork_upstream")
+	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1}}`)
+
+	for _, spec := range []PostSpec{{Forks: f.next("forks")}, {ForkValues: f.next("fork_values")}} {
+		spec.Args, spec.Outs = gen, gen
+		if err := f.g.Post(spec); !errors.Is(err, errForkValues) {
+			t.Errorf("post with forks %q and fork values %q: %v, want %v", spec.Forks, spec.ForkValues, err, errForkValues)
+		}
+	}
 }
 
 func exists(path string) bool {

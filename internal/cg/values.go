@@ -102,12 +102,12 @@ func decodeValue(text string) (string, valueJSON, error) {
 
 	raw, err := base64.StdEncoding.DecodeString(enc)
 	if err != nil {
-		return "", valueJSON{}, fmt.Errorf("value record of %s: %w", name, err)
+		return "", valueJSON{}, fmt.Errorf("%w: %s: %w", errBadValue, name, err)
 	}
 
 	var rec valueJSON
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return "", valueJSON{}, fmt.Errorf("value record of %s: %w", name, err)
+		return "", valueJSON{}, fmt.Errorf("%w: %s: %w", errBadValue, name, err)
 	}
 
 	kinds := 0
