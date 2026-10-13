@@ -7,11 +7,13 @@ toolchain go1.26.9
 require (
 	github.com/google/go-cmp v0.7.0
 	github.com/martian-lang/martian v0.0.0-20260506211707-4a558e7dd93b
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 )
 
 require (
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	golang.org/x/sys v0.30.0 // indirect
+	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.30.0 // indirect
 )
 

@@ -3,8 +3,6 @@ package cgnf
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
-	"slices"
 )
 
 // templateParam is one run parameter of a HealthOmics parameter template;
@@ -14,22 +12,18 @@ type templateParam struct {
 	Optional    bool   `json:"optional"`
 }
 
-// parameterTemplate is parameter-template.json: every entry input and the
-// run's mrp --overrides file, which only resizes jobs, each optional, and
-// none of the project's other params, so a HealthOmics run can neither swap
-// the image the package pins nor widen the file values it stages.
+// parameterTemplate is parameter-template.json: the launch params a
+// HealthOmics run may set, every entry input and the run's mrp --overrides
+// file, which only resizes jobs, each optional, as each has a value when
+// unset, and none of the project's other params, so a HealthOmics run can
+// neither swap the image the package pins nor widen the file values it
+// stages.
 func (p *project) parameterTemplate() (string, error) {
-	tmpl := map[string]templateParam{
-		"mro2nf_overrides": {
-			Description: "an s3:// URI of mrp's --overrides file, over each stage's resources",
-			Optional:    true,
-		},
-	}
+	tmpl := map[string]templateParam{}
 
-	for _, id := range slices.Sorted(maps.Keys(p.src.Invocation.Args)) {
-		tmpl[id] = templateParam{
-			Description: fmt.Sprintf("pipeline input %q; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory", id),
-			Optional:    true,
+	for _, lp := range p.launchParams() {
+		if lp.omics != "" {
+			tmpl[lp.id] = templateParam{Description: lp.omics, Optional: true}
 		}
 	}
 
@@ -43,7 +37,9 @@ func (p *project) parameterTemplate() (string, error) {
 
 // packageScript is package.sh, which zips the workflow HealthOmics runs:
 // the files main.nf reads, its healthomics profile made the workflow's own
-// config, and the image pinned by digest.
+// config, and the image pinned by digest. nextflow_schema.json stays out:
+// HealthOmics detects a workflow's params from a schema in its package,
+// and the template alone names those a run may set.
 const packageScript = `#!/usr/bin/env bash
 # Packages this project as an AWS HealthOmics workflow, its healthomics
 # profile the workflow's own config, as HealthOmics takes no -profile:

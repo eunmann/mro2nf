@@ -275,10 +275,10 @@ func treeDigest(t *testing.T, dir string) string {
 // main.nf includes stage.nf by its path beside it, and the modules of
 // subworkflows/ by theirs, each including stage.nf and the others by
 // theirs, nextflow.config includes conf/'s profile configs by theirs, the
-// HealthOmics package files are no Nextflow source, and nothing here is
-// resolved from -project-dir.
+// HealthOmics package files and the params schema are no Nextflow source,
+// and nothing here is resolved from -project-dir.
 var lintEmissionAllowList = []string{
-	"_assets", "conf", "main.nf", "nextflow.config", "package.sh", "parameter-template.json", "stage.nf", "subworkflows",
+	"_assets", "conf", "main.nf", "nextflow.config", "nextflow_schema.json", "package.sh", "parameter-template.json", "stage.nf", "subworkflows",
 }
 
 // assertNoProjectDirContext trips on any project-dir-anchored lint context,
