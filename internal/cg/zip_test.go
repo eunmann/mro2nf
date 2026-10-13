@@ -6,6 +6,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -296,4 +297,83 @@ func TestZipGatedPartner(t *testing.T) {
 
 	_, got = f.args("ZIPGATED.USE", use[1], f.outs("ZIPGATED.GATE", nil, `{"off":true}`))
 	wantArgs(t, "ZIPGATED.USE fork1, MKFILES disabled", got, `{"f":null,"v":1}`)
+}
+
+// TestDisableGatePartner: a disable binding splitting another stage's
+// output over a map call the entry forks, `disabled = split FLAGS.skips`,
+// is served by FLAGS's partner element at the fork's index, so an enabled
+// fork stages one element of FLAGS.skips, never the whole output, and
+// resolves its disabled state from it as mrp does.
+func TestDisableGatePartner(t *testing.T) {
+	mro := filepath.Join("..", "..", "bench", "forkdisabled", "pipeline_w4.mro")
+
+	g, err := Load(mro, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	topo, err := g.Topology()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, n := range topo.Nodes {
+		if n.Fqid != "FORKDISABLED.GATED.USE" {
+			continue
+		}
+
+		if d := cmp.Diff([]Zip{{Root: "FORKDISABLED.GATED", Node: "FORKDISABLED.FLAGS", Output: "skips"}}, n.Zips); d != "" {
+			t.Errorf("USE's zips (-want +got):\n%s", d)
+		}
+
+		if d := cmp.Diff([]Read{{Node: "FORKDISABLED.GATED.MKFILE", Fields: []string{"f"}}}, n.Reads); d != "" {
+			t.Errorf("USE's reads (-want +got):\n%s", d)
+		}
+	}
+
+	f := &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
+
+	flags := f.outs("FORKDISABLED.FLAGS", nil, `{"skips":[false,true,false,true]}`)
+	skips := partnerDirs(t, f.post(flags, flags), "FORKDISABLED.GATED", "FORKDISABLED.FLAGS", "skips")
+
+	for i, want := range []string{`{"f":"/w/f0.txt"}`, ""} {
+		got := f.entryForkArgs("FORKDISABLED.GATED.USE", "FORKDISABLED.GATED", i, skips[strconv.Itoa(i)])
+		wantArgs(t, "FORKDISABLED.GATED.USE fork"+strconv.Itoa(i), got, want)
+	}
+}
+
+// entryForkArgs writes the args of node's instance at fork i of root, an
+// entry-fed root, staging in and MKFILE's outs at that fork, as mre stage's
+// args step does; "" when the instance is disabled.
+func (f *fixture) entryForkArgs(node, root string, i int, in ...string) string {
+	f.t.Helper()
+
+	entry := f.next("entry")
+	if err := f.g.PostEntry(entry); err != nil {
+		f.t.Fatal(err)
+	}
+
+	el, err := f.g.ReadElement(elementDirs(f.t, entry, root)[i])
+	if err != nil {
+		f.t.Fatal(err)
+	}
+
+	mk := f.outs("FORKDISABLED.GATED.MKFILE", el.Fork, `{"f":"/w/f`+strconv.Itoa(i)+`.txt"}`)
+	out := f.next("args")
+
+	inst, err := f.g.WriteArgs(ArgsSpec{Node: node, In: append(in, mk), Forks: []Element{el}, Out: out})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+
+	if inst.Disabled {
+		return ""
+	}
+
+	raw, err := shim.ReadBundle(out)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+
+	return string(raw)
 }

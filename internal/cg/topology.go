@@ -171,9 +171,10 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 
 // nodeReads are the stage outs st's bindings read, less the splits a
 // staged element serves: of an output of the stage that feeds the split's
-// root (the root's fork element), and, in an input binding, of another
-// stage's output (its partner element, one of the zips). The gating stage
-// posts a disable binding's value, so no partner element serves its split.
+// root (the root's fork element), and of another stage's output (its
+// partner element, one of the zips). A disable binding's split is served
+// alike, so an enabled fork the driver let through re-resolves its gate
+// from one element, not the gating stage's whole output.
 func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 	elementOnly := map[*syntax.CallStm]string{}
 
@@ -183,19 +184,17 @@ func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 		}
 	}
 
-	element := func(x *syntax.SplitExp) bool { return elementServed(x, elementOnly) }
-	input := func(x *syntax.SplitExp) bool {
+	served := func(x *syntax.SplitExp) bool {
 		_, partnered := g.partnerOf(st, x)
 
-		return partnered || element(x)
+		return partnered || elementServed(x, elementOnly)
 	}
 
 	fields := map[string]map[string]bool{}
 	zips := map[Zip]bool{}
 
-	for _, k := range slices.Sorted(maps.Keys(st.ResolvedInputs())) {
-		e := st.ResolvedInputs()[k].Exp
-		collectReads(e, input, fields)
+	for _, e := range bindings(st) {
+		collectReads(e, served, fields)
 		walkSplits(e, func(x *syntax.SplitExp) {
 			if p, ok := g.partnerOf(st, x); ok {
 				zips[Zip{Root: p.root.Fqid, Node: p.ref.Id, Output: p.ref.OutputId}] = true
@@ -203,11 +202,19 @@ func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 		})
 	}
 
-	for _, d := range st.Disabled() {
-		collectReads(d, element, fields)
+	return readList(fields), slices.SortedFunc(maps.Keys(zips), compareZips)
+}
+
+// bindings are st's input bindings, in input order, then its disable
+// bindings.
+func bindings(st *syntax.CallGraphStage) []syntax.Exp {
+	var out []syntax.Exp
+
+	for _, k := range slices.Sorted(maps.Keys(st.ResolvedInputs())) {
+		out = append(out, st.ResolvedInputs()[k].Exp)
 	}
 
-	return readList(fields), slices.SortedFunc(maps.Keys(zips), compareZips)
+	return append(out, st.Disabled()...)
 }
 
 // preflights are the preflight stages st waits for, as mrp makes each

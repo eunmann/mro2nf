@@ -301,7 +301,11 @@ fork stages one element of it whatever the fork width (the `zip` bench lanes
 gate the bytes one task stages flat in N). A split of an output of a stage a
 runtime gate disables, `split Q.o unless G.f`, is zipped the same way: the
 instance reads the gate, and `Q`'s element only where the gate holds `Q`
-enabled (the `zipgated` lanes).
+enabled (the `zipgated` lanes). A disable binding splitting another stage's
+output over an entry-fed root, `disabled = split FLAGS.skips`, is zipped the
+same way: the driver gates on what FLAGS's post posted, and an enabled
+instance resolves the binding again from its one element (the
+`forkdisabled` lanes).
 
 **Preflights.** As in `mrp`, each instance waits until every instance of each
 preflight it is gated by is done: a pipeline's preflights gate every other call
@@ -449,8 +453,8 @@ type manifest from the invocation's own declarations.
   and the zipped outputs too short to have an element there, which read null as
   in `mrp`. A map key's fork dir also carries the key's token, the hex SHA-256
   of the key, after an `@` (an array fork's token is its index). For each
-  output of this stage that a map call it does not fork zips (a split over
-  another stage's or a literal's root), it writes one partner dir per element,
+  output of this stage that a map call it does not fork zips or disables by
+  (a split over another stage's or a literal's root), it writes one partner dir per element,
   `forks/<root>@<node>.<output>/<token>/`, and an absent record, `none`, which
   reads null where the output is null and a missing element, logged, at any
   index it lacks, as `mrp` reads it; a zip of maps at run time need not share

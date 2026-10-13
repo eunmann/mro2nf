@@ -128,7 +128,9 @@ rule targets:
   disable binding splits the entry's array, so PLAN disables its forks, and
   `GATED`'s splits a stage's output, so that stage's post gates them: the
   driver's per-fork `GATE` and `GATED` paths, which `mapdisabled`'s
-  whole-node disable never takes (#535).
+  whole-node disable never takes (#535). Under the flat-staging gate: each
+  of `GATED`'s enabled forks stages only its own element of the gating
+  output.
 - **`mapnested`** — a nested map: samples × a broadcast lane array, W×W leaves
   (`pipeline_w2.mro`, `pipeline_w4.mro`). testdata's `map_pipe_nested` splits
   the inner map over each outer element instead, which mrp rejects.
