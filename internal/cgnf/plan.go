@@ -71,13 +71,8 @@ func (p *project) publications() map[int]string {
 	pubs := make(map[int]string, len(p.topo.Outs))
 
 	for _, r := range p.topo.Outs {
-		fields := "null"
-		if r.Fields != nil {
-			fields = glist(r.Fields)
-		}
-
 		u := p.index[r.Node]
-		pubs[u] = fmt.Sprintf("PUBLISHED(%s, %d, %s)", outsOf(u), u, fields)
+		pubs[u] = fmt.Sprintf("PUBLISHED(%s, %d, %s)", outsOf(u), u, fieldsArg(r.Fields))
 	}
 
 	return pubs

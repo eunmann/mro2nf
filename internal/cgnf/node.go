@@ -67,11 +67,17 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 
 	w := &wiring{}
 	w.linef("// %s", n.Fqid)
-	p.gate(w, i, n, p.instances(w, i, n), meta)
+
+	reads := make([]readArgs, len(n.Reads))
+	for x, r := range n.Reads {
+		reads[x] = p.read(w, i, n, r)
+	}
+
+	p.gate(w, i, n, p.instances(w, i, n), meta, readKey(reads, 0))
 
 	run := fmt.Sprintf("b%d.run", i)
-	for _, r := range n.Reads {
-		w.linef("u%d = READ(%s, %s)", i, run, p.read(w, i, n, r))
+	for x, r := range reads {
+		w.linef("u%d = READ(%s, %s, %s, %s)", i, run, r.src, r.fields, readKey(reads, x+1))
 		run = "u" + strconv.Itoa(i)
 	}
 
@@ -275,8 +281,9 @@ func (p *project) elements(w *wiring, r cg.TopoRoot) string {
 // by the instance's ordinals of the gate's own roots. Each instance carries
 // on as its d the meta of its tasks, planned from the record and the
 // node's own meta. PLAN's records reach it once its preflights are done,
-// so no instance of it is gated before.
-func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta string) {
+// so no instance of it is gated before. An enabled instance leads with its
+// ordinals, at positions at, of the roots its first read joins on.
+func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta, at string) {
 	gated := fmt.Sprintf("GATE(%s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), meta)
 
 	for _, gp := range n.Gates {
@@ -287,18 +294,34 @@ func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta string) {
 			ilist(positions(n.Roots, gp.Roots)), gstr(cg.GateToken(n.Fqid, gp, "")))
 	}
 
-	w.linef("b%d = ENABLED(%s)", i, gated)
+	w.linef("b%d = ENABLED(%s, %s)", i, gated, at)
+}
+
+// readArgs is what READ takes to add to an instance what it reads of one
+// node: the channel it combines, the positions in the reader's key of the
+// roots that channel is keyed by, and the outputs it reads of its items.
+type readArgs struct {
+	src, mine, fields string
+}
+
+// readKey is the positions the x-th of reads joins on, none past the last:
+// the key an instance leads with for it.
+func readKey(reads []readArgs, x int) string {
+	if x < len(reads) {
+		return reads[x].mine
+	}
+
+	return "[]"
 }
 
 // read is what READ takes for each enabled instance of node i to read of
-// node r.Node: a channel keyed by the roots they share, those roots'
-// positions in node i's key, and the outputs it reads of the channel's
-// items. The channel is the upstream's outs, keyed by its whole key, when
-// node i shares every root of it, or, when the upstream is forked on roots
-// node i is not, a gather of the outputs it reads of every such instance,
-// ordered by the upstream's key, not by completion, which waits for all of
-// the upstream, as mrp waits for every fork of a node a node reads.
-func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
+// node r.Node. The channel is the upstream's outs, keyed by its whole key,
+// when node i shares every root of it, or, when the upstream is forked on
+// roots node i is not, a gather of the outputs it reads of every such
+// instance, ordered by the upstream's key, not by completion, which waits
+// for all of the upstream, as mrp waits for every fork of a node a node
+// reads.
+func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) readArgs {
 	u := p.index[r.Node]
 
 	var mine, theirs []int
@@ -313,17 +336,27 @@ func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
 		}
 	}
 
-	fields := "null"
-	if r.Fields != nil {
-		fields = glist(r.Fields)
-	}
+	fields := fieldsArg(r.Fields)
 
 	outs := w.use(outsOf(u))
 	if gather {
-		return fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s), %s, null", i, outs, ilist(mine), ilist(theirs), fields, ilist(mine))
+		return readArgs{fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s)", i, outs, ilist(mine), ilist(theirs), fields), ilist(mine), allFields}
 	}
 
-	return fmt.Sprintf("%s, %s, %s", outs, ilist(mine), fields)
+	return readArgs{outs, ilist(mine), fields}
+}
+
+// allFields is the fields argument of a step that takes every output.
+const allFields = "null"
+
+// fieldsArg is the fields argument of a step that takes the outputs
+// fields, every output where fields is nil.
+func fieldsArg(fields []string) string {
+	if fields == nil {
+		return allFields
+	}
+
+	return glist(fields)
 }
 
 // splitTriad runs split node i's instances, in: its split, a main per

@@ -629,10 +629,14 @@ workflow GATED {
 }
 
 // ENABLED splits the instances the driver runs, which go on to stage what
-// they read, from those it disables, which run no task.
+// they read, from those it disables, which run no task. An instance it
+// runs leads with its ordinals, at positions at, of the roots its node's
+// first READ joins on, and each READ keys it so for the next, so no read
+// adds a step to key it.
 workflow ENABLED {
     take:
     gated
+    at
 
     main:
     b = gated.branch { v ->
@@ -641,7 +645,7 @@ workflow ENABLED {
     }
 
     emit:
-    run = b.run.map { k, fs, es, d, _off -> [k, fs, es, d, []] }
+    run = b.run.map { k, fs, es, d, _off -> [k[at], k, fs, es, d, []] }
     skip = b.skip
 }
 
@@ -652,20 +656,21 @@ def selected(List ds, List fields) {
 }
 
 // READ adds to each instance the outs items it reads, fields, of one node,
-// keyed as ups keys them, at its own positions mine of the roots they
-// share. A node's outs are keyed by its whole key, which a reader sharing
-// every root of it has at mine, so the reader combines them as they come;
-// keying or selecting them per reader would cost Nextflow's DAG edges per
-// read.
+// keyed as ups keys them, as the instance leads with its ordinals of the
+// roots they share, and keys it by its ordinals, at positions next, of
+// those the node's next READ joins on. A node's outs are keyed by its
+// whole key, which a reader sharing every root of it holds, so the reader
+// combines them as they come; keying or selecting them per reader would
+// cost Nextflow's DAG edges per read.
 workflow READ {
     take:
     inst
     ups
-    mine
     fields
+    next
 
     main:
-    out = inst.map { k, fs, es, d, us -> [k[mine], k, fs, es, d, us] }.combine(ups, by: 0).map { _c, k, fs, es, d, us, ds -> [k, fs, es, d, us + selected(ds, fields)] }
+    out = inst.combine(ups, by: 0).map { _c, k, fs, es, d, us, ds -> [k[next], k, fs, es, d, us + selected(ds, fields)] }
 
     emit:
     out
@@ -684,7 +689,7 @@ workflow GATHER {
     fields
 
     main:
-    seeds = run.map { v -> [v[0][mine], null] }.unique()
+    seeds = run.map { v -> [v[1][mine], null] }.unique()
     out = seeds.mix(outs.map { ku, ds -> [ku[theirs], selected(ds, fields).collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->
         [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]
     }
@@ -711,7 +716,7 @@ workflow INPUT {
     inst
 
     main:
-    out = inst.map { k, fs, es, d, us -> [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)] }
+    out = inst.map { _c, k, fs, es, d, us -> [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)] }
 
     emit:
     out
@@ -727,7 +732,7 @@ workflow INPUT_ENTRY {
     at
 
     main:
-    out = inst.combine(entry).map { k, fs, es, d, us, ef ->
+    out = inst.combine(entry).map { _c, k, fs, es, d, us, ef ->
         def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []
         [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]
     }

@@ -366,7 +366,11 @@ such instance under it. A node's outs are keyed by its whole key, which an
 instance sharing every root of it holds, so `READ` combines the node's outs
 channel as it comes and picks the outputs read in the same step: a step
 keying or selecting them per read cost CellRanger 1,263 edges of
-Nextflow's DAG, whose launch is quadratic in its edges (**Preflights**). An output of a type that holds no file leaf, whose
+Nextflow's DAG, whose launch is quadratic in its edges (**Preflights**).
+An enabled instance leads with its ordinals of the roots its node's first
+read joins on (`ENABLED`), and each `READ` keys it so for the next, so a
+read is a combine and a map, not another map to key the instance (1,306
+more edges). An output of a type that holds no file leaf, whose
 JSON is at most 4 KiB (`cg.MaxValueBytes`), reaches it as a value: a record
 its producer posted (`-field-values`), an `eval` output, that the driver
 carries in its channels and the task writes into a file for `mre stage
