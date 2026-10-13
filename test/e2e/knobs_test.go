@@ -21,7 +21,9 @@ import (
 // destroy resumability on long runs. The fixtures pin the gather shapes: a
 // split triad's join of its chunk outs, a map call's gather of its forks, a
 // split stage under a map call and a map call over a sub-pipeline holding
-// a split. Their calls are small, so each task writes the call into its
+// a split; file_tree's join names its chunks' files by reference, which
+// its reader stages from the chunks' work dirs (#562). Their calls are
+// small, so each task writes the call into its
 // script; staged_call's entry label pushes the call's base64 past
 // cg.MaxValueBytes, so each task stages the call.b64 the driver wrote once
 // (CALL), whose path every task's meta holds.
@@ -42,6 +44,7 @@ func TestResumeCachesEverything(t *testing.T) {
 		{"fork_min", "fork_min", nil},
 		{"map_split", "map_split", nil},
 		{"map_pipe_split", "map_pipe_split", nil},
+		{"file_tree", "file_tree", nil},
 		{"staged_call", "struct_input", map[string]any{"s": 10, "l": strings.Repeat("v", cg.MaxValueBytes), "x": 5}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

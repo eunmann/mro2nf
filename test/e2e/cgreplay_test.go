@@ -91,6 +91,10 @@ type cgReplay struct {
 	overrides string
 	posted    map[string][]postedInstance
 	ours      map[string]replayedFork
+	// refs maps each dir a post wrote to the ordinal dirs of the files it
+	// names by reference, where their producers wrote them, as the
+	// driver's POSTED resolves them.
+	refs map[string][]string
 	// emptyFork holds the stages with a fork root that has no fork under
 	// some fork of the roots before it.
 	emptyFork map[string]bool
@@ -121,11 +125,13 @@ type replayInstance struct {
 // replayTasks are the files an instance's tasks share below its dir work:
 // the dir the first task links its args' files below, the split's chunks
 // dir, each chunk's outs bundle, the outs and fork elements the last task
-// posts, as dirs and as value records; and in, the items every task of the
-// instance gets to build its own args.
+// posts, as dirs, value records and references; the files the instance
+// stages by reference, each linked as the driver stages them; and in, the
+// items every task of the instance gets to build its own args.
 type replayTasks struct {
-	work, args, chunks, chunkOuts, outs, outsValues, forks, forkValues string
-	in                                                                 []string
+	work, args, chunks, chunkOuts, refs                     string
+	outs, outsValues, outsRefs, forks, forkValues, forkRefs string
+	in                                                      []string
 }
 
 func newReplayTasks(work string) replayTasks {
@@ -134,16 +140,22 @@ func newReplayTasks(work string) replayTasks {
 		args:       filepath.Join(work, "args"),
 		chunks:     filepath.Join(work, "chunks"),
 		chunkOuts:  filepath.Join(work, "chunkouts"),
+		refs:       filepath.Join(work, "refs"),
 		outs:       filepath.Join(work, "outs"),
 		outsValues: filepath.Join(work, "outs_values"),
+		outsRefs:   filepath.Join(work, "outs_refs"),
 		forks:      filepath.Join(work, "forks"),
 		forkValues: filepath.Join(work, "fork_values"),
+		forkRefs:   filepath.Join(work, "fork_refs"),
 	}
 }
 
 // posting are the flags of the task that posts the instance's outs.
 func (t replayTasks) posting() []string {
-	return []string{"-fields", t.outs, "-field-values", t.outsValues, "-forks", t.forks, "-fork-values", t.forkValues}
+	return []string{
+		"-fields", t.outs, "-field-values", t.outsValues, "-field-refs", t.outsRefs,
+		"-forks", t.forks, "-fork-values", t.forkValues, "-fork-refs", t.forkRefs,
+	}
 }
 
 // notEnabled is the message of the error `mre stage` exits 1 with when the
@@ -177,6 +189,7 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 		adapters:  adapters,
 		posted:    map[string][]postedInstance{},
 		ours:      map[string]replayedFork{},
+		refs:      map[string][]string{},
 		emptyFork: map[string]bool{},
 	}
 
@@ -392,10 +405,11 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.seq++
 	tasks := newReplayTasks(rp.taskDir(fmt.Sprintf("instance %04d", rp.seq)))
 	items := slices.Concat(in.elems, rp.upstreamOuts(st, in.fork))
-	tasks.in = rp.itemFlags(tasks.work, items)
+	rp.stageRefs(tasks.refs, items)
+	tasks.in = append(rp.itemFlags(tasks.work, items), "-refs", tasks.refs)
 
 	name, disabled := rp.firstTask(st, tasks)
-	inst, args := rp.resolve(st, items)
+	inst, args := rp.resolve(st, items, tasks.refs)
 
 	if !forkAgrees(inst.Fork, in.fork) || len(inst.Fork) != len(in.fork) {
 		rp.t.Errorf("%s: mre stage chose fork %s, staged %s", st.Fqid, inst.Fork, in.fork)
@@ -424,15 +438,68 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.posted[st.Fqid] = append(rp.posted[st.Fqid], postedInstance{
 		fork: inst.Fork, outs: tasks.outs, outsValues: tasks.outsValues, forks: tasks.forks, forkValues: tasks.forkValues,
 	})
+	rp.indexRefs(filepath.Dir(tasks.outs), tasks.outsRefs)
+	rp.indexRefs(tasks.forks, tasks.forkRefs)
 
 	return false
 }
 
+// indexRefs records the files the dirs a post wrote below base name by
+// reference, the lines of the file at path (mre stage -field-refs,
+// -fork-refs), each at its ordinal dir in the item it lies in, which a
+// task the replay runs is given by the path it lies at, as the driver
+// resolves them against the paths it staged the item from.
+func (rp *cgReplay) indexRefs(base, path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	for line := range strings.Lines(string(raw)) {
+		f := strings.Split(strings.TrimSuffix(line, "\n"), "\t")
+		if len(f) != 3 {
+			rp.t.Fatalf("%s: malformed reference %q", path, line)
+		}
+
+		item := filepath.Join(base, f[0])
+		rp.refs[item] = append(rp.refs[item], filepath.Join(f[1], f[2]))
+	}
+}
+
+// stageRefs links the ordinal dir of each file the dirs among items name
+// by reference into dir, once each, as a task stages them,
+// <dir>/<n>/f/<ordinal>, and returns them, the n-th first.
+func (rp *cgReplay) stageRefs(dir string, items []string) []string {
+	var ordinals []string
+
+	for _, it := range items {
+		for _, o := range rp.refs[it] {
+			if !slices.Contains(ordinals, o) {
+				ordinals = append(ordinals, o)
+			}
+		}
+	}
+
+	for i, o := range ordinals {
+		at := filepath.Join(dir, strconv.Itoa(i+1), "f")
+		if err := os.MkdirAll(at, 0o755); err != nil {
+			rp.t.Fatal(err)
+		}
+
+		if err := os.Symlink(o, filepath.Join(at, filepath.Base(o))); err != nil {
+			rp.t.Fatal(err)
+		}
+	}
+
+	return ordinals
+}
+
 // resolve resolves st's instance from the items its tasks get, dirs and
-// value records, and its args, as each task's args step does under
-// -host-in-place, its files linked below a dir of the replay's own: no
-// task writes its instance or args but into its jobs.
-func (rp *cgReplay) resolve(st *syntax.CallGraphStage, items []string) (cg.Instance, json.RawMessage) {
+// value records, and the files they name by reference staged in refs, and
+// its args, as each task's args step does under -host-in-place, its files
+// linked below a dir of the replay's own: no task writes its instance or
+// args but into its jobs.
+func (rp *cgReplay) resolve(st *syntax.CallGraphStage, items []string, refs string) (cg.Instance, json.RawMessage) {
 	var in, values []string
 
 	for _, it := range items {
@@ -450,7 +517,7 @@ func (rp *cgReplay) resolve(st *syntax.CallGraphStage, items []string) (cg.Insta
 
 	out := filepath.Join(rp.tmp, "cg", "resolved", strconv.Itoa(rp.seq))
 
-	inst, args, err := rp.g.WriteArgs(cg.ArgsSpec{Node: st.Fqid, In: in, Values: values, Out: out, Roots: roots})
+	inst, args, err := rp.g.WriteArgs(cg.ArgsSpec{Node: st.Fqid, In: in, Values: values, Refs: refs, Out: out, Roots: roots})
 	if err != nil {
 		rp.t.Fatalf("%s: resolve its instance: %v", st.Fqid, err)
 	}
@@ -901,18 +968,26 @@ func (rp *cgReplay) checkPipelineOuts() {
 
 	var lines strings.Builder
 
-	var values []string
+	var values, items []string
 
 	for _, r := range topo.Outs {
 		for _, pi := range rp.posted[r.Node] {
 			for _, d := range rp.fields(pi) {
 				argv = append(argv, "-in", d)
 				lines.WriteString(d + "\t" + d + "\n")
+				items = append(items, d)
 			}
 
 			values = append(values, rp.records(pi.outsValues)...)
 		}
 	}
+
+	refs := filepath.Join(rp.tmp, "cg", "refs")
+	for i, o := range rp.stageRefs(refs, items) {
+		lines.WriteString(filepath.Join(refs, strconv.Itoa(i+1)) + "\t" + filepath.Dir(filepath.Dir(o)) + "\n")
+	}
+
+	argv = append(argv, "-refs", refs)
 
 	if err := os.MkdirAll(filepath.Dir(locations), 0o755); err != nil {
 		rp.t.Fatal(err)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -101,18 +102,19 @@ func TestPostFields(t *testing.T) {
 }
 
 // TestPostFieldsNeedsValues: a post writes its outs field by field, so it
-// needs both the fields dir and the values file, as an output it carries
-// as a value would otherwise reach no reader.
+// needs the fields dir, the values file and the refs file, as an output it
+// carries as a value, or a file a bundle names by reference, would
+// otherwise reach no reader.
 func TestPostFieldsNeedsValues(t *testing.T) {
 	f := loadFixture(t, "chain_gate")
 	src := f.outs("CH.SRC", nil, `{"y":4,"flag":false}`)
 
-	for _, drop := range []func(*PostSpec){func(s *PostSpec) { s.Fields = "" }, func(s *PostSpec) { s.Values = "" }} {
+	for _, drop := range []func(*PostSpec){func(s *PostSpec) { s.Fields = "" }, func(s *PostSpec) { s.Values = "" }, func(s *PostSpec) { s.FieldRefs = "" }} {
 		spec := postedSpec(t, f.g, src, f.next("forks"))
 		drop(&spec)
 
 		if err := f.g.Post(spec); !errors.Is(err, errPostDirs) {
-			t.Errorf("post with fields %q and values %q: %v, want %v", spec.Fields, spec.Values, err, errPostDirs)
+			t.Errorf("post with fields %q, values %q and refs %q: %v, want %v", spec.Fields, spec.Values, spec.FieldRefs, err, errPostDirs)
 		}
 	}
 }
@@ -165,7 +167,7 @@ func TestPostFieldsKeepsValues(t *testing.T) {
 func (f *fixture) storedOuts(t *testing.T, node string, in, values []string) core.LazyArgumentMap {
 	t.Helper()
 
-	s, err := f.g.stage(in, values)
+	s, err := f.g.stage(in, values, shim.Refs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +246,7 @@ func TestPostGatesReadOnce(t *testing.T) {
 	for _, n := range []int{4, 64} {
 		outs := forkDisabledFlags(t, n)
 
-		s, err := outs.g.stage([]string{outs.dir}, nil)
+		s, err := outs.g.stage([]string{outs.dir}, nil, shim.Refs{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -288,6 +290,7 @@ func BenchmarkPostGates(b *testing.B) {
 				dir := b.TempDir()
 				spec.Forks, spec.ForkValues, spec.Gates = filepath.Join(dir, "forks"), filepath.Join(dir, "fork_values"), filepath.Join(dir, "gates")
 				spec.Fields, spec.Values = filepath.Join(dir, "outs"), filepath.Join(dir, "outs_values")
+				spec.FieldRefs, spec.ForkRefs = filepath.Join(dir, "outs_refs"), filepath.Join(dir, "fork_refs")
 
 				if err := outs.g.Post(spec); err != nil {
 					b.Fatal(err)

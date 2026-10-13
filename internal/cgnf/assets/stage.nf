@@ -31,12 +31,18 @@ def ordered(List pairs) {
 // fork element or a partner element. It is a dir a reader stages, or a
 // value record a reader gets as a value, which leads with the path of the
 // dir it stands in for below the post's outs or forks dir and a colon (mre
-// stage -field-values, -fork-values): <output>, or <root>/<element>.
+// stage -field-values, -fork-values): <output>, or <root>/<element>. A dir
+// that names a file by reference, one its task staged from where its
+// producer wrote it, comes as a list of the dir and the ordinal dir of
+// each such file where it lies (referred), which a reader stages with it.
 // itemName is the name of an item's dir, the output an outs item holds,
 // and itemParent the name of the dir above it, the root or partner a fork
-// item is of; bundlesOf are the dirs of a list of items, and recordsOf its
-// value records.
+// item is of; bundlesOf are the dirs of a list of items, refsOf the
+// ordinal dirs they name, each once, and recordsOf its value records.
 def itemPath(e) {
+    if (e instanceof List) {
+        return itemPath(e[0])
+    }
     return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')
 }
 
@@ -49,11 +55,47 @@ def itemParent(e) {
 }
 
 def bundlesOf(List items) {
-    return items.findAll { e -> e instanceof Path }
+    return items.findAll { e -> e instanceof Path || e instanceof List }.collect { e -> e instanceof List ? e[0] : e }
+}
+
+def refsOf(List items) {
+    return items.findAll { e -> e instanceof List }.collectMany { e -> e.drop(1) }.unique()
 }
 
 def recordsOf(List items) {
-    return items.findAll { e -> !(e instanceof Path) }
+    return items.findAll { e -> !(e instanceof Path || e instanceof List) }
+}
+
+// sources maps each item a task staged, by the path the task staged it at,
+// to where it lies: an outs or element bundle (in/u<i>), the bundle of a
+// file staged by reference (refs/<i>), and a split's chunk and its outs
+// (chunks/<name>, chunkouts/<name>). Nextflow replaces a stageAs pattern's
+// ? with the position, from 1, of the path in the list it stages.
+def sources(List us, List rs, List cs, List os) {
+    def m = [:]
+    us.eachWithIndex { p, i -> m['in/u' + (i + 1)] = p }
+    rs.eachWithIndex { p, i -> m['refs/' + (i + 1)] = p.parent.parent }
+    cs.each { p -> m['chunks/' + p.name] = p }
+    os.each { p -> m['chunkouts/' + p.name] = p }
+    return m
+}
+
+// referred is the dirs a task posted, each with the ordinal dir of every
+// file it names by reference (mre stage -field-refs, -fork-refs: a line
+// each of the dir's last two path components, the path the task staged
+// the item the file lies in at, and its ordinal dir there), where the
+// task's sources, src, hold it.
+def referred(List ds, String refs, Map src) {
+    def by = refs.tokenize('\n').collect { l -> l.split('\t') }.groupBy { f -> f[0] }
+    return ds.collect { d ->
+        def rs = by[itemPath(d).join('/')]
+        rs ? [d] + rs.collect { f ->
+            if (src[f[1]] == null) {
+                error("${d} names a file in ${f[1]}, which its task did not stage")
+            }
+            src[f[1]].resolve(f[2])
+        } : d
+    }
 }
 
 def keyOrder(List a, List b) {
@@ -92,13 +134,13 @@ def callStaged(Map meta) {
 }
 
 // args is what a task builds the instance's args from: what it
-// staged, the value records valuesFile wrote, its entry fork records,
-// which are base64 and need no quoting, and the entry files it staged below
-// entry/, by their indices among the run's. The driver ran the instance
-// because its gates hold it enabled; mre must agree, and the node must
-// compile to the spec PLAN planned.
+// staged, the files it staged by reference, the value records valuesFile
+// wrote, its entry fork records, which are base64 and need no quoting, and
+// the entry files it staged below entry/, by their indices among the run's.
+// The driver ran the instance because its gates hold it enabled; mre must
+// agree, and the node must compile to the spec PLAN planned.
 def args(Map meta, List forks, List values, List leaves) {
-    def cmd = "-digest ${meta.digest} -in in"
+    def cmd = "-digest ${meta.digest} -in in -refs refs"
     if (values) {
         cmd += ' -values values'
     }
@@ -171,9 +213,9 @@ def mreStage(task, Map meta, phase, rest) {
 // postFlags name where a task that posts its instance's outs writes them,
 // one bundle per output, and the fork and partner elements they set, one
 // dir per element, or for each with no file leaf and small JSON a value
-// record; and the gates they set.
+// record; the files those dirs name by reference; and the gates they set.
 def postFlags() {
-    return '-fields outs -field-values outs_values -forks forks -fork-values fork_values -gates gates'
+    return '-fields outs -field-values outs_values -field-refs outs_refs -forks forks -fork-values fork_values -fork-refs fork_refs -gates gates'
 }
 
 // resources reads the table a split writes (mre stage -phase split): per
@@ -195,18 +237,18 @@ process STAGE {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
+    tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
-    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), emit: outs
-    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), emit: forks
+    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs
+    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks
     tuple val(key), eval('cat gates'), emit: gates
 
     script:
     """
     ${callScript(meta)}
     ${valuesFile(values)}
-    mkdir -p in
+    mkdir -p in refs
     ${mreStage(task, meta, 'main', "${args(meta, forks, values, leaves)} -args args ${postFlags()}")}
     """
 }
@@ -218,7 +260,7 @@ process STAGE_SPLIT {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
+    tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
     tuple val(meta), val(key), path('chunks/chnk*', type: 'dir', arity: '0..*'), path('chunks/join.json'), path('chunks/resources.tsv'), emit: split
@@ -227,7 +269,7 @@ process STAGE_SPLIT {
     """
     ${callScript(meta)}
     ${valuesFile(values)}
-    mkdir -p in
+    mkdir -p in refs
     ${mreStage(task, meta, 'split', "${args(meta, forks, values, leaves)} -args args -o chunks")}
     """
 }
@@ -241,7 +283,7 @@ process STAGE_MAIN {
     // The chunk is staged below chunk/: the job's metadata dir is named as
     // the chunk, and must not write through the link into the split's.
     input:
-    tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), val(name), path(chunk, stageAs: 'chunk/*'), path(cf, stageAs: 'call.b64', arity: '0..*')
+    tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), val(name), path(chunk, stageAs: 'chunk/*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
     tuple val(meta), val(key), path('chunkout/*', type: 'dir'), emit: chunk
@@ -250,7 +292,7 @@ process STAGE_MAIN {
     """
     ${callScript(meta)}
     ${valuesFile(values)}
-    mkdir -p in
+    mkdir -p in refs
     ${mreStage(task, meta, 'main', "${args(meta, forks, values, leaves)} -args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)}")}
     """
 }
@@ -262,29 +304,30 @@ process STAGE_JOIN {
     clusterOptions { params.job_resources[meta.special] ?: '' }
 
     input:
-    tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(chunks, stageAs: 'chunks/*', arity: '0..*'), path('chunks/join.json'), path(couts, stageAs: 'chunkouts/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
+    tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(chunks, stageAs: 'chunks/*', arity: '0..*'), path('chunks/join.json'), path(couts, stageAs: 'chunkouts/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
-    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), emit: outs
-    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), emit: forks
+    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs
+    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks
     tuple val(key), eval('cat gates'), emit: gates
 
     script:
     """
     ${callScript(meta)}
     ${valuesFile(values)}
-    mkdir -p in
+    mkdir -p in refs
     ${mreStage(task, meta, 'join', "${args(meta, forks, values, leaves)} -args args -chunks chunks -chunkouts chunkouts ${postFlags()}")}
     """
 }
 
 // locations writes the file mre outs names an unpublished file by: each
-// item OUTS staged and where its producing task's work dir keeps it, which
-// no task sees of itself. The here-document's lines start their own lines,
+// item OUTS staged, and the bundle of each file it staged by reference,
+// refs/<i>, and where its producing task's work dir keeps it, which no
+// task sees of itself. The here-document's lines start their own lines,
 // where the script's indent does not reach.
-def locations(ups, List locs) {
-    def lines = [ups, locs].transpose().collect { u, l -> "${u}\t${l}\n" }.join('')
-    return "cat > locations <<'MRO2NF_LOCATIONS'\n${lines}MRO2NF_LOCATIONS"
+def locations(ups, List locs, List refLocs) {
+    def lines = [ups, locs].transpose().collect { u, l -> "${u}\t${l}\n" } + refLocs.withIndex().collect { l, i -> "refs/${i + 1}\t${l}\n" }
+    return "cat > locations <<'MRO2NF_LOCATIONS'\n${lines.join('')}MRO2NF_LOCATIONS"
 }
 
 // OUTS resolves the pipeline outs from the stage outs and the entry files
@@ -298,6 +341,8 @@ process OUTS {
     path cf, stageAs: 'call.b64', arity: '0..*'
     path ups, stageAs: 'in/u*', arity: '0..*'
     val locs
+    path refs, stageAs: 'refs/?/f/*', arity: '0..*'
+    val refLocs
     val values
     tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
     path 'mro'
@@ -310,9 +355,9 @@ process OUTS {
     """
     ${callScript(meta)}
     ${valuesFile(values)}
-    mkdir -p in
-    ${locations(ups, locs)}
-    ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -in in${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
+    mkdir -p in refs
+    ${locations(ups, locs, refLocs)}
+    ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
     """
 }
 
@@ -657,14 +702,14 @@ def planned(Map shared, Map meta, List d) {
 
 // INPUT is each enabled instance as a stage process takes it, with the
 // meta GATE planned for it, the value records of its elements and of the
-// outs it reads apart from the items it stages, and the call file it
-// stages, if any; it stages no entry file.
+// outs it reads apart from the dirs it stages and the files those name by
+// reference, and the call file it stages, if any; it stages no entry file.
 workflow INPUT {
     take:
     inst
 
     main:
-    out = inst.map { k, fs, es, d, us -> [d, k, fs, recordsOf(es + us), bundlesOf(es + us), [], [], callStaged(d)] }
+    out = inst.map { k, fs, es, d, us -> [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)] }
 
     emit:
     out
@@ -682,7 +727,7 @@ workflow INPUT_ENTRY {
     main:
     out = inst.combine(entry).map { k, fs, es, d, us, ef ->
         def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []
-        [d, k, fs, recordsOf(es + us), bundlesOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]
+        [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]
     }
 
     emit:
@@ -691,9 +736,36 @@ workflow INPUT_ENTRY {
 
 // staged is an instance the split process takes, by its key, with what the
 // task stages to build its args: [key, fork records, value records, staged
-// items, entry indices, entry files].
+// items, files staged by reference, entry indices, entry files].
 def staged(List v) {
-    return v.subList(1, 7)
+    return v.subList(1, 8)
+}
+
+// SOURCES is each instance a non-split stage's process takes, input, by
+// its key, with its sources, which POSTED resolves the files its post
+// names by reference against.
+workflow SOURCES {
+    take:
+    input
+
+    main:
+    out = input.map { v -> [v[1], sources(v[4], v[5], [], [])] }
+
+    emit:
+    out
+}
+
+// JOIN_SOURCES is SOURCES of a split's join, input, whose sources hold the
+// split's chunks and their outs too.
+workflow JOIN_SOURCES {
+    take:
+    input
+
+    main:
+    out = input.map { v -> [v[1], sources(v[4], v[5], v[8], v[10])] }
+
+    emit:
+    out
 }
 
 // CHUNKS is a main per chunk a split returned, each scheduled with the
@@ -705,9 +777,9 @@ workflow CHUNKS {
     input
 
     main:
-    out = split.map { m, k, cs, _j, res -> [k, m, cs, res] }.join(input.map { v -> staged(v) }).flatMap { k, m, cs, res, fs, vs, us, ids, ef ->
+    out = split.map { m, k, cs, _j, res -> [k, m, cs, res] }.join(input.map { v -> staged(v) }).flatMap { k, m, cs, res, fs, vs, us, rs, ids, ef ->
         def r = resources(res)
-        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, ids, ef, c.name, c, callStaged(m)] }
+        cs.collect { c -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, rs, ids, ef, c.name, c, callStaged(m)] }
     }
 
     emit:
@@ -726,7 +798,7 @@ workflow JOIN {
     main:
     outs = chunk.map { m, k, o -> [groupKey(k, m.chunks), o] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a.name <=> b.name }] }
     none = split.filter { v -> v[2].isEmpty() }.map { v -> [v[1], []] }
-    out = split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, fs, vs, us, ids, ef, os -> [m, k, fs, vs, us, ids, ef, cs, j, os, callStaged(m)] }
+    out = split.map { m, k, cs, j, res -> [k, m + resources(res).join, cs, j] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, fs, vs, us, rs, ids, ef, os -> [m, k, fs, vs, us, rs, ids, ef, cs, j, os, callStaged(m)] }
 
     emit:
     out
@@ -746,14 +818,17 @@ workflow DONE {
 }
 
 // POSTED is a node's outs or forks, each instance's dirs and value records
-// as one list of items, a disabled instance standing in with none.
+// as one list of items, a disabled instance standing in with none. A dir
+// names a file by reference where its producer wrote it, which POSTED finds
+// among the sources of the instance's posting task (SOURCES), by its key.
 workflow POSTED {
     take:
     posted
     skip
+    sources
 
     main:
-    all = posted.map { k, ds, vs -> [k, ds + vs.tokenize(' ')] }.mix(skip.map { v -> [v[0], []] })
+    all = posted.join(sources).map { k, ds, vs, rs, src -> [k, referred(ds, rs, src) + vs.tokenize(' ')] }.mix(skip.map { v -> [v[0], []] })
 
     emit:
     all

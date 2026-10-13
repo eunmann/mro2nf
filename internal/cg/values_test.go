@@ -66,9 +66,9 @@ func TestElementsKeepValues(t *testing.T) {
 func (f *fixture) postElement(raw json.RawMessage, param *syntax.StructMember) (string, string) {
 	f.t.Helper()
 
-	var recs []string
+	var recs, refs []string
 
-	w := forkWriter{r: &resolver{g: f.g, st: emptyStore{}}, dir: f.next("forks"), tbl: f.g.Table(), values: true, recs: &recs}
+	w := forkWriter{r: &resolver{g: f.g, st: emptyStore{}}, dir: f.next("forks"), tbl: f.g.Table(), values: true, recs: &recs, refs: &refs}
 	fork := elementJSON{Lens: []int{1}}
 
 	if err := w.item("ROOT", "0000", raw, param, valueJSON{Fork: &fork}); err != nil {
@@ -104,7 +104,7 @@ func (f *fixture) readPosted(rec, dir string) string {
 		}
 	}
 
-	raw, held, err := it.read()
+	raw, held, err := it.read(shim.Refs{})
 	if err != nil || !held {
 		f.t.Fatalf("read posted element: %t, %v", held, err)
 	}
@@ -127,7 +127,7 @@ func (f *fixture) bundled(raw json.RawMessage, param *syntax.StructMember) strin
 		f.t.Fatal(err)
 	}
 
-	got, _, err := elementItem{dir: dir}.read()
+	got, _, err := elementItem{dir: dir}.read(shim.Refs{})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -164,19 +164,20 @@ func TestDecodeValueRejectsMalformed(t *testing.T) {
 	}
 }
 
-// TestPostNeedsForkValues: a post writes the elements it feeds into both a
-// Forks dir and a ForkValues file, as an element it carries as a value
-// would otherwise reach no reader.
+// TestPostNeedsForkValues: a post writes the elements it feeds into a
+// Forks dir, a ForkValues file and a ForkRefs file, as an element it
+// carries as a value, or a file an element names by reference, would
+// otherwise reach no reader.
 func TestPostNeedsForkValues(t *testing.T) {
 	f := loadFixture(t, "map_fork_upstream")
 	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1}}`)
 
-	for _, drop := range []func(*PostSpec){func(s *PostSpec) { s.Forks = "" }, func(s *PostSpec) { s.ForkValues = "" }} {
+	for _, drop := range []func(*PostSpec){func(s *PostSpec) { s.Forks = "" }, func(s *PostSpec) { s.ForkValues = "" }, func(s *PostSpec) { s.ForkRefs = "" }} {
 		spec := postedSpec(t, f.g, gen, f.next("forks"))
 		drop(&spec)
 
 		if err := f.g.Post(spec); !errors.Is(err, errPostDirs) {
-			t.Errorf("post with forks %q and fork values %q: %v, want %v", spec.Forks, spec.ForkValues, err, errPostDirs)
+			t.Errorf("post with forks %q, fork values %q and refs %q: %v, want %v", spec.Forks, spec.ForkValues, spec.ForkRefs, err, errPostDirs)
 		}
 	}
 }

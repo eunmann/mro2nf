@@ -23,7 +23,8 @@ const minOrdinalWidth = 4
 var (
 	errInvalidOuts = errors.New("invalid stage outs")
 	errMultiSource = errors.New("fork root reads several stages")
-	errPostDirs    = errors.New("a post writes its outs into a Fields dir and a Values file, and the elements it feeds into a Forks dir and a ForkValues file")
+	errPostDirs    = errors.New("a post writes its outs into a Fields dir, a Values file and a FieldRefs file, " +
+		"and the elements it feeds into a Forks dir, a ForkValues file and a ForkRefs file")
 )
 
 // PostSpec is one finished stage instance a task posts.
@@ -37,15 +38,22 @@ type PostSpec struct {
 	// job's own (Confine), and those under the run's read-only roots named
 	// as the paths they are (Roots).
 	Opts shim.Opts
+	// Staged are the dirs the task staged: a file the outs name that is a
+	// whole leaf of a bundle in one, its producer's, the post names by
+	// reference rather than copying it (shim.WriteItem), so its readers
+	// stage it from where its producer wrote it.
+	Staged shim.Staged
 	// Forks is the dir that receives <root>/<ordinal>/ fork elements and
 	// <partner dir>/<index token>/ partner elements, but for those carried
 	// as values, whose records ForkValues receives, space-separated (item).
-	Forks, ForkValues string
+	// ForkRefs receives the references of their bundles (refLines).
+	Forks, ForkValues, ForkRefs string
 	// Fields is the dir that receives one stamped bundle per output, named
 	// by it, so a consumer stages only the outputs it reads, but for the
 	// outputs carried as values, whose records Values receives,
-	// space-separated (valueRecord).
-	Fields, Values string
+	// space-separated (valueRecord). FieldRefs receives the references of
+	// the bundles (refLines).
+	Fields, Values, FieldRefs string
 	// Gates, when set, is the file that receives the nodes this instance's
 	// outs disable at its fork (Gates).
 	Gates string
@@ -57,7 +65,7 @@ type PostSpec struct {
 // plus each such output's absent record as a value record, then the outs
 // field by field and, when asked, the gates they set.
 func (g *Graph) Post(spec PostSpec) error {
-	if spec.Fields == "" || spec.Values == "" || spec.Forks == "" || spec.ForkValues == "" {
+	if slices.Contains([]string{spec.Fields, spec.Values, spec.FieldRefs, spec.Forks, spec.ForkValues, spec.ForkRefs}, "") {
 		return errPostDirs
 	}
 
@@ -85,7 +93,7 @@ func (g *Graph) post(spec PostSpec) (*stagedStore, error) {
 		return nil, err
 	}
 
-	s, err := g.stage(nil, nil)
+	s, err := g.stage(nil, nil, shim.Refs{})
 	if err != nil {
 		return nil, err
 	}
@@ -96,9 +104,9 @@ func (g *Graph) post(spec PostSpec) (*stagedStore, error) {
 		return nil, err
 	}
 
-	var recs []string
+	var recs, refs []string
 
-	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), opts: spec.Opts, values: true, recs: &recs}
+	w := forkWriter{r: &resolver{g: g, st: s}, dir: spec.Forks, tbl: g.Table(), opts: spec.Opts, staged: spec.Staged, values: true, recs: &recs, refs: &refs}
 	if err := w.posted(in); err != nil {
 		return nil, err
 	}
@@ -107,7 +115,28 @@ func (g *Graph) post(spec PostSpec) (*stagedStore, error) {
 		return nil, err
 	}
 
+	if err := writeFile(spec.ForkRefs, strings.Join(refs, "")); err != nil {
+		return nil, err
+	}
+
 	return s, nil
+}
+
+// refLines are the lines a post writes of the references in the bundle
+// item, <dir>/<name>, one per leaf: the item named by its last two path
+// components, the dir the task was given the item a leaf lies in at, and
+// the leaf's ordinal dir in it, tab-separated. The driver resolves each to
+// where its producer wrote it from the paths it staged the task's items
+// from.
+func refLines(dir, name string, refs []shim.Ref) []string {
+	item := filepath.Base(dir) + "/" + name
+	out := make([]string, len(refs))
+
+	for i, r := range refs {
+		out[i] = item + "\t" + r.Item + "\t" + r.Ordinal + "\n"
+	}
+
+	return out
 }
 
 // posted writes the forks of every root the posting instance's stage feeds,
@@ -187,15 +216,17 @@ func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fo
 // ordinals of any outer parts the producer does not fix, joined by dots.
 // Without values, each is a dir of its fork record. With values, each
 // carries the fork's element of the source collection too, and is written
-// as its readers get it (item), a dir, whose files opts treats, or one of
-// recs.
+// as its readers get it (item), a dir, whose files opts treats, those of
+// staged named by reference in refs (refLines), or one of recs.
 type forkWriter struct {
 	r      *resolver
 	dir    string
 	tbl    *types.Table
 	opts   shim.Opts
+	staged shim.Staged
 	values bool
 	recs   *[]string
+	refs   *[]string
 }
 
 // counted is a fork and the fork count of each of its parts.
@@ -304,8 +335,8 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 // item writes el, an element of type param's that rec names, as a reader
 // gets it: a value record named <sub>/<name> when the post carries it as a
 // value (carried), or else the dir <sub>/<name>/ below the writer's, which
-// holds it as a bundle, its file leaves staged as the writer's opts say,
-// and rec's record of it.
+// holds it as a bundle, its file leaves staged as the writer's opts say or
+// named by reference, and rec's record of it.
 func (w forkWriter) item(sub, name string, el json.Marshaler, param *syntax.StructMember, rec valueJSON) error {
 	raw, err := marshal(el)
 	if err != nil {
@@ -329,9 +360,13 @@ func (w forkWriter) item(sub, name string, el json.Marshaler, param *syntax.Stru
 	}
 
 	dir := filepath.Join(w.dir, sub, name)
-	if err := shim.WriteBundle(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, w.tbl, w.opts); err != nil {
+
+	refs, err := shim.WriteItem(dir, map[string]any{param.Id: v}, []*syntax.StructMember{param}, w.tbl, w.opts, w.staged)
+	if err != nil {
 		return fmt.Errorf("write element %s: %w", dir, err)
 	}
+
+	*w.refs = append(*w.refs, refLines(filepath.Join(w.dir, sub), name, refs)...)
 
 	file, r := rec.elementRecord()
 

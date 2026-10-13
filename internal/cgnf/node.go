@@ -56,8 +56,9 @@ func entryRoot(w *wiring, root string) string {
 // elements and records its roots' feeders write; its gates, which the
 // driver evaluates once its preflights are done so a disabled instance
 // runs no task; the outs its enabled instances stage, field by field; its
-// process call; its outputs, a disabled instance standing in with none;
-// and, of a preflight, PLAN's records held until it is done.
+// process call; its outputs, each file one names by reference resolved
+// against what its posting task staged, and a disabled instance standing
+// in with none; and, of a preflight, PLAN's records held until it is done.
 func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	meta, err := p.nodeMeta(n)
 	if err != nil {
@@ -77,12 +78,15 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	proc := alias(i, n.Fqid)
 	in := p.input(w, n, run)
 
+	sources := fmt.Sprintf("SOURCES(n%d)", i)
 	if n.Split {
 		splitTriad(w, i, proc, in)
 		proc += "_JN"
+		sources = fmt.Sprintf("JOIN_SOURCES(j%d)", i)
 	} else {
 		w.incs = append(w.incs, "STAGE as "+proc)
-		w.linef("%s(%s)", proc, in)
+		w.linef("n%d = %s", i, in)
+		w.linef("%s(n%d)", proc, i)
 	}
 
 	if holds := p.holdsAt(i); len(holds) > 0 {
@@ -95,12 +99,16 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	}
 
 	outs, forks, gates := p.consumed(n.Fqid)
+	if outs || forks {
+		w.linef("r%d = %s", i, sources)
+	}
+
 	for _, o := range []struct {
 		used      bool
 		name, out string
 	}{{outs, outsOf(i), "outs"}, {forks, forksOf(i), "forks"}} {
 		if o.used {
-			w.linef("%s = POSTED(%s.out.%s, b%d.skip)", w.def(o.name), proc, o.out, i)
+			w.linef("%s = POSTED(%s.out.%s, b%d.skip, r%d)", w.def(o.name), proc, o.out, i, i)
 		}
 	}
 
@@ -320,12 +328,13 @@ func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
 }
 
 // splitTriad runs split node i's instances, in: its split, a main per
-// chunk the split returned, and its join over every chunk's outs, each
-// task staging the instance's inputs.
+// chunk the split returned, and its join over every chunk's outs, j<i>,
+// each task staging the instance's inputs.
 func splitTriad(w *wiring, i int, proc, in string) {
 	w.incs = append(w.incs, fmt.Sprintf("STAGE_SPLIT as %[1]s_SP ; STAGE_MAIN as %[1]s_MN ; STAGE_JOIN as %[1]s_JN", proc))
 	w.linef("s%d = %s", i, in)
 	w.linef("%s_SP(s%d)", proc, i)
 	w.linef("%[1]s_MN(CHUNKS(%[1]s_SP.out.split, s%[2]d))", proc, i)
-	w.linef("%[1]s_JN(JOIN(%[1]s_SP.out.split, %[1]s_MN.out.chunk, s%[2]d))", proc, i)
+	w.linef("j%[2]d = JOIN(%[1]s_SP.out.split, %[1]s_MN.out.chunk, s%[2]d)", proc, i)
+	w.linef("%[1]s_JN(j%[2]d)", proc, i)
 }

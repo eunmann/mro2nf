@@ -130,11 +130,11 @@ func postStep(gf graphFlags, inst cg.Instance, outs map[string]any, dir, gates s
 	}
 
 	p := postFlags{
-		forks: filepath.Join(dir, "forks"), forkValues: filepath.Join(dir, "fork_values"),
-		fields: filepath.Join(dir, "outs"), values: filepath.Join(dir, "outs_values"), gates: gates,
+		forks: filepath.Join(dir, "forks"), forkValues: filepath.Join(dir, "fork_values"), forkRefs: filepath.Join(dir, "fork_refs"),
+		fields: filepath.Join(dir, "outs"), values: filepath.Join(dir, "outs_values"), fieldRefs: filepath.Join(dir, "outs_refs"), gates: gates,
 	}
 
-	return p.values, p.post(g, inst, finished{outs: m})
+	return p.values, p.post(g, inst, finished{outs: m}, shim.Staged{})
 }
 
 // TestCallGraphSteps drives struct_proj through its entry forks, mre

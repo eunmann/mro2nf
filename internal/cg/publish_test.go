@@ -240,7 +240,10 @@ func (r *publishRun) post(inst Instance, scratch string, outs map[string]any) er
 		}
 	}
 
-	spec := PostSpec{Instance: inst, Outs: m, Opts: shim.Opts{Confine: conf}, Forks: "forks", ForkValues: "fork_values", Fields: "outs", Values: "values"}
+	spec := PostSpec{
+		Instance: inst, Outs: m, Opts: shim.Opts{Confine: conf},
+		Forks: "forks", ForkValues: "fork_values", ForkRefs: "fork_refs", Fields: "outs", Values: "values", FieldRefs: "outs_refs",
+	}
 
 	return r.g.Post(spec)
 }

@@ -293,7 +293,7 @@ func (s *standIn) node(n TopoNode) int {
 		}
 
 		spec := PostSpec{Instance: in, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Values: s.next("values"), Gates: s.next("gates")}
-		spec.ForkValues = forkValues(spec.Forks)
+		spec.ForkValues, spec.ForkRefs, spec.FieldRefs = forkValues(spec.Forks), s.next("fork_refs"), s.next("outs_refs")
 		if err := s.g.Post(spec); err != nil {
 			s.t.Fatalf("post %s: %v", n.Fqid, err)
 		}

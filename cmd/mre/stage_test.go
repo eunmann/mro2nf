@@ -195,7 +195,10 @@ func postedValues(t *testing.T, path string) string {
 
 // posted is a task's post flags, writing below dir.
 func posted(dir string) []string {
-	return []string{"-fields", dir + "/outs", "-field-values", dir + "/values", "-forks", dir + "/forks", "-fork-values", dir + "/fork_values", "-gates", dir + "/gates"}
+	return []string{
+		"-fields", dir + "/outs", "-field-values", dir + "/values", "-field-refs", dir + "/outs_refs",
+		"-forks", dir + "/forks", "-fork-values", dir + "/fork_values", "-fork-refs", dir + "/fork_refs", "-gates", dir + "/gates",
+	}
 }
 
 // unsplitTask is the mre stage call of a non-split stage's task in dir,
@@ -413,6 +416,95 @@ func treeLeaf(t *testing.T, tree map[string]string, prefix, name string) string 
 	return leaves[0]
 }
 
+// passMRO passes MK's file through PASS.
+const passMRO = `filetype txt;
+
+stage MK(
+    out txt f,
+    src exec "mk.sh",
+)
+
+stage PASS(
+    in  txt x,
+    out txt y,
+    src exec "pass.sh",
+)
+
+pipeline P(
+    out txt y,
+)
+{
+    call MK()
+
+    call PASS(
+        x = MK.f,
+    )
+
+    return (
+        y = PASS.y,
+    )
+}
+
+call P()
+`
+
+// mkScript is MK's exec code: f is a file it writes, and passScript is
+// PASS's: y is its x.
+const (
+	mkScript = `#!/bin/sh
+meta=$2 files=$3
+printf 'made' > "$files/f.txt"
+echo "{\"f\":\"$files/f.txt\"}" > "$meta/_outs"
+touch "$meta/_complete"
+`
+	passScript = `#!/bin/sh
+meta=$2
+echo "{\"y\":\"$(tr -d ' \n' < "$meta/_args" | sed 's/.*"x":"\([^"]*\)".*/\1/')\"}" > "$meta/_outs"
+touch "$meta/_complete"
+`
+)
+
+// TestStagePostNamesStagedFileByReference (#562): PASS's task stages MK's
+// posted file as a driver stages it, below in/, and its post names it by
+// reference, as the item the task staged it in and its ordinal dir there,
+// rather than writing a copy of it into its outs.
+func TestStagePostNamesStagedFileByReference(t *testing.T) {
+	dir, work := t.TempDir(), t.TempDir()
+	mro := writeTestFile(t, filepath.Join(dir, "pipeline.mro"), passMRO)
+
+	for name, src := range map[string]string{"mk.sh": mkScript, "pass.sh": passScript} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Chdir(work)
+
+	if _, err := mreIn(t, mro, unsplitTask("P.MK", "mk")...); err != nil {
+		t.Fatalf("MK: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join("pass", "in"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Symlink(filepath.Join(work, "mk", "outs", "f"), filepath.Join("pass", "in", "u1")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := mreIn(t, mro, unsplitTask("P.PASS", "pass", "-in", "pass/in", "-refs", "pass/refs")...); err != nil {
+		t.Fatalf("PASS: %v", err)
+	}
+
+	if got := readText(t, filepath.Join("pass", "outs_refs")); got != "outs/y\tpass/in/u1\tf/L0000\n" {
+		t.Errorf("PASS's references %q, want its y in MK's f, staged as pass/in/u1", got)
+	}
+
+	if _, err := os.Lstat(filepath.Join("pass", "outs", "y", "f")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("PASS posted a files dir (%v), want none", err)
+	}
+}
+
 // TestStageRefusesADisabledInstance: an instance its args resolve disabled
 // fails its task with errNotEnabled, exit 1, naming it, before any job
 // runs, and its task writes nothing.
@@ -444,7 +536,7 @@ func TestStageExitCodes(t *testing.T) {
 			t.Errorf("%s: %v, exit %d, want exit %d", node, err, exitCode(err), want)
 		}
 
-		for _, f := range []string{"outs", "values", "forks", "gates"} {
+		for _, f := range []string{"outs", "values", "outs_refs", "forks", "fork_values", "fork_refs", "gates"} {
 			if _, err := os.Stat(filepath.Join(dir, f)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("%s: a failed job's task wrote %s: %v", node, f, err)
 			}

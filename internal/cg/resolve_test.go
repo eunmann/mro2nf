@@ -212,8 +212,8 @@ func postedSpec(tb testing.TB, g *Graph, outs, forks string) PostSpec {
 	beside := filepath.Dir(forks)
 
 	return PostSpec{
-		Instance: in, Outs: m, Forks: forks, ForkValues: forkValues(forks),
-		Fields: filepath.Join(beside, "outs"), Values: filepath.Join(beside, "outs_values"),
+		Instance: in, Outs: m, Forks: forks, ForkValues: forkValues(forks), ForkRefs: filepath.Join(beside, "fork_refs"),
+		Fields: filepath.Join(beside, "outs"), Values: filepath.Join(beside, "outs_values"), FieldRefs: filepath.Join(beside, "outs_refs"),
 	}
 }
 
@@ -291,7 +291,7 @@ func (f *fixture) elementValue(item string) string {
 		it = elementItem{value: rec.Value}
 	}
 
-	raw, _, err := it.read()
+	raw, _, err := it.read(shim.Refs{})
 	if err != nil {
 		f.t.Fatal(err)
 	}

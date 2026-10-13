@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"slices"
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/job"
@@ -101,7 +102,12 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return err
 	}
 
-	return s.post.post(g, inst, done)
+	staged, err := shim.NewStaged(append(slices.Clone(s.args.in), s.args.refs, s.run.chunks, s.run.chunkOuts)...)
+	if err != nil {
+		return fmt.Errorf("post: %w", err)
+	}
+
+	return s.post.post(g, inst, done, staged)
 }
 
 // posts reports whether a task of node's phase runs the instance's last

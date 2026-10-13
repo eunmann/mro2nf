@@ -144,6 +144,7 @@ func TestStageUnderOverrides(t *testing.T) {
 		{"join", "join", []string{
 			"-chunks", chunks, "-chunkouts", filepath.Join(work, "chunkouts"), "-fields", filepath.Join(work, "outs"), "-field-values", filepath.Join(work, "outs_values"),
 			"-forks", filepath.Join(work, "forks"), "-fork-values", filepath.Join(work, "fork_values"),
+			"-field-refs", filepath.Join(work, "outs_refs"), "-fork-refs", filepath.Join(work, "fork_refs"),
 		}, allocation{Threads: 1, MemGB: 1, VMemGB: 9}},
 	}
 
