@@ -26,7 +26,8 @@ import (
 
 // TestMrpCallGraph runs each mrp-diff fixture under real mrp and replays its
 // pipestance through the call-graph data plane: in DAG order, every stage
-// instance runs its tasks through `mre stage` as a run's tasks do, from only
+// instance runs its tasks through `mre stage` as a local run's tasks do,
+// reading host entry inputs in place, from only
 // what the instance stages (its fork elements and its parents' stamped
 // outs): the task that runs its first job builds its args bundle, each task
 // runs its phase's job through mrjob, and the task that runs its last job
@@ -598,7 +599,7 @@ func (rp *cgReplay) stage(phase, jw string, argv ...string) bool {
 
 	base := []string{
 		"stage", "-phase", phase, "-psid", "mrp", "-adapters", rp.adapters, "-mrjob", filepath.Join(root, "mrjob"), "-work", jw,
-		"-local-cores", strconv.Itoa(mrpLocalCores), "-local-mem-gb", strconv.Itoa(mrpLocalMemGB),
+		"-local-cores", strconv.Itoa(mrpLocalCores), "-local-mem-gb", strconv.Itoa(mrpLocalMemGB), "-host-in-place",
 	}
 	if rp.overrides != "" {
 		base = append(base, "-overrides", rp.overrides)
