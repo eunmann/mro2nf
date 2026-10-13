@@ -132,8 +132,9 @@ that a stage whose `src` names a command runs, on the image's `PATH`.
   `mrp` flags and their Nextflow equivalents, and troubleshooting.
 - [`docs/FEATURE_COVERAGE.md`](docs/FEATURE_COVERAGE.md): Martian features,
   their support, and the divergences from `mrp`.
-- [`docs/TRANSPILER.md`](docs/TRANSPILER.md): how the transpiler and the
-  generated project work.
+- [`docs/TRANSPILER.md`](docs/TRANSPILER.md): the design record (§1, the
+  ownership boundary between Nextflow and `mre`), and how the transpiler and
+  the generated project work.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): building, testing, CI and releases.
 
 ## License

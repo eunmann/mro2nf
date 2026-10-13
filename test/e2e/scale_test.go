@@ -105,8 +105,9 @@ const scaleJVM = "-Xmx2g -Xlog:gc:file=%s/gc-%%p.log"
 const scaleShapeTimeout = 100 * time.Minute
 
 // TestMakeScaleTimeoutFitsEveryShape requires make test-scale's default
-// SCALE_TIMEOUT, which its default SCALE_RUN spends on every shape, to give
-// each shape scaleShapeTimeout. Its name keeps it out of ^TestScale.
+// SCALE_TIMEOUT, which its default SCALE_RUN spends on every bench shape and
+// then TestScaleWideFanin, to give each scaleShapeTimeout. Its name keeps it
+// out of ^TestScale.
 func TestMakeScaleTimeoutFitsEveryShape(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(root, "Makefile"))
 	if err != nil {
@@ -119,8 +120,9 @@ func TestMakeScaleTimeoutFitsEveryShape(t *testing.T) {
 	}
 
 	got, err := time.ParseDuration(string(m[1]))
-	if want := time.Duration(len(scaleShapes)) * scaleShapeTimeout; err != nil || got < want {
-		t.Errorf("Makefile SCALE_TIMEOUT ?= %s (%v), want at least %v for %d shapes", m[1], err, want, len(scaleShapes))
+	shapes := len(scaleShapes) + 1
+	if want := time.Duration(shapes) * scaleShapeTimeout; err != nil || got < want {
+		t.Errorf("Makefile SCALE_TIMEOUT ?= %s (%v), want at least %v for %d shapes", m[1], err, want, shapes)
 	}
 }
 
