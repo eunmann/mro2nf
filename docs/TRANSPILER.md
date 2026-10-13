@@ -238,7 +238,7 @@ one `mre stage` call (§6), which compiles the call graph once and runs the
 phase's job as `mrp` runs it, resolving the instance's args before it in
 every task, and posting its outs after it in a join and a non-split stage's
 main. A split's chunk mains and join stage the split's inputs, the same
-instance tuple, and build its args again. Each process declares one
+instance tuple, and build its args again. Each stage process declares one
 output: a posting process (`STAGE`, `STAGE_JOIN`) emits its outs, forks
 and gates as one tuple (`posted`), since Nextflow's DAG holds an edge per
 declared output whether a node reads it or not (602 of CellRanger's edges
