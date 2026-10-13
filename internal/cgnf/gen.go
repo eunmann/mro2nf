@@ -39,7 +39,7 @@ func (p *project) workflows() (map[string]string, error) {
 
 	var b strings.Builder
 
-	b.WriteString("include { shq ; code ; ordered ; on ; pool ; binds ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
+	b.WriteString("include { shq ; code ; ordered ; on ; pool ; OUTS ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
 	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
 	b.WriteString(planProcess)
@@ -162,8 +162,7 @@ func ilist(xs []int) string {
 }
 
 // planWiring parses PLAN's records the wirings read: shared is the meta
-// every task shares, with the run's call and the docker options that bind
-// the entry files every task reads in place; nodes maps each witness node to
+// every task shares, with the run's call; nodes maps each witness node to
 // its digest, its off flag, its statically disabled fork keys, the cpus and
 // memory its first task is scheduled with and its own overrides, paired
 // with shared, which a node then reads from no channel of its own; entry
@@ -185,7 +184,7 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 	w.linef("    error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
 	w.linef("}")
 	w.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(), mroAssets)
-	w.linef("%s = PLAN.out.call.combine(PLAN.out.binds).map { c, b -> %s }.first()", w.def("shared"), p.graphMeta("call: c", "binds: binds(b)"))
+	w.linef("%s = PLAN.out.call.map { c -> %s }", w.def("shared"), p.graphMeta("call: c"))
 
 	for _, d := range []struct{ name, expr string }{
 		{"nodes", "NODES(PLAN.out.nodes, shared)"},

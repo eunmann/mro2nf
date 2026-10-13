@@ -92,25 +92,6 @@ def pool(task) {
     return " -local-cores ${lim.cpus as int} -local-mem-gb ${Math.max(1L, mem.toGiga())}"
 }
 
-// binds is the docker run options that bind each path of PLAN's binds
-// record, base64 by line, the entry files every task reads in place,
-// read-only into a task's container at the path itself, which the docker
-// profile adds to every task's: a stage opens the path it was given, or
-// one an earlier stage recorded, as under mrp. A path the head node does
-// not see is not bound, so it fails only a stage that opens it, as under
-// mrp, where docker would refuse to start every task.
-def binds(String record) {
-    return record.readLines().collect { l -> new String(l.decodeBase64(), 'UTF-8') }.findAll { p -> new File(p).exists() }.collect { p ->
-        ' --mount ' + shq('type=bind,' + mountField('source=' + p) + ',' + mountField('target=' + p) + ',readonly')
-    }.join('')
-}
-
-// mountField quotes a --mount field as docker reads it, so a comma or quote
-// in a path stays the path's.
-def mountField(String s) {
-    return '"' + s.replace('"', '""') + '"'
-}
-
 // mreStage runs the task's phase through mre stage.
 def mreStage(task, Map meta, phase, rest) {
     def cmd = "${shq(params.mro2nf_mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(params.mro2nf_psid)} -work .${pool(task)}"
@@ -128,6 +109,9 @@ def mreStage(task, Map meta, phase, rest) {
     }
     if (params.mro2nf_s3_mount) {
         cmd += " -s3-mount ${shq(params.mro2nf_s3_mount)}"
+    }
+    if (on(params.mro2nf_host_in_place)) {
+        cmd += ' -host-in-place'
     }
     if (meta.overrides) {
         cmd = "printf '%s\\n' ${shq(meta.overrides)} > overrides.json\n${cmd} -overrides overrides.json"

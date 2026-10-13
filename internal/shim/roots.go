@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"path/filepath"
 	"slices"
 )
@@ -79,11 +78,6 @@ func (r Roots) Holds(p string) bool {
 	c := filepath.Clean(p)
 
 	return underAny(c, r.set) && !withinAny(c, r.except)
-}
-
-// Paths are the roots, sorted.
-func (r Roots) Paths() []string {
-	return slices.Sorted(maps.Keys(r.set))
 }
 
 // underAny reports whether the clean absolute path p or one of its

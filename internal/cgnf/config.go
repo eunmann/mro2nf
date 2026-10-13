@@ -44,12 +44,16 @@ params.mro2nf_confine = false
 
 	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n\n", gstr(p.src.Invocation.Call))
 
-	b.WriteString(`// The entry file values a run reads: a head-node path, which every task
-// reads in place, where the profile's tasks see the head node's files, an
-// s3:// URI always, and a URI of any other scheme only when whoever
-// supplies the run's params is trusted to fetch it.
+	b.WriteString(`// The entry file values a run reads: a head-node path where the profile
+// sees the head node's files, an s3:// URI always, and a URI of any other
+// scheme only when whoever supplies the run's params is trusted to fetch it.
 params.mro2nf_host_inputs = true
 params.mro2nf_allow_remote_inputs = false
+
+// Every task reads a head-node path in place, the path mrp passes, on the
+// profiles whose tasks run on the host's filesystem; a container profile's
+// tasks see only what they stage, so there Nextflow stages it.
+params.mro2nf_host_in_place = true
 
 // Each job's resources are granted as mrp's local job manager grants them,
 // from the pool process.resourceLimits sets, its --localcores and
@@ -140,19 +144,17 @@ profiles {
     lsf      { process.executor = 'lsf' }
     pbs      { process.executor = 'pbs' }
 
-    // Every task in its own container of --mro2nf_image, which mounts what
-    // the task stages and, read-only at their own paths, the entry files
-    // every task reads in place (meta.binds). The container runs as the
-    // invoking user so work/ is not root-owned; the task's shell expands
-    // $(id), and the image has no home for that uid, so HOME is /tmp.
-    // containerOptions, not docker.runOptions, so a -c docker.runOptions
-    // adds to them.
+    // Every task in its own container of --mro2nf_image, which mounts only
+    // what the task stages. The container runs as the invoking user so work/
+    // is not root-owned; the task's shell expands $(id), and the image has no
+    // home for that uid, so HOME is /tmp. containerOptions, not
+    // docker.runOptions, so a -c docker.runOptions adds to the mapping.
     docker {
         process.executor = 'local'
         process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() * 0.9 ]
         params.mro2nf_local_jobs = true
         docker.enabled = true
-        process.containerOptions = { '-u $(id -u):$(id -g) -e HOME=/tmp' + (meta.binds ?: '') }
+        process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'
         includeConfig 'conf/container.config'
     }
 
@@ -191,10 +193,12 @@ profiles {
 
 // containerConfig is conf/container.config, the one image every task of
 // the container profiles runs in, whose PATH holds mre. Outputs are
-// confined to the task, as no other task could see a path outside it.
+// confined to the task, as no other task could see a path outside it, and
+// a head-node input is staged, as no task sees the host's path.
 const containerConfig = `// The container profiles' image (nextflow.config).
 params.mro2nf_confine = true
 params.mro2nf_require_image = true
+params.mro2nf_host_in_place = false
 
 process.container = params.mro2nf_image
 `

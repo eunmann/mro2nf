@@ -67,12 +67,11 @@ func rootlessDocker() bool {
 // docker profile: none on rootful Docker, where the profile's own user
 // mapping is under test. On ROOTLESS Docker the container's root already
 // maps to the host user, and the mapping maps to an unprivileged subuid that
-// cannot write the bind-mounted work dir, so the run drops it and keeps the
-// binds of the entry inputs read in place, as docs/RUNNING.md tells a
-// rootless user to.
+// cannot write the bind-mounted work dir, so the run clears it, as
+// docs/RUNNING.md tells a rootless user to.
 func dockerProfileConfig() string {
 	if rootlessDocker() {
-		return "process.containerOptions = { meta.binds ?: '' }\n"
+		return "process.containerOptions = ''\n"
 	}
 
 	return ""
@@ -314,7 +313,7 @@ var errNoOwner = errors.New("no owner in the file info")
 // process kind (split, map call, keyed fork, disabled call, a split's join
 // resources, the special scheduler key), each adapter (py, exec, comp), the
 // null-bundle and zero-fork shapes, and file values of every shape an entry
-// input takes.
+// input stages.
 var dockerCases = []string{
 	"split_test", "map_pipe", "map_file_keyed", "disabled_map", "join_resources", "special_resource",
 	"kitchen_sink", "file_chain", "map_split_file", "map_file_split", "struct_file_array", "exec_min",
@@ -362,11 +361,11 @@ func TestDockerIsolation(t *testing.T) {
 }
 
 // TestDockerEntryOverrides checks file-typed entry-input overrides under
-// isolation: every override file lives in a host temp dir, neither in the
-// image nor below the fixture, so the stage can read it only through the
-// read-only bind of the paths every task reads in place. It covers a scalar
-// file, a file[], a file[] of one basename, a struct with a file, a map of
-// files and a directory.
+// isolation, the strictest staging proof: every override file lives in a
+// host temp dir, neither in the image nor below the fixture, so the stage
+// can read it only if the task staged it, the AWS Batch and HealthOmics S3
+// path. It covers a scalar file, a file[], a file[] of one basename, a
+// struct with a file, a map of files and a directory.
 func TestDockerEntryOverrides(t *testing.T) {
 	t.Parallel()
 

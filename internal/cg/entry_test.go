@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -59,25 +58,27 @@ call FAN(
 )
 `
 
+// planOf plans the invocation mro holds as the local profile does, reading
+// head-node paths in place.
 func planOf(t *testing.T, mro string) Plan {
 	t.Helper()
 
-	return planUnder(t, mro, "")
+	return planUnder(t, mro, ReadInPlace{Host: true})
 }
 
 // planUnder plans the invocation mro holds with its s3:// entry file values
-// under mount, as mre plan plans a run.
-func planUnder(t *testing.T, mro string, mount shim.Mount) Plan {
+// under in's mount, as mre plan plans a run.
+func planUnder(t *testing.T, mro string, in ReadInPlace) Plan {
 	t.Helper()
 
 	src := sourceOf(t, mro)
 
-	inv, err := MountEntryValues(src, src.Invocation, nil, mount)
+	inv, err := MountEntryValues(src, src.Invocation, nil, in.Mount)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p, err := MakePlan(src, inv, nil, t.TempDir())
+	p, err := MakePlan(src, inv, nil, t.TempDir(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,34 +103,40 @@ func sourceOf(t *testing.T, mro string) Source {
 }
 
 // TestPlanStagesEachForksOwnEntryFiles: the run's entry file values are its
-// absolute paths, which every task reads in place, and URIs, each once, in
-// type-walk order, and a relative path reaches the stage as given; the USE
-// fork whose element of the mapped array is a URI stages it, the forks
-// whose element and broadcast reference are paths stage nothing, and SUM,
-// whose one file value is relative, stages none.
+// absolute paths and URIs, each once, in type-walk order, and a relative
+// path reaches the stage as given; each USE fork stages its own element of
+// the mapped array and the broadcast reference, never the other forks'
+// files, but for the paths it reads in place where the tasks run on the
+// host, and SUM, whose one file value is relative, stages none.
 func TestPlanStagesEachForksOwnEntryFiles(t *testing.T) {
-	p := planOf(t, entryFanMRO)
-
-	wantLeaves := []EntryLeaf{
-		{Input: "fs", Value: "/data/a.txt", InPlace: true},
-		{Input: "fs", Value: "s3://bucket/b.txt"},
-		{Input: "ref", Value: "/ref/genome.txt", InPlace: true},
-	}
-	if d := cmp.Diff(wantLeaves, p.Leaves); d != "" {
-		t.Errorf("entry leaves (-want +plan):\n%s", d)
+	cases := []struct {
+		host bool
+		use  []PlanFiles
+	}{
+		{true, []PlanFiles{{Key: "1", Leaves: []int{1}}}},
+		{false, []PlanFiles{{Key: "0", Leaves: []int{0, 2}}, {Key: "1", Leaves: []int{1, 2}}, {Key: "2", Leaves: []int{0, 2}}}},
 	}
 
-	files := map[string][]PlanFiles{}
-	for _, n := range p.Nodes {
-		files[n.Fqid] = n.Files
-	}
+	for _, tc := range cases {
+		p := planUnder(t, entryFanMRO, ReadInPlace{Host: tc.host})
 
-	want := map[string][]PlanFiles{
-		"FAN.USE": {{Key: "1", Leaves: []int{1}}},
-		"FAN.SUM": nil,
-	}
-	if d := cmp.Diff(want, files); d != "" {
-		t.Errorf("entry files per node and fork (-want +plan):\n%s", d)
+		wantLeaves := []EntryLeaf{
+			{Input: "fs", Value: "/data/a.txt", InPlace: tc.host},
+			{Input: "fs", Value: "s3://bucket/b.txt"},
+			{Input: "ref", Value: "/ref/genome.txt", InPlace: tc.host},
+		}
+		if d := cmp.Diff(wantLeaves, p.Leaves); d != "" {
+			t.Errorf("host %t: entry leaves (-want +plan):\n%s", tc.host, d)
+		}
+
+		files := map[string][]PlanFiles{}
+		for _, n := range p.Nodes {
+			files[n.Fqid] = n.Files
+		}
+
+		if d := cmp.Diff(map[string][]PlanFiles{"FAN.USE": tc.use, "FAN.SUM": nil}, files); d != "" {
+			t.Errorf("host %t: entry files per node and fork (-want +plan):\n%s", tc.host, d)
+		}
 	}
 }
 
@@ -163,9 +170,10 @@ func TestEntryFileReaders(t *testing.T) {
 }
 
 // TestVetEntryLeaf: of the values a run stages, an s3:// URI is staged on
-// every profile, a file: URI only where the profile sees the head node's
-// files, a URI of any other scheme only when remote inputs are allowed, and
-// a value Nextflow's stage-in script would expand never.
+// every profile, a head-node path, absolute or a file: URI, only where the
+// profile sees the head node's files, a URI of any other scheme only when
+// remote inputs are allowed, and a value Nextflow's stage-in script would
+// expand never.
 func TestVetEntryLeaf(t *testing.T) {
 	cases := []struct {
 		value        string
@@ -173,8 +181,11 @@ func TestVetEntryLeaf(t *testing.T) {
 		ok           bool
 	}{
 		{"s3://b/x.txt", false, false, true},
+		{"/data/x.txt", true, false, true},
 		{"file:///data/x.txt", true, false, true},
+		{"/data/x.txt", false, true, false},
 		{"file:///data/x.txt", false, true, false},
+		{"/data/s[1].txt", true, true, false},
 		{"https://h/x.txt", true, false, false},
 		{"https://h/x.txt", true, true, true},
 		{"HTTP://h/x.txt", false, true, true},

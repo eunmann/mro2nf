@@ -142,34 +142,32 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 	}
 }
 
-// TestEmitBindsInPlaceEntryFiles: PLAN hands mre the run's work dir, which
-// no entry input read in place may hold, and emits the paths every task
-// reads in place; the meta every task and OUTS share carries them, once, as
-// the docker options that bind each, quoted for the shell and for docker's
-// --mount fields.
-func TestEmitBindsInPlaceEntryFiles(t *testing.T) {
-	main := readTree(t, emitFixture(t, "entry_file"))["main.nf"]
+// TestEmitHostInputsInPlaceOffContainers (#543): the local and grid
+// profiles read a head-node entry input in place, and the container
+// profiles, which all include conf/container.config, stage it; PLAN and
+// every stage task take the one param, and PLAN the run's work dir, which no
+// input read in place may hold.
+func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "entry_file"))
+	cfg, ctr := tree["nextflow.config"], tree["conf/container.config"]
 
-	for _, want := range []string{
-		"    eval('cat binds'), emit: binds\n",
-		" -run-workdir ${shq(workflow.workDir.toUriString())}",
-		" -binds binds\n",
-		"shared = PLAN.out.call.combine(PLAN.out.binds).map { c, b -> [",
-		", call: c, binds: binds(b)] }.first()\n",
-		"include { shq ; code ; ordered ; on ; pool ; binds ;",
-	} {
-		if !strings.Contains(main, want) {
-			t.Errorf("main.nf lacks %q:\n%s", want, main)
+	top, _, _ := strings.Cut(cfg, "profiles {")
+	if strings.Count(cfg, "mro2nf_host_in_place") != 1 || !strings.Contains(top, "params.mro2nf_host_in_place = true\n") {
+		t.Errorf("nextflow.config does not read head-node inputs in place before its profiles alone:\n%s", cfg)
+	}
+
+	if !strings.Contains(ctr, "params.mro2nf_host_in_place = false\n") || strings.Contains(tree["conf/healthomics.config"], "mro2nf_host_in_place") {
+		t.Errorf("conf/container.config does not stage head-node inputs, alone:\n%s", ctr)
+	}
+
+	for _, want := range []string{" -host-in-place=${on(params.mro2nf_host_in_place)} ", " -run-workdir ${shq(workflow.workDir.toUriString())}"} {
+		if !strings.Contains(tree["main.nf"], want) {
+			t.Errorf("PLAN lacks %q:\n%s", want, tree["main.nf"])
 		}
 	}
 
-	for _, want := range []string{
-		"def binds(String record) {\n",
-		"' --mount ' + shq('type=bind,' + mountField('source=' + p) + ',' + mountField('target=' + p) + ',readonly')",
-	} {
-		if !strings.Contains(stageModule, want) {
-			t.Errorf("stage.nf lacks %q", want)
-		}
+	if want := "if (on(params.mro2nf_host_in_place)) {\n        cmd += ' -host-in-place'"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
 	}
 }
 
@@ -233,15 +231,14 @@ func TestEmitHealthOmicsTemplate(t *testing.T) {
 
 // TestDockerProfileRunsAsInvokingUser: the docker profile runs each
 // container as the invoking user with a writable HOME so work/ is not
-// root-owned (#519), and binds the entry files every task reads in place,
-// read-only at their own paths, through process.containerOptions so a -c
+// root-owned (#519), through process.containerOptions so a -c
 // docker.runOptions adds to it; only the docker profile maps the user, as
 // AWS Batch runs the container on its own instance.
 func TestDockerProfileRunsAsInvokingUser(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "diamond_min"))
 	cfg := tree["nextflow.config"]
 
-	const opts = "process.containerOptions = { '-u $(id -u):$(id -g) -e HOME=/tmp' + (meta.binds ?: '') }\n"
+	const opts = "process.containerOptions = '-u $(id -u):$(id -g) -e HOME=/tmp'\n"
 
 	docker := cfg[strings.Index(cfg, "    docker {"):strings.Index(cfg, "    awsbatch {")]
 	if !strings.Contains(docker, opts) {

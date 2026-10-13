@@ -50,7 +50,7 @@ func planEntry(t *testing.T, dir, values string, flags ...string) (string, error
 	err := run(t.Context(), append([]string{
 		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"), "-binds", filepath.Join(work, "binds"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
 	}, flags...))
 
 	return work, err
@@ -429,7 +429,7 @@ func planEntryFile(t *testing.T, value string, flags ...string) (string, error) 
 	err := run(t.Context(), append([]string{
 		"plan", "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"), "-binds", filepath.Join(work, "binds"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
 	}, flags...))
 
 	return work, err
@@ -438,9 +438,10 @@ func planEntryFile(t *testing.T, value string, flags ...string) (string, error) 
 // TestPlanRefusesEntryFilesItMayNotStage: an entry file value is vetted
 // before the driver hands it to file(): a glob character in a staged value
 // fails on every profile, a head-node path where the profile sees no
-// head-node file or where it is or holds the run's work dir, and a URI
-// scheme but s3 unless remote inputs are allowed. A head-node path no task
-// stages may hold any character, as under mrp.
+// head-node file, one read in place where it is or holds the run's work
+// dir, and a URI scheme but s3 unless remote inputs are allowed. A
+// head-node path read in place, which no task stages, may hold any
+// character, as under mrp.
 func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 	cases := []struct {
 		value string
@@ -448,11 +449,15 @@ func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 		ok    bool
 	}{
 		{"/data/reads.txt", nil, true},
-		{"/data/s[1].txt", nil, true},
-		{"file:///data/s[1].txt", []string{"-remote-inputs"}, false},
+		{"/data/reads.txt", []string{"-host-in-place"}, true},
+		{"/data/s[1].txt", []string{"-host-in-place"}, true},
+		{"/data/s[1].txt", []string{"-remote-inputs"}, false},
+		{"file:///data/s[1].txt", []string{"-host-in-place", "-remote-inputs"}, false},
 		{"/data/reads.txt", []string{"-host-inputs=false"}, false},
-		{"/data", []string{"-run-workdir", "/data/proj/work"}, false},
-		{"/data/reads.txt", []string{"-run-workdir", "/data/proj/work"}, true},
+		{"/data/reads.txt", []string{"-host-in-place", "-host-inputs=false"}, false},
+		{"/data", []string{"-host-in-place", "-run-workdir", "/data/proj/work"}, false},
+		{"/data", []string{"-run-workdir", "/data/proj/work"}, true},
+		{"/data/reads.txt", []string{"-host-in-place", "-run-workdir", "/data/proj/work"}, true},
 		{"s3://bucket/reads.txt", []string{"-host-inputs=false"}, true},
 		{"http://host/reads.txt", nil, false},
 		{"http://host/reads.txt", []string{"-remote-inputs"}, true},
@@ -466,13 +471,14 @@ func TestPlanRefusesEntryFilesItMayNotStage(t *testing.T) {
 	}
 }
 
-// TestArgsReadsStagedEntryFiles: the plan lists the run's staged entry file
-// and the instance that reads it, and the args step reads the copy the
-// task staged, not the value, which names no path the task has.
+// TestArgsReadsStagedEntryFiles: the plan lists the run's entry file, a
+// head-node path a container profile's tasks do not see, and the instance
+// that reads it, and the args step reads the copy the task staged, not the
+// value's path.
 func TestArgsReadsStagedEntryFiles(t *testing.T) {
-	const value = "s3://bucket/reads.txt"
+	value := filepath.Join(t.TempDir(), "reads.txt")
 
-	work, err := planEntryFile(t, value, "-host-inputs=false")
+	work, err := planEntryFile(t, value)
 	if err != nil {
 		t.Fatal(err)
 	}

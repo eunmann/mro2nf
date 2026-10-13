@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/google/go-cmp/cmp"
 )
 
 // TestRootsHolds: roots hold each root and what lies under it once cleaned,
@@ -33,10 +32,6 @@ func TestRootsHolds(t *testing.T) {
 		if got := r.Holds(p); got != want {
 			t.Errorf("Holds(%q) = %t, want %t", p, got, want)
 		}
-	}
-
-	if d := cmp.Diff([]string{"/data/ref", "/mnt/s3"}, r.Paths()); d != "" {
-		t.Errorf("Paths (-want +got):\n%s", d)
 	}
 
 	if (shim.Roots{}).Holds("/mnt/s3/b") || shim.NewRoots().Holds("/") {

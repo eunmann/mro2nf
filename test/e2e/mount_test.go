@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -23,13 +22,13 @@ const mountedFixture = "mounted_paths"
 // TestDockerMountedS3Inputs simulates the S3 mount of the awsbatch profile with a
 // local dir laid out as Mountpoint for S3 shows a bucket, bound read-only
 // into every container, under copy-staging into per-task scratch dirs. With
-// the inputs staged into each task, as on any isolated executor and as a
-// file: URI is, MAKE_SHARD opens the path RECORD_SAMPLE recorded, which was
-// in RECORD_SAMPLE's own scratch, and fails, though mrp, given the same host
-// paths, succeeds. With s3:// values under the mount, every stage receives
-// the mounted path, as mrp passes the path it was given, and the run gives
-// mrp's outs, on the docker profile and on the awsbatch profile itself, and
-// no stage task holds a copy of the mounted reference.
+// the inputs staged into each task, as on any isolated executor, MAKE_SHARD
+// opens the path RECORD_SAMPLE recorded, which was in RECORD_SAMPLE's own
+// scratch, and fails, though mrp, given the same host paths, succeeds. With
+// s3:// values under the mount, every stage receives the mounted path, as
+// mrp passes the path it was given, and the run gives mrp's outs, on the
+// docker profile and on the awsbatch profile itself, and no stage task
+// holds a copy of the mounted reference.
 func TestDockerMountedS3Inputs(t *testing.T) {
 	t.Parallel()
 
@@ -40,15 +39,14 @@ func TestDockerMountedS3Inputs(t *testing.T) {
 	s3 := simulatedS3(t, fixtureDir)
 	image := pipelineImage(t, fixtureDir, mountedFixture)
 	mounted := map[string]any{"fastqs": "s3://simbucket/fastqs", "reference_path": "s3://simbucket/ref"}
-	ref := filepath.Join(s3, "simbucket", "ref")
 
 	t.Run("staged", func(t *testing.T) {
 		t.Parallel()
 
 		proj := transpile(t, mountedFixture)
 		writeParams(t, proj, map[string]any{
-			"fastqs":         "file://" + filepath.Join(s3, "simbucket", "fastqs"),
-			"reference_path": "file://" + ref,
+			"fastqs":         filepath.Join(s3, "simbucket", "fastqs"),
+			"reference_path": filepath.Join(s3, "simbucket", "ref"),
 		})
 
 		if err := runNextflowAllowingFailedAttempts(t, proj, append(dockerMountArgs(t, proj, image, s3), "-with-trace", "trace.txt")...); err == nil {
@@ -69,7 +67,7 @@ func TestDockerMountedS3Inputs(t *testing.T) {
 		}
 
 		goldenJSON(t, mountedFixture, filepath.Join(proj, "results", "pipeline_outs.json"), golden)
-		assertReadInPlace(t, proj, ref)
+		assertReadInPlace(t, proj, s3)
 	})
 
 	t.Run("awsbatch", func(t *testing.T) {
@@ -87,39 +85,8 @@ func TestDockerMountedS3Inputs(t *testing.T) {
 		}
 
 		goldenJSON(t, mountedFixture, filepath.Join(proj, "results", "pipeline_outs.json"), golden)
-		assertReadInPlace(t, proj, ref)
+		assertReadInPlace(t, proj, s3)
 	})
-}
-
-// TestDockerHostInputsInPlace (#543): on the docker profile every task reads
-// a head-node entry input in place, bound read-only into its container at
-// the path itself, as mrp passes a stage the path it was given: the path
-// RECORD_SAMPLE records opens in MAKE_SHARD's split, which stages no input,
-// RECORD_SAMPLE's _args names the host path, and the run gives mrp's outs
-// with no stage task holding a copy of the reference SETUP_REF returns.
-func TestDockerHostInputsInPlace(t *testing.T) {
-	t.Parallel()
-
-	requireDocker(t)
-
-	fixtureDir := filepath.Join(root, "testdata", mountedFixture)
-	host := filepath.Join(t.TempDir(), "host")
-	copyInputs(t, fixtureDir, host)
-
-	fastqs, ref := filepath.Join(host, "fastqs"), filepath.Join(host, "ref")
-	proj := transpile(t, mountedFixture)
-	writeParams(t, proj, map[string]any{"fastqs": fastqs, "reference_path": ref})
-
-	if err := runDocker(t, proj, fixtureDir, mountedFixture, "-params-file", "params.json", "-with-trace", "trace.txt"); err != nil {
-		t.Fatalf("nextflow (docker profile): %v", err)
-	}
-
-	goldenJSON(t, mountedFixture, filepath.Join(proj, "results", "pipeline_outs.json"), filepath.Join(fixtureDir, "expected", "override_outs.json"))
-	assertReadInPlace(t, proj, ref)
-
-	if want := fmt.Sprintf("%q: %q", "fastqs", fastqs); !argsHold(t, proj, want) {
-		t.Errorf("no stage's _args holds %s", want)
-	}
 }
 
 // TestMrpDiffHostEntryPaths (#543): given head-node paths, mounted_paths
@@ -242,25 +209,6 @@ func walkJSONStrings(v any, visit func(string)) {
 	}
 }
 
-// argsHold reports whether a stage phase's _args under proj's work dir
-// holds the text want.
-func argsHold(t *testing.T, proj, want string) bool {
-	t.Helper()
-
-	args, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "*", "_args"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, a := range args {
-		if raw, err := os.ReadFile(a); err == nil && strings.Contains(string(raw), want) {
-			return true
-		}
-	}
-
-	return false
-}
-
 // TestResumeRechecksTheS3Mount: PLAN reads an s3:// input in place only
 // when its instance mounts the input's bucket, which no cache key holds, so
 // a -resume re-runs PLAN, which sees the mounts the instances have now, and
@@ -296,25 +244,19 @@ func simulatedS3(t *testing.T, fixtureDir string) string {
 	t.Helper()
 
 	s3 := filepath.Join(t.TempDir(), "s3")
-	copyInputs(t, fixtureDir, filepath.Join(s3, "simbucket"))
-
-	return s3
-}
-
-// copyInputs copies the fixture's inputs, fastqs/ and ref/, below dir, a
-// dir outside the fixture and the image.
-func copyInputs(t *testing.T, fixtureDir, dir string) {
-	t.Helper()
-
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	for _, d := range []string{"fastqs", "ref"} {
-		if err := shim.CopyTree(filepath.Join(fixtureDir, "input", d), filepath.Join(dir, d)); err != nil {
+		dst := filepath.Join(s3, "simbucket", d)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := shim.CopyTree(filepath.Join(fixtureDir, "input", d), dst); err != nil {
 			t.Fatal(err)
 		}
 	}
+
+	return s3
 }
 
 func readOnlyBind(dir string) string {
@@ -373,11 +315,11 @@ func assertFailedInRecordedPath(t *testing.T, proj string) {
 	}
 }
 
-// assertReadInPlace requires a run of proj to have read the reference input
-// in place at ref: a stage's outs bundle names it by that path, and no
-// task's work dir holds a copy of it but the OUTS task's, which publishes it
-// as mrp does.
-func assertReadInPlace(t *testing.T, proj, ref string) {
+// assertReadInPlace requires a run of proj under the mount s3 to have read
+// the mounted inputs where they are: a stage's outs bundle names the mounted
+// reference by its path, and no task's work dir holds a copy of it but the
+// OUTS task's, which publishes it as mrp does.
+func assertReadInPlace(t *testing.T, proj, s3 string) {
 	t.Helper()
 
 	var publish []string
@@ -392,7 +334,7 @@ func assertReadInPlace(t *testing.T, proj, ref string) {
 		t.Fatal("the trace lists no OUTS task")
 	}
 
-	quoted, named := `"`+ref+`"`, false
+	ref, named := `"`+filepath.Join(s3, "simbucket", "ref")+`"`, false
 	work := filepath.Join(proj, "work")
 
 	err := filepath.WalkDir(work, func(path string, d fs.DirEntry, err error) error {
@@ -406,12 +348,12 @@ func assertReadInPlace(t *testing.T, proj, ref string) {
 		}
 
 		if d.Name() == "genome.fa" && !hasAnyPrefix(filepath.ToSlash(rel), publish) {
-			t.Errorf("%s holds a copy of the reference read in place", rel)
+			t.Errorf("%s holds a copy of the mounted reference", rel)
 		}
 
 		if d.Name() == "data.json" && !named {
 			raw, err := os.ReadFile(path)
-			named = err == nil && strings.Contains(string(raw), quoted)
+			named = err == nil && strings.Contains(string(raw), ref)
 
 			return err
 		}
@@ -423,7 +365,7 @@ func assertReadInPlace(t *testing.T, proj, ref string) {
 	}
 
 	if !named {
-		t.Errorf("no bundle under work/ names the reference by its path %s", ref)
+		t.Errorf("no bundle under work/ names the reference by its mounted path %s", ref)
 	}
 }
 

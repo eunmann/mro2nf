@@ -172,8 +172,8 @@ touch "$meta/_complete"
 // head-node path as it is given, as mrp hands the path it was given, so a
 // path the stage writes into an output names the same file in every task;
 // and a stage that returns the path, under a strict confinement, posts it
-// as it is, with no copy of the tree in any bundle. The head-node path is
-// one a container task binds; the mounted one, which the mount shows, not.
+// as it is, with no copy of the tree in any bundle. A head-node path is
+// read in place under -host-in-place, as on the local and grid profiles.
 func TestStageKeepsPathsReadInPlace(t *testing.T) {
 	root := s3Root(t)
 	host := filepath.Join(t.TempDir(), "ref")
@@ -184,20 +184,20 @@ func TestStageKeepsPathsReadInPlace(t *testing.T) {
 	writeTestFile(t, filepath.Join(host, "genome.fa"), ">g\n")
 
 	cases := []struct {
-		name, value, ref, binds string
-		flags                   []string
+		name, value, ref string
+		planFlags, flags []string
 	}{
-		{"mounted", "s3://bucket/ref", filepath.Join(root, "bucket", "ref"), "", []string{"-host-inputs=false"}},
-		{"host", host, host, base64.StdEncoding.EncodeToString([]byte(host)) + "\n", nil},
+		{"mounted", "s3://bucket/ref", filepath.Join(root, "bucket", "ref"), []string{"-host-inputs=false"}, nil},
+		{"host", host, host, []string{"-host-in-place"}, []string{"-host-in-place"}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stageEcho(t, root, tc.value, tc.flags)
+			stageEcho(t, root, tc.value, tc.planFlags, tc.flags)
 
-			for record, want := range map[string]string{"leaves": "", "files": "", "binds": tc.binds} {
-				if got := readText(t, filepath.Join("plan", record)); got != want {
-					t.Errorf("the %s record holds %q, want %q", record, got, want)
+			for _, record := range []string{"leaves", "files"} {
+				if got := readText(t, filepath.Join("plan", record)); got != "" {
+					t.Errorf("the %s record holds %q, want nothing staged", record, got)
 				}
 			}
 
@@ -207,9 +207,9 @@ func TestStageKeepsPathsReadInPlace(t *testing.T) {
 }
 
 // stageEcho plans echoMountMRO with ref given as value under -s3-mount
-// root and the plan flags, into plan/ of a new cwd, and runs its stage
-// task there under a strict confinement.
-func stageEcho(t *testing.T, root, value string, flags []string) {
+// root and planFlags, into plan/ of a new cwd, and runs its stage task there
+// under a strict confinement and flags.
+func stageEcho(t *testing.T, root, value string, planFlags, flags []string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -223,13 +223,13 @@ func stageEcho(t *testing.T, root, value string, flags []string) {
 
 	if _, err := mreIn(t, mro, append([]string{
 		"plan", "-psid", "mrp", "-s3-mount", root, "-work", "plan",
-		"-call", "plan/call", "-nodes", "plan/nodes", "-roots", "plan/roots", "-leaves", "plan/leaves", "-files", "plan/files", "-binds", "plan/binds",
+		"-call", "plan/call", "-nodes", "plan/nodes", "-roots", "plan/roots", "-leaves", "plan/leaves", "-files", "plan/files",
 	},
-		flags...)...); err != nil {
+		planFlags...)...); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
 
-	if _, err := mreIn(t, mro, append([]string{"stage", "-call", "plan/call", "-s3-mount", root, "-confine"},
+	if _, err := mreIn(t, mro, append(append([]string{"stage", "-call", "plan/call", "-s3-mount", root, "-confine"}, flags...),
 		unsplitTask("P.ECHO", ".")[1:]...)...); err != nil {
 		t.Fatalf("stage: %v", err)
 	}
