@@ -522,15 +522,16 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 // outs, writing its lines to -out-refs, which the driver resolves, as
 // POSTED does, against the paths the task staged its items from: each
 // chunk stages the files its def names, and the join those every chunk's
-// def and outs name.
+// def and outs name, but those in a dir the task stages whole.
 func TestEmitSplitNamesFilesByReference(t *testing.T) {
 	for _, want := range []string{
 		"-args args -o chunks -out-refs chunk_refs\")}",
 		"-o ${shq('chunkout/' + name)} -out-refs chunkout_refs\")}",
 		"path('chunks/resources.tsv'), path('chunk_refs'), emit: split",
 		"tuple val(meta), val(key), path('chunkout/*', type: 'dir'), eval('cat chunkout_refs'), emit: chunk",
-		"return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], (rs + refsOf([e])).unique()] }",
+		"return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], unstaged(rs + refsOf([e]), us)] }",
 		"refsOf(referred([o], lines, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))",
+		"return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })",
 		"[m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
 		if !strings.Contains(stageModule, want) {

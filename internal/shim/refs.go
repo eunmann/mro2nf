@@ -20,9 +20,9 @@ var (
 	// errUnstagedRef reports a leaf a bundle names by reference that the
 	// reading task did not stage.
 	errUnstagedRef = errors.New("leaf named by reference is not staged")
-	// errBadRef reports a leaf staged by reference whose ordinal dir holds
-	// no one leaf beside its origin record.
-	errBadRef = errors.New("leaf staged by reference is not one recorded leaf")
+	// errBadRef reports a staged ordinal dir that holds no one leaf beside
+	// its origin record.
+	errBadRef = errors.New("staged ordinal dir is not one recorded leaf")
 )
 
 // Staged are the dirs a task staged, each one item, its producer's bundle,
@@ -54,6 +54,33 @@ func NewStaged(names ...string) (Staged, error) {
 	}
 
 	return s, nil
+}
+
+// Leaves indexes the leaf of each ordinal dir of the items s holds, the
+// first of each origin, items in the order s was given them. A leaf the
+// task staged with an item it reads is the one a reference to its origin
+// resolves to, so the driver stages it by reference, as its ordinal dir
+// alone (refs/<n>/f/<ordinal>/), only where no item the task stages holds
+// it.
+func (s Staged) Leaves() (Refs, error) {
+	r := Refs{leaves: map[string]string{}}
+
+	for _, d := range s.dirs {
+		for _, pattern := range []string{filepath.Join(d.abs, bundleFiles, "*"), filepath.Join(d.abs, "*", bundleFiles, "*")} {
+			ordinals, err := filepath.Glob(pattern)
+			if err != nil {
+				return Refs{}, fmt.Errorf("staged leaves %s: %w", d.name, err)
+			}
+
+			for _, ordinal := range ordinals {
+				if err := r.index(ordinal); err != nil {
+					return Refs{}, err
+				}
+			}
+		}
+	}
+
+	return r, nil
 }
 
 // Ref names a whole bundle leaf a task staged: the item it lies in, by the
@@ -151,9 +178,9 @@ func readLink(p string) (string, bool, error) {
 // WriteItem writes payload into dir as a bundle, as WriteBundle does, but
 // names each file leaf that is a whole leaf of a bundle the task staged
 // (staged) by reference rather than copying it: a marker of the leaf's
-// origin, which a reader resolves among the leaves it staged by reference
-// (Refs), where its readers stage it from the item it lies in. It returns
-// those references, one per origin.
+// origin, which a reader resolves among the leaves it staged
+// (Staged.Leaves), where its readers stage it from the item it lies in. It
+// returns those references, one per origin.
 func WriteItem(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts Opts, staged Staged) ([]Ref, error) {
 	refs := []Ref{}
 
@@ -211,40 +238,33 @@ func cutRef(s string) (Origin, bool) {
 	return parseOrigin(record)
 }
 
-// Refs are the bundle leaves a task staged by reference, by origin: each
-// staged with its ordinal dir, at <dir>/<n>/f/<ordinal>/.
+// Refs are the whole bundle leaves a task staged, by origin, among which a
+// reference resolves.
 type Refs struct {
 	leaves map[string]string
 }
 
-// ReadRefs indexes the leaves staged by reference below dir; "" stages
-// none.
-func ReadRefs(dir string) (Refs, error) {
-	if dir == "" {
-		return Refs{}, nil
+// index records the leaf of the ordinal dir at ordinal under its origin,
+// unless a leaf of that origin is recorded.
+func (r Refs) index(ordinal string) error {
+	if !ordinalDir.MatchString(filepath.Base(ordinal)) {
+		return nil
 	}
 
-	ordinals, err := filepath.Glob(filepath.Join(dir, "*", bundleFiles, "*"))
+	leaf, o, err := stagedLeaf(ordinal)
 	if err != nil {
-		return Refs{}, fmt.Errorf("refs %s: %w", dir, err)
+		return err
 	}
 
-	r := Refs{leaves: make(map[string]string, len(ordinals))}
-
-	for _, ordinal := range ordinals {
-		leaf, o, err := stagedLeaf(ordinal)
-		if err != nil {
-			return Refs{}, err
-		}
-
+	if _, ok := r.leaves[o.record()]; !ok {
 		r.leaves[o.record()] = leaf
 	}
 
-	return r, nil
+	return nil
 }
 
-// stagedLeaf is the absolute path of the one leaf in the ordinal dir a
-// task staged by reference, and the origin it records.
+// stagedLeaf is the absolute path of the one leaf in an ordinal dir a task
+// staged, and the origin it records.
 func stagedLeaf(ordinal string) (string, Origin, error) {
 	entries, err := os.ReadDir(ordinal)
 	if err != nil {

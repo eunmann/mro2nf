@@ -88,11 +88,11 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return err
 	}
 
-	if s.run.refs, err = shim.ReadRefs(s.args.refs); err != nil {
+	if s.run.staged, err = shim.NewStaged(append(slices.Clone(s.args.in), s.args.refs, s.run.chunk, s.run.chunks, s.run.chunkOuts)...); err != nil {
 		return fmt.Errorf("stage: %w", err)
 	}
 
-	if s.run.staged, err = shim.NewStaged(append(slices.Clone(s.args.in), s.args.refs, s.run.chunk, s.run.chunks, s.run.chunkOuts)...); err != nil {
+	if s.run.refs, err = s.run.staged.Leaves(); err != nil {
 		return fmt.Errorf("stage: %w", err)
 	}
 

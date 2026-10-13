@@ -401,7 +401,15 @@ Nextflow stages the file from where its producer wrote it, a link on a
 shared filesystem and a download on an object store, and the writing
 task uploads none of it again (on CellRanger on Batch the `MAKE_SHARD`
 join spent 31.8 s re-uploading its chunks' shards, #562; a split
-forwarding its input into M chunk defs uploaded M copies of it). A
+forwarding its input into M chunk defs uploaded M copies of it). An
+ordinal dir that lies in an item the reader stages whole, such as the
+input a split forwarded into its chunk defs, which each chunk and the
+join stage as `in/u<i>`, is not staged again (`unstaged`): `mre`
+resolves a reference among the leaves of every item its task staged,
+each beside its origin record (`shim.Staged.Leaves`), so the file is
+downloaded once per reader (`split_forward_file` with a 10 MB file,
+copy-staged: 21.0 MB staged per chunk and for the join before, 10.5 MB
+after). A
 reader's `-resume` key holds the ordinal dirs' paths, which a cached
 producer keeps. Nextflow's own `includeInputs` cannot do this: an output
 it matches is named in the task's own work dir and is unstaged from it
@@ -524,7 +532,7 @@ every filetype and struct, and the struct of each callable's outputs.
   chunk defs and a chunk's outs name each whole leaf of a bundle the task
   staged (`-in`, `-refs`, `-chunk`) by reference, which `-out-refs` lists
   (§5, **Files by reference**), and a chunk and a join read them among the
-  leaves they staged by reference (`-refs`). Beside the job's metadata mre writes `_mre_stage`, the name of
+  leaves they staged, by reference (`-refs`) or in an item. Beside the job's metadata mre writes `_mre_stage`, the name of
   the stage the job ran. The adapter never reads it; the `mrp` ABI differential
   (`TestMrpDiff`) uses it to group stage invocations without depending on the
   Nextflow task graph, and the failure-parity leg (`TestMrpDiffFailureParity`)
@@ -571,7 +579,8 @@ every filetype and struct, and the struct of each callable's outputs.
   `-fork-refs`, list (§5, **Files by reference**). A consumer's `-values`
   file holds the records it got, of outputs and elements alike, each naming
   the item it stands in for in its JSON, and its `-refs` dir the files its
-  items name by reference; `mre outs` takes both too. With `-gates`, it writes the
+  items name by reference that no item it stages holds; `mre outs` takes
+  both too. With `-gates`, it writes the
   instances the instance's outs disable: of each node with a disable binding
   that reads this stage alone, every fork it resolves true at, as `mrp`'s
   `Fork.disabled` reads it (a null reads false), named
@@ -643,7 +652,7 @@ split's chunk-def file, or the upstream leaf a binding forwarded unchanged. That
 is the path `mrp` passes on, so a stage that reads a sample name or an extension
 from `os.path.basename()` sees the same value under both runtimes. A task stages
 its inputs as whole bundle dirs under `in/u<i>` names, and the files they name
-by reference as ordinal dirs, `refs/<i>/f/L<nnnn>`, so a stage-chosen basename
+by reference that lie in none of those as ordinal dirs, `refs/<i>/f/L<nnnn>`, so a stage-chosen basename
 never appears in Nextflow's stage-in script.
 
 In `data.json`, every file-typed leaf is replaced with a **marker** of the form
@@ -690,15 +699,18 @@ Both prefixes resolve identically on read-back. The rules:
   driver (§5). The task detects it by the path it staged the item at, not
   by a link, so it holds on an object store, where Nextflow stages a copy.
   Identity is the origin, as for a copy: every position of one origin gets
-  one reference, and a reader resolves it among the ordinal dirs it staged
-  by reference, each beside its origin record (`shim.ReadRefs`), failing on
-  one it did not stage. A reader of outs and elements then links it into
-  its args, and `mre outs` places it, as it would a copy of the same
-  origin, so `_args`, the published tree and the outs JSON are the same
-  bytes. A chunk and a join read a chunk def's or a chunk's outs'
-  reference where they staged it, `refs/<i>/f/<ordinal>/<basename>`, where
-  a copy lay below `chunk/<name>/` or `chunks/<name>/`: the basename the
-  stage sees, and the file, are the same. A path inside a staged directory
+  one reference, and a reader resolves it among the ordinal dirs it staged,
+  in its items or by reference, each beside its origin record
+  (`shim.Staged.Leaves`, the first of an origin in the order the task names
+  its staged dirs), failing on one it did not stage. A reader of outs and
+  elements then links it into its args, and `mre outs` places it, as it
+  would a copy of the same origin, so `_args`, the published tree and the
+  outs JSON are the same bytes. A chunk and a join read a chunk def's or a
+  chunk's outs' reference where they staged it, in an item
+  (`in/u<i>/f/<ordinal>/<basename>`) or by reference
+  (`refs/<i>/f/<ordinal>/<basename>`), where a copy lay below
+  `chunk/<name>/` or `chunks/<name>/`: the basename the stage sees, and the
+  file, are the same. A path inside a staged directory
   leaf is still copied, as staging the whole directory to every reader
   would cost more than the one file.
 - **Escaping** (on write): every other string that begins with the reserved

@@ -47,7 +47,8 @@ var (
 
 // runFlags are the inputs of mre stage's job step beside the call graph's,
 // and the dirs its task staged (staged), whose leaves the bundles it writes
-// name by reference, and the leaves it staged by reference (refs).
+// name by reference and the bundles it reads resolve their references
+// among (refs).
 type runFlags struct {
 	phase, args, out, outRefs, chunk, chunks, chunkOuts, overrides string
 	confine                                                        bool

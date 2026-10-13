@@ -90,8 +90,9 @@ func newRefRun(t *testing.T, refs bool) *refRun {
 }
 
 // stage copies the item dirs and the ordinal dir of each file they name
-// by reference into the task dir, cwd, as in/u<i> and refs/<i>/f/<ordinal>,
-// and returns the files, those of all items, once each.
+// by reference that lies in none of them into the task dir, cwd, as
+// in/u<i> and refs/<i>/f/<ordinal>, and returns those files once each, as
+// the driver stages them (refsOf).
 func (r *refRun) stage(items []string) []string {
 	r.t.Helper()
 
@@ -109,7 +110,7 @@ func (r *refRun) stage(items []string) []string {
 		}
 
 		for _, o := range r.itemRefs[it] {
-			if !slices.Contains(refs, o) {
+			if !slices.Contains(refs, o) && !slices.Contains(items, filepath.Dir(filepath.Dir(o))) {
 				refs = append(refs, o)
 			}
 		}
@@ -142,7 +143,12 @@ func (r *refRun) task(node string, items []string, stage func(args map[string]st
 
 	refs := r.stage(items)
 
-	leaves, err := shim.ReadRefs("refs")
+	staged, err := shim.NewStaged("in", "refs")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+
+	leaves, err := staged.Leaves()
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -326,9 +332,10 @@ func treeOf(t *testing.T, dir string) map[string]string {
 // wrote, which its task staged a copy of, as on an object store, so its
 // post names it by reference to MAKE's file and writes no copy of it, which
 // an object store would upload again. READ, given PASS's output and MAKE's,
-// stages MAKE's file once from where MAKE wrote it, and gets the _args, to
-// the byte, that it gets from a copy: one file, linked at one path for
-// both inputs. The pipeline outs publish the same tree and outs JSON.
+// stages MAKE's file once, with MAKE's output, and nothing by reference,
+// and gets the _args, to the byte, that it gets from a copy: one file,
+// linked at one path for both inputs. The pipeline outs, which read both
+// outputs too, publish the same tree and outs JSON.
 func TestPostNamesPassedFileByReference(t *testing.T) {
 	copied := newRefRun(t, false)
 	copyArgs, copyPassed, copyTree := copied.pipeline()
@@ -359,5 +366,11 @@ func TestPostNamesPassedFileByReference(t *testing.T) {
 	want := []string{filepath.Join(referred.root, "work", "P.MAKE", "outs", "made", "f", "L0000")}
 	if d := cmp.Diff(want, referred.itemRefs[refPassed[0]]); d != "" {
 		t.Errorf("PASS's y names by reference (-want +got):\n%s", d)
+	}
+
+	for _, task := range []string{filepath.Join("scratch", "P.READ"), "outs-task"} {
+		if got, err := os.ReadDir(filepath.Join(referred.root, task, "refs")); err != nil || len(got) != 0 {
+			t.Errorf("%s staged %v by reference (%v), want MAKE's file staged once, with MAKE's output", task, got, err)
+		}
 	}
 }

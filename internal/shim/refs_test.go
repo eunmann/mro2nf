@@ -133,20 +133,7 @@ func wantReadByReference(t *testing.T, r refTask) {
 		t.Fatal(err)
 	}
 
-	refs, err := shim.ReadRefs("refs")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	raw, err := refs.ReadBundle(filepath.Join("outs", "x"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var got map[string]string
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatal(err)
-	}
+	got := readStaged(t, filepath.Join("outs", "x"), "refs")
 
 	leaf := filepath.Join(r.dir, "refs", "1", "f", "L0000", "y.txt")
 	if got["up"] != leaf || got["chunk"] != leaf {
@@ -166,6 +153,65 @@ func wantReadByReference(t *testing.T, r refTask) {
 	}
 }
 
+// readStaged reads the bundle at dir as a task that staged the dirs
+// staged reads it, each reference among their leaves.
+func readStaged(t *testing.T, dir string, staged ...string) map[string]string {
+	t.Helper()
+
+	s, err := shim.NewStaged(staged...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := s.Leaves()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := refs.ReadBundle(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]string
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+
+	return got
+}
+
+// TestReferenceResolvesToALeafOfAStagedItem: a reader that stages the item
+// a referenced file lies in, as each chunk of a split forwarding its input
+// stages that input, reads the reference as the file in that item, which
+// the driver therefore stages no second time by reference; staging it by
+// reference too, it reads the item's, the first dir it names.
+func TestReferenceResolvesToALeafOfAStagedItem(t *testing.T) {
+	r := newRefTask(t, t.TempDir(), shim.CopyTree)
+
+	staged, err := shim.NewStaged("in")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := shim.WriteItem(filepath.Join("outs", "x"), map[string]any{"up": r.file}, fields(t, "up file"), fileTable(t), shim.Opts{}, staged); err != nil {
+		t.Fatal(err)
+	}
+
+	stagedFile, _ := r.staged["f"].(string)
+	if err := shim.CopyTree(filepath.Dir(stagedFile), filepath.Join("refs", "1", "f", "L0000")); err != nil {
+		t.Fatal(err)
+	}
+
+	leaf := filepath.Join(r.dir, "in", "u1", "f", "L0000", "y.txt")
+
+	for _, dirs := range [][]string{{"in"}, {filepath.Join("in", "u1")}, {"in", "refs"}} {
+		if got := readStaged(t, filepath.Join("outs", "x"), dirs...); got["up"] != leaf {
+			t.Errorf("staging %v, up reads %s, want the leaf of the staged item %s", dirs, got["up"], leaf)
+		}
+	}
+}
+
 // TestWriteItemCopiesWithNothingStaged: with no staged dir, WriteItem
 // copies every leaf, as WriteBundle does, and returns no reference.
 func TestWriteItemCopiesWithNothingStaged(t *testing.T) {
@@ -181,10 +227,10 @@ func TestWriteItemCopiesWithNothingStaged(t *testing.T) {
 	}
 }
 
-// TestReadRefsRefusesAnOrdinalOfNoOneRecordedLeaf: a leaf staged by
-// reference is one leaf beside its origin record; an ordinal dir with two,
-// or with no record, fails the read.
-func TestReadRefsRefusesAnOrdinalOfNoOneRecordedLeaf(t *testing.T) {
+// TestLeavesRefuseAnOrdinalOfNoOneRecordedLeaf: a staged leaf is one leaf
+// beside its origin record; an ordinal dir with two, or with no record,
+// fails the index.
+func TestLeavesRefuseAnOrdinalOfNoOneRecordedLeaf(t *testing.T) {
 	for name, files := range map[string][]string{"two leaves": {".mre-origin", "a.txt", "b.txt"}, "no record": {"a.txt"}} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -200,8 +246,13 @@ func TestReadRefsRefusesAnOrdinalOfNoOneRecordedLeaf(t *testing.T) {
 				}
 			}
 
-			if _, err := shim.ReadRefs(dir); err == nil {
-				t.Error("ReadRefs succeeded")
+			staged, err := shim.NewStaged(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := staged.Leaves(); err == nil {
+				t.Error("Leaves succeeded")
 			}
 		})
 	}

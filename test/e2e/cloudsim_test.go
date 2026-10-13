@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -124,9 +125,10 @@ func TestCloudSimJoinPostsNoStagedFile(t *testing.T) {
 // TestCloudSimSplitEmitsNoStagedFile: under copy-staging, SUM_FWD's split
 // forwards GEN's file, which it staged, into each of its three chunk defs,
 // and its work dir, what an object store would receive from it, holds no
-// copy of it: each chunk def names it by reference. Each chunk stages it
-// from GEN's work dir, the join stages it from there once for all three
-// defs, and the run's total reads it through every def.
+// copy of it: each chunk def names it by reference. Each chunk and the
+// join stage it once, with GEN's output, which they stage as the split
+// does, and not again by reference, and the run's total reads it through
+// every def.
 func TestCloudSimSplitEmitsNoStagedFile(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
@@ -144,16 +146,12 @@ func TestCloudSimSplitEmitsNoStagedFile(t *testing.T) {
 		t.Errorf("the split's chunks hold (-want +got):\n%s", d)
 	}
 
-	gen := filepath.Join(dirs["N0_GEN"][0], "outs", "data", "f", "L0000")
+	gen := filepath.Join(dirs["N0_GEN"][0], "outs", "data")
 
-	for _, mn := range dirs["N1_SUM_FWD_MN"] {
-		if run := commandRun(t, mn); !strings.Contains(run, gen+" refs/1/f/L0000") {
-			t.Errorf("a chunk does not stage GEN's file by reference from %s:\n%s", gen, run)
+	for _, task := range append(slices.Clone(dirs["N1_SUM_FWD_MN"]), dirs["N1_SUM_FWD_JN"]...) {
+		if run := commandRun(t, task); strings.Count(run, gen) != 1 || !strings.Contains(run, gen+" in/u1") || strings.Contains(run, " refs/") {
+			t.Errorf("%s stages GEN's file other than once, with GEN's output %s:\n%s", task, gen, run)
 		}
-	}
-
-	if n := strings.Count(commandRun(t, dirs["N1_SUM_FWD_JN"][0]), gen+" "); n != 1 {
-		t.Errorf("the join stages GEN's file by reference %d times, want once", n)
 	}
 
 	var outs map[string]any

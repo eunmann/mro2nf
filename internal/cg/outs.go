@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -18,7 +19,8 @@ type OutsSpec struct {
 	// Values those it got as value records (Post's Values).
 	In, Values []string
 	// Refs is the dir of the leaves the task staged by reference, which
-	// the staged outs name by their origin (shim.ReadRefs).
+	// the staged outs name by their origin where none of In holds them
+	// (shim.Staged.Leaves).
 	Refs string
 	// Locations maps each staged outs bundle, and each bundle holding a
 	// leaf staged by reference, by its absolute path, to where its
@@ -41,7 +43,12 @@ type OutsSpec struct {
 // pipestance reconstructed from them. Then it writes the published tree and
 // the outs JSON naming it.
 func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
-	refs, err := shim.ReadRefs(spec.Refs)
+	staged, err := shim.NewStaged(append(slices.Clone(spec.In), spec.Refs)...)
+	if err != nil {
+		return fmt.Errorf("pipeline outs: %w", err)
+	}
+
+	refs, err := staged.Leaves()
 	if err != nil {
 		return fmt.Errorf("pipeline outs: %w", err)
 	}

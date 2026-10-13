@@ -35,8 +35,8 @@ type ArgsSpec struct {
 	// staged: of outputs, fork elements and partner elements (Post's Values
 	// and ForkValues).
 	Values []string
-	// Refs are the leaves the task staged by reference, which the items it
-	// staged name by their origin (shim.ReadRefs).
+	// Refs are the leaves the task staged, among which the references the
+	// items it staged name resolve by origin (shim.Staged.Leaves).
 	Refs shim.Refs
 	// Forks are fork records the task got as values rather than staged:
 	// those of the roots the invocation's entry values fix (DecodeElement).

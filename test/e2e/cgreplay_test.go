@@ -470,14 +470,14 @@ func (rp *cgReplay) indexRefs(base, path string) {
 }
 
 // stageRefs links the ordinal dir of each file the dirs among items name
-// by reference into dir, once each, as a task stages them,
-// <dir>/<n>/f/<ordinal>, and returns them, the n-th first.
+// by reference that lies in none of them into dir, once each, as a task
+// stages them, <dir>/<n>/f/<ordinal>, and returns them, the n-th first.
 func (rp *cgReplay) stageRefs(dir string, items []string) []string {
 	var ordinals []string
 
 	for _, it := range items {
 		for _, o := range rp.refs[it] {
-			if !slices.Contains(ordinals, o) {
+			if !slices.Contains(ordinals, o) && !slices.Contains(items, filepath.Dir(filepath.Dir(o))) {
 				ordinals = append(ordinals, o)
 			}
 		}
@@ -520,7 +520,12 @@ func (rp *cgReplay) resolve(st *syntax.CallGraphStage, items []string, refs stri
 
 	out := filepath.Join(rp.tmp, "cg", "resolved", strconv.Itoa(rp.seq))
 
-	leaves, err := shim.ReadRefs(refs)
+	staged, err := shim.NewStaged(append(slices.Clone(in), refs)...)
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	leaves, err := staged.Leaves()
 	if err != nil {
 		rp.t.Fatal(err)
 	}

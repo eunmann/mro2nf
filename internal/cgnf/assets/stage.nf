@@ -38,7 +38,8 @@ def ordered(List pairs) {
 // itemName is the name of an item's dir, the output an outs item holds,
 // and itemParent the name of the dir above it, the root or partner a fork
 // item is of; bundlesOf are the dirs of a list of items, refsOf the
-// ordinal dirs they name, each once, and recordsOf its value records.
+// ordinal dirs they name that lie in none of those dirs (unstaged), and
+// recordsOf its value records.
 def itemPath(e) {
     if (e instanceof List) {
         return itemPath(e[0])
@@ -59,7 +60,17 @@ def bundlesOf(List items) {
 }
 
 def refsOf(List items) {
-    return items.findAll { e -> e instanceof List }.collectMany { e -> e.drop(1) }.unique()
+    return unstaged(items.findAll { e -> e instanceof List }.collectMany { e -> e.drop(1) }, bundlesOf(items))
+}
+
+// unstaged is the ordinal dirs rs a task stages by reference, each once,
+// but those that lie in a dir it stages whole, ds: mre resolves a
+// reference among the files of every item the task stages, so such a file
+// would otherwise be staged twice.
+def unstaged(List rs, List ds) {
+    def whole = ds.toSet()
+    def seen = [] as Set
+    return rs.findAll { r -> !whole.contains(r.parent.parent) && seen.add(r) }
 }
 
 def recordsOf(List items) {
@@ -771,22 +782,24 @@ workflow JOIN_SOURCES {
 // chunked is each chunk a split wrote, cs, with the ordinal dirs its task
 // stages by reference: the instance's, rs, and those of the files its def
 // names by reference (mre stage -out-refs, the split's lines in table),
-// where the split task's sources, us and rs, hold them.
+// where the split task's sources, us and rs, hold them, but those in the
+// instance's items, us, which the chunk's task stages too.
 def chunked(List us, List rs, List cs, Path table) {
-    return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], (rs + refsOf([e])).unique()] }
+    return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], unstaged(rs + refsOf([e]), us)] }
 }
 
 // joinRefs are the ordinal dirs a split's join stages by reference: the
 // instance's, rs, those each chunk of chunked stages, and those of the
 // files each chunk's outs of os, [outs dir, its lines], name by reference
-// (mre stage -out-refs), where that chunk's task's sources hold them.
+// (mre stage -out-refs), where that chunk's task's sources hold them, but
+// those in the items, chunks and chunk outs the join stages.
 def joinRefs(List us, List rs, List chunked, List os) {
     def by = chunked.collectEntries { c, crs -> [(c.name): [c, crs]] }
     def outs = os.collectMany { o, lines ->
         def c = by[o.name]
         refsOf(referred([o], lines, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))
     }
-    return (rs + chunked.collectMany { e -> e[1] } + outs).unique()
+    return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })
 }
 
 // CHUNKS is a main per chunk a split returned, each scheduled with the

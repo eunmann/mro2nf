@@ -90,7 +90,7 @@ func (a *argsFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&a.digest, "digest", "", "the node's spec digest in the run's plan, which it must compile to")
 	fs.StringVar(&a.leaves, "leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 	fs.StringVar(&a.values, "values", "", "file of the upstream outputs and fork and partner elements the task got as values, whitespace-separated records a post wrote (-field-values, -fork-values)")
-	fs.StringVar(&a.refs, "refs", "", "dir of the bundle leaves the task staged by reference, each with its ordinal dir at <n>/f/<ordinal>/, which the staged items name by origin (-field-refs, -fork-refs, -out-refs)")
+	fs.StringVar(&a.refs, "refs", "", "dir of the bundle leaves the task staged by reference, each with its ordinal dir at <n>/f/<ordinal>/, which the staged items name by origin (-field-refs, -fork-refs, -out-refs) where no staged item holds them")
 	fs.Var(&a.in, "in", "staged item, or dir of staged items: instance outs bundles, fork elements and partner elements (repeatable)")
 	fs.Var(&a.forks, "fork", "a fork record passed as a value, base64 of its JSON (repeatable)")
 }
@@ -215,7 +215,7 @@ func runOuts(ctx context.Context, argv []string) error {
 	locations := fs.String("locations", "", "file of tab-separated lines: a staged outs bundle, or a -refs <n> dir, and where its producing task's work dir keeps it")
 	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 	valuesFile := fs.String("values", "", "file of the stage outputs the task got as values, whitespace-separated records a post wrote (-field-values)")
-	refs := fs.String("refs", "", "dir of the bundle leaves the task staged by reference, each with its ordinal dir at <n>/f/<ordinal>/, which the staged outs name by origin; -locations locates each <n>")
+	refs := fs.String("refs", "", "dir of the bundle leaves the task staged by reference, each with its ordinal dir at <n>/f/<ordinal>/, which the staged outs name by origin where no staged outs bundle holds them; -locations locates each <n>")
 
 	var in repeatedFlag
 
