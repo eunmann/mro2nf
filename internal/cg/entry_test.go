@@ -234,6 +234,22 @@ func TestVetHostLeaf(t *testing.T) {
 	}
 }
 
+// TestVetHostLeafRealPath: a head-node path whose real path holds the run's
+// work dir is refused, though the path as given does not.
+func TestVetHostLeafRealPath(t *testing.T) {
+	proj := t.TempDir()
+
+	link := filepath.Join(t.TempDir(), "proj")
+	if err := os.Symlink(proj, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := VetHostLeaf(EntryLeaf{Input: "reads", Value: link, InPlace: true}, true, filepath.Join(proj, "work"))
+	if !errors.Is(err, ErrEntryFile) || !strings.Contains(err.Error(), "is or holds the run's work dir") {
+		t.Errorf("vet a link to the dir holding the work dir: %v, want ErrEntryFile", err)
+	}
+}
+
 // TestStagedEntryFiles: the i-th staged entry file is read where
 // Nextflow's link points, the value's own path, as mrp passes it, or where
 // it was fetched to; a dir holding no one item fails.

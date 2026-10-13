@@ -20,15 +20,29 @@ type Roots struct {
 	except []string
 }
 
-// NewRoots are the roots at paths, each cleaned; a relative or empty path,
-// and one under another root, adds none.
-func NewRoots(paths ...string) Roots {
+// NewRoots are the roots at paths, each by its cleaned path and, once it
+// exists, its real path, which a stage output linking into it resolves to;
+// a relative or empty path, and one under another root, adds none.
+func NewRoots(paths ...string) (Roots, error) {
 	all := map[string]bool{}
 
 	for _, p := range paths {
-		if filepath.IsAbs(p) {
-			all[filepath.Clean(p)] = true
+		if !filepath.IsAbs(p) {
+			continue
 		}
+
+		all[filepath.Clean(p)] = true
+
+		resolved, err := filepath.EvalSymlinks(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+
+		if err != nil {
+			return Roots{}, fmt.Errorf("roots: resolve %s: %w", p, err)
+		}
+
+		all[resolved] = true
 	}
 
 	set := map[string]bool{}
@@ -39,7 +53,7 @@ func NewRoots(paths ...string) Roots {
 		}
 	}
 
-	return Roots{set: set}
+	return Roots{set: set}, nil
 }
 
 // Except is r holding no path in dir, spelled by its absolute path or, once

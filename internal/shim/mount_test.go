@@ -20,7 +20,12 @@ func mountedTree(t *testing.T) (shim.Roots, string, string) {
 	file := writeSelfNamed(t, filepath.Join(root, "b", "reads", "r1.fastq"))
 	writeSelfNamed(t, filepath.Join(root, "b", "ref", "genome.fa"))
 
-	return shim.NewRoots(root), file, filepath.Join(root, "b", "ref") + "/"
+	roots, err := shim.NewRoots(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return roots, file, filepath.Join(root, "b", "ref") + "/"
 }
 
 // TestMountedLeafStaysItsPath: a file leaf under a root is the same path in

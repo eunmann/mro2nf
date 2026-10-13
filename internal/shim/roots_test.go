@@ -14,7 +14,10 @@ import (
 // root's prefix nor a path climbing out of one reads as held; a relative
 // path is no root, and the zero Roots hold nothing.
 func TestRootsHolds(t *testing.T) {
-	r := shim.NewRoots("/mnt/s3", "/data/ref/", "/data/ref/genome.fa", "rel/x", "")
+	r, err := shim.NewRoots("/mnt/s3", "/data/ref/", "/data/ref/genome.fa", "rel/x", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for p, want := range map[string]bool{
 		"/mnt/s3":              true,
@@ -34,7 +37,12 @@ func TestRootsHolds(t *testing.T) {
 		}
 	}
 
-	if (shim.Roots{}).Holds("/mnt/s3/b") || shim.NewRoots().Holds("/") {
+	none, err := shim.NewRoots()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if (shim.Roots{}).Holds("/mnt/s3/b") || none.Holds("/") {
 		t.Error("no roots hold a path")
 	}
 }
@@ -54,8 +62,12 @@ func TestRootsExceptTheTaskDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	roots, err := shim.NewRoots(base).Except(link)
+	roots, err := shim.NewRoots(base)
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	if roots, err = roots.Except(link); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,6 +103,50 @@ func TestRootsExceptTheTaskDir(t *testing.T) {
 
 	if leaf, _ := readPayload(t, bundle)["out"].(string); leaf == own || !filepath.IsLocal(mustRel(t, bundle, leaf)) {
 		t.Errorf("the stage's own output reads back at %q, want a copy in the bundle", leaf)
+	}
+}
+
+// TestRootsHoldTheRealPath: a root given under a symlinked dir, as /home
+// linking to /gpfs/home makes every host path, holds its real path too, so a
+// stage output linking to the input it read in place resolves to an input,
+// which strict confinement admits.
+func TestRootsHoldTheRealPath(t *testing.T) {
+	base := t.TempDir()
+	input := writeSelfNamed(t, filepath.Join(base, "real", "ref", "genome.fa"))
+
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(filepath.Join(base, "real"), home); err != nil {
+		t.Fatal(err)
+	}
+
+	roots, err := shim.NewRoots(filepath.Join(home, "ref"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !roots.Holds(input) || !roots.Holds(filepath.Join(home, "ref", "genome.fa")) {
+		t.Fatalf("Holds: real path %t, given path %t, want both held", roots.Holds(input), roots.Holds(filepath.Join(home, "ref", "genome.fa")))
+	}
+
+	task := filepath.Join(t.TempDir(), "task")
+
+	out := filepath.Join(task, "main", "files", "ref")
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Symlink(filepath.Join(home, "ref"), out); err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := shim.ConfineStage(task, "main", true, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := filepath.Join(t.TempDir(), "outs")
+	if err := shim.WriteBundle(bundle, map[string]any{"ref": out}, fields(t, "ref path"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}); err != nil {
+		t.Fatalf("a stage output linking to an input read in place: %v", err)
 	}
 }
 

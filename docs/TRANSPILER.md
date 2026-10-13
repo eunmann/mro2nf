@@ -619,7 +619,8 @@ input (followed wherever it points, hard-linked), a path outside the task
 inside what a staged input links to, i.e. an input's real path, which a stage
 that resolves its args' paths returns (hard-linked, as the input it resolves
 from), a path under one of the run's read-only roots (§8), the S3 mount or
-an entry input every task reads in place, which the stage was given (copied
+an entry input every task reads in place, which the stage was given, by the
+path given or its real path (copied
 as a staged input; the path under the root itself, as an output, stays a
 path, so a stage returning its input's path copies nothing), or any other
 host path outside the task:

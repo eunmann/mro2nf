@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -101,7 +102,12 @@ func (g *Graph) Roots(in ReadInPlace) (shim.Roots, error) {
 		}
 	}
 
-	return shim.NewRoots(paths...), nil
+	roots, err := shim.NewRoots(paths...)
+	if err != nil {
+		return shim.Roots{}, fmt.Errorf("entry roots: %w", err)
+	}
+
+	return roots, nil
 }
 
 // entryFileValues are every file value of the call's arguments, each once,
@@ -217,19 +223,42 @@ func (g *Graph) outsEntryFiles(values map[string]int) ([]int, error) {
 // VetHostLeaf refuses a head-node path read in place where the tasks do not
 // see the host's paths, as hostPaths says they do, and one that is or holds
 // the run's work dir, workDir, whose stage outputs every task would then
-// read as an input. A workDir that is a URI holds no host path. The errors
-// name the input, not the value.
+// read as an input, by its given or its real path. A workDir that is a URI
+// holds no host path. The errors name the input, not the value.
 func VetHostLeaf(l EntryLeaf, hostPaths bool, workDir string) error {
 	if !hostPaths {
 		return fmt.Errorf("%w: entry input '%s': a head-node path is not read on this profile; pass an s3:// URI", ErrEntryFile, l.Input)
 	}
 
-	if filepath.IsAbs(workDir) && shim.NewRoots(l.Value).Holds(workDir) {
+	if !filepath.IsAbs(workDir) {
+		return nil
+	}
+
+	roots, err := shim.NewRoots(l.Value)
+	if err != nil {
+		return fmt.Errorf("%w: entry input '%s' does not resolve: %w", ErrEntryFile, l.Input, unnamed(err))
+	}
+
+	if roots.Holds(workDir) {
 		return fmt.Errorf("%w: entry input '%s' is or holds the run's work dir %s, and every task reads a head-node entry input in place; pass a directory that does not hold it, or run with -work-dir outside it",
 			ErrEntryFile, l.Input, workDir)
 	}
 
 	return nil
+}
+
+// unnamed is the cause of the failure err to resolve a value, without the
+// value it names.
+func unnamed(err error) error {
+	if pe := (*fs.PathError)(nil); errors.As(err, &pe) {
+		return pe.Err
+	}
+
+	if cause := errors.Unwrap(err); cause != nil {
+		return cause
+	}
+
+	return err
 }
 
 // VetEntryLeaf refuses an entry file value a run may not stage. file()
