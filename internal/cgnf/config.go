@@ -50,6 +50,13 @@ params.mro2nf_confine = false
 params.mro2nf_host_inputs = true
 params.mro2nf_allow_remote_inputs = false
 
+// The root under which every task's host mounts the input buckets read-only,
+// <root>/<bucket>, which the awsbatch profile sets: a stage receives an
+// s3:// entry input as its path there, as mrp passes the path it was given,
+// so a path one stage writes out names the same file in every task, and no
+// task downloads it.
+params.mro2nf_s3_mount = null
+
 // The image every task of a container profile runs in, which those
 // profiles require: one built FROM mro2nf's runtime image that holds the
 // pipeline's code at the paths it was transpiled from, or the runtime image
@@ -136,11 +143,14 @@ profiles {
     // process.queue and aws.region in a -c config, push the image to ECR
     // and name it with --mro2nf_image; --outdir s3://<bucket>/<prefix>
     // publishes to S3. The submission and transfer limits keep a wide fan-out
-    // from throttling the Batch and S3 APIs and re-run a Spot reclaim.
+    // from throttling the Batch and S3 APIs and re-run a Spot reclaim. The
+    // deploy/awsbatch-cdk instances mount the input buckets at /mnt/s3.
     awsbatch {
         process.executor = 'awsbatch'
         includeConfig 'conf/container.config'
         params.mro2nf_host_inputs = false
+        params.mro2nf_s3_mount = '/mnt/s3'
+        aws.batch.volumes = '/mnt/s3:/mnt/s3:ro'
         executor.submitRateLimit = '50/1sec'
         executor.queueSize = 1000
         aws.batch.maxParallelTransfers = 5

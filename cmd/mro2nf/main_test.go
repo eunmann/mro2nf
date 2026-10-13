@@ -46,7 +46,7 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 	}
 
 	cfg := readConfig(t, out)
-	for _, want := range []string{"params.mro2nf_mre = 'mre'", "params.mro2nf_mrjob = null", "params.mro2nf_adapters = null", "params.mro2nf_confine = false", "params.x = null"} {
+	for _, want := range []string{"params.mro2nf_mre = 'mre'", "params.mro2nf_mrjob = null", "params.mro2nf_adapters = null", "params.mro2nf_confine = false", "params.mro2nf_s3_mount = null", "params.x = null"} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
 		}

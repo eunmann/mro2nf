@@ -1,0 +1,70 @@
+filetype json;
+filetype txt;
+
+# The shape a Cell Ranger run on AWS Batch failed in: RECORD_SAMPLE writes
+# the path of the directory input it was given into a JSON output, and
+# MAKE_SHARD's split opens that path in its own task, as mrp, which passes
+# every stage the invocation's path, allows. SETUP_REF returns the reference
+# directory input, whose file the join reads. Arithmetic stubs only.
+#
+# A stage handed a copy staged into its own task records a path no other
+# task has, so the run needs inputs every task reads at one path: an s3://
+# input under the run's S3 mount (test/e2e/mount_test.go). The relative
+# default paths name nothing from a stage's job dir under either runner.
+
+struct RefInfo(
+    path reference_path,
+)
+
+stage RECORD_SAMPLE(
+    in  path    fastqs,
+    out json    sample_info,
+    src py      "stages/record_sample",
+)
+
+stage SETUP_REF(
+    in  path    reference_path,
+    out RefInfo reference_info,
+    src py      "stages/setup_ref",
+)
+
+stage MAKE_SHARD(
+    in  json    sample_info,
+    in  RefInfo reference_info,
+    out int     total,
+    src py      "stages/make_shard",
+) split (
+    in  txt     read_file,
+    out int     n,
+)
+
+pipeline MOUNTED_PATHS(
+    in  path    fastqs,
+    in  path    reference_path,
+    out int     total,
+    out RefInfo reference_info,
+)
+{
+    call RECORD_SAMPLE(
+        fastqs = self.fastqs,
+    )
+
+    call SETUP_REF(
+        reference_path = self.reference_path,
+    )
+
+    call MAKE_SHARD(
+        sample_info    = RECORD_SAMPLE.sample_info,
+        reference_info = SETUP_REF.reference_info,
+    )
+
+    return (
+        total          = MAKE_SHARD.total,
+        reference_info = SETUP_REF.reference_info,
+    )
+}
+
+call MOUNTED_PATHS(
+    fastqs         = "input/fastqs",
+    reference_path = "input/ref",
+)

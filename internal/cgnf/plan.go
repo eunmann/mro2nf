@@ -35,7 +35,7 @@ const planProcess = `process PLAN {
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)} -host-inputs=${shq(params.mro2nf_host_inputs)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)} -call call -nodes nodes -roots roots -counts counts -leaves leaves -files files
+    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)} -host-inputs=${shq(params.mro2nf_host_inputs)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)}${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''} -call call -nodes nodes -roots roots -counts counts -leaves leaves -files files
     """
 }
 

@@ -91,6 +91,9 @@ def mreStage(Map meta, phase, rest) {
     if (on(params.mro2nf_confine)) {
         cmd += ' -confine'
     }
+    if (params.mro2nf_s3_mount) {
+        cmd += " -s3-mount ${shq(params.mro2nf_s3_mount)}"
+    }
     if (meta.overrides) {
         cmd = "printf '%s\\n' ${shq(meta.overrides)} > overrides.json\n${cmd} -overrides overrides.json"
     }
