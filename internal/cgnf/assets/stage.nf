@@ -225,6 +225,10 @@ def mreStage(task, Map meta, phase, rest) {
 // one bundle per output, and the fork and partner elements they set, one
 // dir per element, or for each with no file leaf and small JSON a value
 // record; the files those dirs name by reference; and the gates they set.
+// The task emits them as one tuple, posted: [key, outs dirs, outs value
+// records, outs refs, fork dirs, fork value records, fork refs, gates]. An
+// output a node's readers do not consume still costs Nextflow's DAG an
+// edge, so each posting process has the one.
 def postFlags() {
     return '-fields outs -field-values outs_values -field-refs outs_refs -forks forks -fork-values fork_values -fork-refs fork_refs -gates gates'
 }
@@ -251,9 +255,7 @@ process STAGE {
     tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
-    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs
-    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks
-    tuple val(key), eval('cat gates'), emit: gates
+    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), eval('cat gates'), emit: posted
 
     script:
     """
@@ -318,9 +320,7 @@ process STAGE_JOIN {
     tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(chunks, stageAs: 'chunks/*', arity: '0..*'), path('chunks/join.json'), path(couts, stageAs: 'chunkouts/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
-    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs
-    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks
-    tuple val(key), eval('cat gates'), emit: gates
+    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), eval('cat gates'), emit: posted
 
     script:
     """
@@ -489,6 +489,16 @@ workflow PUBLISHED {
 // elements of its stage-fed ones, and the index token of its fork of each
 // root a zip of the node splits over. A list of positions picks those
 // entries of a key (k[at]).
+//
+// From GATE on, an instance is [join key, key, fork records, element items,
+// meta, state, additions...]: the ordinals of the roots its next join is on,
+// then what it was before GATE with its tokens replaced by its tasks' meta,
+// then its state when it was last keyed, then one addition per join since.
+// Through GATED the state is whether it is disabled and each addition a gating
+// stage's gate set (disabled); from ENABLED on, the state is the outs items it
+// has read and each addition a node's outs (readItems). GATE, REGATE, ENABLED
+// and REKEY key it again, keeping v.subList(1, 5) and folding the additions
+// into the state.
 
 // FORK extends each instance by one of its node's roots: it joins every
 // fork of the root under its own ordinals of the root's outer roots, at
@@ -578,16 +588,19 @@ workflow AFTER {
 // GATE gives each instance the meta of its node's tasks, planned from its
 // node's PLAN record and its own meta, which it carries on as its d, and
 // whether that record disables it: the whole node, or the instance's fork.
+// It keys each by its ordinals, at positions next, of the roots of the
+// gating stage its node's first GATED joins on.
 workflow GATE {
     take:
     inst
     nodes
     meta
+    next
 
     main:
     out = inst.combine(nodes).map { k, fs, es, _tk, ns, c ->
         def r = ns[meta.node]
-        [k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]
+        [k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]
     }
 
     emit:
@@ -598,83 +611,135 @@ workflow GATE {
 // once however many nodes it gates; a disabled instance posts none.
 workflow GATES {
     take:
-    gates
+    posted
     skip
 
     main:
-    out = gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[0], [].toSet()] })
+    out = posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })
 
     emit:
     out
 }
 
-// GATED disables each instance a gating stage's GATES name, joined on the
-// gating stage's roots, at positions at, by the gate's token and the
-// instance's ordinals of the gate's own roots, at positions ext.
+// disabled is whether instance v, in the wiring's layout from GATE on, is
+// disabled: as it was when it was last keyed, its state v[5], or by the gate
+// sets of each gating stage it was joined to since, its additions, each
+// gate's of gates, [ext, token], naming it by the token and its ordinals of
+// the gate's own roots, at positions ext.
+def disabled(List v, List gates) {
+    def gss = v.drop(6)
+    if (gss.size() != gates.size()) {
+        error("an instance was joined to ${gss.size()} gating stages since it was keyed, which ${gates.size()} gates name")
+    }
+    return v[5] || [gss, gates].transpose().any { gs, g -> gs.contains(g[1] + v[1][g[0]].join('.')) }
+}
+
+// GATED adds to each instance, which leads with its ordinals of a gating
+// stage's roots, the gates that stage's GATES posted there. A run of gates
+// joining on the same roots is a combine each: REGATE keys an instance
+// again only between gates joining on other roots, and it and ENABLED
+// decide it from the gates of each (disabled). A map per gate cost
+// CellRanger an edge of Nextflow's DAG per gate.
 workflow GATED {
     take:
     gated
     gates
-    at
-    ext
-    token
 
     main:
-    out = gated.map { k, fs, es, d, off -> [k[at], k, fs, es, d, off] }.combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->
-        [k, fs, es, d, off || gs.contains(token + k[ext].join('.'))]
-    }
+    out = gated.combine(gates, by: 0)
+
+    emit:
+    out
+}
+
+// REGATE keys each instance by its ordinals, at positions next, of the
+// roots of the gating stage its node's next GATED joins on, with whether
+// it is disabled so far, by the gates it was joined to since it was last
+// keyed.
+workflow REGATE {
+    take:
+    gated
+    gates
+    next
+
+    main:
+    out = gated.map { v -> [v[1][next]] + v.subList(1, 5) + [disabled(v, gates)] }
 
     emit:
     out
 }
 
 // ENABLED splits the instances the driver runs, which go on to stage what
-// they read, from those it disables, which run no task.
+// they read, from those it disables (disabled, by the gates it was joined
+// to since it was last keyed), which run no task and lead with the key the
+// gates left them. An instance it runs leads with its ordinals, at
+// positions at, of the roots its node's first READ joins on.
 workflow ENABLED {
     take:
     gated
+    gates
+    at
 
     main:
     b = gated.branch { v ->
-        skip: v[4]
+        skip: disabled(v, gates)
         run: true
     }
 
     emit:
-    run = b.run.map { k, fs, es, d, _off -> [k, fs, es, d, []] }
+    run = b.run.map { v -> [v[1][at]] + v.subList(1, 5) + [[]] }
     skip = b.skip
 }
 
-// SELECT keys each instance's outs items by its ordinals, at positions
-// theirs, of the roots a reader shares, with the outputs it reads, fields,
-// or all of them where fields is null.
-workflow SELECT {
+// selected is the items of ds of the outputs a reader reads, fields, or
+// all of them where fields is null.
+def selected(List ds, List fields) {
+    return fields == null ? ds : ds.findAll { e -> itemName(e) in fields }
+}
+
+// readItems is the outs items instance v, in the wiring's layout from GATE
+// on, read: those it was last keyed with, its state v[5], then, of the outs
+// of each node it read since, its additions, the outputs fields gives that
+// read.
+def readItems(List v, List fields) {
+    def dss = v.drop(6)
+    if (dss.size() != fields.size()) {
+        error("an instance read ${dss.size()} nodes since it was keyed, which ${fields.size()} reads name")
+    }
+    return v[5] + [dss, fields].transpose().collectMany { ds, f -> selected(ds, f) }
+}
+
+// READ adds to each instance, which leads with its ordinals of the roots
+// it shares with one node, that node's outs, keyed as ups keys them. A
+// node's outs are keyed by its whole key, which a reader sharing every
+// root of it holds, so the reader combines them as they come, and a run of
+// reads joining on the same roots is a combine each: REKEY keys an
+// instance again only between reads joining on other roots, and it and
+// INPUT pick the outputs each read reads. Each step per read cost
+// CellRanger an edge of Nextflow's DAG per read.
+workflow READ {
     take:
-    outs
-    theirs
-    fields
+    inst
+    ups
 
     main:
-    out = outs.map { ku, ds -> [ku[theirs], selected(ds, fields)] }
+    out = inst.combine(ups, by: 0)
 
     emit:
     out
 }
 
-def selected(List ds, List fields) {
-    return fields == null ? ds : ds.findAll { e -> itemName(e) in fields }
-}
-
-// READ adds to each instance the outs it reads of one node, keyed as ups
-// keys them, at its own positions mine of the roots they share.
-workflow READ {
+// REKEY keys each instance by its ordinals, at positions next, of the
+// roots its node's next READ joins on, with the outs items it read so far,
+// of the outputs fields gives each read since it was last keyed.
+workflow REKEY {
     take:
     inst
-    ups
-    mine
+    fields
+    next
 
     main:
-    out = inst.map { k, fs, es, d, us -> [k[mine], k, fs, es, d, us] }.combine(ups, by: 0).map { _c, k, fs, es, d, us, ds -> [k, fs, es, d, us + ds] }
+    out = inst.map { v -> [v[1][next]] + v.subList(1, 5) + [readItems(v, fields)] }
 
     emit:
     out
@@ -693,7 +758,7 @@ workflow GATHER {
     fields
 
     main:
-    seeds = run.map { v -> [v[0][mine], null] }.unique()
+    seeds = run.map { v -> [v[1][mine], null] }.unique()
     out = seeds.mix(outs.map { ku, ds -> [ku[theirs], selected(ds, fields).collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->
         [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]
     }
@@ -711,16 +776,26 @@ def planned(Map shared, Map meta, List d) {
     return shared + [node: meta.node, cpus: d[3] as int, mem_gb: d[4] as double, overrides: d[5] == '-' ? '' : d[5], special: meta.special, digest: d[0]]
 }
 
-// INPUT is each enabled instance as a stage process takes it, with the
-// meta GATE planned for it, the value records of its elements and of the
-// outs it reads apart from the dirs it stages and the files those name by
-// reference, and the call file it stages, if any; it stages no entry file.
+// inputOf is instance v as a stage process takes it, with the meta GATE
+// planned for it, the value records of its elements and of the outs it
+// read (readItems, of the outputs fields gives each read since it was last
+// keyed) apart from the dirs it stages and the files those name by
+// reference, the entry files it stages and their indices, and the call
+// file it stages, if any.
+def inputOf(List v, List fields, List ids, List entries) {
+    def items = v[3] + readItems(v, fields)
+    return [v[4], v[1], v[2], recordsOf(items), bundlesOf(items), refsOf(items), ids, entries, callStaged(v[4])]
+}
+
+// INPUT is each enabled instance as a stage process takes it, staging no
+// entry file.
 workflow INPUT {
     take:
     inst
+    fields
 
     main:
-    out = inst.map { k, fs, es, d, us -> [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)] }
+    out = inst.map { v -> inputOf(v, fields, [], []) }
 
     emit:
     out
@@ -734,22 +809,18 @@ workflow INPUT_ENTRY {
     inst
     entry
     at
+    fields
 
     main:
-    out = inst.combine(entry).map { k, fs, es, d, us, ef ->
-        def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []
-        [d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]
+    out = inst.combine(entry).map { ve ->
+        def v = ve.dropRight(1)
+        def ef = ve[-1]
+        def ids = ef.files[v[4].node + ' ' + (v[1][at].join('.') ?: '-')] ?: []
+        inputOf(v, fields, ids, ids.collect { x -> ef.leaves[x] })
     }
 
     emit:
     out
-}
-
-// staged is an instance the split process takes, by its key, with what the
-// task stages to build its args: [key, fork records, value records, staged
-// items, files staged by reference, entry indices, entry files].
-def staged(List v) {
-    return v.subList(1, 8)
 }
 
 // SOURCES is each instance a non-split stage's process takes, input, by
@@ -802,16 +873,32 @@ def joinRefs(List us, List rs, List chunked, List os) {
     return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })
 }
 
-// CHUNKS is a main per chunk a split returned, each scheduled with the
-// resources its job gets, from the split's resources table, and staging
-// the split's inputs, input, and the files its def names by reference.
-workflow CHUNKS {
+// SPLITS joins what each instance's split returned, split, to what its
+// split task staged, input, both by the instance's key at position 1:
+// [key, meta, chunk defs, join def, resources table, chunk refs, then the
+// input past its key], which its chunks and its join each read, so the
+// join is made once for both.
+workflow SPLITS {
     take:
     split
     input
 
     main:
-    out = split.map { m, k, cs, _j, res, t -> [k, m, cs, res, t] }.join(input.map { v -> staged(v) }).flatMap { k, m, cs, res, t, fs, vs, us, rs, ids, ef ->
+    out = split.join(input, by: 1)
+
+    emit:
+    out
+}
+
+// CHUNKS is a main per chunk a split returned, each scheduled with the
+// resources its job gets, from the split's resources table, and staging
+// the split's inputs and the files its def names by reference.
+workflow CHUNKS {
+    take:
+    splits
+
+    main:
+    out = splits.flatMap { k, m, cs, _j, res, t, _d, fs, vs, us, rs, ids, ef, _cf ->
         def r = resources(res)
         chunked(us, rs, cs, t).collect { c, crs -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, crs, ids, ef, c.name, c, callStaged(m)] }
     }
@@ -822,19 +909,18 @@ workflow CHUNKS {
 
 // JOIN is a split's join over every chunk's outs once all are in, by chunk
 // name, not by completion, scheduled with the resources the split gave it,
-// and staging the split's inputs, input, and the files its chunks' defs
-// and outs name by reference.
+// and staging the split's inputs and the files its chunks' defs and outs
+// name by reference.
 workflow JOIN {
     take:
-    split
+    splits
     chunk
-    input
 
     main:
     outs = chunk.map { m, k, o, recs -> [groupKey(k, m.chunks), [o, recs]] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }
-    none = split.filter { v -> v[2].isEmpty() }.map { v -> [v[1], []] }
-    out = split.map { m, k, cs, j, res, t -> [k, m + resources(res).join, cs, j, t] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, t, fs, vs, us, rs, ids, ef, os ->
-        [m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]
+    none = splits.filter { v -> v[2].isEmpty() }.map { v -> [v[0], []] }
+    out = splits.join(outs.mix(none)).map { k, m, cs, j, res, t, _d, fs, vs, us, rs, ids, ef, _cf, os ->
+        [m + resources(res).join, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]
     }
 
     emit:
@@ -854,18 +940,21 @@ workflow DONE {
     out
 }
 
-// POSTED is a node's outs or forks, each instance's dirs and value records
-// as one list of items, a disabled instance standing in with none. A dir
-// names a file by reference where its producer wrote it, which POSTED finds
-// among the sources of the instance's posting task (SOURCES), by its key.
+// POSTED is a node's outs, or its forks, each instance's dirs and value
+// records as one list of items, a disabled instance standing in with none:
+// the dirs, value records and refs at positions at to at + 2 of what its
+// task posted. A dir names a file by reference where its producer wrote
+// it, which POSTED finds among the sources of the instance's posting task
+// (SOURCES), by its key.
 workflow POSTED {
     take:
     posted
     skip
     sources
+    at
 
     main:
-    all = posted.join(sources).map { k, ds, vs, rs, src -> [k, referred(ds, rs, src) + vs.tokenize(' ')] }.mix(skip.map { v -> [v[0], []] })
+    all = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
 
     emit:
     all

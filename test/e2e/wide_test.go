@@ -4,8 +4,10 @@ package e2e
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/test/wide"
@@ -20,6 +22,62 @@ func TestWidePipelineRuns(t *testing.T) {
 	t.Parallel()
 
 	runWide(t, wide.New(32, 150, 0))
+}
+
+// TestLaunchEdges (#559): Nextflow adds each edge of its DAG in time
+// linear in the edges before it (DAG.findEdge), so its launch is quadratic
+// in them, and a few edges per data dependency of a pipeline (a read, a
+// gate, a fork root, a split's phases, an output) cost CellRanger's
+// -preview seconds per hundred. The bounds are the edges -preview builds,
+// operators included (dag.verbose), under Nextflow 25.10 and 26.04 alike,
+// of the wide pipeline and of cellranger_shaped, which were 1,221 and 346
+// before #559: an edge more per dependency fails them.
+func TestLaunchEdges(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	dir := t.TempDir()
+	if err := wide.New(2, 3, 10).Write(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct {
+		name, dir string
+		bound     int
+	}{
+		{"wide", dir, 950},
+		{"cellranger_shaped", filepath.Join(root, "testdata", "cellranger_shaped"), 267},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := launchEdges(t, transpileDir(t, c.dir)); got > c.bound {
+				t.Errorf("-preview builds %d edges, want at most %d", got, c.bound)
+			}
+		})
+	}
+}
+
+// launchEdges is the edges of the DAG Nextflow builds to launch proj,
+// operators included.
+func launchEdges(t *testing.T, proj string) int {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(proj, "verbose.config"), []byte("dag.verbose = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := execNextflow(t, proj, []string{"-preview", "-c", "verbose.config", "-with-dag", "dag.mmd"}); err != nil {
+		t.Fatalf("nextflow run -preview: %v", err)
+	}
+
+	dag, err := os.ReadFile(filepath.Join(proj, "dag.mmd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.Count(string(dag), "-->")
 }
 
 // TestEntryRootsMatchMrp (#509): a pipeline of 300 entry-fed fork roots

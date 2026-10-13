@@ -43,6 +43,14 @@ func forksOf(i int) string { return "o" + strconv.Itoa(i) + "_forks" }
 func gatesOf(i int) string { return "o" + strconv.Itoa(i) + "_gates" }
 func doneOf(i int) string  { return "d" + strconv.Itoa(i) }
 
+// The positions of a node's outs dirs and of its fork dirs in what its
+// posting task emits (stage.nf postFlags), each before their value records
+// and refs.
+const (
+	postedOuts  = 1
+	postedForks = 4
+)
+
 // entryForks is the channel of PLAN's record of the forks of every
 // entry-fed root, a map by root.
 const entryForks = "entry_forks"
@@ -67,16 +75,22 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 
 	w := &wiring{}
 	w.linef("// %s", n.Fqid)
-	p.gate(w, i, n, p.instances(w, i, n), meta)
 
-	run := fmt.Sprintf("b%d.run", i)
-	for _, r := range n.Reads {
-		w.linef("u%d = READ(%s, %s)", i, run, p.read(w, i, n, r))
-		run = "u" + strconv.Itoa(i)
+	reads := make([]readArgs, len(n.Reads))
+	for x, r := range n.Reads {
+		reads[x] = p.read(w, i, n, r)
 	}
 
+	first := "[]"
+	if len(reads) > 0 {
+		first = reads[0].mine
+	}
+
+	p.gate(w, i, n, p.instances(w, i, n), meta, first)
+
+	run, fields := readAll(w, i, reads)
 	proc := alias(i, n.Fqid)
-	in := p.input(w, n, run)
+	in := p.input(w, n, run, fields)
 
 	sources := fmt.Sprintf("SOURCES(n%d)", i)
 	if n.Split {
@@ -91,7 +105,7 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 
 	if holds := p.holdsAt(i); len(holds) > 0 {
 		done := w.def(doneOf(i))
-		w.linef("%s = DONE(%s.out.outs)", done, proc)
+		w.linef("%s = DONE(%s.out.posted)", done, proc)
 
 		for _, h := range holds {
 			w.linef("%s = AFTER(%s, %s)", w.def(nodesAfter(h)), w.use(nodesAfter(h[:len(h)-1])), done)
@@ -104,27 +118,52 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	}
 
 	for _, o := range []struct {
-		used      bool
-		name, out string
-	}{{outs, outsOf(i), "outs"}, {forks, forksOf(i), "forks"}} {
+		used bool
+		name string
+		at   int
+	}{{outs, outsOf(i), postedOuts}, {forks, forksOf(i), postedForks}} {
 		if o.used {
-			w.linef("%s = POSTED(%s.out.%s, b%d.skip, r%d)", w.def(o.name), proc, o.out, i, i)
+			w.linef("%s = POSTED(%s.out.posted, b%d.skip, r%d, %d)", w.def(o.name), proc, i, i, o.at)
 		}
 	}
 
 	if gates {
-		w.linef("%s = GATES(%s.out.gates, b%d.skip)", w.def(gatesOf(i)), proc, i)
+		w.linef("%s = GATES(%s.out.posted, b%d.skip)", w.def(gatesOf(i)), proc, i)
 	}
 
 	return w, nil
 }
 
+// readAll wires node i's reads of its enabled instances: a READ each, and
+// a REKEY before each that joins on other roots than the read before it.
+// It returns the channel of the instances with every read, and the fields
+// of the reads since they were last keyed.
+func readAll(w *wiring, i int, reads []readArgs) (string, string) {
+	run := fmt.Sprintf("b%d.run", i)
+
+	since := make([]string, 0, len(reads))
+
+	for x, r := range reads {
+		if x > 0 && r.mine != reads[x-1].mine {
+			run = fmt.Sprintf("REKEY(%s, [%s], %s)", run, strings.Join(since, ", "), r.mine)
+			since = since[:0]
+		}
+
+		w.linef("u%d = READ(%s, %s)", i, run, r.src)
+		run = "u" + strconv.Itoa(i)
+		since = append(since, r.fields)
+	}
+
+	return run, "[" + strings.Join(since, ", ") + "]"
+}
+
 // input is the channel of node i's enabled instances, run, as its process
-// takes them, each with the entry files it reads: those PLAN lists for its
-// fork of the node's entry-fed roots.
-func (p *project) input(w *wiring, n cg.TopoNode, run string) string {
+// takes them, with the outputs fields gives each read since they were last
+// keyed, each with the entry files it reads: those PLAN lists for its fork
+// of the node's entry-fed roots.
+func (p *project) input(w *wiring, n cg.TopoNode, run, fields string) string {
 	if !p.readers[n.Fqid] {
-		return fmt.Sprintf("INPUT(%s)", run)
+		return fmt.Sprintf("INPUT(%s, %s)", run, fields)
 	}
 
 	var at []int
@@ -135,7 +174,7 @@ func (p *project) input(w *wiring, n cg.TopoNode, run string) string {
 		}
 	}
 
-	return fmt.Sprintf("INPUT_ENTRY(%s, %s, %s)", run, w.use("entry"), ilist(at))
+	return fmt.Sprintf("INPUT_ENTRY(%s, %s, %s, %s)", run, w.use("entry"), ilist(at), fields)
 }
 
 // instances is the expression of node i's instances: root by root, each
@@ -275,29 +314,56 @@ func (p *project) elements(w *wiring, r cg.TopoRoot) string {
 // by the instance's ordinals of the gate's own roots. Each instance carries
 // on as its d the meta of its tasks, planned from the record and the
 // node's own meta. PLAN's records reach it once its preflights are done,
-// so no instance of it is gated before.
-func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta string) {
-	gated := fmt.Sprintf("GATE(%s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), meta)
-
-	for _, gp := range n.Gates {
-		w.linef("g%d = %s", i, gated)
-
-		q := p.index[gp.Node]
-		gated = fmt.Sprintf("GATED(g%d, %s, %s, %s, %s)", i, w.use(gatesOf(q)), ilist(positions(n.Roots, p.topo.Nodes[q].Roots)),
-			ilist(positions(n.Roots, gp.Roots)), gstr(cg.GateToken(n.Fqid, gp, "")))
+// so no instance of it is gated before. An instance is keyed by its
+// ordinals of the roots of the stage its first gate joins on, and again,
+// by REGATE, only before a gate joining on other roots; an enabled
+// instance leads with its ordinals, at positions at, of the roots its
+// first read joins on.
+func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst, meta, at string) {
+	keys := make([]string, len(n.Gates))
+	for x, gp := range n.Gates {
+		keys[x] = ilist(positions(n.Roots, p.topo.Nodes[p.index[gp.Node]].Roots))
 	}
 
-	w.linef("b%d = ENABLED(%s)", i, gated)
+	first := "[]"
+	if len(keys) > 0 {
+		first = keys[0]
+	}
+
+	gated := fmt.Sprintf("GATE(%s, %s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), meta, first)
+	since := make([]string, 0, len(n.Gates))
+
+	for x, gp := range n.Gates {
+		w.linef("g%d = %s", i, gated)
+
+		in := fmt.Sprintf("g%d", i)
+		if x > 0 && keys[x] != keys[x-1] {
+			in = fmt.Sprintf("REGATE(%s, [%s], %s)", in, strings.Join(since, ", "), keys[x])
+			since = since[:0]
+		}
+
+		gated = fmt.Sprintf("GATED(%s, %s)", in, w.use(gatesOf(p.index[gp.Node])))
+		since = append(since, fmt.Sprintf("[%s, %s]", ilist(positions(n.Roots, gp.Roots)), gstr(cg.GateToken(n.Fqid, gp, ""))))
+	}
+
+	w.linef("b%d = ENABLED(%s, [%s], %s)", i, gated, strings.Join(since, ", "), at)
 }
 
-// read is the channel of the outs items each enabled instance of node i
-// reads of node r.Node, keyed by the roots they share, with those roots'
-// positions in node i's key: from the instance agreeing on every root they
-// share, or, when the upstream is forked on roots node i is not, every
-// such instance, a gather ordered by the upstream's key, not by completion,
-// which waits for all of the upstream, as mrp waits for every fork of a
-// node a node reads.
-func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
+// readArgs is what an instance reads of one node: the channel READ
+// combines, the positions in the reader's key of the roots that channel is
+// keyed by, and the outputs it reads of its items.
+type readArgs struct {
+	src, mine, fields string
+}
+
+// read is what READ takes for each enabled instance of node i to read of
+// node r.Node. The channel is the upstream's outs, keyed by its whole key,
+// when node i shares every root of it, or, when the upstream is forked on
+// roots node i is not, a gather of the outputs it reads of every such
+// instance, ordered by the upstream's key, not by completion, which waits
+// for all of the upstream, as mrp waits for every fork of a node a node
+// reads.
+func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) readArgs {
 	u := p.index[r.Node]
 
 	var mine, theirs []int
@@ -312,29 +378,39 @@ func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) string {
 		}
 	}
 
-	fields := "null"
-	if r.Fields != nil {
-		fields = glist(r.Fields)
-	}
+	fields := fieldsArg(r.Fields)
 
 	outs := w.use(outsOf(u))
-
-	src := fmt.Sprintf("SELECT(%s, %s, %s)", outs, ilist(theirs), fields)
 	if gather {
-		src = fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s)", i, outs, ilist(mine), ilist(theirs), fields)
+		return readArgs{fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s)", i, outs, ilist(mine), ilist(theirs), fields), ilist(mine), allFields}
 	}
 
-	return src + ", " + ilist(mine)
+	return readArgs{outs, ilist(mine), fields}
+}
+
+// allFields is the fields argument of a step that takes every output.
+const allFields = "null"
+
+// fieldsArg is the fields argument of a step that takes the outputs
+// fields, every output where fields is nil.
+func fieldsArg(fields []string) string {
+	if fields == nil {
+		return allFields
+	}
+
+	return glist(fields)
 }
 
 // splitTriad runs split node i's instances, in: its split, a main per
 // chunk the split returned, and its join over every chunk's outs, j<i>,
-// each task staging the instance's inputs.
+// each task staging the instance's inputs, which the chunks and the join
+// read joined to the split's outputs once, x<i>.
 func splitTriad(w *wiring, i int, proc, in string) {
 	w.incs = append(w.incs, fmt.Sprintf("STAGE_SPLIT as %[1]s_SP ; STAGE_MAIN as %[1]s_MN ; STAGE_JOIN as %[1]s_JN", proc))
 	w.linef("s%d = %s", i, in)
 	w.linef("%s_SP(s%d)", proc, i)
-	w.linef("%[1]s_MN(CHUNKS(%[1]s_SP.out.split, s%[2]d))", proc, i)
-	w.linef("j%[2]d = JOIN(%[1]s_SP.out.split, %[1]s_MN.out.chunk, s%[2]d)", proc, i)
+	w.linef("x%[2]d = SPLITS(%[1]s_SP.out.split, s%[2]d)", proc, i)
+	w.linef("%[1]s_MN(CHUNKS(x%[2]d))", proc, i)
+	w.linef("j%[2]d = JOIN(x%[2]d, %[1]s_MN.out.chunk)", proc, i)
 	w.linef("%[1]s_JN(j%[2]d)", proc, i)
 }

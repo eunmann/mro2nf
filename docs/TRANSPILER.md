@@ -165,8 +165,11 @@ phase's job as `mrp` runs it, resolving the instance's args before it in
 every task, and posting its outs after it in a join and a non-split stage's
 main. A split's chunk mains and join stage the split's inputs, the same
 instance tuple, and build its args again. Each process declares only the
-outputs its consumers stage; the steps of a call hand each other the
-instance, its args and its outs in memory. `stage.nf` also
+outputs its consumers stage, as one output: a posting process emits its
+outs, forks and gates as one tuple (`posted`), since Nextflow's DAG holds
+an edge per declared output whether a node reads it or not (602 of
+CellRanger's edges were outputs no node read). The steps of a call hand
+each other the instance, its args and its outs in memory. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_ROOT`) and that take a node's
 instances through each step of it (`FORK`, `ZIP`, `GATE`, `ENABLED`, `READ`, `GATHER`,
@@ -349,20 +352,39 @@ waits for, each set after the one it extends, and a node gates on the records
 held for its own. Nextflow adds each edge of its DAG in time linear in the
 edges before it, so a wait per node, which cost CellRanger three edges per node
 and preflight, would make the launch quadratic in the nodes; this costs a few
-edges per preflight (`TestEmitWaitsOncePerPreflight`).
+edges per preflight (`TestEmitWaitsOncePerPreflight`). `TestLaunchEdges`
+bounds the edges `-preview` builds for a wide pipeline and
+`cellranger_shaped`, so an edge more per data dependency fails it.
 
 **Gates.** A node's gates are decided on the driver: PLAN's record and each
 gating stage's posted `gates` (an `eval` output), joined on the roots they
 share. Each is parsed once into a set of the fork keys or gate tokens it
 disables, PLAN's per node (`NODES`) and a gating instance's however many
 nodes it gates (`GATES`), so an instance's gate is a lookup, not a scan of
-its node's N forks. A disabled instance runs no task and stands in with no
+its node's N forks. `GATE` keys each instance by its ordinals of the roots
+of the stage its node's first gate joins on, and a gate is one combine
+(`GATED`), which adds the gates that stage posted there. `REGATE` keys the
+instance again, deciding it from the gates since (`disabled`), only before
+a gate joining on other roots, and `ENABLED` decides it from the last, as
+`REKEY` and `INPUT` do a node's reads (**Reads**): a map per gate to key
+the instance cost CellRanger 831 edges of its DAG. A disabled instance runs no task and stands in with no
 outs and no forks; Martian's call graph already reads its outputs as null in
 every consumer.
 
 **Reads.** An enabled instance gets, of each node it reads, only the outputs
 it reads: from the instance that shares its roots, or, a gather, from every
-such instance under it. An output of a type that holds no file leaf, whose
+such instance under it. A node's outs are keyed by its whole key, which an
+instance sharing every root of it holds, so `READ` combines the node's outs
+channel as it comes: a step keying or selecting them per read cost
+CellRanger 1,263 edges of Nextflow's DAG, whose launch is quadratic in its
+edges (**Preflights**). An enabled instance leads with its ordinals of the
+roots its node's first read joins on (`ENABLED`), and a read is one
+combine, which adds the node's outs after what the instance read before.
+`REKEY` keys the instance again, with the outputs each read since reads
+(`readItems`), only before a read joining on other roots, and the
+process's `INPUT` picks those of the reads after it, so a run of reads on
+the same roots costs no map per read, where a map per read cost
+CellRanger 2,439 edges more. An output of a type that holds no file leaf, whose
 JSON is at most 4 KiB (`cg.MaxValueBytes`), reaches it as a value: a record
 its producer posted (`-field-values`), an `eval` output, that the driver
 carries in its channels and the task writes into a file for `mre stage
@@ -394,8 +416,8 @@ dir. A task's records come on one line, space-separated, so an `eval`
 output of them, whose records grow with a join's chunks or a fork root's
 forks, is collected in time linear in them. A split's come in a file,
 `chunk_refs`, beside `resources.tsv`, a chunk's as an `eval` output:
-`CHUNKS` and `JOIN`, which already join the split's outputs to the
-instance's staged items, resolve them against the
+`CHUNKS` and `JOIN`, which read the split's outputs joined to the
+instance's staged items (`SPLITS`), resolve them against the
 paths the split, and each chunk, staged its items from (`chunked`,
 `joinRefs`), so each chunk stages the files its def names and the join
 those every chunk's def and outs name. A reader, OUTS included, stages
@@ -421,7 +443,10 @@ like any other output (`TaskFileCollector`,
 bundle holds its files below a dir of its own. A file inside a staged
 directory leaf and an entry file are still copies.
 
-**Split stages.** A split's chunk outs are gathered by `groupKey` over the
+**Split stages.** A split's outputs are joined once to the instance its
+task staged, by the key both hold at position 1 (`SPLITS`), and its chunks'
+mains and its join read that join: joining them anew for each, through a
+map of either side, cost CellRanger 6 DAG edges per split stage. A split's chunk outs are gathered by `groupKey` over the
 chunk count. Each chunk's main and the join are scheduled with the cpus, memory
 and special their jobs get, the split's `resources.tsv`, a file the driver
 reads into rows without parsing a record, not an `eval` value, whose

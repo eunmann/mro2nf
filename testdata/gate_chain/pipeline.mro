@@ -1,0 +1,90 @@
+# A call gated by two stages, each on its own roots: a map call over a
+# sub-pipeline is disabled by a flag no fork shares (OUTER), and the
+# sub-pipeline's WORK by a flag each fork computes (INNER), so the driver
+# joins WORK's instances with OUTER's gates at no fork and then with
+# INNER's at their own. Then WORK reads a stage of its own fork and one
+# no fork shares, so its instances are keyed for one read and then the
+# next. OUTER holds every fork enabled; INNER disables WORK at its odd
+# forks, which read null.
+stage FLAG(
+    in  int  x,
+    out bool off,
+    src py   "stages/flag",
+)
+
+stage WORK(
+    in  int x,
+    in  int y,
+    in  int z,
+    out int w,
+    src py  "stages/work",
+)
+
+stage ADD(
+    in  int x,
+    out int y,
+    src py  "stages/add",
+)
+
+pipeline INNER(
+    in  int x,
+    in  int z,
+    out int w,
+)
+{
+    call FLAG(
+        x = self.x,
+    )
+
+    call ADD(
+        x = self.x,
+    )
+
+    call WORK(
+        x = self.x,
+        y = ADD.y,
+        z = self.z,
+    ) using (
+        disabled = FLAG.off,
+    )
+
+    return (
+        w = WORK.w,
+    )
+}
+
+pipeline GATE_CHAIN(
+    in  int   x,
+    in  int[] xs,
+    out int[] ws,
+)
+{
+    call FLAG as OUTER(
+        x = self.x,
+    )
+
+    call ADD as BASE(
+        x = self.x,
+    )
+
+    map call INNER(
+        x = split self.xs,
+        z = BASE.y,
+    ) using (
+        disabled = OUTER.off,
+    )
+
+    return (
+        ws = INNER.w,
+    )
+}
+
+call GATE_CHAIN(
+    x  = 2,
+    xs = [
+        1,
+        2,
+        3,
+        4,
+    ],
+)

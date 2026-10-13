@@ -253,8 +253,8 @@ func TestEmitOrdersGathers(t *testing.T) {
 	gather := readTree(t, emitFixture(t, "fork_mid"))["main.nf"]
 
 	for _, c := range []struct{ fixture, main, want string }{
-		{"split_test", split, "j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)\n    N0_SUM_SQUARES_JN(j0)"},
-		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']), [])"},
+		{"split_test", split, "j0 = JOIN(x0, N0_SUM_SQUARES_MN.out.chunk)\n    N0_SUM_SQUARES_JN(j0)"},
+		{"fork_mid", gather, "u1 = READ(b1.run, GATHER(b1.run, o0_outs, [], [], ['scaled']))\n    n1 = INPUT(u1, [null])"},
 		{"split_test", split, "    outs_pub = channel.empty().mix(PUBLISHED(o0_outs, 0, ['sum']))\n    outs_in = outs_pub.toList().map { xs -> ordered(xs) }"},
 	} {
 		if !strings.Contains(c.main, c.want) {
@@ -282,7 +282,7 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_outs = POSTED(N0_GEN.out.outs, b0.skip, r0)",
+		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
 		"outs_files = outs_in.map { xs -> bundlesOf(xs) }",
 		", outs_in.map { xs -> recordsOf(xs) }, ",
 	} {
@@ -292,9 +292,8 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs",
 		"'-fields outs -field-values outs_values -field-refs outs_refs -forks forks -fork-values fork_values -fork-refs fork_refs -gates gates'",
-		"posted.join(sources).map { k, ds, vs, rs, src -> [k, referred(ds, rs, src) + vs.tokenize(' ')] }",
+		"posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }",
 		"ds.findAll { e -> itemName(e) in fields }",
 		"keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1])",
 		"return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')",
@@ -307,8 +306,38 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 		}
 	}
 
-	if n := strings.Count(stageModule, "eval('cat outs_values'), eval('cat outs_refs'), emit: outs"); n != 2 {
+	if n := strings.Count(stageModule, postedOutput); n != 2 {
 		t.Errorf("%d processes emit value records, want STAGE's and STAGE_JOIN's", n)
+	}
+}
+
+// postedOutput is the one output of a posting process: its outs dirs,
+// value records and refs, its fork dirs, value records and refs, and its
+// gates.
+const postedOutput = "tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), " +
+	"path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), eval('cat gates'), emit: posted"
+
+// TestEmitPostsOneOutput (#559): every output a process declares costs
+// Nextflow's DAG an edge, consumed or not, and most nodes' forks and
+// gates, and some nodes' outs, have no reader, which cost CellRanger 602
+// edges; so a posting process emits its outs, forks and gates as one
+// tuple, which POSTED, GATES and DONE read (diamond_min: GEN's outs;
+// zip_runtime: TWO's forks; split_gate_entry: SRC's gates;
+// preflight_order: TOP_CHECK's DONE).
+func TestEmitPostsOneOutput(t *testing.T) {
+	if n := strings.Count(stageModule, "emit: "); n != 4 {
+		t.Errorf("stage.nf's processes declare %d outputs, want one of each of STAGE, STAGE_SPLIT, STAGE_MAIN and STAGE_JOIN", n)
+	}
+
+	for fixture, want := range map[string]string{
+		"diamond_min":      "o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
+		"zip_runtime":      "o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
+		"split_gate_entry": "o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
+		"preflight_order":  "d0 = DONE(N0_TOP_CHECK.out.posted)",
+	} {
+		if main := wiringNF(readTree(t, emitFixture(t, fixture))); !strings.Contains(main, want) {
+			t.Errorf("%s's wiring lacks %q:\n%s", fixture, want, main)
+		}
 	}
 }
 
@@ -323,7 +352,7 @@ func TestEmitCarriesValueElements(t *testing.T) {
 	main := readTree(t, emitFixture(t, "zip_runtime"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_forks = POSTED(N0_TWO.out.forks, b0.skip, r0)",
+		"o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
 		"ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false)",
 		"ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
 	} {
@@ -336,15 +365,14 @@ func TestEmitCarriesValueElements(t *testing.T) {
 		"ds.findAll { e -> itemParent(e) == root }",
 		"def name = itemName(e)",
 		"ds.findAll { e -> itemParent(e) == partner }.collectEntries { e -> [(itemName(e)): e] }",
-		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)]",
-		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
+		"def items = v[3] + readItems(v, fields)\n    return [v[4], v[1], v[2], recordsOf(items), bundlesOf(items), refsOf(items), ids, entries, callStaged(v[4])]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
 		}
 	}
 
-	if n := strings.Count(stageModule, "tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks"); n != 2 {
+	if n := strings.Count(stageModule, postedOutput); n != 2 {
 		t.Errorf("%d processes emit element value records, want STAGE's and STAGE_JOIN's", n)
 	}
 
@@ -398,8 +426,7 @@ func TestEmitCarriesTheCall(t *testing.T) {
 		"return meta.call instanceof Path ? '' : \"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"",
 		"return meta.call instanceof Path ? [meta.call] : []",
 		"\"${code(meta, root)} -call call.b64\"",
-		"refsOf(es + us), [], [], callStaged(d)]",
-		"ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
+		"refsOf(items), ids, entries, callStaged(v[4])]",
 		"c.name, c, callStaged(m)] }",
 		"ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
@@ -479,17 +506,24 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
 
 	for _, want := range []string{
-		"s0 = INPUT(b0.run)",
+		"s0 = INPUT(b0.run, [])",
 		"N0_SUM_SQUARES_SP(s0)",
-		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
-		"j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)",
-		"N0_SUM_SQUARES_JN(j0)",
+		splitTriad0,
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("split_test's main.nf lacks %q:\n%s", want, main)
 		}
 	}
 }
+
+// splitTriad0 is the wiring of node 0's split, its chunks' mains and its
+// join, past the split's call: the chunks and the join read the split's
+// outputs joined to its input once (#559), which cost CellRanger 6 edges
+// of Nextflow's DAG per split stage when each joined them anew.
+const splitTriad0 = "    x0 = SPLITS(N0_SUM_SQUARES_SP.out.split, s0)\n" +
+	"    N0_SUM_SQUARES_MN(CHUNKS(x0))\n" +
+	"    j0 = JOIN(x0, N0_SUM_SQUARES_MN.out.chunk)\n" +
+	"    N0_SUM_SQUARES_JN(j0)\n"
 
 // TestEmitSizesChunksAndJoin: each chunk's main and the join are scheduled
 // with the resources their jobs get, the split's resources table, a value
@@ -498,18 +532,13 @@ func TestEmitSplitTasksBuildTheirArgs(t *testing.T) {
 func TestEmitSizesChunksAndJoin(t *testing.T) {
 	main := readTree(t, emitFixture(t, "join_resources"))["main.nf"]
 
-	for _, want := range []string{
-		"N0_SUM_SQUARES_MN(CHUNKS(N0_SUM_SQUARES_SP.out.split, s0))",
-		"j0 = JOIN(N0_SUM_SQUARES_SP.out.split, N0_SUM_SQUARES_MN.out.chunk, s0)",
-	} {
-		if !strings.Contains(main, want) {
-			t.Errorf("join_resources's main.nf lacks %q:\n%s", want, main)
-		}
+	if !strings.Contains(main, splitTriad0) {
+		t.Errorf("join_resources's main.nf lacks %q:\n%s", splitTriad0, main)
 	}
 
 	for _, want := range []string{
 		"def r = resources(res)\n        chunked(us, rs, cs, t).collect { c, crs -> [m + r[c.name] + [chunks: cs.size()], k, fs, vs, us, crs, ids, ef, c.name, c, callStaged(m)] }",
-		"split.map { m, k, cs, j, res, t -> [k, m + resources(res).join, cs, j, t] }",
+		"[m + resources(res).join, k, fs, vs, us, joinRefs(",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -532,7 +561,7 @@ func TestEmitSplitNamesFilesByReference(t *testing.T) {
 		"return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], unstaged(rs + refsOf([e]), us)] }",
 		"refsOf(referred([o], recs, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))",
 		"return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })",
-		"[m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
+		"joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -582,7 +611,7 @@ func TestEmitSizesNodesUnderOverrides(t *testing.T) {
 		},
 		"stage.nf": {
 			"${cmd} -overrides overrides.json",
-			"[k, fs, es, planned(c, meta, r), r[1] == '1'",
+			"[k[next], k, fs, es, planned(c, meta, r), r[1] == '1'",
 			"cpus: d[3] as int, mem_gb: d[4] as double, overrides: d[5] == '-' ? '' : d[5], special: meta.special, digest: d[0]]",
 		},
 	} {
@@ -657,7 +686,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 
 	for _, want := range []string{
 		"entry = ENTRY(PLAN.out.files, PLAN.out.leaves)",
-		"n0 = INPUT_ENTRY(b0.run, entry, [])",
+		"n0 = INPUT_ENTRY(b0.run, entry, [], [])",
 	} {
 		if !strings.Contains(arr, want) {
 			t.Errorf("entry_filearr's main.nf lacks %q:\n%s", want, arr)
@@ -665,7 +694,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 	}
 
 	plain := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
-	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "n1 = INPUT(u1)") {
+	if strings.Contains(plain, "entry =") || !strings.Contains(plain, "n1 = INPUT(u1, [['y']])") {
 		t.Errorf("diamond_min reads no entry file, yet stages some:\n%s", plain)
 	}
 
@@ -673,8 +702,9 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 		"val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')",
 		"-leaves ${shq(leaves.join(','))}",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
-		"def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
-		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), refsOf(es + us), [], [], callStaged(d)]",
+		"def ids = ef.files[v[4].node + ' ' + (v[1][at].join('.') ?: '-')] ?: []",
+		"inputOf(v, fields, ids, ids.collect { x -> ef.leaves[x] })",
+		"out = inst.map { v -> inputOf(v, fields, [], []) }",
 	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)
@@ -762,32 +792,34 @@ func TestEmitGatesBySet(t *testing.T) {
 	main := wiringNF(readTree(t, emitFixture(t, "split_gate_entry")))
 
 	for _, want := range []string{
-		"o0_gates = GATES(N0_SRC.out.gates, b0.skip)",
-		"b1 = ENABLED(GATED(g1, o0_gates, [], [0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@'))",
-		"b2 = ENABLED(GATED(g2, o0_gates, [], [0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@'))",
+		"o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
+		"b1 = ENABLED(GATED(g1, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@']], [])",
+		"b2 = ENABLED(GATED(g2, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@']], [])",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("split_gate_entry's wiring lacks %q:\n%s", want, main)
 		}
 	}
 
-	mains := map[string]string{}
-	for _, w := range parseWorkflows("stage.nf", stageModule) {
-		mains[w.name] = strings.Join(w.main, "\n")
-	}
+	mains := wiringMains()
 
 	for name, want := range map[string]string{
-		"NODES": "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)]",
-		"GATE":  "r[1] == '1' || r[2].contains(k.join('.'))",
-		"GATES": "gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[0], [].toSet()] })",
-		"GATED": ".combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->",
+		"NODES":   "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)]",
+		"GATE":    "r[1] == '1' || r[2].contains(k.join('.'))",
+		"GATES":   "posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })",
+		"ENABLED": "skip: disabled(v, gates)",
+		"REGATE":  "[disabled(v, gates)]",
 	} {
 		if !strings.Contains(mains[name], want) {
 			t.Errorf("stage.nf's %s lacks %q:\n%s", name, want, mains[name])
 		}
 	}
 
-	for _, name := range []string{"GATE", "GATED"} {
+	if want := "return v[5] || [gss, gates].transpose().any { gs, g -> gs.contains(g[1] + v[1][g[0]].join('.')) }"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+
+	for _, name := range []string{"GATE", "GATED", "REGATE", "ENABLED"} {
 		if mains[name] == "" || strings.Contains(mains[name], "tokenize") {
 			t.Errorf("stage.nf's %s parses a record per instance, or is missing:\n%s", name, mains[name])
 		}
@@ -804,8 +836,8 @@ func TestEmitForkedGatherWaitsForItsUpstream(t *testing.T) {
 	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
 
 	for _, want := range []string{
-		"u1 = READ(b1.run, GATHER(b1.run, o0_outs, [0], [0], ['y']), [0])",
-		"u4 = READ(u4, GATHER(b4.run, o3_outs, [0], [0], ['y']), [0])",
+		"u1 = READ(b1.run, GATHER(b1.run, o0_outs, [0], [0], ['y']))",
+		"u4 = READ(u4, GATHER(b4.run, o3_outs, [0], [0], ['y']))",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
@@ -817,6 +849,136 @@ func TestEmitForkedGatherWaitsForItsUpstream(t *testing.T) {
 			t.Errorf("map_nested_gather's main.nf sizes a gather (%q):\n%s", unwanted, main)
 		}
 	}
+}
+
+// TestEmitReadsOutsAsTheyCome (#559): a node's outs are keyed by its whole
+// key, which a reader sharing every root of it has at its own positions,
+// so the reader combines the node's outs channel as it comes, and its
+// process's INPUT picks the outputs each read reads; keying or selecting
+// them per read cost CellRanger 1,263 edges of Nextflow's DAG
+// (map_nested_gather: node 4 reads node 2's xs at its fork of their map
+// root, and gathers node 3's y).
+func TestEmitReadsOutsAsTheyCome(t *testing.T) {
+	main := wiringNF(readTree(t, emitFixture(t, "map_nested_gather")))
+
+	want := "u4 = READ(b4.run, o2_outs)\n    u4 = READ(u4, GATHER(b4.run, o3_outs, [0], [0], ['y']))\n    n4 = INPUT(u4, [['xs'], null])"
+	if !strings.Contains(main, want) {
+		t.Errorf("map_nested_gather's main.nf lacks %q:\n%s", want, main)
+	}
+
+	mains := wiringMains()
+
+	if want = "out = inst.combine(ups, by: 0)\nout"; mains["READ"] != want {
+		t.Errorf("stage.nf's READ's statements are %q, want %q", mains["READ"], want)
+	}
+
+	if _, ok := mains["SELECT"]; ok {
+		t.Errorf("stage.nf keeps SELECT, a step per read:\n%s", mains["SELECT"])
+	}
+}
+
+// TestEmitKeysReadsWhereTheirRootsChange (#559): an enabled instance leads
+// with its ordinals of the roots its node's first read joins on, a read is
+// one combine, which adds the node's outs after what the instance read
+// before, and REKEY keys the instance again, with the outputs each read
+// since reads, only before a read joining on other roots; a map per read
+// to key the instance cost CellRanger 1,135 edges of Nextflow's DAG
+// beyond those (gate_chain: WORK reads at no fork, twice at its own fork
+// of their map root, position 0, and at none). TestMrpDiff/gate_chain runs
+// it against mrp.
+func TestEmitKeysReadsWhereTheirRootsChange(t *testing.T) {
+	got := assignments(wiringNF(readTree(t, emitFixture(t, "gate_chain"))), "u4", "n4")
+
+	want := []string{
+		"u4 = READ(b4.run, o0_outs)",
+		"u4 = READ(REKEY(u4, [['y']], [0]), o2_outs)",
+		"u4 = READ(u4, o3_outs)",
+		"u4 = READ(REKEY(u4, [['y'], ['off']], []), o1_outs)",
+		"n4 = INPUT(u4, [['off']])",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("gate_chain's WORK (-want +got):\n%s", diff)
+	}
+
+	mains := wiringMains()
+
+	for name, want := range map[string]string{
+		"ENABLED": "run = b.run.map { v -> [v[1][at]] + v.subList(1, 5) + [[]] }",
+		"REKEY":   "out = inst.map { v -> [v[1][next]] + v.subList(1, 5) + [readItems(v, fields)] }",
+		"GATHER":  "seeds = run.map { v -> [v[1][mine], null] }.unique()",
+		"INPUT":   "out = inst.map { v -> inputOf(v, fields, [], []) }",
+	} {
+		if !strings.Contains(mains[name], want) {
+			t.Errorf("stage.nf's %s lacks %q:\n%s", name, want, mains[name])
+		}
+	}
+
+	if want := "return v[5] + [dss, fields].transpose().collectMany { ds, f -> selected(ds, f) }"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
+// TestEmitKeysGatesWhereTheirRootsChange (#559): GATE keys an instance by
+// its ordinals of the roots of the stage its node's first gate joins on,
+// a gate is one combine, which adds the gates that stage posted there, and
+// REGATE keys the instance again, deciding it from the gates since, only
+// before a gate joining on other roots, as ENABLED decides it from the
+// last; a map per gate to key the instance cost CellRanger 831 edges of
+// Nextflow's DAG (gate_chain: WORK is gated per fork of their map root,
+// position 0, by INNER's FLAG, then at no fork by OUTER).
+// TestMrpDiff/gate_chain runs it against mrp.
+func TestEmitKeysGatesWhereTheirRootsChange(t *testing.T) {
+	got := assignments(wiringNF(readTree(t, emitFixture(t, "gate_chain"))), "g4", "b4")
+
+	want := []string{
+		"g4 = GATE(i4, nodes, [node: 'GATE_CHAIN.INNER.WORK', special: ''], [0])",
+		"g4 = GATED(g4, o3_gates)",
+		"b4 = ENABLED(GATED(REGATE(g4, [[[], 'GATE_CHAIN.INNER.WORK@@']], []), o1_gates), [[[], 'GATE_CHAIN.INNER.WORK@@']], [])",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("gate_chain's WORK (-want +got):\n%s", diff)
+	}
+
+	mains := wiringMains()
+
+	for name, want := range map[string]string{
+		"GATE":    "[k[next], k, fs, es, planned(c, meta, r), ",
+		"GATED":   "out = gated.combine(gates, by: 0)\nout",
+		"REGATE":  "out = gated.map { v -> [v[1][next]] + v.subList(1, 5) + [disabled(v, gates)] }",
+		"ENABLED": "skip: disabled(v, gates)",
+		"GATES":   "skip.map { v -> [v[1], [].toSet()] }",
+		"POSTED":  "skip.map { v -> [v[1], []] }",
+	} {
+		if !strings.Contains(mains[name], want) {
+			t.Errorf("stage.nf's %s lacks %q:\n%s", name, want, mains[name])
+		}
+	}
+}
+
+// assignments are the statements of main, trimmed, that assign one of
+// names, in order.
+func assignments(main string, names ...string) []string {
+	var out []string
+
+	for l := range strings.SplitSeq(main, "\n") {
+		l = strings.TrimSpace(l)
+		if slices.ContainsFunc(names, func(n string) bool { return strings.HasPrefix(l, n+" = ") }) {
+			out = append(out, l)
+		}
+	}
+
+	return out
+}
+
+// wiringMains is the statements of each workflow of the stage module, its
+// main and its emits, by name.
+func wiringMains() map[string]string {
+	mains := map[string]string{}
+	for _, w := range parseWorkflows("stage.nf", stageModule) {
+		mains[w.name] = strings.Join(slices.Concat(w.main, w.emits), "\n")
+	}
+
+	return mains
 }
 
 // wiringNF is a project's main.nf and the modules of its sub-workflows.
@@ -849,14 +1011,14 @@ func TestEmitWaitsForPreflights(t *testing.T) {
 	}
 
 	want := []string{
-		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, [node: 'TOP.TOP_CHECK', special: '']))",
-		"d0 = DONE(N0_TOP_CHECK.out.outs)",
+		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, [node: 'TOP.TOP_CHECK', special: ''], []), [], [])",
+		"d0 = DONE(N0_TOP_CHECK.out.posted)",
 		"nodes_after_0 = AFTER(nodes, d0)",
-		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.EMIT', special: '']))",
-		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.SUB.CHECK', special: '']))",
-		"d2 = DONE(N2_CHECK.out.outs)",
+		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.EMIT', special: ''], []), [], [])",
+		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.SUB.CHECK', special: ''], []), [], [])",
+		"d2 = DONE(N2_CHECK.out.posted)",
 		"nodes_after_0_2 = AFTER(nodes_after_0, d2)",
-		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, [node: 'TOP.SUB.WORK', special: '']))",
+		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, [node: 'TOP.SUB.WORK', special: ''], []), [], [])",
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("preflight_order's gates and holds (-want +got):\n%s", diff)
