@@ -34,8 +34,8 @@ The project holds:
 
 | File | Purpose |
 |---|---|
-| `main.nf` | the entry workflow: PLAN, the root pipeline's calls, then OUTS |
-| `subworkflows/` | one workflow per sub-pipeline call |
+| `main.nf` | the entry workflow: PLAN, the stage calls or the workflows that run them, then OUTS |
+| `subworkflows/` | in a pipeline too large for one workflow, one workflow per run of its stage calls |
 | `stage.nf` | the stage processes and the wiring every node uses |
 | `nextflow.config` | parameters, the retry policy, the GPU rule, the trace, the profiles |
 | `conf/` | the container and HealthOmics profiles' settings |
@@ -172,7 +172,7 @@ changing what the stage sees. Each stage call is a process named
 `N<i>_<CALL>`, and a split stage's phases are `N<i>_<CALL>_SP`, `_MN` and
 `_JN`. The `include` lines of `main.nf` and `subworkflows/` list the names. A
 selector names the process inside a sub-workflow too, where the trace shows it
-as `W<j>_<SUB>:N<i>_<CALL>`.
+as `W<j>:N<i>_<CALL>`.
 
 ```groovy
 process {

@@ -145,8 +145,8 @@ one forked on a map call another stage feeds — is refused at transpile time.
 ## 4. The generated project
 
 ```
-main.nf               ← PLAN, the root pipeline's stage and sub-pipeline calls, then OUTS
-subworkflows/         ← a workflow per sub-pipeline (W<j>_<CALL>.nf): its calls
+main.nf               ← PLAN, the nodes or the calls of their runs, then OUTS
+subworkflows/         ← a workflow per run of nodes (W<j>.nf), only in a project too large for one
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
 conf/                 ← the container profiles' and the HealthOmics profile's configs
@@ -178,26 +178,30 @@ stage-controlled JSON.
 
 **Workflows.** The JVM compiles each workflow's statements into one method,
 which may not pass 64 KiB of bytecode, and a call into one of at most 255
-arguments. The project mirrors the `.mro`: the root pipeline's calls are
-wired in `main.nf`'s entry workflow, and each sub-pipeline call is a workflow
-of its own, which takes the channels its nodes read from outside it and emits
-those read outside it, and `outs_pub`: one channel that mixes the outs
-bundles of its own nodes the pipeline outs read (`PUBLISHED`) with its
-sub-workflows' `outs_pub`. The entry workflow's `outs_pub` is OUTS's input,
-which `ordered` sorts by node and instance key, so where a bundle is mixed
-does not change it, and no workflow mixes more sources than it has calls.
-Its calls are wired in dependency order, as Martian's
-calls of one pipeline depend on each other acyclically. A pipeline whose calls
-weigh more than one workflow holds (`maxWeight`), such as one of hundreds of
-stage calls, is wired in runs of them, each a workflow of its own; a
-sub-pipeline whose call would take more than `maxTakes` channels is wired in
-its caller's workflow. PLAN declares the same outputs, and the entry workflow
-the same few statements of them, however many entry-fed roots a pipeline
-has, as PLAN writes all their forks as one record (§5). So no workflow grows with the pipeline
-(`TestEmitBoundsEveryWorkflow`, `TestEmitBoundsPlan`, `TestWidePipelineRuns`,
-`TestEntryRootsMatchMrp`). A process's trace
-name carries its workflow path (`W1_SC_MULTI_CORE:N5_X`); a `withName:`
-selector of its alias alone still names it.
+arguments. Only that bound shapes the workflows; the `.mro`'s pipeline
+nesting does not. `main.nf`'s entry workflow wires every node, in the
+dependency order of the call graph's nodes, beside PLAN and OUTS. When
+they weigh more than it holds (`maxWeight`), the nodes are cut, in that
+order, into runs, each filled until the next node would make it weigh more
+than `maxWeight` or take more than `maxTakes` channels, and each is a
+workflow `W<j>` of its own (`subworkflows/W<j>.nf`), which the entry
+workflow calls in turn (and, were the calls of the runs themselves too
+heavy for it, runs of those runs). A run takes the channels its nodes read
+from outside it, emits those read outside it, and emits `outs_pub`: one
+channel that mixes the outs bundles of its own nodes the pipeline outs
+read (`PUBLISHED`). The entry workflow's `outs_pub`, which mixes its own
+nodes' bundles with its runs' `outs_pub`, is OUTS's input, which `ordered`
+sorts by node and instance key, so where a bundle is mixed does not change
+it, and no workflow mixes more sources than it has calls. PLAN declares the
+same outputs, and the entry workflow the same few statements of them,
+however many entry-fed roots a pipeline has, as PLAN writes all their forks
+as one record (§5). So no workflow grows
+with the pipeline (`TestEmitBoundsEveryWorkflow`, `TestEmitBoundsPlan`,
+`TestWidePipelineRuns`, `TestEntryRootsMatchMrp`). A process's trace name
+is its alias, `N5_X`, in the entry workflow, and `W1:N5_X` in a run; a
+`withName:` selector of its alias alone names it in either. Nextflow's task
+hash includes that name, so `-resume` finds no cached task of a node that a
+re-transpiled project wires in another workflow than the run did.
 
 **`nextflow.config`** holds:
 
