@@ -586,6 +586,47 @@ func TestEmitZipsByToken(t *testing.T) {
 	}
 }
 
+// TestEmitGatesBySet: PLAN's statically disabled fork keys of a node and a
+// gating instance's posted gates are each parsed once, into a set, so the
+// gate of each of a node's N instances is a lookup, not a parse or scan of
+// N keys (split_gate_entry: SRC gates INNER.WORK and KEYED.WORK, its gates
+// parsed once for both). TestBench's forkdisabled lanes run both paths.
+func TestEmitGatesBySet(t *testing.T) {
+	main := wiringNF(readTree(t, emitFixture(t, "split_gate_entry")))
+
+	for _, want := range []string{
+		"o0_gates = GATES(N0_SRC.out.gates, b0.skip)",
+		"b1 = ENABLED(GATED(g1, o0_gates, [], [0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@'))",
+		"b2 = ENABLED(GATED(g2, o0_gates, [], [0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@'))",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("split_gate_entry's wiring lacks %q:\n%s", want, main)
+		}
+	}
+
+	mains := map[string]string{}
+	for _, w := range parseWorkflows("stage.nf", stageModule) {
+		mains[w.name] = strings.Join(w.main, "\n")
+	}
+
+	for name, want := range map[string]string{
+		"NODES": "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)]",
+		"GATE":  "ns[node][1] == '1' || ns[node][2].contains(k.join('.'))",
+		"GATES": "gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[0], [].toSet()] })",
+		"GATED": ".combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->",
+	} {
+		if !strings.Contains(mains[name], want) {
+			t.Errorf("stage.nf's %s lacks %q:\n%s", name, want, mains[name])
+		}
+	}
+
+	for _, name := range []string{"GATE", "GATED"} {
+		if mains[name] == "" || strings.Contains(mains[name], "tokenize") {
+			t.Errorf("stage.nf's %s parses a record per instance, or is missing:\n%s", name, mains[name])
+		}
+	}
+}
+
 // TestEmitSizesForkedGathers: a forked call's gather of its share of an
 // inner map call is a groupKey of that share's fork count, from PLAN's
 // counts for an entry-fed root (BY_ENTRY) or the producer's posted forks

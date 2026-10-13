@@ -1,0 +1,100 @@
+filetype txt;
+
+# Benchmark: two map calls over a sub-pipeline whose USE is disabled at
+# every fork whose skip is true, half of them, so mrp runs no USE job there.
+# STATIC splits the entry's skips, so the plan disables its forks; GATED
+# splits FLAGS's, so FLAGS's post gates them. Run at two widths
+# (pipeline_w4.mro, pipeline_w16.mro): plumbing tasks must be identical at
+# both. GATED's sub-pipeline returns no USE output: mrp fails to resolve one
+# of a call a stage's output gates per fork (testdata/split_gate).
+
+stage MKFILE(
+    in  int x,
+    out txt f,
+    src py  "stages/mkfile",
+)
+
+stage FLAGS(
+    in  bool[] skips,
+    out bool[] skips,
+    src py     "stages/flags",
+)
+
+stage USE(
+    in  txt f,
+    out int n,
+    src py  "stages/use",
+)
+
+pipeline INNER(
+    in  int  x,
+    in  bool skip,
+    out txt  f,
+    out int  n,
+)
+{
+    call MKFILE(
+        x = self.x,
+    )
+
+    call USE(
+        f = MKFILE.f,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        f = MKFILE.f,
+        n = USE.n,
+    )
+}
+
+pipeline INNER_GATED(
+    in  int  x,
+    in  bool skip,
+    out txt  f,
+)
+{
+    call MKFILE(
+        x = self.x,
+    )
+
+    call USE(
+        f = MKFILE.f,
+    ) using (
+        disabled = self.skip,
+    )
+
+    return (
+        f = MKFILE.f,
+    )
+}
+
+pipeline FORKDISABLED(
+    in  int[]  xs,
+    in  bool[] skips,
+    out txt[]  fs,
+    out int[]  ns,
+    out txt[]  gfs,
+)
+{
+    map call INNER as STATIC(
+        x    = split self.xs,
+        skip = split self.skips,
+    )
+
+    call FLAGS(
+        skips = self.skips,
+    )
+
+    map call INNER_GATED as GATED(
+        x    = split self.xs,
+        skip = split FLAGS.skips,
+    )
+
+    return (
+        fs  = STATIC.f,
+        ns  = STATIC.n,
+        gfs = GATED.f,
+    )
+}
