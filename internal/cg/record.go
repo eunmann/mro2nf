@@ -213,8 +213,12 @@ func (g *Graph) element(rec elementJSON) (Element, error) {
 	return Element{Fork: f, Lens: rec.Lens, Position: rec.Position}, nil
 }
 
+func (el Element) encode() elementJSON {
+	return elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position}
+}
+
 func writeElement(dir string, el Element) error {
-	return writeRecord(filepath.Join(dir, elementFile), elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position})
+	return writeRecord(filepath.Join(dir, elementFile), el.encode())
 }
 
 func readRecord(path string, v any) error {

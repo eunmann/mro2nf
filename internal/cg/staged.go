@@ -16,41 +16,76 @@ import (
 // elementField is the one field of a fork element's bundle payload.
 const elementField = "value"
 
-// stagedStore serves the instance outs bundles and fork elements one task
-// staged and the outs value records it got, each identified by its own
-// record. An instance's outs may come as one bundle, or field by field
-// (Post's Fields and Values) as bundles and value records, which merge.
+// stagedStore serves the instance outs bundles, fork elements and partner
+// elements one task staged, and those it got as value records, each
+// identified by its own record. An instance's outs may come as one bundle,
+// or field by field (Post's Fields and Values) as bundles and value
+// records, which merge.
 type stagedStore struct {
 	g           *Graph
 	outsDirs    map[string][]string
 	outsValues  map[string]core.LazyArgumentMap
 	forks       map[string][]Fork
-	elements    map[string]string
-	partners    map[string]string
+	elements    map[string]elementItem
+	partners    map[string]elementItem
 	absent      map[string]*bool
 	stagedElems []Element
 	cache       map[string]core.LazyArgumentMap
 }
 
+// elementItem is where a fork or partner element's value is: the bundle dir
+// the task staged, or the value its value record carried.
+type elementItem struct {
+	dir   string
+	value json.RawMessage
+}
+
+// read is the element's value, and false for a dir that holds no bundle:
+// a fork element of a root no stage feeds, whose collection is in the call
+// graph.
+func (it elementItem) read() (json.RawMessage, bool, error) {
+	if it.value != nil {
+		return it.value, true, nil
+	}
+
+	if !shim.IsBundle(it.dir) {
+		return nil, false, nil
+	}
+
+	raw, err := shim.ReadBundle(it.dir)
+	if err != nil {
+		return nil, false, fmt.Errorf("element %s: %w", it.dir, err)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, false, fmt.Errorf("decode element %s: %w", it.dir, err)
+	}
+
+	v, ok := payload[elementField]
+
+	return v, ok, nil
+}
+
 func stagedKey(fqid string, f Fork) string { return fqid + "\x00" + f.key() }
 
-// stage indexes the staged items under dirs, the outs value records values
-// and the fork records recs. Each dir is an item (an instance bundle or a
-// fork element) or holds items as its subdirectories.
+// stage indexes the staged items under dirs, the value records values and
+// the fork records recs. Each dir is an item (an instance bundle, a fork
+// element or a partner element) or holds items as its subdirectories.
 func (g *Graph) stage(dirs, values []string, recs ...Element) (*stagedStore, error) {
 	s := &stagedStore{
 		g:          g,
 		outsDirs:   map[string][]string{},
 		outsValues: map[string]core.LazyArgumentMap{},
 		forks:      map[string][]Fork{},
-		elements:   map[string]string{},
-		partners:   map[string]string{},
+		elements:   map[string]elementItem{},
+		partners:   map[string]elementItem{},
 		absent:     map[string]*bool{},
 		cache:      map[string]core.LazyArgumentMap{},
 	}
 
 	for _, el := range recs {
-		s.addElement(el, "")
+		s.addElement(el, elementItem{})
 	}
 
 	for _, d := range dirs {
@@ -66,23 +101,6 @@ func (g *Graph) stage(dirs, values []string, recs ...Element) (*stagedStore, err
 	}
 
 	return s, nil
-}
-
-// addValue indexes an outs value record.
-func (s *stagedStore) addValue(text string) error {
-	in, field, raw, err := s.g.readValue(text)
-	if err != nil {
-		return err
-	}
-
-	k := s.addInstance(in)
-	if s.outsValues[k] == nil {
-		s.outsValues[k] = core.LazyArgumentMap{}
-	}
-
-	s.outsValues[k][field] = raw
-
-	return nil
 }
 
 // addInstance records the instance whose outs the task staged a part of,
@@ -133,7 +151,7 @@ func (s *stagedStore) add(dir string) error {
 			return err
 		}
 
-		s.addElement(el, dir)
+		s.addElement(el, elementItem{dir: dir})
 	case partnerFile:
 		return s.addPartner(dir)
 	default:
@@ -143,12 +161,12 @@ func (s *stagedStore) add(dir string) error {
 	return nil
 }
 
-// addElement indexes a fork element; dir is its bundle, or "" for a fork
-// record that carries no value.
-func (s *stagedStore) addElement(el Element, dir string) {
+// addElement indexes a fork element, where it holds its value, or none for
+// a fork record that carries no value.
+func (s *stagedStore) addElement(el Element, it elementItem) {
 	root := el.Fork[len(el.Fork)-1].Root
-	if dir != "" {
-		s.elements[stagedKey(root.Fqid, el.Fork)] = dir
+	if it.dir != "" || it.value != nil {
+		s.elements[stagedKey(root.Fqid, el.Fork)] = it
 	}
 
 	s.stagedElems = append(s.stagedElems, el)
@@ -273,22 +291,15 @@ func compareIndex(a, b syntax.CollectionIndex) int {
 }
 
 func (s *stagedStore) element(root *syntax.CallGraphStage, f Fork) (json.RawMessage, bool, error) {
-	dir, ok := s.elements[stagedKey(root.Fqid, f)]
-	if !ok || !shim.IsBundle(dir) {
+	it, ok := s.elements[stagedKey(root.Fqid, f)]
+	if !ok {
 		return nil, false, nil
 	}
 
-	raw, err := shim.ReadBundle(dir)
+	v, ok, err := it.read()
 	if err != nil {
 		return nil, false, fmt.Errorf("fork element of %s: %w", root.Fqid, err)
 	}
-
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, false, fmt.Errorf("decode fork element of %s: %w", root.Fqid, err)
-	}
-
-	v, ok := payload[elementField]
 
 	return v, ok, nil
 }

@@ -195,7 +195,7 @@ func postedValues(t *testing.T, path string) string {
 
 // posted is a task's post flags, writing below dir.
 func posted(dir string) []string {
-	return []string{"-fields", dir + "/outs", "-field-values", dir + "/values", "-forks", dir + "/forks", "-gates", dir + "/gates"}
+	return []string{"-fields", dir + "/outs", "-field-values", dir + "/values", "-forks", dir + "/forks", "-fork-values", dir + "/fork_values", "-gates", dir + "/gates"}
 }
 
 // unsplitTask is the mre stage call of a non-split stage's task in dir,

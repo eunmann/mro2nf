@@ -50,7 +50,7 @@ func TestArgsLinkOneCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	elems := elementDirs(t, entry, "FANOUT.FUSE")
+	elems := elementItems(t, entry, "FANOUT.FUSE")
 	if len(elems) != 4 {
 		t.Fatalf("the entry posted %d forks of FUSE, want 4", len(elems))
 	}

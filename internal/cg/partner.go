@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -24,8 +23,8 @@ var errPartnerSources = errors.New("splits of one output over one root disagree"
 // partner is a split over a fork root of a stage output other than the one
 // the root's forks come from: a map call zipping several outputs, of one
 // stage or of several, or a disable binding splitting one. The stage's post
-// writes the output's elements one dir per index, and an instance stages
-// only the one at its own index (zip_runtime). A stage a runtime gate
+// writes the output's elements one per index, and an instance gets only
+// the one at its own index (zip_runtime). A stage a runtime gate
 // disables is read through the gate, `split Q.o unless G.f`: an instance
 // reads the gate, and the element only where the gate holds Q enabled
 // (#494).
@@ -171,8 +170,8 @@ type partnerJSON struct {
 func partnerKey(root, node, output string) string { return root + "\x00" + node + "\x00" + output }
 
 // writePartners writes the posting instance's elements of each output a
-// partner reads: one dir per index of the output, named by its IndexToken,
-// and the absent record.
+// partner reads: one per index of the output, named by its IndexToken
+// (item), and the absent record, which holds no value, as a value record.
 func (w forkWriter) writePartners(node string, fork Fork) error {
 	ps, err := w.r.g.partners(node)
 	if err != nil {
@@ -204,17 +203,11 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 		return err
 	}
 
-	dir := filepath.Join(w.dir, p.dir())
 	rec := partnerJSON{Root: p.root.Fqid, Node: p.ref.Id, Output: p.ref.OutputId}
 
 	for _, ix := range c.indices() {
 		el, err := c.at(ix)
 		if err != nil {
-			return err
-		}
-
-		ed := filepath.Join(dir, IndexToken(ix))
-		if err := writeElementValue(ed, el, param, w.tbl, w.roots); err != nil {
 			return err
 		}
 
@@ -227,35 +220,41 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 			at.Index = &n
 		}
 
-		if err := writeRecord(filepath.Join(ed, partnerFile), at); err != nil {
+		if err := w.item(p.dir(), IndexToken(ix), el, param, valueJSON{Partner: &at}); err != nil {
 			return err
 		}
 	}
 
 	rec.Null = c.null
 
-	return writeRecord(filepath.Join(dir, AbsentName, partnerFile), rec)
+	return w.record(p.dir()+"/"+AbsentName, valueJSON{Partner: &rec})
 }
 
-// addPartner indexes a staged partner dir: an element, by its index, or the
-// absent record of its output.
+// addPartner indexes a staged partner dir.
 func (s *stagedStore) addPartner(dir string) error {
 	var rec partnerJSON
 	if err := readRecord(filepath.Join(dir, partnerFile), &rec); err != nil {
 		return err
 	}
 
+	return s.indexPartner(rec, elementItem{dir: dir}, dir)
+}
+
+// indexPartner indexes the partner record rec of an element, by its index,
+// whose value it holds, or the absent record of its output. name names
+// where it came from.
+func (s *stagedStore) indexPartner(rec partnerJSON, it elementItem, name string) error {
 	k := partnerKey(rec.Root, rec.Node, rec.Output)
 
 	switch {
 	case rec.Index != nil && rec.Key == nil:
-		s.partners[k+"\x00"+IndexToken(ArrayIndex(*rec.Index))] = dir
+		s.partners[k+"\x00"+IndexToken(ArrayIndex(*rec.Index))] = it
 	case rec.Key != nil && rec.Index == nil:
-		s.partners[k+"\x00"+IndexToken(MapKey(*rec.Key))] = dir
+		s.partners[k+"\x00"+IndexToken(MapKey(*rec.Key))] = it
 	case rec.Key == nil && rec.Index == nil:
 		s.absent[k] = &rec.Null
 	default:
-		return fmt.Errorf("partner element %s: %w: both an index and a key", dir, errBadFork)
+		return fmt.Errorf("partner element %s: %w: both an index and a key", name, errBadFork)
 	}
 
 	return nil
@@ -268,10 +267,17 @@ func (s *stagedStore) addPartner(dir string) error {
 func (s *stagedStore) partner(root *syntax.CallGraphStage, ref *syntax.RefExp, ix syntax.CollectionIndex) (json.RawMessage, bool, error) {
 	k := partnerKey(root.Fqid, ref.Id, ref.OutputId)
 
-	if dir, ok := s.partners[k+"\x00"+IndexToken(ix)]; ok {
-		raw, err := readElementField(dir)
+	if it, ok := s.partners[k+"\x00"+IndexToken(ix)]; ok {
+		raw, held, err := it.read()
+		if err == nil && !held {
+			err = errNotItem
+		}
 
-		return raw, true, err
+		if err != nil {
+			return nil, true, fmt.Errorf("partner element of %s.%s: %w", ref.Id, ref.OutputId, err)
+		}
+
+		return raw, true, nil
 	}
 
 	null, ok := s.absent[k]
@@ -288,19 +294,4 @@ func (s *stagedStore) partner(root *syntax.CallGraphStage, ref *syntax.RefExp, i
 
 func (emptyStore) partner(*syntax.CallGraphStage, *syntax.RefExp, syntax.CollectionIndex) (json.RawMessage, bool, error) {
 	return nil, false, nil
-}
-
-// readElementField reads the one value of a partner element's bundle.
-func readElementField(dir string) (json.RawMessage, error) {
-	raw, err := shim.ReadBundle(dir)
-	if err != nil {
-		return nil, fmt.Errorf("partner element %s: %w", dir, err)
-	}
-
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("decode partner element %s: %w", dir, err)
-	}
-
-	return payload[elementField], nil
 }

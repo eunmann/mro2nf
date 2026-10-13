@@ -5,7 +5,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -238,23 +237,18 @@ call P()
 	outs := f.outs("P.SRC", nil, `{"xs":[1,2,3],"skips":[false,true],"items":null}`)
 	forks := f.post(outs, outs)
 
-	elems := elementDirs(t, forks, "P.PAIR")
+	elems := elementItems(t, forks, "P.PAIR")
 	if len(elems) != 3 {
 		t.Fatalf("SRC posted %d forks of PAIR, want 3", len(elems))
 	}
 
-	for i, want := range []string{`{"value":1}`, `{"value":2}`, `{"value":3}`} {
-		raw, err := shim.ReadBundle(elems[i])
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if d := cmp.Diff(want, string(raw)); d != "" {
+	for i, want := range []string{`1`, `2`, `3`} {
+		if d := cmp.Diff(want, f.elementValue(elems[i])); d != "" {
 			t.Errorf("fork %d element (-want +got):\n%s", i, d)
 		}
 	}
 
-	skips := partnerDirs(t, forks, "P.PAIR", "P.SRC", "skips")
+	skips := partnerItems(t, forks, "P.PAIR", "P.SRC", "skips")
 
 	_, got := f.args("P.PAIR", elems[1], skips["1"])
 	wantArgs(t, "P.PAIR fork1", got, `{"skip":true,"x":2}`)

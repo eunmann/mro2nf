@@ -82,10 +82,10 @@ func loadSource(t *testing.T, src string) *fixture {
 	return &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
 }
 
-func baseNames(dirs []string) []string {
-	out := make([]string, len(dirs))
-	for i, d := range dirs {
-		out[i] = filepath.Base(d)
+func baseNames(items []string) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = itemName(it)
 	}
 
 	return out
@@ -104,13 +104,13 @@ func TestInnerForkIndependentOfOuter(t *testing.T) {
 		}
 
 		gen := f.outs("TOP.GEN", nil, `{"xs":[1,2]}`)
-		subs := elementDirs(t, f.post(gen, gen), "TOP.OUTER2.SUB2")
+		subs := elementItems(t, f.post(gen, gen), "TOP.OUTER2.SUB2")
 
 		if d := cmp.Diff([]string{"0000", "0001"}, baseNames(subs)); d != "" {
 			t.Fatalf("SUB2 fork names (-want +got):\n%s", d)
 		}
 
-		for i, o := range elementDirs(t, entry, "TOP.OUTER2") {
+		for i, o := range elementItems(t, entry, "TOP.OUTER2") {
 			for j, s := range subs {
 				_, got := f.args("TOP.OUTER2.SUB2.ADD", o, s)
 				wantArgs(t, fmt.Sprintf("ADD fork%d_fork%d", i, j), got, fmt.Sprintf(`{"a":%d,"b":%d}`, j+1, 20+10*i))
@@ -140,8 +140,8 @@ func TestNestedForkUnderRuntimeOuter(t *testing.T) {
 	gen := f.outs("TOP.GEN", nil, `{"xss":[[1,2],[3]]}`)
 	forks := f.post(gen, gen)
 
-	outers := elementDirs(t, forks, "TOP.OUTER")
-	echoes := elementDirs(t, forks, "TOP.OUTER.ECHO")
+	outers := elementItems(t, forks, "TOP.OUTER")
+	echoes := elementItems(t, forks, "TOP.OUTER.ECHO")
 
 	if d := cmp.Diff([]string{"0000.0000", "0000.0001", "0001.0000"}, baseNames(echoes)); d != "" {
 		t.Fatalf("ECHO fork names (-want +got):\n%s", d)
@@ -151,10 +151,10 @@ func TestNestedForkUnderRuntimeOuter(t *testing.T) {
 
 	for i, e := range echoes {
 		_, got := f.args("TOP.OUTER.ECHO", outers[underOuter[i]], e)
-		wantArgs(t, "ECHO "+filepath.Base(e), got, fmt.Sprintf(`{"v":%d}`, i+1))
+		wantArgs(t, "ECHO "+itemName(e), got, fmt.Sprintf(`{"v":%d}`, i+1))
 	}
 
-	adds := elementDirs(t, entry, "TOP.OUTER.ADD")
+	adds := elementItems(t, entry, "TOP.OUTER.ADD")
 	if d := cmp.Diff([]string{"0000", "0001"}, baseNames(adds)); d != "" {
 		t.Fatalf("ADD fork names (-want +got):\n%s", d)
 	}

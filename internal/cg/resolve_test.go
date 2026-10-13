@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -119,12 +121,20 @@ func writeOuts(dir string, v json.Marshaler, g *Graph, callable string) error {
 	return shim.WriteBundle(dir, payload, params, g.Table(), shim.Opts{})
 }
 
-// args runs WriteArgs for node over the staged items, returning the
-// instance and its compact _args ("" when disabled).
-func (f *fixture) args(node string, in ...string) (Instance, string) {
+// args runs WriteArgs for node over the items, dirs it stages and value
+// records, returning the instance and its compact _args ("" when
+// disabled).
+func (f *fixture) args(node string, items ...string) (Instance, string) {
 	f.t.Helper()
 
-	return f.writeArgs(ArgsSpec{Node: node, In: in})
+	return f.writeArgs(withItems(ArgsSpec{Node: node}, items...))
+}
+
+// withItems is spec getting the items, dirs it stages and value records.
+func withItems(spec ArgsSpec, items ...string) ArgsSpec {
+	spec.In, spec.Values = staging(items)
+
+	return spec
 }
 
 // writeArgs is args for the instance spec stages, written to a new dir.
@@ -156,27 +166,115 @@ func (f *fixture) writeArgs(spec ArgsSpec) (Instance, string) {
 }
 
 // post posts the instance whose args bundle is args with its outs, and
-// returns its forks dir.
+// returns its forks dir, beside which it writes its element value records,
+// as a task's dir holds them (forkValues).
 func (f *fixture) post(args, outs string) string {
 	f.t.Helper()
 
 	forks := f.next("forks")
-	if err := f.g.Post(PostSpec{Args: args, Outs: outs, Forks: forks}); err != nil {
+	if err := f.g.Post(PostSpec{Args: args, Outs: outs, Forks: forks, ForkValues: forkValues(forks)}); err != nil {
 		f.t.Fatal(err)
 	}
 
 	return forks
 }
 
-func elementDirs(t *testing.T, forks, root string) []string {
+// forkValues is the value records file of the post whose forks dir is
+// forks.
+func forkValues(forks string) string { return filepath.Join(filepath.Dir(forks), "fork_values") }
+
+// elementItems are the items a post or the entry wrote of root, a fork
+// root or a partner dir (PartnerDir), into forks: its element dirs and its
+// value records, by name.
+func elementItems(t *testing.T, forks, root string) []string {
 	t.Helper()
 
-	ms, err := filepath.Glob(filepath.Join(forks, root, "*"))
+	items, err := filepath.Glob(filepath.Join(forks, root, "*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return ms
+	if raw, err := os.ReadFile(forkValues(forks)); err == nil {
+		for rec := range strings.FieldsSeq(string(raw)) {
+			if path, _, _ := strings.Cut(rec, ":"); filepath.Dir(path) == root {
+				items = append(items, rec)
+			}
+		}
+	}
+
+	slices.SortFunc(items, func(a, b string) int { return strings.Compare(itemName(a), itemName(b)) })
+
+	return items
+}
+
+// itemName is the name of an element item: its dir's, or the dir's its
+// value record stands in for.
+func itemName(item string) string {
+	path, _, _ := strings.Cut(item, ":")
+
+	return filepath.Base(path)
+}
+
+// itemElement is the fork element of g item names: a dir, or a value
+// record.
+func itemElement(t *testing.T, g *Graph, item string) Element {
+	t.Helper()
+
+	if filepath.IsAbs(item) {
+		el, err := g.ReadElement(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return el
+	}
+
+	el, ok, err := g.ValueElement(item)
+	if err != nil || !ok {
+		t.Fatalf("value record %.60q is no fork element: %v", item, err)
+	}
+
+	return el
+}
+
+// elementValue is the value a fork or partner element item carries: its
+// bundle's, or its value record's.
+func (f *fixture) elementValue(item string) string {
+	f.t.Helper()
+
+	it := elementItem{dir: item}
+
+	if !filepath.IsAbs(item) {
+		_, rec, err := decodeValue(item)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+
+		it = elementItem{value: rec.Value}
+	}
+
+	raw, _, err := it.read()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+
+	return string(raw)
+}
+
+// staging splits the items a task gets into the dirs it stages, by their
+// absolute paths, and the value records it gets as values.
+func staging(items []string) ([]string, []string) {
+	var dirs, values []string
+
+	for _, it := range items {
+		if filepath.IsAbs(it) {
+			dirs = append(dirs, it)
+		} else {
+			values = append(values, it)
+		}
+	}
+
+	return dirs, values
 }
 
 func wantArgs(t *testing.T, node, got, want string) {
@@ -196,7 +294,7 @@ func TestRuntimeForkFromElement(t *testing.T) {
 	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1,"beta":2,"gamma":3}}`)
 	forks := f.post(gen, gen)
 
-	elems := elementDirs(t, forks, "MFU.DBL")
+	elems := elementItems(t, forks, "MFU.DBL")
 	if len(elems) != 3 {
 		t.Fatalf("GEN posted %d forks of DBL, mrp ran 3", len(elems))
 	}
@@ -303,7 +401,7 @@ func TestEmptyForksPrune(t *testing.T) {
 	forks := f.post(gen, gen)
 
 	for _, root := range []string{"REF.SC_EA", "REF.SC_NA", "REF.SC_EM", "REF.SC_NM"} {
-		if n := len(elementDirs(t, forks, root)); n != 0 {
+		if n := len(elementItems(t, forks, root)); n != 0 {
 			t.Errorf("GEN posted %d forks of %s, mrp ran none", n, root)
 		}
 	}

@@ -30,8 +30,9 @@ type ArgsSpec struct {
 	// forked instance stages a fork element of each of its roots, or one
 	// whose fork holds the parts of several.
 	In []string
-	// Values are the outs value records the task got as values rather than
-	// staged (Post's Values).
+	// Values are the value records the task got as values rather than
+	// staged: of outputs, fork elements and partner elements (Post's Values
+	// and ForkValues).
 	Values []string
 	// Forks are fork records the task got as values rather than staged:
 	// those of the roots the invocation's entry values fix (DecodeElement).

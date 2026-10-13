@@ -145,7 +145,7 @@ func TestCallGraphSteps(t *testing.T) {
 		n := float64(i + 1)
 		writeTestBundle(t, outs, map[string]any{"p": map[string]any{"x": n, "y": 10 * n}})
 
-		if err := postStep(gf, postFlags{forks: filepath.Join(work, strconv.Itoa(i), "forks")}, args, outs); err != nil {
+		if err := postStep(gf, postFlags{forks: filepath.Join(work, strconv.Itoa(i), "forks"), forkValues: filepath.Join(work, strconv.Itoa(i), "fork_values")}, args, outs); err != nil {
 			t.Fatal(err)
 		}
 
@@ -163,7 +163,7 @@ func TestCallGraphSteps(t *testing.T) {
 	outs := filepath.Join(work, "sumx", "outs")
 	writeTestBundle(t, outs, map[string]any{"total": 6})
 
-	if err := postStep(gf, postFlags{forks: filepath.Join(work, "sumx", "forks")}, filepath.Join(work, "sumx", "args"), outs); err != nil {
+	if err := postStep(gf, postFlags{forks: filepath.Join(work, "sumx", "forks"), forkValues: filepath.Join(work, "sumx", "fork_values")}, filepath.Join(work, "sumx", "args"), outs); err != nil {
 		t.Fatal(err)
 	}
 

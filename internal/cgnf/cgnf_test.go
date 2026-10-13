@@ -293,11 +293,11 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 
 	for _, want := range []string{
 		"tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), emit: outs",
-		"'-fields outs -field-values outs_values -forks forks -gates gates'",
-		"outs.map { k, ds, vs -> [k, ds + vs.tokenize(' ')] }",
+		"'-fields outs -field-values outs_values -forks forks -fork-values fork_values -gates gates'",
+		"posted.map { k, ds, vs -> [k, ds + vs.tokenize(' ')] }",
 		"ds.findAll { e -> itemName(e) in fields }",
 		"keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1])",
-		"return e instanceof Path ? e.name : e.substring(0, e.indexOf(':'))",
+		"return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')",
 		"cmd += ' -values values'",
 		"cat > values <<'MRO2NF_VALUES'",
 		"-in in${values ? ' -values values' : ''}",
@@ -309,6 +309,47 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 
 	if n := strings.Count(stageModule, "eval('cat outs_values'), emit: outs"); n != 2 {
 		t.Errorf("%d processes emit value records, want STAGE's and STAGE_JOIN's", n)
+	}
+}
+
+// TestEmitCarriesValueElements: a posting task emits, beside its fork and
+// partner element dirs, the value records of the elements that hold no
+// file, which the driver carries as one list of items per instance, picks
+// by root (ELEMENTS) and by partner and index token (ZIP) like the dirs,
+// and splits apart from them for each task, as it does outs items. On
+// cellranger_shaped each of 9 instances otherwise staged a bundle of one
+// integer.
+func TestEmitCarriesValueElements(t *testing.T) {
+	main := readTree(t, emitFixture(t, "zip_runtime"))["main.nf"]
+
+	for _, want := range []string{
+		"o0_forks = POSTED(N0_TWO.out.forks, b0.skip)",
+		"ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false)",
+		"ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("zip_runtime's main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	for _, want := range []string{
+		"ds.findAll { e -> itemParent(e) == root }",
+		"def name = itemName(e)",
+		"ds.findAll { e -> itemParent(e) == partner }.collectEntries { e -> [(itemName(e)): e] }",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), [], [], callStaged(d)]",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
+	} {
+		if !strings.Contains(stageModule, want) {
+			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+
+	if n := strings.Count(stageModule, "tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), emit: forks"); n != 2 {
+		t.Errorf("%d processes emit element value records, want STAGE's and STAGE_JOIN's", n)
+	}
+
+	if strings.Contains(stageModule, "e.parent.name ==") {
+		t.Error("stage.nf picks elements by their dir alone, which misses value records")
 	}
 }
 
@@ -354,8 +395,8 @@ func TestEmitCarriesTheCall(t *testing.T) {
 		"return meta.call instanceof Path ? '' : \"cat > call.b64 <<'MRO2NF_CALL'\\n${meta.call}\\nMRO2NF_CALL\"",
 		"return meta.call instanceof Path ? [meta.call] : []",
 		"\"${code(meta, root)} -call call.b64\"",
-		"[d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], callStaged(d)]",
-		"[d, k, fs, recordsOf(us), es + bundlesOf(us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
+		"bundlesOf(es + us), [], [], callStaged(d)]",
+		"ids.collect { x -> ef.leaves[x] }, callStaged(d)]",
 		"c.name, c, callStaged(m)] }",
 		"[m, k, fs, vs, us, ids, ef, cs, j, os, callStaged(m)]",
 	} {
@@ -599,7 +640,7 @@ func TestEmitStagesEntryFilesIntoTheirReaders(t *testing.T) {
 		"-leaves ${shq(leaves.join(','))}",
 		"file(new String(f[1].decodeBase64(), 'UTF-8'), glob: false)",
 		"def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []",
-		"[d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], callStaged(d)]",
+		"[d, k, fs, recordsOf(es + us), bundlesOf(es + us), [], [], callStaged(d)]",
 	} {
 		if strings.Count(stageModule, want) < 1 {
 			t.Errorf("stage.nf lacks %q", want)
@@ -646,7 +687,7 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 	}
 }
 
-// TestEmitZipsByToken: an instance zipping another stage's output stages
+// TestEmitZipsByToken: an instance zipping another stage's output gets
 // that stage's partner element at its own fork's index token, or the
 // absent record, never the whole output (zip_runtime: LONG zips THREE.xs;
 // zip_runtime_map: BY_AX zips ABC.m by key token).
@@ -669,7 +710,7 @@ func TestEmitZipsByToken(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"keyed ? e.name.tokenize('@')[1] : t[-1].toString()",
+		"keyed ? name.tokenize('@')[1] : t[-1].toString()",
 		"[k, fs, es + ([m[tk[token]] ?: m[absent]] - [null]), tk]",
 	} {
 		if !strings.Contains(stageModule, want) {

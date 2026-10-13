@@ -274,7 +274,7 @@ func TestPlanAndPostAgreeOnEntryGates(t *testing.T) {
 
 	writeTestBundle(t, outs, map[string]any{"skips": []any{true, true, false}, "flags": map[string]any{"a": false, "b": true, "c": true}})
 
-	if err := postStep(gf, postFlags{forks: filepath.Join(work, "src", "forks"), gates: gates}, args, outs); err != nil {
+	if err := postStep(gf, postFlags{forks: filepath.Join(work, "src", "forks"), forkValues: filepath.Join(work, "src", "fork_values"), gates: gates}, args, outs); err != nil {
 		t.Fatal(err)
 	}
 

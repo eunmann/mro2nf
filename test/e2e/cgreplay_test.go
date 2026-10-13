@@ -97,11 +97,11 @@ type cgReplay struct {
 	jobs      int
 }
 
-// postedInstance is one stage instance its last task posted.
+// postedInstance is one stage instance its last task posted: its outs, and
+// the elements it feeds, as dirs and as value records.
 type postedInstance struct {
-	fork  cg.Fork
-	outs  string
-	forks string
+	fork                    cg.Fork
+	outs, forks, forkValues string
 }
 
 // replayedFork is what the replay resolved for one mrp fork dir.
@@ -110,8 +110,8 @@ type replayedFork struct {
 	args     json.RawMessage
 }
 
-// replayInstance is one stage instance to replay: the fork elements it
-// stages and the fork they give it.
+// replayInstance is one stage instance to replay: the fork element items
+// it gets, dirs it stages and value records, and the fork they give it.
 type replayInstance struct {
 	elems []string
 	fork  cg.Fork
@@ -119,23 +119,30 @@ type replayInstance struct {
 
 // replayTasks are the files an instance's tasks share below its dir work:
 // the args bundle the first task builds, the split's chunks dir, each
-// chunk's outs bundle, and the outs bundle and fork elements the last task
-// posts; and in, the args step's flags naming the items every task of the
-// instance stages to build its own args bundle.
+// chunk's outs bundle, the outs bundle and fork elements the last task
+// posts, and the value records it posts of those elements; and in, the
+// args step's flags naming the items every task of the instance gets to
+// build its own args bundle.
 type replayTasks struct {
-	work, args, chunks, chunkOuts, outs, forks string
-	in                                         []string
+	work, args, chunks, chunkOuts, outs, forks, forkValues string
+	in                                                     []string
 }
 
 func newReplayTasks(work string) replayTasks {
 	return replayTasks{
-		work:      work,
-		args:      filepath.Join(work, "args"),
-		chunks:    filepath.Join(work, "chunks"),
-		chunkOuts: filepath.Join(work, "chunkouts"),
-		outs:      filepath.Join(work, "outs"),
-		forks:     filepath.Join(work, "forks"),
+		work:       work,
+		args:       filepath.Join(work, "args"),
+		chunks:     filepath.Join(work, "chunks"),
+		chunkOuts:  filepath.Join(work, "chunkouts"),
+		outs:       filepath.Join(work, "outs"),
+		forks:      filepath.Join(work, "forks"),
+		forkValues: filepath.Join(work, "fork_values"),
 	}
+}
+
+// posting are the flags of the task that posts the instance's outs.
+func (t replayTasks) posting() []string {
+	return []string{"-o", t.outs, "-forks", t.forks, "-fork-values", t.forkValues}
 }
 
 // notEnabled is the message of the error `mre stage` exits 1 with when the
@@ -278,15 +285,12 @@ func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayIns
 
 	var found []replayInstance
 
-	for _, dir := range rp.elementDirs(roots[i]) {
-		el, err := rp.g.ReadElement(dir)
-		if err != nil {
-			rp.t.Fatal(err)
-		}
+	for _, item := range rp.elementItems(roots[i]) {
+		el := rp.element(item)
 
 		if forkAgrees(el.Fork, prefix.fork) {
 			found = append(found, replayInstance{
-				elems: append(slices.Clip(prefix.elems), dir),
+				elems: append(slices.Clip(prefix.elems), item),
 				fork:  append(slices.Clip(prefix.fork), cg.Part{Root: roots[i], Index: el.Fork[len(el.Fork)-1].Index}),
 			})
 		}
@@ -305,29 +309,64 @@ func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayIns
 	return out
 }
 
-func (rp *cgReplay) elementDirs(root *syntax.CallGraphStage) []string {
-	var feeders []string
+// elementItems are root's fork element items its feeder posted: element
+// dirs and value records of its producer's instances, or the entry's
+// element dirs.
+func (rp *cgReplay) elementItems(root *syntax.CallGraphStage) []string {
+	var feeders []postedInstance
 
 	if p, ok := rp.g.Producer(root); ok {
-		for _, pi := range rp.posted[p] {
-			feeders = append(feeders, pi.forks)
-		}
+		feeders = rp.posted[p]
 	} else {
-		feeders = []string{rp.entry}
+		feeders = []postedInstance{{forks: rp.entry}}
 	}
 
 	var out []string
 
 	for _, f := range feeders {
-		ms, err := filepath.Glob(filepath.Join(f, root.Fqid, "*"))
+		ms, err := filepath.Glob(filepath.Join(f.forks, root.Fqid, "*"))
 		if err != nil {
 			rp.t.Fatal(err)
 		}
 
 		out = append(out, ms...)
+
+		if f.forkValues == "" {
+			continue
+		}
+
+		raw, err := os.ReadFile(f.forkValues)
+		if err != nil {
+			rp.t.Fatal(err)
+		}
+
+		for rec := range strings.FieldsSeq(string(raw)) {
+			if strings.HasPrefix(rec, root.Fqid+"/") {
+				out = append(out, rec)
+			}
+		}
 	}
 
 	return out
+}
+
+// element is the fork element item names: a dir, or a value record.
+func (rp *cgReplay) element(item string) cg.Element {
+	if filepath.IsAbs(item) {
+		el, err := rp.g.ReadElement(item)
+		if err != nil {
+			rp.t.Fatal(err)
+		}
+
+		return el
+	}
+
+	el, ok, err := rp.g.ValueElement(item)
+	if err != nil || !ok {
+		rp.t.Fatalf("value record %.60q is no fork element: %v", item, err)
+	}
+
+	return el
 }
 
 // forkAgrees reports whether two forks give every root they share the same
@@ -351,9 +390,7 @@ func forkAgrees(a, b cg.Fork) bool {
 func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.seq++
 	tasks := newReplayTasks(rp.taskDir(fmt.Sprintf("instance %04d", rp.seq)))
-	for _, d := range slices.Concat(in.elems, rp.upstreamOuts(st, in.fork)) {
-		tasks.in = append(tasks.in, "-in", d)
-	}
+	tasks.in = rp.itemFlags(tasks.work, slices.Concat(in.elems, rp.upstreamOuts(st, in.fork)))
 
 	name, disabled := rp.firstTask(st, tasks)
 
@@ -386,9 +423,42 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	mrpArgs, mrpErr := os.ReadFile(filepath.Join(rp.ps, rel, "split", argsFile))
 	rp.ours[rel] = replayedFork{args: rp.checkArgs(rel, tasks.args, mrpArgs, mrpErr)}
 	rp.runStage(st, rel, tasks)
-	rp.posted[st.Fqid] = append(rp.posted[st.Fqid], postedInstance{fork: inst.Fork, outs: tasks.outs, forks: tasks.forks})
+	rp.posted[st.Fqid] = append(rp.posted[st.Fqid], postedInstance{fork: inst.Fork, outs: tasks.outs, forks: tasks.forks, forkValues: tasks.forkValues})
 
 	return false
+}
+
+// itemFlags are the args step's flags naming items, as a task gets them: a
+// dir it stages as -in, and the value records, which it writes into one
+// file below work, as -values.
+func (rp *cgReplay) itemFlags(work string, items []string) []string {
+	var (
+		flags  []string
+		values []string
+	)
+
+	for _, it := range items {
+		if filepath.IsAbs(it) {
+			flags = append(flags, "-in", it)
+		} else {
+			values = append(values, it)
+		}
+	}
+
+	if len(values) == 0 {
+		return flags
+	}
+
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		rp.t.Fatal(err)
+	}
+
+	file := filepath.Join(work, "values")
+	if err := os.WriteFile(file, []byte(strings.Join(values, "\n")), 0o644); err != nil {
+		rp.t.Fatal(err)
+	}
+
+	return append(flags, "-values", file)
 }
 
 // firstTask runs the instance's first task, which builds its args bundle
@@ -404,7 +474,7 @@ func (rp *cgReplay) firstTask(st *syntax.CallGraphStage, tasks replayTasks) (str
 
 	name := job.ChunkName(0, 1)
 
-	return name, rp.stage(job.PhaseMain, rp.jobDir(tasks, name), append(argv, "-o", tasks.outs, "-forks", tasks.forks)...)
+	return name, rp.stage(job.PhaseMain, rp.jobDir(tasks, name), append(argv, tasks.posting()...)...)
 }
 
 func (rp *cgReplay) checkArgs(rel, args string, want []byte, wantErr error) json.RawMessage {
@@ -554,7 +624,7 @@ func (rp *cgReplay) runStage(st *syntax.CallGraphStage, rel string, tasks replay
 	}
 
 	rp.runTask(rel, job.PhaseJoin, job.PhaseJoin, tasks,
-		slices.Concat(node(job.PhaseJoin), []string{"-chunks", tasks.chunks, "-chunkouts", tasks.chunkOuts, "-o", tasks.outs, "-forks", tasks.forks})...)
+		slices.Concat(node(job.PhaseJoin), []string{"-chunks", tasks.chunks, "-chunkouts", tasks.chunkOuts}, tasks.posting())...)
 }
 
 func (rp *cgReplay) chunkNames(dir string) []string {

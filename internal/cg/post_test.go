@@ -39,23 +39,18 @@ func TestForkElementKeys(t *testing.T) {
 		{"ünï😀", 5},
 	}
 
-	elems := elementDirs(t, forks, "MFU.DBL")
+	elems := elementItems(t, forks, "MFU.DBL")
 	if len(elems) != len(mrp) {
 		t.Fatalf("GEN posted %d forks of DBL, mrp ran %d", len(elems), len(mrp))
 	}
 
 	for i, want := range mrp {
-		if name, want := filepath.Base(elems[i]), ordinal(i, len(mrp))+"@"+IndexToken(MapKey(want.key)); name != want {
+		if name, want := itemName(elems[i]), ordinal(i, len(mrp))+"@"+IndexToken(MapKey(want.key)); name != want {
 			t.Errorf("fork %d is named %q, want %q", i, name, want)
 		}
 
-		el, err := f.g.ReadElement(elems[i])
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if got := el.Fork[0].Index.MapKey(); got != want.key || el.Position != i {
-			t.Errorf("fork %d is key %q at position %d, mrp's is %q", i, got, el.Position, want.key)
+		if el := itemElement(t, f.g, elems[i]); el.Fork[0].Index.MapKey() != want.key || el.Position != i {
+			t.Errorf("fork %d is key %q at position %d, mrp's is %q", i, el.Fork[0].Index.MapKey(), el.Position, want.key)
 		}
 
 		inst, got := f.args("MFU.DBL", elems[i])
@@ -79,11 +74,11 @@ func TestForkElementLeaves(t *testing.T) {
 	gen := stageFileOuts(t, f, n)
 
 	forks := f.next("forks")
-	if err := f.g.Post(PostSpec{Args: gen, Outs: gen, Forks: forks}); err != nil {
+	if err := f.g.Post(PostSpec{Args: gen, Outs: gen, Forks: forks, ForkValues: forkValues(forks)}); err != nil {
 		t.Fatal(err)
 	}
 
-	elems := elementDirs(t, forks, "FBS.PROC")
+	elems := elementItems(t, forks, "FBS.PROC")
 	if len(elems) != n {
 		t.Fatalf("GEN posted %d forks of PROC, mrp ran %d", len(elems), n)
 	}
@@ -137,7 +132,7 @@ func TestForkElementLeaves2D(t *testing.T) {
 		"MAP_FILE_2D.BYK":  {{"k0_0.txt", "k0_1.txt"}, {"k1_0.txt"}},
 		"MAP_FILE_2D.PAIR": {{"r0_0.txt", "r0_1.txt"}, {"r1_0.txt"}},
 	} {
-		elems := elementDirs(t, forks, root)
+		elems := elementItems(t, forks, root)
 		if len(elems) != len(want) {
 			t.Fatalf("MAKE posted %d forks of %s, mrp ran %d", len(elems), root, len(want))
 		}
@@ -149,7 +144,7 @@ func TestForkElementLeaves2D(t *testing.T) {
 		}
 	}
 
-	cols := partnerDirs(t, forks, "MAP_FILE_2D.PAIR", "MAP_FILE_2D.MAKE", "cols")
+	cols := partnerItems(t, forks, "MAP_FILE_2D.PAIR", "MAP_FILE_2D.MAKE", "cols")
 	if d := cmp.Diff([]string{"c0_0.txt", "c0_1.txt"}, stagedLeaves(t, cols["0"])); d != "" {
 		t.Errorf("MAKE.cols partner element 0 leaves (-want +got):\n%s", d)
 	}
@@ -255,7 +250,7 @@ func TestEntryForks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	elems := elementDirs(t, forks, "PP.MAKE")
+	elems := elementItems(t, forks, "PP.MAKE")
 	if len(elems) != 3 {
 		t.Fatalf("entry posted %d forks of MAKE, mrp ran 3", len(elems))
 	}
@@ -280,7 +275,7 @@ func TestNestedEntryForkNames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dirs := elementDirs(t, forks, "TOP.OUTER.SUB")
+	dirs := elementItems(t, forks, "TOP.OUTER.SUB")
 
 	names := make([]string, 0, len(dirs))
 	for _, d := range dirs {

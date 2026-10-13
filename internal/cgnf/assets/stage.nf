@@ -26,13 +26,25 @@ def ordered(List pairs) {
     return pairs.sort(false) { a, b -> keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1]) }.collect { p -> p[1] }
 }
 
-// An outs item is one output an instance posted: a bundle dir a reader
-// stages, named by the output, or a value record a reader gets as a value,
-// which leads with the output's name and a colon (mre stage
-// -field-values). itemName is the output an item holds; bundlesOf are the
-// bundle dirs of a list of items, and recordsOf its value records.
+// An item is one thing an instance posted for its readers: an output, a
+// fork element or a partner element. It is a dir a reader stages, or a
+// value record a reader gets as a value, which leads with the path of the
+// dir it stands in for below the post's outs or forks dir and a colon (mre
+// stage -field-values, -fork-values): <output>, or <root>/<element>.
+// itemName is the name of an item's dir, the output an outs item holds,
+// and itemParent the name of the dir above it, the root or partner a fork
+// item is of; bundlesOf are the dirs of a list of items, and recordsOf its
+// value records.
+def itemPath(e) {
+    return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')
+}
+
 def itemName(e) {
-    return e instanceof Path ? e.name : e.substring(0, e.indexOf(':'))
+    return itemPath(e)[-1]
+}
+
+def itemParent(e) {
+    return itemPath(e)[-2]
 }
 
 def bundlesOf(List items) {
@@ -79,7 +91,7 @@ def callStaged(Map meta) {
 }
 
 // args is what a task builds the instance's args bundle from: what it
-// staged, the outs value records valuesFile wrote, its entry fork records,
+// staged, the value records valuesFile wrote, its entry fork records,
 // which are base64 and need no quoting, and the entry files it staged below
 // entry/, by their indices among the run's. The driver ran the instance
 // because its gates hold it enabled; mre must agree, and the node must
@@ -96,8 +108,8 @@ def args(Map meta, List forks, List values, List leaves) {
     return cmd
 }
 
-// valuesFile writes the outs value records a task got, a line each, which
-// are base64 after an output's name and need no quoting: as arguments, a
+// valuesFile writes the value records a task got, a line each, which are
+// base64 after an item's path and need no quoting: as arguments, a
 // gather's could pass the kernel's limit on a command line. The
 // here-document's lines start their own lines, where the script's indent
 // does not reach.
@@ -156,10 +168,11 @@ def mreStage(task, Map meta, phase, rest) {
 }
 
 // postFlags name where a task that posts its instance's outs writes them,
-// one bundle per output or a value record for one with no file leaf and
-// small JSON, and the fork elements and gates they set.
+// one bundle per output, and the fork and partner elements they set, one
+// dir per element, or for each with no file leaf and small JSON a value
+// record; and the gates they set.
 def postFlags() {
-    return '-fields outs -field-values outs_values -forks forks -gates gates'
+    return '-fields outs -field-values outs_values -forks forks -fork-values fork_values -gates gates'
 }
 
 // resources reads the table a split writes (mre stage -phase split): per
@@ -185,7 +198,7 @@ process STAGE {
 
     output:
     tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), emit: outs
-    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), emit: forks
+    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), emit: forks
     tuple val(key), eval('cat gates'), emit: gates
 
     script:
@@ -252,7 +265,7 @@ process STAGE_JOIN {
 
     output:
     tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), emit: outs
-    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), emit: forks
+    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), emit: forks
     tuple val(key), eval('cat gates'), emit: gates
 
     script:
@@ -414,7 +427,7 @@ workflow PUBLISHED {
 // The node wiring. main.nf runs each node's instances through these, one
 // call per step with the node's static data, so its own lines stay few and
 // no generated method grows with the node's wiring. An instance is [key,
-// fork records, element dirs, index tokens]: its ordinal of each of the
+// fork records, element items, index tokens]: its ordinal of each of the
 // node's roots, the fork records of its entry-fed roots and the fork
 // elements of its stage-fed ones, and the index token of its fork of each
 // root a zip of the node splits over. A list of positions picks those
@@ -423,8 +436,8 @@ workflow PUBLISHED {
 // FORK extends each instance by one of its node's roots: it joins every
 // fork of the root under its own ordinals of the root's outer roots, at
 // positions outer. A fork is [outer key, own ordinal, record or element
-// dir, index token]: an entry-fed root's record from PLAN, a stage-fed
-// root's dir its producer posted (ELEMENTS).
+// item, index token]: an entry-fed root's record from PLAN, a stage-fed
+// root's element its producer posted (ELEMENTS).
 workflow FORK {
     take:
     inst
@@ -442,10 +455,10 @@ workflow FORK {
     out
 }
 
-// ELEMENTS is the forks of a stage-fed root its producer posted, from the
-// dirs below forks/<root>/: per outer root, at its position in at, the
-// producer's ordinal of it, or, at -1, where the producer is not forked on
-// it, the ordinal the dir's name carries before its own. A map key's token
+// ELEMENTS is the forks of a stage-fed root its producer posted, the items
+// of forks/<root>/: per outer root, at its position in at, the producer's
+// ordinal of it, or, at -1, where the producer is not forked on it, the
+// ordinal the item's name carries before its own. A map key's token
 // follows the ordinals after an @; an array fork's is its ordinal.
 workflow ELEMENTS {
     take:
@@ -456,10 +469,11 @@ workflow ELEMENTS {
 
     main:
     out = forks.flatMap { kp, ds ->
-        ds.findAll { e -> e.parent.name == root }.collect { e ->
-            def t = e.name.tokenize('@')[0].tokenize('.').collect { x -> x as int }
+        ds.findAll { e -> itemParent(e) == root }.collect { e ->
+            def name = itemName(e)
+            def t = name.tokenize('@')[0].tokenize('.').collect { x -> x as int }
             def named = t.iterator()
-            [at.collect { a -> a >= 0 ? kp[a] : named.next() }, t[-1], e, keyed ? e.name.tokenize('@')[1] : t[-1].toString()]
+            [at.collect { a -> a >= 0 ? kp[a] : named.next() }, t[-1], e, keyed ? name.tokenize('@')[1] : t[-1].toString()]
         }
     }
 
@@ -482,7 +496,7 @@ workflow ZIP {
     absent
 
     main:
-    out = inst.map { k, fs, es, tk -> [k[at], k, fs, es, tk] }.combine(forks.map { kq, ds -> [kq, ds.findAll { e -> e.parent.name == partner }.collectEntries { e -> [(e.name): e] }] }, by: 0).map { _q, k, fs, es, tk, m ->
+    out = inst.map { k, fs, es, tk -> [k[at], k, fs, es, tk] }.combine(forks.map { kq, ds -> [kq, ds.findAll { e -> itemParent(e) == partner }.collectEntries { e -> [(itemName(e)): e] }] }, by: 0).map { _q, k, fs, es, tk, m ->
         [k, fs, es + ([m[tk[token]] ?: m[absent]] - [null]), tk]
     }
 
@@ -640,15 +654,15 @@ def planned(Map shared, Map meta, List d) {
 }
 
 // INPUT is each enabled instance as a stage process takes it, with the
-// meta GATE planned for it, the value records of the outs it reads apart
-// from the items it stages, and the call file it stages, if any; it stages
-// no entry file.
+// meta GATE planned for it, the value records of its elements and of the
+// outs it reads apart from the items it stages, and the call file it
+// stages, if any; it stages no entry file.
 workflow INPUT {
     take:
     inst
 
     main:
-    out = inst.map { k, fs, es, d, us -> [d, k, fs, recordsOf(us), es + bundlesOf(us), [], [], callStaged(d)] }
+    out = inst.map { k, fs, es, d, us -> [d, k, fs, recordsOf(es + us), bundlesOf(es + us), [], [], callStaged(d)] }
 
     emit:
     out
@@ -666,7 +680,7 @@ workflow INPUT_ENTRY {
     main:
     out = inst.combine(entry).map { k, fs, es, d, us, ef ->
         def ids = ef.files[d.node + ' ' + (k[at].join('.') ?: '-')] ?: []
-        [d, k, fs, recordsOf(us), es + bundlesOf(us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]
+        [d, k, fs, recordsOf(es + us), bundlesOf(es + us), ids, ids.collect { x -> ef.leaves[x] }, callStaged(d)]
     }
 
     emit:
@@ -729,29 +743,15 @@ workflow DONE {
     out
 }
 
-// POSTED is a node's outs, each instance's bundle dirs and value records
-// as one list of outs items, a disabled instance standing in with none.
+// POSTED is a node's outs or forks, each instance's dirs and value records
+// as one list of items, a disabled instance standing in with none.
 workflow POSTED {
     take:
-    outs
+    posted
     skip
 
     main:
-    all = outs.map { k, ds, vs -> [k, ds + vs.tokenize(' ')] }.mix(skip.map { v -> [v[0], []] })
-
-    emit:
-    all
-}
-
-// OR_SKIPPED is a node's fork dirs, a disabled instance standing in with
-// none.
-workflow OR_SKIPPED {
-    take:
-    out
-    skip
-
-    main:
-    all = out.mix(skip.map { v -> [v[0], []] })
+    all = posted.map { k, ds, vs -> [k, ds + vs.tokenize(' ')] }.mix(skip.map { v -> [v[0], []] })
 
     emit:
     all

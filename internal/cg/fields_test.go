@@ -30,8 +30,8 @@ type posted struct {
 func (f *fixture) postFields(outs string) posted {
 	f.t.Helper()
 
-	fields, values, gates := f.next("fields"), f.next("values"), f.next("gates")
-	if err := f.g.Post(PostSpec{Args: outs, Outs: outs, Forks: f.next("forks"), Fields: fields, Values: values, Gates: gates}); err != nil {
+	fields, values, gates, forks := f.next("fields"), f.next("values"), f.next("gates"), f.next("forks")
+	if err := f.g.Post(PostSpec{Args: outs, Outs: outs, Forks: forks, ForkValues: forkValues(forks), Fields: fields, Values: values, Gates: gates}); err != nil {
 		f.t.Fatal(err)
 	}
 
@@ -87,9 +87,9 @@ func TestPostFields(t *testing.T) {
 	}
 
 	for field, want := range map[string]string{"y": `4`, "flag": `false`} {
-		in, name, raw, err := f.g.readValue(p.values[field])
-		if err != nil || in.Node != "CH.SRC" || name != field || string(raw) != want {
-			t.Errorf("SRC's %s record is %s of %+v = %s (%v), want %s of CH.SRC", field, name, in, raw, err, want)
+		name, rec, err := decodeValue(p.values[field])
+		if err != nil || rec.Instance == nil || rec.Instance.Node != "CH.SRC" || name != field || string(rec.Value) != want {
+			t.Errorf("SRC's %s record is %s of %+v = %s (%v), want %s of CH.SRC", field, name, rec.Instance, rec.Value, err, want)
 		}
 	}
 
@@ -106,6 +106,7 @@ func TestPostFieldsNeedsValues(t *testing.T) {
 
 	for _, spec := range []PostSpec{{Fields: f.next("fields")}, {Values: f.next("values")}} {
 		spec.Args, spec.Outs, spec.Forks = src, src, f.next("forks")
+		spec.ForkValues = forkValues(spec.Forks)
 		if err := f.g.Post(spec); !errors.Is(err, errFieldsValues) {
 			t.Errorf("post with fields %q and values %q: %v, want %v", spec.Fields, spec.Values, err, errFieldsValues)
 		}
@@ -279,7 +280,7 @@ func BenchmarkPostGates(b *testing.B) {
 
 			for b.Loop() {
 				forks := b.TempDir()
-				if err := outs.g.Post(PostSpec{Args: outs.dir, Outs: outs.dir, Forks: forks, Gates: filepath.Join(forks, "gates")}); err != nil {
+				if err := outs.g.Post(PostSpec{Args: outs.dir, Outs: outs.dir, Forks: forks, ForkValues: filepath.Join(forks, "values"), Gates: filepath.Join(forks, "gates")}); err != nil {
 					b.Fatal(err)
 				}
 			}

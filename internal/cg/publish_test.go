@@ -245,7 +245,7 @@ func (r *publishRun) post(node, scratch string, outs map[string]any) error {
 		return err
 	}
 
-	return r.g.Post(PostSpec{Args: "args", Outs: "stage_outs", Forks: "forks", Fields: "outs", Values: "values"})
+	return r.g.Post(PostSpec{Args: "args", Outs: "stage_outs", Forks: "forks", ForkValues: "fork_values", Fields: "outs", Values: "values"})
 }
 
 // writeOuts publishes the pipeline outs from the staged bundles with

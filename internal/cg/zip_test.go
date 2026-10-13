@@ -27,7 +27,7 @@ func TestZipShortSourceReadsNull(t *testing.T) {
 	three := f.outs("ZIP_RUNTIME.THREE", nil, `{"xs":[1,2,3]}`)
 	two := f.outs("ZIP_RUNTIME.TWO", nil, `{"xs":[10,20]}`)
 
-	elems := elementDirs(t, f.post(three, three), "ZIP_RUNTIME.SHORT")
+	elems := elementItems(t, f.post(three, three), "ZIP_RUNTIME.SHORT")
 	if len(elems) != 3 {
 		t.Fatalf("THREE posted %d forks of SHORT, mrp ran 3", len(elems))
 	}
@@ -35,7 +35,7 @@ func TestZipShortSourceReadsNull(t *testing.T) {
 	var log bytes.Buffer
 
 	out := f.next("args")
-	if _, err := f.g.WriteArgs(ArgsSpec{Node: "ZIP_RUNTIME.SHORT", In: []string{elems[2], two}, Out: out, Log: &log}); err != nil {
+	if _, err := f.g.WriteArgs(withItems(ArgsSpec{Node: "ZIP_RUNTIME.SHORT", Out: out, Log: &log}, elems[2], two)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -59,11 +59,11 @@ func TestZipForksFromFirstSplit(t *testing.T) {
 	three := f.outs("ZIP_RUNTIME.THREE", nil, `{"xs":[1,2,3]}`)
 	two := f.outs("ZIP_RUNTIME.TWO", nil, `{"xs":[10,20]}`)
 
-	if n := len(elementDirs(t, f.post(three, three), "ZIP_RUNTIME.ORDER")); n != 0 {
+	if n := len(elementItems(t, f.post(three, three), "ZIP_RUNTIME.ORDER")); n != 0 {
 		t.Errorf("THREE posted %d forks of ORDER; mrp forks it over TWO.xs", n)
 	}
 
-	elems := elementDirs(t, f.post(two, two), "ZIP_RUNTIME.ORDER")
+	elems := elementItems(t, f.post(two, two), "ZIP_RUNTIME.ORDER")
 	if len(elems) != 2 {
 		t.Fatalf("TWO posted %d forks of ORDER, mrp ran 2", len(elems))
 	}
@@ -80,11 +80,11 @@ func TestZipNullSource(t *testing.T) {
 	none := f.outs("ZIP_RUNTIME.NONE", nil, `{"xs":null}`)
 	two := f.outs("ZIP_RUNTIME.TWO", nil, `{"xs":[10,20]}`)
 
-	if n := len(elementDirs(t, f.post(none, none), "ZIP_RUNTIME.NULL_MASTER")); n != 0 {
+	if n := len(elementItems(t, f.post(none, none), "ZIP_RUNTIME.NULL_MASTER")); n != 0 {
 		t.Errorf("NONE posted %d forks of NULL_MASTER, mrp ran none", n)
 	}
 
-	elems := elementDirs(t, f.post(two, two), "ZIP_RUNTIME.NULL_OTHER")
+	elems := elementItems(t, f.post(two, two), "ZIP_RUNTIME.NULL_OTHER")
 	if len(elems) != 2 {
 		t.Fatalf("TWO posted %d forks of NULL_OTHER, mrp ran 2", len(elems))
 	}
@@ -106,7 +106,7 @@ func TestZipLiteralMaster(t *testing.T) {
 
 	two := f.outs("ZIP_LITERAL.TWO", nil, `{"xs":[1,2]}`)
 
-	short := elementDirs(t, entry, "ZIP_LITERAL.SHORT")
+	short := elementItems(t, entry, "ZIP_LITERAL.SHORT")
 	if len(short) != 3 {
 		t.Fatalf("the entry posted %d forks of SHORT, mrp ran 3", len(short))
 	}
@@ -114,8 +114,8 @@ func TestZipLiteralMaster(t *testing.T) {
 	_, got := f.args("ZIP_LITERAL.SHORT", short[2], two)
 	wantArgs(t, "ZIP_LITERAL.SHORT fork2", got, `{"a":null,"b":30}`)
 
-	outer := elementDirs(t, entry, "ZIP_LITERAL.INNER_SHORT")
-	inner := elementDirs(t, entry, "ZIP_LITERAL.INNER_SHORT.PAIR")
+	outer := elementItems(t, entry, "ZIP_LITERAL.INNER_SHORT")
+	inner := elementItems(t, entry, "ZIP_LITERAL.INNER_SHORT.PAIR")
 
 	if len(outer) != 3 || len(inner) != 5 {
 		t.Fatalf("the entry posted %d forks of INNER_SHORT and %d of its PAIR; mrp ran 3 and 5", len(outer), len(inner))
@@ -125,14 +125,14 @@ func TestZipLiteralMaster(t *testing.T) {
 	wantArgs(t, "ZIP_LITERAL.INNER_SHORT.PAIR fork2_fork0", got, `{"a":null,"b":40}`)
 }
 
-// partnerDirs are the partner element dirs of node's output over root
+// partnerItems are the partner element items of node's output over root
 // that node's post wrote into forks, by name.
-func partnerDirs(t *testing.T, forks, root, node, output string) map[string]string {
+func partnerItems(t *testing.T, forks, root, node, output string) map[string]string {
 	t.Helper()
 
 	out := map[string]string{}
-	for _, d := range elementDirs(t, forks, PartnerDir(root, node, output)) {
-		out[filepath.Base(d)] = d
+	for _, it := range elementItems(t, forks, PartnerDir(root, node, output)) {
+		out[itemName(it)] = it
 	}
 
 	return out
@@ -150,8 +150,8 @@ func TestZipPartnerElements(t *testing.T) {
 	two := f.outs("ZIP_RUNTIME.TWO", nil, `{"xs":[10,20]}`)
 	none := f.outs("ZIP_RUNTIME.NONE", nil, `{"xs":null}`)
 
-	short := elementDirs(t, f.post(three, three), "ZIP_RUNTIME.SHORT")
-	twos := partnerDirs(t, f.post(two, two), "ZIP_RUNTIME.SHORT", "ZIP_RUNTIME.TWO", "xs")
+	short := elementItems(t, f.post(three, three), "ZIP_RUNTIME.SHORT")
+	twos := partnerItems(t, f.post(two, two), "ZIP_RUNTIME.SHORT", "ZIP_RUNTIME.TWO", "xs")
 
 	if d := cmp.Diff([]string{"0", "1", AbsentName}, slices.Sorted(maps.Keys(twos))); d != "" {
 		t.Errorf("TWO's partner elements of SHORT (-want +got):\n%s", d)
@@ -163,7 +163,7 @@ func TestZipPartnerElements(t *testing.T) {
 	var log bytes.Buffer
 
 	out := f.next("args")
-	if _, err := f.g.WriteArgs(ArgsSpec{Node: "ZIP_RUNTIME.SHORT", In: []string{short[2], twos[AbsentName]}, Out: out, Log: &log}); err != nil {
+	if _, err := f.g.WriteArgs(withItems(ArgsSpec{Node: "ZIP_RUNTIME.SHORT", Out: out, Log: &log}, short[2], twos[AbsentName])); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,8 +178,8 @@ func TestZipPartnerElements(t *testing.T) {
 		t.Errorf("log %q does not report b's missing element, as mrp logs it", log.String())
 	}
 
-	other := elementDirs(t, f.post(two, two), "ZIP_RUNTIME.NULL_OTHER")
-	nones := partnerDirs(t, f.post(none, none), "ZIP_RUNTIME.NULL_OTHER", "ZIP_RUNTIME.NONE", "xs")
+	other := elementItems(t, f.post(two, two), "ZIP_RUNTIME.NULL_OTHER")
+	nones := partnerItems(t, f.post(none, none), "ZIP_RUNTIME.NULL_OTHER", "ZIP_RUNTIME.NONE", "xs")
 
 	if len(nones) != 1 {
 		t.Fatalf("NONE wrote %d partner dirs for its null xs, want its absent record alone", len(nones))
@@ -195,9 +195,9 @@ func TestZipPartnerNotStagedFails(t *testing.T) {
 	f := loadFixture(t, "zip_runtime")
 
 	three := f.outs("ZIP_RUNTIME.THREE", nil, `{"xs":[1,2,3]}`)
-	short := elementDirs(t, f.post(three, three), "ZIP_RUNTIME.SHORT")
+	short := elementItems(t, f.post(three, three), "ZIP_RUNTIME.SHORT")
 
-	_, err := f.g.WriteArgs(ArgsSpec{Node: "ZIP_RUNTIME.SHORT", In: []string{short[0]}, Out: f.next("args")})
+	_, err := f.g.WriteArgs(withItems(ArgsSpec{Node: "ZIP_RUNTIME.SHORT", Out: f.next("args")}, short[0]))
 	if !errors.Is(err, ErrNotStaged) {
 		t.Errorf("WriteArgs = %v, want %v", err, ErrNotStaged)
 	}
@@ -215,9 +215,9 @@ func TestZipPartnerUnderLiteralMaster(t *testing.T) {
 	}
 
 	four := f.outs("ZIP_LITERAL.FOUR", nil, `{"xs":[1,2,3,4]}`)
-	fours := partnerDirs(t, f.post(four, four), "ZIP_LITERAL.INNER_LONG", "ZIP_LITERAL.FOUR", "xs")
+	fours := partnerItems(t, f.post(four, four), "ZIP_LITERAL.INNER_LONG", "ZIP_LITERAL.FOUR", "xs")
 
-	outer := elementDirs(t, entry, "ZIP_LITERAL.INNER_LONG")
+	outer := elementItems(t, entry, "ZIP_LITERAL.INNER_LONG")
 	inner := filepath.Join(entry, "ZIP_LITERAL.INNER_LONG.PAIR", "0001.0000")
 
 	_, got := f.args("ZIP_LITERAL.INNER_LONG.PAIR", outer[1], inner, fours["1"])
@@ -235,11 +235,11 @@ func TestZipPartnerMapKeys(t *testing.T) {
 	abc := f.outs("ZIP_RUNTIME_MAP.ABC", nil, `{"m":{"a":1,"b/c":2,"d e":3}}`)
 	ax := f.outs("ZIP_RUNTIME_MAP.AX", nil, `{"m":{"a":10,"x":20}}`)
 
-	byAX := elementDirs(t, f.post(ax, ax), "ZIP_RUNTIME_MAP.BY_AX")
-	abcs := partnerDirs(t, f.post(abc, abc), "ZIP_RUNTIME_MAP.BY_AX", "ZIP_RUNTIME_MAP.ABC", "m")
+	byAX := elementItems(t, f.post(ax, ax), "ZIP_RUNTIME_MAP.BY_AX")
+	abcs := partnerItems(t, f.post(abc, abc), "ZIP_RUNTIME_MAP.BY_AX", "ZIP_RUNTIME_MAP.ABC", "m")
 
-	if want := "0000@" + IndexToken(MapKey("a")); filepath.Base(byAX[0]) != want {
-		t.Errorf("BY_AX fork a is named %q, want %q", filepath.Base(byAX[0]), want)
+	if want := "0000@" + IndexToken(MapKey("a")); itemName(byAX[0]) != want {
+		t.Errorf("BY_AX fork a is named %q, want %q", itemName(byAX[0]), want)
 	}
 
 	_, got := f.args("ZIP_RUNTIME_MAP.BY_AX", byAX[0], abcs[IndexToken(MapKey("a"))])
@@ -289,8 +289,8 @@ func TestZipGatedPartner(t *testing.T) {
 
 	vals := f.outs("ZIPGATED.MKVALS", nil, `{"vs":[0,1,2,3]}`)
 	files := f.outs("ZIPGATED.MKFILES", nil, `{"fs":["/w/part0.txt","/w/part1.txt","/w/part2.txt","/w/part3.txt"]}`)
-	use := elementDirs(t, f.post(vals, vals), "ZIPGATED.USE")
-	fs := partnerDirs(t, f.post(files, files), "ZIPGATED.USE", "ZIPGATED.MKFILES", "fs")
+	use := elementItems(t, f.post(vals, vals), "ZIPGATED.USE")
+	fs := partnerItems(t, f.post(files, files), "ZIPGATED.USE", "ZIPGATED.MKFILES", "fs")
 
 	_, got := f.args("ZIPGATED.USE", use[1], fs["1"], f.outs("ZIPGATED.GATE", nil, `{"off":false}`))
 	wantArgs(t, "ZIPGATED.USE fork1", got, `{"f":"/w/part1.txt","v":1}`)
@@ -334,7 +334,7 @@ func TestDisableGatePartner(t *testing.T) {
 	f := &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
 
 	flags := f.outs("FORKDISABLED.FLAGS", nil, `{"skips":[false,true,false,true]}`)
-	skips := partnerDirs(t, f.post(flags, flags), "FORKDISABLED.GATED", "FORKDISABLED.FLAGS", "skips")
+	skips := partnerItems(t, f.post(flags, flags), "FORKDISABLED.GATED", "FORKDISABLED.FLAGS", "skips")
 
 	for i, want := range []string{`{"f":"/w/f0.txt"}`, ""} {
 		got := f.entryForkArgs("FORKDISABLED.GATED.USE", "FORKDISABLED.GATED", i, skips[strconv.Itoa(i)])
@@ -343,9 +343,9 @@ func TestDisableGatePartner(t *testing.T) {
 }
 
 // entryForkArgs writes the args of node's instance at fork i of root, an
-// entry-fed root, staging in and MKFILE's outs at that fork, as mre stage's
-// args step does; "" when the instance is disabled.
-func (f *fixture) entryForkArgs(node, root string, i int, in ...string) string {
+// entry-fed root, getting items and MKFILE's outs at that fork, as mre
+// stage's args step does; "" when the instance is disabled.
+func (f *fixture) entryForkArgs(node, root string, i int, items ...string) string {
 	f.t.Helper()
 
 	entry := f.next("entry")
@@ -353,15 +353,11 @@ func (f *fixture) entryForkArgs(node, root string, i int, in ...string) string {
 		f.t.Fatal(err)
 	}
 
-	el, err := f.g.ReadElement(elementDirs(f.t, entry, root)[i])
-	if err != nil {
-		f.t.Fatal(err)
-	}
-
+	el := itemElement(f.t, f.g, elementItems(f.t, entry, root)[i])
 	mk := f.outs("FORKDISABLED.GATED.MKFILE", el.Fork, `{"f":"/w/f`+strconv.Itoa(i)+`.txt"}`)
 	out := f.next("args")
 
-	inst, err := f.g.WriteArgs(ArgsSpec{Node: node, In: append(in, mk), Forks: []Element{el}, Out: out})
+	inst, err := f.g.WriteArgs(withItems(ArgsSpec{Node: node, Forks: []Element{el}, Out: out}, append(items, mk)...))
 	if err != nil {
 		f.t.Fatal(err)
 	}

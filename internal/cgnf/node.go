@@ -95,12 +95,13 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	}
 
 	outs, forks, gates := p.consumed(n.Fqid)
-	if outs {
-		w.linef("%s = POSTED(%s.out.outs, b%d.skip)", w.def(outsOf(i)), proc, i)
-	}
-
-	if forks {
-		w.linef("%s = OR_SKIPPED(%s.out.forks, b%d.skip)", w.def(forksOf(i)), proc, i)
+	for _, o := range []struct {
+		used      bool
+		name, out string
+	}{{outs, outsOf(i), "outs"}, {forks, forksOf(i), "forks"}} {
+		if o.used {
+			w.linef("%s = POSTED(%s.out.%s, b%d.skip)", w.def(o.name), proc, o.out, i)
+		}
 	}
 
 	if gates {
@@ -225,7 +226,7 @@ func positions(roots, xs []string) []int {
 
 // forkOn extends node n's instances, inst, by one of its roots. An
 // entry-fed root's forks are PLAN's records, passed as values; a stage-fed
-// root's are the element dirs its producer posted. A root in zr takes its
+// root's are the element items its producer posted. A root in zr takes its
 // index token.
 func (p *project) forkOn(w *wiring, inst string, n cg.TopoNode, root string, zr []string) string {
 	r := p.roots[root]
@@ -251,9 +252,9 @@ func (p *project) zip(w *wiring, inst string, z cg.Zip, n cg.TopoNode, zr []stri
 		gstr(cg.PartnerDir(z.Root, z.Node, z.Output)), slices.Index(zr, z.Root), gstr(cg.AbsentName))
 }
 
-// elements is the channel of root's fork element dirs its producer posted:
-// an outer root the producer is forked on takes the producer's ordinal for
-// it, any other the ordinal the dir's name carries.
+// elements is the channel of root's fork element items its producer
+// posted: an outer root the producer is forked on takes the producer's
+// ordinal for it, any other the ordinal the item's name carries.
 func (p *project) elements(w *wiring, r cg.TopoRoot) string {
 	prod := p.index[r.Producer]
 
