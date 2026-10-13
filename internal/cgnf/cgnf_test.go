@@ -282,7 +282,7 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_outs = POSTED(N0_GEN.out.outs, b0.skip, r0)",
+		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
 		"outs_files = outs_in.map { xs -> bundlesOf(xs) }",
 		", outs_in.map { xs -> recordsOf(xs) }, ",
 	} {
@@ -292,9 +292,8 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs",
 		"'-fields outs -field-values outs_values -field-refs outs_refs -forks forks -fork-values fork_values -fork-refs fork_refs -gates gates'",
-		"posted.join(sources).map { k, ds, vs, rs, src -> [k, referred(ds, rs, src) + vs.tokenize(' ')] }",
+		"posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }",
 		"ds.findAll { e -> itemName(e) in fields }",
 		"keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1])",
 		"return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')",
@@ -307,8 +306,38 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 		}
 	}
 
-	if n := strings.Count(stageModule, "eval('cat outs_values'), eval('cat outs_refs'), emit: outs"); n != 2 {
+	if n := strings.Count(stageModule, postedOutput); n != 2 {
 		t.Errorf("%d processes emit value records, want STAGE's and STAGE_JOIN's", n)
+	}
+}
+
+// postedOutput is the one output of a posting process: its outs dirs,
+// value records and refs, its fork dirs, value records and refs, and its
+// gates.
+const postedOutput = "tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), " +
+	"path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), eval('cat gates'), emit: posted"
+
+// TestEmitPostsOneOutput (#559): every output a process declares costs
+// Nextflow's DAG an edge, consumed or not, and most nodes' forks and
+// gates, and some nodes' outs, have no reader, which cost CellRanger 602
+// edges; so a posting process emits its outs, forks and gates as one
+// tuple, which POSTED, GATES and DONE read (diamond_min: GEN's outs;
+// zip_runtime: TWO's forks; split_gate_entry: SRC's gates;
+// preflight_order: TOP_CHECK's DONE).
+func TestEmitPostsOneOutput(t *testing.T) {
+	if n := strings.Count(stageModule, "emit: "); n != 4 {
+		t.Errorf("stage.nf's processes declare %d outputs, want one of each of STAGE, STAGE_SPLIT, STAGE_MAIN and STAGE_JOIN", n)
+	}
+
+	for fixture, want := range map[string]string{
+		"diamond_min":      "o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
+		"zip_runtime":      "o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
+		"split_gate_entry": "o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
+		"preflight_order":  "d0 = DONE(N0_TOP_CHECK.out.posted)",
+	} {
+		if main := wiringNF(readTree(t, emitFixture(t, fixture))); !strings.Contains(main, want) {
+			t.Errorf("%s's wiring lacks %q:\n%s", fixture, want, main)
+		}
 	}
 }
 
@@ -323,7 +352,7 @@ func TestEmitCarriesValueElements(t *testing.T) {
 	main := readTree(t, emitFixture(t, "zip_runtime"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_forks = POSTED(N0_TWO.out.forks, b0.skip, r0)",
+		"o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
 		"ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false)",
 		"ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
 	} {
@@ -343,7 +372,7 @@ func TestEmitCarriesValueElements(t *testing.T) {
 		}
 	}
 
-	if n := strings.Count(stageModule, "tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks"); n != 2 {
+	if n := strings.Count(stageModule, postedOutput); n != 2 {
 		t.Errorf("%d processes emit element value records, want STAGE's and STAGE_JOIN's", n)
 	}
 
@@ -761,7 +790,7 @@ func TestEmitGatesBySet(t *testing.T) {
 	main := wiringNF(readTree(t, emitFixture(t, "split_gate_entry")))
 
 	for _, want := range []string{
-		"o0_gates = GATES(N0_SRC.out.gates, b0.skip)",
+		"o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
 		"b1 = ENABLED(GATED(g1, o0_gates, [0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@', []), [])",
 		"b2 = ENABLED(GATED(g2, o0_gates, [0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@', []), [])",
 	} {
@@ -778,7 +807,7 @@ func TestEmitGatesBySet(t *testing.T) {
 	for name, want := range map[string]string{
 		"NODES": "[(f[0]): [f[1], f[2], f[3].tokenize(',').toSet()] + f.drop(4)]",
 		"GATE":  "r[1] == '1' || r[2].contains(k.join('.'))",
-		"GATES": "gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })",
+		"GATES": "posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })",
 		"GATED": ".combine(gates, by: 0).map { _c, k, fs, es, d, off, gs ->",
 	} {
 		if !strings.Contains(mains[name], want) {
@@ -978,11 +1007,11 @@ func TestEmitWaitsForPreflights(t *testing.T) {
 
 	want := []string{
 		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, [node: 'TOP.TOP_CHECK', special: ''], []), [])",
-		"d0 = DONE(N0_TOP_CHECK.out.outs)",
+		"d0 = DONE(N0_TOP_CHECK.out.posted)",
 		"nodes_after_0 = AFTER(nodes, d0)",
 		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.EMIT', special: ''], []), [])",
 		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, [node: 'TOP.SUB.CHECK', special: ''], []), [])",
-		"d2 = DONE(N2_CHECK.out.outs)",
+		"d2 = DONE(N2_CHECK.out.posted)",
 		"nodes_after_0_2 = AFTER(nodes_after_0, d2)",
 		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, [node: 'TOP.SUB.WORK', special: ''], []), [])",
 	}

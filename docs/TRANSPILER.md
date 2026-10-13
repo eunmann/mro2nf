@@ -165,8 +165,11 @@ phase's job as `mrp` runs it, resolving the instance's args before it in
 every task, and posting its outs after it in a join and a non-split stage's
 main. A split's chunk mains and join stage the split's inputs, the same
 instance tuple, and build its args again. Each process declares only the
-outputs its consumers stage; the steps of a call hand each other the
-instance, its args and its outs in memory. `stage.nf` also
+outputs its consumers stage, as one output: a posting process emits its
+outs, forks and gates as one tuple (`posted`), since Nextflow's DAG holds
+an edge per declared output whether a node reads it or not (602 of
+CellRanger's edges were outputs no node read). The steps of a call hand
+each other the instance, its args and its outs in memory. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_ROOT`) and that take a node's
 instances through each step of it (`FORK`, `ZIP`, `GATE`, `ENABLED`, `READ`, `GATHER`,

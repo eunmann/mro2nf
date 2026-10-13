@@ -43,6 +43,14 @@ func forksOf(i int) string { return "o" + strconv.Itoa(i) + "_forks" }
 func gatesOf(i int) string { return "o" + strconv.Itoa(i) + "_gates" }
 func doneOf(i int) string  { return "d" + strconv.Itoa(i) }
 
+// The positions of a node's outs dirs and of its fork dirs in what its
+// posting task emits (stage.nf postFlags), each before their value records
+// and refs.
+const (
+	postedOuts  = 1
+	postedForks = 4
+)
+
 // entryForks is the channel of PLAN's record of the forks of every
 // entry-fed root, a map by root.
 const entryForks = "entry_forks"
@@ -97,7 +105,7 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 
 	if holds := p.holdsAt(i); len(holds) > 0 {
 		done := w.def(doneOf(i))
-		w.linef("%s = DONE(%s.out.outs)", done, proc)
+		w.linef("%s = DONE(%s.out.posted)", done, proc)
 
 		for _, h := range holds {
 			w.linef("%s = AFTER(%s, %s)", w.def(nodesAfter(h)), w.use(nodesAfter(h[:len(h)-1])), done)
@@ -110,16 +118,17 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	}
 
 	for _, o := range []struct {
-		used      bool
-		name, out string
-	}{{outs, outsOf(i), "outs"}, {forks, forksOf(i), "forks"}} {
+		used bool
+		name string
+		at   int
+	}{{outs, outsOf(i), postedOuts}, {forks, forksOf(i), postedForks}} {
 		if o.used {
-			w.linef("%s = POSTED(%s.out.%s, b%d.skip, r%d)", w.def(o.name), proc, o.out, i, i)
+			w.linef("%s = POSTED(%s.out.posted, b%d.skip, r%d, %d)", w.def(o.name), proc, i, i, o.at)
 		}
 	}
 
 	if gates {
-		w.linef("%s = GATES(%s.out.gates, b%d.skip)", w.def(gatesOf(i)), proc, i)
+		w.linef("%s = GATES(%s.out.posted, b%d.skip)", w.def(gatesOf(i)), proc, i)
 	}
 
 	return w, nil

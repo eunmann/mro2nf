@@ -225,6 +225,10 @@ def mreStage(task, Map meta, phase, rest) {
 // one bundle per output, and the fork and partner elements they set, one
 // dir per element, or for each with no file leaf and small JSON a value
 // record; the files those dirs name by reference; and the gates they set.
+// The task emits them as one tuple, posted: [key, outs dirs, outs value
+// records, outs refs, fork dirs, fork value records, fork refs, gates]. An
+// output a node's readers do not consume still costs Nextflow's DAG an
+// edge, so each posting process has the one.
 def postFlags() {
     return '-fields outs -field-values outs_values -field-refs outs_refs -forks forks -fork-values fork_values -fork-refs fork_refs -gates gates'
 }
@@ -251,9 +255,7 @@ process STAGE {
     tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
-    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs
-    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks
-    tuple val(key), eval('cat gates'), emit: gates
+    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), eval('cat gates'), emit: posted
 
     script:
     """
@@ -318,9 +320,7 @@ process STAGE_JOIN {
     tuple val(meta), val(key), val(forks), val(values), path(ups, stageAs: 'in/u?', arity: '0..*'), path(refs, stageAs: 'refs/?/f/*', arity: '0..*'), val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*'), path(chunks, stageAs: 'chunks/*', arity: '0..*'), path('chunks/join.json'), path(couts, stageAs: 'chunkouts/*', arity: '0..*'), path(cf, stageAs: 'call.b64', arity: '0..*')
 
     output:
-    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), emit: outs
-    tuple val(key), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), emit: forks
-    tuple val(key), eval('cat gates'), emit: gates
+    tuple val(key), path('outs/*', type: 'dir', arity: '0..*'), eval('cat outs_values'), eval('cat outs_refs'), path('forks/*/*', type: 'dir', arity: '0..*'), eval('cat fork_values'), eval('cat fork_refs'), eval('cat gates'), emit: posted
 
     script:
     """
@@ -602,11 +602,11 @@ workflow GATE {
 // once however many nodes it gates; a disabled instance posts none.
 workflow GATES {
     take:
-    gates
+    posted
     skip
 
     main:
-    out = gates.map { kp, gs -> [kp, gs.tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })
+    out = posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })
 
     emit:
     out
@@ -894,18 +894,21 @@ workflow DONE {
     out
 }
 
-// POSTED is a node's outs or forks, each instance's dirs and value records
-// as one list of items, a disabled instance standing in with none. A dir
-// names a file by reference where its producer wrote it, which POSTED finds
-// among the sources of the instance's posting task (SOURCES), by its key.
+// POSTED is a node's outs, or its forks, each instance's dirs and value
+// records as one list of items, a disabled instance standing in with none:
+// the dirs, value records and refs at positions at to at + 2 of what its
+// task posted. A dir names a file by reference where its producer wrote
+// it, which POSTED finds among the sources of the instance's posting task
+// (SOURCES), by its key.
 workflow POSTED {
     take:
     posted
     skip
     sources
+    at
 
     main:
-    all = posted.join(sources).map { k, ds, vs, rs, src -> [k, referred(ds, rs, src) + vs.tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
+    all = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
 
     emit:
     all
