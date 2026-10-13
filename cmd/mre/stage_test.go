@@ -496,7 +496,7 @@ func TestStagePostNamesStagedFileByReference(t *testing.T) {
 		t.Fatalf("PASS: %v", err)
 	}
 
-	if got := readText(t, filepath.Join("pass", "outs_refs")); got != "outs/y\tpass/in/u1\tf/L0000\n" {
+	if got := readText(t, filepath.Join("pass", "outs_refs")); got != "outs/y\tpass/in/u1\tf/L0000" {
 		t.Errorf("PASS's references %q, want its y in MK's f, staged as pass/in/u1", got)
 	}
 
@@ -601,7 +601,7 @@ func TestStageSplitNamesStagedFileByReference(t *testing.T) {
 		t.Fatalf("split: %v", err)
 	}
 
-	wantRefs(t, "sp/chunk_refs", "chunks/chnk0\tsp/in/u1\tf/L0000\nchunks/chnk1\tsp/in/u1\tf/L0000\n", "sp/chunks/chnk0/f", "sp/chunks/chnk1/f")
+	wantRefs(t, "sp/chunk_refs", "chunks/chnk0\tsp/in/u1\tf/L0000 chunks/chnk1\tsp/in/u1\tf/L0000", "sp/chunks/chnk0/f", "sp/chunks/chnk1/f")
 
 	for _, c := range []string{"chnk0", "chnk1"} {
 		linkAll(t, work, map[string]string{c + "/in/u1": "mk/outs/f", c + "/chunk/" + c: "sp/chunks/" + c})
@@ -611,7 +611,7 @@ func TestStageSplitNamesStagedFileByReference(t *testing.T) {
 			t.Fatalf("%s: %v", c, err)
 		}
 
-		wantRefs(t, c+"/chunkout_refs", "chunkout/"+c+"\t"+c+"/in/u1\tf/L0000\n", c+"/chunkout/"+c+"/f")
+		wantRefs(t, c+"/chunkout_refs", "chunkout/"+c+"\t"+c+"/in/u1\tf/L0000", c+"/chunkout/"+c+"/f")
 	}
 
 	linkAll(t, work, map[string]string{
@@ -626,10 +626,10 @@ func TestStageSplitNamesStagedFileByReference(t *testing.T) {
 		t.Fatalf("join: %v", err)
 	}
 
-	wantRefs(t, "jn/outs_refs", "outs/y\tjn/in/u1\tf/L0000\n", "jn/outs/y/f")
+	wantRefs(t, "jn/outs_refs", "outs/y\tjn/in/u1\tf/L0000", "jn/outs/y/f")
 }
 
-// wantRefs requires the reference lines a task wrote to path to be want,
+// wantRefs requires the reference records a task wrote to path to be want,
 // and each of copies, a files dir a bundle would hold a copy in, absent.
 func wantRefs(t *testing.T, path, want string, copies ...string) {
 	t.Helper()

@@ -227,13 +227,21 @@ func (r *refRun) resolve(work string, items, refs []string) {
 		r.t.Fatal(err)
 	}
 
-	for line := range strings.Lines(string(raw)) {
-		f := strings.Split(strings.TrimSuffix(line, "\n"), "\t")
+	if strings.Contains(string(raw), "\n") {
+		r.t.Fatalf("outs_refs %q spans lines, want one", raw)
+	}
+
+	for rec := range strings.SplitSeq(string(raw), " ") {
+		if rec == "" {
+			continue
+		}
+
+		f := strings.Split(rec, "\t")
 		kind, i, _ := strings.Cut(f[1], "/")
 
 		n, err := strconv.Atoi(strings.TrimPrefix(i, "u"))
 		if err != nil {
-			r.t.Fatalf("reference %q: %v", line, err)
+			r.t.Fatalf("reference %q: %v", rec, err)
 		}
 
 		src := items[n-1]

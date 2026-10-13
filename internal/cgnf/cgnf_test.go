@@ -519,7 +519,7 @@ func TestEmitSizesChunksAndJoin(t *testing.T) {
 
 // TestEmitSplitNamesFilesByReference: a split and each chunk's main name
 // a file their task staged by reference in the chunk defs and the chunk's
-// outs, writing its lines to -out-refs, which the driver resolves, as
+// outs, writing its records to -out-refs, which the driver resolves, as
 // POSTED does, against the paths the task staged its items from: each
 // chunk stages the files its def names, and the join those every chunk's
 // def and outs name, but those in a dir the task stages whole.
@@ -530,7 +530,7 @@ func TestEmitSplitNamesFilesByReference(t *testing.T) {
 		"path('chunks/resources.tsv'), path('chunk_refs'), emit: split",
 		"tuple val(meta), val(key), path('chunkout/*', type: 'dir'), eval('cat chunkout_refs'), emit: chunk",
 		"return referred(cs, table.text, sources(us, rs, [], [])).collect { e -> [bundlesOf([e])[0], unstaged(rs + refsOf([e]), us)] }",
-		"refsOf(referred([o], lines, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))",
+		"refsOf(referred([o], recs, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))",
 		"return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })",
 		"[m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]",
 	} {
@@ -544,7 +544,8 @@ func TestEmitSplitNamesFilesByReference(t *testing.T) {
 // chunk, PLAN's and a split's resources table and references, reaches the
 // driver as a file it reads, not as an eval output, which Nextflow 26.04
 // joins line by line with string concatenation (TaskEnvCollector.collect),
-// quadratic in the lines.
+// quadratic in the lines; a task's reference records, which grow with a
+// join's chunks or a fork root's forks, are an eval output of one line.
 func TestEmitReadsRecordsFromFiles(t *testing.T) {
 	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
 
@@ -558,6 +559,10 @@ func TestEmitReadsRecordsFromFiles(t *testing.T) {
 		if !strings.Contains(stageModule, "path('"+rec+"')") || strings.Contains(stageModule, "eval('cat "+rec+"')") {
 			t.Errorf("STAGE_SPLIT does not output its %s as a file", rec)
 		}
+	}
+
+	if !strings.Contains(stageModule, "refs.tokenize(' ')") || strings.Contains(stageModule, "refs.tokenize('\\n')") {
+		t.Error("the driver does not read a task's reference records, its eval outputs outs_refs, fork_refs and chunkout_refs, as one line")
 	}
 }
 

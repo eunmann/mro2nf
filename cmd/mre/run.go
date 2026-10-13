@@ -286,21 +286,21 @@ type itemWriter struct {
 	staged shim.Staged
 }
 
-// write writes payload of params as the bundle dir and returns the lines
-// of the references it holds (shim.RefLines).
+// write writes payload of params as the bundle dir and returns the records
+// of the references it holds (shim.RefRecords).
 func (w itemWriter) write(dir string, payload map[string]any, params []*syntax.StructMember) ([]string, error) {
 	refs, err := shim.WriteItem(dir, payload, params, w.tbl, w.opts, w.staged)
 	if err != nil {
 		return nil, fmt.Errorf("write bundle %s: %w", dir, err)
 	}
 
-	return shim.RefLines(dir, refs), nil
+	return shim.RefRecords(dir, refs), nil
 }
 
-// writeRefs writes the reference lines refs to the file path, which the
+// writeRefs writes the reference records refs to the file path, which the
 // driver resolves (-out-refs).
 func writeRefs(path string, refs []string) error {
-	if err := os.WriteFile(path, []byte(strings.Join(refs, "")), filePerm); err != nil {
+	if err := os.WriteFile(path, []byte(shim.JoinRefs(refs)), filePerm); err != nil {
 		return fmt.Errorf("write -out-refs %q: %w", path, err)
 	}
 
@@ -455,7 +455,7 @@ type chunkJSON struct {
 // writeChunksDir writes each chunk def the split returned as a bundle of
 // its args, the files the chunk params name staged or named by reference as
 // w says, named by mrp's chunk name, and the join's resources beside them,
-// and returns the lines of the references. The split chose the files, so
+// and returns the records of the references. The split chose the files, so
 // w's opts confine them.
 func writeChunksDir(dir string, defs *core.StageDefs, params []*syntax.StructMember, w itemWriter) ([]string, error) {
 	var refs []string
@@ -560,7 +560,7 @@ func chunkNames(dir string) ([]string, error) {
 }
 
 // writeOutsBundle writes a job's _outs as a bundle of params, the files
-// they name staged or named by reference as w says, and returns the lines
+// they name staged or named by reference as w says, and returns the records
 // of the references.
 func writeOutsBundle(dir string, raw json.RawMessage, params []*syntax.StructMember, w itemWriter) ([]string, error) {
 	payload, err := outsPayload(raw)

@@ -388,11 +388,14 @@ item the file lies in by the path the task staged it at (`in/u<i>`,
 file's ordinal dir there (`-field-refs`, `-fork-refs`, `-out-refs`).
 `POSTED` joins each posting task's outputs, by instance key, to the paths
 the driver staged its items from (`SOURCES`, `JOIN_SOURCES`; `in/u?` names
-the i-th of the list by its index), and resolves each line to the ordinal
-dir in the producer's work dir, which the item carries beside its dir. A
-split's lines come in a file, `chunk_refs`, beside `resources.tsv`, a
-chunk's as an `eval` output: `CHUNKS` and `JOIN`, which already join the
-split's outputs to the instance's staged items, resolve them against the
+the i-th of the list by its index), and resolves each record to the
+ordinal dir in the producer's work dir, which the item carries beside its
+dir. A task's records come on one line, space-separated, so an `eval`
+output of them, whose records grow with a join's chunks or a fork root's
+forks, is collected in time linear in them. A split's come in a file,
+`chunk_refs`, beside `resources.tsv`, a chunk's as an `eval` output:
+`CHUNKS` and `JOIN`, which already join the split's outputs to the
+instance's staged items, resolve them against the
 paths the split, and each chunk, staged its items from (`chunked`,
 `joinRefs`), so each chunk stages the files its def names and the join
 those every chunk's def and outs name. A reader, OUTS included, stages

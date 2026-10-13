@@ -17,7 +17,7 @@ import (
 // holds no file and is small (valueRecord) as a record in the spec's Values
 // file, which the driver carries as a value, and any other as a stamped
 // bundle under the spec's Fields dir, <output>/, holding that output's
-// value and only its files, but those it names by reference, whose lines
+// value and only its files, but those it names by reference, whose records
 // the spec's FieldRefs file receives.
 func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 	st, err := g.Stage(in.Node)
@@ -68,10 +68,10 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 			return err
 		}
 
-		refs = append(refs, shim.RefLines(fd, named)...)
+		refs = append(refs, shim.RefRecords(fd, named)...)
 	}
 
-	if err := writeFile(spec.FieldRefs, strings.Join(refs, "")); err != nil {
+	if err := writeFile(spec.FieldRefs, shim.JoinRefs(refs)); err != nil {
 		return err
 	}
 

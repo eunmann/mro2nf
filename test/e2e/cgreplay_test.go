@@ -448,7 +448,7 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 }
 
 // indexRefs records the files the dirs a post wrote below base name by
-// reference, the lines of the file at path (mre stage -field-refs,
+// reference, the records of the file at path (mre stage -field-refs,
 // -fork-refs), each at its ordinal dir in the item it lies in, which a
 // task the replay runs is given by the path it lies at, as the driver
 // resolves them against the paths it staged the item from.
@@ -458,10 +458,14 @@ func (rp *cgReplay) indexRefs(base, path string) {
 		rp.t.Fatal(err)
 	}
 
-	for line := range strings.Lines(string(raw)) {
-		f := strings.Split(strings.TrimSuffix(line, "\n"), "\t")
+	for rec := range strings.SplitSeq(string(raw), " ") {
+		if rec == "" {
+			continue
+		}
+
+		f := strings.Split(rec, "\t")
 		if len(f) != 3 {
-			rp.t.Fatalf("%s: malformed reference %q", path, line)
+			rp.t.Fatalf("%s: malformed reference %q", path, rec)
 		}
 
 		item := filepath.Join(base, f[0])

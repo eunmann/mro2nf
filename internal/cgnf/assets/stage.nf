@@ -93,11 +93,11 @@ def sources(List us, List rs, List cs, List os) {
 
 // referred is the dirs a task wrote, each with the ordinal dir of every
 // file it names by reference (mre stage -field-refs, -fork-refs,
-// -out-refs: a line each of the dir's last two path components, the path
-// the task staged the item the file lies in at, and its ordinal dir
-// there), where the task's sources, src, hold it.
+// -out-refs: one line of space-separated records, each of the dir's last
+// two path components, the path the task staged the item the file lies in
+// at, and its ordinal dir there), where the task's sources, src, hold it.
 def referred(List ds, String refs, Map src) {
-    def by = refs.tokenize('\n').collect { l -> l.split('\t') }.groupBy { f -> f[0] }
+    def by = refs.tokenize(' ').collect { r -> r.split('\t') }.groupBy { f -> f[0] }
     return ds.collect { d ->
         def rs = by[itemPath(d).join('/')]
         rs ? [d] + rs.collect { f ->
@@ -781,7 +781,7 @@ workflow JOIN_SOURCES {
 
 // chunked is each chunk a split wrote, cs, with the ordinal dirs its task
 // stages by reference: the instance's, rs, and those of the files its def
-// names by reference (mre stage -out-refs, the split's lines in table),
+// names by reference (mre stage -out-refs, the split's records in table),
 // where the split task's sources, us and rs, hold them, but those in the
 // instance's items, us, which the chunk's task stages too.
 def chunked(List us, List rs, List cs, Path table) {
@@ -790,14 +790,14 @@ def chunked(List us, List rs, List cs, Path table) {
 
 // joinRefs are the ordinal dirs a split's join stages by reference: the
 // instance's, rs, those each chunk of chunked stages, and those of the
-// files each chunk's outs of os, [outs dir, its lines], name by reference
+// files each chunk's outs of os, [outs dir, its records], name by reference
 // (mre stage -out-refs), where that chunk's task's sources hold them, but
 // those in the items, chunks and chunk outs the join stages.
 def joinRefs(List us, List rs, List chunked, List os) {
     def by = chunked.collectEntries { c, crs -> [(c.name): [c, crs]] }
-    def outs = os.collectMany { o, lines ->
+    def outs = os.collectMany { o, recs ->
         def c = by[o.name]
-        refsOf(referred([o], lines, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))
+        refsOf(referred([o], recs, sources(us, c[1], [], []) + [('chunk/' + o.name): c[0]]))
     }
     return unstaged(rs + chunked.collectMany { e -> e[1] } + outs, us + chunked.collect { e -> e[0] } + os.collect { o -> o[0] })
 }
@@ -831,7 +831,7 @@ workflow JOIN {
     input
 
     main:
-    outs = chunk.map { m, k, o, lines -> [groupKey(k, m.chunks), [o, lines]] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }
+    outs = chunk.map { m, k, o, recs -> [groupKey(k, m.chunks), [o, recs]] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }
     none = split.filter { v -> v[2].isEmpty() }.map { v -> [v[1], []] }
     out = split.map { m, k, cs, j, res, t -> [k, m + resources(res).join, cs, j, t] }.join(input.map { v -> staged(v) }).join(outs.mix(none)).map { k, m, cs, j, t, fs, vs, us, rs, ids, ef, os ->
         [m, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]

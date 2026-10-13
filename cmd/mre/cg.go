@@ -176,7 +176,7 @@ type postFlags struct {
 	forks, forkValues, forkRefs, fields, values, fieldRefs, gates string
 }
 
-const refsUsage = ": lines of the item, by its last two path components, the staged item a leaf it names by reference lies in, and the leaf's ordinal dir there, tab-separated"
+const refsUsage = ": space-separated records of the item, by its last two path components, the staged item a leaf it names by reference lies in, and the leaf's ordinal dir there, tab-separated"
 
 func (p *postFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&p.forks, "forks", "forks", "dir to write <root>/<ordinal>/ fork elements and <root>@<node>.<output>/<index token>/ partner elements into, but for those -fork-values receives")

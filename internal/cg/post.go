@@ -46,13 +46,13 @@ type PostSpec struct {
 	// Forks is the dir that receives <root>/<ordinal>/ fork elements and
 	// <partner dir>/<index token>/ partner elements, but for those carried
 	// as values, whose records ForkValues receives, space-separated (item).
-	// ForkRefs receives the references of their bundles (shim.RefLines).
+	// ForkRefs receives the references of their bundles (shim.RefRecords).
 	Forks, ForkValues, ForkRefs string
 	// Fields is the dir that receives one stamped bundle per output, named
 	// by it, so a consumer stages only the outputs it reads, but for the
 	// outputs carried as values, whose records Values receives,
 	// space-separated (valueRecord). FieldRefs receives the references of
-	// the bundles (shim.RefLines).
+	// the bundles (shim.RefRecords).
 	Fields, Values, FieldRefs string
 	// Gates, when set, is the file that receives the nodes this instance's
 	// outs disable at its fork (Gates).
@@ -115,7 +115,7 @@ func (g *Graph) post(spec PostSpec) (*stagedStore, error) {
 		return nil, err
 	}
 
-	if err := writeFile(spec.ForkRefs, strings.Join(refs, "")); err != nil {
+	if err := writeFile(spec.ForkRefs, shim.JoinRefs(refs)); err != nil {
 		return nil, err
 	}
 
@@ -200,7 +200,7 @@ func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fo
 // Without values, each is a dir of its fork record. With values, each
 // carries the fork's element of the source collection too, and is written
 // as its readers get it (item), a dir, whose files opts treats, those of
-// staged named by reference in refs (shim.RefLines), or one of recs.
+// staged named by reference in refs (shim.RefRecords), or one of recs.
 type forkWriter struct {
 	r      *resolver
 	dir    string
@@ -349,7 +349,7 @@ func (w forkWriter) item(sub, name string, el json.Marshaler, param *syntax.Stru
 		return fmt.Errorf("write element %s: %w", dir, err)
 	}
 
-	*w.refs = append(*w.refs, shim.RefLines(dir, refs)...)
+	*w.refs = append(*w.refs, shim.RefRecords(dir, refs)...)
 
 	file, r := rec.elementRecord()
 
