@@ -15,9 +15,9 @@ import (
 )
 
 // writeFields writes the posted instance's outs as one stamped bundle per
-// declared output under dir/<output>/, each holding that output's value
-// and only its files.
-func (g *Graph) writeFields(in Instance, s *stagedStore, man types.Manifest, dir string) error {
+// declared output under the spec's Fields dir, <output>/, each holding that
+// output's value and only its files.
+func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 	st, err := g.Stage(in.Node)
 	if err != nil {
 		return err
@@ -28,7 +28,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, man types.Manifest, dir
 		return err
 	}
 
-	params, err := man.Params(st.Call().DecId, types.RoleOut)
+	params, err := spec.Manifest.Params(st.Call().DecId, types.RoleOut)
 	if err != nil {
 		return fmt.Errorf("out params of %s: %w", st.Fqid, err)
 	}
@@ -42,8 +42,8 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, man types.Manifest, dir
 			}
 		}
 
-		fd := filepath.Join(dir, p.Name)
-		if err := shim.WriteBundle(fd, map[string]any{p.Name: v}, []ir.Param{p}, man.Table(), shim.Opts{}); err != nil {
+		fd := filepath.Join(spec.Fields, p.Name)
+		if err := shim.WriteBundle(fd, map[string]any{p.Name: v}, []ir.Param{p}, spec.Manifest.Table(), shim.Opts{Mount: spec.Mount}); err != nil {
 			return fmt.Errorf("write %s output %s: %w", st.Fqid, p.Name, err)
 		}
 

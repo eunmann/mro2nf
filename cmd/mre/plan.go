@@ -15,6 +15,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/job"
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/util"
@@ -23,7 +24,7 @@ import (
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
 	entry, values, mropath, call, nodes, roots, counts, leaves, files, work string
-	overrides, psid                                                         string
+	overrides, psid, s3Mount                                                string
 	hostInputs, remoteInputs                                                bool
 }
 
@@ -41,6 +42,7 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
 	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
 	fs.BoolVar(&f.remoteInputs, "remote-inputs", false, "an entry file value may name a URI of any scheme, not only s3")
+	fs.StringVar(&f.s3Mount, "s3-mount", "", "the root every task mounts the input buckets under, read-only: an s3://<bucket>/<key> entry file value is <root>/<bucket>/<key>, which no task stages")
 	fs.StringVar(&f.work, "work", ".", "scratch dir")
 }
 
@@ -48,9 +50,10 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 // entry and the run's entry values as mrp builds an invocation from its
 // JSON form, compiles it as mrp does, so mrp's refusals fail the run before
 // any stage starts, and checks its call graph is within the witness's, and
-// that every entry file value is one the run may stage. It writes the call
-// every task compiles, each witness node's spec digest, disabled instances
-// and entry files, and the forks of each entry-fed root.
+// that every entry file value is one the run may stage, or, an s3:// one
+// under -s3-mount, one the mount shows at the path the call names it by.
+// It writes the call every task compiles, each witness node's spec digest,
+// disabled instances and entry files, and the forks of each entry-fed root.
 func runPlan(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 
@@ -75,6 +78,11 @@ func runPlan(_ context.Context, argv []string) error {
 		return fmt.Errorf("plan: %w", err)
 	}
 
+	mount, err := shim.ParseMount(f.s3Mount)
+	if err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+
 	paths := filepath.SplitList(f.mropath)
 
 	src, err := cg.ReadSource(f.entry, paths)
@@ -87,15 +95,17 @@ func runPlan(_ context.Context, argv []string) error {
 		return err
 	}
 
-	p, err := cg.MakePlan(src, inv, paths, f.work)
+	if inv, err = cg.MountEntryValues(src, inv, paths, mount); err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
+
+	p, err := cg.MakePlan(src, inv, paths, f.work, mount)
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
 	}
 
-	for _, l := range p.Leaves {
-		if err := cg.VetEntryLeaf(l, f.hostInputs, f.remoteInputs); err != nil {
-			return fmt.Errorf("plan: %w", err)
-		}
+	if err := f.vetLeaves(p.Leaves, mount); err != nil {
+		return err
 	}
 
 	if err := f.writeEntryFiles(p); err != nil {
@@ -105,14 +115,33 @@ func runPlan(_ context.Context, argv []string) error {
 	return f.write(p, job.Runtime{PSID: f.psid, Overrides: over})
 }
 
-// writeEntryFiles writes the run's entry file values, each by its index,
-// and per node and fork of its entry-fed roots, those its instance there
-// stages, and by the pipeline's fqid, those OUTS stages.
+// vetLeaves refuses an entry file value the run may not read: a mounted one
+// the mount does not show, any other one the run may not stage.
+func (f *planFlags) vetLeaves(leaves []cg.EntryLeaf, mount shim.Mount) error {
+	for _, l := range leaves {
+		vet := cg.VetEntryLeaf(l, f.hostInputs, f.remoteInputs)
+		if l.Mounted {
+			vet = cg.VetMountedLeaf(l, mount)
+		}
+
+		if vet != nil {
+			return fmt.Errorf("plan: %w", vet)
+		}
+	}
+
+	return nil
+}
+
+// writeEntryFiles writes the run's entry file values a task stages, each by
+// its index, and per node and fork of its entry-fed roots, those its
+// instance there stages, and by the pipeline's fqid, those OUTS stages.
 func (f *planFlags) writeEntryFiles(p cg.Plan) error {
 	var leaves, files strings.Builder
 
 	for i, l := range p.Leaves {
-		fmt.Fprintf(&leaves, "%d %s\n", i, base64.StdEncoding.EncodeToString([]byte(l.Value)))
+		if !l.Mounted {
+			fmt.Fprintf(&leaves, "%d %s\n", i, base64.StdEncoding.EncodeToString([]byte(l.Value)))
+		}
 	}
 
 	for _, n := range append(slices.Clone(p.Nodes), p.Outs) {

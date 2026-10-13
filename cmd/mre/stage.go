@@ -8,6 +8,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/job"
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -40,9 +41,18 @@ func runStage(ctx context.Context, argv []string) error {
 	s.run.register(fs)
 	s.post.register(fs)
 
+	root := fs.String("s3-mount", "", "the root every task mounts the input buckets under, read-only, whose paths the task's bundles name as they are")
+
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
+
+	mount, err := shim.ParseMount(*root)
+	if err != nil {
+		return fmt.Errorf("stage: %w", err)
+	}
+
+	s.args.mount, s.run.mount, s.post.mount = mount, mount, mount
 
 	g, man, err := gf.load()
 	if err != nil {
