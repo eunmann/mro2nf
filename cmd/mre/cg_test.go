@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/core"
 )
 
 // captureStdout redirects os.Stdout around fn and returns what it wrote.
@@ -92,25 +94,47 @@ func entryForks(t *testing.T, gf graphFlags, dir string) {
 }
 
 // argsStep runs mre stage's args step against the invocation gf locates,
-// writing the args bundle of the instance a names into out.
-func argsStep(gf graphFlags, a argsFlags, out string) (cg.Instance, error) {
+// linking the files of the args of the instance a names below out, and
+// returns the instance and its args, compact.
+func argsStep(gf graphFlags, a argsFlags, out string) (cg.Instance, string, error) {
 	g, err := gf.load()
 	if err != nil {
-		return cg.Instance{}, err
+		return cg.Instance{}, "", err
 	}
 
-	return a.write(g, out)
+	inst, args, err := a.write(g, out)
+	if err != nil || inst.Disabled {
+		return inst, "", err
+	}
+
+	raw, err := json.Marshal(args)
+
+	return inst, string(raw), err
 }
 
 // postStep runs mre stage's post step against the invocation gf locates,
-// posting the outs bundle outs of the instance the args bundle args stamps.
-func postStep(gf graphFlags, p postFlags, args, outs string) error {
+// posting outs as the outs of the instance inst, written below dir, and
+// returns the file of the value records it posted.
+func postStep(gf graphFlags, inst cg.Instance, outs map[string]any, dir, gates string) (string, error) {
 	g, err := gf.load()
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	return p.post(g, args, outs)
+	m := core.LazyArgumentMap{}
+
+	for k, v := range outs {
+		if m[k], err = json.Marshal(v); err != nil {
+			return "", err
+		}
+	}
+
+	p := postFlags{
+		forks: filepath.Join(dir, "forks"), forkValues: filepath.Join(dir, "fork_values"),
+		fields: filepath.Join(dir, "outs"), values: filepath.Join(dir, "outs_values"), gates: gates,
+	}
+
+	return p.values, p.post(g, inst, finished{outs: m})
 }
 
 // TestCallGraphSteps drives struct_proj through its entry forks, mre
@@ -129,46 +153,48 @@ func TestCallGraphSteps(t *testing.T) {
 		t.Fatalf("entry forks of MAKE: %v %v", elems, err)
 	}
 
-	sumx := argsFlags{node: "PP.SUMX"}
+	made := make([]string, 0, len(elems))
 
 	for i, el := range elems {
-		args, outs := filepath.Join(work, strconv.Itoa(i), "args"), filepath.Join(work, strconv.Itoa(i), "outs")
+		dir := filepath.Join(work, strconv.Itoa(i))
 
-		if inst, err := argsStep(gf, argsFlags{node: "PP.MAKE", in: repeatedFlag{el}}, args); err != nil || inst.Disabled {
+		inst, args, err := argsStep(gf, argsFlags{node: "PP.MAKE", in: repeatedFlag{el}}, filepath.Join(dir, "args"))
+		if err != nil || inst.Disabled {
 			t.Fatalf("MAKE fork %d: %+v, %v", i, inst, err)
 		}
 
-		if d := cmp.Diff(`{"n":`+strconv.Itoa(i+1)+`}`, compactBundle(t, args)); d != "" {
+		if d := cmp.Diff(`{"n":`+strconv.Itoa(i+1)+`}`, args); d != "" {
 			t.Errorf("MAKE fork %d _args (-mrp +mre):\n%s", i, d)
 		}
 
 		n := float64(i + 1)
-		writeTestBundle(t, outs, map[string]any{"p": map[string]any{"x": n, "y": 10 * n}})
 
-		if err := postStep(gf, postFlags{forks: filepath.Join(work, strconv.Itoa(i), "forks"), forkValues: filepath.Join(work, strconv.Itoa(i), "fork_values")}, args, outs); err != nil {
+		values, err := postStep(gf, inst, map[string]any{"p": map[string]any{"x": n, "y": 10 * n}}, dir, "")
+		if err != nil {
 			t.Fatal(err)
 		}
 
-		sumx.in = append(sumx.in, outs)
+		made = append(made, readText(t, values))
 	}
 
-	if _, err := argsStep(gf, sumx, filepath.Join(work, "sumx", "args")); err != nil {
+	sumxValues := writeTestFile(t, filepath.Join(work, "sumx_values"), strings.Join(made, "\n"))
+
+	inst, args, err := argsStep(gf, argsFlags{node: "PP.SUMX", values: sumxValues}, filepath.Join(work, "sumx", "args"))
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	if d := cmp.Diff(`{"xs":[1,2,3]}`, compactBundle(t, filepath.Join(work, "sumx", "args"))); d != "" {
+	if d := cmp.Diff(`{"xs":[1,2,3]}`, args); d != "" {
 		t.Errorf("SUMX _args (-mrp +mre):\n%s", d)
 	}
 
-	outs := filepath.Join(work, "sumx", "outs")
-	writeTestBundle(t, outs, map[string]any{"total": 6})
-
-	if err := postStep(gf, postFlags{forks: filepath.Join(work, "sumx", "forks"), forkValues: filepath.Join(work, "sumx", "fork_values")}, filepath.Join(work, "sumx", "args"), outs); err != nil {
+	values, err := postStep(gf, inst, map[string]any{"total": 6}, filepath.Join(work, "sumx"), "")
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	pipeline := filepath.Join(work, "pipeline_outs.json")
-	runCG(t, "outs", "-in", outs, "-work", filepath.Join(work, "ps"), "-o", filepath.Join(work, "results"), "-json", pipeline)
+	runCG(t, "outs", "-values", values, "-work", filepath.Join(work, "ps"), "-o", filepath.Join(work, "results"), "-json", pipeline)
 
 	got, err := os.ReadFile(pipeline)
 	if err != nil {
@@ -232,12 +258,12 @@ func TestArgsForkRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		args := filepath.Join(work, strconv.Itoa(i))
-		if _, err := argsStep(gf, argsFlags{node: "PP.MAKE", forks: repeatedFlag{base64.StdEncoding.EncodeToString(rec)}}, args); err != nil {
+		_, args, err := argsStep(gf, argsFlags{node: "PP.MAKE", forks: repeatedFlag{base64.StdEncoding.EncodeToString(rec)}}, filepath.Join(work, strconv.Itoa(i)))
+		if err != nil {
 			t.Fatal(err)
 		}
 
-		if d := cmp.Diff(`{"n":`+strconv.Itoa(i+1)+`}`, compactBundle(t, args)); d != "" {
+		if d := cmp.Diff(`{"n":`+strconv.Itoa(i+1)+`}`, args); d != "" {
 			t.Errorf("MAKE fork %d _args (-mrp +mre):\n%s", i, d)
 		}
 	}

@@ -74,7 +74,7 @@ func TestForkIDNamesMrpForks(t *testing.T) {
 
 	f := loadFixture(t, "map_fork_upstream")
 	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1,"beta":2,"gamma":3}}`)
-	elems := elementItems(t, f.post(gen, gen), "MFU.DBL")
+	elems := elementItems(t, f.post(gen), "MFU.DBL")
 
 	if inst, _ := f.args("MFU.DBL", elems[1]); inst.ForkID() != "fork_beta" {
 		t.Errorf("fork id %q, mrp's fork dir is fork_beta", inst.ForkID())

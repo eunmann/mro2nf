@@ -8,10 +8,11 @@
 // Nextflow 25.10 process accelerator directive cannot. Each task runs one
 // `mre stage` call: the instance's args, which it builds from the inputs it
 // staged, its phase's job as mrp runs it, and the post after it that the
-// phase has. A split's chunks and join stage the split's inputs and build
-// its args again, so no task outputs args: each links the files they name
-// where Nextflow staged them, which an object-store work dir would
-// otherwise receive as one copy per fork.
+// phase has, each step handing the next what it needs in memory. A split's
+// chunks and join stage the split's inputs and build its args again, so no
+// task outputs args: each links the files they name where Nextflow staged
+// them, which an object-store work dir would otherwise receive as one copy
+// per fork.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -90,7 +91,7 @@ def callStaged(Map meta) {
     return meta.call instanceof Path ? [meta.call] : []
 }
 
-// args is what a task builds the instance's args bundle from: what it
+// args is what a task builds the instance's args from: what it
 // staged, the value records valuesFile wrote, its entry fork records,
 // which are base64 and need no quoting, and the entry files it staged below
 // entry/, by their indices among the run's. The driver ran the instance
@@ -206,7 +207,7 @@ process STAGE {
     ${callScript(meta)}
     ${valuesFile(values)}
     mkdir -p in
-    ${mreStage(task, meta, 'main', "${args(meta, forks, values, leaves)} -args args -o stage_outs ${postFlags()}")}
+    ${mreStage(task, meta, 'main', "${args(meta, forks, values, leaves)} -args args ${postFlags()}")}
     """
 }
 
@@ -273,7 +274,7 @@ process STAGE_JOIN {
     ${callScript(meta)}
     ${valuesFile(values)}
     mkdir -p in
-    ${mreStage(task, meta, 'join', "${args(meta, forks, values, leaves)} -args args -chunks chunks -chunkouts chunkouts -o stage_outs ${postFlags()}")}
+    ${mreStage(task, meta, 'join', "${args(meta, forks, values, leaves)} -args args -chunks chunks -chunkouts chunkouts ${postFlags()}")}
     """
 }
 

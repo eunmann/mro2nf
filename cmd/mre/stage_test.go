@@ -203,13 +203,13 @@ func posted(dir string) []string {
 // the work dir, its cwd, as a task's own.
 func unsplitTask(node, dir string, in ...string) []string {
 	return slices.Concat([]string{"stage", "-phase", "main", "-node", node}, in,
-		[]string{"-args", dir + "/args", "-o", dir + "/stage_outs", "-work", dir}, posted(dir))
+		[]string{"-args", dir + "/args", "-work", dir}, posted(dir))
 }
 
 // splitTasks are the mre stage calls of a split stage's triad, each of
-// which builds the args bundle in its own dir with the args step's own
-// flags given as in: its split, a main per chunk, each writing its outs
-// into the join's chunkouts, and its join.
+// which builds the args in its own dir with the args step's own flags
+// given as in: its split, a main per chunk, each writing its outs into the
+// join's chunkouts, and its join.
 func splitTasks(node string, in ...string) [][]string {
 	tasks := [][]string{slices.Concat([]string{"stage", "-phase", "split", "-node", node}, in,
 		[]string{"-args", "sp/args", "-o", "sp/chunks", "-work", "sp"})}
@@ -220,7 +220,7 @@ func splitTasks(node string, in ...string) [][]string {
 	}
 
 	return append(tasks, slices.Concat([]string{"stage", "-phase", "join", "-node", node}, in,
-		[]string{"-args", "jn/args", "-chunks", "sp/chunks", "-chunkouts", "jn/chunkouts", "-o", "jn/stage_outs", "-work", "jn"}, posted("jn")))
+		[]string{"-args", "jn/args", "-chunks", "sp/chunks", "-chunkouts", "jn/chunkouts", "-work", "jn"}, posted("jn")))
 }
 
 // stageTasks are a run of stageMRO's enabled tasks, in dependency order,
@@ -348,15 +348,16 @@ func TestStageTasks(t *testing.T) {
 	wantLinkedArgs(t, tree)
 
 	_, err := mreIn(t, mro, "stage", "-phase", "join", "-node", "P.SQ", "-leaves", "0", "-args", "jn2/args", "-chunks", "sp/chunks",
-		"-chunkouts", t.TempDir(), "-o", "jn2/stage_outs", "-work", "jn2")
+		"-chunkouts", t.TempDir(), "-work", "jn2")
 	if !errors.Is(err, errNoChunk) {
 		t.Errorf("join without chunk outs: %v, want errNoChunk", err)
 	}
 }
 
 // wantLinkedArgs requires every task of TestStageTasks that read the entry
-// file to link it in its args bundle, so no task writes a copy of it (#507),
-// and every task of SQ's triad to build the split's args payload.
+// file to link it below its args dir, so no task writes a copy of it
+// (#507), and to write no file there; and every job of SQ's triad to get
+// the split's bindings, each its own link to the entry file.
 func wantLinkedArgs(t *testing.T, tree map[string]string) {
 	t.Helper()
 
@@ -364,16 +365,31 @@ func wantLinkedArgs(t *testing.T, tree map[string]string) {
 		if got := treeLeaf(t, tree, task+"/args/", "reads.txt"); !strings.HasPrefix(got, "-> ") {
 			t.Errorf("%s's args holds reads as %q, want a link", task, got)
 		}
+
+		for rel, v := range tree {
+			if strings.HasPrefix(rel, task+"/args/") && !strings.HasPrefix(v, "-> ") && v != "dir" && filepath.Base(rel) != ".mre-origin" {
+				t.Errorf("%s's args dir holds the file %s", task, rel)
+			}
+		}
 	}
 
-	split := tree["sp/args/data.json"]
-	if split == "" {
-		t.Fatal("the split wrote no args payload")
-	}
+	for task, meta := range map[string]string{"sp": "split", "chnk0": "chnk0", "chnk1": "chnk1", "jn": "join"} {
+		var args struct {
+			Xs    []int  `json:"xs"`
+			Reads string `json:"reads"`
+		}
 
-	for _, task := range []string{"chnk0", "chnk1", "jn"} {
-		if d := cmp.Diff(split, tree[task+"/args/data.json"]); d != "" {
-			t.Errorf("%s's args payload is not the split's (-split +%s):\n%s", task, task, d)
+		if err := json.Unmarshal([]byte(tree[task+"/"+meta+"/_args"]), &args); err != nil {
+			t.Fatalf("%s's _args: %v", task, err)
+		}
+
+		reads, err := filepath.Abs(filepath.Join(task, "args", "f", "L0000", "reads.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if d := cmp.Diff([]int{2, 3}, args.Xs); d != "" || args.Reads != reads {
+			t.Errorf("%s's _args xs %v, reads %s, want the split's bindings, reads %s", task, args.Xs, args.Reads, reads)
 		}
 	}
 }
@@ -398,30 +414,18 @@ func treeLeaf(t *testing.T, tree map[string]string, prefix, name string) string 
 }
 
 // TestStageRefusesADisabledInstance: an instance its args resolve disabled
-// fails its task with errNotEnabled, exit 1, before any job runs, and its
-// args bundle carries only its stamp, which records it disabled.
+// fails its task with errNotEnabled, exit 1, naming it, before any job
+// runs, and its task writes nothing.
 func TestStageRefusesADisabledInstance(t *testing.T) {
 	mro, dir := writeStagePipeline(t), t.TempDir()
-	args := filepath.Join(dir, "args")
 
-	_, err := mreIn(t, mro, "stage", "-phase", "split", "-node", "P.OFF", "-args", args, "-o", filepath.Join(dir, "chunks"), "-work", dir)
-	if !errors.Is(err, errNotEnabled) || exitCode(err) != 1 {
-		t.Errorf("mre stage of a disabled instance: %v, exit %d, want errNotEnabled, exit 1", err, exitCode(err))
+	_, err := mreIn(t, mro, "stage", "-phase", "split", "-node", "P.OFF", "-args", filepath.Join(dir, "args"), "-o", filepath.Join(dir, "chunks"), "-work", dir)
+	if !errors.Is(err, errNotEnabled) || exitCode(err) != 1 || !strings.Contains(err.Error(), "P.OFF") {
+		t.Errorf("mre stage of a disabled instance: %v, exit %d, want errNotEnabled for P.OFF, exit 1", err, exitCode(err))
 	}
 
-	for _, f := range []string{job.PhaseSplit, "chunks"} {
-		if _, err := os.Stat(filepath.Join(dir, f)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("a disabled instance's task wrote %s: %v", f, err)
-		}
-	}
-
-	g, err := (&graphFlags{entry: mro}).load()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if inst, err := g.ReadInstance(args); err != nil || !inst.Disabled || inst.Node != "P.OFF" {
-		t.Errorf("the args stamp: %+v, %v, want P.OFF disabled", inst, err)
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Errorf("a disabled instance's task wrote %v (%v)", entries, err)
 	}
 }
 
@@ -434,14 +438,13 @@ func TestStageExitCodes(t *testing.T) {
 		dir := t.TempDir()
 
 		_, err := mreIn(t, mro, slices.Concat([]string{
-			"stage", "-phase", "main", "-node", node, "-args", filepath.Join(dir, "args"),
-			"-o", filepath.Join(dir, "stage_outs"), "-work", dir,
+			"stage", "-phase", "main", "-node", node, "-args", filepath.Join(dir, "args"), "-work", dir,
 		}, posted(dir))...)
 		if err == nil || exitCode(err) != want {
 			t.Errorf("%s: %v, exit %d, want exit %d", node, err, exitCode(err), want)
 		}
 
-		for _, f := range []string{"stage_outs", "outs", "values", "forks", "gates"} {
+		for _, f := range []string{"outs", "values", "forks", "gates"} {
 			if _, err := os.Stat(filepath.Join(dir, f)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("%s: a failed job's task wrote %s: %v", node, f, err)
 			}

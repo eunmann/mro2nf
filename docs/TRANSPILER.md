@@ -161,12 +161,12 @@ The workflow that wires a node includes them once for it under its own alias
 (`include { STAGE as N3_DBL }`, a split stage as `N1_SUM_SQUARES_SP`, `_MN`
 and `_JN`), so a `withName:` selector names the node. Every stage task runs
 one `mre stage` call (§6), which compiles the call graph once and runs the
-phase's job as `mrp` runs it, building the instance's args bundle before it
-in every task, and posting its outs after it in a join and a non-split
-stage's main. A split's chunk mains and join stage the split's inputs, the
-same instance tuple, and build its args again. Each process declares only
-the outputs its consumers stage; the args and outs bundles between steps
-stay undeclared files of its work dir. `stage.nf` also
+phase's job as `mrp` runs it, resolving the instance's args before it in
+every task, and posting its outs after it in a join and a non-split stage's
+main. A split's chunk mains and join stage the split's inputs, the same
+instance tuple, and build its args again. Each process declares only the
+outputs its consumers stage; the steps of a call hand each other the
+instance, its args and its outs in memory. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_ROOT`) and that take a node's
 instances through each step of it (`FORK`, `ZIP`, `GATE`, `ENABLED`, `READ`, `GATHER`,
@@ -430,33 +430,33 @@ every filetype and struct, and the struct of each callable's outputs.
   the node.
 - **`mre stage -phase split|main|join -node <fqid>`** is the one `mre` call
   of a stage task. It compiles the call graph once and runs, against it, the
-  steps below that the phase has: every phase first builds the instance's
-  args bundle (`-args`) from what its task staged, its file leaves linked,
+  steps below that the phase has, each handing the next the instance, its
+  args and its outs in memory: every phase first resolves the instance and
+  its args from what its task staged, each file leaf linked below `-args`,
   as no other task stages it; then runs its job; then a join, or a
-  non-split stage's main, posts the outs bundle its job wrote (`-o`). A
-  split's chunk mains and join stage the split's inputs and build the same
-  args bundle the split did. An instance its args resolve disabled, where its
-  gates held it enabled, fails the task with exit 1 before any job runs, and
-  it posts nothing. A failed job exits as the job step below says, and no
-  post follows it; a failed args or post step exits 1. The bundles are
-  written to disk between steps and read back, so `_args` names the staged
-  paths a step reads them at.
-- **The args step** (`-node <fqid> -digest <d>`) builds one stage instance's
-  args bundle, once the node compiles to the spec
+  non-split stage's main, posts the outs its job wrote. A split's chunk
+  mains and join stage the split's inputs and resolve the same args the
+  split did. An instance its args resolve disabled, where its gates held it
+  enabled, fails the task with exit 1 before any job runs, and it writes
+  nothing. A failed job exits as the job step below says, and no post
+  follows it; a failed args or post step exits 1. Only the files the job
+  and the task's consumers read are written: `_args` names each file leaf
+  at its link below `-args`.
+- **The args step** (`-node <fqid> -digest <d>`) resolves one stage
+  instance and its args, once the node compiles to the spec
   digest PLAN planned. The instance's fork comes from the fork elements it
   staged or got as value records (`-values`), or the fork records it got as
   values (`-fork`, base64 of a `fork.json`), and its values from its
-  parents' stamped outs bundles and value records. A
-  disabled instance gets only its stamp, `instance.json`, which records the fork
-  and each part's fork count, from which `mrp`'s fork id follows. A map call
+  parents' stamped outs bundles and value records. The instance records the
+  fork and each part's fork count, from which `mrp`'s fork id follows. A map call
   that zips several splits forks over its master source: a split of known
   length if one has it, else its first split in source order. The other splits
   resolve at the same index, and, as in `mrp`, read null past the end of a
   shorter source or from a null one, and drop a longer one's extra elements.
   The missing element is logged, as at `mrp`'s default enforcement level;
   `mrp --strict` is not supported.
-- **The job step** runs the task's phase of the instance that `-args` stamps
-  as `mrp` runs its job (`internal/job`). py and comp stages run
+- **The job step** runs the task's phase of the instance the args step
+  resolved as `mrp` runs its job (`internal/job`). py and comp stages run
   under `mrjob`, built from the pinned module (`make build`), with `mrp`'s argv
   (`core/node.go` `runJob`):
   `mrjob <adapters>/python/martian_shell.py <code> <phase> <meta>
@@ -481,15 +481,16 @@ every filetype and struct, and the struct of each callable's outputs.
   its name, cpus, memory and special, as its job's `_jobinfo` records them
   (`Runtime.Resources`, Martian's resolution of the stage's `using` under the
   def the split returned and then the `-overrides` file, the node's own that
-  PLAN wrote). A main or join writes its outs bundle. The
-  files a job names in either are confined to the work dir (§7), strict under
-  `-confine`. Beside the job's metadata mre writes `_mre_stage`, the name of
+  PLAN wrote). A split stage's main writes its chunk's outs bundle (`-o`),
+  which its join stages; a non-split stage's main and a join hand their
+  job's outs to the post step. The files a job names in any of them are
+  confined to the work dir (§7), strict under `-confine`. Beside the job's metadata mre writes `_mre_stage`, the name of
   the stage the job ran. The adapter never reads it; the `mrp` ABI differential
   (`TestMrpDiff`) uses it to group stage invocations without depending on the
   Nextflow task graph, and the failure-parity leg (`TestMrpDiffFailureParity`)
   to name the stage a failed task ran.
-- **The post step** runs after the stage's last job. It stamps the outs
-  bundle with the instance (`instance.json`). It checks the outs with
+- **The post step** runs after the stage's last job, on the outs the job
+  wrote. It checks them with
   Martian's `LazyArgumentMap.ValidateOutputs`, as mrp's `Fork.verifyOutput`
   does. Then it
   writes one element per fork of every root this stage feeds:
@@ -518,12 +519,13 @@ every filetype and struct, and the struct of each callable's outputs.
   fork of that call. The posting task enumerates an outer call its own fork does
   not fix from what it staged, and prefixes the name with the ordinal of each
   such call, joined by dots. A root of known length is keyed by its own forks
-  alone, whatever outer calls its stages are also forked on. With `-fields` and
-  `-field-values`, it also writes the outs output by output, so a consumer
-  gets only the outputs it reads: one of a type with no file leaf and at most
-  `cg.MaxValueBytes` of JSON as a record in the `-field-values` file,
-  `<output>:` and base64 of the instance's stamp and the output's JSON, and
-  any other as one stamped bundle, `<dir>/<output>/`. A consumer's `-values`
+  alone, whatever outer calls its stages are also forked on. It writes the
+  outs output by output, so a consumer gets only the outputs it reads: one
+  of a type with no file leaf and at most `cg.MaxValueBytes` of JSON as a
+  record in the `-field-values` file, `<output>:` and base64 of the
+  instance's stamp and the output's JSON, and any other as one bundle
+  stamped with the instance (`instance.json`), `<-fields>/<output>/`, the
+  files it names staged as the job's own, confined (§7). A consumer's `-values`
   file holds the records it got, of outputs and elements alike, each naming
   the item it stands in for in its JSON; `mre outs` takes one too. With `-gates`, it writes the
   instances the instance's outs disable: of each node with a disable binding
@@ -576,8 +578,8 @@ set as mrp's own resolver, reattached read-only in-process.
 ## 7. Bundles
 
 A **bundle** is mre's container for "a set of typed values, including the files
-they reference": an args bundle, an outs bundle, a per-output field bundle, a
-chunk's args, a fork element. On disk it is a directory:
+they reference" that one task hands another: a per-output field bundle, a
+chunk's args, a chunk's outs, a fork element. On disk it is a directory:
 
 ```
 <bundle>/
@@ -587,7 +589,7 @@ chunk's args, a fork element. On disk it is a directory:
                          under the basename mrp passes the stage (#284);
                          data.json references them via a marker
   f/L0000/.mre-origin  ← the leaf's origin (#431)
-  instance.json        ← the instance stamp (args, outs and field bundles)
+  instance.json        ← the instance stamp (field bundles)
   fork.json            ← the fork record (fork element dirs)
 ```
 
@@ -610,15 +612,16 @@ Both prefixes resolve identically on read-back. The rules:
   copied into the bundle's `f/` tree and the leaf is *relativized* to a marker.
   This is `shim.MarkFiles`, which walks the compiled types to find exactly
   which leaves are files (recursing into structs, arrays and typed maps).
-- **Linked bundles** (on write): an args bundle is read only by its own
-  task, so the task's `mre stage` writes it linked
-  (`shim.WriteLinkedBundle`), linking each leaf instead of copying it: a leaf of a staged bundle by its ordinal
-  dir, whose origin record comes with it, any other file by itself beside its
-  origin record. A file every fork of a map call reads, such as a broadcast
+- **Linked args** (on write): a task's args are read only by its own job,
+  so `mre stage` links each of their file leaves below `-args`
+  (`shim.LinkLeaves`) instead of copying it, and writes no payload: a leaf
+  of a staged bundle by its ordinal dir, whose origin record comes with it,
+  any other file by itself beside its origin record, and `_args` names each
+  at its link. A file every fork of a map call reads, such as a broadcast
   upstream output or entry file, exists once, its producer's, however wide the
-  fork (#498). A split's chunks and join build their own args bundle from the
-  split's inputs, which Nextflow stages into them, so no task outputs an args
-  bundle and none carries a copy of the files it names (#507).
+  fork (#498). A split's chunks and join build their own args from the
+  split's inputs, which Nextflow stages into them, so no task outputs args
+  and none carries a copy of the files they name (#507).
 - **Origins** (on write): a file is one to `mrp` wherever it is referenced, so a
   bundle copies it once and gives every position that reaches it one marker,
   however many input bundles it arrived through. Its identity is its origin, the
@@ -719,7 +722,7 @@ post-processing publishes such a file only where it finds it, as `mrp`'s
 does. The driver hands each to `file(x, glob: false)`, so the head node never
 globs a name, and a task stages its list as `entry/<i>/<name>`; `mre stage
 -leaves` and `mre outs -leaves` map each value to the path it reads it at.
-The stage gets a staged value as a leaf of its args bundle (§7),
+The stage gets a staged value as a leaf linked below its args dir (§7),
 `<task>/args/f/L<nnnn>/<name>`: the same file name and content, at another
 path than the value, which `mrp` passes. A value with no file (`[]`, `{}`, a
 null field) stages nothing. A relative path names nothing from the stage's

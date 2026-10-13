@@ -171,10 +171,12 @@ func TestPostNeedsForkValues(t *testing.T) {
 	f := loadFixture(t, "map_fork_upstream")
 	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1}}`)
 
-	for _, spec := range []PostSpec{{Forks: f.next("forks")}, {ForkValues: f.next("fork_values")}} {
-		spec.Args, spec.Outs = gen, gen
-		if err := f.g.Post(spec); !errors.Is(err, errForkValues) {
-			t.Errorf("post with forks %q and fork values %q: %v, want %v", spec.Forks, spec.ForkValues, err, errForkValues)
+	for _, drop := range []func(*PostSpec){func(s *PostSpec) { s.Forks = "" }, func(s *PostSpec) { s.ForkValues = "" }} {
+		spec := postedSpec(t, f.g, gen, f.next("forks"))
+		drop(&spec)
+
+		if err := f.g.Post(spec); !errors.Is(err, errPostDirs) {
+			t.Errorf("post with forks %q and fork values %q: %v, want %v", spec.Forks, spec.ForkValues, err, errPostDirs)
 		}
 	}
 }
@@ -208,7 +210,7 @@ func TestPostCarriesFileLessElements(t *testing.T) {
 		{zr, two, PartnerDir("ZIP_RUNTIME.SHORT", "ZIP_RUNTIME.TWO", "xs"), nil, []string{"0", "1", AbsentName}},
 		{fbs, files, "FBS.PROC", []string{"0000", "0001"}, nil},
 	} {
-		forks := c.f.post(c.outs, c.outs)
+		forks := c.f.post(c.outs)
 
 		var dirs, names []string
 

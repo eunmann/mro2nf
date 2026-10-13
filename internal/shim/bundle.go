@@ -237,14 +237,20 @@ func ReadBundle(dir string) (json.RawMessage, error) {
 		return nil, fmt.Errorf("read bundle %s: %w", dir, err)
 	}
 
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve bundle %s: %w", dir, err)
-	}
-
 	v, err := decodeJSON(raw)
 	if err != nil {
 		return nil, fmt.Errorf("parse bundle %s: %w", dir, err)
+	}
+
+	return resolvePayload(dir, v)
+}
+
+// resolvePayload is the marked payload v of the bundle at dir with each
+// marker at its absolute path below dir and each escaped value restored.
+func resolvePayload(dir string, v any) (json.RawMessage, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve bundle %s: %w", dir, err)
 	}
 
 	resolved, err := mapStrings(v, func(s string) (string, error) {
@@ -314,19 +320,21 @@ func WriteBundle(dir string, payload map[string]any, params []*syntax.StructMemb
 	return writePayload(dir, marked)
 }
 
-// WriteLinkedBundle writes payload into dir as a bundle that no other task
-// stages, such as a stage task's args: each file leaf is a symlink to
-// the file payload names, which the task staged, not a copy of it. A leaf of
-// a staged bundle is linked by its ordinal dir, so its recorded origin comes
-// with it. A leaf under roots stays the path it is. A bundle another task
-// stages must carry its files: WriteBundle.
-func WriteLinkedBundle(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, roots Roots) error {
+// LinkLeaves links each file leaf of payload below dir, the files dir of
+// values that only their own task reads, such as a stage task's args, and
+// returns payload naming each leaf at its link, as ReadBundle would return
+// it from a bundle at dir. A link points at the file payload names, which
+// the task staged, not a copy of it: a leaf of a staged bundle by its
+// ordinal dir, so its recorded origin comes with it. A leaf under roots
+// stays the path it is. A bundle another task stages must carry its files:
+// WriteBundle.
+func LinkLeaves(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, roots Roots) (json.RawMessage, error) {
 	marked, err := markFiles(leafMarker{dir: dir, roots: roots, link: true, marks: map[string]string{}}, payload, params, tbl)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return writePayload(dir, marked)
+	return resolvePayload(dir, marked)
 }
 
 // writePayload writes a decoded payload as dir/data.json.

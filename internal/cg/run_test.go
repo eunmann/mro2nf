@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/martian-lang/martian/martian/core"
 )
 
 // standIn runs a fixture's literal invocation as the generated main.nf runs
@@ -179,9 +181,9 @@ func (s *standIn) instances(n TopoNode) [][]elemItem {
 	return out
 }
 
-// args writes the args of n's instance at elems, as mre stage's args step
-// does.
-func (s *standIn) args(n TopoNode, elems []elemItem) (Instance, string) {
+// args resolves n's instance at elems and its args, as mre stage's args
+// step does.
+func (s *standIn) args(n TopoNode, elems []elemItem) Instance {
 	s.t.Helper()
 
 	items, values := s.read(n.Reads)
@@ -217,15 +219,14 @@ func (s *standIn) args(n TopoNode, elems []elemItem) (Instance, string) {
 		recs = append(recs, el)
 	}
 
-	args := s.next("args")
 	dirs, elemValues := staging(items)
 
-	in, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(dirs)}, Values: append(values, elemValues...), Forks: recs, Out: args})
+	in, _, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(dirs)}, Values: append(values, elemValues...), Forks: recs, Out: s.next("args")})
 	if err != nil {
 		s.t.Fatalf("args of %s: %v", n.Fqid, err)
 	}
 
-	return in, args
+	return in
 }
 
 // partner is what the driver gives of z to the instance at fork: the
@@ -281,22 +282,17 @@ func (s *standIn) node(n TopoNode) int {
 	ran := 0
 
 	for _, elems := range s.instances(n) {
-		in, args := s.args(n, elems)
+		in := s.args(n, elems)
 		if in.Disabled {
 			continue
 		}
 
-		st, err := s.g.Stage(n.Fqid)
-		if err != nil {
+		var outs core.LazyArgumentMap
+		if err := json.Unmarshal(s.standInOuts(n.Fqid), &outs); err != nil {
 			s.t.Fatal(err)
 		}
 
-		outs := s.next("outs")
-		if err := writeOuts(outs, s.standInOuts(n.Fqid), s.g, st.Call().DecId); err != nil {
-			s.t.Fatal(err)
-		}
-
-		spec := PostSpec{Args: args, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Values: s.next("values"), Gates: s.next("gates")}
+		spec := PostSpec{Instance: in, Outs: outs, Forks: s.next("forks"), Fields: s.next("fields"), Values: s.next("values"), Gates: s.next("gates")}
 		spec.ForkValues = forkValues(spec.Forks)
 		if err := s.g.Post(spec); err != nil {
 			s.t.Fatalf("post %s: %v", n.Fqid, err)

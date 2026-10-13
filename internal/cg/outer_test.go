@@ -104,7 +104,7 @@ func TestInnerForkIndependentOfOuter(t *testing.T) {
 		}
 
 		gen := f.outs("TOP.GEN", nil, `{"xs":[1,2]}`)
-		subs := elementItems(t, f.post(gen, gen), "TOP.OUTER2.SUB2")
+		subs := elementItems(t, f.post(gen), "TOP.OUTER2.SUB2")
 
 		if d := cmp.Diff([]string{"0000", "0001"}, baseNames(subs)); d != "" {
 			t.Fatalf("SUB2 fork names (-want +got):\n%s", d)
@@ -138,7 +138,7 @@ func TestNestedForkUnderRuntimeOuter(t *testing.T) {
 	}
 
 	gen := f.outs("TOP.GEN", nil, `{"xss":[[1,2],[3]]}`)
-	forks := f.post(gen, gen)
+	forks := f.post(gen)
 
 	outers := elementItems(t, forks, "TOP.OUTER")
 	echoes := elementItems(t, forks, "TOP.OUTER.ECHO")

@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 )
 
-// The records only mre reads: an instance stamp beside an args or outs
-// bundle's data.json, the task record beside a posted outs bundle's stamp,
+// The records only mre reads: an instance stamp beside an outs bundle's
+// data.json, the task record beside a posted outs bundle's stamp,
 // the fork record of a fork element dir, and the record of a partner element
 // dir (partnerJSON).
 const (
@@ -64,7 +64,7 @@ type elementJSON struct {
 	Position int        `json:"position"`
 }
 
-// ReadInstance reads the instance stamp in dir, an args or outs bundle.
+// ReadInstance reads the instance stamp in dir, an outs bundle.
 func (g *Graph) ReadInstance(dir string) (Instance, error) {
 	var rec instanceJSON
 	if err := readRecord(filepath.Join(dir, instanceFile), &rec); err != nil {

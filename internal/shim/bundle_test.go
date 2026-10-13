@@ -314,14 +314,21 @@ func writeStageOuts(t *testing.T, work string, payload map[string]any, params []
 func leafOrigins(t *testing.T, dir string) map[string]shim.Origin {
 	t.Helper()
 
+	return payloadOrigins(t, readPayload(t, dir))
+}
+
+// payloadOrigins maps each file leaf of a payload read back to its origin.
+func payloadOrigins(t *testing.T, payload map[string]any) map[string]shim.Origin {
+	t.Helper()
+
 	out := map[string]shim.Origin{}
 
-	for name, v := range readPayload(t, dir) {
+	for name, v := range payload {
 		leaf, _ := v.(string)
 
 		o, ok, err := shim.ReadOrigin(leaf)
 		if err != nil || !ok {
-			t.Fatalf("origin of %s in %s: %v (recorded %v)", name, dir, err, ok)
+			t.Fatalf("origin of %s at %s: %v (recorded %v)", name, leaf, err, ok)
 		}
 
 		out[name] = o
@@ -345,11 +352,30 @@ func writeSelfNamed(t *testing.T, path string) string {
 	return path
 }
 
-// TestWriteLinkedBundle: a linked bundle holds no copy of a file it names
-// (#498). A leaf of a staged bundle is linked by its ordinal dir, origin
-// record and all, and a host file by itself, its origin recorded beside it;
-// both read back as the files, with the origins a copying bundle records.
-func TestWriteLinkedBundle(t *testing.T) {
+// linkLeaves links payload's leaves below dir and returns it read back.
+func linkLeaves(t *testing.T, dir string, payload map[string]any, params []*syntax.StructMember, roots shim.Roots) map[string]any {
+	t.Helper()
+
+	raw, err := shim.LinkLeaves(dir, payload, params, fileTable(t), roots)
+	if err != nil {
+		t.Fatalf("LinkLeaves: %v", err)
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+
+	return out
+}
+
+// TestLinkLeaves: linked leaves hold no copy of a file they name (#498),
+// and no payload file. A leaf of a staged bundle is linked by its ordinal
+// dir, origin record and all, and a host file by itself, its origin
+// recorded beside it; both read back as the files, with the origins a
+// copying bundle records, at their links, as ReadBundle names a bundle's
+// leaves.
+func TestLinkLeaves(t *testing.T) {
 	dir := t.TempDir()
 	one := fields(t, "f file")
 	params := fields(t, "host file", "up file")
@@ -359,14 +385,12 @@ func TestWriteLinkedBundle(t *testing.T) {
 	produced := writeStageOuts(t, filepath.Join(dir, "producer"), map[string]any{"f": own}, one)
 	staged, _ := readPayload(t, stageBundle(t, produced, filepath.Join(dir, "task", "in", "u0")))["f"].(string)
 
-	bundle := filepath.Join(dir, "task", "args")
-	if err := shim.WriteLinkedBundle(bundle, map[string]any{"host": host, "up": staged}, params, fileTable(t), shim.Roots{}); err != nil {
-		t.Fatalf("WriteLinkedBundle: %v", err)
-	}
+	args := filepath.Join(dir, "task", "args")
+	linked := linkLeaves(t, args, map[string]any{"host": host, "up": staged}, params, shim.Roots{})
 
 	var files []string
 
-	err := filepath.WalkDir(bundle, func(_ string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(args, func(_ string, d fs.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() {
 			files = append(files, d.Name())
 		}
@@ -377,27 +401,31 @@ func TestWriteLinkedBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if d := cmp.Diff([]string{"data.json", ".mre-origin"}, files); d != "" {
-		t.Errorf("files the bundle holds (-want +got):\n%s", d)
+	if d := cmp.Diff([]string{".mre-origin"}, files); d != "" {
+		t.Errorf("files the args dir holds (-want +got):\n%s", d)
 	}
 
 	want := map[string]shim.Origin{"host": {Path: host, Linked: true}, "up": {Path: own}}
-	if d := cmp.Diff(want, leafOrigins(t, bundle)); d != "" {
+	if d := cmp.Diff(want, payloadOrigins(t, linked)); d != "" {
 		t.Errorf("origins (-want +got):\n%s", d)
 	}
 
 	for name, src := range map[string]string{"host": host, "up": own} {
-		leaf, _ := readPayload(t, bundle)[name].(string)
+		leaf, _ := linked[name].(string)
 		if got, err := os.ReadFile(leaf); err != nil || string(got) != src {
 			t.Errorf("%s reads %q (%v), want %s's bytes", name, got, err, src)
+		}
+
+		if !strings.HasPrefix(leaf, args+string(filepath.Separator)) {
+			t.Errorf("%s is named %s, want its link below %s", name, leaf, args)
 		}
 	}
 }
 
-// TestWriteLinkedBundleFails: a linked bundle fails loudly where it cannot
-// place a leaf's link, whether the files dir is blocked or a link already
-// holds the leaf's place, for a host file and for a staged bundle's leaf.
-func TestWriteLinkedBundleFails(t *testing.T) {
+// TestLinkLeavesFails: linking fails loudly where it cannot place a leaf's
+// link, whether the files dir is blocked or a link already holds the
+// leaf's place, for a host file and for a staged bundle's leaf.
+func TestLinkLeavesFails(t *testing.T) {
 	dir := t.TempDir()
 	one := fields(t, "f file")
 
@@ -419,17 +447,15 @@ func TestWriteLinkedBundleFails(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if err := shim.WriteLinkedBundle(blocked, payload, one, fileTable(t), shim.Roots{}); err == nil {
-				t.Error("WriteLinkedBundle with the files dir blocked succeeded")
+			if _, err := shim.LinkLeaves(blocked, payload, one, fileTable(t), shim.Roots{}); err == nil {
+				t.Error("LinkLeaves with the files dir blocked succeeded")
 			}
 
 			twice := filepath.Join(t.TempDir(), "args")
-			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), shim.Roots{}); err != nil {
-				t.Fatalf("WriteLinkedBundle: %v", err)
-			}
+			linkLeaves(t, twice, payload, one, shim.Roots{})
 
-			if err := shim.WriteLinkedBundle(twice, payload, one, fileTable(t), shim.Roots{}); err == nil {
-				t.Error("WriteLinkedBundle over a bundle that holds the leaf's link succeeded")
+			if _, err := shim.LinkLeaves(twice, payload, one, fileTable(t), shim.Roots{}); err == nil {
+				t.Error("LinkLeaves over a dir that holds the leaf's link succeeded")
 			}
 		})
 	}
@@ -463,15 +489,9 @@ func TestRealPathOfLinkedArgsStages(t *testing.T) {
 	}
 
 	staged, _ := readPayload(t, filepath.Join(task, "in", "u0"))["f"].(string)
-	args := filepath.Join(task, "args")
-
-	if err := shim.WriteLinkedBundle(args, map[string]any{"host": entry, "up": staged}, params, fileTable(t), shim.Roots{}); err != nil {
-		t.Fatal(err)
-	}
-
 	resolved := map[string]any{}
 
-	for name, v := range readPayload(t, args) {
+	for name, v := range linkLeaves(t, filepath.Join(task, "args"), map[string]any{"host": entry, "up": staged}, params, shim.Roots{}) {
 		leaf, _ := v.(string)
 
 		r, err := filepath.EvalSymlinks(leaf)

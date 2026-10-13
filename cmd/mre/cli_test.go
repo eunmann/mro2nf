@@ -8,20 +8,8 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/job"
-	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
-	"github.com/martian-lang/martian/martian/syntax"
 )
-
-// writeTestBundle writes payload as a bundle directory with no file leaves.
-func writeTestBundle(t *testing.T, dir string, payload map[string]any) {
-	t.Helper()
-
-	if err := shim.WriteBundle(dir, payload, nil, types.NewTable(syntax.NewTypeLookup()), shim.Opts{}); err != nil {
-		t.Fatalf("write bundle %s: %v", dir, err)
-	}
-}
 
 // writeTestFile writes content to path and returns path.
 func writeTestFile(t *testing.T, path, content string) string {

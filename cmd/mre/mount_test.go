@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -236,21 +237,26 @@ func stageEcho(t *testing.T, root, value string, planFlags, flags []string) {
 }
 
 // assertEchoed requires the ECHO task in the cwd to have been handed ref
-// and to have posted it as it is, with no files dir in any bundle.
+// and to have posted it as it is, with no files dir below its args or in
+// the bundle it posted.
 func assertEchoed(t *testing.T, ref string) {
 	t.Helper()
 
-	for bundle, want := range map[string]string{
-		"args":       `{"ref":"` + ref + `"}`,
-		"stage_outs": `{"same":"` + ref + `"}`,
-		"outs/same":  `{"same":"` + ref + `"}`,
-	} {
-		if got := compactBundle(t, bundle); got != want {
-			t.Errorf("%s holds %s, want %s", bundle, got, want)
-		}
+	var args struct {
+		Ref string `json:"ref"`
+	}
 
-		if _, err := os.Lstat(filepath.Join(bundle, "f")); !os.IsNotExist(err) {
-			t.Errorf("%s has a files dir (%v), want none", bundle, err)
+	if err := json.Unmarshal([]byte(readText(t, filepath.Join("chnk0", "_args"))), &args); err != nil || args.Ref != ref {
+		t.Errorf("ECHO's _args ref %q (%v), want %s", args.Ref, err, ref)
+	}
+
+	if got, want := compactBundle(t, filepath.Join("outs", "same")), `{"same":"`+ref+`"}`; got != want {
+		t.Errorf("outs/same holds %s, want %s", got, want)
+	}
+
+	for _, dir := range []string{"args", filepath.Join("outs", "same")} {
+		if _, err := os.Lstat(filepath.Join(dir, "f")); !os.IsNotExist(err) {
+			t.Errorf("%s has a files dir (%v), want none", dir, err)
 		}
 	}
 }

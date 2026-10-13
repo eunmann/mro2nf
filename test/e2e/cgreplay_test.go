@@ -19,7 +19,6 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/job"
-	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -28,12 +27,14 @@ import (
 // pipestance through the call-graph data plane: in DAG order, every stage
 // instance runs its tasks through `mre stage` as a local run's tasks do,
 // reading host entry inputs in place, from only
-// what the instance stages (its fork elements and its parents' stamped
-// outs): the task that runs its first job builds its args bundle, each task
-// runs its phase's job through mrjob, and the task that runs its last job
-// stamps its outs and writes the fork elements downstream instances fan out
-// over; `mre outs` then resolves the pipeline outs. It requires:
-//   - every instance's _args equal to mrp's after both are re-encoded and
+// what the instance stages (its fork elements and its parents' posted
+// outs): each task builds the instance's args, the task that runs its
+// first job reporting it disabled, each task runs its phase's job through
+// mrjob, and the task that runs its last job posts its outs and the fork
+// elements downstream instances fan out over; `mre outs` then resolves the
+// pipeline outs. It requires:
+//   - every instance's _args, resolved in-process from the same items,
+//     equal to mrp's after both are re-encoded and
 //     file leaves are reduced to name and content digest, and its disabled
 //     state, which `mre stage` reports by refusing the instance before any
 //     job runs, to match mrp's _disabled marker;
@@ -97,11 +98,11 @@ type cgReplay struct {
 	jobs      int
 }
 
-// postedInstance is one stage instance its last task posted: its outs, and
-// the elements it feeds, as dirs and as value records.
+// postedInstance is one stage instance its last task posted: its outs and
+// the elements it feeds, each as dirs and as value records.
 type postedInstance struct {
-	fork                    cg.Fork
-	outs, forks, forkValues string
+	fork                                cg.Fork
+	outs, outsValues, forks, forkValues string
 }
 
 // replayedFork is what the replay resolved for one mrp fork dir.
@@ -118,14 +119,13 @@ type replayInstance struct {
 }
 
 // replayTasks are the files an instance's tasks share below its dir work:
-// the args bundle the first task builds, the split's chunks dir, each
-// chunk's outs bundle, the outs bundle and fork elements the last task
-// posts, and the value records it posts of those elements; and in, the
-// args step's flags naming the items every task of the instance gets to
-// build its own args bundle.
+// the dir the first task links its args' files below, the split's chunks
+// dir, each chunk's outs bundle, the outs and fork elements the last task
+// posts, as dirs and as value records; and in, the items every task of the
+// instance gets to build its own args.
 type replayTasks struct {
-	work, args, chunks, chunkOuts, outs, forks, forkValues string
-	in                                                     []string
+	work, args, chunks, chunkOuts, outs, outsValues, forks, forkValues string
+	in                                                                 []string
 }
 
 func newReplayTasks(work string) replayTasks {
@@ -135,6 +135,7 @@ func newReplayTasks(work string) replayTasks {
 		chunks:     filepath.Join(work, "chunks"),
 		chunkOuts:  filepath.Join(work, "chunkouts"),
 		outs:       filepath.Join(work, "outs"),
+		outsValues: filepath.Join(work, "outs_values"),
 		forks:      filepath.Join(work, "forks"),
 		forkValues: filepath.Join(work, "fork_values"),
 	}
@@ -142,7 +143,7 @@ func newReplayTasks(work string) replayTasks {
 
 // posting are the flags of the task that posts the instance's outs.
 func (t replayTasks) posting() []string {
-	return []string{"-o", t.outs, "-forks", t.forks, "-fork-values", t.forkValues}
+	return []string{"-fields", t.outs, "-field-values", t.outsValues, "-forks", t.forks, "-fork-values", t.forkValues}
 }
 
 // notEnabled is the message of the error `mre stage` exits 1 with when the
@@ -390,14 +391,11 @@ func forkAgrees(a, b cg.Fork) bool {
 func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.seq++
 	tasks := newReplayTasks(rp.taskDir(fmt.Sprintf("instance %04d", rp.seq)))
-	tasks.in = rp.itemFlags(tasks.work, slices.Concat(in.elems, rp.upstreamOuts(st, in.fork)))
+	items := slices.Concat(in.elems, rp.upstreamOuts(st, in.fork))
+	tasks.in = rp.itemFlags(tasks.work, items)
 
 	name, disabled := rp.firstTask(st, tasks)
-
-	inst, err := rp.g.ReadInstance(tasks.args)
-	if err != nil {
-		rp.t.Fatal(err)
-	}
+	inst, args := rp.resolve(st, items)
 
 	if !forkAgrees(inst.Fork, in.fork) || len(inst.Fork) != len(in.fork) {
 		rp.t.Errorf("%s: mre stage chose fork %s, staged %s", st.Fqid, inst.Fork, in.fork)
@@ -406,7 +404,7 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rel := filepath.Join(strings.ReplaceAll(st.Fqid, ".", string(filepath.Separator)), inst.ForkID())
 
 	if disabled != rp.mrpDisabled(rel) || disabled != inst.Disabled {
-		rp.t.Errorf("%s: mre stage refused it as disabled: %t, its args stamp disabled: %t, mrp's run disabled: %t",
+		rp.t.Errorf("%s: mre stage refused it as disabled: %t, its args resolve it disabled: %t, mrp's run disabled: %t",
 			rel, disabled, inst.Disabled, rp.mrpDisabled(rel))
 	}
 
@@ -421,11 +419,48 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	}
 
 	mrpArgs, mrpErr := os.ReadFile(filepath.Join(rp.ps, rel, "split", argsFile))
-	rp.ours[rel] = replayedFork{args: rp.checkArgs(rel, tasks.args, mrpArgs, mrpErr)}
+	rp.ours[rel] = replayedFork{args: rp.checkArgs(rel, args, mrpArgs, mrpErr)}
 	rp.runStage(st, rel, tasks)
-	rp.posted[st.Fqid] = append(rp.posted[st.Fqid], postedInstance{fork: inst.Fork, outs: tasks.outs, forks: tasks.forks, forkValues: tasks.forkValues})
+	rp.posted[st.Fqid] = append(rp.posted[st.Fqid], postedInstance{
+		fork: inst.Fork, outs: tasks.outs, outsValues: tasks.outsValues, forks: tasks.forks, forkValues: tasks.forkValues,
+	})
 
 	return false
+}
+
+// resolve resolves st's instance from the items its tasks get, dirs and
+// value records, and its args, as each task's args step does under
+// -host-in-place, its files linked below a dir of the replay's own: no
+// task writes its instance or args but into its jobs.
+func (rp *cgReplay) resolve(st *syntax.CallGraphStage, items []string) (cg.Instance, json.RawMessage) {
+	var in, values []string
+
+	for _, it := range items {
+		if filepath.IsAbs(it) {
+			in = append(in, it)
+		} else {
+			values = append(values, it)
+		}
+	}
+
+	roots, err := rp.g.Roots(cg.ReadInPlace{Host: true})
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	out := filepath.Join(rp.tmp, "cg", "resolved", strconv.Itoa(rp.seq))
+
+	inst, args, err := rp.g.WriteArgs(cg.ArgsSpec{Node: st.Fqid, In: in, Values: values, Out: out, Roots: roots})
+	if err != nil {
+		rp.t.Fatalf("%s: resolve its instance: %v", st.Fqid, err)
+	}
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	return inst, raw
 }
 
 // itemFlags are the args step's flags naming items, as a task gets them: a
@@ -461,8 +496,8 @@ func (rp *cgReplay) itemFlags(work string, items []string) []string {
 	return append(flags, "-values", file)
 }
 
-// firstTask runs the instance's first task, which builds its args bundle
-// from the items it stages, and reports its job's metadata dir name and
+// firstTask runs the instance's first task, which builds its args from the
+// items it stages, and reports its job's metadata dir name and
 // whether mre stage refused the instance as disabled: a split, or a
 // non-split stage's main, which posts its outs too.
 func (rp *cgReplay) firstTask(st *syntax.CallGraphStage, tasks replayTasks) (string, bool) {
@@ -477,12 +512,7 @@ func (rp *cgReplay) firstTask(st *syntax.CallGraphStage, tasks replayTasks) (str
 	return name, rp.stage(job.PhaseMain, rp.jobDir(tasks, name), append(argv, tasks.posting()...)...)
 }
 
-func (rp *cgReplay) checkArgs(rel, args string, want []byte, wantErr error) json.RawMessage {
-	got, err := shim.ReadBundle(args)
-	if err != nil {
-		rp.t.Fatal(err)
-	}
-
+func (rp *cgReplay) checkArgs(rel string, got json.RawMessage, want []byte, wantErr error) json.RawMessage {
 	if wantErr != nil {
 		rp.t.Errorf("%s: mre stage runs a fork mrp has no _args for: %v", rel, wantErr)
 
@@ -533,12 +563,32 @@ func (rp *cgReplay) upstreamOuts(st *syntax.CallGraphStage, fork cg.Fork) []stri
 	for _, u := range sortedKeys(read) {
 		for _, pi := range rp.posted[u] {
 			if forkAgrees(pi.fork, fork) {
-				out = append(out, pi.outs)
+				out = append(append(out, rp.fields(pi)...), rp.records(pi.outsValues)...)
 			}
 		}
 	}
 
 	return out
+}
+
+// fields are the output bundles the instance posted.
+func (rp *cgReplay) fields(pi postedInstance) []string {
+	dirs, err := filepath.Glob(filepath.Join(pi.outs, "*"))
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	return dirs
+}
+
+// records are the value records a post wrote to the file at path.
+func (rp *cgReplay) records(path string) []string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	return strings.Fields(string(raw))
 }
 
 // refsOutsideSplits collects the stages e reads other than through a split
@@ -851,10 +901,16 @@ func (rp *cgReplay) checkPipelineOuts() {
 
 	var lines strings.Builder
 
+	var values []string
+
 	for _, r := range topo.Outs {
 		for _, pi := range rp.posted[r.Node] {
-			argv = append(argv, "-in", pi.outs)
-			lines.WriteString(pi.outs + "\t" + pi.outs + "\n")
+			for _, d := range rp.fields(pi) {
+				argv = append(argv, "-in", d)
+				lines.WriteString(d + "\t" + d + "\n")
+			}
+
+			values = append(values, rp.records(pi.outsValues)...)
 		}
 	}
 
@@ -865,6 +921,13 @@ func (rp *cgReplay) checkPipelineOuts() {
 	if err := os.WriteFile(locations, []byte(lines.String()), 0o644); err != nil {
 		rp.t.Fatal(err)
 	}
+
+	valuesFile := filepath.Join(rp.tmp, "cg", "outs_values")
+	if err := os.WriteFile(valuesFile, []byte(strings.Join(values, "\n")), 0o644); err != nil {
+		rp.t.Fatal(err)
+	}
+
+	argv = append(argv, "-values", valuesFile)
 
 	if stderr, err := rp.mre(argv...); err != nil {
 		rp.t.Fatalf("%v\n%s", err, stderr)

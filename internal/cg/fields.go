@@ -57,7 +57,7 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 		}
 
 		fd := filepath.Join(spec.Fields, p.Id)
-		if err := shim.WriteBundle(fd, map[string]any{p.Id: v}, []*syntax.StructMember{p}, g.Table(), shim.Opts{Roots: spec.Roots}); err != nil {
+		if err := shim.WriteBundle(fd, map[string]any{p.Id: v}, []*syntax.StructMember{p}, g.Table(), spec.Opts); err != nil {
 			return fmt.Errorf("write %s output %s: %w", st.Fqid, p.Id, err)
 		}
 

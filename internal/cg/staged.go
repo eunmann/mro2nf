@@ -103,6 +103,16 @@ func (g *Graph) stage(dirs, values []string, recs ...Element) (*stagedStore, err
 	return s, nil
 }
 
+// addOuts indexes outs as the whole outs of the instance in.
+func (s *stagedStore) addOuts(in Instance, outs core.LazyArgumentMap) {
+	k := s.addInstance(in)
+	s.outsValues[k] = maps.Clone(outs)
+
+	if s.outsValues[k] == nil {
+		s.outsValues[k] = core.LazyArgumentMap{}
+	}
+}
+
 // addInstance records the instance whose outs the task staged a part of,
 // and returns its key.
 func (s *stagedStore) addInstance(in Instance) string {

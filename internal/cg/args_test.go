@@ -10,14 +10,14 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
-	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/core"
 )
 
 // TestArgsLinkOneCopy pins one copy of a broadcast file (#498): every FUSE
-// fork of bench/forks reads MKPAY's payload, and an args bundle holds no
-// file of its own but its records. Each fork reads the
-// payload, with the origin the producer recorded, through a link to the
-// leaf it staged, so the payload's link count stays the producer's.
+// fork of bench/forks reads MKPAY's payload, and its args dir holds no file
+// of its own. Each fork reads the payload, with the origin the producer
+// recorded, through a link to the leaf it staged, so the payload's link
+// count stays the producer's.
 func TestArgsLinkOneCopy(t *testing.T) {
 	mro := filepath.Join("..", "..", "bench", "forks", "pipeline_w4.mro")
 
@@ -56,13 +56,15 @@ func TestArgsLinkOneCopy(t *testing.T) {
 	}
 
 	for i, el := range elems {
-		args := f.next("args")
-		if _, err := g.WriteArgs(ArgsSpec{Node: "FANOUT.FUSE", In: []string{mkpay, el}, Out: args}); err != nil {
+		dir := f.next("args")
+
+		_, args, err := g.WriteArgs(ArgsSpec{Node: "FANOUT.FUSE", In: []string{mkpay, el}, Out: dir})
+		if err != nil {
 			t.Fatal(err)
 		}
 
-		if d := cmp.Diff([]string{"data.json", "instance.json"}, regularFiles(t, args)); d != "" {
-			t.Errorf("fork %d args files (-want +got):\n%s", i, d)
+		if got := regularFiles(t, dir); len(got) != 0 {
+			t.Errorf("fork %d args dir holds files %v, want only links", i, got)
 		}
 
 		wantPayload(t, i, args, leaf)
@@ -73,12 +75,12 @@ func TestArgsLinkOneCopy(t *testing.T) {
 	}
 }
 
-// wantPayload requires fork i's args bundle to give FUSE the payload, with
-// the origin recorded beside the producer's leaf.
-func wantPayload(t *testing.T, i int, args, leaf string) {
+// wantPayload requires fork i's args to give FUSE the payload, with the
+// origin recorded beside the producer's leaf.
+func wantPayload(t *testing.T, i int, args core.LazyArgumentMap, leaf string) {
 	t.Helper()
 
-	raw, err := shim.ReadBundle(args)
+	raw, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
 	}

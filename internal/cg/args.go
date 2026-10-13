@@ -9,6 +9,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -37,10 +38,10 @@ type ArgsSpec struct {
 	// Forks are fork records the task got as values rather than staged:
 	// those of the roots the invocation's entry values fix (DecodeElement).
 	Forks []Element
-	// Out is the args bundle dir, which only its own task reads: its file
-	// leaves link to the files the task staged (shim.WriteLinkedBundle), so
-	// a file every fork of a map call reads exists once, its producer's. A
-	// disabled instance gets only its stamp.
+	// Out is the dir the args' file leaves are linked below, which only its
+	// own task reads: each links to the file the task staged
+	// (shim.LinkLeaves), so a file every fork of a map call reads exists
+	// once, its producer's.
 	Out string
 	// Log receives the error of each input that read a missing element and
 	// resolved to null, which mrp logs before it runs the fork. Nil discards
@@ -57,51 +58,50 @@ type ArgsSpec struct {
 	Roots shim.Roots
 }
 
-// WriteArgs resolves the instance's disabled state and, when it runs, its
-// _args into an args bundle, and stamps the bundle with the instance.
-func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, error) {
+// WriteArgs resolves the instance and, when it runs, its _args, each file
+// leaf at its link below the spec's Out. A disabled instance has no args.
+func (g *Graph) WriteArgs(spec ArgsSpec) (Instance, core.LazyArgumentMap, error) {
 	st, err := g.Stage(spec.Node)
 	if err != nil {
-		return Instance{}, err
+		return Instance{}, nil, err
 	}
 
 	if err := g.checkDigest(st, spec.Digest); err != nil {
-		return Instance{}, err
+		return Instance{}, nil, err
 	}
 
 	s, err := g.stage(spec.In, spec.Values, spec.Forks...)
 	if err != nil {
-		return Instance{}, err
+		return Instance{}, nil, err
 	}
 
 	fork, lens, err := instanceFork(st, s)
 	if err != nil {
-		return Instance{}, fmt.Errorf("fork of %s: %w", st.Fqid, err)
+		return Instance{}, nil, fmt.Errorf("fork of %s: %w", st.Fqid, err)
 	}
 
 	r := &resolver{g: g, st: s}
 
 	in := Instance{Node: st.Fqid, Fork: fork, Lens: lens}
-	if in.Disabled, err = r.disabled(st, fork); err != nil {
-		return Instance{}, err
+	if in.Disabled, err = r.disabled(st, fork); err != nil || in.Disabled {
+		return in, nil, err
 	}
 
-	if !in.Disabled {
-		args, unresolved, err := r.args(st, fork)
-		if err != nil {
-			return Instance{}, err
-		}
-
-		if err := reportUnresolved(spec.Log, in, unresolved); err != nil {
-			return Instance{}, err
-		}
-
-		if err := g.writeArgs(spec, args, st.Call().DecId); err != nil {
-			return Instance{}, err
-		}
+	args, unresolved, err := r.args(st, fork)
+	if err != nil {
+		return Instance{}, nil, err
 	}
 
-	return in, writeInstance(spec.Out, in)
+	if err := reportUnresolved(spec.Log, in, unresolved); err != nil {
+		return Instance{}, nil, err
+	}
+
+	linked, err := g.linkArgs(spec, args, st.Call().DecId)
+	if err != nil {
+		return Instance{}, nil, err
+	}
+
+	return in, linked, nil
 }
 
 // checkDigest fails unless st compiles to the spec digest want, when set.
@@ -178,18 +178,25 @@ func instanceFork(st *syntax.CallGraphStage, s *stagedStore) (Fork, []int, error
 	return fork, lens, nil
 }
 
-// writeArgs writes the instance's resolved args as its linked args bundle.
-func (g *Graph) writeArgs(spec ArgsSpec, args json.Marshaler, callable string) error {
+// linkArgs links the file leaves of the instance's resolved args below the
+// spec's Out and returns the args naming each at its link.
+func (g *Graph) linkArgs(spec ArgsSpec, args json.Marshaler, callable string) (core.LazyArgumentMap, error) {
 	payload, params, err := g.bundlePayload(args, callable, types.RoleIn, spec.EntryFiles)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if err := shim.WriteLinkedBundle(spec.Out, payload, params, g.Table(), spec.Roots); err != nil {
-		return fmt.Errorf("write %s bundle %s: %w", types.RoleIn, spec.Out, err)
+	raw, err := shim.LinkLeaves(spec.Out, payload, params, g.Table(), spec.Roots)
+	if err != nil {
+		return nil, fmt.Errorf("link %s files below %s: %w", types.RoleIn, spec.Out, err)
 	}
 
-	return nil
+	var m core.LazyArgumentMap
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("decode %s of %s: %w", types.RoleIn, callable, err)
+	}
+
+	return m, nil
 }
 
 // bundlePayload is a resolved object as the payload of a bundle of

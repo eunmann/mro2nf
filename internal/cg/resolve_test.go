@@ -13,6 +13,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -137,46 +138,83 @@ func withItems(spec ArgsSpec, items ...string) ArgsSpec {
 	return spec
 }
 
-// writeArgs is args for the instance spec stages, written to a new dir.
+// writeArgs is args for the instance spec stages, its files linked below a
+// new dir.
 func (f *fixture) writeArgs(spec ArgsSpec) (Instance, string) {
 	f.t.Helper()
 
 	node, out := spec.Node, f.next("args")
 	spec.Out = out
 
-	inst, err := f.g.WriteArgs(spec)
+	inst, args, err := f.g.WriteArgs(spec)
 	if err != nil {
 		f.t.Fatal(err)
 	}
 
 	if inst.Disabled {
-		if shim.IsBundle(out) {
-			f.t.Errorf("%s: a disabled instance got an args payload", node)
+		if args != nil {
+			f.t.Errorf("%s: a disabled instance got args", node)
 		}
 
 		return inst, ""
 	}
 
-	raw, err := shim.ReadBundle(out)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-
-	return inst, string(raw)
+	return inst, compactArgs(f.t, args)
 }
 
-// post posts the instance whose args bundle is args with its outs, and
-// returns its forks dir, beside which it writes its element value records,
-// as a task's dir holds them (forkValues).
-func (f *fixture) post(args, outs string) string {
+// compactArgs is args as one compact JSON object, its keys sorted.
+func compactArgs(t *testing.T, args core.LazyArgumentMap) string {
+	t.Helper()
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(raw)
+}
+
+// post posts the instance the outs bundle outs stamps with its outs, as
+// its last job hands them to its post, and returns its forks dir, beside
+// which it writes its element value records, as a task's dir holds them
+// (forkValues), and its outs field by field.
+func (f *fixture) post(outs string) string {
 	f.t.Helper()
 
 	forks := f.next("forks")
-	if err := f.g.Post(PostSpec{Args: args, Outs: outs, Forks: forks, ForkValues: forkValues(forks)}); err != nil {
+	if err := f.g.Post(postedSpec(f.t, f.g, outs, forks)); err != nil {
 		f.t.Fatal(err)
 	}
 
 	return forks
+}
+
+// postedSpec is the post of the instance the outs bundle outs stamps, its
+// outs read from it, writing its elements into forks and all else beside.
+func postedSpec(tb testing.TB, g *Graph, outs, forks string) PostSpec {
+	tb.Helper()
+
+	in, err := g.ReadInstance(outs)
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	raw, err := shim.ReadBundle(outs)
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	var m core.LazyArgumentMap
+	if err := json.Unmarshal(raw, &m); err != nil {
+		tb.Fatal(err)
+	}
+
+	beside := filepath.Dir(forks)
+
+	return PostSpec{
+		Instance: in, Outs: m, Forks: forks, ForkValues: forkValues(forks),
+		Fields: filepath.Join(beside, "outs"), Values: filepath.Join(beside, "outs_values"),
+	}
 }
 
 // forkValues is the value records file of the post whose forks dir is
@@ -292,7 +330,7 @@ func TestRuntimeForkFromElement(t *testing.T) {
 	f := loadFixture(t, "map_fork_upstream")
 
 	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1,"beta":2,"gamma":3}}`)
-	forks := f.post(gen, gen)
+	forks := f.post(gen)
 
 	elems := elementItems(t, forks, "MFU.DBL")
 	if len(elems) != 3 {
@@ -398,7 +436,7 @@ func TestEmptyForksPrune(t *testing.T) {
 	f := loadFixture(t, "runtime_empty_forks")
 
 	gen := f.outs("REF.GEN", nil, `{"arr_empty":[],"arr_null":null,"m_empty":{},"m_null":null}`)
-	forks := f.post(gen, gen)
+	forks := f.post(gen)
 
 	for _, root := range []string{"REF.SC_EA", "REF.SC_NA", "REF.SC_EM", "REF.SC_NM"} {
 		if n := len(elementItems(t, forks, root)); n != 0 {
@@ -444,12 +482,12 @@ func TestKeyOrder(t *testing.T) {
 func TestUnstagedUpstreamFails(t *testing.T) {
 	f := loadFixture(t, "chain_gate")
 
-	_, err := f.g.WriteArgs(ArgsSpec{Node: "CH.USE", Out: f.next("args")})
+	_, _, err := f.g.WriteArgs(ArgsSpec{Node: "CH.USE", Out: f.next("args")})
 	if err == nil {
 		t.Fatal("USE resolved with SRC unstaged")
 	}
 
-	if _, statErr := os.Stat(filepath.Join(f.dir, strconv.Itoa(f.seq), "args", "data.json")); statErr == nil {
-		t.Error("a failed resolution wrote an args payload")
+	if _, statErr := os.Lstat(filepath.Join(f.dir, strconv.Itoa(f.seq), "args")); statErr == nil {
+		t.Error("a failed resolution linked args files")
 	}
 }

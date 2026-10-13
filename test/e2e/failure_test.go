@@ -146,15 +146,9 @@ func TestStageOutputLinkOutsideWorkCopiedLocally(t *testing.T) {
 		t.Errorf("published linked.txt = %q (err %v), want the link target's content", got, err)
 	}
 
-	var leaves []string
-
-	for _, bundle := range []string{"stage_outs", filepath.Join("outs", "*")} {
-		found, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", bundle, "f", "L0000", "*"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		leaves = append(leaves, found...)
+	leaves, err := filepath.Glob(filepath.Join(proj, "work", "*", "*", "outs", "*", "f", "L0000", "*"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	if len(leaves) == 0 {

@@ -23,7 +23,7 @@ func TestForkElementKeys(t *testing.T) {
 	f := loadFixture(t, "map_fork_upstream")
 
 	gen := f.outs("MFU.GEN", nil, `{"m":{"a\tb":1,"line\nbreak":2,"x,y":3,"q\"uote":4,"ünï😀":5,"'single'":6,"Z":7,"a/b":8}}`)
-	forks := f.post(gen, gen)
+	forks := f.post(gen)
 
 	mrp := []struct {
 		key string
@@ -73,10 +73,7 @@ func TestForkElementLeaves(t *testing.T) {
 
 	gen := stageFileOuts(t, f, n)
 
-	forks := f.next("forks")
-	if err := f.g.Post(PostSpec{Args: gen, Outs: gen, Forks: forks, ForkValues: forkValues(forks)}); err != nil {
-		t.Fatal(err)
-	}
+	forks := f.post(gen)
 
 	elems := elementItems(t, forks, "FBS.PROC")
 	if len(elems) != n {
@@ -125,7 +122,7 @@ func TestForkElementLeaves2D(t *testing.T) {
 	}
 
 	mk := f.outs("MAP_FILE_2D.MAKE", nil, string(raw))
-	forks := f.post(mk, mk)
+	forks := f.post(mk)
 
 	for root, want := range map[string][][]string{
 		"MAP_FILE_2D.ROWS": {{"r0_0.txt", "r0_1.txt"}, {"r1_0.txt"}},
@@ -199,24 +196,17 @@ func stageFileOuts(t *testing.T, f *fixture, n int) string {
 func procInput(t *testing.T, f *fixture, dir string) string {
 	t.Helper()
 
-	args := f.next("args")
-	if _, err := f.g.WriteArgs(ArgsSpec{Node: "FBS.PROC", In: []string{dir}, Out: args}); err != nil {
-		t.Fatal(err)
-	}
-
-	raw, err := shim.ReadBundle(args)
+	_, args, err := f.g.WriteArgs(ArgsSpec{Node: "FBS.PROC", In: []string{dir}, Out: f.next("args")})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var a struct {
-		F string `json:"f"`
-	}
-	if err := json.Unmarshal(raw, &a); err != nil {
+	var path string
+	if err := json.Unmarshal(args["f"], &path); err != nil {
 		t.Fatal(err)
 	}
 
-	return a.F
+	return path
 }
 
 // leafNames lists the files staged below a bundle's files dir.
