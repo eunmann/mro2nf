@@ -257,6 +257,8 @@ nextflow run main.nf -profile awsbatch -c batch.config \
 Keep `--outdir` on S3: the default `results` publishes to the launch host.
 The profile limits job submission and S3 transfers so a wide fan-out does not
 throttle the AWS APIs, and retries a task whose Spot instance is reclaimed.
+It checks job status every 2 s (`executor.$awsbatch.pollInterval`), where
+Nextflow's AWS Batch default is 10 s.
 
 Nextflow stages `s3://` file inputs into each task that reads them, as on
 every profile. Where the compute environment's instances mount an input's
