@@ -36,16 +36,17 @@ and runs both:
 | `TestScaleMapNested` | `mapnested` | 2 × 2 | 100 × 100 | 10,002 |
 | `TestScaleMapDisabled` | `mapdisabled` | 4 forks | 2,500 forks | 2,502 |
 
-`SCALE_WIDTH` replaces the wide width of every selected shape. Each default
-wide width is sized to finish within the 100 minutes one shape runs under
-(`scaleShapeTimeout`). The selected shapes run one after another, so the
-default `SCALE_TIMEOUT` of 500 minutes gives each of the five 100; the
-nightly runs one shape per job with `SCALE_TIMEOUT=100m`.
-
 The default `SCALE_RUN` also selects `TestScaleWideFanin` (#503), which the
 weekly nightly runs as its own job: the generated wide pipeline plus a stage
 whose 210 inputs pass `maxTakes` (`internal/cgnf/scope.go`), the most
 channels one workflow takes, run under Nextflow.
+
+`SCALE_WIDTH` replaces the wide width of every selected bench shape. Each
+default wide width is sized to finish within the 100 minutes one shape runs
+under (`scaleShapeTimeout`). The selected shapes run one after another, so
+the default `SCALE_TIMEOUT` of 600 minutes gives each of the six (the five
+above and `TestScaleWideFanin`) 100; the nightly runs one shape per job with
+`SCALE_TIMEOUT=100m`.
 
 Each run must complete and gather every fork's or chunk's output. On top of the
 `bench_metrics.py` metrics below, the tier reads a staging probe of every task
