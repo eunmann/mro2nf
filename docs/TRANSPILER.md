@@ -169,10 +169,9 @@ the outputs its consumers stage; the args and outs bundles between steps
 stay undeclared files of its work dir. `stage.nf` also
 holds the wiring: sub-workflows that read PLAN's records (`NODES`, `ENTRY`,
 `ENTRY_FORKS`, `ENTRY_ROOT`) and that take a node's
-instances through each step of it (`FORK`, `ZIP`, `AFTER`, `GATE`, `ENABLED`, `READ`, `GATHER`,
+instances through each step of it (`FORK`, `ZIP`, `GATE`, `ENABLED`, `READ`, `GATHER`,
 `INPUT`, `CHUNKS`, `JOIN`, …), each given the node's static data, so a
-node's wiring is a few lines and one per root, read, gate or preflight of
-it. The driver runs only those and a few Groovy helpers (`ordered`,
+node's wiring is a few lines and one per root, read or gate of it. The driver runs only those and a few Groovy helpers (`ordered`,
 `resources`), which read only records mre wrote; it parses no
 stage-controlled JSON.
 
@@ -318,7 +317,14 @@ instance resolves the binding again from its one element (the
 preflight it is gated by is done: a pipeline's preflights gate every other call
 in it, and through a sub-pipeline call every call within, its preflights too
 (`preflight_order`). A disabled preflight instance counts as done, and a failing
-one ends the run before the calls it gates start (`preflight_fail`).
+one ends the run before the calls it gates start (`preflight_fail`). The wait
+is on PLAN's node records, which every instance's gate reads (`GATE`): `AFTER`
+holds them until a preflight is done, once per set of preflights some node
+waits for, each set after the one it extends, and a node gates on the records
+held for its own. Nextflow adds each edge of its DAG in time linear in the
+edges before it, so a wait per node, which cost CellRanger three edges per node
+and preflight, would make the launch quadratic in the nodes; this costs a few
+edges per preflight (`TestEmitWaitsOncePerPreflight`).
 
 **Gates.** A node's gates are decided on the driver: PLAN's record and each
 gating stage's posted `gates` (an `eval` output), joined on the roots they

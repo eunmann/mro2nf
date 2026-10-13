@@ -666,22 +666,32 @@ func wiringNF(tree map[string]string) string {
 }
 
 // TestEmitWaitsForPreflights: a preflight signals once every instance of it
-// is done, and each instance of a node it gates waits for that signal
-// (modifiers_min: CHECK gates INNER's DOUBLE and TRIPLE).
+// is done; PLAN's node records are held until it is, after the preflights
+// before it some node also waits for; and each node gates its instances on
+// the records held for its own preflights (preflight_order: TOP_CHECK gates
+// every other call, SUB's CHECK gates WORK).
 func TestEmitWaitsForPreflights(t *testing.T) {
-	main := wiringNF(readTree(t, emitFixture(t, "modifiers_min")))
+	main := wiringNF(readTree(t, emitFixture(t, "preflight_order")))
 
-	for _, want := range []string{
-		"d0 = DONE(N0_CHECK.out.outs)",
-		"i1 = AFTER(channel.of([[], [], [], []]), d0)",
-		"i2 = AFTER(channel.of([[], [], [], []]), d0)",
-	} {
-		if !strings.Contains(main, want) {
-			t.Errorf("modifiers_min's main.nf lacks %q:\n%s", want, main)
+	var got []string
+
+	for l := range strings.SplitSeq(main, "\n") {
+		if strings.Contains(l, "GATE(") || strings.Contains(l, "DONE(") || strings.Contains(l, "AFTER(") {
+			got = append(got, strings.TrimSpace(l))
 		}
 	}
 
-	if strings.Contains(main, "i0 = AFTER(") {
-		t.Errorf("the preflight waits for itself:\n%s", main)
+	want := []string{
+		"b0 = ENABLED(GATE(channel.of([[], [], [], []]), nodes, 'TOP.TOP_CHECK'))",
+		"d0 = DONE(N0_TOP_CHECK.out.outs)",
+		"nodes_after_0 = AFTER(nodes, d0)",
+		"b1 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, 'TOP.EMIT'))",
+		"b2 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0, 'TOP.SUB.CHECK'))",
+		"d2 = DONE(N2_CHECK.out.outs)",
+		"nodes_after_0_2 = AFTER(nodes_after_0, d2)",
+		"b3 = ENABLED(GATE(channel.of([[], [], [], []]), nodes_after_0_2, 'TOP.SUB.WORK'))",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("preflight_order's gates and holds (-want +got):\n%s", diff)
 	}
 }

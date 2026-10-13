@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/cg"
 )
@@ -52,11 +53,11 @@ func entryRoot(w *wiring, root string) string {
 }
 
 // node wires node i: its instances, enumerated root by root from the fork
-// elements and records its roots' feeders write, each held until its
-// preflights are done; its gates, which the driver evaluates so a disabled
-// instance runs no task; the outs its enabled instances stage, field by
-// field; its process call; and its outputs, a disabled instance standing in
-// with none.
+// elements and records its roots' feeders write; its gates, which the
+// driver evaluates once its preflights are done so a disabled instance
+// runs no task; the outs its enabled instances stage, field by field; its
+// process call; its outputs, a disabled instance standing in with none;
+// and, of a preflight, PLAN's records held until it is done.
 func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 	w := &wiring{}
 	w.linef("// %s", n.Fqid)
@@ -84,8 +85,13 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		w.linef("%s(%s)", proc, in)
 	}
 
-	if p.awaited(n.Fqid) {
-		w.linef("%s = DONE(%s.out.outs)", w.def(doneOf(i)), proc)
+	if holds := p.holdsAt(i); len(holds) > 0 {
+		done := w.def(doneOf(i))
+		w.linef("%s = DONE(%s.out.outs)", done, proc)
+
+		for _, h := range holds {
+			w.linef("%s = AFTER(%s, %s)", w.def(nodesAfter(h)), w.use(nodesAfter(h[:len(h)-1])), done)
+		}
 	}
 
 	outs, forks, gates := p.consumed(n.Fqid)
@@ -125,9 +131,8 @@ func (p *project) input(w *wiring, n cg.TopoNode, run, meta string) string {
 }
 
 // instances is the expression of node i's instances: root by root, each
-// with the partner elements it zips, held until its preflights are done.
-// Each step is assigned to i<i>, which it returns, or the seed channel when
-// the node has no step.
+// with the partner elements it zips. Each step is assigned to i<i>, which
+// it returns, or the seed channel when the node has no step.
 func (p *project) instances(w *wiring, i int, n cg.TopoNode) string {
 	inst := "channel.of([[], [], [], []])"
 	step := func(expr string) {
@@ -144,11 +149,55 @@ func (p *project) instances(w *wiring, i int, n cg.TopoNode) string {
 		step(p.zip(w, inst, z, n, zr))
 	}
 
-	for _, pf := range n.Preflights {
-		step(fmt.Sprintf("AFTER(%s, %s)", inst, w.use(doneOf(p.index[pf]))))
+	return inst
+}
+
+// nodesAfter is the channel of PLAN's node records held until every
+// preflight of pfs, node indices in ascending order, is done; nodes itself
+// for none.
+func nodesAfter(pfs []int) string {
+	if len(pfs) == 0 {
+		return "nodes"
 	}
 
-	return inst
+	ids := make([]string, len(pfs))
+	for x, i := range pfs {
+		ids[x] = strconv.Itoa(i)
+	}
+
+	return "nodes_after_" + strings.Join(ids, "_")
+}
+
+// preflightsOf are the node indices of n's preflights, ascending.
+func (p *project) preflightsOf(n cg.TopoNode) []int {
+	out := make([]int, len(n.Preflights))
+	for x, pf := range n.Preflights {
+		out[x] = p.index[pf]
+	}
+
+	slices.Sort(out)
+
+	return out
+}
+
+// holdsAt are the prefixes of every node's preflights that end at
+// preflight i, each held once, after the prefix before it, whatever the
+// number of nodes that wait for it. Nextflow adds each edge of its DAG in
+// time linear in the edges before it, so a hold per node would make the
+// launch quadratic in the nodes.
+func (p *project) holdsAt(i int) [][]int {
+	var out [][]int
+
+	for _, n := range p.topo.Nodes {
+		pfs := p.preflightsOf(n)
+
+		at := slices.Index(pfs, i)
+		if at >= 0 && !slices.ContainsFunc(out, func(h []int) bool { return slices.Equal(h, pfs[:at+1]) }) {
+			out = append(out, pfs[:at+1])
+		}
+	}
+
+	return out
 }
 
 // zipRoots are node n's roots, in its order, that one of its zips splits
@@ -216,9 +265,10 @@ func (p *project) elements(w *wiring, r cg.TopoRoot) string {
 // b<i>.run or b<i>.skip, from PLAN's record of the node, which each
 // instance carries on as its d, and the gate values each stage whose outs
 // gate it posted at the fork they share, keyed by the instance's ordinals
-// of the gate's own roots.
+// of the gate's own roots. PLAN's records reach it once its preflights are
+// done, so no instance of it is gated before.
 func (p *project) gate(w *wiring, i int, n cg.TopoNode, inst string) {
-	gated := fmt.Sprintf("GATE(%s, %s, %s)", inst, w.use("nodes"), gstr(n.Fqid))
+	gated := fmt.Sprintf("GATE(%s, %s, %s)", inst, w.use(nodesAfter(p.preflightsOf(n))), gstr(n.Fqid))
 
 	for _, gp := range n.Gates {
 		w.linef("g%d = %s", i, gated)

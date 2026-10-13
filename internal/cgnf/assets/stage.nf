@@ -413,14 +413,15 @@ workflow ZIP {
     out
 }
 
-// AFTER holds each instance until a preflight is done.
+// AFTER holds PLAN's node records until a preflight is done: each node
+// waiting for it gates its instances (GATE) on the records it holds.
 workflow AFTER {
     take:
-    inst
+    nodes
     done
 
     main:
-    out = inst.combine(done).map { k, fs, es, tk, _d -> [k, fs, es, tk] }
+    out = nodes.combine(done).map { ns, _d -> ns }
 
     emit:
     out

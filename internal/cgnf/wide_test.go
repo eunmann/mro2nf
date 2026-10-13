@@ -438,8 +438,8 @@ func countMatches(counts map[string]int, re *regexp.Regexp, l string) {
 }
 
 // TestEmitBoundsEachNode: a node's wiring is a constant few lines and one
-// per root, zip, preflight, gate and read of it, and one more per phase of
-// a split stage.
+// per root, zip, gate and read of it, and one more per phase of a split
+// stage; waiting for its preflights costs it none.
 func TestEmitBoundsEachNode(t *testing.T) {
 	dir := t.TempDir()
 	if err := wide.New(2, 3, 0).Write(dir); err != nil {
@@ -462,13 +462,44 @@ func TestEmitBoundsEachNode(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		edges := len(n.Roots) + len(n.Zips) + len(n.Preflights) + len(n.Gates) + len(n.Reads)
+		edges := len(n.Roots) + len(n.Zips) + len(n.Gates) + len(n.Reads)
 		if n.Split {
 			edges += 2
 		}
 
 		if len(w.lines) > 7+edges {
 			t.Errorf("%s: %d lines for %d edges:\n%s", n.Fqid, len(w.lines), edges, strings.Join(w.lines, "\n"))
+		}
+	}
+}
+
+// TestEmitWaitsOncePerPreflight (#512): Nextflow adds each edge of its DAG
+// in time linear in the edges before it, so the project holds PLAN's
+// records once per preflight, not each node's instances: one AFTER
+// whatever the number of nodes below WIDE's one preflight, every one of
+// which but the preflight gates on the held records.
+func TestEmitWaitsOncePerPreflight(t *testing.T) {
+	t.Parallel()
+
+	after := regexp.MustCompile(`(?m)^\s*(\w+) = AFTER\(nodes, d\d+\)$`)
+	gate := regexp.MustCompile(`GATE\((?:i\d+|channel\.of\(\[\[\], \[\], \[\], \[\]\]\)), (\w+), '`)
+
+	for _, p := range []wide.Pipeline{wide.New(2, 3, 0), wide.New(32, 150, 0)} {
+		_, tree := emitWide(t, p)
+		nf := wiringNF(tree)
+
+		held := after.FindAllStringSubmatch(nf, -1)
+		if len(held) != 1 || strings.Count(nf, "AFTER(") != 1 {
+			t.Fatalf("%d stage calls: %d AFTER calls, want 1", p.Stages, strings.Count(nf, "AFTER("))
+		}
+
+		gates := map[string]int{}
+		for l := range strings.SplitSeq(nf, "\n") {
+			countMatches(gates, gate, l)
+		}
+
+		if want := map[string]int{"nodes": 1, held[0][1]: p.Stages - 1}; !cmp.Equal(gates, want) {
+			t.Errorf("%d stage calls: the records the nodes gate on are %v, want %v", p.Stages, gates, want)
 		}
 	}
 }
