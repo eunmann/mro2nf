@@ -52,9 +52,7 @@ internal/
   cgnf/              → call graph -> Nextflow project (main.nf wiring, stage.nf,
                        nextflow.config)
   job/               → runs one stage job through mrjob as mrp runs it
-  frontend/          → lowers a Martian AST to the typed parameters of the manifest
-  ir/                → typed parameters of the program's callables and structs
-  types/             → type-directed file-leaf walk + type manifest (shared by cg + shim)
+  types/             → file-leaf walk over Martian's compiled types (shared by cg + shim)
   shim/              → bundle I/O, markers, output confinement
   logging/           → log/slog setup (stderr)
 ```
