@@ -1104,6 +1104,26 @@ func TestReleaseImagePush(t *testing.T) {
 	}
 }
 
+// TestReleaseImagePushNeedsDigest runs the publish job's image push with a
+// stand-in skopeo that writes no digest file: the step fails and outputs no
+// digest, rather than release an image whose digest nothing recorded.
+func TestReleaseImagePushNeedsDigest(t *testing.T) {
+	requireTools(t, "bash")
+
+	bin, tmp := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "skopeo"), []byte("#!/bin/bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	script := scalarOf(releaseStep(t, "publish", stepRuns("skopeo copy")).get("run"))
+
+	log, out, err := execReleaseStep(t, script, tmp, "PATH="+bin+":"+os.Getenv("PATH"),
+		"VERSION="+releaseTag, "PRERELEASE=false", "IMAGE=ghcr.io/o/mro2nf-runtime", "RUNNER_TEMP="+tmp)
+	if err == nil || strings.Contains(out, "digest=") {
+		t.Errorf("push without a digest file: err %v, output %q; want a failure and no digest\n%s", err, out, log)
+	}
+}
+
 // runImagePush runs the publish job's image push script with a stand-in
 // skopeo that records its arguments and returns the destinations it copied
 // the downloaded archive to, each whole and as built.
