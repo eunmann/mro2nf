@@ -486,8 +486,8 @@ output it stages as a bundle (`outs/<output>/`). A staged bundle costs each
 reader on an object store a listing and a copy whatever its size (on the
 CellRanger Batch run, 287 of 896 downloads were such outputs); a value costs
 the driver its bytes per instance until its readers are done, which the
-bound keeps from growing with an output's size. A gather is a seeded `groupBy`,
-without group sizes, over all of its upstream, so an instance under which there is none gathers
+bound keeps from growing with an output's size. A gather is a seeded `groupTuple`
+over all of its upstream, so an instance under which there is none gathers
 none, and a forked instance waits for every fork of the node it reads, as `mrp`
 waits for every fork of a node before a node reading it runs
 (`martian/core/node.go` `getState`; `TestEmitForkedGatherWaitsForItsUpstream`).
@@ -540,10 +540,13 @@ directory leaf and an entry file are still copies.
 **Split stages.** A split's outputs are joined once to the instance its
 task staged, by the key both hold at position 1 (`SPLITS`), and its chunks'
 mains and its join read that join: joining them anew for each, through a
-map of either side, cost CellRanger 6 DAG edges per split stage. A split's chunk outs are grouped by `groupBy` with the
-chunk count as each group's size, which joins a split as soon as its chunks
-are in and fails the run if its chunk outs number otherwise
-(`TestJoinFailsOnAChunkCountMismatch`). Each chunk's main and the join are scheduled with the cpus, memory
+map of either side, cost CellRanger 6 DAG edges per split stage. A split's chunk outs are grouped by `groupTuple` over a
+`groupKey` of the chunk count, which joins a split as soon as its chunks
+are in, and with `remainder: true`, so a group that numbers otherwise
+reaches the driver's check of its size and fails the run
+(`TestJoinFailsOnAChunkCountMismatch`). Nextflow's `groupBy` would check
+the size itself, but takes time quadratic in a group's size
+(`TestGroupingScalesLinearly`). Each chunk's main and the join are scheduled with the cpus, memory
 and special their jobs get, the split's `resources.tsv`, a file the driver
 reads into rows without parsing a record, not an `eval` value, whose
 collection is quadratic in its lines.
@@ -568,8 +571,7 @@ waits forever on an enabled output's channel.
 **Order.** Each staged list, and each list of value records, is in an order
 the run fixes, a gather's and OUTS's by instance key, then output, and a
 join's by chunk name, since list order is part of
-a task's `-resume` key, arrival order is completion order, and a `groupBy`
-group has no order.
+a task's `-resume` key and arrival order is completion order.
 
 **Overhead.** The tasks are PLAN, one per stage job `mrp` runs (each split,
 chunk and join of a split stage, one per fork of a non-split stage), and OUTS.

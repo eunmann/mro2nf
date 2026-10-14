@@ -12,10 +12,10 @@ import (
 
 // TestJoinFailsOnAChunkCountMismatch (#579): JOIN groups a split's chunk
 // outs by the split's chunk count, and a count of chunk outs other than it
-// fails the run, naming the split's key, where a group short of its count
-// would otherwise never reach the join and the run end without it. JOIN
-// runs alone on chunk outs of one split of two chunks; with no split to
-// join them to, a group of the right size ends the run as it should.
+// fails the run, naming the split's key and both counts, where grouping
+// alone would drop a short group, or the outs past a full one, silently.
+// JOIN runs alone on chunk outs of one split of two chunks; with no split
+// to join them to, a group of the right size ends the run as it should.
 func TestJoinFailsOnAChunkCountMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -27,8 +27,8 @@ func TestJoinFailsOnAChunkCountMismatch(t *testing.T) {
 		want   string
 	}{
 		{"complete", []string{"chnk0", "chnk1"}, ""},
-		{"short", []string{"chnk0"}, "Operator `groupBy` received too few values for grouping keys: [k]"},
-		{"long", []string{"chnk0", "chnk1", "chnk2"}, "Operator `groupBy` received too many values for grouping key: [k] (expected 2)"},
+		{"short", []string{"chnk0"}, "split [k] has 2 chunks, but its chunk outs came in a group of 1"},
+		{"long", []string{"chnk0", "chnk1", "chnk2"}, "split [k] has 2 chunks, but its chunk outs came in a group of 1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
