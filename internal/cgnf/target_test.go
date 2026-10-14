@@ -1,6 +1,7 @@
 package cgnf
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -135,11 +136,11 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 		}
 	}
 
-	if want := "if (params.mro2nf_s3_mount) {\n        cmd += \" -s3-mount ${shq(params.mro2nf_s3_mount)}\""; !strings.Contains(stageModule, want) {
+	if want := "if (run.s3_mount) {\n        cmd += \" -s3-mount ${shq(run.s3_mount)}\""; !strings.Contains(stageModule, want) {
 		t.Errorf("stage.nf lacks %q", want)
 	}
 
-	for _, want := range []string{"process PLAN {\n    cache !params.mro2nf_s3_mount\n", "${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}"} {
+	for _, want := range []string{"process PLAN {\n    cache !params.mro2nf_s3_mount\n", "${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}", planRun, stageRun} {
 		if !strings.Contains(tree["main.nf"], want) {
 			t.Errorf("PLAN lacks %q:\n%s", want, tree["main.nf"])
 		}
@@ -163,13 +164,19 @@ func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 		t.Errorf("conf/container.config does not stage head-node inputs, alone:\n%s", ctr)
 	}
 
-	for _, want := range []string{" -host-in-place=${on(params.mro2nf_host_in_place)} ", " -run-workdir ${shq(workdir)}", ", workflow.workDir.toUriString(), "} {
+	for _, want := range []string{" -host-in-place=${meta.run.host_in_place} ", " -run-workdir ${shq(workdir)}", ", workflow.workDir.toUriString(), "} {
 		if !strings.Contains(tree["main.nf"], want) {
 			t.Errorf("PLAN lacks %q:\n%s", want, tree["main.nf"])
 		}
 	}
 
-	if want := "if (on(params.mro2nf_host_in_place)) {\n        cmd += ' -host-in-place'"; !strings.Contains(stageModule, want) {
+	for _, run := range []string{planRun, stageRun} {
+		if !strings.Contains(run, "host_in_place: on(params.mro2nf_host_in_place)") {
+			t.Errorf("%s does not carry params.mro2nf_host_in_place", run)
+		}
+	}
+
+	if want := "if (run.host_in_place) {\n        cmd += ' -host-in-place'"; !strings.Contains(stageModule, want) {
 		t.Errorf("stage.nf lacks %q", want)
 	}
 }
@@ -183,23 +190,113 @@ func TestProcessesReadNoPathGlobal(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
 
 	for file, src := range map[string]string{"main.nf": tree["main.nf"], "stage.nf": stageModule} {
-		procs := 0
+		procs := blocks(src, "process ")
+		if len(procs) == 0 {
+			t.Errorf("%s declares no process", file)
+		}
 
-		for _, block := range strings.Split(src, "\nprocess ")[1:] {
-			procs++
-			body, _, _ := strings.Cut(block, "\n}\n")
-
+		for _, body := range procs {
 			for _, global := range []string{"workflow.", "projectDir", "launchDir", "moduleDir", "baseDir"} {
 				if strings.Contains(body, global) {
 					t.Errorf("%s: process %s reads %s", file, strings.Fields(body)[0], global)
 				}
 			}
 		}
+	}
+}
 
-		if procs == 0 {
-			t.Errorf("%s declares no process", file)
+var (
+	// paramRead is a read of a launch param: params. after no identifier
+	// character and no quote, which opens a message naming a param.
+	paramRead = regexp.MustCompile(`(^|[^'\w])params\.`)
+	runRead   = regexp.MustCompile(`\brun\.(\w+)`)
+	runKey    = regexp.MustCompile(`(\w+): (?:on\()?params\.`)
+)
+
+// TestScriptsReadParamsFromMeta (#576): a task's -resume key holds its
+// inputs, but Nextflow 25.10 and 26.04 key it on no param read by a
+// function its script calls, and the v2 parser of 26.04.0-26.04.1 on none
+// its script reads (nextflow-io/nextflow#7156). So no process script reads params.,
+// nor any function of the stage module, which the scripts call: each reads
+// the run entry of its meta, which main.nf builds from the params, PLAN's
+// from planRun and every other task's from stageRun, and which carries
+// every key they read. A process's script is its block from its script:,
+// shell: or exec: label on, a process's last section; the directives and
+// inputs above it are not script.
+func TestScriptsReadParamsFromMeta(t *testing.T) {
+	main := readTree(t, emitFixture(t, "entry_file"))["main.nf"]
+
+	for _, c := range []struct{ file, src, run string }{
+		{"main.nf", main, planRun},
+		{"stage.nf", stageModule, stageRun},
+	} {
+		if !strings.Contains(main, c.run) {
+			t.Errorf("main.nf passes no %s", c.run)
+		}
+
+		carried := map[string]bool{}
+		for _, m := range runKey.FindAllStringSubmatch(c.run, -1) {
+			carried[m[1]] = true
+		}
+
+		code := scripts(t, c.file, c.src)
+		for _, fn := range blocks(c.src, "def ") {
+			code[strings.Fields(fn)[0]] = fn
+		}
+
+		for name, body := range code {
+			if paramRead.MatchString(body) {
+				t.Errorf("%s: %s reads a param, not its meta's run entry:\n%s", c.file, name, body)
+			}
+
+			for _, m := range runRead.FindAllStringSubmatch(body, -1) {
+				if !carried[m[1]] {
+					t.Errorf("%s: %s reads run.%s, which %s does not carry", c.file, name, m[1], c.run)
+				}
+			}
 		}
 	}
+}
+
+// blocks is the body of each top-level block of src that opens with
+// keyword, from its name to its closing brace.
+func blocks(src, keyword string) []string {
+	parts := strings.Split(src, "\n"+keyword)[1:]
+	out := make([]string, 0, len(parts))
+
+	for _, block := range parts {
+		body, _, _ := strings.Cut(block, "\n}\n")
+		out = append(out, body)
+	}
+
+	return out
+}
+
+// scripts maps each process of src to its script.
+func scripts(t *testing.T, file, src string) map[string]string {
+	t.Helper()
+
+	out := map[string]string{}
+
+	for _, body := range blocks(src, "process ") {
+		name := strings.Fields(body)[0]
+
+		for _, label := range []string{"\n    script:\n", "\n    shell:\n", "\n    exec:\n"} {
+			if _, script, ok := strings.Cut(body, label); ok {
+				out[name] = script
+			}
+		}
+
+		if out[name] == "" {
+			t.Errorf("%s: process %s has no script", file, name)
+		}
+	}
+
+	if len(out) == 0 {
+		t.Errorf("%s declares no process", file)
+	}
+
+	return out
 }
 
 // TestAWSBatchProfilePollsEveryTwoSeconds: the awsbatch profile checks job
@@ -353,11 +450,11 @@ func TestLocalProfilesGrantFromThePool(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(tree["main.nf"], "${pool(task)} -call call ") {
+	if !strings.Contains(tree["main.nf"], "${pool(task, meta.run.local_jobs)} -call call ") {
 		t.Errorf("PLAN does not hand mre its task's pool:\n%s", tree["main.nf"])
 	}
 
-	if !strings.Contains(stageModule, "-work .${pool(task)}\"") {
+	if !strings.Contains(stageModule, "-work .${pool(task, run.local_jobs)}\"") {
 		t.Errorf("mreStage does not hand mre its task's pool:\n%s", stageModule)
 	}
 }

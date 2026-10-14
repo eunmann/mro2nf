@@ -21,6 +21,7 @@ import (
 // string, not workflow.workDir in the script: Nextflow's v1 parser keys a
 // task on each global its script reads, and keys a Path on its modification
 // time, which each run's new task dirs change, so PLAN would never resume.
+// The launch params it reads are its meta's (planRun), for the same reason.
 const planProcess = `process PLAN {
     cache !params.mro2nf_s3_mount
 
@@ -43,7 +44,7 @@ const planProcess = `process PLAN {
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)} -host-inputs=${shq(params.mro2nf_host_inputs)} -host-in-place=${on(params.mro2nf_host_in_place)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)} -run-workdir ${shq(workdir)}${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}${pool(task)} -call call -nodes nodes -roots roots -leaves leaves -files files
+    ${shq(meta.run.mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)} -host-inputs=${shq(meta.run.host_inputs)} -host-in-place=${meta.run.host_in_place} -remote-inputs=${shq(meta.run.remote_inputs)} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files
     """
 }
 
