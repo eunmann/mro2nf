@@ -117,7 +117,9 @@ jobs:
             echo "::error::$SHA is not a PR's merge commit: release a commit that landed through a PR"
             exit 1
           }
-          [ "$(api "git/commits/$SHA" .tree.sha)" = "$(api "git/commits/$head" .tree.sha)" ] || {
+          tree=$(api "git/commits/$SHA" .tree.sha)
+          head_tree=$(api "git/commits/$head" .tree.sha)
+          [ "$tree" = "$head_tree" ] || {
             echo "::error::$SHA's tree differs from its PR head $head, so no PR run validated it"
             exit 1
           }

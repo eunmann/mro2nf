@@ -672,17 +672,65 @@ func TestReleaseResolveStep(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		log, out, err := runResolveStep(t, scalarOf(step.get("run")), c.responses)
+		log, out, err := runGhStep(t, scalarOf(step.get("run")), c.responses, "VERSION="+releaseTag, "REF=main")
 		if (err == nil) != (c.want != "") || strings.TrimSpace(out) != c.want {
 			t.Errorf("%s: err %v, output %q; want output %q\n%s", c.name, err, out, c.want, log)
 		}
 	}
 }
 
-// runResolveStep runs the resolve step for releaseTag and ref main with a
-// stand-in gh that answers `gh api` from responses, keyed by the path below
-// the repository, through jq as gh does, and fails as a 404 on any other.
-func runResolveStep(t *testing.T, script string, responses map[string]string) (string, string, error) {
+// TestReleaseRequiresValidatedTree runs the gate's PR Validation check with a
+// stand-in gh: it accepts a PR's merge commit whose tree is its head's and
+// whose head has a green run, and refuses any other commit or any lookup
+// that fails.
+func TestReleaseRequiresValidatedTree(t *testing.T) {
+	requireTools(t, "bash", "jq")
+
+	step := releaseStep(t, "gate", stepRuns("pr-validation.yml"))
+	if got := scalarOf(step.get("if")); got != "${{ !inputs.dry_run }}" {
+		t.Errorf("%s PR Validation check if = %q; a real release must pass it", releaseWorkflow, got)
+	}
+
+	const (
+		sha   = "0123456789abcdef0123456789abcdef01234567"
+		head  = "89abcdef0123456789abcdef0123456789abcdef"
+		pulls = "commits/" + sha + "/pulls"
+		tree  = "git/commits/" + sha
+		hTree = "git/commits/" + head
+		runs  = "actions/workflows/pr-validation.yml/runs?head_sha=" + head + "&event=pull_request&status=success"
+	)
+
+	merged := `[{"merge_commit_sha":"` + sha + `","head":{"sha":"` + head + `"}}]`
+	same := `{"tree":{"sha":"aaaa"}}`
+	green := `{"total_count":1}`
+
+	cases := []struct {
+		name      string
+		responses map[string]string
+		ok        bool
+	}{
+		{"validated", map[string]string{pulls: merged, tree: same, hTree: same, runs: green}, true},
+		{"not a merge commit", map[string]string{pulls: `[]`, tree: same, hTree: same, runs: green}, false},
+		{"pulls lookup fails", map[string]string{tree: same, hTree: same, runs: green}, false},
+		{"trees differ", map[string]string{pulls: merged, tree: same, hTree: `{"tree":{"sha":"bbbb"}}`, runs: green}, false},
+		{"tree lookups fail", map[string]string{pulls: merged, runs: green}, false},
+		{"head tree lookup fails", map[string]string{pulls: merged, tree: same, runs: green}, false},
+		{"no green run", map[string]string{pulls: merged, tree: same, hTree: same, runs: `{"total_count":0}`}, false},
+		{"runs lookup fails", map[string]string{pulls: merged, tree: same, hTree: same}, false},
+	}
+
+	for _, c := range cases {
+		log, _, err := runGhStep(t, scalarOf(step.get("run")), c.responses, "SHA="+sha)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: accepted %t, want %t\n%s", c.name, err == nil, c.ok, log)
+		}
+	}
+}
+
+// runGhStep runs a gate step with env added and a stand-in gh that answers
+// `gh api` from responses, keyed by the path below the repository, through
+// jq as gh does, and fails as a 404 on any other.
+func runGhStep(t *testing.T, script string, responses map[string]string, env ...string) (string, string, error) {
 	t.Helper()
 
 	const (
@@ -707,8 +755,10 @@ jq -r "$4" "$f"
 		}
 	}
 
-	return execReleaseStep(t, script, t.TempDir(), "PATH="+bin+":"+os.Getenv("PATH"), "GH_RESPONSES="+dir,
-		"GITHUB_REPOSITORY="+repo, "VERSION="+releaseTag, "REF=main")
+	return execReleaseStep(t, script, t.TempDir(), slices.Concat([]string{
+		"PATH=" + bin + ":" + os.Getenv("PATH"),
+		"GH_RESPONSES=" + dir, "GITHUB_REPOSITORY=" + repo,
+	}, env)...)
 }
 
 // TestReleaseRunsMainWorkflow runs the gate's workflow check: a release runs
