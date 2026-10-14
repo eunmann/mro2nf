@@ -20,6 +20,7 @@ func TestJoinFailsOnAChunkCountMismatch(t *testing.T) {
 	t.Parallel()
 
 	requireTools(t, "nextflow", "java")
+	shardSkip(t)
 
 	for _, c := range []struct {
 		name   string

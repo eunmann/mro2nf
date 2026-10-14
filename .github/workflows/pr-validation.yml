@@ -176,7 +176,9 @@ jobs:
     # failed `changes` would skip the shards even though e2e-config ran.
     if: ${{ !cancelled() && needs.e2e-config.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Setup and make test-e2e's 30-minute go-test timeout, with headroom,
+    # so a stuck test fails with go test's panic rather than a runner kill.
+    timeout-minutes: 40
     strategy:
       fail-fast: false # run every shard so all failures surface in one CI round
       matrix:
