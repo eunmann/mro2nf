@@ -57,7 +57,8 @@ func readTree(t *testing.T, dir string) map[string]string {
 }
 
 // TestEmitProject: a project is main.nf wiring, the one stage module, the
-// config and its container profiles' configs, the params schema, a copy of
+// config, the base config it includes and its container profiles' configs,
+// the params schema, a copy of
 // the entry's .mro files, and the HealthOmics package script, executable,
 // and parameter template; it does not depend on where it is emitted, and
 // holds no other file of the pipeline's, an entry file's default included
@@ -72,7 +73,7 @@ func TestEmitProject(t *testing.T) {
 
 	entry := filepath.Join(fixturePath(t, "entry_file"), "pipeline.mro")
 	want := []string{
-		filepath.Join("_assets/mro", entry), "conf/container.config", "conf/healthomics.config",
+		filepath.Join("_assets/mro", entry), "conf/base.config", "conf/container.config", "conf/healthomics.config",
 		"main.nf", "nextflow.config", "nextflow_schema.json", "package.sh", "parameter-template.json", "stage.nf",
 	}
 
@@ -152,11 +153,11 @@ func fixturePath(t *testing.T, name string) string {
 // mrjob beside it and the adapters it embeds, unless the run names its own,
 // so a project names no tool path of the host that emitted it.
 func TestEmitNamesNoHostTools(t *testing.T) {
-	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
+	cfg := readTree(t, emitFixture(t, "split_test"))["conf/base.config"]
 
 	for _, want := range []string{"params.mro2nf_mre = 'mre'\n", "params.mro2nf_mrjob = null\n", "params.mro2nf_adapters = null\n"} {
 		if !strings.Contains(cfg, want) {
-			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+			t.Errorf("conf/base.config lacks %q:\n%s", want, cfg)
 		}
 	}
 
@@ -173,10 +174,10 @@ func TestEmitNamesNoHostTools(t *testing.T) {
 // TestEmitConfinesAtLaunch: a stage task's outputs are confined to its
 // work dir (mre stage -confine) only when the run sets params.mro2nf_confine.
 func TestEmitConfinesAtLaunch(t *testing.T) {
-	cfg := readTree(t, emitFixture(t, "file_min"))["nextflow.config"]
+	cfg := readTree(t, emitFixture(t, "file_min"))["conf/base.config"]
 
 	if !strings.Contains(cfg, "params.mro2nf_confine = false\n") {
-		t.Errorf("nextflow.config does not leave confinement off:\n%s", cfg)
+		t.Errorf("conf/base.config does not leave confinement off:\n%s", cfg)
 	}
 
 	if !strings.Contains(stageModule, "if (on(params.mro2nf_confine)) {\n        cmd += ' -confine'") {
@@ -230,12 +231,14 @@ func TestEmitAliases(t *testing.T) {
 func TestEmitGPURequest(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "gpu_stage"))
 
-	if !strings.Contains(tree["nextflow.config"], "    accelerator = { def s = meta.special ?: ''; ") {
-		t.Errorf("nextflow.config lacks the accelerator rule:\n%s", tree["nextflow.config"])
+	if !strings.Contains(tree["conf/base.config"], "    accelerator = { def s = meta.special ?: ''; ") {
+		t.Errorf("conf/base.config lacks the accelerator rule:\n%s", tree["conf/base.config"])
 	}
 
-	if strings.Contains(tree["nextflow.config"], "withName:") {
-		t.Errorf("nextflow.config names a process:\n%s", tree["nextflow.config"])
+	for _, f := range []string{"nextflow.config", "conf/base.config"} {
+		if strings.Contains(tree[f], "withName:") {
+			t.Errorf("%s names a process:\n%s", f, tree[f])
+		}
 	}
 
 	if n := strings.Count(stageModule, "clusterOptions { params.job_resources[meta.special] ?: '' }"); n != 4 {
@@ -603,7 +606,7 @@ func TestEmitSizesNodesUnderOverrides(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "split_test"))
 
 	for file, wants := range map[string][]string{
-		"nextflow.config": {"params.mro2nf_overrides = null"},
+		"conf/base.config": {"params.mro2nf_overrides = null"},
 		"main.nf": {
 			"params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : []",
 			"path overrides, stageAs: 'overrides/*', arity: '0..*'",
@@ -629,7 +632,7 @@ func TestEmitSizesNodesUnderOverrides(t *testing.T) {
 // mre step, which would fail again; and a retry requests the memory and cpus
 // of the first attempt, as mrp retries a job at its request (#506).
 func TestEmitRetriesWhatMrpRetries(t *testing.T) {
-	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
+	cfg := readTree(t, emitFixture(t, "split_test"))["conf/base.config"]
 
 	for _, want := range []string{
 		"errorStrategy = { task.exitStatus in ([75, 104] + (130..145)) ? 'retry' : 'terminate' }",
@@ -637,7 +640,7 @@ func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 		"params.mro2nf_monitor = false\n",
 	} {
 		if !strings.Contains(cfg, want) {
-			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+			t.Errorf("conf/base.config lacks %q:\n%s", want, cfg)
 		}
 	}
 
@@ -648,13 +651,21 @@ func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 
 // TestEmitDeclaresTheEngineFloor: the config declares the oldest Nextflow
 // the project runs on, with the `!` that fails an older launch rather than
-// warning (#498). The nightly suite matrix runs this floor
+// warning (#498), and so does the HealthOmics package's, from which
+// HealthOmics chooses the engine. The nightly suite matrix runs this floor
 // (TestNightlyNextflowFloor).
 func TestEmitDeclaresTheEngineFloor(t *testing.T) {
-	cfg := readTree(t, emitFixture(t, "split_test"))["nextflow.config"]
+	tree := readTree(t, emitFixture(t, "split_test"))
 
-	if want := "\nmanifest.nextflowVersion = '!>=25.10.0'\n"; !strings.Contains(cfg, want) {
-		t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+	const floor = "manifest.nextflowVersion = '!>=25.10.0'\n"
+
+	for file, want := range map[string]string{
+		"nextflow.config": "\n" + floor,
+		"package.sh":      "cat > \"$pkg/nextflow.config\" <<EOF\n" + floor,
+	} {
+		if !strings.Contains(tree[file], want) {
+			t.Errorf("%s lacks %q:\n%s", file, want, tree[file])
+		}
 	}
 }
 

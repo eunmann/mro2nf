@@ -545,14 +545,15 @@ func TestGeneratedProfilesRequireImage(t *testing.T) {
 
 // TestGeneratedHealthOmicsPackage validates the HealthOmics package without
 // a live account: package.sh refuses an image not pinned by digest (#334)
-// and zips the files main.nf reads, with the healthomics profile the
-// workflow's own config and the image pinned, so `nextflow config` of the
-// unzipped workflow, given no -profile as HealthOmics gives none, resolves
-// the pinned image, required, and the HealthOmics pubdir (#309). It grants
-// jobs as mrp's cluster job managers do, with no executor or local pool of
-// the engine's host, as HealthOmics, which applies the standard profile to
-// a run that names none, places every task itself (#571). No file of the
-// pipeline's, an entry default included, is in it.
+// and zips the files main.nf reads, with conf/base.config and the
+// healthomics profile's config the workflow's own and the image pinned, so
+// `nextflow config` of the unzipped workflow, given no -profile as a
+// HealthOmics run names none, resolves the pinned image, required, and the
+// HealthOmics pubdir (#309). It grants jobs as mrp's cluster job managers
+// do, with no executor or local pool of the engine's host: HealthOmics
+// applies a standard profile to a run that names none, and places every
+// task itself (#571). No file of the pipeline's, an entry default
+// included, is in it.
 func TestGeneratedHealthOmicsPackage(t *testing.T) {
 	t.Parallel()
 
@@ -657,7 +658,7 @@ func unzipWorkflow(t *testing.T, path string) string {
 	}
 
 	entry := filepath.Join("_assets/mro", root, "testdata", "entry_file", "pipeline.mro")
-	want := []string{entry, "conf/container.config", "conf/healthomics.config", "main.nf", "nextflow.config", "parameter-template.json", "stage.nf"}
+	want := []string{entry, "conf/base.config", "conf/container.config", "conf/healthomics.config", "main.nf", "nextflow.config", "parameter-template.json", "stage.nf"}
 
 	slices.Sort(names)
 

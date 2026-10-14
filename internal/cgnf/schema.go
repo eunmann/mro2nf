@@ -91,7 +91,7 @@ func (p *project) paramsSchema() (string, error) {
 
 // schemaOf is lp as nextflow_schema.json declares it, whose default is the
 // call's value of an entry input, none for a param a profile sets, and else
-// the param's value in nextflow.config.
+// the param's value in conf/base.config.
 func (lp launchParam) schemaOf() (paramSchema, error) {
 	def := lp.def
 	if def == nil && lp.value != nil && !lp.hidden {

@@ -13,13 +13,13 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// launchParam is one param a run is launched with: nextflow.config sets its
+// launchParam is one param a run is launched with: conf/base.config sets its
 // value, nextflow_schema.json describes it, and parameter-template.json lists
 // it where a HealthOmics run may set it.
 type launchParam struct {
 	id     string
 	schema *types.Schema
-	// value is the param's value in nextflow.config: nil, a string, a bool
+	// value is the param's value in conf/base.config: nil, a string, a bool
 	// or a map of strings.
 	value any
 	// def is the JSON value a run takes when the param is unset, nil for none.
@@ -63,7 +63,7 @@ func schemaGroups() []paramGroup {
 	}
 }
 
-// paramBlock is a run of the project's own params nextflow.config sets
+// paramBlock is a run of the project's own params conf/base.config sets
 // below one comment.
 type paramBlock struct {
 	comment string
@@ -79,7 +79,7 @@ func boolParam(id string, value bool, desc string) launchParam {
 }
 
 // projectParams are the params the generated project defines itself, in
-// the blocks nextflow.config sets them in; psid is the call's name, the
+// the blocks conf/base.config sets them in; psid is the call's name, the
 // pipestance id a run takes by default.
 func projectParams(psid string) []paramBlock {
 	return slices.Concat(runParams(), toolParams(psid), inputParams())
@@ -194,7 +194,7 @@ func profileSet(p launchParam) launchParam {
 }
 
 // entryInputs are the entry inputs as run params: each null in
-// nextflow.config, keeping the value of the .mro's call, which the schema
+// conf/base.config, keeping the value of the .mro's call, which the schema
 // gives as its default.
 func (p *project) entryInputs() ([]launchParam, error) {
 	params, tbl, err := p.src.InParams(p.src.Invocation.Call, p.opts.MroPaths)

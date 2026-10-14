@@ -89,7 +89,8 @@ func Emit(entry string, opts Options) error {
 
 	maps.Copy(files, map[string]string{
 		"stage.nf":             stageModule,
-		"nextflow.config":      p.config(),
+		"nextflow.config":      nextflowConfig,
+		"conf/base.config":     p.baseConfig(),
 		"nextflow_schema.json": schema,
 	})
 

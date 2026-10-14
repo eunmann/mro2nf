@@ -274,9 +274,9 @@ func treeDigest(t *testing.T, dir string) string {
 // today. It backs the shared-context tripwire in assertNoProjectDirContext:
 // main.nf includes stage.nf by its path beside it, and the modules of
 // subworkflows/ by theirs, each including stage.nf and the others by
-// theirs, nextflow.config includes conf/'s profile configs by theirs, the
-// HealthOmics package files and the params schema are no Nextflow source,
-// and nothing here is resolved from -project-dir.
+// theirs, nextflow.config includes conf/'s base and profile configs by
+// theirs, the HealthOmics package files and the params schema are no
+// Nextflow source, and nothing here is resolved from -project-dir.
 var lintEmissionAllowList = []string{
 	"_assets", "conf", "main.nf", "nextflow.config", "nextflow_schema.json", "package.sh", "parameter-template.json", "stage.nf", "subworkflows",
 }
