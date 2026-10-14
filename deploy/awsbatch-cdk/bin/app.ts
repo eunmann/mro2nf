@@ -14,6 +14,17 @@ const mountBuckets = String(app.node.tryGetContext('mountBuckets') ?? '')
 // Environment-agnostic: deploys to whatever account/region your AWS CLI is
 // configured for, and synthesizes offline (the VPC uses Fn::GetAZs rather than an
 // account-specific availability-zone lookup, so `cdk synth` works before creds).
-new Mro2nfStack(app, 'Mro2nfStack', { mountBuckets });
+// The root volume's provisioned gp3 throughput and IOPS, gp3's maxima unless
+// set: `-c rootThroughputMiBps=1000 -c rootIops=4000`.
+const contextNumber = (key: string): number | undefined => {
+  const v = app.node.tryGetContext(key);
+  return v === undefined ? undefined : Number(v);
+};
+
+new Mro2nfStack(app, 'Mro2nfStack', {
+  mountBuckets,
+  rootThroughputMiBps: contextNumber('rootThroughputMiBps'),
+  rootIops: contextNumber('rootIops'),
+});
 
 app.synth();
