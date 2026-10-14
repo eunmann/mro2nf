@@ -408,9 +408,11 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 // TestEmitPublishesThroughWorkflowOutputs (#580): OUTS publishes nothing
 // itself; the entry workflow publishes its outs JSON and each entry of its
 // outs tree at its own name, as copies, below outputDir, which follows
-// params.outdir, the HealthOmics pubdir under that profile. A -preview run,
-// which runs no task, publishes nothing, as an enabled output would hang it
-// (TestLaunchEdges).
+// params.outdir, the HealthOmics pubdir under that profile. A run whose
+// later config moves params.outdir and leaves outputDir where conf/base.config
+// set it fails before PLAN, where it would publish elsewhere silently. A
+// -preview run, which runs no task, publishes nothing, as an enabled output
+// would hang it (TestLaunchEdges).
 func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "dir_out"))
 
@@ -432,6 +434,15 @@ func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
 	base := tree["conf/base.config"]
 	if set, follow := strings.Index(base, "params.outdir = 'results'\n"), strings.Index(base, "\noutputDir = params.outdir\n"); set < 0 || follow < set {
 		t.Errorf("conf/base.config does not publish below params.outdir:\n%s", base)
+	}
+
+	if set, kept := strings.Index(base, "params.outdir = 'results'\n"), strings.Index(base, "\nparams.mro2nf_config_outdir = params.outdir\n"); kept < set {
+		t.Errorf("conf/base.config does not keep the params.outdir it sets outputDir from:\n%s", base)
+	}
+
+	main := tree["main.nf"]
+	if guard := strings.Index(main, "if (params.outdir != params.mro2nf_config_outdir && workflow.outputDir == file(params.mro2nf_config_outdir)) {"); guard < 0 || guard > strings.Index(main, "PLAN(") {
+		t.Errorf("main.nf does not refuse, before PLAN, a params.outdir a later config set without outputDir:\n%s", main)
 	}
 }
 

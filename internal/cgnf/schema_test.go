@@ -203,7 +203,7 @@ func TestEmitDeclaresEveryLaunchParam(t *testing.T) {
 		"mro2nf_monitor": "Boolean = false", "mro2nf_confine": "Boolean = false",
 		"mro2nf_host_inputs": "Boolean = true", "mro2nf_allow_remote_inputs": "Boolean = false", "mro2nf_host_in_place": "Boolean = true",
 		"mro2nf_local_jobs": "Boolean = false", "mro2nf_s3_mount": "String?", "mro2nf_image": "String?", "mro2nf_require_image": "Boolean = false",
-		"mro2nf_overrides": "String?",
+		"mro2nf_overrides": "String?", "mro2nf_config_outdir": "String?",
 	}
 
 	if d := cmp.Diff(want, got); d != "" {

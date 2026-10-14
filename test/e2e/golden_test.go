@@ -367,6 +367,38 @@ func TestUndeclaredParamFailsAtLaunch(t *testing.T) {
 	})
 }
 
+// TestOutdirSetByALaterConfig: a -c config that sets params.outdir and not
+// outputDir fails the run before PLAN, naming both, where the outputs would
+// publish silently below the outputDir conf/base.config set; one that sets
+// outputDir with it publishes there.
+func TestOutdirSetByALaterConfig(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	t.Run("params_only", func(t *testing.T) {
+		t.Parallel()
+
+		proj := transpile(t, "cli_typed")
+		writeFileT(t, filepath.Join(proj, "site.config"), "params.outdir = 'elsewhere'\n")
+		assertLaunchRefuses(t, proj, []string{"-c", "site.config"},
+			"params.outdir is elsewhere, set by a config after conf/base.config set outputDir from it, so the outputs would publish to /")
+	})
+
+	t.Run("with_output_dir", func(t *testing.T) {
+		t.Parallel()
+
+		proj := transpile(t, "cli_typed")
+		writeFileT(t, filepath.Join(proj, "site.config"), "params.outdir = 'elsewhere'\noutputDir = params.outdir\n")
+
+		if err := runNextflow(t, proj, "-c", "site.config"); err != nil {
+			t.Fatal(err)
+		}
+
+		goldenJSON(t, "cli_typed", filepath.Join(proj, "elsewhere", "pipeline_outs.json"), filepath.Join(root, "testdata", "cli_typed", "expected", "outs.json"))
+	})
+}
+
 // assertLaunchRefuses runs proj with args, which Nextflow must refuse
 // before any task starts, with a run log holding want.
 func assertLaunchRefuses(t *testing.T, proj string, args []string, want string) {

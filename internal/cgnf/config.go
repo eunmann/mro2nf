@@ -53,10 +53,11 @@ func (p *project) baseConfig() string {
 
 // publishConfig sets where the workflow outputs are published: --outdir, a
 // directory or an object-store prefix. Nextflow's own -output-dir overrides
-// it, and a config that sets params.outdir again must set outputDir again,
-// as this setting read the value params.outdir had here.
+// it. It reads params.outdir as it stands here, so a later config that sets
+// params.outdir must set outputDir too, or main.nf refuses the run
+// (planWiring).
 const publishConfig = `// The run publishes its outputs below --outdir, unless -output-dir names
-// another dir.
+// another dir; a later config that sets params.outdir sets outputDir too.
 outputDir = params.outdir
 
 `

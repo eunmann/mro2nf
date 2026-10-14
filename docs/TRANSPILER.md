@@ -288,7 +288,11 @@ the target profiles (§9), whose settings override the shared ones.
 **`conf/base.config`** holds:
 
 - `params.outdir` (`results`), which `outputDir`, where the workflow
-  outputs publish, follows, and `params.job_resources`, Martian's
+  outputs publish, is set from, with `params.mro2nf_config_outdir` keeping
+  the value it read: a later config that sets `params.outdir` without
+  `outputDir` would leave the outputs below the old dir, so `main.nf` fails
+  that run before PLAN unless `-output-dir` or that config moved
+  `outputDir`. Also `params.job_resources`, Martian's
   `MRO_JOBRESOURCES` analog: a map from a stage's `special` key to the
   `clusterOptions` of a grid executor.
 - `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
@@ -559,7 +563,7 @@ lays them out with `mre outs` through `mrp`'s own post-processing: the
 `results`). The entry workflow publishes both as its workflow outputs:
 `pipeline_outs.json`, and each entry of the tree at its own name
 (`f >> f.name`), copied into `outputDir`, which `conf/base.config` sets to
-`params.outdir` and `-output-dir` overrides. A copy, not Nextflow's
+`params.outdir` (§4) and `-output-dir` overrides. A copy, not Nextflow's
 default symlink, so an object-store or HealthOmics output dir holds the
 files themselves, dotfiles and empty dirs included, and a symlink's target
 content in its place. A `-preview` run publishes nothing (`enabled

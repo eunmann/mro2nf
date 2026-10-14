@@ -147,7 +147,8 @@ The `mro2nf_*` parameters form the `mro2nf options` group, and `outdir` the
 `Output options` group; `job_resources`, a map, sits at the top level, as
 nf-schema's meta-schema admits only scalar types in a group. Those a profile
 sets are marked `hidden` and given no default, as the profile picks their
-value.
+value, and so is `mro2nf_config_outdir`, the `outdir` that `conf/base.config`
+sets `outputDir` from.
 
 The schema validates nothing at launch: the project loads no nf-schema
 plugin, which a run would have to download. `main.nf`'s `params` block
@@ -169,7 +170,7 @@ default, where the run takes the `.mro`'s value, and a `Path` checks that an
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `--outdir <dir>` | `results` | where the outputs are published: a directory or an `s3://` prefix; Nextflow's own `-output-dir <dir>` overrides it |
+| `--outdir <dir>` | `results` | where the outputs are published: a directory or an `s3://` prefix; Nextflow's own `-output-dir <dir>` overrides it. `conf/base.config` sets `outputDir` from it, so a `-c` config that sets `params.outdir` must also set `outputDir = params.outdir`, or the run fails before any task |
 | `--mro2nf_overrides <file>` | none | `mrp`'s `--overrides` file (see [Resources](#resources)) |
 | `--mro2nf_monitor true` | `false` | `mrp`'s `--monitor`: `mrjob` kills a job that exceeds its memory request |
 | `--mro2nf_confine true` | `false` | fails a stage task whose output resolves outside its work directory, instead of copying the file in; the container profiles always do this |

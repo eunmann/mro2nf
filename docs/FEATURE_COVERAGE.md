@@ -121,7 +121,7 @@ too.
 
 | Feature | Status | Test |
 |---|---|---|
-| file outputs published to results (mrp `outs/` layout, `GetOutFilename` naming) | ✅ OUTS lays the tree out with `mrp`'s post-processing; the workflow outputs (`output {}`) copy it below `--outdir` (`outputDir`) | e2e `file_min`, `TestMrpDiff` (tree diff vs real mrp), `TestDockerIsolation`; unit `TestEmitPublishesThroughWorkflowOutputs` |
+| file outputs published to results (mrp `outs/` layout, `GetOutFilename` naming) | ✅ OUTS lays the tree out with `mrp`'s post-processing; the workflow outputs (`output {}`) copy it below `--outdir` (`outputDir`); a `-c` config that moves `params.outdir` and not `outputDir` fails the run before PLAN | e2e `file_min`, `TestMrpDiff` (tree diff vs real mrp), `TestDockerIsolation`, `TestOutdirSetByALaterConfig`; unit `TestEmitPublishesThroughWorkflowOutputs` |
 | inter-stage file passing | ✅ each task stages the bundles it reads, and the files they name by reference where their producer wrote them, as `path` inputs; markers locate the leaves (`TRANSPILER.md` §7) | e2e `file_chain`, `TestCloudSim*`; unit `TestBundleRoundTrip` |
 | a path written into text (JSON or CSV contents, an untyped `map`, a `string`) that a later job opens | 🚫 relies on `mrp`'s shared filesystem; no task stages it, so it opens only where the later task sees that path. Per profile in `RUNNING.md`, Paths written into text | e2e `TestDockerMountedS3Inputs` (a file input's path in JSON, under copy-staging as on `awsbatch`), `TestMrpDiffHostEntryPaths` (a head-node input's path in JSON, on `standard`) |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ | e2e `map_file`, `map_file_keyed`, `struct_of_file` |
