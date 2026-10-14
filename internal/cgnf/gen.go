@@ -205,10 +205,10 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 
 // planRun and stageRun are the run entry of PLAN's meta and of the meta
 // every stage task and OUTS share: the launch params their scripts read,
-// as an input, which Nextflow keys a -resume on. Nextflow 25.10 and 26.04
-// key no task on a param read by a function its script calls, as
-// mreStage, and the v2 parser of 26.04.0-26.04.1 on none its script reads
-// (nextflow-io/nextflow#7156). A boolean is the Boolean the params block
+// as an input, which Nextflow keys a -resume on. Nextflow 26.04 keys no
+// task on a param read by a function its script calls, as mreStage, and
+// 26.04.0-26.04.1 on none its script reads (nextflow-io/nextflow#7156), so
+// a changed param would silently reuse a stale task. A boolean is the Boolean the params block
 // types it as, so a launch's --<name> false keys as its default false does.
 const (
 	planRun  = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, host_inputs: params.mro2nf_host_inputs, host_in_place: params.mro2nf_host_in_place, remote_inputs: params.mro2nf_allow_remote_inputs, s3_mount: params.mro2nf_s3_mount, local_jobs: params.mro2nf_local_jobs]"

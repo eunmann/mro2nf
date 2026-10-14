@@ -378,10 +378,13 @@ mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
 node's digest and resources (in `meta`), the run's call, the mro2nf
 build, and its fork records, value records and staged dirs, and the launch
 params its script reads, which its `meta` carries as its `run` entry:
-Nextflow 25.10 and 26.04 key no task on a param read by a function its
-script calls, as the stage module's are, and the v2 parser of
-26.04.0–26.04.1 on none its script reads (nextflow-io/nextflow#7156), so no
-script reads `params` (`TestScriptsReadParamsFromMeta`). A changed
+Nextflow 26.04 keys no task on a param read by a function its script
+calls, as the stage module's are, and 26.04.0–26.04.1 on none its script
+reads (nextflow-io/nextflow#7156), so a changed param would silently reuse
+a stale task, and no script reads `params`
+(`TestScriptsReadParamsFromMeta`). Nor does a process read a global such as
+`workflow.workDir` or `projectDir`, which no task's key holds on the v2
+parser (`TestProcessesReadNoPathGlobal`). A changed
 `--mro2nf_psid` re-runs every task, and a changed `--mro2nf_monitor` every
 stage task and OUTS (`TestResumeKeysOnTheParamsATaskReads`). No task
 stages a file of PLAN's: the digests reach it as values, which Nextflow
