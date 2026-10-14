@@ -50,7 +50,7 @@ up in them; it computes no Martian value and parses no stage-controlled JSON.
 | Scheduling: a task per `mrp` job, executors, queues | Nextflow | the processes of `stage.nf`; the profiles (§9) |
 | Staging files between tasks | Nextflow `path` inputs; `mre` names each file to stage | `stage.nf`; `-field-refs`, `-fork-refs`, `-out-refs` (§5) |
 | Caching | Nextflow `-resume` | §5, **Cache identity** |
-| Retries | Nextflow `errorStrategy` on the exit `mre` chooses | `nextflow.config`; `internal/job/retry.go` |
+| Retries | Nextflow `errorStrategy` on the exit `mre` chooses | `conf/base.config`; `internal/job/retry.go` |
 | Resources | Nextflow `cpus`, `memory`, `accelerator`, `clusterOptions`; `mre` resolves the values as `mrp` | §9; `internal/job/resources.go` |
 | Publishing | Nextflow `publishDir` of OUTS; `mre outs` builds the tree | §5, **OUTS** |
 | Targets, launch params | Nextflow profiles and `params` | §4, §8, §9 |
@@ -145,7 +145,7 @@ cg.Graph.Topology → per node its fork roots, reads and gates
    │
 cgnf.Emit         → a Nextflow project on disk:
    │                  main.nf, subworkflows/, stage.nf, nextflow.config,
-   │                  _assets/mro/
+   │                  conf/, _assets/mro/
    ▼
 nextflow run main.nf …  →  PLAN, a task per stage instance, then OUTS
 ```
@@ -924,7 +924,7 @@ You can override inputs **at launch** without re-transpiling:
   (`types.Table.Schema`) with the call's value as its default, a split input
   by Martian's split form of that type (`types.Split`) with the call's split
   value wrapped as `{"split": v}`, and the
-  project's own params from the same model as `nextflow.config` and the
+  project's own params from the same model as `conf/base.config` and the
   HealthOmics `parameter-template.json` (`internal/cgnf/params.go`). No
   nf-schema plugin validates against it: a plugin is downloaded at launch,
   which an offline grid or container host cannot do, and HealthOmics installs
