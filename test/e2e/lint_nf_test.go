@@ -42,8 +42,8 @@ import (
 	"github.com/eunmann/mro2nf/test/wide"
 )
 
-// minNextflowMajor/Minor is the first release whose `nextflow lint` takes
-// -project-dir; 25.10 rejects the option.
+// minNextflowMajor/Minor is the engine floor, the first release whose
+// `nextflow lint` takes -project-dir.
 const (
 	minNextflowMajor = 26
 	minNextflowMinor = 4

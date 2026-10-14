@@ -253,40 +253,25 @@ func resolvedLimits(t *testing.T, proj string) (string, string) {
 	return limits["cpus"], limits["memory"]
 }
 
-// TestFlatLimitsReadsBothForms: the clamp's limits read the same from
-// Nextflow 26.04's per-key lines and 25.10's map value.
-func TestFlatLimitsReadsBothForms(t *testing.T) {
+// TestFlatLimitsReadsPerKeyLines: the clamp's limits read from the lines
+// `nextflow config -flat` renders process.resourceLimits as, one per key.
+func TestFlatLimitsReadsPerKeyLines(t *testing.T) {
 	want := map[string]string{"cpus": "20", "memory": "15.3 GB"}
+	out := "process.executor = 'local'\nprocess.resourceLimits.cpus = 20\nprocess.resourceLimits.memory = '15.3 GB'\n"
 
-	for name, out := range map[string]string{
-		"26.04": "process.resourceLimits.cpus = 20\nprocess.resourceLimits.memory = '15.3 GB'\n",
-		"25.10": "process.executor = 'local'\nprocess.resourceLimits = [cpus:20, memory:'15.3 GB']\n",
-	} {
-		if d := cmp.Diff(want, flatLimits(out)); d != "" {
-			t.Errorf("%s: limits (-want +got):\n%s", name, d)
-		}
+	if d := cmp.Diff(want, flatLimits(out)); d != "" {
+		t.Errorf("limits (-want +got):\n%s", d)
 	}
 }
 
-// flatLimits reads process.resourceLimits from `nextflow config -flat` output,
-// which Nextflow 26.04 renders one key per line and 25.10 as one map value:
-// `process.resourceLimits = [cpus:20, memory:'15.3 GB']`.
+// flatLimits reads process.resourceLimits from `nextflow config -flat` output.
 func flatLimits(out string) map[string]string {
 	limits := map[string]string{}
 
 	for line := range strings.SplitSeq(out, "\n") {
 		key, val, ok := strings.Cut(line, " = ")
-
-		switch {
-		case !ok:
-		case strings.HasPrefix(key, "process.resourceLimits."):
+		if ok && strings.HasPrefix(key, "process.resourceLimits.") {
 			limits[strings.TrimPrefix(key, "process.resourceLimits.")] = strings.Trim(val, "'")
-		case key == "process.resourceLimits":
-			for entry := range strings.SplitSeq(strings.Trim(val, "[]"), ", ") {
-				if k, v, ok := strings.Cut(entry, ":"); ok {
-					limits[k] = strings.Trim(v, "'")
-				}
-			}
 		}
 	}
 

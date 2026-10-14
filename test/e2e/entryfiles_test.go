@@ -19,7 +19,7 @@ import (
 // such as a file: URI, whose name holds a character bash would expand fails
 // the run at PLAN, before any stage task stages it, naming the input and the
 // character (#276). Nextflow's stage-in script leaves the source path
-// unquoted on 25.10 and 26.04, so `s[1].txt` beside `s1.txt` would otherwise
+// unquoted on 26.04, so `s[1].txt` beside `s1.txt` would otherwise
 // stage s1.txt silently, and a brace would be expanded; file(x, glob: false)
 // keeps only the head node from globbing. A head-node path, which every task
 // reads in place, no task stages, so it reaches the stage as given, as under

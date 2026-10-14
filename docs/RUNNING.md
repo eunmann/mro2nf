@@ -111,11 +111,10 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   of index files. An input read in place on `standard` and the grid
   profiles, or through the `awsbatch` mount, has its directory beside it, as
   under `mrp`.
-- Nextflow's v1 syntax parser, the default before 26.04 or under
-  `NXF_SYNTAX_PARSER=v1`, converts command-line values before the run sees
-  them: `--s 007` becomes the number `7`, which fails a `string` input. Set
-  `NXF_DISABLE_PARAMS_TYPE_DETECTION=true`, or use a `-params-file`, to pass
-  such strings unchanged ([`TRANSPILER.md`](TRANSPILER.md) §8).
+- A command-line value reaches the run as the text given: `--s 007` stays
+  `007`. That needs Nextflow's default strict (v2) syntax parser, which the
+  project requires; under `NXF_SYNTAX_PARSER=v1`, `--s 007` becomes the
+  number `7` ([`TRANSPILER.md`](TRANSPILER.md) §8).
 
 An entry input named `outdir`, `job_resources` or `mro2nf_*` fails the
 transpile, because the project defines those parameters itself.
@@ -149,10 +148,10 @@ plugin, which a run would have to download. The run's PLAN task, its first,
 checks every pipeline input against its declared type on every profile, and
 fails the run before any stage starts, naming the input, its type and the
 value (`entry input "n" declared int, got "x"`). Nextflow's typed `params`
-block would check them at launch instead, but this project's oldest
-supported Nextflow, 25.10, parses it only under the strict syntax parser,
-which is not its default, and HealthOmics runs the project on 25.10 without
-that parser.
+block would check them at launch instead, but its types are not Martian's:
+on 26.04 a `Float` narrows a command-line value to 32 bits
+(`3.14159265358979` becomes `3.1415927`), and an unset `Boolean` becomes
+`false` even with a `null` default, where the run takes the `.mro`'s value.
 
 ### mro2nf parameters
 
@@ -513,9 +512,7 @@ it, is `gpu` or `gpu:N`. For a chunk or the join of a split stage, that is the
 stage's own `special`. `special` also selects `params.job_resources[special]`
 as the task's `clusterOptions`.
 
-One rule in the generated `conf/base.config` sets `accelerator` per task. A
-process `accelerator` directive that reads the task's inputs fails on Nextflow
-25.10 and works on 26.04, so the request stays a config closure.
+One rule in the generated `conf/base.config` sets `accelerator` per task.
 
 Executors read `accelerator` differently:
 

@@ -4,15 +4,14 @@
 // carries the node's identity, the cache key of its spec (digest), the
 // run's call as CALL carries it (call), the resources it is scheduled with,
 // and its own overrides file (overrides), which PLAN resolved; its GPU
-// request is the config's, which reads meta.special per task where a
-// Nextflow 25.10 process accelerator directive cannot. Each task runs one
-// `mre stage` call: the instance's args, which it builds from the inputs it
-// staged, its phase's job as mrp runs it, and the post after it that the
-// phase has, each step handing the next what it needs in memory. A split's
-// chunks and join stage the split's inputs and build its args again, so no
-// task outputs args: each links the files they name where Nextflow staged
-// them, which an object-store work dir would otherwise receive as one copy
-// per fork.
+// request is the config's, which reads meta.special per task. Each task
+// runs one `mre stage` call: the instance's args, which it builds from the
+// inputs it staged, its phase's job as mrp runs it, and the post after it
+// that the phase has, each step handing the next what it needs in memory.
+// A split's chunks and join stage the split's inputs and build its args
+// again, so no task outputs args: each links the files they name where
+// Nextflow staged them, which an object-store work dir would otherwise
+// receive as one copy per fork.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -172,8 +171,7 @@ def valuesFile(List values) {
 }
 
 // on reads a boolean param, which a launch's --<name> false sets to the
-// string 'false' under the v2 syntax parser or
-// NXF_DISABLE_PARAMS_TYPE_DETECTION, a value Groovy takes as true.
+// string 'false', a value Groovy takes as true.
 def on(v) {
     return v.toString() == 'true'
 }

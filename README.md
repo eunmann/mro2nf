@@ -16,9 +16,12 @@ document also lists every Martian feature and its support status.
 ## Prerequisites
 
 - Go 1.26 and `make`, to build. The build downloads Go modules.
-- Java 17 to 25, and Nextflow 25.10 or later (`curl -s https://get.nextflow.io | bash`).
-  The generated `nextflow.config` sets `manifest.nextflowVersion '!>=25.10.0'`,
-  so an older Nextflow refuses to run it.
+- Java 17 to 26, and Nextflow 26.04 or later (`curl -s https://get.nextflow.io | bash`).
+  The generated `nextflow.config` sets `manifest.nextflowVersion '!>=26.04.0'`,
+  so an older Nextflow refuses to run it. The project needs Nextflow's
+  default strict (v2) syntax parser: under `NXF_SYNTAX_PARSER=v1`, Nextflow
+  converts command-line values before the run sees them (`--s 007` becomes
+  the number `7`).
 - Python 3 on the host, to run `py` stages under the local and grid profiles.
 - Docker, for the container profiles.
 
@@ -88,6 +91,14 @@ A rerun with nothing changed takes all 8 tasks from the cache and runs none.
 A changed entry parameter re-runs every
 task. Nextflow does not see edits to stage code, so after you change stage
 code, run without `-resume`.
+
+The first `-resume` under Nextflow 26.04 of a run an older Nextflow started
+re-runs every task: 26.04 hashes a map input by its keys and values, where
+older releases hashed only its values, and every task takes one. Nextflow
+26.04.0 and 26.04.1 leave the `params.*` a task's script reads out of its
+`-resume` hash (nextflow-io/nextflow#7156, fixed in 26.04.2), so on them a
+`-resume` that changes an `--mro2nf_*` parameter PLAN reads reuses the
+cached PLAN; run without `-resume` after changing one.
 
 ## Container image
 

@@ -29,8 +29,7 @@ func TestWidePipelineRuns(t *testing.T) {
 // in them, and a few edges per data dependency of a pipeline (a read, a
 // gate, a fork root, a split's phases, an output) cost CellRanger's
 // -preview seconds per hundred. The bounds are the edges -preview builds,
-// operators included (dag.verbose), under Nextflow 25.10 and 26.04 alike,
-// of the wide pipeline and of cellranger_shaped, which were 1,221 and 346
+// operators included (dag.verbose), of the wide pipeline and of cellranger_shaped, which were 1,221 and 346
 // before #559: an edge more per dependency fails them.
 func TestLaunchEdges(t *testing.T) {
 	t.Parallel()
