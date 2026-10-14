@@ -37,9 +37,9 @@ The project holds:
 | `main.nf` | the entry workflow: PLAN, the stage calls or the workflows that run them, then OUTS |
 | `subworkflows/` | in a pipeline too large for one workflow, one workflow per run of its stage calls |
 | `stage.nf` | the stage processes and the wiring every node uses |
-| `nextflow.config` | parameters, the retry policy, the GPU rule, the trace, the profiles |
+| `nextflow.config` | the oldest Nextflow the project runs on, `conf/base.config`, the profiles |
 | `nextflow_schema.json` | every parameter's type, default and description, in the nf-schema format, for launch forms and documentation |
-| `conf/` | the container and HealthOmics profiles' settings |
+| `conf/` | `base.config`, the settings every profile shares: parameters, the retry policy, the GPU rule, the trace; the container and HealthOmics profiles' settings |
 | `package.sh`, `parameter-template.json` | the HealthOmics package |
 | `_assets/` | a copy of the `.mro` files, read by PLAN and OUTS |
 
@@ -197,9 +197,9 @@ runs as, and its task is sized to that grant:
   at the pool, but `vmem_gb`. Fractions are kept, to the hundredth of a
   thread and the MiB.
 - The grid profiles (`slurm`, `sge`, `lsf`, `pbs`), `awsbatch` and
-  `healthomics` run as an `mrp` cluster jobmode. A negative request is
-  granted its magnitude, threads are rounded up to whole threads, and no
-  request is capped.
+  `healthomics`, and the HealthOmics package, run as an `mrp` cluster
+  jobmode. A negative request is granted its magnitude, threads are rounded
+  up to whole threads, and no request is capped.
 - Unset, a job gets 1 thread and 1 GB, and `vmem_gb` the memory plus 3 GB.
 - A chunk and the join use the `__threads`, `__mem_gb`, `__vmem_gb` and
   `__special` that the split returned for them.
@@ -256,7 +256,8 @@ a `-c` config:
 process.resourceLimits = [cpus: 8, memory: 32.GB]
 ```
 
-The `awsbatch` and grid profiles do not clamp.
+The `awsbatch`, grid and `healthomics` profiles and the HealthOmics package
+do not clamp.
 
 ## Retries
 
@@ -392,8 +393,16 @@ under `/mnt/s3` given directly is read the same way.
 
 ### HealthOmics
 
-HealthOmics takes no `-profile` and no `-c`. `package.sh` makes the
-`healthomics` profile the workflow's own config and pins the image by digest:
+HealthOmics takes no `-c`, and applies the `standard` profile, the local
+one, to a run that names no profile. `package.sh` writes the workflow's
+own `nextflow.config` instead of the project's: `conf/base.config`, the
+image pinned by digest and the `healthomics` profile's settings, with no
+profiles, so every run grants jobs as `mrp`'s cluster job managers do, and
+no task is clamped to the engine's host. The package sets no executor, as
+HealthOmics runs every task itself. HealthOmics refuses a run whose engine
+settings name a profile, as the package defines none. Settings added to the
+project's `nextflow.config` stay out of the package; add them to
+`conf/base.config` or `conf/healthomics.config`.
 
 ```bash
 IMAGE=$(docker inspect --format '{{index .RepoDigests 0}}' <repo>:<tag>)
@@ -504,7 +513,7 @@ it, is `gpu` or `gpu:N`. For a chunk or the join of a split stage, that is the
 stage's own `special`. `special` also selects `params.job_resources[special]`
 as the task's `clusterOptions`.
 
-One rule in the generated `nextflow.config` sets `accelerator` per task. A
+One rule in the generated `conf/base.config` sets `accelerator` per task. A
 process `accelerator` directive that reads the task's inputs fails on Nextflow
 25.10 and works on 26.04, so the request stays a config closure.
 
