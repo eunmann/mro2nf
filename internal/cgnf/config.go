@@ -10,7 +10,7 @@ import (
 // engineFloor is the oldest Nextflow release the project is tested on. A
 // workflow's nextflow.config declares it, as HealthOmics reads it there to
 // choose the engine a run gets.
-const engineFloor = "manifest.nextflowVersion = '!>=25.10.0'\n"
+const engineFloor = "manifest.nextflowVersion = '!>=26.04.0'\n"
 
 // nextflowConfig is nextflow.config: the engine floor, conf/base.config and
 // the profiles a run is launched with.

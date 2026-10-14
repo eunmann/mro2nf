@@ -657,7 +657,7 @@ func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 func TestEmitDeclaresTheEngineFloor(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "split_test"))
 
-	const floor = "manifest.nextflowVersion = '!>=25.10.0'\n"
+	const floor = "manifest.nextflowVersion = '!>=26.04.0'\n"
 
 	for file, want := range map[string]string{
 		"nextflow.config": "\n" + floor,
