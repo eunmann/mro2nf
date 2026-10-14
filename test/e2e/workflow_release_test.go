@@ -139,23 +139,28 @@ func releaseCheckout(t *testing.T, fileTime time.Time) string {
 		}
 	}
 
-	gitEnv := []string{
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_AUTHOR_DATE=" + releaseCommitTime,
-		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com", "GIT_COMMITTER_DATE=" + releaseCommitTime,
-	}
-
-	for _, args := range [][]string{{"init", "-q"}, {"commit", "-q", "--allow-empty", "-m", "release"}} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), gitEnv...)
-
-		if b, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %s: %v\n%s", args[0], err, b)
-		}
-	}
+	releaseGit(t, dir, "init", "-q")
+	releaseGit(t, dir, "commit", "-q", "--allow-empty", "-m", "release")
 
 	return dir
+}
+
+// releaseGit runs git in dir free of the user's and the system's config,
+// as a fixed identity at releaseCommitTime.
+func releaseGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_AUTHOR_DATE="+releaseCommitTime,
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com", "GIT_COMMITTER_DATE="+releaseCommitTime,
+	)
+
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", args[0], err, b)
+	}
 }
 
 // releaseArchives runs the build job's archive step for every platform in a
@@ -405,5 +410,119 @@ func TestReleasePublishesArchives(t *testing.T) {
 		if ok, err := path.Match(assets[0], "mro2nf-"+releaseTag+"-"+p+".tar.gz"); err != nil || !ok {
 			t.Errorf("%s release files %q miss the %s archive", releaseWorkflow, assets[0], p)
 		}
+	}
+}
+
+const (
+	// releaseNotesPath is where the notes step writes the body the release
+	// step reads.
+	releaseNotesPath = "${{ runner.temp }}/release-notes.md"
+
+	// releaseCuratedNotes is a tag message whose first paragraph spans
+	// lines, which %(contents:subject) would fold into one.
+	releaseCuratedNotes = "Highlights:\n- per-platform archives\n- release notes\n\nBreaking: the loose binaries are gone.\n"
+)
+
+// TestReleaseNotesFromTag pins the publish job's release notes: GitHub
+// generates the list of merged PRs, and the step before the release writes
+// the body above it from the tag the checkout fetched.
+func TestReleaseNotesFromTag(t *testing.T) {
+	steps := readWorkflow(t, releaseWorkflow).get("jobs").get("publish").get("steps").items
+
+	checkout := slices.IndexFunc(steps, stepUses("actions/checkout"))
+	notes := slices.IndexFunc(steps, stepRuns("release-notes.md"))
+	release := slices.IndexFunc(steps, stepUses("softprops/action-gh-release"))
+
+	if checkout < 0 || notes < checkout || release < notes {
+		t.Fatalf("%s publish steps: checkout %d, notes %d, release %d; want them in that order", releaseWorkflow, checkout, notes, release)
+	}
+
+	if got := scalarOf(steps[checkout].get("with").get("persist-credentials")); got != "false" {
+		t.Errorf("%s publish checkout persist-credentials = %q, want false", releaseWorkflow, got)
+	}
+
+	gh := steps[release].get("with")
+	if got := scalarOf(gh.get("generate_release_notes")); got != "true" {
+		t.Errorf("%s generate_release_notes = %q, want true", releaseWorkflow, got)
+	}
+
+	if got := scalarOf(gh.get("body_path")); got != releaseNotesPath {
+		t.Errorf("%s body_path = %q, want %q", releaseWorkflow, got, releaseNotesPath)
+	}
+
+	if gh.get("name") != nil || gh.get("body") != nil {
+		t.Errorf("%s release sets name or body; the title is the tag and the body the notes file", releaseWorkflow)
+	}
+}
+
+// TestReleaseNotesBody runs the notes step on each kind of tag: an annotated
+// tag's message is the body as written, a signed one's without its
+// signature, and a lightweight tag or an empty message gives no body, never
+// the commit's message.
+func TestReleaseNotesBody(t *testing.T) {
+	requireTools(t, "bash", "git", "ssh-keygen")
+
+	script := scalarOf(releaseStep(t, "publish", stepRuns("release-notes.md")).get("run"))
+
+	dir := t.TempDir()
+	key := filepath.Join(t.TempDir(), "key")
+
+	if b, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, b)
+	}
+
+	releaseGit(t, dir, "init", "-q")
+	releaseGit(t, dir, "commit", "-q", "--allow-empty", "-m", "fix: the commit's message")
+	releaseGit(t, dir, "tag", "-a", "v1.0.0", "-m", releaseCuratedNotes)
+	releaseGit(t, dir, "-c", "gpg.format=ssh", "-c", "user.signingkey="+key, "tag", "-s", "v1.0.1", "-m", releaseCuratedNotes)
+	releaseGit(t, dir, "tag", "v1.0.2")
+	releaseGit(t, dir, "tag", "-a", "v1.0.3", "-m", "")
+
+	cases := map[string]string{"v1.0.0": releaseCuratedNotes, "v1.0.1": releaseCuratedNotes, "v1.0.2": "", "v1.0.3": ""}
+
+	for tag, want := range cases {
+		tmp := t.TempDir()
+		runReleaseStep(t, script, dir, "GITHUB_REF_NAME="+tag, "RUNNER_TEMP="+tmp)
+
+		got, err := os.ReadFile(strings.Replace(releaseNotesPath, "${{ runner.temp }}", tmp, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if diff := cmp.Diff(want, string(got)); diff != "" {
+			t.Errorf("%s notes (-want +got):\n%s", tag, diff)
+		}
+	}
+}
+
+// TestReleaseNotesConfig pins .github/release.yml, which groups the generated
+// notes: Dependabot's PRs, labelled dependencies, below every other PR.
+func TestReleaseNotesConfig(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(workflowsDir, "..", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := parseYAML(string(raw))
+	if err != nil {
+		t.Fatalf("parse .github/release.yml: %v", err)
+	}
+
+	type category struct{ Title, Labels, Exclude string }
+
+	items := doc.get("changelog").get("categories").items
+	got := make([]category, 0, len(items))
+
+	for _, c := range items {
+		got = append(got, category{
+			Title:   scalarOf(c.get("title")),
+			Labels:  strings.Join(c.get("labels").list(), ","),
+			Exclude: strings.Join(c.get("exclude").get("labels").list(), ","),
+		})
+	}
+
+	want := []category{{"Changes", "*", "dependencies"}, {"Dependency updates", "dependencies", ""}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf(".github/release.yml categories (-want +got):\n%s", diff)
 	}
 }

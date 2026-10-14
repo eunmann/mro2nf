@@ -113,9 +113,22 @@ divergences" issue.
 
 ## Releases
 
-Tagging `v*` triggers `release.yml`. It requires the tagged commit to be a
-PR's merge whose tree matches that PR's head, and that head to have a green PR
-Validation run. It then cross-compiles `mro2nf`, `mre` and `mrjob` for Linux
+To release, tag the merged commit with an annotated tag whose message is the
+curated notes, such as breaking changes and highlights, then push the tag:
+
+```bash
+git tag -a v1.2.0        # the editor takes the notes, in Markdown
+git push origin v1.2.0
+```
+
+The release's body is the tag's message, without any signature, above the
+list of PRs merged since the previous tag that GitHub generates, grouped by
+`.github/release.yml`. A lightweight tag, or an empty message, gives only
+that list. The release's title is the tag.
+
+Pushing a `v*` tag triggers `release.yml`. It requires the tagged commit to be
+a PR's merge whose tree matches that PR's head, and that head to have a green
+PR Validation run. It then cross-compiles `mro2nf`, `mre` and `mrjob` for Linux
 and macOS (amd64, arm64) and publishes a GitHub release with one archive per
 platform, `mro2nf-<tag>-<os>-<arch>.tar.gz`, and a `SHA256SUMS` file covering
 the archives. Each archive holds a single directory of the same name with
@@ -127,6 +140,9 @@ the tagged commit's time, and gzip without a name or timestamp
 the runtime image `ghcr.io/eunmann/mro2nf-runtime:<tag>` for linux/amd64 and
 linux/arm64. A pre-release tag (`v1.2.0-rc1`) never becomes the latest release
 or the image's `latest` tag. In a public repository the archives and the image
-carry build
-provenance; check a download with `sha256sum -c SHA256SUMS --ignore-missing`
-and `gh attestation verify <file> --repo eunmann/mro2nf`.
+carry build provenance; check a download with `sha256sum -c SHA256SUMS
+--ignore-missing` and `gh attestation verify <file> --repo eunmann/mro2nf`.
+
+To check the pipeline without releasing, for example after an action bump,
+run `release.yml` by hand (`gh workflow run release.yml --ref <branch>`): the
+dry run builds the archives and the runtime image but publishes neither.

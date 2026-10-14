@@ -135,6 +135,30 @@ jobs:
       id-token: write # sign the provenance with a Sigstore certificate
       attestations: write # store the provenance
     steps:
+      # On a tag push the pinned checkout fetches the tag by its ref, so an
+      # annotated tag arrives with its message (actions/checkout#2356).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # An annotated tag's message, minus any signature, heads the release
+      # above GitHub's generated list of merged PRs. A lightweight tag has no
+      # message of its own (%(contents) would print its commit's), so it, like
+      # an empty message, leaves the body to the generated list. Not
+      # %(contents:subject): it folds the first paragraph into one line.
+      - name: Write the release notes from the tag
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          : > "$notes"
+          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag ]; then
+            msg=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+            sig=$(git tag -l --format='%(contents:signature)' "$GITHUB_REF_NAME")
+            msg=$(printf '%s' "${msg%"$sig"}")
+            if [ -n "${msg//[[:space:]]/}" ]; then
+              printf '%s\n' "$msg" > "$notes"
+            fi
+          fi
+          cat "$notes"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: archive-*
@@ -156,6 +180,10 @@ jobs:
             SHA256SUMS
           fail_on_unmatched_files: true
           prerelease: ${{ env.PRERELEASE }}
+          # The action prepends body_path's text to the generated notes
+          # (src/github.ts at v3.0.3).
+          body_path: ${{ runner.temp }}/release-notes.md
+          generate_release_notes: true
 
   # Publish the runtime image (mre, mrjob and Martian's adapters at
   # /opt/mro2nf) to GHCR: the image a pipeline's own image builds FROM, which
