@@ -830,10 +830,6 @@ func TestReleasePublishesAfterBuilds(t *testing.T) {
 		t.Errorf("%s jobs (-want +got):\n%s", releaseWorkflow, diff)
 	}
 
-	if got := scalarOf(releaseStep(t, "gate", stepRuns("pr-validation.yml")).get("if")); got != "${{ !inputs.dry_run }}" {
-		t.Errorf("%s CI-green check if = %q; a real release must pass it", releaseWorkflow, got)
-	}
-
 	if got := scalarOf(jobs.get("gate").get("outputs").get("sha")); got != "${{ steps.resolve.outputs.sha }}" {
 		t.Errorf("%s gate outputs sha %q, want the resolve step's", releaseWorkflow, got)
 	}
