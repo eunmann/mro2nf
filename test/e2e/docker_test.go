@@ -594,6 +594,7 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 	for _, want := range []string{
 		"process.container = '" + image + "'",
 		"params.outdir = '/mnt/workflow/pubdir'",
+		"outputDir = '/mnt/workflow/pubdir'",
 		"params.mro2nf_require_image = true",
 		"params.mro2nf_host_inputs = false",
 		"params.mro2nf_local_jobs = false",

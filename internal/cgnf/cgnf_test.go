@@ -328,7 +328,8 @@ const postedOutput = "tuple val(key), path('outs/*', type: 'dir', arity: '0..*')
 // zip_runtime: TWO's forks; split_gate_entry: SRC's gates;
 // preflight_order: TOP_CHECK's DONE).
 func TestEmitPostsOneOutput(t *testing.T) {
-	if n := strings.Count(stageModule, "emit: "); n != 4 {
+	stages, _, _ := strings.Cut(stageModule, "\nprocess OUTS {")
+	if n := strings.Count(stages, "emit: "); n != 4 {
 		t.Errorf("stage.nf's processes declare %d outputs, want one of each of STAGE, STAGE_SPLIT, STAGE_MAIN and STAGE_JOIN", n)
 	}
 
@@ -401,6 +402,36 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}
+	}
+}
+
+// TestEmitPublishesThroughWorkflowOutputs (#580): OUTS publishes nothing
+// itself; the entry workflow publishes its outs JSON and each entry of its
+// outs tree at its own name, as copies, below outputDir, which follows
+// params.outdir, the HealthOmics pubdir under that profile. A -preview run,
+// which runs no task, publishes nothing, as an enabled output would hang it
+// (TestLaunchEdges).
+func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "dir_out"))
+
+	checkContains(t, tree, "main.nf",
+		"workflow {\n    main:\n    if (",
+		"\n    publish:\n    pipeline_outs = OUTS.out.json\n    results = OUTS.out.results.flatMap { fs -> fs }\n}\n",
+		"\noutput {\n    pipeline_outs {\n        enabled !workflow.preview\n        mode 'copy'\n    }\n"+
+			"    results {\n        enabled !workflow.preview\n        mode 'copy'\n        path { f -> f >> f.name }\n    }\n}\n",
+	)
+	checkContains(t, tree, "stage.nf",
+		"    path 'pipeline_outs.json', emit: json\n    path 'results/*', hidden: true, arity: '0..*', emit: results\n",
+	)
+	checkContains(t, tree, "conf/healthomics.config", "params.outdir = '/mnt/workflow/pubdir'\noutputDir = params.outdir\n")
+
+	if strings.Contains(stageModule, "publishDir") {
+		t.Error("stage.nf publishes through publishDir")
+	}
+
+	base := tree["conf/base.config"]
+	if set, follow := strings.Index(base, "params.outdir = 'results'\n"), strings.Index(base, "\noutputDir = params.outdir\n"); set < 0 || follow < set {
+		t.Errorf("conf/base.config does not publish below params.outdir:\n%s", base)
 	}
 }
 

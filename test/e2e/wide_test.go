@@ -30,7 +30,8 @@ func TestWidePipelineRuns(t *testing.T) {
 // gate, a fork root, a split's phases, an output) cost CellRanger's
 // -preview seconds per hundred. The bounds are the edges -preview builds,
 // operators included (dag.verbose), of the wide pipeline and of cellranger_shaped, which were 1,221 and 346
-// before #559: an edge more per dependency fails them.
+// before #559: an edge more per dependency fails them. Publishing OUTS's
+// tree through the workflow outputs adds one, its flatMap (#580).
 func TestLaunchEdges(t *testing.T) {
 	t.Parallel()
 
@@ -45,8 +46,8 @@ func TestLaunchEdges(t *testing.T) {
 		name, dir string
 		bound     int
 	}{
-		{"wide", dir, 951},
-		{"cellranger_shaped", filepath.Join(root, "testdata", "cellranger_shaped"), 268},
+		{"wide", dir, 952},
+		{"cellranger_shaped", filepath.Join(root, "testdata", "cellranger_shaped"), 269},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

@@ -16,8 +16,9 @@ const wiringWorkflows = "ENTRY_ROOT ; FORK ; ELEMENTS ; ZIP ; AFTER ; GATE ; GAT
 // subworkflowDir holds a module per sub-workflow main.nf calls.
 const subworkflowDir = "subworkflows"
 
-// workflows renders main.nf, which runs PLAN, the nodes and OUTS, and a
-// module per sub-workflow below subworkflowDir.
+// workflows renders main.nf, which runs PLAN, the nodes and OUTS and
+// publishes OUTS's outputs, and a module per sub-workflow below
+// subworkflowDir.
 func (p *project) workflows() (map[string]string, error) {
 	nodes := make([]*wiring, len(p.topo.Nodes))
 
@@ -43,11 +44,11 @@ func (p *project) workflows() (map[string]string, error) {
 	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
 	b.WriteString(planProcess)
-	b.WriteString("workflow {\n")
+	b.WriteString("workflow {\n    main:\n")
 	writeLines(&b, plan.lines)
 	writeUnits(&b, root, nodes)
 	writeLines(&b, outs.lines)
-	b.WriteString("}\n")
+	b.WriteString(publication)
 
 	files["main.nf"] = b.String()
 

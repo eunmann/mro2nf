@@ -344,11 +344,11 @@ def locations(ups, List locs, List refLocs) {
 }
 
 // OUTS resolves the pipeline outs from the stage outs and the entry files
-// they read and publishes them with mrp's own post-processing. It runs no
-// stage, so it compiles the project's copy of the .mro files it stages.
+// they read and lays out what the run publishes with mrp's own
+// post-processing: the outs JSON (json) and each entry of the outs tree
+// (results), which main.nf's workflow outputs publish. It runs no stage, so
+// it compiles the project's copy of the .mro files it stages.
 process OUTS {
-    publishDir params.outdir, mode: 'copy', saveAs: { f -> f.startsWith('results/') ? f.substring(8) : f }
-
     input:
     val meta
     path cf, stageAs: 'call.b64', arity: '0..*'
@@ -361,8 +361,8 @@ process OUTS {
     path 'mro'
 
     output:
-    path 'pipeline_outs.json'
-    path 'results/*', hidden: true, arity: '0..*'
+    path 'pipeline_outs.json', emit: json
+    path 'results/*', hidden: true, arity: '0..*', emit: results
 
     script:
     """

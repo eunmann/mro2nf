@@ -39,6 +39,7 @@ func (p *project) baseConfig() string {
 		b.WriteString("\n")
 	}
 
+	b.WriteString(publishConfig)
 	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
 
 	for _, lp := range p.inputs {
@@ -49,6 +50,16 @@ func (p *project) baseConfig() string {
 
 	return b.String()
 }
+
+// publishConfig sets where the workflow outputs are published: --outdir, a
+// directory or an object-store prefix. Nextflow's own -output-dir overrides
+// it, and a config that sets params.outdir again must set outputDir again,
+// as this setting read the value params.outdir had here.
+const publishConfig = `// The run publishes its outputs below --outdir, unless -output-dir names
+// another dir.
+outputDir = params.outdir
+
+`
 
 // processConfig is the retry policy, the GPU rule and the trace.
 func processConfig() string {
@@ -168,6 +179,7 @@ includeConfig 'container.config'
 
 params.mro2nf_host_inputs = false
 params.outdir = '/mnt/workflow/pubdir'
+outputDir = params.outdir
 
 // HealthOmics gives a task whole GiB, rounding a fractional request down, and
 // refuses one under 1 GiB; rounding up keeps every task at or above mrp's

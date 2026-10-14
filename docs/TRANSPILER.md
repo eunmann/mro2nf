@@ -52,7 +52,7 @@ up in them; it computes no Martian value and parses no stage-controlled JSON.
 | Caching | Nextflow `-resume` | §5, **Cache identity** |
 | Retries | Nextflow `errorStrategy` on the exit `mre` chooses | `conf/base.config`; `internal/job/retry.go` |
 | Resources | Nextflow `cpus`, `memory`, `accelerator`, `clusterOptions`; `mre` resolves the values as `mrp` | §9; `internal/job/resources.go` |
-| Publishing | Nextflow `publishDir` of OUTS; `mre outs` builds the tree | §5, **OUTS** |
+| Publishing | Nextflow workflow outputs (`publish:`, `output {}`) of OUTS's outputs; `mre outs` builds the tree | §5, **OUTS** |
 | Targets, launch params | Nextflow profiles and `params` | §4, §8, §9 |
 | Binding, projection, struct narrowing | `mre`, through Martian's functions | `internal/cg/resolve.go` |
 | Types, file leaves | `mre` | `internal/types`, `internal/shim` (§7) |
@@ -286,7 +286,8 @@ includes `conf/base.config`, the settings every target shares, and defines
 the target profiles (§9), whose settings override the shared ones.
 **`conf/base.config`** holds:
 
-- `params.outdir` (`results`), and `params.job_resources`, Martian's
+- `params.outdir` (`results`), which `outputDir`, where the workflow
+  outputs publish, follows, and `params.job_resources`, Martian's
   `MRO_JOBRESOURCES` analog: a map from a stage's `special` key to the
   `clusterOptions` of a grid executor.
 - `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
@@ -548,9 +549,17 @@ collection is quadratic in its lines.
 the files they name by reference, gets each bundle's location, and each
 referenced file's bundle's, as a value (`toUriString()`, a path or an
 `s3://` URI) and the outputs they read that reach it as values, and
-publishes them with `mre outs` through `mrp`'s own post-processing: the
-`outs/` tree and `pipeline_outs.json`, which `publishDir` copies into
-`params.outdir`.
+lays them out with `mre outs` through `mrp`'s own post-processing: the
+`outs/` tree and `pipeline_outs.json`, which it emits apart (`json`,
+`results`). The entry workflow publishes both as its workflow outputs:
+`pipeline_outs.json`, and each entry of the tree at its own name
+(`f >> f.name`), copied into `outputDir`, which `conf/base.config` sets to
+`params.outdir` and `-output-dir` overrides. A copy, not Nextflow's
+default symlink, so an object-store or HealthOmics output dir holds the
+files themselves, dotfiles and empty dirs included, and a symlink's target
+content in its place. A `-preview` run publishes nothing (`enabled
+!workflow.preview`): it runs no task, and Nextflow 26.04 to 26.10 then
+waits forever on an enabled output's channel.
 
 **Order.** Each staged list, and each list of value records, is in an order
 the run fixes, a gather's and OUTS's by instance key, then output, and a

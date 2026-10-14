@@ -157,7 +157,7 @@ on 26.04 a `Float` narrows a command-line value to 32 bits
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `--outdir <dir>` | `results` | where the outputs are published: a directory or an `s3://` prefix |
+| `--outdir <dir>` | `results` | where the outputs are published: a directory or an `s3://` prefix; Nextflow's own `-output-dir <dir>` overrides it |
 | `--mro2nf_overrides <file>` | none | `mrp`'s `--overrides` file (see [Resources](#resources)) |
 | `--mro2nf_monitor true` | `false` | `mrp`'s `--monitor`: `mrjob` kills a job that exceeds its memory request |
 | `--mro2nf_confine true` | `false` | fails a stage task whose output resolves outside its work directory, instead of copying the file in; the container profiles always do this |
@@ -577,11 +577,11 @@ HealthOmics takes no `-c`.
 
 `mrp` runs the `--onfinish` program with the pipestance path, `complete` or
 `failed`, the pipestance ID, and the error file. A `-c` handler can pass the
-output directory, the outcome and the ID:
+output directory the run published to, the outcome and the ID:
 
 ```groovy
 workflow.onComplete = {
-    ['/path/to/hook', params.outdir, workflow.success ? 'complete' : 'failed', params.mro2nf_psid].execute().waitFor()
+    ['/path/to/hook', workflow.outputDir.toUriString(), workflow.success ? 'complete' : 'failed', params.mro2nf_psid].execute().waitFor()
 }
 ```
 
