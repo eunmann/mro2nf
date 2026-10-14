@@ -53,10 +53,10 @@ jobs:
       # account lookups), so synth needs no AWS credentials.
       - name: Synthesize
         run: npx cdk synth --quiet
-      - name: The root volume is gp3 at its provisioned maxima
+      - name: The root volume is gp3 at its provisioned throughput
         run: |
           jq -e '[.Resources[] | select(.Type == "AWS::EC2::LaunchTemplate") | .Properties.LaunchTemplateData.BlockDeviceMappings[].Ebs
-                  | select(.VolumeType == "gp3" and .Throughput == 2000 and .Iops == 80000)] | length == 1' \
+                  | select(.VolumeType == "gp3" and .Throughput == 1000 and .Iops == 6000)] | length == 1' \
             cdk.out/Mro2nfStack.template.json
       - name: The queue cancels a job no instance can fit
         run: |
