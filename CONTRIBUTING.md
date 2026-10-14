@@ -113,41 +113,70 @@ divergences" issue.
 
 ## Releases
 
-To release, write the curated notes, such as breaking changes and highlights,
-in Markdown to `notes.md`, tag the merged commit with an annotated tag whose
-message is those notes, then push the tag:
+A release is cut by dispatching `release.yml`, which creates the tag itself;
+pushing a tag by hand releases nothing. Write the curated notes, such as
+breaking changes and highlights, in Markdown to `notes.md`, then run:
 
 ```bash
-git tag -a --cleanup=whitespace -F notes.md v1.2.0
-git push origin v1.2.0
+gh workflow run release.yml -f version=v0.6.0 -f ref=main -F notes=@notes.md
 ```
 
-`--cleanup=whitespace` keeps the Markdown headings, which git's default
-cleanup drops as comments. The notes come from a file because with that
-cleanup the editor's instructions would stay in the message.
+`-F notes=@notes.md` passes the file's contents, so multi-line Markdown and
+its headings arrive as written. The inputs are:
 
-The release's body is the tag's message, without any signature, above the
-list of PRs merged since the previous tag that GitHub generates, grouped by
-`.github/release.yml`. A lightweight tag, or an empty message, gives only
-that list. The release's title is the tag.
+- `version` (required): `v<major>.<minor>.<patch>`, optionally with a
+  `-<prerelease>` suffix of dot-separated identifiers (`v0.6.0-rc1`,
+  `v0.6.0-rc.1`) that git takes in a tag name. Its tag must not exist yet.
+- `ref` (default `main`): the branch, tag or commit SHA to release, resolved
+  to a commit.
+- `notes` (optional): the curated Markdown.
+- `dry_run` (default `false`): build everything, publish and tag nothing.
 
-Pushing a `v*` tag triggers `release.yml`. It requires the tagged commit to be
-a PR's merge whose tree matches that PR's head, and that head to have a green
-PR Validation run. It then cross-compiles `mro2nf`, `mre` and `mrjob` for Linux
-and macOS (amd64, arm64) and publishes a GitHub release with one archive per
-platform, `mro2nf-<tag>-<os>-<arch>.tar.gz`, and a `SHA256SUMS` file covering
-the archives. Each archive holds a single directory of the same name with
-`mro2nf`, `mre` and `mrjob` under those names, as `mre` runs the `mrjob`
-beside it, plus `LICENSE` and `THIRD_PARTY_NOTICES`. The archives are
-reproducible: entries sorted by name, owned and writable only by root, with
-the tagged commit's time, and gzip without a name or timestamp
-(`test/e2e/workflow_release_test.go` runs the packaging step). It also pushes
-the runtime image `ghcr.io/eunmann/mro2nf-runtime:<tag>` for linux/amd64 and
-linux/arm64. A pre-release tag (`v1.2.0-rc1`) never becomes the latest release
-or the image's `latest` tag. In a public repository the archives and the image
-carry build provenance; check a download with `sha256sum -c SHA256SUMS
---ignore-missing` and `gh attestation verify <file> --repo eunmann/mro2nf`.
+The Actions tab's "Run workflow" form offers the same inputs, but its notes
+field holds a single line: leave it empty and edit the release's text once it
+is published.
 
-To check the pipeline without releasing, for example after an action bump,
-run `release.yml` by hand (`gh workflow run release.yml --ref <branch>`): the
-dry run builds the archives and the runtime image but publishes neither.
+The workflow first requires the commit to be a PR's merge whose tree matches
+that PR's head, and that head to have a green PR Validation run, and refuses
+to run from any branch but `main`, since a dispatch runs the `release.yml` of
+the branch it names (`--ref`, by default `main`). It then
+cross-compiles `mro2nf`, `mre` and `mrjob` for Linux and macOS (amd64,
+arm64), packs one archive per platform, and builds the runtime image for
+linux/amd64 and linux/arm64 without pushing it. Only once every build
+succeeds does it publish, in this order:
+
+1. the annotated tag `<version>` on the commit, tagged by
+   `github-actions[bot]`, whose message is the notes as written;
+2. the runtime image `ghcr.io/eunmann/mro2nf-runtime:<version>`, also tagged
+   `latest` unless the version is a pre-release, the exact image built;
+3. the GitHub release on that tag, titled with it, with one archive per
+   platform, `mro2nf-<version>-<os>-<arch>.tar.gz`, and a `SHA256SUMS` file
+   covering the archives. Its body is the notes above the list of PRs merged
+   since the previous tag that GitHub generates, grouped by
+   `.github/release.yml`; without notes it is just that list.
+
+A failed build therefore leaves no tag, image or release. If publishing itself
+fails partway, delete whatever it created, the tag included, and dispatch
+again. A pre-release is never the latest release.
+
+Each archive holds a single directory of the same name with `mro2nf`, `mre`
+and `mrjob` under those names, as `mre` runs the `mrjob` beside it, plus
+`LICENSE` and `THIRD_PARTY_NOTICES`. The archives are reproducible: entries
+sorted by name, owned and writable only by root, with the released commit's
+time, and gzip without a name or timestamp
+(`test/e2e/workflow_release_test.go` runs the packaging step). In a public
+repository the archives and the image carry build provenance; check a download
+with `sha256sum -c SHA256SUMS --ignore-missing` and `gh attestation verify
+<file> --repo eunmann/mro2nf`.
+
+To check the pipeline without releasing, for example after an action bump on
+a branch, add `-f dry_run=true`; `--ref` runs that branch's `release.yml`:
+
+```bash
+gh workflow run release.yml --ref <branch> -f version=v0.0.0-dryrun -f ref=<branch> -f dry_run=true
+```
+
+A dry run validates the inputs, the version's tag included, so it needs a
+version never released, and builds the archives and the runtime image, but
+skips the PR Validation and `main` requirements and tags and publishes
+nothing.

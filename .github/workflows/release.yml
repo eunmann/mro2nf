@@ -1,54 +1,126 @@
 name: release
 
+# The one way to release: dispatch it with the version, and the workflow tags
+# the validated commit after everything builds. A tag pushed by hand releases
+# nothing.
 on:
-  push:
-    tags: ["v*"]
-  # Manual dry run: build the binaries and the runtime image on demand to
-  # validate the release pipeline (e.g. after an action bump) WITHOUT publishing
-  # a GitHub release or pushing to GHCR. Only a tag push publishes.
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, v<major>.<minor>.<patch>[-<prerelease>]; the tag it creates must not exist"
+        required: true
+        type: string
+      ref:
+        description: Branch, tag or commit SHA to release
+        required: false
+        default: main
+        type: string
+      notes:
+        description: Curated Markdown notes above the generated PR list; also the tag's message
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: Build everything, publish and tag nothing
+        required: false
+        default: false
+        type: boolean
 
 # No token scopes by default: each job grants only what it uses, so the build
-# job's toolchain never holds a write token.
+# jobs' toolchains never hold a write token.
 permissions: {}
 
+concurrency:
+  group: release-${{ inputs.version }}
+
+# Scripts read the inputs from env, never from an expression in their text,
+# so an input is data to the shell and never code.
 env:
-  # A dispatch run is a dry run (no tag to publish against); a tag push is real.
-  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' }}
+  VERSION: ${{ inputs.version }}
   # A semver pre-release (v1.2.0-rc1) is published but never becomes the
   # latest GitHub release or the image's `latest` tag.
-  PRERELEASE: ${{ contains(github.ref_name, '-') }}
+  PRERELEASE: ${{ contains(inputs.version, '-') }}
   IMAGE: ghcr.io/${{ github.repository_owner }}/mro2nf-runtime
 
 jobs:
   # Publish only what CI validated. PR Validation runs on PRs only, so the
-  # tagged commit must be a PR's squash merge with the same tree as the PR's
-  # head, and that head must have a green run. A commit pushed past a PR has
-  # no such run and cannot be released.
-  ci-green:
-    name: CI green on the tagged commit
+  # commit must be a PR's squash merge with the same tree as the PR's head,
+  # and that head must have a green run. A commit pushed past a PR has no such
+  # run and cannot be released. The workflow that builds and publishes must be
+  # main's too, since a dispatch runs the release.yml of the branch it names.
+  # A dry run checks the pipeline on any commit and branch, such as after an
+  # action bump, so it skips both requirements.
+  gate:
+    name: Validate the inputs and the commit
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: read # resolve the tag and compare trees
+      contents: read # resolve the ref, look the tag up and compare trees
       pull-requests: read # find the PR that merged the commit
       actions: read # read the PR Validation runs
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
     steps:
-      - name: Require a green PR Validation run on the tagged tree
-        if: env.DRY_RUN != 'true'
+      - name: Require main's workflow
+        if: ${{ !inputs.dry_run }}
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || {
+            echo "::error::a release runs main's release.yml, not $GITHUB_REF's: dispatch it from main, or add -f dry_run=true"
+            exit 1
+          }
+      # The prerelease is semver's dot-separated identifiers, and git's ref
+      # rules refuse more than that grammar does, such as a `.lock` ending,
+      # so a version the dry run accepts tags in the real run. The ref goes
+      # into an API path, so it is held to a ref's characters and may not
+      # climb out of the path with `..`.
+      - name: Validate the version and the ref
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          version_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          ref_re='^[0-9A-Za-z][0-9A-Za-z._/-]*$'
+          [[ $VERSION =~ $version_re ]] && git check-ref-format "refs/tags/$VERSION" || {
+            echo "::error::version must be v<major>.<minor>.<patch>, optionally with a -<prerelease> suffix of dot-separated identifiers, and a valid tag name"
+            exit 1
+          }
+          [[ $REF =~ $ref_re && $REF != *..* ]] || {
+            echo "::error::ref must be a branch, tag or commit SHA"
+            exit 1
+          }
+      - name: Resolve the ref; require the tag to be new
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
           api() { gh api "repos/$GITHUB_REPOSITORY/$1" --jq "$2"; }
-          sha=$(api "commits/refs/tags/$GITHUB_REF_NAME" .sha)
-          head=$(api "commits/$sha/pulls" "map(select(.merge_commit_sha == \"$sha\")) | .[0].head.sha // empty")
+          existing=$(api "git/matching-refs/tags/$VERSION" ".[] | select(.ref == \"refs/tags/$VERSION\") | .ref")
+          if [ -n "$existing" ]; then
+            echo "::error::tag $VERSION already exists"
+            exit 1
+          fi
+          sha=$(api "commits/$REF" .sha)
+          echo "$REF is $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Require a green PR Validation run on the commit's tree
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          api() { gh api "repos/$GITHUB_REPOSITORY/$1" --jq "$2"; }
+          head=$(api "commits/$SHA/pulls" "map(select(.merge_commit_sha == \"$SHA\")) | .[0].head.sha // empty")
           [ -n "$head" ] || {
-            echo "::error::$sha is not a PR's merge commit: tag a commit that landed through a PR"
+            echo "::error::$SHA is not a PR's merge commit: release a commit that landed through a PR"
             exit 1
           }
-          [ "$(api "git/commits/$sha" .tree.sha)" = "$(api "git/commits/$head" .tree.sha)" ] || {
-            echo "::error::$sha's tree differs from its PR head $head, so no PR run validated it"
+          tree=$(api "git/commits/$SHA" .tree.sha)
+          head_tree=$(api "git/commits/$head" .tree.sha)
+          [ "$tree" = "$head_tree" ] || {
+            echo "::error::$SHA's tree differs from its PR head $head, so no PR run validated it"
             exit 1
           }
           green=$(api "actions/workflows/pr-validation.yml/runs?head_sha=$head&event=pull_request&status=success" .total_count)
@@ -58,7 +130,7 @@ jobs:
           }
 
   build:
-    needs: ci-green
+    needs: gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,6 +147,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.gate.outputs.sha }}
           persist-credentials: false
       # No build cache: it is shared with main-branch jobs that run third-party
       # actions, so a poisoned entry could reach the release binaries.
@@ -91,7 +164,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           for bin in mro2nf mre; do
-            go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/${bin}" "./cmd/${bin}"
+            go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "dist/${bin}" "./cmd/${bin}"
           done
           go build -trimpath -o dist/mrjob github.com/martian-lang/martian/cmd/mrjob
       - name: Check the linux binaries are static
@@ -102,9 +175,8 @@ jobs:
             file "$f" | grep -q 'statically linked' || { file "$f"; echo "::error::$f is not statically linked"; exit 1; }
           done
       # mre runs the mrjob beside it by that exact name, so the binaries ship
-      # together under their plain names. A dry run's ref is a branch, whose
-      # `/` cannot be in a file name. The fixed owner, order, modes and mtimes
-      # and gzip's -n make the archive a function of the commit alone.
+      # together under their plain names. The fixed owner, order, modes and
+      # mtimes and gzip's -n make the archive a function of the commit alone.
       - name: Package the archive
         id: archive
         env:
@@ -112,7 +184,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           set -euo pipefail
-          name="mro2nf-${GITHUB_REF_NAME//\//-}-${GOOS}-${GOARCH}"
+          name="mro2nf-${VERSION}-${GOOS}-${GOARCH}"
           mkdir "$name"
           cp dist/mro2nf dist/mre dist/mrjob LICENSE THIRD_PARTY_NOTICES "$name/"
           tar --sort=name --owner=0 --group=0 --numeric-owner --mode=go-w --mtime="@$(git log -1 --format=%ct)" -cf - "$name" | gzip -n > "$name.tar.gz"
@@ -123,50 +195,138 @@ jobs:
           path: ${{ steps.archive.outputs.file }}
           if-no-files-found: error
 
-  # A single job publishes the release: the 4 build legs racing to create the
-  # same release concurrently is a known flakiness source (duplicate-release
-  # 409s in action-gh-release).
-  publish:
-    needs: build
+  # Build the runtime image (mre, mrjob and Martian's adapters at /opt/mro2nf),
+  # the image a pipeline's own image builds FROM, which every task of a
+  # container profile runs in. Multi-arch (amd64 + arm64). The build writes an
+  # OCI archive instead of pushing: publish pushes those exact bytes, so
+  # nothing reaches the registry unless every build succeeded, and what it
+  # pushes is what was built here.
+  image:
+    name: Runtime image
+    needs: gate
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch' # dry run builds but never releases
     permissions:
-      contents: write # create the GitHub release
+      contents: read
+    steps:
+      # Publish pushes the tag before the image, so a runner without the
+      # skopeo that pushes it must fail here, where a dry run sees it too.
+      - name: Require skopeo
+        run: |
+          command -v skopeo || { echo "::error::skopeo is not on the runner; publish pushes the image with it"; exit 1; }
+          skopeo --version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      # arm64 emulation for the final stage.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # The labels only: publish names the tags. The default revision is the
+      # commit the workflow ran from, not the one released.
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: type=raw,value=${{ inputs.version }}
+          labels: org.opencontainers.image.revision=${{ needs.gate.outputs.sha }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/runtime/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          outputs: type=oci,dest=${{ runner.temp }}/runtime-image.tar
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ inputs.version }}
+      # The layers are compressed already.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-image
+          path: ${{ runner.temp }}/runtime-image.tar
+          if-no-files-found: error
+          compression-level: 0
+
+  # The only job that writes. It runs after every build succeeded, and never
+  # in a dry run: it tags, then pushes the image, then creates the release. A
+  # single job publishes because 4 build legs racing to create the same
+  # release is a known flakiness source (duplicate-release 409s in
+  # action-gh-release).
+  publish:
+    name: Tag and publish
+    needs: [gate, build, image]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the tag and create the GitHub release
+      packages: write # push the image and its provenance
       id-token: write # sign the provenance with a Sigstore certificate
       attestations: write # store the provenance
     steps:
-      # On a tag push the pinned checkout fetches the tag by its ref, so an
-      # annotated tag arrives with its message (actions/checkout#2356).
+      # Publish runs on a runner of its own, which must have skopeo too
+      # before the tag exists.
+      - name: Require skopeo
+        run: |
+          command -v skopeo || { echo "::error::skopeo is not on the runner; publish pushes the image with it"; exit 1; }
+          skopeo --version
+      # The tag push authenticates with the token the checkout keeps; every
+      # action after it is handed the same token anyway.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          persist-credentials: false
-      # An annotated tag's message, minus any signature, heads the release
-      # above GitHub's generated list of merged PRs. A lightweight tag has no
-      # message of its own (%(contents) would print its commit's), so it, like
-      # an empty message, leaves the body to the generated list. Not
-      # %(contents:subject): it folds the first paragraph into one line.
-      - name: Write the release notes from the tag
-        run: |
-          set -euo pipefail
-          notes="$RUNNER_TEMP/release-notes.md"
-          : > "$notes"
-          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" = tag ]; then
-            msg=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
-            sig=$(git tag -l --format='%(contents:signature)' "$GITHUB_REF_NAME")
-            msg=$(printf '%s' "${msg%"$sig"}")
-            if [ -n "${msg//[[:space:]]/}" ]; then
-              printf '%s\n' "$msg" > "$notes"
-            fi
-          fi
-          cat "$notes"
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: archive-*
           merge-multiple: true
       - name: Write SHA256SUMS
         run: LC_ALL=C sha256sum mro2nf-*.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-image
+          path: ${{ runner.temp }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The notes are the tag's message as written: the default cleanup would
+      # drop their `#` headings as comments. git refuses a tag that exists,
+      # here or on the remote, so a release never moves one.
+      - name: Tag the release
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+          NOTES: ${{ inputs.notes }}
+          GIT_COMMITTER_NAME: "github-actions[bot]"
+          GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          printf '%s' "$NOTES" > "$notes"
+          git tag -a --cleanup=verbatim -F "$notes" "$VERSION" "$SHA"
+          git push origin "refs/tags/$VERSION"
+      # --preserve-digests fails rather than push a converted manifest, so the
+      # registry holds the image the image job built, under that digest.
+      - name: Push the runtime image
+        id: push
+        run: |
+          set -euo pipefail
+          tags=("$VERSION")
+          if [ "$PRERELEASE" != true ]; then tags+=(latest); fi
+          for tag in "${tags[@]}"; do
+            skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/image-digest" "oci-archive:$RUNNER_TEMP/runtime-image.tar" "docker://$IMAGE:$tag"
+          done
+          digest=$(cat "$RUNNER_TEMP/image-digest")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       # GitHub offers no attestations to private repositories owned by a user
-      # account, so the step would fail every release there.
+      # account, so these steps would fail every release there.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: ${{ !github.event.repository.private }}
         with:
@@ -175,69 +335,13 @@ jobs:
         run: echo "::warning::no build provenance for the binaries or the image; GitHub attestations need a public repository here"
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          tag_name: ${{ inputs.version }}
           files: |
             mro2nf-*.tar.gz
             SHA256SUMS
           fail_on_unmatched_files: true
           prerelease: ${{ env.PRERELEASE }}
           # The action prepends body_path's text to the generated notes
-          # (src/github.ts at v3.0.3).
+          # (src/github.ts at v3.0.3); empty notes leave just the list.
           body_path: ${{ runner.temp }}/release-notes.md
           generate_release_notes: true
-
-  # Publish the runtime image (mre, mrjob and Martian's adapters at
-  # /opt/mro2nf) to GHCR: the image a pipeline's own image builds FROM, which
-  # every task of a container profile runs in. Tagged with the release version (+ latest for
-  # a non-prerelease), multi-arch (amd64 + arm64).
-  image:
-    name: Runtime image (GHCR)
-    needs: ci-green
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write # push the image and its provenance
-      id-token: write # sign the provenance with a Sigstore certificate
-      attestations: write # store the provenance
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # arm64 emulation for the final stage.
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: env.DRY_RUN != 'true' # no registry auth needed to build-without-push
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # latest=false: the default (auto) adds `latest` to every
-      # type=ref,event=tag, pre-releases included.
-      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        id: meta
-        with:
-          images: ${{ env.IMAGE }}
-          flavor: latest=false
-          tags: |
-            type=ref,event=tag
-            type=raw,value=latest,enable=${{ env.PRERELEASE != 'true' }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        id: push
-        with:
-          context: .
-          file: deploy/runtime/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: ${{ env.DRY_RUN != 'true' }} # dry run builds the image but does not push
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Bake the tag into `mre version` (a dispatch dry run bakes the branch
-          # name, which is fine — the image is never pushed).
-          build-args: |
-            VERSION=${{ github.ref_name }}
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        if: ${{ env.DRY_RUN != 'true' && !github.event.repository.private }}
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-          create-storage-record: false
