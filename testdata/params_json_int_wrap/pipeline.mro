@@ -1,0 +1,9 @@
+# The divergence params-json-int-wrap: TestMrpDiffFailureParity launches
+# this call with params.json, whose n is beyond int64, against mrp running
+# override_overflow.mro, whose literal it is. mrp refuses the literal;
+# Nextflow reads the JSON int wrapped into int64, and the run succeeds.
+@include "echo.mro"
+
+call JW(
+    n = 1,
+)

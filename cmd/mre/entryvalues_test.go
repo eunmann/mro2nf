@@ -33,7 +33,7 @@ stage MAKE(
 )
 `)
 	params := fields(t, "n int", "f float", "b bool", "s string", "reads file", "aln bam",
-		"xs int[]", "m map<int>", "fs float[]", "fm map<float[]>", "um map", "cfg Cfg", "made MAKE")
+		"xs int[]", "m map<int>", "fs float[]", "um map", "cfg Cfg", "made MAKE")
 
 	return tbl, params
 }
@@ -73,10 +73,10 @@ func fields(t *testing.T, decls ...string) []*syntax.StructMember {
 }
 
 // TestTypeOverrides checks each accepted override: a string for an int, float or
-// bool input becomes its typed value (int64 exactly at the int64 bounds), a
-// string for a string or file input is kept, every float leaf, string-parsed or
-// typed and at any depth, takes mrp's 'g' encoding, and any other value that is
-// already typed, null, nested or undeclared passes through.
+// bool input becomes its typed value (int64 exactly at the int64 bounds, a
+// float as the number it spells), a string for a string or file input is kept,
+// and any other value that is already typed, null, nested or undeclared passes
+// through, a number with its text.
 func TestTypeOverrides(t *testing.T) {
 	tests := []struct {
 		name string
@@ -92,30 +92,26 @@ func TestTypeOverrides(t *testing.T) {
 		{name: "int_min", key: "n", in: "-9223372036854775808", want: int64(-9223372036854775808)},
 		{name: "int_past_2^53", key: "n", in: "9007199254740993", want: int64(9007199254740993)},
 		{name: "float", key: "f", in: "2.5", want: json.Number("2.5")},
-		{name: "float_exponent", key: "f", in: "1e6", want: json.Number("1e+06")},
-		{name: "float_whole", key: "f", in: "2.0", want: json.Number("2")},
+		{name: "float_exponent", key: "f", in: "1e6", want: json.Number("1e6")},
+		{name: "float_whole", key: "f", in: "2.0", want: json.Number("2.0")},
 		{name: "float_integer_text", key: "f", in: "5", want: json.Number("5")},
-		{name: "float_negative_fraction", key: "f", in: "-0.125", want: json.Number("-0.125")},
-		{name: "float_small_exponent", key: "f", in: "1E-7", want: json.Number("1e-07")},
-		{name: "float_shortest_roundtrip", key: "f", in: "0.1", want: json.Number("0.1")},
+		{name: "float_past_2^53", key: "f", in: "9007199254740993", want: json.Number("9007199254740993")},
+		{name: "float_negative_zero", key: "f", in: "-0.0", want: json.Number("-0.0")},
+		{name: "float_small_exponent", key: "f", in: "1E-7", want: json.Number("1E-7")},
 		{name: "bool_true", key: "b", in: "true", want: true},
 		{name: "bool_false", key: "b", in: "false", want: false},
 		{name: "string_kept", key: "s", in: "5", want: "5"},
 		{name: "file_kept", key: "reads", in: "s3://b/reads.fq", want: "s3://b/reads.fq"},
 		{name: "user_filetype_kept", key: "aln", in: "true", want: "true"},
 		{name: "typed_int", key: "n", in: json.Number("5"), want: json.Number("5")},
-		{name: "typed_float_whole", key: "f", in: json.Number("2.0"), want: json.Number("2")},
-		{name: "typed_float_exponent", key: "f", in: json.Number("1E6"), want: json.Number("1e+06")},
-		{name: "typed_float_fraction", key: "f", in: json.Number("2.5"), want: json.Number("2.5")},
+		{name: "typed_float_whole", key: "f", in: json.Number("2.0"), want: json.Number("2.0")},
 		{name: "typed_float_out_of_range", key: "f", in: json.Number("1e400"), want: json.Number("1e400")},
-		{name: "typed_float_array", key: "fs", in: []any{json.Number("2.0"), json.Number("0.50")}, want: []any{json.Number("2"), json.Number("0.5")}},
-		{name: "typed_float_map_of_array", key: "fm", in: map[string]any{"k": []any{json.Number("3.0")}}, want: map[string]any{"k": []any{json.Number("3")}}},
-		{name: "typed_float_struct_field", key: "cfg", in: map[string]any{"n": "5", "x": json.Number("4.0")}, want: map[string]any{"n": "5", "x": json.Number("4")}},
+		{name: "typed_float_array", key: "fs", in: []any{json.Number("2.0"), json.Number("0.50")}, want: []any{json.Number("2.0"), json.Number("0.50")}},
+		{name: "typed_float_struct_field", key: "cfg", in: map[string]any{"n": "5", "x": json.Number("4.0")}, want: map[string]any{"n": "5", "x": json.Number("4.0")}},
 		{name: "typed_bool", key: "b", in: false, want: false},
 		{name: "typed_array", key: "xs", in: []any{json.Number("1")}, want: []any{json.Number("1")}},
 		{name: "typed_map", key: "m", in: map[string]any{"k": json.Number("1")}, want: map[string]any{"k": json.Number("1")}},
 		{name: "typed_struct_nested_string", key: "cfg", in: map[string]any{"n": "5"}, want: map[string]any{"n": "5"}},
-		{name: "typed_callable_struct_field", key: "made", in: map[string]any{"size": json.Number("2.0")}, want: map[string]any{"size": json.Number("2")}},
 		{name: "null", key: "n", in: nil, want: nil},
 		{name: "undeclared", key: "ghost", in: "5", want: "5"},
 	}

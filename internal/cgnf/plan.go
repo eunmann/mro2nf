@@ -2,8 +2,6 @@ package cgnf
 
 import (
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 )
 
@@ -51,11 +49,9 @@ const planProcess = `process PLAN {
 // each entry input's param, null when unset, which keeps the transpiled
 // value.
 func (p *project) values() string {
-	ids := slices.Sorted(maps.Keys(p.src.Invocation.Args))
-
-	entries := make([]string, len(ids))
-	for i, id := range ids {
-		entries[i] = gstr(id) + ": params." + id
+	entries := make([]string, len(p.inputs))
+	for i, lp := range p.inputs {
+		entries[i] = gstr(lp.id) + ": params." + lp.id
 	}
 
 	if len(entries) == 0 {

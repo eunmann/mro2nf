@@ -2,8 +2,6 @@ package cgnf
 
 import (
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 
 	"github.com/eunmann/mro2nf/internal/job"
@@ -18,73 +16,24 @@ func (p *project) config() string {
 	b.WriteString(`// The oldest Nextflow release this project is tested on.
 manifest.nextflowVersion = '!>=25.10.0'
 
-params.outdir = 'results'
-
-// Martian 'special' scheduler-resource map (the MRO_JOBRESOURCES analog):
-// a stage's special key to the clusterOptions of a grid executor.
-params.job_resources = [:]
-
-// The mre every task runs, a PATH command by default: the host's on the
-// local and grid profiles, the image's on the container profiles. mre runs
-// py and comp stages under the mrjob beside it and py stages with the
-// Martian adapters it embeds; set these to run another Martian runtime's,
-// such as a pipeline bundle's own.
-params.mro2nf_mre = 'mre'
-params.mro2nf_mrjob = null
-params.mro2nf_adapters = null
-
-// mrp's --monitor: mrjob enforces each job's memory and thread limits.
-params.mro2nf_monitor = false
-
-// Fail a stage task whose output resolves outside its work dir instead of
-// copying it in, for a run under an isolating executor such as docker.
-params.mro2nf_confine = false
-
 `)
 
-	fmt.Fprintf(&b, "params.mro2nf_psid = %s\n\n", gstr(p.src.Invocation.Call))
+	for _, blk := range projectParams(p.src.Invocation.Call) {
+		if blk.comment != "" {
+			b.WriteString(blk.comment + "\n")
+		}
 
-	b.WriteString(`// The entry file values a run reads: a head-node path where the profile
-// sees the head node's files, an s3:// URI always, and a URI of any other
-// scheme only when whoever supplies the run's params is trusted to fetch it.
-params.mro2nf_host_inputs = true
-params.mro2nf_allow_remote_inputs = false
+		for _, lp := range blk.params {
+			fmt.Fprintf(&b, "params.%s = %s\n", lp.id, groovy(lp.value))
+		}
 
-// Every task reads a head-node path in place, the path mrp passes, on the
-// profiles whose tasks run on the host's filesystem; a container profile's
-// tasks see only what they stage, so there Nextflow stages it.
-params.mro2nf_host_in_place = true
-
-// Each job's resources are granted as mrp's local job manager grants them,
-// from the pool process.resourceLimits sets, its --localcores and
-// --localmem, on the profiles that run every task on one host; elsewhere as
-// mrp's cluster job managers grant them.
-params.mro2nf_local_jobs = false
-
-// The root under which every task's host mounts the input buckets read-only,
-// <root>/<bucket>, which the awsbatch profile sets: a stage receives an
-// s3:// entry input as its path there, as mrp passes the path it was given,
-// so a path one stage writes out names the same file in every task, and no
-// task downloads it.
-params.mro2nf_s3_mount = null
-
-// The image every task of a container profile runs in, which those
-// profiles require: one built FROM mro2nf's runtime image that holds the
-// pipeline's code at the paths it was transpiled from, or the runtime image
-// itself where a -c config mounts the code there.
-params.mro2nf_image = null
-params.mro2nf_require_image = false
-
-// mrp's --overrides file, over each stage's resources; PLAN reads it as
-// mrp does.
-params.mro2nf_overrides = null
-
-`)
+		b.WriteString("\n")
+	}
 
 	b.WriteString("// The entry inputs, null keeping the transpiled invocation's value.\n")
 
-	for _, id := range slices.Sorted(maps.Keys(p.src.Invocation.Args)) {
-		fmt.Fprintf(&b, "params.%s = null\n", id)
+	for _, lp := range p.inputs {
+		fmt.Fprintf(&b, "params.%s = null\n", lp.id)
 	}
 
 	b.WriteString(processConfig())

@@ -38,6 +38,7 @@ The project holds:
 | `subworkflows/` | in a pipeline too large for one workflow, one workflow per run of its stage calls |
 | `stage.nf` | the stage processes and the wiring every node uses |
 | `nextflow.config` | parameters, the retry policy, the GPU rule, the trace, the profiles |
+| `nextflow_schema.json` | every parameter's type, default and description, in the nf-schema format, for launch forms and documentation |
 | `conf/` | the container and HealthOmics profiles' settings |
 | `package.sh`, `parameter-template.json` | the HealthOmics package |
 | `_assets/` | a copy of the `.mro` files, read by PLAN and OUTS |
@@ -58,10 +59,23 @@ disabled calls and chunk counts as the same value in the `.mro` would under
 - A scalar `int`, `float` or `bool` can be passed on the command line
   (`--n 5 --scale 2.5 --skip false`). The value must parse as the declared
   type, or the run fails.
+- An int beyond int64 in a JSON `-params-file` reaches the run wrapped into
+  int64: `{"n": 9223372036854775808}` runs as `-9223372036854775808`, where
+  `mrp` refuses the literal. Nextflow's JSON reader wraps it before the run
+  sees it. A YAML params file, a command-line value and an `.mro` literal
+  are refused with an error naming the input. The same reader turns `-0.0`
+  into `0.0`. Use a YAML params file, or keep values in range (the
+  divergence `params-json-int-wrap` in `FEATURE_COVERAGE.md`).
 - An array, map or struct must be passed as typed JSON in a `-params-file`
   (`{"values": [5, 6, 7]}`). On the command line it fails with `entry override
   of a non-scalar type cannot be a string; pass the value as typed JSON in a
   -params-file`.
+- An input the `.mro`'s top-level `map call` binds with `split` takes
+  Martian's invocation form of a split, `{"split": v}`, in a `-params-file`:
+  `{"x": {"split": [4, 5]}}` forks the call once per element, and
+  `{"x": {"split": {"a": 4, "b": 5}}}` once per key, as `mrp` forks a call
+  holding `split [4, 5]` or `split {"a": 4, "b": 5}`. Any other value fails
+  the run at PLAN, naming the input.
 - A file input is an absolute path or an `s3://` URI. Other URI schemes
   (`http://`, `https://`, `ftp://`) are refused unless you pass
   `--mro2nf_allow_remote_inputs true`. The `awsbatch` and `healthomics`
@@ -105,6 +119,40 @@ disabled calls and chunk counts as the same value in the `.mro` would under
 
 An entry input named `outdir`, `job_resources` or `mro2nf_*` fails the
 transpile, because the project defines those parameters itself.
+
+### Parameter schema
+
+`nextflow_schema.json` describes every parameter in the
+[nf-schema](https://nextflow-io.github.io/nf-schema/) format, for a launch
+form such as Seqera Platform's and for documentation. Each pipeline input sits
+at the schema's top level with its `.mro` type and, as its default, its value
+in the `.mro`'s `call`:
+
+| Martian type | Schema |
+|---|---|
+| `int`, `float`, `bool`, `string` | `integer`, `number`, `boolean`, `string` |
+| `file`, a `filetype` | `string`, format `file-path` |
+| `path` | `string`, format `path` (a file or a directory) |
+| `T[]` | `array` of `T` |
+| `map`, `map<T>` | `object`; a `map<T>`'s values are `T` |
+| a `struct` | `object` with a property per member |
+| `T`, split by the top-level `map call` | `object` with a required `split`: an `array` of `T` or an `object` of `T`, as [Pipeline inputs](#pipeline-inputs) gives it |
+
+The `mro2nf_*` parameters form the `mro2nf options` group, and `outdir` the
+`Output options` group; `job_resources`, a map, sits at the top level, as
+nf-schema's meta-schema admits only scalar types in a group. Those a profile
+sets are marked `hidden` and given no default, as the profile picks their
+value.
+
+The schema validates nothing at launch: the project loads no nf-schema
+plugin, which a run would have to download. The run's PLAN task, its first,
+checks every pipeline input against its declared type on every profile, and
+fails the run before any stage starts, naming the input, its type and the
+value (`entry input "n" declared int, got "x"`). Nextflow's typed `params`
+block would check them at launch instead, but this project's oldest
+supported Nextflow, 25.10, parses it only under the strict syntax parser,
+which is not its default, and HealthOmics runs the project on 25.10 without
+that parser.
 
 ### mro2nf parameters
 
@@ -360,7 +408,9 @@ aws omics start-run --workflow-id "$WF" --role-arn <role ARN> \
 
 `parameter-template.json` declares each pipeline input and
 `mro2nf_overrides` (an `s3://` URI), all optional. A run can set nothing else,
-so it cannot change the image or the inputs it may stage. A directory input is
+so it cannot change the image or the inputs it may stage. `nextflow_schema.json`
+stays out of the zip: HealthOmics would read the parameters it declares from
+it. A directory input is
 an `s3://` prefix ending in `/` (`s3://<bucket>/fastqs/`): `start-run` checks
 each URI and refuses a prefix without the slash with `S3 object not found`. Outputs are
 published to `/mnt/workflow/pubdir`, which HealthOmics exports to the run's
@@ -596,8 +646,22 @@ In the task's work directory:
   bucket: the example stack's may read only the buckets it mounts.
 - **`entry input '<name>' names no object under the mounted bucket
   <bucket>`**: on `awsbatch`, no object or prefix has the input's key.
+- **`<file>:<line>:<column>: number literal out of range: an int must fit
+  int64, a float float64 and a threads, mem_gb or vmem_gb value float32:
+  <literal>`**: `mro2nf` refuses an int literal outside int64, a float
+  literal beyond float64, or a stage's `threads`, `mem_gb` or `vmem_gb`
+  beyond float32 in the `.mro` or a file it includes, where `mrp` panics on
+  it.
+- **`entry input "<name>": number literal out of range: an int must fit
+  int64, a float float64 and a threads, mem_gb or vmem_gb value float32:
+  <literal>`**: PLAN refuses a launch value holding an int outside int64 or
+  a float beyond float64 at any depth, as `mrp` refuses the literal.
 - **`entry override of a non-scalar type cannot be a string`**: pass the
   array, map or struct in a `-params-file`.
+- **`entry override of a split input must be {"split": [...]} or {"split":
+  {...}}`**: the input forks the top-level `map call`; pass its value in
+  Martian's split form in a `-params-file` ([Pipeline
+  inputs](#pipeline-inputs)).
 - **`Process requirement exceeds available memory`** (or `CPUs`): a task
   requests more than the local executor's pool, `executor.cpus` and
   `executor.memory`. Set `process.resourceLimits` no larger, as in the table

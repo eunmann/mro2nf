@@ -604,6 +604,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// inner fork across the outer forks, an empty one as null.
 	{name: "merge_across_outer"},
 	{name: "merge_across_empty"},
+	// #565: a top-level map call's outs are its pipeline's per fork, each
+	// fork's files published under outs/<fork key>/.
+	// TestMrpDiffSplitEntryOverride launches it with other split values.
+	{name: "map_call_entry"},
 	// #301: mrp's --overrides file at launch resizes each job as mrp does, by
 	// keys scoped to a stage, a sub-pipeline, the top-level pipeline, an
 	// aliased call and a map call, over a split's chunk and join requests.
@@ -670,6 +674,10 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// it; mro2nf stages only the files the producer's outs name, so the
 	// stage fails.
 	{name: "output_file_sibling", mrp: runOutcome{}, divergence: "input-file-siblings"},
+	// An int beyond int64 in a JSON params file. mrp refuses the literal
+	// before it makes a pipestance; Nextflow wraps the JSON int into int64,
+	// and the run succeeds.
+	{name: "params_json_int_wrap", mrp: runOutcome{Failed: true}, divergence: "params-json-int-wrap", params: "params.json", mro: "override_overflow.mro"},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -692,6 +700,86 @@ func TestMrpDiff(t *testing.T) {
 			runMrpDiffCase(t, bin, tc)
 		})
 	}
+}
+
+// TestMrpDiffSplitEntryOverride (#565): map_call_entry launched with its
+// split input x in Martian's invocation form, {"split": v}, forks by v, an
+// array of another length than the .mro's and a map, and matches mrp
+// running the invocation whose literal is v.
+func TestMrpDiffSplitEntryOverride(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	bin := martianBin(t)
+
+	for _, tc := range []struct{ name, params, mro string }{
+		{name: "array", params: `{"x": {"split": [4, 5]}}`, mro: "override_array.mro"},
+		{name: "map", params: `{"x": {"split": {"r": 7, "q": 8}}}`, mro: "override_map.mro"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runMrpDiffOverride(t, bin, "map_call_entry", tc.mro, "params.json", tc.params)
+		})
+	}
+}
+
+// TestMrpDiffInt64Override (#567): literals_edge launched with int64's min
+// and max from a -params-file reaches the stage and the outs byte-exact, as
+// mrp runs the invocation whose literals they are.
+func TestMrpDiffInt64Override(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	runMrpDiffOverride(t, martianBin(t), "literals_edge", "override_int64.mro", "params.json",
+		`{"neg": -9223372036854775808, "big": 9223372036854775807}`)
+}
+
+// TestMrpDiffFloatOverride: a float input's launch value reaches the stage
+// and the outs byte-exact, as mrp runs the invocation whose literal it is:
+// a whole number beyond 2^53 is Martian's int literal, which a float input
+// takes as written, and a float takes Martian's shortest form (1e+06, -0).
+// -0.0 comes from a YAML params file: Nextflow reads a JSON one's -0.0 as
+// 0.0 before PLAN sees it.
+func TestMrpDiffFloatOverride(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	bin := martianBin(t)
+
+	for _, tc := range []struct{ name, file, params, mro string }{
+		{name: "whole", file: "params.json", params: `{"f": 9007199254740993, "g": 1e6}`, mro: "override_float_whole.mro"},
+		{name: "frac", file: "params.yaml", params: "f: 1.5\ng: -0.0\n", mro: "override_float_frac.mro"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runMrpDiffOverride(t, bin, "cli_typed", tc.mro, tc.file, tc.params)
+		})
+	}
+}
+
+// runMrpDiffOverride runs fixture under Nextflow with the launch values
+// params in the params file named file, and the invocation mro, whose
+// literals are those values, under mrp, and diffs the two.
+func runMrpDiffOverride(t *testing.T, bin, fixture, mro, file, params string) {
+	t.Helper()
+	shardSkip(t)
+
+	dir := filepath.Join(root, "testdata", fixture)
+	tmp := t.TempDir()
+	runMrpAt(t, bin, dir, mro, tmp)
+
+	proj := transpileMRO(t, dir, "pipeline.mro")
+	writeFileT(t, filepath.Join(proj, file), params)
+
+	if err := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-params-file", file)...); err != nil {
+		t.Fatalf("nextflow: %v", err)
+	}
+
+	compareMrpToNextflow(t, fixture, tmp, proj)
+	compareStageABI(t, fixture, tmp, proj)
 }
 
 // runMrpDiffCase runs one fixture under mrp and under Nextflow and diffs the
@@ -801,8 +889,8 @@ func TestMrpDiffFailureParity(t *testing.T) {
 			}
 
 			tmp := t.TempDir()
-			mrpFlags, nfFlags := overridesFlags(filepath.Join(root, "testdata", tc.name), tc.overrides)
-			mrp := mrpRunOutcome(t, bin, tc.name, tmp, mrpFlags...)
+			mrpFlags, nfFlags := tc.flags(filepath.Join(root, "testdata", tc.name))
+			mrp := mrpRunOutcome(t, bin, tc.name, tc.invocation(), tmp, mrpFlags...)
 			nf, attempts, nfLog := nfRunOutcome(t, tc.name, nfFlags...)
 
 			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts)...)
@@ -817,13 +905,33 @@ func TestMrpDiffFailureParity(t *testing.T) {
 	}
 }
 
-// mrpRunOutcome runs a fixture under mrp in tmp, with extra flags, and
-// classifies the run. Only mrp's non-zero exit counts as a failed run; mrp
-// failing to start fails the test.
-func mrpRunOutcome(t *testing.T, bin, fixture, tmp string, extra ...string) runOutcome {
+// invocation is the .mro in the case's fixture dir mrp runs.
+func (c mrpOutcomeCase) invocation() string {
+	if c.mro == "" {
+		return "pipeline.mro"
+	}
+
+	return c.mro
+}
+
+// flags are the launch flags of mrp's and the Nextflow run of the case's
+// fixture in dir.
+func (c mrpOutcomeCase) flags(dir string) ([]string, []string) {
+	mrpFlags, nfFlags := overridesFlags(dir, c.overrides)
+	if c.params != "" {
+		nfFlags = append(nfFlags, "-params-file", filepath.Join(dir, c.params))
+	}
+
+	return mrpFlags, nfFlags
+}
+
+// mrpRunOutcome runs the invocation mro of a fixture under mrp in tmp, with
+// extra flags, and classifies the run. Only mrp's non-zero exit counts as a
+// failed run; mrp failing to start fails the test.
+func mrpRunOutcome(t *testing.T, bin, fixture, mro, tmp string, extra ...string) runOutcome {
 	t.Helper()
 
-	o, err := mrpOutcome(t.Context(), bin, filepath.Join(root, "testdata", fixture), tmp, extra...)
+	o, err := mrpOutcome(t.Context(), bin, filepath.Join(root, "testdata", fixture), mro, tmp, extra...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -857,10 +965,10 @@ func nfRunOutcome(t *testing.T, fixture string, extra ...string) (runOutcome, []
 	return failedWith(nil), nil, err.Error()
 }
 
-// mrpOutcome runs dir's pipeline.mro under mrp in tmp, with extra flags, and
-// classifies the run.
-func mrpOutcome(ctx context.Context, bin, dir, tmp string, extra ...string) (runOutcome, error) {
-	_, err := execMrp(ctx, bin, dir, "pipeline.mro", tmp, extra...)
+// mrpOutcome runs the invocation mro in dir under mrp in tmp, with extra
+// flags, and classifies the run.
+func mrpOutcome(ctx context.Context, bin, dir, mro, tmp string, extra ...string) (runOutcome, error) {
+	_, err := execMrp(ctx, bin, dir, mro, tmp, extra...)
 	if err == nil {
 		return runOutcome{}, nil
 	}

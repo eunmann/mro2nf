@@ -1,0 +1,27 @@
+# The pipeline the top-level map calls of pipeline.mro and the override_*.mro
+# invocations fork: each fork returns an int and writes a file, which mrp
+# publishes under outs/<fork key>/.
+filetype txt;
+
+stage DOUBLE(
+    in  int x,
+    out int y,
+    out txt note,
+    src py  "stages/double",
+)
+
+pipeline DOUBLER(
+    in  int x,
+    out int y,
+    out txt note,
+)
+{
+    call DOUBLE(
+        x = self.x,
+    )
+
+    return (
+        y    = DOUBLE.y,
+        note = DOUBLE.note,
+    )
+}

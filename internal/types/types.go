@@ -7,12 +7,9 @@
 package types
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -71,21 +68,6 @@ type Transform func(path string) (string, error)
 // result always preserves the full input, and every Object keeps its key order.
 func (t *Table) Apply(params []*syntax.StructMember, vals map[string]any, fn Transform) (map[string]any, error) {
 	out, err := t.applyObject(params, sortedObject(vals), fn)
-	if err != nil {
-		return nil, err
-	}
-
-	return objectMap(out), nil
-}
-
-// FormatFloats re-encodes each float leaf of vals (a float-typed leaf, or a
-// float-literal number inside an untyped map) the way mrp encodes a float
-// literal in a stage's _args (Martian's FloatExp uses AppendFloat 'g', -1):
-// 2.0 becomes 2 and 1E6 becomes 1e+06. It is for values that stand in for
-// .mro literals, such as entry-input overrides; a stage's own outputs keep
-// their text, as mrp passes them through unchanged.
-func (t *Table) FormatFloats(params []*syntax.StructMember, vals map[string]any) (map[string]any, error) {
-	out, err := t.mapObjectNumbers(params, sortedObject(vals), formatFloat)
 	if err != nil {
 		return nil, err
 	}
@@ -217,138 +199,4 @@ func (t *Table) walkMap(m Object, elem syntax.Type, fn Transform) (any, error) {
 	}
 
 	return out, nil
-}
-
-// numberLeaf maps one number leaf given the name of its declared base type.
-type numberLeaf func(n json.Number, base string) any
-
-// mapObjectNumbers returns o with the number leaves of each declared param
-// mapped by leaf, keeping o's key order.
-func (t *Table) mapObjectNumbers(params []*syntax.StructMember, o Object, leaf numberLeaf) (Object, error) {
-	out := slices.Clone(o)
-
-	for _, p := range params {
-		i := o.index(p.Id)
-		if i < 0 {
-			continue
-		}
-
-		typ, err := t.Type(p.Tname)
-		if err != nil {
-			return nil, fmt.Errorf("param %s: %w", p.Id, err)
-		}
-
-		if out[i].Value, err = t.mapNumber(o[i].Value, typ, leaf); err != nil {
-			return nil, fmt.Errorf("param %s: %w", p.Id, err)
-		}
-	}
-
-	return out, nil
-}
-
-// mapNumber returns v with its number leaves mapped, never mutating v: nested
-// slices and maps are rebuilt copy-on-write so the caller-owned input survives
-// intact. A number is mapped by the base type name of the type it is found at.
-func (t *Table) mapNumber(v any, typ syntax.Type, leaf numberLeaf) (any, error) {
-	switch tv := v.(type) {
-	case []any:
-		at, ok := typ.(*syntax.ArrayType)
-		if !ok {
-			return v, nil
-		}
-
-		elem := t.elemType(at)
-		out := make([]any, len(tv))
-
-		for i, e := range tv {
-			var err error
-			if out[i], err = t.mapNumber(e, elem, leaf); err != nil {
-				return nil, err
-			}
-		}
-
-		return out, nil
-	case map[string]any:
-		nv, err := t.mapNumber(sortedObject(tv), typ, leaf)
-
-		return asMap(nv), err
-	case Object:
-		return t.mapObjectNumber(tv, typ, leaf)
-	case json.Number:
-		return leaf(tv, typ.TypeId().Tname), nil
-	default:
-		return v, nil
-	}
-}
-
-// mapObjectNumber is mapNumber over an object value.
-func (t *Table) mapObjectNumber(o Object, typ syntax.Type, leaf numberLeaf) (any, error) {
-	switch ot := typ.(type) {
-	case *syntax.TypedMapType:
-		out := slices.Clone(o)
-
-		for i, m := range o {
-			var err error
-			if out[i].Value, err = t.mapNumber(m.Value, ot.Elem, leaf); err != nil {
-				return nil, err
-			}
-		}
-
-		return out, nil
-	case *syntax.StructType:
-		return t.mapObjectNumbers(ot.Members, o, leaf)
-	case *syntax.BuiltinType:
-		if ot.Id == syntax.KindMap {
-			return mapUntyped(o, leaf), nil
-		}
-	}
-
-	return o, nil
-}
-
-// mapUntyped returns v, a value inside an untyped map, with its number leaves
-// mapped at any depth. Martian types such a number by its literal: one written
-// with a '.' or an exponent is a float, any other keeps the untyped base.
-func mapUntyped(v any, leaf numberLeaf) any {
-	switch tv := v.(type) {
-	case []any:
-		out := make([]any, len(tv))
-		for i, e := range tv {
-			out[i] = mapUntyped(e, leaf)
-		}
-
-		return out
-	case map[string]any:
-		return asMap(mapUntyped(sortedObject(tv), leaf))
-	case Object:
-		out := slices.Clone(tv)
-		for i, m := range tv {
-			out[i].Value = mapUntyped(m.Value, leaf)
-		}
-
-		return out
-	case json.Number:
-		if strings.ContainsAny(string(tv), ".eE") {
-			return leaf(tv, syntax.KindFloat)
-		}
-
-		return leaf(tv, syntax.KindMap)
-	default:
-		return v
-	}
-}
-
-// formatFloat re-encodes a float param's number in Martian's 'g', -1 form. A
-// number outside float64 range is left as written.
-func formatFloat(n json.Number, base string) any {
-	if base != syntax.KindFloat {
-		return n
-	}
-
-	f, err := strconv.ParseFloat(string(n), 64)
-	if err != nil {
-		return n
-	}
-
-	return json.Number(strconv.FormatFloat(f, 'g', -1, 64))
 }

@@ -56,7 +56,7 @@ func Load(entry, call string, mroPaths []string) (*Graph, error) {
 	}
 
 	if call != "" {
-		decls, _, err := splitEntry(raw, entry)
+		decls, _, err := splitEntry(raw, entry, mroPaths)
 		if err != nil {
 			return nil, err
 		}

@@ -58,7 +58,7 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 		return err
 	}
 
-	v, err := g.pipelineOuts(s)
+	v, shape, err := g.pipelineOuts(s)
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 		return fmt.Errorf("pipeline outs: %w", err)
 	}
 
-	ps, err := newPipestance(spec, s.outsItems(), g.Table(), params)
+	ps, err := newPipestance(spec, s.outsItems(), forkShape{tbl: g.Table(), params: params, typ: shape})
 	if err != nil {
 		return err
 	}
@@ -95,27 +95,28 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 }
 
 // pipelineOuts resolves the invocation's pipeline outs from the staged
-// stage outs and checks them.
-func (g *Graph) pipelineOuts(s *stagedStore) (json.Marshaler, error) {
+// stage outs and checks them. It returns them with their type, an array or
+// a map of the pipeline's outs for a top-level map call.
+func (g *Graph) pipelineOuts(s *stagedStore) (json.Marshaler, syntax.Type, error) {
 	r := &resolver{g: g, st: s}
 
 	ro := g.root.ResolvedOutputs()
 	if ro == nil || ro.Exp == nil {
-		return core.MarshalerMap{}, nil
+		return core.MarshalerMap{}, nil, nil
 	}
 
 	v, err := r.resolve(ro.Exp, ro.Type, nil)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline outs: %w", err)
+		return nil, nil, fmt.Errorf("pipeline outs: %w", err)
 	}
 
 	if ps := g.root.Callable().GetOutParams(); ps != nil && len(ps.List) > 0 {
 		if err := g.verifyPipelineOutputs(v, ro.Type); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
-	return v, nil
+	return v, ro.Type, nil
 }
 
 // postProcess runs Martian's PostProcess on the pipestance at ps, attached

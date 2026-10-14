@@ -285,12 +285,16 @@ func outcomeOf(m divergence.OutcomeMatcher) runOutcome {
 // with mrp's: mrp fails it by design, or mro2nf's outcome is a known
 // divergence from mrp's, recorded by the allowlist entry divergence names.
 // overrides names an mrp --overrides file in the fixture's dir, which both
-// runs are launched with.
+// runs are launched with. params names a params file in the fixture's dir
+// the Nextflow run is launched with, and mro the invocation mrp runs in
+// place of pipeline.mro, whose literals are those values.
 type mrpOutcomeCase struct {
 	name       string
 	mrp        runOutcome
 	divergence string
 	overrides  string
+	params     string
+	mro        string
 }
 
 // errOutcomeCase reports a malformed mrpOutcomeCases entry.
@@ -300,6 +304,10 @@ var errOutcomeCase = errors.New("outcome case")
 // that belongs in mrpDiffCases, because both sides succeed on it, and a
 // divergence that is no outcome entry or records mrp's own outcome.
 func (c mrpOutcomeCase) validate(allow divergence.Allowlist) (*outcomeDivergence, error) {
+	if (c.params == "") != (c.mro == "") {
+		return nil, fmt.Errorf("%w %q: a params file and the invocation of its values go together", errOutcomeCase, c.name)
+	}
+
 	if c.divergence == "" {
 		if !c.mrp.Failed {
 			return nil, fmt.Errorf("%w %q: mrp succeeds and no divergence is recorded; diff it in mrpDiffCases", errOutcomeCase, c.name)

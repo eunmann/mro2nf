@@ -56,7 +56,7 @@ func inMembers(ps *syntax.InParams) []*syntax.StructMember {
 
 	out := make([]*syntax.StructMember, len(ps.List))
 	for i, p := range ps.List {
-		out[i] = &syntax.StructMember{Id: p.Id, Tname: p.Tname}
+		out[i] = &syntax.StructMember{Id: p.Id, Tname: p.Tname, Help: p.Help}
 	}
 
 	return out

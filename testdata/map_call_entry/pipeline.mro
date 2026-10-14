@@ -1,0 +1,14 @@
+# A top-level map call forks the entry pipeline per element of its split
+# input; its outs are an array of the pipeline's outs, one per fork.
+# TestMrpDiffSplitEntryOverride launches it with x in Martian's split form,
+# an array of another length and a map, against mrp running
+# override_array.mro and override_map.mro, whose literals are those values.
+@include "doubler.mro"
+
+map call DOUBLER(
+    x = split [
+        1,
+        2,
+        3,
+    ],
+)

@@ -142,30 +142,3 @@ func TestApplyKeepsObjectOrder(t *testing.T) {
 		t.Errorf("leaf visit order (-want +got):\n%s", diff)
 	}
 }
-
-// TestNumberWalksKeepObjectOrder checks FormatFloats rewrites numbers inside
-// Objects (a struct, a typed map, an untyped map) without reordering their
-// keys.
-func TestNumberWalksKeepObjectOrder(t *testing.T) {
-	tbl := orderTable(t)
-	params := fields(t, "q In", "box Box", "m map<In>", "u map")
-	vals := map[string]any{
-		"q":   decodeOrdered(t, `{"z":1.0,"a":2}`),
-		"box": decodeOrdered(t, `{"b":2.0,"q":{"z":3.0,"a":4}}`),
-		"m":   decodeOrdered(t, `{"k2":{"z":5.0,"a":6},"k1":{"z":7,"a":8.0}}`),
-		"u":   decodeOrdered(t, `{"y":1E6,"x":{"w":0.50,"v":1}}`),
-	}
-
-	out, err := tbl.FormatFloats(params, vals)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	formatted := encode(t, out)
-
-	wantFormatted := `{"box":{"b":2,"q":{"z":3.0,"a":4}},"m":{"k2":{"z":5.0,"a":6},"k1":{"z":7,"a":8.0}},` +
-		`"q":{"z":1.0,"a":2},"u":{"y":1e+06,"x":{"w":0.5,"v":1}}}`
-	if formatted != wantFormatted {
-		t.Errorf("FormatFloats = %s, want %s", formatted, wantFormatted)
-	}
-}

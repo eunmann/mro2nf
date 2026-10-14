@@ -45,9 +45,10 @@ func TestEmitRefusesUncreatableOutDir(t *testing.T) {
 }
 
 // TestEmitEveryFixture: every fixture mrp instantiates emits a project
-// whose main.nf runs PLAN, a process call per witness node, then OUTS, and
-// whose config declares a param per entry input; a fixture mrp refuses
-// emits nothing.
+// whose main.nf runs PLAN, a process call per witness node, then OUTS,
+// whose config declares a param per entry input, and whose
+// nextflow_schema.json meets nf-schema's meta-schema and admits the call's
+// own values; a fixture mrp refuses emits nothing.
 func TestEmitEveryFixture(t *testing.T) {
 	// mrp refuses to instantiate these (#387): a split of a runtime-gated
 	// literal collection.
@@ -89,6 +90,8 @@ func TestEmitEveryFixture(t *testing.T) {
 			if nodes, incs := strings.Count(wiring, "\n    // "), strings.Count(wiring, "include { STAGE"); nodes != incs {
 				t.Errorf("the project wires %d nodes but includes the stage module %d times", nodes, incs)
 			}
+
+			checkParamsSchema(t, tree["nextflow_schema.json"])
 		})
 	}
 }

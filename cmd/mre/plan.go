@@ -18,6 +18,7 @@ import (
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/syntax"
 	"github.com/martian-lang/martian/martian/util"
 )
 
@@ -181,7 +182,8 @@ func (f *planFlags) writeEntryFiles(p cg.Plan) error {
 
 // overlayInvocation is the source's invocation with the run's entry values
 // over its own: a string for a scalar input parsed as its declared type, as
-// a command-line param is a string.
+// a command-line param is a string, and a split input's value in Martian's
+// invocation form, {"split": v}, whose v the rebuilt call splits.
 func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*core.InvocationData, error) {
 	inv := *src.Invocation
 	inv.Args = maps.Clone(src.Invocation.Args)
@@ -205,7 +207,12 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 		return nil, fmt.Errorf("plan: entry params: %w", err)
 	}
 
-	if err := typeOverrides(over, params, tbl); err != nil {
+	if err := splitOverrides(over, inv.SplitArgs); err != nil {
+		return nil, err
+	}
+
+	unsplit := slices.DeleteFunc(params, func(p *syntax.StructMember) bool { return slices.Contains(inv.SplitArgs, p.Id) })
+	if err := typeOverrides(over, unsplit, tbl); err != nil {
 		return nil, err
 	}
 
@@ -217,6 +224,10 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 		v, err := json.Marshal(types.Sorted(over[k]))
 		if err != nil {
 			return nil, fmt.Errorf("encode entry value %s: %w", k, err)
+		}
+
+		if err := cg.CheckValue(v); err != nil {
+			return nil, fmt.Errorf("entry input %q: %w", k, err)
 		}
 
 		inv.Args[k] = v

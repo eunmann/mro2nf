@@ -1,0 +1,8 @@
+@include "repr.mro"
+
+call CT(
+    n = 1,
+    f = 1.5,
+    g = -0.0,
+    b = true,
+)

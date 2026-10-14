@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -346,6 +348,276 @@ func TestPlanRefusesAsMrp(t *testing.T) {
 	if _, err := plan(t, "empty_fork_gated", `{"none":[1]}`); err == nil {
 		t.Error("plan of a runtime-gated split of a non-empty literal succeeded; mrp refuses it")
 	}
+}
+
+// splitEntryMRO is an entry whose top-level map call forks its pipeline per
+// element of its split input x.
+const splitEntryMRO = `stage DOUBLE(
+    in  int x,
+    out int y,
+    src py  "stages/double",
+)
+
+pipeline DOUBLER(
+    in  int x,
+    out int y,
+)
+{
+    call DOUBLE(
+        x = self.x,
+    )
+
+    return (
+        y = DOUBLE.y,
+    )
+}
+
+map call DOUBLER(
+    x = split [
+        1,
+        2,
+        3,
+    ],
+)
+`
+
+// TestPlanForksByTheSplitValue (#565): a launch value of a split entry
+// input in Martian's invocation form, {"split": v}, forks the run by v, an
+// array of another length than the .mro's or a map, as mrp forks the call
+// holding v as its literal. A value in no such form fails the plan, naming
+// the input.
+func TestPlanForksByTheSplitValue(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), splitEntryMRO)
+
+	cases := []struct {
+		values, split string
+		forks         []string
+	}{
+		{`{"x":{"split":[4,5]}}`, "split [\n        4,\n        5,\n    ]", []string{`{"root":"DOUBLER","index":0}`, `{"root":"DOUBLER","index":1}`}},
+		{`{"x":{"split":{"r":7,"q":8}}}`, "split {\n        \"q\": 8,\n        \"r\": 7,\n    }", []string{`{"root":"DOUBLER","key":"q"}`, `{"root":"DOUBLER","key":"r"}`}},
+	}
+
+	for _, tc := range cases {
+		work, err := planEntry(t, dir, tc.values)
+		if err != nil {
+			t.Fatalf("plan with %s: %v", tc.values, err)
+		}
+
+		if call := planCall(t, work); !strings.Contains(call, "x = "+tc.split+",") {
+			t.Errorf("plan with %s: the call lacks x = %s:\n%s", tc.values, tc.split, call)
+		}
+
+		var forks []string
+
+		for _, line := range rootLines(t, filepath.Join(work, "roots"), "DOUBLER") {
+			raw, err := base64.StdEncoding.DecodeString(strings.Fields(line)[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var rec struct {
+				Fork json.RawMessage `json:"fork"`
+			}
+
+			if err := json.Unmarshal(raw, &rec); err != nil {
+				t.Fatal(err)
+			}
+
+			forks = append(forks, strings.Trim(string(rec.Fork), "[]"))
+		}
+
+		if d := cmp.Diff(tc.forks, forks); d != "" {
+			t.Errorf("plan with %s: forks (-mrp +plan):\n%s", tc.values, d)
+		}
+	}
+
+	for _, values := range []string{
+		`{"x":[4,5]}`, `{"x":5}`, `{"x":"5"}`, `{"x":{}}`, `{"x":{"split":5}}`, `{"x":{"split":null}}`, `{"x":{"split":"[4,5]"}}`,
+	} {
+		_, err := planEntry(t, dir, values)
+		if !errors.Is(err, errSplitShape) || !strings.Contains(err.Error(), `entry input "x"`) {
+			t.Errorf("plan with %s: %v, want errSplitShape naming x", values, err)
+		}
+	}
+}
+
+// TestPlanRefusesOutOfRangeValues (#567): a launch value holding an int
+// outside int64 or a float beyond float64, at any depth, fails the plan
+// naming the input and the literal, as mrp's parser refuses the literal
+// (syntax/parsenum.go), where it panicked; int64's ends and float64's
+// largest value pass as written.
+func TestPlanRefusesOutOfRangeValues(t *testing.T) {
+	split := t.TempDir()
+	writeTestFile(t, filepath.Join(split, "pipeline.mro"), splitEntryMRO)
+
+	cases := []struct{ dir, values, input, literal string }{
+		{fixtureDir(t, "cli_typed"), `{"n":9223372036854775808}`, "n", "9223372036854775808"},
+		{fixtureDir(t, "cli_typed"), `{"n":-9223372036854775809}`, "n", "-9223372036854775809"},
+		{fixtureDir(t, "cli_typed"), `{"f":1E+400}`, "f", "1E+400"},
+		{fixtureDir(t, "cli_typed"), `{"f":9223372036854775808}`, "f", "9223372036854775808"},
+		{fixtureDir(t, "cli_typed"), `{"f":"9223372036854775808"}`, "f", "9223372036854775808"},
+		{split, `{"x":{"split":[1,9223372036854775808]}}`, "x", "9223372036854775808"},
+	}
+
+	for _, tc := range cases {
+		_, err := planEntry(t, tc.dir, tc.values)
+		if !errors.Is(err, cg.ErrLiteralRange) {
+			t.Errorf("plan with %s: %v, want %v", tc.values, err, cg.ErrLiteralRange)
+
+			continue
+		}
+
+		if want := fmt.Sprintf("entry input %q: %v: %s", tc.input, cg.ErrLiteralRange, tc.literal); !strings.Contains(err.Error(), want) {
+			t.Errorf("plan with %s: %v, want %q", tc.values, err, want)
+		}
+	}
+
+	work, err := plan(t, "cli_typed", `{"n":-9223372036854775808,"f":1.7976931348623157E+308}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call := planCall(t, work)
+	for _, want := range []string{"n = -9223372036854775808,", "f = 1.7976931348623157e+308,"} {
+		if !strings.Contains(call, want) {
+			t.Errorf("the call lacks %q:\n%s", want, call)
+		}
+	}
+}
+
+// TestPlanFloatValuesAsMrp: a float input's launch value, a JSON number or
+// a command-line string, compiles to the _args value mrp writes for the
+// same literal (each want from an mrp run of `f = <literal>`): a whole
+// number is Martian's int literal, which a float input keeps exact.
+func TestPlanFloatValuesAsMrp(t *testing.T) {
+	cases := []struct{ value, want string }{
+		{`9007199254740993`, "9007199254740993"},
+		{`"9007199254740993"`, "9007199254740993"},
+		{`-9223372036854775808`, "-9223372036854775808"},
+		{`1e6`, "1e+06"},
+		{`"1e6"`, "1e+06"},
+		{`1.5`, "1.5"},
+		{`2.0`, "2"},
+		{`-0.0`, "-0"},
+		{`"-0.0"`, "-0"},
+		{`1E+21`, "1e+21"},
+	}
+
+	dir := fixtureDir(t, "cli_typed")
+
+	for _, tc := range cases {
+		work, err := plan(t, "cli_typed", `{"f":`+tc.value+`}`)
+		if err != nil {
+			t.Fatalf("plan with f = %s: %v", tc.value, err)
+		}
+
+		if got := planInput(t, dir, work, "CT.REPR", "f"); got != tc.want {
+			t.Errorf("f = %s reaches _args as %s, mrp's is %s", tc.value, got, tc.want)
+		}
+	}
+}
+
+const nestedNumbersMRO = `struct Cfg(
+    int   n,
+    float x,
+)
+
+stage S(
+    in  float[]    fs,
+    in  map        um,
+    in  int        i,
+    in  Cfg        cfg,
+    in  map<float> fm,
+    out int        y,
+    src py         "stages/s",
+)
+
+pipeline P(
+    in  float[]    fs,
+    in  map        um,
+    in  int        i,
+    in  Cfg        cfg,
+    in  map<float> fm,
+    out int        y,
+)
+{
+    call S(
+        fs  = self.fs,
+        um  = self.um,
+        i   = self.i,
+        cfg = self.cfg,
+        fm  = self.fm,
+    )
+
+    return (
+        y = S.y,
+    )
+}
+
+call P(
+    fs  = [],
+    um  = {},
+    i   = 1,
+    cfg = {"n": 1, "x": 1},
+    fm  = {},
+)
+`
+
+// TestPlanNestedNumbersAsMrp: a number at any depth of a launch value, of
+// a float, an int, an untyped map or a struct field, compiles to the _args
+// value mrp writes for the same literal (each want from an mrp run of the
+// call with the launch values as its literals).
+func TestPlanNestedNumbersAsMrp(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), nestedNumbersMRO)
+
+	work, err := planEntry(t, dir, `{"fs":[2.0,0.50,9007199254740993],"um":{"y":1E6,"x":{"w":0.50,"v":1},"big":9007199254740993},`+
+		`"i":2.0,"cfg":{"n":4.0,"x":4.0},"fm":{"k":-0.0}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for id, want := range map[string]string{
+		"fs":  `[2,0.5,9007199254740993]`,
+		"um":  `{"big":9007199254740993,"x":{"v":1,"w":0.5},"y":1e+06}`,
+		"i":   `2`,
+		"cfg": `{"n":4,"x":4}`,
+		"fm":  `{"k":-0}`,
+	} {
+		if got := planInput(t, dir, work, "P.S", id); got != want {
+			t.Errorf("%s reaches _args as %s, mrp's is %s", id, got, want)
+		}
+	}
+}
+
+// planInput is the input id of the stage node as the plan in work compiles
+// it over the declarations of the pipeline.mro in dir, encoded as mrp
+// encodes it in _args.
+func planInput(t *testing.T, dir, work, node, id string) string {
+	t.Helper()
+
+	src, err := cg.ReadSource(filepath.Join(dir, "pipeline.mro"), []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := cg.Compile([]byte(src.Decls+"\n\n"+planCall(t, work)), src.Name, []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := g.Stage(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := st.ResolvedInputs()[id].Exp.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return string(raw)
 }
 
 const besideEntryMRO = `stage FOO(

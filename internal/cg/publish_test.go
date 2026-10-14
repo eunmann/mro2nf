@@ -371,7 +371,7 @@ func TestWriteOutsNeedsLocations(t *testing.T) {
 // pipeline_outs.json: a reconstructed pipestance path no file was placed at,
 // and a name in outs/ or a link there that reaches no file.
 func TestPublishedNamesFailLoudly(t *testing.T) {
-	p, err := newPipestance(OutsSpec{Work: t.TempDir()}, nil, nil, nil)
+	p, err := newPipestance(OutsSpec{Work: t.TempDir()}, nil, forkShape{})
 	if err != nil {
 		t.Fatal(err)
 	}

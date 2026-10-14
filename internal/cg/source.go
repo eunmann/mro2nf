@@ -52,14 +52,14 @@ func ReadSource(path string, mroPaths []string) (Source, error) {
 		return Source{}, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	decls, call, err := splitEntry(raw, path)
+	decls, call, err := splitEntry(raw, path, mroPaths)
 	if err != nil {
 		return Source{}, err
 	}
 
-	_, _, ast, err := syntax.Compile(path, mroPaths, false)
+	ast, err := compileEntry(path, mroPaths)
 	if err != nil {
-		return Source{}, fmt.Errorf("compile %s: %w", path, err)
+		return Source{}, err
 	}
 
 	if ast.Call == nil {
@@ -88,18 +88,41 @@ func ReadSource(path string, mroPaths []string) (Source, error) {
 
 // splitEntry splits the entry .mro src, read from path, into its
 // declarations and its call, each as Martian's formatter prints it.
-func splitEntry(src []byte, path string) (string, string, error) {
-	var p syntax.Parser
+func splitEntry(src []byte, path string, mroPaths []string) (string, string, error) {
+	file, lit, err := parseMRO(src, path)
+	if lit != "" {
+		return "", "", literalError(path, mroPaths, lit)
+	}
 
-	file, err := p.UncheckedParse(src, path)
 	if err != nil {
-		return "", "", fmt.Errorf("parse %s: %w", path, err)
+		return "", "", err
 	}
 
 	call := keepNegativeZero((&syntax.Ast{Call: file.Call}).Format())
 	file.Call = nil
 
 	return keepNegativeZero(file.Format()), call, nil
+}
+
+// compileEntry compiles the entry .mro at path with its includes.
+func compileEntry(path string, mroPaths []string) (*syntax.Ast, error) {
+	var ast *syntax.Ast
+
+	lit, err := recoverLiteral(func() error {
+		_, _, a, err := syntax.Compile(path, mroPaths, false)
+		if err != nil {
+			return fmt.Errorf("compile %s: %w", path, err)
+		}
+
+		ast = a
+
+		return nil
+	})
+	if lit != "" {
+		return nil, literalError(path, mroPaths, lit)
+	}
+
+	return ast, err
 }
 
 // Rebuild is the invocation source of inv over the declarations: the call

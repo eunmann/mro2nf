@@ -31,8 +31,9 @@ const (
 )
 
 var (
-	errReservedParam = errors.New("entry input name is reserved by the generated project")
-	errNotStage      = errors.New("not a stage")
+	errReservedParam   = errors.New("entry input name is reserved by the generated project")
+	errUndeclaredInput = errors.New("the call binds an input the pipeline does not declare")
+	errNotStage        = errors.New("not a stage")
 )
 
 // reserved reports a param the generated project defines itself.
@@ -51,7 +52,8 @@ type Options struct {
 }
 
 // project is one emission: the source, the witness's call graph and its
-// topology, and the nodes that read entry files.
+// topology, the nodes that read entry files, and the entry inputs as run
+// params, sorted.
 type project struct {
 	opts    Options
 	src     cg.Source
@@ -60,6 +62,7 @@ type project struct {
 	index   map[string]int
 	roots   map[string]cg.TopoRoot
 	readers map[string]bool
+	inputs  []launchParam
 }
 
 // Emit writes the project for the entry .mro at entry into opts.OutDir.
@@ -79,9 +82,15 @@ func Emit(entry string, opts Options) error {
 		return err
 	}
 
+	schema, err := p.paramsSchema()
+	if err != nil {
+		return err
+	}
+
 	maps.Copy(files, map[string]string{
-		"stage.nf":        stageModule,
-		"nextflow.config": p.config(),
+		"stage.nf":             stageModule,
+		"nextflow.config":      p.config(),
+		"nextflow_schema.json": schema,
 	})
 
 	if err := addMroFiles(files, src.Files); err != nil {
@@ -179,6 +188,10 @@ func newProject(src cg.Source, opts Options) (*project, error) {
 	}
 
 	p := &project{opts: opts, src: src, g: g, topo: topo, index: map[string]int{}, roots: map[string]cg.TopoRoot{}, readers: readers}
+
+	if p.inputs, err = p.entryInputs(); err != nil {
+		return nil, err
+	}
 
 	for i, n := range topo.Nodes {
 		p.index[n.Fqid] = i

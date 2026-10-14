@@ -1,9 +1,10 @@
 package cgnf
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestEmitTargetsAsProfiles: one project runs on every target, chosen at
@@ -199,17 +200,33 @@ func TestAWSBatchProfilePollsEveryTwoSeconds(t *testing.T) {
 // TestEmitHealthOmicsTemplate: the HealthOmics parameter template declares
 // every entry input and the run's mrp --overrides file, optional, and none
 // of the project's other params, which a run then cannot set: the image
-// the package pins (#334), and the file values it stages.
+// the package pins (#334), and the file values it stages. Its bytes are
+// those a registered workflow was created with.
 func TestEmitHealthOmicsTemplate(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
 
-	var tmpl map[string]templateParam
-	if err := json.Unmarshal([]byte(tree["parameter-template.json"]), &tmpl); err != nil {
-		t.Fatal(err)
+	const want = `{
+  "mro2nf_overrides": {
+    "description": "an s3:// URI of mrp's --overrides file, over each stage's resources",
+    "optional": true
+  },
+  "reads": {
+    "description": "pipeline input \"reads\"; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory",
+    "optional": true
+  },
+  "scale": {
+    "description": "pipeline input \"scale\"; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory",
+    "optional": true
+  }
+}
+`
+
+	if d := cmp.Diff(want, tree["parameter-template.json"]); d != "" {
+		t.Errorf("parameter template (-want +got):\n%s", d)
 	}
 
-	if len(tmpl) != 3 || !tmpl["reads"].Optional || !tmpl["scale"].Optional || !tmpl["mro2nf_overrides"].Optional {
-		t.Errorf("parameter template %v, want reads, scale and mro2nf_overrides, optional", tmpl)
+	if strings.Contains(tree["package.sh"], "nextflow_schema.json") {
+		t.Error("package.sh packages nextflow_schema.json, from which HealthOmics would detect params the template does not name")
 	}
 
 	for _, want := range []string{

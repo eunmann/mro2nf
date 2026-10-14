@@ -222,6 +222,7 @@ main.nf               ← PLAN, the nodes or the calls of their runs, then OUTS
 subworkflows/         ← a workflow per run of nodes (W<j>.nf), only in a project too large for one
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
+nextflow_schema.json  ← every param's type, default and description (nf-schema), for launch forms (§8)
 conf/                 ← the container profiles' and the HealthOmics profile's configs
 package.sh, parameter-template.json ← the HealthOmics package (§9)
 _assets/mro/          ← a copy of every .mro file the entry compiles from, each
@@ -695,7 +696,10 @@ every filetype and struct, and the struct of each callable's outputs.
   post-processing (`Pipestance.PostProcess`), so the published tree and the
   outs JSON follow `mrp`'s rules by construction. It reconstructs a pipestance
   (`-work`): the top fork's `_outs` holds the resolved outs, each file leaf
-  placed by its origin (§7). A stage's own file is one path in the pipestance
+  placed by its origin (§7). A top-level `map call`'s outs are an array or a
+  map of its pipeline's outs, one per fork, whose files PostProcess publishes
+  under `outs/<fork key>/`, so each fork's are placed and named as a
+  pipeline's are. A stage's own file is one path in the pipestance
   however many outputs reach it, which PostProcess moves into `outs/` at the
   first and links the others to; a linked file is a path outside the
   pipestance per output that reaches it, which PostProcess links into `outs/`
@@ -873,11 +877,31 @@ You can override inputs **at launch** without re-transpiling:
   base-10 int64; a JSON number; exactly `true`/`false`). A value that does not
   parse, or a string for an array, map or struct input, fails the run; set those
   with `-params-file`.
-- Every float in a supplied value, typed or parsed and at any depth, is
-  re-encoded the way `mrp` encodes a float literal (`'g'`, shortest form). That
-  covers a `float` leaf of any shape and, inside an untyped `map`, any number
-  written with a `.` or an exponent, so `--f 2.0` and a `-params-file`
-  `{"f": 2.0}` both reach the stage as `2`, as `f = 2.0` does under `mrp`.
+- An input the top-level `map call` binds with `split` takes Martian's
+  invocation form of a split, `{"split": v}` with `v` an array or a map
+  (`core/runtime.go` `convertToExp`), as `-params-file` takes Martian's
+  invocation data. The rebuilt call splits `v`, so the fork count and keys
+  follow the launch value. `mre plan` refuses any other value naming the
+  input (`errSplitShape`), and the compile types `v`'s elements as `mrp`'s
+  does.
+- Every number in a supplied value, typed or parsed and at any depth, keeps
+  the text `mre plan` receives until the rebuilt call parses it
+  (`core.BuildCallAst`), so it reaches the stage as `mrp` encodes the same
+  literal: `--f 2.0` and a `-params-file` `{"f": 2.0}` both reach it as `2`,
+  `1e6` as `1e+06`, a YAML params file's or a command-line `-0.0` as `-0`,
+  and a whole number given to a `float` input, Martian's int literal, exact
+  (`9007199254740993`).
+- `mre plan` parses each supplied value as `core.BuildCallAst` parses an
+  invocation argument (`syntax.Parser.ParseValExp`) before it rebuilds the
+  call (`cg.CheckValue`), and refuses one holding an int outside int64 or a
+  float beyond float64, naming the input and the literal. Martian's parser
+  panics on such a literal (`syntax/parsenum.go`), as `mrp` does on it in an
+  invocation; the check recovers that panic, as the transpile does for the
+  `.mro`'s own literals (`cg.ReadSource`).
+- A JSON `-params-file` is the exception to both: Nextflow's `JsonSlurper`
+  wraps an int beyond int64 into int64 and reads `-0.0` as `0.0` before
+  `mre plan` sees the value, so the run takes the wrapped int and the stage
+  gets `0` (the divergence `params-json-int-wrap`).
 - The string guarantee holds only under the strict (v2) syntax parser, the
   default from Nextflow 26.04. The v1 parser (the default on earlier releases,
   or `NXF_SYNTAX_PARSER=v1`) converts CLI values before the script sees them:
@@ -887,6 +911,20 @@ You can override inputs **at launch** without re-transpiling:
   unaffected.
 - An entry input named `outdir`, `job_resources` or `mro2nf_*` collides with
   a param the project defines itself and fails the transpile.
+- `mre plan` is the one validator of the launch values. `nextflow_schema.json`
+  (`internal/cgnf/schema.go`) describes every param for launch forms and
+  documentation, each entry input by the JSON Schema of its Martian type
+  (`types.Table.Schema`) with the call's value as its default, a split input
+  by Martian's split form of that type (`types.Split`) with the call's split
+  value wrapped as `{"split": v}`, and the
+  project's own params from the same model as `nextflow.config` and the
+  HealthOmics `parameter-template.json` (`internal/cgnf/params.go`). No
+  nf-schema plugin validates against it: a plugin is downloaded at launch,
+  which an offline grid or container host cannot do, and HealthOmics installs
+  only the versions it pins. Nextflow's typed `params {}` block is not used:
+  Nextflow 25.10, the floor `manifest.nextflowVersion` declares, parses it
+  only under `NXF_SYNTAX_PARSER=v2`, not its default, and HealthOmics, given
+  that range, runs 25.10 and supports the v2 parser only from 26.04.
 
 **File-typed inputs.** Every file value of the run's entry inputs that is an
 absolute path is read in place by every task on the local and grid profiles
