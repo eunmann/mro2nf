@@ -156,6 +156,86 @@ func TestResumeKeysOnANodesOverrides(t *testing.T) {
 	}
 }
 
+// TestResumeKeysOnTheParamsATaskReads (#576): a -resume under a changed
+// launch param re-runs exactly the tasks whose script reads it, and the
+// tasks downstream of them, and a -resume under the same params is fully
+// cached. --mro2nf_psid names every job in its _jobinfo and is read by
+// PLAN and every stage task; --mro2nf_monitor sets every job's
+// monitor_flag and is read by the stage tasks alone, so PLAN stays cached.
+// A stage task read both in mreStage, outside its -resume key, and so
+// kept the old values. split_test runs the split triad and a plain stage.
+func TestResumeKeysOnTheParamsATaskReads(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	proj := transpile(t, "split_test")
+
+	if err := runNextflow(t, proj); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	psid := []string{"--mro2nf_psid", "other"}
+	monitor := slices.Concat(psid, []string{"--mro2nf_monitor", "true"})
+
+	for _, step := range []struct {
+		trace     string
+		args      []string
+		monitor   string
+		planRerun bool
+		rerun     bool
+	}{
+		{"psid.txt", psid, "disable", true, true},
+		{"psid-same.txt", psid, "disable", false, false},
+		{"monitor.txt", monitor, "monitor", false, true},
+		{"monitor-same.txt", monitor, "monitor", false, false},
+	} {
+		trace := filepath.Join(proj, step.trace)
+		if err := runNextflow(t, proj, slices.Concat([]string{"-resume", "-with-trace", step.trace}, step.args)...); err != nil {
+			t.Fatalf("%s: -resume: %v", step.trace, err)
+		}
+
+		for _, row := range readTraceColumns(t, trace, "name", "status", "workdir") {
+			want := step.rerun
+			if row[0] == "PLAN" {
+				want = step.planRerun
+			}
+
+			if (row[1] == "CACHED") == want {
+				t.Errorf("%s: task %s: status %s, want re-run %t", step.trace, row[0], row[1], want)
+			}
+
+			if row[0] != "PLAN" && row[0] != "OUTS" {
+				assertJobInfo(t, row[0], row[2], "ID.other.", step.monitor)
+			}
+		}
+	}
+}
+
+// assertJobInfo fails unless every _jobinfo in the phase dirs of the task
+// work dir holds a job name with prefix and monitor flag monitor.
+func assertJobInfo(t *testing.T, name, workdir, prefix, monitor string) {
+	t.Helper()
+
+	infos, err := filepath.Glob(filepath.Join(workdir, "*", "_jobinfo"))
+	if err != nil || len(infos) == 0 {
+		t.Fatalf("task %s: no _jobinfo in %s: %v", name, workdir, err)
+	}
+
+	for _, path := range infos {
+		var info struct {
+			Name    string `json:"name"`
+			Monitor string `json:"monitor_flag"`
+		}
+
+		readJSON(t, path, &info)
+
+		if !strings.HasPrefix(info.Name, prefix) || info.Monitor != monitor {
+			t.Errorf("task %s: _jobinfo names job %s with monitor_flag %q, want prefix %s and %q", name, info.Name, info.Monitor, prefix, monitor)
+		}
+	}
+}
+
 // readersMRO maps PAIR over the forks of A.xs, beside a second SRC, B, that
 // nothing reads. Each readersEdits case changes only how PAIR reads A or B.
 const readersMRO = `stage SRC(
