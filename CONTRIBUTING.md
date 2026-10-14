@@ -116,12 +116,17 @@ divergences" issue.
 Tagging `v*` triggers `release.yml`. It requires the tagged commit to be a
 PR's merge whose tree matches that PR's head, and that head to have a green PR
 Validation run. It then cross-compiles `mro2nf`, `mre` and `mrjob` for Linux
-and macOS (amd64, arm64) and publishes them in a GitHub release with a
-`SHA256SUMS` file, `LICENSE` and `THIRD_PARTY_NOTICES`. Install `mre` and
-`mrjob` under those names in one directory on `PATH`, as `mre` runs the
-`mrjob` beside it. It also pushes the runtime image
-`ghcr.io/eunmann/mro2nf-runtime:<tag>` for linux/amd64 and linux/arm64. A
-pre-release tag (`v1.2.0-rc1`) never becomes the latest release or the image's
-`latest` tag. In a public repository the binaries and the image carry build
+and macOS (amd64, arm64) and publishes a GitHub release with one archive per
+platform, `mro2nf-<tag>-<os>-<arch>.tar.gz`, and a `SHA256SUMS` file covering
+the archives. Each archive holds a single directory of the same name with
+`mro2nf`, `mre` and `mrjob` under those names, as `mre` runs the `mrjob`
+beside it, plus `LICENSE` and `THIRD_PARTY_NOTICES`. The archives are
+reproducible: entries sorted by name, owned and writable only by root, with
+the tagged commit's time, and gzip without a name or timestamp
+(`test/e2e/workflow_release_test.go` runs the packaging step). It also pushes
+the runtime image `ghcr.io/eunmann/mro2nf-runtime:<tag>` for linux/amd64 and
+linux/arm64. A pre-release tag (`v1.2.0-rc1`) never becomes the latest release
+or the image's `latest` tag. In a public repository the archives and the image
+carry build
 provenance; check a download with `sha256sum -c SHA256SUMS --ignore-missing`
 and `gh attestation verify <file> --repo eunmann/mro2nf`.

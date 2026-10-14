@@ -142,67 +142,69 @@ func TestVendoredDirsCarryLicense(t *testing.T) {
 	}
 }
 
-// TestShippedArtifactsCarryNotices keeps LICENSE and THIRD_PARTY_NOTICES in
-// the release assets and in the runtime image beside mre.
-func TestShippedArtifactsCarryNotices(t *testing.T) {
-	read := func(rel string) string {
-		raw, err := os.ReadFile(filepath.Join(repoRoot, rel))
-		if err != nil {
-			t.Fatal(err)
-		}
+// archiveDest is the last argument of release.yml's copy into the archive's
+// top-level directory.
+const archiveDest = `"$name/"`
 
-		return string(raw)
-	}
-
-	release := read(releaseYAML)
-	for _, f := range []string{licenseName, NoticesFile} {
-		if !strings.Contains(release, "\n            "+f+"\n") {
-			t.Errorf("%s does not attach %s to the release", releaseYAML, f)
-		}
-	}
-
-	const copyLine = "\nCOPY " + licenseName + " " + NoticesFile + " /opt/mro2nf/\n"
-	if !strings.Contains(read("deploy/runtime/Dockerfile"), copyLine) {
-		t.Errorf("deploy/runtime/Dockerfile lacks %q", strings.TrimSpace(copyLine))
-	}
-}
-
-// TestReleaseShipsEveryBinary keeps each shipped binary, mrjob included, in
-// the release: built per target, attached and in SHA256SUMS, so a
-// downloaded mre finds its mrjob beside it.
-func TestReleaseShipsEveryBinary(t *testing.T) {
-	bins, err := binaries(repoRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
+// archiveSources returns the files release.yml copies into each release
+// archive; test/e2e's TestReleaseArchiveLayout runs that step.
+func archiveSources(t *testing.T) []string {
+	t.Helper()
 
 	raw, err := os.ReadFile(filepath.Join(repoRoot, releaseYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	release := string(raw)
+	var copies [][]string
 
-	var sums string
-
-	for line := range strings.Lines(release) {
-		if strings.Contains(line, "sha256sum ") {
-			sums = line
+	for line := range strings.Lines(string(raw)) {
+		f := strings.Fields(line)
+		if len(f) > 2 && f[0] == "cp" && f[len(f)-1] == archiveDest {
+			copies = append(copies, f[1:len(f)-1])
 		}
 	}
 
-	for _, name := range names(bins) {
-		for _, want := range []string{
-			"\n            " + name + "-${{ matrix.goos }}-${{ matrix.goarch }}\n",
-			"\n            " + name + "-*\n",
-		} {
-			if !strings.Contains(release, want) {
-				t.Errorf("%s lacks %q", releaseYAML, strings.TrimSpace(want))
-			}
-		}
+	if len(copies) != 1 {
+		t.Fatalf("%s has %d `cp ... %s` lines, want the one that fills the archive", releaseYAML, len(copies), archiveDest)
+	}
 
-		if !strings.Contains(sums, " "+name+"-* ") {
-			t.Errorf("%s does not checksum %s: %q", releaseYAML, name, strings.TrimSpace(sums))
+	return copies[0]
+}
+
+// TestShippedArtifactsCarryNotices keeps LICENSE and THIRD_PARTY_NOTICES in
+// each release archive and in the runtime image beside mre.
+func TestShippedArtifactsCarryNotices(t *testing.T) {
+	sources := archiveSources(t)
+	for _, f := range []string{licenseName, NoticesFile} {
+		if !slices.Contains(sources, f) {
+			t.Errorf("%s does not put %s in the release archive: copies %q", releaseYAML, f, sources)
+		}
+	}
+
+	raw, err := os.ReadFile(filepath.Join(repoRoot, runtimeDockerfile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const copyLine = "\nCOPY " + licenseName + " " + NoticesFile + " /opt/mro2nf/\n"
+	if !strings.Contains(string(raw), copyLine) {
+		t.Errorf("%s lacks %q", runtimeDockerfile, strings.TrimSpace(copyLine))
+	}
+}
+
+// TestReleaseShipsEveryBinary keeps each shipped binary, mrjob included, in
+// each release archive, so a downloaded mre finds its mrjob beside it.
+func TestReleaseShipsEveryBinary(t *testing.T) {
+	bins, err := binaries(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sources := archiveSources(t)
+	for _, name := range names(bins) {
+		if !slices.Contains(sources, "dist/"+name) {
+			t.Errorf("%s does not put dist/%s in the release archive: copies %q", releaseYAML, name, sources)
 		}
 	}
 }
