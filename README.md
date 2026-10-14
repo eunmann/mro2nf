@@ -15,7 +15,8 @@ document also lists every Martian feature and its support status.
 
 ## Prerequisites
 
-- Go 1.26 and `make`, to build. The build downloads Go modules.
+- Go 1.26 and `make`, only to build from source. The build downloads Go
+  modules.
 - Java 17 to 26, and Nextflow 26.04 or later (`curl -s https://get.nextflow.io | bash`).
   The generated `nextflow.config` sets `manifest.nextflowVersion '!>=26.04.0'`,
   so an older Nextflow refuses to run it. The project needs Nextflow's
@@ -25,7 +26,33 @@ document also lists every Martian feature and its support status.
 - Python 3 on the host, to run `py` stages under the local and grid profiles.
 - Docker, for the container profiles.
 
-## Install
+## Install from a release
+
+Each [release](https://github.com/eunmann/mro2nf/releases) has one archive per
+platform, `mro2nf-<tag>-<os>-<arch>.tar.gz` for `linux` and `darwin` on
+`amd64` and `arm64`, and a `SHA256SUMS` file covering them. Download the
+archive for your platform and `SHA256SUMS`, verify the archive, extract it
+and put its directory on `PATH`:
+
+```bash
+tag=v1.2.3 platform=linux-amd64       # the release and your <os>-<arch>
+base=https://github.com/eunmann/mro2nf/releases/download/$tag
+curl -fL -O "$base/mro2nf-$tag-$platform.tar.gz" -O "$base/SHA256SUMS"
+grep " mro2nf-$tag-$platform.tar.gz\$" SHA256SUMS | sha256sum -c   # macOS: shasum -a 256 -c
+tar -xzf "mro2nf-$tag-$platform.tar.gz"
+export PATH="$PWD/mro2nf-$tag-$platform:$PATH"
+mro2nf -version
+```
+
+The archive's directory holds `mro2nf`, `mre`, `mrjob`, `LICENSE` and
+`THIRD_PARTY_NOTICES`. Keep `mre` and `mrjob` in the same directory if you
+move them: `mre` runs the `mrjob` beside it.
+
+The release's runtime image is `ghcr.io/eunmann/mro2nf-runtime:<tag>`, with
+the same tag. The image you run under the `docker`, `awsbatch` and
+`healthomics` profiles builds `FROM` it ([Container image](#container-image)).
+
+## Build from source
 
 ```bash
 git clone https://github.com/eunmann/mro2nf
@@ -40,7 +67,8 @@ mro2nf -version
 
 ## First run
 
-From the clone, transpile the `testdata/split_test` fixture and run it with
+From a clone of this repository, transpile the `testdata/split_test` fixture
+and run it with
 the array input `values = [5, 6, 7]`:
 
 ```bash
@@ -109,9 +137,9 @@ image, which you name with `--mro2nf_image`. Build it `FROM` the mro2nf runtime
 image, which has `mre`, `mrjob` and the Martian adapters at `/opt/mro2nf` on
 its `PATH`, and add your pipeline's code.
 
-The runtime image is `ghcr.io/eunmann/mro2nf-runtime:<version>`, where
-`<version>` is the release tag of the mro2nf that transpiled the project (what
-`mro2nf -version` prints for a release build). For a build of an unreleased
+The runtime image is `ghcr.io/eunmann/mro2nf-runtime:<tag>`, where `<tag>` is
+the release tag of the mro2nf that transpiled the project (what `mro2nf
+-version` prints for a release build). For a build of an unreleased
 commit, build the runtime image from the same checkout:
 
 ```bash
