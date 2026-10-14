@@ -18,6 +18,7 @@ import (
 // none.
 func TestGPURequestFollowsSpecial(t *testing.T) {
 	requireTools(t, "nextflow", "java")
+	shardSkip(t)
 
 	proj := transpile(t, "gpu_stage")
 

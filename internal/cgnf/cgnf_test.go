@@ -267,8 +267,9 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"[k, m.chunks, [o, recs]] }.groupBy().map { k, os -> [k, os.sort(false) { a, b -> a[0].name <=> b[0].name }] }",
-		".collect { e -> [ku, e] }] }).groupBy().map { c, dss ->\n        [c, ordered(dss.collectMany { x -> x })]",
+		"groupTuple(remainder: true).map { gk, os -> [gk.getGroupTarget(), chunkOuts(gk, os)] }",
+		"return os.sort(false) { a, b -> a[0].name <=> b[0].name }",
+		".collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->\n        [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]",
 		"outs.flatMap { k, ds -> selected(ds, fields).collect { e -> [[node] + k, e] } }",
 	} {
 		if !strings.Contains(stageModule, want) {
@@ -981,7 +982,7 @@ func TestEmitKeysReadsWhereTheirRootsChange(t *testing.T) {
 	for name, want := range map[string]string{
 		"ENABLED": "run = b.run.map { v -> [v[1][at]] + v.subList(1, 5) + [[]] }",
 		"REKEY":   "out = inst.map { v -> [v[1][next]] + v.subList(1, 5) + [readItems(v, fields)] }",
-		"GATHER":  "seeds = run.map { v -> [v[1][mine], []] }.unique()",
+		"GATHER":  "seeds = run.map { v -> [v[1][mine], null] }.unique()",
 		"INPUT":   "out = inst.map { v -> inputOf(v, fields, [], []) }",
 	} {
 		if !strings.Contains(mains[name], want) {

@@ -754,9 +754,9 @@ workflow GATHER {
     fields
 
     main:
-    seeds = run.map { v -> [v[1][mine], []] }.unique()
-    out = seeds.mix(outs.map { ku, ds -> [ku[theirs], selected(ds, fields).collect { e -> [ku, e] }] }).groupBy().map { c, dss ->
-        [c, ordered(dss.collectMany { x -> x })]
+    seeds = run.map { v -> [v[1][mine], null] }.unique()
+    out = seeds.mix(outs.map { ku, ds -> [ku[theirs], selected(ds, fields).collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->
+        [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]
     }
 
     emit:
@@ -903,20 +903,32 @@ workflow CHUNKS {
     out
 }
 
-// JOIN is a split's join over every chunk's outs once all are in, by chunk
-// name, not by completion, scheduled with the resources the split gave it,
-// and staging the split's inputs and the files its chunks' defs and outs
-// name by reference. Chunk outs that number other than the split's chunks
-// fail the run, as a group short of its count would never reach the join.
+// chunkOuts is the chunk outs os of the split gk keys, by chunk name, not
+// by completion. groupTuple emits a split's chunk outs once they number its
+// chunks, and, when every chunk is done, any group that does not; such a
+// group fails the run here, where the join would otherwise run short or
+// never. Chunk outs that number a multiple of the chunks come as full
+// groups, which JOIN's join fails as duplicates. groupBy checks the count
+// itself, but in time quadratic in it.
+def chunkOuts(gk, List os) {
+    if (os.size() != gk.getGroupSize()) {
+        error("split ${gk.getGroupTarget()} has ${gk.getGroupSize()} chunks, but its chunk outs came in a group of ${os.size()}")
+    }
+    return os.sort(false) { a, b -> a[0].name <=> b[0].name }
+}
+
+// JOIN is a split's join over every chunk's outs once all are in, scheduled
+// with the resources the split gave it, and staging the split's inputs and
+// the files its chunks' defs and outs name by reference.
 workflow JOIN {
     take:
     splits
     chunk
 
     main:
-    outs = chunk.map { m, k, o, recs -> [k, m.chunks, [o, recs]] }.groupBy().map { k, os -> [k, os.sort(false) { a, b -> a[0].name <=> b[0].name }] }
+    outs = chunk.map { m, k, o, recs -> [groupKey(k, m.chunks), [o, recs]] }.groupTuple(remainder: true).map { gk, os -> [gk.getGroupTarget(), chunkOuts(gk, os)] }
     none = splits.filter { v -> v[2].isEmpty() }.map { v -> [v[0], []] }
-    out = splits.join(outs.mix(none)).map { k, m, cs, j, res, t, _d, fs, vs, us, rs, ids, ef, _cf, os ->
+    out = splits.join(outs.mix(none), failOnDuplicate: true).map { k, m, cs, j, res, t, _d, fs, vs, us, rs, ids, ef, _cf, os ->
         [m + resources(res).join, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]
     }
 
