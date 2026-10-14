@@ -82,6 +82,15 @@
       "outcome": {"failed": false}
     },
     {
+      "id": "keyword-input",
+      "kind": "outcome",
+      "feature": "an entry input named with a Groovy or Nextflow keyword",
+      "summary": "mrp runs a pipeline whose entry input is named `def`, `new`, `class` or another Groovy or Nextflow keyword; mro2nf refuses the transpile, naming the input and the word, and writes no project.",
+      "justification": "Every entry input is a launch param, which main.nf's params block declares by name, and Nextflow's v2 script grammar accepts no such name there, quoted or not: `paramDeclaration` takes an `identifier`, which excludes the words its lexer reads as keywords, such as `def` and `new`, and `checkInvalidVarName` refuses the Groovy keywords it does lex as names, such as `class` (nf-lang `ScriptParser.g4`, `ScriptLexer.g4`, `ScriptAstBuilder.java`, v26.04.0 to v26.04.7). Renaming the param would change the name a launch sets it by.",
+      "evidence": ["TestMrpDiffFailureParity/keyword_input", "TestEmitRefusesKeywordInput", "TestNextflowKeyword", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true}
+    },
+    {
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",

@@ -127,7 +127,12 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   number `7` ([`TRANSPILER.md`](TRANSPILER.md) §8).
 
 An entry input named `job_resources` or `mro2nf_*` fails the
-transpile, because the project defines those parameters itself.
+transpile, because the project defines those parameters itself. So does an
+input named with a Groovy or Nextflow keyword, such as `def`, `new` or
+`class`, which `mrp` runs: Nextflow's `params` block refuses the name, quoted
+or not (the divergence `keyword-input`). An input whose name starts with `_`
+is set on the command line as `--_name=value`, because Nextflow reads only
+a name starting with a letter or digit in `--name value`.
 
 ### Parameter schema
 

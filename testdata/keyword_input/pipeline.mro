@@ -1,0 +1,27 @@
+# #585: an entry input named `def`, a Groovy keyword. mrp runs it; Nextflow's
+# params block refuses the name, quoted or not, so mro2nf refuses the
+# transpile naming the input (TestMrpDiffFailureParity, divergence
+# keyword-input).
+stage INC(
+    in  int x,
+    out int y,
+    src py  "stages/inc",
+)
+
+pipeline KW(
+    in  int def,
+    out int y,
+)
+{
+    call INC(
+        x = self.def,
+    )
+
+    return (
+        y = INC.y,
+    )
+}
+
+call KW(
+    def = 1,
+)

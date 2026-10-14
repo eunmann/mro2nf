@@ -956,7 +956,12 @@ You can override inputs **at launch** without re-transpiling:
   before the script sees them: `--b True` becomes `true`, and `--s 007`
   becomes the integer `7`, which no later step can recover.
 - An entry input named `job_resources` or `mro2nf_*` collides with
-  a param the project defines itself and fails the transpile.
+  a param the project defines itself and fails the transpile. So does one
+  named with a word the params block cannot declare (`nextflowKeyword`,
+  `internal/cgnf/keywords.go`): Nextflow's `paramDeclaration` takes an
+  `identifier`, which excludes the words its lexer reads as keywords, quoted
+  or not, and its parser refuses the Groovy keywords it reads as names
+  (the divergence `keyword-input`).
 - `mre plan` validates every entry value against its Martian type; the
   params block checks only that no undeclared param is set and that a
   `string` input's value is one. `nextflow_schema.json`

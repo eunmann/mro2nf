@@ -32,6 +32,7 @@ const (
 
 var (
 	errReservedParam   = errors.New("entry input name is reserved by the generated project")
+	errKeywordParam    = errors.New("a Groovy or Nextflow keyword, which Nextflow's params block refuses as a param name")
 	errUndeclaredInput = errors.New("the call binds an input the pipeline does not declare")
 	errNotStage        = errors.New("not a stage")
 )
@@ -177,9 +178,12 @@ func newProject(src cg.Source, opts Options) (*project, error) {
 		return nil, fmt.Errorf("emit: %w", err)
 	}
 
-	for id := range src.Invocation.Args {
-		if reserved(id) {
+	for _, id := range slices.Sorted(maps.Keys(src.Invocation.Args)) {
+		switch {
+		case reserved(id):
 			return nil, fmt.Errorf("emit: %w: %s", errReservedParam, id)
+		case nextflowKeyword(id):
+			return nil, fmt.Errorf("emit: entry input %s: %q is %w", id, id, errKeywordParam)
 		}
 	}
 
