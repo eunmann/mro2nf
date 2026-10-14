@@ -283,10 +283,10 @@ func renderOverrideParams(t *testing.T, fixtureDir, proj string) {
 // as the boolean false rather than the truthy string "false". A float or
 // bool value that is not a literal of its declared type must fail the run at
 // PLAN, before any stage runs, naming the input and its type: mre plan
-// validates the launch values the params block leaves untyped, as
-// nextflow_schema.json validates nothing at launch. An int input is the
-// params block's Integer, so Nextflow refuses a value spelling no integer at
-// launch, naming the input.
+// validates the launch values the params block leaves untyped, an int's
+// included, as nextflow_schema.json validates nothing at launch. A params
+// file's whole-number float for an int input runs as that int, as `mrp`
+// takes the literal 5.0 for an int, where Nextflow's Integer refuses it.
 func TestCLITypedOverrides(t *testing.T) {
 	t.Parallel()
 
@@ -300,9 +300,12 @@ func TestCLITypedOverrides(t *testing.T) {
 	runs := []struct {
 		name string
 		args []string
+		// whole is a params file written for the run, empty for none.
+		whole string
 	}{
 		{name: "cli", args: []string{"--n", "5", "--f", "2.5", "--g", "1e6", "--b", "false"}},
 		{name: "params_file", args: []string{"-params-file", "params.json"}},
+		{name: "params_file_whole_int", args: []string{"-params-file", "whole.json"}, whole: `{"n": 5.0, "f": 2.5, "g": 1e6, "b": false}`},
 	}
 
 	for _, rc := range runs {
@@ -311,6 +314,10 @@ func TestCLITypedOverrides(t *testing.T) {
 
 			proj := transpile(t, fixture)
 			renderOverrideParams(t, fixtureDir, proj)
+
+			if rc.whole != "" {
+				writeFileT(t, filepath.Join(proj, "whole.json"), rc.whole)
+			}
 
 			if err := runNextflow(t, proj, rc.args...); err != nil {
 				t.Fatal(err)
@@ -321,6 +328,7 @@ func TestCLITypedOverrides(t *testing.T) {
 	}
 
 	for _, bad := range []struct{ param, typ, value string }{
+		{"n", "int", "x"},
 		{"f", "float", "2.5x"},
 		{"b", "bool", "True"},
 	} {
@@ -331,12 +339,6 @@ func TestCLITypedOverrides(t *testing.T) {
 				fmt.Sprintf("entry input %q declared %s, got %q", bad.param, bad.typ, bad.value))
 		})
 	}
-
-	t.Run("invalid_int", func(t *testing.T) {
-		t.Parallel()
-
-		assertLaunchRefuses(t, transpile(t, fixture), []string{"--n", "x"}, "Parameter `n` with type Integer cannot be assigned to x [String]")
-	})
 }
 
 // TestUndeclaredParamFailsAtLaunch (#357): a launch setting a param the
@@ -391,9 +393,8 @@ func assertLaunchRefuses(t *testing.T, proj string, args []string, want string) 
 // TestOutOfRangeLaunchValues (#567): a launch value outside Martian's number
 // range fails the run at PLAN naming the input, as mrp's parser refuses the
 // literal. A YAML params file keeps an int beyond int64 exact, and a JSON
-// one a float beyond float64. Nextflow types a command-line int as the
-// params block's Integer, an integer beyond int64 included, which PLAN
-// refuses.
+// one a float beyond float64. The command line passes the int as a String,
+// which the int input refuses.
 func TestOutOfRangeLaunchValues(t *testing.T) {
 	t.Parallel()
 
@@ -419,7 +420,7 @@ func TestOutOfRangeLaunchValues(t *testing.T) {
 		},
 		{
 			name: "cli_int", args: []string{"--n", "9223372036854775808"},
-			wants: []string{`entry input "n": number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32: 9223372036854775808`},
+			wants: []string{`entry input "n" declared int, got "9223372036854775808"`, "binding parameter n to value 9.223372036854776e+18"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

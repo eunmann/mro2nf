@@ -908,23 +908,22 @@ You can override inputs **at launch** without re-transpiling:
   `conf/base.config`), so Nextflow fails a launch that sets an undeclared
   one, a misspelt input, where it would otherwise ignore it. Config-set
   params stay declared, as `conf/base.config` and the profiles set only
-  those. The block types an `int` input as `Integer?` and a `string` input
-  as `String?`, and leaves every other input `Object?` (`entryType`): on
-  26.04 a `Float` narrows a CLI value to 32 bits (`3.14159265358979` becomes
-  `3.1415927`), an unset `Boolean`, even one declared `= null`, becomes
+  those. The block types a `string` input as `String?` and leaves every
+  other input `Object?` (`entryType`): on 26.04 an `Integer` refuses a
+  params file's whole-number float (`{"n": 2.0}`), which Martian assigns to
+  an `int` (`syntax/builtin_types.go`), a `Float` narrows a CLI value to 32
+  bits (`3.14159265358979` becomes `3.1415927`), an unset `Boolean`, even
+  one declared `= null`, becomes
   `false`, overriding the `.mro`'s value, a `Path` checks an `s3://` value
   exists on the head node and changes its type, and a `List` or `Map`
   checks only its shape. A split input, whose value is `{"split": v}`, is
   untyped too. The project's params are typed by kind (`String`, `Boolean`,
   `Map`) with their `conf/base.config` value as the default, which that
   config's value overrides.
-- Nextflow converts a command-line value of an `Integer` param with Java's
-  integer parsing, refusing one that spells no integer at launch, and
-  passes an integer beyond int64 on, for `mre plan` to refuse; it also
-  reads a leading `+`, surrounding spaces and non-ASCII digits as an
-  integer. Every other command-line `--<name> <value>` reaches `mre plan` as
-  a string, so a scalar `float` or `bool` input is parsed strictly into its
-  declared type (a JSON number; exactly `true`/`false`). A value that does
+- A command-line `--<name> <value>` of an entry input other than a `string`
+  reaches `mre plan` as a string, so a scalar `int`, `float` or `bool` input
+  is parsed strictly into its declared type (a base-10 int64; a JSON number;
+  exactly `true`/`false`). A value that does
   not parse, or a string for an array, map or struct input, fails the run;
   set those with `-params-file`.
 - An input the top-level `map call` binds with `split` takes Martian's
@@ -960,8 +959,8 @@ You can override inputs **at launch** without re-transpiling:
 - An entry input named `outdir`, `job_resources` or `mro2nf_*` collides with
   a param the project defines itself and fails the transpile.
 - `mre plan` validates every entry value against its Martian type; the
-  params block checks only that no undeclared param is set and that an
-  `int` or `string` input's value is one. `nextflow_schema.json`
+  params block checks only that no undeclared param is set and that a
+  `string` input's value is one. `nextflow_schema.json`
   (`internal/cgnf/schema.go`) describes every param for launch forms and
   documentation, each entry input by the JSON Schema of its Martian type
   (`types.Table.Schema`) with the call's value as its default, a split input

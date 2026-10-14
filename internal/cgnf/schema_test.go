@@ -177,8 +177,9 @@ func TestEmitParamsSchema(t *testing.T) {
 
 // TestEmitDeclaresEveryLaunchParam (#357): main.nf's params block declares
 // exactly the params conf/base.config sets, so Nextflow fails a launch
-// setting another; it types an int entry input as an Integer and a string
-// one as a String, every other entry input as none, and each project param
+// setting another; it types a string entry input as a String, every other
+// entry input as none, an int's included, as Nextflow's Integer refuses a
+// whole-number float Martian takes as an int, and each project param
 // by its kind with its conf/base.config value as the default, so a boolean
 // is a Boolean wherever a script reads it.
 func TestEmitDeclaresEveryLaunchParam(t *testing.T) {
@@ -195,8 +196,8 @@ func TestEmitDeclaresEveryLaunchParam(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"n": "Integer?", "s": "String?",
-		"f": "Object?", "b": "Object?", "r": "Object?", "d": "Object?", "xs": "Object?", "m": "Object?", "tm": "Object?", "cfg": "Object?",
+		"s": "String?",
+		"n": "Object?", "f": "Object?", "b": "Object?", "r": "Object?", "d": "Object?", "xs": "Object?", "m": "Object?", "tm": "Object?", "cfg": "Object?",
 		"outdir": "String = 'results'", "job_resources": "Map = [:]",
 		"mro2nf_mre": "String = 'mre'", "mro2nf_mrjob": "String?", "mro2nf_adapters": "String?", "mro2nf_psid": "String = 'P'",
 		"mro2nf_monitor": "Boolean = false", "mro2nf_confine": "Boolean = false",

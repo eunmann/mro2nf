@@ -79,7 +79,6 @@ type paramBlock struct {
 const (
 	nfString  = "String"
 	nfBoolean = "Boolean"
-	nfInteger = "Integer"
 	nfMap     = "Map"
 )
 
@@ -271,28 +270,19 @@ func (p *project) entryInput(m *syntax.StructMember, tbl *types.Table) (launchPa
 	return lp, nil
 }
 
-// entryType is the Nextflow type of an entry input of Martian type t: an
-// int's, which Nextflow converts a launch value to, refusing one that spells
-// no integer at launch, or a string's, and none for any other. An integer
-// beyond int64 passes, for mre plan to refuse. On 26.04 a Float narrows a
-// command-line value to 32 bits, an unset Boolean becomes false where the
-// run would take the .mro's value, a Path checks an s3:// value exists on
-// the head node and changes the value's type, and a List or a Map checks
-// only its shape; mre plan types those (typeOverrides).
+// entryType is the Nextflow type of an entry input of Martian type t: a
+// string's, and none for any other, which mre plan types (typeOverrides).
+// On 26.04 an Integer refuses a params file's whole-number float, which
+// Martian takes as an int, a Float narrows a command-line value to 32 bits,
+// an unset Boolean becomes false where the run would take the .mro's value,
+// a Path checks an s3:// value exists on the head node and changes the
+// value's type, and a List or a Map checks only its shape.
 func entryType(t syntax.Type) string {
-	b, ok := t.(*syntax.BuiltinType)
-	if !ok {
-		return ""
+	if b, ok := t.(*syntax.BuiltinType); ok && b.Id == syntax.KindString {
+		return nfString
 	}
 
-	switch b.Id {
-	case syntax.KindInt:
-		return nfInteger
-	case syntax.KindString:
-		return nfString
-	default:
-		return ""
-	}
+	return ""
 }
 
 // declaration is lp's entry in main.nf's params block: its type with its
