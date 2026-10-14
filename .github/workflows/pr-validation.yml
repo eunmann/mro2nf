@@ -244,13 +244,15 @@ jobs:
   # (#48): a Groovy syntax error or warning in rarely-run wiring fails here with
   # file/line, before the slower golden runs can miss it. setup-nextflow installs
   # latest (>= 26.04), which the target asserts. Lints every fixture's project
-  # once (#295); budgeted with headroom over observed wall time.
+  # once (#295). Its limit is setup and make lint-nf's 25-minute go-test
+  # timeout, with headroom, so a stuck lint fails with go test's panic
+  # rather than a runner kill.
   lint-nf:
     name: Lint generated Nextflow
     needs: changes
     if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.code == 'false') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       E2E_REQUIRE: "1" # missing prereqs must fail CI, not skip it
     steps:
