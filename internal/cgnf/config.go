@@ -115,7 +115,7 @@ profiles {
 
     // AWS Batch over an S3 work dir (-work-dir s3://<bucket>/work): set
     // process.queue and aws.region in a -c config, push the image to ECR
-    // and name it with --mro2nf_image; --outdir s3://<bucket>/<prefix>
+    // and name it with --mro2nf_image; -output-dir s3://<bucket>/<prefix>
     // publishes to S3. The submission and transfer limits keep a wide fan-out
     // from throttling the Batch and S3 APIs and re-run a Spot reclaim. The
     // deploy/awsbatch-cdk instances mount the input buckets at /mnt/s3; a
@@ -167,7 +167,7 @@ const healthomicsConfig = `// The healthomics profile (nextflow.config), the wor
 includeConfig 'container.config'
 
 params.mro2nf_host_inputs = false
-params.outdir = '/mnt/workflow/pubdir'
+outputDir = '/mnt/workflow/pubdir'
 
 // HealthOmics gives a task whole GiB, rounding a fractional request down, and
 // refuses one under 1 GiB; rounding up keeps every task at or above mrp's

@@ -30,9 +30,9 @@ Designed to cost **≈ $0 while idle** and only a few cents per test run:
   newest pipeline images, so pipeline pushes never expire the runtime image.
   Final
   outputs are kept until you delete them or run `cdk destroy`: `results/` (the
-  Batch `--outdir` below) and
-  `omics-out/` (the HealthOmics `--output-uri`: each run's `pubdir/` outputs
-  and logs). Idle storage is a few hundred MB (the image) plus your outputs.
+  Batch `-output-dir` below) and
+  `omics-out/` (the HealthOmics `--output-uri`: each run's outputs below
+  `<run-id>/`, and its logs). Idle storage is a few hundred MB (the image) plus your outputs.
 - **HealthOmics** has no idle cost — you're billed per run (omics instance-hours
   + run storage) only while a run executes. Keep the default **DYNAMIC** run
   storage; do **not** request STATIC (it provisions ≥1,200 GiB of Lustre and is
@@ -126,10 +126,10 @@ EOF
 nextflow run main.nf -profile awsbatch -c batch.config \
     --mro2nf_image <EcrRepoUri>:split_test \
     -work-dir s3://<WorkBucketName>/work \
-    --outdir s3://<WorkBucketName>/results
+    -output-dir s3://<WorkBucketName>/results
 ```
 
-Keep `--outdir` on S3: the default `results` publishes to the head node's
+Keep `-output-dir` on S3: the default `results` publishes to the head node's
 working dir, and the work dir expires after 14 days. Pass entry files as
 `s3://` URIs (a `-params-file` or `--<input>`); the `awsbatch` profile refuses
 a head-node path. The profile reads an input of a mounted bucket in place

@@ -18,10 +18,13 @@ import (
 // PLAN reads in place depends on the buckets its instance mounts, which no
 // input of PLAN holds, so a -resume re-runs it; a task downstream stays
 // cached while PLAN's records are unchanged. The run's work dir is an input
-// string, not workflow.workDir in the script: Nextflow's v1 parser keys a
-// task on each global its script reads, and keys a Path on its modification
-// time, which each run's new task dirs change, so PLAN would never resume.
-// The launch params it reads are its meta's (planRun), for the same reason.
+// string, not workflow.workDir in the script: on Nextflow's v2 parser a
+// global a script reads is no part of the task's -resume key, so a run
+// under another work dir would reuse a PLAN that checked the entry values
+// against the old one. The unsupported v1 parser would key it on the Path's
+// modification time, which each run's new task dirs change, so PLAN would
+// never resume. The launch params it reads are its meta's (planRun), as no
+// 26.04 release keys a param read by a function its script calls (gen.go).
 const planProcess = `process PLAN {
     cache !params.mro2nf_s3_mount
 
@@ -78,6 +81,31 @@ func (p *project) publications() map[int]string {
 
 	return pubs
 }
+
+// publication ends the entry workflow with its outputs, OUTS's outs JSON
+// and each entry of its outs tree, and declares how they are published
+// below Nextflow's outputDir: each at its own name, as copies, so an
+// object-store or HealthOmics output dir holds the files themselves. A -preview run publishes nothing: it runs no task,
+// and Nextflow 26.04 to 26.10 then waits forever on an enabled output's
+// channel.
+const publication = `
+    publish:
+    pipeline_outs = OUTS.out.json
+    results = OUTS.out.results.flatMap { fs -> fs }
+}
+
+output {
+    pipeline_outs {
+        enabled !workflow.preview
+        mode 'copy'
+    }
+    results {
+        enabled !workflow.preview
+        mode 'copy'
+        path { f -> f >> f.name }
+    }
+}
+`
 
 // outs runs OUTS over every outs item the pipeline outs read, which the
 // entry workflow's published channel mixes, ordered by node and instance

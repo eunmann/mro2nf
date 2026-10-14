@@ -52,7 +52,7 @@ up in them; it computes no Martian value and parses no stage-controlled JSON.
 | Caching | Nextflow `-resume` | §5, **Cache identity** |
 | Retries | Nextflow `errorStrategy` on the exit `mre` chooses | `conf/base.config`; `internal/job/retry.go` |
 | Resources | Nextflow `cpus`, `memory`, `accelerator`, `clusterOptions`; `mre` resolves the values as `mrp` | §9; `internal/job/resources.go` |
-| Publishing | Nextflow `publishDir` of OUTS; `mre outs` builds the tree | §5, **OUTS** |
+| Publishing | Nextflow workflow outputs (`publish:`, `output {}`) of OUTS's outputs; `mre outs` builds the tree | §5, **OUTS** |
 | Targets, launch params | Nextflow profiles and `params` | §4, §8, §9 |
 | Binding, projection, struct narrowing | `mre`, through Martian's functions | `internal/cg/resolve.go` |
 | Types, file leaves | `mre` | `internal/types`, `internal/shim` (§7) |
@@ -218,7 +218,8 @@ one forked on a map call another stage feeds — is refused at transpile time.
 ## 4. The generated project
 
 ```
-main.nf               ← PLAN, the nodes or the calls of their runs, then OUTS
+main.nf               ← the params block (§8), PLAN, the nodes or the calls of
+                        their runs, then OUTS and the workflow outputs
 subworkflows/         ← a workflow per run of nodes (W<j>.nf), only in a project too large for one
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← the engine floor, conf/base.config, the target profiles
@@ -286,9 +287,8 @@ includes `conf/base.config`, the settings every target shares, and defines
 the target profiles (§9), whose settings override the shared ones.
 **`conf/base.config`** holds:
 
-- `params.outdir` (`results`), and `params.job_resources`, Martian's
-  `MRO_JOBRESOURCES` analog: a map from a stage's `special` key to the
-  `clusterOptions` of a grid executor.
+- `params.job_resources`, Martian's `MRO_JOBRESOURCES` analog: a map from
+  a stage's `special` key to the `clusterOptions` of a grid executor.
 - `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
   `mro2nf_monitor` and `mro2nf_confine`: the tools and knobs the stage module
   reads, PLAN refusing a psid `mrp` refuses (letters, digits, `-` and `_`
@@ -301,8 +301,9 @@ the target profiles (§9), whose settings override the shared ones.
   memory and thread limits. `--mro2nf_confine true` fails a stage task whose
   output resolves outside its work dir instead of copying it in (§7) on the
   local and grid profiles too; the container profiles always confine. A
-  boolean param is on only when it is `true` or the string `'true'`, as a
-  launch's `--<name> <value>` sets it (§8).
+  boolean param is a `Boolean` of `main.nf`'s params block (§8), which
+  Nextflow converts a launch's `--<name> true|false` to and refuses any
+  other value as, so a script reads it as the boolean it is.
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
   values a run reads (§8), `mro2nf_host_in_place`, which the container
   profiles turn off (`conf/container.config`), whether every task reads a
@@ -375,10 +376,13 @@ mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
 node's digest and resources (in `meta`), the run's call, the mro2nf
 build, and its fork records, value records and staged dirs, and the launch
 params its script reads, which its `meta` carries as its `run` entry:
-Nextflow 25.10 and 26.04 key no task on a param read by a function its
-script calls, as the stage module's are, and the v2 parser of
-26.04.0–26.04.1 on none its script reads (nextflow-io/nextflow#7156), so no
-script reads `params` (`TestScriptsReadParamsFromMeta`). A changed
+Nextflow 26.04 keys no task on a param read by a function its script
+calls, as the stage module's are, and 26.04.0–26.04.1 on none its script
+reads (nextflow-io/nextflow#7156), so a changed param would silently reuse
+a stale task, and no script reads `params`
+(`TestScriptsReadParamsFromMeta`). Nor does a process read a global such as
+`workflow.workDir` or `projectDir`, which no task's key holds on the v2
+parser (`TestProcessesReadNoPathGlobal`). A changed
 `--mro2nf_psid` re-runs every task, and a changed `--mro2nf_monitor` every
 stage task and OUTS (`TestResumeKeysOnTheParamsATaskReads`). No task
 stages a file of PLAN's: the digests reach it as values, which Nextflow
@@ -548,9 +552,18 @@ collection is quadratic in its lines.
 the files they name by reference, gets each bundle's location, and each
 referenced file's bundle's, as a value (`toUriString()`, a path or an
 `s3://` URI) and the outputs they read that reach it as values, and
-publishes them with `mre outs` through `mrp`'s own post-processing: the
-`outs/` tree and `pipeline_outs.json`, which `publishDir` copies into
-`params.outdir`.
+lays them out with `mre outs` through `mrp`'s own post-processing: the
+`outs/` tree and `pipeline_outs.json`, which it emits apart (`json`,
+`results`). The entry workflow publishes both as its workflow outputs:
+`pipeline_outs.json`, and each entry of the tree at its own name
+(`f >> f.name`), copied into Nextflow's `outputDir`: `results` in the
+launch dir by default, `-output-dir` or a config's `outputDir` elsewhere,
+the HealthOmics pubdir under that profile (§9). No param names it. A copy,
+not Nextflow's default symlink, so an object-store or HealthOmics output
+dir holds the files themselves, dotfiles and empty dirs included, and a symlink's target
+content in its place. A `-preview` run publishes nothing (`enabled
+!workflow.preview`): it runs no task, and Nextflow 26.04 to 26.10 then
+waits forever on an enabled output's channel.
 
 **Order.** Each staged list, and each list of value records, is in an order
 the run fixes, a gather's and OUTS's by instance key, then output, and a
@@ -889,11 +902,29 @@ You can override inputs **at launch** without re-transpiling:
   overlays them on the invocation data and recompiles the call, so a launch
   value can change the run's forks, gates and pruned calls as an invocation
   literal would under `mrp`.
-- A command-line `--<name> <value>` reaches `mre plan` as a string, so a scalar
-  `int`, `float` or `bool` input is parsed strictly into its declared type (a
-  base-10 int64; a JSON number; exactly `true`/`false`). A value that does not
-  parse, or a string for an array, map or struct input, fails the run; set those
-  with `-params-file`.
+- `main.nf`'s `params` block declares every launch param, the entry inputs
+  and the project's own (`paramsBlock`, from the same model as
+  `conf/base.config`), so Nextflow fails a launch that sets an undeclared
+  one, a misspelt input, where it would otherwise ignore it. Config-set
+  params stay declared, as `conf/base.config` and the profiles set only
+  those. The block types a `string` input as `String?` and leaves every
+  other input `Object?` (`entryType`): on 26.04 an `Integer` refuses a
+  params file's whole-number float (`{"n": 2.0}`), which Martian assigns to
+  an `int` (`syntax/builtin_types.go`), a `Float` narrows a CLI value to 32
+  bits (`3.14159265358979` becomes `3.1415927`), an unset `Boolean`, even
+  one declared `= null`, becomes
+  `false`, overriding the `.mro`'s value, a `Path` checks an `s3://` value
+  exists on the head node and changes its type, and a `List` or `Map`
+  checks only its shape. A split input, whose value is `{"split": v}`, is
+  untyped too. The project's params are typed by kind (`String`, `Boolean`,
+  `Map`) with their `conf/base.config` value as the default, which that
+  config's value overrides.
+- A command-line `--<name> <value>` of an entry input other than a `string`
+  reaches `mre plan` as a string, so a scalar `int`, `float` or `bool` input
+  is parsed strictly into its declared type (a base-10 int64; a JSON number;
+  exactly `true`/`false`). A value that does
+  not parse, or a string for an array, map or struct input, fails the run;
+  set those with `-params-file`.
 - An input the top-level `map call` binds with `split` takes Martian's
   invocation form of a split, `{"split": v}` with `v` an array or a map
   (`core/runtime.go` `convertToExp`), as `-params-file` takes Martian's
@@ -924,9 +955,11 @@ You can override inputs **at launch** without re-transpiling:
   supports. The v1 parser (`NXF_SYNTAX_PARSER=v1`) converts CLI values
   before the script sees them: `--b True` becomes `true`, and `--s 007`
   becomes the integer `7`, which no later step can recover.
-- An entry input named `outdir`, `job_resources` or `mro2nf_*` collides with
+- An entry input named `job_resources` or `mro2nf_*` collides with
   a param the project defines itself and fails the transpile.
-- `mre plan` is the one validator of the launch values. `nextflow_schema.json`
+- `mre plan` validates every entry value against its Martian type; the
+  params block checks only that no undeclared param is set and that a
+  `string` input's value is one. `nextflow_schema.json`
   (`internal/cgnf/schema.go`) describes every param for launch forms and
   documentation, each entry input by the JSON Schema of its Martian type
   (`types.Table.Schema`) with the call's value as its default, a split input
@@ -936,11 +969,7 @@ You can override inputs **at launch** without re-transpiling:
   HealthOmics `parameter-template.json` (`internal/cgnf/params.go`). No
   nf-schema plugin validates against it: a plugin is downloaded at launch,
   which an offline grid or container host cannot do, and HealthOmics installs
-  only the versions it pins. Nextflow's typed `params {}` block does not
-  type the entry inputs as Martian does: on 26.04 a `Float` narrows a CLI
-  value to 32 bits (`3.14159265358979` becomes `3.1415927`), and an unset
-  `Boolean`, even one declared `= null`, becomes `false`, overriding the
-  `.mro`'s value.
+  only the versions it pins.
 
 **File-typed inputs.** Every file value of the run's entry inputs that is an
 absolute path is read in place by every task on the local and grid profiles
@@ -1083,11 +1112,16 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   bind-mounts read-only into every container (`aws.batch.volumes`), where the
   compute environment's instances mount the file's bucket (§8,
   `deploy/awsbatch-cdk`), and stages it otherwise. Set `process.queue` and
-  `aws.region` in a `-c` config; `--outdir s3://…` publishes to S3.
+  `aws.region` in a `-c` config; `-output-dir s3://…` publishes to S3.
 - `healthomics`: `./package.sh <image>@sha256:…` zips the files `main.nf`
   reads with a `nextflow.config` of its own: the engine floor,
   `conf/base.config`, the image and `conf/healthomics.config`, so the
-  profile is the workflow's own, and publishes to `/mnt/workflow/pubdir`.
+  profile is the workflow's own, and sets `outputDir` to
+  `/mnt/workflow/pubdir`, the dir HealthOmics exports. It exports the
+  workflow outputs to the root of the run's folder under `--output-uri`
+  (`<output-uri>/<run-id>/pipeline_outs.json`, `<output-uri>/<run-id>/d/f0.txt`),
+  where the earlier `publishDir` outputs landed below
+  `<output-uri>/<run-id>/pubdir/`.
   That config defines no profiles: HealthOmics applies `standard`, if the
   workflow defines it, to a run that names no profile, and `standard` is
   the local target, whose `process.resourceLimits` would clamp every task

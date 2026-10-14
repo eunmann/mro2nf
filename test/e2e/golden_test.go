@@ -276,14 +276,17 @@ func renderOverrideParams(t *testing.T, fixtureDir, proj string) {
 }
 
 // TestCLITypedOverrides checks that scalar entry inputs set on the Nextflow
-// command line reach the stage typed as declared. Nextflow passes every --param
-// as a String, and the stage reports each value's Python repr and type, so the
-// CLI run matches the -params-file run and the mrp golden (the override values
-// as invocation literals) only if mre plan typed `--b false` as the boolean
-// false rather than the truthy string "false". A value that is not a literal of
-// its declared type must fail the run at PLAN, before any stage runs, naming
-// the input and its type: mre plan is the launch params' validator, as
-// nextflow_schema.json validates nothing at launch.
+// command line reach the stage typed as declared. Nextflow passes an untyped
+// --param as a String, and the stage reports each value's Python repr and
+// type, so the CLI run matches the -params-file run and the mrp golden (the
+// override values as invocation literals) only if mre plan typed `--b false`
+// as the boolean false rather than the truthy string "false". A float or
+// bool value that is not a literal of its declared type must fail the run at
+// PLAN, before any stage runs, naming the input and its type: mre plan
+// validates the launch values the params block leaves untyped, an int's
+// included, as nextflow_schema.json validates nothing at launch. A params
+// file's whole-number float for an int input runs as that int, as `mrp`
+// takes the literal 5.0 for an int, where Nextflow's Integer refuses it.
 func TestCLITypedOverrides(t *testing.T) {
 	t.Parallel()
 
@@ -297,9 +300,12 @@ func TestCLITypedOverrides(t *testing.T) {
 	runs := []struct {
 		name string
 		args []string
+		// whole is a params file written for the run, empty for none.
+		whole string
 	}{
 		{name: "cli", args: []string{"--n", "5", "--f", "2.5", "--g", "1e6", "--b", "false"}},
 		{name: "params_file", args: []string{"-params-file", "params.json"}},
+		{name: "params_file_whole_int", args: []string{"-params-file", "whole.json"}, whole: `{"n": 5.0, "f": 2.5, "g": 1e6, "b": false}`},
 	}
 
 	for _, rc := range runs {
@@ -308,6 +314,10 @@ func TestCLITypedOverrides(t *testing.T) {
 
 			proj := transpile(t, fixture)
 			renderOverrideParams(t, fixtureDir, proj)
+
+			if rc.whole != "" {
+				writeFileT(t, filepath.Join(proj, "whole.json"), rc.whole)
+			}
 
 			if err := runNextflow(t, proj, rc.args...); err != nil {
 				t.Fatal(err)
@@ -328,6 +338,91 @@ func TestCLITypedOverrides(t *testing.T) {
 			assertPlanRefuses(t, transpile(t, fixture), []string{"--" + bad.param, bad.value},
 				fmt.Sprintf("entry input %q declared %s, got %q", bad.param, bad.typ, bad.value))
 		})
+	}
+}
+
+// TestUndeclaredParamFailsAtLaunch (#357): a launch setting a param the
+// project does not declare, on the command line or in a params file, such
+// as a misspelt input, fails before any task, naming the param, where
+// Nextflow would otherwise ignore it and run the .mro's value.
+func TestUndeclaredParamFailsAtLaunch(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	const want = "Parameter `fatcor` was specified on the command line or params file but is not declared in the script or config"
+
+	t.Run("cli", func(t *testing.T) {
+		t.Parallel()
+
+		assertLaunchRefuses(t, transpile(t, "cli_typed"), []string{"--fatcor", "3"}, want)
+	})
+
+	t.Run("params_file", func(t *testing.T) {
+		t.Parallel()
+
+		proj := transpile(t, "cli_typed")
+		writeFileT(t, filepath.Join(proj, "params.json"), `{"n": 5, "fatcor": 3}`)
+		assertLaunchRefuses(t, proj, []string{"-params-file", "params.json"}, want)
+	})
+}
+
+// TestOutputDirFromConfig: a -c config's outputDir is where the run
+// publishes, as Nextflow's own setting, unless -output-dir names another
+// dir; nothing of the project's keeps the outputs in the default results/.
+func TestOutputDirFromConfig(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java")
+
+	for _, tc := range []struct {
+		name, published string
+		args            []string
+	}{
+		{name: "config", published: "elsewhere"},
+		{name: "cli_wins", published: "cli", args: []string{"-output-dir", "cli"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			proj := transpile(t, "cli_typed")
+			writeFileT(t, filepath.Join(proj, "site.config"), "outputDir = 'elsewhere'\n")
+
+			if err := runNextflow(t, proj, append([]string{"-c", "site.config"}, tc.args...)...); err != nil {
+				t.Fatal(err)
+			}
+
+			goldenJSON(t, "cli_typed", filepath.Join(proj, tc.published, "pipeline_outs.json"), filepath.Join(root, "testdata", "cli_typed", "expected", "outs.json"))
+
+			for _, other := range []string{"results", "elsewhere", "cli"} {
+				if other != tc.published && fileExists(filepath.Join(proj, other)) {
+					t.Errorf("the run published to %s/ too", other)
+				}
+			}
+		})
+	}
+}
+
+// assertLaunchRefuses runs proj with args, which Nextflow must refuse
+// before any task starts, with a run log holding want.
+func assertLaunchRefuses(t *testing.T, proj string, args []string, want string) {
+	t.Helper()
+
+	if err := runNextflowAllowingFailedAttempts(t, proj, args...); err == nil {
+		t.Fatalf("the run with %v must fail at launch", args)
+	}
+
+	runLog, err := os.ReadFile(filepath.Join(proj, "run.log"))
+	if err != nil {
+		t.Fatalf("read run.log: %v", err)
+	}
+
+	if !strings.Contains(string(runLog), want) {
+		t.Errorf("run log lacks %q:\n%s", want, runLog)
+	}
+
+	if strings.Contains(string(runLog), "PLAN") {
+		t.Errorf("PLAN started:\n%s", runLog)
 	}
 }
 

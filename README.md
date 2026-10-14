@@ -64,7 +64,8 @@ results. The output is:
 Each entry input of the pipeline is a run parameter. Without one, the run uses
 the value in the `.mro`'s `call`. A scalar can be passed on the command line
 (`--n 5`). An array, map or struct must be passed as typed JSON in a
-`-params-file`. Give file inputs as absolute paths.
+`-params-file`. Give file inputs as absolute paths. A parameter the project
+does not declare, such as a misspelt input, fails the launch.
 
 The generated project refers to the entry `.mro`, its includes and its stage
 code by the absolute paths they had at transpile time. Don't move or delete
@@ -73,8 +74,9 @@ them; if you do, transpile again.
 ## Outputs
 
 - `results/` holds the published outputs: `mrp`'s `outs/` tree and
-  `pipeline_outs.json`. `--outdir <dir>` publishes them elsewhere, including
-  to an `s3://` prefix.
+  `pipeline_outs.json`. Nextflow's `-output-dir <dir>`, or `outputDir =
+  '<dir>'` in a `-c` config, publishes them elsewhere, including to an
+  `s3://` prefix.
 - `work/` holds one directory per task, with the stage's metadata and logs.
 - `.nextflow/`, `.nextflow.log` and `trace-<timestamp>.txt` are Nextflow's
   run state, log and task trace, written to the launch directory.

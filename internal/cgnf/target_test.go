@@ -52,10 +52,10 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 		}
 	}
 
-	checkContains(t, tree, "conf/healthomics.config", "includeConfig 'container.config'\n", "params.mro2nf_host_inputs = false\n", "params.outdir = '/mnt/workflow/pubdir'\n")
+	checkContains(t, tree, "conf/healthomics.config", "includeConfig 'container.config'\n", "params.mro2nf_host_inputs = false\n", "outputDir = '/mnt/workflow/pubdir'\n")
 
 	main := tree["main.nf"]
-	if !strings.Contains(main, "if (on(params.mro2nf_require_image) && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
+	if !strings.Contains(main, "if (params.mro2nf_require_image && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
 		t.Errorf("main.nf does not refuse a container profile without an image before PLAN:\n%s", main)
 	}
 
@@ -171,7 +171,7 @@ func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 	}
 
 	for _, run := range []string{planRun, stageRun} {
-		if !strings.Contains(run, "host_in_place: on(params.mro2nf_host_in_place)") {
+		if !strings.Contains(run, "host_in_place: params.mro2nf_host_in_place,") {
 			t.Errorf("%s does not carry params.mro2nf_host_in_place", run)
 		}
 	}
@@ -181,11 +181,13 @@ func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 	}
 }
 
-// TestProcessesReadNoPathGlobal: on Nextflow's v1 parser, the 25.10 floor's
-// default, a task's cache key holds every global its process reads, and a
-// Path global is keyed on its modification time, which each run changes
-// for the work dir and may for the others, so a process reading one
-// re-runs under -resume. Each process takes such a path as an input value.
+// TestProcessesReadNoPathGlobal: on Nextflow's v2 parser, the 26.04 floor's
+// default, a task's -resume key holds no global its process reads, so a
+// changed value, such as another run's work dir, would silently reuse a
+// stale task. Each process takes such a path as an input value. The v1
+// parser, an opt-in the project does not support, keys every global and a
+// Path global on its modification time, which each run changes for the
+// work dir, so a process reading one would never resume.
 func TestProcessesReadNoPathGlobal(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
 
@@ -210,13 +212,14 @@ var (
 	// character and no quote, which opens a message naming a param.
 	paramRead = regexp.MustCompile(`(^|[^'\w])params\.`)
 	runRead   = regexp.MustCompile(`\brun\.(\w+)`)
-	runKey    = regexp.MustCompile(`(\w+): (?:on\()?params\.`)
+	runKey    = regexp.MustCompile(`(\w+): params\.`)
 )
 
 // TestScriptsReadParamsFromMeta (#576): a task's -resume key holds its
-// inputs, but Nextflow 25.10 and 26.04 key it on no param read by a
-// function its script calls, and the v2 parser of 26.04.0-26.04.1 on none
-// its script reads (nextflow-io/nextflow#7156). So no process script reads params.,
+// inputs, but Nextflow 26.04 keys it on no param read by a function its
+// script calls, and 26.04.0-26.04.1 on none its script reads
+// (nextflow-io/nextflow#7156), so a changed param would silently reuse a
+// stale task. So no process script reads params.,
 // nor any function of the stage module, which the scripts call: each reads
 // the run entry of its meta, which main.nf builds from the params, PLAN's
 // from planRun and every other task's from stageRun, and which carries

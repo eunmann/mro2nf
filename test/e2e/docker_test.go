@@ -472,7 +472,8 @@ func requireAmazonPlugin(t *testing.T) {
 // TestGeneratedAWSBatchProfile validates the awsbatch profile without a
 // live account: a run of it with only the executor swapped for local
 // docker, in the one image built FROM the runtime image, so the profile's
-// tools, image and staging policy are the ones under test.
+// tools, image and staging policy are the ones under test. It publishes
+// where -output-dir names, as a run names its S3 prefix.
 func TestGeneratedAWSBatchProfile(t *testing.T) {
 	t.Parallel()
 
@@ -481,27 +482,26 @@ func TestGeneratedAWSBatchProfile(t *testing.T) {
 
 	proj := transpile(t, "diamond_min")
 	image := pipelineImage(t, filepath.Join(root, "testdata", "diamond_min"), "awsbatch_diamond_min")
+	published := filepath.Join(proj, "published")
 
-	if err := runAWSBatchLocally(t, proj, image, nil); err != nil {
+	if err := runAWSBatchLocally(t, proj, image, nil, "-output-dir", published); err != nil {
 		t.Fatalf("nextflow (awsbatch profile, local docker): %v", err)
 	}
 
-	goldenJSON(t, "diamond_min", filepath.Join(proj, "results", "pipeline_outs.json"),
+	goldenJSON(t, "diamond_min", filepath.Join(published, "pipeline_outs.json"),
 		filepath.Join(root, "testdata", "diamond_min", "expected", "outs.json"))
 }
 
 // runAWSBatchLocally runs proj under its awsbatch profile with only the
 // executor swapped for local docker, every container run with the docker
-// options dockerOpts besides the user mapping, in image, publishing to
-// proj/results.
+// options dockerOpts besides the user mapping, in image.
 func runAWSBatchLocally(t *testing.T, proj, image string, dockerOpts []string, args ...string) error {
 	t.Helper()
 
 	writeFileT(t, filepath.Join(proj, "local.config"), "process.executor = 'local'\ndocker.enabled = true\n"+localDockerConfig(dockerOpts...))
 
 	return runNextflow(t, proj, append([]string{
-		"-profile", "awsbatch", "-c", "local.config",
-		"--mro2nf_image", image, "--outdir", filepath.Join(proj, "results"),
+		"-profile", "awsbatch", "-c", "local.config", "--mro2nf_image", image,
 	}, args...)...)
 }
 
@@ -593,7 +593,7 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 
 	for _, want := range []string{
 		"process.container = '" + image + "'",
-		"params.outdir = '/mnt/workflow/pubdir'",
+		"outputDir = '/mnt/workflow/pubdir'",
 		"params.mro2nf_require_image = true",
 		"params.mro2nf_host_inputs = false",
 		"params.mro2nf_local_jobs = false",

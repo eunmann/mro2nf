@@ -43,9 +43,10 @@ type paramSchema struct {
 
 // paramsSchema is nextflow_schema.json, which describes every launch param
 // for documentation and launch forms. It validates nothing at launch: the
-// nf-schema plugin that would must be downloaded, and PLAN's mre plan
-// already fails a run on an entry value that is no value of its declared
-// type, on every profile.
+// nf-schema plugin that would must be downloaded, main.nf's params block
+// already fails a launch setting an undeclared param or an ill-typed value
+// of a typed one, and PLAN's mre plan fails a run on any other entry value
+// that is no value of its declared type, on every profile.
 func (p *project) paramsSchema() (string, error) {
 	call := p.src.Invocation.Call
 	doc := schemaDoc{

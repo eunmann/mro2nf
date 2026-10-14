@@ -42,13 +42,6 @@ import (
 	"github.com/eunmann/mro2nf/test/wide"
 )
 
-// minNextflowMajor/Minor is the engine floor, the first release whose
-// `nextflow lint` takes -project-dir.
-const (
-	minNextflowMajor = 26
-	minNextflowMinor = 4
-)
-
 // lintBatchSize bounds how many projects one `nextflow lint` invocation
 // covers, keeping the argument list and the JVM's parse workload bounded as
 // the fixture matrix grows. One JVM handled the full ~370-project set
@@ -531,36 +524,53 @@ func lintFixtures(t *testing.T) []string {
 	return fixtures
 }
 
-// requireNextflowLint asserts the installed Nextflow is new enough to have the
-// `lint` subcommand. A too-old install FAILS loudly rather than silently
-// skipping, so a stale local Nextflow cannot make the gate a no-op.
+// requireNextflowLint asserts the installed Nextflow is at least the engine
+// floor the generated nextflow.config declares, which is also the first
+// release whose `nextflow lint` takes -project-dir. A too-old install FAILS
+// loudly rather than silently skipping, so a stale local Nextflow cannot
+// make the gate a no-op, and a floor bump in the emitter raises it.
 func requireNextflowLint(t *testing.T) {
 	t.Helper()
+
+	cfg, err := os.ReadFile(filepath.Join(transpile(t, "file_min"), "nextflow.config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	floor := manifestFloor.FindSubmatch(cfg)
+	if floor == nil {
+		t.Fatalf("generated nextflow.config declares no manifest.nextflowVersion floor:\n%s", cfg)
+	}
 
 	out, err := exec.Command("nextflow", "-version").CombinedOutput()
 	if err != nil {
 		t.Fatalf("nextflow -version: %v\n%s", err, out)
 	}
 
-	major, minor := parseNextflowVersion(t, string(out))
-	if major < minNextflowMajor || (major == minNextflowMajor && minor < minNextflowMinor) {
-		t.Fatalf("nextflow %d.%02d is too old for `nextflow lint`; need >= %d.%02d",
-			major, minor, minNextflowMajor, minNextflowMinor)
-	}
-}
-
-// parseNextflowVersion extracts the major and minor version from `nextflow
-// -version` output (a line like "      version 26.04.4 build 12445").
-func parseNextflowVersion(t *testing.T, out string) (int, int) {
-	t.Helper()
-
-	m := regexp.MustCompile(`version\s+(\d+)\.(\d+)`).FindStringSubmatch(out)
+	m := regexp.MustCompile(`version\s+([0-9.]+)`).FindSubmatch(out)
 	if m == nil {
 		t.Fatalf("could not parse nextflow version from:\n%s", out)
 	}
 
-	major, _ := strconv.Atoi(m[1])
-	minor, _ := strconv.Atoi(m[2]) // "04" parses to 4
+	if slices.Compare(versionParts(t, string(m[1])), versionParts(t, string(floor[1]))) < 0 {
+		t.Fatalf("nextflow %s is older than the engine floor %s", m[1], floor[1])
+	}
+}
 
-	return major, minor
+// versionParts is a dotted release number's parts, "26.04.7" as [26 4 7].
+func versionParts(t *testing.T, v string) []int {
+	t.Helper()
+
+	var parts []int
+
+	for f := range strings.SplitSeq(v, ".") {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			t.Fatalf("release %q: %v", v, err)
+		}
+
+		parts = append(parts, n)
+	}
+
+	return parts
 }

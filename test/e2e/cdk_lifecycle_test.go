@@ -16,7 +16,7 @@ import (
 var expiringPrefix = regexp.MustCompile(`\{\s*prefix:\s*'([^']*)',\s*expiration:`)
 
 // TestCDKExpiresOnlyWorkDir guards #258: the example stack's bucket also holds
-// the final outputs (results/ for awsbatch --aws_outdir, omics-out/ for the
+// the final outputs (results/ for awsbatch -output-dir, omics-out/ for the
 // HealthOmics --output-uri the runbooks pass), so only the intermediate
 // Nextflow work dir may expire.
 func TestCDKExpiresOnlyWorkDir(t *testing.T) {

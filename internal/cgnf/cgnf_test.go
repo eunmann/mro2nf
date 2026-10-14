@@ -180,7 +180,7 @@ func TestEmitConfinesAtLaunch(t *testing.T) {
 		t.Errorf("conf/base.config does not leave confinement off:\n%s", cfg)
 	}
 
-	if !strings.Contains(stageModule, "if (run.confine) {\n        cmd += ' -confine'") || !strings.Contains(stageRun, "confine: on(params.mro2nf_confine)") {
+	if !strings.Contains(stageModule, "if (run.confine) {\n        cmd += ' -confine'") || !strings.Contains(stageRun, "confine: params.mro2nf_confine,") {
 		t.Error("stage.nf does not confine on params.mro2nf_confine")
 	}
 }
@@ -328,7 +328,8 @@ const postedOutput = "tuple val(key), path('outs/*', type: 'dir', arity: '0..*')
 // zip_runtime: TWO's forks; split_gate_entry: SRC's gates;
 // preflight_order: TOP_CHECK's DONE).
 func TestEmitPostsOneOutput(t *testing.T) {
-	if n := strings.Count(stageModule, "emit: "); n != 4 {
+	stages, _, _ := strings.Cut(stageModule, "\nprocess OUTS {")
+	if n := strings.Count(stages, "emit: "); n != 4 {
 		t.Errorf("stage.nf's processes declare %d outputs, want one of each of STAGE, STAGE_SPLIT, STAGE_MAIN and STAGE_JOIN", n)
 	}
 
@@ -400,6 +401,41 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
+		}
+	}
+}
+
+// TestEmitPublishesThroughWorkflowOutputs (#580): OUTS publishes nothing
+// itself; the entry workflow publishes its outs JSON and each entry of its
+// outs tree at its own name, as copies, below Nextflow's outputDir, which
+// only the healthomics profile sets, to the HealthOmics pubdir; no param
+// names it. A -preview run, which runs no task, publishes nothing, as an
+// enabled output would hang it (TestLaunchEdges).
+func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "dir_out"))
+
+	checkContains(t, tree, "main.nf",
+		"workflow {\n    main:\n    if (",
+		"\n    publish:\n    pipeline_outs = OUTS.out.json\n    results = OUTS.out.results.flatMap { fs -> fs }\n}\n",
+		"\noutput {\n    pipeline_outs {\n        enabled !workflow.preview\n        mode 'copy'\n    }\n"+
+			"    results {\n        enabled !workflow.preview\n        mode 'copy'\n        path { f -> f >> f.name }\n    }\n}\n",
+	)
+	checkContains(t, tree, "stage.nf",
+		"    path 'pipeline_outs.json', emit: json\n    path 'results/*', hidden: true, arity: '0..*', emit: results\n",
+	)
+	checkContains(t, tree, "conf/healthomics.config", "\noutputDir = '/mnt/workflow/pubdir'\n")
+
+	if strings.Contains(stageModule, "publishDir") {
+		t.Error("stage.nf publishes through publishDir")
+	}
+
+	for name, src := range tree {
+		if name != "conf/healthomics.config" && strings.Contains(src, "outputDir =") {
+			t.Errorf("%s sets outputDir:\n%s", name, src)
+		}
+
+		if strings.Contains(src, "outdir") {
+			t.Errorf("%s names an outdir param:\n%s", name, src)
 		}
 	}
 }
@@ -672,7 +708,7 @@ func TestEmitDeclaresTheEngineFloor(t *testing.T) {
 // TestEmitRefusesReservedParam: an entry input named like a param the
 // project defines itself, or might, under the mro2nf_ prefix, is refused.
 func TestEmitRefusesReservedParam(t *testing.T) {
-	for _, name := range []string{"outdir", "mro2nf_image"} {
+	for _, name := range []string{"job_resources", "mro2nf_image"} {
 		dir := t.TempDir()
 		mro := filepath.Join(dir, "pipeline.mro")
 		src := "stage S(\n    in  int " + name + ",\n    out int y,\n    src py \"s\",\n)\n\ncall S(\n    " + name + " = 1,\n)\n"

@@ -44,7 +44,11 @@ The project holds:
 | `_assets/` | a copy of the `.mro` files, read by PLAN and OUTS |
 
 A run writes `work/`, `results/`, `.nextflow/`, `.nextflow.log` and
-`trace-<timestamp>.txt` into the launch directory.
+`trace-<timestamp>.txt` into the launch directory. `results/` is Nextflow's
+default output directory, where the run publishes `pipeline_outs.json` and
+`mrp`'s `outs/` tree. To publish elsewhere, a directory or an `s3://`
+prefix, pass Nextflow's `-output-dir <dir>`, or set `outputDir = '<dir>'`
+in a `-c` config; `-output-dir` wins over the config.
 
 ## Launch parameters
 
@@ -56,9 +60,15 @@ compiles the call with the launch values, so a launch value changes forks,
 disabled calls and chunk counts as the same value in the `.mro` would under
 `mrp`.
 
+- A parameter the project does not declare, an input's misspelt name
+  (`--fatcor 3`) or a key of a params file, fails the launch before any task
+  starts: ``Parameter `fatcor` was specified on the command line or params
+  file but is not declared in the script or config``.
 - A scalar `int`, `float` or `bool` can be passed on the command line
   (`--n 5 --scale 2.5 --skip false`). The value must parse as the declared
-  type, or the run fails.
+  type, or the run's PLAN task fails, naming the input and its type. A
+  params file's whole-number float for an `int` input (`{"n": 5.0}`) runs
+  as the int, as `mrp` takes the literal `5.0`.
 - An int beyond int64 in a JSON `-params-file` reaches the run wrapped into
   int64: `{"n": 9223372036854775808}` runs as `-9223372036854775808`, where
   `mrp` refuses the literal. Nextflow's JSON reader wraps it before the run
@@ -116,7 +126,7 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   project requires; under `NXF_SYNTAX_PARSER=v1`, `--s 007` becomes the
   number `7` ([`TRANSPILER.md`](TRANSPILER.md) §8).
 
-An entry input named `outdir`, `job_resources` or `mro2nf_*` fails the
+An entry input named `job_resources` or `mro2nf_*` fails the
 transpile, because the project defines those parameters itself.
 
 ### Parameter schema
@@ -137,27 +147,31 @@ in the `.mro`'s `call`:
 | a `struct` | `object` with a property per member |
 | `T`, split by the top-level `map call` | `object` with a required `split`: an `array` of `T` or an `object` of `T`, as [Pipeline inputs](#pipeline-inputs) gives it |
 
-The `mro2nf_*` parameters form the `mro2nf options` group, and `outdir` the
-`Output options` group; `job_resources`, a map, sits at the top level, as
-nf-schema's meta-schema admits only scalar types in a group. Those a profile
-sets are marked `hidden` and given no default, as the profile picks their
-value.
+The `mro2nf_*` parameters form the `mro2nf options` group; `job_resources`,
+a map, sits at the top level, as nf-schema's meta-schema admits only scalar
+types in a group. Those a profile sets are marked `hidden` and given no
+default, as the profile picks their value.
 
 The schema validates nothing at launch: the project loads no nf-schema
-plugin, which a run would have to download. The run's PLAN task, its first,
-checks every pipeline input against its declared type on every profile, and
-fails the run before any stage starts, naming the input, its type and the
-value (`entry input "n" declared int, got "x"`). Nextflow's typed `params`
-block would check them at launch instead, but its types are not Martian's:
-on 26.04 a `Float` narrows a command-line value to 32 bits
-(`3.14159265358979` becomes `3.1415927`), and an unset `Boolean` becomes
-`false` even with a `null` default, where the run takes the `.mro`'s value.
+plugin, which a run would have to download. `main.nf`'s `params` block
+declares every parameter, so a launch setting another fails, and types the
+`string` inputs and the `mro2nf_*` parameters, whose values Nextflow checks
+at launch. The run's PLAN task, its first, checks every
+pipeline input against its declared type on every profile, and fails the
+run before any stage starts, naming the input, its type and the value
+(`entry input "f" declared float, got "2.5x"`). The block leaves the other
+inputs untyped (`Object?`), as Nextflow's types are not Martian's: on 26.04
+an `Integer` refuses a params file's whole-number float (`{"n": 2.0}`),
+which `mrp` takes as the int `2`, a `Float` narrows a command-line value to
+32 bits (`3.14159265358979`
+becomes `3.1415927`), an unset `Boolean` becomes `false` even with a `null`
+default, where the run takes the `.mro`'s value, and a `Path` checks that an
+`s3://` input exists on the launch host.
 
 ### mro2nf parameters
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `--outdir <dir>` | `results` | where the outputs are published: a directory or an `s3://` prefix |
 | `--mro2nf_overrides <file>` | none | `mrp`'s `--overrides` file (see [Resources](#resources)) |
 | `--mro2nf_monitor true` | `false` | `mrp`'s `--monitor`: `mrjob` kills a job that exceeds its memory request |
 | `--mro2nf_confine true` | `false` | fails a stage task whose output resolves outside its work directory, instead of copying the file in; the container profiles always do this |
@@ -171,6 +185,11 @@ on 26.04 a `Float` narrows a command-line value to 32 bits
 
 `--mro2nf_mre`, `--mro2nf_mrjob` and `--mro2nf_adapters` let the stages run
 under another Martian runtime, such as the one bundled with a pipeline.
+
+A boolean parameter is a `Boolean` of the `params` block: on the command
+line it takes `true` or `false`, in any case, and alone (`--mro2nf_monitor`)
+it is `true`. Nextflow refuses any other value at launch, a quoted `'true'`
+in a `-c` config included.
 
 `params.job_resources`, set in a `-c` config, maps a stage's `special` value
 to the `clusterOptions` of its tasks on a grid executor, like `mrp`'s
@@ -344,10 +363,10 @@ aws.region = '<region>'
 nextflow run main.nf -profile awsbatch -c batch.config \
     --mro2nf_image <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag> \
     -work-dir s3://<bucket>/work \
-    --outdir s3://<bucket>/results
+    -output-dir s3://<bucket>/results
 ```
 
-Keep `--outdir` on S3: the default `results` publishes to the launch host.
+Keep `-output-dir` on S3: the default `results` publishes to the launch host.
 The profile limits job submission and S3 transfers so a wide fan-out does not
 throttle the AWS APIs, and retries a task whose Spot instance is reclaimed.
 It checks job status every 2 s (`executor.$awsbatch.pollInterval`), where
@@ -420,9 +439,16 @@ so it cannot change the image or the inputs it may stage. `nextflow_schema.json`
 stays out of the zip: HealthOmics would read the parameters it declares from
 it. A directory input is
 an `s3://` prefix ending in `/` (`s3://<bucket>/fastqs/`): `start-run` checks
-each URI and refuses a prefix without the slash with `S3 object not found`. Outputs are
-published to `/mnt/workflow/pubdir`, which HealthOmics exports to the run's
-output URI.
+each URI and refuses a prefix without the slash with `S3 object not found`.
+
+`conf/healthomics.config` sets `outputDir = '/mnt/workflow/pubdir'`, the
+directory HealthOmics exports. The run's workflow outputs land at the root
+of the run's folder under the output URI:
+`<output-uri>/<run-id>/pipeline_outs.json`, and each entry of `mrp`'s
+`outs/` tree at its own path below it, such as
+`<output-uri>/<run-id>/d/f0.txt`. There is no `pubdir/` level: the
+`publishDir` publishing of earlier mro2nf versions landed below
+`<output-uri>/<run-id>/pubdir/`.
 
 ## Paths written into text
 
@@ -564,7 +590,7 @@ HealthOmics takes no `-c`.
 | `--auto-adjust-memory` | not supported; [Retries](#retries) shows a `-c` config that raises memory on each retry |
 | `--profile=MODE` | no stage profiling; the trace file the project enables records each task's `realtime`, `%cpu`, `peak_rss`, `peak_vmem`, `rchar` and `wchar`, and `-with-report` adds a report |
 | `--onfinish=EXEC` | `-c`: a `workflow.onComplete` handler (below) |
-| `--psdir=PATH` | the launch directory, `-work-dir` and `--outdir` |
+| `--psdir=PATH` | the launch directory, `-work-dir` and `-output-dir` |
 | `--never-local` | the default: mro2nf schedules `local` stages like any other |
 | `--vdrmode=MODE` | none: mro2nf deletes no intermediate file during a run; `nextflow clean` removes work directories afterwards |
 | `--nopreflight` | none: preflight stages always run; to skip one, remove its call from the `.mro` and transpile again |
@@ -577,11 +603,11 @@ HealthOmics takes no `-c`.
 
 `mrp` runs the `--onfinish` program with the pipestance path, `complete` or
 `failed`, the pipestance ID, and the error file. A `-c` handler can pass the
-output directory, the outcome and the ID:
+output directory the run published to, the outcome and the ID:
 
 ```groovy
 workflow.onComplete = {
-    ['/path/to/hook', params.outdir, workflow.success ? 'complete' : 'failed', params.mro2nf_psid].execute().waitFor()
+    ['/path/to/hook', workflow.outputDir.toUriString(), workflow.success ? 'complete' : 'failed', params.mro2nf_psid].execute().waitFor()
 }
 ```
 

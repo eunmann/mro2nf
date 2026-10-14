@@ -113,8 +113,8 @@ export class Mro2nfStack extends cdk.Stack {
       autoDeleteObjects: true,
       // Cost guards: expire the intermediate Nextflow work dir and orphaned
       // multipart-upload parts. Final outputs never expire: results/ (the
-      // awsbatch --outdir) and omics-out/ (the HealthOmics --output-uri,
-      // which receives each run's pubdir/ outputs and logs).
+      // awsbatch -output-dir) and omics-out/ (the HealthOmics --output-uri,
+      // which receives each run's outputs below <run-id>/, and its logs).
       lifecycleRules: [
         { prefix: 'work/', expiration: cdk.Duration.days(14) },
         { abortIncompleteMultipartUploadAfter: cdk.Duration.days(3) },
