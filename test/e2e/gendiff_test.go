@@ -594,7 +594,7 @@ func evalGenFixture(t *testing.T, env genEnv, dir, work string) (genVerdict, err
 	ctx, cancel := context.WithTimeout(t.Context(), env.mrpTimeout)
 	defer cancel()
 
-	mrp, err := mrpOutcome(ctx, env.martian, dir, work)
+	mrp, err := mrpOutcome(ctx, env.martian, dir, "pipeline.mro", work)
 
 	switch {
 	case errors.Is(err, errMrpUnfinished) && t.Context().Err() == nil:
@@ -1012,7 +1012,7 @@ func writeGenFixture(t *testing.T, env genEnv, p *gen.Program, v genVerdict) (st
 	ctx, cancel := context.WithTimeout(t.Context(), env.mrpTimeout)
 	defer cancel()
 
-	mrp, err := mrpOutcome(ctx, env.martian, dir, tmp)
+	mrp, err := mrpOutcome(ctx, env.martian, dir, "pipeline.mro", tmp)
 	if err != nil {
 		return "", err
 	}

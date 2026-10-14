@@ -73,6 +73,15 @@
       "outcome": {"failed": true, "failures": [{"kind": "error", "stage": "READ_WITH_INDEX"}]}
     },
     {
+      "id": "params-json-int-wrap",
+      "kind": "outcome",
+      "feature": "an int beyond int64 in a JSON `-params-file`",
+      "summary": "mrp refuses an int literal outside int64 before it makes a pipestance. Given in a JSON `-params-file`, such an int reaches mro2nf's run wrapped into int64, `9223372036854775808` as `-9223372036854775808`, and the run succeeds with that value.",
+      "justification": "Nextflow wraps the int before any mro2nf code sees it: it reads a JSON params file with Groovy's `JsonSlurper` (`CmdRun.groovy` `readJsonFile`, v25.10.0:799-802, v26.04.7:839-842), whose `CharScanner.parseLongFromTo` has no overflow check. A YAML params file, a command-line value and an `.mro` literal keep the int, and the run refuses it naming the input (`RUNNING.md`, Pipeline inputs).",
+      "evidence": ["TestMrpDiffFailureParity/params_json_int_wrap", "TestOutOfRangeLaunchValues/yaml_int", "TestOutOfRangeLaunchValues/cli_int", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": false}
+    },
+    {
       "id": "local-modifier-ignored",
       "kind": "mechanism",
       "feature": "`(local)`",

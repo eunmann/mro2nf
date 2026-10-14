@@ -674,6 +674,10 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// it; mro2nf stages only the files the producer's outs name, so the
 	// stage fails.
 	{name: "output_file_sibling", mrp: runOutcome{}, divergence: "input-file-siblings"},
+	// An int beyond int64 in a JSON params file. mrp refuses the literal
+	// before it makes a pipestance; Nextflow wraps the JSON int into int64,
+	// and the run succeeds.
+	{name: "params_json_int_wrap", mrp: runOutcome{Failed: true}, divergence: "params-json-int-wrap", params: "params.json", mro: "override_overflow.mro"},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -885,8 +889,8 @@ func TestMrpDiffFailureParity(t *testing.T) {
 			}
 
 			tmp := t.TempDir()
-			mrpFlags, nfFlags := overridesFlags(filepath.Join(root, "testdata", tc.name), tc.overrides)
-			mrp := mrpRunOutcome(t, bin, tc.name, tmp, mrpFlags...)
+			mrpFlags, nfFlags := tc.flags(filepath.Join(root, "testdata", tc.name))
+			mrp := mrpRunOutcome(t, bin, tc.name, tc.invocation(), tmp, mrpFlags...)
 			nf, attempts, nfLog := nfRunOutcome(t, tc.name, nfFlags...)
 
 			reports := append(tc.check(d, mrp, nf), outcomeRuleReports(allow, tc.name, attempts)...)
@@ -901,13 +905,33 @@ func TestMrpDiffFailureParity(t *testing.T) {
 	}
 }
 
-// mrpRunOutcome runs a fixture under mrp in tmp, with extra flags, and
-// classifies the run. Only mrp's non-zero exit counts as a failed run; mrp
-// failing to start fails the test.
-func mrpRunOutcome(t *testing.T, bin, fixture, tmp string, extra ...string) runOutcome {
+// invocation is the .mro in the case's fixture dir mrp runs.
+func (c mrpOutcomeCase) invocation() string {
+	if c.mro == "" {
+		return "pipeline.mro"
+	}
+
+	return c.mro
+}
+
+// flags are the launch flags of mrp's and the Nextflow run of the case's
+// fixture in dir.
+func (c mrpOutcomeCase) flags(dir string) ([]string, []string) {
+	mrpFlags, nfFlags := overridesFlags(dir, c.overrides)
+	if c.params != "" {
+		nfFlags = append(nfFlags, "-params-file", filepath.Join(dir, c.params))
+	}
+
+	return mrpFlags, nfFlags
+}
+
+// mrpRunOutcome runs the invocation mro of a fixture under mrp in tmp, with
+// extra flags, and classifies the run. Only mrp's non-zero exit counts as a
+// failed run; mrp failing to start fails the test.
+func mrpRunOutcome(t *testing.T, bin, fixture, mro, tmp string, extra ...string) runOutcome {
 	t.Helper()
 
-	o, err := mrpOutcome(t.Context(), bin, filepath.Join(root, "testdata", fixture), tmp, extra...)
+	o, err := mrpOutcome(t.Context(), bin, filepath.Join(root, "testdata", fixture), mro, tmp, extra...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -941,10 +965,10 @@ func nfRunOutcome(t *testing.T, fixture string, extra ...string) (runOutcome, []
 	return failedWith(nil), nil, err.Error()
 }
 
-// mrpOutcome runs dir's pipeline.mro under mrp in tmp, with extra flags, and
-// classifies the run.
-func mrpOutcome(ctx context.Context, bin, dir, tmp string, extra ...string) (runOutcome, error) {
-	_, err := execMrp(ctx, bin, dir, "pipeline.mro", tmp, extra...)
+// mrpOutcome runs the invocation mro in dir under mrp in tmp, with extra
+// flags, and classifies the run.
+func mrpOutcome(ctx context.Context, bin, dir, mro, tmp string, extra ...string) (runOutcome, error) {
+	_, err := execMrp(ctx, bin, dir, mro, tmp, extra...)
 	if err == nil {
 		return runOutcome{}, nil
 	}

@@ -1,0 +1,19 @@
+stage ECHO(
+    in  int n,
+    out int m,
+    src py  "stages/echo",
+)
+
+pipeline JW(
+    in  int n,
+    out int m,
+)
+{
+    call ECHO(
+        n = self.n,
+    )
+
+    return (
+        m = ECHO.m,
+    )
+}

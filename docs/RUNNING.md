@@ -59,6 +59,13 @@ disabled calls and chunk counts as the same value in the `.mro` would under
 - A scalar `int`, `float` or `bool` can be passed on the command line
   (`--n 5 --scale 2.5 --skip false`). The value must parse as the declared
   type, or the run fails.
+- An int beyond int64 in a JSON `-params-file` reaches the run wrapped into
+  int64: `{"n": 9223372036854775808}` runs as `-9223372036854775808`, where
+  `mrp` refuses the literal. Nextflow's JSON reader wraps it before the run
+  sees it. A YAML params file, a command-line value and an `.mro` literal
+  are refused with an error naming the input. Use a YAML params file, or
+  keep values in range (the divergence `params-json-int-wrap` in
+  `FEATURE_COVERAGE.md`).
 - An array, map or struct must be passed as typed JSON in a `-params-file`
   (`{"values": [5, 6, 7]}`). On the command line it fails with `entry override
   of a non-scalar type cannot be a string; pass the value as typed JSON in a
