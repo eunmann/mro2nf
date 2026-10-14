@@ -136,7 +136,9 @@ field holds a single line: leave it empty and edit the release's text once it
 is published.
 
 The workflow first requires the commit to be a PR's merge whose tree matches
-that PR's head, and that head to have a green PR Validation run. It then
+that PR's head, and that head to have a green PR Validation run, and refuses
+to run from any branch but `main`, since a dispatch runs the `release.yml` of
+the branch it names (`--ref`, by default `main`). It then
 cross-compiles `mro2nf`, `mre` and `mrjob` for Linux and macOS (amd64,
 arm64), packs one archive per platform, and builds the runtime image for
 linux/amd64 and linux/arm64 without pushing it. Only once every build
@@ -170,8 +172,10 @@ To check the pipeline without releasing, for example after an action bump on
 a branch, add `-f dry_run=true`; `--ref` runs that branch's `release.yml`:
 
 ```bash
-gh workflow run release.yml --ref <branch> -f version=v0.6.0 -f ref=<branch> -f dry_run=true
+gh workflow run release.yml --ref <branch> -f version=v0.0.0-dryrun -f ref=<branch> -f dry_run=true
 ```
 
-A dry run validates the inputs and builds the archives and the runtime image,
-but skips the PR Validation requirement and tags and publishes nothing.
+A dry run validates the inputs, the version's tag included, so it needs a
+version never released, and builds the archives and the runtime image, but
+skips the PR Validation and `main` requirements and tags and publishes
+nothing.

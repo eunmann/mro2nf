@@ -46,8 +46,10 @@ jobs:
   # Publish only what CI validated. PR Validation runs on PRs only, so the
   # commit must be a PR's squash merge with the same tree as the PR's head,
   # and that head must have a green run. A commit pushed past a PR has no such
-  # run and cannot be released. A dry run checks the pipeline on any commit,
-  # such as a branch's after an action bump, so it skips that requirement.
+  # run and cannot be released. The workflow that builds and publishes must be
+  # main's too, since a dispatch runs the release.yml of the branch it names.
+  # A dry run checks the pipeline on any commit and branch, such as after an
+  # action bump, so it skips both requirements.
   gate:
     name: Validate the inputs and the commit
     runs-on: ubuntu-latest
@@ -59,6 +61,13 @@ jobs:
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
+      - name: Require main's workflow
+        if: ${{ !inputs.dry_run }}
+        run: |
+          [ "$GITHUB_REF" = refs/heads/main ] || {
+            echo "::error::a release runs main's release.yml, not $GITHUB_REF's: dispatch it from main, or add -f dry_run=true"
+            exit 1
+          }
       # The ref goes into an API path, so it is held to a ref's characters
       # and may not climb out of the path with `..`.
       - name: Validate the version and the ref

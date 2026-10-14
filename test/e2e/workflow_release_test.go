@@ -634,6 +634,31 @@ func TestReleaseValidatesInputs(t *testing.T) {
 	}
 }
 
+// TestReleaseRunsMainWorkflow runs the gate's workflow check: a release runs
+// only main's release.yml, which a PR run validated, and a dry run, which
+// checks a branch's, skips the check.
+func TestReleaseRunsMainWorkflow(t *testing.T) {
+	requireTools(t, "bash")
+
+	step := releaseStep(t, "gate", stepRuns("GITHUB_REF"))
+	if got := scalarOf(step.get("if")); got != "${{ !inputs.dry_run }}" {
+		t.Errorf("%s workflow check if = %q; a real release must pass it", releaseWorkflow, got)
+	}
+
+	for ref, ok := range map[string]bool{
+		"refs/heads/main":          true,
+		"refs/heads/ci/bump-setup": false,
+		"refs/heads/main-old":      false,
+		"refs/tags/v0.5.0":         false,
+		"":                         false,
+	} {
+		log, _, err := execReleaseStep(t, scalarOf(step.get("run")), t.TempDir(), "GITHUB_REF="+ref)
+		if (err == nil) != ok {
+			t.Errorf("workflow from %q: accepted %t, want %t\n%s", ref, err == nil, ok, log)
+		}
+	}
+}
+
 type releaseJob struct {
 	Needs, If string
 	Writes    []string
