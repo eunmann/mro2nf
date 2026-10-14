@@ -52,7 +52,7 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 		}
 	}
 
-	checkContains(t, tree, "conf/healthomics.config", "includeConfig 'container.config'\n", "params.mro2nf_host_inputs = false\n", "params.outdir = '/mnt/workflow/pubdir'\n")
+	checkContains(t, tree, "conf/healthomics.config", "includeConfig 'container.config'\n", "params.mro2nf_host_inputs = false\n", "outputDir = '/mnt/workflow/pubdir'\n")
 
 	main := tree["main.nf"]
 	if !strings.Contains(main, "if (params.mro2nf_require_image && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {

@@ -84,9 +84,8 @@ func (p *project) publications() map[int]string {
 
 // publication ends the entry workflow with its outputs, OUTS's outs JSON
 // and each entry of its outs tree, and declares how they are published
-// below outputDir, which conf/base.config sets to params.outdir: each at its
-// own name, as copies, so an object-store or HealthOmics output dir holds
-// the files themselves. A -preview run publishes nothing: it runs no task,
+// below Nextflow's outputDir: each at its own name, as copies, so an
+// object-store or HealthOmics output dir holds the files themselves. A -preview run publishes nothing: it runs no task,
 // and Nextflow 26.04 to 26.10 then waits forever on an enabled output's
 // channel.
 const publication = `

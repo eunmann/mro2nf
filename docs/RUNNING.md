@@ -44,7 +44,11 @@ The project holds:
 | `_assets/` | a copy of the `.mro` files, read by PLAN and OUTS |
 
 A run writes `work/`, `results/`, `.nextflow/`, `.nextflow.log` and
-`trace-<timestamp>.txt` into the launch directory.
+`trace-<timestamp>.txt` into the launch directory. `results/` is Nextflow's
+default output directory, where the run publishes `pipeline_outs.json` and
+`mrp`'s `outs/` tree. To publish elsewhere, a directory or an `s3://`
+prefix, pass Nextflow's `-output-dir <dir>`, or set `outputDir = '<dir>'`
+in a `-c` config; `-output-dir` wins over the config.
 
 ## Launch parameters
 
@@ -122,7 +126,7 @@ disabled calls and chunk counts as the same value in the `.mro` would under
   project requires; under `NXF_SYNTAX_PARSER=v1`, `--s 007` becomes the
   number `7` ([`TRANSPILER.md`](TRANSPILER.md) §8).
 
-An entry input named `outdir`, `job_resources` or `mro2nf_*` fails the
+An entry input named `job_resources` or `mro2nf_*` fails the
 transpile, because the project defines those parameters itself.
 
 ### Parameter schema
@@ -143,12 +147,10 @@ in the `.mro`'s `call`:
 | a `struct` | `object` with a property per member |
 | `T`, split by the top-level `map call` | `object` with a required `split`: an `array` of `T` or an `object` of `T`, as [Pipeline inputs](#pipeline-inputs) gives it |
 
-The `mro2nf_*` parameters form the `mro2nf options` group, and `outdir` the
-`Output options` group; `job_resources`, a map, sits at the top level, as
-nf-schema's meta-schema admits only scalar types in a group. Those a profile
-sets are marked `hidden` and given no default, as the profile picks their
-value, and so is `mro2nf_config_outdir`, the `outdir` that `conf/base.config`
-sets `outputDir` from.
+The `mro2nf_*` parameters form the `mro2nf options` group; `job_resources`,
+a map, sits at the top level, as nf-schema's meta-schema admits only scalar
+types in a group. Those a profile sets are marked `hidden` and given no
+default, as the profile picks their value.
 
 The schema validates nothing at launch: the project loads no nf-schema
 plugin, which a run would have to download. `main.nf`'s `params` block
@@ -170,7 +172,6 @@ default, where the run takes the `.mro`'s value, and a `Path` checks that an
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `--outdir <dir>` | `results` | where the outputs are published: a directory or an `s3://` prefix; Nextflow's own `-output-dir <dir>` overrides it. `conf/base.config` sets `outputDir` from it, so a `-c` config that sets `params.outdir` must also set `outputDir = params.outdir`, or the run fails before any task |
 | `--mro2nf_overrides <file>` | none | `mrp`'s `--overrides` file (see [Resources](#resources)) |
 | `--mro2nf_monitor true` | `false` | `mrp`'s `--monitor`: `mrjob` kills a job that exceeds its memory request |
 | `--mro2nf_confine true` | `false` | fails a stage task whose output resolves outside its work directory, instead of copying the file in; the container profiles always do this |
@@ -362,10 +363,10 @@ aws.region = '<region>'
 nextflow run main.nf -profile awsbatch -c batch.config \
     --mro2nf_image <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag> \
     -work-dir s3://<bucket>/work \
-    --outdir s3://<bucket>/results
+    -output-dir s3://<bucket>/results
 ```
 
-Keep `--outdir` on S3: the default `results` publishes to the launch host.
+Keep `-output-dir` on S3: the default `results` publishes to the launch host.
 The profile limits job submission and S3 transfers so a wide fan-out does not
 throttle the AWS APIs, and retries a task whose Spot instance is reclaimed.
 It checks job status every 2 s (`executor.$awsbatch.pollInterval`), where
@@ -438,9 +439,16 @@ so it cannot change the image or the inputs it may stage. `nextflow_schema.json`
 stays out of the zip: HealthOmics would read the parameters it declares from
 it. A directory input is
 an `s3://` prefix ending in `/` (`s3://<bucket>/fastqs/`): `start-run` checks
-each URI and refuses a prefix without the slash with `S3 object not found`. Outputs are
-published to `/mnt/workflow/pubdir`, which HealthOmics exports to the run's
-output URI.
+each URI and refuses a prefix without the slash with `S3 object not found`.
+
+`conf/healthomics.config` sets `outputDir = '/mnt/workflow/pubdir'`, the
+directory HealthOmics exports. The run's workflow outputs land at the root
+of the run's folder under the output URI:
+`<output-uri>/<run-id>/pipeline_outs.json`, and each entry of `mrp`'s
+`outs/` tree at its own path below it, such as
+`<output-uri>/<run-id>/d/f0.txt`. There is no `pubdir/` level: the
+`publishDir` publishing of earlier mro2nf versions landed below
+`<output-uri>/<run-id>/pubdir/`.
 
 ## Paths written into text
 
@@ -582,7 +590,7 @@ HealthOmics takes no `-c`.
 | `--auto-adjust-memory` | not supported; [Retries](#retries) shows a `-c` config that raises memory on each retry |
 | `--profile=MODE` | no stage profiling; the trace file the project enables records each task's `realtime`, `%cpu`, `peak_rss`, `peak_vmem`, `rchar` and `wchar`, and `-with-report` adds a report |
 | `--onfinish=EXEC` | `-c`: a `workflow.onComplete` handler (below) |
-| `--psdir=PATH` | the launch directory, `-work-dir` and `--outdir` |
+| `--psdir=PATH` | the launch directory, `-work-dir` and `-output-dir` |
 | `--never-local` | the default: mro2nf schedules `local` stages like any other |
 | `--vdrmode=MODE` | none: mro2nf deletes no intermediate file during a run; `nextflow clean` removes work directories afterwards |
 | `--nopreflight` | none: preflight stages always run; to skip one, remove its call from the `.mro` and transpile again |

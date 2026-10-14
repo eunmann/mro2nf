@@ -407,12 +407,10 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 
 // TestEmitPublishesThroughWorkflowOutputs (#580): OUTS publishes nothing
 // itself; the entry workflow publishes its outs JSON and each entry of its
-// outs tree at its own name, as copies, below outputDir, which follows
-// params.outdir, the HealthOmics pubdir under that profile. A run whose
-// later config moves params.outdir and leaves outputDir where conf/base.config
-// set it fails before PLAN, where it would publish elsewhere silently. A
-// -preview run, which runs no task, publishes nothing, as an enabled output
-// would hang it (TestLaunchEdges).
+// outs tree at its own name, as copies, below Nextflow's outputDir, which
+// only the healthomics profile sets, to the HealthOmics pubdir; no param
+// names it. A -preview run, which runs no task, publishes nothing, as an
+// enabled output would hang it (TestLaunchEdges).
 func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "dir_out"))
 
@@ -425,24 +423,20 @@ func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
 	checkContains(t, tree, "stage.nf",
 		"    path 'pipeline_outs.json', emit: json\n    path 'results/*', hidden: true, arity: '0..*', emit: results\n",
 	)
-	checkContains(t, tree, "conf/healthomics.config", "params.outdir = '/mnt/workflow/pubdir'\noutputDir = params.outdir\n")
+	checkContains(t, tree, "conf/healthomics.config", "\noutputDir = '/mnt/workflow/pubdir'\n")
 
 	if strings.Contains(stageModule, "publishDir") {
 		t.Error("stage.nf publishes through publishDir")
 	}
 
-	base := tree["conf/base.config"]
-	if set, follow := strings.Index(base, "params.outdir = 'results'\n"), strings.Index(base, "\noutputDir = params.outdir\n"); set < 0 || follow < set {
-		t.Errorf("conf/base.config does not publish below params.outdir:\n%s", base)
-	}
+	for name, src := range tree {
+		if name != "conf/healthomics.config" && strings.Contains(src, "outputDir =") {
+			t.Errorf("%s sets outputDir:\n%s", name, src)
+		}
 
-	if set, kept := strings.Index(base, "params.outdir = 'results'\n"), strings.Index(base, "\nparams.mro2nf_config_outdir = params.outdir\n"); kept < set {
-		t.Errorf("conf/base.config does not keep the params.outdir it sets outputDir from:\n%s", base)
-	}
-
-	main := tree["main.nf"]
-	if guard := strings.Index(main, "if (params.outdir != params.mro2nf_config_outdir && workflow.outputDir == file(params.mro2nf_config_outdir)) {"); guard < 0 || guard > strings.Index(main, "PLAN(") {
-		t.Errorf("main.nf does not refuse, before PLAN, a params.outdir a later config set without outputDir:\n%s", main)
+		if strings.Contains(src, "outdir") {
+			t.Errorf("%s names an outdir param:\n%s", name, src)
+		}
 	}
 }
 
@@ -714,7 +708,7 @@ func TestEmitDeclaresTheEngineFloor(t *testing.T) {
 // TestEmitRefusesReservedParam: an entry input named like a param the
 // project defines itself, or might, under the mro2nf_ prefix, is refused.
 func TestEmitRefusesReservedParam(t *testing.T) {
-	for _, name := range []string{"outdir", "mro2nf_image"} {
+	for _, name := range []string{"job_resources", "mro2nf_image"} {
 		dir := t.TempDir()
 		mro := filepath.Join(dir, "pipeline.mro")
 		src := "stage S(\n    in  int " + name + ",\n    out int y,\n    src py \"s\",\n)\n\ncall S(\n    " + name + " = 1,\n)\n"

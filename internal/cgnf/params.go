@@ -24,8 +24,8 @@ type launchParam struct {
 	// Nextflow converts a launch value to or refuses it at launch; empty for
 	// none, a value mre plan types.
 	nfType string
-	// value is the param's value in conf/base.config: nil, a string, a bool,
-	// a map of strings or a paramRef.
+	// value is the param's value in conf/base.config: nil, a string, a bool
+	// or a map of strings.
 	value any
 	// def is the JSON value a run takes when the param is unset, nil for none.
 	def json.RawMessage
@@ -33,9 +33,9 @@ type launchParam struct {
 	// the schema's root.
 	group string
 	desc  string
-	// hidden marks a param a profile or conf/base.config sets, not the user,
-	// which the schema gives no default: a launch form writing the default
-	// into a params file would override the config's value.
+	// hidden marks a param a profile sets, not the user, which the schema
+	// gives no default: a launch form writing the default into a params file
+	// would override the profile's value.
 	hidden bool
 	// omics is the param's description in the HealthOmics template, empty
 	// where a HealthOmics run cannot set it.
@@ -50,21 +50,13 @@ type paramGroup struct {
 	id, title, desc string
 }
 
-const (
-	outputGroup = "output_options"
-	mro2nfGroup = "mro2nf_options"
-)
+const mro2nfGroup = "mro2nf_options"
 
 // null is the null literal of Groovy and of JSON.
 const null = "null"
 
-// paramRef is a param value conf/base.config copies from the named param,
-// as that param's value stands there.
-type paramRef string
-
 func schemaGroups() []paramGroup {
 	return []paramGroup{
-		{id: outputGroup, title: "Output options"},
 		{
 			id: mro2nfGroup, title: "mro2nf options",
 			desc: "The generated project's runtime: the tools every task runs, how it reads entry files and how jobs are granted resources. A profile sets those marked hidden.",
@@ -103,18 +95,6 @@ func projectParams(psid string) []paramBlock {
 
 func runParams() []paramBlock {
 	return []paramBlock{
-		{params: []launchParam{{
-			id: "outdir", value: "results", nfType: nfString, schema: &types.Schema{Type: types.JSONString, Format: "directory-path"}, group: outputGroup,
-			desc: "where the outputs are published: a directory or an s3:// prefix",
-		}}},
-		{
-			comment: `// The --outdir outputDir is set from below, so main.nf refuses a run whose
-// later config set params.outdir and left outputDir here.`,
-			params: []launchParam{{
-				id: "mro2nf_config_outdir", value: paramRef("outdir"), nfType: nfString, schema: &types.Schema{Type: types.JSONString, Format: "directory-path"}, group: mro2nfGroup,
-				desc: "the --outdir conf/base.config sets outputDir from", hidden: true,
-			}},
-		},
 		{
 			comment: `// Martian 'special' scheduler-resource map (the MRO_JOBRESOURCES analog):
 // a stage's special key to the clusterOptions of a grid executor.`,
@@ -298,16 +278,14 @@ func entryType(t syntax.Type) string {
 }
 
 // declaration is lp's entry in main.nf's params block: its type with its
-// value as the default, or nullable where it has no literal one, which
-// keeps the value conf/base.config sets; an untyped param is an Object?,
-// which takes any value.
+// value as the default, or nullable where it has none, which keeps the
+// value conf/base.config sets; an untyped param is an Object?, which takes
+// any value.
 func (lp launchParam) declaration() string {
-	_, ref := lp.value.(paramRef)
-
 	switch {
 	case lp.nfType == "":
 		return lp.id + ": Object?"
-	case lp.value == nil || ref:
+	case lp.value == nil:
 		return lp.id + ": " + lp.nfType + "?"
 	default:
 		return lp.id + ": " + lp.nfType + " = " + groovy(lp.value)
@@ -370,15 +348,13 @@ func (p *project) launchParams() []launchParam {
 	return out
 }
 
-// groovy is v as a Groovy literal, or the param a paramRef reads.
+// groovy is v as a Groovy literal.
 func groovy(v any) string {
 	switch x := v.(type) {
 	case string:
 		return gstr(x)
 	case bool:
 		return strconv.FormatBool(x)
-	case paramRef:
-		return "params." + string(x)
 	case map[string]string:
 		if len(x) == 0 {
 			return "[:]"

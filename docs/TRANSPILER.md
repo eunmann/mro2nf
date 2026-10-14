@@ -287,14 +287,8 @@ includes `conf/base.config`, the settings every target shares, and defines
 the target profiles (§9), whose settings override the shared ones.
 **`conf/base.config`** holds:
 
-- `params.outdir` (`results`), which `outputDir`, where the workflow
-  outputs publish, is set from, with `params.mro2nf_config_outdir` keeping
-  the value it read: a later config that sets `params.outdir` without
-  `outputDir` would leave the outputs below the old dir, so `main.nf` fails
-  that run before PLAN unless `-output-dir` or that config moved
-  `outputDir`. Also `params.job_resources`, Martian's
-  `MRO_JOBRESOURCES` analog: a map from a stage's `special` key to the
-  `clusterOptions` of a grid executor.
+- `params.job_resources`, Martian's `MRO_JOBRESOURCES` analog: a map from
+  a stage's `special` key to the `clusterOptions` of a grid executor.
 - `params.mro2nf_mre`, `mro2nf_mrjob`, `mro2nf_adapters`, `mro2nf_psid`,
   `mro2nf_monitor` and `mro2nf_confine`: the tools and knobs the stage module
   reads, PLAN refusing a psid `mrp` refuses (letters, digits, `-` and `_`
@@ -562,10 +556,11 @@ lays them out with `mre outs` through `mrp`'s own post-processing: the
 `outs/` tree and `pipeline_outs.json`, which it emits apart (`json`,
 `results`). The entry workflow publishes both as its workflow outputs:
 `pipeline_outs.json`, and each entry of the tree at its own name
-(`f >> f.name`), copied into `outputDir`, which `conf/base.config` sets to
-`params.outdir` (§4) and `-output-dir` overrides. A copy, not Nextflow's
-default symlink, so an object-store or HealthOmics output dir holds the
-files themselves, dotfiles and empty dirs included, and a symlink's target
+(`f >> f.name`), copied into Nextflow's `outputDir`: `results` in the
+launch dir by default, `-output-dir` or a config's `outputDir` elsewhere,
+the HealthOmics pubdir under that profile (§9). No param names it. A copy,
+not Nextflow's default symlink, so an object-store or HealthOmics output
+dir holds the files themselves, dotfiles and empty dirs included, and a symlink's target
 content in its place. A `-preview` run publishes nothing (`enabled
 !workflow.preview`): it runs no task, and Nextflow 26.04 to 26.10 then
 waits forever on an enabled output's channel.
@@ -960,7 +955,7 @@ You can override inputs **at launch** without re-transpiling:
   supports. The v1 parser (`NXF_SYNTAX_PARSER=v1`) converts CLI values
   before the script sees them: `--b True` becomes `true`, and `--s 007`
   becomes the integer `7`, which no later step can recover.
-- An entry input named `outdir`, `job_resources` or `mro2nf_*` collides with
+- An entry input named `job_resources` or `mro2nf_*` collides with
   a param the project defines itself and fails the transpile.
 - `mre plan` validates every entry value against its Martian type; the
   params block checks only that no undeclared param is set and that a
@@ -1117,11 +1112,16 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   bind-mounts read-only into every container (`aws.batch.volumes`), where the
   compute environment's instances mount the file's bucket (§8,
   `deploy/awsbatch-cdk`), and stages it otherwise. Set `process.queue` and
-  `aws.region` in a `-c` config; `--outdir s3://…` publishes to S3.
+  `aws.region` in a `-c` config; `-output-dir s3://…` publishes to S3.
 - `healthomics`: `./package.sh <image>@sha256:…` zips the files `main.nf`
   reads with a `nextflow.config` of its own: the engine floor,
   `conf/base.config`, the image and `conf/healthomics.config`, so the
-  profile is the workflow's own, and publishes to `/mnt/workflow/pubdir`.
+  profile is the workflow's own, and sets `outputDir` to
+  `/mnt/workflow/pubdir`, the dir HealthOmics exports. It exports the
+  workflow outputs to the root of the run's folder under `--output-uri`
+  (`<output-uri>/<run-id>/pipeline_outs.json`, `<output-uri>/<run-id>/d/f0.txt`),
+  where the earlier `publishDir` outputs landed below
+  `<output-uri>/<run-id>/pubdir/`.
   That config defines no profiles: HealthOmics applies `standard`, if the
   workflow defines it, to a run that names no profile, and `standard` is
   the local target, whose `process.resourceLimits` would clamp every task

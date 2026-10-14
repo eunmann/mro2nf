@@ -38,7 +38,7 @@ var (
 
 // reserved reports a param the generated project defines itself.
 func reserved(param string) bool {
-	return param == "outdir" || param == "job_resources" || strings.HasPrefix(param, "mro2nf_")
+	return param == "job_resources" || strings.HasPrefix(param, "mro2nf_")
 }
 
 // Options are where a project is emitted and what it bakes in.

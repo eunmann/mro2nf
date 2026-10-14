@@ -198,12 +198,11 @@ func TestEmitDeclaresEveryLaunchParam(t *testing.T) {
 	want := map[string]string{
 		"s": "String?",
 		"n": "Object?", "f": "Object?", "b": "Object?", "r": "Object?", "d": "Object?", "xs": "Object?", "m": "Object?", "tm": "Object?", "cfg": "Object?",
-		"outdir": "String = 'results'", "job_resources": "Map = [:]",
-		"mro2nf_mre": "String = 'mre'", "mro2nf_mrjob": "String?", "mro2nf_adapters": "String?", "mro2nf_psid": "String = 'P'",
+		"job_resources": "Map = [:]", "mro2nf_mre": "String = 'mre'", "mro2nf_mrjob": "String?", "mro2nf_adapters": "String?", "mro2nf_psid": "String = 'P'",
 		"mro2nf_monitor": "Boolean = false", "mro2nf_confine": "Boolean = false",
 		"mro2nf_host_inputs": "Boolean = true", "mro2nf_allow_remote_inputs": "Boolean = false", "mro2nf_host_in_place": "Boolean = true",
 		"mro2nf_local_jobs": "Boolean = false", "mro2nf_s3_mount": "String?", "mro2nf_image": "String?", "mro2nf_require_image": "Boolean = false",
-		"mro2nf_overrides": "String?", "mro2nf_config_outdir": "String?",
+		"mro2nf_overrides": "String?",
 	}
 
 	if d := cmp.Diff(want, got); d != "" {
