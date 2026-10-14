@@ -32,6 +32,20 @@ const (
 	releaseCommitTime = "2001-02-03T04:05:06Z"
 
 	releaseTag = "v1.2.3"
+
+	// releaseSHA is the commit every job checks out: the one the gate
+	// resolved the ref input to.
+	releaseSHA = "${{ needs.gate.outputs.sha }}"
+
+	// releaseNotesPath is where the tag step writes the notes the release
+	// step reads.
+	releaseNotesPath = "${{ runner.temp }}/release-notes.md"
+
+	// releaseCuratedNotes has Markdown headings, which git's default cleanup
+	// drops as comments, and a paragraph spanning lines.
+	releaseCuratedNotes = "## Highlights\n\n- per-platform archives\n- release notes\n\n## Breaking changes\n\nThe loose binaries\nare gone.\n"
+
+	releaseImageArchive = "runtime-image.tar"
 )
 
 // releaseBinaries ship under the names mre looks mrjob up by.
@@ -89,9 +103,28 @@ func stepRuns(cmd string) func(*yamlNode) bool {
 	return func(s *yamlNode) bool { return strings.Contains(scalarOf(s.get("run")), cmd) }
 }
 
-// runReleaseStep runs a step's script in dir as Actions does, with env
-// added, and returns what it wrote to $GITHUB_OUTPUT.
-func runReleaseStep(t *testing.T, script, dir string, env ...string) string {
+// stepLiteralEnv returns a step's env entries that are not expressions,
+// which a test passes to its script as Actions would.
+func stepLiteralEnv(step *yamlNode) []string {
+	env := step.get("env")
+	if env == nil {
+		return nil
+	}
+
+	var out []string
+
+	for _, k := range env.keys {
+		if v := scalarOf(env.get(k)); !strings.Contains(v, "${{") {
+			out = append(out, k+"="+v)
+		}
+	}
+
+	return out
+}
+
+// execReleaseStep runs a step's script in dir as Actions does, with env
+// added, and returns its output and what it wrote to $GITHUB_OUTPUT.
+func execReleaseStep(t *testing.T, script, dir string, env ...string) (string, string, error) {
 	t.Helper()
 
 	out := filepath.Join(t.TempDir(), "output")
@@ -100,16 +133,27 @@ func runReleaseStep(t *testing.T, script, dir string, env ...string) string {
 	cmd.Dir = dir
 	cmd.Env = slices.Concat(os.Environ(), env, []string{"GITHUB_OUTPUT=" + out})
 
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("release step: %v\n%s", err, b)
-	}
+	log, runErr := cmd.CombinedOutput()
 
 	data, err := os.ReadFile(out)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal(err)
 	}
 
-	return string(data)
+	return string(log), string(data), runErr
+}
+
+// runReleaseStep runs a step's script that must succeed and returns what it
+// wrote to $GITHUB_OUTPUT.
+func runReleaseStep(t *testing.T, script, dir string, env ...string) string {
+	t.Helper()
+
+	log, out, err := execReleaseStep(t, script, dir, env...)
+	if err != nil {
+		t.Fatalf("release step: %v\n%s", err, log)
+	}
+
+	return out
 }
 
 // releaseCheckout returns a git checkout committed at releaseCommitTime
@@ -145,35 +189,38 @@ func releaseCheckout(t *testing.T, fileTime time.Time) string {
 	return dir
 }
 
+// releaseGitEnv frees git of the user's and the system's config.
+var releaseGitEnv = []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}
+
 // releaseGit runs git in dir free of the user's and the system's config,
-// as a fixed identity at releaseCommitTime.
-func releaseGit(t *testing.T, dir string, args ...string) {
+// as a fixed identity at releaseCommitTime, and returns its stdout.
+func releaseGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+
+	var stderr bytes.Buffer
 
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_AUTHOR_DATE="+releaseCommitTime,
-		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com", "GIT_COMMITTER_DATE="+releaseCommitTime,
-	)
+	cmd.Stderr = &stderr
+	cmd.Env = slices.Concat(os.Environ(), releaseGitEnv, []string{
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_AUTHOR_DATE=" + releaseCommitTime,
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com", "GIT_COMMITTER_DATE=" + releaseCommitTime,
+	})
 
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %s: %v\n%s", args[0], err, b)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", args[0], err, stderr.Bytes())
 	}
+
+	return string(out)
 }
 
 // releaseArchives runs the build job's archive step for every platform in a
 // fresh checkout and returns the checkout and the archives' names.
-func releaseArchives(t *testing.T, ref string, fileTime time.Time) (string, []string) {
+func releaseArchives(t *testing.T, version string, fileTime time.Time) (string, []string) {
 	t.Helper()
 
 	step := releaseStep(t, "build", stepID("archive"))
-
-	script := scalarOf(step.get("run"))
-	if strings.Contains(script, "${{") {
-		t.Fatalf("%s archive step interpolates an expression into its script; read it from env", releaseWorkflow)
-	}
 
 	env := step.get("env")
 	if scalarOf(env.get("GOOS")) != "${{ matrix.goos }}" || scalarOf(env.get("GOARCH")) != "${{ matrix.goarch }}" {
@@ -186,7 +233,7 @@ func releaseArchives(t *testing.T, ref string, fileTime time.Time) (string, []st
 
 	for _, p := range platforms {
 		goos, goarch, _ := strings.Cut(p, "-")
-		out := runReleaseStep(t, script, dir, "GITHUB_REF_NAME="+ref, "GOOS="+goos, "GOARCH="+goarch)
+		out := runReleaseStep(t, scalarOf(step.get("run")), dir, "VERSION="+version, "GOOS="+goos, "GOARCH="+goarch)
 
 		file, ok := strings.CutPrefix(strings.TrimSpace(out), "file=")
 		if !ok {
@@ -249,10 +296,10 @@ func readArchive(t *testing.T, file string) []archiveEntry {
 }
 
 // TestReleaseArchiveLayout runs release.yml's archive step for each platform
-// of its matrix, on a tag and on a dry run's branch: each archive is
-// mro2nf-<ref>-<os>-<arch>.tar.gz holding one directory of that name with the
-// executable binaries and the notices, owned by root, writable by it alone,
-// at the commit time.
+// of its matrix, for a release and a pre-release: each archive is
+// mro2nf-<version>-<os>-<arch>.tar.gz holding one directory of that name
+// with the executable binaries and the notices, owned by root, writable by
+// it alone, at the commit time.
 func TestReleaseArchiveLayout(t *testing.T) {
 	requireTools(t, "bash", "git", "tar", "gzip")
 
@@ -266,13 +313,13 @@ func TestReleaseArchiveLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for ref, label := range map[string]string{releaseTag: releaseTag, "feat/dry-run": "feat-dry-run"} {
-		dir, files := releaseArchives(t, ref, commit.Add(time.Hour))
+	for _, version := range []string{releaseTag, releaseTag + "-rc1"} {
+		dir, files := releaseArchives(t, version, commit.Add(time.Hour))
 
 		for i, p := range platforms {
-			top := "mro2nf-" + label + "-" + p
+			top := "mro2nf-" + version + "-" + p
 			if files[i] != top+".tar.gz" {
-				t.Errorf("ref %q %s: archive %q, want %q", ref, p, files[i], top+".tar.gz")
+				t.Errorf("version %q %s: archive %q, want %q", version, p, files[i], top+".tar.gz")
 
 				continue
 			}
@@ -371,9 +418,9 @@ func TestReleaseChecksumsCoverArchives(t *testing.T) {
 		t.Errorf("SHA256SUMS (-want +got):\n%s", diff)
 	}
 
-	attest := releaseStep(t, "publish", stepUses("actions/attest-build-provenance"))
-	if got := scalarOf(attest.get("with").get("subject-checksums")); got != "SHA256SUMS" {
-		t.Errorf("%s provenance subject-checksums = %q, want SHA256SUMS", releaseWorkflow, got)
+	attest := releaseStep(t, "publish", func(s *yamlNode) bool { return s.get("with").get("subject-checksums") != nil })
+	if !stepUses("actions/attest-build-provenance")(attest) || scalarOf(attest.get("with").get("subject-checksums")) != "SHA256SUMS" {
+		t.Errorf("%s publish does not attest SHA256SUMS with attest-build-provenance", releaseWorkflow)
 	}
 }
 
@@ -386,7 +433,7 @@ func TestReleasePublishesArchives(t *testing.T) {
 		t.Errorf("%s build uploads %q, want the archive step's file", releaseWorkflow, got)
 	}
 
-	pattern := scalarOf(releaseStep(t, "publish", stepUses("actions/download-artifact")).get("with").get("pattern"))
+	pattern := scalarOf(releaseStep(t, "publish", func(s *yamlNode) bool { return s.get("with").get("pattern") != nil }).get("with").get("pattern"))
 
 	gh := releaseStep(t, "publish", stepUses("softprops/action-gh-release")).get("with")
 
@@ -399,6 +446,11 @@ func TestReleasePublishesArchives(t *testing.T) {
 		t.Errorf("%s fail_on_unmatched_files = %q, want true", releaseWorkflow, got)
 	}
 
+	image := scalarOf(releaseStep(t, "image", stepUses("actions/upload-artifact")).get("with").get("name"))
+	if ok, err := path.Match(pattern, image); err != nil || ok {
+		t.Errorf("%s archive download pattern %q also takes the image artifact %q", releaseWorkflow, pattern, image)
+	}
+
 	for _, p := range releasePlatforms(t) {
 		goos, goarch, _ := strings.Cut(p, "-")
 		name := strings.NewReplacer("${{ matrix.goos }}", goos, "${{ matrix.goarch }}", goarch).Replace(scalarOf(upload.get("name")))
@@ -409,120 +461,6 @@ func TestReleasePublishesArchives(t *testing.T) {
 
 		if ok, err := path.Match(assets[0], "mro2nf-"+releaseTag+"-"+p+".tar.gz"); err != nil || !ok {
 			t.Errorf("%s release files %q miss the %s archive", releaseWorkflow, assets[0], p)
-		}
-	}
-}
-
-const (
-	// releaseNotesPath is where the notes step writes the body the release
-	// step reads.
-	releaseNotesPath = "${{ runner.temp }}/release-notes.md"
-
-	// releaseCuratedNotes is a tag message with Markdown headings, which
-	// git's default cleanup drops as comments, and a paragraph spanning
-	// lines, which %(contents:subject) would fold into one.
-	releaseCuratedNotes = "## Highlights\n\n- per-platform archives\n- release notes\n\n## Breaking changes\n\nThe loose binaries\nare gone.\n"
-
-	// releaseNotesFile is the notes file CONTRIBUTING's tag command reads.
-	releaseNotesFile = "notes.md"
-)
-
-// documentedTagArgs returns the arguments of the `git tag` command
-// CONTRIBUTING.md documents for a release, and the tag it creates.
-func documentedTagArgs(t *testing.T) ([]string, string) {
-	t.Helper()
-
-	raw, err := os.ReadFile(filepath.Join("..", "..", "CONTRIBUTING.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for line := range strings.Lines(string(raw)) {
-		cmd, _, _ := strings.Cut(line, "#")
-		if fields := strings.Fields(cmd); len(fields) > 2 && fields[0] == "git" && fields[1] == "tag" {
-			return fields[1:], fields[len(fields)-1]
-		}
-	}
-
-	t.Fatal("CONTRIBUTING.md documents no `git tag` command")
-
-	return nil, ""
-}
-
-// TestReleaseNotesFromTag pins the publish job's release notes: GitHub
-// generates the list of merged PRs, and the step before the release writes
-// the body above it from the tag the checkout fetched.
-func TestReleaseNotesFromTag(t *testing.T) {
-	steps := readWorkflow(t, releaseWorkflow).get("jobs").get("publish").get("steps").items
-
-	checkout := slices.IndexFunc(steps, stepUses("actions/checkout"))
-	notes := slices.IndexFunc(steps, stepRuns("release-notes.md"))
-	release := slices.IndexFunc(steps, stepUses("softprops/action-gh-release"))
-
-	if checkout < 0 || notes < checkout || release < notes {
-		t.Fatalf("%s publish steps: checkout %d, notes %d, release %d; want them in that order", releaseWorkflow, checkout, notes, release)
-	}
-
-	if got := scalarOf(steps[checkout].get("with").get("persist-credentials")); got != "false" {
-		t.Errorf("%s publish checkout persist-credentials = %q, want false", releaseWorkflow, got)
-	}
-
-	gh := steps[release].get("with")
-	if got := scalarOf(gh.get("generate_release_notes")); got != "true" {
-		t.Errorf("%s generate_release_notes = %q, want true", releaseWorkflow, got)
-	}
-
-	if got := scalarOf(gh.get("body_path")); got != releaseNotesPath {
-		t.Errorf("%s body_path = %q, want %q", releaseWorkflow, got, releaseNotesPath)
-	}
-
-	if gh.get("name") != nil || gh.get("body") != nil {
-		t.Errorf("%s release sets name or body; the title is the tag and the body the notes file", releaseWorkflow)
-	}
-}
-
-// TestReleaseNotesBody runs the notes step on each kind of tag: an annotated
-// tag's message is the body as written, a signed one's without its
-// signature, and a lightweight tag or an empty message gives no body, never
-// the commit's message.
-func TestReleaseNotesBody(t *testing.T) {
-	requireTools(t, "bash", "git", "ssh-keygen")
-
-	script := scalarOf(releaseStep(t, "publish", stepRuns("release-notes.md")).get("run"))
-
-	dir := t.TempDir()
-	key := filepath.Join(t.TempDir(), "key")
-
-	if b, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key).CombinedOutput(); err != nil {
-		t.Fatalf("ssh-keygen: %v\n%s", err, b)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, releaseNotesFile), []byte(releaseCuratedNotes), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	documented, documentedTag := documentedTagArgs(t)
-
-	releaseGit(t, dir, "init", "-q")
-	releaseGit(t, dir, "commit", "-q", "--allow-empty", "-m", "fix: the commit's message")
-	releaseGit(t, dir, documented...)
-	releaseGit(t, dir, "-c", "gpg.format=ssh", "-c", "user.signingkey="+key, "tag", "-s", "--cleanup=whitespace", "-F", releaseNotesFile, "v1.0.1")
-	releaseGit(t, dir, "tag", "v1.0.2")
-	releaseGit(t, dir, "tag", "-a", "v1.0.3", "-m", "")
-
-	cases := map[string]string{documentedTag: releaseCuratedNotes, "v1.0.1": releaseCuratedNotes, "v1.0.2": "", "v1.0.3": ""}
-
-	for tag, want := range cases {
-		tmp := t.TempDir()
-		runReleaseStep(t, script, dir, "GITHUB_REF_NAME="+tag, "RUNNER_TEMP="+tmp)
-
-		got, err := os.ReadFile(strings.Replace(releaseNotesPath, "${{ runner.temp }}", tmp, 1))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		if diff := cmp.Diff(want, string(got)); diff != "" {
-			t.Errorf("%s notes (-want +got):\n%s", tag, diff)
 		}
 	}
 }
@@ -557,4 +495,500 @@ func TestReleaseNotesConfig(t *testing.T) {
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf(".github/release.yml categories (-want +got):\n%s", diff)
 	}
+}
+
+// TestReleaseDispatchOnly pins release.yml's one trigger, a dispatch with
+// the inputs a release is cut from, so a pushed tag releases nothing, and
+// one run at a time per version.
+func TestReleaseDispatchOnly(t *testing.T) {
+	wf := readWorkflow(t, releaseWorkflow)
+
+	on := wf.get("on")
+	if on == nil {
+		t.Fatalf("%s has no triggers", releaseWorkflow)
+	}
+
+	if diff := cmp.Diff([]string{"workflow_dispatch"}, on.keys); diff != "" {
+		t.Errorf("%s triggers (-want +got):\n%s", releaseWorkflow, diff)
+	}
+
+	inputs := on.get("workflow_dispatch").get("inputs")
+	if inputs == nil {
+		t.Fatalf("%s workflow_dispatch has no inputs", releaseWorkflow)
+	}
+
+	type input struct{ Name, Type, Required, Default string }
+
+	got := make([]input, 0, len(inputs.keys))
+
+	for _, k := range inputs.keys {
+		in := inputs.get(k)
+		got = append(got, input{k, scalarOf(in.get("type")), scalarOf(in.get("required")), scalarOf(in.get("default"))})
+	}
+
+	want := []input{
+		{"version", "string", "true", ""},
+		{"ref", "string", "false", "main"},
+		{"notes", "string", "false", ""},
+		{"dry_run", "boolean", "false", "false"},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s dispatch inputs (-want +got):\n%s", releaseWorkflow, diff)
+	}
+
+	concurrency := wf.get("concurrency")
+	if got := scalarOf(concurrency.get("group")); got != "release-${{ inputs.version }}" {
+		t.Errorf("%s concurrency group %q, want one per version", releaseWorkflow, got)
+	}
+
+	if got := scalarOf(concurrency.get("cancel-in-progress")); got != "" && got != "false" {
+		t.Errorf("%s cancel-in-progress = %q; a cancelled run can stop between the tag and the release", releaseWorkflow, got)
+	}
+}
+
+// TestReleaseScriptsReadInputsFromEnv keeps every expression out of
+// release.yml's scripts: an input reaches a script only through env, where
+// the shell reads it as data.
+func TestReleaseScriptsReadInputsFromEnv(t *testing.T) {
+	wf := readWorkflow(t, releaseWorkflow)
+
+	env := wf.get("env")
+	if got := scalarOf(env.get("VERSION")); got != "${{ inputs.version }}" {
+		t.Errorf("%s env VERSION = %q, want the version input", releaseWorkflow, got)
+	}
+
+	if got := scalarOf(env.get("PRERELEASE")); got != "${{ contains(inputs.version, '-') }}" {
+		t.Errorf("%s env PRERELEASE = %q, want a version with a -suffix", releaseWorkflow, got)
+	}
+
+	jobs := wf.get("jobs")
+	scripts := 0
+
+	for _, id := range jobs.keys {
+		for i, s := range jobs.get(id).get("steps").items {
+			run := scalarOf(s.get("run"))
+			if run == "" {
+				continue
+			}
+
+			scripts++
+
+			if strings.Contains(run, "${{") {
+				t.Errorf("%s %s step %d interpolates an expression into its script; pass it through env", releaseWorkflow, id, i)
+			}
+		}
+	}
+
+	if scripts < 5 {
+		t.Fatalf("%s: found %d scripts; the walk is wrong", releaseWorkflow, scripts)
+	}
+}
+
+// TestReleaseValidatesInputs runs the gate's validation step: only a
+// v<major>.<minor>.<patch>[-<prerelease>] version and a ref spelled as a
+// branch, tag or SHA pass, and neither ever runs as code.
+func TestReleaseValidatesInputs(t *testing.T) {
+	requireTools(t, "bash")
+
+	step := releaseStep(t, "gate", stepRuns("version_re"))
+	if got := scalarOf(step.get("env").get("REF")); got != "${{ inputs.ref }}" {
+		t.Errorf("%s validation env REF = %q, want the ref input", releaseWorkflow, got)
+	}
+
+	const ref = "main"
+
+	cases := []struct {
+		version, ref string
+		ok           bool
+	}{
+		{"v0.6.0", ref, true},
+		{"v1.2.3-rc1", ref, true},
+		{"v1.2.3-rc.1", "feat/release-dispatch", true},
+		{"v0.6.0", "0123456789abcdef0123456789abcdef01234567", true},
+		{"v0.6.0", "v0.5.0", true},
+		{"0.6.0", ref, false},
+		{"v1.2", ref, false},
+		{"v1.2.3;rm -rf /", ref, false},
+		{"v1.2.3-$(touch pwned)", ref, false},
+		{"v1.2.3\nv1.2.4", ref, false},
+		{"v1.2.3-", ref, false},
+		{"", ref, false},
+		{"v0.6.0", "", false},
+		{"v0.6.0", "../../pulls", false},
+		{"v0.6.0", "-main", false},
+		{"v0.6.0", "main?per_page=1", false},
+		{"v0.6.0", "main;$(touch pwned)", false},
+	}
+
+	dir := t.TempDir()
+
+	for _, c := range cases {
+		log, _, err := execReleaseStep(t, scalarOf(step.get("run")), dir, "VERSION="+c.version, "REF="+c.ref)
+		if (err == nil) != c.ok {
+			t.Errorf("version %q ref %q: accepted %t, want %t\n%s", c.version, c.ref, err == nil, c.ok, log)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "pwned")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("an input ran as code: %v", err)
+	}
+}
+
+type releaseJob struct {
+	Needs, If string
+	Writes    []string
+}
+
+// TestReleasePublishesAfterBuilds pins the job graph: the gate, then the
+// archive and image builds of the commit it resolved, then one publish job
+// that alone writes, needs every build and is skipped in a dry run. A failed
+// build or a dry run therefore tags, pushes and releases nothing.
+func TestReleasePublishesAfterBuilds(t *testing.T) {
+	wf := readWorkflow(t, releaseWorkflow)
+	if got := scalarOf(wf.get("permissions")); got != "{}" {
+		t.Errorf("%s default permissions %q, want {}", releaseWorkflow, got)
+	}
+
+	jobs := wf.get("jobs")
+	got := map[string]releaseJob{}
+
+	for _, id := range jobs.keys {
+		j := jobs.get(id)
+
+		var writes []string
+
+		if perms := j.get("permissions"); perms != nil {
+			for _, k := range perms.keys {
+				if scalarOf(perms.get(k)) == "write" {
+					writes = append(writes, k)
+				}
+			}
+		}
+
+		got[id] = releaseJob{strings.Join(j.get("needs").list(), ","), scalarOf(j.get("if")), writes}
+	}
+
+	want := map[string]releaseJob{
+		"gate":    {},
+		"build":   {Needs: "gate"},
+		"image":   {Needs: "gate"},
+		"publish": {Needs: "gate,build,image", If: "${{ !inputs.dry_run }}", Writes: []string{"contents", "packages", "id-token", "attestations"}},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s jobs (-want +got):\n%s", releaseWorkflow, diff)
+	}
+
+	if got := scalarOf(releaseStep(t, "gate", stepRuns("pr-validation.yml")).get("if")); got != "${{ !inputs.dry_run }}" {
+		t.Errorf("%s CI-green check if = %q; a real release must pass it", releaseWorkflow, got)
+	}
+
+	if got := scalarOf(jobs.get("gate").get("outputs").get("sha")); got != "${{ steps.resolve.outputs.sha }}" {
+		t.Errorf("%s gate outputs sha %q, want the resolve step's", releaseWorkflow, got)
+	}
+
+	for _, id := range []string{"build", "image", "publish"} {
+		if got := scalarOf(releaseStep(t, id, stepUses("actions/checkout")).get("with").get("ref")); got != releaseSHA {
+			t.Errorf("%s %s checks out %q, want the gate's commit", releaseWorkflow, id, got)
+		}
+	}
+}
+
+// releasePublishing matches the steps that tag, push or release.
+var releasePublishing = map[string]func(*yamlNode) bool{
+	"tag":      stepRuns("git tag"),
+	"git push": stepRuns("git push"),
+	"skopeo":   stepRuns("skopeo copy"),
+	"login":    stepUses("docker/login-action"),
+	"attest":   stepUses("actions/attest-build-provenance"),
+	"release":  stepUses("softprops/action-gh-release"),
+}
+
+// TestReleasePublishesInOrder keeps every step that tags, pushes or releases
+// in the publish job, in the order tag, image, release, and the image job
+// building to an archive rather than a registry.
+func TestReleasePublishesInOrder(t *testing.T) {
+	jobs := readWorkflow(t, releaseWorkflow).get("jobs")
+
+	for _, id := range jobs.keys {
+		if id == "publish" {
+			continue
+		}
+
+		for i, s := range jobs.get(id).get("steps").items {
+			for what, match := range releasePublishing {
+				if match(s) {
+					t.Errorf("%s %s step %d does %s; only publish may", releaseWorkflow, id, i, what)
+				}
+			}
+		}
+	}
+
+	steps := jobs.get("publish").get("steps").items
+	tag := slices.IndexFunc(steps, stepRuns("git push"))
+	image := slices.IndexFunc(steps, stepRuns("skopeo copy"))
+	release := slices.IndexFunc(steps, stepUses("softprops/action-gh-release"))
+
+	if tag < 0 || image < tag || release < image {
+		t.Errorf("%s publish steps: tag %d, image %d, release %d; want them in that order", releaseWorkflow, tag, image, release)
+	}
+
+	build := releaseStep(t, "image", stepUses("docker/build-push-action")).get("with")
+	if got := scalarOf(build.get("outputs")); got != "type=oci,dest=${{ runner.temp }}/"+releaseImageArchive {
+		t.Errorf("%s image build outputs %q, want an OCI archive", releaseWorkflow, got)
+	}
+
+	if push := build.get("push"); push != nil {
+		t.Errorf("%s image build sets push %q; only publish pushes", releaseWorkflow, push.scalar)
+	}
+}
+
+// TestReleaseRequiresSkopeo pins the skopeo preflight in the image job,
+// which a dry run runs too, and in publish before the tag exists, and runs
+// it: it fails on a runner without skopeo and passes on one with it.
+func TestReleaseRequiresSkopeo(t *testing.T) {
+	requireTools(t, "bash")
+
+	preflight := stepRuns("command -v skopeo")
+
+	image := readWorkflow(t, releaseWorkflow).get("jobs").get("image").get("steps").items
+	if slices.IndexFunc(image, preflight) < 0 {
+		t.Errorf("%s image job does not check for skopeo", releaseWorkflow)
+	}
+
+	publish := readWorkflow(t, releaseWorkflow).get("jobs").get("publish").get("steps").items
+	if check, tag := slices.IndexFunc(publish, preflight), slices.IndexFunc(publish, stepRuns("git tag")); check < 0 || tag < check {
+		t.Errorf("%s publish steps: skopeo check %d, tag %d; want the check first", releaseWorkflow, check, tag)
+	}
+
+	script := scalarOf(releaseStep(t, "publish", preflight).get("run"))
+	if got := scalarOf(releaseStep(t, "image", preflight).get("run")); got != script {
+		t.Errorf("%s image and publish check for skopeo differently:\n%s\n%s", releaseWorkflow, got, script)
+	}
+
+	without, with := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(with, "skopeo"), []byte("#!/bin/sh\necho skopeo version 1.13.3\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if log, _, err := execReleaseStep(t, script, t.TempDir(), "PATH="+without); err == nil {
+		t.Errorf("skopeo check passed without skopeo:\n%s", log)
+	}
+
+	if log, _, err := execReleaseStep(t, script, t.TempDir(), "PATH="+with); err != nil {
+		t.Errorf("skopeo check failed with skopeo: %v\n%s", err, log)
+	}
+}
+
+// TestReleaseNotesFromInput pins the release on the tag the workflow
+// created: its title is the tag and its body the notes the tag step wrote,
+// above GitHub's generated list of merged PRs.
+func TestReleaseNotesFromInput(t *testing.T) {
+	gh := releaseStep(t, "publish", stepUses("softprops/action-gh-release")).get("with")
+
+	got := map[string]string{}
+	for _, k := range []string{"tag_name", "body_path", "generate_release_notes", "prerelease"} {
+		got[k] = scalarOf(gh.get(k))
+	}
+
+	want := map[string]string{
+		"tag_name":               "${{ inputs.version }}",
+		"body_path":              releaseNotesPath,
+		"generate_release_notes": "true",
+		"prerelease":             "${{ env.PRERELEASE }}",
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s release (-want +got):\n%s", releaseWorkflow, diff)
+	}
+
+	if gh.get("name") != nil || gh.get("body") != nil {
+		t.Errorf("%s release sets name or body; the title is the tag and the body the notes file", releaseWorkflow)
+	}
+}
+
+// releaseRemote returns a bare remote whose main holds two commits, and the
+// first, which is not main's head.
+func releaseRemote(t *testing.T) (string, string) {
+	t.Helper()
+
+	remote := filepath.Join(t.TempDir(), "origin.git")
+	releaseGit(t, "", "init", "-q", "--bare", remote)
+
+	src := t.TempDir()
+	releaseGit(t, src, "init", "-q")
+	releaseGit(t, src, "commit", "-q", "--allow-empty", "-m", "released")
+	commit := strings.TrimSpace(releaseGit(t, src, "rev-parse", "HEAD"))
+	releaseGit(t, src, "commit", "-q", "--allow-empty", "-m", "later")
+	releaseGit(t, src, "push", "-q", remote, "HEAD:refs/heads/main")
+
+	return remote, commit
+}
+
+// releaseClone fetches commit alone from remote into a new repository and
+// checks it out, as actions/checkout does for a SHA.
+func releaseClone(t *testing.T, remote, commit string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	releaseGit(t, dir, "init", "-q")
+	releaseGit(t, dir, "remote", "add", "origin", "file://"+remote)
+	releaseGit(t, dir, "fetch", "-q", "--no-tags", "--depth=1", "origin", commit)
+	releaseGit(t, dir, "checkout", "-q", "--detach", "FETCH_HEAD")
+
+	return dir
+}
+
+// runTagStep runs the publish job's tag step in dir to tag commit as
+// version with notes. On success the notes file the release reads must hold
+// the notes.
+func runTagStep(t *testing.T, step *yamlNode, dir, commit, version, notes string) (string, error) {
+	t.Helper()
+
+	tmp := t.TempDir()
+	env := slices.Concat(releaseGitEnv, stepLiteralEnv(step), []string{"VERSION=" + version, "SHA=" + commit, "NOTES=" + notes, "RUNNER_TEMP=" + tmp})
+
+	log, _, err := execReleaseStep(t, scalarOf(step.get("run")), dir, env...)
+	if err != nil {
+		return log, err
+	}
+
+	written, err := os.ReadFile(strings.Replace(releaseNotesPath, "${{ runner.temp }}", tmp, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(written) != notes {
+		t.Errorf("%s notes file %q, want %q", version, written, notes)
+	}
+
+	return log, nil
+}
+
+// TestReleaseTagStep runs the publish job's tag step in a checkout of a
+// commit behind main, against a bare remote: it pushes an annotated tag on
+// that commit, by github-actions[bot], whose message is the notes as
+// written, possibly none, and writes the notes the release reads. A tag that
+// exists, here or on the remote, is refused and left as it was.
+func TestReleaseTagStep(t *testing.T) {
+	requireTools(t, "bash", "git")
+
+	step := releaseStep(t, "publish", stepRuns("git tag"))
+	if env := step.get("env"); scalarOf(env.get("NOTES")) != "${{ inputs.notes }}" || scalarOf(env.get("SHA")) != releaseSHA {
+		t.Errorf("%s tag step env NOTES/SHA are not the notes input and the gate's commit", releaseWorkflow)
+	}
+
+	remote, commit := releaseRemote(t)
+	first, second := releaseClone(t, remote, commit), releaseClone(t, remote, commit)
+
+	for version, notes := range map[string]string{releaseTag: releaseCuratedNotes, "v1.2.4": ""} {
+		if log, err := runTagStep(t, step, releaseClone(t, remote, commit), commit, version, notes); err != nil {
+			t.Fatalf("tag %s: %v\n%s", version, err, log)
+		}
+
+		ref := "refs/tags/" + version
+
+		got := strings.TrimSpace(releaseGit(t, remote, "for-each-ref", "--format=%(objecttype) %(*objectname) %(taggername) %(taggeremail)", ref))
+		if want := "tag " + commit + " github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"; got != want {
+			t.Errorf("%s on the remote is %q, want %q", version, got, want)
+		}
+
+		_, msg, _ := strings.Cut(releaseGit(t, remote, "cat-file", "tag", ref), "\n\n")
+		if diff := cmp.Diff(notes, msg); diff != "" {
+			t.Errorf("%s message (-want +got):\n%s", version, diff)
+		}
+	}
+
+	if log, err := runTagStep(t, step, first, commit, "v1.2.5", releaseCuratedNotes); err != nil {
+		t.Fatalf("tag v1.2.5: %v\n%s", err, log)
+	}
+
+	before := releaseGit(t, remote, "for-each-ref", "refs/tags/")
+
+	for where, dir := range map[string]string{"on the remote": second, "here and on the remote": first} {
+		if _, err := runTagStep(t, step, dir, commit, "v1.2.5", "again"); err == nil {
+			t.Errorf("a tag that exists %s was retagged", where)
+		}
+	}
+
+	if after := releaseGit(t, remote, "for-each-ref", "refs/tags/"); after != before {
+		t.Errorf("refused tags changed the remote's:\n%s\nwant\n%s", after, before)
+	}
+}
+
+// TestReleaseImagePush runs the publish job's image push with a stand-in
+// skopeo: it copies the OCI archive the image job uploaded, with every
+// manifest and digest as built, to the version's tag and, unless a
+// pre-release, to latest, and outputs the digest the provenance attests.
+func TestReleaseImagePush(t *testing.T) {
+	requireTools(t, "bash")
+
+	upload := releaseStep(t, "image", stepUses("actions/upload-artifact")).get("with")
+	download := releaseStep(t, "publish", func(s *yamlNode) bool {
+		return stepUses("actions/download-artifact")(s) && s.get("with").get("name") != nil
+	}).get("with")
+
+	chain := []string{scalarOf(upload.get("name")), scalarOf(upload.get("path")), scalarOf(download.get("name")), scalarOf(download.get("path"))}
+	if diff := cmp.Diff([]string{"runtime-image", "${{ runner.temp }}/" + releaseImageArchive, "runtime-image", "${{ runner.temp }}"}, chain); diff != "" {
+		t.Errorf("%s image artifact upload name, path, download name, path (-want +got):\n%s", releaseWorkflow, diff)
+	}
+
+	step := releaseStep(t, "publish", stepRuns("skopeo copy"))
+
+	attest := releaseStep(t, "publish", func(s *yamlNode) bool { return s.get("with").get("subject-digest") != nil }).get("with")
+	if scalarOf(step.get("id")) != "push" || scalarOf(attest.get("subject-digest")) != "${{ steps.push.outputs.digest }}" {
+		t.Errorf("%s image provenance does not attest the digest the push step outputs", releaseWorkflow)
+	}
+
+	const image = "ghcr.io/o/mro2nf-runtime"
+
+	for prerelease, tags := range map[string][]string{"false": {releaseTag, "latest"}, "true": {releaseTag}} {
+		want := make([]string, 0, len(tags))
+		for _, tag := range tags {
+			want = append(want, "docker://"+image+":"+tag)
+		}
+
+		if diff := cmp.Diff(want, runImagePush(t, scalarOf(step.get("run")), image, prerelease)); diff != "" {
+			t.Errorf("prerelease %s: pushed tags (-want +got):\n%s", prerelease, diff)
+		}
+	}
+}
+
+// runImagePush runs the publish job's image push script with a stand-in
+// skopeo that records its arguments and returns the destinations it copied
+// the downloaded archive to, each whole and as built.
+func runImagePush(t *testing.T, script, image, prerelease string) []string {
+	t.Helper()
+
+	const fake = "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$SKOPEO_LOG\"\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --digestfile ]; then printf sha256:built > \"$2\"; fi\n  shift\ndone\n"
+
+	bin, tmp := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "skopeo"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	log := filepath.Join(tmp, "skopeo.log")
+
+	out := runReleaseStep(t, script, tmp, "PATH="+bin+":"+os.Getenv("PATH"), "SKOPEO_LOG="+log,
+		"VERSION="+releaseTag, "PRERELEASE="+prerelease, "IMAGE="+image, "RUNNER_TEMP="+tmp)
+
+	if got := strings.TrimSpace(out); got != "digest=sha256:built" {
+		t.Errorf("prerelease %s: push step output %q, want the pushed digest", prerelease, got)
+	}
+
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var dests []string
+
+	for line := range strings.Lines(string(raw)) {
+		args := strings.Fields(line)
+		if !slices.Contains(args, "--all") || !slices.Contains(args, "--preserve-digests") || !slices.Contains(args, "oci-archive:"+filepath.Join(tmp, releaseImageArchive)) {
+			t.Errorf("prerelease %s: skopeo %s does not copy the whole archive as built", prerelease, line)
+		}
+
+		dests = append(dests, args[len(args)-1])
+	}
+
+	return dests
 }
