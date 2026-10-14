@@ -907,7 +907,9 @@ workflow CHUNKS {
 // by completion. groupTuple emits a split's chunk outs once they number its
 // chunks, and, when every chunk is done, any group that does not; such a
 // group fails the run here, where the join would otherwise run short or
-// never. groupBy checks the count itself, but in time quadratic in it.
+// never. Chunk outs that number a multiple of the chunks come as full
+// groups, which JOIN's join fails as duplicates. groupBy checks the count
+// itself, but in time quadratic in it.
 def chunkOuts(gk, List os) {
     if (os.size() != gk.getGroupSize()) {
         error("split ${gk.getGroupTarget()} has ${gk.getGroupSize()} chunks, but its chunk outs came in a group of ${os.size()}")
@@ -926,7 +928,7 @@ workflow JOIN {
     main:
     outs = chunk.map { m, k, o, recs -> [groupKey(k, m.chunks), [o, recs]] }.groupTuple(remainder: true).map { gk, os -> [gk.getGroupTarget(), chunkOuts(gk, os)] }
     none = splits.filter { v -> v[2].isEmpty() }.map { v -> [v[0], []] }
-    out = splits.join(outs.mix(none)).map { k, m, cs, j, res, t, _d, fs, vs, us, rs, ids, ef, _cf, os ->
+    out = splits.join(outs.mix(none), failOnDuplicate: true).map { k, m, cs, j, res, t, _d, fs, vs, us, rs, ids, ef, _cf, os ->
         [m + resources(res).join, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]
     }
 
