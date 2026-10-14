@@ -316,7 +316,8 @@ jobs:
           for tag in "${tags[@]}"; do
             skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/image-digest" "oci-archive:$RUNNER_TEMP/runtime-image.tar" "docker://$IMAGE:$tag"
           done
-          echo "digest=$(cat "$RUNNER_TEMP/image-digest")" >> "$GITHUB_OUTPUT"
+          digest=$(cat "$RUNNER_TEMP/image-digest")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       # GitHub offers no attestations to private repositories owned by a user
       # account, so these steps would fail every release there.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
