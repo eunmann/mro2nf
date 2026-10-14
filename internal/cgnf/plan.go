@@ -17,13 +17,17 @@ import (
 // in time quadratic in its lines. Under an S3 mount, which s3:// inputs
 // PLAN reads in place depends on the buckets its instance mounts, which no
 // input of PLAN holds, so a -resume re-runs it; a task downstream stays
-// cached while PLAN's records are unchanged.
+// cached while PLAN's records are unchanged. The run's work dir is an input
+// string, not workflow.workDir in the script: Nextflow's v1 parser keys a
+// task on each global its script reads, and keys a Path on its modification
+// time, which each run's new task dirs change, so PLAN would never resume.
 const planProcess = `process PLAN {
     cache !params.mro2nf_s3_mount
 
     input:
     val values
     val meta
+    val workdir
     path 'mro'
     path overrides, stageAs: 'overrides/*', arity: '0..*'
 
@@ -39,7 +43,7 @@ const planProcess = `process PLAN {
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)} -host-inputs=${shq(params.mro2nf_host_inputs)} -host-in-place=${on(params.mro2nf_host_in_place)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)} -run-workdir ${shq(workflow.workDir.toUriString())}${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}${pool(task)} -call call -nodes nodes -roots roots -leaves leaves -files files
+    ${shq(params.mro2nf_mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)} -host-inputs=${shq(params.mro2nf_host_inputs)} -host-in-place=${on(params.mro2nf_host_in_place)} -remote-inputs=${shq(params.mro2nf_allow_remote_inputs)} -run-workdir ${shq(workdir)}${params.mro2nf_s3_mount ? ' -s3-mount ' + shq(params.mro2nf_s3_mount) : ''}${pool(task)} -call call -nodes nodes -roots roots -leaves leaves -files files
     """
 }
 
