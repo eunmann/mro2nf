@@ -163,7 +163,7 @@ func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 		t.Errorf("conf/container.config does not stage head-node inputs, alone:\n%s", ctr)
 	}
 
-	for _, want := range []string{" -host-in-place=${on(params.mro2nf_host_in_place)} ", " -run-workdir ${shq(workflow.workDir.toUriString())}"} {
+	for _, want := range []string{" -host-in-place=${on(params.mro2nf_host_in_place)} ", " -run-workdir ${shq(workdir)}", ", workflow.workDir.toUriString(), "} {
 		if !strings.Contains(tree["main.nf"], want) {
 			t.Errorf("PLAN lacks %q:\n%s", want, tree["main.nf"])
 		}
@@ -171,6 +171,34 @@ func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 
 	if want := "if (on(params.mro2nf_host_in_place)) {\n        cmd += ' -host-in-place'"; !strings.Contains(stageModule, want) {
 		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
+// TestProcessesReadNoPathGlobal: on Nextflow's v1 parser, the 25.10 floor's
+// default, a task's cache key holds every global its process reads, and a
+// Path global is keyed on its modification time, which each run changes
+// for the work dir and may for the others, so a process reading one
+// re-runs under -resume. Each process takes such a path as an input value.
+func TestProcessesReadNoPathGlobal(t *testing.T) {
+	tree := readTree(t, emitFixture(t, "entry_file"))
+
+	for file, src := range map[string]string{"main.nf": tree["main.nf"], "stage.nf": stageModule} {
+		procs := 0
+
+		for _, block := range strings.Split(src, "\nprocess ")[1:] {
+			procs++
+			body, _, _ := strings.Cut(block, "\n}\n")
+
+			for _, global := range []string{"workflow.", "projectDir", "launchDir", "moduleDir", "baseDir"} {
+				if strings.Contains(body, global) {
+					t.Errorf("%s: process %s reads %s", file, strings.Fields(body)[0], global)
+				}
+			}
+		}
+
+		if procs == 0 {
+			t.Errorf("%s declares no process", file)
+		}
 	}
 }
 

@@ -184,7 +184,7 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 	w.linef("if (on(params.mro2nf_require_image) && !params.mro2nf_image) {")
 	w.linef("    error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
 	w.linef("}")
-	w.linef("PLAN(%s, %s, file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(), mroAssets)
+	w.linef("PLAN(%s, %s, workflow.workDir.toUriString(), file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(), mroAssets)
 	w.linef("%s = CALL(PLAN.out.call, %d).map { c -> %s }", w.def("shared"), cg.MaxValueBytes, p.graphMeta("call: c"))
 
 	for _, d := range []struct{ name, expr string }{

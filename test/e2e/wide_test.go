@@ -46,8 +46,8 @@ func TestLaunchEdges(t *testing.T) {
 		name, dir string
 		bound     int
 	}{
-		{"wide", dir, 950},
-		{"cellranger_shaped", filepath.Join(root, "testdata", "cellranger_shaped"), 267},
+		{"wide", dir, 951},
+		{"cellranger_shaped", filepath.Join(root, "testdata", "cellranger_shaped"), 268},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

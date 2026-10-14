@@ -37,7 +37,7 @@ process GPU_PROBE {
 workflow {
     def gpu2 = [name: 'stage', cpus: 1, mem_gb: 1, special: 'gpu:2']
     def none = [name: 'none', cpus: 1, mem_gb: 1, special: '']
-    def r = resources("chnk0\t2\t1\tgpu:2\nchnk1\t1\t1\tgpu\nchnk2\t1\t1\thighmem\njoin\t1\t3\tgpu:3\n")
+    def r = resources(file("${projectDir}/resources.tsv"))
     GPU_PROBE(channel.of(
         gpu2,
         none,
@@ -50,6 +50,11 @@ workflow {
 }
 `
 	if err := os.WriteFile(filepath.Join(proj, "probe.nf"), []byte(probe), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	table := "chnk0\t2\t1\tgpu:2\nchnk1\t1\t1\tgpu\nchnk2\t1\t1\thighmem\njoin\t1\t3\tgpu:3\n"
+	if err := os.WriteFile(filepath.Join(proj, "resources.tsv"), []byte(table), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
