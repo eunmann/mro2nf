@@ -100,8 +100,9 @@ run (`runs/3`, `runs/4`, `runs/6`, `runs/7`) from the archive's files:
 | `cimap.json`, `instance_types.json` | `analysis/perf/ct_cimap.json`, `analysis/perf/itypes.json` |
 | `ecs_tasks.json` (run 6), `ebs_raw.json` (runs 6, 7) | `analysis/perf/r6/ecs_tasks.json`, `analysis/perf/r7/ebs_raw_r<run>.json` |
 
-The archive does not hold the tasks' `.command.run` files, so take `stagein.json` from it instead of
-running `stagein.py`. Run `phases.py` and `cp.py` on each directory, then:
+The archive holds each task's `.command.run` (`analysis/perf/r<run>/runs/`, run 3
+`cellranger/runs3/`), so `stagein.py` can rebuild `stagein.json`, or take the archived one. Run
+`phases.py` and `cp.py` on each directory, then:
 
 ```bash
 W=N0_CELLRANGER_PREFLIGHT,N1_CELLRANGER_PREFLIGHT_LOCAL,N10_MAKE_SHARD_MN,N10_MAKE_SHARD_JN,N12_BARCODE_CORRECTION_MN,N13_ALIGN_AND_COUNT_SP,N13_ALIGN_AND_COUNT_MN,N13_ALIGN_AND_COUNT_JN,N19_WRITE_BARCODE_INDEX
