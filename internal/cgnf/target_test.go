@@ -17,35 +17,29 @@ import (
 // PLAN and OUTS the project's copy of the .mro files.
 func TestEmitTargetsAsProfiles(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "diamond_min"))
-	cfg, ctr, ho := tree["nextflow.config"], tree["conf/container.config"], tree["conf/healthomics.config"]
+	cfg, ctr := tree["nextflow.config"], tree["conf/container.config"]
 
-	for _, want := range []string{
+	checkContains(t, tree, "conf/base.config",
 		"params.mro2nf_mre = 'mre'\n",
 		"params.mro2nf_image = null\nparams.mro2nf_require_image = false\n",
+	)
+	checkContains(t, tree, "nextflow.config",
 		"    docker {\n        process.executor = 'local'\n",
 		"        docker.enabled = true\n        process.containerOptions = ",
 		"'\n        includeConfig 'conf/container.config'\n",
 		"    awsbatch {\n        process.executor = 'awsbatch'\n        includeConfig 'conf/container.config'\n        params.mro2nf_host_inputs = false\n",
 		"    healthomics {\n        includeConfig 'conf/healthomics.config'\n",
-	} {
-		if !strings.Contains(cfg, want) {
-			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
-		}
+	)
+
+	if top, _, _ := strings.Cut(cfg, "profiles {"); !strings.Contains(top, "\nincludeConfig 'conf/base.config'\n") || strings.Contains("\n"+cfg, "\nparams.") {
+		t.Errorf("nextflow.config does not include conf/base.config before its profiles, or sets a param outside them, which would override theirs:\n%s", cfg)
 	}
 
-	if strings.Index(cfg, "profiles {") < strings.Index(cfg, "params.mro2nf_image") {
-		t.Error("nextflow.config sets a param after its profiles, which would override theirs")
-	}
-
-	for _, want := range []string{
+	checkContains(t, tree, "conf/container.config",
 		"params.mro2nf_confine = true\n",
 		"params.mro2nf_require_image = true\n",
 		"process.container = params.mro2nf_image\n",
-	} {
-		if !strings.Contains(ctr, want) {
-			t.Errorf("conf/container.config lacks %q:\n%s", want, ctr)
-		}
-	}
+	)
 
 	if strings.Contains(ctr, "withName") {
 		t.Errorf("conf/container.config gives a task an image of its own:\n%s", ctr)
@@ -57,11 +51,7 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"includeConfig 'container.config'\n", "params.mro2nf_host_inputs = false\n", "params.outdir = '/mnt/workflow/pubdir'\n"} {
-		if !strings.Contains(ho, want) {
-			t.Errorf("conf/healthomics.config lacks %q:\n%s", want, ho)
-		}
-	}
+	checkContains(t, tree, "conf/healthomics.config", "includeConfig 'container.config'\n", "params.mro2nf_host_inputs = false\n", "params.outdir = '/mnt/workflow/pubdir'\n")
 
 	main := tree["main.nf"]
 	if !strings.Contains(main, "if (on(params.mro2nf_require_image) && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
@@ -71,6 +61,17 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 	for _, want := range []string{"stage -phase ${phase} ${graph(meta, '')}", "outs ${graph(meta, 'mro')}"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
+		}
+	}
+}
+
+// checkContains fails t for each of wants the tree's file name lacks.
+func checkContains(t *testing.T, tree map[string]string, name string, wants ...string) {
+	t.Helper()
+
+	for _, want := range wants {
+		if !strings.Contains(tree[name], want) {
+			t.Errorf("%s lacks %q:\n%s", name, want, tree[name])
 		}
 	}
 }
@@ -103,10 +104,12 @@ func TestEmitHealthOmicsRoundsMemoryUp(t *testing.T) {
 // s3:// inputs are staged.
 func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
-	cfg := tree["nextflow.config"]
+	cfg, base := tree["nextflow.config"], tree["conf/base.config"]
 
-	if !strings.Contains(cfg, "params.mro2nf_s3_mount = null\n") || strings.Index(cfg, "params.mro2nf_s3_mount = null") > strings.Index(cfg, "profiles {") {
-		t.Errorf("nextflow.config does not leave the S3 mount unset before its profiles:\n%s", cfg)
+	checkContains(t, tree, "conf/base.config", "params.mro2nf_s3_mount = null\n")
+
+	if strings.Count(base, "mro2nf_s3_mount = ") != 1 || strings.Contains(base, "aws.batch.volumes") {
+		t.Errorf("conf/base.config mounts S3:\n%s", base)
 	}
 
 	start := strings.Index(cfg, "    awsbatch {\n")
@@ -122,7 +125,7 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 		}
 	}
 
-	if strings.Count(cfg, "aws.batch.volumes") != 1 || strings.Count(cfg, "mro2nf_s3_mount = ") != 2 {
+	if strings.Count(cfg, "aws.batch.volumes") != 1 || strings.Count(cfg, "mro2nf_s3_mount = ") != 1 {
 		t.Errorf("a profile other than awsbatch mounts S3:\n%s", cfg)
 	}
 
@@ -150,11 +153,10 @@ func TestEmitMountsS3InputsOnAWSBatch(t *testing.T) {
 // input read in place may hold.
 func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
-	cfg, ctr := tree["nextflow.config"], tree["conf/container.config"]
+	cfg, base, ctr := tree["nextflow.config"], tree["conf/base.config"], tree["conf/container.config"]
 
-	top, _, _ := strings.Cut(cfg, "profiles {")
-	if strings.Count(cfg, "mro2nf_host_in_place") != 1 || !strings.Contains(top, "params.mro2nf_host_in_place = true\n") {
-		t.Errorf("nextflow.config does not read head-node inputs in place before its profiles alone:\n%s", cfg)
+	if strings.Contains(cfg, "mro2nf_host_in_place") || strings.Count(base, "mro2nf_host_in_place") != 1 || !strings.Contains(base, "params.mro2nf_host_in_place = true\n") {
+		t.Errorf("conf/base.config does not read head-node inputs in place, or a profile other than the container ones sets it:\n%s\n%s", base, cfg)
 	}
 
 	if !strings.Contains(ctr, "params.mro2nf_host_in_place = false\n") || strings.Contains(tree["conf/healthomics.config"], "mro2nf_host_in_place") {
@@ -201,7 +203,9 @@ func TestAWSBatchProfilePollsEveryTwoSeconds(t *testing.T) {
 // every entry input and the run's mrp --overrides file, optional, and none
 // of the project's other params, which a run then cannot set: the image
 // the package pins (#334), and the file values it stages. Its bytes are
-// those a registered workflow was created with.
+// those a registered workflow was created with. The package's own config
+// is conf/base.config, the pinned image and the healthomics profile's
+// config, without the project's profiles (#571).
 func TestEmitHealthOmicsTemplate(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "entry_file"))
 
@@ -229,20 +233,25 @@ func TestEmitHealthOmicsTemplate(t *testing.T) {
 		t.Error("package.sh packages nextflow_schema.json, from which HealthOmics would detect params the template does not name")
 	}
 
+	pkg := tree["package.sh"]
+
 	for _, want := range []string{
+		"includeConfig 'conf/base.config'\n",
 		`params.mro2nf_image = '$1'`,
 		"includeConfig 'conf/healthomics.config'",
 		"@sha256:[0-9a-f]{64}$",
-		"cp -R main.nf stage.nf nextflow.config conf _assets parameter-template.json",
+		"cp -R main.nf stage.nf conf _assets parameter-template.json \"$pkg\"/\n",
+		"cat > \"$pkg/nextflow.config\" <<EOF\n",
 		"if [ -d subworkflows ]; then\n    cp -R subworkflows",
 	} {
-		if !strings.Contains(tree["package.sh"], want) {
-			t.Errorf("package.sh lacks %q:\n%s", want, tree["package.sh"])
+		if !strings.Contains(pkg, want) {
+			t.Errorf("package.sh lacks %q:\n%s", want, pkg)
 		}
 	}
 
-	if strings.Index(tree["package.sh"], "params.mro2nf_image = '$1'") > strings.Index(tree["package.sh"], "includeConfig 'conf/healthomics.config'") {
-		t.Error("package.sh pins the image after the profile reads it")
+	if strings.Index(pkg, "includeConfig 'conf/base.config'") > strings.Index(pkg, "params.mro2nf_image = '$1'") ||
+		strings.Index(pkg, "params.mro2nf_image = '$1'") > strings.Index(pkg, "includeConfig 'conf/healthomics.config'") {
+		t.Error("package.sh pins the image before the base config or after the profile that reads it")
 	}
 }
 
@@ -281,7 +290,7 @@ func TestDockerProfileRunsAsInvokingUser(t *testing.T) {
 // task hand mre the pool of their own task.
 func TestLocalProfilesGrantFromThePool(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "diamond_min"))
-	cfg := tree["nextflow.config"]
+	cfg, base := tree["nextflow.config"], tree["conf/base.config"]
 
 	const (
 		limits = "        process.resourceLimits = [ cpus: nextflow.util.SysHelper.getAvailCpus(), memory: nextflow.util.SysHelper.getAvailMemory() * 0.9 ]\n" +
@@ -289,7 +298,7 @@ func TestLocalProfilesGrantFromThePool(t *testing.T) {
 		off = "params.mro2nf_local_jobs = false\n"
 	)
 
-	top, profiles, _ := strings.Cut(cfg, "profiles {")
+	_, profiles, _ := strings.Cut(cfg, "profiles {")
 	for _, name := range []string{"standard", "docker"} {
 		_, body, _ := strings.Cut(profiles, "    "+name+" {")
 		body, _, _ = strings.Cut(body, "\n    }\n")
@@ -300,8 +309,14 @@ func TestLocalProfilesGrantFromThePool(t *testing.T) {
 		}
 	}
 
-	if strings.Count(cfg, "params.mro2nf_local_jobs = true") != 2 || !strings.Contains(top, off) {
-		t.Errorf("nextflow.config grants from a local pool outside the standard and docker profiles:\n%s", cfg)
+	if strings.Count(cfg, "params.mro2nf_local_jobs = true") != 2 || !strings.Contains(base, off) {
+		t.Errorf("nextflow.config grants from a local pool outside the standard and docker profiles:\n%s\n%s", base, cfg)
+	}
+
+	for _, local := range []string{"resourceLimits =", "executor ="} {
+		if strings.Contains(base, local) {
+			t.Errorf("conf/base.config, which the HealthOmics package includes, sets %q:\n%s", local, base)
+		}
 	}
 
 	for _, name := range []string{"conf/container.config", "conf/healthomics.config"} {

@@ -28,7 +28,7 @@ func runFixture(t *testing.T, fixture string, flags ...string) (string, error) {
 func readConfig(t *testing.T, proj string) string {
 	t.Helper()
 
-	cfg, err := os.ReadFile(filepath.Join(proj, "nextflow.config"))
+	cfg, err := os.ReadFile(filepath.Join(proj, "conf", "base.config"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 	cfg := readConfig(t, out)
 	for _, want := range []string{"params.mro2nf_mre = 'mre'", "params.mro2nf_mrjob = null", "params.mro2nf_adapters = null", "params.mro2nf_confine = false", "params.mro2nf_s3_mount = null", "params.x = null"} {
 		if !strings.Contains(cfg, want) {
-			t.Errorf("nextflow.config lacks %q:\n%s", want, cfg)
+			t.Errorf("conf/base.config lacks %q:\n%s", want, cfg)
 		}
 	}
 

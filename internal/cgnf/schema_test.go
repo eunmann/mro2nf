@@ -108,7 +108,7 @@ func emitSource(t *testing.T, src string) map[string]string {
 // TestEmitParamsSchema: nextflow_schema.json declares each entry input at
 // its root by its Martian type, described by its help text, with the
 // call's value as its default unless that is null, and the project's own
-// params in their groups; it declares exactly the params nextflow.config
+// params in their groups; it declares exactly the params conf/base.config
 // sets.
 func TestEmitParamsSchema(t *testing.T) {
 	tree := emitSource(t, typedEntrySrc)
@@ -163,7 +163,7 @@ func TestEmitParamsSchema(t *testing.T) {
 		}
 	}
 
-	set := regexp.MustCompile(`(?m)^params\.(\w+) = `).FindAllStringSubmatch(tree["nextflow.config"], -1)
+	set := regexp.MustCompile(`(?m)^params\.(\w+) = `).FindAllStringSubmatch(tree["conf/base.config"], -1)
 
 	config := make([]string, len(set))
 	for i, m := range set {
@@ -171,7 +171,7 @@ func TestEmitParamsSchema(t *testing.T) {
 	}
 
 	if d := cmp.Diff(slices.Sorted(slices.Values(config)), slices.Sorted(slices.Values(declared))); d != "" {
-		t.Errorf("schema params differ from nextflow.config's (-config +schema):\n%s", d)
+		t.Errorf("schema params differ from conf/base.config's (-config +schema):\n%s", d)
 	}
 }
 

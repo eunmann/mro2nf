@@ -7,16 +7,25 @@ import (
 	"github.com/eunmann/mro2nf/internal/job"
 )
 
-// config renders nextflow.config: the engine floor, the tools, code and
-// knobs the stage module reads, one param per entry input, the retry
-// policy and the profiles a run is launched with.
-func (p *project) config() string {
+// engineFloor is the oldest Nextflow release the project is tested on. A
+// workflow's nextflow.config declares it, as HealthOmics reads it there to
+// choose the engine a run gets.
+const engineFloor = "manifest.nextflowVersion = '!>=25.10.0'\n"
+
+// nextflowConfig is nextflow.config: the engine floor, conf/base.config and
+// the profiles a run is launched with.
+const nextflowConfig = `// The oldest Nextflow release this project is tested on.
+` + engineFloor + `
+includeConfig 'conf/base.config'
+` + profilesConfig
+
+// baseConfig renders conf/base.config, the settings every target shares:
+// the tools, code and knobs the stage module reads, one param per entry
+// input, the retry policy and the trace.
+func (p *project) baseConfig() string {
 	var b strings.Builder
 
-	b.WriteString(`// The oldest Nextflow release this project is tested on.
-manifest.nextflowVersion = '!>=25.10.0'
-
-`)
+	b.WriteString("// The settings every target shares: nextflow.config and the HealthOmics\n// package's config include them.\n\n")
 
 	for _, blk := range projectParams(p.src.Invocation.Call) {
 		if blk.comment != "" {
@@ -37,7 +46,6 @@ manifest.nextflowVersion = '!>=25.10.0'
 	}
 
 	b.WriteString(processConfig())
-	b.WriteString(profilesConfig)
 
 	return b.String()
 }
@@ -72,8 +80,8 @@ trace {
 }
 
 // profilesConfig are the targets one project runs on, chosen at launch
-// with -profile. It comes last: a profile's settings override the ones
-// above it.
+// with -profile. It comes after conf/base.config: a profile's settings
+// override the ones there.
 const profilesConfig = `
 // The local profiles grant each job from a pool of the cpus and 90% of the
 // memory the JVM sees, and clamp each task to it; a -c config setting
@@ -132,8 +140,9 @@ profiles {
         aws.batch.retryMode = 'standard'
     }
 
-    // AWS HealthOmics, which takes no -profile: package.sh makes it the
-    // workflow's own config, with the image it pins.
+    // AWS HealthOmics, which applies standard to a run that names no
+    // profile: package.sh makes conf/base.config and this profile's config
+    // the workflow's own, with the image it pins and no profiles.
     healthomics {
         includeConfig 'conf/healthomics.config'
     }

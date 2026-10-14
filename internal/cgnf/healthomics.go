@@ -36,13 +36,16 @@ func (p *project) parameterTemplate() (string, error) {
 }
 
 // packageScript is package.sh, which zips the workflow HealthOmics runs:
-// the files main.nf reads, its healthomics profile made the workflow's own
-// config, and the image pinned by digest. nextflow_schema.json stays out:
-// HealthOmics detects a workflow's params from a schema in its package,
-// and the template alone names those a run may set.
+// the files main.nf reads, a nextflow.config of conf/base.config and its
+// healthomics profile's config, and the image pinned by digest. That
+// config holds no profiles, as HealthOmics applies standard to a run that
+// names none. nextflow_schema.json stays out: HealthOmics detects a
+// workflow's params from a schema in its package, and the template alone
+// names those a run may set.
 const packageScript = `#!/usr/bin/env bash
-# Packages this project as an AWS HealthOmics workflow, its healthomics
-# profile the workflow's own config, as HealthOmics takes no -profile:
+# Packages this project as an AWS HealthOmics workflow whose config is
+# conf/base.config and the healthomics profile's, with no profiles, as
+# HealthOmics applies the standard profile to a run that names none:
 #   ./package.sh <image>
 # Push the image every task runs in (README: Container image) to private
 # ECR in the run's region and name it by digest (<repo>@sha256:...): the
@@ -63,14 +66,14 @@ if ! [[ $1 =~ ^[^@[:space:]\'\\]+@sha256:[0-9a-f]{64}$ ]]; then
 fi
 pkg=$(mktemp -d)
 trap 'rm -rf "$pkg"' EXIT
-cp -R main.nf stage.nf nextflow.config conf _assets parameter-template.json "$pkg"/
+cp -R main.nf stage.nf conf _assets parameter-template.json "$pkg"/
 if [ -d subworkflows ]; then
     cp -R subworkflows "$pkg"/
 fi
-cat >> "$pkg/nextflow.config" <<EOF
+cat > "$pkg/nextflow.config" <<EOF
+` + engineFloor + `includeConfig 'conf/base.config'
 
-// package.sh: the image the workflow pins, and its healthomics profile,
-// which reads it.
+// The image the workflow pins, which conf/healthomics.config reads.
 params.mro2nf_image = '$1'
 includeConfig 'conf/healthomics.config'
 EOF

@@ -50,7 +50,7 @@ up in them; it computes no Martian value and parses no stage-controlled JSON.
 | Scheduling: a task per `mrp` job, executors, queues | Nextflow | the processes of `stage.nf`; the profiles (§9) |
 | Staging files between tasks | Nextflow `path` inputs; `mre` names each file to stage | `stage.nf`; `-field-refs`, `-fork-refs`, `-out-refs` (§5) |
 | Caching | Nextflow `-resume` | §5, **Cache identity** |
-| Retries | Nextflow `errorStrategy` on the exit `mre` chooses | `nextflow.config`; `internal/job/retry.go` |
+| Retries | Nextflow `errorStrategy` on the exit `mre` chooses | `conf/base.config`; `internal/job/retry.go` |
 | Resources | Nextflow `cpus`, `memory`, `accelerator`, `clusterOptions`; `mre` resolves the values as `mrp` | §9; `internal/job/resources.go` |
 | Publishing | Nextflow `publishDir` of OUTS; `mre outs` builds the tree | §5, **OUTS** |
 | Targets, launch params | Nextflow profiles and `params` | §4, §8, §9 |
@@ -145,7 +145,7 @@ cg.Graph.Topology → per node its fork roots, reads and gates
    │
 cgnf.Emit         → a Nextflow project on disk:
    │                  main.nf, subworkflows/, stage.nf, nextflow.config,
-   │                  _assets/mro/
+   │                  conf/, _assets/mro/
    ▼
 nextflow run main.nf …  →  PLAN, a task per stage instance, then OUTS
 ```
@@ -221,9 +221,10 @@ one forked on a map call another stage feeds — is refused at transpile time.
 main.nf               ← PLAN, the nodes or the calls of their runs, then OUTS
 subworkflows/         ← a workflow per run of nodes (W<j>.nf), only in a project too large for one
 stage.nf              ← the one hand-written stage module every node includes
-nextflow.config       ← params, retry policy, GPU requests, trace, the target profiles
+nextflow.config       ← the engine floor, conf/base.config, the target profiles
 nextflow_schema.json  ← every param's type, default and description (nf-schema), for launch forms (§8)
-conf/                 ← the container profiles' and the HealthOmics profile's configs
+conf/                 ← base.config: params, retry policy, GPU requests, trace;
+                        the container profiles' and the HealthOmics profile's configs
 package.sh, parameter-template.json ← the HealthOmics package (§9)
 _assets/mro/          ← a copy of every .mro file the entry compiles from, each
                         at its absolute path below it; PLAN and OUTS compile it
@@ -280,7 +281,10 @@ is its alias, `N5_X`, in the entry workflow, and `W1:N5_X` in a run; a
 hash includes that name, so `-resume` finds no cached task of a node that a
 re-transpiled project wires in another workflow than the run did.
 
-**`nextflow.config`** holds:
+**`nextflow.config`** declares the oldest Nextflow the project runs on,
+includes `conf/base.config`, the settings every target shares, and defines
+the target profiles (§9), whose settings override the shared ones.
+**`conf/base.config`** holds:
 
 - `params.outdir` (`results`), and `params.job_resources`, Martian's
   `MRO_JOBRESOURCES` analog: a map from a stage's `special` key to the
@@ -327,10 +331,13 @@ re-transpiled project wires in another workflow than the run did.
   whose special, as `mrp` resolves it, is `"gpu"` or `"gpu:N"`: the stage's own,
   or for a chunk or the join the `__special` the split returned for it (see
   [`RUNNING.md`](RUNNING.md#gpu-stages)).
-- Task tracing, and the target profiles (§9): `standard` (local, each job
-  granted from and each task clamped to the host's cpus and 90% of its memory
-  with `process.resourceLimits`), `slurm`, `sge`,
-  `lsf`, `pbs`, `docker`, `awsbatch` and `healthomics`.
+- Task tracing.
+
+The target profiles are `standard` (local, each job granted from and each
+task clamped to the host's cpus and 90% of its memory with
+`process.resourceLimits`), `slurm`, `sge`, `lsf`, `pbs`, `docker`,
+`awsbatch` and `healthomics`. Nextflow applies `standard` to a launch that
+names no profile, so a run without `-profile` is local.
 
 ---
 
@@ -917,7 +924,7 @@ You can override inputs **at launch** without re-transpiling:
   (`types.Table.Schema`) with the call's value as its default, a split input
   by Martian's split form of that type (`types.Split`) with the call's split
   value wrapped as `{"split": v}`, and the
-  project's own params from the same model as `nextflow.config` and the
+  project's own params from the same model as `conf/base.config` and the
   HealthOmics `parameter-template.json` (`internal/cgnf/params.go`). No
   nf-schema plugin validates against it: a plugin is downloaded at launch,
   which an offline grid or container host cannot do, and HealthOmics installs
@@ -1068,10 +1075,18 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   compute environment's instances mount the file's bucket (§8,
   `deploy/awsbatch-cdk`), and stages it otherwise. Set `process.queue` and
   `aws.region` in a `-c` config; `--outdir s3://…` publishes to S3.
-- `healthomics` (HealthOmics takes no `-profile`): `./package.sh
-  <image>@sha256:…` zips the files `main.nf` reads, appends the image and
-  `includeConfig 'conf/healthomics.config'` to the zip's `nextflow.config`, so
-  the profile is the workflow's own, and publishes to `/mnt/workflow/pubdir`.
+- `healthomics`: `./package.sh <image>@sha256:…` zips the files `main.nf`
+  reads with a `nextflow.config` of its own: the engine floor,
+  `conf/base.config`, the image and `conf/healthomics.config`, so the
+  profile is the workflow's own, and publishes to `/mnt/workflow/pubdir`.
+  That config defines no profiles: HealthOmics applies `standard`, if the
+  workflow defines it, to a run that names no profile, and `standard` is
+  the local target, whose `process.resourceLimits` would clamp every task
+  to the engine's host and whose `mro2nf_local_jobs` would grant jobs as
+  `mrp`'s local job manager does (#571). A setting after the profiles
+  cannot undo them: under Nextflow 25.10, a profile's `process` settings
+  outrank a later top-level one, and a `null` unsets nothing. The package
+  sets no executor; HealthOmics runs every task itself.
   The image must be pinned by digest: a workflow version then runs the code
   it was validated with, and as `parameter-template.json` declares only the
   entry inputs and `mro2nf_overrides`, no run can name another image.
