@@ -53,3 +53,9 @@ jobs:
       # account lookups), so synth needs no AWS credentials.
       - name: Synthesize
         run: npx cdk synth --quiet
+      - name: The queue cancels a job no instance can fit
+        run: |
+          jq -e '[.Resources[] | select(.Type == "AWS::Batch::JobQueue") | .Properties.JobStateTimeLimitActions[]
+                  | select(.Action == "CANCEL" and .State == "RUNNABLE") | .Reason] | sort
+                 == ["MISCONFIGURATION:COMPUTE_ENVIRONMENT_MAX_RESOURCE", "MISCONFIGURATION:JOB_RESOURCE_REQUIREMENT"]' \
+            cdk.out/Mro2nfStack.template.json

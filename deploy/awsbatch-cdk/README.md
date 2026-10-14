@@ -43,6 +43,12 @@ pipelines (capped here at `maxvCpus: 256`, so a wide parallel run is not vCPU
 starved; still $0 idle on spot + `minvCpus: 0`), or leaving data in S3/ECR. Run
 `cdk destroy` when done to remove everything.
 
+A job no instance can ever fit (more vCPUs or memory than any instance type
+offers, or than `maxvCpus`) would wait at the head of the queue forever and
+hold back every job behind it. The queue cancels such a job after 10 minutes,
+so its run fails naming the task instead of hanging. A job waiting only on
+spot capacity keeps waiting.
+
 ## Prerequisites
 
 - Node 18+ and the AWS CDK: `npm i -g aws-cdk` (or use the local `npx cdk`).
