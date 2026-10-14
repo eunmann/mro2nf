@@ -202,7 +202,7 @@ func TestProcessesReadNoPathGlobal(t *testing.T) {
 	}
 }
 
-// TestAWSBatchProfilePollsEveryTwoSeconds:the awsbatch profile checks job
+// TestAWSBatchProfilePollsEveryTwoSeconds: the awsbatch profile checks job
 // status every 2 s rather than Nextflow's 10 s Batch default (#537), scoped
 // to the awsbatch executor so a local executor keeps its 100 ms.
 func TestAWSBatchProfilePollsEveryTwoSeconds(t *testing.T) {
