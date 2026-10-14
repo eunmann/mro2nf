@@ -43,11 +43,14 @@ pipelines (capped here at `maxvCpus: 256`, so a wide parallel run is not vCPU
 starved; still $0 idle on spot + `minvCpus: 0`), or leaving data in S3/ECR. Run
 `cdk destroy` when done to remove everything.
 
-Each instance's 500 GiB gp3 root volume is provisioned at gp3's maxima,
-2,000 MiB/s and 80,000 IOPS: Nextflow copies every task input onto it before
-the task runs, and at gp3's default 125 MiB/s that copy is disk-bound. Above
-the defaults this costs about $0.63 per instance-hour in us-east-1, billed only
-while an instance runs; an instance type's own EBS bandwidth caps what it uses.
+Each instance's 500 GiB gp3 root volume is provisioned at 1,000 MiB/s and
+6,000 IOPS: Nextflow copies every task input onto it before the task runs, and
+at gp3's default 125 MiB/s that copy is disk-bound. On CellRanger these
+settings staged and computed as fast as gp3's maxima (2,000 MiB/s, 80,000 IOPS),
+where staging tops out at the S3 download rate (~400–500 MB/s); the IOPS leave
+headroom over the measured peak of ~4,000. Above the defaults this costs about
+$0.07 per instance-hour in us-east-1, billed only while an instance runs; an
+instance type's own EBS bandwidth caps what it uses.
 `-c rootThroughputMiBps=<125–2000> -c rootIops=<3000–80000>` sets other values.
 
 A job no instance can ever fit (more vCPUs or memory than any instance type

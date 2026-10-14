@@ -14,8 +14,8 @@ const mountBuckets = String(app.node.tryGetContext('mountBuckets') ?? '')
 // Environment-agnostic: deploys to whatever account/region your AWS CLI is
 // configured for, and synthesizes offline (the VPC uses Fn::GetAZs rather than an
 // account-specific availability-zone lookup, so `cdk synth` works before creds).
-// The root volume's provisioned gp3 throughput and IOPS, gp3's maxima unless
-// set: `-c rootThroughputMiBps=1000 -c rootIops=4000`.
+// The root volume's provisioned gp3 throughput and IOPS, 1,000 MiB/s and 6,000
+// unless set: `-c rootThroughputMiBps=2000 -c rootIops=8000`.
 const contextNumber = (key: string): number | undefined => {
   const v = app.node.tryGetContext(key);
   return v === undefined ? undefined : Number(v);

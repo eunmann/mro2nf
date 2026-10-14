@@ -29,11 +29,13 @@ export interface Mro2nfStackProps extends cdk.StackProps {
   readonly rootIops?: number;
 }
 
-// gp3's maxima. Nextflow copies every Batch task input to the root volume
-// before the task starts and uploads its outputs after, at gp3's default
-// 125 MiB/s unless provisioned higher; billed only while an instance runs.
-const GP3_MAX_THROUGHPUT_MIBPS = 2000;
-const GP3_MAX_IOPS = 80000;
+// Nextflow copies every Batch task input to the root volume before the task
+// starts and uploads its outputs after, at gp3's default 125 MiB/s unless
+// provisioned higher. Measured on CellRanger, staging and Mountpoint's cache
+// fills write ~200 KiB per op and peak just above 4,000 IOPS, so 6,000 keeps
+// IOPS from capping the volume below its 1,000 MiB/s.
+const ROOT_THROUGHPUT_MIBPS = 1000;
+const ROOT_IOPS = 6000;
 
 // An S3 bucket name, which the user data names unquoted.
 const BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
@@ -173,8 +175,8 @@ export class Mro2nfStack extends cdk.Stack {
         deviceName: '/dev/xvda',
         volume: ec2.BlockDeviceVolume.ebs(500, {
           volumeType: ec2.EbsDeviceVolumeType.GP3,
-          throughput: props.rootThroughputMiBps ?? GP3_MAX_THROUGHPUT_MIBPS,
-          iops: props.rootIops ?? GP3_MAX_IOPS,
+          throughput: props.rootThroughputMiBps ?? ROOT_THROUGHPUT_MIBPS,
+          iops: props.rootIops ?? ROOT_IOPS,
         }),
       }],
     });
