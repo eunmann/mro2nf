@@ -162,8 +162,8 @@ func TestEmitNamesNoHostTools(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"if (params.mro2nf_adapters) {\n        cmd += \" -adapters ${shq(params.mro2nf_adapters)}\"",
-		"if (params.mro2nf_mrjob) {\n        cmd += \" -mrjob ${shq(params.mro2nf_mrjob)}\"",
+		"if (run.adapters) {\n        cmd += \" -adapters ${shq(run.adapters)}\"",
+		"if (run.mrjob) {\n        cmd += \" -mrjob ${shq(run.mrjob)}\"",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("stage.nf lacks %q", want)
@@ -180,7 +180,7 @@ func TestEmitConfinesAtLaunch(t *testing.T) {
 		t.Errorf("conf/base.config does not leave confinement off:\n%s", cfg)
 	}
 
-	if !strings.Contains(stageModule, "if (on(params.mro2nf_confine)) {\n        cmd += ' -confine'") {
+	if !strings.Contains(stageModule, "if (run.confine) {\n        cmd += ' -confine'") || !strings.Contains(stageRun, "confine: on(params.mro2nf_confine)") {
 		t.Error("stage.nf does not confine on params.mro2nf_confine")
 	}
 }
@@ -467,7 +467,7 @@ func TestEmitRunsOneMreCallPerTask(t *testing.T) {
 		}
 	}
 
-	if n := strings.Count(stageModule, "${shq(params.mro2nf_mre)} "); n != 2 {
+	if n := strings.Count(stageModule, "${shq(run.mre)} ") + strings.Count(stageModule, "${shq(meta.run.mre)} "); n != 2 {
 		t.Errorf("stage.nf runs mre at %d places, want mreStage's and OUTS's", n)
 	}
 }
@@ -610,7 +610,7 @@ func TestEmitSizesNodesUnderOverrides(t *testing.T) {
 		"main.nf": {
 			"params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : []",
 			"path overrides, stageAs: 'overrides/*', arity: '0..*'",
-			"${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(params.mro2nf_psid)}",
+			"${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)}",
 		},
 		"stage.nf": {
 			"${cmd} -overrides overrides.json",

@@ -2,7 +2,8 @@
 // including them under its own alias, so a withName: selector names the
 // node, and the sub-workflows that wire a node's instances to them. meta
 // carries the node's identity, the cache key of its spec (digest), the
-// run's call as CALL carries it (call), the resources it is scheduled with,
+// run's call as CALL carries it (call), the launch params its script reads
+// (run), the resources it is scheduled with,
 // and its own overrides file (overrides), which PLAN resolved; its GPU
 // request is the config's, which reads meta.special per task. Each task
 // runs one `mre stage` call: the instance's args, which it builds from the
@@ -177,11 +178,12 @@ def on(v) {
 }
 
 // pool names the pool mrp's local job manager grants a job from, its
-// --localcores and --localmem, where params.mro2nf_local_jobs holds: the
-// cpus and whole GB of memory process.resourceLimits clamps the task to, so
-// a job granted the whole pool requests no more than its task is given.
-def pool(task) {
-    if (!on(params.mro2nf_local_jobs)) {
+// --localcores and --localmem, where local, params.mro2nf_local_jobs as the
+// task's meta carries it, holds: the cpus and whole GB of memory
+// process.resourceLimits clamps the task to, so a job granted the whole
+// pool requests no more than its task is given.
+def pool(task, Boolean local) {
+    if (!local) {
         return ''
     }
     def lim = task.resourceLimits ?: [:]
@@ -192,25 +194,27 @@ def pool(task) {
     return " -local-cores ${lim.cpus as int} -local-mem-gb ${Math.max(1L, mem.toGiga())}"
 }
 
-// mreStage runs the task's phase through mre stage.
+// mreStage runs the task's phase through mre stage, under the launch
+// params its meta carries (run), which key the task's -resume.
 def mreStage(task, Map meta, phase, rest) {
-    def cmd = "${shq(params.mro2nf_mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(params.mro2nf_psid)} -work .${pool(task)}"
-    if (params.mro2nf_adapters) {
-        cmd += " -adapters ${shq(params.mro2nf_adapters)}"
+    def run = meta.run
+    def cmd = "${shq(run.mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(run.psid)} -work .${pool(task, run.local_jobs)}"
+    if (run.adapters) {
+        cmd += " -adapters ${shq(run.adapters)}"
     }
-    if (params.mro2nf_mrjob) {
-        cmd += " -mrjob ${shq(params.mro2nf_mrjob)}"
+    if (run.mrjob) {
+        cmd += " -mrjob ${shq(run.mrjob)}"
     }
-    if (on(params.mro2nf_monitor)) {
+    if (run.monitor) {
         cmd += ' -monitor'
     }
-    if (on(params.mro2nf_confine)) {
+    if (run.confine) {
         cmd += ' -confine'
     }
-    if (params.mro2nf_s3_mount) {
-        cmd += " -s3-mount ${shq(params.mro2nf_s3_mount)}"
+    if (run.s3_mount) {
+        cmd += " -s3-mount ${shq(run.s3_mount)}"
     }
-    if (on(params.mro2nf_host_in_place)) {
+    if (run.host_in_place) {
         cmd += ' -host-in-place'
     }
     if (meta.overrides) {
@@ -366,7 +370,7 @@ process OUTS {
     ${valuesFile(values)}
     mkdir -p in refs
     ${locations(ups, locs, refLocs)}
-    ${shq(params.mro2nf_mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
+    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
     """
 }
 

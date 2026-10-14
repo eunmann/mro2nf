@@ -366,13 +366,21 @@ index token. Each line of it leads with its root, and a node's wiring takes
 its root's own lines from it (`ENTRY_ROOT`, a lookup by root).
 
 **Cache identity.** PLAN caches on its inputs: the entry values, the `.mro`
-copy, the overrides file and its meta, whether head-node values are read in
-place, and the run's work dir, which no entry value read in place may hold
+copy, the overrides file and its meta, which carries the launch params it
+reads, such as whether head-node values are read in place, and the run's
+work dir, which no entry value read in place may hold
 (§8). Under an S3 mount it does not cache,
 as which s3:// inputs it reads in place depends on the buckets its instance
 mounts (`TestResumeRechecksTheS3Mount`). A task's `-resume` key holds its own
 node's digest and resources (in `meta`), the run's call, the mro2nf
-build, and its fork records, value records and staged dirs. No task
+build, and its fork records, value records and staged dirs, and the launch
+params its script reads, which its `meta` carries as its `run` entry:
+Nextflow 25.10 and 26.04 key no task on a param read by a function its
+script calls, as the stage module's are, and the v2 parser of
+26.04.0–26.04.1 on none its script reads (nextflow-io/nextflow#7156), so no
+script reads `params` (`TestScriptsReadParamsFromMeta`). A changed
+`--mro2nf_psid` re-runs every task, and a changed `--mro2nf_monitor` every
+stage task and OUTS (`TestResumeKeysOnTheParamsATaskReads`). No task
 stages a file of PLAN's: the digests reach it as values, which Nextflow
 keys on by content, and so does the call, by one rule (`CALL`): a call
 whose base64 is at most 4 KiB (`cg.MaxValueBytes`, the bound of an output
