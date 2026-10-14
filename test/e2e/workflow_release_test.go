@@ -585,10 +585,11 @@ func TestReleaseScriptsReadInputsFromEnv(t *testing.T) {
 }
 
 // TestReleaseValidatesInputs runs the gate's validation step: only a
-// v<major>.<minor>.<patch>[-<prerelease>] version and a ref spelled as a
-// branch, tag or SHA pass, and neither ever runs as code.
+// v<major>.<minor>.<patch>[-<prerelease>] version that git takes as a tag
+// name and a ref spelled as a branch, tag or SHA pass, and neither ever runs
+// as code.
 func TestReleaseValidatesInputs(t *testing.T) {
-	requireTools(t, "bash")
+	requireTools(t, "bash", "git")
 
 	step := releaseStep(t, "gate", stepRuns("version_re"))
 	if got := scalarOf(step.get("env").get("REF")); got != "${{ inputs.ref }}" {
@@ -612,6 +613,10 @@ func TestReleaseValidatesInputs(t *testing.T) {
 		{"v1.2.3-$(touch pwned)", ref, false},
 		{"v1.2.3\nv1.2.4", ref, false},
 		{"v1.2.3-", ref, false},
+		{"v1.2.3-rc.", ref, false},
+		{"v1.2.3-.rc", ref, false},
+		{"v1.2.3-a..b", ref, false},
+		{"v1.2.3-x.lock", ref, false},
 		{"", ref, false},
 		{"v0.6.0", "", false},
 		{"v0.6.0", "../../pulls", false},

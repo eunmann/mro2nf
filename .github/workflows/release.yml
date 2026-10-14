@@ -68,17 +68,20 @@ jobs:
             echo "::error::a release runs main's release.yml, not $GITHUB_REF's: dispatch it from main, or add -f dry_run=true"
             exit 1
           }
-      # The ref goes into an API path, so it is held to a ref's characters
-      # and may not climb out of the path with `..`.
+      # The prerelease is semver's dot-separated identifiers, and git's ref
+      # rules refuse more than that grammar does, such as a `.lock` ending,
+      # so a version the dry run accepts tags in the real run. The ref goes
+      # into an API path, so it is held to a ref's characters and may not
+      # climb out of the path with `..`.
       - name: Validate the version and the ref
         env:
           REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          version_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          version_re='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
           ref_re='^[0-9A-Za-z][0-9A-Za-z._/-]*$'
-          [[ $VERSION =~ $version_re ]] || {
-            echo "::error::version must be v<major>.<minor>.<patch>, optionally with a -<prerelease> suffix"
+          [[ $VERSION =~ $version_re ]] && git check-ref-format "refs/tags/$VERSION" || {
+            echo "::error::version must be v<major>.<minor>.<patch>, optionally with a -<prerelease> suffix of dot-separated identifiers, and a valid tag name"
             exit 1
           }
           [[ $REF =~ $ref_re && $REF != *..* ]] || {

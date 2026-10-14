@@ -125,7 +125,8 @@ gh workflow run release.yml -f version=v0.6.0 -f ref=main -F notes=@notes.md
 its headings arrive as written. The inputs are:
 
 - `version` (required): `v<major>.<minor>.<patch>`, optionally with a
-  `-<prerelease>` suffix (`v0.6.0-rc1`). Its tag must not exist yet.
+  `-<prerelease>` suffix of dot-separated identifiers (`v0.6.0-rc1`,
+  `v0.6.0-rc.1`) that git takes in a tag name. Its tag must not exist yet.
 - `ref` (default `main`): the branch, tag or commit SHA to release, resolved
   to a commit.
 - `notes` (optional): the curated Markdown.
