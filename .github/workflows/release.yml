@@ -93,7 +93,8 @@ jobs:
         run: |
           set -euo pipefail
           api() { gh api "repos/$GITHUB_REPOSITORY/$1" --jq "$2"; }
-          if [ -n "$(api "git/matching-refs/tags/$VERSION" ".[] | select(.ref == \"refs/tags/$VERSION\") | .ref")" ]; then
+          existing=$(api "git/matching-refs/tags/$VERSION" ".[] | select(.ref == \"refs/tags/$VERSION\") | .ref")
+          if [ -n "$existing" ]; then
             echo "::error::tag $VERSION already exists"
             exit 1
           fi

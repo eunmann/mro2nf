@@ -634,6 +634,78 @@ func TestReleaseValidatesInputs(t *testing.T) {
 	}
 }
 
+// TestReleaseResolveStep runs the gate's resolve step with a stand-in gh
+// answering from canned API responses: it refuses a version whose tag
+// exists or cannot be looked up, takes one that only prefixes another tag,
+// and outputs the commit the ref resolves to, which every job checks out.
+func TestReleaseResolveStep(t *testing.T) {
+	requireTools(t, "bash", "jq")
+
+	step := releaseStep(t, "gate", stepID("resolve"))
+	if got := scalarOf(step.get("env").get("REF")); got != "${{ inputs.ref }}" {
+		t.Errorf("%s resolve env REF = %q, want the ref input", releaseWorkflow, got)
+	}
+
+	const (
+		sha    = "0123456789abcdef0123456789abcdef01234567"
+		tags   = "git/matching-refs/tags/" + releaseTag
+		commit = "commits/main"
+	)
+
+	resolved := `{"sha":"` + sha + `"}`
+
+	cases := []struct {
+		name      string
+		responses map[string]string
+		want      string
+	}{
+		{"new tag", map[string]string{tags: `[]`, commit: resolved}, "sha=" + sha},
+		{"prefix of another tag", map[string]string{tags: `[{"ref":"refs/tags/v1.2.3-rc1"}]`, commit: resolved}, "sha=" + sha},
+		{"existing tag", map[string]string{tags: `[{"ref":"refs/tags/v1.2.3-rc1"},{"ref":"refs/tags/v1.2.3"}]`, commit: resolved}, ""},
+		{"tag lookup fails", map[string]string{commit: resolved}, ""},
+		{"unknown ref", map[string]string{tags: `[]`}, ""},
+	}
+
+	for _, c := range cases {
+		log, out, err := runResolveStep(t, scalarOf(step.get("run")), c.responses)
+		if (err == nil) != (c.want != "") || strings.TrimSpace(out) != c.want {
+			t.Errorf("%s: err %v, output %q; want output %q\n%s", c.name, err, out, c.want, log)
+		}
+	}
+}
+
+// runResolveStep runs the resolve step for releaseTag and ref main with a
+// stand-in gh that answers `gh api` from responses, keyed by the path below
+// the repository, through jq as gh does, and fails as a 404 on any other.
+func runResolveStep(t *testing.T, script string, responses map[string]string) (string, string, error) {
+	t.Helper()
+
+	const (
+		repo = "o/mro2nf"
+		fake = `#!/bin/bash
+[ "$1" = api ] && [ "$3" = --jq ] || { echo "unexpected gh $*" >&2; exit 2; }
+path=${2#"repos/$GITHUB_REPOSITORY/"}
+f="$GH_RESPONSES/${path//\//_}"
+[ "$path" != "$2" ] && [ -f "$f" ] || { echo "gh: Not Found (HTTP 404) for $2" >&2; exit 1; }
+jq -r "$4" "$f"
+`
+	)
+
+	bin, dir := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for p, body := range responses {
+		if err := os.WriteFile(filepath.Join(dir, strings.ReplaceAll(p, "/", "_")), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return execReleaseStep(t, script, t.TempDir(), "PATH="+bin+":"+os.Getenv("PATH"), "GH_RESPONSES="+dir,
+		"GITHUB_REPOSITORY="+repo, "VERSION="+releaseTag, "REF=main")
+}
+
 // TestReleaseRunsMainWorkflow runs the gate's workflow check: a release runs
 // only main's release.yml, which a PR run validated, and a dry run, which
 // checks a branch's, skips the check.
