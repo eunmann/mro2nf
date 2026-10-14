@@ -48,11 +48,21 @@ def load_trace(path):
     return rows
 
 
-def task_key(t):
-    """The process's short name, then its tag's fork key and chunk, then '@<attempt>' for a retry, '/'-joined:
-    one key per trace row, stable across runs. The tag is '<node> <fork key> [<chunk>]'."""
+def instance_key(t):
+    """The process's short name, then its tag's fork key and chunk, '/'-joined: one key per task, shared by
+    its attempts and stable across runs. The tag is '<node> <fork key> [<chunk>]'."""
     tag = t['name'].partition(' (')[2].removesuffix(')').split()[1:]
-    return '/'.join([t['short'], *tag]) + ('' if t['attempt'] == '1' else '@' + t['attempt'])
+    return '/'.join([t['short'], *tag])
+
+
+def task_key(t):
+    """instance_key, then '@<attempt>' for a retry: one key per trace row."""
+    return instance_key(t) + ('' if t['attempt'] == '1' else '@' + t['attempt'])
+
+
+def last_attempts(tasks):
+    """{instance_key: the task's last attempt, the one whose outputs the run used}."""
+    return {instance_key(t): t for t in sorted(tasks, key=lambda t: int(t['attempt']))}
 
 
 def keyed(tasks):

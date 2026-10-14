@@ -131,15 +131,15 @@ def descendants(preds, roots):
 def requeue(target, source, proc):
     """TARGET's critical path with PROCESS's queue times replaced by SOURCE's, and the shift that implies."""
     tt, cpt = target['tasks'], target['cp']
-    qs = {t['key']: t['queue'] for t in source['tasks'].values() if t['short'] == proc}
-    mn = [t for t in tt.values() if t['short'] == proc]
-    endp = {t['task_id']: P(t['end_log']) - dt.timedelta(seconds=t['queue'] - qs[t['key']]) for t in mn}
+    qs = {k: t['queue'] for k, t in perfrun.last_attempts(t for t in source['tasks'].values() if t['short'] == proc).items()}
+    mn = perfrun.last_attempts(t for t in tt.values() if t['short'] == proc)
+    endp = {t['task_id']: P(t['end_log']) - dt.timedelta(seconds=t['queue'] - qs[k]) for k, t in mn.items()}
     new_k = max(endp, key=endp.get)
-    delta = (endp[new_k] - max(P(t['end_log']) for t in mn)).total_seconds()
+    delta = (endp[new_k] - max(P(t['end_log']) for t in mn.values())).total_seconds()
     i = next(j for j, x in enumerate(cpt) if x['name'] == proc)
     c = tt[new_k]
     row = dict(cpt[i], id=new_k, dispatch=(P(c['created']) - P(tt[cpt[i - 1]['id']]['end_log'])).total_seconds(),
-               queue=qs[c['key']], nc=c['nc'], rt=c['rt'] or 0, poll=c['poll_log'])
+               queue=qs[perfrun.instance_key(c)], nc=c['nc'], rt=c['rt'] or 0, poll=c['poll_log'])
     nxt = dict(cpt[i + 1], dispatch=(P(tt[cpt[i + 1]['id']]['created']) + dt.timedelta(seconds=delta)
                                      - endp[new_k]).total_seconds())
     preds = dag(tt)
@@ -149,7 +149,7 @@ def requeue(target, source, proc):
     slack = min(((P(tt[y]['sub']) + dt.timedelta(seconds=delta) - P(tt[x]['end_log'])).total_seconds(), x, y)
                 for y in desc - set(endp) for x in preds[y] - desc)
     return (cpt[:i] + [row, nxt] + cpt[i + 2:], delta, slack,
-            {t['key']: (round(t['queue'], 1), round(qs[t['key']], 1)) for t in mn})
+            {k: (round(t['queue'], 1), round(qs[k], 1)) for k, t in mn.items()})
 
 
 def section_cp(a, D, out):
