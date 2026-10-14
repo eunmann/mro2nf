@@ -48,11 +48,13 @@ func TestEmitRefusesUncreatableOutDir(t *testing.T) {
 // whose main.nf runs PLAN, a process call per witness node, then OUTS,
 // whose config declares a param per entry input, and whose
 // nextflow_schema.json meets nf-schema's meta-schema and admits the call's
-// own values; a fixture mrp refuses emits nothing.
+// own values; a refused fixture emits nothing.
 func TestEmitEveryFixture(t *testing.T) {
-	// mrp refuses to instantiate these (#387): a split of a runtime-gated
-	// literal collection.
-	mrpRefused := []string{"rt_gate_split_reject", "rt_gate_split_reject_pass", "rt_gate_split_reject_sub"}
+	// mrp refuses to instantiate the rt_gate_split_reject fixtures (#387): a
+	// split of a runtime-gated literal collection. keyword_input names an
+	// entry input with a Groovy keyword, which Nextflow refuses as a param
+	// name (#585).
+	refused := []string{"rt_gate_split_reject", "rt_gate_split_reject_pass", "rt_gate_split_reject_sub", "keyword_input"}
 
 	for _, dir := range fixtureDirs(t) {
 		name := filepath.Base(dir)
@@ -67,9 +69,9 @@ func TestEmitEveryFixture(t *testing.T) {
 			opts := Options{OutDir: out, MroPaths: []string{abs}, Version: "test"}
 			err = Emit(filepath.Join(abs, "pipeline.mro"), opts)
 
-			if slices.Contains(mrpRefused, name) {
+			if slices.Contains(refused, name) {
 				if _, statErr := os.Stat(out); err == nil || statErr == nil {
-					t.Errorf("emit = %v, out stat = %v; mrp refuses %s, so no project may exist", err, statErr, name)
+					t.Errorf("emit = %v, out stat = %v; %s is refused, so no project may exist", err, statErr, name)
 				}
 
 				return

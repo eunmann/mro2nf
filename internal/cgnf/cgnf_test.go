@@ -2,6 +2,7 @@ package cgnf
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -720,6 +721,34 @@ func TestEmitRefusesReservedParam(t *testing.T) {
 		err := Emit(mro, Options{OutDir: t.TempDir(), MroPaths: []string{dir}})
 		if !errors.Is(err, errReservedParam) {
 			t.Errorf("Emit of input %s = %v, want errReservedParam", name, err)
+		}
+	}
+}
+
+// TestEmitRefusesKeywordInput (#585): an entry input named with a word
+// Nextflow's params block refuses, a keyword of its lexer (def) or a Groovy
+// keyword its parser refuses (class, volatile, which Martian lexes as its
+// own keyword), fails the transpile naming the input and the word, and
+// emits nothing.
+func TestEmitRefusesKeywordInput(t *testing.T) {
+	for _, name := range []string{"def", "class", "volatile"} {
+		dir := t.TempDir()
+		mro := filepath.Join(dir, "pipeline.mro")
+		src := "stage S(\n    in  int " + name + ",\n    out int y,\n    src py \"s\",\n)\n\ncall S(\n    " + name + " = 1,\n)\n"
+
+		if err := os.WriteFile(mro, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		out := filepath.Join(t.TempDir(), "proj")
+		want := fmt.Sprintf("entry input %s: %q is a Groovy or Nextflow keyword", name, name)
+
+		if err := Emit(mro, Options{OutDir: out, MroPaths: []string{dir}}); !errors.Is(err, errKeywordParam) || !strings.Contains(err.Error(), want) {
+			t.Errorf("Emit of input %s = %v, want an error naming %q", name, err, want)
+		}
+
+		if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a refused emit of input %s left %s (stat: %v)", name, out, err)
 		}
 	}
 }

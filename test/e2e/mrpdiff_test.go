@@ -678,6 +678,9 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// before it makes a pipestance; Nextflow wraps the JSON int into int64,
 	// and the run succeeds.
 	{name: "params_json_int_wrap", mrp: runOutcome{Failed: true}, divergence: "params-json-int-wrap", params: "params.json", mro: "override_overflow.mro"},
+	// #585: an entry input named with a Groovy keyword. mrp runs it; mro2nf
+	// refuses the transpile (transpileRefused).
+	{name: "keyword_input", mrp: runOutcome{}, divergence: "keyword-input"},
 }
 
 // TestMrpDiff runs each fixture under real mrp and under transpiled Nextflow
@@ -941,14 +944,14 @@ func mrpRunOutcome(t *testing.T, bin, fixture, mro, tmp string, extra ...string)
 
 // nfRunOutcome is the mro2nf outcome of a fixture, the task name of every
 // attempt (nextflowRunOutcome), and the log that explains it. A
-// transpileRefused fixture must fail to transpile, the counterpart of mrp
-// refusing it before it makes a pipestance, so its outcome is a failure
-// blaming no stage, with no attempts. Any other fixture is transpiled and
-// run, with extra launch flags.
+// transpileRefused fixture must fail to transpile, so its outcome is a
+// failure blaming no stage, with no attempts. Any other fixture is
+// transpiled and run, with extra launch flags.
 func nfRunOutcome(t *testing.T, fixture string, extra ...string) (runOutcome, []string, string) {
 	t.Helper()
 
-	if _, refused := transpileRefused[fixture]; !refused {
+	reason, refused := transpileRefused[fixture]
+	if !refused {
 		proj := transpile(t, fixture)
 		o, attempts := nextflowRunOutcome(t, proj, extra...)
 
@@ -959,7 +962,7 @@ func nfRunOutcome(t *testing.T, fixture string, extra ...string) (runOutcome, []
 
 	err := transpileInto(repoTools(), filepath.Join(root, "testdata", fixture), "pipeline.mro", t.TempDir())
 	if err == nil {
-		t.Fatalf("mro2nf transpiles %s; mrp refuses it before any stage runs", fixture)
+		t.Fatalf("mro2nf transpiles %s; it must refuse it: %s", fixture, reason)
 	}
 
 	return failedWith(nil), nil, err.Error()
