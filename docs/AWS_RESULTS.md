@@ -126,7 +126,7 @@ path (1,311 s).
 
 | Cause | Seconds | Owner |
 |---|---:|---|
-| Mid-run cold starts: Batch scale-up 308 s, boot 104 s, image pull 50 s | 542 | infrastructure |
+| Mid-run cold starts, 3 tasks: Batch scale-up 308 s, boot 104 s, placement on the new instance 78 s, image pull 50 s, container start 6 s, less the 1.5 s warm-queue minimum each | 542 | infrastructure |
 | Queue above the minimum for 58 short tasks (ECS task creation, about 5 s each) | 417 | inherent to Batch |
 | nc above the floor that staging does not explain, and packing | 144 | unattributed |
 | Intermediates staged but not read | 81 | was 194 s before gp3 (run 4) |
