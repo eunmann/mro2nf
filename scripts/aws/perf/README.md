@@ -2,6 +2,8 @@
 
 These scripts break a finished `awsbatch` run's wall time into its critical path and per-task overheads.
 They also compute the run's floors and rank where the gap above those floors goes.
+[`docs/AWS_RESULTS.md`](../../../docs/AWS_RESULTS.md) records what they measured on CellRanger, and how to
+recompute it from the archived runs.
 
 They need Python 3 (standard library only) and AWS CLI v2. Every AWS call is read-only and runs in
 the CLI's configured region and credentials. The fetch step needs the run's S3 work directory, which
@@ -83,3 +85,31 @@ By default it starts a day before the run's first job.
 - `--pair A,B` compares the tasks that move over 1 GB in runs `A` and `B`. `--watch` adds named
   processes to that table, and `--volume-mibps LABEL=N` fills its root-volume column.
 - `--wrap-floor` (default 5.5 s) and `--poll-floor` (1.0 s) set the per-task floors.
+
+## The archived CellRanger runs
+
+To recompute [`docs/AWS_RESULTS.md`](../../../docs/AWS_RESULTS.md)'s tables, build a run directory per
+run (`runs/3`, `runs/4`, `runs/6`, `runs/7`) from the archive's files:
+
+| Run directory file | Archive source |
+|---|---|
+| `trace.txt`, `nextflow.log` | `cellranger/batch<run>/trace-*.txt`, `.nextflow.log` |
+| `jobs.json` | `analysis/perf/r<run>/jobs.json`; run 3 `analysis/m544/jobs.json`; run 4 `cellranger/batch4/an/jobs.json` |
+| `stagein.json` | `analysis/perf/r<run>/stagein.json`; run 3 `analysis/m544/stagein.json` |
+| `s3ls.txt`, `instances.json` | `analysis/perf/r<run>/` |
+| `cimap.json`, `instance_types.json` | `analysis/perf/ct_cimap.json`, `analysis/perf/itypes.json` |
+| `ecs_tasks.json` (run 6), `ebs_raw.json` (runs 6, 7) | `analysis/perf/r6/ecs_tasks.json`, `analysis/perf/r7/ebs_raw_r<run>.json` |
+
+The archive does not hold the tasks' `.command.run` files, so take `stagein.json` from it instead of
+running `stagein.py`. Run `phases.py` and `cp.py` on each directory, then:
+
+```bash
+W=N0_CELLRANGER_PREFLIGHT,N1_CELLRANGER_PREFLIGHT_LOCAL,N10_MAKE_SHARD_MN,N10_MAKE_SHARD_JN,N12_BARCODE_CORRECTION_MN,N13_ALIGN_AND_COUNT_SP,N13_ALIGN_AND_COUNT_MN,N13_ALIGN_AND_COUNT_JN,N19_WRITE_BARCODE_INDEX
+python3 $P/analyze.py -o out346 --baseline 3 --requeue 4=3:N13_ALIGN_AND_COUNT_MN --pair 4,6 --watch $W \
+    --volume-mibps 3=125 --volume-mibps 4=125 --volume-mibps 6=2000 runs/3 runs/4 runs/6
+python3 $P/analyze.py -o out67 --pair 6,7 --watch $W --volume-mibps 6=2000 --volume-mibps 7=1000 runs/6 runs/7
+python3 $P/ebs_report.py -o out67 --gp3 6=2000,80000 --gp3 7=1000,4000 runs/6 runs/7
+```
+
+These reproduce the archive's `analysis/perf/` and `analysis/perf/r7/` tables; only labels differ. The
+archive names the `--pair` tables `gp3_heavy.csv` and `gp3_by_itype.csv`.
