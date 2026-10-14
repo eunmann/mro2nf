@@ -162,7 +162,8 @@ func ilist(xs []int) string {
 }
 
 // planWiring parses PLAN's records the wirings read: shared is the meta
-// every task shares, with the run's call, inline when its base64 is at
+// every task shares, with the launch params their scripts read (stageRun)
+// and the run's call, inline when its base64 is at
 // most cg.MaxValueBytes, as an output value is, or else staged (CALL);
 // nodes maps each witness node to its digest, its off flag, its statically
 // disabled fork keys, the cpus and memory its first task is scheduled with
@@ -184,8 +185,8 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 	w.linef("if (on(params.mro2nf_require_image) && !params.mro2nf_image) {")
 	w.linef("    error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
 	w.linef("}")
-	w.linef("PLAN(%s, %s, workflow.workDir.toUriString(), file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(), mroAssets)
-	w.linef("%s = CALL(PLAN.out.call, %d).map { c -> %s }", w.def("shared"), cg.MaxValueBytes, p.graphMeta("call: c"))
+	w.linef("PLAN(%s, %s, workflow.workDir.toUriString(), file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(planRun), mroAssets)
+	w.linef("%s = CALL(PLAN.out.call, %d).map { c -> %s }", w.def("shared"), cg.MaxValueBytes, p.graphMeta("call: c", stageRun))
 
 	for _, d := range []struct{ name, expr string }{
 		{"nodes", "NODES(PLAN.out.nodes, shared)"},
@@ -199,6 +200,18 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 
 	return w
 }
+
+// planRun and stageRun are the run entry of PLAN's meta and of the meta
+// every stage task and OUTS share: the launch params their scripts read,
+// as an input, which Nextflow keys a -resume on. Nextflow 25.10 and 26.04
+// key no task on a param read by a function its script calls, as
+// mreStage, and the v2 parser of 26.04.0-26.04.1 on none its script reads
+// (nextflow-io/nextflow#7156). A boolean is on() of its param, so a
+// launch's --<name> false keys as its default false does.
+const (
+	planRun  = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, host_inputs: on(params.mro2nf_host_inputs), host_in_place: on(params.mro2nf_host_in_place), remote_inputs: on(params.mro2nf_allow_remote_inputs), s3_mount: params.mro2nf_s3_mount, local_jobs: on(params.mro2nf_local_jobs)]"
+	stageRun = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, mrjob: params.mro2nf_mrjob, adapters: params.mro2nf_adapters, monitor: on(params.mro2nf_monitor), confine: on(params.mro2nf_confine), s3_mount: params.mro2nf_s3_mount, host_in_place: on(params.mro2nf_host_in_place), local_jobs: on(params.mro2nf_local_jobs)]"
+)
 
 // graphMeta is the meta map naming the entry .mro and the include path the
 // run's invocation compiles with, with extra entries.
