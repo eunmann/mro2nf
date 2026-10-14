@@ -350,15 +350,15 @@ func TestOutOfRangeLaunchValues(t *testing.T) {
 	}{
 		{
 			name: "yaml_int", file: "params.yaml", body: "n: 9223372036854775808\n", args: []string{"-params-file", "params.yaml"},
-			wants: []string{`entry input "n": number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32:9223372036854775808`},
+			wants: []string{`entry input "n": number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32: 9223372036854775808`},
 		},
 		{
 			name: "yaml_float_int", file: "params.yaml", body: "f: 9223372036854775808\n", args: []string{"-params-file", "params.yaml"},
-			wants: []string{`entry input "f": number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32:9223372036854775808`},
+			wants: []string{`entry input "f": number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32: 9223372036854775808`},
 		},
 		{
 			name: "json_float", file: "params.json", body: `{"f": -1e400}`, args: []string{"-params-file", "params.json"},
-			wants: []string{`entry input "f": number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32:-1E+400`},
+			wants: []string{`entry input "f": number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32: -1E+400`},
 		},
 		{
 			name: "cli_int", args: []string{"--n", "9223372036854775808"},
