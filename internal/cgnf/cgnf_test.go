@@ -266,8 +266,8 @@ func TestEmitOrdersGathers(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }",
-		".collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->\n        [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]",
+		"[k, m.chunks, [o, recs]] }.groupBy().map { k, os -> [k, os.sort(false) { a, b -> a[0].name <=> b[0].name }] }",
+		".collect { e -> [ku, e] }] }).groupBy().map { c, dss ->\n        [c, ordered(dss.collectMany { x -> x })]",
 		"outs.flatMap { k, ds -> selected(ds, fields).collect { e -> [[node] + k, e] } }",
 	} {
 		if !strings.Contains(stageModule, want) {
@@ -657,7 +657,7 @@ func TestEmitRetriesWhatMrpRetries(t *testing.T) {
 func TestEmitDeclaresTheEngineFloor(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "split_test"))
 
-	const floor = "manifest.nextflowVersion = '!>=25.10.0'\n"
+	const floor = "manifest.nextflowVersion = '!>=26.04.0'\n"
 
 	for file, want := range map[string]string{
 		"nextflow.config": "\n" + floor,
@@ -916,7 +916,7 @@ func TestEmitKeysReadsWhereTheirRootsChange(t *testing.T) {
 	for name, want := range map[string]string{
 		"ENABLED": "run = b.run.map { v -> [v[1][at]] + v.subList(1, 5) + [[]] }",
 		"REKEY":   "out = inst.map { v -> [v[1][next]] + v.subList(1, 5) + [readItems(v, fields)] }",
-		"GATHER":  "seeds = run.map { v -> [v[1][mine], null] }.unique()",
+		"GATHER":  "seeds = run.map { v -> [v[1][mine], []] }.unique()",
 		"INPUT":   "out = inst.map { v -> inputOf(v, fields, [], []) }",
 	} {
 		if !strings.Contains(mains[name], want) {

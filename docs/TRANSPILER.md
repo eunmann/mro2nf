@@ -302,8 +302,7 @@ the target profiles (§9), whose settings override the shared ones.
   output resolves outside its work dir instead of copying it in (§7) on the
   local and grid profiles too; the container profiles always confine. A
   boolean param is on only when it is `true` or the string `'true'`, as a
-  launch's `--<name> <value>` sets it under the v2 parser or
-  `NXF_DISABLE_PARAMS_TYPE_DETECTION` (§8).
+  launch's `--<name> <value>` sets it (§8).
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
   values a run reads (§8), `mro2nf_host_in_place`, which the container
   profiles turn off (`conf/container.config`), whether every task reads a
@@ -483,8 +482,8 @@ output it stages as a bundle (`outs/<output>/`). A staged bundle costs each
 reader on an object store a listing and a copy whatever its size (on the
 CellRanger Batch run, 287 of 896 downloads were such outputs); a value costs
 the driver its bytes per instance until its readers are done, which the
-bound keeps from growing with an output's size. A gather is a seeded `groupTuple`
-over all of its upstream, so an instance under which there is none gathers
+bound keeps from growing with an output's size. A gather is a seeded `groupBy`,
+without group sizes, over all of its upstream, so an instance under which there is none gathers
 none, and a forked instance waits for every fork of the node it reads, as `mrp`
 waits for every fork of a node before a node reading it runs
 (`martian/core/node.go` `getState`; `TestEmitForkedGatherWaitsForItsUpstream`).
@@ -537,8 +536,10 @@ directory leaf and an entry file are still copies.
 **Split stages.** A split's outputs are joined once to the instance its
 task staged, by the key both hold at position 1 (`SPLITS`), and its chunks'
 mains and its join read that join: joining them anew for each, through a
-map of either side, cost CellRanger 6 DAG edges per split stage. A split's chunk outs are gathered by `groupKey` over the
-chunk count. Each chunk's main and the join are scheduled with the cpus, memory
+map of either side, cost CellRanger 6 DAG edges per split stage. A split's chunk outs are grouped by `groupBy` with the
+chunk count as each group's size, which joins a split as soon as its chunks
+are in and fails the run if its chunk outs number otherwise
+(`TestJoinFailsOnAChunkCountMismatch`). Each chunk's main and the join are scheduled with the cpus, memory
 and special their jobs get, the split's `resources.tsv`, a file the driver
 reads into rows without parsing a record, not an `eval` value, whose
 collection is quadratic in its lines.
@@ -554,7 +555,8 @@ publishes them with `mre outs` through `mrp`'s own post-processing: the
 **Order.** Each staged list, and each list of value records, is in an order
 the run fixes, a gather's and OUTS's by instance key, then output, and a
 join's by chunk name, since list order is part of
-a task's `-resume` key and arrival order is completion order.
+a task's `-resume` key, arrival order is completion order, and a `groupBy`
+group has no order.
 
 **Overhead.** The tasks are PLAN, one per stage job `mrp` runs (each split,
 chunk and join of a split stage, one per fork of a non-split stage), and OUTS.
@@ -917,13 +919,11 @@ You can override inputs **at launch** without re-transpiling:
   wraps an int beyond int64 into int64 and reads `-0.0` as `0.0` before
   `mre plan` sees the value, so the run takes the wrapped int and the stage
   gets `0` (the divergence `params-json-int-wrap`).
-- The string guarantee holds only under the strict (v2) syntax parser, the
-  default from Nextflow 26.04. The v1 parser (the default on earlier releases,
-  or `NXF_SYNTAX_PARSER=v1`) converts CLI values before the script sees them:
-  `--b True` becomes `true`, and `--s 007` becomes the integer `7`, which no
-  later step can recover. On such a launch, set
-  `NXF_DISABLE_PARAMS_TYPE_DETECTION=true`. `-params-file` values are
-  unaffected.
+- The string guarantee rests on the strict (v2) syntax parser, Nextflow's
+  default from 26.04, the engine floor, and the only parser the project
+  supports. The v1 parser (`NXF_SYNTAX_PARSER=v1`) converts CLI values
+  before the script sees them: `--b True` becomes `true`, and `--s 007`
+  becomes the integer `7`, which no later step can recover.
 - An entry input named `outdir`, `job_resources` or `mro2nf_*` collides with
   a param the project defines itself and fails the transpile.
 - `mre plan` is the one validator of the launch values. `nextflow_schema.json`
@@ -936,10 +936,11 @@ You can override inputs **at launch** without re-transpiling:
   HealthOmics `parameter-template.json` (`internal/cgnf/params.go`). No
   nf-schema plugin validates against it: a plugin is downloaded at launch,
   which an offline grid or container host cannot do, and HealthOmics installs
-  only the versions it pins. Nextflow's typed `params {}` block is not used:
-  Nextflow 25.10, the floor `manifest.nextflowVersion` declares, parses it
-  only under `NXF_SYNTAX_PARSER=v2`, not its default, and HealthOmics, given
-  that range, runs 25.10 and supports the v2 parser only from 26.04.
+  only the versions it pins. Nextflow's typed `params {}` block does not
+  type the entry inputs as Martian does: on 26.04 a `Float` narrows a CLI
+  value to 32 bits (`3.14159265358979` becomes `3.1415927`), and an unset
+  `Boolean`, even one declared `= null`, becomes `false`, overriding the
+  `.mro`'s value.
 
 **File-typed inputs.** Every file value of the run's entry inputs that is an
 absolute path is read in place by every task on the local and grid profiles
@@ -995,8 +996,8 @@ not bound the paths it opens: a run-wide bind list costs every task one
 mount option per value, quadratic in a map call's width over the run.
 `awsbatch` and `healthomics` refuse a head-node value outright.
 
-**Names Nextflow cannot stage.** Nextflow's stage-in script, on 25.10 and
-26.04, writes each staged file as `ln -s <source> <name>`, leaving `*`, `?`,
+**Names Nextflow cannot stage.** Nextflow's stage-in script, on 26.04,
+writes each staged file as `ln -s <source> <name>`, leaving `*`, `?`,
 `[`, `]`, `{`, `}`, `$` and control characters such as a tab for bash to
 expand: `s[1].txt` beside `s1.txt` stages `s1.txt` silently. So PLAN refuses a
 staged value holding any of them, naming the input and the character, before
@@ -1091,10 +1092,12 @@ runs the tasks and in which image; every task finds `mre` on `PATH`.
   workflow defines it, to a run that names no profile, and `standard` is
   the local target, whose `process.resourceLimits` would clamp every task
   to the engine's host and whose `mro2nf_local_jobs` would grant jobs as
-  `mrp`'s local job manager does (#571). A setting after the profiles
-  cannot undo them: under Nextflow 25.10, a profile's `process` settings
-  outrank a later top-level one, and a `null` unsets nothing. The package
-  sets no executor; HealthOmics runs every task itself.
+  `mrp`'s local job manager does (#571). Under Nextflow 26.04 a top-level
+  setting after the profiles does override a profile's, and `= null` unsets
+  one (`nextflow config -flat`), but undoing `standard` that way would have
+  to name each of its settings, and one added later would reach HealthOmics
+  runs unnoticed; a config without the profiles has nothing to undo. The
+  package sets no executor; HealthOmics runs every task itself.
   The image must be pinned by digest: a workflow version then runs the code
   it was validated with, and as `parameter-template.json` declares only the
   entry inputs and `mro2nf_overrides`, no run can name another image.

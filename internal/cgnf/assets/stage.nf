@@ -5,15 +5,14 @@
 // run's call as CALL carries it (call), the launch params its script reads
 // (run), the resources it is scheduled with,
 // and its own overrides file (overrides), which PLAN resolved; its GPU
-// request is the config's, which reads meta.special per task where a
-// Nextflow 25.10 process accelerator directive cannot. Each task runs one
-// `mre stage` call: the instance's args, which it builds from the inputs it
-// staged, its phase's job as mrp runs it, and the post after it that the
-// phase has, each step handing the next what it needs in memory. A split's
-// chunks and join stage the split's inputs and build its args again, so no
-// task outputs args: each links the files they name where Nextflow staged
-// them, which an object-store work dir would otherwise receive as one copy
-// per fork.
+// request is the config's, which reads meta.special per task. Each task
+// runs one `mre stage` call: the instance's args, which it builds from the
+// inputs it staged, its phase's job as mrp runs it, and the post after it
+// that the phase has, each step handing the next what it needs in memory.
+// A split's chunks and join stage the split's inputs and build its args
+// again, so no task outputs args: each links the files they name where
+// Nextflow staged them, which an object-store work dir would otherwise
+// receive as one copy per fork.
 
 // shq quotes s for the shell: every value a script names goes through it.
 def shq(s) {
@@ -173,8 +172,7 @@ def valuesFile(List values) {
 }
 
 // on reads a boolean param, which a launch's --<name> false sets to the
-// string 'false' under the v2 syntax parser or
-// NXF_DISABLE_PARAMS_TYPE_DETECTION, a value Groovy takes as true.
+// string 'false', a value Groovy takes as true.
 def on(v) {
     return v.toString() == 'true'
 }
@@ -762,9 +760,9 @@ workflow GATHER {
     fields
 
     main:
-    seeds = run.map { v -> [v[1][mine], null] }.unique()
-    out = seeds.mix(outs.map { ku, ds -> [ku[theirs], selected(ds, fields).collect { e -> [ku, e] }] }).groupTuple().map { c, dss ->
-        [c, ordered(dss.findAll { x -> x != null }.collectMany { x -> x })]
+    seeds = run.map { v -> [v[1][mine], []] }.unique()
+    out = seeds.mix(outs.map { ku, ds -> [ku[theirs], selected(ds, fields).collect { e -> [ku, e] }] }).groupBy().map { c, dss ->
+        [c, ordered(dss.collectMany { x -> x })]
     }
 
     emit:
@@ -914,14 +912,15 @@ workflow CHUNKS {
 // JOIN is a split's join over every chunk's outs once all are in, by chunk
 // name, not by completion, scheduled with the resources the split gave it,
 // and staging the split's inputs and the files its chunks' defs and outs
-// name by reference.
+// name by reference. Chunk outs that number other than the split's chunks
+// fail the run, as a group short of its count would never reach the join.
 workflow JOIN {
     take:
     splits
     chunk
 
     main:
-    outs = chunk.map { m, k, o, recs -> [groupKey(k, m.chunks), [o, recs]] }.groupTuple().map { gk, os -> [gk.getGroupTarget(), os.sort(false) { a, b -> a[0].name <=> b[0].name }] }
+    outs = chunk.map { m, k, o, recs -> [k, m.chunks, [o, recs]] }.groupBy().map { k, os -> [k, os.sort(false) { a, b -> a[0].name <=> b[0].name }] }
     none = splits.filter { v -> v[2].isEmpty() }.map { v -> [v[0], []] }
     out = splits.join(outs.mix(none)).map { k, m, cs, j, res, t, _d, fs, vs, us, rs, ids, ef, _cf, os ->
         [m + resources(res).join, k, fs, vs, us, joinRefs(us, rs, chunked(us, rs, cs, t), os), ids, ef, cs, j, os.collect { o -> o[0] }, callStaged(m)]

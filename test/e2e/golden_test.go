@@ -334,9 +334,8 @@ func TestCLITypedOverrides(t *testing.T) {
 // TestOutOfRangeLaunchValues (#567): a launch value outside Martian's number
 // range fails the run at PLAN naming the input, as mrp's parser refuses the
 // literal. A YAML params file keeps an int beyond int64 exact, and a JSON
-// one a float beyond float64. The command line passes the int as a String
-// under Nextflow's strict syntax parser and as a Double under its v1
-// parser, which the int input refuses.
+// one a float beyond float64. The command line passes the int as a String,
+// which the int input refuses.
 func TestOutOfRangeLaunchValues(t *testing.T) {
 	t.Parallel()
 

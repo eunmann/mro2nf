@@ -10,7 +10,7 @@ import (
 // engineFloor is the oldest Nextflow release the project is tested on. A
 // workflow's nextflow.config declares it, as HealthOmics reads it there to
 // choose the engine a run gets.
-const engineFloor = "manifest.nextflowVersion = '!>=25.10.0'\n"
+const engineFloor = "manifest.nextflowVersion = '!>=26.04.0'\n"
 
 // nextflowConfig is nextflow.config: the engine floor, conf/base.config and
 // the profiles a run is launched with.
@@ -66,9 +66,7 @@ process {
 
     // A job's special "gpu" or "gpu:N", as mrp resolves it (the stage's, or
     // the one its split returned for a chunk or the join), requests 1 or N
-    // GPUs, beside the clusterOptions params.job_resources maps it to. A
-    // process accelerator directive cannot read a task's inputs on Nextflow
-    // 25.10; a config closure can.
+    // GPUs, beside the clusterOptions params.job_resources maps it to.
     accelerator = { def s = meta.special ?: ''; def n = s == 'gpu' ? 1 : (s.startsWith('gpu:') && s.substring(4).isInteger() ? s.substring(4) as int : 0); n > 0 ? [request: n] : null }
 }
 
