@@ -21,7 +21,7 @@ def load(run_dir):
     for t in ts:
         a, b = P(t['started']), P(t['stopped'])
         t['conc'] = sum(1 for x in ts if x is not t and x['inst'] == t['inst'] and P(x['started']) < b and P(x['stopped']) > a)
-    return {perfrun.task_key(t): t for t in ts}
+    return perfrun.keyed(ts)
 
 
 def summary(rows, lbl, sel):

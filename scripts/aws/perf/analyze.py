@@ -52,8 +52,9 @@ def parse_args():
 def load(run_dir):
     tasks = perfrun.tasks_by_id(run_dir)
     si = perfrun.read_json(run_dir, 'stagein.json')
+    for k, t in perfrun.keyed(tasks.values()).items():
+        t['key'] = k
     for tid, t in tasks.items():
-        t['key'] = perfrun.task_key(t)
         t['bin'] = si[tid].get('bytes_in')
         t['bout'] = si[tid].get('bytes_out')
         t['rchar_b'] = perfrun.size(t['rchar'])
@@ -244,7 +245,7 @@ def section_pair(a, D, ebs, vol, best):
     kA = {t['key']: t for t in D[A]['tasks'].values()}
     kB = {t['key']: t for t in D[B]['tasks'].values()}
     watch = set(filter(None, a.watch.split(',')))
-    keys = sorted((k for k in kA.keys() & kB.keys() if k.split('/')[0] in watch or max(moved(kA[k]), moved(kB[k])) > HEAVY),
+    keys = sorted((k for k in kA.keys() & kB.keys() if kA[k]['short'] in watch or max(moved(kA[k]), moved(kB[k])) > HEAVY),
                   key=lambda k: P(kA[k]['sub']))
     rows = []
     for k in keys:

@@ -49,9 +49,21 @@ def load_trace(path):
 
 
 def task_key(t):
-    """The process's short name, with the chunk for a split stage's main: one key per task, stable across runs."""
-    m = re.search(r'(chnk\d+)\)$', t['name'])
-    return t['short'] + ('/' + m.group(1) if m else '')
+    """The process's short name, then its tag's fork key and chunk, then '@<attempt>' for a retry, '/'-joined:
+    one key per trace row, stable across runs. The tag is '<node> <fork key> [<chunk>]'."""
+    tag = t['name'].partition(' (')[2].removesuffix(')').split()[1:]
+    return '/'.join([t['short'], *tag]) + ('' if t['attempt'] == '1' else '@' + t['attempt'])
+
+
+def keyed(tasks):
+    """{task_key: task}; a ValueError when two tasks share a key."""
+    out = {}
+    for t in tasks:
+        k = task_key(t)
+        if k in out:
+            raise ValueError(f"task key {k}: tasks {out[k]['task_id']} and {t['task_id']} share it")
+        out[k] = t
+    return out
 
 
 def work_dir(tasks):
