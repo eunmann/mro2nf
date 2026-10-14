@@ -171,12 +171,6 @@ def valuesFile(List values) {
     return values ? "cat > values <<'MRO2NF_VALUES'\n${values.join('\n')}\nMRO2NF_VALUES" : ''
 }
 
-// on reads a boolean param, which a launch's --<name> false sets to the
-// string 'false', a value Groovy takes as true.
-def on(v) {
-    return v.toString() == 'true'
-}
-
 // pool names the pool mrp's local job manager grants a job from, its
 // --localcores and --localmem, where local, params.mro2nf_local_jobs as the
 // task's meta carries it, holds: the cpus and whole GB of memory

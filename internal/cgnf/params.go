@@ -13,12 +13,17 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// launchParam is one param a run is launched with: conf/base.config sets its
-// value, nextflow_schema.json describes it, and parameter-template.json lists
-// it where a HealthOmics run may set it.
+// launchParam is one param a run is launched with: main.nf's params block
+// declares it, conf/base.config sets its value, nextflow_schema.json
+// describes it, and parameter-template.json lists it where a HealthOmics run
+// may set it.
 type launchParam struct {
 	id     string
 	schema *types.Schema
+	// nfType is the Nextflow type the params block declares it with, which
+	// Nextflow converts a launch value to or refuses it at launch; empty for
+	// none, a value mre plan types.
+	nfType string
 	// value is the param's value in conf/base.config: nil, a string, a bool
 	// or a map of strings.
 	value any
@@ -70,12 +75,20 @@ type paramBlock struct {
 	params  []launchParam
 }
 
+// The Nextflow types the params block declares.
+const (
+	nfString  = "String"
+	nfBoolean = "Boolean"
+	nfInteger = "Integer"
+	nfMap     = "Map"
+)
+
 func stringParam(id string, value any, format, desc string) launchParam {
-	return launchParam{id: id, value: value, schema: &types.Schema{Type: types.JSONString, Format: format}, group: mro2nfGroup, desc: desc}
+	return launchParam{id: id, value: value, nfType: nfString, schema: &types.Schema{Type: types.JSONString, Format: format}, group: mro2nfGroup, desc: desc}
 }
 
 func boolParam(id string, value bool, desc string) launchParam {
-	return launchParam{id: id, value: value, schema: &types.Schema{Type: types.JSONBoolean}, group: mro2nfGroup, desc: desc}
+	return launchParam{id: id, value: value, nfType: nfBoolean, schema: &types.Schema{Type: types.JSONBoolean}, group: mro2nfGroup, desc: desc}
 }
 
 // projectParams are the params the generated project defines itself, in
@@ -88,14 +101,14 @@ func projectParams(psid string) []paramBlock {
 func runParams() []paramBlock {
 	return []paramBlock{
 		{params: []launchParam{{
-			id: "outdir", value: "results", schema: &types.Schema{Type: types.JSONString, Format: "directory-path"}, group: outputGroup,
+			id: "outdir", value: "results", nfType: nfString, schema: &types.Schema{Type: types.JSONString, Format: "directory-path"}, group: outputGroup,
 			desc: "where the outputs are published: a directory or an s3:// prefix",
 		}}},
 		{
 			comment: `// Martian 'special' scheduler-resource map (the MRO_JOBRESOURCES analog):
 // a stage's special key to the clusterOptions of a grid executor.`,
 			params: []launchParam{{
-				id: "job_resources", value: map[string]string{},
+				id: "job_resources", value: map[string]string{}, nfType: nfMap,
 				schema: &types.Schema{Type: types.JSONObject, AdditionalProperties: &types.Schema{Type: types.JSONString}},
 				desc:   "a stage's special value to the clusterOptions of its tasks on a grid executor, as mrp's MRO_JOBRESOURCES",
 			}},
@@ -228,8 +241,13 @@ func (p *project) entryInput(m *syntax.StructMember, tbl *types.Table) (launchPa
 		return launchParam{}, fmt.Errorf("schema: %w", err)
 	}
 
+	t, err := tbl.Type(m.Tname)
+	if err != nil {
+		return launchParam{}, fmt.Errorf("type: %w", err)
+	}
+
 	lp := launchParam{
-		id: m.Id, schema: s, desc: cmp.Or(m.Help, fmt.Sprintf("input %s of pipeline %s", m.Id, p.src.Invocation.Call)),
+		id: m.Id, schema: s, nfType: entryType(t), desc: cmp.Or(m.Help, fmt.Sprintf("input %s of pipeline %s", m.Id, p.src.Invocation.Call)),
 		omics: fmt.Sprintf("pipeline input %q; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory", m.Id),
 	}
 
@@ -240,6 +258,7 @@ func (p *project) entryInput(m *syntax.StructMember, tbl *types.Table) (launchPa
 
 	if slices.Contains(p.src.Invocation.SplitArgs, m.Id) {
 		lp.schema = types.Split(s)
+		lp.nfType = ""
 		lp.omics = fmt.Sprintf(`pipeline input %q, split per fork as {"split": [...]} or {"split": {...}}; the transpiled value when unset; a file value is an s3:// URI, or an s3:// prefix for a directory`, m.Id)
 
 		if def, err = splitValue(def); err != nil {
@@ -250,6 +269,66 @@ func (p *project) entryInput(m *syntax.StructMember, tbl *types.Table) (launchPa
 	lp.def = def
 
 	return lp, nil
+}
+
+// entryType is the Nextflow type of an entry input of Martian type t: an
+// int's, which Nextflow converts a launch value to, refusing one that spells
+// no integer at launch, or a string's, and none for any other. An integer
+// beyond int64 passes, for mre plan to refuse. On 26.04 a Float narrows a
+// command-line value to 32 bits, an unset Boolean becomes false where the
+// run would take the .mro's value, a Path checks an s3:// value exists on
+// the head node and changes the value's type, and a List or a Map checks
+// only its shape; mre plan types those (typeOverrides).
+func entryType(t syntax.Type) string {
+	b, ok := t.(*syntax.BuiltinType)
+	if !ok {
+		return ""
+	}
+
+	switch b.Id {
+	case syntax.KindInt:
+		return nfInteger
+	case syntax.KindString:
+		return nfString
+	default:
+		return ""
+	}
+}
+
+// declaration is lp's entry in main.nf's params block: its type with its
+// value as the default, or nullable where it has none, which keeps the
+// value conf/base.config sets; an untyped param is an Object?, which takes
+// any value.
+func (lp launchParam) declaration() string {
+	switch {
+	case lp.nfType == "":
+		return lp.id + ": Object?"
+	case lp.value == nil:
+		return lp.id + ": " + lp.nfType + "?"
+	default:
+		return lp.id + ": " + lp.nfType + " = " + groovy(lp.value)
+	}
+}
+
+// paramsBlock is main.nf's params block, which declares every launch
+// param, so Nextflow fails a launch that sets an undeclared one, which it
+// would otherwise ignore.
+func (p *project) paramsBlock() string {
+	var b strings.Builder
+
+	b.WriteString(`// Every launch param: a launch setting another fails. conf/base.config and
+// the profiles set their values; PLAN types each untyped entry input as its
+// .mro declares it.
+params {
+`)
+
+	for _, lp := range p.launchParams() {
+		b.WriteString("    " + lp.declaration() + "\n")
+	}
+
+	b.WriteString("}\n\n")
+
+	return b.String()
 }
 
 // splitValue is the invocation data of a split, which carries the split's

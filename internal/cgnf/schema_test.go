@@ -175,6 +175,56 @@ func TestEmitParamsSchema(t *testing.T) {
 	}
 }
 
+// TestEmitDeclaresEveryLaunchParam (#357): main.nf's params block declares
+// exactly the params conf/base.config sets, so Nextflow fails a launch
+// setting another; it types an int entry input as an Integer and a string
+// one as a String, every other entry input as none, and each project param
+// by its kind with its conf/base.config value as the default, so a boolean
+// is a Boolean wherever a script reads it.
+func TestEmitDeclaresEveryLaunchParam(t *testing.T) {
+	tree := emitSource(t, typedEntrySrc)
+
+	_, block, _ := strings.Cut(tree["main.nf"], "\nparams {\n")
+	block, _, _ = strings.Cut(block, "\n}\n")
+
+	got := map[string]string{}
+
+	for l := range strings.SplitSeq(block, "\n") {
+		id, decl, _ := strings.Cut(strings.TrimSpace(l), ": ")
+		got[id] = decl
+	}
+
+	want := map[string]string{
+		"n": "Integer?", "s": "String?",
+		"f": "Object?", "b": "Object?", "r": "Object?", "d": "Object?", "xs": "Object?", "m": "Object?", "tm": "Object?", "cfg": "Object?",
+		"outdir": "String = 'results'", "job_resources": "Map = [:]",
+		"mro2nf_mre": "String = 'mre'", "mro2nf_mrjob": "String?", "mro2nf_adapters": "String?", "mro2nf_psid": "String = 'P'",
+		"mro2nf_monitor": "Boolean = false", "mro2nf_confine": "Boolean = false",
+		"mro2nf_host_inputs": "Boolean = true", "mro2nf_allow_remote_inputs": "Boolean = false", "mro2nf_host_in_place": "Boolean = true",
+		"mro2nf_local_jobs": "Boolean = false", "mro2nf_s3_mount": "String?", "mro2nf_image": "String?", "mro2nf_require_image": "Boolean = false",
+		"mro2nf_overrides": "String?",
+	}
+
+	if d := cmp.Diff(want, got); d != "" {
+		t.Errorf("params block (-want +got):\n%s", d)
+	}
+
+	set := regexp.MustCompile(`(?m)^params\.(\w+) = `).FindAllStringSubmatch(tree["conf/base.config"], -1)
+
+	config := make([]string, len(set))
+	for i, m := range set {
+		config[i] = m[1]
+	}
+
+	if d := cmp.Diff(slices.Sorted(slices.Values(config)), slices.Sorted(maps.Keys(got))); d != "" {
+		t.Errorf("params block differs from conf/base.config's params (-config +block):\n%s", d)
+	}
+
+	if strings.Contains(stageModule, "def on(") || strings.Contains(tree["main.nf"], "on(params.") {
+		t.Error("a script reads a boolean param through on(), which its Boolean type makes dead")
+	}
+}
+
 // TestProfileParamsHaveNoDefault: every param a -profile sets, in
 // nextflow.config's profiles or the conf/container.config they include, is
 // hidden and has no default, so a launch form that writes the schema's
@@ -284,7 +334,8 @@ map call DOUBLER(
 // TestSplitInputSchema (#565): an input the top-level map call splits is
 // declared in Martian's invocation form of a split, {"split": v}, v an
 // array or a map of the input's type, with the .mro's split value so
-// wrapped as its default, and the HealthOmics template names that form.
+// wrapped as its default, the HealthOmics template names that form, and the
+// params block leaves it untyped.
 // The schema admits the form and refuses a bare value or elements of
 // another type.
 func TestSplitInputSchema(t *testing.T) {
@@ -318,6 +369,10 @@ func TestSplitInputSchema(t *testing.T) {
 
 		if want := `pipeline input \"x\", split per fork as {\"split\": [...]} or {\"split\": {...}}`; !strings.Contains(tree["parameter-template.json"], want) {
 			t.Errorf("split %s: parameter template lacks %s:\n%s", literal, want, tree["parameter-template.json"])
+		}
+
+		if !strings.Contains(tree["main.nf"], "\n    x: Object?\n") {
+			t.Errorf("split %s: the params block types the split int x, whose value is {\"split\": v}:\n%s", literal, tree["main.nf"])
 		}
 
 		checkParamsSchema(t, tree["nextflow_schema.json"])

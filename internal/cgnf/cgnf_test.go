@@ -180,7 +180,7 @@ func TestEmitConfinesAtLaunch(t *testing.T) {
 		t.Errorf("conf/base.config does not leave confinement off:\n%s", cfg)
 	}
 
-	if !strings.Contains(stageModule, "if (run.confine) {\n        cmd += ' -confine'") || !strings.Contains(stageRun, "confine: on(params.mro2nf_confine)") {
+	if !strings.Contains(stageModule, "if (run.confine) {\n        cmd += ' -confine'") || !strings.Contains(stageRun, "confine: params.mro2nf_confine,") {
 		t.Error("stage.nf does not confine on params.mro2nf_confine")
 	}
 }

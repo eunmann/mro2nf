@@ -55,7 +55,7 @@ func TestEmitTargetsAsProfiles(t *testing.T) {
 	checkContains(t, tree, "conf/healthomics.config", "includeConfig 'container.config'\n", "params.mro2nf_host_inputs = false\n", "params.outdir = '/mnt/workflow/pubdir'\n")
 
 	main := tree["main.nf"]
-	if !strings.Contains(main, "if (on(params.mro2nf_require_image) && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
+	if !strings.Contains(main, "if (params.mro2nf_require_image && !params.mro2nf_image) {") || strings.Index(main, "!params.mro2nf_image") > strings.Index(main, "PLAN(") {
 		t.Errorf("main.nf does not refuse a container profile without an image before PLAN:\n%s", main)
 	}
 
@@ -171,7 +171,7 @@ func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 	}
 
 	for _, run := range []string{planRun, stageRun} {
-		if !strings.Contains(run, "host_in_place: on(params.mro2nf_host_in_place)") {
+		if !strings.Contains(run, "host_in_place: params.mro2nf_host_in_place,") {
 			t.Errorf("%s does not carry params.mro2nf_host_in_place", run)
 		}
 	}
@@ -210,7 +210,7 @@ var (
 	// character and no quote, which opens a message naming a param.
 	paramRead = regexp.MustCompile(`(^|[^'\w])params\.`)
 	runRead   = regexp.MustCompile(`\brun\.(\w+)`)
-	runKey    = regexp.MustCompile(`(\w+): (?:on\()?params\.`)
+	runKey    = regexp.MustCompile(`(\w+): params\.`)
 )
 
 // TestScriptsReadParamsFromMeta (#576): a task's -resume key holds its

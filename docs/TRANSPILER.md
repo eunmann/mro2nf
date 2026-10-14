@@ -218,7 +218,8 @@ one forked on a map call another stage feeds — is refused at transpile time.
 ## 4. The generated project
 
 ```
-main.nf               ← PLAN, the nodes or the calls of their runs, then OUTS
+main.nf               ← the params block (§8), PLAN, the nodes or the calls of
+                        their runs, then OUTS and the workflow outputs
 subworkflows/         ← a workflow per run of nodes (W<j>.nf), only in a project too large for one
 stage.nf              ← the one hand-written stage module every node includes
 nextflow.config       ← the engine floor, conf/base.config, the target profiles
@@ -302,8 +303,9 @@ the target profiles (§9), whose settings override the shared ones.
   memory and thread limits. `--mro2nf_confine true` fails a stage task whose
   output resolves outside its work dir instead of copying it in (§7) on the
   local and grid profiles too; the container profiles always confine. A
-  boolean param is on only when it is `true` or the string `'true'`, as a
-  launch's `--<name> <value>` sets it (§8).
+  boolean param is a `Boolean` of `main.nf`'s params block (§8), which
+  Nextflow converts a launch's `--<name> true|false` to and refuses any
+  other value as, so a script reads it as the boolean it is.
   `mro2nf_host_inputs` and `mro2nf_allow_remote_inputs` are the entry file
   values a run reads (§8), `mro2nf_host_in_place`, which the container
   profiles turn off (`conf/container.config`), whether every task reads a
@@ -898,11 +900,30 @@ You can override inputs **at launch** without re-transpiling:
   overlays them on the invocation data and recompiles the call, so a launch
   value can change the run's forks, gates and pruned calls as an invocation
   literal would under `mrp`.
-- A command-line `--<name> <value>` reaches `mre plan` as a string, so a scalar
-  `int`, `float` or `bool` input is parsed strictly into its declared type (a
-  base-10 int64; a JSON number; exactly `true`/`false`). A value that does not
-  parse, or a string for an array, map or struct input, fails the run; set those
-  with `-params-file`.
+- `main.nf`'s `params` block declares every launch param, the entry inputs
+  and the project's own (`paramsBlock`, from the same model as
+  `conf/base.config`), so Nextflow fails a launch that sets an undeclared
+  one, a misspelt input, where it would otherwise ignore it. Config-set
+  params stay declared, as `conf/base.config` and the profiles set only
+  those. The block types an `int` input as `Integer?` and a `string` input
+  as `String?`, and leaves every other input `Object?` (`entryType`): on
+  26.04 a `Float` narrows a CLI value to 32 bits (`3.14159265358979` becomes
+  `3.1415927`), an unset `Boolean`, even one declared `= null`, becomes
+  `false`, overriding the `.mro`'s value, a `Path` checks an `s3://` value
+  exists on the head node and changes its type, and a `List` or `Map`
+  checks only its shape. A split input, whose value is `{"split": v}`, is
+  untyped too. The project's params are typed by kind (`String`, `Boolean`,
+  `Map`) with their `conf/base.config` value as the default, which that
+  config's value overrides.
+- Nextflow converts a command-line value of an `Integer` param with Java's
+  integer parsing, refusing one that spells no integer at launch, and
+  passes an integer beyond int64 on, for `mre plan` to refuse; it also
+  reads a leading `+`, surrounding spaces and non-ASCII digits as an
+  integer. Every other command-line `--<name> <value>` reaches `mre plan` as
+  a string, so a scalar `float` or `bool` input is parsed strictly into its
+  declared type (a JSON number; exactly `true`/`false`). A value that does
+  not parse, or a string for an array, map or struct input, fails the run;
+  set those with `-params-file`.
 - An input the top-level `map call` binds with `split` takes Martian's
   invocation form of a split, `{"split": v}` with `v` an array or a map
   (`core/runtime.go` `convertToExp`), as `-params-file` takes Martian's
@@ -935,7 +956,9 @@ You can override inputs **at launch** without re-transpiling:
   becomes the integer `7`, which no later step can recover.
 - An entry input named `outdir`, `job_resources` or `mro2nf_*` collides with
   a param the project defines itself and fails the transpile.
-- `mre plan` is the one validator of the launch values. `nextflow_schema.json`
+- `mre plan` validates every entry value against its Martian type; the
+  params block checks only that no undeclared param is set and that an
+  `int` or `string` input's value is one. `nextflow_schema.json`
   (`internal/cgnf/schema.go`) describes every param for launch forms and
   documentation, each entry input by the JSON Schema of its Martian type
   (`types.Table.Schema`) with the call's value as its default, a split input
@@ -945,11 +968,7 @@ You can override inputs **at launch** without re-transpiling:
   HealthOmics `parameter-template.json` (`internal/cgnf/params.go`). No
   nf-schema plugin validates against it: a plugin is downloaded at launch,
   which an offline grid or container host cannot do, and HealthOmics installs
-  only the versions it pins. Nextflow's typed `params {}` block does not
-  type the entry inputs as Martian does: on 26.04 a `Float` narrows a CLI
-  value to 32 bits (`3.14159265358979` becomes `3.1415927`), and an unset
-  `Boolean`, even one declared `= null`, becomes `false`, overriding the
-  `.mro`'s value.
+  only the versions it pins.
 
 **File-typed inputs.** Every file value of the run's entry inputs that is an
 absolute path is read in place by every task on the local and grid profiles

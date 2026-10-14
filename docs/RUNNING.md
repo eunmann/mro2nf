@@ -56,9 +56,18 @@ compiles the call with the launch values, so a launch value changes forks,
 disabled calls and chunk counts as the same value in the `.mro` would under
 `mrp`.
 
+- A parameter the project does not declare, an input's misspelt name
+  (`--fatcor 3`) or a key of a params file, fails the launch before any task
+  starts: ``Parameter `fatcor` was specified on the command line or params
+  file but is not declared in the script or config``.
 - A scalar `int`, `float` or `bool` can be passed on the command line
   (`--n 5 --scale 2.5 --skip false`). The value must parse as the declared
-  type, or the run fails.
+  type, or the run fails. An `int` or `string` input is typed in `main.nf`'s
+  `params` block, so Nextflow refuses an `int` value that is no integer at
+  launch (``Parameter `n` with type Integer cannot be assigned to x``); it
+  reads the value as Java does, so a leading `+`, surrounding spaces and
+  non-ASCII digits also spell an integer. The run's PLAN task checks every
+  other input, and an `int` beyond int64.
 - An int beyond int64 in a JSON `-params-file` reaches the run wrapped into
   int64: `{"n": 9223372036854775808}` runs as `-9223372036854775808`, where
   `mrp` refuses the literal. Nextflow's JSON reader wraps it before the run
@@ -144,14 +153,18 @@ sets are marked `hidden` and given no default, as the profile picks their
 value.
 
 The schema validates nothing at launch: the project loads no nf-schema
-plugin, which a run would have to download. The run's PLAN task, its first,
-checks every pipeline input against its declared type on every profile, and
-fails the run before any stage starts, naming the input, its type and the
-value (`entry input "n" declared int, got "x"`). Nextflow's typed `params`
-block would check them at launch instead, but its types are not Martian's:
-on 26.04 a `Float` narrows a command-line value to 32 bits
-(`3.14159265358979` becomes `3.1415927`), and an unset `Boolean` becomes
-`false` even with a `null` default, where the run takes the `.mro`'s value.
+plugin, which a run would have to download. `main.nf`'s `params` block
+declares every parameter, so a launch setting another fails, and types the
+`int` and `string` inputs and the `mro2nf_*` parameters, whose values
+Nextflow checks at launch. The run's PLAN task, its first, checks every
+pipeline input against its declared type on every profile, and fails the
+run before any stage starts, naming the input, its type and the value
+(`entry input "f" declared float, got "2.5x"`). The block leaves the other
+inputs untyped (`Object?`), as Nextflow's types are not Martian's: on 26.04
+a `Float` narrows a command-line value to 32 bits (`3.14159265358979`
+becomes `3.1415927`), an unset `Boolean` becomes `false` even with a `null`
+default, where the run takes the `.mro`'s value, and a `Path` checks that an
+`s3://` input exists on the launch host.
 
 ### mro2nf parameters
 
@@ -171,6 +184,11 @@ on 26.04 a `Float` narrows a command-line value to 32 bits
 
 `--mro2nf_mre`, `--mro2nf_mrjob` and `--mro2nf_adapters` let the stages run
 under another Martian runtime, such as the one bundled with a pipeline.
+
+A boolean parameter is a `Boolean` of the `params` block: on the command
+line it takes `true` or `false`, in any case, and alone (`--mro2nf_monitor`)
+it is `true`. Nextflow refuses any other value at launch, a quoted `'true'`
+in a `-c` config included.
 
 `params.job_resources`, set in a `-c` config, maps a stage's `special` value
 to the `clusterOptions` of its tasks on a grid executor, like `mrp`'s

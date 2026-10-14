@@ -64,7 +64,8 @@ results. The output is:
 Each entry input of the pipeline is a run parameter. Without one, the run uses
 the value in the `.mro`'s `call`. A scalar can be passed on the command line
 (`--n 5`). An array, map or struct must be passed as typed JSON in a
-`-params-file`. Give file inputs as absolute paths.
+`-params-file`. Give file inputs as absolute paths. A parameter the project
+does not declare, such as a misspelt input, fails the launch.
 
 The generated project refers to the entry `.mro`, its includes and its stage
 code by the absolute paths they had at transpile time. Don't move or delete
