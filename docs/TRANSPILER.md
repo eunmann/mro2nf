@@ -885,11 +885,12 @@ You can override inputs **at launch** without re-transpiling:
   input (`errSplitShape`), and the compile types `v`'s elements as `mrp`'s
   does.
 - Every number in a supplied value, typed or parsed and at any depth, keeps
-  its text until the rebuilt call parses it (`core.BuildCallAst`), so it
-  reaches the stage as `mrp` encodes the same literal: `--f 2.0` and a
-  `-params-file` `{"f": 2.0}` both reach it as `2`, `1e6` as `1e+06`, `-0.0`
-  as `-0`, and a whole number given to a `float` input, Martian's int
-  literal, exact (`9007199254740993`).
+  the text `mre plan` receives until the rebuilt call parses it
+  (`core.BuildCallAst`), so it reaches the stage as `mrp` encodes the same
+  literal: `--f 2.0` and a `-params-file` `{"f": 2.0}` both reach it as `2`,
+  `1e6` as `1e+06`, a YAML params file's or a command-line `-0.0` as `-0`,
+  and a whole number given to a `float` input, Martian's int literal, exact
+  (`9007199254740993`).
 - `mre plan` parses each supplied value as `core.BuildCallAst` parses an
   invocation argument (`syntax.Parser.ParseValExp`) before it rebuilds the
   call (`cg.CheckValue`), and refuses one holding an int outside int64 or a
@@ -897,6 +898,10 @@ You can override inputs **at launch** without re-transpiling:
   panics on such a literal (`syntax/parsenum.go`), as `mrp` does on it in an
   invocation; the check recovers that panic, as the transpile does for the
   `.mro`'s own literals (`cg.ReadSource`).
+- A JSON `-params-file` is the exception to both: Nextflow's `JsonSlurper`
+  wraps an int beyond int64 into int64 and reads `-0.0` as `0.0` before
+  `mre plan` sees the value, so the run takes the wrapped int and the stage
+  gets `0` (the divergence `params-json-int-wrap`).
 - The string guarantee holds only under the strict (v2) syntax parser, the
   default from Nextflow 26.04. The v1 parser (the default on earlier releases,
   or `NXF_SYNTAX_PARSER=v1`) converts CLI values before the script sees them:
