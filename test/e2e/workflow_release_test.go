@@ -418,10 +418,36 @@ const (
 	// step reads.
 	releaseNotesPath = "${{ runner.temp }}/release-notes.md"
 
-	// releaseCuratedNotes is a tag message whose first paragraph spans
+	// releaseCuratedNotes is a tag message with Markdown headings, which
+	// git's default cleanup drops as comments, and a paragraph spanning
 	// lines, which %(contents:subject) would fold into one.
-	releaseCuratedNotes = "Highlights:\n- per-platform archives\n- release notes\n\nBreaking: the loose binaries are gone.\n"
+	releaseCuratedNotes = "## Highlights\n\n- per-platform archives\n- release notes\n\n## Breaking changes\n\nThe loose binaries\nare gone.\n"
+
+	// releaseNotesFile is the notes file CONTRIBUTING's tag command reads.
+	releaseNotesFile = "notes.md"
 )
+
+// documentedTagArgs returns the arguments of the `git tag` command
+// CONTRIBUTING.md documents for a release, and the tag it creates.
+func documentedTagArgs(t *testing.T) ([]string, string) {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join("..", "..", "CONTRIBUTING.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for line := range strings.Lines(string(raw)) {
+		cmd, _, _ := strings.Cut(line, "#")
+		if fields := strings.Fields(cmd); len(fields) > 2 && fields[0] == "git" && fields[1] == "tag" {
+			return fields[1:], fields[len(fields)-1]
+		}
+	}
+
+	t.Fatal("CONTRIBUTING.md documents no `git tag` command")
+
+	return nil, ""
+}
 
 // TestReleaseNotesFromTag pins the publish job's release notes: GitHub
 // generates the list of merged PRs, and the step before the release writes
@@ -471,14 +497,20 @@ func TestReleaseNotesBody(t *testing.T) {
 		t.Fatalf("ssh-keygen: %v\n%s", err, b)
 	}
 
+	if err := os.WriteFile(filepath.Join(dir, releaseNotesFile), []byte(releaseCuratedNotes), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	documented, documentedTag := documentedTagArgs(t)
+
 	releaseGit(t, dir, "init", "-q")
 	releaseGit(t, dir, "commit", "-q", "--allow-empty", "-m", "fix: the commit's message")
-	releaseGit(t, dir, "tag", "-a", "v1.0.0", "-m", releaseCuratedNotes)
-	releaseGit(t, dir, "-c", "gpg.format=ssh", "-c", "user.signingkey="+key, "tag", "-s", "v1.0.1", "-m", releaseCuratedNotes)
+	releaseGit(t, dir, documented...)
+	releaseGit(t, dir, "-c", "gpg.format=ssh", "-c", "user.signingkey="+key, "tag", "-s", "--cleanup=whitespace", "-F", releaseNotesFile, "v1.0.1")
 	releaseGit(t, dir, "tag", "v1.0.2")
 	releaseGit(t, dir, "tag", "-a", "v1.0.3", "-m", "")
 
-	cases := map[string]string{"v1.0.0": releaseCuratedNotes, "v1.0.1": releaseCuratedNotes, "v1.0.2": "", "v1.0.3": ""}
+	cases := map[string]string{documentedTag: releaseCuratedNotes, "v1.0.1": releaseCuratedNotes, "v1.0.2": "", "v1.0.3": ""}
 
 	for tag, want := range cases {
 		tmp := t.TempDir()

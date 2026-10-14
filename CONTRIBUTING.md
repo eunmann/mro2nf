@@ -113,13 +113,18 @@ divergences" issue.
 
 ## Releases
 
-To release, tag the merged commit with an annotated tag whose message is the
-curated notes, such as breaking changes and highlights, then push the tag:
+To release, write the curated notes, such as breaking changes and highlights,
+in Markdown to `notes.md`, tag the merged commit with an annotated tag whose
+message is those notes, then push the tag:
 
 ```bash
-git tag -a v1.2.0        # the editor takes the notes, in Markdown
+git tag -a --cleanup=whitespace -F notes.md v1.2.0
 git push origin v1.2.0
 ```
+
+`--cleanup=whitespace` keeps the Markdown headings, which git's default
+cleanup drops as comments. The notes come from a file because with that
+cleanup the editor's instructions would stay in the message.
 
 The release's body is the tag's message, without any signature, above the
 list of PRs merged since the previous tag that GitHub generates, grouped by
