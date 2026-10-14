@@ -548,8 +548,11 @@ func TestGeneratedProfilesRequireImage(t *testing.T) {
 // and zips the files main.nf reads, with the healthomics profile the
 // workflow's own config and the image pinned, so `nextflow config` of the
 // unzipped workflow, given no -profile as HealthOmics gives none, resolves
-// the pinned image, required, and the HealthOmics pubdir (#309). No file of
-// the pipeline's, an entry default included, is in it.
+// the pinned image, required, and the HealthOmics pubdir (#309). It grants
+// jobs as mrp's cluster job managers do, with no executor or local pool of
+// the engine's host, as HealthOmics, which applies the standard profile to
+// a run that names none, places every task itself (#571). No file of the
+// pipeline's, an entry default included, is in it.
 func TestGeneratedHealthOmicsPackage(t *testing.T) {
 	t.Parallel()
 
@@ -592,9 +595,16 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 		"params.outdir = '/mnt/workflow/pubdir'",
 		"params.mro2nf_require_image = true",
 		"params.mro2nf_host_inputs = false",
+		"params.mro2nf_local_jobs = false",
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("the package's config lacks %q:\n%s", want, out)
+		}
+	}
+
+	for _, local := range []string{"process.executor", "process.resourceLimits"} {
+		if strings.Contains(string(out), local) {
+			t.Errorf("the package's config sets %s:\n%s", local, out)
 		}
 	}
 
