@@ -30,6 +30,7 @@ test/scale/    the scale tier's gates
 test/wide/     a synthetic pipeline of many stage calls
 test/thirdparty/   THIRD_PARTY_NOTICES generator, vendored-license and vendor-martian drift checks
 scripts/aws/   normcmp.py, the path-normalized outs comparison of live AWS runs
+scripts/aws/perf/   the critical-path and overhead analysis of an AWS Batch run
 deploy/        the runtime image; a minimal AWS CDK (S3 + ECR + Batch + HealthOmics role)
 docs/          user and design docs
 .github/workflows/   PR validation, nightly, CDK and release CI

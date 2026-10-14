@@ -105,6 +105,12 @@ meaningless pass. Lanes run in parallel, so a shared `BENCH_WORKDIR` gets a
 per-lane subdirectory. Collecting the true S3-object metric needs S3 request
 logs or a wrapping proxy and is out of scope here (see below).
 
+[`AWS_RESULTS.md`](AWS_RESULTS.md) records live runs on AWS Batch over S3
+and on HealthOmics: the fixture matrix against local runs, and CellRanger's
+critical path, its floors and the overhead above them.
+[`scripts/aws/perf/`](../scripts/aws/perf/README.md) measures a Batch run
+the same way.
+
 ## Fixtures and lanes
 
 Ten fixtures live under `bench/`, exercising the costly patterns the overhead
