@@ -209,7 +209,7 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 // (nextflow-io/nextflow#7156). A boolean is on() of its param, so a
 // launch's --<name> false keys as its default false does.
 const (
-	planRun  = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, host_inputs: params.mro2nf_host_inputs, host_in_place: on(params.mro2nf_host_in_place), remote_inputs: params.mro2nf_allow_remote_inputs, s3_mount: params.mro2nf_s3_mount, local_jobs: on(params.mro2nf_local_jobs)]"
+	planRun  = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, host_inputs: on(params.mro2nf_host_inputs), host_in_place: on(params.mro2nf_host_in_place), remote_inputs: on(params.mro2nf_allow_remote_inputs), s3_mount: params.mro2nf_s3_mount, local_jobs: on(params.mro2nf_local_jobs)]"
 	stageRun = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, mrjob: params.mro2nf_mrjob, adapters: params.mro2nf_adapters, monitor: on(params.mro2nf_monitor), confine: on(params.mro2nf_confine), s3_mount: params.mro2nf_s3_mount, host_in_place: on(params.mro2nf_host_in_place), local_jobs: on(params.mro2nf_local_jobs)]"
 )
 
