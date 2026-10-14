@@ -1,7 +1,7 @@
 # #585: an entry input named `def`, a Groovy keyword. mrp runs it; Nextflow's
 # params block refuses the name, quoted or not, so mro2nf refuses the
 # transpile naming the input (TestMrpDiffFailureParity, divergence
-# groovy-keyword-input).
+# keyword-input).
 stage INC(
     in  int x,
     out int y,
