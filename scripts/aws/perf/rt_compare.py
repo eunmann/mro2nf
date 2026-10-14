@@ -27,8 +27,9 @@ def load(run_dir):
 def summary(rows, lbl, sel):
     v = [r for r in rows if sel(r)]
     sa, sb = sum(r['a_rt'] for r in v), sum(r['b_rt'] for r in v)
+    pct = f' ({100*(sb-sa)/sa:+.1f}%)' if sa else ''
     ratios = [r['b_rt'] / r['a_rt'] for r in v if r['a_rt'] >= 5]
-    print(f"\n{lbl}: n={len(v)} sum rt A {sa:.0f} s, B {sb:.0f} s ({100*(sb-sa)/sa:+.1f}%)" +
+    print(f"\n{lbl}: n={len(v)} sum rt A {sa:.0f} s, B {sb:.0f} s{pct}" +
           (f"; per-task B/A median {st.median(ratios):.3f}, min {min(ratios):.3f}, max {max(ratios):.3f}" if ratios else ''))
 
 
