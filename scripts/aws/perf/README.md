@@ -20,7 +20,7 @@ cross-run tables.
 ```bash
 P=scripts/aws/perf
 R=runs/7                                      # the run directory; its name, 7, is the run's label
-$P/fetch_run.sh $R <launch dir>/trace-*.txt <launch dir>/.nextflow.log
+$P/fetch_run.sh $R <launch dir>/trace-<timestamp>.txt <launch dir>/.nextflow.log   # the run's own trace
 python3 $P/instances.py $R                    # within hours of the run, for ECS and EC2; CloudTrail after that
 python3 $P/phases.py $R
 python3 $P/stagein.py $R

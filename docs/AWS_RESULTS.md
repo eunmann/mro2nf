@@ -209,12 +209,13 @@ measurable cost (`analysis/perf/r7/ebs_report.md`).
 [`scripts/aws/perf/`](../scripts/aws/perf/README.md) holds the
 analysis. To measure a new Batch run, launch it as
 [RUNNING.md](RUNNING.md#aws-batch) describes. The project writes
-`trace-<timestamp>.txt` into the launch directory. Within an hour of the
-run, while ECS still holds its task records, run:
+a new `trace-<timestamp>.txt` into the launch directory on each run, so
+pass the run's own trace by name. Within an hour of the run, while ECS
+still holds its task records, run:
 
 ```bash
 P=scripts/aws/perf
-$P/fetch_run.sh runs/new <launch dir>/trace-*.txt <launch dir>/.nextflow.log
+$P/fetch_run.sh runs/new <launch dir>/trace-<timestamp>.txt <launch dir>/.nextflow.log
 python3 $P/instances.py runs/new
 python3 $P/phases.py runs/new
 python3 $P/stagein.py runs/new
