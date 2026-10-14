@@ -16,14 +16,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import perfrun
 
 
+def fetch(stream, group):
+    """Every event of the stream: get-log-events pages forward until nextForwardToken repeats."""
+    evs, token = [], None
+    while True:
+        cmd = ['aws', 'logs', 'get-log-events', '--log-group-name', group, '--log-stream-name', stream,
+               '--start-from-head', '--output', 'json'] + (['--next-token', token] if token else [])
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode:
+            sys.exit(f'cw: get-log-events {stream}: {res.stderr.strip()}')
+        page = json.loads(res.stdout)
+        evs += page['events']
+        if page['nextForwardToken'] == token:
+            return evs
+        token = page['nextForwardToken']
+
+
 def events(run_dir, tid, stream, group):
     path = os.path.join(run_dir, 'cw', f'{tid}.json')
     if not os.path.exists(path):
+        evs = fetch(stream, group)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        res = subprocess.run(['aws', 'logs', 'get-log-events', '--log-group-name', group, '--log-stream-name', stream,
-                              '--start-from-head', '--output', 'json'], capture_output=True, text=True)
         with open(path, 'w') as f:
-            f.write(res.stdout or '{"events":[]}')
+            json.dump({'events': evs}, f)
     with open(path) as f:
         return json.load(f)['events']
 
