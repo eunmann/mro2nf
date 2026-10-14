@@ -17,8 +17,9 @@ queue times for the same tasks, the path shifts accordingly, and TARGET is repor
 
 usage: analyze.py [-o OUT] [--baseline LABEL] [--requeue T=S:PROC] [--pair A,B] [--watch PROC,...]
                   [--volume-mibps LABEL=N ...] RUN_DIR...
-writes OUT/cp_summary.csv, pair_heavy.csv, pair_by_itype.csv, floors.json, gap_detail.csv, nc_residual.csv,
-analysis.json; markdown on stdout
+writes OUT/cp_summary.csv, floors.json, gap_detail.csv, nc_residual.csv, analysis.json; with --pair,
+pair_heavy.csv and pair_by_itype.csv; with --requeue, cp_log_adjusted.json (TARGETadj's critical path); markdown
+on stdout
 """
 import argparse
 import datetime as dt
@@ -161,7 +162,7 @@ def section_cp(a, D, out):
         cpt[f'{tgt}adj'] = cp_totals(rows)
         paths[f'{tgt}adj'] = (tgt, rows)
         out['requeue'] = dict(target=tgt, delta_s=delta, min_slack_s=slack[0], slack_pair=slack[1:], queue_replaced=qrep)
-        perfrun.write_json(D[tgt]['dir'], 'cp_log_adjusted.json', rows, indent=1)
+        perfrun.write_json(a.out, 'cp_log_adjusted.json', rows, indent=1)
     print('## 1. Critical path\n')
     print('| run | wall s | tasks | ' + ' | '.join(f'{c} s (%)' for c in COMP) + ' |')
     print('|---|---:|---:|' + '---:|' * len(COMP))

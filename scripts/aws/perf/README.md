@@ -68,7 +68,7 @@ By default it starts a day before the run's first job.
 | `phases.py` | `tasks.json` | per task: Batch `queue`, in-container time, `nc` (in-container time less the trace's `realtime`), `poll` lag, instance |
 | `stagein.py` | `stagein.json` | per task: the files it stages and the tasks that wrote them, bytes in and out |
 | `cp.py` | `cp_log.json` (`--end trace`: `cp.json`) | the critical path, each task split into dispatch, queue, nc, rt and poll |
-| `analyze.py` | `cp_summary.csv`, `floors.json`, `gap_detail.csv`, `nc_residual.csv`, `analysis.json`; with `--pair`, `pair_heavy.csv`, `pair_by_itype.csv` | the cross-run tables, printed as markdown |
+| `analyze.py` | `cp_summary.csv`, `floors.json`, `gap_detail.csv`, `nc_residual.csv`, `analysis.json`; with `--pair`, `pair_heavy.csv`, `pair_by_itype.csv`; with `--requeue`, `cp_log_adjusted.json` (`TARGETadj`'s critical path) | the cross-run tables, printed as markdown |
 | `queue_decomp.py` | `queue_decomp.csv` | per task: Batch placement, instance launch and boot for a cold start, image pull, container start |
 | `cw.py` | `cw/<task ID>.json` | the task's log events |
 | `ncsplit.py` | `ncsplit.csv` | per task: nc split by its work dir's object times |
