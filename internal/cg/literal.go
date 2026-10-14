@@ -160,13 +160,18 @@ func findLiteral(path string, mroPaths []string, lit string, seen map[string]boo
 }
 
 // literalOffset is the offset and text of the first token in src that is
-// lit, or lit negated as parseInt's panic drops an int's sign; the parse
-// that panicked on lit read every token before it.
+// lit or, when it also overflows, lit negated, as parseInt's panic drops an
+// int's sign; the parse that panicked on lit read every token before it.
 func literalOffset(src, lit string) (int, string, bool) {
+	toks := []string{lit}
+
 	negated := "-" + lit
+	if _, err := strconv.ParseInt(negated, 10, 64); errors.Is(err, strconv.ErrRange) {
+		toks = append(toks, negated)
+	}
 
 	for i := range codeOffsets(src) {
-		for _, tok := range []string{negated, lit} {
+		for _, tok := range toks {
 			if wholeToken(src, i, tok) {
 				return i, tok, true
 			}

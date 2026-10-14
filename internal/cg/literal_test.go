@@ -72,6 +72,7 @@ pipeline P(out int m,)
 	}{
 		{"int above", map[string]string{"pipeline.mro": echoStage + echoCall("ECHO", "9223372036854775808", "1")}, "pipeline.mro:12:9: "},
 		{"int below", map[string]string{"pipeline.mro": echoStage + echoCall("ECHO", "-9223372036854775809", "1")}, "pipeline.mro:12:9: "},
+		{"int above after int64 min", map[string]string{"pipeline.mro": echoStage + echoCall("ECHO", "-9223372036854775808", "9223372036854775808")}, "pipeline.mro:13:9: "},
 		{"float", map[string]string{"pipeline.mro": echoStage + echoCall("ECHO", "1", "-1.5e400")}, "pipeline.mro:13:9: "},
 		{"included", map[string]string{"echo.mro": echoStage + pipeline, "pipeline.mro": "@include \"echo.mro\"\n\ncall P()\n"}, "echo.mro:14:13: "},
 	}
@@ -94,5 +95,33 @@ pipeline P(out int m,)
 	dir := writeMROs(t, map[string]string{"pipeline.mro": echoStage + echoCall("ECHO", "-9223372036854775808", "1.7976931348623157e308")})
 	if _, err := ReadSource(filepath.Join(dir, "pipeline.mro"), []string{dir}); err != nil {
 		t.Errorf("ReadSource of int64's min and float64's max: %v", err)
+	}
+}
+
+// TestCheckValueNamesTheOutOfRangeLiteral: a launch value's out-of-range
+// literal is named as written, past an earlier int64 minimum, whose digits
+// are those parseInt's panic names for the positive literal.
+func TestCheckValueNamesTheOutOfRangeLiteral(t *testing.T) {
+	cases := []struct {
+		raw, want string
+	}{
+		{`[-9223372036854775808,9223372036854775808]`, "9223372036854775808"},
+		{`[1,-9223372036854775809]`, "-9223372036854775809"},
+		{`{"f":-1E+400}`, "-1E+400"},
+	}
+
+	for _, tc := range cases {
+		err := CheckValue([]byte(tc.raw))
+		if !errors.Is(err, ErrLiteralRange) {
+			t.Fatalf("CheckValue(%s): %v, want %v", tc.raw, err, ErrLiteralRange)
+		}
+
+		if want := fmt.Sprintf("%v: %s", ErrLiteralRange, tc.want); err.Error() != want {
+			t.Errorf("CheckValue(%s): %v, want %s", tc.raw, err, want)
+		}
+	}
+
+	if err := CheckValue([]byte(`[-9223372036854775808,1.7976931348623157E+308]`)); err != nil {
+		t.Errorf("CheckValue of int64's min and float64's max: %v", err)
 	}
 }
