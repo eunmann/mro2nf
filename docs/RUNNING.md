@@ -647,12 +647,15 @@ In the task's work directory:
 - **`entry input '<name>' names no object under the mounted bucket
   <bucket>`**: on `awsbatch`, no object or prefix has the input's key.
 - **`<file>:<line>:<column>: number literal out of range: an int must fit
-  int64 and a float float64: <literal>`**: `mro2nf` refuses an int literal
-  outside int64 or a float literal beyond float64 in the `.mro` or a file it
-  includes, where `mrp` panics on it.
-- **`entry input "<name>": number literal out of range: an int must fit int64
-  and a float float64: <literal>`**: PLAN refuses a launch value holding such
-  a number at any depth, as `mrp` refuses the literal.
+  int64, a float float64 and a threads, mem_gb or vmem_gb value float32:
+  <literal>`**: `mro2nf` refuses an int literal outside int64, a float
+  literal beyond float64, or a stage's `threads`, `mem_gb` or `vmem_gb`
+  beyond float32 in the `.mro` or a file it includes, where `mrp` panics on
+  it.
+- **`entry input "<name>": number literal out of range: an int must fit
+  int64, a float float64 and a threads, mem_gb or vmem_gb value float32:
+  <literal>`**: PLAN refuses a launch value holding an int outside int64 or
+  a float beyond float64 at any depth, as `mrp` refuses the literal.
 - **`entry override of a non-scalar type cannot be a string`**: pass the
   array, map or struct in a `-params-file`.
 - **`entry override of a split input must be {"split": [...]} or {"split":

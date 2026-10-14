@@ -14,16 +14,16 @@ import (
 )
 
 // ErrLiteralRange reports a number literal outside the range Martian's
-// parser holds: an int outside int64 or a float outside float64, which mrp
-// refuses.
-var ErrLiteralRange = errors.New("number literal out of range: an int must fit int64 and a float float64")
+// parser holds: an int outside int64, a float outside float64, or a stage's
+// threads, mem_gb or vmem_gb outside float32, which mrp refuses.
+var ErrLiteralRange = errors.New("number literal out of range: an int must fit int64, a float float64 and a threads, mem_gb or vmem_gb value float32")
 
 // recoverLiteral runs parse, a parse by Martian's parser, and returns the
 // number literal it panics on as out of range, or parse's error. Martian's
 // lexer admits a 19-digit int beyond int64 and a float beyond float64, and
 // its parser panics on either by design (syntax/parsenum.go parseInt,
-// parseFloat), so recovering is the only way to refuse one as an error. Any
-// other panic is re-raised.
+// parseFloat, parseFloat32), so recovering is the only way to refuse one as
+// an error. Any other panic is re-raised.
 func recoverLiteral(parse func() error) (string, error) {
 	var lit string
 
