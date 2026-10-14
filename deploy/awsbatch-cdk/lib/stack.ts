@@ -191,8 +191,22 @@ export class Mro2nfStack extends cdk.Stack {
     (computeEnv.node.defaultChild as batch.CfnComputeEnvironment).addPropertyOverride(
       'ComputeResources.LaunchTemplate.Version', launchTemplate.latestVersionNumber);
 
+    // A job no instance of the compute environment can ever fit stays RUNNABLE
+    // at the head of the queue and holds back every job behind it, so the run
+    // hangs instead of failing. Cancelling it after Batch's 10-minute minimum
+    // fails that task, and so the run, loudly. A Spot capacity shortage is
+    // transient and is left to wait.
     const queue = new batch.JobQueue(this, 'JobQueue', {
       computeEnvironments: [{ computeEnvironment: computeEnv, order: 1 }],
+      jobStateTimeLimitActions: [
+        batch.JobStateTimeLimitActionsReason.JOB_RESOURCE_REQUIREMENT,
+        batch.JobStateTimeLimitActionsReason.COMPUTE_ENVIRONMENT_MAX_RESOURCE,
+      ].map(reason => ({
+        action: batch.JobStateTimeLimitActionsAction.CANCEL,
+        maxTime: cdk.Duration.minutes(10),
+        reason,
+        state: batch.JobStateTimeLimitActionsState.RUNNABLE,
+      })),
     });
 
     // --- AWS HealthOmics (the healthomics profile, package.sh) ---
