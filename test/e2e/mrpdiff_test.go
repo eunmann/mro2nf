@@ -622,6 +622,9 @@ var mrpDiffCases = []mrpDiffCase{
 	// #595 (gen_54d3a5646ff7): the same inside a mapped sub-pipeline, the
 	// split over an outer map call's gated element.
 	{name: "rt_gate_split_nested"},
+	// #601: a map call over a mapped sub-pipeline's merged outs, each fork
+	// staging only the inner forks of its own outer fork.
+	{name: "map_chain_partial"},
 	// Two partner splits of one projected output inside a mapped
 	// sub-pipeline, their references leaving the outer index unresolved
 	// (gen-diff seed 862's witness).

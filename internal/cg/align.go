@@ -15,8 +15,9 @@ import (
 // that fork's index or a merge of the forks in their order, so an instance
 // of st reads the one instance of up at its own index, as an mrp job reads
 // it, and the driver joins it on the two roots' ordinals rather than
-// gathering every instance of up. It is nil when a root of up is not so
-// aligned.
+// gathering every instance of up. A root of up that is not so aligned, as
+// the forks a merge at that element gathers, is gathered under the roots
+// that are. It is nil when no root aligns.
 func (g *Graph) alignment(st *syntax.CallGraphStage, up string) map[string]string {
 	u, err := g.Stage(up)
 	if err != nil {
@@ -39,11 +40,15 @@ func (g *Graph) alignment(st *syntax.CallGraphStage, up string) map[string]strin
 		a.walk(e, nil)
 	}
 
-	out := map[string]string{}
+	var out map[string]string
 
 	for _, r := range a.roots {
 		if a.unaligned[r.Fqid] || len(a.cand[r.Fqid]) == 0 {
-			return nil
+			continue
+		}
+
+		if out == nil {
+			out = map[string]string{}
 		}
 
 		out[r.Fqid] = a.cand[r.Fqid][0]
