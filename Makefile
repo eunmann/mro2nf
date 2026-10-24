@@ -42,13 +42,13 @@ test: ## Run unit tests
 # -count=1: a cached result for a package that does not import a -coverpkg
 # package replays that package's blocks from an older source, so the merged
 # profile mixes two versions of the file and the total collapses.
-# internal/mrcore's verbatim copies of Martian core are left out: they are
-# core's own source (TestMrcoreMatchesCore), including the paths of mrp's
-# runtime mro2nf never takes; what mrcore adapts or adds is measured.
-MRCORE_VERBATIM := internal/mrcore/(fork|resolve|convert)\.go:
+# internal/mrcore's copies of Martian core are left out: they are core's own
+# source, adapted only where TestMrcoreMatchesCore declares, including the
+# paths of mrp's runtime mro2nf never takes; what mrcore adds is measured.
+MRCORE_COPIES := internal/mrcore/(fork|resolve|convert|adapted)\.go:
 cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
 	@go test -count=1 -coverprofile=artifacts/cover.all.out -coverpkg=./cmd/...,./internal/... ./cmd/... ./internal/... >/dev/null
-	@grep -vE '$(MRCORE_VERBATIM)' artifacts/cover.all.out > artifacts/cover.out
+	@grep -vE '$(MRCORE_COPIES)' artifacts/cover.all.out > artifacts/cover.out
 	@go tool cover -func=artifacts/cover.out | tail -1
 	@go tool cover -func=artifacts/cover.out | awk -v min="$(COVER_MIN)" \
 		'END { gsub(/%/,"",$$3); if ($$3+0 < min+0) { printf "FAIL: total coverage %s%% is below COVER_MIN=%s%%\n", $$3, min; exit 1 } \
