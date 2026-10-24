@@ -18,7 +18,9 @@ Read the parts of `docs/TRANSPILER.md` and `docs/FEATURE_COVERAGE.md` that cover
 - **Runtime (`mre`):** `cmd/mre` subcommands (`plan|stage|outs`), `internal/job` (one stage job through `mrjob`), `internal/shim` (bundles, markers, output confinement), `internal/types` (the file-leaf walk over Martian's compiled types)
 - **Around it:** `cmd/mro2nf` (the transpile CLI: `-o`, `-mropath`, `-version`), `vendor-martian` (the pinned Martian adapters `mre` embeds)
 - **Tests:** unit tests beside each package; `test/e2e` (build tag `e2e`: goldens, mrp-diff, bench, lint-nf); fixtures and real-`mrp` goldens in `testdata/<name>/`; `bench/`
-- **Reference oracle:** the pinned Martian module (`go env GOMODCACHE`, version in `go.mod`) — `martian/syntax` for the language, `martian/core` for what `mrp` does at run time; a local `mrp` build at `$MARTIAN_BIN` (default `~/workdir/martian/bin`)
+- **Reference oracle:** the pinned Martian module (`go env GOMODCACHE`, version in `go.mod`) — `martian/syntax` for the language, `martian/core` for what `mrp` does at run time; a local `mrp` build at `$MARTIAN_BIN` (default `~/workdir/martian/bin`), which must be built at the commit `go.mod` pins — check `git -C ~/workdir/martian rev-parse --short HEAD` against it before trusting a differential.
+
+**Lean on Martian; never drift from it.** `internal/cg` uses Martian's compiled call graph and exported API, and mirrors only the runtime pieces `core` does not export (fork expansion, `TopNode.resolve`, `Fork.disabled`, `ForkId.forkId`, merge `constrain`). A mirror follows the `core` function case for case over the same compiled structures, cites each case's `core/<file>.go:<line>` at the pinned commit, and changes only when that function does. Deriving behaviour from a heuristic of mro2nf's own over `sp.Value` instead of Martian's compiled `sp.Source` is how #595's fork-producer bugs arose; a heuristic that a `core` function already decides is the defect, not the fix.
 
 ## 2. Locate
 

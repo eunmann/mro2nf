@@ -595,6 +595,7 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "bench/zip", mro: "pipeline_w4.mro"},
 	{name: "bench/zipgated", mro: "pipeline_w4.mro"},
 	{name: "bench/splitbroadcast", mro: "pipeline_w4.mro"},
+	{name: "bench/mapchain", mro: "pipeline_w4.mro"},
 	// #464: a map call zipping splits forks over its master source, and the
 	// other sources read null past their end.
 	{name: "zip_runtime"},

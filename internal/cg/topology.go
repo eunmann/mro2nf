@@ -71,10 +71,15 @@ func GateToken(node string, gate Gate, key string) string {
 }
 
 // Read is the outs of one stage node a task stages: the named outputs, or
-// all of them when Fields is nil (a whole-call reference).
+// all of them when Fields is nil (a whole-call reference). Align maps each
+// root of the node the reader is not forked on to the reader's root whose
+// forks index it alike (alignment): an instance reads the node's one
+// instance at its own ordinal of that root. With no Align, an instance
+// reads every instance of the node under the roots they share.
 type Read struct {
-	Node   string   `json:"node"`
-	Fields []string `json:"fields"`
+	Node   string            `json:"node"`
+	Fields []string          `json:"fields"`
+	Align  map[string]string `json:"align,omitempty"`
 }
 
 // TopoRoot is one fork root: the outer roots its fork set varies with, the
@@ -157,6 +162,10 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	}
 
 	n.Reads, n.Zips = g.nodeReads(st)
+	for i := range n.Reads {
+		n.Reads[i].Align = g.alignment(st, n.Reads[i].Node)
+	}
+
 	n.Preflights = g.preflights(st)
 
 	gates, err := g.gates(st)
@@ -511,10 +520,17 @@ func (t Topology) coverNodes(rs []TopoNode) ([]error, map[string]bool) {
 	return errs, live
 }
 
+// readsCovered reports whether each of want is a read of have, of no more
+// fields, and aligned as it is in have, which the transpiled project joins
+// it by.
 func readsCovered(have, want []Read) bool {
 	for _, w := range want {
 		i := slices.IndexFunc(have, func(h Read) bool { return h.Node == w.Node })
 		if i < 0 || (have[i].Fields != nil && (w.Fields == nil || !subset(have[i].Fields, w.Fields))) {
+			return false
+		}
+
+		if have[i].Align != nil && !maps.Equal(have[i].Align, w.Align) {
 			return false
 		}
 	}

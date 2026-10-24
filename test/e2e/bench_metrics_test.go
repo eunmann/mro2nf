@@ -177,6 +177,25 @@ func TestBenchMetricsReadsEveryStagingLink(t *testing.T) {
 	}
 }
 
+// TestBenchMetricsLeavesOutTheCall pins that the staged-bytes probe leaves
+// out call.b64, the run's call a task stages once it outgrows its script:
+// it is the invocation every mrp job's _jobinfo carries too, which grows
+// with the entry values, not orchestration staging.
+func TestBenchMetricsLeavesOutTheCall(t *testing.T) {
+	requireTools(t, "python3")
+
+	dir := t.TempDir()
+	in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
+	call := writeBenchFile(t, filepath.Join(dir, "call.b64"), strings.Repeat("c", 5000))
+
+	writeBenchTask(t, dir, "aa/task", "WF:ST (1)", "    rm -f in.txt call.b64\n    ln -sfn "+in+" in.txt\n    ln -sfn "+call+" call.b64\n")
+
+	got := benchStagedMax(t, dir, "WF:ST (1)")
+	if diff := cmp.Diff(map[string]int{"ST": len("abc")}, got); diff != "" {
+		t.Errorf("stage_staged_bytes_max (-want +got):\n%s", diff)
+	}
+}
+
 // benchStagedMax runs bench_metrics.py over dir with stage process ST, whose
 // trace holds the one task traced, and returns its stage_staged_bytes_max.
 func benchStagedMax(t *testing.T, dir, traced string) map[string]int {

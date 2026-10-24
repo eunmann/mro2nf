@@ -1,0 +1,8 @@
+@include "common.mro"
+
+call CHAINS(
+    xs = [0, 1, 2, 3],
+    m  = {"k00": 0, "k01": 1, "k02": 2, "k03": 3},
+    n  = 4,
+    kb = 64,
+)

@@ -358,11 +358,13 @@ type readArgs struct {
 
 // read is what READ takes for each enabled instance of node i to read of
 // node r.Node. The channel is the upstream's outs, keyed by its whole key,
-// when node i shares every root of it, or, when the upstream is forked on
-// roots node i is not, a gather of the outputs it reads of every such
-// instance, ordered by the upstream's key, not by completion, which waits
-// for all of the upstream, as mrp waits for every fork of a node a node
-// reads.
+// when node i shares every root of it or aligns it with one of its own
+// (cg.Read.Align), whose ordinal it then joins on, so an instance stages
+// the one upstream instance it reads; or, when the upstream is forked on
+// roots node i neither shares nor aligns, a gather of the outputs it reads
+// of every such instance, ordered by the upstream's key, not by
+// completion, which waits for all of the upstream, as mrp waits for every
+// fork of a node a node reads.
 func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) readArgs {
 	u := p.index[r.Node]
 
@@ -371,7 +373,12 @@ func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) readArgs {
 	gather := false
 
 	for x, root := range p.topo.Nodes[u].Roots {
-		if at := slices.Index(n.Roots, root); at >= 0 {
+		at := slices.Index(n.Roots, root)
+		if aligned, ok := r.Align[root]; ok {
+			at = slices.Index(n.Roots, aligned)
+		}
+
+		if at >= 0 {
 			mine, theirs = append(mine, at), append(theirs, x)
 		} else {
 			gather = true

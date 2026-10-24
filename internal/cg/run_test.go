@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/martian-lang/martian/martian/core"
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // standIn runs a fixture's literal invocation as the generated main.nf runs
@@ -31,8 +33,19 @@ type standIn struct {
 	seq      int
 	fields   map[string][]string
 	values   map[string][]string
+	posted   map[string][]postedOuts
 	elems    map[string][]elemItem
 	partners map[string][]postedPartner
+	// overstaged, when set, receives each instance's reads of more
+	// instances of a node than its resolution reads (overstaged).
+	overstaged func(node, fork, read string, staged, resolved int)
+}
+
+// postedOuts are one instance's posted outs: its fork, its outputs' bundle
+// dirs and their value records.
+type postedOuts struct {
+	fork           Fork
+	fields, values []string
 }
 
 // postedPartner is one instance's partner element items of one output, by
@@ -58,9 +71,17 @@ func newStandIn(t *testing.T, mro string) *standIn {
 		t.Fatal(err)
 	}
 
+	return standInOf(t, g)
+}
+
+// standInOf runs g's invocation.
+func standInOf(t *testing.T, g *Graph) *standIn {
+	t.Helper()
+
 	return &standIn{
 		t: t, g: g, dir: t.TempDir(),
-		fields: map[string][]string{}, values: map[string][]string{}, elems: map[string][]elemItem{}, partners: map[string][]postedPartner{},
+		fields: map[string][]string{}, values: map[string][]string{}, posted: map[string][]postedOuts{},
+		elems: map[string][]elemItem{}, partners: map[string][]postedPartner{},
 	}
 }
 
@@ -131,6 +152,59 @@ func (s *standIn) read(reads []Read) ([]string, []string) {
 	return dirs, values
 }
 
+// readAt is what the driver's READ and GATHER give the instance at fork of
+// each node reads names (internal/cgnf node.go read): the named outputs of
+// every instance of it that agrees with fork on the roots they share and,
+// on each of its roots the read aligns, is at the index fork has of the
+// aligned root; and how many such instances of each node it was given.
+func (s *standIn) readAt(reads []Read, fork Fork) ([]string, []string, map[string]int) {
+	var dirs, values []string
+
+	given := map[string]int{}
+
+	for _, r := range reads {
+		for _, p := range s.posted[r.Node] {
+			if !agrees(p.fork, fork) || !alignedWith(p.fork, fork, r.Align) {
+				continue
+			}
+
+			given[r.Node]++
+
+			for _, d := range p.fields {
+				if r.Fields == nil || slices.Contains(r.Fields, filepath.Base(d)) {
+					dirs = append(dirs, d)
+				}
+			}
+
+			for _, v := range p.values {
+				if field, _, _ := strings.Cut(v, ":"); r.Fields == nil || slices.Contains(r.Fields, field) {
+					values = append(values, v)
+				}
+			}
+		}
+	}
+
+	return dirs, values, given
+}
+
+// alignedWith reports whether up, an upstream instance's fork, is at the
+// index fork has of each reader root align pairs with one of up's roots.
+func alignedWith(up, fork Fork, align map[string]string) bool {
+	for _, p := range up {
+		mine, ok := align[p.Root.Fqid]
+		if !ok {
+			continue
+		}
+
+		i := slices.IndexFunc(fork, func(q Part) bool { return q.Root.Fqid == mine })
+		if i < 0 || !indexEqual(fork[i].Index, p.Index) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // staged links items below one dir, as a task stages them, and returns it.
 func (s *standIn) staged(items []string) string {
 	s.t.Helper()
@@ -187,14 +261,14 @@ func (s *standIn) instances(n TopoNode) [][]elemItem {
 func (s *standIn) args(n TopoNode, elems []elemItem) Instance {
 	s.t.Helper()
 
-	items, values := s.read(n.Reads)
-
 	var recs []Element
 
 	fork := make(Fork, 0, len(elems))
 	for _, e := range elems {
 		fork = append(fork, e.el.Fork[len(e.el.Fork)-1])
 	}
+
+	items, values, given := s.readAt(n.Reads, fork)
 
 	for _, z := range n.Zips {
 		items = append(items, s.partner(z, fork)...)
@@ -221,13 +295,78 @@ func (s *standIn) args(n TopoNode, elems []elemItem) Instance {
 	}
 
 	dirs, elemValues := staging(items)
+	spec := ArgsSpec{Node: n.Fqid, In: []string{s.staged(dirs)}, Values: append(values, elemValues...), Forks: recs, Out: s.next("args")}
 
-	in, _, err := s.g.WriteArgs(ArgsSpec{Node: n.Fqid, In: []string{s.staged(dirs)}, Values: append(values, elemValues...), Forks: recs, Out: s.next("args")})
+	in, _, err := s.g.WriteArgs(spec)
 	if err != nil {
 		s.t.Fatalf("args of %s: %v", n.Fqid, err)
 	}
 
+	if s.overstaged != nil {
+		resolved := s.resolvedReads(spec)
+		for _, node := range slices.Sorted(maps.Keys(given)) {
+			if given[node] > max(1, resolved[node]) {
+				s.overstaged(n.Fqid, in.Fork.String(), node, given[node], resolved[node])
+			}
+		}
+	}
+
 	return in
+}
+
+// recordingStore records the instances whose outs a resolution reads.
+type recordingStore struct {
+	store
+
+	read map[string]map[string]bool
+}
+
+func (r *recordingStore) outs(st *syntax.CallGraphStage, f Fork) (core.LazyArgumentMap, error) {
+	if r.read[st.Fqid] == nil {
+		r.read[st.Fqid] = map[string]bool{}
+	}
+
+	r.read[st.Fqid][f.key()] = true
+
+	return r.store.outs(st, f)
+}
+
+// resolvedReads resolves the instance spec stages as WriteArgs does, its
+// disabled state and then its args, and returns how many instances of each
+// node it read the outs of.
+func (s *standIn) resolvedReads(spec ArgsSpec) map[string]int {
+	s.t.Helper()
+
+	st, err := s.g.Stage(spec.Node)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+
+	staged, err := s.g.stage(spec.In, spec.Values, spec.Refs, spec.Forks...)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+
+	fork, _, err := instanceFork(st, staged)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+
+	rec := &recordingStore{store: staged, read: map[string]map[string]bool{}}
+	r := &resolver{g: s.g, st: rec}
+
+	if off, err := r.disabled(st, fork); err == nil && !off {
+		if _, _, err := r.args(st, fork); err != nil {
+			s.t.Fatalf("args of %s: %v", spec.Node, err)
+		}
+	}
+
+	out := map[string]int{}
+	for node, forks := range rec.read {
+		out[node] = len(forks)
+	}
+
+	return out
 }
 
 // partner is what the driver gives of z to the instance at fork: the
@@ -311,6 +450,7 @@ func (s *standIn) node(n TopoNode) int {
 
 		s.fields[n.Fqid] = append(s.fields[n.Fqid], fields...)
 		s.values[n.Fqid] = append(s.values[n.Fqid], strings.Fields(string(values))...)
+		s.posted[n.Fqid] = append(s.posted[n.Fqid], postedOuts{fork: in.Fork, fields: fields, values: strings.Fields(string(values))})
 		s.collect(spec.Forks, false, in.Fork)
 		ran++
 	}
@@ -410,10 +550,7 @@ func TestWriteOutsOfATopLevelMapCall(t *testing.T) {
 // pipeline outs resolve from the outs they read and publish, or panic as
 // Martian's pipestance does under mrp.
 func TestStandInRunOfEveryFixture(t *testing.T) {
-	skipped := map[string]string{
-		"split_gate_entry": "it zips entry collections with SRC's outs, whose keys and lengths no stand-in knows",
-		"forkdisabled":     "GATED zips the entry's xs with FLAGS's skips, whose length no stand-in knows",
-	}
+	skipped := standInSkipped()
 	panics := map[string]string{
 		"nested_empty_forks": "index out of range",
 	}
