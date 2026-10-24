@@ -636,6 +636,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// sub-pipeline, their references leaving the outer index unresolved
 	// (gen-diff seed 862's witness).
 	{name: "partner_nested_projection"},
+	// #604 (gen-diff seed 2554's witness): a merge of a mapped sub-pipeline
+	// Martian gave no fork root, gathering none of its forks, or its
+	// compile-time forks.
+	{name: "merge_unforked_pipeline"},
 	// #565: a top-level map call's outs are its pipeline's per fork, each
 	// fork's files published under outs/<fork key>/.
 	// TestMrpDiffSplitEntryOverride launches it with other split values.

@@ -1223,7 +1223,10 @@ completes, have goldens only. The validation tiers:
   well-typed programs (`test/gen`) whose stub stages derive every output from a
   hash of their inputs, run under live `mrp` and under mro2nf; any difference
   in the published outputs, a stage's `_args`/`_outs` or the run outcome is
-  shrunk to a minimal fixture. Every comparator rule of the divergence
+  shrunk to a minimal fixture. Each program runs at its literal invocation and
+  again at its witness invocation, which forks every entry collection at
+  differing nested widths; a run in which `mrp` ran a job on bindings it failed
+  to resolve (it passes `null` in their place, #606) is no test. Every comparator rule of the divergence
   allowlist, issue-tracked ones included, excuses a difference there, though
   none is reported as excusing nothing; the ABI and outcome matchers, which name
   their fixtures, do not apply. `make test-e2e` runs a fixed smoke set of seeds;

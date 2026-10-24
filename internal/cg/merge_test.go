@@ -256,6 +256,24 @@ func structOuts(f *fixture) []string {
 	}
 }
 
+// TestMergeOfForklessPipeline: a merge of a mapped sub-pipeline Martian
+// gave no fork root gathers what mrp's getParts finds without one: no fork
+// where the call's length is unknown at compile time, its compile-time
+// forks where it is known (merge_unforked_pipeline, gen-diff seed 2554's
+// witness). Each want is the _args of upstream mrp's (50ad6c0) run.
+func TestMergeOfForklessPipeline(t *testing.T) {
+	f := loadFixture(t, "merge_unforked_pipeline")
+
+	for node, want := range map[string]string{
+		"TOP.OUTER.COUNT":     `{"vs":[]}`,
+		"TOP.OUTER.COUNT_LIT": `{"vs":[null,null]}`,
+		"TOP.OUTER.SHOW":      `{"yss":[]}`,
+	} {
+		_, got := f.args(node)
+		wantArgs(t, node, got, want)
+	}
+}
+
 // TestUnconstrainedMergeAcrossForksFails: a merge that fixes an outer
 // fork's index with no constraint to gather that fork's forks alone, which
 // mrp would gather across every outer fork, fails rather than gathering
