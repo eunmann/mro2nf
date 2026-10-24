@@ -30,6 +30,8 @@ var goldenCases = []goldenCase{
 	// #99: upstream MAP-fork with real keys — the O(1) element path slicing a
 	// producer bundle for a map fork (driver UTF-8 key sort vs Go fork key order).
 	{"map_fork_upstream", "map_fork_upstream", "expected/outs.json"},
+	// #595: a map call over another map call's outs, both sized by a stage.
+	{"map_chain_runtime", "map_chain_runtime", "expected/outs.json"},
 	{"struct_min", "struct_min", "expected/stats_pipe_outs.json"},
 	{"modifiers_min", "modifiers_min", "expected/top_outs.json"},
 	{"alias_min", "alias_min", "expected/p_outs.json"},
@@ -148,9 +150,9 @@ var goldenCases = []goldenCase{
 	{"fork_ref", "fork_ref", "expected/outs.json"},
 	{"fork_mid", "fork_mid", "expected/outs.json"},
 	// #99 empty-fork fidelity: an invocation-known split source that resolves
-	// EMPTY merges to null (mrp's static resolver prunes a zero-fork call:
-	// null, not []); runtime_empty_forks pins the RUNTIME side (typed empty
-	// for an upstream empty/null collection) plus the zero-fork sentinel. The
+	// EMPTY merges statically to the typed empty (null before Martian
+	// 50ad6c0); runtime_empty_forks pins the RUNTIME side (typed empty for an
+	// upstream empty/null collection) plus the zero-fork sentinel. The
 	// _override case proves a launch-time entry override to a NON-empty
 	// collection still runs the forks.
 	{"empty_map_fork", "empty_map_fork", "expected/outs.json"},
@@ -160,26 +162,26 @@ var goldenCases = []goldenCase{
 	// an entry value through the parent call's bindings, an in-pipeline
 	// cascade `map call SECOND(split FIRST.scaled)` over an
 	// invocation-known-empty FIRST, and a MIXED split (entry ref zipped with an
-	// upstream ref, entry side empty). mrp prunes all three to null; the
-	// _override cases launch-override the entry side non-empty and the forks
-	// run.
+	// upstream ref, entry side empty). mrp merges all three statically, to
+	// []; the _override cases launch-override the entry side non-empty and
+	// the forks run.
 	{"empty_fork_sub", "empty_fork_sub", "expected/outs.json"},
 	{"empty_fork_sub_override", "empty_fork_sub", "expected/override_outs.json"},
 	{"empty_fork_cascade", "empty_fork_cascade", "expected/outs.json"},
 	{"empty_fork_cascade_override", "empty_fork_cascade", "expected/override_outs.json"},
 	{"empty_fork_mixed", "empty_fork_mixed", "expected/outs.json"},
 	// #241: one sub-pipeline at two call sites, one invocation-known empty
-	// (null) and one runtime-empty ([]); the rule is decided per call site.
+	// and one runtime-empty, both [].
 	{"empty_fork_two_sites", "empty_fork_two_sites", "expected/outs.json"},
 	// #383: a split over a disable-gated producer of an invocation-known
 	// source (map call, mapping sub-pipeline, pass-through sub-pipeline) is
-	// null under literal and runtime gates alike.
+	// [] under literal and runtime gates alike.
 	{"empty_fork_gated", "empty_fork_gated", "expected/outs.json"},
 	{"empty_fork_gated_sub", "empty_fork_gated_sub", "expected/outs.json"},
-	// #435: a split of a mapped call's whole ref cascades the prune to null.
+	// #435: a split of a mapped call's whole ref cascades the static merge.
 	{"empty_fork_wholeref", "empty_fork_wholeref", "expected/outs.json"},
-	// #436: a split of a call an entry value disables is null, while the same
-	// gate left false gives the runtime empty [].
+	// #436: a split of a call an entry value disables merges to [], as the
+	// same gate left false does.
 	{"disabled_split_null", "disabled_split_null", "expected/outs.json"},
 	// #434: a runtime-gated map call over a sub-pipeline is one null per fork.
 	{"disabled_map_nullforks", "disabled_map_nullforks", "expected/outs.json"},

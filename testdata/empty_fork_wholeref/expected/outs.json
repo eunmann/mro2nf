@@ -3,10 +3,10 @@
         100,
         200
     ],
-    "none_emp": null,
-    "none_nul": null,
-    "pair_emp": null,
-    "pair_nul": null,
+    "none_emp": [],
+    "none_nul": [],
+    "pair_emp": [],
+    "pair_nul": [],
     "pair_some": [
         [
             10,
@@ -17,7 +17,7 @@
             21
         ]
     ],
-    "sum_emp": "null",
-    "sum_nul": "null",
+    "sum_emp": "[]",
+    "sum_nul": "[]",
     "sum_some": "[[10, 11], [20, 21]]"
 }

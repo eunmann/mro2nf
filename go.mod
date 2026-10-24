@@ -6,7 +6,7 @@ toolchain go1.26.9
 
 require (
 	github.com/google/go-cmp v0.7.0
-	github.com/martian-lang/martian v0.0.0-20260506211707-4a558e7dd93b
+	github.com/martian-lang/martian v0.0.0-20261019211818-50ad6c054d30
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 )
 

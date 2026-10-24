@@ -1,8 +1,9 @@
 # #241: one sub-pipeline instantiated at two call sites whose split sources
-# differ in kind. mrp's static resolver prunes S1's zero-fork map call (an
-# invocation-known empty, chained from the entry) to NULL, while S2's
-# runtime-empty collection (a GEN output) merges to the typed empty [].
-# The empty-fork rule must be decided per call site, not once for SUB.
+# differ in kind. mrp's static resolver merges S1's zero-fork map call (an
+# invocation-known empty, chained from the entry), while S2's runtime-empty
+# collection (a GEN output) merges at run time. Both give the typed empty []
+# since Martian 50ad6c0; before it S1's gave null, so the empty-fork rule was
+# decided per call site.
 stage GEN(
     out int[] arr_empty,
     src py    "stages/gen",

@@ -13,7 +13,7 @@ import (
 )
 
 // resolveSplit resolves a split at the fork part that matches its call, or
-// the last part (core/resolve.go:553-631): the element of the collection at
+// the last part (core/resolve.go:604-682): the element of the collection at
 // that part's index. A ref already forked on the call is that one element.
 func (r *resolver) resolveSplit(e *syntax.SplitExp, t syntax.Type, fork Fork) (json.Marshaler, error) {
 	var innerT syntax.Type
@@ -255,7 +255,7 @@ func indexedOf(v json.Marshaler, mode syntax.CallMode) (indexed, error) {
 }
 
 // indices are the collection's fork indices in mrp's order; null and empty
-// have none (core/fork.go:1639-1790 expandForkFromObj).
+// have none (core/fork.go:1657-1790 expandForkFromObj).
 func (c indexed) indices() []syntax.CollectionIndex {
 	switch {
 	case c.null:
@@ -291,7 +291,7 @@ func (c indexed) at(ix syntax.CollectionIndex) (json.Marshaler, error) {
 }
 
 // resolveMerge gathers a value over every fork of a map call
-// (core/resolve.go:292-440): inside the call's own fork it is that fork's
+// (core/resolve.go:293-491): inside the call's own fork it is that fork's
 // value; outside it is a map by key or an array by index over the call's
 // forks, the typed empty when it has none, and null over a null source.
 func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (json.Marshaler, error) {
@@ -342,7 +342,7 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 	return out, nil
 }
 
-// mergeElemType is the type of one merged value (core/resolve.go:294-322).
+// mergeElemType is the type of one merged value (core/resolve.go:295-323).
 func mergeElemType(e *syntax.MergeExp, t syntax.Type) (syntax.Type, error) {
 	switch mt := t.(type) {
 	case *syntax.ArrayType:
@@ -371,7 +371,7 @@ func mergeElemType(e *syntax.MergeExp, t syntax.Type) (syntax.Type, error) {
 
 // indices returns root's fork indices under outer in mrp's order. A source
 // whose values are at hand is evaluated as core expands a fork
-// (core/fork.go:1389-1790); otherwise the indices are those of the staged
+// (core/fork.go:1392-1790); otherwise the indices are those of the staged
 // instances forked on root, which a gathering task stages in full.
 func (r *resolver) indices(root *syntax.CallGraphStage, outer Fork) ([]syntax.CollectionIndex, error) {
 	idx, err := r.sourceIndices(root, outer)
@@ -392,18 +392,239 @@ func (r *resolver) sourceIndices(root *syntax.CallGraphStage, outer Fork) ([]syn
 		return idx, nil
 	}
 
-	v, err := r.sourceValue(root, outer)
+	s, err := r.sourceExp(root, outer)
+	if err != nil {
+		return nil, err
+	}
+
+	c := counter{r: r, sp: sp, outer: outer}
+
+	idx, err := c.source(s.Source)
+	if _, null := s.Value.(*syntax.NullExp); null {
+		idx, err = nil, nil
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("indices of %s: %w", root.Fqid, err)
 	}
 
-	c, err := indexedOf(v, sp.Source.CallMode())
+	return idx, nil
+}
 
-	return c.indices(), err
+// counter counts the forks of split sp at outer from its specialized
+// source case for case as mrp expands them (countWalk): a literal by its
+// length or keys, whatever its elements read, a disable-wrapped value by
+// its value where its gate holds it enabled and by none where the gate
+// disables it, and any other value by the collection it resolves to
+// (core/fork.go:1657 expandForkFromObj). At the post of a stage the gate
+// disables too, the gate is unstaged and holds the value enabled.
+type counter struct {
+	r     *resolver
+	sp    *syntax.SplitExp
+	outer Fork
+}
+
+func (c counter) source(src syntax.MapCallSource) ([]syntax.CollectionIndex, error) {
+	switch s := src.(type) {
+	case *syntax.MergeExp:
+		if s.ForkNode != nil {
+			return c.value(s.ForkNode)
+		}
+
+		return c.source(s.MergeOver)
+	case *syntax.MapCallSet:
+		return c.source(s.Master)
+	case syntax.Exp:
+		return c.exp(s)
+	case *syntax.BoundReference:
+		return c.value(s.Exp)
+	default:
+		return nil, fmt.Errorf("%w: fork source %T", errShape, src)
+	}
+}
+
+func (c counter) exp(e syntax.Exp) ([]syntax.CollectionIndex, error) {
+	switch x := e.(type) {
+	case nil, *syntax.NullExp:
+		return nil, nil
+	case *syntax.MergeExp:
+		return c.source(x)
+	case *syntax.ArrayExp:
+		return arrayIndices(len(x.Value)), nil
+	case *syntax.MapExp:
+		return mapIndices(slices.Collect(maps.Keys(x.Value))), nil
+	case *syntax.DisabledExp:
+		if d, ok := x.Disabled.(*syntax.SplitExp); ok && d.Call == c.sp.Call {
+			return c.exp(d.Value)
+		}
+
+		if on, err := c.enabled(x); err != nil || !on {
+			return nil, err
+		}
+
+		return c.exp(x.Value)
+	case *syntax.SplitExp:
+		return c.split(x)
+	default:
+		return c.value(e)
+	}
+}
+
+// enabled reports whether d's gate holds its value enabled at the outer
+// fork, as it does, unstaged, at the post of a stage it disables too.
+func (c counter) enabled(d *syntax.DisabledExp) (bool, error) {
+	off, err := c.r.disabledBy(d.Disabled, c.outer)
+
+	switch {
+	case errors.Is(err, ErrNotStaged) && c.r.g.allGatedBy((&countWalk{g: c.r.g, sp: c.sp}).exp(d.Value), d.Disabled):
+		return true, nil
+	case err != nil:
+		return false, err
+	default:
+		return !off, nil
+	}
+}
+
+// split counts a split over the forks of x's call, its own or the outer
+// fork's element of another call's (core/fork.go:1491
+// expandForkPartFromSplit).
+func (c counter) split(x *syntax.SplitExp) ([]syntax.CollectionIndex, error) {
+	if x.Call == c.sp.Call {
+		return c.exp(x.Value)
+	}
+
+	p, ok := c.outer.part(x.Call)
+	if !ok {
+		return nil, fmt.Errorf("%w: split over %s outside its fork", errShape, x.GoString())
+	}
+
+	el, err := c.inner(x.Value, p.Index)
+	if err != nil {
+		return nil, err
+	}
+
+	if e, ok := el.(syntax.Exp); ok {
+		return c.exp(e)
+	}
+
+	col, err := indexedOf(el, c.sp.Source.CallMode())
+
+	return col.indices(), err
+}
+
+// literalElement is the expression at ix of an array or map literal e.
+func literalElement(e syntax.Exp, ix syntax.CollectionIndex) (syntax.Exp, error) {
+	switch x := e.(type) {
+	case *syntax.ArrayExp:
+		if i := ix.ArrayIndex(); i >= 0 && i < len(x.Value) {
+			return x.Value[i], nil
+		}
+
+		return nil, fmt.Errorf("%w: array index %d >= %d", errNoElement, ix.ArrayIndex(), len(x.Value))
+	case *syntax.MapExp:
+		if v, ok := x.Value[ix.MapKey()]; ok {
+			return v, nil
+		}
+
+		return nil, fmt.Errorf("%w: map key %q not found", errNoElement, ix.MapKey())
+	default:
+		return nil, fmt.Errorf("%w: %T is no literal collection", errShape, e)
+	}
+}
+
+// inner is the element at ix of the collection e an outer split splits
+// (core/fork.go:1532 expandForkSplitInnerPart): an element of a literal, as
+// the expression it is, nothing where a gate disables e, and the element of
+// a reference's or nested split's value.
+func (c counter) inner(e syntax.Exp, ix syntax.CollectionIndex) (json.Marshaler, error) {
+	switch x := e.(type) {
+	case *syntax.ArrayExp, *syntax.MapExp:
+		return literalElement(x, ix)
+	case *syntax.DisabledExp:
+		if on, err := c.enabled(x); err != nil || !on {
+			return nil, err
+		}
+
+		return c.inner(x.Value, ix)
+	case *syntax.SplitExp:
+		p, ok := c.outer.part(x.Call)
+		if !ok {
+			return nil, fmt.Errorf("%w: split over %s outside its fork", errShape, x.GoString())
+		}
+
+		v, err := c.inner(x.Value, p.Index)
+		if err != nil || v == nil {
+			return nil, err
+		}
+
+		if ve, ok := v.(syntax.Exp); ok {
+			return c.inner(ve, ix)
+		}
+
+		return element(v, ix)
+	case *syntax.RefExp:
+		v, err := c.r.resolveRef(x, nil, c.outer)
+		if err != nil {
+			return nil, err
+		}
+
+		return element(v, ix)
+	default:
+		return nil, fmt.Errorf("%w: split source %T", errShape, e)
+	}
+}
+
+// value counts the collection e resolves to; a reference is read with its
+// declared type, as core expandForkFromRef reads it (core/fork.go:1631).
+func (c counter) value(e syntax.Exp) ([]syntax.CollectionIndex, error) {
+	var (
+		v   json.Marshaler
+		err error
+	)
+
+	if ref, ok := e.(*syntax.RefExp); ok {
+		v, err = c.r.resolveRef(ref, nil, c.outer)
+	} else {
+		v, err = c.r.resolve(e, c.sp.Type, c.outer)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	col, err := indexedOf(v, c.sp.Source.CallMode())
+
+	return col.indices(), err
+}
+
+// ownSource is the producer's output root's split source reads under
+// outer, as its post reads it: the specialized source, unwrapped of the
+// gates that disable the producer too, when that is a reference to the
+// producer's outs; false for any other source, whose elements no one
+// stage's outs hold.
+func (r *resolver) ownSource(root *syntax.CallGraphStage, outer Fork) (*syntax.RefExp, bool, error) {
+	prod, fed := r.g.Producer(root)
+	if !fed {
+		return nil, false, nil
+	}
+
+	s, err := r.sourceExp(root, outer)
+	if err != nil {
+		return nil, false, err
+	}
+
+	v := s.Value
+	for d, ok := v.(*syntax.DisabledExp); ok && r.g.allGatedBy([]string{prod}, d.Disabled); d, ok = v.(*syntax.DisabledExp) {
+		v = d.Value
+	}
+
+	ref, ok := v.(*syntax.RefExp)
+
+	return ref, ok && ref.Id == prod, nil
 }
 
 // sourceExp specializes root's split for outer, as core Fork.expandForkPart
-// does before it expands a fork from the split's source (core/fork.go:1389).
+// does before it expands a fork from the split's source (core/fork.go:1392).
 // A split the specialization removes has a null source.
 func (r *resolver) sourceExp(root *syntax.CallGraphStage, outer Fork) (*syntax.SplitExp, error) {
 	sp := root.Split()
@@ -421,24 +642,8 @@ func (r *resolver) sourceExp(root *syntax.CallGraphStage, outer Fork) (*syntax.S
 	return s, nil
 }
 
-// sourceValue is root's split collection under outer. A ref source is read
-// with its declared type, as core expandForkFromRef reads it
-// (core/fork.go:1625).
-func (r *resolver) sourceValue(root *syntax.CallGraphStage, outer Fork) (json.Marshaler, error) {
-	s, err := r.sourceExp(root, outer)
-	if err != nil {
-		return nil, err
-	}
-
-	if ref, ok := s.Value.(*syntax.RefExp); ok {
-		return r.resolveRef(ref, nil, outer)
-	}
-
-	return r.resolve(s.Value, root.Split().Type, outer)
-}
-
 // knownIndices are the indices of a source of compile-time length: array
-// positions, or map keys in byte order (core/resolve.go:474-513).
+// positions, or map keys in byte order (core/resolve.go:525-564).
 func knownIndices(src syntax.MapCallSource) ([]syntax.CollectionIndex, bool) {
 	if !src.KnownLength() {
 		return nil, false

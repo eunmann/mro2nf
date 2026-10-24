@@ -4,9 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
+
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // entryFiles lists every fixture invocation: each testdata fixture's
@@ -32,24 +33,12 @@ func entryFiles(t *testing.T) []string {
 // call graph is a node of the witness's, forked on the same roots, reading
 // and gated by no more, and every fork root is fed alike.
 func TestWitnessCoversLiteral(t *testing.T) {
-	// mrp refuses to instantiate these literal invocations (#387): a split
-	// of a runtime-gated literal collection.
-	mrpRefused := []string{"rt_gate_split_reject", "rt_gate_split_reject_pass", "rt_gate_split_reject_sub"}
 	checked := 0
 
 	for _, mro := range entryFiles(t) {
 		dir := filepath.Dir(mro)
-		name := filepath.Base(dir)
 
 		src, err := ReadSource(mro, []string{dir})
-		if slices.Contains(mrpRefused, name) {
-			if err == nil {
-				t.Errorf("%s: the literal invocation compiles; mrp refuses it", name)
-			}
-
-			continue
-		}
-
 		if err != nil {
 			t.Errorf("%s: %v", mro, err)
 
@@ -123,14 +112,11 @@ func TestCoversRefuses(t *testing.T) {
 	}
 }
 
-// TestWitnessFallsBackOnCompilerPanic: Martian's call-graph builder panics
-// "invalid merge kind null" on a map call over a map holding a null
-// (syntax/merge_exp.go:455 at the pinned commit; real mrp panics on it too).
-// The literal invocation disables the map call, so it compiles; the witness
-// enables it. The panic is the witness invocation's compile error, so the
-// witness keeps the literal gate, as it does for any invocation mrp refuses
-// (gen_9641884889b0, #595).
-func TestWitnessFallsBackOnCompilerPanic(t *testing.T) {
+// TestWitnessOfANullInAMappedMap (gen_9641884889b0, #595): a map call over
+// a literal map holding a null compiles, which Martian's call-graph builder
+// failed to do before 50ad6c0 ("invalid merge kind null"), whether the
+// literal invocation disables the map call or the witness enables it.
+func TestWitnessOfANullInAMappedMap(t *testing.T) {
 	const src = `filetype json;
 stage S(in int i, out int o, src py "stages/s",)
 
@@ -165,8 +151,19 @@ call TOP(off = true,)
 		t.Errorf("witness: %v", err)
 	}
 
-	if _, err := Compile([]byte(s.with(`call TOP(off = false,)`)), s.Name, []string{dir}); !errors.Is(err, errCompilerPanic) {
-		t.Errorf("Compile of the enabled call = %v, want errCompilerPanic", err)
+	if _, err := Compile([]byte(s.with(`call TOP(off = false,)`)), s.Name, []string{dir}); err != nil {
+		t.Errorf("Compile of the enabled call: %v", err)
+	}
+}
+
+// TestCallGraphPanicIsACompileError: a panic of Martian's call-graph
+// builder, here on a call of a callable no AST the parser builds lacks, is
+// the invocation's compile error, from which the witness falls back as from
+// any invocation mrp refuses, not a crash of the transpile.
+func TestCallGraphPanicIsACompileError(t *testing.T) {
+	_, err := callGraph(&syntax.Ast{Call: &syntax.CallStm{Id: "X", DecId: "X"}}, "pipeline.mro")
+	if !errors.Is(err, errCompilerPanic) {
+		t.Errorf("callGraph = %v, want errCompilerPanic", err)
 	}
 }
 

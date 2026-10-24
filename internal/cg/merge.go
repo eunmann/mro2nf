@@ -25,16 +25,25 @@ type mergeParts struct {
 }
 
 // mergeParts lists what a merge of e.Call gathers at fork, as mrp's getParts
-// lists it (core/resolve.go:444). A merge Martian expanded per fork of an
+// lists it (core/resolve.go:348). A merge Martian expanded per fork of an
 // outer map call of known length is one element per outer fork, whose
-// references fix that fork's index (mergeOuter) while fork lacks it. Unless
-// the call's split source has a length Martian knows at compile time, mrp
-// then lists the call's part of every fork of the call under fork, across
+// references fix that fork's index (mergeOuter) while fork lacks it. A
+// merge of the call's own outs (its constraint) gathers the call's forks at
+// that outer fork alone (core/resolve.go:459 ForkId.constrain). Any other,
+// unless the call's split source has a length Martian knows at compile
+// time, lists the call's part of every fork of the call under fork, across
 // every fork of the outer call (acrossOuter), and resolves each at the
 // element's own outer fork (mergeElement). With one outer fork that is the
 // element's own forks (gen-diff seed 5).
 func (r *resolver) mergeParts(e *syntax.MergeExp, fork Fork) (mergeParts, error) {
-	at, missing := r.mergeOuter(e, fork)
+	refs := e.Value.FindRefs()
+	constraint := mergeConstraint(e)
+
+	if constraint != nil {
+		refs = []*syntax.RefExp{constraint}
+	}
+
+	at, missing := r.mergeOuter(e, fork, refs)
 
 	own, err := r.indices(e.Call, at)
 	if err != nil {
@@ -42,7 +51,7 @@ func (r *resolver) mergeParts(e *syntax.MergeExp, fork Fork) (mergeParts, error)
 	}
 
 	same := mergeParts{list: own, own: own}
-	if len(missing) == 0 {
+	if len(missing) == 0 || constraint != nil {
 		return same, nil
 	}
 
@@ -84,9 +93,24 @@ func (r *resolver) singleForks(roots syntax.ForkRootList, fork Fork) error {
 	return nil
 }
 
+// mergeConstraint is the reference whose static fork indices a merge of
+// e.Call is constrained to (core/resolve.go:330-341): its fork node, or its
+// value when that is a reference to the merged call itself.
+func mergeConstraint(e *syntax.MergeExp) *syntax.RefExp {
+	if e.ForkNode != nil {
+		return e.ForkNode
+	}
+
+	if ref, ok := e.Value.(*syntax.RefExp); ok && ref.Id == e.Call.Fqid {
+		return ref
+	}
+
+	return nil
+}
+
 // mergeOuter is fork with the index of each outer root of the merged call
-// that fork lacks and the merged value's references fix, and those roots.
-func (r *resolver) mergeOuter(e *syntax.MergeExp, fork Fork) (Fork, syntax.ForkRootList) {
+// that fork lacks and one of refs fixes, and those roots.
+func (r *resolver) mergeOuter(e *syntax.MergeExp, fork Fork, refs []*syntax.RefExp) (Fork, syntax.ForkRootList) {
 	out := fork
 
 	var missing syntax.ForkRootList
@@ -96,7 +120,7 @@ func (r *resolver) mergeOuter(e *syntax.MergeExp, fork Fork) (Fork, syntax.ForkR
 			continue
 		}
 
-		for _, ref := range e.Value.FindRefs() {
+		for _, ref := range refs {
 			if ix, ok := ref.Forks[o.Call()]; ok && ix != nil && ix.IndexSource() == nil {
 				out = out.with(Part{Root: o, Index: concrete(ix)})
 				missing = append(missing, o)
@@ -113,7 +137,7 @@ func (r *resolver) mergeOuter(e *syntax.MergeExp, fork Fork) (Fork, syntax.ForkR
 // forks of o, in mrp's fork order, and how many forks o has: each fork of
 // o's first fork of call, then each one's others, as Node.expandForks
 // expands a fork in place and appends its further forks
-// (core/node.go:479). An outer fork with no fork of call lists one nil. A
+// (core/node.go:481). An outer fork with no fork of call lists one nil. A
 // list is computed once per merge and fork, not once per outer fork.
 func (r *resolver) acrossOuter(call *syntax.CallGraphStage, fork Fork, o *syntax.CallGraphStage) ([]syntax.CollectionIndex, int, error) {
 	key := call.Fqid + "\x00" + o.Fqid + "\x00" + fork.key()

@@ -16,7 +16,8 @@ var ErrShapeUnsupported = errors.New("unsupported call graph shape")
 
 // Topology is what a run's tasks exchange on a call graph: per stage node,
 // its fork roots, the stage outs it reads and the stages whose outs disable
-// it; per fork root, what feeds its forks; and what the pipeline outs read.
+// it; per fork root, what feeds its forks; and what the pipeline outs read,
+// with the gates Martian's post-processing reads (sourceGates).
 // Nodes are in dependency order: each follows every node it reads, the
 // producers of its fork roots and its gates.
 type Topology struct {
@@ -117,16 +118,19 @@ func (g *Graph) Topology() (Topology, error) {
 
 	t.Nodes = dependencyOrder(byID, t.Roots)
 
+	outs := g.sourceGates()
 	if ro := g.root.ResolvedOutputs(); ro != nil && ro.Exp != nil {
-		t.Outs = reads(ro.Exp)
+		outs = append(outs, ro.Exp)
 	}
+
+	t.Outs = reads(outs...)
 
 	return t, nil
 }
 
 func (g *Graph) topoRoot(root *syntax.CallGraphStage) (TopoRoot, error) {
-	if runtimeMultiSource(root) {
-		return TopoRoot{}, fmt.Errorf("%w: the forks of %s are fixed by the outs of %s", ErrShapeUnsupported, root.Fqid, strings.Join(refIDs(root.Split().Value), " and "))
+	if refs := g.rootCountRefs(root); len(refs) > 1 {
+		return TopoRoot{}, fmt.Errorf("%w: the forks of %s are fixed by the outs of %s", ErrShapeUnsupported, root.Fqid, strings.Join(refs, " and "))
 	}
 
 	sp := root.Split()
@@ -244,9 +248,9 @@ func walkSplits(e syntax.Exp, visit func(*syntax.SplitExp)) {
 // preflights are the preflight stages st waits for, as mrp makes each
 // preflight stage of a pipeline a prenode of every other call of that
 // pipeline, and through a sub-pipeline call of every call within it, its
-// preflights too (core/pipestance.go:238 NewPipestance, core/node.go:521
+// preflights too (core/pipestance.go:238 NewPipestance, core/node.go:523
 // setPrenode); a node runs once every fork of its prenodes is complete or
-// disabled (core/node.go:646 getState).
+// disabled (core/node.go:656 getState).
 func (g *Graph) preflights(st *syntax.CallGraphStage) []string {
 	var out []string
 

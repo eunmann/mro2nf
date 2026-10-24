@@ -126,7 +126,7 @@ func (g *Graph) post(spec PostSpec) (*stagedStore, error) {
 // and its partner elements.
 func (w forkWriter) posted(in Instance) error {
 	for _, root := range w.r.g.sortedRoots() {
-		if runtimeMultiSource(root) && slices.Contains(refIDs(root.Split().Value), in.Node) {
+		if refs := w.r.g.rootCountRefs(root); len(refs) > 1 && slices.Contains(refs, in.Node) {
 			return fmt.Errorf("%w: %s", errMultiSource, root.Fqid)
 		}
 	}
@@ -148,7 +148,7 @@ func (g *Graph) PostEntry(forks string) error {
 	w := forkWriter{r: &resolver{g: g, st: emptyStore{}}, dir: forks}
 
 	for _, root := range g.sortedRoots() {
-		if _, ok := g.Producer(root); ok || runtimeMultiSource(root) {
+		if len(g.rootCountRefs(root)) > 0 {
 			continue
 		}
 
@@ -194,7 +194,7 @@ func (g *Graph) verifyOutputs(st *syntax.CallGraphStage, s *stagedStore, fork Fo
 }
 
 // forkWriter writes a root's forks as <dir>/<root>/<name>/, one per fork
-// in mrp's order (core/fork.go:1639 expandForkFromObj). The name is the
+// in mrp's order (core/fork.go:1657 expandForkFromObj). The name is the
 // fork's ordinal, zero-padded so names sort in that order, after the
 // ordinals of any outer parts the producer does not fix, joined by dots.
 // Without values, each is a dir of its fork record. With values, each
@@ -265,15 +265,21 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 	outer := outerAt.fork
 
 	var (
-		c   indexed
-		idx []syntax.CollectionIndex
-		err error
+		c      indexed
+		idx    []syntax.CollectionIndex
+		values bool
+		err    error
 	)
 
 	if w.values {
-		c, err = w.source(root, outer)
+		c, values, err = w.source(root, outer)
+	}
+
+	switch {
+	case err != nil:
+	case values:
 		idx = c.indices()
-	} else {
+	default:
 		idx, err = w.r.sourceIndices(root, outer)
 	}
 
@@ -283,7 +289,7 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 
 	var param *syntax.StructMember
 
-	if w.values && len(idx) > 0 {
+	if values && len(idx) > 0 {
 		if param, err = w.r.g.collectionParam(elementField, root.Split(), root); err != nil {
 			return err
 		}
@@ -294,7 +300,7 @@ func (w forkWriter) elements(root *syntax.CallGraphStage, outerAt counted, names
 		at := outerAt.with(Part{Root: root, Index: ix}, len(idx))
 		rec := Element{Fork: at.fork, Lens: at.lens, Position: i}.encode()
 
-		if !w.values {
+		if !values {
 			if err := writeRecord(filepath.Join(w.dir, root.Fqid, name, elementFile), rec); err != nil {
 				return err
 			}
@@ -369,14 +375,23 @@ func (w forkWriter) record(name string, rec valueJSON) error {
 }
 
 // source is root's collection under outer, as core expands a fork from a
-// stage's outs (core/fork.go:1576-1790).
-func (w forkWriter) source(root *syntax.CallGraphStage, outer Fork) (indexed, error) {
-	v, err := w.r.sourceValue(root, outer)
-	if err != nil {
-		return indexed{}, err
+// stage's outs (core/fork.go:1582-1657), when it is the posting producer's
+// own output (ownSource): its elements are what the post writes. It is
+// false for any other source, whose forks the post writes as records only.
+func (w forkWriter) source(root *syntax.CallGraphStage, outer Fork) (indexed, bool, error) {
+	ref, own, err := w.r.ownSource(root, outer)
+	if err != nil || !own {
+		return indexed{}, false, err
 	}
 
-	return indexedOf(v, root.Split().Source.CallMode())
+	v, err := w.r.resolveRef(ref, nil, outer)
+	if err != nil {
+		return indexed{}, false, err
+	}
+
+	c, err := indexedOf(v, root.Split().Source.CallMode())
+
+	return c, true, err
 }
 
 // elementName names fork i of n at ix under the outer ordinals names. A map
