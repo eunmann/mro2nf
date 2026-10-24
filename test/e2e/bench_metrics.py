@@ -160,9 +160,12 @@ def count_refs(workdir, probe):
     return refs
 
 
-# The task name Nextflow writes into each .command.run header: the YAML-style
-# header of recent releases, or the comment line of older ones.
-_TASK_NAME = re.compile(r"^(?:### name: '(?P<yaml>.*)'|# NEXTFLOW TASK: (?P<old>.*))$")
+# The task name Nextflow writes into each .command.run header: a YAML
+# double-quoted string from 26.10.3, single-quoted in the YAML header before
+# it, or the comment line of older releases.
+_TASK_NAME = re.compile(
+    r"^(?:### name: (?P<quoted>\".*\")|### name: '(?P<yaml>.*)'|# NEXTFLOW TASK: (?P<old>.*))$"
+)
 
 # The files Nextflow itself writes into a task dir, which carry no task data.
 _NEXTFLOW_FILES = re.compile(r"^\.command\.\w+$|^\.exitcode$")
@@ -185,6 +188,17 @@ def task_dirs(workdir):
                 yield d
 
 
+def task_name(m):
+    """The task name of a _TASK_NAME match.
+
+    Nextflow escapes a double-quoted name only with the escapes JSON shares
+    (BashWrapperBuilder.yamlString), so JSON decodes it.
+    """
+    if m.group("quoted"):
+        return json.loads(m.group("quoted"))
+    return m.group("yaml") or m.group("old")
+
+
 def read_command_run(d):
     """Return the task's process base name and the sources its staging links in.
 
@@ -198,7 +212,7 @@ def read_command_run(d):
             line = line.rstrip("\n")
             m = _TASK_NAME.match(line)
             if m and not name:
-                name = m.group("yaml") or m.group("old")
+                name = task_name(m)
             if line.startswith("nxf_stage()"):
                 in_stage = True
             elif in_stage and line == "}":
@@ -209,8 +223,20 @@ def read_command_run(d):
     if os.path.exists(stage_file):
         with open(stage_file) as h:
             staging.extend(h)
-    sources = [shlex.split(line.split("&& ")[-1])[2] for line in staging if "ln -s " in line]
+    sources = [s for s in map(link_source, staging) if s]
     return name.split(" (")[0].split(":")[-1], sources
+
+
+def link_source(line):
+    """The source of the symlink a staging line makes, or None.
+
+    Nextflow links with `ln -s` up to 26.04 and `ln -sfn` from 26.10, after
+    a `mkdir -p <dir> &&` when the target is nested.
+    """
+    argv = shlex.split(line.split("&& ")[-1])
+    if len(argv) == 4 and argv[0] == "ln" and argv[1].startswith("-") and "s" in argv[1]:
+        return argv[2]
+    return None
 
 
 def tree_files(path):
