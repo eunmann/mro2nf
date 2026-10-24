@@ -223,8 +223,20 @@ def read_command_run(d):
     if os.path.exists(stage_file):
         with open(stage_file) as h:
             staging.extend(h)
-    sources = [shlex.split(line.split("&& ")[-1])[2] for line in staging if "ln -s " in line]
+    sources = [s for s in map(link_source, staging) if s]
     return name.split(" (")[0].split(":")[-1], sources
+
+
+def link_source(line):
+    """The source of the symlink a staging line makes, or None.
+
+    Nextflow links with `ln -s` up to 26.04 and `ln -sfn` from 26.10, after
+    a `mkdir -p <dir> &&` when the target is nested.
+    """
+    argv = shlex.split(line.split("&& ")[-1])
+    if len(argv) == 4 and argv[0] == "ln" and argv[1].startswith("-") and "s" in argv[1]:
+        return argv[2]
+    return None
 
 
 def tree_files(path):

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,6 +136,38 @@ func TestBenchMetricsReadsEveryTaskNameHeader(t *testing.T) {
 			in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
 
 			writeBenchTaskHeader(t, dir, "aa/task", tc.header, "    rm -f in.txt\n    ln -s "+in+" in.txt\n")
+
+			got := benchStagedMax(t, dir, "WF:ST (1)")
+			if diff := cmp.Diff(map[string]int{"ST": len("abc")}, got); diff != "" {
+				t.Errorf("stage_staged_bytes_max (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestBenchMetricsReadsEveryStagingLink pins the sources bench_metrics.py
+// reads from each symlink staging line Nextflow has written: `ln -s` up to
+// 26.04, `ln -sfn` from 26.10, either after the `mkdir -p` of a nested
+// target.
+func TestBenchMetricsReadsEveryStagingLink(t *testing.T) {
+	requireTools(t, "python3")
+
+	cases := []struct {
+		name string
+		line string
+	}{
+		{"ln -s", "ln -s %s in.txt"},
+		{"ln -sfn", "ln -sfn %s in.txt"},
+		{"nested ln -s", "mkdir -p d && ln -s %s d/in.txt"},
+		{"nested ln -sfn", "mkdir -p d && ln -sfn %s d/in.txt"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
+
+			writeBenchTask(t, dir, "aa/task", "WF:ST (1)", "    rm -f in.txt\n    "+fmt.Sprintf(tc.line, in)+"\n")
 
 			got := benchStagedMax(t, dir, "WF:ST (1)")
 			if diff := cmp.Diff(map[string]int{"ST": len("abc")}, got); diff != "" {
