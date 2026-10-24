@@ -123,6 +123,53 @@ func TestCoversRefuses(t *testing.T) {
 	}
 }
 
+// TestWitnessFallsBackOnCompilerPanic: Martian's call-graph builder panics
+// "invalid merge kind null" on a map call over a map holding a null
+// (syntax/merge_exp.go:455 at the pinned commit; real mrp panics on it too).
+// The literal invocation disables the map call, so it compiles; the witness
+// enables it. The panic is the witness invocation's compile error, so the
+// witness keeps the literal gate, as it does for any invocation mrp refuses
+// (gen_9641884889b0, #595).
+func TestWitnessFallsBackOnCompilerPanic(t *testing.T) {
+	const src = `filetype json;
+stage S(in int i, out int o, src py "stages/s",)
+
+pipeline INNER(in int[] xs, out int[] r,)
+{
+    map call S(i = split self.xs,)
+    return (r = S.o,)
+}
+
+pipeline TOP(in bool off,)
+{
+    map call INNER(xs = split {"a": null, "b": []},) using (disabled = self.off,)
+    return ()
+}
+
+call TOP(off = true,)
+`
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.mro")
+
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := ReadSource(path, []string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Witness([]string{dir}); err != nil {
+		t.Errorf("witness: %v", err)
+	}
+
+	if _, err := Compile([]byte(s.with(`call TOP(off = false,)`)), s.Name, []string{dir}); !errors.Is(err, errCompilerPanic) {
+		t.Errorf("Compile of the enabled call = %v, want errCompilerPanic", err)
+	}
+}
+
 // TestSourceIncludesIgnoreWorkingDir: a source read from its entry file
 // resolves the entry's includes beside it, as mrp does, and never in the
 // working directory, whose unrelated lib.mro would make them ambiguous.

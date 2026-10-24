@@ -22,6 +22,8 @@ import (
 var (
 	errNoCall      = errors.New("no top-level call")
 	errUnknownNode = errors.New("unknown call graph node")
+	// errCompilerPanic is a panic of Martian's call-graph builder.
+	errCompilerPanic = errors.New("martian call graph builder panicked")
 )
 
 // Graph is a compiled invocation's call graph, indexed by stage and by fork
@@ -93,9 +95,9 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 		return nil, fmt.Errorf("compile %s: %w", name, errNoCall)
 	}
 
-	root, err := ast.MakePipelineCallGraph("", ast.Call)
+	root, err := callGraph(ast, name)
 	if err != nil {
-		return nil, fmt.Errorf("call graph of %s: %w", name, err)
+		return nil, err
 	}
 
 	g := &Graph{
@@ -125,6 +127,40 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 	}
 
 	return g, nil
+}
+
+// callGraph is ast's call graph. Martian's builder panics on some
+// invocations mrp also cannot run (a map call over a null in a literal map,
+// syntax/merge_exp.go:455); the panic is that invocation's compile error, so
+// the witness falls back from it as from any invocation mrp refuses.
+func callGraph(ast *syntax.Ast, name string) (*syntax.CallGraphPipeline, error) {
+	var (
+		root *syntax.CallGraphPipeline
+		err  error
+	)
+
+	if p := recovered(func() { root, err = ast.MakePipelineCallGraph("", ast.Call) }); p != nil {
+		return nil, fmt.Errorf("call graph of %s: %w: %v", name, errCompilerPanic, p)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("call graph of %s: %w", name, err)
+	}
+
+	return root, nil
+}
+
+// recovered runs f and returns what it panicked with, nil when it returned.
+func recovered(f func()) any {
+	var p any
+
+	func() {
+		defer func() { p = recover() }()
+
+		f()
+	}()
+
+	return p
 }
 
 // Invocation is the run's invocation as mrp records it in every job's
