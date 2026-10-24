@@ -625,6 +625,13 @@ var mrpDiffCases = []mrpDiffCase{
 	// #601: a map call over a mapped sub-pipeline's merged outs, each fork
 	// staging only the inner forks of its own outer fork.
 	{name: "map_chain_partial"},
+	// #601: reads only some forks of the literal read (mixed) and reads
+	// through two roots (cross), each instance staging what it reads.
+	{name: "map_chain_mixed"},
+	{name: "map_chain_cross"},
+	// #601: a merge's fork count read from a stage inside the merged
+	// pipeline's own fork.
+	{name: "map_chain_counted"},
 	// Two partner splits of one projected output inside a mapped
 	// sub-pipeline, their references leaving the outer index unresolved
 	// (gen-diff seed 862's witness).

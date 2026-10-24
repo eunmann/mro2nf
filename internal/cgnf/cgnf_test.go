@@ -928,6 +928,22 @@ func TestEmitForkedGatherWaitsForItsUpstream(t *testing.T) {
 	}
 }
 
+// TestEmitReadsWhatEachInstanceReads (#601): a read some of whose
+// instances read only some upstream instances, an element of a literal
+// (map_chain_mixed) or two roots each aligned with the upstream's
+// (map_chain_cross), joins each instance to those through NEEDS, never a
+// GATHER of every upstream instance. TestStandInStagesOnlyWhatItReads
+// holds what each is given to what it reads.
+func TestEmitReadsWhatEachInstanceReads(t *testing.T) {
+	for _, fixture := range []string{"map_chain_mixed", "map_chain_cross"} {
+		main := wiringNF(readTree(t, emitFixture(t, fixture)))
+
+		if !strings.Contains(main, "NEEDS(") || strings.Contains(main, "GATHER(") {
+			t.Errorf("%s's main.nf reads its upstream other than through NEEDS:\n%s", fixture, main)
+		}
+	}
+}
+
 // TestEmitReadsOutsAsTheyCome (#559): a node's outs are keyed by its whole
 // key, which a reader sharing every root of it has at its own positions,
 // so the reader combines the node's outs channel as it comes, and its

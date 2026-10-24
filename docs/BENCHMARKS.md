@@ -160,7 +160,7 @@ rule targets:
   for an A over a stage's outs (`RUN`), and the literal under a runtime gate
   (`GATED`) (`pipeline_w4.mro`, `pipeline_w16.mro`). Under the flat-staging
   gate: each B task stages the one A file at its own index, joined on the
-  two roots' ordinals (`cg.Read.Align`), never all N of A's.
+  two roots' ordinals (an aligned `cg.ReadPattern`), never all N of A's.
 - **`splitbroadcast`** — one file (`MKREF`'s `ref`) broadcast into a map
   call over a split stage, whose every chunk and join reads it
   (`pipeline_w4.mro`, `pipeline_w8.mro` samples): no task may copy it into

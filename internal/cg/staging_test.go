@@ -2,6 +2,7 @@ package cg
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -53,8 +54,8 @@ func TestStandInStagesOnlyWhatItReads(t *testing.T) {
 
 			t.Run(name, func(t *testing.T) {
 				s := standInOf(t, g)
-				s.overstaged = func(node, fork, read string, staged, resolved int) {
-					found = append(found, fmt.Sprintf("%s: %s at %s is given %d instances of %s and reads %d", name, node, fork, staged, read, resolved))
+				s.audit = func(a stagingAudit) {
+					found = append(found, overstaged(name, a)...)
 				}
 
 				s.stages()
@@ -67,4 +68,20 @@ func TestStandInStagesOnlyWhatItReads(t *testing.T) {
 	for _, f := range found {
 		t.Error(f)
 	}
+}
+
+// overstaged are the reads of the audited instance that give it more
+// instances of a node than its resolution reads, or than one where it
+// reads none: a disable-wrapped value whose gate holds it off at run time
+// reads none of the one instance the driver gives it.
+func overstaged(name string, a stagingAudit) []string {
+	var out []string
+
+	for _, node := range slices.Sorted(maps.Keys(a.given)) {
+		if a.given[node] > max(1, a.resolved[node]) {
+			out = append(out, fmt.Sprintf("%s: %s at %s is given %d instances of %s and reads %d", name, a.node.Fqid, a.fork, a.given[node], node, a.resolved[node]))
+		}
+	}
+
+	return out
 }

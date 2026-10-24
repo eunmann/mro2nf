@@ -763,6 +763,43 @@ workflow GATHER {
     out
 }
 
+// NEEDS keys, for each enabled instance, by its whole key, the outs of the
+// instances of a node it reads that one of the read's patterns gives it,
+// once all are in, ordered by the upstream's key: each instance stages only
+// the upstream instances its bindings read. A pattern is [limits, mine,
+// theirs]: it gives the instances whose ordinals, at positions theirs, are
+// the instance's at positions mine, to an instance whose ordinal at each
+// limit's position is one of its ordinals (needed). An instance no pattern
+// gives anything gathers none.
+workflow NEEDS {
+    take:
+    run
+    outs
+    patterns
+    fields
+
+    main:
+    seeds = run.map { v -> [v[1], null] }
+    picks = run.flatMap { v -> needed(v[1], patterns).collect { q -> [q, v[1]] } }
+    ups = outs.flatMap { ku, ds ->
+        def es = selected(ds, fields)
+        (0..<patterns.size()).collect { x -> [[x] + ku[patterns[x][2]], [ku, es]] }
+    }
+    out = seeds.mix(picks.combine(ups, by: 0).map { _q, k, u -> [k, u] }).groupTuple().map { k, us ->
+        [k, ordered(us.findAll { u -> u != null }.unique { u -> u[0] }.collectMany { u -> u[1].collect { e -> [u[0], e] } })]
+    }
+
+    emit:
+    out
+}
+
+// needed is, of each pattern whose limits instance key k meets, the key it
+// joins k to the upstream's instances by: the pattern's index, then k's
+// ordinals at the pattern's positions mine.
+def needed(List k, List patterns) {
+    return (0..<patterns.size()).findAll { x -> patterns[x][0].every { g -> k[g[0]] in g[1] } }.collect { x -> [x] + k[patterns[x][1]] }
+}
+
 // planned is the meta of a node's tasks: the one every task shares, with
 // the run's call, then the node's identity and resources and its digest.
 // Its PLAN record d gives the cpus and memory its first task is scheduled

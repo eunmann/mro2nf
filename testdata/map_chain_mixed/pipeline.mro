@@ -1,0 +1,37 @@
+# #601: B splits a literal whose elements differ: the first and last merge
+# every fork of A, the middle one is a literal. B's forks 0 and 2 stage
+# every A fork, and fork 1 stages none, as an mrp job reads none there
+# (a read pattern limited to B's elements 0 and 2).
+stage INC(
+    in  int x,
+    out int y,
+    src py  "stages/inc",
+)
+
+stage USE(
+    in  int[] vs,
+    out int   s,
+    src py    "stages/use",
+)
+
+pipeline MIX(
+    in  int[] xs,
+    out int[] ss,
+)
+{
+    map call INC as A(
+        x = split self.xs,
+    )
+
+    map call USE as B(
+        vs = split [A.y, [7], A.y],
+    )
+
+    return (
+        ss = B.s,
+    )
+}
+
+call MIX(
+    xs = [1, 2, 3],
+)
