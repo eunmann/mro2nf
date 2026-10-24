@@ -108,7 +108,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - uses: ./.github/actions/setup-martian
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ matrix.nextflow == 'latest-stable' && env.JAVA_VERSION || env.FLOOR_JAVA_VERSION }}
@@ -146,7 +146,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ matrix.nextflow == 'latest-stable' && env.JAVA_VERSION || env.FLOOR_JAVA_VERSION }}
@@ -180,7 +180,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
@@ -215,7 +215,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
@@ -263,7 +263,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - uses: ./.github/actions/setup-martian
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
