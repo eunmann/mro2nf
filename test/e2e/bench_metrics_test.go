@@ -112,12 +112,77 @@ func TestBenchMetricsRestagedBytes(t *testing.T) {
 	}
 }
 
+// TestBenchMetricsReadsEveryTaskNameHeader pins the task name bench_metrics.py
+// reads from each .command.run header Nextflow has written: a comment line,
+// then a YAML header whose name is single-quoted up to 26.10.2 and a YAML
+// double-quoted string, escapes and all, from 26.10.3.
+func TestBenchMetricsReadsEveryTaskNameHeader(t *testing.T) {
+	requireTools(t, "python3")
+
+	cases := []struct {
+		name   string
+		header string
+	}{
+		{"comment", "# NEXTFLOW TASK: WF:ST (1)"},
+		{"yaml single-quoted", "### name: 'WF:ST (1)'"},
+		{"yaml double-quoted", `### name: "WF:ST (1)"`},
+		{"yaml double-quoted with escapes", `### name: "WF:ST (a\"b\\c\t\u0001)"`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
+
+			writeBenchTaskHeader(t, dir, "aa/task", tc.header, "    rm -f in.txt\n    ln -s "+in+" in.txt\n")
+
+			got := benchStagedMax(t, dir, "WF:ST (1)")
+			if diff := cmp.Diff(map[string]int{"ST": len("abc")}, got); diff != "" {
+				t.Errorf("stage_staged_bytes_max (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// benchStagedMax runs bench_metrics.py over dir with stage process ST, whose
+// trace holds the one task traced, and returns its stage_staged_bytes_max.
+func benchStagedMax(t *testing.T, dir, traced string) map[string]int {
+	t.Helper()
+
+	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\n"+traced+"\n")
+	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+
+	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
+		"--producers", "1", "--stages", stages, "--mrp-jobs", "1").Output()
+	if err != nil {
+		t.Fatalf("bench_metrics: %v", err)
+	}
+
+	var got struct {
+		StagedMax map[string]int `json:"stage_staged_bytes_max"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("bench_metrics output %q: %v", out, err)
+	}
+
+	return got.StagedMax
+}
+
 // writeBenchTask writes a task dir under dir/work whose .command.run names
 // the task and holds nxfStage as the body of nxf_stage.
 func writeBenchTask(t *testing.T, dir, hash, name, nxfStage string) {
 	t.Helper()
 
-	run := strings.Join([]string{"#!/bin/bash", "### name: '" + name + "'", "nxf_stage() {", "    true", nxfStage + "}", ""}, "\n")
+	writeBenchTaskHeader(t, dir, hash, "### name: '"+name+"'", nxfStage)
+}
+
+// writeBenchTaskHeader is writeBenchTask with the .command.run header line
+// that names the task given whole.
+func writeBenchTaskHeader(t *testing.T, dir, hash, header, nxfStage string) {
+	t.Helper()
+
+	run := strings.Join([]string{"#!/bin/bash", header, "nxf_stage() {", "    true", nxfStage + "}", ""}, "\n")
 	writeBenchFile(t, filepath.Join(dir, "work", hash, ".command.run"), run)
 }
 
