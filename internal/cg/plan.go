@@ -428,7 +428,7 @@ func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, wt Topology, pl
 
 	for _, root := range n.Roots {
 		if slices.ContainsFunc(wt.Roots, func(r TopoRoot) bool { return r.Fqid == root && r.Producer != "" }) {
-			return nil, fmt.Errorf("%w: %s has a disable binding over its forks and is forked on %s, whose forks a stage fixes", errShapeUnsupported, st.Fqid, root)
+			return nil, fmt.Errorf("%w: %s has a disable binding over its forks and is forked on %s, whose forks a stage fixes", ErrShapeUnsupported, st.Fqid, root)
 		}
 	}
 
@@ -474,7 +474,7 @@ func (g *Graph) decl(fqid string) (*syntax.Stage, error) {
 
 	s, ok := st.Callable().(*syntax.Stage)
 	if !ok {
-		return nil, fmt.Errorf("%s: %w: not a stage", fqid, errShapeUnsupported)
+		return nil, fmt.Errorf("%s: %w: not a stage", fqid, ErrShapeUnsupported)
 	}
 
 	return s, nil
@@ -487,7 +487,7 @@ func (g *Graph) decl(fqid string) (*syntax.Stage, error) {
 func (g *Graph) specDigest(st *syntax.CallGraphStage) (string, error) {
 	s, ok := st.Callable().(*syntax.Stage)
 	if !ok {
-		return "", fmt.Errorf("%s: %w: not a stage", st.Fqid, errShapeUnsupported)
+		return "", fmt.Errorf("%s: %w: not a stage", st.Fqid, ErrShapeUnsupported)
 	}
 
 	readers, err := g.postReaders(st)
