@@ -36,8 +36,9 @@ type standIn struct {
 	posted   map[string][]postedOuts
 	elems    map[string][]elemItem
 	partners map[string][]postedPartner
-	// overstaged, when set, receives each instance's reads of more
-	// instances of a node than its resolution reads (overstaged).
+	// overstaged, when set, receives each enabled instance's reads of more
+	// instances of a node than its resolution reads; a disabled instance
+	// runs no task, so the driver stages it nothing.
 	overstaged func(node, fork, read string, staged, resolved int)
 }
 
@@ -302,7 +303,7 @@ func (s *standIn) args(n TopoNode, elems []elemItem) Instance {
 		s.t.Fatalf("args of %s: %v", n.Fqid, err)
 	}
 
-	if s.overstaged != nil {
+	if s.overstaged != nil && !in.Disabled {
 		resolved := s.resolvedReads(spec)
 		for _, node := range slices.Sorted(maps.Keys(given)) {
 			if given[node] > max(1, resolved[node]) {
