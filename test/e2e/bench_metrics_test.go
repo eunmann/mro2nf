@@ -127,7 +127,7 @@ func TestBenchMetricsReadsEveryTaskNameHeader(t *testing.T) {
 		{"comment", "# NEXTFLOW TASK: WF:ST (1)"},
 		{"yaml single-quoted", "### name: 'WF:ST (1)'"},
 		{"yaml double-quoted", `### name: "WF:ST (1)"`},
-		{"yaml double-quoted with escapes", `### name: "WF:ST (a\"b\\c\t\u0001)"`},
+		{"yaml double-quoted with escapes", `### name: "WF:S\u0054 (a\"b\\c\t\u0001)"`},
 	}
 
 	for _, tc := range cases {
