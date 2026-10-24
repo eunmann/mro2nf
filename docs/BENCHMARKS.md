@@ -35,6 +35,7 @@ and runs both:
 | `TestScaleMapSplit` | `mapsplit` (the Cell Ranger shape) | 4 samples | 2,000 samples | 8,002 |
 | `TestScaleMapNested` | `mapnested` | 2 × 2 | 100 × 100 | 10,002 |
 | `TestScaleMapDisabled` | `mapdisabled` | 4 forks | 2,500 forks | 2,502 |
+| `TestScaleMapChain` | `mapchain` | 4 forks | 1,250 forks | 10,004 |
 
 The default `SCALE_RUN` also selects `TestScaleWideFanin` (#503), which the
 weekly nightly runs as its own job: the generated wide pipeline plus a stage
@@ -44,7 +45,7 @@ channels one workflow takes, run under Nextflow.
 `SCALE_WIDTH` replaces the wide width of every selected bench shape. Each
 default wide width is sized to finish within the 100 minutes one shape runs
 under (`scaleShapeTimeout`). The selected shapes run one after another, so
-the default `SCALE_TIMEOUT` of 600 minutes gives each of the six (the five
+the default `SCALE_TIMEOUT` of 700 minutes gives each of the seven (the six
 above and `TestScaleWideFanin`) 100; the nightly runs one shape per job with
 `SCALE_TIMEOUT=100m`.
 
@@ -144,7 +145,7 @@ rule targets:
   output.
 - **`mapnested`** — a nested map: samples × a broadcast lane array, W×W leaves
   (`pipeline_w2.mro`, `pipeline_w4.mro`). testdata's `map_pipe_nested` splits
-  the inner map over each outer element instead, which mrp rejects.
+  the inner map over each outer element instead.
 - **`zip`** — a map call zipping splits over the outputs of two stages, one
   of them a file array (`pipeline_w4.mro`, `pipeline_w16.mro`): the most
   bytes one fork stages must be the same at both widths, one element of
@@ -153,6 +154,13 @@ rule targets:
   so the split reads `MKFILES.fs unless GATE.off` (#494), under the same
   flat-staging gate. Both lanes hold the gate enabled (`skip = false`); the
   disabled branch is covered only by the unit `TestZipGatedPartner`.
+- **`mapchain`** — a map call B over another map call A's per-fork files
+  (#601), in each form Martian compiles B's split to: a literal of A's forks
+  for an A over an entry array (`LIT`) or map (`KEY`), a merge of A's forks
+  for an A over a stage's outs (`RUN`), and the literal under a runtime gate
+  (`GATED`) (`pipeline_w4.mro`, `pipeline_w16.mro`). Under the flat-staging
+  gate: each B task stages the one A file at its own index, joined on the
+  two roots' ordinals (`cg.Read.Align`), never all N of A's.
 - **`splitbroadcast`** — one file (`MKREF`'s `ref`) broadcast into a map
   call over a split stage, whose every chunk and join reads it
   (`pipeline_w4.mro`, `pipeline_w8.mro` samples): no task may copy it into

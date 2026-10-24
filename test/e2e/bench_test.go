@@ -76,6 +76,11 @@ func benchLanes() []benchLane {
 		// MKVALS's values with MKFILES's files through the gate (#494).
 		{key: "zipgated_w4", dir: "zipgated", mro: "pipeline_w4.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 1, mrpJobs: 3 + 4, flatStaging: true},
 		{key: "zipgated_w16", dir: "zipgated", mro: "pipeline_w16.mro", probe: "MRE_BENCH_ZIPGATED_PROBE", producers: 1, mrpJobs: 3 + 16, flatStaging: true},
+		// MKXS and GATE, then in each of 4 lanes an A per fork writing one
+		// file and a B per fork reading the A file at its own index (#601):
+		// each B task stages that one file.
+		{key: "mapchain_w4", dir: "mapchain", mro: "pipeline_w4.mro", probe: "MRE_BENCH_MAPCHAIN_PROBE", producers: 4 * 4, mrpJobs: 2 + 8*4, flatStaging: true},
+		{key: "mapchain_w16", dir: "mapchain", mro: "pipeline_w16.mro", probe: "MRE_BENCH_MAPCHAIN_PROBE", producers: 4 * 16, mrpJobs: 2 + 8*16, flatStaging: true},
 		// MKREF, then per sample ALIGN's split, 2 chunks and join, whose
 		// chunks and join read MKREF's ref.
 		{key: "splitbroadcast_w4", dir: "splitbroadcast", mro: "pipeline_w4.mro", probe: "MRE_BENCH_SPLITBROADCAST_PROBE", producers: 1, mrpJobs: 1 + 4*4, flatStaging: true},
