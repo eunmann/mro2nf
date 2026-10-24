@@ -38,6 +38,9 @@ type Graph struct {
 	stages    map[string]*syntax.CallGraphStage
 	roots     map[string]*syntax.CallGraphStage
 	outer     map[string]syntax.ForkRootList
+	// splitRoots are the fork roots by their own split, which two
+	// instances of one sub-pipeline, sharing their calls, do not share.
+	splitRoots map[*syntax.SplitExp]*syntax.CallGraphStage
 }
 
 // Load compiles the entry .mro at entry as mrp compiles the invocation it
@@ -108,6 +111,8 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 		stages:   map[string]*syntax.CallGraphStage{},
 		roots:    map[string]*syntax.CallGraphStage{},
 		outer:    map[string]syntax.ForkRootList{},
+
+		splitRoots: map[*syntax.SplitExp]*syntax.CallGraphStage{},
 	}
 
 	closure := root.NodeClosure()
@@ -122,6 +127,7 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 
 		for i, r := range st.ForkRoots() {
 			g.roots[r.Fqid] = r
+			g.splitRoots[r.Split()] = r
 			g.addOuter(r, st.ForkRoots()[:i])
 		}
 	}
