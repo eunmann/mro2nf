@@ -308,15 +308,15 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 		return nil, nil
 	}
 
-	parts, err := r.mergeParts(e, fork)
+	list, err := r.mergeIndices(e, fork)
 	if err != nil {
 		return nil, fmt.Errorf("merge of %s: %w", e.Call.Fqid, err)
 	}
 
 	if e.CallMode() == syntax.ModeMapCall {
-		out := make(core.MarshalerMap, len(parts.list))
+		out := make(core.MarshalerMap, len(list))
 
-		for _, ix := range parts.list {
+		for _, ix := range list {
 			v, err := r.resolve(e.Value, innerT, fork.with(Part{Root: e.Call, Index: ix}))
 			if err != nil {
 				return nil, fmt.Errorf("merge of %s key %q: %w", e.Call.Fqid, ix.MapKey(), err)
@@ -328,10 +328,10 @@ func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (j
 		return out, nil
 	}
 
-	out := make(marshalerArray, len(parts.list))
+	out := make(marshalerArray, len(list))
 
-	for i, ix := range parts.list {
-		v, err := r.mergeElement(e, innerT, fork, parts, ix)
+	for i, ix := range list {
+		v, err := r.resolve(e.Value, innerT, fork.with(Part{Root: e.Call, Index: ix}))
 		if err != nil {
 			return nil, fmt.Errorf("merge of %s index %d: %w", e.Call.Fqid, i, err)
 		}

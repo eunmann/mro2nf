@@ -55,7 +55,6 @@ type store interface {
 type resolver struct {
 	g       *Graph
 	st      store
-	across  map[string]acrossList
 	decoded map[indexedKey]indexed
 }
 
