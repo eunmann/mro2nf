@@ -38,15 +38,24 @@ func (r *resolver) resolveSplit(e *syntax.SplitExp, t syntax.Type, fork Fork) (j
 			}
 		}
 
-		return r.splitElement(e, innerT, fork, p.Index)
+		return r.splitElement(e, t, innerT, fork, p.Index)
 	}
 
 	return nil, fmt.Errorf("%w: split %s outside its fork", errShape, e.GoString())
 }
 
-// splitElement is the element at ix of e's collection, of type innerT, at
-// fork. A ref already forked on the call is that one element.
-func (r *resolver) splitElement(e *syntax.SplitExp, innerT syntax.Type, fork Fork, ix syntax.CollectionIndex) (json.Marshaler, error) {
+// splitElement is the element at ix, of type t, of e's collection, of type
+// innerT, at fork. A ref already forked on the call is that one element. Of
+// a literal collection only the element at ix resolves (literalSplitElement).
+func (r *resolver) splitElement(e *syntax.SplitExp, t, innerT syntax.Type, fork Fork, ix syntax.CollectionIndex) (json.Marshaler, error) {
+	if v, ok, err := r.literalSplitElement(e.Value, t, fork, ix); ok || err != nil {
+		if err != nil {
+			return v, fmt.Errorf("split %s: %w", e.Source.CallMode().String(), err)
+		}
+
+		return v, nil
+	}
+
 	ref, isRef := e.Value.(*syntax.RefExp)
 	if isRef {
 		if _, forked := ref.Forks[e.Call]; !forked {
@@ -69,6 +78,32 @@ func (r *resolver) splitElement(e *syntax.SplitExp, innerT syntax.Type, fork For
 	}
 
 	return element(v, ix)
+}
+
+// literalSplitElement resolves the element at ix of v, a literal collection
+// within any gates, as v would resolve and then be indexed, without
+// resolving its other elements, whose upstream outs an instance is not
+// given: null where a gate disables v. It is false for any other v.
+func (r *resolver) literalSplitElement(v syntax.Exp, t syntax.Type, fork Fork, ix syntax.CollectionIndex) (json.Marshaler, bool, error) {
+	switch x := v.(type) {
+	case *syntax.ArrayExp, *syntax.MapExp:
+		el, err := literalElement(x, ix)
+		if err != nil {
+			return nil, true, err
+		}
+
+		out, err := r.resolve(el, t, fork)
+
+		return out, true, err
+	case *syntax.DisabledExp:
+		if off, err := r.disabledBy(x.Disabled, fork); err != nil || off {
+			return nil, true, err
+		}
+
+		return r.literalSplitElement(x.Value, t, fork, ix)
+	default:
+		return nil, false, nil
+	}
 }
 
 // indexedKey names a collection read from a stage output: the output,

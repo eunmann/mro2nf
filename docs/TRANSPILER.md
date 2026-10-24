@@ -209,7 +209,15 @@ forks is the one whose outs fix their count, found by walking Martian's
 compiled split source case for case as `mrp` expands forks from it
 (`core/fork.go` `expandForkPartFromSource`): the source set's master for a
 map call over another map call's outs, the gate's stage for a gated literal,
-the gated stage itself where the gate disables that stage too. A disable binding forked on a
+the gated stage itself where the gate disables that stage too. A node's read
+of another node forked on a root it is not is a gather of every instance,
+unless the reader aligns that root with one of its own (`cg.Read.Align`):
+every reference to the node sits at the element of a split over the reader's
+root whose index is its index of the node's root, as Martian expands a split
+over a map call's outs into a literal or a merge of its forks. The driver then
+joins the two roots' ordinals, so each instance stages the one upstream
+instance it reads, as an `mrp` job reads only that fork's outs (#601,
+`TestStandInStagesOnlyWhatItReads`). A disable binding forked on a
 map call its gating stage feeds (a split of its outs, as in
 `map call X(item = split SRC.items)` under `disabled = self.item.skip`) has a
 value per fork of that call; the gating stage's post resolves it at each and
