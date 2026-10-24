@@ -27,6 +27,7 @@ type reportLane struct {
 	// StagedMax is the most bytes one task of each stage process staged.
 	StagedMax map[string]int `json:"stage_staged_bytes_max,omitempty"`
 	Producers int            `json:"producers"`
+	Staged    int            `json:"staged_bytes"`
 	Restaged  int            `json:"restaged_bytes"`
 }
 
@@ -53,24 +54,28 @@ func stagingPair(s4, s8 int) []reportLane {
 }
 
 // widthPair is one fixture's lanes at widths 4 and 8, with the given plumbing
-// counts and known_scaling marker; stage tasks equal mrp jobs.
+// counts and known_scaling marker; stage tasks equal mrp jobs, and each lane
+// staged its inputs.
 func widthPair(p4, p8, known int) []reportLane {
 	return []reportLane{
-		{Name: "x_w4", Tasks: 4 + p4, PlumbingTasks: p4, StageTasks: 4, MrpJobs: 4, KnownScaling: known, Producers: 1},
-		{Name: "x_w8", Tasks: 8 + p8, PlumbingTasks: p8, StageTasks: 8, MrpJobs: 8, KnownScaling: known, Producers: 1},
+		{Name: "x_w4", Tasks: 4 + p4, PlumbingTasks: p4, StageTasks: 4, MrpJobs: 4, KnownScaling: known, Producers: 1, Staged: 4 * 100},
+		{Name: "x_w8", Tasks: 8 + p8, PlumbingTasks: p8, StageTasks: 8, MrpJobs: 8, KnownScaling: known, Producers: 1, Staged: 8 * 100},
 	}
 }
 
 // TestBenchReportGates drives bench_report.py on synthetic metrics: the
 // width-flatness gate, its known_scaling exemption (which may not get worse
 // and must be dropped once flat), the flat per-task staging gate, the flat
-// restaged-bytes-per-producer gate, and the stage-tasks-equal-mrp-jobs gate,
-// gating and under BENCH_UPDATE=1.
+// restaged-bytes-per-producer gate, the stage-tasks-equal-mrp-jobs gate, and
+// the gate that every lane staged its inputs, gating and under BENCH_UPDATE=1.
 func TestBenchReportGates(t *testing.T) {
 	requireTools(t, "python3")
 
 	offMrp := widthPair(2, 2, 0)
 	offMrp[1].StageTasks = 9
+
+	unstaged := widthPair(2, 2, 0)
+	unstaged[1].Staged = 0
 
 	cases := []struct {
 		name     string
@@ -87,6 +92,8 @@ func TestBenchReportGates(t *testing.T) {
 		{"stage tasks off mrp fails", false, offMrp, offMrp, "MRP-JOBS[x_w8]"},
 		{"flat staging passes", false, stagingPair(65600, 65610), stagingPair(65600, 65610), ""},
 		{"staging grown with width fails", false, stagingPair(4*65600, 8*65600), stagingPair(4*65600, 8*65600), "STAGING[x]"},
+		{"nothing staged fails", false, unstaged, unstaged, "STAGED[x_w8]: no task staged anything"},
+		{"update refuses nothing staged", true, unstaged, unstaged, "STAGED[x_w8]"},
 		{"restaged per producer flat passes", false, restagedPair(4, 4*100, 8, 8*100), restagedPair(4, 4*100, 8, 8*100), ""},
 		{"no restaged bytes passes", false, restagedPair(1, 0, 1, 0), restagedPair(1, 0, 1, 0), ""},
 		{"broadcast copied per fork fails", false, restagedPair(1, 4*65600, 1, 8*65600), restagedPair(1, 4*65600, 1, 8*65600), "RESTAGED[x]"},

@@ -2,7 +2,7 @@
 """Print a benchmark metrics table and gate on data movement and overhead.
 
 Reads the run's metrics (one JSON object per line) and a committed baseline,
-then applies three independent gates:
+then applies four independent gates:
 
   * baseline gate -- per lane, `refs` (the transfer multiplier), `plumbing_tasks`,
     and `tasks` must not exceed the committed baseline: a rise is respectively a
@@ -27,11 +27,15 @@ then applies three independent gates:
   * mrp-jobs gate -- every lane's `stage_tasks` must equal `mrp_jobs`, the
     jobs real mrp runs for the same invocation: one Nextflow task per Martian
     job, so stage work is neither duplicated nor hidden in plumbing.
+  * staged gate -- every lane's `staged_bytes` must be above 0: a lane that
+    staged nothing was not measured, and the staging gates would pass on
+    zeros.
 
 With BENCH_UPDATE=1 it rewrites the baseline from the current run instead of
 gating on it (used to record a new, lower baseline after a data-plane
 improvement lands) — but still refuses to record a baseline that violates the
-scaling or mrp-jobs gate, or that raises a known-scaling lane's plumbing.
+scaling, mrp-jobs or staged gate, or that raises a known-scaling lane's
+plumbing.
 """
 import json
 import os
@@ -214,6 +218,24 @@ def check_mrp_jobs(cur):
     return rc
 
 
+def check_staged(cur):
+    """Fail (rc 1) unless every lane staged some bytes into its tasks.
+
+    Every fixture stages files between its tasks, so a lane that staged none
+    was not measured: bench_metrics.py no longer reads the staging Nextflow
+    writes, and the staging and restaged gates would pass on zeros.
+    """
+    rc = 0
+    for name in sorted(cur):
+        if not cur[name].get("staged_bytes"):
+            print(
+                f"STAGED[{name}]: no task staged anything; bench_metrics.py "
+                f"(read_command_run) no longer reads this Nextflow's staging"
+            )
+            rc = 1
+    return rc
+
+
 def check_known_ratchet(cur, base):
     """Fail (rc 1) if re-recording would raise a known-scaling lane's plumbing.
 
@@ -278,6 +300,7 @@ def main():
     if os.environ.get("BENCH_UPDATE") == "1":
         bad = check_scaling(cur)
         bad = check_mrp_jobs(cur) or bad
+        bad = check_staged(cur) or bad
         bad = check_known_ratchet(cur, load_baseline(baseline_path)) or bad
         if bad:
             print("refusing to record a baseline that violates a gate above")
@@ -293,12 +316,13 @@ def main():
     rc = check_baseline(cur, load_baseline(baseline_path))
     rc = check_scaling(cur) or rc
     rc = check_mrp_jobs(cur) or rc
+    rc = check_staged(cur) or rc
     if rc == 0:
         print(
             "OK: no regression vs baseline (refs/plumbing_tasks/tasks); "
             "plumbing is width-flat outside known-scaling groups; "
             "restaged bytes per producer are width-flat; "
-            "stage tasks equal mrp jobs"
+            "stage tasks equal mrp jobs; every lane staged its inputs"
         )
     return rc
 

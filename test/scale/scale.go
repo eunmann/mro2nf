@@ -148,8 +148,15 @@ func mrpJobs(narrow, wide Metrics) string {
 }
 
 // stagedBytes is GateStagedBytes's result for each stage process of the
-// wide run that is not a gather.
+// wide run that is not a gather. Every shape stages files between its tasks,
+// so a width at which no task staged a byte was not measured: the metrics no
+// longer read the staging Nextflow writes.
 func stagedBytes(r Run, slack int64) []Result {
+	if r.Narrow.StagedBytes == 0 || r.Wide.StagedBytes == 0 {
+		return []Result{{Gate: GateStagedBytes, Failure: fmt.Sprintf(
+			"no task staged anything: %d bytes narrow, %d wide", r.Narrow.StagedBytes, r.Wide.StagedBytes)}}
+	}
+
 	if len(r.Wide.StagedBytesMax) == 0 {
 		return []Result{{Gate: GateStagedBytes, Failure: "no stage task staged anything"}}
 	}
