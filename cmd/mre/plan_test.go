@@ -336,17 +336,17 @@ func TestPlanTypesStringParams(t *testing.T) {
 	}
 }
 
-// TestPlanRefusesAsMrp: an invocation mrp refuses to instantiate fails the
-// plan, so no stage runs (rt_gate_split_reject_pass: mrp refuses a split of
-// a runtime-gated literal collection, #387), and a value that is not a
-// literal of its input's type fails it too.
+// TestPlanRefusesAsMrp: a value that is not a literal of its input's type
+// fails the plan, so no stage runs, while a runtime-gated split of a
+// non-empty literal plans as upstream mrp (50ad6c0) instantiates it; mrp
+// before it refused it (#387).
 func TestPlanRefusesAsMrp(t *testing.T) {
 	if _, err := plan(t, "chain_gate", `{"x":"four"}`); !errors.Is(err, errOverrideParse) {
 		t.Errorf("plan with a non-int x: %v, want errOverrideParse", err)
 	}
 
-	if _, err := plan(t, "empty_fork_gated", `{"none":[1]}`); err == nil {
-		t.Error("plan of a runtime-gated split of a non-empty literal succeeded; mrp refuses it")
+	if _, err := plan(t, "empty_fork_gated", `{"none":[1]}`); err != nil {
+		t.Errorf("plan of a runtime-gated split of a non-empty literal: %v", err)
 	}
 }
 

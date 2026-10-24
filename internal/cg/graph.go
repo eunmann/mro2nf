@@ -22,6 +22,8 @@ import (
 var (
 	errNoCall      = errors.New("no top-level call")
 	errUnknownNode = errors.New("unknown call graph node")
+	// errCompilerPanic is a panic of Martian's call-graph builder.
+	errCompilerPanic = errors.New("martian call graph builder panicked")
 )
 
 // Graph is a compiled invocation's call graph, indexed by stage and by fork
@@ -93,9 +95,9 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 		return nil, fmt.Errorf("compile %s: %w", name, errNoCall)
 	}
 
-	root, err := ast.MakePipelineCallGraph("", ast.Call)
+	root, err := callGraph(ast, name)
 	if err != nil {
-		return nil, fmt.Errorf("call graph of %s: %w", name, err)
+		return nil, err
 	}
 
 	g := &Graph{
@@ -125,6 +127,40 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 	}
 
 	return g, nil
+}
+
+// callGraph is ast's call graph. Martian's builder has panicked on
+// invocations mrp cannot run either (a map call over a null in a literal map,
+// before 50ad6c0); a panic is that invocation's compile error, so the witness
+// falls back from it as from any invocation mrp refuses.
+func callGraph(ast *syntax.Ast, name string) (*syntax.CallGraphPipeline, error) {
+	var (
+		root *syntax.CallGraphPipeline
+		err  error
+	)
+
+	if p := recovered(func() { root, err = ast.MakePipelineCallGraph("", ast.Call) }); p != nil {
+		return nil, fmt.Errorf("call graph of %s: %w: %v", name, errCompilerPanic, p)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("call graph of %s: %w", name, err)
+	}
+
+	return root, nil
+}
+
+// recovered runs f and returns what it panicked with, nil when it returned.
+func recovered(f func()) any {
+	var p any
+
+	func() {
+		defer func() { p = recover() }()
+
+		f()
+	}()
+
+	return p
 }
 
 // Invocation is the run's invocation as mrp records it in every job's
@@ -172,22 +208,182 @@ func (g *Graph) Stage(fqid string) (*syntax.CallGraphStage, error) {
 }
 
 // Producer returns the stage whose outs decide root's fork set at run time,
-// the one stage its split source reads, and false for a root whose forks the
-// call graph already fixes: a source of known length, or one that reads no
-// stage. mrp expands such a root once that stage completes
-// (core/fork.go:1576 expandForkFromRef).
+// the one stage rootCountRefs finds, and false for a root whose forks the
+// call graph already fixes: a source of known length, or one whose count
+// reads no stage. mrp expands such a root once that stage completes
+// (core/fork.go:1582 expandForkFromRef).
 func (g *Graph) Producer(root *syntax.CallGraphStage) (string, bool) {
-	sp := root.Split()
-	if sp == nil || sp.Source.KnownLength() {
-		return "", false
-	}
-
-	refs := refIDs(sp.Value)
+	refs := g.rootCountRefs(root)
 	if len(refs) != 1 {
 		return "", false
 	}
 
 	return refs[0], true
+}
+
+// rootCountRefs are the stages whose outs fix root's fork count: none for a
+// split source of known length, else those its compiled source reads where
+// mrp expands the root's forks from it.
+func (g *Graph) rootCountRefs(root *syntax.CallGraphStage) []string {
+	sp := root.Split()
+	if sp == nil || sp.Source.KnownLength() {
+		return nil
+	}
+
+	w := countWalk{g: g, sp: sp}
+
+	return w.source(sp.Source)
+}
+
+// countWalk walks the compiled source of split sp case for case as mrp
+// expands its forks from it (core/fork.go:1412 expandForkPartFromSource,
+// 1441 expandForkPartFromExp, 1491 expandForkPartFromSplit), returning the
+// stages whose outs fix the fork count and collecting in gates the disable
+// gates mrp evaluates on the way.
+type countWalk struct {
+	g     *Graph
+	sp    *syntax.SplitExp
+	gates []syntax.Exp
+}
+
+func (w *countWalk) source(src syntax.MapCallSource) []string {
+	switch s := src.(type) {
+	case *syntax.MergeExp:
+		if s.ForkNode != nil {
+			return refCountRefs(s.ForkNode)
+		}
+
+		return w.source(s.MergeOver)
+	case *syntax.MapCallSet:
+		return w.source(s.Master)
+	case syntax.Exp:
+		return w.exp(s)
+	case *syntax.BoundReference:
+		return refCountRefs(s.Exp)
+	default:
+		return nil
+	}
+}
+
+// exp counts from the value e: a literal's length reads no stage, whatever
+// its elements read, and a split over another call's forks counts the
+// elements it splits into. Of a disable-wrapped value mrp reads its gate
+// and its value; only its value's stages count when the gate disables each
+// of them too, since only an instance that runs posts, which holds the gate
+// false.
+func (w *countWalk) exp(e syntax.Exp) []string {
+	switch x := e.(type) {
+	case *syntax.RefExp:
+		return refCountRefs(x)
+	case *syntax.MergeExp:
+		return w.source(x)
+	case *syntax.DisabledExp:
+		if d, ok := x.Disabled.(*syntax.SplitExp); ok && d.Call == w.sp.Call {
+			return w.exp(d.Value)
+		}
+
+		gate := refIDs(x.Disabled)
+		if len(gate) > 0 {
+			w.gates = append(w.gates, x.Disabled)
+		}
+
+		inner := w.exp(x.Value)
+		if len(inner) > 0 && w.g.allGatedBy(inner, x.Disabled) {
+			return inner
+		}
+
+		return union(gate, inner)
+	case *syntax.SplitExp:
+		if x.Call == w.sp.Call {
+			return w.exp(x.Value)
+		}
+
+		return w.elements(x.Value)
+	default:
+		return nil
+	}
+}
+
+// elements counts the collections a split over another call's forks splits
+// e into (core/fork.go:1532 expandForkSplitInnerPart): each element of a
+// literal, or else e's.
+func (w *countWalk) elements(e syntax.Exp) []string {
+	var out []string
+
+	switch x := e.(type) {
+	case *syntax.ArrayExp:
+		for _, v := range x.Value {
+			out = union(out, w.exp(v))
+		}
+	case *syntax.MapExp:
+		for _, k := range slices.Sorted(maps.Keys(x.Value)) {
+			out = union(out, w.exp(x.Value[k]))
+		}
+	default:
+		out = w.exp(e)
+	}
+
+	return out
+}
+
+// refCountRefs is the stage a reference reads, none for an entry input.
+func refCountRefs(ref *syntax.RefExp) []string {
+	if ref == nil || ref.Kind == syntax.KindSelf {
+		return nil
+	}
+
+	return []string{ref.Id}
+}
+
+// allGatedBy reports whether every stage of fqids has gate among its
+// disable bindings.
+func (g *Graph) allGatedBy(fqids []string, gate syntax.Exp) bool {
+	ref, ok := gate.(*syntax.RefExp)
+	if !ok {
+		return false
+	}
+
+	for _, id := range fqids {
+		st, ok := g.stages[id]
+		if !ok || !slices.ContainsFunc(st.Disabled(), func(d syntax.Exp) bool {
+			dr, ok := d.(*syntax.RefExp)
+
+			return ok && sameRef(ref, dr)
+		}) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// sourceGates are the disable gates mrp evaluates expanding the forks of
+// every root whose forks it expands at run time (countWalk), which it
+// requires ready to restore those forks when it reattaches a pipestance
+// (core/pipestance.go RestoreForks, core/fork.go getDisabledSource).
+func (g *Graph) sourceGates() []syntax.Exp {
+	var out []syntax.Exp
+
+	for _, root := range g.sortedRoots() {
+		if sp := root.Split(); sp != nil && !sp.Source.KnownLength() {
+			w := countWalk{g: g, sp: sp}
+			w.source(sp.Source)
+			out = append(out, w.gates...)
+		}
+	}
+
+	return out
+}
+
+// union is a with each of b it lacks appended.
+func union(a, b []string) []string {
+	for _, s := range b {
+		if !slices.Contains(a, s) {
+			a = append(a, s)
+		}
+	}
+
+	return a
 }
 
 func (g *Graph) forkRoot(fqid string) (*syntax.CallGraphStage, error) {
@@ -228,17 +424,9 @@ func (g *Graph) outerRoots(root *syntax.CallGraphStage) syntax.ForkRootList {
 	return g.outer[root.Fqid]
 }
 
-// runtimeMultiSource reports a root whose fork set reads several stages: no
-// one stage's post can write its forks.
-func runtimeMultiSource(root *syntax.CallGraphStage) bool {
-	sp := root.Split()
-
-	return sp != nil && !sp.Source.KnownLength() && len(refIDs(sp.Value)) > 1
-}
-
 // splitCalls adds the map calls e is forked on to out, as Martian's
 // unexported findSplitCalls finds a stage's fork roots in its inputs
-// (syntax/resolve_stage.go:791): every split's call, and each call a ref is
+// (syntax/resolve_stage.go:789): every split's call, and each call a ref is
 // forked on at an index not yet fixed, less the calls a merge gathers.
 func splitCalls(e syntax.Exp, out map[*syntax.CallStm]bool) {
 	switch x := e.(type) {

@@ -196,15 +196,20 @@ two elements in every collection, nested collections of different lengths,
 false for every bool and no null anywhere. No map call is pruned on an empty or
 null source and no call is disabled by an entry value, so its call graph holds
 every stage node, with its fork roots, of any invocation. Where `mrp` refuses
-the witness (it refuses a runtime-gated split of a non-empty literal), each
-input takes its witness value over the literal invocation's only while `mrp`
-still accepts the call. `TestWitnessCoversLiteral` checks every fixture's
+the witness, each input takes its witness value over the literal
+invocation's only while `mrp` still accepts the call; a panic of Martian's
+call-graph builder counts as a refusal. `TestWitnessCoversLiteral` checks every fixture's
 literal invocation is within its witness's.
 
 **The topology.** `cg.Topology` reduces the witness call graph to what tasks
 exchange: per node its fork roots, the outputs it reads of other nodes, and the
 nodes whose outs gate it; per fork root what feeds its forks (the entry, or one
-stage) and the outer roots its forks vary with. A disable binding forked on a
+stage) and the outer roots its forks vary with. The stage that feeds a root's
+forks is the one whose outs fix their count, found by walking Martian's
+compiled split source case for case as `mrp` expands forks from it
+(`core/fork.go` `expandForkPartFromSource`): the source set's master for a
+map call over another map call's outs, the gate's stage for a gated literal,
+the gated stage itself where the gate disables that stage too. A disable binding forked on a
 map call its gating stage feeds (a split of its outs, as in
 `map call X(item = split SRC.items)` under `disabled = self.item.skip`) has a
 value per fork of that call; the gating stage's post resolves it at each and

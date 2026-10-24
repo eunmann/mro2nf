@@ -237,13 +237,8 @@ func transpileMRO(t *testing.T, dir, mro string, extra ...string) string {
 // mrpOutcomeCases entry, and TestNextflowLint requires the refusal in place
 // of a lint verdict.
 var transpileRefused = map[string]string{
-	"rt_gate_split_reject":      mrpRefusesGatedSplit,
-	"rt_gate_split_reject_sub":  mrpRefusesGatedSplit,
-	"rt_gate_split_reject_pass": mrpRefusesGatedSplit,
-	"keyword_input":             "Nextflow's params block refuses a Groovy keyword as a param name, quoted or not (#585)",
+	"keyword_input": "Nextflow's params block refuses a Groovy keyword as a param name, quoted or not (#585)",
 }
-
-const mrpRefusesGatedSplit = "mrp refuses a split of a runtime-gated literal collection when it builds the call graph (#387)"
 
 // toolchain is the mro2nf binary a test transpiles with and the mre binary
 // the generated project runs.

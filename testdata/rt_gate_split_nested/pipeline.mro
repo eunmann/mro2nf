@@ -1,0 +1,115 @@
+# #595 (gen_54d3a5646ff7): a split inside a mapped sub-pipeline over the
+# runtime-gated outs of a map call. OUTER's fork element is `INNER.SRC.xs
+# unless G.off`, so SRC, which the gate disables too, fixes USE's forks,
+# and none run where the gate is on (OFF lane); and a gated literal, PASS's
+# return, whose forks the gate stage fixes (LIT lane). INNER maps over one
+# element: over several, Martian 50ad6c0 compiles OUTER's elements to
+# references that match every fork of SRC, which mrp fails on.
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage SRC(
+    in  int   k,
+    out int[] xs,
+    src py    "stages/src",
+)
+
+stage USE(
+    in  int x,
+    out int z,
+    src py  "stages/use",
+)
+
+pipeline INNER(
+    in  int   k,
+    out int[] ys,
+)
+{
+    call SRC(
+        k = self.k,
+    )
+
+    return (
+        ys = SRC.xs,
+    )
+}
+
+pipeline PASS(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    return (
+        ys = self.xs,
+    )
+}
+
+pipeline OUTER(
+    in  int[] ys,
+    out int[] zs,
+)
+{
+    map call USE(
+        x = split self.ys,
+    )
+
+    return (
+        zs = USE.z,
+    )
+}
+
+pipeline TOP(
+    out OUTER[] on,
+    out OUTER[] off,
+    out OUTER[] lit,
+)
+{
+    call GATE as G_ON(
+        v = false,
+    )
+
+    call GATE as G_OFF(
+        v = true,
+    )
+
+    map call INNER as I_ON(
+        k = split [1],
+    ) using (
+        disabled = G_ON.off,
+    )
+
+    map call OUTER as O_ON(
+        ys = split I_ON.ys,
+    )
+
+    map call INNER as I_OFF(
+        k = split [1],
+    ) using (
+        disabled = G_OFF.off,
+    )
+
+    map call OUTER as O_OFF(
+        ys = split I_OFF.ys,
+    )
+
+    call PASS(
+        xs = [5, 6],
+    ) using (
+        disabled = G_ON.off,
+    )
+
+    map call OUTER as O_LIT(
+        ys = split [PASS.ys, PASS.ys],
+    )
+
+    return (
+        on  = O_ON,
+        off = O_OFF,
+        lit = O_LIT,
+    )
+}
+
+call TOP()

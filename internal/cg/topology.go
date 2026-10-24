@@ -10,13 +10,14 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// errShapeUnsupported reports a call graph shape the emitted project does
-// not wire.
-var errShapeUnsupported = errors.New("unsupported call graph shape")
+// ErrShapeUnsupported reports a call graph shape the emitted project does
+// not wire: mro2nf refuses the program rather than run it unlike mrp.
+var ErrShapeUnsupported = errors.New("unsupported call graph shape")
 
 // Topology is what a run's tasks exchange on a call graph: per stage node,
 // its fork roots, the stage outs it reads and the stages whose outs disable
-// it; per fork root, what feeds its forks; and what the pipeline outs read.
+// it; per fork root, what feeds its forks; and what the pipeline outs read,
+// with the gates Martian's post-processing reads (sourceGates).
 // Nodes are in dependency order: each follows every node it reads, the
 // producers of its fork roots and its gates.
 type Topology struct {
@@ -117,16 +118,19 @@ func (g *Graph) Topology() (Topology, error) {
 
 	t.Nodes = dependencyOrder(byID, t.Roots)
 
+	outs := g.sourceGates()
 	if ro := g.root.ResolvedOutputs(); ro != nil && ro.Exp != nil {
-		t.Outs = reads(ro.Exp)
+		outs = append(outs, ro.Exp)
 	}
+
+	t.Outs = reads(outs...)
 
 	return t, nil
 }
 
 func (g *Graph) topoRoot(root *syntax.CallGraphStage) (TopoRoot, error) {
-	if runtimeMultiSource(root) {
-		return TopoRoot{}, fmt.Errorf("%w: the forks of %s are fixed by the outs of %s", errShapeUnsupported, root.Fqid, strings.Join(refIDs(root.Split().Value), " and "))
+	if refs := g.rootCountRefs(root); len(refs) > 1 {
+		return TopoRoot{}, fmt.Errorf("%w: the forks of %s are fixed by the outs of %s", ErrShapeUnsupported, root.Fqid, strings.Join(refs, " and "))
 	}
 
 	sp := root.Split()
@@ -139,7 +143,7 @@ func (g *Graph) topoRoot(root *syntax.CallGraphStage) (TopoRoot, error) {
 func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	s, ok := st.Callable().(*syntax.Stage)
 	if !ok {
-		return TopoNode{}, fmt.Errorf("%s: %w: not a stage", st.Fqid, errShapeUnsupported)
+		return TopoNode{}, fmt.Errorf("%s: %w: not a stage", st.Fqid, ErrShapeUnsupported)
 	}
 
 	n := TopoNode{Fqid: st.Fqid, Stage: s.Id, Split: s.Split, Roots: fqids(st.ForkRoots())}
@@ -147,7 +151,7 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	for i, r := range st.ForkRoots() {
 		for _, o := range g.outerRoots(r) {
 			if !slices.Contains(n.Roots[:i], o.Fqid) {
-				return TopoNode{}, fmt.Errorf("%w: %s is forked on %s before %s, whose forks vary with it", errShapeUnsupported, st.Fqid, r.Fqid, o.Fqid)
+				return TopoNode{}, fmt.Errorf("%w: %s is forked on %s before %s, whose forks vary with it", ErrShapeUnsupported, st.Fqid, r.Fqid, o.Fqid)
 			}
 		}
 	}
@@ -244,9 +248,9 @@ func walkSplits(e syntax.Exp, visit func(*syntax.SplitExp)) {
 // preflights are the preflight stages st waits for, as mrp makes each
 // preflight stage of a pipeline a prenode of every other call of that
 // pipeline, and through a sub-pipeline call of every call within it, its
-// preflights too (core/pipestance.go:238 NewPipestance, core/node.go:521
+// preflights too (core/pipestance.go:238 NewPipestance, core/node.go:523
 // setPrenode); a node runs once every fork of its prenodes is complete or
-// disabled (core/node.go:646 getState).
+// disabled (core/node.go:656 getState).
 func (g *Graph) preflights(st *syntax.CallGraphStage) []string {
 	var out []string
 
@@ -289,7 +293,7 @@ func (g *Graph) gates(st *syntax.CallGraphStage) ([]Gate, error) {
 		case len(refs) == 0:
 			continue
 		case len(refs) > 1:
-			return nil, fmt.Errorf("%w: a disable binding of %s reads %s", errShapeUnsupported, st.Fqid, strings.Join(refs, " and "))
+			return nil, fmt.Errorf("%w: a disable binding of %s reads %s", ErrShapeUnsupported, st.Fqid, strings.Join(refs, " and "))
 		}
 
 		up, err := g.Stage(refs[0])
@@ -299,7 +303,7 @@ func (g *Graph) gates(st *syntax.CallGraphStage) ([]Gate, error) {
 
 		for _, r := range up.ForkRoots() {
 			if !slices.ContainsFunc(st.ForkRoots(), func(x *syntax.CallGraphStage) bool { return x.Fqid == r.Fqid }) {
-				return nil, fmt.Errorf("%w: %s is disabled by %s, which is forked on %s and it is not", errShapeUnsupported, st.Fqid, up.Fqid, r.Fqid)
+				return nil, fmt.Errorf("%w: %s is disabled by %s, which is forked on %s and it is not", ErrShapeUnsupported, st.Fqid, up.Fqid, r.Fqid)
 			}
 		}
 
@@ -343,12 +347,12 @@ func (g *Graph) gateRoots(st *syntax.CallGraphStage, d syntax.Exp, up *syntax.Ca
 		}
 
 		if p, ok := g.Producer(r); ok && p != up.Fqid {
-			return nil, fmt.Errorf("%w: a disable binding of %s reads %s and is forked on %s, whose forks %s fixes", errShapeUnsupported, st.Fqid, up.Fqid, r.Fqid, p)
+			return nil, fmt.Errorf("%w: a disable binding of %s reads %s and is forked on %s, whose forks %s fixes", ErrShapeUnsupported, st.Fqid, up.Fqid, r.Fqid, p)
 		}
 
 		for _, o := range g.outerRoots(r) {
 			if !slices.Contains(known, o) {
-				return nil, fmt.Errorf("%w: a disable binding of %s is forked on %s, whose forks vary with %s, which %s is not forked on", errShapeUnsupported, st.Fqid, r.Fqid, o.Fqid, up.Fqid)
+				return nil, fmt.Errorf("%w: a disable binding of %s is forked on %s, whose forks vary with %s, which %s is not forked on", ErrShapeUnsupported, st.Fqid, r.Fqid, o.Fqid, up.Fqid)
 			}
 		}
 

@@ -1,11 +1,10 @@
 # #383: `map call B(split A.scaled)` where A forks over an invocation-known
 # source under a disable gate. mrp folds a literal gate at static time and
-# prunes A's known-empty split to null whatever the gate, so A and B both
-# resolve to null under every gate kind it runs: a literal false (LIT), an
-# upstream output that is false (RT) or true (RTON) at runtime, and a literal
-# true over a non-empty source (OFF, statically disabled). B's zero-fork merge
-# must give null in each, not the typed empty. A runtime gate over a non-empty
-# source is not here: mrp rejects that binding statically.
+# merges A's known-empty split statically whatever the gate, so A and B both
+# resolve to [] (null before Martian 50ad6c0) under every gate kind it runs:
+# a literal false (LIT), an upstream output that is false (RT) or true (RTON)
+# at runtime, and a literal true over a non-empty source (OFF, statically
+# disabled). A runtime gate over a non-empty source is rt_gate_split's.
 stage GATE(
     in  bool v,
     out bool off,

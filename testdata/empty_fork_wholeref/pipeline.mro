@@ -1,8 +1,9 @@
 # #435: a map call that splits the WHOLE ref of a mapped call (`split SCALE`,
 # not `split SCALE.scaled`). The whole ref regroups the merged forks into one
 # struct per fork, so its length is the producer's fork count: when the
-# producer forks over an invocation-known null or empty entry, mrp prunes it
-# and cascades the prune to the consumer (both resolve null). The cascade
+# producer forks over an invocation-known null or empty entry, mrp merges it
+# statically and cascades to the consumer (both resolve to [] since Martian
+# 50ad6c0, to null before it). The cascade
 # covers a stage consumer (PAIR) and a sub-pipeline consumer (WRAP); SUM sees
 # the consumer's projection, and the SOME lane forks normally.
 stage SCALE(

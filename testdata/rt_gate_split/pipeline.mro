@@ -1,7 +1,9 @@
-# #387: mrp refuses this pipeline before any stage runs. A map call over a
-# non-empty literal under a runtime disable gate resolves to a gated array of
-# fork outputs, and B's split of it fails mrp's binding type walk with
-# "RTG.B input value: unexpected array". mro2nf refuses it at transpile time.
+# #387, #595: B splits the outs of map call A, which a runtime gate
+# disables. A maps over a literal of known length, so B has A's forks
+# whatever the gate, each reading its fork of A's outs through the gate
+# (`[A.scaled, A.scaled] unless GATE.off`). Martian refused this before
+# 50ad6c0 ("RTG.B input value: unexpected array"); rt_gate_split_on runs it
+# with the gate on.
 stage GATE(
     in  bool v,
     out bool off,

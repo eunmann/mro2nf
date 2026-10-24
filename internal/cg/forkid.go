@@ -10,11 +10,11 @@ import (
 )
 
 // defaultFork is the id of an unforked node and of every fork whose index is
-// zero in each part (core/fork.go:983).
+// zero in each part (core/fork.go:982).
 const defaultFork = "fork0"
 
 // ID is f's fork id as mrp names the fork's directory and jobs
-// (core/fork.go:1011 ForkId.ForkIdString). lens[i] is the number of forks of
+// (core/fork.go:1010 ForkId.ForkIdString). lens[i] is the number of forks of
 // f[i]'s root under the parts before it, the length its part's range has
 // (ForkSourcePart.GetRange).
 func (f Fork) ID(lens []int) string {
@@ -33,7 +33,7 @@ func (f Fork) ID(lens []int) string {
 	return b.String()
 }
 
-// partID is a one-part fork's id (core/fork.go:1030
+// partID is a one-part fork's id (core/fork.go:1029
 // ForkSourcePart.ForkIdString).
 func partID(p Part) string {
 	if p.Index.Mode() == syntax.ModeMapCall {
@@ -48,9 +48,10 @@ func partID(p Part) string {
 }
 
 // idFrom writes the id of f's parts from start, as core's ForkId.forkId
-// does (core/fork.go:1111): array parts of known length fold into one
+// does (core/fork.go:1110): array parts of known length fold into one
 // mixed-radix index, a variable-length one starts a new index after '_',
-// and a map part writes its key and a '/' before the parts after it. It
+// a map part writes its key and a '/' before the parts after it, and an
+// empty part ends the id with the index of the parts before it. It
 // reports a default id, which it leaves unwritten.
 func (f Fork) idFrom(b *strings.Builder, lens []int, start int) bool {
 	index, dim := 0, 1
@@ -58,7 +59,7 @@ func (f Fork) idFrom(b *strings.Builder, lens []int, start int) bool {
 	for i, p := range f[start:] {
 		alen := lens[start+i]
 		if alen == 0 {
-			return index == 0
+			break
 		}
 
 		if p.Index.Mode() == syntax.ModeMapCall {
@@ -85,15 +86,14 @@ func (f Fork) idFrom(b *strings.Builder, lens []int, start int) bool {
 	return false
 }
 
-// mapIDFrom writes the id from the map part at start+i. As core does, a
-// map part after the first flushes the index so far and continues past
-// itself without writing its key.
+// mapIDFrom writes the id from the map part at start+i. A map part after
+// the first flushes the index so far, then writes the id from itself.
 func (f Fork) mapIDFrom(b *strings.Builder, lens []int, start, i, index, dim int) bool {
 	if i != 0 {
 		writeForkIndex(b, dim, index)
 		b.WriteByte('/')
 
-		return f.idFrom(b, lens, start+i+1)
+		return f.idFrom(b, lens, start+i)
 	}
 
 	b.WriteString("fork_" + url.PathEscape(f[start].Index.MapKey()))
@@ -110,7 +110,7 @@ func (f Fork) mapIDFrom(b *strings.Builder, lens []int, start, i, index, dim int
 }
 
 // writeForkIndex writes a mixed-radix fork index, zero-padded to the width
-// of its largest value (core/fork.go:1202 writeForkIndex,
+// of its largest value (core/fork.go:1205 writeForkIndex,
 // writePaddedIndex).
 func writeForkIndex(b *strings.Builder, dim, index int) {
 	if dim < 10 && index == 0 {

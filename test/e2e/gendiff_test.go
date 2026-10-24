@@ -60,6 +60,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/eunmann/mro2nf/test/gen"
 	"github.com/google/go-cmp/cmp"
@@ -285,6 +286,45 @@ func TestGenDiffHarnessErrorFails(t *testing.T) {
 		t.Errorf("TestGenDiff without mrp: err %v, want a failed run naming %q:\n%s", err, errNoMrp, out)
 	}
 }
+
+// TestGenDiffSkipsRefusedShape pins that a program mro2nf refuses as a call
+// graph shape it does not wire is no test, rather than a divergence filed
+// against every refusal the generator reaches.
+func TestGenDiffSkipsRefusedShape(t *testing.T) {
+	buildBinaries(t)
+
+	dir, work := t.TempDir(), t.TempDir()
+	writeBenchFile(t, filepath.Join(dir, "pipeline.mro"), refusedShapeMRO)
+
+	errs, skip := transpileGenLegs(genEnv{tools: repoTools(), legs: genLegs}, dir, work)
+	if skip == "" {
+		t.Errorf("transpileGenLegs = %v, want a skip for the refused shape", errs)
+	}
+}
+
+// refusedShapeMRO zips a disable gate from one stage's outs into a map call
+// another stage's outs fork, which mro2nf refuses.
+const refusedShapeMRO = `
+stage SRC(out bool[] skips, src py "stages/src",)
+stage OTHER(out int[] xs, src py "stages/other",)
+stage WORK(in int x, out int y, src py "stages/work",)
+
+pipeline INNER(in int x, in bool skip, out int y,)
+{
+    call WORK(x = self.x,) using (disabled = self.skip,)
+    return (y = WORK.y,)
+}
+
+pipeline P(out int[] ys,)
+{
+    call SRC()
+    call OTHER()
+    map call INNER(x = split OTHER.xs, skip = split SRC.skips,)
+    return (ys = INNER.y,)
+}
+
+call P()
+`
 
 // TestGenDiffHarnessErrorFailsSkipsWithoutTools pins that test's guard:
 // without TestGenDiff's tools and E2E_REQUIRE it skips, as TestGenDiff does,
@@ -637,7 +677,7 @@ func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
 
 	for i, leg := range env.legs {
 		err := transpileInto(env.tools, dir, "pipeline.mro", genLegProj(work, leg))
-		if err != nil && strings.Contains(err.Error(), "unsupported construct") {
+		if err != nil && strings.Contains(err.Error(), cg.ErrShapeUnsupported.Error()) {
 			return nil, fmt.Sprintf("mro2nf rejects it as unsupported (%s leg): %v", leg.name, err)
 		}
 

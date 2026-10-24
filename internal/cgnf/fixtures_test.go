@@ -50,11 +50,9 @@ func TestEmitRefusesUncreatableOutDir(t *testing.T) {
 // nextflow_schema.json meets nf-schema's meta-schema and admits the call's
 // own values; a refused fixture emits nothing.
 func TestEmitEveryFixture(t *testing.T) {
-	// mrp refuses to instantiate the rt_gate_split_reject fixtures (#387): a
-	// split of a runtime-gated literal collection. keyword_input names an
-	// entry input with a Groovy keyword, which Nextflow refuses as a param
-	// name (#585).
-	refused := []string{"rt_gate_split_reject", "rt_gate_split_reject_pass", "rt_gate_split_reject_sub", "keyword_input"}
+	// keyword_input names an entry input with a Groovy keyword, which
+	// Nextflow refuses as a param name (#585).
+	refused := []string{"keyword_input"}
 
 	for _, dir := range fixtureDirs(t) {
 		name := filepath.Base(dir)

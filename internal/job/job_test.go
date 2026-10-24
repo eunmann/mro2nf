@@ -101,7 +101,7 @@ func decode(t *testing.T, s string) any {
 
 // TestArgvIsMrps: py and comp stages run under mrjob, py through the
 // adapters' martian_shell.py, and an exec stage directly, each with its
-// src args then the phase, metadata, files and journal (core/node.go:1120).
+// src args then the phase, metadata, files and journal (core/node.go:1130).
 func TestArgvIsMrps(t *testing.T) {
 	r := runtime(t, nil)
 

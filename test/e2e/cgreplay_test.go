@@ -96,11 +96,12 @@ type cgReplay struct {
 	// names by reference, where their producers wrote them, as the
 	// driver's POSTED resolves them.
 	refs map[string][]string
-	// emptyFork holds the stages with a fork root that has no fork under
-	// some fork of the roots before it.
-	emptyFork map[string]bool
-	seq       int
-	jobs      int
+	// placeholderDirs holds the dirs, relative to the pipestance, of each
+	// fork of a stage whose fork root has no fork under the forks of the
+	// roots before it, where mrp keeps a disabled placeholder.
+	placeholderDirs map[string]bool
+	seq             int
+	jobs            int
 }
 
 // postedInstance is one stage instance its last task posted: its outs and
@@ -121,6 +122,7 @@ type replayedFork struct {
 type replayInstance struct {
 	elems []string
 	fork  cg.Fork
+	lens  []int
 }
 
 // replayTasks are the files an instance's tasks share below its dir work:
@@ -187,13 +189,13 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 
 	rp := &cgReplay{
 		t: t, fixture: fixture, g: g, call: call, dir: dir, mro: mro, tmp: tmp,
-		ps:        filepath.Join(tmp, "mrp"),
-		entry:     filepath.Join(tmp, "cg", "entry"),
-		adapters:  adapters,
-		posted:    map[string][]postedInstance{},
-		ours:      map[string]replayedFork{},
-		refs:      map[string][]string{},
-		emptyFork: map[string]bool{},
+		ps:              filepath.Join(tmp, "mrp"),
+		entry:           filepath.Join(tmp, "cg", "entry"),
+		adapters:        adapters,
+		posted:          map[string][]postedInstance{},
+		ours:            map[string]replayedFork{},
+		refs:            map[string][]string{},
+		placeholderDirs: map[string]bool{},
 	}
 
 	return rp
@@ -292,6 +294,21 @@ func stageDeps(g *cg.Graph, st *syntax.CallGraphStage) []string {
 	return sortedKeys(set)
 }
 
+// placeholders are the dirs mrp may keep its disabled placeholder of st's
+// fork with no fork of root under prefix in: the id of prefix's parts, as
+// an empty part ends a fork id (core/fork.go:1133), or, under no prefix,
+// fork0 or the node's own dir.
+func (rp *cgReplay) placeholders(st *syntax.CallGraphStage, root *syntax.CallGraphStage, prefix replayInstance) []string {
+	dir := filepath.Join(strings.Split(st.Fqid, ".")...)
+	if len(prefix.fork) == 0 {
+		return []string{dir, filepath.Join(dir, "fork0")}
+	}
+
+	empty := append(slices.Clip(prefix.fork), cg.Part{Root: root, Index: cg.ArrayIndex(0)})
+
+	return []string{filepath.Join(dir, empty.ID(append(slices.Clip(prefix.lens), 0)))}
+}
+
 // instances enumerates st's instances root by root from the fork elements
 // the root's feeder posted: its producer's instances, or the entry.
 func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayInstance) []replayInstance {
@@ -309,12 +326,15 @@ func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayIns
 			found = append(found, replayInstance{
 				elems: append(slices.Clip(prefix.elems), item),
 				fork:  append(slices.Clip(prefix.fork), cg.Part{Root: roots[i], Index: el.Fork[len(el.Fork)-1].Index}),
+				lens:  append(slices.Clip(prefix.lens), el.Lens[len(el.Lens)-1]),
 			})
 		}
 	}
 
 	if len(found) == 0 {
-		rp.emptyFork[st.Fqid] = true
+		for _, rel := range rp.placeholders(st, roots[i], prefix) {
+			rp.placeholderDirs[rel] = true
+		}
 	}
 
 	var out []replayInstance
@@ -947,8 +967,8 @@ func (rp *cgReplay) mrpDisabled(rel string) bool {
 // checkCore is the drift guard: mrp's own resolver, reattached to the same
 // pipestance, must hold exactly the forks the replay ran, plus only the
 // disabled placeholder mrp keeps for a stage whose map call has no forks
-// under some outer fork (an empty or null source), fork0 or the node's own
-// dir, and resolve the same _args for every fork that runs.
+// under some outer fork (an empty or null source), in a placeholder dir,
+// and resolve the same _args for every fork that runs.
 func (rp *cgReplay) checkCore() {
 	cf := coreForks(rp.t.Context(), rp.t, rp.ps, []string{rp.dir})
 
@@ -971,9 +991,7 @@ func (rp *cgReplay) checkCore() {
 	}
 
 	for _, rel := range sortedKeys(cf) {
-		node := cf[rel].node
-		named := filepath.Base(rel) == "fork0" || rel == filepath.Join(strings.Split(node, ".")...)
-		placeholder := named && rp.mrpDisabled(rel) && rp.emptyFork[node]
+		placeholder := rp.placeholderDirs[rel] && rp.mrpDisabled(rel)
 		if _, ok := rp.ours[rel]; !ok && !placeholder {
 			rp.t.Errorf("drift guard: %s: mrp's resolver runs a fork the replay has no instance for", rel)
 		}

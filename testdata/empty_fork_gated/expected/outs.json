@@ -1,10 +1,10 @@
 {
-    "a_lit": null,
+    "a_lit": [],
     "a_off": null,
-    "a_rt": null,
+    "a_rt": [],
     "a_rton": null,
-    "b_lit": null,
-    "b_off": null,
-    "b_rt": null,
-    "b_rton": null
+    "b_lit": [],
+    "b_off": [],
+    "b_rt": [],
+    "b_rton": []
 }

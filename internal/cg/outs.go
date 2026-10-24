@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -37,7 +38,7 @@ type OutsSpec struct {
 	Results, OutsJSON string
 }
 
-// WriteOuts resolves the invocation's pipeline outs (core/resolve.go:183
+// WriteOuts resolves the invocation's pipeline outs (core/resolve.go:184
 // resolvePipelineOutputs), checks them as mrp does, and publishes them as
 // mrp does, with Martian's own post-processing (core/post_process.go) on a
 // pipestance reconstructed from them. Then it writes the published tree and
@@ -75,6 +76,10 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 
 	fork0 := filepath.Join(ps.dir, g.root.Call().Id, "fork0")
 	if err := ps.reconstruct(v, filepath.Join(fork0, "_outs")); err != nil {
+		return err
+	}
+
+	if err := g.writeSourceGates(s, ps.dir); err != nil {
 		return err
 	}
 
@@ -117,6 +122,64 @@ func (g *Graph) pipelineOuts(s *stagedStore) (json.Marshaler, syntax.Type, error
 	}
 
 	return v, ro.Type, nil
+}
+
+// writeSourceGates writes into the pipestance at ps the outs of every
+// instance of the stages sourceGates read, where an mrp pipestance holds
+// them, at the instance's fork dir, so the reattach postProcess makes finds
+// them ready.
+func (g *Graph) writeSourceGates(s *stagedStore, ps string) error {
+	r := &resolver{g: g, st: s}
+
+	var ids []string
+	for _, d := range g.sourceGates() {
+		ids = union(ids, refIDs(d))
+	}
+
+	for _, id := range ids {
+		st, err := g.Stage(id)
+		if err != nil {
+			return err
+		}
+
+		for _, f := range s.forks[id] {
+			lens, err := r.forkLens(f)
+			if err != nil {
+				return fmt.Errorf("gate %s: %w", id, err)
+			}
+
+			outs, err := s.outs(st, f)
+			if err != nil {
+				return fmt.Errorf("gate %s: %w", id, err)
+			}
+
+			path := filepath.Join(ps, filepath.FromSlash(strings.ReplaceAll(id, ".", "/")), f.ID(lens), "_outs")
+			if err := writeJSONFile(path, outs); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// forkLens is the fork count of each of f's roots under the parts of f
+// its fork set varies with.
+func (r *resolver) forkLens(f Fork) ([]int, error) {
+	lens := make([]int, len(f))
+
+	for i, p := range f {
+		outer, _ := f.restrict(r.g.outerRoots(p.Root))
+
+		idx, err := r.indices(p.Root, outer)
+		if err != nil {
+			return nil, err
+		}
+
+		lens[i] = len(idx)
+	}
+
+	return lens, nil
 }
 
 // postProcess runs Martian's PostProcess on the pipestance at ps, attached

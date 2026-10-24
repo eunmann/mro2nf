@@ -1,0 +1,93 @@
+# #595: rt_gate_split, rt_gate_split_sub and rt_gate_split_pass with the
+# runtime gate on. B over the disabled map call A keeps A's forks, of known
+# length, each reading null; B over the disabled SUB or PASS, whose length
+# the gate decides, has no forks and merges to [].
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+pipeline SUB(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    map call SCALE(
+        value = split self.xs,
+    )
+
+    return (
+        ys = SCALE.scaled,
+    )
+}
+
+pipeline PASS(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    return (
+        ys = self.xs,
+    )
+}
+
+pipeline RTGO(
+    in  int[] some,
+    in  bool  skip,
+    out int[] chain,
+    out int[] sub,
+    out int[] pass,
+)
+{
+    call GATE(
+        v = self.skip,
+    )
+
+    map call SCALE as A(
+        value = split self.some,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as B(
+        value = split A.scaled,
+    )
+
+    call SUB as S(
+        xs = self.some,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as BS(
+        value = split S.ys,
+    )
+
+    call PASS as P(
+        xs = self.some,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as BP(
+        value = split P.ys,
+    )
+
+    return (
+        chain = B.scaled,
+        sub   = BS.scaled,
+        pass  = BP.scaled,
+    )
+}
+
+call RTGO(
+    some = [1, 2],
+    skip = true,
+)

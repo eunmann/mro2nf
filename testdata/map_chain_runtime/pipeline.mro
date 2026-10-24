@@ -1,0 +1,46 @@
+# #595: a map call over the output of another map call whose forks a stage
+# fixes. mrp sizes B from the source A splits over (core/fork.go
+# expandForkPartFromSource: the source set's master, MAKE's outs), and B's
+# fork i reads A's fork i, for an array and for a map source.
+stage MAKE(
+    out int[]    xs,
+    out map<int> m,
+    src py       "stages/make",
+)
+
+stage INC(
+    in  int x,
+    out int y,
+    src py  "stages/inc",
+)
+
+pipeline MCR(
+    out int[]    ys,
+    out map<int> my,
+)
+{
+    call MAKE()
+
+    map call INC as A(
+        x = split MAKE.xs,
+    )
+
+    map call INC as B(
+        x = split A.y,
+    )
+
+    map call INC as MA(
+        x = split MAKE.m,
+    )
+
+    map call INC as MB(
+        x = split MA.y,
+    )
+
+    return (
+        ys = B.y,
+        my = MB.y,
+    )
+}
+
+call MCR()
