@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -36,9 +35,22 @@ type standIn struct {
 	posted   map[string][]postedOuts
 	elems    map[string][]elemItem
 	partners map[string][]postedPartner
-	// overstaged, when set, receives each instance's reads of more
-	// instances of a node than its resolution reads (overstaged).
-	overstaged func(node, fork, read string, staged, resolved int)
+	// audit, when set, receives each enabled instance with, of each node it
+	// reads, how many instances the driver gives it and how many its
+	// resolution reads; a disabled instance runs no task, so the driver
+	// stages it nothing.
+	audit func(a stagingAudit)
+}
+
+// stagingAudit is one enabled instance of node at fork, whose ordinal of
+// each root ords holds: of each node it reads, the instances the driver
+// gives it (given) and how many of them its resolution reads (resolved).
+type stagingAudit struct {
+	node     TopoNode
+	fork     Fork
+	ords     map[string]int
+	given    map[string]int
+	resolved map[string]int
 }
 
 // postedOuts are one instance's posted outs: its fork, its outputs' bundle
@@ -152,19 +164,20 @@ func (s *standIn) read(reads []Read) ([]string, []string) {
 	return dirs, values
 }
 
-// readAt is what the driver's READ and GATHER give the instance at fork of
-// each node reads names (internal/cgnf node.go read): the named outputs of
-// every instance of it that agrees with fork on the roots they share and,
-// on each of its roots the read aligns, is at the index fork has of the
-// aligned root; and how many such instances of each node it was given.
-func (s *standIn) readAt(reads []Read, fork Fork) ([]string, []string, map[string]int) {
+// readAt is what the driver's READ, GATHER and NEEDS give the instance at
+// fork, whose ordinal of each root ords holds, of each node reads names
+// (internal/cgnf node.go read): the named outputs of every instance of it
+// that agrees with fork on the roots they share and that one of the read's
+// patterns matches (matches); and how many such instances of each node it
+// was given.
+func (s *standIn) readAt(reads []Read, fork Fork, ords map[string]int) ([]string, []string, map[string]int) {
 	var dirs, values []string
 
 	given := map[string]int{}
 
 	for _, r := range reads {
 		for _, p := range s.posted[r.Node] {
-			if !agrees(p.fork, fork) || !alignedWith(p.fork, fork, r.Align) {
+			if !agrees(p.fork, fork) || !slices.ContainsFunc(r.Patterns, func(rp ReadPattern) bool { return matches(rp, p.fork, fork, ords) }) && r.Patterns != nil {
 				continue
 			}
 
@@ -185,6 +198,20 @@ func (s *standIn) readAt(reads []Read, fork Fork) ([]string, []string, map[strin
 	}
 
 	return dirs, values, given
+}
+
+// matches reports whether the pattern p gives the reader instance at fork,
+// whose ordinal of each root ords holds, the upstream instance at up: the
+// reader is at an ordinal of each root p limits it to, and up at the index
+// fork has of each reader root p aligns one of up's roots with.
+func matches(p ReadPattern, up, fork Fork, ords map[string]int) bool {
+	for root, allowed := range p.When {
+		if o, ok := ords[root]; !ok || !slices.Contains(allowed, o) {
+			return false
+		}
+	}
+
+	return alignedWith(up, fork, p.Align)
 }
 
 // alignedWith reports whether up, an upstream instance's fork, is at the
@@ -264,11 +291,15 @@ func (s *standIn) args(n TopoNode, elems []elemItem) Instance {
 	var recs []Element
 
 	fork := make(Fork, 0, len(elems))
+	ords := map[string]int{}
+
 	for _, e := range elems {
-		fork = append(fork, e.el.Fork[len(e.el.Fork)-1])
+		own := e.el.Fork[len(e.el.Fork)-1]
+		fork = append(fork, own)
+		ords[own.Root.Fqid] = e.el.Position
 	}
 
-	items, values, given := s.readAt(n.Reads, fork)
+	items, values, given := s.readAt(n.Reads, fork, ords)
 
 	for _, z := range n.Zips {
 		items = append(items, s.partner(z, fork)...)
@@ -302,13 +333,8 @@ func (s *standIn) args(n TopoNode, elems []elemItem) Instance {
 		s.t.Fatalf("args of %s: %v", n.Fqid, err)
 	}
 
-	if s.overstaged != nil {
-		resolved := s.resolvedReads(spec)
-		for _, node := range slices.Sorted(maps.Keys(given)) {
-			if given[node] > max(1, resolved[node]) {
-				s.overstaged(n.Fqid, in.Fork.String(), node, given[node], resolved[node])
-			}
-		}
+	if s.audit != nil && !in.Disabled {
+		s.audit(stagingAudit{node: n, fork: fork, ords: ords, given: given, resolved: s.resolvedReads(spec)})
 	}
 
 	return in

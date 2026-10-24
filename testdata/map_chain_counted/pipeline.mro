@@ -1,0 +1,62 @@
+# #601: map_chain_partial with INNER's SQ sized by a stage, MK, inside it.
+# SUM's fork j merges INNER fork j's SQ forks, which it counts from MK's
+# xs at INNER fork j: it stages MK and SQ of its own INNER fork alone, the
+# count read aligned as the merge it counts is (a merge's count reads,
+# Graph.countReads).
+stage MK(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/mk",
+)
+
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+stage SUM(
+    in  int[] vs,
+    out int   s,
+    src py    "stages/sum",
+)
+
+pipeline INNER(
+    in  int   n,
+    out int[] ys,
+)
+{
+    call MK(
+        n = self.n,
+    )
+
+    map call SQ(
+        x = split MK.xs,
+    )
+
+    return (
+        ys = SQ.y,
+    )
+}
+
+pipeline TOP(
+    in  int[] ns,
+    out int[] ss,
+)
+{
+    map call INNER(
+        n = split self.ns,
+    )
+
+    map call SUM(
+        vs = split INNER.ys,
+    )
+
+    return (
+        ss = SUM.s,
+    )
+}
+
+call TOP(
+    ns = [1, 2, 3],
+)

@@ -236,12 +236,27 @@ func sameRef(a, b *syntax.RefExp) bool {
 
 	for c, ai := range a.Forks {
 		bi, ok := b.Forks[c]
-		if !ok || (ai == nil) != (bi == nil) || (ai != nil && !indexEqual(ai, bi)) {
+		if !ok || !sameIndex(ai, bi) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// sameIndex reports whether two references' indices of one call are the
+// same: both absent, both concrete and equal, or both left to the fork the
+// reference resolves at, over the same source, whose index Martian has not
+// resolved and which has no concrete value to read.
+func sameIndex(a, b syntax.CollectionIndex) bool {
+	switch {
+	case a == nil || b == nil:
+		return a == nil && b == nil
+	case a.IndexSource() != nil || b.IndexSource() != nil:
+		return a.IndexSource() == b.IndexSource()
+	default:
+		return indexEqual(a, b)
+	}
 }
 
 // element takes the element of a resolved collection at ix.

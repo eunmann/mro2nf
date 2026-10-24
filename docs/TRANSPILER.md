@@ -209,15 +209,26 @@ forks is the one whose outs fix their count, found by walking Martian's
 compiled split source case for case as `mrp` expands forks from it
 (`core/fork.go` `expandForkPartFromSource`): the source set's master for a
 map call over another map call's outs, the gate's stage for a gated literal,
-the gated stage itself where the gate disables that stage too. A node's read
-of another node forked on a root it is not is a gather of every instance,
-unless the reader aligns that root with one of its own (`cg.Read.Align`):
-every reference to the node sits at the element of a split over the reader's
-root whose index is its index of the node's root, as Martian expands a split
-over a map call's outs into a literal or a merge of its forks. The driver then
-joins the two roots' ordinals, so each instance stages the one upstream
-instance it reads, as an `mrp` job reads only that fork's outs (#601,
-`TestStandInStagesOnlyWhatItReads`). A disable binding forked on a
+the gated stage itself where the gate disables that stage too.
+
+Each instance stages exactly the upstream instances its `_args` read, as an
+`mrp` job reads only those forks' outs (#601, held by
+`TestStandInStagesOnlyWhatItReads` over every fixture). A node's read of
+another carries read patterns (`cg.ReadPattern`), one per shape of the
+references to it:
+- a pattern aligns an upstream root the reader is not forked on with a
+  reader root where every reference under a split over that root sits at
+  its element's own index of the upstream root, as Martian expands a split
+  over a map call's outs into a literal or a merge of its forks;
+- the upstream's other roots it gathers;
+- where a split's elements do not all read the upstream, it is limited to
+  the elements that do.
+The reads of a merge include what counting the merged call's forks reads
+(`Graph.countReads`, the walk `mrp`'s fork expansion makes), at the outer
+fork the merge's constraint fixes. The driver joins an instance on the
+shared and aligned roots' ordinals (`READ`, or `GATHER` under them) for one
+unlimited pattern, and through `NEEDS`, a keyed join per pattern regrouped
+per instance, otherwise. A disable binding forked on a
 map call its gating stage feeds (a split of its outs, as in
 `map call X(item = split SRC.items)` under `disabled = self.item.skip`) has a
 value per fork of that call; the gating stage's post resolves it at each and

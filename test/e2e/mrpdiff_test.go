@@ -622,6 +622,20 @@ var mrpDiffCases = []mrpDiffCase{
 	// #595 (gen_54d3a5646ff7): the same inside a mapped sub-pipeline, the
 	// split over an outer map call's gated element.
 	{name: "rt_gate_split_nested"},
+	// #601: a map call over a mapped sub-pipeline's merged outs, each fork
+	// staging only the inner forks of its own outer fork.
+	{name: "map_chain_partial"},
+	// #601: reads only some forks of the literal read (mixed) and reads
+	// through two roots (cross), each instance staging what it reads.
+	{name: "map_chain_mixed"},
+	{name: "map_chain_cross"},
+	// #601: a merge's fork count read from a stage inside the merged
+	// pipeline's own fork.
+	{name: "map_chain_counted"},
+	// Two partner splits of one projected output inside a mapped
+	// sub-pipeline, their references leaving the outer index unresolved
+	// (gen-diff seed 862's witness).
+	{name: "partner_nested_projection"},
 	// #565: a top-level map call's outs are its pipeline's per fork, each
 	// fork's files published under outs/<fork key>/.
 	// TestMrpDiffSplitEntryOverride launches it with other split values.
