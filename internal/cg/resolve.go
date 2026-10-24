@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
-	"strconv"
 
+	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -26,7 +24,7 @@ var (
 	// getMapElement). The element reads null, and an input that reads one
 	// still runs under mrp's default enforcement level (core/stage.go:1402
 	// getBindings), as a zipped split over a shorter source does.
-	errNoElement = errors.New("no such element")
+	errNoElement = mrcore.ErrNoElement
 )
 
 // store serves the upstream values one task staged.
@@ -48,14 +46,12 @@ type store interface {
 	partner(root *syntax.CallGraphStage, ref *syntax.RefExp, ix syntax.CollectionIndex) (json.RawMessage, bool, error)
 }
 
-// resolver evaluates call-graph expressions at a fork as core TopNode.resolve
-// does (core/resolve.go:201), over Martian's exported pieces: BindingPath
-// specializes a binding for the fork, LazyArgumentMap.Path projects and
-// type-filters an upstream's outs.
+// resolver evaluates call-graph expressions at a fork by Martian core's own
+// resolution (mrcore) over the values one task staged.
 type resolver struct {
-	g       *Graph
-	st      store
-	decoded map[indexedKey]indexed
+	g   *Graph
+	st  store
+	top *mrcore.TopNode
 }
 
 func (r *resolver) boolType() syntax.Type {
@@ -68,26 +64,16 @@ func (r *resolver) boolType() syntax.Type {
 // returned in unresolved, as resolveInputs keeps a binding's partial value
 // beside its error.
 func (r *resolver) args(st *syntax.CallGraphStage, fork Fork) (core.MarshalerMap, []error, error) {
-	out := make(core.MarshalerMap, len(st.ResolvedInputs()))
-
-	var unresolved []error
-
-	for _, k := range slices.Sorted(maps.Keys(st.ResolvedInputs())) {
-		rb := st.ResolvedInputs()[k]
-
-		v, err := r.resolve(rb.Exp, rb.Type, fork)
-		if err != nil && !errors.Is(err, errNoElement) {
-			return nil, nil, fmt.Errorf("resolve %s input %s: %w", st.Fqid, k, err)
-		}
-
-		if err != nil {
-			unresolved = append(unresolved, fmt.Errorf("parameter %s: %w", k, err))
-		}
-
-		out[k] = v
+	out, missing, err := r.core().Inputs(st.Fqid, coreFork(fork))
+	if err != nil {
+		return nil, nil, fmt.Errorf("args of %s: %w", st.Fqid, err)
 	}
 
-	return out, unresolved, nil
+	if missing == nil {
+		return out, nil, nil
+	}
+
+	return out, []error{missing}, nil
 }
 
 // disabled evaluates st's disable bindings at fork as core Fork.disabled
@@ -146,35 +132,12 @@ func gateValue(v json.Marshaler) (bool, error) {
 
 // resolve evaluates exp of type t at fork (core/resolve.go:201).
 func (r *resolver) resolve(exp syntax.Exp, t syntax.Type, fork Fork) (json.Marshaler, error) {
-	if exp == nil {
-		return nil, nil
+	v, err := r.core().Resolve(exp, t, coreFork(fork))
+	if err != nil {
+		return v, fmt.Errorf("resolve at fork %s: %w", fork, err)
 	}
 
-	if !exp.HasRef() && !exp.HasSplit() {
-		return exp, nil
-	}
-
-	exp, t, err := r.specialize(exp, t, fork)
-	if err != nil || (!exp.HasRef() && !exp.HasSplit()) {
-		return exp, err
-	}
-
-	switch e := exp.(type) {
-	case *syntax.RefExp:
-		return r.resolveRef(e, t, fork)
-	case *syntax.ArrayExp:
-		return r.resolveArray(e, t, fork)
-	case *syntax.MapExp:
-		return r.resolveMap(e, t, fork)
-	case *syntax.SplitExp:
-		return r.resolveSplit(e, t, fork)
-	case *syntax.MergeExp:
-		return r.resolveMerge(e, t, fork)
-	case *syntax.DisabledExp:
-		return r.resolveDisabled(e, t, fork)
-	default:
-		return nil, fmt.Errorf("%w: %T", errShape, exp)
-	}
+	return v, nil
 }
 
 // specialize narrows exp to fork with Martian's BindingPath, as resolve
@@ -227,102 +190,6 @@ func (r *resolver) resolveRef(e *syntax.RefExp, t syntax.Type, fork Fork) (json.
 	return v, nil
 }
 
-// resolveArray resolves an array literal element-wise (core/resolve.go:1331).
-// An element that reads a missing element is null in the array, and its
-// error is returned with it.
-func (r *resolver) resolveArray(e *syntax.ArrayExp, t syntax.Type, fork Fork) (json.Marshaler, error) {
-	at, ok := t.(*syntax.ArrayType)
-	if !ok {
-		return nil, fmt.Errorf("%w: array literal of type %s", errShape, t)
-	}
-
-	et := r.g.types.GetArray(at.Elem, at.Dim-1)
-	out := make(marshalerArray, len(e.Value))
-
-	var missing missingElements
-
-	for i, v := range e.Value {
-		rv, err := r.resolve(v, et, fork)
-		if err := missing.add(err, "array index "+strconv.Itoa(i)); err != nil {
-			return nil, err
-		}
-
-		out[i] = rv
-	}
-
-	return out, missing.err()
-}
-
-// resolveMap resolves a typed-map or struct literal member-wise into a
-// MarshalerMap, whose keys marshal sorted (core/resolve.go:1362), keeping a
-// member that reads a missing element as resolveArray keeps an element.
-func (r *resolver) resolveMap(e *syntax.MapExp, t syntax.Type, fork Fork) (json.Marshaler, error) {
-	out := make(core.MarshalerMap, len(e.Value))
-
-	var missing missingElements
-
-	switch mt := t.(type) {
-	case *syntax.TypedMapType:
-		for _, k := range slices.Sorted(maps.Keys(e.Value)) {
-			rv, err := r.resolve(e.Value[k], mt.Elem, fork)
-			if err := missing.add(err, "key "+k); err != nil {
-				return nil, err
-			}
-
-			out[k] = rv
-		}
-	case *syntax.StructType:
-		for _, m := range mt.Members {
-			rv, err := r.resolve(e.Value[m.Id], r.g.types.Get(m.Tname), fork)
-			if err := missing.add(err, "field "+m.Id); err != nil {
-				return nil, err
-			}
-
-			out[m.Id] = rv
-		}
-	default:
-		return nil, fmt.Errorf("%w: map literal of type %s", errShape, t)
-	}
-
-	return out, missing.err()
-}
-
-// missingElements collects the errNoElement errors of a literal's members.
-type missingElements []error
-
-// add records err, a member's resolution error, under the member's name,
-// and returns it when it is fatal: any error but a missing element.
-func (m *missingElements) add(err error, member string) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, errNoElement):
-		*m = append(*m, fmt.Errorf("%s: %w", member, err))
-
-		return nil
-	default:
-		return fmt.Errorf("%s: %w", member, err)
-	}
-}
-
-func (m *missingElements) err() error { return errors.Join(*m...) }
-
-// resolveDisabled resolves a disable-wrapped value: null when its gate is
-// true (core/resolve.go:248-291).
-func (r *resolver) resolveDisabled(e *syntax.DisabledExp, t syntax.Type, fork Fork) (json.Marshaler, error) {
-	off, err := r.disabledBy(e.Disabled, fork)
-	if err != nil || off {
-		return nil, err
-	}
-
-	v, err := r.resolve(e.Value, t, fork)
-	if err != nil {
-		return v, fmt.Errorf("enabled value: %w", err)
-	}
-
-	return v, nil
-}
-
 // disabledBy reports whether the gate of a disable-wrapped value, resolved
 // at fork, disables it: a true, and no null.
 func (r *resolver) disabledBy(gate syntax.Exp, fork Fork) (bool, error) {
@@ -363,35 +230,4 @@ func isNull(raw json.RawMessage) bool {
 	raw = bytes.TrimSpace(raw)
 
 	return len(raw) == 0 || bytes.Equal(raw, []byte("null"))
-}
-
-// marshalerArray is core's marshallerArray (core/resolve.go:1206): a nil
-// array encodes as null, and a nil element as null.
-type marshalerArray []json.Marshaler
-
-func (a marshalerArray) MarshalJSON() ([]byte, error) {
-	if a == nil {
-		return []byte("null"), nil
-	}
-
-	var buf bytes.Buffer
-
-	buf.WriteByte('[')
-
-	for i, v := range a {
-		if i > 0 {
-			buf.WriteByte(',')
-		}
-
-		raw, err := marshal(v)
-		if err != nil {
-			return nil, err
-		}
-
-		buf.Write(raw)
-	}
-
-	buf.WriteByte(']')
-
-	return buf.Bytes(), nil
 }

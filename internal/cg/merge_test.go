@@ -1,14 +1,11 @@
 package cg
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // subOuts stages the outs of TOP.SUB's stages in the merge_across fixtures:
@@ -271,56 +268,5 @@ func TestMergeOfForklessPipeline(t *testing.T) {
 	} {
 		_, got := f.args(node)
 		wantArgs(t, node, got, want)
-	}
-}
-
-// TestUnconstrainedMergeAcrossForksFails: a merge that fixes an outer
-// fork's index with no constraint to gather that fork's forks alone, which
-// mrp would gather across every outer fork, fails rather than gathering
-// what mro2nf cannot check against mrp. merge_across_outer's merge, its
-// constraint removed, is one.
-func TestUnconstrainedMergeAcrossForksFails(t *testing.T) {
-	f := loadFixture(t, "merge_across_outer")
-
-	var merge *syntax.MergeExp
-
-	walkMerges(f.g.root.ResolvedOutputs().Exp, func(m *syntax.MergeExp) {
-		if m.Call.Fqid == "TOP.SUB.SQ" {
-			merge = m
-		}
-	})
-
-	if merge == nil || mergeConstraint(merge) == nil {
-		t.Fatalf("merge_across_outer's outs hold no constrained merge of TOP.SUB.SQ")
-	}
-
-	free := *merge
-	free.ForkNode = nil
-	free.Value = &syntax.ArrayExp{Value: []syntax.Exp{merge.Value}}
-
-	r := &resolver{g: f.g, st: emptyStore{}}
-	if _, err := r.mergeIndices(&free, nil); !errors.Is(err, errMergeAcrossForks) {
-		t.Errorf("mergeIndices = %v, want errMergeAcrossForks", err)
-	}
-}
-
-// walkMerges calls visit on every merge in e.
-func walkMerges(e syntax.Exp, visit func(*syntax.MergeExp)) {
-	switch x := e.(type) {
-	case *syntax.MergeExp:
-		visit(x)
-		walkMerges(x.Value, visit)
-	case *syntax.ArrayExp:
-		for _, v := range x.Value {
-			walkMerges(v, visit)
-		}
-	case *syntax.MapExp:
-		for _, v := range x.Value {
-			walkMerges(v, visit)
-		}
-	case *syntax.SplitExp:
-		walkMerges(x.Value, visit)
-	case *syntax.DisabledExp:
-		walkMerges(x.Value, visit)
 	}
 }
