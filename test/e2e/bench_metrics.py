@@ -231,12 +231,22 @@ def link_source(line):
     """The source of the symlink a staging line makes, or None.
 
     Nextflow links with `ln -s` up to 26.04 and `ln -sfn` from 26.10, after
-    a `mkdir -p <dir> &&` when the target is nested.
+    a `mkdir -p <dir> &&` when the target is nested. The link to call.b64,
+    the run's call a task stages once it outgrows the task's script, is
+    left out: it is the invocation every mrp job's _jobinfo carries too,
+    which grows with the entry values, not orchestration staging.
     """
     argv = shlex.split(line.split("&& ")[-1])
     if len(argv) == 4 and argv[0] == "ln" and argv[1].startswith("-") and "s" in argv[1]:
+        if argv[3] == CALL_FILE:
+            return None
         return argv[2]
     return None
+
+
+# CALL_FILE is the name a task stages the run's call under (stage.nf's
+# STAGE processes, stageAs: 'call.b64').
+CALL_FILE = "call.b64"
 
 
 def tree_files(path):
