@@ -1,0 +1,55 @@
+# #601: OUTER maps over A's forks, and inside it PAIR maps over every A
+# output: PAIR at (i, j) reads A's fork i through OUTER's element and A's
+# fork j through its own, two read patterns, each aligning A's root with
+# one of PAIR's roots, so it stages those two A forks, not all of them.
+stage INC(
+    in  int x,
+    out int y,
+    src py  "stages/inc",
+)
+
+stage USE(
+    in  int a,
+    in  int b,
+    out int p,
+    src py  "stages/use",
+)
+
+pipeline OUTER(
+    in  int   a,
+    in  int[] bs,
+    out int[] ps,
+)
+{
+    map call USE as PAIR(
+        a = self.a,
+        b = split self.bs,
+    )
+
+    return (
+        ps = PAIR.p,
+    )
+}
+
+pipeline CROSS(
+    in  int[]   xs,
+    out int[][] pss,
+)
+{
+    map call INC as A(
+        x = split self.xs,
+    )
+
+    map call OUTER(
+        a  = split A.y,
+        bs = A.y,
+    )
+
+    return (
+        pss = OUTER.ps,
+    )
+}
+
+call CROSS(
+    xs = [1, 2, 3],
+)

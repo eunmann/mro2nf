@@ -72,10 +72,13 @@ type publishRun struct {
 	g    *Graph
 	mro  string
 	root string
-	// makeWork is MAKE's work dir, and staged the outs bundles OUTS staged,
-	// each in its producer's work dir by the path it is staged at.
-	makeWork string
-	staged   map[string]string
+	// makeWork and linkWork are MAKE's and LINK's work dirs, and staged the
+	// outs bundles OUTS staged, each in its producer's work dir by the path
+	// it is staged at: the bundle itself, or with skeletons its skeleton
+	// expanded, as mre outs stages it.
+	makeWork, linkWork string
+	staged             map[string]string
+	skeletons          bool
 }
 
 // nestedMRO is a pipeline whose outs reach a stage's directory and, through
@@ -131,11 +134,13 @@ func newRun(t *testing.T, mro string) *publishRun {
 }
 
 // newPublishRun runs MAKE, PASS and LINK, and stages the outs bundles the
-// pipeline outs read into the OUTS task's dir, its working dir.
-func newPublishRun(t *testing.T) *publishRun {
+// pipeline outs read, or their skeletons, into the OUTS task's dir, its
+// working dir.
+func newPublishRun(t *testing.T, skeletons bool) *publishRun {
 	t.Helper()
 
 	r := newRun(t, publishMRO)
+	r.skeletons = skeletons
 	host := writeFileOf(t, filepath.Join(r.root, "host", "ref.txt"), "host")
 
 	r.makeWork = r.task("P.MAKE", nil, func(_ map[string]any, files string) map[string]any {
@@ -148,7 +153,7 @@ func newPublishRun(t *testing.T) *publishRun {
 		return map[string]any{"y": args["x"]}
 	})
 
-	linkWork := r.task("P.LINK", nil, func(_ map[string]any, files string) map[string]any {
+	r.linkWork = r.task("P.LINK", nil, func(_ map[string]any, files string) map[string]any {
 		if err := os.Symlink(host, filepath.Join(files, "l.txt")); err != nil {
 			t.Fatal(err)
 		}
@@ -156,7 +161,7 @@ func newPublishRun(t *testing.T) *publishRun {
 		return map[string]any{"l": filepath.Join(files, "l.txt")}
 	})
 
-	r.stageOuts(filepath.Join(r.makeWork, "outs", "made"), filepath.Join(r.makeWork, "outs", "grid"), filepath.Join(passWork, "outs", "y"), filepath.Join(linkWork, "outs", "l"))
+	r.stageOuts(filepath.Join(r.makeWork, "outs", "made"), filepath.Join(r.makeWork, "outs", "grid"), filepath.Join(passWork, "outs", "y"), filepath.Join(r.linkWork, "outs", "l"))
 
 	return r
 }
@@ -175,7 +180,15 @@ func (r *publishRun) stageOuts(items ...string) {
 
 	for i, item := range items {
 		at := filepath.Join(task, "in", "u"+strconv.Itoa(i+1))
-		if err := os.Symlink(item, at); err != nil {
+
+		var err error
+		if r.skeletons {
+			err = shim.ExpandSkeleton(filepath.Join(item, shim.SkeletonFile), at)
+		} else {
+			err = os.Symlink(item, at)
+		}
+
+		if err != nil {
 			r.t.Fatal(err)
 		}
 
@@ -251,9 +264,16 @@ func (r *publishRun) post(inst Instance, scratch string, outs map[string]any) er
 // writeOuts publishes the pipeline outs from the staged bundles with
 // locations, into the working dir.
 func (r *publishRun) writeOuts(locations map[string]string) error {
-	spec := OutsSpec{In: []string{"in"}, Locations: locations, Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
+	spec := OutsSpec{In: []string{"in"}, Locations: locations, Work: "work", Manifest: "publish.json", OutsJSON: "pipeline_outs.json"}
 
 	return r.g.WriteOuts(r.t.Context(), spec)
+}
+
+// stagings are the two ways OUTS's outs may be staged: the bundles whole,
+// and their skeletons, which mre outs expands (#610). WriteOuts publishes
+// the same from either.
+func stagings() map[string]bool {
+	return map[string]bool{"bundles": false, "skeletons": true}
 }
 
 // TestWriteOutsPublishesAsMrp: the pipeline outs publish as mrp's
@@ -262,22 +282,87 @@ func (r *publishRun) writeOuts(locations map[string]string) error {
 // to a host file is linked, so copied, at each output that reaches it
 // (#485); and the files below MAKE's 2-D array stay unpublished, each named
 // where MAKE's work dir keeps it, as is the file MAKE declared and never
-// wrote, though MAKE ran in a scratch dir (#457).
+// wrote, though MAKE ran in a scratch dir (#457). Each published file is
+// published from where the task that wrote it keeps it (#610).
 func TestWriteOutsPublishesAsMrp(t *testing.T) {
-	r := newPublishRun(t)
+	for name, skeletons := range stagings() {
+		t.Run(name, func(t *testing.T) {
+			r := newPublishRun(t, skeletons)
 
-	locations := map[string]string{}
-	for at, item := range r.staged {
-		locations[at] = "s3://bucket" + item
+			locations := map[string]string{}
+			for at, item := range r.staged {
+				locations[at] = "s3://bucket" + item
+			}
+
+			if err := r.writeOuts(locations); err != nil {
+				t.Fatal(err)
+			}
+
+			work := "s3://bucket" + r.makeWork
+			want := map[string]any{
+				"made": "made.txt", "passed": "made.txt", "linked": "linked.txt", "relinked": "relinked.txt",
+				"grid": []any{[]any{work + "/outs/grid/f/L0000/cell.txt", work + "/main/files/gone.txt"}},
+			}
+
+			if d := cmp.Diff(want, outsJSON(t, "pipeline_outs.json")); d != "" {
+				t.Errorf("pipeline_outs.json (-mrp +got):\n%s", d)
+			}
+
+			made, link := work+"/outs/made/f/L0000/made.txt", "s3://bucket"+r.linkWork+"/outs/l/f/L0000/l.txt"
+			manifest := []published{
+				{Path: "linked.txt", Source: link},
+				{Path: "made.txt", Source: made},
+				{Path: "passed.txt", Source: made},
+				{Path: "relinked.txt", Source: link},
+			}
+
+			if d := cmp.Diff(manifest, readManifest(t, "publish.json")); d != "" {
+				t.Errorf("published tree's sources (-want +got):\n%s", d)
+			}
+
+			for _, dir := range []string{filepath.Join("work", "pipestance", "outs"), filepath.Join("work", "linked")} {
+				requireNoBytes(t, dir)
+			}
+
+			publishManifest(t, "publish.json", "results", func(src string) string { return strings.TrimPrefix(src, "s3://bucket") })
+
+			tree := map[string]string{"made.txt": "made", "passed.txt": "made", "linked.txt": "host", "relinked.txt": "host"}
+			if d := cmp.Diff(tree, publishedFiles(t, "results")); d != "" {
+				t.Errorf("published tree (-mrp +got):\n%s", d)
+			}
+		})
 	}
+}
 
-	if err := r.writeOuts(locations); err != nil {
+// requireNoBytes fails t for each regular file below dir that holds a byte:
+// OUTS places files as their shapes.
+func requireNoBytes(t *testing.T, dir string) {
+	t.Helper()
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+
+		info, err := d.Info()
+		if err == nil && info.Size() != 0 {
+			t.Errorf("OUTS wrote %d bytes at %s", info.Size(), path)
+		}
+
+		return err
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// outsJSON decodes the outs JSON at path.
+func outsJSON(t *testing.T, path string) map[string]any {
+	t.Helper()
 
 	var got map[string]any
 
-	raw, err := os.ReadFile("pipeline_outs.json")
+	raw, err := os.ReadFile(path)
 	if err == nil {
 		err = json.Unmarshal(raw, &got)
 	}
@@ -286,19 +371,42 @@ func TestWriteOutsPublishesAsMrp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	work := "s3://bucket" + r.makeWork
-	want := map[string]any{
-		"made": "made.txt", "passed": "made.txt", "linked": "linked.txt", "relinked": "relinked.txt",
-		"grid": []any{[]any{work + "/outs/grid/f/L0000/cell.txt", work + "/main/files/gone.txt"}},
+	return got
+}
+
+// readManifest reads the published tree's entries from the manifest at path.
+func readManifest(t *testing.T, path string) []published {
+	t.Helper()
+
+	var entries []published
+	if err := readRecord(path, &entries); err != nil {
+		t.Fatal(err)
 	}
 
-	if d := cmp.Diff(want, got); d != "" {
-		t.Errorf("pipeline_outs.json (-mrp +got):\n%s", d)
-	}
+	return entries
+}
 
-	tree := map[string]string{"made.txt": "made", "passed.txt": "made", "linked.txt": "host", "relinked.txt": "host"}
-	if d := cmp.Diff(tree, publishedFiles(t, "results")); d != "" {
-		t.Errorf("published tree (-mrp +got):\n%s", d)
+// publishManifest publishes the tree the manifest at path lists into
+// results, as the run's workflow outputs do: each entry's source, a task's
+// file at the path local maps it to here or a path beside the manifest,
+// copied to the entry's path below results.
+func publishManifest(t *testing.T, path, results string, local func(string) string) {
+	t.Helper()
+
+	for _, e := range readManifest(t, path) {
+		dst := filepath.Join(results, filepath.FromSlash(e.Path))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		src := local(e.Source)
+		if e.Local {
+			src = filepath.Join(filepath.Dir(path), filepath.FromSlash(e.Source))
+		}
+
+		if err := shim.CopyTree(src, dst); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -306,9 +414,19 @@ func TestWriteOutsPublishesAsMrp(t *testing.T) {
 // pipeline outs reach lies inside that directory in the pipestance, as in
 // mrp's, so PostProcess moves it out of the directory it moved into outs/
 // and leaves there a link that reaches nothing, which fails the pipeline outs
-// rather than publish the file twice.
+// rather than publish the file twice. A skeleton holds the directory's
+// layout, so the same holds when OUTS stages skeletons.
 func TestWriteOutsHoldsOneTree(t *testing.T) {
+	for name, skeletons := range stagings() {
+		t.Run(name, func(t *testing.T) { holdsOneTree(t, skeletons) })
+	}
+}
+
+func holdsOneTree(t *testing.T, skeletons bool) {
+	t.Helper()
+
 	r := newRun(t, nestedMRO)
+	r.skeletons = skeletons
 
 	mkdirWork := r.task("P.MKDIR", nil, func(_ map[string]any, files string) map[string]any {
 		d := filepath.Join(files, "d")
@@ -351,15 +469,15 @@ func TestWriteOutsHoldsOneTree(t *testing.T) {
 		t.Errorf("outs/d/sub/x.txt = %v, %v, want the link PostProcess leaves where it moved the file from", info, err)
 	}
 
-	if raw, err := os.ReadFile(filepath.Join(outs, "x.txt")); err != nil || string(raw) != "x" {
-		t.Errorf("outs/x.txt = %q, %v, want the file inside the directory", raw, err)
+	if info, err := os.Lstat(filepath.Join(outs, "x.txt")); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("outs/x.txt = %v, %v, want the file inside the directory, placed as its shape", info, err)
 	}
 }
 
 // TestWriteOutsNeedsLocations: a staged outs bundle without a location
 // fails the pipeline outs rather than name its unpublished files nowhere.
 func TestWriteOutsNeedsLocations(t *testing.T) {
-	r := newPublishRun(t)
+	r := newPublishRun(t, false)
 
 	if err := r.writeOuts(nil); !errors.Is(err, errNoLocation) {
 		t.Errorf("pipeline outs without their bundles' locations: %v, want %v", err, errNoLocation)
@@ -401,9 +519,9 @@ func TestPublishedNamesFailLoudly(t *testing.T) {
 		}
 	}
 
-	err = p.materialize(filepath.Join(t.TempDir(), "results"))
+	err = p.manifest(filepath.Join(t.TempDir(), "publish.json"))
 	if !errors.Is(err, errUnpublished) {
-		t.Errorf("materialize outs/ holding a dangling link: %v, want %v", err, errUnpublished)
+		t.Errorf("manifest of outs/ holding a dangling link: %v, want %v", err, errUnpublished)
 	}
 
 	if err != nil && strings.Contains(err.Error(), "published directory") {

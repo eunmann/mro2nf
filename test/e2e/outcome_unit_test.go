@@ -103,6 +103,25 @@ func TestMrpFailedOutcomePipelineFork(t *testing.T) {
 	}
 }
 
+// TestMrpFailedOutcomeUnresolvedStageFork checks a failure mrp records in a
+// stage's fork it failed resolving, and so never invoked, blames no stage
+// (post_outer_fork: TOP/OUTER/USE/fork0/_errors, "matched 2 out of 2 forks
+// of ID.mrp.TOP.INNER.SRC, need exactly 1", and no _invocation).
+func TestMrpFailedOutcomeUnresolvedStageFork(t *testing.T) {
+	ps := t.TempDir()
+	writeMrpSource(t, ps, "USE")
+	writeABITestFile(t, filepath.Join(ps, "P", "USE", "fork0", "_errors"), "need exactly 1")
+
+	got, err := mrpFailedOutcome(ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := cmp.Diff(failedIn(failError, ""), got); diff != "" {
+		t.Errorf("outcome (-want +got):\n%s", diff)
+	}
+}
+
 // TestMrpFailedOutcomeNoPipestance checks a failed mrp that left no pipestance
 // (a compile error) is a failure blaming no stage.
 func TestMrpFailedOutcomeNoPipestance(t *testing.T) {

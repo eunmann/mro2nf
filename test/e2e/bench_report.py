@@ -30,6 +30,9 @@ then applies four independent gates:
   * staged gate -- every lane's `staged_bytes` must be above 0: a lane that
     staged nothing was not measured, and the staging gates would pass on
     zeros.
+  * publish gate -- every lane's `plumbing_probe_refs` must be 0: a published
+    stage file is published from the task that wrote it, so no plumbing task
+    stages or writes its bytes (#610).
 
 With BENCH_UPDATE=1 it rewrites the baseline from the current run instead of
 gating on it (used to record a new, lower baseline after a data-plane
@@ -236,6 +239,26 @@ def check_staged(cur):
     return rc
 
 
+def check_publish(cur):
+    """Fail (rc 1) if a plumbing task staged or wrote a copy of the probe.
+
+    OUTS lays out the published tree from the outs' metadata, and the
+    workflow outputs publish each file from the task that wrote it, so the
+    bytes of a published stage file reach no plumbing task.
+    """
+    rc = 0
+    for name in sorted(cur):
+        n = cur[name].get("plumbing_probe_refs", 0)
+        if n:
+            print(
+                f"PUBLISH[{name}]: {n} plumbing task(s) staged or wrote a copy of "
+                f"the probe file; a published file is published from the task "
+                f"that wrote it, never through a plumbing task (#610)"
+            )
+            rc = 1
+    return rc
+
+
 def check_known_ratchet(cur, base):
     """Fail (rc 1) if re-recording would raise a known-scaling lane's plumbing.
 
@@ -301,6 +324,7 @@ def main():
         bad = check_scaling(cur)
         bad = check_mrp_jobs(cur) or bad
         bad = check_staged(cur) or bad
+        bad = check_publish(cur) or bad
         bad = check_known_ratchet(cur, load_baseline(baseline_path)) or bad
         if bad:
             print("refusing to record a baseline that violates a gate above")
@@ -317,12 +341,14 @@ def main():
     rc = check_scaling(cur) or rc
     rc = check_mrp_jobs(cur) or rc
     rc = check_staged(cur) or rc
+    rc = check_publish(cur) or rc
     if rc == 0:
         print(
             "OK: no regression vs baseline (refs/plumbing_tasks/tasks); "
             "plumbing is width-flat outside known-scaling groups; "
             "restaged bytes per producer are width-flat; "
-            "stage tasks equal mrp jobs; every lane staged its inputs"
+            "stage tasks equal mrp jobs; every lane staged its inputs; "
+            "no plumbing task moved a published file"
         )
     return rc
 

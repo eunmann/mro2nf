@@ -29,6 +29,7 @@ type reportLane struct {
 	Producers int            `json:"producers"`
 	Staged    int            `json:"staged_bytes"`
 	Restaged  int            `json:"restaged_bytes"`
+	ProbeRefs int            `json:"plumbing_probe_refs,omitempty"`
 }
 
 // restagedPair is widthPair(2, 2, 0) with producers p4 and p8 restaging r4
@@ -67,7 +68,8 @@ func widthPair(p4, p8, known int) []reportLane {
 // width-flatness gate, its known_scaling exemption (which may not get worse
 // and must be dropped once flat), the flat per-task staging gate, the flat
 // restaged-bytes-per-producer gate, the stage-tasks-equal-mrp-jobs gate, and
-// the gate that every lane staged its inputs, gating and under BENCH_UPDATE=1.
+// the gate that every lane staged its inputs, and the gate that no plumbing
+// task moves a published file, gating and under BENCH_UPDATE=1.
 func TestBenchReportGates(t *testing.T) {
 	requireTools(t, "python3")
 
@@ -76,6 +78,9 @@ func TestBenchReportGates(t *testing.T) {
 
 	unstaged := widthPair(2, 2, 0)
 	unstaged[1].Staged = 0
+
+	published := widthPair(2, 2, 0)
+	published[1].ProbeRefs = 1
 
 	cases := []struct {
 		name     string
@@ -94,6 +99,8 @@ func TestBenchReportGates(t *testing.T) {
 		{"staging grown with width fails", false, stagingPair(4*65600, 8*65600), stagingPair(4*65600, 8*65600), "STAGING[x]"},
 		{"nothing staged fails", false, unstaged, unstaged, "STAGED[x_w8]: no task staged anything"},
 		{"update refuses nothing staged", true, unstaged, unstaged, "STAGED[x_w8]"},
+		{"plumbing moving the probe fails", false, published, published, "PUBLISH[x_w8]"},
+		{"update refuses plumbing moving the probe", true, published, published, "PUBLISH[x_w8]"},
 		{"restaged per producer flat passes", false, restagedPair(4, 4*100, 8, 8*100), restagedPair(4, 4*100, 8, 8*100), ""},
 		{"no restaged bytes passes", false, restagedPair(1, 0, 1, 0), restagedPair(1, 0, 1, 0), ""},
 		{"broadcast copied per fork fails", false, restagedPair(1, 4*65600, 1, 8*65600), restagedPair(1, 4*65600, 1, 8*65600), "RESTAGED[x]"},
