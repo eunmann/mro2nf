@@ -126,10 +126,11 @@ re-encodes every float in them as `mrp` encodes a literal
 ## Martian code reused
 
 mro2nf reuses Martian rather than re-implementing it. Martian's code comes from
-the module `go.mod` pins, `github.com/martian-lang/martian`. Two parts are
+the module `go.mod` pins, `github.com/martian-lang/martian`. Three parts are
 copies, each held to the module by a test: the adapters
-(`vendor-martian/python`, byte for byte, `TestVendoredMartianMatchesModule`)
-and the retry patterns (`TestRetryPatternsMatchModule`).
+(`vendor-martian/python`, byte for byte, `TestVendoredMartianMatchesModule`),
+the retry patterns (`TestRetryPatternsMatchModule`), and core's runtime
+resolution, `internal/mrcore` (`TestMrcoreMatchesCore`).
 
 | Martian | Used for | Call site |
 |---|---|---|
@@ -144,16 +145,19 @@ and the retry patterns (`TestRetryPatternsMatchModule`).
 | `core` `LazyArgumentMap.ValidateOutputs`, `MarshalerMap.ValidatePipelineOutputs` | output checks | [`internal/cg/post.go`](../../internal/cg/post.go), [`internal/cg/outs.go`](../../internal/cg/outs.go) |
 | `core` `Runtime.ReattachToPipestance`, `Pipestance.PostProcess` | the published tree and outs JSON | [`internal/cg/outs.go`](../../internal/cg/outs.go) |
 | `core` `NewMetadata` | writing a job's metadata | [`internal/job/launch.go`](../../internal/job/launch.go) |
-| `core` runtime resolution (`resolve.go`, `fork.go`) | resolving one instance's inputs and forks, ported to read what a task staged | [`internal/mrcore`](../../internal/mrcore) |
-| `cmd/mrjob` | running `py` and `comp` jobs | `go.mod` `tool`; [`internal/job/launch.go`](../../internal/job/launch.go) |
-| `adapters/python` | the `py` adapter, embedded in `mre` | [`vendor-martian`](../../vendor-martian) |
+| `core` runtime resolution (`fork.go`, `resolve.go`, `runtime.go`, `node.go`, `stage.go`) | resolving one instance's inputs and forks, adapted to read what a task staged | [`internal/mrcore`](../../internal/mrcore) |
+| `cmd/mrjob` | running `py` and `comp` jobs | `go.mod` `tool`; `Makefile` `build`; [`internal/job/launch.go`](../../internal/job/launch.go) |
+| `adapters/python` | the `py` adapter, embedded in `mre` | [`vendor-martian`](../../vendor-martian), [`cmd/mre/tools.go`](../../cmd/mre/tools.go) |
 | `jobmanagers/retry.json` `retry_on` | which failures are retried | [`internal/job/retry.go`](../../internal/job/retry.go) |
 
 [`internal/mrcore`](../../internal/mrcore) is Martian core's runtime
 resolution at the pinned commit, run over what one task staged in place of a
-pipestance on disk. Only its data access differs from core's: a fork's outputs
-come from a store of the task's staged records, and an output read the task
-did not stage fails loudly rather than reading as not yet ready.
+pipestance on disk. A fork's outputs come from a store of the task's staged
+records, and an output read the task did not stage fails loudly rather than
+reading as not yet ready. Every function it changes from core is listed, with
+why, in `mrcoreAdapted`
+([`test/thirdparty/mrcore_test.go`](../../test/thirdparty/mrcore_test.go)),
+and `TestMrcoreMatchesCore` holds everything else to core's own source.
 
 ## No undocumented divergence
 
@@ -164,7 +168,7 @@ its justification and the tests that prove it.
 
 - The differential tests excuse a difference only through an entry.
 - [Divergences](../reference/divergences.md) is generated from the allowlist
-  (`make docs-divergences`), and `TestFeatureCoverageIsCurrent` fails while it
+  (`make docs-divergences`), and `TestDivergencesDocIsCurrent` fails while it
   is stale.
 - A difference with no entry is a bug.
 

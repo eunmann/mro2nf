@@ -26,7 +26,8 @@ flowchart LR
   same model as `conf/base.config`;
   [`internal/cgnf/params.go`](../../internal/cgnf/params.go)), so Nextflow
   fails a launch that sets an undeclared one, such as a misspelt input, where it
-  would otherwise ignore it.
+  would otherwise ignore it. Config-set parameters stay declared, as
+  `conf/base.config` and the profiles set only those.
 - **Types.** The block types a `string` input as `String?` and leaves every
   other input `Object?` (`entryType`). On 26.04, an `Integer` refuses a params
   file's whole-number float (`{"n": 2.0}`), which Martian assigns to an `int`
@@ -102,18 +103,21 @@ Every file value of the run's entry inputs is either read in place or staged:
 |---|---|---|
 | absolute path | `standard`, grid | read in place by every task ([below](#head-node-paths-read-in-place)) |
 | absolute path | `docker` | staged |
-| absolute path | `awsbatch`, `healthomics` | refused |
-| `s3://` URI | `awsbatch`, bucket mounted under the S3 root | read in place through the mount ([below](#mounted-s3-values)) |
+| absolute path under the S3 root | `awsbatch` | read in place through the mount ([below](#mounted-s3-values)) |
+| any other absolute path | `awsbatch`, `healthomics` | refused |
+| `s3://` URI | `awsbatch`, bucket mounted under the S3 root | read in place through the mount |
 | `s3://` URI | elsewhere | staged |
-| other URI | with `--mro2nf_allow_remote_inputs true` | staged |
+| `file:` URI | where head-node inputs are allowed: `standard`, grid, `docker` | staged |
+| other URI (`http(s)://`, `ftp://`) | with `--mro2nf_allow_remote_inputs true` | staged |
 
 A staged value is staged by Nextflow into the tasks that read it, and only
 those. PLAN lists the staged values (`leaves`) and, per node and fork of its
 entry-fed roots, the ones Martian's specialization of its bindings to that fork
 reads (`files`), so a map call over entry files stages each fork's own element.
 The pipeline outs' own reads, keyed by the pipeline's fqid, are staged into
-OUTS, which copies each one it publishes into its `external/` directory
-([Run time](runtime.md#outs)).
+OUTS, whose post-processing publishes such a file only where it finds it, as
+`mrp`'s does, and which copies each one it publishes into its `external/`
+directory ([Run time](runtime.md#outs)).
 
 - The driver hands each value to `file(x, glob: false)`, so the head node never
   globs a name, and a task stages its list as `entry/<i>/<name>`. `mre stage

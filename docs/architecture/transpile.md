@@ -40,9 +40,9 @@ No map call is pruned on an empty or null source and no call is disabled by an
 entry value, so the witness's call graph holds every stage node, with its fork
 roots, of any invocation.
 
-Where `mrp` refuses the witness, an input keeps its literal value instead,
-only while `mrp` still accepts the call; a panic of Martian's call-graph
-builder counts as a refusal. `TestWitnessCoversLiteral` checks that every
+Where `mrp` refuses the witness, the inputs start from the literal invocation,
+and each in turn takes its witness value only while `mrp` still accepts the
+call; a panic of Martian's call-graph builder counts as a refusal. `TestWitnessCoversLiteral` checks that every
 fixture's literal invocation is within its witness's.
 
 At run time PLAN checks the real invocation against the witness
@@ -87,6 +87,10 @@ shape of the references to it:
 - **Gathering.** The upstream's other roots it gathers: all of their forks.
 - **Limiting.** Where a split's elements do not all read the upstream, the
   pattern is limited to the elements that do.
+
+The driver joins an instance on the shared and aligned roots' ordinals
+(`READ`, or `GATHER` under them) for one unlimited pattern, and otherwise
+through `NEEDS`, a keyed join per pattern regrouped per instance.
 
 ```mermaid
 flowchart LR
@@ -230,9 +234,12 @@ those limits shape the workflows; the `.mro`'s pipeline nesting does not.
   heavy, runs of those runs are cut the same way
   ([`internal/cgnf/scope.go`](../../internal/cgnf/scope.go)).
 - A run takes the channels its nodes read from outside it, emits those read
-  outside it, and emits `outs_pub`: one channel that mixes the outputs its own
-  nodes publish. OUTS's input mixes them all and `ordered` sorts it by node and
-  instance key, so where an output is mixed does not change it.
+  outside it, and emits `outs_pub`: one channel that mixes the outputs bundles
+  of its own nodes the pipeline outs read (`PUBLISHED`). The entry workflow's
+  `outs_pub`, which mixes its own nodes' bundles with its runs' `outs_pub`, is
+  OUTS's input, which `ordered` sorts by node and instance key, so where a
+  bundle is mixed does not change it, and no workflow mixes more sources than
+  it has calls.
 - PLAN declares the same outputs, and the entry workflow has the same few
   statements of them, however many entry-fed roots a pipeline has, as PLAN
   writes all their forks as one record.

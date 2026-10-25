@@ -21,7 +21,8 @@ flowchart TD
     kind -->|other URI| remote{"remote inputs allowed?"}
     host -->|standard, grid| inplace["read in place<br/>the stage gets the path itself"]
     host -->|docker| staged["staged into each task that reads it<br/>the stage gets a path in its task dir"]
-    host -->|awsbatch, healthomics| refused["refused: pass an s3:// URI"]
+    host -->|"awsbatch, under /mnt/s3"| mount
+    host -->|"healthomics; awsbatch elsewhere"| refused["refused: pass an s3:// URI"]
     mounted -->|yes| mount["read in place through the mount<br/>/mnt/s3/bucket/key"]
     mounted -->|no| staged
     remote -->|true| staged

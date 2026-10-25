@@ -25,7 +25,8 @@ It also fails on:
 - an entry input named `job_resources` or `mro2nf_*`, because the project
   defines those parameters itself;
 - an entry input named with a Groovy or Nextflow keyword, such as `def`,
-  `new` or `class`, which Nextflow's `params` block refuses, quoted or not
+  `new` or `class`, which `mrp` runs but Nextflow's `params` block refuses,
+  quoted or not
   (the divergence [`keyword-input`](../reference/divergences.md));
 - a number literal out of range: an int outside int64, a float beyond
   float64, or a `threads`, `mem_gb` or `vmem_gb` beyond float32, on which
@@ -57,7 +58,7 @@ the image at its own path too.
 
 Each stage call is a process named `N<i>_<CALL>`. A split stage has three
 processes, `N<i>_<CALL>_SP`, `_MN` and `_JN`, for its split, chunk (main) and
-join phases. The `include` lines at the top of `main.nf` list them all. Use
+join phases. The `include` lines of `main.nf` and `subworkflows/` list them. Use
 these names in `withName:` selectors
 ([Resources and retries](resources-and-retries.md#size-one-stage)).
 

@@ -18,18 +18,21 @@ summary, even when the run succeeds.
 
 ## Inside a task's work directory
 
+Each stage task runs one job, one phase of one stage instance, so its work
+directory holds that job's metadata directory:
+
 ```
 work/ab/cdef…/
 ├── .command.sh      the task's script
 ├── .command.out     its stdout
 ├── .command.err     its stderr
-├── split/           one metadata directory per job mrp would run:
-├── chnk0/           split/, chnk<N>/ for a main (chnk0/ for a stage
-├── join/            that does not split) and join/
+├── chnk0/           the job's metadata: split/ for a split, chnk<N>/ for a
+│                    main (chnk0/ for a stage that does not split), join/
+│                    for a join
 └── journal/         the job journal files mrjob writes
 ```
 
-Each job's metadata directory holds `_args`, `_jobinfo`, `_outs`, `_stdout`,
+The metadata directory holds `_args`, `_jobinfo`, `_outs`, `_stdout`,
 `_stderr`, `_log`, and `_errors` for an exception or `_assert` for an `ASSERT`:
 the same files `mrp` writes for the job.
 
@@ -45,14 +48,18 @@ the same files `mrp` writes for the job.
   directory`**: the task cannot see the pipeline's code at the path it was
   transpiled from. In a container, `COPY` the code to that path in the image
   ([Container images](container-images.md)).
-- **`<file>:<line>:<column>: number literal out of range: …`**: `mro2nf`
+- **`<file>:<line>:<column>: number literal out of range: an int must fit
+  int64, a float float64 and a threads, mem_gb or vmem_gb value float32:
+  <literal>`**: `mro2nf`
   refuses an int literal outside int64, a float literal beyond float64, or a
   stage's `threads`, `mem_gb` or `vmem_gb` beyond float32 in the `.mro` or a
   file it includes, where `mrp` panics on it.
 
 ### Launch values
 
-- **`entry input "<name>": number literal out of range: …`**: PLAN refuses a
+- **`entry input "<name>": number literal out of range: an int must fit
+  int64, a float float64 and a threads, mem_gb or vmem_gb value float32:
+  <literal>`**: PLAN refuses a
   launch value holding an int outside int64 or a float beyond float64 at any
   depth, as `mrp` refuses the literal.
 - **`entry override of a non-scalar type cannot be a string`**: pass the
@@ -80,7 +87,8 @@ the same files `mrp` writes for the job.
 - **`entry input '<name>': scheme '<scheme>' is not allowed`**: pass a path or
   an `s3://` URI, or `--mro2nf_allow_remote_inputs true`.
 - **`entry input '<name>': bucket <bucket> is not mounted at /mnt/s3/<bucket>
-  on this run's instances; …`**: on `awsbatch`, the input is a path under
+  on this run's instances; mount it there, or pass the input as an s3:// URI,
+  which the tasks stage if their role may read the bucket`**: on `awsbatch`, the input is a path under
   `/mnt/s3` whose bucket is not mounted. Deploy the stack with the bucket in
   `mountBuckets`, or pass its `s3://` URI on a compute environment whose
   instance role may read the bucket: the example stack's may read only the

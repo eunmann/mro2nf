@@ -44,7 +44,9 @@ output line by line in time quadratic in its lines):
 
 - **per node**: a digest of its resolved spec (stage, bindings, disable
   bindings and fork roots, in Martian's JSON form) and of what its post step
-  writes for its readers; whether the invocation disables it; the fork keys a
+  writes for its readers (the splits of the roots it feeds, its partners'
+  splits, and the disable bindings whose value it posts with their roots);
+  whether the invocation disables it; the fork keys a
   static per-fork binding disables; and its resources under the run's
   overrides file;
 - **the entry files** the tasks stage ([Inputs](inputs.md));
@@ -55,8 +57,10 @@ output line by line in time quadratic in its lines):
 
 ## Cache identity
 
-`-resume` must re-run exactly the tasks whose inputs changed. Each task's
-cache key holds only what that task depends on.
+A task's `-resume` key holds what can change its result, so a changed input
+re-runs it and an unchanged one does not. Two choices widen a key on purpose:
+every stage task keys on the whole call, as `mrp` refuses to resume a changed
+invocation, and PLAN does not cache under an S3 mount.
 
 **PLAN** caches on the entry values, the `.mro` copy, the overrides file, and
 its `meta`, which carries the launch parameters it reads and the run's work
@@ -81,9 +85,13 @@ stale task. Nor does a process read a global such as `workflow.workDir` or
 `projectDir`, which no task's key holds on the v2 parser
 (`TestProcessesReadNoPathGlobal`).
 
+No task stages a file of PLAN's: the digests reach it as values, which
+Nextflow keys on by content.
+
 **The run's call** reaches each task by one rule (`CALL`): a call whose base64
 is at most 4 KiB (`cg.MaxValueBytes`) is a value each task's script writes
-into `call.b64`; a larger one is a file the driver writes once per run
+into `call.b64`, as on AWS Batch a staged file costs each task a download; a
+larger one is a file the driver writes once per run
 (`collectFile`), in a directory named by the call and the run's session, which
 each task stages. The call grows with the entry values, so with N entry forks
 an inline call would grow every task's script by O(N) bytes. A task still reads
@@ -96,7 +104,7 @@ What re-runs after a change:
 |---|---|
 | an entry value | every task (the call changed) |
 | `--mro2nf_psid` | every task (`TestResumeKeysOnTheParamsATaskReads`) |
-| `--mro2nf_monitor` | every stage task and OUTS |
+| `--mro2nf_monitor` | every stage task and OUTS (`TestResumeKeysOnTheParamsATaskReads`) |
 | a `.mro` edit that leaves a node's spec and the call as they were | PLAN only; the node stays cached (`TestResumeKeysOnlyOnATasksOwnTypes`) |
 | a `.mro` edit of how a consumer splits or gates on a node's outputs | the node too, since its post writes differently (`TestResumeKeysOnTheReadersAPostWritesFor`) |
 | the overrides file | each node whose resources it changes, a split stage's split included, which writes the table its chunks and join are scheduled by (`TestResumeKeysOnANodesOverrides`) |
@@ -125,8 +133,8 @@ and with the same bytes as an output does ([Reads](#reads)); any other is
 staged.
 
 **Zips.** An instance zipping a stage output over a root other than the root's
-own source joins that stage's partner element at its own fork's token, or the
-absent record, so each fork gets one element of it whatever the fork width
+own source joins that stage's partner element at its own fork's token,
+whether that stage feeds the root or not, or the absent record, so each fork gets one element of it whatever the fork width
 (the `zip` bench lanes hold the bytes one task stages flat in N). The same
 holds for:
 

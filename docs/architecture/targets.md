@@ -1,8 +1,10 @@
 # Targets
 
 Targets are profiles of one project (`nextflow run -profile <name>`). The `.nf`
-files are the same everywhere; a profile sets only which executor runs the
-tasks, in which image, and how jobs are granted resources. Every task finds
+files are the same everywhere; a profile sets only configuration: which
+executor runs the tasks, in which image, how jobs are granted resources, how
+entry files are read, whether outputs are confined, and where the run
+publishes. Every task finds
 `mre` on `PATH`. [Profiles](../user-guide/profiles.md) is the user-facing
 guide.
 
@@ -16,7 +18,7 @@ flowchart TD
     container --> batch["awsbatch"]
     container --> omics["healthomics<br/>(package.sh)"]
     local & grid -.-> host["host's mre and code,<br/>head-node paths read in place"]
-    docker & batch & omics -.-> image["one image: --mro2nf_image,<br/>outputs confined, inputs staged"]
+    docker & batch & omics -.-> image["one image: --mro2nf_image,<br/>outputs confined, head-node inputs staged"]
 ```
 
 ## Profiles

@@ -154,27 +154,35 @@ The post step runs after the stage's last job, on the outputs the job wrote.
    feeds: `forks/<root fqid>/<ordinal>/`. The ordinal is zero-padded, in `mrp`'s
    fork order (array index, or map keys in byte order). Each holds that fork's
    element of the source collection and `fork.json`, which records the real
-   fork (keys as JSON strings) and its position. A small element (no file
-   leaf, at most `cg.MaxValueBytes` of JSON) is a value record in the
-   `-fork-values` file instead. A map key's fork also carries the key's token,
+   fork (keys as JSON strings) and its position. A small element (of a type
+   with no file leaf, at most `cg.MaxValueBytes` of JSON) is a value record in
+   the `-fork-values` file instead, named as its directory would be:
+   `<root fqid>/<ordinal>:` and base64 of its fork record and the element's
+   JSON. A map key's fork also carries the key's token,
    the hex SHA-256 of the key, after an `@`; an array fork's token is its
    index.
 3. **Partner elements.** For each output that a map call splits other than as
    its root's source (a map call zipping several outputs, or a disable binding
    splitting one), it writes one partner element per element,
-   `forks/<root>@<node>.<output>/<token>/`, and an absent record, `none`, which
-   reads null where the output is null, and a missing element, logged, at any
-   index it lacks, as `mrp` reads it. A zip of maps at run time need not share
+   `forks/<root>@<node>.<output>/<token>/`, a directory or a value record by
+   the same rule, and an absent record, `none`, a value record, which reads
+   null where the output is null, and a missing element, logged, at any index
+   it lacks, as `mrp` reads it. A zip of maps at run time need not share
    keys (`zip_runtime_map`). An instance therefore gets only its own elements,
    and no key ever needs escaping.
 4. **Outputs.** It writes the outputs one by one, so a consumer gets only the
-   outputs it reads: a small one as a record in the `-field-values` file, any
+   outputs it reads: a small one as a record in the `-field-values` file,
+   `<output>:` and base64 of the instance's stamp and the output's JSON; any
    other as one bundle stamped with the instance (`instance.json`),
-   `<-fields>/<output>/`.
+   `<-fields>/<output>/`, the files it names staged as the job's own and
+   confined, but each whole leaf of a bundle the task staged named by
+   reference, which `-field-refs`, and for element directories `-fork-refs`,
+   list ([Files by reference](bundles.md#files-by-reference)).
 5. **Gates.** With `-gates`, it writes the instances the outputs disable: of
    each node with a disable binding that reads this stage alone, every fork it
    resolves true at, as `mrp`'s `Fork.disabled` reads it (a null reads false),
-   named `<node>@<roots>@<ordinals>`.
+   named `<node>@<roots>@<ordinals>` by the node's ordinals of the roots,
+   beyond this stage's, the binding is forked on.
 6. **Task record.** Each bundle it posts also records, in `task.json`, the
    directory it posted from, where its stage ran, and the bundle's path there.
 
@@ -184,6 +192,11 @@ outer call its own fork does not fix, joined by dots. A root of known length is
 keyed by its own forks alone. `mre plan` writes the forks the call graph
 already fixes (literal and entry-sourced sources) the same way, as fork records
 without values.
+
+A consumer's `-values` file holds the value records it got, of outputs and
+elements alike, each naming the item it stands in for in its JSON, and its
+`-refs` directory the files its items name by reference that no item it stages
+holds. `mre outs` takes both too.
 
 ## `mre outs`
 
@@ -216,9 +229,12 @@ JSON follow `mrp`'s rules by construction.
 5. **Outs JSON** (`-json`): naming a published file by its path in the tree,
    a linked one by its own link's path, and a file left unpublished (below an
    array of two or more dimensions) by where its producer's work directory
-   keeps the copy it staged (`-locations`). A path the stage declared and never
+   keeps the copy it staged: `-locations` maps each staged bundle to that
+   location, which no task sees of itself. A path the stage declared and never
    wrote is named below the work directory of the task that posted it
-   (`task.json`).
+   (`task.json`), which a scratch directory is not.
+
+A staged skeleton (`-in`, `-refs`) is expanded in place.
 
 ## How it is checked against `mrp`
 

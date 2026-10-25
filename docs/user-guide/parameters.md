@@ -49,8 +49,9 @@ Rules:
 > A JSON `-params-file` changes two kinds of number before mro2nf sees them.
 > An int beyond int64 wraps: `{"n": 9223372036854775808}` runs as
 > `-9223372036854775808`, where `mrp` refuses the literal. And `-0.0` becomes
-> `0.0`. A YAML params file, a command-line value and an `.mro` literal keep
-> both. Use a YAML params file, or keep values in range (the divergence
+> `0.0`. In a YAML params file, a command-line value or an `.mro` literal, an
+> out-of-range int is refused with an error naming the input, and `-0.0`
+> reaches the stage as `-0`. Use a YAML params file, or keep values in range (the divergence
 > [`params-json-int-wrap`](../reference/divergences.md)).
 
 ## The parameter schema

@@ -9,7 +9,7 @@ This page installs mro2nf, transpiles a small pipeline and runs it.
 | Java 17 to 26 and Nextflow 26.04 or later | to run the generated project (`curl -s https://get.nextflow.io \| bash`) |
 | Python 3 | to run `py` stages on the local and grid profiles |
 | Docker | only for the container profiles |
-| Go 1.27 and `make` | only to build mro2nf from source |
+| Go 1.27 and `make` | only to build mro2nf from source; the build downloads Go modules |
 
 The generated `nextflow.config` sets `manifest.nextflowVersion '!>=26.04.0'`,
 so an older Nextflow refuses to run it. The project also needs Nextflow's
@@ -122,7 +122,7 @@ absolute paths. [Parameters](user-guide/parameters.md) has the details.
 
 A failed run publishes nothing to `results/`. To publish somewhere else,
 including an `s3://` prefix, pass Nextflow's `-output-dir <dir>`, or set
-`outputDir = '<dir>'` in a `-c` config.
+`outputDir = '<dir>'` in a `-c` config; `-output-dir` wins over the config.
 
 ## Resume
 

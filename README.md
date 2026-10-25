@@ -23,10 +23,11 @@ work on many more targets and brings its own tooling. mro2nf joins the two:
 - **Your stage code runs as is.** Each task runs the original stage through
   Martian's own adapter, with the same inputs (`_args`) and outputs (`_outs`)
   `mrp` would give it.
-- **The outputs are the same as `mrp`'s.** Every test fixture that `mrp` can
-  run is run under both `mrp` and Nextflow, and the published files are
-  compared byte for byte. The known differences are listed, with the reason
-  for each.
+- **The outputs are the same as `mrp`'s.** The test suite runs its fixtures
+  under both `mrp` and Nextflow and compares the results: the published files
+  byte for byte, `pipeline_outs.json`, and every stage's inputs and outputs.
+  A fixture `mrp` fails must fail the same way. The known differences are
+  listed, with the reason for each.
 - **It runs wherever Nextflow runs.** One project runs locally, on Slurm,
   SGE, LSF or PBS, in Docker, on AWS Batch, and on AWS HealthOmics. You pick
   the target at launch with `-profile`.
@@ -38,8 +39,9 @@ work on many more targets and brings its own tooling. mro2nf joins the two:
 
 ## How it works
 
-mro2nf compiles the pipeline with Martian's own compiler and emits one
-Nextflow process per stage. At run time, a small shim, `mre`, sits between
+mro2nf compiles the pipeline with Martian's own compiler and wires one
+Nextflow process per stage call (three for a split stage: split, chunk and
+join). At run time, a small shim, `mre`, sits between
 Nextflow and the stage: it builds each stage's arguments, runs the stage
 exactly as `mrp` runs it, and hands its outputs back to Nextflow. Nextflow
 does the scheduling, staging, caching, retries and publishing.
@@ -63,5 +65,6 @@ does the scheduling, staging, caching, retries and publishing.
 
 MIT; see [`LICENSE`](LICENSE). The binaries and the runtime image also carry
 third-party code, listed with its licenses in
-[`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES). The vendored Martian adapters
+[`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) (`make notices` regenerates
+it). The vendored Martian adapters
 keep Martian's license in [`vendor-martian/LICENSE`](vendor-martian/LICENSE).

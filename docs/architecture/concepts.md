@@ -23,8 +23,8 @@ flowchart TD
 |---|---|---|
 | Call graph | Martian's compiled form of a pipeline invocation: every stage call as a node with its resolved bindings. `mrp` compiles it before it makes a pipestance, and so does mro2nf. | [`syntax.MakePipelineCallGraph`](https://github.com/martian-lang/martian/blob/50ad6c054d30/martian/syntax/resolve.go) |
 | Node, fqid | One stage call in the call graph, named by its fully qualified id, such as `SUM_SQUARE_PIPELINE.SUM_SQUARES`. | `syntax.CallGraphStage` |
-| Fork root | A `map call` whose forks a node runs under. A node's fork roots are the map calls it is nested in. | `syntax.ForkRootList` |
-| Fork | One element of a fork root's collection: an array index or a map key. A node runs once per combination of its roots' forks. | [`internal/cg/fork.go`](../../internal/cg/fork.go) `Fork` |
+| Fork root | A `map call` whose forks a node runs under: of the map calls it is nested in, those whose `split` its inputs or disable bindings reach. | `syntax.ForkRootList`; upstream [`CallGraphStage.resolveForks`](https://github.com/martian-lang/martian/blob/50ad6c054d30/martian/syntax/resolve_stage.go) |
+| Fork | A stage instance's position: one part per fork root, each part an element of that root's collection, an array index or a map key. A node runs once per combination of its roots' forks. | [`internal/cg/fork.go`](../../internal/cg/fork.go) `Fork`, `Part` |
 | Split, merge | Martian's compiled expressions for a `split` over a collection (`SplitExp`) and for gathering a map call's forks back into a collection (`MergeExp`). | `syntax.SplitExp`, `syntax.MergeExp` |
 | Disable binding | A `using (disabled = …)` binding, compiled to a `DisabledExp` that gates a node per fork. | [`core/stage.go`](https://github.com/martian-lang/martian/blob/50ad6c054d30/martian/core/stage.go) `Fork.disabled` |
 | Split stage | A stage with a `split` block: one split job, one main job per chunk, one join job. | [Run time](runtime.md#split-stages) |
@@ -43,9 +43,9 @@ flowchart TD
 | `Instance`, instance key | One run of a node at one fork. Its key is its ordinal of each of its roots' forks, which the driver joins on. | [`internal/cg/record.go`](../../internal/cg/record.go) |
 | Fork id | `mrp`'s name for a fork, such as `fork0`, which names jobs in `_jobinfo`. | [`internal/cg/forkid.go`](../../internal/cg/forkid.go) |
 | Fork element | One fork of a stage-fed root, posted by the stage whose outputs fix it: the element of the split collection and its fork record. | [`internal/cg/post.go`](../../internal/cg/post.go) |
-| Partner element, token | The element of a zipped output at one fork's index, for a map call that splits several collections. A map key's token is the hex SHA-256 of the key, so no key needs escaping. | [`internal/cg/partner.go`](../../internal/cg/partner.go) |
+| Partner element, token | The element of a split output at one fork's index, for a map call that zips several collections or a disable binding that splits one. A map key's token is the hex SHA-256 of the key, so no key needs escaping. | [`internal/cg/partner.go`](../../internal/cg/partner.go) |
 | Gate | The set of instances a stage's outputs disable, posted by that stage and looked up on the driver. | [Run time](runtime.md#gates) |
-| Value record | A small output or element (no file leaf, at most `cg.MaxValueBytes`, 4 KiB, of JSON) carried through the driver's channels as base64, instead of staged as a file. | [`internal/cg/values.go`](../../internal/cg/values.go) |
+| Value record | A small output or element (of a type with no file leaf, at most `cg.MaxValueBytes`, 4 KiB, of JSON) carried through the driver's channels as base64, instead of staged as a file. | [`internal/cg/values.go`](../../internal/cg/values.go) |
 | Bundle | A directory holding a typed JSON payload and the files its leaves name: how outputs, chunk definitions and fork elements move between tasks. | [Bundles and file flow](bundles.md) |
 | Marker | The `@mre:` string that stands for a file leaf inside a bundle's JSON. | [`internal/shim`](../../internal/shim) |
 | Origin | The absolute path a file was first staged from, which identifies the file however many bundles carry it. | [Bundles and file flow](bundles.md#origins) |
@@ -56,7 +56,7 @@ flowchart TD
 | Algorithm | What it does | Code |
 |---|---|---|
 | Compile | Parse the `.mro` and build the call graph with Martian's compiler, exactly as `mrp` does, so a pipeline `mrp` refuses is refused with `mrp`'s message. | [`internal/cg/graph.go`](../../internal/cg/graph.go) |
-| Witness construction | Give every entry input a value of its type with two elements in every collection, nested collections of different lengths, `false` for every bool and no null, so no node is pruned or disabled. | [`Source.Witness`](../../internal/cg/source.go) |
+| Witness construction | Give every entry input a value of its type with two elements in every collection, nested collections of different lengths, `false` for every bool and no null, so no map call is pruned and no call is disabled by an entry value. | [`Source.Witness`](../../internal/cg/source.go) |
 | Fork-root feeders | Find the stage whose outputs fix a root's fork count by walking Martian's compiled split source case for case, as `mrp`'s fork expansion does. | [`internal/cg/topology.go`](../../internal/cg/topology.go); upstream [`Fork.expandForkPartFromSource`](https://github.com/martian-lang/martian/blob/50ad6c054d30/martian/core/fork.go) |
 | Read collection | Walk each node's bindings to find exactly which outputs of which nodes it reads, including what counting a merge's forks reads. | [`internal/cg/topology.go`](../../internal/cg/topology.go) `collectReads`, [`internal/cg/graph.go`](../../internal/cg/graph.go) `countReads` |
 | Read alignment | Match a split over another map call's outputs to the reader's own fork, so fork *i* of the reader stages only fork *i* of the upstream, never all N. | [`internal/cg/align.go`](../../internal/cg/align.go) |

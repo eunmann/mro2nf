@@ -1,7 +1,7 @@
 # Bundles and file flow
 
-Under `mrp`, every job reads its inputs from one shared pipestance directory.
-Under Nextflow, a task sees only what is staged into it. This page explains
+Under `mrp`, every job reads its upstream outputs from one shared pipestance
+directory. Under Nextflow, a task sees only what is staged into it. This page explains
 how typed values, and the files they name, move from the task that wrote them
 to the tasks that read them, without copying a file more than once.
 
@@ -27,8 +27,9 @@ a chunk's args, a chunk's outputs, a fork element. On disk it is a directory
                        no leaf's bytes (#610)
 ```
 
-A small value never becomes a bundle: an output or element with no file leaf
-and at most `cg.MaxValueBytes` (4 KiB) of JSON travels as a value record
+A small value never becomes a bundle: an output or element whose type holds
+no file leaf, with at most `cg.MaxValueBytes` (4 KiB) of JSON, travels as a
+value record
 through the driver's channels instead ([Run time](runtime.md#reads)).
 
 ### Basenames
@@ -61,7 +62,7 @@ In `data.json`, every file leaf is replaced with a **marker**,
 from a **directory** (a `path` output, or a directory a stage wrote into a
 `file`-typed output) uses `@mre:dir:` instead, so whether it is a directory,
 checked when it is staged, travels to publishing rather than being inferred
-from the declared type.
+from the declared type. Both prefixes resolve the same way on read.
 
 ```mermaid
 flowchart LR
@@ -158,7 +159,8 @@ flowchart LR
    directory. A task's records come on one line, space-separated, so an `eval`
    output of them is collected in time linear in them. A split's come in a
    file, `chunk_refs`, and a chunk's as an `eval` output, which `CHUNKS` and
-   `JOIN` resolve (`chunked`, `joinRefs`).
+   `JOIN` resolve (`chunked`, `joinRefs`), so each chunk stages the files its
+   def names, and the join those every chunk's def and outputs name.
 3. **A reader** stages those ordinal directories once each as
    `refs/<i>/f/<ordinal>/` (`refsOf`), and OUTS the skeleton of each bundle
    holding them once as `refs/<i>` (`refBundles`). Nextflow stages the file
@@ -170,7 +172,12 @@ flowchart LR
    in the order the task names its staged directories), and fails on one it did
    not stage. It then links the file into its args, and `mre outs` places it,
    as it would a copy of the same origin, so `_args`, the published tree and the
-   outs JSON are the same bytes.
+   outs JSON are the same bytes. A chunk and a join read a chunk def's or a
+   chunk's outputs' reference where they staged it, in an item
+   (`in/u<i>/f/<ordinal>/<basename>`) or by reference
+   (`refs/<i>/f/<ordinal>/<basename>`), where a copy lay below `chunk/<name>/`
+   or `chunks/<name>/`: the basename the stage sees, and the file, are the
+   same.
 
 An ordinal directory that lies in an item the reader stages whole, such as the
 input a split forwarded into its chunk defs, which each chunk and the join
@@ -193,8 +200,9 @@ in the task's own work directory and is unstaged from it like any other output
 (`TaskFileCollector`, `AwsBatchFileCopyStrategy.getUnstageOutputFilesScript`),
 and a posted bundle holds its files below a directory of its own.
 
-A file inside a staged directory leaf, and an entry file, are still copies:
-staging the whole directory to every reader would cost more than the one file.
+A file inside a staged directory leaf is still copied, as staging the whole
+directory to every reader would cost more than the one file. An entry file is
+still copied too.
 
 ## Symlinks and confinement
 
