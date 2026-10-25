@@ -131,10 +131,10 @@ func (p *project) outs() *wiring {
 
 	w.linef("outs_in = %s", ups)
 	shared := w.use("shared")
-	w.linef("outs_files = outs_in.map { xs -> bundlesOf(xs) }")
-	w.linef("outs_refs = outs_in.map { xs -> refBundles(xs) }")
-	w.linef("OUTS(%s, %s.map { m -> callStaged(m) }, outs_files.map { ds -> ds.collect { d -> skeletonOf(d) } }, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, "+
-		"outs_refs.map { bs -> bs.collect { b -> skeletonOf(b) } }, outs_refs.map { bs -> bs.collect { b -> b.toUriString() } }, outs_in.map { xs -> recordsOf(xs) }, %s, file(\"${projectDir}/%s\"))",
+	w.linef("outs_files = outs_in.map { xs -> skeletons(bundlesOf(xs)) }")
+	w.linef("outs_refs = outs_in.map { xs -> skeletons(refBundles(xs)) }")
+	w.linef("OUTS(%s, %s.map { m -> callStaged(m) }, outs_files, outs_files.map { ss -> bundleLocations(ss) }, "+
+		"outs_refs, outs_refs.map { ss -> bundleLocations(ss) }, outs_in.map { xs -> recordsOf(xs) }, %s, file(\"${projectDir}/%s\"))",
 		shared, shared, entry, mroAssets)
 
 	return w

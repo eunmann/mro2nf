@@ -337,11 +337,17 @@ def locations(ups, List locs, List refLocs) {
     return "cat > locations <<'MRO2NF_LOCATIONS'\n${lines.join('')}MRO2NF_LOCATIONS"
 }
 
-// skeletonOf is the skeleton of the bundle dir d (mre's shim.SkeletonFile):
-// its paths and records, none of its files' bytes, which OUTS stages in
-// its place.
-def skeletonOf(Path d) {
-    return d.resolve('.mre-skeleton.json')
+// skeletons are the skeletons of the bundle dirs ds (mre's
+// shim.SkeletonFile): their paths and records, none of their files' bytes,
+// which OUTS stages in their place.
+def skeletons(List ds) {
+    return ds.collect { d -> d.resolve('.mre-skeleton.json') }
+}
+
+// bundleLocations are where the producing task's work dir keeps the bundle
+// of each of the skeletons ss.
+def bundleLocations(List ss) {
+    return ss.collect { s -> s.parent.toUriString() }
 }
 
 // refBundles are the bundles holding the files items name by reference
@@ -350,24 +356,26 @@ def refBundles(List items) {
     return refsOf(items).collect { r -> r.parent.parent }.unique()
 }
 
-// published is the published tree OUTS's manifest m lists: each entry's
-// source and its path in the tree. A source lies in the work dir of the
-// task that wrote it, OUTS's own beside m for a file no stage task wrote,
-// as Nextflow publishes no other file. A stage chooses its files' names,
-// so the driver globs none.
-def published(Path m) {
-    return new groovy.json.JsonSlurper().parseText(m.text).collect { e -> [e.local ? m.resolveSibling(e.source) : file(e.source, glob: false), e.path] }
+// published is the published tree the manifest in OUTS's publish dir p
+// lists: each entry's source and its path in the tree. A source lies in
+// the work dir of the task that wrote it, OUTS's own below p for a file no
+// stage task wrote, as Nextflow publishes no other file. A stage chooses
+// its files' names, so the driver globs none.
+def published(Path p) {
+    return new groovy.json.JsonSlurper().parseText(p.resolve('publish.json').text).collect { e -> [e.local ? p.resolve(e.source) : file(e.source, glob: false), e.path] }
 }
 
 // OUTS resolves the pipeline outs from the stage outs and the entry files
 // they read and lays out what the run publishes with mrp's own
 // post-processing, from the skeletons of the outs, none of the bytes of
 // the files a stage task wrote: the outs JSON (json) and the manifest of
-// the outs tree (manifest), each entry where the task that wrote it keeps
-// it, which main.nf's workflow outputs publish from there. A published
-// file no stage task wrote, an entry file or a host path, it copies into
-// external/, which the manifest names. It runs no stage, so it compiles
-// the project's copy of the .mro files it stages.
+// the outs tree (manifest, publish/publish.json), each entry where the task
+// that wrote it keeps it, which main.nf's workflow outputs publish from
+// there. A published file no stage task wrote, an entry file or a host
+// path, it copies into publish/external/, which the manifest names. One
+// output dir holds both, as each output is an edge of the run's DAG. It
+// runs no stage, so it compiles the project's copy of the .mro files it
+// stages.
 process OUTS {
     input:
     val meta
@@ -382,8 +390,7 @@ process OUTS {
 
     output:
     path 'pipeline_outs.json', emit: json
-    path 'publish.json', emit: manifest
-    path 'external', optional: true
+    path 'publish', emit: manifest
 
     script:
     """
@@ -391,7 +398,7 @@ process OUTS {
     ${valuesFile(values)}
     mkdir -p in refs
     ${locations(ups, locs, refLocs)}
-    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish.json -json pipeline_outs.json
+    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish/publish.json -json pipeline_outs.json
     """
 }
 

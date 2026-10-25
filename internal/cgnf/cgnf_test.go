@@ -289,7 +289,7 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 
 	for _, want := range []string{
 		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
-		"outs_files = outs_in.map { xs -> bundlesOf(xs) }",
+		"outs_files = outs_in.map { xs -> skeletons(bundlesOf(xs)) }",
 		", outs_in.map { xs -> recordsOf(xs) }, ",
 	} {
 		if !strings.Contains(main, want) {
@@ -398,9 +398,9 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
 	for _, want := range []string{
-		"outs_refs = outs_in.map { xs -> refBundles(xs) }",
-		", outs_files.map { ds -> ds.collect { d -> skeletonOf(d) } }, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, ",
-		"outs_refs.map { bs -> bs.collect { b -> skeletonOf(b) } }, outs_refs.map { bs -> bs.collect { b -> b.toUriString() } }, ",
+		"outs_files = outs_in.map { xs -> skeletons(bundlesOf(xs)) }",
+		"outs_refs = outs_in.map { xs -> skeletons(refBundles(xs)) }",
+		", outs_files, outs_files.map { ss -> bundleLocations(ss) }, outs_refs, outs_refs.map { ss -> bundleLocations(ss) }, ",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf lacks %q:\n%s", want, main)
@@ -409,7 +409,7 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 
 	for _, want := range []string{
 		"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs\n    path refs, stageAs: 'refs/?', arity: '0..*'\n    val refLocs",
-		"${locations(ups, locs, refLocs)}", " -locations locations", "return d.resolve('.mre-skeleton.json')",
+		"${locations(ups, locs, refLocs)}", " -locations locations", "return ss.collect { s -> s.parent.toUriString() }",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
@@ -417,7 +417,7 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 	}
 
 	if !strings.Contains(stageModule, "d.resolve('"+shim.SkeletonFile+"')") {
-		t.Errorf("skeletonOf names no %s", shim.SkeletonFile)
+		t.Errorf("skeletons names no %s", shim.SkeletonFile)
 	}
 }
 
@@ -439,8 +439,8 @@ func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
 			"    results {\n        enabled !workflow.preview\n        mode 'copy'\n        path { e -> e[0] >> e[1] }\n    }\n}\n",
 	)
 	checkContains(t, tree, "stage.nf",
-		"    path 'pipeline_outs.json', emit: json\n    path 'publish.json', emit: manifest\n    path 'external', optional: true\n",
-		"new groovy.json.JsonSlurper().parseText(m.text).collect { e -> [e.local ? m.resolveSibling(e.source) : file(e.source, glob: false), e.path] }",
+		"    path 'pipeline_outs.json', emit: json\n    path 'publish', emit: manifest\n",
+		"new groovy.json.JsonSlurper().parseText(p.resolve('publish.json').text).collect { e -> [e.local ? p.resolve(e.source) : file(e.source, glob: false), e.path] }",
 	)
 	checkContains(t, tree, "conf/healthomics.config", "\noutputDir = '/mnt/workflow/pubdir'\n")
 
@@ -471,7 +471,7 @@ func TestEmitCarriesTheCall(t *testing.T) {
 
 	for _, want := range []string{
 		"shared = CALL(PLAN.out.call, " + strconv.Itoa(cg.MaxValueBytes) + ").map { c -> [entry: ",
-		"OUTS(shared, shared.map { m -> callStaged(m) }, outs_files.map { ",
+		"OUTS(shared, shared.map { m -> callStaged(m) }, outs_files, ",
 	} {
 		if !strings.Contains(main, want) {
 			t.Errorf("main.nf lacks %q:\n%s", want, main)
@@ -838,7 +838,7 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 		t.Errorf("diamond_min's outs read no entry file, yet OUTS stages some:\n%s", plain)
 	}
 
-	for _, want := range []string{"    val values\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish.json"} {
+	for _, want := range []string{"    val values\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish/publish.json"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}

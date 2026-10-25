@@ -579,7 +579,7 @@ collection is quadratic in its lines.
 **OUTS.** The last task lays out what the run publishes without the bytes
 of any file a stage task wrote (#610). It stages the skeleton of every
 outs bundle the pipeline outs read, and of every bundle holding a file
-they name by reference (`skeletonOf`, `refBundles`; §7), never the
+they name by reference (`skeletons`, `refBundles`; §7), never the
 bundles. It gets each bundle's location as a value (`toUriString()`, a
 path or an `s3://` URI) and the outputs that reach it as values, and
 stages the entry files the pipeline outs read (§8). `mre outs` expands the
