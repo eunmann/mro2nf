@@ -1,0 +1,142 @@
+{
+  "name": "ST4",
+  "in": [
+    [
+      "i9",
+      "float"
+    ]
+  ],
+  "out": [
+    [
+      "seen",
+      "string"
+    ],
+    [
+      "o13",
+      "bool"
+    ]
+  ],
+  "split": true,
+  "chunk_in": [
+    [
+      "c0",
+      "string"
+    ]
+  ],
+  "chunk_out": [
+    [
+      "d0",
+      "S0"
+    ],
+    [
+      "d1",
+      "json"
+    ]
+  ],
+  "structs": {
+    "P0": [
+      [
+        "r1",
+        "map<float>"
+      ]
+    ],
+    "P2": [
+      [
+        "r10",
+        "bool"
+      ],
+      [
+        "r11",
+        "ST4[]"
+      ]
+    ],
+    "S0": [
+      [
+        "f0",
+        "path"
+      ],
+      [
+        "f1",
+        "int"
+      ],
+      [
+        "f2",
+        "int"
+      ]
+    ],
+    "ST0": [
+      [
+        "seen",
+        "string"
+      ],
+      [
+        "o0",
+        "bool[][]"
+      ],
+      [
+        "o1",
+        "path"
+      ],
+      [
+        "o2",
+        "string"
+      ]
+    ],
+    "ST1": [
+      [
+        "seen",
+        "string"
+      ],
+      [
+        "o3",
+        "map<float>"
+      ],
+      [
+        "o4",
+        "path"
+      ]
+    ],
+    "ST2": [
+      [
+        "seen",
+        "string"
+      ],
+      [
+        "o5",
+        "map<S0>"
+      ],
+      [
+        "o6",
+        "string"
+      ],
+      [
+        "o7",
+        "bool[]"
+      ],
+      [
+        "o8",
+        "bool"
+      ]
+    ],
+    "ST4": [
+      [
+        "seen",
+        "string"
+      ],
+      [
+        "o13",
+        "bool"
+      ]
+    ],
+    "TOP": [
+      [
+        "r17",
+        "map<bool>"
+      ]
+    ]
+  },
+  "filetypes": [
+    "json"
+  ],
+  "fail": null
+}

@@ -1,0 +1,140 @@
+# #613 (gen-diff seed 156120001705268): TOP's r17 merges P2.r10, a null,
+# over P2's forks. P2 maps over ST4's forks, which C0's o3 fixes. Martian
+# constrains the merge to ST4, which has no root on P2's call, so mrp's
+# getParts takes the forks of ST4's one root (getUnmatchedForkParts):
+# r17 holds a null per key of C0's o3, and the pipeline outs wait for C0.
+filetype json;
+
+struct S0(
+    path f0,
+    int f1,
+    int f2,
+)
+
+stage ST0(
+    in  string i0,
+    in  int[] i1,
+    out string seen,
+    out bool[][] o0,
+    out path o1,
+    out string o2,
+    src py "stages/st0",
+)
+
+stage ST1(
+    in  bool[] i2,
+    in  bool[] i3,
+    in  map<S0>[] i4,
+    out string seen,
+    out map<float> o3,
+    out path o4,
+    src py "stages/st1",
+)
+
+stage ST2(
+    in  ST1 i5,
+    in  map<float> i6,
+    in  path[] i7,
+    in  S0 i8,
+    out string seen,
+    out map<S0> o5,
+    out string o6,
+    out bool[] o7,
+    out bool o8,
+    src py "stages/st2",
+)
+
+stage ST4(
+    in  float i9,
+    out string seen,
+    out bool o13,
+    src py "stages/st4",
+) split (
+    in  string c0,
+    out S0 d0,
+    out json d1,
+)
+
+pipeline P0(
+    in  bool[][] p3,
+    in  map<S0>[] p5,
+    in  bool p6,
+    in  S0 p7,
+    out map<float> r1,
+)
+{
+    map call ST1(
+        i2 = split self.p3,
+        i3 = split self.p3,
+        i4 = self.p5,
+    ) using (
+        disabled = self.p6,
+    )
+
+    map call ST2(
+        i5 = split ST1,
+        i6 = split ST1.o3,
+        i7 = ST1.o4,
+        i8 = self.p7,
+    ) using (
+        disabled = self.p6,
+    )
+
+    call ST1 as C0(
+        i2 = ST2.o8,
+        i3 = ST2.o8,
+        i4 = self.p5,
+    )
+
+    return (
+        r1 = C0.o3,
+    )
+}
+
+pipeline P2(
+    in  ST4 p12,
+    out bool r10,
+    out ST4[] r11,
+)
+{
+    return (
+        r10 = null,
+        r11 = [self.p12, null],
+    )
+}
+
+pipeline TOP(
+    in  string p0,
+    in  int p2,
+    out map<bool> r17,
+)
+{
+    call ST0(
+        i0 = self.p0,
+        i1 = [self.p2, self.p2, self.p2],
+    )
+
+    call P0(
+        p3 = ST0.o0,
+        p5 = [{"2": {f0: null, f1: -9007199254740993, f2: 42}, "a~b": {f0: null, f1: 9007199254740993, f2: 1}}],
+        p6 = true,
+        p7 = {f0: null, f1: 9007199254740993, f2: -9223372036854775808},
+    )
+
+    map call ST4(
+        i9 = split P0.r1,
+    )
+
+    map call P2(
+        p12 = split ST4,
+    )
+
+    return (
+        r17 = P2.r10,
+    )
+}
+
+call TOP(
+    p0 = "€ 😀",
+    p2 = -9223372036854775808,
+)

@@ -16,12 +16,35 @@ func (g *Graph) mergeCounts(e *syntax.MergeExp) bool {
 	})
 }
 
-// mergeGathersNone reports whether a merge of e.Call gathers no fork
-// wherever it resolves, so nothing it binds is read: getParts finds no part
-// of a call its bound node has no root on, unless Martian knows the call's
-// length (core/resolve.go:519-600).
-func (g *Graph) mergeGathersNone(e *syntax.MergeExp) bool {
-	return !g.mergeCounts(e) && !e.Call.Call().KnownLength()
+// mergeGathersNone reports whether a merge of e.Call, resolved by an
+// instance forked on reader, gathers no fork, so nothing it binds is read:
+// getParts finds no part of a call its bound node has no root on, unless
+// Martian knows the call's length or the bound node has one root the
+// instance is not forked on (core/resolve.go:519-600, mergeCounted).
+func (g *Graph) mergeGathersNone(e *syntax.MergeExp, reader syntax.ForkRootList) bool {
+	_, ok := g.mergeCounted(e, reader)
+
+	return !ok && !e.Call.Call().KnownLength()
+}
+
+// mergeCounted is the root whose forks a merge of e.Call, resolved by an
+// instance forked on reader, gathers at run time: e.Call where its bound
+// node has a root on it (mergeCounts); else, where Martian does not know
+// the call's length, the bound node's one root when it has only one and
+// the instance is not forked on it, whose forks getParts then takes
+// (getUnmatchedForkParts, core/resolve.go:598-606); false otherwise, where
+// it gathers none, or the forks Martian knows.
+func (g *Graph) mergeCounted(e *syntax.MergeExp, reader syntax.ForkRootList) (*syntax.CallGraphStage, bool) {
+	if g.mergeCounts(e) {
+		return e.Call, true
+	}
+
+	bound := g.boundRoots(e)
+	if e.Call.Call().KnownLength() || len(bound) != 1 || slices.Contains(reader, bound[0]) {
+		return nil, false
+	}
+
+	return bound[0], true
 }
 
 // boundRoots are the fork roots of the node mrp binds a merge of e.Call to

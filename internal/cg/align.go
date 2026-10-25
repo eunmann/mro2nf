@@ -116,7 +116,7 @@ func (a *aligner) walk(e syntax.Exp, ctx []alignCtx) {
 			a.walk(x.Value[k], ctx)
 		}
 	case *syntax.MergeExp:
-		if a.g.mergeGathersNone(x) {
+		if a.g.mergeGathersNone(x, a.reader) {
 			return
 		}
 
@@ -133,13 +133,19 @@ func (a *aligner) walk(e syntax.Exp, ctx []alignCtx) {
 	}
 }
 
-// countReads visits what counting the forks of the merge x's call reads
-// (Graph.countReads), each at the indices of the outer roots the merge's
-// constraint fixes, where the merge resolves it (mergeIndices).
+// countReads visits what counting the forks the merge x gathers reads
+// (Graph.mergeCounted, Graph.countReads), each at the indices of the outer
+// roots the merge's constraint fixes, where the merge resolves it
+// (mergeIndices).
 func (a *aligner) countReads(x *syntax.MergeExp, ctx []alignCtx) {
+	root, ok := a.g.mergeCounted(x, a.reader)
+	if !ok {
+		return
+	}
+
 	constraint := mergeConstraint(x)
 
-	for _, r := range a.g.countReads(x.Call) {
+	for _, r := range a.g.countReads(root) {
 		if r.Id != a.up {
 			continue
 		}
