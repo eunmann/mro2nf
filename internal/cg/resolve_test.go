@@ -52,7 +52,7 @@ func (f *fixture) writeOuts(in ...string) (string, error) {
 	f.t.Helper()
 
 	outs := f.next("pipeline_outs.json")
-	spec := OutsSpec{In: in, Work: f.next("work"), Results: f.next("results"), OutsJSON: outs}
+	spec := OutsSpec{In: in, Work: f.next("work"), Manifest: f.next("publish.json"), OutsJSON: outs}
 
 	if err := f.g.WriteOuts(f.t.Context(), spec); err != nil {
 		return "", err

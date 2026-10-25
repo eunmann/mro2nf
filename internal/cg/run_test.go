@@ -510,7 +510,7 @@ func (s *standIn) stages() (OutsSpec, int) {
 
 	return OutsSpec{
 		In: []string{s.staged(dirs)}, Values: values,
-		Work: s.next("work"), Results: s.next("results"), OutsJSON: s.next("pipeline_outs.json"),
+		Work: s.next("work"), Manifest: s.next("publish.json"), OutsJSON: s.next("pipeline_outs.json"),
 	}, ran
 }
 

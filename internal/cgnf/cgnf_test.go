@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/cg"
+	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -288,7 +289,7 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 
 	for _, want := range []string{
 		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
-		"outs_files = outs_in.map { xs -> bundlesOf(xs) }",
+		"outs_files = outs_in.map { xs -> skeletons(bundlesOf(xs)) }",
 		", outs_in.map { xs -> recordsOf(xs) }, ",
 	} {
 		if !strings.Contains(main, want) {
@@ -387,43 +388,59 @@ func TestEmitCarriesValueElements(t *testing.T) {
 	}
 }
 
-// TestEmitLocatesOutsInputs: OUTS gets, beside each outs bundle it stages,
-// where its producing task's work dir keeps it, which names a file the
-// pipeline outs leave unpublished (#457), and passes both to mre outs.
+// TestEmitLocatesOutsInputs: OUTS stages the skeleton of each outs bundle,
+// and of each bundle holding a file they name by reference, never the
+// bundle (#610), and gets beside each where its producing task's work dir
+// keeps the bundle, which names a file the pipeline outs leave unpublished
+// (#457) and the source each published file is published from, and passes
+// both to mre outs.
 func TestEmitLocatesOutsInputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "nested_path_unpublished"))["main.nf"]
 
-	if !strings.Contains(main, ", outs_files, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, ") {
-		t.Errorf("OUTS is not given its inputs' locations:\n%s", main)
+	for _, want := range []string{
+		"outs_files = outs_in.map { xs -> skeletons(bundlesOf(xs)) }",
+		"outs_refs = outs_in.map { xs -> skeletons(refBundles(xs)) }",
+		", outs_files, outs_files.map { ss -> bundleLocations(ss) }, outs_refs, outs_refs.map { ss -> bundleLocations(ss) }, ",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
 	}
 
 	for _, want := range []string{
-		"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs\n    path refs, stageAs: 'refs/?/f/*', arity: '0..*'\n    val refLocs",
-		"${locations(ups, locs, refLocs)}", " -locations locations",
+		"path ups, stageAs: 'in/u*', arity: '0..*'\n    val locs\n    path refs, stageAs: 'refs/?', arity: '0..*'\n    val refLocs",
+		"${locations(ups, locs, refLocs)}", " -locations locations", "return ss.collect { s -> s.parent.toUriString() }",
 	} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}
 	}
+
+	if !strings.Contains(stageModule, "d.resolve('"+shim.SkeletonFile+"')") {
+		t.Errorf("skeletons names no %s", shim.SkeletonFile)
+	}
 }
 
 // TestEmitPublishesThroughWorkflowOutputs (#580): OUTS publishes nothing
-// itself; the entry workflow publishes its outs JSON and each entry of its
-// outs tree at its own name, as copies, below Nextflow's outputDir, which
-// only the healthomics profile sets, to the HealthOmics pubdir; no param
-// names it. A -preview run, which runs no task, publishes nothing, as an
-// enabled output would hang it (TestLaunchEdges).
+// itself; the entry workflow publishes its outs JSON, and each entry of
+// the outs tree its manifest lists from where the task that wrote it keeps
+// it to its path in the tree (#610), OUTS's own external/ copy for a file
+// no stage task wrote, as copies, below Nextflow's outputDir, which only
+// the healthomics profile sets, to the HealthOmics pubdir; no param names
+// it. A -preview run, which runs no task, publishes nothing, as an enabled
+// output would hang it (TestLaunchEdges).
 func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "dir_out"))
 
 	checkContains(t, tree, "main.nf",
 		"workflow {\n    main:\n    if (",
-		"\n    publish:\n    pipeline_outs = OUTS.out.json\n    results = OUTS.out.results.flatMap { fs -> fs }\n}\n",
+		"\n    publish:\n    pipeline_outs = OUTS.out.json\n    results = OUTS.out.manifest.flatMap { m -> published(m) }\n}\n",
 		"\noutput {\n    pipeline_outs {\n        enabled !workflow.preview\n        mode 'copy'\n    }\n"+
-			"    results {\n        enabled !workflow.preview\n        mode 'copy'\n        path { f -> f >> f.name }\n    }\n}\n",
+			"    results {\n        enabled !workflow.preview\n        mode 'copy'\n        path { e -> e[0] >> e[1] }\n    }\n}\n",
 	)
 	checkContains(t, tree, "stage.nf",
-		"    path 'pipeline_outs.json', emit: json\n    path 'results/*', hidden: true, arity: '0..*', emit: results\n",
+		"    path 'pipeline_outs.json', emit: json\n    path 'publish', emit: manifest\n",
+		"new groovy.json.JsonSlurper().parseText(p.resolve('publish.json').text).collect { e -> [e.local ? p.resolve(e.source) : file(e.source, glob: false), e.path] }",
 	)
 	checkContains(t, tree, "conf/healthomics.config", "\noutputDir = '/mnt/workflow/pubdir'\n")
 
@@ -821,7 +838,7 @@ func TestEmitStagesEntryFilesIntoOuts(t *testing.T) {
 		t.Errorf("diamond_min's outs read no entry file, yet OUTS stages some:\n%s", plain)
 	}
 
-	for _, want := range []string{"    val values\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results"} {
+	for _, want := range []string{"    val values\n    tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')\n", "-locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish/publish.json"} {
 		if !strings.Contains(stageModule, want) {
 			t.Errorf("OUTS lacks %q", want)
 		}

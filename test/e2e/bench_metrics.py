@@ -37,6 +37,10 @@ The staging probe reads every task work dir (see probe_task_dirs):
                  or a split stage's tasks (#507)
   probe_writes -- files in task work dirs that are a copy of the probe file
                  (the ideal is producers: each producer writes it once)
+  plumbing_probe_refs -- plumbing task dirs that stage or write a copy of
+                 the probe file: a published stage file is published from
+                 the task that wrote it, so no plumbing task moves its bytes
+                 (bench_report.py holds it to 0, #610)
   max_argv_bytes / max_arg_bytes -- the largest mre command line, and the
                  largest single argument on one, from the .mre-argv files
                  the scale tier's mre wrapper (scale_test.go writeArgvProbe)
@@ -340,6 +344,7 @@ def probe_task_dirs(workdir, probe, stages):
             "plumbing_uploaded_bytes",
             "restaged_bytes",
             "probe_writes",
+            "plumbing_probe_refs",
             "max_argv_bytes",
             "max_arg_bytes",
         ),
@@ -352,7 +357,8 @@ def probe_task_dirs(workdir, probe, stages):
         staged = sum(tree_bytes(s) for s in sources)
         written = list(written_files(d))
         uploaded = sum(size for _, size in written)
-        m["probe_writes"] += sum(is_probe_copy(path, marker) for path, _ in written)
+        writes = sum(is_probe_copy(path, marker) for path, _ in written)
+        m["probe_writes"] += writes
         m["restaged_bytes"] += restaged_bytes(written, sources)
         m["staged_bytes"] += staged
         m["uploaded_bytes"] += uploaded
@@ -362,6 +368,8 @@ def probe_task_dirs(workdir, probe, stages):
             most[name] = max(most.get(name, 0), staged)
         else:
             m["plumbing_uploaded_bytes"] += uploaded
+            if writes or any(is_probe_copy(p, marker) for s in sources for p in tree_files(s)):
+                m["plumbing_probe_refs"] += 1
         argv, arg = read_argv_probe(d)
         m["max_argv_bytes"] = max(m["max_argv_bytes"], argv)
         m["max_arg_bytes"] = max(m["max_arg_bytes"], arg)

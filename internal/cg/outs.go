@@ -34,16 +34,20 @@ type OutsSpec struct {
 	EntryFiles map[string]string
 	// Work is the dir the pipestance is reconstructed in.
 	Work string
-	// Results receives the published tree, and OutsJSON the outs JSON that
-	// names each published file by its path in it.
-	Results, OutsJSON string
+	// Manifest receives the published tree as the run publishes it: a line
+	// per entry, its path in the tree and, tab-separated, where the task
+	// that wrote it keeps it. OutsJSON receives the outs JSON that names
+	// each published file by its path in the tree.
+	Manifest, OutsJSON string
 }
 
 // WriteOuts resolves the invocation's pipeline outs (core/resolve.go:184
 // resolvePipelineOutputs), checks them as mrp does, and publishes them as
 // mrp does, with Martian's own post-processing (core/post_process.go) on a
-// pipestance reconstructed from them. Then it writes the published tree and
-// the outs JSON naming it.
+// pipestance reconstructed from them. Then it writes the manifest of the
+// published tree and the outs JSON naming it. Post-processing reads no
+// file's bytes, so the staged outs may be their skeletons
+// (shim.ExpandSkeleton).
 func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 	staged, err := shim.NewStaged(append(slices.Clone(spec.In), spec.Refs)...)
 	if err != nil {
@@ -93,7 +97,7 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 		return err
 	}
 
-	if err := ps.materialize(spec.Results); err != nil {
+	if err := ps.manifest(spec.Manifest); err != nil {
 		return err
 	}
 
