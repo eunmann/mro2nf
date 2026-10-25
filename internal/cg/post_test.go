@@ -3,6 +3,7 @@ package cg
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -331,6 +332,25 @@ func TestPostCountsForksFromTheSource(t *testing.T) {
 		forks := nested.post(nested.outs("TOP.G_ON", nil, `{"off":`+off+`}`))
 		if got := len(elementItems(t, forks, "TOP.O_LIT.USE")); got != want {
 			t.Errorf("gate off=%s: G_ON's post wrote %d forks of TOP.O_LIT.USE, want %d", off, got, want)
+		}
+	}
+}
+
+// TestPostFailsUnderAnOuterForkItDoesNotHold (#602): SRC feeds USE, whose
+// forks vary with OUTER, a map call SRC is not forked on. Each instance of
+// SRC holds only its own outs, so its post fails at the first fork of OUTER
+// whose element another instance's outs hold, as mrp fails resolving USE's
+// forks, rather than write USE's forks under every fork of OUTER from every
+// instance of SRC.
+func TestPostFailsUnderAnOuterForkItDoesNotHold(t *testing.T) {
+	f := loadFixture(t, "post_outer_fork")
+
+	for i := range 2 {
+		outs := f.outs("TOP.INNER.SRC", Fork{f.part("TOP.INNER", ArrayIndex(i))}, `{"xs":[1,2,3]}`)
+
+		err := f.g.Post(postedSpec(t, f.g, outs, f.next("forks")))
+		if !errors.Is(err, ErrNotStaged) {
+			t.Errorf("post of SRC at INNER fork %d: %v, want %v", i, err, ErrNotStaged)
 		}
 	}
 }

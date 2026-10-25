@@ -695,6 +695,10 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// while it makes the pipestance, before any stage runs; mro2nf fails its
 	// OUTS task.
 	{name: "nested_empty_forks", mrp: runOutcome{Failed: true}, divergence: "nested-empty-forks"},
+	// #602: a map call's forks vary with an outer map call its source's
+	// producer is not forked on, over two elements. mrp fails resolving the
+	// consumer's forks; mro2nf fails the producer's post.
+	{name: "post_outer_fork", mrp: failedIn(failError, ""), divergence: "post-outer-fork"},
 	// #520: a stage opening a companion file beside a file input another
 	// stage wrote. mrp passes the path in the producer's job dir and finds
 	// it; mro2nf stages only the files the producer's outs name, so the

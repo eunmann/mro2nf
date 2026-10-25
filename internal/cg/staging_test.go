@@ -13,6 +13,7 @@ func standInSkipped() map[string]string {
 	return map[string]string{
 		"split_gate_entry": "it zips entry collections with SRC's outs, whose keys and lengths no stand-in knows",
 		"forkdisabled":     "GATED zips the entry's xs with FLAGS's skips, whose length no stand-in knows",
+		"post_outer_fork":  "SRC's post fails, as mrp does (TestPostFailsUnderAnOuterForkItDoesNotHold)",
 	}
 }
 

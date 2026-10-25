@@ -1,0 +1,65 @@
+# #602: USE's forks vary with OUTER, a map call SRC is not forked on, and
+# INNER maps over two elements. Martian 50ad6c0 compiles OUTER's elements
+# to references that match every fork of SRC, so mrp fails resolving USE's
+# forks ("matched 2 out of 2 forks of ID.mrp.TOP.INNER.SRC, need exactly
+# 1"). mro2nf fails SRC's post at the first fork of OUTER it does not hold,
+# rather than write USE's forks under every fork of OUTER from each
+# instance of SRC. Over one element (rt_gate_split_nested) both runs succeed.
+stage SRC(
+    in  int   k,
+    out int[] xs,
+    src py    "stages/src",
+)
+
+stage USE(
+    in  int x,
+    out int z,
+    src py  "stages/use",
+)
+
+pipeline INNER(
+    in  int   k,
+    out int[] ys,
+)
+{
+    call SRC(
+        k = self.k,
+    )
+
+    return (
+        ys = SRC.xs,
+    )
+}
+
+pipeline OUTER(
+    in  int[] ys,
+    out int[] zs,
+)
+{
+    map call USE(
+        x = split self.ys,
+    )
+
+    return (
+        zs = USE.z,
+    )
+}
+
+pipeline TOP(
+    out OUTER[] outs,
+)
+{
+    map call INNER(
+        k = split [1, 2],
+    )
+
+    map call OUTER(
+        ys = split INNER.ys,
+    )
+
+    return (
+        outs = OUTER,
+    )
+}
+
+call TOP()
