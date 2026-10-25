@@ -235,6 +235,47 @@ func TestBenchMetricsLeavesOutTheCall(t *testing.T) {
 	}
 }
 
+// TestBenchMetricsCarriedBytes pins stage_carried_bytes_max: the bytes of
+// a stage task's value records, the values here-document of its script,
+// at the script's top or indented after an inline call, and none of the
+// call's here-document, per stage process.
+func TestBenchMetricsCarriedBytes(t *testing.T) {
+	requireTools(t, "python3")
+
+	dir := t.TempDir()
+	records := "xs:eyJ2YWx1ZSI6WzFdfQ==\nys:eyJ2YWx1ZSI6WzJdfQ==\n"
+
+	writeBenchTask(t, dir, "aa/top", "WF:ST (1)", "")
+	writeBenchFile(t, filepath.Join(dir, "work", "aa", "top", ".command.sh"),
+		"#!/bin/bash -ue\ncat > values <<'MRO2NF_VALUES'\n"+records+"MRO2NF_VALUES\nmre stage\n")
+	writeBenchTask(t, dir, "bb/indented", "WF:ST (2)", "")
+	writeBenchFile(t, filepath.Join(dir, "work", "bb", "indented", ".command.sh"),
+		"#!/bin/bash -ue\ncat > call.b64 <<'MRO2NF_CALL'\n"+strings.Repeat("c", 500)+"\nMRO2NF_CALL\n    cat > values <<'MRO2NF_VALUES'\nxs:e30=\nMRO2NF_VALUES\n")
+	writeBenchTask(t, dir, "cc/none", "WF:OTHER (1)", "")
+	writeBenchFile(t, filepath.Join(dir, "work", "cc", "none", ".command.sh"), "#!/bin/bash -ue\nmre stage\n")
+
+	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:ST (2)\nWF:OTHER (1)\n")
+	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST", "OTHER"]`)
+
+	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
+		"--producers", "1", "--stages", stages, "--mrp-jobs", "3").Output()
+	if err != nil {
+		t.Fatalf("bench_metrics: %v", err)
+	}
+
+	var got struct {
+		CarriedMax map[string]int `json:"stage_carried_bytes_max"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("bench_metrics output %q: %v", out, err)
+	}
+
+	if diff := cmp.Diff(map[string]int{"ST": len(records), "OTHER": 0}, got.CarriedMax); diff != "" {
+		t.Errorf("stage_carried_bytes_max (-want +got):\n%s", diff)
+	}
+}
+
 // benchStagedMax runs bench_metrics.py over dir with stage process ST, whose
 // trace holds the one task traced, and returns its stage_staged_bytes_max.
 func benchStagedMax(t *testing.T, dir, traced string) map[string]int {

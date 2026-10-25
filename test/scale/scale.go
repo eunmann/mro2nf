@@ -25,7 +25,10 @@ type Metrics struct {
 	UploadedBytes int64  `json:"uploaded_bytes"`
 	// StagedBytesMax is, per stage process, the most bytes staged into one
 	// of its tasks.
-	StagedBytesMax  map[string]int64 `json:"stage_staged_bytes_max"`
+	StagedBytesMax map[string]int64 `json:"stage_staged_bytes_max"`
+	// CarriedBytesMax is, per stage process, the most bytes of value
+	// records one of its tasks' scripts carries.
+	CarriedBytesMax map[string]int64 `json:"stage_carried_bytes_max"`
 	ProbeWrites     int              `json:"probe_writes"`
 	Producers       int              `json:"producers"`
 	DriverHeapBytes int64            `json:"driver_heap_bytes"`
@@ -70,6 +73,12 @@ const (
 	// width's. It is judged per process because the mix of processes among
 	// the stage tasks changes with the width.
 	GateStagedBytes Gate = "staged-bytes-per-stage-task"
+	// GateCarriedBytes holds, per stage process, the most bytes of value
+	// records one of its tasks' scripts carries to the slack
+	// GateStagedBytes allows: an upstream output small enough to pass by
+	// value is still data the task is given, which grew with the width
+	// where an instance was given a collection it did not read (#614).
+	GateCarriedBytes Gate = "carried-bytes-per-stage-task"
 	// GateProbeWrites requires the same number of copies of the probe file
 	// per producer at both widths: a task that copies a broadcast file into
 	// every fork writes one more per fork.
@@ -120,7 +129,7 @@ func Evaluate(r Run, lim Limits) []Result {
 		{Gate: GateDriverHeap, Failure: heap(w.DriverHeapBytes, lim.HeapBytes)},
 	}
 
-	out := slices.Concat(fixed, stagedBytes(r, lim.StagedSlackBytes))
+	out := slices.Concat(fixed, stagedBytes(r, lim.StagedSlackBytes), carriedBytes(r, lim.StagedSlackBytes))
 
 	for i := range out {
 		out[i].Shape = r.Shape
@@ -161,17 +170,34 @@ func stagedBytes(r Run, slack int64) []Result {
 		return []Result{{Gate: GateStagedBytes, Failure: "no stage task staged anything"}}
 	}
 
+	return perProcess(r, GateStagedBytes, "bytes staged into one task", r.Narrow.StagedBytesMax, r.Wide.StagedBytesMax, slack)
+}
+
+// carriedBytes is GateCarriedBytes's result for each stage process of the
+// wide run that is not a gather. The metrics list every stage process,
+// carrying nothing or not, so none listed were not measured.
+func carriedBytes(r Run, slack int64) []Result {
+	if len(r.Narrow.CarriedBytesMax) == 0 || len(r.Wide.CarriedBytesMax) == 0 {
+		return []Result{{Gate: GateCarriedBytes, Failure: "the metrics list no stage process's carried bytes"}}
+	}
+
+	return perProcess(r, GateCarriedBytes, "value bytes carried into one task", r.Narrow.CarriedBytesMax, r.Wide.CarriedBytesMax, slack)
+}
+
+// perProcess is gate's result for each stage process of the wide run that
+// is not a gather, holding its wide peak to its narrow one.
+func perProcess(r Run, gate Gate, what string, narrow, wide map[string]int64, slack int64) []Result {
 	var out []Result
 
-	for _, p := range slices.Sorted(maps.Keys(r.Wide.StagedBytesMax)) {
+	for _, p := range slices.Sorted(maps.Keys(wide)) {
 		if slices.Contains(r.Gathers, p) {
 			continue
 		}
 
-		res := Result{Gate: GateStagedBytes, Process: p}
+		res := Result{Gate: gate, Process: p}
 
-		if n, ok := r.Narrow.StagedBytesMax[p]; ok {
-			res.Failure = grows("bytes staged into one task", n, r.Wide.StagedBytesMax[p], slack)
+		if n, ok := narrow[p]; ok {
+			res.Failure = grows(what, n, wide[p], slack)
 		} else {
 			res.Failure = "the process runs only at the wide width"
 		}

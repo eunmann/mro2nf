@@ -23,6 +23,11 @@ The staging probe reads every task work dir (see probe_task_dirs):
                  downloads
   stage_staged_bytes_max -- per stage process, the most bytes staged into
                  one of its tasks
+  stage_carried_bytes_max -- per stage process, the most bytes of value
+                 records one of its tasks' scripts carries (the values
+                 here-document): upstream outs the driver passes by value
+                 rather than staged, which the scale tier holds to the same
+                 at every width as staged bytes (#614)
   flat_staging -- set by --flat-staging: bench_report.py holds the largest
                  stage_staged_bytes_max to the same at every width
   uploaded_bytes / plumbing_uploaded_bytes -- bytes of the files all tasks /
@@ -321,6 +326,27 @@ def is_probe_copy(path, probe):
         return h.read(len(probe)) == probe
 
 
+VALUES_DOC = ("cat > values <<'MRO2NF_VALUES'", "MRO2NF_VALUES")
+
+
+def carried_bytes(d):
+    """Bytes of the value records the task's script carries (stage.nf valuesFile)."""
+    path = os.path.join(d, ".command.sh")
+    if not os.path.exists(path):
+        return 0
+    total, inside = 0, False
+    with open(path, "rb") as h:
+        for raw in h:
+            line = raw.decode().rstrip("\n")
+            if not inside and line.strip() == VALUES_DOC[0]:
+                inside = True
+            elif inside and line == VALUES_DOC[1]:
+                inside = False
+            elif inside:
+                total += len(raw)
+    return total
+
+
 def read_argv_probe(d):
     """Return the largest (argv, single argument) byte counts the wrapper logged."""
     path = os.path.join(d, ARGV_PROBE)
@@ -351,6 +377,7 @@ def probe_task_dirs(workdir, probe, stages):
         0,
     )
     m["stage_staged_bytes_max"] = {}
+    m["stage_carried_bytes_max"] = {}
     marker = probe.encode()
     for d in task_dirs(workdir):
         name, sources = read_command_run(d)
@@ -366,6 +393,8 @@ def probe_task_dirs(workdir, probe, stages):
             m["stage_staged_bytes"] += staged
             most = m["stage_staged_bytes_max"]
             most[name] = max(most.get(name, 0), staged)
+            carried = m["stage_carried_bytes_max"]
+            carried[name] = max(carried.get(name, 0), carried_bytes(d))
         else:
             m["plumbing_uploaded_bytes"] += uploaded
             if writes or any(is_probe_copy(p, marker) for s in sources for p in tree_files(s)):

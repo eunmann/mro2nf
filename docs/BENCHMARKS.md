@@ -63,6 +63,10 @@ script that logs each task's command line, and reads the driver JVM's GC log.
   into one of its tasks — within 64 bytes of the narrow width's. A split's join,
   which reads every chunk's output, is exempt in the `split` shape, whose width
   is the chunk count;
+- **value bytes carried per stage task** — per stage process, the most bytes
+  of value records one task's script carries — within the same 64 bytes, with
+  the same exemption: an upstream output passed by value is data the task is
+  given as much as a staged one (#614);
 - **probe copies per producer** identical at both widths, so no task copies a
   broadcast file into every fork;
 - **longest command-line argument** within 64 bytes of the narrow width's
@@ -188,6 +192,7 @@ reporting with a direct probe-file measurement:
 | `refs`       | work-dir scan | task dirs into which the probe file is staged/materialized |
 | `multiplier` | `refs / producers` | **per-file transfer multiplier (ideal = 1)** |
 | `staged_bytes` / `stage_staged_bytes` / `stage_staged_bytes_max` | `nxf_stage` in each `.command.run` | bytes of the inputs staged into all tasks / stage tasks / the largest task of each stage process |
+| `stage_carried_bytes_max` | the `values` here-document in each `.command.sh` | the most bytes of value records one task of each stage process carries: upstream outs passed by value rather than staged |
 | `uploaded_bytes` / `plumbing_uploaded_bytes` | task work dirs | bytes of the files all tasks / plumbing tasks wrote, every hard link counted |
 | `restaged_bytes` | task work dirs and `nxf_stage` | bytes of the files tasks wrote that are a hard link to, or a byte copy of, a file they staged |
 | `probe_writes` | task work dirs | files that are a copy of the probe file (ideal = `producers`) |
