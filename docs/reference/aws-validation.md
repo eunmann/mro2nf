@@ -3,15 +3,15 @@
 This is the record of mro2nf's live runs on AWS Batch over S3 and on AWS
 HealthOmics, 2026-10-12 to 2026-10-14. It covers what was checked, the
 CellRanger critical-path analysis, what each change bought, and the
-options that were ruled out. [`RUNNING.md`](RUNNING.md) holds the
-user-facing rules these runs established.
+options that were ruled out. The [user guide](../README.md#user-guide)
+holds the user-facing rules these runs established.
 
 ## Environment
 
 - **Account and region:** us-east-1 (HealthOmics is not offered in
   us-east-2).
 - **Stack:** `Mro2nfStack`, from
-  [`deploy/awsbatch-cdk`](../deploy/awsbatch-cdk/README.md):
+  [`deploy/awsbatch-cdk`](../../deploy/awsbatch-cdk/README.md):
   - a Spot queue (`SPOT_PRICE_CAPACITY_OPTIMIZED`, optimal instance
     classes, `minvCpus` 0, `maxvCpus` 256);
   - the work bucket mounted read-only at `/mnt/s3/<bucket>` with
@@ -160,16 +160,16 @@ measurable cost (`analysis/perf/r7/ebs_report.md`).
   absolute path inside a task's own work directory into a JSON value, and
   a later task opens it. Run 5, with the mount turned off, failed at
   `MAKE_SHARD` on that path. Paths written into text are out of scope
-  (#546; [Paths written into text](RUNNING.md#paths-written-into-text)).
+  (#546; [Paths written into text](../user-guide/files-and-paths.md#paths-written-into-text)).
   HealthOmics runs it as is, since its run storage is shared.
 - **HealthOmics output layout:** the outputs land at
   `<output-uri>/<run-id>/`. Earlier versions wrote them to
-  `<run-id>/pubdir/` (#586; [HealthOmics](RUNNING.md#healthomics)).
+  `<run-id>/pubdir/` (#586; [HealthOmics](../user-guide/profiles.md#aws-healthomics)).
 - **gp3 root volume:** the example stack provisions 1,000 MiB/s and
   6,000 IOPS. This costs about $0.07 per instance-hour above gp3's
   baseline, against $0.63 at the maxima. Set other values with
   `-c rootThroughputMiBps` and `-c rootIops`
-  ([`deploy/awsbatch-cdk/README.md`](../deploy/awsbatch-cdk/README.md#cost)).
+  ([`deploy/awsbatch-cdk/README.md`](../../deploy/awsbatch-cdk/README.md#cost)).
 
 ## Optimizations evaluated and ruled out
 
@@ -206,9 +206,9 @@ measurable cost (`analysis/perf/r7/ebs_report.md`).
 
 ## Reproduce or re-measure
 
-[`scripts/aws/perf/`](../scripts/aws/perf/README.md) holds the
+[`scripts/aws/perf/`](../../scripts/aws/perf/README.md) holds the
 analysis. To measure a new Batch run, launch it as
-[RUNNING.md](RUNNING.md#aws-batch) describes. The project writes
+[AWS Batch](../user-guide/profiles.md#aws-batch) describes. The project writes
 a new `trace-<timestamp>.txt` into the launch directory on each run, so
 pass the run's own trace by name. Within an hour of the run, while ECS
 still holds its task records, run:
@@ -229,7 +229,7 @@ scripts' README lists each step's inputs and outputs, and the optional
 EBS and log steps.
 
 The scripts recompute the tables above from the archive
-([recipe](../scripts/aws/perf/README.md#the-archived-cellranger-runs)).
+([recipe](../../scripts/aws/perf/README.md#the-archived-cellranger-runs)).
 Run 7's critical path comes out at 2,590 s over 66 tasks: 118.1 s
 dispatch, 1,225.5 s queue, 617.7 s nc, 540.4 s compute and 88.3 s poll.
 

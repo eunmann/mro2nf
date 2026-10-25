@@ -68,7 +68,7 @@ func rootlessDocker() bool {
 // mapping is under test. On ROOTLESS Docker the container's root already
 // maps to the host user, and the mapping maps to an unprivileged subuid that
 // cannot write the bind-mounted work dir, so the run clears it, as
-// docs/RUNNING.md tells a rootless user to.
+// docs/user-guide/profiles.md tells a rootless user to.
 func dockerProfileConfig() string {
 	if rootlessDocker() {
 		return "process.containerOptions = ''\n"
@@ -134,9 +134,9 @@ func runtimeImage(t *testing.T) string {
 }
 
 // pipelineImage builds the image a user builds for the fixture at dir, the
-// README's recipe: FROM the runtime image, with the fixture's code at the
-// path the project was transpiled from, under a tag named for name, and
-// returns the tag.
+// recipe of docs/user-guide/container-images.md: FROM the runtime image,
+// with the fixture's code at the path the project was transpiled from,
+// under a tag named for name, and returns the tag.
 func pipelineImage(t *testing.T, dir, name string) string {
 	t.Helper()
 

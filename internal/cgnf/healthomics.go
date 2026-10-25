@@ -47,10 +47,11 @@ const packageScript = `#!/usr/bin/env bash
 # conf/base.config and the healthomics profile's, with no profiles, as
 # HealthOmics applies the standard profile to a run that names none:
 #   ./package.sh <image>
-# Push the image every task runs in (README: Container image) to private
-# ECR in the run's region and name it by digest (<repo>@sha256:...): the
-# workflow pins it, so every run executes the code it was validated with,
-# and a run cannot name another. Then register it:
+# Push the image every task runs in (mro2nf's
+# docs/user-guide/container-images.md) to private ECR in the run's region
+# and name it by digest (<repo>@sha256:...): the workflow pins it, so every
+# run executes the code it was validated with, and a run cannot name
+# another. Then register it:
 #   aws omics create-workflow --engine NEXTFLOW --main main.nf \
 #     --definition-zip fileb://workflow.zip \
 #     --parameter-template file://parameter-template.json

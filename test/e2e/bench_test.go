@@ -356,14 +356,14 @@ var errNonLocalWorkdir = errors.New("BENCH_WORKDIR is non-local")
 // cannot walk the tree, so `refs` reads 0 and the regression gate would pass
 // vacuously — a real S3-transfer regression would slip through. Rather than
 // report a meaningless pass, the harness fails loudly: collecting the
-// object-store metric is out of scope (see docs/BENCHMARKS.md). The scheme
-// compare is case-insensitive (URI schemes are, per RFC 3986).
+// object-store metric is out of scope (see docs/development/benchmarks.md).
+// The scheme compare is case-insensitive (URI schemes are, per RFC 3986).
 func requireLocalWorkdir(w string) error {
 	if before, _, ok := strings.Cut(w, "://"); ok && !strings.EqualFold(before, "file") {
 		return fmt.Errorf("%w: BENCH_WORKDIR=%q (%s://): the bench gate's "+
 			"refs metric is a local work-dir scan and reads 0 over an object store, "+
 			"so the gate would pass vacuously; run bench against a local work dir "+
-			"(see docs/BENCHMARKS.md)", errNonLocalWorkdir, w, before)
+			"(see docs/development/benchmarks.md)", errNonLocalWorkdir, w, before)
 	}
 
 	return nil

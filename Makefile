@@ -128,8 +128,8 @@ deadcode: ## Fail on functions unreachable from the mro2nf/mre binaries
 	@out="$$($(DEADCODE) ./cmd/...)"; \
 	if [ -n "$$out" ]; then echo "$$out"; echo "deadcode: unreachable functions found"; exit 1; fi
 
-# make test fails while the checked-in table is stale (TestFeatureCoverageIsCurrent).
-docs-divergences: ## Regenerate FEATURE_COVERAGE.md's divergence table from test/e2e/divergences.json
+# make test fails while the checked-in table is stale (TestDivergencesDocIsCurrent).
+docs-divergences: ## Regenerate docs/reference/divergences.md's table from test/e2e/divergences.json
 	go run ./test/divergence/gendoc
 
 # make test fails while THIRD_PARTY_NOTICES is stale (TestNoticesAreCurrent).

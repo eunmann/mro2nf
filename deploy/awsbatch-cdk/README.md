@@ -96,10 +96,10 @@ new instances from the new launch template version.
 ## Run on AWS Batch + S3
 
 One transpiled project runs on every target; `-profile` chooses it
-(`docs/TRANSPILER.md` §9), every task in the one image `--mro2nf_image`
-names: the pipeline's image, built FROM the runtime image
+([Profiles](../../docs/user-guide/profiles.md)), every task in the one image
+`--mro2nf_image` names: the pipeline's image, built FROM the runtime image
 (`deploy/runtime/Dockerfile`) with the pipeline's code at the paths it was
-transpiled from (the README's "Container image").
+transpiled from ([Container images](../../docs/user-guide/container-images.md)).
 
 ```bash
 # 1. transpile (the same project serves Batch and HealthOmics)
@@ -160,8 +160,8 @@ aws omics start-run --workflow-id "$WF" --role-arn <OmicsRoleArn> \
 The workflow pins the image, so every run executes the code it was
 validated with; the parameter template declares only the pipeline's inputs
 and `mro2nf_overrides`, so a run cannot name another image. See
-[`docs/RUNNING.md`](../../docs/RUNNING.md) for the launch parameters and the
-other profiles.
+[Parameters](../../docs/user-guide/parameters.md) for the launch parameters and
+[Profiles](../../docs/user-guide/profiles.md) for the other profiles.
 
 ## Teardown
 
