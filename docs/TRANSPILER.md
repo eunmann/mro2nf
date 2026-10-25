@@ -225,7 +225,10 @@ references to it:
   the elements that do.
 The reads of a merge include what counting the merged call's forks reads
 (`Graph.countReads`, the walk `mrp`'s fork expansion makes), at the outer
-fork the merge's constraint fixes. The driver joins an instance on the
+fork the merge's constraint fixes. A merge that is the collection a split
+over the reader's own root forks is not counted: its element there is the
+one merged fork at the reader's index, which the instance reads alone, as its
+`_args` hold it (#614). The driver joins an instance on the
 shared and aligned roots' ordinals (`READ`, or `GATHER` under them) for one
 unlimited pattern, and through `NEEDS`, a keyed join per pattern regrouped
 per instance, otherwise. A disable binding forked on a
