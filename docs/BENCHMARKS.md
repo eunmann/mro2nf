@@ -191,6 +191,7 @@ reporting with a direct probe-file measurement:
 | `uploaded_bytes` / `plumbing_uploaded_bytes` | task work dirs | bytes of the files all tasks / plumbing tasks wrote, every hard link counted |
 | `restaged_bytes` | task work dirs and `nxf_stage` | bytes of the files tasks wrote that are a hard link to, or a byte copy of, a file they staged |
 | `probe_writes` | task work dirs | files that are a copy of the probe file (ideal = `producers`) |
+| `plumbing_probe_refs` | plumbing task dirs and `nxf_stage` | plumbing tasks that stage or write a copy of the probe file (must be 0) |
 | `max_argv_bytes` / `max_arg_bytes` | the scale tier's `mre` wrapper | the longest `mre` command line, and its longest argument |
 | `driver_heap_bytes` / `wall_seconds` | the scale tier's GC log and clock | the driver heap after a GC, and the run's wall time |
 
@@ -201,8 +202,8 @@ every on-disk staging/materialization is locatable.
 
 ## The gates
 
-`make bench` (`test/e2e/bench_report.py`) fails on any of the first three
-independent checks; the fourth is the differential's:
+`make bench` (`test/e2e/bench_report.py`) fails on any of the first four
+independent checks; the fifth is the differential's:
 
 - **Baseline gate** — per lane, `refs`, `plumbing_tasks`, and `tasks` must not
   exceed the committed baseline. A rise is respectively a reintroduced per-hop
@@ -234,6 +235,11 @@ independent checks; the fourth is the differential's:
   stage task per Martian job, so stage work is neither duplicated nor hidden
   in plumbing. `TestMrpDiffBenchJobs` (in `make test-e2e` / `make
   test-mrp-diff`, which have mrp) keeps each lane's `mrp_jobs` true to real mrp.
+- **Publish gate** — every lane's `plumbing_probe_refs` must be 0: OUTS lays
+  out the published tree from the outs' skeletons, and the workflow outputs
+  publish each file from the task that wrote it, so no plumbing task stages
+  or writes a published file's bytes (#610). Every lane that publishes its
+  probe file fails it when OUTS stages the files it publishes.
 - **outputs** — the gates above count tasks and bytes, not results:
   `TestMrpDiff/bench/<fixture>` compares each fixture's narrower-width
   invocation with real mrp like any testdata fixture.
