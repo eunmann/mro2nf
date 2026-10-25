@@ -64,6 +64,15 @@
       "outcome": {"failed": true, "failures": [{"kind": "error", "stage": ""}]}
     },
     {
+      "id": "post-outer-fork",
+      "kind": "outcome",
+      "feature": "a map call whose forks vary with an outer map call its source's producer is not forked on",
+      "summary": "When a map call's split source is a stage's outs gathered over one map call and split again by another, as `post_outer_fork`'s USE splits OUTER's element, which is SRC's outs gathered over INNER, and INNER maps over two or more elements, mrp fails resolving USE's forks (`matched 2 out of 2 forks of ID.mrp.TOP.INNER.SRC, need exactly 1`) before it runs USE; mro2nf fails SRC's post, which writes USE's forks, at the first fork of OUTER whose element another instance of SRC holds.",
+      "justification": "Martian compiles OUTER's elements to references to SRC's outs that name no fork of INNER (`split(OUTER) [ID.mrp.TOP.INNER.SRC.xs,ID.mrp.TOP.INNER.SRC.xs]` in mrp's error), so each matches every fork of SRC, and mrp's fork resolution needs exactly one. Both runs fail before USE runs. An instance of SRC stages only its own outs, so its post fails rather than write USE's forks under every fork of OUTER from every instance of SRC. Over one element (`rt_gate_split_nested`) both runs succeed, so mro2nf cannot refuse the shape when it transpiles.",
+      "evidence": ["TestMrpDiffFailureParity/post_outer_fork", "TestPostFailsUnderAnOuterForkItDoesNotHold", "TestRemovingAnOutcomeEntryFailsItsCase"],
+      "outcome": {"failed": true, "failures": [{"kind": "error", "stage": "SRC"}]}
+    },
+    {
       "id": "input-file-siblings",
       "kind": "outcome",
       "feature": "a stage opening files beside a file input",
