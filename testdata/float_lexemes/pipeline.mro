@@ -1,0 +1,49 @@
+# Float lexemes in the pipeline outs: mrp's _outs keeps each number as its
+# writer spelled it (1e+21, 1e-07, -0.0, and -0 for the -0.0 literal it
+# passes on), and pipeline_outs.json must too. Nextflow's workflow-output
+# index re-spells them (1E+21, 0.0), so it cannot write that file (#612,
+# TestWorkflowIndexRespellsNumbers).
+stage FLOATS(
+    in  float   seed,
+    out float   big,
+    out float   negz,
+    out float   tiny,
+    out float   third,
+    out float   whole,
+    out float[] arr,
+    src py      "stages/floats",
+)
+
+pipeline P(
+    in  float   pz,
+    in  float   pbig,
+    out float   big,
+    out float   negz,
+    out float   tiny,
+    out float   third,
+    out float   whole,
+    out float[] arr,
+    out float   pz,
+    out float   pbig,
+)
+{
+    call FLOATS(
+        seed = self.pz,
+    )
+
+    return (
+        big   = FLOATS.big,
+        negz  = FLOATS.negz,
+        tiny  = FLOATS.tiny,
+        third = FLOATS.third,
+        whole = FLOATS.whole,
+        arr   = FLOATS.arr,
+        pz    = self.pz,
+        pbig  = self.pbig,
+    )
+}
+
+call P(
+    pz   = -0.0,
+    pbig = 1e21,
+)

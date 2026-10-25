@@ -125,6 +125,8 @@ var goldenCases = []goldenCase{
 	{"literals", "literals", "expected/outs.json"},
 	// #238: whole-number float literals >= 1e6 stay floats for a Python stage.
 	{"literals_big", "literals_big", "expected/outs.json"},
+	// #612: float outputs keep mrp's lexemes (1e+21, -0.0, -0).
+	{"float_lexemes", "float_lexemes", "expected/outs.json"},
 	{"fanin", "fanin", "expected/outs.json"},
 	{"map_split_file", "map_split_file", "expected/outs.json"},
 	// #217: file-typed chunk-def arg the split phase creates, read by the JOIN.

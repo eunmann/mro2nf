@@ -487,6 +487,8 @@ var mrpDiffCases = []mrpDiffCase{
 	// floats; the outputs are type+repr strings, since the _outs JSON diff
 	// alone would equate 1e+06 with 1000000.
 	{name: "literals_big"},
+	// #612: float outputs keep mrp's lexemes (1e+21, -0.0, -0).
+	{name: "float_lexemes"},
 	// A comp stage split/main/join, which both runners run through mrjob.
 	{name: "comp_split"},
 	// The remaining runnable fixtures: each golden-suite shape faces live mrp,
