@@ -194,7 +194,7 @@ func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 		roots[r.Call()] = r
 	}
 
-	in := &readerSplits{roots: roots, served: func(x *syntax.SplitExp) bool {
+	in := &readerSplits{own: st.ForkRoots(), roots: roots, served: func(x *syntax.SplitExp) bool {
 		if _, partnered := g.partnerOf(st, x); partnered {
 			return true
 		}
@@ -400,10 +400,21 @@ func readList(fields map[string]map[string]bool) []Read {
 
 // readerSplits are the splits of one reader's bindings collectReads tells
 // apart: those a staged element serves, and those over the reader's own
-// roots.
+// roots, own, by call.
 type readerSplits struct {
 	served func(*syntax.SplitExp) bool
+	own    syntax.ForkRootList
 	roots  map[*syntax.CallStm]*syntax.CallGraphStage
+}
+
+// forkRoots are the roots the reader is forked on, none for the pipeline's
+// outs.
+func (in *readerSplits) forkRoots() syntax.ForkRootList {
+	if in == nil {
+		return nil
+	}
+
+	return in.own
 }
 
 // collectReads adds to fields the stage outs e reads, less the splits of
@@ -423,26 +434,33 @@ func (g *Graph) collectReads(e syntax.Exp, in *readerSplits, fields map[string]m
 			g.collectReads(v, in, fields)
 		}
 	case *syntax.MergeExp:
-		if g.mergeGathersNone(x) {
-			return
-		}
-
-		g.collectReads(x.Value, in, fields)
-
-		if x.ForkNode != nil {
-			addRead(fields, x.ForkNode)
-		}
-
-		// A merge over a root whose forks a stage fixes takes them from the
-		// root's source, as mrp does: the instances it gathers are no
-		// count of them, as a disabled one posts none. It reads what
-		// counting them reads (countReads), not the source's every value.
-		for _, r := range g.countReads(x.Call) {
-			addRead(fields, r)
-		}
+		g.collectMerge(x, in, fields)
 	case *syntax.DisabledExp:
 		g.collectReads(x.Disabled, in, fields)
 		g.collectReads(x.Value, in, fields)
+	}
+}
+
+// collectMerge adds to fields the stage outs x reads where in resolves it.
+// A merge over a root whose forks a stage fixes takes them from the root's
+// source, as mrp does: the instances it gathers are no count of them, as a
+// disabled one posts none. It reads what counting them reads (countReads),
+// not the source's every value.
+func (g *Graph) collectMerge(x *syntax.MergeExp, in *readerSplits, fields map[string]map[string]bool) {
+	if g.mergeGathersNone(x, in.forkRoots()) {
+		return
+	}
+
+	g.collectReads(x.Value, in, fields)
+
+	if x.ForkNode != nil {
+		addRead(fields, x.ForkNode)
+	}
+
+	if root, ok := g.mergeCounted(x, in.forkRoots()); ok {
+		for _, r := range g.countReads(root) {
+			addRead(fields, r)
+		}
 	}
 }
 
@@ -471,7 +489,7 @@ func (g *Graph) collectSplit(x *syntax.SplitExp, in *readerSplits, fields map[st
 func (g *Graph) collectCollection(v syntax.Exp, in *readerSplits, fields map[string]map[string]bool) {
 	switch x := v.(type) {
 	case *syntax.MergeExp:
-		if !g.mergeGathersNone(x) {
+		if !g.mergeGathersNone(x, in.forkRoots()) {
 			g.collectReads(x.Value, in, fields)
 		}
 	case *syntax.DisabledExp:

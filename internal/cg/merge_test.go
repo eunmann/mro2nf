@@ -3,6 +3,7 @@ package cg
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -250,6 +251,24 @@ func structOuts(f *fixture) []string {
 		f.outs("TOP.SUB.P.SQ", Fork{first, f.part("TOP.SUB.P", ArrayIndex(1))}, `{"y":4}`),
 		f.outs("TOP.SUB.MK", Fork{first}, `{"xs":[1,2],"km":{}}`),
 		f.outs("TOP.SUB.MK", Fork{f.part("TOP.SUB", ArrayIndex(1))}, `{"xs":[],"km":{}}`),
+	}
+}
+
+// TestMergeOfRootedPipelineReadsItsCount (#613, gen-diff seed
+// 156120001705268): r17 merges P2.r10, a null, over P2's forks. P2 maps
+// over ST4's forks, which C0's o3 fixes, and Martian roots P2 on itself
+// through r11, so mrp's getParts counts r17's keys from C0's outs: the
+// pipeline outs read C0, and wait for it.
+func TestMergeOfRootedPipelineReadsItsCount(t *testing.T) {
+	f := loadFixture(t, "merge_sub_root")
+
+	top, err := f.g.Topology()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.ContainsFunc(top.Outs, func(r Read) bool { return r.Node == "TOP.P0.C0" }) {
+		t.Errorf("pipeline outs read %v, want TOP.P0.C0, whose o3 fixes r17's forks", top.Outs)
 	}
 }
 

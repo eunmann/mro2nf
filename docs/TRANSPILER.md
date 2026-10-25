@@ -223,9 +223,14 @@ references to it:
 - the upstream's other roots it gathers;
 - where a split's elements do not all read the upstream, it is limited to
   the elements that do.
-The reads of a merge include what counting the merged call's forks reads
+The reads of a merge include what counting the forks it gathers reads
 (`Graph.countReads`, the walk `mrp`'s fork expansion makes), at the outer
-fork the merge's constraint fixes. A merge that is the collection a split
+fork the merge's constraint fixes. Those forks are the ones `mrp`'s
+`getParts` takes (`Graph.mergeCounted`): the merged call's, where the node the
+merge is bound to has a root on that call. Otherwise, when Martian does not
+know the call's length, they are the forks of the bound node's single root,
+if it has exactly one and the reader is not forked on it (#613). In every
+other case the merge gathers none. A merge that is the collection a split
 over the reader's own root forks is not counted: its element there is the
 one merged fork at the reader's index, which the instance reads alone, as its
 `_args` hold it (#614). The driver joins an instance on the

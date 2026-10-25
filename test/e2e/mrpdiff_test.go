@@ -642,6 +642,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// Martian gave no fork root, gathering none of its forks, or its
 	// compile-time forks.
 	{name: "merge_unforked_pipeline"},
+	// #613 (gen-diff seed 156120001705268): a merge constrained to a stage
+	// with no root on the merged call gathers that stage's one root's
+	// forks, which the pipeline outs wait for.
+	{name: "merge_sub_root"},
 	// #565: a top-level map call's outs are its pipeline's per fork, each
 	// fork's files published under outs/<fork key>/.
 	// TestMrpDiffSplitEntryOverride launches it with other split values.
