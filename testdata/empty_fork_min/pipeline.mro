@@ -1,10 +1,10 @@
 # A map call over an INVOCATION-known empty collection ([] baked through the
-# launch call): Martian's static resolver prunes the zero-fork call, so the
-# output resolves to NULL. The run's plan compiles the invocation as mrp does,
-# keeping entry inputs overridable at launch (#99): override `values` to a
-# non-empty list and the forks run (expected/override_outs.json pins that); a
-# stage-produced empty/null source merges to the typed empty instead
-# (runtime_empty_forks).
+# launch call): Martian's static resolver merges the zero-fork call to the
+# typed empty [], as a stage-produced empty source merges at run time
+# (runtime_empty_forks); Martian before 50ad6c0 merged it to null. The run's
+# plan compiles the invocation as mrp does, keeping entry inputs overridable
+# at launch (#99): override `values` to a non-empty list and the forks run
+# (expected/override_outs.json pins that).
 stage SCALE(
     in  float value,
     in  float factor,

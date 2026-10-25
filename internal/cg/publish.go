@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -19,6 +22,8 @@ var (
 	errNoLocation  = errors.New("no location for a staged outs bundle")
 	errUnpublished = errors.New("published file missing")
 	errStrayPath   = errors.New("pipeline outs name a path of the reconstructed pipestance")
+	errNoIdentity  = errors.New("no device and inode for a placed path")
+	errNoSource    = errors.New("published path placed from no staged file")
 )
 
 // pipestance is the pipestance Martian's post-processing publishes the
@@ -48,7 +53,34 @@ type pipestance struct {
 	// entry maps each entry file value the task staged to the path it reads
 	// it at.
 	entry map[string]string
-	n     int
+	// sources maps each placed path, by its file's identity, which
+	// PostProcess's rename keeps, to the file the run publishes it from.
+	sources map[fileKey]placedSource
+	n       int
+}
+
+// placedSource is the file the run publishes a placed path from: a file a
+// stage task wrote, by where its task keeps it (task), or any other, an
+// entry file or a host path, by its path here (external), which no task
+// dir holds and so Nextflow publishes only once a task writes it.
+type placedSource struct {
+	task, external string
+}
+
+// below is the source of the path rel below a placed dir that s is the
+// source of.
+func (s placedSource) below(rel string) placedSource {
+	if s.external != "" {
+		return placedSource{external: s.external + rel}
+	}
+
+	return placedSource{task: s.task + filepath.ToSlash(rel)}
+}
+
+// fileKey identifies a file by its device and inode, as shim's dirID: int64
+// keeps the conversions from Stat_t's per-platform field types necessary.
+type fileKey struct {
+	dev, ino int64
 }
 
 // forkShape is the shape of the top-level call's outs: params are its
@@ -117,7 +149,7 @@ func newPipestance(spec OutsSpec, items []string, shape forkShape) (*pipestance,
 		dir: filepath.Join(work, "pipestance"), linked: filepath.Join(work, "linked"), shape: shape,
 		locations: spec.Locations, tasks: map[string]string{},
 		origins: map[string]string{}, placed: map[string]string{}, names: map[string]string{}, links: map[string]string{},
-		entry: spec.EntryFiles,
+		entry: spec.EntryFiles, sources: map[fileKey]placedSource{},
 	}
 	p.outs = filepath.Join(p.dir, "outs")
 
@@ -221,7 +253,7 @@ func (p *pipestance) place(leaf string) (string, error) {
 
 	var at string
 	if o.Linked {
-		at, err = p.copy(leaf, p.linked)
+		at, err = p.copy(leaf, p.linked, linkedSource(leaf, o))
 	} else {
 		at, err = p.placeOwn(o.Path)
 	}
@@ -250,8 +282,14 @@ func (p *pipestance) placeOwn(origin string) (string, error) {
 
 	at, ok := p.placed[top]
 	if !ok {
-		var err error
-		if at, err = p.copy(p.origins[top], filepath.Join(p.dir, "files")); err != nil {
+		leaf := p.origins[top]
+
+		o, err := p.identify(leaf)
+		if err != nil {
+			return "", err
+		}
+
+		if at, err = p.copy(leaf, filepath.Join(p.dir, "files"), placedSource{task: o.name}); err != nil {
 			return "", err
 		}
 
@@ -261,9 +299,21 @@ func (p *pipestance) placeOwn(origin string) (string, error) {
 	return filepath.Join(at, strings.TrimPrefix(origin, top)), nil
 }
 
-// copy copies the file leaf at leaf to a dir of its own below root and
-// returns the copy's path.
-func (p *pipestance) copy(leaf, root string) (string, error) {
+// linkedSource is the source of the Linked file leaf at leaf, of origin o:
+// a bundle's leaf where its task keeps it, and any other file, which no
+// stage task wrote, itself.
+func linkedSource(leaf string, o leafOrigin) placedSource {
+	if _, _, ok := shim.LeafBundle(leaf); ok {
+		return placedSource{task: o.name}
+	}
+
+	return placedSource{external: leaf}
+}
+
+// copy places the shape of the file leaf at leaf, whose source is src, in
+// a dir of its own below root, and returns its path there. Post-processing
+// reads no file's bytes, so none is copied.
+func (p *pipestance) copy(leaf, root string, src placedSource) (string, error) {
 	p.n++
 	at := filepath.Join(root, strconv.Itoa(p.n), filepath.Base(leaf))
 
@@ -271,11 +321,50 @@ func (p *pipestance) copy(leaf, root string) (string, error) {
 		return "", fmt.Errorf("pipeline outs: %w", err)
 	}
 
-	if err := shim.CopyTree(leaf, at); err != nil {
+	if err := shim.CopyShape(leaf, at); err != nil {
 		return "", fmt.Errorf("pipeline outs: place %s: %w", leaf, err)
 	}
 
-	return at, nil
+	return at, p.recordSources(at, src)
+}
+
+// recordSources records the source of each path of the tree placed at at:
+// src, and below it, the same path below src.
+func (p *pipestance) recordSources(at string, src placedSource) error {
+	err := filepath.WalkDir(at, func(path string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		k, err := keyOf(path)
+		if err != nil {
+			return err
+		}
+
+		p.sources[k] = src.below(strings.TrimPrefix(path, at))
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("pipeline outs: place %s: %w", at, err)
+	}
+
+	return nil
+}
+
+// keyOf is the identity of the file at path, its links followed.
+func keyOf(path string) (fileKey, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileKey{}, fmt.Errorf("stat %s: %w", path, err)
+	}
+
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fileKey{}, fmt.Errorf("%w: %s", errNoIdentity, path)
+	}
+
+	return fileKey{dev: int64(st.Dev), ino: int64(st.Ino)}, nil
 }
 
 // leafOrigin is the origin of a file leaf and its name when left
@@ -421,40 +510,145 @@ func (p *pipestance) indexLinks() error {
 	return nil
 }
 
-// materialize writes the published tree at outs/ into results, each link
-// replaced by what it reaches, since a publish dir may be an object store.
-func (p *pipestance) materialize(results string) error {
-	if err := os.MkdirAll(results, dirPerm); err != nil {
+// externalDir is the dir beside the manifest that OUTS copies each
+// published file no stage task wrote into, from which the run publishes it.
+const externalDir = "external"
+
+// published is one entry of the published tree: its path in the tree and
+// the file the run publishes it from, where the task that wrote it keeps
+// it, or, Local, a path beside the manifest.
+type published struct {
+	Path   string `json:"path"`
+	Source string `json:"source"`
+	Local  bool   `json:"local,omitempty"`
+}
+
+// manifest writes to path the published tree at outs/ as the entries the
+// run publishes, by path: each file PostProcess moved or linked into
+// outs/, a link as what it reaches, since a publish dir may be an object
+// store, and a placed dir whole.
+func (p *pipestance) manifest(path string) error {
+	entries, err := p.entries(filepath.Dir(path))
+	if err != nil {
 		return fmt.Errorf("published tree: %w", err)
 	}
 
+	slices.SortFunc(entries, func(a, b published) int { return strings.Compare(a.Path, b.Path) })
+
+	return writeRecord(path, entries)
+}
+
+// entries are the entries of the published tree at outs/, none where
+// PostProcess published nothing, each external one copied below dir.
+func (p *pipestance) entries(dir string) ([]published, error) {
+	entries := []published{}
+
 	if _, err := os.Lstat(p.outs); errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return entries, nil
 	}
 
-	err := filepath.WalkDir(p.outs, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || path == p.outs {
+	err := filepath.WalkDir(p.outs, func(at string, d fs.DirEntry, err error) error {
+		if err != nil || at == p.outs {
 			return err
 		}
 
-		rel := strings.TrimPrefix(path, p.outs+string(filepath.Separator))
-		dst := filepath.Join(results, rel)
+		rel := filepath.ToSlash(strings.TrimPrefix(at, p.outs+string(filepath.Separator)))
 
-		switch {
-		case d.Type()&fs.ModeSymlink != 0:
-			if _, err := os.Stat(path); err != nil {
-				return danglingLink(filepath.ToSlash(rel), err)
-			}
-
-			return shim.CopyTree(path, dst)
-		case d.IsDir():
-			return os.MkdirAll(dst, dirPerm)
-		default:
-			return shim.CopyTree(path, dst)
+		src, whole, err := p.source(at, rel, d)
+		if err != nil || src == (placedSource{}) {
+			return err
 		}
+
+		e, err := p.publishedAt(rel, src, dir)
+		if err != nil {
+			return err
+		}
+
+		entries = append(entries, e)
+
+		if whole {
+			return filepath.SkipDir
+		}
+
+		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("published tree: %w", err)
+		return nil, fmt.Errorf("walk outs/: %w", err)
+	}
+
+	return entries, nil
+}
+
+// publishedAt is the entry at rel in the tree published from src: a file
+// a stage task wrote from where its task keeps it, and any other from its
+// copy below dir, external/<n>/, as Nextflow publishes only a file a task
+// wrote.
+func (p *pipestance) publishedAt(rel string, src placedSource, dir string) (published, error) {
+	if src.external == "" {
+		return published{Path: rel, Source: src.task}, nil
+	}
+
+	p.n++
+	local := path.Join(externalDir, strconv.Itoa(p.n), path.Base(rel))
+	at := filepath.Join(dir, filepath.FromSlash(local))
+
+	if err := os.MkdirAll(filepath.Dir(at), dirPerm); err != nil {
+		return published{}, fmt.Errorf("publish outs/%s: %w", rel, err)
+	}
+
+	if err := shim.CopyTree(src.external, at); err != nil {
+		return published{}, fmt.Errorf("publish outs/%s: %w", rel, err)
+	}
+
+	return published{Path: rel, Source: local, Local: true}, nil
+}
+
+// source is the source of the entry d at at, rel in outs/, and whether it
+// is a placed dir, published whole; none for a dir PostProcess made, whose
+// entries are published each.
+func (p *pipestance) source(at, rel string, d fs.DirEntry) (placedSource, bool, error) {
+	if d.Type()&fs.ModeSymlink != 0 {
+		if _, err := os.Stat(at); err != nil {
+			return placedSource{}, false, danglingLink(rel, err)
+		}
+	}
+
+	k, err := keyOf(at)
+	if err != nil {
+		return placedSource{}, false, err
+	}
+
+	src, ok := p.sources[k]
+
+	switch {
+	case !ok && d.IsDir():
+		return placedSource{}, false, nil
+	case !ok:
+		return placedSource{}, false, fmt.Errorf("%w: outs/%s", errNoSource, rel)
+	case d.IsDir():
+		return src, true, reachesAll(at, rel)
+	default:
+		return src, false, nil
+	}
+}
+
+// reachesAll fails on a link below the placed dir at at, rel in outs/,
+// that reaches nothing: the link PostProcess leaves where it moved out an
+// entry the pipeline outs publish apart from the dir.
+func reachesAll(at, rel string) error {
+	err := filepath.WalkDir(at, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.Type()&fs.ModeSymlink == 0 {
+			return err
+		}
+
+		if _, err := os.Stat(path); err != nil {
+			return danglingLink(rel+filepath.ToSlash(strings.TrimPrefix(path, at)), err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("published dir outs/%s: %w", rel, err)
 	}
 
 	return nil

@@ -1,7 +1,7 @@
-# #387: rt_gate_split_reject with the gated producer a pass-through
+# #387, #595: rt_gate_split with the gated producer a pass-through
 # sub-pipeline. PASS returns its literal input, so B splits a runtime-gated
-# array literal, which mrp refuses before any stage runs even when the array is
-# empty. mro2nf refuses it at transpile time.
+# array literal (`[] unless GATE.off`): GATE's outs fix B's forks, none here.
+# Martian refused this before 50ad6c0.
 stage GATE(
     in  bool v,
     out bool off,

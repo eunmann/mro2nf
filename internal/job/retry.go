@@ -15,7 +15,7 @@ const TransientExitCode = 75
 const DefaultRetries = 2
 
 // ErrTransient marks a job failure mrp retries: one whose _errors has a
-// line matching a retry_on pattern of retry.json (core/node.go:848
+// line matching a retry_on pattern of retry.json (core/node.go:858
 // isErrorTransient). mrp retries no other failure, and never an
 // assertion; a stage that exceeds its memory under --monitor is retried
 // only under --auto-adjust-memory, which mre does not support.

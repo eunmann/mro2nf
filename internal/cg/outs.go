@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 
+	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
@@ -32,16 +34,20 @@ type OutsSpec struct {
 	EntryFiles map[string]string
 	// Work is the dir the pipestance is reconstructed in.
 	Work string
-	// Results receives the published tree, and OutsJSON the outs JSON that
-	// names each published file by its path in it.
-	Results, OutsJSON string
+	// Manifest receives the published tree as the run publishes it: a line
+	// per entry, its path in the tree and, tab-separated, where the task
+	// that wrote it keeps it. OutsJSON receives the outs JSON that names
+	// each published file by its path in the tree.
+	Manifest, OutsJSON string
 }
 
-// WriteOuts resolves the invocation's pipeline outs (core/resolve.go:183
+// WriteOuts resolves the invocation's pipeline outs (core/resolve.go:184
 // resolvePipelineOutputs), checks them as mrp does, and publishes them as
 // mrp does, with Martian's own post-processing (core/post_process.go) on a
-// pipestance reconstructed from them. Then it writes the published tree and
-// the outs JSON naming it.
+// pipestance reconstructed from them. Then it writes the manifest of the
+// published tree and the outs JSON naming it. Post-processing reads no
+// file's bytes, so the staged outs may be their skeletons
+// (shim.ExpandSkeleton).
 func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 	staged, err := shim.NewStaged(append(slices.Clone(spec.In), spec.Refs)...)
 	if err != nil {
@@ -78,6 +84,10 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 		return err
 	}
 
+	if err := g.writeSourceGates(s, ps.dir); err != nil {
+		return err
+	}
+
 	if err := g.postProcess(ctx, ps.dir); err != nil {
 		return err
 	}
@@ -87,7 +97,7 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 		return err
 	}
 
-	if err := ps.materialize(spec.Results); err != nil {
+	if err := ps.manifest(spec.Manifest); err != nil {
 		return err
 	}
 
@@ -117,6 +127,64 @@ func (g *Graph) pipelineOuts(s *stagedStore) (json.Marshaler, syntax.Type, error
 	}
 
 	return v, ro.Type, nil
+}
+
+// writeSourceGates writes into the pipestance at ps the outs of every
+// instance of the stages sourceGates read, where an mrp pipestance holds
+// them, at the instance's fork dir, so the reattach postProcess makes finds
+// them ready.
+func (g *Graph) writeSourceGates(s *stagedStore, ps string) error {
+	r := &resolver{g: g, st: s}
+
+	var ids []string
+	for _, d := range g.sourceGates() {
+		ids = union(ids, refIDs(d))
+	}
+
+	for _, id := range ids {
+		st, err := g.Stage(id)
+		if err != nil {
+			return err
+		}
+
+		for _, f := range s.forks[id] {
+			lens, err := r.forkLens(f)
+			if err != nil {
+				return fmt.Errorf("gate %s: %w", id, err)
+			}
+
+			outs, err := s.outs(st, f)
+			if err != nil {
+				return fmt.Errorf("gate %s: %w", id, err)
+			}
+
+			path := filepath.Join(ps, filepath.FromSlash(strings.ReplaceAll(id, ".", "/")), f.ID(lens), "_outs")
+			if err := writeJSONFile(path, outs); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// forkLens is the fork count of each of f's roots under the parts of f
+// its fork set varies with.
+func (r *resolver) forkLens(f Fork) ([]int, error) {
+	lens := make([]int, len(f))
+
+	for i, p := range f {
+		outer, _ := f.restrict(r.g.outerRoots(p.Root))
+
+		idx, err := r.indices(p.Root, outer)
+		if err != nil {
+			return nil, err
+		}
+
+		lens[i] = len(idx)
+	}
+
+	return lens, nil
 }
 
 // postProcess runs Martian's PostProcess on the pipestance at ps, attached
@@ -153,7 +221,7 @@ func (g *Graph) verifyPipelineOutputs(v json.Marshaler, t syntax.Type) error {
 			}
 		}
 	case *syntax.ArrayType:
-		if a, ok := v.(marshalerArray); ok {
+		if a, ok := mrcore.Elements(v); ok {
 			for _, e := range a {
 				if err := g.verifyPipelineOutputs(e, t.Elem); err != nil {
 					return err

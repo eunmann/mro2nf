@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -150,6 +151,107 @@ func TestMrpDiffHostEntryPaths(t *testing.T) {
 
 	if d := cmp.Diff(mrpPaths, nfPaths); d != "" {
 		t.Errorf("the paths below the inputs the stages' _args name (-mrp +mro2nf):\n%s", d)
+	}
+}
+
+// hostEntryOutsMRO returns a head-node entry file from the pipeline and
+// through a stage that passes it on, at the path %s.
+const hostEntryOutsMRO = `filetype txt;
+
+stage PASS(
+    in  txt f,
+    out txt g,
+    src py  "stages/pass",
+)
+
+pipeline PUB(
+    in  txt ref,
+    out txt direct,
+    out txt passed,
+)
+{
+    call PASS(
+        f = self.ref,
+    )
+
+    return (
+        direct = self.ref,
+        passed = PASS.g,
+    )
+}
+
+call PUB(
+    ref = %q,
+)
+`
+
+// TestMrpDiffPublishesHostEntryFiles (#610): pipeline outs that reach a
+// head-node entry file, directly and through a stage that returns it,
+// publish as mrp's do, a copy of the file at each output. Nextflow 26.04
+// publishes no file outside a task's work dir, logging a
+// NullPointerException and losing it while the run succeeds, so OUTS
+// copies such a file into its external/ dir, the one task that holds it,
+// and the run publishes it from there.
+func TestMrpDiffPublishesHostEntryFiles(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	bin := martianBin(t)
+
+	shardSkip(t)
+
+	const content = "host entry file, published from OUTS's copy"
+
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "input", "ref.txt")
+
+	for path, body := range map[string]string{
+		ref: content, filepath.Join(dir, "pipeline.mro"): fmt.Sprintf(hostEntryOutsMRO, ref),
+		filepath.Join(dir, "stages", "pass", "__init__.py"): "def main(args, outs):\n    outs.g = args.f\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		writeFileT(t, path, body)
+	}
+
+	tmp := t.TempDir()
+	runMrpAt(t, bin, dir, "pipeline.mro", tmp)
+
+	proj := transpileDir(t, dir)
+	if err := runNextflow(t, proj, mrpPoolArgs(t, proj)...); err != nil {
+		t.Fatalf("nextflow: %v", err)
+	}
+
+	compareMrpToNextflow(t, "host_entry_outs", tmp, proj)
+
+	for _, name := range []string{"direct.txt", "passed.txt"} {
+		assertFileContent(t, filepath.Join(proj, "results", name), content)
+	}
+
+	var copies []string
+
+	err := filepath.WalkDir(filepath.Join(proj, "work"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
+			return err
+		}
+
+		if raw, err := os.ReadFile(path); err == nil && string(raw) == content {
+			copies = append(copies, filepath.Base(filepath.Dir(filepath.Dir(path)))+"/"+filepath.Base(path))
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	slices.Sort(copies)
+
+	if d := cmp.Diff([]string{"external/direct.txt", "external/passed.txt"}, copies); d != "" {
+		t.Errorf("the tasks' copies of the entry file (-OUTS's external/ copy per output +got):\n%s", d)
 	}
 }
 

@@ -411,23 +411,25 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "map_key_sort"},
 	// #99: an upstream map fork with real keys.
 	{name: "map_fork_upstream"},
+	// #595: B maps over A's outs, and A over a stage's: B's fork i reads
+	// A's fork i.
+	{name: "map_chain_runtime"},
 	// #99 empty-fork fidelity, both sides of the static/runtime split:
-	// an invocation-known empty split source merges to null (mrp's static
-	// resolver prunes the zero-fork call); an upstream empty/null
-	// collection merges to the typed empty at runtime.
+	// an invocation-known empty split source merges statically, an upstream
+	// empty/null collection at runtime, each to the typed empty.
 	{name: "empty_fork_min"},
 	{name: "empty_map_fork"},
 	{name: "runtime_empty_forks"},
-	// #127 value-chain empty-fork classes: mrp's static resolver prunes
-	// each to null (sub-pipeline chain to an entry value, in-pipeline
-	// cascade through a mapped call, mixed entry+upstream zip).
+	// #127 value-chain empty-fork classes: mrp's static resolver merges
+	// each (sub-pipeline chain to an entry value, in-pipeline cascade
+	// through a mapped call, mixed entry+upstream zip).
 	{name: "empty_fork_sub"},
 	{name: "empty_fork_cascade"},
 	{name: "empty_fork_mixed"},
 	// #241: SUB at two call sites (invocation-known empty vs runtime empty).
 	{name: "empty_fork_two_sites"},
 	// #383: splits over disable-gated producers of invocation-known sources,
-	// under literal and runtime gates; mrp prunes each to null.
+	// under literal and runtime gates; mrp merges each statically.
 	{name: "empty_fork_gated"},
 	{name: "empty_fork_gated_sub"},
 	// #435: splits of a mapped call's whole ref over an invocation-known null
@@ -593,6 +595,7 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "bench/zip", mro: "pipeline_w4.mro"},
 	{name: "bench/zipgated", mro: "pipeline_w4.mro"},
 	{name: "bench/splitbroadcast", mro: "pipeline_w4.mro"},
+	{name: "bench/mapchain", mro: "pipeline_w4.mro"},
 	// #464: a map call zipping splits forks over its master source, and the
 	// other sources read null past their end.
 	{name: "zip_runtime"},
@@ -600,10 +603,43 @@ var mrpDiffCases = []mrpDiffCase{
 	// #488: a map call zipping maps of different stages forks over its
 	// first split's keys, and another map lacking a key reads null there.
 	{name: "zip_runtime_map"},
-	// A merge Martian expanded per fork of an outer map call gathers every
-	// inner fork across the outer forks, an empty one as null.
+	// A merge Martian expanded per fork of an outer map call gathers the
+	// inner forks of its element's own outer fork (core ForkId.constrain),
+	// an empty one as [], however the outer forks' widths differ: an inner
+	// split over a stage output, or over a literal whose elements differ in
+	// length (map_pipe_nested).
 	{name: "merge_across_outer"},
 	{name: "merge_across_empty"},
+	{name: "merge_across_short"},
+	{name: "map_pipe_nested"},
+	// #387, #595: a split of a runtime-gated output, the forks fixed by the
+	// gated call's own forks (rt_gate_split), by the gate alone over a
+	// literal (_pass, _sub), and each with the gate on (rt_gate_split_on).
+	{name: "rt_gate_split"},
+	{name: "rt_gate_split_sub"},
+	{name: "rt_gate_split_pass"},
+	{name: "rt_gate_split_on"},
+	// #595 (gen_54d3a5646ff7): the same inside a mapped sub-pipeline, the
+	// split over an outer map call's gated element.
+	{name: "rt_gate_split_nested"},
+	// #601: a map call over a mapped sub-pipeline's merged outs, each fork
+	// staging only the inner forks of its own outer fork.
+	{name: "map_chain_partial"},
+	// #601: reads only some forks of the literal read (mixed) and reads
+	// through two roots (cross), each instance staging what it reads.
+	{name: "map_chain_mixed"},
+	{name: "map_chain_cross"},
+	// #601: a merge's fork count read from a stage inside the merged
+	// pipeline's own fork.
+	{name: "map_chain_counted"},
+	// Two partner splits of one projected output inside a mapped
+	// sub-pipeline, their references leaving the outer index unresolved
+	// (gen-diff seed 862's witness).
+	{name: "partner_nested_projection"},
+	// #604 (gen-diff seed 2554's witness): a merge of a mapped sub-pipeline
+	// Martian gave no fork root, gathering none of its forks, or its
+	// compile-time forks.
+	{name: "merge_unforked_pipeline"},
 	// #565: a top-level map call's outs are its pipeline's per fork, each
 	// fork's files published under outs/<fork key>/.
 	// TestMrpDiffSplitEntryOverride launches it with other split values.
@@ -639,11 +675,6 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "split_bad_special", mrp: failedIn(failError, "BAD_SPECIAL")},
 	{name: "split_bad_mem", mrp: failedIn(failError, "BAD_MEM")},
 	{name: "split_bad_threads", mrp: failedIn(failError, "BAD_THREADS")},
-	// mrp refuses to instantiate a split of a runtime-gated literal collection
-	// (#387), and mro2nf refuses to transpile it (transpileRefused).
-	{name: "rt_gate_split_reject", mrp: runOutcome{Failed: true}},
-	{name: "rt_gate_split_reject_sub", mrp: runOutcome{Failed: true}},
-	{name: "rt_gate_split_reject_pass", mrp: runOutcome{Failed: true}},
 	// A relative entry path is passed through verbatim, so the stage opens
 	// it from its own job dir, where it names nothing.
 	{name: "entry_file", mrp: failedIn(failError, "COUNT")},
@@ -654,11 +685,6 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	{name: "entry_file_empty", mrp: failedIn(failError, "SUMMARIZE")},
 	{name: "split_from_file", mrp: failedIn(failError, "SQUARELINES")},
 	{name: "mounted_paths", mrp: failedIn(failError, "MAKE_SHARD")},
-	// A merge Martian expanded per fork of an outer map call reads an inner
-	// fork its element's outer fork lacks: an inner split over a literal
-	// whose elements differ in length, or over a stage output.
-	{name: "map_pipe_nested", mrp: failedIn(failError, "")},
-	{name: "merge_across_short", mrp: failedIn(failError, "")},
 	// #301: an overrides key mrp's reader does not know fails the run before
 	// any stage runs.
 	{name: "overrides_unknown", mrp: runOutcome{Failed: true}, overrides: "overrides.json"},
@@ -669,6 +695,10 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// while it makes the pipestance, before any stage runs; mro2nf fails its
 	// OUTS task.
 	{name: "nested_empty_forks", mrp: runOutcome{Failed: true}, divergence: "nested-empty-forks"},
+	// #602: a map call's forks vary with an outer map call its source's
+	// producer is not forked on, over two elements. mrp fails resolving the
+	// consumer's forks; mro2nf fails the producer's post.
+	{name: "post_outer_fork", mrp: failedIn(failError, ""), divergence: "post-outer-fork"},
 	// #520: a stage opening a companion file beside a file input another
 	// stage wrote. mrp passes the path in the producer's job dir and finds
 	// it; mro2nf stages only the files the producer's outs name, so the

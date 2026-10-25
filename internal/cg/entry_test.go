@@ -1,7 +1,6 @@
 package cg
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -357,7 +356,9 @@ call ECHO(
 // entry file value read it in OUTS, so OUTS stages it, and post-processing
 // publishes it where OUTS staged it, as mrp publishes the file it finds at
 // the value: a link in outs/ the outs JSON names. A container sees only
-// what its task stages, but for a path OUTS reads in place.
+// what its task stages, but for a path OUTS reads in place. No stage task
+// wrote it, so OUTS copies it beside its manifest, from which the run
+// publishes it, as Nextflow publishes only a file a task wrote (#610).
 func TestOutsPublishStagedEntryFiles(t *testing.T) {
 	p := planOf(t, echoMRO)
 
@@ -398,23 +399,26 @@ func TestOutsPublishStagedEntryFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	spec := OutsSpec{EntryFiles: files, Work: "work", Results: "results", OutsJSON: "pipeline_outs.json"}
+	spec := OutsSpec{EntryFiles: files, Work: "work", Manifest: "publish.json", OutsJSON: "pipeline_outs.json"}
 	if err := g.WriteOuts(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}
 
-	var got map[string]any
+	requireEchoPublished(t)
+}
 
-	raw, err := os.ReadFile("pipeline_outs.json")
-	if err == nil {
-		err = json.Unmarshal(raw, &got)
+// requireEchoPublished checks the publish in the working dir of echoMRO's
+// outs: the entry file, which no stage task wrote, from OUTS's own copy.
+func requireEchoPublished(t *testing.T) {
+	t.Helper()
+
+	if m := readManifest(t, "publish.json"); len(m) != 1 || !m[0].Local || !strings.HasPrefix(m[0].Source, externalDir+"/") {
+		t.Errorf("manifest %+v, want echoed.txt from OUTS's own copy below %s/", m, externalDir)
 	}
 
-	if err != nil {
-		t.Fatal(err)
-	}
+	publishManifest(t, "publish.json", "results", func(src string) string { return src })
 
-	if d := cmp.Diff(map[string]any{"echoed": "echoed.txt"}, got); d != "" {
+	if d := cmp.Diff(map[string]any{"echoed": "echoed.txt"}, outsJSON(t, "pipeline_outs.json")); d != "" {
 		t.Errorf("pipeline_outs.json (-want +got):\n%s", d)
 	}
 

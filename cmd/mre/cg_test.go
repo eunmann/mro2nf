@@ -194,7 +194,7 @@ func TestCallGraphSteps(t *testing.T) {
 	}
 
 	pipeline := filepath.Join(work, "pipeline_outs.json")
-	runCG(t, "outs", "-values", values, "-work", filepath.Join(work, "ps"), "-o", filepath.Join(work, "results"), "-json", pipeline)
+	runCG(t, "outs", "-values", values, "-work", filepath.Join(work, "ps"), "-manifest", filepath.Join(work, "publish.json"), "-json", pipeline)
 
 	got, err := os.ReadFile(pipeline)
 	if err != nil {

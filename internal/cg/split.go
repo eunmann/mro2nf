@@ -8,125 +8,9 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/martian-lang/martian/martian/core"
+	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/martian-lang/martian/martian/syntax"
 )
-
-// resolveSplit resolves a split at the fork part that matches its call, or
-// the last part (core/resolve.go:553-631): the element of the collection at
-// that part's index. A ref already forked on the call is that one element.
-func (r *resolver) resolveSplit(e *syntax.SplitExp, t syntax.Type, fork Fork) (json.Marshaler, error) {
-	var innerT syntax.Type
-
-	switch e.Source.CallMode() {
-	case syntax.ModeArrayCall:
-		innerT = r.g.types.GetArray(t, 1)
-	case syntax.ModeMapCall:
-		innerT = r.g.types.GetMap(t)
-	default:
-		return nil, fmt.Errorf("%w: split over a %s source", errShape, e.Source.CallMode().String())
-	}
-
-	for i, p := range fork {
-		if p.Root.Call() != e.Call && i != len(fork)-1 {
-			continue
-		}
-
-		if p.Root.Call() == e.Call {
-			if v, ok, err := r.stagedElement(e, t, fork, p); ok || err != nil {
-				return v, err
-			}
-		}
-
-		return r.splitElement(e, innerT, fork, p.Index)
-	}
-
-	return nil, fmt.Errorf("%w: split %s outside its fork", errShape, e.GoString())
-}
-
-// splitElement is the element at ix of e's collection, of type innerT, at
-// fork. A ref already forked on the call is that one element.
-func (r *resolver) splitElement(e *syntax.SplitExp, innerT syntax.Type, fork Fork, ix syntax.CollectionIndex) (json.Marshaler, error) {
-	ref, isRef := e.Value.(*syntax.RefExp)
-	if isRef {
-		if _, forked := ref.Forks[e.Call]; !forked {
-			c, err := r.refIndexed(ref, innerT, fork, ix.Mode())
-			if err != nil {
-				return nil, fmt.Errorf("split %s: %w", e.Source.CallMode().String(), err)
-			}
-
-			return c.at(ix)
-		}
-	}
-
-	v, err := r.resolve(e.Value, innerT, fork)
-	if err != nil {
-		return v, fmt.Errorf("split %s: %w", e.Source.CallMode().String(), err)
-	}
-
-	if isRef {
-		return v, nil
-	}
-
-	return element(v, ix)
-}
-
-// indexedKey names a collection read from a stage output: the output,
-// the upstream fork it is read at, the type it is filtered to and the mode
-// it forks by.
-type indexedKey struct {
-	node, output, fork string
-	t                  syntax.TypeId
-	mode               syntax.CallMode
-}
-
-// refIndexed is ref's collection, filtered to t, at fork, as resolve
-// reads it, decoded once per resolver: a post resolving a binding at every
-// fork of a root reads the same output at each.
-func (r *resolver) refIndexed(ref *syntax.RefExp, t syntax.Type, fork Fork, mode syntax.CallMode) (indexed, error) {
-	exp, t, err := r.specialize(ref, t, fork)
-	if err != nil {
-		return indexed{}, err
-	}
-
-	sref, ok := exp.(*syntax.RefExp)
-	if !ok {
-		return indexed{}, fmt.Errorf("%w: %s specializes to %T", errShape, ref.GoString(), exp)
-	}
-
-	up, err := r.g.Stage(sref.Id)
-	if err != nil {
-		return indexed{}, fmt.Errorf("ref %s.%s: %w", sref.Id, sref.OutputId, err)
-	}
-
-	uf, err := fork.project(up.ForkRoots(), sref.Forks)
-	if err != nil {
-		return indexed{}, fmt.Errorf("ref %s.%s: %w", sref.Id, sref.OutputId, err)
-	}
-
-	k := indexedKey{node: sref.Id, output: sref.OutputId, fork: uf.key(), t: t.TypeId(), mode: mode}
-	if c, ok := r.decoded[k]; ok {
-		return c, nil
-	}
-
-	v, err := r.resolveRef(sref, t, fork)
-	if err != nil {
-		return indexed{}, err
-	}
-
-	c, err := indexedOf(v, mode)
-	if err != nil {
-		return indexed{}, err
-	}
-
-	if r.decoded == nil {
-		r.decoded = map[indexedKey]indexed{}
-	}
-
-	r.decoded[k] = c
-
-	return c, nil
-}
 
 // stagedElement serves a split from an element a stage's post wrote (Post),
 // so an instance never reads the whole collection: the root's fork element
@@ -201,7 +85,7 @@ func sameRef(a, b *syntax.RefExp) bool {
 
 	for c, ai := range a.Forks {
 		bi, ok := b.Forks[c]
-		if !ok || (ai == nil) != (bi == nil) || (ai != nil && !indexEqual(ai, bi)) {
+		if !ok || !sameIndex(ai, bi) {
 			return false
 		}
 	}
@@ -209,14 +93,19 @@ func sameRef(a, b *syntax.RefExp) bool {
 	return true
 }
 
-// element takes the element of a resolved collection at ix.
-func element(v json.Marshaler, ix syntax.CollectionIndex) (json.Marshaler, error) {
-	c, err := indexedOf(v, ix.Mode())
-	if err != nil {
-		return nil, err
+// sameIndex reports whether two references' indices of one call are the
+// same: both absent, both concrete and equal, or both left to the fork the
+// reference resolves at, over the same source, whose index Martian has not
+// resolved and which has no concrete value to read.
+func sameIndex(a, b syntax.CollectionIndex) bool {
+	switch {
+	case a == nil || b == nil:
+		return a == nil && b == nil
+	case a.IndexSource() != nil || b.IndexSource() != nil:
+		return a.IndexSource() == b.IndexSource()
+	default:
+		return indexEqual(a, b)
 	}
-
-	return c.at(ix)
 }
 
 // indexed is a resolved collection decoded once, so that taking the element
@@ -255,7 +144,7 @@ func indexedOf(v json.Marshaler, mode syntax.CallMode) (indexed, error) {
 }
 
 // indices are the collection's fork indices in mrp's order; null and empty
-// have none (core/fork.go:1639-1790 expandForkFromObj).
+// have none (core/fork.go:1657-1790 expandForkFromObj).
 func (c indexed) indices() []syntax.CollectionIndex {
 	switch {
 	case c.null:
@@ -290,88 +179,9 @@ func (c indexed) at(ix syntax.CollectionIndex) (json.Marshaler, error) {
 	}
 }
 
-// resolveMerge gathers a value over every fork of a map call
-// (core/resolve.go:292-440): inside the call's own fork it is that fork's
-// value; outside it is a map by key or an array by index over the call's
-// forks, the typed empty when it has none, and null over a null source.
-func (r *resolver) resolveMerge(e *syntax.MergeExp, t syntax.Type, fork Fork) (json.Marshaler, error) {
-	innerT, err := mergeElemType(e, t)
-	if err != nil {
-		return nil, err
-	}
-
-	if _, ok := fork.part(e.GetCall()); ok {
-		return r.resolve(e.Value, innerT, fork)
-	}
-
-	if e.CallMode() == syntax.ModeNullMapCall {
-		return nil, nil
-	}
-
-	parts, err := r.mergeParts(e, fork)
-	if err != nil {
-		return nil, fmt.Errorf("merge of %s: %w", e.Call.Fqid, err)
-	}
-
-	if e.CallMode() == syntax.ModeMapCall {
-		out := make(core.MarshalerMap, len(parts.list))
-
-		for _, ix := range parts.list {
-			v, err := r.resolve(e.Value, innerT, fork.with(Part{Root: e.Call, Index: ix}))
-			if err != nil {
-				return nil, fmt.Errorf("merge of %s key %q: %w", e.Call.Fqid, ix.MapKey(), err)
-			}
-
-			out[ix.MapKey()] = v
-		}
-
-		return out, nil
-	}
-
-	out := make(marshalerArray, len(parts.list))
-
-	for i, ix := range parts.list {
-		v, err := r.mergeElement(e, innerT, fork, parts, ix)
-		if err != nil {
-			return nil, fmt.Errorf("merge of %s index %d: %w", e.Call.Fqid, i, err)
-		}
-
-		out[i] = v
-	}
-
-	return out, nil
-}
-
-// mergeElemType is the type of one merged value (core/resolve.go:294-322).
-func mergeElemType(e *syntax.MergeExp, t syntax.Type) (syntax.Type, error) {
-	switch mt := t.(type) {
-	case *syntax.ArrayType:
-		if e.MergeOver.CallMode() != syntax.ModeArrayCall {
-			return nil, fmt.Errorf("%w: array merge over a %s mapping", errShape, e.MergeOver.CallMode().String())
-		}
-
-		if mt.Dim > 1 {
-			nt := *mt
-			nt.Dim--
-
-			return &nt, nil
-		}
-
-		return mt.Elem, nil
-	case *syntax.TypedMapType:
-		if e.MergeOver.CallMode() != syntax.ModeMapCall {
-			return nil, fmt.Errorf("%w: map merge over a %s mapping", errShape, e.MergeOver.CallMode().String())
-		}
-
-		return mt.Elem, nil
-	default:
-		return nil, fmt.Errorf("%w: merge of %s into %s", errShape, e.Call.Fqid, t)
-	}
-}
-
 // indices returns root's fork indices under outer in mrp's order. A source
 // whose values are at hand is evaluated as core expands a fork
-// (core/fork.go:1389-1790); otherwise the indices are those of the staged
+// (core/fork.go:1392-1790); otherwise the indices are those of the staged
 // instances forked on root, which a gathering task stages in full.
 func (r *resolver) indices(root *syntax.CallGraphStage, outer Fork) ([]syntax.CollectionIndex, error) {
 	idx, err := r.sourceIndices(root, outer)
@@ -382,28 +192,54 @@ func (r *resolver) indices(root *syntax.CallGraphStage, outer Fork) ([]syntax.Co
 	return idx, err
 }
 
+// sourceIndices are root's fork indices under outer as Martian core
+// expands them, from what the task staged; ErrNotStaged where that does not
+// hold the source the count reads.
 func (r *resolver) sourceIndices(root *syntax.CallGraphStage, outer Fork) ([]syntax.CollectionIndex, error) {
-	sp := root.Split()
-	if sp == nil {
-		return nil, fmt.Errorf("indices of %s: %w: not a map call", root.Fqid, errShape)
+	idx, err := r.core().Indices(root, r.g.outerRoots(root), coreFork(outer))
+	if errors.Is(err, mrcore.ErrUnresolved) {
+		return nil, fmt.Errorf("indices of %s: %w: %w", root.Fqid, ErrNotStaged, err)
 	}
 
-	if idx, ok := knownIndices(sp.Source); ok {
-		return idx, nil
-	}
-
-	v, err := r.sourceValue(root, outer)
 	if err != nil {
 		return nil, fmt.Errorf("indices of %s: %w", root.Fqid, err)
 	}
 
-	c, err := indexedOf(v, sp.Source.CallMode())
+	for i, ix := range idx {
+		idx[i] = concrete(ix)
+	}
 
-	return c.indices(), err
+	return idx, nil
+}
+
+// ownSource is the producer's output root's split source reads under
+// outer, as its post reads it: the specialized source, unwrapped of the
+// gates that disable the producer too, when that is a reference to the
+// producer's outs; false for any other source, whose elements no one
+// stage's outs hold.
+func (r *resolver) ownSource(root *syntax.CallGraphStage, outer Fork) (*syntax.RefExp, bool, error) {
+	prod, fed := r.g.Producer(root)
+	if !fed {
+		return nil, false, nil
+	}
+
+	s, err := r.sourceExp(root, outer)
+	if err != nil {
+		return nil, false, err
+	}
+
+	v := s.Value
+	for d, ok := v.(*syntax.DisabledExp); ok && r.g.allGatedBy([]string{prod}, d.Disabled); d, ok = v.(*syntax.DisabledExp) {
+		v = d.Value
+	}
+
+	ref, ok := v.(*syntax.RefExp)
+
+	return ref, ok && ref.Id == prod, nil
 }
 
 // sourceExp specializes root's split for outer, as core Fork.expandForkPart
-// does before it expands a fork from the split's source (core/fork.go:1389).
+// does before it expands a fork from the split's source (core/fork.go:1392).
 // A split the specialization removes has a null source.
 func (r *resolver) sourceExp(root *syntax.CallGraphStage, outer Fork) (*syntax.SplitExp, error) {
 	sp := root.Split()
@@ -419,44 +255,6 @@ func (r *resolver) sourceExp(root *syntax.CallGraphStage, outer Fork) (*syntax.S
 	}
 
 	return s, nil
-}
-
-// sourceValue is root's split collection under outer. A ref source is read
-// with its declared type, as core expandForkFromRef reads it
-// (core/fork.go:1625).
-func (r *resolver) sourceValue(root *syntax.CallGraphStage, outer Fork) (json.Marshaler, error) {
-	s, err := r.sourceExp(root, outer)
-	if err != nil {
-		return nil, err
-	}
-
-	if ref, ok := s.Value.(*syntax.RefExp); ok {
-		return r.resolveRef(ref, nil, outer)
-	}
-
-	return r.resolve(s.Value, root.Split().Type, outer)
-}
-
-// knownIndices are the indices of a source of compile-time length: array
-// positions, or map keys in byte order (core/resolve.go:474-513).
-func knownIndices(src syntax.MapCallSource) ([]syntax.CollectionIndex, bool) {
-	if !src.KnownLength() {
-		return nil, false
-	}
-
-	switch src.CallMode() {
-	case syntax.ModeArrayCall:
-		return arrayIndices(src.ArrayLength()), true
-	case syntax.ModeMapCall:
-		keys := make([]string, 0, len(src.Keys()))
-		for k := range src.Keys() {
-			keys = append(keys, k)
-		}
-
-		return mapIndices(keys), true
-	default:
-		return nil, true
-	}
 }
 
 func arrayIndices(n int) []syntax.CollectionIndex {

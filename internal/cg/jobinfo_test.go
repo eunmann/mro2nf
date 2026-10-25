@@ -81,6 +81,49 @@ func TestForkIDNamesMrpForks(t *testing.T) {
 	}
 }
 
+// TestForkIDAfterAnOuterPart pins the fork dirs upstream mrp (50ad6c0)
+// names under an outer array fork: a map fork writes its key after the
+// outer index, and a fork whose inner part is empty is the outer fork's.
+func TestForkIDAfterAnOuterPart(t *testing.T) {
+	f := loadSource(t, `stage MK(in int n, out map<int> km, src py "stages/mk",)
+stage SQ(in int x, out int y, src py "stages/sq",)
+
+pipeline SUB(in int n, out map<int> ys,)
+{
+    call MK(n = self.n,)
+    map call SQ(x = split MK.km,)
+    return (ys = SQ.y,)
+}
+
+pipeline TOP(out SUB[] subs,)
+{
+    map call SUB(n = split [2, 0, 3],)
+    return (subs = SUB,)
+}
+
+call TOP()
+`)
+
+	sub := func(i int) Part { return f.part("TOP.SUB", ArrayIndex(i)) }
+	sq := f.part("TOP.SUB.SQ", MapKey("x"))
+
+	cases := []struct {
+		fork Fork
+		lens []int
+		want string
+	}{
+		{Fork{sub(0), sq}, []int{3, 2}, "fork0/fork_x"},
+		{Fork{sub(2), sq}, []int{3, 2}, "fork2/fork_x"},
+		{Fork{sub(1), sq}, []int{3, 0}, "fork1"},
+	}
+
+	for _, tc := range cases {
+		if got := tc.fork.ID(tc.lens); got != tc.want {
+			t.Errorf("ID of %s = %q, mrp's fork dir is %q", tc.fork, got, tc.want)
+		}
+	}
+}
+
 // forkIDs are the fork ids of node's instances, one per element of its last
 // fork root, each staged with ups and the element of its outer root it
 // names.

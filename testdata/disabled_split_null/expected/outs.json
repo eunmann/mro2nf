@@ -1,19 +1,19 @@
 {
-    "cascade_on": null,
+    "cascade_on": [],
     "each_off": [],
-    "each_on": null,
+    "each_on": [],
     "fork_on": [
-        null,
-        null
+        [],
+        []
     ],
     "keyed_off": {},
-    "keyed_on": null,
-    "lit_on": null,
-    "map_on": null,
-    "pass_on": null,
+    "keyed_on": {},
+    "lit_on": [],
+    "map_on": [],
+    "pass_on": [],
     "stage_off": [],
-    "stage_on": null,
-    "sub_on": null,
-    "whole_on": null,
-    "whole_sub": null
+    "stage_on": [],
+    "sub_on": [],
+    "whole_on": [],
+    "whole_sub": []
 }

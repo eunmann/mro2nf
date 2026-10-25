@@ -1,0 +1,51 @@
+# #601: a map call over a mapped sub-pipeline's merged outs. SUM's fork j
+# reads INNER's fork j, whose ys merges every SQ fork under it: SUM aligns
+# INNER's root with its own and gathers SQ's under it, so each SUM task
+# stages only the SQ forks of its own INNER fork, not all of them.
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+stage SUM(
+    in  int[] vs,
+    out int   s,
+    src py    "stages/sum",
+)
+
+pipeline INNER(
+    in  int[] xs,
+    out int[] ys,
+)
+{
+    map call SQ(
+        x = split self.xs,
+    )
+
+    return (
+        ys = SQ.y,
+    )
+}
+
+pipeline TOP(
+    in  int[][] xss,
+    out int[]   ss,
+)
+{
+    map call INNER(
+        xs = split self.xss,
+    )
+
+    map call SUM(
+        vs = split INNER.ys,
+    )
+
+    return (
+        ss = SUM.s,
+    )
+}
+
+call TOP(
+    xss = [[1], [2, 3], [4, 5, 6]],
+)

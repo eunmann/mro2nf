@@ -52,7 +52,7 @@ up in them; it computes no Martian value and parses no stage-controlled JSON.
 | Caching | Nextflow `-resume` | §5, **Cache identity** |
 | Retries | Nextflow `errorStrategy` on the exit `mre` chooses | `conf/base.config`; `internal/job/retry.go` |
 | Resources | Nextflow `cpus`, `memory`, `accelerator`, `clusterOptions`; `mre` resolves the values as `mrp` | §9; `internal/job/resources.go` |
-| Publishing | Nextflow workflow outputs (`publish:`, `output {}`) of OUTS's outputs; `mre outs` builds the tree | §5, **OUTS** |
+| Publishing | Nextflow workflow outputs (`publish:`, `output {}`), each file from the task that wrote it; `mre outs` lays out the tree | §5, **OUTS** |
 | Targets, launch params | Nextflow profiles and `params` | §4, §8, §9 |
 | Binding, projection, struct narrowing | `mre`, through Martian's functions | `internal/cg/resolve.go` |
 | Types, file leaves | `mre` | `internal/types`, `internal/shim` (§7) |
@@ -196,15 +196,39 @@ two elements in every collection, nested collections of different lengths,
 false for every bool and no null anywhere. No map call is pruned on an empty or
 null source and no call is disabled by an entry value, so its call graph holds
 every stage node, with its fork roots, of any invocation. Where `mrp` refuses
-the witness (it refuses a runtime-gated split of a non-empty literal), each
-input takes its witness value over the literal invocation's only while `mrp`
-still accepts the call. `TestWitnessCoversLiteral` checks every fixture's
+the witness, each input takes its witness value over the literal
+invocation's only while `mrp` still accepts the call; a panic of Martian's
+call-graph builder counts as a refusal. `TestWitnessCoversLiteral` checks every fixture's
 literal invocation is within its witness's.
 
 **The topology.** `cg.Topology` reduces the witness call graph to what tasks
 exchange: per node its fork roots, the outputs it reads of other nodes, and the
 nodes whose outs gate it; per fork root what feeds its forks (the entry, or one
-stage) and the outer roots its forks vary with. A disable binding forked on a
+stage) and the outer roots its forks vary with. The stage that feeds a root's
+forks is the one whose outs fix their count, found by walking Martian's
+compiled split source case for case as `mrp` expands forks from it
+(`core/fork.go` `expandForkPartFromSource`): the source set's master for a
+map call over another map call's outs, the gate's stage for a gated literal,
+the gated stage itself where the gate disables that stage too.
+
+Each instance stages exactly the upstream instances its `_args` read, as an
+`mrp` job reads only those forks' outs (#601, held by
+`TestStandInStagesOnlyWhatItReads` over every fixture). A node's read of
+another carries read patterns (`cg.ReadPattern`), one per shape of the
+references to it:
+- a pattern aligns an upstream root the reader is not forked on with a
+  reader root where every reference under a split over that root sits at
+  its element's own index of the upstream root, as Martian expands a split
+  over a map call's outs into a literal or a merge of its forks;
+- the upstream's other roots it gathers;
+- where a split's elements do not all read the upstream, it is limited to
+  the elements that do.
+The reads of a merge include what counting the merged call's forks reads
+(`Graph.countReads`, the walk `mrp`'s fork expansion makes), at the outer
+fork the merge's constraint fixes. The driver joins an instance on the
+shared and aligned roots' ordinals (`READ`, or `GATHER` under them) for one
+unlimited pattern, and through `NEEDS`, a keyed join per pattern regrouped
+per instance, otherwise. A disable binding forked on a
 map call its gating stage feeds (a split of its outs, as in
 `map call X(item = split SRC.items)` under `disabled = self.item.skip`) has a
 value per fork of that call; the gating stage's post resolves it at each and
@@ -514,8 +538,9 @@ chunk's as an `eval` output:
 instance's staged items (`SPLITS`), resolve them against the
 paths the split, and each chunk, staged its items from (`chunked`,
 `joinRefs`), so each chunk stages the files its def names and the join
-those every chunk's def and outs name. A reader, OUTS included, stages
-those ordinal dirs once each as `refs/<i>/f/<ordinal>/` (`refsOf`), so
+those every chunk's def and outs name. A reader stages those ordinal dirs
+once each as `refs/<i>/f/<ordinal>/` (`refsOf`), and OUTS the skeleton of
+each bundle holding them once as `refs/<i>` (`refBundles`), so
 Nextflow stages the file from where its producer wrote it, a link on a
 shared filesystem and a download on an object store, and the writing
 task uploads none of it again (on CellRanger on Batch the `MAKE_SHARD`
@@ -551,19 +576,33 @@ and special their jobs get, the split's `resources.tsv`, a file the driver
 reads into rows without parsing a record, not an `eval` value, whose
 collection is quadratic in its lines.
 
-**OUTS.** The last task stages every outs bundle the pipeline outs read and
-the files they name by reference, gets each bundle's location, and each
-referenced file's bundle's, as a value (`toUriString()`, a path or an
-`s3://` URI) and the outputs they read that reach it as values, and
-lays them out with `mre outs` through `mrp`'s own post-processing: the
-`outs/` tree and `pipeline_outs.json`, which it emits apart (`json`,
-`results`). The entry workflow publishes both as its workflow outputs:
-`pipeline_outs.json`, and each entry of the tree at its own name
-(`f >> f.name`), copied into Nextflow's `outputDir`: `results` in the
-launch dir by default, `-output-dir` or a config's `outputDir` elsewhere,
-the HealthOmics pubdir under that profile (§9). No param names it. A copy,
-not Nextflow's default symlink, so an object-store or HealthOmics output
-dir holds the files themselves, dotfiles and empty dirs included, and a symlink's target
+**OUTS.** The last task lays out what the run publishes without the bytes
+of any file a stage task wrote (#610). It stages the skeleton of every
+outs bundle the pipeline outs read, and of every bundle holding a file
+they name by reference (`skeletons`, `refBundles`; §7), never the
+bundles. It gets each bundle's location as a value (`toUriString()`, a
+path or an `s3://` URI) and the outputs that reach it as values, and
+stages the entry files the pipeline outs read (§8). `mre outs` expands the
+skeletons and runs `mrp`'s own post-processing over them, which reads only
+paths, never bytes. It emits `pipeline_outs.json` (`json`) and a manifest
+of the `outs/` tree (`manifest`), each entry its path in the tree and
+where the task that wrote it keeps it. The entry workflow publishes both
+as its workflow outputs: `pipeline_outs.json`, and each manifest entry
+from its source to its path (`published`: `file(source) >> path`), copied
+into Nextflow's `outputDir`: `results` in the launch dir by default,
+`-output-dir` or a config's `outputDir` elsewhere, the HealthOmics pubdir
+under that profile (§9). No param names it. So each file a stage task
+wrote is copied once, by the driver, from where its producer wrote it,
+server side between two `s3://` prefixes, and no other task stages or
+uploads it (the bench's publish gate). Nextflow 26.04 publishes no file
+outside a task's work dir: it logs a `NullPointerException` in
+`PublishOp.publish0` and the run succeeds without the file. So a published
+file no stage task wrote, an entry file or a host path a stage passed on,
+OUTS copies into its own `external/` dir, which the manifest names beside
+it (`local`), and the run publishes it from there
+(`TestMrpDiffPublishesHostEntryFiles`). A copy, not Nextflow's default
+symlink, so an object-store or HealthOmics output dir holds the files
+themselves, dotfiles and empty dirs included, and a symlink's target
 content in its place. A `-preview` run publishes nothing (`enabled
 !workflow.preview`): it runs no task, and Nextflow 26.04 to 26.10 then
 waits forever on an enabled output's channel.
@@ -739,14 +778,21 @@ every filetype and struct, and the struct of each callable's outputs.
   with a runtime that needs no job manager, so no Martian install is read.
   PostProcess reports no error, so `mre outs` then checks every name it wrote:
   a path in `outs/` must exist, and no path of the reconstruction may reach the
-  outs JSON. It writes `outs/` with each link replaced by what it reaches
-  (`-o`) and the outs JSON (`-json`), naming a published file by its path in
-  the tree, a linked one by its own link's path, and a file left unpublished
-  (below an array of two or more dimensions) by where its producer's work dir
-  keeps the copy it staged: `-locations` maps each staged bundle to that
-  location, which no task sees of itself. A path the stage declared and never
-  wrote is named below the work dir of the task that posted it (`task.json`),
-  which a scratch dir is not.
+  outs JSON. It writes the manifest of `outs/` (`-manifest`), each entry a
+  file or a placed dir, whole, and a link as what it reaches, by its path in
+  the tree and where the task that wrote it keeps it, or, for a file no
+  stage task wrote, its copy in `external/` beside the manifest:
+  PostProcess's rename keeps a placed path's identity (device and inode),
+  which maps it to the file it was placed from. It places each file as its
+  shape (`shim.CopyShape`), never its bytes. It writes the outs JSON
+  (`-json`), naming a published file by its path in the tree, a linked one
+  by its own link's path, and a file left unpublished (below an array of
+  two or more dimensions) by where its producer's work dir keeps the copy
+  it staged: `-locations` maps each staged bundle to that location, which
+  no task sees of itself. A path the stage declared and never wrote is
+  named below the work dir of the task that posted it (`task.json`), which
+  a scratch dir is not. A staged skeleton (`-in`, `-refs`) is expanded in
+  place.
 
 The resolver mirrors only what Martian does not export: per-instance resolution
 (`core/resolve.go` `resolveInputs` and `TopNode.resolve`), fork expansion
@@ -781,8 +827,18 @@ chunk's args, a chunk's outs, a fork element. On disk it is a directory:
                          data.json references them via a marker
   f/L0000/.mre-origin  ← the leaf's origin (#431)
   instance.json        ← the instance stamp (field bundles)
+  task.json            ← where the posting task ran (field bundles)
   fork.json            ← the fork record (fork element dirs)
+  .mre-skeleton.json   ← the skeleton: every path above, the records' contents,
+                         no leaf's bytes (#610)
 ```
+
+`WriteItem` writes the skeleton last, so it holds the records written
+before it, a field bundle's stamps among them. It lists each path as
+`copyTree` copies a leaf, links followed and a dangling one left out, so a
+dir leaf's skeleton holds its every file and dir: post-processing moves a
+file inside a published dir out of it, and a skeleton keeps where. OUTS
+stages skeletons in place of the bundles it reads.
 
 The basename is the one the leaf's path had where `WriteItem` found it: the file
 a stage wrote (Martian's `<out>.<ext>` default, or any path the stage chose), a
@@ -988,9 +1044,11 @@ Martian's specialization of its bindings to that fork reads (`files`), so a
 map call over entry files stages each fork's own element. The pipeline outs'
 own reads, keyed by the pipeline's fqid, are staged into OUTS, whose
 post-processing publishes such a file only where it finds it, as `mrp`'s
-does. The driver hands each to `file(x, glob: false)`, so the head node never
-globs a name, and a task stages its list as `entry/<i>/<name>`; `mre stage
--leaves` and `mre outs -leaves` map each value to the path it reads it at.
+does, and which copies each it publishes into its `external/` dir, from
+which the run publishes it (§5, **OUTS**). The driver hands
+each to `file(x, glob: false)`, so the head node never globs a name, and a
+task stages its list as `entry/<i>/<name>`; `mre stage -leaves` and `mre outs
+-leaves` map each value to the path it reads it at.
 The stage gets a staged value as a leaf linked below its args dir (§7),
 `<task>/args/f/L<nnnn>/<name>`: the same file name and content, at another
 path than the value, which `mrp` passes. A value with no file (`[]`, `{}`, a
@@ -1199,7 +1257,10 @@ completes, have goldens only. The validation tiers:
   well-typed programs (`test/gen`) whose stub stages derive every output from a
   hash of their inputs, run under live `mrp` and under mro2nf; any difference
   in the published outputs, a stage's `_args`/`_outs` or the run outcome is
-  shrunk to a minimal fixture. Every comparator rule of the divergence
+  shrunk to a minimal fixture. Each program runs at its literal invocation and
+  again at its witness invocation, which forks every entry collection at
+  differing nested widths; a run in which `mrp` ran a job on bindings it failed
+  to resolve (it passes `null` in their place, #606) is no test. Every comparator rule of the divergence
   allowlist, issue-tracked ones included, excuses a difference there, though
   none is reported as excusing nothing; the ABI and outcome matchers, which name
   their fixtures, do not apply. `make test-e2e` runs a fixed smoke set of seeds;

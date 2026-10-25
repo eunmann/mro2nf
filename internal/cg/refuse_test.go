@@ -61,64 +61,37 @@ func readSourceText(t *testing.T, src string) error {
 	return err
 }
 
-// TestReadSourceRefusesAsMrp runs the #383 probe matrix: every shape under a
-// literal and a runtime gate, each false and true, over an empty and a
-// non-empty source. refused is what real mrp (martian 4a558e7dd93b) did with
-// each variant: refuse it before any stage ran with "TOP.B input value: MRO
-// unexpected array", or run it.
-func TestReadSourceRefusesAsMrp(t *testing.T) {
-	cases := []struct {
-		shape, gate, skip, vals string
-		refused                 bool
-	}{
-		{"chain", "lit", "false", "[]", false},
-		{"chain", "lit", "false", "[1, 2]", false},
-		{"chain", "lit", "true", "[]", false},
-		{"chain", "lit", "true", "[1, 2]", false},
-		{"chain", "rt", "false", "[]", false},
-		{"chain", "rt", "false", "[1, 2]", true},
-		{"chain", "rt", "true", "[]", false},
-		{"chain", "rt", "true", "[1, 2]", true},
-		{"sub", "lit", "false", "[]", false},
-		{"sub", "lit", "false", "[1, 2]", false},
-		{"sub", "lit", "true", "[]", false},
-		{"sub", "lit", "true", "[1, 2]", false},
-		{"sub", "rt", "false", "[]", false},
-		{"sub", "rt", "false", "[1, 2]", true},
-		{"sub", "rt", "true", "[]", false},
-		{"sub", "rt", "true", "[1, 2]", true},
-		{"pass", "lit", "false", "[]", false},
-		{"pass", "lit", "false", "[1, 2]", false},
-		{"pass", "lit", "true", "[]", false},
-		{"pass", "lit", "true", "[1, 2]", false},
-		{"pass", "rt", "false", "[]", true},
-		{"pass", "rt", "false", "[1, 2]", true},
-		{"pass", "rt", "true", "[]", true},
-		{"pass", "rt", "true", "[1, 2]", true},
-	}
+// TestGatedSplitTranspilesAsMrp runs the #383 probe matrix: every shape
+// under a literal and a runtime gate, each false and true, over an empty
+// and a non-empty source. Real mrp at Martian 50ad6c0 instantiates every
+// variant, where 4a558e7 refused the runtime-gated splits of a non-empty
+// source (#387), so each reads, and its call graph is within its witness's,
+// which the transpile emits.
+func TestGatedSplitTranspilesAsMrp(t *testing.T) {
+	for _, shape := range []string{"chain", "sub", "pass"} {
+		for _, gate := range []string{"lit", "rt"} {
+			for _, skip := range []string{"false", "true"} {
+				for _, vals := range []string{"[]", "[1, 2]"} {
+					t.Run(shape+"/"+gate+"/"+skip+"/"+vals, func(t *testing.T) {
+						dir := t.TempDir()
+						path := filepath.Join(dir, "pipeline.mro")
 
-	for _, tc := range cases {
-		t.Run(tc.shape+"/"+tc.gate+"/"+tc.skip+"/"+tc.vals, func(t *testing.T) {
-			err := readSourceText(t, gatedSplitMRO(tc.shape, tc.gate, tc.skip, tc.vals))
+						if err := os.WriteFile(path, []byte(gatedSplitMRO(shape, gate, skip, vals)), 0o600); err != nil {
+							t.Fatal(err)
+						}
 
-			if !tc.refused {
-				if err != nil {
-					t.Fatalf("mrp runs this variant; ReadSource refused it: %v", err)
-				}
+						src, err := ReadSource(path, []string{dir})
+						if err != nil {
+							t.Fatalf("mrp instantiates this variant; ReadSource refused it: %v", err)
+						}
 
-				return
-			}
-
-			if err == nil {
-				t.Fatal("mrp refuses this variant; ReadSource accepted it")
-			}
-
-			for _, want := range []string{"TOP.B input value:", "MRO unexpected array", "pipeline.mro:"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("error %q does not contain %q", err, want)
+						if err := checkCovered(src, dir); err != nil {
+							t.Error(err)
+						}
+					})
 				}
 			}
-		})
+		}
 	}
 }
 

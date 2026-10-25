@@ -1,11 +1,13 @@
 # #383: a disable-gated sub-pipeline call whose return a downstream
-# `map call B(split S.ys)` forks over. SUB maps over its input, so mrp prunes
-# its known-empty split to null whatever the gate (S_LIT literal false, S_RT
-# runtime false, S_RTON runtime true) and statically disables S_OFF (literal
-# true over a non-empty input); PASS returns its input unchanged, so P_LIT
-# returns the empty list itself and P_OFF is statically disabled. B's
-# zero-fork merge gives null in every case. A runtime gate over a returned
-# value that is not statically null is not here: mrp rejects that binding.
+# `map call B(split S.ys)` forks over. SUB maps over its input, so mrp merges
+# its known-empty split to [] where the gate holds it enabled (S_LIT literal
+# false, S_RT runtime false); S_RTON (runtime true) is null at run time and
+# S_OFF (literal true over a non-empty input) statically disabled. PASS
+# returns its input unchanged, so P_LIT returns the empty list itself and
+# P_OFF is statically disabled. B has no forks in every case, so its merge
+# gives [] (Martian 50ad6c0: a map call over a null or empty source gives an
+# empty collection). rt_gate_split_sub runs a runtime gate over a non-empty
+# return.
 stage GATE(
     in  bool v,
     out bool off,

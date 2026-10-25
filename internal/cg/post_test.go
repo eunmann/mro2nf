@@ -3,6 +3,7 @@ package cg
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -298,6 +299,58 @@ func TestForkRecordRoundTrip(t *testing.T) {
 		if got.Fork.String() != want.Fork.String() || got.Position != want.Position || got.Fork[0].Index.MapKey() != key ||
 			!slices.Equal(got.Lens, want.Lens) {
 			t.Errorf("key %q round-trips to %s of %v at %d", key, got.Fork, got.Lens, got.Position)
+		}
+	}
+}
+
+// TestPostCountsForksFromTheSource: a post writes the forks of each root
+// its stage's outs size, counted from the root's compiled source as mrp
+// counts them (#595). MAKE sizes B, which maps over A's outs, from its own
+// xs and m, and writes them as records only, since A's outs hold their
+// elements (map_chain_runtime). A gate sizes a split of a gated literal
+// under an outer map call, two forks per outer fork with the gate off and
+// none with it on (rt_gate_split_nested's O_LIT).
+func TestPostCountsForksFromTheSource(t *testing.T) {
+	chain := loadFixture(t, "map_chain_runtime")
+	forks := chain.post(chain.outs("MCR.MAKE", nil, `{"xs":[10,20,30],"m":{"b":2,"a":1}}`))
+
+	for root, want := range map[string]int{"MCR.A": 3, "MCR.B": 3, "MCR.MA": 2, "MCR.MB": 2} {
+		if got := len(elementItems(t, forks, root)); got != want {
+			t.Errorf("MAKE's post wrote %d forks of %s, want %d", got, root, want)
+		}
+	}
+
+	for _, item := range elementItems(t, forks, "MCR.B") {
+		if !filepath.IsAbs(item) || shim.IsBundle(item) {
+			t.Errorf("B's fork %s carries a value; A's outs hold its elements", item)
+		}
+	}
+
+	nested := loadFixture(t, "rt_gate_split_nested")
+
+	for off, want := range map[string]int{"false": 4, "true": 0} {
+		forks := nested.post(nested.outs("TOP.G_ON", nil, `{"off":`+off+`}`))
+		if got := len(elementItems(t, forks, "TOP.O_LIT.USE")); got != want {
+			t.Errorf("gate off=%s: G_ON's post wrote %d forks of TOP.O_LIT.USE, want %d", off, got, want)
+		}
+	}
+}
+
+// TestPostFailsUnderAnOuterForkItDoesNotHold (#602): SRC feeds USE, whose
+// forks vary with OUTER, a map call SRC is not forked on. Each instance of
+// SRC holds only its own outs, so its post fails at the first fork of OUTER
+// whose element another instance's outs hold, as mrp fails resolving USE's
+// forks, rather than write USE's forks under every fork of OUTER from every
+// instance of SRC.
+func TestPostFailsUnderAnOuterForkItDoesNotHold(t *testing.T) {
+	f := loadFixture(t, "post_outer_fork")
+
+	for i := range 2 {
+		outs := f.outs("TOP.INNER.SRC", Fork{f.part("TOP.INNER", ArrayIndex(i))}, `{"xs":[1,2,3]}`)
+
+		err := f.g.Post(postedSpec(t, f.g, outs, f.next("forks")))
+		if !errors.Is(err, ErrNotStaged) {
+			t.Errorf("post of SRC at INNER fork %d: %v, want %v", i, err, ErrNotStaged)
 		}
 	}
 }

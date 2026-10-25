@@ -37,6 +37,10 @@ The staging probe reads every task work dir (see probe_task_dirs):
                  or a split stage's tasks (#507)
   probe_writes -- files in task work dirs that are a copy of the probe file
                  (the ideal is producers: each producer writes it once)
+  plumbing_probe_refs -- plumbing task dirs that stage or write a copy of
+                 the probe file: a published stage file is published from
+                 the task that wrote it, so no plumbing task moves its bytes
+                 (bench_report.py holds it to 0, #610)
   max_argv_bytes / max_arg_bytes -- the largest mre command line, and the
                  largest single argument on one, from the .mre-argv files
                  the scale tier's mre wrapper (scale_test.go writeArgvProbe)
@@ -160,9 +164,12 @@ def count_refs(workdir, probe):
     return refs
 
 
-# The task name Nextflow writes into each .command.run header: the YAML-style
-# header of recent releases, or the comment line of older ones.
-_TASK_NAME = re.compile(r"^(?:### name: '(?P<yaml>.*)'|# NEXTFLOW TASK: (?P<old>.*))$")
+# The task name Nextflow writes into each .command.run header: a YAML
+# double-quoted string from 26.10.3, single-quoted in the YAML header before
+# it, or the comment line of older releases.
+_TASK_NAME = re.compile(
+    r"^(?:### name: (?P<quoted>\".*\")|### name: '(?P<yaml>.*)'|# NEXTFLOW TASK: (?P<old>.*))$"
+)
 
 # The files Nextflow itself writes into a task dir, which carry no task data.
 _NEXTFLOW_FILES = re.compile(r"^\.command\.\w+$|^\.exitcode$")
@@ -185,6 +192,17 @@ def task_dirs(workdir):
                 yield d
 
 
+def task_name(m):
+    """The task name of a _TASK_NAME match.
+
+    Nextflow escapes a double-quoted name only with the escapes JSON shares
+    (BashWrapperBuilder.yamlString), so JSON decodes it.
+    """
+    if m.group("quoted"):
+        return json.loads(m.group("quoted"))
+    return m.group("yaml") or m.group("old")
+
+
 def read_command_run(d):
     """Return the task's process base name and the sources its staging links in.
 
@@ -198,7 +216,7 @@ def read_command_run(d):
             line = line.rstrip("\n")
             m = _TASK_NAME.match(line)
             if m and not name:
-                name = m.group("yaml") or m.group("old")
+                name = task_name(m)
             if line.startswith("nxf_stage()"):
                 in_stage = True
             elif in_stage and line == "}":
@@ -209,8 +227,30 @@ def read_command_run(d):
     if os.path.exists(stage_file):
         with open(stage_file) as h:
             staging.extend(h)
-    sources = [shlex.split(line.split("&& ")[-1])[2] for line in staging if "ln -s " in line]
+    sources = [s for s in map(link_source, staging) if s]
     return name.split(" (")[0].split(":")[-1], sources
+
+
+def link_source(line):
+    """The source of the symlink a staging line makes, or None.
+
+    Nextflow links with `ln -s` up to 26.04 and `ln -sfn` from 26.10, after
+    a `mkdir -p <dir> &&` when the target is nested. The link to call.b64,
+    the run's call a task stages once it outgrows the task's script, is
+    left out: it is the invocation every mrp job's _jobinfo carries too,
+    which grows with the entry values, not orchestration staging.
+    """
+    argv = shlex.split(line.split("&& ")[-1])
+    if len(argv) == 4 and argv[0] == "ln" and argv[1].startswith("-") and "s" in argv[1]:
+        if argv[3] == CALL_FILE:
+            return None
+        return argv[2]
+    return None
+
+
+# CALL_FILE is the name a task stages the run's call under (stage.nf's
+# STAGE processes, stageAs: 'call.b64').
+CALL_FILE = "call.b64"
 
 
 def tree_files(path):
@@ -304,6 +344,7 @@ def probe_task_dirs(workdir, probe, stages):
             "plumbing_uploaded_bytes",
             "restaged_bytes",
             "probe_writes",
+            "plumbing_probe_refs",
             "max_argv_bytes",
             "max_arg_bytes",
         ),
@@ -316,7 +357,8 @@ def probe_task_dirs(workdir, probe, stages):
         staged = sum(tree_bytes(s) for s in sources)
         written = list(written_files(d))
         uploaded = sum(size for _, size in written)
-        m["probe_writes"] += sum(is_probe_copy(path, marker) for path, _ in written)
+        writes = sum(is_probe_copy(path, marker) for path, _ in written)
+        m["probe_writes"] += writes
         m["restaged_bytes"] += restaged_bytes(written, sources)
         m["staged_bytes"] += staged
         m["uploaded_bytes"] += uploaded
@@ -326,6 +368,8 @@ def probe_task_dirs(workdir, probe, stages):
             most[name] = max(most.get(name, 0), staged)
         else:
             m["plumbing_uploaded_bytes"] += uploaded
+            if writes or any(is_probe_copy(p, marker) for s in sources for p in tree_files(s)):
+                m["plumbing_probe_refs"] += 1
         argv, arg = read_argv_probe(d)
         m["max_argv_bytes"] = max(m["max_argv_bytes"], argv)
         m["max_arg_bytes"] = max(m["max_arg_bytes"], arg)

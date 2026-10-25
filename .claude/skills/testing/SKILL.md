@@ -35,8 +35,21 @@ Run these once at the **end** of a change set, after all edits are complete — 
 - `make test` — run unit tests. Run after lint is clean.
 - `make cover` — cross-package coverage with the CI floor (`COVER_MIN`).
 - `make deadcode` — fail on functions unreachable from the binaries (runs in CI's lint job). Run after removing a subcommand or feature.
-- `make test-e2e` — Go e2e suites in `test/e2e` (build tag `e2e`, always `-count=1`): golden diffs vs committed mrp outputs. Run when changing the emitter, `mre`, shim, or data plane.
-- `make test-mrp-diff` — the differential against a real `mrp` (needs `MARTIAN_BIN`) on its own; `make test-e2e` includes it, and CI runs it on every PR. `make bench` — the data-movement regression gate.
+- `make test-e2e` — Go e2e suites in `test/e2e` (build tag `e2e`, always `-count=1`): golden diffs vs committed mrp outputs. **CI only**: locally run the targeted suites a change touches (`go test -tags e2e -count=1 -run '<suite>/<fixture>' ./test/e2e/`, under about 4 minutes); PR Validation runs the full suite (see the `workflow` skill's Verification).
+- `make test-mrp-diff` — the differential against a real `mrp` (needs `MARTIAN_BIN`) on its own; `make test-e2e` includes it, and CI runs it on every PR. `make bench` — the data-movement regression gate, also CI only.
+- `MARTIAN_BIN` must hold `mrp` and `mrjob` built at the commit `go.mod` pins (`go list -m -f '{{.Version}}' github.com/martian-lang/martian`; CI's `setup-martian` builds exactly that). An `mrp` at another commit makes every differential and every golden you record a comparison against the wrong oracle.
+
+Local runs CI cannot replace: the scale tier (`make test-scale`, weekly nightly only), recording a bench baseline (`BENCH_UPDATE=1`), and the real `mrp` runs that establish a new golden or fixture's ground truth.
+
+## Data Movement: the Efficiency Bar
+
+Tasks are 1:1 with `mrp`'s jobs (the ABI diff counts every stage phase's invocations against `mrp`'s), and each stage task stages only the upstream outs its `_args` read, as an `mrp` job reads only those forks' outs. Superlinear staging is a bug, never a tradeoff. Three layers hold it:
+
+- **`TestStandInStagesOnlyWhatItReads`** (`internal/cg/staging_test.go`) runs every fixture's literal and witness invocation through a stand-in that gives each instance exactly what the driver's `READ`/`GATHER` give it, and fails when an instance is given more instances of a node than its resolution reads. Every new fixture is covered by adding it to `testdata/`. Keep the stand-in (`run_test.go` `readAt`) in step with the driver's read wiring (`internal/cgnf/node.go` `read`): it is the model the guard trusts.
+- **Bench lanes with `flatStaging`** hold the most bytes one stage task stages to the same at two widths. A new data-movement shape gets a `bench/<shape>` with two width invocations, real `mrp` runs for `mrpJobs`, an `mrpDiffCases` entry, and baseline entries recorded with `BENCH_UPDATE=1 make bench` — commit only the new lanes' entries, since other lanes' numbers drift with the environment. Prove the gate red on the unfixed code before relying on it.
+- **The scale tier** (`test/e2e/scale_test.go`) runs the bench shapes at production widths; a new shape needs a `TestScale<Shape>`, the nightly matrix entry and `SCALE_TIMEOUT` room.
+
+The staged-bytes probe (`bench_metrics.py`) leaves out `call.b64`, the run's invocation: every `mrp` job's `_jobinfo` carries the same invocation with all its args, so its growth with entry values is ABI parity, not orchestration staging.
 
 The correctness bar these suites enforce (see CLAUDE.md "North star"): pipeline
 OUTPUTS identical to mrp, plus the stage `_args`/`_outs` ABI. Do NOT write tests
