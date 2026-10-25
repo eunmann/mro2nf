@@ -1012,8 +1012,7 @@ func mrpOutcome(ctx context.Context, bin, dir, mro, tmp string, extra ...string)
 		return runOutcome{}, nil
 	}
 
-	var exit *exec.ExitError
-	if !errors.As(err, &exit) {
+	if _, ok := errors.AsType[*exec.ExitError](err); !ok {
 		return runOutcome{}, err
 	}
 

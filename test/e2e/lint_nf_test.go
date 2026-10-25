@@ -438,8 +438,8 @@ func attributeLintDiag(chunk []string, filename string) (string, string, bool) {
 
 	for _, member := range chunk {
 		marker := "/" + member + "/"
-		if i := strings.LastIndex(clean, marker); i >= 0 {
-			return member, clean[i+len(marker):], true
+		if _, after, ok := strings.CutLast(clean, marker); ok {
+			return member, after, true
 		}
 	}
 

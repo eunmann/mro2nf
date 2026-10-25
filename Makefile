@@ -11,8 +11,8 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
 # Tools run via `go run ...@pinned` to avoid global installs.
-GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
-DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.47.0
+GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.52.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
 .PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences notices cloc install clean help

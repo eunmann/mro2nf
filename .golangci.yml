@@ -10,6 +10,8 @@ linters:
     - tagliatelle
     - paralleltest
     - exhaustruct
+    - exhaustruct_v5
+    - gomodguard
     - canonicalheader
     - depguard
     - noinlineerr
@@ -100,4 +102,4 @@ issues:
 run:
   timeout: 10m
   tests: true
-  go: "1.26"
+  go: "1.27"
