@@ -337,18 +337,44 @@ def locations(ups, List locs, List refLocs) {
     return "cat > locations <<'MRO2NF_LOCATIONS'\n${lines.join('')}MRO2NF_LOCATIONS"
 }
 
+// skeletonOf is the skeleton of the bundle dir d (mre's shim.SkeletonFile):
+// its paths and records, none of its files' bytes, which OUTS stages in
+// its place.
+def skeletonOf(Path d) {
+    return d.resolve('.mre-skeleton.json')
+}
+
+// refBundles are the bundles holding the files items name by reference
+// that no item holds (refsOf), each once.
+def refBundles(List items) {
+    return refsOf(items).collect { r -> r.parent.parent }.unique()
+}
+
+// published is the published tree OUTS's manifest m lists: each entry's
+// source and its path in the tree. A source lies in the work dir of the
+// task that wrote it, OUTS's own beside m for a file no stage task wrote,
+// as Nextflow publishes no other file. A stage chooses its files' names,
+// so the driver globs none.
+def published(Path m) {
+    return new groovy.json.JsonSlurper().parseText(m.text).collect { e -> [e.local ? m.resolveSibling(e.source) : file(e.source, glob: false), e.path] }
+}
+
 // OUTS resolves the pipeline outs from the stage outs and the entry files
 // they read and lays out what the run publishes with mrp's own
-// post-processing: the outs JSON (json) and each entry of the outs tree
-// (results), which main.nf's workflow outputs publish. It runs no stage, so
-// it compiles the project's copy of the .mro files it stages.
+// post-processing, from the skeletons of the outs, none of the bytes of
+// the files a stage task wrote: the outs JSON (json) and the manifest of
+// the outs tree (manifest), each entry where the task that wrote it keeps
+// it, which main.nf's workflow outputs publish from there. A published
+// file no stage task wrote, an entry file or a host path, it copies into
+// external/, which the manifest names. It runs no stage, so it compiles
+// the project's copy of the .mro files it stages.
 process OUTS {
     input:
     val meta
     path cf, stageAs: 'call.b64', arity: '0..*'
     path ups, stageAs: 'in/u*', arity: '0..*'
     val locs
-    path refs, stageAs: 'refs/?/f/*', arity: '0..*'
+    path refs, stageAs: 'refs/?', arity: '0..*'
     val refLocs
     val values
     tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
@@ -356,7 +382,8 @@ process OUTS {
 
     output:
     path 'pipeline_outs.json', emit: json
-    path 'results/*', hidden: true, arity: '0..*', emit: results
+    path 'publish.json', emit: manifest
+    path 'external', optional: true
 
     script:
     """
@@ -364,7 +391,7 @@ process OUTS {
     ${valuesFile(values)}
     mkdir -p in refs
     ${locations(ups, locs, refLocs)}
-    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
+    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish.json -json pipeline_outs.json
     """
 }
 

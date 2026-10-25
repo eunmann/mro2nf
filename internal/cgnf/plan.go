@@ -83,15 +83,17 @@ func (p *project) publications() map[int]string {
 }
 
 // publication ends the entry workflow with its outputs, OUTS's outs JSON
-// and each entry of its outs tree, and declares how they are published
-// below Nextflow's outputDir: each at its own name, as copies, so an
-// object-store or HealthOmics output dir holds the files themselves. A -preview run publishes nothing: it runs no task,
-// and Nextflow 26.04 to 26.10 then waits forever on an enabled output's
-// channel.
+// and each entry of the outs tree its manifest lists, and declares how they
+// are published below Nextflow's outputDir: each entry from where the task
+// that wrote it keeps it to its path in the tree, so no other task moves a
+// stage's file's bytes (#610), as copies, so an object-store or HealthOmics
+// output dir holds the files themselves. A -preview run publishes nothing:
+// it runs no task, and Nextflow 26.04 to 26.10 then waits forever on an
+// enabled output's channel.
 const publication = `
     publish:
     pipeline_outs = OUTS.out.json
-    results = OUTS.out.results.flatMap { fs -> fs }
+    results = OUTS.out.manifest.flatMap { m -> published(m) }
 }
 
 output {
@@ -102,17 +104,18 @@ output {
     results {
         enabled !workflow.preview
         mode 'copy'
-        path { f -> f >> f.name }
+        path { e -> e[0] >> e[1] }
     }
 }
 `
 
 // outs runs OUTS over every outs item the pipeline outs read, which the
 // entry workflow's published channel mixes, ordered by node and instance
-// key, not by completion: the bundles it stages and the files they name by
-// reference, with where each producing task keeps them, and the value
-// records it gets as a value; and the entry files they read, which PLAN
-// lists by the pipeline's fqid.
+// key, not by completion: the skeletons of the bundles and of those
+// holding the files they name by reference, which it stages, with where
+// each producing task keeps the bundle, and the value records it gets as a
+// value; and the entry files they read, which PLAN lists by the pipeline's
+// fqid.
 func (p *project) outs() *wiring {
 	w := &wiring{}
 
@@ -129,9 +132,9 @@ func (p *project) outs() *wiring {
 	w.linef("outs_in = %s", ups)
 	shared := w.use("shared")
 	w.linef("outs_files = outs_in.map { xs -> bundlesOf(xs) }")
-	w.linef("outs_refs = outs_in.map { xs -> refsOf(xs) }")
-	w.linef("OUTS(%s, %s.map { m -> callStaged(m) }, outs_files, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, "+
-		"outs_refs, outs_refs.map { rs -> rs.collect { r -> r.parent.parent.toUriString() } }, outs_in.map { xs -> recordsOf(xs) }, %s, file(\"${projectDir}/%s\"))",
+	w.linef("outs_refs = outs_in.map { xs -> refBundles(xs) }")
+	w.linef("OUTS(%s, %s.map { m -> callStaged(m) }, outs_files.map { ds -> ds.collect { d -> skeletonOf(d) } }, outs_files.map { ds -> ds.collect { d -> d.toUriString() } }, "+
+		"outs_refs.map { bs -> bs.collect { b -> skeletonOf(b) } }, outs_refs.map { bs -> bs.collect { b -> b.toUriString() } }, outs_in.map { xs -> recordsOf(xs) }, %s, file(\"${projectDir}/%s\"))",
 		shared, shared, entry, mroAssets)
 
 	return w
