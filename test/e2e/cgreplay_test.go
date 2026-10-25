@@ -96,11 +96,12 @@ type cgReplay struct {
 	// names by reference, where their producers wrote them, as the
 	// driver's POSTED resolves them.
 	refs map[string][]string
-	// emptyFork holds the stages with a fork root that has no fork under
-	// some fork of the roots before it.
-	emptyFork map[string]bool
-	seq       int
-	jobs      int
+	// placeholderDirs holds the dirs, relative to the pipestance, of each
+	// fork of a stage whose fork root has no fork under the forks of the
+	// roots before it, where mrp keeps a disabled placeholder.
+	placeholderDirs map[string]bool
+	seq             int
+	jobs            int
 }
 
 // postedInstance is one stage instance its last task posted: its outs and
@@ -121,6 +122,7 @@ type replayedFork struct {
 type replayInstance struct {
 	elems []string
 	fork  cg.Fork
+	lens  []int
 }
 
 // replayTasks are the files an instance's tasks share below its dir work:
@@ -187,13 +189,13 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 
 	rp := &cgReplay{
 		t: t, fixture: fixture, g: g, call: call, dir: dir, mro: mro, tmp: tmp,
-		ps:        filepath.Join(tmp, "mrp"),
-		entry:     filepath.Join(tmp, "cg", "entry"),
-		adapters:  adapters,
-		posted:    map[string][]postedInstance{},
-		ours:      map[string]replayedFork{},
-		refs:      map[string][]string{},
-		emptyFork: map[string]bool{},
+		ps:              filepath.Join(tmp, "mrp"),
+		entry:           filepath.Join(tmp, "cg", "entry"),
+		adapters:        adapters,
+		posted:          map[string][]postedInstance{},
+		ours:            map[string]replayedFork{},
+		refs:            map[string][]string{},
+		placeholderDirs: map[string]bool{},
 	}
 
 	return rp
@@ -292,6 +294,21 @@ func stageDeps(g *cg.Graph, st *syntax.CallGraphStage) []string {
 	return sortedKeys(set)
 }
 
+// placeholders are the dirs mrp may keep its disabled placeholder of st's
+// fork with no fork of root under prefix in: the id of prefix's parts, as
+// an empty part ends a fork id (core/fork.go:1133), or, under no prefix,
+// fork0 or the node's own dir.
+func (rp *cgReplay) placeholders(st *syntax.CallGraphStage, root *syntax.CallGraphStage, prefix replayInstance) []string {
+	dir := filepath.Join(strings.Split(st.Fqid, ".")...)
+	if len(prefix.fork) == 0 {
+		return []string{dir, filepath.Join(dir, "fork0")}
+	}
+
+	empty := append(slices.Clip(prefix.fork), cg.Part{Root: root, Index: cg.ArrayIndex(0)})
+
+	return []string{filepath.Join(dir, empty.ID(append(slices.Clip(prefix.lens), 0)))}
+}
+
 // instances enumerates st's instances root by root from the fork elements
 // the root's feeder posted: its producer's instances, or the entry.
 func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayInstance) []replayInstance {
@@ -309,12 +326,15 @@ func (rp *cgReplay) instances(st *syntax.CallGraphStage, i int, prefix replayIns
 			found = append(found, replayInstance{
 				elems: append(slices.Clip(prefix.elems), item),
 				fork:  append(slices.Clip(prefix.fork), cg.Part{Root: roots[i], Index: el.Fork[len(el.Fork)-1].Index}),
+				lens:  append(slices.Clip(prefix.lens), el.Lens[len(el.Lens)-1]),
 			})
 		}
 	}
 
 	if len(found) == 0 {
-		rp.emptyFork[st.Fqid] = true
+		for _, rel := range rp.placeholders(st, roots[i], prefix) {
+			rp.placeholderDirs[rel] = true
+		}
 	}
 
 	var out []replayInstance
@@ -947,8 +967,8 @@ func (rp *cgReplay) mrpDisabled(rel string) bool {
 // checkCore is the drift guard: mrp's own resolver, reattached to the same
 // pipestance, must hold exactly the forks the replay ran, plus only the
 // disabled placeholder mrp keeps for a stage whose map call has no forks
-// under some outer fork (an empty or null source), fork0 or the node's own
-// dir, and resolve the same _args for every fork that runs.
+// under some outer fork (an empty or null source), in a placeholder dir,
+// and resolve the same _args for every fork that runs.
 func (rp *cgReplay) checkCore() {
 	cf := coreForks(rp.t.Context(), rp.t, rp.ps, []string{rp.dir})
 
@@ -971,9 +991,7 @@ func (rp *cgReplay) checkCore() {
 	}
 
 	for _, rel := range sortedKeys(cf) {
-		node := cf[rel].node
-		named := filepath.Base(rel) == "fork0" || rel == filepath.Join(strings.Split(node, ".")...)
-		placeholder := named && rp.mrpDisabled(rel) && rp.emptyFork[node]
+		placeholder := rp.placeholderDirs[rel] && rp.mrpDisabled(rel)
 		if _, ok := rp.ours[rel]; !ok && !placeholder {
 			rp.t.Errorf("drift guard: %s: mrp's resolver runs a fork the replay has no instance for", rel)
 		}
@@ -981,17 +999,61 @@ func (rp *cgReplay) checkCore() {
 }
 
 // checkPipelineOuts publishes the pipeline outs with `mre outs` from the
-// posted outs of the stages the OUTS task stages, those the topology's outs
-// read, each located where it was posted, and requires the tree and outs
-// JSON mrp published, as TestMrpDiff compares them, with the outs JSON at
-// the root of the tree as OUTS publishes it.
+// skeletons of the posted outs of the stages the OUTS task stages, those
+// the topology's outs read, and of the bundles holding the files they name
+// by reference, each located where it was posted, as OUTS stages them
+// (#610). It publishes the manifest as the workflow outputs do and
+// requires the tree and outs JSON mrp published, as TestMrpDiff compares
+// them, with the outs JSON at the root of the tree as OUTS publishes it.
 func (rp *cgReplay) checkPipelineOuts() {
 	results := filepath.Join(rp.tmp, "cg", "results")
 	locations := filepath.Join(rp.tmp, "cg", "locations")
-	argv := []string{"outs", "-locations", locations, "-work", filepath.Join(rp.tmp, "cg", "pipestance"), "-o", results, "-json", filepath.Join(results, "pipeline_outs.json")}
+	manifest := filepath.Join(rp.tmp, "cg", "publish", "publish.json")
+	valuesFile := filepath.Join(rp.tmp, "cg", "outs_values")
+	in, refs := filepath.Join(rp.tmp, "cg", "outs-in"), filepath.Join(rp.tmp, "cg", "outs-refs")
+
+	items, values, lines := rp.stageOutsItems(in)
+	lines += rp.stageRefSkeletons(refs, items)
+
+	for path, body := range map[string]string{locations: lines, valuesFile: strings.Join(values, "\n")} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			rp.t.Fatal(err)
+		}
+	}
+
+	argv := []string{
+		"outs", "-locations", locations, "-work", filepath.Join(rp.tmp, "cg", "pipestance"), "-values", valuesFile,
+		"-manifest", manifest, "-json", filepath.Join(results, "pipeline_outs.json"), "-in", in, "-refs", refs,
+	}
+
+	if stderr, err := rp.mre(argv...); err != nil {
+		rp.t.Fatalf("%v\n%s", err, stderr)
+	}
+
+	publishManifest(rp.t, manifest, results)
+
+	reports, err := diffPublished(mustAllowlist(rp.t), rp.fixture, rp.ps, results)
+	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	for _, r := range reports {
+		rp.t.Error(r)
+	}
+}
+
+// stageOutsItems stages into in the skeleton of each outs bundle the
+// topology's outs read, as in/u<i>, and returns the bundles, the value
+// records, and the locations lines of the skeletons.
+func (rp *cgReplay) stageOutsItems(in string) ([]string, []string, string) {
+	rp.t.Helper()
 
 	topo, err := rp.g.Topology()
 	if err != nil {
+		rp.t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(in, 0o755); err != nil {
 		rp.t.Fatal(err)
 	}
 
@@ -1002,48 +1064,94 @@ func (rp *cgReplay) checkPipelineOuts() {
 	for _, r := range topo.Outs {
 		for _, pi := range rp.posted[r.Node] {
 			for _, d := range rp.fields(pi) {
-				argv = append(argv, "-in", d)
-				lines.WriteString(d + "\t" + d + "\n")
 				items = append(items, d)
+				lines.WriteString(rp.stageSkeleton(filepath.Join(in, "u"+strconv.Itoa(len(items))), d))
 			}
 
 			values = append(values, rp.records(pi.outsValues)...)
 		}
 	}
 
-	refs := filepath.Join(rp.tmp, "cg", "refs")
-	for i, o := range rp.stageRefs(refs, items) {
-		lines.WriteString(filepath.Join(refs, strconv.Itoa(i+1)) + "\t" + filepath.Dir(filepath.Dir(o)) + "\n")
-	}
+	return items, values, lines.String()
+}
 
-	argv = append(argv, "-refs", refs)
+// stageRefSkeletons stages into refs, as refs/<i>, the skeleton of each
+// bundle holding a file items name by reference that no item is, once,
+// and returns their locations lines.
+func (rp *cgReplay) stageRefSkeletons(refs string, items []string) string {
+	rp.t.Helper()
 
-	if err := os.MkdirAll(filepath.Dir(locations), 0o755); err != nil {
+	if err := os.MkdirAll(refs, 0o755); err != nil {
 		rp.t.Fatal(err)
 	}
 
-	if err := os.WriteFile(locations, []byte(lines.String()), 0o644); err != nil {
+	var lines strings.Builder
+
+	var bundles []string
+
+	for _, it := range items {
+		for _, o := range rp.refs[it] {
+			// A replayed task stages a referenced ordinal as a link to where
+			// its producer wrote it, the bundle OUTS stages the skeleton of.
+			target, err := filepath.EvalSymlinks(o)
+			if err != nil {
+				rp.t.Fatal(err)
+			}
+
+			if b := filepath.Dir(filepath.Dir(target)); !slices.Contains(bundles, b) && !slices.Contains(items, b) {
+				bundles = append(bundles, b)
+				lines.WriteString(rp.stageSkeleton(filepath.Join(refs, strconv.Itoa(len(bundles))), b))
+			}
+		}
+	}
+
+	return lines.String()
+}
+
+// stageSkeleton stages the skeleton of the bundle dir as a copy at at, as
+// Nextflow stages OUTS's inputs, and returns its locations line.
+func (rp *cgReplay) stageSkeleton(at, bundle string) string {
+	rp.t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil {
 		rp.t.Fatal(err)
 	}
 
-	valuesFile := filepath.Join(rp.tmp, "cg", "outs_values")
-	if err := os.WriteFile(valuesFile, []byte(strings.Join(values, "\n")), 0o644); err != nil {
+	if err := shim.CopyTree(filepath.Join(bundle, shim.SkeletonFile), at); err != nil {
 		rp.t.Fatal(err)
 	}
 
-	argv = append(argv, "-values", valuesFile)
+	return at + "\t" + bundle + "\n"
+}
 
-	if stderr, err := rp.mre(argv...); err != nil {
-		rp.t.Fatalf("%v\n%s", err, stderr)
+// publishManifest publishes the tree the manifest at path lists into
+// results, as the workflow outputs do: each entry's source, where the task
+// that wrote it keeps it or, local, beside the manifest, copied to its path.
+func publishManifest(t *testing.T, path, results string) {
+	t.Helper()
+
+	var entries []struct {
+		Path   string `json:"path"`
+		Source string `json:"source"`
+		Local  bool   `json:"local"`
 	}
 
-	reports, err := diffPublished(mustAllowlist(rp.t), rp.fixture, rp.ps, results)
-	if err != nil {
-		rp.t.Fatal(err)
-	}
+	readJSON(t, path, &entries)
 
-	for _, r := range reports {
-		rp.t.Error(r)
+	for _, e := range entries {
+		src := e.Source
+		if e.Local {
+			src = filepath.Join(filepath.Dir(path), filepath.FromSlash(e.Source))
+		}
+
+		dst := filepath.Join(results, filepath.FromSlash(e.Path))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := shim.CopyTree(src, dst); err != nil {
+			t.Fatalf("publish %s: %v", e.Path, err)
+		}
 	}
 }
 

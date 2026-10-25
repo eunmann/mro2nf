@@ -1,14 +1,14 @@
 {
-    "b_p_lit": null,
-    "b_p_off": null,
-    "b_s_lit": null,
-    "b_s_off": null,
-    "b_s_rt": null,
-    "b_s_rton": null,
+    "b_p_lit": [],
+    "b_p_off": [],
+    "b_s_lit": [],
+    "b_s_off": [],
+    "b_s_rt": [],
+    "b_s_rton": [],
     "p_lit": [],
     "p_off": null,
-    "s_lit": null,
+    "s_lit": [],
     "s_off": null,
-    "s_rt": null,
+    "s_rt": [],
     "s_rton": null
 }

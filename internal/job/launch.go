@@ -107,7 +107,7 @@ func (j *job) read(name core.MetadataFileName) ([]byte, bool, error) {
 	return raw, true, nil
 }
 
-// argv is the command mrp runs for the job (core/node.go:1120-1150): py
+// argv is the command mrp runs for the job (core/node.go:1130-1160): py
 // and comp stages under mrjob, an exec stage directly, each followed by the
 // phase, the metadata and files dirs and the journal prefix.
 func (r Runtime) argv(code Code, j *job) (string, []string) {
@@ -124,7 +124,7 @@ func (r Runtime) argv(code Code, j *job) (string, []string) {
 }
 
 // jobInfo is the _jobinfo mrp writes before the job runs
-// (core/node.go:1168-1180): every key the adapters read, with mrp's
+// (core/node.go:1178-1190): every key the adapters read, with mrp's
 // default profiling and stack-variable modes.
 func (r Runtime) jobInfo(j *job) *core.JobInfo {
 	mon := disable
@@ -150,7 +150,7 @@ func (r Runtime) jobInfo(j *job) *core.JobInfo {
 
 // env is the job's environment (core/jobmanager_local.go:515): mre's own,
 // each thread variable set to the job's whole threads, and TMPDIR the
-// job's tmp dir (core/node.go:1113).
+// job's tmp dir (core/node.go:1125).
 func (j *job) env() []string {
 	envs := map[string]string{}
 
@@ -246,7 +246,7 @@ func (j *job) stdio(cmd *exec.Cmd) (func() error, error) {
 
 // outcome reads the job's state as mrp does (core/metadata.go:465
 // _getStateNoLock): an assertion, which mrp never retries
-// (core/node.go:848 isErrorTransient), then an error, transient when mrp
+// (core/node.go:858 isErrorTransient), then an error, transient when mrp
 // retries it, then completion. A job that exited non-zero without an error
 // gets one, as mrp's local job manager writes it
 // (core/jobmanager_local.go:667-672): "signal: killed" for a killed job.

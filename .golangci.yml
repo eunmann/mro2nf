@@ -59,6 +59,10 @@ linters:
       # The CDK app under deploy/ is TypeScript; its node_modules ships stray Go
       # template files that aren't part of any package. Never lint there.
       - deploy/
+      # Martian core's runtime resolution, copied in Martian's own style;
+      # test/thirdparty (TestMrcoreMatchesCore) holds it to the source go.mod
+      # pins. mrcore's own files are linted.
+      - internal/mrcore/(fork|resolve|convert|adapted)\.go$
     rules:
       # In-package tests are intentional here (they exercise unexported helpers).
       # Tests also legitimately launch subprocesses, leave external errors

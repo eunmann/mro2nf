@@ -11,12 +11,12 @@ import (
 // flat is a forks-like run whose wide width keeps every gate passing.
 func flat() Run {
 	narrow := Metrics{
-		PlumbingTasks: 4, StageTasks: 5, MrpJobs: 5,
+		PlumbingTasks: 4, StageTasks: 5, MrpJobs: 5, StagedBytes: 1 << 20,
 		StagedBytesMax: map[string]int64{"MKPAY": 2500, "FUSE": 270000, "JOIN": 1000},
 		ProbeWrites:    2, Producers: 1, DriverHeapBytes: 80 << 20, MaxArgBytes: 74,
 	}
 	wide := Metrics{
-		PlumbingTasks: 4, StageTasks: 1001, MrpJobs: 1001,
+		PlumbingTasks: 4, StageTasks: 1001, MrpJobs: 1001, StagedBytes: 256 << 20,
 		StagedBytesMax: map[string]int64{"MKPAY": 2510, "FUSE": 270001, "JOIN": 90000},
 		ProbeWrites:    2, Producers: 1, DriverHeapBytes: 300 << 20, MaxArgBytes: 76,
 	}
@@ -56,6 +56,8 @@ func TestEvaluateFailsEachGate(t *testing.T) {
 		{"gather is no exemption for another process", func(r *Run) { r.Wide.StagedBytesMax["FUSE"] = 280000 }, "forks staged-bytes-per-stage-task FUSE", "270000 narrow, 280000 wide"},
 		{"process only wide", func(r *Run) { r.Wide.StagedBytesMax["NEW"] = 1 }, "forks staged-bytes-per-stage-task NEW", "only at the wide width"},
 		{"nothing staged", func(r *Run) { r.Wide.StagedBytesMax = nil }, "forks staged-bytes-per-stage-task", "no stage task staged anything"},
+		{"no task staged narrow", func(r *Run) { r.Narrow.StagedBytes = 0 }, "forks staged-bytes-per-stage-task", "no task staged anything"},
+		{"no task staged wide", func(r *Run) { r.Wide.StagedBytes = 0 }, "forks staged-bytes-per-stage-task", "no task staged anything"},
 		{"probe writes", func(r *Run) { r.Wide.ProbeWrites = 1002 }, "forks probe-writes-per-producer", "2/1 narrow, 1002/1 wide"},
 		{"no producers", func(r *Run) { r.Narrow.Producers = 0 }, "forks probe-writes-per-producer", "no probe producers"},
 		{"argument", func(r *Run) { r.Wide.MaxArgBytes = 131072 }, "forks max-arg-bytes", "74 narrow, 131072 wide"},

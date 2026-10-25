@@ -59,13 +59,13 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 
 		fd := filepath.Join(spec.Fields, p.Id)
 
+		if err := stampPosted(fd, in); err != nil {
+			return err
+		}
+
 		named, err := shim.WriteItem(fd, map[string]any{p.Id: v}, []*syntax.StructMember{p}, g.Table(), spec.Opts, spec.Staged)
 		if err != nil {
 			return fmt.Errorf("write %s output %s: %w", st.Fqid, p.Id, err)
-		}
-
-		if err := stampPosted(fd, in); err != nil {
-			return err
 		}
 
 		refs = append(refs, shim.RefRecords(fd, named)...)

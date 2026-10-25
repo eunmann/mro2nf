@@ -320,27 +320,36 @@ func TestRunDefaultSearchPath(t *testing.T) {
 	}
 }
 
-// TestRunRefusesPipelineMrpCannotInstantiate checks each pipeline mrp refuses
-// before any stage runs (#387) fails the transpile, naming the call and
-// binding as mrp does, and emits no project.
+// TestRunRefusesPipelineMrpCannotInstantiate checks a pipeline mrp refuses
+// before any stage runs, here a disable gate bound to null, fails the
+// transpile with mrp's binding error, and emits no project.
 func TestRunRefusesPipelineMrpCannotInstantiate(t *testing.T) {
-	refused := map[string]string{
-		"rt_gate_split_reject":      "RTG.B input value:",
-		"rt_gate_split_reject_sub":  "RTGS.B input value:",
-		"rt_gate_split_reject_pass": "RTGP.B input value:",
+	dir := t.TempDir()
+	mro := filepath.Join(dir, "pipeline.mro")
+	src := `stage WORK(in int x, out int y, src py "stages/work",)
+
+pipeline P(in int x, in bool b, out int y,)
+{
+    call WORK(x = self.x,) using (disabled = self.b,)
+    return (y = WORK.y,)
+}
+
+call P(x = 3, b = null,)
+`
+
+	if err := os.WriteFile(mro, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	for fixture, binding := range refused {
-		t.Run(fixture, func(t *testing.T) {
-			out, err := runFixture(t, fixture)
-			if err == nil || !strings.Contains(err.Error(), binding) {
-				t.Fatalf("run: %v, want mrp's refusal naming %q", err, binding)
-			}
+	out := filepath.Join(t.TempDir(), "proj")
 
-			if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("a refused transpile left %s (stat: %v)", out, err)
-			}
-		})
+	err := run([]string{"-o", out, "-mropath", dir, mro})
+	if err == nil || !strings.Contains(err.Error(), "disabled cannot be bound to a null value") {
+		t.Fatalf("run: %v, want mrp's refusal of the null gate", err)
+	}
+
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused transpile left %s (stat: %v)", out, err)
 	}
 }
 

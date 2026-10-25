@@ -1,7 +1,7 @@
 // Package job runs one phase of a stage instance as mrp runs a job: it
 // writes the metadata mrp writes before the job starts (core/stage.go), runs
 // the stage code with mrp's argv, through mrjob for py and comp stages
-// (core/node.go:1093 runJob), and reads the job's outcome from the metadata
+// (core/node.go:1105 runJob), and reads the job's outcome from the metadata
 // files it left, as mrp's state machine does (core/metadata.go:465).
 package job
 
@@ -31,7 +31,7 @@ const AssertExitCode = 42
 
 var (
 	// ErrAssert is a stage assertion (an _assert file), which mrp never
-	// retries (core/node.go:848 isErrorTransient).
+	// retries (core/node.go:858 isErrorTransient).
 	ErrAssert = errors.New("stage assertion failed")
 
 	errFailed     = errors.New("stage failed")

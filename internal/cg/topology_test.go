@@ -171,8 +171,8 @@ call P()
 		t.Fatal(err)
 	}
 
-	if _, err := g.Topology(); !errors.Is(err, errShapeUnsupported) {
-		t.Errorf("Topology = %v, want errShapeUnsupported", err)
+	if _, err := g.Topology(); !errors.Is(err, ErrShapeUnsupported) {
+		t.Errorf("Topology = %v, want ErrShapeUnsupported", err)
 	}
 }
 

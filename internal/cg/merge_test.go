@@ -1,7 +1,6 @@
 package cg
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,69 +54,58 @@ func oneOuterFork(t *testing.T) *fixture {
 }
 
 // TestMergeAcrossOuterForks: a merge Martian expanded per fork of an outer
-// map call of known length, outside that call's forks, gathers what mrp
-// gathers: every inner fork across the outer forks, in mrp's fork order,
-// each read at the element's own outer fork, an empty fork as null. Each
-// want is mrp's outs of the fixture; over one outer fork, each element
-// gathers its own forks, as mrp's run of gen-diff seed 5 does.
+// map call of known length, outside that call's forks, gathers the
+// element's own forks: mrp constrains the merge to the outer fork its
+// reference fixes (core/resolve.go ForkId.constrain). Each want is the outs
+// of upstream mrp's (50ad6c0) run of the fixture: an empty outer fork
+// merges to [], and outer forks of different widths each gather their own.
 func TestMergeAcrossOuterForks(t *testing.T) {
+	nested := func(t *testing.T) (*fixture, []string) {
+		t.Helper()
+
+		f := loadFixture(t, "map_pipe_nested")
+		inner := func(i int) Part { return f.part("OUTER.INNER", ArrayIndex(i)) }
+		dbl := func(i int) Part { return f.part("OUTER.INNER.DBL", ArrayIndex(i)) }
+
+		return f, []string{
+			f.outs("OUTER.INNER.DBL", Fork{inner(0), dbl(0)}, `{"y":2}`),
+			f.outs("OUTER.INNER.DBL", Fork{inner(0), dbl(1)}, `{"y":4}`),
+			f.outs("OUTER.INNER.DBL", Fork{inner(1), dbl(0)}, `{"y":6}`),
+		}
+	}
+
+	sub := func(load func(*testing.T) *fixture, widths ...int) func(*testing.T) (*fixture, []string) {
+		return func(t *testing.T) (*fixture, []string) {
+			t.Helper()
+
+			f := load(t)
+
+			return f, subOuts(f, widths)
+		}
+	}
+
 	cases := []struct {
-		name   string
-		load   func(*testing.T) *fixture
-		widths []int
-		want   string
+		name string
+		load func(*testing.T) (*fixture, []string)
+		want string
 	}{
-		{"merge_across_outer", fixtureNamed("merge_across_outer"), []int{3, 3}, `{"subs":[{"ys":[1,1,4,9,4,9]},{"ys":[1,1,4,9,4,9]}]}`},
-		{"merge_across_empty", fixtureNamed("merge_across_empty"), []int{2, 0}, `{"subs":[{"ys":[1,null,4]},{"ys":[null,null,null]}]}`},
-		{"one_outer_fork", oneOuterFork, []int{2}, `{"subs":[{"ys":[1,4]}]}`},
+		{"merge_across_outer", sub(fixtureNamed("merge_across_outer"), 3, 3), `{"subs":[{"ys":[1,4,9]},{"ys":[1,4,9]}]}`},
+		{"merge_across_empty", sub(fixtureNamed("merge_across_empty"), 2, 0), `{"subs":[{"ys":[1,4]},{"ys":[]}]}`},
+		{"merge_across_short", sub(fixtureNamed("merge_across_short"), 2, 1), `{"subs":[{"ys":[1,4]},{"ys":[1]}]}`},
+		{"one_outer_fork", sub(oneOuterFork, 2), `{"subs":[{"ys":[1,4]}]}`},
+		{"map_pipe_nested", nested, `{"yss":[[2,4],[6]]}`},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := tc.load(t)
+			f, in := tc.load(t)
 
-			raw, err := f.writeOuts(subOuts(f, tc.widths)...)
+			raw, err := f.writeOuts(in...)
 			if err != nil {
 				t.Fatal(err)
 			}
 
 			wantArgs(t, "TOP outs", raw, tc.want)
-		})
-	}
-}
-
-// TestMergeAcrossOuterForksFails: where an element's own outer fork lacks
-// an inner fork another outer fork has, the merge fails as mrp's run of the
-// fixture fails resolving the pipeline outs ("could not match reference to
-// a specific fork"): an inner map call over a stage output
-// (merge_across_short) or over a literal whose elements differ in length
-// (map_pipe_nested).
-func TestMergeAcrossOuterForksFails(t *testing.T) {
-	short := loadFixture(t, "merge_across_short")
-
-	nested := loadFixture(t, "map_pipe_nested")
-	inner := func(i int) Part { return nested.part("OUTER.INNER", ArrayIndex(i)) }
-	dbl := func(i int) Part { return nested.part("OUTER.INNER.DBL", ArrayIndex(i)) }
-
-	cases := []struct {
-		name string
-		f    *fixture
-		in   []string
-	}{
-		{"merge_across_short", short, subOuts(short, []int{2, 1})},
-		{"map_pipe_nested", nested, []string{
-			nested.outs("OUTER.INNER.DBL", Fork{inner(0), dbl(0)}, `{"y":2}`),
-			nested.outs("OUTER.INNER.DBL", Fork{inner(0), dbl(1)}, `{"y":4}`),
-			nested.outs("OUTER.INNER.DBL", Fork{inner(1), dbl(0)}, `{"y":6}`),
-		}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := tc.f.writeOuts(tc.in...)
-			if !errors.Is(err, errMergeUnmatched) {
-				t.Fatalf("pipeline outs: %v, want %v", err, errMergeUnmatched)
-			}
 		})
 	}
 }
@@ -139,16 +127,18 @@ stage SQ(
 )
 `
 
-// TestMergeAcrossOuterForksRefused: a merge across an outer map call's forks
-// that mro2nf does not list as mrp does fails the outs, not gathering only
-// the element's own forks: a merge of a map call, a merge across two outer
-// map calls of several forks each, and a merged value other than a
-// reference at an empty fork.
-func TestMergeAcrossOuterForksRefused(t *testing.T) {
+// TestMergeAcrossOuterForksOfEveryShape: the element's own forks are what
+// upstream mrp (50ad6c0) gathers too for a merge of a map call over a map,
+// a merge across two outer map calls of several forks each, and a merged
+// value other than a reference, at an empty fork as []. Each want is that
+// mrp's outs of the program, with MK returning xs 1..n and km {a: 1, b: 2},
+// and SQ its x squared.
+func TestMergeAcrossOuterForksOfEveryShape(t *testing.T) {
 	cases := []struct {
 		name string
 		src  string
 		in   func(*fixture) []string
+		want string
 	}{
 		{"map_call", acrossStages + `
 pipeline SUB(in int n, out map<int> ys,)
@@ -157,7 +147,7 @@ pipeline SUB(in int n, out map<int> ys,)
     map call SQ(x = split MK.km,)
     return (ys = SQ.y,)
 }
-`, mapCallOuts},
+`, mapCallOuts, `{"subs":[{"ys":{"a":1,"b":4}},{"ys":{"a":1,"b":4}}]}`},
 		{"two_outer_calls", acrossStages + `
 pipeline SUB2(in int n, out int[] ys,)
 {
@@ -171,7 +161,7 @@ pipeline SUB(in int n, out SUB2[] s2,)
     map call SUB2(n = split [self.n, self.n],)
     return (s2 = SUB2,)
 }
-`, twoOuterOuts},
+`, twoOuterOuts, `{"subs":[{"s2":[{"ys":[1,4]},{"ys":[1,4]}]},{"s2":[{"ys":[1,4]},{"ys":[1,4]}]}]}`},
 		{"struct_at_empty_fork", acrossStages + `
 pipeline P(in int x, out int y, out int k,)
 {
@@ -185,7 +175,7 @@ pipeline SUB(in int n, out P[] ps,)
     map call P(x = split MK.xs,)
     return (ps = P,)
 }
-`, structOuts},
+`, structOuts, `{"subs":[{"ps":[{"k":5,"y":1},{"k":5,"y":4}]},{"ps":[]}]}`},
 	}
 
 	for _, tc := range cases {
@@ -200,24 +190,26 @@ pipeline TOP(out SUB[] subs,)
 call TOP()
 `)
 
-			_, err := f.writeOuts(tc.in(f)...)
-			if !errors.Is(err, errMergeAcrossForks) {
-				t.Fatalf("pipeline outs: %v, want %v", err, errMergeAcrossForks)
+			raw, err := f.writeOuts(tc.in(f)...)
+			if err != nil {
+				t.Fatal(err)
 			}
+
+			wantArgs(t, "TOP outs", raw, tc.want)
 		})
 	}
 }
 
 // mapCallOuts stages the outs of map_call's stages: at each outer fork, MK
-// returns km {a, b} and SQ a y at each key.
+// returns km {a: 1, b: 2} and SQ its square at each key.
 func mapCallOuts(f *fixture) []string {
 	in := make([]string, 0, 6)
 
 	for s := range 2 {
 		sub := f.part("TOP.SUB", ArrayIndex(s))
 
-		for _, k := range []string{"a", "b"} {
-			in = append(in, f.outs("TOP.SUB.SQ", Fork{sub, f.part("TOP.SUB.SQ", MapKey(k))}, `{"y":1}`))
+		for k, y := range map[string]string{"a": "1", "b": "4"} {
+			in = append(in, f.outs("TOP.SUB.SQ", Fork{sub, f.part("TOP.SUB.SQ", MapKey(k))}, `{"y":`+y+`}`))
 		}
 
 		in = append(in, f.outs("TOP.SUB.MK", Fork{sub}, `{"xs":[],"km":{"a":1,"b":2}}`))
@@ -226,8 +218,8 @@ func mapCallOuts(f *fixture) []string {
 	return in
 }
 
-// twoOuterOuts stages the outs of two_outer_calls' stages: two SQ forks
-// under each of SUB2's two forks under each of SUB's two.
+// twoOuterOuts stages the outs of two_outer_calls' stages: two SQ forks,
+// of 1 and 4, under each of SUB2's two forks under each of SUB's two.
 func twoOuterOuts(f *fixture) []string {
 	in := make([]string, 0, 12)
 
@@ -238,7 +230,7 @@ func twoOuterOuts(f *fixture) []string {
 			sub2 := f.part("TOP.SUB.SUB2", ArrayIndex(s2))
 
 			for q := range 2 {
-				in = append(in, f.outs("TOP.SUB.SUB2.SQ", Fork{sub, sub2, f.part("TOP.SUB.SUB2.SQ", ArrayIndex(q))}, `{"y":1}`))
+				in = append(in, f.outs("TOP.SUB.SUB2.SQ", Fork{sub, sub2, f.part("TOP.SUB.SUB2.SQ", ArrayIndex(q))}, `{"y":`+strconv.Itoa((q+1)*(q+1))+`}`))
 			}
 
 			in = append(in, f.outs("TOP.SUB.SUB2.MK", Fork{sub, sub2}, `{"xs":[1,2],"km":{}}`))
@@ -258,5 +250,23 @@ func structOuts(f *fixture) []string {
 		f.outs("TOP.SUB.P.SQ", Fork{first, f.part("TOP.SUB.P", ArrayIndex(1))}, `{"y":4}`),
 		f.outs("TOP.SUB.MK", Fork{first}, `{"xs":[1,2],"km":{}}`),
 		f.outs("TOP.SUB.MK", Fork{f.part("TOP.SUB", ArrayIndex(1))}, `{"xs":[],"km":{}}`),
+	}
+}
+
+// TestMergeOfForklessPipeline: a merge of a mapped sub-pipeline Martian
+// gave no fork root gathers what mrp's getParts finds without one: no fork
+// where the call's length is unknown at compile time, its compile-time
+// forks where it is known (merge_unforked_pipeline, gen-diff seed 2554's
+// witness). Each want is the _args of upstream mrp's (50ad6c0) run.
+func TestMergeOfForklessPipeline(t *testing.T) {
+	f := loadFixture(t, "merge_unforked_pipeline")
+
+	for node, want := range map[string]string{
+		"TOP.OUTER.COUNT":     `{"vs":[]}`,
+		"TOP.OUTER.COUNT_LIT": `{"vs":[null,null]}`,
+		"TOP.OUTER.SHOW":      `{"yss":[]}`,
+	} {
+		_, got := f.args(node)
+		wantArgs(t, node, got, want)
 	}
 }

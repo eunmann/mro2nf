@@ -10,6 +10,13 @@ package e2e
 // written as a fixture directory, shrunk to a minimal program first unless
 // GEN_SHRINK_EVALS is 0.
 //
+// Each program runs at its literal invocation, which mostly binds empty
+// collections, and again at its witness invocation (cg.Source.Witness),
+// which forks every entry collection, nested ones at different widths; a
+// witness run's findings are under the leg <leg>@witness. A run in which
+// mrp ran a job on bindings it failed to resolve is no test: mrp ran it on
+// nulls in their place (#606).
+//
 // A generated program is no fixture, so every comparator rule of the
 // allowlist (divergences.json) applies to it, an issue-tracked one included,
 // since a known divergence is no new finding; but none is reported as
@@ -60,6 +67,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/test/divergence"
 	"github.com/eunmann/mro2nf/test/gen"
 	"github.com/google/go-cmp/cmp"
@@ -285,6 +293,45 @@ func TestGenDiffHarnessErrorFails(t *testing.T) {
 		t.Errorf("TestGenDiff without mrp: err %v, want a failed run naming %q:\n%s", err, errNoMrp, out)
 	}
 }
+
+// TestGenDiffSkipsRefusedShape pins that a program mro2nf refuses as a call
+// graph shape it does not wire is no test, rather than a divergence filed
+// against every refusal the generator reaches.
+func TestGenDiffSkipsRefusedShape(t *testing.T) {
+	buildBinaries(t)
+
+	dir, work := t.TempDir(), t.TempDir()
+	writeBenchFile(t, filepath.Join(dir, "pipeline.mro"), refusedShapeMRO)
+
+	errs, skip := transpileGenLegs(genEnv{tools: repoTools(), legs: genLegs}, dir, work)
+	if skip == "" {
+		t.Errorf("transpileGenLegs = %v, want a skip for the refused shape", errs)
+	}
+}
+
+// refusedShapeMRO zips a disable gate from one stage's outs into a map call
+// another stage's outs fork, which mro2nf refuses.
+const refusedShapeMRO = `
+stage SRC(out bool[] skips, src py "stages/src",)
+stage OTHER(out int[] xs, src py "stages/other",)
+stage WORK(in int x, out int y, src py "stages/work",)
+
+pipeline INNER(in int x, in bool skip, out int y,)
+{
+    call WORK(x = self.x,) using (disabled = self.skip,)
+    return (y = WORK.y,)
+}
+
+pipeline P(out int[] ys,)
+{
+    call SRC()
+    call OTHER()
+    map call INNER(x = split OTHER.xs, skip = split SRC.skips,)
+    return (ys = INNER.y,)
+}
+
+call P()
+`
 
 // TestGenDiffHarnessErrorFailsSkipsWithoutTools pins that test's guard:
 // without TestGenDiff's tools and E2E_REQUIRE it skips, as TestGenDiff does,
@@ -578,7 +625,44 @@ func evalGenProgram(t *testing.T, env genEnv, prog *gen.Program) (genVerdict, er
 		return genVerdict{}, err
 	}
 
-	return evalGenFixture(t, env, dir, work)
+	return evalGenInvocations(t, env, dir, work)
+}
+
+// evalGenInvocations runs the fixture at dir at its own invocation and,
+// where it differs, at its witness invocation, which reaches the shapes
+// non-empty collections fork into.
+func evalGenInvocations(t *testing.T, env genEnv, dir, work string) (genVerdict, error) {
+	t.Helper()
+
+	literal, err := evalGenFixture(t, env, dir, work)
+	if err != nil {
+		return genVerdict{}, err
+	}
+
+	text, differs, err := witnessSource(dir)
+
+	switch {
+	case err != nil && literal.skip != "":
+		return literal, nil
+	case err != nil:
+		return genVerdict{}, err
+	case !differs:
+		return literal, nil
+	}
+
+	wwork := filepath.Join(work, "witness")
+	wdir := filepath.Join(wwork, "fixture")
+
+	if err := writeWitnessFixture(dir, wdir, text); err != nil {
+		return genVerdict{}, err
+	}
+
+	witness, err := evalGenFixture(t, env, wdir, wwork)
+	if err != nil {
+		return genVerdict{}, fmt.Errorf("witness invocation: %w", err)
+	}
+
+	return joinVerdicts(literal, witness), nil
 }
 
 // evalGenFixture runs the fixture at dir under mrp and under every leg, in
@@ -605,6 +689,10 @@ func evalGenFixture(t *testing.T, env genEnv, dir, work string) (genVerdict, err
 			tailFile(filepath.Join(work, "mrp.log")))}, nil
 	case err != nil:
 		return genVerdict{}, err
+	}
+
+	if unresolved, err := mrpRanUnresolved(filepath.Join(work, "mrp.log")); err != nil || unresolved {
+		return genVerdict{skip: "mrp ran a stage whose bindings it failed to resolve (#606):\n" + tailFile(filepath.Join(work, "mrp.log"))}, err
 	}
 
 	if mrp.Failed && !slices.ContainsFunc(mrp.Failures, func(f stageFailure) bool { return isStageDir(dir, f.Stage) }) {
@@ -637,7 +725,7 @@ func transpileGenLegs(env genEnv, dir, work string) ([]error, string) {
 
 	for i, leg := range env.legs {
 		err := transpileInto(env.tools, dir, "pipeline.mro", genLegProj(work, leg))
-		if err != nil && strings.Contains(err.Error(), "unsupported construct") {
+		if err != nil && strings.Contains(err.Error(), cg.ErrShapeUnsupported.Error()) {
 			return nil, fmt.Sprintf("mro2nf rejects it as unsupported (%s leg): %v", leg.name, err)
 		}
 
@@ -1005,6 +1093,17 @@ func writeGenFixture(t *testing.T, env genEnv, p *gen.Program, v genVerdict) (st
 
 	if err := p.WriteFixture(dir); err != nil {
 		return "", err
+	}
+
+	if v.atWitness() {
+		text, _, err := witnessSource(dir)
+		if err != nil {
+			return "", err
+		}
+
+		if err := os.WriteFile(filepath.Join(dir, "pipeline.mro"), []byte(text), 0o600); err != nil {
+			return "", fmt.Errorf("write witness pipeline.mro: %w", err)
+		}
 	}
 
 	tmp := t.TempDir()

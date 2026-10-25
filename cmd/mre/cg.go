@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -205,21 +206,23 @@ func (p *postFlags) post(g *cg.Graph, inst cg.Instance, done finished, staged sh
 }
 
 // runOuts resolves the pipeline outs from the staged stage outs and
-// publishes them as mrp does: the published tree and the outs JSON naming it.
+// publishes them as mrp does: the manifest of the published tree and the
+// outs JSON naming it. It reads the staged outs' skeletons, never the
+// bytes of a file a stage task wrote.
 func runOuts(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("outs", flag.ContinueOnError)
 	gf := addGraph(fs)
-	out := fs.String("o", "results", "dir to write the published tree into")
+	manifest := fs.String("manifest", "publish.json", "file to write the published tree's entries to, each its path in the tree and where the task that wrote it keeps it; a file no stage task wrote is copied into external/ beside it")
 	outsJSON := fs.String("json", "pipeline_outs.json", "file to write the outs JSON to")
 	work := fs.String("work", "pipestance", "dir to reconstruct the pipestance in")
 	locations := fs.String("locations", "", "file of tab-separated lines: a staged outs bundle, or a -refs <n> dir, and where its producing task's work dir keeps it")
 	leaves := fs.String("leaves", "", "comma-separated indices of the run's entry file values the task staged, the i-th in entry/<i>/, from 1")
 	valuesFile := fs.String("values", "", "file of the stage outputs the task got as values, whitespace-separated records a post wrote (-field-values)")
-	refs := fs.String("refs", "", "dir of the bundle leaves the task staged by reference, each with its ordinal dir at <n>/f/<ordinal>/, which the staged outs name by origin where no staged outs bundle holds them; -locations locates each <n>")
+	refs := fs.String("refs", "", "dir of the bundles holding the leaves the task staged by reference, each at <n>/, which the staged outs name by origin where no staged outs bundle holds them; -locations locates each <n>")
 
 	var in repeatedFlag
 
-	fs.Var(&in, "in", "staged instance outs bundle, or dir of them (repeatable)")
+	fs.Var(&in, "in", "staged instance outs bundle, or dir of them (repeatable); a staged bundle skeleton (shim.SkeletonFile) is expanded in place")
 
 	if err := fs.Parse(argv); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -240,12 +243,16 @@ func runOuts(ctx context.Context, argv []string) error {
 		return err
 	}
 
+	if err := expandSkeletons(append(slices.Clone(in), *refs)); err != nil {
+		return fmt.Errorf("outs: %w", err)
+	}
+
 	files, err := stagedEntryFiles(g, *leaves)
 	if err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}
 
-	spec := cg.OutsSpec{In: in, Values: values, Refs: *refs, Locations: locs, EntryFiles: files, Work: *work, Results: *out, OutsJSON: *outsJSON}
+	spec := cg.OutsSpec{In: in, Values: values, Refs: *refs, Locations: locs, EntryFiles: files, Work: *work, Manifest: *manifest, OutsJSON: *outsJSON}
 	if err := g.WriteOuts(ctx, spec); err != nil {
 		return fmt.Errorf("outs: %w", err)
 	}

@@ -1,6 +1,7 @@
-# #387: rt_gate_split_reject with the gated producer a mapping sub-pipeline.
-# mrp refuses B's split of the runtime-gated SUB return before any stage runs,
-# and mro2nf refuses it at transpile time.
+# #387, #595: rt_gate_split with the gated producer a mapping sub-pipeline.
+# B splits SUB's runtime-gated return, `[S.SCALE.scaled, S.SCALE.scaled]
+# unless GATE.off`, whose literal length the gate alone decides: GATE's outs
+# fix B's forks. Martian refused this before 50ad6c0.
 stage GATE(
     in  bool v,
     out bool off,

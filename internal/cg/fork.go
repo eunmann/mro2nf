@@ -69,7 +69,7 @@ func (f Fork) String() string {
 
 // project restricts f to roots, taking each root's index from f, else from
 // the reference's own fork indices, as core ForkId.Match does
-// (core/fork.go:453).
+// (core/fork.go:454).
 func (f Fork) project(roots syntax.ForkRootList, ref map[*syntax.CallStm]syntax.CollectionIndex) (Fork, error) {
 	out := make(Fork, 0, len(roots))
 

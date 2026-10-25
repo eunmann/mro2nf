@@ -1,0 +1,70 @@
+# A stage inside a mapped sub-pipeline reads one struct field of its fork
+# element twice, directly and inside a literal: two splits of MK's output
+# projected to f1 over INNER's root. Their references to MK leave MID's
+# index unresolved, which a post comparing them must not read as a
+# concrete index (gen-diff witness of seed 862).
+struct S(
+    int f1,
+    int f2,
+)
+
+stage MK(
+    in  int    x,
+    out map<S> m,
+    src py     "stages/mk",
+)
+
+stage USE(
+    in  int   a,
+    in  int[] b,
+    out int   y,
+    src py    "stages/use",
+)
+
+pipeline INNER(
+    in  S   s,
+    out int y,
+)
+{
+    call USE(
+        a = self.s.f1,
+        b = [self.s.f1, self.s.f1],
+    )
+
+    return (
+        y = USE.y,
+    )
+}
+
+pipeline MID(
+    in  int      x,
+    out map<int> ys,
+)
+{
+    call MK(
+        x = self.x,
+    )
+
+    map call INNER(
+        s = split MK.m,
+    )
+
+    return (
+        ys = INNER.y,
+    )
+}
+
+pipeline TOP(
+    out map<int>[] r,
+)
+{
+    map call MID(
+        x = split [1, 5],
+    )
+
+    return (
+        r = MID.ys,
+    )
+}
+
+call TOP()

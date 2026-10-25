@@ -305,10 +305,12 @@ func (r *refRun) publish(items []string) map[string]string {
 		locations[abs] = filepath.Dir(filepath.Dir(o))
 	}
 
-	spec := OutsSpec{In: []string{"in"}, Refs: "refs", Locations: locations, Work: "work", Results: "results", OutsJSON: filepath.Join("results", "pipeline_outs.json")}
+	spec := OutsSpec{In: []string{"in"}, Refs: "refs", Locations: locations, Work: "work", Manifest: "publish.json", OutsJSON: filepath.Join("results", "pipeline_outs.json")}
 	if err := r.g.WriteOuts(r.t.Context(), spec); err != nil {
 		r.t.Fatal(err)
 	}
+
+	publishManifest(r.t, "publish.json", "results", func(src string) string { return src })
 
 	return treeOf(r.t, "results")
 }

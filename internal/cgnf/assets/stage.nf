@@ -337,18 +337,52 @@ def locations(ups, List locs, List refLocs) {
     return "cat > locations <<'MRO2NF_LOCATIONS'\n${lines.join('')}MRO2NF_LOCATIONS"
 }
 
+// skeletons are the skeletons of the bundle dirs ds (mre's
+// shim.SkeletonFile): their paths and records, none of their files' bytes,
+// which OUTS stages in their place.
+def skeletons(List ds) {
+    return ds.collect { d -> d.resolve('.mre-skeleton.json') }
+}
+
+// bundleLocations are where the producing task's work dir keeps the bundle
+// of each of the skeletons ss.
+def bundleLocations(List ss) {
+    return ss.collect { s -> s.parent.toUriString() }
+}
+
+// refBundles are the bundles holding the files items name by reference
+// that no item holds (refsOf), each once.
+def refBundles(List items) {
+    return refsOf(items).collect { r -> r.parent.parent }.unique()
+}
+
+// published is the published tree the manifest in OUTS's publish dir p
+// lists: each entry's source and its path in the tree. A source lies in
+// the work dir of the task that wrote it, OUTS's own below p for a file no
+// stage task wrote, as Nextflow publishes no other file. A stage chooses
+// its files' names, so the driver globs none.
+def published(Path p) {
+    return new groovy.json.JsonSlurper().parseText(p.resolve('publish.json').text).collect { e -> [e.local ? p.resolve(e.source) : file(e.source, glob: false), e.path] }
+}
+
 // OUTS resolves the pipeline outs from the stage outs and the entry files
 // they read and lays out what the run publishes with mrp's own
-// post-processing: the outs JSON (json) and each entry of the outs tree
-// (results), which main.nf's workflow outputs publish. It runs no stage, so
-// it compiles the project's copy of the .mro files it stages.
+// post-processing, from the skeletons of the outs, none of the bytes of
+// the files a stage task wrote: the outs JSON (json) and the manifest of
+// the outs tree (manifest, publish/publish.json), each entry where the task
+// that wrote it keeps it, which main.nf's workflow outputs publish from
+// there. A published file no stage task wrote, an entry file or a host
+// path, it copies into publish/external/, which the manifest names. One
+// output dir holds both, as each output is an edge of the run's DAG. It
+// runs no stage, so it compiles the project's copy of the .mro files it
+// stages.
 process OUTS {
     input:
     val meta
     path cf, stageAs: 'call.b64', arity: '0..*'
     path ups, stageAs: 'in/u*', arity: '0..*'
     val locs
-    path refs, stageAs: 'refs/?/f/*', arity: '0..*'
+    path refs, stageAs: 'refs/?', arity: '0..*'
     val refLocs
     val values
     tuple val(leaves), path(entry, stageAs: 'entry/?/*', arity: '0..*')
@@ -356,7 +390,7 @@ process OUTS {
 
     output:
     path 'pipeline_outs.json', emit: json
-    path 'results/*', hidden: true, arity: '0..*', emit: results
+    path 'publish', emit: manifest
 
     script:
     """
@@ -364,7 +398,7 @@ process OUTS {
     ${valuesFile(values)}
     mkdir -p in refs
     ${locations(ups, locs, refLocs)}
-    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -o results -json pipeline_outs.json
+    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish/publish.json -json pipeline_outs.json
     """
 }
 
@@ -761,6 +795,43 @@ workflow GATHER {
 
     emit:
     out
+}
+
+// NEEDS keys, for each enabled instance, by its whole key, the outs of the
+// instances of a node it reads that one of the read's patterns gives it,
+// once all are in, ordered by the upstream's key: each instance stages only
+// the upstream instances its bindings read. A pattern is [limits, mine,
+// theirs]: it gives the instances whose ordinals, at positions theirs, are
+// the instance's at positions mine, to an instance whose ordinal at each
+// limit's position is one of its ordinals (needed). An instance no pattern
+// gives anything gathers none.
+workflow NEEDS {
+    take:
+    run
+    outs
+    patterns
+    fields
+
+    main:
+    seeds = run.map { v -> [v[1], null] }
+    picks = run.flatMap { v -> needed(v[1], patterns).collect { q -> [q, v[1]] } }
+    ups = outs.flatMap { ku, ds ->
+        def es = selected(ds, fields)
+        (0..<patterns.size()).collect { x -> [[x] + ku[patterns[x][2]], [ku, es]] }
+    }
+    out = seeds.mix(picks.combine(ups, by: 0).map { _q, k, u -> [k, u] }).groupTuple().map { k, us ->
+        [k, ordered(us.findAll { u -> u != null }.unique { u -> u[0] }.collectMany { u -> u[1].collect { e -> [u[0], e] } })]
+    }
+
+    emit:
+    out
+}
+
+// needed is, of each pattern whose limits instance key k meets, the key it
+// joins k to the upstream's instances by: the pattern's index, then k's
+// ordinals at the pattern's positions mine.
+def needed(List k, List patterns) {
+    return (0..<patterns.size()).findAll { x -> patterns[x][0].every { g -> k[g[0]] in g[1] } }.collect { x -> [x] + k[patterns[x][1]] }
 }
 
 // planned is the meta of a node's tasks: the one every task shares, with
