@@ -108,7 +108,7 @@ func TestCloudSimJoinPostsNoStagedFile(t *testing.T) {
 
 	dirs := taskDirs(t, proj)
 
-	if d := cmp.Diff([]string{"data.json", "instance.json", "task.json"}, filesBelow(t, filepath.Join(dirs["N1_MAKE_SHARDS_JN"][0], "outs"))); d != "" {
+	if d := cmp.Diff([]string{shim.SkeletonFile, "data.json", "instance.json", "task.json"}, filesBelow(t, filepath.Join(dirs["N1_MAKE_SHARDS_JN"][0], "outs"))); d != "" {
 		t.Errorf("the join's posted outs hold (-want +got):\n%s", d)
 	}
 
@@ -141,7 +141,8 @@ func TestCloudSimSplitEmitsNoStagedFile(t *testing.T) {
 
 	dirs := taskDirs(t, proj)
 
-	want := []string{"chunk.json", "data.json", "chunk.json", "data.json", "chunk.json", "data.json", "join.json", "resources.tsv"}
+	chunk := []string{shim.SkeletonFile, "chunk.json", "data.json"}
+	want := append(slices.Concat(chunk, chunk, chunk), "join.json", "resources.tsv")
 	if d := cmp.Diff(want, filesBelow(t, filepath.Join(dirs["N1_SUM_FWD_SP"][0], "chunks"))); d != "" {
 		t.Errorf("the split's chunks hold (-want +got):\n%s", d)
 	}
