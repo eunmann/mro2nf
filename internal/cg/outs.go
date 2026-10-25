@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/core"
@@ -216,7 +217,7 @@ func (g *Graph) verifyPipelineOutputs(v json.Marshaler, t syntax.Type) error {
 			}
 		}
 	case *syntax.ArrayType:
-		if a, ok := v.(marshalerArray); ok {
+		if a, ok := mrcore.Elements(v); ok {
 			for _, e := range a {
 				if err := g.verifyPipelineOutputs(e, t.Elem); err != nil {
 					return err
