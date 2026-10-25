@@ -194,7 +194,7 @@ func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 		roots[r.Call()] = r
 	}
 
-	served := func(x *syntax.SplitExp) bool {
+	in := &readerSplits{roots: roots, served: func(x *syntax.SplitExp) bool {
 		if _, partnered := g.partnerOf(st, x); partnered {
 			return true
 		}
@@ -202,13 +202,13 @@ func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 		ref, ok := x.Value.(*syntax.RefExp)
 
 		return ok && roots[x.Call] != nil && g.ownSource(roots[x.Call], ref)
-	}
+	}}
 
 	fields := map[string]map[string]bool{}
 	zips := map[Zip]bool{}
 
 	for _, e := range bindings(st) {
-		g.collectReads(e, served, fields)
+		g.collectReads(e, in, fields)
 		walkSplits(e, func(x *syntax.SplitExp) {
 			if p, ok := g.partnerOf(st, x); ok {
 				zips[Zip{Root: p.root.Fqid, Node: p.ref.Id, Output: p.ref.OutputId}] = true
@@ -398,32 +398,36 @@ func readList(fields map[string]map[string]bool) []Read {
 	return out
 }
 
-// collectReads adds to fields the stage outs e reads, less the splits
-// served reports, which a staged element serves.
-func (g *Graph) collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, fields map[string]map[string]bool) {
+// readerSplits are the splits of one reader's bindings collectReads tells
+// apart: those a staged element serves, and those over the reader's own
+// roots.
+type readerSplits struct {
+	served func(*syntax.SplitExp) bool
+	roots  map[*syntax.CallStm]*syntax.CallGraphStage
+}
+
+// collectReads adds to fields the stage outs e reads, less the splits of
+// in, if set, that a staged element serves.
+func (g *Graph) collectReads(e syntax.Exp, in *readerSplits, fields map[string]map[string]bool) {
 	switch x := e.(type) {
 	case *syntax.SplitExp:
-		if served == nil || !served(x) {
-			g.collectReads(x.Value, served, fields)
-		} else if d, ok := x.Value.(*syntax.DisabledExp); ok {
-			g.collectReads(d.Disabled, served, fields)
-		}
+		g.collectSplit(x, in, fields)
 	case *syntax.RefExp:
 		addRead(fields, x)
 	case *syntax.ArrayExp:
 		for _, v := range x.Value {
-			g.collectReads(v, served, fields)
+			g.collectReads(v, in, fields)
 		}
 	case *syntax.MapExp:
 		for _, v := range x.Value {
-			g.collectReads(v, served, fields)
+			g.collectReads(v, in, fields)
 		}
 	case *syntax.MergeExp:
 		if g.mergeGathersNone(x) {
 			return
 		}
 
-		g.collectReads(x.Value, served, fields)
+		g.collectReads(x.Value, in, fields)
 
 		if x.ForkNode != nil {
 			addRead(fields, x.ForkNode)
@@ -437,8 +441,44 @@ func (g *Graph) collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, f
 			addRead(fields, r)
 		}
 	case *syntax.DisabledExp:
-		g.collectReads(x.Disabled, served, fields)
-		g.collectReads(x.Value, served, fields)
+		g.collectReads(x.Disabled, in, fields)
+		g.collectReads(x.Value, in, fields)
+	}
+}
+
+// collectSplit adds to fields the stage outs x reads: of a split a staged
+// element serves, only its gate.
+func (g *Graph) collectSplit(x *syntax.SplitExp, in *readerSplits, fields map[string]map[string]bool) {
+	switch {
+	case in == nil:
+		g.collectReads(x.Value, in, fields)
+	case in.served(x):
+		if d, ok := x.Value.(*syntax.DisabledExp); ok {
+			g.collectReads(d.Disabled, in, fields)
+		}
+	case in.roots[x.Call] != nil:
+		g.collectCollection(x.Value, in, fields)
+	default:
+		g.collectReads(x.Value, in, fields)
+	}
+}
+
+// collectCollection adds to fields the stage outs v, the collection a split
+// over one of in's roots forks, reads, as the aligner walks it
+// (aligner.collection): a merge there is of the forks at the reader's own
+// element, one instance its fork names, so it reads the merged value and
+// nothing counting the merge's forks reads, which grows with their number.
+func (g *Graph) collectCollection(v syntax.Exp, in *readerSplits, fields map[string]map[string]bool) {
+	switch x := v.(type) {
+	case *syntax.MergeExp:
+		if !g.mergeGathersNone(x) {
+			g.collectReads(x.Value, in, fields)
+		}
+	case *syntax.DisabledExp:
+		g.collectReads(x.Disabled, in, fields)
+		g.collectCollection(x.Value, in, fields)
+	default:
+		g.collectReads(v, in, fields)
 	}
 }
 

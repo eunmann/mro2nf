@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/martian-lang/martian/martian/syntax"
 )
 
 // standInSkipped are the fixtures the stand-in cannot run, by why.
@@ -56,7 +58,12 @@ func TestStandInStagesOnlyWhatItReads(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				s := standInOf(t, g)
 				s.audit = func(a stagingAudit) {
-					found = append(found, overstaged(name, a)...)
+					st, err := g.Stage(a.node.Fqid)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					found = append(found, overstaged(name, a, gatedValueReads(st))...)
 				}
 
 				s.stages()
@@ -72,16 +79,61 @@ func TestStandInStagesOnlyWhatItReads(t *testing.T) {
 }
 
 // overstaged are the reads of the audited instance that give it more
-// instances of a node than its resolution reads, or than one where it
-// reads none: a disable-wrapped value whose gate holds it off at run time
-// reads none of the one instance the driver gives it.
-func overstaged(name string, a stagingAudit) []string {
+// instances of a node than its resolution reads, or, of a node gated
+// reads, than one where it reads none: a disable-wrapped value whose gate
+// holds it off at run time reads none of the one instance the driver gives
+// it. Any other node it is given and reads none of is a read only the
+// topology makes, as counting a merge's forks under a split aligned to
+// them was (#614): the instance's _args hold none of it.
+func overstaged(name string, a stagingAudit, gated map[string]bool) []string {
 	var out []string
 
 	for _, node := range slices.Sorted(maps.Keys(a.given)) {
-		if a.given[node] > max(1, a.resolved[node]) {
+		allowed := a.resolved[node]
+		if gated[node] {
+			allowed = max(1, allowed)
+		}
+
+		if a.given[node] > allowed {
 			out = append(out, fmt.Sprintf("%s: %s at %s is given %d instances of %s and reads %d", name, a.node.Fqid, a.fork, a.given[node], node, a.resolved[node]))
 		}
+	}
+
+	return out
+}
+
+// gatedValueReads are the nodes st's bindings read within a disable-wrapped
+// value.
+func gatedValueReads(st *syntax.CallGraphStage) map[string]bool {
+	out := map[string]bool{}
+
+	var walk func(e syntax.Exp)
+
+	walk = func(e syntax.Exp) {
+		switch x := e.(type) {
+		case *syntax.DisabledExp:
+			for _, r := range x.Value.FindRefs() {
+				out[r.Id] = true
+			}
+
+			walk(x.Value)
+		case *syntax.SplitExp:
+			walk(x.Value)
+		case *syntax.MergeExp:
+			walk(x.Value)
+		case *syntax.ArrayExp:
+			for _, v := range x.Value {
+				walk(v)
+			}
+		case *syntax.MapExp:
+			for _, v := range x.Value {
+				walk(v)
+			}
+		}
+	}
+
+	for _, e := range bindings(st) {
+		walk(e)
 	}
 
 	return out
