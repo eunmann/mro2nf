@@ -594,7 +594,7 @@ into Nextflow's `outputDir`: `results` in the launch dir by default,
 under that profile (§9). No param names it. So each file a stage task
 wrote is copied once, by the driver, from where its producer wrote it,
 server side between two `s3://` prefixes, and no other task stages or
-uploads it (the bench's publish gate). Nextflow 26.10 publishes no file
+uploads it (the bench's publish gate). Nextflow 26.04 publishes no file
 outside a task's work dir: it logs a `NullPointerException` in
 `PublishOp.publish0` and the run succeeds without the file. So a published
 file no stage task wrote, an entry file or a host path a stage passed on,

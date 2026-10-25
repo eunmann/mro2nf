@@ -187,7 +187,7 @@ call PUB(
 
 // TestMrpDiffPublishesHostEntryFiles (#610): pipeline outs that reach a
 // head-node entry file, directly and through a stage that returns it,
-// publish as mrp's do, a copy of the file at each output. Nextflow 26.10
+// publish as mrp's do, a copy of the file at each output. Nextflow 26.04
 // publishes no file outside a task's work dir, logging a
 // NullPointerException and losing it while the run succeeds, so OUTS
 // copies such a file into its external/ dir, the one task that holds it,
