@@ -10,17 +10,20 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-const featureCoverage = "../../docs/FEATURE_COVERAGE.md"
+const (
+	divergencesDoc  = "../../docs/reference/divergences.md"
+	featureCoverage = "../../docs/reference/feature-coverage.md"
+)
 
-// TestFeatureCoverageIsCurrent fails when the checked-in divergence table of
-// docs/FEATURE_COVERAGE.md is not what the allowlist renders.
-func TestFeatureCoverageIsCurrent(t *testing.T) {
+// TestDivergencesDocIsCurrent fails when the checked-in divergence table of
+// docs/reference/divergences.md is not what the allowlist renders.
+func TestDivergencesDocIsCurrent(t *testing.T) {
 	allow, err := Load(checkedIn)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	doc, err := os.ReadFile(featureCoverage)
+	doc, err := os.ReadFile(divergencesDoc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,24 +34,26 @@ func TestFeatureCoverageIsCurrent(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(want, string(doc)); diff != "" {
-		t.Errorf("docs/FEATURE_COVERAGE.md's divergence table is stale; run make docs-divergences (-want +got):\n%s", diff)
+		t.Errorf("docs/reference/divergences.md's divergence table is stale; run make docs-divergences (-want +got):\n%s", diff)
 	}
 }
 
-// TestFeatureCoverageWarningsAreGenerated fails on a ⚠️ table row written by
-// hand outside the generated section.
-func TestFeatureCoverageWarningsAreGenerated(t *testing.T) {
-	doc, err := os.ReadFile(featureCoverage)
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestWarningsAreGenerated fails on a ⚠️ table row written by hand outside
+// the generated section, in the feature coverage or the divergences doc.
+func TestWarningsAreGenerated(t *testing.T) {
+	for _, path := range []string{featureCoverage, divergencesDoc} {
+		doc, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	before, rest, _ := strings.Cut(string(doc), BeginMarker)
-	_, after, _ := strings.Cut(rest, EndMarker)
+		before, rest, _ := strings.Cut(string(doc), BeginMarker)
+		_, after, _ := strings.Cut(rest, EndMarker)
 
-	for line := range strings.Lines(before + after) {
-		if strings.HasPrefix(line, "|") && strings.Contains(line, "⚠️") {
-			t.Errorf("hand-written ⚠️ row; make it an allowlist entry: %s", strings.TrimSpace(line))
+		for line := range strings.Lines(before + after) {
+			if strings.HasPrefix(line, "|") && strings.Contains(line, "⚠️") {
+				t.Errorf("%s: hand-written ⚠️ row; make it an allowlist entry: %s", path, strings.TrimSpace(line))
+			}
 		}
 	}
 }

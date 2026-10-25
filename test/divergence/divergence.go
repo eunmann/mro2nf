@@ -1,7 +1,7 @@
 // Package divergence is the checked-in allowlist of every known divergence
 // between mrp and a transpiled pipeline (test/e2e/divergences.json). The
 // differential excuses a difference only when an entry here matches it, and
-// the divergence section of docs/FEATURE_COVERAGE.md is rendered from it.
+// the divergence table of docs/reference/divergences.md is rendered from it.
 package divergence
 
 import (

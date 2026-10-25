@@ -2,7 +2,8 @@
 
 `make bench` measures how much data the generated Nextflow moves and how much
 orchestration it adds, so "performant / not needlessly copying" is a number
-rather than a claim. It mechanizes the CLAUDE.md overhead rule (#119):
+rather than a claim. It mechanizes the
+[overhead rule](../architecture/overview.md#the-overhead-rule) (#119):
 orchestration cost must not scale with fork width or chunk count.
 
 ## Running
@@ -110,10 +111,10 @@ meaningless pass. Lanes run in parallel, so a shared `BENCH_WORKDIR` gets a
 per-lane subdirectory. Collecting the true S3-object metric needs S3 request
 logs or a wrapping proxy and is out of scope here (see below).
 
-[`AWS_RESULTS.md`](AWS_RESULTS.md) records live runs on AWS Batch over S3
-and on HealthOmics: the fixture matrix against local runs, and CellRanger's
-critical path, its floors and the overhead above them.
-[`scripts/aws/perf/`](../scripts/aws/perf/README.md) measures a Batch run
+[AWS validation](../reference/aws-validation.md) records live runs on AWS
+Batch over S3 and on HealthOmics: the fixture matrix against local runs, and
+Cell Ranger's critical path, its floors and the overhead above them.
+[`scripts/aws/perf/`](../../scripts/aws/perf/README.md) measures a Batch run
 the same way.
 
 ## Fixtures and lanes

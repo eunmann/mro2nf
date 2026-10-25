@@ -3,7 +3,8 @@
 Transpiles Martian (`.mro`) pipelines into Nextflow projects. Generated Nextflow
 orchestrates the DAG/splits/forks/resources; each process runs the **original**
 Martian stage code through the Martian adapter ABI via the `mre` shim. See
-`docs/TRANSPILER.md` for the end-to-end design.
+`docs/architecture/` for the end-to-end design, starting with
+`docs/architecture/overview.md`.
 
 ## North star (the correctness + performance bar)
 
