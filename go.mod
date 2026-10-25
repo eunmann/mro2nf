@@ -1,8 +1,8 @@
 module github.com/eunmann/mro2nf
 
-go 1.26
+go 1.27
 
-toolchain go1.26.9
+toolchain go1.27.3
 
 require (
 	github.com/google/go-cmp v0.7.0
