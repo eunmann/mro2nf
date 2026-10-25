@@ -59,7 +59,7 @@ done <<< "$STAGED_FILES"
 # constraint), matching make lint / CI.
 LINT_EXIT=0
 LINT_OUT=$(mktemp)
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --fix --build-tags e2e $PACKAGES >"$LINT_OUT" 2>&1 || LINT_EXIT=$?
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --fix --build-tags e2e $PACKAGES >"$LINT_OUT" 2>&1 || LINT_EXIT=$?
 cat "$LINT_OUT"
 
 # golangci exits 5 for "no go files to analyze" — e.g. every staged package is

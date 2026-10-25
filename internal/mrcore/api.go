@@ -157,8 +157,7 @@ func onlyMissing(err error) bool {
 		return allMissing(multi.Unwrap())
 	}
 
-	var list syntax.ErrorList
-	if errors.As(err, &list) {
+	if list, ok := errors.AsType[syntax.ErrorList](err); ok {
 		return len(list) > 0 && allMissing(list)
 	}
 

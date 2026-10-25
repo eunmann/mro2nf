@@ -14,7 +14,7 @@
 #
 # Base images are pinned by digest, so a moved tag cannot change the image;
 # Dependabot (docker) bumps tag and digest together.
-FROM --platform=$BUILDPLATFORM golang:1.26.9@sha256:37cfcca63222ec499bec5e8ad7aad52dbf7529db36d5812b8eae2f0621aa92d6 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:f20d83a83e18dbd2a4714b8ffd4b30b287b6243962dd75608e86abcc63ba4efc AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

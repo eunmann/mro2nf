@@ -326,7 +326,7 @@ func fromCore(v json.Marshaler) json.Marshaler {
 
 	out := make(marshallerArray, rv.Len())
 	for i := range out {
-		if e, ok := rv.Index(i).Interface().(json.Marshaler); ok {
+		if e, ok := reflect.TypeAssert[json.Marshaler](rv.Index(i)); ok {
 			out[i] = fromCore(e)
 		}
 	}

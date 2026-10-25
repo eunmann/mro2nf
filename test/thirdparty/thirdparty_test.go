@@ -89,7 +89,7 @@ func TestCollectIgnoresWorkspace(t *testing.T) {
 	}
 
 	work := filepath.Join(t.TempDir(), "go.work")
-	if err := os.WriteFile(work, []byte("go 1.26\n\nuse (\n\t"+root+"\n\t"+martianDir+"\n)\n"), 0o600); err != nil {
+	if err := os.WriteFile(work, []byte("go 1.27\n\nuse (\n\t"+root+"\n\t"+martianDir+"\n)\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

@@ -6,4 +6,4 @@
 // this subtree as a separate module and skip it entirely.
 module github.com/eunmann/mro2nf/deploy/awsbatch-cdk
 
-go 1.26
+go 1.27

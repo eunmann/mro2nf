@@ -15,7 +15,7 @@ document also lists every Martian feature and its support status.
 
 ## Prerequisites
 
-- Go 1.26 and `make`, only to build from source. The build downloads Go
+- Go 1.27 and `make`, only to build from source. The build downloads Go
   modules.
 - Java 17 to 26, and Nextflow 26.04 or later (`curl -s https://get.nextflow.io | bash`).
   The generated `nextflow.config` sets `manifest.nextflowVersion '!>=26.04.0'`,
