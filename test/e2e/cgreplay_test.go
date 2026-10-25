@@ -100,8 +100,11 @@ type cgReplay struct {
 	// fork of a stage whose fork root has no fork under the forks of the
 	// roots before it, where mrp keeps a disabled placeholder.
 	placeholderDirs map[string]bool
-	seq             int
-	jobs            int
+	// off holds the stage nodes the topology disables outright, whose
+	// forks mrp does not expand from a stage's outs.
+	off  map[string]bool
+	seq  int
+	jobs int
 }
 
 // postedInstance is one stage instance its last task posted: its outs and
@@ -196,6 +199,16 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 		ours:            map[string]replayedFork{},
 		refs:            map[string][]string{},
 		placeholderDirs: map[string]bool{},
+		off:             map[string]bool{},
+	}
+
+	topo, err := g.Topology()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, n := range topo.Nodes {
+		rp.off[n.Fqid] = n.Off
 	}
 
 	return rp
@@ -440,9 +453,9 @@ func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 
 	rel := filepath.Join(strings.ReplaceAll(st.Fqid, ".", string(filepath.Separator)), inst.ForkID())
 
-	if disabled != rp.mrpDisabled(rel) || disabled != inst.Disabled {
+	if mrpOff := rp.mrpDisabledAt(st, rel); disabled != mrpOff || disabled != inst.Disabled {
 		rp.t.Errorf("%s: mre stage refused it as disabled: %t, its args resolve it disabled: %t, mrp's run disabled: %t",
-			rel, disabled, inst.Disabled, rp.mrpDisabled(rel))
+			rel, disabled, inst.Disabled, mrpOff)
 	}
 
 	if disabled {
@@ -958,6 +971,25 @@ func orNull(raw json.RawMessage) json.RawMessage {
 
 // mrpDisabled reports whether mrp's run disabled the fork at rel: it writes
 // the _disabled marker (core/stage.go:1001 Fork.skip).
+// mrpDisabledAt reports whether mrp's run disabled st's fork at rel: its
+// dir holds _disabled, or, for a node disabled outright whose forks a
+// stage's outs fix, mrp expanded none and kept only its disabled
+// placeholder (merge_sub_root's P0.ST1), where the driver drops every fork
+// the outs give it.
+func (rp *cgReplay) mrpDisabledAt(st *syntax.CallGraphStage, rel string) bool {
+	if rp.mrpDisabled(rel) {
+		return true
+	}
+
+	if _, err := os.Stat(filepath.Join(rp.ps, rel)); !rp.off[st.Fqid] || !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+
+	dir := filepath.Join(strings.Split(st.Fqid, ".")...)
+
+	return rp.mrpDisabled(dir) || rp.mrpDisabled(filepath.Join(dir, "fork0"))
+}
+
 func (rp *cgReplay) mrpDisabled(rel string) bool {
 	_, err := os.Stat(filepath.Join(rp.ps, rel, "_disabled"))
 
