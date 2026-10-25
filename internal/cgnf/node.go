@@ -2,6 +2,7 @@ package cgnf
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -357,35 +358,86 @@ type readArgs struct {
 }
 
 // read is what READ takes for each enabled instance of node i to read of
-// node r.Node. The channel is the upstream's outs, keyed by its whole key,
-// when node i shares every root of it, or, when the upstream is forked on
-// roots node i is not, a gather of the outputs it reads of every such
-// instance, ordered by the upstream's key, not by completion, which waits
-// for all of the upstream, as mrp waits for every fork of a node a node
-// reads.
+// node r.Node, the instances of it r's patterns give it (cg.ReadPattern).
+// With one pattern and no limit, the channel is the upstream's outs, keyed
+// by its whole key, when node i shares every root of it or aligns it with
+// one of its own, whose ordinal it then joins on, so an instance stages the
+// one upstream instance it reads; or a gather of the outputs it reads of
+// every instance under the roots it shares and aligns, ordered by the
+// upstream's key, not by completion, which waits for all of the upstream,
+// as mrp waits for every fork of a node a node reads. With more, or a
+// limit, it is the instances each instance's patterns give it (NEEDS).
 func (p *project) read(w *wiring, i int, n cg.TopoNode, r cg.Read) readArgs {
 	u := p.index[r.Node]
+	fields := fieldsArg(r.Fields)
+	outs := w.use(outsOf(u))
 
+	if len(r.Patterns) > 1 || (len(r.Patterns) == 1 && r.Patterns[0].When != nil) {
+		all := make([]int, len(n.Roots))
+		for x := range all {
+			all[x] = x
+		}
+
+		return readArgs{fmt.Sprintf("NEEDS(b%d.run, %s, %s, %s)", i, outs, p.patternsArg(n, u, r.Patterns), fields), ilist(all), allFields}
+	}
+
+	var align map[string]string
+	if len(r.Patterns) == 1 {
+		align = r.Patterns[0].Align
+	}
+
+	mine, theirs, gather := p.joinOn(n, u, align)
+	if gather {
+		return readArgs{fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s)", i, outs, ilist(mine), ilist(theirs), fields), ilist(mine), allFields}
+	}
+
+	return readArgs{outs, ilist(mine), fields}
+}
+
+// joinOn are the positions in node n's key, mine, and in upstream node u's,
+// theirs, of each root of u that n shares or align pairs with one of its
+// own, in u's order, and whether u has a root that is neither, which a read
+// gathers.
+func (p *project) joinOn(n cg.TopoNode, u int, align map[string]string) ([]int, []int, bool) {
 	var mine, theirs []int
 
 	gather := false
 
 	for x, root := range p.topo.Nodes[u].Roots {
-		if at := slices.Index(n.Roots, root); at >= 0 {
+		at := slices.Index(n.Roots, root)
+		if aligned, ok := align[root]; ok {
+			at = slices.Index(n.Roots, aligned)
+		}
+
+		if at >= 0 {
 			mine, theirs = append(mine, at), append(theirs, x)
 		} else {
 			gather = true
 		}
 	}
 
-	fields := fieldsArg(r.Fields)
+	return mine, theirs, gather
+}
 
-	outs := w.use(outsOf(u))
-	if gather {
-		return readArgs{fmt.Sprintf("GATHER(b%d.run, %s, %s, %s, %s)", i, outs, ilist(mine), ilist(theirs), fields), ilist(mine), allFields}
+// patternsArg is NEEDS's patterns of node n's read of upstream node u, each
+// [limits, mine, theirs]: the limits a list of [position in n's key,
+// ordinals], and the positions in n's key and in u's of the roots the
+// pattern joins on (joinOn).
+func (p *project) patternsArg(n cg.TopoNode, u int, ps []cg.ReadPattern) string {
+	out := make([]string, len(ps))
+
+	for x, rp := range ps {
+		var limits []string
+
+		for _, root := range slices.Sorted(maps.Keys(rp.When)) {
+			limits = append(limits, fmt.Sprintf("[%d, %s]", slices.Index(n.Roots, root), ilist(rp.When[root])))
+		}
+
+		mine, theirs, _ := p.joinOn(n, u, rp.Align)
+		out[x] = fmt.Sprintf("[[%s], %s, %s]", strings.Join(limits, ", "), ilist(mine), ilist(theirs))
 	}
 
-	return readArgs{outs, ilist(mine), fields}
+	return "[" + strings.Join(out, ", ") + "]"
 }
 
 // allFields is the fields argument of a step that takes every output.

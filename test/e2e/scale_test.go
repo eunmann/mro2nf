@@ -80,6 +80,25 @@ var scaleShapes = map[string]scaleShape{
 		prods: func(w int) int { return w },
 		check: checkOutsLen("fs", 1),
 	},
+	"mapchain": {
+		name: "mapchain", probe: "MRE_BENCH_MAPCHAIN_PROBE", narrow: 4, wide: 1250,
+		call: func(w int) string {
+			return fmt.Sprintf("CHAINS(\n    xs = [%s],\n    m  = {%s},\n    n  = %d,\n    kb = 64,\n)", seq(w), seqKeys(w), w)
+		},
+		jobs:  func(w int) int { return 2 + 8*w },
+		prods: func(w int) int { return 4 * w },
+		check: checkOutsLen("lit", 1),
+	},
+}
+
+// seqKeys is a map literal of n keys, each bound to its position.
+func seqKeys(n int) string {
+	vs := make([]string, n)
+	for i := range vs {
+		vs[i] = fmt.Sprintf("%q: %d", fmt.Sprintf("k%05d", i), i)
+	}
+
+	return strings.Join(vs, ", ")
 }
 
 // scaleKnown are the gates open issues fail at the default widths, each
@@ -131,6 +150,7 @@ func TestScaleSplit(t *testing.T)       { runScaleShape(t, scaleShapes["split"])
 func TestScaleMapSplit(t *testing.T)    { runScaleShape(t, scaleShapes["mapsplit"]) }
 func TestScaleMapNested(t *testing.T)   { runScaleShape(t, scaleShapes["mapnested"]) }
 func TestScaleMapDisabled(t *testing.T) { runScaleShape(t, scaleShapes["mapdisabled"]) }
+func TestScaleMapChain(t *testing.T)    { runScaleShape(t, scaleShapes["mapchain"]) }
 
 // TestScaleWideFanin (#503) runs TestWidePipelineRuns' pipeline plus FANIN,
 // whose 210 inputs pass maxTakes (internal/cgnf/scope.go), the most

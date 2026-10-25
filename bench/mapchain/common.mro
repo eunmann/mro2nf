@@ -1,0 +1,100 @@
+filetype txt;
+
+# Benchmark: a map call over another map call's outs (#601). Each B fork
+# reads the one A fork at its own index, as an mrp job does, so it stages
+# that one file, never all N of A's. The lanes cover each form Martian
+# compiles B's split to: a literal of A's forks for an A over an entry
+# collection (LIT, and KEY over a map), a merge of A's forks for an A over
+# a stage's outs (RUN), and either under a runtime gate (GATED). Run at two
+# widths (pipeline_w4.mro, pipeline_w16.mro): plumbing tasks must be
+# identical at both, and so must the bytes each B task stages.
+
+stage MKXS(
+    in  int   n,
+    out int[] xs,
+    src py    "stages/mkxs",
+)
+
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage MKFILE(
+    in  int x,
+    in  int kb,
+    out txt f,
+    src py  "stages/mkfile",
+)
+
+stage USE(
+    in  txt f,
+    out int size,
+    src py  "stages/use",
+)
+
+pipeline CHAINS(
+    in  int[]    xs,
+    in  map<int> m,
+    in  int      n,
+    in  int      kb,
+    out int[]    lit,
+    out int[]    run,
+    out map<int> key,
+    out int[]    gated,
+)
+{
+    call MKXS(
+        n = self.n,
+    )
+
+    call GATE(
+        v = false,
+    )
+
+    map call MKFILE as A_LIT(
+        x  = split self.xs,
+        kb = self.kb,
+    )
+
+    map call USE as B_LIT(
+        f = split A_LIT.f,
+    )
+
+    map call MKFILE as A_RUN(
+        x  = split MKXS.xs,
+        kb = self.kb,
+    )
+
+    map call USE as B_RUN(
+        f = split A_RUN.f,
+    )
+
+    map call MKFILE as A_KEY(
+        x  = split self.m,
+        kb = self.kb,
+    )
+
+    map call USE as B_KEY(
+        f = split A_KEY.f,
+    )
+
+    map call MKFILE as A_GATED(
+        x  = split self.xs,
+        kb = self.kb,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call USE as B_GATED(
+        f = split A_GATED.f,
+    )
+
+    return (
+        lit   = B_LIT.size,
+        run   = B_RUN.size,
+        key   = B_KEY.size,
+        gated = B_GATED.size,
+    )
+}

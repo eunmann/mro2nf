@@ -4,7 +4,8 @@
 # and none run where the gate is on (OFF lane); and a gated literal, PASS's
 # return, whose forks the gate stage fixes (LIT lane). INNER maps over one
 # element: over several, Martian 50ad6c0 compiles OUTER's elements to
-# references that match every fork of SRC, which mrp fails on.
+# references that match every fork of SRC, which mrp fails on
+# (post_outer_fork).
 stage GATE(
     in  bool v,
     out bool off,

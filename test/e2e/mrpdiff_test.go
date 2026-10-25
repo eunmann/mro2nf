@@ -595,6 +595,7 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "bench/zip", mro: "pipeline_w4.mro"},
 	{name: "bench/zipgated", mro: "pipeline_w4.mro"},
 	{name: "bench/splitbroadcast", mro: "pipeline_w4.mro"},
+	{name: "bench/mapchain", mro: "pipeline_w4.mro"},
 	// #464: a map call zipping splits forks over its master source, and the
 	// other sources read null past their end.
 	{name: "zip_runtime"},
@@ -621,6 +622,24 @@ var mrpDiffCases = []mrpDiffCase{
 	// #595 (gen_54d3a5646ff7): the same inside a mapped sub-pipeline, the
 	// split over an outer map call's gated element.
 	{name: "rt_gate_split_nested"},
+	// #601: a map call over a mapped sub-pipeline's merged outs, each fork
+	// staging only the inner forks of its own outer fork.
+	{name: "map_chain_partial"},
+	// #601: reads only some forks of the literal read (mixed) and reads
+	// through two roots (cross), each instance staging what it reads.
+	{name: "map_chain_mixed"},
+	{name: "map_chain_cross"},
+	// #601: a merge's fork count read from a stage inside the merged
+	// pipeline's own fork.
+	{name: "map_chain_counted"},
+	// Two partner splits of one projected output inside a mapped
+	// sub-pipeline, their references leaving the outer index unresolved
+	// (gen-diff seed 862's witness).
+	{name: "partner_nested_projection"},
+	// #604 (gen-diff seed 2554's witness): a merge of a mapped sub-pipeline
+	// Martian gave no fork root, gathering none of its forks, or its
+	// compile-time forks.
+	{name: "merge_unforked_pipeline"},
 	// #565: a top-level map call's outs are its pipeline's per fork, each
 	// fork's files published under outs/<fork key>/.
 	// TestMrpDiffSplitEntryOverride launches it with other split values.
@@ -676,6 +695,10 @@ var mrpOutcomeCases = []mrpOutcomeCase{
 	// while it makes the pipestance, before any stage runs; mro2nf fails its
 	// OUTS task.
 	{name: "nested_empty_forks", mrp: runOutcome{Failed: true}, divergence: "nested-empty-forks"},
+	// #602: a map call's forks vary with an outer map call its source's
+	// producer is not forked on, over two elements. mrp fails resolving the
+	// consumer's forks; mro2nf fails the producer's post.
+	{name: "post_outer_fork", mrp: failedIn(failError, ""), divergence: "post-outer-fork"},
 	// #520: a stage opening a companion file beside a file input another
 	// stage wrote. mrp passes the path in the producer's job dir and finds
 	// it; mro2nf stages only the files the producer's outs name, so the

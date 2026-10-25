@@ -113,6 +113,45 @@ func TestBenchMetricsRestagedBytes(t *testing.T) {
 	}
 }
 
+// TestBenchMetricsPlumbingProbeRefs pins plumbing_probe_refs: a plumbing
+// task counts once when it stages the probe file or writes a copy of it,
+// and a stage task staging it, or a plumbing task staging another file,
+// does not count.
+func TestBenchMetricsPlumbingProbeRefs(t *testing.T) {
+	requireTools(t, "python3")
+
+	dir := t.TempDir()
+	probe := writeBenchFile(t, filepath.Join(dir, "up", "big.txt"), "PROBE\nxxxx")
+	other := writeBenchFile(t, filepath.Join(dir, "up", "other.txt"), "other")
+
+	writeBenchTask(t, dir, "aa/use", "WF:ST (1)", "    ln -s "+probe+" big.txt\n")
+	writeBenchTask(t, dir, "bb/stages", "WF:OUTS", "    ln -s "+probe+" big.txt\n")
+	writeBenchTask(t, dir, "cc/writes", "WF:PLAN", "    ln -s "+other+" other.txt\n")
+	writeBenchFile(t, filepath.Join(dir, "work", "cc", "writes", "results", "big.txt"), "PROBE\nxxxx")
+	writeBenchTask(t, dir, "dd/neither", "WF:PLAN", "    ln -s "+other+" other.txt\n")
+
+	trace := writeBenchFile(t, filepath.Join(dir, "trace.tsv"), "name\nWF:ST (1)\nWF:OUTS\nWF:PLAN\n")
+	stages := writeBenchFile(t, filepath.Join(dir, "stages.json"), `["ST"]`)
+
+	out, err := exec.Command("python3", filepath.Join(root, "test", "e2e", "bench_metrics.py"),
+		"--name", "x", "--trace", trace, "--workdir", dir, "--probe", "PROBE",
+		"--producers", "1", "--stages", stages, "--mrp-jobs", "1").Output()
+	if err != nil {
+		t.Fatalf("bench_metrics: %v", err)
+	}
+
+	var got struct {
+		ProbeRefs int `json:"plumbing_probe_refs"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("bench_metrics output %q: %v", out, err)
+	}
+
+	if got.ProbeRefs != 2 {
+		t.Errorf("plumbing_probe_refs = %d, want 2: OUTS staging the probe and PLAN writing a copy", got.ProbeRefs)
+	}
+}
+
 // TestBenchMetricsReadsEveryTaskNameHeader pins the task name bench_metrics.py
 // reads from each .command.run header Nextflow has written: a comment line,
 // then a YAML header whose name is single-quoted up to 26.10.2 and a YAML
@@ -174,6 +213,25 @@ func TestBenchMetricsReadsEveryStagingLink(t *testing.T) {
 				t.Errorf("stage_staged_bytes_max (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestBenchMetricsLeavesOutTheCall pins that the staged-bytes probe leaves
+// out call.b64, the run's call a task stages once it outgrows its script:
+// it is the invocation every mrp job's _jobinfo carries too, which grows
+// with the entry values, not orchestration staging.
+func TestBenchMetricsLeavesOutTheCall(t *testing.T) {
+	requireTools(t, "python3")
+
+	dir := t.TempDir()
+	in := writeBenchFile(t, filepath.Join(dir, "in.txt"), "abc")
+	call := writeBenchFile(t, filepath.Join(dir, "call.b64"), strings.Repeat("c", 5000))
+
+	writeBenchTask(t, dir, "aa/task", "WF:ST (1)", "    rm -f in.txt call.b64\n    ln -sfn "+in+" in.txt\n    ln -sfn "+call+" call.b64\n")
+
+	got := benchStagedMax(t, dir, "WF:ST (1)")
+	if diff := cmp.Diff(map[string]int{"ST": len("abc")}, got); diff != "" {
+		t.Errorf("stage_staged_bytes_max (-want +got):\n%s", diff)
 	}
 }
 

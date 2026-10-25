@@ -65,6 +65,16 @@ Locally, run only the fast checks; PR Validation is the full gate.
 
 Do not run the full `make test-e2e`, `make lint-nf`, `make bench` or `make cover` locally before a PR. PR Validation runs all of them, plus `-race`, govulncheck and deadcode, on GitHub's runners. When a run fails, read only the failing job's log tail (`gh run view <id> --log-failed | tail -n 100`) and fix that.
 
+## Bumping the Martian Pin
+
+The pin tracks upstream Martian's head (Dependabot ignores the module: its `v4.x` tags would read as a downgrade). A bump is its own change set, because upstream fixes change `mrp`'s outputs:
+
+1. `go get github.com/martian-lang/martian@<commit> && go mod tidy`; build `mrp` and `mrjob` at that commit for `MARTIAN_BIN`.
+2. `git diff <old> <new> -- martian/core martian/syntax` in a Martian checkout, and update every mirror of a `core` function that changed (the `repo-research` skill's mirror rule), with a test pinning the new behaviour from a real `mrp` run.
+3. Run the differential against the new `mrp`; re-record each golden whose `mrp` output changed (copy `<pipestance>/<TOP>/fork0/_outs`, `make record-goldens` for trees), and move fixtures between `mrpDiffCases`, `mrpOutcomeCases` and refusal tables to what the new `mrp` does. Update fixture headers and docs that state the old behaviour.
+4. Re-cite `core/…:N` and `syntax/…:N` line numbers to the new commit, mapping each through the diff and checking the cited line's text is unchanged.
+5. Name the commit after the bump and list the behaviour changes in its body; CI's `setup-martian` builds the new `mrp` from `go.mod`.
+
 ## Review
 
 Run `/review-loop`: one full review of the branch, then checks of its own fixes, at most three rounds.

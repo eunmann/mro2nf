@@ -190,7 +190,9 @@ func readLink(p string) (string, bool, error) {
 // of a bundle the task staged (staged) it names by reference rather than
 // copying it: a marker of the leaf's origin, which a reader resolves among
 // the leaves it staged (Staged.Leaves), where its readers stage it from the
-// item it lies in. It returns those references, one per origin.
+// item it lies in. It returns those references, one per origin. Last it
+// writes the bundle's skeleton (SkeletonFile), so a record written into
+// dir before it is part of the skeleton.
 func WriteItem(dir string, payload map[string]any, params []*syntax.StructMember, tbl *types.Table, opts Opts, staged Staged) ([]Ref, error) {
 	refs := []Ref{}
 
@@ -201,7 +203,11 @@ func WriteItem(dir string, payload map[string]any, params []*syntax.StructMember
 		return nil, err
 	}
 
-	return refs, writePayload(dir, marked)
+	if err := writePayload(dir, marked); err != nil {
+		return nil, err
+	}
+
+	return refs, writeSkeleton(dir)
 }
 
 // reference is the marker of the leaf at the absolute path abs, and true,

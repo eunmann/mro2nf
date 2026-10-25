@@ -38,6 +38,9 @@ type Graph struct {
 	stages    map[string]*syntax.CallGraphStage
 	roots     map[string]*syntax.CallGraphStage
 	outer     map[string]syntax.ForkRootList
+	// splitRoots are the fork roots by their own split, which two
+	// instances of one sub-pipeline, sharing their calls, do not share.
+	splitRoots map[*syntax.SplitExp]*syntax.CallGraphStage
 }
 
 // Load compiles the entry .mro at entry as mrp compiles the invocation it
@@ -108,6 +111,8 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 		stages:   map[string]*syntax.CallGraphStage{},
 		roots:    map[string]*syntax.CallGraphStage{},
 		outer:    map[string]syntax.ForkRootList{},
+
+		splitRoots: map[*syntax.SplitExp]*syntax.CallGraphStage{},
 	}
 
 	closure := root.NodeClosure()
@@ -122,6 +127,7 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 
 		for i, r := range st.ForkRoots() {
 			g.roots[r.Fqid] = r
+			g.splitRoots[r.Split()] = r
 			g.addOuter(r, st.ForkRoots()[:i])
 		}
 	}
@@ -239,18 +245,19 @@ func (g *Graph) rootCountRefs(root *syntax.CallGraphStage) []string {
 // expands its forks from it (core/fork.go:1412 expandForkPartFromSource,
 // 1441 expandForkPartFromExp, 1491 expandForkPartFromSplit), returning the
 // stages whose outs fix the fork count and collecting in gates the disable
-// gates mrp evaluates on the way.
+// gates mrp evaluates on the way and in refs the references it reads.
 type countWalk struct {
 	g     *Graph
 	sp    *syntax.SplitExp
 	gates []syntax.Exp
+	refs  []*syntax.RefExp
 }
 
 func (w *countWalk) source(src syntax.MapCallSource) []string {
 	switch s := src.(type) {
 	case *syntax.MergeExp:
 		if s.ForkNode != nil {
-			return refCountRefs(s.ForkNode)
+			return w.ref(s.ForkNode)
 		}
 
 		return w.source(s.MergeOver)
@@ -259,7 +266,7 @@ func (w *countWalk) source(src syntax.MapCallSource) []string {
 	case syntax.Exp:
 		return w.exp(s)
 	case *syntax.BoundReference:
-		return refCountRefs(s.Exp)
+		return w.ref(s.Exp)
 	default:
 		return nil
 	}
@@ -274,7 +281,7 @@ func (w *countWalk) source(src syntax.MapCallSource) []string {
 func (w *countWalk) exp(e syntax.Exp) []string {
 	switch x := e.(type) {
 	case *syntax.RefExp:
-		return refCountRefs(x)
+		return w.ref(x)
 	case *syntax.MergeExp:
 		return w.source(x)
 	case *syntax.DisabledExp:
@@ -326,13 +333,37 @@ func (w *countWalk) elements(e syntax.Exp) []string {
 	return out
 }
 
-// refCountRefs is the stage a reference reads, none for an entry input.
-func refCountRefs(ref *syntax.RefExp) []string {
+// ref is the stage a reference reads, none for an entry input, and records
+// the reference among those the count reads.
+func (w *countWalk) ref(ref *syntax.RefExp) []string {
 	if ref == nil || ref.Kind == syntax.KindSelf {
 		return nil
 	}
 
+	w.refs = append(w.refs, ref)
+
 	return []string{ref.Id}
+}
+
+// countReads are the stage outs counting root's forks reads, as mrp
+// expands them from its compiled source (countWalk): the references the
+// walk reaches and the gates it evaluates; none for a source of known
+// length.
+func (g *Graph) countReads(root *syntax.CallGraphStage) []*syntax.RefExp {
+	sp := root.Split()
+	if sp == nil || sp.Source.KnownLength() {
+		return nil
+	}
+
+	w := countWalk{g: g, sp: sp}
+	w.source(sp.Source)
+
+	refs := w.refs
+	for _, gate := range w.gates {
+		refs = append(refs, gate.FindRefs()...)
+	}
+
+	return refs
 }
 
 // allGatedBy reports whether every stage of fqids has gate among its

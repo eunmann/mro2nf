@@ -71,10 +71,14 @@ func GateToken(node string, gate Gate, key string) string {
 }
 
 // Read is the outs of one stage node a task stages: the named outputs, or
-// all of them when Fields is nil (a whole-call reference).
+// all of them when Fields is nil (a whole-call reference). Patterns are
+// the instances of the node each instance of the reader reads
+// (readPatterns), the instances any of them matches; with none, an instance
+// reads every instance of the node under the roots they share.
 type Read struct {
-	Node   string   `json:"node"`
-	Fields []string `json:"fields"`
+	Node     string        `json:"node"`
+	Fields   []string      `json:"fields"`
+	Patterns []ReadPattern `json:"patterns,omitempty"`
 }
 
 // TopoRoot is one fork root: the outer roots its fork set varies with, the
@@ -123,7 +127,7 @@ func (g *Graph) Topology() (Topology, error) {
 		outs = append(outs, ro.Exp)
 	}
 
-	t.Outs = reads(outs...)
+	t.Outs = g.reads(outs...)
 
 	return t, nil
 }
@@ -157,6 +161,10 @@ func (g *Graph) topoNode(st *syntax.CallGraphStage) (TopoNode, error) {
 	}
 
 	n.Reads, n.Zips = g.nodeReads(st)
+	for i := range n.Reads {
+		n.Reads[i].Patterns = g.readPatterns(st, n.Reads[i].Node)
+	}
+
 	n.Preflights = g.preflights(st)
 
 	gates, err := g.gates(st)
@@ -200,7 +208,7 @@ func (g *Graph) nodeReads(st *syntax.CallGraphStage) ([]Read, []Zip) {
 	zips := map[Zip]bool{}
 
 	for _, e := range bindings(st) {
-		collectReads(e, served, fields)
+		g.collectReads(e, served, fields)
 		walkSplits(e, func(x *syntax.SplitExp) {
 			if p, ok := g.partnerOf(st, x); ok {
 				zips[Zip{Root: p.root.Fqid, Node: p.ref.Id, Output: p.ref.OutputId}] = true
@@ -364,11 +372,11 @@ func (g *Graph) gateRoots(st *syntax.CallGraphStage, d syntax.Exp, up *syntax.Ca
 }
 
 // reads are the stage outs exps read.
-func reads(exps ...syntax.Exp) []Read {
+func (g *Graph) reads(exps ...syntax.Exp) []Read {
 	fields := map[string]map[string]bool{}
 
 	for _, e := range exps {
-		collectReads(e, nil, fields)
+		g.collectReads(e, nil, fields)
 	}
 
 	return readList(fields)
@@ -392,26 +400,30 @@ func readList(fields map[string]map[string]bool) []Read {
 
 // collectReads adds to fields the stage outs e reads, less the splits
 // served reports, which a staged element serves.
-func collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, fields map[string]map[string]bool) {
+func (g *Graph) collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, fields map[string]map[string]bool) {
 	switch x := e.(type) {
 	case *syntax.SplitExp:
 		if served == nil || !served(x) {
-			collectReads(x.Value, served, fields)
+			g.collectReads(x.Value, served, fields)
 		} else if d, ok := x.Value.(*syntax.DisabledExp); ok {
-			collectReads(d.Disabled, served, fields)
+			g.collectReads(d.Disabled, served, fields)
 		}
 	case *syntax.RefExp:
 		addRead(fields, x)
 	case *syntax.ArrayExp:
 		for _, v := range x.Value {
-			collectReads(v, served, fields)
+			g.collectReads(v, served, fields)
 		}
 	case *syntax.MapExp:
 		for _, v := range x.Value {
-			collectReads(v, served, fields)
+			g.collectReads(v, served, fields)
 		}
 	case *syntax.MergeExp:
-		collectReads(x.Value, served, fields)
+		if g.mergeGathersNone(x) {
+			return
+		}
+
+		g.collectReads(x.Value, served, fields)
 
 		if x.ForkNode != nil {
 			addRead(fields, x.ForkNode)
@@ -419,13 +431,14 @@ func collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, fields map[s
 
 		// A merge over a root whose forks a stage fixes takes them from the
 		// root's source, as mrp does: the instances it gathers are no
-		// count of them, as a disabled one posts none.
-		if sp := x.Call.Split(); sp != nil && !sp.Source.KnownLength() {
-			collectReads(sp.Value, nil, fields)
+		// count of them, as a disabled one posts none. It reads what
+		// counting them reads (countReads), not the source's every value.
+		for _, r := range g.countReads(x.Call) {
+			addRead(fields, r)
 		}
 	case *syntax.DisabledExp:
-		collectReads(x.Disabled, served, fields)
-		collectReads(x.Value, served, fields)
+		g.collectReads(x.Disabled, served, fields)
+		g.collectReads(x.Value, served, fields)
 	}
 }
 
@@ -511,15 +524,26 @@ func (t Topology) coverNodes(rs []TopoNode) ([]error, map[string]bool) {
 	return errs, live
 }
 
+// readsCovered reports whether each of want is a read of have, of no more
+// fields, and of the instances have's patterns, which the transpiled
+// project joins it by, give.
 func readsCovered(have, want []Read) bool {
 	for _, w := range want {
 		i := slices.IndexFunc(have, func(h Read) bool { return h.Node == w.Node })
 		if i < 0 || (have[i].Fields != nil && (w.Fields == nil || !subset(have[i].Fields, w.Fields))) {
 			return false
 		}
+
+		if have[i].Patterns != nil && !slices.EqualFunc(have[i].Patterns, w.Patterns, samePattern) {
+			return false
+		}
 	}
 
 	return true
+}
+
+func samePattern(a, b ReadPattern) bool {
+	return maps.Equal(a.Align, b.Align) && maps.EqualFunc(a.When, b.When, slices.Equal)
 }
 
 func gatesCovered(have, want []Gate) bool {
