@@ -419,6 +419,10 @@ func (g *Graph) collectReads(e syntax.Exp, served func(*syntax.SplitExp) bool, f
 			g.collectReads(v, served, fields)
 		}
 	case *syntax.MergeExp:
+		if g.mergeGathersNone(x) {
+			return
+		}
+
 		g.collectReads(x.Value, served, fields)
 
 		if x.ForkNode != nil {

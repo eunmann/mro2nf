@@ -116,6 +116,10 @@ func (a *aligner) walk(e syntax.Exp, ctx []alignCtx) {
 			a.walk(x.Value[k], ctx)
 		}
 	case *syntax.MergeExp:
+		if a.g.mergeGathersNone(x) {
+			return
+		}
+
 		a.walk(x.Value, ctx)
 
 		if x.ForkNode != nil {
