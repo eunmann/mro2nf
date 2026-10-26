@@ -54,6 +54,10 @@ func (g *Graph) WriteOuts(ctx context.Context, spec OutsSpec) error {
 		return fmt.Errorf("pipeline outs: %w", err)
 	}
 
+	if err := staged.Restore(); err != nil {
+		return fmt.Errorf("pipeline outs: %w", err)
+	}
+
 	refs, err := staged.Leaves()
 	if err != nil {
 		return fmt.Errorf("pipeline outs: %w", err)

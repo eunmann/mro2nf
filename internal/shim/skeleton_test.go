@@ -15,8 +15,9 @@ import (
 // TestSkeletonIsTheBundleWithoutBytes (#610): a bundle's skeleton expands
 // to the bundle's every path, its records as written, a record written
 // into the bundle before WriteItem included, and each other file below its
-// leaves empty, a dir leaf's empty dir and nested files among them, and
-// no dangling link the bundle's copy left out.
+// leaves empty, a dir leaf's empty dir and nested files among them. A
+// dangling link is no path of the bundle but its leaf's shape record
+// (#624).
 func TestSkeletonIsTheBundleWithoutBytes(t *testing.T) {
 	dir := t.TempDir()
 	leaf := writeFileAt(t, filepath.Join(dir, "work", "a.txt"), "aaaa")
@@ -44,7 +45,7 @@ func TestSkeletonIsTheBundleWithoutBytes(t *testing.T) {
 	delete(want, shim.SkeletonFile)
 
 	for p := range want {
-		if strings.HasPrefix(p, "f/") && !strings.HasSuffix(p, "/") && filepath.Base(p) != ".mre-origin" {
+		if strings.HasPrefix(p, "f/") && !strings.HasSuffix(p, "/") && filepath.Base(p) != ".mre-origin" && filepath.Base(p) != ".mre-shape" {
 			want[p] = ""
 		}
 	}
@@ -53,7 +54,7 @@ func TestSkeletonIsTheBundleWithoutBytes(t *testing.T) {
 		t.Errorf("expanded skeleton (-bundle without bytes +got):\n%s", d)
 	}
 
-	for _, p := range []string{"instance.json", "f/L0001/d/sub/x.txt", "f/L0001/d/empty/"} {
+	for _, p := range []string{"instance.json", "f/L0001/d/sub/x.txt", "f/L0001/d/empty/", "f/L0001/.mre-shape"} {
 		if _, ok := want[p]; !ok {
 			t.Errorf("the bundle lacks %s: %v", p, want)
 		}
@@ -66,7 +67,8 @@ func TestSkeletonIsTheBundleWithoutBytes(t *testing.T) {
 
 // TestCopyShapeReadsNoBytes (#610): CopyShape places a tree's every dir
 // and an empty file at each of its files, a file it reaches through a link
-// included and a dangling link left out, as CopyTree copies the tree.
+// included, as CopyTree copies the tree, and a dangling link as itself, as
+// a reader restores it (#624).
 func TestCopyShapeReadsNoBytes(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "d")
@@ -86,7 +88,7 @@ func TestCopyShapeReadsNoBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := map[string]string{"sub/": "", "sub/x.txt": "", "linked.txt": ""}
+	want := map[string]string{"sub/": "", "sub/x.txt": "", "linked.txt": "", "broken": "-> " + filepath.Join(dir, "gone")}
 	if d := cmp.Diff(want, pathsOf(t, dst)); d != "" {
 		t.Errorf("shape (-want +got):\n%s", d)
 	}
@@ -108,7 +110,7 @@ func TestExpandSkeletonStaysInItsDir(t *testing.T) {
 }
 
 // pathsOf maps each path below dir, a dir by its path and a trailing "/",
-// to a file's content.
+// to a file's content, or a link's target after "-> ".
 func pathsOf(t *testing.T, dir string) map[string]string {
 	t.Helper()
 
@@ -120,10 +122,17 @@ func pathsOf(t *testing.T, dir string) map[string]string {
 		}
 
 		rel := filepath.ToSlash(strings.TrimPrefix(path, dir+string(filepath.Separator)))
-		if d.IsDir() {
+
+		switch {
+		case d.IsDir():
 			out[rel+"/"] = ""
 
 			return nil
+		case d.Type()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			out[rel] = "-> " + target
+
+			return err
 		}
 
 		raw, err := os.ReadFile(path)

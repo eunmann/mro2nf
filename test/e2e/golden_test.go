@@ -65,6 +65,9 @@ var goldenCases = []goldenCase{
 	{"dir_out", "dir_out", "expected/outs.json"},
 	// #242: directory outputs with dotfiles and an empty subdirectory.
 	{"dir_hidden", "dir_hidden", "expected/outs.json"},
+	// #624: a reader of a directory output sees the link inside it that
+	// reaches nothing, with its target.
+	{"dir_dangling_link", "dir_dangling_link", "expected/outs.json"},
 	// #431: a file reached from several outputs names its first published path.
 	{"shared_out_file", "shared_out_file", "expected/outs.json"},
 	// #432: files below an N-D array stay unpublished, as under mrp.

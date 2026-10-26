@@ -1,0 +1,4 @@
+{
+    "names": "dangling,real.txt,rel_link.txt",
+    "target": "/nonexistent"
+}
