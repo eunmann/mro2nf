@@ -111,8 +111,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Build all packages
-        run: go build ./...
+      - name: Build every package and test for each release platform
+        run: make cross
 
   test:
     name: Unit tests

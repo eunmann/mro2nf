@@ -343,6 +343,34 @@ func TestReleaseArchiveLayout(t *testing.T) {
 	}
 }
 
+var makeReleasePlatforms = regexp.MustCompile(`(?m)^RELEASE_PLATFORMS := (.+)$`)
+
+// TestCrossCompilesReleasePlatforms holds make cross to the platforms the
+// release ships archives for, and PR Validation's Build job to running it:
+// no test runs on darwin or linux/arm64, so only the cross-compile catches a
+// test that compiles on the runner's platform alone.
+func TestCrossCompilesReleasePlatforms(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := makeReleasePlatforms.FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("Makefile sets no RELEASE_PLATFORMS")
+	}
+
+	got := strings.Fields(strings.ReplaceAll(string(m[1]), "/", "-"))
+	if diff := cmp.Diff(releasePlatforms(t), got); diff != "" {
+		t.Errorf("Makefile RELEASE_PLATFORMS != %s build platforms (-want +got):\n%s", releaseWorkflow, diff)
+	}
+
+	steps := readWorkflow(t, gateWorkflow).get("jobs").get("build").get("steps").items
+	if !slices.ContainsFunc(steps, func(s *yamlNode) bool { return scalarOf(s.get("run")) == "make cross" }) {
+		t.Errorf("%s build job never runs make cross", gateWorkflow)
+	}
+}
+
 // TestReleaseArchiveReproducible packs the same commit in two checkouts
 // whose files differ in mtime: the archives are byte-identical.
 func TestReleaseArchiveReproducible(t *testing.T) {

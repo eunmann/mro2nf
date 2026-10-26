@@ -15,7 +15,7 @@ GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v
 DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.52.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: all build test cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences notices cloc install clean help
+.PHONY: all build test cross cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check deadcode docs-divergences notices cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
@@ -36,6 +36,17 @@ build: ## Build mro2nf, mre and mrjob
 
 test: ## Run unit tests
 	go test ./... 2>&1 | tee artifacts/test.log
+
+# The platforms release.yml ships archives for (TestCrossCompilesReleasePlatforms).
+# go test -exec=true compiles and links each test binary for the platform and
+# runs none, so a test that compiles only on the CI runner's platform fails.
+RELEASE_PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+cross: ## Compile every package and test for each release platform
+	@for p in $(RELEASE_PLATFORMS); do \
+		echo "$$p"; \
+		CGO_ENABLED=0 GOOS=$${p%/*} GOARCH=$${p#*/} go build -trimpath ./...; \
+		CGO_ENABLED=0 GOOS=$${p%/*} GOARCH=$${p#*/} go test -trimpath -exec=true -tags e2e ./... >/dev/null; \
+	done
 
 # Cross-package attribution (-coverpkg) so e.g. internal/cg exercised from
 # cmd/mre tests counts; scoped to ./cmd + ./internal (deploy/ has no Go).

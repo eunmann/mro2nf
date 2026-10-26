@@ -4,7 +4,7 @@
 
 | Workflow | Runs | Does |
 |---|---|---|
-| [`pr-validation.yml`](../../.github/workflows/pr-validation.yml) | every PR | lint (golangci-lint, `govulncheck`, a `go mod tidy` check, `make deadcode`), build, unit tests (`-race`), coverage, the e2e suites, `make lint-nf` and `make bench` |
+| [`pr-validation.yml`](../../.github/workflows/pr-validation.yml) | every PR | lint (golangci-lint, `govulncheck`, a `go mod tidy` check, `make deadcode`), build (`make cross`: every package and test compiled for each release platform), unit tests (`-race`), coverage, the e2e suites, `make lint-nf` and `make bench` |
 | [`nightly.yml`](../../.github/workflows/nightly.yml) | daily, and weekly for the heavy tier | the e2e suites on the declared Nextflow floor and the latest stable release, with a 1,000-fork `make test-scale` smoke; weekly, the full scale tier and a long `make gen-diff` run |
 | [`cdk-validation.yml`](../../.github/workflows/cdk-validation.yml) | changes to the CDK app | compiles and synthesizes the example AWS stack |
 | [`release.yml`](../../.github/workflows/release.yml) | dispatched by hand | cuts a release ([below](#releases)) |
