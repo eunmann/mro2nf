@@ -37,8 +37,16 @@ parameters. So it compiles a *witness* invocation
 - every bool is `false`, and nothing is null.
 
 No map call is pruned on an empty or null source and no call is disabled by an
-entry value, so the witness's call graph holds every stage node, with its fork
-roots, of any invocation.
+entry value, so the witness's call graph holds every stage node of any
+invocation, forked on every root it can be.
+
+An invocation can fork a node on fewer roots. When an entry value makes a
+node's inputs the same at every fork of a root, such as a flag that disables
+the only stage it reads, Martian drops that root from the node and `mrp` runs
+its job once for all of them. PLAN records those roots (`PlanNode.Collapse`).
+The driver runs the node only at ordinal 0 of each, and its posted outs, forks
+and gates serve the other instances (`ALIASES`), so the job count stays
+`mrp`'s.
 
 Where `mrp` refuses the witness, the inputs start from the literal invocation,
 and each in turn takes its witness value only while `mrp` still accepts the

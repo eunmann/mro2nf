@@ -641,6 +641,11 @@ var mrpDiffCases = []mrpDiffCase{
 	// witness's reads of every fork cover.
 	{name: "witness_one_element"},
 	{name: "witness_one_fork_read"},
+	// #621: a node an entry flag leaves forked on fewer roots than the
+	// witness's, which runs once per fork of the roots it keeps, as mrp's
+	// job does, and serves the rest.
+	{name: "witness_flag_disables"},
+	{name: "witness_drops_outer"},
 	// Two partner splits of one projected output inside a mapped
 	// sub-pipeline, their references leaving the outer index unresolved
 	// (gen-diff seed 862's witness).

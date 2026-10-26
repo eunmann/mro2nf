@@ -19,11 +19,11 @@ func planResources(t *testing.T, work string) map[string]string {
 
 	for line := range strings.SplitSeq(strings.TrimSpace(readText(t, filepath.Join(work, "nodes"))), "\n") {
 		f := strings.Fields(line)
-		if len(f) != 7 {
-			t.Fatalf("nodes line %q: want fqid, digest, off, disabled keys, cpus, memory and overrides", line)
+		if len(f) != 8 {
+			t.Fatalf("nodes line %q: want fqid, digest, off, disabled keys, cpus, memory, overrides and collapsed roots", line)
 		}
 
-		out[f[0]] = strings.Join(f[4:], " ")
+		out[f[0]] = strings.Join(f[4:7], " ")
 	}
 
 	return out

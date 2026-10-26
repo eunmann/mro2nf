@@ -288,7 +288,7 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 	main := readTree(t, emitFixture(t, "diamond_min"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
+		"o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1, channel.empty())",
 		"outs_files = outs_in.map { xs -> skeletons(bundlesOf(xs)) }",
 		", outs_in.map { xs -> recordsOf(xs) }, ",
 	} {
@@ -337,9 +337,9 @@ func TestEmitPostsOneOutput(t *testing.T) {
 	}
 
 	for fixture, want := range map[string]string{
-		"diamond_min":      "o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1)",
-		"zip_runtime":      "o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
-		"split_gate_entry": "o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
+		"diamond_min":      "o0_outs = POSTED(N0_GEN.out.posted, b0.skip, r0, 1, channel.empty())",
+		"zip_runtime":      "o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4, channel.empty())",
+		"split_gate_entry": "o0_gates = GATES(N0_SRC.out.posted, b0.skip, channel.empty())",
 		"preflight_order":  "d0 = DONE(N0_TOP_CHECK.out.posted)",
 	} {
 		if main := wiringNF(readTree(t, emitFixture(t, fixture))); !strings.Contains(main, want) {
@@ -359,7 +359,7 @@ func TestEmitCarriesValueElements(t *testing.T) {
 	main := readTree(t, emitFixture(t, "zip_runtime"))["main.nf"]
 
 	for _, want := range []string{
-		"o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4)",
+		"o0_forks = POSTED(N0_TWO.out.posted, b0.skip, r0, 4, channel.empty())",
 		"ELEMENTS(o0_forks, 'ZIP_RUNTIME.LONG', [], false)",
 		"ZIP(i2, o1_forks, [], 'ZIP_RUNTIME.LONG@ZIP_RUNTIME.THREE.xs', 0, 'none')",
 	} {
@@ -922,7 +922,7 @@ func TestEmitGatesBySet(t *testing.T) {
 	main := wiringNF(readTree(t, emitFixture(t, "split_gate_entry")))
 
 	for _, want := range []string{
-		"o0_gates = GATES(N0_SRC.out.posted, b0.skip)",
+		"o0_gates = GATES(N0_SRC.out.posted, b0.skip, channel.empty())",
 		"b1 = ENABLED(GATED(g1, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.INNER.WORK@SPLIT_GATE_ENTRY.INNER@']], [])",
 		"b2 = ENABLED(GATED(g2, o0_gates), [[[0], 'SPLIT_GATE_ENTRY.KEYED.WORK@SPLIT_GATE_ENTRY.KEYED@']], [])",
 	} {

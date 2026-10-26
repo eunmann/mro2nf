@@ -62,7 +62,9 @@ func entryRoot(w *wiring, root string) string {
 }
 
 // node wires node i: its instances, enumerated root by root from the fork
-// elements and records its roots' feeders write; its gates, which the
+// elements and records its roots' feeders write, of which those the
+// invocation's node is not forked on run at one fork only (ALIASES); its
+// gates, which the
 // driver evaluates once its preflights are done so a disabled instance
 // runs no task; the outs its enabled instances stage, field by field; its
 // process call; its outputs, each file one names by reference resolved
@@ -87,7 +89,8 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		first = reads[0].mine
 	}
 
-	p.gate(w, i, n, p.instances(w, i, n), meta, first)
+	inst := p.instances(w, i, n)
+	p.gate(w, i, n, inst, meta, first)
 
 	run, fields := readAll(w, i, reads)
 	proc := alias(i, n.Fqid)
@@ -113,6 +116,29 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		}
 	}
 
+	p.posted(w, i, n, proc, sources, p.aliases(w, i, n, inst, meta))
+
+	return w, nil
+}
+
+// aliases is the channel of node i's instances, inst, that run no job of
+// their own (ALIASES), where a node reads what it posts; none where it has
+// no root the invocation could fork it on fewer of.
+func (p *project) aliases(w *wiring, i int, n cg.TopoNode, inst, meta string) string {
+	outs, forks, gates := p.consumed(n.Fqid)
+	if len(n.Roots) == 0 || (!outs && !forks && !gates) {
+		return "channel.empty()"
+	}
+
+	w.linef("a%d = ALIASES(%s, %s, %s)", i, inst, w.use(nodesAfter(p.preflightsOf(n))), meta)
+
+	return fmt.Sprintf("a%d", i)
+}
+
+// posted wires what node i's tasks, proc, posted for the nodes that read
+// it: its outs, its forks and its gates, each instance's own or, where it
+// runs no job, its representative's (aliases).
+func (p *project) posted(w *wiring, i int, n cg.TopoNode, proc, sources, aliases string) {
 	outs, forks, gates := p.consumed(n.Fqid)
 	if outs || forks {
 		w.linef("r%d = %s", i, sources)
@@ -124,15 +150,13 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		at   int
 	}{{outs, outsOf(i), postedOuts}, {forks, forksOf(i), postedForks}} {
 		if o.used {
-			w.linef("%s = POSTED(%s.out.posted, b%d.skip, r%d, %d)", w.def(o.name), proc, i, i, o.at)
+			w.linef("%s = POSTED(%s.out.posted, b%d.skip, r%d, %d, %s)", w.def(o.name), proc, i, i, o.at, aliases)
 		}
 	}
 
 	if gates {
-		w.linef("%s = GATES(%s.out.posted, b%d.skip)", w.def(gatesOf(i)), proc, i)
+		w.linef("%s = GATES(%s.out.posted, b%d.skip, %s)", w.def(gatesOf(i)), proc, i, aliases)
 	}
-
-	return w, nil
 }
 
 // readAll wires node i's reads of its enabled instances: a READ each, and
