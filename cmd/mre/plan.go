@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"maps"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/buildinfo"
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -22,16 +24,22 @@ import (
 	"github.com/martian-lang/martian/martian/util"
 )
 
+// errBuild reports a project transpiled by another mro2nf build than this
+// mre's, whose flags and records the project's tasks may not match.
+var errBuild = errors.New("the project and mre are different mro2nf builds")
+
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
 	entry, values, mropath, call, nodes, roots, leaves, files, work string
 	overrides, psid, s3Mount, runWork, codeMropath, pipelines       string
+	build                                                           string
 	hostInputs, hostInPlace, remoteInputs                           bool
 	local                                                           job.Pool
 }
 
 func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.entry, "entry", "", "the transpiled entry .mro")
+	fs.StringVar(&f.build, "build", "", "the mro2nf build that transpiled the project, which must be this mre's (mre version)")
 	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null sets the input to null, and an input it leaves out keeps the transpiled value")
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
 	fs.StringVar(&f.overrides, "overrides", "", "the run's mrp --overrides file")
@@ -52,7 +60,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	definePool(fs, &f.local)
 }
 
-// runPlan starts a run: it rebuilds the invocation from the transpiled
+// runPlan starts a run: it refuses a project another mro2nf build
+// transpiled than this mre's, then rebuilds the invocation from the transpiled
 // entry and the run's entry values as mrp builds an invocation from its
 // JSON form, compiles it as mrp does, so mrp's refusals fail the run before
 // any stage starts, and checks its call graph is within the witness's, and
@@ -75,6 +84,10 @@ func runPlan(_ context.Context, argv []string) error {
 
 	if f.entry == "" {
 		return errNoEntry
+	}
+
+	if mine := buildinfo.Version(version); f.build != mine {
+		return fmt.Errorf("plan: %w: project transpiled by %s, mre is %s; run the project with the mre of the build that transpiled it, or transpile it again with this build's mro2nf", errBuild, f.build, mine)
 	}
 
 	if err := util.ValidateID(f.psid); err != nil {

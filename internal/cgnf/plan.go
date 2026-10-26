@@ -28,6 +28,9 @@ import (
 // modification time, which each run's new task dirs change, so PLAN would
 // never resume. The launch params it reads are its meta's (planRun), as no
 // 26.04 release keys a param read by a function its script calls (gen.go).
+// It fails the run unless the mre it runs is the mro2nf build that
+// transpiled the project (meta.build), whose flags and records every task
+// relies on.
 const planProcess = `process PLAN {
     cache !params.mro2nf_s3_mount
 
@@ -51,7 +54,7 @@ const planProcess = `process PLAN {
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(meta.run.mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)} -host-inputs=${meta.run.host_inputs} -host-in-place=${meta.run.host_in_place} -remote-inputs=${meta.run.remote_inputs} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files -code-mropath ${shq(meta.mropath)} -pipelines pipelines
+    ${shq(meta.run.mre)} plan -build ${shq(meta.build)} ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)} -host-inputs=${meta.run.host_inputs} -host-in-place=${meta.run.host_in_place} -remote-inputs=${meta.run.remote_inputs} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files -code-mropath ${shq(meta.mropath)} -pipelines pipelines
     """
 }
 

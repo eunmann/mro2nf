@@ -111,14 +111,18 @@ var (
 
 // runtimeImage builds, once per test process, the runtime image from
 // deploy/runtime/Dockerfile, the image a release publishes, and returns its
-// tag.
+// tag. Its mre is stamped with the build of the repo's mro2nf, which
+// transpiles the projects it runs: the build context holds no .git, so an
+// unstamped mre would be dev where a clone's mro2nf names its commit, and
+// PLAN would refuse the project.
 func runtimeImage(t *testing.T) string {
 	t.Helper()
 
 	tag := checkoutImage("mro2nf-runtime")
+	build := repoBuild(t)
 
 	runtimeImgOnce.Do(func() {
-		cmd := exec.Command("docker", "build", "-q", "-t", tag, "-f", filepath.Join("deploy", "runtime", "Dockerfile"), ".")
+		cmd := exec.Command("docker", "build", "-q", "-t", tag, "--build-arg", "VERSION="+build, "-f", filepath.Join("deploy", "runtime", "Dockerfile"), ".")
 		cmd.Dir = root
 
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -131,6 +135,25 @@ func runtimeImage(t *testing.T) string {
 	}
 
 	return tag
+}
+
+// repoBuild is the build the repo's mro2nf names, as `mro2nf -version`
+// prints it.
+func repoBuild(t *testing.T) string {
+	t.Helper()
+	buildBinaries(t)
+
+	out, err := exec.Command(filepath.Join(root, "mro2nf"), "-version").Output()
+	if err != nil {
+		t.Fatalf("mro2nf -version: %v", err)
+	}
+
+	name, build, ok := strings.Cut(strings.TrimSpace(string(out)), " ")
+	if !ok || name != "mro2nf" || build == "" {
+		t.Fatalf("mro2nf -version printed %q, want mro2nf <build>", out)
+	}
+
+	return build
 }
 
 // pipelineImage builds the image a user builds for the fixture at dir, the

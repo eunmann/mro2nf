@@ -196,6 +196,19 @@ func TestEmitPassesThePipestanceUUID(t *testing.T) {
 	}
 }
 
+// TestEmitPlanChecksTheBuild (#626): PLAN hands mre plan the mro2nf build
+// that transpiled the project, which its meta records, so a run whose mre
+// is another build fails before any stage runs.
+func TestEmitPlanChecksTheBuild(t *testing.T) {
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, want := range []string{"${shq(meta.run.mre)} plan -build ${shq(meta.build)} ", "build: 'v1.2.3'"} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+}
+
 // TestEmitPassesTheRunWorkDir (#625): the pipeline's code is a read-only
 // root every task reads at one path, and an include path may hold the run's
 // work dir, so every stage task names it, and mre keeps the tasks' files

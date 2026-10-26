@@ -58,6 +58,12 @@ inputs on the `docker` profile, whose work directory keeps them.
 
 ### The pipeline and its code
 
+- **`project transpiled by <build>, mre is <build>`**: PLAN runs a project only
+  under the `mre` of the `mro2nf` build that transpiled it. Put that build's
+  `mre` on the tasks' `PATH` (or name it with `--mro2nf_mre`), use the runtime
+  image of its tag, or transpile the pipeline again with the `mro2nf` of the
+  `mre` you run. A local runtime image takes the build with `--build-arg
+  VERSION` ([Container images](container-images.md#the-runtime-image)).
 - **`the node compiles to another spec than the run's plan holds;
   re-transpile the pipeline, and rebuild its image, from the same sources`**:
   the `.mro` changed after the transpile, or the image holds other sources

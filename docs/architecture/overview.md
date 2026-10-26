@@ -185,6 +185,7 @@ internal/
   job/           runs one stage job through mrjob as mrp runs it
   types/         the type-directed file-leaf walk over Martian's compiled types
   shim/          bundle I/O, markers, output confinement
+  buildinfo/     the build's name, which a project records and PLAN matches mre against
   logging/       log/slog setup (stderr)
 ```
 

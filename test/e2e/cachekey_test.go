@@ -27,7 +27,7 @@ func TestResumeKeysOnTheBuild(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 	buildBinaries(t)
 
-	other := toolchain{mro2nf: buildStampedMro2nf(t, "e2e-another-build"), mre: repoTools().mre}
+	other := buildStampedTools(t, "e2e-another-build")
 
 	for _, fixture := range []string{"map_fork", "split_test"} {
 		t.Run(fixture, func(t *testing.T) {
@@ -438,19 +438,28 @@ func assertNoneCached(t *testing.T, rows []traceRow) {
 	}
 }
 
-// buildStampedMro2nf builds mro2nf as `make build` does, stamped with
-// version, into a temp dir and returns its path.
-func buildStampedMro2nf(t *testing.T, version string) string {
+// buildStampedTools builds mro2nf and mre as `make build` does, stamped
+// with version, into a temp dir beside a link to the repo's mrjob, which mre
+// runs py and comp stages under, and returns them: a project the mro2nf
+// transpiles runs only under the mre of its build.
+func buildStampedTools(t *testing.T, version string) toolchain {
 	t.Helper()
 
-	bin := filepath.Join(t.TempDir(), "mro2nf")
-	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-X main.version="+version, "-o", bin, "./cmd/mro2nf")
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	dir := t.TempDir()
 
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build stamped mro2nf: %v\n%s", err, out)
+	for _, bin := range []string{"mro2nf", "mre"} {
+		cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-X main.version="+version, "-o", filepath.Join(dir, bin), "./cmd/"+bin)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("build stamped %s: %v\n%s", bin, err, out)
+		}
 	}
 
-	return bin
+	if err := os.Symlink(filepath.Join(root, "mrjob"), filepath.Join(dir, "mrjob")); err != nil {
+		t.Fatal(err)
+	}
+
+	return toolchain{mro2nf: filepath.Join(dir, "mro2nf"), mre: filepath.Join(dir, "mre")}
 }

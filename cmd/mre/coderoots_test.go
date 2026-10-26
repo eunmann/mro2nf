@@ -74,7 +74,7 @@ func TestStageKeepsPathsIntoTheCode(t *testing.T) {
 
 	t.Chdir(t.TempDir())
 
-	if _, err := mreIn(t, mro, "plan", "-psid", "mrp", "-work", "plan",
+	if _, err := mreIn(t, mro, "plan", "-build", testBuild(), "-psid", "mrp", "-work", "plan",
 		"-call", "plan/call", "-nodes", "plan/nodes", "-roots", "plan/roots", "-leaves", "plan/leaves", "-files", "plan/files"); err != nil {
 		t.Fatalf("plan: %v", err)
 	}
