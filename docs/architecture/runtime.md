@@ -290,7 +290,14 @@ Two Nextflow details shape this:
   the manifest names, and the run publishes it from there
   (`TestMrpDiffPublishesHostEntryFiles`). It is a copy, not Nextflow's default
   symlink, so an object-store or HealthOmics output directory holds the files
-  themselves, dotfiles and empty directories included.
+  themselves, dotfiles included.
+- An upload to S3 creates no object for an empty directory, so neither a
+  stage task's work directory nor OUTS's holds one there. The manifest lists
+  each empty directory of the tree as an entry of its own, an empty directory
+  in OUTS's `external/`, and lists the other entries of a directory holding
+  one each, so no entry lies below another. `published` makes the empty
+  directory again before publishing it (`mkdirs()`, which nf-amazon makes as
+  an empty `<key>/` object) (#624).
 - A `-preview` run publishes nothing (`enabled !workflow.preview`): it runs no
   task, and Nextflow 26.04 to 26.10 then waits forever on an enabled output's
   channel.

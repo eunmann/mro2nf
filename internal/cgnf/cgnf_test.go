@@ -427,10 +427,12 @@ func TestEmitLocatesOutsInputs(t *testing.T) {
 // itself; the entry workflow publishes its outs JSON, and each entry of
 // the outs tree its manifest lists from where the task that wrote it keeps
 // it to its path in the tree (#610), OUTS's own external/ copy for a file
-// no stage task wrote, as copies, below Nextflow's outputDir, which only
-// the healthomics profile sets, to the HealthOmics pubdir; no param names
-// it. A -preview run, which runs no task, publishes nothing, as an enabled
-// output would hang it (TestLaunchEdges).
+// no stage task wrote, and for an empty dir that copy made again first, as
+// an object store keeps none of OUTS's upload (#624), as copies, below
+// Nextflow's outputDir, which only the healthomics profile sets, to the
+// HealthOmics pubdir; no param names it. A -preview run, which runs no
+// task, publishes nothing, as an enabled output would hang it
+// (TestLaunchEdges).
 func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
 	tree := readTree(t, emitFixture(t, "dir_out"))
 
@@ -442,7 +444,8 @@ func TestEmitPublishesThroughWorkflowOutputs(t *testing.T) {
 	)
 	checkContains(t, tree, "stage.nf",
 		"    path 'pipeline_outs.json', emit: json\n    path 'publish', emit: manifest\n",
-		"new groovy.json.JsonSlurper().parseText(p.resolve('publish.json').text).collect { e -> [e.local ? p.resolve(e.source) : file(e.source, glob: false), e.path] }",
+		"new groovy.json.JsonSlurper().parseText(p.resolve('publish.json').text).collect { e -> [publishedSource(p, e), e.path] }",
+		"    if (!e.local) {\n        return file(e.source, glob: false)\n    }\n    def src = p.resolve(e.source)\n    if (e.dir) {\n        src.mkdirs()\n    }\n    return src\n",
 	)
 	checkContains(t, tree, "conf/healthomics.config", "\noutputDir = '/mnt/workflow/pubdir'\n")
 

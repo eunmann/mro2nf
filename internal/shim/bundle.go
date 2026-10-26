@@ -89,8 +89,8 @@ const originFile = ".mre-origin"
 var (
 	// errNoBasename reports a file leaf whose path names no file, such as "/".
 	errNoBasename = errors.New("file leaf has no basename")
-	// errReservedLeaf reports a file leaf named like the origin file it would
-	// share its ordinal dir with.
+	// errReservedLeaf reports a file leaf named like the origin or shape
+	// file it would share its ordinal dir with.
 	errReservedLeaf = errors.New("file leaf name is reserved")
 	// errBadOrigin reports an origin file that holds no origin a writer records.
 	errBadOrigin = errors.New("malformed leaf origin")
@@ -536,7 +536,7 @@ func (m leafMarker) linked(src string) (bool, error) {
 }
 
 // stage copies, or links, the leaf at src, whose absolute path is abs, to
-// rel in the bundle and records its origin beside it.
+// rel in the bundle and records its origin, and its shape, beside it.
 func (m leafMarker) stage(src, abs, rel string, origin Origin) error {
 	dst := filepath.Join(m.dir, rel)
 	if m.link {
@@ -547,7 +547,12 @@ func (m leafMarker) stage(src, abs, rel string, origin Origin) error {
 		return fmt.Errorf("create files dir: %w", err)
 	}
 
-	if err := copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{conf: m.conf}); err != nil {
+	shape := &shapeRecorder{ordinal: filepath.Dir(dst)}
+	if err := copyTree(src, dst, copyWalk{ancestors: map[dirID]struct{}{}, shape: shape}, copyPolicy{conf: m.conf}); err != nil {
+		return err
+	}
+
+	if err := shape.write(); err != nil {
 		return err
 	}
 
@@ -690,7 +695,7 @@ func leafName(src, abs string) (string, error) {
 		return "", fmt.Errorf("%w: %q", errNoBasename, src)
 	}
 
-	if name == originFile {
+	if name == originFile || name == shapeFile {
 		return "", fmt.Errorf("%w: %q", errReservedLeaf, src)
 	}
 
@@ -702,7 +707,16 @@ func leafName(src, abs string) (string, error) {
 // for speed, falling back to a byte copy. It follows symlinks to any target,
 // so it is for trees the run was given, not a stage's outputs.
 func CopyTree(src, dst string) error {
-	return copyTree(src, dst, make(map[dirID]struct{}), copyPolicy{})
+	return copyTree(src, dst, copyWalk{ancestors: map[dirID]struct{}{}}, copyPolicy{})
+}
+
+// copyWalk is the state copyTree threads through a tree: the identities of
+// the dirs on the recursion stack, and while shape is non-nil, the shape
+// of the leaf it copies, which records each empty dir below it and each
+// link that reaches nothing, where a copy without one leaves it out.
+type copyWalk struct {
+	ancestors map[dirID]struct{}
+	shape     *shapeRecorder
 }
 
 // copyPolicy is how copyTree treats the tree it is copying: conf, while
@@ -740,10 +754,9 @@ func (p copyPolicy) admit(src string) (copyPolicy, error) {
 // for a dangling symlink. Nextflow stages inputs as symlinks, and link(2) does
 // not follow them — hard-linking the symlink would leave a dangling link once
 // the bundle is staged into another isolated task (AWS Batch + S3 /
-// HealthOmics), where the original target is absent. A dangling symlink inside
-// a copied directory is treated as absent — the same way leafMarker.mark's top-level
-// guard does (os.Stat -> IsNotExist -> keep the path) — rather than aborting
-// the whole bundle.
+// HealthOmics), where the original target is absent. A dangling symlink is
+// left to the caller, which records it in a leaf's shape or leaves it out,
+// rather than aborting the whole bundle.
 func resolveSymlink(src string) (string, error) {
 	lst, err := os.Lstat(src)
 	if err != nil {
@@ -797,10 +810,18 @@ func enterDir(dir os.FileInfo, ancestors map[dirID]struct{}) (func(), bool) {
 // of its own ancestors would otherwise recurse until ENAMETOOLONG, duplicating
 // the tree on every pass; catching the repeat (dev, inode) bounds the recursion
 // to the finite number of distinct directories reachable once.
-func copyTree(src, dst string, ancestors map[dirID]struct{}, pol copyPolicy) error {
+func copyTree(src, dst string, w copyWalk, pol copyPolicy) error {
 	resolved, err := resolveSymlink(src)
-	if err != nil || resolved == "" {
+	if err != nil {
 		return err
+	}
+
+	if resolved == "" {
+		if w.shape == nil {
+			return nil
+		}
+
+		return w.shape.link(src, dst)
 	}
 
 	if pol, err = pol.admit(src); err != nil {
@@ -815,14 +836,14 @@ func copyTree(src, dst string, ancestors map[dirID]struct{}, pol copyPolicy) err
 	}
 
 	if info.IsDir() {
-		release, cycle := enterDir(info, ancestors)
+		release, cycle := enterDir(info, w.ancestors)
 		if cycle {
 			return fmt.Errorf("copy %s: %w", src, errSymlinkCycle)
 		}
 
 		defer release()
 
-		return copyDir(src, dst, info, ancestors, pol)
+		return copyDir(src, dst, info, w, pol)
 	}
 
 	if !pol.copyOnly {
@@ -842,7 +863,7 @@ func copyTree(src, dst string, ancestors map[dirID]struct{}, pol copyPolicy) err
 	return copyFileContents(src, dst, info)
 }
 
-func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}, pol copyPolicy) error {
+func copyDir(src, dst string, info os.FileInfo, w copyWalk, pol copyPolicy) error {
 	// Create the destination writable regardless of the source's mode, then
 	// restore the source mode after populating: a read-only source directory
 	// (e.g. 0555) must still admit its children being written into the copy.
@@ -855,8 +876,14 @@ func copyDir(src, dst string, info os.FileInfo, ancestors map[dirID]struct{}, po
 		return fmt.Errorf("read dir %s: %w", src, err)
 	}
 
+	if len(entries) == 0 && w.shape != nil {
+		if err := w.shape.emptyDir(dst); err != nil {
+			return err
+		}
+	}
+
 	for _, e := range entries {
-		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), ancestors, pol); err != nil {
+		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), w, pol); err != nil {
 			return err
 		}
 	}

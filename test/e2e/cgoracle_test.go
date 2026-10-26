@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -212,6 +213,13 @@ func normLeaf(t *testing.T, s string, mode leafMode) string {
 		}
 
 		rel, _ := filepath.Rel(walkRoot, p)
+
+		if _, err := os.Stat(p); d.Type()&fs.ModeSymlink != 0 && errors.Is(err, fs.ErrNotExist) {
+			target, err := os.Readlink(p)
+			_, _ = fmt.Fprintf(h, "%s\x00l\x00%s\x00", rel, target)
+
+			return err
+		}
 
 		b, err := os.ReadFile(p)
 		if err != nil {
