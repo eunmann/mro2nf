@@ -97,14 +97,14 @@ func TestPipestanceUUID(t *testing.T) {
 	requireTools(t, "nextflow", "java", "python3")
 
 	dir := t.TempDir()
-	writeFileT(t, filepath.Join(dir, "pipeline.mro"), uuidPipeline)
+	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), uuidPipeline)
 
 	for name, code := range map[string]string{"split_uuid": uuidSplitStage, "main_uuid": uuidMainStage} {
 		if err := os.MkdirAll(filepath.Join(dir, "stages", name), 0o755); err != nil {
 			t.Fatal(err)
 		}
 
-		writeFileT(t, filepath.Join(dir, "stages", name, "__init__.py"), code)
+		writeTestFile(t, filepath.Join(dir, "stages", name, "__init__.py"), code)
 	}
 
 	proj := transpileDir(t, dir)

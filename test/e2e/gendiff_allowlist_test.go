@@ -46,10 +46,10 @@ func TestGenDiffPublishedAppliesEveryRule(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if c.mrpOuts != "" {
-				writeABITestFile(t, mrpJSON, c.mrpOuts)
+				writeTestFile(t, mrpJSON, c.mrpOuts)
 			}
 
-			writeABITestFile(t, nfOuts, c.nfOuts)
+			writeTestFile(t, nfOuts, c.nfOuts)
 
 			got, err := genPublishedFindings(allow.RulesEverywhere(), "default", program, ps, results)
 			if err != nil {
@@ -62,8 +62,8 @@ func TestGenDiffPublishedAppliesEveryRule(t *testing.T) {
 		})
 	}
 
-	writeABITestFile(t, mrpJSON, relative)
-	writeABITestFile(t, nfOuts, nf)
+	writeTestFile(t, mrpJSON, relative)
+	writeTestFile(t, nfOuts, nf)
 
 	reports, err := diffPublished(allow, pairFixture, ps, results)
 	if err != nil {
@@ -99,9 +99,9 @@ func TestGenDiffOutcomeAppliesEveryRule(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			proj := t.TempDir()
-			writeABITestFile(t, filepath.Join(proj, "trace.txt"), "hash\tname\tstatus\texit\n"+c.trace)
-			writeABITestFile(t, filepath.Join(proj, "work", "1b", "0000aa11", "main", mreStageFile), "RAISE")
-			writeABITestFile(t, filepath.Join(proj, "work", "1c", "0000aa22", "main", mreStageFile), "RAISE")
+			writeTestFile(t, filepath.Join(proj, "trace.txt"), "hash\tname\tstatus\texit\n"+c.trace)
+			writeTestFile(t, filepath.Join(proj, "work", "1b", "0000aa11", "main", mreStageFile), "RAISE")
+			writeTestFile(t, filepath.Join(proj, "work", "1c", "0000aa22", "main", mreStageFile), "RAISE")
 
 			v, err := outcomeLegVerdict(env, genLegs[0], program, proj, c.mrp, runErr)
 			if err != nil {

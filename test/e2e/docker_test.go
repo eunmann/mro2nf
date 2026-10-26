@@ -268,7 +268,7 @@ func addTarEntry(tw *tar.Writer, path, name string, d fs.DirEntry) error {
 func runDocker(t *testing.T, proj, dir, name string, args ...string) error {
 	t.Helper()
 
-	writeFileT(t, filepath.Join(proj, "iso.config"), dockerProfileConfig())
+	writeTestFile(t, filepath.Join(proj, "iso.config"), dockerProfileConfig())
 
 	return runNextflow(t, proj, append([]string{
 		"-profile", "docker", "-c", "iso.config", "--mro2nf_image", pipelineImage(t, dir, name),
@@ -420,7 +420,7 @@ func TestDockerEntryOverrides(t *testing.T) {
 			t.Fatalf("mkdir for %s: %v", name, err)
 		}
 
-		writeFileT(t, path, content)
+		writeTestFile(t, path, content)
 	}
 
 	p := func(name string) string { return filepath.Join(work, name) }
@@ -449,7 +449,7 @@ func TestDockerEntryOverrides(t *testing.T) {
 				t.Fatalf("marshal params: %v", err)
 			}
 
-			writeFileT(t, filepath.Join(proj, "params.json"), string(params))
+			writeTestFile(t, filepath.Join(proj, "params.json"), string(params))
 
 			if err := runDocker(t, proj, filepath.Join(root, "testdata", tc.fixture), "overrides_"+tc.name, "-params-file", "params.json"); err != nil {
 				t.Fatalf("nextflow (isolated): %v", err)
@@ -523,7 +523,7 @@ func TestGeneratedAWSBatchProfile(t *testing.T) {
 func runAWSBatchLocally(t *testing.T, proj, image string, dockerOpts []string, args ...string) error {
 	t.Helper()
 
-	writeFileT(t, filepath.Join(proj, "local.config"), "process.executor = 'local'\ndocker.enabled = true\n"+localDockerConfig(dockerOpts...))
+	writeTestFile(t, filepath.Join(proj, "local.config"), "process.executor = 'local'\ndocker.enabled = true\n"+localDockerConfig(dockerOpts...))
 
 	return runNextflow(t, proj, append([]string{
 		"-profile", "awsbatch", "-c", "local.config", "--mro2nf_image", image,
@@ -679,7 +679,7 @@ func unzipWorkflow(t *testing.T, path string) string {
 			t.Fatal(err)
 		}
 
-		writeFileT(t, dst, string(raw))
+		writeTestFile(t, dst, string(raw))
 	}
 
 	entry := filepath.Join("_assets/mro", root, "testdata", "entry_file", "pipeline.mro")

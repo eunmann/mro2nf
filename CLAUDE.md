@@ -62,7 +62,6 @@ internal/
   types/             → file-leaf walk over Martian's compiled types (shared by cg + shim)
   shim/              → bundle I/O, markers, output confinement
   buildinfo/         → the build's version, shared by mro2nf and mre (PLAN checks they match)
-  logging/           → log/slog setup (stderr)
 ```
 
 The Martian parser is consumed as a normal module dependency, pinned by commit

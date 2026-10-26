@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -32,7 +33,7 @@ func newRefTask(t *testing.T, root string, stage func(src, dst string) error) re
 	writeSelfNamed(t, filepath.Join(d, "inner.txt"))
 
 	r := refTask{dir: filepath.Join(root, "task"), own: own}
-	r.produced = writeStageOuts(t, filepath.Join(root, "producer"), map[string]any{"f": own, "d": d}, fields(t, "f file", "d path"))
+	r.produced = writeStageOuts(t, filepath.Join(root, "producer"), map[string]any{"f": own, "d": d}, typestest.Fields(t, "f file", "d path"))
 
 	if err := os.MkdirAll(filepath.Join(r.dir, "in"), 0o755); err != nil {
 		t.Fatal(err)
@@ -45,7 +46,7 @@ func newRefTask(t *testing.T, root string, stage func(src, dst string) error) re
 	t.Chdir(r.dir)
 
 	r.staged = readPayload(t, filepath.Join("in", "u1"))
-	r.args = linkLeaves(t, "args", map[string]any{"up": r.staged["f"], "dir": r.staged["d"]}, fields(t, "up file", "dir path"), shim.Roots{})
+	r.args = linkLeaves(t, "args", map[string]any{"up": r.staged["f"], "dir": r.staged["d"]}, typestest.Fields(t, "up file", "dir path"), shim.Roots{})
 	r.ownLeaf = writeSelfNamed(t, filepath.Join(r.dir, "main", "files", "mine.txt"))
 	r.file, _ = r.args["up"].(string)
 	dir, _ := r.args["dir"].(string)
@@ -78,7 +79,7 @@ func TestWriteItemNamesStagedLeavesByReference(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			params := fields(t, "up file", "chunk file", "own file", "inner file")
+			params := typestest.Fields(t, "up file", "chunk file", "own file", "inner file")
 			payload := map[string]any{"up": r.file, "chunk": r.staged["f"], "own": r.ownLeaf, "inner": r.inner}
 
 			refs, err := shim.WriteItem(filepath.Join("outs", "x"), payload, params, fileTable(t), shim.Opts{Confine: conf}, staged)
@@ -194,7 +195,7 @@ func TestReferenceResolvesToALeafOfAStagedItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := shim.WriteItem(filepath.Join("outs", "x"), map[string]any{"up": r.file}, fields(t, "up file"), fileTable(t), shim.Opts{}, staged); err != nil {
+	if _, err := shim.WriteItem(filepath.Join("outs", "x"), map[string]any{"up": r.file}, typestest.Fields(t, "up file"), fileTable(t), shim.Opts{}, staged); err != nil {
 		t.Fatal(err)
 	}
 
@@ -217,7 +218,7 @@ func TestReferenceResolvesToALeafOfAStagedItem(t *testing.T) {
 func TestWriteItemCopiesWithNothingStaged(t *testing.T) {
 	r := newRefTask(t, t.TempDir(), os.Symlink)
 
-	refs, err := shim.WriteItem(filepath.Join("outs", "x"), map[string]any{"up": r.file}, fields(t, "up file"), fileTable(t), shim.Opts{}, shim.Staged{})
+	refs, err := shim.WriteItem(filepath.Join("outs", "x"), map[string]any{"up": r.file}, typestest.Fields(t, "up file"), fileTable(t), shim.Opts{}, shim.Staged{})
 	if err != nil || len(refs) != 0 {
 		t.Fatalf("WriteItem: %v, %v; want no reference", refs, err)
 	}
@@ -241,7 +242,7 @@ func TestReferenceIgnoresASidecarBesideTheLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := shim.WriteItem(filepath.Join("outs", "x"), map[string]any{"up": r.file}, fields(t, "up file"), fileTable(t), shim.Opts{}, staged); err != nil {
+	if _, err := shim.WriteItem(filepath.Join("outs", "x"), map[string]any{"up": r.file}, typestest.Fields(t, "up file"), fileTable(t), shim.Opts{}, staged); err != nil {
 		t.Fatal(err)
 	}
 

@@ -42,6 +42,8 @@ type Graph struct {
 	// splitRoots are the fork roots by their own split, which two
 	// instances of one sub-pipeline, sharing their calls, do not share.
 	splitRoots map[*syntax.SplitExp]*syntax.CallGraphStage
+	counts     map[*syntax.SplitExp]rootCount
+	partnered  map[string]nodePartners
 }
 
 // Load compiles the entry .mro at entry as mrp compiles the invocation it
@@ -114,6 +116,7 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 		outer:    map[string]syntax.ForkRootList{},
 
 		splitRoots: map[*syntax.SplitExp]*syntax.CallGraphStage{},
+		counts:     map[*syntax.SplitExp]rootCount{},
 	}
 
 	closure := root.NodeClosure()
@@ -132,6 +135,14 @@ func graphOf(ast *syntax.Ast, name string, mroPaths []string) (*Graph, error) {
 			g.addOuter(r, st.ForkRoots()[:i])
 		}
 	}
+
+	for sp := range g.splitRoots {
+		if sp != nil && !sp.Source.KnownLength() {
+			g.counts[sp] = g.countSplit(sp)
+		}
+	}
+
+	g.partnered = g.indexPartners()
 
 	return g, nil
 }
@@ -235,14 +246,46 @@ func (g *Graph) Producer(root *syntax.CallGraphStage) (string, bool) {
 // split source of known length, else those its compiled source reads where
 // mrp expands the root's forks from it.
 func (g *Graph) rootCountRefs(root *syntax.CallGraphStage) []string {
+	return g.rootCount(root).stages
+}
+
+// rootCount is what counting a root's forks reads, as mrp expands them from
+// its compiled source (countWalk): the stages whose outs fix the count, the
+// disable gates it evaluates on the way, and every reference it reads, the
+// gates' too.
+type rootCount struct {
+	stages []string
+	gates  []syntax.Exp
+	reads  []*syntax.RefExp
+}
+
+// rootCount is root's, none for a source of known length. Every stage's
+// fork roots are counted once, when the graph is built; the call of a merge
+// no stage is forked on, such as a mapped sub-pipeline's in the pipeline
+// outs, is counted where it is asked for.
+func (g *Graph) rootCount(root *syntax.CallGraphStage) rootCount {
 	sp := root.Split()
 	if sp == nil || sp.Source.KnownLength() {
-		return nil
+		return rootCount{}
 	}
 
-	w := countWalk{g: g, sp: sp}
+	if c, ok := g.counts[sp]; ok {
+		return c
+	}
 
-	return w.source(sp.Source)
+	return g.countSplit(sp)
+}
+
+func (g *Graph) countSplit(sp *syntax.SplitExp) rootCount {
+	w := countWalk{g: g, sp: sp}
+	stages := w.source(sp.Source)
+	c := rootCount{stages: stages, gates: w.gates, reads: w.refs}
+
+	for _, gate := range w.gates {
+		c.reads = append(c.reads, gate.FindRefs()...)
+	}
+
+	return c
 }
 
 // countWalk walks the compiled source of split sp case for case as mrp
@@ -349,25 +392,9 @@ func (w *countWalk) ref(ref *syntax.RefExp) []string {
 	return []string{ref.Id}
 }
 
-// countReads are the stage outs counting root's forks reads, as mrp
-// expands them from its compiled source (countWalk): the references the
-// walk reaches and the gates it evaluates; none for a source of known
-// length.
+// countReads are the stage outs counting root's forks reads (rootCount).
 func (g *Graph) countReads(root *syntax.CallGraphStage) []*syntax.RefExp {
-	sp := root.Split()
-	if sp == nil || sp.Source.KnownLength() {
-		return nil
-	}
-
-	w := countWalk{g: g, sp: sp}
-	w.source(sp.Source)
-
-	refs := w.refs
-	for _, gate := range w.gates {
-		refs = append(refs, gate.FindRefs()...)
-	}
-
-	return refs
+	return g.rootCount(root).reads
 }
 
 // allGatedBy reports whether every stage of fqids has gate among its
@@ -397,14 +424,10 @@ func (g *Graph) allGatedBy(fqids []string, gate syntax.Exp) bool {
 // requires ready to restore those forks when it reattaches a pipestance
 // (core/pipestance.go RestoreForks, core/fork.go getDisabledSource).
 func (g *Graph) sourceGates() []syntax.Exp {
-	var out []syntax.Exp
+	out := make([]syntax.Exp, 0, len(g.roots))
 
 	for _, root := range g.sortedRoots() {
-		if sp := root.Split(); sp != nil && !sp.Source.KnownLength() {
-			w := countWalk{g: g, sp: sp}
-			w.source(sp.Source)
-			out = append(out, w.gates...)
-		}
+		out = append(out, g.rootCount(root).gates...)
 	}
 
 	return out

@@ -5,13 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 
 	"github.com/eunmann/mro2nf/internal/buildinfo"
 	"github.com/eunmann/mro2nf/internal/cgnf"
-	"github.com/eunmann/mro2nf/internal/logging"
 )
 
 // version is set via -ldflags at build time.
@@ -56,7 +56,7 @@ func run(args []string) error {
 		return fmt.Errorf("transpile %s: %w", src, err)
 	}
 
-	logging.New().Info("emitted Nextflow project", "source", src, "out", opts.OutDir)
+	slog.New(slog.NewTextHandler(os.Stderr, nil)).Info("emitted Nextflow project", "source", src, "out", opts.OutDir)
 
 	return nil
 }
