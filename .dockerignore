@@ -12,6 +12,7 @@
 artifacts
 deploy/awsbatch-cdk/node_modules
 deploy/awsbatch-cdk/cdk.out
+out
 out-*
 work
 results
