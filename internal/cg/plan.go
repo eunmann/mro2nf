@@ -423,7 +423,9 @@ func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks, leaves 
 }
 
 // staticOff are the fork keys of the instances of st a disable binding that
-// reads no stage disables, which every entry-fed root of st enumerates.
+// reads no stage disables, which every entry-fed root of st enumerates. A
+// binding that does not resolve to a bool is left to the instance's own
+// task, which fails on it as mrp fails the fork.
 func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, wt Topology, planned *plannedForks) ([]string, error) {
 	var static []syntax.Exp
 
@@ -449,12 +451,7 @@ func (g *Graph) staticOff(st *syntax.CallGraphStage, n TopoNode, wt Topology, pl
 
 	for _, in := range assignments(n.Roots, planned) {
 		for _, d := range static {
-			v, err := r.resolve(d, r.boolType(), in.fork)
-			if err != nil {
-				return nil, fmt.Errorf("disable binding of %s at fork %s: %w", st.Fqid, in.fork, err)
-			}
-
-			if on, err := gateValue(v); err == nil && on {
+			if on, err := r.disables(d, in.fork); err == nil && on {
 				off = append(off, DottedKey(entryFork{ords: in.ords}.key(n.Roots)))
 
 				break

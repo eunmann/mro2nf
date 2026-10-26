@@ -366,7 +366,7 @@ func TestAlarmsReachStderr(t *testing.T) {
 // (core/stage.go:1171-1246).
 func TestJoinWritesChunkFiles(t *testing.T) {
 	s, inv := stage(t, "file_min", "FP.WRITE", `touch "$meta/_complete"`)
-	s.Split, s.Outs, s.ChunkOuts = true, nil, nil
+	s.Split, s.Outs, s.ChunkOuts = true, new(syntax.OutParams), new(syntax.OutParams)
 	r := runtime(t, inv)
 
 	defs := &core.StageDefs{

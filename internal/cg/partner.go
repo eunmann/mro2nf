@@ -232,7 +232,7 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 
 	rec := partnerJSON{Root: p.root.Fqid, Node: p.ref.Id, Output: p.ref.OutputId}
 
-	for _, ix := range c.indices() {
+	for _, ix := range c.indices {
 		el, err := c.at(ix)
 		if err != nil {
 			return err

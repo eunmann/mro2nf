@@ -7,8 +7,6 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-const disabledBinding = "disabled binding"
-
 // resolved is what core's resolvers return: whether the reads were ready,
 // the value, and the error.
 type resolved struct {
@@ -190,7 +188,7 @@ func (top *TopNode) literalElement(v syntax.Exp, t syntax.Type, fork ForkId,
 
 		return resolved{ready: ready, v: out, err: err}, true
 	case *syntax.DisabledExp:
-		ready, off, err := top.gate(x, fork, readSize)
+		ready, off, err := top.gate(x.Disabled, fork, readSize)
 		if err != nil || !ready || off {
 			return resolved{ready: ready, err: err}, true
 		}
@@ -201,29 +199,15 @@ func (top *TopNode) literalElement(v syntax.Exp, t syntax.Type, fork ForkId,
 	}
 }
 
-// gate resolves a disable-wrapped value's gate as resolveDisabledExp does
-// (resolve.go:248): whether its reads were ready, and whether it disables
-// the value.
-func (top *TopNode) gate(d *syntax.DisabledExp, fork ForkId, readSize int64) (bool, bool, error) {
-	ready, v, err := top.resolve(d.Disabled,
+// gate resolves the gate of a disable-wrapped value by core's own
+// resolveDisabledExp (resolve.go:248), over a value that resolves to
+// itself: whether its reads were ready, and whether it disables the value,
+// which it then resolves to nothing.
+func (top *TopNode) gate(gate syntax.Exp, fork ForkId, readSize int64) (bool, bool, error) {
+	enabled := &syntax.BoolExp{Value: true}
+
+	ready, v, err := top.resolveDisabledExp(&syntax.DisabledExp{Disabled: gate, Value: enabled},
 		top.types.Get(syntax.TypeId{Tname: syntax.KindBool}), fork, readSize)
-	if err != nil || !ready {
-		return ready, false, err
-	}
 
-	switch g := v.(type) {
-	case *syntax.BoolExp:
-		return true, g.Value, nil
-	case json.RawMessage:
-		var b bool
-		if err := json.Unmarshal(g, &b); err != nil {
-			return true, false, &elementError{element: disabledBinding, inner: err}
-		}
-
-		return true, b, nil
-	default:
-		return true, false, &elementError{
-			element: fmt.Sprintf("invalid type %T for %s from %s", v, disabledBinding, d.Disabled.GoString()),
-		}
-	}
+	return ready, err == nil && ready && v == nil, err
 }

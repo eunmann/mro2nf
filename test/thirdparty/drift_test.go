@@ -12,6 +12,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/google/go-cmp/cmp"
+	"github.com/martian-lang/martian/martian/core"
 )
 
 const vendorMartian = "vendor-martian"
@@ -132,6 +133,34 @@ func TestRetryPatternsMatchModule(t *testing.T) {
 
 	if retry.DefaultRetries != job.DefaultRetries {
 		t.Errorf("job.DefaultRetries = %d, retry.json's default_retries is %d", job.DefaultRetries, retry.DefaultRetries)
+	}
+}
+
+// TestJobSettingsMatchModule: mre grants and runs a job by exactly the
+// settings of mrp's jobmanagers/config.json, at the Martian commit go.mod
+// pins.
+func TestJobSettingsMatchModule(t *testing.T) {
+	dir, err := ModuleDir(t.Context(), repoRoot, Vendored()[vendorMartian])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "jobmanagers", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var config core.JobManagerJson
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+
+	if config.JobSettings == nil {
+		t.Fatalf("%s has no settings", filepath.Join(dir, "jobmanagers", "config.json"))
+	}
+
+	if diff := cmp.Diff(*config.JobSettings, job.Settings()); diff != "" {
+		t.Errorf("job.Settings drifted from %s (-module +mre):\n%s", dir, diff)
 	}
 }
 

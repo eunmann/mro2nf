@@ -31,7 +31,7 @@ var (
 )
 
 // Instance identifies one stage instance: its node, its fork, and whether
-// it is disabled. Lens are the fork counts of its parts (Fork.ID).
+// it is disabled. Lens are the fork counts of its parts (Graph.ForkID).
 type Instance struct {
 	Node     string
 	Fork     Fork
@@ -46,11 +46,8 @@ type instanceJSON struct {
 	Disabled bool       `json:"disabled"`
 }
 
-// ForkID is the instance's fork id as mrp names the fork (Fork.ID).
-func (in Instance) ForkID() string { return in.Fork.ID(in.Lens) }
-
 // Element is one fork of a runtime fork root: its fork (the root's outer
-// parts, then the root's own), the fork counts of those parts (Fork.ID),
+// parts, then the root's own), the fork counts of those parts (Graph.ForkID),
 // and its position among the root's forks under its outer parts, in mrp's
 // order.
 type Element struct {

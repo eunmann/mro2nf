@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"path"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/mrcore"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 )
@@ -65,9 +65,9 @@ func (r Runtime) Main(ctx context.Context, in Instance, args core.LazyArgumentMa
 		return nil, err
 	}
 
-	outs := outArgs(in.Stage.Outs, j.files())
+	outs := mrcore.OutArgs(in.Stage.Outs, j.files(), false)
 	if in.Stage.Split {
-		maps.Copy(outs, outArgs(in.Stage.ChunkOuts, j.files()))
+		maps.Copy(outs, mrcore.OutArgs(in.Stage.ChunkOuts, j.files(), false))
 	}
 
 	return r.runForOuts(ctx, in, j, outs)
@@ -98,7 +98,7 @@ func (r Runtime) Join(ctx context.Context, in Instance, args core.LazyArgumentMa
 		return nil, err
 	}
 
-	return r.runForOuts(ctx, in, j, outArgs(in.Stage.Outs, j.files()))
+	return r.runForOuts(ctx, in, j, mrcore.OutArgs(in.Stage.Outs, j.files(), false))
 }
 
 // writeChunks writes the join's _chunk_defs, each def's args without its
@@ -136,7 +136,7 @@ func hasParams(p *syntax.OutParams) bool { return p != nil && len(p.List) > 0 }
 
 // runForOuts writes the job's pre-populated _outs, runs it, and returns the
 // _outs it wrote.
-func (r Runtime) runForOuts(ctx context.Context, in Instance, j *job, outs map[string]any) (json.RawMessage, error) {
+func (r Runtime) runForOuts(ctx context.Context, in Instance, j *job, outs core.MarshalerMap) (json.RawMessage, error) {
 	if err := j.write(core.OutsFile, outs); err != nil {
 		return nil, err
 	}
@@ -148,29 +148,4 @@ func (r Runtime) runForOuts(ctx context.Context, in Instance, j *job, outs map[s
 	raw, _, err := j.read(core.OutsFile)
 
 	return raw, err
-}
-
-// outArgs pre-populates _outs as core's makeOutArgs does (core/stage.go:44
-// makeOutArg): an empty array or map for a collection, the default path in
-// files for a file, and null otherwise.
-func outArgs(params *syntax.OutParams, files string) map[string]any {
-	out := map[string]any{}
-	if params == nil {
-		return out
-	}
-
-	for _, p := range params.List {
-		switch m := &p.StructMember; {
-		case m.Tname.ArrayDim > 0:
-			out[p.Id] = []any{}
-		case m.Tname.MapDim > 0:
-			out[p.Id] = map[string]any{}
-		case m.IsFile() == syntax.KindIsFile && m.GetOutFilename() != "":
-			out[p.Id] = path.Join(files, m.GetOutFilename())
-		default:
-			out[p.Id] = nil
-		}
-	}
-
-	return out
 }

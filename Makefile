@@ -57,7 +57,7 @@ cross: ## Compile every package and test for each release platform
 # internal/mrcore's copies of Martian core are left out: they are core's own
 # source, adapted only where TestMrcoreMatchesCore declares, including the
 # paths of mrp's runtime mro2nf never takes; what mrcore adds is measured.
-MRCORE_COPIES := internal/mrcore/(fork|resolve|convert|adapted)\.go:
+MRCORE_COPIES := internal/mrcore/(fork|resolve|convert|stage|adapted)\.go:
 cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
 	@go test -count=1 -coverprofile=artifacts/cover.all.out -coverpkg=./cmd/...,./internal/... ./cmd/... ./internal/... >/dev/null
 	@grep -vE '$(MRCORE_COPIES)' artifacts/cover.all.out > artifacts/cover.out

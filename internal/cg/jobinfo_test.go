@@ -76,9 +76,20 @@ func TestForkIDNamesMrpForks(t *testing.T) {
 	gen := f.outs("MFU.GEN", nil, `{"m":{"alpha":1,"beta":2,"gamma":3}}`)
 	elems := elementItems(t, f.post(gen), "MFU.DBL")
 
-	if inst, _ := f.args("MFU.DBL", elems[1]); inst.ForkID() != "fork_beta" {
-		t.Errorf("fork id %q, mrp's fork dir is fork_beta", inst.ForkID())
+	if inst, _ := f.args("MFU.DBL", elems[1]); f.forkID(inst) != "fork_beta" {
+		t.Errorf("fork id %q, mrp's fork dir is fork_beta", f.forkID(inst))
 	}
+}
+
+func (f *fixture) forkID(in Instance) string {
+	f.t.Helper()
+
+	id, err := f.g.ForkID(in.Node, in.Fork, in.Lens)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+
+	return id
 }
 
 // TestForkIDAfterAnOuterPart pins the fork dirs upstream mrp (50ad6c0)
@@ -118,8 +129,9 @@ call TOP()
 	}
 
 	for _, tc := range cases {
-		if got := tc.fork.ID(tc.lens); got != tc.want {
-			t.Errorf("ID of %s = %q, mrp's fork dir is %q", tc.fork, got, tc.want)
+		got, err := f.g.ForkID("TOP.SUB.SQ", tc.fork, tc.lens)
+		if err != nil || got != tc.want {
+			t.Errorf("ForkID of %s = %q, %v; mrp's fork dir is %q", tc.fork, got, err, tc.want)
 		}
 	}
 }
@@ -147,7 +159,7 @@ func forkIDs(t *testing.T, f *fixture, node, entry, last string, ups []string) [
 		}
 
 		inst, _ := f.args(node, in...)
-		ids = append(ids, inst.ForkID())
+		ids = append(ids, f.forkID(inst))
 	}
 
 	return ids
