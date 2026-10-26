@@ -873,7 +873,7 @@ func TestReleasePublishesAfterBuilds(t *testing.T) {
 var releasePublishing = map[string]func(*yamlNode) bool{
 	"tag":      stepRuns("git tag"),
 	"git push": stepRuns("git push"),
-	"skopeo":   stepRuns("skopeo copy"),
+	"skopeo":   func(s *yamlNode) bool { return stepRuns("skopeo copy")(s) && stepRuns("docker://")(s) },
 	"login":    stepUses("docker/login-action"),
 	"attest":   stepUses("actions/attest-build-provenance"),
 	"release":  stepUses("softprops/action-gh-release"),
@@ -1126,6 +1126,106 @@ func TestReleaseImagePush(t *testing.T) {
 			t.Errorf("prerelease %s: pushed tags (-want +got):\n%s", prerelease, diff)
 		}
 	}
+}
+
+// scanPolicy is the Grype gate of the release and nightly image scans:
+// fail on a High or Critical finding that has a fix.
+var scanPolicy = map[string]string{"severity-cutoff": "high", "only-fixed": "true"}
+
+// TestReleaseImageAttestsAndScans pins the image build's SBOM and
+// provenance attestations, and runs the step that loads each built
+// platform from the archive publish pushes, with stand-in skopeo and
+// docker: every platform loads under the tag a scan step scans with
+// scanPolicy, the same gate as the nightly scan.
+func TestReleaseImageAttestsAndScans(t *testing.T) {
+	requireTools(t, "bash")
+
+	build := releaseStep(t, "image", stepUses("docker/build-push-action")).get("with")
+	if got := []string{scalarOf(build.get("sbom")), scalarOf(build.get("provenance"))}; !slices.Equal(got, []string{"true", "mode=max"}) {
+		t.Errorf("%s image build sbom, provenance = %q, want true, mode=max", releaseWorkflow, got)
+	}
+
+	steps := readWorkflow(t, releaseWorkflow).get("jobs").get("image").get("steps").items
+	load := slices.IndexFunc(steps, stepRuns("docker load"))
+
+	if load < 0 {
+		t.Fatalf("%s image job never runs docker load", releaseWorkflow)
+	}
+
+	loaded := runImageLoad(t, scalarOf(steps[load].get("run")))
+	scans := scannedImages(t, releaseWorkflow, steps[load:])
+
+	for p := range strings.SplitSeq(scalarOf(build.get("platforms")), ",") {
+		tag := "mro2nf-runtime:smoke-" + strings.TrimPrefix(p, "linux/")
+		if !slices.Contains(loaded, tag) || !slices.Contains(scans, tag) {
+			t.Errorf("platform %s: loaded %q, scanned %q; want %s in both", p, loaded, scans, tag)
+		}
+	}
+
+	if got := scannedImages(t, nightlyWorkflow, readWorkflow(t, nightlyWorkflow).get("jobs").get("imagescan").get("steps").items); len(got) != 1 {
+		t.Errorf("%s imagescan job scans %q, want one image", nightlyWorkflow, got)
+	}
+}
+
+// scannedImages is the image of each anchore/scan-action step, which must
+// apply scanPolicy at the action pin release.yml uses.
+func scannedImages(t *testing.T, file string, steps []*yamlNode) []string {
+	t.Helper()
+
+	pin := scalarOf(releaseStep(t, "image", stepUses("anchore/scan-action")).get("uses"))
+
+	var images []string
+
+	for _, s := range steps {
+		if !stepUses("anchore/scan-action")(s) {
+			continue
+		}
+
+		with := s.get("with")
+		for k, v := range scanPolicy {
+			if got := scalarOf(with.get(k)); got != v {
+				t.Errorf("%s scan of %q: %s = %q, want %q", file, scalarOf(with.get("image")), k, got, v)
+			}
+		}
+
+		if got := scalarOf(s.get("uses")); got != pin {
+			t.Errorf("%s scans with %q, want %q as %s pins it", file, got, pin, releaseWorkflow)
+		}
+
+		images = append(images, scalarOf(with.get("image")))
+	}
+
+	return images
+}
+
+// runImageLoad runs the image job's load step with a stand-in skopeo that
+// writes the docker archive it is asked for and a stand-in docker that
+// reports the tag each loaded archive names, and returns the loaded tags.
+func runImageLoad(t *testing.T, script string) []string {
+	t.Helper()
+
+	const (
+		fakeSkopeo = "#!/bin/bash\n[ \"$1\" = copy ] && [ \"${@: -2:1}\" = \"oci-archive:$RUNNER_TEMP/runtime-image.tar\" ] || exit 1\n" +
+			"dest=${@: -1}; dest=${dest#docker-archive:}; printf '%s' \"${dest#*:}\" > \"${dest%%:*}\"\n"
+		fakeDocker = "#!/bin/bash\n[ \"$1 $2\" = 'load -i' ] || exit 1\ncat \"$3\" >> \"$DOCKER_LOG\"; echo >> \"$DOCKER_LOG\"\n"
+	)
+
+	bin, tmp := t.TempDir(), t.TempDir()
+	for name, body := range map[string]string{"skopeo": fakeSkopeo, "docker": fakeDocker} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	log := filepath.Join(tmp, "docker.log")
+	runReleaseStep(t, script, tmp, "PATH="+bin+":"+os.Getenv("PATH"), "RUNNER_TEMP="+tmp, "DOCKER_LOG="+log)
+
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return strings.Fields(string(raw))
 }
 
 // TestReleaseImagePushNeedsDigest runs the publish job's image push with a

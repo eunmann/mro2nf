@@ -5,7 +5,7 @@
 | Workflow | Runs | Does |
 |---|---|---|
 | [`pr-validation.yml`](../../.github/workflows/pr-validation.yml) | every PR | lint (golangci-lint, `make vulncheck`: `govulncheck` on the source and on the `mro2nf`, `mre` and `mrjob` binaries, a `go mod tidy` check, `make deadcode`), build (`make cross`: every package and test compiled for each release platform), unit tests (`-race`), coverage, the e2e suites, `make lint-nf` and `make bench` |
-| [`nightly.yml`](../../.github/workflows/nightly.yml) | daily, and weekly for the heavy tier | the e2e suites on the declared Nextflow floor and the latest stable release, with a 1,000-fork `make test-scale` smoke, the unit tests (`-race`) on Linux and macOS, `make lint-check`, and `make vulncheck`; weekly, the full scale tier and a long `make gen-diff` run |
+| [`nightly.yml`](../../.github/workflows/nightly.yml) | daily, and weekly for the heavy tier | the e2e suites on the declared Nextflow floor and the latest stable release, with a 1,000-fork `make test-scale` smoke, the unit tests (`-race`) on Linux and macOS, `make lint-check`, `make vulncheck` and a Grype scan of the runtime image; weekly, the full scale tier and a long `make gen-diff` run |
 | [`cdk-validation.yml`](../../.github/workflows/cdk-validation.yml) | changes to the CDK app | compiles and synthesizes the example AWS stack |
 | [`release.yml`](../../.github/workflows/release.yml) | dispatched by hand | cuts a release ([below](#releases)) |
 
@@ -16,8 +16,10 @@ its Unit tests job runs only the tests that read those files: `test/docs`,
 `test/divergence` and the untagged tests of `test/e2e`.
 
 The nightly run skips a scheduled tier when the current `main` commit and the
-latest stable Nextflow have already passed it, except the vulnerability scan,
-which runs every day because new advisories arrive without a commit. The weekly tier, or a dispatch
+latest stable Nextflow have already passed it, except the vulnerability scans,
+`make vulncheck` and a Grype scan of the runtime image `main` builds, which
+run every day because advisories and Debian's fixes arrive without a commit.
+The weekly tier, or a dispatch
 with `heavy`, keeps the shrunk repros of `make gen-diff` as an artifact. A
 failed run opens, or comments on, a "Nightly CI is failing" issue.
 Generative-differential divergences do not fail the run: they go to a
@@ -64,7 +66,10 @@ is published.
    of the branch it names (`--ref`, by default `main`).
 2. **Builds.** It cross-compiles `mro2nf`, `mre` and `mrjob` for Linux and
    macOS (amd64, arm64), packs one archive per platform, and builds the
-   runtime image for linux/amd64 and linux/arm64 without pushing it.
+   runtime image for linux/amd64 and linux/arm64 without pushing it, with
+   SBOM and provenance attestations in its index. A Grype scan of each
+   platform of the image fails the release on a High or Critical finding
+   that has a fix.
 3. **Publishes**, only once every build succeeds, in this order:
    1. the annotated tag `<version>` on the commit, tagged by
       `github-actions[bot]`, whose message is the notes as written;

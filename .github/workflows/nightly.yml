@@ -10,7 +10,8 @@ name: Nightly
 #
 # Two tiers share the workflow. The daily one runs the e2e suites, the scale
 # smoke, lint and the unit tests on Linux and macOS, and, whether or not the
-# change gate skips those, the vulnerability scan. The weekly one, from its own cron or a dispatch with `heavy`,
+# change gate skips those, the vulnerability scans of the code and the runtime
+# image. The weekly one, from its own cron or a dispatch with `heavy`,
 # runs the full scale tier and the generative differential's long run, which
 # cost too many runner minutes to run every day (TestNightlyHeavyJobsRunWeekly).
 on:
@@ -244,6 +245,24 @@ jobs:
           cache: true
       - run: make vulncheck
 
+  # The runtime image main builds today, scanned as release.yml scans it:
+  # Debian's fixes arrive without a commit, as advisories do.
+  imagescan:
+    name: Nightly runtime image scan
+    needs: gate
+    if: ${{ needs.gate.outputs.tier == 'daily' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -t mro2nf-runtime:nightly -f deploy/runtime/Dockerfile .
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: mro2nf-runtime:nightly
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
+
   # The scale tier (#352), one bench shape per job so each gets a runner. Each
   # shape's default wide width is sized to finish within the 100-minute
   # SCALE_TIMEOUT it runs under (scaleShapeTimeout in test/e2e/scale_test.go).
@@ -372,7 +391,7 @@ jobs:
   # another branch may be trying out its own broken nightly.
   report:
     name: Nightly failure report
-    needs: [gate, e2e, docker, smoke, unit, lint, vulncheck, scale, gendiff, mark]
+    needs: [gate, e2e, docker, smoke, unit, lint, vulncheck, imagescan, scale, gendiff, mark]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

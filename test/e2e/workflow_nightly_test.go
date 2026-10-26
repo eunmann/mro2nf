@@ -208,9 +208,10 @@ const nightlyMarkGate = "${{ !failure() && !cancelled() && needs.gate.outputs.ru
 // verdict.
 const nightlyScanGate = "${{ needs.gate.outputs.tier == 'daily' }}"
 
-// nightlyScanJobs check the commit against data that changes without it, a
-// vulnerability database, so a pass on the commit cannot skip them.
-var nightlyScanJobs = []string{"vulncheck"}
+// nightlyScanJobs check the commit against data that changes without it,
+// vulnerability databases and Debian's packages, so a pass on the commit
+// cannot skip them.
+var nightlyScanJobs = []string{"vulncheck", "imagescan"}
 
 // TestNightlySuitesWaitOnChangeGate requires every suite job to need the
 // change gate and run only on its verdict, in its tier, and the pass record

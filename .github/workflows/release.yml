@@ -239,6 +239,33 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ inputs.version }}
+          sbom: true
+          provenance: mode=max
+      # Each platform of the archive publish pushes, through a docker archive
+      # that docker load takes: skopeo 1.13, Ubuntu 24.04's, fails writing to
+      # a Docker 29 daemon directly.
+      - name: Load each platform of the image
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            skopeo copy --override-os linux --override-arch "$arch" \
+              "oci-archive:$RUNNER_TEMP/runtime-image.tar" "docker-archive:$RUNNER_TEMP/smoke-$arch.tar:mro2nf-runtime:smoke-$arch"
+            docker load -i "$RUNNER_TEMP/smoke-$arch.tar"
+          done
+      # Fixable High or Critical findings fail the release; the rest are
+      # listed in the log.
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: mro2nf-runtime:smoke-amd64
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: mro2nf-runtime:smoke-arm64
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
       # The layers are compressed already.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
