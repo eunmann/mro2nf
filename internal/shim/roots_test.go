@@ -190,13 +190,13 @@ func TestCodeRootsKeepPathsNotLinks(t *testing.T) {
 	opts := shim.Opts{Confine: conf, Roots: roots}
 
 	bundle := filepath.Join(t.TempDir(), "outs")
-	writeBundle(t, bundle, map[string]any{"out": shipped}, fields(t, "out file"), opts)
+	writeBundle(t, bundle, map[string]any{"out": shipped}, typestest.Fields(t, "out file"), opts)
 
 	if got := readPayload(t, bundle)["out"]; got != shipped {
 		t.Errorf("the code file reads back at %v, want its path %s", got, shipped)
 	}
 
-	if _, err := shim.WriteItem(filepath.Join(t.TempDir(), "outs"), map[string]any{"out": link}, fields(t, "out file"), fileTable(t), opts, shim.Staged{}); err == nil {
+	if _, err := shim.WriteItem(filepath.Join(t.TempDir(), "outs"), map[string]any{"out": link}, typestest.Fields(t, "out file"), fileTable(t), opts, shim.Staged{}); err == nil {
 		t.Error("a stage output linking into the code: nil error, want the confinement's refusal")
 	}
 }
