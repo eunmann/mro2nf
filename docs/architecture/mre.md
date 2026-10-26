@@ -115,7 +115,8 @@ The job step runs the task's phase of the instance as `mrp` runs its job
   `_outs`, `_chunk_defs` and `_chunk_outs` for a join, and the files, tmp and
   journal directories. `_jobinfo` carries `mrp`'s name,
   `ID.<psid>.<fqid>.<fork id>[.chnkN]`, the top-level call's invocation, the
-  Martian runtime's and the pipelines' versions, and `monitor_flag` under
+  Martian runtime's version and the pipelines' version PLAN found
+  (`-pipelines-version`), and `monitor_flag` under
   `-monitor`, which `mrjob` enforces.
 - **Its environment.** The job runs in `mre`'s environment with each of
   `mrp`'s thread variables set to its threads, `TMPDIR` its tmp directory and

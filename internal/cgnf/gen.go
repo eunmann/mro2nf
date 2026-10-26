@@ -164,9 +164,10 @@ func ilist(xs []int) string {
 }
 
 // planWiring parses PLAN's records the wirings read: shared is the meta
-// every task shares, with the launch params their scripts read (stageRun)
-// and the run's call, inline when its base64 is at
-// most cg.MaxValueBytes, as an output value is, or else staged (CALL);
+// every task shares, with the launch params their scripts read (stageRun),
+// the pipelines' version every job records and the run's call, inline when
+// its base64 is at most cg.MaxValueBytes, as an output value is, or else
+// staged (CALL), one value, as combine makes a queue of two values;
 // nodes maps each witness node to its digest, its off flag, its statically
 // disabled fork keys, the cpus and memory its first task is scheduled with
 // and its own overrides, paired with shared, which a node then reads from
@@ -188,7 +189,7 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 	w.linef("    error 'a container profile runs every task in params.mro2nf_image: pass --mro2nf_image <image>, an image built FROM the mro2nf runtime image that holds the pipeline code at the paths it was transpiled from'")
 	w.linef("}")
 	w.linef("PLAN(%s, %s, workflow.workDir.toUriString(), file(\"${projectDir}/%s\"), params.mro2nf_overrides ? file(params.mro2nf_overrides, checkIfExists: true) : [])", p.values(), p.graphMeta(planRun), mroAssets)
-	w.linef("%s = CALL(PLAN.out.call, %d).map { c -> %s }", w.def("shared"), cg.MaxValueBytes, p.graphMeta("call: c", stageRun))
+	w.linef("%s = CALL(PLAN.out.call, %d).combine(PLAN.out.pipelines).map { c, v -> %s }.first()", w.def("shared"), cg.MaxValueBytes, p.graphMeta("call: c", "pipelines: v", stageRun))
 
 	for _, d := range []struct{ name, expr string }{
 		{"nodes", "NODES(PLAN.out.nodes, shared)"},

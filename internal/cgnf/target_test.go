@@ -196,6 +196,31 @@ func TestEmitPassesThePipestanceUUID(t *testing.T) {
 	}
 }
 
+// TestEmitPassesThePipelinesVersion (#625): PLAN finds the pipelines'
+// version once, on the include path the stage tasks find the code on, and
+// every stage task records it in its jobs' _jobinfo, so a commit during a
+// run or across a -resume gives no two tasks different versions.
+func TestEmitPassesThePipelinesVersion(t *testing.T) {
+	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
+
+	for _, want := range []string{
+		" -code-mropath ${shq(meta.mropath)} ",
+		" -pipelines pipelines",
+		"eval('cat pipelines'), emit: pipelines",
+		".combine(PLAN.out.pipelines).map { c, v -> [entry: ",
+		", call: c, pipelines: v, run: [",
+		"] }.first()\n",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if want := " -pipelines-version ${shq(meta.pipelines)}"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
 // TestProcessesReadNoPathGlobal: on Nextflow's v2 parser, the 26.04 floor's
 // default, a task's -resume key holds no global its process reads, so a
 // changed value, such as another run's work dir, would silently reuse a

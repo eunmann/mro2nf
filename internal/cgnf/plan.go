@@ -11,8 +11,11 @@ import (
 // path of PLAN's file: the run's call, which every task compiles over the
 // entry's declarations where the run finds its code, each node's digest and
 // its resources under the run's mrp --overrides file, the entry files each
-// instance stages, and the forks of every entry-fed root, one record, so
-// PLAN's outputs do not grow with the roots. A multi-line record is a file
+// instance stages, the forks of every entry-fed root, one record, so
+// PLAN's outputs do not grow with the roots, and the pipelines' version,
+// found once, as mrp finds it, on the include path the stage tasks find the
+// code on, where its own copy of the .mro files has no version. A
+// multi-line record is a file
 // the driver reads, not an eval output, which Nextflow joins line by line
 // in time quadratic in its lines. Under an S3 mount, which s3:// inputs
 // PLAN reads in place depends on the buckets its instance mounts, which no
@@ -41,13 +44,14 @@ const planProcess = `process PLAN {
     path('leaves'), emit: leaves
     path('files'), emit: files
     path('roots'), emit: roots
+    eval('cat pipelines'), emit: pipelines
 
     script:
     """
     cat > values.json <<'MRO2NF_VALUES'
     ${values}
     MRO2NF_VALUES
-    ${shq(meta.run.mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)} -host-inputs=${meta.run.host_inputs} -host-in-place=${meta.run.host_in_place} -remote-inputs=${meta.run.remote_inputs} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files
+    ${shq(meta.run.mre)} plan ${code(meta, 'mro')} -values values.json${overrides ? ' -overrides ' + shq(overrides[0]) : ''} -psid ${shq(meta.run.psid)} -host-inputs=${meta.run.host_inputs} -host-in-place=${meta.run.host_in_place} -remote-inputs=${meta.run.remote_inputs} -run-workdir ${shq(workdir)}${meta.run.s3_mount ? ' -s3-mount ' + shq(meta.run.s3_mount) : ''}${pool(task, meta.run.local_jobs)} -call call -nodes nodes -roots roots -leaves leaves -files files -code-mropath ${shq(meta.mropath)} -pipelines pipelines
     """
 }
 

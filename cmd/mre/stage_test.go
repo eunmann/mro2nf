@@ -313,12 +313,14 @@ func snapshot(t *testing.T, dir string) map[string]string {
 // reading that total; CP, reading the entry file through its args bundle's
 // link; and each fork of the map call EACH, given its fork record as a
 // value. Each task runs its job in its own work dir, and a join missing a
-// chunk's outs runs none.
+// chunk's outs runs none. Every job's _jobinfo records the pipelines'
+// version PLAN found, not one the task finds on the include path, which a
+// commit during the run would change (#625).
 func TestStageTasks(t *testing.T) {
 	mro, work := writeStagePipeline(t), t.TempDir()
 
 	for _, argv := range stageTasks(stageWork(t, mro, work)) {
-		if _, err := mreIn(t, mro, argv...); err != nil {
+		if _, err := mreIn(t, mro, append(argv, "-pipelines-version", "v-planned")...); err != nil {
 			t.Fatalf("mre %v: %v", argv, err)
 		}
 	}
@@ -341,6 +343,20 @@ func TestStageTasks(t *testing.T) {
 	} {
 		if got := readText(t, filepath.Join(meta, stageNameFile)); got != stage {
 			t.Errorf("the job in %s ran %q, want %s", meta, got, stage)
+		}
+
+		var info struct {
+			Version struct {
+				Pipelines string `json:"pipelines"`
+			} `json:"version"`
+		}
+
+		if err := json.Unmarshal([]byte(readText(t, filepath.Join(meta, "_jobinfo"))), &info); err != nil {
+			t.Fatal(err)
+		}
+
+		if info.Version.Pipelines != "v-planned" {
+			t.Errorf("the job in %s records the pipelines' version %q, want PLAN's v-planned", meta, info.Version.Pipelines)
 		}
 	}
 

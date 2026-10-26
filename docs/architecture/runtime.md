@@ -54,7 +54,12 @@ output line by line in time quadratic in its lines):
 - **in one record, the forks of every entry-fed root**, keyed by the witness's
   outer roots, each with its fork record and its index token. Each line leads
   with its root, and a node's wiring takes its root's own lines from it
-  (`ENTRY_ROOT`, a lookup by root).
+  (`ENTRY_ROOT`, a lookup by root);
+- **the pipelines' version**, an `eval` value, found once, as `mrp` finds it
+  at its start (`git describe` or a `.version` file), on the include path the
+  stage tasks find the code on, not on PLAN's copy of the `.mro` files. Every
+  job's `_jobinfo` records it, so a commit during a run or across a `-resume`
+  gives no two tasks different versions.
 
 ## Cache identity
 

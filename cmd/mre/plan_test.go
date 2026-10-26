@@ -29,12 +29,12 @@ func fixtureDir(t *testing.T, fixture string) string {
 	return fx
 }
 
-// plan runs mre plan on fixture with the entry values values, and returns
-// the plan dir.
-func plan(t *testing.T, fixture, values string) (string, error) {
+// plan runs mre plan on fixture with the entry values and flags,
+// and returns the plan dir.
+func plan(t *testing.T, fixture, values string, flags ...string) (string, error) {
 	t.Helper()
 
-	return planEntry(t, fixtureDir(t, fixture), values)
+	return planEntry(t, fixtureDir(t, fixture), values, flags...)
 }
 
 // planEntry runs mre plan on the pipeline.mro in dir with the entry values
@@ -52,10 +52,33 @@ func planEntry(t *testing.T, dir, values string, flags ...string) (string, error
 	err := run(t.Context(), append([]string{
 		"plan", "-entry", filepath.Join(dir, "pipeline.mro"), "-values", vf, "-mropath", dir, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"), "-pipelines", filepath.Join(work, "pipelines"),
 	}, flags...))
 
 	return work, err
+}
+
+// TestPlanFindsThePipelinesVersion (#625): PLAN finds the pipelines'
+// version once for the run, as mrp does at its start (cmd/mrp/configure.go
+// GetMroVersion), on the include path the stage tasks find the code on, not
+// on its own copy of the .mro files, and writes it for every task's
+// _jobinfo.
+func TestPlanFindsThePipelinesVersion(t *testing.T) {
+	code := filepath.Join(t.TempDir(), "mro")
+	if err := os.MkdirAll(code, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeTestFile(t, filepath.Join(filepath.Dir(code), ".version"), "v9.9.9\n")
+
+	work, err := plan(t, "diamond_min", `{}`, "-code-mropath", code)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readText(t, filepath.Join(work, "pipelines")); got != "v9.9.9" {
+		t.Errorf("PLAN wrote the pipelines' version %q, want v9.9.9, the code's", got)
+	}
 }
 
 // planCall is the run's call the plan in work wrote, decoded.
@@ -701,7 +724,7 @@ func planEntryFile(t *testing.T, value string, flags ...string) (string, error) 
 	err := run(t.Context(), append([]string{
 		"plan", "-entry", filepath.Join(fx, "pipeline.mro"), "-values", vf, "-mropath", fx, "-work", work, "-psid", "mrp",
 		"-call", filepath.Join(work, "call"), "-nodes", filepath.Join(work, "nodes"), "-roots", filepath.Join(work, "roots"),
-		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"),
+		"-leaves", filepath.Join(work, "leaves"), "-files", filepath.Join(work, "files"), "-pipelines", filepath.Join(work, "pipelines"),
 	}, flags...))
 
 	return work, err

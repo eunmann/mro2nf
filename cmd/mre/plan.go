@@ -25,7 +25,7 @@ import (
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
 	entry, values, mropath, call, nodes, roots, leaves, files, work string
-	overrides, psid, s3Mount, runWork                               string
+	overrides, psid, s3Mount, runWork, codeMropath, pipelines       string
 	hostInputs, hostInPlace, remoteInputs                           bool
 	local                                                           job.Pool
 }
@@ -41,6 +41,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.roots, "roots", "roots", "file to write one line per fork of every entry-fed fork root into: root key record index-token")
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
+	fs.StringVar(&f.codeMropath, "code-mropath", "", "colon-separated include path the stage tasks find the pipeline's code on, whose version every job's _jobinfo records")
+	fs.StringVar(&f.pipelines, "pipelines", "pipelines", "file to write the pipelines' version found on -code-mropath into, as mrp finds it at its start")
 	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
 	fs.BoolVar(&f.hostInPlace, "host-in-place", false, "every task reads a head-node path in place, as the tasks run on the host's filesystem; otherwise it is staged")
 	fs.StringVar(&f.runWork, "run-workdir", "", "the run's work dir, which no head-node path read in place may be or hold")
@@ -58,8 +60,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 // read in place under -host-in-place, one the -s3-mount root shows, an
 // s3:// one of a bucket that root shows rewritten to its path there, and
 // any other staged. It writes the call every task compiles, each witness
-// node's spec digest, disabled instances and entry files, and the forks of
-// each entry-fed root.
+// node's spec digest, disabled instances and entry files, the forks of
+// each entry-fed root, and the pipelines' version every job records.
 func runPlan(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 
@@ -267,6 +269,10 @@ func (f *planFlags) write(p cg.Plan, rt job.Runtime) error {
 	}
 
 	if err := writeText(f.nodes, nodes.String()); err != nil {
+		return err
+	}
+
+	if err := writeText(f.pipelines, job.PipelinesVersion(filepath.SplitList(f.codeMropath))); err != nil {
 		return err
 	}
 

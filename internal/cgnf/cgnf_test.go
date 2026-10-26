@@ -470,7 +470,7 @@ func TestEmitCarriesTheCall(t *testing.T) {
 	main := readTree(t, emitFixture(t, "split_test"))["main.nf"]
 
 	for _, want := range []string{
-		"shared = CALL(PLAN.out.call, " + strconv.Itoa(cg.MaxValueBytes) + ").map { c -> [entry: ",
+		"shared = CALL(PLAN.out.call, " + strconv.Itoa(cg.MaxValueBytes) + ").combine(PLAN.out.pipelines).map { c, v -> [entry: ",
 		"OUTS(shared, shared.map { m -> callStaged(m) }, outs_files, ",
 	} {
 		if !strings.Contains(main, want) {

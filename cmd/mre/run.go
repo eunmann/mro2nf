@@ -51,6 +51,7 @@ var (
 // among (refs).
 type runFlags struct {
 	phase, args, out, outRefs, chunk, chunks, chunkOuts, overrides string
+	pipelines                                                      string
 	confine                                                        bool
 	roots                                                          shim.Roots
 	rt                                                             job.Runtime
@@ -74,6 +75,7 @@ func (f *runFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.rt.Work, "work", ".", "the dir to hold the job's metadata and journal")
 	fs.BoolVar(&f.confine, "confine", false, "fail on a stage output that resolves outside the task work dir (isolated container targets) instead of copying it")
 	fs.StringVar(&f.overrides, "overrides", "", "an mrp --overrides file over the job's resources (mre plan writes each node's own)")
+	fs.StringVar(&f.pipelines, "pipelines-version", "", "the pipelines' version the job's _jobinfo records, which mre plan found for the run (-pipelines)")
 	definePool(fs, &f.rt.Local)
 }
 
@@ -146,7 +148,7 @@ func (f *runFlags) instance(g *cg.Graph, inst cg.Instance) (job.Instance, error)
 		return job.Instance{}, fmt.Errorf("run: %w", err)
 	}
 
-	f.rt.Version = job.Versions(g.MroPaths())
+	f.rt.Version = job.Versions(f.pipelines)
 
 	return job.Instance{Stage: stage, ForkID: inst.ForkID()}, nil
 }
