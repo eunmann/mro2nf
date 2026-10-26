@@ -858,7 +858,7 @@ func (rp *cgReplay) chunkNames(dir string) []string {
 
 	for _, e := range entries {
 		// chnkN is mrp's link to its uniquified chunk dir, chnkN-u<id>.
-		if chunkDir.MatchString(e.Name()) {
+		if job.IsChunkName(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}

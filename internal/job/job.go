@@ -153,9 +153,18 @@ type Chunk struct {
 // (core/stage.go:419 NewFork).
 func Unsplit() Chunk { return Chunk{Count: 1, Def: new(core.ChunkDef)} }
 
+const chunkPrefix = "chnk"
+
 // ChunkName is chunk i of n's name, its metadata dir and the last part of
 // its job name (core/stage.go:98 NewChunk).
-func ChunkName(i, n int) string { return fmt.Sprintf("chnk%0*d", util.WidthForInt(n), i) }
+func ChunkName(i, n int) string { return fmt.Sprintf("%s%0*d", chunkPrefix, util.WidthForInt(n), i) }
+
+// IsChunkName reports whether name is a ChunkName.
+func IsChunkName(name string) bool {
+	digits, ok := strings.CutPrefix(name, chunkPrefix)
+
+	return ok && digits != "" && strings.Trim(digits, "0123456789") == ""
+}
 
 // top is the run's top node name (core/runtime.go:360).
 func (r Runtime) top() string { return "ID." + r.PSID }

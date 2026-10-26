@@ -548,7 +548,7 @@ func chunkNames(dir string) ([]string, error) {
 	var names []string
 
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), "chnk") {
+		if !job.IsChunkName(e.Name()) {
 			continue
 		}
 
