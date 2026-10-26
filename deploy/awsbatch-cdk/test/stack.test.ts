@@ -20,6 +20,81 @@ test('the root volume is gp3 at its provisioned throughput', () => {
   });
 });
 
+test('the root volume is encrypted', () => {
+  template.hasResourceProperties('AWS::EC2::LaunchTemplate', {
+    LaunchTemplateData: { BlockDeviceMappings: [{ Ebs: Match.objectLike({ Encrypted: true }) }] },
+  });
+});
+
+test('the bucket is encrypted, private and TLS-only', () => {
+  template.hasResourceProperties('AWS::S3::Bucket', {
+    BucketEncryption: {
+      ServerSideEncryptionConfiguration: [{ ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } }],
+    },
+    PublicAccessBlockConfiguration: {
+      BlockPublicAcls: true,
+      BlockPublicPolicy: true,
+      IgnorePublicAcls: true,
+      RestrictPublicBuckets: true,
+    },
+  });
+  template.hasResourceProperties('AWS::S3::BucketPolicy', {
+    PolicyDocument: {
+      Statement: Match.arrayWith([Match.objectLike({
+        Effect: 'Deny',
+        Action: 's3:*',
+        Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+      })]),
+    },
+  });
+});
+
+const thisAccount = { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } };
+
+test('HealthOmics assumes its role only for this account', () => {
+  template.hasResourceProperties('AWS::IAM::Role', {
+    AssumeRolePolicyDocument: {
+      Statement: [Match.objectLike({
+        Principal: { Service: 'omics.amazonaws.com' },
+        Condition: {
+          StringEquals: thisAccount,
+          ArnLike: { 'aws:SourceArn': Match.anyValue() },
+        },
+      })],
+    },
+  });
+});
+
+test('HealthOmics pulls from the repository only for this account', () => {
+  template.hasResourceProperties('AWS::ECR::Repository', {
+    RepositoryPolicyText: {
+      Statement: [Match.objectLike({
+        Principal: { Service: 'omics.amazonaws.com' },
+        Condition: { StringEquals: thisAccount },
+      })],
+    },
+  });
+});
+
+interface Statement {
+  Action: string | string[];
+  Resource?: unknown;
+}
+
+const statements = (): Statement[] =>
+  Object.values(template.findResources('AWS::IAM::Policy'))
+    .flatMap((p) => p.Properties.PolicyDocument.Statement as Statement[]);
+
+const actionsOf = (s: Statement): string[] => [s.Action].flat();
+
+test('the log permissions name only the HealthOmics workflow log group', () => {
+  const logs = statements().filter((s) => actionsOf(s).some((a) => a.startsWith('logs:')));
+  assert.equal(logs.length, 1);
+  assert.deepEqual(actionsOf(logs[0]).sort(),
+    ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:DescribeLogStreams', 'logs:PutLogEvents']);
+  assert.match(JSON.stringify(logs[0].Resource), /:log-group:\/aws\/omics\/WorkflowLog:\*"/);
+});
+
 test('the queue cancels a job no instance can fit', () => {
   const queues = Object.values(template.findResources('AWS::Batch::JobQueue'));
   assert.equal(queues.length, 1);

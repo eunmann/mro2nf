@@ -14,6 +14,14 @@ a transpiled Martian→Nextflow pipeline live, for **both** cloud targets:
 It's an **example**, not a hardened deployment (public subnets, spot instances,
 `DESTROY` removal policies for easy teardown). `cdk destroy` removes everything.
 
+It does not leave security defaults to the account: the instances' root
+volumes are encrypted with the account's default EBS key and the bucket with
+S3-managed keys, the bucket blocks public access and refuses requests without
+TLS, HealthOmics may assume its role and pull from the repository only for
+this account's runs, and the role writes logs only to HealthOmics' log group,
+`/aws/omics/WorkflowLog`. `npm test` asserts each of these on the synthesized
+template.
+
 ## Cost
 
 Designed to cost **≈ $0 while idle** and only a few cents per test run:

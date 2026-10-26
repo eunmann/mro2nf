@@ -109,6 +109,9 @@ export class Mro2nfStack extends cdk.Stack {
 
     // S3 work dir + outputs. autoDeleteObjects makes `cdk destroy` clean.
     const bucket = new s3.Bucket(this, 'WorkBucket', {
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       // Cost guards: expire the intermediate Nextflow work dir and orphaned
@@ -175,6 +178,7 @@ export class Mro2nfStack extends cdk.Stack {
         deviceName: '/dev/xvda',
         volume: ec2.BlockDeviceVolume.ebs(500, {
           volumeType: ec2.EbsDeviceVolumeType.GP3,
+          encrypted: true,
           throughput: props.rootThroughputMiBps ?? ROOT_THROUGHPUT_MIBPS,
           iops: props.rootIops ?? ROOT_IOPS,
         }),
@@ -229,20 +233,30 @@ export class Mro2nfStack extends cdk.Stack {
 
     // The role HealthOmics assumes to read inputs / write outputs to S3 and pull
     // the image from ECR. Pass its ARN as --role-arn to `aws omics start-run`.
+    // The conditions keep HealthOmics from assuming it on behalf of another
+    // account's runs (HealthOmics' confused-deputy guidance).
     const omicsRole = new iam.Role(this, 'OmicsServiceRole', {
-      assumedBy: new iam.ServicePrincipal('omics.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('omics.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': this.account },
+          ArnLike: { 'aws:SourceArn': `arn:${this.partition}:omics:${this.region}:${this.account}:*` },
+        },
+      }),
     });
     bucket.grantReadWrite(omicsRole);
     repo.grantPull(omicsRole);
+    // HealthOmics writes every run's engine and task logs to this one group.
     omicsRole.addToPolicy(new iam.PolicyStatement({
       actions: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents', 'logs:DescribeLogStreams'],
-      resources: ['*'],
+      resources: [`arn:${this.partition}:logs:${this.region}:${this.account}:log-group:/aws/omics/WorkflowLog:*`],
     }));
 
-    // HealthOmics pulls images via its service principal; allow it on this repo.
+    // HealthOmics pulls images via its service principal; allow it on this
+    // repo for this account's runs only.
     repo.addToResourcePolicy(new iam.PolicyStatement({
       principals: [new iam.ServicePrincipal('omics.amazonaws.com')],
       actions: ['ecr:GetDownloadUrlForLayer', 'ecr:BatchGetImage', 'ecr:BatchCheckLayerAvailability'],
+      conditions: { StringEquals: { 'aws:SourceAccount': this.account } },
     }));
 
     // --- Outputs (feed these to `mro2nf` / `nextflow run` / `aws omics`) ---
