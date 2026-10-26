@@ -16,7 +16,7 @@ DEADCODE := go run golang.org/x/tools/cmd/deadcode@v0.52.0
 GOVULNCHECK := go run golang.org/x/vuln/cmd/govulncheck@v1.9.0
 SCC := go run github.com/boyter/scc/v3@v3.7.0
 
-.PHONY: all build test cross cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale vet lint lint-check vulncheck deadcode docs-divergences notices cloc install clean help
+.PHONY: build test cross cover test-e2e test-e2e-docker test-mrp-diff gen-diff record-goldens lint-nf bench test-scale test-cellranger vet lint lint-check vulncheck deadcode docs-divergences notices cloc install clean help
 
 # Minimum total statement coverage (cross-package) the cover gate accepts. Keep
 # it a little under the current `make cover` total so refactors don't flap while
