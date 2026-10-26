@@ -102,7 +102,10 @@ type cgReplay struct {
 	placeholderDirs map[string]bool
 	// off holds the stage nodes the topology disables outright, whose
 	// forks mrp does not expand from a stage's outs.
-	off  map[string]bool
+	off map[string]bool
+	// zips are each stage node's splits of a stage output it gets the
+	// partner element of, which its producer posts in place of the output.
+	zips map[string][]cg.Zip
 	seq  int
 	jobs int
 }
@@ -200,6 +203,7 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 		refs:            map[string][]string{},
 		placeholderDirs: map[string]bool{},
 		off:             map[string]bool{},
+		zips:            map[string][]cg.Zip{},
 	}
 
 	topo, err := g.Topology()
@@ -209,6 +213,7 @@ func newCGReplay(t *testing.T, fixture, dir, entry, tmp, adapters string) *cgRep
 
 	for _, n := range topo.Nodes {
 		rp.off[n.Fqid] = n.Off
+		rp.zips[n.Fqid] = n.Zips
 	}
 
 	return rp
@@ -440,7 +445,7 @@ func forkAgrees(a, b cg.Fork) bool {
 func (rp *cgReplay) replay(st *syntax.CallGraphStage, in replayInstance) bool {
 	rp.seq++
 	tasks := newReplayTasks(rp.taskDir(fmt.Sprintf("instance %04d", rp.seq)))
-	items := slices.Concat(in.elems, rp.upstreamOuts(st, in.fork))
+	items := slices.Concat(in.elems, rp.partners(st, in.fork), rp.upstreamOuts(st, in.fork))
 	rp.stageRefs(tasks.refs, items)
 	tasks.items, tasks.in = items, rp.itemFlags(tasks.work, items)
 
@@ -686,6 +691,51 @@ func (rp *cgReplay) upstreamOuts(st *syntax.CallGraphStage, fork cg.Fork) []stri
 	}
 
 	return out
+}
+
+// partners are the partner elements st's instance at fork gets, as the
+// driver's ZIP gives them: of each output it zips, the element its
+// producer's instance agreeing with fork posted at fork's index of the
+// zip's root, or the output's absent record where it posted none there.
+func (rp *cgReplay) partners(st *syntax.CallGraphStage, fork cg.Fork) []string {
+	var out []string
+
+	for _, z := range rp.zips[st.Fqid] {
+		at := slices.IndexFunc(fork, func(p cg.Part) bool { return p.Root.Fqid == z.Root })
+		if at < 0 {
+			rp.t.Fatalf("%s zips %s.%s over %s, which its fork %v lacks", st.Fqid, z.Node, z.Output, z.Root, fork)
+		}
+
+		dir := cg.PartnerDir(z.Root, z.Node, z.Output)
+
+		for _, pi := range rp.posted[z.Node] {
+			if forkAgrees(pi.fork, fork) {
+				out = append(out, rp.partner(pi, dir, cg.IndexToken(fork[at].Index)))
+			}
+		}
+	}
+
+	return out
+}
+
+// partner is the partner element pi posted in dir named token: its element
+// dir, its value record, or else the dir's absent record.
+func (rp *cgReplay) partner(pi postedInstance, dir, token string) string {
+	if el := filepath.Join(pi.forks, dir, token); fileExists(el) {
+		return el
+	}
+
+	recs := rp.records(pi.forkValues)
+
+	for _, name := range []string{token, cg.AbsentName} {
+		if i := slices.IndexFunc(recs, func(r string) bool { return strings.HasPrefix(r, dir+"/"+name+":") }); i >= 0 {
+			return recs[i]
+		}
+	}
+
+	rp.t.Fatalf("%s posted no partner element %s/%s and no absent record", pi.outs, dir, token)
+
+	return ""
 }
 
 // fields are the output bundles the instance posted.

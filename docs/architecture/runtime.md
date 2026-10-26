@@ -44,8 +44,9 @@ output line by line in time quadratic in its lines):
 
 - **per node**: a digest of its resolved spec (stage, bindings, disable
   bindings and fork roots, in Martian's JSON form) and of what its post step
-  writes for its readers (the splits of the roots it feeds, its partners'
-  splits, and the disable bindings whose value it posts with their roots);
+  writes for its readers (the outputs a reader reads, the splits of the
+  roots it feeds, its partners' splits, and the disable bindings whose value
+  it posts with their roots);
   whether the invocation disables it; the fork keys a
   static per-fork binding disables; its resources under the run's
   overrides file; and the witness roots the invocation's node is not forked

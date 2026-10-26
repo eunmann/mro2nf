@@ -150,8 +150,10 @@ The post step runs after the stage's last job, on the outputs the job wrote.
 
 1. **Validate.** It checks them with Martian's
    `LazyArgumentMap.ValidateOutputs`, as `mrp`'s `Fork.verifyOutput` does.
-2. **Outputs.** It writes the outputs one by one, so a consumer gets only the
-   outputs it reads: a small one as a record in the `-field-values` file,
+2. **Outputs.** It writes the outputs a reader reads, a stage's binding or
+   the pipeline outs (every output for a whole-call reference), one by one,
+   so a consumer gets only the outputs it reads and no task uploads an
+   output nothing stages: a small one as a record in the `-field-values` file,
    `<output>:` and base64 of the instance's stamp and the output's JSON; any
    other as one bundle stamped with the instance (`instance.json`),
    `<-fields>/<output>/`, the files it names staged as the job's own and
