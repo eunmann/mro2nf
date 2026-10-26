@@ -30,6 +30,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -606,6 +607,8 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 		t.Fatalf("package.sh: %v\n%s", err, out)
 	}
 
+	requireReproduciblePackage(t, proj, image)
+
 	unzipped := unzipWorkflow(t, filepath.Join(proj, "workflow.zip"))
 
 	cmd := exec.Command("nextflow", "config", "-flat", unzipped)
@@ -636,6 +639,40 @@ func TestGeneratedHealthOmicsPackage(t *testing.T) {
 
 	if regexp.MustCompile(`withName[^\n]*container`).Match(out) {
 		t.Errorf("the package's config gives a task an image of its own:\n%s", out)
+	}
+}
+
+// requireReproduciblePackage packages proj again, a second later, under
+// another time zone and umask, and requires the same workflow.zip bytes, so
+// a workflow version registered twice from one project is the same
+// definition.
+func requireReproduciblePackage(t *testing.T, proj, image string) {
+	t.Helper()
+
+	zipPath := filepath.Join(proj, "workflow.zip")
+
+	first, err := os.ReadFile(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(time.Second)
+
+	cmd := exec.Command("bash", "-c", `umask 077 && exec bash package.sh "$1"`, "package.sh", image)
+	cmd.Dir = proj
+	cmd.Env = append(os.Environ(), "TZ=Asia/Tokyo")
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("package.sh again: %v\n%s", err, out)
+	}
+
+	second, err := os.ReadFile(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(first, second) {
+		t.Errorf("package.sh wrote a different workflow.zip on its second run (%d bytes, then %d)", len(first), len(second))
 	}
 }
 

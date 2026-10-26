@@ -79,6 +79,15 @@ params.mro2nf_image = '$1'
 includeConfig 'conf/healthomics.config'
 EOF
 rm -f workflow.zip
-(cd "$pkg" && zip -qr - .) > workflow.zip
+zipfile="$PWD/workflow.zip"
+# Fixed modes, times and entry order, and no extra fields (-X), so a project
+# packages to the same bytes on every run and host.
+(
+    cd "$pkg"
+    export TZ=UTC
+    chmod -R u=rwX,go=rX .
+    find . -exec touch -h -d '2000-01-01 00:00:00' {} +
+    find . -mindepth 1 | LC_ALL=C sort | zip -qX "$zipfile" -@
+)
 echo "wrote workflow.zip"
 `
