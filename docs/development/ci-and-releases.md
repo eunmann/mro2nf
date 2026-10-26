@@ -30,7 +30,7 @@ Generative-differential divergences do not fail the run: they go to a
 ```mermaid
 flowchart LR
     dispatch["gh workflow run release.yml"] --> check["check: a PR's merge on main,<br/>with a green PR Validation"]
-    check --> build["build archives for 4 platforms<br/>and the runtime image (no push)"]
+    check --> build["build archives for 4 platforms<br/>and the runtime image (no push),<br/>smoke-test and scan them"]
     build --> tag["1. annotated tag"]
     tag --> image["2. push the runtime image"]
     image --> rel["3. GitHub release<br/>archives + SHA256SUMS"]
@@ -70,7 +70,12 @@ is published.
    SBOM and provenance attestations in its index. A Grype scan of each
    platform of the image fails the release on a High or Critical finding
    that has a fix.
-3. **Publishes**, only once every build succeeds, in this order:
+3. **Smoke-tests.** Each archive runs on a runner of its platform:
+   `mro2nf -version` and `mre version` must print the version, and `mrjob`
+   must be executable. Each platform of the image must print the version
+   from `mre version`, hold an executable `mrjob`, and run `aws --version`
+   and `ps --version`.
+4. **Publishes**, only once every build and smoke test succeeds, in this order:
    1. the annotated tag `<version>` on the commit, tagged by
       `github-actions[bot]`, whose message is the notes as written;
    2. the runtime image `ghcr.io/eunmann/mro2nf-runtime:<version>`, also
@@ -82,7 +87,7 @@ is published.
       since the previous tag that GitHub generates, grouped by
       `.github/release.yml`; without notes it is just that list.
 
-A failed build therefore leaves no tag, image or release. If publishing itself
+A failed build, scan or smoke test therefore leaves no tag, image or release. If publishing itself
 fails partway, delete whatever it created, the tag included, and dispatch
 again. A pre-release is never the latest release.
 

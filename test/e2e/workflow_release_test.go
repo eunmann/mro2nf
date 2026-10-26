@@ -820,9 +820,10 @@ type releaseJob struct {
 }
 
 // TestReleasePublishesAfterBuilds pins the job graph: the gate, then the
-// archive and image builds of the commit it resolved, then one publish job
-// that alone writes, needs every build and is skipped in a dry run. A failed
-// build or a dry run therefore tags, pushes and releases nothing.
+// archive and image builds of the commit it resolved and the archives' smoke
+// tests, then one publish job that alone writes, needs every build and smoke
+// test and is skipped in a dry run. A failed build or smoke test or a dry
+// run therefore tags, pushes and releases nothing.
 func TestReleasePublishesAfterBuilds(t *testing.T) {
 	wf := readWorkflow(t, releaseWorkflow)
 	if got := scalarOf(wf.get("permissions")); got != "{}" {
@@ -851,8 +852,9 @@ func TestReleasePublishesAfterBuilds(t *testing.T) {
 	want := map[string]releaseJob{
 		"gate":    {},
 		"build":   {Needs: "gate"},
+		"smoke":   {Needs: "build"},
 		"image":   {Needs: "gate"},
-		"publish": {Needs: "gate,build,image", If: "${{ !inputs.dry_run }}", Writes: []string{"contents", "packages", "id-token", "attestations"}},
+		"publish": {Needs: "gate,build,smoke,image", If: "${{ !inputs.dry_run }}", Writes: []string{"contents", "packages", "id-token", "attestations"}},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("%s jobs (-want +got):\n%s", releaseWorkflow, diff)
@@ -1124,6 +1126,131 @@ func TestReleaseImagePush(t *testing.T) {
 
 		if diff := cmp.Diff(want, runImagePush(t, scalarOf(step.get("run")), image, prerelease)); diff != "" {
 			t.Errorf("prerelease %s: pushed tags (-want +got):\n%s", prerelease, diff)
+		}
+	}
+}
+
+var smokeMatrixEntry = regexp.MustCompile(`^\{ goos: (\w+), goarch: (\w+), runner: ([\w.-]+) \}$`)
+
+// smokeRunners are the hosted runners of each release platform.
+var smokeRunners = map[string]string{
+	"linux-amd64":  "ubuntu-latest",
+	"linux-arm64":  "ubuntu-24.04-arm",
+	"darwin-amd64": "macos-15-intel",
+	"darwin-arm64": "macos-latest",
+}
+
+// TestReleaseSmokeTestsEveryArchive requires a smoke test of each archive on
+// a runner of its platform.
+func TestReleaseSmokeTestsEveryArchive(t *testing.T) {
+	job := readWorkflow(t, releaseWorkflow).get("jobs").get("smoke")
+	if got := scalarOf(job.get("runs-on")); got != "${{ matrix.runner }}" {
+		t.Errorf("%s smoke job runs on %q, want its matrix runner", releaseWorkflow, got)
+	}
+
+	got := map[string]string{}
+
+	for _, it := range job.get("strategy").get("matrix").get("include").items {
+		m := smokeMatrixEntry.FindStringSubmatch(it.scalar)
+		if m == nil {
+			t.Fatalf("%s smoke matrix entry %q is not { goos: <os>, goarch: <arch>, runner: <label> }", releaseWorkflow, it.scalar)
+		}
+
+		got[m[1]+"-"+m[2]] = m[3]
+	}
+
+	want := map[string]string{}
+	for _, p := range releasePlatforms(t) {
+		want[p] = smokeRunners[p]
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("%s smoke platforms and runners (-want +got):\n%s", releaseWorkflow, diff)
+	}
+}
+
+// TestReleaseSmokeTestStep runs the archive smoke step on stand-in binaries
+// in the archive layout: it passes when mro2nf and mre print the version and
+// mrjob is executable, and fails on a wrong version or a missing mrjob.
+func TestReleaseSmokeTestStep(t *testing.T) {
+	requireTools(t, "bash", "tar", "gzip")
+
+	script := scalarOf(releaseStep(t, "smoke", stepRuns("tar -xzf")).get("run"))
+
+	cases := []struct {
+		name, version string
+		mrjob, ok     bool
+	}{
+		{"good", releaseTag, true, true},
+		{"wrong_version", "v0.0.0", true, false},
+		{"no_mrjob", releaseTag, false, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := smokeArchive(t, tc.version, tc.mrjob)
+
+			log, _, err := execReleaseStep(t, script, dir, "VERSION="+releaseTag, "PLATFORM=linux-amd64")
+			if (err == nil) != tc.ok {
+				t.Errorf("smoke step err %v, want ok %v\n%s", err, tc.ok, log)
+			}
+		})
+	}
+}
+
+// smokeArchive writes the linux-amd64 archive of releaseTag in a new dir,
+// its mro2nf and mre stand-ins printing version, and returns the dir.
+func smokeArchive(t *testing.T, version string, mrjob bool) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	top := "mro2nf-" + releaseTag + "-linux-amd64"
+
+	bins := map[string]string{"mro2nf": "mro2nf " + version, "mre": "mre " + version}
+	if mrjob {
+		bins["mrjob"] = ""
+	}
+
+	if err := os.Mkdir(filepath.Join(dir, top), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, out := range bins {
+		if err := os.WriteFile(filepath.Join(dir, top, name), []byte("#!/bin/sh\necho '"+out+"'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if out, err := exec.Command("tar", "-C", dir, "-czf", filepath.Join(dir, top+".tar.gz"), top).CombinedOutput(); err != nil {
+		t.Fatalf("tar: %v\n%s", err, out)
+	}
+
+	if err := os.RemoveAll(filepath.Join(dir, top)); err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
+}
+
+// TestReleaseImageSmokeTest runs the image job's smoke step with a stand-in
+// docker whose images print mre's version: it passes on the release's
+// version and fails on another.
+func TestReleaseImageSmokeTest(t *testing.T) {
+	requireTools(t, "bash")
+
+	script := scalarOf(releaseStep(t, "image", stepRuns("mre version")).get("run"))
+
+	for version, ok := range map[string]bool{releaseTag: true, "v0.0.0": false} {
+		bin := t.TempDir()
+		fake := "#!/bin/bash\ncase \"$*\" in *' mre version') echo 'mre " + version + "' ;; esac\n"
+
+		if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		log, _, err := execReleaseStep(t, script, t.TempDir(), "PATH="+bin+":"+os.Getenv("PATH"), "VERSION="+releaseTag)
+		if (err == nil) != ok {
+			t.Errorf("image printing %s: smoke step err %v, want ok %v\n%s", version, err, ok, log)
 		}
 	}
 }
