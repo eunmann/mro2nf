@@ -181,6 +181,21 @@ func TestEmitHostInputsInPlaceOffContainers(t *testing.T) {
 	}
 }
 
+// TestEmitPassesThePipestanceUUID (#625): every stage task hands its jobs
+// the run's pipestance uuid, which mrp sets as MRO_UUID for each job: the
+// launch environment's MRO_FORCE_UUID, as mrp honours it, or else the
+// run's Nextflow session id, which a -resume keeps, as mrp's restart keeps
+// the pipestance's uuid, and which already keys every task.
+func TestEmitPassesThePipestanceUUID(t *testing.T) {
+	if want := "uuid: env('MRO_FORCE_UUID') ?: workflow.sessionId.toString()"; !strings.Contains(stageRun, want) {
+		t.Errorf("stageRun lacks %q: %s", want, stageRun)
+	}
+
+	if want := " -uuid ${shq(run.uuid)}"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
 // TestProcessesReadNoPathGlobal: on Nextflow's v2 parser, the 26.04 floor's
 // default, a task's -resume key holds no global its process reads, so a
 // changed value, such as another run's work dir, would silently reuse a
@@ -212,7 +227,7 @@ var (
 	// character and no quote, which opens a message naming a param.
 	paramRead = regexp.MustCompile(`(^|[^'\w])params\.`)
 	runRead   = regexp.MustCompile(`\brun\.(\w+)`)
-	runKey    = regexp.MustCompile(`(\w+): params\.`)
+	runKey    = regexp.MustCompile(`(\w+): `)
 )
 
 // TestScriptsReadParamsFromMeta (#576): a task's -resume key holds its

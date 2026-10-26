@@ -195,7 +195,7 @@ def pool(task, Boolean local) {
 // params its meta carries (run), which key the task's -resume.
 def mreStage(task, Map meta, phase, rest) {
     def run = meta.run
-    def cmd = "${shq(run.mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(run.psid)} -work .${pool(task, run.local_jobs)}"
+    def cmd = "${shq(run.mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(run.psid)} -uuid ${shq(run.uuid)} -work .${pool(task, run.local_jobs)}"
     if (run.adapters) {
         cmd += " -adapters ${shq(run.adapters)}"
     }

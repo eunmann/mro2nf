@@ -23,6 +23,7 @@ HealthOmics takes no `-c`.
 | `--nopreflight` | none: preflight stages always run; to skip one, remove its call from the `.mro` and transpile again |
 | `--inspect` | none; `nextflow log` lists past runs and their tasks |
 | `--uiport`, `--disable-ui`, `--disable-auth`, `--require-auth`, `--auth-key`, `--https-cert`, `--https-key`, `--noexit` | no UI; `nextflow log`, `-with-report` and `-with-timeline` |
+| `MRO_FORCE_UUID` in `mrp`'s environment | the same variable in the environment `nextflow run` is launched in; unset, a run's pipestance uuid (`MRO_UUID`, `martian.get_pipestance_uuid()`) is its Nextflow session id, which `-resume` keeps |
 | `--zip` | none: `mrp` zips the pipestance's metadata files; each task's work directory keeps its jobs' metadata |
 | `--localvmem`, `--mempercore`, `--limit-loadavg`, `--retry-wait`, `--tags`, `--strict`, `--stackvars`, `--debug`, `--stest` | none |
 | `mro graph` | `nextflow run main.nf -with-dag dag.html` |

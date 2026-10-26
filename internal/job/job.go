@@ -62,6 +62,9 @@ type Runtime struct {
 	Local Pool
 	// PSID is the run's pipestance id, which names every job.
 	PSID string
+	// UUID is the run's pipestance uuid, which every job's environment
+	// holds as MRO_UUID (core/pipestance.go:879 SetUuid).
+	UUID string
 	// Invocation and Version are recorded in every job's _jobinfo.
 	Invocation *core.InvocationData
 	Version    core.VersionInfo
