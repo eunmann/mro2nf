@@ -28,8 +28,9 @@ type (
 )
 
 var (
-	// ErrNotStaged reports an outs read the task did not stage.
-	ErrNotStaged = errors.New("upstream outs not staged")
+	// ErrNotStaged reports a value an instance's resolution reads that the
+	// task did not stage: an upstream instance's outs or a fork element.
+	ErrNotStaged = errors.New("upstream value not staged")
 
 	// ErrNoElement is core's element error for an array index past the end
 	// or a map key the map lacks (getArrayElement, getMapElement): mrp runs

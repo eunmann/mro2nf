@@ -2,7 +2,6 @@ package cg
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/eunmann/mro2nf/internal/mrcore"
@@ -76,12 +75,7 @@ func (c coreStore) Outs(st *syntax.CallGraphStage, fork mrcore.ForkId) (core.Laz
 		return nil, err
 	}
 
-	m, err := c.r.st.outs(st, f)
-	if errors.Is(err, ErrNotStaged) {
-		return nil, fmt.Errorf("%w: %w", mrcore.ErrNotStaged, err)
-	}
-
-	return m, err
+	return c.r.st.outs(st, f)
 }
 
 func (c coreStore) SplitElement(e *syntax.SplitExp, t syntax.Type, fork mrcore.ForkId, _ *mrcore.ForkSourcePart) (json.Marshaler, bool, error) {

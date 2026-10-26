@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	// ErrNotStaged reports a value an instance's resolution reads that the
-	// task did not stage: an upstream instance's outs or a fork element.
-	ErrNotStaged = errors.New("upstream value not staged")
+	// ErrNotStaged is mrcore's, so one errors.Is matches an unstaged read
+	// whether cg or mrcore reports it.
+	ErrNotStaged = mrcore.ErrNotStaged
 
 	errShape = errors.New("unexpected expression shape")
 
