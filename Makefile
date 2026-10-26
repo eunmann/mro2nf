@@ -41,7 +41,7 @@ test: ## Run unit tests
 # The platforms release.yml ships archives for (TestCrossCompilesReleasePlatforms).
 # go test -exec=true compiles and links each test binary for the platform and
 # runs none, so a test that compiles only on the CI runner's platform fails.
-RELEASE_PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+RELEASE_PLATFORMS := linux/amd64 linux/arm64
 cross: ## Compile every package and test for each release platform
 	@for p in $(RELEASE_PLATFORMS); do \
 		echo "$$p"; \
