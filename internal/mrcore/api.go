@@ -119,6 +119,13 @@ func (t *TopNode) Disables(gate syntax.Exp, fork ForkId) (bool, error) {
 	}
 }
 
+// OutArgs is the _outs mrp writes before a job runs, each output named by
+// params pre-populated with its files below filesPath, or each null where
+// nullAll (stage.go:57 makeOutArgs).
+func OutArgs(params *syntax.OutParams, filesPath string, nullAll bool) MarshalerMap {
+	return makeOutArgs(params, filesPath, nullAll)
+}
+
 // VerifyOutput checks outs, the outs of stage fqid's fork at fork, as mrp
 // checks a finished stage's (stage.go:764 Fork.verifyOutput): an error
 // fails it, wrapping ErrInvalidOuts.

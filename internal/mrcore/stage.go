@@ -5,10 +5,52 @@ package mrcore
 
 import (
 	"encoding/json"
+	"path"
 
 	"github.com/martian-lang/martian/martian/syntax"
 	"github.com/martian-lang/martian/martian/util"
 )
+
+// For convenience, a string which implements json.Marshaler.
+type jsonString string
+
+func (s jsonString) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(s))
+}
+
+// makeOutArg generates the value with which to pre-populate an entry in the
+// _outs json file.
+//
+// If brokenFileArrays is true, then for backwards compatibility it will return
+// a file name for arrays of file types.
+//
+// An empty array is returned for arrays.  An empty map is returned for maps.
+// A map with recursively-populated fields is returned for struct types.
+// Nil is returned for any other type.
+func makeOutArg(field *syntax.StructMember, filesPath string) json.Marshaler {
+	if field.Tname.ArrayDim > 0 {
+		return marshallerArray{}
+	} else if field.Tname.MapDim > 0 {
+		return MarshalerMap{}
+	} else if field.IsFile() == syntax.KindIsFile {
+		if fn := field.GetOutFilename(); fn != "" {
+			return jsonString(path.Join(filesPath, fn))
+		}
+	}
+	return nil
+}
+
+func makeOutArgs(outParams *syntax.OutParams, filesPath string, nullAll bool) MarshalerMap {
+	args := make(MarshalerMap, len(outParams.List))
+	for _, param := range outParams.List {
+		if nullAll {
+			args[param.Id] = nil
+		} else {
+			args[param.Id] = makeOutArg(&param.StructMember, filesPath)
+		}
+	}
+	return args
+}
 
 func (self *Fork) OutParams() *syntax.OutParams {
 	return self.node.call.Callable().GetOutParams()
