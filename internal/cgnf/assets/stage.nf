@@ -490,7 +490,7 @@ workflow ENTRY_ROOT {
     root
 
     main:
-    out = records.flatMap { m -> m[root] ?: [] }
+    out = records.flatMap { m -> (m[root] ?: []).collect { f -> f + [true] } }
 
     emit:
     out
@@ -533,19 +533,20 @@ workflow PUBLISHED {
 // FORK extends each instance by one of its node's roots: it joins every
 // fork of the root under its own ordinals of the root's outer roots, at
 // positions outer. A fork is [outer key, own ordinal, record or element
-// item, index token]: an entry-fed root's record from PLAN, a stage-fed
-// root's element its producer posted (ELEMENTS).
+// item, index token, whether a record]: an entry-fed root's record from
+// PLAN (ENTRY_ROOT), a stage-fed root's element its producer posted
+// (ELEMENTS), or its record from PLAN where the invocation's entry fixes
+// its forks.
 workflow FORK {
     take:
     inst
     forks
     outer
-    entryFed
     zipped
 
     main:
-    out = inst.map { k, fs, es, tk -> [k[outer], k, fs, es, tk] }.combine(forks, by: 0).map { _o, k, fs, es, tk, own, x, t ->
-        [k + [own], entryFed ? fs + [x] : fs, entryFed ? es : es + [x], zipped ? tk + [t] : tk]
+    out = inst.map { k, fs, es, tk -> [k[outer], k, fs, es, tk] }.combine(forks, by: 0).map { _o, k, fs, es, tk, own, x, t, rec ->
+        [k + [own], rec ? fs + [x] : fs, rec ? es : es + [x], zipped ? tk + [t] : tk]
     }
 
     emit:
@@ -570,7 +571,7 @@ workflow ELEMENTS {
             def name = itemName(e)
             def t = name.tokenize('@')[0].tokenize('.').collect { x -> x as int }
             def named = t.iterator()
-            [at.collect { a -> a >= 0 ? kp[a] : named.next() }, t[-1], e, keyed ? name.tokenize('@')[1] : t[-1].toString()]
+            [at.collect { a -> a >= 0 ? kp[a] : named.next() }, t[-1], e, keyed ? name.tokenize('@')[1] : t[-1].toString(), false]
         }
     }
 
@@ -628,10 +629,55 @@ workflow GATE {
     next
 
     main:
-    out = inst.combine(nodes).map { k, fs, es, _tk, ns, c ->
+    out = inst.combine(nodes).flatMap { k, fs, es, _tk, ns, c ->
         def r = ns[meta.node]
-        [k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]
+        representative(k, r) != null ? [] : [[k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]]
     }
+
+    emit:
+    out
+}
+
+// representative is, of instance key k of a node whose PLAN record is r,
+// the key of the instance that runs its job, where the invocation's node is
+// not forked on some of the roots k has ordinals of (r[6], positions in
+// k): its job is the same at every fork of them, which runs at ordinal 0
+// of each and serves the rest. It is null for an instance that runs its own.
+def representative(List k, List r) {
+    def collapse = r[6] == '-' ? [] : r[6].tokenize(',').collect { x -> x as int }
+    if (!collapse.any { x -> k[x] != 0 }) {
+        return null
+    }
+    return (0..<k.size()).collect { x -> x in collapse ? 0 : k[x] }
+}
+
+// ALIASES pairs each instance of a node that runs no job of its own, by its
+// key, with its representative's, whose posted items serve it (ALIASED).
+workflow ALIASES {
+    take:
+    inst
+    nodes
+    meta
+
+    main:
+    out = inst.combine(nodes).flatMap { k, _fs, _es, _tk, ns, _c ->
+        def rep = representative(k, ns[meta.node])
+        rep == null ? [] : [[rep, k]]
+    }
+
+    emit:
+    out
+}
+
+// ALIASED is a collapsible node's posted items, by key, each instance's own
+// and, for each instance that runs no job of its own, its representative's.
+workflow ALIASED {
+    take:
+    items
+    aliases
+
+    main:
+    out = items.mix(aliases.combine(items, by: 0).map { _r, k, x -> [k, x] })
 
     emit:
     out

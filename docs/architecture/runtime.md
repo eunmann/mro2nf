@@ -47,8 +47,9 @@ output line by line in time quadratic in its lines):
   writes for its readers (the splits of the roots it feeds, its partners'
   splits, and the disable bindings whose value it posts with their roots);
   whether the invocation disables it; the fork keys a
-  static per-fork binding disables; and its resources under the run's
-  overrides file;
+  static per-fork binding disables; its resources under the run's
+  overrides file; and the witness roots the invocation's node is not forked
+  on, at which it runs once ([Transpile time](transpile.md#the-witness));
 - **the entry files** the tasks stage ([Inputs](inputs.md));
 - **in one record, the forks of every entry-fed root**, keyed by the witness's
   outer roots, each with its fork record and its index token. Each line leads

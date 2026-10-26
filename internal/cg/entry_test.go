@@ -153,7 +153,7 @@ func TestEntryFileReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w, err := src.Witness(nil)
+	w, _, err := src.Witness(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

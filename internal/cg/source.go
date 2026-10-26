@@ -180,8 +180,8 @@ func (s Source) InParams(id string, mroPaths []string) ([]*syntax.StructMember, 
 }
 
 // Witness compiles the witness invocation of the source's call, whose call
-// graph holds every stage node, with its fork roots, of the call's
-// invocations: every entry input given a value of its type that is no
+// graph holds every stage node of the call's invocations, forked on every
+// root it can be: every entry input given a value of its type that is no
 // null, with witnessWidth elements in every collection, nested collections
 // of different lengths so no nested split's length is uniform, and false
 // for every bool, so no map call is pruned on an empty or null source and
@@ -189,47 +189,24 @@ func (s Source) InParams(id string, mroPaths []string) ([]*syntax.StructMember, 
 // (it refuses, say, a runtime-gated split of a non-empty literal), each
 // input in turn takes its witness value over the literal invocation's only
 // while mrp still accepts the call.
-func (s Source) Witness(mroPaths []string) (*Graph, error) {
-	callable, lookup, err := s.callable(s.Invocation.Call, mroPaths)
+//
+// It returns the topology the project is wired by: the witness's, with what
+// its variants hold that it lacks (addVariants), so a project runs an
+// invocation with a null input or uniform nested collections too.
+func (s Source) Witness(mroPaths []string) (*Graph, Topology, error) {
+	args, g, err := s.witnessArgs(mroPaths, false)
 	if err != nil {
-		return nil, err
+		return nil, Topology{}, err
 	}
 
-	witness := map[string]json.RawMessage{}
-
-	for _, p := range callable.GetInParams().List {
-		v := witnessValue(lookup.Get(p.GetTname()), lookup, witnessWidth)
-		if slices.Contains(s.Invocation.SplitArgs, p.GetId()) {
-			v = append(append(json.RawMessage("["), v...), ']')
-		}
-
-		witness[p.GetId()] = v
+	t, err := g.Topology()
+	if err != nil {
+		return nil, Topology{}, err
 	}
 
-	full := core.LazyArgumentMap{}
-	maps.Copy(full, witness)
+	s.addVariants(&t, args, mroPaths)
 
-	if g, err := s.compileArgs(full, mroPaths); err == nil {
-		return g, nil
-	}
-
-	args := core.LazyArgumentMap{}
-	maps.Copy(args, s.Invocation.Args)
-
-	for _, p := range callable.GetInParams().List {
-		was, had := args[p.GetId()]
-		args[p.GetId()] = witness[p.GetId()]
-
-		if _, err := s.compileArgs(args, mroPaths); err != nil {
-			delete(args, p.GetId())
-
-			if had {
-				args[p.GetId()] = was
-			}
-		}
-	}
-
-	return s.compileArgs(args, mroPaths)
+	return g, t, nil
 }
 
 // CoversLiteral checks that t, the topology of the source's witness, covers
@@ -299,19 +276,162 @@ func (s Source) compileArgs(args core.LazyArgumentMap, mroPaths []string) (*Grap
 	return Compile([]byte(src), s.Path(), mroPaths)
 }
 
-// witnessValue is the witness value of type t whose collections hold n
-// elements, the i-th element's own collections i+1.
-func witnessValue(t syntax.Type, lookup *syntax.TypeLookup, n int) json.RawMessage {
-	switch t := t.(type) {
-	case *syntax.ArrayType:
-		inner := t.Elem
-		if t.Dim > 1 {
-			inner = lookup.GetArray(t.Elem, t.Dim-1)
+// addVariants adds to t, the witness's topology, what each variant of the
+// witness invocation args holds that it lacks (Topology.withVariant): args
+// with one input null, which can make a gate fix whether a collection is
+// null (rt_gate_split), one false bool true, which can disable a stage and
+// leave a node reading only it forked on fewer roots
+// (witness_flag_disables), or one collection's elements null, which can
+// leave a node forked on fewer roots too; and the witness with nested
+// collections of one
+// length, which Martian expands at their compile-time forks: a merge's
+// (merge_unforked_pipeline), or a root's, which the entry then fixes
+// (witness_known_inner). A variant mrp refuses adds nothing.
+func (s Source) addVariants(t *Topology, args core.LazyArgumentMap, mroPaths []string) {
+	var variants []*Graph
+
+	if _, g, err := s.witnessArgs(mroPaths, true); err == nil {
+		variants = append(variants, g)
+	}
+
+	for _, id := range slices.Sorted(maps.Keys(args)) {
+		if slices.Contains(s.Invocation.SplitArgs, id) {
+			continue
 		}
 
-		return collection(n, func(i int) []byte { return witnessValue(inner, lookup, i+1) }, "[", "]", nil)
+		values := []string{"null"}
+		if string(args[id]) == "false" {
+			values = append(values, "true")
+		}
+
+		if v, ok := nullElements(args[id]); ok {
+			values = append(values, v)
+		}
+
+		for _, val := range values {
+			v := maps.Clone(args)
+			v[id] = json.RawMessage(val)
+
+			if g, err := s.compileArgs(v, mroPaths); err == nil {
+				variants = append(variants, g)
+			}
+		}
+	}
+
+	for _, g := range variants {
+		vt, err := g.Topology()
+		if err != nil {
+			continue
+		}
+
+		*t = t.withVariant(vt)
+	}
+
+	byID := make(map[string]TopoNode, len(t.Nodes))
+	for _, n := range t.Nodes {
+		byID[n.Fqid] = n
+	}
+
+	t.Nodes = dependencyOrder(byID, t.Roots)
+}
+
+// nullElements is v, a JSON array or object, with every element or member
+// null, and whether it is one.
+func nullElements(v json.RawMessage) (string, bool) {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(v, &arr); err == nil {
+		return "[" + strings.Join(slices.Repeat([]string{"null"}, len(arr)), ",") + "]", true
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(v, &obj); err != nil {
+		return "", false
+	}
+
+	nulls := make(map[string]any, len(obj))
+	for k := range obj {
+		nulls[k] = nil
+	}
+
+	raw, err := json.Marshal(nulls)
+	if err != nil {
+		return "", false
+	}
+
+	return string(raw), true
+}
+
+// witnessArgs are the witness invocation's args and its call graph, its
+// nested collections all of one length where uniform.
+func (s Source) witnessArgs(mroPaths []string, uniform bool) (core.LazyArgumentMap, *Graph, error) {
+	callable, lookup, err := s.callable(s.Invocation.Call, mroPaths)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	witness := map[string]json.RawMessage{}
+
+	for _, p := range callable.GetInParams().List {
+		v := witnessValue(lookup.Get(p.GetTname()), lookup, witnessWidth, uniform)
+		if slices.Contains(s.Invocation.SplitArgs, p.GetId()) {
+			v = append(append(json.RawMessage("["), v...), ']')
+		}
+
+		witness[p.GetId()] = v
+	}
+
+	full := core.LazyArgumentMap{}
+	maps.Copy(full, witness)
+
+	if g, err := s.compileArgs(full, mroPaths); err == nil {
+		return full, g, nil
+	}
+
+	args := core.LazyArgumentMap{}
+	maps.Copy(args, s.Invocation.Args)
+
+	for _, p := range callable.GetInParams().List {
+		was, had := args[p.GetId()]
+		args[p.GetId()] = witness[p.GetId()]
+
+		if _, err := s.compileArgs(args, mroPaths); err != nil {
+			delete(args, p.GetId())
+
+			if had {
+				args[p.GetId()] = was
+			}
+		}
+	}
+
+	g, err := s.compileArgs(args, mroPaths)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return args, g, nil
+}
+
+// witnessValue is the witness value of type t whose collections hold n
+// elements, the i-th element's own collections i+1, or n where uniform.
+func witnessValue(t syntax.Type, lookup *syntax.TypeLookup, n int, uniform bool) json.RawMessage {
+	inner := func(i int) int {
+		if uniform {
+			return n
+		}
+
+		return i + 1
+	}
+
+	switch t := t.(type) {
+	case *syntax.ArrayType:
+		elem := t.Elem
+		if t.Dim > 1 {
+			elem = lookup.GetArray(t.Elem, t.Dim-1)
+		}
+
+		return collection(n, func(i int) []byte { return witnessValue(elem, lookup, inner(i), uniform) }, "[", "]", nil)
 	case *syntax.TypedMapType:
-		return collection(n, func(i int) []byte { return witnessValue(t.Elem, lookup, i+1) }, "{", "}", func(i int) string {
+		return collection(n, func(i int) []byte { return witnessValue(t.Elem, lookup, inner(i), uniform) }, "{", "}", func(i int) string {
 			return strconv.Quote(strconv.Itoa(i)) + ":"
 		})
 	case *syntax.StructType:
@@ -325,7 +445,7 @@ func witnessValue(t syntax.Type, lookup *syntax.TypeLookup, n int) json.RawMessa
 			}
 
 			b.WriteString(strconv.Quote(m.Id) + ":")
-			b.Write(witnessValue(lookup.Get(m.Tname), lookup, n))
+			b.Write(witnessValue(lookup.Get(m.Tname), lookup, n, uniform))
 		}
 
 		b.WriteByte('}')

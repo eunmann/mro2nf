@@ -27,7 +27,7 @@ func witnessSource(dir string) (string, bool, error) {
 		return "", false, fmt.Errorf("read %s: %w", mro, err)
 	}
 
-	w, err := src.Witness(paths)
+	w, _, err := src.Witness(paths)
 	if err != nil {
 		return "", false, fmt.Errorf("witness of %s: %w", mro, err)
 	}

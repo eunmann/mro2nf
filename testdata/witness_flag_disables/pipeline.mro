@@ -1,0 +1,77 @@
+# #621 (a): an entry flag disables EXTRA in every sample, so Martian gives
+# REPORT, which reads only EXTRA, a constant null and no fork root: mrp runs
+# it once. The witness (every bool false) forks it per sample, and SHOW,
+# mapped over the samples' reports, reads the REPORT of its own sample.
+stage VAL(
+    in  int x,
+    out int y,
+    src py  "stages/val",
+)
+
+stage SHOW(
+    in  int    z,
+    out string s,
+    src py     "stages/show",
+)
+
+stage REPORT(
+    in  int extra,
+    out int z,
+    src py  "stages/report",
+)
+
+pipeline PER_SAMPLE(
+    in  int  x,
+    in  bool skip_extra,
+    out int  main,
+    out int  report,
+)
+{
+    call VAL as MAIN(
+        x = self.x,
+    )
+
+    call VAL as EXTRA(
+        x = self.x,
+    ) using (
+        disabled = self.skip_extra,
+    )
+
+    call REPORT(
+        extra = EXTRA.y,
+    )
+
+    return (
+        main   = MAIN.y,
+        report = REPORT.z,
+    )
+}
+
+pipeline TOP(
+    in  int[]    xs,
+    in  bool     skip_extra,
+    out int[]    mains,
+    out int[]    reports,
+    out string[] shown,
+)
+{
+    map call PER_SAMPLE(
+        x          = split self.xs,
+        skip_extra = self.skip_extra,
+    )
+
+    map call SHOW(
+        z = split PER_SAMPLE.report,
+    )
+
+    return (
+        mains   = PER_SAMPLE.main,
+        reports = PER_SAMPLE.report,
+        shown   = SHOW.s,
+    )
+}
+
+call TOP(
+    xs         = [1, 2, 3],
+    skip_extra = true,
+)

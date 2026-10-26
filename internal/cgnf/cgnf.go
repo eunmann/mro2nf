@@ -168,12 +168,7 @@ func addMroFiles(files map[string]string, paths []string) error {
 }
 
 func newProject(src cg.Source, opts Options) (*project, error) {
-	g, err := src.Witness(opts.MroPaths)
-	if err != nil {
-		return nil, fmt.Errorf("emit: %w", err)
-	}
-
-	topo, err := g.Topology()
+	g, topo, err := src.Witness(opts.MroPaths)
 	if err != nil {
 		return nil, fmt.Errorf("emit: %w", err)
 	}

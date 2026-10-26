@@ -62,7 +62,9 @@ func entryRoot(w *wiring, root string) string {
 }
 
 // node wires node i: its instances, enumerated root by root from the fork
-// elements and records its roots' feeders write; its gates, which the
+// elements and records its roots' feeders write, of which those the
+// invocation's node is not forked on run at one fork only (ALIASES); its
+// gates, which the
 // driver evaluates once its preflights are done so a disabled instance
 // runs no task; the outs its enabled instances stage, field by field; its
 // process call; its outputs, each file one names by reference resolved
@@ -87,7 +89,8 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		first = reads[0].mine
 	}
 
-	p.gate(w, i, n, p.instances(w, i, n), meta, first)
+	inst := p.instances(w, i, n)
+	p.gate(w, i, n, inst, meta, first)
 
 	run, fields := readAll(w, i, reads)
 	proc := alias(i, n.Fqid)
@@ -113,6 +116,37 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		}
 	}
 
+	p.posted(w, i, n, proc, sources, p.aliases(w, i, n, inst, meta))
+
+	return w, nil
+}
+
+// aliases is the channel of collapsible node i's instances, inst, that run
+// no job of their own (ALIASES), where a node reads what it posts; "" for
+// a node no invocation forks on fewer of its roots.
+func (p *project) aliases(w *wiring, i int, n cg.TopoNode, inst, meta string) string {
+	outs, forks, gates := p.consumed(n.Fqid)
+	if !n.Collapsible || (!outs && !forks && !gates) {
+		return ""
+	}
+
+	w.linef("a%d = ALIASES(%s, %s, %s)", i, inst, w.use(nodesAfter(p.preflightsOf(n))), meta)
+
+	return fmt.Sprintf("a%d", i)
+}
+
+// posted wires what node i's tasks, proc, posted for the nodes that read
+// it: its outs, its forks and its gates, each instance's own or, where it
+// runs no job, its representative's (aliases, ALIASED).
+func (p *project) posted(w *wiring, i int, n cg.TopoNode, proc, sources, aliases string) {
+	aliased := func(items string) string {
+		if aliases == "" {
+			return items
+		}
+
+		return fmt.Sprintf("ALIASED(%s, %s)", items, aliases)
+	}
+
 	outs, forks, gates := p.consumed(n.Fqid)
 	if outs || forks {
 		w.linef("r%d = %s", i, sources)
@@ -124,15 +158,13 @@ func (p *project) node(i int, n cg.TopoNode) (*wiring, error) {
 		at   int
 	}{{outs, outsOf(i), postedOuts}, {forks, forksOf(i), postedForks}} {
 		if o.used {
-			w.linef("%s = POSTED(%s.out.posted, b%d.skip, r%d, %d)", w.def(o.name), proc, i, i, o.at)
+			w.linef("%s = %s", w.def(o.name), aliased(fmt.Sprintf("POSTED(%s.out.posted, b%d.skip, r%d, %d)", proc, i, i, o.at)))
 		}
 	}
 
 	if gates {
-		w.linef("%s = GATES(%s.out.posted, b%d.skip)", w.def(gatesOf(i)), proc, i)
+		w.linef("%s = %s", w.def(gatesOf(i)), aliased(fmt.Sprintf("GATES(%s.out.posted, b%d.skip)", proc, i)))
 	}
-
-	return w, nil
 }
 
 // readAll wires node i's reads of its enabled instances: a READ each, and
@@ -274,21 +306,25 @@ func positions(roots, xs []string) []int {
 
 // forkOn extends node n's instances, inst, by one of its roots. An
 // entry-fed root's forks are PLAN's records, passed as values; a stage-fed
-// root's are the element items its producer posted. A root in zr takes its
+// root's are the element items its producer posted, and PLAN's records
+// where an invocation's entry can fix them (TopoRoot.Entry), which PLAN
+// writes only then and its producer posts none. A root in zr takes its
 // index token.
 func (p *project) forkOn(w *wiring, inst string, n cg.TopoNode, root string, zr []string) string {
 	r := p.roots[root]
 
-	entryFed := r.Producer == ""
-
 	var src string
-	if entryFed {
+
+	switch {
+	case r.Producer == "":
 		src = entryRoot(w, root)
-	} else {
+	case r.Entry:
+		src = fmt.Sprintf("%s.mix(%s)", p.elements(w, r), entryRoot(w, root))
+	default:
 		src = p.elements(w, r)
 	}
 
-	return fmt.Sprintf("FORK(%s, %s, %s, %t, %t)", inst, src, ilist(positions(n.Roots, r.Outer)), entryFed, slices.Contains(zr, root))
+	return fmt.Sprintf("FORK(%s, %s, %s, %t)", inst, src, ilist(positions(n.Roots, r.Outer)), slices.Contains(zr, root))
 }
 
 // zip adds to node n's instances, inst, z.Node's partner element at the

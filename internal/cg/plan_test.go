@@ -45,12 +45,7 @@ func nestedPlan(tb testing.TB, n int) (*Graph, Topology) {
 		tb.Fatal(err)
 	}
 
-	wg, err := src.Witness(nil)
-	if err != nil {
-		tb.Fatal(err)
-	}
-
-	wt, err := wg.Topology()
+	_, wt, err := src.Witness(nil)
 	if err != nil {
 		tb.Fatal(err)
 	}

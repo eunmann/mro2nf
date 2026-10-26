@@ -37,15 +37,19 @@ type Plan struct {
 // resolved spec in the invocation and what its post writes for its readers,
 // so a task's cache key changes only with its own node and those. Off
 // disables every instance; OffAt the instances, by fork key, a static
-// per-fork binding disables. Files are the entry files its instances read.
-// Stage is the stage it runs, which the pipeline outs' node has none of.
+// per-fork binding disables. Collapse are the positions of the witness
+// node's roots the invocation's node is not forked on: its job is the same
+// at every fork of them, which runs at their ordinal 0 only and serves the
+// rest. Files are the entry files its instances read. Stage is the stage it
+// runs, which the pipeline outs' node has none of.
 type PlanNode struct {
-	Fqid   string
-	Digest string
-	Off    bool
-	OffAt  []string
-	Files  []PlanFiles
-	Stage  *syntax.Stage
+	Fqid     string
+	Digest   string
+	Off      bool
+	OffAt    []string
+	Collapse []int
+	Files    []PlanFiles
+	Stage    *syntax.Stage
 }
 
 // PlanFork is one fork of an entry-fed root: its fork key, the ordinals of
@@ -63,12 +67,7 @@ type PlanFork struct {
 // stages an entry file value in reads in place; it keeps its index among
 // the Leaves, which a task recomputes from the call.
 func MakePlan(src Source, inv *core.InvocationData, mroPaths []string, scratch string, in ReadInPlace) (Plan, error) {
-	w, err := src.Witness(mroPaths)
-	if err != nil {
-		return Plan{}, err
-	}
-
-	wt, err := w.Topology()
+	w, wt, err := src.Witness(mroPaths)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -160,10 +159,11 @@ func EncodeElement(el Element) (string, error) {
 	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
-// entryForks are the forks of the witness's entry-fed roots, keyed by the
-// witness's outer roots: a root the invocation gives a fork set of known
-// length repeats it under every fork of the outer roots the witness's
-// varies with.
+// entryForks are the forks of the witness's entry-fed roots, and of its
+// stage-fed roots the invocation's entry fixes (TopoRoot.Entry), keyed by
+// the witness's outer roots: a root the invocation gives a fork set of
+// known length repeats it under every fork of the outer roots the
+// witness's varies with.
 func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, *plannedForks, error) {
 	dir := filepath.Join(scratch, "entry")
 	if err := g.PostEntry(dir); err != nil {
@@ -171,10 +171,15 @@ func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, 
 	}
 
 	own := map[string][]Element{}
+	roots := slices.Clone(wt.Roots)
 
-	for _, r := range wt.Roots {
+	for x, r := range roots {
 		if r.Producer != "" {
-			continue
+			if root, ok := g.roots[r.Fqid]; !r.Entry || !ok || len(g.rootCountRefs(root)) > 0 {
+				continue
+			}
+
+			roots[x].Producer = ""
 		}
 
 		els, err := g.readElements(filepath.Join(dir, r.Fqid))
@@ -185,7 +190,7 @@ func (g *Graph) entryForks(wt Topology, scratch string) (map[string][]PlanFork, 
 		own[r.Fqid] = els
 	}
 
-	return planEntry(wt.Roots, own)
+	return planEntry(roots, own)
 }
 
 // planEntry plans the forks own holds of each entry-fed root, outer roots
@@ -398,6 +403,12 @@ func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks, leaves 
 
 	if pn.Off {
 		return pn, nil
+	}
+
+	for x, root := range n.Roots {
+		if !slices.ContainsFunc(st.ForkRoots(), func(r *syntax.CallGraphStage) bool { return r.Fqid == root }) {
+			pn.Collapse = append(pn.Collapse, x)
+		}
 	}
 
 	if pn.OffAt, err = g.staticOff(st, n, wt, planned); err != nil {

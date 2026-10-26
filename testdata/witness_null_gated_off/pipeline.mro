@@ -1,0 +1,43 @@
+# #621: witness_null_gated with the gate on, which disables B's source;
+# mrp's pipeline outs read [] as with it off.
+stage GATE(
+    in  bool v,
+    out bool off,
+    src py   "stages/gate",
+)
+
+stage SCALE(
+    in  int value,
+    out int scaled,
+    src py  "stages/scale",
+)
+
+pipeline RTG(
+    in  int[] some,
+    in  bool  skip,
+    out int[] b,
+)
+{
+    call GATE(
+        v = self.skip,
+    )
+
+    map call SCALE as A(
+        value = split self.some,
+    ) using (
+        disabled = GATE.off,
+    )
+
+    map call SCALE as B(
+        value = split A.scaled,
+    )
+
+    return (
+        b = B.scaled,
+    )
+}
+
+call RTG(
+    some = null,
+    skip = true,
+)

@@ -258,7 +258,12 @@ func (f *planFlags) write(p cg.Plan, rt job.Runtime) error {
 			return err
 		}
 
-		fmt.Fprintf(&nodes, "%s %s %s %s %s\n", n.Fqid, orDash(n.Digest), off, at, res)
+		collapse := make([]string, len(n.Collapse))
+		for x, c := range n.Collapse {
+			collapse[x] = strconv.Itoa(c)
+		}
+
+		fmt.Fprintf(&nodes, "%s %s %s %s %s %s\n", n.Fqid, orDash(n.Digest), off, at, res, orDash(strings.Join(collapse, ",")))
 	}
 
 	if err := writeText(f.nodes, nodes.String()); err != nil {

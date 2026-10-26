@@ -16,6 +16,8 @@ func standInSkipped() map[string]string {
 		"split_gate_entry": "it zips entry collections with SRC's outs, whose keys and lengths no stand-in knows",
 		"forkdisabled":     "GATED zips the entry's xs with FLAGS's skips, whose length no stand-in knows",
 		"post_outer_fork":  "SRC's post fails, as mrp does (TestPostFailsUnderAnOuterForkItDoesNotHold)",
+		"witness_known_inner": "its witness's rows differ in length, where ROW's post fails as mrp's run panics " +
+			"(map filtering an array); its literal is TestMrpDiff's",
 	}
 }
 
@@ -42,7 +44,7 @@ func TestStandInStagesOnlyWhatItReads(t *testing.T) {
 			t.Fatalf("%s: %v", mro, err)
 		}
 
-		witness, err := src.Witness([]string{dir})
+		witness, _, err := src.Witness([]string{dir})
 		if err != nil {
 			t.Fatalf("%s: witness: %v", mro, err)
 		}
