@@ -19,12 +19,12 @@ import (
 func TestMrpFailedOutcome(t *testing.T) {
 	ps := t.TempDir()
 	writeMrpSource(t, ps, "BOOM", "UP")
-	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM(\n    x = 1,\n)\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk0-u1c28cb18e6", "_assert"), "boom")
-	writeABITestFile(t, filepath.Join(ps, "P", "UP", "fork0", "_invocation"), "call UP as UPPER()\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "UP", "fork0", "_errors"), "missing key")
-	writeABITestFile(t, filepath.Join(ps, "P", "UP", "fork1", "_invocation"), "call UP as UPPER()\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "UP", "fork1", "split-u1ce7cb18e6", "_errors"), "bad split")
+	writeTestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM(\n    x = 1,\n)\n")
+	writeTestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk0-u1c28cb18e6", "_assert"), "boom")
+	writeTestFile(t, filepath.Join(ps, "P", "UP", "fork0", "_invocation"), "call UP as UPPER()\n")
+	writeTestFile(t, filepath.Join(ps, "P", "UP", "fork0", "_errors"), "missing key")
+	writeTestFile(t, filepath.Join(ps, "P", "UP", "fork1", "_invocation"), "call UP as UPPER()\n")
+	writeTestFile(t, filepath.Join(ps, "P", "UP", "fork1", "split-u1ce7cb18e6", "_errors"), "bad split")
 
 	if err := os.Symlink("chnk0-u1c28cb18e6", filepath.Join(ps, "P", "BOOM", "fork0", "chnk0")); err != nil {
 		t.Fatal(err)
@@ -46,15 +46,15 @@ func TestMrpFailedOutcome(t *testing.T) {
 func TestMrpFailedOutcomeKilledJob(t *testing.T) {
 	ps := t.TempDir()
 	writeMrpSource(t, ps, "BOOM", "SLOW", "EARLY", "STAMPED")
-	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM()\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk0-u1", "_errors"), "Traceback ...\nRuntimeError: boom")
-	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk1-u1", "_errors"), "Caught signal terminated")
-	writeABITestFile(t, filepath.Join(ps, "P", "SLOW", "fork0", "_invocation"), "call SLOW()\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "SLOW", "fork0", "chnk0-u2", "_errors"), "Caught signal terminated")
-	writeABITestFile(t, filepath.Join(ps, "P", "EARLY", "fork0", "_invocation"), "call EARLY()\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "EARLY", "fork0", "chnk0-u3", "_errors"), "signal: terminated")
-	writeABITestFile(t, filepath.Join(ps, "P", "STAMPED", "fork0", "_invocation"), "call STAMPED()\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "STAMPED", "fork0", "chnk0-u4", "_errors"), "2026-10-11 22:41:07 Caught signal interrupt")
+	writeTestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM()\n")
+	writeTestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk0-u1", "_errors"), "Traceback ...\nRuntimeError: boom")
+	writeTestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "chnk1-u1", "_errors"), "Caught signal terminated")
+	writeTestFile(t, filepath.Join(ps, "P", "SLOW", "fork0", "_invocation"), "call SLOW()\n")
+	writeTestFile(t, filepath.Join(ps, "P", "SLOW", "fork0", "chnk0-u2", "_errors"), "Caught signal terminated")
+	writeTestFile(t, filepath.Join(ps, "P", "EARLY", "fork0", "_invocation"), "call EARLY()\n")
+	writeTestFile(t, filepath.Join(ps, "P", "EARLY", "fork0", "chnk0-u3", "_errors"), "signal: terminated")
+	writeTestFile(t, filepath.Join(ps, "P", "STAMPED", "fork0", "_invocation"), "call STAMPED()\n")
+	writeTestFile(t, filepath.Join(ps, "P", "STAMPED", "fork0", "chnk0-u4", "_errors"), "2026-10-11 22:41:07 Caught signal interrupt")
 
 	got, err := mrpFailedOutcome(ps)
 	if err != nil {
@@ -78,7 +78,7 @@ func writeMrpSource(t *testing.T, ps string, stages ...string) {
 		fmt.Fprintf(&calls, "    call %s()\n\n", s)
 	}
 
-	writeABITestFile(t, filepath.Join(ps, "_mrosource"), decls.String()+"pipeline P()\n{\n"+calls.String()+"    return ()\n}\n\ncall P()\n")
+	writeTestFile(t, filepath.Join(ps, "_mrosource"), decls.String()+"pipeline P()\n{\n"+calls.String()+"    return ()\n}\n\ncall P()\n")
 }
 
 // TestMrpFailedOutcomePipelineFork checks a failure mrp records in a mapped
@@ -87,11 +87,12 @@ func writeMrpSource(t *testing.T, ps string, stages ...string) {
 // _invocation).
 func TestMrpFailedOutcomePipelineFork(t *testing.T) {
 	ps := t.TempDir()
-	writeABITestFile(t, filepath.Join(ps, "_mrosource"), "stage WORK(\n    in  int x,\n    src py \"stages/work\",\n)\n\n"+
+	writeTestFile(t, filepath.Join(ps, "_mrosource"), "stage WORK(\n    in  int x,\n    src py \"stages/work\",\n)\n\n"+
 		"pipeline INNER(\n    in  int x,\n)\n{\n    call WORK(\n        x = self.x,\n    )\n\n    return ()\n}\n\n"+
 		"pipeline P()\n{\n    map call INNER(\n        x = split [1, 2],\n    )\n\n    return ()\n}\n\ncall P()\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "INNER", "fork0", "_invocation"), "@include \"pipeline.mro\"\n\nmap call INNER(\n    x = split [1, 2],\n)\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "INNER", "fork0", "_errors"), "could not match reference to a specific fork")
+
+	writeTestFile(t, filepath.Join(ps, "P", "INNER", "fork0", "_invocation"), "@include \"pipeline.mro\"\n\nmap call INNER(\n    x = split [1, 2],\n)\n")
+	writeTestFile(t, filepath.Join(ps, "P", "INNER", "fork0", "_errors"), "could not match reference to a specific fork")
 
 	got, err := mrpFailedOutcome(ps)
 	if err != nil {
@@ -110,7 +111,7 @@ func TestMrpFailedOutcomePipelineFork(t *testing.T) {
 func TestMrpFailedOutcomeUnresolvedStageFork(t *testing.T) {
 	ps := t.TempDir()
 	writeMrpSource(t, ps, "USE")
-	writeABITestFile(t, filepath.Join(ps, "P", "USE", "fork0", "_errors"), "need exactly 1")
+	writeTestFile(t, filepath.Join(ps, "P", "USE", "fork0", "_errors"), "need exactly 1")
 
 	got, err := mrpFailedOutcome(ps)
 	if err != nil {
@@ -139,9 +140,9 @@ func TestMrpFailedOutcomeNoPipestance(t *testing.T) {
 // no _invocation in fails the classification instead of being dropped.
 func TestMrpFailedOutcomeUnattributable(t *testing.T) {
 	ps := t.TempDir()
-	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM()\n")
-	writeABITestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_assert"), "boom")
-	writeABITestFile(t, filepath.Join(ps, "P", "fork0", "_errors"), "pipeline failed")
+	writeTestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_invocation"), "call BOOM()\n")
+	writeTestFile(t, filepath.Join(ps, "P", "BOOM", "fork0", "_assert"), "boom")
+	writeTestFile(t, filepath.Join(ps, "P", "fork0", "_errors"), "pipeline failed")
 
 	got, err := mrpFailedOutcome(ps)
 	if err == nil {
@@ -169,10 +170,10 @@ func TestMrpFailedOutsideStagesIsNarrow(t *testing.T) {
 // no stage.
 func TestNextflowFailedOutcome(t *testing.T) {
 	work := t.TempDir()
-	writeABITestFile(t, filepath.Join(work, "4a", "5cab94aa", "join", mreStageFile), "JOIN_BOOM")
-	writeABITestFile(t, filepath.Join(work, "1b", "0000aa11", "main", mreStageFile), "RAISE")
-	writeABITestFile(t, filepath.Join(work, "1c", "0000aa22", "main", mreStageFile), "RAISE")
-	writeABITestFile(t, filepath.Join(work, "9f", "77beef00", ".exitcode"), "1")
+	writeTestFile(t, filepath.Join(work, "4a", "5cab94aa", "join", mreStageFile), "JOIN_BOOM")
+	writeTestFile(t, filepath.Join(work, "1b", "0000aa11", "main", mreStageFile), "RAISE")
+	writeTestFile(t, filepath.Join(work, "1c", "0000aa22", "main", mreStageFile), "RAISE")
+	writeTestFile(t, filepath.Join(work, "9f", "77beef00", ".exitcode"), "1")
 
 	got, err := nextflowFailedOutcome(work, []failedAttempt{
 		{Hash: "4a/5cab94", Exit: 42},

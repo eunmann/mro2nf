@@ -246,7 +246,10 @@ A staged skeleton (`-in`, `-refs`) is expanded in place.
 
 `TestMrpCallGraph` (e2e) replays every mrp-diff fixture's real `mrp`
 pipestance through these subcommands, running every task through `mre stage`
-as a run's tasks do. It requires:
+as a run's tasks do. It takes the node order, each node's instances and what
+each instance stages from the topology, as the driver does: its fork
+elements, the partner elements it zips, and of each node it reads only the
+outputs and instances the read and its patterns give it. It requires:
 
 - the same `_args` as `mrp`'s, after both are re-encoded and file leaves are
   reduced to name and content digest;

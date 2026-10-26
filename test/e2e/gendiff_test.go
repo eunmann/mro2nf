@@ -301,7 +301,7 @@ func TestGenDiffSkipsRefusedShape(t *testing.T) {
 	buildBinaries(t)
 
 	dir, work := t.TempDir(), t.TempDir()
-	writeBenchFile(t, filepath.Join(dir, "pipeline.mro"), refusedShapeMRO)
+	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), refusedShapeMRO)
 
 	errs, skip := transpileGenLegs(genEnv{tools: repoTools(), legs: genLegs}, dir, work)
 	if skip == "" {

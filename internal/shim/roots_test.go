@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 )
 
 // holds is whether roots hold p, failing the test on an error.
@@ -84,7 +85,7 @@ func TestRootsExceptTheTaskDir(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "outs")
 	payload := map[string]any{"out": own, "ref": input}
 
-	writeBundle(t, bundle, payload, fields(t, "out file", "ref file"), shim.Opts{Confine: conf, Roots: roots})
+	writeBundle(t, bundle, payload, typestest.Fields(t, "out file", "ref file"), shim.Opts{Confine: conf, Roots: roots})
 
 	raw, err := os.ReadFile(filepath.Join(bundle, "data.json"))
 	if err != nil {
@@ -145,7 +146,7 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 	}
 
 	bundle := filepath.Join(t.TempDir(), "outs")
-	if _, err := shim.WriteItem(bundle, map[string]any{"ref": out}, fields(t, "ref file"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}, shim.Staged{}); err != nil {
+	if _, err := shim.WriteItem(bundle, map[string]any{"ref": out}, typestest.Fields(t, "ref file"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}, shim.Staged{}); err != nil {
 		t.Fatalf("a stage output linking to the real path of an input read in place: %v", err)
 	}
 }
@@ -190,7 +191,7 @@ func TestTaskResolvesOnlyWhatItReads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	linkLeaves(t, filepath.Join(task, "args"), map[string]any{"in": values[0]}, fields(t, "in file"), roots)
+	linkLeaves(t, filepath.Join(task, "args"), map[string]any{"in": values[0]}, typestest.Fields(t, "in file"), roots)
 
 	conf, err := shim.ConfineStage(task, "main", true, roots)
 	if err != nil {
@@ -198,7 +199,7 @@ func TestTaskResolvesOnlyWhatItReads(t *testing.T) {
 	}
 
 	payload := map[string]any{"own": own, "ref": link, "same": values[0]}
-	writeBundle(t, filepath.Join(t.TempDir(), "outs"), payload, fields(t, "own file", "ref file", "same file"), shim.Opts{Confine: conf, Roots: roots})
+	writeBundle(t, filepath.Join(t.TempDir(), "outs"), payload, typestest.Fields(t, "own file", "ref file", "same file"), shim.Opts{Confine: conf, Roots: roots})
 
 	if *resolved != 0 {
 		t.Errorf("the task resolved %d roots, want none", *resolved)

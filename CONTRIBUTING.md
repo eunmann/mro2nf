@@ -39,7 +39,6 @@ internal/
   job/               one stage job through mrjob, as mrp runs it
   types/             the type-directed file-leaf walk over Martian's compiled types
   shim/              bundle I/O, markers, output confinement
-  logging/           slog setup
 vendor-martian/python/   the pinned Martian adapters, which mre embeds (Martian's LICENSE beside)
 THIRD_PARTY_NOTICES      licenses of the code the binaries link and the images vendor
 testdata/            .mro fixtures with expected mrp outputs (see testdata/README.md)

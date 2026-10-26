@@ -598,6 +598,7 @@ var mrpDiffCases = []mrpDiffCase{
 	{name: "bench/zipgated", mro: "pipeline_w4.mro"},
 	{name: "bench/splitbroadcast", mro: "pipeline_w4.mro"},
 	{name: "bench/mapchain", mro: "pipeline_w4.mro"},
+	{name: "bench/mapgather", mro: "pipeline_w4.mro"},
 	// #464: a map call zipping splits forks over its master source, and the
 	// other sources read null past their end.
 	{name: "zip_runtime"},
@@ -832,7 +833,7 @@ func runMrpDiffOverride(t *testing.T, bin, fixture, mro, file, params string) {
 	runMrpAt(t, bin, dir, mro, tmp)
 
 	proj := transpileMRO(t, dir, "pipeline.mro")
-	writeFileT(t, filepath.Join(proj, file), params)
+	writeTestFile(t, filepath.Join(proj, file), params)
 
 	if err := runNextflow(t, proj, append(mrpPoolArgs(t, proj), "-params-file", file)...); err != nil {
 		t.Fatalf("nextflow: %v", err)

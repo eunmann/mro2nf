@@ -33,7 +33,7 @@ split triad (split → per-chunk main → join, per fork) is the only intrinsic
 fan-out; it matches Martian's own jobs 1:1. When judging a change, measure
 tasks and per-instance work against `mrp`'s job count at two widths — `make
 bench` does exactly this: the `bench/` fixtures (`chain`, `forks`, `split`,
-`mapsplit`, `mapdisabled`, `forkdisabled`, `mapnested`, `splitbroadcast`, `zip`, `zipgated`, `mapchain`) each run at two widths
+`mapsplit`, `mapdisabled`, `forkdisabled`, `mapnested`, `splitbroadcast`, `zip`, `zipgated`, `mapchain`, `mapgather`) each run at two widths
 (`chain` at one),
 and the gate fails if the plumbing task count differs between widths, a
 lane's stage tasks differ from `mrp`'s job count, or the most bytes one
@@ -59,7 +59,6 @@ internal/
   job/               → runs one stage job through mrjob as mrp runs it
   types/             → file-leaf walk over Martian's compiled types (shared by cg + shim)
   shim/              → bundle I/O, markers, output confinement
-  logging/           → log/slog setup (stderr)
 ```
 
 The Martian parser is consumed as a normal module dependency, pinned by commit

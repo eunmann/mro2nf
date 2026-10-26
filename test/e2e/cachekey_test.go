@@ -133,7 +133,7 @@ func TestResumeKeysOnANodesOverrides(t *testing.T) {
 	}
 
 	edited := filepath.Join(t.TempDir(), "overrides.json")
-	writeFileT(t, edited, strings.Replace(string(over), `"chunk.mem_gb": 2.25`, `"chunk.mem_gb": 2`, 1))
+	writeTestFile(t, edited, strings.Replace(string(over), `"chunk.mem_gb": 2.25`, `"chunk.mem_gb": 2`, 1))
 
 	if err := runNextflow(t, proj, "-resume", "-with-trace", "edited.txt", "--mro2nf_overrides", edited); err != nil {
 		t.Fatalf("-resume under the edited overrides: %v", err)
@@ -368,9 +368,9 @@ func readersFixture(t *testing.T) string {
 		}
 	}
 
-	writeFileT(t, filepath.Join(dir, "pipeline.mro"), readersMRO)
-	writeFileT(t, filepath.Join(dir, "stages", "src", "__init__.py"), readersSrc)
-	writeFileT(t, filepath.Join(dir, "stages", "pair", "__init__.py"), readersPair)
+	writeTestFile(t, filepath.Join(dir, "pipeline.mro"), readersMRO)
+	writeTestFile(t, filepath.Join(dir, "stages", "src", "__init__.py"), readersSrc)
+	writeTestFile(t, filepath.Join(dir, "stages", "pair", "__init__.py"), readersPair)
 
 	return dir
 }

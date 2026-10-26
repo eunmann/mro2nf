@@ -89,6 +89,52 @@ var scaleShapes = map[string]scaleShape{
 		prods: func(w int) int { return 4 * w },
 		check: checkOutsLen("lit", 1),
 	},
+	"zip": {
+		name: "zip", probe: "MRE_BENCH_ZIP_PROBE", narrow: 4, wide: 10000,
+		call:  func(w int) string { return fmt.Sprintf("ZIPFAN(\n    n  = %d,\n    kb = 4,\n)", w) },
+		jobs:  func(w int) int { return 2 + w },
+		prods: func(int) int { return 1 },
+		check: checkOutsLen("ws", 1),
+	},
+	"zipgated": {
+		name: "zipgated", probe: "MRE_BENCH_ZIPGATED_PROBE", narrow: 4, wide: 10000,
+		call: func(w int) string {
+			return fmt.Sprintf("ZIPGATED(\n    n    = %d,\n    kb   = 4,\n    skip = false,\n)", w)
+		},
+		jobs:  func(w int) int { return 3 + w },
+		prods: func(int) int { return 1 },
+		check: checkOutsLen("ws", 1),
+	},
+	// Every other fork's USE is disabled, in each of STATIC and GATED.
+	"forkdisabled": {
+		name: "forkdisabled", probe: "MRE_BENCH_FORKDISABLED_PROBE", narrow: 4, wide: 3334,
+		call: func(w int) string {
+			return fmt.Sprintf("FORKDISABLED(\n    xs    = [%s],\n    skips = [%s],\n)", seq(w), alternating(w))
+		},
+		jobs:  func(w int) int { return 1 + 2*(w+(w+1)/2) },
+		prods: func(w int) int { return 2 * w },
+		check: checkOutsLen("fs", 1),
+	},
+	"splitbroadcast": {
+		name: "splitbroadcast", probe: "MRE_BENCH_SPLITBROADCAST_PROBE", narrow: 4, wide: 2500,
+		call: func(w int) string {
+			return fmt.Sprintf("COHORT(\n    samples = [%s],\n    kb      = 256,\n)", seq(w))
+		},
+		jobs:  func(w int) int { return 1 + 4*w },
+		prods: func(int) int { return 1 },
+		check: checkOutsLen("totals", 1),
+	},
+}
+
+// alternating is the MRO bool array body false, true, false, ... of n
+// elements.
+func alternating(n int) string {
+	vs := make([]string, n)
+	for i := range vs {
+		vs[i] = strconv.FormatBool(i%2 == 1)
+	}
+
+	return strings.Join(vs, ", ")
 }
 
 // seqKeys is a map literal of n keys, each bound to its position.
@@ -145,12 +191,16 @@ func TestMakeScaleTimeoutFitsEveryShape(t *testing.T) {
 	}
 }
 
-func TestScaleForks(t *testing.T)       { runScaleShape(t, scaleShapes["forks"]) }
-func TestScaleSplit(t *testing.T)       { runScaleShape(t, scaleShapes["split"]) }
-func TestScaleMapSplit(t *testing.T)    { runScaleShape(t, scaleShapes["mapsplit"]) }
-func TestScaleMapNested(t *testing.T)   { runScaleShape(t, scaleShapes["mapnested"]) }
-func TestScaleMapDisabled(t *testing.T) { runScaleShape(t, scaleShapes["mapdisabled"]) }
-func TestScaleMapChain(t *testing.T)    { runScaleShape(t, scaleShapes["mapchain"]) }
+func TestScaleForks(t *testing.T)          { runScaleShape(t, scaleShapes["forks"]) }
+func TestScaleSplit(t *testing.T)          { runScaleShape(t, scaleShapes["split"]) }
+func TestScaleMapSplit(t *testing.T)       { runScaleShape(t, scaleShapes["mapsplit"]) }
+func TestScaleMapNested(t *testing.T)      { runScaleShape(t, scaleShapes["mapnested"]) }
+func TestScaleMapDisabled(t *testing.T)    { runScaleShape(t, scaleShapes["mapdisabled"]) }
+func TestScaleMapChain(t *testing.T)       { runScaleShape(t, scaleShapes["mapchain"]) }
+func TestScaleZip(t *testing.T)            { runScaleShape(t, scaleShapes["zip"]) }
+func TestScaleZipGated(t *testing.T)       { runScaleShape(t, scaleShapes["zipgated"]) }
+func TestScaleForkDisabled(t *testing.T)   { runScaleShape(t, scaleShapes["forkdisabled"]) }
+func TestScaleSplitBroadcast(t *testing.T) { runScaleShape(t, scaleShapes["splitbroadcast"]) }
 
 // TestScaleWideFanin (#503) runs TestWidePipelineRuns' pipeline plus FANIN,
 // whose 210 inputs pass maxTakes (internal/cgnf/scope.go), the most

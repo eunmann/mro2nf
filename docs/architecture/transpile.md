@@ -119,6 +119,8 @@ shape of the references to it:
 - **Limiting.** Where a split's elements do not all read the upstream, the
   pattern is limited to the elements that do.
 
+A pattern another reads at least the instances of is dropped, so a read both
+aligned and whole (`f = split A.f`, `all = A.f`) is the one whole pattern.
 The driver joins an instance on the shared and aligned roots' ordinals
 (`READ`, or `GATHER` under them) for one unlimited pattern, and otherwise
 through `NEEDS`, a keyed join per pattern regrouped per instance.

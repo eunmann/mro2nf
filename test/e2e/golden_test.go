@@ -320,7 +320,7 @@ func TestCLITypedOverrides(t *testing.T) {
 			renderOverrideParams(t, fixtureDir, proj)
 
 			if rc.whole != "" {
-				writeFileT(t, filepath.Join(proj, "whole.json"), rc.whole)
+				writeTestFile(t, filepath.Join(proj, "whole.json"), rc.whole)
 			}
 
 			if err := runNextflow(t, proj, rc.args...); err != nil {
@@ -366,7 +366,7 @@ func TestUndeclaredParamFailsAtLaunch(t *testing.T) {
 		t.Parallel()
 
 		proj := transpile(t, "cli_typed")
-		writeFileT(t, filepath.Join(proj, "params.json"), `{"n": 5, "fatcor": 3}`)
+		writeTestFile(t, filepath.Join(proj, "params.json"), `{"n": 5, "fatcor": 3}`)
 		assertLaunchRefuses(t, proj, []string{"-params-file", "params.json"}, want)
 	})
 }
@@ -390,7 +390,7 @@ func TestOutputDirFromConfig(t *testing.T) {
 			t.Parallel()
 
 			proj := transpile(t, "cli_typed")
-			writeFileT(t, filepath.Join(proj, "site.config"), "outputDir = 'elsewhere'\n")
+			writeTestFile(t, filepath.Join(proj, "site.config"), "outputDir = 'elsewhere'\n")
 
 			if err := runNextflow(t, proj, append([]string{"-c", "site.config"}, tc.args...)...); err != nil {
 				t.Fatal(err)
@@ -468,7 +468,7 @@ func TestOutOfRangeLaunchValues(t *testing.T) {
 
 			proj := transpile(t, fixture)
 			if tc.file != "" {
-				writeFileT(t, filepath.Join(proj, tc.file), tc.body)
+				writeTestFile(t, filepath.Join(proj, tc.file), tc.body)
 			}
 
 			assertPlanRefuses(t, proj, tc.args, tc.wants...)
