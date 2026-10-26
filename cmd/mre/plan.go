@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"maps"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/buildinfo"
 	"github.com/eunmann/mro2nf/internal/cg"
 	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/job"
@@ -23,17 +25,23 @@ import (
 	"github.com/martian-lang/martian/martian/util"
 )
 
+// errBuild reports a project transpiled by another mro2nf build than this
+// mre's, whose flags and records the project's tasks may not match.
+var errBuild = errors.New("the project and mre are different mro2nf builds")
+
 // planFlags are `mre plan`'s inputs and outputs.
 type planFlags struct {
 	entry, values, mropath, call, nodes, roots, leaves, files, work string
-	overrides, psid, s3Mount, runWork                               string
+	overrides, psid, s3Mount, runWork, codeMropath, pipelines       string
+	build                                                           string
 	hostInputs, hostInPlace, remoteInputs                           bool
 	local                                                           job.Pool
 }
 
 func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.entry, "entry", "", "the transpiled entry .mro")
-	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null keeps the transpiled one")
+	fs.StringVar(&f.build, "build", "", "the mro2nf build that transpiled the project, which must be this mre's (mre version)")
+	fs.StringVar(&f.values, "values", "", "JSON file of {input: value} entry values; a null sets the input to null, and an input it leaves out keeps the transpiled value")
 	fs.StringVar(&f.mropath, "mropath", "", "colon-separated include path")
 	fs.StringVar(&f.overrides, "overrides", "", "the run's mrp --overrides file")
 	fs.StringVar(&f.psid, "psid", "", "the pipestance id, whose fqnames the overrides walk, as mrp requires it: letters, digits, '-' and '_'")
@@ -42,6 +50,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	fs.StringVar(&f.roots, "roots", "roots", "file to write one line per fork of every entry-fed fork root into: root key record index-token")
 	fs.StringVar(&f.leaves, "leaves", "leaves", "file to write one line per entry file value a task stages into: index base64-value")
 	fs.StringVar(&f.files, "files", "files", "file to write one line per instance group that stages entry files into: fqid fork-key indices")
+	fs.StringVar(&f.codeMropath, "code-mropath", "", "colon-separated include path the stage tasks find the pipeline's code on, whose version every job's _jobinfo records")
+	fs.StringVar(&f.pipelines, "pipelines", "pipelines", "file to write the pipelines' version found on -code-mropath into, as mrp finds it at its start")
 	fs.BoolVar(&f.hostInputs, "host-inputs", true, "an entry file value may name a head-node path")
 	fs.BoolVar(&f.hostInPlace, "host-in-place", false, "every task reads a head-node path in place, as the tasks run on the host's filesystem; otherwise it is staged")
 	fs.StringVar(&f.runWork, "run-workdir", "", "the run's work dir, which no head-node path read in place may be or hold")
@@ -51,7 +61,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 	definePool(fs, &f.local)
 }
 
-// runPlan starts a run: it rebuilds the invocation from the transpiled
+// runPlan starts a run: it refuses a project another mro2nf build
+// transpiled than this mre's, then rebuilds the invocation from the transpiled
 // entry and the run's entry values as mrp builds an invocation from its
 // JSON form, compiles it as mrp does, so mrp's refusals fail the run before
 // any stage starts, and checks its call graph is within the witness's, and
@@ -59,8 +70,8 @@ func (f *planFlags) define(fs *flag.FlagSet) {
 // read in place under -host-in-place, one the -s3-mount root shows, an
 // s3:// one of a bucket that root shows rewritten to its path there, and
 // any other staged. It writes the call every task compiles, each witness
-// node's spec digest, disabled instances and entry files, and the forks of
-// each entry-fed root.
+// node's spec digest, disabled instances and entry files, the forks of
+// each entry-fed root, and the pipelines' version every job records.
 func runPlan(_ context.Context, argv []string) error {
 	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
 
@@ -74,6 +85,10 @@ func runPlan(_ context.Context, argv []string) error {
 
 	if f.entry == "" {
 		return errNoEntry
+	}
+
+	if mine := buildinfo.Version(version); f.build != mine {
+		return fmt.Errorf("plan: %w: project transpiled by %s, mre is %s; run the project with the mre of the build that transpiled it, or transpile it again with this build's mro2nf", errBuild, f.build, mine)
 	}
 
 	if err := util.ValidateID(f.psid); err != nil {
@@ -183,8 +198,10 @@ func (f *planFlags) writeEntryFiles(p cg.Plan) error {
 
 // overlayInvocation is the source's invocation with the run's entry values
 // over its own: a string for a scalar input parsed as its declared type, as
-// a command-line param is a string, and a split input's value in Martian's
-// invocation form, {"split": v}, whose v the rebuilt call splits.
+// a command-line param is a string, a null as the null literal mrp's
+// invocation takes, and a split input's value in Martian's invocation form,
+// {"split": v}, whose v the rebuilt call splits. An input the values leave
+// out keeps the source's value.
 func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*core.InvocationData, error) {
 	inv := *src.Invocation
 	inv.Args = maps.Clone(src.Invocation.Args)
@@ -218,10 +235,6 @@ func overlayInvocation(src cg.Source, valuesFile string, mroPaths []string) (*co
 	}
 
 	for _, k := range slices.Sorted(maps.Keys(over)) {
-		if over[k] == nil {
-			continue
-		}
-
 		v, err := json.Marshal(types.Sorted(over[k]))
 		if err != nil {
 			return nil, fmt.Errorf("encode entry value %s: %w", k, err)
@@ -273,6 +286,10 @@ func (f *planFlags) write(p cg.Plan, rt job.Runtime) error {
 	}
 
 	if err := writeText(f.nodes, nodes.String()); err != nil {
+		return err
+	}
+
+	if err := writeText(f.pipelines, job.PipelinesVersion(filepath.SplitList(f.codeMropath))); err != nil {
 		return err
 	}
 

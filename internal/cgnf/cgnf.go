@@ -43,7 +43,8 @@ type Options struct {
 	OutDir string
 	// MroPaths are the absolute include paths the invocation compiles with.
 	MroPaths []string
-	// Version names the build in every task's cache key.
+	// Version names the build in every task's cache key, and PLAN fails a
+	// run whose mre is another build.
 	Version string
 }
 

@@ -1,0 +1,37 @@
+# #625 fixture: a stage returns a file its code ships, at the path it finds
+# beside its own code, and a later stage reads it there. mrp keeps the path
+# the stage returned. The pipeline's code is at the same path in every task,
+# on the host or in the image, so the path stays the path under a container
+# profile's confinement, which refused it as a file outside the task, and no
+# task copies the file.
+filetype txt;
+
+stage SHIP(
+    out txt shipped,
+    src py  "stages/ship",
+)
+
+stage READ(
+    in  txt    shipped,
+    out string content,
+    src py     "stages/read",
+)
+
+pipeline CODE_PATH_OUT(
+    out txt    shipped,
+    out string content,
+)
+{
+    call SHIP()
+
+    call READ(
+        shipped = SHIP.shipped,
+    )
+
+    return (
+        shipped = SHIP.shipped,
+        content = READ.content,
+    )
+}
+
+call CODE_PATH_OUT()

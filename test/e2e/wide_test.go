@@ -31,7 +31,9 @@ func TestWidePipelineRuns(t *testing.T) {
 // -preview seconds per hundred. The bounds are the edges -preview builds,
 // operators included (dag.verbose), of the wide pipeline and of cellranger_shaped, which were 1,221 and 346
 // before #559: an edge more per dependency fails them. Publishing OUTS's
-// tree through the workflow outputs adds one, its flatMap (#580).
+// tree through the workflow outputs adds one, its flatMap (#580), and
+// pairing the pipelines' version PLAN finds with the meta every task
+// shares adds three, its combine and first, at any width (#625).
 func TestLaunchEdges(t *testing.T) {
 	t.Parallel()
 
@@ -46,8 +48,8 @@ func TestLaunchEdges(t *testing.T) {
 		name, dir string
 		bound     int
 	}{
-		{"wide", dir, 952},
-		{"cellranger_shaped", filepath.Join(root, "testdata", "cellranger_shaped"), 269},
+		{"wide", dir, 955},
+		{"cellranger_shaped", filepath.Join(root, "testdata", "cellranger_shaped"), 272},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()

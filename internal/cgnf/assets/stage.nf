@@ -19,6 +19,13 @@ def shq(s) {
     return "'" + s.toString().replace("'", "'\\''") + "'"
 }
 
+// changed is each of values unequal to its entry in defaults by Java's
+// equals, which tells an int from a float of the same value, as Groovy's ==
+// does not.
+def changed(Map values, Map defaults) {
+    return values.findAll { k, v -> !java.util.Objects.equals(v, defaults[k]) }
+}
+
 // ordered is the items of [fork key, item] pairs by key, ordinal by
 // ordinal, then by the output each holds. A task stages such a gather as
 // one list, whose order is part of its -resume key and would otherwise be
@@ -151,11 +158,12 @@ def callStaged(Map meta) {
 }
 
 // args is what a task builds the instance's args from: what it
-// staged, the files it staged by reference, the value records valuesFile
-// wrote, its entry fork records, which are base64 and need no quoting, and
-// the entry files it staged below entry/, by their indices among the run's.
-// The driver ran the instance because its gates hold it enabled; mre must
-// agree, and the node must compile to the spec PLAN planned.
+// staged, the files it staged by reference, the value records it wrote
+// into values, its entry fork records, which are base64 and need no
+// quoting, and the entry files it staged below entry/, by their indices
+// among the run's, which it wrote into leaves. The driver ran the instance
+// because its gates hold it enabled; mre must agree, and the node must
+// compile to the spec PLAN planned.
 def args(Map meta, List forks, List values, List leaves) {
     def cmd = "-digest ${meta.digest} -in in -refs refs"
     if (values) {
@@ -163,18 +171,20 @@ def args(Map meta, List forks, List values, List leaves) {
     }
     forks.each { f -> cmd += " -fork ${f}" }
     if (leaves) {
-        cmd += " -leaves ${shq(leaves.join(','))}"
+        cmd += ' -leaves leaves'
     }
     return cmd
 }
 
-// valuesFile writes the value records a task got, a line each, which are
-// base64 after an item's path and need no quoting: as arguments, a
-// gather's could pass the kernel's limit on a command line. The
+// recordsFile writes records into the file name, a line each: a task's
+// value records, base64 after an item's path, or its entry file indices,
+// none of which need quoting. As arguments, a gather's records or a wide
+// instance's indices could pass the kernel's limit on a command line. The
 // here-document's lines start their own lines, where the script's indent
 // does not reach.
-def valuesFile(List values) {
-    return values ? "cat > values <<'MRO2NF_VALUES'\n${values.join('\n')}\nMRO2NF_VALUES" : ''
+def recordsFile(String name, List records) {
+    def end = "MRO2NF_${name.toUpperCase()}"
+    return records ? "cat > ${name} <<'${end}'\n${records.join('\n')}\n${end}" : ''
 }
 
 // pool names the pool mrp's local job manager grants a job from, its
@@ -198,7 +208,7 @@ def pool(task, Boolean local) {
 // params its meta carries (run), which key the task's -resume.
 def mreStage(task, Map meta, phase, rest) {
     def run = meta.run
-    def cmd = "${shq(run.mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(run.psid)} -work .${pool(task, run.local_jobs)}"
+    def cmd = "${shq(run.mre)} stage -phase ${phase} ${graph(meta, '')} -node ${shq(meta.node)} -psid ${shq(run.psid)} -uuid ${shq(run.uuid)} -pipelines-version ${shq(meta.pipelines)} -run-workdir ${shq(run.workdir)} -work .${pool(task, run.local_jobs)}"
     if (run.adapters) {
         cmd += " -adapters ${shq(run.adapters)}"
     }
@@ -262,7 +272,8 @@ process STAGE {
     script:
     """
     ${callScript(meta)}
-    ${valuesFile(values)}
+    ${recordsFile('values', values)}
+    ${recordsFile('leaves', leaves)}
     mkdir -p in refs
     ${mreStage(task, meta, 'main', "${args(meta, forks, values, leaves)} -args args ${postFlags()}")}
     """
@@ -283,7 +294,8 @@ process STAGE_SPLIT {
     script:
     """
     ${callScript(meta)}
-    ${valuesFile(values)}
+    ${recordsFile('values', values)}
+    ${recordsFile('leaves', leaves)}
     mkdir -p in refs
     ${mreStage(task, meta, 'split', "${args(meta, forks, values, leaves)} -args args -o chunks -out-refs chunk_refs")}
     """
@@ -306,7 +318,8 @@ process STAGE_MAIN {
     script:
     """
     ${callScript(meta)}
-    ${valuesFile(values)}
+    ${recordsFile('values', values)}
+    ${recordsFile('leaves', leaves)}
     mkdir -p in refs
     ${mreStage(task, meta, 'main', "${args(meta, forks, values, leaves)} -args args -chunk ${shq(chunk)} -o ${shq('chunkout/' + name)} -out-refs chunkout_refs")}
     """
@@ -327,7 +340,8 @@ process STAGE_JOIN {
     script:
     """
     ${callScript(meta)}
-    ${valuesFile(values)}
+    ${recordsFile('values', values)}
+    ${recordsFile('leaves', leaves)}
     mkdir -p in refs
     ${mreStage(task, meta, 'join', "${args(meta, forks, values, leaves)} -args args -chunks chunks -chunkouts chunkouts ${postFlags()}")}
     """
@@ -418,10 +432,11 @@ process OUTS {
     script:
     """
     ${callScript(meta)}
-    ${valuesFile(values)}
+    ${recordsFile('values', values)}
+    ${recordsFile('leaves', leaves)}
     mkdir -p in refs
     ${locations(ups, locs, refLocs)}
-    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves ' + shq(leaves.join(',')) : ''} -manifest publish/publish.json -json pipeline_outs.json
+    ${shq(meta.run.mre)} outs ${graph(meta, 'mro')} -in in -refs refs${values ? ' -values values' : ''} -locations locations${leaves ? ' -leaves leaves' : ''} -manifest publish/publish.json -json pipeline_outs.json
     """
 }
 

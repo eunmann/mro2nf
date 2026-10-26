@@ -554,6 +554,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// and a sub-pipeline boundary too, is named by the first path mrp
 	// published it at.
 	{name: "shared_out_file"},
+	// #625: a stage returns a path into its own code, which mrp keeps and
+	// publishes as a link (published-symlinks-copied), and a later stage
+	// reads the file there.
+	{name: "code_path_out"},
 	// #432: files below a 2-D array, reached through a struct projection and
 	// a whole sub-pipeline ref, stay unpublished, as mrp leaves them. #457:
 	// each is named in its producer's work dir, from a scratch dir too.
@@ -812,7 +816,9 @@ func TestMrpDiffInt64Override(t *testing.T) {
 // a whole number beyond 2^53 is Martian's int literal, which a float input
 // takes as written, and a float takes Martian's shortest form (1e+06, -0).
 // -0.0 comes from a YAML params file: Nextflow reads a JSON one's -0.0 as
-// 0.0 before PLAN sees it.
+// 0.0 before PLAN sees it. A 0 over float_lexemes' -0.0 reaches the stage
+// as 0: PLAN gets a value unequal to the input's default, which is the
+// Double -0.0, not an int 0.
 func TestMrpDiffFloatOverride(t *testing.T) {
 	t.Parallel()
 
@@ -820,15 +826,39 @@ func TestMrpDiffFloatOverride(t *testing.T) {
 
 	bin := martianBin(t)
 
-	for _, tc := range []struct{ name, file, params, mro string }{
-		{name: "whole", file: "params.json", params: `{"f": 9007199254740993, "g": 1e6}`, mro: "override_float_whole.mro"},
-		{name: "frac", file: "params.yaml", params: "f: 1.5\ng: -0.0\n", mro: "override_float_frac.mro"},
+	for _, tc := range []struct{ name, fixture, file, params, mro string }{
+		{name: "whole", fixture: "cli_typed", file: "params.json", params: `{"f": 9007199254740993, "g": 1e6}`, mro: "override_float_whole.mro"},
+		{name: "frac", fixture: "cli_typed", file: "params.yaml", params: "f: 1.5\ng: -0.0\n", mro: "override_float_frac.mro"},
+		{name: "zero", fixture: "float_lexemes", file: "params.json", params: `{"pz": 0}`, mro: "override_zero.mro"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			runMrpDiffOverride(t, bin, "cli_typed", tc.mro, tc.file, tc.params)
+			runMrpDiffOverride(t, bin, tc.fixture, tc.mro, tc.file, tc.params)
 		})
 	}
+}
+
+// TestMrpDiffNullOverride (#625): a null in a -params-file sets the entry
+// input to null, as a null literal in mrp's invocation does, where an input
+// the launch leaves unset keeps the transpiled value: cli_typed's n and b
+// reach the stage as None, f and g as the .mro gives them.
+func TestMrpDiffNullOverride(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	runMrpDiffOverride(t, martianBin(t), "cli_typed", "override_null.mro", "params.json", `{"n": null, "b": null}`)
+}
+
+// TestMrpDiffStringOverride (#625): a string input takes any launch text,
+// as mrp's invocation takes any string literal: literals_edge's esc set to
+// mro2nf:transpiled reaches the stage as that text.
+func TestMrpDiffStringOverride(t *testing.T) {
+	t.Parallel()
+
+	requireTools(t, "nextflow", "java", "python3")
+
+	runMrpDiffOverride(t, martianBin(t), "literals_edge", "override_string.mro", "params.json", `{"esc": "mro2nf:transpiled"}`)
 }
 
 // runMrpDiffOverride runs fixture under Nextflow with the launch values

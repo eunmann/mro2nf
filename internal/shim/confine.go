@@ -213,7 +213,7 @@ func (c *Confinement) classify(src, p string) (leafKind, error) {
 		return leafInput, nil
 	}
 
-	held, err := c.roots.Holds(p)
+	held, err := c.roots.holdsInput(p)
 	if err != nil {
 		return leafOwn, err
 	}

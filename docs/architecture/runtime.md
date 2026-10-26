@@ -28,13 +28,17 @@ sequenceDiagram
 One task starts every run. It stages the project's copy of the entry's `.mro`
 files (`_assets/mro/`) and compiles it. `mre plan`:
 
-1. overlays the run's entry parameters on the entry's invocation data (a
+1. fails unless it is the `mro2nf` build that transpiled the project, which
+   the project records (`-build`): a project and `mre` of different builds
+   would otherwise fail only at the first task whose flags differ, or run
+   with mismatched behaviour;
+2. overlays the run's entry parameters on the entry's invocation data (a
    string parameter of a scalar input is parsed as its type;
    [Inputs](inputs.md));
-2. rebuilds the call as `mrp`'s invocation generator does (`core.BuildCallAst`);
-3. compiles it over the entry's declarations, so `mrp`'s refusals fail the run
+3. rebuilds the call as `mrp`'s invocation generator does (`core.BuildCallAst`);
+4. compiles it over the entry's declarations, so `mrp`'s refusals fail the run
    before any stage starts;
-4. fails if the call graph has a node, fork root or read the witness lacks
+5. fails if the call graph has a node, fork root or read the witness lacks
    (`Topology.Covers`); a node the invocation disables outright counts only by
    its presence.
 
@@ -55,7 +59,12 @@ output line by line in time quadratic in its lines):
 - **in one record, the forks of every entry-fed root**, keyed by the witness's
   outer roots, each with its fork record and its index token. Each line leads
   with its root, and a node's wiring takes its root's own lines from it
-  (`ENTRY_ROOT`, a lookup by root).
+  (`ENTRY_ROOT`, a lookup by root);
+- **the pipelines' version**, an `eval` value, found once, as `mrp` finds it
+  at its start (`git describe` or a `.version` file), on the include path the
+  stage tasks find the code on, not on PLAN's copy of the `.mro` files. Every
+  job's `_jobinfo` records it, so a commit during a run or across a `-resume`
+  gives no two tasks different versions.
 
 ## Cache identity
 

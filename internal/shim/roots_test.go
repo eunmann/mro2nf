@@ -151,6 +151,53 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 	}
 }
 
+// TestCodeRootsKeepPathsNotLinks (#625): under strict confinement a stage
+// output naming a file in the pipeline's code, which every task finds at
+// the same path, stays the path it is, and resolves no root's real path; a
+// link the stage made into the code is no input the task was given, so the
+// confinement refuses it as any other path outside the task.
+func TestCodeRootsKeepPathsNotLinks(t *testing.T) {
+	code := t.TempDir()
+	shipped := writeSelfNamed(t, filepath.Join(code, "stages", "ship", "shipped.txt"))
+	entry := writeSelfNamed(t, filepath.Join(t.TempDir(), "in", "e.txt"))
+
+	roots := shim.NewRoots(entry).WithCode(code)
+	resolved := shim.CountResolves(roots)
+
+	task := filepath.Join(t.TempDir(), "task")
+
+	link := filepath.Join(task, "main", "files", "linked.txt")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Symlink(shipped, link); err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := shim.ConfineStage(task, "main", true, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := shim.Opts{Confine: conf, Roots: roots}
+
+	bundle := filepath.Join(t.TempDir(), "outs")
+	writeBundle(t, bundle, map[string]any{"out": shipped}, typestest.Fields(t, "out file"), opts)
+
+	if got := readPayload(t, bundle)["out"]; got != shipped {
+		t.Errorf("the code file reads back at %v, want its path %s", got, shipped)
+	}
+
+	if *resolved != 0 {
+		t.Errorf("a path into the code resolved %d roots, want none", *resolved)
+	}
+
+	if _, err := shim.WriteItem(filepath.Join(t.TempDir(), "outs"), map[string]any{"out": link}, typestest.Fields(t, "out file"), fileTable(t), opts, shim.Staged{}); err == nil {
+		t.Error("a stage output linking into the code: nil error, want the confinement's refusal")
+	}
+}
+
 // TestTaskResolvesOnlyWhatItReads: a task of a run reading many entry files
 // in place, each under a symlinked dir, that reads one of them, names it in
 // its args, returns its path and links to it as given resolves no root's

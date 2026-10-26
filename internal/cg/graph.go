@@ -9,6 +9,7 @@ package cg
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"os"
 	"path/filepath"
@@ -214,6 +215,9 @@ func (g *Graph) Params(callable, role string) ([]*syntax.StructMember, error) {
 // MroPaths are the include paths the invocation compiled with, mrp's
 // MROPATH (cmd/mrp/configure.go:247).
 func (g *Graph) MroPaths() []string { return g.mroPaths }
+
+// Stages are the call graph's stage nodes, in no order.
+func (g *Graph) Stages() iter.Seq[*syntax.CallGraphStage] { return maps.Values(g.stages) }
 
 // Stage returns the stage node fqid.
 func (g *Graph) Stage(fqid string) (*syntax.CallGraphStage, error) {

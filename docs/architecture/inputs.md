@@ -17,10 +17,31 @@ flowchart LR
 ```
 
 - **Parameters.** Every entry input is a nullable Nextflow parameter,
-  `params.<name>`; null keeps the transpiled value. PLAN hands them to `mre
-  plan` as one JSON object, which overlays them on the invocation data and
-  recompiles the call. So a launch value can change the run's forks, gates and
-  pruned calls as an invocation literal would under `mrp`.
+  `params.<name>`, which `main.nf`'s `params` block declares with the call's
+  value as its default. Nextflow takes a param's default only where no launch,
+  params file or config sets it, and a `-params-file` null over it
+  (`ParamsDsl.apply`), so an unset input holds the call's value and a null
+  one null. PLAN hands `mre plan` one JSON object of each input whose param
+  is not its default by Java's `equals`, type included (`changed` in
+  `stage.nf`), which an unset input's is, and `mre plan` overlays them on
+  the invocation data and recompiles the call: a null sets the input to
+  null, as a null literal in `mrp`'s invocation does, and an input left out
+  keeps the call's literal as the `.mro` writes it, which a round trip
+  through Groovy and its JSON would re-spell (a float's `-0` as `0`). So a
+  launch value can change the run's forks, gates and pruned calls as an
+  invocation literal would under `mrp`. `conf/base.config` sets no entry
+  input, as a config value would override the default and not a params
+  file's null.
+- **Defaults.** The default is the Groovy literal of the call's value as
+  Martian encodes it (`groovy`), which a function per input returns
+  (`default_<name>()`), so the params block and PLAN's values read one copy
+  of it. A launch value equal to it by Java's `equals` is the same Martian
+  value, so leaving it out changes nothing, and no other value may equal it:
+  a whole number keeps its text, a number with a fraction or an exponent is
+  a `Double`, and a float's negative zero, which Martian encodes as `-0`, is
+  the `Double` `-0.0`, as Groovy's literal `-0` is the int `0`. A string
+  escapes its control characters. A split input's default is the call's
+  split value as `{"split": v}`.
 - **Declared parameters.** `main.nf`'s `params` block declares every launch
   parameter, the entry inputs and the project's own (`paramsBlock`, from the
   same model as `conf/base.config`;
@@ -120,8 +141,10 @@ OUTS, whose post-processing publishes such a file only where it finds it, as
 directory ([Run time](runtime.md#outs)).
 
 - The driver hands each value to `file(x, glob: false)`, so the head node never
-  globs a name, and a task stages its list as `entry/<i>/<name>`. `mre stage
-  -leaves` and `mre outs -leaves` map each value to the path it reads it at.
+  globs a name, and a task stages its list as `entry/<i>/<name>`. The task's
+  script writes the values' indices into a file, so its command line does not
+  grow with them, and `mre stage -leaves` and `mre outs -leaves` read it to map
+  each value to the path the task reads it at.
 - The stage gets a staged value as a leaf linked below its args directory,
   `<task>/args/f/L<nnnn>/<name>`: the same file name and content, at another
   path than the value `mrp` passes.
@@ -145,7 +168,9 @@ itself, the path `mrp` passes.
 - **Read-only roots.** Every task, told the same by `mre stage -host-in-place`,
   computes the run's read-only roots (`shim.Roots`,
   [`Graph.Roots`](../../internal/cg/entry.go)) from the call it compiles: each
-  value read in place, and the S3 mount below. Every bundle writer keeps a leaf
+  value read in place, the S3 mount below, and the pipeline's include path and
+  stages' code directories, which hold the code at the same path in every
+  task ([Bundles](bundles.md#symlinks-and-confinement)). Every bundle writer keeps a leaf
   under a root as the path it is, with no link, copy or origin. So a stage that
   returns its input's path, as Cell Ranger's `SETUP_REFERENCE_INFO` returns
   `reference_path`, posts the path, and no byte of the input is copied into
@@ -156,7 +181,8 @@ itself, the path `mrp` passes.
   then once, so a task reading one of a run's thousands of values in place
   makes no lookup for the rest, each a remote call on a network filesystem.
 - A path in the task's own work directory is under no root, so a stage's own
-  outputs stay its own even below an input directory.
+  outputs stay its own even below an input directory; nor is one in the run's
+  work directory (`mre stage -run-workdir`), which an include path may hold.
 - PLAN, handed the run's work directory (`-run-workdir`), refuses a value that
   is or holds it, which every task would otherwise read as an input.
 - A task's `-resume` key holds the value's path, as `mrp`'s restart keys a

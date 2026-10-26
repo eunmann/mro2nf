@@ -5,7 +5,8 @@
 # whether `b` reads as truthy. expected/override_outs.json is mrp run with the
 # override values as invocation literals. TestMrpDiffFloatOverride launches
 # the float inputs against mrp running override_float_*.mro, whose literals
-# are the launch values.
+# are the launch values, and TestMrpDiffNullOverride sets n and b to null
+# from a params file against mrp running override_null.mro.
 @include "repr.mro"
 
 call CT(

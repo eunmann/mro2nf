@@ -1,0 +1,39 @@
+stage FLOATS(
+    in  float   seed,
+    out float   big,
+    out float   negz,
+    out float   tiny,
+    out float   third,
+    out float   whole,
+    out float[] arr,
+    src py      "stages/floats",
+)
+
+pipeline P(
+    in  float   pz,
+    in  float   pbig,
+    out float   big,
+    out float   negz,
+    out float   tiny,
+    out float   third,
+    out float   whole,
+    out float[] arr,
+    out float   pz,
+    out float   pbig,
+)
+{
+    call FLOATS(
+        seed = self.pz,
+    )
+
+    return (
+        big   = FLOATS.big,
+        negz  = FLOATS.negz,
+        tiny  = FLOATS.tiny,
+        third = FLOATS.third,
+        whole = FLOATS.whole,
+        arr   = FLOATS.arr,
+        pz    = self.pz,
+        pbig  = self.pbig,
+    )
+}

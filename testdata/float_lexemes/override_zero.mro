@@ -1,0 +1,6 @@
+@include "floats.mro"
+
+call P(
+    pz   = 0,
+    pbig = 1e21,
+)

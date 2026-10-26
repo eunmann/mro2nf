@@ -118,7 +118,8 @@ So `mre` decodes every value with `json.Number`
 ([`internal/types/object.go`](../../internal/types/object.go)), which keeps a
 number's bytes, and resolves it with Martian's own types. The driver carries a
 value only as a base64 record `mre` wrote. The launch parameters are the one
-place values cross Groovy's JSON: PLAN serializes them
+place values cross Groovy's JSON: PLAN serializes those a launch set to
+other than the `.mro`'s value
 ([`internal/cgnf/plan.go`](../../internal/cgnf/plan.go)), and `mre plan`
 re-encodes every float in them as `mrp` encodes a literal
 ([`cmd/mre/entryvalues.go`](../../cmd/mre/entryvalues.go)).
@@ -188,6 +189,7 @@ internal/
   types/         the type-directed file-leaf walk over Martian's compiled types
   shim/          bundle I/O, markers, output confinement
   fileio/        the file and record writers, with mrp's modes
+  buildinfo/     the build's name, which a project records and PLAN matches mre against
 ```
 
 Next: [Concepts](concepts.md).
