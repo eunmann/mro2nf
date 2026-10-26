@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
@@ -260,8 +261,8 @@ func (w forkWriter) partner(p partner, fork Fork) error {
 // addPartner indexes a staged partner dir.
 func (s *stagedStore) addPartner(dir string) error {
 	var rec partnerJSON
-	if err := readRecord(filepath.Join(dir, partnerFile), &rec); err != nil {
-		return err
+	if err := fileio.ReadJSON(filepath.Join(dir, partnerFile), &rec); err != nil {
+		return fmt.Errorf("partner element: %w", err)
 	}
 
 	return s.indexPartner(rec, elementItem{dir: dir}, dir)

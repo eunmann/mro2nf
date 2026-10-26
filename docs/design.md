@@ -266,5 +266,5 @@ and [Divergences](divergences.md) is generated from it.
 | [`internal/job`](../internal/job) | one job through `mrjob`, as `mrp` runs it |
 | [`internal/types`](../internal/types) | the file-leaf walk over Martian's compiled types |
 | [`internal/shim`](../internal/shim) | bundles, markers, origins, shapes, confinement |
-| `internal/fileio` | file and record writers with `mrp`'s modes |
+| [`internal/fileio`](../internal/fileio) | file and record writers with `mrp`'s modes |
 | [`internal/buildinfo`](../internal/buildinfo) | the build name a project records and PLAN checks |

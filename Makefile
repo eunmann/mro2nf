@@ -59,7 +59,8 @@ cross: ## Compile every package and test for each release platform
 # paths of mrp's runtime mro2nf never takes; what mrcore adds is measured.
 MRCORE_COPIES := internal/mrcore/(fork|resolve|convert|stage|adapted)\.go:
 cover: ## Unit-test coverage gate: fails below COVER_MIN% total statements
-	@go test -count=1 -coverprofile=artifacts/cover.all.out -coverpkg=./cmd/...,./internal/... ./cmd/... ./internal/... >/dev/null
+	@go test -count=1 -coverprofile=artifacts/cover.all.out -coverpkg=./cmd/...,./internal/... ./cmd/... ./internal/... >artifacts/cover.log 2>&1 \
+		|| { grep -vE '^(ok|\?) ' artifacts/cover.log; exit 1; }
 	@grep -vE '$(MRCORE_COPIES)' artifacts/cover.all.out > artifacts/cover.out
 	@go tool cover -func=artifacts/cover.out | tail -1
 	@go tool cover -func=artifacts/cover.out | awk -v min="$(COVER_MIN)" \

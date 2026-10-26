@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/cg"
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
@@ -88,7 +89,7 @@ func TestEmitProject(t *testing.T) {
 		t.Error("stage.nf is not the stage module")
 	}
 
-	for name, mode := range map[string]os.FileMode{"package.sh": execPerm, "main.nf": filePerm} {
+	for name, mode := range map[string]os.FileMode{"package.sh": fileio.ExecPerm, "main.nf": fileio.FilePerm} {
 		info, err := os.Stat(filepath.Join(out, name))
 		if err != nil || info.Mode().Perm() != mode {
 			t.Errorf("%s mode %v %v, want %v", name, info, err, mode)

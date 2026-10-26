@@ -23,8 +23,9 @@ import (
 var (
 	errNoCall      = errors.New("no top-level call")
 	errUnknownNode = errors.New("unknown call graph node")
-	// errCompilerPanic is a panic of Martian's call-graph builder.
-	errCompilerPanic = errors.New("martian call graph builder panicked")
+	// errCompilerPanic is a panic of Martian's compiler: its parser or its
+	// call-graph builder.
+	errCompilerPanic = errors.New("martian compiler panicked")
 )
 
 // Graph is a compiled invocation's call graph, indexed by stage and by fork
@@ -158,7 +159,7 @@ func callGraph(ast *syntax.Ast, name string) (*syntax.CallGraphPipeline, error) 
 	)
 
 	if p := recovered(func() { root, err = ast.MakePipelineCallGraph("", ast.Call) }); p != nil {
-		return nil, fmt.Errorf("call graph of %s: %w: %v", name, errCompilerPanic, p)
+		return nil, fmt.Errorf("call graph of %s: %w: %v (%T)", name, errCompilerPanic, p, p)
 	}
 
 	if err != nil {

@@ -14,24 +14,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
-)
-
-const (
-	filePerm = 0o644
-	dirPerm  = 0o755
 )
 
 // errDestExists is returned by CopyTree when the destination already exists, to
 // avoid truncating a possibly hard-linked source.
 var errDestExists = errors.New("destination already exists")
-
-// errSymlinkCycle is returned by CopyTree when a directory output reaches one of
-// its own ancestors through a symlink, which would otherwise recurse unbounded.
-var errSymlinkCycle = errors.New("directory symlink cycle")
 
 // ErrBadMarker reports a payload string carrying the reserved marker prefix in
 // a shape mre never writes: a corrupt or forged bundle.
@@ -340,7 +331,7 @@ func LinkLeaves(dir string, payload map[string]any, params []*syntax.StructMembe
 
 // writePayload writes a decoded payload as dir/data.json.
 func writePayload(dir string, payload map[string]any) error {
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	if err := os.MkdirAll(dir, fileio.DirPerm); err != nil {
 		return fmt.Errorf("create bundle %s: %w", dir, err)
 	}
 
@@ -353,7 +344,7 @@ func writePayload(dir string, payload map[string]any) error {
 }
 
 func writeRaw(path string, data []byte) error {
-	if err := os.WriteFile(path, data, filePerm); err != nil {
+	if err := os.WriteFile(path, data, fileio.FilePerm); err != nil {
 		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 
@@ -543,12 +534,12 @@ func (m leafMarker) stage(src, abs, rel string, origin Origin) error {
 		return linkLeaf(abs, dst, origin)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), fileio.DirPerm); err != nil {
 		return fmt.Errorf("create files dir: %w", err)
 	}
 
 	shape := &shapeRecorder{ordinal: filepath.Dir(dst)}
-	if err := copyTree(src, dst, copyWalk{ancestors: map[dirID]struct{}{}, shape: shape}, copyPolicy{conf: m.conf}); err != nil {
+	if err := walkTree(src, copyNode{dst: dst, shape: shape, pol: copyPolicy{conf: m.conf}}); err != nil {
 		return err
 	}
 
@@ -571,14 +562,14 @@ func linkLeaf(abs, dst string, origin Origin) error {
 	}
 
 	if recorded {
-		if err := os.MkdirAll(filepath.Dir(ordinal), dirPerm); err != nil {
+		if err := os.MkdirAll(filepath.Dir(ordinal), fileio.DirPerm); err != nil {
 			return fmt.Errorf("create files dir: %w", err)
 		}
 
 		return linkAt(filepath.Dir(abs), ordinal)
 	}
 
-	if err := os.MkdirAll(ordinal, dirPerm); err != nil {
+	if err := os.MkdirAll(ordinal, fileio.DirPerm); err != nil {
 		return fmt.Errorf("create files dir: %w", err)
 	}
 
@@ -707,19 +698,85 @@ func leafName(src, abs string) (string, error) {
 // for speed, falling back to a byte copy. It follows symlinks to any target,
 // so it is for trees the run was given, not a stage's outputs.
 func CopyTree(src, dst string) error {
-	return copyTree(src, dst, copyWalk{ancestors: map[dirID]struct{}{}}, copyPolicy{})
+	return walkTree(src, copyNode{dst: dst})
 }
 
-// copyWalk is the state copyTree threads through a tree: the identities of
-// the dirs on the recursion stack, and while shape is non-nil, the shape
-// of the leaf it copies, which records each empty dir below it and each
+// copyNode copies the path it visits to dst. While shape is non-nil, it
+// records the shape of the leaf it copies: each empty dir below it and each
 // link that reaches nothing, where a copy without one leaves it out.
-type copyWalk struct {
-	ancestors map[dirID]struct{}
-	shape     *shapeRecorder
+type copyNode struct {
+	dst   string
+	shape *shapeRecorder
+	pol   copyPolicy
 }
 
-// copyPolicy is how copyTree treats the tree it is copying: conf, while
+func (c copyNode) admit(src string) (treeNode, error) {
+	pol, err := c.pol.admit(src)
+	c.pol = pol
+
+	return c, err
+}
+
+func (c copyNode) dangling(src string) error {
+	if c.shape == nil {
+		return nil
+	}
+
+	return c.shape.link(src, c.dst)
+}
+
+func (c copyNode) file(src string, info fs.FileInfo) error {
+	if !c.pol.copyOnly {
+		if err := os.Link(src, c.dst); err == nil {
+			return nil
+		}
+	}
+
+	// Not hard-linked. Refuse to overwrite an existing destination: a
+	// truncating copy over a file already hard-linked elsewhere would corrupt
+	// the shared inode. A genuinely absent dst means the link was unavailable
+	// (e.g. cross-device) or not allowed, so make a byte copy.
+	if _, err := os.Lstat(c.dst); err == nil {
+		return fmt.Errorf("copy %s: %w", c.dst, errDestExists)
+	}
+
+	return copyFileContents(src, c.dst, info)
+}
+
+// dir creates the copy writable regardless of the source's mode, which leave
+// restores after populating: a read-only source directory (e.g. 0555) must
+// still admit its children being written into the copy.
+func (c copyNode) dir() error {
+	if err := os.MkdirAll(c.dst, fileio.DirPerm); err != nil {
+		return fmt.Errorf("mkdir %s: %w", c.dst, err)
+	}
+
+	return nil
+}
+
+func (c copyNode) child(name string) (treeNode, bool) {
+	c.dst = filepath.Join(c.dst, name)
+
+	return c, true
+}
+
+func (c copyNode) leave(info fs.FileInfo, empty bool) error {
+	if empty && c.shape != nil {
+		if err := c.shape.emptyDir(c.dst); err != nil {
+			return err
+		}
+	}
+
+	// Restoring the source mode is best-effort: the exact directory permission is
+	// a nicety, not a contract (publish names every leaf and reads by path), and a
+	// filesystem that rejects the chmod would otherwise fail a copy that the prior
+	// MkdirAll-with-source-mode tolerated. A more-permissive fileio.DirPerm is safe.
+	_ = os.Chmod(c.dst, info.Mode().Perm())
+
+	return nil
+}
+
+// copyPolicy is how copyNode treats the tree it is copying: conf, while
 // non-nil, classifies each entry of a stage's own output (see Confinement), and
 // copyOnly forbids hard links below a host path outside the task.
 type copyPolicy struct {
@@ -748,153 +805,6 @@ func (p copyPolicy) admit(src string) (copyPolicy, error) {
 	default:
 		return p, nil
 	}
-}
-
-// resolveSymlink returns src, or its real target when src is a symlink, and ""
-// for a dangling symlink. Nextflow stages inputs as symlinks, and link(2) does
-// not follow them — hard-linking the symlink would leave a dangling link once
-// the bundle is staged into another isolated task (AWS Batch + S3 /
-// HealthOmics), where the original target is absent. A dangling symlink is
-// left to the caller, which records it in a leaf's shape or leaves it out,
-// rather than aborting the whole bundle.
-func resolveSymlink(src string) (string, error) {
-	lst, err := os.Lstat(src)
-	if err != nil {
-		return "", fmt.Errorf("stat %s: %w", src, err)
-	}
-
-	if lst.Mode()&os.ModeSymlink == 0 {
-		return src, nil
-	}
-
-	resolved, err := filepath.EvalSymlinks(src)
-	if os.IsNotExist(err) {
-		return "", nil
-	}
-
-	if err != nil {
-		return "", fmt.Errorf("resolve symlink %s: %w", src, err)
-	}
-
-	return resolved, nil
-}
-
-// dirID identifies a directory by (device, inode) — the same identity os.SameFile
-// compares — so the copy-tree recursion detects a directory reached twice on one
-// path regardless of the symlink route taken to it.
-type dirID struct {
-	dev, ino uint64
-}
-
-// enterDir records dir's (device, inode) in ancestors for cycle detection. The
-// bool is true when it was already on the recursion stack (a cycle); the returned
-// func pops it on unwind.
-func enterDir(dir os.FileInfo, ancestors map[dirID]struct{}) (func(), bool) {
-	st, ok := dir.Sys().(*syscall.Stat_t)
-	if !ok {
-		return func() {}, false
-	}
-
-	id := dirID{dev: st.Dev, ino: st.Ino}
-	if _, seen := ancestors[id]; seen {
-		return func() {}, true
-	}
-
-	ancestors[id] = struct{}{}
-
-	return func() { delete(ancestors, id) }, false
-}
-
-// copyTree implements CopyTree, threading the set of directory identities already
-// on the recursion stack. A directory output that (via a symlink) points at one
-// of its own ancestors would otherwise recurse until ENAMETOOLONG, duplicating
-// the tree on every pass; catching the repeat (dev, inode) bounds the recursion
-// to the finite number of distinct directories reachable once.
-func copyTree(src, dst string, w copyWalk, pol copyPolicy) error {
-	resolved, err := resolveSymlink(src)
-	if err != nil {
-		return err
-	}
-
-	if resolved == "" {
-		if w.shape == nil {
-			return nil
-		}
-
-		return w.shape.link(src, dst)
-	}
-
-	if pol, err = pol.admit(src); err != nil {
-		return err
-	}
-
-	src = resolved
-
-	info, err := os.Stat(src)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", src, err)
-	}
-
-	if info.IsDir() {
-		release, cycle := enterDir(info, w.ancestors)
-		if cycle {
-			return fmt.Errorf("copy %s: %w", src, errSymlinkCycle)
-		}
-
-		defer release()
-
-		return copyDir(src, dst, info, w, pol)
-	}
-
-	if !pol.copyOnly {
-		if err := os.Link(src, dst); err == nil {
-			return nil
-		}
-	}
-
-	// Not hard-linked. Refuse to overwrite an existing destination: a
-	// truncating copy over a file already hard-linked elsewhere would corrupt
-	// the shared inode. A genuinely absent dst means the link was unavailable
-	// (e.g. cross-device) or not allowed, so make a byte copy.
-	if _, err := os.Lstat(dst); err == nil {
-		return fmt.Errorf("copy %s: %w", dst, errDestExists)
-	}
-
-	return copyFileContents(src, dst, info)
-}
-
-func copyDir(src, dst string, info os.FileInfo, w copyWalk, pol copyPolicy) error {
-	// Create the destination writable regardless of the source's mode, then
-	// restore the source mode after populating: a read-only source directory
-	// (e.g. 0555) must still admit its children being written into the copy.
-	if err := os.MkdirAll(dst, dirPerm); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dst, err)
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return fmt.Errorf("read dir %s: %w", src, err)
-	}
-
-	if len(entries) == 0 && w.shape != nil {
-		if err := w.shape.emptyDir(dst); err != nil {
-			return err
-		}
-	}
-
-	for _, e := range entries {
-		if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), w, pol); err != nil {
-			return err
-		}
-	}
-
-	// Restoring the source mode is best-effort: the exact directory permission is
-	// a nicety, not a contract (publish names every leaf and reads by path), and a
-	// filesystem that rejects the chmod would otherwise fail a copy that the prior
-	// MkdirAll-with-source-mode tolerated. A more-permissive dirPerm is safe.
-	_ = os.Chmod(dst, info.Mode().Perm())
-
-	return nil
 }
 
 // closeChecked closes c and wraps a close(2) failure with name, returning nil on

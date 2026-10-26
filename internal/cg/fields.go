@@ -2,12 +2,12 @@ package cg
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
 	"github.com/martian-lang/martian/martian/syntax"
@@ -72,11 +72,15 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 		refs = append(refs, shim.RefRecords(fd, named)...)
 	}
 
-	if err := writeFile(spec.FieldRefs, shim.JoinRefs(refs)); err != nil {
-		return err
+	if err := fileio.Write(spec.FieldRefs, []byte(shim.JoinRefs(refs))); err != nil {
+		return fmt.Errorf("post fields: %w", err)
 	}
 
-	return writeFile(spec.Values, strings.Join(values, " "))
+	if err := fileio.Write(spec.Values, []byte(strings.Join(values, " "))); err != nil {
+		return fmt.Errorf("post fields: %w", err)
+	}
+
+	return nil
 }
 
 // postedOutputs are the out params of st's stage, in its order, that a
@@ -130,17 +134,8 @@ func (g *Graph) writeGates(in Instance, s store, path string) error {
 		off = append(off, tokens...)
 	}
 
-	return writeFile(path, strings.Join(off, " "))
-}
-
-// writeFile writes text to path, creating its dir.
-func writeFile(path, text string) error {
-	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
-	}
-
-	if err := os.WriteFile(path, []byte(text), filePerm); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	if err := fileio.Write(path, []byte(strings.Join(off, " "))); err != nil {
+		return fmt.Errorf("post gates: %w", err)
 	}
 
 	return nil

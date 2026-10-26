@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/eunmann/mro2nf/internal/fileio"
 )
 
 // TestRecordsRefuseMalformed: an instance stamp or fork record that is
@@ -17,11 +19,11 @@ func TestRecordsRefuseMalformed(t *testing.T) {
 
 	write := func(name, body string) string {
 		dir := f.next(name)
-		if err := os.MkdirAll(dir, dirPerm); err != nil {
+		if err := os.MkdirAll(dir, fileio.DirPerm); err != nil {
 			t.Fatal(err)
 		}
 
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), filePerm); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), fileio.FilePerm); err != nil {
 			t.Fatal(err)
 		}
 
@@ -64,7 +66,7 @@ func TestRecordsRefuseMalformed(t *testing.T) {
 		t.Error("a fork record that is no base64 decoded without error")
 	}
 
-	if err := writeRecord(filepath.Join(write("blocker", ""), "blocker", "el", elementFile), Element{}.encode()); err == nil {
+	if err := fileio.WriteJSON(filepath.Join(write("blocker", ""), "blocker", "el", elementFile), Element{}.encode()); err == nil {
 		t.Error("a fork record wrote below a file")
 	}
 

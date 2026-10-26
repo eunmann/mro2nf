@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/google/go-cmp/cmp"
 )
@@ -428,7 +429,7 @@ func TestForkRecordRoundTrip(t *testing.T) {
 		dir := f.next("fork")
 
 		want := Element{Fork: Fork{f.part("MFU.DBL", MapKey(key))}, Lens: []int{4}, Position: 3}
-		if err := writeRecord(filepath.Join(dir, elementFile), want.encode()); err != nil {
+		if err := fileio.WriteJSON(filepath.Join(dir, elementFile), want.encode()); err != nil {
 			t.Fatal(err)
 		}
 

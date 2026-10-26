@@ -16,13 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/martian-lang/martian/martian/core"
 	"github.com/martian-lang/martian/martian/syntax"
 	"github.com/martian-lang/martian/martian/util"
 )
-
-// DirPerm is the mode of a job's metadata, files and tmp dirs.
-const DirPerm = 0o755
 
 const (
 	disable  = "disable"
@@ -60,7 +58,7 @@ func (r Runtime) newJob(shell, name, sub string) (*job, error) {
 	journal := filepath.Join(work, "journal")
 
 	for _, d := range []string{filepath.Join(dir, filesDir), filepath.Join(dir, tempDir), journal} {
-		if err := os.MkdirAll(d, DirPerm); err != nil {
+		if err := os.MkdirAll(d, fileio.DirPerm); err != nil {
 			return nil, fmt.Errorf("create %s: %w", d, err)
 		}
 	}

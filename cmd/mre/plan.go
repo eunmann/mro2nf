@@ -16,6 +16,7 @@ import (
 
 	"github.com/eunmann/mro2nf/internal/buildinfo"
 	"github.com/eunmann/mro2nf/internal/cg"
+	"github.com/eunmann/mro2nf/internal/fileio"
 	"github.com/eunmann/mro2nf/internal/job"
 	"github.com/eunmann/mro2nf/internal/shim"
 	"github.com/eunmann/mro2nf/internal/types"
@@ -337,12 +338,8 @@ func orDash(s string) string {
 }
 
 func writeText(path, text string) error {
-	if err := os.MkdirAll(filepath.Dir(path), recordDirPerm); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
-	}
-
-	if err := os.WriteFile(path, []byte(text), filePerm); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	if err := fileio.Write(path, []byte(text)); err != nil {
+		return fmt.Errorf("plan: %w", err)
 	}
 
 	return nil

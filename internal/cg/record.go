@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/eunmann/mro2nf/internal/fileio"
 )
 
 // The records the package reads back from the items a task staged, which
@@ -20,9 +22,6 @@ const (
 	taskFile     = "task.json"
 	elementFile  = "fork.json"
 	partnerFile  = "partner.json"
-
-	filePerm = 0o644
-	dirPerm  = 0o755
 )
 
 var (
@@ -65,8 +64,8 @@ type elementJSON struct {
 // readInstance reads the instance stamp in dir, an outs bundle.
 func (g *Graph) readInstance(dir string) (Instance, error) {
 	var rec instanceJSON
-	if err := readRecord(filepath.Join(dir, instanceFile), &rec); err != nil {
-		return Instance{}, err
+	if err := fileio.ReadJSON(filepath.Join(dir, instanceFile), &rec); err != nil {
+		return Instance{}, fmt.Errorf("instance stamp: %w", err)
 	}
 
 	in, err := g.instance(rec)
@@ -100,7 +99,11 @@ func (in Instance) encode() instanceJSON {
 }
 
 func writeInstance(dir string, in Instance) error {
-	return writeRecord(filepath.Join(dir, instanceFile), in.encode())
+	if err := fileio.WriteJSON(filepath.Join(dir, instanceFile), in.encode()); err != nil {
+		return fmt.Errorf("instance stamp: %w", err)
+	}
+
+	return nil
 }
 
 // taskJSON is where a posted outs bundle was written: the dir of the task
@@ -134,7 +137,11 @@ func stampPosted(dir string, in Instance) error {
 		return fmt.Errorf("task dir: %w", err)
 	}
 
-	return writeRecord(filepath.Join(dir, taskFile), taskJSON{Dir: wd, At: filepath.ToSlash(at)})
+	if err := fileio.WriteJSON(filepath.Join(dir, taskFile), taskJSON{Dir: wd, At: filepath.ToSlash(at)}); err != nil {
+		return fmt.Errorf("task record: %w", err)
+	}
+
+	return nil
 }
 
 // readTask reads the task record beside the posted outs bundle dir, and
@@ -142,12 +149,16 @@ func stampPosted(dir string, in Instance) error {
 func readTask(dir string) (taskJSON, bool, error) {
 	var rec taskJSON
 
-	err := readRecord(filepath.Join(dir, taskFile), &rec)
+	err := fileio.ReadJSON(filepath.Join(dir, taskFile), &rec)
 	if errors.Is(err, fs.ErrNotExist) {
 		return rec, false, nil
 	}
 
-	return rec, err == nil, err
+	if err != nil {
+		return rec, false, fmt.Errorf("task record: %w", err)
+	}
+
+	return rec, true, nil
 }
 
 func orEmpty(lens []int) []int {
@@ -161,8 +172,8 @@ func orEmpty(lens []int) []int {
 // ReadElement reads the fork record of the fork element dir.
 func (g *Graph) ReadElement(dir string) (Element, error) {
 	var rec elementJSON
-	if err := readRecord(filepath.Join(dir, elementFile), &rec); err != nil {
-		return Element{}, err
+	if err := fileio.ReadJSON(filepath.Join(dir, elementFile), &rec); err != nil {
+		return Element{}, fmt.Errorf("fork element: %w", err)
 	}
 
 	el, err := g.element(rec)
@@ -213,36 +224,6 @@ func (g *Graph) element(rec elementJSON) (Element, error) {
 
 func (el Element) encode() elementJSON {
 	return elementJSON{Fork: el.Fork.encode(), Lens: el.Lens, Position: el.Position}
-}
-
-func readRecord(path string, v any) error {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-
-	if err := json.Unmarshal(raw, v); err != nil {
-		return fmt.Errorf("decode %s: %w", path, err)
-	}
-
-	return nil
-}
-
-func writeRecord(path string, v any) error {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("encode %s: %w", path, err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
-		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
-	}
-
-	if err := os.WriteFile(path, raw, filePerm); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-
-	return nil
 }
 
 // itemKind reports which record dir holds: instanceFile, elementFile,
