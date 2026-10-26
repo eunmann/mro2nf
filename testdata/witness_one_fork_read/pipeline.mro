@@ -1,0 +1,56 @@
+# #621 (gen seed 1424, shrunk): USE maps over a literal whose first element
+# merges SQ's forks. With one entry element SQ has one fork, which Martian
+# expands into a reference at index 0 in element 0, so the read looks
+# aligned with USE's fork; it reads what the witness's read of every SQ fork
+# at element 0 does.
+stage SQ(
+    in  int x,
+    out int y,
+    src py  "stages/sq",
+)
+
+stage USE(
+    in  int[] ys,
+    out int   n,
+    src py    "stages/use",
+)
+
+pipeline INNER(
+    in  int[]  xs,
+    out SQ[][] groups,
+)
+{
+    map call SQ(
+        x = split self.xs,
+    )
+
+    return (
+        groups = [
+            SQ,
+            null,
+            [],
+        ],
+    )
+}
+
+pipeline TOP(
+    in  int[] xs,
+    out int[] ns,
+)
+{
+    call INNER(
+        xs = self.xs,
+    )
+
+    map call USE(
+        ys = split INNER.groups.y,
+    )
+
+    return (
+        ns = USE.n,
+    )
+}
+
+call TOP(
+    xs = [5],
+)

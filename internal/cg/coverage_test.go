@@ -19,6 +19,7 @@ func TestWitnessCoversLaunch(t *testing.T) {
 	}{
 		{name: "merged literal map call at width 1", fixture: "witness_merged_literal", input: "names", value: `["a"]`},
 		{name: "merged literal map call at width 4", fixture: "witness_merged_literal", input: "names", value: `["a","b","c","d"]`},
+		{name: "one-element nested collection", fixture: "map_chain_partial", input: "xss", value: "[[5]]"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := filepath.Join("..", "..", "testdata", c.fixture)

@@ -83,12 +83,14 @@ type Read struct {
 
 // TopoRoot is one fork root: the outer roots its fork set varies with, the
 // stage whose outs fix its forks, or "" when the invocation's entry values
-// do, and whether its forks are a map's keys, not an array's positions.
+// do, whether its forks are a map's keys, not an array's positions, and
+// whether the call fixes them at exactly one under every outer fork.
 type TopoRoot struct {
 	Fqid     string   `json:"fqid"`
 	Outer    []string `json:"outer"`
 	Producer string   `json:"producer"`
 	Keyed    bool     `json:"keyed"`
+	Single   bool     `json:"single,omitempty"`
 }
 
 // Topology computes g's topology, failing on a shape whose data the
@@ -140,6 +142,7 @@ func (g *Graph) topoRoot(root *syntax.CallGraphStage) (TopoRoot, error) {
 	sp := root.Split()
 	r := TopoRoot{Fqid: root.Fqid, Outer: fqids(g.outerRoots(root)), Keyed: sp != nil && sp.Source.CallMode() == syntax.ModeMapCall}
 	r.Producer, _ = g.Producer(root)
+	r.Single = sp != nil && sp.Source.KnownLength() && (sp.Source.ArrayLength() == 1 || len(sp.Source.Keys()) == 1)
 
 	return r, nil
 }
@@ -529,7 +532,8 @@ var errUncovered = errors.New("the invocation's call graph is not within the tra
 // disables outright only its presence counts, and so do the roots only such
 // nodes are forked on: it runs at no fork.
 func (t Topology) Covers(r Topology) error {
-	errs, live := t.coverNodes(r.Nodes)
+	sh := shapeOf(r)
+	errs, live := t.coverNodes(r.Nodes, sh)
 
 	for _, rr := range r.Roots {
 		if live[rr.Fqid] && !slices.ContainsFunc(t.Roots, func(x TopoRoot) bool {
@@ -540,16 +544,67 @@ func (t Topology) Covers(r Topology) error {
 		}
 	}
 
-	if !readsCovered(t.Outs, r.Outs) {
+	if !readsCovered(t.Outs, r.Outs, sh) {
 		errs = append(errs, fmt.Errorf("%w: pipeline outs reading %v, beyond %v", errUncovered, r.Outs, t.Outs))
 	}
 
 	return errors.Join(errs...)
 }
 
+// shape is what an invocation's call graph fixes that its read patterns
+// mean at: the roots of exactly one fork.
+type shape struct {
+	single map[string]bool
+}
+
+func shapeOf(r Topology) shape {
+	sh := shape{single: map[string]bool{}}
+
+	for _, rr := range r.Roots {
+		sh.single[rr.Fqid] = rr.Single
+	}
+
+	return sh
+}
+
+// at is p as it reads in the invocation sh, and whether it reads at any
+// instance of the reader. An alignment with a root of one fork is the
+// reader's ordinal 0 of the root aligned with, and a limit to elements of a
+// root of one fork either holds at its only instance or at none.
+func (sh shape) at(p ReadPattern) (ReadPattern, bool) {
+	q := ReadPattern{Align: map[string]string{}, When: map[string][]int{}}
+	maps.Copy(q.When, p.When)
+
+	for u, c := range p.Align {
+		if !sh.single[u] {
+			q.Align[u] = c
+
+			continue
+		}
+
+		if ords, ok := q.When[c]; ok {
+			q.When[c] = slices.DeleteFunc(slices.Clone(ords), func(o int) bool { return o != 0 })
+		} else {
+			q.When[c] = []int{0}
+		}
+	}
+
+	for c, ords := range q.When {
+		if sh.single[c] {
+			if !slices.Contains(ords, 0) {
+				return ReadPattern{}, false
+			}
+
+			delete(q.When, c)
+		}
+	}
+
+	return q, true
+}
+
 // coverNodes checks the nodes of r as Covers does, and returns the roots a
 // node r does not disable outright is forked on.
-func (t Topology) coverNodes(rs []TopoNode) ([]error, map[string]bool) {
+func (t Topology) coverNodes(rs []TopoNode, sh shape) ([]error, map[string]bool) {
 	nodes := map[string]TopoNode{}
 	for _, n := range t.Nodes {
 		nodes[n.Fqid] = n
@@ -568,7 +623,7 @@ func (t Topology) coverNodes(rs []TopoNode) ([]error, map[string]bool) {
 		case rn.Off:
 		case n.Stage != rn.Stage || n.Split != rn.Split || !slices.Equal(n.Roots, rn.Roots):
 			errs = append(errs, fmt.Errorf("%w: %s is stage %s forked on %v, not %s forked on %v", errUncovered, rn.Fqid, rn.Stage, rn.Roots, n.Stage, n.Roots))
-		case !readsCovered(n.Reads, rn.Reads) || !gatesCovered(n.Gates, rn.Gates):
+		case !readsCovered(n.Reads, rn.Reads, sh) || !gatesCovered(n.Gates, rn.Gates):
 			errs = append(errs, fmt.Errorf("%w: %s reads %v and is gated by %v, beyond %v and %v", errUncovered, rn.Fqid, rn.Reads, rn.Gates, n.Reads, n.Gates))
 		case !subset(n.Zips, rn.Zips) || !subset(n.Preflights, rn.Preflights):
 			errs = append(errs, fmt.Errorf("%w: %s zips %v and waits for %v, beyond %v and %v", errUncovered, rn.Fqid, rn.Zips, rn.Preflights, n.Zips, n.Preflights))
@@ -583,21 +638,48 @@ func (t Topology) coverNodes(rs []TopoNode) ([]error, map[string]bool) {
 }
 
 // readsCovered reports whether each of want is a read of have, of no more
-// fields, and of the instances have's patterns, which the transpiled
-// project joins it by, give.
-func readsCovered(have, want []Read) bool {
+// fields, and of no instances but those have's patterns, which the
+// transpiled project joins it by, give in the invocation sh.
+func readsCovered(have, want []Read, sh shape) bool {
 	for _, w := range want {
 		i := slices.IndexFunc(have, func(h Read) bool { return h.Node == w.Node })
 		if i < 0 || (have[i].Fields != nil && (w.Fields == nil || !subset(have[i].Fields, w.Fields))) {
 			return false
 		}
 
-		if have[i].Patterns != nil && !slices.EqualFunc(have[i].Patterns, w.Patterns, samePattern) {
+		if !sh.patternsCovered(have[i].Patterns, w.Patterns) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// patternsCovered reports whether, of each instance want reads at, have's
+// patterns give every instance want's do in the invocation sh; nil patterns
+// read every instance.
+func (sh shape) patternsCovered(have, want []ReadPattern) bool {
+	if have == nil {
+		return true
+	}
+
+	if want == nil {
+		want = []ReadPattern{{}}
+	}
+
+	var hs []ReadPattern
+
+	for _, h := range have {
+		if a, ok := sh.at(h); ok {
+			hs = append(hs, a)
+		}
+	}
+
+	return !slices.ContainsFunc(want, func(w ReadPattern) bool {
+		a, ok := sh.at(w)
+
+		return ok && !slices.ContainsFunc(hs, func(h ReadPattern) bool { return h.covers(a) })
+	})
 }
 
 func samePattern(a, b ReadPattern) bool {
