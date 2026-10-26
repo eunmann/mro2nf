@@ -407,8 +407,12 @@ type leafMarker struct {
 // its tree is walked nor its origin recorded.
 func (m leafMarker) mark(leaf string) (string, error) {
 	src := strings.TrimPrefix(leaf, escapePrefix)
-	if src == "" || m.roots.Holds(src) {
+	if src == "" {
 		return leaf, nil
+	}
+
+	if held, err := m.roots.Holds(src); err != nil || held {
+		return leaf, err
 	}
 
 	// A declared output file the stage legitimately never wrote: keep the path
@@ -442,6 +446,10 @@ func (m leafMarker) mark(leaf string) (string, error) {
 	}
 
 	if marker, ok := m.marks[origin.Path]; ok {
+		return marker, nil
+	}
+
+	if marker, ok := m.ownReference(origin); ok {
 		return marker, nil
 	}
 

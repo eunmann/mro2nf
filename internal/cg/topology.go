@@ -130,15 +130,34 @@ func (g *Graph) Topology() (Topology, error) {
 	}
 
 	t.Nodes = dependencyOrder(byID, t.Roots)
+	t.Outs = g.reads(g.outsExps()...)
 
+	return t, nil
+}
+
+// outsExps are what Martian's post-processing of the pipeline outs reads:
+// the gates of the roots whose forks a stage fixes (sourceGates), and the
+// pipeline's outs.
+func (g *Graph) outsExps() []syntax.Exp {
 	outs := g.sourceGates()
 	if ro := g.root.ResolvedOutputs(); ro != nil && ro.Exp != nil {
 		outs = append(outs, ro.Exp)
 	}
 
-	t.Outs = g.reads(outs...)
+	return outs
+}
 
-	return t, nil
+// readsOf are the reads of node's outs: by a stage node's bindings
+// (nodeReads) or by the pipeline outs (Topology.Outs).
+func (g *Graph) readsOf(node string) []Read {
+	all := g.reads(g.outsExps()...)
+
+	for _, fqid := range slices.Sorted(maps.Keys(g.stages)) {
+		r, _ := g.nodeReads(g.stages[fqid])
+		all = append(all, r...)
+	}
+
+	return slices.DeleteFunc(all, func(r Read) bool { return r.Node != node })
 }
 
 func (g *Graph) topoRoot(root *syntax.CallGraphStage) (TopoRoot, error) {

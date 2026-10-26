@@ -19,10 +19,22 @@ across the run's work dir:
 The staging probe reads every task work dir (see probe_task_dirs):
 
   staged_bytes / stage_staged_bytes -- bytes of the inputs Nextflow staged into
-                 all tasks / into stage tasks: what an object-store backend
-                 downloads
+                 all tasks / into stage tasks, and of the run's call each
+                 gets, staged as call.b64 or written by its script: what an
+                 object-store backend downloads
   stage_staged_bytes_max -- per stage process, the most bytes staged into
-                 one of its tasks
+                 one of its tasks, the call left out: it is the invocation
+                 every mrp job's _jobinfo carries too, which grows with the
+                 entry values, not orchestration staging
+  stage_call_bytes_max -- per stage process, the most bytes of the run's
+                 call one of its tasks gets
+  output_bytes -- bytes of the files the stage tasks' declared outputs hold
+                 (the patterns each .command.run header lists), each path
+                 once: what an object-store backend uploads from them
+  job_bytes   -- bytes of the files the stage tasks' jobs wrote into their
+                 files dirs: the data the outputs carry. bench_report.py
+                 holds output_bytes per byte of it to the same at every
+                 width, so no output is written once more per fork
   stage_carried_bytes_max -- per stage process, the most bytes of value
                  records one of its tasks' scripts carries (the values
                  here-document): upstream outs the driver passes by value
@@ -209,7 +221,8 @@ def task_name(m):
 
 
 def read_command_run(d):
-    """Return the task's process base name and the sources its staging links in.
+    """Return the task's process base name, the sources its staging links
+    in, and the source of the call.b64 it stages, or None.
 
     Nextflow writes the links into nxf_stage, or, once they reach
     NXF_WRAPPER_STAGE_FILE_THRESHOLD (1 MB), into .command.stage, which
@@ -232,30 +245,115 @@ def read_command_run(d):
     if os.path.exists(stage_file):
         with open(stage_file) as h:
             staging.extend(h)
-    sources = [s for s in map(link_source, staging) if s]
-    return name.split(" (")[0].split(":")[-1], sources
+    links = [s for s in map(link_source, staging) if s]
+    sources = [src for src, at in links if at != CALL_FILE]
+    call = next((src for src, at in links if at == CALL_FILE), None)
+    return name.split(" (")[0].split(":")[-1], sources, call
 
 
 def link_source(line):
-    """The source of the symlink a staging line makes, or None.
+    """The (source, name) of the symlink a staging line makes, or None.
 
     Nextflow links with `ln -s` up to 26.04 and `ln -sfn` from 26.10, after
-    a `mkdir -p <dir> &&` when the target is nested. The link to call.b64,
-    the run's call a task stages once it outgrows the task's script, is
-    left out: it is the invocation every mrp job's _jobinfo carries too,
-    which grows with the entry values, not orchestration staging.
+    a `mkdir -p <dir> &&` when the target is nested.
     """
     argv = shlex.split(line.split("&& ")[-1])
     if len(argv) == 4 and argv[0] == "ln" and argv[1].startswith("-") and "s" in argv[1]:
-        if argv[3] == CALL_FILE:
-            return None
-        return argv[2]
+        return argv[2], argv[3]
     return None
 
 
 # CALL_FILE is the name a task stages the run's call under (stage.nf's
 # STAGE processes, stageAs: 'call.b64').
 CALL_FILE = "call.b64"
+
+CALL_DOC = ("cat > call.b64 <<'MRO2NF_CALL'", "MRO2NF_CALL")
+
+
+def heredoc_bytes(d, doc):
+    """Bytes of the lines of the here-document doc in the task's script."""
+    path = os.path.join(d, ".command.sh")
+    if not os.path.exists(path):
+        return 0
+    total, inside = 0, False
+    with open(path, "rb") as h:
+        for raw in h:
+            line = raw.decode().rstrip("\n")
+            if not inside and line.strip() == doc[0]:
+                inside = True
+            elif inside and line == doc[1]:
+                inside = False
+            elif inside:
+                total += len(raw)
+    return total
+
+
+def call_bytes(d, staged_call):
+    """Bytes of the run's call the task gets: the call.b64 it staged, or the
+    call its script writes (stage.nf callScript)."""
+    if staged_call:
+        return tree_bytes(staged_call)
+    return heredoc_bytes(d, CALL_DOC)
+
+
+# The YAML header line of each output pattern a task declares, single- or
+# double-quoted, below its `### outputs:` line.
+_OUTPUT = re.compile(r"^### - (?P<quoted>'(?:[^']|'')*'|\".*\")$")
+
+
+def declared_outputs(d):
+    """The output patterns the task's .command.run header declares."""
+    patterns, inside = [], False
+    with open(os.path.join(d, ".command.run")) as h:
+        for line in h:
+            line = line.rstrip("\n")
+            if line == "### outputs:":
+                inside = True
+                continue
+            m = _OUTPUT.match(line) if inside else None
+            if not m:
+                if inside:
+                    break
+                continue
+            q = m.group("quoted")
+            patterns.append(json.loads(q) if q.startswith('"') else q[1:-1].replace("''", "'"))
+    return patterns
+
+
+def regular_files(path):
+    """Yield (path, size) of the regular file at path, or under it, links
+    not followed."""
+    st = os.lstat(path)
+    if stat.S_ISREG(st.st_mode):
+        yield path, st.st_size
+    elif stat.S_ISDIR(st.st_mode):
+        for parent, dirs, files in os.walk(path):
+            for f in files:
+                p = os.path.join(parent, f)
+                fst = os.lstat(p)
+                if stat.S_ISREG(fst.st_mode):
+                    yield p, fst.st_size
+            dirs[:] = [x for x in dirs if not os.path.islink(os.path.join(parent, x))]
+
+
+def output_bytes(d):
+    """Bytes of the files the task's declared outputs hold, each path once:
+    what an object-store work dir uploads from the task."""
+    seen = {}
+    for pattern in declared_outputs(d):
+        for match in glob.glob(os.path.join(glob.escape(d), pattern)):
+            seen.update(regular_files(match))
+    return sum(seen.values())
+
+
+def job_bytes(d):
+    """Bytes of the files the task's stage jobs wrote into their files dirs."""
+    total = 0
+    for info in glob.glob(os.path.join(glob.escape(d), "*", "_jobinfo")):
+        files = os.path.join(os.path.dirname(info), "files")
+        if os.path.isdir(files):
+            total += sum(size for _, size in regular_files(files))
+    return total
 
 
 def tree_files(path):
@@ -326,25 +424,9 @@ def is_probe_copy(path, probe):
         return h.read(len(probe)) == probe
 
 
+# The here-document of the value records a task's script carries (stage.nf
+# valuesFile).
 VALUES_DOC = ("cat > values <<'MRO2NF_VALUES'", "MRO2NF_VALUES")
-
-
-def carried_bytes(d):
-    """Bytes of the value records the task's script carries (stage.nf valuesFile)."""
-    path = os.path.join(d, ".command.sh")
-    if not os.path.exists(path):
-        return 0
-    total, inside = 0, False
-    with open(path, "rb") as h:
-        for raw in h:
-            line = raw.decode().rstrip("\n")
-            if not inside and line.strip() == VALUES_DOC[0]:
-                inside = True
-            elif inside and line == VALUES_DOC[1]:
-                inside = False
-            elif inside:
-                total += len(raw)
-    return total
 
 
 def read_argv_probe(d):
@@ -373,28 +455,35 @@ def probe_task_dirs(workdir, probe, stages):
             "plumbing_probe_refs",
             "max_argv_bytes",
             "max_arg_bytes",
+            "output_bytes",
+            "job_bytes",
         ),
         0,
     )
-    m["stage_staged_bytes_max"] = {}
-    m["stage_carried_bytes_max"] = {}
+    for k in ("stage_staged_bytes_max", "stage_call_bytes_max", "stage_carried_bytes_max"):
+        m[k] = {}
     marker = probe.encode()
     for d in task_dirs(workdir):
-        name, sources = read_command_run(d)
+        name, sources, staged_call = read_command_run(d)
         staged = sum(tree_bytes(s) for s in sources)
+        call = call_bytes(d, staged_call)
         written = list(written_files(d))
         uploaded = sum(size for _, size in written)
         writes = sum(is_probe_copy(path, marker) for path, _ in written)
         m["probe_writes"] += writes
         m["restaged_bytes"] += restaged_bytes(written, sources)
-        m["staged_bytes"] += staged
+        m["staged_bytes"] += staged + call
         m["uploaded_bytes"] += uploaded
         if name in stages:
-            m["stage_staged_bytes"] += staged
-            most = m["stage_staged_bytes_max"]
-            most[name] = max(most.get(name, 0), staged)
-            carried = m["stage_carried_bytes_max"]
-            carried[name] = max(carried.get(name, 0), carried_bytes(d))
+            m["stage_staged_bytes"] += staged + call
+            m["output_bytes"] += output_bytes(d)
+            m["job_bytes"] += job_bytes(d)
+            for k, v in (
+                ("stage_staged_bytes_max", staged),
+                ("stage_call_bytes_max", call),
+                ("stage_carried_bytes_max", heredoc_bytes(d, VALUES_DOC)),
+            ):
+                m[k][name] = max(m[k].get(name, 0), v)
         else:
             m["plumbing_uploaded_bytes"] += uploaded
             if writes or any(is_probe_copy(p, marker) for s in sources for p in tree_files(s)):

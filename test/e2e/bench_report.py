@@ -23,7 +23,11 @@ then applies four independent gates:
     Every group must write, per producer, the same `restaged_bytes` at every
     width (within STAGING_SLACK): a file every fork reads is referenced
     where it was staged, not copied into each fork, by a non-split stage
-    (#498) or a split stage's tasks (#507).
+    (#498) or a split stage's tasks (#507). And no group's stage tasks may
+    declare, as outputs an object-store work dir uploads, more bytes per
+    byte their jobs wrote at a wider width (`output_bytes` / `job_bytes`,
+    within STAGING_SLACK): a file is uploaded once, not once more per fork
+    (#623).
   * mrp-jobs gate -- every lane's `stage_tasks` must equal `mrp_jobs`, the
     jobs real mrp runs for the same invocation: one Nextflow task per Martian
     job, so stage work is neither duplicated nor hidden in plumbing.
@@ -103,6 +107,11 @@ def scaling_group(name):
     return m.group("base")
 
 
+def lane_width(name):
+    """The width N of a <base>_[wc]<N> lane."""
+    return int(re.search(r"(\d+)$", name).group(1))
+
+
 def check_scaling(cur):
     """Fail (rc 1) if any width group's plumbing task count varies with width.
 
@@ -138,7 +147,34 @@ def check_scaling(cur):
         rc = check_group(g, lanes) or rc
         rc = check_staging(g, lanes) or rc
         rc = check_restaged(g, lanes) or rc
+        rc = check_outputs(g, lanes) or rc
     return rc
+
+
+def check_outputs(g, lanes):
+    """Gate a group's declared-output bytes per byte its jobs wrote (rc 1 on
+    failure).
+
+    The data a fixture's jobs write may grow with width; what the stage
+    tasks declare as outputs, which an object-store work dir uploads, may
+    not grow faster: a file written into one more output per fork, or an
+    element carrying every fork's files, raises the ratio with the width.
+    """
+    if any(not m.get("output_bytes") or not m.get("job_bytes") for m in lanes.values()):
+        print(
+            f"OUTPUTS[{g}]: a width measured no declared-output or job bytes; "
+            f"bench_metrics.py (declared_outputs, job_bytes) no longer reads them"
+        )
+        return 1
+    per = {n: round(m["output_bytes"] / m["job_bytes"], 4) for n, m in lanes.items()}
+    by_width = [per[n] for n in sorted(per, key=lane_width)]
+    if any(wide > narrow * STAGING_SLACK for narrow, wide in zip(by_width, by_width[1:])):
+        print(
+            f"OUTPUTS[{g}]: declared-output bytes per byte the jobs wrote must "
+            f"not grow with width (slack {STAGING_SLACK}), got {per}"
+        )
+        return 1
+    return 0
 
 
 def check_restaged(g, lanes):
@@ -347,6 +383,7 @@ def main():
             "OK: no regression vs baseline (refs/plumbing_tasks/tasks); "
             "plumbing is width-flat outside known-scaling groups; "
             "restaged bytes per producer are width-flat; "
+            "declared-output bytes per job byte do not grow with width; "
             "stage tasks equal mrp jobs; every lane staged its inputs; "
             "no plumbing task moved a published file"
         )

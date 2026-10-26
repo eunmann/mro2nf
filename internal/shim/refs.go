@@ -3,6 +3,7 @@ package shim
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -27,9 +28,11 @@ var (
 
 // Staged are the dirs a task staged, each one item, its producer's bundle,
 // or a dir of items, by the path the task was given it at: the item a file
-// it names by reference lies in is named by that path.
+// it names by reference lies in is named by that path. Own adds the
+// bundles the task wrote itself.
 type Staged struct {
 	dirs []stagedDir
+	own  map[string]Ref
 }
 
 type stagedDir struct {
@@ -77,6 +80,47 @@ func (s Staged) Leaves() (Refs, error) {
 	}
 
 	return r, nil
+}
+
+// Own is s with the leaves of the bundles in dir, a dir of bundles the task
+// wrote, by the path it names dir by: a bundle the task writes after names
+// a leaf of the same origin by reference to the bundle it lies in, so its
+// file is written, and uploaded from an object-store work dir, once. A
+// post's fork and partner elements name the files of its outs this way.
+func (s Staged) Own(dir string) (Staged, error) {
+	ordinals, err := filepath.Glob(filepath.Join(dir, "*", bundleFiles, "*"))
+	if err != nil {
+		return Staged{}, fmt.Errorf("own leaves %s: %w", dir, err)
+	}
+
+	own := maps.Clone(s.own)
+	if own == nil {
+		own = map[string]Ref{}
+	}
+
+	for _, ordinal := range ordinals {
+		if !ordinalDir.MatchString(filepath.Base(ordinal)) {
+			continue
+		}
+
+		o, recorded, err := readOrdinalOrigin(ordinal)
+		if err != nil {
+			return Staged{}, fmt.Errorf("own leaf %s: %w", ordinal, err)
+		}
+
+		if !recorded {
+			return Staged{}, fmt.Errorf("%w: %s", errUnrecordedOrdinal, ordinal)
+		}
+
+		if _, ok := own[o.record()]; !ok {
+			bundle := filepath.Base(filepath.Dir(filepath.Dir(ordinal)))
+			own[o.record()] = Ref{Item: path.Join(filepath.ToSlash(dir), bundle), Ordinal: path.Join(bundleFiles, filepath.Base(ordinal))}
+		}
+	}
+
+	s.own = own
+
+	return s, nil
 }
 
 // ordinals are the absolute paths below the items s holds, items in the
@@ -203,8 +247,9 @@ func readLink(p string) (string, bool, error) {
 // file leaf located by params/tbl is copied into its ordinal dir below
 // dir/f/ beside its origin record and replaced with a marker, then the
 // rewritten payload is written to dir/data.json. A leaf that is a whole leaf
-// of a bundle the task staged (staged) it names by reference rather than
-// copying it: a marker of the leaf's origin, which a reader resolves among
+// of a bundle the task staged (staged), or whose origin a leaf of a bundle
+// it wrote has (Staged.Own), it names by reference rather than copying
+// it: a marker of the leaf's origin, which a reader resolves among
 // the leaves it staged (Staged.Leaves), where its readers stage it from the
 // item it lies in. It returns those references, one per origin. Last it
 // writes the bundle's skeleton (SkeletonFile), so a record written into
@@ -247,6 +292,20 @@ func (m leafMarker) reference(abs string) (string, bool, error) {
 	*m.refs = append(*m.refs, ref)
 
 	return m.marks[o.Path], true, nil
+}
+
+// ownReference is the marker of a leaf of origin o that a bundle the task
+// wrote holds (Staged.Own), and true, recording the reference.
+func (m leafMarker) ownReference(o Origin) (string, bool) {
+	ref, ok := m.staged.own[o.record()]
+	if !ok || m.refs == nil {
+		return "", false
+	}
+
+	m.marks[o.Path] = refPrefix + o.record()
+	*m.refs = append(*m.refs, ref)
+
+	return m.marks[o.Path], true
 }
 
 // copied is how many leaves the writer has copied or linked into the

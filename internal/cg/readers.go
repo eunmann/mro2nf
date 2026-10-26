@@ -9,13 +9,14 @@ import (
 )
 
 // postReaders is what a node's post writes for the nodes that read its
-// outs, beyond its own spec: per root its outs fix the forks of, the root
-// and the outer roots whose forks it enumerates; each partner of its
-// outputs; each disable binding whose
-// value it posts, with the roots that binding is forked on beyond the
-// node's. A task's cache key holds it, so a re-transpile that changes it
-// re-runs the node, whose cached post would write for the old readers.
+// outs, beyond its own spec: the outputs a reader reads (postedOutputs);
+// per root its outs fix the forks of, the root and the outer roots whose
+// forks it enumerates; each partner of its outputs; each disable binding
+// whose value it posts, with the roots that binding is forked on beyond
+// the node's. A task's cache key holds it, so a re-transpile that changes
+// it re-runs the node, whose cached post would write for the old readers.
 type postReaders struct {
+	Outs     []string  `json:"outs"`
 	Roots    []fedRoot `json:"roots"`
 	Partners []rootZip `json:"partners"`
 	Gates    []gateKey `json:"gates"`
@@ -51,7 +52,16 @@ type gateKey struct {
 }
 
 func (g *Graph) postReaders(st *syntax.CallGraphStage) (postReaders, error) {
-	out := postReaders{Roots: []fedRoot{}, Partners: []rootZip{}, Gates: []gateKey{}}
+	out := postReaders{Outs: []string{}, Roots: []fedRoot{}, Partners: []rootZip{}, Gates: []gateKey{}}
+
+	posted, err := g.postedOutputs(st)
+	if err != nil {
+		return postReaders{}, err
+	}
+
+	for _, p := range posted {
+		out.Outs = append(out.Outs, p.Id)
+	}
 
 	for _, root := range g.fedBy(st.Fqid) {
 		out.Roots = append(out.Roots, fedRoot{Root: g.rootKey(root), Outer: g.rootKeys(g.outerRoots(root))})

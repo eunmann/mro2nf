@@ -62,12 +62,46 @@ func planEntry(t *testing.T, dir, values string, flags ...string) (string, error
 func planCall(t *testing.T, work string) string {
 	t.Helper()
 
-	call, err := base64.StdEncoding.DecodeString(readText(t, filepath.Join(work, "call")))
+	call, err := decodeCall(readText(t, filepath.Join(work, "call")))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return string(call)
+	return call
+}
+
+// TestCallIsCompressed (#623): the run's call every task gets is base64 of
+// its gzip, the same bytes each time PLAN writes it, so a re-run PLAN keeps
+// every task's -resume key, and a call naming 10,000 files, each task's
+// to read, is a small share of its base64.
+func TestCallIsCompressed(t *testing.T) {
+	var call strings.Builder
+
+	call.WriteString("call P(\n    reads = [\n")
+
+	for i := range 10000 {
+		fmt.Fprintf(&call, "        \"/data/project/sample_%05d/reads_R1.fastq.gz\",\n", i)
+	}
+
+	call.WriteString("    ],\n)\n")
+
+	first, err := encodeCall(call.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := encodeCall(call.String())
+	if err != nil || again != first {
+		t.Fatalf("encoding the call twice: %v, the same bytes %t", err, again == first)
+	}
+
+	if got, err := decodeCall(first); err != nil || got != call.String() {
+		t.Fatalf("the call decodes to %d bytes (%v), want its %d", len(got), err, call.Len())
+	}
+
+	if plain := base64.StdEncoding.EncodedLen(call.Len()); len(first)*10 > plain {
+		t.Errorf("the call is %d bytes encoded, %d as plain base64, want under a tenth", len(first), plain)
+	}
 }
 
 func readText(t *testing.T, path string) string {
@@ -240,8 +274,12 @@ func TestArgsReadsAWideCallFromItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wide := planCall(t, work) + "\n# " + strings.Repeat("w", 256<<10) + "\n"
-	call := writeTestFile(t, filepath.Join(work, "wide.b64"), base64.StdEncoding.EncodeToString([]byte(wide))+"\n")
+	wide, err := encodeCall(planCall(t, work) + "\n# " + strings.Repeat("w", 256<<10) + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call := writeTestFile(t, filepath.Join(work, "wide.b64"), wide+"\n")
 	fx, args := fixtureDir(t, "chain_gate"), filepath.Join(work, "args")
 
 	_, got, err := argsStep(graphFlags{entry: filepath.Join(fx, "pipeline.mro"), call: call, mropath: fx}, argsFlags{node: "CH.SRC"}, args)
