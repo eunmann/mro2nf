@@ -37,15 +37,19 @@ type Plan struct {
 // resolved spec in the invocation and what its post writes for its readers,
 // so a task's cache key changes only with its own node and those. Off
 // disables every instance; OffAt the instances, by fork key, a static
-// per-fork binding disables. Files are the entry files its instances read.
-// Stage is the stage it runs, which the pipeline outs' node has none of.
+// per-fork binding disables. Collapse are the positions of the witness
+// node's roots the invocation's node is not forked on: its job is the same
+// at every fork of them, which runs at their ordinal 0 only and serves the
+// rest. Files are the entry files its instances read. Stage is the stage it
+// runs, which the pipeline outs' node has none of.
 type PlanNode struct {
-	Fqid   string
-	Digest string
-	Off    bool
-	OffAt  []string
-	Files  []PlanFiles
-	Stage  *syntax.Stage
+	Fqid     string
+	Digest   string
+	Off      bool
+	OffAt    []string
+	Collapse []int
+	Files    []PlanFiles
+	Stage    *syntax.Stage
 }
 
 // PlanFork is one fork of an entry-fed root: its fork key, the ordinals of
@@ -398,6 +402,12 @@ func (g *Graph) planNode(n TopoNode, wt Topology, planned *plannedForks, leaves 
 
 	if pn.Off {
 		return pn, nil
+	}
+
+	for x, root := range n.Roots {
+		if !slices.ContainsFunc(st.ForkRoots(), func(r *syntax.CallGraphStage) bool { return r.Fqid == root }) {
+			pn.Collapse = append(pn.Collapse, x)
+		}
 	}
 
 	if pn.OffAt, err = g.staticOff(st, n, wt, planned); err != nil {

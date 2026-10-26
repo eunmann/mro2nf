@@ -74,7 +74,8 @@ func checkCovered(src Source, dir string) error {
 }
 
 // TestCoversRefuses: a call graph with a node, a read or a fork root the
-// witness lacks is not covered.
+// witness lacks is not covered; one whose node is forked on fewer of the
+// witness's roots is (#621).
 func TestCoversRefuses(t *testing.T) {
 	w := Topology{
 		Nodes: []TopoNode{{Fqid: "P.A", Stage: "A"}, {Fqid: "P.B", Stage: "B", Roots: []string{"P.B"}, Reads: []Read{{Node: "P.A", Fields: []string{"x"}}}}},
@@ -83,7 +84,7 @@ func TestCoversRefuses(t *testing.T) {
 
 	for name, r := range map[string]Topology{
 		"node":  {Nodes: []TopoNode{{Fqid: "P.C", Stage: "C"}}},
-		"roots": {Nodes: []TopoNode{{Fqid: "P.B", Stage: "B"}}},
+		"roots": {Nodes: []TopoNode{{Fqid: "P.A", Stage: "A", Roots: []string{"P.B"}}}},
 		"read":  {Nodes: []TopoNode{{Fqid: "P.B", Stage: "B", Roots: []string{"P.B"}, Reads: []Read{{Node: "P.A"}}}}},
 		"feed":  {Nodes: w.Nodes[1:], Roots: []TopoRoot{{Fqid: "P.B", Producer: "P.A"}}},
 	} {
@@ -92,8 +93,13 @@ func TestCoversRefuses(t *testing.T) {
 		}
 	}
 
-	if err := w.Covers(Topology{Nodes: w.Nodes[1:], Roots: w.Roots}); err != nil {
-		t.Errorf("a subset is not covered: %v", err)
+	for name, r := range map[string]Topology{
+		"a subset":    {Nodes: w.Nodes[1:], Roots: w.Roots},
+		"fewer roots": {Nodes: []TopoNode{{Fqid: "P.B", Stage: "B", Reads: w.Nodes[1].Reads}}},
+	} {
+		if err := w.Covers(r); err != nil {
+			t.Errorf("%s is not covered: %v", name, err)
+		}
 	}
 }
 

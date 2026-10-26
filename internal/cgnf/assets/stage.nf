@@ -628,10 +628,39 @@ workflow GATE {
     next
 
     main:
-    out = inst.combine(nodes).map { k, fs, es, _tk, ns, c ->
+    out = inst.combine(nodes).filter { k, _fs, _es, _tk, ns, _c -> representative(k, ns[meta.node]) == null }.map { k, fs, es, _tk, ns, c ->
         def r = ns[meta.node]
         [k[next], k, fs, es, planned(c, meta, r), r[1] == '1' || r[2].contains(k.join('.'))]
     }
+
+    emit:
+    out
+}
+
+// representative is, of instance key k of a node whose PLAN record is r,
+// the key of the instance that runs its job, where the invocation's node is
+// not forked on some of the roots k has ordinals of (r[6], positions in
+// k): its job is the same at every fork of them, which runs at ordinal 0
+// of each and serves the rest. It is null for an instance that runs its own.
+def representative(List k, List r) {
+    def collapse = r[6] == '-' ? [] : r[6].tokenize(',').collect { x -> x as int }
+    if (!collapse.any { x -> k[x] != 0 }) {
+        return null
+    }
+    return (0..<k.size()).collect { x -> x in collapse ? 0 : k[x] }
+}
+
+// ALIASES pairs each instance of a node that runs no job of its own, by its
+// key, with its representative's, whose posted items serve it (POSTED,
+// GATES).
+workflow ALIASES {
+    take:
+    inst
+    nodes
+    meta
+
+    main:
+    out = inst.combine(nodes).map { k, _fs, _es, _tk, ns, _c -> [representative(k, ns[meta.node]), k] }.filter { v -> v[0] != null }
 
     emit:
     out
@@ -643,9 +672,11 @@ workflow GATES {
     take:
     posted
     skip
+    aliases
 
     main:
-    out = posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })
+    own = posted.map { v -> [v[0], v[7].tokenize(' ').toSet()] }.mix(skip.map { v -> [v[1], [].toSet()] })
+    out = own.mix(aliases.combine(own, by: 0).map { _r, k, gs -> [k, gs] })
 
     emit:
     out
@@ -1025,16 +1056,19 @@ workflow DONE {
 // the dirs, value records and refs at positions at to at + 2 of what its
 // task posted. A dir names a file by reference where its producer wrote
 // it, which POSTED finds among the sources of the instance's posting task
-// (SOURCES), by its key.
+// (SOURCES), by its key. An instance that runs no job of its own takes its
+// representative's (ALIASES).
 workflow POSTED {
     take:
     posted
     skip
     sources
     at
+    aliases
 
     main:
-    all = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
+    own = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
+    all = own.mix(aliases.combine(own, by: 0).map { _r, k, items -> [k, items] })
 
     emit:
     all

@@ -1,0 +1,64 @@
+# #621 (a): PAIR maps over ys within each sample and reads the sample's
+# EXTRA. An entry flag disables EXTRA in every sample, so EXTRA.y is a
+# constant null and Martian forks PAIR on its own split only, not on the
+# sample: mrp runs one PAIR job per element of ys. The witness forks it on
+# both.
+stage VAL(
+    in  int x,
+    out int y,
+    src py  "stages/val",
+)
+
+stage PAIR(
+    in  int y,
+    in  int extra,
+    out int z,
+    src py  "stages/pair",
+)
+
+pipeline PER_SAMPLE(
+    in  int   x,
+    in  int[] ys,
+    in  bool  off,
+    out int[] zs,
+)
+{
+    call VAL as EXTRA(
+        x = self.x,
+    ) using (
+        disabled = self.off,
+    )
+
+    map call PAIR(
+        y     = split self.ys,
+        extra = EXTRA.y,
+    )
+
+    return (
+        zs = PAIR.z,
+    )
+}
+
+pipeline TOP(
+    in  int[]   xs,
+    in  int[]   ys,
+    in  bool    off,
+    out int[][] zss,
+)
+{
+    map call PER_SAMPLE(
+        x   = split self.xs,
+        ys  = self.ys,
+        off = self.off,
+    )
+
+    return (
+        zss = PER_SAMPLE.zs,
+    )
+}
+
+call TOP(
+    xs  = [1, 2],
+    ys  = [1, 2, 3],
+    off = true,
+)

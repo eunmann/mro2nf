@@ -523,12 +523,15 @@ func addRead(fields map[string]map[string]bool, ref *syntax.RefExp) {
 var errUncovered = errors.New("the invocation's call graph is not within the transpiled one")
 
 // Covers checks that every node, fork root and read of r is one of t's: the
-// stage nodes of r with the same stage and fork roots, reading no stage
-// outs and gated by no stage t's does not, and every fork root fed by the
-// same producer, varying with the same outer roots. An entry-fed root may
-// vary with fewer: nested entry collections all of one length are a source
-// of known length, which varies with none (syntax InnerMapSource), and the
-// plan repeats its forks under every outer fork (entryForks). Of a node r
+// stage nodes of r with the same stage, forked on t's roots or fewer,
+// reading no stage outs and gated by no stage t's does not, and every fork
+// root fed by the same producer, varying with the same outer roots. A node
+// forked on fewer is one Martian found constant across the others, which
+// an entry value can make it (#621); the driver runs it once per fork of
+// those it keeps (PlanNode.Collapse). An entry-fed root may vary with
+// fewer: nested entry collections all of one length are a source of known
+// length, which varies with none (syntax InnerMapSource), and the plan
+// repeats its forks under every outer fork (entryForks). Of a node r
 // disables outright only its presence counts, and so do the roots only such
 // nodes are forked on: it runs at no fork.
 func (t Topology) Covers(r Topology) error {
@@ -552,13 +555,19 @@ func (t Topology) Covers(r Topology) error {
 }
 
 // shape is what an invocation's call graph fixes that its read patterns
-// mean at: the roots of exactly one fork.
+// mean at: the roots each node is forked on, and the roots of exactly one
+// fork.
 type shape struct {
+	roots  map[string][]string
 	single map[string]bool
 }
 
 func shapeOf(r Topology) shape {
-	sh := shape{single: map[string]bool{}}
+	sh := shape{roots: map[string][]string{}, single: map[string]bool{}}
+
+	for _, n := range r.Nodes {
+		sh.roots[n.Fqid] = n.Roots
+	}
 
 	for _, rr := range r.Roots {
 		sh.single[rr.Fqid] = rr.Single
@@ -567,25 +576,27 @@ func shapeOf(r Topology) shape {
 	return sh
 }
 
-// at is p as it reads in the invocation sh, and whether it reads at any
-// instance of the reader. An alignment with a root of one fork is the
+// at is p as it reads instances of up in the invocation sh, and whether it
+// reads at any instance of the reader. An alignment with a root up is not
+// forked on in sh constrains nothing: every instance of up under that root
+// is the one instance sh runs. One with a root of one fork is the
 // reader's ordinal 0 of the root aligned with, and a limit to elements of a
 // root of one fork either holds at its only instance or at none.
-func (sh shape) at(p ReadPattern) (ReadPattern, bool) {
+func (sh shape) at(p ReadPattern, up string) (ReadPattern, bool) {
 	q := ReadPattern{Align: map[string]string{}, When: map[string][]int{}}
 	maps.Copy(q.When, p.When)
 
 	for u, c := range p.Align {
-		if !sh.single[u] {
+		switch {
+		case !slices.Contains(sh.roots[up], u):
+		case sh.single[u]:
+			if ords, ok := q.When[c]; ok {
+				q.When[c] = slices.DeleteFunc(slices.Clone(ords), func(o int) bool { return o != 0 })
+			} else {
+				q.When[c] = []int{0}
+			}
+		default:
 			q.Align[u] = c
-
-			continue
-		}
-
-		if ords, ok := q.When[c]; ok {
-			q.When[c] = slices.DeleteFunc(slices.Clone(ords), func(o int) bool { return o != 0 })
-		} else {
-			q.When[c] = []int{0}
 		}
 	}
 
@@ -621,7 +632,7 @@ func (t Topology) coverNodes(rs []TopoNode, sh shape) ([]error, map[string]bool)
 		case !ok:
 			errs = append(errs, fmt.Errorf("%w: stage node %s", errUncovered, rn.Fqid))
 		case rn.Off:
-		case n.Stage != rn.Stage || n.Split != rn.Split || !slices.Equal(n.Roots, rn.Roots):
+		case n.Stage != rn.Stage || n.Split != rn.Split || !subset(n.Roots, rn.Roots):
 			errs = append(errs, fmt.Errorf("%w: %s is stage %s forked on %v, not %s forked on %v", errUncovered, rn.Fqid, rn.Stage, rn.Roots, n.Stage, n.Roots))
 		case !readsCovered(n.Reads, rn.Reads, sh) || !gatesCovered(n.Gates, rn.Gates):
 			errs = append(errs, fmt.Errorf("%w: %s reads %v and is gated by %v, beyond %v and %v", errUncovered, rn.Fqid, rn.Reads, rn.Gates, n.Reads, n.Gates))
@@ -647,7 +658,7 @@ func readsCovered(have, want []Read, sh shape) bool {
 			return false
 		}
 
-		if !sh.patternsCovered(have[i].Patterns, w.Patterns) {
+		if !sh.patternsCovered(have[i].Patterns, w.Patterns, w.Node) {
 			return false
 		}
 	}
@@ -655,10 +666,10 @@ func readsCovered(have, want []Read, sh shape) bool {
 	return true
 }
 
-// patternsCovered reports whether, of each instance want reads at, have's
-// patterns give every instance want's do in the invocation sh; nil patterns
-// read every instance.
-func (sh shape) patternsCovered(have, want []ReadPattern) bool {
+// patternsCovered reports whether, of each instance want reads up at,
+// have's patterns give every instance want's do in the invocation sh; nil
+// patterns read every instance.
+func (sh shape) patternsCovered(have, want []ReadPattern, up string) bool {
 	if have == nil {
 		return true
 	}
@@ -670,13 +681,13 @@ func (sh shape) patternsCovered(have, want []ReadPattern) bool {
 	var hs []ReadPattern
 
 	for _, h := range have {
-		if a, ok := sh.at(h); ok {
+		if a, ok := sh.at(h, up); ok {
 			hs = append(hs, a)
 		}
 	}
 
 	return !slices.ContainsFunc(want, func(w ReadPattern) bool {
-		a, ok := sh.at(w)
+		a, ok := sh.at(w, up)
 
 		return ok && !slices.ContainsFunc(hs, func(h ReadPattern) bool { return h.covers(a) })
 	})
