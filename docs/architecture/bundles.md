@@ -138,11 +138,14 @@ reconstructs by its origin ([The `mre` shim](mre.md#mre-outs)).
 copies the directory's files, following links, but some of what the stage
 wrote cannot travel as a file:
 
+- An empty directory. An upload of the bundle to S3 (`aws s3 cp
+  --recursive`) creates no object for it.
 - A link that reaches nothing. It has no content to copy, and an upload of
   the bundle to S3 skips it and exits 2 (`aws s3 cp`), which fails the task.
 
-`WriteItem` records each such entry of a leaf in `.mre-shape` beside it: a
-link by its path and the target text the stage gave it (#624). Before it reads
+`WriteItem` records each such entry of a leaf in `.mre-shape` beside it: an
+empty directory by its path, and a link by its path and the target text the
+stage gave it (#624). Before it reads
 anything, every task restores what the shapes of the leaves it staged record,
 in its items and in the ordinal directories it staged by reference
 ([`shim.Staged.Restore`](../../internal/shim/shape.go)): in its own copy of a

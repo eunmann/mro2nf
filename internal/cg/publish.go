@@ -536,17 +536,21 @@ const externalDir = "external"
 
 // published is one entry of the published tree: its path in the tree and
 // the file the run publishes it from, where the task that wrote it keeps
-// it, or, Local, a path beside the manifest.
+// it, or, Local, a path beside the manifest. Dir is an empty dir beside
+// the manifest, which the driver makes again before it publishes it, as
+// an object store keeps no empty dir of OUTS's upload.
 type published struct {
 	Path   string `json:"path"`
 	Source string `json:"source"`
 	Local  bool   `json:"local,omitempty"`
+	Dir    bool   `json:"dir,omitempty"`
 }
 
 // manifest writes to path the published tree at outs/ as the entries the
 // run publishes, by path: each file PostProcess moved or linked into
 // outs/, a link as what it reaches, since a publish dir may be an object
-// store, and a placed dir whole.
+// store, and a placed dir whole, but for one holding an empty dir, whose
+// entries it lists each (placedEntries).
 func (p *pipestance) manifest(path string) error {
 	entries, err := p.entries(filepath.Dir(path))
 	if err != nil {
@@ -579,14 +583,25 @@ func (p *pipestance) entries(dir string) ([]published, error) {
 			return err
 		}
 
-		e, err := p.publishedAt(rel, src, dir)
+		if !whole {
+			e, err := p.publishedAt(rel, src, dir)
+			if err != nil {
+				return err
+			}
+
+			entries = append(entries, e)
+
+			return nil
+		}
+
+		es, err := p.placedEntries(at, rel, src, dir)
 		if err != nil {
 			return err
 		}
 
-		entries = append(entries, e)
+		entries = append(entries, es...)
 
-		if whole && d.IsDir() {
+		if d.IsDir() {
 			return filepath.SkipDir
 		}
 
@@ -597,6 +612,105 @@ func (p *pipestance) entries(dir string) ([]published, error) {
 	}
 
 	return entries, nil
+}
+
+// placedEntries are the entries of the placed dir at at, rel in outs/,
+// published from src: the dir whole, or, where it holds an empty dir,
+// which a copy of the dir from an object store does not carry, each of its
+// entries, an empty dir as itself (emptyDirAt). No entry lies below
+// another, which Nextflow would publish over it.
+func (p *pipestance) placedEntries(at, rel string, src placedSource, dir string) ([]published, error) {
+	names, err := os.ReadDir(at)
+	if err != nil {
+		return nil, fmt.Errorf("published dir outs/%s: %w", rel, err)
+	}
+
+	if len(names) == 0 {
+		e, err := p.emptyDirAt(rel, dir)
+
+		return []published{e}, err
+	}
+
+	hollow, err := holdsEmptyDir(at)
+	if err != nil {
+		return nil, fmt.Errorf("published dir outs/%s: %w", rel, err)
+	}
+
+	if !hollow {
+		e, err := p.publishedAt(rel, src, dir)
+
+		return []published{e}, err
+	}
+
+	var out []published
+
+	for _, n := range names {
+		childAt, childRel, childSrc := filepath.Join(at, n.Name()), rel+"/"+n.Name(), src.below(string(filepath.Separator)+n.Name())
+
+		info, err := os.Stat(childAt)
+		if err != nil {
+			return nil, fmt.Errorf("published dir outs/%s: %w", rel, err)
+		}
+
+		var es []published
+		if info.IsDir() {
+			es, err = p.placedEntries(childAt, childRel, childSrc, dir)
+		} else {
+			var e published
+			e, err = p.publishedAt(childRel, childSrc, dir)
+			es = []published{e}
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, es...)
+	}
+
+	return out, nil
+}
+
+// holdsEmptyDir reports whether dir is or holds an empty dir.
+func holdsEmptyDir(dir string) (bool, error) {
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return false, fmt.Errorf("read dir %s: %w", dir, err)
+	}
+
+	if len(names) == 0 {
+		return true, nil
+	}
+
+	for _, n := range names {
+		info, err := os.Stat(filepath.Join(dir, n.Name()))
+		if err != nil {
+			return false, fmt.Errorf("stat %s: %w", filepath.Join(dir, n.Name()), err)
+		}
+
+		if !info.IsDir() {
+			continue
+		}
+
+		if hollow, err := holdsEmptyDir(filepath.Join(dir, n.Name())); err != nil || hollow {
+			return hollow, err
+		}
+	}
+
+	return false, nil
+}
+
+// emptyDirAt is the entry of the empty dir at rel in the tree: an empty
+// dir below dir, external/<n>/, which the run publishes as the empty dir.
+func (p *pipestance) emptyDirAt(rel, dir string) (published, error) {
+	p.n++
+	local := path.Join(externalDir, strconv.Itoa(p.n), path.Base(rel))
+
+	if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(local)), dirPerm); err != nil {
+		return published{}, fmt.Errorf("publish outs/%s: %w", rel, err)
+	}
+
+	return published{Path: rel, Source: local, Local: true, Dir: true}, nil
 }
 
 // publishedAt is the entry at rel in the tree published from src: a file

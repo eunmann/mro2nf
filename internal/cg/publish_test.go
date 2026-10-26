@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -389,7 +390,8 @@ func readManifest(t *testing.T, path string) []published {
 // publishManifest publishes the tree the manifest at path lists into
 // results, as the run's workflow outputs do: each entry's source, a task's
 // file at the path local maps it to here or a path beside the manifest,
-// copied to the entry's path below results.
+// an empty dir's made again first, copied to the entry's path below
+// results.
 func publishManifest(t *testing.T, path, results string, local func(string) string) {
 	t.Helper()
 
@@ -402,6 +404,12 @@ func publishManifest(t *testing.T, path, results string, local func(string) stri
 		src := local(e.Source)
 		if e.Local {
 			src = filepath.Join(filepath.Dir(path), filepath.FromSlash(e.Source))
+		}
+
+		if e.Dir {
+			if err := os.MkdirAll(src, 0o755); err != nil {
+				t.Fatal(err)
+			}
 		}
 
 		if err := shim.CopyTree(src, dst); err != nil {
@@ -617,8 +625,12 @@ func publishedFiles(t *testing.T, dir string) map[string]string {
 	out := map[string]string{}
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return err
+		}
+
+		if d.IsDir() {
+			return recordEmptyDir(out, dir, path)
 		}
 
 		if !d.Type().IsRegular() {
@@ -640,6 +652,96 @@ func publishedFiles(t *testing.T, dir string) map[string]string {
 	}
 
 	return out
+}
+
+// recordEmptyDir maps the dir path below dir, when it is empty, by its
+// path relative to dir and a trailing "/", to "".
+func recordEmptyDir(out map[string]string, dir, path string) error {
+	names, err := os.ReadDir(path)
+	if err != nil || len(names) > 0 || path == dir {
+		return err
+	}
+
+	rel, err := filepath.Rel(dir, path)
+	out[rel+"/"] = ""
+
+	return err
+}
+
+// TestWriteOutsPublishesEmptyDirs (#624): an empty dir inside a published
+// directory is published though no object store holds it: neither the
+// producer's upload of its bundle nor OUTS's upload of its publish dir
+// creates an object for it. The manifest lists each such dir as its own
+// entry, which the driver makes again, and the directory's other entries
+// apart, so no entry lies below another.
+func TestWriteOutsPublishesEmptyDirs(t *testing.T) {
+	for name, skeletons := range stagings() {
+		t.Run(name, func(t *testing.T) {
+			r, work := newDirRun(t, skeletons, func(d string) {
+				writeFileOf(t, filepath.Join(d, "sub", "x.txt"), "x")
+				writeFileOf(t, filepath.Join(d, "y.txt"), "y")
+
+				for _, e := range []string{"empty", filepath.Join("deep", "er")} {
+					if err := os.MkdirAll(filepath.Join(d, e), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+
+			dropEmptyDirs(t, filepath.Join(work, "outs"))
+
+			if err := r.writeOuts(stagedLocations(r)); err != nil {
+				t.Fatal(err)
+			}
+
+			leaf := "s3://bucket" + work + "/outs/d/f/L0000/d"
+			manifest := []published{
+				{Path: "d/deep/er", Source: "external/2/er", Local: true, Dir: true},
+				{Path: "d/empty", Source: "external/3/empty", Local: true, Dir: true},
+				{Path: "d/sub", Source: leaf + "/sub"},
+				{Path: "d/y.txt", Source: leaf + "/y.txt"},
+			}
+
+			if d := cmp.Diff(manifest, readManifest(t, "publish.json")); d != "" {
+				t.Errorf("published tree's entries (-want +got):\n%s", d)
+			}
+
+			dropEmptyDirs(t, externalDir)
+			publishManifest(t, "publish.json", "results", func(src string) string { return strings.TrimPrefix(src, "s3://bucket") })
+
+			tree := map[string]string{"d/sub/x.txt": "x", "d/y.txt": "y", "d/empty/": "", "d/deep/er/": ""}
+			if d := cmp.Diff(tree, publishedFiles(t, "results")); d != "" {
+				t.Errorf("published tree (-mrp +got):\n%s", d)
+			}
+		})
+	}
+}
+
+// dropEmptyDirs removes each dir below dir that holds no file, as a copy
+// through an object store, which holds only files, loses it.
+func dropEmptyDirs(t *testing.T, dir string) {
+	t.Helper()
+
+	var dirs []string
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && path != dir {
+			dirs = append(dirs, path)
+		}
+
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, d := range slices.Backward(dirs) {
+		if names, err := os.ReadDir(d); err == nil && len(names) == 0 {
+			if err := os.Remove(d); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }
 
 // writeFileOf writes content to a file at path, and returns path.

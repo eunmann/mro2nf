@@ -225,9 +225,12 @@ JSON follow `mrp`'s rules by construction.
 4. **Manifest** (`-manifest`): each entry a file or a placed directory, whole,
    and a link as what it reaches, by its path in the tree and where the task
    that wrote it keeps it, or, for a file no stage task wrote, its copy in
-   `external/`. `PostProcess`'s rename keeps a placed path's identity (device
-   and inode), which maps it to the file it was placed from. It places each
-   file as its shape (`shim.CopyShape`), never its bytes.
+   `external/`. A placed directory holding an empty directory is listed entry
+   by entry instead, each empty directory as an empty directory in
+   `external/` that the driver makes again before publishing it, as no object
+   store holds one (#624). `PostProcess`'s rename keeps a placed path's
+   identity (device and inode), which maps it to the file it was placed from.
+   It places each file as its shape (`shim.CopyShape`), never its bytes.
 5. **Outs JSON** (`-json`): naming a published file by its path in the tree,
    a linked one by its own link's path, and a file left unpublished (below an
    array of two or more dimensions) by where its producer's work directory

@@ -704,8 +704,8 @@ func CopyTree(src, dst string) error {
 
 // copyWalk is the state copyTree threads through a tree: the identities of
 // the dirs on the recursion stack, and while shape is non-nil, the shape
-// of the leaf it copies, which records each link below it that reaches
-// nothing, where a copy without one leaves it out.
+// of the leaf it copies, which records each empty dir below it and each
+// link that reaches nothing, where a copy without one leaves it out.
 type copyWalk struct {
 	ancestors map[dirID]struct{}
 	shape     *shapeRecorder
@@ -868,6 +868,12 @@ func copyDir(src, dst string, info os.FileInfo, w copyWalk, pol copyPolicy) erro
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return fmt.Errorf("read dir %s: %w", src, err)
+	}
+
+	if len(entries) == 0 && w.shape != nil {
+		if err := w.shape.emptyDir(dst); err != nil {
+			return err
+		}
 	}
 
 	for _, e := range entries {

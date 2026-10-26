@@ -10,10 +10,11 @@ import (
 )
 
 // shapeFile names the file beside a leaf in its ordinal dir that records
-// what of the leaf's tree its bundle cannot carry through an object store:
-// each link the stage wrote that reaches nothing, which mrp hands a reader
-// as it is, and which an upload of the bundle would refuse (aws s3 cp exits
-// 2 on it). A reader recreates what it records (Staged.Restore).
+// what of the leaf's tree its bundle cannot carry through an object store,
+// which mrp hands a reader as the stage wrote it: each empty dir, which an
+// upload of the bundle creates no object for, and each link the stage wrote
+// that reaches nothing, which an upload refuses (aws s3 cp exits 2 on it).
+// A reader recreates what it records (Staged.Restore).
 const shapeFile = ".mre-shape"
 
 var (
@@ -27,6 +28,7 @@ var (
 // leafShape is a leaf's shape record. Each path is slash-separated and
 // relative to the leaf's ordinal dir, so it begins with the leaf's name.
 type leafShape struct {
+	Dirs  []string    `json:"dirs,omitempty"`
 	Links []shapeLink `json:"links,omitempty"`
 }
 
@@ -61,6 +63,18 @@ func (r *shapeRecorder) link(src, dst string) error {
 	return nil
 }
 
+// emptyDir records the copy's dir dst, which holds nothing.
+func (r *shapeRecorder) emptyDir(dst string) error {
+	rel, err := r.rel(dst)
+	if err != nil {
+		return err
+	}
+
+	r.shape.Dirs = append(r.shape.Dirs, rel)
+
+	return nil
+}
+
 func (r *shapeRecorder) rel(dst string) (string, error) {
 	rel, err := filepath.Rel(r.ordinal, dst)
 	if err != nil {
@@ -73,7 +87,7 @@ func (r *shapeRecorder) rel(dst string) (string, error) {
 // write writes the shape into the ordinal dir, and nothing when it records
 // nothing.
 func (r *shapeRecorder) write() error {
-	if len(r.shape.Links) == 0 {
+	if len(r.shape.Dirs) == 0 && len(r.shape.Links) == 0 {
 		return nil
 	}
 
@@ -122,6 +136,17 @@ func restoreShape(ordinal string) error {
 	var shape leafShape
 	if err := json.Unmarshal(raw, &shape); err != nil {
 		return fmt.Errorf("decode shape of %s: %w", ordinal, err)
+	}
+
+	for _, d := range shape.Dirs {
+		at, err := shapePath(ordinal, d)
+		if err != nil {
+			return err
+		}
+
+		if err := os.MkdirAll(at, dirPerm); err != nil {
+			return fmt.Errorf("restore dir %s: %w", at, err)
+		}
 	}
 
 	for _, l := range shape.Links {

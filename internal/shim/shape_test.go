@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestReaderRestoresDanglingLinks (#624): a link a stage wrote into a dir
@@ -47,6 +48,43 @@ func TestReaderRestoresDanglingLinks(t *testing.T) {
 		if target, err := os.Readlink(filepath.Join(d, "dangling")); err != nil || target != "/nonexistent" {
 			t.Errorf("%s: dangling = %q, %v, want the link to /nonexistent the stage wrote", name, target, err)
 		}
+	}
+}
+
+// TestReaderRestoresEmptyDirs (#624): an empty dir a stage wrote into a dir
+// output, nested or the output itself, reaches the dir's reader from the
+// copy of the bundle an object store kept, which holds no empty dir.
+func TestReaderRestoresEmptyDirs(t *testing.T) {
+	dir := t.TempDir()
+	tree := filepath.Join(dir, "work", "d")
+	writeFileAt(t, filepath.Join(tree, "sub", "x.txt"), "x")
+	empty := filepath.Join(dir, "work", "e")
+
+	for _, d := range []string{filepath.Join(tree, "empty"), filepath.Join(tree, "deep", "er"), empty} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	bundle := filepath.Join(dir, "bundle")
+	writeBundle(t, bundle, map[string]any{"d": tree, "e": empty}, fields(t, "d path", "e path"), shim.Opts{})
+
+	staged := objectStoreCopy(t, bundle, filepath.Join(dir, "copy"))
+	if err := mustStaged(t, staged).Restore(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	payload := readPayload(t, staged)
+	d, _ := payload["d"].(string)
+	e, _ := payload["e"].(string)
+
+	want := map[string]string{"sub/": "", "sub/x.txt": "x", "empty/": "", "deep/": "", "deep/er/": ""}
+	if diff := cmp.Diff(want, pathsOf(t, d)); diff != "" {
+		t.Errorf("the reader's d (-written +read):\n%s", diff)
+	}
+
+	if names := listDir(t, e); len(names) != 0 {
+		t.Errorf("the reader's e holds %v, want the empty dir the stage wrote", names)
 	}
 }
 
