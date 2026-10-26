@@ -53,7 +53,7 @@ touch "$meta/_complete"
 	lsScript = `#!/bin/sh
 meta=$2
 d=$(tr -d ' \n' < "$meta/_args" | sed 's/.*"d":"\([^"]*\)".*/\1/')
-names=$(cd "$d" && find . -mindepth 1 -printf '%p:%y:%l\n' | sort | paste -sd ' ' -)
+names=$(cd "$d" && find . -mindepth 1 -printf '%p:%y:%l\n' | LC_ALL=C sort | paste -sd ' ' -)
 echo "{\"names\":\"$names\"}" > "$meta/_outs"
 touch "$meta/_complete"
 `
@@ -85,7 +85,7 @@ func TestStageRestoresWhatAnObjectStoreDrops(t *testing.T) {
 		t.Fatalf("LS: %v", err)
 	}
 
-	want := `names:"./dangling:l:/nonexistent ./deep:d: ./deep/er:d: ./empty:d: ./sub:d: ./sub/x.txt:f:"`
+	want := `names:"./dangling:l:/nonexistent ./deep/er:d: ./deep:d: ./empty:d: ./sub/x.txt:f: ./sub:d:"`
 	if got := postedValues(t, filepath.Join("ls", "values")); got != want {
 		t.Errorf("LS posted %s, want %s", got, want)
 	}
