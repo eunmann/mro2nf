@@ -56,9 +56,12 @@ internal/
                        the _args resolver, fork elements, gates, pipeline outs
   cgnf/              → call graph -> Nextflow project (main.nf wiring, stage.nf,
                        nextflow.config)
+  mrcore/            → verbatim copies of Martian core's unexported functions,
+                       each adaptation declared (TestMrcoreMatchesCore)
   job/               → runs one stage job through mrjob as mrp runs it
   types/             → file-leaf walk over Martian's compiled types (shared by cg + shim)
   shim/              → bundle I/O, markers, output confinement
+  buildinfo/         → the build's version, shared by mro2nf and mre (PLAN checks they match)
   logging/           → log/slog setup (stderr)
 ```
 
