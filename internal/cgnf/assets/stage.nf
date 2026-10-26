@@ -91,6 +91,12 @@ def sources(List us, List rs, List cs, List os) {
     return m
 }
 
+// ownOuts maps each outs dir a task posted, ds, by the path the task wrote
+// it at (postFlags: -fields outs), to where it lies.
+def ownOuts(List ds) {
+    return ds.collectEntries { d -> [('outs/' + d.name): d] }
+}
+
 // referred is the dirs a task wrote, each with the ordinal dir of every
 // file it names by reference (mre stage -field-refs, -fork-refs,
 // -out-refs: one line of space-separated records, each of the dir's last
@@ -404,9 +410,10 @@ process OUTS {
     """
 }
 
-// CALL is the run's call, base64, as every task gets it: inline, a value
-// its script writes (callScript), when it is at most bound bytes, or else
-// a file the driver writes once per run and each task stages (callStaged).
+// CALL is the run's call, base64 of its gzip, as every task gets it:
+// inline, a value its script writes (callScript), when it is at most bound
+// bytes, or else a file the driver writes once per run and each task
+// stages (callStaged).
 // The call grows with the entry values; inline, a large one would grow
 // every task's script, and the -resume key Nextflow hashes from it, while
 // a staged file costs each task on an object store a download. collectFile
@@ -1089,7 +1096,8 @@ workflow DONE {
 // the dirs, value records and refs at positions at to at + 2 of what its
 // task posted. A dir names a file by reference where its producer wrote
 // it, which POSTED finds among the sources of the instance's posting task
-// (SOURCES), by its key.
+// (SOURCES), by its key, or, for a fork or partner element naming a file
+// of the task's own outs, among those (ownOuts).
 workflow POSTED {
     take:
     posted
@@ -1098,7 +1106,7 @@ workflow POSTED {
     at
 
     main:
-    all = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
+    all = posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1] + ownOuts(v[1])) + v[at + 1].tokenize(' ')] }.mix(skip.map { v -> [v[1], []] })
 
     emit:
     all

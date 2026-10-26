@@ -13,12 +13,13 @@ import (
 	"github.com/martian-lang/martian/martian/syntax"
 )
 
-// writeFields writes the posted instance's outs output by output: one that
-// holds no file and is small (valueRecord) as a record in the spec's Values
-// file, which the driver carries as a value, and any other as a stamped
-// bundle under the spec's Fields dir, <output>/, holding that output's
-// value and only its files, but those it names by reference, whose records
-// the spec's FieldRefs file receives.
+// writeFields writes the posted instance's outs a reader reads
+// (postedOutputs) output by output: one that holds no file and is small
+// (valueRecord) as a record in the spec's Values file, which the driver
+// carries as a value, and any other as a stamped bundle under the spec's
+// Fields dir, <output>/, holding that output's value and only its files,
+// but those it names by reference, whose records the spec's FieldRefs file
+// receives.
 func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 	st, err := g.Stage(in.Node)
 	if err != nil {
@@ -30,9 +31,9 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 		return err
 	}
 
-	params, err := g.Params(st.Call().DecId, types.RoleOut)
+	params, err := g.postedOutputs(st)
 	if err != nil {
-		return fmt.Errorf("out params of %s: %w", st.Fqid, err)
+		return err
 	}
 
 	var values, refs []string
@@ -76,6 +77,30 @@ func (g *Graph) writeFields(in Instance, s *stagedStore, spec PostSpec) error {
 	}
 
 	return writeFile(spec.Values, strings.Join(values, " "))
+}
+
+// postedOutputs are the out params of st's stage, in its order, that a
+// reader reads (readsOf), every one where a reader reads the whole call. A
+// post writes these alone: no task stages any other.
+func (g *Graph) postedOutputs(st *syntax.CallGraphStage) ([]*syntax.StructMember, error) {
+	params, err := g.Params(st.Call().DecId, types.RoleOut)
+	if err != nil {
+		return nil, fmt.Errorf("out params of %s: %w", st.Fqid, err)
+	}
+
+	read := map[string]bool{}
+
+	for _, r := range g.readsOf(st.Fqid) {
+		if r.Fields == nil {
+			return params, nil
+		}
+
+		for _, f := range r.Fields {
+			read[f] = true
+		}
+	}
+
+	return slices.DeleteFunc(params, func(p *syntax.StructMember) bool { return !read[p.Id] }), nil
 }
 
 // writeGates writes to path the instances the posted instance disables, as

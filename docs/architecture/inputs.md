@@ -150,6 +150,11 @@ itself, the path `mrp` passes.
   returns its input's path, as Cell Ranger's `SETUP_REFERENCE_INFO` returns
   `reference_path`, posts the path, and no byte of the input is copied into
   `work/`.
+- A root also holds its real path, which a stage output linking into it
+  resolves to. A task reads the roots' real paths only for a path that no
+  root's given path, staged input or the task's own directory settles, and
+  then once, so a task reading one of a run's thousands of values in place
+  makes no lookup for the rest, each a remote call on a network filesystem.
 - A path in the task's own work directory is under no root, so a stage's own
   outputs stay its own even below an input directory.
 - PLAN, handed the run's work directory (`-run-workdir`), refuses a value that

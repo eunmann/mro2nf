@@ -165,7 +165,7 @@ func ilist(xs []int) string {
 
 // planWiring parses PLAN's records the wirings read: shared is the meta
 // every task shares, with the launch params their scripts read (stageRun)
-// and the run's call, inline when its base64 is at
+// and the run's call, inline when its encoding is at
 // most cg.MaxValueBytes, as an output value is, or else staged (CALL);
 // nodes maps each witness node to its digest, its off flag, its statically
 // disabled fork keys, the cpus and memory its first task is scheduled with

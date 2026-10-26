@@ -55,6 +55,9 @@ pipeline P(
     in  txt   reads,
     in  bool  off,
     out int   total,
+    out int   y,
+    out int[] ys,
+    out txt   copy,
 )
 {
     call SQ(
@@ -95,6 +98,9 @@ pipeline P(
 
     return (
         total = SQ.total,
+        y     = ADD.y,
+        ys    = EACH.y,
+        copy  = CP.copy,
     )
 }
 

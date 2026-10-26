@@ -300,7 +300,8 @@ func TestEmitCarriesValueOutputs(t *testing.T) {
 
 	for _, want := range []string{
 		"'-fields outs -field-values outs_values -field-refs outs_refs -forks forks -fork-values fork_values -fork-refs fork_refs -gates gates'",
-		"posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1]) + v[at + 1].tokenize(' ')] }",
+		"posted.join(sources).map { v -> [v[0], referred(v[at], v[at + 2], v[-1] + ownOuts(v[1])) + v[at + 1].tokenize(' ')] }",
+		"ds.collectEntries { d -> [('outs/' + d.name): d] }",
 		"ds.findAll { e -> itemName(e) in fields }",
 		"keyOrder(a[0], b[0]) ?: itemName(a[1]) <=> itemName(b[1])",
 		"return e instanceof Path ? [e.parent.name, e.name] : e.substring(0, e.indexOf(':')).tokenize('/')",

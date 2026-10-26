@@ -101,6 +101,96 @@ func TestPostFields(t *testing.T) {
 	wantArgs(t, "CH.USE", got, `{"k":3,"y":4}`)
 }
 
+// unreadMRO reads MAKE's a in USE and its n in the pipeline outs, and no
+// other output of MAKE.
+const unreadMRO = `filetype txt;
+
+stage MAKE(
+    out txt a,
+    out txt b,
+    out int n,
+    out int m,
+    src py  "stages/make",
+)
+
+stage USE(
+    in  txt f,
+    out int size,
+    src py  "stages/use",
+)
+
+pipeline P(
+    out int n,
+    out int size,
+)
+{
+    call MAKE()
+
+    call USE(
+        f = MAKE.a,
+    )
+
+    return (
+        n    = MAKE.n,
+        size = USE.size,
+    )
+}
+
+call P()
+`
+
+// TestPostSkipsUnreadOutputs (#623): a post writes only the outputs a
+// reader reads, a stage's binding or the pipeline outs, as a bundle or a
+// value record, so a file no task stages is not uploaded; the node's spec
+// digest holds them, so a re-transpile that reads another re-runs it; a
+// whole-call reference reads every output.
+func TestPostSkipsUnreadOutputs(t *testing.T) {
+	mro := filepath.Join(t.TempDir(), "pipeline.mro")
+	if err := os.WriteFile(mro, []byte(unreadMRO), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := Load(mro, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
+	src := t.TempDir()
+	a, b := writeFileOf(t, filepath.Join(src, "a.txt"), "a"), writeFileOf(t, filepath.Join(src, "b.txt"), "b")
+
+	p := f.postFields(f.outs("P.MAKE", nil, fmt.Sprintf(`{"a":%q,"b":%q,"n":1,"m":2}`, a, b)))
+
+	if d := cmp.Diff([]string{"a"}, bundles(t, p.fields)); d != "" {
+		t.Errorf("MAKE's bundles (-want +got):\n%s", d)
+	}
+
+	if d := cmp.Diff([]string{"n"}, slices.Sorted(maps.Keys(p.values))); d != "" {
+		t.Errorf("MAKE's value records (-want +got):\n%s", d)
+	}
+
+	st, err := g.Stage("P.MAKE")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readers, err := g.postReaders(st)
+	if err != nil || !slices.Equal(readers.Outs, []string{"a", "n"}) {
+		t.Errorf("MAKE's readers read %v (%v), want [a n]", readers.Outs, err)
+	}
+
+	whole := loadFixture(t, "disabled_wholeref")
+
+	zero, err := whole.g.Stage("DW.ZERO")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if posted, err := whole.g.postedOutputs(zero); err != nil || len(posted) != 1 || posted[0].Id != "v" {
+		t.Errorf("a whole-call reference to ZERO reads %v (%v), want its one output v", posted, err)
+	}
+}
+
 // TestPostFieldsNeedsValues: a post writes its outs field by field, so it
 // needs the fields dir, the values file and the refs file, as an output it
 // carries as a value, or a file a bundle names by reference, would
