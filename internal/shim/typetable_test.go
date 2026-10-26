@@ -1,7 +1,6 @@
 package shim_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/types"
@@ -29,25 +28,4 @@ func fileTable(t *testing.T) *types.Table {
 	}
 
 	return types.NewTable(&ast.TypeTable)
-}
-
-// fields declares each "name type" pair, the type as an .mro spells it, as a
-// param of a bundle's payload.
-func fields(t *testing.T, decls ...string) []*syntax.StructMember {
-	t.Helper()
-
-	out := make([]*syntax.StructMember, len(decls))
-
-	for i, d := range decls {
-		name, tname, _ := strings.Cut(d, " ")
-
-		var id syntax.TypeId
-		if err := id.UnmarshalText([]byte(tname)); err != nil {
-			t.Fatalf("type of %s: %v", d, err)
-		}
-
-		out[i] = &syntax.StructMember{Id: name, Tname: id}
-	}
-
-	return out
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/types"
+	"github.com/eunmann/mro2nf/internal/types/typestest"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -116,7 +117,7 @@ struct Box(
 // visited in sorted key order.
 func TestApplyKeepsObjectOrder(t *testing.T) {
 	tbl := orderTable(t)
-	params := fields(t, "box Box", "fm map<file>")
+	params := typestest.Fields(t, "box Box", "fm map<file>")
 	vals := map[string]any{
 		"box": decodeOrdered(t, `{"b":1.0,"f":"x.txt","q":{"a":1,"z":2},"extra":"e.txt"}`),
 		"fm":  decodeOrdered(t, `{"k2":"two","k1":"one"}`),
