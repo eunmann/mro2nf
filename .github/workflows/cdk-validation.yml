@@ -53,14 +53,5 @@ jobs:
       # account lookups), so synth needs no AWS credentials.
       - name: Synthesize
         run: npx cdk synth --quiet
-      - name: The root volume is gp3 at its provisioned throughput
-        run: |
-          jq -e '[.Resources[] | select(.Type == "AWS::EC2::LaunchTemplate") | .Properties.LaunchTemplateData.BlockDeviceMappings[].Ebs
-                  | select(.VolumeType == "gp3" and .Throughput == 1000 and .Iops == 6000)] | length == 1' \
-            cdk.out/Mro2nfStack.template.json
-      - name: The queue cancels a job no instance can fit
-        run: |
-          jq -e '[.Resources[] | select(.Type == "AWS::Batch::JobQueue") | .Properties.JobStateTimeLimitActions[]
-                  | select(.Action == "CANCEL" and .State == "RUNNABLE") | .Reason] | sort
-                 == ["MISCONFIGURATION:COMPUTE_ENVIRONMENT_MAX_RESOURCE", "MISCONFIGURATION:JOB_RESOURCE_REQUIREMENT"]' \
-            cdk.out/Mro2nfStack.template.json
+      - name: Assert the template
+        run: npm test
