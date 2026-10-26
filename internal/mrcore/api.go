@@ -78,6 +78,44 @@ func (t *TopNode) ForkID(fqid string, fork ForkId) (string, error) {
 	return id, nil
 }
 
+// Disabled reports whether the fork of node fqid at fork is disabled, as
+// core's Fork.disabled decides it (stage.go:883): a part of no forks, or a
+// disable binding that resolves true. A binding that fails to resolve to a
+// bool, or reads what the task did not stage, fails.
+func (t *TopNode) Disabled(fqid string, fork ForkId) (bool, error) {
+	node, err := t.node(fqid)
+	if err != nil {
+		return false, err
+	}
+
+	t.unstaged = nil
+
+	off, err := newFork(node, fork).disabled()
+	if err != nil {
+		return false, fmt.Errorf("disabled state of %s at %s: %w", fqid, fork.GoString(), t.withUnstaged(err))
+	}
+
+	return off, nil
+}
+
+// Disables reports whether gate, the gate of a disable-wrapped value or a
+// disable binding, disables at fork, as core's resolveDisabledExp decides it
+// (resolve.go:248).
+func (t *TopNode) Disables(gate syntax.Exp, fork ForkId) (bool, error) {
+	t.unstaged = nil
+
+	ready, off, err := t.gate(gate, fork, 0)
+
+	switch {
+	case err != nil:
+		return false, t.withUnstaged(err)
+	case !ready:
+		return false, t.notReady()
+	default:
+		return off, nil
+	}
+}
+
 // Index is the index of root's part in fork, and false where fork has none.
 func (f ForkId) Index(root *syntax.CallGraphStage) (syntax.CollectionIndex, bool) {
 	p, err := f.matchPart(root.Call())

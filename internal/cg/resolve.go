@@ -16,8 +16,7 @@ var (
 	// task did not stage: an upstream instance's outs or a fork element.
 	ErrNotStaged = errors.New("upstream value not staged")
 
-	errShape    = errors.New("unexpected expression shape")
-	errNullGate = errors.New("disabled is bound to a null value")
+	errShape = errors.New("unexpected expression shape")
 
 	// errNoElement is core's elementError for an index past the end of an
 	// array or a key a map lacks (core/resolve.go:718 getArrayElement, :714
@@ -54,10 +53,6 @@ type resolver struct {
 	top *mrcore.TopNode
 }
 
-func (r *resolver) boolType() syntax.Type {
-	return r.g.types.Get(syntax.TypeId{Tname: syntax.KindBool})
-}
-
 // args resolves every input binding of st at fork into the map mrp writes as
 // the fork's _args (core/resolve.go:61 resolveInputs). An input that reads a
 // missing element keeps the value resolved around it, and its error is
@@ -76,58 +71,34 @@ func (r *resolver) args(st *syntax.CallGraphStage, fork Fork) (core.MarshalerMap
 	return out, []error{missing}, nil
 }
 
-// disabled evaluates st's disable bindings at fork as core Fork.disabled
-// does (core/stage.go:883): the first true disables it, and a gate that
-// resolves to no value is an error, which fails the stage under mrp.
-func (r *resolver) disabled(st *syntax.CallGraphStage, fork Fork) (bool, error) {
-	var errs []error
-
-	for _, d := range st.Disabled() {
-		v, err := r.resolve(d, r.boolType(), fork)
-		if err != nil {
-			errs = append(errs, err)
-
-			continue
-		}
-
-		on, err := gateValue(v)
-		if err != nil {
-			errs = append(errs, err)
-
-			continue
-		}
-
-		if on {
-			return true, nil
-		}
+// disabled reports whether st's instance at fork, of the fork counts lens,
+// is disabled, as core's Fork.disabled decides it (core/stage.go:883); a
+// gate that does not resolve to a bool fails it, as it fails the stage
+// under mrp.
+func (r *resolver) disabled(st *syntax.CallGraphStage, fork Fork, lens []int) (bool, error) {
+	cf, err := countedFork(fork, lens)
+	if err != nil {
+		return false, err
 	}
 
-	if err := errors.Join(errs...); err != nil {
-		return false, fmt.Errorf("disabled state of %s: %w", st.Fqid, err)
+	off, err := r.core().Disabled(st.Fqid, cf)
+	if err != nil {
+		return false, fmt.Errorf("instance of %s: %w", st.Fqid, err)
 	}
 
-	return false, nil
+	return off, nil
 }
 
-// gateValue reads a resolved disable binding (core/stage.go:898-922): a JSON
-// null from a stage output reads as false, as json.Unmarshal into a bool
-// leaves it unset.
-func gateValue(v json.Marshaler) (bool, error) {
-	switch d := v.(type) {
-	case nil, *syntax.NullExp:
-		return false, errNullGate
-	case *syntax.BoolExp:
-		return d.Value, nil
-	case json.RawMessage:
-		var b bool
-		if err := json.Unmarshal(d, &b); err != nil {
-			return false, fmt.Errorf("decode disable gate %s: %w", d, err)
-		}
-
-		return b, nil
-	default:
-		return false, fmt.Errorf("%w: disable gate of type %T", errShape, v)
+// disables reports whether gate, a disable binding or the gate of a
+// disable-wrapped value, disables at fork (core/resolve.go:248
+// resolveDisabledExp).
+func (r *resolver) disables(gate syntax.Exp, fork Fork) (bool, error) {
+	off, err := r.core().Disables(gate, coreFork(fork))
+	if err != nil {
+		return false, fmt.Errorf("disabled binding at fork %s: %w", fork, err)
 	}
+
+	return off, nil
 }
 
 // resolve evaluates exp of type t at fork (core/resolve.go:201).
@@ -188,29 +159,6 @@ func (r *resolver) resolveRef(e *syntax.RefExp, t syntax.Type, fork Fork) (json.
 	}
 
 	return v, nil
-}
-
-// disabledBy reports whether the gate of a disable-wrapped value, resolved
-// at fork, disables it: a true, and no null.
-func (r *resolver) disabledBy(gate syntax.Exp, fork Fork) (bool, error) {
-	d, err := r.resolve(gate, r.boolType(), fork)
-	if err != nil {
-		return false, fmt.Errorf("disabled binding: %w", err)
-	}
-
-	switch g := d.(type) {
-	case *syntax.BoolExp:
-		return g.Value, nil
-	case json.RawMessage:
-		var on bool
-		if err := json.Unmarshal(g, &on); err != nil {
-			return false, fmt.Errorf("disabled binding: %w", err)
-		}
-
-		return on, nil
-	default:
-		return false, fmt.Errorf("%w: disabled binding of type %T from %s", errShape, d, gate.GoString())
-	}
 }
 
 func marshal(v json.Marshaler) (json.RawMessage, error) {

@@ -160,12 +160,7 @@ func (g *Graph) gateTokens(r *resolver, st *syntax.CallGraphStage, d syntax.Exp,
 	var out []string
 
 	for _, a := range cur {
-		v, err := r.resolve(d, r.boolType(), a.fork)
-		if err != nil {
-			continue
-		}
-
-		if on, err := gateValue(v); err == nil && on {
+		if on, err := r.disables(d, a.fork); err == nil && on {
 			out = append(out, GateToken(st.Fqid, gate, strings.Join(a.ords, ".")))
 		}
 	}

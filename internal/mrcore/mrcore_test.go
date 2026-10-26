@@ -515,6 +515,39 @@ func TestInputsGatedLiteral(t *testing.T) {
 	}
 }
 
+// TestDisabled: a fork is disabled as core's Fork.disabled decides: by a
+// gate that reads true, not by one that reads false or null, and by a part
+// of no forks whatever its gates; a gate the task did not stage fails.
+func TestDisabled(t *testing.T) {
+	for off, want := range map[string]bool{"true": true, "false": false, "null": false} {
+		top := compile(t, gated, fakeStore{outs: map[string]string{"TOP.FLAG|": `{"off":` + off + `,"items":{}}`}})
+		sq := stage(t, top, "TOP.LIT.SQ")
+
+		got, err := top.Disabled(sq.Fqid, nil)
+		if err != nil || got != want {
+			t.Errorf("off=%s: Disabled of %s = %t, %v; want %t", off, sq.Fqid, got, err, want)
+		}
+
+		got, err = top.Disables(sq.Disabled()[0], nil)
+		if err != nil || got != want {
+			t.Errorf("off=%s: Disables = %t, %v; want %t", off, got, err, want)
+		}
+	}
+
+	top := compile(t, gated, fakeStore{outs: map[string]string{}})
+	if _, err := top.Disabled("TOP.LIT.SQ", nil); !errors.Is(err, ErrNotStaged) {
+		t.Errorf("Disabled with its gate unstaged: %v, want ErrNotStaged", err)
+	}
+
+	each := stage(t, top, "TOP.EACH")
+	for n, want := range map[int]bool{0: true, 2: false} {
+		got, err := top.Disabled(each.Fqid, ForkId{CountedPart(each.ForkRoots()[0], arrayIndexFork(0), n)})
+		if err != nil || got != want {
+			t.Errorf("Disabled of %s, a part of %d forks = %t, %v; want %t", each.Fqid, n, got, err, want)
+		}
+	}
+}
+
 // TestFailuresAreLoud: an unknown node, an unstaged read and a root whose
 // count reads what the task did not stage each fail.
 func TestFailuresAreLoud(t *testing.T) {

@@ -55,7 +55,7 @@ func (r *resolver) stagedElement(e *syntax.SplitExp, t syntax.Type, fork Fork, p
 // the split resolves as the gated value, which reads null.
 func (r *resolver) partnerElement(ref, gate *syntax.RefExp, t syntax.Type, fork Fork, p Part) (json.Marshaler, bool, error) {
 	if gate != nil {
-		if off, err := r.disabledBy(gate, fork); err != nil || off {
+		if off, err := r.disables(gate, fork); err != nil || off {
 			return nil, false, err
 		}
 	}

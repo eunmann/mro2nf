@@ -51,6 +51,7 @@ func mrcoreAdapted() map[string]string {
 		"(*Node).GetFQName":              "the node's fqid, with no pipestance name",
 		"(*Fork).updateId":               "sets the fork id and a name keyed by it, with no pipestance paths",
 		"(*Fork).writeDisable":           "marks the fork disabled; its outs read null (Fork.outs)",
+		"(*Fork).disabled":               "no read size limit; a not-ready binding fails",
 	}
 }
 

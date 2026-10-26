@@ -5,6 +5,7 @@
 package mrcore
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,13 +44,13 @@ type Node struct {
 	views     map[string]*Node
 }
 
-// Fork is core's Fork (stage.go:356): one fork of a node, disabled where
-// its expansion found no forks (Fork.writeDisable).
+// Fork is core's Fork (stage.go:356): one fork of a node, in core's
+// DisabledState where its expansion found no forks (Fork.writeDisable).
 type Fork struct {
-	node     *Node
-	forkId   ForkId
-	fqname   string
-	disabled bool
+	node          *Node
+	forkId        ForkId
+	fqname        string
+	disabledState bool
 }
 
 // resolveInputs is core's (resolve.go:61) as the _args of a job resolve
@@ -581,7 +582,7 @@ func (f *Fork) resolveRef(binding *syntax.RefExp, t syntax.Type,
 func (self *Fork) expandForkPart(must bool,
 	i int, part *ForkSourcePart,
 	split *syntax.SplitExp, result []ForkId) ([]ForkId, error) {
-	if self.disabled {
+	if self.disabledState {
 		return nil, nil
 	}
 	exp, err := split.BindingPath("", self.forkId.SourceIndexMap(),
@@ -726,4 +727,52 @@ func (self *Fork) updateId(id ForkId) {
 	self.fqname = self.node.call.GetFqid() + " " + id.key()
 }
 
-func (self *Fork) writeDisable() { self.disabled = true }
+func (self *Fork) writeDisable() { self.disabledState = true }
+
+func (self *Fork) disabled() (bool, error) {
+	top := self.node.top
+	var errs syntax.ErrorList
+	for _, p := range self.forkId {
+		if r := p.Range; r != nil && r.Length() == 0 {
+			return true, nil
+		}
+	}
+	for _, bind := range self.node.call.Disabled() {
+		if ready, res, err := top.resolve(bind,
+			top.types.Get(syntax.TypeId{
+				Tname: syntax.KindBool,
+			}), self.forkId, 0); err != nil {
+			errs = append(errs, err)
+		} else if ready {
+			if res != nil {
+				switch d := res.(type) {
+				case *syntax.BoolExp:
+					if d.Value {
+						return true, nil
+					}
+				case *syntax.NullExp:
+					errs = append(errs, fmt.Errorf(
+						"disabled is bound to a null value, which the compiler should not allow"))
+				case json.RawMessage:
+					var v bool
+					if err := json.Unmarshal(d, &v); err == nil && v {
+						return true, nil
+					} else if err != nil {
+						if bytes.Equal(d, nullBytes) {
+							errs = append(errs, fmt.Errorf(
+								"disabled is bound to a null value, which is not permitted"))
+						} else {
+							errs = append(errs, err)
+						}
+					}
+				}
+			} else {
+				errs = append(errs, fmt.Errorf(
+					"disabled is bound to a null value, which the compiler should not allow"))
+			}
+		} else {
+			errs = append(errs, top.notReady())
+		}
+	}
+	return false, errs.If()
+}

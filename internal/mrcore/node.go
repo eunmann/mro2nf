@@ -342,7 +342,7 @@ func (f *Fork) outs() (LazyArgumentMap, error) {
 		return nil, fmt.Errorf("%w: %s is no stage", ErrNotStaged, f.fqname)
 	}
 
-	if f.disabled {
+	if f.disabledState {
 		out := LazyArgumentMap{}
 		if ps := st.Callable().GetOutParams(); ps != nil {
 			for _, p := range ps.List {
