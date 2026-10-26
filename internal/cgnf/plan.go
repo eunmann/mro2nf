@@ -1,9 +1,6 @@
 package cgnf
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 // planProcess declares PLAN, the run's one start task, which compiles the
 // project's copy of the entry's .mro files. The driver reads its records
@@ -61,19 +58,26 @@ const planProcess = `process PLAN {
 `
 
 // values is the workflow expression of the run's entry values as JSON:
-// each entry input's param, the call's value where the launch leaves it
-// unset.
+// each entry input's param that is not its default (changed), which an
+// unset input is. mre plan keeps an input the values leave out as the .mro
+// writes it, where a value round-tripped through Groovy and JSON would lose
+// its lexeme, such as a float's -0.
 func (p *project) values() string {
-	entries := make([]string, len(p.inputs))
+	values := make([]string, len(p.inputs))
+	defaults := []string{}
+
 	for i, lp := range p.inputs {
-		entries[i] = gstr(lp.id) + ": params." + lp.id
+		values[i] = gstr(lp.id) + ": params." + lp.id
+		if lp.defaultFunc != "" {
+			defaults = append(defaults, gstr(lp.id)+": "+lp.defaultFunc+"()")
+		}
 	}
 
-	if len(entries) == 0 {
+	if len(values) == 0 {
 		return "'{}'"
 	}
 
-	return "groovy.json.JsonOutput.toJson([" + strings.Join(entries, ", ") + "])"
+	return "groovy.json.JsonOutput.toJson(changed(" + gmap(values) + ", " + gmap(defaults) + "))"
 }
 
 // publications maps each node the pipeline outs read to the source of the

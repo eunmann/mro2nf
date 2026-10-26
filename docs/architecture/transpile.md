@@ -178,8 +178,9 @@ A shape whose data the tasks cannot exchange is refused at transpile time:
 ## The generated project
 
 ```
-main.nf               the params block, PLAN, the nodes or the calls of their
-                      workflows, then OUTS and the workflow outputs
+main.nf               the params block, each entry input's default function,
+                      PLAN, the nodes or the calls of their workflows,
+                      then OUTS and the workflow outputs
 subworkflows/         a workflow per run of nodes (W<j>.nf), only in a project
                       too large for one
 stage.nf              the one hand-written stage module every node includes

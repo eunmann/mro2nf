@@ -19,6 +19,13 @@ def shq(s) {
     return "'" + s.toString().replace("'", "'\\''") + "'"
 }
 
+// changed is each of values unequal to its entry in defaults by Java's
+// equals, which tells an int from a float of the same value, as Groovy's ==
+// does not.
+def changed(Map values, Map defaults) {
+    return values.findAll { k, v -> !java.util.Objects.equals(v, defaults[k]) }
+}
+
 // ordered is the items of [fork key, item] pairs by key, ordinal by
 // ordinal, then by the output each holds. A task stages such a gather as
 // one list, whose order is part of its -resume key and would otherwise be

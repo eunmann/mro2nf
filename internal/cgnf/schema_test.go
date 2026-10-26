@@ -170,20 +170,34 @@ func TestEmitParamsSchema(t *testing.T) {
 }
 
 // blockParams maps each param main.nf's params block declares to its
-// declaration.
+// declaration, with an entry input's default function call replaced by the
+// literal the function returns.
 func blockParams(tree map[string]string) map[string]string {
 	_, block, _ := strings.Cut(tree["main.nf"], "\nparams {\n")
 	block, _, _ = strings.Cut(block, "\n}\n")
+
+	funcs := map[string]string{}
+	for _, m := range defaultFunc.FindAllStringSubmatch(tree["main.nf"], -1) {
+		funcs[m[1]+"()"] = m[2]
+	}
 
 	out := map[string]string{}
 
 	for l := range strings.SplitSeq(block, "\n") {
 		id, decl, _ := strings.Cut(strings.TrimSpace(l), ": ")
+		if head, call, ok := strings.Cut(decl, " = "); ok && funcs[call] != "" {
+			decl = head + " = " + funcs[call]
+		}
+
 		out[id] = decl
 	}
 
 	return out
 }
+
+// defaultFunc matches a function main.nf declares to return an entry
+// input's default: its name and the literal it returns.
+var defaultFunc = regexp.MustCompile(`(?m)^def (default_\w+)\(\) \{\n    return (.*)\n\}$`)
 
 // configParams are the params conf/base.config sets.
 func configParams(tree map[string]string) []string {
@@ -197,17 +211,38 @@ func configParams(tree map[string]string) []string {
 	return out
 }
 
-// TestEmitPassesEveryEntryValue (#625): PLAN's values carry every entry
-// input's param, which holds the call's value unless the launch sets it, a
-// params file's null included, and conf/base.config sets none, whose value
-// Nextflow would take over the default but not under a params file's null.
-// A string input takes any text: no value stands for an unset input.
-func TestEmitPassesEveryEntryValue(t *testing.T) {
+// TestEmitPassesChangedEntryValues (#625): PLAN's values carry each entry
+// input's param that is not its default, the call's value, which an unset
+// input's param holds, so mre plan keeps an unset input's literal as the
+// .mro writes it, where Groovy would re-spell it (-0.0 as 0). The params
+// block and the values read the default from one function per input, so
+// main.nf holds each literal once. A null default is no function: a
+// param that is null equals it. conf/base.config sets no entry input,
+// whose value Nextflow would take over the default but not under a params
+// file's null. A string input takes any text: no value stands for an
+// unset input.
+func TestEmitPassesChangedEntryValues(t *testing.T) {
 	tree := emitSource(t, typedEntrySrc)
+	main := tree["main.nf"]
 
-	want := "PLAN(groovy.json.JsonOutput.toJson(['b': params.b, 'cfg': params.cfg, 'd': params.d, 'f': params.f, 'm': params.m, 'n': params.n, 'r': params.r, 's': params.s, 'tm': params.tm, 'xs': params.xs]), "
-	if !strings.Contains(tree["main.nf"], want) {
-		t.Errorf("main.nf lacks %q:\n%s", want, tree["main.nf"])
+	for _, want := range []string{
+		"PLAN(groovy.json.JsonOutput.toJson(changed(['b': params.b, 'cfg': params.cfg, 'd': params.d, 'f': params.f, 'm': params.m, 'n': params.n, 'r': params.r, 's': params.s, 'tm': params.tm, 'xs': params.xs], " +
+			"['b': default_b(), 'cfg': default_cfg(), 'd': default_d(), 'f': default_f(), 'm': default_m(), 'n': default_n(), 'r': default_r(), 'tm': default_tm(), 'xs': default_xs()])), ",
+		"\n    n: Object? = default_n()\n",
+		"\ndef default_n() {\n    return 1\n}\n",
+		" ; changed ; ",
+	} {
+		if !strings.Contains(main, want) {
+			t.Errorf("main.nf lacks %q:\n%s", want, main)
+		}
+	}
+
+	if got := len(defaultFunc.FindAllString(main, -1)); got != 9 {
+		t.Errorf("main.nf declares %d default functions, want 9, one per input with a value", got)
+	}
+
+	if want := "!java.util.Objects.equals(v, defaults[k])"; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf's changed lacks %q", want)
 	}
 
 	for _, id := range configParams(tree) {
@@ -217,17 +252,20 @@ func TestEmitPassesEveryEntryValue(t *testing.T) {
 	}
 }
 
-// TestGroovyLiterals: a call value is the Groovy literal JsonOutput encodes
-// back to JSON Martian parses as the same literal: a whole number keeps its
-// text, any other number is a Double, and a string escapes every control
-// character, which a single-quoted literal cannot hold raw.
+// TestGroovyLiterals: a call value is the Groovy literal of the same value,
+// which no launch value of another Martian value equals by Java's equals: a
+// whole number keeps its text, any other number is a Double, a float's
+// negative zero, which Martian encodes as -0, is the Double -0.0, not
+// Groovy's int 0, and a string escapes every control character, which a
+// single-quoted literal cannot hold raw.
 func TestGroovyLiterals(t *testing.T) {
 	for _, tc := range []struct{ json, want string }{
 		{`null`, `null`},
 		{`true`, `true`},
 		{`-9223372036854775808`, `-9223372036854775808`},
 		{`1500`, `1500`},
-		{`-0`, `-0`},
+		{`-0`, `-0.0d`},
+		{`0`, `0`},
 		{`0.5`, `0.5d`},
 		{`1e+06`, `1e+06d`},
 		{`1.234567e-07`, `1.234567e-07d`},
@@ -442,7 +480,7 @@ func TestSplitInputSchema(t *testing.T) {
 			t.Errorf("split %s: parameter template lacks %s:\n%s", literal, want, tree["parameter-template.json"])
 		}
 
-		if !strings.Contains(tree["main.nf"], "\n    x: Object? = "+tc.decl+"\n") {
+		if blockParams(tree)["x"] != "Object? = "+tc.decl {
 			t.Errorf("split %s: the params block types the split int x, whose value is {\"split\": v}:\n%s", literal, tree["main.nf"])
 		}
 

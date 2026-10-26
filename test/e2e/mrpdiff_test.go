@@ -813,7 +813,9 @@ func TestMrpDiffInt64Override(t *testing.T) {
 // a whole number beyond 2^53 is Martian's int literal, which a float input
 // takes as written, and a float takes Martian's shortest form (1e+06, -0).
 // -0.0 comes from a YAML params file: Nextflow reads a JSON one's -0.0 as
-// 0.0 before PLAN sees it.
+// 0.0 before PLAN sees it. A 0 over float_lexemes' -0.0 reaches the stage
+// as 0: PLAN gets a value unequal to the input's default, which is the
+// Double -0.0, not an int 0.
 func TestMrpDiffFloatOverride(t *testing.T) {
 	t.Parallel()
 
@@ -821,13 +823,14 @@ func TestMrpDiffFloatOverride(t *testing.T) {
 
 	bin := martianBin(t)
 
-	for _, tc := range []struct{ name, file, params, mro string }{
-		{name: "whole", file: "params.json", params: `{"f": 9007199254740993, "g": 1e6}`, mro: "override_float_whole.mro"},
-		{name: "frac", file: "params.yaml", params: "f: 1.5\ng: -0.0\n", mro: "override_float_frac.mro"},
+	for _, tc := range []struct{ name, fixture, file, params, mro string }{
+		{name: "whole", fixture: "cli_typed", file: "params.json", params: `{"f": 9007199254740993, "g": 1e6}`, mro: "override_float_whole.mro"},
+		{name: "frac", fixture: "cli_typed", file: "params.yaml", params: "f: 1.5\ng: -0.0\n", mro: "override_float_frac.mro"},
+		{name: "zero", fixture: "float_lexemes", file: "params.json", params: `{"pz": 0}`, mro: "override_zero.mro"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			runMrpDiffOverride(t, bin, "cli_typed", tc.mro, tc.file, tc.params)
+			runMrpDiffOverride(t, bin, tc.fixture, tc.mro, tc.file, tc.params)
 		})
 	}
 }

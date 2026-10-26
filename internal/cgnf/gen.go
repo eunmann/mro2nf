@@ -40,10 +40,11 @@ func (p *project) workflows() (map[string]string, error) {
 
 	var b strings.Builder
 
-	b.WriteString("include { shq ; code ; ordered ; bundlesOf ; refBundles ; skeletons ; bundleLocations ; recordsOf ; published ; callStaged ; pool ; OUTS ; CALL ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
+	b.WriteString("include { shq ; code ; ordered ; bundlesOf ; refBundles ; skeletons ; bundleLocations ; recordsOf ; published ; callStaged ; pool ; changed ; OUTS ; CALL ; NODES ; ENTRY ; ENTRY_FORKS ; " + wiringWorkflows + " } from './stage.nf'\n")
 	writeIncludes(&b, root, nodes, "./stage.nf", "./"+subworkflowDir+"/")
 	b.WriteString("\n")
 	b.WriteString(p.paramsBlock())
+	b.WriteString(p.defaultFuncs())
 	b.WriteString(planProcess)
 	b.WriteString("workflow {\n    main:\n")
 	writeLines(&b, plan.lines)

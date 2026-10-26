@@ -60,8 +60,10 @@ func TestRunEmitsCallGraphProject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if want := "\n    x: Object? = 42\n"; !strings.Contains(string(mainNF), want) {
-		t.Errorf("main.nf does not declare the entry input x with the call's value, %q:\n%s", want, mainNF)
+	for _, want := range []string{"\n    x: Object? = default_x()\n", "\ndef default_x() {\n    return 42\n}\n"} {
+		if !strings.Contains(string(mainNF), want) {
+			t.Errorf("main.nf does not declare the entry input x with the call's value, %q:\n%s", want, mainNF)
+		}
 	}
 }
 

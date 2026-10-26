@@ -21,21 +21,27 @@ flowchart LR
   value as its default. Nextflow takes a param's default only where no launch,
   params file or config sets it, and a `-params-file` null over it
   (`ParamsDsl.apply`), so an unset input holds the call's value and a null
-  one null. PLAN hands `mre plan` every input's value as one JSON object, and
-  `mre plan` overlays them on the invocation data and recompiles the call: a
-  null sets the input to null, as a null literal in `mrp`'s invocation does,
-  and the call's own value leaves the call as the `.mro` writes it. So a
+  one null. PLAN hands `mre plan` one JSON object of each input whose param
+  is not its default by Java's `equals`, type included (`changed` in
+  `stage.nf`), which an unset input's is, and `mre plan` overlays them on
+  the invocation data and recompiles the call: a null sets the input to
+  null, as a null literal in `mrp`'s invocation does, and an input left out
+  keeps the call's literal as the `.mro` writes it, which a round trip
+  through Groovy and its JSON would re-spell (a float's `-0` as `0`). So a
   launch value can change the run's forks, gates and pruned calls as an
   invocation literal would under `mrp`. `conf/base.config` sets no entry
   input, as a config value would override the default and not a params
   file's null.
 - **Defaults.** The default is the Groovy literal of the call's value as
-  Martian encodes it (`groovy`), which Groovy's `JsonOutput` encodes back to
-  JSON Martian parses as the same literal: a whole number keeps its text, a
-  number with a fraction or an exponent is a `Double`, as Groovy's default
-  `BigDecimal` encodes `1.234567e+06` as the int `1234567`, and a string
-  escapes its control characters. A split input's default is the call's split
-  value as `{"split": v}`.
+  Martian encodes it (`groovy`), which a function per input returns
+  (`default_<name>()`), so the params block and PLAN's values read one copy
+  of it. A launch value equal to it by Java's `equals` is the same Martian
+  value, so leaving it out changes nothing, and no other value may equal it:
+  a whole number keeps its text, a number with a fraction or an exponent is
+  a `Double`, and a float's negative zero, which Martian encodes as `-0`, is
+  the `Double` `-0.0`, as Groovy's literal `-0` is the int `0`. A string
+  escapes its control characters. A split input's default is the call's
+  split value as `{"split": v}`.
 - **Declared parameters.** `main.nf`'s `params` block declares every launch
   parameter, the entry inputs and the project's own (`paramsBlock`, from the
   same model as `conf/base.config`;

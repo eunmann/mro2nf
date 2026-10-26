@@ -29,6 +29,11 @@ type launchParam struct {
 	// map of strings; the params block gives an entry input's, the call's
 	// value as types.DecodeJSON decodes it, as its default.
 	value any
+	// defaultFunc names the function main.nf declares to return an entry
+	// input's value, which the params block declares as its default and
+	// PLAN's values compare the launch's value to; empty for a project
+	// param or an input with no value.
+	defaultFunc string
 	// nullable marks a param a launch may set to null: an entry input, whose
 	// null is the null literal mrp's invocation takes.
 	nullable bool
@@ -267,6 +272,8 @@ func (p *project) entryInput(m *syntax.StructMember, tbl *types.Table) (launchPa
 		if lp.value, err = types.DecodeJSON(def); err != nil {
 			return launchParam{}, fmt.Errorf("value: %w", err)
 		}
+
+		lp.defaultFunc = "default_" + m.Id
 	}
 
 	return lp, nil
@@ -299,11 +306,29 @@ func (lp launchParam) declaration() string {
 		decl += "?"
 	}
 
-	if lp.value == nil {
+	switch {
+	case lp.value == nil:
 		return decl
+	case lp.defaultFunc != "":
+		return decl + " = " + lp.defaultFunc + "()"
+	default:
+		return decl + " = " + groovy(lp.value)
+	}
+}
+
+// defaultFuncs declares the function of each entry input that has a
+// value, returning it, so the params block and PLAN's values read one
+// literal of it.
+func (p *project) defaultFuncs() string {
+	var b strings.Builder
+
+	for _, lp := range p.inputs {
+		if lp.defaultFunc != "" {
+			fmt.Fprintf(&b, "def %s() {\n    return %s\n}\n\n", lp.defaultFunc, groovy(lp.value))
+		}
 	}
 
-	return decl + " = " + groovy(lp.value)
+	return b.String()
 }
 
 // paramsBlock is main.nf's params block, which declares every launch
@@ -364,11 +389,12 @@ func (p *project) launchParams() []launchParam {
 }
 
 // groovy is v, a value types.DecodeJSON decodes or a map of strings, as a
-// Groovy literal, which groovy.json.JsonOutput encodes back to JSON that
-// Martian parses to the same literal. A number with a fraction or an
-// exponent is a Double: Groovy's default BigDecimal would encode
-// 1.234567e+06 as 1234567, Martian's int literal, which an untyped map
-// keeps as an int.
+// Groovy literal of the same value. PLAN's values leave out an entry input
+// whose launch value equals it by Java's equals (changed), so no launch
+// value of another Martian value may equal it. A number with a fraction or
+// an exponent is a Double, and Martian's -0, a float's negative zero
+// (FloatExp.EncodeJSON), is the Double -0.0: Groovy's literal -0 is the
+// int 0, and a BigDecimal has no negative zero.
 func groovy(v any) string {
 	switch x := v.(type) {
 	case string:
@@ -376,6 +402,10 @@ func groovy(v any) string {
 	case bool:
 		return strconv.FormatBool(x)
 	case json.Number:
+		if x == "-0" {
+			return "-0.0d"
+		}
+
 		if strings.ContainsAny(string(x), ".eE") {
 			return string(x) + "d"
 		}
