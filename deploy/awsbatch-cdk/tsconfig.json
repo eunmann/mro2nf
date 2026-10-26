@@ -9,8 +9,9 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "noImplicitAny": true,
-    "typeRoots": ["./node_modules/@types"]
+    "typeRoots": ["./node_modules/@types"],
+    "types": ["node"]
   },
-  "include": ["bin/**/*.ts", "lib/**/*.ts"],
+  "include": ["bin/**/*.ts", "lib/**/*.ts", "test/**/*.ts"],
   "exclude": ["node_modules", "cdk.out"]
 }
