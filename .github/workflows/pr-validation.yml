@@ -85,10 +85,8 @@ jobs:
           cache: true
       - name: Check go mod tidy
         run: go mod tidy && git diff --exit-code go.mod go.sum
-      - name: Check for vulnerabilities
-        # Pinned so a new govulncheck release (or one needing a newer toolchain)
-        # cannot change CI behavior without a repo change.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0 && govulncheck ./...
+      - name: Check the source and the binaries for vulnerabilities
+        run: make vulncheck
       # golangci-lint runs govet, so there is no separate `go vet` step.
       # --build-tags e2e pulls the tag-gated test/e2e harness into the lint
       # set (the tag is additive; nothing else carries an e2e constraint).
