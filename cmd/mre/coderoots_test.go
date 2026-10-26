@@ -124,8 +124,8 @@ func TestCodeRootsHoldNoTaskOfTheRun(t *testing.T) {
 		filepath.Join(runWork, "01", "2345", "x.txt"): false,
 		filepath.Join(task, "x.txt"):                  false,
 	} {
-		if got := roots.Holds(path); got != want {
-			t.Errorf("the roots hold %s: %t, want %t", path, got, want)
+		if got, err := roots.Holds(path); err != nil || got != want {
+			t.Errorf("the roots hold %s: %t (%v), want %t", path, got, err, want)
 		}
 	}
 }

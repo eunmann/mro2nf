@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -28,7 +31,7 @@ type graphFlags struct {
 func addGraph(fs *flag.FlagSet) *graphFlags {
 	g := &graphFlags{}
 	fs.StringVar(&g.entry, "entry", "", "the entry .mro, compiled as mrp compiles it; Martian resolves its includes and stage code beside it")
-	fs.StringVar(&g.call, "call", "", "file holding the run's call, base64 of the call mre plan rebuilt, in place of the entry's own (default: the entry's call)")
+	fs.StringVar(&g.call, "call", "", "file holding the run's call, base64 of the gzip of the call mre plan rebuilt, in place of the entry's own (default: the entry's call)")
 	fs.StringVar(&g.mropath, "mropath", "", "colon-separated include path (default: the -entry file's dir)")
 
 	return g
@@ -57,10 +60,10 @@ func (g *graphFlags) load() (*cg.Graph, error) {
 	return graph, nil
 }
 
-// readCall is the call the file at path holds, base64; "" reads none. A
-// task writes it from its value or stages the file the driver wrote, by the
-// call's size: as an argument, a wide run's call would pass the kernel's
-// limit on one argument (MAX_ARG_STRLEN, 128 KiB).
+// readCall is the call the file at path holds (encodeCall); "" reads none.
+// A task writes it from its value or stages the file the driver wrote, by
+// the call's size: as an argument, a wide run's call would pass the
+// kernel's limit on one argument (MAX_ARG_STRLEN, 128 KiB).
 func readCall(path string) (string, error) {
 	if path == "" {
 		return "", nil
@@ -71,9 +74,54 @@ func readCall(path string) (string, error) {
 		return "", fmt.Errorf("read -call: %w", err)
 	}
 
-	call, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	call, err := decodeCall(strings.TrimSpace(string(raw)))
 	if err != nil {
 		return "", fmt.Errorf("decode -call %s: %w", path, err)
+	}
+
+	return call, nil
+}
+
+// encodeCall is the run's call as every task gets it: base64 of its gzip.
+// The call holds every entry value, a file path each, so it grows with the
+// run, and a task gets all of it: 10,000 file paths are 1.67 MB of plain
+// base64 per task, 37 KB gzipped. The gzip header records no name or time,
+// so a PLAN re-run writes the same bytes and its tasks keep their -resume
+// key.
+func encodeCall(call string) (string, error) {
+	var buf bytes.Buffer
+
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return "", fmt.Errorf("compress call: %w", err)
+	}
+
+	if _, err := zw.Write([]byte(call)); err != nil {
+		return "", fmt.Errorf("compress call: %w", err)
+	}
+
+	if err := zw.Close(); err != nil {
+		return "", fmt.Errorf("compress call: %w", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+// decodeCall is the call text encodes (encodeCall).
+func decodeCall(text string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(text)
+	if err != nil {
+		return "", fmt.Errorf("decode call: %w", err)
+	}
+
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return "", fmt.Errorf("decompress call: %w", err)
+	}
+
+	call, err := io.ReadAll(zr)
+	if err != nil {
+		return "", fmt.Errorf("decompress call: %w", err)
 	}
 
 	return string(call), nil

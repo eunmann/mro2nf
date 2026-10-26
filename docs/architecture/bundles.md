@@ -152,7 +152,10 @@ flowchart LR
    `chunkouts/<name>`) and the file's ordinal directory there (`-field-refs`,
    `-fork-refs`, `-out-refs`). It detects a reference by the path it staged the
    item at, not by a link, so this holds on an object store, where Nextflow
-   stages a copy.
+   stages a copy. A fork or partner element names a file of the posting
+   task's own outs bundle the same way, by the bundle's path in the task
+   (`outs/<output>`), which `POSTED` resolves among the outs the task
+   posted, so the file is uploaded once, not once more per element.
 2. **The driver** joins each posting task's outputs, by instance key, to the
    paths it staged its items from (`POSTED`, with `SOURCES`, `JOIN_SOURCES`),
    and resolves each record to the ordinal directory in the producer's work

@@ -296,8 +296,9 @@ const readersPair = `def main(args, outs):
 `
 
 // readersEdits are edits of readersMRO that change only what a producer's
-// post writes for PAIR, by the producer's task: a fork element member of
-// A.ys zipped with A.xs, B's partner elements of B.ys, and the gate B posts.
+// post writes for its readers, by the producer's task: a fork element
+// member of A.ys zipped with A.xs, B's partner elements of B.ys, the gate B
+// posts, and B's off, which the pipeline outs come to read.
 var readersEdits = map[string]struct {
 	producer string
 	edit     []string
@@ -305,6 +306,7 @@ var readersEdits = map[string]struct {
 	"zip":     {"(READERS.A)", []string{"        b = 0,\n", "        b = split A.ys,\n"}},
 	"partner": {"(READERS.B)", []string{"        b = 0,\n", "        b = split B.ys,\n"}},
 	"gate":    {"(READERS.B)", []string{"        b = 0,\n    ) using (\n        disabled = self.skip,\n", "        b = 0,\n    ) using (\n        disabled = B.off,\n"}},
+	"outs":    {"(READERS.B)", []string{"    out string[] s,\n", "    out string[] s,\n    out bool     off,\n", "        s = PAIR.s,\n", "        s   = PAIR.s,\n        off = B.off,\n"}},
 }
 
 // TestResumeKeysOnTheReadersAPostWritesFor (#499): a stage's post writes

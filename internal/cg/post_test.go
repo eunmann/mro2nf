@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/eunmann/mro2nf/internal/shim"
@@ -83,12 +84,11 @@ func TestForkElementLeaves(t *testing.T) {
 
 	for i, dir := range elems {
 		want := "g" + strconv.Itoa(i) + ".txt"
-		// .mre-origin is the shim's record of where the leaf came from (#431).
-		if d := cmp.Diff([]string{".mre-origin", want}, leafNames(t, dir)); d != "" {
+		if d := cmp.Diff([]string{want}, stagedLeaves(t, forks, dir)); d != "" {
 			t.Errorf("fork %d element leaves (-want +got):\n%s", i, d)
 		}
 
-		path := procInput(t, f, dir)
+		path := procInput(t, f, forks, dir)
 		if b, err := os.ReadFile(path); err != nil || filepath.Base(path) != want || len(b) != i+1 {
 			t.Errorf("fork %d reads %s (%d bytes, %v), want %s of %d bytes", i, path, len(b), err, want, i+1)
 		}
@@ -136,23 +136,137 @@ func TestForkElementLeaves2D(t *testing.T) {
 		}
 
 		for i, dir := range elems {
-			if d := cmp.Diff(want[i], stagedLeaves(t, dir)); d != "" {
+			if d := cmp.Diff(want[i], stagedLeaves(t, forks, dir)); d != "" {
 				t.Errorf("%s fork %d element leaves (-want +got):\n%s", root, i, d)
 			}
 		}
 	}
 
 	cols := partnerItems(t, forks, "MAP_FILE_2D.PAIR", "MAP_FILE_2D.MAKE", "cols")
-	if d := cmp.Diff([]string{"c0_0.txt", "c0_1.txt"}, stagedLeaves(t, cols["0"])); d != "" {
+	if d := cmp.Diff([]string{"c0_0.txt", "c0_1.txt"}, stagedLeaves(t, forks, cols["0"])); d != "" {
 		t.Errorf("MAKE.cols partner element 0 leaves (-want +got):\n%s", d)
 	}
 }
 
-// stagedLeaves are the names of the files staged in the bundle at dir, sorted.
-func stagedLeaves(t *testing.T, dir string) []string {
+// postBothMRO maps PROC over GEN's files and returns them too, so GEN's
+// post writes its outs bundle of them and an element of each.
+const postBothMRO = `filetype txt;
+
+stage GEN(
+    in  int   n,
+    out txt[] files,
+    src py    "stages/gen",
+)
+
+stage PROC(
+    in  txt f,
+    out int size,
+    src py  "stages/proc",
+)
+
+pipeline FBS(
+    in  int   n,
+    out txt[] files,
+    out int[] sizes,
+)
+{
+    call GEN(
+        n = self.n,
+    )
+
+    map call PROC(
+        f = split GEN.files,
+    )
+
+    return (
+        files = GEN.files,
+        sizes = PROC.size,
+    )
+}
+
+call FBS(
+    n = 3,
+)
+`
+
+// TestForkElementNamesItsOutsFile (#623): a file of an output that GEN's
+// post writes as an outs bundle and that its fork elements hold lies in
+// the outs bundle alone, each element naming its file by reference there,
+// so an object-store work dir uploads it once; a PROC instance staging its
+// element and the file it names reads the file mrp gives its fork.
+func TestForkElementNamesItsOutsFile(t *testing.T) {
+	const n = 3
+
+	mro := filepath.Join(t.TempDir(), "pipeline.mro")
+	if err := os.WriteFile(mro, []byte(postBothMRO), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := Load(mro, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fixture{t: t, g: g, mro: mro, dir: t.TempDir()}
+	forks := f.post(stageFileOuts(t, f, n))
+
+	if d := cmp.Diff([]string{"g0.txt", "g1.txt", "g2.txt"}, stagedLeaves(t, forks, filepath.Join(filepath.Dir(forks), "outs", "files"))); d != "" {
+		t.Errorf("GEN's outs bundle of files (-want +got):\n%s", d)
+	}
+
+	for i, dir := range elementItems(t, forks, "FBS.PROC") {
+		if _, err := os.Lstat(filepath.Join(dir, "f")); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("fork %d element holds files (%v), want its file named in GEN's outs", i, err)
+		}
+
+		if refs := elementRefs(t, forks, dir); len(refs) != 1 || filepath.Dir(filepath.Dir(refs[0])) != filepath.Join(filepath.Dir(forks), "outs", "files") {
+			t.Errorf("fork %d element names %v, want one file of GEN's outs bundle of files", i, refs)
+		}
+
+		want := "g" + strconv.Itoa(i) + ".txt"
+		if path := procInput(t, f, forks, dir); filepath.Base(path) != want {
+			t.Errorf("fork %d reads %s, want %s", i, path, want)
+		}
+	}
+}
+
+// elementRefs are the ordinal dirs of the files the element dir, an item
+// a post wrote below forks, names by reference, as the post's fork refs
+// record them and the driver resolves them: here, where the post wrote
+// them.
+func elementRefs(t *testing.T, forks, dir string) []string {
 	t.Helper()
 
-	got := slices.DeleteFunc(leafNames(t, dir), func(n string) bool { return n == ".mre-origin" })
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(forks), "fork_refs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	item := filepath.Base(filepath.Dir(dir)) + "/" + filepath.Base(dir)
+
+	var out []string
+
+	for rec := range strings.SplitSeq(string(raw), " ") {
+		if f := strings.Split(rec, "\t"); len(f) == 3 && f[0] == item {
+			out = append(out, filepath.Join(f[1], f[2]))
+		}
+	}
+
+	return out
+}
+
+// stagedLeaves are the names of the files the bundle at dir, written into
+// forks or beside it, holds or names by reference, sorted.
+func stagedLeaves(t *testing.T, forks, dir string) []string {
+	t.Helper()
+
+	got := leafNames(t, dir)
+
+	for _, ordinal := range elementRefs(t, forks, dir) {
+		got = append(got, leafNames(t, filepath.Dir(filepath.Dir(ordinal)), filepath.Base(ordinal))...)
+	}
+
+	got = slices.DeleteFunc(got, func(n string) bool { return n == ".mre-origin" })
 	slices.Sort(got)
 
 	return got
@@ -193,11 +307,31 @@ func stageFileOuts(t *testing.T, f *fixture, n int) string {
 }
 
 // procInput is the file a PROC instance staging only the fork element at
-// dir is given.
-func procInput(t *testing.T, f *fixture, dir string) string {
+// dir, which a post wrote into forks, and the files it names by reference
+// is given.
+func procInput(t *testing.T, f *fixture, forks, dir string) string {
 	t.Helper()
 
-	_, args, err := f.g.WriteArgs(ArgsSpec{Node: "FBS.PROC", In: []string{dir}, Out: f.next("args")})
+	ordinals := elementRefs(t, forks, dir)
+
+	bundles := make([]string, 0, 1+len(ordinals))
+	bundles = append(bundles, dir)
+
+	for _, ordinal := range ordinals {
+		bundles = append(bundles, filepath.Dir(filepath.Dir(ordinal)))
+	}
+
+	staged, err := shim.NewStaged(bundles...)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := staged.Leaves()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, args, err := f.g.WriteArgs(ArgsSpec{Node: "FBS.PROC", In: []string{dir}, Refs: refs, Out: f.next("args")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,21 +344,28 @@ func procInput(t *testing.T, f *fixture, dir string) string {
 	return path
 }
 
-// leafNames lists the files staged below a bundle's files dir.
-func leafNames(t *testing.T, dir string) []string {
+// leafNames lists the files staged below a bundle's files dir, or only
+// below its ordinal dirs ordinals, none where it has none.
+func leafNames(t *testing.T, dir string, ordinals ...string) []string {
 	t.Helper()
+
+	if len(ordinals) == 0 {
+		ordinals = []string{""}
+	}
 
 	var out []string
 
-	err := filepath.WalkDir(filepath.Join(dir, "f"), func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			out = append(out, d.Name())
-		}
+	for _, d := range ordinals {
+		err := filepath.WalkDir(filepath.Join(dir, "f", d), func(_ string, e fs.DirEntry, err error) error {
+			if err == nil && !e.IsDir() {
+				out = append(out, e.Name())
+			}
 
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
+			return err
+		})
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal(err)
+		}
 	}
 
 	return out

@@ -3,10 +3,13 @@
 package e2e
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,8 +29,8 @@ import (
 // split_forward_file's split names its input by reference in each chunk's
 // def, which each chunk and the join stage from GEN's work dir. Their calls are
 // small, so each task writes the call into its
-// script; staged_call's entry label pushes the call's base64 past
-// cg.MaxValueBytes, so each task stages the call.b64 the driver wrote once
+// script; staged_call's incompressible entry label pushes the call's
+// encoding past cg.MaxValueBytes, so each task stages the call.b64 the driver wrote once
 // (CALL), whose path every task's meta holds.
 // These runtime cases are probabilistic guards: an unsorted gather only
 // re-executes when completion order happens to churn.
@@ -48,7 +51,7 @@ func TestResumeCachesEverything(t *testing.T) {
 		{"map_pipe_split", "map_pipe_split", nil},
 		{"file_tree", "file_tree", nil},
 		{"split_forward_file", "split_forward_file", nil},
-		{"staged_call", "struct_input", map[string]any{"s": 10, "l": strings.Repeat("v", cg.MaxValueBytes), "x": 5}},
+		{"staged_call", "struct_input", map[string]any{"s": 10, "l": incompressible(2 * cg.MaxValueBytes), "x": 5}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -74,6 +77,20 @@ func TestResumeCachesEverything(t *testing.T) {
 			assertAllCached(t, readTrace(t, filepath.Join(proj, "trace2.txt")))
 		})
 	}
+}
+
+// incompressible is n characters of base64 of SHA-256 hashes, which gzip
+// shrinks by no more than base64 grows them: a call holding it encodes to
+// at least n bytes (cmd/mre encodeCall).
+func incompressible(n int) string {
+	var b strings.Builder
+
+	for i := 0; b.Len() < n; i++ {
+		sum := sha256.Sum256([]byte(strconv.Itoa(i)))
+		b.WriteString(base64.RawURLEncoding.EncodeToString(sum[:]))
+	}
+
+	return b.String()[:n]
 }
 
 // assertCallStaged requires every task of the traced run that reads the

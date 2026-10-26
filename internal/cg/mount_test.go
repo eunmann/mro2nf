@@ -195,8 +195,8 @@ func TestRootsAreThePathsReadInPlace(t *testing.T) {
 			"/data/other.txt":  false,
 			"s3://reads/a.txt": false,
 		} {
-			if got := roots.Holds(value); got != want {
-				t.Errorf("host %t: a task's roots hold %s: %t, want %t", host, value, got, want)
+			if got, err := roots.Holds(value); err != nil || got != want {
+				t.Errorf("host %t: a task's roots hold %s: %t (%v), want %t", host, value, got, err, want)
 			}
 		}
 	}

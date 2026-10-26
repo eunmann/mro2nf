@@ -104,16 +104,7 @@ func (g *Graph) Roots(in ReadInPlace, code ...string) (shim.Roots, error) {
 		}
 	}
 
-	roots, err := shim.NewRoots(paths...)
-	if err != nil {
-		return shim.Roots{}, fmt.Errorf("entry roots: %w", err)
-	}
-
-	if roots, err = roots.WithCode(slices.Concat(g.mroPaths, code)...); err != nil {
-		return shim.Roots{}, fmt.Errorf("code roots: %w", err)
-	}
-
-	return roots, nil
+	return shim.NewRoots(paths...).WithCode(slices.Concat(g.mroPaths, code)...), nil
 }
 
 // entryFileValues are every file value of the call's arguments, each once,
@@ -241,11 +232,6 @@ func VetHostLeaf(l EntryLeaf, hostPaths bool, workDir string) error {
 		return nil
 	}
 
-	roots, err := shim.NewRoots(l.Value)
-	if err != nil {
-		return fmt.Errorf("%w: entry input '%s' does not resolve: %w", ErrEntryFile, l.Input, unnamed(err))
-	}
-
 	realWork, err := filepath.EvalSymlinks(workDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		realWork = workDir
@@ -253,12 +239,33 @@ func VetHostLeaf(l EntryLeaf, hostPaths bool, workDir string) error {
 		return fmt.Errorf("vet entry input '%s': resolve the run's work dir: %w", l.Input, err)
 	}
 
-	if roots.Holds(workDir) || roots.Holds(realWork) {
+	held, err := holdsAny(shim.NewRoots(l.Value), workDir, realWork)
+	if err != nil {
+		return fmt.Errorf("%w: entry input '%s' does not resolve: %w", ErrEntryFile, l.Input, unnamed(err))
+	}
+
+	if held {
 		return fmt.Errorf("%w: entry input '%s' is or holds the run's work dir %s, and every task reads a head-node entry input in place; pass a directory that does not hold it, or run with -work-dir outside it",
 			ErrEntryFile, l.Input, workDir)
 	}
 
 	return nil
+}
+
+// holdsAny reports whether roots hold any of paths.
+func holdsAny(roots shim.Roots, paths ...string) (bool, error) {
+	for _, p := range paths {
+		held, err := roots.Holds(p)
+		if err != nil {
+			return false, fmt.Errorf("hold %s: %w", p, err)
+		}
+
+		if held {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // unnamed is the cause of the failure err to resolve a value, without the

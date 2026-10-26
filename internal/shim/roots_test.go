@@ -2,6 +2,7 @@ package shim_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,15 +11,24 @@ import (
 	"github.com/eunmann/mro2nf/internal/types/typestest"
 )
 
-// TestRootsHolds: roots hold each root and what lies under it once cleaned,
-// a root under another adding nothing, so neither a sibling sharing a
-// root's prefix nor a path climbing out of one reads as held; a relative
-// path is no root, and the zero Roots hold nothing.
-func TestRootsHolds(t *testing.T) {
-	r, err := shim.NewRoots("/mnt/s3", "/data/ref/", "/data/ref/genome.fa", "rel/x", "")
+// holds is whether roots hold p, failing the test on an error.
+func holds(t *testing.T, roots shim.Roots, p string) bool {
+	t.Helper()
+
+	held, err := roots.Holds(p)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Holds(%q): %v", p, err)
 	}
+
+	return held
+}
+
+// TestRootsHolds: roots hold each root and what lies under it once cleaned,
+// so neither a sibling sharing a root's prefix nor a path climbing out of
+// one reads as held; a relative path is no root, and the zero Roots hold
+// nothing.
+func TestRootsHolds(t *testing.T) {
+	r := shim.NewRoots("/mnt/s3", "/data/ref/", "/data/ref/genome.fa", "rel/x", "")
 
 	for p, want := range map[string]bool{
 		"/mnt/s3":              true,
@@ -33,17 +43,12 @@ func TestRootsHolds(t *testing.T) {
 		"rel/x":                false,
 		"/rel/x":               false,
 	} {
-		if got := r.Holds(p); got != want {
+		if got := holds(t, r, p); got != want {
 			t.Errorf("Holds(%q) = %t, want %t", p, got, want)
 		}
 	}
 
-	none, err := shim.NewRoots()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if (shim.Roots{}).Holds("/mnt/s3/b") || none.Holds("/") {
+	if holds(t, shim.Roots{}, "/mnt/s3/b") || holds(t, shim.NewRoots(), "/") {
 		t.Error("no roots hold a path")
 	}
 }
@@ -63,17 +68,13 @@ func TestRootsExceptTheTaskDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	roots, err := shim.NewRoots(base)
+	roots, err := shim.NewRoots(base).Except(link)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if roots, err = roots.Except(link); err != nil {
-		t.Fatal(err)
-	}
-
-	if !roots.Holds(input) || roots.Holds(own) || roots.Holds(filepath.Join(link, "main", "files", "out.txt")) {
-		t.Fatalf("Holds: input %t, own output %t, want only the input held", roots.Holds(input), roots.Holds(own))
+	if !holds(t, roots, input) || holds(t, roots, own) || holds(t, roots, filepath.Join(link, "main", "files", "out.txt")) {
+		t.Fatalf("Holds: input %t, own output %t, want only the input held", holds(t, roots, input), holds(t, roots, own))
 	}
 
 	conf, err := shim.ConfineStage(filepath.Join(base, "task"), "main", true, roots)
@@ -122,13 +123,10 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	roots, err := shim.NewRoots(filepath.Join(home, "ref"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	roots := shim.NewRoots(filepath.Join(home, "ref"))
 
-	if !roots.Holds(input) || !roots.Holds(filepath.Join(home, "ref", "genome.fa")) {
-		t.Fatalf("Holds: real path %t, given path %t, want both held", roots.Holds(input), roots.Holds(filepath.Join(home, "ref", "genome.fa")))
+	if !holds(t, roots, input) || !holds(t, roots, filepath.Join(home, "ref", "genome.fa")) {
+		t.Fatalf("Holds: real path %t, given path %t, want both held", holds(t, roots, input), holds(t, roots, filepath.Join(home, "ref", "genome.fa")))
 	}
 
 	task := filepath.Join(t.TempDir(), "task")
@@ -138,7 +136,7 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.Symlink(filepath.Join(home, "ref"), out); err != nil {
+	if err := os.Symlink(input, out); err != nil {
 		t.Fatal(err)
 	}
 
@@ -148,28 +146,23 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 	}
 
 	bundle := filepath.Join(t.TempDir(), "outs")
-	if _, err := shim.WriteItem(bundle, map[string]any{"ref": out}, typestest.Fields(t, "ref path"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}, shim.Staged{}); err != nil {
-		t.Fatalf("a stage output linking to an input read in place: %v", err)
+	if _, err := shim.WriteItem(bundle, map[string]any{"ref": out}, typestest.Fields(t, "ref file"), fileTable(t), shim.Opts{Confine: conf, Roots: roots}, shim.Staged{}); err != nil {
+		t.Fatalf("a stage output linking to the real path of an input read in place: %v", err)
 	}
 }
 
 // TestCodeRootsKeepPathsNotLinks (#625): under strict confinement a stage
 // output naming a file in the pipeline's code, which every task finds at
-// the same path, stays the path it is; a link the stage made into the code
-// is no input the task was given, so the confinement refuses it as any
-// other path outside the task.
+// the same path, stays the path it is, and resolves no root's real path; a
+// link the stage made into the code is no input the task was given, so the
+// confinement refuses it as any other path outside the task.
 func TestCodeRootsKeepPathsNotLinks(t *testing.T) {
 	code := t.TempDir()
 	shipped := writeSelfNamed(t, filepath.Join(code, "stages", "ship", "shipped.txt"))
+	entry := writeSelfNamed(t, filepath.Join(t.TempDir(), "in", "e.txt"))
 
-	roots, err := shim.NewRoots()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if roots, err = roots.WithCode(code); err != nil {
-		t.Fatal(err)
-	}
+	roots := shim.NewRoots(entry).WithCode(code)
+	resolved := shim.CountResolves(roots)
 
 	task := filepath.Join(t.TempDir(), "task")
 
@@ -196,15 +189,84 @@ func TestCodeRootsKeepPathsNotLinks(t *testing.T) {
 		t.Errorf("the code file reads back at %v, want its path %s", got, shipped)
 	}
 
+	if *resolved != 0 {
+		t.Errorf("a path into the code resolved %d roots, want none", *resolved)
+	}
+
 	if _, err := shim.WriteItem(filepath.Join(t.TempDir(), "outs"), map[string]any{"out": link}, typestest.Fields(t, "out file"), fileTable(t), opts, shim.Staged{}); err == nil {
 		t.Error("a stage output linking into the code: nil error, want the confinement's refusal")
 	}
 }
 
-// TestNewRootsUnresolvable: a root whose real path cannot be read for a
-// reason other than its absence fails, rather than holding only its given
-// path.
-func TestNewRootsUnresolvable(t *testing.T) {
+// TestTaskResolvesOnlyWhatItReads: a task of a run reading many entry files
+// in place, each under a symlinked dir, that reads one of them, names it in
+// its args, returns its path and links to it as given resolves no root's
+// real path; a path only a real path holds resolves each root once for the
+// task.
+func TestTaskResolvesOnlyWhatItReads(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(base, home); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 200
+
+	values := make([]string, n)
+	for i := range values {
+		writeSelfNamed(t, filepath.Join(base, "in", fmt.Sprintf("e%03d.txt", i)))
+		values[i] = filepath.Join(home, "in", fmt.Sprintf("e%03d.txt", i))
+	}
+
+	task := filepath.Join(t.TempDir(), "task")
+	own := writeSelfNamed(t, filepath.Join(task, "main", "files", "own.txt"))
+
+	link := filepath.Join(task, "main", "files", "ref")
+	if err := os.Symlink(values[0], link); err != nil {
+		t.Fatal(err)
+	}
+
+	given := shim.NewRoots(values...)
+	resolved := shim.CountResolves(given)
+
+	roots, err := given.Except(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	linkLeaves(t, filepath.Join(task, "args"), map[string]any{"in": values[0]}, typestest.Fields(t, "in file"), roots)
+
+	conf, err := shim.ConfineStage(task, "main", true, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := map[string]any{"own": own, "ref": link, "same": values[0]}
+	writeBundle(t, filepath.Join(t.TempDir(), "outs"), payload, typestest.Fields(t, "own file", "ref file", "same file"), shim.Opts{Confine: conf, Roots: roots})
+
+	if *resolved != 0 {
+		t.Errorf("the task resolved %d roots, want none", *resolved)
+	}
+
+	for range 2 {
+		if !holds(t, roots, filepath.Join(base, "in", "e007.txt")) {
+			t.Fatal("a root's real path is not held")
+		}
+	}
+
+	if *resolved != n {
+		t.Errorf("two paths only real paths hold resolved %d roots, want each of %d once", *resolved, n)
+	}
+}
+
+// TestRootsUnresolvable: a path no root holds by its given path fails where
+// a root's real path cannot be read for a reason other than its absence,
+// rather than reading the root as its given path alone.
+func TestRootsUnresolvable(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a dir of mode 000")
 	}
@@ -216,8 +278,14 @@ func TestNewRootsUnresolvable(t *testing.T) {
 
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
-	if _, err := shim.NewRoots(filepath.Join(locked, "ref")); err == nil {
-		t.Error("NewRoots under a dir of mode 000: nil error, want the resolve failure")
+	roots := shim.NewRoots(filepath.Join(locked, "ref"))
+
+	if !holds(t, roots, filepath.Join(locked, "ref", "x")) {
+		t.Error("the root's given path is not held")
+	}
+
+	if _, err := roots.Holds(filepath.Join(t.TempDir(), "x")); err == nil {
+		t.Error("Holds of a path outside the given root, under a dir of mode 000: nil error, want the resolve failure")
 	}
 }
 
