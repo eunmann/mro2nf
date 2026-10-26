@@ -330,7 +330,9 @@ var scaleTestFunc = regexp.MustCompile(`(?m)^func (TestScale\w+)\(`)
 
 // TestNightlyScaleMatrixRunsEveryShape requires the scale job's matrix to
 // run every TestScale function in test/e2e/scale_test.go, one per job, so a
-// new shape cannot go unrun.
+// new shape cannot go unrun, and each job's -run pattern to end at its
+// shape, as some shapes' names are prefixes of others (Split,
+// SplitBroadcast).
 func TestNightlyScaleMatrixRunsEveryShape(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join(root, "test", "e2e", "scale_test.go"))
 	if err != nil {
@@ -359,7 +361,7 @@ func TestNightlyScaleMatrixRunsEveryShape(t *testing.T) {
 		t.Errorf("%s scale matrix shapes != TestScale functions (-want +got):\n%s", nightlyWorkflow, diff)
 	}
 
-	run := fmt.Sprintf("make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}' SCALE_TIMEOUT=%.0fm", scaleShapeTimeout.Minutes())
+	run := fmt.Sprintf("make test-scale SCALE_RUN='^TestScale${{ matrix.shape }}$' SCALE_TIMEOUT=%.0fm", scaleShapeTimeout.Minutes())
 	if !slices.ContainsFunc(job.get("steps").items, func(s *yamlNode) bool { return scalarOf(s.get("run")) == run }) {
 		t.Errorf("%s scale job never runs %q", nightlyWorkflow, run)
 	}
