@@ -196,6 +196,20 @@ func TestEmitPassesThePipestanceUUID(t *testing.T) {
 	}
 }
 
+// TestEmitPassesTheRunWorkDir (#625): the pipeline's code is a read-only
+// root every task reads at one path, and an include path may hold the run's
+// work dir, so every stage task names it, and mre keeps the tasks' files
+// out of the roots.
+func TestEmitPassesTheRunWorkDir(t *testing.T) {
+	if want := "workdir: workflow.workDir.toUriString()]"; !strings.Contains(stageRun, want) {
+		t.Errorf("stageRun lacks %q: %s", want, stageRun)
+	}
+
+	if want := " -run-workdir ${shq(run.workdir)} "; !strings.Contains(stageModule, want) {
+		t.Errorf("stage.nf lacks %q", want)
+	}
+}
+
 // TestEmitPassesThePipelinesVersion (#625): PLAN finds the pipelines'
 // version once, on the include path the stage tasks find the code on, and
 // every stage task records it in its jobs' _jobinfo, so a commit during a

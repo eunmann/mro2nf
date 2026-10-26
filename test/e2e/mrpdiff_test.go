@@ -551,6 +551,10 @@ var mrpDiffCases = []mrpDiffCase{
 	// and a sub-pipeline boundary too, is named by the first path mrp
 	// published it at.
 	{name: "shared_out_file"},
+	// #625: a stage returns a path into its own code, which mrp keeps and
+	// publishes as a link (published-symlinks-copied), and a later stage
+	// reads the file there.
+	{name: "code_path_out"},
 	// #432: files below a 2-D array, reached through a struct projection and
 	// a whole sub-pipeline ref, stay unpublished, as mrp leaves them. #457:
 	// each is named in its producer's work dir, from a scratch dir too.

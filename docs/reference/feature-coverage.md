@@ -129,6 +129,7 @@ syntax parser, and lints warning-free (`make lint-nf`).
 | a path written into text (JSON or CSV contents, an untyped `map`, a `string`) that a later job opens | 🚫 relies on `mrp`'s shared filesystem; no task stages it, so it opens only where the later task sees that path. Per profile in [Paths written into text](../user-guide/files-and-paths.md#paths-written-into-text) | e2e `TestDockerMountedS3Inputs` (a file input's path in JSON, under copy-staging as on `awsbatch`), `TestMrpDiffHostEntryPaths` (a head-node input's path in JSON, on `standard`) |
 | file-array / struct-of-file / map-of-file outputs publishing | ✅ | e2e `map_file`, `map_file_keyed`, `struct_of_file` |
 | a file reached from several outputs | ✅ #431 named by the first path mrp published it at | e2e `shared_out_file` |
+| a stage output naming a file in the pipeline's code (its include path or a stage's code directory) | ✅ #625 the path stays the path, as `mrp` keeps it, on every profile, a container profile's confinement included, since every task finds the code at the path it was transpiled from; a later stage reads the file there, and OUTS publishes a copy | e2e `code_path_out` (`TestGolden`, `TestMrpDiff`, `TestDockerIsolation`); unit `TestStageKeepsPathsIntoTheCode`, `TestCodeRootsHoldNoTaskOfTheRun`, `TestCodeRootsKeepPathsNotLinks` |
 | VDR modes (disable/post/rolling/strict) timing | 🚫 no mid-run deletion | e2e `TestMrpDiffVDR/rolling`, `TestMrpDiffVDR/strict` (published outputs match mrp's under its VDR) |
 
 ## Running / inspecting — running-pipelines / inspecting-pipelines

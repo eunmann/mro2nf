@@ -107,7 +107,7 @@ types are not Martian's. On 26.04:
 |---|---|---|
 | `--mro2nf_overrides <file>` | none | `mrp`'s `--overrides` file ([Resources and retries](resources-and-retries.md#mrp---overrides)) |
 | `--mro2nf_monitor true` | `false` | `mrp`'s `--monitor`: `mrjob` kills a job that exceeds its memory request |
-| `--mro2nf_confine true` | `false` | fails a stage task whose output resolves outside its work directory, instead of copying the file in; the container profiles always do this |
+| `--mro2nf_confine true` | `false` | fails a stage task whose output resolves outside its work directory, instead of copying the file in, unless it lies in a file input read in place or the S3 mount, or the output names a path in the pipeline's code (its include path and stage code directories); the container profiles always do this |
 | `--mro2nf_image <image>` | none | the image every task runs in; required by the container profiles |
 | `--mro2nf_mre <path>` | `mre` on `PATH` | the `mre` the tasks run |
 | `--mro2nf_mrjob <path>` | the `mrjob` beside `mre` | the `mrjob` that runs `py` and `comp` stages |

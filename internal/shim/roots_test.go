@@ -152,6 +152,54 @@ func TestRootsHoldTheRealPath(t *testing.T) {
 	}
 }
 
+// TestCodeRootsKeepPathsNotLinks (#625): under strict confinement a stage
+// output naming a file in the pipeline's code, which every task finds at
+// the same path, stays the path it is; a link the stage made into the code
+// is no input the task was given, so the confinement refuses it as any
+// other path outside the task.
+func TestCodeRootsKeepPathsNotLinks(t *testing.T) {
+	code := t.TempDir()
+	shipped := writeSelfNamed(t, filepath.Join(code, "stages", "ship", "shipped.txt"))
+
+	roots, err := shim.NewRoots()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if roots, err = roots.WithCode(code); err != nil {
+		t.Fatal(err)
+	}
+
+	task := filepath.Join(t.TempDir(), "task")
+
+	link := filepath.Join(task, "main", "files", "linked.txt")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Symlink(shipped, link); err != nil {
+		t.Fatal(err)
+	}
+
+	conf, err := shim.ConfineStage(task, "main", true, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts := shim.Opts{Confine: conf, Roots: roots}
+
+	bundle := filepath.Join(t.TempDir(), "outs")
+	writeBundle(t, bundle, map[string]any{"out": shipped}, fields(t, "out file"), opts)
+
+	if got := readPayload(t, bundle)["out"]; got != shipped {
+		t.Errorf("the code file reads back at %v, want its path %s", got, shipped)
+	}
+
+	if _, err := shim.WriteItem(filepath.Join(t.TempDir(), "outs"), map[string]any{"out": link}, fields(t, "out file"), fileTable(t), opts, shim.Staged{}); err == nil {
+		t.Error("a stage output linking into the code: nil error, want the confinement's refusal")
+	}
+}
+
 // TestNewRootsUnresolvable: a root whose real path cannot be read for a
 // reason other than its absence fails, rather than holding only its given
 // path.

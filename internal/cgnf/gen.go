@@ -215,10 +215,11 @@ func (p *project) planWiring(ws []*wiring) *wiring {
 // MRO_UUID: the launch environment's MRO_FORCE_UUID, as mrp honours it
 // (core/runtime.go:446), or else the Nextflow session id, which a -resume
 // keeps, as mrp's restart keeps the pipestance's uuid, and which keys
-// every task already.
+// every task already. Its workdir is the run's work dir, whose tasks' files
+// lie under no read-only root, though an include path may hold it.
 const (
 	planRun  = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, host_inputs: params.mro2nf_host_inputs, host_in_place: params.mro2nf_host_in_place, remote_inputs: params.mro2nf_allow_remote_inputs, s3_mount: params.mro2nf_s3_mount, local_jobs: params.mro2nf_local_jobs]"
-	stageRun = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, uuid: env('MRO_FORCE_UUID') ?: workflow.sessionId.toString(), mrjob: params.mro2nf_mrjob, adapters: params.mro2nf_adapters, monitor: params.mro2nf_monitor, confine: params.mro2nf_confine, s3_mount: params.mro2nf_s3_mount, host_in_place: params.mro2nf_host_in_place, local_jobs: params.mro2nf_local_jobs]"
+	stageRun = "run: [mre: params.mro2nf_mre, psid: params.mro2nf_psid, uuid: env('MRO_FORCE_UUID') ?: workflow.sessionId.toString(), mrjob: params.mro2nf_mrjob, adapters: params.mro2nf_adapters, monitor: params.mro2nf_monitor, confine: params.mro2nf_confine, s3_mount: params.mro2nf_s3_mount, host_in_place: params.mro2nf_host_in_place, local_jobs: params.mro2nf_local_jobs, workdir: workflow.workDir.toUriString()]"
 )
 
 // graphMeta is the meta map naming the entry .mro and the include path the

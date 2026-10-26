@@ -221,6 +221,7 @@ symlink it passes through, is classified as one of:
 | a path in the work directory outside the stage's phase directory: a staged input | followed wherever it points, hard-linked |
 | a path outside the task, inside what a staged input links to: an input's real path, which a stage that resolves its args' paths returns | hard-linked, as the input it resolves from |
 | a path under one of the run's read-only roots: the S3 mount, or an entry input every task reads in place ([Inputs](inputs.md)) | copied as a staged input; as an output, the path under the root stays a path, so a stage returning its input's path copies nothing |
+| a path in the pipeline's code, its include path or a stage's code directory, which every task finds at the path it was transpiled from, on the host or in the image | as an output, the path stays a path, as `mrp` keeps it; a link the stage made into it is any other host path |
 | any other host path outside the task | see below |
 
 For any other host path:

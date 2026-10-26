@@ -147,13 +147,16 @@ itself, the path `mrp` passes.
 - **Read-only roots.** Every task, told the same by `mre stage -host-in-place`,
   computes the run's read-only roots (`shim.Roots`,
   [`Graph.Roots`](../../internal/cg/entry.go)) from the call it compiles: each
-  value read in place, and the S3 mount below. Every bundle writer keeps a leaf
+  value read in place, the S3 mount below, and the pipeline's include path and
+  stages' code directories, which hold the code at the same path in every
+  task ([Bundles](bundles.md#symlinks-and-confinement)). Every bundle writer keeps a leaf
   under a root as the path it is, with no link, copy or origin. So a stage that
   returns its input's path, as Cell Ranger's `SETUP_REFERENCE_INFO` returns
   `reference_path`, posts the path, and no byte of the input is copied into
   `work/`.
 - A path in the task's own work directory is under no root, so a stage's own
-  outputs stay its own even below an input directory.
+  outputs stay its own even below an input directory; nor is one in the run's
+  work directory (`mre stage -run-workdir`), which an include path may hold.
 - PLAN, handed the run's work directory (`-run-workdir`), refuses a value that
   is or holds it, which every task would otherwise read as an input.
 - A task's `-resume` key holds the value's path, as `mrp`'s restart keys a
