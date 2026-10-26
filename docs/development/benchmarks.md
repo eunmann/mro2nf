@@ -119,7 +119,7 @@ the same way.
 
 ## Fixtures and lanes
 
-Ten fixtures live under `bench/`, exercising the costly patterns the overhead
+Twelve fixtures live under `bench/`, exercising the costly patterns the overhead
 rule targets:
 
 - **`chain`** — one file (`MAKEBIG`) carried through a deep chain of pass-through
@@ -166,6 +166,13 @@ rule targets:
   (`GATED`) (`pipeline_w4.mro`, `pipeline_w16.mro`). Under the flat-staging
   gate: each B task stages the one A file at its own index, joined on the
   two roots' ordinals (an aligned `cg.ReadPattern`), never all N of A's.
+- **`mapgather`** — a map call B reading another map call A's files both at
+  its own fork and whole (`f = split A.f`, `all = A.f`, #622), for an A
+  over an entry array (`LIT`) and over a stage's outs (`RUN`)
+  (`pipeline_w4.mro`, `pipeline_w16.mro`). The whole read covers the
+  aligned one, so every B instance reads A through the one `GATHER` of its
+  outs; each B task stages all N of A's files, as each `mrp` job reads
+  them, so the lanes are not under the flat-staging gate.
 - **`splitbroadcast`** — one file (`MKREF`'s `ref`) broadcast into a map
   call over a split stage, whose every chunk and join reads it
   (`pipeline_w4.mro`, `pipeline_w8.mro` samples): no task may copy it into
