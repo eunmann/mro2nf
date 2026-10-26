@@ -304,7 +304,7 @@ func TestReleaseArchiveLayout(t *testing.T) {
 	requireTools(t, "bash", "git", "tar", "gzip")
 
 	platforms := releasePlatforms(t)
-	if diff := cmp.Diff([]string{"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"}, platforms); diff != "" {
+	if diff := cmp.Diff([]string{"linux-amd64", "linux-arm64"}, platforms); diff != "" {
 		t.Errorf("%s build platforms (-want +got):\n%s", releaseWorkflow, diff)
 	}
 
@@ -347,7 +347,7 @@ var makeReleasePlatforms = regexp.MustCompile(`(?m)^RELEASE_PLATFORMS := (.+)$`)
 
 // TestCrossCompilesReleasePlatforms holds make cross to the platforms the
 // release ships archives for, and PR Validation's Build job to running it:
-// no test runs on darwin or linux/arm64, so only the cross-compile catches a
+// no test runs on linux/arm64, so only the cross-compile catches a
 // test that compiles on the runner's platform alone.
 func TestCrossCompilesReleasePlatforms(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(root, "Makefile"))
@@ -1134,10 +1134,8 @@ var smokeMatrixEntry = regexp.MustCompile(`^\{ goos: (\w+), goarch: (\w+), runne
 
 // smokeRunners are the hosted runners of each release platform.
 var smokeRunners = map[string]string{
-	"linux-amd64":  "ubuntu-latest",
-	"linux-arm64":  "ubuntu-24.04-arm",
-	"darwin-amd64": "macos-15-intel",
-	"darwin-arm64": "macos-latest",
+	"linux-amd64": "ubuntu-latest",
+	"linux-arm64": "ubuntu-24.04-arm",
 }
 
 // TestReleaseSmokeTestsEveryArchive requires a smoke test of each archive on

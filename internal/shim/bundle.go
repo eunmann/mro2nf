@@ -768,11 +768,9 @@ func resolveSymlink(src string) (string, error) {
 
 // dirID identifies a directory by (device, inode) — the same identity os.SameFile
 // compares — so the copy-tree recursion detects a directory reached twice on one
-// path regardless of the symlink route taken to it. int64 (not uint64) keeps the
-// field conversions non-redundant across platforms whose Stat_t.Dev differs
-// (linux uint64, darwin int32); sign is irrelevant to a map key.
+// path regardless of the symlink route taken to it.
 type dirID struct {
-	dev, ino int64
+	dev, ino uint64
 }
 
 // enterDir records dir's (device, inode) in ancestors for cycle detection. The
@@ -784,7 +782,7 @@ func enterDir(dir os.FileInfo, ancestors map[dirID]struct{}) (func(), bool) {
 		return func() {}, false
 	}
 
-	id := dirID{dev: int64(st.Dev), ino: int64(st.Ino)}
+	id := dirID{dev: st.Dev, ino: st.Ino}
 	if _, seen := ancestors[id]; seen {
 		return func() {}, true
 	}
