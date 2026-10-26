@@ -65,7 +65,7 @@ meta=$2
 case $1 in
 split) echo '{"chunks":[{"x":2},{"x":3}],"join":{}}' > "$meta/_stage_defs" ;;
 main) x=$(tr -d ' \n' < "$meta/_args" | sed 's/.*"x":\([0-9]*\).*/\1/'); echo "{\"sq\":$((x * x))}" > "$meta/_outs" ;;
-join) echo "{\"total\":$(($(tr -d ' \n' < "$meta/_chunk_outs" | grep -o '"sq":[0-9]*' | cut -d: -f2 | paste -sd+)))}" > "$meta/_outs" ;;
+join) echo "{\"total\":$(($(tr -d ' \n' < "$meta/_chunk_outs" | grep -o '"sq":[0-9]*' | cut -d: -f2 | paste -sd+ -)))}" > "$meta/_outs" ;;
 esac
 touch "$meta/_complete"
 `

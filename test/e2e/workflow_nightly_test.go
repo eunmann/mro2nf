@@ -204,6 +204,15 @@ var nightlyHeavyJobs = []string{"scale", "gendiff"}
 // jobs, which the implicit success() would treat as a reason to skip it.
 const nightlyMarkGate = "${{ !failure() && !cancelled() && needs.gate.outputs.run == 'true' }}"
 
+// nightlyScanGate runs a scan job every day, whatever the change gate's
+// verdict.
+const nightlyScanGate = "${{ needs.gate.outputs.tier == 'daily' }}"
+
+// nightlyScanJobs check the commit against data that changes without it,
+// vulnerability databases and Debian's packages, so a pass on the commit
+// cannot skip them.
+var nightlyScanJobs = []string{"vulncheck", "imagescan"}
+
 // TestNightlySuitesWaitOnChangeGate requires every suite job to need the
 // change gate and run only on its verdict, in its tier, and the pass record
 // to need every suite job and run only when none failed, so a pass is
@@ -214,9 +223,9 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 	var mark workflowJob
 
 	for _, j := range workflowJobs(t, nightlyWorkflow) {
-		switch j.id {
-		case "gate", "report":
-		case "mark":
+		switch {
+		case j.id == "gate" || j.id == "report" || slices.Contains(nightlyScanJobs, j.id):
+		case j.id == "mark":
 			mark = j
 		default:
 			suites = append(suites, j.id)
@@ -244,6 +253,85 @@ func TestNightlySuitesWaitOnChangeGate(t *testing.T) {
 
 	if mark.cond != nightlyMarkGate {
 		t.Errorf("mark job has if %q, want %q", mark.cond, nightlyMarkGate)
+	}
+}
+
+// TestNightlyScansRunDaily requires every scan job to run each day on the
+// gate's tier alone, and the pass record not to need it: a new advisory
+// must not withhold the suites' record, and the record cannot skip a scan.
+func TestNightlyScansRunDaily(t *testing.T) {
+	jobs := workflowJobs(t, nightlyWorkflow)
+
+	for _, id := range nightlyScanJobs {
+		i := slices.IndexFunc(jobs, func(j workflowJob) bool { return j.id == id })
+		if i < 0 {
+			t.Errorf("%s has no scan job %q", nightlyWorkflow, id)
+
+			continue
+		}
+
+		if j := jobs[i]; !slices.Contains(j.needs, "gate") || j.cond != nightlyScanGate {
+			t.Errorf("scan job %q: needs %q, if %q; want needs gate, if %q", j.id, j.needs, j.cond, nightlyScanGate)
+		}
+	}
+
+	mark := slices.IndexFunc(jobs, func(j workflowJob) bool { return j.id == "mark" })
+	if mark < 0 {
+		t.Fatalf("%s has no mark job", nightlyWorkflow)
+	}
+
+	for _, s := range nightlyScanJobs {
+		if slices.Contains(jobs[mark].needs, s) {
+			t.Errorf("mark job needs scan job %q", s)
+		}
+	}
+}
+
+// nightlyJobRuns are the nightly jobs that run one command, and the command.
+var nightlyJobRuns = map[string]string{
+	"unit":      "go test -race ./...",
+	"lint":      "make lint-check",
+	"vulncheck": "make vulncheck",
+}
+
+var makeVulncheck = regexp.MustCompile(`(?m)^vulncheck: build .*\n((?:\t.*\n)+)`)
+
+// TestNightlyChecksCodeAndAdvisories pins the daily unit tests on Linux and
+// on macOS, which PR Validation only compiles for, lint, and govulncheck on
+// the source and on every binary make build builds, mrjob included, which
+// PR Validation's Lint job runs too.
+func TestNightlyChecksCodeAndAdvisories(t *testing.T) {
+	jobs := readWorkflow(t, nightlyWorkflow).get("jobs")
+
+	for id, run := range nightlyJobRuns {
+		if !slices.ContainsFunc(jobs.get(id).get("steps").items, func(s *yamlNode) bool { return scalarOf(s.get("run")) == run }) {
+			t.Errorf("%s job %q never runs %q", nightlyWorkflow, id, run)
+		}
+	}
+
+	if diff := cmp.Diff([]string{"ubuntu-latest", "macos-latest"}, jobs.get("unit").get("strategy").get("matrix").get("os").list()); diff != "" {
+		t.Errorf("%s unit matrix os (-want +got):\n%s", nightlyWorkflow, diff)
+	}
+
+	lint := readWorkflow(t, gateWorkflow).get("jobs").get("lint").get("steps").items
+	if !slices.ContainsFunc(lint, func(s *yamlNode) bool { return scalarOf(s.get("run")) == "make vulncheck" }) {
+		t.Errorf("%s lint job never runs make vulncheck", gateWorkflow)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := makeVulncheck.FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("Makefile has no vulncheck target that builds first")
+	}
+
+	for _, want := range []string{"$(GOVULNCHECK) ./...", "for b in $(BINS) mrjob;", "$(GOVULNCHECK) -mode=binary $$b"} {
+		if !strings.Contains(string(m[1]), want) {
+			t.Errorf("Makefile vulncheck recipe lacks %q:\n%s", want, m[1])
+		}
 	}
 }
 
