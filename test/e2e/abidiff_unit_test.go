@@ -228,6 +228,25 @@ func TestHashDirTree(t *testing.T) {
 	if got := sum(t, link); got != base {
 		t.Errorf("symlinked root hashes differently from the tree it points at")
 	}
+
+	dangling := func(t *testing.T, to string) string {
+		t.Helper()
+
+		dir := build(t, map[string]string{"a.txt": "x", "sub/b.txt": "y"})
+		if err := os.Symlink(to, filepath.Join(dir, "gone")); err != nil {
+			t.Fatal(err)
+		}
+
+		return sum(t, dir)
+	}
+
+	if a, b := dangling(t, "/nonexistent"), dangling(t, "/nonexistent"); a != b || a == base {
+		t.Errorf("a tree holding a dangling link hashes %s and %s, want equal and unlike the tree without it", a, b)
+	}
+
+	if dangling(t, "/nonexistent") == dangling(t, "/elsewhere") {
+		t.Errorf("dangling links to different targets hash alike")
+	}
 }
 
 // TestABINormalizeKeyRules checks ignore-key and ceil-number touch only the

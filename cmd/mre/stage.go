@@ -92,6 +92,10 @@ func (s *stageFlags) stage(ctx context.Context, g *cg.Graph) error {
 		return fmt.Errorf("stage: %w", err)
 	}
 
+	if err := s.run.staged.Restore(); err != nil {
+		return fmt.Errorf("stage: %w", err)
+	}
+
 	if s.run.refs, err = s.run.staged.Leaves(); err != nil {
 		return fmt.Errorf("stage: %w", err)
 	}

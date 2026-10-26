@@ -474,6 +474,86 @@ func holdsOneTree(t *testing.T, skeletons bool) {
 	}
 }
 
+// dirMRO is a pipeline whose outs publish a stage's directory.
+const dirMRO = `stage MKDIR(
+    out path d,
+    src py   "mkdir",
+)
+
+pipeline P(
+    out path d,
+)
+{
+    call MKDIR()
+
+    return (
+        d = MKDIR.d,
+    )
+}
+
+call P()
+`
+
+// newDirRun runs MKDIR, whose directory write fills, and stages its outs
+// bundle, or its skeleton, into the OUTS task's dir. It returns MKDIR's
+// work dir.
+func newDirRun(t *testing.T, skeletons bool, write func(d string)) (*publishRun, string) {
+	t.Helper()
+
+	r := newRun(t, dirMRO)
+	r.skeletons = skeletons
+
+	work := r.task("P.MKDIR", nil, func(_ map[string]any, files string) map[string]any {
+		d := filepath.Join(files, "d")
+		write(d)
+
+		return map[string]any{"d": d}
+	})
+
+	r.stageOuts(filepath.Join(work, "outs", "d"))
+
+	return r, work
+}
+
+// TestWriteOutsRefusesAStageDanglingLink (#624): a published directory
+// holding a link its stage wrote that reaches nothing fails the pipeline
+// outs, naming the link, rather than publish the directory without it, as
+// the run publishes copies, which the link has none of, into a results dir
+// that may be an object store.
+func TestWriteOutsRefusesAStageDanglingLink(t *testing.T) {
+	for name, skeletons := range stagings() {
+		t.Run(name, func(t *testing.T) {
+			r, _ := newDirRun(t, skeletons, func(d string) {
+				writeFileOf(t, filepath.Join(d, "real.txt"), "real")
+
+				if err := os.Symlink("/nonexistent", filepath.Join(d, "dangling")); err != nil {
+					t.Fatal(err)
+				}
+			})
+
+			err := r.writeOuts(stagedLocations(r))
+			if !errors.Is(err, errUnpublished) {
+				t.Fatalf("pipeline outs publishing a stage's dangling link: %v, want %v", err, errUnpublished)
+			}
+
+			if want := "outs/d/dangling is a link its stage wrote that reaches nothing"; !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q lacks %q", err, want)
+			}
+		})
+	}
+}
+
+// stagedLocations are the locations of r's staged outs bundles, each below
+// an s3:// prefix.
+func stagedLocations(r *publishRun) map[string]string {
+	locations := map[string]string{}
+	for at, item := range r.staged {
+		locations[at] = "s3://bucket" + item
+	}
+
+	return locations
+}
+
 // TestWriteOutsNeedsLocations: a staged outs bundle without a location
 // fails the pipeline outs rather than name its unpublished files nowhere.
 func TestWriteOutsNeedsLocations(t *testing.T) {

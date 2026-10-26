@@ -65,22 +65,38 @@ func NewStaged(names ...string) (Staged, error) {
 func (s Staged) Leaves() (Refs, error) {
 	r := Refs{leaves: map[string]string{}}
 
-	for _, d := range s.dirs {
-		for _, pattern := range []string{filepath.Join(d.abs, bundleFiles, "*"), filepath.Join(d.abs, "*", bundleFiles, "*")} {
-			ordinals, err := filepath.Glob(pattern)
-			if err != nil {
-				return Refs{}, fmt.Errorf("staged leaves %s: %w", d.name, err)
-			}
+	ordinals, err := s.ordinals()
+	if err != nil {
+		return Refs{}, err
+	}
 
-			for _, ordinal := range ordinals {
-				if err := r.index(ordinal); err != nil {
-					return Refs{}, err
-				}
-			}
+	for _, ordinal := range ordinals {
+		if err := r.index(ordinal); err != nil {
+			return Refs{}, err
 		}
 	}
 
 	return r, nil
+}
+
+// ordinals are the absolute paths below the items s holds, items in the
+// order s was given them, that may be leaves' ordinal dirs: each entry of
+// an item's files dir, or of the files dir of an item in a dir of them.
+func (s Staged) ordinals() ([]string, error) {
+	var out []string
+
+	for _, d := range s.dirs {
+		for _, pattern := range []string{filepath.Join(d.abs, bundleFiles, "*"), filepath.Join(d.abs, "*", bundleFiles, "*")} {
+			ordinals, err := filepath.Glob(pattern)
+			if err != nil {
+				return nil, fmt.Errorf("staged leaves %s: %w", d.name, err)
+			}
+
+			out = append(out, ordinals...)
+		}
+	}
+
+	return out, nil
 }
 
 // Ref names a whole bundle leaf a task staged: the item it lies in, by the

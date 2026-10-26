@@ -20,6 +20,8 @@ a chunk's args, a chunk's outputs, a fork element. On disk it is a directory
   f/L0001/reads.fastq  order, so leaves never collide, under the basename mrp
                        passes the stage (#284)
   f/L0000/.mre-origin  the leaf's origin (#431)
+  f/L0000/.mre-shape   what of a directory leaf an object store does not
+                       carry, where it holds any (#624)
   instance.json        the instance stamp (field bundles)
   task.json            where the posting task ran (field bundles)
   fork.json            the fork record (fork element dirs)
@@ -49,8 +51,9 @@ Nextflow's stage-in script.
 
 `WriteItem` writes the skeleton last, so it holds the records written before
 it, a field bundle's stamps among them. It lists each path as `CopyTree`
-copies a leaf, with links followed and a dangling one left out, so a
-directory leaf's skeleton holds every file and directory in it.
+copies a leaf, with links followed, so a directory leaf's skeleton holds
+every file and directory in it, and each leaf's shape as a record
+([Shapes](#shapes)).
 Post-processing moves a file inside a published directory out of it, and the
 skeleton keeps where. OUTS stages skeletons in place of the bundles it reads
 ([Run time](runtime.md#outs)).
@@ -128,6 +131,28 @@ bundles it arrived through.
 
 `mre outs` places each file of the pipeline outs in the pipestance it
 reconstructs by its origin ([The `mre` shim](mre.md#mre-outs)).
+
+## Shapes
+
+`mrp` hands a reader a directory output as its stage wrote it. A bundle
+copies the directory's files, following links, but some of what the stage
+wrote cannot travel as a file:
+
+- A link that reaches nothing. It has no content to copy, and an upload of
+  the bundle to S3 skips it and exits 2 (`aws s3 cp`), which fails the task.
+
+`WriteItem` records each such entry of a leaf in `.mre-shape` beside it: a
+link by its path and the target text the stage gave it (#624). Before it reads
+anything, every task restores what the shapes of the leaves it staged record,
+in its items and in the ordinal directories it staged by reference
+([`shim.Staged.Restore`](../../internal/shim/shape.go)): in its own copy of a
+bundle on an object store, and in the producer's bundle on a shared work
+directory, where a later reader finds it restored. A stage then lists and
+reads the directory as under `mrp`. `mre outs` restores the shapes in the
+skeletons it expands, and fails the run on a link that reaches nothing in a
+directory the pipeline outs publish: the run publishes copies, and a results
+directory, possibly an object store, cannot hold the link (divergence
+`dir-dangling-link`). A leaf named `.mre-shape` fails the write.
 
 ## Files by reference
 
